@@ -8,6 +8,7 @@ import type {
   PR,
   ProjectHealthSnapshot,
   RateLimitInfo,
+  RepoMetadata,
   StatsPage,
 } from "../forge.js";
 
@@ -18,6 +19,20 @@ import type {
  * not GitHub-specific even though GitHub is currently the only built-in
  * provider that reports it.
  */
+/**
+ * Whose number an issue read is about (#13744). Omitted, the read goes to the
+ * project's issues provider — what a bare number has always meant on the
+ * agent surface. Worktree callers always say: the link's stored provider
+ * (with its stable id or key when it has them), or `role: "code"` for a number
+ * without provenance, which belongs to the code forge.
+ */
+export interface IssueLinkTarget {
+  role?: "code";
+  issueProviderId?: string;
+  issueId?: string;
+  issueKey?: string;
+}
+
 export type ForgeRateLimitKind = "primary" | "secondary";
 
 /**
@@ -89,7 +104,19 @@ export interface ForgeCIStatusSummary {
   pending: number;
   /** Whether required-checks gating is satisfied. Omitted if the provider doesn't gate. */
   requiredChecksPassing?: boolean;
+  /** Commit this verdict was read from, when the provider reports it. */
+  headSha?: string;
 }
+
+/**
+ * `forge:get-repo-metadata` result: the provider's metadata plus which
+ * optional write capabilities the active provider implements, decided by the
+ * host from the implementation itself — manifest hints never gate behaviour.
+ */
+export type ForgeRepoMetadataPayload = RepoMetadata & {
+  /** The provider implements `autoMerge` (arm or cancel "merge when ready"). */
+  autoMergeSupported: boolean;
+};
 
 /**
  * Renderer-facing projection of {@link import("../forge.js").CheckRun}, used by
@@ -172,6 +199,14 @@ export interface ForgeRepositoryStats {
   rateLimitKind?: ForgeRateLimitKind;
   /** Provider-suggested delay (ms) until the next background stats poll. */
   nextPollIntervalMs?: number;
+  /**
+   * Machine-independent identity of the repository these counts describe
+   * (`forge-host/owner/repo`), so a device visiting several hosts can match one
+   * repo across their different project paths (#14199). Absent when no single
+   * provider reported both counts — no provider resolved, or an issues
+   * provider split the issue count off the code forge's.
+   */
+  repoKey?: string;
 }
 
 /**
@@ -242,6 +277,19 @@ export interface ForgeProjectHealthPayload extends ProjectHealthSnapshot {
    * steps that wouldn't help.
    */
   unsupported?: boolean;
+  /**
+   * The issues provider's issue list when the project takes its issues from a
+   * provider other than its code forge (#13744). `issueCount` is then that
+   * provider's count, so the issues chip opens this instead of the code
+   * forge's `/issues`.
+   */
+  issuesUrl?: string;
+  /**
+   * `true` when the issues provider's count couldn't be read. The code forge's
+   * count belongs to a different tracker, so the issues chip hides rather than
+   * show it.
+   */
+  issueCountUnavailable?: boolean;
 }
 
 /**
@@ -293,6 +341,8 @@ export type ForgeProviderMethodName =
   | "closePR"
   | "reopenPR"
   | "mergePR"
+  | "enableAutoMerge"
+  | "disableAutoMerge"
   | "convertPRToDraft"
   | "markPRReadyForReview"
   | "commentOnPR"

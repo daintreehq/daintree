@@ -117,12 +117,20 @@ vi.mock("../ProjectStore.js", () => ({ projectStore: mockProjectStore }));
 
 // Stand-in for the real scheme schema: the theme tests are about which schemes
 // survive validation, not about the token shape itself. A scheme is "valid"
-// here when it has an id and a name.
-vi.mock("../../schemas/customSchemes.js", async () => {
+// here when it has an id and a name. `extensions` is the real field, so the
+// key stripping it does reaches what the bundle persists.
+vi.mock("../../schemas/customSchemes.js", async (importOriginal) => {
   const { z } = await import("zod");
+  const actual = await importOriginal<typeof import("../../schemas/customSchemes.js")>();
   return {
     appCustomSchemesWriteSchema: z.array(
-      z.object({ id: z.string().min(1), name: z.string().min(1) }).passthrough()
+      z
+        .object({
+          id: z.string().min(1),
+          name: z.string().min(1),
+          extensions: actual.appColorSchemeSchema.shape.extensions,
+        })
+        .passthrough()
     ),
   };
 });
@@ -340,6 +348,61 @@ describe("ConfigBundleService.apply", () => {
     // take the user's working theme down with it.
     const stored = mockStore.get("appTheme.customSchemes") as Array<{ id: string }>;
     expect(stored.map((s) => s.id)).toEqual(["mine"]);
+  });
+
+  it("persists an imported theme without extension keys that shadow theme tokens", async () => {
+    const { service } = makeService();
+
+    const report = await service.apply({
+      appTheme: {
+        customSchemes: [
+          {
+            id: "mine",
+            name: "Mine",
+            extensions: { "theme-text-primary": "#202020", "panel-grid-bg": "#101010" },
+          },
+        ],
+      },
+    });
+
+    expect(statusFor(report, "appTheme", "theme:mine")?.status).toBe("applied");
+    const stored = mockStore.get("appTheme.customSchemes") as Array<{
+      extensions?: Record<string, string>;
+    }>;
+    expect(stored[0]?.extensions).toEqual({ "panel-grid-bg": "#101010" });
+
+    const again = await service.apply({
+      appTheme: {
+        customSchemes: [
+          {
+            id: "mine",
+            name: "Mine",
+            extensions: { "theme-text-primary": "#202020", "panel-grid-bg": "#101010" },
+          },
+        ],
+      },
+    });
+    expect(statusFor(again, "appTheme", "theme:mine")?.status).toBe("unchanged");
+  });
+
+  it("keeps plugin theme ids out of imported themes and uninstalled selections (#13832)", async () => {
+    mockStore.set("appTheme", { colorSchemeId: "daintree" });
+    const { service } = makeService();
+
+    const report = await service.apply({
+      appTheme: {
+        customSchemes: [{ id: "plugin:acme.themes:midnight", name: "Midnight" }],
+        colorSchemeId: "plugin:acme.themes:midnight",
+        preferredDarkSchemeId: "plugin:acme.themes:midnight",
+      },
+    });
+
+    expect(statusFor(report, "appTheme", "theme:plugin:acme.themes:midnight")?.status).toBe(
+      "skipped"
+    );
+    expect(statusFor(report, "appTheme", "colorSchemeId")?.status).toBe("skipped");
+    expect(statusFor(report, "appTheme", "preferredDarkSchemeId")?.status).toBe("skipped");
+    expect(mockStore.get("appTheme")).toEqual({ colorSchemeId: "daintree" });
   });
 
   it("keeps a pre-existing theme that the current schema would reject", async () => {

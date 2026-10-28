@@ -12,6 +12,7 @@ import type {
 import type { PanelSnapshot, Project, ProjectState } from "../../../shared/types/project.js";
 import type { AgentPreset } from "../../../shared/config/agentRegistry.js";
 import type { AgentSettings } from "../../../shared/types/agentSettings.js";
+import type { AgentToolbarPins } from "../../../shared/types/ipc/agentToolbarPins.js";
 import type { AgentAvailabilityState, AgentCliDetail } from "../../../shared/types/ipc/system.js";
 import type { AgentState, WaitingReason } from "../../../shared/types/agent.js";
 import type { TerminalStatusResult } from "../../../shared/types/terminalStatus.js";
@@ -22,6 +23,7 @@ import type {
 } from "../../../shared/types/worktree.js";
 import type { WorktreeChanges } from "../../../shared/types/git.js";
 import type { SubmoduleDeleteRisk } from "../../../shared/types/submodule.js";
+import type { WorktreeDeleteNotesReport } from "../../../shared/types/plugin.js";
 import { getDefaultPanelTitle, panelKindHasPty } from "../../../shared/config/panelKindRegistry.js";
 import {
   readDispatchTerminalCommand,
@@ -55,16 +57,30 @@ import {
   runTerminalList,
   runTerminalSendKeys,
 } from "./viewlessTerminals.js";
-import { runAgentLaunch, runAgentListAvailable } from "./viewlessAgents.js";
+import {
+  runAgentLaunch,
+  runAgentListAvailable,
+  runAgentListModels,
+  runAgentListPresets,
+} from "./viewlessAgents.js";
+import { runSlashCommandsList } from "./viewlessSlashCommands.js";
 import {
   previewWorktreeDelete,
   runWorktreeDelete,
   runWorktreeList,
+  runWorktreeWaitForPullRequest,
   runWorktreeWaitUntilReady,
 } from "./viewlessWorktrees.js";
-import { runProjectDetectRunners, runProjectGetAll } from "./viewlessProjects.js";
+import { runProjectDetectRunners, runProjectGetAll, runWorkspaceList } from "./viewlessProjects.js";
+import { runRecipeList } from "./viewlessRecipes.js";
 import { runForgeRead } from "./viewlessForge.js";
-import { runActionsGetSchema, runActionsList, runActionsSearch } from "./viewlessIntrospection.js";
+import { runProjectPulse, runSessionHistoryList } from "./viewlessHistory.js";
+import {
+  runActionsGetContext,
+  runActionsGetSchema,
+  runActionsList,
+  runActionsSearch,
+} from "./viewlessIntrospection.js";
 import { refuseRecipeWithNoView, runWorktreeCreateWithRecipe } from "./viewlessWorktreeCreation.js";
 
 const TERMINAL_SEND_COMMAND_ACTION_ID = "terminal.sendCommand";
@@ -161,6 +177,8 @@ export interface ViewlessLaunchEnvLayers {
  */
 export interface ViewlessAgentSources {
   getSettings(): Promise<AgentSettings | null>;
+  /** This machine's toolbar pins: with no view, there is no other screen to describe (#14702). */
+  getToolbarPins(): Promise<AgentToolbarPins>;
   getCcrPresets(agentId: string): Promise<AgentPreset[] | undefined>;
   getProjectPresets(projectPath: string): Promise<Record<string, AgentPreset[]>>;
   getCliDetail(agentId: string): Promise<AgentCliDetail | undefined>;
@@ -195,6 +213,11 @@ export interface ViewlessDeps {
   hostPlatform: ViewlessHostPlatform;
   /** Pacing for key presses and readiness polls; real timers outside tests. */
   sleep(ms: number): Promise<void>;
+  /** The plugins' notes on a worktree about to be deleted, each bounded by its deadline (#13805). */
+  collectWorktreeDeleteNotes(
+    projectId: string,
+    worktreeId: string
+  ): Promise<WorktreeDeleteNotesReport[]>;
 }
 
 export interface ViewlessActionRequest {
@@ -689,8 +712,15 @@ function guardWrites(
   };
 }
 
+/**
+ * Channels the drive lease leaves free that still change a project's files:
+ * the project recipe read reconciles .daintree/recipes on the way (#14139).
+ */
+const CHANGING_FREE_CHANNELS: ReadonlySet<string> = new Set([CHANNELS.PROJECT_GET_RECIPES]);
+
 /** Whether a host channel only reads, by the drive lease's own account of it. */
 function isFreeLeaseChannel(channel: string): boolean {
+  if (CHANGING_FREE_CHANNELS.has(channel)) return false;
   return (CHANNEL_LEASE_POLICY as Readonly<Record<string, string>>)[channel] === "free";
 }
 
@@ -784,6 +814,8 @@ async function runAction(
       return runAgentLaunch(request, project, deps);
     case "agent.listAvailable":
       return runAgentListAvailable(request, project, deps);
+    case "slashCommands.list":
+      return runSlashCommandsList(request, project, deps);
     case "worktree.list":
       return runWorktreeList(request, project, deps);
     case "worktree.waitUntilReady":
@@ -794,6 +826,8 @@ async function runAction(
       return runProjectGetAll(request, project, deps);
     case "project.detectRunners":
       return runProjectDetectRunners(request, project, deps);
+    case "workspace.list":
+      return runWorkspaceList(request, project, deps);
     case "worktree.createWithRecipe":
       return runWorktreeCreateWithRecipe(request, project, deps);
     case "actions.list":
@@ -802,6 +836,20 @@ async function runAction(
       return runActionsSearch(request);
     case "actions.getSchema":
       return runActionsGetSchema(request);
+    case "actions.getContext":
+      return runActionsGetContext(request, project, deps);
+    case "agent.listPresets":
+      return runAgentListPresets(request, project, deps);
+    case "agent.listModels":
+      return runAgentListModels(request, project, deps);
+    case "recipe.list":
+      return runRecipeList(request, project, deps);
+    case "worktree.waitForPullRequest":
+      return runWorktreeWaitForPullRequest(request, project, deps);
+    case "agentSessionHistory.list":
+      return runSessionHistoryList(request, project, deps);
+    case "git.getProjectPulse":
+      return runProjectPulse(request, project, deps);
     default:
       return runForgeRead(request, project, deps);
   }

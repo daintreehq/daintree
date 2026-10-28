@@ -1,10 +1,22 @@
 import { useMemo } from "react";
+import type { ContextProviderItem } from "@shared/types/pluginContextProvider";
+import { formatContextReference } from "@shared/utils/pluginContextReference";
 import type { AutocompleteItem } from "../AutocompleteMenu";
+import { filterForgeReferences, type ForgeReference } from "../forgeReferences";
 import {
   getDaintreeAtClaim,
   formatAtFileToken,
   type ActiveCompletionContext,
 } from "../hybridInputParsing";
+
+/** The plugin context provider an `@{prefix}:` query names (#13795). */
+export interface ContextProviderClaim {
+  prefix: string;
+  pluginId: string;
+  pluginName: string;
+  /** What the user typed after the prefix. */
+  query: string;
+}
 
 interface UseAutocompleteItemsParams {
   activeCompletionContext: ActiveCompletionContext | null;
@@ -12,6 +24,25 @@ interface UseAutocompleteItemsParams {
   isAutocompleteLoading: boolean;
   autocompleteCommands: AutocompleteItem[];
   isCommandsLoading: boolean;
+  contextClaim?: ContextProviderClaim | null;
+  contextItems?: ContextProviderItem[];
+  isContextLoading?: boolean;
+  forgeReferences?: ForgeReference[];
+}
+
+const NO_CONTEXT_ITEMS: ContextProviderItem[] = [];
+const NO_FORGE_REFERENCES: ForgeReference[] = [];
+const FORGE_REFERENCE_LIMIT = 50;
+
+/** What a `#` row says about its item: whether it's an issue or a PR, and its state. */
+export function forgeReferenceBadge(ref: Pick<ForgeReference, "kind" | "isDraft">): string {
+  if (ref.kind === "issue") return "Open issue";
+  return ref.isDraft ? "Draft PR" : "Open PR";
+}
+
+/** The menu key of a provider's row, unique across providers that reuse an id. */
+export function contextItemKey(prefix: string, id: string): string {
+  return `context:${prefix}:${id}`;
 }
 
 const DIFF_ITEMS: AutocompleteItem[] = [
@@ -61,9 +92,10 @@ const SELECTION_ITEM: AutocompleteItem = {
 
 /**
  * Merge the active trigger's completion items. `/` and `$` come pre-mapped from
- * discovery; `@` is served by Daintree's diff/terminal/selection providers
- * (which claim their prefixes ahead of file search) with `@file` fuzzy search
- * as the fallback provider.
+ * discovery; `#` narrows the project's open issues and pull requests; `@` is
+ * served by Daintree's diff/terminal/selection providers (which claim their
+ * prefixes ahead of file search) with `@file` fuzzy search as the fallback
+ * provider.
  */
 export function useAutocompleteItems({
   activeCompletionContext,
@@ -71,8 +103,29 @@ export function useAutocompleteItems({
   isAutocompleteLoading,
   autocompleteCommands,
   isCommandsLoading,
+  contextClaim = null,
+  contextItems = NO_CONTEXT_ITEMS,
+  isContextLoading = false,
+  forgeReferences = NO_FORGE_REFERENCES,
 }: UseAutocompleteItemsParams) {
   const query = activeCompletionContext?.query ?? "";
+  const contextPrefix = contextClaim?.prefix ?? null;
+  const contextPluginName = contextClaim?.pluginName ?? "";
+
+  // The plugin names its rows; the host decides what a row does. Picking one
+  // inserts the reference and nothing else — a provider never sends.
+  const contextRows = useMemo((): AutocompleteItem[] => {
+    if (contextPrefix === null) return [];
+    return contextItems.map((item) => ({
+      key: contextItemKey(contextPrefix, item.id),
+      label: item.label,
+      description: item.description,
+      badge: contextPluginName,
+      insertText: formatContextReference({ prefix: contextPrefix, id: item.id }),
+      enterAction: "insert",
+      insert: { insert: "resolve", resolverId: "context" },
+    }));
+  }, [contextItems, contextPrefix, contextPluginName]);
 
   const fileItems = useMemo(
     (): AutocompleteItem[] =>
@@ -95,6 +148,22 @@ export function useAutocompleteItems({
     [autocompleteFiles]
   );
 
+  const isReferenceQuery = activeCompletionContext?.triggerChar === "#";
+  // Narrowed here, as typed, from rows fetched once: a query never reaches the
+  // forge. A row inserts its reference and nothing it says.
+  const referenceItems = useMemo((): AutocompleteItem[] => {
+    if (!isReferenceQuery) return [];
+    return filterForgeReferences(forgeReferences, query, FORGE_REFERENCE_LIMIT).map((ref) => ({
+      key: `ref:${ref.kind}:${ref.number}`,
+      label: ref.reference,
+      description: ref.title,
+      badge: forgeReferenceBadge(ref),
+      insertText: ref.reference,
+      enterAction: "insert",
+      insert: "literal",
+    }));
+  }, [isReferenceQuery, forgeReferences, query]);
+
   const diffItems = useMemo((): AutocompleteItem[] => {
     if (!query) return DIFF_ITEMS;
     return DIFF_ITEMS.filter((item) => item.insertText.slice(1).startsWith(query));
@@ -110,8 +179,13 @@ export function useAutocompleteItems({
     if (ctx.triggerChar === "/" || ctx.triggerChar === "$") {
       return { autocompleteItems: autocompleteCommands, isLoading: isCommandsLoading };
     }
+    if (ctx.triggerChar === "#") return { autocompleteItems: referenceItems, isLoading: false };
 
-    // ctx.triggerChar === "@": Daintree providers claim their prefix; else file.
+    // ctx.triggerChar === "@": a plugin's `@{prefix}:` and Daintree's own
+    // providers claim their prefix; else file.
+    if (contextPrefix !== null) {
+      return { autocompleteItems: contextRows, isLoading: isContextLoading };
+    }
     const claim = getDaintreeAtClaim(ctx.query);
     if (claim === "terminal") return { autocompleteItems: [TERMINAL_ITEM], isLoading: false };
     if (claim === "selection") return { autocompleteItems: [SELECTION_ITEM], isLoading: false };
@@ -124,6 +198,10 @@ export function useAutocompleteItems({
     diffItems,
     fileItems,
     isAutocompleteLoading,
+    contextPrefix,
+    contextRows,
+    isContextLoading,
+    referenceItems,
   ]);
 
   return { autocompleteItems, isLoading };

@@ -230,7 +230,6 @@ function makeDeps(
     onUserScrollIntent: vi.fn(),
     onEnterPressed: vi.fn(),
     updateLastObservedTitle: vi.fn(),
-    notifyXtermFocused: vi.fn(),
     ...overrides,
   };
 }
@@ -528,6 +527,34 @@ describe("installTerminalBoundListeners", () => {
     expect(writeTerminalInputOrFleetMock).toHaveBeenCalledWith("t1", "z");
   });
 
+  it("holds typing but answers the program's queries while history refills (#14220)", () => {
+    const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
+    const terminal = makeMockTerminal(captured);
+    const managed = makeMockManaged();
+    const deps = makeDeps();
+
+    managed.terminal = terminal as unknown as ManagedTerminal["terminal"];
+    installTerminalBoundListeners(
+      terminal as unknown as Parameters<typeof installTerminalBoundListeners>[0],
+      managed,
+      "t1",
+      deps
+    );
+
+    managed.historyRefilling = true;
+    managed.isInputLocked = true;
+    captured.onData!("ls\r");
+    captured.onData!("\x1b[12;4R");
+    expect(writeTerminalInputOrFleetMock).not.toHaveBeenCalled();
+    expect(deps.noteUserInput).not.toHaveBeenCalled();
+    expect(writeReplyMock.mock.calls).toEqual([["t1", "\x1b[12;4R"]]);
+
+    // A user's own lock holds the replies too, as it always has.
+    managed.historyRefilling = false;
+    captured.onData!("\x1b[3;1R");
+    expect(writeReplyMock).toHaveBeenCalledTimes(1);
+  });
+
   it("clears directing state on escape but not on regular input", () => {
     const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
     const terminal = makeMockTerminal(captured);
@@ -636,60 +663,6 @@ describe("installTerminalBoundListeners", () => {
     (terminal.getSelection as ReturnType<typeof vi.fn>).mockReturnValue("");
     captured.onSelectionChange!();
     expect(deps.deleteCachedSelection).toHaveBeenCalledWith("t1");
-  });
-
-  it("invokes notifyXtermFocused when a descendant of the host element receives focus", () => {
-    const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
-    const terminal = makeMockTerminal(captured);
-    const managed = makeMockManaged();
-    const deps = makeDeps();
-
-    managed.terminal = terminal as unknown as ManagedTerminal["terminal"];
-    document.body.appendChild(managed.hostElement);
-    installTerminalBoundListeners(
-      terminal as unknown as Parameters<typeof installTerminalBoundListeners>[0],
-      managed,
-      "t1",
-      deps
-    );
-
-    // Simulate xterm's helper textarea being created during terminal.open() —
-    // a focus event on that descendant must bubble up and trigger the listener.
-    const helperTextarea = document.createElement("textarea");
-    managed.hostElement.appendChild(helperTextarea);
-    helperTextarea.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
-
-    expect(deps.notifyXtermFocused).toHaveBeenCalledTimes(1);
-
-    document.body.removeChild(managed.hostElement);
-  });
-
-  it("removes the focusin listener via the cleanup function", () => {
-    const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
-    const terminal = makeMockTerminal(captured);
-    const managed = makeMockManaged();
-    const deps = makeDeps();
-
-    managed.terminal = terminal as unknown as ManagedTerminal["terminal"];
-    document.body.appendChild(managed.hostElement);
-    installTerminalBoundListeners(
-      terminal as unknown as Parameters<typeof installTerminalBoundListeners>[0],
-      managed,
-      "t1",
-      deps
-    );
-
-    // Run all cleanups (the installer pushes the focusin removal lambda into
-    // managed.listeners alongside everything else).
-    for (const cleanup of managed.listeners) cleanup();
-
-    const helperTextarea = document.createElement("textarea");
-    managed.hostElement.appendChild(helperTextarea);
-    helperTextarea.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
-
-    expect(deps.notifyXtermFocused).not.toHaveBeenCalled();
-
-    document.body.removeChild(managed.hostElement);
   });
 
   it("suppresses wheel→arrow translation when an agent terminal is in the alt-screen buffer (issue #6621)", () => {

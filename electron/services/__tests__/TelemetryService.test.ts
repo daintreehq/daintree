@@ -2080,6 +2080,25 @@ describe("child process exit reporting", () => {
     }
   );
 
+  it("keeps the dictation session summary out of breadcrumbs", async () => {
+    const { mod, options } = await initFresh();
+    const summary = {
+      category: "console",
+      level: "log",
+      message:
+        '[INFO] [Main] [VoiceSession] Summary {"sessionId":"0b6f…","cueMs":14,"source":"Renderer"}',
+    };
+    const other = {
+      category: "console",
+      level: "log",
+      message: "[INFO] [Main] [VoiceInput] Session ended",
+    };
+
+    expect(options.beforeBreadcrumb(summary)).toBeNull();
+    expect(options.beforeBreadcrumb(other)).toEqual(other);
+    await mod.closeTelemetry();
+  });
+
   it("limits a repeated console breadcrumb and strips service instance names", async () => {
     const { mod, options } = await initFresh();
     const crumb = (id: string) => ({

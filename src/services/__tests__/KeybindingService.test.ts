@@ -143,16 +143,15 @@ describe("KeybindingService", () => {
       expect(service.matchesEvent(event, "Cmd+Alt+.")).toBe(false);
     });
 
-    it("routes the period shortcut to voice dictation by default on macOS and Windows", () => {
+    it("routes Cmd+D, not the period shortcut, to voice dictation on macOS", async () => {
       setPlatform("MacIntel");
-      const mac = new KeybindingService();
+      vi.resetModules();
+      const { KeybindingService: MacKeybindingService } = await import("../KeybindingService");
+      const mac = new MacKeybindingService();
+      const cmdD = createKeyboardEvent({ key: "d", code: "KeyD", metaKey: true });
+      expect(mac.findMatchingAction(cmdD)?.actionId).toBe("voiceInput.toggle");
       const cmdPeriod = createKeyboardEvent({ key: ".", code: "Period", metaKey: true });
-      expect(mac.findMatchingAction(cmdPeriod)?.actionId).toBe("voiceInput.toggle");
-
-      setPlatform("Win32");
-      const windows = new KeybindingService();
-      const ctrlPeriod = createKeyboardEvent({ key: ".", code: "Period", ctrlKey: true });
-      expect(windows.findMatchingAction(ctrlPeriod)?.actionId).toBe("voiceInput.toggle");
+      expect(mac.findMatchingAction(cmdPeriod)?.actionId).not.toBe("voiceInput.toggle");
     });
 
     it("lists every combo an action fires on, a second binding such as Windows' Ctrl+F4 included", () => {
@@ -342,6 +341,20 @@ describe("KeybindingService", () => {
     // Cmd+W after Cmd+K completes the chord
     const match = service.findMatchingAction(cmdW);
     expect(match?.actionId).toBe("terminal.closeAll");
+  });
+
+  it("keeps Cmd+K Cmd+D on redraw while a bare Cmd+D starts dictation", async () => {
+    setPlatform("MacIntel");
+    vi.resetModules();
+    const { KeybindingService: MacKeybindingService } = await import("../KeybindingService");
+
+    const service = new MacKeybindingService();
+    const cmdD = createKeyboardEvent({ key: "d", code: "KeyD", metaKey: true });
+    expect(service.findMatchingAction(cmdD)?.actionId).toBe("voiceInput.toggle");
+
+    const cmdK = createKeyboardEvent({ key: "k", code: "KeyK", metaKey: true });
+    expect(service.resolveKeybinding(cmdK).chordPrefix).toBe(true);
+    expect(service.findMatchingAction(cmdD)?.actionId).toBe("terminal.redraw");
   });
 
   it("does not report conflicts for bindings disabled by empty override list", () => {

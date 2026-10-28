@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef } from "react";
 import { usePanelStore, type AddPanelOptions } from "@/store/panelStore";
+import { exitProjectHome } from "@/store/storeAccessors";
 import type { PanelLimitSnapshot } from "@/store/panelLimitStore";
 import type { PtyPanelData } from "@shared/types/panel";
 import { useProjectStore } from "@/store/projectStore";
@@ -49,6 +50,7 @@ import {
   resolveHostTmpDir,
 } from "@/hooks/useHostPlatform";
 import { agentClipboardDirectory } from "@shared/types/agentSettings";
+import { buildFirstPrompt } from "@shared/utils/firstPrompt";
 
 export { resolveAgentLaunchBaseCommand } from "@/utils/agentLaunchCommand";
 export { buildLaunchIdentity, type LaunchAgentIdentity };
@@ -153,6 +155,12 @@ export interface LaunchAgentOptions {
   worktreeId?: string;
   prompt?: string;
   /**
+   * `prompt` as the caller wrote it, before `agent.launch` appended a handback
+   * instruction (#14592). Recorded on the pane as its first prompt; absent
+   * means `prompt` is already as written.
+   */
+  promptAsWritten?: string;
+  /**
    * Handback code already appended to `prompt` by `agent.launch` (#12488).
    * Handed to the spawn so the pty-host looks for its marker.
    */
@@ -206,6 +214,11 @@ export interface LaunchAgentOptions {
    * whether the new panel captures keyboard focus.
    */
   spawnedBy?: TerminalSpawnSource;
+  /**
+   * The plugin whose dispatch launched this agent (#14017), stamped as the
+   * pane's `launchedByPluginId`. Only ever `ActionContext.callerPluginId`.
+   */
+  launchedByPluginId?: string;
   /**
    * Focus policy for the new panel. `"preserve"` keeps focus where it is
    * (background/MCP spawns). Omitted defaults to the resolved policy from
@@ -509,6 +522,14 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
         }
 
         const customTitle = plan.titleMode ? { titleMode: plan.titleMode } : {};
+        // Only an agent is handed the prompt as its launch argument.
+        const firstPrompt = isAgent
+          ? buildFirstPrompt(
+              launchOptions?.promptAsWritten ?? launchOptions?.prompt,
+              "launch",
+              Date.now()
+            )
+          : undefined;
         const spawnedBy = launchOptions?.spawnedBy;
         const focusPolicy =
           launchOptions?.focusPolicy ?? (isMcpSpawnFocusSuppressed() ? "preserve" : undefined);
@@ -528,6 +549,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
               agentModelId: launchOptions?.modelId,
               agentSessionId: assignedSessionId,
               handbackCode: launchOptions?.handbackCode,
+              ...(firstPrompt && { launchPrompt: firstPrompt }),
               agentPresetId: preset?.id,
               agentPresetColor: preset?.color,
               env: plan.env,
@@ -535,6 +557,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
               excludeFromPersistence: launchOptions?.excludeFromPersistence,
               removeOnExit: launchOptions?.removeOnExit,
               spawnedBy,
+              launchedByPluginId: launchOptions?.launchedByPluginId,
               focusPolicy,
               requestedId: launchOptions?.requestedId,
             }
@@ -584,6 +607,10 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
               agentPresetId: preset?.id,
               agentPresetColor: preset?.color,
               spawnStatus: "missing-cli",
+              // "Run anyway" replays the gate's command, prompt included, so
+              // the gate holds the launch's record for it. Review Hub shows
+              // none for a gate, where nothing ran.
+              ...(firstPrompt && { firstPrompt }),
               startedAt: Date.now(),
               isVisible: true,
               extensionState: plan.env ? { presetEnv: plan.env } : undefined,
@@ -653,6 +680,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
               !(focusPolicy === undefined && isAssistantFocused());
             if (takesFocus) {
               usePanelStore.getState().exitMaximize();
+              exitProjectHome();
               usePanelStore.getState().setFocused(resolvedGateId);
             }
             return {

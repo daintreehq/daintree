@@ -3,6 +3,11 @@ import { parseHostScopedKey, type HostId } from "../../../shared/types/remoteHos
 import type { PluginUiPromptParams } from "../../../shared/types/pluginUiPrompt.js";
 import { requestConsentInWebContents } from "../../ipc/handlers/pluginCapability.js";
 import { PluginRendererDispatcher } from "../../services/plugin/PluginRendererDispatcher.js";
+import {
+  PanelReloadRejectedError,
+  PLUGIN_PANEL_RELOAD_SHELL_BUDGET_MS,
+  PluginPanelReloadDispatcher,
+} from "../../services/plugin/PluginPanelReloadDispatcher.js";
 import { PluginUIPromptDispatcher } from "../../services/plugin/PluginUIPromptDispatcher.js";
 import {
   PluginActionsGetPayloadSchema,
@@ -12,6 +17,7 @@ import {
   PluginConsentPayloadSchema,
   PluginDispatchPayloadSchema,
   PluginFrontendMethod,
+  PluginPanelReloadPayloadSchema,
   PluginPromptCancelPayloadSchema,
   PluginPromptPayloadSchema,
   PluginToastPayloadSchema,
@@ -190,6 +196,7 @@ export function installPluginShellRequests(deps: PluginShellRequestDeps = {}): (
   let disposed = false;
   const prompts = new PluginUIPromptDispatcher({ isDisposed: () => disposed });
   const actions = new PluginRendererDispatcher({ isDisposed: () => disposed });
+  const panelReloads = new PluginPanelReloadDispatcher({ isDisposed: () => disposed });
   const openPrompts = new Map<
     string,
     { controller: AbortController; hostId: HostId; webContentsId: number; pluginId: string }
@@ -358,18 +365,35 @@ export function installPluginShellRequests(deps: PluginShellRequestDeps = {}): (
   const showToast = (request: ViewReverseRequest): null => {
     const parsed = PluginToastPayloadSchema.safeParse(request.payload);
     if (!parsed.success) throw malformed("toast");
-    const { pluginId, type, message, durationMs } = parsed.data;
+    const { pluginId, type, message, durationMs, pluginDisplayName, passive } = parsed.data;
     const wc = scopeView(request, pluginId);
     // Every plugin on a host draws on the host's one budget, so naming more
     // plugins can't raise more toasts; past it, a toast is dropped quietly.
     if (!admitHostNotice(request.hostId)) return null;
+    // An older host sends no name; the manifest id still keeps the instance
+    // key out of the overflow summary.
+    const pluginName =
+      displaySafeText(pluginDisplayName ?? "").trim() || pluginManifestIdFromInstanceKey(pluginId);
+    const pluginProjectId = projectIdFromPluginInstanceKey(pluginId);
     // Straight to the one view: the push filter keeps this machine's own
     // toasts out of a host's window, and this one is the host's.
     wc.send(CHANNELS.NOTIFICATION_SHOW_TOAST, {
       type,
       message: displaySafeText(message),
       duration: durationMs,
-      rateLimitKey: `plugin:${request.hostId}:${pluginId}:${type}`,
+      rateLimitKey: `plugin:${request.hostId}:${pluginId}`,
+      rateLimitLabel: pluginName,
+      // The host already applied its silence and project mute; passive only
+      // decides where this screen puts it.
+      ...(passive === true ? { priority: "low" as const } : {}),
+      // The row names the host's plugin and offers its "Silence <Plugin>",
+      // which this view's plugin IPC carries back to the host that keeps it.
+      // A project plugin's instance key names the host project it belongs to,
+      // whose ids are the ones this host-bound view knows.
+      context: {
+        ...(pluginProjectId !== null ? { projectId: pluginProjectId } : {}),
+        plugin: { id: pluginId, name: pluginName },
+      },
     });
     return null;
   };
@@ -395,6 +419,10 @@ export function installPluginShellRequests(deps: PluginShellRequestDeps = {}): (
         },
       };
     }
+    // Unattributed on purpose: `events:emit` is local, so naming the host's
+    // plugin would file its audit record in this machine's log under a bare id
+    // with no host provenance, beside local plugins that may share it, and
+    // nowhere the remote window's Host-routed audit viewer reads.
     return actions.sendDispatchToWebContents(wc, parsed.data.actionId, parsed.data.args);
   };
 
@@ -423,7 +451,30 @@ export function installPluginShellRequests(deps: PluginShellRequestDeps = {}): (
     return actions.sendAgentsListToWebContents(scopeView(request, parsed.data.pluginId));
   };
 
+  /** A host plugin's `reloadPanel()` for a panel in the view that drives its project. */
+  const reloadPanel = async (request: ViewReverseRequest): Promise<unknown> => {
+    const parsed = PluginPanelReloadPayloadSchema.safeParse(request.payload);
+    if (!parsed.success) throw malformed("panel reload");
+    const wc = scopeView(request, parsed.data.pluginId);
+    // A parked view would hold the request until the person switches back.
+    if (isCachedViewWebContents(wc.id)) return { result: "unavailable" };
+    try {
+      return {
+        result: await panelReloads.reloadInView(
+          wc,
+          parsed.data.pluginId,
+          parsed.data.panelId,
+          PLUGIN_PANEL_RELOAD_SHELL_BUDGET_MS
+        ),
+      };
+    } catch (err) {
+      if (err instanceof PanelReloadRejectedError) return { rejected: err.reason };
+      throw err;
+    }
+  };
+
   const disposers = [
+    registerReverseRequestMethod(PluginFrontendMethod.PANEL_RELOAD, reloadPanel),
     registerReverseRequestMethod(PluginFrontendMethod.DISPATCH, dispatchAction),
     registerReverseRequestMethod(PluginFrontendMethod.AGENTS_LIST, listAgents),
     registerReverseRequestMethod(PluginFrontendMethod.ACTIONS_LIST, listActions),
@@ -457,6 +508,7 @@ export function installPluginShellRequests(deps: PluginShellRequestDeps = {}): (
   return () => {
     disposed = true;
     for (const dispose of disposers.splice(0).reverse()) dispose();
+    panelReloads.dispose();
     for (const entry of openPrompts.values()) entry.controller.abort();
     openPrompts.clear();
     prompts.dispose();

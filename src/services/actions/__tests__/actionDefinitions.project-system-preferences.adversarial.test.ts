@@ -53,10 +53,6 @@ const mocks = vi.hoisted(() => ({
     quit: vi.fn(),
     forceQuit: vi.fn(),
   },
-  hibernationClient: {
-    getConfig: vi.fn(),
-    updateConfig: vi.fn(),
-  },
   windowOpeningClient: {
     getConfig: vi.fn(),
     updateConfig: vi.fn(),
@@ -182,7 +178,6 @@ vi.mock("@/clients", () => ({
   copyTreeClient: mocks.copyTreeClient,
   agentSettingsClient: mocks.agentSettingsClient,
   appClient: mocks.appClient,
-  hibernationClient: mocks.hibernationClient,
   windowOpeningClient: mocks.windowOpeningClient,
   terminalConfigClient: mocks.terminalConfigClient,
   worktreeConfigClient: mocks.worktreeConfigClient,

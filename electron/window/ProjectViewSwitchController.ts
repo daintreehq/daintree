@@ -166,6 +166,11 @@ export async function performSwitch(
       if (activeIntent) {
         deliverFocusIntent(existing.view, activeIntent);
       }
+      // Still an open: a project closed while on screen leaves the window on
+      // its welcome view, and reopening it lands here. The signal is
+      // idempotent, so a switch to a project that never closed costs a
+      // reconcile and nothing else.
+      if (isLocalViewKey(projectId)) notifyProjectPluginsOpened(projectId, projectPath);
       return { view: existing.view, isNew: false };
     }
   }
@@ -848,6 +853,8 @@ export async function performSwitch(
     // restored as the active view (rollback), so it no longer needs the
     // bridge protections.
     host.pendingColdSwitch = null;
+    // The chrome held on the outgoing project while it covered this one.
+    host.repaintThemeChrome();
   }
 
   // Explicit focus after swap

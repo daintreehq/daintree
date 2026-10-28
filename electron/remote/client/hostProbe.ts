@@ -10,6 +10,7 @@ import type {
   HostModeObservation,
   HostProbeResult,
 } from "../../../shared/types/ipc/remoteHosts.js";
+import { hostBuildOrder } from "../../../shared/utils/hostBuildOrder.js";
 import { HOST_MODE_STATUS_NAME, parseHostModeStatus } from "../host/hostModeStatusFile.js";
 import { launchAgentLabel } from "../host/startAtLogin.js";
 import {
@@ -31,6 +32,9 @@ import { failureDetail, type HostCommandChannel } from "./remoteShell.js";
  */
 
 export const MAC_APP_PATH = "/Applications/Daintree.app";
+export const MAC_USER_APP_RELATIVE = "Applications/Daintree.app";
+/** electron-builder's appId: what Spotlight indexes the bundle under. */
+export const MAC_BUNDLE_ID = "org.daintree.app";
 export const DEB_INSTALL_DIR = "/opt/Daintree";
 /** The packaged app's settings folder under `~/.config` (Electron's userData, by product name). */
 const LINUX_SETTINGS_DIR_NAME = "Daintree";
@@ -67,6 +71,16 @@ function sq(value: string): string {
   return `'${value.replace(/'/g, `'"'"'`)}'`;
 }
 
+/**
+ * Shell that sets `$<into>` to when process `$<pidVar>` started, in the form the
+ * host writes into its discovery file (see `processStartTime` in
+ * host/hostSocketLock.ts): `ps` lstart on macOS with its padding collapsed,
+ * /proc field 22 on Linux. Empty when the system can't say.
+ */
+export function processStartShell(pidVar: string, into: string): string {
+  return `if [ "$(uname -s)" = Darwin ]; then ${into}=$(LC_ALL=C /bin/ps -o lstart= -p "$${pidVar}" 2>/dev/null | sed 's/^ *//; s/  */ /g; s/ *$//'); else ${into}=$(sed 's/.*) //' "/proc/$${pidVar}/stat" 2>/dev/null | cut -d' ' -f20); fi`;
+}
+
 function buildInfoRead(asar: string): string {
   // Assigned first: bash 3.2 (macOS /bin/sh) brace-expands inside "$(...)".
   return `b=$(grep -a -o -m 1 -E ${sq(BUILD_INFO_PATTERN)} ${asar} 2>/dev/null | head -n 1); echo "${MARK}buildinfo $b"`;
@@ -80,9 +94,12 @@ export function buildHostProbeScript(): string {
     `d=${macDir}`,
     // Settings there mean Daintree has run as this user, who may have chosen its update channel.
     `if [ -f "$d/config.json" ]; then echo "${MARK}settings yes"; else echo "${MARK}settings no"; fi`,
-    `if [ -d ${MAC_APP_PATH} ]; then echo "${MARK}install app-bundle ${MAC_APP_PATH}"`,
-    `echo "${MARK}version $(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' ${MAC_APP_PATH}/Contents/Info.plist 2>/dev/null)"`,
-    `${buildInfoRead(`${MAC_APP_PATH}/Contents/Resources/app.asar`)}; fi`,
+    // The app can live anywhere: the usual folders first, then Spotlight (which a headless Mac often has off).
+    `a=""; for c in ${sq(MAC_APP_PATH)} "$HOME/${MAC_USER_APP_RELATIVE}"; do if [ -d "$c" ]; then a=$c; break; fi; done`,
+    `if [ -z "$a" ]; then a=$(mdfind "kMDItemCFBundleIdentifier == '${MAC_BUNDLE_ID}'" 2>/dev/null | head -n 1); if [ ! -d "$a" ]; then a=""; fi; fi`,
+    `if [ -n "$a" ]; then echo "${MARK}install app-bundle $a"`,
+    `echo "${MARK}version $(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$a/Contents/Info.plist" 2>/dev/null)"`,
+    `${buildInfoRead('"$a/Contents/Resources/app.asar"')}; fi`,
     // Only this SSH user's Daintree can take a handoff: another user's is someone else's.
     `if pgrep -u "$(id -u)" -x Daintree >/dev/null 2>&1; then echo "${MARK}running yes"; fi`,
     `echo "${MARK}sleep $(pmset -g 2>/dev/null | awk '$1=="sleep"{print $2; exit}')"`,
@@ -116,8 +133,11 @@ export function buildHostProbeScript(): string {
   return [
     `echo "${MARK}uname $(uname -sm)"`,
     `case "$(uname -s)" in Darwin) ${mac} ;; Linux) ${linux} ;; *) d=/nonexistent ;; esac`,
-    // Only a live process counts: a crash leaves the socket and both files behind.
-    `if [ -f "$d/${HOST_DISCOVERY_NAME}" ] && [ -S "$d/${HOST_SOCKET_NAME}" ]; then p=$(sed -n 's/.*"pid":\\([0-9][0-9]*\\).*/\\1/p' "$d/${HOST_DISCOVERY_NAME}"); if [ -n "$p" ] && kill -0 "$p" 2>/dev/null; then echo "${MARK}listening yes"; echo "${MARK}hostpid $p"; fi; fi`,
+    // Only a live process counts: a crash leaves the socket and both files behind,
+    // and the pid can be reused since. A file that records when its process started
+    // must match it; one that doesn't (an older host) is taken on the pid alone,
+    // but then no start time is reported and nothing is ever signalled by pid.
+    `if [ -f "$d/${HOST_DISCOVERY_NAME}" ] && [ -S "$d/${HOST_SOCKET_NAME}" ]; then p=$(sed -n 's/.*"pid":\\([0-9][0-9]*\\).*/\\1/p' "$d/${HOST_DISCOVERY_NAME}"); if [ -n "$p" ] && kill -0 "$p" 2>/dev/null; then s=$(sed -n 's/.*"startedAt":"\\([^"]*\\)".*/\\1/p' "$d/${HOST_DISCOVERY_NAME}"); ${processStartShell("p", "n")}; if [ -z "$s" ] || [ -z "$n" ]; then echo "${MARK}listening yes"; echo "${MARK}hostpid $p"; elif [ "$n" = "$s" ]; then echo "${MARK}listening yes"; echo "${MARK}hostpid $p"; echo "${MARK}hoststart $s"; fi; fi; fi`,
     `if [ -f "$d/${HOST_MODE_STATUS_NAME}" ]; then printf '%s %s\\n' "${MARK}hostmodestate" "$(head -c 4096 "$d/${HOST_MODE_STATUS_NAME}" | tr -d '\\n')"; fi`,
     `if command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1; then echo "${MARK}download yes"; fi`,
     `echo "${MARK}end"`,
@@ -139,6 +159,8 @@ export interface ParsedProbe {
   appRunning: boolean;
   hostModeListening: boolean;
   hostPid: number | null;
+  /** When that pid started, as the discovery file recorded and the live process confirmed; null if either couldn't say. */
+  hostStartedAt: string | null;
   canDownload: boolean;
   /**
    * Whether Daintree keeps settings there for this user, so has run there and
@@ -311,6 +333,7 @@ export function parseHostProbe(stdout: string): ParsedProbe {
       : null;
   const keyringText = one("keyring");
   const hostPidText = one("hostpid");
+  const hostStartText = one("hoststart");
   const unitPresent = platform === "linux" ? one("unit") === "yes" : null;
   const unitEnabled = one("unitenabled");
   let startAtLoginInstalled: boolean | null = null;
@@ -333,6 +356,7 @@ export function parseHostProbe(stdout: string): ParsedProbe {
     appRunning: one("running") === "yes",
     hostModeListening: one("listening") === "yes",
     hostPid: hostPidText && /^\d{1,10}$/.test(hostPidText) ? Number(hostPidText) : null,
+    hostStartedAt: hostStartText || null,
     canDownload: one("download") === "yes",
     hasSettings: values.has("settings") ? one("settings") === "yes" : null,
     advice: {
@@ -355,16 +379,45 @@ export function parseHostProbe(stdout: string): ParsedProbe {
   };
 }
 
+type LiveProbe = Pick<ParsedProbe, "hostModeListening" | "hostPid" | "hostModeState">;
+
+/**
+ * `host-mode.json` when the listener running now wrote it, so what it says
+ * (its build, its windows, its staged update) is about that process; null
+ * for a record left by one that quit or isn't the listener.
+ */
+export function liveHostRecord(probe: LiveProbe): HostModeObservation | null {
+  const state = probe.hostModeState;
+  if (!probe.hostModeListening || !state || state.stopped || state.pid !== probe.hostPid) {
+    return null;
+  }
+  return state;
+}
+
 /**
  * The build a listening host runs, as that same process recorded it in
  * `host-mode.json`; null unless the file's writer is the live listener.
  */
-export function runningHostBuild(
-  probe: Pick<ParsedProbe, "hostModeListening" | "hostPid" | "hostModeState">
-): { version: string; commit: string } | null {
-  const state = probe.hostModeState;
-  if (!probe.hostModeListening || !state?.build || state.pid !== probe.hostPid) return null;
-  return state.build;
+export function runningHostBuild(probe: LiveProbe): { version: string; commit: string } | null {
+  return liveHostRecord(probe)?.build ?? null;
+}
+
+/**
+ * The host's build against this client's: the one a listening host runs,
+ * else the one installed. Null when neither can be read, or while it can't
+ * be told which AppImage is the installed one.
+ */
+export function hostBuildOf(
+  probe: ParsedProbe,
+  client: Pick<HostHandshakeInfo, "version" | "commit">
+): HostProbeResult["hostBuild"] {
+  const running = runningHostBuild(probe);
+  const build =
+    running ??
+    (!probe.appImageConflict && probe.install?.version
+      ? { version: probe.install.version, commit: probe.install.commit }
+      : null);
+  return build ? { ...build, order: hostBuildOrder(build, client) } : null;
 }
 
 /**
@@ -451,6 +504,8 @@ export async function probeHost(params: {
         appImages: [],
         canDownload: false,
         matchesClient: null,
+        hostBuild: null,
+        stagedUpdate: null,
         advice: {
           sleepObserved: null,
           sleepDisabled: null,
@@ -491,6 +546,8 @@ export async function probeHost(params: {
       appImages: observed.appImages,
       canDownload: observed.canDownload,
       matchesClient: hostMatchesClient(observed, params.client),
+      hostBuild: hostBuildOf(observed, params.client),
+      stagedUpdate: liveHostRecord(observed)?.stagedUpdate ?? null,
       advice: observed.advice,
       hostModeState: observed.hostModeState,
     },

@@ -43,6 +43,11 @@ export interface RestartTerminalOptions {
    * with no launch agent.
    */
   resumeSessionId?: string;
+  /**
+   * Start the agent this once even if plugin tools it requires aren't ready
+   * (#14096). The user's explicit choice from the refusal banner; never stored.
+   */
+  allowMissingPluginTools?: boolean;
 }
 
 export interface TrashedTerminalGroupMetadata {
@@ -264,6 +269,12 @@ export interface PanelRegistrySlice {
   setInputLocked: (id: string, locked: boolean) => void;
   toggleInputLocked: (id: string) => void;
   /**
+   * Set or clear the launching plugin's request that restore hold this pane
+   * (#14017). Takes effect from the next restore; a pane already held stays
+   * held either way. Ownership is the caller's to check.
+   */
+  setHoldOnRestart: (id: string, hold: boolean) => void;
+  /**
    * Kill the current PTY and respawn it in the same panel slot using a
    * different preset. Fires as part of the fallback chain when a preset's
    * provider is unavailable. No session resume (fresh spawn), since the
@@ -273,6 +284,17 @@ export interface PanelRegistrySlice {
     id: string,
     nextPresetId: string,
     originalPresetId: string
+  ) => Promise<{ success: boolean; error?: string }>;
+  /**
+   * Respawn an agent pane in place on another preset of the same agent
+   * (#13746). Always a new conversation: a session can't follow the pane into
+   * another preset's home. The chosen preset becomes the pane's own — fallback
+   * marking is reset — and its env replaces the saved launch layer so a cold
+   * restore comes back on it.
+   */
+  restartTerminalOnPreset: (
+    id: string,
+    presetId: string
   ) => Promise<{ success: boolean; error?: string }>;
   /** Open a terminal's Scratchpad column (#12835), or expand a collapsed one. */
   showScratchpad: (id: string) => void;
@@ -304,6 +326,8 @@ export interface PanelRegistrySlice {
   ) => void;
   setFilePanelPath: (id: string, filePath: string) => void;
   setFileViewMode: (id: string, viewMode: import("@shared/types/panel.js").FileViewMode) => void;
+  /** Pin the editor a file panel's Edit mode opens with, as an "Edit with…" answer. */
+  setFileEditorChoice: (id: string, choice: string) => void;
   /**
    * Merge a patch into a plugin panel's `extensionState` — the write half of
    * the bag its view reads as `PanelViewProps.initialArgs`. No-op for a

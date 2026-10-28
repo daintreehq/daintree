@@ -12,8 +12,8 @@ const notifyRestoreSettledWaitersMock = vi.fn();
 const notifyScrollbackRestoreListenersMock = vi.fn();
 const destroyedListeners = new Set<(id: string) => void>();
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     get: (id: string) => getMock(id),
     fetchAndRestore: (id: string) => fetchAndRestoreMock(id),
     notifyRestoreSettledWaiters: (id: string) => notifyRestoreSettledWaitersMock(id),
@@ -22,8 +22,11 @@ vi.mock("@/services/TerminalInstanceService", () => ({
       destroyedListeners.add(cb);
       return () => destroyedListeners.delete(cb);
     },
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 const setScrollbackRestoreErrorMock = vi.fn();
 const clearScrollbackRestoreErrorMock = vi.fn();
@@ -64,6 +67,10 @@ const {
   retryFailedScrollbackRestoreBatch,
   resetScrollbackRestoreBatch,
 } = await import("../scrollbackRestoreScheduler");
+const terminalServiceMock = (
+  await import("@/services/TerminalInstanceService")
+).createTerminalPaintPlane();
+const terminalServiceAccessor = await import("@/services/terminal/terminalInstanceServiceAccessor");
 
 function getScheduledDoRestore(callIndex = 0): () => Promise<void> {
   const cb = scheduleBackgroundFetchAndRestoreMock.mock.calls[callIndex]?.[0];
@@ -96,6 +103,9 @@ beforeEach(() => {
   notifyScrollbackRestoreListenersMock.mockReset();
   resetScrollbackRestoreBatch();
   storeFocusedId = null;
+  // The service mock never evaluates the real module, so nothing registers it.
+  terminalServiceAccessor.__testing.reset();
+  terminalServiceAccessor.register(terminalServiceMock);
 });
 
 afterEach(() => {
@@ -599,5 +609,72 @@ describe("scheduleScrollbackRestore — restore queue", () => {
     await getScheduledDoRestore(0)();
 
     expect(scheduleBackgroundFetchAndRestoreMock).toHaveBeenCalledTimes(4);
+  });
+});
+
+describe("scheduleScrollbackRestore — terminal service lifecycle", () => {
+  const t1 = { terminalId: "t1", label: "a", location: "grid" } as const;
+  const t2 = { terminalId: "t2", label: "b", location: "grid" } as const;
+
+  it("schedules nothing while the terminal service is not loaded", () => {
+    terminalServiceAccessor.__testing.reset();
+    getMock.mockReturnValue(fakeManaged("none"));
+
+    scheduleScrollbackRestore([t1], () => true);
+
+    expect(getMock).not.toHaveBeenCalled();
+    expect(scheduleBackgroundFetchAndRestoreMock).not.toHaveBeenCalled();
+    expect(notifyScrollbackRestoreListenersMock).not.toHaveBeenCalled();
+  });
+
+  it("attaches one destroyed listener once a not-yet-loaded service becomes ready", () => {
+    terminalServiceAccessor.__testing.reset();
+
+    scheduleScrollbackRestore([t1], () => true);
+    scheduleScrollbackRestore([t2], () => true);
+    expect(destroyedListeners.size).toBe(0);
+
+    terminalServiceAccessor.register(terminalServiceMock);
+    expect(destroyedListeners.size).toBe(1);
+
+    getMock.mockImplementation(() => fakeManaged("none"));
+    scheduleScrollbackRestore([{ ...t1, terminalId: "t3" }], () => true);
+    expect(destroyedListeners.size).toBe(1);
+
+    resetScrollbackRestoreBatch();
+    expect(destroyedListeners.size).toBe(0);
+  });
+
+  it("attaches synchronously when the service is already loaded", () => {
+    getMock.mockImplementation(() => fakeManaged("none"));
+
+    scheduleScrollbackRestore([t1, t2], () => true);
+    scheduleScrollbackRestore([{ ...t1, terminalId: "t3" }], () => true);
+    expect(destroyedListeners.size).toBe(1);
+
+    resetScrollbackRestoreBatch();
+    expect(destroyedListeners.size).toBe(0);
+  });
+
+  it("cancels a pending destroyed-listener attach when the batch resets", () => {
+    terminalServiceAccessor.__testing.reset();
+    scheduleScrollbackRestore([t1], () => true);
+    resetScrollbackRestoreBatch();
+
+    terminalServiceAccessor.register(terminalServiceMock);
+    expect(destroyedListeners.size).toBe(0);
+  });
+
+  it("resets a queued restore whose service is gone by the time it runs", async () => {
+    const managed = fakeManaged("none");
+    getMock.mockReturnValue(managed);
+    scheduleScrollbackRestore([t1], () => true);
+    expect(managed.scrollbackRestoreState).toBe("pending");
+
+    terminalServiceAccessor.__testing.reset();
+    await getScheduledDoRestore(0)();
+
+    expect(managed.scrollbackRestoreState).toBe("none");
+    expect(fetchAndRestoreMock).not.toHaveBeenCalled();
   });
 });

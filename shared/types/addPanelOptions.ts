@@ -11,7 +11,10 @@ import type {
   FileBrowserTreeSnapshot,
   SessionLostReason,
   PanelRestoreRecovery,
+  TerminalAgentObservation,
+  TerminalRestoreProvenance,
   TerminalScratchpad,
+  TerminalFirstPrompt,
 } from "./panel.js";
 import type { GitStatus, DiffChangeSetEntry } from "./git.js";
 import type { BrowserHistory } from "./browser.js";
@@ -43,6 +46,13 @@ export interface AddPanelOptionsBase {
    * (default grid). Ignored for any other location.
    */
   backgroundRestoreLocation?: "grid" | "dock";
+  /**
+   * Set while a plugin panel the user docked sits in the grid only because its
+   * kind wasn't registered when it was restored (#13907). The value is the
+   * worktree it was docked with: `null` for none (a `scope: "project"` panel).
+   * `undefined` means no dock restore is pending.
+   */
+  pendingDockWorktreeId?: string | null;
   /**
    * Opt-in placement hint: land the new panel immediately after this one
    * instead of at the end. Resolved against live store state at commit time,
@@ -173,6 +183,12 @@ export interface AddPanelOptionsBase {
    * reconcile the settings-derived part and re-append these untouched.
    */
   callerLaunchFlags?: string[];
+  /**
+   * Plugin instances whose agent tools this agent can't do without, from a
+   * plugin recipe's `requiresAgentTools` (#14096). Carried to every relaunch of
+   * the pane so a retry is held to the same requirement. Runtime only.
+   */
+  requiredPluginTools?: string[];
   /** Model ID selected at launch time for per-panel model selection */
   agentModelId?: string;
   /** Sticky "runtime agent ever detected" flag, rehydrated from backend during reconnect. */
@@ -224,10 +240,37 @@ export interface AddPanelOptionsBase {
    */
   replacesRestoreRecovery?: boolean;
   /**
+   * PTY-only. This launch replaces, under the same `requestedId`, a pane whose
+   * terminal its host lost (#14184), and names the restart key the pane was
+   * lost under. Dropped when the pane has since been restarted, closed or
+   * seen to exit: someone got there first.
+   */
+  replacesLostTerminal?: number;
+  /** PTY-only. See `PtyPanelData.restoreProvenance`. */
+  restoreProvenance?: TerminalRestoreProvenance;
+  /** PTY-only. See `PtyPanelData.lastAgentObservation`. */
+  lastAgentObservation?: TerminalAgentObservation;
+  /** PTY-only. See `PtyPanelData.launchedByPluginId`. */
+  launchedByPluginId?: string;
+  /** PTY-only. See `PtyPanelData.holdOnRestart`. */
+  holdOnRestart?: true;
+  /**
    * PTY-only. The terminal's Scratchpad (#12835), carried by restore. A live
    * panel's own notes outrank this when the call lands on an existing record.
    */
   scratchpad?: TerminalScratchpad;
+  /**
+   * PTY-only. The first prompt a run already has (#14592), carried by restore,
+   * a resume or a rollback. A live panel's own record outranks this when the
+   * call lands on an existing record.
+   */
+  firstPrompt?: TerminalFirstPrompt;
+  /**
+   * PTY-only. The first prompt this launch hands its agent (#14592), recorded
+   * on the pane only once its process starts, so a launch that never starts
+   * claims nothing.
+   */
+  launchPrompt?: TerminalFirstPrompt;
   /**
    * User-initiated focus timestamp from the saved snapshot, propagated
    * from the hydration boundary (`statePatcher.ts:buildArgsFor*` →
@@ -342,6 +385,8 @@ export interface ReviewPanelOptions extends AddPanelOptionsBase {
   initialCommitMessage?: string;
   /** Stage all unstaged files on open when nothing is staged. Open-time hint. */
   autoStageOnOpen?: boolean;
+  /** Open straight into the "Since review" view. Open-time hint. */
+  initialMode?: "since-review";
 }
 
 /** Options for creating a file viewer panel */
@@ -355,6 +400,8 @@ export interface FilePanelOptions extends AddPanelOptionsBase {
   initialLine?: number;
   /** Explicit containment root for every read of the file; see `FilePanelData`. Never persisted. */
   fileContainmentRoot?: string;
+  /** The editor Edit mode opens with; see `FilePanelData`. Never persisted. */
+  fileEditorChoice?: string;
 }
 
 /**

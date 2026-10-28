@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import crypto from "node:crypto";
 import { z } from "zod";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+import { getProjectSurfaceRefusals } from "./plugin/PluginSurfaceRegistry.js";
 import {
   getCliSocketPath,
   getCliControlFilePath,
@@ -351,7 +352,7 @@ let singleton: PluginCliServer | null = null;
 
 /**
  * Start the CLI control server for this app instance. Idempotent. Wires the
- * real socket path, gates binding behind `pluginService.waitForInit()`, and
+ * real socket path, gates binding behind `pluginService.waitForCatalog()`, and
  * routes install/uninstall through the existing IPC handler trust gates.
  */
 export async function startPluginCliServer(): Promise<void> {
@@ -372,7 +373,7 @@ export async function startPluginCliServer(): Promise<void> {
 
   const server = createPluginCliServer({
     socketPath,
-    waitForReady: () => pluginService.waitForInit(),
+    waitForReady: () => pluginService.waitForCatalog(),
     handlers: {
       install: ({ path: installPath, url }) => {
         // Schema guarantees exactly one source; these branches are defensive.
@@ -395,12 +396,17 @@ export async function startPluginCliServer(): Promise<void> {
           .find((row) => path.resolve(row.path) === normalized);
         // A path Daintree has never opened is a legitimate answer, not an
         // error: the author may be checking a clone before adding it.
-        if (!project) return { known: false, projectId: null, trust: null, plugins: [] };
+        if (!project) {
+          return { known: false, projectId: null, trust: null, plugins: [], surfaceRefusals: [] };
+        }
         return {
           known: true,
           projectId: project.id,
           trust: pluginService.getProjectPluginTrustState(project.id),
           plugins: pluginService.listProjectPlugins(project.id),
+          // Slot claims the host refused, by plugin instance key, so `doctor`
+          // can tell an author why a surface they declared isn't showing.
+          surfaceRefusals: getProjectSurfaceRefusals(project.id),
         };
       },
     },

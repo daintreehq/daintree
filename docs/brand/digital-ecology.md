@@ -60,6 +60,4 @@ Illustrations and marketing â€” anything outside the Lucide-driven UI icon set â
 
 - Authoritative current icon policy: `src/components/icons/README.md`.
 - Icon rules that bind in the app (monochrome, no opacity dimming, solid tokens over slash-alpha): [`.claude/rules/design-system.md`](../../.claude/rules/design-system.md) and [../themes/theme-tokens.md](../themes/theme-tokens.md#text-tokens).
-- Brand-mark ink and backdrop system: [../themes/interaction-state-recipes.md](../themes/interaction-state-recipes.md#brand-mark-states).
-- Theme hero artwork, which is the other place the metaphor is drawn rather than described: `.claude/skills/daintree-theme-creator/resources/theme-preview-images.md`.
-- Lucide construction rules (grid, stroke, optical alignment), useful when judging which stock icon fits or when drawing a brand mark: <https://lucide.dev/contribute/icon-design-guide>
+- Brand-mark ink and backdrop system: [../themes/interaction-state-recipes.md](../themes/interaction-state-recipes.md#brand-mark-states).- Lucide construction rules (grid, stroke, optical alignment), useful when judging which stock icon fits or when drawing a brand mark: <https://lucide.dev/contribute/icon-design-guide>

@@ -1,26 +1,22 @@
 import { useState } from "react";
-import { Send } from "lucide-react";
+import { HardDrive } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { systemClient } from "@/clients/systemClient";
-import {
-  CANOPY_BETA_TERMS,
-  CANOPY_PRIVACY_URL,
-  CANOPY_REDACTION,
-  canopySendsFrom,
-  canopyStopOn,
-} from "./canopyTerms";
+import { canopyLocalOn, canopyStopOn } from "./canopyTerms";
 
 /**
- * Canopy is off on the host the panel shows. Consent is that host's own: the
- * offer names it, says what turning it on sends from there, and turns it on
+ * Canopy is off on the host the panel shows. Turning it on is that host's own:
+ * the offer names it, says what turning it on does there, and turns it on
  * there alone. Nothing about the window's own host changes.
  */
 export function CanopyHostOffer({
   hostName,
   onTurnOn,
+  onBack,
 }: {
   hostName: string;
   onTurnOn: () => Promise<void>;
+  /** Back to the host's agents, which stay listed as it observed them. */
+  onBack?: () => void;
 }) {
   const [pending, setPending] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -55,31 +51,84 @@ export function CanopyHostOffer({
           </p>
         </div>
         <div className="flex gap-2 text-sm leading-6 text-text-secondary">
-          <Send className="mt-1.5 size-3.5 shrink-0" aria-hidden="true" />
-          <div className="flex flex-col gap-2">
-            <p>{canopySendsFrom(hostName)}</p>
-            <p>
-              {CANOPY_REDACTION} {canopyStopOn(hostName)}{" "}
-              <Button
-                variant="link"
-                size="xs"
-                className="h-auto p-0 text-sm"
-                onClick={() => void systemClient.openExternal(CANOPY_PRIVACY_URL)}
-              >
-                Privacy policy
-              </Button>
-            </p>
-          </div>
+          <HardDrive className="mt-1.5 size-3.5 shrink-0" aria-hidden="true" />
+          <p>
+            {canopyLocalOn(hostName)} {canopyStopOn(hostName)}
+          </p>
         </div>
         <div className="flex items-center gap-3">
           <Button variant="contrast" disabled={pending} onClick={turnOn}>
             Turn on Canopy on {hostName}
           </Button>
+          {onBack && (
+            <Button variant="outline" disabled={pending} onClick={onBack}>
+              Back to agents
+            </Button>
+          )}
           <p role="status" className="text-xs text-text-secondary">
             {failed ? `Couldn't turn on Canopy on ${hostName}. Try again.` : ""}
           </p>
         </div>
-        <p className="text-xs text-text-secondary">{CANOPY_BETA_TERMS}</p>
+      </div>
+    </section>
+  );
+}
+
+/**
+ * The host the panel shows runs a Daintree from before Canopy read on the
+ * machine itself: its Canopy would send screens to a service that is gone.
+ * Nothing of it is shown or turned on from here until it is updated.
+ */
+export function CanopyHostOutdated({
+  hostName,
+  onTurnOff,
+}: {
+  hostName: string;
+  /** Present while Canopy is on there: still sending screens, it can be stopped from here. */
+  onTurnOff?: () => Promise<void>;
+}) {
+  const [pending, setPending] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const turnOff = () => {
+    if (!onTurnOff) return;
+    setPending(true);
+    setFailed(false);
+    onTurnOff().then(
+      () => setPending(false),
+      () => {
+        setPending(false);
+        setFailed(true);
+      }
+    );
+  };
+  return (
+    <section
+      aria-labelledby="canopy-host-outdated-title"
+      data-canopy-host-outdated=""
+      className="flex min-h-0 flex-1 items-center justify-center overflow-y-auto p-10"
+    >
+      <div className="flex max-w-md flex-col gap-2">
+        <h2
+          id="canopy-host-outdated-title"
+          className="text-lg font-semibold tracking-tight text-text-primary"
+        >
+          Update Daintree on {hostName}
+        </h2>
+        <p className="text-sm leading-6 text-text-secondary">
+          {hostName} runs an older Daintree, whose Canopy reads screens with a service that has been
+          retired. Once it is updated, Canopy reads its agents on {hostName} itself, with a model it
+          downloads there.
+        </p>
+        {onTurnOff && (
+          <div className="flex items-center gap-3 pt-2">
+            <Button variant="outline" disabled={pending} onClick={turnOff}>
+              Turn off Canopy on {hostName}
+            </Button>
+            <p role="status" className="text-xs text-text-secondary">
+              {failed ? `Couldn't turn off Canopy on ${hostName}. Try again.` : ""}
+            </p>
+          </div>
+        )}
       </div>
     </section>
   );

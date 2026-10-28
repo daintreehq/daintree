@@ -36,7 +36,7 @@ const GOLDEN_QUERIES = [
   { query: "voice", expectedTopResults: ["tab-nav-voice", "voice-enable"] },
   { query: "microphone", expectedTopResults: ["tab-nav-voice", "voice-enable"] },
   { query: "appearance", expectedTopResults: ["tab-nav-terminalAppearance", "appearance-theme"] },
-  { query: "hibernate", expectedTopResults: ["general-hibernation"] },
+  { query: "reclaim", expectedTopResults: ["general-idle-background-auto-close"] },
   { query: "github", expectedTopResults: ["forge-access-token", "tab-nav-code-forge"] },
   { query: "remote resources", expectedTopResults: ["tab-nav-project:environments"] },
   { query: "docker akash", expectedTopResults: ["tab-nav-project:environments"] },
@@ -134,9 +134,9 @@ describe("filterSettings", () => {
   });
 
   it("matches by keyword", () => {
-    const results = filterSettings(SETTINGS_SEARCH_INDEX, "hibernate");
+    const results = filterSettings(SETTINGS_SEARCH_INDEX, "caffeinate");
     expect(results.length).toBeGreaterThan(0);
-    // All matching entries should be in general (hibernate keyword only on general entries)
+    // "caffeinate" is only ever a keyword, on a general entry
     expect(results.some((r) => r.tab === "general")).toBe(true);
   });
 
@@ -184,6 +184,13 @@ describe("filterSettings", () => {
     for (const query of ["antigravity", "Antigravity IDE"]) {
       const results = filterSettings(SETTINGS_SEARCH_INDEX, query);
       expect(results.some((r) => r.id === "editor-external")).toBe(true);
+    }
+  });
+
+  it("finds the dictation cleanup model by either model's name", () => {
+    for (const query of ["cleanup model", "terra", "luna"]) {
+      const results = filterSettings(SETTINGS_SEARCH_INDEX, query);
+      expect(results.some((r) => r.id === "voice-cleanup-model")).toBe(true);
     }
   });
 
@@ -423,9 +430,17 @@ describe("Appearance tab search index subtab metadata", () => {
 });
 
 describe("voice tab coverage", () => {
-  it("returns results for 'whisper' query", () => {
+  it.each(["deepgram", "push to talk", "input device", "recording mode"])(
+    "returns a voice result for '%s'",
+    (query) => {
+      const results = filterSettings(SETTINGS_SEARCH_INDEX, query);
+      expect(results.some((r) => r.tab === "voice")).toBe(true);
+    }
+  );
+
+  it("no longer matches the retired 'whisper' model name", () => {
     const results = filterSettings(SETTINGS_SEARCH_INDEX, "whisper");
-    expect(results.some((r) => r.tab === "voice")).toBe(true);
+    expect(results.some((r) => r.tab === "voice")).toBe(false);
   });
 
   it("returns results for 'speech' query", () => {

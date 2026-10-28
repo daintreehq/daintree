@@ -20,8 +20,10 @@ import { isScheduledQuietNow, nextOccurrenceTimestamp } from "@shared/utils/quie
 import { normalizeForDedup } from "@shared/utils/normalizeErrorMessage";
 import { UNDO_ACTION_LABEL } from "@/lib/undoToast";
 import { worktreeNameFromId } from "@/lib/notificationSourceLabel";
+import { isScreenLocked, subscribeScreenLock } from "@/lib/powerPolicyState";
 import type { ErrorRetryability, ErrorType } from "@/store/errorStore";
 import type { NotificationSettings } from "@shared/types/ipc/api";
+import type { NotificationPluginSource } from "@shared/types/ipc/maps";
 
 /**
  * Closed union of routing-relevant notification domains. Kept closed (not
@@ -305,15 +307,24 @@ interface NotifyPayloadBase {
    * inbox summary, catching slow-dripping noisy producers that sit outside
    * the coalesce window. Falls back to `correlationId`, then
    * `context.projectId`, then `<context.worktreeId>:<type>`, then `type`.
+   * Printed as the source in the overflow summary unless `rateLimitLabel`
+   * names it.
    */
   rateLimitKey?: string;
+  /**
+   * How the overflow summary names a `rateLimitKey` source, for a key that is
+   * an internal id (a plugin's instance key). Never part of the bucket's
+   * identity: two sources may share a label.
+   */
+  rateLimitLabel?: string;
   /** When false, the history entry exists but does not increment the unread badge. Defaults to true. */
   countable?: boolean;
   /**
    * When true, the notification is shown as a toast only — no history entry is
-   * written and no unread badge increments. Use only for one-shot confirmations
-   * where the result is already visible elsewhere (clipboard write, file dialog
-   * outcome, in-place UI state). Stronger than `countable: false`, which still
+   * written and no unread badge increments. Use only for news the user can't
+   * see for themselves that isn't worth keeping. Never confirm the user's own
+   * action when its result is already on screen (a delete, an import, a save to
+   * a destination they chose): the change is the confirmation. Stronger than `countable: false`, which still
    * writes the entry; `transient` skips the inbox entirely.
    */
   transient?: boolean;
@@ -335,13 +346,20 @@ interface NotifyPayloadBase {
    */
   suppressWhenOriginVisible?: boolean;
   /**
-   * Set when another host already applied its own policy (on/off, quiet
-   * hours) to this event. This window's notification settings can belong to
-   * a third host, so they must not decide it again: only this screen's focus
-   * and session mute still apply. `quiet` routes it to the inbox, as quiet
-   * hours would for a local event.
+   * Set when main already judged this event from another host by this
+   * machine's notification settings (on/off, quiet hours, #14701), with an
+   * older host's own quiet verdict folded in. A view's settings mirror can lag
+   * a change, so it doesn't decide again: only this screen's focus and session
+   * mute still apply. `quiet` routes it to the inbox, as quiet hours would for
+   * a local event.
    */
   sourceHostPolicy?: { quiet: boolean };
+  /**
+   * Main already paged for this with a native banner, finding no window
+   * focused. It routes as it would in a blurred window, so one focused while
+   * it was on its way doesn't toast it as well.
+   */
+  pagedNatively?: boolean;
   /** Fires exactly once when the user explicitly dismisses the toast via the close or action button */
   onDismiss?: () => void;
   /**
@@ -362,6 +380,11 @@ interface NotifyPayloadBase {
      * Its project ids mean nothing here, so the host's name is the source.
      */
     hostName?: string;
+    /**
+     * The plugin that raised it, set by main from the plugin's own binding.
+     * Names the plugin in the row's source and offers "Silence <Plugin>".
+     */
+    plugin?: NotificationPluginSource;
   };
 }
 
@@ -478,10 +501,19 @@ export function _resetPendingSuppressedForTest(): void {
   _pendingSuppressed.clear();
 }
 
+/**
+ * Whether anyone can be looking at this window. A locked screen fires no blur,
+ * so focus alone keeps answering yes on one (#14885).
+ */
+function isWindowAttended(): boolean {
+  if (isScreenLocked()) return false;
+  return typeof document === "undefined" || document.hasFocus();
+}
+
 function isOriginSurfaceVisible(context: NotifyPayload["context"]): boolean {
   if (!context) return false;
   if (!_activeContextAccessors) return false;
-  if (typeof document !== "undefined" && !document.hasFocus()) return false;
+  if (!isWindowAttended()) return false;
 
   // A panel address is the narrower surface: its worktree being active doesn't
   // put that panel on screen, so the worktree only decides when no panel is named.
@@ -697,7 +729,7 @@ interface RateLimitBucketId {
 
 function getRateLimitBucketId(payload: NotifyPayload): RateLimitBucketId {
   const explicit = payload.rateLimitKey ?? payload.correlationId ?? payload.context?.projectId;
-  if (explicit) return { key: explicit, label: explicit };
+  if (explicit) return { key: explicit, label: payload.rateLimitLabel || explicit };
   const worktreeId = payload.context?.worktreeId;
   if (worktreeId) {
     // Keyed by severity too: a burst of routine successes in one worktree
@@ -791,6 +823,16 @@ function checkAndApplyRateLimit(payload: NotifyPayload): boolean {
     // like "Mute project X" would dispatch against the first overflow's
     // project and silently mute the wrong target on later events. A
     // worktree-keyed bucket is about one worktree, so the row files under it.
+    // A plugin's bucket is that one plugin's (on another host, `plugin:<host>:<id>`),
+    // so its row keeps the plugin: a noisy plugin's summary is exactly where
+    // "Silence <Plugin>" is wanted.
+    const plugin = payload.context?.plugin;
+    const bucketPlugin =
+      plugin &&
+      (key === `plugin:${plugin.id}` ||
+        (key.startsWith("plugin:") && key.endsWith(`:${plugin.id}`)))
+        ? plugin
+        : undefined;
     bucket.overflowEntryId = historyStore.addEntry({
       type: payload.type,
       title: payload.title,
@@ -798,7 +840,14 @@ function checkAndApplyRateLimit(payload: NotifyPayload): boolean {
       correlationId: payload.correlationId,
       seenAsToast: false,
       countable: payload.countable,
-      ...(worktreeId ? { context: { worktreeId } } : {}),
+      ...(worktreeId || bucketPlugin
+        ? {
+            context: {
+              ...(worktreeId ? { worktreeId } : {}),
+              ...(bucketPlugin ? { plugin: bucketPlugin } : {}),
+            },
+          }
+        : {}),
     });
   }
 
@@ -853,9 +902,8 @@ export function muteUntilNextMorning(morningMin = 8 * 60): number {
 
 /**
  * Whether notifications are on and whether this one is held back as quiet. A
- * cross-host event carries its source host's verdict in place of this
- * window's schedule and on/off switch; the session mute is always this
- * screen's.
+ * cross-host event carries main's verdict in place of this window's schedule
+ * and on/off switch; the session mute is always this screen's.
  */
 function deliveryGates(payload: NotifyPayload): { enabled: boolean; quiet: boolean } {
   const hostPolicy = payload.sourceHostPolicy;
@@ -1046,7 +1094,8 @@ export function notify(payload: NotifyPayload): string {
     });
   }
 
-  const isFocused = typeof document !== "undefined" ? document.hasFocus() : true;
+  // A locked screen counts as blurred, though it never fires a blur (#14885).
+  const isFocused = payload.pagedNatively !== true && isWindowAttended();
 
   const originVisible =
     payload.suppressWhenOriginVisible === true &&
@@ -1317,7 +1366,7 @@ function scheduleSuppressionGrace(
   // when the user returns.
   const unsubContext = subscriber
     ? subscriber(() => {
-        if (typeof document !== "undefined" && !document.hasFocus()) return;
+        if (!isWindowAttended()) return;
         promote();
       })
     : () => {};
@@ -1335,8 +1384,11 @@ function scheduleSuppressionGrace(
   // re-reads focus synchronously.
   let unsubBlur = (): void => {};
   let unsubFocus = (): void => {};
+  let unsubLock = (): void => {};
   if (typeof window !== "undefined") {
     const focusHandler = (): void => {
+      // Focus on a still-locked screen is no return; the unlock below is.
+      if (isScreenLocked()) return;
       window.removeEventListener("focus", focusHandler);
       unsubFocus = (): void => {};
       const entry = _pendingSuppressed.get(historyEntryId);
@@ -1359,12 +1411,21 @@ function scheduleSuppressionGrace(
     };
     window.addEventListener("blur", blurHandler);
     unsubBlur = (): void => window.removeEventListener("blur", blurHandler);
+    // Locking hides the affordance without a blur (#14885), so it pauses the
+    // same way. Unlocking into a focused window is the return, and focus read
+    // here, outside a focus handler, is current; unlocking anywhere else
+    // leaves the refocus listener to decide.
+    unsubLock = subscribeScreenLock((locked) => {
+      if (locked) blurHandler();
+      else if (document.hasFocus()) focusHandler();
+    });
   }
 
   const unsub = (): void => {
     unsubContext();
     unsubBlur();
     unsubFocus();
+    unsubLock();
   };
 
   const timerId = setTimeout(() => {

@@ -8,13 +8,16 @@ const waitForAttachSettledMock =
 const repaintForRevealMock = vi.fn<(id: string) => boolean>();
 const revealTerminalMock = vi.fn<(id: string) => Promise<boolean>>();
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     waitForAttachSettled: waitForAttachSettledMock,
     repaintForReveal: repaintForRevealMock,
     revealTerminal: revealTerminalMock,
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 const { createWorktreeRevealCoordinator } = await import("../worktreeRevealCoordinator");
 

@@ -16,6 +16,7 @@ import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { markPerformance, withPerformanceSpan } from "../utils/performance.js";
 import { buildSwitchHydrateResult } from "./AppHydrationService.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+import { notifyProjectPluginsOpened } from "../window/projectPluginLifecycle.js";
 
 export class ProjectSwitchService {
   private deps: HandlerDependencies;
@@ -298,11 +299,14 @@ export type HostActivationWorkspace = {
   loadProject(rootPath: string, residentId: number): Promise<unknown>;
   resumeProject(rootPath: string): void;
   unregisterWindow(residentId: number): void;
+  isWindowAttached(residentId: number, rootPath: string): boolean;
 };
 
 interface HostResidency {
   projectId: string;
+  path: string;
   load: Promise<void>;
+  settled: boolean;
 }
 
 /**
@@ -328,20 +332,58 @@ export function activateProjectOnHost(
   project: Pick<Project, "id" | "path">,
   residentId: number
 ): Promise<void> {
+  // Every activation is an open as plugins count it, the re-hold of a project
+  // the view never left included: a project closed under a still-attached view
+  // is reopened by that same view switching back to it. The plugin open is the
+  // same one a local view sends: without it the project's plugins never load
+  // here, and every wait on them (a new worktree's setup-step listing, an
+  // agent launch's plugin tools) runs to its full timeout.
+  notifyProjectPluginsOpened(project.id, project.path);
   const current = hostResidency.get(residentId);
-  if (current?.projectId === project.id) return current.load;
+  if (current?.projectId === project.id && isResidencyHeld(workspace, residentId, current)) {
+    return current.load;
+  }
 
   // Foreground first: a warm host demoted by an earlier switch-away must be
   // accepting worktree calls by the time the view's first ones arrive.
   workspace.resumeProject(project.path);
   const load = workspace.loadProject(project.path, residentId).then(() => undefined);
-  const entry: HostResidency = { projectId: project.id, load };
+  const entry: HostResidency = { projectId: project.id, path: project.path, load, settled: false };
   hostResidency.set(residentId, entry);
-  load.catch(() => {
-    if (hostResidency.get(residentId) === entry) hostResidency.delete(residentId);
-  });
-  markProjectActiveOnHost(project.id);
+  load.then(
+    () => {
+      entry.settled = true;
+    },
+    () => {
+      if (hostResidency.get(residentId) === entry) hostResidency.delete(residentId);
+    }
+  );
+  // Re-holding a project the view never left is not a fresh activation.
+  if (current?.projectId !== project.id) markProjectActiveOnHost(project.id);
   return load;
+}
+
+/**
+ * A loaded residency is only as good as the pool's hold behind it: when the
+ * project's host was disposed and re-spawned under the view, the view is no
+ * longer one of its holders and nothing keeps that host up for it (#13748).
+ */
+function isResidencyHeld(
+  workspace: HostActivationWorkspace,
+  residentId: number,
+  residency: HostResidency
+): boolean {
+  return !residency.settled || workspace.isWindowAttached(residentId, residency.path);
+}
+
+/** Whether a remote view still holds `projectId` resident here, its host included. */
+export function isProjectHeldOnHost(
+  workspace: HostActivationWorkspace,
+  residentId: number,
+  projectId: string
+): boolean {
+  const current = hostResidency.get(residentId);
+  return current?.projectId === projectId && isResidencyHeld(workspace, residentId, current);
 }
 
 /**

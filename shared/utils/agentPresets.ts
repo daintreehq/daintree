@@ -142,6 +142,7 @@ function sanitizePreset(preset: AgentPreset): AgentPreset | null {
         : undefined,
     displayTitle: sanitizeDisplayTitle(preset.displayTitle),
     fallbacks: sanitizeFallbacks(preset.fallbacks, preset.id),
+    fallbackOnRateLimit: preset.fallbackOnRateLimit === true ? true : undefined,
   };
 }
 

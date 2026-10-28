@@ -1,34 +1,45 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
-const { execFileMock, findAllOnPathMock, pathScanMock, createApplicationMenuMock, pluginInit } =
-  vi.hoisted(() => {
-    const pluginInit = {
-      promise: Promise.resolve(),
-      resolve: () => {},
-      reset() {
-        this.promise = new Promise<void>((resolve) => {
-          this.resolve = resolve;
-        });
-      },
-    };
-    return {
-      execFileMock: vi.fn((...args: unknown[]) => {
-        const callback = args.find(
-          (a): a is (err: unknown, stdout?: string) => void => typeof a === "function"
-        );
-        const err = Object.assign(new Error("not found"), { code: "ENOENT" });
-        queueMicrotask(() => callback?.(err));
-        return {} as never;
-      }),
-      // POSIX walks PATH in-process; every agent misses.
-      findAllOnPathMock: vi.fn(async () => [] as string[]),
-      // Windows probes PATH by reading its directories rather than running
-      // `where`; every agent misses there too.
-      pathScanMock: vi.fn(async () => ({ paths: [] as string[], skipped: [] as string[] })),
-      createApplicationMenuMock: vi.fn(),
-      pluginInit,
-    };
-  });
+const {
+  execFileMock,
+  findAllOnPathMock,
+  pathScanMock,
+  createApplicationMenuMock,
+  rebuildMenuIfChangedMock,
+  getFocusedWindowMock,
+  tourListeners,
+  pluginInit,
+} = vi.hoisted(() => {
+  const pluginInit = {
+    promise: Promise.resolve(),
+    resolve: () => {},
+    reset() {
+      this.promise = new Promise<void>((resolve) => {
+        this.resolve = resolve;
+      });
+    },
+  };
+  return {
+    execFileMock: vi.fn((...args: unknown[]) => {
+      const callback = args.find(
+        (a): a is (err: unknown, stdout?: string) => void => typeof a === "function"
+      );
+      const err = Object.assign(new Error("not found"), { code: "ENOENT" });
+      queueMicrotask(() => callback?.(err));
+      return {} as never;
+    }),
+    // POSIX walks PATH in-process; every agent misses.
+    findAllOnPathMock: vi.fn(async () => [] as string[]),
+    // Windows probes PATH by reading its directories rather than running
+    // `where`; every agent misses there too.
+    pathScanMock: vi.fn(async () => ({ paths: [] as string[], skipped: [] as string[] })),
+    createApplicationMenuMock: vi.fn(),
+    rebuildMenuIfChangedMock: vi.fn(),
+    getFocusedWindowMock: vi.fn((): unknown => null),
+    tourListeners: [] as Array<() => void>,
+    pluginInit,
+  };
+});
 
 vi.mock("child_process", () => ({ execFile: execFileMock, execFileSync: vi.fn() }));
 vi.mock("../../utils/findOnPath.js", () => ({
@@ -57,7 +68,7 @@ vi.mock("../../utils/windowsExecutable.js", async (importOriginal) => ({
 }));
 
 vi.mock("electron", () => ({
-  BrowserWindow: { getFocusedWindow: vi.fn(() => null) },
+  BrowserWindow: { getFocusedWindow: getFocusedWindowMock },
   session: { defaultSession: { clearCache: vi.fn(async () => {}) } },
 }));
 vi.mock("../../ipc/handlers.js", () => ({ sendToRenderer: vi.fn() }));
@@ -72,7 +83,7 @@ vi.mock("../portDistribution.js", () => ({
   distributePortsToView: vi.fn(),
   releaseAllTerminalWorkerPorts: vi.fn(),
 }));
-vi.mock("../skeletonCss.js", () => ({ resolveInitialColorSchemeId: () => "daintree" }));
+vi.mock("../skeletonCss.js", () => ({ resolveInitialCanvasBackgroundColor: () => "#000000" }));
 vi.mock("../../../shared/theme/index.js", () => ({
   resolveAppTheme: () => ({ tokens: { "surface-canvas": "#000" } }),
 }));
@@ -93,19 +104,26 @@ vi.mock("../../services/EventBuffer.js", () => ({
 vi.mock("../../services/ProjectSwitchService.js", () => ({
   ProjectSwitchService: vi.fn(function ProjectSwitchService() {}),
 }));
-vi.mock("../../menu.js", () => ({ createApplicationMenu: createApplicationMenuMock }));
+vi.mock("../../menu.js", () => ({
+  createApplicationMenu: createApplicationMenuMock,
+  rebuildApplicationMenuIfPluginVisibilityChanged: rebuildMenuIfChangedMock,
+}));
 vi.mock("../../services/plugin/PluginTourRegistry.js", () => ({
-  onPluginToursChanged: vi.fn(() => () => {}),
+  onPluginToursChanged: vi.fn((listener: () => void) => {
+    tourListeners.push(listener);
+    return () => {};
+  }),
 }));
 vi.mock("../../services/NotificationService.js", () => ({
   notificationService: { initialize: vi.fn(), detachWindowListeners: vi.fn() },
 }));
 vi.mock("../../services/ProjectStore.js", () => ({ projectStore: { getProjectById: vi.fn() } }));
 vi.mock("../../services/PluginService.js", () => ({
-  pluginService: { waitForInit: () => pluginInit.promise },
+  pluginService: { waitForCatalog: () => pluginInit.promise },
 }));
 
 import { initPerWindowServices, __resetPerWindowInitForTests } from "../perWindowInit.js";
+import { notifyProjectPresenceChanged } from "../projectPresenceChanges.js";
 import { __resetDeferredQueueForTests, signalFirstInteractive } from "../deferredInitQueue.js";
 import {
   getCliAvailabilityServiceRef,
@@ -241,5 +259,98 @@ describe("initPerWindowServices repeated work across windows", () => {
     await settle();
 
     expect(second.menuWindowIds).toEqual([2]);
+  });
+});
+
+describe("initPerWindowServices plugin menu context (#13765)", () => {
+  const debounce = () => new Promise((r) => setTimeout(r, 80));
+
+  async function openFocusableWindow(id: number): Promise<{
+    win: BrowserWindow;
+    focus: () => void;
+    close: () => void;
+  }> {
+    const win = fakeWindow(id);
+    await initPerWindowServices(win, fakeContext(id), undefined);
+    signalFirstInteractive(id);
+    pluginInit.resolve();
+    await settle();
+    const handler = (event: string) =>
+      vi
+        .mocked(win.on)
+        .mock.calls.concat(vi.mocked(win.once).mock.calls)
+        .filter(([name]) => name === event)
+        .map(([, listener]) => listener as () => void);
+    return {
+      win,
+      focus: () => handler("focus").forEach((listener) => listener()),
+      close: () => handler("closed").forEach((listener) => listener()),
+    };
+  }
+
+  beforeEach(() => {
+    vi.useRealTimers();
+    __resetDeferredQueueForTests();
+    __resetPerWindowInitForTests();
+    pluginInit.reset();
+    setCliAvailabilityServiceRef(null);
+    setPtyClientRef({} as PtyClient);
+    tourListeners.length = 0;
+    getFocusedWindowMock.mockReturnValue(null);
+  });
+
+  it("checks the focused window's menu on a project switch or focus, and only rebuilds outright for tours", async () => {
+    const { win, focus, close } = await openFocusableWindow(1);
+    getFocusedWindowMock.mockReturnValue(win);
+    createApplicationMenuMock.mockClear();
+    rebuildMenuIfChangedMock.mockClear();
+
+    try {
+      notifyProjectPresenceChanged();
+      notifyProjectPresenceChanged();
+      await debounce();
+      expect(rebuildMenuIfChangedMock.mock.calls.map(([w]) => w)).toEqual([win]);
+
+      focus();
+      await debounce();
+      expect(rebuildMenuIfChangedMock).toHaveBeenCalledTimes(2);
+
+      // A tour change alongside a context change in the same tick still
+      // rebuilds outright: the tour set itself moved.
+      notifyProjectPresenceChanged();
+      tourListeners.forEach((listener) => listener());
+      await debounce();
+      expect(rebuildMenuIfChangedMock).toHaveBeenCalledTimes(2);
+      expect(createApplicationMenuMock.mock.calls.map(([w]) => w)).toEqual([win]);
+    } finally {
+      close();
+    }
+  });
+
+  it("leaves the menu alone on a context change while no window is focused", async () => {
+    const { close } = await openFocusableWindow(1);
+    createApplicationMenuMock.mockClear();
+    rebuildMenuIfChangedMock.mockClear();
+
+    try {
+      notifyProjectPresenceChanged();
+      await debounce();
+      expect(rebuildMenuIfChangedMock).not.toHaveBeenCalled();
+      expect(createApplicationMenuMock).not.toHaveBeenCalled();
+    } finally {
+      close();
+    }
+  });
+
+  it("stops listening once the window closes", async () => {
+    const { win, close } = await openFocusableWindow(1);
+    getFocusedWindowMock.mockReturnValue(win);
+    rebuildMenuIfChangedMock.mockClear();
+
+    close();
+    notifyProjectPresenceChanged();
+    await debounce();
+    expect(rebuildMenuIfChangedMock).not.toHaveBeenCalled();
+    expect(win.removeListener).toHaveBeenCalledWith("focus", expect.any(Function));
   });
 });

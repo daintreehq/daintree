@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import type { CliAvailability, AgentSettings, HibernationConfig } from "@shared/types";
+import type { CliAvailability, AgentSettings } from "@shared/types";
 import { getBuildChannelLabel } from "@shared/config/distribution";
 
 vi.mock("@/lib/utils", () => ({ cn: (...args: unknown[]) => args.filter(Boolean).join(" ") }));
@@ -86,12 +86,6 @@ function setupDispatchMock(cliAvailability: CliAvailability, agentSettings: Agen
     }
     if (actionId === "agentSettings.get") {
       return { ok: true, result: agentSettings };
-    }
-    if (actionId === "hibernation.getConfig") {
-      return {
-        ok: true,
-        result: { enabled: false, inactiveThresholdHours: 24 } as HibernationConfig,
-      };
     }
     if (actionId === "windowOpening.getConfig") {
       return { ok: true, result: { openFoldersInNewWindow: "default" } };

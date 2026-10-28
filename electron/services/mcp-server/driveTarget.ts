@@ -90,6 +90,27 @@ export function resolveMcpDriveTarget(projectId: string): McpDriveTarget | null 
   return target;
 }
 
+/**
+ * Whether a tool only a frontend can run would reach one for `projectId` now
+ * (#14122), by the same reading dispatch makes: a reachable driver, or — while
+ * nobody drives it, or no lease is installed — a view on this machine that
+ * shows it. A holder the lease is keeping a place for answers nothing, so it
+ * is not attached. `shownLocally` is the caller's own view lookup, which keeps
+ * this module free of the window registry.
+ */
+export function isMcpFrontendAttached(projectId: string, shownLocally: boolean): boolean {
+  const target = resolveMcpDriveTarget(projectId);
+  if (target === null) return shownLocally;
+  switch (target.state) {
+    case "live":
+      return true;
+    case "unavailable":
+      return false;
+    case "vacant":
+      return shownLocally;
+  }
+}
+
 /** @internal Tests only. */
 export function _resetMcpDriveTargetResolverForTesting(): void {
   resolver = null;

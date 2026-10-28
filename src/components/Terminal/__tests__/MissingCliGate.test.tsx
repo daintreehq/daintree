@@ -41,6 +41,11 @@ vi.mock("@/lib/platform", () => ({
   isLinux: () => mockPlatform.isLinux(),
 }));
 
+const mockHost = vi.hoisted(() => ({ name: null as string | null }));
+vi.mock("@/hooks/useSettingsOwner", () => ({
+  useRemoteHostName: () => mockHost.name,
+}));
+
 // Mock cn utility to pass through class names
 vi.mock("@/lib/utils", () => ({
   cn: (...args: (string | false | undefined | null)[]) => args.filter(Boolean).join(" "),

@@ -10,6 +10,8 @@ dist-typecheck/
 packages/plugin-sdk/browser/
 out/
 release/
+# Skill directories are always source, whatever they're named (release/, out/ ...)
+!.claude/skills/*/
 *.asar
 stats.html
 

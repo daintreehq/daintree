@@ -4,6 +4,7 @@ import { StateField, StateEffect } from "@codemirror/state";
 import { createChipRemoveControl, removeChipRange } from "./base";
 import { formatBytes } from "@/lib/formatBytes";
 import { chipAriaLabel, chipPendingDeleteField, isChipSelected } from "./chipBackspace";
+import { mapChipEntry, restoreChipsOnUndo } from "./composerHistory";
 import { chipCardMeta, chipCardPath, chipHoverTooltip, chipTooltip } from "./chipCard";
 import { createTrustedHTML, setTrustedInnerHTML } from "@/lib/trustedTypesPolicy";
 import { resolveLocalFileSources } from "@/lib/transferSources";
@@ -86,7 +87,7 @@ class FileDropChipWidget extends WidgetType {
   }
 }
 
-export const addFileDropChip = StateEffect.define<FileDropChipEntry>();
+export const addFileDropChip = StateEffect.define<FileDropChipEntry>({ map: mapChipEntry });
 
 export const fileDropChipField = StateField.define<FileDropChipEntry[]>({
   create() {
@@ -115,6 +116,7 @@ export const fileDropChipField = StateField.define<FileDropChipEntry[]>({
     return entries;
   },
   provide: (f) => [
+    restoreChipsOnUndo(f, addFileDropChip),
     EditorView.decorations.of((view) => {
       const entries = view.state.field(f, false);
       if (!entries || entries.length === 0) return Decoration.none;

@@ -8,7 +8,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { RadioChoiceGroup, RadioChoiceRow } from "@/components/ui/RadioChoice";
 import { SettingsSection } from "./SettingsSection";
-import { useSettingsOwnerMarker } from "@/hooks/useSettingsOwner";
+import { SECTION_SETTINGS } from "@/components/Settings/settingsSectionOwners";
 import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
 import { SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { ErrorRetryRow } from "./auditLogParts";
@@ -21,6 +21,7 @@ import { actionService } from "@/services/ActionService";
 import { useActionPrefsStore } from "@/store/actionPrefsStore";
 import { logError } from "@/utils/logger";
 import { pluralize } from "@/lib/pluralize";
+import { isClientAppError } from "@/utils/clientAppError";
 
 type TelemetryLevel = "off" | "errors" | "full";
 type LogRetention = 7 | 30 | 90 | 0;
@@ -28,6 +29,13 @@ type LoadState = "loading" | "ready" | "error";
 
 /** A write that failed, and the call that repeats it. */
 type FailedWrite = { message: string; retry: () => void } | null;
+
+/** The host's own words for a change it refused because another screen drives a project there. */
+function drivenElsewhereMessage(error: unknown): string | null {
+  return isClientAppError(error) && error.code === "DRIVEN_ELSEWHERE" && error.userMessage
+    ? error.userMessage
+    : null;
+}
 
 const PRIVACY_SUBTABS: SettingsSubtabItem[] = [
   { id: "telemetry", label: "Telemetry" },
@@ -127,7 +135,6 @@ interface PrivacyDataTabProps {
 export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabProps) {
   // Telemetry, logs and local data are this machine's; agent session history is kept
   // where the agents run. A remote window names the owner of each section.
-  const ownerMarker = useSettingsOwnerMarker();
   const currentSubtab = activeSubtab ?? "telemetry";
 
   const [telemetryLevel, setTelemetryLevel] = useState<TelemetryLevel>("off");
@@ -233,26 +240,29 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
   }, [sessionRetentionNonce]);
 
   /** Resolves false when the write failed; the caller decides where to say so. */
+  // Resolves null once saved; a failure carries the host's refusal when
+  // another screen drives a project there.
   const handleSessionRetentionChange = async (
     days: LogRetention,
     { reportInline = true }: { reportInline?: boolean } = {}
-  ): Promise<boolean> => {
+  ): Promise<{ refusal: string | null } | null> => {
     const prev = sessionRetentionDays;
     setSessionRetentionFailure(null);
     setSessionRetentionDays(days);
     try {
       await window.electron.agentSessionHistory.setRetentionDays(days);
-      return true;
+      return null;
     } catch (err) {
       setSessionRetentionDays(prev);
+      const refusal = drivenElsewhereMessage(err);
       if (reportInline) {
         setSessionRetentionFailure({
-          message: "Session history retention couldn't be saved",
+          message: refusal ?? "Session history retention couldn't be saved",
           retry: () => void handleSessionRetentionChange(days),
         });
       }
       logError("Failed to set session history retention", err);
-      return false;
+      return { refusal };
     }
   };
 
@@ -262,12 +272,13 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
     if (pendingSessionRetention === null || shortenPending) return;
     setShortenPending(true);
     setShortenError(null);
-    const ok = await handleSessionRetentionChange(pendingSessionRetention, {
+    const failure = await handleSessionRetentionChange(pendingSessionRetention, {
       reportInline: false,
     });
     setShortenPending(false);
-    if (ok) setPendingSessionRetention(null);
-    else setShortenError("Session history retention couldn't be saved. Try again.");
+    if (failure === null) setPendingSessionRetention(null);
+    else
+      setShortenError(failure.refusal ?? "Session history retention couldn't be saved. Try again.");
   };
 
   // A shorter window prunes records the moment it's saved, so it asks first;
@@ -290,7 +301,9 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
       setHistoryCleared(true);
       setTimeout(() => setHistoryCleared(false), CLEARED_FLASH_MS);
     } catch (err) {
-      setClearHistoryError("Session history couldn't be cleared. Try again.");
+      setClearHistoryError(
+        drivenElsewhereMessage(err) ?? "Session history couldn't be cleared. Try again."
+      );
       logError("Failed to clear agent session history", err);
     } finally {
       setClearHistoryPending(false);
@@ -390,7 +403,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
             <SettingsSection
               id="privacy-telemetry-level"
               title="Telemetry & diagnostics"
-              badge={ownerMarker("device")}
+              settings={SECTION_SETTINGS.privacy}
               description="What Daintree sends off this machine. File contents, prompts and credentials are never sent. Logs and histories kept on this machine are managed under Data & storage."
             >
               {privacyLoadError}
@@ -441,7 +454,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
 
             <SettingsSection
               title="What's collected at each level"
-              badge={ownerMarker("device")}
+              settings={SECTION_SETTINGS.privacy}
               description="Exactly what each level sends."
             >
               <SettingsGroup>
@@ -505,7 +518,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
           <>
             <SettingsSection
               title="Local data"
-              badge={ownerMarker("device")}
+              settings={SECTION_SETTINGS.privacy}
               description="Where Daintree keeps settings, logs, and session data on this machine."
             >
               {privacyLoadError}
@@ -583,7 +596,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
 
             <SettingsSection
               title="Session history"
-              badge={ownerMarker("host")}
+              settings={SECTION_SETTINGS.sessionHistory}
               description="Daintree records resumable agent sessions so you can pick up where you left off."
             >
               {sessionRetentionLoad === "error" && (
@@ -633,7 +646,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
             <SettingsSection
               id="privacy-reset-data"
               title="Factory reset"
-              badge={ownerMarker("device")}
+              settings={SECTION_SETTINGS.privacy}
             >
               <SettingsGroup>
                 <SettingsRow

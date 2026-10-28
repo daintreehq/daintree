@@ -3,11 +3,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ActionCallbacks, ActionRegistry } from "../../actionTypes";
 import type { ActionContext } from "@shared/types/actions";
 import type { HostListEntry } from "@shared/types/remoteHosts";
+import type { NotifyPayload } from "@/lib/notify";
 
 const { supported, remoteHosts, notify } = vi.hoisted(() => ({
   supported: { value: true },
   remoteHosts: { value: [] as HostListEntry[] },
-  notify: vi.fn((_payload: unknown) => "toast"),
+  notify: vi.fn((_payload: NotifyPayload) => "toast"),
 }));
 
 vi.mock("@/lib/notify", async (importOriginal) => ({
@@ -26,6 +27,7 @@ vi.mock("@/components/Hosts/hostList", async (importOriginal) => ({
 }));
 
 import { createActionDefinitions } from "../../actionDefinitions";
+import { ActionService } from "@/services/ActionService";
 import { ClientAppError } from "@/utils/clientAppError";
 import { registerHostActions } from "../hostActions";
 import { registerPortActions } from "../portActions";
@@ -218,6 +220,91 @@ describe("host.switch", () => {
     registerHostActions(registry, callbacks());
     await expect(run(registry, "host.switch", { hostId: "nowhere" })).rejects.toThrow(/nowhere/);
     expect(switchWindowHost).not.toHaveBeenCalled();
+  });
+
+  it("opens a named project on the host with its terminal focused once it shows", async () => {
+    const registry: ActionRegistry = new Map();
+    registerHostActions(registry, callbacks());
+    await run(registry, "host.switch", { hostId: "studio-01", projectId: "p1", terminalId: "t1" });
+    expect(switchWindowHost).toHaveBeenLastCalledWith({
+      hostId: "studio-01",
+      newWindow: false,
+      projectId: "p1",
+      focusIntent: { intent: "focus-panel", panelId: "t1" },
+    });
+    await run(registry, "host.switch", { hostId: "studio-01", projectId: "p1" });
+    expect(switchWindowHost).toHaveBeenLastCalledWith({
+      hostId: "studio-01",
+      newWindow: false,
+      projectId: "p1",
+    });
+  });
+
+  it("retries a failed switch into the same project and terminal", async () => {
+    remoteHosts.value = [host("studio-01")];
+    switchWindowHost.mockRejectedValueOnce(
+      new ClientAppError("HOST_DISCONNECTED", "gone", "Couldn't reach this host.")
+    );
+    notify.mockClear();
+    const registry: ActionRegistry = new Map();
+    registerHostActions(registry, callbacks());
+    const args = { hostId: "studio-01", projectId: "p1", terminalId: "t1" };
+    await expect(run(registry, "host.switch", args)).rejects.toThrow();
+
+    const retry = notify.mock.calls[0]?.[0].actions?.[0];
+    expect(retry?.label).toBe("Retry");
+    void retry?.onClick();
+    await vi.waitFor(() => expect(switchWindowHost).toHaveBeenCalledTimes(2));
+    expect(switchWindowHost).toHaveBeenLastCalledWith({
+      hostId: "studio-01",
+      newWindow: false,
+      projectId: "p1",
+      focusIntent: { intent: "focus-panel", panelId: "t1" },
+    });
+  });
+});
+
+describe("host.switch through the action service", () => {
+  function service(): ActionService {
+    const registry: ActionRegistry = new Map();
+    registerHostActions(registry, callbacks());
+    const svc = new ActionService();
+    for (const [, factory] of registry) svc.register(factory());
+    return svc;
+  }
+
+  it("refuses a terminal without its project, and a project without its host, before asking anyone", async () => {
+    remoteHosts.value = [host("studio-01")];
+    const svc = service();
+    const terminalOnly = await svc.dispatch(
+      "host.switch",
+      { hostId: "studio-01", terminalId: "t1" },
+      { source: "agent" }
+    );
+    expect(terminalOnly).toMatchObject({ ok: false, error: { code: "VALIDATION_ERROR" } });
+    const projectOnly = await svc.dispatch("host.switch", { projectId: "p1" }, { source: "user" });
+    expect(projectOnly).toMatchObject({ ok: false, error: { code: "VALIDATION_ERROR" } });
+    expect(switchWindowHost).not.toHaveBeenCalled();
+    expect(usePaletteStore.getState().activePaletteId).toBeNull();
+  });
+
+  it("asks an agent first, and lands on the project and terminal once confirmed", async () => {
+    const svc = service();
+    const args = { hostId: "studio-01", projectId: "p1", terminalId: "t1" };
+    expect(await svc.dispatch("host.switch", args, { source: "agent" })).toMatchObject({
+      ok: false,
+      error: { code: "CONFIRMATION_REQUIRED" },
+    });
+    expect(switchWindowHost).not.toHaveBeenCalled();
+
+    const confirmed = await svc.dispatch("host.switch", args, { source: "agent", confirmed: true });
+    expect(confirmed.ok).toBe(true);
+    expect(switchWindowHost).toHaveBeenCalledWith({
+      hostId: "studio-01",
+      newWindow: false,
+      projectId: "p1",
+      focusIntent: { intent: "focus-panel", panelId: "t1" },
+    });
   });
 });
 

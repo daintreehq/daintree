@@ -33,7 +33,12 @@ vi.mock("../../window/webContentsRegistry.js", () => ({
 }));
 
 import { McpServerService, mcpServerService } from "../McpServerService.js";
-import { helpOwnershipPrincipal, principalOwnerKey } from "../mcp-server/resourceOwnership.js";
+import {
+  helpOwnershipPrincipal,
+  principalOwnerKey,
+  relayOwnershipPrincipal,
+} from "../mcp-server/resourceOwnership.js";
+import { getAgentAvailabilityStore } from "../AgentAvailabilityStore.js";
 import { getMcpServerServiceRef, setPtyClientRef } from "../../window/serviceRefs.js";
 import { events } from "../events.js";
 import type { PtyClient } from "../PtyClient.js";
@@ -535,6 +540,156 @@ describe("McpServerService.getWorkspaceViewActivity (#11790)", () => {
 // this machine's renderer bridge. The bridge's response listeners otherwise
 // exist only while this machine's own server runs, so the passthrough has to
 // bring them up itself, once.
+describe("McpServerService terminal hand-over to the global assistant (#14161)", () => {
+  const service = new McpServerService();
+  const terminals = new Map<string, string | null>();
+  const generations = new Map<string, number>();
+  const GLOBAL = { sessionId: "help-global", terminalId: "terminal-global" };
+  const globalOwner = principalOwnerKey(relayOwnershipPrincipal("local", GLOBAL.sessionId));
+
+  beforeEach(() => {
+    terminals.clear();
+    generations.clear();
+    terminals.set("terminal-1", "project-a");
+    generations.set("terminal-1", 3);
+    setPtyClientRef({
+      hasTerminal: (id: string) => terminals.has(id),
+      getTerminalProjectId: (id: string) => terminals.get(id) ?? null,
+      getLaunchGeneration: (id: string) => generations.get(id) ?? null,
+    } as unknown as PtyClient);
+  });
+
+  afterEach(() => {
+    for (const adoption of service.listTerminalAdoptions()) {
+      service.releaseTerminalAdoption(adoption.terminalId);
+    }
+    setPtyClientRef(null);
+  });
+
+  afterAll(() => {
+    service._sessionStore.drain();
+    service._sessionStore.grantCache.dispose();
+  });
+
+  function adoptGlobal(
+    overrides: Partial<Parameters<McpServerService["adoptTerminalForGlobalAssistant"]>[0]> = {}
+  ) {
+    return service.adoptTerminalForGlobalAssistant({
+      terminalId: "terminal-1",
+      global: GLOBAL,
+      callerWorkspaceId: "project-a",
+      ...overrides,
+    });
+  }
+
+  it("holds the hand-over by the principal its host.call sessions in that project bind", () => {
+    expect(adoptGlobal()).toEqual({
+      status: "handed-over",
+      adoption: {
+        terminalId: "terminal-1",
+        orchestratorPaneId: GLOBAL.terminalId,
+        recipient: "global-assistant",
+        adoptedAt: expect.any(Number),
+      },
+    });
+    const ownership = service._sessionStore.resourceOwnership;
+    ownership.bindPrincipal("relay-session", relayOwnershipPrincipal("local", GLOBAL.sessionId));
+    expect(ownership.ownerOf("relay-session")).toBe(globalOwner);
+    expect(
+      service._sessionStore.terminalAdoption.get(globalOwner, "terminal-1")?.launchGeneration
+    ).toBe(3);
+    // Another of this machine's assistants holds nothing by it.
+    const other = principalOwnerKey(relayOwnershipPrincipal("local", "help-other"));
+    expect(service._sessionStore.terminalAdoption.get(other, "terminal-1")).toBeUndefined();
+    ownership.clearSession("relay-session");
+  });
+
+  it("refuses with no assistant running, its own PTY, and an assistant's terminal", () => {
+    expect(adoptGlobal({ global: null })).toMatchObject({ reason: "not-orchestrator" });
+    terminals.set(GLOBAL.terminalId, null);
+    expect(adoptGlobal({ terminalId: GLOBAL.terminalId })).toMatchObject({ reason: "self" });
+    terminals.set("terminal-help", "project-a");
+    generations.set("terminal-help", 1);
+    const store = getAgentAvailabilityStore();
+    vi.spyOn(store, "isHelpTerminal").mockImplementation((id) => id === "terminal-help");
+    expect(adoptGlobal({ terminalId: "terminal-help" })).toMatchObject({
+      reason: "assistant-terminal",
+    });
+    vi.mocked(store.isHelpTerminal).mockRestore();
+    expect(service.listTerminalAdoptions()).toEqual([]);
+  });
+
+  it("knows an assistant by main's own binding, before any view marks it", () => {
+    terminals.set("terminal-headless", "project-a");
+    generations.set("terminal-headless", 1);
+    service.setSessionIdResolver((id) => (id === "terminal-headless" ? "help-headless" : null));
+    try {
+      expect(adoptGlobal({ terminalId: "terminal-headless" })).toMatchObject({
+        reason: "assistant-terminal",
+      });
+      expect(
+        service.adoptTerminal({
+          terminalId: "terminal-headless",
+          orchestratorPaneId: "pane-orch",
+          orchestrator: { principalId: "principal-orch", tier: "core", workspaceId: "project-a" },
+          callerWorkspaceId: "project-a",
+        })
+      ).toMatchObject({ reason: "assistant-terminal" });
+    } finally {
+      service.setSessionIdResolver(() => null);
+    }
+    expect(service.listTerminalAdoptions()).toEqual([]);
+  });
+
+  it("refuses a terminal in no project or another view's, and one whose launch main can't name", () => {
+    terminals.set("terminal-loose", null);
+    generations.set("terminal-loose", 1);
+    expect(adoptGlobal({ terminalId: "terminal-loose" })).toMatchObject({
+      reason: "other-project",
+    });
+    expect(adoptGlobal({ callerWorkspaceId: "project-b" })).toMatchObject({
+      reason: "other-project",
+    });
+    generations.delete("terminal-1");
+    expect(adoptGlobal()).toMatchObject({ reason: "terminal-gone" });
+    expect(service.listTerminalAdoptions()).toEqual([]);
+  });
+
+  it("refuses what someone else launched, and what it launched itself", () => {
+    const ownership = service._sessionStore.resourceOwnership;
+    ownership.record("s-api", [{ kind: "terminal", id: "terminal-1" }]);
+    expect(adoptGlobal()).toMatchObject({ reason: "launched-by-another" });
+    ownership.clearSession("s-api");
+
+    ownership.bindPrincipal("relay-session", relayOwnershipPrincipal("local", GLOBAL.sessionId));
+    ownership.record(globalOwner, [{ kind: "terminal", id: "terminal-1" }]);
+    expect(adoptGlobal()).toMatchObject({ reason: "launched-by-orchestrator" });
+    ownership.revokePrincipal(relayOwnershipPrincipal("local", GLOBAL.sessionId));
+    ownership.clearSession("relay-session");
+  });
+
+  it("ends with the assistant's session, however that session ended", () => {
+    adoptGlobal();
+    service.releaseRelayAdoptions("local", "help-other");
+    expect(service.listTerminalAdoptions()).toHaveLength(1);
+    service.releaseRelayAdoptions("local", GLOBAL.sessionId);
+    expect(service.listTerminalAdoptions()).toEqual([]);
+
+    adoptGlobal();
+    service.retireRelayPrincipal("local", GLOBAL.sessionId);
+    expect(service.listTerminalAdoptions()).toEqual([]);
+  });
+
+  it("a replacement run is a new principal, handed nothing the old one held", () => {
+    adoptGlobal();
+    service.releaseRelayAdoptions("local", GLOBAL.sessionId);
+    const next = { sessionId: "help-global-2", terminalId: "terminal-global-2" };
+    const nextOwner = principalOwnerKey(relayOwnershipPrincipal("local", next.sessionId));
+    expect(service._sessionStore.terminalAdoption.get(nextOwner, "terminal-1")).toBeUndefined();
+    expect(adoptGlobal({ global: next })).toMatchObject({ status: "handed-over" });
+  });
+});
+
 describe("McpServerService host passthroughs", () => {
   const service = new McpServerService();
 

@@ -1,4 +1,4 @@
-import type { TerminalConfig } from "@shared/types";
+import type { TerminalConfig, TerminalConfigChange } from "@shared/types";
 import type { TerminalColorScheme } from "@/config/terminalColorSchemes";
 
 export const terminalConfigClient = {
@@ -52,5 +52,9 @@ export const terminalConfigClient = {
 
   setCachedProjectViews: (cachedProjectViews: number): Promise<void> => {
     return window.electron.terminalConfig.setCachedProjectViews(cachedProjectViews);
+  },
+
+  onChanged: (callback: (change: TerminalConfigChange) => void): (() => void) => {
+    return window.electron.terminalConfig.onChanged(callback);
   },
 } as const;

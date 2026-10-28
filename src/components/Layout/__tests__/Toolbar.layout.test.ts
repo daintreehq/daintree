@@ -2,12 +2,8 @@ import { describe, it, expect, beforeEach } from "vitest";
 import fs from "fs/promises";
 import path from "path";
 import { readToolbarCss } from "@/__tests__/support/cssManifest";
+import { readToolbarSource } from "./toolbarSource";
 
-const TOOLBAR_PATH = path.resolve(__dirname, "../Toolbar.tsx");
-// The pill's markup lives in its own component; the toolbar and the pill are read as one surface.
-const PILL_PATH = path.resolve(__dirname, "../ToolbarProjectPill.tsx");
-const readToolbarSource = async () =>
-  (await fs.readFile(TOOLBAR_PATH, "utf-8")) + (await fs.readFile(PILL_PATH, "utf-8"));
 const BUTTON_PATH = path.resolve(__dirname, "../../ui/button.tsx");
 
 describe("Toolbar layout — issue #2584 project switcher collision", () => {
@@ -96,6 +92,31 @@ describe("Toolbar layout — issue #2584 project switcher collision", () => {
     });
   });
 
+  describe("Composition of the extracted modules — issue #14347", () => {
+    // Every guard here reads the toolbar's modules as one surface, so it would
+    // still pass on a hook nothing calls. Toolbar.tsx itself has to wire them.
+    it("calls each extracted hook and renders the overflow menu", async () => {
+      const shell = await fs.readFile(path.resolve(__dirname, "../Toolbar.tsx"), "utf-8");
+      for (const call of [
+        "useToolbarItemPlacement({",
+        "useToolbarOverflowStatus({",
+        "useToolbarOverflowEviction({",
+        "useToolbarCustomization({",
+        "useToolbarProjectPill({",
+        "<OverflowMenu",
+      ]) {
+        expect(shell).toContain(call);
+      }
+    });
+
+    it("keys eviction on measured overflow and the demoted set, not the merged lists", async () => {
+      const shell = await fs.readFile(path.resolve(__dirname, "../Toolbar.tsx"), "utf-8");
+      expect(shell).toMatch(
+        /useToolbarOverflowEviction\(\{\s*measuredLeftOverflow,\s*measuredRightOverflow,\s*demotedIds,/
+      );
+    });
+  });
+
   describe("Empty-space context menu — issue #12355", () => {
     // The menu's behaviour is covered for real in ToolbarButtonsContextMenu and
     // toolbarVisibilityMenu tests; these only pin Toolbar.tsx's wiring to it.
@@ -108,8 +129,13 @@ describe("Toolbar layout — issue #2584 project switcher collision", () => {
     it("builds the rows from the side lists before the visibility filter", () => {
       // Built from `effective*Buttons` instead, a hidden button would drop out of
       // the one menu that exists to bring it back.
+      // The right list adds this project's tray-only plugin buttons in project
+      // mode (#13783), on top of the same pre-filter side list.
       expect(source).toMatch(
-        /buildToolbarVisibilityMenuRows\(\s*positionedLeftButtons,\s*positionedRightButtons/
+        /buildToolbarVisibilityMenuRows\(\s*positionedLeftButtons,\s*menuRightButtons/
+      );
+      expect(source).toMatch(
+        /const menuRightButtons = useMemo\([\s\S]*?return positionedRightButtons;/
       );
     });
 

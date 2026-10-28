@@ -5,15 +5,25 @@ import { CHANNELS } from "../../channels.js";
 import { store, type StoreSchema, consumePendingSettingsRecovery } from "../../../store.js";
 import { readCanopyMode } from "../../../services/canopy/canopyMode.js";
 import { readAgentDefaults } from "../../../services/agentDefaults.js";
+import { readAgentToolbarPinsSnapshot } from "../../../services/agentToolbarPins.js";
 import { projectStore } from "../../../services/ProjectStore.js";
 import {
   mayWriteProjectState,
   peekDriveLeaseService,
 } from "../../../services/DriveLeaseService.js";
 import { APP_STATE_FIELD_OWNERSHIP } from "../../../storeOwnership.js";
+import type { PanelGridConfig } from "../../../../shared/types/config.js";
 import { AppStateTerminalEntrySchema, filterValidTerminalEntries } from "../../../schemas/ipc.js";
 import { filterRestorableTerminalSnapshots } from "../../../services/projectStateRestore.js";
 import { getCrashRecoveryService } from "../../../services/CrashRecoveryService.js";
+import {
+  applyHostEndHold,
+  holdTerminalsForHostEnds,
+} from "../../../services/hostEndRestoreHold.js";
+import {
+  captureProjectLayoutSeed,
+  getProjectLayoutSeed,
+} from "../../../services/plugin/projectLayoutSeeds.js";
 import { relaunchApp } from "../../../lifecycle/appRelaunch.js";
 import { getDatabaseMaintenanceService } from "../../../services/DatabaseMaintenanceService.js";
 import { USAGE_WINDOW_MS, MAX_USES_PER_ENTRY } from "../../../../shared/utils/actionUsage.js";
@@ -52,7 +62,7 @@ import { readGpuDisabledFlagData } from "../../../services/gpuDisabledFlag.js";
 import { getCrashLoopGuard } from "../../../services/CrashLoopGuardService.js";
 import { getPanelSuspectLedger } from "../../../services/PanelSuspectLedgerService.js";
 import { inferKind } from "../../../../shared/utils/inferPanelKind.js";
-import { typedHandle, typedHandleWithContext } from "../../utils.js";
+import { broadcastToRenderer, typedHandle, typedHandleWithContext } from "../../utils.js";
 import { signalFirstInteractive } from "../../../window/deferredInitQueue.js";
 import { markPerformance } from "../../../utils/performance.js";
 import { PERF_MARKS } from "../../../../shared/perf/marks.js";
@@ -100,6 +110,7 @@ export type ShellHydrateFields = Pick<
   | "crashLoopStateRecovery"
   | "systemTmpDir"
   | "keybindingOverrides"
+  | "agentToolbarPins"
 >;
 
 /**
@@ -143,6 +154,7 @@ export function readShellHydrateFields(options: { consumeOneShots: boolean }): S
     // `system:get-tmp-dir` round-trip on boot (matches `handleSystemGetTmpDir`).
     systemTmpDir: os.tmpdir(),
     keybindingOverrides: getValidatedOverrides(),
+    agentToolbarPins: readAgentToolbarPinsSnapshot(),
   };
 }
 
@@ -236,6 +248,27 @@ function withoutUndrivenHostFields(
   );
 }
 
+/** Whether `projectId` has yet to have its first-open layout seed decided (#13782). */
+function isLayoutSeedUndecided(projectId: string): boolean {
+  try {
+    return getProjectLayoutSeed(projectId) === null;
+  } catch (error) {
+    // Unreadable: nothing can be recorded either, so there is nothing for the
+    // full path to do that the cache would skip.
+    console.warn("[AppHydrate] Failed to read the project's layout seed:", error);
+    return false;
+  }
+}
+
+function recordLayoutSeed(projectId: string, firstOpen: boolean): void {
+  try {
+    captureProjectLayoutSeed(projectId, firstOpen);
+  } catch (error) {
+    // Hydration goes on; the project simply never gets a seed.
+    console.warn("[AppHydrate] Failed to record the project's layout seed:", error);
+  }
+}
+
 export function registerAppStateHandlers(deps?: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
 
@@ -255,6 +288,9 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
     // Only the first few hundred milliseconds of a session ever wait here.
     await whenGpuReported(GPU_REPORT_WAIT_MS);
     const { project: currentProject, workspaceId } = resolveWorkspaceForHydration(ctx);
+    // Before any read of the saved panes, the prefetch cache included: agents an
+    // unclean end cut short come back held, whichever screen restores them.
+    const hostEnds = await applyHostEndHold(workspaceId);
     // A remote Shell merges only this machine's host half of the answer, so
     // nothing addressed to this machine's own windows may be consumed for it.
     const forRemoteShell = ctx?.endpoint?.kind === "remote-view";
@@ -302,12 +338,20 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
     // cache is only probed when the result is actually usable.
     const cacheGuard = getCrashLoopGuard();
     const cacheInSafeMode = cacheGuard.isSafeMode();
+    // A project's first hydrate here decides its layout seed (#13782) from the
+    // state read this fast path skips, so the cache cannot stand in for that
+    // hydrate either. Once per project, ever.
+    const layoutSeedUndecided =
+      currentProject !== null && workspaceId !== null && isLayoutSeedUndecided(workspaceId);
     const cacheEligible =
       Boolean(workspaceId) &&
       panelFilter === null &&
       !crashPanelFilterWithheld &&
       !cacheInSafeMode &&
-      persistedLegacyOwnerId !== undefined;
+      persistedLegacyOwnerId !== undefined &&
+      !layoutSeedUndecided &&
+      // A cached payload predates the holds; this read applies them again.
+      hostEnds.length === 0;
     const cached = cacheEligible ? consumePrefetchedHydrateResult(workspaceId!) : undefined;
     markPerformance(PERF_MARKS.APP_HYDRATE_PREFETCH, {
       hit: Boolean(cached),
@@ -322,11 +366,20 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
               ? "panel-filter"
               : persistedLegacyOwnerId === undefined
                 ? "legacy-state-unclaimed"
-                : "miss",
+                : layoutSeedUndecided
+                  ? "layout-seed-undecided"
+                  : "miss",
     });
     if (cached) {
+      // One leaf, not the whole appState the cached payload already carries.
+      const panelGridConfig = store.get("appState.panelGridConfig");
       return {
         ...cached,
+        // Settings saved after the hover must not boot this view with the old
+        // value (#14700).
+        appState: panelGridConfig ? { ...cached.appState, panelGridConfig } : cached.appState,
+        agentSettings: store.get("agentSettings"),
+        agentDefaults: readAgentDefaults(),
         // The live sender's identity always wins over whatever the prefetch
         // stamped — only ever a project today, but never assume that.
         workspaceId,
@@ -348,7 +401,11 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
         // snapshot from the hover-prefetch window.
         projects: projectStore.getAllProjects(),
         keybindingOverrides: getValidatedOverrides(),
+        agentToolbarPins: readAgentToolbarPinsSnapshot(),
         userAgentRegistry: loadSanitizedUserAgentRegistry(),
+        // A terminal setting saved after the hover must not boot this view
+        // with the old value (#14699).
+        terminalConfig: readHydrateTerminalConfig(),
         ...readHostPlatformFields(),
       };
     }
@@ -456,6 +513,29 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       const { state: projectState, quarantinedPath } =
         await projectStore.getProjectStateWithRecovery(workspaceId);
       projectStateQuarantinedPath = quarantinedPath;
+      if (currentProject !== null) {
+        // Read before this hydrate writes the project's fresh state below. A
+        // null that hid a corrupt or newer-schema file, a safe-mode boot, and a
+        // project inheriting legacy or crash-restored terminals all have a
+        // history, so none of them is a first open. A remote Shell's view
+        // counts too: the state it starts is this host's, written below.
+        // An unclaimed legacy list may be this project's own history, which a
+        // remote view never claims; it is only ruled out once another project
+        // owns it.
+        const inheritsLegacyTerminals =
+          (canInheritLegacyWorkspaceState || legacyWorkspaceStateOwnerId === undefined) &&
+          Array.isArray(globalAppState.terminals) &&
+          globalAppState.terminals.length > 0;
+        recordLayoutSeed(
+          workspaceId,
+          projectState === null &&
+            quarantinedPath === undefined &&
+            !projectStore.wasStateUnreadableThisSession(workspaceId) &&
+            !cacheInSafeMode &&
+            !hasCrashRestoreTerminals &&
+            !inheritsLegacyTerminals
+        );
+      }
       // Defaults match the standalone handlers' null-state returns.
       tabGroupsToUse = projectState?.tabGroups ?? [];
       terminalSizesToUse = projectState?.terminalSizes ?? {};
@@ -525,14 +605,19 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
 
         // Migrate terminals to per-project state with kind inference
         if (terminalsToUse.length > 0) {
-          const migratedTerminals = terminalsToUse.map(
-            (t) =>
-              ({
-                ...t,
-                kind: inferKind(t, workspaceId),
-                cwd: t.cwd || currentProject?.path || "",
-              }) as import("../../../../shared/types/project.js").TerminalSnapshot
-          );
+          // Saved held: the hold above found no per-project panes to hold.
+          const migratedTerminals = holdTerminalsForHostEnds(
+            terminalsToUse.map(
+              (t) =>
+                ({
+                  ...t,
+                  kind: inferKind(t, workspaceId),
+                  cwd: t.cwd || currentProject?.path || "",
+                }) as import("../../../../shared/types/project.js").TerminalSnapshot
+            ),
+            hostEnds,
+            workspaceId
+          ).terminals;
 
           // Normalize legacy focusPanelState (may have logsOpen/eventInspectorOpen instead of diagnosticsOpen)
           const normalizedFocusPanelState = globalAppState.focusPanelState
@@ -730,6 +815,16 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
     // but we preserve saved terminals array for ordering metadata (IDs and locations).
     // The frontend uses this to restore panel order when reconnecting to running terminals.
     // activeWorktreeId is preserved so the frontend can validate it exists after worktrees load.
+    // Held here as well as on disk: whatever source the terminals came from,
+    // and even if saving the hold failed, none of them starts on its own.
+    if (hostEnds.length > 0) {
+      terminalsToUse = holdTerminalsForHostEnds(
+        terminalsToUse,
+        hostEnds,
+        workspaceId ?? undefined
+      ).terminals;
+    }
+
     const appState: StoreSchema["appState"] = {
       ...globalAppState,
       terminals: terminalsToUse,
@@ -902,30 +997,12 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
         }
       }
 
-      if ("panelGridConfig" in partialState) {
-        const gridConfig = partialState.panelGridConfig;
-        if (gridConfig && typeof gridConfig === "object") {
-          const strategy = gridConfig.strategy;
-          const value = Number(gridConfig.value);
-          if (
-            (strategy === "automatic" ||
-              strategy === "fixed-columns" ||
-              strategy === "fixed-rows") &&
-            !isNaN(value) &&
-            value >= 1 &&
-            value <= 10
-          ) {
-            updates.panelGridConfig = {
-              strategy,
-              value,
-            };
-          }
-        }
-      }
-
       if ("mruList" in partialState && Array.isArray(partialState.mruList)) {
-        // Sanitize: dense array, string items with valid prefix, per-item length cap, dedupe
-        const MRU_ID_PATTERN = /^(terminal|worktree):[a-zA-Z0-9_-]{1,128}$/;
+        // Sanitize: dense array, string items with valid prefix, per-item length cap, dedupe.
+        // The id after the prefix is opaque: plugin panel ids carry `.`, `:` and `/`
+        // (`acme.dash-<uuid>`, `project:<id>/acme/dash-<uuid>`) and worktree ids are
+        // absolute paths, so only control characters are refused.
+        const MRU_ID_PATTERN = /^(terminal|worktree):\P{Cc}{1,1024}$/u;
         const seen = new Set<string>();
         const sanitized: string[] = [];
         for (const id of partialState.mruList) {
@@ -1077,6 +1154,32 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
         }
       }
 
+      if ("panelGridConfig" in partialState) {
+        // A patch may carry just one of the two fields; the other is read from the
+        // store here so a view with an old copy can't write its stale value back.
+        // After every await above, so the read and the write below share a turn
+        // and an edit landing in between isn't overwritten either (#14700).
+        const gridConfig = partialState.panelGridConfig as Partial<PanelGridConfig> | undefined;
+        if (gridConfig && typeof gridConfig === "object") {
+          const current = store.get("appState")?.panelGridConfig;
+          const strategy = gridConfig.strategy ?? current?.strategy ?? "automatic";
+          const value = Number(gridConfig.value ?? current?.value ?? 3);
+          if (
+            (strategy === "automatic" ||
+              strategy === "fixed-columns" ||
+              strategy === "fixed-rows") &&
+            Number.isInteger(value) &&
+            value >= 1 &&
+            value <= 10
+          ) {
+            updates.panelGridConfig = {
+              strategy,
+              value,
+            };
+          }
+        }
+      }
+
       const hasCriticalField = Object.keys(updates).some((k) => CRASH_CRITICAL_FIELDS.has(k));
 
       try {
@@ -1096,6 +1199,16 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
             }
           }
           store.set("appState", merged as StoreSchema["appState"]);
+          // Every view on this machine hears it, a view of another host too:
+          // the grid is device-owned (#14698, #14700).
+          const grid = updates.panelGridConfig;
+          const previousGrid = current.panelGridConfig as PanelGridConfig | undefined;
+          if (
+            grid &&
+            (grid.strategy !== previousGrid?.strategy || grid.value !== previousGrid?.value)
+          ) {
+            broadcastToRenderer(CHANNELS.APP_PANEL_GRID_CONFIG_CHANGED, grid);
+          }
         }
       } finally {
         if (hasCriticalField) {

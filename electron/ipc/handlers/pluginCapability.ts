@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { BrowserWindow } from "electron";
+import type { BuiltInPluginCapability } from "../../../shared/types/plugin.js";
 import { defineIpcNamespace, op } from "../define.js";
 import type { IpcContext } from "../types.js";
 import { CHANNELS } from "../channels.js";
+import { broadcastToRenderer } from "../utils.js";
 import { PLUGIN_CAPABILITY_METHOD_CHANNELS } from "./pluginCapability.preload.js";
 import {
   getPluginCapabilityConsentService,
@@ -11,6 +13,7 @@ import {
 import type {
   PluginCapabilityConsentBridge,
   PluginCapabilityConsentRequest,
+  PluginCapabilityFirstUseRequest,
 } from "../../services/plugin-capability/PluginCapabilityConsentService.js";
 import { getMainWindow } from "../../window/windowRef.js";
 import { getAppWebContents } from "../../window/webContentsRegistry.js";
@@ -21,20 +24,33 @@ import {
   PluginConsentOutcomeSchema,
   PluginFrontendMethod,
 } from "../../services/plugin/pluginFrontendRequests.js";
-import { projectIdFromPluginInstanceKey } from "../../services/plugin/projectPluginIdentity.js";
+import {
+  isSafePluginInstanceId,
+  projectIdFromPluginInstanceKey,
+} from "../../services/plugin/projectPluginIdentity.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import {
+  EXTERNAL_LINK_CONSENT,
   PLUGIN_CAPABILITY_CONSENT_DELIVERY_TIMEOUT_MS,
   PLUGIN_CAPABILITY_CONSENT_RESEND_INTERVAL_MS,
   PLUGIN_CAPABILITY_CONSENT_TIMEOUT_MS,
+  PLUGIN_PANEL_ATTENTION_GRANT,
   type PluginCapabilityAcknowledgeConsentInput,
   type PluginCapabilityConsentOutcome,
   type PluginCapabilityResolveConsentInput,
   type PluginOsNotificationsQuery,
   type PluginOsNotificationsUpdate,
+  type PluginPanelAttentionQuery,
+  type PluginPanelAttentionUpdate,
   type PluginProjectTargetingQuery,
   type PluginProjectTargetingUpdate,
+  type PluginWorktreeDeleteNotesQuery,
+  type PluginWorktreeDeleteNotesUpdate,
 } from "../../../shared/types/pluginCapabilityConsent.js";
+import {
+  isWorktreeDeleteNotesMuted,
+  setWorktreeDeleteNotesEnabled,
+} from "../../services/plugin/pluginWorktreeDeleteNoteMutes.js";
 
 // --- Consent bridge (main → renderer prompt, renderer → main decision) --------
 //
@@ -118,11 +134,20 @@ const consentBridge: PluginCapabilityConsentBridge = (request: PluginCapabilityC
     request.pluginId
   );
   if (frontend.kind === "remote") {
-    return requestRemoteConsent(frontend.endpoint, frontend.leaseId, request);
+    // The remote consent wire carries one capability only. A link opens in this
+    // host's browser, which `system.openExternal` already refuses for a remote
+    // driver, so a site prompt reaching here has no one to ask; an offer-back
+    // after a replacing install has no remote form, so its grants stay off.
+    if (request.restore !== undefined) return Promise.resolve("undeliverable");
+    const { capability } = request;
+    if (request.site !== undefined || capability === EXTERNAL_LINK_CONSENT) {
+      return Promise.resolve("undeliverable");
+    }
+    return requestRemoteConsent(frontend.endpoint, frontend.leaseId, { ...request, capability });
   }
   if (frontend.kind === "none") {
     console.warn(
-      `[plugin-capability] Nobody is attached to answer the consent prompt for plugin "${request.pluginId}" capability "${request.capability}" — denying it`
+      `[plugin-capability] Nobody is attached to answer the consent prompt for plugin "${request.pluginId}" ${describeRequest(request)} — denying it`
     );
     return Promise.resolve("undeliverable");
   }
@@ -146,7 +171,7 @@ const consentBridge: PluginCapabilityConsentBridge = (request: PluginCapabilityC
 async function requestRemoteConsent(
   endpoint: ClientEndpoint,
   leaseId: number | undefined,
-  request: PluginCapabilityConsentRequest
+  request: PluginCapabilityFirstUseRequest & { capability: BuiltInPluginCapability }
 ): Promise<PluginCapabilityConsentOutcome> {
   try {
     const answer = await endpoint.request(
@@ -205,13 +230,23 @@ export function requestConsentInWebContents(
     const push = () => {
       wc.send(CHANNELS.EVENTS_PUSH, {
         name: "plugin-capability:consent-request",
-        payload: {
-          requestId,
-          pluginId: request.pluginId,
-          pluginDisplayName: request.pluginDisplayName,
-          capability: request.capability,
-          declaredCapabilities: request.declaredCapabilities,
-        },
+        payload:
+          request.restore !== undefined
+            ? {
+                requestId,
+                pluginId: request.pluginId,
+                pluginDisplayName: request.pluginDisplayName,
+                restore: request.restore,
+                declaredCapabilities: request.declaredCapabilities,
+              }
+            : {
+                requestId,
+                pluginId: request.pluginId,
+                pluginDisplayName: request.pluginDisplayName,
+                capability: request.capability,
+                ...(request.site !== undefined ? { site: request.site } : {}),
+                declaredCapabilities: request.declaredCapabilities,
+              },
       });
     };
 
@@ -238,7 +273,7 @@ export function requestConsentInWebContents(
     // rather than holding the plugin for the full five-minute decision window.
     const deliveryTimer = setTimeout(() => {
       console.warn(
-        `[plugin-capability] No renderer acknowledged the consent prompt for plugin "${request.pluginId}" capability "${request.capability}" within ${PLUGIN_CAPABILITY_CONSENT_DELIVERY_TIMEOUT_MS}ms — treating it as undeliverable`
+        `[plugin-capability] No renderer acknowledged the consent prompt for plugin "${request.pluginId}" ${describeRequest(request)} within ${PLUGIN_CAPABILITY_CONSENT_DELIVERY_TIMEOUT_MS}ms — treating it as undeliverable`
       );
       settleConsent(requestId, "undeliverable");
     }, PLUGIN_CAPABILITY_CONSENT_DELIVERY_TIMEOUT_MS);
@@ -258,6 +293,13 @@ export function requestConsentInWebContents(
       settleConsent(requestId, "undeliverable");
     }
   });
+}
+
+/** What a prompt is about, for the logs. */
+function describeRequest(request: PluginCapabilityConsentRequest): string {
+  return request.restore !== undefined
+    ? `offer-back of ${request.restore.length} permission(s)`
+    : `capability "${request.capability}"`;
 }
 
 /** Install the consent bridge once, lazily — keeps an unused boot path bridge-free. */
@@ -417,6 +459,79 @@ export async function handleSetOsNotifications(
   return store.hasGrant(identity);
 }
 
+function worktreeDeleteNotesPluginId(pluginId: unknown): string {
+  if (typeof pluginId !== "string" || !isSafePluginInstanceId(pluginId)) {
+    throw new Error("pluginId must be a plugin instance id");
+  }
+  return pluginId;
+}
+
+/** Read a plugin's "Show notes when deleting a worktree" switch (#13805). On unless turned off. */
+export async function handleGetWorktreeDeleteNotes(
+  input: PluginWorktreeDeleteNotesQuery
+): Promise<boolean> {
+  return !isWorktreeDeleteNotesMuted(worktreeDeleteNotesPluginId(input?.pluginId));
+}
+
+/** Flip a plugin's "Show notes when deleting a worktree" switch (#13805) and return it as stored. */
+export async function handleSetWorktreeDeleteNotes(
+  input: PluginWorktreeDeleteNotesUpdate
+): Promise<boolean> {
+  const pluginId = worktreeDeleteNotesPluginId(input?.pluginId);
+  if (typeof input.enabled !== "boolean") {
+    throw new Error("enabled must be a boolean");
+  }
+  return setWorktreeDeleteNotesEnabled(pluginId, input.enabled);
+}
+
+function panelAttentionIdentity(pluginId: unknown) {
+  if (typeof pluginId !== "string" || pluginId.length === 0) {
+    throw new Error("pluginId must be a non-empty string");
+  }
+  // Instance-keyed like OS notifications: each project's instance of a project
+  // plugin is switched on separately.
+  return { pluginId, capability: PLUGIN_PANEL_ATTENTION_GRANT, scopeKey: "global" } as const;
+}
+
+/** Read a plugin's "Show in attention views" switch (#13821). */
+export async function handleGetPanelAttention(input: PluginPanelAttentionQuery): Promise<boolean> {
+  return getPluginCapabilityConsentStore().hasGrant(panelAttentionIdentity(input?.pluginId));
+}
+
+/**
+ * Every plugin instance with "Show in attention views" on (#13821). The
+ * attention views join reports against this set, so they never read the
+ * switch one plugin at a time.
+ */
+export async function handleListPanelAttention(): Promise<string[]> {
+  return getPluginCapabilityConsentStore()
+    .list()
+    .filter(
+      (record) => record.capability === PLUGIN_PANEL_ATTENTION_GRANT && record.scopeKey === "global"
+    )
+    .map((record) => record.pluginId);
+}
+
+/**
+ * Flip a plugin's "Show in attention views" switch (#13821) and return the
+ * persisted state. Every view re-reads the granted set on a provenance change,
+ * so the flip is announced as one — after a failed write too, since a failed
+ * "off" is still revoked in memory and the rows must go now.
+ */
+export async function handleSetPanelAttention(input: PluginPanelAttentionUpdate): Promise<boolean> {
+  const identity = panelAttentionIdentity(input?.pluginId);
+  if (typeof input.enabled !== "boolean") {
+    throw new Error("enabled must be a boolean");
+  }
+  const store = getPluginCapabilityConsentStore();
+  const saved = store.setGrant(identity, input.enabled);
+  broadcastToRenderer(CHANNELS.EVENTS_PUSH, { name: "plugin:provenance-changed", payload: {} });
+  if (!saved) {
+    throw new Error("The attention views setting could not be saved");
+  }
+  return store.hasGrant(identity);
+}
+
 export const pluginCapabilityNamespace = defineIpcNamespace({
   name: "pluginCapability",
   ops: {
@@ -443,6 +558,26 @@ export const pluginCapabilityNamespace = defineIpcNamespace({
     setOsNotifications: op(
       PLUGIN_CAPABILITY_METHOD_CHANNELS.setOsNotifications,
       handleSetOsNotifications
+    ),
+    getWorktreeDeleteNotes: op(
+      PLUGIN_CAPABILITY_METHOD_CHANNELS.getWorktreeDeleteNotes,
+      handleGetWorktreeDeleteNotes
+    ),
+    setWorktreeDeleteNotes: op(
+      PLUGIN_CAPABILITY_METHOD_CHANNELS.setWorktreeDeleteNotes,
+      handleSetWorktreeDeleteNotes
+    ),
+    getPanelAttention: op(
+      PLUGIN_CAPABILITY_METHOD_CHANNELS.getPanelAttention,
+      handleGetPanelAttention
+    ),
+    setPanelAttention: op(
+      PLUGIN_CAPABILITY_METHOD_CHANNELS.setPanelAttention,
+      handleSetPanelAttention
+    ),
+    listPanelAttention: op(
+      PLUGIN_CAPABILITY_METHOD_CHANNELS.listPanelAttention,
+      handleListPanelAttention
     ),
   },
 });

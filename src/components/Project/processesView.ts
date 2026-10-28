@@ -8,7 +8,13 @@ import type {
   ProcessInventoryTerminal,
   ProcessTreeSample,
 } from "@shared/types/processes";
+import type {
+  RendererTerminalBufferEntry,
+  RendererTerminalBufferSlice,
+  RendererTerminalBufferStatus,
+} from "@shared/types/memoryAccounting";
 import { pluralize } from "@/lib/pluralize";
+import { formatCores } from "./ProjectResourceBadge.utils";
 
 export interface TerminalGroup {
   key: string;
@@ -37,12 +43,24 @@ export function pluginProcessTitle(process: ProcessInventoryPluginProcess): stri
     : (process.label ?? process.pluginId);
 }
 
-function byMemoryDesc<T extends { sample: ProcessTreeSample | null }>(a: T, b: T): number {
-  return (b.sample?.memoryKb ?? -1) - (a.sample?.memoryKb ?? -1);
+/** What the list ranks by; either way the heaviest row is first and unsampled rows are last. */
+export type ProcessSort = "memory" | "cpu";
+
+function sampleMetric(sample: ProcessTreeSample | null, sort: ProcessSort): number {
+  if (!sample) return -1;
+  return sort === "cpu" ? sample.cpuPercent : sample.memoryKb;
+}
+
+function bySampleDesc(sort: ProcessSort) {
+  return <T extends { sample: ProcessTreeSample | null }>(a: T, b: T): number =>
+    sampleMetric(b.sample, sort) - sampleMetric(a.sample, sort);
 }
 
 /** Terminals by owning project, named groups first, heaviest rows first within each. */
-export function groupTerminalsByProject(terminals: ProcessInventoryTerminal[]): TerminalGroup[] {
+export function groupTerminalsByProject(
+  terminals: ProcessInventoryTerminal[],
+  sort: ProcessSort = "memory"
+): TerminalGroup[] {
   const groups = new Map<string, TerminalGroup>();
   for (const terminal of terminals) {
     const key = terminal.projectId ?? UNOWNED_KEY;
@@ -57,7 +75,7 @@ export function groupTerminalsByProject(terminals: ProcessInventoryTerminal[]): 
     }
     group.terminals.push(terminal);
   }
-  for (const group of groups.values()) group.terminals.sort(byMemoryDesc);
+  for (const group of groups.values()) group.terminals.sort(bySampleDesc(sort));
   return [...groups.values()].sort((a, b) => {
     if (a.key === UNOWNED_KEY) return 1;
     if (b.key === UNOWNED_KEY) return -1;
@@ -79,8 +97,9 @@ export interface ProjectProcessGroup {
   rows: ProjectProcessRow[];
 }
 
-function rowMemory(row: ProjectProcessRow): number {
-  return row.kind === "live" ? (row.terminal.sample?.memoryKb ?? -1) : (row.closed.memoryKb ?? -1);
+function rowMetric(row: ProjectProcessRow, sort: ProcessSort): number {
+  if (row.kind === "live") return sampleMetric(row.terminal.sample, sort);
+  return (sort === "cpu" ? row.closed.cpuPercent : row.closed.memoryKb) ?? -1;
 }
 
 /**
@@ -89,7 +108,8 @@ function rowMemory(row: ProjectProcessRow): number {
  */
 export function groupProcessesByProject(
   terminals: ProcessInventoryTerminal[],
-  closed: ClosedProcessGroup[]
+  closed: ClosedProcessGroup[],
+  sort: ProcessSort = "memory"
 ): ProjectProcessGroup[] {
   const groups = new Map<string, ProjectProcessGroup>();
   const ensure = (key: string, label: string): ProjectProcessGroup => {
@@ -100,7 +120,7 @@ export function groupProcessesByProject(
     }
     return group;
   };
-  for (const group of groupTerminalsByProject(terminals)) {
+  for (const group of groupTerminalsByProject(terminals, sort)) {
     ensure(group.key, group.label).terminals.push(...group.terminals);
   }
   for (const group of closed) {
@@ -114,7 +134,7 @@ export function groupProcessesByProject(
     group.rows = [
       ...group.terminals.map((terminal) => ({ kind: "live" as const, terminal })),
       ...group.closed.map((closed) => ({ kind: "closed" as const, closed })),
-    ].sort((a, b) => rowMemory(b) - rowMemory(a));
+    ].sort((a, b) => rowMetric(b, sort) - rowMetric(a, sort));
   }
   return [...groups.values()].sort((a, b) => {
     if (a.key === UNOWNED_KEY) return 1;
@@ -124,9 +144,44 @@ export function groupProcessesByProject(
 }
 
 export function sortPluginProcesses(
-  processes: ProcessInventoryPluginProcess[]
+  processes: ProcessInventoryPluginProcess[],
+  sort: ProcessSort = "memory"
 ): ProcessInventoryPluginProcess[] {
-  return [...processes].sort(byMemoryDesc);
+  return [...processes].sort(bySampleDesc(sort));
+}
+
+/**
+ * Busy cores on the host that the listed Daintree-launched trees don't add up
+ * to: the host's reading less every listed tree's, never below zero. Null when
+ * the inventory is partial, truncated or unsampled, any listed row has no
+ * reading, or the host reports no core count — a bound from missing rows could be wrong in either direction.
+ * Per-tree readings are ps averages, so this is an approximation, not a
+ * measurement of what else is running.
+ */
+export function unaccountedCores(
+  inventory: {
+    terminals: readonly ProcessInventoryTerminal[];
+    closedTerminalProcesses: readonly ProcessInventoryClosedProcess[];
+    plugins: readonly ProcessInventoryPluginProcess[];
+    complete: boolean;
+    samplesAvailable: boolean;
+    truncated: boolean;
+  },
+  hostBusyCores: number | null
+): number | null {
+  if (hostBusyCores === null || !Number.isFinite(hostBusyCores)) return null;
+  if (!inventory.complete || !inventory.samplesAvailable || inventory.truncated) return null;
+  let listedPercent = 0;
+  // A row with no reading is unknown, not idle: counting it as zero would inflate the remainder.
+  for (const row of [...inventory.terminals, ...inventory.plugins]) {
+    if (!row.sample) return null;
+    listedPercent += row.sample.cpuPercent;
+  }
+  for (const process of inventory.closedTerminalProcesses) {
+    if (process.cpuPercent === null) return null;
+    listedPercent += process.cpuPercent;
+  }
+  return Math.max(0, hostBusyCores - listedPercent / 100);
 }
 
 export function formatApproxMemory(memoryKb: number): string {
@@ -135,9 +190,80 @@ export function formatApproxMemory(memoryKb: number): string {
   return `~${Math.max(1, Math.round(mb))} MB`;
 }
 
-/** The value alone: the column heading names it. */
+/**
+ * A terminal buffer estimate in bytes. Unlike {@link formatApproxMemory} it
+ * keeps a real zero (an empty view holds no buffers) and says when a reading
+ * is under a megabyte rather than rounding it up to one.
+ */
+export function formatBufferEstimate(bytes: number): string {
+  if (bytes <= 0) return "0 MB";
+  const mb = bytes / (1024 * 1024);
+  if (mb < 1) return "<1 MB";
+  if (mb >= 1024) return `~${(mb / 1024).toFixed(1)} GB`;
+  return `~${Math.round(mb)} MB`;
+}
+
+/** One terminal's renderer buffer reading, with the freshness of the view it came from. */
+export interface TerminalBufferReading extends RendererTerminalBufferEntry {
+  status: Exclude<RendererTerminalBufferStatus, "unavailable">;
+  ageMs: number | null;
+  /** Views holding a buffer for this terminal; `estimatedBytes` sums them all. */
+  copies: number;
+}
+
+/**
+ * Terminal id → buffer reading. A terminal shown in two windows holds a
+ * buffer in each, and both are memory: the estimate sums every copy, while
+ * the line counts, width and age come from the freshest one.
+ */
+export function indexTerminalBuffers(
+  slice: RendererTerminalBufferSlice | null | undefined
+): ReadonlyMap<string, TerminalBufferReading> {
+  const out = new Map<string, TerminalBufferReading & { sampledAt: number }>();
+  for (const view of slice?.views ?? []) {
+    if (view.status === "unavailable" || !view.terminals || view.sampledAt === null) continue;
+    for (const entry of view.terminals) {
+      const prev = out.get(entry.terminalId);
+      const better =
+        !prev ||
+        (view.status === "fresh" && prev.status !== "fresh") ||
+        (view.status === prev.status && view.sampledAt > prev.sampledAt);
+      const totalBytes = (prev?.estimatedBytes ?? 0) + entry.estimatedBytes;
+      const copies = (prev?.copies ?? 0) + 1;
+      out.set(
+        entry.terminalId,
+        better
+          ? {
+              ...entry,
+              status: view.status,
+              ageMs: view.ageMs,
+              sampledAt: view.sampledAt,
+              estimatedBytes: totalBytes,
+              copies,
+            }
+          : { ...prev, estimatedBytes: totalBytes, copies }
+      );
+    }
+  }
+  return out;
+}
+
+/** "Buffer ~25 MB est. · 10,000 + 40 lines × 182 cols", aged when not current. */
+export function describeTerminalBuffer(reading: TerminalBufferReading): string {
+  const lines =
+    reading.alternateLines > 0
+      ? `${reading.normalLines.toLocaleString()} + ${pluralize(reading.alternateLines, "line")}`
+      : pluralize(reading.normalLines, "line");
+  const copies = reading.copies > 1 ? ` · ${reading.copies} windows` : "";
+  const base = `Buffer ${formatBufferEstimate(reading.estimatedBytes)} est.${copies} · ${lines} × ${reading.cols} cols`;
+  return reading.status === "last-known" && reading.ageMs !== null
+    ? `${base} · from ${formatAgo(reading.ageMs)}`
+    : base;
+}
+
+/** A process tree's ps %cpu, where 100 is one core. */
 export function formatCpu(cpuPercent: number): string {
-  return `${Math.round(cpuPercent)}%`;
+  return formatCores(cpuPercent / 100);
 }
 
 /**

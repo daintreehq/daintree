@@ -43,6 +43,21 @@ describe("useFileDecorations", () => {
     expect(getDecorationsMock).toHaveBeenCalledWith("worktree-diff:/r", ["a.ts", "b.ts"]);
   });
 
+  it("drops the previous scope's decorations while the next scope is still loading", async () => {
+    getDecorationsMock.mockResolvedValueOnce({ "a.ts": { badge: "A" } });
+    const useFileDecorations = await load();
+    const { result, rerender } = renderHook(
+      ({ s }: { s: string }) => useFileDecorations(s, ["a.ts"]),
+      { initialProps: { s: "worktree-files:/a" } }
+    );
+    await waitFor(() => expect(result.current["a.ts"]?.badge).toBe("A"));
+
+    getDecorationsMock.mockReturnValueOnce(new Promise(() => {}));
+    rerender({ s: "worktree-files:/b" });
+
+    expect(result.current["a.ts"]).toBeUndefined();
+  });
+
   it("returns a stable empty object and skips IPC when scope is empty", async () => {
     const useFileDecorations = await load();
     const { result, rerender } = renderHook(

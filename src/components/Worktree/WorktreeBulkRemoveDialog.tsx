@@ -4,6 +4,7 @@ import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { cn } from "@/lib/utils";
 import { PathText } from "./PathText";
+import { WorktreeDeleteNotes } from "./WorktreeDeleteNotes";
 import {
   buildSubmoduleCommitRows,
   buildSubmoduleFileRows,
@@ -601,6 +602,10 @@ export function WorktreeBulkRemoveDialog({
                 <li key={target.id} data-testid="bulk-remove-target" className={TARGET_ROW}>
                   <TargetName target={target} />
                   <EligibleBody target={target} />
+                  {/* Plugin notes (#13805), asked per row once it is in the
+                      batch. Outside the consent key on purpose: a note
+                      arriving must not reset what the user agreed to. */}
+                  <WorktreeDeleteNotes worktreeId={target.id} className={DETAIL} />
                 </li>
               ))}
             </ul>

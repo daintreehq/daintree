@@ -12,6 +12,17 @@ vi.mock("@/clients/systemClient", () => ({
   systemClient: { isMemoryPressureCritical: isMemoryPressureCriticalMock },
 }));
 
+const noteVisibleAgentLaunchMock = vi.hoisted(() => vi.fn());
+const selection = vi.hoisted(() => ({ activeWorktreeId: null as string | null }));
+vi.mock("@/store/storeAccessors", async () => {
+  const actual =
+    await vi.importActual<typeof import("@/store/storeAccessors")>("@/store/storeAccessors");
+  return { ...actual, getWorktreeSelectionSnapshot: () => selection };
+});
+vi.mock("@/services/systemMemoryLaunchNotice", () => ({
+  noteVisibleAgentLaunch: noteVisibleAgentLaunchMock,
+}));
+
 vi.mock("@/clients", () => ({
   terminalClient: {
     spawn: vi.fn(),
@@ -46,8 +57,8 @@ vi.mock("@/clients", () => ({
   },
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     cleanup: vi.fn(),
     applyRendererPolicy: vi.fn(),
     onPanelBackgrounded: vi.fn(),
@@ -60,8 +71,11 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     // No attached renderer xterm in these tests — spawn falls back to the
     // default/estimated dims path.
     get: vi.fn(() => null),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("../persistence", async () => {
   const actual = await vi.importActual<typeof import("../persistence")>("../persistence");
@@ -343,5 +357,58 @@ describe("agent launches at critical memory pressure (#13530)", () => {
 
     expect(spawnedIds()).toEqual(["free-1"]);
     expect(isHeld("free-1")).toBe(false);
+  });
+
+  // #14221 held the ninth agent on a 36 GB host; how many agents run is never a reason to wait (#14309).
+  it("starts every agent past the old per-host limit at once", async () => {
+    isMemoryPressureCriticalMock.mockResolvedValue(false);
+    const ids = Array.from({ length: 12 }, (_, i) => `many-${i}`);
+    for (const id of ids) await launchAgent(id);
+    await drainMicrotasks(400);
+
+    expect(spawnedIds()).toEqual(ids);
+    expect(ids.filter(isHeld)).toEqual([]);
+    expect(ids.map((id) => getPtyPanel(id)?.spawnStatus)).toEqual(ids.map(() => "ready"));
+  });
+
+  it("notes a fresh visible agent launch for the memory notice, never a restore", async () => {
+    isMemoryPressureCriticalMock.mockResolvedValue(false);
+    noteVisibleAgentLaunchMock.mockClear();
+    await launchAgent("seen-grid");
+    await launchAgent("seen-dock", { location: "dock" });
+    await launchAgent("restored", { restore: true });
+    await launchAgent("assistant", { location: "overlay" });
+    await drainMicrotasks();
+
+    expect(noteVisibleAgentLaunchMock).toHaveBeenCalledTimes(2);
+    expect(spawnedIds()).toEqual(["seen-grid", "seen-dock", "restored", "assistant"]);
+  });
+
+  it("doesn't note a launch into a worktree the user isn't looking at", async () => {
+    isMemoryPressureCriticalMock.mockResolvedValue(false);
+    noteVisibleAgentLaunchMock.mockClear();
+    selection.activeWorktreeId = "wt-a";
+    try {
+      await launchAgent("elsewhere", { worktreeId: "wt-b" });
+      await launchAgent("here", { worktreeId: "wt-a" });
+      // A worktree-less dock panel shows in every worktree's dock.
+      await launchAgent("global-dock", { location: "dock" });
+      await drainMicrotasks();
+    } finally {
+      selection.activeWorktreeId = null;
+    }
+
+    expect(noteVisibleAgentLaunchMock).toHaveBeenCalledTimes(2);
+    expect(spawnedIds()).toEqual(expect.arrayContaining(["elsewhere", "here", "global-dock"]));
+  });
+
+  it("doesn't note a worktree's launch while the selection hasn't hydrated", async () => {
+    isMemoryPressureCriticalMock.mockResolvedValue(false);
+    noteVisibleAgentLaunchMock.mockClear();
+    await launchAgent("scoped-early", { worktreeId: "wt-a" });
+    await drainMicrotasks();
+
+    expect(noteVisibleAgentLaunchMock).not.toHaveBeenCalled();
+    expect(spawnedIds()).toEqual(["scoped-early"]);
   });
 });

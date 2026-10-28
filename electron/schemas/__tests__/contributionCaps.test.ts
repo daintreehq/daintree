@@ -61,6 +61,8 @@ describe("contributes.* array-size caps (#10477)", () => {
   const NON_ARRAY_CONTRIBUTION_KINDS = new Set([
     // Three optional fixed slots on a strict object — bounded by its shape.
     "surfaces",
+    // Two lists on a strict object, each capped by MANIFEST_SERVICE_*_CAP.
+    "services",
   ]);
 
   it("exposes a cap for every contributes.* array key", () => {

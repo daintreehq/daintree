@@ -52,6 +52,9 @@ function isSetupState(value: unknown): value is WorktreeCreateResult["setupState
  * const worktrees = await worktreeClient.getAll();
  * ```
  */
+// Module state is per project view: each view runs its own renderer context.
+let inFlightRetryProjectLoad: Promise<void> | null = null;
+
 export const worktreeClient = {
   getAll: (): Promise<WorktreeState[]> => {
     return window.electron.worktree.getAll();
@@ -232,8 +235,13 @@ export const worktreeClient = {
     return window.electron.worktree.restartService();
   },
 
+  // Shared by the banner's Retry and the automatic one (#14313): each forces a
+  // fresh port, so two at once would replace each other's mid-handshake.
   retryProjectLoad: (): Promise<void> => {
-    return window.electron.worktree.retryProjectLoad();
+    inFlightRetryProjectLoad ??= window.electron.worktree.retryProjectLoad().finally(() => {
+      inFlightRetryProjectLoad = null;
+    });
+    return inFlightRetryProjectLoad;
   },
 
   onRemove: (callback: (data: { worktreeId: string }) => void): (() => void) => {

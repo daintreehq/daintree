@@ -143,6 +143,8 @@ export interface PluginWorkerIdleInput {
   pendingHostCallCount: number;
   managedProcessCount: number;
   fsWatcherCount: number;
+  /** Unfinished `host.tasks` tasks (#13819): disposing the worker would interrupt them. */
+  liveTaskCount: number;
   lastActivityAt: number | null;
   now: number;
   idleDisposeMs?: number;
@@ -156,9 +158,10 @@ export interface PluginWorkerIdleInput {
  * Every disqualifier is a live surface a disposed worker would silently break:
  * built-ins have no worker; dev workers own their reload cycle via the file
  * watcher; panel plugins may have an open panel main can't see; MCP plugins may
- * be serving an agent; pending invokes / spawned processes / fs watchers are
- * work in flight. Manifest-declared palette commands do NOT disqualify — they
- * re-bind lazily on first dispatch, which re-forks the worker on demand.
+ * be serving an agent; pending invokes / spawned processes / fs watchers /
+ * unfinished plugin tasks are work in flight. Manifest-declared palette
+ * commands do NOT disqualify — they re-bind lazily on first dispatch, which
+ * re-forks the worker on demand.
  */
 export function canDisposeIdlePluginWorker(input: PluginWorkerIdleInput): {
   ok: boolean;
@@ -185,6 +188,7 @@ export function canDisposeIdlePluginWorker(input: PluginWorkerIdleInput): {
   if (input.pendingHostCallCount > 0) return { ok: false, reason: "host calls in flight" };
   if (input.managedProcessCount > 0) return { ok: false, reason: "managed processes running" };
   if (input.fsWatcherCount > 0) return { ok: false, reason: "fs watchers active" };
+  if (input.liveTaskCount > 0) return { ok: false, reason: "plugin tasks running" };
   if (input.lastActivityAt === null) return { ok: false, reason: "activity unknown" };
   const idleMs = input.now - input.lastActivityAt;
   const idleDisposeMs = input.idleDisposeMs ?? WORKER_IDLE_DISPOSE_MS;

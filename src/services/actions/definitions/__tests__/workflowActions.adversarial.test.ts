@@ -58,6 +58,9 @@ vi.mock("@/store/slices/panelRegistry", () => selectorMock);
   { electron: { git: { getStagingStatus: gitGetStagingStatusMock } } };
 
 import { registerWorkflowActions } from "../workflowActions";
+// The run bodies load on first dispatch (#14275). Evaluate them here, as they
+// always were, rather than under the window stub a test swaps in before run().
+import "../workflowCreationActions.impl";
 import { ActionService } from "@/services/ActionService";
 import type { ActionDefinition, ActionId } from "@shared/types/actions";
 import {

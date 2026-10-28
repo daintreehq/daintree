@@ -1,15 +1,17 @@
 /**
- * Svelte source semantics for SvelteKit Tools.
+ * Svelte source semantics, for any Svelte 5 app with or without SvelteKit.
  *
  * Deliberately free of Daintree concepts: give it a `.svelte` file's bytes and
  * a location from Svelte's dev runtime, and it tells you which element of the
  * source that is.
  *
  * The Svelte compiler is a real dependency of this package but is `external` in
- * the bundle and reached only through `loadParse()`, which imports it
- * dynamically — so the consumer decides when several megabytes of parser load.
- * The built-in plugin `await import()`s this package lazily for the same
- * reason.
+ * the bundle and reached only through `loadParse()`, which imports its `parse`
+ * export dynamically — so the consumer decides when the parser loads, and its
+ * bundler can leave the rest of the compiler out.
+ * Every consumer reaches this package only behind a dynamic import, for the
+ * same reason: the Element Picker host loads its Svelte resolver, and with it
+ * this package, only when a Svelte selection arrives.
  */
 export * from "./types.js";
 export * from "./splice.js";

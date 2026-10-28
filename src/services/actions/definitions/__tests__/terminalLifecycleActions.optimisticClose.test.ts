@@ -72,18 +72,24 @@ vi.mock("@/store/panelStore", () => ({ usePanelStore: { getState: () => store.st
 vi.mock("@/store/fleetArmingStore", () => ({
   useFleetArmingStore: { getState: () => ({ armedIds: new Set<string>() }) },
 }));
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: { focus: vi.fn() },
-}));
-vi.mock("@/services/terminal/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = { focus: vi.fn() };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
+vi.mock("@/services/terminal/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     focus: vi.fn(),
     cleanup: vi.fn(),
     applyRendererPolicy: vi.fn(),
     onPanelBackgrounded: vi.fn(),
     resetRenderer: vi.fn(),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 vi.mock("@/clients", () => ({
   terminalClient: { submit: vi.fn(), killTerminal: vi.fn(), forceResume: vi.fn() },
 }));
@@ -104,6 +110,10 @@ vi.mock("@/utils/logger", () => ({ logError: vi.fn(), logWarn: vi.fn(), logDebug
 import { ActionService } from "../../../ActionService";
 import { registerTerminalLifecycleActions } from "../terminalLifecycleActions";
 import { registerTerminalQueryActions } from "../terminalQueryActions";
+import {
+  registerPanelCloseGuard,
+  __resetPanelCloseGuardsForTests,
+} from "@/services/panelCloseGuard";
 import {
   requestPanelClose,
   __resetOptimisticPanelCloseForTests,
@@ -414,5 +424,42 @@ describe("terminal.close read-your-writes against the real coordinator (#11805)"
       expect(schema?.type, id).toBe("object");
       expect(schema?.properties?.closedIds, id).toBeDefined();
     }
+  });
+});
+
+describe("terminal.trash on a docked panel with a close guard (#13815)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    __resetOptimisticPanelCloseForTests();
+    __resetPanelCloseGuardsForTests();
+    vi.clearAllMocks();
+    store.override.trash = null;
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    __resetPanelCloseGuardsForTests();
+  });
+
+  it("trashes only once the guard proceeds", async () => {
+    seed([{ id: "d", kind: "terminal", location: "dock" }]);
+    let verdict: "proceed" | "cancel" = "cancel";
+    registerPanelCloseGuard("d", async () => verdict);
+    const service = buildService();
+
+    await service.dispatch("terminal.trash", { terminalId: "d" });
+    expect(store.state.trashPanel).not.toHaveBeenCalled();
+
+    verdict = "proceed";
+    await service.dispatch("terminal.trash", { terminalId: "d" });
+    expect(store.state.trashPanel).toHaveBeenCalledWith("d");
+  });
+
+  it("trashes straight away when nothing guards the panel", async () => {
+    seed([{ id: "d", kind: "terminal", location: "dock" }]);
+    const service = buildService();
+
+    await service.dispatch("terminal.trash", { terminalId: "d" });
+    expect(store.state.trashPanel).toHaveBeenCalledWith("d");
   });
 });

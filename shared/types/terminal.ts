@@ -18,6 +18,16 @@ export interface TerminalKillOptions {
   forRestart?: boolean;
 }
 
+/** What Main knows about why a terminal exited, beyond its exit code. */
+export interface TerminalExitContext {
+  /**
+   * A session-preserving project teardown (sleep, hibernation, idle close,
+   * quit, relocation) ended this process. The pane is restored on reopen, so it
+   * stays in the layout instead of being treated as a finished shell.
+   */
+  preserveSession?: boolean;
+}
+
 /**
  * Terminal activity status.
  * - working: Terminal is actively processing
@@ -85,6 +95,12 @@ export interface SerializedTerminalSnapshot extends TerminalGeometry {
   /** Live snapshots only; persisted and preserved snapshots never carry it. */
   continuation?: SnapshotContinuation;
   /**
+   * Set by a host on a live snapshot it answers a remote view with: its stream
+   * to that view carries offsets, so the continuation can be fenced. The Shell
+   * consumes it before the view sees the snapshot (#13916).
+   */
+  remoteStreamOffsets?: true;
+  /**
    * Set when the read was capped by `tailRows` and older rows were left out, so
    * a caller that needs more than the tail knows to read again in full.
    */
@@ -149,6 +165,21 @@ export function isValidTerminalGeometry(value: unknown): value is TerminalGeomet
     cols <= MAX_TERMINAL_GRID_DIMENSION &&
     rows <= MAX_TERMINAL_GRID_DIMENSION
   );
+}
+
+/**
+ * A continuation that came across a process or machine boundary, checked, or
+ * undefined when it is malformed. A bad offset would fence off output the
+ * snapshot never held, so anything doubtful drops the whole continuation and
+ * the restore falls back to replaying without one.
+ */
+export function toSnapshotContinuation(value: unknown): SnapshotContinuation | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const { pendingEscapeTail, streamOffset } = value as Partial<Record<string, unknown>>;
+  if (pendingEscapeTail !== null && typeof pendingEscapeTail !== "string") return undefined;
+  if (streamOffset === undefined) return { pendingEscapeTail };
+  if (!Number.isSafeInteger(streamOffset) || (streamOffset as number) < 0) return undefined;
+  return { pendingEscapeTail, streamOffset: streamOffset as number };
 }
 
 /**

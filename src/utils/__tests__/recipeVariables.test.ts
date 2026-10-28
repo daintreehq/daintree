@@ -175,3 +175,68 @@ describe("segmentRecipePrompt", () => {
     expect(unknown).toEqual(["{{ issue_number }}", "{{issue-number}}"]);
   });
 });
+
+describe("plugin recipe variables (#13797)", () => {
+  const withValues = (values: Record<string, string>): RecipeContext => ({
+    branchName: "feature/x",
+    pluginVariables: values,
+  });
+
+  it("fills {{plugin.<name>}} from the plugin's values alongside host variables", () => {
+    expect(
+      replaceRecipeVariables(
+        "Review {{plugin.record_title}} on {{branch_name}}",
+        withValues({ record_title: "Invoice 42" })
+      )
+    ).toBe("Review Invoice 42 on feature/x");
+  });
+
+  it("inserts a value literally — no replacement patterns, no second expansion", () => {
+    const text = "A {{plugin.a}} B {{plugin.b}}";
+    expect(
+      replaceRecipeVariables(text, withValues({ a: "$& $1 {{branch_name}}", b: "{{plugin.a}}" }))
+    ).toBe("A $& $1 {{branch_name}} B {{plugin.a}}");
+  });
+
+  it("leaves a declared variable with no value empty, like a host variable", () => {
+    expect(replaceRecipeVariables("Record: {{plugin.record_id}}.", withValues({}))).toBe(
+      "Record: ."
+    );
+    expect(detectUnresolvedVariables("Record: {{plugin.record_id}}", withValues({}))).toEqual([
+      "plugin.record_id",
+    ]);
+    expect(
+      detectUnresolvedVariables("Record: {{plugin.record_id}}", withValues({ record_id: "7" }))
+    ).toEqual([]);
+  });
+
+  it("keeps {{plugin.<name>}} as typed text outside a plugin's own recipe", () => {
+    const user: RecipeContext = { branchName: "feature/x" };
+    expect(replaceRecipeVariables("Explain {{plugin.foo}} on {{branch_name}}", user)).toBe(
+      "Explain {{plugin.foo}} on feature/x"
+    );
+    expect(detectUnresolvedVariables("Explain {{plugin.foo}}", user)).toEqual([]);
+    expect(segmentRecipePrompt("Explain {{plugin.foo}}", user)).toEqual([
+      { kind: "text", text: "Explain " },
+      { kind: "unknown", text: "{{plugin.foo}}", name: "plugin.foo" },
+    ]);
+  });
+
+  it("never resolves a name through the prototype chain", () => {
+    expect(replaceRecipeVariables("[{{plugin.constructor}}]", withValues({}))).toBe("[]");
+    expect(replaceRecipeVariables("[{{plugin.toString}}]", withValues({}))).toBe("[]");
+  });
+
+  it("previews plugin variables as values or missing", () => {
+    expect(
+      segmentRecipePrompt("Open {{plugin.record_id}}", withValues({ record_id: "7" }))
+    ).toEqual([
+      { kind: "text", text: "Open " },
+      { kind: "value", text: "7", name: "plugin.record_id" },
+    ]);
+    expect(segmentRecipePrompt("Open {{plugin.record_id}}", withValues({}))).toEqual([
+      { kind: "text", text: "Open " },
+      { kind: "missing", text: "{{plugin.record_id}}", name: "plugin.record_id" },
+    ]);
+  });
+});

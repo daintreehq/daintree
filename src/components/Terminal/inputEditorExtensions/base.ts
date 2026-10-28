@@ -1,10 +1,12 @@
 import { EditorView, Decoration, WidgetType, keymap, placeholder } from "@codemirror/view";
-import type { Extension } from "@codemirror/state";
+import type { DecorationSet } from "@codemirror/view";
+import type { ChangeDesc, EditorSelection, Extension, Range } from "@codemirror/state";
 import { StateField, StateEffect, Prec } from "@codemirror/state";
 import { insertNewline } from "@codemirror/commands";
 import type { ITheme } from "@xterm/xterm";
 import { resolveInputBarColors } from "@/utils/terminalTheme";
 import {
+  DURATION_100,
   UI_ANIMATION_DURATION,
   UI_PALETTE_ENTER_DURATION,
   EASE_OUT_EXPO,
@@ -40,6 +42,9 @@ const CHIP_SVG_SIZE = {
   width: "14px",
   flexShrink: "0",
 } as const;
+
+/** The live dictation caret's meter follows the mic level through this property, 0 to 1. */
+export const VOICE_CARET_LEVEL_PROPERTY = "--cm-voice-caret-level";
 
 export function buildInputBarTheme(theme: ITheme): Extension {
   const c = resolveInputBarColors(theme);
@@ -119,6 +124,15 @@ export function buildInputBarTheme(theme: ITheme): Extension {
         overflowWrap: "anywhere",
         verticalAlign: "top",
       },
+      // A `#N` that names an issue or pull request: still text the caret walks
+      // through, so weight and a quiet underline set it apart, not a chip's ink.
+      ".cm-forge-ref": {
+        fontWeight: 600,
+        textDecorationLine: "underline",
+        textDecorationThickness: "1px",
+        textDecorationColor: "color-mix(in oklab, currentColor 45%, transparent)",
+        textUnderlineOffset: "3px",
+      },
       ".cm-chip-label": {
         whiteSpace: "break-spaces",
         overflowWrap: "anywhere",
@@ -186,6 +200,12 @@ export function buildInputBarTheme(theme: ITheme): Extension {
       },
       "@media (prefers-reduced-motion: reduce)": {
         ".cm-chip-remove": { transition: "none" },
+        // `.cm-content` outranks the live rule further down.
+        '.cm-content .cm-voice-caret[data-phase="live"]::after': {
+          transform: "none",
+          transition: "none",
+          opacity: `calc(${c.voiceCaretFloor} + ${1 - c.voiceCaretFloor} * var(${VOICE_CARET_LEVEL_PROPERTY}, 1))`,
+        },
       },
       ".cm-diff-chip": {
         ...chipStyle,
@@ -199,6 +219,20 @@ export function buildInputBarTheme(theme: ITheme): Extension {
         ...chipStyle,
       },
       ".cm-selection-chip svg": CHIP_SVG_SIZE,
+      ".cm-context-chip": {
+        ...chipStyle,
+      },
+      ".cm-context-chip svg": CHIP_SVG_SIZE,
+      // The plugin the content comes from, a step quieter than the item itself.
+      ".cm-context-chip-source": {
+        color: `color-mix(in oklab, ${c.foreground} 60%, ${c.shellBg})`,
+      },
+      ".cm-context-chip-label": {
+        maxWidth: "28ch",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+      },
       // Opaque, so the label keeps its resting contrast at the one moment the
       // user has to confirm which chip is about to go; the contour sits inside
       // the box so the staged chip keeps its geometry.
@@ -210,10 +244,19 @@ export function buildInputBarTheme(theme: ITheme): Extension {
       "&.cm-chip-staging .cm-selectionBackground": {
         background: "transparent !important",
       },
-      ".cm-voice-interim": {
-        opacity: "0.55",
+      // Italic is what sets words not yet written apart from the draft, so it
+      // can't rest on colour alone. The mono face ships no italic and the app
+      // turns synthesis off, so the ghost asks for a slanted regular. A
+      // streamed cleanup is the same until it lands: its reply is judged only
+      // once whole and lands with every passage of its pass, so what streams
+      // in may yet be turned down. A slant keeps a mono face's advances, so
+      // nothing moves as it lands. The shell sets `--ib-interim`; the expanded
+      // editor portals out of it onto the dialog, whose draft takes the app's
+      // ink, so its provisional words step down that ink instead.
+      ".cm-voice-interim, .cm-voice-rewrite": {
+        color: "var(--ib-interim, var(--color-text-secondary))",
         fontStyle: "italic",
-        transition: "opacity 150ms ease-out",
+        fontSynthesis: "style",
       },
       ".cm-voice-pending-ai": {
         textDecorationLine: "underline",
@@ -221,13 +264,105 @@ export function buildInputBarTheme(theme: ITheme): Extension {
         textDecorationColor: `color-mix(in oklab, ${c.successColor} 82%, transparent)`,
         textDecorationThickness: "2px",
         textUnderlineOffset: "3px",
-        transition: "text-decoration-color 150ms ease-out",
+        transition: `text-decoration-color ${UI_ANIMATION_DURATION}ms ease-out`,
       },
-      '[data-voice-active="true"] & .cm-content': {
-        caretColor: c.voiceCursor,
+      // The pending underline's hue, drawn solid once the correction has
+      // landed, and only under what it changed.
+      ".cm-voice-corrected": {
+        textDecorationLine: "underline",
+        textDecorationStyle: "solid",
+        textDecorationColor: `color-mix(in oklab, ${c.successColor} 82%, transparent)`,
+        textDecorationThickness: "2px",
+        textUnderlineOffset: "3px",
       },
-      '[data-voice-active="true"] &.cm-focused .cm-cursor': {
-        borderLeft: `2px solid ${c.voiceCursor}`,
+      // Words dropped with nothing written in their place: a caret pointing up
+      // at the gap they left, in the underline's hue. A flat stroke there read
+      // as an underscore joining the words. Zero-width, so the text around it
+      // does not move; drawn with borders, which forced colours keep.
+      ".cm-voice-corrected-gap": {
+        display: "inline-block",
+        position: "relative",
+        width: "0",
+        height: "0",
+      },
+      ".cm-voice-corrected-gap::after": {
+        content: '""',
+        position: "absolute",
+        top: "5px",
+        left: "calc(0.5ch - 3px)",
+        width: "6px",
+        height: "6px",
+        boxSizing: "border-box",
+        borderLeft: `2px solid color-mix(in oklab, ${c.successColor} 82%, transparent)`,
+        borderTop: `2px solid color-mix(in oklab, ${c.successColor} 82%, transparent)`,
+        transform: "rotate(45deg)",
+      },
+      '.cm-voice-corrected-gap[data-side="before"]::after': {
+        left: "calc(-0.5ch - 3px)",
+      },
+      "@media (prefers-contrast: more)": {
+        ".cm-voice-pending-ai, .cm-voice-corrected": {
+          textDecorationColor: c.successColor,
+        },
+        ".cm-voice-corrected-gap::after": {
+          borderColor: c.successColor,
+        },
+      },
+      // Where dictation writes (`voiceCaret`): a thin level meter set a gap
+      // past the text, so it reads as the mic and never as the keyboard's
+      // caret. A quiet track holds the place in every phase; the fill is the
+      // voice, rising with it while live, empty while the mic comes up, and a
+      // still neutral stub while the session holds. Reduced motion keeps the
+      // fill full and lets only its opacity follow the voice.
+      ".cm-voice-caret": {
+        position: "relative",
+        paddingLeft: "11px",
+        pointerEvents: "none",
+      },
+      ".cm-voice-caret::before, .cm-voice-caret::after": {
+        content: '""',
+        position: "absolute",
+        top: "1px",
+        bottom: "1px",
+        left: "6px",
+        width: "3px",
+        borderRadius: "var(--radius-xs)",
+      },
+      ".cm-voice-caret::before": {
+        // The expanded editor portals outside the shell that sets `--ib-fg`.
+        backgroundColor: "color-mix(in oklab, var(--ib-fg, currentColor) 16%, transparent)",
+      },
+      ".cm-voice-caret::after": {
+        backgroundColor: c.voiceSignal,
+        transformOrigin: "bottom",
+        transform: "scaleY(0)",
+      },
+      '.cm-voice-caret[data-phase="held"]::after': {
+        backgroundColor: c.voiceHeld,
+        transform: "scaleY(0.25)",
+      },
+      // The level comes in raw, about once a frame; the transition is what
+      // smooths it, so the meter moves with the voice rather than flickers.
+      '.cm-voice-caret[data-phase="live"]::after': {
+        transform: `scaleY(max(0.12, var(${VOICE_CARET_LEVEL_PROPERTY}, 1)))`,
+        transition: `transform ${DURATION_100}ms linear`,
+      },
+      'body[data-reduce-animations="true"] & .cm-voice-caret[data-phase="live"]::after, body[data-performance-mode="true"] & .cm-voice-caret[data-phase="live"]::after':
+        {
+          transform: "none",
+          transition: "none",
+          opacity: `calc(${c.voiceCaretFloor} + ${1 - c.voiceCaretFloor} * var(${VOICE_CARET_LEVEL_PROPERTY}, 1))`,
+        },
+      "&[data-voice-caret-covers] .cm-cursorLayer": {
+        visibility: "hidden",
+      },
+      // System inks replace author backgrounds, so the meter is borders: a
+      // CanvasText outline, filled in Highlight live and GrayText held.
+      "@media (forced-colors: active)": {
+        ".cm-voice-caret::before, .cm-voice-caret::after": { background: "none" },
+        ".cm-voice-caret::before": { border: "1px solid CanvasText", width: "1px" },
+        ".cm-voice-caret::after": { width: "0", borderLeft: "3px solid Highlight" },
+        '.cm-voice-caret[data-phase="held"]::after': { borderLeftColor: "GrayText" },
       },
     },
     { dark: true }
@@ -242,6 +377,7 @@ const CHIP_CLASSES = [
   ".cm-diff-chip",
   ".cm-terminal-chip",
   ".cm-selection-chip",
+  ".cm-context-chip",
 ];
 
 const CHIP_ANIMATION = `chip-enter ${UI_PALETTE_ENTER_DURATION}ms ${EASE_OUT_EXPO} both`;
@@ -294,35 +430,59 @@ class InterimGhostWidget extends WidgetType {
   }
 }
 
-export const setInterimText = StateEffect.define<string>();
+/**
+ * The dictation preview: its text, and where it shows. A null position puts
+ * it at the end of the draft; any other follows edits around it until the next
+ * preview replaces it.
+ */
+export interface InterimPreview {
+  text: string;
+  pos: number | null;
+}
 
-export const interimWidgetField = StateField.define<string>({
+const NO_PREVIEW: InterimPreview = { text: "", pos: null };
+
+export const setInterimText = StateEffect.define<string | InterimPreview>();
+
+export const interimWidgetField = StateField.define<InterimPreview>({
   create() {
-    return "";
+    return NO_PREVIEW;
   },
   update(value, tr) {
+    let next = value;
+    if (tr.docChanged && next.pos !== null) {
+      const pos = tr.changes.mapPos(next.pos, 1);
+      if (pos !== next.pos) next = { ...next, pos };
+    }
     for (const effect of tr.effects) {
       if (effect.is(setInterimText)) {
-        return effect.value;
+        const preview =
+          typeof effect.value === "string" ? { text: effect.value, pos: null } : effect.value;
+        next =
+          preview.text === next.text && preview.pos === next.pos
+            ? next
+            : preview.text
+              ? preview
+              : NO_PREVIEW;
       }
     }
-    return value;
+    return next;
   },
   provide: (f) => [
-    EditorView.decorations.from(f, (text) => (view) => {
+    EditorView.decorations.from(f, ({ text, pos }) => (view) => {
       // Suppress the ghost during IME composition so it can't displace the
       // composition overlay (mirrors the xterm guard added for #4379).
       if (!text || view.composing) return Decoration.none;
-      const pos = view.state.doc.length;
+      const at = pos === null ? view.state.doc.length : Math.min(pos, view.state.doc.length);
       return Decoration.set([
-        Decoration.widget({ widget: new InterimGhostWidget(text), side: 1 }).range(pos),
+        Decoration.widget({ widget: new InterimGhostWidget(text), side: 1 }).range(at),
       ]);
     }),
     // The doc stays empty while dictation is interim, so CodeMirror's own
     // placeholder is still mounted and the ghost renders right after it
     // ("Ask Claude" followed by the transcript). Flag the content element so
     // the placeholder can be hidden for as long as ghost text is showing.
-    EditorView.contentAttributes.from(f, (text): Record<string, string> =>
+    EditorView.contentAttributes.from(f, ({ text }): Record<string, string> =>
       text ? { class: "cm-voice-interim-active" } : {}
     ),
     EditorView.baseTheme({
@@ -333,7 +493,107 @@ export const interimWidgetField = StateField.define<string>({
 
 const pendingAIMark = Decoration.mark({ class: "cm-voice-pending-ai" });
 
-export const setPendingAIRanges = StateEffect.define<{ from: number; to: number }[]>();
+// The cleanup streamed so far, drawn over the dictated words it has replaced.
+// The draft keeps what was dictated until the whole correction lands.
+class CorrectionRewriteWidget extends WidgetType {
+  constructor(readonly text: string) {
+    super();
+  }
+  eq(other: CorrectionRewriteWidget): boolean {
+    return other.text === this.text;
+  }
+  toDOM(): HTMLElement {
+    const span = document.createElement("span");
+    span.className = "cm-voice-rewrite";
+    span.textContent = this.text;
+    return span;
+  }
+  // The rewrite grows a stretch at a time; the same node takes each stretch.
+  updateDOM(dom: HTMLElement): boolean {
+    dom.textContent = this.text;
+    return true;
+  }
+  // A spoken list is laid out on lines of its own.
+  get lineBreaks(): number {
+    return this.text.split("\n").length - 1;
+  }
+  // A click lands at the edge of the rewritten words, as on any text.
+  ignoreEvent(): boolean {
+    return false;
+  }
+}
+
+/**
+ * Whether `changes` edit inside the range, not just at its edges: typing in
+ * the dictated words a rewrite hides drops the rewrite in the same
+ * transaction, so the keystroke is never hidden under it.
+ */
+function editsInside(changes: ChangeDesc, from: number, to: number): boolean {
+  let inside = false;
+  changes.iterChangedRanges((fromA, toA) => {
+    if (fromA === toA ? fromA > from && fromA < to : fromA < to && toA > from) inside = true;
+  });
+  return inside;
+}
+
+// A caret or selection end among the words a rewrite hides would sit where
+// nothing shows, so those words show as dictated while it's there.
+function selectionInside(selection: EditorSelection, from: number, to: number): boolean {
+  return selection.ranges.some(
+    (range) => (range.head > from && range.head < to) || (range.anchor > from && range.anchor < to)
+  );
+}
+
+/** The rewrite already shown at `from`, if it still ends clear of the selection. */
+function heldRewrite(
+  value: DecorationSet,
+  from: number,
+  to: number,
+  selection: EditorSelection
+): Range<Decoration> | null {
+  let held: Range<Decoration> | null = null;
+  value.between(from, from, (start, end, decoration) => {
+    if (
+      !held &&
+      start === from &&
+      end <= to &&
+      decoration.spec.widget instanceof CorrectionRewriteWidget &&
+      !selectionInside(selection, start, end)
+    ) {
+      held = decoration.range(start, end);
+    }
+  });
+  return held;
+}
+
+function revealUnderSelection(value: DecorationSet, selection: EditorSelection): DecorationSet {
+  const revealed: Range<Decoration>[] = [];
+  value.between(0, Number.MAX_SAFE_INTEGER, (from, to, decoration) => {
+    if (
+      decoration.spec.widget instanceof CorrectionRewriteWidget &&
+      selectionInside(selection, from, to)
+    ) {
+      revealed.push(pendingAIMark.range(from, to));
+    }
+  });
+  if (revealed.length === 0) return value;
+  return value.update({
+    filter: (from, to, decoration) =>
+      !(decoration.spec.widget instanceof CorrectionRewriteWidget) ||
+      !selectionInside(selection, from, to),
+    add: revealed,
+    sort: true,
+  });
+}
+
+export interface PendingAIRange {
+  from: number;
+  to: number;
+  /** Show the draft from `from` to `rewrite.to` as `rewrite.text`. */
+  rewrite?: { to: number; text: string };
+}
+
+export const setPendingAIRanges = StateEffect.define<PendingAIRange[]>();
 
 export const pendingAIField = StateField.define({
   create() {
@@ -341,24 +601,52 @@ export const pendingAIField = StateField.define({
   },
   update(value, tr) {
     if (tr.docChanged) {
-      value = value.map(tr.changes);
+      value = value
+        .update({
+          filter: (from, to, decoration) =>
+            !(decoration.spec.widget instanceof CorrectionRewriteWidget) ||
+            !editsInside(tr.changes, from, to),
+        })
+        .map(tr.changes);
     }
     for (const effect of tr.effects) {
       if (effect.is(setPendingAIRanges)) {
         const ranges = effect.value;
         if (ranges.length === 0) return Decoration.none;
         const docLen = tr.state.doc.length;
-        const marks = ranges
-          .map((r) => ({
-            from: Math.max(0, r.from),
-            to: Math.min(docLen, r.to),
-          }))
-          .filter((r) => r.from < r.to)
-          .map((r) => pendingAIMark.range(r.from, r.to));
-        return marks.length > 0 ? Decoration.set(marks, true) : Decoration.none;
+        const decorations: Range<Decoration>[] = [];
+        for (const r of ranges) {
+          const from = Math.max(0, r.from);
+          const to = Math.min(docLen, r.to);
+          if (from >= to) continue;
+          let rewriteTo = r.rewrite ? Math.min(to, r.rewrite.to) : from;
+          let rewrite: Range<Decoration> | null =
+            r.rewrite && rewriteTo > from
+              ? Decoration.replace({ widget: new CorrectionRewriteWidget(r.rewrite.text) }).range(
+                  from,
+                  rewriteTo
+                )
+              : null;
+          // A locked composer draws no caret, so nothing would sit hidden.
+          if (
+            rewrite &&
+            !tr.state.readOnly &&
+            selectionInside(tr.state.selection, from, rewriteTo)
+          ) {
+            // The stream waits at the caret rather than taking back what it
+            // already wrote: a rewrite never steps backwards.
+            rewrite = heldRewrite(value, from, to, tr.state.selection);
+            rewriteTo = rewrite?.to ?? from;
+          }
+          if (rewrite) decorations.push(rewrite);
+          if (rewriteTo < to) decorations.push(pendingAIMark.range(rewriteTo, to));
+        }
+        return decorations.length > 0 ? Decoration.set(decorations, true) : Decoration.none;
       }
     }
-    return value;
+    return (tr.selection || tr.docChanged || tr.reconfigured) && !tr.state.readOnly
+      ? revealUnderSelection(value, tr.state.selection)
+      : value;
   },
   provide: (f) => EditorView.decorations.from(f),
 });
@@ -406,13 +694,25 @@ export function createAutoSize(config: AutoSizeConfig = {}) {
   return EditorView.updateListener.of((update) => {
     // Interim dictation is an effect-only change to a widget on an otherwise
     // empty doc, so none of the layout flags fire for it (#13103).
+    // A streamed cleanup's rewrite is the same: its words can change the
+    // passage's line count without touching the doc.
     const interimChanged =
       update.startState.field(interimWidgetField, false) !==
-      update.state.field(interimWidgetField, false);
+        update.state.field(interimWidgetField, false) ||
+      update.startState.field(pendingAIField, false) !== update.state.field(pendingAIField, false);
     if (!update.docChanged && !update.viewportChanged && !update.geometryChanged && !interimChanged)
       return;
 
     const view = update.view;
+    // A cleanup changes its passage's length as it streams; the composer keeps
+    // the height it had until the correction lands, scrolling inside it if the
+    // rewrite runs longer, so the pane above is resized once rather than a
+    // line at a time. Typing, and dictation still arriving, size it as ever.
+    const holdHeight =
+      lastHeight > 0 &&
+      !update.docChanged &&
+      (update.state.field(pendingAIField, false)?.size ?? 0) > 0 &&
+      !update.state.field(interimWidgetField, false)?.text;
 
     view.requestMeasure({
       read() {
@@ -424,16 +724,19 @@ export function createAutoSize(config: AutoSizeConfig = {}) {
               : LINE_HEIGHT_PX;
         // Interim dictation renders as a widget while the doc stays empty; it
         // hides the placeholder and has real height, so it counts as content.
-        const isEmpty = view.state.doc.length === 0 && !view.state.field(interimWidgetField, false);
+        const isEmpty =
+          view.state.doc.length === 0 && !view.state.field(interimWidgetField, false)?.text;
         return computeAutoSize(view.contentHeight, lineHeight, maxHeightPx, isEmpty);
       },
       write(measured) {
-        if (measured.next !== lastHeight) {
-          lastHeight = measured.next;
-          view.dom.style.height = `${measured.next}px`;
+        const next = holdHeight ? lastHeight : measured.next;
+        if (next !== lastHeight) {
+          lastHeight = next;
+          view.dom.style.height = `${next}px`;
         }
 
-        const newOverflowY = measured.shouldScroll ? "auto" : "hidden";
+        const overflows = measured.shouldScroll || (holdHeight && measured.next > lastHeight);
+        const newOverflowY = overflows ? "auto" : "hidden";
         if (newOverflowY !== lastOverflowY) {
           lastOverflowY = newOverflowY;
           view.scrollDOM.style.overflowY = newOverflowY;
@@ -450,6 +753,7 @@ export function createAutoSize(config: AutoSizeConfig = {}) {
 
 interface CustomKeymapConfig {
   onEnter: () => boolean;
+  onModEnter: () => boolean;
   onEscape: () => boolean;
   onArrowUp: () => boolean;
   onArrowDown: () => boolean;
@@ -470,6 +774,12 @@ export function createCustomKeymap(config: CustomKeymapConfig): Extension {
         key: "Enter",
         run() {
           return config.onEnter();
+        },
+      },
+      {
+        key: "Mod-Enter",
+        run() {
+          return config.onModEnter();
         },
       },
       {
@@ -612,34 +922,6 @@ export function createPlainPasteKeymap(): Extension {
       },
     ])
   );
-}
-
-/**
- * The one change that turns `current` into `next`, leaving their common start
- * and end untouched. A draft written from outside — a plugin handoff appended
- * below the user's text, a voice insert — arrives as a whole new string; as a
- * whole-document replacement it would drop every chip field entry it overlaps,
- * image attachments included, even though that text did not change.
- */
-export function minimalDocChange(
-  current: string,
-  next: string
-): { from: number; to: number; insert: string } | null {
-  if (current === next) return null;
-  const shorter = Math.min(current.length, next.length);
-  let start = 0;
-  while (start < shorter && current.charCodeAt(start) === next.charCodeAt(start)) start++;
-  let endCurrent = current.length;
-  let endNext = next.length;
-  while (
-    endCurrent > start &&
-    endNext > start &&
-    current.charCodeAt(endCurrent - 1) === next.charCodeAt(endNext - 1)
-  ) {
-    endCurrent--;
-    endNext--;
-  }
-  return { from: start, to: endCurrent, insert: next.slice(start, endNext) };
 }
 
 /**

@@ -5,6 +5,7 @@ import path from "node:path";
 import { formatHostConnection, type HostId } from "../../../shared/types/remoteHosts.js";
 import type {
   HostInstallPlan,
+  HostProbeResult,
   HostRestartImpact,
   InstallHostPayload,
   InstallHostResult,
@@ -19,6 +20,10 @@ import {
   LINUX_UNIT_NAME,
   MAC_APP_PATH,
   formatBuildInfo,
+  liveHostRecord,
+  processStartShell,
+  runningHostBuild,
+  type ParsedProbe,
   type ProbeOutcome,
 } from "./hostProbe.js";
 import { type ClientBuild, debInstallCommand, planInstall } from "./installPlan.js";
@@ -60,6 +65,8 @@ export interface InstallerDeps {
   /** How long waiting for idle tolerates not hearing from the host (a reconnect) before it gives up. */
   idleUnknownGraceMs?: number;
   comeBackTimeoutMs?: number;
+  /** How long a Mac gets to install its downloaded update once Daintree there has quit. */
+  stagedInstallTimeoutMs?: number;
 }
 
 /** Nothing would end: the host said so in full. A count alone can't say that (shells go unseen). */
@@ -600,17 +607,26 @@ async function waitForIdle(
   }
 }
 
+/**
+ * Stop Daintree on the host. A pid from the discovery file is signalled only
+ * while it still started when that file says (`hostStartedAt`, confirmed live by
+ * the probe): a pid since reused by a stranger is left alone. With no pid, or an
+ * older host that recorded no start time, the user's own process named
+ * Daintree is the target.
+ */
 export function stopScript(
   platform: "darwin" | "linux",
   hostPid: number | null,
-  hasUnit: boolean
+  hasUnit: boolean,
+  hostStartedAt: string | null = null
 ): string {
   const name = platform === "darwin" ? "Daintree" : "daintree";
   const unitStop = hasUnit ? `systemctl --user stop ${LINUX_UNIT_NAME} 2>/dev/null; ` : "";
+  const byName = `pkill -TERM -u "$(id -u)" -o -x ${name}`;
   const signalIt =
-    hostPid !== null
-      ? `kill -TERM ${hostPid} 2>/dev/null || pkill -TERM -u "$(id -u)" -o -x ${name}`
-      : `pkill -TERM -u "$(id -u)" -o -x ${name}`;
+    hostPid !== null && Number.isInteger(hostPid) && hostPid > 0 && hostStartedAt
+      ? `hp=${hostPid}; ${processStartShell("hp", "hn")}; if [ "$hn" = ${sq(hostStartedAt)} ]; then kill -TERM "$hp" 2>/dev/null; fi`
+      : byName;
   return `${unitStop}if pgrep -u "$(id -u)" -x ${name} >/dev/null 2>&1; then ${signalIt}; fi; i=0; while pgrep -u "$(id -u)" -x ${name} >/dev/null 2>&1 && [ $i -lt 60 ]; do sleep 1; i=$((i+1)); done; if pgrep -u "$(id -u)" -x ${name} >/dev/null 2>&1; then echo "${MARK}stopped no"; else echo "${MARK}stopped yes"; fi`;
 }
 
@@ -622,8 +638,8 @@ function swapScript(
   marker: string | null
 ): string {
   if (plan.packaging === "app-bundle") {
-    const app = remotePath(MAC_APP_PATH);
-    const old = remotePath(`${MAC_APP_PATH}.old`);
+    const app = remotePath(target);
+    const old = remotePath(`${target}.old`);
     return `rm -rf ${old}; if [ -d ${app} ]; then mv ${app} ${old} || exit 1; fi; if mv ${remotePath(`${staged.dir}/x/Daintree.app`)} ${app}; then rm -rf ${remotePath(staged.dir)}; else if [ -d ${old} ]; then mv ${old} ${app}; fi; exit 1; fi`;
   }
   const t = remotePath(target);
@@ -637,8 +653,8 @@ function swapScript(
 /** Put the previous build (and its marker) back. Says what it did, so a restore is never assumed. */
 function rollbackScript(plan: HostInstallPlan, target: string): string {
   if (plan.packaging === "app-bundle") {
-    const app = remotePath(MAC_APP_PATH);
-    const old = remotePath(`${MAC_APP_PATH}.old`);
+    const app = remotePath(target);
+    const old = remotePath(`${target}.old`);
     return `if [ -d ${old} ]; then if rm -rf ${app} && mv ${old} ${app}; then echo "${MARK}rolledback yes"; else echo "${MARK}rolledback failed"; fi; else echo "${MARK}rolledback none"; fi`;
   }
   const t = remotePath(target);
@@ -650,18 +666,59 @@ function rollbackScript(plan: HostInstallPlan, target: string): string {
 
 function dropBackupScript(plan: HostInstallPlan, target: string): string {
   return plan.packaging === "app-bundle"
-    ? `rm -rf ${remotePath(`${MAC_APP_PATH}.old`)}`
+    ? `rm -rf ${remotePath(`${target}.old`)}`
     : `rm -f ${remotePath(`${target}.old`)} ${remotePath(`${target}${APPIMAGE_BUILD_INFO_SUFFIX}.old`)}`;
 }
 
-function startScript(plan: HostInstallPlan, hostMode: boolean, hasUnit: boolean): string | null {
-  if (plan.packaging === "app-bundle") {
-    return hostMode
-      ? `open -g -a ${remotePath(MAC_APP_PATH)} --args --host-mode`
-      : `open -g -a ${remotePath(MAC_APP_PATH)}`;
+/** Where the probe found the Mac app, which is replaced and started where it is. */
+function macAppPath(probe: Pick<HostProbeResult, "install">): string {
+  return probe.install?.packaging === "app-bundle" ? probe.install.path : MAC_APP_PATH;
+}
+
+/**
+ * How to start Daintree there again: windowless only when it ran that way. A
+ * plain launch with Host mode switched on listens and opens its windows; one
+ * listening only for this run (Host mode off) needs the flag, which is always
+ * windowless. A record without the window observation keeps the flag. A Mac
+ * starts the app at `target`, where the probe found it.
+ */
+function startScript(
+  platform: "darwin" | "linux",
+  probe: ParsedProbe,
+  hasUnit: boolean,
+  target: string
+): string | null {
+  if (platform === "darwin") {
+    const live = liveHostRecord(probe);
+    const headless = probe.hostModeListening && !(live?.windows === true && live.enabled === true);
+    return headless
+      ? `open -g -a ${remotePath(target)} --args --host-mode`
+      : `open -g -a ${remotePath(target)}`;
   }
   // Never run the backend from this SSH session: only the user's own unit may start it.
   return hasUnit ? `systemctl --user start ${LINUX_UNIT_NAME}` : null;
+}
+
+/**
+ * The last look before a restart: wait for idle when asked, then check that
+ * nothing the user didn't confirm has started since. Returns what now needs
+ * confirming, or null to go ahead.
+ */
+async function recheckBeforeRestart(
+  deps: InstallerDeps,
+  hostId: HostId | null,
+  whileWorking: NonNullable<InstallHostPayload["whileWorking"]>,
+  confirmed: HostRestartImpact,
+  signal: AbortSignal,
+  report: (p: InstallProgress) => void
+): Promise<HostRestartImpact | null> {
+  for (;;) {
+    if (whileWorking === "wait-for-idle") await waitForIdle(deps, hostId, signal, report);
+    const impact = await deps.restartImpact(hostId);
+    if (exceedsConfirmed(impact, confirmed)) return impact;
+    // An agent that went busy again since the wait saw it idle: wait for it too.
+    if (whileWorking !== "wait-for-idle" || busyAgents(impact) === 0) return null;
+  }
 }
 
 export async function runHostInstall(
@@ -681,14 +738,20 @@ export async function runHostInstall(
       userMessage: before.result.sshError ?? "Couldn't reach the host over SSH.",
     });
   }
-  const probe = before.result;
+  if (payload.applyStaged) {
+    const outcome = { result: before.result, parsed: before.parsed };
+    return applyStagedUpdate(payload, payload.applyStaged.version, deps, outcome, signal, report);
+  }
+  let probe = before.result;
   const plan = planInstall({
     client: deps.client,
     probe,
     linuxPackage: payload.linuxPackage,
     appImageConflict: before.parsed.appImageConflict,
+    allowDowngrade: payload.allowDowngrade === true,
   });
   if (plan.kind === "up-to-date") return { status: "up-to-date", probe };
+  if (plan.kind === "host-newer") return { status: "host-newer", probe };
   if (plan.kind === "unsupported") {
     throw new AppError({
       code: "UNSUPPORTED",
@@ -758,41 +821,81 @@ export async function runHostInstall(
   if (plan.restartsHost && confirmed) {
     const dropStagedBuild = () =>
       deps.shell.exec(`rm -rf ${remotePath(staged.dir)}`, { timeoutMs: 30_000 }).catch(() => {});
-    for (;;) {
-      if (whileWorking === "wait-for-idle") {
-        try {
-          await waitForIdle(deps, hostId, signal, report);
-        } catch (err) {
-          // Nothing is left staged for an update that isn't going ahead.
-          await dropStagedBuild();
-          throw err;
-        }
-      }
-      // Checked again right before the restart: work may have started while staging or waiting.
-      const impact = await deps.restartImpact(hostId);
-      if (exceedsConfirmed(impact, confirmed)) {
-        await dropStagedBuild();
-        return { status: "needs-confirmation", impact };
-      }
-      // An agent that went busy again since the wait saw it idle: wait for it too.
-      if (whileWorking !== "wait-for-idle" || busyAgents(impact) === 0) break;
+    // Checked again right before the restart: work may have started while staging or waiting.
+    let impact: HostRestartImpact | null;
+    try {
+      impact = await recheckBeforeRestart(deps, hostId, whileWorking, confirmed, signal, report);
+    } catch (err) {
+      // Nothing is left staged for an update that isn't going ahead.
+      await dropStagedBuild();
+      throw err;
+    }
+    if (impact) {
+      await dropStagedBuild();
+      return { status: "needs-confirmation", impact };
     }
   }
+  const dropStaged = () =>
+    deps.shell.exec(`rm -rf ${remotePath(staged.dir)}`, { timeoutMs: 30_000 }).catch(() => {});
   if (signal.aborted) {
-    await deps.shell
-      .exec(`rm -rf ${remotePath(staged.dir)}`, { timeoutMs: 30_000 })
-      .catch(() => {});
+    await dropStaged();
     throw cancelled();
   }
 
   const platform = probe.platform!;
-  const parsed = before.parsed;
+  let parsed = before.parsed;
+  // Staging and waiting can take a while: the host may have downloaded an
+  // update meanwhile, which stopping it would install over this one, moved
+  // past this build on its own, or had its windows opened or closed. Looked
+  // at again here, and planned again from what is there now.
+  if (parsed.appRunning || parsed.hostModeListening) {
+    const fresh = await deps.probe(signal);
+    if (signal.aborted || !fresh.parsed) {
+      await dropStaged();
+      if (signal.aborted) throw cancelled();
+      throw failed("The host stopped answering right before the restart. Nothing was changed");
+    }
+    if (fresh.result.stagedUpdate?.installsOnQuit) {
+      await dropStaged();
+      throw refusal(
+        `The host has just downloaded Daintree ${fresh.result.stagedUpdate.version}, which installs when Daintree there restarts. Nothing was changed: install that update first.`
+      );
+    }
+    const now = planInstall({
+      client: deps.client,
+      probe: fresh.result,
+      linuxPackage: payload.linuxPackage,
+      appImageConflict: fresh.parsed.appImageConflict,
+      allowDowngrade: payload.allowDowngrade === true,
+    });
+    if (now.kind === "up-to-date" || now.kind === "host-newer") {
+      await dropStaged();
+      return { status: now.kind, probe: fresh.result };
+    }
+    if (now.kind !== "install" || now.packaging !== plan.packaging) {
+      await dropStaged();
+      throw refusal(
+        now.reason ??
+          "The host changed while the update was being prepared. Nothing was changed: check again."
+      );
+    }
+    probe = fresh.result;
+    parsed = fresh.parsed;
+  }
   const hasUnit = parsed.advice.hostModeUnit === true;
   const wasHostMode = parsed.hostModeListening;
   const wasRunning = parsed.appRunning || wasHostMode;
-  const start = wasRunning ? startScript(plan, wasHostMode, hasUnit) : null;
-  const dropStaged = () =>
-    deps.shell.exec(`rm -rf ${remotePath(staged.dir)}`, { timeoutMs: 30_000 }).catch(() => {});
+  // An app bundle or AppImage is replaced where it is, so a unit or login item that runs it keeps working.
+  let target = MAC_APP_PATH;
+  if (plan.packaging === "app-bundle") {
+    target = macAppPath(probe);
+  } else if (plan.packaging === "appimage") {
+    target =
+      probe.install?.packaging === "appimage"
+        ? probe.install.path
+        : `${await homeOf(deps, signal)}/Applications/Daintree.AppImage`;
+  }
+  const start = wasRunning ? startScript(platform, parsed, hasUnit, target) : null;
   if (wasRunning && start === null) {
     await dropStaged();
     throw new AppError({
@@ -801,14 +904,6 @@ export async function runHostInstall(
       userMessage:
         "Daintree is running on the host without its Host mode service, so it couldn't be restarted from here. Quit it there and try again.",
     });
-  }
-  // An AppImage replaces the one in use in place, so a unit that runs it keeps working.
-  let target = MAC_APP_PATH;
-  if (plan.packaging === "appimage") {
-    target =
-      probe.install?.packaging === "appimage"
-        ? probe.install.path
-        : `${await homeOf(deps, signal)}/Applications/Daintree.AppImage`;
   }
   if (signal.aborted) {
     await dropStaged();
@@ -903,7 +998,7 @@ export async function runHostInstall(
       report({ stage: "stopping", fraction: 0.7, message: "Stopping Daintree on the host" });
       const out = await exec(
         deps,
-        stopScript(platform, parsed.hostPid, hasUnit),
+        stopScript(platform, parsed.hostPid, hasUnit, parsed.hostStartedAt),
         settle,
         "Couldn't stop Daintree on the host"
       );
@@ -964,6 +1059,219 @@ export async function runHostInstall(
   }
   await deps.shell.exec(dropBackupScript(plan, target), { timeoutMs: 120_000 }).catch(() => {});
   return { status: "installed", probe: after.result, reconnected };
+}
+
+function refusal(userMessage: string): AppError {
+  return new AppError({ code: "UNSUPPORTED", message: userMessage, userMessage });
+}
+
+/**
+ * Why the host's downloaded update can't be installed from here as asked, or
+ * null when it can: it is the version the user was shown, quitting installs
+ * it, and it is ready.
+ */
+function stagedProblem(probe: HostProbeResult, version: string): string | null {
+  const staged = probe.stagedUpdate;
+  if (!staged) return "The host no longer has a downloaded update waiting.";
+  if (staged.version !== version) {
+    return `The host now has Daintree ${staged.version} downloaded, not ${version}. Check again to see it.`;
+  }
+  if (!staged.installsOnQuit) {
+    return "This host installs its updates from Restart to update on its own screen, where the package install asks for an administrator password.";
+  }
+  if (!staged.ready) return "The host is still preparing the update. Check again in a moment.";
+  return null;
+}
+
+const NO_SERVICE_TO_RESTART =
+  "Daintree is running on the host without its Host mode service, so it couldn't be restarted from here. Restart it at the machine to install the update.";
+
+/**
+ * Restart a listening host into the update its own updater downloaded.
+ * Quitting installs it there: a Mac's updater swaps the app once the process
+ * has gone, an AppImage's puts the new image in place and points the Host
+ * mode service at it. Nothing comes from this machine, so nothing is rolled
+ * back: putting the old build back over data the new one opened would be the
+ * downgrade this guards against. A host that comes back on its old build is
+ * reported, and a host is never knowingly left stopped.
+ */
+async function applyStagedUpdate(
+  payload: InstallHostPayload,
+  version: string,
+  deps: InstallerDeps,
+  before: ProbeOutcome & { parsed: ParsedProbe },
+  signal: AbortSignal,
+  report: (p: InstallProgress) => void
+): Promise<InstallHostResult> {
+  const hostId = payload.hostId ?? null;
+  const platform = before.result.platform!;
+  const problem = stagedProblem(before.result, version);
+  if (problem) throw refusal(problem);
+  const hasUnitBefore = before.parsed.advice.hostModeUnit === true;
+  if (startScript(platform, before.parsed, hasUnitBefore, macAppPath(before.result)) === null) {
+    throw refusal(NO_SERVICE_TO_RESTART);
+  }
+
+  const whileWorking = payload.whileWorking ?? "refuse";
+  let confirmed: HostRestartImpact | null = payload.confirmed ?? null;
+  if (confirmed === null) {
+    const impact = await deps.restartImpact(hostId);
+    if (whileWorking === "refuse" && !isRestartImpactEmpty(impact)) {
+      return { status: "needs-confirmation", impact };
+    }
+    confirmed = impact;
+  }
+  const reconfirm = await recheckBeforeRestart(
+    deps,
+    hostId,
+    whileWorking,
+    confirmed,
+    signal,
+    report
+  );
+  if (reconfirm) return { status: "needs-confirmation", impact: reconfirm };
+  if (signal.aborted) throw cancelled();
+
+  // Waiting can take a while: the update, the process and its windows are
+  // looked at again right before the stop, and the restart follows what is there now.
+  const current = await deps.probe(signal);
+  if (signal.aborted) throw cancelled();
+  if (!current.parsed || !current.result.hostModeListening) {
+    throw failed("The host stopped answering right before the restart. Nothing was changed");
+  }
+  const changed = stagedProblem(current.result, version);
+  if (changed) throw refusal(changed);
+  const parsed = current.parsed;
+  const hasUnit = parsed.advice.hostModeUnit === true;
+  const start = startScript(platform, parsed, hasUnit, macAppPath(current.result));
+  if (start === null) throw refusal(NO_SERVICE_TO_RESTART);
+
+  // From the stop on, every step runs to completion whatever the cancel does,
+  // and any failure starts Daintree there again, so the host isn't left stopped.
+  const settle = new AbortController().signal;
+  const now = deps.now ?? Date.now;
+  let started = false;
+
+  const runStart = async (): Promise<CommandResult> => {
+    const result = await deps.shell
+      .exec(start, { signal: settle, timeoutMs: 30_000 })
+      .catch((err: unknown): CommandResult => ({
+        code: null,
+        stdout: "",
+        stderr: formatErrorMessage(err, "ssh failed"),
+        spawnError: null,
+        timedOut: false,
+      }));
+    if (result.code === 0) started = true;
+    return result;
+  };
+
+  const probeUntil = async (done: (seen: ProbeOutcome) => boolean): Promise<ProbeOutcome> => {
+    const deadline = now() + (deps.comeBackTimeoutMs ?? 90_000);
+    let seen = await deps.probe(settle);
+    while (!done(seen) && now() < deadline) {
+      await deps.sleep(2_000, settle);
+      seen = await deps.probe(settle);
+    }
+    return seen;
+  };
+  /** The process that came back, once it listens and has written its own record. */
+  const waitForNewListener = () =>
+    probeUntil(
+      (seen) =>
+        seen.parsed !== null &&
+        seen.result.hostModeListening &&
+        seen.parsed.hostPid !== parsed.hostPid &&
+        runningHostBuild(seen.parsed) !== null
+    );
+
+  let after: ProbeOutcome;
+  /** What the wait after a start last saw, so recovery doesn't wait it out again. */
+  let lastSeen: ProbeOutcome | null = null;
+  try {
+    report({ stage: "stopping", fraction: 0.3, message: "Stopping Daintree on the host" });
+    const stopped = await exec(
+      deps,
+      stopScript(platform, parsed.hostPid, hasUnit, parsed.hostStartedAt),
+      settle,
+      "Couldn't stop Daintree on the host"
+    );
+    if (markerValue(stopped, "stopped") !== "yes") {
+      throw failed("Daintree on the host didn't quit, so the update wasn't installed");
+    }
+
+    // macOS's updater replaces the app only after the process has gone:
+    // starting before it finishes would open the old one.
+    if (platform === "darwin") {
+      report({ stage: "installing", fraction: 0.5, message: "Waiting for the host to install it" });
+      const deadline = now() + (deps.stagedInstallTimeoutMs ?? 120_000);
+      let seen = await deps.probe(settle);
+      while (seen.result.install?.version !== version && now() < deadline) {
+        await deps.sleep(2_000, settle);
+        seen = await deps.probe(settle);
+      }
+    }
+
+    report({ stage: "restarting", fraction: 0.8, message: "Starting Daintree on the host" });
+    const result = await runStart();
+    if (result.code !== 0) {
+      throw failed("Couldn't start Daintree on the host", failureDetail(result, "ssh failed"));
+    }
+    after = await waitForNewListener();
+    lastSeen = after;
+    if (!after.parsed || !after.result.hostModeListening) {
+      throw failed("Host mode didn't come back on the host after restarting");
+    }
+    const running = runningHostBuild(after.parsed);
+    if (running === null || after.parsed.hostPid === parsed.hostPid) {
+      throw failed(
+        "Daintree restarted on the host, but the build it runs couldn't be read, so the update can't be confirmed"
+      );
+    }
+    if (running.version !== version) {
+      throw failed(
+        `Daintree restarted on the host, but still runs ${running.version}: the downloaded update wasn't installed`
+      );
+    }
+  } catch (err) {
+    // Started once more if it isn't, whatever went wrong; never put back on an older build.
+    let back = false;
+    try {
+      if (started && lastSeen) {
+        back = lastSeen.result.hostModeListening;
+      } else {
+        if (!started) await runStart();
+        // Any process listening will do: one that never quit counts as running.
+        if (started) {
+          back = (await probeUntil((seen) => seen.result.hostModeListening)).result
+            .hostModeListening;
+        }
+      }
+    } catch {
+      // Reported below as not started.
+    }
+    const base =
+      err instanceof AppError
+        ? err
+        : failed("The update failed", formatErrorMessage(err, "unknown error"));
+    const note = back
+      ? "Daintree is running on the host again."
+      : "Daintree couldn't be started again on the host; start it at the machine.";
+    throw new AppError({
+      code: base.code,
+      message: `${base.message}. ${note}`,
+      userMessage: `${base.userMessage ?? base.message}. ${note}`,
+    });
+  }
+
+  // The host now runs its own newer build, which may not be this client's: a
+  // link that reports the difference is still a host that updated.
+  let reconnected: boolean | null = null;
+  if (hostId && deps.reconnect) {
+    report({ stage: "reconnecting", fraction: 0.95, message: "Reconnecting to the host" });
+    reconnected = await deps.reconnect(hostId).catch(() => null);
+  }
+  return { status: "staged-applied", probe: after.result, reconnected };
 }
 
 async function homeOf(deps: InstallerDeps, signal: AbortSignal): Promise<string> {

@@ -2736,6 +2736,32 @@ describe("pty-host adversarial", () => {
     );
   });
 
+  it("EXIT_RELAYS_SESSION_PRESERVING_MARK", async () => {
+    // Main keeps a pane in the layout only when the host says a
+    // session-preserving teardown ended it (#13841).
+    const parentPort = await loadHost();
+    const manager = hostState.currentPtyManager as MiniEmitter;
+
+    manager.emit("exit", "slept", 0, 15, 3, true);
+    manager.emit("exit", "typed-exit", 0, undefined, 4);
+    await flushMicrotasks();
+
+    const exits = parentPort.postMessage.mock.calls
+      .map((c: unknown[]) => c[0])
+      .filter((m: unknown) => (m as { type?: string } | null)?.type === "exit");
+    expect(exits).toEqual([
+      {
+        type: "exit",
+        id: "slept",
+        exitCode: 0,
+        signal: 15,
+        launchGeneration: 3,
+        preserveSession: true,
+      },
+      { type: "exit", id: "typed-exit", exitCode: 0, signal: undefined, launchGeneration: 4 },
+    ]);
+  });
+
   describe("graceful capture (#12432)", () => {
     type CaptureHost = {
       open(id: string): { shouldDiscard(data: string): boolean; close(): void } | null;

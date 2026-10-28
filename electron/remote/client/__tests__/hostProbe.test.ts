@@ -1,4 +1,6 @@
+import { spawn, spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
+import { processStartTime } from "../../host/hostSocketLock.js";
 import type { CommandResult } from "../commandRunner.js";
 import {
   BUILD_INFO_PATTERN,
@@ -6,6 +8,7 @@ import {
   compareVersions,
   installMatches,
   parseHostProbe,
+  processStartShell,
   probeHost,
 } from "../hostProbe.js";
 import type { HostCommandChannel } from "../remoteShell.js";
@@ -71,6 +74,39 @@ describe("buildHostProbeScript", () => {
     expect(script).toContain('"pid"');
     // bash 3.2 (macOS /bin/sh) brace-expands {m,n} inside "$(...)".
     expect(script).not.toMatch(/\{\d+,\d+\}/);
+  });
+
+  it("looks for the macOS app beyond /Applications, and quotes where it found it", () => {
+    const script = buildHostProbeScript();
+    expect(script).toContain('"$HOME/Applications/Daintree.app"');
+    expect(script).toContain("kMDItemCFBundleIdentifier");
+    expect(script).toContain('"$a/Contents/Info.plist"');
+    expect(script).not.toContain("${MAC_APP_PATH}");
+  });
+
+  it("reports a host listening only while its pid still started when the discovery file says", () => {
+    const script = buildHostProbeScript();
+    expect(script).toContain('"startedAt"');
+    expect(script).toContain('[ "$n" = "$s" ]');
+  });
+
+  it("reads a process start time the way the host writes it", () => {
+    const sleeper = spawn("sleep", ["30"], { stdio: "ignore" });
+    try {
+      const expected = processStartTime(sleeper.pid!)?.replace(/\s+/g, " ");
+      if (process.platform !== "darwin" && process.platform !== "linux") return;
+      expect(expected).toBeTruthy();
+      const out = spawnSync(
+        "sh",
+        ["-c", `p=${sleeper.pid}; ${processStartShell("p", "n")}; printf %s "$n"`],
+        {
+          encoding: "utf8",
+        }
+      );
+      expect(out.stdout).toBe(expected);
+    } finally {
+      sleeper.kill("SIGKILL");
+    }
   });
 
   it("uses a marker pattern that can't match its own source text", () => {
@@ -296,6 +332,14 @@ describe("Host mode setup read-back", () => {
     }
   });
 
+  it("keeps the record when a field it doesn't understand is malformed", () => {
+    const text = JSON.stringify({ ...STATE, windows: "yes", stagedUpdate: { version: "" } });
+    const probe = parseHostProbe(`@@dt:uname Darwin arm64\n@@dt:hostmodestate ${text}\n@@dt:end`);
+    expect(probe.hostModeState?.enabled).toBe(true);
+    expect(probe.hostModeState?.windows).toBeUndefined();
+    expect(probe.hostModeState?.stagedUpdate).toBeUndefined();
+  });
+
   it("counts a Linux unit as start at login only when systemd says it is enabled", () => {
     const linux = (lines: string[]) =>
       parseHostProbe(["@@dt:uname Linux x86_64", ...lines, "@@dt:end"].join("\n")).advice;
@@ -436,11 +480,16 @@ describe("probeHost", () => {
   });
 
   describe("a listening host's own build", () => {
-    const state = (pid: number, build: { version: string; commit: string }) =>
+    const state = (
+      pid: number,
+      build: { version: string; commit: string },
+      extra: Record<string, unknown> = {}
+    ) =>
       JSON.stringify({
         daintreeHostMode: 1,
         pid,
         build,
+        ...extra,
         enabled: true,
         startAtLogin: false,
         startAtLoginInstalled: false,
@@ -498,5 +547,76 @@ describe("probeHost", () => {
       const notListening = await probe([...OLD_APP, `@@dt:hostmodestate ${state(4242, CLIENT)}`]);
       expect(notListening.matchesClient).toBe(false);
     });
+
+    it("says which side is ahead: the listener's build, else the installed one", async () => {
+      const newer = { version: "1.5.0", commit: "ffffffffffffffff" };
+      const ahead = await probe([
+        ...OLD_APP,
+        "@@dt:listening yes",
+        "@@dt:hostpid 4242",
+        `@@dt:hostmodestate ${state(4242, newer)}`,
+      ]);
+      expect(ahead.hostBuild).toEqual({ ...newer, order: "newer" });
+      const behind = await probe(OLD_APP);
+      expect(behind.hostBuild).toEqual({
+        version: "1.3.0",
+        commit: "0000000000000000",
+        order: "older",
+      });
+      expect((await probe(["@@dt:uname Darwin arm64"])).hostBuild).toBeNull();
+    });
+
+    it("passes on a downloaded update only from the live listener's own record", async () => {
+      const stagedUpdate = { version: "1.5.0", installsOnQuit: true, ready: false };
+      const record = (pid: number) =>
+        `@@dt:hostmodestate ${state(pid, CLIENT, { stagedUpdate, windows: true })}`;
+      const live = await probe([
+        ...OLD_APP,
+        "@@dt:listening yes",
+        "@@dt:hostpid 4242",
+        record(4242),
+      ]);
+      expect(live.stagedUpdate).toEqual(stagedUpdate);
+      expect(live.hostModeState?.windows).toBe(true);
+      const stale = await probe([
+        ...OLD_APP,
+        "@@dt:listening yes",
+        "@@dt:hostpid 4242",
+        record(1111),
+      ]);
+      expect(stale.stagedUpdate).toBeNull();
+      expect((await probe([...OLD_APP, record(4242)])).stagedUpdate).toBeNull();
+    });
+  });
+});
+
+describe("a verified host start time", () => {
+  it("is read from the probe's hoststart line", () => {
+    const out = [
+      "@@dt:uname Linux x86_64",
+      "@@dt:listening yes",
+      "@@dt:hostpid 4242",
+      "@@dt:hoststart 123456",
+      "@@dt:end",
+    ].join("\n");
+    expect(parseHostProbe(out)).toMatchObject({
+      hostModeListening: true,
+      hostPid: 4242,
+      hostStartedAt: "123456",
+    });
+  });
+
+  it("is null for an older host that recorded none", () => {
+    const out = ["@@dt:uname Linux x86_64", "@@dt:listening yes", "@@dt:hostpid 4242", "@@dt:end"];
+    expect(parseHostProbe(out.join("\n")).hostStartedAt).toBeNull();
+  });
+
+  it("finds a Mac's app wherever the probe said it is", () => {
+    const out = [
+      "@@dt:uname Darwin arm64",
+      "@@dt:install app-bundle /Users/me/Applications/Daintree.app",
+      "@@dt:end",
+    ].join("\n");
+    expect(parseHostProbe(out).install?.path).toBe("/Users/me/Applications/Daintree.app");
   });
 });

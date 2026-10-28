@@ -167,6 +167,9 @@ function sanitize(raw: unknown): HostDescriptor[] {
       // A field the record never had reads as an SSH host's default, on. Its
       // retired messaging switches were folded into it at migration (#13496).
       assistantControlEnabled: storedSwitch(host.assistantControlEnabled, connection),
+      ...(typeof host.ownerWorktreeId === "string" && host.ownerWorktreeId
+        ? { ownerWorktreeId: host.ownerWorktreeId }
+        : {}),
     });
   }
   return out;
@@ -228,6 +231,9 @@ export class HostRegistry {
       // A Shell that reaches a host over SSH can already run anything there as
       // that user; a tool run there, or an assistant started there, is no more.
       assistantControlEnabled: connection.kind === "ssh",
+      ...(typeof payload.ownerWorktreeId === "string" && payload.ownerWorktreeId
+        ? { ownerWorktreeId: payload.ownerWorktreeId }
+        : {}),
     };
     this.write([...hosts, descriptor]);
     return descriptor;
@@ -256,6 +262,8 @@ export class HostRegistry {
         next.arch = null;
         next.lastHandshake = null;
         next.lastSeenAt = null;
+        // Pointed at another machine by hand, it is no longer the worktree's box.
+        delete next.ownerWorktreeId;
       }
     }
     if (payload.notificationsEnabled !== undefined) {

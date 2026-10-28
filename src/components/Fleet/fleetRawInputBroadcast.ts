@@ -1,6 +1,9 @@
 import { terminalClient } from "@/clients";
 import { registerFleetInputBroadcastHandler } from "@/services/terminal/fleetInputRouter";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import {
+  peek as peekTerminalService,
+  with as withTerminalService,
+} from "@/services/terminal/terminalInstanceServiceAccessor";
 import { isFleetArmEligible, useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useFleetBroadcastProgressStore } from "@/store/fleetBroadcastProgressStore";
 import { useFleetFailureStore } from "@/store/fleetFailureStore";
@@ -45,7 +48,7 @@ export function broadcastFleetRawInput(originId: string, data: string): boolean 
   // see #3565.
   for (const id of targets) {
     if (id === originId) continue;
-    terminalInstanceService.notifyUserInput(id, data);
+    withTerminalService((service) => service.notifyUserInput(id, data), id);
   }
   // Plain Enter is a submit. Mirror the structured-submit pattern from
   // `fleetExecution.ts`: optimistically advance `directing → working` for
@@ -61,7 +64,7 @@ export function broadcastFleetRawInput(originId: string, data: string): boolean 
   // ESC+CR, neither is a submit.
   if (data === "\r") {
     for (const id of targets) {
-      terminalInstanceService.notifyEnterPressed(id);
+      peekTerminalService()?.notifyEnterPressed(id);
     }
   }
   // Bump the broadcast signal so the ribbon can fire a one-shot commit
@@ -155,7 +158,7 @@ export function applyFleetBroadcastResult(payload: BroadcastWriteResultPayload):
       // Clear the synthetic `directing` set when we mirrored the broadcast
       // through notifyUserInput, so a dead-pipe target doesn't show the
       // blue indicator for the full 1.5s debounce window.
-      terminalInstanceService.clearDirectingState(id);
+      withTerminalService((service) => service.clearDirectingState(id), id);
     }
   }
 }

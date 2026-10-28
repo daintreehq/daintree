@@ -1,5 +1,5 @@
 import { useId } from "react";
-import type { ReactNode } from "react";
+import type { ComponentType, ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import {
   Select,
@@ -22,6 +22,8 @@ export interface SettingsSelectOption {
   label: string;
   description?: string;
   disabled?: boolean;
+  /** A brand mark shown beside the label in the list and, once picked, in the trigger. */
+  icon?: ComponentType<{ size?: number; className?: string }>;
 }
 
 interface SettingsSelectProps {
@@ -93,7 +95,14 @@ export function SettingsSelect({
       description={option.description}
       disabled={option.disabled}
     >
-      {option.label}
+      {option.icon ? (
+        <span className="inline-flex items-center gap-2 align-middle">
+          <option.icon size={14} className="shrink-0 text-text-secondary" />
+          {option.label}
+        </span>
+      ) : (
+        option.label
+      )}
     </SelectItem>
   ));
 

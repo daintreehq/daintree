@@ -578,7 +578,11 @@ export function checkKernelPressureCritical(
  */
 export function summarizeSystemMemoryWorkloads(
   snapshot: CompositeMemorySnapshot,
-  resolveProjectName: (projectId: string) => string | null
+  resolveProjectName: (projectId: string) => string | null,
+  host: Pick<SystemMemoryWorkloads, "agentsRunning" | "memoryTotalMb"> = {
+    agentsRunning: null,
+    memoryTotalMb: null,
+  }
 ): SystemMemoryWorkloads | null {
   const appMemoryMb = snapshot.electron.available ? snapshot.electron.totalWorkingSetMb : null;
   const terminals = snapshot.terminalWorkloads;
@@ -595,8 +599,53 @@ export function summarizeSystemMemoryWorkloads(
             memoryMb: p.memoryMb,
           }))
       : [];
-  if (appMemoryMb === null && projects.length === 0) return null;
-  return { appMemoryMb, projects };
+  if (
+    appMemoryMb === null &&
+    projects.length === 0 &&
+    host.agentsRunning === null &&
+    host.memoryTotalMb === null
+  ) {
+    return null;
+  }
+  return { appMemoryMb, projects, ...host };
+}
+
+/** The fields of a terminal record that say whether its agent is still there. */
+export interface AgentCountableTerminal {
+  detectedAgentId?: string;
+  launchAgentId?: string;
+  everDetectedAgent?: boolean;
+  hasPty?: boolean;
+  isExited?: boolean;
+  isAssistantTerminal?: boolean;
+  agentState?: string;
+}
+
+/**
+ * Terminals with an agent in them, idle ones included: its runtime identity,
+ * or its launch intent before detection has ever committed, as `classifyRun`
+ * counts them. Null for a read missing a shard: a partial count would read low.
+ */
+export function countLiveAgentTerminals(
+  snapshot: { terminals: readonly AgentCountableTerminal[]; degraded: boolean } | null
+): number | null {
+  if (!snapshot || snapshot.degraded) return null;
+  let count = 0;
+  for (const terminal of snapshot.terminals) {
+    const hasAgent =
+      Boolean(terminal.detectedAgentId) ||
+      (Boolean(terminal.launchAgentId) && terminal.everDetectedAgent !== true);
+    if (
+      hasAgent &&
+      terminal.hasPty !== false &&
+      terminal.isExited !== true &&
+      terminal.agentState !== "exited" &&
+      terminal.isAssistantTerminal !== true
+    ) {
+      count += 1;
+    }
+  }
+  return count;
 }
 
 /**

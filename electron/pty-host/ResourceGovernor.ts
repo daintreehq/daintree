@@ -8,6 +8,7 @@ import type {
 import type { ResourceProfile } from "../../shared/types/resourceProfile.js";
 import type { PowerPolicyLevel } from "../../shared/types/powerPolicy.js";
 import { SCROLLBACK_MIN } from "../../shared/config/scrollback.js";
+import { XTERM_BYTES_PER_CELL } from "../../shared/config/terminalBufferMemory.js";
 import type { WorkerMemoryAccounting } from "../services/pty/analysis/AnalysisWorkerPool.js";
 import { FdMonitor } from "./FdMonitor.js";
 import { metricsEnabled } from "./metrics.js";
@@ -179,10 +180,9 @@ export class ResourceGovernor {
   // flap that issue #8616 reports — terminals keep running (possibly slowly
   // under OS-level backpressure) rather than getting repeatedly hard-paused.
   private readonly REENGAGE_COOLDOWN_MS = 30000;
-  // Bytes per headless-buffer cell: xterm stores 3 uint32s per cell (codepoint +
-  // fg attr + bg attr). `scrollbackLines × cols × BYTES_PER_CELL` is the cheap
-  // closed-form estimate used to rank per-terminal buffer-memory contribution.
-  private readonly BYTES_PER_CELL = 12;
+  // `scrollbackLines × cols × BYTES_PER_CELL` is the cheap closed-form estimate
+  // used to rank per-terminal buffer-memory contribution.
+  private readonly BYTES_PER_CELL = XTERM_BYTES_PER_CELL;
   private isThrottling = false;
   private checkInterval: NodeJS.Timeout | null = null;
   private fdSampleInterval: NodeJS.Timeout | null = null;

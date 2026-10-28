@@ -30,15 +30,6 @@ const WARMUP_CYCLES = 3;
 // the first — a single terminal wouldn't surface an early-exiting kill loop.
 const PROJECT_A_TERMINALS = 3;
 
-// Scheduled hibernation currently kills no PTYs: HibernationService.ts pins
-// `EXPERIMENT_HIBERNATION_DISABLED = true`, so the scheduled-kill branch is dead
-// code and a test for it would be vacuous. The "project.sleepProject" test below
-// covers the real background-project PTY-teardown path (gracefulKillByProject),
-// which bypasses the experiment flag. Flip this to true and add a scheduled-kill
-// assertion when EXPERIMENT_HIBERNATION_DISABLED is removed (#10829).
-const HIBERNATION_KILL_ENABLED = false;
-void HIBERNATION_KILL_ENABLED;
-
 async function openAndCloseTerminal(window: AppContext["window"]): Promise<void> {
   const idsBefore = await getGridPanelIds(window);
   await openTerminal(window);
@@ -188,7 +179,16 @@ test.describe.serial("Nightly: PTY process leak — project.sleepProject teardow
     // under A's id. Using more than one guards against a teardown that kills only
     // the first PTY (e.g. an early-exiting gracefulKillByProject loop).
     for (let i = 0; i < PROJECT_A_TERMINALS; i++) {
+      const idsBefore = await getGridPanelIds(ctx.window);
       await openTerminal(ctx.window);
+      await expect
+        .poll(() => getGridPanelCount(ctx.window), { timeout: T_LONG })
+        .toBe(idsBefore.length + 1);
+      const idsAfter = await getGridPanelIds(ctx.window);
+      const newId = idsAfter.find((id) => !idsBefore.includes(id));
+      expect(newId, "new project A terminal").toBeTruthy();
+      // The launch guard rejects another click until the current launch settles.
+      await waitForTerminalPty(ctx.window, getPanelById(ctx.window, newId!), T_LONG);
     }
     await expect
       .poll(() => getLivePtyCount(ctx.window, projectAId), { timeout: T_LONG })

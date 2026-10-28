@@ -6,20 +6,52 @@ import { appClient } from "@/clients";
 import { appThemeClient } from "@/clients/appThemeClient";
 import { useUserAgentRegistryStore } from "@/store/userAgentRegistryStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { useResourceMonitoringStore } from "@/store/resourceMonitoringStore";
+import {
+  DEFAULT_AUTO_RESTART_THRESHOLD_MB,
+  useMemoryLeakConfigStore,
+} from "@/store/memoryLeakConfigStore";
+import { invalidateGlobalEnvCache } from "@/clients/globalEnvClient";
 import { useAppThemeStore } from "@/store/appThemeStore";
 import { notify } from "@/lib/notify";
 import { keybindingService } from "@/services/KeybindingService";
 import { actionService } from "@/services/ActionService";
 import { getBuiltInAppSchemeForType, resolveAppTheme } from "@shared/theme";
+import { selectSelectableSchemes } from "@/theme/selectableSchemes";
 import { logError } from "@/utils/logger";
 import { IMPORT_CONFIG_EVENT } from "@/components/Config/importConfigEvent";
 import { pluralize } from "@/lib/pluralize";
 
+/**
+ * The terminal monitoring this view runs, as the host now has it: another
+ * machine's Settings may have changed it there (#14706). Only the mirrors are
+ * set; the host already holds the values, so nothing is written back.
+ */
+async function refreshTerminalMonitoring(): Promise<void> {
+  let config: Awaited<ReturnType<typeof window.electron.terminalConfig.get>>;
+  try {
+    config = await window.electron.terminalConfig.get();
+  } catch (error) {
+    logError("[app.reloadConfig] Failed to refresh terminal monitoring", error);
+    return;
+  }
+  const resourceEnabled = config.resourceMonitoringEnabled === true;
+  useResourceMonitoringStore.getState().setEnabled(resourceEnabled);
+  const leak = useMemoryLeakConfigStore.getState();
+  leak.setEnabled(config.memoryLeakDetectionEnabled ?? resourceEnabled);
+  leak.setAutoRestartThresholdMb(
+    config.memoryLeakAutoRestartThresholdMb ?? DEFAULT_AUTO_RESTART_THRESHOLD_MB
+  );
+}
+
 async function refreshRendererConfig(): Promise<void> {
+  // The next terminal reads the host's environment as it is now, not as first read.
+  invalidateGlobalEnvCache();
   await Promise.all([
     useUserAgentRegistryStore.getState().refresh(),
     useAgentSettingsStore.getState().refresh(),
     keybindingService.loadOverrides(),
+    refreshTerminalMonitoring(),
   ]);
   actionService.dispatch("cliAvailability.refresh", undefined, { source: "agent" });
 }
@@ -140,16 +172,16 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
         const result = await window.electron.configBundle.export();
         if (result.outcome === "canceled") return;
 
+        // The user picked the destination, so a clean export needs no toast.
+        // Values left out of the file are something they couldn't see.
         const omitted = result.omittedSecretPaths.length;
+        if (omitted === 0) return;
         notify({
-          type: "success",
+          type: "info",
           priority: "high",
           transient: true,
           context: { eventKind: "settings" },
-          message:
-            omitted > 0
-              ? `Configuration exported — ${pluralize(omitted, "value that looked like a secret was", "values that looked like secrets were")} left out`
-              : "Configuration exported",
+          message: `Configuration exported — ${pluralize(omitted, "value that looked like a secret was", "values that looked like secrets were")} left out`,
           duration: 4000,
         });
       } catch (error) {
@@ -256,14 +288,15 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
     scope: "renderer",
     keywords: ["appearance", "mode", "dark", "light"],
     run: async () => {
+      const state = useAppThemeStore.getState();
       const {
         selectedSchemeId,
         customSchemes,
         preferredDarkSchemeId,
         preferredLightSchemeId,
         setSelectedSchemeId,
-      } = useAppThemeStore.getState();
-      const current = resolveAppTheme(selectedSchemeId, customSchemes);
+      } = state;
+      const current = resolveAppTheme(selectedSchemeId, selectSelectableSchemes(state));
       const targetType: "dark" | "light" = current.type === "light" ? "dark" : "light";
       const preferredTargetId =
         targetType === "dark" ? preferredDarkSchemeId : preferredLightSchemeId;

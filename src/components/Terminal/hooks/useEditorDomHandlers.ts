@@ -4,8 +4,7 @@ import type { EditorView } from "@codemirror/view";
 import { hasFileDrag } from "@/lib/fileDragPayload";
 import { hasAgentContextDrag } from "@/lib/agentContextDragPayload";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
-import { usePanelStore } from "@/store/panelStore";
-import { isEnterLikeLineBreakInputEvent } from "../hybridInputEvents";
+import { agentAltChordKey, isEnterLikeLineBreakInputEvent } from "../hybridInputEvents";
 
 interface LatestRefShape {
   disabled: boolean;
@@ -15,8 +14,13 @@ interface LatestRefShape {
   selectedIndex: number;
   value: string;
   terminalId: string;
+  /** Where dictation into the composer is kept: a voice send locks it under this. */
+  voiceId: string;
   onSendKey?: (key: string) => void;
+  isVoiceActiveForPanel: boolean;
   isExpanded: boolean;
+  /** The agent's own Option/Alt chords (`capabilities.altChords`), sent to it rather than typed. */
+  altChords?: readonly string[];
 }
 
 interface UseEditorDomHandlersParams {
@@ -58,14 +62,6 @@ export function useEditorDomHandlers({
   const domEventHandlers = useMemo(
     () =>
       EditorViewFacet.domEventHandlers({
-        focus: () => {
-          // Record the session-wide focus preference so Cmd-Opt-Arrow keeps
-          // landing on the hybrid input across panes. Idempotent: the slice
-          // setter no-ops when the value is already "hybridInput", so a burst
-          // of focus events from re-renders does not churn subscribers.
-          usePanelStore.getState().setPreferredTerminalFocusTarget("hybridInput");
-          return false;
-        },
         drop: (event) => {
           if (!event.dataTransfer) return false;
           // CodeMirror reads a dropped file with a FileReader and dispatches its
@@ -111,12 +107,14 @@ export function useEditorDomHandlers({
             submitAfterCompositionRef.current = true;
             return true;
           }
-          if (useTerminalInputStore.getState().isVoiceSubmitting(latest.terminalId)) {
+          if (useTerminalInputStore.getState().isVoiceSubmitting(latest.voiceId)) {
             event.preventDefault();
             return true;
           }
           const text = editorViewRef.current?.state.doc.toString() ?? latest.value;
-          if (text.trim().length === 0) {
+          // While dictating, the words can still be on their way into an empty
+          // doc; the send finishes the dictation, as the keymap's Enter does.
+          if (text.trim().length === 0 && !latest.isVoiceActiveForPanel) {
             if (latest.onSendKey) latest.onSendKey("enter");
             return true;
           }
@@ -134,7 +132,7 @@ export function useEditorDomHandlers({
           if (!submitAfterCompositionRef.current) return false;
           submitAfterCompositionRef.current = false;
           const latest = latestRef.current;
-          if (latest && useTerminalInputStore.getState().isVoiceSubmitting(latest.terminalId)) {
+          if (latest && useTerminalInputStore.getState().isVoiceSubmitting(latest.voiceId)) {
             return false;
           }
           setTimeout(() => sendFromEditorRef.current(), 0);
@@ -153,7 +151,14 @@ export function useEditorDomHandlers({
             }
             return false;
           }
-          return false;
+          // Matched by key code here rather than in the keymap: CodeMirror
+          // leaves every macOS Option chord to type its glyph.
+          const latest = latestRef.current;
+          if (!latest || isComposingRef.current) return false;
+          const chord = agentAltChordKey(event, latest.altChords);
+          if (chord === null || !latest.onSendKey || latest.disabled) return false;
+          latest.onSendKey(chord);
+          return true;
         },
         blur: (event) => {
           const nextTarget = event.relatedTarget as HTMLElement | null;

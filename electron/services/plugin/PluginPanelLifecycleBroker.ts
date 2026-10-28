@@ -48,6 +48,23 @@ export type PanelReloadTarget =
   | { kind: "non-plugin" }
   | { kind: "unavailable" };
 
+/**
+ * Whose a panel is, as far as main knows, for a host call that must only ever
+ * touch the caller's own panels (#13820).
+ *
+ * - `owned` — every renderer holding the id holds it as one of the caller's
+ *   kinds; `panelKindId` is that kind.
+ * - `missing` — no renderer reported the id (just opened, or closed).
+ * - `foreign` / `non-plugin` — the id names someone else's panel.
+ * - `unavailable` — the kind has no registered owner right now (mid-upgrade).
+ */
+export type PanelOwnership =
+  | { kind: "owned"; panelKindId: string }
+  | { kind: "missing" }
+  | { kind: "foreign" }
+  | { kind: "non-plugin" }
+  | { kind: "unavailable" };
+
 const VALID_PHASES = new Set<PluginPanelLifecyclePhase>([
   "mounted",
   "hidden",
@@ -229,6 +246,33 @@ export class PluginPanelLifecycleBroker {
     if (viewSources.length > 1) return { kind: "unavailable" };
     if (known) return { kind: "not-mounted" };
     if (ownerless) return { kind: "unavailable" };
+    for (const ids of this.nonPluginBySource.values()) {
+      if (ids.has(panelId)) return { kind: "non-plugin" };
+    }
+    return { kind: "missing" };
+  }
+
+  /**
+   * Whether `panelId` is one of `pluginId`'s panels, and of which kind, in any
+   * live phase (#13820). Re-resolved against the live kind registry like
+   * {@link locate}, so it authorizes nothing while a kind has no owner.
+   */
+  ownership(panelId: string, pluginId: string): PanelOwnership {
+    let panelKindId: string | null = null;
+    let ownerless = false;
+    for (const panels of this.bySource.values()) {
+      const event = panels.get(panelId);
+      if (!event) continue;
+      const owner = this.resolveOwner(event.panelKindId);
+      if (owner === undefined) {
+        ownerless = true;
+        continue;
+      }
+      if (owner !== pluginId) return { kind: "foreign" };
+      panelKindId = event.panelKindId;
+    }
+    if (ownerless) return { kind: "unavailable" };
+    if (panelKindId !== null) return { kind: "owned", panelKindId };
     for (const ids of this.nonPluginBySource.values()) {
       if (ids.has(panelId)) return { kind: "non-plugin" };
     }

@@ -16,8 +16,36 @@ import type { BuiltInPluginCapability, PluginScopeKey } from "./plugin.js";
  * `host.process.spawn` the plugin makes for its lifetime, not one per spawn.
  * There is no fingerprint and no rug-pull re-prompt — capabilities are static
  * manifest declarations, so a grant only resets when the plugin is uninstalled
- * (`revokeAllForPlugin`) or the user explicitly revokes it.
+ * (`revokeAllForPlugin`), replaced by a different archive, or the user
+ * explicitly revokes it. A replacing install offers back, in one approval, the
+ * grants the new version still asks for (#14019).
  */
+
+/**
+ * Consent subject for a plugin opening a link in the user's browser. Not a
+ * manifest capability, so no `capabilities[]` entry can claim it; the grant it
+ * keys is always paired with a `site` and answers for that hostname only.
+ */
+export const EXTERNAL_LINK_CONSENT = "external-link" as const;
+
+/** What a consent record or prompt is about: a gated capability, or opening links to one site. */
+export type PluginConsentSubject = BuiltInPluginCapability | typeof EXTERNAL_LINK_CONSENT;
+
+/**
+ * "Show in attention views" (#13821): lets a plugin's panel activity reports
+ * appear as their own rows in Pilot, the dock's Waiting and Unread pills and the
+ * sidebar's attention filters. A user grant with no manifest token of its own —
+ * a panel kind's `reportsActivity` is the declaration, and declaring it turns
+ * nothing on — so it lives in the grant store beside the capability grants
+ * rather than in {@link BuiltInPluginCapability}.
+ */
+export const PLUGIN_PANEL_ATTENTION_GRANT = "panel-attention";
+
+/**
+ * What a stored grant can be for: a consent subject, or a user switch that has no
+ * capability token of its own. Never a prompt's subject — nothing asks for this.
+ */
+export type PluginGrantKey = PluginConsentSubject | typeof PLUGIN_PANEL_ATTENTION_GRANT;
 
 /**
  * Stable pin-store identity for a single plugin capability grant. Keyed in the
@@ -32,8 +60,14 @@ import type { BuiltInPluginCapability, PluginScopeKey } from "./plugin.js";
 export interface PluginCapabilityIdentity {
   /** Contributing plugin id (`manifest.name`). */
   pluginId: string;
-  /** The high-risk capability being gated. */
-  capability: BuiltInPluginCapability;
+  /** The high-risk capability being gated, or a user switch with no token of its own. */
+  capability: PluginGrantKey;
+  /**
+   * Lower-cased hostname an {@link EXTERNAL_LINK_CONSENT} grant is for. Required
+   * for that subject and absent for every real capability, so a capability grant
+   * can never answer a site and one site never answers another.
+   */
+  site?: string;
   /**
    * Scope the grant belongs to. Omitted means `"global"` — the app-wide scope
    * every installed and builtin plugin loads into.
@@ -47,7 +81,9 @@ export interface PluginCapabilityIdentity {
  */
 export interface PluginCapabilityConsentRecord {
   pluginId: string;
-  capability: BuiltInPluginCapability;
+  capability: PluginGrantKey;
+  /** Hostname of an {@link EXTERNAL_LINK_CONSENT} grant; absent otherwise. */
+  site?: string;
   /**
    * Scope the grant was minted in. Records written before the key widened have
    * no `scopeKey` on disk and read back as `"global"`.
@@ -149,6 +185,13 @@ export const PLUGIN_CAPABILITY_CONSENT_DELIVERY_TIMEOUT_MS = 10 * 1000;
 export const PLUGIN_CAPABILITY_CONSENT_RESEND_INTERVAL_MS = 2 * 1000;
 
 /**
+ * What a replacing install can offer back (#14019): anything a manifest asks
+ * for. A site is never one — no manifest declares the sites it opens, so each
+ * asks again on first use.
+ */
+export type PluginRestorableGrant = Exclude<PluginGrantKey, typeof EXTERNAL_LINK_CONSENT>;
+
+/**
  * Display-safe consent prompt pushed from main to the renderer over the typed
  * event bus (`plugin-capability:consent-request`) when a plugin first exercises
  * a gated capability. Unlike the MCP consent payload there is no args preview or
@@ -156,17 +199,41 @@ export const PLUGIN_CAPABILITY_CONSENT_RESEND_INTERVAL_MS = 2 * 1000;
  * into the consent dialog FIFO and replies via `plugin-capability:resolve-consent`,
  * correlated by `requestId`.
  */
-export interface PluginCapabilityConsentRequestEvent {
+export interface PluginCapabilityFirstUseRequestEvent {
   /** Correlation id for the matching `plugin-capability:resolve-consent` reply. */
   requestId: string;
   pluginId: string;
   /** Human-readable plugin display name (manifest `displayName ?? name`). */
   pluginDisplayName: string;
   /** The capability the plugin is asking to use for the first time. */
-  capability: BuiltInPluginCapability;
+  capability: PluginConsentSubject;
+  /** Hostname the plugin wants to open links to; set only for {@link EXTERNAL_LINK_CONSENT}. */
+  site?: string;
   /** Plugin's manifest `capabilities[]` list — surfaced for transparency. */
   declaredCapabilities: readonly BuiltInPluginCapability[];
+  restore?: undefined;
 }
+
+/**
+ * The offer-back after a replacing install (#14019), on the same push and the
+ * same reply as a first-use prompt. The new code is a new trust decision, so
+ * nothing carries over on its own; this asks once whether the grants the
+ * previous version held, and this version still asks for, should come back.
+ * `approved-and-pin` restores them all and anything else leaves them off.
+ */
+export interface PluginCapabilityRestoreRequestEvent {
+  requestId: string;
+  pluginId: string;
+  pluginDisplayName: string;
+  /** Never empty. What each grant is for, not which scope holds it: main keeps those. */
+  restore: readonly PluginRestorableGrant[];
+  declaredCapabilities: readonly BuiltInPluginCapability[];
+  capability?: undefined;
+  site?: undefined;
+}
+
+export type PluginCapabilityConsentRequestEvent =
+  PluginCapabilityFirstUseRequestEvent | PluginCapabilityRestoreRequestEvent;
 
 /**
  * Renderer → main receipt for a `plugin-capability:consent-request` push
@@ -215,6 +282,33 @@ export interface PluginOsNotificationsQuery {
 
 /** Renderer → main write of the "Allow OS notifications" switch (#13505). */
 export interface PluginOsNotificationsUpdate {
+  pluginId: string;
+  enabled: boolean;
+}
+
+/** Renderer → main read of the "Show notes when deleting a worktree" switch (#13805). */
+export interface PluginWorktreeDeleteNotesQuery {
+  pluginId: string;
+}
+
+/** Renderer → main write of the "Show notes when deleting a worktree" switch (#13805). */
+export interface PluginWorktreeDeleteNotesUpdate {
+  pluginId: string;
+  enabled: boolean;
+}
+
+/**
+ * Renderer → main read of a plugin's "Show in attention views" switch (#13821)
+ * — the {@link PLUGIN_PANEL_ATTENTION_GRANT} grant in the `"global"` scope,
+ * keyed by the plugin's instance id, so each project's instance of a project
+ * plugin has its own.
+ */
+export interface PluginPanelAttentionQuery {
+  pluginId: string;
+}
+
+/** Renderer → main write of the "Show in attention views" switch (#13821). */
+export interface PluginPanelAttentionUpdate {
   pluginId: string;
   enabled: boolean;
 }

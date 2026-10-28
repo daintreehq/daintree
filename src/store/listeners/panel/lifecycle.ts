@@ -2,7 +2,7 @@ import type { TerminalStatusPayload } from "@shared/types";
 import type { TerminalReliabilityMetricPayload } from "@shared/types/pty-host";
 import { isPtyPanel } from "@shared/types/panel";
 import { terminalRegistryController } from "@/controllers";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useResourceMonitoringStore } from "@/store/resourceMonitoringStore";
 import { isAgentTerminal } from "@/utils/terminalType";
@@ -34,6 +34,7 @@ import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { notify } from "@/lib/notify";
 import { actionService } from "@/services/ActionService";
+import type { AgentFallbackReason } from "@shared/types/ipc/agent";
 
 /**
  * Per-terminal reentrancy guard for fallback activations. A single slow exit
@@ -48,7 +49,7 @@ export async function handleFallbackTriggered(data: {
   agentId: string;
   fromPresetId: string;
   originalPresetId?: string;
-  reason: "connection" | "auth";
+  reason: AgentFallbackReason;
 }): Promise<void> {
   const { terminalId, agentId, fromPresetId, reason } = data;
   if (fallbackInFlight.has(terminalId)) return;
@@ -57,6 +58,8 @@ export async function handleFallbackTriggered(data: {
   if (!_panelRaw || !isPtyPanel(_panelRaw)) return;
   const panel = _panelRaw;
   if (panel.isRestarting) return;
+  // Held for recovery (#12434): nothing is running there to fall over from.
+  if (panel.restoreRecovery) return;
 
   // Drop stale duplicate events: if the panel has already advanced past the
   // preset this event refers to, the exit was from a now-replaced process
@@ -79,6 +82,21 @@ export async function handleFallbackTriggered(data: {
   const chain = originalPreset?.fallbacks ?? [];
   const currentIndex = panel.fallbackChainIndex ?? 0;
   const nextPresetId = chain[currentIndex];
+  // A rate limit is the user's to see unless they opted in on their own preset
+  // (#14370): a hop ends a live conversation, which a team-shared project file
+  // can't agree to for them. Nothing is said otherwise, or once the chain runs
+  // out, because the pane's rate-limit chip already shows the limit.
+  if (reason === "rate-limit") {
+    // Resolved like any other preset (sanitized, first id wins), from the
+    // user's own presets alone.
+    const optedIn =
+      getMergedPresets(agentId, entry.customPresets, [], []).find((p) => p.id === originalPresetId)
+        ?.fallbackOnRateLimit === true;
+    if (!optedIn || !nextPresetId) {
+      fallbackInFlight.delete(terminalId);
+      return;
+    }
+  }
 
   const fromPreset = mergedPresets.find((p) => p.id === fromPresetId);
   const fromName = fromPreset?.name ?? fromPresetId;
@@ -101,7 +119,9 @@ export async function handleFallbackTriggered(data: {
       title: isExhausted ? "Fallback chain exhausted" : `${fromName} unavailable`,
       message: isExhausted
         ? `All fallback presets were tried. Configure fallback presets or restart the terminal manually.`
-        : `${fromName} provider is unreachable. Configure fallbacks in Settings to auto-recover.`,
+        : reason === "auth"
+          ? `${fromName} couldn't sign in. Configure fallbacks in Settings to auto-recover.`
+          : `${fromName} provider is unreachable. Configure fallbacks in Settings to auto-recover.`,
       duration: 12000,
       supersedeKey: fallbackSupersedeKey,
       context: { ...fallbackAddress },
@@ -172,7 +192,9 @@ export async function handleFallbackTriggered(data: {
         message:
           reason === "auth"
             ? `${fromName} authentication failed — now running "${nextPreset.name}".`
-            : `${fromName} unreachable — now running "${nextPreset.name}".`,
+            : reason === "rate-limit"
+              ? `${fromName} hit its usage limit — now running "${nextPreset.name}" in a new conversation.`
+              : `${fromName} unreachable — now running "${nextPreset.name}".`,
         supersedeKey: fallbackSupersedeKey,
         context: { ...fallbackAddress },
       });
@@ -341,6 +363,22 @@ export function setupLifecycleListeners(): DisposableStore {
     );
   }
 
+  // Canopy removed a trashed terminal this view holds for good: the pane goes
+  // as the dock trash's own Remove takes it, the process ended by that kill so
+  // its session is kept for resuming as any close keeps it.
+  const onCanopyRemove = window.electron?.canopy?.onRemoveRequested;
+  if (onCanopyRemove) {
+    d.add(
+      toDisposable(
+        onCanopyRemove(({ runId }) => {
+          const panel = usePanelStore.getState().panelsById[runId];
+          if (!panel || panel.location !== "trash") return;
+          usePanelStore.getState().removePanel(runId);
+        })
+      )
+    );
+  }
+
   // Canopy renamed a terminal this view holds: the pane takes it as the user's
   // own rename here would, user-locked — or, for an empty title, back to the
   // default this view works out for it.
@@ -398,7 +436,7 @@ export function setupLifecycleListeners(): DisposableStore {
 
   d.add(
     toDisposable(
-      terminalRegistryController.onExit((id, exitCode) => {
+      terminalRegistryController.onExit((id, exitCode, context) => {
         // Check synchronous restart guard FIRST - this handles the race condition where
         // the store's isRestarting flag hasn't propagated yet during bulk restarts
         if (isTerminalRestarting(id)) {
@@ -424,6 +462,8 @@ export function setupLifecycleListeners(): DisposableStore {
         // resurrect a stale "paused" pill on the just-exited panel (#9899).
         cancelTerminalFlowState(id);
 
+        const sessionPreservingExit = context?.preserveSession === true;
+
         // Store exit code and clear the flow state on the terminal before
         // applying exit behavior. Flow status must not outlive the PTY process
         // that owned the pause — clear it atomically with the exit-code write so
@@ -437,6 +477,7 @@ export function setupLifecycleListeners(): DisposableStore {
               [id]: {
                 ...existing,
                 exitCode,
+                sessionPreservingExit: sessionPreservingExit || undefined,
                 flowStatus: undefined,
                 flowStatusTimestamp: undefined,
                 heldDurationMs: undefined,
@@ -458,6 +499,14 @@ export function setupLifecycleListeners(): DisposableStore {
         // so they don't linger in the dock as "exited" agents.
         if (terminal.removeOnExit === true) {
           state.removePanel(id);
+          return;
+        }
+
+        // Sleep, hibernation, idle close and quit end the project's processes
+        // and restore its layout on reopen. A signal-killed shell reports code
+        // 0, so without this it would be trashed like one the user typed `exit`
+        // in, and drop out of the layout that is saved mid-teardown (#13841).
+        if (sessionPreservingExit) {
           return;
         }
 
@@ -508,7 +557,7 @@ export function setupLifecycleListeners(): DisposableStore {
         // never persist via updateFlowStatus or the runtime status would
         // freeze on "data-loss" forever.
         if (status === "data-loss") {
-          terminalInstanceService.injectDataLossMarker(id, droppedBytes ?? 0);
+          peekTerminalService()?.injectDataLossMarker(id, droppedBytes ?? 0);
           return;
         }
         // FUTURE_SAB: `suspended` and `paused-user` are excluded from
@@ -654,10 +703,8 @@ export function setupLifecycleListeners(): DisposableStore {
 
   d.add(
     toDisposable(
-      terminalRegistryController.onReduceScrollback(({ terminalIds, targetLines }) => {
-        for (const id of terminalIds) {
-          terminalInstanceService.reduceScrollback(id, targetLines);
-        }
+      terminalRegistryController.onReduceScrollback(({ targetLines }) => {
+        peekTerminalService()?.reduceScrollbackHidden(targetLines);
       })
     )
   );
@@ -666,7 +713,7 @@ export function setupLifecycleListeners(): DisposableStore {
     toDisposable(
       terminalRegistryController.onRestoreScrollback(({ terminalIds }) => {
         for (const id of terminalIds) {
-          terminalInstanceService.restoreScrollback(id);
+          peekTerminalService()?.restoreScrollback(id);
         }
       })
     )

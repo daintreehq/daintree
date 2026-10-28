@@ -50,7 +50,12 @@ vi.mock("../../../window/webContentsRegistry.js", () => ({
 }));
 
 import type { LinkSession } from "../../link/session.js";
-import { makeTempDir, openSessionPair, removeTempDir } from "../../link/__tests__/linkTestUtils.js";
+import {
+  makeTempDir,
+  openSessionPair,
+  removeTempDir,
+  waitFor,
+} from "../../link/__tests__/linkTestUtils.js";
 import { _resetRemoteServicesForTest, getRemoteService } from "../../runtime.js";
 import { installPortForwardClient } from "../clientInstall.js";
 import { installHostPortService } from "../hostPorts.js";
@@ -283,5 +288,145 @@ describe("installPortForwardClient", () => {
     const lookup = hooks.resolver!("dp-proj-panel") as Promise<unknown> | null;
     expect(lookup).not.toBeNull();
     await lookup;
+  });
+
+  it("lets a preview's forward go when its panel closes, with no further lookup", async () => {
+    cleanups.push(
+      installPortForwardClient({
+        onEndpointOpened: () => () => {},
+        hostForView: (webContentsId) => (webContentsId === 9 ? HOST : null),
+        projectForView: (webContentsId) =>
+          webContentsId === 9 ? { hostId: HOST, projectId: "proj" } : null,
+        isKnownHost: (hostId) => hostId === HOST,
+        sessionFor: (hostId) => (hostId === HOST ? client : null),
+        connectionFor: () => null,
+        clientDir: dir,
+      })
+    );
+    const service = getRemoteService("portForwards")!;
+    // The host's own preview lookup answers from its dev-preview sessions.
+    hooks.localSubdomains.add("dp-proj-panel");
+    hooks.forwarded!({
+      hostId: HOST,
+      webContentsId: 9,
+      hostProjectId: "proj",
+      channel: "dev-preview:ensure",
+      args: [{ panelId: "panel", projectId: "proj", cwd: "/x", devCommand: "npm run dev" }],
+    });
+    await (hooks.resolver!("dp-proj-panel") as Promise<unknown>);
+    expect(service.list()).toEqual([expect.objectContaining({ origin: "dev-preview" })]);
+
+    // Closing the panel stops its session on the host; nothing looks the preview up again.
+    hooks.forwarded!({
+      hostId: HOST,
+      webContentsId: 9,
+      hostProjectId: "proj",
+      channel: "dev-preview:stop-by-panel",
+      args: [{ panelId: "panel" }],
+    });
+    await waitFor(() => service.list().length === 0, 3_000);
+  });
+
+  it("lets a worktree's previews go when its servers are stopped, and ignores another host's stop", async () => {
+    const OTHER = "studio-02";
+    cleanups.push(
+      installPortForwardClient({
+        onEndpointOpened: () => () => {},
+        hostForView: (webContentsId) => (webContentsId === 9 ? HOST : null),
+        projectForView: (webContentsId) =>
+          webContentsId === 9 ? { hostId: HOST, projectId: "proj" } : null,
+        isKnownHost: (hostId) => hostId === HOST || hostId === OTHER,
+        sessionFor: (hostId) => (hostId === HOST || hostId === OTHER ? client : null),
+        connectionFor: () => null,
+        clientDir: dir,
+      })
+    );
+    const service = getRemoteService("portForwards")!;
+    hooks.localSubdomains.add("dp-proj-panel");
+    hooks.forwarded!({
+      hostId: HOST,
+      webContentsId: 9,
+      hostProjectId: "proj",
+      channel: "dev-preview:ensure",
+      args: [
+        { panelId: "panel", projectId: "proj", cwd: "/x", devCommand: "x", worktreeId: "wt-1" },
+      ],
+    });
+    await (hooks.resolver!("dp-proj-panel") as Promise<unknown>);
+    expect(service.list()).toHaveLength(1);
+
+    // Another host's project that sanitises to the same origin doesn't speak for this preview.
+    hooks.forwarded!({
+      hostId: OTHER,
+      webContentsId: 10,
+      hostProjectId: "proj",
+      channel: "dev-preview:stop-by-panel",
+      args: [{ panelId: "panel" }],
+    });
+    hooks.forwarded!({
+      hostId: OTHER,
+      webContentsId: 10,
+      hostProjectId: "proj",
+      channel: "dev-preview:stop-dev-server-by-worktree",
+      args: [{ worktreeId: "wt-1" }],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(service.list()).toHaveLength(1);
+
+    const stopWorktree = () =>
+      hooks.forwarded!({
+        hostId: HOST,
+        webContentsId: 9,
+        hostProjectId: "proj",
+        channel: "dev-preview:stop-dev-server-by-worktree",
+        args: [{ worktreeId: "wt-1" }],
+      });
+    stopWorktree();
+    await waitFor(() => service.list().length === 0, 3_000);
+
+    // Restarted from the dashboard (no ensure), loaded, and stopped again.
+    await (hooks.resolver!("dp-proj-panel") as Promise<unknown>);
+    expect(service.list()).toHaveLength(1);
+    stopWorktree();
+    await waitFor(() => service.list().length === 0, 3_000);
+  });
+
+  it("holds a panel's forward for the view that asked, and lets it go when that view is gone", async () => {
+    const upstream = http.createServer((_req, res) => res.end("ok"));
+    const remotePort = await new Promise<number>((resolve) =>
+      upstream.listen(0, "127.0.0.1", () => resolve((upstream.address() as net.AddressInfo).port))
+    );
+    cleanups.push(() => upstream.close());
+    const gone = new Map<number, () => void>();
+    cleanups.push(
+      installPortForwardClient({
+        onEndpointOpened: () => () => {},
+        hostForView: (webContentsId) => (webContentsId === 9 ? HOST : null),
+        isKnownHost: (hostId) => hostId === HOST,
+        sessionFor: (hostId) => (hostId === HOST ? client : null),
+        connectionFor: () => null,
+        clientDir: dir,
+        watchView(webContentsId, onGone) {
+          gone.set(webContentsId, onGone);
+          return () => gone.delete(webContentsId);
+        },
+      })
+    );
+    const service = getRemoteService("portForwards")!;
+    const panel = { hostId: HOST, remotePort, origin: "browser-panel" as const };
+
+    await expect(
+      service.forward({ ...panel, panelId: "" }, { webContentsId: 9 })
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+    // A panel forward with no panel to hold it would last for good.
+    await expect(service.forward(panel)).rejects.toMatchObject({ code: "VALIDATION" });
+    expect(() => service.release({ panelId: "" }, { webContentsId: 9 })).toThrow();
+
+    await service.forward({ ...panel, panelId: "a" }, { webContentsId: 9 });
+    expect(service.list()).toEqual([expect.objectContaining({ origin: "browser-panel" })]);
+    expect([...gone.keys()]).toEqual([9]);
+
+    gone.get(9)!();
+    await waitFor(() => service.list().length === 0, 3_000);
   });
 });

@@ -4,9 +4,12 @@ vi.mock("@/store/panelStore", () => ({
   usePanelStore: { getState: () => ({ panelIdsByWorktreeId: {}, panelsById: {} }) },
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: { applyRendererPolicy: vi.fn(), getInstance: vi.fn() },
-}));
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = { applyRendererPolicy: vi.fn(), getInstance: vi.fn() };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 import { planDeletedWorktreePlacement } from "../deletedWorktreePlacement";
 import type { DeletedWorktree } from "@/store/worktreeStore";

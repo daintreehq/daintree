@@ -66,8 +66,8 @@ function setHibernated(id: string, value: boolean) {
   for (const l of ls) l();
 }
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     isHibernated: (id: string) => hibernationState.get(id) ?? false,
     subscribeHibernation: (id: string, listener: () => void) => {
       let set = hibernationListeners.get(id);
@@ -83,11 +83,29 @@ vi.mock("@/services/TerminalInstanceService", () => ({
         if (current.size === 0) hibernationListeners.delete(id);
       };
     },
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { useAccessibilityAnnouncements } from "../useAccessibilityAnnouncements";
+import { createTerminalPaintPlane } from "@/services/TerminalInstanceService";
+import {
+  __testing as terminalServiceTesting,
+  register as registerTerminalService,
+} from "@/services/terminal/terminalInstanceServiceAccessor";
+
+const terminalInstanceService = createTerminalPaintPlane();
+
+const terminalService = terminalInstanceService;
+
+// The service mock never evaluates the real module, so nothing registers it.
+beforeEach(() => {
+  terminalServiceTesting.reset();
+  registerTerminalService(terminalService);
+});
 
 function setPanels(panels: Terminal[], queueCounts: Record<string, number> = {}) {
   panelMockStore.setState({
@@ -1127,5 +1145,68 @@ describe("useAccessibilityAnnouncements — stable-membership record writes", ()
     });
 
     expect(useAnnouncerStore.getState().polite).toBeNull();
+  });
+});
+
+describe("useAccessibilityAnnouncements — before the terminal service loads", () => {
+  beforeEach(() => {
+    useAnnouncerStore.setState({ polite: null, assertive: null, nextId: 1 });
+    panelMockStore.setState({
+      focusedId: null,
+      panelsById: {},
+      panelIds: [],
+      commandQueueCountById: {},
+    });
+    hibernationState.clear();
+    hibernationListeners.clear();
+    terminalServiceTesting.reset();
+  });
+
+  it("attaches the hibernation listener once the service is ready", () => {
+    const { rerender } = renderHook(() => useAccessibilityAnnouncements());
+    act(() => {
+      setPanels([{ id: "t1", title: "Pane A" }]);
+    });
+    rerender();
+    expect(hibernationListeners.has("t1")).toBe(false);
+
+    // Seeded silently: becoming ready is not a hibernation transition.
+    hibernationState.set("t1", true);
+    useAnnouncerStore.setState({ polite: null, assertive: null });
+    act(() => registerTerminalService(terminalService));
+    expect(hibernationListeners.get("t1")?.size).toBe(1);
+    expect(useAnnouncerStore.getState().polite).toBeNull();
+
+    act(() => {
+      setHibernated("t1", false);
+    });
+    expect(useAnnouncerStore.getState().polite?.msg).toBe("Pane A: woke up");
+  });
+
+  it("leaves no listener behind for a panel removed before ready", () => {
+    const { rerender } = renderHook(() => useAccessibilityAnnouncements());
+    act(() => {
+      setPanels([{ id: "t1", title: "Pane A" }]);
+    });
+    rerender();
+    act(() => {
+      setPanels([]);
+    });
+    rerender();
+
+    registerTerminalService(terminalService);
+    expect(hibernationListeners.has("t1")).toBe(false);
+  });
+
+  it("leaves no listener behind when unmounted before ready", () => {
+    const { rerender, unmount } = renderHook(() => useAccessibilityAnnouncements());
+    act(() => {
+      setPanels([{ id: "t1", title: "Pane A" }]);
+    });
+    rerender();
+    unmount();
+
+    registerTerminalService(terminalService);
+    expect(hibernationListeners.has("t1")).toBe(false);
   });
 });

@@ -321,6 +321,101 @@ describe("getFileDiff paging over a real repo", () => {
   });
 });
 
+describe("getFileDiff index sides over a real repo", () => {
+  let tmp: string;
+  let repo: string;
+  let service: WorkspaceService;
+  let last: DiffResult | null;
+
+  beforeAll(async () => {
+    const { WorkspaceService } = await import("../WorkspaceService.js");
+    service = new WorkspaceService((event) => {
+      if (event.type === "get-file-diff-result") last = event;
+    });
+  });
+
+  afterAll(() => service.dispose());
+
+  beforeEach(() => {
+    tmp = realpathSync(mkdtempSync(path.join(realpathSync(os.tmpdir()), "file-diff-side-")));
+    repo = path.join(tmp, "repo");
+    git(tmp, "init", "-q", "-b", "main", repo);
+    writeFileSync(path.join(repo, "a.txt"), "base\n");
+    writeFileSync(path.join(repo, "gone.txt"), "going\n");
+    git(repo, "add", ".");
+    git(repo, "commit", "-q", "-m", "base");
+  });
+
+  afterEach(() => rmSync(tmp, { recursive: true, force: true }));
+
+  async function diffOf(file: string, status: string, side?: "staged" | "unstaged") {
+    last = null;
+    await service.getFileDiff("req", repo, file, status, false, 0, undefined, side);
+    if (!last) throw new Error("no result");
+    return (last as DiffResult).diff;
+  }
+
+  it("splits a partially staged file into HEAD→index and index→working tree", async () => {
+    writeFileSync(path.join(repo, "a.txt"), "staged\n");
+    git(repo, "add", "a.txt");
+    writeFileSync(path.join(repo, "a.txt"), "working\n");
+
+    const staged = await diffOf("a.txt", "modified", "staged");
+    expect(staged).toContain("-base");
+    expect(staged).toContain("+staged");
+    expect(staged).not.toContain("working");
+
+    const unstaged = await diffOf("a.txt", "modified", "unstaged");
+    expect(unstaged).toContain("-staged");
+    expect(unstaged).toContain("+working");
+    expect(unstaged).not.toContain("base");
+
+    const combined = await diffOf("a.txt", "modified");
+    expect(combined).toContain("-base");
+    expect(combined).toContain("+working");
+  });
+
+  it("keeps the two sides apart across repeated reads", async () => {
+    writeFileSync(path.join(repo, "a.txt"), "staged\n");
+    git(repo, "add", "a.txt");
+    writeFileSync(path.join(repo, "a.txt"), "working\n");
+
+    for (let i = 0; i < 2; i++) {
+      expect(await diffOf("a.txt", "modified", "staged")).toContain("+staged");
+      expect(await diffOf("a.txt", "modified", "unstaged")).toContain("+working");
+    }
+  });
+
+  it("shows a staged new file as added at its staged content, not the edited copy", async () => {
+    writeFileSync(path.join(repo, "new.txt"), "first\n");
+    git(repo, "add", "new.txt");
+    writeFileSync(path.join(repo, "new.txt"), "second\n");
+
+    const staged = await diffOf("new.txt", "added", "staged");
+    expect(staged).toContain("new file mode");
+    expect(staged).toContain("+first");
+    expect(staged).not.toContain("second");
+
+    const unstaged = await diffOf("new.txt", "modified", "unstaged");
+    expect(unstaged).toContain("-first");
+    expect(unstaged).toContain("+second");
+  });
+
+  it("shows a staged deletion on the staged side and nothing on the unstaged side", async () => {
+    git(repo, "rm", "-q", "gone.txt");
+
+    expect(await diffOf("gone.txt", "deleted", "staged")).toContain("deleted file mode");
+    expect(await diffOf("gone.txt", "deleted", "unstaged")).toBe("NO_CHANGES");
+  });
+
+  it("shows an unstaged deletion of a tracked file on the unstaged side only", async () => {
+    rmSync(path.join(repo, "gone.txt"));
+
+    expect(await diffOf("gone.txt", "deleted", "unstaged")).toContain("deleted file mode");
+    expect(await diffOf("gone.txt", "deleted", "staged")).toBe("NO_CHANGES");
+  });
+});
+
 describe("FileDiffCache bounds", () => {
   afterEach(() => vi.useRealTimers());
 

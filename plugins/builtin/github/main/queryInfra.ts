@@ -57,6 +57,12 @@ export async function dispatchQuery(
     gitHubRateLimitService.updateFromGraphQL(response, queryLabel);
     return response;
   } catch (error) {
+    // A response that carried errors still spent budget, and says how much:
+    // read it here, once per request, however many callers share the result.
+    const data = (error as { data?: unknown } | null)?.data;
+    if (data && typeof data === "object") {
+      gitHubRateLimitService.updateFromGraphQL(data as Record<string, unknown>, queryLabel);
+    }
     throw new Error(parseGitHubError(error), { cause: error });
   }
 }

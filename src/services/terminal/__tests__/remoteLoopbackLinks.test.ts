@@ -10,16 +10,22 @@ vi.mock("@/store/panelStore", () => ({
   usePanelStore: { getState: () => ({ panelsById: {}, panelIds: [] }) },
 }));
 
+import { ClientAppError } from "@/utils/clientAppError";
 import {
   callbackPortOf,
+  HostPortInUseError,
+  hostForwardFailure,
   needsHostForward,
   parseLoopbackLink,
+  releaseBrowserPanelForwards,
   resolveBrowserUrlForView,
+  resolveExternalPageForView,
   resolveTerminalLinkForView,
 } from "../remoteLoopbackLinks";
 import { TerminalLinkHandler } from "../TerminalLinkHandler";
 
 const forward = vi.fn();
+const release = vi.fn(() => Promise.resolve());
 // Long enough for a rejected forward to settle, so a late open would have happened.
 const SETTLE_MS = 10;
 
@@ -41,10 +47,11 @@ beforeEach(() => {
   }));
   openExternal.mockClear();
   dispatch.mockClear();
+  release.mockClear();
   Object.defineProperty(window, "electron", {
     configurable: true,
     writable: true,
-    value: { portForwards: { forward } },
+    value: { portForwards: { forward, release } },
   });
 });
 
@@ -54,11 +61,13 @@ describe("browser panel URLs", () => {
   it("leaves every URL alone in a view on this machine", async () => {
     bindView(null);
     expect(needsHostForward("http://localhost:3000/")).toBe(false);
-    expect(await resolveBrowserUrlForView("http://localhost:3000/")).toBe("http://localhost:3000/");
+    expect(await resolveBrowserUrlForView("http://localhost:3000/", "panel-1")).toBe(
+      "http://localhost:3000/"
+    );
     expect(forward).not.toHaveBeenCalled();
   });
 
-  it("forwards a host's localhost port for good, to the same port, keeping the address", async () => {
+  it("holds a host's localhost port for the panel, at the same port, keeping the address", async () => {
     bindView("studio-01");
     forward.mockImplementationOnce(async ({ hostId, remotePort, origin }) => ({
       forwardId: "f1",
@@ -70,18 +79,35 @@ describe("browser panel URLs", () => {
       createdAt: 1,
     }));
     expect(needsHostForward("localhost:3000")).toBe(true);
-    expect(await resolveBrowserUrlForView("http://localhost:3000/app?x=1")).toBe(
+    expect(await resolveBrowserUrlForView("http://localhost:3000/app?x=1", "panel-1")).toBe(
       "http://localhost:3000/app?x=1"
     );
     expect(forward).toHaveBeenCalledWith(
-      expect.objectContaining({ hostId: "studio-01", remotePort: 3000, origin: "manual" })
+      expect.objectContaining({
+        hostId: "studio-01",
+        remotePort: 3000,
+        origin: "browser-panel",
+        panelId: "panel-1",
+        samePort: true,
+      })
     );
+  });
+
+  it("lets the panel's forwards go when it closes, in a host's view only", () => {
+    bindView("studio-01");
+    releaseBrowserPanelForwards("panel-1");
+    expect(release).toHaveBeenCalledWith({ panelId: "panel-1" });
+
+    release.mockClear();
+    bindView(null);
+    releaseBrowserPanelForwards("panel-1");
+    expect(release).not.toHaveBeenCalled();
   });
 
   it("refuses when the port is taken here, rather than show the page at another address", async () => {
     bindView("studio-01");
     // The default mock lands on another local port, as a busy one would.
-    await expect(resolveBrowserUrlForView("http://localhost:3000/")).rejects.toThrow(
+    await expect(resolveBrowserUrlForView("http://localhost:3000/", "panel-1")).rejects.toThrow(
       "Port 3000 is in use on this machine"
     );
   });
@@ -89,14 +115,80 @@ describe("browser panel URLs", () => {
   it("loads an internet page in a host's view as it is", async () => {
     bindView("studio-01");
     expect(needsHostForward("https://github.com/")).toBe(false);
-    expect(await resolveBrowserUrlForView("https://github.com/")).toBe("https://github.com/");
+    expect(await resolveBrowserUrlForView("https://github.com/", "panel-1")).toBe(
+      "https://github.com/"
+    );
     expect(forward).not.toHaveBeenCalled();
   });
 
   it("refuses rather than fall back to this machine's own localhost", async () => {
     bindView("studio-01");
     forward.mockRejectedValueOnce(new Error("host gone"));
-    await expect(resolveBrowserUrlForView("http://localhost:3000/")).rejects.toThrow("host gone");
+    await expect(resolveBrowserUrlForView("http://localhost:3000/", "panel-1")).rejects.toThrow(
+      "host gone"
+    );
+  });
+});
+
+describe("system browser pages", () => {
+  it("forwards a host's page for as long as it is in use, at the same address", async () => {
+    bindView("studio-01");
+    forward.mockImplementationOnce(async ({ hostId, remotePort, origin }) => ({
+      forwardId: "f1",
+      hostId,
+      remotePort,
+      localPort: remotePort,
+      origin,
+      label: null,
+      createdAt: 1,
+    }));
+    await expect(
+      resolveExternalPageForView("http://127.0.0.1:8080", "Worktree endpoint")
+    ).resolves.toBe("http://127.0.0.1:8080/");
+    expect(forward).toHaveBeenCalledWith(
+      expect.objectContaining({
+        remotePort: 8080,
+        origin: "oauth-callback",
+        label: "Worktree endpoint",
+        samePort: true,
+      })
+    );
+  });
+
+  it("opens every page as it is in a view on this machine", async () => {
+    await expect(resolveExternalPageForView("http://127.0.0.1:8080", "x")).resolves.toBe(
+      "http://127.0.0.1:8080"
+    );
+    expect(forward).not.toHaveBeenCalled();
+  });
+});
+
+describe("hostForwardFailure", () => {
+  it("says the port is taken here, in the conflict's own words", () => {
+    const error = new HostPortInUseError(8080);
+    expect(hostForwardFailure("http://127.0.0.1:8080", error)).toBe(error.message);
+  });
+
+  it("passes on main's words for a port another forward holds, naming its host", () => {
+    const error = new ClientAppError(
+      "PORT_IN_USE",
+      "raw",
+      "Port 3000 on this machine already forwards studio-01's port 3000, so the host's page can't open here at the same address. Stop that forward in Ports, then try again."
+    );
+    expect(hostForwardFailure("http://localhost:3000", error)).toBe(error.userMessage);
+  });
+
+  it("names the port and gives the host's reason where it gave one", () => {
+    const error = new ClientAppError("UNSUPPORTED", "raw", "The host isn't connected.");
+    expect(hostForwardFailure("http://localhost:3000", error)).toBe(
+      "Port 3000 on the host couldn't be forwarded to this machine. The host isn't connected."
+    );
+  });
+
+  it("falls back to a plain reason for an error with no message and a URL with no loopback port", () => {
+    expect(hostForwardFailure("https://gpu.staging.dev", undefined)).toBe(
+      "The host didn't answer."
+    );
   });
 });
 
@@ -156,7 +248,7 @@ describe("resolveTerminalLinkForView", () => {
     }));
     await expect(resolveTerminalLinkForView(url)).resolves.toBe(url);
     expect(forward).toHaveBeenCalledWith(
-      expect.objectContaining({ remotePort: 54545, origin: "oauth-callback" })
+      expect.objectContaining({ remotePort: 54545, origin: "oauth-callback", samePort: true })
     );
   });
 

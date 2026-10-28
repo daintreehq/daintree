@@ -1,14 +1,10 @@
 import type { IpcInvokeMap } from "../../types/index.js";
 
 export const SITE_PREVIEW_METHOD_CHANNELS = {
-  listCandidates: "site-preview:list-candidates",
-  bind: "site-preview:bind",
   detach: "site-preview:detach",
   setMode: "site-preview:set-mode",
-  reselect: "site-preview:reselect",
   clearSelection: "site-preview:clear-selection",
   clearHover: "site-preview:clear-hover",
-  getState: "site-preview:get-state",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof SITE_PREVIEW_METHOD_CHANNELS;

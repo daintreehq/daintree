@@ -435,6 +435,27 @@ describe("PluginMcpRoute", () => {
     expect(JSON.stringify(caller)).not.toContain(token);
   });
 
+  it("tells the call observer which grant made each call, and how it ended", async () => {
+    const settled: string[] = [];
+    const observeToolCall = vi.fn<NonNullable<PluginMcpRouteDeps["observeToolCall"]>>(
+      () => (outcome) => {
+        settled.push(outcome);
+      }
+    );
+    route.dispose();
+    await listener.close();
+    route = makeRoute({ observeToolCall });
+    listener = await startListener(route);
+
+    const { grant, token } = issue({ terminalId: "help-term" });
+    const { client } = await connect(token);
+    await client.callTool({ name: "lookup", arguments: { id: "r-1" } });
+
+    expect(observeToolCall).toHaveBeenCalledTimes(1);
+    expect(observeToolCall).toHaveBeenCalledWith(grant, "lookup", ["id"]);
+    expect(settled).toEqual(["ok"]);
+  });
+
   it("answers arguments that break the input schema with a tool error, over HTTP too", async () => {
     const { token } = issue();
     const { client } = await connect(token);
@@ -1238,5 +1259,38 @@ describe("PluginMcpRoute", () => {
     expect(seen?.aborted).toBe(true);
     expect(route.sessionCount).toBe(0);
     expect(await outcome).toBe("rejected");
+  });
+});
+
+describe("regrouped tools", () => {
+  it("revokes the credentials reaching a plugin's groups when a roster moves a tool between them", () => {
+    const SEARCH = { id: "search", access: "read" as const };
+    const grouped = (groupId: string) =>
+      compileAgentMcpTool({
+        name: "search_contacts",
+        description: "Search contacts.",
+        inputSchema: { type: "object" },
+        group: { id: groupId, access: "read" },
+      });
+    endpoints.register({
+      pluginInstanceId: INSTANCE,
+      endpointId: ENDPOINT,
+      tools: [grouped("search")],
+      invoke,
+    });
+    const groupedGrant = issue({
+      scope: { databases: false, pluginEndpointId: ENDPOINT, pluginGroups: [SEARCH] },
+    }).grant;
+    const databaseGrant = issue({ scope: { databases: true }, terminalId: "term-2" }).grant;
+
+    endpoints.register({
+      pluginInstanceId: INSTANCE,
+      endpointId: ENDPOINT,
+      tools: [grouped("lookup")],
+      invoke,
+    });
+
+    expect(pluginMcpGrantRegistry.isLive(groupedGrant.credentialId)).toBe(false);
+    expect(pluginMcpGrantRegistry.isLive(databaseGrant.credentialId)).toBe(true);
   });
 });

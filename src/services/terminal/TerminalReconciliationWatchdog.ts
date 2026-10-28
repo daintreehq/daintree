@@ -1,4 +1,4 @@
-import { Terminal } from "@xterm/xterm";
+import type { Terminal } from "@xterm/xterm";
 import { TerminalRefreshTier } from "@/types";
 import { isSidebarMeasurementLocked } from "@/lib/layoutTransitionLock";
 import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
@@ -32,7 +32,7 @@ export const WATCHDOG_MAX_HEAVY_REPAIRS_PER_TICK = 2;
 // circuit breaker trips (#10909). The cooldown spaces repairs ~2 ticks apart but
 // never caps them, so a pane whose proposeDimensions() never converges (a stable
 // off-by-one, e.g. a scrollbar-gutter width step it can't reach) would re-wrap its
-// full scrollback — renderer xterm plus the 10000-line headless copy — every
+// full scrollback — renderer xterm plus the pty-host headless copy — every
 // cooldown window indefinitely. After this many issued repairs still fail to
 // converge, stop repairing and log once, matching TerminalWebGLManager's
 // LOSS_THRESHOLD one-way-trip pattern. Reset on genuine convergence or re-attach.

@@ -1,8 +1,14 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { actionService } from "@/services/ActionService";
 import type { ProjectFocusOnActivateIntent } from "@shared/types/ipc/project";
 import type { ActionId } from "@shared/types/actions";
 import { logWarn } from "@/utils/logger";
+import { notify } from "@/lib/notify";
+import { activateAssistantLane } from "@/services/assistantSubject";
+import { landOnWorktree } from "@/services/worktreeLanding";
+import { useWorktreeStoreApi } from "@/hooks/useWorktreeStore";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { safeFireAndForget } from "@/utils/safeFireAndForget";
 
 /**
  * Cross-project focus intent receiver.
@@ -25,18 +31,33 @@ import { logWarn } from "@/utils/logger";
  */
 export function useFocusOnActivateIntent(isStateLoaded: boolean): void {
   const [pending, setPending] = useState<ProjectFocusOnActivateIntent | null>(null);
+  const worktreeStore = useWorktreeStoreApi();
+  /**
+   * A landing still waiting (on the worktree list, or on a restore's pane): a
+   * newer intent or unmount cancels it.
+   */
+  const cancelLanding = useRef<(() => void) | null>(null);
 
   useEffect(() => {
-    return window.electron.project.onFocusOnActivate((payload) => {
+    const off = window.electron.project.onFocusOnActivate((payload) => {
       if (
         payload?.intent !== "focus-next-waiting" &&
         payload?.intent !== "focus-panel" &&
-        payload?.intent !== "run-plugin-action"
+        payload?.intent !== "focus-worktree" &&
+        payload?.intent !== "run-plugin-action" &&
+        payload?.intent !== "open-assistant" &&
+        payload?.intent !== "restore-trashed"
       ) {
         return;
       }
+      cancelLanding.current?.();
+      cancelLanding.current = null;
       setPending(payload);
     });
+    return () => {
+      off();
+      cancelLanding.current?.();
+    };
   }, []);
 
   useEffect(() => {
@@ -57,10 +78,62 @@ export function useFocusOnActivateIntent(isStateLoaded: boolean): void {
         });
       return;
     }
+    if (pending.intent === "open-assistant") {
+      // Checked again on arrival: a session that ended during the switch opens nothing.
+      void activateAssistantLane(pending.subject).catch((error: unknown) => {
+        logWarn("Couldn't open the assistant lane", { error });
+      });
+      return;
+    }
+    if (pending.intent === "restore-trashed") {
+      // This project was opened to resume a run from Canopy's Trash: its
+      // host resumes it in this view now, and the pane it lands in is shown,
+      // unless a newer destination came meanwhile.
+      const { runId, spawnedAt, expiresAt } = pending;
+      let superseded = false;
+      cancelLanding.current = () => {
+        superseded = true;
+      };
+      safeFireAndForget(
+        window.electron.canopy
+          .restoreTrashed(runId, { spawnedAt, expiresAt })
+          .then(async (outcome) => {
+            if (!("runId" in outcome)) throw new Error("This project's view isn't ready.");
+            if (superseded) return;
+            await actionService.dispatch("panel.focus", { panelId: outcome.runId });
+          })
+          .catch((error: unknown) => {
+            // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+            notify({
+              type: "error",
+              title: "Couldn't restore terminal",
+              message: formatErrorMessage(error, "It has left the trash."),
+              context: { eventKind: "agent" },
+              replaceKey: "focus-on-activate:restore-trashed",
+            });
+          }),
+        { context: "Restoring a run from Canopy's Trash" }
+      );
+      return;
+    }
+    if (pending.intent === "focus-worktree") {
+      cancelLanding.current = landOnWorktree(pending.worktreeId, worktreeStore);
+      return;
+    }
     if (pending.intent === "focus-panel") {
-      void actionService.dispatch("panel.focus", { panelId: pending.panelId });
+      // The terminal can exit or be trashed while the project switch is in flight.
+      void actionService.dispatch("panel.focus", { panelId: pending.panelId }).then((result) => {
+        if (result.ok) return;
+        notify({
+          type: "warning",
+          title: "Terminal is gone",
+          message: "It closed while its project was opening. You're in that project now.",
+          context: { eventKind: "uiFeedback" },
+          replaceKey: "focus-on-activate:terminal-gone",
+        });
+      });
       return;
     }
     void actionService.dispatch("agent.focusNextWaiting");
-  }, [isStateLoaded, pending]);
+  }, [isStateLoaded, pending, worktreeStore]);
 }

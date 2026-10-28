@@ -42,8 +42,8 @@ import { getWindowRegistry } from "../../window/windowRef.js";
 import { isValidSshTarget } from "../client/sshTransport.js";
 import { getRemoteService } from "../runtime.js";
 import { mergeByOwnership, splitByOwnership } from "./fieldOwnership.js";
-import { notificationSettingsGet, notificationSettingsSet } from "./notificationSettings.js";
 import { sshTargetOf } from "../client/connection.js";
+import { expectAccountSignIn } from "../plugins/accountSignIn.js";
 import { wslUncPath } from "../../../shared/utils/wslPath.js";
 
 type SplitCall = Parameters<HybridSplit>[0];
@@ -77,6 +77,36 @@ function refuse(userMessage: (host: string) => string): HybridSplit {
 
 const localOnly: HybridSplit = ({ local }) => local();
 const remoteOnly: HybridSplit = ({ remote }) => remote();
+
+/**
+ * A plugin account sign-in from a remote window runs on the host, which asks
+ * this Shell to open the browser here and catch the redirect on this
+ * machine's loopback. That request is answered only while this call is in
+ * flight, and its loopback comes down when the call settles however it ends:
+ * signed in, cancelled, superseded or a dropped link.
+ */
+const pluginAccountConnect: HybridSplit = async ({ hostId, webContentsId, args, remote }) => {
+  const [pluginId, connectionId] = args;
+  if (
+    typeof pluginId !== "string" ||
+    (connectionId !== undefined && typeof connectionId !== "string")
+  ) {
+    // The host refuses it; nothing here is waited on.
+    return remote();
+  }
+  const { signInId, release } = expectAccountSignIn(
+    hostId,
+    webContentsId,
+    pluginId,
+    connectionId ?? null
+  );
+  try {
+    // The id rides along so the host's request names this click and no other.
+    return await remote(undefined, [pluginId, connectionId, signInId]);
+  } finally {
+    release();
+  }
+};
 
 /** The Shell half of a hydrate merged over the host's answer. */
 function mergeHydrate(host: HydrateResult): HydrateResult {
@@ -192,11 +222,12 @@ const projectSwitch: HybridSplit = async ({ hostId, webContentsId, args, remote 
   const cacheHit = hasLiveProjectView(pvm, key);
   // Before the swap, as a local switch records it: the view consumes it on activation.
   if (options.focusIntent) pvm?.setPendingFocusIntent(key, options.focusIntent);
-  const shown = await client.switchWindowHost(senderContext(webContentsId), {
-    hostId,
-    projectId,
-    newWindow: false,
-  });
+  // The view's own project switch words its failure itself, as a local one does.
+  const shown = await client.switchWindowHost(
+    senderContext(webContentsId),
+    { hostId, projectId, newWindow: false },
+    { failureOnScreen: false }
+  );
   // The asking view is still on screen unless this window really moved: a
   // window that already had the project came forward, or a newer navigation
   // here won. Reporting `switched` for those left the view busy for good.
@@ -252,7 +283,7 @@ const scratchSwitch: HybridSplit = async ({ hostId, webContentsId, args, remote 
   const shown = await client.switchWindowHost(
     senderContext(webContentsId),
     { hostId, projectId: scratch.id, newWindow: false },
-    { requesterReports: false }
+    { requesterReports: false, failureOnScreen: false }
   );
   // Another window had it and came forward, or a newer navigation here won:
   // the asking view still shows what it showed, so it must not adopt the scratch.
@@ -484,8 +515,6 @@ export const HYBRID_SPLITS: Readonly<Record<string, HybridSplit>> = {
   [CHANNELS.TERMINAL_CONFIG_GET]: terminalConfigGet,
   [CHANNELS.EDITOR_GET_CONFIG]: editorGetConfig,
   [CHANNELS.EDITOR_SET_CONFIG]: remoteOnly,
-  [CHANNELS.NOTIFICATION_SETTINGS_GET]: notificationSettingsGet,
-  [CHANNELS.NOTIFICATION_SETTINGS_SET]: notificationSettingsSet,
   [CHANNELS.PROJECT_SWITCH]: projectSwitch,
   [CHANNELS.PROJECT_REOPEN]: projectSwitch,
   [CHANNELS.PROJECT_GET_CURRENT]: remoteOnly,
@@ -496,6 +525,10 @@ export const HYBRID_SPLITS: Readonly<Record<string, HybridSplit>> = {
   [CHANNELS.KEEP_AWAKE_UPDATE_CONFIG]: localOnly,
   // Action breadcrumbs describe this machine's UI.
   [CHANNELS.EVENTS_EMIT]: localOnly,
+  // A window answers for this machine's assistants, which refuse one bound
+  // elsewhere; another host's are read through a viewer it serves (#14163).
+  [CHANNELS.CANOPY_WATCH_ASSISTANT_TERMINAL]: localOnly,
+  [CHANNELS.CANOPY_RESOLVE_ASSISTANT]: localOnly,
   // The preview's browser and its proxy live on this machine.
   [CHANNELS.DEV_PREVIEW_GET_PROXY_PORT]: localOnly,
   [CHANNELS.DEV_PREVIEW_MINT_BROWSER_TOKEN]: localOnly,
@@ -504,6 +537,7 @@ export const HYBRID_SPLITS: Readonly<Record<string, HybridSplit>> = {
   [CHANNELS.FORGE_AUDIT_EXPORT_LOG]: localOnly,
   [CHANNELS.PLUGIN_EXPORT_AUDIT_LOG]: localOnly,
   [CHANNELS.ARTIFACT_SAVE_TO_FILE]: artifactSaveToFile,
+  [CHANNELS.PLUGIN_ACCOUNT_CONNECT]: pluginAccountConnect,
   [CHANNELS.FORGE_OPEN_PR]: openForgePage,
   [CHANNELS.FORGE_OPEN_PRS]: openForgePage,
   [CHANNELS.FORGE_OPEN_ISSUE]: openForgePage,
@@ -568,10 +602,10 @@ export const HYBRID_HOST_LEGS: readonly string[] = [
   CHANNELS.SCRATCH_SWITCH,
   // The picker split's host leg (see pickers.ts), with the folder chosen in the host picker.
   CHANNELS.SCRATCH_SAVE_AS_PROJECT,
-  CHANNELS.NOTIFICATION_SETTINGS_GET,
-  CHANNELS.NOTIFICATION_SETTINGS_SET,
   CHANNELS.NOTIFICATION_SYNC_WATCHED,
   CHANNELS.NOTIFICATION_SESSION_MUTE_SET,
+  // The sign-in runs on the host; its browser half is asked back of the calling Shell.
+  CHANNELS.PLUGIN_ACCOUNT_CONNECT,
   // Answer a remote caller with the page's URL, for its Shell to open.
   CHANNELS.FORGE_OPEN_PR,
   CHANNELS.FORGE_OPEN_PRS,

@@ -7,7 +7,8 @@
  * - resetAllStoresForProjectSwitch({ skipTerminalStateReset: true }) preserves terminal state
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 
 vi.mock("@/clients", () => ({
   terminalClient: {
@@ -34,8 +35,8 @@ vi.mock("@/clients", () => ({
   },
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     cleanup: vi.fn(),
     applyRendererPolicy: vi.fn(),
     onPanelBackgrounded: vi.fn(),
@@ -43,11 +44,16 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     setVisible: vi.fn(),
     suppressResizesDuringProjectSwitch: vi.fn(),
     detachForProjectSwitch: vi.fn(),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 const { usePanelStore } = await import("../panelStore");
-const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
+const terminalInstanceService = (
+  await import("@/services/TerminalInstanceService")
+).createTerminalPaintPlane();
 
 function seedTerminals() {
   const t1 = {
@@ -87,6 +93,12 @@ function seedTerminals() {
     ],
   });
 }
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
+});
 
 describe("detachTerminalsForProjectSwitch", () => {
   beforeEach(() => {

@@ -1,3 +1,4 @@
+// eager-import-allow: reads host agent defaults via store.get synchronously so hydration and migration cannot interleave checking and filling absent leaves
 import { store } from "../store.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { broadcastToRenderer } from "../ipc/utils.js";
@@ -59,8 +60,23 @@ export function readAgentDefaults(): AgentDefaultsSnapshot {
   return out;
 }
 
+const changeListeners = new Set<() => void>();
+
+/** Main-side subscribers to a landed change, however it was written (#14159). */
+export function onAgentDefaultsChanged(listener: () => void): () => void {
+  changeListeners.add(listener);
+  return () => changeListeners.delete(listener);
+}
+
 function broadcast(): void {
   broadcastToRenderer(CHANNELS.AGENT_DEFAULTS_CHANGED, readAgentDefaults());
+  for (const listener of [...changeListeners]) {
+    try {
+      listener();
+    } catch (err) {
+      console.warn("[agentDefaults] A change listener threw:", err);
+    }
+  }
 }
 
 function sameLeaf(leaf: Leaf, value: unknown): boolean {

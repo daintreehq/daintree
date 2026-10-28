@@ -17,9 +17,7 @@ vi.mock("../../fileAttachments", async (importOriginal) => ({
 const pickHostPaths = vi.hoisted(() => vi.fn<() => Promise<string[] | null>>());
 vi.mock("@/components/HostFilePicker/hostFilePickerQueue", () => ({ pickHostPaths }));
 
-vi.mock("@/store/panelStore", () => ({
-  usePanelStore: { getState: () => ({ setPreferredTerminalFocusTarget: vi.fn() }) },
-}));
+vi.mock("../../paneFocusRequest", () => ({ requestPaneFocus: vi.fn(() => true) }));
 
 import { useDragDrop } from "../../hooks/useDragDrop";
 import { useAttachFiles, useAttachFromHost } from "../../hooks/useAttachFiles";
@@ -107,14 +105,16 @@ describe("composer drops in a remote window", () => {
   });
 });
 
-describe("an Option-drop on a bar whose terminal holds the keyboard", () => {
+describe("a drop on a bar whose terminal could take it", () => {
   afterEach(() => {
     act(() => _resetPaneDropRoutingForTests());
   });
 
   function renderPaneDragDrop() {
     const take = vi.fn(() => true);
-    registerPaneDropTarget("t1", "xterm", { ownsFocus: () => true, canTake: () => true, take });
+    registerPaneDropTarget("t1", "xterm", { canTake: () => true, take });
+    // The bar's own registration, as HybridInputBar makes it beside the hook.
+    registerPaneDropTarget("t1", "hybridInput", { canTake: () => true, take: () => true });
     const hook = renderHook(() => {
       const ref = useRef<EditorView | null>(view);
       return useDragDrop(ref, "/srv/proj/src", undefined, "t1", {
@@ -126,7 +126,7 @@ describe("an Option-drop on a bar whose terminal holds the keyboard", () => {
     return { take, result: hook.result };
   }
 
-  it("stays on the bar, lit, and adds to the project", async () => {
+  it("stays on the bar, lit, and adds to the project with Option", async () => {
     const { take, result } = renderPaneDragDrop();
     act(() => result.current.handleDragEnter(dropEvent(true)));
     expect(result.current.isDragOverFiles).toBe(true);
@@ -144,16 +144,22 @@ describe("an Option-drop on a bar whose terminal holds the keyboard", () => {
     );
   });
 
-  it("goes to the terminal without Option, and leaves the bar unlit", async () => {
+  it("stays on the bar, lit, and attaches as usual without Option", async () => {
     const { take, result } = renderPaneDragDrop();
     act(() => result.current.handleDragEnter(dropEvent(false)));
-    expect(result.current.isDragOverFiles).toBe(false);
+    expect(result.current.isDragOverFiles).toBe(true);
 
     await act(async () => {
       await result.current.handleDrop(dropEvent(false));
     });
-    expect(take).toHaveBeenCalledTimes(1);
-    expect(insertFileAttachments).not.toHaveBeenCalled();
+    expect(take).not.toHaveBeenCalled();
+    expect(insertFileAttachments).toHaveBeenCalledWith(
+      expect.anything(),
+      view,
+      expect.any(Array),
+      "/srv/proj/src",
+      { uploadSurface: "composer:t1" }
+    );
   });
 });
 

@@ -143,13 +143,13 @@ describe("ProjectPulseStrip", () => {
     expect(screen.queryByTestId("streak-flame")).toBeNull();
   });
 
-  it("expands to the full card on click, fetches fresh data, and collapses again", () => {
+  it("expands to the full card on click, fetches fresh data, and collapses again", async () => {
     render(<ProjectPulseStrip worktreeId="wt1" />);
     // The cold-cache mount fetch already fired; clear it so we assert only the
     // click-triggered fetch (a bare vi.fn() doesn't model the store's dedupe).
     state.fetchPulse.mockClear();
     fireEvent.click(screen.getByRole("button", { name: /^project pulse/i }));
-    expect(screen.getByTestId("pulse-card")).toBeTruthy();
+    expect(await screen.findByTestId("pulse-card")).toBeTruthy();
     // Expanding kicks a (deduped) fetch so the peek is fresh + the card opens on
     // a skeleton rather than a blank frame.
     expect(state.fetchPulse).toHaveBeenCalledWith("wt1");

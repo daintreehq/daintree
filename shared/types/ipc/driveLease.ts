@@ -43,8 +43,9 @@ export interface DriveLeaseReportNavigationPayload extends DriveLeaseProjectPayl
 /** A project's drive lease as one renderer sees it. */
 export interface DriveLeaseView extends DriveLeaseState {
   /**
-   * This renderer's client drives the project (or nobody does), so it may type
-   * and resize. Enforced per client: every window of the driving machine drives.
+   * This renderer drives the project (or nobody does), so it may type
+   * and resize. For a remote client only the holder endpoint drives; the exceptions
+   * are a Canopy viewer on the holder's client and the host's own windows.
    */
   drivingHere: boolean;
   /** This renderer is the holder itself: MCP dispatch and plugin prompts land here. */
@@ -64,6 +65,14 @@ export interface DriveLeaseView extends DriveLeaseState {
    * from hosts before this field.
    */
   hostScreenInUse?: boolean;
+  /**
+   * The holder is away (its link dropped, its view closed or moved, or the
+   * Host restarted without it) and keeps the lease this many milliseconds more
+   * unless it comes back. A duration, not a time: the two machines' clocks
+   * needn't agree. Absent while the holder is there, and from hosts before
+   * this field.
+   */
+  holderAwayMs?: number;
   /**
    * The driver's navigation as it last reported it, kept across a change of
    * holder so a view taking over starts from it. Absent until a driver reports,

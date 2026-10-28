@@ -24,6 +24,9 @@ const gitServiceCacheMock = vi.hoisted(() => ({
 }));
 
 const sendToRendererMock = vi.hoisted(() => vi.fn());
+const pluginServiceMock = vi.hoisted(() => ({
+  onProjectOpened: vi.fn(async () => undefined),
+}));
 const randomUUIDMock = vi.hoisted(() => vi.fn(() => "switch-id-1"));
 
 const storeMock = vi.hoisted(() => ({
@@ -77,6 +80,10 @@ const buildSwitchHydrateResultMock = vi.hoisted(() =>
   }))
 );
 
+vi.mock("../PluginService.js", () => ({
+  pluginService: pluginServiceMock,
+}));
+
 vi.mock("../AppHydrationService.js", () => ({
   buildSwitchHydrateResult: buildSwitchHydrateResultMock,
 }));
@@ -87,8 +94,13 @@ import {
   _resetHostResidencyForTesting,
   activateProjectOnHost,
   getHostResidentProject,
+  isProjectHeldOnHost,
   releaseProjectOnHost,
 } from "../ProjectSwitchService.js";
+import {
+  ProjectPresenceTracker,
+  _setProjectPresenceTrackerForTests,
+} from "../ProjectPresenceTracker.js";
 
 describe("ProjectSwitchService", () => {
   beforeEach(() => {
@@ -554,6 +566,7 @@ describe("Host activation for a remote view", () => {
         return load();
       }),
       unregisterWindow: vi.fn(),
+      isWindowAttached: vi.fn((_residentId: number, _rootPath: string) => true),
     };
   }
 
@@ -587,6 +600,37 @@ describe("Host activation for a remote view", () => {
     expect(projectStoreMock.recordRemoteActivation).toHaveBeenCalledTimes(1);
   });
 
+  it("reopens presence on every activation, the re-hold of a project closed under the view included", async () => {
+    const id = "c".repeat(64);
+    const tracker = new ProjectPresenceTracker(() => []);
+    _setProjectPresenceTrackerForTests(tracker);
+    try {
+      const ws = workspace();
+      await activateProjectOnHost(ws, { id, path: "/tmp/c" }, -5);
+      expect(tracker.getState(id)).toBe("background");
+      tracker.markClosed(id);
+      await activateProjectOnHost(ws, { id, path: "/tmp/c" }, -5);
+
+      expect(tracker.getState(id)).toBe("background");
+      expect(ws.loadProject).toHaveBeenCalledTimes(1);
+    } finally {
+      _setProjectPresenceTrackerForTests(null);
+    }
+  });
+
+  it("opens the project's plugins on every activation, as a local view does", async () => {
+    const ws = workspace();
+    await activateProjectOnHost(ws, project, -4);
+    await vi.waitFor(() =>
+      expect(pluginServiceMock.onProjectOpened).toHaveBeenCalledWith("project-new", "/tmp/new")
+    );
+
+    await activateProjectOnHost(ws, project, -4);
+    await vi.waitFor(() => expect(pluginServiceMock.onProjectOpened).toHaveBeenCalledTimes(2));
+    expect(pluginServiceMock.onProjectOpened).toHaveBeenNthCalledWith(2, "project-new", "/tmp/new");
+    expect(ws.loadProject).toHaveBeenCalledTimes(1);
+  });
+
   it("drops residency when the load fails so a retry starts over", async () => {
     const ws = workspace(async () => {
       throw new Error("spawn failed");
@@ -595,6 +639,24 @@ describe("Host activation for a remote view", () => {
     expect(getHostResidentProject(-4)).toBeNull();
     await expect(activateProjectOnHost(ws, project, -4)).rejects.toThrow();
     expect(ws.loadProject).toHaveBeenCalledTimes(2);
+  });
+
+  it("re-holds a project whose host was re-spawned under the view", async () => {
+    const ws = workspace();
+    await activateProjectOnHost(ws, project, -4);
+    await Promise.resolve();
+    expect(isProjectHeldOnHost(ws, -4, "project-new")).toBe(true);
+
+    ws.isWindowAttached.mockReturnValue(false);
+    expect(isProjectHeldOnHost(ws, -4, "project-new")).toBe(false);
+    expect(ws.isWindowAttached).toHaveBeenLastCalledWith(-4, "/tmp/new");
+
+    await activateProjectOnHost(ws, project, -4);
+    expect(ws.loadProject).toHaveBeenCalledTimes(2);
+    expect(ws.loadProject).toHaveBeenLastCalledWith("/tmp/new", -4);
+    expect(getHostResidentProject(-4)).toBe("project-new");
+    // The view never left the project: re-holding it is not another activation.
+    expect(projectStoreMock.recordRemoteActivation).toHaveBeenCalledTimes(1);
   });
 
   it("releases the view's hold once, when it leaves", async () => {

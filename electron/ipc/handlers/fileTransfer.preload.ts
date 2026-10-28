@@ -4,6 +4,7 @@ export const FILE_TRANSFER_METHOD_CHANNELS = {
   uploadLocalFile: "file-transfer:upload-local-file",
   uploadBytes: "file-transfer:upload-bytes",
   download: "file-transfer:download",
+  grantClickedFile: "file-transfer:grant-clicked-file",
   cancel: "file-transfer:cancel",
   answerHostPick: "file-transfer:answer-host-pick",
   getPreviewCapability: "file-transfer:get-preview-capability",

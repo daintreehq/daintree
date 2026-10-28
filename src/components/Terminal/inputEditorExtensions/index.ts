@@ -13,10 +13,27 @@ export {
   createContentAttributes,
   createComboboxAttributes,
   createPlainPasteKeymap,
-  minimalDocChange,
   removeChipRange,
+  VOICE_CARET_LEVEL_PROPERTY,
 } from "./base";
-export type { AutoSizeConfig, ComboboxAttributes } from "./base";
+export { minimalDocChange } from "@/lib/textRangeMapping";
+export { createCaretTracker } from "./caretTracker";
+export {
+  dictationFollow,
+  dictationFollowField,
+  revealDictationStart,
+  setDictationFollow,
+} from "./dictationFollow";
+export {
+  currentVoiceCaretEffects,
+  requestVoiceCaret,
+  setVoiceCaret,
+  voiceCaret,
+  voiceCaretField,
+  voiceCaretPosition,
+} from "./voiceCaret";
+export type { VoiceCaretAt, VoiceCaretPhase } from "./voiceCaret";
+export type { AutoSizeConfig, ComboboxAttributes, InterimPreview } from "./base";
 
 export {
   createSlashChipField,
@@ -42,6 +59,24 @@ export { diffChipField, createDiffChipTooltip } from "./diffChip";
 export { terminalChipField, createTerminalChipTooltip } from "./terminalChip";
 export { selectionChipField, createSelectionChipTooltip } from "./selectionChip";
 export {
+  applyContextReferenceProviders,
+  currentContextReferenceProvidersEffects,
+  contextReferenceChipField,
+  contextReferenceChipProviders,
+  createContextReferenceChipTooltip,
+  isOwnedByContextReferenceChip,
+  setContextReferenceProviders,
+} from "./contextReferenceChip";
+export {
+  applyForgeReferences,
+  createForgeReferenceTooltip,
+  eligibleIssueReferences,
+  forgeReferenceField,
+  onForgeReferenceRescan,
+  rescanForgeReferences,
+} from "./forgeReference";
+export type { ForgeReferenceMap } from "./forgeReference";
+export {
   chipPendingDeleteField,
   setChipPendingDelete,
   createChipBackspaceKeymap,
@@ -49,3 +84,17 @@ export {
 } from "./chipBackspace";
 export type { ChipPendingDelete } from "./chipBackspace";
 export { createCursorBlink } from "./cursorBlink";
+export {
+  createComposerHistory,
+  clearComposerHistory,
+  outsideDraftWrite,
+  selectionAfterOutsideWrite,
+} from "./composerHistory";
+export {
+  correctionLanded,
+  createCorrectionReview,
+  endCorrectionReview,
+  replayLandedCorrection,
+} from "./correctionReview";
+export type { CorrectionReview } from "./correctionReview";
+export { captureRewriteSelection, voiceRewriteTracker } from "./voiceRewrite";

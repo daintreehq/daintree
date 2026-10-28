@@ -1,6 +1,6 @@
-import type { ActionDanger } from "../actions.js";
+import type { ActionDanger, ActionSource } from "../actions.js";
 
-export type ActionBreadcrumbSource = "user" | "keybinding" | "menu" | "agent" | "context-menu";
+export type ActionBreadcrumbSource = ActionSource;
 
 export interface ActionBreadcrumb {
   id: string;
@@ -93,7 +93,24 @@ export interface CrashLogEntry {
   watchdogKilledAt?: number;
   watchdogMissedBeats?: number;
   watchdogMainPid?: number;
+  /** Which watchdog deadline ran out. Absent on kills recorded before #14367. */
+  watchdogKillReason?: WatchdogKillReason;
+  /** Beats with no ping and no write to a file only main writes. */
+  watchdogBeatsSinceProgress?: number;
+  /** What earned the kill a longer deadline, when something did. */
+  watchdogPressureEvidence?: string;
 }
+
+/**
+ * - `unresponsive`: main went silent with no sign of memory pressure.
+ * - `unresponsive-under-pressure`: main went silent under pressure evidence and
+ *   stayed silent past the longer deadline.
+ * - `no-progress-under-external-pressure`: main went silent while the machine
+ *   was under confirmed pressure that Daintree's own processes didn't account
+ *   for, and showed no sign of progress for the longest deadline.
+ */
+export type WatchdogKillReason =
+  "unresponsive" | "unresponsive-under-pressure" | "no-progress-under-external-pressure";
 
 /**
  * Why a panel was flagged `isSuspect`. `crash-window` = created within

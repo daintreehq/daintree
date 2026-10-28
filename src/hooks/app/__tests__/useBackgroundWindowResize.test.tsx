@@ -32,14 +32,24 @@ vi.stubGlobal("window", {
   },
 });
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     applyBackgroundWindowResize: applyBackgroundWindowResizeMock,
     resetBackgroundResizeBasis: resetBackgroundResizeBasisMock,
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 import { useBackgroundWindowResize } from "../useBackgroundWindowResize";
+import {
+  __testing as terminalServiceTesting,
+  register as registerTerminalService,
+} from "@/services/terminal/terminalInstanceServiceAccessor";
+import { createTerminalPaintPlane } from "@/services/TerminalInstanceService";
+
+const service = createTerminalPaintPlane();
 
 function setVisibility(state: "visible" | "hidden") {
   Object.defineProperty(document, "visibilityState", { value: state, configurable: true });
@@ -75,9 +85,11 @@ describe("useBackgroundWindowResize", () => {
     });
     isProjectViewCachedMock.mockReturnValue(false);
     setVisibility("hidden");
+    terminalServiceTesting.reset();
+    registerTerminalService(service);
   });
 
-  it("forwards bounds to terminalInstanceService", () => {
+  it("forwards bounds to the terminal service", () => {
     renderHook(() => useBackgroundWindowResize());
 
     act(() => {
@@ -175,5 +187,29 @@ describe("useBackgroundWindowResize", () => {
     setVisibility("visible");
     document.dispatchEvent(new Event("visibilitychange"));
     expect(resetBackgroundResizeBasisMock).not.toHaveBeenCalled();
+  });
+
+  it("drops signals while the terminal service is unloaded, then forwards later ones", () => {
+    terminalServiceTesting.reset();
+    renderHook(() => useBackgroundWindowResize());
+
+    // No service means no terminals to resize, so nothing is queued for later.
+    expect(() => {
+      act(() => {
+        lastCallback?.({ width: 1280, height: 800 });
+        emitPhase("active");
+        setVisibility("visible");
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+    }).not.toThrow();
+
+    registerTerminalService(service);
+    expect(applyBackgroundWindowResizeMock).not.toHaveBeenCalled();
+    expect(resetBackgroundResizeBasisMock).not.toHaveBeenCalled();
+
+    act(() => {
+      lastCallback?.({ width: 1024, height: 768 });
+    });
+    expect(applyBackgroundWindowResizeMock).toHaveBeenCalledWith(1024, 768);
   });
 });

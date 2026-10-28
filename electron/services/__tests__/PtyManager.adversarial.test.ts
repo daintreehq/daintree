@@ -742,3 +742,147 @@ describe("PtyManager gracefulKillByProject partial capture (#12180)", () => {
     expect(shared.created[1]!.kill).toHaveBeenCalled();
   });
 });
+
+// Session-preserving teardowns signal-kill plain shells, which node-pty reports
+// as code 0. Their exits carry a mark so the renderer keeps the pane in the
+// layout it restores on reopen instead of auto-trashing it (#13841).
+describe("PtyManager session-preserving teardown exits (#13841)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    shared.terminals.clear();
+    shared.created.length = 0;
+    shared.computeSpawnContext.mockReturnValue({ env: {}, shell: "/bin/zsh", args: ["-l"] });
+    shared.acquirePtyProcess.mockImplementation(() => createPtyProcess());
+    shared.agentTransitionState.mockReturnValue(true);
+    shared.deleteSessionFile.mockResolvedValue(undefined);
+    shared.persistAgentSession.mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function recordExits(manager: InstanceType<typeof PtyManager>) {
+    const exits: Array<{ id: string; preserveSession: boolean | undefined }> = [];
+    manager.on(
+      "exit",
+      (id: string, _code: number, _signal?: number, _gen?: number, preserveSession?: boolean) => {
+        exits.push({ id, preserveSession });
+      }
+    );
+    return exits;
+  }
+
+  it("marks the exit of every terminal the teardown kills", async () => {
+    const manager = new PtyManager();
+    manager.spawn("shell", spawnOptions({ projectId: "project-a" }));
+    manager.spawn("agent", spawnOptions({ projectId: "project-a", kind: "agent" }));
+    const [shell, agent] = shared.created;
+    agent!.gracefulShutdown = () => Promise.resolve("sess-agent");
+    const exits = recordExits(manager);
+
+    await manager.gracefulKillByProject("project-a", { preserveSession: true });
+    shell!.callbacks.onExit("shell", 0);
+    agent!.callbacks.onExit("agent", 0);
+
+    expect(exits).toEqual([
+      { id: "shell", preserveSession: true },
+      { id: "agent", preserveSession: true },
+    ]);
+  });
+
+  it("marks an agent that exits on its own partway through its quit sequence", async () => {
+    const manager = new PtyManager();
+    manager.spawn("agent", spawnOptions({ projectId: "project-a", kind: "agent" }));
+    const agent = shared.created[0]!;
+    let finishShutdown: (id: string | null) => void = () => {};
+    agent.gracefulShutdown = () =>
+      new Promise<string | null>((resolve) => {
+        finishShutdown = resolve;
+      });
+    const exits = recordExits(manager);
+
+    const teardown = manager.gracefulKillByProject("project-a", { preserveSession: true });
+    agent.callbacks.onExit("agent", 0);
+    finishShutdown(null);
+    await teardown;
+
+    expect(exits).toEqual([{ id: "agent", preserveSession: true }]);
+  });
+
+  it("marks a terminal killed for outrunning its budget", async () => {
+    vi.useFakeTimers();
+    const manager = new PtyManager();
+    manager.spawn("hung", spawnOptions({ projectId: "project-a", kind: "agent" }));
+    const hung = shared.created[0]!;
+    hung.gracefulShutdown = () => new Promise<string | null>(() => {});
+    const exits = recordExits(manager);
+
+    const teardown = manager.gracefulKillByProject("project-a", { preserveSession: true });
+    await vi.advanceTimersByTimeAsync(GRACEFUL_KILL_TERMINAL_BUDGET_MS);
+    await teardown;
+    expect(hung.kill).toHaveBeenCalledWith("graceful-kill-timeout", undefined, expect.anything());
+    hung.callbacks.onExit("hung", 0);
+
+    expect(exits).toEqual([{ id: "hung", preserveSession: true }]);
+  });
+
+  it("leaves exits unmarked for a teardown that deletes the session, a single kill, or a natural exit", async () => {
+    const manager = new PtyManager();
+    manager.spawn("closed", spawnOptions({ projectId: "project-a" }));
+    manager.spawn("killed", spawnOptions({ projectId: "project-b" }));
+    manager.spawn("natural", spawnOptions({ projectId: "project-c" }));
+    const [closed, killed, natural] = shared.created;
+    const exits = recordExits(manager);
+
+    await manager.gracefulKillByProject("project-a");
+    closed!.callbacks.onExit("closed", 0);
+    manager.kill("killed", "user", { preserveSession: true });
+    killed!.callbacks.onExit("killed", 0);
+    natural!.callbacks.onExit("natural", 0);
+
+    expect(exits).toEqual([
+      { id: "closed", preserveSession: undefined },
+      { id: "killed", preserveSession: undefined },
+      { id: "natural", preserveSession: undefined },
+    ]);
+  });
+
+  it("does not mark a same-id respawn that lands while the teardown is still running", async () => {
+    const manager = new PtyManager();
+    manager.spawn("shell", spawnOptions({ projectId: "project-a" }));
+    manager.spawn("agent", spawnOptions({ projectId: "project-a", kind: "agent" }));
+    let finishAgent: (id: string | null) => void = () => {};
+    shared.created[1]!.gracefulShutdown = () =>
+      new Promise<string | null>((resolve) => {
+        finishAgent = resolve;
+      });
+    const exits = recordExits(manager);
+
+    const teardown = manager.gracefulKillByProject("project-a", { preserveSession: true });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(shared.created[0]!.kill).toHaveBeenCalled();
+    manager.spawn("shell", spawnOptions({ projectId: "project-a" }));
+    shared.created[2]!.callbacks.onExit("shell", 0);
+    finishAgent(null);
+    await teardown;
+
+    expect(exits).toEqual([{ id: "shell", preserveSession: undefined }]);
+  });
+
+  it("does not carry the mark onto a same-id respawn", async () => {
+    const manager = new PtyManager();
+    manager.spawn("t1", spawnOptions({ projectId: "project-a" }));
+    const exits = recordExits(manager);
+
+    await manager.gracefulKillByProject("project-a", { preserveSession: true });
+    manager.spawn("t1", spawnOptions({ projectId: "project-a" }));
+    const [old, successor] = shared.created;
+
+    old!.callbacks.onExit("t1", 0);
+    successor!.callbacks.onExit("t1", 0);
+
+    expect(exits).toEqual([{ id: "t1", preserveSession: undefined }]);
+  });
+});

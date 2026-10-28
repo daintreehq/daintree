@@ -12,6 +12,7 @@ import type {
   HostInstallPlan,
   HostProbeResult,
   HostRestartImpact,
+  StagedHostUpdate,
 } from "@shared/types/ipc/remoteHosts";
 import { pluralize } from "@/lib/pluralize";
 
@@ -64,6 +65,22 @@ export function installLabel(install: HostInstallInfo | null): string {
   return commit ? `${version} (${commit})` : version;
 }
 
+/** How the host's build compares with this machine's, as far as the probe could tell. */
+export function buildMatchLabel(
+  probe: Pick<HostProbeResult, "matchesClient" | "hostBuild">
+): string {
+  if (probe.matchesClient === true) return "Same build";
+  if (probe.hostBuild?.order === "newer") return "Newer build";
+  if (probe.hostBuild?.order === "older") return "Older build";
+  return probe.matchesClient === false ? "Different build" : "Can't tell";
+}
+
+export function stagedUpdateLabel(staged: StagedHostUpdate): string {
+  return staged.installsOnQuit && !staged.ready
+    ? `Daintree ${staged.version}, still being prepared`
+    : `Daintree ${staged.version}`;
+}
+
 function formatSeen(at: number | null, now: number): string {
   if (at === null) return "never seen";
   return `last seen ${formatRelativeTime(at, now)}`;
@@ -77,6 +94,7 @@ export function connectionLabel(state: HostConnectionState, now: number = Date.n
     case "disconnected":
       return "Not connected";
     case "connecting":
+      if (state.restarting) return "Restarting";
       return state.attempt > 1 ? `Connecting (attempt ${state.attempt})` : "Connecting";
     case "connected": {
       if (state.quietSince !== undefined) {
@@ -86,7 +104,10 @@ export function connectionLabel(state: HostConnectionState, now: number = Date.n
       return state.rttMs === null ? "Connected" : `Connected · ${Math.round(state.rttMs)} ms`;
     }
     case "unreachable":
-      if (state.hostModeOff) return "Daintree isn't running in Host mode there";
+      if (state.restarting) return "Restarting";
+      if (state.hostModeOff) {
+        return `Daintree isn't listening there · ${formatSeen(state.lastSeenAt, now)}`;
+      }
       // What was seen, when there is something: ssh's own words for why it couldn't reach it.
       return [
         "Unreachable",
@@ -148,6 +169,35 @@ export function localNameSuggestion(sshTarget: string, sshError: string | null):
   if (!host || host.includes(".") || host.includes(":") || host.startsWith("[")) return null;
   if (unresolved.toLowerCase() !== host.toLowerCase()) return null;
   return `${sshTarget.slice(0, at + 1)}${host}.local`;
+}
+
+/** A target as one shell word: the host list accepts `[` and `]`, which a shell reads as a glob. */
+export function shellWord(target: string): string {
+  return /^[\w@.%+-]+$/.test(target) ? target : `'${target}'`;
+}
+
+export type SshRefusalAdvice = "untrusted-host-key" | "changed-host-key" | "login-refused";
+
+/**
+ * What ssh's own words say stopped a probe that BatchMode refused, so the
+ * dialog can name the next step. The probe keeps only the last lines of
+ * stderr, so a changed key is told apart by its "has changed" or "Offending"
+ * line rather than the banner above them.
+ */
+export function sshRefusalAdvice(sshError: string | null): SshRefusalAdvice | null {
+  if (!sshError) return null;
+  if (
+    /^Host key for \S+ has changed\b|REMOTE HOST IDENTIFICATION HAS CHANGED|^Offending \S+ key in /im.test(
+      sshError
+    )
+  ) {
+    return "changed-host-key";
+  }
+  if (/Host key verification failed|No \S+ host key is known/i.test(sshError)) {
+    return "untrusted-host-key";
+  }
+  if (/Permission denied \(/i.test(sshError)) return "login-refused";
+  return null;
 }
 
 /**
@@ -216,17 +266,20 @@ export function restartTerminalCount(impact: HostRestartImpact): number | null {
  * ends. With no terminals counted it names the operations and Sessions that
  * held it up instead, never "0 terminals".
  */
-export function restartConfirmLabel(impact: HostRestartImpact): string {
+export function restartConfirmLabel(
+  impact: HostRestartImpact,
+  verb: "Update" | "Downgrade" = "Update"
+): string {
   const detail = impact.detail;
   const terminals = restartTerminalCount(impact);
-  if (!detail || terminals === null) return "Update and end terminals";
-  if (terminals > 0) return `Update and end ${pluralize(terminals, "terminal")}`;
-  if (!detail.complete) return "Update and end terminals";
+  if (!detail || terminals === null) return `${verb} and end terminals`;
+  if (terminals > 0) return `${verb} and end ${pluralize(terminals, "terminal")}`;
+  if (!detail.complete) return `${verb} and end terminals`;
   const ends = [
     detail.operations > 0 ? pluralize(detail.operations, "operation") : null,
     detail.otherShells.length > 0 ? pluralize(detail.otherShells.length, "session") : null,
   ].filter((part) => part !== null);
-  return ends.length > 0 ? `Update and end ${ends.join(" and ")}` : "Update now";
+  return ends.length > 0 ? `${verb} and end ${ends.join(" and ")}` : `${verb} now`;
 }
 
 /** Whether waiting for idle can be watched: the host reports both working and waiting agents. */

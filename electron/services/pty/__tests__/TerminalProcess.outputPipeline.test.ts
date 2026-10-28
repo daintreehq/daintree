@@ -1,8 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { stubProcessKillForFile } from "../../../__tests__/helpers/processKillGuard.js";
 import type { IPty } from "node-pty";
-import { TerminalProcess } from "../TerminalProcess.js";
+import { RATE_LIMIT_SETTLE_MS, TerminalProcess } from "../TerminalProcess.js";
 import type { SpawnContext } from "../terminalSpawn.js";
 import { events } from "../../events.js";
+
+vi.mock("../../../utils/windowsTreeKill.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../utils/windowsTreeKill.js")>()),
+  killWindowsProcessTrees: vi.fn(async () => []),
+  killWindowsProcessTreesSync: vi.fn(() => []),
+}));
 
 vi.mock("node-pty", () => {
   return { spawn: vi.fn() };
@@ -80,8 +87,12 @@ type PipelineInternals = {
     agentState?: string;
     headlessTerminal?: { write: (data: string, cb?: () => void) => void };
   };
-  getAgentOutputContentSnapshot: () => unknown;
 };
+
+// Mock ptys carry made-up PIDs that belong to real processes on the machine
+// running the suite; every kill path below must land on a stub (#14418). The
+// stub outlives ProcessTreeKiller's 500ms SIGKILL escalation.
+stubProcessKillForFile(600);
 
 describe("TerminalProcess output pipeline ordering and throttling", () => {
   beforeEach(() => {
@@ -129,7 +140,11 @@ describe("TerminalProcess output pipeline ordering and throttling", () => {
     const internals = terminal as unknown as PipelineInternals;
     internals.terminalInfo.agentState = "waiting";
     const snapshotSpy = vi.spyOn(
-      internals as unknown as Record<"getAgentOutputContentSnapshot", () => unknown>,
+      (
+        terminal as unknown as {
+          analysis: Record<"getAgentOutputContentSnapshot", () => unknown>;
+        }
+      ).analysis,
       "getAgentOutputContentSnapshot"
     );
 
@@ -182,7 +197,11 @@ describe("TerminalProcess output pipeline ordering and throttling", () => {
     const internals = terminal as unknown as PipelineInternals;
     internals.terminalInfo.agentState = "waiting";
     const snapshotSpy = vi.spyOn(
-      internals as unknown as Record<"getAgentOutputContentSnapshot", () => unknown>,
+      (
+        terminal as unknown as {
+          analysis: Record<"getAgentOutputContentSnapshot", () => unknown>;
+        }
+      ).analysis,
       "getAgentOutputContentSnapshot"
     );
 
@@ -191,8 +210,12 @@ describe("TerminalProcess output pipeline ordering and throttling", () => {
     await vi.advanceTimersByTimeAsync(1);
     ptyOnDataCallback!("\x1b[H\x1b[2Jframe b");
     await vi.advanceTimersByTimeAsync(1);
+    const analysis = (terminal as unknown as { analysis: { agentOutputNoteTimer: unknown } })
+      .analysis;
+    expect(analysis.agentOutputNoteTimer).not.toBeNull();
 
     terminal.dispose();
+    expect(analysis.agentOutputNoteTimer).toBeNull();
     const afterDispose = snapshotSpy.mock.calls.length;
     await vi.advanceTimersByTimeAsync(200);
     // A live trailing timer would fire another comparison after teardown.
@@ -286,7 +309,8 @@ describe("TerminalProcess output progress, in-thread (#12428)", () => {
     // A preserved exit drains its final output and then releases the mirror;
     // that frame must be observed before the mirror goes, not dropped with it.
     const terminal = createTerminal({ launchAgentId: "claude" });
-    const internals = terminal as unknown as { outputProgressTimer: unknown };
+    const internals = (terminal as unknown as { analysis: { outputProgressTimer: unknown } })
+      .analysis;
 
     ptyOnDataCallback!("the final answer\r\n");
     await vi.advanceTimersByTimeAsync(1);
@@ -377,6 +401,192 @@ describe("TerminalProcess rate-limit observation (#12797)", () => {
 
     ptyOnDataCallback!("HTTP 429 Too Many Requests\r\n");
     await vi.advanceTimersByTimeAsync(250);
+    expect(seen).toHaveLength(0);
+
+    terminal.dispose();
+  });
+});
+
+describe("TerminalProcess rate-limit fallback offer (#14370)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    ptyOnDataCallback = null;
+  });
+
+  const unsubscribers: Array<() => void> = [];
+
+  afterEach(() => {
+    unsubscribers.splice(0).forEach((unsubscribe) => unsubscribe());
+    vi.useRealTimers();
+    vi.clearAllTimers();
+  });
+
+  function collect() {
+    const seen: Array<Record<string, unknown>> = [];
+    unsubscribers.push(
+      events.on("agent:fallback-triggered", (payload) => seen.push({ ...payload }))
+    );
+    return seen;
+  }
+
+  const preset = {
+    launchAgentId: "claude",
+    agentPresetId: "claude-work",
+    originalAgentPresetId: "claude-home",
+  } as const;
+  const banner = "  ⎿  You’ve hit your weekly limit · resets Oct 2 at 9pm\r\n";
+
+  it("offers the chain once the banner has sat still, with no terminal text", async () => {
+    const seen = collect();
+    const terminal = createTerminal(preset);
+
+    ptyOnDataCallback!(banner);
+    await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS - 100);
+    expect(seen).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(500);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toEqual({
+      terminalId: "t1",
+      agentId: "claude",
+      fromPresetId: "claude-work",
+      originalPresetId: "claude-home",
+      reason: "rate-limit",
+      timestamp: expect.any(Number),
+    });
+
+    // Sitting there longer, or redrawn, is the same banner, not a second offer.
+    await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS * 4);
+    ptyOnDataCallback!("prompt\r\n");
+    await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS * 4);
+    expect(seen).toHaveLength(1);
+
+    terminal.dispose();
+  });
+
+  it("waits while output is still arriving under the banner", async () => {
+    const seen = collect();
+    const terminal = createTerminal(preset);
+
+    ptyOnDataCallback!(banner);
+    for (let i = 0; i < 10; i++) {
+      await vi.advanceTimersByTimeAsync(1_000);
+      ptyOnDataCallback!(`retrying ${i}\r\n`);
+    }
+    expect(seen).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS + 500);
+    expect(seen).toHaveLength(1);
+
+    terminal.dispose();
+  });
+
+  it("waits while bytes keep arriving even when the screen doesn't change", async () => {
+    const seen = collect();
+    const terminal = createTerminal(preset);
+
+    ptyOnDataCallback!(banner);
+    for (let i = 0; i < 8; i++) {
+      await vi.advanceTimersByTimeAsync(1_000);
+      ptyOnDataCallback!("\x1b[?25h");
+    }
+    expect(seen).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS + 500);
+    expect(seen).toHaveLength(1);
+
+    terminal.dispose();
+  });
+
+  it("never offers a banner the agent kept working past", async () => {
+    const seen = collect();
+    const terminal = createTerminal(preset);
+
+    ptyOnDataCallback!(banner);
+    for (let i = 0; i < 40; i++) {
+      await vi.advanceTimersByTimeAsync(1_000);
+      ptyOnDataCallback!(`\rretrying ${i % 5}`);
+    }
+    await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS * 4);
+    expect(seen).toHaveLength(0);
+
+    terminal.dispose();
+  });
+
+  it("waits while the agent is still working at the banner", async () => {
+    const seen = collect();
+    const terminal = createTerminal(preset);
+    const info = (terminal as unknown as { terminalInfo: { agentState?: string } }).terminalInfo;
+
+    info.agentState = "working";
+    ptyOnDataCallback!(banner);
+    await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS * 3);
+    expect(seen).toHaveLength(0);
+
+    info.agentState = "waiting";
+    await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS + 500);
+    expect(seen).toHaveLength(1);
+
+    terminal.dispose();
+  });
+
+  it("drops the offer when the banner goes before it settles, and offers again on a new one", async () => {
+    const seen = collect();
+    const terminal = createTerminal(preset);
+
+    ptyOnDataCallback!(banner);
+    await vi.advanceTimersByTimeAsync(1_000);
+    ptyOnDataCallback!("line\r\n".repeat(20));
+    await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS * 2);
+    expect(seen).toHaveLength(0);
+
+    // Inside the chip's cooldown, but a fresh appearance all the same.
+    ptyOnDataCallback!(banner);
+    await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS + 500);
+    expect(seen).toHaveLength(1);
+
+    ptyOnDataCallback!("line\r\n".repeat(20));
+    await vi.advanceTimersByTimeAsync(500);
+    ptyOnDataCallback!(banner);
+    await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS + 500);
+    expect(seen).toHaveLength(2);
+
+    terminal.dispose();
+  });
+
+  it("never offers once another agent has taken over the pane", async () => {
+    const seen = collect();
+    const terminal = createTerminal(preset);
+    const info = (terminal as unknown as { terminalInfo: { detectedAgentId?: string } })
+      .terminalInfo;
+
+    info.detectedAgentId = "codex";
+    ptyOnDataCallback!(banner);
+    await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS * 2);
+    expect(seen).toHaveLength(0);
+
+    terminal.dispose();
+  });
+
+  it("never offers for a pane launched without a preset", async () => {
+    const seen = collect();
+    const terminal = createTerminal({ launchAgentId: "claude" });
+
+    ptyOnDataCallback!(banner);
+    await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS * 2);
+    expect(seen).toHaveLength(0);
+
+    terminal.dispose();
+  });
+
+  it("cancels a pending offer when the pane is killed", async () => {
+    const seen = collect();
+    const terminal = createTerminal(preset);
+
+    ptyOnDataCallback!(banner);
+    await vi.advanceTimersByTimeAsync(1_000);
+    terminal.kill("user");
+    await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS * 2);
     expect(seen).toHaveLength(0);
 
     terminal.dispose();
@@ -479,8 +689,10 @@ describe("TerminalProcess agent:output coalescing", () => {
 // The OSC 9;4 tap runs per-chunk so the agent-state heartbeat never lags
 // (#8753). The parser is a private collaborator; spy on its `feed`.
 function osc94FeedSpy(terminal: TerminalProcess) {
-  const internal = terminal as unknown as { osc94Parser: { feed: (d: string, n: number) => void } };
-  return vi.spyOn(internal.osc94Parser, "feed");
+  const internal = terminal as unknown as {
+    analysis: { osc94Parser: { feed: (d: string, n: number) => void } };
+  };
+  return vi.spyOn(internal.analysis.osc94Parser, "feed");
 }
 
 // Hibernation removal: PTY output streams LIVE through the parse pipeline for

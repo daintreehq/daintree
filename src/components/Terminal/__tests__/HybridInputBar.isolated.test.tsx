@@ -33,6 +33,7 @@ vi.mock("../fileAttachments", async (importOriginal) => {
 });
 
 import { HybridInputBar } from "../HybridInputBar";
+import { _resetPaneFocusRequestsForTesting } from "../paneFocusRequest";
 import {
   _resetPaneDropRoutingForTests,
   registerPaneDropTarget,
@@ -81,6 +82,8 @@ describe("HybridInputBar isolated", () => {
 
   afterEach(() => {
     cleanup();
+    // An accepted drop asks the pane for its bar, and the ask outlives the bar.
+    _resetPaneFocusRequestsForTesting();
     delete (window as { __DAINTREE_HOST_ID__?: unknown }).__DAINTREE_HOST_ID__;
   });
 
@@ -165,27 +168,18 @@ describe("HybridInputBar isolated", () => {
 
     function registerTerminal() {
       registerPaneDropTarget("term-1", "xterm", {
-        ownsFocus: () => false,
         canTake: () => true,
         take: () => true,
       });
     }
 
-    it("claims the drop while its editor holds the keyboard, even with the window blurred", async () => {
+    it("claims a drop let go over it, and leaves one let go over the terminal there", async () => {
       const view = mount(false);
       await act(async () => {});
       registerTerminal();
-      expect(resolvePaneDropTarget("term-1", "xterm")).toBe("xterm");
 
-      const editor = view.container.querySelector<HTMLElement>(".cm-content");
-      editor!.focus();
-      expect(document.activeElement).toBe(editor);
-      const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
-      try {
-        expect(resolvePaneDropTarget("term-1", "xterm")).toBe("hybridInput");
-      } finally {
-        hasFocus.mockRestore();
-      }
+      expect(resolvePaneDropTarget("term-1", "hybridInput")).toBe("hybridInput");
+      expect(resolvePaneDropTarget("term-1", "xterm")).toBe("xterm");
       view.unmount();
     });
 

@@ -2,11 +2,19 @@ import type { PanelRegistryStoreApi, PanelRegistrySlice, PanelRegistryMiddleware
 import { isPtyPanel } from "@shared/types/panel";
 import type { PanelInstance, PanelTitleMode } from "@shared/types/panel";
 import { terminalClient } from "@/clients";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import {
+  peek as peekTerminalService,
+  with as withTerminalService,
+} from "@/services/terminal/terminalInstanceServiceAccessor";
 import { TerminalRefreshTier } from "@/types";
 import { panelKindHasPty, panelKindIsDockable } from "@shared/config/panelKindRegistry";
 import { isDevPreviewPanel } from "@shared/types/panel";
 import { saveNormalized, saveTabGroups } from "./persistence";
+import {
+  deferPersistToBatchEnd,
+  isHydrationBatchActive,
+  takeDeferredPersist,
+} from "./hydrationBatch";
 import { optimizeForDock } from "./layout";
 import { cancelReconnectErrorDebounce } from "./browser";
 import {
@@ -31,6 +39,7 @@ import { getWorktreeSelectionSnapshot } from "@/store/storeAccessors";
 import { countPanelsTowardLimit } from "./panelCount";
 import { usePanelLimitStore } from "@/store/panelLimitStore";
 import { notify } from "@/lib/notify";
+import { cancelDriveLeaseHold, clearPanelDriveLeaseMark } from "@/store/driveLeaseWaitStore";
 
 type Set = PanelRegistryStoreApi["setState"];
 type Get = PanelRegistryStoreApi["getState"];
@@ -50,17 +59,21 @@ function recordLedgerClose(id: string, reason: string): void {
 /**
  * Reveal a batch's collected panel ids in `panelIds` and persist once. The
  * filter drops ids that never landed in `panelsById` (failed addPanel) or are
- * already present (reconnect path).
+ * already present (reconnect path). A save deferred while the batch ran is
+ * written here even when nothing was added (#14017).
  */
-function commitPendingIds(set: Set, pendingIds: string[]): void {
-  if (pendingIds.length === 0) return;
+function commitPendingIds(set: Set, pendingIds: string[], persistDeferred: boolean): void {
+  if (pendingIds.length === 0 && !persistDeferred) return;
 
   set((state) => {
     const existing = new Set(state.panelIds);
     const additions = pendingIds.filter(
       (id) => !existing.has(id) && state.panelsById[id] !== undefined
     );
-    if (additions.length === 0) return {};
+    if (additions.length === 0) {
+      if (persistDeferred) saveNormalized(state.panelsById, state.panelIds);
+      return {};
+    }
     const newIds = [...state.panelIds, ...additions];
     saveNormalized(state.panelsById, newIds);
     return { panelIds: newIds };
@@ -77,7 +90,7 @@ function commitPendingIds(set: Set, pendingIds: string[]): void {
 function applyBatchFlush(set: Set, token: HydrationBatchToken | null): void {
   const pendingIds = consumeBatch(token);
   if (pendingIds === null) return;
-  commitPendingIds(set, pendingIds);
+  commitPendingIds(set, pendingIds, takeDeferredPersist());
 }
 
 /**
@@ -130,7 +143,7 @@ export const createCorePanelActions = (
     // any pending ids drop out at the `panelsById[id] !== undefined` filter
     // in `commitPendingIds`. (#9165)
     const orphaned = consumeActiveSpawnBatch();
-    if (orphaned !== null) commitPendingIds(set, orphaned);
+    if (orphaned !== null) commitPendingIds(set, orphaned, takeDeferredPersist());
     return beginBatch();
   },
 
@@ -154,6 +167,9 @@ export const createCorePanelActions = (
     // Only call PTY operations for PTY-backed terminals
     if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
       recordLedgerClose(id, "removed");
+      // A launch still waiting for control goes with its pane.
+      cancelDriveLeaseHold(id);
+      clearPanelDriveLeaseMark(id);
       // Bookmark and close already closed the backend via prepareBookmark; a
       // second kill here is redundant and could hit a same-id successor.
       if (!options?.backendAlreadyClosed) {
@@ -162,7 +178,7 @@ export const createCorePanelActions = (
         });
       }
 
-      terminalInstanceService.destroy(id);
+      peekTerminalService()?.destroy(id);
     }
 
     set((state) => {
@@ -236,10 +252,12 @@ export const createCorePanelActions = (
 
       if (panelKindHasPty(terminal.kind ?? "terminal")) {
         recordLedgerClose(id, "trash-emptied");
+        cancelDriveLeaseHold(id);
+        clearPanelDriveLeaseMark(id);
         terminalClient.kill(id).catch((error) => {
           logError("[TerminalStore] Failed to kill terminal", error);
         });
-        terminalInstanceService.destroy(id);
+        peekTerminalService()?.destroy(id);
       }
     }
 
@@ -380,16 +398,43 @@ export const createCorePanelActions = (
       // trigger here the confirmation would be suppressed and HybridInputBar
       // would never see `agentHasLifecycleEvent === true`. See #8592.
       const nextWaitingReason = agentState === "waiting" ? waitingReason : undefined;
+      // Only the host's own reports carry its timestamp: the input controller's
+      // `directing`, its optimistic `working` and the exit fallback pass none,
+      // and none of those is something the host saw (#14017). A report of the
+      // state already observed keeps the time that state began.
+      const observation =
+        lastStateChange !== undefined &&
+        agentState !== "directing" &&
+        terminal.lastAgentObservation?.agentState !== agentState
+          ? { agentState, at: lastStateChange }
+          : undefined;
+      // Written as it is observed, since nothing else saves while an agent works
+      // and the next restore reports it as last seen. Never mid-batch: `panelIds`
+      // is partial then, and a save would read the panels still being restored
+      // as removed, so the batch writes it when it closes.
+      const persist = (panelsById: typeof state.panelsById): void => {
+        if (!observation) return;
+        if (isHydrationBatchActive()) deferPersistToBatchEnd();
+        else saveNormalized(panelsById, state.panelIds);
+      };
       if (
         terminal.agentState === agentState &&
         terminal.error === error &&
         terminal.waitingReason === nextWaitingReason &&
         terminal.stateChangeTrigger === trigger
       ) {
-        return state;
+        if (!observation) return state;
+        // The host confirmed what the screen already showed — an optimistic
+        // guess, say. Nothing visible changes, but the observation is new.
+        const confirmed = {
+          ...state.panelsById,
+          [id]: { ...terminal, lastAgentObservation: observation },
+        };
+        persist(confirmed);
+        return { panelsById: confirmed };
       }
 
-      return {
+      const next = {
         panelsById: {
           ...state.panelsById,
           [id]: {
@@ -397,6 +442,7 @@ export const createCorePanelActions = (
             agentState,
             error,
             lastStateChange: lastStateChange ?? Date.now(),
+            ...(observation && { lastAgentObservation: observation }),
             stateChangeTrigger: trigger,
             stateChangeConfidence: confidence,
             waitingReason: nextWaitingReason,
@@ -415,6 +461,8 @@ export const createCorePanelActions = (
           },
         },
       };
+      persist(next.panelsById);
+      return next;
     });
   },
 
@@ -658,7 +706,10 @@ export const createCorePanelActions = (
 
     // Only apply renderer policy for PTY-backed panels if move succeeded
     if (moveSucceeded && terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
-      terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
+      withTerminalService(
+        (service) => service.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE),
+        id
+      );
     }
 
     return moveSucceeded;

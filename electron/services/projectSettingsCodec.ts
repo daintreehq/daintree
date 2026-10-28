@@ -28,6 +28,7 @@ import { normalizeDaintreeMcpTier } from "../../shared/types/project.js";
 import type { CommandOverride } from "../../shared/types/commands.js";
 import type { NotificationSettings } from "../../shared/types/ipc/api.js";
 import { normalizeProviderId } from "../../shared/utils/forgeProviderIds.js";
+import { sanitizeDictionary } from "../../shared/utils/voiceDictionary.js";
 
 export const PROJECT_SETTINGS_SCHEMA_VERSION = 1;
 
@@ -503,6 +504,10 @@ export function decode(raw: unknown): ProjectSettingsDecodeResult {
     browserAllowedHosts: Array.isArray(migrated.browserAllowedHosts)
       ? migrated.browserAllowedHosts.filter((h): h is string => typeof h === "string")
       : undefined,
+    // A committed file carries no times, so an entry without one reads as 0.
+    voiceDictionary: Array.isArray(migrated.voiceDictionary)
+      ? sanitizeDictionary(migrated.voiceDictionary, 0)
+      : undefined,
     preferredImageViewer:
       migrated.preferredImageViewer && typeof migrated.preferredImageViewer === "object"
         ? (migrated.preferredImageViewer as ProjectSettings["preferredImageViewer"])
@@ -557,7 +562,7 @@ export function encodeEnvelope(settings: ProjectSettings): Record<string, unknow
  *
  * Notably permits both `daintreeMcpTier` and the deprecated
  * `exposeDaintreeMcpToAgents` — the agent-action wrapper at
- * `src/services/actions/definitions/projectActions.ts` strips both before
+ * `src/services/actions/definitions/projectActions.impl.ts` strips both before
  * the IPC call, and the renderer settings dialog still passes them through
  * legitimately.
  */
@@ -600,6 +605,7 @@ export const ProjectSettingsSaveSchema = z
     daintreeMcpSkipConfirmations: z.boolean().optional(),
     exposeDaintreeMcpToAgents: z.boolean().optional(),
     browserAllowedHosts: z.array(z.string()).optional(),
+    voiceDictionary: z.array(z.unknown()).optional(),
     agentInstructions: z.unknown().optional(),
   })
   .passthrough()

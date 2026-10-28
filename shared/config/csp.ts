@@ -108,7 +108,7 @@ function buildScriptSrc(base: string, scriptSrcHashes?: readonly string[]): stri
  * Applied at two layers (must stay aligned to avoid the browser intersecting
  * them into a stricter effective policy that breaks the app):
  *   1. `<meta http-equiv="Content-Security-Policy">` injected into index.html
- *      at build time by the Vite plugin in vite.config.ts.
+ *      at build time by the Vite plugin in scripts/lib/vite-index-html.ts.
  *   2. `Content-Security-Policy` HTTP response header set by the main process
  *      via `webRequest.onHeadersReceived` on the persist:daintree session.
  *

@@ -42,6 +42,7 @@ import { computeSpawnContext, acquirePtyProcess } from "./pty/terminalSpawn.js";
 import { disposeTerminalSerializerService } from "./pty/TerminalSerializerService.js";
 import { deleteSessionFile } from "./pty/terminalSessionPersistence.js";
 import { ledgerFactsFromSpawnOptions } from "./pty/lifecycleLedger.js";
+import { attributeClose } from "./pty/closeAttribution.js";
 import { AgentTerminalLifecycleLedger } from "../../shared/utils/agentLifecycleLedger.js";
 import { events } from "./events.js";
 import { keepWindowsTreeKillHelperWarm } from "../utils/windowsTreeKill.js";
@@ -119,6 +120,11 @@ export class PtyManager extends EventEmitter {
   >();
   // Drive leases a remote client is party to, by project (pushed by Main).
   private driveLeases = new Map<string, PtyHostDriveLease>();
+  // Processes a session-preserving project teardown is ending. Their exits are
+  // tagged so the renderer keeps the pane in the layout it will be restored
+  // into, rather than treating a signal kill's code 0 as the user's own `exit`
+  // (#13841). Held per instance, not per id, so a same-id respawn starts clean.
+  private sessionPreservingTeardowns = new WeakSet<TerminalProcess>();
   // Output the TerminalProcess constructor emits before `registry.add` — the
   // pooled-shell prelude and any chunks the data handoff buffered while the
   // shell sat in the pool. `emitData` routes by registry entry, so without this
@@ -580,7 +586,14 @@ export class PtyManager extends EventEmitter {
             if (this.registry.get(termId) !== terminalProcess) {
               return;
             }
-            this.emit("exit", termId, exitCode, signal, options.launchGeneration);
+            this.emit(
+              "exit",
+              termId,
+              exitCode,
+              signal,
+              options.launchGeneration,
+              this.sessionPreservingTeardowns.has(terminalProcess) || undefined
+            );
             if (!terminalProcess.shouldPreserveOnExit(exitCode)) {
               this.registry.delete(termId);
             }
@@ -738,12 +751,26 @@ export class PtyManager extends EventEmitter {
    * surfaces already distinguish those, having resolved the terminal first.
    */
   /** Withdraw a guarded submission (#12491); a terminal that is gone has nothing to withdraw. */
+  cancelPendingInput(id: string): void {
+    this.registry.get(id)?.cancelPendingInput();
+  }
+
   withdrawGuardedSubmission(id: string, submissionToken: string): void {
     this.registry.get(id)?.withdrawGuardedSubmission(submissionToken);
   }
 
   getSubmission(id: string, submissionToken: string): TerminalSubmissionRecord | undefined {
     return this.registry.get(id)?.getSubmission(submissionToken);
+  }
+
+  /** Undefined when the registry holds no such terminal. */
+  hasPendingSubmission(id: string): boolean | undefined {
+    return this.registry.get(id)?.hasPendingSubmission();
+  }
+
+  /** Null once nothing reads the output; undefined when the registry holds no such terminal. */
+  analysisObservedSince(id: string): number | null | undefined {
+    return this.registry.get(id)?.analysisObservedSince();
   }
 
   /**
@@ -947,6 +974,20 @@ export class PtyManager extends EventEmitter {
       // Capture terminal info before async kill (info may be unavailable after kill)
       const terminal = this.registry.get(termId);
       const info = terminal?.getInfo();
+      // Read before the kill, which clears the trash first: the record names
+      // the trash it left, so Canopy's Trash keeps the run past this window.
+      const close = attributeClose(
+        info
+          ? {
+              ...info,
+              id: termId,
+              isTrashed: true,
+              trashExpiresAt: this.registry.getTrashExpiresAt(termId),
+            }
+          : null,
+        "kill",
+        this.registry.getTrashTtlMs()
+      );
 
       // Registered with the quit barrier as a whole: the id isn't known until
       // the graceful kill returns, and a quit must still wait for it (#12433).
@@ -987,6 +1028,7 @@ export class PtyManager extends EventEmitter {
                 agentModelId: info.agentModelId,
                 cwd: info.cwd ?? undefined,
                 branch: branch ?? undefined,
+                ...close,
               },
             });
           }
@@ -1389,6 +1431,15 @@ export class PtyManager extends EventEmitter {
     if (terminalIds.length === 0) return [];
 
     logInfo(`Gracefully killing ${terminalIds.length} terminal(s) for project ${projectId}`);
+
+    // Marked before any shutdown starts: an agent can exit on its own partway
+    // through its quit sequence, before the teardown's kill ever runs.
+    if (options?.preserveSession) {
+      for (const terminalId of terminalIds) {
+        const terminal = this.registry.get(terminalId);
+        if (terminal) this.sessionPreservingTeardowns.add(terminal);
+      }
+    }
 
     const results = await Promise.all(
       terminalIds.map(async (terminalId) => {

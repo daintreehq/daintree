@@ -241,6 +241,10 @@ import {
 import { toRuntimePanelKindId } from "../../../shared/config/panelKindRegistry.js";
 import { registerPanelKind } from "../../../shared/config/panelKindRegistry.js";
 import { stripPluginViewGeneration } from "../../../shared/utils/pluginViewUrl.js";
+import {
+  __resetProjectPluginVisibilityForTesting,
+  setProjectPluginVisibility,
+} from "../plugin/projectPluginVisibility.js";
 
 function makeCtx(pluginId: string, overrides: Partial<PluginIpcContext> = {}): PluginIpcContext {
   return {
@@ -725,6 +729,42 @@ describe("Deferred activation — activatePlugin", () => {
     }
   });
 
+  it("a decoration pull from a project that hides the plugin does not activate it (#13765)", async () => {
+    const hiddenIn = "a".repeat(64);
+    const shownIn = "b".repeat(64);
+    const pluginDir = path.join(tmpDir, "decorator");
+    await fs.mkdir(pluginDir);
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({
+        name: "acme.decorator",
+        version: "1.0.0",
+        main: "main.mjs",
+        contributes: { fileDecorationProviders: [{ id: "badges", scopes: ["s:1"] }] },
+      })
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "main.mjs"),
+      "globalThis.__decoratorActivated = true; export function activate() {}"
+    );
+
+    try {
+      const service = new PluginService(tmpDir);
+      openedServices.push(service);
+      await service.initialize();
+      setProjectPluginVisibility(hiddenIn, "acme.decorator", false);
+
+      await service.activatePluginsForFileDecorationScope("s:1", hiddenIn);
+      expect((globalThis as Record<string, unknown>).__decoratorActivated).toBeUndefined();
+
+      await service.activatePluginsForFileDecorationScope("s:1", shownIn);
+      expect((globalThis as Record<string, unknown>).__decoratorActivated).toBe(true);
+    } finally {
+      delete (globalThis as Record<string, unknown>).__decoratorActivated;
+      __resetProjectPluginVisibilityForTesting();
+    }
+  });
+
   it("commits the plugin to the map before publishing an addressable panel (#11728)", async () => {
     // The core invariant, asserted in a suite the PR gate actually runs — the
     // real-registry version of this lives in PluginService.integration.test.ts,
@@ -819,6 +859,16 @@ describe("Deferred activation — activatePlugin", () => {
     // The manifest id is an alias for the same root, because plugin authors
     // write `plugin://{pluginId}/…` by hand.
     expect(service.getPluginRootByAuthority("acme.view-authority")).toBe(pluginDir);
+    // Both keys name the load that owns them, so a request is judged by that
+    // instance and never by another instance sharing its root (#14257).
+    expect(service.resolvePluginAuthority(authority)).toEqual({
+      dir: pluginDir,
+      pluginId: "acme.view-authority",
+    });
+    expect(service.resolvePluginAuthority("acme.view-authority")).toEqual({
+      dir: pluginDir,
+      pluginId: "acme.view-authority",
+    });
 
     service.unloadPlugin("acme.view-authority");
 
@@ -826,6 +876,7 @@ describe("Deferred activation — activatePlugin", () => {
     // not the old root, and not whatever next occupies that plugin id.
     expect(service.getPluginRootByAuthority(authority)).toBeUndefined();
     expect(service.getPluginRootByAuthority("acme.view-authority")).toBeUndefined();
+    expect(service.resolvePluginAuthority(authority)).toBeUndefined();
   });
 
   it("activatePluginForView mints one shared recovery view generation per load (#11728)", async () => {
@@ -1383,6 +1434,63 @@ describe("project plugin load errors", () => {
 
     expect(vi.mocked(registerPanelKind)).not.toHaveBeenCalled();
     expect(service.getPluginRootByAuthority(INSTANCE_KEY)).toBeUndefined();
+  });
+
+  describe("an application payload rewritten after its preflight (#14113)", () => {
+    type Rewrite = (manifest: Record<string, unknown>) => Record<string, unknown>;
+    const asApplication: Rewrite = (m) => ({
+      ...m,
+      engines: { daintree: ">=0.0.0" },
+      application: { name: "Boom", destination: "grid" },
+    });
+
+    async function openRewritten(first: Rewrite, atGate: Rewrite | null): Promise<PluginService> {
+      const projectRoot = await writeProjectPlugin("export function activate() {}");
+      const manifestPath = path.join(projectRoot, ".daintree", "plugins", PLUGIN_ID, "plugin.json");
+      const written = JSON.parse(await fs.readFile(manifestPath, "utf-8")) as Record<
+        string,
+        unknown
+      >;
+      await fs.writeFile(manifestPath, JSON.stringify(first(written)));
+      const { service, reached, release } = gatedService();
+      const opening = service.onProjectOpened(PROJECT_ID, projectRoot);
+      try {
+        // Discovery has read the first manifest and the load is parked at the gate.
+        await reached;
+        if (atGate) await fs.writeFile(manifestPath, JSON.stringify(atGate(written)));
+        release();
+        await opening;
+      } finally {
+        release();
+        await opening.catch(() => {});
+      }
+      return service;
+    }
+
+    afterEach(() => {
+      vi.mocked(registerPanelKind).mockReset();
+    });
+
+    it("loads one left as it was checked", async () => {
+      const service = await openRewritten(asApplication, null);
+      expect(service.hasPlugin(INSTANCE_KEY)).toBe(true);
+      expect(vi.mocked(registerPanelKind)).toHaveBeenCalled();
+    });
+
+    it.each<[string, Rewrite, Rewrite]>([
+      ["a new version", asApplication, (m) => ({ ...asApplication(m), version: "2.0.0" })],
+      [
+        "an engine range this Daintree is outside",
+        asApplication,
+        (m) => ({ ...asApplication(m), engines: { daintree: ">=99.0.0" } }),
+      ],
+      ["an application added to a plain plugin", (m) => m, asApplication],
+    ])("registers nothing for %s", async (_label, first, atGate) => {
+      const service = await openRewritten(first, atGate);
+      expect(service.hasPlugin(INSTANCE_KEY)).toBe(false);
+      expect(vi.mocked(registerPanelKind)).not.toHaveBeenCalled();
+      expect(service.listProjectPlugins(PROJECT_ID)[0]).toMatchObject({ state: "blocked" });
+    });
   });
 
   it("returns the real cause from activatePluginForView instead of a clean result", async () => {

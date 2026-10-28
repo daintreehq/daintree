@@ -209,6 +209,7 @@ describe("canDisposeIdlePluginWorker", () => {
     pendingHostCallCount: 0,
     managedProcessCount: 0,
     fsWatcherCount: 0,
+    liveTaskCount: 0,
     lastActivityAt: NOW - HOUR,
     now: NOW,
   };
@@ -229,6 +230,7 @@ describe("canDisposeIdlePluginWorker", () => {
     expect(canDisposeIdlePluginWorker({ ...idle, pendingHostCallCount: 1 }).ok).toBe(false);
     expect(canDisposeIdlePluginWorker({ ...idle, managedProcessCount: 1 }).ok).toBe(false);
     expect(canDisposeIdlePluginWorker({ ...idle, fsWatcherCount: 1 }).ok).toBe(false);
+    expect(canDisposeIdlePluginWorker({ ...idle, liveTaskCount: 1 }).ok).toBe(false);
     expect(canDisposeIdlePluginWorker({ ...idle, lastActivityAt: null }).ok).toBe(false);
     expect(canDisposeIdlePluginWorker({ ...idle, lastActivityAt: NOW - 1000 }).ok).toBe(false);
   });

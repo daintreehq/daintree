@@ -1,13 +1,17 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, fireEvent, act } from "@testing-library/react";
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     get: vi.fn(),
     ensureSearchAddon: vi.fn(),
-  },
-}));
+    pinHistory: vi.fn(),
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("@/components/ui/tooltip", () => ({
   Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -17,8 +21,11 @@ vi.mock("@/components/ui/tooltip", () => ({
 }));
 
 import { TerminalSearchBar } from "../TerminalSearchBar";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { createTerminalPaintPlane } from "@/services/TerminalInstanceService";
 import { useTerminalSearchHistoryStore } from "@/store/terminalSearchHistoryStore";
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
+
+const terminalInstanceService = createTerminalPaintPlane();
 
 type ResultsListener = (event: { resultIndex: number; resultCount: number }) => void;
 
@@ -46,9 +53,19 @@ function createMockManaged(findNextResult = true) {
   };
 }
 
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
+});
+
 describe("TerminalSearchBar", () => {
+  const unpinHistory = vi.fn();
+
   beforeEach(() => {
     vi.useFakeTimers();
+    unpinHistory.mockClear();
+    vi.mocked(terminalInstanceService.pinHistory).mockClear().mockReturnValue(unpinHistory);
     vi.mocked(terminalInstanceService.ensureSearchAddon).mockImplementation(async (id) => {
       return terminalInstanceService.get(id)?.searchAddon ?? null;
     });
@@ -72,6 +89,15 @@ describe("TerminalSearchBar", () => {
   function renderSearchBar() {
     return render(<TerminalSearchBar terminalId="test-terminal" onClose={vi.fn()} />);
   }
+
+  it("keeps the terminal's history resident while the bar is open (#14220)", () => {
+    const { unmount } = renderSearchBar();
+    expect(terminalInstanceService.pinHistory).toHaveBeenCalledWith("test-terminal");
+    expect(unpinHistory).not.toHaveBeenCalled();
+
+    unmount();
+    expect(unpinHistory).toHaveBeenCalledTimes(1);
+  });
 
   it("renders the sr-only live region on initial mount with correct attributes", () => {
     const mock = createMockManaged(true);

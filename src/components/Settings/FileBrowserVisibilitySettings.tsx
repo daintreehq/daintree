@@ -10,7 +10,7 @@ import {
 } from "@/store/preferencesStore";
 import { SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { SettingsSection } from "./SettingsSection";
-import { useSettingsOwnerMarker } from "@/hooks/useSettingsOwner";
+import { SECTION_SETTINGS } from "@/components/Settings/settingsSectionOwners";
 
 function sameList(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((value, index) => value === b[index]);
@@ -24,7 +24,6 @@ function sameList(a: readonly string[], b: readonly string[]): boolean {
  * committed on Enter or the add button.
  */
 export function FileBrowserVisibilitySettings() {
-  const ownerMarker = useSettingsOwnerMarker();
   const patterns = usePreferencesStore((s) => s.fileBrowserAlwaysHiddenPatterns);
   const setPatterns = usePreferencesStore((s) => s.setFileBrowserAlwaysHiddenPatterns);
   const resetPatterns = usePreferencesStore((s) => s.resetFileBrowserAlwaysHiddenPatterns);
@@ -97,7 +96,7 @@ export function FileBrowserVisibilitySettings() {
     <SettingsSection
       id="file-browser-always-hidden"
       title="Always-hidden files"
-      badge={ownerMarker("device")}
+      settings={SECTION_SETTINGS.clientPreferences}
       description="Files matching these names stay hidden in every file browser panel, whatever the dotfile toggle"
     >
       <SettingsGroup>

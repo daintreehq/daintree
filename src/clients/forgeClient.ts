@@ -9,13 +9,15 @@ import type {
   EditIssueInput,
   IssueCloseReason,
   MergePRResult,
+  EnableAutoMergeResult,
+  DisableAutoMergeResult,
   PR,
   PRDraftStateResult,
   PRLookupResult,
+  ForgeReferenceLookupResult,
   PullRequestReview,
   RequestReviewersResult,
   Page,
-  RepoMetadata,
   ListOptions,
   IssueTooltipData,
   PRTooltipData,
@@ -26,6 +28,7 @@ import type {
 import type {
   ForgeCheckRun,
   ForgeCIStatusSummary,
+  ForgeRepoMetadataPayload,
   ForgeRepositoryStats,
   ForgeRepoStatsAndPagePayload,
   ForgeRepoCountsUpdatedPayload,
@@ -37,6 +40,7 @@ import type {
   PRClearedPayload,
   IssueDetectedPayload,
   IssueNotFoundPayload,
+  IssueLinkTarget,
 } from "@shared/types/ipc/forge";
 
 // The open calls answer with a URL only to a window on another machine, whose
@@ -54,12 +58,12 @@ export const forgeClient = {
     return window.electron.forge.openCommits(cwd, branch).then(() => undefined);
   },
 
-  openIssue: (cwd: string, issueNumber: number): Promise<void> => {
-    return window.electron.forge.openIssue({ cwd, issueNumber }).then(() => undefined);
+  openIssue: (cwd: string, issueNumber: number, target?: IssueLinkTarget): Promise<void> => {
+    return window.electron.forge.openIssue({ ...target, cwd, issueNumber }).then(() => undefined);
   },
 
-  getIssueUrl: (cwd: string, issueNumber: number): Promise<string> => {
-    return window.electron.forge.getIssueUrl({ cwd, issueNumber });
+  getIssueUrl: (cwd: string, issueNumber: number, target?: IssueLinkTarget): Promise<string> => {
+    return window.electron.forge.getIssueUrl({ ...target, cwd, issueNumber });
   },
 
   openRepo: (cwd: string): Promise<void> => {
@@ -151,15 +155,19 @@ export const forgeClient = {
     return window.electron.forge.getIssue({ cwd, issueNumber });
   },
 
-  getPR: (cwd: string, prNumber: number): Promise<PR | null> => {
-    return window.electron.forge.getPR({ cwd, prNumber });
+  getPR: (cwd: string, prNumber: number, options?: { fresh?: boolean }): Promise<PR | null> => {
+    return window.electron.forge.getPR({
+      cwd,
+      prNumber,
+      ...(options?.fresh ? { fresh: true } : {}),
+    });
   },
 
   getCIStatus: (cwd: string, prNumber: number): Promise<ForgeCIStatusSummary | null> => {
     return window.electron.forge.getCIStatus({ cwd, prNumber });
   },
 
-  getRepoMetadata: (cwd: string): Promise<RepoMetadata> => {
+  getRepoMetadata: (cwd: string): Promise<ForgeRepoMetadataPayload> => {
     return window.electron.forge.getRepoMetadata({ cwd });
   },
 
@@ -186,8 +194,12 @@ export const forgeClient = {
     return window.electron.forge.getProjectHealth({ cwd, bypassCache });
   },
 
-  getIssueTooltip: (cwd: string, issueNumber: number): Promise<IssueTooltipData | null> => {
-    return window.electron.forge.getIssueTooltip({ cwd, issueNumber });
+  getIssueTooltip: (
+    cwd: string,
+    issueNumber: number,
+    target?: IssueLinkTarget
+  ): Promise<IssueTooltipData | null> => {
+    return window.electron.forge.getIssueTooltip({ ...target, cwd, issueNumber });
   },
 
   getPRTooltip: (cwd: string, prNumber: number): Promise<PRTooltipData | null> => {
@@ -215,6 +227,14 @@ export const forgeClient = {
   getPRsByNumbers: async (cwd: string, numbers: number[]): Promise<PR[]> => {
     const results = await window.electron.forge.getPRsByNumbers({ cwd, numbers });
     return results.flatMap((entry) => (entry.status === "found" && entry.pr ? [entry.pr] : []));
+  },
+
+  /** What each bare `#N` names; `null` when nothing can be looked up for `cwd`. */
+  getReferencesByNumbers: (
+    cwd: string,
+    numbers: number[]
+  ): Promise<ForgeReferenceLookupResult[] | null> => {
+    return window.electron.forge.getReferencesByNumbers({ cwd, numbers });
   },
 
   getPRReviewThreads: (cwd: string, prNumber: number): Promise<ReviewThread[]> => {
@@ -271,9 +291,27 @@ export const forgeClient = {
       mergeMethod?: "merge" | "squash" | "rebase";
       commitTitle?: string;
       commitMessage?: string;
+      expectedHeadSha?: string;
+      expectedBaseRef?: string;
     }
   ): Promise<MergePRResult> => {
     return window.electron.forge.mergePR({ cwd, prNumber, ...input });
+  },
+
+  enableAutoMerge: (
+    cwd: string,
+    prNumber: number,
+    input: {
+      mergeMethod?: "merge" | "squash" | "rebase";
+      expectedHeadSha: string;
+      expectedBaseRef?: string;
+    }
+  ): Promise<EnableAutoMergeResult> => {
+    return window.electron.forge.enableAutoMerge({ cwd, prNumber, ...input });
+  },
+
+  disableAutoMerge: (cwd: string, prNumber: number): Promise<DisableAutoMergeResult> => {
+    return window.electron.forge.disableAutoMerge({ cwd, prNumber });
   },
 
   convertPRToDraft: (cwd: string, prNumber: number): Promise<PRDraftStateResult> => {

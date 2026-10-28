@@ -10,6 +10,17 @@ import { MAX_TERMINAL_GRID_DIMENSION } from "../../shared/types/terminal.js";
 import { HANDBACK_CODE_PATTERN } from "../../shared/types/handback.js";
 import { COPY_TREE_RUN_SOURCES } from "../../shared/types/ipc/copyTreeHistory.js";
 import { MAX_TERMINALS_PER_RECIPE_ADMISSION_BATCH } from "../../shared/utils/recipeSanitizer.js";
+import {
+  VOICE_FOLLOWING_TEXT_MAX_CHARS,
+  VOICE_RECENT_PROMPT_MAX_CHARS,
+  VOICE_RECENT_PROMPTS_MAX,
+  VOICE_REWRITE_MAX_INSTRUCTION_CHARS,
+  VOICE_REWRITE_MAX_SELECTION_CHARS,
+} from "../../shared/config/voiceCorrection.js";
+import {
+  VOICE_SNAPSHOT_TRANSCRIPT_MAX_LENGTH,
+  VOICE_WORKSPACE_NAME_MAX_LENGTH,
+} from "../../shared/types/voice.js";
 
 /** Schema for a launch hint — built-in agent id or plugin-provided string. */
 const LaunchAgentIdSchema = z.union([z.enum(BUILT_IN_AGENT_IDS), z.string().min(1)]);
@@ -370,6 +381,9 @@ export const TerminalSpawnOptionsSchema = z.object({
   id: z.string().optional(),
   kind: PanelKindSchema.optional(),
   launchAgentId: LaunchAgentIdSchema.optional(),
+  // Listed or zod strips it, and the terminal reads as a plain shell to
+  // lifecycle observers (#13814).
+  pluginPanelKindId: z.string().min(1).max(256).optional(),
   projectId: z.string().optional(),
   cwd: z.string().optional(),
   shell: z.string().optional(),
@@ -413,6 +427,10 @@ export const TerminalSpawnOptionsSchema = z.object({
   // Launch-time ActionContext snapshot, replayed by an agent pane's workspace
   // binding (#12486). Optional so existing spawn callers are unaffected.
   actionContext: ActionContextSchema.optional(),
+  // Listed or zod strips them, and a required launch silently starts without
+  // its plugin tools (#14096).
+  requiredPluginTools: z.array(z.string().min(1).max(512)).max(32).optional(),
+  allowMissingPluginTools: z.boolean().optional(),
 });
 
 export const TerminalResizePayloadSchema = z.object({
@@ -757,9 +775,150 @@ export const DiffMediaReadFileVersionsPayloadSchema = z.object({
     .optional(),
 });
 
+// Renderer-minted (a UUID); bounded so a malformed id can't be stored or logged.
+export const VoiceSessionIdSchema = z.string().min(1).max(64);
+
+// Another view's dictation key, stopping the live session (#14791).
+export const VoiceStopLiveRequestSchema = z.object({
+  sessionId: VoiceSessionIdSchema,
+  returnToTarget: z.boolean().optional(),
+});
+
+const VoiceDetailLabelSchema = z.string().max(VOICE_WORKSPACE_NAME_MAX_LENGTH);
+const VOICE_IDENTITY_MAX_LENGTH = 1024;
+const VoiceDurationMsSchema = z
+  .number()
+  .finite()
+  .min(0)
+  .max(7 * 24 * 60 * 60 * 1000);
+
+// The owner's report of its live session, passed on to every other view (#14921).
+export const VoicePublishDetailsRequestSchema = z.object({
+  sessionId: VoiceSessionIdSchema,
+  details: z.object({
+    phase: z.enum(["arming", "connecting", "recording", "paused", "reconnecting", "finishing"]),
+    kind: z.enum(["dictation", "rewrite", "canopy-reply"]),
+    targetTitle: VoiceDetailLabelSchema,
+    targetChrome: z
+      .object({
+        // Plugin icon keys carry a project plugin instance id, so these run long.
+        iconId: z.string().max(VOICE_IDENTITY_MAX_LENGTH).nullable(),
+        color: z.string().max(64).optional(),
+        label: VoiceDetailLabelSchema,
+        isAgent: z.boolean(),
+        agentId: z.string().max(VOICE_IDENTITY_MAX_LENGTH).nullable(),
+        processId: z.string().max(VOICE_IDENTITY_MAX_LENGTH).nullable(),
+        runtimeKind: z.enum(["agent", "process", "panel", "none"]),
+        hasExited: z.boolean(),
+      })
+      .nullable(),
+    targetHostId: z.string().min(1).max(256).nullable(),
+    projectName: VoiceDetailLabelSchema.nullable(),
+    worktreeLabel: VoiceDetailLabelSchema.nullable(),
+    micLabel: VoiceDetailLabelSchema.nullable(),
+    micSignal: z.enum(["pending", "live", "silent"]),
+    micNotice: z.object({ kind: z.enum(["lost", "silent"]), bluetooth: z.boolean() }).nullable(),
+    stopWarning: z.boolean(),
+    correctionEnabled: z.boolean(),
+    locked: z.boolean(),
+    wordCount: z.number().int().min(0).max(1_000_000),
+    transcript: z.string().max(VOICE_SNAPSHOT_TRANSCRIPT_MAX_LENGTH),
+    provider: z.enum(["openai", "deepgram", "grok"]).nullable(),
+    clock: z
+      .object({
+        at: z.number().finite().min(0),
+        elapsedMs: VoiceDurationMsSchema,
+        pausedMs: VoiceDurationMsSchema,
+        paused: z.boolean(),
+        autoStop: z
+          .object({ reason: z.enum(["pause", "idle"]), remainingMs: VoiceDurationMsSchema })
+          .nullable(),
+      })
+      .nullable(),
+  }),
+});
+
+// Another view's panel pausing or resuming the live session (#14921).
+export const VoicePauseRequestSchema = z.object({
+  sessionId: VoiceSessionIdSchema,
+  paused: z.boolean(),
+});
+
+// The terminal being dictated into: keyterms are read from it alone.
+export const VoiceInputStartOptionsSchema = z
+  .object({
+    terminalId: z.string().min(1).max(256).optional(),
+    // "rewrite" records a spoken instruction for the selected text, so its
+    // words reach the renderer as spoken: no formatting commands, paragraph
+    // splits or file links.
+    intent: z.enum(["dictation", "rewrite"]).optional(),
+    // The text goes to a terminal outside the asking view (a Canopy reply to
+    // another host's or another project's): the view's own project vocabulary
+    // and file links have no place in it.
+    outsideView: z.literal(true).optional(),
+    // What the asking view calls its workspace, so views on other hosts can
+    // name it: this machine has no name for a host's project or scratch.
+    workspaceName: z.string().min(1).max(VOICE_WORKSPACE_NAME_MAX_LENGTH).optional(),
+  })
+  .optional();
+
 export const VoiceInputCorrectPayloadSchema = z.object({
   rawText: z.string(),
   recentContext: z.array(z.string()).optional(),
+  /**
+   * The draft after the passage, already bounded: context cleanup never
+   * rewrites. Text that doesn't validate is dropped rather than failing the cleanup.
+   */
+  followingText: z.string().max(VOICE_FOLLOWING_TEXT_MAX_CHARS).optional().catch(undefined),
+  /**
+   * The prompts the view last sent to `terminalId`, oldest first, already
+   * bounded. Ones that don't validate are dropped rather than failing the cleanup.
+   */
+  recentPrompts: z
+    .array(z.string().max(VOICE_RECENT_PROMPT_MAX_CHARS))
+    .max(VOICE_RECENT_PROMPTS_MAX)
+    .optional()
+    .catch(undefined),
+  /** The panel the passage was dictated into: it picks the project vocabulary and the agent's commands. */
+  terminalId: z.string().min(1).max(256).optional(),
+  startsPrompt: z.boolean().optional(),
+  /** The dictation the passage came from: its context was read while it ran. */
+  sessionId: VoiceSessionIdSchema.optional(),
+  /**
+   * Spans of `rawText` the recogniser was unsure of. Each holds a character and
+   * cleanup takes at most 12,000, so more belong to a passage it leaves raw.
+   * Spans that don't validate are dropped rather than failing the cleanup.
+   */
+  uncertain: z
+    .array(z.object({ from: z.number().int().nonnegative(), to: z.number().int().nonnegative() }))
+    .max(12_000)
+    .optional()
+    .catch(undefined),
+  /**
+   * Positions in `rawText` where the speaker paused. Each follows a word, so
+   * the same bound holds. Ones that don't validate are dropped rather than
+   * failing the cleanup.
+   */
+  pauses: z.array(z.number().int().nonnegative()).max(12_000).optional().catch(undefined),
+  /** Dictated into a terminal outside the asking view: cleaned up without its project's vocabulary. */
+  outsideView: z.literal(true).optional(),
+  /** Streams the reply, reporting its text so far under this id. */
+  streamId: z.string().min(1).max(64).optional(),
+});
+
+/**
+ * The passages a stop would clean up if it came now, sent at a pause while the
+ * dictation runs, so the stop can take replies already on their way. Each is
+ * the request the stop would send, less its stream id.
+ */
+export const VoiceInputPrefetchCorrectionsSchema = z.object({
+  sessionId: VoiceSessionIdSchema,
+  requests: z.array(VoiceInputCorrectPayloadSchema.omit({ streamId: true })).max(6),
+});
+
+export const VoiceInputRewritePayloadSchema = z.object({
+  selectedText: z.string().min(1).max(VOICE_REWRITE_MAX_SELECTION_CHARS),
+  instruction: z.string().min(1).max(VOICE_REWRITE_MAX_INSTRUCTION_CHARS),
 });
 
 export const SystemOpenExternalPayloadSchema = z.object({
@@ -1017,7 +1176,12 @@ export type CopyTreeCancelPayload = z.infer<typeof CopyTreeCancelPayloadSchema>;
 export type CopyTreeProgress = z.infer<typeof CopyTreeProgressSchema>;
 export type CopyTreeGetFileTreePayload = z.infer<typeof CopyTreeGetFileTreePayloadSchema>;
 export type FileReadPayload = z.infer<typeof FileReadPayloadSchema>;
+export type VoiceInputStartOptions = z.infer<typeof VoiceInputStartOptionsSchema>;
 export type VoiceInputCorrectPayload = z.infer<typeof VoiceInputCorrectPayloadSchema>;
+export type VoiceInputPrefetchCorrectionsPayload = z.infer<
+  typeof VoiceInputPrefetchCorrectionsSchema
+>;
+export type VoiceInputRewritePayload = z.infer<typeof VoiceInputRewritePayloadSchema>;
 export type SystemOpenExternalPayload = z.infer<typeof SystemOpenExternalPayloadSchema>;
 export type SystemOpenPathPayload = z.infer<typeof SystemOpenPathPayloadSchema>;
 export type SystemShowItemInFolderUnconfinedPayload = z.infer<

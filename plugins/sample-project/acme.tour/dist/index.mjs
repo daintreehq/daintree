@@ -38,6 +38,9 @@ export async function activate(host) {
   // — or left over from — a previous activation. Anything that should outlive
   // an activation belongs in `host.storage`, not in a module binding.
   const mountedPanels = new Set();
+  // Media path -> artifact id. The host releases every artifact when the
+  // plugin unloads, so nothing here needs disposing beyond the map itself.
+  const importedMedia = new Map();
 
   // `(ctx, ...args)` — the context is ALWAYS first and the view's payload is
   // second. Declaring `(args) => …` binds the context to `args` and drops the
@@ -50,9 +53,8 @@ export async function activate(host) {
       throw new Error("describe-file requires a path");
     }
 
-    // `host.fs.readFile` resolves to a UTF-8 STRING. There is no binary mode:
-    // anything that isn't text — an image, an mp3 — is fetched by the view over
-    // `daintree-file://` instead. See dist/panel.js.
+    // `host.fs.readFile` resolves to a UTF-8 STRING. Anything that isn't text —
+    // an image, an mp3 — goes through `import-media` below instead.
     //
     // The manifest declares BOTH `${project}` and `${worktree}` for this to
     // work. `${project}` expands to the MAIN worktree only, so declaring it
@@ -68,6 +70,28 @@ export async function activate(host) {
       // round trip; `ctx.projectId` is null only for a plugin with no project.
       projectId: ctx.projectId,
     };
+  });
+
+  // Media is imported into the host's artifact cache (`artifact:store`, plus
+  // the fs read capability for the path's root) and the view gets back the
+  // metadata-only handle — id, name, mimeType, size — never bytes or a path.
+  // Its `MediaPlayer` streams the bytes from the host itself.
+  //
+  // An artifact is a copy taken at import, so the handle is reused while it is
+  // still live rather than re-copying the file on every mount. `stat` answers
+  // null once the host has dropped it (expiry, cache pressure), and the file is
+  // imported afresh.
+  await host.registerHandler("import-media", async (_ctx, args) => {
+    const { path: filePath } = args ?? {};
+    if (typeof filePath !== "string" || filePath.length === 0) {
+      throw new Error("import-media requires a path");
+    }
+    const known = importedMedia.get(filePath);
+    const live = known ? await host.artifacts.stat(known) : null;
+    if (live) return live;
+    const artifact = await host.artifacts.import({ path: filePath });
+    importedMedia.set(filePath, artifact.id);
+    return artifact;
   });
 
   // Opens a SECOND instance of this plugin's own panel. `reuseExisting: false`
@@ -154,5 +178,6 @@ export async function activate(host) {
   return () => {
     unsubscribe();
     mountedPanels.clear();
+    importedMedia.clear();
   };
 }

@@ -3,9 +3,13 @@
  * Issue #2137: Preserve hybrid input bar content when switching projects
  */
 
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { EditorState } from "@codemirror/state";
 import { useTerminalInputStore } from "../terminalInputStore";
+import { getViewWorkspaceId } from "../viewWorkspaceId";
+import { VOICE_RECENT_PROMPT_MAX_CHARS } from "@shared/config/voiceCorrection";
+
+vi.mock("../viewWorkspaceId", () => ({ getViewWorkspaceId: vi.fn(() => null) }));
 
 describe("terminalInputStore", () => {
   beforeEach(() => {
@@ -13,6 +17,7 @@ describe("terminalInputStore", () => {
     useTerminalInputStore.setState({
       draftInputs: new Map(),
       commandHistory: new Map(),
+      sentPrompts: new Map(),
       historyIndex: new Map(),
       tempDraft: new Map(),
       pendingDrafts: new Map(),
@@ -20,6 +25,118 @@ describe("terminalInputStore", () => {
       stashedEditorStates: new Map(),
       externalDraftRevision: 0,
       lastTypedAgentTarget: null,
+    });
+    vi.mocked(getViewWorkspaceId).mockReturnValue(null);
+  });
+
+  describe("sent prompts", () => {
+    const texts = (terminalId: string) =>
+      useTerminalInputStore
+        .getState()
+        .getSentPrompts(terminalId)
+        .map((prompt) => prompt.text);
+
+    it("keeps every send in the order it went, repeats included, unlike recall history", () => {
+      const store = useTerminalInputStore.getState();
+      for (const text of ["fix the build", "  continue \n", "continue", "fix the build", "   "]) {
+        store.addToHistory("term-1", text, "project-a");
+        useTerminalInputStore.getState().recordSentPrompt("term-1", text, 1_000);
+      }
+
+      expect(texts("term-1")).toEqual(["fix the build", "continue", "continue", "fix the build"]);
+      expect(useTerminalInputStore.getState().commandHistory.get("project-a:term-1")).toEqual([
+        "continue",
+        "fix the build",
+      ]);
+      expect(texts("term-2")).toEqual([]);
+    });
+
+    it("keeps the latest sends, counting every one so far", () => {
+      for (let n = 0; n < 9; n++) {
+        useTerminalInputStore.getState().recordSentPrompt("term-1", `prompt ${n}`, 1_000 + n * 10);
+      }
+
+      const sent = useTerminalInputStore.getState().getSentPrompts("term-1");
+      expect(sent).toEqual(
+        [3, 4, 5, 6, 7, 8].map((seq) => ({ text: `prompt ${seq}`, sentAt: 1_000 + seq * 10, seq }))
+      );
+    });
+
+    it("takes back one send, leaving the rest and the count where they were", () => {
+      const store = useTerminalInputStore.getState();
+      const sent = ["one", "two", "three"].map((text) => store.recordSentPrompt("term-1", text));
+      expect(sent.map((prompt) => prompt?.seq)).toEqual([0, 1, 2]);
+      expect(store.recordSentPrompt("term-1", "   ")).toBeNull();
+
+      useTerminalInputStore.getState().retractSentPrompt("term-1", sent[1]!);
+      expect(texts("term-1")).toEqual(["one", "three"]);
+      expect(useTerminalInputStore.getState().recordSentPrompt("term-1", "four")?.seq).toBe(3);
+    });
+
+    it("takes back nothing newer when the refused send's record was cleared first", () => {
+      const pending = useTerminalInputStore.getState().recordSentPrompt("term-1", "refused late")!;
+      useTerminalInputStore.getState().clearTerminalState("term-1");
+      const newer = useTerminalInputStore.getState().recordSentPrompt("term-1", "landed")!;
+      expect(newer.seq).toBe(pending.seq);
+
+      useTerminalInputStore.getState().retractSentPrompt("term-1", pending);
+      expect(texts("term-1")).toEqual(["landed"]);
+    });
+
+    it("keeps only the opening of a long prompt, never half a surrogate pair", () => {
+      const store = useTerminalInputStore.getState();
+      const opening = "x".repeat(VOICE_RECENT_PROMPT_MAX_CHARS - 2);
+      store.recordSentPrompt("term-1", `${opening}😀 and the rest of a pasted log`);
+      store.recordSentPrompt("term-2", "日本語".repeat(VOICE_RECENT_PROMPT_MAX_CHARS));
+      const exact = "y".repeat(VOICE_RECENT_PROMPT_MAX_CHARS);
+      store.recordSentPrompt("term-3", exact);
+
+      expect(texts("term-1")).toEqual([`${opening}…`]);
+      expect(texts("term-2")).toEqual([
+        `${"日本語".repeat(VOICE_RECENT_PROMPT_MAX_CHARS).slice(0, VOICE_RECENT_PROMPT_MAX_CHARS - 1)}…`,
+      ]);
+      expect(texts("term-3")).toEqual([exact]);
+    });
+
+    it("forgets the terminal sent to longest ago past its terminal limit", () => {
+      for (let n = 0; n < 64; n++) {
+        useTerminalInputStore.getState().recordSentPrompt(`term-${n}`, "hello");
+      }
+      useTerminalInputStore.getState().recordSentPrompt("term-0", "again");
+      useTerminalInputStore.getState().recordSentPrompt("term-64", "hello");
+      useTerminalInputStore.getState().recordSentPrompt("term-65", "hello");
+
+      const keys = [...useTerminalInputStore.getState().sentPrompts.keys()];
+      expect(keys).toHaveLength(64);
+      expect(keys).not.toContain("term-1");
+      expect(keys).not.toContain("term-2");
+      expect(texts("term-0")).toEqual(["hello", "again"]);
+    });
+
+    it("is kept by the view's workspace and cleared with the terminal or the project", () => {
+      vi.mocked(getViewWorkspaceId).mockReturnValue("project-a");
+      const store = useTerminalInputStore.getState();
+      store.recordSentPrompt("term-1", "first");
+      store.recordSentPrompt("term-2", "second");
+
+      expect([...useTerminalInputStore.getState().sentPrompts.keys()]).toEqual([
+        "project-a:term-1",
+        "project-a:term-2",
+      ]);
+
+      useTerminalInputStore.getState().clearTerminalState("term-1");
+      expect(texts("term-1")).toEqual([]);
+      expect(texts("term-2")).toEqual(["second"]);
+
+      store.recordSentPrompt("term-3", "kept with its pane");
+      vi.mocked(getViewWorkspaceId).mockReturnValue("project-b");
+      store.recordSentPrompt("term-2", "another workspace's");
+
+      useTerminalInputStore.getState().resetForProjectSwitch("project-a", new Set(["term-3"]));
+      expect([...useTerminalInputStore.getState().sentPrompts.keys()]).toEqual([
+        "project-a:term-3",
+        "project-b:term-2",
+      ]);
     });
   });
 

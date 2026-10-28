@@ -1,7 +1,7 @@
 /**
  * @vitest-environment jsdom
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { useRef } from "react";
 import type { PluginSendToAgentRefusalReason } from "@shared/types/plugin";
@@ -9,20 +9,26 @@ import type { PluginSendToAgentRefusalReason } from "@shared/types/plugin";
 vi.mock("@/clients", () => ({
   terminalClient: { write: vi.fn<(terminalId: string, data: string) => void>() },
 }));
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: { notifyUserInput: vi.fn(), focus: vi.fn(), get: vi.fn(() => null) },
-}));
-const setPreferredTerminalFocusTarget = vi.hoisted(() => vi.fn<(target: string) => void>());
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
+    notifyUserInput: vi.fn(),
+    focus: vi.fn(),
+    get: vi.fn(() => null),
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 vi.mock("@/store/panelStore", () => ({
-  usePanelStore: { getState: () => ({ setPreferredTerminalFocusTarget }) },
+  usePanelStore: { getState: () => ({}) },
 }));
-const { draftAgentContext, getDraftRefusal, focusPanelInput } = vi.hoisted(() => ({
+const { draftAgentContext, getDraftRefusal, requestPaneFocus } = vi.hoisted(() => ({
   draftAgentContext: vi.fn(),
   getDraftRefusal: vi.fn<(terminalId: string) => PluginSendToAgentRefusalReason | null>(),
-  focusPanelInput: vi.fn<(id: string) => boolean>(() => true),
+  requestPaneFocus: vi.fn<(paneId: string, surface: string) => boolean>(() => true),
 }));
 vi.mock("@/services/agentHandoff/agentDraft", () => ({ draftAgentContext, getDraftRefusal }));
-vi.mock("@/components/Panel/panelFocusRegistry", () => ({ focusPanelInput }));
+vi.mock("../paneFocusRequest", () => ({ requestPaneFocus }));
 
 import { useTerminalFileTransfer } from "../useTerminalFileTransfer";
 import { terminalClient } from "@/clients";
@@ -30,8 +36,15 @@ import {
   AGENT_CONTEXT_DRAG_MIME,
   encodeAgentContextDragPayload,
 } from "@shared/utils/agentContextDrag";
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 
 const TERMINAL_ID = "term-1";
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
+});
 
 describe("useTerminalFileTransfer — agent context on the xterm surface", () => {
   let container: HTMLDivElement;
@@ -105,9 +118,11 @@ describe("useTerminalFileTransfer — agent context on the xterm surface", () =>
       sourceLabel: undefined,
     });
     expect(terminalClient.write).not.toHaveBeenCalled();
-    expect(setPreferredTerminalFocusTarget).toHaveBeenCalledWith("hybridInput");
     expect(onDropSelect).toHaveBeenCalledTimes(1);
-    expect(focusPanelInput).toHaveBeenCalledWith(TERMINAL_ID);
+    expect(requestPaneFocus).toHaveBeenCalledExactlyOnceWith(TERMINAL_ID, "hybridInput");
+    expect(onDropSelect.mock.invocationCallOrder[0]!).toBeLessThan(
+      requestPaneFocus.mock.invocationCallOrder[0]!
+    );
   });
 
   it("refuses the drag over a pane with no input bar, and writes nothing to it", () => {
@@ -127,7 +142,7 @@ describe("useTerminalFileTransfer — agent context on the xterm surface", () =>
     expect(drop.event.defaultPrevented).toBe(true);
     expect(terminalClient.write).not.toHaveBeenCalled();
     expect(onDropSelect).not.toHaveBeenCalled();
-    expect(focusPanelInput).not.toHaveBeenCalled();
+    expect(requestPaneFocus).not.toHaveBeenCalled();
   });
 
   it("refuses a drag that also carries files over a shell, rather than showing a file target", () => {

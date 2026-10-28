@@ -3,13 +3,17 @@ import { app, safeStorage } from "electron";
 import { CHANNELS } from "../../ipc/channels.js";
 import { store } from "../../store.js";
 import { getAllAppWebContents } from "../../window/webContentsRegistry.js";
+import { getWindowRegistry } from "../../window/windowRef.js";
+import { onProjectPresenceChanged } from "../../window/projectPresenceChanges.js";
+import { getStagedUpdate, onStagedUpdateChanged } from "../../services/stagedUpdateState.js";
 import type { HostModeEvent, HostModeStatus } from "../../../shared/types/ipc/hostMode.js";
 import { getLocalHandshakeInfo } from "../handshakeInfo.js";
 import { HostAdvertiser } from "./advertise.js";
+import { clearAdvertRecord, reapOrphanedAdvert, saveAdvertRecord } from "./advertRecord.js";
 import { runCommand, spawnOwnedProcess } from "./hostCommands.js";
 import { hostLocation, startHostListener } from "./hostListener.js";
 import { HostModeService, type HostModeSettings } from "./HostModeService.js";
-import { writeHostModeStatusFile } from "./hostModeStatusFile.js";
+import { readHostModeStatusFile, writeHostModeStatusFile } from "./hostModeStatusFile.js";
 import type { HostSocketLocation } from "./hostSocketPath.js";
 import {
   runningAppImage,
@@ -92,6 +96,8 @@ export function createHostModeService(
     // Reported through the listener's own error when it tries to start.
   }
   const statusDir = socketDir;
+  // Whatever the settings now say: an advert the last launch left behind keeps announcing this machine.
+  if (statusDir) reapOrphanedAdvert(statusDir);
   return new HostModeService({
     platform: process.platform,
     readSettings,
@@ -105,6 +111,12 @@ export function createHostModeService(
         hostName: os.hostname(),
         handshake: getLocalHandshakeInfo(),
         spawn: spawnOwnedProcess,
+        record: statusDir
+          ? {
+              save: (child) => void saveAdvertRecord(statusDir, child),
+              clear: (pid) => clearAdvertRecord(statusDir, pid),
+            }
+          : undefined,
         onChange,
       }),
     keychain: {
@@ -115,6 +127,7 @@ export function createHostModeService(
     },
     run: runCommand,
     broadcast: broadcastLocal,
+    readStatus: statusDir ? () => readHostModeStatusFile(statusDir) : undefined,
     writeStatus: statusDir
       ? (observation) => {
           const { version, commit } = getLocalHandshakeInfo();
@@ -126,5 +139,21 @@ export function createHostModeService(
           });
         }
       : undefined,
+    runtime: {
+      read: () => ({
+        // Minimized or hidden still counts: someone at the machine has it open.
+        windows: (getWindowRegistry()?.all() ?? []).some((ctx) => !ctx.browserWindow.isDestroyed()),
+        stagedUpdate: getStagedUpdate(),
+      }),
+      subscribe: (onChange) => {
+        // Window registration and removal both pass through this invalidation.
+        const offWindows = onProjectPresenceChanged(onChange);
+        const offStaged = onStagedUpdateChanged(onChange);
+        return () => {
+          offWindows();
+          offStaged();
+        };
+      },
+    },
   });
 }

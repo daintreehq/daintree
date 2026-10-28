@@ -1,5 +1,4 @@
 import { Profiler, Suspense, useCallback, useEffect, useRef, useState } from "react";
-import "@xterm/xterm/css/xterm.css";
 import {
   isElectronAvailable,
   useAgentLauncher,
@@ -27,6 +26,8 @@ import { usePluginPanelMenuSubscription } from "./store/pluginPanelMenuStore";
 import { usePluginAgents } from "./hooks/usePluginAgents";
 import { usePluginRecipes } from "./hooks/usePluginRecipes";
 import { usePluginTours } from "./hooks/usePluginTours";
+import { usePluginLayouts } from "./hooks/usePluginLayouts";
+import { usePluginThemes } from "./hooks/usePluginThemes";
 import { usePluginIcons } from "./hooks/usePluginIcons";
 import { usePluginKeybindings } from "./hooks/usePluginKeybindings";
 import { usePluginMcpConsentBridge } from "./hooks/usePluginMcpConsentBridge";
@@ -47,6 +48,7 @@ import {
   useRosettaWarning,
   useAccessibilityAnnouncements,
   useUnloadCleanup,
+  usePanelRecoveryResponder,
   useHomeDir,
   usePerformanceMonitors,
   useSettingsDialog,
@@ -57,8 +59,11 @@ import {
   useActiveWorktreeSync,
   useAgentActivityBroadcast,
   useCanopySeenTracking,
+  usePluginPanelActivitySeenTracking,
   useCanopySnapshotSync,
   useCanopyDoubleShift,
+  useWorktreeCustomTitlesSync,
+  useReviewMarksSync,
 } from "./hooks/app";
 import { useResourceProfile } from "./hooks/useResourceProfile";
 import { AppLayout } from "./components/Layout";
@@ -69,6 +74,7 @@ import { useTypeAnywhere } from "./hooks/useTypeAnywhere";
 import { useResumeAgentSession } from "./hooks/useResumeAgentSession";
 import { VoiceRecordingAnnouncer } from "./components/Terminal/VoiceRecordingAnnouncer";
 import { usePendingHostSwitchSync } from "./hooks/usePendingHostSwitchSync";
+import { HostSwitchScreenHost } from "./components/HostSwitch/HostSwitchScreenHost";
 import { AccessibilityAnnouncer } from "./components/Accessibility/AccessibilityAnnouncer";
 import { CopyFlash } from "./components/ui/CopyFlash";
 import { TooltipProvider } from "./components/ui/tooltip";
@@ -109,7 +115,7 @@ import { voiceRecordingService } from "./services/VoiceRecordingService";
 import { useRenderProfiler } from "./utils/renderProfiler";
 import { logError } from "./utils/logger";
 
-import { SidebarContent, E2EFaultInjector } from "./components/Sidebar";
+import { SidebarContent, SidebarViewHost, E2EFaultInjector } from "./components/Sidebar";
 import { ensureHydrationBootstrap } from "./utils/stateHydration/bootstrapGuard";
 
 // Kick the hydration-bootstrap IPC pair (keybinding overrides + user-agent
@@ -124,6 +130,7 @@ void ensureHydrationBootstrap().catch(() => {});
 function AppInner() {
   useErrors();
   useUnloadCleanup();
+  usePanelRecoveryResponder();
   useResourceProfile();
   usePowerSavingMotion();
   useOverlayClaimCountMarker();
@@ -139,10 +146,11 @@ function AppInner() {
 
   const focusedId = usePanelStore((state) => state.focusedId);
 
-  const { launchAgent, availability, agentSettings, refreshSettings } = useAgentLauncher();
+  const { launchAgent, availability, refreshSettings } = useAgentLauncher();
 
   useTerminalConfig();
   useAppThemeConfig();
+  usePluginThemes();
   useWindowNotifications();
   useWatchedPanelNotifications();
   const reEntrySummary = useReEntrySummary();
@@ -176,6 +184,7 @@ function AppInner() {
     isThemePaletteOpen,
     isLogLevelPaletteOpen,
     isResumeSessionsPaletteOpen,
+    isRecentDictationsPaletteOpen,
     isProjectSwitcherModalOpen,
     shouldMountQuickSwitcher,
     shouldMountSendToAgentPalette,
@@ -185,6 +194,7 @@ function AppInner() {
     shouldMountPanelPalette,
     shouldMountThemePalette,
     shouldMountResumeSessionsPalette,
+    shouldMountRecentDictationsPalette,
     shouldMountLogLevelPalette,
     shouldMountActionPalette,
   } = usePaletteWiring({ isWorktreeOverviewOpen });
@@ -237,7 +247,10 @@ function AppInner() {
   const { activeWorktreeId: liveActiveWorktreeId, defaultTerminalCwd } = useActiveWorktreeSync();
   useAgentActivityBroadcast();
   useCanopySnapshotSync();
+  useWorktreeCustomTitlesSync();
+  useReviewMarksSync();
   useCanopySeenTracking();
+  usePluginPanelActivitySeenTracking();
   useCanopyDoubleShift();
   const resumeSession = useResumeAgentSession();
 
@@ -297,6 +310,7 @@ function AppInner() {
   const {
     gitPushResetKey,
     gitForcePushResetKey,
+    projectSleepResetKey,
     gitPullRebaseResetKey,
     fileMutationResetKey,
     gitWorktreeOperationResetKey,
@@ -404,6 +418,7 @@ function AppInner() {
   usePluginAgents();
   usePluginRecipes();
   usePluginTours();
+  usePluginLayouts();
   usePluginIcons();
   usePluginKeybindings();
   usePluginMcpConsentBridge();
@@ -421,12 +436,12 @@ function AppInner() {
   useGlobalEscapeDispatcher();
 
   // App lifecycle hooks
-  usePanelStoreBootstrap(bootResult?.terminalConfig ?? null);
+  usePanelStoreBootstrap();
   useCloudSyncWarning(homeDir);
   useRosettaWarning(bootResult);
   useAccessibilityAnnouncements();
-  // A switch to another host that is taking a while says so, can be cancelled,
-  // and holds typing back until it lands.
+  // A switch to another host shows its screen from the start, can be
+  // cancelled, and holds typing back until it lands.
   usePendingHostSwitchSync();
 
   useEffect(() => {
@@ -499,11 +514,11 @@ function AppInner() {
                   onSettings={handleSettings}
                   onPreloadSettings={handlePreloadSettings}
                   agentAvailability={availability}
-                  agentSettings={agentSettings}
                   isHydrated={false}
                   projectSwitcherPalette={projectSwitcherPalette}
                 />
               </DndProvider>
+              <HostSwitchScreenHost />
             </TooltipProvider>
           </ErrorBoundary>
         </MotionConfig>
@@ -527,14 +542,17 @@ function AppInner() {
               <CopyFlash />
               <Profiler id="app-layout" onRender={onLayoutRender}>
                 <AppLayout
-                  sidebarContent={<SidebarContent onOpenOverview={openWorktreeOverview} />}
+                  sidebarContent={
+                    <SidebarViewHost>
+                      <SidebarContent onOpenOverview={openWorktreeOverview} />
+                    </SidebarViewHost>
+                  }
                   onLaunchAgent={handleLaunchAgent}
                   onSettings={handleSettings}
                   onPreloadSettings={handlePreloadSettings}
                   onRetry={handleErrorRetry}
                   onCancelRetry={handleCancelRetry}
                   agentAvailability={availability}
-                  agentSettings={agentSettings}
                   isHydrated={isStateLoaded}
                   projectSwitcherPalette={projectSwitcherPalette}
                 >
@@ -558,6 +576,7 @@ function AppInner() {
                 </AppLayout>
               </Profiler>
             </DndProvider>
+            <HostSwitchScreenHost />
 
             <Suspense fallback={null}>
               <LazyModalHostLayer
@@ -584,6 +603,8 @@ function AppInner() {
                 closeThemePalette={closeThemePalette}
                 isResumeSessionsPaletteOpen={isResumeSessionsPaletteOpen}
                 shouldMountResumeSessionsPalette={shouldMountResumeSessionsPalette}
+                isRecentDictationsPaletteOpen={isRecentDictationsPaletteOpen}
+                shouldMountRecentDictationsPalette={shouldMountRecentDictationsPalette}
                 isLogLevelPaletteOpen={isLogLevelPaletteOpen}
                 shouldMountLogLevelPalette={shouldMountLogLevelPalette}
                 closeLogLevelPalette={closeLogLevelPalette}
@@ -624,6 +645,7 @@ function AppInner() {
                 diagnosticsReviewResetKey={diagnosticsReviewResetKey}
                 gitPushResetKey={gitPushResetKey}
                 gitForcePushResetKey={gitForcePushResetKey}
+                projectSleepResetKey={projectSleepResetKey}
                 gitPullRebaseResetKey={gitPullRebaseResetKey}
                 fileMutationResetKey={fileMutationResetKey}
                 gitWorktreeOperationResetKey={gitWorktreeOperationResetKey}

@@ -15,7 +15,8 @@ import type { PowerPolicyLevel } from "./powerPolicy.js";
 import type { BuiltInAgentId } from "../config/agentIds.js";
 import type { AgentConfig } from "../config/agentRegistry.js";
 import type { AgentSessionRecord } from "./ipc/agentSessionHistory.js";
-import type { AgentEndObservation } from "./ipc/agent.js";
+import type { AgentEndObservation, AgentFallbackTriggeredPayload } from "./ipc/agent.js";
+import type { RequiredPluginToolStatus } from "./ipc/pluginAgentMcp.js";
 import type { SemanticSearchMatch, TerminalInfoPayload } from "./ipc/terminal.js";
 import type { WorkerResourceSnapshot } from "./workerGovernance.js";
 import type { MemorySource } from "./memoryAccounting.js";
@@ -66,6 +67,12 @@ export interface PtyHostSpawnOptions {
    * `docs/architecture/terminal-identity.md`.
    */
   launchAgentId?: AgentId;
+  /**
+   * The plugin kind a PTY-backed plugin panel was opened as (#13213). Rides the
+   * spawn cache so Main's lifecycle observer can tell a plugin's terminal from a
+   * plain shell (#13814); the pty-host ignores it.
+   */
+  pluginPanelKindId?: string;
   title?: string;
   /** Title ownership rung at spawn — lets the backend skip its own default-title rewrites for pinned titles. */
   titleMode?: PanelTitleMode;
@@ -277,6 +284,8 @@ export type PtyHostRequest =
   | { type: "stage"; id: string; text: string }
   /** Take back a guarded submission before its Enter (#12491). Ordinary ones are unaffected. */
   | { type: "withdraw-submission"; id: string; submissionToken: string }
+  /** Drop input queued for the PTY but not yet written; input stays open. */
+  | { type: "cancel-pending-input"; id: string }
   | { type: "batch-double-escape"; ids: string[] }
   | { type: "kill"; id: string; reason?: string; escalationDelayMs?: number }
   | { type: "trash"; id: string }
@@ -679,7 +688,16 @@ export type PtyHostEvent =
     }
   // `launchGeneration` attributes the exit to one terminal incarnation so a
   // stale exit arriving after a same-id respawn can't close the successor.
-  | { type: "exit"; id: string; exitCode: number; signal?: number; launchGeneration?: number }
+  // `preserveSession` marks an exit a session-preserving project teardown
+  // caused, so the renderer keeps the pane in the layout (#13841).
+  | {
+      type: "exit";
+      id: string;
+      exitCode: number;
+      signal?: number;
+      launchGeneration?: number;
+      preserveSession?: boolean;
+    }
   | { type: "error"; id: string; error: string }
   // Typed submit-lane status (#11875). Deliberately NOT folded into the `error`
   // carrier above: "this prompt is taking a while" is not an error, and the
@@ -771,6 +789,11 @@ export type PtyHostEvent =
       timestamp: number;
     }
   | {
+      /** This pane may move to its next fallback preset (#14370). */
+      type: "agent-fallback-triggered";
+      payload: AgentFallbackTriggeredPayload;
+    }
+  | {
       type: "agent-detected";
       terminalId: string;
       /** Detected agent identity (lowercase built-in agent id) if a known agent is running. */
@@ -803,6 +826,8 @@ export type PtyHostEvent =
   | { type: "agent-killed"; payload: AgentKilledPayload }
   | { type: "terminal-trashed"; id: string; expiresAt: number }
   | { type: "terminal-restored"; id: string }
+  /** The trash let a terminal go without a restore: removed for good, or expired. */
+  | { type: "terminal-trash-cleared"; id: string; expiresAt: number }
   | {
       /**
        * The pty-host captured a resumable session — trash expiry, a natural
@@ -1135,6 +1160,14 @@ export interface PtyHostTerminalInfo {
   /** Last input that could have put text in the composer, ignoring xterm's own reports (#12491). */
   lastTypedInputAt?: number;
   lastOutputTime?: number;
+  /** A submission is queued or still being written; absent from older hosts. */
+  hasPendingSubmission?: boolean;
+  /**
+   * Since when a mirror has read every byte of this terminal's output, so its
+   * agent state and visible-change stamp cover that span. Absent while nothing
+   * reads it (no analysis worker left, reads paused) and from older hosts.
+   */
+  outputObservedSince?: number;
   spawnedAt: number;
   isTrashed?: boolean;
   trashExpiresAt?: number;
@@ -1254,6 +1287,7 @@ export type SpawnErrorCode =
   | "PENDING_SPAWNS_CAPPED" // PtyClient.pendingSpawns admission cap hit (restart-storm guard)
   | "TERMINAL_ALREADY_LIVE" // Spawn rejected: the id already has a live owner (#11341)
   | "SPAWN_TIMEOUT" // No spawn result from the pty-host within the confirmation window (#12754)
+  | "REQUIRED_PLUGIN_TOOLS" // Agent launch refused: plugin tools it requires weren't ready (#14096)
   | "UNKNOWN"; // Unknown error
 
 /** Result of a spawn operation */
@@ -1276,6 +1310,8 @@ export interface SpawnError {
   errno?: number;
   syscall?: string;
   path?: string;
+  /** `REQUIRED_PLUGIN_TOOLS` only: where each required plugin's tools stood. */
+  pluginTools?: RequiredPluginToolStatus[];
 }
 
 /** Crash type classification based on exit codes */
@@ -1330,7 +1366,8 @@ export type TerminalSubmitStatusState = "slow" | "stalled" | "settled" | "failed
  *
  * `settled-prompt-strict` is the same check without mid-turn queueing, even
  * for a CLI that queues input while it works: a brief one assistant sends
- * another (#13496) is refused rather than taken in the middle of a turn.
+ * another (#13496) is refused rather than taken in the middle of a turn. A
+ * question the agent asked in prose still counts as its prompt (#14475).
  */
 export type TerminalSubmitGuard = "settled-prompt" | "settled-prompt-strict";
 

@@ -19,6 +19,7 @@ import {
   type SpacedFilePathCandidate,
 } from "./filePathDetection";
 import { fileBrowserClient } from "@/clients/fileBrowserClient";
+import { grantClickedHostFile } from "./clickedHostFile";
 import type { TerminalLink } from "./types";
 
 // Coalesce key for file-link activation failures. A user who scrolls a stack
@@ -1311,20 +1312,38 @@ class FileLink implements ILink {
           reportFileLinkFailure("Failed to open in editor", error, this._absolutePath);
         });
     } else {
-      actionService
-        .dispatch(
-          "file.view",
-          { path: this._absolutePath, rootPath: this._rootPath, line: this._line, col: this._col },
-          { source: "user" }
-        )
-        .then((result) => {
-          if (result.ok) return;
-          return systemClient.openPath(this._absolutePath);
-        })
-        .catch((error) => {
-          reportFileLinkFailure("Failed to view file", error, this._absolutePath);
-        });
+      this._view().catch((error) => {
+        reportFileLinkFailure("Failed to view file", error, this._absolutePath);
+      });
     }
+  }
+
+  /**
+   * The viewer dialog — unless a project plugin made its editor the default for
+   * the file (#13811). The dialog stays read-only, so that file opens in a panel
+   * with the plugin's editor instead, as a double-click in the file browser
+   * would. `file.openPanel` resolves the default again itself; this only picks
+   * the route, and a panel that can't open falls back to the dialog.
+   */
+  private async _view(): Promise<void> {
+    await grantClickedHostFile(this._absolutePath);
+    // Lazy, like the project store import above: the resolver reads that store.
+    const { currentFileEditorDefault } = await import("@/registry/fileEditorDefaults");
+    if (currentFileEditorDefault(this._absolutePath) !== null) {
+      const opened = await actionService.dispatch(
+        "file.openPanel",
+        { path: this._absolutePath },
+        { source: "user" }
+      );
+      if (opened.ok) return;
+    }
+    const result = await actionService.dispatch(
+      "file.view",
+      { path: this._absolutePath, rootPath: this._rootPath, line: this._line, col: this._col },
+      { source: "user" }
+    );
+    if (result.ok) return;
+    await systemClient.openPath(this._absolutePath);
   }
 
   hover?(_event: MouseEvent, _text: string): void {

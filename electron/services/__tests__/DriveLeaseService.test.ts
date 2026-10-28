@@ -1,5 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const loggerMock = vi.hoisted(() => ({
+  debug: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+}));
+
+vi.mock("../../utils/logger.js", () => ({
+  createLogger: () => loggerMock,
+}));
+
 vi.mock("electron", () => ({
   webContents: { fromId: vi.fn(() => null), getAllWebContents: vi.fn(() => []) },
   BrowserWindow: { fromWebContents: vi.fn(() => null), getAllWindows: vi.fn(() => []) },
@@ -10,6 +21,7 @@ import {
   DriveLeaseService,
   NAVIGATION_CHANGED_DELAY_MS,
   PANELS_CHANGED_DELAY_MS,
+  type DriveLeaseReservation,
 } from "../DriveLeaseService.js";
 import { EndpointRegistryImpl } from "../../ipc/endpointRegistry.js";
 import type { ClientEndpoint, Disposable, HostFrame } from "../../ipc/endpoint.js";
@@ -92,6 +104,7 @@ async function settle(): Promise<void> {
 
 beforeEach(() => {
   vi.useFakeTimers();
+  loggerMock.info.mockClear();
   registry = new EndpointRegistryImpl();
   leaseTables = [];
   changes = [];
@@ -168,6 +181,87 @@ describe("DriveLeaseService", () => {
     other.projectId = "q";
     expect(service.getHolder("p")?.endpointId).toBe("local:2");
     expect(changes.map((change) => change.holder?.clientId)).toEqual(["local"]);
+  });
+
+  it("reports each lease live, or away with the deadline its grace set, and lets it pass on", async () => {
+    let now = 1_000;
+    const own = new DriveLeaseService({
+      registry,
+      releaseGraceMs: GRACE_MS,
+      now: () => now,
+      applyDriveLeases: () => {},
+    });
+    const laptop = remote("s1:e1", "c1");
+    const studio = remote("s2:e1", "c2", "q");
+    registry.add(laptop);
+    registry.add(studio);
+    await settle();
+    expect(own.snapshotLeases()).toEqual([
+      {
+        projectId: "p",
+        holder: expect.objectContaining({ clientId: "c1", endpointId: "s1:e1" }),
+        state: "live",
+        awayUntil: null,
+      },
+      {
+        projectId: "q",
+        holder: expect.objectContaining({ clientId: "c2", endpointId: "s2:e1" }),
+        state: "live",
+        awayUntil: null,
+      },
+    ]);
+
+    own.noteEndpointTransport([laptop.endpointId], false);
+    now = 1_500;
+    // Read again and again, the reservation still ends when the drop set it to.
+    for (let i = 0; i < 3; i++) {
+      expect(own.snapshotLeases()[0]).toMatchObject({
+        projectId: "p",
+        state: "away",
+        awayUntil: 1_000 + GRACE_MS,
+      });
+    }
+    vi.advanceTimersByTime(GRACE_MS);
+    expect(own.snapshotLeases().map((lease) => lease.projectId)).toEqual(["q"]);
+    own.dispose();
+  });
+
+  it("settles nothing when its leases are read, where a getter would (#13939)", async () => {
+    const own = new DriveLeaseService({
+      registry,
+      releaseGraceMs: GRACE_MS,
+      now: () => 1_000,
+      applyDriveLeases: () => {},
+    });
+    const ownChanges: DriveLeaseState[] = [];
+    own.onChange((state) => ownChanges.push(state));
+    const hostWindow = local(1);
+    const other = local(2);
+    registry.add(hostWindow);
+    registry.add(other);
+    registry.add(remote("s1:e1", "greg-mbp-id"));
+    await settle();
+    own.takeOver("p", hostWindow);
+    ownChanges.length = 0;
+    const timers = vi.getTimerCount();
+
+    // The holder moved off the project without the registry hearing of it.
+    hostWindow.projectId = "q";
+    expect(own.snapshotLeases()).toEqual([
+      {
+        projectId: "p",
+        holder: expect.objectContaining({ endpointId: "local:1" }),
+        state: "away",
+        awayUntil: null,
+      },
+    ]);
+    expect(ownChanges).toEqual([]);
+    expect(vi.getTimerCount()).toBe(timers);
+
+    // A getter settles it onto the holder's other window; the read above didn't.
+    expect(own.getHolder("p")?.endpointId).toBe("local:2");
+    expect(ownChanges).toHaveLength(1);
+    own.dispose();
   });
 
   it("settles a lease nobody holds when views come back after it was released (#13285)", async () => {
@@ -344,6 +438,27 @@ describe("DriveLeaseService", () => {
     expect(service.getHolder("p")?.endpointId).toBe("s2:e1");
   });
 
+  it("hands the lease to a view reopened under its holder's id, on the new view's connection", async () => {
+    const hostWindow = local(1);
+    const laptop = remote("s1:e1", "c1");
+    registry.add(hostWindow);
+    registry.add(laptop);
+    await settle();
+    const taken = service.takeOver("p", laptop);
+
+    // Closed and opened again before the registry's change settles.
+    laptop.close();
+    const reopened = remote("s1:e1", "c1");
+    registry.add(reopened);
+    await settle();
+
+    const [published] = leaseTables.at(-1)!;
+    expect(published).toMatchObject({ projectId: "p", holderConnection: reopened.handle });
+    expect(published!.leaseId).toBeGreaterThan(taken.leaseId);
+    expect(service.getHolder("p")?.leaseId).toBe(published!.leaseId);
+    expect(service.isDriving("p", reopened)).toBe(true);
+  });
+
   it("releases to nobody when no one is left on the project", async () => {
     const laptop = remote("s1:e1", "c1");
     registry.add(laptop);
@@ -357,6 +472,52 @@ describe("DriveLeaseService", () => {
     expect(service.getState("p").holder).toBeNull();
     expect(changes.at(-1)).toEqual({ projectId: "p", holder: null });
     expect(arbitrated()).toEqual([]);
+  });
+
+  it("keeps one tenure while a client holds the project, and starts another for anyone else", async () => {
+    const hostWindow = local(1);
+    const laptop = remote("s1:e1", "c1");
+    const other = remote("s9:e1", "c2");
+    registry.add(hostWindow);
+    registry.add(laptop);
+    registry.add(other);
+    await settle();
+    const taken = service.takeOver("p", laptop);
+    expect(taken.tenureId).toEqual(expect.any(String));
+
+    // Its link drops and resumes, then its window comes back on a new session.
+    service.noteEndpointTransport([laptop.endpointId], false);
+    service.noteEndpointTransport([laptop.endpointId], true);
+    laptop.close();
+    await settle();
+    const reopened = remote("s2:e1", "c1");
+    registry.add(reopened);
+    await settle();
+    const regranted = service.getHolder("p")!;
+    expect(regranted.leaseId).toBeGreaterThan(taken.leaseId);
+    expect(regranted.tenureId).toBe(taken.tenureId);
+    expect(reopened.events().at(-1)?.state.holder?.tenureId).toBe(taken.tenureId);
+
+    const elsewhere = service.takeOver("p", other);
+    expect(elsewhere.tenureId).not.toBe(taken.tenureId);
+    const back = service.takeOver("p", reopened);
+    expect(new Set([taken.tenureId, elsewhere.tenureId, back.tenureId]).size).toBe(3);
+  });
+
+  it("starts a new tenure once nobody held the project", async () => {
+    const laptop = remote("s1:e1", "c1");
+    registry.add(laptop);
+    await settle();
+    const first = service.getHolder("p")!;
+
+    service.noteEndpointTransport([laptop.endpointId], false);
+    vi.advanceTimersByTime(GRACE_MS);
+    expect(service.getState("p").holder).toBeNull();
+    service.noteEndpointTransport([laptop.endpointId], true);
+
+    const regranted = service.getHolder("p")!;
+    expect(regranted.endpointId).toBe("s1:e1");
+    expect(regranted.tenureId).not.toBe(first.tenureId);
   });
 
   it("treats a remote view rebound to another project as having left", async () => {
@@ -483,12 +644,104 @@ describe("DriveLeaseService", () => {
   it("reports an unleased project as vacant", () => {
     expect(service.getDriveTarget("empty")).toEqual({ kind: "vacant" });
   });
+
+  it("tells the other views a dropped holder is away and how long its grace has left, then that it is back (#13937)", async () => {
+    service.dispose();
+    let clock = 1_000;
+    service = new DriveLeaseService({
+      registry,
+      releaseGraceMs: GRACE_MS,
+      now: () => clock,
+      applyDriveLeases: (leases) => leaseTables.push(leases),
+    });
+    service.onChange((state) => changes.push(state));
+    const hostWindow = local(1);
+    const laptop = remote("s1:e1", "c1");
+    registry.add(hostWindow);
+    registry.add(laptop);
+    await settle();
+    const taken = service.takeOver("p", laptop);
+    expect(service.viewFor("p", hostWindow)).not.toHaveProperty("holderAwayMs");
+    const heard = hostWindow.events().length;
+    const holderChanges = changes.length;
+
+    service.noteEndpointTransport([laptop.endpointId], false);
+    expect(hostWindow.events()).toHaveLength(heard + 1);
+    expect(hostWindow.events().at(-1)?.state).toMatchObject({
+      holder: taken,
+      holderAwayMs: GRACE_MS,
+    });
+
+    clock += 400;
+    vi.advanceTimersByTime(400);
+    expect(service.viewFor("p", hostWindow).holderAwayMs).toBe(GRACE_MS - 400);
+    // Reading the lease while it waits announces nothing more.
+    service.getHolder("p");
+    service.getDriveTarget("p");
+    expect(hostWindow.events()).toHaveLength(heard + 1);
+
+    service.noteEndpointTransport([laptop.endpointId], true);
+    expect(hostWindow.events()).toHaveLength(heard + 2);
+    expect(hostWindow.events().at(-1)?.state.holder).toBe(taken);
+    expect(hostWindow.events().at(-1)?.state).not.toHaveProperty("holderAwayMs");
+    expect(service.viewFor("p", hostWindow)).not.toHaveProperty("holderAwayMs");
+    // Nobody new holds it: no holder change goes out to the remote sessions.
+    expect(changes).toHaveLength(holderChanges);
+  });
+
+  it("taking control from an away holder lands at once, and its old grace hands nothing on", async () => {
+    const hostWindow = local(1);
+    const laptop = remote("s1:e1", "c1");
+    const studio = remote("s2:e1", "c2");
+    registry.add(hostWindow);
+    registry.add(laptop);
+    registry.add(studio);
+    await settle();
+    service.takeOver("p", laptop);
+    service.noteEndpointTransport([laptop.endpointId], false);
+    expect(studio.events().at(-1)?.state.holderAwayMs).toBe(GRACE_MS);
+
+    const taken = service.takeOver("p", studio);
+    expect(service.getHolder("p")).toBe(taken);
+    for (const endpoint of [hostWindow, studio]) {
+      expect(endpoint.events().at(-1)?.state.holder).toBe(taken);
+      expect(endpoint.events().at(-1)?.state).not.toHaveProperty("holderAwayMs");
+    }
+
+    vi.advanceTimersByTime(GRACE_MS * 2);
+    expect(service.getHolder("p")).toBe(taken);
+    expect(service.viewFor("p", hostWindow)).not.toHaveProperty("holderAwayMs");
+  });
+
+  it("says a closed holder is away until the grace hands the project on", async () => {
+    const hostWindow = local(1);
+    const laptop = remote("s1:e1", "c1");
+    registry.add(hostWindow);
+    registry.add(laptop);
+    await settle();
+    service.takeOver("p", laptop);
+
+    laptop.close();
+    await settle();
+    expect(hostWindow.events().at(-1)?.state).toMatchObject({
+      holder: { clientId: "c1" },
+      holderAwayMs: GRACE_MS,
+    });
+
+    vi.advanceTimersByTime(GRACE_MS);
+    const handedOn = hostWindow.events().at(-1)?.state;
+    expect(handedOn?.holder).toMatchObject({ endpointId: "local:1" });
+    expect(handedOn).not.toHaveProperty("holderAwayMs");
+  });
 });
 
 describe("DriveLeaseService and a Canopy panel reading this host (#13387)", () => {
   // Never registered: a viewer is a caller, not a view of a project.
-  const viewerFrom = (clientId: string) =>
-    new FakeEndpoint("canopy-viewer:v1", clientId, null, "remote-view");
+  const viewerFrom = (clientId: string, linkSessionId?: string) =>
+    Object.assign(
+      new FakeEndpoint("canopy-viewer:v1", clientId, null, "remote-view"),
+      linkSessionId === undefined ? {} : { linkSessionId }
+    );
   const laptopClient = {
     clientId: "greg-mbp-id",
     clientName: "greg-mbp",
@@ -498,8 +751,8 @@ describe("DriveLeaseService and a Canopy panel reading this host (#13387)", () =
 
   it("types where its own machine's window holds the project, and nowhere another does", async () => {
     const hostWindow = local(1);
-    const laptopWindow = remote("s1:e1", "greg-mbp-id");
-    const studioWindow = remote("s2:e1", "studio-id");
+    const laptopWindow = remote("remote:s1:e1", "greg-mbp-id");
+    const studioWindow = remote("remote:s2:e1", "studio-id");
     for (const endpoint of [hostWindow, laptopWindow, studioWindow]) registry.add(endpoint);
     service.noteEndpointClient(laptopWindow.endpointId, laptopClient);
     service.noteEndpointClient(studioWindow.endpointId, {
@@ -508,7 +761,7 @@ describe("DriveLeaseService and a Canopy panel reading this host (#13387)", () =
       clientName: "studio",
     });
     await settle();
-    const laptopViewer = viewerFrom("greg-mbp-id");
+    const laptopViewer = viewerFrom("greg-mbp-id", "s1");
 
     service.takeOver("p", laptopWindow);
     expect(service.isDriving("p", laptopViewer)).toBe(true);
@@ -525,13 +778,13 @@ describe("DriveLeaseService and a Canopy panel reading this host (#13387)", () =
 
   it("is held to the same rule as its machine, taking nothing by typing", async () => {
     const hostWindow = local(1);
-    const laptopWindow = remote("s1:e1", "greg-mbp-id");
+    const laptopWindow = remote("remote:s1:e1", "greg-mbp-id");
     registry.add(hostWindow);
     registry.add(laptopWindow);
     service.noteEndpointClient(laptopWindow.endpointId, laptopClient);
     await settle();
     const holder = service.takeOver("p", laptopWindow);
-    const laptopViewer = viewerFrom("greg-mbp-id");
+    const laptopViewer = viewerFrom("greg-mbp-id", "s1");
 
     expect(service.isDriving("p", laptopViewer)).toBe(true);
     // Driving through its machine's lease is not holding it.
@@ -540,8 +793,8 @@ describe("DriveLeaseService and a Canopy panel reading this host (#13387)", () =
   });
 
   it("leaves another machine's ordinary windows as they were", async () => {
-    const laptopWindow = remote("s1:e1", "greg-mbp-id");
-    const laptopSecondWindow = remote("s1:e2", "greg-mbp-id");
+    const laptopWindow = remote("remote:s1:e1", "greg-mbp-id");
+    const laptopSecondWindow = remote("remote:s1:e2", "greg-mbp-id");
     registry.add(laptopWindow);
     registry.add(laptopSecondWindow);
     service.noteEndpointClient(laptopWindow.endpointId, laptopClient);
@@ -559,6 +812,113 @@ describe("DriveLeaseService and a Canopy panel reading this host (#13387)", () =
     service.takeOver("p", hostWindow);
 
     expect(service.isDriving("p", viewerFrom("local"))).toBe(true);
+  });
+
+  it("drives nowhere another session holds, even under the holder's client id (#14679)", async () => {
+    const hostWindow = local(1);
+    const laptopWindow = remote("remote:s1:e1", "greg-mbp-id");
+    registry.add(hostWindow);
+    registry.add(laptopWindow);
+    service.noteEndpointClient(laptopWindow.endpointId, laptopClient);
+    await settle();
+    service.takeOver("p", laptopWindow);
+
+    // Another Shell connected under the laptop's client id has a session of its own.
+    const impostor = viewerFrom("greg-mbp-id", "s9");
+    expect(service.isDriving("p", impostor)).toBe(false);
+    expect(service.drivingLeaseId("p", impostor)).toBe(false);
+    expect(service.projectsDrivenElsewhere(impostor).get("p")?.clientId).toBe("greg-mbp-id");
+    // A remote viewer that names no session stands for none.
+    expect(service.isDriving("p", viewerFrom("greg-mbp-id"))).toBe(false);
+    // Nor does one on the right session reach the host's own windows' projects.
+    service.takeOver("p", hostWindow);
+    expect(service.isDriving("p", viewerFrom("greg-mbp-id", "s1"))).toBe(false);
+    expect(service.isDriving("p", viewerFrom("local"))).toBe(true);
+  });
+
+  it("types anywhere while nobody holds the project", () => {
+    expect(service.isDriving("p", viewerFrom("greg-mbp-id", "s9"))).toBe(true);
+  });
+});
+
+describe("DriveLeaseService and a device paired with a Shell answering this host (#13941)", () => {
+  // Never registered: only ever asked whether it drives.
+  const deviceThrough = (clientId: string, linkSessionId: string) => ({
+    endpointId: "device-answer:1",
+    clientId,
+    linkSessionId,
+  });
+  const laptopClient = {
+    clientId: "greg-mbp-id",
+    clientName: "greg-mbp",
+    platform: "darwin" as const,
+    kind: "remote" as const,
+  };
+
+  it("presses where its Shell's window holds the project, and nowhere another screen does", async () => {
+    const hostWindow = local(1);
+    const laptopWindow = remote("remote:s1:e1", "greg-mbp-id");
+    const studioWindow = remote("remote:s2:e1", "studio-id");
+    for (const endpoint of [hostWindow, laptopWindow, studioWindow]) registry.add(endpoint);
+    service.noteEndpointClient(laptopWindow.endpointId, laptopClient);
+    service.noteEndpointClient(studioWindow.endpointId, {
+      ...laptopClient,
+      clientId: "studio-id",
+      clientName: "studio",
+    });
+    await settle();
+    const device = deviceThrough("greg-mbp-id", "s1");
+
+    const holder = service.takeOver("p", laptopWindow);
+    expect(service.isDriving("p", device)).toBe(true);
+    // Answering through its Shell's lease is not holding it.
+    expect(service.getHolder("p")).toEqual(holder);
+
+    service.takeOver("p", studioWindow);
+    expect(service.isDriving("p", device)).toBe(false);
+
+    // The host's own screen holds it: the Shell couldn't type there either.
+    service.takeOver("p", hostWindow);
+    expect(service.isDriving("p", device)).toBe(false);
+  });
+
+  it("presses nothing where another session holds, even under the holder's client id (#14679)", async () => {
+    const laptopWindow = remote("remote:s1:e1", "greg-mbp-id");
+    registry.add(laptopWindow);
+    service.noteEndpointClient(laptopWindow.endpointId, laptopClient);
+    await settle();
+    service.takeOver("p", laptopWindow);
+
+    expect(service.isDriving("p", deviceThrough("greg-mbp-id", "s9"))).toBe(false);
+    expect(service.isDriving("p", deviceThrough("greg-mbp-id", "s1"))).toBe(true);
+  });
+
+  it("presses through a relaunched Shell once the project is handed back to its new session", async () => {
+    const install = "5b1f6c3e-8d2a-4f4e-9c1b-0a7e2d9f3c41";
+    const before = remote("remote:s1:e1", "launch-1");
+    registry.add(before);
+    service.noteEndpointClient(before.endpointId, {
+      ...laptopClient,
+      clientId: "launch-1",
+      deviceId: install,
+    });
+    await settle();
+    expect(service.getHolder("p")?.endpointId).toBe("remote:s1:e1");
+    before.close();
+    await settle();
+
+    const after = remote("remote:s2:e1", "launch-2");
+    registry.add(after);
+    service.noteEndpointClient(after.endpointId, {
+      ...laptopClient,
+      clientId: "launch-2",
+      deviceId: install,
+    });
+    await settle();
+
+    expect(service.getHolder("p")?.endpointId).toBe("remote:s2:e1");
+    expect(service.isDriving("p", deviceThrough("launch-2", "s2"))).toBe(true);
+    expect(service.isDriving("p", deviceThrough("launch-1", "s1"))).toBe(false);
   });
 });
 
@@ -810,13 +1170,13 @@ describe("DriveLeaseService and the Host's own screen in use (#13285)", () => {
 });
 
 describe("DriveLeaseService across a restart of this app", () => {
-  function memoryStore(initial: Record<string, { clientId: string; clientName: string }> = {}) {
-    const saved: Array<Record<string, { clientId: string; clientName: string }>> = [];
+  function memoryStore(initial: Record<string, DriveLeaseReservation> = {}) {
+    const saved: Array<Record<string, DriveLeaseReservation>> = [];
     return {
       saved,
       store: {
         load: () => initial,
-        save: (next: Record<string, { clientId: string; clientName: string }>) => {
+        save: (next: Record<string, DriveLeaseReservation>) => {
           saved.push(next);
         },
       },
@@ -825,7 +1185,7 @@ describe("DriveLeaseService across a restart of this app", () => {
 
   const RESTORED_GRACE_MS = GRACE_MS * 3;
 
-  function restarted(initial: Record<string, { clientId: string; clientName: string }>) {
+  function restarted(initial: Record<string, DriveLeaseReservation>) {
     const memory = memoryStore(initial);
     const next = new DriveLeaseService({
       registry,
@@ -868,7 +1228,11 @@ describe("DriveLeaseService across a restart of this app", () => {
     });
     await settle();
     expect(memory.saved.at(-1)).toEqual({
-      p: { clientId: "shell-launch-1", clientName: "greg-mbp" },
+      p: {
+        clientId: "shell-launch-1",
+        clientName: "greg-mbp",
+        tenureId: service.getHolder("p")!.tenureId,
+      },
     });
 
     registry.add(hostWindow);
@@ -892,6 +1256,8 @@ describe("DriveLeaseService across a restart of this app", () => {
     });
     expect(service.getDriveTarget("p").kind).toBe("reserved");
     expect(service.isDriving("p", hostWindow)).toBe(false);
+    // The Shell is away from the start, for the whole restored grace.
+    expect(service.viewFor("p", hostWindow).holderAwayMs).toBe(RESTORED_GRACE_MS);
     // Nobody's terminal input reaches it while it waits: no connection has id 0.
     expect(leaseTables.at(-1)).toEqual([
       expect.objectContaining({ projectId: "p", holderConnection: 0 }),
@@ -903,6 +1269,7 @@ describe("DriveLeaseService across a restart of this app", () => {
     await settle();
     expect(service.getHolder("p")?.endpointId).toBe("s2:e1");
     expect(service.isDriving("p", laptop)).toBe(true);
+    expect(service.viewFor("p", hostWindow)).not.toHaveProperty("holderAwayMs");
   });
 
   it("gives the project to whoever is there once the grace runs out", async () => {
@@ -962,6 +1329,45 @@ describe("DriveLeaseService across a restart of this app", () => {
     ]);
   });
 
+  it("carries the tenure across the restart, so the Shell that drove carries on in it", async () => {
+    service.dispose();
+    const { next } = restarted({
+      p: { ...greg, tenureId: "tenure-before-restart" },
+      q: greg,
+    });
+    service = next;
+    expect(service.getHolder("p")?.tenureId).toBe("tenure-before-restart");
+    // Saved by a Host that predates tenures: a tenure of its own from here on.
+    expect(service.getHolder("q")?.tenureId).toEqual(expect.any(String));
+
+    const back = remote("s2:e1", "shell-launch-1");
+    registry.add(back);
+    await settle();
+    expect(service.getHolder("p")).toMatchObject({
+      endpointId: "s2:e1",
+      tenureId: "tenure-before-restart",
+    });
+  });
+
+  it("writes the tenure a reservation saved without one gets, so the next restart keeps it", async () => {
+    service.dispose();
+    const first = restarted({ p: greg });
+    service = first.next;
+    const tenure = service.getHolder("p")!.tenureId;
+
+    const back = remote("s2:e1", "shell-launch-1");
+    registry.add(back);
+    noteClient(back, "shell-launch-1", "greg-mbp");
+    await settle();
+    expect(first.memory.saved.at(-1)).toEqual({ p: { ...greg, tenureId: tenure } });
+
+    service.dispose();
+    back.close();
+    const second = restarted(first.memory.saved.at(-1)!);
+    service = second.next;
+    expect(service.getHolder("p")?.tenureId).toBe(tenure);
+  });
+
   it("gives it to the Shell that waited once the grace runs out; the old driver returning late observes", async () => {
     service.dispose();
     const { next } = restarted({ p: greg });
@@ -1004,6 +1410,7 @@ describe("DriveLeaseService across a restart of this app", () => {
     registry.add(laptop);
     await settle();
     expect(saved).toEqual([]);
+    const { tenureId } = service.getHolder("p")!;
 
     // Same client, same name, a new endpoint: nothing new to say, but the file is behind.
     laptop.close();
@@ -1011,14 +1418,14 @@ describe("DriveLeaseService across a restart of this app", () => {
     registry.add(again);
     await settle();
     expect(saved.at(-1)).toEqual({
-      p: { clientId: "shell-launch-1", clientName: "shell-launch-1" },
+      p: { clientId: "shell-launch-1", clientName: "shell-launch-1", tenureId },
     });
     errors.mockRestore();
   });
 
   it("starts with nothing held when the store can't be read", async () => {
     service.dispose();
-    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    loggerMock.error.mockClear();
     service = new DriveLeaseService({
       registry,
       releaseGraceMs: GRACE_MS,
@@ -1031,7 +1438,341 @@ describe("DriveLeaseService across a restart of this app", () => {
       },
     });
     expect(service.getState("p").holder).toBeNull();
-    expect(errors).toHaveBeenCalled();
-    errors.mockRestore();
+    expect(loggerMock.error).toHaveBeenCalledWith(
+      "Drive lease reservations could not be read",
+      expect.any(Error)
+    );
+  });
+});
+
+describe("DriveLeaseService and a relaunched Shell (#13909)", () => {
+  const INSTALL = "5b1f6c3e-8d2a-4f4e-9c1b-0a7e2d9f3c41";
+  const OTHER_INSTALL = "c0e9a1d2-3b4c-4d5e-8f6a-7b8c9d0e1f2a";
+
+  const note = (endpoint: FakeEndpoint, clientName: string, deviceId?: string) =>
+    service.noteEndpointClient(endpoint.endpointId, {
+      clientId: endpoint.clientId,
+      clientName,
+      platform: "darwin",
+      kind: "remote",
+      ...(deviceId ? { deviceId } : {}),
+    });
+
+  async function drivenThenGone(deviceId: string | undefined, gone: "quit" | "parked") {
+    const before = remote("s1:e1", "launch-1");
+    registry.add(before);
+    note(before, "greg-studio", deviceId);
+    await settle();
+    expect(service.getHolder("p")?.endpointId).toBe("s1:e1");
+    if (gone === "quit") before.close();
+    else service.noteEndpointTransport([before.endpointId], false);
+    await settle();
+    return before;
+  }
+
+  it("takes the project straight back for a relaunch of the install that drove it", async () => {
+    await drivenThenGone(INSTALL, "quit");
+    const hostWindow = local(1);
+    registry.add(hostWindow);
+    await settle();
+    expect(service.isDriving("p", hostWindow)).toBe(false);
+
+    const after = remote("s2:e1", "launch-2");
+    registry.add(after);
+    note(after, "greg-studio", INSTALL);
+    await settle();
+
+    expect(service.getHolder("p")).toMatchObject({ endpointId: "s2:e1", clientId: "launch-2" });
+    expect(service.getDriveTarget("p").kind).toBe("live");
+    expect(service.viewFor("p", after)).toMatchObject({
+      drivingHere: true,
+      isHolderEndpoint: true,
+      heldByThisClient: true,
+    });
+    expect(service.isDriving("p", hostWindow)).toBe(false);
+    expect(leaseTables.at(-1)).toEqual([
+      expect.objectContaining({ projectId: "p", holderConnection: after.handle }),
+    ]);
+    // The grace the old launch left running releases nothing.
+    vi.advanceTimersByTime(GRACE_MS * 2);
+    expect(service.getHolder("p")?.endpointId).toBe("s2:e1");
+  });
+
+  it("leaves a holder whose link merely dropped its grace, and carries on once its session ends", async () => {
+    const before = await drivenThenGone(INSTALL, "parked");
+
+    // Another launch sharing the install's id waits: a resume keeps the lease.
+    const after = remote("s2:e1", "launch-2");
+    registry.add(after);
+    note(after, "greg-studio", INSTALL);
+    await settle();
+    expect(service.getHolder("p")?.endpointId).toBe("s1:e1");
+    expect(service.isDriving("p", after)).toBe(false);
+    service.noteEndpointTransport([before.endpointId], true);
+    expect(service.getHolder("p")?.endpointId).toBe("s1:e1");
+
+    // Its link drops again and the host ends the session, as a relaunch's HELLO does.
+    service.noteEndpointTransport([before.endpointId], false);
+    before.close();
+    await settle();
+    expect(changes.at(-1)?.holder?.endpointId).toBe("s2:e1");
+    expect(service.isDriving("p", before)).toBe(false);
+    vi.advanceTimersByTime(GRACE_MS * 2);
+    expect(service.getHolder("p")?.endpointId).toBe("s2:e1");
+  });
+
+  it("hands it to its install, over an earlier watcher, when a dropped holder's grace runs out", async () => {
+    const before = remote("s1:e1", "launch-1");
+    registry.add(before);
+    note(before, "greg-studio", INSTALL);
+    await settle();
+    const watcher = remote("s9:e1", "ana-launch");
+    registry.add(watcher);
+    note(watcher, "ana-mbp", OTHER_INSTALL);
+    await settle();
+    // The host only sees the crashed launch's link die after the relaunch said HELLO.
+    const after = remote("s2:e1", "launch-2");
+    registry.add(after);
+    note(after, "greg-studio", INSTALL);
+    service.noteEndpointTransport([before.endpointId], false);
+    await settle();
+    expect(service.getHolder("p")?.endpointId).toBe("s1:e1");
+
+    vi.advanceTimersByTime(GRACE_MS);
+    expect(service.getHolder("p")?.endpointId).toBe("s2:e1");
+    expect(service.isDriving("p", watcher)).toBe(false);
+  });
+
+  it.each([
+    ["another install", INSTALL, OTHER_INSTALL],
+    ["a newcomer that names no install", INSTALL, undefined],
+    ["a holder that named no install", undefined, INSTALL],
+    ["neither naming one", undefined, undefined],
+  ])("waits out the grace for %s", async (_label, holderInstall, newcomerInstall) => {
+    await drivenThenGone(holderInstall, "quit");
+
+    const after = remote("s2:e1", "launch-2");
+    registry.add(after);
+    // Same machine name: a name never stands in for the install.
+    note(after, "greg-studio", newcomerInstall);
+    await settle();
+    expect(service.getHolder("p")?.clientId).toBe("launch-1");
+    expect(service.isDriving("p", after)).toBe(false);
+
+    vi.advanceTimersByTime(GRACE_MS);
+    expect(service.getHolder("p")?.endpointId).toBe("s2:e1");
+  });
+
+  it("never takes it from a holder still there, whichever install it names", async () => {
+    const first = remote("s1:e1", "launch-1");
+    const second = remote("s2:e1", "launch-2");
+    registry.add(first);
+    note(first, "greg-studio", INSTALL);
+    await settle();
+    registry.add(second);
+    note(second, "greg-studio", INSTALL);
+    await settle();
+
+    expect(service.getHolder("p")?.endpointId).toBe("s1:e1");
+    expect(service.isDriving("p", second)).toBe(false);
+    vi.advanceTimersByTime(GRACE_MS * 2);
+    expect(service.getHolder("p")?.endpointId).toBe("s1:e1");
+    // Taking control is still the explicit step.
+    expect(service.takeOver("p", second).endpointId).toBe("s2:e1");
+  });
+
+  it("hands it to the holder's own client before another launch of its install", async () => {
+    await drivenThenGone(INSTALL, "quit");
+    const sibling = remote("s2:e1", "launch-2");
+    const sameLaunch = remote("s1:e2", "launch-1");
+    registry.add(sibling);
+    note(sibling, "greg-studio", INSTALL);
+    registry.add(sameLaunch);
+    note(sameLaunch, "greg-studio", INSTALL);
+    await settle();
+
+    expect(service.getHolder("p")?.endpointId).toBe("s1:e2");
+  });
+
+  it("matches the install once it is noted, whichever order the note and the lease came in", async () => {
+    // Granted before its client was noted: the install is learned from the late note.
+    const before = remote("s1:e1", "launch-1");
+    registry.add(before);
+    await settle();
+    expect(service.getHolder("p")?.endpointId).toBe("s1:e1");
+    note(before, "greg-studio", INSTALL);
+    before.close();
+    await settle();
+
+    // A newcomer attached before its own note arrived takes it once the note says who it is.
+    const after = remote("s2:e1", "launch-2");
+    registry.add(after);
+    await settle();
+    expect(service.getHolder("p")?.clientId).toBe("launch-1");
+    note(after, "greg-studio", INSTALL);
+    await settle();
+    // Settled by the note itself, not by a later read.
+    expect(changes.at(-1)?.holder?.endpointId).toBe("s2:e1");
+    expect(leaseTables.at(-1)).toEqual([
+      expect.objectContaining({ projectId: "p", holderConnection: after.handle }),
+    ]);
+  });
+
+  it("keeps the install id off everything other Shells see", async () => {
+    const watcher = remote("s9:e1", "ana-launch");
+    registry.add(watcher);
+    note(watcher, "ana-mbp", OTHER_INSTALL);
+    await settle();
+    const driver = remote("s1:e1", "launch-1");
+    registry.add(driver);
+    note(driver, "greg-studio", INSTALL);
+    await settle();
+    service.takeOver("p", driver);
+
+    const seen = JSON.stringify([
+      changes,
+      watcher.sent,
+      driver.sent,
+      service.getState("p"),
+      service.viewFor("p", watcher),
+    ]);
+    expect(seen).not.toContain(INSTALL);
+    expect(seen).not.toContain(OTHER_INSTALL);
+  });
+
+  describe("across a restart of this app", () => {
+    function restartedWith(initial: Record<string, DriveLeaseReservation>) {
+      const saved: Array<Record<string, DriveLeaseReservation>> = [];
+      service.dispose();
+      service = new DriveLeaseService({
+        registry,
+        releaseGraceMs: GRACE_MS,
+        restoredReservationGraceMs: GRACE_MS * 3,
+        now: () => 1_000,
+        applyDriveLeases: (leases) => leaseTables.push(leases),
+        reservations: { load: () => initial, save: (next) => saved.push(next) },
+      });
+      return saved;
+    }
+
+    it("saves the holder's install with its reservation", async () => {
+      const saved = restartedWith({});
+      const driver = remote("s1:e1", "launch-1");
+      registry.add(driver);
+      note(driver, "greg-studio", INSTALL);
+      await settle();
+      const { tenureId } = service.getHolder("p")!;
+      expect(saved.at(-1)).toEqual({
+        p: { clientId: "launch-1", clientName: "greg-studio", deviceId: INSTALL, tenureId },
+      });
+    });
+
+    it("saves the install a late note names, even one that leaves the name as it was", async () => {
+      const saved = restartedWith({});
+      const driver = remote("s1:e1", "launch-1");
+      registry.add(driver);
+      await settle();
+      const { tenureId } = service.getHolder("p")!;
+      expect(saved.at(-1)).toEqual({
+        p: { clientId: "launch-1", clientName: "launch-1", tenureId },
+      });
+
+      note(driver, "launch-1", INSTALL);
+      expect(saved.at(-1)).toEqual({
+        p: { clientId: "launch-1", clientName: "launch-1", deviceId: INSTALL, tenureId },
+      });
+    });
+
+    it("holds the project for its install, which takes it straight back on a new launch", async () => {
+      restartedWith({
+        p: { clientId: "launch-1", clientName: "greg-studio", deviceId: INSTALL },
+      });
+      const other = remote("s9:e1", "ana-launch");
+      registry.add(other);
+      note(other, "ana-mbp", OTHER_INSTALL);
+      await settle();
+      expect(service.getDriveTarget("p").kind).toBe("reserved");
+      expect(service.isDriving("p", other)).toBe(false);
+
+      const after = remote("s2:e1", "launch-2");
+      registry.add(after);
+      note(after, "greg-studio", INSTALL);
+      await settle();
+      expect(service.getHolder("p")?.endpointId).toBe("s2:e1");
+      expect(service.isDriving("p", other)).toBe(false);
+    });
+
+    it("leaves a reservation saved before installs were recorded to its client alone", async () => {
+      restartedWith({ p: { clientId: "launch-1", clientName: "greg-studio" } });
+      const after = remote("s2:e1", "launch-2");
+      registry.add(after);
+      note(after, "greg-studio", INSTALL);
+      await settle();
+      expect(service.getHolder("p")?.clientId).toBe("launch-1");
+      expect(service.isDriving("p", after)).toBe(false);
+    });
+  });
+
+  describe("logging", () => {
+    const messages = () => loggerMock.info.mock.calls.map(([message]) => message);
+
+    it("records who got the lease, who lost it and why", async () => {
+      const laptop = remote("s1:e1", "c1");
+      const phone = remote("s2:e1", "c2");
+      registry.add(laptop);
+      registry.add(phone);
+      await settle();
+      service.takeOver("p", laptop);
+      service.takeOver("p", phone);
+
+      expect(loggerMock.info).toHaveBeenCalledWith(
+        "Drive lease transferred",
+        expect.objectContaining({
+          projectId: "p",
+          clientId: "c2",
+          reason: "explicit-takeover",
+          previousClientId: "c1",
+        })
+      );
+    });
+
+    it("records a holder going away, the grace running out, and the successor", async () => {
+      const hostWindow = local(1);
+      const laptop = remote("s1:e1", "c1");
+      registry.add(hostWindow);
+      registry.add(laptop);
+      await settle();
+      service.takeOver("p", laptop);
+      loggerMock.info.mockClear();
+
+      laptop.close();
+      await settle();
+      expect(messages()).toContain("Drive lease holder away");
+
+      vi.advanceTimersByTime(GRACE_MS);
+      expect(messages()).toEqual([
+        "Drive lease holder away",
+        "Drive lease grace expired",
+        "Drive lease transferred",
+      ]);
+      expect(loggerMock.info).toHaveBeenLastCalledWith(
+        "Drive lease transferred",
+        expect.objectContaining({ reason: "grace-expired" })
+      );
+    });
+
+    it("records a release when nobody is left, and stays quiet on reads", async () => {
+      const laptop = remote("s1:e1", "c1");
+      registry.add(laptop);
+      await settle();
+      service.getHolder("p");
+      service.getState("p");
+      expect(messages()).toEqual(["Drive lease granted"]);
+
+      laptop.close();
+      await settle();
+      vi.advanceTimersByTime(GRACE_MS);
+      expect(messages().at(-1)).toBe("Drive lease released");
+    });
   });
 });

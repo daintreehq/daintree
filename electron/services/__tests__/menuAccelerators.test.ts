@@ -14,6 +14,7 @@ import {
   findTerminalCycleAction,
   getMenuAccelerator,
   isAcceleratorClaimedByKeybinding,
+  isDictationKey,
   isKeybindingOwnedAction,
   isRendererOwnedShortcut,
   rendererMenuAccelerator,
@@ -222,6 +223,44 @@ describe("findPortalPageAction", () => {
   it("takes the default Cmd+W", () => {
     setProcessPlatform("darwin");
     expect(findPortalPageAction(input({ key: "w", meta: true }), PORTAL)).toBe("portal.closeTab");
+  });
+});
+
+describe("isDictationKey", () => {
+  it("takes the default dictation key", () => {
+    setProcessPlatform("darwin");
+    expect(isDictationKey(input({ key: "d", meta: true }))).toBe(true);
+    expect(isDictationKey(input({ key: ".", meta: true }))).toBe(false);
+    expect(isDictationKey(input({ key: "d", meta: true, shift: true }))).toBe(false);
+    expect(isDictationKey(input({ type: "keyUp", key: "d", meta: true }))).toBe(false);
+  });
+
+  it("never takes a chord's first stroke, and a chord binding never matches one keystroke", () => {
+    setProcessPlatform("darwin");
+    // Cmd+K Cmd+D is terminal.redraw: its Cmd+K is not the dictation key.
+    expect(isDictationKey(input({ key: "k", code: "KeyK", meta: true }))).toBe(false);
+
+    storeMock.get.mockReturnValue({ "voiceInput.toggle": ["Cmd+K Cmd+D"] });
+    expect(isDictationKey(input({ key: "k", code: "KeyK", meta: true }))).toBe(false);
+    expect(isDictationKey(input({ key: "d", code: "KeyD", meta: true }))).toBe(false);
+  });
+
+  it("follows a rebind, and an unbound key takes nothing", () => {
+    setProcessPlatform("darwin");
+    storeMock.get.mockReturnValue({ "voiceInput.toggle": ["Cmd+Shift+D"] });
+    expect(isDictationKey(input({ key: ".", meta: true }))).toBe(false);
+    expect(isDictationKey(input({ key: "d", meta: true, shift: true }))).toBe(true);
+
+    storeMock.get.mockReturnValue({ "voiceInput.toggle": [] });
+    expect(isDictationKey(input({ key: "d", meta: true, shift: true }))).toBe(false);
+    expect(isDictationKey(input({ key: ".", meta: true }))).toBe(false);
+  });
+
+  it("matches a space-bar binding, which Input names by its character", () => {
+    setProcessPlatform("darwin");
+    storeMock.get.mockReturnValue({ "voiceInput.toggle": ["Cmd+Shift+Space"] });
+    expect(isDictationKey(input({ key: " ", code: "Space", meta: true, shift: true }))).toBe(true);
+    expect(isDictationKey(input({ key: " ", code: "Space", meta: true }))).toBe(false);
   });
 });
 

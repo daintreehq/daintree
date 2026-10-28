@@ -22,7 +22,7 @@ import type { AgentSettings, CliAvailability } from "@shared/types";
 import { MenuActionSourceContext } from "@/components/ui/menu-source";
 
 const dispatchMock = vi.fn();
-const updateWorktreePresetMock = vi.fn();
+const updateWorktreePresetMock = vi.fn().mockResolvedValue(undefined);
 const updateAgentMock = vi.fn().mockResolvedValue(undefined);
 let dropdownCloseAutoFocusSpy: ((e: { preventDefault: () => void }) => void) | null = null;
 let dropdownPointerDownOutsideSpy: (() => void) | null = null;
@@ -55,16 +55,21 @@ const setAgentPinnedMock = vi.fn().mockResolvedValue(undefined);
 
 vi.mock("@/store/agentSettingsStore", () => ({
   useAgentSettingsStore: Object.assign(
-    (selector: (s: Record<string, unknown>) => unknown) =>
-      selector({ settings: mockSettings, setAgentPinned: setAgentPinnedMock }),
+    (selector: (s: Record<string, unknown>) => unknown) => selector({ settings: mockSettings }),
     {
       getState: () => ({
-        setAgentPinned: setAgentPinnedMock,
         updateWorktreePreset: updateWorktreePresetMock,
         updateAgent: updateAgentMock,
       }),
     }
   ),
+}));
+
+// The pin is this machine's (#14702), so the unpin must land in the pins
+// store, never in the host's agent settings.
+vi.mock("@/store/agentToolbarPinsStore", () => ({
+  useAgentToolbarPinsStore: (selector: (s: Record<string, unknown>) => unknown) =>
+    selector({ pins: { claude: true }, revision: 0, setAgentPinned: setAgentPinnedMock }),
 }));
 
 vi.mock("@/store/ccrPresetsStore", () => ({
@@ -353,6 +358,11 @@ vi.mock("@/components/ui/context-menu", () => ({
   ),
 }));
 
+vi.mock("@/components/ui/ConfirmDialog", () => ({
+  ConfirmDialog: ({ title, isOpen }: { title: React.ReactNode; isOpen: boolean }) =>
+    isOpen ? <div data-testid="preset-restart-confirm">{title}</div> : null,
+}));
+
 vi.mock("lucide-react", () => ({
   Settings2: () => <span data-testid="settings-icon" />,
   ChevronDown: (props: Record<string, unknown>) => <span data-testid="chevron-icon" {...props} />,
@@ -619,6 +629,94 @@ describe("AgentButton preset UX", () => {
       expect(updateWorktreePresetMock).toHaveBeenCalledWith("claude", "wt-A", "user-alpha");
       // The gutter is a pure configurer — it must not launch.
       expect(dispatchMock).not.toHaveBeenCalled();
+    });
+
+    it("says once which panes a default pick left on the old preset (#13746)", async () => {
+      mockActiveWorktreeId = "wt-A";
+      mockSettings = settingsWith({ claude: { worktreePresets: { "wt-A": "user-alpha" } } });
+      mockMergedPresetsFn = () => [
+        { id: "user-alpha", name: "Alpha" },
+        { id: "user-beta", name: "Beta" },
+      ];
+      const pane = (id: string, presetId: string, extra: Record<string, unknown> = {}) => ({
+        id,
+        kind: "terminal",
+        title: `Claude [${presetId}]`,
+        cwd: "/repo",
+        location: "grid",
+        launchAgentId: "claude",
+        worktreeId: "wt-A",
+        agentPresetId: presetId,
+        agentState: "waiting",
+        ...extra,
+      });
+      mockPanelsById = {
+        p1: pane("p1", "user-alpha"),
+        p2: pane("p2", "user-alpha", { isUsingFallback: true }),
+        p3: pane("p3", "user-beta"),
+      };
+      mockPanelIds = ["p1", "p2", "p3"];
+      mockPanelIdsByWorktreeId = { "wt-A": ["p1", "p2", "p3"] };
+
+      const { getAllByTestId } = render(<AgentButton type="claude" availability="ready" />);
+      await act(async () => {
+        clickGutter(rowByText(getAllByTestId, "Beta"));
+      });
+
+      // The fallback pane has its own indicator; the one already on Beta is fine.
+      expect(screen.getByRole("status").textContent).toBe("1 Claude pane still on Alpha");
+      expect(screen.getByText("Restart it on Beta…")).toBeTruthy();
+    });
+
+    it("doesn't bring the offer back when the save lands after the picker closed (#13746)", async () => {
+      mockActiveWorktreeId = "wt-A";
+      mockSettings = settingsWith({ claude: { worktreePresets: { "wt-A": "user-alpha" } } });
+      mockMergedPresetsFn = () => [
+        { id: "user-alpha", name: "Alpha" },
+        { id: "user-beta", name: "Beta" },
+      ];
+      mockPanelsById = {
+        p1: {
+          id: "p1",
+          kind: "terminal",
+          title: "Claude [Alpha]",
+          cwd: "/repo",
+          location: "grid",
+          launchAgentId: "claude",
+          worktreeId: "wt-A",
+          agentPresetId: "user-alpha",
+          agentState: "waiting",
+        },
+      };
+      mockPanelIds = ["p1"];
+      mockPanelIdsByWorktreeId = { "wt-A": ["p1"] };
+      let resolveSave: () => void = () => {};
+      updateWorktreePresetMock.mockImplementationOnce(
+        () => new Promise<void>((resolve) => (resolveSave = resolve))
+      );
+
+      const { getAllByTestId } = render(<AgentButton type="claude" availability="ready" />);
+      clickGutter(rowByText(getAllByTestId, "Beta"));
+      act(() => dropdownOnOpenChange?.(false));
+      await act(async () => resolveSave());
+
+      expect(screen.queryByRole("status")).toBeNull();
+    });
+
+    it("offers nothing when the pick leaves no pane behind (#13746)", async () => {
+      mockActiveWorktreeId = "wt-A";
+      mockSettings = settingsWith({ claude: { worktreePresets: { "wt-A": "user-alpha" } } });
+      mockMergedPresetsFn = () => [
+        { id: "user-alpha", name: "Alpha" },
+        { id: "user-beta", name: "Beta" },
+      ];
+
+      const { getAllByTestId } = render(<AgentButton type="claude" availability="ready" />);
+      await act(async () => {
+        clickGutter(rowByText(getAllByTestId, "Beta"));
+      });
+
+      expect(screen.queryByRole("status")).toBeNull();
     });
 
     it("label zone launches with the row's explicit preset without changing the default", () => {
@@ -1914,7 +2012,7 @@ describe("AgentButton right-click unpin — issue #9825", () => {
     updateWorktreePresetMock.mockClear();
     updateAgentMock.mockClear();
     setAgentPinnedMock.mockClear();
-    mockSettings = settingsWith({ claude: { pinned: true } });
+    mockSettings = settingsWith({ claude: {} });
     mockActiveWorktreeId = null;
     mockCcrPresetsByAgent = {};
     mockMergedPresetsFn = () => [];

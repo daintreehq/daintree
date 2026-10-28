@@ -1,4 +1,6 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
+import { evaluateWhenClause } from "@shared/utils/whenClause";
+import { useChromeWhenContext } from "@/hooks/useChromeWhenContext";
 import { isRemoteContributionActionAllowed } from "@shared/utils/remotePluginContributions";
 import { pluginViewHostId } from "@/components/Plugin/remotePluginView";
 import type { ToolbarButtonConfig } from "@shared/config/toolbarButtonRegistry";
@@ -6,6 +8,8 @@ import type { PluginToolbarButtonId } from "@shared/types/toolbar";
 import { useToolbarPreferencesStore } from "@/store";
 import { logWarn } from "@/utils/logger";
 import { usePluginToolbarBadgeStore } from "@/store/pluginToolbarBadgeStore";
+import { usePluginToolbarStateStore } from "@/store/pluginToolbarStateStore";
+import { usePluginToolbarPopoverStore } from "@/store/pluginToolbarPopoverStore";
 
 export interface PluginToolbarButtonState {
   buttonIds: PluginToolbarButtonId[];
@@ -44,10 +48,21 @@ export function usePluginToolbarButtons(): PluginToolbarButtonState {
       const map = new Map<string, ToolbarButtonConfig>();
       const remote = pluginViewHostId() !== null;
       for (const btn of buttons) {
-        if (remote && !isRemoteContributionActionAllowed(btn.pluginId, btn.actionId)) continue;
+        // A popover button names a view, not an action; the popover only mounts
+        // a panel kind its own plugin registered, which is that button's check.
+        if (
+          remote &&
+          btn.actionId !== undefined &&
+          !isRemoteContributionActionAllowed(btn.pluginId, btn.actionId)
+        ) {
+          continue;
+        }
         map.set(btn.id, btn);
       }
       setConfigs(map);
+      // A popover whose button went away (its plugin unloaded or stopped
+      // showing in this project) closes with it.
+      usePluginToolbarPopoverStore.getState().retain(new Set(map.keys()));
       if (complete) {
         useToolbarPreferencesStore.getState().sweepStalePluginPinnedButtons(Array.from(map.keys()));
       }
@@ -55,8 +70,9 @@ export function usePluginToolbarButtons(): PluginToolbarButtonState {
 
     const electron = typeof window !== "undefined" ? window.electron : undefined;
     if (!electron?.plugin) return;
-    // The buttons' live badges, subscribed alongside the buttons themselves.
+    // The buttons' live badges and state, subscribed alongside the buttons themselves.
     usePluginToolbarBadgeStore.getState().init();
+    usePluginToolbarStateStore.getState().init();
 
     void electron.plugin
       .toolbarButtons()
@@ -91,4 +107,40 @@ export function usePluginToolbarButtons(): PluginToolbarButtonState {
   const isRegistered = (id: string) => configs.has(id);
 
   return { buttonIds, configs, isRegistered };
+}
+
+/**
+ * The plugin toolbar buttons whose manifest `when` holds right now — what the
+ * toolbar and its tray show. A hidden button only leaves this view: its config,
+ * its pin and its saved slot in the layout stay where they are, so it returns
+ * to the same place once the clause is true again. Settings and the stale-pin
+ * sweep keep reading the full set from {@link usePluginToolbarButtons}.
+ */
+export function useVisiblePluginToolbarButtons(): PluginToolbarButtonState {
+  const all = usePluginToolbarButtons();
+  const context = useChromeWhenContext();
+  const { configs } = all;
+
+  const shown = useMemo(() => {
+    let hidden = false;
+    const visible = new Map<string, ToolbarButtonConfig>();
+    for (const [id, config] of configs) {
+      if (evaluateWhenClause(config.when, context)) visible.set(id, config);
+      else hidden = true;
+    }
+    if (!hidden) return all;
+    return {
+      buttonIds: all.buttonIds.filter((id) => visible.has(id)),
+      configs: visible,
+      isRegistered: (id: string) => visible.has(id),
+    };
+  }, [all, configs, context]);
+
+  // A popover whose button a false clause hid closes with it, as one whose
+  // button went away does, rather than springing back open once it holds again.
+  useEffect(() => {
+    usePluginToolbarPopoverStore.getState().retain(new Set(shown.configs.keys()));
+  }, [shown.configs]);
+
+  return shown;
 }

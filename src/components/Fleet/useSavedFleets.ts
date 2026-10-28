@@ -3,7 +3,7 @@ import { useShallow } from "zustand/react/shallow";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
-import { computeSavedScopePaneCount } from "@/services/actions/definitions/fleetActions";
+import { computeSavedScopePaneCount } from "@/services/actions/definitions/fleetSavedScope";
 import type { FleetSavedScope } from "@shared/types";
 import { rankSavedFleets, rankPredicateFleets } from "./fleetRanking";
 

@@ -66,6 +66,13 @@ vi.mock("../../../store.js", () => ({
   store: storeMock,
 }));
 
+const broadcastToRenderer = vi.hoisted(() => vi.fn());
+
+vi.mock("../../utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../utils.js")>()),
+  broadcastToRenderer,
+}));
+
 import { ipcMain } from "electron";
 import { CHANNELS } from "../../channels.js";
 import { registerTerminalConfigHandlers } from "../terminalConfig.js";
@@ -233,6 +240,87 @@ describe("terminalConfig handlers", () => {
     });
   });
 
+  it("get never writes, even for a legacy custom-schemes string", async () => {
+    const legacy = JSON.stringify([
+      { id: "mine", name: "Mine", type: "dark", builtin: false, colors: { background: "#000" } },
+    ]);
+    storeState.data.terminalConfig = { customSchemes: legacy };
+    registerTerminalConfigHandlers();
+    const handler = getHandler(CHANNELS.TERMINAL_CONFIG_GET);
+
+    const result = (await handler({}, undefined)) as Record<string, unknown>;
+
+    expect(result.customSchemes).toEqual([expect.objectContaining({ id: "mine" })]);
+    expect(storeMock.set).not.toHaveBeenCalled();
+    expect(storeState.data.terminalConfig).toEqual({ customSchemes: legacy });
+  });
+
+  describe("change broadcast", () => {
+    const changed = (channel: string) =>
+      broadcastToRenderer.mock.calls
+        .filter(([pushed]) => pushed === channel)
+        .map(([, payload]) => payload as Record<string, unknown>);
+
+    it("sends a device field with every device field and nothing of the host's", async () => {
+      storeState.data.terminalConfig = {
+        fontSize: 12,
+        resourceMonitoringEnabled: true,
+        memoryLeakAutoRestartThresholdMb: 4096,
+      };
+      registerTerminalConfigHandlers();
+
+      await getHandler(CHANNELS.TERMINAL_CONFIG_SET_SCROLLBACK)({}, 5000);
+
+      expect(changed(CHANNELS.TERMINAL_CONFIG_HOST_CHANGED)).toEqual([]);
+      const [payload] = changed(CHANNELS.TERMINAL_CONFIG_DEVICE_CHANGED);
+      expect(payload).toMatchObject({ scrollbackLines: 5000, fontSize: 12, customSchemes: [] });
+      expect(payload).not.toHaveProperty("resourceMonitoringEnabled");
+      expect(payload).not.toHaveProperty("memoryLeakAutoRestartThresholdMb");
+    });
+
+    it("sends a host field with every host field and nothing of the device's", async () => {
+      const ptyClient = { setResourceMonitoring: vi.fn() };
+      storeState.data.terminalConfig = { fontSize: 12, memoryLeakAutoRestartThresholdMb: 4096 };
+      registerTerminalConfigHandlers({ ptyClient } as never);
+
+      await getHandler(CHANNELS.TERMINAL_CONFIG_SET_RESOURCE_MONITORING)({}, true);
+
+      expect(changed(CHANNELS.TERMINAL_CONFIG_DEVICE_CHANGED)).toEqual([]);
+      expect(changed(CHANNELS.TERMINAL_CONFIG_HOST_CHANGED)).toEqual([
+        { resourceMonitoringEnabled: true, memoryLeakAutoRestartThresholdMb: 4096 },
+      ]);
+      expect(ptyClient.setResourceMonitoring).toHaveBeenCalledWith(true);
+    });
+
+    it("tells no one about a value the handler refused", async () => {
+      registerTerminalConfigHandlers();
+
+      await getHandler(CHANNELS.TERMINAL_CONFIG_SET_FONT_SIZE)({}, 99);
+      await getHandler(CHANNELS.TERMINAL_CONFIG_SET_MEMORY_LEAK_DETECTION)({}, "yes");
+      await expect(getHandler(CHANNELS.TERMINAL_CONFIG_SET_SCROLLBACK)({}, 1)).rejects.toThrow();
+
+      expect(broadcastToRenderer).not.toHaveBeenCalled();
+    });
+
+    it("still tells views about a saved cap when a window refuses it", async () => {
+      const failing = {
+        setCachedViewLimit: vi.fn(() => {
+          throw new Error("gone");
+        }),
+      };
+      registerTerminalConfigHandlers({ projectViewManager: failing } as never);
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      await getHandler(CHANNELS.TERMINAL_CONFIG_SET_CACHED_PROJECT_VIEWS)({}, 3);
+
+      expect(failing.setCachedViewLimit).toHaveBeenCalledWith(3);
+      expect(changed(CHANNELS.TERMINAL_CONFIG_DEVICE_CHANGED)).toEqual([
+        expect.objectContaining({ cachedProjectViews: 3 }),
+      ]);
+      warn.mockRestore();
+    });
+  });
+
   it("setScrollback accepts valid finite integer in range", async () => {
     registerTerminalConfigHandlers();
     const handler = getHandler(CHANNELS.TERMINAL_CONFIG_SET_SCROLLBACK);
@@ -373,6 +461,32 @@ describe("terminalConfig handlers", () => {
 
     await handler({}, 4);
     expect(mockPvm.setCachedViewLimit).toHaveBeenCalledWith(4);
+  });
+
+  it("setCachedProjectViews applies the cap to every window, once each (#14218)", async () => {
+    const first = { setCachedViewLimit: vi.fn() };
+    const second = {
+      setCachedViewLimit: vi.fn(() => {
+        throw new Error("window gone");
+      }),
+    };
+    const third = { setCachedViewLimit: vi.fn() };
+    const windowRegistry = {
+      all: () => [
+        { services: { projectViewManager: first } },
+        { services: { projectViewManager: second } },
+        { services: {} },
+        { services: { projectViewManager: third } },
+      ],
+    };
+    registerTerminalConfigHandlers({ projectViewManager: first, windowRegistry } as never);
+    const handler = getHandler(CHANNELS.TERMINAL_CONFIG_SET_CACHED_PROJECT_VIEWS);
+
+    await handler({}, 2);
+
+    expect(first.setCachedViewLimit).toHaveBeenCalledTimes(1);
+    expect(second.setCachedViewLimit).toHaveBeenCalledWith(2);
+    expect(third.setCachedViewLimit).toHaveBeenCalledWith(2);
   });
 
   it("normalizes malformed terminalConfig shape before writes", async () => {

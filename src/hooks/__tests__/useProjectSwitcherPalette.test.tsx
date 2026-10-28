@@ -1583,6 +1583,49 @@ describe("useProjectSwitcherPalette", () => {
       expect(asProject(result.current.results[0]).blockedAgentCount).toBe(2);
     });
 
+    it("keeps a push that lands while the bulk pull is in flight", async () => {
+      // The seed decides what is absent when the response lands, not when the
+      // request went out: a push in between is newer than anything bulk read.
+      projectState.projects = [
+        ...projectState.projects,
+        { ...projectState.projects[0]!, id: "project-2", name: "Project Two", path: "/repo/two" },
+      ];
+      projectStatsState.stats = {};
+      let resolveBulk!: (value: Awaited<ReturnType<typeof getBulkStatsMock>>) => void;
+      getBulkStatsMock.mockReturnValue(new Promise((resolve) => (resolveBulk = resolve)));
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+      act(() => {
+        result.current.open();
+      });
+      await waitFor(() => {
+        expect(getBulkStatsMock).toHaveBeenCalled();
+      });
+
+      const pushed = { activeAgentCount: 0, waitingAgentCount: 1, processCount: 1 };
+      projectStatsState.stats = { "project-1": pushed };
+      const stale = {
+        processCount: 0,
+        terminalCount: 0,
+        estimatedMemoryMB: 0,
+        terminalTypes: {},
+        processIds: [],
+        activeAgentCount: 0,
+        waitingAgentCount: 0,
+        blockedAgentCount: 0,
+      };
+      await act(async () => {
+        resolveBulk({ "project-1": stale, "project-2": { ...stale, activeAgentCount: 2 } });
+      });
+
+      await waitFor(() => {
+        expect(setStatsMock).toHaveBeenCalledTimes(1);
+      });
+      const seeded = setStatsMock.mock.calls[0]![0];
+      expect(seeded["project-1"]).toBe(pushed);
+      expect(seeded["project-2"]).toMatchObject({ activeAgentCount: 2 });
+    });
+
     it("seeds a project the push store has no entry for", async () => {
       projectStatsState.stats = {};
       getBulkStatsMock.mockResolvedValue({
@@ -1883,6 +1926,24 @@ describe("useProjectSwitcherPalette", () => {
           "zulu",
         ]);
       });
+      view.unmount();
+    });
+
+    it("keeps both an arrival and a sort change that land in the same commit", async () => {
+      // The re-sort and the arrival fold each rewrite the freeze through an
+      // updater. A plain replacement in either would drop the other's write.
+      const view = await openWith("mostUsed", conflicting());
+      act(() => {
+        projectState.projects = [...conflicting(), base("bravo")];
+        setOtherSortMode("alphabetical");
+        view.rerender();
+      });
+
+      await waitFor(() => {
+        expect(view.result.current.results.map((p) => p.id)).toContain("bravo");
+      });
+      const ids = view.result.current.results.map((p) => p.id);
+      expect(ids.filter((id) => id !== "bravo")).toEqual(["alpha", "mike", "zulu"]);
       view.unmount();
     });
 

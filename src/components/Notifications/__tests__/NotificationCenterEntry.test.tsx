@@ -91,6 +91,85 @@ describe("NotificationCenterEntry overflow menu", () => {
   });
 });
 
+describe("NotificationCenterEntry plugin provenance (#13818)", () => {
+  const PROJECT_A = "a".repeat(64);
+  const PROJECT_PLUGIN = `project__${PROJECT_A}__acme.records`;
+
+  async function openMenu() {
+    const trigger = screen.getByLabelText(/^Options for /);
+    await act(async () => {
+      fireEvent.pointerDown(trigger, { button: 0 });
+      fireEvent.pointerUp(trigger, { button: 0 });
+      fireEvent.click(trigger);
+    });
+  }
+
+  const initialProjects = useProjectStore.getState().projects;
+  beforeEach(() => {
+    useProjectStore.setState({
+      projects: [
+        { id: "p1", path: "/repos/helios", name: "Helios", emoji: "🌲", lastOpened: 0 },
+        { id: PROJECT_A, path: "/repos/atlas", name: "Atlas", emoji: "🌲", lastOpened: 0 },
+      ],
+    });
+  });
+  afterEach(() => {
+    useProjectStore.setState({ projects: initialProjects });
+  });
+
+  it("names the plugin and its project as the source", () => {
+    render(
+      <NotificationCenterEntry
+        entry={makeEntry({
+          context: { projectId: PROJECT_A, plugin: { id: PROJECT_PLUGIN, name: "Acme Records" } },
+        })}
+      />
+    );
+    expect(screen.getByTestId("notification-source").textContent).toBe("Acme Records · Atlas");
+  });
+
+  it("silences a project plugin in its own project, named, from the row menu", async () => {
+    render(
+      <NotificationCenterEntry
+        entry={makeEntry({
+          context: { projectId: PROJECT_A, plugin: { id: PROJECT_PLUGIN, name: "Acme Records" } },
+        })}
+      />
+    );
+    await openMenu();
+    // Project mute stays on offer beside it: it covers the plugin too.
+    expect(screen.getByText("Mute project notifications")).toBeTruthy();
+    // Named rather than "this project": the inbox can show another project's row.
+    await act(async () => {
+      fireEvent.click(screen.getByText("Silence Acme Records in Atlas"));
+    });
+
+    expect(dispatchMock).toHaveBeenCalledWith("plugin.setNotificationsSilenced", {
+      pluginId: PROJECT_PLUGIN,
+      silenced: true,
+    });
+  });
+
+  it("silences an installed plugin everywhere, even with no project on the row", async () => {
+    render(
+      <NotificationCenterEntry
+        entry={makeEntry({ context: { plugin: { id: "acme.tools", name: "Acme Tools" } } })}
+      />
+    );
+    expect(screen.getByTestId("notification-source").textContent).toBe("Acme Tools");
+    await openMenu();
+    expect(screen.queryByText("Mute project notifications")).toBeNull();
+    await act(async () => {
+      fireEvent.click(screen.getByText("Silence Acme Tools"));
+    });
+
+    expect(dispatchMock).toHaveBeenCalledWith("plugin.setNotificationsSilenced", {
+      pluginId: "acme.tools",
+      silenced: true,
+    });
+  });
+});
+
 describe("NotificationCenterEntry unread signal", () => {
   it("renders the unread dot when isNew=true", () => {
     const { container } = render(<NotificationCenterEntry entry={makeEntry()} isNew />);

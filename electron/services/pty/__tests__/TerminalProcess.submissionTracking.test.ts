@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { stubProcessKillForFile } from "../../../__tests__/helpers/processKillGuard.js";
 import type { IPty } from "node-pty";
 import { TerminalProcess } from "../TerminalProcess.js";
 import { events } from "../../events.js";
@@ -18,6 +19,12 @@ import { OUTPUT_PROGRESS_SAMPLE_MS } from "../OutputProgressTracker.js";
 
 let ptyWriteMock: ReturnType<typeof vi.fn<(data: string) => void>>;
 let ptyOnDataCallback: ((data: string) => void) | null = null;
+
+vi.mock("../../../utils/windowsTreeKill.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../utils/windowsTreeKill.js")>()),
+  killWindowsProcessTrees: vi.fn(async () => []),
+  killWindowsProcessTreesSync: vi.fn(() => []),
+}));
 
 vi.mock("node-pty", () => ({ spawn: vi.fn() }));
 
@@ -80,6 +87,11 @@ function acquireInputLock(terminal: TerminalProcess): () => void {
     terminal as unknown as { inputController: TerminalInputController }
   ).inputController.acquireShutdownInputLock();
 }
+
+// Mock ptys carry made-up PIDs that belong to real processes on the machine
+// running the suite; every kill path below must land on a stub (#14418). The
+// stub outlives ProcessTreeKiller's 500ms SIGKILL escalation.
+stubProcessKillForFile(600);
 
 describe("TerminalProcess submission tracking (#12337)", () => {
   beforeEach(() => {
@@ -158,6 +170,30 @@ describe("TerminalProcess submission tracking (#12337)", () => {
 
     expect(ptyWriteMock).not.toHaveBeenCalledWith("\r");
     expect(terminal.getSubmission("tok-1")?.phase).toBe("cancelled");
+    vi.useRealTimers();
+  });
+
+  it("drops a queued submit and an in-flight Enter when pending input is cancelled, and keeps input open (#14454)", async () => {
+    vi.useFakeTimers();
+    const terminal = createTerminal();
+
+    terminal.submit("first\n", "tok-1");
+    terminal.submit("second\n", "tok-2");
+    expect(ptyWriteMock).toHaveBeenCalledWith("first");
+
+    // Input moved to another window between the body and its Enter.
+    terminal.cancelPendingInput();
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(ptyWriteMock).not.toHaveBeenCalledWith("\r");
+    expect(ptyWriteMock).not.toHaveBeenCalledWith("second");
+    expect(terminal.getSubmission("tok-1")?.phase).toBe("cancelled");
+
+    // Unlike the shutdown lock, the new owner types straight away.
+    terminal.submit("third\n", "tok-3");
+    await vi.advanceTimersByTimeAsync(250);
+    expect(ptyWriteMock).toHaveBeenCalledWith("third");
+    expect(ptyWriteMock).toHaveBeenLastCalledWith("\r");
     vi.useRealTimers();
   });
 

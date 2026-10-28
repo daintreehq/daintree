@@ -17,7 +17,7 @@ import {
   type PluginMcpGrantRegistry,
 } from "./grantRegistry.js";
 import { isPluginMcpGrantAllowed } from "./projectEnablement.js";
-import { createPluginSessionServer } from "./pluginSessionServer.js";
+import { createPluginSessionServer, type PluginToolCallObserver } from "./pluginSessionServer.js";
 import { PLUGIN_MCP_ROUTE_PREFIX, type PluginMcpRouteHandler } from "./types.js";
 import { createLogger } from "../../utils/logger.js";
 
@@ -84,6 +84,11 @@ export interface PluginMcpRouteDeps {
   reloadWaitMs?: number;
   callTimeoutMs?: number;
   maxResultBytes?: number;
+  /** Watches each tool call made with a grant, for the activity of whoever holds it. */
+  observeToolCall?: (
+    grant: PluginMcpGrant,
+    ...call: Parameters<PluginToolCallObserver>
+  ) => ReturnType<PluginToolCallObserver>;
 }
 
 interface PluginMcpSession {
@@ -190,8 +195,10 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
   private readonly parked = new Map<string, Set<AbortController>>();
   private readonly callTimeoutMs: number | undefined;
   private readonly maxResultBytes: number | undefined;
+  private readonly observeToolCall: PluginMcpRouteDeps["observeToolCall"];
   private readonly offRevoked: () => void;
   private readonly offKept: () => void;
+  private readonly offRegroup: () => void;
   /** When each kind of rejection or eviction was last logged, by kind and credential. */
   private readonly rejectionsLoggedAt = new Map<string, number>();
   /**
@@ -211,10 +218,16 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
     this.reloadWaitMs = deps.reloadWaitMs ?? PLUGIN_MCP_RELOAD_WAIT_MS;
     this.callTimeoutMs = deps.callTimeoutMs;
     this.maxResultBytes = deps.maxResultBytes;
+    this.observeToolCall = deps.observeToolCall;
     // Grants are deleted before this fires, so any request racing the close
     // already fails authentication; this only has to reap what is open.
     this.offRevoked = this.grants.onRevoked((revoked) => {
       for (const grant of revoked) this.closeCredentialSessions(grant.credentialId);
+    });
+    // A grant names the groups the user allowed, not tools; once the plugin
+    // moves a tool between groups, it no longer says which tools those are.
+    this.offRegroup = this.endpoints.onDidRegroup((pluginInstanceId, endpointId) => {
+      this.grants.revokeRegrouped(pluginInstanceId, endpointId);
     });
     // The reload's roster changes may have reached a client while its
     // credential was held, or not at all (a lazy plugin registers nothing until
@@ -262,6 +275,7 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
   dispose(): void {
     this.offRevoked();
     this.offKept();
+    this.offRegroup();
     this.closeAllSessions();
   }
 
@@ -576,6 +590,12 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
       endpointRegistry: this.endpoints,
       ...(this.callTimeoutMs !== undefined ? { callTimeoutMs: this.callTimeoutMs } : {}),
       ...(this.maxResultBytes !== undefined ? { maxResultBytes: this.maxResultBytes } : {}),
+      ...(this.observeToolCall !== undefined
+        ? {
+            observeToolCall: (toolName: string, argNames: readonly string[]) =>
+              this.observeToolCall?.(grant, toolName, argNames),
+          }
+        : {}),
     });
 
     // enableDnsRebindingProtection / allowedHosts / allowedOrigins are

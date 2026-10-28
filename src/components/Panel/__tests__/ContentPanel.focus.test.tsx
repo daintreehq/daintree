@@ -14,6 +14,8 @@ import type { AgentState } from "@shared/types/agent";
 const mockState = {
   showGridAgentHighlights: false,
   dockBlockedState: null as string | null,
+  headerAgentState: undefined as AgentState | undefined,
+  pluginActivity: null as { pluginId: string; shown: string; description: string } | null,
 };
 
 vi.mock("@/components/Terminal/TerminalContextMenu", () => ({
@@ -49,7 +51,12 @@ vi.mock("@/utils/terminalChrome", () => ({
 }));
 
 vi.mock("@/utils/terminalAgentDisplayState", () => ({
-  getTerminalAgentDisplayState: () => undefined,
+  getTerminalAgentDisplayState: () => mockState.headerAgentState,
+}));
+
+vi.mock("../PluginPanelActivity", () => ({
+  usePluginPanelActivity: () => mockState.pluginActivity,
+  PluginPanelActivityIndicator: () => null,
 }));
 
 vi.mock("@/components/Terminal/TerminalHeaderContent", () => ({
@@ -553,6 +560,8 @@ describe("ContentPanel selection chrome", () => {
     useVoiceRecordingStore.setState({ lockedTarget: null });
     mockState.showGridAgentHighlights = false;
     mockState.dockBlockedState = null;
+    mockState.headerAgentState = undefined;
+    mockState.pluginActivity = null;
   }
 
   beforeEach(resetStores);
@@ -613,6 +622,45 @@ describe("ContentPanel selection chrome", () => {
       });
       const panel = container.querySelector('[data-panel-id="t-1"]');
       expect(panel?.classList.contains("panel-voice-dictation-locked")).toBe(true);
+      expect(chromeOf(container)).toBe("selected");
+    });
+  });
+
+  describe("ContentPanel plugin-reported activity chrome (#13820)", () => {
+    function reported(shown: string) {
+      mockState.pluginActivity = { pluginId: "acme", shown, description: `Reported by Acme` };
+    }
+
+    it.each([
+      ["waiting", "waiting"],
+      ["working", "working"],
+      ["unread", "none"],
+      ["failed", "none"],
+    ] as const)("draws a %s report as %s chrome in a multi-pane grid", (shown, chrome) => {
+      mockState.showGridAgentHighlights = true;
+      reported(shown);
+      const { container } = renderPanel({ isFocused: false });
+      expect(chromeOf(container)).toBe(chrome);
+    });
+
+    it("draws nothing with grid highlights off", () => {
+      reported("waiting");
+      const { container } = renderPanel({ isFocused: false });
+      expect(chromeOf(container)).toBe("none");
+    });
+
+    it("yields the border to an agent Daintree observes in the panel", () => {
+      mockState.showGridAgentHighlights = true;
+      mockState.headerAgentState = "working";
+      reported("waiting");
+      const { container } = renderPanel({ isFocused: false, agentState: "working" });
+      expect(chromeOf(container)).toBe("working");
+    });
+
+    it("never outranks selection", () => {
+      mockState.showGridAgentHighlights = true;
+      reported("waiting");
+      const { container } = renderPanel();
       expect(chromeOf(container)).toBe("selected");
     });
   });
@@ -807,6 +855,15 @@ describe("ContentPanel title", () => {
         await act(nextFrame);
       }
       expect(onTitleChange.mock.calls).toEqual([["after Enter"]]);
+    });
+
+    it("claims the Escape that cancels the rename", async () => {
+      renderPanel();
+      fireEvent.keyDown(titleButton(), { key: "F2" });
+      await act(nextFrame);
+
+      // fireEvent returns false once a handler prevented the default.
+      expect(fireEvent.keyDown(titleField(), { key: "Escape" })).toBe(false);
     });
 
     it("does not re-select text typed in the moment after the field opens", async () => {

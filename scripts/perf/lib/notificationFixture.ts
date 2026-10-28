@@ -299,6 +299,14 @@ export function logInfo() { bus().logInfoCount += 1; }
 export function logError() { bus().logErrorCount += 1; }
 export function logWarn() { bus().logInfoCount += 1; }
 export function logDebug() { bus().logInfoCount += 1; }
+export function createLogger() {
+  return {
+    debug() { bus().logInfoCount += 1; },
+    info() { bus().logInfoCount += 1; },
+    warn() { bus().logInfoCount += 1; },
+    error() { bus().logErrorCount += 1; },
+  };
+}
 `;
 
 function dataUrl(source: string): string {
@@ -1170,7 +1178,7 @@ export type IdleProjectKind =
   | "recently-active"
   | "no-terminals"
   | "pty-less"
-  | "unknown-activity"
+  | "fresh-spawn"
   | "dismissed";
 
 export interface IdleProjectCase {
@@ -1189,7 +1197,7 @@ const IDLE_KIND_ORDER: readonly IdleProjectKind[] = [
   "recently-active",
   "no-terminals",
   "pty-less",
-  "unknown-activity",
+  "fresh-spawn",
   "dismissed",
 ];
 
@@ -1197,10 +1205,11 @@ const IDLE_KIND_REASON: Record<IdleProjectKind, string> = {
   eligible: "every terminal idle past the threshold, nothing on screen, no cooldown",
   "on-screen": "foreground in a window — a project the user is looking at is never nudged",
   "active-agent": "an agent is working, so the terminals are not idle",
-  "recently-active": "output inside the threshold window",
+  "recently-active": "a visible change inside the threshold window",
   "no-terminals": "nothing to close",
   "pty-less": "its only terminals have no PTY, so they do not count as terminals",
-  "unknown-activity": "no activity timestamps at all — the sweep is conservative",
+  "fresh-spawn":
+    "nothing typed and no visible change since a spawn inside the threshold, so it can't have been idle that long",
   dismissed: "the user muted this project inside the cooldown",
 };
 
@@ -1213,6 +1222,9 @@ export interface IdleTerminalRow {
   agentState?: AgentState;
   lastInputTime?: number;
   lastOutputTime?: number;
+  /** The real-activity clocks the sweep reads (#13845). */
+  lastTypedInputAt?: number;
+  lastOutputChangeAt?: number;
 }
 
 export interface IdleCorpus {
@@ -1263,6 +1275,9 @@ export function buildIdleCorpus(
     if (kind === "no-terminals") continue;
 
     for (let t = 0; t < terminalsPerProject; t += 1) {
+      // The raw output clock reads "now" on every row: a status line that
+      // keeps repainting moves it without changing the screen, so a sweep that
+      // still read it would find nothing idle and miss every eligible project.
       const row: IdleTerminalRow = {
         id: `${projectId}-term-${t}`,
         projectId,
@@ -1270,13 +1285,16 @@ export function buildIdleCorpus(
         spawnedAt: idleAt,
         hasPty: kind !== "pty-less",
         lastInputTime: idleAt,
-        lastOutputTime: idleAt,
+        lastOutputTime: nowMs,
+        lastTypedInputAt: idleAt,
+        lastOutputChangeAt: idleAt,
       };
       if (kind === "active-agent" && t === 0) row.agentState = "working";
-      if (kind === "recently-active" && t === 0) row.lastOutputTime = recentAt;
-      if (kind === "unknown-activity") {
-        delete row.lastInputTime;
-        delete row.lastOutputTime;
+      if (kind === "recently-active" && t === 0) row.lastOutputChangeAt = recentAt;
+      if (kind === "fresh-spawn") {
+        row.spawnedAt = recentAt;
+        delete row.lastTypedInputAt;
+        delete row.lastOutputChangeAt;
       }
       terminals.push(row);
     }

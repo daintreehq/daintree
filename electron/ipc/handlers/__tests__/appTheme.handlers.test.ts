@@ -86,6 +86,7 @@ vi.mock("../../../../shared/theme/index.js", () => ({
       "status-success": "#30a46c",
     },
   })),
+  getAppThemeFallbackType: vi.fn(() => "dark"),
   normalizeAppColorScheme: vi.fn((s: unknown) => s),
   normalizeAccentHex: vi.fn((value: unknown): string | null => {
     if (typeof value !== "string") return null;
@@ -141,6 +142,7 @@ import { ipcMain, dialog, BrowserWindow } from "electron";
 import { CHANNELS } from "../../channels.js";
 import { registerAppThemeHandlers } from "../appTheme.js";
 import { typedSend } from "../../utils.js";
+import { getAppThemeFallbackType, resolveAppTheme } from "../../../../shared/theme/index.js";
 import {
   seedTitleBarOverlay,
   setTitleBarOverlayBannerSeverity,
@@ -149,6 +151,17 @@ import {
   WINDOWS_CAPTION_SYMBOL_COLOR,
   WINDOWS_TITLEBAR_HEIGHT_PX,
 } from "../../../../shared/config/windowChrome.js";
+import {
+  clearPluginThemeRegistry,
+  registerPluginThemes,
+} from "../../../services/plugin/PluginThemeRegistry.js";
+import {
+  compilePluginTheme,
+  makePluginThemeId,
+  toPluginThemeSnapshot,
+} from "../../../../shared/theme/pluginThemes.js";
+import { BUILT_IN_THEME_SOURCES } from "../../../../shared/theme/builtInThemes/index.js";
+import type { PluginThemeSource } from "../../../../shared/theme/types.js";
 
 type Handler = (event: unknown, ...args: unknown[]) => Promise<unknown>;
 
@@ -201,6 +214,55 @@ describe("appTheme handlers", () => {
     await handler({}, "custom-dark");
 
     expect(storeState.data.appTheme).toMatchObject({ preferredDarkSchemeId: "custom-dark" });
+  });
+
+  describe("plugin themes (#13832)", () => {
+    const daintree = BUILT_IN_THEME_SOURCES.find((source) => source.id === "daintree")!;
+    const source: PluginThemeSource = {
+      id: makePluginThemeId("acme.themes", "midnight"),
+      name: "Midnight",
+      type: "dark",
+      pluginId: "acme.themes",
+      pluginName: "Acme Themes",
+      palette: daintree.palette,
+    };
+
+    afterEach(() => {
+      clearPluginThemeRegistry();
+    });
+
+    it("persists an offered plugin theme together with the snapshot that paints it", async () => {
+      registerPluginThemes("acme.themes", [{ source, scheme: compilePluginTheme(source) }]);
+      storeState.data.appTheme = { colorSchemeId: "daintree" };
+      registerAppThemeHandlers();
+
+      await getHandler(CHANNELS.APP_THEME_SET_COLOR_SCHEME)({}, source.id);
+
+      expect(storeState.data.appTheme).toEqual({
+        colorSchemeId: source.id,
+        pluginThemeSnapshot: toPluginThemeSnapshot(source),
+      });
+    });
+
+    it("refuses a plugin theme no loaded plugin offers, so the picker rolls back", async () => {
+      storeState.data.appTheme = { colorSchemeId: "daintree" };
+      registerAppThemeHandlers();
+
+      await expect(
+        getHandler(CHANNELS.APP_THEME_SET_COLOR_SCHEME)({}, source.id)
+      ).rejects.toThrow();
+      expect(storeState.data.appTheme).toEqual({ colorSchemeId: "daintree" });
+    });
+
+    it("keeps plugin themes out of the follow-system slots", async () => {
+      storeState.data.appTheme = { colorSchemeId: "daintree" };
+      registerAppThemeHandlers();
+
+      await getHandler(CHANNELS.APP_THEME_SET_PREFERRED_DARK_SCHEME)({}, source.id);
+      await getHandler(CHANNELS.APP_THEME_SET_PREFERRED_LIGHT_SCHEME)({}, source.id);
+
+      expect(storeState.data.appTheme).toEqual({ colorSchemeId: "daintree" });
+    });
   });
 
   it("setPreferredLightScheme stores the scheme id", async () => {
@@ -435,6 +497,33 @@ describe("appTheme handlers", () => {
     vi.advanceTimersByTime(300);
 
     expect(mockWindow.setBackgroundColor).toHaveBeenCalledWith("#1a1a2e");
+  });
+
+  it("nativeTheme updated falls back to the appearance the OS switched to", () => {
+    const mockWindow = {
+      isDestroyed: () => false,
+      setBackgroundColor: vi.fn(),
+      setTitleBarOverlay: vi.fn(),
+    };
+    storeState.data.appTheme = {
+      colorSchemeId: "daintree",
+      followSystem: true,
+      preferredLightSchemeId: "custom-deleted",
+    };
+    nativeThemeMock.shouldUseDarkColors = false;
+
+    registerAppThemeHandlers(mockWindow as never);
+
+    getNativeThemeHandler()();
+    vi.advanceTimersByTime(300);
+
+    // The polarity comes from the light slot the id holds and the light OS appearance.
+    expect(getAppThemeFallbackType).toHaveBeenCalledWith(
+      "custom-deleted",
+      expect.objectContaining({ preferredLightSchemeId: "custom-deleted" }),
+      false
+    );
+    expect(resolveAppTheme).toHaveBeenCalledWith("custom-deleted", [], "dark");
   });
 
   it("nativeTheme updated does not send when window is destroyed", () => {

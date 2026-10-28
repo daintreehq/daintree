@@ -7,12 +7,42 @@ import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { notify } from "@/lib/notify";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 
+type SetupView = {
+  lifecycleStatus?: { state: string };
+  setupStatus?: { state: string; stage?: string };
+};
+
+function isSetupRunning(worktree: SetupView | undefined): boolean {
+  return (
+    worktree?.lifecycleStatus?.state === "running" || worktree?.setupStatus?.state === "running"
+  );
+}
+
+/**
+ * A skipped setup is included: once its commands are approved elsewhere, this
+ * is how the worktree gets it run. Before then a retry settles straight back on
+ * `needs-approval`, running nothing. Read from `setupStatus` too, because a
+ * resource action overwrites the lifecycle slot — and plugin steps that did not
+ * succeed are recorded there.
+ */
+function hasSetupToRetry(worktree: SetupView | undefined): boolean {
+  const state = worktree?.lifecycleStatus?.state;
+  const setup = worktree?.setupStatus;
+  return (
+    state === "failed" ||
+    state === "timed-out" ||
+    state === "needs-approval" ||
+    setup?.state === "needs-approval" ||
+    (setup?.stage === "plugin-steps" && (setup.state === "failed" || setup.state === "timed-out"))
+  );
+}
+
 export function registerWorktreeLifecycleActions(actions: ActionRegistry): void {
   actions.set("worktree.lifecycle.retrySetup", () =>
     defineAction({
       id: "worktree.lifecycle.retrySetup",
       title: "Retry setup",
-      description: "Re-run the worktree lifecycle setup script in place",
+      description: "Re-run a worktree's setup in place, resuming where it stopped",
       category: "worktree",
       kind: "command",
       danger: "safe",
@@ -22,33 +52,15 @@ export function registerWorktreeLifecycleActions(actions: ActionRegistry): void 
         const worktreeId = ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
         if (!worktreeId) return false;
         const worktree = getCurrentViewStore().getState().worktrees.get(worktreeId);
-        const state = worktree?.lifecycleStatus?.state;
-        if (state === "running") return false;
-        // A skipped setup is included: once its commands are approved elsewhere,
-        // this is how the worktree gets it run. Before then a retry settles
-        // straight back on `needs-approval`, running nothing. Read from
-        // `setupStatus` too, because a resource action overwrites the lifecycle slot.
-        return (
-          state === "failed" ||
-          state === "timed-out" ||
-          state === "needs-approval" ||
-          worktree?.setupStatus?.state === "needs-approval"
-        );
+        if (isSetupRunning(worktree)) return false;
+        return hasSetupToRetry(worktree);
       },
       disabledReason: (ctx: ActionContext) => {
         const worktreeId = ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
         if (!worktreeId) return "No worktree selected";
         const worktree = getCurrentViewStore().getState().worktrees.get(worktreeId);
-        const state = worktree?.lifecycleStatus?.state;
-        if (state === "running") return "Setup is already running";
-        if (
-          state !== "failed" &&
-          state !== "timed-out" &&
-          state !== "needs-approval" &&
-          worktree?.setupStatus?.state !== "needs-approval"
-        ) {
-          return "No failed setup to retry";
-        }
+        if (isSetupRunning(worktree)) return "Setup is already running";
+        if (!hasSetupToRetry(worktree)) return "No failed setup to retry";
         return undefined;
       },
       run: async (args, ctx: ActionContext) => {

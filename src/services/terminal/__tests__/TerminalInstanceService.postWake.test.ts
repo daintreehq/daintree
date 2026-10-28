@@ -123,10 +123,9 @@ describe("TerminalInstanceService post-wake handling", () => {
     vi.useFakeTimers();
     vi.clearAllMocks();
 
-    ({ terminalInstanceService: service } =
-      (await import("../TerminalInstanceService")) as unknown as {
-        terminalInstanceService: PostWakeTestService;
-      });
+    service = (await (
+      await import("../terminalInstanceServiceAccessor")
+    ).load()) as unknown as PostWakeTestService;
 
     service.instances.clear();
   });

@@ -170,6 +170,12 @@ function playwrightBench({ summary, kind, spec, gate, build }: PlaywrightBench):
 }
 
 export const REGISTRY: Record<string, Command> = {
+  "vanilla-plugins": {
+    summary:
+      "Idle cost of vanilla Daintree with 20 or 100 terminals and no plugins (opt-in, #14129)",
+    kind: "diagnostic",
+    runner: tsxScript("vanilla-plugins.ts"),
+  },
   "foreground-terminal": {
     summary: "Visible single/two-agent terminal CPU and GPU time (macOS, explicit scenario)",
     kind: "mechanism",
@@ -296,6 +302,14 @@ export const REGISTRY: Record<string, Command> = {
     gate: "RUN_PERF_SWITCH_ROTATION",
     build: "build:e2e",
   }),
+  "reference-app-lifecycle": playwrightBench({
+    summary:
+      "Request Desk reference app in six projects behind a two-view cache: warm/cold switch, memory and idle/active CPU, report only",
+    kind: "journey",
+    spec: "e2e/perf/reference-app-lifecycle-perf.spec.ts",
+    gate: "RUN_PERF_REFERENCE_APP",
+    build: "build:e2e",
+  }),
   "project-switch-stress": playwrightBench({
     summary:
       "Cold/warm project-switch churn across many projects: switch latency, FD and memory growth per round",
@@ -378,6 +392,19 @@ export const REGISTRY: Record<string, Command> = {
     kind: "diagnostic",
     runner: tsxScript("memory-growth-compare.ts"),
   },
+  "empty-view-memory": playwrightBench({
+    summary:
+      "One project view's renderer footprint, by category, empty and after a terminal session (macOS)",
+    kind: "journey",
+    spec: "e2e/perf/empty-project-view-memory-perf.spec.ts",
+    gate: "RUN_PERF_EMPTY_VIEW",
+    build: "build:e2e",
+  }),
+  "empty-view-memory-compare": {
+    summary: "Compare two sets of empty-view-memory results by per-phase medians",
+    kind: "diagnostic",
+    runner: tsxScript("empty-view-memory-compare.ts"),
+  },
   "memory-compare": {
     summary: "Diff two memory-bench result files into a delta table",
     kind: "diagnostic",
@@ -390,6 +417,43 @@ export const REGISTRY: Record<string, Command> = {
     gate: "RUN_PERF_MEMORY_PRESSURE",
     build: "build:e2e:bench",
   }),
+  "voice-replay": playwrightBench({
+    summary:
+      "Fixture clips as the microphone through dictation to the real providers: WER, term recall, first/last word, timings (needs keys)",
+    kind: "journey",
+    spec: "e2e/perf/voice-replay-perf.spec.ts",
+    gate: "RUN_PERF_VOICE_REPLAY",
+    build: "build:e2e",
+  }),
+  "voice-replay-compare": {
+    summary: "Compare a voice-replay run against the saved baseline, or save one (--save)",
+    kind: "diagnostic",
+    runner: tsxScript("voice-replay-compare.ts"),
+  },
+  "voice-cleanup": {
+    summary:
+      "Dictated passages through the real cleanup per model, effort and prompt, landed under each edit budget: agent-ready text, fixes, meaning kept, guard catches, latency, cost (needs OPENAI_API_KEY)",
+    kind: "diagnostic",
+    runner: tsxScript("voice-cleanup.ts"),
+  },
+  "voice-preview-final": {
+    summary:
+      "Replay clips through the real OpenAI provider: where each segment's final disagrees with its live preview, and whether those are the misheard words (needs OPENAI_API_KEY)",
+    kind: "diagnostic",
+    runner: tsxScript("voice-preview-final.ts"),
+  },
+  "voice-tuning": {
+    summary:
+      "Replay clips through the real OpenAI provider per delay tier and segmentation: WER, term recall, first/last word, time to final (needs OPENAI_API_KEY)",
+    kind: "diagnostic",
+    runner: tsxScript("voice-tuning.ts"),
+  },
+  "voice-pipeline": {
+    summary:
+      "Replay clips in several voices through the real Grok provider and Terra cleanup: WER and exact prompts raw and cleaned, stop-to-settled wait, cost (needs GROK_API_KEY, OPENAI_API_KEY)",
+    kind: "diagnostic",
+    runner: tsxScript("voice-pipeline.ts"),
+  },
   analyze: {
     summary: "Bundle-size visualizer build (ANALYZE=true vite build)",
     kind: "diagnostic",

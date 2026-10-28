@@ -135,3 +135,25 @@ describe("ForgeProviderContributionSchema roles (#13700)", () => {
     expect(parse({ roles: ["wiki"] }).success).toBe(false);
   });
 });
+
+describe("ForgeProviderContributionSchema referencePrefixes", () => {
+  const parse = (referencePrefixes: unknown) =>
+    ForgeProviderContributionSchema.safeParse({ ...base, referencePrefixes });
+
+  it("accepts a prefix per kind, or for one kind only", () => {
+    expect(parse({ issue: "#", pr: "!" }).success).toBe(true);
+    expect(parse({ pr: "#" }).success).toBe(true);
+    expect(parse({}).success).toBe(true);
+  });
+
+  it("rejects a prefix that would run into the number or split the reference", () => {
+    expect(parse({ issue: "" }).success).toBe(false);
+    expect(parse({ issue: "v1" }).success).toBe(false);
+    expect(parse({ pr: "PR " }).success).toBe(false);
+    expect(parse({ pr: "#####" }).success).toBe(false);
+  });
+
+  it("rejects a kind it doesn't know", () => {
+    expect(parse({ issue: "#", mergeRequest: "!" }).success).toBe(false);
+  });
+});

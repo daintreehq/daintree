@@ -38,14 +38,17 @@ vi.mock("@/clients", () => ({
   agentSettingsClient: { get: vi.fn().mockResolvedValue({}) },
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     cleanup: vi.fn(),
     applyRendererPolicy: vi.fn(),
     onPanelBackgrounded: vi.fn(),
     destroy: vi.fn(),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 const notifyMock = vi.fn();
 vi.mock("@/lib/notify", () => ({ notify: notifyMock }));

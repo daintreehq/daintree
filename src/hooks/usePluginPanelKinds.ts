@@ -9,7 +9,7 @@ import {
 import { registerPanelKindDefinition, unregisterPanelKindDefinition } from "@/registry";
 import { TerminalPane } from "@/components/Terminal/TerminalPane";
 import { makePluginViewHost } from "@/components/Plugin/PluginViewHost";
-import { reconcileDockMembership } from "@/store/reconcileDockMembership";
+import { reconcileDockMembership, restorePendingDockPanels } from "@/store/reconcileDockMembership";
 import { logWarn } from "@/utils/logger";
 
 /**
@@ -61,13 +61,19 @@ const PANEL_KIND_META_KEYS = [
   // out would keep serving a cached host judging state against the version the
   // PREVIOUS build declared (#12280).
   "stateVersion",
+  // Read off the registered config by `panel.openPluginPanel` to decide whether
+  // a new panel gets a worktree at all.
+  "scope",
+  // Read off the registered config before drawing a plugin's activity report.
+  "reportsActivity",
   // A reload that only adds, drops or retargets a tour changes only this, and
   // the panel menus read it off the registered config.
   "tourId",
   // Read off the registered config by the panel menus ("Plugin settings…") and
-  // by the view host (the "needs setup" strip).
+  // by the view host (the setup strip).
   "hasPluginSettings",
   "hasRequiredSettings",
+  "hasSetupSteps",
   // Read off the registered config by the panel menus ("Back up data…").
   "hasPluginDatabases",
 ] as const satisfies readonly (keyof PanelKindConfig)[];
@@ -233,6 +239,11 @@ export function usePluginPanelKinds(): void {
       // stay reachable (#11375). Cheap — it scans dock membership, which is
       // small, and no-ops when nothing is stranded.
       reconcileDockMembership();
+      // The other direction (#13907): a plugin panel restored into the grid
+      // because its kind wasn't registered yet goes back to the dock now that
+      // it is. After the pass above so a kind that came back non-dockable is
+      // settled by that rule, not bounced.
+      restorePendingDockPanels();
     };
 
     const electron = typeof window !== "undefined" ? window.electron : undefined;

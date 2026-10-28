@@ -114,11 +114,22 @@ vi.mock("../TelemetryService.js", () => ({
   trackEvent: trackEventMock,
 }));
 
+// Electron's own updater: on macOS, electron-updater hands each download to it.
+const nativeUpdaterMock = vi.hoisted(() => ({
+  on: vi.fn(),
+  off: vi.fn(),
+}));
+
 vi.mock("electron", () => ({
   app: appMock,
   ipcMain: ipcMainMock,
-  BrowserWindow: { getAllWindows: () => [windowMock] },
+  autoUpdater: nativeUpdaterMock,
+  BrowserWindow: { getAllWindows: () => [windowMock], getFocusedWindow: () => null },
+  dialog: { showMessageBox: vi.fn() },
 }));
+
+const updateWarningMock = vi.hoisted(() => ({ showUpdateWarning: vi.fn() }));
+vi.mock("../../utils/quitWarning.js", () => updateWarningMock);
 
 vi.mock("../../ipc/utils.js", () => ({
   broadcastToRenderer: broadcastMock,
@@ -154,7 +165,12 @@ const armRelaunchMock = vi.hoisted(() => ({
 vi.mock("../../lifecycle/armRelaunch.js", () => armRelaunchMock);
 
 import { autoUpdaterService } from "../AutoUpdaterService.js";
+import { getStagedUpdate } from "../stagedUpdateState.js";
 import { CHANNELS } from "../../ipc/channels.js";
+import {
+  isExitConfirmationPending,
+  setAttachedShellsProvider,
+} from "../../lifecycle/attachedShells.js";
 import { PENDING_UPDATE_INSTALL_STAGES } from "../../utils/updateInstallStages.js";
 
 const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
@@ -1637,6 +1653,77 @@ describe("AutoUpdaterService", () => {
     });
   });
 
+  describe("staged update for Host mode", () => {
+    let downloadedHandler: (info: { version: string }) => void;
+    let setChannelHandler: (event: unknown, channel: unknown) => Promise<unknown>;
+
+    beforeEach(() => {
+      autoUpdaterService.initialize();
+      downloadedHandler = (autoUpdaterMock.on as Mock).mock.calls.find(
+        (args) => args[0] === "update-downloaded"
+      )![1];
+      setChannelHandler = (ipcMainMock.handle as Mock).mock.calls.find(
+        (args) => args[0] === CHANNELS.UPDATE_SET_CHANNEL
+      )![1];
+    });
+
+    it("says a Mac's download is ready only once macOS's own updater has it", () => {
+      downloadedHandler({ version: "2.0.0" });
+      expect(getStagedUpdate()).toEqual({ version: "2.0.0", installsOnQuit: true, ready: false });
+      const nativeDownloaded = (nativeUpdaterMock.on as Mock).mock.calls.find(
+        (args) => args[0] === "update-downloaded"
+      )![1] as () => void;
+      nativeDownloaded();
+      expect(getStagedUpdate()).toEqual({ version: "2.0.0", installsOnQuit: true, ready: true });
+    });
+
+    it("waits for every download handed to macOS before calling the latest ready", () => {
+      const nativeDownloaded = () =>
+        (
+          (nativeUpdaterMock.on as Mock).mock.calls.find(
+            (args) => args[0] === "update-downloaded"
+          )![1] as () => void
+        )();
+      downloadedHandler({ version: "2.0.0" });
+      downloadedHandler({ version: "2.0.1" });
+      // The first handoff finishing says nothing about the second.
+      nativeDownloaded();
+      expect(getStagedUpdate()).toMatchObject({ version: "2.0.1", ready: false });
+      nativeDownloaded();
+      expect(getStagedUpdate()).toMatchObject({ version: "2.0.1", ready: true });
+    });
+
+    it("lets a handoff that failed stop counting, so a later one can still land", () => {
+      const native = (event: string) =>
+        (
+          (nativeUpdaterMock.on as Mock).mock.calls.find(
+            (args) => args[0] === event
+          )![1] as () => void
+        )();
+      downloadedHandler({ version: "2.0.0" });
+      native("error");
+      expect(getStagedUpdate()).toMatchObject({ ready: false });
+      downloadedHandler({ version: "2.0.0" });
+      native("update-downloaded");
+      expect(getStagedUpdate()).toMatchObject({ version: "2.0.0", ready: true });
+    });
+
+    it("keeps a Mac's staged update across a channel change, which can't take it back", async () => {
+      downloadedHandler({ version: "2.0.0" });
+      await setChannelHandler(null, "nightly");
+      expect(getStagedUpdate()).toMatchObject({ version: "2.0.0" });
+    });
+
+    it("forgets it when the service goes", () => {
+      downloadedHandler({ version: "2.0.1" });
+      autoUpdaterService.dispose();
+      expect(getStagedUpdate()).toBeNull();
+      expect(
+        (nativeUpdaterMock.off as Mock).mock.calls.some(([name]) => name === "update-downloaded")
+      ).toBe(true);
+    });
+  });
+
   describe("channel-switch invalidation", () => {
     let setChannelHandler: (event: unknown, channel: unknown) => Promise<unknown>;
     let downloadedHandler: (info: { version: string }) => void;
@@ -2140,6 +2227,80 @@ describe("AutoUpdaterService", () => {
       expect(autoUpdaterService.quitAndInstallIfReady()).toBe(false);
       vi.advanceTimersByTime(0);
       expect(autoUpdaterMock.quitAndInstall).not.toHaveBeenCalled();
+    });
+
+    describe("with Shells attached to this host", () => {
+      const quitHandler = () =>
+        (ipcMainMock.handle as Mock).mock.calls.find(
+          (args) => args[0] === CHANNELS.UPDATE_QUIT_AND_INSTALL
+        )![1] as (event: unknown) => void;
+
+      beforeEach(() => {
+        setAttachedShellsProvider(() => [{ clientName: "MacBook Pro" }]);
+        downloadedHandler({ version: "2.0.0" });
+      });
+
+      afterEach(() => {
+        setAttachedShellsProvider(null);
+        updateWarningMock.showUpdateWarning.mockReset();
+      });
+
+      it("asks first and leaves the update staged when cancelled", async () => {
+        updateWarningMock.showUpdateWarning.mockResolvedValue(false);
+
+        await expect(autoUpdaterService.confirmAndQuitAndInstall()).resolves.toBe(false);
+
+        expect(updateWarningMock.showUpdateWarning).toHaveBeenCalledWith(
+          [{ clientName: "MacBook Pro" }],
+          expect.anything(),
+          windowMock
+        );
+        expect(shutdownCoordinatorMock.requestGracefulShutdownForUpdate).not.toHaveBeenCalled();
+        expect(autoUpdaterService.getMenuState()).toBe("ready");
+        expect(isExitConfirmationPending()).toBe(false);
+      });
+
+      it("installs once confirmed", async () => {
+        updateWarningMock.showUpdateWarning.mockResolvedValue(true);
+
+        await expect(autoUpdaterService.confirmAndQuitAndInstall()).resolves.toBe(true);
+
+        expect(shutdownCoordinatorMock.requestGracefulShutdownForUpdate).toHaveBeenCalledTimes(1);
+      });
+
+      it("gates the renderer toast the same way", async () => {
+        updateWarningMock.showUpdateWarning.mockResolvedValue(false);
+
+        quitHandler()(TRUSTED_SENDER);
+        await vi.waitFor(() => expect(updateWarningMock.showUpdateWarning).toHaveBeenCalled());
+        await vi.waitFor(() => expect(isExitConfirmationPending()).toBe(false));
+
+        expect(shutdownCoordinatorMock.requestGracefulShutdownForUpdate).not.toHaveBeenCalled();
+      });
+
+      it("does not stack a second dialog on a pending one", async () => {
+        let answer: (confirmed: boolean) => void = () => {};
+        updateWarningMock.showUpdateWarning.mockReturnValue(
+          new Promise<boolean>((resolve) => {
+            answer = resolve;
+          })
+        );
+
+        const first = autoUpdaterService.confirmAndQuitAndInstall();
+        await expect(autoUpdaterService.confirmAndQuitAndInstall()).resolves.toBe(false);
+        answer(false);
+        await first;
+
+        expect(updateWarningMock.showUpdateWarning).toHaveBeenCalledTimes(1);
+      });
+
+      it("does not ask when nothing is attached any more", async () => {
+        setAttachedShellsProvider(() => []);
+
+        await expect(autoUpdaterService.confirmAndQuitAndInstall()).resolves.toBe(true);
+
+        expect(updateWarningMock.showUpdateWarning).not.toHaveBeenCalled();
+      });
     });
 
     it("coordinates the shutdown when ready, and installs only once it settles", () => {

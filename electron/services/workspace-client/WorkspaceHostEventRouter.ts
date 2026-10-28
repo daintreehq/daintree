@@ -48,6 +48,8 @@ export class WorkspaceHostEventRouter {
   private readonly inotifyLimitToastsSent = new Set<"watches" | "instances">();
   private emfileLimitToastSent = false;
   private cloudTeardownFailureToastKeys = new Set<string>();
+  /** Resource teardowns already announced, by worktree and start: a settled status repeats on every update. */
+  private resourceTeardownSuccessKeys = new Set<string>();
   private pruneRetainedToastKeys = new Set<string>();
 
   private pendingSysWorktreeUpdates = new Map<string, WorktreeSnapshot>();
@@ -172,6 +174,19 @@ export class WorkspaceHostEventRouter {
         // leaves the resource running exactly as a failed one does, so it takes
         // the same route with its own reason.
         const status = worktree.lifecycleStatus;
+        // Announced from the raw stream: the sys-bus queue keeps only the
+        // latest snapshot per 50ms, and the next phase or a status check can
+        // replace the success before it drains.
+        if (status?.phase === "resource-teardown" && status.state === "success") {
+          const key = `${worktree.worktreeId}:${status.startedAt}`;
+          if (!this.resourceTeardownSuccessKeys.has(key)) {
+            this.resourceTeardownSuccessKeys.add(key);
+            events.emit("sys:worktree:resource-teardown", {
+              worktreeId: worktree.worktreeId,
+              timestamp: Date.now(),
+            });
+          }
+        }
         if (
           status?.phase === "resource-teardown" &&
           (status.state === "failed" ||
@@ -205,6 +220,7 @@ export class WorkspaceHostEventRouter {
         this.emit("worktree-removed", {
           worktreeId: event.worktreeId,
           projectPath: entry.projectPath,
+          projectId: entry.projectId,
         });
         // Fallback signal for external removals (CLI `git worktree remove`,
         // IDE-driven cleanup). The UI-initiated delete path stops the dev
@@ -353,6 +369,7 @@ export class WorkspaceHostEventRouter {
           branchName: event.branchName,
           providerId: event.providerId,
           linked: event.linked,
+          ...(event.issueProvenance ? { issueProvenance: event.issueProvenance } : {}),
         };
         events.emit("sys:issue:detected", {
           ...issuePayload,

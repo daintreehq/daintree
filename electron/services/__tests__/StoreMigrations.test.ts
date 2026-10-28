@@ -1115,6 +1115,67 @@ describe("MigrationRunner", () => {
     expect(LATEST_SCHEMA_VERSION).toBe(highest);
   });
 
+  it("runs migration035 from v34 under the full barrel, dropping the retired hibernation setting (#13840)", async () => {
+    // The buffered facade is the production branch, and a switched-on value is
+    // the one that must not survive into a later automatic sleep.
+    const store = createBufferedMockStore(storePath, {
+      _schemaVersion: 34,
+      hibernation: { enabled: true, inactiveThresholdHours: 48 },
+      idleTerminalNotify: { enabled: true, thresholdMinutes: 60 },
+    });
+    const runner = new MigrationRunner(store as never);
+
+    await runner.runMigrations(migrations);
+
+    expect(store.data._schemaVersion).toBe(LATEST_SCHEMA_VERSION);
+    expect("hibernation" in store.data).toBe(false);
+    expect(store.data.idleTerminalNotify).toEqual({ enabled: true, thresholdMinutes: 60 });
+  });
+
+  it("runs migration037 from v36 under the full barrel, turning dictation cleanup on (#14615)", async () => {
+    const store = createBufferedMockStore(storePath, {
+      _schemaVersion: 36,
+      voiceInput: { enabled: true, openaiApiKey: "sk-test", correctionEnabled: false },
+    });
+    const runner = new MigrationRunner(store as never);
+
+    await runner.runMigrations(migrations);
+
+    expect(store.data._schemaVersion).toBe(LATEST_SCHEMA_VERSION);
+    expect(store.data.voiceInput).toEqual({
+      enabled: true,
+      openaiApiKey: "sk-test",
+      correctionEnabled: true,
+    });
+
+    // Switching it off afterwards survives the next launch's runner.
+    (store.data.voiceInput as Record<string, unknown>).correctionEnabled = false;
+    await new MigrationRunner(store as never).runMigrations(migrations);
+    expect((store.data.voiceInput as Record<string, unknown>).correctionEnabled).toBe(false);
+  });
+
+  it("runs migration037 then migration038 from v36, turning cleanup on and moving toggle onto tap-or-hold (#14626)", async () => {
+    const store = createBufferedMockStore(storePath, {
+      _schemaVersion: 36,
+      voiceInput: { enabled: true, correctionEnabled: false, recordingMode: "toggle" },
+    });
+    const runner = new MigrationRunner(store as never);
+
+    await runner.runMigrations(migrations);
+
+    expect(store.data._schemaVersion).toBe(LATEST_SCHEMA_VERSION);
+    expect(store.data.voiceInput).toEqual({
+      enabled: true,
+      correctionEnabled: true,
+      recordingMode: "tap-or-hold",
+    });
+
+    // Choosing Toggle again afterwards survives the next launch's runner.
+    (store.data.voiceInput as Record<string, unknown>).recordingMode = "toggle";
+    await new MigrationRunner(store as never).runMigrations(migrations);
+    expect((store.data.voiceInput as Record<string, unknown>).recordingMode).toBe("toggle");
+  });
+
   it("runs migration025 from v24 under the full barrel, upgrading the voice correction model (#11365)", async () => {
     const store = createMockStore(storePath, {
       _schemaVersion: 24,
@@ -1126,7 +1187,8 @@ describe("MigrationRunner", () => {
 
     expect(store.data._schemaVersion).toBe(LATEST_SCHEMA_VERSION);
     const voiceInput = store.data.voiceInput as Record<string, unknown>;
-    expect(voiceInput.correctionModel).toBe("gpt-5.6-luna");
+    // 025 lands it on gpt-5.6-luna, then 040 moves it on to gpt-6.1-terra.
+    expect(voiceInput.correctionModel).toBe("gpt-6.1-terra");
     expect(voiceInput.enabled).toBe(true);
     expect(voiceInput.language).toBe("en");
   });
@@ -1841,10 +1903,17 @@ describe("MigrationRunner", () => {
       // Verify migrations actually ran
       expect(store.data._schemaVersion).toBe(LATEST_SCHEMA_VERSION);
 
-      // Migration 025: the legacy gpt-5-nano correction model migrates to luna.
+      // Migration 035: the retired hibernation setting is gone.
+      expect("hibernation" in store.data).toBe(false);
+
+      // Migrations 025 and 040: the legacy gpt-5-nano correction model ends on terra.
       const migratedVoice = store.data.voiceInput as Record<string, unknown>;
-      expect(migratedVoice.correctionModel).toBe("gpt-5.6-luna");
+      expect(migratedVoice.correctionModel).toBe("gpt-6.1-terra");
       expect(migratedVoice.enabled).toBe(true);
+
+      // Migration 036: the flat word list becomes structured entries.
+      expect(migratedVoice.dictionary).toEqual([]);
+      expect("customDictionary" in migratedVoice).toBe(false);
 
       // Migration 002: terminals should have location field
       const migratedTerminals = (store.data.appState as Record<string, unknown>).terminals as Array<
@@ -1866,7 +1935,9 @@ describe("MigrationRunner", () => {
       expect(notif.waitingSoundFile).toBe("waiting.wav");
       expect(notif.soundFile).toBeUndefined();
 
-      // Migration 012: agents should have pinned field, no selected/enabled
+      // Migration 012 retires selected/enabled; 039 then moves the pins it
+      // wrote off the agents. This store predates `settingsVersion` 1, whose
+      // pins the renderer never showed, so none carry over (#14702).
       const migratedAgents = (store.data.agentSettings as Record<string, unknown>).agents as Record<
         string,
         Record<string, unknown>
@@ -1874,8 +1945,9 @@ describe("MigrationRunner", () => {
       for (const [, entry] of Object.entries(migratedAgents)) {
         expect(entry.selected).toBeUndefined();
         expect(entry.enabled).toBeUndefined();
-        expect(typeof entry.pinned).toBe("boolean");
+        expect("pinned" in entry).toBe(false);
       }
+      expect(store.data.agentToolbarPins).toEqual({});
 
       // Migration 019: orphaned fleet deck keys should be gone
       const migratedAppState = store.data.appState as Record<string, unknown>;

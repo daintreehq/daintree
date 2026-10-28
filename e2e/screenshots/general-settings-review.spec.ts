@@ -10,7 +10,7 @@
  * Every state is driven through a real seam:
  *   - navigation via the `daintree:open-settings-tab` deep link the toolbar, recovery
  *     banners and the theme-browser bridge all use, with `subtab` selecting Overview /
- *     Hibernation / Display;
+ *     Background / Display;
  *   - agent availability by stubbing the three `system:*-cli-availability` IPC channels
  *     the real detector answers on. Everything above the IPC boundary — the client, the
  *     store, the hook, the component — is the shipping code path running on top of a
@@ -355,8 +355,8 @@ const STATES: GeneralState[] = [
   },
   {
     // The second sub-tab. Content a user only finds if they think to look for it.
-    slug: "07-hibernation",
-    target: { tab: "general", subtab: "hibernation" },
+    slug: "07-background",
+    target: { tab: "general", subtab: "background" },
     availability: MIXED_AVAILABILITY,
     extraCrop: "content",
     sweep: true,
@@ -489,7 +489,7 @@ const ONLY = (process.env.DAINTREE_SHOT_ONLY ?? "").split(",").filter(Boolean);
 const failures: string[] = [];
 let captured = 0;
 
-test("general settings pane review — overview, agent status, hibernation, display and trouble states", async () => {
+test("general settings pane review — overview, agent status, background, display and trouble states", async () => {
   test.info().annotations.push({
     type: "conditional-skip",
     description: "DAINTREE_SHOT_GENERAL is required for the general-settings capture",

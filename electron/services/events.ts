@@ -8,6 +8,7 @@ import type {
 } from "../../shared/types/pty-host.js";
 import type { ExitReason } from "./pty/types.js";
 import type { AgentEndObservation } from "../../shared/types/ipc/agent.js";
+import type { ActionSource } from "../../shared/types/actions.js";
 
 export type { EventCategory };
 
@@ -87,6 +88,12 @@ export const EVENT_META: Record<keyof DaintreeEventMap, EventMetadata> = {
     requiresContext: true,
     requiresTimestamp: true,
     description: "Worktree was removed from monitoring",
+  },
+  "sys:worktree:resource-teardown": {
+    category: "system",
+    requiresContext: true,
+    requiresTimestamp: true,
+    description: "A worktree's resource teardown succeeded",
   },
   "sys:pr:detected": {
     category: "system",
@@ -202,7 +209,7 @@ export const EVENT_META: Record<keyof DaintreeEventMap, EventMetadata> = {
     category: "agent",
     requiresContext: false,
     requiresTimestamp: true,
-    description: "Agent preset exited with a fallback-eligible error",
+    description: "Agent preset hit a fallback-eligible error or rate limit",
   },
   "agent:state-changed": {
     category: "agent",
@@ -279,7 +286,7 @@ export const EVENT_META: Record<keyof DaintreeEventMap, EventMetadata> = {
     category: "ui",
     requiresContext: false,
     requiresTimestamp: true,
-    description: "Action dispatched by user, keybinding, menu, or agent",
+    description: "Action dispatched by user, keybinding, menu, context menu, agent, or plugin",
   },
 
   // Terminal events
@@ -294,6 +301,19 @@ export const EVENT_META: Record<keyof DaintreeEventMap, EventMetadata> = {
     requiresContext: false,
     requiresTimestamp: false,
     description: "Terminal restored from trash",
+  },
+  "terminal:trash-cleared": {
+    category: "agent",
+    requiresContext: false,
+    requiresTimestamp: false,
+    description: "Terminal left the trash for good: removed, or expired",
+  },
+  "terminal:lifecycle": {
+    category: "agent",
+    requiresContext: false,
+    requiresTimestamp: true,
+    description:
+      "A terminal spawned, exited, was trashed or restored, or showed a rate-limit banner — metadata only",
   },
   "terminal:park-changed": {
     category: "agent",
@@ -508,6 +528,7 @@ export type DaintreeEventMap = {
   "sys:worktree:selectByName": WorktreeSelectByNamePayload;
   "sys:worktree:update": WorktreeState;
   "sys:worktree:remove": { worktreeId: string; timestamp: number };
+  "sys:worktree:resource-teardown": { worktreeId: string; timestamp: number };
 
   "watcher:change": WatcherChangePayload;
 
@@ -538,6 +559,10 @@ export type DaintreeEventMap = {
     ciStatus?: import("../../shared/types/forge.js").CIStatus;
     /** Branch the PR merges into (e.g. "develop"); drives base-branch divergence display. */
     baseRef?: string;
+    /** Pending forge-side merge (auto-merge or queue); `null` when none is pending. */
+    mergeIntent?: import("../../shared/types/forge.js").PRMergeIntent | null;
+    /** The PR's head moved while auto-merge stayed armed (observed this session). */
+    headMovedWhileArmed?: boolean;
     timestamp: number;
   };
   "sys:pr:cleared": {
@@ -566,6 +591,11 @@ export type DaintreeEventMap = {
     owner: string;
     /** Canonical repository name the issue belongs to. */
     repo: string;
+    /**
+     * Set when an issues provider claimed the number from the branch name
+     * (#13744); its title came from that provider, not the code forge.
+     */
+    issueProvenance?: { issueProviderId: string; issueKey: string; issueId?: string };
     timestamp: number;
   };
 
@@ -787,16 +817,19 @@ export type DaintreeEventMap = {
 
   /**
    * Emitted when an agent PTY exits with output matching a fallback-eligible
-   * error class (connection failure or hard auth). The renderer consumes this
-   * to walk the preset's `fallbacks` chain and respawn.
+   * error class (connection failure or hard auth), or hits a rate limit (on
+   * exit, or live and settled at its banner). The renderer consumes this to
+   * walk the preset's `fallbacks` chain and respawn; a `rate-limit` hop only
+   * for a preset that opted in with `fallbackOnRateLimit`.
    */
   "agent:fallback-triggered": {
     terminalId: string;
     agentId: string;
     fromPresetId: string;
     originalPresetId?: string;
-    reason: "connection" | "auth";
-    exitCode: number;
+    reason: "connection" | "auth" | "rate-limit";
+    /** Absent when the pane is still running at a rate-limit banner. */
+    exitCode?: number;
     timestamp: number;
   };
 
@@ -819,7 +852,7 @@ export type DaintreeEventMap = {
 
   /**
    * Emitted after an action completes successfully from the renderer.
-   * Tracks user actions, keybindings, menu actions, context menus, and agent-driven actions.
+   * Tracks user actions, keybindings, menu actions, context menus, agent-driven and plugin-driven actions.
    */
   "action:dispatched": {
     actionId: string;
@@ -830,7 +863,7 @@ export type DaintreeEventMap = {
      * redacted but not allowlisted.
      */
     safeArgs?: Record<string, unknown>;
-    source: "user" | "keybinding" | "menu" | "agent" | "context-menu";
+    source: ActionSource;
     context: {
       projectId?: string;
       activeWorktreeId?: string;
@@ -843,15 +876,17 @@ export type DaintreeEventMap = {
     /** True when an agent explicitly confirmed a danger:"confirm" action. Absent for user-source and safe actions. */
     confirmed?: boolean;
     /**
-     * Contributing plugin id when this action was registered by a plugin
-     * (`ActionDefinition.pluginId`). Absent for built-in actions. Drives the
-     * plugin-action audit log — the main-side `PluginActionAuditService`
-     * appends a record only when this is present.
+     * The plugin this dispatch is audited under: for a `"plugin"` source the
+     * plugin that made the call, whoever owns the action; otherwise the plugin
+     * that registered the action (`ActionDefinition.pluginId`). Absent for a
+     * built-in action no plugin dispatched. Drives the plugin-action audit
+     * log — the main-side `PluginActionAuditService` appends a record only
+     * when this is present.
      */
     pluginId?: string;
     /**
      * SHA-256 hex digest of the (redacted) dispatch args, computed in the
-     * renderer. Only set for plugin actions. Persisted in the audit record
+     * renderer. Set whenever `pluginId` is. Persisted in the audit record
      * so raw args need never cross IPC for fingerprinting.
      */
     argsHash?: string;
@@ -873,6 +908,26 @@ export type DaintreeEventMap = {
   "terminal:restored": {
     id: string;
   };
+
+  /**
+   * The trash let a terminal go without a restore: removed for good, or its
+   * time ran out. `expiresAt` names which trash of it that was.
+   */
+  "terminal:trash-cleared": {
+    id: string;
+    expiresAt: number;
+  };
+
+  /**
+   * One change in a terminal's life, with the routing metadata recorded at its
+   * launch (#13814). Main-only: published by `TerminalLifecycleObserver` from
+   * the PTY client's spawn/exit stream and the trash, restore, worktree and
+   * rate-limit events, and read by the plugin host's
+   * `onDidChangeTerminalLifecycle`. Never carries a command line, cwd, title or
+   * output — the pty-host's `terminal:exited` (with `recentOutput`) is never
+   * bridged here.
+   */
+  "terminal:lifecycle": import("../../shared/utils/pluginTerminalLifecycle.js").TerminalLifecycleObservation;
 
   /**
    * Emitted whenever a run's park record is created, replaced or removed —
@@ -1106,6 +1161,7 @@ export const ALL_EVENT_TYPES: Array<keyof DaintreeEventMap> = [
   "sys:worktree:selectByName",
   "sys:worktree:update",
   "sys:worktree:remove",
+  "sys:worktree:resource-teardown",
   "watcher:change",
   "sys:pr:detected",
   "sys:pr:cleared",
@@ -1129,6 +1185,12 @@ export const ALL_EVENT_TYPES: Array<keyof DaintreeEventMap> = [
   "action:dispatched",
   "terminal:trashed",
   "terminal:restored",
+  "terminal:trash-cleared",
+  // `terminal:lifecycle` is deliberately absent: it restates the trash,
+  // restore and PTY events above with every terminal's project attached, for
+  // the plugin host's scoped feed. Buffered here it would reach the event
+  // inspector, which any plugin can dispatch without `agent:read` or a
+  // project filter.
   "terminal:park-changed",
   "terminal:park-released",
   "terminal:title-changed",

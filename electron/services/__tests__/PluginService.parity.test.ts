@@ -56,7 +56,7 @@ beforeEach(async () => {
   svc = new PluginService(path.join(baseDir, "plugins"), "0.38.0", {
     blocklistService: { getBlocklist: async () => blocklist } as unknown as PluginBlocklistService,
   });
-  (svc as unknown as { resolveInit: () => void }).resolveInit();
+  (svc as unknown as { resolveCatalog: () => void }).resolveCatalog();
   installSpy = vi.fn(async (): Promise<PluginInstallResult> => ({
     status: "installed",
     pluginId: "acme.graph",

@@ -6,14 +6,23 @@ import {
   type SegmentedRadioOption,
 } from "@/components/ui/SegmentedRadioGroup";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
-import { SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
+import {
+  SettingsDependents,
+  SettingsGroup,
+  SettingsRow,
+} from "@/components/Settings/SettingsGroup";
+import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
 import { TriangleAlert } from "lucide-react";
 import { pluginAgentMcpClient } from "@/clients/pluginAgentMcpClient";
 import { useProjectPluginStore } from "@/store/projectPluginStore";
+import { getPanelStoreSnapshot } from "@/store/storeAccessors";
+import { actionService } from "@/services/ActionService";
 import { logError } from "@/utils/logger";
 import type {
   AgentMcpAccess,
+  ProjectAgentToolGroup,
   ProjectAgentToolPlugin,
+  AgentToolsRelaunchSession,
   ProjectAgentToolsSnapshot,
   SetProjectAgentToolAccessPayload,
 } from "@shared/types/ipc/pluginAgentMcp";
@@ -52,6 +61,62 @@ function FailureRow({ message, onRetry }: { message: string; onRetry: () => void
   );
 }
 
+/**
+ * Running agents whose tools changed since they started, each with a restart:
+ * more access, or a plugin that came back with different tools, only reaches
+ * an agent when it is launched again. Agents this window doesn't show are left
+ * to the window that does.
+ */
+function RelaunchNeededGroup({
+  sessions,
+  onRestarted,
+}: {
+  sessions: readonly AgentToolsRelaunchSession[];
+  onRestarted: () => void;
+}) {
+  // Read through the accessor, not the panel store: settings stay off the
+  // store's import graph. Read as the snapshot arrives, which is when the
+  // list changes.
+  const panelsById = getPanelStoreSnapshot()?.panelsById ?? {};
+  const shown = sessions.flatMap((session) => {
+    const panel = panelsById[session.terminalId];
+    return panel === undefined ? [] : [{ session, title: panel.title || "Agent" }];
+  });
+  if (shown.length === 0) return null;
+  return (
+    <SettingsGroup
+      label="Agents that need a restart"
+      rootAttributes={{ "data-testid": "project-agent-tools-relaunch" }}
+    >
+      {shown.map(({ session, title }) => (
+        <SettingsRow
+          key={session.terminalId}
+          label={title}
+          description={`Started before its tools from ${session.pluginDisplayNames.join(", ")} changed, so it only gets them once restarted`}
+          control={
+            <Button
+              variant="outline"
+              size="sm"
+              // The action's own confirm guards interrupting a running agent.
+              onClick={() =>
+                void actionService
+                  .dispatch(
+                    "terminal.restart",
+                    { terminalId: session.terminalId },
+                    { source: "user" }
+                  )
+                  .then(onRestarted)
+              }
+            >
+              Restart
+            </Button>
+          }
+        />
+      ))}
+    </SettingsGroup>
+  );
+}
+
 interface FailedWrite {
   plugin: ProjectAgentToolPlugin;
   payload: SetProjectAgentToolAccessPayload;
@@ -59,6 +124,58 @@ interface FailedWrite {
 
 function originLabel(plugin: ProjectAgentToolPlugin): string {
   return plugin.origin === "project" ? "Project" : "Installed";
+}
+
+/**
+ * The plugin's own tools when a level reaches them. A plugin whose tools come
+ * in groups has none: each group is allowed on its own instead.
+ */
+function levelTools(plugin: ProjectAgentToolPlugin): ProjectAgentToolPlugin["pluginTools"] {
+  return plugin.toolGroups === undefined ? plugin.pluginTools : undefined;
+}
+
+/** Whether a level control means anything: a grouped plugin with no databases has nothing for one. */
+function hasLevel(plugin: ProjectAgentToolPlugin): boolean {
+  return plugin.toolGroups === undefined || plugin.hasDatabases;
+}
+
+/** Whether this project's agents may use anything of the plugin: a level above off, or a group. */
+function agentsHaveAccess(plugin: ProjectAgentToolPlugin): boolean {
+  return plugin.access !== "off" || (plugin.toolGroups ?? []).some((group) => group.allowed);
+}
+
+/** Whether the groups this project's agents have differ from an installed plugin's default for every project. */
+function groupsDifferFromDefault(plugin: ProjectAgentToolPlugin): boolean {
+  if (plugin.toolGroups === undefined || plugin.allProjectsGroups === undefined) return false;
+  const here = plugin.toolGroups.filter((group) => group.allowed).map((group) => group.id);
+  const everywhere = new Set(plugin.allProjectsGroups);
+  return here.length !== everywhere.size || here.some((id) => !everywhere.has(id));
+}
+
+/** The ids of the groups allowed, with one switched on or off. */
+function withGroup(
+  groups: readonly ProjectAgentToolGroup[],
+  key: "allowed" | "assistantAllowed",
+  groupId: string,
+  on: boolean
+): string[] {
+  const ids = groups.filter((group) => group[key]).map((group) => group.id);
+  return on ? [...new Set([...ids, groupId])] : ids.filter((id) => id !== groupId);
+}
+
+function groupDescription(group: ProjectAgentToolGroup): string[] {
+  const lines = group.description ? [group.description] : [];
+  lines.push(
+    group.access === "read"
+      ? "The plugin says these tools read and search. That never changes whether your agent asks before using them"
+      : "The plugin says these tools make changes"
+  );
+  if (group.reclassified) {
+    lines.push(
+      "The plugin changed what it says these tools do, so they stay off until allowed again"
+    );
+  }
+  return lines;
 }
 
 /** Only the levels that mean something for what the plugin offers. */
@@ -72,7 +189,7 @@ function accessOptions(plugin: ProjectAgentToolPlugin): SegmentedRadioOption<Age
           { value: plugin.access, label: ACCESS_LABELS[plugin.access] },
         ];
   }
-  if (!plugin.pluginTools && !plugin.hasDatabaseWrites) {
+  if (!levelTools(plugin) && !plugin.hasDatabaseWrites) {
     return [
       { value: "off", label: ACCESS_LABELS.off },
       { value: "read-only", label: ACCESS_LABELS["read-only"] },
@@ -112,20 +229,29 @@ function offersSharedDatabases(plugin: ProjectAgentToolPlugin): boolean {
 /** What the plugin offers, then where its current access comes from. */
 function PluginDescription({ plugin }: { plugin: ProjectAgentToolPlugin }) {
   const lines: string[] = [];
-  if (plugin.hasDatabaseWrites && plugin.pluginTools) {
+  const pluginTools = levelTools(plugin);
+  if (plugin.toolGroups !== undefined && plugin.pluginTools) {
     lines.push(
-      `Read only lets agents query its databases; read and write adds the changes it declares and ${plugin.pluginTools.name}`
+      plugin.hasDatabaseWrites
+        ? `Read only lets agents query its databases; read and write adds the changes it declares. ${plugin.pluginTools.name} is allowed one group at a time`
+        : plugin.hasDatabases
+          ? `Read only lets agents query its databases. ${plugin.pluginTools.name} is allowed one group at a time`
+          : `${plugin.pluginTools.name}, allowed one group at a time`
+    );
+  } else if (plugin.hasDatabaseWrites && pluginTools) {
+    lines.push(
+      `Read only lets agents query its databases; read and write adds the changes it declares and ${pluginTools.name}`
     );
   } else if (plugin.hasDatabaseWrites) {
     lines.push(
       "Read only lets agents query its databases; read and write adds the changes it declares"
     );
-  } else if (plugin.hasDatabases && plugin.pluginTools) {
+  } else if (plugin.hasDatabases && pluginTools) {
     lines.push(
-      `Read only lets agents query its databases; read and write adds ${plugin.pluginTools.name}`
+      `Read only lets agents query its databases; read and write adds ${pluginTools.name}`
     );
-  } else if (plugin.pluginTools) {
-    lines.push(plugin.pluginTools.name);
+  } else if (pluginTools) {
+    lines.push(pluginTools.name);
   } else {
     lines.push("Lets agents query its databases, read only");
   }
@@ -172,11 +298,215 @@ function PluginDescription({ plugin }: { plugin: ProjectAgentToolPlugin }) {
   );
 }
 
+/** The plugin has something only read and write reaches: its own ungrouped tools, or the changes it declares. */
+function offersChanges(plugin: ProjectAgentToolPlugin): boolean {
+  return levelTools(plugin) !== undefined || plugin.hasDatabaseWrites === true;
+}
+
+/** What allowing changes adds for the Assistant, named the way the plugin's row names it. */
+function changesDescription(plugin: ProjectAgentToolPlugin): string {
+  const pluginTools = levelTools(plugin);
+  if (pluginTools && plugin.hasDatabaseWrites) {
+    return `Adds the changes it declares and ${pluginTools.name}`;
+  }
+  if (pluginTools) return `Adds ${pluginTools.name}`;
+  return "Adds the changes it declares";
+}
+
+/**
+ * One switch per group of the plugin's own tools, under the plugin's row: on
+ * for the groups this project's agents may use. A group that is on stays
+ * switchable off whatever happens to the plugin.
+ */
+function ToolGroupRows({
+  plugin,
+  busy,
+  onChange,
+}: {
+  plugin: ProjectAgentToolPlugin;
+  busy: boolean;
+  onChange: (groups: string[]) => void;
+}) {
+  const groups = plugin.toolGroups ?? [];
+  return (
+    <SettingsDependents>
+      {groups.map((group) => (
+        <SettingsRow
+          key={group.id}
+          label={group.name}
+          description={
+            <>
+              {groupDescription(group).map((line) => (
+                <span key={line} className="block">
+                  {line}
+                </span>
+              ))}
+            </>
+          }
+          disabled={busy || (!plugin.available && !group.allowed)}
+          control={({ labelId, descriptionId, disabled }) => (
+            <SettingsSwitch
+              checked={group.allowed}
+              disabled={disabled}
+              onCheckedChange={(checked) =>
+                onChange(withGroup(groups, "allowed", group.id, checked))
+              }
+              aria-labelledby={labelId}
+              aria-describedby={descriptionId}
+              data-testid={`project-agent-tool-group-${group.id}`}
+            />
+          )}
+        />
+      ))}
+    </SettingsDependents>
+  );
+}
+
+/**
+ * Whether this project's Daintree Assistant may use the plugin's tools: a
+ * switch that starts it at read only, and under it a second, separate choice
+ * for the tools that change things. Neither goes past what the project's
+ * agents have, and an answer that is on stays switchable off whatever happens
+ * to the agents' access or the plugin.
+ */
+function AssistantAccessRows({
+  plugin,
+  busy,
+  onChange,
+}: {
+  plugin: ProjectAgentToolPlugin;
+  busy: boolean;
+  onChange: (access: AgentMcpAccess, groups?: string[]) => void;
+}) {
+  const on = plugin.assistantAccess !== "off";
+  const changesOn = plugin.assistantAccess === "read-write";
+  const groups = plugin.toolGroups ?? [];
+  const blocked = !plugin.available
+    ? "Not offered here right now"
+    : !agentsHaveAccess(plugin)
+      ? "Agents in this project have no access to it, and the Assistant never gets more than they do"
+      : null;
+  const changesBlocked = changesOn
+    ? null
+    : !on
+      ? "Let the Assistant use its tools first"
+      : (blocked ??
+        (plugin.access !== "read-write"
+          ? "Agents in this project can only read it, and the Assistant never gets more than they do"
+          : null));
+
+  const lines = [
+    "Read only to start. What its tools return reaches an Assistant that can act across this project, so the plugin's data could steer what it does.",
+  ];
+  if (groups.length > 0) {
+    lines.push(
+      "Of the plugin's own tools it gets only the groups allowed for it, never one just because the plugin says it reads."
+    );
+  } else if (!plugin.hasDatabases && offersChanges(plugin)) {
+    lines.push(
+      "It has no read-only tools, so the Assistant reaches nothing here until changes are allowed."
+    );
+  }
+  if (on && !agentsHaveAccess(plugin)) {
+    lines.push("Agents here have no access to it now, so the Assistant has none either.");
+  }
+
+  return (
+    <SettingsDependents disabled={!on && blocked !== null} reason={blocked ?? undefined}>
+      <SettingsRow
+        label="Daintree Assistant can use this plugin's tools"
+        description={
+          <>
+            {lines.map((line) => (
+              <span key={line} className="block">
+                {line}
+              </span>
+            ))}
+          </>
+        }
+        disabled={busy}
+        control={({ labelId, descriptionId, disabled }) => (
+          <SettingsSwitch
+            checked={on}
+            disabled={disabled}
+            onCheckedChange={(checked) => onChange(checked ? "read-only" : "off")}
+            aria-labelledby={labelId}
+            aria-describedby={descriptionId}
+            data-testid="project-agent-tool-assistant"
+          />
+        )}
+      />
+      {groups.map((group) => {
+        const groupBlocked = group.assistantAllowed
+          ? null
+          : !on
+            ? "Let the Assistant use its tools first"
+            : (blocked ??
+              (group.allowed ? null : "Allow this group for agents in this project first"));
+        return (
+          <SettingsDependents
+            key={group.id}
+            disabled={groupBlocked !== null}
+            reason={groupBlocked ?? undefined}
+          >
+            <SettingsRow
+              label={`Assistant can use ${group.name}`}
+              description={
+                group.assistantAllowed && !group.allowed
+                  ? "Agents in this project can't use this group now, so the Assistant can't either until they can again"
+                  : group.access === "read"
+                    ? "Tools the plugin says read and search"
+                    : "Tools the plugin says make changes"
+              }
+              disabled={busy}
+              control={({ labelId, descriptionId, disabled }) => (
+                <SettingsSwitch
+                  checked={group.assistantAllowed}
+                  disabled={disabled}
+                  onCheckedChange={(checked) =>
+                    onChange(
+                      plugin.assistantAccess,
+                      withGroup(groups, "assistantAllowed", group.id, checked)
+                    )
+                  }
+                  aria-labelledby={labelId}
+                  aria-describedby={descriptionId}
+                  data-testid={`project-agent-tool-assistant-group-${group.id}`}
+                />
+              )}
+            />
+          </SettingsDependents>
+        );
+      })}
+      {offersChanges(plugin) && (
+        <SettingsDependents disabled={changesBlocked !== null} reason={changesBlocked ?? undefined}>
+          <SettingsRow
+            label="Allow tools that change things"
+            description={changesDescription(plugin)}
+            disabled={busy}
+            control={({ labelId, descriptionId, disabled }) => (
+              <SettingsSwitch
+                checked={changesOn}
+                disabled={disabled}
+                onCheckedChange={(checked) => onChange(checked ? "read-write" : "read-only")}
+                aria-labelledby={labelId}
+                aria-describedby={descriptionId}
+                data-testid="project-agent-tool-assistant-changes"
+              />
+            )}
+          />
+        </SettingsDependents>
+      )}
+    </SettingsDependents>
+  );
+}
+
 /**
  * How much of each plugin's agent tools this project's agents may use: off,
  * read only (the host's tools for the plugin's databases) or read and write
  * (the writes it declares and the plugin's own tools as well). An installed plugin's choice can be made
  * the default for every project, which a project's own choice still overrides.
+ * Under each, whether the project's Daintree Assistant may use them too.
  *
  * Enabling a plugin never exposes its tools to agents by itself; this is the
  * separate, revocable answer. Rendered only when some running plugin offers
@@ -333,15 +663,19 @@ export function ProjectAgentToolsSection() {
             const canSetDefault =
               plugin.allProjectsAccess !== undefined &&
               plugin.available &&
-              plugin.access !== plugin.allProjectsAccess;
+              (plugin.access !== plugin.allProjectsAccess || groupsDifferFromDefault(plugin));
             // A default left on for a plugin that went away would apply in every
             // project the moment it came back, so it stays clearable from here.
             const canClearDefault =
               plugin.allProjectsAccess !== undefined &&
-              plugin.allProjectsAccess !== "off" &&
+              (plugin.allProjectsAccess !== "off" || (plugin.allProjectsGroups ?? []).length > 0) &&
               !plugin.available;
             return (
-              <div key={key} data-testid="project-agent-tool-row">
+              <div
+                key={key}
+                data-testid="project-agent-tool-row"
+                className="divide-y divide-border-subtle"
+              >
                 <SettingsRow
                   label={plugin.pluginDisplayName}
                   labelText={plugin.pluginDisplayName}
@@ -414,24 +748,60 @@ export function ProjectAgentToolsSection() {
                     })
                   }
                   resetAriaLabel={`Use the default access for ${plugin.pluginDisplayName}`}
-                  control={({ descriptionId }) => (
-                    <SegmentedRadioGroup
-                      className="shrink-0"
-                      options={accessOptions(plugin)}
-                      value={plugin.access}
-                      disabled={busy}
-                      onChange={(access) =>
-                        void setAccess(plugin, {
-                          pluginInstanceId: key,
-                          access,
-                          scope: "project",
-                        })
-                      }
-                      aria-label={`Agent access to ${plugin.pluginDisplayName} (${origin.toLowerCase()})`}
-                      aria-describedby={descriptionId}
-                    />
-                  )}
+                  control={
+                    hasLevel(plugin)
+                      ? ({ descriptionId }) => (
+                          <SegmentedRadioGroup
+                            className="shrink-0"
+                            options={accessOptions(plugin)}
+                            value={plugin.access}
+                            disabled={busy}
+                            onChange={(access) =>
+                              void setAccess(plugin, {
+                                pluginInstanceId: key,
+                                access,
+                                scope: "project",
+                              })
+                            }
+                            aria-label={
+                              plugin.toolGroups !== undefined
+                                ? `Agent access to ${plugin.pluginDisplayName}'s databases (${origin.toLowerCase()})`
+                                : `Agent access to ${plugin.pluginDisplayName} (${origin.toLowerCase()})`
+                            }
+                            aria-describedby={descriptionId}
+                          />
+                        )
+                      : undefined
+                  }
                 />
+                {plugin.toolGroups !== undefined && plugin.toolGroups.length > 0 && (
+                  <ToolGroupRows
+                    plugin={plugin}
+                    busy={busy}
+                    onChange={(groups) =>
+                      void setAccess(plugin, {
+                        pluginInstanceId: key,
+                        access: plugin.access,
+                        scope: "project",
+                        groups,
+                      })
+                    }
+                  />
+                )}
+                {(plugin.available || plugin.assistantAccess !== "off") && (
+                  <AssistantAccessRows
+                    plugin={plugin}
+                    busy={busy}
+                    onChange={(access, groups) =>
+                      void setAccess(plugin, {
+                        pluginInstanceId: key,
+                        access,
+                        scope: "assistant",
+                        ...(groups !== undefined ? { groups } : {}),
+                      })
+                    }
+                  />
+                )}
               </div>
             );
           })}
@@ -448,6 +818,7 @@ export function ProjectAgentToolsSection() {
             />
           )}
         </SettingsGroup>
+        <RelaunchNeededGroup sessions={snapshot.relaunchNeeded ?? []} onRestarted={refresh} />
       </SettingsSection>
     </div>
   );

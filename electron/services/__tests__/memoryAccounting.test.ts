@@ -8,6 +8,9 @@ vi.mock("electron", () => ({
   },
 }));
 
+const buffersMock = vi.hoisted(() => ({ collectRendererTerminalBuffers: vi.fn() }));
+vi.mock("../rendererTerminalBuffers.js", () => buffersMock);
+
 import { app } from "electron";
 import {
   composeMemorySnapshot,
@@ -276,5 +279,27 @@ describe("getCompositeMemorySnapshot", () => {
       sampledAt: NOW - 3_000,
       ageMs: 3_000,
     });
+  });
+
+  it("leaves renderers alone unless the caller opts in", async () => {
+    mockGetAppMetrics.mockReturnValue([makeMetric(200 * 1024)]);
+
+    const snapshot = await getCompositeMemorySnapshot(null);
+
+    expect(buffersMock.collectRendererTerminalBuffers).not.toHaveBeenCalled();
+    expect(snapshot).not.toHaveProperty("rendererTerminalBuffers");
+  });
+
+  it("attaches renderer buffer estimates without folding them into the Electron total", async () => {
+    mockGetAppMetrics.mockReturnValue([makeMetric(200 * 1024)]);
+    const slice = { views: [], estimatedBytes: 50 * 1024 * 1024, complete: true };
+    buffersMock.collectRendererTerminalBuffers.mockResolvedValue(slice);
+    const source = { projectViewManager: undefined };
+
+    const snapshot = await getCompositeMemorySnapshot(null, { rendererTerminalBuffers: source });
+
+    expect(buffersMock.collectRendererTerminalBuffers).toHaveBeenCalledWith(source);
+    expect(snapshot.rendererTerminalBuffers).toBe(slice);
+    expect(snapshot.electron.totalWorkingSetMb).toBe(200);
   });
 });

@@ -5,7 +5,7 @@ import {
   setWebglThresholds,
 } from "../services/terminal/TerminalWebGLConfig";
 import { getAgentScrollbackMaxLines, setAgentScrollbackMaxLines } from "../utils/scrollbackConfig";
-import { terminalInstanceService } from "../services/terminal/TerminalInstanceService";
+import { peek as peekTerminalService } from "../services/terminal/terminalInstanceServiceAccessor";
 import { useResourceProfileStore } from "../store/resourceProfileStore";
 import { safeFireAndForget } from "../utils/safeFireAndForget";
 import type { ResourceProfilePayload } from "@shared/types/resourceProfile";
@@ -25,7 +25,7 @@ export function useResourceProfile(): void {
       // upper flips to dom immediately instead of waiting on the next
       // consumer event to evaluate it.
       if (getWebglUpperThreshold() !== prevUpper || getWebglLowerThreshold() !== prevLower) {
-        terminalInstanceService.refreshWebGLMode();
+        peekTerminalService()?.refreshWebGLMode();
       }
       // Same write-then-apply shape for the scrollback ceiling: the config
       // write covers terminals created later, the re-derive covers the ones
@@ -33,7 +33,7 @@ export function useResourceProfile(): void {
       const prevScrollbackMax = getAgentScrollbackMaxLines();
       setAgentScrollbackMaxLines(payload.config.agentScrollbackMaxLines);
       if (getAgentScrollbackMaxLines() !== prevScrollbackMax) {
-        terminalInstanceService.restoreScrollbackAllForeground();
+        peekTerminalService()?.restoreScrollbackAll();
       }
       useResourceProfileStore.getState().setProfile(payload.profile);
     };

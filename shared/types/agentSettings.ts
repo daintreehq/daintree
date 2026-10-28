@@ -55,16 +55,6 @@ export type DangerousMode = "inherit" | "on" | "off";
 export type InlineMode = "inherit" | "on" | "off";
 
 export interface AgentSettingsEntry {
-  /**
-   * Tri-state pin for the toolbar: `true` (explicit pin), `false` (explicit
-   * unpin), or `undefined` (no explicit intent — follow live CLI availability).
-   * Use `isAgentToolbarVisible(entry, availability)` from
-   * `shared/utils/agentPinned.ts` for toolbar visibility so installing or
-   * uninstalling a CLI flips the button without ever needing to write a
-   * concrete value here. `isAgentPinned()` reads the explicit user intent
-   * directly (see #7673).
-   */
-  pinned?: boolean;
   customFlags?: string;
   /** Additional args appended when dangerous mode is enabled */
   dangerousArgs?: string;
@@ -146,6 +136,8 @@ export interface AgentSettingsEntry {
     color?: string;
     /** Ordered preset IDs to fall over to when provider is unreachable. */
     fallbacks?: string[];
+    /** Also fall over when the agent hits a plan or rate limit (#14370). */
+    fallbackOnRateLimit?: boolean;
   }>;
   /**
    * Environment variables applied to every launch of this agent, regardless of preset.
@@ -158,11 +150,9 @@ export interface AgentSettingsEntry {
 export interface AgentSettings {
   agents: Record<string, AgentSettingsEntry>;
   /**
-   * Schema version for the persisted store. Absent on stores written by
-   * versions before the tri-state pin fix (#7673); presence of `1` signals
-   * that the one-shot migration has cleared eagerly-seeded `pinned` values
-   * so toolbar visibility can follow live CLI availability. Stamped by the
-   * main-process IPC handler on the first write after migration.
+   * Legacy schema version, read only by migration 039 (#14702): below `1` the
+   * store's toolbar pins predate the tri-state fix (#7673) and were never
+   * shown, so they don't move to this machine's toolbar pins.
    */
   settingsVersion?: number;
   /**
@@ -1162,10 +1152,21 @@ export function buildResumeCommand(
   return parts.join(" ");
 }
 
+/** Whether `run` appears in `tokens` as one contiguous sequence. Empty is always present. */
+function containsTokenRun(tokens: readonly string[] | undefined, run: readonly string[]): boolean {
+  if (run.length === 0) return true;
+  if (!tokens) return false;
+  for (let i = 0; i + run.length <= tokens.length; i++) {
+    if (run.every((token, offset) => tokens[i + offset] === token)) return true;
+  }
+  return false;
+}
+
 /**
  * Builds a "resume the most recent session" launch command for agents whose
  * `session-id` resume config declares `resumeLatestArgs`, or whose resume is
- * `project-scoped` (its args are already the latest-in-directory form). Used as a fallback
+ * `project-scoped` or `rolling-history` (their args are already the
+ * latest-in-directory form). Used as a fallback
  * when the graceful-shutdown pattern-match capture loop failed to harvest a
  * session ID — instead of launching fresh and losing the user's context, the
  * CLI's own "continue last" flag picks up the prior conversation in the
@@ -1178,7 +1179,7 @@ export function buildResumeCommand(
  *
  * @returns The resume-latest command string, or `undefined` if the agent
  *   has no resume config, or is a `session-id` agent without
- *   `resumeLatestArgs`, or is a `rolling-history` / `named-target` agent.
+ *   `resumeLatestArgs`, or is a `named-target` agent, or its args are empty.
  */
 export function buildResumeLatestCommand(
   agentId: string,
@@ -1188,19 +1189,34 @@ export function buildResumeLatestCommand(
   const agentConfig = getEffectiveAgentConfig(agentId);
   const resume = agentConfig?.resume;
   if (!agentConfig || !resume) return undefined;
-  // A `project-scoped` resume IS the latest-in-directory form — it captures no
-  // id, so without this a restore had nothing to rebuild for it (#13687). It
-  // shares the restore election with `resumeLatestArgs`, so a second pane in
-  // the same directory starts fresh instead of reopening the same session.
+  // A `project-scoped` or `rolling-history` resume IS the latest-in-directory
+  // form — it captures no id, so without this a restore had nothing to rebuild
+  // for it (#13687, #13847). It shares the restore election with
+  // `resumeLatestArgs`, so a second pane in the same directory starts fresh
+  // instead of reopening the same session. `named-target` has no latest form:
+  // its args need the target it names.
   const fallbackArgs =
     resume.kind === "session-id"
       ? resume.resumeLatestArgs
-      : resume.kind === "project-scoped"
+      : resume.kind === "project-scoped" || resume.kind === "rolling-history"
         ? resume.args()
         : undefined;
   if (!fallbackArgs || fallbackArgs.length === 0) return undefined;
 
   const parts = [baseCommand ?? agentConfig.command];
+
+  // Registry defaults ride every launch (Aider's `--no-auto-commits` keeps it
+  // off the user's history), but a pane whose captured flags were voided — a
+  // deleted preset, a snapshot from before flags were kept — hands over none.
+  // A fresh launch builds them in, so the resume standing in for one must too.
+  // Matched as one run, never token by token: a plugin's `--profile latest`
+  // would otherwise lose its value to a fallback that also says `latest`.
+  const defaults = agentConfig.args ?? [];
+  if (!containsTokenRun(launchFlags, defaults) && !containsTokenRun(fallbackArgs, defaults)) {
+    for (const arg of defaults) {
+      parts.push(isSafeShellOption(arg) ? arg : quoteAgentArg(arg));
+    }
+  }
 
   if (launchFlags?.length) {
     for (const flag of launchFlags) {
@@ -1405,6 +1421,38 @@ export function stripAssignedSessionIdArgs(command: string, agentId: string | un
     }
   }
   return command;
+}
+
+/**
+ * Drops the arguments that pick a conversation — the agent's own resume, assign
+ * and resume-latest shapes — from a list of launch flags. For a respawn that
+ * promises a new conversation (#13746): a caller's verbatim `--continue` would
+ * otherwise reopen whichever conversation the new home has last.
+ */
+export function stripConversationSelectorFlags(
+  flags: readonly string[],
+  agentId: string | undefined
+): string[] {
+  const resume = agentId ? getEffectiveAgentConfig(agentId)?.resume : undefined;
+  if (!resume || resume.kind !== "session-id") return [...flags];
+  const shapes = [
+    resume.args(SESSION_ID_SLOT),
+    resume.assignSessionIdArgs?.(SESSION_ID_SLOT) ?? [],
+    resume.resumeLatestArgs ?? [],
+  ].filter((shape) => shape.length > 0);
+  const kept: string[] = [];
+  for (let i = 0; i < flags.length;) {
+    const shape = shapes.find((candidate) =>
+      candidate.every((token, offset) => shapeWordMatches(token, flags[i + offset] ?? ""))
+    );
+    if (shape) {
+      i += shape.length;
+      continue;
+    }
+    kept.push(flags[i]!);
+    i++;
+  }
+  return kept;
 }
 
 const ASSIGNABLE_SESSION_ID_PATTERN =

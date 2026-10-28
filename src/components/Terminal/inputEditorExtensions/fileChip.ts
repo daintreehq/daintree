@@ -8,6 +8,7 @@ import {
 import { chipAriaLabel, chipPendingDeleteField, isChipSelected } from "./chipBackspace";
 import { chipCardPath, chipHoverTooltip, chipTooltip } from "./chipCard";
 import { fileDropChipField } from "./fileDropChip";
+import { isOwnedByContextReferenceChip } from "./contextReferenceChip";
 import { imageChipField } from "./imageChip";
 
 interface FileChipState {
@@ -17,6 +18,16 @@ interface FileChipState {
 interface RangeOwner {
   from: number;
   to: number;
+}
+
+/**
+ * Whether an `@file` token's range belongs to another chip: an attachment, or
+ * a plugin context reference (`@rec:142` would otherwise read as a file `rec`).
+ */
+function isOwnedByOtherChip(state: EditorState, start: number, end: number): boolean {
+  return (
+    isOwnedByAttachmentChip(state, start, end) || isOwnedByContextReferenceChip(state, start, end)
+  );
 }
 
 /**
@@ -86,7 +97,7 @@ const fileChipStateField = StateField.define<FileChipState>({
       if (!fieldValue || fieldValue.tokens.length === 0) return Decoration.none;
       const pending = view.state.field(chipPendingDeleteField, false) ?? null;
       const ranges = fieldValue.tokens
-        .filter((t) => !isOwnedByAttachmentChip(view.state, t.start, t.end))
+        .filter((t) => !isOwnedByOtherChip(view.state, t.start, t.end))
         .map((token) => {
           const selected = isChipSelected(pending, token.start, token.end);
           return Decoration.replace({
@@ -100,7 +111,7 @@ const fileChipStateField = StateField.define<FileChipState>({
       const fieldValue = view.state.field(f, false);
       if (!fieldValue || fieldValue.tokens.length === 0) return Decoration.none;
       const ranges = fieldValue.tokens
-        .filter((t) => !isOwnedByAttachmentChip(view.state, t.start, t.end))
+        .filter((t) => !isOwnedByOtherChip(view.state, t.start, t.end))
         .map((t) => Decoration.mark({}).range(t.start, t.end));
       if (ranges.length === 0) return Decoration.none;
       return Decoration.set(ranges, true);
@@ -118,7 +129,7 @@ export function createFileChipTooltip() {
     if (!chipState) return null;
 
     const token = chipState.tokens.find((t) => pos >= t.start && pos < t.end);
-    if (!token || isOwnedByAttachmentChip(view.state, token.start, token.end)) return null;
+    if (!token || isOwnedByOtherChip(view.state, token.start, token.end)) return null;
 
     return chipTooltip({ from: token.start, to: token.end }, ".cm-file-chip", () => [
       chipCardPath(token.path),

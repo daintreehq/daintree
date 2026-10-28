@@ -27,8 +27,8 @@ import type { ProjectViewManager } from "./ProjectViewManager.js";
 import type { WindowRegistry } from "./WindowRegistry.js";
 import { getActiveShutdown } from "../lifecycle/shutdownCoordinator.js";
 import {
-  MAX_BACKGROUND_PROJECTS_PER_WINDOW,
   MAX_RESTORED_WINDOWS,
+  capBackgroundProjectIds,
   type OpenWindowRecord,
 } from "../services/persistence/windowManifest.js";
 import { writeOpenWindowsManifest } from "../services/persistence/windowManifestStore.js";
@@ -102,11 +102,56 @@ export function clearPendingRemoteRestoresForHost(hostId: string): void {
   for (const [windowId, key] of pendingRemoteRestores) {
     if (parseHostScopedKey(key).hostId === hostId) pendingRemoteRestores.delete(windowId);
   }
+  for (const windowId of [...pendingRemoteBackgroundRestores.keys()]) {
+    removePendingRemoteBackgroundRestores(
+      windowId,
+      (key) => parseHostScopedKey(key).hostId === hostId
+    );
+  }
 }
 
 /** A restored window's host-scoped workspace, while it is still on the picker it opened with. */
 export function getPendingRemoteRestore(windowId: number): string | null {
   return pendingRemoteRestores.get(windowId) ?? null;
+}
+
+/**
+ * Host-scoped workspaces a restored window had in the background, keyed by
+ * window id, until each comes back as a cached view or is let go (#13932).
+ * Unlike {@link pendingBackgroundRestores} this survives the quit: a host that
+ * was unreachable all session still holds those projects for the next launch,
+ * as {@link pendingRemoteRestores} does for the one a window was showing.
+ */
+const pendingRemoteBackgroundRestores = new Map<number, string[]>();
+
+/** Add to a window's waiting host projects, keeping the order they were given in. */
+export function addPendingRemoteBackgroundRestores(
+  windowId: number,
+  keys: readonly string[]
+): void {
+  const current = pendingRemoteBackgroundRestores.get(windowId) ?? [];
+  const merged = [...current, ...keys.filter((key) => !current.includes(key))];
+  if (merged.length > 0) pendingRemoteBackgroundRestores.set(windowId, merged);
+}
+
+/** Let go of a window's waiting host projects that match. */
+export function removePendingRemoteBackgroundRestores(
+  windowId: number,
+  matches: (key: string) => boolean
+): void {
+  const current = pendingRemoteBackgroundRestores.get(windowId);
+  if (!current) return;
+  const remaining = current.filter((key) => !matches(key));
+  if (remaining.length > 0) pendingRemoteBackgroundRestores.set(windowId, remaining);
+  else pendingRemoteBackgroundRestores.delete(windowId);
+}
+
+export function getPendingRemoteBackgroundRestores(windowId: number): readonly string[] {
+  return pendingRemoteBackgroundRestores.get(windowId) ?? [];
+}
+
+export function clearPendingRemoteBackgroundRestores(windowId: number): void {
+  pendingRemoteBackgroundRestores.delete(windowId);
 }
 
 let state: TrackerState | null = null;
@@ -193,16 +238,29 @@ export function buildOpenWindowRecords(
     if (windows.length >= MAX_RESTORED_WINDOWS) break;
   }
 
-  const records: OpenWindowRecord[] = [];
-  for (const win of windows) {
-    let backgroundProjectIds: string[];
+  // Every window's views are claimed before any window's pending restores, so
+  // a project one window is only waiting to bring back never takes the place
+  // of the window actually holding it, and one dropped by its holder's cap
+  // can still be kept by the window waiting for it. Claimed as we go, so the
+  // next window — and the orphan sweep below — can see what this one took.
+  const viewIds = windows.map((win) => {
+    let ids: string[];
     try {
-      backgroundProjectIds = collectWindowBackgroundIds(win.pvm, win.windowId, claimed);
+      ids = collectWindowViewIds(win.pvm, claimed);
     } catch {
-      backgroundProjectIds = [];
+      ids = [];
     }
-    // Claimed as we go, so the next window — and the orphan sweep below — can
-    // see what this one already took.
+    for (const id of ids) claimed.add(id);
+    return ids;
+  });
+
+  const records: OpenWindowRecord[] = [];
+  for (const [index, win] of windows.entries()) {
+    const pending = [
+      ...(pendingBackgroundRestores.get(win.windowId) ?? []),
+      ...(pendingRemoteBackgroundRestores.get(win.windowId) ?? []),
+    ].filter((id) => !claimed.has(id));
+    const backgroundProjectIds = capBackgroundProjectIds([...viewIds[index]!, ...pending]);
     for (const id of backgroundProjectIds) claimed.add(id);
     records.push(
       backgroundProjectIds.length > 0
@@ -215,36 +273,26 @@ export function buildOpenWindowRecords(
 }
 
 /**
- * A window's own background workspaces, most-recently-used first: its cached
- * views, plus whatever it is still restoring.
+ * A window's own cached views, most-recently-used first, within the caps.
+ * Whatever it is still restoring follows them, in its persisted order, which
+ * is already a recency ordering from the previous session.
  *
  * `lastUsed` descending rather than insertion order — it is the same recency
  * signal `EvictionController` scores against, so the projects the manifest
- * keeps under the per-window cap are the ones the user actually rotates
- * through. Pending restores follow the live views and hold their persisted
- * order, which is already a recency ordering from the previous session.
+ * keeps under the per-window caps are the ones the user actually rotates
+ * through.
  */
-function collectWindowBackgroundIds(
+function collectWindowViewIds(
   pvm: ProjectViewManager | undefined,
-  windowId: number,
   claimed: ReadonlySet<string>
 ): string[] {
-  const ids: string[] = [];
-  const seen = new Set<string>();
-
-  const push = (id: string): void => {
-    if (seen.has(id) || claimed.has(id)) return;
-    seen.add(id);
-    ids.push(id);
-  };
-
   const views = pvm?.getAllViews() ?? [];
-  for (const entry of [...views].sort((a, b) => b.lastUsed - a.lastUsed)) {
-    push(entry.projectId);
-  }
-  for (const id of pendingBackgroundRestores.get(windowId) ?? []) push(id);
-
-  return ids.slice(0, MAX_BACKGROUND_PROJECTS_PER_WINDOW);
+  return capBackgroundProjectIds(
+    [...views]
+      .sort((a, b) => b.lastUsed - a.lastUsed)
+      .map((entry) => entry.projectId)
+      .filter((id) => !claimed.has(id))
+  );
 }
 
 /**
@@ -271,10 +319,7 @@ function attachOrphanedLiveWorkspaces(
   if (orphans.length === 0) return records;
 
   const primary = records[0];
-  const merged = [...(primary.backgroundProjectIds ?? []), ...orphans].slice(
-    0,
-    MAX_BACKGROUND_PROJECTS_PER_WINDOW
-  );
+  const merged = capBackgroundProjectIds([...(primary.backgroundProjectIds ?? []), ...orphans]);
   records[0] = { ...primary, backgroundProjectIds: merged };
   return records;
 }
@@ -403,4 +448,5 @@ export function resetOpenWindowsTrackerForTests(): void {
   suppressed = false;
   pendingBackgroundRestores.clear();
   pendingRemoteRestores.clear();
+  pendingRemoteBackgroundRestores.clear();
 }

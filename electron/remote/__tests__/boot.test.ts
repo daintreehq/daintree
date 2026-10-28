@@ -50,7 +50,12 @@ const m = vi.hoisted(() => {
     descriptor: { id: string; connection: { kind: "ssh"; target: string } };
   }> = [];
   const client = {
-    client: { connect: vi.fn(), list: vi.fn(() => hostEntries) },
+    client: {
+      connect: vi.fn(),
+      openHostForNotice: vi.fn(async (_window: unknown, _notice: unknown) => ({})),
+      list: vi.fn(() => hostEntries),
+      isDisconnectedByPerson: vi.fn((hostId: string) => hostId === "control-on"),
+    },
     sessionFor: vi.fn((_hostId: string) => null as unknown),
     onEndpointOpened: vi.fn((l: (hostId: string, info: unknown) => void) => {
       clientOpenedListeners.add(l);
@@ -66,6 +71,7 @@ const m = vi.hoisted(() => {
       touch: vi.fn((_hostId: string) => {}),
       hold: vi.fn((_hostId: string) => () => {}),
       addUseCheck: vi.fn((_check: unknown) => () => {}),
+      onStateChange: vi.fn((_l: unknown) => () => {}),
     },
     registry: {
       get: vi.fn(
@@ -143,12 +149,18 @@ const m = vi.hoisted(() => {
     uninstallSettingsCopyClient: vi.fn(() => record("uninstall settings copy client")),
     installSettingsCopyHost: vi.fn(),
     uninstallSettingsCopyHost: vi.fn(() => record("uninstall settings copy host")),
+    installSettingsControlClient: vi.fn(),
+    uninstallSettingsControlClient: vi.fn(() => record("uninstall settings control client")),
+    installSettingsControlHost: vi.fn(),
+    uninstallSettingsControlHost: vi.fn(() => record("uninstall settings control host")),
     uninstallPluginHost: vi.fn(() => record("uninstall plugin host")),
     attachHostPluginAssets: vi.fn(),
     hostFilesDispose: vi.fn(() => record("host files dispose")),
     installHostFileService: vi.fn(),
     attachHostFiles: vi.fn(),
     admitHybridHostLegs: vi.fn(() => vi.fn()),
+    installNotificationPolicyPush: vi.fn(() => vi.fn()),
+    installNotificationPolicyHost: vi.fn(() => vi.fn()),
     acceptLocalPushForRemoteView: vi.fn((channel: string) => channel === "shell:ok"),
     uninstallViewRequests: vi.fn(),
     uninstallWorktreeRedelivery: vi.fn(),
@@ -209,7 +221,7 @@ const m = vi.hoisted(() => {
 });
 
 vi.mock("electron", () => ({
-  app: { getPath: () => "/tmp/daintree-user-data", isPackaged: false },
+  app: { getPath: () => "/tmp/daintree-user-data", getVersion: () => "0.0.0", isPackaged: false },
 }));
 vi.mock("../../boot/hostServices.js", () => ({
   ensureWorkspaceClient: m.ensureWorkspaceClient,
@@ -300,6 +312,8 @@ vi.mock("../../services/mcp-server/driveTarget.js", () => ({
 vi.mock("../hybrid/index.js", () => ({
   installHybridSplits: m.installHybridSplits,
   admitHybridHostLegs: m.admitHybridHostLegs,
+  installNotificationPolicyPush: m.installNotificationPolicyPush,
+  installNotificationPolicyHost: m.installNotificationPolicyHost,
   acceptLocalPushForRemoteView: m.acceptLocalPushForRemoteView,
   ViewVisibilityReporter: vi.fn(function ViewVisibilityReporter() {
     return m.visibility;
@@ -375,6 +389,16 @@ vi.mock("../settingsCopy/install.js", () => ({
     return m.uninstallSettingsCopyHost;
   }),
 }));
+vi.mock("../settingsControl/install.js", () => ({
+  installSettingsControlClient: vi.fn((deps: unknown) => {
+    m.installSettingsControlClient(deps);
+    return m.uninstallSettingsControlClient;
+  }),
+  installSettingsControlHost: vi.fn((server: unknown) => {
+    m.installSettingsControlHost(server);
+    return m.uninstallSettingsControlHost;
+  }),
+}));
 vi.mock("../ports/clientInstall.js", () => ({
   installPortForwardClient: vi.fn((deps: unknown) => {
     m.installPortForwardClient(deps);
@@ -408,6 +432,8 @@ vi.mock("../metrics/clientInstall.js", () => ({
 }));
 vi.mock("../metrics/hostMetricsHost.js", () => ({
   installHostMetricsHost: metrics.installHostMetricsHost,
+  installLinkActivityHost: vi.fn((_server: unknown, _read: unknown) => () => {}),
+  installProcessInventoryHost: vi.fn((_server: unknown, _read: unknown) => () => {}),
 }));
 const canopy = vi.hoisted(() => ({
   installCanopyHostsClient: vi.fn((_options: unknown) => () => {}),
@@ -418,6 +444,42 @@ vi.mock("../canopy/clientInstall.js", () => ({
 }));
 vi.mock("../canopy/hostInstall.js", () => ({
   installCanopyHost: canopy.installCanopyHost,
+}));
+const deviceAnswer = vi.hoisted(() => ({
+  uninstallClient: vi.fn(),
+  uninstallHost: vi.fn(),
+  installDeviceAnswerHostsClient: vi.fn(),
+  installDeviceAnswerHost: vi.fn(),
+}));
+vi.mock("../deviceAnswer/clientInstall.js", () => ({
+  installDeviceAnswerHostsClient: vi.fn((deps: unknown) => {
+    deviceAnswer.installDeviceAnswerHostsClient(deps);
+    return deviceAnswer.uninstallClient;
+  }),
+}));
+vi.mock("../deviceAnswer/hostInstall.js", () => ({
+  installDeviceAnswerHost: vi.fn((server: unknown) => {
+    deviceAnswer.installDeviceAnswerHost(server);
+    return deviceAnswer.uninstallHost;
+  }),
+}));
+const voicePane = vi.hoisted(() => ({
+  uninstallClient: vi.fn(),
+  uninstallHost: vi.fn(),
+  installVoicePaneHostsClient: vi.fn(),
+  installVoicePaneHost: vi.fn(),
+}));
+vi.mock("../voice/clientInstall.js", () => ({
+  installVoicePaneHostsClient: vi.fn((deps: unknown) => {
+    voicePane.installVoicePaneHostsClient(deps);
+    return voicePane.uninstallClient;
+  }),
+}));
+vi.mock("../voice/hostInstall.js", () => ({
+  installVoicePaneHost: vi.fn((server: unknown) => {
+    voicePane.installVoicePaneHost(server);
+    return voicePane.uninstallHost;
+  }),
 }));
 const control = vi.hoisted(() => {
   const uninstall = vi.fn();
@@ -478,7 +540,11 @@ vi.mock("../host/hostModeDefaults.js", async () => {
 
 import { startRemoteHosts, stopRemoteHosts } from "../boot.js";
 import { notifyMcpDriveTargetChange } from "../../services/mcp-server/driveTarget.js";
-import { _resetRemoteServicesForTest, getRemoteService } from "../runtime.js";
+import {
+  _resetRemoteServicesForTest,
+  getRemoteService,
+  registerRemoteService,
+} from "../runtime.js";
 import { Lane } from "../link/frames.js";
 import { ControlKind } from "../link/messages.js";
 
@@ -551,17 +617,109 @@ describe("startRemoteHosts", () => {
     expect(m.ensureWorkspaceClient).not.toHaveBeenCalled();
   });
 
+  it("opens a host from a banner about one of its agents through the Remote Hosts client", async () => {
+    await startRemoteHosts({ hostMode: false });
+    const [options] = metrics.installHostMetricsClient.mock.calls[0] as [
+      { openHostForNotice(window: unknown, notice: unknown): Promise<unknown> },
+    ];
+    const notice = { hostId: "studio-01", projectId: null, terminalId: "t1" };
+    const result = { outcome: "switched" };
+    m.client.client.openHostForNotice.mockResolvedValueOnce(result);
+    await expect(options.openHostForNotice(3, notice)).resolves.toBe(result);
+    expect(m.client.client.openHostForNotice).toHaveBeenCalledWith(3, notice);
+    // A failed switch reaches the banner's click handler, which logs it.
+    m.client.client.openHostForNotice.mockRejectedValueOnce(new Error("unreachable"));
+    await expect(options.openHostForNotice(3, notice)).rejects.toThrow("unreachable");
+  });
+
   it("installs host control from start, reading each host's switch live", async () => {
     await startRemoteHosts({ hostMode: false });
     expect(control.installHostControl).toHaveBeenCalledTimes(1);
     const [deps] = control.installHostControl.mock.calls[0] as [
-      { isHostControlEnabled(hostId: string): boolean; hasHosts(): boolean },
+      { isHostControlEnabled(hostId: string): boolean },
     ];
     expect(deps.isHostControlEnabled("control-on")).toBe(true);
     expect(deps.isHostControlEnabled("unknown-host")).toBe(false);
-    expect(deps.hasHosts()).toBe(true);
     await stopRemoteHosts();
     expect(control.uninstall).toHaveBeenCalledTimes(1);
+  });
+
+  it("hands host control each host's last handshake and whether the person disconnected it (#14461)", async () => {
+    const handshake = {
+      version: "1.0.0",
+      commit: "abc1234",
+      protocolVersion: 12,
+      platform: "darwin",
+      arch: "arm64",
+    };
+    m.hostEntries.push({
+      descriptor: { id: "control-on", name: "studio-01", lastSeenAt: 5, lastHandshake: handshake },
+      connection: { status: "disconnected" },
+      summary: null,
+    } as never);
+    await startRemoteHosts({ hostMode: false });
+    const [deps] = control.installHostControl.mock.calls[0] as [
+      { observeHosts(): Array<Record<string, unknown>> },
+    ];
+    expect(deps.observeHosts()).toEqual([
+      {
+        hostId: "control-on",
+        name: "studio-01",
+        connection: { status: "disconnected" },
+        lastSeenAt: 5,
+        summary: null,
+        summaryReceipt: null,
+        lastHandshake: handshake,
+        disconnectedByPerson: true,
+      },
+    ]);
+    await stopRemoteHosts();
+  });
+
+  it("hands host watches the link, host list and summaries, and lets all three go (#14463)", async () => {
+    const offs = { registry: vi.fn(), manager: vi.fn(), metrics: vi.fn() };
+    const onSummary = vi.fn((_l: unknown) => offs.metrics);
+    await startRemoteHosts({ hostMode: false });
+    m.client.registry.onChange.mockImplementationOnce(() => offs.registry);
+    m.client.manager.onStateChange.mockImplementationOnce(() => offs.manager);
+    const offMetrics = registerRemoteService("hostMetrics", { onSummary } as never);
+    const [deps] = control.installHostControl.mock.calls[0] as [
+      { watchHosts(listener: { changed(): void; summary(hostId: string): void }): () => void },
+    ];
+    // Only asked once something watches: starting up subscribes nothing for it.
+    expect(onSummary).not.toHaveBeenCalled();
+    const off = deps.watchHosts({ changed: vi.fn(), summary: vi.fn() });
+    expect(onSummary).toHaveBeenCalledTimes(1);
+    off();
+    expect(offs.registry).toHaveBeenCalledTimes(1);
+    expect(offs.manager).toHaveBeenCalledTimes(1);
+    expect(offs.metrics).toHaveBeenCalledTimes(1);
+    offMetrics();
+    await stopRemoteHosts();
+  });
+
+  it("hands host control when each host's summary arrived, beside the summary itself (#14462)", async () => {
+    const summary = { sampledAt: 1 };
+    const receipt = {
+      receivedAt: 2,
+      at: { wall: 2, mono: 2 },
+      hostAgeMs: 0,
+      maxAgeMs: 0,
+      timed: true,
+    };
+    const receiptOf = vi.fn((held: object) => (held === summary ? receipt : null));
+    m.hostEntries.push({
+      descriptor: { id: "control-on", name: "studio-01", lastSeenAt: 5 },
+      connection: { status: "disconnected" },
+      summary,
+    } as never);
+    await startRemoteHosts({ hostMode: false });
+    registerRemoteService("hostMetrics", { receiptOf } as never);
+    const [deps] = control.installHostControl.mock.calls[0] as [
+      { observeHosts(): Array<Record<string, unknown>> },
+    ];
+    expect(deps.observeHosts()[0]).toMatchObject({ summary, summaryReceipt: receipt });
+    await stopRemoteHosts();
   });
 
   it("proves this Shell's sender to hosts from start, and reaches only hosts it still knows", async () => {
@@ -993,6 +1151,43 @@ describe("startRemoteHosts", () => {
     expect(m.uninstallPluginParityHost).toHaveBeenCalledTimes(1);
   });
 
+  it("answers connected hosts' agents for paired devices from start, and serves a Shell's devices only while listening", async () => {
+    await startRemoteHosts({ hostMode: false });
+    expect(m.client.client.connect).not.toHaveBeenCalled();
+    expect(deviceAnswer.installDeviceAnswerHostsClient).toHaveBeenCalledWith({
+      registry: m.client.registry,
+      manager: m.client.manager,
+      sessionFor: m.client.sessionFor,
+    });
+    expect(deviceAnswer.installDeviceAnswerHost).not.toHaveBeenCalled();
+
+    const hostMode = getRemoteService("hostMode")!;
+    await hostMode.startListening();
+    expect(deviceAnswer.installDeviceAnswerHost).toHaveBeenCalledWith(m.server);
+    await hostMode.stopListening();
+    expect(deviceAnswer.uninstallHost).toHaveBeenCalledTimes(1);
+
+    await stopRemoteHosts();
+    expect(deviceAnswer.uninstallClient).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads a host's pane for dictation from start, and answers a Shell's only while listening", async () => {
+    await startRemoteHosts({ hostMode: false });
+    expect(voicePane.installVoicePaneHostsClient).toHaveBeenCalledWith({
+      sessionFor: m.client.sessionFor,
+    });
+    expect(voicePane.installVoicePaneHost).not.toHaveBeenCalled();
+
+    const hostMode = getRemoteService("hostMode")!;
+    await hostMode.startListening();
+    expect(voicePane.installVoicePaneHost).toHaveBeenCalledWith(m.server);
+    await hostMode.stopListening();
+    expect(voicePane.uninstallHost).toHaveBeenCalledTimes(1);
+
+    await stopRemoteHosts();
+    expect(voicePane.uninstallClient).toHaveBeenCalledTimes(1);
+  });
+
   it("serves plugin assets for opened endpoints and moves them to a resumed link", async () => {
     await startRemoteHosts({ hostMode: true });
     const endpoint = fakeEndpoint("remote:s1:view-11");
@@ -1219,6 +1414,7 @@ describe("stopRemoteHosts", () => {
       "uninstall terminal override",
       "advertise.stop",
       "uninstall plugin host",
+      "uninstall settings control host",
       "uninstall settings copy host",
       "uninstall plugin parity host",
       "uninstall projects host",
@@ -1229,6 +1425,7 @@ describe("stopRemoteHosts", () => {
       "host.dispose",
       "server.close",
       "uninstall port forward client",
+      "uninstall settings control client",
       "uninstall settings copy client",
       "uninstall plugin parity client",
       "uninstall host switch service",

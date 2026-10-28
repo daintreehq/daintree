@@ -21,7 +21,7 @@ import {
 import type { UpdateMenuState } from "./services/AutoUpdaterService.js";
 import { getAutoUpdaterServiceRef } from "./window/serviceRefs.js";
 import { getPluginMenuItems } from "./services/pluginMenuRegistry.js";
-import { getPluginTours } from "./services/plugin/PluginTourRegistry.js";
+import { getPluginToursForProject } from "./services/plugin/PluginContributionBroadcaster.js";
 import { isPluginVisibleInProject } from "./services/plugin/projectPluginVisibility.js";
 import { evaluateWhen } from "./services/WhenClauseService.js";
 import { getAppWebContents, getProjectForWebContents } from "./window/webContentsRegistry.js";
@@ -122,7 +122,7 @@ function handleUpdateMenuClick(): void {
   void import("./services/AutoUpdaterService.js")
     .then(({ autoUpdaterService }) => {
       if (autoUpdaterService.getMenuState() === "ready") {
-        autoUpdaterService.quitAndInstallIfReady();
+        void autoUpdaterService.confirmAndQuitAndInstall();
       } else {
         autoUpdaterService.checkForUpdatesManually();
       }
@@ -135,6 +135,59 @@ function handleUpdateMenuClick(): void {
 // previous unsubscribe at module scope to avoid stacking listeners across
 // rebuilds — a stale listener would mutate items that no longer exist.
 let unsubscribeUpdateMenuState: (() => void) | null = null;
+
+/**
+ * What a menu built for `projectId` leaves out of its plugin items and shows of
+ * its plugin tours, as a comparable key. Empty in an app where nobody has hidden
+ * a plugin and no project plugin offers a tour, so the rebuild check below
+ * costs nothing there.
+ */
+function hiddenMenuPluginsKey(projectId: string | null): string {
+  const hidden = new Set<string>();
+  for (const { pluginId } of getPluginMenuItems()) {
+    if (!isPluginVisibleInProject(pluginId, projectId)) hidden.add(pluginId);
+  }
+  // Tours are keyed by what shows, not what hides: a project plugin's tour is
+  // absent from every other project, and hiding alone can't express that.
+  const tours = helpMenuTours(projectId).map((tour) => tour.id);
+  return [[...hidden].sort().join("\n"), tours.sort().join("\n")].join("\n\n");
+}
+
+/** Plugin tours the Help menu lists for `projectId`; panel tours open from their panel. */
+function helpMenuTours(projectId: string | null) {
+  return getPluginToursForProject(projectId).filter((tour) => tour.panelKind === undefined);
+}
+
+/** {@link hiddenMenuPluginsKey} of the menu currently installed. */
+let builtHiddenMenuPluginsKey = "";
+
+/**
+ * The project whose plugin choices the menu shows: the most recently focused
+ * window's, not necessarily the window a caller rebuilt the menu for. Several
+ * rebuilds (a keybinding override, an agent config reload, CLI or plugin init)
+ * name a fixed window, and the menu bar is process-global.
+ */
+function menuProjectIdFor(win: BrowserWindow): string | null {
+  const primary = getWindowRegistry()?.getPrimary()?.browserWindow;
+  const shown = primary && !primary.isDestroyed() ? primary : win;
+  return shown.isDestroyed() ? null : getProjectForWebContents(getAppWebContents(shown).id);
+}
+
+/**
+ * Rebuild the menu for `win` only if its project would show a different set of
+ * plugin items and tours than the installed menu does. The menu is
+ * process-global but filtered by one window's project, so a project switch or a
+ * focus change can leave it showing another project's choices — yet a rebuild
+ * dismisses an open menu, so it must not happen on every switch.
+ */
+export function rebuildApplicationMenuIfPluginVisibilityChanged(
+  win: BrowserWindow,
+  cliAvailabilityService?: CliAvailabilityService
+): void {
+  if (win.isDestroyed()) return;
+  if (hiddenMenuPluginsKey(menuProjectIdFor(win)) === builtHiddenMenuPluginsKey) return;
+  createApplicationMenu(win, cliAvailabilityService);
+}
 
 export function createApplicationMenu(
   mainWindow: BrowserWindow,
@@ -214,10 +267,16 @@ export function createApplicationMenu(
     return items;
   };
 
+  // A plugin hidden in this window's project has withdrawn its contributions
+  // from the view, so its menu items and Help tours leave the menu too.
+  const menuProjectId = menuProjectIdFor(mainWindow);
+  builtHiddenMenuPluginsKey = hiddenMenuPluginsKey(menuProjectId);
+
   const buildPluginMenuItems = (location: string): Electron.MenuItemConstructorOptions[] => {
     const items: Electron.MenuItemConstructorOptions[] = [];
-    for (const { item } of getPluginMenuItems()) {
+    for (const { pluginId, item } of getPluginMenuItems()) {
       if (item.location !== location) continue;
+      if (!isPluginVisibleInProject(pluginId, menuProjectId)) continue;
       if (!evaluateWhen(item.when, {})) continue;
       items.push({
         label: item.label,
@@ -235,22 +294,14 @@ export function createApplicationMenu(
   const terminalPluginItems = buildPluginMenuItems("terminal");
   const helpPluginItems = buildPluginMenuItems("help");
   // Plugin tours sit beside the Daintree Tour, named "<plugin>: <tour>". Panel
-  // tours are opened from their panel, not from Help, and a plugin hidden in
-  // this window's project has withdrawn its tours from the view, so Help drops
-  // them too.
-  const menuProjectId = mainWindow.isDestroyed()
-    ? null
-    : getProjectForWebContents(getAppWebContents(mainWindow).id);
-  const pluginTourItems: Electron.MenuItemConstructorOptions[] = getPluginTours()
-    .filter(
-      (tour) =>
-        tour.panelKind === undefined && isPluginVisibleInProject(tour.pluginId, menuProjectId)
-    )
-    .map((tour) => ({
+  // tours are opened from their panel, not from Help.
+  const pluginTourItems: Electron.MenuItemConstructorOptions[] = helpMenuTours(menuProjectId).map(
+    (tour) => ({
       label: `${tour.pluginName}: ${tour.title}`,
       click: (_item, browserWindow) =>
         sendAction("help.tour.show", getTargetBrowserWindow(browserWindow), { tourId: tour.id }),
-    }));
+    })
+  );
 
   // Built BEFORE the gate is resolved: this reads getAllProjects(), which
   // repairs stale status rows as a side effect (a "closed" row that is still the

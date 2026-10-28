@@ -151,18 +151,20 @@ Every spec under `e2e/perf/` must have an entry in `scripts/perf/registry.ts`; `
 
 ```bash
 npm run build:e2e && npm run test:e2e:plugins                                                         # every plugin
-npm run build:e2e && npx playwright test --config=playwright.plugins.config.ts e2e/plugins/sveltekit-builder.spec.ts
+npm run build:e2e && npx playwright test --config=playwright.plugins.config.ts e2e/plugins/element-picker/react-vite.spec.ts
 ```
 
-- **`sveltekit-builder.spec.ts`** creates a throwaway SvelteKit 2 + Svelte 5 + Tailwind 4 app and installs its dependencies from the registry (network on a cold npm cache), runs it in a dev preview, and walks SvelteKit Tools: enable, switch it on with its command so it opens a dev preview and starts the site, close it and switch it back on from the preview's own toolbar button, click an element in the preview, walk up to the component that drew it with Option+Up, then send the component to an agent terminal and wait for the site to change. The agent is a deterministic fake `claude` (`e2e/plugins/helpers/siteAgent.ts`) that applies the requested edit only at the source location the prompt names, so a pass proves the context SvelteKit Tools sent.
+- **`element-picker/<framework>.spec.ts`** run the Element Picker on a real, unmodified dev server for each framework it meets — SvelteKit, React + Vite, Next.js, Vue + Vite, Nuxt, Angular, Astro, Preact, Solid and static HTML — one throwaway project per spec (`e2e/plugins/helpers/frameworks/`), installed once and served fresh to each variant. Every fixture draws the same page — a heading and three cards from a child component — and each spec asserts only what that framework truly exposes; the negatives (React production build, React dev with its source maps dropped, SvelteKit production build) check that the picker reports an element as untraced rather than naming a file it can't back. Frameworks the core catalog doesn't register yet keep an active picking test and a `test.fixme` naming #13888 for the source they'll trace.
+
+- **`reference-app-lifecycle.spec.ts`** takes the committed Request Desk reference app through six projects behind a two-view cache: trust, setup, an agent's first operation, rotation, a draft through cache pressure and reload, a simulated suspend and a restart. It asserts behaviour only; its timings and resource readings are `npm run perf reference-app-lifecycle`. The matrix, workload and limitations are in `docs/plugins/reference-app-lifecycle.md`.
 
 Things these specs have to handle that bucket specs don't:
 
 - **Plugin commands can confirm.** A plugin whose manifest holds a high-risk capability (any `fs:*-write`, for one) gets a "Run '…'?" dialog on every command unless the command declares the capabilities it actually uses with `requires` — `[]` for one that only opens a panel. The dispatch stays pending until the dialog is answered.
-- **Built-ins are default-off.** Enable with `window.electron.plugin.setEnabled(id, true)` and poll `getPanelKinds()` / `getActions()`.
+- **Some built-ins are default-off.** Enable one with `window.electron.plugin.setEnabled(id, true)` and poll `getPanelKinds()` / `getActions()`.
 - **The preview's page is only reachable from main.** The host renderer's Trusted Types policy rejects `webview.executeJavaScript`; use `app.evaluate` over `webContents.getAllWebContents()` filtered to `getType() === "webview"`. Click at the element's real position: the webview's bounding box plus the element's client rect.
 - **A fixture project's `package.json` type applies to scripts in it.** An extensionless fake CLI inside a `"type": "module"` project loads as ESM, so `require` throws; use `process.getBuiltinModule`.
-- **Print diagnostics on failure.** A blank panel or a silent preview has no assertion message worth reading; the SvelteKit Tools spec dumps the builder's text, the renderer console, the preview's console (collected from `web-contents-created`) and what the agent received.
+- **Print diagnostics on failure.** A blank panel or a silent preview has no assertion message worth reading; the Element Picker specs (`e2e/plugins/helpers/pickerSession.ts`) dump the inspector's text, the renderer console and the preview's console (collected from `web-contents-created`).
 
 ### Remote hosts E2E (separate config)
 

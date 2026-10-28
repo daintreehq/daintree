@@ -11,6 +11,7 @@ export const PLUGIN_SDK_RUNTIME_ENTRIES = {
   index: "packages/plugin-sdk/src/index.ts",
   files: "packages/plugin-sdk/src/files.ts",
   data: "packages/plugin-sdk/src/data.ts",
+  operations: "packages/plugin-sdk/src/operations.ts",
 };
 
 export const PLUGIN_SDK_RUNTIME_OUTDIR = "dist-electron/electron/plugin-sdk";

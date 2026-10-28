@@ -261,6 +261,46 @@ describe("buildCrashReportUrl", () => {
     expect(body).not.toContain("External kill");
   });
 
+  it("tells a kill under outside memory pressure apart from a plain deadlock (#14367)", () => {
+    const external = decodeBody(
+      buildCrashReportUrl(
+        baseEntry({
+          cause: "watchdog-deadlock",
+          watchdogKillReason: "no-progress-under-external-pressure",
+          watchdogBeatsSinceProgress: 120,
+          watchdogPressureEvidence: "main reported memory pressure",
+        })
+      ).url
+    );
+    const plain = decodeBody(
+      buildCrashReportUrl(
+        baseEntry({ cause: "watchdog-deadlock", watchdogKillReason: "unresponsive" })
+      ).url
+    );
+    expect(external).toContain("**Cause**: Watchdog deadlock (SIGKILL)");
+    expect(external).toContain("120 heartbeats with no sign of main");
+    expect(external).toContain("deferred because main reported memory pressure");
+    expect(plain).not.toContain("deferred because");
+    const causeLine = (body: string) => body.split("\n").find((l) => l.includes("**Cause**"));
+    const reasons = [
+      "unresponsive",
+      "unresponsive-under-pressure",
+      "no-progress-under-external-pressure",
+    ] as const;
+    const lines = reasons.map((reason) =>
+      causeLine(
+        decodeBody(
+          buildCrashReportUrl(baseEntry({ cause: "watchdog-deadlock", watchdogKillReason: reason }))
+            .url
+        )
+      )
+    );
+    expect(new Set(lines).size).toBe(reasons.length);
+    expect(lines).not.toContain(
+      causeLine(decodeBody(buildCrashReportUrl(baseEntry({ cause: "watchdog-deadlock" })).url))
+    );
+  });
+
   it("does not throw on a future-schema crashCause value (defensive normalization)", () => {
     // A log from a newer build with a cause enum value this build doesn't know
     // about must not throw TypeError from CRASH_CAUSE_COPY[bad].title — the

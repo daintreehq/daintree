@@ -5,6 +5,7 @@ import { usePanelStore } from "@/store/panelStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
+import { usePaletteStore } from "@/store/paletteStore";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 
 const lockTargetArgsSchema = z.object({ panelId: z.string().optional() });
@@ -50,8 +51,11 @@ export function registerVoiceActions(actions: ActionRegistry): void {
     danger: "safe",
     scope: "renderer",
     keywords: ["dictate", "mic", "speech"],
-    run: async () => {
-      await voiceRecordingService.toggleFocusedPanel();
+    run: async (_args: unknown, ctx) => {
+      // Only the key itself takes the person back to a dictation it stops (#14791).
+      await voiceRecordingService.toggleFocusedPanel({
+        returnToTarget: ctx?.dispatchSource === "keybinding",
+      });
     },
   }));
 
@@ -69,6 +73,21 @@ export function registerVoiceActions(actions: ActionRegistry): void {
     },
   }));
 
+  actions.set("voiceInput.rewriteSelection", () => ({
+    id: "voiceInput.rewriteSelection",
+    title: "Rewrite selection by voice",
+    description:
+      'Record a spoken instruction ("make this shorter", "turn this into a list") and apply it to the text selected in the focused prompt; stops dictation if it is recording',
+    category: "voice",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    keywords: ["dictate", "mic", "speech", "rewrite", "rephrase", "edit", "command"],
+    run: async () => {
+      await voiceRecordingService.rewriteSelection();
+    },
+  }));
+
   actions.set("voiceInput.togglePause", () => ({
     id: "voiceInput.togglePause",
     title: "Pause or resume voice dictation",
@@ -80,6 +99,21 @@ export function registerVoiceActions(actions: ActionRegistry): void {
     keywords: ["pause", "resume", "dictate", "mic", "speech"],
     run: async () => {
       voiceRecordingService.togglePause();
+    },
+  }));
+
+  actions.set("voiceInput.stopAndSend", () => ({
+    id: "voiceInput.stopAndSend",
+    title: "Stop voice dictation and send",
+    description:
+      "Stop dictation and send the prompt it was dictating into, the way Enter would, without going to its terminal",
+    category: "voice",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    keywords: ["dictate", "mic", "speech", "submit", "send", "stop"],
+    run: async () => {
+      await voiceRecordingService.stopAndSend();
     },
   }));
 
@@ -165,6 +199,23 @@ export function registerVoiceActions(actions: ActionRegistry): void {
         return;
       }
       await voiceRecordingService.toggle(target);
+    },
+  }));
+
+  // Opens the picker only: the text never rides on the action, so dispatch
+  // logging and automation can't carry it.
+  actions.set("voiceInput.openRecentDictations", () => ({
+    id: "voiceInput.openRecentDictations",
+    title: "Recover a recent dictation",
+    description:
+      "Pick one of this session's dictations to add to the focused input's draft or copy",
+    category: "voice",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    keywords: ["dictate", "dictation", "voice", "history", "recover", "copy", "transcript"],
+    run: async () => {
+      usePaletteStore.getState().openPalette("recent-dictations");
     },
   }));
 }

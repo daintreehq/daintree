@@ -9,6 +9,7 @@ import {
   PLUGIN_BLOCKLIST_TTL_MS,
   PLUGIN_BLOCKLIST_FETCH_TIMEOUT_MS,
 } from "../../../shared/config/pluginBlocklist.js";
+import { PLUGIN_BLOCKLIST_SEED } from "./pluginBlocklistSeed.js";
 
 /**
  * One blocklist entry. OSV-inspired minimal shape: a plugin `name`, one or
@@ -24,7 +25,7 @@ const PluginBlocklistEntrySchema = z.object({
   message: z.string().min(1).optional(),
 });
 
-const PluginBlocklistSchema = z.object({
+export const PluginBlocklistSchema = z.object({
   entries: z.array(PluginBlocklistEntrySchema),
 });
 
@@ -63,7 +64,18 @@ interface BlocklistDeps {
   }>;
   /** Override for the clock (used by tests). Defaults to `Date.now`. */
   now?: () => number;
+  /**
+   * Override for the release-shipped seed (used by tests). Defaults to
+   * {@link PLUGIN_BLOCKLIST_SEED}; `null` means the release shipped none.
+   */
+  seed?: unknown;
 }
+
+/**
+ * The seed's `fetchedAt`. Older than any real fetch, so a validated cache always
+ * wins over it, and never fresh, so startup always revalidates.
+ */
+const SEED_FETCHED_AT = Number.NEGATIVE_INFINITY;
 
 /**
  * Resolves the remote plugin blocklist / kill-switch (#10891) with a
@@ -128,9 +140,10 @@ export class PluginBlocklistService {
    * (it is still enforced — a kill-switch must not forget a known-bad plugin
    * just because the TTL lapsed) and `refreshed` settles with the revalidated
    * list, which the caller must re-apply to anything it loaded meanwhile.
-   * With no usable disk cache at all this waits for the fetch exactly as
-   * `getBlocklist()` does, so a first run never loads against an empty list
-   * that a fetch was about to fill.
+   * With no usable cache at all the release-shipped seed stands in as that
+   * stale list (#14127), so a first run never waits on the network either.
+   * Only when the seed is missing or malformed does this wait for the fetch
+   * exactly as `getBlocklist()` does.
    */
   async getStartupBlocklist(): Promise<{
     blocklist: ParsedPluginBlocklist | null;
@@ -141,12 +154,32 @@ export class PluginBlocklistService {
     }
     const disk = await this.readDisk();
     if (disk) this.adoptIfNewer(disk);
+    if (!this.memCache) this.adoptSeed();
     const known = this.memCache;
     if (!known) return { blocklist: await this.getBlocklist(), refreshed: null };
     if (this.now() - known.fetchedAt < PLUGIN_BLOCKLIST_TTL_MS) {
       return { blocklist: known.data, refreshed: null };
     }
     return { blocklist: known.data, refreshed: this.getBlocklist() };
+  }
+
+  /**
+   * Warm the memory cache with the release-shipped seed, marked stale so the
+   * caller revalidates and a failed refresh keeps enforcing it. Never invents a
+   * list: a missing or malformed seed leaves the cache empty.
+   */
+  private adoptSeed(): void {
+    const raw = this.deps.seed === undefined ? PLUGIN_BLOCKLIST_SEED : this.deps.seed;
+    if (raw === null) return;
+    const parsed = PluginBlocklistSchema.safeParse(raw);
+    if (!parsed.success) {
+      console.warn(
+        "[PluginBlocklistService] bundled blocklist seed rejected",
+        parsed.error.message
+      );
+      return;
+    }
+    this.memCache = { data: parsed.data, fetchedAt: SEED_FETCHED_AT };
   }
 
   /**

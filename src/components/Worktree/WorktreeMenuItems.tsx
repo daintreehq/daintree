@@ -259,6 +259,18 @@ export interface WorktreeMenuItemsProps {
   onStopDevServer?: (worktreeId: string) => void;
   onRestartDevServer?: (worktreeId: string) => void;
   pluginItems?: PluginContextMenuItemEntry[];
+  /**
+   * The project's presentation profile quiets git detail (#13777): Review and
+   * the issue and PR rows of Linked work fold into the one Git submenu. Every
+   * row keeps its action, so the palette reaches each by its id regardless.
+   */
+  quietGit?: boolean;
+  /**
+   * The project hides the dev preview (#14069), so the launch row goes. Its
+   * Start, Stop and Restart rows stay: a server already running is still the
+   * user's to control.
+   */
+  hideDevPreview?: boolean;
 }
 
 /**
@@ -364,6 +376,8 @@ export function WorktreeMenuItems({
   onStopDevServer,
   onRestartDevServer,
   pluginItems,
+  quietGit = false,
+  hideDevPreview = false,
 }: WorktreeMenuItemsProps) {
   const source = useMenuActionSource();
   // Group labels in the Extensions submenu name a plugin to the user, and a
@@ -420,10 +434,12 @@ export function WorktreeMenuItems({
           <Globe className={ICON} />
           Browser
         </C.Item>
-        <C.Item onSelect={() => onLaunchAgent?.("dev-preview")} disabled={!onLaunchAgent}>
-          <MonitorPlay className={ICON} />
-          Dev preview
-        </C.Item>
+        {!hideDevPreview && (
+          <C.Item onSelect={() => onLaunchAgent?.("dev-preview")} disabled={!onLaunchAgent}>
+            <MonitorPlay className={ICON} />
+            Dev preview
+          </C.Item>
+        )}
         {onOpenPanelPalette && (
           <>
             <C.Separator />
@@ -461,6 +477,14 @@ export function WorktreeMenuItems({
           <FolderOpen className={ICON} />
           {hostFileManagerRevealLabel()}
         </C.Item>
+        {/* Quiet git detail empties Linked work of everything but the plan,
+            and the plan is a file in the worktree. */}
+        {quietGit && worktree && onViewPlan && (
+          <C.Item onSelect={onViewPlan}>
+            <FileText className={ICON} />
+            View plan
+          </C.Item>
+        )}
       </C.SubContent>
     </C.Sub>
   );
@@ -714,16 +738,6 @@ export function WorktreeMenuItems({
           </C.Item>
         ),
       ].filter(Boolean);
-
-  const gitSub = gitRows.length > 0 && (
-    <C.Sub key="git">
-      <C.SubTrigger>
-        <GitBranch className={ICON} />
-        Git
-      </C.SubTrigger>
-      <C.SubContent>{gitRows}</C.SubContent>
-    </C.Sub>
-  );
 
   // -------------------------------------------------------------- Sessions
   // The `worktree.sessions.*` actions and fleet selection resolve a worktree id
@@ -1091,17 +1105,17 @@ export function WorktreeMenuItems({
   const hasIssue = Boolean(worktree?.issueNumber);
   const hasIssueItem = hasIssue && Boolean(onOpenIssueExternal);
   const hasPRItem = Boolean(worktree?.linked?.pr && onOpenPRExternal);
-  const linkedOpenRows = [
-    worktree && onViewPlan && (
-      <C.Item key="plan" onSelect={onViewPlan}>
-        <FileText className={ICON} />
-        View plan
-      </C.Item>
-    ),
+  const planRow = worktree && onViewPlan && (
+    <C.Item key="plan" onSelect={onViewPlan}>
+      <FileText className={ICON} />
+      View plan
+    </C.Item>
+  );
+  const linkedForgeRows = [
     hasIssueItem && (
       <C.Item key="issue" onSelect={onOpenIssueExternal}>
         <CircleDot className={ICON} />
-        Open issue #{worktree?.issueNumber}
+        Open issue {worktree?.issueKey ?? `#${worktree?.issueNumber}`}
       </C.Item>
     ),
     hasPRItem && (
@@ -1111,8 +1125,11 @@ export function WorktreeMenuItems({
       </C.Item>
     ),
   ].filter(Boolean);
+  // Quiet git detail takes the issue and PR rows into Git and the plan into
+  // Open, which leaves Linked work with nothing to hold.
+  const linkedOpenRows = quietGit ? [] : compact(planRow, ...linkedForgeRows);
 
-  const linkedAssociationRows = [
+  const issueAssociationRows = [
     worktree && onAttachIssue && (
       <C.Item key="attach" onSelect={onAttachIssue}>
         <Link className={ICON} />
@@ -1126,6 +1143,7 @@ export function WorktreeMenuItems({
       </C.Item>
     ),
   ].filter(Boolean);
+  const linkedAssociationRows = quietGit ? [] : issueAssociationRows;
 
   const linkedWorkSub = (linkedOpenRows.length > 0 || linkedAssociationRows.length > 0) && (
     <C.Sub key="linked-work">
@@ -1138,6 +1156,22 @@ export function WorktreeMenuItems({
         {linkedOpenRows.length > 0 && linkedAssociationRows.length > 0 && <C.Separator />}
         {linkedAssociationRows}
       </C.SubContent>
+    </C.Sub>
+  );
+
+  // ------------------------------------------------------------------- Git
+  // Quiet git detail folds Review and the issue and PR rows in here, so the
+  // menu's git surface is this one submenu (#13777).
+  const gitContent = quietGit
+    ? joinGroups([reviewRows, gitRows, linkedForgeRows, issueAssociationRows], C.Separator)
+    : gitRows;
+  const gitSub = gitContent.length > 0 && (
+    <C.Sub key="git">
+      <C.SubTrigger>
+        <GitBranch className={ICON} />
+        Git
+      </C.SubTrigger>
+      <C.SubContent>{gitContent}</C.SubContent>
     </C.Sub>
   );
 
@@ -1316,7 +1350,11 @@ export function WorktreeMenuItems({
               <C.Item
                 key={`${entry.pluginId}:${entry.item.actionId}`}
                 onSelect={() =>
-                  void actionService.dispatch(entry.item.actionId, undefined, { source })
+                  void actionService.dispatch(
+                    entry.item.actionId,
+                    worktree ? { worktreeId: worktree.id } : undefined,
+                    { source }
+                  )
                 }
               >
                 <Puzzle className={ICON} />
@@ -1343,7 +1381,7 @@ export function WorktreeMenuItems({
 
   const rows = joinGroups(
     [
-      compact(launchSub, openSub, reviewSub, gitSub),
+      compact(launchSub, openSub, !quietGit && reviewSub, gitSub),
       compact(sessionsSub, recipesSub, runtimeSub),
       compact(linkedWorkSub, copySub, organizeSub, extensionsSub),
       compact(deleteItem),

@@ -76,7 +76,8 @@ function buildDerivedMeta(
   const buckets = deriveWorktreeAgentBuckets(
     agentIds,
     bucketInputs.runsById,
-    isWorktreeMergedForCleanup(worktree)
+    isWorktreeMergedForCleanup(worktree),
+    bucketInputs.pluginByWorktreeId.get(worktree.id)
   );
 
   return {
@@ -109,7 +110,7 @@ function worktreeMatchesQuery(
 /**
  * Returns worktrees in the exact order the sidebar renders them.
  *
- * Mirrors the `filteredWorktrees` memo in `SidebarContent.tsx` so that
+ * Mirrors `filterSidebarWorktrees` in `components/Sidebar/sidebarWorktreeModel.ts` so that
  * cycle/index-jump keybindings walk the same list the user sees.
  *
  * Call this inside action `run()` bodies — each call reads fresh state

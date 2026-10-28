@@ -1,5 +1,6 @@
 import type { LucideIcon } from "lucide-react";
 import type { FileReadErrorCode } from "@shared/types/ipc/files";
+import type { MediaPreviewError } from "./useMediaSourceUrl";
 import { EmptyState } from "@/components/ui/EmptyState";
 
 /**
@@ -14,13 +15,41 @@ export type UnavailableReason =
   | "IMAGE_FAILED"
   | "SVG_REJECTED"
   | "PDF_FAILED"
-  | "READ_FAILED";
+  | "READ_FAILED"
+  /** A remote window's host shows previews only to the window with control. */
+  | "DRIVEN_ELSEWHERE"
+  /** A remote window's host refused a file outside the project's folders. */
+  | "OUTSIDE_PROJECT";
 
 export interface UnavailableCopy {
   title: string;
   description: string;
   /** The way out the body offers, beyond the toolbar's own actions. */
-  action: "open" | "reveal" | "retry" | null;
+  action: "open" | "reveal" | "retry" | "save" | "take-control" | null;
+}
+
+/**
+ * Where an unavailable file is, for a window attached to a remote host: the
+ * file is on that machine, so the ways out are the ones that work from here.
+ */
+export interface RemoteFileContext {
+  /** The host, as this window names it. */
+  hostName: string;
+  /** Who has control of the project, while another window does; null otherwise. */
+  driverName: string | null;
+  /**
+   * This computer as a save names it ("this Mac"), when saving a copy here is
+   * how to open a host file in another app; null where this computer opens
+   * the host's files itself (a WSL distro, through its share).
+   */
+  saveTarget: string | null;
+}
+
+/** The reason a preview's host refusal stands for, or null for a failure of the file itself. */
+export function refusalReason(error: MediaPreviewError | undefined): UnavailableReason | null {
+  if (error?.refusal === "driven-elsewhere") return "DRIVEN_ELSEWHERE";
+  if (error?.refusal === "outside-project") return "OUTSIDE_PROJECT";
+  return null;
 }
 
 /**
@@ -28,9 +57,16 @@ export interface UnavailableCopy {
  * line saying what to do instead, and the one action that does it. The open
  * action follows the toolbar's own target for the file's type, so "open" means
  * the editor for text and the OS default app for media — never the OS default
- * for a binary, which may execute it; a binary gets Reveal.
+ * for a binary, which may execute it; a binary gets Reveal. In a remote window
+ * the file is on the host: see {@link remoteUnavailableCopy}.
  */
-export function unavailableCopy(reason: UnavailableReason, message: string): UnavailableCopy {
+export function unavailableCopy(
+  reason: UnavailableReason,
+  message: string,
+  remote: RemoteFileContext | null = null
+): UnavailableCopy {
+  const remoteCopy = remote === null ? null : remoteUnavailableCopy(reason, message, remote);
+  if (remoteCopy !== null) return remoteCopy;
   switch (reason) {
     case "BINARY_FILE":
       return {
@@ -108,6 +144,89 @@ export function unavailableCopy(reason: UnavailableReason, message: string): Una
         description: "Something went wrong reading it from disk.",
         action: "retry",
       };
+    case "DRIVEN_ELSEWHERE":
+      return {
+        title: "Another window has control",
+        description: "Take control of this project to show the file here.",
+        action: "take-control",
+      };
+    case "OUTSIDE_PROJECT":
+      return {
+        title: "Outside this project",
+        description: "It's outside this project's folders, so it can't be opened here.",
+        action: "reveal",
+      };
+  }
+}
+
+/**
+ * A remote window's own wording, where it differs: a refusal names the
+ * window with control or the machine the file is on, never the file; and
+ * where this computer can't open the host's files, the way out of a preview
+ * it can't show is a copy saved here, not the default app.
+ */
+function remoteUnavailableCopy(
+  reason: UnavailableReason,
+  message: string,
+  remote: RemoteFileContext
+): UnavailableCopy | null {
+  switch (reason) {
+    case "DRIVEN_ELSEWHERE":
+      return {
+        title: "Another window has control",
+        description:
+          remote.driverName === null
+            ? `Take control of this project on ${remote.hostName} to show the file here.`
+            : `${remote.driverName} has control of this project on ${remote.hostName}. Take control to show the file here.`,
+        action: "take-control",
+      };
+    case "OUTSIDE_PROJECT":
+    case "OUTSIDE_ROOT":
+      return {
+        title: "Outside this project",
+        description: `It's on ${remote.hostName}, outside this project's folders, so this window can't open it.`,
+        action: "reveal",
+      };
+  }
+  if (remote.saveTarget === null) return null;
+  const save = `Save it to ${remote.saveTarget}`;
+  switch (reason) {
+    case "BINARY_FILE":
+      return {
+        title: "Binary file",
+        description: `It can't be shown as text. ${save} to open it with another app.`,
+        action: "save",
+      };
+    case "FILE_TOO_LARGE":
+      return {
+        title: "Too large to preview",
+        description: `It's over the size this viewer opens. ${save} to open it outside Daintree.`,
+        action: "save",
+      };
+    case "UNSUPPORTED_MEDIA":
+      return { title: "Can't play this format", description: message, action: "save" };
+    case "MEDIA_FAILED":
+      return {
+        title: message || "Couldn't play this file",
+        description: `${save} to play it in another app.`,
+        action: "save",
+      };
+    case "IMAGE_FAILED":
+      return {
+        title: "Couldn't load this image",
+        description: "It may be damaged, or in a format that can't be decoded here.",
+        action: "save",
+      };
+    case "SVG_REJECTED":
+      return { title: "Can't preview this SVG", description: message, action: "save" };
+    case "PDF_FAILED":
+      return {
+        title: message || "This PDF couldn't be displayed",
+        description: `${save} to read it in another app.`,
+        action: "save",
+      };
+    default:
+      return null;
   }
 }
 

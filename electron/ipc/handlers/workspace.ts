@@ -1,6 +1,7 @@
 import { projectStore } from "../../services/ProjectStore.js";
 import { scratchStore } from "../../services/ScratchStore.js";
 import { getRegisteredProjectViews } from "../../window/webContentsRegistry.js";
+import { isMcpFrontendAttached } from "../../services/mcp-server/driveTarget.js";
 import { isScratchWorkspaceId } from "../../../shared/utils/workspaceIds.js";
 import { defineIpcNamespace, op } from "../define.js";
 import { WORKSPACE_METHOD_CHANNELS } from "./workspace.preload.js";
@@ -12,8 +13,8 @@ import type { WorkspaceListEntry } from "../../../shared/types/ipc/workspace.js"
  * Joined here rather than in the renderer because all three sources are
  * main-process state — two stores and the cross-window view registry — and
  * joining in the renderer would mean three IPC round trips whose answers could
- * disagree, plus a wider payload crossing the bridge than the five fields the
- * external contract permits.
+ * disagree, plus a wider payload crossing the bridge than the fields the external
+ * contract permits.
  *
  * Lives in its own `defineIpcNamespace` block so its `IpcInvokeMap` entry is
  * codegen-generated; new channels must not grow the hand-written ratchet
@@ -44,6 +45,7 @@ export const workspaceNamespace = defineIpcNamespace({
           name,
           kind: isScratchWorkspaceId(id) ? "scratch" : "project",
           hasLiveView: liveWorkspaceIds.has(id),
+          frontendAttached: isMcpFrontendAttached(id, liveWorkspaceIds.has(id)),
         }))
         .sort((a, b) =>
           a.workspaceId < b.workspaceId ? -1 : a.workspaceId > b.workspaceId ? 1 : 0

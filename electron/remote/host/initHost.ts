@@ -4,9 +4,11 @@ import { helpSessionService } from "../../services/HelpSessionService.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import type { PtyClient } from "../../services/PtyClient.js";
 import { scratchStore } from "../../services/ScratchStore.js";
+import { isProjectFrontendAttached } from "../../services/mcp-server/frontendAttachment.js";
+import { isWorkspaceKeepResident } from "../../services/workspaceResidency.js";
 import { events } from "../../services/events.js";
 import { setAttachedFrontendCount } from "../../services/PowerSaveBlockerService.js";
-import { getPtyClient } from "../../window/serviceRefs.js";
+import { getMcpServerServiceRef, getPtyClient } from "../../window/serviceRefs.js";
 import { registerRemoteService } from "../runtime.js";
 import { MAX_PROJECT_EMOJI_LENGTH } from "./linkMethods.js";
 import { ProjectAgentActivityCache } from "./ProjectAgentActivityCache.js";
@@ -19,7 +21,7 @@ declare module "../runtime.js" {
   }
 }
 
-/** How often the host re-reads its views' assistant and agent answers, beside the events. */
+/** How often the host re-reads its views' answers, beside the events that change them. */
 export const ASSISTANT_SWEEP_MS = 30_000;
 
 /**
@@ -66,10 +68,19 @@ export function initRemoteHostsHost(
         name,
         path,
         ...(emoji && emoji.length <= MAX_PROJECT_EMOJI_LENGTH ? { emoji } : {}),
+        frontendAttached: isProjectFrontendAttached(id),
       })),
     assistantLive: assistantLiveFor,
     agentActive: (endpoint) =>
       endpoint.projectId !== null && agents.isProjectActive(endpoint.projectId),
+    keepResident: (endpoint) =>
+      endpoint.projectId !== null && isWorkspaceKeepResident(endpoint.projectId),
+    // The same reading a local view's eviction pass takes (#11790), here where
+    // the session runs. Before the MCP service loads there are no sessions.
+    mcpBindingLive: (endpoint) =>
+      endpoint.projectId !== null &&
+      getMcpServerServiceRef()?.getWorkspaceViewActivity(endpoint.projectId, endpoint.handle)
+        .liveBinding === true,
     ...overrides,
   });
   const unregister = registerRemoteService("sessionHost", sessionHost);
@@ -99,11 +110,16 @@ export function initRemoteHostsHost(
   // the view those leave protected from staying so until something else changes.
   // The agent cache reads the inventory again on the same beat: a failed or
   // partial read, or a pty-host that restarted without a crash event, is
-  // repaired there, and any change it finds is announced as it lands.
+  // repaired there, and any change it finds is announced as it lands. An MCP
+  // session binding or dropping against a view already open is only seen here:
+  // its liveness spans the session's routing and transport records, which
+  // change at different moments, and the sweep reads them settled.
   const sweep = setInterval(() => {
     refresh();
     agents.reconcile();
     sessionHost.refreshAgentActivity();
+    sessionHost.refreshResidency();
+    sessionHost.refreshMcpBindings();
   }, ASSISTANT_SWEEP_MS);
   sweep.unref?.();
   return {

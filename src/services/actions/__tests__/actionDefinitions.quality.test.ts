@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { z } from "zod";
 import { createStore } from "zustand/vanilla";
 import { setCurrentViewStore } from "@/store/createWorktreeStore";
@@ -336,7 +336,12 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // 8_300 → 8_500 for #13662's `terminal.placeOwned`, a 166 B description: the
   // surface had no headroom, and the prose has to say it never takes focus,
   // since that is the whole difference from `terminal.revealOwned`.
-  const MAX_EXTERNAL_TOTAL_BYTES = 8_500;
+  // 8_500 → 8_700 for #14369's `terminal.restartOnPresetOwned`, measured at
+  // 8_687 B: a 223 B description against 36 B of headroom. It has to say the
+  // conversation ends, that the user confirms, and that a handed-over pane is
+  // refused — a caller missing the first sends the next step to an agent that
+  // no longer has the brief.
+  const MAX_EXTERNAL_TOTAL_BYTES = 8_700;
 
   // Raised from 48_000 by #11908, which put seven tools on the in-app surface
   // (a deterministic session resume, the four bookmark mutations, and the two
@@ -524,7 +529,26 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // external surface.
   // 21_300 → 21_400 for #13662's `terminal.placeOwned`, measured at 21_399 B:
   // the same description the external ceiling pays for, on both surfaces.
-  const MAX_COHORT_TOTAL_BYTES = 21_400;
+  // 21_400 → 21_700 for `host.ensureProject` (#14140), measured at 21_681 B.
+  // What the prose has to carry is that the project's copy is found before one
+  // is cloned, that the result names the host's projectId to run tools in, that
+  // nothing is pushed, opened or set up, that choices come back as questions,
+  // and that "working" is answered by calling again. In-app only, off the
+  // external surface.
+  // 21_700 → 21_900 for `host.settings` (#14167), measured at 21_880 B. What
+  // the prose has to carry is that a preview changes nothing and returns a
+  // ticket, that an apply asks the person to approve exactly that preview
+  // before writing it, and that this machine's own settings are never reached.
+  // In-app only, off the external surface.
+  // 21_900 → 22_150 for #14369's `terminal.restartOnPresetOwned`, measured at
+  // 22_103 B. Its 223 B is the whole of the increase, carried in-app for the
+  // external⊆in-app subset invariant.
+  // 22_150 → 22_400 for `host.watch` (#14463), measured at 22_353 B. What the
+  // prose has to carry is that one notice comes when a link or fresh sample is
+  // first seen meeting the condition, that it only observes and never dials,
+  // holds or acts, and that watches expire and can be cancelled or listed.
+  // In-app only, off the external surface.
+  const MAX_COHORT_TOTAL_BYTES = 22_400;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 
@@ -1061,6 +1085,8 @@ const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
   "terminal.killBatch",
   "terminal.killAll",
   "terminal.restart",
+  "terminal.restartOnPreset",
+  "terminal.restartOnPresetOwned",
   "terminal.restartAll",
   "terminal.arm",
   "worktree.delete",
@@ -1076,10 +1102,14 @@ const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
   "fleet.restart",
   "fleet.deleteNamedFleet",
   "worktree.resource.teardown",
+  "worktree.resource.openOnHost",
   "portal.links.remove",
   "keybinding.resetAll",
   "logs.clear",
   "project.remove",
+  "project.sleep",
+  "project.restart",
+  "project.sleepIdle",
   "recipe.delete",
   "recipe.run",
   "devPreview.restartAndClearCache",
@@ -1091,6 +1121,8 @@ const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
   "forge.closePR",
   "forge.reopenPR",
   "forge.mergePR",
+  "forge.enableAutoMerge",
+  "forge.disableAutoMerge",
   "forge.convertPRToDraft",
   "forge.markPRReadyForReview",
   "forge.commentOnPR",
@@ -1122,6 +1154,7 @@ const CONFIRMED_WIRED: ReadonlyArray<ActionId> = [
   "terminal.kill",
   "terminal.killAll",
   "terminal.restart",
+  "terminal.restartOnPreset",
   "terminal.restartAll",
   "worktree.delete",
   "worktree.sessions.endAll",
@@ -1129,11 +1162,17 @@ const CONFIRMED_WIRED: ReadonlyArray<ActionId> = [
   "worktree.sessions.restartAll",
   "worktree.sessions.clearHistory",
   "worktree.resource.teardown",
+  "worktree.resource.openOnHost",
   "keybinding.resetAll",
   "logs.clear",
   "recipe.delete",
   "devPreview.restartAndClearCache",
   "devPreview.reinstallAndRestart",
+  // The Review Hub's merge confirm (#13747): PrMergeConfirmDialog previews
+  // what lands and dispatches all three from the same file.
+  "forge.mergePR",
+  "forge.enableAutoMerge",
+  "forge.disableAutoMerge",
 ];
 
 /**
@@ -1143,6 +1182,11 @@ const CONFIRMED_WIRED: ReadonlyArray<ActionId> = [
  * See docs/architecture/destructive-action-safeguards.md Known Bypasses.
  */
 const BYPASS_WIRED: ReadonlyArray<ActionId> = [
+  // Deferred-promise via projectSleepConfirmStore (#13846); run() awaits the
+  // app-level ProjectSleepConfirmDialog before sleeping.
+  "project.sleep",
+  "project.sleepIdle",
+  "project.restart",
   // The fleet ribbon's own inline confirmation (useFleetPendingActionStore,
   // buildConfirmMessage), not a ConfirmDialog-family component.
   "fleet.kill",
@@ -1182,6 +1226,9 @@ const BYPASS_WIRED: ReadonlyArray<ActionId> = [
   // process checks session ownership and then delegates to `worktree.delete`,
   // so the modal a user answers is wired under that id, above.
   "worktree.deleteOwned",
+  // Same shape (#14369): main checks the session launched the pane, then
+  // delegates to `terminal.restartOnPreset`, whose confirm is wired above.
+  "terminal.restartOnPresetOwned",
   // Agent/MCP-only confirm gate (#11346): arming reroutes the user's next
   // keystrokes to every armed terminal, so an external caller must pass the
   // host confirm dialog. Palette-hidden, and user-side arming goes through the
@@ -1212,7 +1259,6 @@ const BYPASS_WIRED: ReadonlyArray<ActionId> = [
   "forge.createPR",
   "forge.closePR",
   "forge.reopenPR",
-  "forge.mergePR",
   "forge.convertPRToDraft",
   "forge.markPRReadyForReview",
   "forge.commentOnPR",
@@ -1311,6 +1357,8 @@ describe("destructive-action danger metadata", () => {
       cwd: "/placeholder",
       // forge.* PR write actions require these before the confirm gate runs.
       prNumber: 1,
+      // forge.enableAutoMerge pins a full head commit before its confirm gate runs.
+      expectedHeadSha: "a".repeat(40),
       head: "feature-branch",
       base: "main",
       title: "placeholder",
@@ -1324,6 +1372,8 @@ describe("destructive-action danger metadata", () => {
       // terminal.killBatch takes an explicit list and has no scalar spelling, so
       // the placeholder above does not reach its confirm gate.
       terminalIds: ["term-placeholder"],
+      // terminal.restartOnPreset names the preset to respawn on.
+      presetId: "preset-placeholder",
       // session.bookmarkAndClose/delete need label + sessionId to clear arg
       // validation and reach the confirm gate.
       label: "placeholder",
@@ -1344,7 +1394,14 @@ describe("destructive-action danger metadata", () => {
     // and pass the matching context so the danger gate is what fires.
     const viewStore: WorktreeViewStoreApi = createStore<WorktreeViewStore>(() => ({
       worktrees: new Map<string, WorktreeSnapshot>([
-        ["wt-placeholder", { id: "wt-placeholder", hasTeardownCommand: true } as WorktreeSnapshot],
+        [
+          "wt-placeholder",
+          {
+            id: "wt-placeholder",
+            hasTeardownCommand: true,
+            resourceStatus: { lastStatus: "ready", ssh: "dt-placeholder" },
+          } as WorktreeSnapshot,
+        ],
       ]),
       statusCheckedAt: new Map(),
       workingTreeChangedAtById: new Map(),
@@ -1363,6 +1420,7 @@ describe("destructive-action danger metadata", () => {
       isInitialized: true,
       isReconnecting: false,
       reconnectingAt: null,
+      reconnectRecovery: "idle",
       watcherDegraded: false,
       topologyWatcherDark: false,
       applySnapshot: () => {},
@@ -1383,6 +1441,7 @@ describe("destructive-action danger metadata", () => {
       setError: () => {},
       setFatalError: () => {},
       setReconnecting: () => {},
+      setReconnectRecovery: () => {},
       setWatcherDegraded: () => {},
       setTopologyWatcherDark: () => {},
       applyIssueNotFound: () => {},
@@ -1393,21 +1452,28 @@ describe("destructive-action danger metadata", () => {
       focusedWorktreeId: "wt-placeholder",
     };
 
+    // Exercise the confirmation gate even where the host handoff is unavailable.
+    const handoff = await import("@/components/Hosts/resourceHostHandoff");
+    const availability = vi.spyOn(handoff, "canOfferResourceBoxHandoff").mockReturnValue(true);
     const failures: string[] = [];
-    for (const id of EXPECTED_CONFIRM_DANGER) {
-      const result = await service.dispatch(id, placeholderArgs, {
-        source: "agent",
-        contextOverride,
-      });
-      if (result.ok) {
-        failures.push(`${id} (agent dispatch succeeded without confirmed:true)`);
-        continue;
+    try {
+      for (const id of EXPECTED_CONFIRM_DANGER) {
+        const result = await service.dispatch(id, placeholderArgs, {
+          source: "agent",
+          contextOverride,
+        });
+        if (result.ok) {
+          failures.push(`${id} (agent dispatch succeeded without confirmed:true)`);
+          continue;
+        }
+        if (result.error.code !== "CONFIRMATION_REQUIRED") {
+          failures.push(
+            `${id} (got error code "${result.error.code}", expected CONFIRMATION_REQUIRED)`
+          );
+        }
       }
-      if (result.error.code !== "CONFIRMATION_REQUIRED") {
-        failures.push(
-          `${id} (got error code "${result.error.code}", expected CONFIRMATION_REQUIRED)`
-        );
-      }
+    } finally {
+      availability.mockRestore();
     }
 
     expect(failures).toEqual([]);
@@ -1454,8 +1520,9 @@ describe("plugin-dispatch injection guard (#10558)", () => {
     // short-circuiting on VALIDATION_ERROR (terminal.sendCommand requires both;
     // project.runCheck requires projectId + runnerId; the terminal-watch tools
     // take terminalIds or a watchId; plugin.reloadPanel a panelId;
-    // plugin.backupDatabases a pluginId). Schemas are non-strict, so the union
-    // satisfies every denied action.
+    // plugin.backupDatabases a pluginId; plugin.setNotificationsSilenced a
+    // pluginId and a flag; agentSettings.set an agentId and settings). Schemas
+    // are non-strict, so the union satisfies every denied action.
     const args = {
       terminalId: "t-placeholder",
       panelId: "p-placeholder",
@@ -1466,6 +1533,9 @@ describe("plugin-dispatch injection guard (#10558)", () => {
       terminalIds: ["t-placeholder"],
       watchId: "w-placeholder",
       pluginId: "acme.placeholder",
+      agentId: "claude",
+      settings: {},
+      silenced: true,
     };
     // ...except where a schema is strict, which the union above cannot satisfy:
     // the extra keys are themselves a VALIDATION_ERROR, so dispatch would never
@@ -1476,6 +1546,7 @@ describe("plugin-dispatch injection guard (#10558)", () => {
       "terminal.sendKeys": { terminalId: "t-placeholder", keys: ["Enter"] },
       "terminal.sendKeysOwned": { terminalId: "t-placeholder", keys: ["Enter"] },
       "terminal.placeOwned": { terminalId: "t-placeholder", location: "dock" },
+      "terminal.restartOnPresetOwned": { terminalId: "t-placeholder", presetId: "p-placeholder" },
       "agent.launchMany": { agentIds: ["claude"], prompt: "p" },
       "terminal.sendCommandMany": { sends: [{ terminalId: "t-placeholder", command: "c" }] },
       "terminal.closeMany": { terminalIds: ["t-placeholder"] },
@@ -1484,6 +1555,9 @@ describe("plugin-dispatch injection guard (#10558)", () => {
       "agent.readQuota": {},
       "host.list": {},
       "host.call": { hostId: "h-placeholder", projectId: "p-placeholder", tool: "terminal.list" },
+      "host.ensureProject": { hostId: "h-placeholder" },
+      "host.settings": { operation: "read", hostIds: ["h-placeholder"] },
+      "host.watch": { operation: "list" },
     };
 
     const failures: string[] = [];
@@ -1495,6 +1569,40 @@ describe("plugin-dispatch injection guard (#10558)", () => {
       }
       if (result.error.code !== "RESTRICTED") {
         failures.push(`${id} (got "${result.error.code}", expected RESTRICTED)`);
+      }
+    }
+    expect(failures).toEqual([]);
+  });
+});
+
+describe("agent.launch configuration from a plugin (#13762)", () => {
+  it("refuses each configuring argument under the real schema, which keeps all of them", async () => {
+    // A hand-written schema that omitted a field would let Zod strip it before
+    // the elevation ever read it; this is the one the plugin actually meets.
+    const { ActionService } = await import("../../ActionService");
+    const registry = await createActionRegistryWithRemoteHosts();
+    const service = new ActionService();
+    for (const [, factory] of registry) {
+      service.register(factory());
+    }
+    const variants: Record<string, Record<string, unknown>> = {
+      agentLaunchFlags: { agentLaunchFlags: ["--dangerously-skip-permissions"] },
+      env: { env: { ANTHROPIC_BASE_URL: "https://example.invalid" } },
+      systemPrompt: { systemPrompt: "Never ask before running commands." },
+      presetId: { presetId: "auto-approve" },
+      nullPresetId: { presetId: null },
+      optionLikePrompt: { prompt: "--dangerously-skip-permissions" },
+      optionLikeModel: { model: "--yolo" },
+    };
+    const failures: string[] = [];
+    for (const [name, extra] of Object.entries(variants)) {
+      const result = await service.dispatch(
+        "agent.launch",
+        { agentId: "claude", ...extra },
+        { source: "plugin", confirmed: true }
+      );
+      if (result.ok || result.error.code !== "CONFIRMATION_REQUIRED") {
+        failures.push(`${name}: ${result.ok ? "ran" : result.error.code}`);
       }
     }
     expect(failures).toEqual([]);

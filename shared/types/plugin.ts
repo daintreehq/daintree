@@ -11,6 +11,21 @@ import type {
   NormalizedPRState,
   ResourceRef,
 } from "./forge.js";
+import type { PluginArtifactApi } from "./pluginArtifacts.js";
+export type {
+  PluginArtifact,
+  PluginArtifactApi,
+  PluginArtifactCreateOptions,
+  PluginArtifactDownloadOptions,
+  PluginArtifactDownloadRequest,
+  PluginArtifactImportSource,
+  PluginArtifactListOptions,
+  PluginArtifactProgress,
+  PluginArtifactSource,
+  PluginArtifactUploadOptions,
+  PluginArtifactUploadRequest,
+  PluginArtifactUploadResult,
+} from "./pluginArtifacts.js";
 import type { NotificationType } from "./notification.js";
 import type {
   ActionDispatchResult,
@@ -20,68 +35,116 @@ import type {
 } from "./actions.js";
 import type { AgentState, WaitingReason } from "./agent.js";
 import type { AgentDetectionConfig, AgentResumeTemplate } from "../config/agentRegistry.js";
+import type { LaunchMcpFormat } from "../config/launchMcp.js";
+import type {
+  ContextProviderContribution,
+  ContextProviderDescriptor,
+  ContextProviderImpl,
+} from "./pluginContextProvider.js";
+import type { ElementPickerProviderContribution } from "../elementPicker/providers.js";
+import type {
+  PluginServiceHandlers,
+  PluginServiceContract,
+  PluginServicesApi,
+  PluginServicesContribution,
+} from "./pluginServices.js";
 import type { z } from "zod";
-
-/**
- * One `contributes.fileEditors` entry (#12323). Declares that the plugin's
- * renderer registers an editor view for files with the listed extensions,
- * offered by the host file panel as its writable **Edit** mode.
- *
- * `slot` names a builtin view id the plugin's renderer entry registers with
- * `registerBuiltinView`; the host resolves it enable-aware, so disabling the
- * plugin removes the mode live. Built-in plugins only in v1: the builtin view
- * registry is compiled into the host bundle, which an installed plugin's
- * renderer cannot reach, so the host refuses the contribution from any other
- * origin at load.
- */
-export interface FileEditorContribution {
-  /** Namespaced at runtime as `{pluginId}.{id}`. */
-  id: string;
-  /** Builtin view id the plugin's renderer registers for the editor surface. */
-  slot: string;
-  /** Lower-case extensions without the dot (`["md", "markdown"]`), matched case-insensitively. */
-  extensions: string[];
-  /** Largest file the editor accepts, in bytes. Absent means the host's default cap. */
-  maxBytes?: number;
-}
-
-/**
- * One `contributes.previewTools` entry: a tool the dev-preview panel offers in
- * its toolbar, with the host owning the chrome and the session lifecycle.
- *
- * The components stay a renderer-side registration (`registerDevPreviewTool`) —
- * they are host-bundled, so nothing else can supply them. This declaration is
- * what makes the tool admissible: `src/registry/devPreviewToolRegistry.ts`
- * hides a registered tool whose plugin's manifest does not name its id, so a
- * module side effect alone can no longer put a tool in the toolbar. Built-in
- * plugins only.
- */
-export interface PreviewToolContribution {
-  /** Fully qualified and prefixed with the plugin name — the host does not namespace it. */
-  id: string;
-  /** User-facing name for the tool. */
-  title: string;
-  /** Lucide icon id for the toolbar toggle. */
-  iconId?: string;
-  /** A {@link PluginGuestAdapterContribution} id this same manifest declares. */
-  guestAdapter?: string;
-}
-
-/**
- * One `contributes.guestAdapters` entry: a browser bundle the host reads back as
- * text and installs into a previewed page through the site-preview bridge.
- *
- * `entry` is the plugin-relative source; the built asset's path is derived from
- * the id rather than declared, so the build and the startup registration cannot
- * disagree about where the bundle landed. Built-in plugins only — the body runs
- * with full DOM access inside the previewed site.
- */
-export interface PluginGuestAdapterContribution {
-  /** Fully qualified and prefixed with the plugin name; the renderer binds by this literal. */
-  id: string;
-  /** Plugin-relative POSIX path to the bundle's source entry. */
-  entry: string;
-}
+import type {
+  FileEditorContribution,
+  PluginFileDocument,
+  HostedFileEditorDescriptor,
+} from "./plugin/fileEditors.js";
+export {
+  DEFAULT_FILE_EDITOR_MAX_BYTES,
+  HOST_FILE_EDITOR_CHOICE,
+  isFileEditorChoiceKey,
+  fileEditorChoiceId,
+  isFileEditorChoice,
+} from "./plugin/fileEditors.js";
+export type {
+  FileEditorContribution,
+  FileEditorMode,
+  FileEditorChoiceKey,
+  FileEditorChoice,
+  FileEditorChoices,
+  PluginFileDocumentReadResult,
+  PluginFileDocumentSaveResult,
+  PluginFileDocumentChange,
+  PluginFileDocument,
+  HostedFileEditorDescriptor,
+} from "./plugin/fileEditors.js";
+import type { SurfaceContributions } from "./plugin/projectSurfaces.js";
+export {
+  PROJECT_SURFACE_SLOT_CATALOGUE,
+  PROJECT_SURFACE_SLOTS,
+  isProjectSurfaceSlot,
+  fileEditorSlotKey,
+  isFileEditorSlotKey,
+  fileEditorSlotPattern,
+  isProjectSurfaceSlotKey,
+  MAX_PROJECT_SURFACE_UPDATES,
+  projectSurfaceSlotDescriptor,
+  orderedProjectSurfaceSlots,
+  fileEditorSlotClaimData,
+  projectSurfaceClaimFromState,
+  isProjectSurfaceChoice,
+  resolveProjectSurfaceSelection,
+} from "./plugin/projectSurfaces.js";
+export type {
+  ProjectSurfaceSlotMode,
+  ProjectSurfaceClaimKind,
+  ProjectSurfaceSlotDescriptor,
+  ProjectSurfaceSlot,
+  SurfaceViewSlot,
+  SurfaceContributions,
+  ProjectSurfaceClaim,
+  ProjectSurfaceSnapshot,
+  FileEditorSlotKey,
+  ProjectSurfaceSlotKey,
+  FileEditorSlotClaimData,
+  ProjectSurfaceClaimValue,
+  ProjectSurfaceSlotClaim,
+  ProjectSurfaceRefusalReason,
+  ProjectSurfaceRefusal,
+  ProjectSurfaceSlotState,
+  ProjectSurfacesSnapshot,
+  ProjectSurfacesChangedEvent,
+  ProjectSurfaceChoice,
+  ProjectSurfaceChoiceRecord,
+  ProjectSurfaceChoices,
+  ProjectSurfaceChoiceUpdate,
+} from "./plugin/projectSurfaces.js";
+import type {
+  PluginApplicationDescriptor,
+  ProjectApplicationState,
+} from "./plugin/projectApplication.js";
+export {
+  PLUGIN_APPLICATION_DESTINATIONS,
+  PLUGIN_APPLICATION_ARRANGEMENTS,
+  PLUGIN_APPLICATION_NAVIGATION_LIMITS,
+} from "./plugin/projectApplication.js";
+export type {
+  PluginApplicationDestination,
+  PluginApplicationArrangement,
+  PluginApplicationTourRef,
+  PluginApplicationNavigationParam,
+  PluginApplicationSection,
+  PluginApplicationNavigation,
+  PluginApplicationDescriptor,
+  ProjectApplicationStatus,
+  ProjectApplicationReason,
+  ProjectApplicationPreflightReason,
+  ProjectApplicationState,
+} from "./plugin/projectApplication.js";
+export {
+  PROJECT_PLUGIN_INSTANCE_PREFIX,
+  makeProjectPluginInstanceKey,
+  makeInstalledProjectInstanceKey,
+  isInstalledProjectInstanceKey,
+  parseProjectPluginInstanceKey,
+  pluginManifestIdFromInstanceKey,
+  projectIdFromPluginInstanceKey,
+} from "./plugin/instanceKeys.js";
 
 export interface PanelContribution {
   id: string;
@@ -100,6 +163,20 @@ export interface PanelContribution {
   dockable?: boolean;
   /** Schema version stamped on every persisted panel-state write; bump only for an incompatible shape change. */
   stateVersion?: number;
+  /**
+   * What one panel of this kind belongs to. `"worktree"` (the default) ties each
+   * panel to the worktree it was opened in. `"project"` opens it with no
+   * worktree, so one panel serves the whole project: it opens in the dock by
+   * default, and its dock chip and its dialog show in every worktree.
+   */
+  scope?: "worktree" | "project";
+  /**
+   * Set `true` to report your own work on panels of this kind with
+   * `host.setPanelActivity` (working, waiting, finished, failed). The host
+   * draws it the way it draws agent activity, attributed to your plugin, and
+   * the plugin manager lists the kind as reporting activity.
+   */
+  reportsActivity?: boolean;
   /**
    * Up to five of your own actions, offered in this panel's ⋯ and right-click
    * menus in the order given. Each is dispatched with `{ panelId }` naming the
@@ -192,14 +269,374 @@ export const PANEL_RUNTIME_MENU_MAX_ITEMS = 5;
 /** Most characters a menu entry's label may carry; a longer runtime label is cut. */
 export const PANEL_MENU_LABEL_MAX = 80;
 
+/** Most characters a title set through `PanelViewProps.setTitle` may carry; a longer one is cut. */
+export const PANEL_VIEW_TITLE_MAX = 80;
+
+/**
+ * What a toolbar button opens instead of dispatching an action: an anchored
+ * popover the host draws, filled by one of the plugin's own views.
+ */
+export interface ToolbarButtonPopover {
+  /**
+   * A `contributes.views[].id` with `location: "panel"` whose panel is not
+   * `hasPty`. The same view stays spawnable as a panel; in the popover it sees
+   * `hostContext.kind === "popover"` and can close it with `hostContext.close`.
+   */
+  viewId: string;
+}
+
+/**
+ * A toolbar button does one thing on click: dispatch `actionId`, or open
+ * `popover`. Declaring both is a manifest error.
+ *
+ * `menu` adds a short list of the plugin's own commands (at most
+ * {@link PANEL_MENU_MAX_ITEMS}). With an `actionId` the button is a split
+ * button — the click runs the action and a chevron opens the menu; with
+ * neither `actionId` nor `popover` it is a menu button that opens the menu.
+ * A button with a `popover` can't also carry a menu. Each item is dispatched
+ * on its own with nothing the plugin supplies, and shows only while its action
+ * is registered. A plugin can replace the list at runtime with
+ * {@link PluginToolbarButtonRuntimeState.menu}.
+ */
 export interface ToolbarButtonContribution {
   id: string;
   label: string;
   /** A generic plugin icon id, or a `./…svg` path to the plugin's own icon (#13143). */
   iconId: string;
-  actionId: ActionId;
+  actionId?: ActionId;
+  popover?: ToolbarButtonPopover;
+  menu?: PanelMenuItemContribution[];
   priority?: 1 | 2 | 3 | 4 | 5;
 }
+
+/** Where a panel launch entry opens its panel. `grid` is the worktree's panel grid. */
+export type PluginLaunchEntryPlacement = "dock" | "grid" | "dialog";
+
+/** Opens one of the plugin's own panels, optionally with arguments. */
+export interface PluginLaunchEntryPanelTarget {
+  /** A `contributes.panels[].id` of this plugin. */
+  id: string;
+  /** Handed to the view as `initialArgs`, or as `openRequest` to a panel the open reuses. */
+  args?: Record<string, unknown>;
+  /** Omitted: where the launcher surface opens panels, and the dock for a project panel. */
+  placement?: PluginLaunchEntryPlacement;
+}
+
+/** Dispatches one of the plugin's own commands. */
+export interface PluginLaunchEntryCommandTarget {
+  /** Written `{manifest name}.{command id}`; another namespace is a manifest error. */
+  actionId: string;
+  args?: Record<string, unknown>;
+}
+
+/** Starts an agent with a first turn. Nothing else about the launch is the plugin's to choose. */
+export interface PluginLaunchEntryAgentTarget {
+  /** An agent id from the agent registry. */
+  id: string;
+  prompt: string;
+}
+
+/**
+ * A row a plugin adds to the launcher (#13788). Declaring exactly one of
+ * `panel`, `command` and `agent` is required; none or several is a manifest
+ * error.
+ */
+export interface PluginLaunchEntryContribution {
+  id: string;
+  label: string;
+  /** A generic plugin icon id, or a `./…svg` path to the plugin's own icon. */
+  iconId: string;
+  description?: string;
+  /** Order within the plugin's group, 1 first. Default 3. */
+  priority?: 1 | 2 | 3 | 4 | 5;
+  when?: string;
+  /** Also list this entry as a tile in the empty canvas's "From <plugin>" band. */
+  showInEmptyState?: boolean;
+  panel?: PluginLaunchEntryPanelTarget;
+  command?: PluginLaunchEntryCommandTarget;
+  agent?: PluginLaunchEntryAgentTarget;
+}
+
+/** A launch entry's target as main resolved it, with runtime ids in place of manifest ones. */
+export type PluginLaunchEntryTarget =
+  | {
+      type: "panel";
+      /** The runtime panel kind id, project-qualified for a project plugin. */
+      panelKindId: string;
+      args?: Record<string, unknown>;
+      placement?: PluginLaunchEntryPlacement;
+    }
+  | {
+      type: "command";
+      /** The runtime action id, in the plugin instance's own namespace. */
+      actionId: string;
+      args?: Record<string, unknown>;
+    }
+  | { type: "agent"; agentId: string; prompt: string };
+
+/** A registered launch entry, as main broadcasts it to the renderer. */
+export interface PluginLaunchEntryConfig {
+  /** `{pluginId}.{entry id}`: the plugin instance id, so project-qualified for a project plugin. */
+  id: string;
+  pluginId: string;
+  /** The plugin's display name, the group's heading. */
+  pluginName: string;
+  label: string;
+  iconId: string;
+  description?: string;
+  priority: 1 | 2 | 3 | 4 | 5;
+  when?: string;
+  showInEmptyState?: boolean;
+  target: PluginLaunchEntryTarget;
+}
+
+/** Where a layout entry puts its panels. `grid` is the active worktree's panel grid. */
+export type PluginLayoutLocation = "grid" | "dock";
+
+/**
+ * One entry of a {@link LayoutContribution}. Declaring exactly one of `panel`,
+ * `browser` and `recipe` is required; none or several is a manifest error.
+ */
+export interface LayoutEntryContribution {
+  /** A `contributes.panels[].id` of this plugin. A PTY-backed panel is refused: terminals come from recipes. */
+  panel?: string;
+  /** An `http:` or `https:` URL, opened in a browser panel. */
+  browser?: string;
+  /** A `contributes.recipes[].id` of this plugin. Its terminals start only once the user confirms. */
+  recipe?: string;
+  /** Default `grid`, or `dock` for a `scope: "project"` panel. A recipe puts all its terminals here. */
+  location?: PluginLayoutLocation;
+  /** Entries sharing a key open as the tabs of one group, in entry order. */
+  tabGroup?: string;
+  /** Maximize this entry's panel, or its tab group, in the grid. At most one per layout. */
+  maximized?: boolean;
+}
+
+/**
+ * A named arrangement of the plugin's own panels, browser pages and recipes
+ * (#13780). The user applies one from the palette and the plugin's commands
+ * can apply their own through `layout.apply`. Applying is additive: it opens
+ * or moves what it lists and leaves every other panel where it is.
+ */
+export interface LayoutContribution {
+  id: string;
+  name: string;
+  entries: LayoutEntryContribution[];
+}
+
+/** A layout entry's target as main resolved it, with runtime ids in place of manifest ones. */
+export type PluginLayoutTarget =
+  | {
+      type: "panel";
+      /** The runtime panel kind id, project-qualified for a project plugin. */
+      panelKindId: string;
+    }
+  | { type: "browser"; url: string }
+  | {
+      type: "recipe";
+      /** The qualified recipe id, `{pluginId}.{recipe id}`. */
+      recipeId: string;
+    };
+
+export interface PluginLayoutEntry {
+  target: PluginLayoutTarget;
+  location: PluginLayoutLocation;
+  tabGroup?: string;
+  maximized?: boolean;
+}
+
+/** A registered layout, as main broadcasts it to the renderer. */
+export interface PluginLayoutConfig {
+  /** `{pluginId}.{layout id}`: the plugin instance id, so project-qualified for a project plugin. */
+  id: string;
+  pluginId: string;
+  /** The plugin's display name, shown beside the layout's own. */
+  pluginName: string;
+  name: string;
+  entries: PluginLayoutEntry[];
+  /** Set on the layout a project plugin names as `surfaces.defaultLayout` (#13782). */
+  projectDefault?: true;
+}
+
+/**
+ * Where a project's first-open layout seed stands on this machine (#13782).
+ *
+ * - `pending` — main saw the project's first open (no saved state, readable,
+ *   not safe mode) and nothing has been opened since. A default layout that
+ *   arrives while the grid and dock are empty is applied.
+ * - `offered` — the user opened something first, so a default layout is only
+ *   ever offered, never applied on its own.
+ * - `applying` — one view claimed the seed and is opening the layout now.
+ *   Written before anything opens (#14106), so an apply cut short is seen.
+ * - `failed` — the apply threw, left entries unopened, or its view went away
+ *   mid-apply (a crash, a reload, a quit). Waits for the user's Retry, which
+ *   reuses whatever the earlier attempt already opened, or their dismissal.
+ * - `settled` — used, declined, or never eligible. Nothing more happens.
+ */
+export type ProjectLayoutSeedStatus = "pending" | "offered" | "applying" | "failed" | "settled";
+
+/** Why a seed settled, kept for diagnostics. */
+export type ProjectLayoutSeedOutcome = "applied" | "opened" | "dismissed" | "ineligible";
+
+export interface ProjectLayoutSeedRecord {
+  status: ProjectLayoutSeedStatus;
+  /**
+   * Why a seed settled. While `applying` or `failed`, how the apply began —
+   * `applied` on its own or `opened` from the offer — which it settles with.
+   */
+  outcome?: ProjectLayoutSeedOutcome;
+  /** Epoch ms of the last change. */
+  at: number;
+}
+
+/**
+ * What the user did with a project application's welcome (#14106): skipped
+ * it, or played it to the end. Either way it is not offered again until the
+ * application declares a higher welcome revision.
+ */
+export type ProjectWelcomeStatus = "skipped" | "completed";
+
+export interface ProjectWelcomeRecord {
+  /** The `application.welcomeTour.version` the decision was made under. */
+  version: number;
+  status: ProjectWelcomeStatus;
+  /** Epoch ms of the decision. */
+  at: number;
+}
+
+/** A compare-and-set on a project's seed: whether this call moved it, and what is stored now. */
+export interface ProjectLayoutSeedAdvance {
+  advanced: boolean;
+  /** `null` while the project's first hydrate has not been seen. */
+  record: ProjectLayoutSeedRecord | null;
+}
+
+/**
+ * Where a quick switcher search result opens, in manifest terms: one of the
+ * plugin's own `contributes.panels[].id`, or one of its own commands written
+ * `{manifest name}.{command id}`. Exactly one of the two.
+ */
+export interface PluginSearchResultTarget {
+  panel?: string;
+  command?: string;
+}
+
+/**
+ * A search provider the plugin adds to the quick switcher (#13792). Typing
+ * `keyword` then Tab scopes the switcher to it; with `blend` it also offers a
+ * few results to the unscoped search.
+ *
+ * - `kind: "declarative"` names one of the plugin's read-only
+ *   `contributes.databases[].queries` with exactly one string parameter, which
+ *   the host runs with what the user typed. No plugin code runs. Result rows
+ *   are read by column name: `id` and `label` (required), `description`,
+ *   `iconId` and `args` (a JSON object as text). `target` is required.
+ * - `kind: "runtime"` is answered by the function the plugin binds with
+ *   {@link PluginHostApi.registerSearchProvider} during `activate()`. `target`
+ *   is the default for results that carry none.
+ */
+export interface PluginSearchProviderContribution {
+  id: string;
+  kind: "declarative" | "runtime";
+  /** Shown in the switcher's scope chip and in Settings. */
+  title: string;
+  /** Lowercase letters, digits and `-`, starting with a letter. Unique per project. */
+  keyword: string;
+  /** A generic plugin icon id, or a `./…svg` path to the plugin's own icon. Results without their own use it. */
+  iconId?: string;
+  /** Offer a few results to the unscoped search too. Default false. */
+  blend?: boolean;
+  /** For `declarative`: the `name` of one of the plugin's read-only declared queries. */
+  query?: string;
+  target?: PluginSearchResultTarget;
+}
+
+/** One result a runtime search provider returns. The host renders it; nothing here is markup. */
+export interface PluginSearchResult {
+  /** Stable within this provider; results with a repeated id are dropped. */
+  id: string;
+  label: string;
+  description?: string;
+  /** A generic plugin icon id or one of this plugin's registered custom icons. */
+  iconId?: string;
+  /** Omitted: the provider's manifest `target`. */
+  target?: PluginSearchResultTarget;
+  /** Handed to the target: the panel's `initialArgs` (or `openRequest`), or the command's args. */
+  args?: Record<string, unknown>;
+}
+
+/** What a runtime search provider is told about the query it is answering. */
+export interface PluginSearchContext {
+  /** `scoped` when the user picked this provider by keyword; `blended` for the unscoped search. */
+  mode: "scoped" | "blended";
+  /** Most results the host will show; extra ones are dropped. */
+  limit: number;
+  /** Aborted when the user typed on, closed the switcher, or the deadline passed. */
+  signal: AbortSignal;
+}
+
+/** A runtime search provider, bound with {@link PluginHostApi.registerSearchProvider}. */
+export type PluginSearchProvider = (
+  query: string,
+  context: PluginSearchContext
+) => PluginSearchResult[] | Promise<PluginSearchResult[]>;
+
+/** A search result's target as main resolved it, with runtime ids in place of manifest ones. */
+export type PluginSearchResolvedTarget =
+  | {
+      type: "panel";
+      /** The runtime panel kind id, project-qualified for a project plugin. */
+      panelKindId: string;
+      args: Record<string, unknown>;
+    }
+  | {
+      type: "command";
+      /** The runtime action id, in the plugin instance's own namespace. */
+      actionId: string;
+      args: Record<string, unknown>;
+    };
+
+/** A search provider as the quick switcher and Settings see it, for one project. */
+export interface PluginSearchProviderInfo {
+  /** `{pluginId}.{provider id}`: the plugin instance id, so project-qualified for a project plugin. */
+  key: string;
+  pluginId: string;
+  pluginName: string;
+  title: string;
+  keyword: string;
+  iconId: string;
+  blend: boolean;
+  kind: "declarative" | "runtime";
+  /** The user's "Show in quick switcher" choice. */
+  shown: boolean;
+  /** Another plugin's provider registered the same keyword first in this project; this one is refused. */
+  keywordTakenBy?: string;
+}
+
+/** One validated result row, as main hands it to the quick switcher. */
+export interface PluginSearchResultRow {
+  id: string;
+  label: string;
+  description?: string;
+  iconId: string;
+  target: PluginSearchResolvedTarget;
+}
+
+/** What the quick switcher asks one provider. */
+export interface PluginSearchQueryRequest {
+  providerKey: string;
+  query: string;
+  mode: "scoped" | "blended";
+}
+
+/**
+ * One provider's answer. `unavailable` is a provider that can't be asked now
+ * (gone, hidden, refused, or not running for a blended search); `timeout` and
+ * `error` are recorded in the plugin's diagnostics.
+ */
+export type PluginSearchQueryResponse =
+  | { status: "ok"; results: PluginSearchResultRow[] }
+  | { status: "cancelled" | "timeout" | "error" | "unavailable" };
 
 /**
  * Semantic color for a {@link PluginPanelBadge}. Plugins pick intent, not a raw
@@ -210,6 +647,10 @@ export interface ToolbarButtonContribution {
  * leaves it there, and the host cannot know what a given plugin means by
  * success, so it renders as emphasis on the neutral ramp instead of a health
  * hue (#12002) — still visually distinct from `"default"`, just not green.
+ *
+ * Only a panel of a kind the plugin contributed draws the color. On any other
+ * panel the badge is drawn as `"default"` and its tooltip names the plugin, so
+ * it can't pass for a failure Daintree observed (#13766).
  */
 export type PluginPanelBadgeColor = "default" | "success" | "warning" | "error";
 
@@ -228,13 +669,52 @@ export type PluginPanelBadge =
 export const PLUGIN_PANEL_BADGE_LABEL_MAX = 6;
 
 /**
+ * Live state a plugin sets on one of its own toolbar buttons via
+ * {@link PluginHostApi.setToolbarButtonState} (#13785). Every field is optional
+ * and each call replaces the whole state, so a field left out returns to the
+ * manifest's default. The button's label never changes: a toggle reads the same
+ * name in both positions and announces `pressed` as `aria-pressed`.
+ */
+export interface PluginToolbarButtonRuntimeState {
+  /** Marks the button as a toggle and whether it is on. Leave out for a plain button. */
+  pressed?: boolean;
+  /** Blocks activation. Requires `disabledReason`, shown in place of the tooltip. */
+  disabled?: boolean;
+  /** Why the button is disabled, in a sentence the user can act on. Only with `disabled: true`. */
+  disabledReason?: string;
+  /** Work started by this button is running: shows a spinner and blocks activation. */
+  busy?: boolean;
+  /** Replaces the tooltip text. The accessible name stays the manifest `label`. */
+  tooltip?: string;
+  /** Replaces the icon, using the same ids as the manifest `iconId`. Unknown ids keep the manifest icon. */
+  iconId?: string;
+  /**
+   * Replaces the button's manifest `menu` (#13786); `[]` removes it. Each
+   * `actionId` must be one of this plugin's own actions, written
+   * `"{manifestId}.{id}"`, at most {@link PANEL_MENU_MAX_ITEMS} of them. Not
+   * for a button that opens a popover.
+   */
+  menu?: PanelMenuItemContribution[];
+}
+
+/** Max length of a {@link PluginToolbarButtonRuntimeState} `tooltip` or `disabledReason`, enforced host-side. */
+export const PLUGIN_TOOLBAR_BUTTON_STATE_TEXT_MAX = 200;
+
+/**
  * A short status a plugin shows on one worktree's card via
  * {@link PluginHostApi.setWorktreeCardStatus} (#13704): a one-line `label`
- * drawn as quiet metadata, and an optional `tooltip` with the detail.
+ * drawn as quiet metadata, an optional `tooltip` with the detail, and an
+ * optional `command` the chip runs when clicked.
  */
 export interface PluginWorktreeCardStatus {
   label: string;
   tooltip?: string;
+  /**
+   * One of this plugin's own actions, written `"{manifestId}.{id}"` as in the
+   * manifest, dispatched with `{ worktreeId }` when the chip is clicked
+   * (#13776). The chip stays a plain status until the action is registered.
+   */
+  command?: string;
 }
 
 /** Max length of a {@link PluginWorktreeCardStatus} `label`, enforced host-side. */
@@ -242,6 +722,215 @@ export const PLUGIN_WORKTREE_CARD_STATUS_LABEL_MAX = 32;
 
 /** Max length of a {@link PluginWorktreeCardStatus} `tooltip`, enforced host-side. */
 export const PLUGIN_WORKTREE_CARD_STATUS_TOOLTIP_MAX = 512;
+
+/**
+ * One advisory readiness check a plugin shows in a worktree's Review Hub via
+ * {@link PluginHostApi.setWorktreeReviewChecks} (#13806). Never a blocker: it
+ * cannot change whether commit or push is ready.
+ */
+export interface PluginWorktreeReviewCheck {
+  /** One line naming what the plugin found. */
+  label: string;
+  severity: "warning" | "info";
+  detail?: string;
+  /**
+   * One of this plugin's own actions, written `"{manifestId}.{id}"`, offered
+   * as a button and dispatched with `{ worktreeId }`. Until the action is
+   * registered the check stays plain text.
+   */
+  command?: string;
+}
+
+/** Max length of a {@link PluginWorktreeReviewCheck} `label`, enforced host-side. */
+export const PLUGIN_WORKTREE_REVIEW_CHECK_LABEL_MAX = 120;
+
+/** Max length of a {@link PluginWorktreeReviewCheck} `detail`, enforced host-side. */
+export const PLUGIN_WORKTREE_REVIEW_CHECK_DETAIL_MAX = 2048;
+
+/** Most checks one plugin may hold on one worktree, enforced host-side. */
+export const PLUGIN_WORKTREE_REVIEW_CHECKS_MAX = 10;
+
+/**
+ * One `contributes.worktreeSetupSteps` entry (#13807): work the plugin does
+ * for each worktree Daintree creates, after the project's own setup script.
+ * The handler is bound in `activate()` through
+ * {@link PluginActivationApi.registerWorktreeSetupStep}.
+ *
+ * Declared in the manifest so the step can be shown and allowed before any
+ * plugin code runs. The user allows each step once per project, and a new
+ * label, timeout or plugin version asks again.
+ */
+export interface WorktreeSetupStepContribution {
+  /** Unique within the plugin; the id the handler registers under. */
+  id: string;
+  /** Shown on the worktree card while the step runs, and when asking to allow it. */
+  label: string;
+  /**
+   * How long the step may run before its signal aborts and it is recorded as
+   * timed out. Defaults to {@link PLUGIN_WORKTREE_SETUP_STEP_DEFAULT_TIMEOUT_MS}.
+   */
+  timeoutMs?: number;
+}
+
+/** Max length of a {@link WorktreeSetupStepContribution} `label`. */
+export const PLUGIN_WORKTREE_SETUP_STEP_LABEL_MAX = 80;
+
+/** Shortest {@link WorktreeSetupStepContribution} `timeoutMs` a manifest may declare. */
+export const PLUGIN_WORKTREE_SETUP_STEP_MIN_TIMEOUT_MS = 1_000;
+
+/** Longest {@link WorktreeSetupStepContribution} `timeoutMs` a manifest may declare. */
+export const PLUGIN_WORKTREE_SETUP_STEP_MAX_TIMEOUT_MS = 30 * 60_000;
+
+/** The timeout of a {@link WorktreeSetupStepContribution} that declares none. */
+export const PLUGIN_WORKTREE_SETUP_STEP_DEFAULT_TIMEOUT_MS = 5 * 60_000;
+
+/** What a worktree setup step handler is told about the worktree it sets up. */
+export interface PluginWorktreeSetupStepContext {
+  /** The project the worktree belongs to. */
+  readonly projectId: string;
+  readonly worktreeId: string;
+  /** Absolute path of the new worktree's checkout. */
+  readonly worktreePath: string;
+  /** The checked-out branch, or `null` when HEAD is detached. */
+  readonly branch: string | null;
+  /**
+   * Aborted when the step times out or the worktree is deleted while it runs.
+   * The host stops waiting either way; a handler that ignores it keeps running
+   * unobserved.
+   */
+  readonly signal: AbortSignal;
+}
+
+/**
+ * Runs one worktree setup step. Resolving is success; throwing, or rejecting,
+ * is a failure the worktree card attributes to the plugin. A retry runs the
+ * step again, so it must tolerate running more than once.
+ */
+export type PluginWorktreeSetupStepHandler = (
+  context: PluginWorktreeSetupStepContext
+) => void | Promise<void>;
+
+/**
+ * One note a plugin adds to a worktree's delete confirmation (#13805). Plain
+ * text, shown attributed to the plugin. Annotation only: a note never cancels
+ * the delete, changes its confirmation tier or alters the typed confirmation.
+ */
+export interface PluginWorktreeDeleteNote {
+  severity: "warning" | "info";
+  /** One line. Line breaks become spaces; control and bidi characters are removed. */
+  text: string;
+}
+
+/** Max length of a {@link PluginWorktreeDeleteNote} `text`, in code points, enforced host-side. */
+export const PLUGIN_WORKTREE_DELETE_NOTE_TEXT_MAX = 200;
+
+/** Most notes one plugin may return for one worktree, enforced host-side. */
+export const PLUGIN_WORKTREE_DELETE_NOTES_MAX = 3;
+
+/**
+ * `contributes.worktreeDeleteNotes` entry (#13805). Declaring it is what lets
+ * the host find, and activate, the plugin when a delete is confirmed; the
+ * provider binds during `activate()` through
+ * {@link PluginActivationApi.registerWorktreeDeleteNotesProvider}.
+ */
+export interface WorktreeDeleteNotesContribution {
+  /** Must match the descriptor passed to `registerWorktreeDeleteNotesProvider`. */
+  id: string;
+}
+
+/** Passed to {@link PluginActivationApi.registerWorktreeDeleteNotesProvider} alongside the impl. */
+export interface WorktreeDeleteNotesProviderDescriptor {
+  id: string;
+}
+
+/**
+ * Runtime contract bound through
+ * {@link PluginActivationApi.registerWorktreeDeleteNotesProvider}. The host
+ * calls {@link provideNotes} each time a delete of a worktree in the plugin's
+ * reach is confirmed, and shows what it returns in that confirmation.
+ */
+export interface WorktreeDeleteNotesProviderImpl {
+  /**
+   * Notes for the worktree about to be deleted, at most
+   * {@link PLUGIN_WORKTREE_DELETE_NOTES_MAX}. Return `[]` when there is
+   * nothing to say. An answer that misses the host's deadline, throws, or
+   * breaks the note rules is shown as "<plugin> didn't answer".
+   */
+  provideNotes(
+    worktree: PluginWorktreeSnapshot
+  ): Promise<readonly PluginWorktreeDeleteNote[]> | readonly PluginWorktreeDeleteNote[];
+}
+
+/** A plugin asked for notes when a worktree delete is confirmed in a view (#13805). Host-internal. */
+export interface WorktreeDeleteNoteSource {
+  /** Instance id. */
+  pluginId: string;
+  /** Who the confirmation attributes the notes to. */
+  pluginName: string;
+}
+
+/** One plugin's answer: its vetted notes, or that it missed the deadline, failed or broke the rules. */
+export type WorktreeDeleteNotesAnswer =
+  { status: "answered"; notes: PluginWorktreeDeleteNote[] } | { status: "no-answer" };
+
+/** An answer with the plugin it came from, as the no-window confirmation collects them. */
+export interface WorktreeDeleteNotesReport extends WorktreeDeleteNoteSource {
+  answer: WorktreeDeleteNotesAnswer;
+}
+
+/**
+ * A short status a plugin shows on one terminal's header via
+ * {@link PluginHostApi.setTerminalStatus} (#13802): the same shape as a
+ * worktree card's, drawn as a colourless chip named after the plugin.
+ */
+export interface PluginTerminalStatus {
+  label: string;
+  tooltip?: string;
+  /**
+   * One of this plugin's own actions, written `"{manifestId}.{id}"` as in the
+   * manifest, dispatched with `{ terminalId, worktreeId? }` when the chip is
+   * clicked. The chip stays a plain status until the action is registered.
+   */
+  command?: string;
+}
+
+/** Max length of a {@link PluginTerminalStatus} `label`, enforced host-side. */
+export const PLUGIN_TERMINAL_STATUS_LABEL_MAX = PLUGIN_WORKTREE_CARD_STATUS_LABEL_MAX;
+
+/** Max length of a {@link PluginTerminalStatus} `tooltip`, enforced host-side. */
+export const PLUGIN_TERMINAL_STATUS_TOOLTIP_MAX = PLUGIN_WORKTREE_CARD_STATUS_TOOLTIP_MAX;
+
+/** Most terminals one plugin may hold a status on at once, per project. */
+export const PLUGIN_TERMINAL_STATUS_MAX_PER_PROJECT = 256;
+
+/** What a plugin says one of its own panels is doing, via {@link PluginHostApi.setPanelActivity}. */
+export type PluginPanelActivityState = "working" | "waiting" | "finished" | "failed";
+
+/**
+ * A plugin's report of its own work on one of its own panels (#13820): its
+ * state and an optional one-line `reason` ("Importing 3 of 12", "Pick a
+ * branch to sync"). Drawn the way agent activity is drawn, always attributed
+ * to the plugin.
+ */
+export interface PluginPanelActivity {
+  state: PluginPanelActivityState;
+  reason?: string;
+}
+
+/**
+ * A {@link PluginPanelActivity} as main holds and sends it: `revision` is
+ * assigned per accepted change, so a view can tell a replay of the report it
+ * already showed from a new one. Never authored by a plugin.
+ */
+export interface PluginPanelActivityReport extends PluginPanelActivity {
+  revision: number;
+}
+
+/** Max length of a {@link PluginPanelActivity} `reason`, enforced host-side. */
+export const PLUGIN_PANEL_ACTIVITY_REASON_MAX = 120;
+
+/** Most panels one plugin may hold an activity report on at once. */
+export const PLUGIN_PANEL_ACTIVITY_MAX_PANELS = 256;
 
 /** Value a plugin publishes to `when` clauses via {@link PluginHostApi.setContext}. */
 export type PluginContextValue = boolean | string;
@@ -258,8 +947,9 @@ export const PLUGIN_CONTEXT_VALUE_LENGTH_MAX = 256;
 export type MenuItemLocation = "terminal" | "file" | "view" | "help";
 // `"panel"` was removed (#10512): no renderer surface ever mounted
 // `usePluginContextMenuItems("panel")`, so a contributed panel context-menu item
-// was silently dead. Only `worktree` / `terminal` / `file` have live consumers.
-export type ContextMenuLocation = "worktree" | "terminal" | "file";
+// was silently dead. Only `worktree` / `terminal` / `file` / `browser` /
+// `project` have live consumers (`project` is the toolbar project pill).
+export type ContextMenuLocation = "worktree" | "terminal" | "file" | "browser" | "project";
 
 export const BUILT_IN_PLUGIN_CAPABILITIES = [
   "fs:project-read",
@@ -309,6 +999,17 @@ export const BUILT_IN_PLUGIN_CAPABILITIES = [
   // confirm-triggering — it changes where a notification is shown, not what a
   // plugin can do.
   "notification:os",
+  // Hold large files in the host's artifact cache (`host.artifacts`, #14100):
+  // import a scoped or chosen file, download or upload a provider file, play
+  // one in a view. Bytes stay in main. Not confirm-triggering on its own —
+  // what reaches the cache is already gated by the fs read capabilities, the
+  // person's own selection, or `network:fetch` with a declared URL scope.
+  "artifact:store",
+  // Read the DOM and runtime of a previewed page on behalf of a contributed
+  // element picker provider (`contributes.elementPickerProviders`, #14073).
+  // Disclosure-only like `panel:focus-read`: nothing runs until installed guest
+  // execution lands, and the install-time list is where the user is told.
+  "preview:inspect",
 ] as const;
 
 export type BuiltInPluginCapability = (typeof BUILT_IN_PLUGIN_CAPABILITIES)[number];
@@ -366,6 +1067,12 @@ export interface ContextMenuContribution {
   location: ContextMenuLocation;
   label: string;
   when?: string;
+  /** `location: "file"` only: restrict to files or folders. Omitted matches both. */
+  kind?: "file" | "folder";
+  /** `location: "file"` only: bare lower-case suffixes a file must carry. */
+  extensions?: string[];
+  /** `location: "file"` only: worktree-relative globs, any of which must match. */
+  paths?: string[];
 }
 
 /**
@@ -380,11 +1087,32 @@ export interface ContextMenuContribution {
  * installed plugin, Project settings → Plugins for a project plugin). It
  * receives {@link PanelViewProps.settingsContext}.
  *
- * `sidebar` is rejected at the manifest gate (`ViewContributionSchema`) because
- * the sidebar host does not exist yet — accepting it would validate a
- * contribution the runtime cannot honor.
+ * `fileEditor` backs a view-backed `contributes.fileEditors` entry: tied to no
+ * panel, mounted only inside the file panel for a file the editor matches, and
+ * handed the host-owned {@link PanelViewProps.fileDocument} (#13809).
+ *
+ * `sidebar` is one of the sidebar's views: listed by `name` in the sidebar
+ * header's switcher beside the built-in worktree list, ordered by `priority`,
+ * gated by an optional `when`, and mounted below the header while chosen.
  */
-export type ViewLocation = "panel" | "settings";
+export type ViewLocation = "panel" | "settings" | "fileEditor" | "sidebar";
+
+/** Longest `name` a sidebar view may declare: it is the sidebar header's title. */
+export const SIDEBAR_VIEW_NAME_MAX_LENGTH = 40;
+
+/** The range a sidebar view's `priority` may take. Higher sorts first in the switcher. */
+export const SIDEBAR_VIEW_PRIORITY_MIN = -1000;
+export const SIDEBAR_VIEW_PRIORITY_MAX = 1000;
+
+/**
+ * The built-in worktree list's fixed priority, which every plugin sidebar
+ * view's is compared against: a positive priority lists above it, zero or
+ * negative below it, because the worktree list wins a tie.
+ */
+export const WORKTREES_SIDEBAR_VIEW_PRIORITY = 0;
+
+/** A sidebar view that declares no `priority` ties the worktree list, so lists below it. */
+export const SIDEBAR_VIEW_DEFAULT_PRIORITY = WORKTREES_SIDEBAR_VIEW_PRIORITY;
 
 /**
  * Where a `location: "settings"` view is mounted, handed to it as
@@ -397,122 +1125,187 @@ export interface PluginSettingsViewContext {
   readonly scope: "user" | "project";
   /** The project the section is shown for; `null` in the `"user"` home. */
   readonly projectId: string | null;
+  /**
+   * The declared settings page (`pages[].id` on the settings view) the user
+   * has open, or `null` on the section's own root. Absent on a host that
+   * predates pages, and for a view that declares none.
+   */
+  readonly page?: string | null;
+  /**
+   * A deep link to one of the settings this view edits (`editor: "view"`),
+   * present until it is answered. Focus that setting's control and call
+   * `acknowledge(true)`; call `acknowledge(false)` when you can't show it. A
+   * view that doesn't answer in time, or answers `false`, gets the host's
+   * landing on the whole section instead, so ignoring this is always safe.
+   */
+  readonly focus?: PluginSettingsViewFocus;
 }
 
 /**
- * The synthetic view-kind id a plugin's `location: "settings"` view mounts
- * under. It names no panel kind: it exists so the shared plugin-view loader can
- * activate the owning plugin and key its per-view state, and main recognises
- * the prefix in `activatePluginForView`.
+ * A request to land on one setting a custom settings view edits, handed to it
+ * as {@link PluginSettingsViewContext.focus}. `key` is always a declared
+ * `contributes.settings` id with `editor: "view"` that lives in this home; the
+ * host checks it before passing it on. `nonce` changes for every request, so a
+ * second link to the same key lands again.
  */
-export const PLUGIN_SETTINGS_VIEW_KIND_PREFIX = "plugin-settings-view:";
-
-export function pluginSettingsViewKindId(pluginId: string): string {
-  return `${PLUGIN_SETTINGS_VIEW_KIND_PREFIX}${pluginId}`;
+export interface PluginSettingsViewFocus {
+  readonly key: string;
+  readonly nonce: number;
+  /**
+   * Report whether the view landed on `key`. Only the first answer for a
+   * request counts; one after the host has fallen back does nothing.
+   */
+  readonly acknowledge: (landed: boolean) => void;
 }
 
-/** The plugin instance key a settings-view kind id names, or `null` for any other id. */
-export function pluginIdFromSettingsViewKindId(kindId: string): string | null {
-  if (typeof kindId !== "string" || !kindId.startsWith(PLUGIN_SETTINGS_VIEW_KIND_PREFIX)) {
+/**
+ * One declared page of a plugin's custom settings section (`pages` on a
+ * `location: "settings"` view). The host lists the pages under the section,
+ * opens one in place with its own title and a way back, and tells the view
+ * which is open through {@link PluginSettingsViewContext.page}. Pages are
+ * navigation only: the values on them are still the plugin's declared
+ * settings, stored and scoped as declared.
+ */
+export interface PluginSettingsPageContribution {
+  /** Unique within the view; what search and deep links name the page by. */
+  id: string;
+  title: string;
+  description?: string;
+}
+
+/**
+ * Where a plugin view is mounted, handed to it as
+ * {@link PanelViewProps.hostContext}.
+ *
+ * `"panel"` is a panel in the grid, the dock or a dialog. `"surface"` is a
+ * project surface slot (`contributes.surfaces`), which mounts one of the
+ * plugin's panel views in place of the host's own content — so the same view
+ * can see both and lay itself out for each. `"settings"` is the plugin's custom
+ * settings section. `"sidebar"` is a sidebar view, below the sidebar header and
+ * as narrow as the sidebar's minimum width. `"fileEditor"` is a view-backed
+ * file editor inside the file panel. `"popover"` is the anchored popover
+ * a toolbar button opens (`contributes.toolbarButtons[].popover`), again one of
+ * the plugin's panel views.
+ *
+ * Open-ended: hosts added later arrive as new members, so a view that switches
+ * on this must give unknown kinds a sensible default rather than treat the list
+ * as exhaustive.
+ */
+export type PluginViewHostKind =
+  "panel" | "surface" | "settings" | "sidebar" | "fileEditor" | "popover";
+
+export interface PluginViewHostContext {
+  readonly kind: PluginViewHostKind;
+  /**
+   * Dismiss the host the view is in. Present only where the view may end its
+   * own mount — today the toolbar popover, after a "quick add" submits, say.
+   * Focus goes back to the button that opened it.
+   */
+  readonly close?: () => void;
+}
+
+/**
+ * A plugin view that mounts outside the panel grid — every `contributes.views`
+ * entry whose location is not `"panel"`. Registered by main at plugin load,
+ * never as a panel kind, so nothing can spawn it from the launcher, palette or
+ * dock, and served only to the views of projects that may see the plugin.
+ */
+interface PluginHostedViewDescriptorBase {
+  /** {@link pluginHostedViewKindId} of the plugin instance and view. */
+  id: string;
+  /** The plugin's RUNTIME instance key, as panel kinds carry it in `extensionId`. */
+  pluginId: string;
+  /** The view's own manifest id. */
+  viewId: string;
+  /** Display name for diagnostics: the plugin's name and what the view is for. */
+  name: string;
+  /** The `plugin://` module URL under the plugin's current load and generation. */
+  componentPath: string;
+  /** For a `location: "fileEditor"` view, the file editors it backs (#13809). */
+  fileEditors?: readonly HostedFileEditorDescriptor[];
+}
+
+export interface PluginSettingsHostedViewDescriptor extends PluginHostedViewDescriptorBase {
+  location: "settings";
+}
+
+/** A file editor view, mounted only inside the file panel for the editors it backs. */
+export interface PluginFileEditorHostedViewDescriptor extends PluginHostedViewDescriptorBase {
+  location: "fileEditor";
+}
+
+/** A sidebar view, carrying what its switcher entry needs. */
+export interface PluginSidebarHostedViewDescriptor extends PluginHostedViewDescriptorBase {
+  location: "sidebar";
+  /** The manifest `name`: the switcher entry, and the header's title while it shows. */
+  title: string;
+  /** The plugin's display name, which attributes the entry. */
+  pluginName: string;
+  /** The manifest `iconId`, with a custom SVG reference resolved to its runtime key. */
+  iconId?: string;
+  /** The manifest `priority`, or {@link SIDEBAR_VIEW_DEFAULT_PRIORITY}. */
+  priority: number;
+  /** The manifest `when`, evaluated live against the chrome context. */
+  when?: string;
+}
+
+export type PluginHostedViewDescriptor =
+  | PluginSettingsHostedViewDescriptor
+  | PluginFileEditorHostedViewDescriptor
+  | PluginSidebarHostedViewDescriptor;
+
+/**
+ * The synthetic view-kind id a hosted view mounts under. It names no panel
+ * kind: it lets the shared plugin-view loader activate the owning plugin and
+ * key the view's state, and main resolves it in `activatePluginForView`.
+ */
+export const PLUGIN_HOSTED_VIEW_KIND_PREFIX = "plugin-view:";
+
+/** The manifest grammar for a view id (`SAFE_ID_PATTERN`), which rules out `/`. */
+const HOSTED_VIEW_ID_PATTERN = /^[a-zA-Z0-9._-]+$/;
+
+export function pluginHostedViewKindId(pluginId: string, viewId: string): string {
+  return `${PLUGIN_HOSTED_VIEW_KIND_PREFIX}${pluginId}/${viewId}`;
+}
+
+/**
+ * The plugin instance key and view id a hosted-view kind id names, or `null`
+ * for any other id. Split at the LAST `/`: a view id can never contain one,
+ * while an instance key is not promised not to.
+ */
+export function parsePluginHostedViewKindId(
+  kindId: string
+): { pluginId: string; viewId: string } | null {
+  if (typeof kindId !== "string" || !kindId.startsWith(PLUGIN_HOSTED_VIEW_KIND_PREFIX)) {
     return null;
   }
-  const pluginId = kindId.slice(PLUGIN_SETTINGS_VIEW_KIND_PREFIX.length);
-  return pluginId.length > 0 ? pluginId : null;
+  const rest = kindId.slice(PLUGIN_HOSTED_VIEW_KIND_PREFIX.length);
+  const slash = rest.lastIndexOf("/");
+  if (slash <= 0) return null;
+  const pluginId = rest.slice(0, slash);
+  const viewId = rest.slice(slash + 1);
+  if (!HOSTED_VIEW_ID_PATTERN.test(viewId)) return null;
+  return { pluginId, viewId };
 }
 
 export interface ViewContribution {
   id: string;
   componentPath: string;
   location: ViewLocation;
-  // Advisory only — the matching `contributes.panels` entry owns the rendered
-  // icon/name at runtime. `name`/`description` were removed (#10888) because no
-  // runtime path consumed them.
+  // Advisory only for a panel view — the matching `contributes.panels` entry
+  // owns the rendered icon/name at runtime, which is why `name`/`description`
+  // were removed from panel views (#10888). A sidebar view has no panel, so it
+  // carries its own `iconId`, `name`, `priority` and `when`.
   iconId?: string;
+  name?: string;
+  priority?: number;
+  when?: string;
+  // Settings views only: what settings search shows for the custom section,
+  // and the pages the host lists under it.
+  title?: string;
+  description?: string;
+  pages?: PluginSettingsPageContribution[];
 }
-
-/**
- * The project surfaces a project-local plugin can own. See §7.8 and
- * `SurfaceContributionsSchema` in `electron/schemas/plugin.ts` for why
- * `projectHome` and `defaultLayout` are not here yet.
- */
-export const PROJECT_SURFACE_SLOTS = ["emptyCanvas"] as const;
-
-export type ProjectSurfaceSlot = (typeof PROJECT_SURFACE_SLOTS)[number];
-
-/** A surface slot claim naming one of the plugin's own `contributes.views`. */
-export interface SurfaceViewSlot {
-  viewId: string;
-}
-
-/** The `contributes.surfaces` block of a project plugin's manifest. */
-export interface SurfaceContributions {
-  emptyCanvas?: SurfaceViewSlot;
-}
-
-/**
- * A resolved surface claim, as the renderer receives it.
- *
- * `panelKindId` is the RUNTIME, project-qualified panel-kind id the view
- * registered under, not the manifest's bare `viewId` — the renderer already
- * knows how to turn one of those into a mounted plugin view (icon, name, the
- * `plugin://` component path, the error boundary), so a surface reuses that
- * path wholesale instead of growing a second way to mount the same module.
- */
-export interface ProjectSurfaceClaim {
-  /** The owning plugin INSTANCE key, matching `PanelKindConfig.extensionId`. */
-  pluginId: string;
-  panelKindId: string;
-}
-
-/** Every surface claimed in one project, keyed by slot. */
-export type ProjectSurfaceSnapshot = Partial<Record<ProjectSurfaceSlot, ProjectSurfaceClaim>>;
-
-export function isProjectSurfaceSlot(value: unknown): value is ProjectSurfaceSlot {
-  return PROJECT_SURFACE_SLOTS.some((slot) => slot === value);
-}
-
-/**
- * What the user wants a claimed slot to show: the plugin's surface, or the
- * host's own stock content in its place.
- */
-export type ProjectSurfaceChoice = "surface" | "stock";
-
-export function isProjectSurfaceChoice(value: unknown): value is ProjectSurfaceChoice {
-  return value === "surface" || value === "stock";
-}
-
-/**
- * One project's remembered answer about one surface slot. Machine-local, in
- * Daintree's own store: which canvas one person prefers is not a fact about the
- * repository.
- */
-export interface ProjectSurfaceChoiceRecord {
-  /**
-   * The MANIFEST id of the plugin the answer was about. A slot that has since
-   * passed to a different plugin is undecided again — agreeing to one plugin's
-   * canvas is not agreeing to whatever claims the slot next.
-   */
-  pluginId: string;
-  choice: ProjectSurfaceChoice;
-  /** Epoch ms of the answer. */
-  decidedAt: number;
-}
-
-/** Every remembered surface answer in one project, keyed by slot. */
-export type ProjectSurfaceChoices = Partial<Record<ProjectSurfaceSlot, ProjectSurfaceChoiceRecord>>;
-
-/**
- * One project's remembered surface answers, named by the project main resolved
- * them for. Every read, write and push carries the name, so a view can refuse a
- * set that is not its own.
- */
-export interface ProjectSurfaceChoicesSnapshot {
-  projectId: string;
-  choices: ProjectSurfaceChoices;
-}
-
-/** `plugin:project-surface-choices-changed` — the full set, for every view of the project. */
-export type ProjectSurfaceChoicesChangedEvent = ProjectSurfaceChoicesSnapshot;
 
 /**
  * The attribute the host stamps on the element a plugin view renders into, and
@@ -538,7 +1331,8 @@ export const PLUGIN_STYLE_ROOT_ATTRIBUTE = "data-daintree-plugin-style-root";
  * - `pluginId` is the plugin's RUNTIME id, sourced from
  *   `PanelKindConfig.extensionId` — the bare manifest `name` for an installed
  *   or builtin plugin, but the instance key `project__{projectId}__{manifestId}`
- *   for a project plugin. Pass it back verbatim to `window.electron.plugin.*`;
+ *   for a project plugin and `project__{projectId}__installed__{manifestId}`
+ *   for an installed package's per-project instance. Pass it back verbatim to `window.electron.plugin.*`;
  *   a view that writes its own manifest name down instead addresses nothing.
  * - `disposeSignal` aborts on unmount AND when the host receives a
  *   `plugin:panel-kinds-changed` push that no longer contains this kind. The
@@ -547,6 +1341,73 @@ export const PLUGIN_STYLE_ROOT_ATTRIBUTE = "data-daintree-plugin-style-root";
  *   while the plugin host APIs are still live.
  * - `panelRemovedSignal` aborts ONLY when the panel is permanently gone.
  */
+/** A value a navigation parameter holds: an identifier, a safe integer or a flag. */
+export type PluginNavigationParamValue = string | number | boolean;
+
+/** Where an application is: one of its declared sections, with its parameters. */
+export interface PluginNavigationLocation {
+  readonly sectionId: string;
+  readonly params: Readonly<Record<string, PluginNavigationParamValue>>;
+}
+
+/** A request to go to a declared section (#14108). */
+export interface PluginNavigationIntent {
+  sectionId: string;
+  /** Only parameters the section declares, each of its declared type. */
+  params?: Record<string, PluginNavigationParamValue>;
+  /** Replace the current history entry instead of adding one. */
+  replace?: boolean;
+  /**
+   * Bring the application's destination forward (its Home, or the grid) as
+   * well as moving the location. Defaults to `true`; `false` changes only the
+   * shared selection.
+   */
+  reveal?: boolean;
+}
+
+/**
+ * Why a navigation was refused. Nothing moved: not the location, the history,
+ * the main area nor focus.
+ *
+ * - `invalid-intent` — not an intent object.
+ * - `unknown-section` — the application declares no such section.
+ * - `invalid-params` — a parameter is undeclared, missing, or not its declared type or bounds.
+ * - `too-large` — the location is over the size cap.
+ * - `unsaved` — a view of the application reports unsaved work; save or drop it, then retry.
+ * - `no-history` — nothing to go back or forward to.
+ * - `stale` — the call came from a view attempt that is gone, or an application no longer in force.
+ */
+export type PluginNavigationRefusal =
+  | "invalid-intent"
+  | "unknown-section"
+  | "invalid-params"
+  | "too-large"
+  | "unsaved"
+  | "no-history"
+  | "stale";
+
+export type PluginNavigationResult =
+  | { readonly ok: true; readonly location: PluginNavigationLocation }
+  | { readonly ok: false; readonly reason: PluginNavigationRefusal };
+
+/**
+ * The project application's shared navigation, as one of its views sees it
+ * (#14108). Every view of the application in the project — its sidebar view,
+ * its Home, its panels — holds the same location and re-renders when it moves,
+ * so selection in one is selection in all.
+ */
+export interface PluginApplicationNavigationApi {
+  /** The current location. A new object only when the location changes. */
+  readonly location: PluginNavigationLocation;
+  /** The declared sections, in manifest order. */
+  readonly sections: readonly { readonly id: string; readonly title: string }[];
+  readonly canGoBack: boolean;
+  readonly canGoForward: boolean;
+  navigate(intent: PluginNavigationIntent): PluginNavigationResult;
+  back(): PluginNavigationResult;
+  forward(): PluginNavigationResult;
+}
+
 export interface PanelViewProps {
   readonly panelId: string;
   readonly pluginId: string;
@@ -589,9 +1450,46 @@ export interface PanelViewProps {
    * This is a snapshot taken at mount, not a live value: it does not update
    * while the view is mounted, including in response to your own
    * {@link persistState} calls. Treat the contents as read-only and hold your
-   * working copy in React state seeded from here.
+   * working copy in React state seeded from here. Arguments from a later open
+   * that reuses this panel arrive as {@link openRequest} instead.
    */
   readonly initialArgs?: Record<string, unknown>;
+  /**
+   * The latest `panel.openPluginPanel` call that reused this panel rather than
+   * spawning a new one, carrying the `initialArgs` it was called with (#13779).
+   * A fresh panel gets its arguments as {@link initialArgs}; every later "open
+   * this in the panel" — a second context-menu click, a notification button, a
+   * search result — lands here.
+   *
+   * Live: a mounted view re-renders with the new request, keeping its state,
+   * its {@link disposeSignal} and its {@link initialArgs}. A request made while
+   * no view is mounted (a hidden dock tab, a pane behind a maximized sibling, a
+   * view still loading) waits and is handed to the next one. Only the latest
+   * waits: a second call before the view sees the first replaces it.
+   *
+   * `seq` is new for every call, including one with the same `args`, so key
+   * the effect that acts on it by the request itself:
+   *
+   * ```tsx
+   * useEffect(() => {
+   *   if (openRequest) showFile(String(openRequest.args.path));
+   * }, [openRequest]);
+   * ```
+   *
+   * Once a view has committed with a request it is delivered: it stays on
+   * this attempt's props, but a later remount or reload does not see it again,
+   * so persist whatever the request changed if it should survive one. Not
+   * persisted itself, and not merged into {@link initialArgs}: it is held by
+   * the project's window, so one still waiting when that window reloads,
+   * closes or is evicted to save memory is lost.
+   *
+   * Absent until a reusing open supplies `initialArgs`, and always absent on a
+   * host with no panel record (a project surface, a settings view).
+   */
+  readonly openRequest?: {
+    readonly seq: number;
+    readonly args: Record<string, unknown>;
+  };
   /**
    * Which version of your `stateVersion` schema {@link initialArgs} was written
    * against — the other half of declaring one in `contributes.panels` (#12280).
@@ -646,6 +1544,16 @@ export interface PanelViewProps {
    * `true` means "accepted and scheduled" — the layout save is debounced, so it
    * is not a promise that bytes have reached disk.
    *
+   * Outside the grid (a Home surface, a sidebar view, a settings section, a
+   * toolbar popover) there is no panel record, so the bag is kept in the host's
+   * durable view-state store instead, under the project, your plugin and the
+   * view. The same cap, merge and version rules apply, the write is committed
+   * without a debounce, so it survives the renderer going away the moment this
+   * returns, and `false` also means storage refused it. A
+   * user-scope settings section's bag follows the user across projects. The
+   * least recently written of these bags are dropped beyond 200, so treat them
+   * as state you can rebuild.
+   *
    * Absent when the host does not support persistence for this panel; call it
    * optionally.
    */
@@ -676,20 +1584,29 @@ export interface PanelViewProps {
    */
   readonly requestReload?: () => void;
   /**
-   * Tell the host whether this view holds work that a reload would lose
-   * (#12611).
+   * Tell the host whether this view holds work that a reload or a close would
+   * lose (#12611, #13815).
    *
    * The user can reload a plugin panel from its menus, and an agent can do the
    * same through the host's tools. Neither asks first by default, because what
    * you accepted through {@link persistState} comes back. While this is set to
-   * `true`, both ask the user to confirm before discarding the view. Set it
-   * back to `false` once the work is saved or dropped.
+   * `true`, both ask the user to confirm before discarding the view, and so
+   * does closing the panel with its close button or menu. Set it back to
+   * `false` once the work is saved or dropped.
    *
    * Your own {@link requestReload} is never held up by it. The setter belongs to
    * the attempt that received it: one held past this attempt's teardown does
    * nothing, and a new attempt starts with no unsaved work until it says so.
    *
-   * Absent where the host offers no reload, so call it optionally.
+   * While it is `true`, the host also keeps the project's renderer: automatic
+   * Sleep waits, and cache eviction skips it until memory runs short. Work you
+   * keep in {@link persistState} comes back after either, so prefer persisting
+   * a draft over holding the flag, and keep the flag for work that cannot be
+   * persisted. Offered outside the grid too (a Home surface, a sidebar view, a
+   * settings section, a toolbar popover), where there is no close to confirm.
+   *
+   * Absent where the host offers neither (a file editor, whose document owns
+   * its draft), so call it optionally.
    */
   readonly setHasUnsavedChanges?: (hasUnsavedChanges: boolean) => void;
   /**
@@ -732,6 +1649,28 @@ export interface PanelViewProps {
    */
   readonly setMenuItems?: (items: readonly PanelMenuItemContribution[] | null) => void;
   /**
+   * Names this panel: the title shown on its tab, its header, its dock chip and
+   * its dialog. Use it when one kind shows different things, so three record
+   * panels read "Record #42", "Record #43" and "Record #44" rather than three
+   * copies of the kind's `name`. `null` (or a blank string) goes back to the
+   * kind's name.
+   *
+   * The title belongs to the panel, not the view: it survives the view
+   * unmounting and reloading, and a grid or dock panel keeps it across a
+   * restart. A dialog keeps it until the dialog closes, since closing one
+   * removes its panel. A name the user typed wins: once they rename the panel,
+   * this does nothing until they clear their rename. The title is held to one
+   * line: control and invisible formatting characters become spaces, and it is
+   * cut at 80 characters.
+   *
+   * Only ever titles this panel. The setter belongs to the attempt that
+   * received it: a call held past this attempt's teardown does nothing.
+   *
+   * Absent where the host has no panel to name (a project surface, a settings
+   * view), so call it optionally.
+   */
+  readonly setTitle?: (title: string | null) => void;
+  /**
    * Your actions whose handlers are running right now, by `actionId` as the
    * manifest writes it — however they were dispatched: the palette, a menu,
    * the panel toolbar, a keybinding or an agent. A new array when the set
@@ -770,6 +1709,61 @@ export interface PanelViewProps {
    * mounted in, so it renders the rows for that scope. Absent for a panel view.
    */
   readonly settingsContext?: PluginSettingsViewContext;
+  /**
+   * Present only for a `location: "fileEditor"` view (#13809): the file it was
+   * opened for, owned by the host. Read it with a revision, save against the
+   * revision you read, and report your unsaved text with `setDraft` so the
+   * host's dirty indicator, Rendered preview and Save / Discard / Cancel prompt
+   * on close all apply. The draft is the host's, not the view's: it survives
+   * the user switching to Source and back, and the close prompt can save it
+   * after your view has unmounted.
+   */
+  readonly fileDocument?: PluginFileDocument;
+  /**
+   * Where the host mounted this view — a panel, a project surface, the plugin's
+   * settings section, the sidebar — so one view can lay itself out for each
+   * place it appears. Always set by Daintree; absent only from a host that predates it,
+   * which you can treat as `"panel"`.
+   *
+   * This is the whole of what a view learns about its surroundings. Your view
+   * owns its own box and nothing outside it: reading or styling the host's DOM,
+   * relying on an ancestor's layout or class names, or reaching past your box
+   * with global CSS is unsupported and can break on any update. The host
+   * contains your layout (`position: fixed` stays inside your box, and your
+   * z-indexes stay in your own stacking context), but a modal `<dialog>`, a
+   * `popover` element or a `createPortal` into `document.body` leaves that
+   * containment. For overlays use `@daintreehq/plugin-ui`'s `Dialog`, `Popover`
+   * and menus, which the host draws and positions.
+   *
+   * New host kinds are added over time, so give an unrecognised `kind` a
+   * sensible default rather than switching on it exhaustively.
+   */
+  readonly hostContext?: PluginViewHostContext;
+  /**
+   * The project application's navigation (#14108): the location its declared
+   * sections share across the application's sidebar view, Home and panels,
+   * with back and forward.
+   *
+   * Handed only to views of the plugin whose `application` is in force in
+   * this project and declares `navigation`; absent otherwise, and absent in a
+   * user-scope settings section, which belongs to no project. Live: the view
+   * re-renders with a new `location` when any view of the application moves
+   * it, without remounting, so it keeps its own state, its `initialArgs` and
+   * its {@link disposeSignal}.
+   *
+   * The location is restored per project after a remount, an evicted renderer
+   * or a restart, but only parameters declared `persist` are written to disk;
+   * the others last as long as the project's renderer, so they survive a
+   * remount but not an evicted or reloaded renderer. A location that no longer
+   * resolves — its section removed, a parameter that no longer validates, a
+   * raised `navigation.version` — restores as the default section.
+   *
+   * Navigation is refused with `unsaved` while any view of the application
+   * reports {@link setHasUnsavedChanges}, so a pending form is never replaced:
+   * persist the draft or drop it, clear the flag, and navigate again. A
+   * callback held past this view attempt refuses with `stale`.
+   */
+  readonly navigation?: PluginApplicationNavigationApi;
 }
 
 /**
@@ -923,9 +1917,10 @@ export interface McpServerContribution {
  * the existing loopback listener), the per-terminal credential, the project
  * binding and revocation. The plugin supplies the tool roster at activation via
  * {@link PluginMcpApi.registerTools}. Requires the `mcp:expose` capability, and
- * reaches no agent until the user gives the plugin read-and-write access. Its
- * tools share one MCP server with the host's tools for the plugin's databases,
- * so `database_schema` and `database_query` are reserved.
+ * reaches no agent until the user gives the plugin read-and-write access — or,
+ * when it declares `groups`, until the user allows a group. Its tools share
+ * one MCP server with the host's tools for the plugin's databases, so
+ * `database_schema` and `database_query` are reserved.
  */
 export interface PluginAgentMcpContribution {
   id: string;
@@ -934,6 +1929,60 @@ export interface PluginAgentMcpContribution {
   description?: string;
   /** Host-managed tools. The only mode today; kept explicit so a later mode is additive. */
   mode: "tools";
+  /**
+   * Sets of tools the user allows one at a time, such as a `search` group apart
+   * from a `commit` group. With groups declared, every registered tool names
+   * one, and access levels no longer reach the plugin's own tools: only a
+   * group the user allowed does. See {@link PluginAgentMcpToolGroup}.
+   */
+  groups?: PluginAgentMcpToolGroup[];
+  /**
+   * Serve chosen tools of one of the plugin's own `contributes.mcpServers`
+   * entries here instead of a roster from {@link PluginMcpApi.registerTools},
+   * which the host then refuses for this endpoint. The server stays where it
+   * is: the host supervises it, resolves its settings and environment, and
+   * starts it the first time an agent with access lists or calls a tool. Only
+   * the tools named in `tools` are served, under their agent-facing names.
+   */
+  source?: PluginAgentMcpServerSource;
+}
+
+/** An `agentMcp` endpoint's tools taken from a contributed MCP server. */
+export interface PluginAgentMcpServerSource {
+  /** The id of a `contributes.mcpServers` entry in the same manifest. */
+  mcpServer: string;
+  /** The tools served, each named explicitly; nothing else the server lists ever reaches an agent. */
+  tools: PluginAgentMcpServerSourceTool[];
+}
+
+/** One tool an `agentMcp` endpoint takes from its source server. */
+export interface PluginAgentMcpServerSourceTool {
+  /** What agents call it, in the {@link AGENT_MCP_TOOL_NAME_PATTERN} grammar. */
+  name: string;
+  /** Its exact name on the server. */
+  serverTool: string;
+  /** A group the endpoint declares; required when it declares any, refused when it declares none. */
+  group?: string;
+  /** Replaces the server's own description, which is otherwise cut to {@link AGENT_MCP_MAX_DESCRIPTION_BYTES}. */
+  description?: string;
+}
+
+/**
+ * Whether a group's tools read and search, or change things. The plugin's own
+ * description of its tools, shown to the user as such: the host can't check
+ * it, never turns it into a `readOnlyHint`, and never allows a group because
+ * of it.
+ */
+export type PluginAgentMcpToolGroupAccess = "read" | "write";
+
+/** One `contributes.agentMcp[].groups` entry. */
+export interface PluginAgentMcpToolGroup {
+  /** What tools name in {@link PluginMcpToolDefinition.group}, and what the user's choice is kept under. */
+  id: string;
+  /** Shown in the per-project access UI. */
+  name: string;
+  description?: string;
+  access: PluginAgentMcpToolGroupAccess;
 }
 
 /**
@@ -949,6 +1998,13 @@ export interface PluginDatabaseContribution {
   location: PluginDatabaseLocationKind;
   path?: string;
   journalMode: "delete" | "wal";
+  /**
+   * How many migrations this version of the plugin applies: the schema it
+   * leaves the file at. Lets the host refuse an application whose file was
+   * written by a newer copy before any of its code runs, and makes a writable
+   * `db.open` with a different number of migrations fail rather than drift.
+   */
+  schemaVersion?: number;
   /** Named statements the host serves to agents as tools of their own. */
   queries?: PluginDatabaseQueryContribution[];
 }
@@ -1026,6 +2082,8 @@ export interface PluginDatabaseQueryContribution {
 export const AGENT_MCP_MAX_TOOLS_PER_ENDPOINT = 16;
 /** Most `agentMcp` endpoints one manifest may declare. */
 export const AGENT_MCP_MAX_ENDPOINTS_PER_PLUGIN = 1;
+/** Most tool groups one `agentMcp` endpoint may declare. */
+export const AGENT_MCP_MAX_GROUPS_PER_ENDPOINT = 8;
 /**
  * Tool name grammar — the subset every MCP client accepts unmangled. Capped at
  * 32 characters because Claude exposes a server's tools as
@@ -1041,6 +2099,8 @@ export const AGENT_MCP_MAX_SCHEMA_BYTES = 8 * 1024;
 export const AGENT_MCP_MAX_RESULT_BYTES = 256 * 1024;
 /** Wall-clock budget for one tool call before the host aborts it. */
 export const AGENT_MCP_CALL_TIMEOUT_MS = 60_000;
+/** Server tool name grammar an `agentMcp` source may select: the MCP spec's recommended tool name characters. */
+export const AGENT_MCP_SERVER_TOOL_NAME_PATTERN = /^[A-Za-z0-9_.-]{1,128}$/;
 
 /**
  * Who a tool call came from, as far as the host can say. Provenance, not
@@ -1093,6 +2153,12 @@ export interface PluginMcpToolDefinition {
   outputSchema?: PluginMcpJsonSchema;
   /** MCP tool annotations advertised on `tools/list`. See {@link PluginMcpToolAnnotations}. */
   annotations?: PluginMcpToolAnnotations;
+  /**
+   * The declared group the tool belongs to: required when the endpoint
+   * declares `groups`, rejected when it declares none. The tool is listed and
+   * callable only on credentials for a project whose user allowed that group.
+   */
+  group?: string;
   execute(
     args: Record<string, unknown>,
     caller: PluginMcpCaller,
@@ -1108,8 +2174,10 @@ export interface PluginMcpApi {
    * manifest's declared database queries comes to more than
    * {@link AGENT_MCP_MAX_TOOLS_PER_ENDPOINT}, a tool named like one of those
    * queries, or a tool breaking the name, description or schema limits is
-   * rejected whole. Calling it again for the same endpoint replaces the
-   * roster. Returns a disposer; every roster is dropped when the plugin
+   * rejected whole, and so is a tool naming no declared group on an endpoint
+   * that declares groups. Calling it again for the same endpoint replaces the
+   * roster; a replacement that changes which tools a group holds revokes
+   * the credentials agents hold for the plugin's groups. Returns a disposer; every roster is dropped when the plugin
    * unloads. Must be called during `activate()`.
    */
   registerTools(
@@ -1136,6 +2204,47 @@ export interface SkillContribution {
   triggers?: string[];
 }
 
+/** One skill or reference file in `contributes.assistantKnowledge`. */
+export interface AssistantKnowledgeEntry {
+  /** Lowercase letters, digits and single hyphens; unique within its list. */
+  id: string;
+  /** Plugin-relative path: a skill directory holding `SKILL.md`, or a `.md` reference file. */
+  path: string;
+}
+
+/**
+ * `contributes.assistantKnowledge` (#13828): Markdown the Daintree Assistant is
+ * given about this plugin's tools. Delivered only while the user has given the
+ * Assistant everything the plugin declares (its databases, their writes and its
+ * own `agentMcp` endpoint) in the project, and framed to the model as the plugin
+ * author's notes on those tools, never as the user speaking.
+ */
+export interface AssistantKnowledgeContribution {
+  /** Plugin-relative `.md` file of short notes, inlined up to 4 KiB and otherwise handed over as a file. */
+  instructions?: string;
+  /** Skill directories (Agent Skills layout); only their `.md` files are mirrored, never `scripts/`. */
+  skills?: AssistantKnowledgeEntry[];
+  /** `.md` files the Assistant can read when a question needs them. */
+  references?: AssistantKnowledgeEntry[];
+}
+
+/**
+ * One `contributes.themes` entry (#13832). `path` is a plugin-relative JSON file
+ * holding `{ palette, tokens?, extensions? }`, the palette in the same shape
+ * Daintree's built-in themes use, with overrides limited to the registered token
+ * and extension sets. Offered in Appearance as `plugin:{pluginId}:{id}`, grouped
+ * under the plugin, once the theme clears the contrast gate; a theme that fails
+ * is not offered and the failure is written to the plugin's log. `type` is the
+ * polarity the palette must declare.
+ */
+export interface ThemeContribution {
+  id: string;
+  name: string;
+  type: "dark" | "light";
+  /** Plugin-relative path to the theme JSON file (e.g. `./themes/midnight.json`). */
+  path: string;
+}
+
 /**
  * One terminal in a `contributes.recipes` entry (#11860). The authorable subset
  * of {@link RecipeTerminal}: the transient per-launch fields (`agentModelId`,
@@ -1143,23 +2252,111 @@ export interface SkillContribution {
  * strips on persist, so a manifest may not declare them. `type` accepts the
  * built-in terminal kinds plus an agent id the SAME plugin contributes — a
  * foreign plugin's agent id is dropped by the sanitizer at registration.
+ *
+ * `type: "plugin-panel"` opens one of this plugin's own `contributes.panels`
+ * (#13797), named by `panelId`, with `panelArgs` handed to the view.
  */
 export interface RecipeContributionTerminal {
   type: string;
   title?: string;
   command?: string;
   env?: Record<string, string>;
+  /** First turn for an agent step. `{{plugin.<name>}}` takes one of the recipe's `variables`. */
   initialPrompt?: string;
+  /**
+   * Standing instruction appended to an agent step's system prompt, on agents
+   * whose CLI supports one. Takes `{{plugin.<name>}}` like `initialPrompt`.
+   */
+  systemPrompt?: string;
   args?: string;
   devCommand?: string;
   exitBehavior?: "keep" | "trash" | "remove";
+  /** A `contributes.panels[].id` of this plugin, for a `plugin-panel` step. */
+  panelId?: string;
+  /** Handed to a `plugin-panel` step's view as `initialArgs`, or as `openRequest` to a panel it reuses. */
+  panelArgs?: Record<string, unknown>;
+}
+
+/**
+ * One argument of a {@link PromptTemplateContribution}: a single-line text
+ * field in the form the picker opens, filled into `{{name}}` in the body.
+ */
+export interface PromptTemplateArgument {
+  name: string;
+  label: string;
+  required?: boolean;
+}
+
+/**
+ * One `contributes.promptTemplates` entry (#13799). A prompt template is
+ * offered in the composer's command picker under the plugin's name; choosing
+ * it asks for its arguments and puts the expanded body in the composer's
+ * draft. It never submits, and it never appears in the `/` or `$` menus, which
+ * belong to the agent CLI. Inert declarative content: no capability required.
+ */
+export interface PromptTemplateContribution {
+  id: string;
+  title: string;
+  description: string;
+  /** Prompt text; `{{name}}` is replaced by the argument of that name. */
+  body: string;
+  args: PromptTemplateArgument[];
+}
+
+/** The URLs a {@link TerminalLinkContribution} claims: one scheme, one exact host. */
+export interface TerminalLinkUrlContribution {
+  scheme: "https" | "http";
+  /** A lowercase public domain name; never loopback, private, local-only or an IP. */
+  host: string;
+  /** Matched against the URL's path as a plain prefix. */
+  pathPrefix?: string;
+}
+
+/**
+ * One `contributes.terminalLinks` entry (#13798): terminal text the plugin
+ * makes clickable. Exactly one of `pattern` or `url` is set. A pattern match
+ * dispatches `actionId` with {@link TerminalLinkPatternArgs}; a claimed URL
+ * dispatches it with {@link TerminalLinkUrlArgs} instead of opening the
+ * browser. Matching runs in the host on hover only, and only the matched text
+ * reaches the plugin, on click. Built-in links win any overlap.
+ */
+export interface TerminalLinkContribution {
+  id: string;
+  /** One of the plugin's own commands, written `"{manifest name}.{id}"`. */
+  actionId: string;
+  /** A bounded regular expression, matched within one terminal row. */
+  pattern?: string;
+  /** Match `pattern` without regard to case. */
+  ignoreCase?: boolean;
+  url?: TerminalLinkUrlContribution;
+}
+
+/** The terminal a clicked plugin link was in. */
+export interface TerminalLinkSubject {
+  panelId: string;
+  panelKind: string;
+  /** Absent for a terminal outside any worktree. */
+  worktreeId?: string;
+}
+
+/** What a pattern {@link TerminalLinkContribution}'s command receives on click. */
+export interface TerminalLinkPatternArgs extends TerminalLinkSubject {
+  text: string;
+  /** Capture groups by position; `null` where an optional group matched nothing. */
+  groups: (string | null)[];
+}
+
+/** What a URL {@link TerminalLinkContribution}'s command receives on click. */
+export interface TerminalLinkUrlArgs extends TerminalLinkSubject {
+  url: string;
 }
 
 /**
  * One `contributes.recipes` entry (#11860). A recipe is a named multi-terminal
  * launch layout the plugin ships; the host registers it under the qualified id
- * `{pluginId}.{id}` and merges it into the recipe list as a plugin-owned tier
- * available in every project.
+ * `{pluginId}.{id}` and merges it into the recipe list as a plugin-owned tier:
+ * in every project for an installed plugin, in its own project only for a
+ * `scope: "project"` one.
  *
  * Terminals are declared inline rather than pointing at a shipped JSON file so
  * the install-time confirmation can show what a recipe actually runs:
@@ -1191,6 +2388,18 @@ export interface RecipeContribution {
    * `TerminalRecipe.autoAssign`, so any drift is a compile error there.
    */
   autoAssign?: "always" | "never" | "prompt";
+  /**
+   * Names the prompts may use as `{{plugin.<name>}}` (#13797), filled by
+   * {@link PluginHostApi.runRecipe}. A run that supplies no value for one
+   * leaves it empty, as a host variable with no value is.
+   */
+  variables?: string[];
+  /**
+   * The recipe's agents need this plugin's agent tools. While those are off in
+   * the project the launch is refused and says so, rather than starting agents
+   * without them. It never turns them on.
+   */
+  requiresAgentTools?: boolean;
 }
 
 /** One caption line in a {@link PluginTourChapter}, in seconds from the chapter start. */
@@ -1239,6 +2448,29 @@ export interface PluginTourContribution {
   /** Bare hostnames remote chapter audio is fetched from, e.g. `cdn.example.com`. */
   audioHosts?: string[];
   chapters: PluginTourChapter[];
+  /**
+   * Content version. Saved progress resumes by chapter id only while it
+   * matches; bump it when a half-watched run should start over.
+   */
+  version?: string;
+  /** What Finish does beyond closing. */
+  finish?: PluginTourFinishContribution;
+}
+
+/**
+ * A tour's Finish handoff (#14098): open this plugin's settings, optionally at
+ * one setting, or run one of its own commands, written `{manifest.name}.<id>`.
+ */
+export interface PluginTourFinishContribution {
+  /** The line on the last end card that says what Finish will do. */
+  hint: string;
+  action: { kind: "settings"; key?: string } | { kind: "command"; actionId: string };
+}
+
+/** {@link PluginTourFinishContribution} as renderers see it: the command qualified to this instance. */
+export interface PluginTourDescriptorFinish {
+  hint: string;
+  action: PluginSetupStepUiAction;
 }
 
 /** One chapter of a {@link PluginTourDescriptor}: manifest timing with its audio resolved. */
@@ -1269,6 +2501,63 @@ export interface PluginTourDescriptor {
   /** `plugin://` URL of the scene module, carrying the load's view generation. */
   moduleUrl: string;
   chapters: PluginTourDescriptorChapter[];
+  version?: string;
+  finish?: PluginTourDescriptorFinish;
+}
+
+/**
+ * One `contributes.projectTemplates` entry (#13825): a starting set of files
+ * offered in the Create project dialog. The files are the plugin's
+ * `project-templates/<id>/` folder, copied as they are into the new folder the
+ * user names. Nothing in the plugin runs to produce them.
+ */
+export interface ProjectTemplateContribution {
+  id: string;
+  title: string;
+  description: string;
+  /** A plugin icon id (`shared/config/pluginIconIds.ts`); advisory, with a fallback glyph. */
+  iconId?: string;
+}
+
+/** A loaded plugin's project template as the Create project dialog lists it. */
+export interface ProjectTemplateDescriptor {
+  pluginId: string;
+  /** The plugin's display name, which the dialog attributes the template to. */
+  pluginName: string;
+  templateId: string;
+  title: string;
+  description: string;
+  iconId?: string;
+}
+
+/**
+ * What a template file is to the user reading the list: an instruction file
+ * agents read, part of a project plugin that asks for trust on first open, or
+ * anything else.
+ */
+export type ProjectTemplateFileKind = "file" | "instructions" | "project-plugin";
+
+export interface ProjectTemplateFile {
+  /** Relative to the new project folder, `/`-separated. */
+  path: string;
+  size: number;
+  kind: ProjectTemplateFileKind;
+}
+
+/**
+ * Every file a template would write, or why it can't be used. `digest` names
+ * this exact set of paths and bytes; creating from the template hands it back
+ * and is refused if the files have changed since.
+ */
+export type ProjectTemplatePreview =
+  | { status: "ready"; digest: string; files: ProjectTemplateFile[]; totalBytes: number }
+  | { status: "unusable"; reason: string };
+
+/** The template a new project folder starts from, as the dialog previewed it. */
+export interface ProjectTemplateSelection {
+  pluginId: string;
+  templateId: string;
+  digest: string;
 }
 
 /**
@@ -1383,6 +2672,14 @@ export interface PluginAgentContribution {
    * resume command is built. Plugin agents never claim a `continuity` tier.
    */
   resume?: AgentResumeTemplate;
+  /**
+   * Optional additive launch mechanism (#13803): the CLI's own way of merging
+   * extra MCP servers over the user's, which Daintree uses to hand the agent its
+   * orchestration server and the plugin endpoints the project turned on. Declaring
+   * a format grants nothing — access still comes from the project's tool
+   * settings. Only the format is declared; Daintree owns any env var name.
+   */
+  launchMcp?: { format: LaunchMcpFormat };
 }
 
 /**
@@ -1473,7 +2770,8 @@ export interface PluginManifest {
   /**
    * The short name agents see this plugin's MCP server under, as
    * `daintree-<mcpName>`: lowercase letters, digits and hyphens, at most 16
-   * characters. Without one the host derives a name from the last segment of
+   * characters. `docs` and `runbooks` are taken by the Daintree Assistant's own
+   * servers. Without one the host derives a name from the last segment of
    * `name`. The same name in every project; see `docs/plugins/manifest.md` for
    * how a clash between two plugins is settled.
    */
@@ -1489,6 +2787,13 @@ export interface PluginManifest {
    * block. Each entry credits a person who worked on the plugin.
    */
   authors?: PluginAuthor[];
+  /**
+   * Manifest ids (`publisher.name`) of other plugins this one works with, shown
+   * in the plugin manager with whether each is installed. Disclosure and an
+   * install hint only: nothing is installed, loaded or ordered from it, and a
+   * listed plugin that is missing changes nothing about how this one runs.
+   */
+  worksWith?: string[];
   /**
    * Declared catalog category. Optional — when absent the manager derives one
    * from `contributes` (see `resolvePluginCategory`).
@@ -1510,6 +2815,21 @@ export interface PluginManifest {
    * decision is the project folder, not this field.
    */
   scope?: "project";
+  /**
+   * Opts an installed package into running as one independently bound instance
+   * per selected project, instead of a single app-wide singleton. Absent means
+   * singleton. Installed packages only, and mutually exclusive with `scope`.
+   * An instance runs under the project-plugin binding contract: its settings,
+   * storage, databases and connections are pinned to the project it was enabled
+   * in, never to whichever project is focused.
+   */
+  instanceMode?: "project";
+  /**
+   * Names this project plugin as the project's application and points at the
+   * parts of it the plugin already contributes. `scope: "project"` only. See
+   * {@link PluginApplicationDescriptor}.
+   */
+  application?: PluginApplicationDescriptor;
   /**
    * `"unsupported"` for a plugin that only works on the machine the person is
    * sitting at — a view that assumes the renderer's `localhost` is the
@@ -1533,12 +2853,35 @@ export interface PluginManifest {
    */
   scopes?: PluginManifestScopes;
   activationEvents?: "onStartupFinished"[];
+  /**
+   * Events that wake the plugin and run one of its own commands (#13816).
+   * Optional in the type but always materialized by the manifest schema's
+   * `.default([])`. See {@link PluginEventRoute}.
+   */
+  eventRoutes?: PluginEventRoute[];
   contributes: {
     panels: PanelContribution[];
     toolbarButtons: ToolbarButtonContribution[];
     menuItems: MenuItemContribution[];
     keybindings: KeybindingContribution[];
     contextMenus: ContextMenuContribution[];
+    /**
+     * Rows the plugin adds to the launcher (#13788). Optional in the type but
+     * always materialized by the manifest schema's `.default([])`, like
+     * `agentMcp`.
+     */
+    launchEntries?: PluginLaunchEntryContribution[];
+    /**
+     * Named panel layouts (#13780). Optional in the type but always
+     * materialized by the manifest schema's `.default([])`, like
+     * `launchEntries`.
+     */
+    layouts?: LayoutContribution[];
+    /**
+     * Search providers for the quick switcher (#13792). Optional in the type
+     * but always materialized by the manifest schema's `.default([])`.
+     */
+    searchProviders?: PluginSearchProviderContribution[];
     /**
      * Manifest-declared commands. Each entry registers a {@link PluginActionDescriptor}
      * at load time (so the command appears in the palette before the plugin
@@ -1562,8 +2905,50 @@ export interface PluginManifest {
      * Empty unless the plugin ships skills.
      */
     skills: SkillContribution[];
+    /**
+     * Markdown for the Daintree Assistant about this plugin's tools (#13828).
+     * Not materialized by the schema: absent unless the plugin declares it.
+     */
+    assistantKnowledge?: AssistantKnowledgeContribution;
+    /**
+     * Plugin-contributed themes (#13832). Optional in the type but always
+     * materialized by the manifest schema's `.default([])`, for the same reason
+     * as `surfaces`. Installed and built-in plugins only.
+     */
+    themes?: ThemeContribution[];
+    /**
+     * Plugin-contributed prompt templates (#13799). Optional in the type but
+     * always materialized by the manifest schema's `.default([])`. Shown in
+     * every project for an installed plugin, in its own project only for a
+     * `scope: "project"` one.
+     */
+    promptTemplates?: PromptTemplateContribution[];
+    /**
+     * Plugin-contributed terminal link matchers (#13798). Optional in the type
+     * but always materialized by the manifest schema's `.default([])`. Applied
+     * in every project's terminals for an installed plugin, in its own
+     * project's only for a `scope: "project"` one.
+     */
+    terminalLinks?: TerminalLinkContribution[];
+    /**
+     * `@` context providers for the agent composer (#13795). Optional in the
+     * type but always materialized by the manifest schema's `.default([])`. A
+     * project plugin's providers show in its own project only.
+     */
+    contextProviders?: ContextProviderContribution[];
     forgeProviders: ForgeProviderContribution[];
+    /**
+     * Element Picker framework providers (#14073). Optional in the type but
+     * always materialized by the manifest schema's `.default([])`.
+     */
+    elementPickerProviders?: ElementPickerProviderContribution[];
     fileDecorationProviders: FileDecorationContribution[];
+    /**
+     * The plugin's check for worktree delete confirmations (#13805), at most
+     * one. Optional in the type but always materialized by the manifest
+     * schema's `.default([])`, like `launchEntries`.
+     */
+    worktreeDeleteNotes?: WorktreeDeleteNotesContribution[];
     /**
      * Plugin-contributed file editors (#12323): an extra, writable mode on the
      * host's file panel for the declared extensions. Built-in plugins only in
@@ -1572,25 +2957,6 @@ export interface PluginManifest {
      * plugin ships an editor.
      */
     fileEditors: FileEditorContribution[];
-    /**
-     * Dev-preview tools this plugin offers (built-in only). The renderer
-     * registry admits a registered tool only when its plugin's manifest names
-     * the tool id here, so the manifest — not a module side effect — is what
-     * puts a tool in the preview toolbar.
-     *
-     * Optional in the type but always materialized by the manifest schema's
-     * `.default([])`, for the same reason as `agentMcp` — the hand-built
-     * manifest literals in tests and tooling predate the field.
-     */
-    previewTools?: PreviewToolContribution[];
-    /**
-     * Guest runtimes this plugin ships as standalone browser assets (built-in
-     * only). Main registers one site-preview guest adapter per entry at
-     * startup; the build derives the bundle's entry and output from the same
-     * declaration. Optional in the type for the same reason as
-     * `previewTools`.
-     */
-    guestAdapters?: PluginGuestAdapterContribution[];
     /**
      * Plugin-contributed launchable agents (#9560). Each entry registers an
      * {@link PluginAgentContribution} into the effective agent registry at load
@@ -1615,7 +2981,8 @@ export interface PluginManifest {
     settings?: SettingDefinition[];
     /**
      * Plugin-contributed recipes (#11860) — named multi-terminal launch layouts
-     * merged into the recipe list as a plugin-owned, globally-available tier.
+     * merged into the recipe list as a plugin-owned tier, shown in every
+     * project or, for a `scope: "project"` plugin, in its own project only.
      * Inert declarative content; no capability required. Content is immutable;
      * user-owned frecency and preferences live in a sidecar keyed by the
      * qualified id. Empty unless the plugin ships recipes.
@@ -1624,9 +2991,15 @@ export interface PluginManifest {
     /**
      * Plugin welcome tours (#12768). Optional in the type but always
      * materialized by the manifest schema's `.default([])`, for the same reason
-     * as `agentMcp`. Not available to a `scope: "project"` plugin.
+     * as `agentMcp`.
      */
     tours?: PluginTourContribution[];
+    /**
+     * Project templates offered in the Create project dialog (#13825). Optional
+     * in the type but always materialized by the manifest schema's
+     * `.default([])`, like `agentMcp`. Installed and builtin plugins only.
+     */
+    projectTemplates?: ProjectTemplateContribution[];
     /**
      * Project surfaces this plugin claims (§7.8). Optional in the type but
      * always materialized by the manifest schema's `.default({})`, so a
@@ -1644,8 +3017,282 @@ export interface PluginManifest {
      * `agentMcp`.
      */
     databases?: PluginDatabaseContribution[];
+    /**
+     * Steps run for each new worktree after the project's setup script
+     * (#13807). Optional in the type but always materialized by the manifest
+     * schema's `.default([])`, like `agentMcp`.
+     */
+    worktreeSetupSteps?: WorktreeSetupStepContribution[];
+    /**
+     * The one online account the host signs in to for this plugin (#13823).
+     * The host draws the Connect / Disconnect row, runs the flow, stores the
+     * tokens in the OS keychain and hands the plugin a current access token
+     * through `host.account`. A project plugin's account is per project.
+     * Shorthand for a single connection named `"default"`; a manifest declares
+     * this or `connections`, never both.
+     */
+    account?: PluginAccountContribution;
+    /**
+     * Named host-managed connections (#14102): one entry per service or per
+     * account of the same service ("work", "personal"). Each is signed in,
+     * refreshed and disconnected on its own; `host.account` picks one by id,
+     * or the one the project is bound to. Same rules as `account` otherwise.
+     */
+    connections?: PluginConnectionContribution[];
+    /**
+     * Services this plugin exports to other plugins and imports from them
+     * (#14105). Optional in the type but always materialized by the manifest
+     * schema's default, like `surfaces`. See {@link PluginServicesContribution}.
+     */
+    services?: PluginServicesContribution;
+    /**
+     * A short setup checklist (#13824), shown on the plugin's setup strip and
+     * at the top of its settings. The host works out which steps are done from
+     * what it can see; only the user's "Skip" is remembered, per project.
+     * Optional in the type but always materialized by the manifest schema's
+     * `.default([])`, like `agentMcp`.
+     */
+    setup?: PluginSetupStepContribution[];
   };
 }
+
+/**
+ * How the host tells a setup step is done. Never stored: a cleared setting, a
+ * disconnected account or a context key that turns false makes the step
+ * outstanding again.
+ *
+ * - `setting`: the declared setting `key` has a stored value. A declared
+ *   `default` doesn't count, the same rule `required` settings follow.
+ * - `account`: the plugin's account is connected — the named `connection`, or
+ *   without one the connection the project uses.
+ * - `context`: the `when` clause holds over the context keys plugins publish
+ *   with `host.setContext`, written `publisher.name.key`.
+ */
+export type PluginSetupStepDone =
+  | { kind: "setting"; key: string }
+  | { kind: "account"; connection?: string }
+  | { kind: "context"; when: string };
+
+/**
+ * What clicking a setup step does.
+ *
+ * - `settings`: open the plugin's settings, at the declared setting `key` when
+ *   one is given.
+ * - `command`: run one of the plugin's own commands, written
+ *   `"<manifest name>.<id>"` like every other action reference in the manifest.
+ *   It runs with no arguments.
+ */
+export type PluginSetupStepAction =
+  { kind: "settings"; key?: string } | { kind: "command"; actionId: string };
+
+/** One `contributes.setup` entry (#13824). */
+export interface PluginSetupStepContribution {
+  /** Unique within the plugin; what a skip is remembered by. */
+  id: string;
+  title: string;
+  description?: string;
+  done: PluginSetupStepDone;
+  /**
+   * Defaults to opening the step's setting for a `setting` step and the
+   * plugin's settings for an `account` step. A `context` step has none unless
+   * it declares one.
+   */
+  action?: PluginSetupStepAction;
+}
+
+/** A setup step's action as the renderer runs it: a command already in the instance's namespace. */
+export type PluginSetupStepUiAction =
+  { kind: "settings"; key: string | null } | { kind: "command"; actionId: string };
+
+/**
+ * What the host saw for one setup step. A `context` step carries its clause
+ * instead of an answer: the renderer evaluates it against the context keys its
+ * own view mirrors.
+ */
+export type PluginSetupStepCheck =
+  { kind: "observed"; done: boolean } | { kind: "context"; when: string };
+
+export interface PluginSetupStepUiStatus {
+  id: string;
+  title: string;
+  description: string | null;
+  check: PluginSetupStepCheck;
+  action: PluginSetupStepUiAction | null;
+  /** The user skipped this step in the requested project. Always false with no project. */
+  skipped: boolean;
+}
+
+/** A plugin's setup checklist, in manifest order; empty when it declares none. */
+export interface PluginSetupUiStatus {
+  steps: PluginSetupStepUiStatus[];
+}
+
+/** Where "Connected as …" comes from: a bearer GET whose JSON holds the name at `field`. */
+export interface PluginAccountIdentity {
+  url: string;
+  /** Dotted path into the response, such as `"viewer.login"`. */
+  field: string;
+}
+
+/**
+ * A connection test: a bearer GET that answers 2xx while the service still
+ * accepts the token, and 401/403 once it doesn't.
+ */
+export interface PluginAccountTest {
+  url: string;
+}
+
+interface PluginAccountContributionBase {
+  /** The service's name, shown on the Connect row ("GitLab", "Linear"). */
+  label: string;
+  description?: string;
+  identity?: PluginAccountIdentity;
+  /** What the settings row's Test runs. Without one, Test asks the `identity` endpoint. */
+  test?: PluginAccountTest;
+}
+
+/**
+ * `contributes.account`. `oauth2` runs an authorization-code flow with PKCE
+ * (S256) as a public client against fixed `https:` endpoints; `token` stores
+ * an API token the user pastes.
+ */
+export type PluginAccountContribution =
+  | (PluginAccountContributionBase & {
+      kind: "oauth2";
+      authorizeUrl: string;
+      tokenUrl: string;
+      clientId: string;
+      scopes: string[];
+    })
+  | (PluginAccountContributionBase & { kind: "token" });
+
+export type PluginAccountKind = PluginAccountContribution["kind"];
+
+/** One `contributes.connections` entry: an account declaration with the id it is addressed by. */
+export type PluginConnectionContribution = PluginAccountContribution & { id: string };
+
+/** The connection `contributes.account` declares. */
+export const DEFAULT_PLUGIN_CONNECTION_ID = "default";
+
+/**
+ * Which connection a `host.account` call means. `connection` names a declared
+ * one; without it the project's bound connection, else the first declared.
+ * `projectId` says which project's binding applies: an installed plugin serves
+ * every project and passes it, a project plugin's host already knows its own.
+ */
+export interface PluginAccountRef {
+  connection?: string;
+  projectId?: string;
+}
+
+/**
+ * A project's choice of connection for one plugin, kept in Daintree's own
+ * settings, never the repository. `machine` points a project plugin at the
+ * installed plugin's connection of the same id on this machine instead of its
+ * own private one.
+ */
+export interface PluginAccountBinding {
+  connectionId: string;
+  source: "own" | "machine";
+}
+
+/**
+ * What the host last saw when it used the stored tokens. Never stored: it
+ * starts `unchecked` and resets on every sign-in, so "connected" only ever
+ * means tokens are kept, and this says whether the service took them.
+ *
+ * - `ok`: a test or a refresh succeeded.
+ * - `rejected`: the service answered 401/403 to a test.
+ * - `unreachable`: the test couldn't reach the service or got another error.
+ * - `revoked`: a refresh was refused for good, so the tokens were dropped.
+ */
+export interface PluginAccountVerification {
+  status: "unchecked" | "ok" | "rejected" | "unreachable" | "revoked";
+  /** Epoch ms of the check, `null` while unchecked. */
+  checkedAt: number | null;
+  message: string | null;
+}
+
+/** What a plugin hears about its account. Never carries a token. */
+export interface PluginAccountState {
+  connected: boolean;
+  /** The name the service reported, when the manifest declares `identity` and it answered. */
+  identity: string | null;
+}
+
+/** A current access token for the plugin's account. The refresh token never leaves the host. */
+export interface PluginAccountAccessToken {
+  accessToken: string;
+  /** Epoch ms the token expires at, or `null` when the service didn't say. */
+  expiresAt: number | null;
+}
+
+/**
+ * `host.account` — the plugin's side of its host-managed account. Signing in
+ * and out happens only from the host's own settings row.
+ */
+export interface PluginAccountApi {
+  /** Whether the account is connected, and as whom. */
+  getState(ref?: PluginAccountRef): Promise<PluginAccountState>;
+  /**
+   * A current access token, refreshed first when it is about to expire, or
+   * `null` when the account isn't connected (including after the service
+   * refused a refresh, which disconnects it). Ask each time you need one;
+   * don't keep it. Rejects when the plugin declares no `contributes.account`,
+   * or when a refresh fails for a reason that may pass (offline, server error).
+   */
+  getAccessToken(ref?: PluginAccountRef): Promise<PluginAccountAccessToken | null>;
+  /**
+   * Called when the account connects, disconnects or reports a new identity,
+   * and when the project's binding moves `ref` to another connection.
+   * Returns a disposer; every subscription is disposed when the plugin unloads.
+   * Without a declared account nothing ever changes, so the callback never runs.
+   */
+  onDidChange(
+    callback: (state: PluginAccountState) => void | Promise<void>,
+    ref?: PluginAccountRef
+  ): () => void;
+}
+
+/** The settings row's view of a plugin account. */
+export interface PluginAccountUiStatus {
+  /** The connection's id; `"default"` for `contributes.account`. */
+  connectionId: string;
+  kind: PluginAccountKind;
+  label: string;
+  description: string | null;
+  connected: boolean;
+  identity: string | null;
+  /** A browser sign-in is waiting on the user. */
+  pending: boolean;
+  /** Whether the OS keychain can store the tokens right now. */
+  secretTier: PluginSecretStorageTier;
+  /** Whether the manifest declares something Test can ask (`test`, else `identity`). */
+  testable: boolean;
+  verification: PluginAccountVerification;
+}
+
+/** A connection a project can use for a plugin, as its binding picker lists it. */
+export interface PluginAccountBindingChoice extends PluginAccountBinding {
+  label: string;
+  connected: boolean;
+  identity: string | null;
+}
+
+/** Which connection a project uses for one plugin, and what it could use instead. */
+export interface PluginAccountBindingUiStatus {
+  /** The stored choice, or `null` when the project uses the default. */
+  binding: PluginAccountBinding | null;
+  /** What `host.account` resolves to in this project without a named connection. */
+  selected: PluginAccountBinding;
+  choices: PluginAccountBindingChoice[];
+}
+
+/** How a Connect click ended. `cancelled` covers a superseded or cancelled flow. */
+export type PluginAccountConnectResult =
+  | { status: "connected"; account: PluginAccountUiStatus }
+  | { status: "cancelled" }
+  | { status: "failed"; message: string };
 
 /**
  * Field control kind for a {@link SettingDefinition}. Drives which input the
@@ -1866,8 +3513,9 @@ export interface PluginPromptCallOptions extends PluginHostCallOptions {
  * {@link PluginActivationApi.onDidChangeWorktrees},
  * {@link PluginActivationApi.onDidChangeActiveWorktree},
  * {@link PluginActivationApi.onDidChangeAgentState},
- * {@link PluginActivationApi.onDidChangeAllAgents} and
- * {@link PluginActivationApi.onDidChangeFocusedPanel}. These coalesce by default:
+ * {@link PluginActivationApi.onDidChangeAllAgents},
+ * {@link PluginActivationApi.onDidChangeFocusedPanel} and
+ * {@link PluginActivationApi.onDidChangeProjectPresence}. These coalesce by default:
  * a burst of events becomes one trailing callback fired `debounceMs` after the
  * last event (the host re-emits the worktree set on every git-status poll, and
  * agents change state many times a second). A burst that never goes quiet
@@ -1948,6 +3596,19 @@ export interface SettingsApi {
    * an explicit scope that conflicts with the declaration throws.
    */
   set<T = unknown>(key: string, value: T, scope?: PluginSettingsScope): Promise<void>;
+  /**
+   * Clear a stored setting, so it reads as its declared `default` (or
+   * `undefined`) again. This is not the same as writing an empty value: a
+   * cleared `required` setting is listed by {@link missingRequired} again, and a
+   * cleared secret is removed from the keychain-backed store it was written to.
+   * Only a key the manifest declares in `contributes.settings` can be cleared,
+   * in the scope it declares; omitting `scope` targets that scope, and a
+   * conflicting one throws. Subscribers fire with the declared default when
+   * something was removed, and clearing a key that holds nothing is silent.
+   * For `"project"` scope with no active project there is nothing to clear and
+   * it resolves.
+   */
+  unset(key: string, scope?: PluginSettingsScope): Promise<void>;
   /**
    * Subscribe to in-process writes of `key` in `scope` (default: the key's
    * declared scope, else `"user"`). The callback fires with the new value after
@@ -2060,6 +3721,8 @@ export interface PluginDatabaseLocation {
   /** For a `"project"` database, the path relative to the project root. */
   readonly projectRelativePath: string | null;
   readonly journalMode: "delete" | "wal";
+  /** The declaration's `schemaVersion`, when it has one. */
+  readonly schemaVersion?: number;
 }
 
 /** Positional (`?`) or named (`:name`, `$name`, `@name`) statement parameters. */
@@ -2276,6 +3939,15 @@ export interface PluginArchiveManifestPreview {
    * reads.
    */
   recipes: { count: number; names: string[] };
+  /**
+   * Project templates (#13825), by title, each with the project plugins its
+   * files include — named by their `.daintree/plugins/<dir>` folder, read from
+   * the archive's entry names without parsing or loading anything. A template
+   * writes files only after the Create project dialog lists every one, but a
+   * project plugin inside it asks for trust when that project first opens, so
+   * install is where the user first hears about it.
+   */
+  projectTemplates: Array<{ title: string; projectPlugins: string[] }>;
 }
 
 /**
@@ -2460,6 +4132,9 @@ export interface InstalledPluginRecord {
  *   reviewed update) and the archive's digest or `manifest.name` differs from it;
  *   refused before extraction (digest) or before the swap (name), so nothing runs
  *   or is replaced
+ * - `instance_mode_changed` — the update switches `instanceMode` between a singleton
+ *   and per-project instances; refused before the swap because nothing carries
+ *   settings, grants or enablements across, so the user uninstalls first
  * - `unload_failed` — the existing plugin's disposer cascade threw
  * - `swap_failed` — atomic rename failed but the prior state was restored
  * - `swap_unrecoverable` — rename failed AND rollback failed; on-disk state is inconsistent
@@ -2484,6 +4159,7 @@ export type PluginInstallErrorCode =
   | "name_collision"
   | "hash_failed"
   | "archive_mismatch"
+  | "instance_mode_changed"
   | "unload_failed"
   | "swap_failed"
   | "swap_unrecoverable"
@@ -2605,8 +4281,10 @@ export interface LoadedPluginInfo {
    * (settings, invoke, actions) expects.
    *
    * Equal to `manifest.name` for installed and builtin plugins. For a PROJECT
-   * plugin it is the instance key (`project__{projectId}__{name}`), and the
-   * manifest is left alone — so `manifest.name` alone cannot tell the two
+   * plugin it is the instance key (`project__{projectId}__{name}`), and for an
+   * installed package's per-project instance it is
+   * `project__{projectId}__installed__{name}`; either way the manifest is left
+   * alone — so `manifest.name` alone cannot tell the two
    * apart, and a consumer that filtered on it would treat a project plugin as
    * an installed one.
    *
@@ -2673,12 +4351,6 @@ export interface LoadedPluginInfo {
    */
   pluginDanger: "safe" | "confirm";
   /**
-   * The `plugin://` module URL of the plugin's `location: "settings"` view,
-   * built by main under this load's authority and generation. Present only
-   * while the plugin is running and declares one.
-   */
-  settingsViewPath?: string;
-  /**
    * True when the plugin was refused at load time by the remote blocklist /
    * kill-switch (#10891) — its `manifest.name` matched a blocklist entry whose
    * version range covers `manifest.version`. Distinct from `disabled` (a
@@ -2695,6 +4367,15 @@ export interface LoadedPluginInfo {
    * `blocklisted` is true.
    */
   blocklistReason?: string;
+  /**
+   * Set on the package row of an installed `instanceMode: "project"` package.
+   * That row is the catalog entry: it never runs itself (`loadedAt` is 0), and
+   * each project that enabled it runs its own instance, listed as a separate
+   * `origin: "project"` row under its instance key.
+   */
+  instanceMode?: "project";
+  /** Project ids the package is enabled in. Present exactly when `instanceMode` is. */
+  enabledInProjects?: string[];
 }
 
 export interface PluginIpcContext {
@@ -2791,6 +4472,16 @@ export interface PluginWorktreeLinkedPR {
   readonly ciStatus?: import("./forge.js").CIStatus;
   /** Branch this PR merges into (e.g. "develop"). Drives base-branch divergence display. */
   readonly baseRef?: string;
+  /**
+   * A merge the forge was asked to carry out later (auto-merge or merge queue),
+   * whoever asked. `null`: the forge reported nothing pending.
+   */
+  readonly mergeIntent?: import("./forge.js").PRMergeIntent | null;
+  /**
+   * The PR's head moved while this host watched auto-merge stay armed — a
+   * later push the forge may merge unreviewed. Observed this session only.
+   */
+  readonly headMovedWhileArmed?: boolean;
 }
 
 export interface PluginWorktreeLinked {
@@ -2831,6 +4522,47 @@ export interface PluginWorktreeStatus {
 }
 
 /**
+ * A git operation the host saw in progress in a worktree, read from the
+ * operation's marker files under the git directory. Only operations that block
+ * normal work appear here; a worktree with none reads as `null`.
+ */
+export type PluginWorktreeGitOperation = "merge" | "rebase" | "cherry-pick" | "revert";
+
+/**
+ * How far a worktree's post-create setup has got.
+ *
+ * - `pending`: the worktree exists and setup has not started
+ * - `running`: config copy, submodule init, the setup commands or a plugin
+ *   setup step are in flight
+ * - `ready`: the recorded run finished without a failure, including a project
+ *   with no setup commands. A retry resumes the setup commands, or the plugin
+ *   setup steps that did not succeed, so after a retry `ready` speaks for those
+ *   alone
+ * - `failed` / `timed-out`: a stage failed; {@link PluginWorktreeSetup.stage} says which.
+ *   A plugin setup step whose plugin could not run it counts as failed
+ * - `needs-approval`: setup or provisioning commands from the repository, or a
+ *   plugin setup step, are waiting for the user's approval, so they were
+ *   skipped. The checkout exists, but its initialization may be incomplete
+ */
+export type PluginWorktreeSetupState =
+  "pending" | "running" | "ready" | "failed" | "timed-out" | "needs-approval";
+
+/**
+ * The stages of worktree setup, in the order they run. `setup-script` covers
+ * the project's setup commands and any resource provisioning that follows them.
+ * `plugin-steps` covers every plugin's {@link WorktreeSetupStepContribution}.
+ */
+export type PluginWorktreeSetupStage =
+  "copy-config" | "submodules" | "setup-script" | "plugin-steps";
+
+/** The workspace host's record of a worktree's setup run, including a retry. */
+export interface PluginWorktreeSetup {
+  readonly state: PluginWorktreeSetupState;
+  /** The stage running, or the one that failed. `null` once `ready`. */
+  readonly stage: PluginWorktreeSetupStage | null;
+}
+
+/**
  * Read-only, deep-frozen projection of a worktree exposed to plugins.
  * This is an explicit allowlist of fields from the internal WorktreeSnapshot;
  * do not add fields by spreading — every field must be intentionally exposed
@@ -2841,6 +4573,13 @@ export interface PluginWorktreeSnapshot {
   readonly worktreeId: string;
   readonly path: string;
   readonly name: string;
+  /**
+   * The title the user gave this worktree, shown in place of its issue, PR or
+   * branch headline, or `null` when they gave none. Whitespace is collapsed and
+   * it is at most 80 characters. A rename or clear is a change to the worktree,
+   * so it reaches {@link PluginHostApi.onDidChangeWorktrees} like any other.
+   */
+  readonly customTitle: string | null;
   readonly isCurrent: boolean;
   readonly branch?: string;
   readonly isMainWorktree?: boolean;
@@ -2864,6 +4603,30 @@ export interface PluginWorktreeSnapshot {
    * `null` when the host hasn't computed a status for this worktree yet.
    */
   readonly status: PluginWorktreeStatus | null;
+  /**
+   * Object id of the commit HEAD points at, from the same status poll as
+   * `status`. A new value means HEAD moved since the last poll: a commit from
+   * any source, a checkout, a reset or a pull. It is a sample, not a commit
+   * log, so a move that returns to the same oid between polls is not seen.
+   * Treat it as an opaque string. `null` before the first status poll and on a
+   * repository with no commits yet. While a git operation is in progress the
+   * host pauses status polling, so this holds its last value.
+   */
+  readonly headOid: string | null;
+  /**
+   * The blocking git operation in progress, or `null` when the host saw none.
+   * Detection fails open, so `null` is the host's observation, not a promise
+   * that git is idle.
+   */
+  readonly gitOperation: PluginWorktreeGitOperation | null;
+  /**
+   * Setup progress, or `null` when the workspace host has no record of a setup
+   * run for this worktree. The record is held in memory and written when the
+   * host creates the worktree or retries its setup, so a worktree made outside
+   * Daintree, or one from before the workspace host last started, reads `null`
+   * until its setup is retried. `null` means unknown, never ready.
+   */
+  readonly setup: PluginWorktreeSetup | null;
 }
 
 /**
@@ -2996,6 +4759,95 @@ export interface PluginAgentSnapshot {
   /** Unix timestamp in milliseconds when the transition was committed. */
   readonly timestamp: number;
 }
+
+/**
+ * How a terminal was started, as {@link PluginTerminalLifecycleEvent.kind}
+ * reports it:
+ *
+ * - `agent` — launched to run an agent CLI.
+ * - `plugin` — opened as a plugin-contributed terminal panel.
+ * - `shell` — anything else: a plain shell, a dev server, a command launch.
+ *
+ * Fixed at launch. A shell the user later starts an agent in stays `shell`, and
+ * an agent pane whose agent has exited back to its prompt stays `agent`.
+ */
+export type PluginTerminalKind = "agent" | "shell" | "plugin";
+
+/**
+ * Which change a {@link PluginTerminalLifecycleEvent} reports:
+ *
+ * - `spawned` — the terminal's process started. Repeats for the same
+ *   `terminalId` when the terminal is restarted or recovered after a
+ *   terminal-host crash, sometimes with no `exited` in between.
+ * - `exited` — the terminal's process ended.
+ * - `trashed` — the user moved the terminal to the trash, where it can still be
+ *   restored.
+ * - `restored` — the terminal came back out of the trash. Reopening a project
+ *   after a restart starts its terminals afresh and reports `spawned`.
+ * - `rate-limit-observed` — the terminal's output showed an agent rate-limit
+ *   banner.
+ */
+export type PluginTerminalLifecycleEventType = PluginTerminalLifecycleEvent["type"];
+
+/** The fields every {@link PluginTerminalLifecycleEvent} carries. */
+export interface PluginTerminalLifecycleEventBase {
+  /**
+   * The terminal's id — the same id {@link PluginAgentPane.terminalId} and
+   * {@link PluginAgentSnapshot.terminalId} report. Not a lasting identity: a
+   * restarted terminal comes back under the same id.
+   */
+  readonly terminalId: string;
+  /**
+   * The workspace (project or scratch) that owns the terminal. Opaque: compare
+   * it, don't parse it. A project plugin only ever sees its own project's id.
+   * Absent for a terminal that belongs to no workspace.
+   */
+  readonly workspaceId?: string;
+  /** The worktree the terminal is filed under, when it has one. An id only. */
+  readonly worktreeId?: string;
+  /** How the terminal was started. */
+  readonly kind: PluginTerminalKind;
+  /**
+   * The agent the terminal was launched to run (`claude`, `codex`, …), when it
+   * was launched for one. A fact about the launch, not about what is running
+   * now: the user can exit the agent and run anything in the same shell. Read
+   * {@link PluginActivationApi.onDidChangeAgentState} for what is running.
+   */
+  readonly agentId?: string;
+  /** Unix timestamp in milliseconds when the host observed the change. */
+  readonly timestamp: number;
+}
+
+/**
+ * One change in a terminal's life, as
+ * {@link PluginActivationApi.onDidChangeTerminalLifecycle} reports it. Frozen.
+ *
+ * Metadata only, and an explicit allowlist: no command line, working
+ * directory, title, environment or output ever rides on it, so it stays safe to
+ * log or send off the machine. Narrow on `type`.
+ */
+export type PluginTerminalLifecycleEvent =
+  | (PluginTerminalLifecycleEventBase & { readonly type: "spawned" })
+  | (PluginTerminalLifecycleEventBase & {
+      readonly type: "exited";
+      /**
+       * The terminal process's exit code. For an agent pane this is the shell
+       * the agent ran in, not the agent itself, which hands back to that shell.
+       */
+      readonly exitCode: number;
+      /** The signal that ended the process, when one did. Never present on Windows. */
+      readonly signal?: number;
+    })
+  | (PluginTerminalLifecycleEventBase & { readonly type: "trashed" })
+  | (PluginTerminalLifecycleEventBase & { readonly type: "restored" })
+  | (PluginTerminalLifecycleEventBase & {
+      readonly type: "rate-limit-observed";
+      /**
+       * When the banner was seen. An observation that an agent hit a limit, not
+       * a reading of how close the account is to one.
+       */
+      readonly observedAt: number;
+    });
 
 /**
  * Why an agent pane will not take a drafted handoff right now. Codes, not copy:
@@ -3159,6 +5011,129 @@ export interface PluginFocusedPanel {
   readonly worktreeId: string | null;
 }
 
+/**
+ * Where a project is, as {@link PluginActivationApi.onDidChangeProjectPresence}
+ * reports it: `"foreground"` while it is the project some window shows (or a
+ * remote Shell shows from this machine), `"background"` while it is open but
+ * no window shows it, and `"closed"` once it is closed, removed or put to
+ * sleep. A project whose renderer was reclaimed under memory pressure is still
+ * open, and reads as `"background"`.
+ */
+export type PluginProjectPresenceState = "foreground" | "background" | "closed";
+
+/** One project's presence. Carries the project id and the state only. */
+export interface PluginProjectPresence {
+  readonly projectId: string;
+  readonly state: PluginProjectPresenceState;
+}
+
+/** Every {@link PluginEventRouteEvent}, in the order the docs list them. */
+export const PLUGIN_EVENT_ROUTE_EVENTS = [
+  "agentWaiting",
+  "worktreeAdded",
+  "worktreeRemoved",
+  "projectForeground",
+] as const;
+
+/**
+ * The events a manifest {@link PluginEventRoute} can wake a plugin on (#13816).
+ * Closed: each is the edge of an existing subscription, and the wake carries
+ * that subscription's payload.
+ *
+ * - `agentWaiting` — an agent session moved into `waiting`, as
+ *   {@link PluginActivationApi.onDidChangeAgentState} reports it. Needs
+ *   `agent:read`.
+ * - `worktreeAdded` / `worktreeRemoved` — the worktree set
+ *   {@link PluginActivationApi.onDidChangeWorktrees} reports gained or lost a
+ *   worktree.
+ * - `projectForeground` — a project became `"foreground"`, as
+ *   {@link PluginActivationApi.onDidChangeProjectPresence} reports it.
+ */
+export type PluginEventRouteEvent = (typeof PLUGIN_EVENT_ROUTE_EVENTS)[number];
+
+/**
+ * One manifest `eventRoutes` entry: when `event` happens, the host activates
+ * the plugin if it is not running and runs `command` with a
+ * {@link PluginEventRouteWake}. Unlike a live subscription, a route holds no
+ * worker open, so a plugin that only reacts through routes can still be
+ * disposed while idle.
+ */
+export interface PluginEventRoute {
+  readonly event: PluginEventRouteEvent;
+  /** Bare id of one of this plugin's own `contributes.commands` entries. */
+  readonly command: string;
+}
+
+/**
+ * The single argument a routed command receives. Each variant carries exactly
+ * what the matching subscription delivers, so a handler can share code with a
+ * live listener.
+ *
+ * Wakes are best effort: a burst coalesces to the latest value per terminal,
+ * project or worktree set, a plugin is woken at most about once a second, and
+ * nothing is delivered while its worker has failed. A transition that reverses
+ * before the wake runs (an agent that stopped waiting, a project sent back)
+ * cancels it. Nothing is replayed when the plugin loads.
+ */
+export type PluginEventRouteWake =
+  | { readonly event: "agentWaiting"; readonly agent: PluginAgentSnapshot }
+  | {
+      readonly event: "worktreeAdded" | "worktreeRemoved";
+      /** The worktree set after the change, as `onDidChangeWorktrees` lists it. */
+      readonly worktrees: readonly PluginWorktreeSnapshot[];
+      /**
+       * What changed: one read's difference from the read before it, or, when
+       * the wake waited its turn, the net of every read since it was due.
+       */
+      readonly change: PluginWorktreesChange;
+    }
+  | { readonly event: "projectForeground"; readonly presence: PluginProjectPresence };
+
+/**
+ * What {@link PluginAgentsApi.sendKeys} presses: up to 16 named keys (`Up`,
+ * `Down`, `Left`, `Right`, `Enter`, `Escape`, `Tab`, `Space`, `Backspace`, or
+ * one lowercase letter or digit), or the option whose label the agent's screen
+ * shows — the host moves to it and presses Enter. Prefer `choose` for a
+ * dialog's options.
+ */
+export type PluginAgentKeysInput =
+  | { readonly keys: readonly string[]; readonly choose?: never }
+  | { readonly choose: string; readonly keys?: never };
+
+/**
+ * What an input call on an agent this plugin launched did.
+ *
+ * - `sent`: the input was written. Delivery is not acknowledged and the effect
+ *   is not observed; read the screen or watch the agent's state for that.
+ * - `refused`: nothing was written, and `reason` says why — an interrupt to an
+ *   idle agent, a label the screen doesn't show, a trashed pane. Not worth
+ *   retrying unchanged.
+ * - `not-found`: no running agent this plugin launched has that id. One answer
+ *   for an unknown id, an agent the user, an MCP client or another plugin
+ *   started, and one outside a project plugin's own project.
+ * - `unavailable`: the terminal host did not answer, or the plugin is
+ *   unloaded. Worth retrying later.
+ */
+export type PluginAgentInputResult =
+  | { readonly status: "sent" }
+  | { readonly status: "refused"; readonly reason: string }
+  | { readonly status: "not-found" }
+  | { readonly status: "unavailable" };
+
+/**
+ * What {@link PluginAgentsApi.interrupt} did. `cancelKey` is `advertised` when
+ * the agent's CLI shows the cancel key it was sent, and `unverified` when it is
+ * that agent's known convention but not one its screen confirms.
+ */
+export type PluginAgentInterruptResult =
+  | { readonly status: "sent"; readonly cancelKey: "advertised" | "unverified" }
+  | Exclude<PluginAgentInputResult, { readonly status: "sent" }>;
+
+/** What {@link PluginAgentsApi.sendKeys} did; `keys` are the keys pressed, in order. */
+export type PluginAgentKeysResult =
+  | { readonly status: "sent"; readonly keys: readonly string[] }
+  | Exclude<PluginAgentInputResult, { readonly status: "sent" }>;
+
 /** `host.agents` — the agent panes in the plugin's project. */
 export interface PluginAgentsApi {
   /**
@@ -3189,6 +5164,55 @@ export interface PluginAgentsApi {
    *   `agent:read`, or is a project plugin.
    */
   listAll(): Promise<PluginAllAgentsSnapshot>;
+  /**
+   * Stop the turn an agent this plugin launched is running, keeping its pane
+   * and conversation. Sends the agent's cancel keystrokes, not text. An idle
+   * agent, or one whose CLI binds a different cancel key, is refused rather
+   * than reported stopped.
+   *
+   * Only agents this plugin started with its own `host.dispatch("agent.launch")`
+   * are reachable, for as long as the plugin stays loaded — an agent the user,
+   * an MCP client or another plugin started answers `not-found`, and so does
+   * one outside a project plugin's own project. A launch that passes its own
+   * `requestedId` is not counted: the launcher must choose the id. The three
+   * input methods are gated on `agent:input` with the same first-use consent
+   * prompt as {@link PluginHostApi.sendToActiveAgent}; a call that would answer
+   * `not-found` never raises it. Answered by the host's main process, so an
+   * agent in a project whose view is not loaded is reached too. In a plugin
+   * worker, a call still in flight when the worker stops rejects, since the
+   * input may already have been written.
+   *
+   * @throws {Error} `PERMISSION_REQUIRED:` if the plugin did not declare
+   *   `agent:input`, or the user denies the consent prompt.
+   * @throws {Error} `DRIVEN_ELSEWHERE:` when the call came from a view that
+   *   doesn't drive the agent's project.
+   * @throws {Error} If `terminalId` is not a non-empty string of at most 512
+   *   characters.
+   */
+  interrupt(terminalId: string): Promise<PluginAgentInterruptResult>;
+  /**
+   * Press keys in an agent this plugin launched — most often to answer its
+   * CLI's own dialog (a trust or permission prompt, a list). Keys go one at a
+   * time, spaced out so a TUI reads each on its own. Reach, capability and
+   * consent are as for {@link interrupt}.
+   *
+   * @throws {Error} `PERMISSION_REQUIRED:` / `DRIVEN_ELSEWHERE:` as for
+   *   {@link interrupt}.
+   * @throws {Error} If `input` does not hold exactly one of `keys` (1 to 16
+   *   names) or `choose` (1 to 200 characters).
+   */
+  sendKeys(terminalId: string, input: PluginAgentKeysInput): Promise<PluginAgentKeysResult>;
+  /**
+   * Submit `text` to an agent this plugin launched, as one submission with one
+   * Enter: the agent takes it as its next prompt, or a slash command such as
+   * `/compact`. Resolves once it is queued, not once the agent reads it. Reach,
+   * capability and consent are as for {@link interrupt}.
+   *
+   * @throws {Error} `PERMISSION_REQUIRED:` / `DRIVEN_ELSEWHERE:` as for
+   *   {@link interrupt}.
+   * @throws {Error} If `text` is blank.
+   */
+  submit(terminalId: string, text: string): Promise<PluginAgentInputResult>;
 }
 
 /** Options for {@link PluginTerminalsApi.readScreen}. */
@@ -3284,6 +5308,48 @@ export type PluginSendToAgentResult =
   | { status: "cancelled" }
   | { status: "refused"; reason: PluginSendToAgentRefusalReason; worktreeId?: string };
 
+/** Options for {@link PluginHostApi.runRecipe}. */
+export interface PluginRunRecipeOptions {
+  /**
+   * Values for the recipe's declared `variables`, filling `{{plugin.<name>}}`
+   * in its prompts. A name the recipe doesn't declare is an error; a declared
+   * one left out is empty.
+   */
+  variables?: Record<string, string>;
+  /** The worktree to run it in. Omit for the active one. */
+  worktreeId?: string;
+}
+
+/**
+ * Why a {@link PluginHostApi.runRecipe} call ran nothing:
+ *
+ * - `unknown-worktree` — `options.worktreeId` is not a worktree of the plugin's project.
+ * - `recipe-unavailable` — the recipe isn't offered in the project's window,
+ *   for example because the plugin is hidden there.
+ * - `agent-tools-off` — the recipe declares `requiresAgentTools` and this
+ *   plugin's agent tools are off in the project. The dialog said so.
+ * - `project-unavailable` — the plugin's project has no open view, or it did not answer.
+ * - `prompt-open` — another dialog from this plugin is already open.
+ * - `launch-failed` — the user ran it and nothing started.
+ */
+export type PluginRunRecipeRefusalReason =
+  | "unknown-worktree"
+  | "recipe-unavailable"
+  | "agent-tools-off"
+  | "project-unavailable"
+  | "prompt-open"
+  | "launch-failed";
+
+/**
+ * How a {@link PluginHostApi.runRecipe} call ended. `ran` means the user
+ * confirmed and at least one step started; `failedCount` is the steps that
+ * didn't.
+ */
+export type PluginRunRecipeResult =
+  | { status: "ran"; spawnedCount: number; failedCount: number }
+  | { status: "cancelled" }
+  | { status: "refused"; reason: PluginRunRecipeRefusalReason };
+
 /**
  * Options for {@link PluginHostApi.showToast}. Intentionally narrower than the
  * app's internal `notify()` surface: plugins cannot set `priority` (a
@@ -3320,10 +5386,35 @@ export interface PluginNotifyAction {
   args?: Record<string, unknown>;
 }
 
+/**
+ * Where a {@link PluginHostApi.notify} notification leads: one of the plugin's
+ * own panels (an id from {@link PluginHostApi.onDidChangePanelLifecycle}) or a
+ * worktree the plugin can see. The inbox row's Go to source opens it.
+ */
+export type PluginNotifyTarget = { panelId: string } | { worktreeId: string };
+
 /** Options for {@link PluginHostApi.notify}. */
 export interface PluginNotifyOptions {
   title: string;
   body: string;
+  /**
+   * How serious it is. Defaults to `"info"`. An `"error"` needs exactly one
+   * action, the way out of it, and can't be passive.
+   */
+  severity?: "info" | "warning" | "error";
+  /**
+   * `"active"` (the default) shows a toast when the window has focus and keeps
+   * an inbox row either way. `"passive"` goes to the inbox only: no toast and
+   * no OS banner, so it can't be combined with `os`.
+   */
+  delivery?: "active" | "passive";
+  /**
+   * What the notification is about. A panel must be one of this plugin's own
+   * and a worktree one it can see; anything else rejects. A target the host
+   * can't check yet (a panel no window has reported) is dropped and the
+   * notification still goes out.
+   */
+  target?: PluginNotifyTarget;
   /** At most {@link PLUGIN_NOTIFY_MAX_ACTIONS}. */
   actions?: PluginNotifyAction[];
   /**
@@ -3331,7 +5422,7 @@ export interface PluginNotifyOptions {
    * the banner when the user hasn't turned it on, during quiet hours or a
    * session mute, while the user is looking at the plugin's project, and when
    * the plugin pages faster than the host allows. Needs the `notification:os`
-   * capability.
+   * capability, and an active notification.
    */
   os?: boolean;
   /**
@@ -3345,6 +5436,142 @@ export interface PluginNotifyOptions {
 export interface PluginNotifyResult {
   /** A fresh id per call; it doesn't say which surfaces showed it. */
   id: string;
+}
+
+/** Most unfinished tasks one plugin may hold at once through {@link PluginHostApi.tasks}. */
+export const PLUGIN_TASK_MAX_LIVE = 16;
+
+/** Most interrupted tasks the host keeps per plugin until the user dismisses them. */
+export const PLUGIN_TASK_MAX_INTERRUPTED = 16;
+
+/** Max length of a task's `title`, enforced host-side. */
+export const PLUGIN_TASK_TITLE_MAX = 120;
+
+/** Max length of a task's `detail`, enforced host-side. */
+export const PLUGIN_TASK_DETAIL_MAX = 200;
+
+/** Max length of a finished task's `message`, enforced host-side. */
+export const PLUGIN_TASK_MESSAGE_MAX = 2000;
+
+/** Serialized size cap for a task's `retry.args`, the same as a notification action's. */
+export const PLUGIN_TASK_RETRY_ARGS_MAX_BYTES = 4096;
+
+/**
+ * Window a task's progress reports are coalesced over before they cross a
+ * process boundary: the worker's port to main, and main's push to the views.
+ * The latest report in the window wins.
+ */
+export const PLUGIN_TASK_PROGRESS_COALESCE_MS = 150;
+
+/** Options for {@link PluginTaskApi.start}. */
+export interface PluginTaskStartOptions {
+  /** What the task is doing, in a few words ("Importing records"). */
+  title: string;
+  /** A second line under the title ("312 of 1,000"). */
+  detail?: string;
+  /** Whether the user may cancel it. Defaults to `false`. */
+  cancellable?: boolean;
+  /**
+   * Progress from 0 to 1, or `null` (the default) while it can't be measured.
+   */
+  fraction?: number | null;
+  /**
+   * One of the plugin's own actions that runs the work again, written
+   * `"{manifest name}.{id}"` as in `contributes.menu`. A failed task's
+   * notification offers it as Retry.
+   */
+  retry: { actionId: ActionId; args?: Record<string, unknown> };
+}
+
+/** A progress update for {@link PluginTaskHandle.report}. Omitted fields keep their last value. */
+export interface PluginTaskProgress {
+  /** Progress from 0 to 1, or `null` while it can't be measured. */
+  fraction?: number | null;
+  /** Replaces the detail line; `""` clears it. */
+  detail?: string;
+}
+
+/**
+ * How a task ended, for {@link PluginTaskHandle.finish}. A failure's `message`
+ * says what went wrong and becomes the notification body. A success's
+ * optional `message` files a passive inbox entry; without one, nothing is
+ * shown.
+ */
+export type PluginTaskResult =
+  | { outcome: "succeeded"; message?: string }
+  | { outcome: "failed"; message: string }
+  | { outcome: "cancelled" };
+
+/**
+ * Why a task's signal aborted, carried as `signal.reason.cause`: the user's
+ * Cancel, or the host interrupting the task because the plugin is unloading,
+ * restarting or crashed.
+ */
+export type PluginTaskAbortCause = "cancelled" | "interrupted";
+
+/** A running task started with {@link PluginTaskApi.start}. */
+export interface PluginTaskHandle {
+  /** Host-assigned, unique for the session. */
+  readonly id: string;
+  /**
+   * Aborts when the user cancels the task or the host interrupts it (the
+   * plugin unloading). The plugin still calls {@link finish} with
+   * `"cancelled"` once it has stopped.
+   *
+   * `signal.reason` is an `AbortError` whose `cause` says which:
+   * {@link PluginTaskAbortCause}. Work that outlives the plugin — a durable
+   * operation — records a user's cancel, but treats an interruption as the
+   * plugin stopping, to be resumed when it runs again.
+   */
+  readonly signal: AbortSignal;
+  /**
+   * Update the task's progress. Reports are coalesced before they cross IPC,
+   * so calling this on every item is fine. Invalid progress throws; a report
+   * after the task finished is ignored.
+   */
+  report(progress: PluginTaskProgress): void;
+  /**
+   * End the task. Only the first call counts. Invalid results reject.
+   */
+  finish(result: PluginTaskResult): Promise<void>;
+}
+
+/**
+ * Long-running work the host shows in its own place for background work
+ * (#13819), with Cancel where the task allows it. A failed task raises an
+ * error notification naming the plugin, with Retry. A successful one shows at
+ * most a passive inbox entry, and a cancelled one nothing. Tasks still
+ * running when the plugin unloads are marked interrupted.
+ */
+export interface PluginTaskApi {
+  /**
+   * Start a task. Rejects on invalid options, a `retry` outside the plugin's
+   * own namespace, or more than {@link PLUGIN_TASK_MAX_LIVE} unfinished tasks.
+   * Once the plugin is unloaded it resolves with a handle whose signal is
+   * already aborted and whose methods do nothing.
+   */
+  start(options: PluginTaskStartOptions): Promise<PluginTaskHandle>;
+}
+
+/** Where a plugin task stands, as the host shows it. */
+export type PluginTaskState = "working" | "cancelling" | "interrupted";
+
+/**
+ * A plugin task as main holds and sends it to the views. Never authored by a
+ * plugin. The plugin's name is captured at start, so an interrupted task
+ * still names its plugin after the plugin has gone.
+ */
+export interface PluginTaskSnapshot {
+  id: string;
+  pluginId: string;
+  pluginName: string;
+  title: string;
+  detail?: string;
+  /** 0 to 1, or `null` when the plugin can't measure it. */
+  fraction: number | null;
+  cancellable: boolean;
+  state: PluginTaskState;
+  startedAt: number;
 }
 
 /**
@@ -4341,6 +6568,19 @@ export interface PluginSystemApi {
    * it. The path must exist.
    */
   showItemInFolder(targetPath: string): Promise<void>;
+  /**
+   * Open a web page in the user's default browser. Only `https:` URLs of at
+   * most 2048 characters and without embedded credentials are accepted
+   * (`INVALID_URL:`); `file:`, `http:`, custom schemes and `daintree:` never
+   * are. Opens are rate limited per plugin (`RATE_LIMITED:`), and the first
+   * link a plugin opens to a given site (its lower-cased hostname, any port or
+   * path) asks the user, who can allow that site or deny it
+   * (`PERMISSION_REQUIRED:`). An allowed site is remembered for that plugin in
+   * its project scope until the plugin is uninstalled or replaced. Built-in
+   * plugins are not asked. Nothing opens on a host whose
+   * project is driven from another machine (`REMOTE_FRONTEND:`).
+   */
+  openExternal(url: string): Promise<void>;
 }
 
 /** Paper sizes {@link PluginDocumentsApi.renderPdf} accepts. */
@@ -4569,6 +6809,109 @@ export interface PluginActivationApi {
     impl: FileDecorationProviderImpl
   ): Promise<() => void>;
   /**
+   * Bind the handler for a step declared in `contributes.worktreeSetupSteps`
+   * (#13807). The host runs it for each worktree it creates in a project this
+   * plugin is loaded for, after the project's setup script succeeded and once
+   * the user has allowed the step for that project. Steps run one at a time,
+   * ordered by plugin id and then declaration order, and one failing does not
+   * stop the next.
+   *
+   * The step runs from this plugin as loaded for the project, never from the
+   * new worktree's branch. It is not a teardown hook: resources that cost
+   * money belong in a resource environment, which has its own teardown.
+   *
+   * `stepId` must match a declared entry; an undeclared id is rejected.
+   * Returns a disposer that unbinds the handler; bindings are removed when the
+   * plugin unloads. Must be called during `activate()`. Calling it twice with
+   * the same id overwrites the prior binding, and the older disposer becomes
+   * inert.
+   *
+   * @throws {Error} If called after activation resolves or times out — the host
+   *   is revoked and registration is rejected.
+   */
+  registerWorktreeSetupStep(
+    stepId: string,
+    handler: PluginWorktreeSetupStepHandler
+  ): Promise<() => void>;
+  /**
+   * Answer a `kind: "runtime"` entry of `contributes.searchProviders` (#13792)
+   * with `provider`. `id` must name such an entry; an undeclared id, or a
+   * declarative one, is rejected. The host asks it while the user types in the
+   * quick switcher, with a short deadline: an answer that misses it is dropped
+   * and recorded in this plugin's diagnostics, and `context.signal` aborts when
+   * the query is superseded. Results are re-checked host-side — a target outside
+   * this plugin, or args over the size limit, drop the row.
+   *
+   * A blended (unscoped) search only asks a provider whose plugin is already
+   * running; it never activates the plugin. Returns a disposer; re-registering
+   * the same id replaces the binding. Must be called during `activate()`.
+   *
+   * @throws {Error} If called after activation resolves or times out — the host
+   *   is revoked and registration is rejected.
+   */
+  registerSearchProvider(id: string, provider: PluginSearchProvider): Promise<() => void>;
+  /**
+   * Bind a runtime {@link ContextProviderImpl} to a provider declared in
+   * `contributes.contextProviders` (#13795). The host asks it for matches when
+   * the user types `@{prefix}:` in an agent composer, and for an item's content
+   * when the user sends a draft holding one of its chips — each call under a
+   * deadline, with a signal aborted when the host stops waiting. An undeclared
+   * id is rejected. Returns a disposer; every binding is removed when the plugin
+   * unloads. Must be called during `activate()`. Registering the same id again
+   * replaces the prior binding and leaves the older disposer inert.
+   *
+   * @throws {Error} If called after activation resolves or times out — the host
+   *   is revoked and registration is rejected.
+   */
+  registerContextProvider(
+    descriptor: ContextProviderDescriptor,
+    impl: ContextProviderImpl
+  ): Promise<() => void>;
+  /**
+   * Bind the methods of a service declared in `contributes.services.provides`
+   * (#14105). `handlers` must have a function for exactly the declared
+   * methods. Other plugins reach it through `host.services.call`; the host
+   * starts this plugin for the first call, so it need not stay loaded. Each
+   * method gets the arguments and a context with the caller's identity and a
+   * signal aborted when the caller stops waiting. Returns a disposer; every
+   * binding is removed when the plugin unloads, and calls still running then
+   * resolve as `unavailable`. Registering the same name again replaces the
+   * prior binding and leaves the older disposer inert. Must be called during
+   * `activate()`.
+   *
+   * @throws {Error} If called after activation resolves or times out — the host
+   *   is revoked and registration is rejected.
+   */
+  registerService<TContract extends PluginServiceContract = PluginServiceContract>(
+    name: string,
+    handlers: PluginServiceHandlers<TContract>
+  ): Promise<() => void>;
+  /**
+   * Bind the check declared in `contributes.worktreeDeleteNotes` (#13805). The
+   * host calls `impl.provideNotes` when the delete of a worktree in this
+   * plugin's reach is confirmed — the delete dialog, bulk remove, an agent's
+   * request over MCP, and the path used when no window is open — and shows
+   * the notes attributed to the plugin. A plugin that isn't running is
+   * activated for the check, so it need not stay loaded to answer.
+   *
+   * The answer has 3 seconds, activation included. A late, failed or invalid
+   * answer is shown as "<plugin> didn't answer"; notes never change the
+   * delete, its confirmation tier or its typed confirmation. The user can turn
+   * a plugin's notes off in its permissions, and the plugin is then not asked.
+   *
+   * The descriptor's `id` must match the manifest entry. Returns a disposer
+   * that unbinds the impl; the binding also goes when the plugin unloads.
+   * Must be called during `activate()`. Calling it again with the same id
+   * replaces the binding, and the older disposer becomes inert.
+   *
+   * @throws {Error} If called after activation resolves or times out, or with
+   *   an id that `contributes.worktreeDeleteNotes` does not declare.
+   */
+  registerWorktreeDeleteNotesProvider(
+    descriptor: WorktreeDeleteNotesProviderDescriptor,
+    impl: WorktreeDeleteNotesProviderImpl
+  ): Promise<() => void>;
+  /**
    * Subscribe to active-worktree changes. The callback fires with the new
    * active snapshot (or `null` when none is active). Returns a disposer;
    * calling it more than once is a no-op. All subscriptions are automatically
@@ -4647,6 +6990,35 @@ export interface PluginActivationApi {
     options?: PluginHostSubscriptionOptions
   ): Promise<() => void>;
   /**
+   * Subscribe to terminals starting, exiting, being trashed and restored, and to
+   * agent rate-limit banners seen in them, gated on the `agent:read`
+   * capability. Covers every terminal — plain shells as well as agents — in
+   * every workspace for an installed plugin, and in its own project only for a
+   * project plugin. The callback receives one frozen
+   * {@link PluginTerminalLifecycleEvent} per change, in the order the host saw
+   * them; nothing is coalesced, and nothing is replayed on subscribe. There is
+   * no snapshot of the terminals already open — {@link PluginAgentsApi.list}
+   * covers only the project's live agent panes. Resolves to a disposer; calling
+   * it more than once is a no-op. Disposed automatically when the plugin is
+   * unloaded.
+   *
+   * Observation only — there is no companion method to start, stop or restart a
+   * terminal.
+   *
+   * Subscribing is revoke-guarded — call it during `activate()`. The callback
+   * itself fires for the plugin's whole lifetime; only the act of subscribing
+   * is restricted to the activation window.
+   *
+   * @throws {Error} `PERMISSION_REQUIRED:` if the plugin did not declare the
+   *   `agent:read` capability, or if called after activation resolves or times
+   *   out (the host is revoked). In a worker only the revoke check throws: a
+   *   missing `agent:read` resolves to a disposer whose callback never fires,
+   *   and the refusal is logged in main.
+   */
+  onDidChangeTerminalLifecycle(
+    callback: (event: PluginTerminalLifecycleEvent) => void
+  ): Promise<() => void>;
+  /**
    * Subscribe to changes in the app-wide agent list that
    * {@link PluginAgentsApi.listAll} returns: a run added or removed, or one's
    * observed state, title or worktree changing, in any open project or scratch.
@@ -4691,6 +7063,38 @@ export interface PluginActivationApi {
    */
   onDidChangeFocusedPanel(
     callback: (focus: PluginFocusedPanel) => void,
+    options?: PluginHostSubscriptionOptions
+  ): Promise<() => void>;
+  /**
+   * Subscribe to where projects are (#13813): `"foreground"` while a window
+   * shows the project, `"background"` while it is open behind another one, and
+   * `"closed"` when it closes. The callback receives one frozen
+   * {@link PluginProjectPresence} per project that changed. A project plugin
+   * hears about its own project only; an installed plugin hears about every
+   * open project, and never about a scratch. No capability is required.
+   *
+   * Presence follows the project each window has switched to, not the user's
+   * attention: a project in an unfocused or minimised window is still
+   * `"foreground"`, and it changes as a switch commits, before the incoming
+   * project has finished painting. Use `onDidChangeFocusedPanel` for focus.
+   *
+   * The current state is delivered once after subscribing — the bound project
+   * for a project plugin, every open project for an installed one — then every
+   * change. Coalesced per project to its latest state with the 100ms default
+   * window, and a state equal to the last one delivered for that project is
+   * never repeated, so a project closed and reopened inside one window may
+   * report nothing; see {@link PluginHostSubscriptionOptions}. An installed
+   * plugin is never told about a project that opened and closed inside one
+   * window. Resolves to a disposer; calling it more than once is a no-op.
+   * Disposed automatically when the plugin is unloaded — a project plugin is
+   * unloaded as its project closes, so it may not live to see `"closed"`.
+   *
+   * Subscribing is revoke-guarded — call it during `activate()`.
+   *
+   * @throws {Error} If the host is revoked.
+   */
+  onDidChangeProjectPresence(
+    callback: (presence: PluginProjectPresence) => void,
     options?: PluginHostSubscriptionOptions
   ): Promise<() => void>;
   /**
@@ -5040,8 +7444,9 @@ export interface PluginHostApi extends PluginActivationApi {
    */
   sendToActiveAgent(text: string, options?: { submit?: boolean }): Promise<void>;
   /**
-   * The agent panes in this plugin's project, for choosing where to hand work.
-   * Gated on `agent:read`. See {@link PluginAgentsApi}.
+   * The agent panes in this plugin's project, for choosing where to hand work,
+   * gated on `agent:read`; and input to the agents this plugin launched, gated
+   * on `agent:input`. See {@link PluginAgentsApi}.
    */
   readonly agents: PluginAgentsApi;
   /**
@@ -5083,6 +7488,32 @@ export interface PluginHostApi extends PluginActivationApi {
     callOptions?: PluginHostCallOptions
   ): Promise<PluginSendToAgentResult>;
   /**
+   * Offer to run one of this plugin's own `contributes.recipes`, named by its
+   * manifest `id`, with values for its `{{plugin.<name>}}` variables (#13797).
+   * Nothing starts until the user confirms: the host shows every step with its
+   * final prompt, system prompt and arguments resolved, and runs exactly that.
+   *
+   * Needs no capability — the recipe is the plugin's own declared content, and
+   * each run is the user's decision. Only the plugin's own recipes are
+   * reachable. A recipe declaring `requiresAgentTools` is refused while those
+   * tools are off in the project; this never turns them on.
+   *
+   * Resolves `{ status: "ran", spawnedCount, failedCount }`,
+   * `{ status: "cancelled" }` (the user dismissed it, or the call was aborted
+   * or the plugin unloaded before they answered), or
+   * `{ status: "refused", reason }` — see {@link PluginRunRecipeRefusalReason}.
+   * Once the user confirms, the run is theirs: an abort no longer cancels it.
+   *
+   * @throws {Error} If `recipeId` names no recipe this plugin contributes, or a
+   *   variable is undeclared, not a string, holds control characters, or is
+   *   longer than 8,192 characters (32,768 across all of them).
+   */
+  runRecipe(
+    recipeId: string,
+    options?: PluginRunRecipeOptions,
+    callOptions?: PluginHostCallOptions
+  ): Promise<PluginRunRecipeResult>;
+  /**
    * Signal that decorations for `scope` (optionally narrowed to `paths`) have
    * changed and any renderer showing them should re-pull. Unlike the
    * `register*` methods this is NOT revoke-guarded: it is called from the
@@ -5097,7 +7528,12 @@ export interface PluginHostApi extends PluginActivationApi {
    * given `panelId` — a status `dot` or a short `label` — so per-worktree /
    * per-agent state surfaces without opening the panel. Pass `null` to clear
    * this plugin's badge on that panel. Badges are keyed by `(pluginId, panelId)`,
-   * so plugins never clobber each other's badge on the same panel.
+   * so plugins never clobber each other's badge on the same panel. Any panel id
+   * is accepted, but a badge on a panel of a kind this plugin did not contribute
+   * is drawn neutral and names the plugin (see {@link PluginPanelBadgeColor}).
+   * Setting the badge a panel already carries sends nothing. A plugin badges at
+   * most 256 panels at once: a new panel past that rejects, while an update or
+   * a clear always goes through.
    *
    * Like {@link invalidateFileDecorations} this is NOT revoke-guarded: plugins
    * call it from post-activation subscription callbacks and timers, and it
@@ -5131,6 +7567,28 @@ export interface PluginHostApi extends PluginActivationApi {
    * malformed badge is logged in the host instead.)
    */
   setToolbarButtonBadge(buttonId: string, badge: PluginPanelBadge | null): Promise<void>;
+  /**
+   * Set (or clear) the live state of one of this plugin's own toolbar buttons —
+   * `buttonId` is a `contributes.toolbarButtons[].id` from this plugin's
+   * manifest — so a toggle shows whether it is on, a button can say why it
+   * can't run, and running work shows on the button that started it. Each call
+   * replaces the button's whole {@link PluginToolbarButtonRuntimeState}; pass
+   * `null` to return it to the manifest's defaults.
+   *
+   * State shows on a promoted button, its plugin-tray row and its overflow-menu
+   * entry. A disabled or busy button ignores clicks; the action itself stays
+   * dispatchable from keybindings, the palette and `host.dispatch`. The label
+   * never changes with state.
+   *
+   * Like {@link setToolbarButtonBadge} this is NOT revoke-guarded and becomes a
+   * silent no-op once the plugin is unloaded; all of its button state is cleared
+   * on unload and whenever its worker is replaced or shut down. An empty or
+   * foreign `buttonId` or an invalid state rejects, in a worker as in process.
+   */
+  setToolbarButtonState(
+    buttonId: string,
+    state: PluginToolbarButtonRuntimeState | null
+  ): Promise<void>;
   /**
    * Publish one of this plugin's own context keys to `when` clauses, so a
    * keybinding or `contributes.contextMenus` entry can turn on and off with the
@@ -5168,6 +7626,13 @@ export interface PluginHostApi extends PluginActivationApi {
    * {@link PLUGIN_WORKTREE_CARD_STATUS_LABEL_MAX} characters, or the tooltip
    * longer than {@link PLUGIN_WORKTREE_CARD_STATUS_TOOLTIP_MAX}.
    *
+   * An optional `command` makes the chip a button for one of the plugin's own
+   * actions, written `"{manifestId}.{id}"`: a click dispatches it with
+   * `{ worktreeId }`, the card's own id, so a declared `inputSchema` must
+   * accept that. A command in any other namespace, or one that names a
+   * built-in action, rejects. It need not be registered yet; until it is, the
+   * chip stays a plain status.
+   *
    * Statuses are not persisted. They are cleared when the worktree is
    * removed, when its project closes, and when the plugin unloads or its
    * worker is replaced, so republish them after a restart. Like
@@ -5175,6 +7640,88 @@ export interface PluginHostApi extends PluginActivationApi {
    * no-op once the plugin is unloaded.
    */
   setWorktreeCardStatus(worktreeId: string, status: PluginWorktreeCardStatus | null): Promise<void>;
+  /**
+   * Publish (or clear) this plugin's advisory readiness checks for one
+   * worktree. They show attributed to the plugin in the Review Hub's readiness
+   * rail and in the `worktree.reviewReadiness` tool's `pluginChecks`, and never
+   * change whether commit or push is ready. Each call replaces the plugin's
+   * whole list for that worktree; pass `null` or `[]` to clear it.
+   *
+   * `worktreeId` is a worktree this host can see right now, as for
+   * {@link setWorktreeCardStatus}. The call rejects when it is not one of
+   * them, when the host has no worktree answer yet, when a check is malformed
+   * (empty or multi-line label longer than
+   * {@link PLUGIN_WORKTREE_REVIEW_CHECK_LABEL_MAX}, a severity other than
+   * `"warning"` or `"info"`, detail longer than
+   * {@link PLUGIN_WORKTREE_REVIEW_CHECK_DETAIL_MAX}), or when the list holds
+   * more than {@link PLUGIN_WORKTREE_REVIEW_CHECKS_MAX} checks. A `command`
+   * follows the rules of {@link PluginWorktreeCardStatus.command}.
+   *
+   * Checks are not persisted. They are cleared when the worktree is removed,
+   * when its project closes, and when the plugin unloads or its worker is
+   * replaced, so republish them after a restart. Like {@link setPanelBadge}
+   * this is NOT revoke-guarded and becomes a silent no-op once the plugin is
+   * unloaded.
+   */
+  setWorktreeReviewChecks(
+    worktreeId: string,
+    checks: readonly PluginWorktreeReviewCheck[] | null
+  ): Promise<void>;
+  /**
+   * Show (or clear) this plugin's status chip on one terminal's header (#13802)
+   * — a short one-line `label` with an optional `tooltip` for the detail. Pass
+   * `null` to clear it. A plugin holds one status per terminal, so a second
+   * call replaces the first; every plugin that marks a terminal gets its own
+   * chip, named after the plugin. The chip is colourless: the pane's accent
+   * and glyphs stay with agent state.
+   *
+   * Requires `agent:read`. `terminalId` is the `terminalId` of an entry in
+   * {@link PluginAgentsApi.list} right now, so a project plugin only ever
+   * reaches its own project's agent terminals. The call rejects when the id is
+   * not one of them, when the host cannot read the list, when the plugin holds
+   * the maximum of {@link PLUGIN_TERMINAL_STATUS_MAX_PER_PROJECT} statuses in
+   * the project, or when the label is empty, multi-line or longer than
+   * {@link PLUGIN_TERMINAL_STATUS_LABEL_MAX} characters or the tooltip longer
+   * than {@link PLUGIN_TERMINAL_STATUS_TOOLTIP_MAX}.
+   *
+   * An optional `command` makes the chip a button for one of the plugin's own
+   * actions, written `"{manifestId}.{id}"`: a click dispatches it with
+   * `{ terminalId, worktreeId? }` (the terminal's worktree, when it has one),
+   * so a declared `inputSchema` must accept that. A command in any other
+   * namespace, or one that names a built-in action, rejects. It need not be
+   * registered yet; until it is, the chip stays a plain status.
+   *
+   * Statuses are not persisted. They are cleared when the project closes and
+   * when the plugin unloads or its worker is replaced, so republish them after
+   * a restart. Like {@link setPanelBadge} this is NOT revoke-guarded and
+   * becomes a silent no-op once the plugin is unloaded.
+   */
+  setTerminalStatus(terminalId: string, status: PluginTerminalStatus | null): Promise<void>;
+  /**
+   * Report (or clear) what this plugin is doing on one of its own panels
+   * (#13820): `working`, `waiting` on the user, `finished` or `failed`, with an
+   * optional one-line `reason`. Pass `null` to clear it. The host draws it the
+   * way it draws agent activity — working and waiting borders in the grid
+   * (when the user's grid highlights are on), a glyph in the panel header and
+   * on the dock chip — and every mark reads "Reported by" your plugin. A
+   * `finished` report draws as unread until the panel has been in front of the
+   * user; a `failed` one stays until you change or clear it.
+   *
+   * Only panels of a kind this plugin contributes with `reportsActivity: true`.
+   * The call rejects for another plugin's panel, a built-in panel, a kind that
+   * does not declare `reportsActivity`, a `reason` that is empty, multi-line or
+   * longer than {@link PLUGIN_PANEL_ACTIVITY_REASON_MAX} characters, or a new
+   * panel past {@link PLUGIN_PANEL_ACTIVITY_MAX_PANELS} reports. A panel id
+   * the host has not seen yet (one `panel.openPluginPanel` just returned) is
+   * accepted and drawn once the panel shows up as yours; a report on a panel
+   * that has closed is dropped. Reporting the state a panel already shows
+   * sends nothing.
+   *
+   * Reports are not persisted, and are cleared when the plugin unloads or its
+   * worker is replaced. Like {@link setPanelBadge} this is NOT revoke-guarded
+   * and becomes a silent no-op once the plugin is unloaded.
+   */
+  setPanelActivity(panelId: string, activity: PluginPanelActivity | null): Promise<void>;
   /**
    * Publish the contextual actions the ⋯ and right-click menus of one of this
    * plugin's own panels offer right now — the backend-side twin of the view's
@@ -5256,7 +7803,11 @@ export interface PluginHostApi extends PluginActivationApi {
    * the id itself is never shown, since a project plugin's id is an instance
    * key. Display names need not be unique. Routes
    * through the app's `notify()` path so rate-limit, quiet-hours, and
-   * inbox-history semantics apply identically to plugin toasts.
+   * inbox-history semantics apply identically to plugin toasts. One rate limit
+   * covers all of a plugin's toasts, whatever their `type`, and its
+   * {@link notify} calls; past it in main a toast is dropped quietly. The inbox
+   * row names the plugin and its project, and a toast from a plugin the user
+   * silenced, or from a project the user muted, is never sent.
    *
    * Like {@link invalidateFileDecorations} this is NOT revoke-guarded: plugins
    * call it from post-activation subscription callbacks and timers. It becomes
@@ -5268,8 +7819,14 @@ export interface PluginHostApi extends PluginActivationApi {
    * Raise a notification with up to {@link PLUGIN_NOTIFY_MAX_ACTIONS} buttons,
    * each running one of the caller's own actions (#13505). It routes through
    * the app's notification path like {@link showToast} — inbox, focus, quiet
-   * hours, session mute and the plugin's rate limit — and the title carries
-   * the plugin's display name for provenance.
+   * hours, session mute and the plugin's rate limit, shared with its toasts —
+   * and the title carries the plugin's display name for provenance. A call
+   * past that limit shows, pages and replaces nothing, and so does a call from
+   * a plugin the user silenced or in a project the user muted.
+   *
+   * `delivery: "passive"` keeps it to the inbox. A `severity: "error"` needs
+   * exactly one action and can't be passive. A `target` gives the inbox row a
+   * Go to source.
    *
    * `os: true` also asks for an OS banner. Banners carry no buttons: clicking
    * one brings the plugin's project forward and runs the first action. The
@@ -5389,6 +7946,19 @@ export interface PluginHostApi extends PluginActivationApi {
    */
   readonly settings: SettingsApi;
   /**
+   * The host-managed account declared in `contributes.account`. See
+   * {@link PluginAccountApi}. NOT revoke-guarded: plugins ask for a token from
+   * timers and callbacks. `getState` and `getAccessToken` reject when the
+   * manifest declares no account, and once the plugin is unloaded.
+   */
+  readonly account: PluginAccountApi;
+  /**
+   * Calls into services other plugins provide (#14105). See
+   * {@link PluginServicesApi}. NOT revoke-guarded; calls made before
+   * `activate()` returns resolve as `unavailable`.
+   */
+  readonly services: PluginServicesApi;
+  /**
    * Private, plugin-scoped key/value storage — the machine-owned counterpart to
    * {@link settings}. Values never surface in the settings UI and are not gated
    * by `contributes.settings` declarations. Plaintext JSON, three scopes
@@ -5430,6 +8000,15 @@ export interface PluginHostApi extends PluginActivationApi {
    * unloaded `spawn` rejects.
    */
   readonly process: PluginProcessApi;
+  /**
+   * Long-running work shown in the host's background-work readout (#13819).
+   * See {@link PluginTaskApi}. Needs no capability.
+   *
+   * NOT revoke-guarded: plugins start tasks from commands and timers long
+   * after activate(). Once the plugin is unloaded `start` hands back an inert
+   * handle, and handles it gave out earlier stop doing anything.
+   */
+  readonly tasks: PluginTaskApi;
   /**
    * Host-mediated filesystem surface contained to the plugin's declared
    * `scopes.fs.allowedPaths` — the runtime enforcement of those paths (formerly
@@ -5478,97 +8057,15 @@ export interface PluginHostApi extends PluginActivationApi {
    * NOT revoke-guarded — same membership lifetime as {@link fs}.
    */
   readonly documents: PluginDocumentsApi;
-}
-
-/**
- * The project and worktree a built-in plugin's filesystem handle is pinned to
- * for the life of that handle — see {@link BuiltinPluginHostApi.fsForWorkspace}.
- */
-export interface PluginWorkspaceScope {
-  readonly projectId: string;
-  readonly worktreeId: string;
-}
-
-/** Options for {@link BuiltinPluginFsApi.readFileBounded}. */
-export interface PluginFsBoundedReadOptions extends PluginHostCallOptions {
   /**
-   * Byte ceiling the read itself obeys: the host stops after `limitBytes + 1`
-   * bytes and reports `too-large` rather than handing back a truncated file,
-   * so a caller never has to decide whether short bytes mean "small file" or
-   * "gave up".
-   */
-  limitBytes: number;
-}
-
-/**
- * Outcome of {@link BuiltinPluginFsApi.readFileBounded}. A path that cannot be
- * opened at all still rejects, exactly as {@link PluginFsApi.readFileBytes}
- * does — the union describes files the host reached and refused, not errors.
- */
-export type PluginFsBoundedRead =
-  | { status: "ok"; bytes: Uint8Array }
-  | { status: "too-large" }
-  /** The open descriptor is a directory, FIFO, socket or device — never read. */
-  | { status: "not-a-file" };
-
-/**
- * The filesystem surface a BUILT-IN plugin holds through
- * {@link BuiltinPluginHostApi.fsForWorkspace}: everything {@link PluginFsApi}
- * offers, plus a read that refuses before it allocates.
- *
- * `readFileBounded` is optional so every existing {@link PluginFsApi} — the
- * out-of-process proxy, test doubles — still satisfies this type. A caller
- * feature-detects it and keeps a stat-then-read fallback; the in-process host
- * always provides it.
- */
-export interface BuiltinPluginFsApi extends PluginFsApi {
-  /**
-   * Read at most `limitBytes + 1` bytes of a regular file through one opened
-   * descriptor. The regular-file check is an `fstat` on that descriptor rather
-   * than a `stat` on the path, so nothing decided before the open can go stale
-   * between the two, and the open itself is non-blocking — a FIFO standing
-   * where a file was cannot leave the read pending.
+   * Host-managed large files — imports, provider downloads and uploads, and
+   * playback in views — gated on `artifact:store`. Bytes never cross the
+   * plugin's channel. See {@link PluginArtifactApi}.
    *
-   * Same capability gate, realpath containment and cancellation as
-   * {@link PluginFsApi.readFileBytes}. It does not replace that method: an
-   * uncapped read stays uncapped.
+   * NOT revoke-guarded — same membership lifetime as {@link fs}. Unloading
+   * cancels the plugin's transfers and drops its artifacts.
    */
-  readFileBounded?(
-    filePath: string,
-    options: PluginFsBoundedReadOptions
-  ): Promise<PluginFsBoundedRead>;
-}
-
-/**
- * The host as a BUILT-IN plugin sees it. Deliberately absent from
- * `shared/types/plugin-sdk.ts`: it is not part of `@daintreehq/plugin-sdk`, and
- * the out-of-process host proxy third-party plugins talk to never carries it.
- *
- * A built-in is app-global — it has no project binding of its own — so its
- * `host.fs` resolves `${project}` / `${worktree}` from whichever window is
- * focused at each call. That is right for a plugin acting on "the project the
- * user is looking at" and wrong for one holding long-lived state about a named
- * worktree: the roots move under it the moment focus does.
- */
-export interface BuiltinPluginHostApi extends PluginHostApi {
-  /**
-   * A {@link PluginFsApi} whose `${project}` / `${worktree}` roots are pinned
-   * to `scope` instead of the focused window: `${worktree}` is the worktree
-   * with that id, `${project}` that project's main worktree. Every gate
-   * `host.fs` applies still applies — capability class, realpath containment,
-   * the implicit data dir, the write audit trail. A project that is not open
-   * contributes no token roots at all; an id matching none of its worktrees
-   * drops `${worktree}` alone (`${project}` still names that project's main
-   * worktree, as the manifest asked for). Nothing falls back to focus.
-   *
-   * A caller must only name a scope it was invoked for: the workspace scope is
-   * supplied by a renderer, so validate it against the handler's
-   * {@link PluginIpcContext} (`args.projectId === ctx.projectId`) before asking.
-   *
-   * Watchers taken through the returned handle are torn down on unload exactly
-   * like `host.fs.watch` ones.
-   */
-  fsForWorkspace(scope: PluginWorkspaceScope): BuiltinPluginFsApi;
+  readonly artifacts: PluginArtifactApi;
 }
 
 /**
@@ -5614,6 +8111,32 @@ export interface PluginActionContribution {
   keywords?: string[];
   inputSchema?: Record<string, unknown>;
   /**
+   * JSON Schema the action's result must match, with `type: "object"` at the
+   * root. Compiled when the action registers (JSON Schema 2020-12 unless
+   * `$schema` names draft-07; references resolve only inside the schema) and
+   * refused there if it can't be enforced as written. Each result is checked in
+   * its JSON form, and that copy is what the caller receives — a `Date` arrives
+   * as its ISO string — but nothing is coerced, defaulted or stripped to make it
+   * fit. One that does not match fails the dispatch with
+   * `RESULT_VALIDATION_ERROR`. Published to callers as the catalog entry's
+   * `outputSchema`, and to agents as the MCP tool's.
+   */
+  resultSchema?: PluginActionResultSchema;
+  /**
+   * `when` clause over the plugin's own context keys (`host.setContext`). While
+   * it is false the command is left out of the command palette. Palette-only:
+   * keybindings, context menus, MCP and `host.dispatch` never evaluate it, so it
+   * decides what is offered, not what can run. A clause that fails to parse is
+   * refused at registration.
+   */
+  when?: string;
+  /**
+   * Same grammar as {@link when}. While it is false the command stays in the
+   * palette, greyed out with a short reason, and Enter does nothing. Also
+   * palette-only.
+   */
+  enablement?: string;
+  /**
    * Per-action capability intent: the subset of the plugin's declared
    * `manifest.capabilities` this specific action actually exercises. Mirrors
    * {@link PluginChannelSchema.requires} in both spelling and enforcement — the
@@ -5639,8 +8162,16 @@ export interface PluginActionContribution {
   requires?: readonly BuiltInPluginCapability[];
 }
 
+/** A {@link PluginActionContribution.resultSchema}: a JSON Schema whose root is an object. */
+export type PluginActionResultSchema = { type: "object" } & Record<string, unknown>;
+
 export interface PluginActionDescriptor extends PluginActionContribution {
   pluginId: string;
+  /**
+   * The providing plugin's name, set by the host from its manifest
+   * (`displayName`, else `name`) — never from the contribution.
+   */
+  pluginName?: string;
   /**
    * Host-authoritative danger classification, computed in the main process by
    * {@link PluginService.registerPluginAction} from the plugin's declared
@@ -5705,71 +8236,6 @@ export const UNBOUND_PLUGIN_HOST_BINDING: PluginHostBinding = {
   projectId: null,
   projectRoot: null,
 };
-
-/**
- * Prefix marking a plugin instance key as project-owned.
- *
- * A project plugin is keyed `project__{projectId}__{manifestId}` everywhere the
- * host indexes a plugin instance — `PluginService.plugins`, the contribution
- * registries' `pluginId`/`extensionId`, the `plugin://` authority map, the
- * capability-consent subject, the per-plugin settings/storage filename. That is
- * what keeps two projects shipping the same manifest id genuinely separate:
- * separate contributions, separate authority, separate grants, separate
- * teardown. Keying them by bare manifest id would give one project's revoke the
- * power to sweep the other's registrations, and one project's grant the power
- * to answer for both.
- *
- * The separator is `__` rather than `/` or `:` on purpose: an instance key is
- * joined onto a filesystem path for the user-scope settings and storage files,
- * and both of those characters are either a path separator or illegal on
- * Windows. A project id is 64 lowercase hex (`mintProjectId`) and a manifest id
- * is `publisher.name` in `[a-z0-9-]`, so neither half can contain `__` and the
- * parse below is unambiguous.
- */
-export const PROJECT_PLUGIN_INSTANCE_PREFIX = "project__";
-
-const PROJECT_PLUGIN_INSTANCE_SEPARATOR = "__";
-
-/** Build the instance key a project-owned plugin loads under. */
-export function makeProjectPluginInstanceKey(projectId: string, manifestId: string): string {
-  return `${PROJECT_PLUGIN_INSTANCE_PREFIX}${projectId}${PROJECT_PLUGIN_INSTANCE_SEPARATOR}${manifestId}`;
-}
-
-/**
- * Split an instance key back into its project and manifest halves, or `null`
- * when the key is not a project instance key (an installed or builtin plugin
- * id, which is its own manifest id).
- */
-export function parseProjectPluginInstanceKey(
-  instanceKey: string
-): { projectId: string; manifestId: string } | null {
-  if (!instanceKey.startsWith(PROJECT_PLUGIN_INSTANCE_PREFIX)) return null;
-  const rest = instanceKey.slice(PROJECT_PLUGIN_INSTANCE_PREFIX.length);
-  const cut = rest.indexOf(PROJECT_PLUGIN_INSTANCE_SEPARATOR);
-  if (cut <= 0) return null;
-  const projectId = rest.slice(0, cut);
-  const manifestId = rest.slice(cut + PROJECT_PLUGIN_INSTANCE_SEPARATOR.length);
-  if (projectId.length === 0 || manifestId.length === 0) return null;
-  return { projectId, manifestId };
-}
-
-/**
- * The manifest id behind a plugin instance key. Identity for an installed or
- * builtin plugin; the bare `publisher.name` for a project instance.
- *
- * This is what belongs in anything the *repository* sees — the project-scope
- * settings and storage filenames under `<projectRoot>/.daintree/` are
- * git-tracked, so writing a machine-local project id into them would commit one
- * developer's identity into everyone's checkout.
- */
-export function pluginManifestIdFromInstanceKey(instanceKey: string): string {
-  return parseProjectPluginInstanceKey(instanceKey)?.manifestId ?? instanceKey;
-}
-
-/** The owning project of a plugin instance key, or null for an app-global one. */
-export function projectIdFromPluginInstanceKey(instanceKey: string): string | null {
-  return parseProjectPluginInstanceKey(instanceKey)?.projectId ?? null;
-}
 
 /**
  * What the user decided about a project's `.daintree/plugins/` folder.
@@ -5886,6 +8352,8 @@ export interface ProjectPluginInfo {
   description?: string;
   /** Declared capabilities, disclosed in the manager. Never a consent gate. */
   capabilities: PluginCapability[];
+  /** The manifest's `worksWith`, disclosed in the manager. Absent when it lists none. */
+  worksWith?: string[];
   /** Declared `contributes.databases`, disclosed in the manager. */
   databases?: PluginDatabaseContribution[];
   /**
@@ -5896,6 +8364,8 @@ export interface ProjectPluginInfo {
   settings?: SettingDefinition[];
   /** The manifest declares a `location: "settings"` view. */
   declaresSettingsView?: boolean;
+  /** The manifest declares `contributes.worktreeDeleteNotes`, so the manager offers its mute (#13805). */
+  declaresWorktreeDeleteNotes?: boolean;
   /** Directory name under `.daintree/plugins/`. Not required to equal `id`. */
   dirName: string;
   state: ProjectPluginState;
@@ -5964,6 +8434,8 @@ export interface ProjectPluginsChangedEvent {
   projectId: string;
   plugins: ProjectPluginInfo[];
   trust: ProjectPluginTrustState;
+  /** The project's application, or `null` when none of its plugins declares one. */
+  application?: ProjectApplicationState | null;
 }
 
 /**

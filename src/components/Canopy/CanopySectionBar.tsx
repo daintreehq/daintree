@@ -18,10 +18,15 @@ export function SectionBar({
   count,
   trailing,
   fold,
+  menu,
+  countNoun = "run",
 }: {
   id: string;
   label: string;
-  count: number;
+  /** Left off for a section with nothing in it: its own words say so, not a 0. */
+  count?: number;
+  /** What the count counts, for the screen reader. */
+  countNoun?: string;
   trailing?: React.ReactNode;
   fold?: {
     expanded: boolean;
@@ -29,12 +34,17 @@ export function SectionBar({
     onToggle: () => void;
     /** Down from the bar into its first row. */
     onEnter: () => void;
+    /** Up from the bar, back into the list above it. */
+    onLeaveUp?: () => void;
+    buttonRef?: React.Ref<HTMLButtonElement>;
   };
+  /** The section's own menu, beside a folding bar rather than inside its button. */
+  menu?: React.ReactNode;
 }) {
   const heading = (
     <span id={id} className={cn(PALETTE_SECTION_LABEL_CLASS, "flex items-center gap-1.5")}>
       {label}
-      <CountBadge label={pluralize(count, "run")}>{count}</CountBadge>
+      {count !== undefined && <CountBadge label={pluralize(count, countNoun)}>{count}</CountBadge>}
     </span>
   );
   if (!fold) {
@@ -45,13 +55,20 @@ export function SectionBar({
       </div>
     );
   }
-  return (
+  const bar = (
     <button
+      ref={fold.buttonRef}
       type="button"
       aria-expanded={fold.expanded}
       aria-controls={fold.controls}
       onClick={fold.onToggle}
       onKeyDown={(event) => {
+        if (event.key === "ArrowUp" && fold.onLeaveUp) {
+          event.preventDefault();
+          event.stopPropagation();
+          fold.onLeaveUp();
+          return;
+        }
         if (event.key !== "ArrowDown" || !fold.expanded) return;
         event.preventDefault();
         event.stopPropagation();
@@ -59,7 +76,8 @@ export function SectionBar({
       }}
       className={cn(
         SECTION_BAR_CLASS,
-        "justify-between outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-selection-outline"
+        "justify-between outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-selection-outline",
+        menu !== undefined && "min-w-0 flex-1"
       )}
     >
       {heading}
@@ -71,5 +89,12 @@ export function SectionBar({
         )}
       />
     </button>
+  );
+  if (menu === undefined) return bar;
+  return (
+    <div className="flex w-full shrink-0 items-center pr-1.5">
+      {bar}
+      {menu}
+    </div>
   );
 }

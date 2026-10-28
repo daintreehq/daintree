@@ -6,7 +6,7 @@
  * on a hovered path (#11483), and the fleet's Park/Unpark (#13236) and Snooze
  * (#11783) items.
  */
-import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, cleanup, fireEvent, act } from "@testing-library/react";
 import type React from "react";
 
@@ -37,6 +37,9 @@ vi.mock("@/components/ui/context-menu", () => {
 
 const {
   dispatch,
+  hoveredUrl,
+  hoveredUrlPlugin,
+  openLink,
   hoveredFilePath,
   hoveredFileKind,
   reportFileLinkFailure,
@@ -51,6 +54,9 @@ const {
   pingTerminal,
 } = vi.hoisted(() => ({
   dispatch: vi.fn<(...args: unknown[]) => Promise<unknown>>(),
+  hoveredUrl: { current: null as string | null },
+  hoveredUrlPlugin: { current: null as string | null },
+  openLink: vi.fn(),
   hoveredFilePath: { current: null as string | null },
   hoveredFileKind: { current: "file" as "file" | "directory" | null },
   reportFileLinkFailure: vi.fn(),
@@ -75,19 +81,24 @@ vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch, get: () => undefined, list: () => [] },
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     // A live xterm is what unlocks the hovered-path branch; without it
     // `handleContextMenu` bails and clears every hover field.
     get: () => ({ terminal: { getSelection: () => "" } }),
     getTerminal: () => undefined,
     getSelection: () => "",
-    getHoveredLinkText: () => null,
+    getHoveredLinkText: () => hoveredUrl.current,
+    getHoveredLinkPluginName: () => hoveredUrlPlugin.current,
+    openLink,
     getHoveredFilePath: () => hoveredFilePath.current,
     getHoveredFileKind: () => (hoveredFilePath.current ? hoveredFileKind.current : null),
     openHoveredLink: vi.fn(),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("@/services/terminal/FileLinksAddon", () => ({ reportFileLinkFailure }));
 
@@ -143,6 +154,7 @@ vi.mock("@/store", () => {
 
 import { TerminalContextMenu } from "../TerminalContextMenu";
 import { AGENT_SNOOZE_LABEL } from "@shared/utils/agentSnoozeDurations";
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 
 const agentPanel = {
   id: "panel-1",
@@ -185,6 +197,12 @@ const terminal = {
   worktreeId: "wt-1",
   hasPty: true,
 };
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
+});
 
 describe("TerminalContextMenu — a backgrounded panel", () => {
   beforeEach(() => {
@@ -482,6 +500,38 @@ describe("TerminalContextMenu — open in file browser (#11483)", () => {
  */
 const parkRun = vi.fn(() => Promise.resolve({ parkedAt: 0 }));
 const unparkRun = vi.fn(() => Promise.resolve(true));
+
+describe("TerminalContextMenu — a URL a plugin claims (#13798)", () => {
+  const URL_TEXT = "https://records.example.com/r/42";
+
+  afterEach(() => {
+    hoveredUrl.current = null;
+    hoveredUrlPlugin.current = null;
+    openLink.mockReset();
+  });
+
+  it("names the plugin and still offers the external browser, for the URL captured on open", () => {
+    hoveredUrl.current = URL_TEXT;
+    hoveredUrlPlugin.current = "Acme Records";
+    openMenu({ hovered: null });
+    // The hover ends once the pointer reaches the menu.
+    hoveredUrl.current = null;
+
+    act(() => screen.getByText("Open in external browser").click());
+    expect(openLink).toHaveBeenLastCalledWith("panel-1", URL_TEXT, { external: true });
+
+    act(() => screen.getByText("Open with Acme Records").click());
+    expect(openLink).toHaveBeenLastCalledWith("panel-1", URL_TEXT);
+    expect(screen.queryByText("Open link")).toBeNull();
+  });
+
+  it("keeps the plain Open link item for a URL no plugin claims", () => {
+    hoveredUrl.current = URL_TEXT;
+    openMenu({ hovered: null });
+    expect(screen.getByText("Open link")).toBeTruthy();
+    expect(screen.queryByText("Open in external browser")).toBeNull();
+  });
+});
 
 describe("TerminalContextMenu — Park and Unpark", () => {
   beforeEach(() => {

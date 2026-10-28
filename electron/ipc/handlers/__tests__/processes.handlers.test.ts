@@ -59,6 +59,47 @@ afterEach(() => {
 });
 
 describe("processes IPC (#13175)", () => {
+  it("lists the plugins' running children and workers, asking the census about each child", async () => {
+    const { pluginService } = await import("../../../services/PluginService.js");
+    vi.mocked(pluginService.listManagedProcesses).mockReturnValueOnce([
+      {
+        id: "h1",
+        pluginId: "acme.tools",
+        command: "/usr/bin/node",
+        args: ["--secret"],
+        cwd: null,
+        status: "running",
+        pid: 4242,
+        exitCode: null,
+        signal: null,
+        spawnedAt: 5,
+        restartCount: 0,
+      },
+    ] as never);
+    vi.mocked(pluginService.getWorkerGovernanceSnapshots).mockReturnValueOnce([
+      { kind: "plugin-worker", id: "acme.worker", pid: 4343 },
+    ] as never);
+    const getProcessInventory = vi.fn(async () => ({
+      inventories: [{ terminals: [], pidSamples: {}, available: true, sampledAt: 1 }],
+      shardsTotal: 1,
+      shardsFailed: 0,
+    }));
+    dispose = registerProcessesHandlers({
+      ptyClient: { getProcessInventory },
+    } as unknown as HandlerDependencies);
+
+    const snapshot = (await getHandler("processes:get-snapshot")(
+      EVENT
+    )) as ProcessInventorySnapshot;
+
+    expect(getProcessInventory).toHaveBeenCalledWith([4242]);
+    expect(snapshot.plugins.map((p) => [p.source, p.pid])).toEqual([
+      ["plugin-process", 4242],
+      ["plugin-worker", 4343],
+    ]);
+    expect(JSON.stringify(snapshot)).not.toContain("--secret");
+  });
+
   it("lists terminals from every project, named, whichever view asks", async () => {
     const getProcessInventory = vi.fn(async () => ({
       inventories: [

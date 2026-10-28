@@ -1,4 +1,4 @@
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { with as withTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 import { getPanelKindConfig, panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { isSmokeTestTerminalId } from "@shared/utils/smokeTestTerminals";
 import { logWarn } from "@/utils/logger";
@@ -581,6 +581,27 @@ export interface PanelRestorePhaseResult {
  *  - `backendTerminalMap` is mutated by reference; orphan detection depends
  *    on the surviving entries after the saved-panels loop.
  */
+const MRU_TERMINAL_PREFIX = "terminal:";
+
+/**
+ * The saved panel id the per-project MRU names as last on screen, for the
+ * `visiblePanelId` tier (#10527). Non-PTY panels share the `terminal:` key
+ * (#13763) but can never take that PTY-only tier, so they are skipped — the
+ * result is the head the list had before they were recorded. A `worktree:`
+ * entry ahead of every PTY panel still yields `undefined`.
+ */
+export function resolveVisiblePanelId(
+  mruList: readonly unknown[] | undefined,
+  isNonPtyPanel: (savedId: string) => boolean
+): string | undefined {
+  for (const entry of mruList ?? []) {
+    if (typeof entry !== "string" || !entry.startsWith(MRU_TERMINAL_PREFIX)) return undefined;
+    const savedId = entry.slice(MRU_TERMINAL_PREFIX.length);
+    if (!isNonPtyPanel(savedId)) return savedId;
+  }
+  return undefined;
+}
+
 export async function restorePanelsPhase(
   savedPanels: TerminalState[] | undefined,
   ctx: PanelRestoreContext
@@ -762,7 +783,16 @@ export async function restorePanelsPhase(
           if (saved.worktreeId !== undefined) {
             movedRootsById.set(saved.id, { oldRoot: saved.worktreeId, newRoot: patch.worktreeId });
           }
-          return { ...saved, ...patch };
+          return {
+            ...saved,
+            ...patch,
+            // A pending dock restore names the worktree the panel was docked
+            // with, so it follows the same move.
+            ...(saved.worktreeId !== undefined &&
+              saved.pendingDockWorktreeId === saved.worktreeId && {
+                pendingDockWorktreeId: patch.worktreeId,
+              }),
+          };
         })
       : savedPanels;
 
@@ -788,6 +818,8 @@ export async function restorePanelsPhase(
     }
 
     const resumeOnRestart = resolveResumeOnRestart(agentSettings);
+    // One time for every pane this pass rebuilds (#14017).
+    const restoredAt = Date.now();
 
     // Decide which panes may resume what, before any restore task runs. At most
     // one pane per (agent, cwd) may use the agent's resume-latest fallback, none
@@ -958,9 +990,10 @@ export async function restorePanelsPhase(
             restoredIdsByIndex.set(capturedIndex, restoredTerminalId);
 
             if (backendTerminal.activityTier) {
-              terminalInstanceService.initializeBackendTier(
-                restoredTerminalId,
-                backendTerminal.activityTier
+              const tier = backendTerminal.activityTier;
+              withTerminalService(
+                (service) => service.initializeBackendTier(restoredTerminalId, tier),
+                restoredTerminalId
               );
             }
 
@@ -1023,9 +1056,10 @@ export async function restorePanelsPhase(
                 restoredIdsByIndex.set(capturedIndex, restoredTerminalId);
 
                 if (reconnectedTerminal.activityTier) {
-                  terminalInstanceService.initializeBackendTier(
-                    restoredTerminalId,
-                    reconnectedTerminal.activityTier
+                  const tier = reconnectedTerminal.activityTier;
+                  withTerminalService(
+                    (service) => service.initializeBackendTier(restoredTerminalId, tier),
+                    restoredTerminalId
                   );
                 }
 
@@ -1104,6 +1138,7 @@ export async function restorePanelsPhase(
                     resolvedResumeLatestSessionId,
                     coldLaunch,
                     resumeOnRestart,
+                    restoredAt,
                   }
                 );
 
@@ -1191,7 +1226,12 @@ export async function restorePanelsPhase(
               // Same normalization the PTY paths get from
               // `resolveRestoredWorktreeId`: this builder keeps `saved.worktreeId`
               // untouched, so a worktree-less workspace needs it cleared here too.
-              if (!workspaceHasWorktrees) nonPtyArgs.worktreeId = undefined;
+              if (!workspaceHasWorktrees) {
+                nonPtyArgs.worktreeId = undefined;
+                if (nonPtyArgs.pendingDockWorktreeId !== undefined) {
+                  nonPtyArgs.pendingDockWorktreeId = null;
+                }
+              }
               // Not re-parked: there is no process to keep alive, and the
               // background list shows only terminals, so a parked browser or
               // preview would be left with no way back. It returns to the
@@ -1375,7 +1415,11 @@ export async function restorePanelsPhase(
         const restoredTerminalId = await addPanel(orphanArgs);
 
         if (terminal.activityTier) {
-          terminalInstanceService.initializeBackendTier(restoredTerminalId, terminal.activityTier);
+          const tier = terminal.activityTier;
+          withTerminalService(
+            (service) => service.initializeBackendTier(restoredTerminalId, tier),
+            restoredTerminalId
+          );
         }
 
         restoreTasks.push({

@@ -25,8 +25,8 @@ vi.mock("@/controllers", () => ({
   },
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     get: vi.fn().mockReturnValue(null),
     getAgentState: vi.fn(),
     addAgentStateListener: vi.fn(() => vi.fn()),
@@ -39,8 +39,11 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     optimizeForDock: vi.fn(),
     suppressResizesDuringProjectSwitch: vi.fn(),
     detachForProjectSwitch: vi.fn(),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("@/clients/appClient", () => ({
   appClient: {
@@ -51,7 +54,7 @@ vi.mock("@/clients/appClient", () => ({
 import { useLayoutUndoStore } from "../layoutUndoStore";
 import { usePanelStore } from "../panelStore";
 import { useLayoutConfigStore } from "../layoutConfigStore";
-import { setWorktreeSelectionAccessor } from "@/store/storeAccessors";
+import { setProjectHomeExitAccessor, setWorktreeSelectionAccessor } from "@/store/storeAccessors";
 import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
 import type { TabGroup } from "@shared/types";
 
@@ -574,7 +577,7 @@ describe("layoutUndoStore", () => {
       expect(state.preMaximizeLayout).toBeNull();
     });
 
-    it("keeps the live maximize target so redo can return to fullscreen", () => {
+    it("restores the maximize target on redo so it returns to fullscreen", () => {
       const a = makeTerminal({ id: "a", location: "grid" });
       const b = makeTerminal({ id: "b", location: "grid" });
       seedTerminals([a, b]);
@@ -592,6 +595,41 @@ describe("layoutUndoStore", () => {
       const state = usePanelStore.getState();
       expect(state.maximizedId).toBe("b");
       expect(state.maximizeTarget).toEqual({ type: "panel", id: "b" });
+    });
+
+    // #13780: a layout that maximizes is undone in one step. Leaving the target
+    // behind would turn the next maximize click on that panel into an unmaximize.
+    it("clears the maximize target when undo returns to an unmaximized grid", () => {
+      const a = makeTerminal({ id: "a", location: "grid" });
+      const b = makeTerminal({ id: "b", location: "grid" });
+      seedTerminals([a, b]);
+
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
+      usePanelStore.setState({
+        maximizedId: "b",
+        maximizeTarget: { type: "panel", id: "b" },
+      });
+      useLayoutUndoStore.getState().undo();
+
+      expect(usePanelStore.getState().maximizeTarget).toBeNull();
+      usePanelStore.getState().toggleMaximize("b");
+      expect(usePanelStore.getState().maximizedId).toBe("b");
+    });
+
+    it("maximizes the panel alone when its maximized group didn't survive", () => {
+      const a = makeTerminal({ id: "a", location: "grid" });
+      const b = makeTerminal({ id: "b", location: "grid" });
+      seedTerminals([a, b]);
+      usePanelStore.setState({
+        maximizedId: "b",
+        maximizeTarget: { type: "group", id: "g-gone" },
+      });
+
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
+      usePanelStore.setState({ maximizedId: null, maximizeTarget: null });
+      useLayoutUndoStore.getState().undo();
+
+      expect(usePanelStore.getState().maximizeTarget).toEqual({ type: "panel", id: "b" });
     });
 
     it("keeps a retained pre-maximize layout when nothing was maximized", () => {
@@ -981,5 +1019,51 @@ describe("layoutUndoStore syncs restored worktree filings to the pty host", () =
     useLayoutUndoStore.getState().undo();
 
     expect(updateWorktreeId).not.toHaveBeenCalled();
+  });
+});
+
+describe("layoutUndoStore — leaving the project's Home", () => {
+  const exitHome = vi.fn();
+
+  beforeEach(() => {
+    exitHome.mockClear();
+    setProjectHomeExitAccessor(exitHome);
+    useLayoutUndoStore.setState({
+      undoStack: [],
+      redoStack: [],
+      canUndo: false,
+      canRedo: false,
+    });
+  });
+
+  afterEach(() => {
+    setProjectHomeExitAccessor(() => {});
+  });
+
+  it("leaves Home when undo hands focus back to a grid panel", () => {
+    const t1 = makeTerminal({ id: "t1", location: "grid" });
+    const t2 = makeTerminal({ id: "t2", location: "grid" });
+    seedTerminals([t1, t2]);
+    useLayoutUndoStore.getState().pushLayoutSnapshot();
+    setTerminals([{ ...t1, location: "dock" }, t2]);
+    usePanelStore.setState({ focusedId: "t2" });
+
+    useLayoutUndoStore.getState().undo();
+
+    expect(usePanelStore.getState().focusedId).toBe("t1");
+    expect(exitHome).toHaveBeenCalledTimes(1);
+  });
+
+  it("stays on Home when undo hands focus back to a dock panel", () => {
+    const t1 = makeTerminal({ id: "t1", location: "dock" });
+    const t2 = makeTerminal({ id: "t2", location: "grid" });
+    seedTerminals([t1, t2]);
+    useLayoutUndoStore.getState().pushLayoutSnapshot();
+    usePanelStore.setState({ focusedId: "t2" });
+
+    useLayoutUndoStore.getState().undo();
+
+    expect(usePanelStore.getState().focusedId).toBe("t1");
+    expect(exitHome).not.toHaveBeenCalled();
   });
 });

@@ -12,14 +12,14 @@ import {
   type CanopySeen,
   isCanopyUnread,
 } from "@shared/types/ipc/canopy";
-import type { PilotProjectGroup, PilotRow } from "@/components/Pilot/pilotRows";
+import type { PilotAgentRow, PilotProjectGroup } from "@/components/Pilot/pilotRows";
 import { getTerminalTaskTitle } from "@/utils/terminalTitleDisplay";
 
 export interface CanopyItem {
   runId: string;
   workspaceId: string;
-  row: PilotRow;
-  workspace: Pick<PilotProjectGroup, "name" | "emoji" | "color" | "kind" | "isCurrent">;
+  row: PilotAgentRow;
+  workspace: Pick<PilotProjectGroup, "name" | "host" | "emoji" | "color" | "kind" | "isCurrent">;
   /** What the card is drawn as. The classifier's reading once it has one. */
   kind: CanopyCategory;
   /** The classifier's card, when it still describes the run's current state. */
@@ -127,6 +127,10 @@ export interface CanopyReadState {
   failed: boolean;
   /** Runs whose own last read failed. */
   failedRuns?: ReadonlySet<string>;
+  /** The reader is off for every run: no words are coming, so no bone promises them. */
+  off?: boolean;
+  /** Runs on a host whose reader is off, among hosts read together. */
+  offRuns?: ReadonlySet<string>;
 }
 
 const READING: CanopyReadState = { failed: false };
@@ -138,10 +142,23 @@ const READING: CanopyReadState = { failed: false };
  */
 export const PERMISSION_FLOOR = 92;
 
+/**
+ * The user parked or snoozed this run in Pilot. The record is the user's own
+ * decision and beats every observed state, an approval included; it ends only
+ * by their release paths, or a snooze expiring, after which main drops it.
+ */
+export function itemPutAside(item: CanopyItem): boolean {
+  return item.row.run.park !== undefined || item.row.run.snooze !== undefined;
+}
+
+/** Where a parked or snoozed run sorts at the highest: with the low-priority runs. */
+export const PUT_ASIDE_PRIORITY = 15;
+
 /** Daintree itself sees the agent stopped on an approval dialog, and nobody has answered it. */
 export function itemAwaitsPermission(item: CanopyItem): boolean {
   const run = item.row.run;
   return (
+    !itemPutAside(item) &&
     run.agentState === "waiting" &&
     run.waitingReason === "approval" &&
     !itemHandled(item) &&
@@ -228,6 +245,7 @@ export function itemPriority(item: CanopyItem, nowMs: number): number {
   // otherwise rank it as the prompt the user just answered.
   if (itemHandled(item)) return 0;
   const read = readPriority(item);
+  if (itemPutAside(item)) return Math.min(read, PUT_ASIDE_PRIORITY);
   if (itemAwaitsPermission(item)) return Math.max(read, PERMISSION_FLOOR);
   if (!itemIsBusy(item)) return read;
   return Math.max(read, checkInPriority(item, nowMs));
@@ -246,6 +264,7 @@ export function shownPriority(item: CanopyItem, nowMs: number): number | null {
   // A reading stands until the next replaces it while the run stays the kind
   // it was read as; once Daintree sees it change kind, the number goes.
   const read = card === null || card.priorityFromEarlierRead ? null : card.priority;
+  if (itemPutAside(item)) return read === null ? null : Math.min(read, PUT_ASIDE_PRIORITY);
   // Daintree's own observation needs no reading behind it.
   if (itemAwaitsPermission(item)) return Math.max(read ?? 0, PERMISSION_FLOOR);
   if (!itemIsBusy(item) || itemHandled(item)) return read;
@@ -271,7 +290,11 @@ export function unseenLabelMs(item: CanopyItem, nowMs: number): number | null {
  * or failing that its worktree's name.
  */
 export function itemSubject(item: CanopyItem): string {
-  const { row } = item;
+  return rowSubject(item.row, item.workspace.name);
+}
+
+/** {@link itemSubject} for a row alone, with the name of the project it runs in. */
+export function rowSubject(row: PilotAgentRow, workspaceName: string | undefined): string {
   const run = row.run;
   const panelNamesWork =
     run.titleMode === "user" ||
@@ -284,9 +307,19 @@ export function itemSubject(item: CanopyItem): string {
       cwd: run.cwd,
     }) !== null;
   if (panelNamesWork) return row.title;
-  // A pane named only for its agent says nothing about which one this is; where
-  // it runs does, until the readers have titled the work.
-  return item.card?.task ?? row.worktreeLabel ?? item.workspace.name ?? row.title;
+  // A pane named only for its agent says nothing about which one this is;
+  // where it runs does. Never a line off the screen: those go beneath it.
+  return row.worktreeLabel ?? workspaceName ?? row.title;
+}
+
+/** Whether a card line only says again what the row's title already does. */
+export function repeatsSubject(item: CanopyItem, text: string): boolean {
+  const flat = (value: string) =>
+    value
+      .replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "")
+      .replace(/\s+/g, " ")
+      .toLowerCase();
+  return flat(text) !== "" && flat(text) === flat(itemSubject(item));
 }
 
 /** How far through the user's task a run is, as the row shows it; null when nothing says. */
@@ -419,9 +452,8 @@ export function itemHandled(item: CanopyItem): boolean {
 }
 
 /**
- * The latest reading — the classifier's, or the describer's once it has
- * written the card — says the agent finished its task, and Daintree itself
- * sees it stopped rather than working. A reading only an LLM can make, offered
+ * The latest reading says the agent finished its task, and Daintree itself
+ * sees it stopped rather than working. A reading only a model can make, offered
  * as a suggestion: the panel suggests closing the terminal, it never does.
  */
 export function itemLooksDone(item: CanopyItem): boolean {
@@ -452,7 +484,7 @@ export function repliedAt(item: CanopyItem): number | null {
  * read the screen — Daintree's own state says the agent is waiting.
  */
 export function itemNeedsAttention(item: CanopyItem): boolean {
-  if (itemHandled(item) || itemArchived(item)) return false;
+  if (itemHandled(item) || itemArchived(item) || itemPutAside(item)) return false;
   if (itemAwaitsPermission(item)) return true;
   // Daintree's own stall observation: working, and no output for ten minutes.
   // Whether it is stuck or just slow, it is worth a look.
@@ -461,12 +493,11 @@ export function itemNeedsAttention(item: CanopyItem): boolean {
   // something left to check, decide or answer. A finished turn with nothing
   // left (40), an idle session (20) or work going normally (5) stays in the
   // list but is not counted: a count that includes what needs no action
-  // teaches the user to stop reading it. The quick classifier's probability
-  // leans towards "needs you" (it passed fresh, idle sessions at 0.55–0.72) —
-  // right for a gate, wrong for the count, and counting by it made a run flip
-  // in and out of the count as the classifier's and the describer's readings
-  // took turns. Its own priority (a finished turn at 50, an ask at 86–92)
-  // sits on the same bands as the describer's score.
+  // teaches the user to stop reading it. The attention probability leans
+  // towards "needs you" (it passes fresh, idle sessions) — right for a gate,
+  // wrong for the count, and counting by it made a run flip in and out of the
+  // count. Its priority (a finished turn at 50, an ask at 86–92) sits on the
+  // same bands as the words' score.
   return readPriority(item) >= NEEDS_YOU_FLOOR;
 }
 
@@ -519,6 +550,7 @@ export function buildCanopyInbox(
         row,
         workspace: {
           name: group.name,
+          ...(group.host ? { host: group.host } : {}),
           emoji: group.emoji,
           color: group.color,
           kind: group.kind,
@@ -538,9 +570,11 @@ export function buildCanopyInbox(
         // now, so it draws none; a run put aside is not read for words until
         // it comes back.
         pending:
-          card === null
-            ? !read.failed && disposition === null
-            : card.describing || (stale && !read.failed && disposition === null),
+          read.off === true || read.offRuns?.has(row.run.runId) === true
+            ? false
+            : card === null
+              ? !read.failed && disposition === null
+              : card.describing || (stale && !read.failed && disposition === null),
         stale,
         failed: read.failedRuns?.has(row.run.runId) ?? false,
         disposition,
@@ -589,6 +623,7 @@ export function itemSearchText(item: CanopyItem): string {
   const run = row.run;
   return [
     item.workspace.name,
+    item.workspace.host,
     itemSubject(item),
     row.title,
     run.title,

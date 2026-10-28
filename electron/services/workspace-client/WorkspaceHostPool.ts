@@ -251,6 +251,22 @@ export class WorkspaceHostPool {
     })();
   }
 
+  private createHost(normalizedPath: string): WorkspaceHostProcess {
+    const host = new WorkspaceHostProcess(normalizedPath, this.config);
+    host.setLogLevelOverrides(this.logLevelOverridesCache);
+    host.relayFetchThrottle(this.fetchThrottleMultiplierCache);
+    if (this.forgeProviderMatchersCache !== null) {
+      host.relayForgeProviderMatchers(this.forgeProviderMatchersCache);
+    }
+    if (this.monitorConfigCache !== null) {
+      host.updateMonitorConfig(this.monitorConfigCache);
+    }
+    if (this.workspacePolicyCache !== null) {
+      host.setWorkspacePowerPolicy(this.workspacePolicyCache, true);
+    }
+    return host;
+  }
+
   /** Resolves with whether an existing host was reused ("warm") or one was spawned ("cold"). */
   async loadProject(rootPath: string, windowId: number): Promise<HostLoadKind> {
     const normalizedPath = this.normalizeProjectPath(rootPath);
@@ -263,7 +279,8 @@ export class WorkspaceHostPool {
 
     const existingEntry = this.entries.get(normalizedPath);
     if (existingEntry) {
-      const isReadyFailed = await existingEntry.currentReadyPromise.then(
+      const awaitedReady = existingEntry.currentReadyPromise;
+      const isReadyFailed = await awaitedReady.then(
         () => false,
         () => true
       );
@@ -274,7 +291,12 @@ export class WorkspaceHostPool {
       // No reference is held across that wait, so the entry was still dormant
       // and a reclaim, the warm cap or the grace timer may have disposed it.
       // Re-inserting it would attach the window to a dead host; start over.
-      if (this.entries.get(normalizedPath) !== existingEntry) {
+      // Likewise when the entry's host was replaced or restarted in place during
+      // the wait: the readiness just awaited belongs to the previous process.
+      if (
+        this.entries.get(normalizedPath) !== existingEntry ||
+        existingEntry.currentReadyPromise !== awaitedReady
+      ) {
         return this.loadProject(rootPath, windowId);
       }
       if (isReadyFailed) {
@@ -313,18 +335,7 @@ export class WorkspaceHostPool {
       }
     }
 
-    const host = new WorkspaceHostProcess(normalizedPath, this.config);
-    host.setLogLevelOverrides(this.logLevelOverridesCache);
-    host.relayFetchThrottle(this.fetchThrottleMultiplierCache);
-    if (this.forgeProviderMatchersCache !== null) {
-      host.relayForgeProviderMatchers(this.forgeProviderMatchersCache);
-    }
-    if (this.monitorConfigCache !== null) {
-      host.updateMonitorConfig(this.monitorConfigCache);
-    }
-    if (this.workspacePolicyCache !== null) {
-      host.setWorkspacePowerPolicy(this.workspacePolicyCache, true);
-    }
+    const host = this.createHost(normalizedPath);
 
     const projectId = projectStore.resolveProjectIdForPath(normalizedPath);
     const initPromise = this.makeInitPromise(host, normalizedPath, projectId);
@@ -349,12 +360,13 @@ export class WorkspaceHostPool {
     } catch (error) {
       if (this.entries.get(normalizedPath) === newEntry) {
         this.entries.delete(normalizedPath);
-        newEntry.windowIds.delete(windowId);
-        newEntry.refCount--;
+        this.detachWindow(newEntry, windowId);
         newEntry.host.dispose("init-failed");
       }
       throw error;
     }
+
+    if (this.entries.get(normalizedPath) === newEntry) this.announceSpawn(newEntry);
 
     if (isStale()) {
       // Superseded while the host was spawning. Keep the now-warm host for a
@@ -366,8 +378,7 @@ export class WorkspaceHostPool {
         this.entries.get(normalizedPath) === newEntry &&
         this.windowToProject.get(windowId) !== normalizedPath
       ) {
-        newEntry.windowIds.delete(windowId);
-        newEntry.refCount--;
+        this.detachWindow(newEntry, windowId);
         if (newEntry.refCount <= 0) {
           newEntry.host.send({ type: "background" });
           this.scheduleDormantCleanup(normalizedPath, newEntry);
@@ -390,18 +401,7 @@ export class WorkspaceHostPool {
 
     if (this.entries.has(normalizedPath)) return;
 
-    const host = new WorkspaceHostProcess(normalizedPath, this.config);
-    host.setLogLevelOverrides(this.logLevelOverridesCache);
-    host.relayFetchThrottle(this.fetchThrottleMultiplierCache);
-    if (this.forgeProviderMatchersCache !== null) {
-      host.relayForgeProviderMatchers(this.forgeProviderMatchersCache);
-    }
-    if (this.monitorConfigCache !== null) {
-      host.updateMonitorConfig(this.monitorConfigCache);
-    }
-    if (this.workspacePolicyCache !== null) {
-      host.setWorkspacePowerPolicy(this.workspacePolicyCache, true);
-    }
+    const host = this.createHost(normalizedPath);
 
     const projectId = projectStore.resolveProjectIdForPath(normalizedPath);
     const initPromise = this.makeInitPromise(host, normalizedPath, projectId);
@@ -422,20 +422,56 @@ export class WorkspaceHostPool {
     this.wireHostEvents(entry);
     this.scheduleDormantCleanup(normalizedPath, entry);
 
-    initPromise.catch(() => {
-      if (this.entries.get(normalizedPath) === entry) {
-        this.entries.delete(normalizedPath);
-        entry.host.dispose("init-failed");
+    initPromise.then(
+      () => {
+        if (this.entries.get(normalizedPath) === entry) this.announceSpawn(entry);
+      },
+      () => {
+        if (this.entries.get(normalizedPath) === entry) {
+          this.entries.delete(normalizedPath);
+          entry.host.dispose("init-failed");
+        }
       }
-    });
+    );
+  }
+
+  /**
+   * A new host process for a project is up and loaded. Holders of the host it
+   * replaced lost their worktree ports when that one went away, and a view
+   * whose port closed with it has nothing of its own that reconnects it.
+   */
+  private announceSpawn(entry: ProcessEntry): void {
+    // Listeners run synchronously; one that throws must not fail a load whose
+    // host came up fine.
+    try {
+      this.emit("host-spawned", { projectPath: entry.projectPath, host: entry.host });
+    } catch (error) {
+      console.error("[WorkspaceClient] A host-spawned listener failed:", error);
+    }
+  }
+
+  /**
+   * Drop `windowId`'s hold on `entry`, if it has one. A window can still be
+   * mapped to a project whose host was disposed and re-spawned under it; it
+   * never held the replacement, and releasing it must not take another
+   * holder's reference with it.
+   */
+  private detachWindow(entry: ProcessEntry, windowId: number): void {
+    if (entry.windowIds.delete(windowId)) entry.refCount--;
+  }
+
+  /** Whether `windowId` holds the host currently serving `projectPath`. */
+  isWindowAttached(windowId: number, projectPath: string): boolean {
+    return (
+      this.entries.get(this.normalizeProjectPath(projectPath))?.windowIds.has(windowId) ?? false
+    );
   }
 
   private releaseOldProject(windowId: number, oldProjectPath: string): void {
     const oldEntry = this.entries.get(oldProjectPath);
     if (!oldEntry) return;
 
-    oldEntry.windowIds.delete(windowId);
-    oldEntry.refCount--;
+    this.detachWindow(oldEntry, windowId);
 
     if (oldEntry.refCount <= 0) {
       // No window holds this project anymore — demote its host to background so
@@ -462,8 +498,7 @@ export class WorkspaceHostPool {
     const entry = this.entries.get(projectPath);
     if (!entry) return;
 
-    entry.windowIds.delete(windowId);
-    entry.refCount--;
+    this.detachWindow(entry, windowId);
 
     for (const [wcId, wc] of entry.directPortViews) {
       if (wc.isDestroyed()) {
@@ -720,6 +755,34 @@ export class WorkspaceHostPool {
     entry.host.manualRestart();
   }
 
+  /**
+   * Swap `entry`'s host for a freshly spawned one, keeping the entry itself —
+   * its holders, ref count, dormant timer and direct-port views — so nothing
+   * attached to the project has to re-attach. For a host whose loaded state no
+   * longer matches the folder and can't be reloaded in place: `load-project`
+   * is not re-entrant, so a fresh process is the only way to re-run it (#14178).
+   *
+   * Resolves once the replacement has loaded, after announcing it the way a
+   * crash restart is announced, so every view holding a port to the old host
+   * is re-brokered to the new one.
+   */
+  replaceHost(entry: ProcessEntry, reason: WorkspaceHostDisposeReason): Promise<void> {
+    const oldHost = entry.host;
+    const host = this.createHost(entry.projectPath);
+    const initPromise = this.makeInitPromise(host, entry.projectPath, entry.projectId);
+    entry.host = host;
+    entry.initPromise = initPromise;
+    entry.currentReadyPromise = initPromise;
+    this.wireHostEvents(entry);
+    oldHost.dispose(reason);
+
+    return initPromise.then(() => {
+      if (this.entries.get(entry.projectPath) !== entry || entry.host !== host) return;
+      this.backgroundIfDormant(entry.projectPath, entry);
+      this.emit("host-restarted", { projectPath: entry.projectPath, host });
+    });
+  }
+
   private async reloadProjectAfterRestart(entry: ProcessEntry): Promise<void> {
     const host = entry.host;
     const [, forgeSettings] = await Promise.all([
@@ -759,18 +822,24 @@ export class WorkspaceHostPool {
 
   private wireHostEvents(entry: ProcessEntry): void {
     const host = entry.host;
+    // A replaced host can still emit on its way out; only the entry's current
+    // host speaks for it.
+    const isCurrent = () => entry.host === host;
 
     host.on("host-event", (event) => {
+      if (!isCurrent()) return;
       this.routeHostEventFn?.(entry, event);
     });
 
     host.on("host-recovering", () => {
+      if (!isCurrent()) return;
       sendToEntryWindows(entry, CHANNELS.WORKTREE_HOST_DISCONNECTED, {
         fatal: false,
       });
     });
 
     host.on("host-crash", (code: number) => {
+      if (!isCurrent()) return;
       sendToEntryWindows(entry, CHANNELS.WORKTREE_HOST_DISCONNECTED, {
         fatal: true,
       });
@@ -778,6 +847,7 @@ export class WorkspaceHostPool {
     });
 
     host.on("restarted", () => {
+      if (!isCurrent()) return;
       const restartPromise = this.reloadProjectAfterRestart(entry);
       restartPromise.catch((err) => {
         console.error(`[WorkspaceClient] Failed to reload project after host restart:`, err);

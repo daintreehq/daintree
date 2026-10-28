@@ -13,7 +13,11 @@
  */
 
 import { terminalClient } from "@/clients";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import {
+  load as loadTerminalService,
+  peek as peekTerminalService,
+  with as withTerminalService,
+} from "@/services/terminal/terminalInstanceServiceAccessor";
 import type { PanelLocation, AgentState } from "@/types";
 import type {
   TerminalSpawnOptions,
@@ -23,6 +27,7 @@ import type {
   AgentFallbackTriggeredPayload,
   TerminalActivityPayload,
   TerminalStatusPayload,
+  TerminalExitContext,
   SpawnResult,
 } from "@shared/types";
 import type { TerminalReliabilityMetricPayload } from "@shared/types/pty-host";
@@ -152,7 +157,8 @@ class TerminalRegistryController {
       // Awaited so the instance exists before any sendPtyResize below targets
       // it — prewarmTerminal is async now that the lazy Unicode11 addon is
       // loaded during terminal construction (#10840).
-      await terminalInstanceService.prewarmTerminal(id, launchAgentId, terminalOptions, {
+      const service = peekTerminalService() ?? (await loadTerminalService());
+      await service.prewarmTerminal(id, launchAgentId, terminalOptions, {
         offscreen,
         widthPx,
         heightPx,
@@ -165,7 +171,7 @@ class TerminalRegistryController {
       // sync with xtermConfig (1.0 — see BASE_TERMINAL_OPTIONS).
       if (isAgent && !offscreen) {
         const { cols, rows } = calculateTerminalDimensions(widthPx, heightPx, fontSize);
-        terminalInstanceService.sendPtyResize(id, cols, rows);
+        service.sendPtyResize(id, cols, rows);
       }
     } catch (error) {
       console.warn(`[TerminalRegistryController] Failed to prewarm terminal ${id}:`, error);
@@ -177,7 +183,7 @@ class TerminalRegistryController {
    */
   async kill(id: string): Promise<void> {
     await terminalClient.kill(id);
-    terminalInstanceService.destroy(id);
+    peekTerminalService()?.destroy(id);
   }
 
   /**
@@ -212,21 +218,23 @@ class TerminalRegistryController {
    * Apply renderer policy for a terminal (affects refresh rate).
    */
   applyRendererPolicy(id: string, tier: TerminalRefreshTier): void {
-    terminalInstanceService.applyRendererPolicy(id, tier);
+    // Queued rather than peeked: the policy records the id even before an
+    // instance exists, so a tier set ahead of load must still land.
+    withTerminalService((service) => service.applyRendererPolicy(id, tier), id);
   }
 
   /**
    * Destroy a terminal's renderer-side instance.
    */
   destroyRendererInstance(id: string): void {
-    terminalInstanceService.destroy(id);
+    peekTerminalService()?.destroy(id);
   }
 
   /**
    * Notify that user input occurred (for activity tracking).
    */
   notifyUserInput(id: string): void {
-    terminalInstanceService.notifyUserInput(id);
+    peekTerminalService()?.notifyUserInput(id);
   }
 
   /**
@@ -294,7 +302,7 @@ class TerminalRegistryController {
     return terminalClient.onRestored(handler);
   }
 
-  onExit(handler: (id: string, exitCode: number) => void) {
+  onExit(handler: (id: string, exitCode: number, context?: TerminalExitContext) => void) {
     return terminalClient.onExit(handler);
   }
 
@@ -336,7 +344,7 @@ class TerminalRegistryController {
     return terminalClient.onSpawnResult(handler);
   }
 
-  onReduceScrollback(handler: (data: { terminalIds: string[]; targetLines: number }) => void) {
+  onReduceScrollback(handler: (data: { targetLines: number }) => void) {
     return terminalClient.onReduceScrollback(handler);
   }
 

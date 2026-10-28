@@ -67,7 +67,7 @@ vi.mock("../../../services/GitServiceCache.js", () => ({
 }));
 
 const pluginServiceMock = vi.hoisted(() => ({
-  waitForInit: vi.fn(() => Promise.resolve()),
+  waitForCatalog: vi.fn(() => Promise.resolve()),
   activatePluginForForgeProvider: vi.fn(() => Promise.resolve()),
 }));
 
@@ -251,13 +251,13 @@ describe("registerForgeCredentialImportHandlers", () => {
       registryMock.getForgeProviderImpl.mockReturnValueOnce(undefined).mockReturnValue(impl);
 
       await expect(preview(PROVIDER_ID)).resolves.toMatchObject({ unavailable: false });
-      expect(pluginServiceMock.waitForInit).toHaveBeenCalled();
+      expect(pluginServiceMock.waitForCatalog).toHaveBeenCalled();
       expect(pluginServiceMock.activatePluginForForgeProvider).toHaveBeenCalledWith(PROVIDER_ID);
     });
 
     it("refuses a missing provider id without resolving a provider", async () => {
       await expect(preview("")).resolves.toEqual({ unavailable: true, reason: "invalid-request" });
-      expect(pluginServiceMock.waitForInit).not.toHaveBeenCalled();
+      expect(pluginServiceMock.waitForCatalog).not.toHaveBeenCalled();
     });
 
     it("reports a provider that can't be activated", async () => {
@@ -355,7 +355,7 @@ describe("registerForgeCredentialImportHandlers", () => {
 
     it("settles at the deadline even when plugin startup never finishes", async () => {
       vi.useFakeTimers();
-      pluginServiceMock.waitForInit.mockReturnValueOnce(new Promise(() => {}));
+      pluginServiceMock.waitForCatalog.mockReturnValueOnce(new Promise(() => {}));
       const sender = new FakeSender();
 
       const pending = getHandler("forge:preview-credential-import")(fakeEvent(sender), PROVIDER_ID);

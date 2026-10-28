@@ -4,7 +4,7 @@ import { usePaletteStore, usePanelStore } from "@/store";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
 import { useCanopyStore } from "@/store/canopyStore";
-import { usePluginContextKeyStore } from "@/store/pluginContextKeyStore";
+import { getChromeWhenContext } from "@/services/chromeWhenContext";
 
 /**
  * Live `when`-clause context for keybinding resolution — the documented
@@ -18,10 +18,9 @@ import { usePluginContextKeyStore } from "@/store/pluginContextKeyStore";
  * `!modalOpne` is always true, so a typo can broaden a binding rather than
  * disable it.
  *
- * Keys plugins publish with `host.setContext` sit under their manifest name
- * (`acme.beads.needsYou`). Manifest names are lowercase and every built-in key
- * is camelCase, so neither can shadow the other; built-ins are spread last
- * regardless.
+ * The shared chrome context comes first — plugin `host.setContext` keys under
+ * their manifest name (`acme.beads.needsYou`), this view's project facts and
+ * its presentation levels — and the focus and UI keys below are added on top.
  */
 export function buildKeybindingWhenContext(event: KeyboardEvent): WhenClauseContext {
   const target = event.target instanceof Element ? event.target : null;
@@ -46,7 +45,7 @@ export function buildKeybindingWhenContext(event: KeyboardEvent): WhenClauseCont
       target.isContentEditable === true);
 
   return {
-    ...usePluginContextKeyStore.getState().whenContext,
+    ...getChromeWhenContext(),
     terminalFocused: inTerminal,
     // xterm's own input is a textarea; it doesn't count as a text field.
     textInputFocused: editable && !inTerminal,

@@ -14,13 +14,16 @@ vi.mock("@/hooks/useWorktreeStore", () => ({
   useWorktreeStoreOptional: useWorktreeStoreOptionalMock,
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     getCachedSelection: () => "",
     get: () => undefined,
     notifyUserInput: vi.fn(),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 import { usePanelStore } from "@/store/panelStore";
 import { usePaletteStore } from "@/store/paletteStore";

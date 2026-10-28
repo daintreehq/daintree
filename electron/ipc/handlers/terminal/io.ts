@@ -18,6 +18,8 @@ import { normalizeObservedTitle } from "../../../../shared/utils/isUselessTitle.
 import { isPanelTitleMode, type PanelTitleMode } from "../../../../shared/types/panel.js";
 import { peekDriveLeaseService } from "../../../services/DriveLeaseService.js";
 import { events } from "../../../services/events.js";
+import { createLogger } from "../../../utils/logger.js";
+import { createKeyedLogLimiter } from "../../../utils/keyedLogLimiter.js";
 import {
   getWebContentsForProject,
   isCachedViewWebContents,
@@ -35,6 +37,9 @@ import type { TerminalSubmissionLookup } from "../../../../shared/types/terminal
 import type { TerminalOutputActivityLookup } from "../../../../shared/types/terminalStatus.js";
 
 /** Mirrors `terminal.getStatus`'s own `terminalIds` bound. */
+const logger = createLogger("main:TerminalIO");
+const refusalLogLimiter = createKeyedLogLimiter();
+
 const MAX_TERMINAL_LOOKUP_IDS = 256;
 /** Mirrors the bound `terminal.sendCommand`/`getStatus` put on the token. */
 const MAX_SUBMISSION_TOKEN_LENGTH = 128;
@@ -66,11 +71,29 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
    * only once Remote Hosts started it, so a machine that never used them never
    * asks. A terminal main cannot place has no lease to consult.
    */
-  const isDrivenElsewhere = (ctx: IpcContext, id: string): boolean => {
+  const isDrivenElsewhere = (ctx: IpcContext, id: string, operation: string): boolean => {
     const lease = peekDriveLeaseService();
     if (!lease || !ctx.endpoint) return false;
     const projectId = ptyClient.getTerminalProjectId(id);
-    return projectId !== null && !lease.isDriving(projectId, ctx.endpoint);
+    if (projectId === null || lease.isDriving(projectId, ctx.endpoint)) return false;
+    const holder = lease.getHolder(projectId);
+    const suppressedCount = refusalLogLimiter.take(
+      `${operation}:${ctx.endpoint.endpointId}:${holder?.leaseId ?? ""}`
+    );
+    if (suppressedCount !== null) {
+      logger.info("Terminal operation refused: another window drives the project", {
+        code: "DRIVEN_ELSEWHERE",
+        operation,
+        terminalId: id,
+        projectId,
+        endpointId: ctx.endpoint.endpointId,
+        clientId: ctx.endpoint.clientId,
+        holderClientId: holder?.clientId,
+        holderClientName: holder?.clientName,
+        suppressedCount,
+      });
+    }
+    return true;
   };
 
   const handleTerminalInput = (ctx: IpcContext, id: string, data: string) => {
@@ -79,7 +102,7 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
         console.error("Invalid terminal input parameters");
         return;
       }
-      if (isRefusedForRemoteCaller(ctx, id) || isDrivenElsewhere(ctx, id)) return;
+      if (isRefusedForRemoteCaller(ctx, id) || isDrivenElsewhere(ctx, id, "input")) return;
       ptyClient.write(id, data);
     } catch (error) {
       console.error("Error writing to terminal:", error);
@@ -93,7 +116,7 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
         console.error("Invalid terminal sendKey parameters");
         return;
       }
-      if (isRefusedForRemoteCaller(ctx, id) || isDrivenElsewhere(ctx, id)) return;
+      if (isRefusedForRemoteCaller(ctx, id) || isDrivenElsewhere(ctx, id, "sendKey")) return;
       ptyClient.sendKey(id, key);
     } catch (error) {
       console.error("Error sending key to terminal:", error);
@@ -112,7 +135,7 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
           typeof id === "string" &&
           id.length > 0 &&
           !isRefusedForRemoteCaller(ctx, id) &&
-          !isDrivenElsewhere(ctx, id)
+          !isDrivenElsewhere(ctx, id, "batchDoubleEscape")
       );
       if (validIds.length === 0) return;
       ptyClient.batchDoubleEscape(validIds);
@@ -140,7 +163,7 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
           typeof id === "string" &&
           id.length > 0 &&
           !isRefusedForRemoteCaller(ctx, id) &&
-          !isDrivenElsewhere(ctx, id)
+          !isDrivenElsewhere(ctx, id, "broadcastWrite")
       );
       if (validIds.length === 0 || data.length === 0) return;
       ptyClient.broadcastWrite(validIds, data, reportSuccess === true);
@@ -239,7 +262,7 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
           context: { terminalId: id },
         });
       }
-      if (isDrivenElsewhere(ctx, id)) {
+      if (isDrivenElsewhere(ctx, id, "submit")) {
         throw new AppError({
           code: "DRIVEN_ELSEWHERE",
           message: `terminal ${id} is driven elsewhere; only its driver may submit to it`,
@@ -272,7 +295,7 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
       const { id, cols, rows } = parseResult.data;
       // The port paths gate resizes on the drive lease; this fallback must
       // too, or a view that isn't driving could still set the PTY's grid.
-      if (isRefusedForRemoteCaller(ctx, id) || isDrivenElsewhere(ctx, id)) return;
+      if (isRefusedForRemoteCaller(ctx, id) || isDrivenElsewhere(ctx, id, "resize")) return;
       // Defensive backstop at the shared ceiling. The renderer already
       // normalized to the same bound before choosing a transport, so this
       // agrees with what the MessagePort path (which bypasses Main entirely)

@@ -71,6 +71,26 @@ const storeMock = vi.hoisted(() => {
   };
 });
 
+// Holds a settings write inside its drive-lease check, so a test can unload or
+// replace the plugin while the write is awaiting authorization.
+const driveLeaseGate = vi.hoisted(() => ({
+  hold: null as Promise<void> | null,
+  entered: vi.fn(),
+}));
+vi.mock("../plugin/pluginDriveLease.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugin/pluginDriveLease.js")>();
+  return {
+    ...actual,
+    assertPluginCallerDrives: async (
+      ...args: Parameters<typeof actual.assertPluginCallerDrives>
+    ) => {
+      driveLeaseGate.entered();
+      if (driveLeaseGate.hold) await driveLeaseGate.hold;
+      return actual.assertPluginCallerDrives(...args);
+    },
+  };
+});
+
 vi.mock("electron", () => ({
   app: appMock,
   ipcMain: ipcMainMock,
@@ -271,6 +291,7 @@ beforeEach(async () => {
   vi.clearAllMocks();
   storeMock._state.clear();
   safeStorageMock.state.available = false;
+  driveLeaseGate.hold = null;
   // The real cipher remembers a keychain that gave no key for the process;
   // each test here is a fresh run.
   _resetSecretStorageSessionForTests();
@@ -280,7 +301,7 @@ afterEach(async () => {
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
-type SettingsScope = "user" | "project";
+type SettingsScope = "user" | "project" | "local";
 type SettingsHostShape = (
   pluginId: string,
   binding?: { projectId: string | null; projectRoot: string | null }
@@ -289,6 +310,8 @@ type SettingsHostShape = (
     settings: {
       get: <T = unknown>(key: string, scope?: SettingsScope) => Promise<T | undefined>;
       set: <T = unknown>(key: string, value: T, scope?: SettingsScope) => Promise<void>;
+      unset: (key: string, scope?: SettingsScope) => Promise<void>;
+      missingRequired: () => Promise<string[]>;
       onDidChange: <T = unknown>(
         key: string,
         cb: (value: T | undefined) => void,
@@ -319,7 +342,13 @@ type ServiceWithSettingsManager = {
 
 async function setupSettingsService(
   pluginId: string,
-  settings?: Array<{ id: string; type: string; scope?: SettingsScope; default?: unknown }>
+  settings?: Array<{
+    id: string;
+    type?: string;
+    scope?: SettingsScope;
+    default?: unknown;
+    required?: boolean;
+  }>
 ): Promise<{ service: PluginService; settingsRoot: string }> {
   const pluginsRoot = path.join(tmpDir, "plugins");
   const dir = path.join(pluginsRoot, pluginId);
@@ -625,6 +654,235 @@ describe("createHost — settings", () => {
     expect(await host.settings.get<string>("token")).toBe("still-works");
   });
 
+  // #14092: a write classifies its key from the instance that declared it, so
+  // an unload — before the write or while it awaits authorization — can't
+  // downgrade a secret to plaintext or move it under the project root, and a
+  // write from a replaced instance never commits.
+  describe("writes stay bound to the declaring instance (#14092)", () => {
+    const projectId = "c".repeat(64);
+    type Timing = "before the write" | "while awaiting authorization";
+    const timings: Timing[] = ["before the write", "while awaiting authorization"];
+
+    /** Run `write` with `retire` landing at `timing`. */
+    async function writeAround(
+      timing: Timing,
+      write: () => Promise<void>,
+      retire: () => void
+    ): Promise<void> {
+      driveLeaseGate.entered.mockClear();
+      if (timing === "before the write") {
+        retire();
+        return write();
+      }
+      let release!: () => void;
+      driveLeaseGate.hold = new Promise<void>((resolve) => (release = resolve));
+      const pending = write();
+      expect(driveLeaseGate.entered).toHaveBeenCalled();
+      retire();
+      release();
+      return pending;
+    }
+
+    function replacePlugin(
+      service: PluginService,
+      pluginId: string,
+      settings: SettingDefinition[] | undefined
+    ): void {
+      const seam = service as unknown as {
+        plugins: Map<string, { manifest: PluginManifest }>;
+        _registerFakePluginForTests: (plugin: unknown) => void;
+      };
+      const current = seam.plugins.get(pluginId)!;
+      seam._registerFakePluginForTests({
+        ...current,
+        manifest: {
+          ...current.manifest,
+          contributes: { ...current.manifest.contributes, settings: settings ?? [] },
+        },
+      });
+    }
+
+    const secretScopes: Array<{
+      scope: "user" | "project" | "local";
+      file: (settingsRoot: string, pluginId: string) => string;
+    }> = [
+      { scope: "user", file: (root, id) => path.join(root, `${id}.json`) },
+      { scope: "project", file: (root, id) => path.join(root, "local", projectId, `${id}.json`) },
+      { scope: "local", file: (root, id) => path.join(root, "local", projectId, `${id}.json`) },
+    ];
+
+    describe.each(timings)("unloaded %s", (timing) => {
+      it.each(secretScopes)(
+        "keeps a $scope-scoped secret encrypted in its own file",
+        async ({ scope, file }) => {
+          safeStorageMock.state.available = true;
+          const projectDir = path.join(tmpDir, `proj-${scope}`);
+          projectStoreMock.getCurrentProject.mockReturnValue({ id: projectId, path: projectDir });
+          const pluginId = `acme.bound-secret-${scope}`;
+          const { service, settingsRoot } = await setupSettingsService(pluginId, [
+            { id: "token", type: "secret", scope },
+          ]);
+          const { host } = createSettingsHost(service, pluginId);
+
+          await writeAround(
+            timing,
+            () => host.settings.set("token", "synthetic-secret-value", scope),
+            () => service.unloadPlugin(pluginId)
+          );
+
+          const raw = await fs.readFile(file(settingsRoot, pluginId), "utf-8");
+          expect(raw).not.toContain("synthetic-secret-value");
+          expect((JSON.parse(raw) as Record<string, unknown>).token).toMatchObject({
+            __daintreeSecret: "daintree:secret:v1",
+          });
+          await expect(fs.access(path.join(projectDir, ".daintree"))).rejects.toThrow();
+        }
+      );
+
+      // Cleanup-time writes of ordinary settings (a deactivate() saving state)
+      // keep landing, in the scope the instance declared.
+      it("still persists an ordinary declared setting in its declared scope", async () => {
+        const projectDir = path.join(tmpDir, "proj-ordinary");
+        projectStoreMock.getCurrentProject.mockReturnValue({ id: projectId, path: projectDir });
+        const pluginId = "acme.bound-ordinary";
+        const { service } = await setupSettingsService(pluginId, [
+          { id: "channel", type: "string", scope: "project" },
+        ]);
+        const { host } = createSettingsHost(service, pluginId);
+
+        await writeAround(
+          timing,
+          () => host.settings.set("channel", "after-unload"),
+          () => service.unloadPlugin(pluginId)
+        );
+
+        const file = path.join(projectDir, ".daintree", "plugin-settings", `${pluginId}.json`);
+        expect(JSON.parse(await fs.readFile(file, "utf-8"))).toEqual({ channel: "after-unload" });
+      });
+
+      it.each(secretScopes)(
+        "still clears a $scope-scoped secret from its own file",
+        async ({ scope, file }) => {
+          safeStorageMock.state.available = true;
+          const projectDir = path.join(tmpDir, `proj-unset-${scope}`);
+          projectStoreMock.getCurrentProject.mockReturnValue({ id: projectId, path: projectDir });
+          const pluginId = `acme.bound-unset-${scope}`;
+          const { service, settingsRoot } = await setupSettingsService(pluginId, [
+            { id: "token", type: "secret", scope },
+            { id: "keep", type: "string", scope },
+          ]);
+          const { host } = createSettingsHost(service, pluginId);
+          await host.settings.set("token", "synthetic-secret-value");
+          await host.settings.set("keep", "kept");
+
+          await writeAround(
+            timing,
+            () => host.settings.unset("token"),
+            () => service.unloadPlugin(pluginId)
+          );
+
+          const secretFile = JSON.parse(
+            await fs.readFile(file(settingsRoot, pluginId), "utf-8")
+          ) as Record<string, unknown>;
+          expect(secretFile).not.toHaveProperty("token");
+        }
+      );
+    });
+
+    describe.each(timings)("replaced %s", (timing) => {
+      it.each([
+        {
+          change: "a secret the new instance no longer declares",
+          before: [{ id: "token", type: "secret" }],
+          after: undefined,
+        },
+        {
+          change: "an ordinary key the new instance declares secret",
+          before: [{ id: "token", type: "string" }],
+          after: [{ id: "token", type: "secret" }] as SettingDefinition[],
+        },
+      ])("rejects a write of $change and stores nothing", async ({ before, after }) => {
+        safeStorageMock.state.available = true;
+        const pluginId = "acme.bound-replaced";
+        const { service, settingsRoot } = await setupSettingsService(pluginId, before);
+        const { host } = createSettingsHost(service, pluginId);
+
+        await expect(
+          writeAround(
+            timing,
+            () => host.settings.set("token", "synthetic-secret-value"),
+            () => replacePlugin(service, pluginId, after)
+          )
+        ).rejects.toThrow(/^PLUGIN_UNLOADED: .*was replaced/);
+
+        if (timing === "before the write") expect(driveLeaseGate.entered).not.toHaveBeenCalled();
+        await expect(fs.access(path.join(settingsRoot, `${pluginId}.json`))).rejects.toThrow();
+      });
+
+      it("rejects an unset from the replaced instance", async () => {
+        const pluginId = "acme.bound-replaced-unset";
+        const declared: SettingDefinition[] = [{ id: "channel", type: "string" }];
+        const { service, settingsRoot } = await setupSettingsService(pluginId, declared);
+        const { host } = createSettingsHost(service, pluginId);
+        await host.settings.set("channel", "stored");
+
+        await expect(
+          writeAround(
+            timing,
+            () => host.settings.unset("channel"),
+            () => replacePlugin(service, pluginId, declared)
+          )
+        ).rejects.toThrow(/^PLUGIN_UNLOADED: .*was replaced/);
+
+        const file = path.join(settingsRoot, `${pluginId}.json`);
+        expect(JSON.parse(await fs.readFile(file, "utf-8"))).toEqual({ channel: "stored" });
+      });
+    });
+
+    // The successor unloading doesn't hand authority back to the instance it
+    // replaced: that instance declared the key ordinary, so its write would
+    // overwrite the successor's encrypted value with plaintext.
+    // A successor that never made a host (a lazy plugin whose secret was saved
+    // from the settings form) retires its predecessor just the same.
+    it.each(["made a host", "never made a host"])(
+      "keeps a replaced instance retired after a successor that %s unloads",
+      async (successorShape) => {
+        safeStorageMock.state.available = true;
+        const pluginId = `acme.bound-successor-${successorShape === "made a host" ? "hosted" : "hostless"}`;
+        const { service, settingsRoot } = await setupSettingsService(pluginId, [
+          { id: "token", type: "string" },
+        ]);
+        const { host: retired } = createSettingsHost(service, pluginId);
+        replacePlugin(service, pluginId, [{ id: "token", type: "secret" }]);
+        if (successorShape === "made a host") {
+          const { host: successor } = createSettingsHost(service, pluginId);
+          await successor.settings.set("token", "synthetic-secret-value");
+        } else {
+          const settings = (service as unknown as ServiceWithSettingsManager).settings;
+          const file = settings.resolveSettingsFilePath(pluginId, "user")!;
+          const store = settings.getOrCreateSettingsStore(pluginId, file) as unknown as {
+            set: (key: string, value: unknown, opts: { secret: boolean }) => Promise<boolean>;
+          };
+          await store.set("token", "synthetic-secret-value", { secret: true });
+        }
+        service.unloadPlugin(pluginId);
+
+        await expect(retired.settings.set("token", "synthetic-plain-value")).rejects.toThrow(
+          /^PLUGIN_UNLOADED: .*was replaced/
+        );
+        await expect(retired.settings.unset("token")).rejects.toThrow(
+          /^PLUGIN_UNLOADED: .*was replaced/
+        );
+
+        const raw = await fs.readFile(path.join(settingsRoot, `${pluginId}.json`), "utf-8");
+        expect(raw).not.toContain("synthetic-plain-value");
+        expect((JSON.parse(raw) as Record<string, unknown>).token).toMatchObject({
+          __daintreeSecret: "daintree:secret:v1",
+        });
+      }
+    );
+  });
+
   // #10586: get must honor a key's manifest-declared scope rather than silently
   // defaulting to "user", mirroring the set/onDidChange scope guards.
   it("get resolves a project-scoped declared key from the project store with no scope arg", async () => {
@@ -686,6 +944,138 @@ describe("createHost — settings", () => {
     expect(await host.settings.get("channel")).toBe("x");
   });
 
+  it("unset clears a stored value, reads as the default, and fires onDidChange with it", async () => {
+    const { service, settingsRoot } = await setupSettingsService("acme.settings-unset", [
+      { id: "region", type: "string", default: "eu" },
+      { id: "name", type: "string" },
+    ]);
+    const { host } = createSettingsHost(service, "acme.settings-unset");
+    const heard: unknown[] = [];
+    await host.settings.onDidChange("region", (v) => heard.push(v));
+    await host.settings.onDidChange("name", (v) => heard.push(v));
+    await host.settings.set("region", "us");
+    await host.settings.set("name", "n");
+    heard.length = 0;
+
+    await host.settings.unset("region");
+    await host.settings.unset("name");
+
+    expect(heard).toEqual(["eu", undefined]);
+    expect(await host.settings.get("region")).toBe("eu");
+    expect(await host.settings.get("name")).toBeUndefined();
+    const raw = await fs.readFile(path.join(settingsRoot, "acme.settings-unset.json"), "utf-8");
+    expect(JSON.parse(raw)).toEqual({});
+
+    heard.length = 0;
+    await host.settings.unset("region");
+    expect(heard).toEqual([]);
+  });
+
+  it("unset only clears declared keys, in their declared scope", async () => {
+    const projectDir = path.join(tmpDir, "proj-unset-guard");
+    projectStoreMock.getCurrentProject.mockReturnValue({ path: projectDir });
+    const { service } = await setupSettingsService("acme.settings-unset-guard", [
+      { id: "channel", type: "string", scope: "project" },
+    ]);
+    const { host } = createSettingsHost(service, "acme.settings-unset-guard");
+    await expect(host.settings.unset("other")).rejects.toThrow(/not declared/);
+    await expect(host.settings.unset("channel", "user")).rejects.toThrow(/declared in "project"/);
+    await expect(host.settings.unset("")).rejects.toThrow(/non-empty string/);
+
+    const { service: bare } = await setupSettingsService("acme.settings-unset-bare");
+    const { host: bareHost } = createSettingsHost(bare, "acme.settings-unset-bare");
+    await expect(bareHost.settings.unset("anything")).rejects.toThrow(/not declared/);
+  });
+
+  it("unset clears the active project's value and leaves another project's alone", async () => {
+    const projA = path.join(tmpDir, "unset-projA");
+    const projB = path.join(tmpDir, "unset-projB");
+    const { service } = await setupSettingsService("acme.settings-unset-proj", [
+      { id: "channel", type: "string", scope: "project" },
+    ]);
+    const { host } = createSettingsHost(service, "acme.settings-unset-proj");
+    const file = (root: string) =>
+      path.join(root, ".daintree", "plugin-settings", "acme.settings-unset-proj.json");
+    projectStoreMock.getCurrentProject.mockReturnValue({ path: projA });
+    await host.settings.set("channel", "a");
+    projectStoreMock.getCurrentProject.mockReturnValue({ path: projB });
+    await host.settings.set("channel", "b");
+    const heard: unknown[] = [];
+    await host.settings.onDidChange("channel", (v) => heard.push(v));
+
+    await host.settings.unset("channel");
+
+    expect(JSON.parse(await fs.readFile(file(projB), "utf-8"))).toEqual({});
+    expect(JSON.parse(await fs.readFile(file(projA), "utf-8"))).toEqual({ channel: "a" });
+    expect(heard).toEqual([undefined]);
+  });
+
+  it("unset on a bound project plugin clears its own project's value while another is active", async () => {
+    const ownId = "a".repeat(64);
+    const ownRoot = path.join(tmpDir, "unset-own");
+    const activeRoot = path.join(tmpDir, "unset-active");
+    const manifestId = "acme.settings-unset-bound";
+    const { service } = await setupSettingsService(manifestId, [
+      { id: "channel", type: "string", scope: "project" },
+    ]);
+    const instanceKey = `project__${ownId}__${manifestId}`;
+    const seam = service as unknown as {
+      plugins: Map<string, unknown>;
+      _registerFakePluginForTests: (plugin: unknown, instanceKey?: string) => void;
+    };
+    seam._registerFakePluginForTests(seam.plugins.get(manifestId), instanceKey);
+    const { host } = createSettingsHost(service, instanceKey, {
+      projectId: ownId,
+      projectRoot: ownRoot,
+    });
+    projectStoreMock.getCurrentProject.mockReturnValue({ id: ownId, path: ownRoot });
+    await host.settings.set("channel", "own");
+    projectStoreMock.getCurrentProject.mockReturnValue({ id: "b".repeat(64), path: activeRoot });
+    const file = path.join(ownRoot, ".daintree", "plugin-settings", `${manifestId}.json`);
+    expect(JSON.parse(await fs.readFile(file, "utf-8"))).toEqual({ channel: "own" });
+
+    await host.settings.unset("channel");
+
+    expect(JSON.parse(await fs.readFile(file, "utf-8"))).toEqual({});
+    await expect(fs.access(path.join(activeRoot, ".daintree"))).rejects.toThrow();
+  });
+
+  it("unset on a project key with no active project resolves without touching disk", async () => {
+    projectStoreMock.getCurrentProject.mockReturnValue(null);
+    const { service, settingsRoot } = await setupSettingsService("acme.settings-unset-noproj", [
+      { id: "channel", type: "string", scope: "project" },
+    ]);
+    const { host } = createSettingsHost(service, "acme.settings-unset-noproj");
+    const cb = vi.fn();
+    await host.settings.onDidChange("channel", cb);
+    await expect(host.settings.unset("channel")).resolves.toBeUndefined();
+    expect(cb).not.toHaveBeenCalled();
+    await expect(fs.access(settingsRoot)).rejects.toThrow();
+  });
+
+  it("unset makes a required key missing again, and removes a secret's stored envelope", async () => {
+    safeStorageMock.state.available = true;
+    const pluginId = "acme.settings-unset-secret";
+    const { service, settingsRoot } = await setupSettingsService(pluginId, [
+      { id: "token", type: "secret", required: true },
+    ]);
+    const { host } = createSettingsHost(service, pluginId);
+    const heard: unknown[] = [];
+    await host.settings.onDidChange("token", (v) => heard.push(v));
+
+    await host.settings.set("token", "sk-1");
+    expect(await host.settings.missingRequired()).toEqual([]);
+    heard.length = 0;
+
+    await host.settings.unset("token");
+
+    expect(heard).toEqual([undefined]);
+    expect(await host.settings.get("token")).toBeUndefined();
+    expect(await host.settings.missingRequired()).toEqual(["token"]);
+    const raw = await fs.readFile(path.join(settingsRoot, `${pluginId}.json`), "utf-8");
+    expect(raw).not.toContain("daintree:secret");
+  });
+
   it("get throws when the explicit scope conflicts with the declared scope", async () => {
     const projectDir = path.join(tmpDir, "proj-conflict");
     projectStoreMock.getCurrentProject.mockReturnValue({ path: projectDir });
@@ -737,6 +1127,159 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
     const waiter = service.waitForInit();
     service.dispose();
     await expect(waiter).resolves.toBeUndefined();
+  });
+
+  it("holds the catalog, cold replay and complete snapshots until the scan settles (#14127)", async () => {
+    let releaseBlocklist!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseBlocklist = resolve;
+    });
+    let entered!: () => void;
+    const scanReached = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const blocklistService = {
+      getStartupBlocklist: async () => {
+        entered();
+        await gate;
+        return { blocklist: null, refreshed: null };
+      },
+    } as unknown as NonNullable<ConstructorParameters<typeof PluginService>[2]>["blocklistService"];
+    const service = new PluginService(tmpDir, undefined, { blocklistService });
+    const toolbarCompleteFlags = () =>
+      broadcastToRendererMock.mock.calls
+        .map((c) => c[1] as { name?: string; payload?: { complete?: boolean } })
+        .filter((e) => e.name === "plugin:toolbar-buttons-changed")
+        .map((e) => e.payload?.complete);
+
+    const init = service.initialize();
+    // A concurrent call joins the scan rather than starting a second one.
+    expect(service.initialize()).toBe(init);
+    await scanReached;
+    let catalogReady = false;
+    void service.waitForCatalog().then(() => (catalogReady = true));
+    const send = vi.fn();
+    const wc = { id: 4251, send, isDestroyed: () => false } as unknown as Electron.WebContents;
+    const replay = service.pushSnapshotTo(wc);
+
+    broadcastToRendererMock.mockClear();
+    // An unload while the catalog is still partial owes an authoritative snapshot.
+    (
+      service as unknown as {
+        broadcaster: { scheduleToolbarButtonsBroadcast: (complete: boolean) => void };
+      }
+    ).broadcaster.scheduleToolbarButtonsBroadcast(true);
+    await vi.waitFor(() => expect(toolbarCompleteFlags()).toEqual([false]));
+    expect(catalogReady).toBe(false);
+    expect(send).not.toHaveBeenCalled();
+
+    releaseBlocklist();
+    await init;
+    await replay;
+    expect(catalogReady).toBe(true);
+    expect(send).toHaveBeenCalled();
+    await vi.waitFor(() => expect(toolbarCompleteFlags()).toEqual([false, true]));
+    service.dispose();
+  });
+
+  it.each([
+    { outcome: "fails", loadError: { message: "boom", at: 1 }, pushes: 1 },
+    { outcome: "succeeds", loadError: null, pushes: 0 },
+  ])(
+    "re-pulls the plugin list only when a startup activation changes its load error ($outcome)",
+    async ({ loadError, pushes }) => {
+      const service = new PluginService(tmpDir);
+      const internals = service as unknown as {
+        plugins: Map<string, unknown>;
+        records: { upsertInstalledRecord: (id: string, patch: object) => void };
+      };
+      const activate = vi.spyOn(service, "activatePlugin").mockImplementation(async (id) => {
+        internals.records.upsertInstalledRecord(id, { loadError });
+      });
+      internals.plugins.set("acme.early", {
+        resolvedMain: "/x/main.mjs",
+        manifest: { name: "acme.early", activationEvents: ["onStartupFinished"] },
+      });
+      broadcastToRendererMock.mockClear();
+
+      await service.activateStartupFinishedPlugins();
+      expect(activate).toHaveBeenCalledWith("acme.early");
+      const provenancePushes = broadcastToRendererMock.mock.calls.filter(
+        (c) => (c[1] as { name?: string })?.name === "plugin:provenance-changed"
+      );
+      expect(provenancePushes).toHaveLength(pushes);
+      internals.plugins.clear();
+      service.dispose();
+    }
+  );
+
+  it("dispose() resolves a pending waitForCatalog() too", async () => {
+    const service = new PluginService(tmpDir);
+    const waiter = service.waitForCatalog();
+    service.dispose();
+    await expect(waiter).resolves.toBeUndefined();
+  });
+
+  it("waitForCatalog() settles when the scan does, even if a prerequisite throws", async () => {
+    const service = new PluginService(tmpDir);
+    (
+      service as unknown as { installer: { sweepStalePluginTempDirs: () => Promise<void> } }
+    ).installer.sweepStalePluginTempDirs = async () => {
+      throw new Error("EACCES");
+    };
+    await expect(service.initialize()).rejects.toThrow("EACCES");
+    await expect(service.waitForCatalog()).resolves.toBeUndefined();
+    service.dispose();
+  });
+
+  it("a held startup activation holds waitForInit() but not the catalog, and its own callers (#14127)", async () => {
+    const dir = path.join(tmpDir, "slow");
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(
+      path.join(dir, "plugin.json"),
+      JSON.stringify({
+        name: "acme.slow",
+        version: "1.0.0",
+        main: "main.mjs",
+        activationEvents: ["onStartupFinished"],
+        contributes: {
+          panels: [{ id: "viewer", name: "Viewer", iconId: "eye", color: "#ff0000" }],
+        },
+      })
+    );
+    await fs.writeFile(path.join(dir, "main.mjs"), "export function activate() {}\n");
+    const service = new PluginService(tmpDir);
+    let releaseActivation!: () => void;
+    const held = new Promise<void>((resolve) => {
+      releaseActivation = resolve;
+    });
+    (service as unknown as { _doActivate: (id: string) => Promise<void> })._doActivate = () => held;
+
+    await service.initialize();
+    const startup = service.activateStartupFinishedPlugins();
+    let fullyStarted = false;
+    void service.waitForInit().then(() => (fullyStarted = true));
+    let ownerActivated = false;
+    const owner = service.activatePlugin("acme.slow").then(() => (ownerActivated = true));
+
+    await service.waitForCatalog();
+    expect(service.hasPlugin("acme.slow")).toBe(true);
+    const send = vi.fn();
+    const wc = { id: 4250, send, isDestroyed: () => false } as unknown as Electron.WebContents;
+    await service.pushSnapshotTo(wc);
+    expect(send).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ name: "plugin:panel-kinds-changed" })
+    );
+    expect(fullyStarted).toBe(false);
+    expect(ownerActivated).toBe(false);
+
+    releaseActivation();
+    await startup;
+    await owner;
+    expect(fullyStarted).toBe(true);
+    expect(ownerActivated).toBe(true);
+    service.dispose();
   });
 
   it("pushSnapshotTo() replays a global plugin's runtime panel menus, and skips a project plugin's for another view (#13213)", async () => {
@@ -795,6 +1338,44 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
         payload: { pluginId: "acme.global", badges: { needs: { kind: "label", text: "3" } } },
       },
     ]);
+  });
+
+  it("pushSnapshotTo() replays toolbar-button state to entitled views, withholding it from a remote-bound one (#13785)", async () => {
+    const service = new PluginService(tmpDir);
+    await service.activateStartupFinishedPlugins();
+    const states = (
+      service as unknown as {
+        pluginToolbarStates: Map<string, Map<string, { pressed?: boolean; busy?: boolean }>>;
+      }
+    ).pluginToolbarStates;
+    states.set("acme.global", new Map([["sync", { pressed: true }]]));
+    states.set("project__other-project__acme.local", new Map([["sync", { busy: true }]]));
+    const send = vi.fn();
+    const wc = { id: 4245, send, isDestroyed: () => false } as unknown as Electron.WebContents;
+    const stateEvents = () =>
+      send.mock.calls
+        .map((c) => c[1] as { name?: string; payload?: unknown })
+        .filter((event) => event.name === "plugin:toolbar-states-changed");
+
+    try {
+      await service.pushSnapshotTo(wc);
+      expect(stateEvents()).toEqual([
+        {
+          name: "plugin:toolbar-states-changed",
+          payload: { pluginId: "acme.global", states: { sync: { pressed: true } } },
+        },
+      ]);
+
+      send.mockClear();
+      ipcViewMocks.isWithheldFromView.mockImplementation(
+        (_id, _channel, args) =>
+          (args[0] as { name?: string } | undefined)?.name === "plugin:toolbar-states-changed"
+      );
+      await service.pushSnapshotTo(wc);
+      expect(stateEvents()).toEqual([]);
+    } finally {
+      ipcViewMocks.isWithheldFromView.mockImplementation(() => false);
+    }
   });
 
   it("pushSnapshotTo() replays context keys to the views entitled to them, empty ones too (#13506)", async () => {
@@ -918,7 +1499,7 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
 
     await service.activateStartupFinishedPlugins();
     await inFlight;
-    expect(send).toHaveBeenCalledTimes(9);
+    expect(send).toHaveBeenCalledTimes(12);
   });
 
   it("pushSnapshotTo() does not send after dispose()", async () => {
@@ -1330,6 +1911,194 @@ describe("worktree card statuses (#13704)", () => {
   });
 });
 
+describe("worktree review checks (#13806)", () => {
+  type Check = { label: string; severity: "warning" | "info" };
+  type Checks = Map<string, Map<string, Map<string, Check[]>>>;
+  const checksOf = (service: PluginService): Checks =>
+    (service as unknown as { pluginWorktreeReviewChecks: Checks }).pluginWorktreeReviewChecks;
+  const checkEvents = () =>
+    ipcViewMocks.broadcastToProjectRenderers.mock.calls
+      .map((call) => ({ to: call[0], ...(call[2] as { name: string; payload: unknown }) }))
+      .filter((event) => event.name === "plugin:worktree-review-checks-changed");
+  const warn = (label: string): Check => ({ label, severity: "warning" });
+
+  beforeEach(() => {
+    devWorkerMock.instances.length = 0;
+    devWorkerMock.bridges.length = 0;
+  });
+  afterEach(() => {
+    ipcViewMocks.getProjectRendererTargets.mockImplementation(() => []);
+  });
+
+  async function writeDevPlugin(name: string, pluginName: string): Promise<void> {
+    const dir = path.join(tmpDir, name);
+    await fs.mkdir(path.join(dir, "dist"), { recursive: true });
+    await fs.writeFile(
+      path.join(dir, "plugin.json"),
+      JSON.stringify({ name: pluginName, version: "1.0.0", main: "dist/index.js" })
+    );
+    await fs.writeFile(path.join(dir, "dist", "index.js"), "export function activate() {}");
+    await fs.writeFile(path.join(dir, ".dev-marker"), "");
+  }
+
+  it("pushSnapshotTo() replays only the buckets for the view's own project", async () => {
+    const service = new PluginService(tmpDir);
+    await service.activateStartupFinishedPlugins();
+    checksOf(service).set(
+      "acme.global",
+      new Map([
+        ["proj-a", new Map([["/a/wt", [warn("a")]]])],
+        ["proj-b", new Map([["/b/wt", [warn("b")]]])],
+      ])
+    );
+    ipcViewMocks.getProjectRendererTargets.mockImplementation((projectId) =>
+      projectId === "proj-a" ? [{ id: 4260 }] : []
+    );
+    const send = vi.fn();
+    const wc = { id: 4260, send, isDestroyed: () => false } as unknown as Electron.WebContents;
+
+    await service.pushSnapshotTo(wc);
+
+    const replayed = send.mock.calls
+      .map((c) => c[1] as { name?: string; payload?: unknown })
+      .filter((event) => event.name === "plugin:worktree-review-checks-changed");
+    expect(replayed).toEqual([
+      {
+        name: "plugin:worktree-review-checks-changed",
+        payload: { pluginId: "acme.global", projectId: "proj-a", checks: { "/a/wt": [warn("a")] } },
+      },
+    ]);
+  });
+
+  it("withholds replayed checks from a local view bound to a remote host", async () => {
+    const service = new PluginService(tmpDir);
+    await service.activateStartupFinishedPlugins();
+    checksOf(service).set("acme.global", new Map([["proj-a", new Map([["/a/wt", [warn("a")]]])]]));
+    ipcViewMocks.getProjectRendererTargets.mockImplementation(() => [{ id: 4261 }]);
+    ipcViewMocks.isWithheldFromView.mockImplementation((id) => id === 4261);
+    const send = vi.fn();
+    const wc = { id: 4261, send, isDestroyed: () => false } as unknown as Electron.WebContents;
+    try {
+      await service.pushSnapshotTo(wc);
+    } finally {
+      ipcViewMocks.isWithheldFromView.mockImplementation(() => false);
+    }
+    const replayed = send.mock.calls
+      .map((c) => c[1] as { name?: string })
+      .filter((event) => event.name === "plugin:worktree-review-checks-changed");
+    expect(replayed).toEqual([]);
+  });
+
+  it("clears every project a plugin published to when it unloads", async () => {
+    await writeDevPlugin("dev-checks", "acme.checks");
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+    await service.activatePlugin("acme.checks");
+    checksOf(service).set(
+      "acme.checks",
+      new Map([
+        ["proj-a", new Map([["/a/wt", [warn("a")]]])],
+        ["proj-b", new Map([["/b/wt", [warn("b")]]])],
+      ])
+    );
+    ipcViewMocks.broadcastToProjectRenderers.mockClear();
+
+    service.unloadPlugin("acme.checks");
+
+    expect(checksOf(service).has("acme.checks")).toBe(false);
+    expect(checkEvents().map((event) => [event.to, event.payload])).toEqual([
+      ["proj-a", { pluginId: "acme.checks", projectId: "proj-a", checks: {} }],
+      ["proj-b", { pluginId: "acme.checks", projectId: "proj-b", checks: {} }],
+    ]);
+  });
+
+  it("clears a plugin's checks, and advances its generation, when its worker is replaced", async () => {
+    await writeDevPlugin("dev-checks-reload", "acme.checks-reload");
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+    await service.activatePlugin("acme.checks-reload");
+    checksOf(service).set(
+      "acme.checks-reload",
+      new Map([["proj-a", new Map([["/a/wt", [warn("a")]]])]])
+    );
+    ipcViewMocks.broadcastToProjectRenderers.mockClear();
+
+    (
+      devWorkerMock.bridges[0].deps as unknown as { clearPriorRegistrations: () => void }
+    ).clearPriorRegistrations();
+
+    expect(checksOf(service).size).toBe(0);
+    expect(checkEvents().map((event) => event.payload)).toEqual([
+      { pluginId: "acme.checks-reload", projectId: "proj-a", checks: {} },
+    ]);
+    const generation = (
+      service as unknown as { worktreeReviewChecksGenerations: Map<string, number> }
+    ).worktreeReviewChecksGenerations.get("acme.checks-reload");
+    expect(generation).toBe(1);
+  });
+
+  it("clears every plugin's checks on a closed project and leaves other projects alone", async () => {
+    const service = new PluginService(tmpDir);
+    await service.activateStartupFinishedPlugins();
+    checksOf(service).set(
+      "acme.global",
+      new Map([
+        ["proj-a", new Map([["/a/wt", [warn("a")]]])],
+        ["proj-b", new Map([["/b/wt", [warn("b")]]])],
+      ])
+    );
+    ipcViewMocks.broadcastToProjectRenderers.mockClear();
+
+    await service.onProjectClosed("proj-a");
+
+    expect([...checksOf(service).get("acme.global")!.keys()]).toEqual(["proj-b"]);
+    expect(checkEvents().map((event) => event.payload)).toEqual([
+      { pluginId: "acme.global", projectId: "proj-a", checks: {} },
+    ]);
+  });
+
+  it("prunes a removed worktree from every plugin, and only that worktree", async () => {
+    const service = new PluginService(tmpDir);
+    await service.activateStartupFinishedPlugins();
+    const handlers = new Map<string, Set<(payload: unknown) => void>>();
+    service.setWorkspaceClient({
+      on: vi.fn((event: string, handler: (payload: unknown) => void) => {
+        if (!handlers.has(event)) handlers.set(event, new Set());
+        handlers.get(event)!.add(handler);
+      }),
+      off: vi.fn((event: string, handler: (payload: unknown) => void) => {
+        handlers.get(event)?.delete(handler);
+      }),
+    } as never);
+    checksOf(service).set(
+      "acme.one",
+      new Map([
+        [
+          "proj-a",
+          new Map([
+            ["/a/gone", [warn("x")]],
+            ["/a/kept", [warn("y")]],
+          ]),
+        ],
+      ])
+    );
+    checksOf(service).set("acme.two", new Map([["proj-a", new Map([["/a/gone", [warn("z")]]])]]));
+    ipcViewMocks.broadcastToProjectRenderers.mockClear();
+
+    for (const handler of handlers.get("worktree-removed") ?? []) {
+      handler({ worktreeId: "/a/gone", projectPath: "/a" });
+    }
+
+    expect(checksOf(service).get("acme.one")?.get("proj-a")?.has("/a/kept")).toBe(true);
+    expect(checksOf(service).has("acme.two")).toBe(false);
+    expect(checkEvents().map((event) => event.payload)).toEqual([
+      { pluginId: "acme.one", projectId: "proj-a", checks: { "/a/kept": [warn("y")] } },
+      { pluginId: "acme.two", projectId: "proj-a", checks: {} },
+    ]);
+    service.dispose();
+  });
+});
+
 describe("PluginService settings for launch-disabled plugins", () => {
   let svc: PluginService;
 
@@ -1393,5 +2162,146 @@ describe("PluginService settings for launch-disabled plugins", () => {
     ]);
     await svc.setSettingValueFromUi("acme.demo", "apiKey", "xyz", "user", null);
     expect((await svc.getRequiredSettingsStatusForUi("acme.demo", null)).missing).toEqual([]);
+  });
+
+  describe("setup checklist (#13824)", () => {
+    const SETUP_MANIFEST = {
+      name: "acme.demo",
+      version: "1.0.0",
+      contributes: {
+        settings: [{ id: "team", type: "string", scope: "user", default: "core" }],
+        account: { kind: "token", label: "Acme token" },
+        commands: [],
+        setup: [
+          { id: "team", title: "Pick a team", done: { kind: "setting", key: "team" } },
+          { id: "connect", title: "Connect", done: { kind: "account" } },
+          {
+            id: "sync",
+            title: "Run the first sync",
+            description: "Pulls your projects",
+            done: { kind: "context", when: "acme.demo.synced" },
+            action: { kind: "command", actionId: "acme.demo.sync" },
+          },
+        ],
+      },
+    } as unknown as PluginManifest;
+
+    it("works each step out from stored state, never from a default", async () => {
+      seedDisabled(SETUP_MANIFEST);
+
+      const before = await svc.getSetupStatusForUi("acme.demo", "proj-a");
+      expect(before.steps).toEqual([
+        {
+          id: "team",
+          title: "Pick a team",
+          description: null,
+          check: { kind: "observed", done: false },
+          action: { kind: "settings", key: "team" },
+          skipped: false,
+        },
+        {
+          id: "connect",
+          title: "Connect",
+          description: null,
+          check: { kind: "observed", done: false },
+          action: { kind: "settings", key: null },
+          skipped: false,
+        },
+        {
+          id: "sync",
+          title: "Run the first sync",
+          description: "Pulls your projects",
+          check: { kind: "context", when: "acme.demo.synced" },
+          action: { kind: "command", actionId: "acme.demo.sync" },
+          skipped: false,
+        },
+      ]);
+
+      await svc.setSettingValueFromUi("acme.demo", "team", "core", "user", null);
+      const after = await svc.getSetupStatusForUi("acme.demo", "proj-a");
+      expect(after.steps[0]?.check).toEqual({ kind: "observed", done: true });
+
+      // Cleared again, the step is outstanding again: nothing was latched.
+      await svc.deleteSettingValueFromUi("acme.demo", "team", "user", null);
+      const cleared = await svc.getSetupStatusForUi("acme.demo", "proj-a");
+      expect(cleared.steps[0]?.check).toEqual({ kind: "observed", done: false });
+    });
+
+    it("keeps the other steps when the account can't be read", async () => {
+      seedDisabled(SETUP_MANIFEST);
+      const accounts = (svc as unknown as { accounts: { getStateFor: () => Promise<unknown> } })
+        .accounts;
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      const read = vi.spyOn(accounts, "getStateFor").mockRejectedValueOnce(new Error("bad JSON"));
+
+      const status = await svc.getSetupStatusForUi("acme.demo", "proj-a");
+      expect(status.steps.map((step) => [step.id, step.check])).toEqual([
+        ["team", { kind: "observed", done: false }],
+        ["connect", { kind: "observed", done: false }],
+        ["sync", { kind: "context", when: "acme.demo.synced" }],
+      ]);
+      expect(read).toHaveBeenCalledWith("acme.demo", { projectId: "proj-a" });
+      expect(warn).toHaveBeenCalled();
+      warn.mockRestore();
+    });
+
+    it("answers no steps for a plugin that declares none or isn't loaded", async () => {
+      seedDisabled(manifestWith([{ id: "team", type: "string" } as SettingDefinition]));
+      expect(await svc.getSetupStatusForUi("acme.demo", null)).toEqual({ steps: [] });
+      expect(await svc.getSetupStatusForUi("acme.unknown", null)).toEqual({ steps: [] });
+    });
+
+    it("remembers a skip per project and tells only that project's views", async () => {
+      seedDisabled(SETUP_MANIFEST);
+      ipcViewMocks.broadcastToProjectRenderers.mockClear();
+      broadcastToRendererMock.mockClear();
+
+      svc.setSetupStepSkippedFromUi("proj-a", "acme.demo", "connect", true);
+
+      const skippedIn = async (projectId: string | null) =>
+        (await svc.getSetupStatusForUi("acme.demo", projectId)).steps
+          .filter((step) => step.skipped)
+          .map((step) => step.id);
+      expect(await skippedIn("proj-a")).toEqual(["connect"]);
+      expect(await skippedIn("proj-b")).toEqual([]);
+      expect(await skippedIn(null)).toEqual([]);
+      expect(ipcViewMocks.broadcastToProjectRenderers).toHaveBeenCalledWith(
+        "proj-a",
+        expect.any(String),
+        { name: "plugin:settings-changed", payload: { pluginId: "acme.demo" } }
+      );
+      expect(broadcastToRendererMock).not.toHaveBeenCalled();
+
+      // Asking again changes nothing and announces nothing.
+      ipcViewMocks.broadcastToProjectRenderers.mockClear();
+      svc.setSetupStepSkippedFromUi("proj-a", "acme.demo", "connect", true);
+      expect(ipcViewMocks.broadcastToProjectRenderers).not.toHaveBeenCalled();
+
+      svc.setSetupStepSkippedFromUi("proj-a", "acme.demo", "connect", false);
+      expect(await skippedIn("proj-a")).toEqual([]);
+    });
+
+    it("refuses to remember a skip for a step the plugin doesn't declare", () => {
+      seedDisabled(SETUP_MANIFEST);
+      expect(() => svc.setSetupStepSkippedFromUi("proj-a", "acme.demo", "nope", true)).toThrow();
+      expect(() => svc.setSetupStepSkippedFromUi("proj-a", "acme.unknown", "sync", true)).toThrow();
+    });
+
+    it("runs a project plugin's command in its own instance's namespace", async () => {
+      const instanceId = "project__proj-a__acme.demo";
+      const manifest = {
+        ...SETUP_MANIFEST,
+        contributes: { commands: [], setup: [SETUP_MANIFEST.contributes.setup![2]] },
+      } as unknown as PluginManifest;
+      (svc as unknown as { disabledPlugins: Map<string, unknown> }).disabledPlugins.set(
+        instanceId,
+        { manifest, source: "sideload", installedAt: 0 }
+      );
+      const status = await svc.getSetupStatusForUi(instanceId, "proj-a");
+      expect(status.steps[0]?.action).toEqual({
+        kind: "command",
+        actionId: `${instanceId}.sync`,
+      });
+    });
   });
 });

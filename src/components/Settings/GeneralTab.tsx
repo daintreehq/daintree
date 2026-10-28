@@ -7,6 +7,7 @@ import { ChevronRight, ShieldBan, KeyRound, Wrench, ExternalLink } from "lucide-
 import { cn } from "@/lib/utils";
 import { DaintreeIcon } from "@/components/icons";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
+import { SECTION_SETTINGS } from "@/components/Settings/settingsSectionOwners";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
 import { KeepAwakeSection } from "@/components/Settings/KeepAwakeSection";
@@ -23,12 +24,12 @@ import { KbdChord } from "@/components/ui/Kbd";
 import { Badge } from "@/components/ui/badge";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import type {
-  HibernationConfig,
   SessionRestoreConfig,
   IdleTerminalNotifyConfig,
   IdleBackgroundAutoCloseConfig,
   CliAvailability,
 } from "@shared/types";
+import type { IdleShellThresholdMinutes } from "@shared/types/ipc/idleBackgroundAutoClose";
 import {
   isAgentInstalled,
   isAgentReady,
@@ -43,11 +44,11 @@ import { getBuildChannelLabel } from "@shared/config/distribution";
 import { logError } from "@/utils/logger";
 import { useDistributionStore } from "@/store/distributionStore";
 import { pluralize } from "@/lib/pluralize";
-import { useRemoteHostName, useSettingsOwnerMarker } from "@/hooks/useSettingsOwner";
+import { useRemoteHostName } from "@/hooks/useSettingsOwner";
 
 const GENERAL_SUBTABS: SettingsSubtabItem[] = [
   { id: "overview", label: "Overview" },
-  { id: "hibernation", label: "Hibernation" },
+  { id: "background", label: "Background" },
   { id: "display", label: "Display" },
 ];
 
@@ -78,6 +79,7 @@ const CURATED_SHORTCUTS = [
       "terminal.focusNext",
       "terminal.focusPrevious",
       "terminal.focusAlternate",
+      "terminal.toggleInputSurface",
     ],
   },
   {
@@ -85,13 +87,6 @@ const CURATED_SHORTCUTS = [
     actionIds: ["panel.diagnosticsLogs", "panel.diagnosticsEvents"],
   },
 ];
-
-const THRESHOLD_PRESETS = [
-  { value: 12, label: "12h" },
-  { value: 24, label: "24h" },
-  { value: 48, label: "48h" },
-  { value: 72, label: "72h" },
-] as const;
 
 const IDLE_TERMINAL_THRESHOLD_PRESETS = [
   { value: 30, label: "30m" },
@@ -107,10 +102,17 @@ const IDLE_BACKGROUND_THRESHOLD_PRESETS = [
   { value: 120, label: "2h" },
 ] as const;
 
+const IDLE_SHELL_THRESHOLD_PRESETS = [
+  { value: 60, label: "1h" },
+  { value: 120, label: "2h" },
+  { value: 240, label: "4h" },
+  { value: 480, label: "8h" },
+] as const satisfies ReadonlyArray<{ value: IdleShellThresholdMinutes; label: string }>;
+
 // Mirrors the electron-store defaults, so a row can say when it has moved off them.
-const DEFAULT_HIBERNATION_THRESHOLD_HOURS = 24;
 const DEFAULT_IDLE_TERMINAL_THRESHOLD_MINUTES = 60;
 const DEFAULT_IDLE_BACKGROUND_THRESHOLD_MINUTES = 15;
+const DEFAULT_IDLE_SHELL_THRESHOLD_MINUTES: IdleShellThresholdMinutes = 60;
 const DEFAULT_UPDATE_CHANNEL = "stable";
 const DEFAULT_SESSION_RESTORE_ENABLED = true;
 
@@ -134,7 +136,7 @@ function describeUpdateChannel(
   return base.endsWith(".") ? `${base} ${checked}` : `${base}. ${checked}`;
 }
 
-type SaveTarget = "sessionRestore" | "updates" | "idleNotify" | "idleAutoClose" | "hibernation";
+type SaveTarget = "sessionRestore" | "updates" | "idleNotify" | "idleAutoClose";
 
 interface ShortcutDisplay {
   actionId: string;
@@ -161,14 +163,12 @@ export function GeneralTab({
   // badge. Distinct from the user-selected update-feed `updateChannel`.
   const buildChannelLabel = getBuildChannelLabel(appVersion);
   // This page holds both machines' settings in a remote window, so each section says whose.
-  const ownerMarker = useSettingsOwnerMarker();
   // Agent detection runs on the host, so a remote window names it rather than "this machine".
   const remoteHostName = useRemoteHostName();
   const agentMachine = remoteHostName ?? "this machine";
 
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
   const [showReadyAgents, setShowReadyAgents] = useState(false);
-  const [hibernationConfig, setHibernationConfig] = useState<HibernationConfig | null>(null);
   const [sessionRestoreConfig, setSessionRestoreConfig] = useState<SessionRestoreConfig | null>(
     null
   );
@@ -178,8 +178,6 @@ export function GeneralTab({
   const [idleAutoCloseConfig, setIdleAutoCloseConfig] =
     useState<IdleBackgroundAutoCloseConfig | null>(null);
   const [isIdleAutoCloseSaving, setIsIdleAutoCloseSaving] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
-  const [configError, setConfigError] = useState<string | null>(null);
   const [cliAvailability, setCliAvailability] = useState<CliAvailability | null>(null);
   // Past the Doherty threshold only, like every settings list's bones.
   const showAgentsLoading = useDeferredLoading(cliAvailability === null, UI_DOHERTY_THRESHOLD);
@@ -191,7 +189,7 @@ export function GeneralTab({
    * simply did not render, on the reasoning that a missing card beats a wrong explanation.
    * But a missing card IS an explanation — the user reads it as "this app has no such
    * setting" — and it is the wrong one. Each section now keeps its own message so it can
-   * say what failed and offer a way back, without borrowing hibernation's wording.
+   * say what failed and offer a way back.
    */
   const [sectionErrors, setSectionErrors] = useState<Record<string, string | null>>({});
   const [configRetryNonce, setConfigRetryNonce] = useState(0);
@@ -399,29 +397,6 @@ export function GeneralTab({
 
   useEffect(() => {
     let cancelled = false;
-    const timer = setTimeout(() => {
-      if (!cancelled) {
-        setConfigError("Settings load timed out");
-      }
-    }, 10_000);
-
-    actionService
-      .dispatch("hibernation.getConfig", undefined, { source: "user" })
-      .then((result) => {
-        clearTimeout(timer);
-        if (cancelled) return;
-        if (!result.ok) {
-          throw new Error(result.error.message);
-        }
-        setHibernationConfig(result.result as HibernationConfig);
-        setConfigError(null);
-      })
-      .catch((error) => {
-        clearTimeout(timer);
-        if (cancelled) return;
-        logError("Failed to load hibernation config", error);
-        setConfigError(formatErrorMessage(error, "Failed to load hibernation settings"));
-      });
 
     actionService
       .dispatch("sessionRestore.getConfig", undefined, { source: "user" })
@@ -482,7 +457,6 @@ export function GeneralTab({
 
     return () => {
       cancelled = true;
-      clearTimeout(timer);
     };
   }, [configRetryNonce]);
 
@@ -584,35 +558,6 @@ export function GeneralTab({
       unsubscribe();
     };
   }, []);
-  const handleHibernationToggle = async () => {
-    if (!hibernationConfig || isSaving) return;
-    const prev = hibernationConfig;
-    clearSaveFailure("hibernation");
-    setHibernationConfig({ ...prev, enabled: !prev.enabled });
-    setIsSaving(true);
-    try {
-      const result = await actionService.dispatch(
-        "hibernation.updateConfig",
-        { enabled: !prev.enabled },
-        { source: "user" }
-      );
-      if (!isMountedRef.current) return;
-      if (!result.ok) {
-        throw new Error(result.error.message);
-      }
-      setHibernationConfig(result.result as HibernationConfig);
-      clearSaveFailure("hibernation");
-    } catch (error) {
-      if (!isMountedRef.current) return;
-      setHibernationConfig(prev);
-      logError("Failed to update hibernation config", error);
-      recordSaveFailure("hibernation", () => handleHibernationToggle());
-    } finally {
-      if (isMountedRef.current) {
-        setIsSaving(false);
-      }
-    }
-  };
 
   const handleSessionRestoreToggle = async () => {
     if (!sessionRestoreConfig || isSessionRestoreSaving) return;
@@ -704,18 +649,16 @@ export function GeneralTab({
     }
   };
 
-  const handleIdleAutoCloseToggle = async () => {
+  const updateIdleAutoCloseConfig = async (patch: Partial<IdleBackgroundAutoCloseConfig>) => {
     if (!idleAutoCloseConfig || isIdleAutoCloseSaving) return;
     const prev = idleAutoCloseConfig;
     clearSaveFailure("idleAutoClose");
-    setIdleAutoCloseConfig({ ...prev, enabled: !prev.enabled });
+    setIdleAutoCloseConfig({ ...prev, ...patch });
     setIsIdleAutoCloseSaving(true);
     try {
-      const result = await actionService.dispatch(
-        "idleBackgroundAutoClose.updateConfig",
-        { enabled: !prev.enabled },
-        { source: "user" }
-      );
+      const result = await actionService.dispatch("idleBackgroundAutoClose.updateConfig", patch, {
+        source: "user",
+      });
       if (!isMountedRef.current) return;
       if (!result.ok) {
         throw new Error(result.error.message);
@@ -726,7 +669,7 @@ export function GeneralTab({
       if (!isMountedRef.current) return;
       setIdleAutoCloseConfig(prev);
       logError("Failed to update idle background auto-close config", error);
-      recordSaveFailure("idleAutoClose", () => handleIdleAutoCloseToggle());
+      recordSaveFailure("idleAutoClose", () => updateIdleAutoCloseConfig(patch));
     } finally {
       if (isMountedRef.current) {
         setIsIdleAutoCloseSaving(false);
@@ -734,65 +677,8 @@ export function GeneralTab({
     }
   };
 
-  const handleIdleAutoCloseThresholdChange = async (value: number) => {
-    if (!idleAutoCloseConfig || isIdleAutoCloseSaving) return;
-    const prev = idleAutoCloseConfig;
-    clearSaveFailure("idleAutoClose");
-    setIdleAutoCloseConfig({ ...prev, thresholdMinutes: value });
-    setIsIdleAutoCloseSaving(true);
-    try {
-      const result = await actionService.dispatch(
-        "idleBackgroundAutoClose.updateConfig",
-        { thresholdMinutes: value },
-        { source: "user" }
-      );
-      if (!isMountedRef.current) return;
-      if (!result.ok) {
-        throw new Error(result.error.message);
-      }
-      setIdleAutoCloseConfig(result.result as IdleBackgroundAutoCloseConfig);
-      clearSaveFailure("idleAutoClose");
-    } catch (error) {
-      if (!isMountedRef.current) return;
-      setIdleAutoCloseConfig(prev);
-      logError("Failed to update idle background auto-close threshold", error);
-      recordSaveFailure("idleAutoClose", () => handleIdleAutoCloseThresholdChange(value));
-    } finally {
-      if (isMountedRef.current) {
-        setIsIdleAutoCloseSaving(false);
-      }
-    }
-  };
-
-  const handleThresholdChange = async (value: number) => {
-    if (!hibernationConfig || isSaving) return;
-    const prev = hibernationConfig;
-    clearSaveFailure("hibernation");
-    setHibernationConfig({ ...prev, inactiveThresholdHours: value });
-    setIsSaving(true);
-    try {
-      const result = await actionService.dispatch(
-        "hibernation.updateConfig",
-        { inactiveThresholdHours: value },
-        { source: "user" }
-      );
-      if (!isMountedRef.current) return;
-      if (!result.ok) {
-        throw new Error(result.error.message);
-      }
-      setHibernationConfig(result.result as HibernationConfig);
-      clearSaveFailure("hibernation");
-    } catch (error) {
-      if (!isMountedRef.current) return;
-      setHibernationConfig(prev);
-      logError("Failed to update hibernation threshold", error);
-      recordSaveFailure("hibernation", () => handleThresholdChange(value));
-    } finally {
-      if (isMountedRef.current) {
-        setIsSaving(false);
-      }
-    }
-  };
+  const handleIdleAutoCloseToggle = () =>
+    updateIdleAutoCloseConfig({ enabled: !idleAutoCloseConfig?.enabled });
 
   return (
     <div className="space-y-6">
@@ -809,7 +695,7 @@ export function GeneralTab({
           <>
             <SettingsSection
               title="System status"
-              badge={ownerMarker("host")}
+              settings={SECTION_SETTINGS.systemStatus}
               description={<span role="status">{systemStatusSummary}</span>}
               id="general-system-status"
             >
@@ -1056,7 +942,7 @@ export function GeneralTab({
                 save over a value the user never saw. */}
             <SettingsSection
               title="Startup"
-              badge={ownerMarker("host")}
+              settings={SECTION_SETTINGS.startup}
               description="What comes back when Daintree restarts"
               id="general-session-restore"
             >
@@ -1094,7 +980,7 @@ export function GeneralTab({
             {updatesManagedByStore ? (
               <SettingsSection
                 title="Updates"
-                badge={ownerMarker("device")}
+                settings={SECTION_SETTINGS.updates}
                 description="Updates are managed by the Microsoft Store on Windows"
                 id="general-update-channel"
               >
@@ -1112,7 +998,7 @@ export function GeneralTab({
             ) : (
               <SettingsSection
                 title="Updates"
-                badge={ownerMarker("device")}
+                settings={SECTION_SETTINGS.updates}
                 id="general-update-channel"
               >
                 {updateChannelLoadFailed && (
@@ -1141,7 +1027,7 @@ export function GeneralTab({
 
             <SettingsSection
               title="Quick reference"
-              badge={ownerMarker("device")}
+              settings={SECTION_SETTINGS.quickReference}
               description="Common keyboard shortcuts"
               action={
                 <Button
@@ -1254,17 +1140,17 @@ export function GeneralTab({
           </>
         )}
 
-        {effectiveSubtab === "hibernation" && (
+        {effectiveSubtab === "background" && (
           <>
             {/* Every group renders before its config arrives. Until the stored value is
                 known each switch shows the default, disabled, and each threshold shows no
                 selection — a load error sits on the group it belongs to, with Retry. */}
             {/* One section for everything Daintree does about projects left in the
-                background: remind, close, or stop their processes. Idle-terminal reminders
+                background: remind about them, or close them. Idle-terminal reminders
                 were a section of their own whose only row repeated its heading. */}
             <SettingsSection
               title="Background projects"
-              badge={ownerMarker("host")}
+              settings={SECTION_SETTINGS.backgroundProjects}
               description="What happens to projects you haven't used in a while — the active project is never touched"
             >
               {sectionErrors.idleNotify && (
@@ -1277,7 +1163,7 @@ export function GeneralTab({
               <SettingsGroup id="general-idle-terminal-notify">
                 <SettingsSwitchCard
                   title="Notify me about idle terminals"
-                  subtitle="A reminder when terminals in background projects go quiet, offering to close them — nothing closes on its own"
+                  subtitle="A reminder when terminals in background projects go quiet, offering to put the project to sleep — nothing sleeps on its own"
                   isEnabled={idleNotifyConfig?.enabled ?? true}
                   onChange={handleIdleNotifyToggle}
                   disabled={!idleNotifyConfig}
@@ -1338,10 +1224,10 @@ export function GeneralTab({
                   <SettingsPresetGroup<number>
                     id="general-idle-background-threshold"
                     label="Close after"
-                    description="How long a background project sits idle before it closes"
+                    description="How long a background project with no open terminals sits idle before it closes"
                     options={IDLE_BACKGROUND_THRESHOLD_PRESETS}
                     value={idleAutoCloseConfig?.thresholdMinutes ?? null}
-                    onChange={(v) => void handleIdleAutoCloseThresholdChange(v)}
+                    onChange={(v) => void updateIdleAutoCloseConfig({ thresholdMinutes: v })}
                     disabled={isIdleAutoCloseSaving}
                     isModified={
                       !!idleAutoCloseConfig &&
@@ -1349,52 +1235,55 @@ export function GeneralTab({
                         DEFAULT_IDLE_BACKGROUND_THRESHOLD_MINUTES
                     }
                     onReset={() =>
-                      void handleIdleAutoCloseThresholdChange(
-                        DEFAULT_IDLE_BACKGROUND_THRESHOLD_MINUTES
-                      )
+                      void updateIdleAutoCloseConfig({
+                        thresholdMinutes: DEFAULT_IDLE_BACKGROUND_THRESHOLD_MINUTES,
+                      })
                     }
                   />
-                </SettingsDependents>
-              </SettingsGroup>
-              {configError && (
-                <SettingsLoadErrorBanner
-                  title="Couldn't load hibernation settings"
-                  message={configError}
-                  onRetry={() => setConfigRetryNonce((n) => n + 1)}
-                />
-              )}
-              {saveFailureBanner("hibernation")}
-              <SettingsGroup id="general-hibernation">
-                <SettingsSwitchCard
-                  title="Hibernate inactive projects"
-                  subtitle="Stops their terminals and dev servers to free resources; the project reopens where you left it"
-                  isEnabled={hibernationConfig?.enabled ?? false}
-                  onChange={handleHibernationToggle}
-                  disabled={!hibernationConfig}
-                  isModified={!!hibernationConfig?.enabled}
-                  onReset={() => void handleHibernationToggle()}
-                />
-                <SettingsDependents
-                  disabled={!hibernationConfig?.enabled}
-                  reason={
-                    hibernationConfig ? "Turn on hibernation to choose when it happens" : undefined
-                  }
-                >
-                  <SettingsPresetGroup<number>
-                    id="general-hibernation-threshold"
-                    label="Hibernate after"
-                    description="How long a project sits idle before its processes are stopped"
-                    options={THRESHOLD_PRESETS}
-                    value={hibernationConfig?.inactiveThresholdHours ?? null}
-                    onChange={(v) => void handleThresholdChange(v)}
-                    disabled={isSaving}
-                    isModified={
-                      !!hibernationConfig &&
-                      hibernationConfig.inactiveThresholdHours !==
-                        DEFAULT_HIBERNATION_THRESHOLD_HOURS
+                  <SettingsSwitchCard
+                    id="general-idle-background-include-shells"
+                    title="Include projects with idle terminals"
+                    subtitle="Also sleeps projects whose shells have nothing running and whose agents sit at their prompt with nothing running beside them. An agent sleeps only if it will resume its conversation."
+                    isEnabled={idleAutoCloseConfig?.includeIdleShells ?? false}
+                    onChange={() =>
+                      void updateIdleAutoCloseConfig({
+                        includeIdleShells: !idleAutoCloseConfig?.includeIdleShells,
+                      })
                     }
-                    onReset={() => void handleThresholdChange(DEFAULT_HIBERNATION_THRESHOLD_HOURS)}
+                    disabled={!idleAutoCloseConfig || isIdleAutoCloseSaving}
+                    isModified={!!idleAutoCloseConfig?.includeIdleShells}
+                    onReset={() => void updateIdleAutoCloseConfig({ includeIdleShells: false })}
                   />
+                  <SettingsDependents
+                    disabled={!idleAutoCloseConfig?.includeIdleShells}
+                    reason={
+                      idleAutoCloseConfig?.enabled
+                        ? "Include projects with idle terminals to choose when they sleep"
+                        : undefined
+                    }
+                  >
+                    <SettingsPresetGroup<IdleShellThresholdMinutes>
+                      id="general-idle-shell-threshold"
+                      label="Sleep after"
+                      description="How long a project with terminals stays off screen with no terminal input or output"
+                      options={IDLE_SHELL_THRESHOLD_PRESETS}
+                      value={idleAutoCloseConfig?.idleShellThresholdMinutes ?? null}
+                      onChange={(v) =>
+                        void updateIdleAutoCloseConfig({ idleShellThresholdMinutes: v })
+                      }
+                      disabled={isIdleAutoCloseSaving}
+                      isModified={
+                        !!idleAutoCloseConfig &&
+                        idleAutoCloseConfig.idleShellThresholdMinutes !==
+                          DEFAULT_IDLE_SHELL_THRESHOLD_MINUTES
+                      }
+                      onReset={() =>
+                        void updateIdleAutoCloseConfig({
+                          idleShellThresholdMinutes: DEFAULT_IDLE_SHELL_THRESHOLD_MINUTES,
+                        })
+                      }
+                    />
+                  </SettingsDependents>
                 </SettingsDependents>
               </SettingsGroup>
             </SettingsSection>
@@ -1404,7 +1293,7 @@ export function GeneralTab({
         {effectiveSubtab === "display" && (
           <SettingsSection
             title="Interface elements"
-            badge={ownerMarker("device")}
+            settings={SECTION_SETTINGS.interfaceElements}
             description="What Daintree shows while you work"
             id="general-project-pulse"
           >

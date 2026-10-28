@@ -56,6 +56,7 @@ export function registerGitReadHandlers(deps: HandlerDependencies): () => void {
     filePath: string;
     status: string;
     ignoreWhitespace?: boolean;
+    side?: string;
     offset?: number;
     maxBytes?: number;
   }): Promise<GitFileDiffResult> => {
@@ -64,7 +65,7 @@ export function registerGitReadHandlers(deps: HandlerDependencies): () => void {
       throw new Error("Invalid payload");
     }
 
-    const { cwd, filePath, status, ignoreWhitespace, offset, maxBytes } = payload;
+    const { cwd, filePath, status, ignoreWhitespace, side, offset, maxBytes } = payload;
 
     if (typeof cwd !== "string" || !cwd) {
       throw new Error("Invalid working directory");
@@ -77,6 +78,9 @@ export function registerGitReadHandlers(deps: HandlerDependencies): () => void {
     }
     if (ignoreWhitespace !== undefined && typeof ignoreWhitespace !== "boolean") {
       throw new Error("Invalid ignoreWhitespace");
+    }
+    if (side !== undefined && side !== "staged" && side !== "unstaged") {
+      throw new Error("Invalid side");
     }
     // The renderer argsSchema is one caller among several; the ceiling is
     // re-enforced here so no IPC client can ask for an unbounded window.
@@ -101,7 +105,8 @@ export function registerGitReadHandlers(deps: HandlerDependencies): () => void {
         status,
         ignoreWhitespace,
         offset,
-        maxBytes
+        maxBytes,
+        side
       );
     } catch (error) {
       const errorMessage = formatErrorMessage(error, "Failed to get file diff");
@@ -158,7 +163,23 @@ export function registerGitReadHandlers(deps: HandlerDependencies): () => void {
     }
 
     const senderWindowPulse = ctx.event && getWindowForWebContents(ctx.event.sender);
-    const states = await deps.worktreeService.getAllStatesAsync(senderWindowPulse?.id);
+    // With no window behind the call (a host call on a project nobody has
+    // open) the unscoped read spans every project, so the main worktree it
+    // picks could be another repository's.
+    const project =
+      !senderWindowPulse && ctx.projectId
+        ? (await import("../../services/ProjectStore.js")).projectStore.getProjectById(
+            ctx.projectId
+          )
+        : null;
+    const states = project
+      ? (
+          await deps.worktreeService.getAllStatesWithGitBackedForProjectAsync(
+            project.path,
+            project.id
+          )
+        ).states
+      : await deps.worktreeService.getAllStatesAsync(senderWindowPulse?.id);
     const mainWorktree = states.find((wt) => wt.isMainWorktree);
     const mainBranch = mainWorktree?.branch ?? "main";
 

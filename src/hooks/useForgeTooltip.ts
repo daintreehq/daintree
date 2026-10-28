@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import type { IssueTooltipData, PRTooltipData } from "@shared/types/forge";
+import type { IssueLinkTarget } from "@shared/types/ipc/forge";
 import { TtlCache } from "@/utils/ttlCache";
 import { forgeClient } from "@/clients";
 import { useProjectStore } from "@/store/projectStore";
@@ -33,13 +34,19 @@ const credentialStatusCache = new TtlCache<string, boolean>(16, CREDENTIAL_STATU
  * Fetching is enabled only once a forge provider resolves for the current
  * project; `missingCredential` drives the badges' "connect your forge" state
  * (the WCAG-relevant affordance the old `missingToken` flag provided).
+ *
+ * `namedProviderId` is the provider an issue link names (#13744), which may be
+ * neither of the project's current bindings; its credential is the one that
+ * matters, and main reports it unavailable if it's gone.
  */
-function useForgeTooltipGate(role: "issues" | "code") {
+function useForgeTooltipGate(role: "issues" | "code", namedProviderId?: string) {
   const projectId = useProjectStore((s) => s.currentProject?.id ?? null);
   const resolved = useResolvedForgeProvider(projectId);
   // Issue badges ask the issues provider, which a project may bind apart from
   // the code forge (#13700) — and it has its own credential.
-  const { entry, providerId } = role === "issues" ? resolved.issues : resolved;
+  const binding = role === "issues" ? resolved.issues : resolved;
+  const providerResolved = namedProviderId !== undefined || binding.entry !== null;
+  const providerId = namedProviderId ?? binding.providerId;
   const [hasCredential, setHasCredential] = useState<boolean | null>(() =>
     providerId ? (credentialStatusCache.get(providerId) ?? null) : null
   );
@@ -88,24 +95,49 @@ function useForgeTooltipGate(role: "issues" | "code") {
   }, [providerId]);
 
   return {
-    providerResolved: entry !== null,
+    providerResolved,
     providerId,
-    missingCredential: entry !== null && hasCredential === false,
+    missingCredential: providerResolved && hasCredential === false,
     recheckCredential,
   };
 }
 
 const inFlightIssues = new Map<string, Promise<IssueTooltipData | null>>();
 
-export function useIssueTooltip(cwd: string | undefined, issueNumber: number | undefined) {
-  const [state, setState] = useState<TooltipState<IssueTooltipData>>({
-    data: null,
-    loading: false,
-    error: false,
-  });
+type IssueTooltipState = TooltipState<IssueTooltipData> & { key: string | null };
+const IDLE_ISSUE_TOOLTIP: IssueTooltipState = {
+  data: null,
+  loading: false,
+  error: false,
+  key: null,
+};
+
+/**
+ * `target` says whose number this is (#13744) — see {@link IssueLinkTarget}.
+ * Omitted, the number is read from the project's issues provider.
+ */
+export function useIssueTooltip(
+  cwd: string | undefined,
+  issueNumber: number | undefined,
+  target?: IssueLinkTarget
+) {
+  // State remembers which issue it describes, so a response for a link the
+  // badge no longer shows is never painted under it (#13744).
+  const [state, setState] = useState<IssueTooltipState>(IDLE_ISSUE_TOOLTIP);
   const mountedRef = useRef(true);
+  const targetRole = target?.role;
+  const issueProviderId = target?.issueProviderId;
+  const issueId = target?.issueId;
+  const issueKey = target?.issueKey;
   const { providerResolved, providerId, missingCredential, recheckCredential } =
-    useForgeTooltipGate("issues");
+    useForgeTooltipGate(targetRole === "code" ? "code" : "issues", issueProviderId);
+  // The provider and the issue's own identity, never the number alone: two
+  // trackers can both have an issue 42, and a renumbered issue keeps its id.
+  // Tagged by kind so a stable id of "7" never meets issue #7.
+  const cacheKey =
+    cwd && issueNumber
+      ? `${providerId ?? ""}:${cwd}:${issueId ? `id:${issueId}` : issueKey ? `key:${issueKey}` : `#${issueNumber}`}`
+      : null;
 
   useEffect(() => {
     mountedRef.current = true;
@@ -115,47 +147,70 @@ export function useIssueTooltip(cwd: string | undefined, issueNumber: number | u
   }, []);
 
   const fetchTooltip = useCallback(async () => {
-    if (!cwd || !issueNumber || !providerResolved) return;
+    if (!cwd || !issueNumber || !cacheKey || !providerResolved) return;
     if (missingCredential && !(await recheckCredential())) return;
 
-    const cacheKey = `${providerId ?? ""}:${cwd}:${issueNumber}`;
+    const settled: (result: IssueTooltipData | null) => IssueTooltipState = (result) => ({
+      data: result,
+      loading: false,
+      error: result === null,
+      key: cacheKey,
+    });
+    // A completion lands only while the badge still shows this request's link:
+    // a newer link's request has re-keyed the state, and must keep it.
+    const toSettled =
+      (result: IssueTooltipData | null) =>
+      (prev: IssueTooltipState): IssueTooltipState =>
+        prev.key === cacheKey ? settled(result) : prev;
+    const toLoading = (prev: IssueTooltipState): IssueTooltipState =>
+      prev.key === cacheKey
+        ? { ...prev, loading: true, error: false }
+        : { data: null, loading: true, error: false, key: cacheKey };
+
     const cached = issueCache.get(cacheKey);
     if (cached) {
-      setState({ data: cached, loading: false, error: false });
+      setState(settled(cached));
       return;
     }
 
     const inFlight = inFlightIssues.get(cacheKey);
     if (inFlight) {
       const joinedGeneration = cacheGeneration;
-      setState((prev) => ({ ...prev, loading: true, error: false }));
+      setState(toLoading);
       try {
-        const data = await inFlight;
+        const result = await inFlight;
         if (!mountedRef.current || joinedGeneration !== cacheGeneration) return;
-        if (data) {
-          setState({ data, loading: false, error: false });
-        } else {
-          setState({ data: null, loading: false, error: true });
-        }
+        setState(toSettled(result));
       } catch {
         if (!mountedRef.current || joinedGeneration !== cacheGeneration) return;
-        setState({ data: null, loading: false, error: true });
+        setState(toSettled(null));
       }
       return;
     }
 
-    setState((prev) => ({ ...prev, loading: true, error: false }));
+    setState(toLoading);
 
     const generation = cacheGeneration;
     const promise = (async () => {
-      const data = await forgeClient.getIssueTooltip(cwd, issueNumber);
+      const fetched = await forgeClient.getIssueTooltip(
+        cwd,
+        issueNumber,
+        targetRole || issueProviderId
+          ? {
+              ...(targetRole ? { role: targetRole } : {}),
+              ...(issueProviderId ? { issueProviderId } : {}),
+              ...(issueId ? { issueId } : {}),
+              ...(issueKey ? { issueKey } : {}),
+            }
+          : undefined
+      );
       // A sidebar refresh landed while this was in flight: the response predates
       // the invalidation, so writing it back would re-poison the cache the
       // refresh just cleared and the next hover would serve pre-refresh data.
-      if (data && generation === cacheGeneration) {
-        issueCache.set(cacheKey, data);
+      if (fetched && generation === cacheGeneration) {
+        issueCache.set(cacheKey, fetched);
       }
-      return data;
+      return fetched;
     })();
 
     inFlightIssues.set(cacheKey, promise);
@@ -167,28 +222,36 @@ export function useIssueTooltip(cwd: string | undefined, issueNumber: number | u
     promise.then(clearInFlight, clearInFlight);
 
     try {
-      const data = await promise;
+      const result = await promise;
       // Same fence as the cache write: a response from before the refresh must
       // not paint pre-refresh detail into an open tooltip, and must not
       // overwrite a newer request that already resolved. The tooltip re-fetches
       // on its next open rather than committing data the refresh invalidated.
       if (!mountedRef.current || generation !== cacheGeneration) return;
-      if (data) {
-        setState({ data, loading: false, error: false });
-      } else {
-        setState({ data: null, loading: false, error: true });
-      }
+      setState(toSettled(result));
     } catch {
       if (!mountedRef.current || generation !== cacheGeneration) return;
-      setState({ data: null, loading: false, error: true });
+      setState(toSettled(null));
     }
-  }, [cwd, issueNumber, providerId, providerResolved, missingCredential, recheckCredential]);
+  }, [
+    cwd,
+    issueNumber,
+    cacheKey,
+    targetRole,
+    issueProviderId,
+    issueId,
+    issueKey,
+    providerResolved,
+    missingCredential,
+    recheckCredential,
+  ]);
 
   const reset = useCallback(() => {
-    setState({ data: null, loading: false, error: false });
+    setState(IDLE_ISSUE_TOOLTIP);
   }, []);
 
-  return { ...state, missingCredential, providerId, fetchTooltip, reset };
+  const { data, loading, error } = state.key === cacheKey ? state : IDLE_ISSUE_TOOLTIP;
+  return { data, loading, error, missingCredential, providerId, fetchTooltip, reset };
 }
 
 const inFlightPRs = new Map<string, Promise<PRTooltipData | null>>();

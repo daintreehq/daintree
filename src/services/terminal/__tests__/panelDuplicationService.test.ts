@@ -197,6 +197,33 @@ describe("buildPanelSnapshotOptions", () => {
       agentLaunchFlags: ["--verbose"],
     });
   });
+
+  it("reopens with the launch record, since the stored command carries its prompt (#14592)", () => {
+    const firstPrompt = { text: "Port the parser", via: "launch" as const, at: 1_000 };
+    const reopened = buildPanelSnapshotOptions(
+      makePanel({ launchAgentId: "claude", command: "claude 'Port the parser'", firstPrompt })
+    );
+    expect(reopened?.launchPrompt).toEqual(firstPrompt);
+
+    const sent = buildPanelSnapshotOptions(
+      makePanel({
+        launchAgentId: "claude",
+        command: "claude",
+        firstPrompt: { text: "Port the parser", via: "send", at: 1_000 },
+      })
+    );
+    expect(sent).not.toHaveProperty("launchPrompt");
+  });
+
+  it("keeps a recipe agent's required plugin tools on the reopened pane (#14096)", () => {
+    const panel = makePanel({
+      kind: "terminal",
+      launchAgentId: "claude",
+      command: "claude",
+      requiredPluginTools: ["acme.tools"],
+    });
+    expect(buildPanelSnapshotOptions(panel)?.requiredPluginTools).toEqual(["acme.tools"]);
+  });
 });
 
 describe("panelDuplicationService", () => {
@@ -254,6 +281,17 @@ describe("panelDuplicationService", () => {
     expect(result.command).toBe("generated-claude-command");
   });
 
+  it("holds a duplicated recipe agent to the same required plugin tools (#14096)", async () => {
+    const panel = makePanel({
+      kind: "terminal",
+      launchAgentId: "claude",
+      command: "old-cmd",
+      requiredPluginTools: ["acme.tools"],
+    });
+    const result = await buildPanelDuplicateOptions(panel, "grid");
+    expect(result.requiredPluginTools).toEqual(["acme.tools"]);
+  });
+
   // #13046: settings rebuild the duplicate's flags, but the caller's own flags
   // have no setting behind them and ride last in both command and flags.
   it("carries the source's caller flags onto the rebuilt command and flags", async () => {
@@ -286,6 +324,38 @@ describe("panelDuplicationService", () => {
     const result = await buildPanelDuplicateOptions(panel, "grid");
 
     expect(result.command).toBe("fallback-cmd");
+  });
+
+  it("hands a copy that replays the stored command its launch record (#14592)", async () => {
+    const { agentSettingsClient } = await import("@/clients");
+    vi.mocked(agentSettingsClient.get).mockRejectedValue(new Error("network error"));
+    const firstPrompt = { text: "Port the parser", via: "launch" as const, at: 1_000 };
+
+    const result = await buildPanelDuplicateOptions(
+      makePanel({ launchAgentId: "claude", command: "claude 'Port the parser'", firstPrompt }),
+      "grid"
+    );
+
+    expect(result.command).toBe("claude 'Port the parser'");
+    expect(result.launchPrompt).toMatchObject({ text: "Port the parser", via: "launch" });
+    expect(result.launchPrompt?.at).toBeGreaterThan(firstPrompt.at);
+  });
+
+  it("gives a copy rebuilt from settings no record, since it was never handed the prompt (#14592)", async () => {
+    const { agentSettingsClient } = await import("@/clients");
+    vi.mocked(agentSettingsClient.get).mockResolvedValue({ agents: { claude: {} } });
+
+    const result = await buildPanelDuplicateOptions(
+      makePanel({
+        launchAgentId: "claude",
+        command: "claude 'Port the parser'",
+        firstPrompt: { text: "Port the parser", via: "launch", at: 1_000 },
+      }),
+      "grid"
+    );
+
+    expect(result.command).toBe("generated-claude-command");
+    expect(result).not.toHaveProperty("launchPrompt");
   });
 
   it("uses existing command for unregistered agents", async () => {
@@ -749,7 +819,7 @@ describe("inherited worktree cwd resolution (#11854)", () => {
     panel: PanelInstance,
     location: "grid" | "dock"
   ) => Promise<AddPanelOptions>;
-  let indexReads: number;
+  let indexReads = 0;
 
   beforeEach(async () => {
     vi.clearAllMocks();

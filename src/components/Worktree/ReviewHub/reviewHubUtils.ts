@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import { COUNT_BADGE_CLASS } from "@/components/ui/badge";
 import { pluralize } from "@/lib/pluralize";
 
-export type DiffMode = "working-tree" | "base-branch";
+export type DiffMode = "working-tree" | "base-branch" | "since-review";
 
 export interface PushErrorState {
   reason: GitOperationReason;

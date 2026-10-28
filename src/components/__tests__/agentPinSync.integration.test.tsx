@@ -2,25 +2,20 @@
 //
 // Integration test for issue #5112: proves that the Agent Tray's pin toggle
 // and Settings > Toolbar's checkbox share the same canonical state via
-// `agentSettingsStore`. A shared mutable mock store stands in for the real
-// Zustand store; both UIs read from and write to the same settings object,
-// which is exactly the guarantee the split-brain fix provides.
+// `agentToolbarPinsStore` (this machine's pins, #14702). A shared mutable mock
+// store stands in for the real Zustand store; both UIs read from and write to
+// the same pins object, which is exactly the guarantee the split-brain fix
+// provides.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, fireEvent } from "@testing-library/react";
-import type { AgentSettings, CliAvailability } from "@shared/types";
+import type { AgentToolbarPins, CliAvailability } from "@shared/types";
 import type { ActionFrecencyEntry } from "@shared/types/actions";
 
-// Shared settings state — mutated by setAgentPinnedMock, read by both UIs.
-let sharedSettings: AgentSettings | null = null;
+// Shared pins — mutated by setAgentPinnedMock, read by both UIs.
+let sharedPins: AgentToolbarPins = {};
 
 const setAgentPinnedMock = vi.fn(async (id: string, pinned: boolean) => {
-  sharedSettings = {
-    ...(sharedSettings ?? ({ agents: {} } as AgentSettings)),
-    agents: {
-      ...(sharedSettings?.agents ?? {}),
-      [id]: { ...(sharedSettings?.agents?.[id] ?? {}), pinned },
-    },
-  } as AgentSettings;
+  sharedPins = { ...sharedPins, [id]: pinned };
 });
 
 const dispatchMock = vi.fn();
@@ -32,15 +27,21 @@ const recordActionMruMock = vi.fn();
 
 // LauncherMenuButton calls `useAgentSettingsStore.getState()` inside
 // `handleLaunch`, so the mock has to expose both the hook selector and a
-// static `getState`. `settings` reads via a getter so `beforeEach`
-// mutations to `sharedSettings` propagate through the static handle too.
+// static `getState`. No pins live here any more (#14702).
 const agentSettingsState = {
-  get settings() {
-    return sharedSettings;
-  },
-  setAgentPinned: setAgentPinnedMock,
+  settings: { agents: {} },
   updateAgent: updateAgentMock,
   updateWorktreePreset: updateWorktreePresetMock,
+};
+
+// `pins` reads via a getter so mutations to `sharedPins` propagate through
+// every render.
+const agentToolbarPinsState = {
+  get pins() {
+    return sharedPins;
+  },
+  revision: 0,
+  setAgentPinned: setAgentPinnedMock,
 };
 
 // The toolbar tab's reset confirm reaches for stores this suite's `@/store`
@@ -51,6 +52,14 @@ vi.mock("@/store/agentSettingsStore", () => ({
   useAgentSettingsStore: Object.assign(
     (selector: (s: typeof agentSettingsState) => unknown) => selector(agentSettingsState),
     { getState: () => agentSettingsState }
+  ),
+}));
+
+vi.mock("@/store/agentToolbarPinsStore", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/store/agentToolbarPinsStore")>()),
+  useAgentToolbarPinsStore: Object.assign(
+    (selector: (s: typeof agentToolbarPinsState) => unknown) => selector(agentToolbarPinsState),
+    { getState: () => agentToolbarPinsState }
   ),
 }));
 
@@ -231,6 +240,7 @@ vi.mock("@/registry", () => ({
 
 vi.mock("@shared/config/panelKindRegistry", () => ({
   panelKindIsDockable: () => true,
+  panelKindIsProjectScoped: () => false,
   getPanelKindConfig: () => undefined,
   subscribeToPanelKindRegistry: () => () => {},
   getPanelKindRegistrySnapshot: () => 0,
@@ -467,13 +477,7 @@ describe("agent pin sync — Settings > Toolbar and Agent Tray share state (#511
     updateAgentMock.mockClear();
     updateWorktreePresetMock.mockClear();
     recordActionMruMock.mockClear();
-    sharedSettings = {
-      agents: {
-        claude: { pinned: true },
-        gemini: { pinned: false },
-        codex: { pinned: false },
-      },
-    } as AgentSettings;
+    sharedPins = { claude: true, gemini: false, codex: false };
     sharedToolbarLayout = {
       leftButtons: ["launcher", "claude", "gemini", "codex", "terminal"],
       rightButtons: ["settings"],
@@ -512,13 +516,7 @@ describe("agent pin sync — Settings > Toolbar and Agent Tray share state (#511
       gemini: "ready",
       codex: "ready",
     } as unknown as CliAvailability;
-    sharedSettings = {
-      agents: {
-        claude: { pinned: true },
-        gemini: { pinned: false },
-        codex: { pinned: false },
-      },
-    } as AgentSettings;
+    sharedPins = { claude: true, gemini: false, codex: false };
 
     // Initial Settings render: gemini unchecked. No availability is known for
     // it yet, so it sits behind the uninstalled-agent disclosure.
@@ -544,7 +542,7 @@ describe("agent pin sync — Settings > Toolbar and Agent Tray share state (#511
 
   it("undefined-pin agent with ready availability renders checked and toggles to false", () => {
     // Tri-state fallback (#7673): no explicit pin, ready CLI → visible.
-    sharedSettings = { agents: {} } as AgentSettings;
+    sharedPins = {};
     sharedAvailability = { claude: "ready" } as unknown as CliAvailability;
 
     const settings = render(<ToolbarSettingsTab />);
@@ -555,7 +553,7 @@ describe("agent pin sync — Settings > Toolbar and Agent Tray share state (#511
   });
 
   it("undefined-pin agent with missing availability renders unchecked and toggles to true", () => {
-    sharedSettings = { agents: {} } as AgentSettings;
+    sharedPins = {};
     sharedAvailability = { gemini: "missing" } as unknown as CliAvailability;
 
     const settings = render(<ToolbarSettingsTab />);

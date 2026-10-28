@@ -40,6 +40,22 @@ vi.mock("../../store.js", () => {
   return { store: { get: vi.fn(read), set: vi.fn(write) } };
 });
 
+/** Each change push, with the machine whose main process sent it. */
+const pushes = vi.hoisted(
+  () => [] as Array<{ machine: "shell" | "host"; channel: string; payload: unknown }>
+);
+
+vi.mock("../utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../utils.js")>()),
+  broadcastToRenderer: vi.fn((channel: string, payload: unknown) => {
+    pushes.push({
+      machine: machines.current === machines.host ? "host" : "shell",
+      channel,
+      payload,
+    });
+  }),
+}));
+
 import { ipcMain } from "electron";
 import type { IpcMainInvokeEvent } from "electron";
 import { wrapSuccess } from "../../../shared/utils/ipcErrorSerialization.js";
@@ -50,6 +66,7 @@ import { CHANNELS } from "../channels.js";
 import { _resetIpcDispatcherForTesting, getIpcDispatcher } from "../dispatcher.js";
 import type { EndpointInvocation, RemoteRouter } from "../endpoint.js";
 import { registerTerminalConfigHandlers } from "../handlers/terminalConfig.js";
+import { acceptHostPush, acceptLocalPushForRemoteView } from "../../remote/hybrid/eventsPush.js";
 
 type TerminalConfigField = keyof StoreSchema["terminalConfig"];
 type LocalListener = (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown;
@@ -136,6 +153,7 @@ beforeEach(() => {
   machines.host.terminalConfig = {};
   machines.current = machines.shell;
   forwarded = [];
+  pushes.length = 0;
   const dispatcher = getIpcDispatcher();
   dispatcher.setInvokeEnveloper(async (_channel, _args, call, options) => {
     const value = await call();
@@ -172,11 +190,8 @@ afterEach(() => {
 
 describe("terminal config in a window attached to another host", () => {
   it("exercises a writer for every terminal-config setter and every field", () => {
-    const setters = Object.values(CHANNELS).filter(
-      (channel) =>
-        channel.startsWith("terminal-config:") &&
-        channel !== CHANNELS.TERMINAL_CONFIG_GET &&
-        channel !== CHANNELS.TERMINAL_CONFIG_IMPORT_COLOR_SCHEME
+    const setters = Object.values(CHANNELS).filter((channel) =>
+      channel.startsWith("terminal-config:set-")
     );
     expect(WRITES.map((write) => write.channel).sort()).toEqual([...setters].sort());
     expect(new Set(WRITES.map((write) => write.field))).toEqual(
@@ -196,6 +211,28 @@ describe("terminal config in a window attached to another host", () => {
       expect(written.terminalConfig).toEqual({ [field]: value });
       expect(untouched.terminalConfig).toEqual({});
       expect(forwarded).toEqual(owner === "host" ? [channel] : []);
+    });
+
+    it(`${channel} tells views of the ${owner === "host" ? "host" : "machine you're at"} about ${field}`, async () => {
+      await invokeFromRemoteWindow(channel, [value]);
+
+      expect(pushes).toHaveLength(1);
+      const [push] = pushes;
+      expect(push.machine).toBe(owner === "host" ? "host" : "shell");
+      expect(push.channel).toBe(
+        owner === "host"
+          ? CHANNELS.TERMINAL_CONFIG_HOST_CHANGED
+          : CHANNELS.TERMINAL_CONFIG_DEVICE_CHANGED
+      );
+      const payload = push.payload as Record<string, unknown>;
+      expect(payload[field]).toEqual(value);
+      // Only the owner's fields, so the other machine's half is never overwritten.
+      for (const key of Object.keys(payload)) {
+        expect(TERMINAL_CONFIG_FIELD_OWNERSHIP[key as TerminalConfigField]).toBe(owner);
+      }
+      // A window here bound to the host takes the push from the owner alone.
+      expect(acceptLocalPushForRemoteView(push.channel, [payload])).toBe(owner === "device");
+      expect(acceptHostPush(push.channel, [payload])).toBe(owner === "host");
     });
   }
 

@@ -60,6 +60,7 @@ import type {
 } from "@shared/types/memoryAccounting";
 import type { ProcessMetricEntry } from "@shared/types/ipc/system";
 import { ProjectResourceBadge } from "../ProjectResourceBadge";
+import { _resetPluginTaskStoreForTest, usePluginTaskStore } from "@/store/pluginTaskStore";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { primeRadix } from "@/components/ui/radix-loader";
 
@@ -483,6 +484,124 @@ describe("ProjectResourceBadge — popover memory honesty", () => {
     expect(mockGetBulkStats).not.toHaveBeenCalled();
   });
 
+  it("lists renderer terminal buffers per project view, cached and unanswered ones included", async () => {
+    mockGetAll.mockResolvedValue([
+      makeProject({ id: "p1", name: "Agents" }),
+      makeProject({ id: "p2", name: "Backgrounded" }),
+      makeProject({ id: "p3", name: "Silent" }),
+    ]);
+    const mb = 1024 * 1024;
+    mockGetMemorySnapshot.mockResolvedValue({
+      ...makeMemorySnapshot(),
+      rendererTerminalBuffers: {
+        complete: false,
+        estimatedBytes: 30 * mb,
+        views: [
+          {
+            webContentsId: 3,
+            windowId: 1,
+            projectId: "p3",
+            state: "cached",
+            status: "unavailable",
+            sampledAt: null,
+            ageMs: null,
+            estimatedBytes: null,
+            terminals: null,
+          },
+          {
+            webContentsId: 2,
+            windowId: 1,
+            projectId: "p2",
+            state: "cached",
+            status: "last-known",
+            sampledAt: Date.now() - 120_000,
+            ageMs: 120_000,
+            estimatedBytes: 5 * mb,
+            terminals: [],
+          },
+          {
+            webContentsId: 1,
+            windowId: 1,
+            projectId: "p1",
+            state: "active",
+            status: "fresh",
+            sampledAt: Date.now(),
+            ageMs: 0,
+            estimatedBytes: 25 * mb,
+            terminals: [],
+          },
+        ],
+      },
+    });
+
+    const container = await renderOpenBadge();
+    const breakdown = container.ownerDocument.querySelector(
+      '[data-testid="terminal-buffer-breakdown"]'
+    );
+    const text = breakdown?.textContent ?? "";
+
+    expect(text).toContain("estimate");
+    // Partial coverage is named rather than passed off as the whole.
+    expect(text).toContain("Projects that reported~30 MB");
+    expect(text).toContain("Agents~25 MB");
+    expect(text).toContain("Backgrounded · cached 2m ago~5 MB");
+    expect(text).toContain("Silent · cachedUnavailable");
+    // Heaviest first, the unanswered view last.
+    expect(text.indexOf("Agents")).toBeLessThan(text.indexOf("Backgrounded"));
+    expect(text.indexOf("Backgrounded")).toBeLessThan(text.indexOf("Silent"));
+  });
+
+  it("ages an active view's buffer reading once it stops answering, and names remote views by host", async () => {
+    // A remote window lists its host's projects by bare id; views arrive host-scoped.
+    Object.defineProperty(window, "__DAINTREE_HOST_ID__", {
+      configurable: true,
+      value: { id: "studio-01" },
+    });
+    try {
+      mockGetAll.mockResolvedValue([makeProject({ id: "proj-a", name: "Remote repo" })]);
+      const view = (webContentsId: number, projectId: string, ageMs: number) => ({
+        webContentsId,
+        windowId: webContentsId,
+        projectId,
+        state: "active" as const,
+        status: "last-known" as const,
+        sampledAt: Date.now() - ageMs,
+        ageMs,
+        estimatedBytes: 4 * 1024 * 1024,
+        terminals: [],
+      });
+      mockGetMemorySnapshot.mockResolvedValue({
+        ...makeMemorySnapshot(),
+        rendererTerminalBuffers: {
+          complete: true,
+          estimatedBytes: 8 * 1024 * 1024,
+          views: [view(1, "studio-01:proj-a", 90_000), view(2, "lab-02:proj-a", 0)],
+        },
+      });
+
+      const container = await renderOpenBadge();
+      const text =
+        container.ownerDocument.querySelector('[data-testid="terminal-buffer-breakdown"]')
+          ?.textContent ?? "";
+
+      expect(text).toContain("Remote repo · from 2m ago~4 MB");
+      // Same bare id on another host: not this host's project.
+      expect(text).toContain("Project on lab-02");
+    } finally {
+      delete window.__DAINTREE_HOST_ID__;
+    }
+  });
+
+  it("omits the buffer section when the snapshot didn't sample renderers", async () => {
+    mockGetMemorySnapshot.mockResolvedValue(makeMemorySnapshot());
+
+    const container = await renderOpenBadge();
+
+    expect(
+      container.ownerDocument.querySelector('[data-testid="terminal-buffer-breakdown"]')
+    ).toBeNull();
+  });
+
   it("folds a long project list behind a disclosure whose label does not change", async () => {
     const projects = Array.from({ length: 8 }, (_, i) =>
       makeProject({ id: `p${i}`, name: `Project ${i}` })
@@ -587,5 +706,50 @@ describe("ProjectResourceBadge — process ownership", () => {
     expect(container.querySelectorAll("[title]")).toHaveLength(0);
     const found = await findProcessRowLabel(container, 400);
     expect(found?.tooltip).toBe("2 views · Cedar Forge, RuinWeave (400)");
+  });
+});
+
+describe("ProjectResourceBadge — plugin tasks (#13819)", () => {
+  beforeEach(setupDefaultMocks);
+
+  afterEach(() => {
+    _resetPluginTaskStoreForTest();
+    restoreTimersAndMocks();
+  });
+
+  it("lists running plugin tasks under their own heading, before memory", async () => {
+    const task = {
+      id: "t-1",
+      pluginId: "acme",
+      pluginName: "Acme",
+      title: "Importing records",
+      fraction: 0.5,
+      cancellable: true,
+      state: "working" as const,
+      startedAt: 1,
+    };
+    usePluginTaskStore.setState({ tasks: [task], tasksByPluginId: { acme: [task] } });
+    const container = await renderOpenBadge();
+
+    // The popover is named by both headings (aria-labelledby on the real
+    // content, which this suite stubs), so both must exist.
+    const heading = container.querySelector("#plugin-tasks-title");
+    const memory = container.querySelector("#resource-usage-title");
+    expect(heading?.textContent).toBe("Plugin tasks");
+    expect(memory?.textContent).toBe("Memory");
+    expect(
+      heading!.compareDocumentPosition(memory!) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    const list = screen.getByRole("list", { name: "Plugin tasks" });
+    expect(list.textContent).toContain("Importing records");
+    expect(list.textContent).toContain("Acme");
+    expect(screen.getByRole("button", { name: "Cancel Importing records" })).toBeTruthy();
+  });
+
+  it("leaves the section out entirely while no plugin has a task", async () => {
+    const container = await renderOpenBadge();
+
+    expect(container.querySelector("#plugin-tasks-title")).toBeNull();
+    expect(screen.queryByRole("list", { name: "Plugin tasks" })).toBeNull();
   });
 });

@@ -12,10 +12,12 @@ import {
   HostPluginAssetService,
   type HostPluginAssetEndpoint,
   type HostPluginAssetPlugin,
+  type HostPluginAssetServiceOptions,
 } from "./HostPluginAssetService.js";
 import { persistedPluginViewConsent } from "./pluginViewConsent.js";
 import { PluginViewGate, type PluginViewQuestion } from "./pluginViewGate.js";
 import { defaultHostName, installPluginShellRequests } from "./shellRequests.js";
+import { installAccountSignInRequests } from "./accountSignIn.js";
 
 declare module "../runtime.js" {
   interface RemoteServices {
@@ -84,8 +86,9 @@ export function revokePluginViewDecisions(hostId: HostId, pluginId?: string): vo
 
 /**
  * Shell side: answer host plugins' prompts, consent and clipboard requests for
- * the views that drive their projects, and load their view bundles from the
- * host. Returns a teardown.
+ * the views that drive their projects, run the browser half of the account
+ * sign-ins views here start, and load their view bundles from the host.
+ * Returns a teardown.
  */
 export function installPluginClient(
   feed: PluginEndpointFeed,
@@ -100,6 +103,7 @@ export function installPluginClient(
       onEndpointOpened: feed.onEndpointOpened,
       onEndpointClosed: feed.onEndpointClosed,
     }),
+    installAccountSignInRequests(),
     feed.onEndpointOpened((hostId, info) => assets.noteEndpointOpened(hostId, info)),
     feed.onEndpointClosed((hostId, info) => assets.noteEndpointClosed(hostId, info)),
     setRemotePluginAssetProxy(assets.proxy),
@@ -168,12 +172,17 @@ async function showPluginViewDialog(question: PluginViewQuestion): Promise<boole
 
 async function loadedPlugins(): Promise<HostPluginAssetPlugin[]> {
   const { pluginService } = await import("../../services/PluginService.js");
-  return pluginService.listPlugins().map((info) => ({
-    instanceId: info.instanceId,
-    projectId: info.projectId,
-    dir: info.dir,
-    remoteUnsupported: info.manifest.remote === "unsupported",
-  }));
+  // A per-project package's own row serves nothing: its assets are reached
+  // through each instance's project-bound row.
+  return pluginService
+    .listPlugins()
+    .filter((info) => info.instanceMode !== "project")
+    .map((info) => ({
+      instanceId: info.instanceId,
+      projectId: info.projectId,
+      dir: info.dir,
+      remoteUnsupported: info.manifest.remote === "unsupported",
+    }));
 }
 
 /**
@@ -183,12 +192,15 @@ async function loadedPlugins(): Promise<HostPluginAssetPlugin[]> {
  */
 export function installPluginHost(): () => void {
   const lease = getDriveLeaseService();
-  let rootForAuthority: (authority: string) => string | undefined = () => undefined;
+  let resolveAuthority: HostPluginAssetServiceOptions["resolveAuthority"] = () => undefined;
   void import("../../services/PluginService.js").then(({ pluginService }) => {
-    rootForAuthority = (authority) => pluginService.getPluginRootByAuthority(authority);
+    resolveAuthority = (authority) => {
+      const owner = pluginService.resolvePluginAuthority(authority);
+      return owner ? { root: owner.dir, instanceId: owner.pluginId } : undefined;
+    };
   });
   const service = new HostPluginAssetService({
-    rootForAuthority: (authority) => rootForAuthority(authority),
+    resolveAuthority: (authority) => resolveAuthority(authority),
     loadedPlugins,
     isDriving: (projectId, endpoint) => lease.isDriving(projectId, endpoint),
     fetchAsset: (request) => fetchLocalPluginAsset(request),

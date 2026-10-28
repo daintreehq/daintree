@@ -9,7 +9,7 @@
  * mislabeled ones survived.
  */
 import { registerPanelFocusHandler } from "@/components/Panel/panelFocusRegistry";
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { act, render, screen, cleanup } from "@testing-library/react";
 
 const menuCloseHook = vi.hoisted(() => ({
@@ -90,12 +90,15 @@ vi.mock("@/services/ActionService", () => ({
   },
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     getTerminal: () => undefined,
     getSelection: () => "",
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 const worktreeList = vi.hoisted(() => ({
   current: [] as Array<{ id: string; path: string; name: string }>,
@@ -176,6 +179,7 @@ import {
   __resetPanelCloseGuardsForTests,
   registerPanelCloseGuard,
 } from "@/services/panelCloseGuard";
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 
 // A PTY-backed plugin kind. Registered so the real `panelKindHasPty` reports
 // `hasPty: true` for it, which is what keeps such a panel on the terminal menu
@@ -318,6 +322,12 @@ const pluginPanel = {
   pluginId: "acme",
   worktreeId: "wt-1",
 };
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
+});
 
 describe("TerminalContextMenu — plugin panels (#11228)", () => {
   afterEach(() => {

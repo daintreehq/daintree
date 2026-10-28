@@ -8,7 +8,8 @@
  *
  * Uses a correct phase-accumulator with linear interpolation.
  * Input:  Float32 at the AudioContext sample rate (usually 44100 or 48000 Hz)
- * Output: Int16Array chunks at 24000 Hz via postMessage, ~100ms each (2400 samples)
+ * Output: Int16Array chunks at 24000 Hz via postMessage, ~100ms each (2400 samples),
+ *         plus a shorter final chunk when a stop flushes the processor
  */
 class PCMProcessor extends AudioWorkletProcessor {
   constructor() {
@@ -30,15 +31,44 @@ class PCMProcessor extends AudioWorkletProcessor {
     // no PCM chunks cross the IPC boundary. The worklet stays alive (returns
     // true) so resume restores forwarding without rebuilding the audio graph.
     this.isPaused = false;
+    // Set once a stop has flushed this processor. Nothing may follow the
+    // "flushed" marker, so process() stops emitting for good.
+    this.isFlushed = false;
+    // The AudioContext outlives each capture, so a processor that is done must
+    // end itself: returning true would keep it alive in the reused context.
+    this.isDisposed = false;
     this.port.onmessage = (event) => {
       const data = event.data;
-      if (data && data.type === "setPaused") {
+      if (!data) return;
+      if (data.type === "setPaused") {
         this.isPaused = !!data.value;
+      } else if (data.type === "flush") {
+        this.flush();
+      } else if (data.type === "dispose") {
+        this.isDisposed = true;
+        // An open channel keeps both ends, and this processor, alive.
+        this.port.onmessage = null;
+        this.port.close();
       }
     };
   }
 
+  // Posts the partial chunk still being filled, then a marker. Port messages
+  // arrive in order, so the marker tells the main thread that every chunk this
+  // processor produced has already been delivered.
+  flush() {
+    if (!this.isFlushed && this.outIdx > 0) {
+      const buf = this.outBuf.slice(0, this.outIdx).buffer;
+      this.port.postMessage(buf, [buf]);
+      this.outIdx = 0;
+    }
+    this.isFlushed = true;
+    this.port.postMessage({ type: "flushed" });
+  }
+
   process(inputs) {
+    if (this.isFlushed || this.isDisposed) return false;
+
     const input = inputs[0];
     if (!input || input.length === 0) return true;
 

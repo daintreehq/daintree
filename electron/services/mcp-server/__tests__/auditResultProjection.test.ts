@@ -206,16 +206,35 @@ describe("host.list audit projection (#13493)", () => {
           hostId: "studio",
           name: "Greg's studio",
           projects: [{ projectId: "p-1", name: "PROJECT-SENTINEL" }],
+          projectInventory: { complete: false, nextCursor: "CURSOR-SENTINEL" },
         },
-        { hostId: "laptop", name: "laptop", projects: null },
+        { hostId: "laptop", name: "laptop", projects: null, projectInventory: null },
+        { hostId: "mini", name: "mini", projects: [], projectInventory: { complete: true } },
       ],
     });
     expect(projected).toEqual({
-      hostCount: 2,
-      hostIds: ["studio", "laptop"],
-      projectCounts: [1, null],
+      hostCount: 3,
+      hostIds: ["studio", "laptop", "mini"],
+      projectCounts: [1, null, 0],
+      projectsComplete: [false, null, true],
     });
     expect(JSON.stringify(projected)).not.toContain("PROJECT-SENTINEL");
+    expect(JSON.stringify(projected)).not.toContain("CURSOR-SENTINEL");
+  });
+
+  it("records that a call searched or paged, never what it searched for (#14457)", () => {
+    const projected = projectAuditArgs("host.list", {
+      hostId: "studio",
+      projectQuery: "QUERY-SENTINEL",
+      projectCursor: "CURSOR-SENTINEL",
+    });
+    expect(projected).toEqual({
+      includeAgents: false,
+      projectId: null,
+      hostId: "studio",
+      projectQuery: true,
+      projectCursor: true,
+    });
   });
 });
 
@@ -326,11 +345,42 @@ describe("host.call audit projection (#13493)", () => {
       projectId: null,
       tool: "agent.launch",
       callId: CALL_ID,
+      newCallId: null,
       "args.agentId": "claude",
       "args.prompt": "<string: 10 chars>",
       "args.notify": false,
     });
     expect(summarizeMcpArgs(projected)).not.toContain("rm -rf");
+  });
+
+  it("keeps the caller's own id for a first send, so its resend reads as the same call (#14240)", () => {
+    const projected = projectAuditArgs("host.call", {
+      hostId: "studio-01",
+      tool: "terminal.sendCommandOwned",
+      newCallId: CALL_ID,
+      args: {},
+    }) as Record<string, unknown>;
+
+    expect(projected).toMatchObject({ callId: null, newCallId: CALL_ID });
+  });
+
+  it("marks a throwaway target, and keeps what it types to its length (#14444)", () => {
+    const projected = projectAuditArgs("host.call", {
+      hostId: "studio-01",
+      throwaway: true,
+      tool: "throwaway.sendCommand",
+      args: { runId: "run-1", command: "/usage" },
+    }) as Record<string, unknown>;
+
+    expect(projected).toMatchObject({
+      hostId: "studio-01",
+      projectId: null,
+      throwaway: true,
+      tool: "throwaway.sendCommand",
+      "args.runId": "run-1",
+      "args.command": "<string: 6 chars>",
+    });
+    expect(JSON.stringify(projected)).not.toContain("/usage");
   });
 
   it("applies the relayed tool's own projection, and keeps what it names to its length", () => {
@@ -353,14 +403,20 @@ describe("host.call audit projection (#13493)", () => {
         tool: "say hello to the team",
         args: { prompt: "x" },
       })
-    ).toEqual({ hostId: "studio-01", projectId: null, tool: null, callId: null });
+    ).toEqual({ hostId: "studio-01", projectId: null, tool: null, callId: null, newCallId: null });
     expect(
       projectAuditArgs("host.call", {
         hostId: "studio-01",
         tool: "host.call",
         args: { tool: "agent.launch", args: { prompt: "nested" } },
       })
-    ).toEqual({ hostId: "studio-01", projectId: null, tool: "host.call", callId: null });
+    ).toEqual({
+      hostId: "studio-01",
+      projectId: null,
+      tool: "host.call",
+      callId: null,
+      newCallId: null,
+    });
   });
 
   it("keeps nothing anyone wrote when the host audits a call relayed to it, however short", () => {
@@ -399,5 +455,176 @@ describe("host.call audit projection (#13493)", () => {
     expect(projected).toEqual({ outcome: "ok", callId: CALL_ID, isError: false });
     expect(JSON.stringify(summarizeMcpResult(projected))).not.toContain("OUTPUT-SENTINEL");
     expect(projectAuditResult("host.call", "nope")).toEqual({ status: "unrecognized" });
+  });
+});
+
+describe("host.ensureProject audit (#14140)", () => {
+  it("records where it stands, never a host's paths or the questions' words", () => {
+    const result = projectAuditResult("host.ensureProject", {
+      outcome: "ok",
+      detail: null,
+      retryAfterMs: null,
+      hostId: "studio-01",
+      answer: {
+        status: "question",
+        questions: [
+          {
+            reason: "multiple_copies",
+            detail: "PROSE-SENTINEL",
+            accept: null,
+            copies: [
+              { path: "/PATH-SENTINEL", name: "app", registered: true, matchedBy: "remote-url" },
+            ],
+          },
+        ],
+      },
+    });
+    const args = projectAuditArgs("host.ensureProject", {
+      hostId: "studio-01",
+      worktree: true,
+      worktreePath: "/PATH-SENTINEL/wt",
+      copy: "/PATH-SENTINEL",
+      accept: ["unpushed"],
+    });
+
+    expect(result).toEqual({
+      outcome: "ok",
+      hostId: "studio-01",
+      status: "question",
+      projectId: null,
+      how: null,
+      questions: ["multiple_copies"],
+    });
+    expect(args).toEqual({
+      hostId: "studio-01",
+      worktree: true,
+      worktreePath: "<path>",
+      copy: "<path>",
+      accept: "unpushed",
+    });
+    const audited = JSON.stringify([summarizeMcpResult(result), summarizeMcpArgs(args)]);
+    expect(audited).not.toContain("SENTINEL");
+    expect(projectAuditArgs("host.ensureProject", { hostId: "h", copy: "new" })).toMatchObject({
+      copy: "new",
+    });
+    // A call refused for its arguments is audited too, keeping only answers the schema names.
+    expect(
+      projectAuditArgs("host.ensureProject", {
+        hostId: "h",
+        accept: ["unpushed", "/srv/PATH-SENTINEL", 3],
+      })
+    ).toMatchObject({ accept: "unpushed" });
+  });
+});
+
+describe("host.settings audit (#14167)", () => {
+  it("records the hosts, settings and outcomes, never a value, name, detail or ticket", () => {
+    const result = projectAuditResult("host.settings", {
+      outcome: "ok",
+      detail: "PROSE-SENTINEL",
+      retryAfterMs: null,
+      ticket: "TICKET-SENTINEL",
+      hosts: [
+        {
+          hostId: "studio-01",
+          name: "NAME-SENTINEL",
+          outcome: "conflict",
+          detail: "PROSE-SENTINEL",
+          settings: [
+            {
+              key: "agentDefaults.defaultAgent",
+              value: "VALUE-SENTINEL",
+              proposed: "VALUE-SENTINEL",
+            },
+            { key: "KEY-SENTINEL", value: 1 },
+          ],
+        },
+      ],
+    });
+    const args = projectAuditArgs("host.settings", {
+      operation: "preview",
+      hostIds: ["studio-01"],
+      patch: { "agentDefaults.defaultAgent": "VALUE-SENTINEL", "KEY-SENTINEL": true },
+      ticket: "TICKET-SENTINEL",
+    });
+
+    expect(result).toEqual({
+      outcome: "ok",
+      ticketed: true,
+      hosts: [{ hostId: "studio-01", outcome: "conflict", keys: ["agentDefaults.defaultAgent"] }],
+    });
+    expect(args).toMatchObject({
+      operation: "preview",
+      keys: ["agentDefaults.defaultAgent"],
+      ticketed: true,
+    });
+    const audited = JSON.stringify([summarizeMcpResult(result), summarizeMcpArgs(args)]);
+    expect(audited).not.toContain("SENTINEL");
+    expect(projectAuditResult("host.settings", "nope")).toEqual({ status: "unrecognized" });
+  });
+});
+
+describe("host.watch audit (#14463)", () => {
+  it("records which watches and where each stands, never the note, name, detail or figures", () => {
+    const watch = {
+      watchId: "hw-0b7a1c2e-0000-4000-8000-000000000001",
+      hostId: "studio-01",
+      hostName: "NAME-SENTINEL",
+      condition: {
+        connection: null,
+        memoryAvailableBytesAtLeast: 1,
+        cpuIdleCoresAtLeast: null,
+        memoryPressureAtMost: null,
+      },
+      note: "NOTE-SENTINEL",
+      armedAt: 1,
+      expiresAt: 2,
+      status: "fired",
+      endedAt: 2,
+      lostReason: null,
+      observed: {
+        observedAt: 2,
+        link: "connected",
+        lastSeenAt: 2,
+        load: { temperatureZone: "ZONE-SENTINEL" },
+      },
+      delivery: "held",
+    };
+    const result = projectAuditResult("host.watch", {
+      outcome: "ok",
+      detail: "PROSE-SENTINEL",
+      retryAfterMs: null,
+      armed: false,
+      watches: [watch, { status: "STATUS-SENTINEL" }],
+      observed: { link: "connected", load: { temperatureZone: "ZONE-SENTINEL" } },
+    });
+    const args = projectAuditArgs("host.watch", {
+      operation: "arm",
+      hostId: "studio-01",
+      memoryAvailableBytesAtLeast: 1,
+      note: "NOTE-SENTINEL",
+    });
+
+    expect(result).toMatchObject({
+      outcome: "ok",
+      armed: false,
+      watches: [
+        {
+          watchId: "hw-0b7a1c2e-0000-4000-8000-000000000001",
+          hostId: "studio-01",
+          on: "capacity",
+          status: "fired",
+          delivery: "held",
+        },
+        { watchId: null, status: null },
+      ],
+    });
+    expect(args).toMatchObject({ operation: "arm", memoryAvailableBytesAtLeast: 1, noted: true });
+    const audited = JSON.stringify([summarizeMcpResult(result), summarizeMcpArgs(args)]);
+    expect(audited).not.toContain("SENTINEL");
+    expect(projectAuditResult("host.watch", "nope")).toEqual({ status: "unrecognized" });
+    expect(
+      JSON.stringify(projectAuditArgs("host.watch", { note: "NOTE-SENTINEL", operation: 5 }))
+    ).not.toContain("SENTINEL");
   });
 });

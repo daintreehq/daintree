@@ -163,6 +163,10 @@ async function rig(): Promise<Rig> {
       }
       return state.client;
     },
+    openSession: async (hostId) => {
+      if (hostId !== STUDIO) throw new AppError({ code: "NOT_FOUND", message: hostId });
+      return state.client;
+    },
     hostOfSender: () => from.hostId,
     isKnownHost: (hostId) => hostId === STUDIO,
     whenReconnected: async () => {

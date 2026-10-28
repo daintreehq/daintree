@@ -6,14 +6,15 @@ import {
 } from "@shared/types/pluginCapabilityConsent";
 
 /**
- * One pending just-in-time capability consent prompt (#10524). Stored in a FIFO
- * queue; only the first item drives the visible modal so concurrent first-use
- * prompts from different plugins never stack overlapping dialogs. Mirrors the
- * plugin-MCP confirm store but for host capabilities rather than MCP tools.
+ * One pending just-in-time capability consent prompt (#10524), or the
+ * offer-back after a replacing install (#14019). Stored in a FIFO queue; only
+ * the first item drives the visible modal so concurrent prompts from different
+ * plugins never stack overlapping dialogs. Mirrors the plugin-MCP confirm store
+ * but for host capabilities rather than MCP tools.
  */
-export interface PendingPluginCapabilityConsent extends PluginCapabilityConsentRequestEvent {
+export type PendingPluginCapabilityConsent = PluginCapabilityConsentRequestEvent & {
   enqueuedAt: number;
-}
+};
 
 interface PluginCapabilityConfirmState {
   queue: PendingPluginCapabilityConsent[];
@@ -121,7 +122,7 @@ export const usePluginCapabilityConfirmStore = create<
  * remove.
  */
 export function requestPluginCapabilityConsent(
-  item: Omit<PendingPluginCapabilityConsent, "enqueuedAt">
+  item: PluginCapabilityConsentRequestEvent
 ): Promise<PluginCapabilityConsentDecision> {
   const { requestId } = item;
   const existing = resolvers.get(requestId);

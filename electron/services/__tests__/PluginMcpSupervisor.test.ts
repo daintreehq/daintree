@@ -1204,6 +1204,110 @@ describe("PluginMcpSupervisor lazy tool discovery (issue #9235)", () => {
   });
 });
 
+describe("PluginMcpSupervisor agent-facing calls (issue #14112)", () => {
+  async function readyServer() {
+    const fake = makeFakeSubprocess();
+    const supervisor = new PluginMcpSupervisor({ spawner: () => fake.handle, killTree: () => {} });
+    const started = supervisor.start({
+      pluginId: "acme.demo",
+      contributions: [{ id: "srv", name: "Server", command: "node" }],
+      resolveSettings: async () => "",
+    });
+    await fake.waitForStdinCount(1);
+    fake.answerInitialize();
+    await started;
+    return { fake, supervisor };
+  }
+
+  it("answers a server ping whose id collides with a pending call, and refuses other server requests", async () => {
+    const { fake, supervisor } = await readyServer();
+    const call = supervisor.callTool({ pluginId: "acme.demo", serverId: "srv", tool: "t" });
+    await fake.waitForStdinCount(3);
+    const callId = (JSON.parse(fake.readStdinLines()[2]!) as { id: number }).id;
+
+    fake.emitStdout({ jsonrpc: "2.0", id: callId, method: "ping" });
+    await fake.waitForStdinCount(4);
+    expect(JSON.parse(fake.readStdinLines()[3]!)).toEqual({
+      jsonrpc: "2.0",
+      id: callId,
+      result: {},
+    });
+
+    fake.emitStdout({ jsonrpc: "2.0", id: "s-1", method: "sampling/createMessage", params: {} });
+    await fake.waitForStdinCount(5);
+    expect(JSON.parse(fake.readStdinLines()[4]!)).toMatchObject({
+      id: "s-1",
+      error: { code: -32601 },
+    });
+
+    // The call is still pending, and resolves with its own answer.
+    fake.emitStdout({ jsonrpc: "2.0", id: callId, result: { content: [] } });
+    await expect(call).resolves.toEqual({ content: [] });
+    await supervisor.shutdownAll();
+  });
+
+  it("sends notifications/cancelled on abort and ignores the late answer", async () => {
+    const { fake, supervisor } = await readyServer();
+    const controller = new AbortController();
+    const call = supervisor.callTool({
+      pluginId: "acme.demo",
+      serverId: "srv",
+      tool: "slow",
+      signal: controller.signal,
+    });
+    await fake.waitForStdinCount(3);
+    const callId = (JSON.parse(fake.readStdinLines()[2]!) as { id: number }).id;
+
+    controller.abort(new Error("caller gave up"));
+    await expect(call).rejects.toThrow("caller gave up");
+    await fake.waitForStdinCount(4);
+    expect(JSON.parse(fake.readStdinLines()[3]!)).toMatchObject({
+      method: "notifications/cancelled",
+      params: { requestId: callId },
+    });
+    fake.emitStdout({ jsonrpc: "2.0", id: callId, result: { content: [] } });
+
+    // A signal that is already aborted never reaches the wire.
+    await expect(
+      supervisor.callTool({
+        pluginId: "acme.demo",
+        serverId: "srv",
+        tool: "slow",
+        signal: AbortSignal.abort(new Error("already")),
+      })
+    ).rejects.toThrow("already");
+    expect(fake.readStdinLines()).toHaveLength(4);
+    await supervisor.shutdownAll();
+  });
+
+  it("tells listeners when a server's tools may have changed: list_changed, exit and shutdown", async () => {
+    const { fake, supervisor } = await readyServer();
+    const seen: string[] = [];
+    const off = supervisor.onDidInvalidateTools((pluginId, serverId, reason) =>
+      seen.push(`${pluginId}/${serverId}:${reason}`)
+    );
+
+    fake.emitStdout({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
+    await flushMicrotasks();
+    expect(seen).toEqual(["acme.demo/srv:changed"]);
+
+    fake.closeStdout();
+    await flushMicrotasks();
+    expect(seen.at(-1)).toBe("acme.demo/srv:exited");
+
+    await supervisor.shutdownAll();
+    expect(seen).toEqual([
+      "acme.demo/srv:changed",
+      "acme.demo/srv:exited",
+      "acme.demo/srv:stopped",
+    ]);
+
+    off();
+    await supervisor.shutdownAll();
+    expect(seen).toHaveLength(3);
+  });
+});
+
 describe("PluginMcpSupervisor.notifySettingChanged (issue #10619)", () => {
   beforeEach(() => {
     vi.useRealTimers();

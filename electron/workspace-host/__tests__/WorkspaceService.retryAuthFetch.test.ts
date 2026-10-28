@@ -220,7 +220,7 @@ describe("WorkspaceService.retryAuthFetch", () => {
 
   it("re-arms the confirmed-auth escalation guard so a later re-confirmation re-notifies", () => {
     const confirm = (commonDir: string) =>
-      service["handleAuthFailureConfirmed"](commonDir, "auth-failed");
+      service["handleAuthFailureConfirmed"](commonDir, "origin", "auth-failed");
 
     // First confirmation emits the escalation event.
     confirm("/repo/.git");
@@ -259,21 +259,35 @@ describe("WorkspaceService — handleAuthFailureConfirmed", () => {
   });
 
   it("emits a single escalation event per commondir and carries the reason", () => {
-    service["handleAuthFailureConfirmed"]("/repoA/.git", "auth-failed");
-    service["handleAuthFailureConfirmed"]("/repoA/.git", "auth-failed");
+    service["handleAuthFailureConfirmed"]("/repoA/.git", "origin", "auth-failed");
+    service["handleAuthFailureConfirmed"]("/repoA/.git", "origin", "auth-failed");
 
     const events = mockSendEvent.mock.calls
       .map((c) => c[0])
       .filter((e) => e?.type === "fetch-auth-failure-confirmed");
     expect(events).toHaveLength(1);
     expect(events[0].reason).toBe("auth-failed");
-    // The raw commondir path must never cross the IPC boundary.
+    // The toast names the repo and remote (#14208)...
+    expect(events[0].repoName).toBe("repoA");
+    expect(events[0].remote).toBe("origin");
+    // ...but the raw commondir path must never cross the IPC boundary.
     expect(JSON.stringify(events[0])).not.toContain("/repoA/.git");
   });
 
+  it.each([
+    ["/Users/me/code/acme/.git", "acme"],
+    ["/Users/me/code/acme/.git/", "acme"],
+    ["/srv/git/acme.git", "acme"],
+    ["/srv/git/acme", "acme"],
+    ["/.git", "this repository"],
+  ])("names the repo for commondir %s as %s", async (commonDir, expected) => {
+    const { repoNameFromCommonDir } = await import("../WorkspaceService.js");
+    expect(repoNameFromCommonDir(commonDir)).toBe(expected);
+  });
+
   it("confirms distinct commondirs independently", () => {
-    service["handleAuthFailureConfirmed"]("/repoA/.git", "auth-failed");
-    service["handleAuthFailureConfirmed"]("/repoB/.git", "repository-not-found");
+    service["handleAuthFailureConfirmed"]("/repoA/.git", "origin", "auth-failed");
+    service["handleAuthFailureConfirmed"]("/repoB/.git", "origin", "repository-not-found");
 
     const events = mockSendEvent.mock.calls
       .map((c) => c[0])
@@ -283,15 +297,15 @@ describe("WorkspaceService — handleAuthFailureConfirmed", () => {
   });
 
   it("re-arms the escalation guard on project switch so a re-opened repo can re-notify", async () => {
-    service["handleAuthFailureConfirmed"]("/repoA/.git", "auth-failed");
-    service["handleAuthFailureConfirmed"]("/repoA/.git", "auth-failed");
+    service["handleAuthFailureConfirmed"]("/repoA/.git", "origin", "auth-failed");
+    service["handleAuthFailureConfirmed"]("/repoA/.git", "origin", "auth-failed");
     expect(
       mockSendEvent.mock.calls.filter((c) => c[0]?.type === "fetch-auth-failure-confirmed").length
     ).toBe(1);
 
     await service.onProjectSwitch("req-1");
 
-    service["handleAuthFailureConfirmed"]("/repoA/.git", "auth-failed");
+    service["handleAuthFailureConfirmed"]("/repoA/.git", "origin", "auth-failed");
     expect(
       mockSendEvent.mock.calls.filter((c) => c[0]?.type === "fetch-auth-failure-confirmed").length
     ).toBe(2);

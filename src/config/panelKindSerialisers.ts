@@ -46,7 +46,13 @@ function sanitizeGitStatus(value: string | undefined): GitStatus | undefined {
   return value !== undefined && GIT_STATUSES.includes(value) ? (value as GitStatus) : undefined;
 }
 
-const DIFF_SOURCES: readonly string[] = ["working-tree", "staged", "unstaged", "base-branch"];
+const DIFF_SOURCES: readonly string[] = [
+  "working-tree",
+  "staged",
+  "unstaged",
+  "base-branch",
+  "since-review",
+];
 
 /** Coerce a persisted diff source, dropping unknown on-disk values. */
 function sanitizeDiffSource(value: string | undefined): DiffSource | undefined {

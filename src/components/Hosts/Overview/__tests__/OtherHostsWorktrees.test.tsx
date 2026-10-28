@@ -93,7 +93,36 @@ describe("OtherHostsWorktrees", () => {
 
     fireEvent.click(rows[0]!);
     expect(onNavigate).toHaveBeenCalled();
-    expect(switchToHost).toHaveBeenCalledWith("studio-01", false, "p-remote");
+    // A row with no agent lands on its worktree (#14569).
+    expect(switchToHost).toHaveBeenCalledWith("studio-01", false, "p-remote", {
+      focusIntent: { intent: "focus-worktree", worktreeId: "/srv/helios-feature" },
+    });
+  });
+
+  it("focuses the most urgent agent's terminal, and lands on the worktree without runs", async () => {
+    listWorktrees.mockResolvedValueOnce([
+      {
+        ...worktree,
+        runs: [
+          { band: "needs-you", agentState: "waiting", terminalId: "t-urgent" },
+          { band: "running", agentState: "working", terminalId: "t-other" },
+        ],
+      },
+      { ...worktree, worktreeId: "/srv/other", runs: [] },
+    ]);
+    render(<OtherHostsWorktrees onNavigate={() => {}} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "All hosts" }));
+    });
+    const rows = await screen.findAllByTestId("other-host-worktree-row");
+    fireEvent.click(rows[0]!, { metaKey: true });
+    expect(switchToHost).toHaveBeenCalledWith("studio-01", true, "p-remote", {
+      focusIntent: { intent: "focus-panel", panelId: "t-urgent" },
+    });
+    fireEvent.click(rows[1]!);
+    expect(switchToHost).toHaveBeenLastCalledWith("studio-01", false, "p-remote", {
+      focusIntent: { intent: "focus-worktree", worktreeId: "/srv/other" },
+    });
   });
 
   it("renders nothing without another host", () => {

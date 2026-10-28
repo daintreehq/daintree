@@ -10,9 +10,13 @@ import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { worktreeClient } from "@/clients";
 import type { WorktreeSnapshot } from "@shared/types/workspace-host";
 import {
+  MAX_WAIT_FOR_PR_TARGETS,
+  MAX_WAIT_FOR_PR_TIMEOUT_MS,
   MAX_WAIT_UNTIL_READY_TIMEOUT_MS,
   readWorktreeSetupState,
+  toPullRequestWaitRow,
   toWorktreeSummary,
+  UNKNOWN_WORKTREE_MESSAGE,
   waitForWorktreeSetup,
 } from "@shared/utils/worktreeSummary";
 
@@ -39,19 +43,10 @@ async function fetchSetupStatus(
 }
 
 /**
- * Same ceiling and for the same reason as the readiness wait: the renderer
- * dispatch path times out at 30s. PR detection polls every 30s focused and
- * every 2 minutes blurred, so several expired calls in a row are normal.
- */
-const MAX_WAIT_FOR_PR_TIMEOUT_MS = 25_000;
-
-/**
  * A local store read rather than a host round trip, so this can be tighter
  * than the readiness poll at no cost.
  */
 const WAIT_FOR_PR_POLL_INTERVAL_MS = 250;
-
-const MAX_WAIT_FOR_PR_TARGETS = 32;
 
 export function registerWorktreeQueryActions(
   actions: ActionRegistry,
@@ -270,7 +265,7 @@ export function registerWorktreeQueryActions(
       id: "worktree.waitUntilReady",
       title: "Wait until worktree ready",
       description:
-        "Wait for a worktree's post-create setup (config copy, submodules, setup script, provisioning) and report where it got. Setup can outlive creation, so work started earlier may see an unpopulated tree. A zero timeout reads without blocking; running out of time is not a failure.",
+        "Wait for a worktree's post-create setup (config copy, submodules, setup script, provisioning, plugin steps) and report where it got. Setup can outlive creation, so earlier work may see an unpopulated tree. A zero timeout reads without blocking; timing out is not a failure.",
       category: "worktree",
       kind: "query",
       danger: "safe",
@@ -293,7 +288,7 @@ export function registerWorktreeQueryActions(
         worktreeId: z.string(),
         setupState: WorktreeSetupStateSchema,
         stage: z
-          .enum(["copy-config", "submodules", "setup-script"])
+          .enum(["copy-config", "submodules", "setup-script", "plugin-steps"])
           .nullable()
           .describe("Stage running or failed; null before setup starts and once ready or unknown."),
         error: z
@@ -394,20 +389,7 @@ export function registerWorktreeQueryActions(
           const rows = worktreeIds.map((worktreeId) => {
             const worktree = worktrees.get(worktreeId);
             if (worktree) seen.add(worktreeId);
-            // Absent here means not yet arrived, or deleted mid-wait. Neither
-            // has a PR to report, and neither should cost the sibling rows
-            // their answer.
-            //
-            // `linked` is the source of truth (#8452); the flat pr* fields can
-            // outlive a branch switch that cleared it. `linked: null` is that
-            // explicit clear, and it reads as "not detected" like absence does.
-            const pr = worktree?.linked?.pr;
-            return {
-              worktreeId,
-              prNumber: pr?.ref.number ?? null,
-              prUrl: pr?.url ?? null,
-              prState: pr?.state ?? null,
-            };
+            return toPullRequestWaitRow(worktreeId, worktree);
           });
           const detected = rows.some((row) => row.prNumber !== null);
           const remaining = deadline - Date.now();
@@ -442,8 +424,6 @@ async function refuseIdsTheHostLacks(
   // Re-read the store: a row can arrive while the host read is in flight.
   const current = store.getState().worktrees;
   if (worktreeIds.some((id) => !seen.has(id) && !current.has(id) && !hostIds.has(id))) {
-    // Static, per the repo-wide rule: an error message never carries the
-    // rejected input back out.
-    throw new Error("Unknown worktree — the workspace host has no worktree with that id.");
+    throw new Error(UNKNOWN_WORKTREE_MESSAGE);
   }
 }

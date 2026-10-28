@@ -33,7 +33,7 @@ import { discoverHosts, discoverWslDistros } from "./discovery.js";
 import { type ArtifactChecksum, lookupArtifactChecksum } from "./clientBuild.js";
 import { runHostInstall } from "./hostInstaller.js";
 import { RestartImpactSchema } from "../metrics/linkMethods.js";
-import { bootstrapHostMode, LINUX_START_SCRIPT, MAC_START_SCRIPT } from "./hostModeBootstrap.js";
+import { bootstrapHostMode, LINUX_START_SCRIPT, macStartScript } from "./hostModeBootstrap.js";
 import { probeHost, type ProbeOutcome } from "./hostProbe.js";
 import { NIGHTLY_FEED_URL, STABLE_FEED_URL, type ClientBuild, planInstall } from "./installPlan.js";
 import { createSshCommandChannel, failureDetail, type HostCommandChannel } from "./remoteShell.js";
@@ -155,6 +155,7 @@ export class HostSetupService {
       probe: outcome.result,
       linuxPackage: payload.linuxPackage,
       appImageConflict: outcome.parsed?.appImageConflict ?? null,
+      allowDowngrade: payload.allowDowngrade === true,
     });
   }
 
@@ -177,6 +178,16 @@ export class HostSetupService {
     if (confirmed && !confirmed.success) {
       throw new AppError({ code: "VALIDATION", message: "confirmed is not valid" });
     }
+    if (payload.allowDowngrade !== undefined && typeof payload.allowDowngrade !== "boolean") {
+      throw new AppError({ code: "VALIDATION", message: "allowDowngrade is not valid" });
+    }
+    const stagedVersion = payload.applyStaged?.version;
+    if (
+      payload.applyStaged !== undefined &&
+      (typeof stagedVersion !== "string" || !/^[0-9A-Za-z.+-]{1,64}$/.test(stagedVersion))
+    ) {
+      throw new AppError({ code: "VALIDATION", message: "applyStaged is not valid" });
+    }
     if (!this.targets.has(opId)) this.targets.set(opId, connection);
     const normalized: InstallHostPayload = {
       opId,
@@ -185,6 +196,8 @@ export class HostSetupService {
       linuxPackage: payload.linuxPackage,
       whileWorking,
       ...(confirmed ? { confirmed: confirmed.data } : {}),
+      ...(payload.allowDowngrade === true ? { allowDowngrade: true } : {}),
+      ...(stagedVersion !== undefined ? { applyStaged: { version: stagedVersion } } : {}),
     };
     return this.operations.run(
       {
@@ -197,6 +210,8 @@ export class HostSetupService {
           normalized.hostId ?? null,
           normalized.linuxPackage ?? null,
           whileWorking,
+          normalized.allowDowngrade === true,
+          stagedVersion ?? null,
         ]),
       },
       async (handle) => {
@@ -299,7 +314,7 @@ export class HostSetupService {
     if (probe.hostModeState?.stopped === true) return "not-startable";
     const script =
       probe.platform === "darwin" && probe.hostModeState?.enabled === true
-        ? MAC_START_SCRIPT
+        ? macStartScript(probe.install.path)
         : probe.platform === "linux" && probe.advice.hostModeUnit === true
           ? LINUX_START_SCRIPT
           : null;

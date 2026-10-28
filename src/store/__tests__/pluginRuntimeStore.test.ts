@@ -1,6 +1,10 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { LoadedPluginInfo } from "@shared/types/plugin";
+import type {
+  LoadedPluginInfo,
+  PromptTemplateContribution,
+  TerminalLinkContribution,
+} from "@shared/types/plugin";
 import { _resetPluginRuntimeStoreForTest, usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 
 const logErrorMock = vi.hoisted(() => vi.fn());
@@ -18,6 +22,10 @@ function makePlugin(opts: {
   disabled?: boolean;
   /** Project-owned instance: `id` stays the manifest id, the key gets qualified. */
   projectId?: string;
+  promptTemplates?: PromptTemplateContribution[];
+  terminalLinks?: TerminalLinkContribution[];
+  blocklisted?: boolean;
+  instanceMode?: "project";
 }): LoadedPluginInfo {
   const projectId = opts.projectId ?? null;
   const instanceId = projectId === null ? opts.id : `project__${projectId}__${opts.id}`;
@@ -45,6 +53,8 @@ function makePlugin(opts: {
         agents: [],
         processTools: [],
         recipes: [],
+        ...(opts.promptTemplates ? { promptTemplates: opts.promptTemplates } : {}),
+        ...(opts.terminalLinks ? { terminalLinks: opts.terminalLinks } : {}),
       },
     },
     dir: `/plugins/${opts.id}`,
@@ -60,7 +70,8 @@ function makePlugin(opts: {
     updateAvailable: null,
     devMode: opts.devMode ?? false,
     pluginDanger: "safe",
-    blocklisted: false,
+    blocklisted: opts.blocklisted ?? false,
+    ...(opts.instanceMode ? { instanceMode: opts.instanceMode, enabledInProjects: [] } : {}),
   };
 }
 
@@ -109,7 +120,6 @@ describe("usePluginRuntimeStore", () => {
     expect(state.pluginMetaById.get("project__b6700c7a__gregpriday.video-manager")).toEqual({
       devMode: false,
       displayName: "Video Manager",
-      previewToolIds: new Set(),
     });
     // The bare manifest name is deliberately NOT a second key.
     expect(state.pluginMetaById.has("gregpriday.video-manager")).toBe(false);
@@ -205,7 +215,6 @@ describe("usePluginRuntimeStore", () => {
     expect(state.pluginMetaById.get("acme.dev")).toEqual({
       devMode: true,
       displayName: "Acme Dev",
-      previewToolIds: new Set(),
     });
     expect(state.pluginMetaById.get("acme.plain")?.devMode).toBe(false);
   });
@@ -399,8 +408,123 @@ describe("usePluginRuntimeStore", () => {
     expect(state.pluginMetaById.get("acme.a")).toEqual({
       devMode: true,
       displayName: "Acme A",
-      previewToolIds: new Set(),
     });
     expect(state.disabledPluginIds.has("acme.a")).toBe(true);
+  });
+
+  it("offers the prompt templates of running plugins, namespaced and attributed", async () => {
+    const template = { id: "t", title: "T", description: "d", body: "b", args: [] };
+    listMock.mockResolvedValue([
+      makePlugin({ id: "acme.a", displayName: "Acme A", promptTemplates: [template] }),
+      makePlugin({ id: "acme.a", projectId: "p1", promptTemplates: [template] }),
+      makePlugin({ id: "acme.off", disabled: true, promptTemplates: [template] }),
+      makePlugin({ id: "acme.blocked", blocklisted: true, promptTemplates: [template] }),
+      makePlugin({ id: "acme.none" }),
+    ]);
+
+    usePluginRuntimeStore.getState().init();
+
+    await vi.waitFor(() => expect(usePluginRuntimeStore.getState().promptTemplates.length).toBe(2));
+    expect(
+      usePluginRuntimeStore
+        .getState()
+        .promptTemplates.map((e) => [e.key, e.pluginName, e.projectId])
+    ).toEqual([
+      ["acme.a::t", "Acme A", null],
+      ["project__p1__acme.a::t", "acme.a", "p1"],
+    ]);
+  });
+
+  it("offers nothing from a per-project package's own row, only from its instances", async () => {
+    const template = { id: "t", title: "T", description: "d", body: "b", args: [] };
+    const link = { id: "l", pattern: "x", actionId: "acme.ledger.open" };
+    listMock.mockResolvedValue([
+      makePlugin({
+        id: "acme.ledger",
+        instanceMode: "project",
+        promptTemplates: [template],
+        terminalLinks: [link],
+      }),
+      makePlugin({
+        id: "acme.ledger",
+        projectId: "p1",
+        promptTemplates: [template],
+        terminalLinks: [link],
+      }),
+    ]);
+
+    usePluginRuntimeStore.getState().init();
+
+    await vi.waitFor(() => expect(usePluginRuntimeStore.getState().promptTemplates.length).toBe(1));
+    const state = usePluginRuntimeStore.getState();
+    expect(state.promptTemplates.map((e) => e.pluginId)).toEqual(["project__p1__acme.ledger"]);
+    expect(state.terminalLinks.map((e) => e.pluginId)).toEqual(["project__p1__acme.ledger"]);
+  });
+
+  it("keeps the template list's identity across an identical refresh", async () => {
+    const template = { id: "t", title: "T", description: "d", body: "b", args: [] };
+    listMock.mockResolvedValue([makePlugin({ id: "acme.a", promptTemplates: [template] })]);
+    usePluginRuntimeStore.getState().init();
+    await vi.waitFor(() => expect(usePluginRuntimeStore.getState().promptTemplates.length).toBe(1));
+    const before = usePluginRuntimeStore.getState().promptTemplates;
+
+    usePluginRuntimeStore.getState().refresh();
+    await vi.waitFor(() => expect(listMock).toHaveBeenCalledTimes(2));
+    await Promise.resolve();
+
+    expect(usePluginRuntimeStore.getState().promptTemplates).toBe(before);
+  });
+
+  it("offers running plugins' terminal links with their command in the instance's namespace", async () => {
+    const invoice = { id: "inv", pattern: "INV-\\d{1,4}", actionId: "acme.a.open" };
+    listMock.mockResolvedValue([
+      makePlugin({ id: "acme.a", displayName: "Acme A", terminalLinks: [invoice] }),
+      makePlugin({ id: "acme.a", projectId: "p1", terminalLinks: [invoice] }),
+      // Each in its own namespace, so only being stopped keeps them out.
+      makePlugin({
+        id: "acme.off",
+        disabled: true,
+        terminalLinks: [{ ...invoice, actionId: "acme.off.open" }],
+      }),
+      makePlugin({
+        id: "acme.blocked",
+        blocklisted: true,
+        terminalLinks: [{ ...invoice, actionId: "acme.blocked.open" }],
+      }),
+      // Outside its own namespace, so it could only have dodged the manifest gate.
+      makePlugin({ id: "acme.rogue", terminalLinks: [invoice] }),
+    ]);
+
+    usePluginRuntimeStore.getState().init();
+
+    await vi.waitFor(() => expect(usePluginRuntimeStore.getState().terminalLinks.length).toBe(2));
+    expect(
+      usePluginRuntimeStore
+        .getState()
+        .terminalLinks.map((e) => [e.key, e.pluginName, e.projectId, e.actionId])
+    ).toEqual([
+      ["acme.a::inv", "Acme A", null, "acme.a.open"],
+      ["project__p1__acme.a::inv", "acme.a", "p1", "project__p1__acme.a.open"],
+    ]);
+  });
+
+  it("pulls again when plugin actions change, which is all a dev-attached plugin announces", async () => {
+    let actionsChanged: (() => void) | undefined;
+    installBridge({
+      list: listMock,
+      onProvenanceChanged: onProvenanceChangedMock,
+      onActionsChanged: (cb: () => void) => {
+        actionsChanged = cb;
+        return () => {};
+      },
+    });
+    listMock.mockResolvedValue([]);
+    usePluginRuntimeStore.getState().init();
+    await vi.waitFor(() => expect(listMock).toHaveBeenCalledTimes(1));
+
+    const invoice = { id: "inv", pattern: "INV-\\d{1,4}", actionId: "acme.dev.open" };
+    listMock.mockResolvedValue([makePlugin({ id: "acme.dev", terminalLinks: [invoice] })]);
+    actionsChanged?.();
+    await vi.waitFor(() => expect(usePluginRuntimeStore.getState().terminalLinks).toHaveLength(1));
   });
 });

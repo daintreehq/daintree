@@ -12,6 +12,7 @@ import type {
   PluginInputBoxOptions,
   PluginConfirmOptions,
   PluginSendToAgentResult,
+  PluginRunRecipeResult,
 } from "./plugin.js";
 
 /**
@@ -20,7 +21,7 @@ import type {
  * is a picker the user answers — and with one it still has to reach the one
  * renderer that owns the project's drafts.
  */
-export type PluginUiPromptKind = "quickPick" | "inputBox" | "confirm" | "sendToAgent";
+export type PluginUiPromptKind = "quickPick" | "inputBox" | "confirm" | "sendToAgent" | "runRecipe";
 
 /**
  * A validated `host.sendToAgent` call on its way to the renderer. `sourceLabel`
@@ -33,6 +34,19 @@ export interface PluginSendToAgentRequest {
   sourceLabel: string;
   terminalId?: string;
   worktreeId?: string;
+}
+
+/**
+ * A validated `host.runRecipe` call on its way to the renderer (#13797).
+ * `recipeId` is the qualified id main built from the calling plugin's own
+ * instance, never one the plugin named, and `variables` are already checked
+ * against the recipe's declarations.
+ */
+export interface PluginRunRecipeRequest {
+  recipeId: string;
+  variables: Record<string, string>;
+  worktreeId?: string;
+  sourceLabel: string;
 }
 
 /**
@@ -52,6 +66,7 @@ export type PluginUiPromptParams = (
   | { kind: "inputBox"; options: PluginInputBoxOptions }
   | { kind: "confirm"; options: PluginConfirmOptions }
   | { kind: "sendToAgent"; request: PluginSendToAgentRequest }
+  | { kind: "runRecipe"; request: PluginRunRecipeRequest }
 ) & { waited?: PluginUiPromptWaited };
 
 /**
@@ -99,6 +114,7 @@ export type PluginUiPromptResultValue =
   | string
   | boolean
   | PluginSendToAgentResult
+  | PluginRunRecipeResult
   | undefined;
 
 /**

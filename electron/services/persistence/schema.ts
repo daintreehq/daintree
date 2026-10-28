@@ -13,6 +13,8 @@ export const projects = sqliteTable(
     daintreeConfigPresent: integer("daintree_config_present", { mode: "boolean" }),
     inRepoSettings: integer("in_repo_settings", { mode: "boolean" }),
     pinned: integer("pinned").notNull().default(0),
+    // Opt-out from the idle auto-close only: manual Sleep ignores it.
+    neverAutoSleep: integer("never_auto_sleep").notNull().default(0),
     frecencyScore: real("frecency_score").notNull().default(3.0),
     lastAccessedAt: integer("last_accessed_at").notNull().default(0),
     // Epoch ms up to which the user has seen this project's completed agents:

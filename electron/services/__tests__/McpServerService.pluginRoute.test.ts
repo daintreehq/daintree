@@ -73,6 +73,8 @@ vi.mock("../PluginService.js", () => ({
   pluginService: {
     hasPlugin: (id: string) => pluginHost.loaded.has(id),
     activatePlugin: (id: string) => pluginHost.activatePlugin(id),
+    // No instance here bridges a contributed server.
+    findAgentMcpServerSource: () => undefined,
   },
 }));
 

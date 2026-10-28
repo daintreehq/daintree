@@ -18,7 +18,14 @@ const setWorktreeLoadErrorMock = vi.fn<(error: string | null) => void>();
 
 let worktreeLoadError: string | null = null;
 let currentProject: { id: string } | null = null;
-let viewState: { isInitialized: boolean; isLoading: boolean; error: string | null } | null = null;
+let viewState: {
+  isInitialized: boolean;
+  isLoading: boolean;
+  error: string | null;
+  isReconnecting?: boolean;
+  reconnectingAt?: number | null;
+  reconnectRecovery?: "idle" | "recovering" | "exhausted";
+} | null = null;
 
 vi.mock("@/clients", () => ({
   worktreeClient: {
@@ -327,6 +334,38 @@ describe("worktree.retryProjectLoad (#8400)", () => {
 
     viewState = { isInitialized: true, isLoading: false, error: null };
     expect(getAction().isEnabled({})).toBe(false);
+  });
+
+  it("is enabled once a lost worktree port is past any restart's time to return (#13748)", () => {
+    currentProject = { id: "p1" };
+    const base = { isInitialized: true, isLoading: false, error: null, isReconnecting: true };
+    // A crash restart can still be on its way back here.
+    viewState = { ...base, reconnectingAt: Date.now() - 15_000 };
+    expect(getAction().isEnabled({})).toBe(false);
+
+    viewState = { ...base, reconnectingAt: Date.now() - 120_000 };
+    const action = getAction();
+    expect(action.isEnabled({})).toBe(true);
+    expect(action.disabledReason({})).toBeUndefined();
+
+    viewState = { ...base, isReconnecting: false, reconnectingAt: null };
+    expect(getAction().isEnabled({})).toBe(false);
+  });
+
+  it("waits for automatic recovery of a stalled port to give up (#14313)", () => {
+    currentProject = { id: "p1" };
+    const stalled = {
+      isInitialized: true,
+      isLoading: false,
+      error: null,
+      isReconnecting: true,
+      reconnectingAt: Date.now() - 120_000,
+    };
+    viewState = { ...stalled, reconnectRecovery: "recovering" };
+    expect(getAction().isEnabled({})).toBe(false);
+
+    viewState = { ...stalled, reconnectRecovery: "exhausted" };
+    expect(getAction().isEnabled({})).toBe(true);
   });
 
   it("leaves a crashed workspace service to Restart service", () => {

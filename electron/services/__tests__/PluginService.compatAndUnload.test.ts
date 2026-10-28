@@ -74,6 +74,15 @@ vi.mock("../../../shared/config/panelKindRegistry.js", () => ({
   onPanelKindRegistered: vi.fn(() => () => {}),
   onPanelKindUnregistered: vi.fn(() => () => {}),
   getPluginPanelKinds: vi.fn(() => []),
+  toRuntimePanelKindId: vi.fn(
+    (ref: { origin: string; pluginId: string; kindId: string }, projectId?: string | null) =>
+      ref.origin === "project"
+        ? projectId
+          ? `project:${projectId}/${ref.pluginId}/${ref.kindId}`
+          : null
+        : `${ref.pluginId}.${ref.kindId}`
+  ),
+  getPanelKindConfig: vi.fn(() => undefined),
 }));
 vi.mock("../../../shared/config/toolbarButtonRegistry.js", () => ({
   registerToolbarButton: vi.fn(),
@@ -217,11 +226,24 @@ vi.mock("../plugin/PluginDevWorkerMainBridge.js", () => ({
 import { PluginService } from "../PluginService.js";
 import { type PluginIpcContext } from "../../../shared/types/plugin.js";
 import {
+  getPanelKindConfig,
   registerPanelKind,
   unregisterPluginPanelKinds,
 } from "../../../shared/config/panelKindRegistry.js";
-import { unregisterPluginToolbarButtons } from "../../../shared/config/toolbarButtonRegistry.js";
+import {
+  clearAllProjectSurfaces,
+  getProjectSurfaceRefusals,
+  getProjectSurfaceSlots,
+} from "../plugin/PluginSurfaceRegistry.js";
+import {
+  registerToolbarButton,
+  unregisterPluginToolbarButtons,
+} from "../../../shared/config/toolbarButtonRegistry.js";
 import { unregisterPluginMenuItems } from "../pluginMenuRegistry.js";
+import {
+  clearPluginLayoutRegistry,
+  getAllPluginLayouts,
+} from "../../../shared/config/pluginLayoutRegistry.js";
 import { unregisterForgeProviders } from "../forgeProviderRegistry.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { agentMcpEndpointRegistry } from "../pluginAgentMcp/endpointRegistry.js";
@@ -309,6 +331,8 @@ describe("engines.daintree compatibility gate", () => {
     expect(payload).toMatchObject({
       type: "warning",
       message: expect.stringContaining('"Incompatible Plugin" targets Daintree ^0.7.0'),
+      rateLimitKey: "plugin-engine:acme.incompatible",
+      rateLimitLabel: "Incompatible Plugin",
     });
     expect(payload.message).toContain("newer version of the plugin");
     expect(payload).not.toHaveProperty("action");
@@ -547,6 +571,339 @@ describe("engines.daintree compatibility gate", () => {
     expect(payload.message).not.toContain("Update Daintree");
     expect(payload.message).not.toContain("newer version of the plugin");
     expect(payload).not.toHaveProperty("action");
+  });
+});
+
+describe("Project surface claims", () => {
+  const PROJECT = "proj-a";
+  const INSTANCE = "project__proj-a__acme.canvas";
+
+  async function loadCanvasPlugin(service: PluginService): Promise<unknown> {
+    const projectRoot = path.join(tmpDir, "project-a");
+    const pluginsParent = path.join(projectRoot, ".daintree", "plugins");
+    const dir = path.join(pluginsParent, "acme.canvas");
+    await fs.mkdir(path.join(dir, "dist"), { recursive: true });
+    await fs.writeFile(path.join(dir, "dist", "panel.js"), "export default () => null;\n");
+    await fs.writeFile(
+      path.join(dir, "plugin.json"),
+      JSON.stringify({
+        name: "acme.canvas",
+        version: "1.0.0",
+        scope: "project",
+        engines: { daintree: ">=0.1.0" },
+        contributes: {
+          panels: [{ id: "overview", name: "Overview", iconId: "gauge", color: "#000" }],
+          views: [{ id: "overview", componentPath: "dist/panel.js", location: "panel" }],
+          surfaces: { emptyCanvas: { viewId: "overview" } },
+        },
+      })
+    );
+    const seam = service as unknown as {
+      loadPlugin(
+        root: string,
+        dirName: string,
+        opts: {
+          isBuiltin: boolean;
+          disabled: Set<string>;
+          origin: "project";
+          instanceKey: string;
+          binding: { projectId: string; projectRoot: string };
+        }
+      ): Promise<unknown>;
+    };
+    return seam.loadPlugin(pluginsParent, "acme.canvas", {
+      isBuiltin: false,
+      disabled: new Set(),
+      origin: "project",
+      instanceKey: INSTANCE,
+      binding: { projectId: PROJECT, projectRoot },
+    });
+  }
+
+  /** Every slot-state push, in order, as `[projectId, revision]`. */
+  const surfacePushes = () =>
+    broadcastToProjectRenderersMock.mock.calls.flatMap(([projectId, channel, envelope]) => {
+      const { name, payload } = envelope as { name?: string; payload?: { revision?: number } };
+      return channel === CHANNELS.EVENTS_PUSH && name === "plugin:project-surfaces-changed"
+        ? [[projectId, payload?.revision]]
+        : [];
+    });
+
+  beforeEach(() => {
+    clearAllProjectSurfaces();
+    // `clearAllMocks` keeps implementations, so a mountable kind installed by
+    // one test would otherwise leak into the next.
+    vi.mocked(getPanelKindConfig).mockReset().mockReturnValue(undefined);
+  });
+
+  afterEach(() => {
+    clearAllProjectSurfaces();
+  });
+
+  it("tells the project's views when a plugin claims a slot, and again when it unloads", async () => {
+    vi.mocked(getPanelKindConfig).mockImplementation((id: string) => ({
+      id,
+      name: "Overview",
+      iconId: "gauge",
+      color: "#000",
+      hasPty: false,
+      canRestart: false,
+      canConvert: false,
+      extensionId: INSTANCE,
+      componentPath: "plugin://acme.canvas/1/dist/panel.js",
+    }));
+    const service = new PluginService(path.join(tmpDir, "installed"), "1.0.0");
+    try {
+      expect(await loadCanvasPlugin(service)).not.toBeNull();
+      expect(getProjectSurfaceSlots(PROJECT).emptyCanvas?.defaultOptionId).toBe(INSTANCE);
+      const [claimed] = surfacePushes();
+      expect(claimed?.[0]).toBe(PROJECT);
+
+      // The release result used to be dropped here, so a slot change that was
+      // not also a panel-kind change never reached the canvas.
+      service.unloadPlugin(INSTANCE);
+
+      expect(getProjectSurfaceSlots(PROJECT)).toEqual({});
+      const pushes = surfacePushes();
+      expect(pushes).toHaveLength(2);
+      expect(pushes[1]?.[0]).toBe(PROJECT);
+      expect(pushes[1]?.[1]).toBeGreaterThan(claimed?.[1] as number);
+    } finally {
+      service.dispose();
+    }
+  });
+
+  it("claims a slot per default pattern of a file editor, and releases them on unload (#13811)", async () => {
+    const instance = "project__proj-a__acme.cms";
+    const projectRoot = path.join(tmpDir, "project-a");
+    const pluginsParent = path.join(projectRoot, ".daintree", "plugins");
+    const dir = path.join(pluginsParent, "acme.cms");
+    await fs.mkdir(path.join(dir, "dist"), { recursive: true });
+    await fs.writeFile(path.join(dir, "dist", "editor.js"), "export default () => null;\n");
+    await fs.writeFile(
+      path.join(dir, "plugin.json"),
+      JSON.stringify({
+        name: "acme.cms",
+        version: "1.0.0",
+        scope: "project",
+        engines: { daintree: ">=0.1.0" },
+        contributes: {
+          views: [
+            { id: "records-editor", componentPath: "dist/editor.js", location: "fileEditor" },
+          ],
+          fileEditors: [
+            {
+              id: "records",
+              view: "records-editor",
+              mode: "edit",
+              extensions: ["json"],
+              paths: ["content/*.json", "data/**/*.json"],
+              default: true,
+            },
+            // Not a default: it only adds a choice, and claims nothing.
+            { id: "pages", view: "records-editor", mode: "edit", paths: ["pages/*.json"] },
+          ],
+        },
+      })
+    );
+    const service = new PluginService(path.join(tmpDir, "installed"), "1.0.0");
+    const seam = service as unknown as {
+      loadPlugin(
+        root: string,
+        dirName: string,
+        opts: {
+          isBuiltin: boolean;
+          disabled: Set<string>;
+          origin: "project";
+          instanceKey: string;
+          binding: { projectId: string; projectRoot: string };
+        }
+      ): Promise<unknown>;
+    };
+    try {
+      expect(
+        await seam.loadPlugin(pluginsParent, "acme.cms", {
+          isBuiltin: false,
+          disabled: new Set(),
+          origin: "project",
+          instanceKey: instance,
+          binding: { projectId: PROJECT, projectRoot },
+        })
+      ).not.toBeNull();
+
+      const slots = getProjectSurfaceSlots(PROJECT);
+      expect(Object.keys(slots).sort()).toEqual([
+        "fileEditor:content/*.json",
+        "fileEditor:data/**/*.json",
+      ]);
+      expect(slots["fileEditor:content/*.json"]?.options).toEqual([
+        {
+          pluginId: instance,
+          scope: "project",
+          value: { kind: "data", data: { editorId: "records" } },
+        },
+      ]);
+      expect(surfacePushes().map(([projectId]) => projectId)).toEqual([PROJECT]);
+
+      service.unloadPlugin(instance);
+      expect(getProjectSurfaceSlots(PROJECT)).toEqual({});
+    } finally {
+      service.dispose();
+    }
+  });
+
+  it("records a claim whose view registered nothing mountable as a refusal", async () => {
+    const service = new PluginService(path.join(tmpDir, "installed"), "1.0.0");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await loadCanvasPlugin(service);
+
+      // Visible to the user and the author, not only to the log.
+      expect(getProjectSurfaceRefusals(PROJECT)).toEqual([
+        { slot: "emptyCanvas", pluginId: INSTANCE, reason: "unresolved-view" },
+      ]);
+      expect(getProjectSurfaceSlots(PROJECT).emptyCanvas?.defaultOptionId).toBeNull();
+      expect(surfacePushes()).toHaveLength(1);
+    } finally {
+      service.dispose();
+      warn.mockRestore();
+    }
+  });
+});
+
+describe("Project default layout", () => {
+  const PROJECT = "proj-a";
+  const INSTANCE = "project__proj-a__acme.layouts";
+
+  async function loadLayoutsPlugin(service: PluginService, defaultLayout: string): Promise<void> {
+    const projectRoot = path.join(tmpDir, "project-a");
+    const pluginsParent = path.join(projectRoot, ".daintree", "plugins");
+    const dir = path.join(pluginsParent, "acme.layouts");
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(
+      path.join(dir, "plugin.json"),
+      JSON.stringify({
+        name: "acme.layouts",
+        version: "1.0.0",
+        scope: "project",
+        engines: { daintree: ">=0.1.0" },
+        contributes: {
+          layouts: [
+            { id: "workbench", name: "Workbench", entries: [{ browser: "https://example.com/" }] },
+            { id: "review", name: "Review", entries: [{ browser: "https://example.com/r" }] },
+          ],
+          surfaces: { defaultLayout },
+        },
+      })
+    );
+    const seam = service as unknown as {
+      loadPlugin(
+        root: string,
+        dirName: string,
+        opts: {
+          isBuiltin: boolean;
+          disabled: Set<string>;
+          origin: "project";
+          instanceKey: string;
+          binding: { projectId: string; projectRoot: string };
+        }
+      ): Promise<unknown>;
+    };
+    await seam.loadPlugin(pluginsParent, "acme.layouts", {
+      isBuiltin: false,
+      disabled: new Set(),
+      origin: "project",
+      instanceKey: INSTANCE,
+      binding: { projectId: PROJECT, projectRoot },
+    });
+  }
+
+  beforeEach(() => clearPluginLayoutRegistry());
+  afterEach(() => clearPluginLayoutRegistry());
+
+  it.each(["workbench", "review"])(
+    "marks only the layout surfaces.defaultLayout names (%s)",
+    async (defaultLayout) => {
+      const service = new PluginService(path.join(tmpDir, "installed"), "1.0.0");
+      try {
+        await loadLayoutsPlugin(service, defaultLayout);
+        const defaults = getAllPluginLayouts()
+          .filter((layout) => layout.projectDefault === true)
+          .map((layout) => layout.id);
+        expect(defaults).toEqual([`${INSTANCE}.${defaultLayout}`]);
+      } finally {
+        service.dispose();
+      }
+    }
+  );
+});
+
+describe("Project toolbar popover buttons", () => {
+  const PROJECT = "proj-a";
+  const INSTANCE = "project__proj-a__acme.inbox";
+
+  async function loadInboxPlugin(service: PluginService): Promise<unknown> {
+    const projectRoot = path.join(tmpDir, "project-a");
+    const pluginsParent = path.join(projectRoot, ".daintree", "plugins");
+    const dir = path.join(pluginsParent, "acme.inbox");
+    await fs.mkdir(path.join(dir, "dist"), { recursive: true });
+    await fs.writeFile(path.join(dir, "dist", "inbox.js"), "export default () => null;\n");
+    await fs.writeFile(
+      path.join(dir, "plugin.json"),
+      JSON.stringify({
+        name: "acme.inbox",
+        version: "1.0.0",
+        scope: "project",
+        engines: { daintree: ">=0.1.0" },
+        contributes: {
+          panels: [{ id: "inbox", name: "Inbox", iconId: "list", color: "#000" }],
+          views: [{ id: "inbox", componentPath: "dist/inbox.js", location: "panel" }],
+          toolbarButtons: [
+            { id: "open", label: "Inbox", iconId: "list", popover: { viewId: "inbox" } },
+          ],
+        },
+      })
+    );
+    const seam = service as unknown as {
+      loadPlugin(
+        root: string,
+        dirName: string,
+        opts: {
+          isBuiltin: boolean;
+          disabled: Set<string>;
+          origin: "project";
+          instanceKey: string;
+          binding: { projectId: string; projectRoot: string };
+        }
+      ): Promise<unknown>;
+    };
+    return seam.loadPlugin(pluginsParent, "acme.inbox", {
+      isBuiltin: false,
+      disabled: new Set(),
+      origin: "project",
+      instanceKey: INSTANCE,
+      binding: { projectId: PROJECT, projectRoot },
+    });
+  }
+
+  it("registers the popover against the project-qualified panel kind its view loads under", async () => {
+    vi.mocked(registerToolbarButton).mockClear();
+    vi.mocked(registerPanelKind).mockClear();
+    const service = new PluginService(path.join(tmpDir, "installed"), "1.0.0");
+    expect(await loadInboxPlugin(service)).not.toBeNull();
+
+    const config = vi
+      .mocked(registerToolbarButton)
+      .mock.calls.map(([registered]) => registered)
+      .find((registered) => registered.id === `${INSTANCE}.open`);
+    const kindIds = vi.mocked(registerPanelKind).mock.calls.map(([kind]) => kind.id);
+    // The id the panels loop registered this project's view under, so the
+    // popover never mounts a same-named installed plugin's kind.
+    expect(config?.popover?.viewId).toBe("inbox");
+    expect(config?.popover?.panelKindId).toBe(`project:${PROJECT}/acme.inbox/inbox`);
+    expect(kindIds).toContain(config?.popover?.panelKindId);
+    expect(config?.pluginId).toBe(INSTANCE);
+    expect(config).not.toHaveProperty("actionId");
   });
 });
 

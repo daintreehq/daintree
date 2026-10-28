@@ -19,7 +19,21 @@ import type { ChecklistState, HelpAssistantTier, IpcEventBusMap, IpcInvokeMap } 
 import type { GeneratedElectronAPI } from "./generated-api.js";
 import type { AgentSettings, AgentSettingsEntry, ResumeOnRestart } from "../agentSettings.js";
 import type { AgentPreset } from "../../config/agentRegistry.js";
-import type { VoiceInputError, VoiceInputStatus } from "../voice.js";
+import type {
+  VoiceInputError,
+  VoiceInputStatus,
+  VoiceLiveSessionUpdate,
+  VoiceLiveLevel,
+  VoicePauseRequest,
+  VoiceRevealRequest,
+  VoiceSessionEndReason,
+  VoiceStopRequest,
+} from "../voice.js";
+import type {
+  VoiceCorrectionTiming,
+  VoiceCorrectionVerdict,
+  VoiceSessionReport,
+} from "../voiceSessionSummary.js";
 export type { VoiceInputError, VoiceInputStatus };
 import type {
   AuthValidation,
@@ -29,8 +43,8 @@ import type {
   Issue,
   PR,
   PRLookupResult,
+  ForgeReferenceLookupResult,
   Page,
-  RepoMetadata,
   ListOptions,
   ForgeUser,
   ForgeLabel,
@@ -72,6 +86,7 @@ import type { AppVersionInfo } from "./app.js";
 import type {
   SerializeReadOptions,
   SerializedTerminalSnapshot,
+  TerminalExitContext,
   TerminalKillOptions,
 } from "../terminal.js";
 import type {
@@ -150,9 +165,9 @@ import type {
   ForgeRepoCountsUpdatedPayload,
   ForgeFirstPageCachePayload,
   ForgeProjectHealthPayload,
+  IssueLinkTarget,
 } from "./forge.js";
 import type { TerminalConfig } from "./config.js";
-import type { HibernationProjectHibernatedPayload } from "./hibernation.js";
 import type { KeepAwakeState } from "./keepAwake.js";
 import type { IdleTerminalNotifyPayload } from "./idleTerminals.js";
 import type { IdleBackgroundClosedPayload } from "./idleBackgroundAutoClose.js";
@@ -386,7 +401,9 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       id: string,
       callback: (data: string | Uint8Array, streamEnd?: number) => void
     ): () => void;
-    onExit(callback: (id: string, exitCode: number) => void): () => void;
+    onExit(
+      callback: (id: string, exitCode: number, context?: TerminalExitContext) => void
+    ): () => void;
     onAgentStateChanged(callback: (data: AgentStateChangePayload) => void): () => void;
     onAgentDetected(callback: (data: AgentDetectedPayload) => void): () => void;
     onAgentExited(callback: (data: AgentExitedPayload) => void): () => void;
@@ -450,9 +467,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     updateTitle(id: string, title: string, titleMode: PanelTitleMode): void;
     updateWorktreeId(id: string, worktreeId: string | null): void;
     onSpawnResult(callback: (id: string, result: SpawnResult) => void): () => void;
-    onReduceScrollback(
-      callback: (data: { terminalIds: string[]; targetLines: number }) => void
-    ): () => void;
+    onReduceScrollback(callback: (data: { targetLines: number }) => void): () => void;
     onRestoreScrollback(callback: (data: { terminalIds: string[] }) => void): () => void;
     restartService(): Promise<void>;
     onReclaimMemory(callback: () => void): () => void;
@@ -615,6 +630,10 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     ): () => void;
     reloadConfig(): Promise<{ success: boolean }>;
     onConfigReloaded(callback: () => void): () => void;
+    /** This machine's saved grid layout, after any view changes it (#14700). */
+    onPanelGridConfigChanged(
+      callback: (config: import("../config.js").PanelGridConfig) => void
+    ): () => void;
     /**
      * Subscribe to the post-reveal repaint signal (#10362). Main fires this
      * after it detaches the warm anti-flash bridge and focuses the cached view,
@@ -728,6 +747,11 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onFocusOnActivate(
       callback: (payload: import("./project.js").ProjectFocusOnActivateIntent) => void
     ): () => void;
+    /** Main asks whether this view holds work that would not survive its teardown. */
+    onPanelRecoveryQuery(callback: (requestId: string) => void): () => void;
+    replyPanelRecovery(requestId: string, holding: boolean): void;
+    /** The same answer, pushed whenever it changes, for eviction to read without asking. */
+    reportPanelRecoveryState(holding: boolean): void;
     onBackgroundResize(callback: (payload: { width: number; height: number }) => void): () => void;
     onUpdated(callback: (project: Project) => void): () => void;
     /** A project was put to sleep — a window showing it drops to no-project. */
@@ -781,7 +805,11 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       projectIds: string[]
     ): Promise<Record<string, Partial<NotificationSettings>>>;
     onStatsUpdated(callback: (stats: ProjectStatusMap) => void): () => void;
-    createFolder(parentPath: string, folderName: string): Promise<string>;
+    createFolder(
+      parentPath: string,
+      folderName: string,
+      template?: import("../plugin.js").ProjectTemplateSelection
+    ): Promise<string>;
     initGit(directoryPath: string): Promise<void>;
     /** Initialize git repository with progress events */
     initGitGuided(options: GitInitOptions): Promise<GitInitResult>;
@@ -962,6 +990,17 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onRestoreRequested(
       callback: (request: import("./canopy.js").CanopyRestoreRequest) => void
     ): () => void;
+    /** Canopy removed a trashed terminal this view owns for good: remove its pane from the trash. */
+    onRemoveRequested(
+      callback: (request: import("./canopy.js").CanopyRemoveRequest) => void
+    ): () => void;
+    /**
+     * Canopy asks this view, one of its project's, to resume a session the user
+     * closed: as the Resume Sessions palette would, answered with `resumeSettled`.
+     */
+    onResumeRequested(
+      callback: (request: import("./canopy.js").CanopyResumeRequest) => void
+    ): () => void;
     /** Canopy renamed a terminal this view owns: rename its pane as the user's own rename would. */
     onRenameRequested(
       callback: (request: import("./canopy.js").CanopyRenameRequest) => void
@@ -1025,6 +1064,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * the requested value.
      */
     stampVersion(version: number): Promise<Record<string, unknown>>;
+    /** Every saved change on the host, the whole slice as `get` reads it (#14700). */
+    onChanged(callback: (settings: AgentSettings) => void): () => void;
   };
   userAgentRegistry: {
     get(): Promise<import("../userAgentRegistry.js").UserAgentRegistry>;
@@ -1052,9 +1093,39 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       callback: (snapshot: import("./agentDefaults.js").AgentDefaultsSnapshot) => void
     ): () => void;
   };
+  // get / set come from GeneratedElectronAPI; onChanged is a renderer-only subscription.
+  agentToolbarPins: GeneratedElectronAPI["agentToolbarPins"] & {
+    onChanged(
+      callback: (snapshot: import("./agentToolbarPins.js").AgentToolbarPinsSnapshot) => void
+    ): () => void;
+  };
   // getSnapshot comes from GeneratedElectronAPI; onChanged is a renderer-only subscription.
   projectPresence: GeneratedElectronAPI["projectPresence"] & {
     onChanged(callback: () => void): () => void;
+  };
+  // get / setLevel / answerSuggestion come from GeneratedElectronAPI; onChanged is a renderer-only subscription.
+  projectPresentation: GeneratedElectronAPI["projectPresentation"] & {
+    onChanged(
+      callback: (snapshot: import("./projectPresentation.js").ProjectPresentationSnapshot) => void
+    ): () => void;
+  };
+  // get / setTheme / answerSuggestion / resetSuggestion come from GeneratedElectronAPI; onChanged is a renderer-only subscription.
+  projectTheme: GeneratedElectronAPI["projectTheme"] & {
+    onChanged(
+      callback: (change: import("./projectTheme.js").ProjectThemeChange) => void
+    ): () => void;
+  };
+  // hydrate / set come from GeneratedElectronAPI; onChanged is a renderer-only subscription.
+  worktreeTitles: GeneratedElectronAPI["worktreeTitles"] & {
+    onChanged(
+      callback: (snapshot: import("./worktreeTitles.js").WorktreeTitlesSnapshot) => void
+    ): () => void;
+  };
+  // hydrate / capture / mark / markCaptured / clear / compare come from GeneratedElectronAPI; onChanged is a renderer-only subscription.
+  reviewMarks: GeneratedElectronAPI["reviewMarks"] & {
+    onChanged(
+      callback: (snapshot: import("./reviewMarks.js").ReviewMarksSnapshot) => void
+    ): () => void;
   };
   // ensure / restart / stop / getState etc. come from GeneratedElectronAPI;
   // onStateChanged is a renderer-only subscription.
@@ -1062,11 +1133,15 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onStateChanged(callback: (data: DevPreviewStateChangedPayload) => void): () => void;
     onAllSessionsChanged(callback: (data: DevPreviewAllSessionsPayload) => void): () => void;
   };
-  // bind / detach / setMode / getState come from GeneratedElectronAPI; onEvent
-  // is the renderer-only push subscription for validated guest observations.
-  sitePreview: GeneratedElectronAPI["sitePreview"] & {
+  sitePreview: GeneratedElectronAPI["sitePreview"];
+  // The invoke methods come from GeneratedElectronAPI; these are the two
+  // pushes: a core binding's traffic, and a workspace's source changes.
+  elementPicker: GeneratedElectronAPI["elementPicker"] & {
     onEvent(
-      callback: (data: import("./sitePreview.js").SitePreviewPushPayload) => void
+      callback: (data: import("./elementPicker.js").ElementPickerPushPayload) => void
+    ): () => void;
+    onSourceChanged(
+      callback: (data: import("./elementPicker.js").ElementPickerSourceChangedPush) => void
     ): () => void;
   };
   git: GeneratedElectronAPI["git"] & {
@@ -1075,7 +1150,11 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       filePath: string,
       status: GitStatus,
       ignoreWhitespace?: boolean,
-      window?: { offset?: number; maxBytes?: number }
+      window?: {
+        offset?: number;
+        maxBytes?: number;
+        side?: import("../git.js").GitDiffSide;
+      }
     ): Promise<import("./git.js").GitFileDiffResult>;
     getProjectPulse(options: {
       worktreeId: string;
@@ -1197,9 +1276,14 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     setMemoryLeakDetection(enabled: boolean): Promise<void>;
     setMemoryLeakAutoRestartThresholdMb(thresholdMb: number): Promise<void>;
     setCachedProjectViews(cachedProjectViews: number): Promise<void>;
+    onChanged(callback: (change: import("./config.js").TerminalConfigChange) => void): () => void;
   };
   // getEnabled comes from GeneratedElectronAPI; onSupportChanged is a
   // renderer-only subscription.
+  recentDictations: GeneratedElectronAPI["recentDictations"] & {
+    /** Fires when any view records or settles a dictation; carries no text, so re-read the list. */
+    onChanged(callback: () => void): () => void;
+  };
   accessibility: GeneratedElectronAPI["accessibility"] & {
     onSupportChanged(callback: (data: { enabled: boolean }) => void): () => void;
   };
@@ -1363,12 +1447,6 @@ export interface ElectronAPI extends GeneratedElectronAPI {
   // Invoke methods come from GeneratedElectronAPI; the rest are renderer-only subscriptions.
   keepAwake: GeneratedElectronAPI["keepAwake"] & {
     onStateChanged(callback: (state: KeepAwakeState) => void): () => void;
-  };
-  // Invoke methods come from GeneratedElectronAPI; the rest are renderer-only subscriptions.
-  hibernation: GeneratedElectronAPI["hibernation"] & {
-    onProjectHibernated(
-      callback: (payload: HibernationProjectHibernatedPayload) => void
-    ): () => void;
   };
   // Channel is `idle-terminal:*` (singular) but the renderer surface uses
   // `idleTerminals` (plural). The preload opts out of the API codegen via
@@ -1743,9 +1821,11 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     /** Open the commits page for the resolved forge provider. */
     openCommits(cwd: string, branch?: string): Promise<string | undefined>;
     /** Open a single issue in the system browser via the resolved forge provider. */
-    openIssue(payload: { cwd: string; issueNumber: number }): Promise<string | undefined>;
+    openIssue(
+      payload: { cwd: string; issueNumber: number } & IssueLinkTarget
+    ): Promise<string | undefined>;
     /** Resolve the canonical URL for a single issue via the resolved forge provider. */
-    getIssueUrl(payload: { cwd: string; issueNumber: number }): Promise<string>;
+    getIssueUrl(payload: { cwd: string; issueNumber: number } & IssueLinkTarget): Promise<string>;
     /**
      * Open the repository's home page via the resolved forge provider. Rejects
      * when the provider doesn't implement the optional `buildRepoUrl`.
@@ -1890,7 +1970,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     /** Fetch a single normalized issue, or `null` when it doesn't exist. */
     getIssue(payload: { cwd: string; issueNumber: number }): Promise<Issue | null>;
     /** Fetch a single normalized PR, or `null` when it doesn't exist. */
-    getPR(payload: { cwd: string; prNumber: number }): Promise<PR | null>;
+    /** `fresh` reads past the provider's response cache, for a confirm about to act on it. */
+    getPR(payload: { cwd: string; prNumber: number; fresh?: boolean }): Promise<PR | null>;
     /**
      * Fetch the roll-up CI status for one PR, or `null` when the PR doesn't
      * exist. The provider's transport fields (`rawData`, `freshnessToken`,
@@ -1902,7 +1983,9 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       prNumber: number;
     }): Promise<import("./forge.js").ForgeCIStatusSummary | null>;
     /** Fetch the normalized repository metadata roll-up. */
-    getRepoMetadata(payload: { cwd: string }): Promise<RepoMetadata>;
+    getRepoMetadata(payload: {
+      cwd: string;
+    }): Promise<import("./forge.js").ForgeRepoMetadataPayload>;
     /**
      * Resolve the active forge provider's current authenticated viewer for a
      * project, used by the renderer to drive provider-agnostic "assign issue
@@ -1968,10 +2051,12 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       bypassCache?: boolean;
     }): Promise<ForgeProjectHealthPayload>;
     /** Hover-tooltip projection of an issue. Best-effort — `null` on any failure. */
-    getIssueTooltip(payload: {
-      cwd: string;
-      issueNumber: number;
-    }): Promise<import("../forge.js").IssueTooltipData | null>;
+    getIssueTooltip(
+      payload: {
+        cwd: string;
+        issueNumber: number;
+      } & IssueLinkTarget
+    ): Promise<import("../forge.js").IssueTooltipData | null>;
     /** Hover-tooltip projection of a PR. Best-effort — `null` on any failure. */
     getPRTooltip(payload: {
       cwd: string;
@@ -1995,6 +2080,16 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * collapse to their first occurrence.
      */
     getPRsByNumbers(payload: { cwd: string; numbers: number[] }): Promise<PRLookupResult[]>;
+    /**
+     * What each bare `#N` names in the code forge's repository, issue or pull
+     * request, one entry per distinct number (the first 50). `null` when
+     * nothing can be looked up for this cwd: no remote, no provider, no stored
+     * credential, or a provider without the lookup.
+     */
+    getReferencesByNumbers(payload: {
+      cwd: string;
+      numbers: number[];
+    }): Promise<ForgeReferenceLookupResult[] | null>;
     /**
      * Opaque review threads for a PR via the provider's `reviews`
      * capability. `[]` when the capability is absent. Note this is the
@@ -2060,7 +2155,28 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       mergeMethod?: "merge" | "squash" | "rebase";
       commitTitle?: string;
       commitMessage?: string;
+      /** Head commit the caller reviewed; the forge refuses the merge if it moved. */
+      expectedHeadSha?: string;
+      /** Base branch the caller previewed; refused if the PR was retargeted. */
+      expectedBaseRef?: string;
     }): Promise<MergePRResult>;
+    /**
+     * Ask the forge to merge a pull request once its requirements pass, pinned
+     * to the reviewed head. Never merges immediately: a PR that can already
+     * merge comes back `already-mergeable`.
+     */
+    enableAutoMerge(payload: {
+      cwd: string;
+      prNumber: number;
+      mergeMethod?: "merge" | "squash" | "rebase";
+      expectedHeadSha: string;
+      expectedBaseRef?: string;
+    }): Promise<import("../forge.js").EnableAutoMergeResult>;
+    /** Cancel a pull request's pending auto-merge, or take it out of the merge queue. */
+    disableAutoMerge(payload: {
+      cwd: string;
+      prNumber: number;
+    }): Promise<import("../forge.js").DisableAutoMergeResult>;
     /** Convert an open pull request to a draft, returning its resulting draft state. */
     convertPRToDraft(payload: { cwd: string; prNumber: number }): Promise<PRDraftStateResult>;
     /** Mark a draft pull request ready for review, returning its resulting draft state. */
@@ -2083,22 +2199,94 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onIssueNotFound(callback: (data: IssueNotFoundPayload) => void): () => void;
   };
   // forgeAudit comes from GeneratedElectronAPI
-  voiceInput: {
+  // start, stop and flushParagraph come from GeneratedElectronAPI. Each takes
+  // the session id the renderer minted before its start path first awaited;
+  // main ignores audio, stop and flush carrying an id that isn't the live
+  // session's, and every event carries the id of the session it belongs to.
+  // start's optional `terminalId` names the terminal being dictated into;
+  // keyterms come from it alone. getLiveSession, stopLive, revealLive and
+  // setPausedLive come from there too: they let a view that doesn't own the
+  // live session see it, stop it, pause it, and go to it. publishDetails is the
+  // owner reporting what those views show of it.
+  voiceInput: GeneratedElectronAPI["voiceInput"] & {
     getSettings(): Promise<VoiceInputSettings>;
-    setSettings(settings: Partial<VoiceInputSettings>): Promise<void>;
-    start(): Promise<{ ok: true } | { ok: false; error: string }>;
-    stop(): Promise<{ rawText: string | null }>;
-    flushParagraph(): Promise<{ rawText: string | null }>;
-    sendAudioChunk(chunk: ArrayBuffer): void;
+    setSettings(settings: VoiceInputSettingsPatch): Promise<void>;
+    sendAudioChunk(sessionId: string, chunk: ArrayBuffer): void;
     onTranscriptionDelta(
-      callback: (payload: { text: string; itemId?: string }) => void
+      callback: (payload: {
+        sessionId: string;
+        text: string;
+        itemId?: string;
+        replace?: boolean;
+      }) => void
     ): () => void;
     onTranscriptionComplete(
-      callback: (payload: { text: string; willCorrect: boolean; itemId?: string }) => void
+      callback: (payload: {
+        sessionId: string;
+        text: string;
+        willCorrect: boolean;
+        /** The words as transcribed, when heard-as rules rewrote them into `text`. */
+        heard?: string;
+        itemId?: string;
+        transcriptId?: string;
+        send?: boolean;
+        commandText?: string;
+        /** Spans of `text` the recogniser was unsure of. */
+        uncertain?: Array<{ from: number; to: number }>;
+        /** Spans of `heard` the recogniser was unsure of. */
+        heardUncertain?: Array<{ from: number; to: number }>;
+        /** Spans of `commandText` the recogniser was unsure of. */
+        commandUncertain?: Array<{ from: number; to: number }>;
+        /**
+         * Where the speaker paused in `text`, each straight after a word. With no
+         * words, `[0]` marks a pause after the words that landed before it.
+         */
+        pauses?: number[];
+        /** Where the speaker paused in `heard`. */
+        heardPauses?: number[];
+        /** Where the speaker paused in `commandText`. */
+        commandPauses?: number[];
+      }) => void
     ): () => void;
-    onParagraphBoundary(callback: (payload: { rawText: string | null }) => void): () => void;
-    onError(callback: (error: VoiceInputError) => void): () => void;
-    onStatus(callback: (status: VoiceInputStatus) => void): () => void;
+    onParagraphBoundary(
+      callback: (payload: { sessionId: string; rawText: string | null }) => void
+    ): () => void;
+    onError(callback: (payload: { sessionId: string; error: VoiceInputError }) => void): () => void;
+    onStatus(
+      callback: (payload: { sessionId: string; status: VoiceInputStatus }) => void
+    ): () => void;
+    /** Fires once per session when main ends it, with why and main's counts for its summary. */
+    onSessionEnded(
+      callback: (payload: {
+        sessionId: string;
+        reason: VoiceSessionEndReason;
+        report: VoiceSessionReport;
+      }) => void
+    ): () => void;
+    /**
+     * The session live in another view, or none, whenever it changes. A view
+     * that owns the live session is told none. `getLiveSession()` pulls the
+     * same snapshot; the larger `revision` wins.
+     */
+    onLiveSession(callback: (update: VoiceLiveSessionUpdate) => void): () => void;
+    /**
+     * To the owner, when another view's dictation key, or a page's, asked it to
+     * stop; `returnToTarget` when its target pane should take the keyboard back.
+     */
+    onStopRequested(callback: (payload: VoiceStopRequest) => void): () => void;
+    /**
+     * When another view's indicator asked to be taken to the live session: the
+     * owner focuses its target, and the view on screen in the owner's window
+     * goes to `workspaceId` on `hostId`.
+     */
+    onRevealRequested(callback: (payload: VoiceRevealRequest) => void): () => void;
+    /**
+     * The live session's input level, while this view is on screen and another
+     * owns the session: one per audio chunk main hears, never to a cached view.
+     */
+    onLiveLevel(callback: (payload: VoiceLiveLevel) => void): () => void;
+    /** To the owner, when another view's control panel paused or resumed it. */
+    onPauseRequested(callback: (payload: VoicePauseRequest) => void): () => void;
     checkMicPermission(): Promise<MicPermissionStatus>;
     /**
      * Native permission preflight. Resolves to whether the renderer may proceed
@@ -2118,9 +2306,38 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     correct(request: {
       rawText: string;
       recentContext?: string[];
-    }): Promise<{ action: "no_change" | "replace"; correctedText: string }>;
+      /** The draft after the passage, bounded: context cleanup never rewrites, sent to OpenAI and never logged. */
+      followingText?: string;
+      /** The prompts last sent to `terminalId`, oldest first, bounded: sent to OpenAI with the passage, never logged. */
+      recentPrompts?: string[];
+      /** The panel the passage was dictated into: it picks the project vocabulary and the agent's commands. */
+      terminalId?: string;
+      /** Nothing but whitespace comes before the passage in the draft. */
+      startsPrompt?: boolean;
+      /** The dictation the passage came from: its context was read while it ran. */
+      sessionId?: string;
+      /** Dictated into a terminal outside the asking view: cleaned up without its project's vocabulary. */
+      outsideView?: true;
+      /** Streams the reply: its text so far arrives through `onCorrectionProgress` under this id. */
+      streamId?: string;
+    }): Promise<{
+      action: "no_change" | "replace";
+      correctedText: string;
+      failed?: true;
+      /** Why the passage came back as it did: a code, never text. */
+      verdict?: VoiceCorrectionVerdict;
+      timing?: VoiceCorrectionTiming;
+    }>;
+    /** A streaming correction's text so far, cut at a word boundary; only ever grows. */
+    onCorrectionProgress(
+      callback: (payload: { streamId: string; text: string }) => void
+    ): () => void;
     onFileTokenResolved(
-      callback: (payload: { description: string; replacement: string; resolved: boolean }) => void
+      callback: (payload: {
+        sessionId: string;
+        transcriptId: string;
+        references: Array<{ description: string; path: string | null }>;
+      }) => void
     ): () => void;
   };
   // Invoke methods come from GeneratedElectronAPI; the rest are
@@ -2194,7 +2411,12 @@ export interface ElectronAPI extends GeneratedElectronAPI {
   // All help methods (incl. reportPanelOpen + peekPendingHibernation, which
   // surfaces `panelWasOpen` for cold switch-back auto-resume) come from
   // GeneratedElectronAPI (#10815).
-  help: GeneratedElectronAPI["help"];
+  help: GeneratedElectronAPI["help"] & {
+    /** The global assistant changed: its run, its readers or who holds its input (#14454). */
+    onGlobalAssistantChanged(
+      callback: (state: import("./help.js").GlobalAssistantView) => void
+    ): () => void;
+  };
   // helpAssistant is generated — see GeneratedElectronAPI.
   mcpBridge: {
     /** Listen for manifest requests from main process */
@@ -2278,10 +2500,16 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * Listen for plugin-sourced action dispatch requests from the main process.
      * Unlike {@link mcpBridge.onDispatchActionRequest} there is no `confirmed`,
      * `context`, or `callerInfo`: plugins cannot bypass confirm-gating and don't
-     * override the action context.
+     * override the action context. `pluginId` is the calling plugin, set by main
+     * from the plugin host, never by the plugin.
      */
     onDispatchActionRequest(
-      callback: (payload: { requestId: string; actionId: string; args?: unknown }) => void
+      callback: (payload: {
+        requestId: string;
+        actionId: string;
+        args?: unknown;
+        pluginId?: string;
+      }) => void
     ): () => void;
     /** Send the plugin action dispatch result back to the main process. */
     sendDispatchActionResponse(payload: {
@@ -2437,6 +2665,28 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      */
     onPanelBadgesCleared(callback: (payload: { pluginId: string }) => void): () => void;
     /**
+     * Subscribe to plugin panel activity reports (#13820). The callback fires
+     * with one plugin's COMPLETE current map (`panelId → report`); an empty map
+     * clears that plugin's reports. Returns a cleanup.
+     */
+    onPanelActivityChanged(
+      callback: (payload: {
+        pluginId: string;
+        activity: Record<string, import("../plugin.js").PluginPanelActivityReport>;
+      }) => void
+    ): () => void;
+    /**
+     * Subscribe to plugin tasks (#13819). The callback fires with one plugin's
+     * COMPLETE current list, oldest first; an empty list clears that plugin's
+     * tasks. Returns a cleanup.
+     */
+    onTasksChanged(
+      callback: (payload: {
+        pluginId: string;
+        tasks: import("../plugin.js").PluginTaskSnapshot[];
+      }) => void
+    ): () => void;
+    /**
      * Subscribe to plugin toolbar-button badges (#13503). The callback fires with
      * one plugin's COMPLETE current map (manifest button id → badge); an empty
      * map clears that plugin's badges, as on unload. Returns a cleanup.
@@ -2445,6 +2695,17 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       callback: (payload: {
         pluginId: string;
         badges: Record<string, import("../plugin.js").PluginPanelBadge>;
+      }) => void
+    ): () => void;
+    /**
+     * Subscribe to plugin toolbar-button state (#13785). The callback fires with
+     * one plugin's COMPLETE current map (manifest button id → state); an empty
+     * map clears that plugin's state, as on unload. Returns a cleanup.
+     */
+    onToolbarStatesChanged(
+      callback: (payload: {
+        pluginId: string;
+        states: Record<string, import("../plugin.js").PluginToolbarButtonRuntimeState>;
       }) => void
     ): () => void;
     /**
@@ -2468,6 +2729,30 @@ export interface ElectronAPI extends GeneratedElectronAPI {
         pluginId: string;
         projectId: string;
         statuses: Record<string, import("../plugin.js").PluginWorktreeCardStatus>;
+      }) => void
+    ): () => void;
+    /**
+     * Subscribe to plugin readiness checks (#13806). The callback fires with
+     * one plugin's COMPLETE map for one project (worktreeId → checks); an empty
+     * map clears that plugin's checks there. Returns a cleanup.
+     */
+    onWorktreeReviewChecksChanged(
+      callback: (payload: {
+        pluginId: string;
+        projectId: string;
+        checks: Record<string, import("../plugin.js").PluginWorktreeReviewCheck[]>;
+      }) => void
+    ): () => void;
+    /**
+     * Subscribe to plugin terminal header statuses (#13802). The callback fires
+     * with one plugin's COMPLETE map for one project (terminalId → status); an
+     * empty map clears that plugin's statuses there. Returns a cleanup.
+     */
+    onTerminalStatusesChanged(
+      callback: (payload: {
+        pluginId: string;
+        projectId: string;
+        statuses: Record<string, import("../plugin.js").PluginTerminalStatus>;
       }) => void
     ): () => void;
     /**
@@ -2519,6 +2804,15 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      */
     reportFocusedPanel(report: import("../plugin.js").PluginFocusedPanel): void;
     /**
+     * Subscribe to presence changes pushed to this view's project (#13813) —
+     * the view half of `host.onDidChangeProjectPresence`, behind the SDK's
+     * `useProjectPresence()`. Read `getProjectPresence()` for the current
+     * state. Returns a cleanup.
+     */
+    onProjectPresenceChanged(
+      callback: (presence: import("../plugin.js").PluginProjectPresence) => void
+    ): () => void;
+    /**
      * Subscribe to per-plugin perf snapshots, pushed at most once a second and
      * only while at least one listener is attached (worker memory is sampled
      * only then). Each push carries every tracked plugin; read
@@ -2558,6 +2852,17 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onToursChanged(
       callback: (payload: { tours: import("../plugin.js").PluginTourDescriptor[] }) => void
     ): () => void;
+    /** Subscribe to plugin hosted-view registry changes (#13770). Returns a cleanup. */
+    onHostedViewsChanged(
+      callback: (payload: { views: import("../plugin.js").PluginHostedViewDescriptor[] }) => void
+    ): () => void;
+    /** Subscribe to the plugin theme catalog (#13832). Returns a cleanup. */
+    onThemesChanged(
+      callback: (payload: {
+        themes: import("../appTheme.js").AppColorScheme[];
+        fallbackSchemeId?: string;
+      }) => void
+    ): () => void;
     /** Subscribe to plugin custom-icon snapshot changes (#13143). Returns a cleanup. */
     onIconsChanged(
       callback: (payload: {
@@ -2570,6 +2875,14 @@ export interface ElectronAPI extends GeneratedElectronAPI {
         buttons: import("../../config/toolbarButtonRegistry.js").ToolbarButtonConfig[];
         complete: boolean;
       }) => void
+    ): () => void;
+    /** Subscribe to plugin launch-entry registry changes (#13788). Returns a cleanup. */
+    onLaunchEntriesChanged(
+      callback: (payload: { entries: import("../plugin.js").PluginLaunchEntryConfig[] }) => void
+    ): () => void;
+    /** Subscribe to plugin layout registry changes (#13780). Returns a cleanup. */
+    onLayoutsChanged(
+      callback: (payload: { layouts: import("../plugin.js").PluginLayoutConfig[] }) => void
     ): () => void;
     /** Subscribe to plugin keybinding registry changes. Returns a cleanup. */
     onKeybindingsChanged(
@@ -2673,28 +2986,27 @@ export type VoiceTranscriptionModel = "gpt-live-transcribe";
  *   `OpenAITranscriptionProvider`.
  * - "deepgram": Deepgram Nova-3 streaming. Native server-side VAD / endpointing,
  *   so no client commit timer is needed.
+ * - "grok": xAI's `grok-voice-transcribe-2.0` streaming. Server-side endpointing
+ *   like Deepgram's, with utterance finals that restate the whole utterance.
  */
-export type VoiceTranscriptionProvider = "openai" | "deepgram";
+export type VoiceTranscriptionProvider = "openai" | "deepgram" | "grok";
 
 /**
- * The correction model is single-valued: gpt-5.6-luna replaced both the retired
- * gpt-5-mini (quality) and gpt-5-nano (speed) tiers, so there is no longer a
- * user-facing model choice. Kept as a named type (rather than inlining the
- * literal) so the persisted setting, the runtime constant in
- * `shared/config/voiceCorrection.ts` (`VOICE_DICTATION_AI_MODEL`), and this
- * union stay recognizably one concept.
+ * The model cleanup and spoken rewrite run on, the user's choice in settings.
+ * `shared/config/voiceCorrection.ts` lists the same models
+ * (`VOICE_CLEANUP_MODELS`) and names the default (`VOICE_CLEANUP_AI_MODEL`).
  */
-export type VoiceCorrectionModel = "gpt-5.6-luna";
+export type VoiceCorrectionModel = "gpt-6.1-terra" | "gpt-6-luna";
 
 /**
  * Paragraphing strategy for voice dictation.
  *
  * "spoken-command" (default): The user says "new paragraph" to insert a paragraph break.
- *   Spoken commands ("new paragraph" → \n\n, "period" → ".", "new line" → \n, etc.) are
- *   transcribed literally by the upstream service and rewritten post-hoc by the IPC handler
- *   via applyDictationCommands. Manual Enter is always available as a secondary mechanism.
+ *   Spoken commands ("new paragraph" → \n\n, "new line" → \n, and a final "send it",
+ *   which sends the prompt) are transcribed literally by the upstream service and
+ *   rewritten post-hoc by the IPC handler. Shift+Enter is always available for a break.
  *
- * "manual": Paragraph breaks are inserted only via the Enter key. No spoken commands.
+ * "manual": Paragraph breaks are inserted only via Shift+Enter. No spoken commands.
  *   Best for users who prefer keyboard control or find spoken formatting commands awkward.
  */
 export type VoiceParagraphingStrategy = "spoken-command" | "manual";
@@ -2702,7 +3014,11 @@ export type VoiceParagraphingStrategy = "spoken-command" | "manual";
 /**
  * Recording mode for voice dictation.
  *
- * "toggle" (default): Pressing the voice shortcut starts recording; pressing it
+ * "tap-or-hold" (default): Recording starts on key down. A quick tap keeps
+ *   recording until the next press; a hold longer than ~400ms stops on release,
+ *   unless no speech was heard yet, in which case it counts as a tap.
+ *
+ * "toggle": Pressing the voice shortcut starts recording; pressing it
  *   again stops recording. Recording persists until the user explicitly ends it.
  *
  * "push-to-talk": Recording is bound to the keyboard shortcut press. Pressing and
@@ -2710,15 +3026,22 @@ export type VoiceParagraphingStrategy = "spoken-command" | "manual";
  *   recording and drains the transcript into the editor without auto-submitting.
  *   Escape still cancels. The toolbar button remains toggle-only regardless of mode.
  */
-export type VoiceRecordingMode = "toggle" | "push-to-talk";
+export type VoiceRecordingMode = "tap-or-hold" | "toggle" | "push-to-talk";
 
 export interface VoiceInputSettings {
   enabled: boolean;
   openaiApiKey: string;
   /** API key for the Deepgram transcription provider. Empty string when unset. */
   deepgramApiKey: string;
+  /** xAI API key for the Grok transcription provider. Empty string when unset. */
+  xaiApiKey: string;
   language: string;
-  customDictionary: string[];
+  /**
+   * The user's dictionary, oldest entry first. Main owns every write: the
+   * renderer changes it only through the `voiceDictionary` operations, never
+   * through `setSettings`.
+   */
+  dictionary: VoiceDictionaryEntry[];
   /** Which transcription backend to use. Defaults to "openai". */
   transcriptionProvider: VoiceTranscriptionProvider;
   transcriptionModel: VoiceTranscriptionModel;
@@ -2731,11 +3054,16 @@ export interface VoiceInputSettings {
   resolveFileLinks: boolean;
   /** Microphone device ID to use for recording. Empty string means system default. */
   deviceId: string;
+  /**
+   * The chosen microphone's name when it was picked, so settings can still name
+   * it while it is unplugged. Display only: never used to find or open a mic.
+   */
+  deviceLabel: string;
   /** OpenAI Organization ID for legacy sk- keys. Sent as OpenAI-Organization header. */
   organizationId: string;
   /** OpenAI Project ID for legacy sk- keys. Sent as OpenAI-Project header. */
   projectId: string;
-  /** Controls whether recording is held (push-to-talk) or toggled. Defaults to "toggle". */
+  /** Controls whether recording is held, toggled, or either by press length. Defaults to "tap-or-hold". */
   recordingMode: VoiceRecordingMode;
   /**
    * Runtime-only. Context keyterms (custom dictionary + project/branch/terminal
@@ -2749,11 +3077,48 @@ export interface VoiceInputSettings {
   keyterms?: string[];
   /**
    * Words learned from the user's manual corrections to dictated text, pending
-   * explicit accept/dismiss. Never added to `customDictionary` silently.
+   * explicit accept/dismiss. Never added to `dictionary` silently, and, like
+   * it, written only by main.
    */
   suggestedDictionary: SuggestedDictionaryEntry[];
+  /** Suggestions the user dismissed, so the same substitution is never offered again. Written only by main. */
+  dismissedSuggestions: DismissedSuggestion[];
   /** When enabled, manual corrections to dictated text surface as suggested dictionary words. Defaults to true. */
   learnFromCorrections: boolean;
+}
+
+/** What `voiceInput.setSettings` accepts: everything except the main-owned and runtime-only fields. */
+export type VoiceInputSettingsPatch = Partial<
+  Omit<
+    VoiceInputSettings,
+    "dictionary" | "suggestedDictionary" | "dismissedSuggestions" | "keyterms"
+  >
+>;
+
+/** Where a dictionary entry came from. */
+export type VoiceDictionarySource = "manual" | "learned" | "imported";
+
+/** One dictionary term and how it tends to be misheard. */
+export interface VoiceDictionaryEntry {
+  /** The written form, in the exact casing to produce (e.g. "Zustand"). Unique ignoring case. */
+  term: string;
+  /** Phrases the transcriber has produced for this term (e.g. "zoo stand"), unique ignoring case. */
+  heardAs: string[];
+  source: VoiceDictionarySource;
+  /** Epoch ms when the entry was added. Entries migrated from the old word list share one time. */
+  addedAt: number;
+}
+
+/** The dictionary and its suggestion queue as main holds them after an operation. */
+export interface VoiceDictionaryState {
+  dictionary: VoiceDictionaryEntry[];
+  suggestedDictionary: SuggestedDictionaryEntry[];
+}
+
+/** A word and what it was heard as, the pair a dismissed suggestion keeps from coming back. */
+export interface DismissedSuggestion {
+  word: string;
+  utterance: string;
 }
 
 /** A dictionary word suggested from a user's manual correction, with provenance. */
@@ -2774,8 +3139,9 @@ export type HelpAssistantIdleHibernateMinutes = 0 | 5 | 15 | 30 | 60 | 120;
 
 /**
  * Whether the assistant's confirm-gated Daintree actions ask first (#12874).
- * `inherit` follows the global "Skip permission prompts" setting; `always-ask`
- * keeps Daintree's dialog regardless; `never-ask` skips it whatever the global
+ * `inherit` follows the assistant agent's effective "Skip permission prompts"
+ * setting, its own if it has one, else the global (#14141); `always-ask` keeps
+ * Daintree's dialog regardless; `never-ask` skips it whatever the agent's
  * setting says (#12989).
  */
 export type HelpAssistantDaintreeConfirmations = "inherit" | "always-ask" | "never-ask";
@@ -2842,7 +3208,7 @@ export interface HelpAssistantSettings {
   loadGlobalHooksAndServers: boolean;
   /**
    * Whether help sessions' Daintree confirmations are skipped: always under
-   * `never-ask`, while the global "Skip permission prompts" is on under
+   * `never-ask`, while the assistant agent skips permission prompts under
    * `inherit`. Read per dispatch, not snapshotted at launch. Defaults to
    * `"inherit"`.
    */

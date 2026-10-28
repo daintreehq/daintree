@@ -43,6 +43,8 @@ export const TerminalOutPortMessageSchema = z.discriminatedUnion("type", [
     id: terminalId,
     data: z.instanceof(Uint8Array),
     bytes: byteCount,
+    /** Absent from a host that does not forward stream offsets. */
+    streamEnd: seq.optional(),
   }),
   z.object({
     type: z.literal("tier-changed"),

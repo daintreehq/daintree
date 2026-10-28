@@ -33,6 +33,8 @@ export interface PluginTourUrlContext {
   pluginName: string;
   /** Builds a `plugin://` URL for a plugin-relative path under this load's generation. */
   pluginUrl: (relativePath: string) => string;
+  /** Maps one of the manifest's own command ids to where this instance registers it. */
+  qualifyActionId: (actionId: string) => string;
 }
 
 const toursByQualifiedId = new Map<string, RegisteredPluginTour>();
@@ -98,6 +100,17 @@ export function registerPluginTours(
       }),
     };
     if (tour.panelKind !== undefined) descriptor.panelKind = tour.panelKind;
+    if (tour.version !== undefined) descriptor.version = tour.version;
+    if (tour.finish !== undefined) {
+      const { action } = tour.finish;
+      descriptor.finish = {
+        hint: tour.finish.hint,
+        action:
+          action.kind === "command"
+            ? { kind: "command", actionId: context.qualifyActionId(action.actionId) }
+            : { kind: "settings", key: action.key ?? null },
+      };
+    }
     const entry: RegisteredPluginTour = { descriptor, remoteAudio };
     toursByQualifiedId.set(qualifiedId, entry);
     byLocalId.set(tour.id, entry);

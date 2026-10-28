@@ -76,6 +76,12 @@ export interface DownloadPayload {
   opId: OperationId;
 }
 
+/** A host file the person clicked a link to in a remote view's terminal. */
+export interface GrantClickedFilePayload {
+  hostId: HostId;
+  hostPath: string;
+}
+
 export interface DownloadResult {
   localPath: string;
   bytes: number;

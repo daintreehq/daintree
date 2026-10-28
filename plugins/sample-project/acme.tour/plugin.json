@@ -7,9 +7,9 @@
   "authors": [{ "name": "Daintree", "role": "Maintainer" }],
   "main": "dist/index.mjs",
   "engines": {
-    "daintree": ">=0.34.0"
+    "daintree": ">=0.46.0"
   },
-  "capabilities": ["fs:project-read"],
+  "capabilities": ["fs:project-read", "artifact:store"],
   "scopes": {
     "fs": {
       "allowedPaths": ["${project}", "${worktree}"]

@@ -17,6 +17,9 @@ import { readAvailableSystemMemoryMb } from "../utils/systemMemory.js";
 import { memoryPressureTarget } from "../utils/cachedProjectViews.js";
 import { isSwapPressureConfirmed } from "../services/systemSwapPressure.js";
 import { isKernelPressureCritical } from "../services/systemKernelPressure.js";
+import { isPanelRecoveryHeldReported } from "../services/panelRecoveryQuery.js";
+import { isDictationViewHeld } from "../services/voice/dictationViewHold.js";
+import { hasPendingActivation } from "./projectActivationClaims.js";
 import {
   isWorkspaceKeepResident,
   recordWorkspaceEviction,
@@ -30,7 +33,40 @@ type EvictionCandidate = {
   liveAssistantBackend: boolean;
   boundMcpSession: boolean;
   keepResident: boolean;
+  recoveryHeld: boolean;
 };
+
+/** A candidate in the app-wide queue: the manager that owns it, and its protection tier. */
+type ScopedCandidate = EvictionCandidate & { owner: ProjectViewManager; tier: number };
+
+/**
+ * The managers whose views share one cap (#14218): every live window in the
+ * host's registry, oldest first, and the host itself even before it is
+ * registered. The cap and the pressure budget are app-wide, so one window's
+ * inventory can no longer say whether the app is over them. A host built
+ * without a registry is its own scope.
+ */
+export function cacheScope(host: ProjectViewManager): ProjectViewManager[] {
+  const scope: ProjectViewManager[] = [];
+  for (const wCtx of host.windowRegistry?.all() ?? []) {
+    const pvm = wCtx.services.projectViewManager;
+    if (!pvm || pvm.disposed || pvm.win.isDestroyed() || scope.includes(pvm)) continue;
+    scope.push(pvm);
+  }
+  if (!scope.includes(host)) scope.push(host);
+  return scope;
+}
+
+/** Resident views across the host's scope — view instances, so a project open in two windows counts twice. */
+export function scopeViewCount(host: ProjectViewManager): number {
+  return countViews(cacheScope(host));
+}
+
+function countViews(scope: readonly ProjectViewManager[]): number {
+  let count = 0;
+  for (const pvm of scope) count += pvm.views.size;
+  return count;
+}
 
 /**
  * Consecutive sampler readings below the warning edge before a pressure pass
@@ -59,6 +95,17 @@ export const MIN_PRESSURE_EVICTION_AGE_MS = 300_000;
  * escalation.
  */
 export const MIN_CRITICAL_PRESSURE_EVICTION_AGE_MS = 60_000;
+
+/**
+ * How long a cached view may go unshown before the sampler releases it whatever
+ * the cap or memory reads (#14217). Each one is a full renderer (median 279 MB
+ * at eviction in a month of field logs) and keeps its project's workspace host
+ * past `CLEANUP_GRACE_MS`. An hour turns about 6% of warm switches cold, where
+ * half an hour would turn 10%. Measured from `lastUsed` like the pressure
+ * floors, and wall-clock on purpose: a machine asleep for the night was a user
+ * away for the night.
+ */
+export const IDLE_VIEW_RELEASE_MS = 60 * 60 * 1000;
 
 /**
  * Consecutive soft-band evictions that failed to move available memory before
@@ -132,6 +179,17 @@ export function hasLiveAssistantBackend(
 }
 
 /**
+ * The user's residency grant for a cached view. A view of a host's project is
+ * asked of its host (#13933): the grant is stored there, and this machine's
+ * store says nothing about it.
+ */
+function viewKeepsResident(host: ProjectViewManager, projectId: string, entry: ViewEntry): boolean {
+  if (isLocalViewKey(projectId)) return isWorkspaceKeepResident(projectId);
+  const wc = entry.view.webContents;
+  return !wc.isDestroyed() && host.remoteKeepResident?.(wc.id) === true;
+}
+
+/**
  * The active-agent rank of a cached view. A view of a host's project is asked
  * of its host (#13359): its agents run there, so this machine's agent-state
  * cache never sees them, and without the host's answer every such view ranked
@@ -145,6 +203,109 @@ function viewHasActiveAgent(
   if (isLocalViewKey(projectId)) return hasActiveAgent(host, projectId);
   const wc = entry.view.webContents;
   return !wc.isDestroyed() && host.remoteAgentActive?.(wc.id) === true;
+}
+
+type EvictionMetrics = {
+  memoryByPid: ReadonlyMap<number, number>;
+  residentByPid: ReadonlyMap<number, number>;
+};
+
+/**
+ * Build pid → memory indexes from the synchronous app.getAppMetrics() snapshot,
+ * joined per view via `webContents.getOSProcessId()` so the eviction log line
+ * can record each evicted view's footprint.
+ */
+function readEvictionMetrics(): EvictionMetrics {
+  const memoryByPid = new Map<number, number>();
+  const residentByPid = new Map<number, number>();
+  try {
+    // Shared TTL snapshot: the eviction log line tolerates a few seconds of
+    // staleness, so a pass landing near another sampler's sweep reuses it.
+    for (const proc of getAppMetricsSnapshot()) {
+      const kb = getProcessMemoryKb(proc);
+      if (kb > 0) {
+        memoryByPid.set(proc.pid, kb);
+      }
+      if (proc.memory.workingSetSize > 0) {
+        residentByPid.set(proc.pid, proc.memory.workingSetSize);
+      }
+    }
+  } catch {
+    // app.getAppMetrics() throwing is non-fatal — memoryKb is simply omitted
+    // from the eviction log line.
+  }
+  return { memoryByPid, residentByPid };
+}
+
+function memoryFor(entry: ViewEntry, byPid: ReadonlyMap<number, number>): number {
+  const wc = entry.view.webContents;
+  if (wc.isDestroyed()) return 0;
+  const getPid = (wc as { getOSProcessId?: () => number }).getOSProcessId;
+  if (typeof getPid !== "function") return 0;
+  const pid = getPid.call(wc);
+  if (typeof pid !== "number" || pid <= 0) return 0;
+  return byPid.get(pid) ?? 0;
+}
+
+function guestMemoryFor(entry: ViewEntry, byPid: ReadonlyMap<number, number>): number {
+  return entry.view.webContents.isDestroyed() ? 0 : sumGuestMemoryKb(entry.view.webContents, byPid);
+}
+
+/**
+ * Log, tear down and ledger one eviction. Returns the view's resident memory
+ * (KB) so a soft pressure pass can judge what it freed.
+ */
+function evictCandidate(
+  host: ProjectViewManager,
+  candidate: EvictionCandidate,
+  reason: EvictionReason,
+  ageMs: number,
+  metrics: EvictionMetrics,
+  availableMb: number | null
+): number {
+  const {
+    projectId,
+    entry,
+    activeAgent,
+    liveAssistantBackend,
+    boundMcpSession,
+    keepResident,
+    recoveryHeld: heldWork,
+  } = candidate;
+  const memoryKb = memoryFor(entry, metrics.memoryByPid);
+  const guestMemoryKb = guestMemoryFor(entry, metrics.memoryByPid);
+  const residentKb =
+    memoryFor(entry, metrics.residentByPid) + guestMemoryFor(entry, metrics.residentByPid);
+  const ctx: Record<string, unknown> = {
+    projectId,
+    reason,
+    ageMs,
+    activeAgent,
+  };
+  if (liveAssistantBackend) ctx.liveAssistantBackend = true;
+  // Recorded so a bound session going `SESSION_BINDING_GONE` is traceable to
+  // the pass that took its view, rather than looking like the binding broke
+  // on its own.
+  if (boundMcpSession) ctx.boundMcpSession = true;
+  // The user granted this workspace residency and it is being evicted anyway
+  // — the cap could not hold every grant, or pressure took the slots. Logged
+  // so the override is attributable rather than looking like the grant was
+  // ignored (#11162).
+  if (keepResident) ctx.keepResident = true;
+  // Unsaved work the view said it could not recover is lost with it: the
+  // defined outcome of a pressure pass over a held view (#14095).
+  if (heldWork) ctx.recoveryHeld = true;
+  if (memoryKb > 0) ctx.memoryKb = memoryKb;
+  if (guestMemoryKb > 0) ctx.guestMemoryKb = guestMemoryKb;
+  if (availableMb != null) ctx.memoryAvailableMb = availableMb;
+  logInfo("projectview.eviction", ctx);
+  host.evictionTimestamps.set(projectId, Date.now());
+  cleanupEntry(host, projectId);
+  // After the teardown, because the read side is what gates the record on
+  // liveness — see `readWorkspaceBindingState` (#12313).
+  // A remote project's residency is its host's; only local keys enter this ledger.
+  if (isLocalViewKey(projectId)) recordWorkspaceEviction(projectId, reason);
+  return residentKb;
 }
 
 /**
@@ -205,8 +366,8 @@ export function evictDeadView(
  * available. Deliberately without the assistant allowance (#12885) — that slot
  * is for a project the user just left, not one the previous session left cold
  * — so restore is at most stricter than reclaim and never admits a view the
- * next pass would destroy. The cap counts the
- * active view, so a window at the ceiling reports `"capacity"` rather than
+ * next pass would destroy. The cap counts every
+ * window's views, current ones included, so a window at the ceiling reports `"capacity"` rather than
  * evicting a sibling to make room — a project the user is rotating through is
  * worth more than one the previous session left cold.
  */
@@ -223,8 +384,11 @@ export function backgroundRestoreCapacity(
         })
       : { level: "none" as const, targetMax: host.maxCachedViews };
 
-  if (host.views.size >= host.maxCachedViews) return "capacity";
-  if (host.views.size >= targetMax) return level === "none" ? "capacity" : "pressure";
+  // Every window's views, not this one's: the cap is app-wide (#14218), and
+  // current views in other windows leave this one no more room than they use.
+  const viewCount = scopeViewCount(host);
+  if (viewCount >= host.maxCachedViews) return "capacity";
+  if (viewCount >= targetMax) return level === "none" ? "capacity" : "pressure";
   // A restore nobody asked for never adds a renderer at critical kernel
   // pressure (#13530); the project still opens cold, through its own gate,
   // when the user goes to it.
@@ -325,7 +489,15 @@ export function evictStaleViews(
       ? MIN_CRITICAL_PRESSURE_EVICTION_AGE_MS
       : MIN_PRESSURE_EVICTION_AGE_MS;
 
-  if (host.views.size <= baseMax || host.activeProjectId === null) {
+  // One queue over every window's views (#14218). Each window keeps its current
+  // view and its own exclusions; the cap, the target and the budget are the
+  // app's. Read lazily, so a window that closed has already given back its share.
+  const scope = cacheScope(host);
+
+  // Each window without a current view is skipped below; only when none has
+  // one is there nothing to anchor a pass — a window left on the project picker
+  // must not stop the others' reclaim.
+  if (countViews(scope) <= baseMax || scope.every((pvm) => pvm.activeProjectId === null)) {
     // Nothing is over target, so whatever the last pass reported has ended; a
     // later pass that finds the cache over it again is a new episode.
     host.lastEvictionSkippedLog = null;
@@ -333,41 +505,11 @@ export function evictStaleViews(
     return 0;
   }
 
-  // Build pid → memory index from the synchronous app.getAppMetrics()
-  // snapshot. Joined per-view via `webContents.getOSProcessId()` so the
-  // eviction log line can record each evicted view's footprint. Memory size
-  // does not drive eviction order — the largest renderer is typically the
-  // project the user has been working in, so size-first ordering destroys
-  // the most valuable view. Eviction is pure LRU (see #8602).
-  const memoryByPid = new Map<number, number>();
-  const residentByPid = new Map<number, number>();
-  try {
-    // Shared TTL snapshot: the eviction log line tolerates a few seconds of
-    // staleness, so a pass landing near another sampler's sweep reuses it.
-    for (const proc of getAppMetricsSnapshot()) {
-      const kb = getProcessMemoryKb(proc);
-      if (kb > 0) {
-        memoryByPid.set(proc.pid, kb);
-      }
-      if (proc.memory.workingSetSize > 0) {
-        residentByPid.set(proc.pid, proc.memory.workingSetSize);
-      }
-    }
-  } catch {
-    // app.getAppMetrics() throwing is non-fatal — memoryKb is simply omitted
-    // from the eviction log line below.
-  }
-  const memoryFor = (entry: ViewEntry, byPid: ReadonlyMap<number, number>): number => {
-    const wc = entry.view.webContents;
-    if (wc.isDestroyed()) return 0;
-    const getPid = (wc as { getOSProcessId?: () => number }).getOSProcessId;
-    if (typeof getPid !== "function") return 0;
-    const pid = getPid.call(wc);
-    if (typeof pid !== "number" || pid <= 0) return 0;
-    return byPid.get(pid) ?? 0;
-  };
-  const guestMemoryFor = (entry: ViewEntry, byPid: ReadonlyMap<number, number>): number =>
-    entry.view.webContents.isDestroyed() ? 0 : sumGuestMemoryKb(entry.view.webContents, byPid);
+  // Each evicted view's footprint is recorded on its log line. Memory size does
+  // not drive eviction order — the largest renderer is typically the project
+  // the user has been working in, so size-first ordering destroys the most
+  // valuable view. Eviction is pure LRU (see #8602).
+  const metrics = readEvictionMetrics();
 
   // Outgoing view of an open paint gate is still on-screen and serving as
   // the anti-flash bridge — treat it as non-evictable, same as the active
@@ -375,13 +517,14 @@ export function evictStaleViews(
   // (e.g. an efficiency-profile transition firing during a slow cold
   // start) would evict the outgoing view and expose the unpainted
   // incoming frame, re-creating the exact flash this gate prevents.
-  const gateOutgoingProjectId = host.pendingPaintGate?.outgoingProjectId ?? null;
   // The gate resolves on the incoming skeleton signal (or its own hard
   // timeout) while the outgoing view stays attached until the load finishes,
   // so the gate alone under-covers the very case the guard above describes —
   // by up to the full load ceiling (#11459). `pendingColdSwitch` spans the
   // real on-screen window.
-  const switchOutgoingProjectId = host.pendingColdSwitch?.outgoingProjectId ?? null;
+  //
+  // Both are per window: each window's own bridges, beside its own active view.
+  let transientlyExcludedCount = 0;
 
   // Views an MCP request is currently awaiting (#11790). Excluded outright,
   // like the two bridges above and for the same reason: destroying one does not
@@ -403,25 +546,60 @@ export function evictStaleViews(
   // this from becoming a floor.
   const mcpLeasedProjectIds = new Set<string>();
 
-  const evictable = Array.from(host.views.entries())
-    .filter(([id, entry]) => {
+  // Views a dictation still needs (#14773): its session runs there, or the
+  // cleanup after its stop is still to write into its draft. Excluded outright,
+  // under pressure too, for the MCP lease's reason: destroying one cancels the
+  // session and drops the words still on their way, which nothing can redo.
+  // A hold lasts a dictation and the few seconds of its cleanup, so like a
+  // lease it lapses on its own.
+  const dictationHeldProjectIds = new Set<string>();
+
+  // Views whose renderer says it holds work its teardown would lose (#14095):
+  // the same answer automatic Sleep asks for (`readPanelRecoveryHold`), pushed
+  // by the renderer as it changes so this synchronous pass can read it. A cap
+  // the user set (LRU, limit change) never takes one — what a plugin persisted
+  // comes back on the next mount, but unsaved work does not, so these wait for
+  // the work to be saved, persisted or dropped. Memory pressure is different:
+  // a pressure pass admits them as the very last ordinary tier, logged with
+  // `recoveryHeld`, because an OOM loses the same work and everything else
+  // with it. The hold is only as wide as the views reporting unsaved work, and
+  // a view whose state is in recoverable storage reports none.
+  const recoveryHeldProjectIds = new Set<string>();
+  const pressurePass = criticalPressure || gradualPressure;
+
+  const evictable: Array<{ owner: ProjectViewManager; projectId: string; entry: ViewEntry }> = [];
+  for (const owner of scope) {
+    // A window mid-transition has no current view to anchor its cache; its
+    // views still count, but none of them is taken until it settles.
+    if (owner.activeProjectId === null) continue;
+    const gateOutgoingProjectId = owner.pendingPaintGate?.outgoingProjectId ?? null;
+    const switchOutgoingProjectId = owner.pendingColdSwitch?.outgoingProjectId ?? null;
+    for (const outgoing of new Set([gateOutgoingProjectId, switchOutgoingProjectId])) {
+      if (outgoing !== null && outgoing !== owner.activeProjectId) transientlyExcludedCount++;
+    }
+    for (const [id, entry] of owner.views) {
       if (
-        id === host.activeProjectId ||
+        id === owner.activeProjectId ||
         id === gateOutgoingProjectId ||
         id === switchOutgoingProjectId
       ) {
-        return false;
+        continue;
       }
-      if (host.mcpActivityFor(id, entry.view.webContents).dispatchLease) {
+      if (owner.mcpActivityFor(id, entry.view.webContents).dispatchLease) {
         mcpLeasedProjectIds.add(id);
-        return false;
+        continue;
       }
-      return true;
-    })
-    // Oldest lastUsed first — pure LRU. Sequential switchTo calls stamp
-    // distinct millisecond timestamps so equal-lastUsed ties don't arise
-    // in practice; Array.sort stability handles them deterministically.
-    .sort(([, a], [, b]) => a.lastUsed - b.lastUsed);
+      if (isDictationViewHeld(entry.view.webContents)) {
+        dictationHeldProjectIds.add(id);
+        continue;
+      }
+      if (!pressurePass && isPanelRecoveryHeldReported(entry.view.webContents)) {
+        recoveryHeldProjectIds.add(id);
+        continue;
+      }
+      evictable.push({ owner, projectId: id, entry });
+    }
+  }
 
   // Partition into three tiers, each LRU-ordered internally.
   //
@@ -472,14 +650,15 @@ export function evictStaleViews(
   // A workspace the *user* granted residency (#12313) is the one tier a client
   // cannot give itself, so it outranks the bound-session ordering above. Still
   // not a floor, and deliberately not an exclusion — see the ordering below.
-  const safeToEvict: EvictionCandidate[] = [];
-  const activeAgentFallback: EvictionCandidate[] = [];
-  const boundMcpSessionFallback: EvictionCandidate[] = [];
-  const residentGranted: EvictionCandidate[] = [];
-  const assistantProtected: EvictionCandidate[] = [];
-  for (const [projectId, entry] of evictable) {
-    const activeAgent = viewHasActiveAgent(host, projectId, entry);
-    const mcp = host.mcpActivityFor(projectId, entry.view.webContents);
+  const safeToEvict: ScopedCandidate[] = [];
+  const activeAgentFallback: ScopedCandidate[] = [];
+  const boundMcpSessionFallback: ScopedCandidate[] = [];
+  const residentGranted: ScopedCandidate[] = [];
+  const assistantProtected: ScopedCandidate[] = [];
+  const recoveryHeld: ScopedCandidate[] = [];
+  for (const { owner, projectId, entry } of evictable) {
+    const activeAgent = viewHasActiveAgent(owner, projectId, entry);
+    const mcp = owner.mcpActivityFor(projectId, entry.view.webContents);
     // `unknown` (the activity callback threw) deprioritizes but never protects:
     // it must not reach the exclusion set above, or one broken callback would
     // pin every cached view straight through critical pressure.
@@ -488,18 +667,29 @@ export function evictStaleViews(
     // this is also the liveness half (#11162) — the preference record is keyed
     // by workspace id and nothing prunes it when a project is deleted, so a
     // stale entry only ever meets this loop for a view that actually exists.
-    const keepResident = isWorkspaceKeepResident(projectId);
-    const base = { projectId, entry, activeAgent, boundMcpSession, keepResident };
-    if (hasLiveAssistantBackend(host, projectId, entry)) {
-      assistantProtected.push({ ...base, liveAssistantBackend: true });
+    const keepResident = viewKeepsResident(owner, projectId, entry);
+    const held = isPanelRecoveryHeldReported(entry.view.webContents);
+    const base = {
+      owner,
+      projectId,
+      entry,
+      activeAgent,
+      boundMcpSession,
+      keepResident,
+      recoveryHeld: held,
+    };
+    if (hasLiveAssistantBackend(owner, projectId, entry)) {
+      assistantProtected.push({ ...base, tier: -1, liveAssistantBackend: true });
+    } else if (held) {
+      recoveryHeld.push({ ...base, tier: 4, liveAssistantBackend: false });
     } else if (keepResident) {
-      residentGranted.push({ ...base, liveAssistantBackend: false });
+      residentGranted.push({ ...base, tier: 3, liveAssistantBackend: false });
     } else if (boundMcpSession) {
-      boundMcpSessionFallback.push({ ...base, liveAssistantBackend: false });
+      boundMcpSessionFallback.push({ ...base, tier: 2, liveAssistantBackend: false });
     } else if (activeAgent) {
-      activeAgentFallback.push({ ...base, liveAssistantBackend: false });
+      activeAgentFallback.push({ ...base, tier: 1, liveAssistantBackend: false });
     } else {
-      safeToEvict.push({ ...base, liveAssistantBackend: false });
+      safeToEvict.push({ ...base, tier: 0, liveAssistantBackend: false });
     }
   }
 
@@ -532,12 +722,20 @@ export function evictStaleViews(
   // What the user gets over `boundMcpSessionFallback` is precedence, which is
   // the right shape: that tier is ordering a client earns just by connecting,
   // and this one is ordering the user granted deliberately.
+  //
+  // Tier first, then oldest `lastUsed` — pure LRU within a tier, whichever
+  // window owns the view, so a newer ordinary view in one window goes before an
+  // older agent's view in another (#14218). `lastUsed` is wall-clock in every
+  // window, so stamps compare across them; sequential switches stamp distinct
+  // milliseconds, and the stable sort settles any tie deterministically.
   const candidates = [
     ...safeToEvict,
     ...activeAgentFallback,
     ...boundMcpSessionFallback,
     ...residentGranted,
-  ];
+    // Only reachable on a pressure pass; see `recoveryHeldProjectIds`.
+    ...recoveryHeld,
+  ].sort((a, b) => a.tier - b.tier || a.entry.lastUsed - b.entry.lastUsed);
 
   // Assistant-pinned views still count toward the cache, so without an
   // allowance two running assistants plus the active view fill a cap of three
@@ -550,22 +748,49 @@ export function evictStaleViews(
   //
   // Counted over every non-active view rather than `assistantProtected`, which
   // omits views a bridge or an MCP lease is holding — those still occupy a slot.
+  //
+  // Across windows (#14218) every current view is a floor of its own, and the
+  // ordinary slot is one for the app, granted only while the current views
+  // leave the target room for it. With one window this is the formula above:
+  // `pinned + 1 + min(1, baseMax - 1)`.
+  let currentViewCount = 0;
   let pinnedAssistantCount = 0;
-  if (!criticalPressure) {
-    for (const [projectId, entry] of host.views) {
-      if (projectId === host.activeProjectId) continue;
-      if (hasLiveAssistantBackend(host, projectId, entry)) pinnedAssistantCount++;
+  for (const owner of scope) {
+    if (owner.activeProjectId !== null && owner.views.has(owner.activeProjectId)) {
+      currentViewCount++;
+    }
+    if (criticalPressure) continue;
+    for (const [projectId, entry] of owner.views) {
+      if (projectId === owner.activeProjectId) continue;
+      if (hasLiveAssistantBackend(owner, projectId, entry)) pinnedAssistantCount++;
     }
   }
   const effectiveMax =
     pinnedAssistantCount > 0
-      ? Math.max(baseMax, pinnedAssistantCount + 1 + Math.min(1, baseMax - 1))
-      : baseMax;
+      ? Math.max(
+          baseMax,
+          currentViewCount + pinnedAssistantCount + (baseMax > currentViewCount ? 1 : 0)
+        )
+      : Math.max(baseMax, currentViewCount);
 
   let evictedCount = 0;
   let evictedResidentKb = 0;
-  while (host.views.size > effectiveMax && candidates.length > 0 && evictedCount < evictionBudget) {
+  while (
+    countViews(scope) > effectiveMax &&
+    candidates.length > 0 &&
+    evictedCount < evictionBudget
+  ) {
     const next = candidates[0];
+    // A teardown's callbacks run synchronously inside this loop; skip a view
+    // that has since left its window or become what that window shows.
+    if (
+      next.owner.disposed ||
+      next.owner.views.get(next.projectId) !== next.entry ||
+      next.projectId === next.owner.activeProjectId
+    ) {
+      candidates.shift();
+      continue;
+    }
     const ageMs = Date.now() - next.entry.lastUsed;
     // Ends the pass rather than skipping to the next candidate. The queue is
     // tier-ordered, so passing over a young ordinary view would hand its
@@ -583,45 +808,24 @@ export function evictStaleViews(
       break;
     }
     candidates.shift();
-    const { projectId, entry, activeAgent, liveAssistantBackend, boundMcpSession, keepResident } =
-      next;
-    const memoryKb = memoryFor(entry, memoryByPid);
-    const guestMemoryKb = guestMemoryFor(entry, memoryByPid);
-    const residentKb = memoryFor(entry, residentByPid) + guestMemoryFor(entry, residentByPid);
-    const ctx: Record<string, unknown> = {
-      projectId,
-      reason: effectiveReason,
+    evictedResidentKb += evictCandidate(
+      next.owner,
+      next,
+      effectiveReason,
       ageMs,
-      activeAgent,
-    };
-    if (liveAssistantBackend) ctx.liveAssistantBackend = true;
-    // Recorded so a bound session going `SESSION_BINDING_GONE` is traceable to
-    // the pass that took its view, rather than looking like the binding broke
-    // on its own.
-    if (boundMcpSession) ctx.boundMcpSession = true;
-    // The user granted this workspace residency and it is being evicted anyway
-    // — the cap could not hold every grant, or pressure took the slots. Logged
-    // so the override is attributable rather than looking like the grant was
-    // ignored (#11162).
-    if (keepResident) ctx.keepResident = true;
-    if (memoryKb > 0) ctx.memoryKb = memoryKb;
-    if (guestMemoryKb > 0) ctx.guestMemoryKb = guestMemoryKb;
-    if (availableMb != null) ctx.memoryAvailableMb = availableMb;
-    logInfo("projectview.eviction", ctx);
-    host.evictionTimestamps.set(projectId, Date.now());
-    cleanupEntry(host, projectId);
-    // After the teardown, because the read side is what gates the record on
-    // liveness — see `readWorkspaceBindingState` (#12313).
-    // A remote project's residency is its host's; only local keys enter this ledger.
-    if (isLocalViewKey(projectId)) recordWorkspaceEviction(projectId, effectiveReason);
+      metrics,
+      availableMb
+    );
     evictedCount++;
-    evictedResidentKb += residentKb;
   }
 
   // A soft-band sampler eviction is judged by the next reading — see
   // `maybeEvictUnderPressure`. Any other pass supersedes a pending judgement:
   // its own evictions would be credited to, or blamed on, the soft one.
+  // Whichever window holds that judgement: only the pressure leader makes one,
+  // but any window's pass can supersede it.
   if (evictedCount > 0) {
+    for (const pvm of scope) pvm.pendingSoftPressureEviction = null;
     host.pendingSoftPressureEviction =
       gradualPressure && level === "soft" && availableMb != null
         ? { availableMbBefore: availableMb, evictedResidentMb: evictedResidentKb / 1024 }
@@ -677,10 +881,15 @@ export function evictStaleViews(
   // The assistant allowance opens it as well (#12885): a pass that stopped at
   // the raised target rather than on an empty queue has still left the cache
   // over `baseMax` because of the assistants, so it is reported the same way.
+  const viewCount = countViews(scope);
   if (
-    host.views.size > baseMax &&
-    (candidates.length === 0 || host.views.size <= effectiveMax) &&
-    (assistantProtected.length > 0 || pinnedAssistantCount > 0 || mcpLeasedProjectIds.size > 0)
+    viewCount > baseMax &&
+    (candidates.length === 0 || viewCount <= effectiveMax) &&
+    (assistantProtected.length > 0 ||
+      pinnedAssistantCount > 0 ||
+      mcpLeasedProjectIds.size > 0 ||
+      dictationHeldProjectIds.size > 0 ||
+      recoveryHeldProjectIds.size > 0)
   ) {
     // `overflow` counts views over `baseMax`, the cap before the assistant
     // allowance; `effectiveMax` is the target the pass settled on. The counts
@@ -691,20 +900,17 @@ export function evictStaleViews(
     // than derived by subtraction, because with a `baseMax` above 1 the
     // protected views need not all be over the cap,
     // and subtracting would report a bigger protected share than the overflow.
-    const transientlyExcludedProjectIds = new Set(
-      [gateOutgoingProjectId, switchOutgoingProjectId].filter(
-        (id): id is string => id !== null && id !== host.activeProjectId
-      )
-    );
     const skipped = {
       reason: effectiveReason,
       forced: criticalPressure,
-      viewCount: host.views.size,
+      viewCount,
       baseMax,
       effectiveMax,
-      overflow: host.views.size - baseMax,
+      overflow: viewCount - baseMax,
+      // Present only when the cap spans more than one window (#14218).
+      ...(scope.length > 1 ? { windowCount: scope.length } : {}),
       protectedCount: assistantProtected.length,
-      transientlyExcludedCount: transientlyExcludedProjectIds.size,
+      transientlyExcludedCount,
       // Reported as its own reason rather than folded into the transient count
       // (#11790). A lease resolves on its own like the two bridges above, but
       // it is excluded BEFORE assistant protection is evaluated, so folding
@@ -713,6 +919,14 @@ export function evictStaleViews(
       // each count means exactly one thing.
       mcpLeasedCount: mcpLeasedProjectIds.size,
       protectedProjectIds: assistantProtected.map(({ projectId }) => projectId),
+      // Present only while a dictation holds a view (#14773).
+      ...(dictationHeldProjectIds.size > 0
+        ? { dictationHeldProjectIds: [...dictationHeldProjectIds] }
+        : {}),
+      // Present only when a view is waiting on its own unsaved work (#14095).
+      ...(recoveryHeldProjectIds.size > 0
+        ? { recoveryHeldProjectIds: [...recoveryHeldProjectIds] }
+        : {}),
     };
     // Once per change in what is holding the cache over, not once per pass: a
     // live assistant pins its view for as long as it runs, and the sampler
@@ -727,6 +941,65 @@ export function evictStaleViews(
   }
 
   return evictedCount;
+}
+
+/**
+ * Release cached views nobody has shown for `IDLE_VIEW_RELEASE_MS` (#14217),
+ * independent of the cap and of memory pressure — the cap keeps recently used
+ * projects warm, this drops the ones that only sit there. Their workspace host
+ * then follows through its existing idle grace.
+ *
+ * Stricter than LRU about what it may take, because nothing is asking for the
+ * memory: a bound MCP session and a residency grant only rank a view under
+ * the cap, but here they keep it. The rest is `canReleaseCachedView`'s set — a
+ * settled background view, not the front one or a switch's outgoing bridge, no
+ * dispatch in flight or unreadable MCP activity, no unrecoverable work, no live
+ * assistant (#11157). A view with a working agent still goes, after the
+ * ordinary ones: its PTYs live in the pty-host and the view rebuilds from their
+ * mirrors. A switch already heading to a view wins: a window with one queued
+ * or running releases nothing until it settles, and a view this window has
+ * claimed for activation is kept through the checks and persist the switch
+ * awaits before it reaches the queue.
+ */
+export function evictIdleViews(host: ProjectViewManager): number {
+  if (host.disposed || host.win.isDestroyed()) return 0;
+  if (host.views.size <= 1 || host.activeProjectId === null) return 0;
+  if (host.pendingSwitchCount > 0) return 0;
+
+  const now = Date.now();
+  const ordinary: EvictionCandidate[] = [];
+  const withAgent: EvictionCandidate[] = [];
+  for (const [projectId, entry] of host.views) {
+    if (now - entry.lastUsed < IDLE_VIEW_RELEASE_MS) continue;
+    if (!host.canReleaseCachedView(projectId)) continue;
+    if (hasPendingActivation(projectId, host.win.id)) continue;
+    if (host.mcpActivityFor(projectId, entry.view.webContents).liveBinding) continue;
+    if (viewKeepsResident(host, projectId, entry)) continue;
+    const activeAgent = viewHasActiveAgent(host, projectId, entry);
+    (activeAgent ? withAgent : ordinary).push({
+      projectId,
+      entry,
+      activeAgent,
+      liveAssistantBackend: false,
+      boundMcpSession: false,
+      keepResident: false,
+      recoveryHeld: false,
+    });
+  }
+  if (ordinary.length === 0 && withAgent.length === 0) return 0;
+
+  const byLastUsed = (a: EvictionCandidate, b: EvictionCandidate) =>
+    a.entry.lastUsed - b.entry.lastUsed;
+  const candidates = [...ordinary.sort(byLastUsed), ...withAgent.sort(byLastUsed)];
+  const metrics = readEvictionMetrics();
+  for (const candidate of candidates) {
+    evictCandidate(host, candidate, "idle", now - candidate.entry.lastUsed, metrics, null);
+  }
+  // Like any non-pressure pass, this supersedes a pending soft-pressure
+  // judgement: the memory it freed would otherwise be credited to that eviction.
+  // The judgement is held by whichever window leads the pressure check.
+  for (const pvm of cacheScope(host)) pvm.pendingSoftPressureEviction = null;
+  return candidates.length;
 }
 
 /**
@@ -839,8 +1112,30 @@ export function sampleCachedViewMemory(host: ProjectViewManager): void {
  * live assistant's view 560ms into a tier-1 pass that resolved the pressure
  * without it (#11477). Collapse is `ProcessMemoryMonitor`'s tier 2 alone,
  * which owns all of that state globally and arrives via `forcePressure`.
+ *
+ * One window answers each reading for the whole app (#14218): the oldest live
+ * one in the registry with a pressure policy, whose pass then runs over every
+ * window's views. Each
+ * window still has its own sampler, so letting all of them act would shed one
+ * renderer per window on the same memory figure and split the confirmation
+ * streak and the backoff between them. When the leader closes, the next
+ * window takes over with a fresh streak, which only ever confirms later.
  */
 export function maybeEvictUnderPressure(host: ProjectViewManager): void {
+  const scope = cacheScope(host);
+  const leader = scope.find((pvm) => pvm.memoryPressurePolicy != null) ?? host;
+  if (leader !== host) {
+    // Only the leader holds an episode. A window that led earlier would
+    // otherwise resume one it never saw recover, latch included.
+    host.pressureSampleStreak = 0;
+    host.lastPressureOverrideLog = null;
+    host.lastEvictionSkippedLog = null;
+    clearSoftPressureBackoff(host);
+    return;
+  }
+  // Whether any window holds a view beyond the one it shows — the leader's own
+  // cache may be down to its current view while another window's is not.
+  const hasCachedViews = scope.some((pvm) => pvm.views.size > 1);
   const policy = host.memoryPressurePolicy;
   if (policy == null) {
     host.pressureSampleStreak = 0;
@@ -853,12 +1148,12 @@ export function maybeEvictUnderPressure(host: ProjectViewManager): void {
   // is down to the active view: to settle the last eviction, and to see the
   // recovery that clears the count, or a later episode would inherit it.
   const needsReading =
-    host.views.size > 1 ||
+    hasCachedViews ||
     host.pendingSoftPressureEviction != null ||
     host.softPressureUnproductivePasses > 0 ||
     host.softPressureBackoffLatched;
   const availableMb = needsReading ? getAvailableMemoryMb() : null;
-  const swapPressure = host.views.size > 1 && isSwapPressureConfirmed();
+  const swapPressure = hasCachedViews && isSwapPressureConfirmed();
   if (availableMb != null && availableMb < policy.warningMb) {
     settleSoftPressureEviction(host, availableMb, policy.warningMb);
   } else {
@@ -883,7 +1178,7 @@ export function maybeEvictUnderPressure(host: ProjectViewManager): void {
     }
   }
 
-  if (host.views.size <= 1) {
+  if (!hasCachedViews) {
     host.pressureSampleStreak = 0;
     return;
   }

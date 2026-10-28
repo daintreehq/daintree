@@ -5,9 +5,14 @@ import path from "path";
 import { pipeline } from "node:stream/promises";
 import yauzl from "yauzl";
 import { getPluginManifestSchema } from "../schemas/plugin.js";
-import { MAX_DNTR_BYTES } from "../utils/pluginArchiveConstants.js";
+import { MAX_DNTR_BYTES, PROJECT_TEMPLATES_DIR } from "../utils/pluginArchiveConstants.js";
 import { stripUtf8Bom } from "../utils/stripUtf8Bom.js";
 import type { PluginManifest } from "../../shared/types/plugin.js";
+import { foldFileName } from "../../shared/utils/fileNameFold.js";
+import {
+  collectPluginManifestAssets,
+  describePluginManifestAsset,
+} from "../../shared/config/pluginManifestAssets.js";
 
 export const ZIP_EPOCH_DATE = new Date("1980-01-01T00:00:00Z");
 // Cap on total zip entries. A plugin is a handful of compiled files plus
@@ -171,9 +176,29 @@ function manifestSizeError(entry: yauzl.Entry): string | null {
   return null;
 }
 
+const PROJECT_TEMPLATE_PAYLOAD_PREFIX = `${PROJECT_TEMPLATES_DIR}/`;
+
+/**
+ * Segments a project-template payload never ships, at any depth: an author's
+ * local install and repository metadata, and Finder litter. Everything else
+ * under `project-templates/` ships as written — a template is a project's
+ * starting files, so its `.ts` sources, source maps, `package.json` and
+ * dotfiles are the content, not build leftovers.
+ */
+const PROJECT_TEMPLATE_EXCLUDED_SEGMENTS: ReadonlySet<string> = new Set([
+  "node_modules",
+  ".git",
+  ".ds_store",
+]);
+
 function matchesExclusionPattern(name: string, sourcemaps: boolean): boolean {
   for (const pattern of REQUIRED_EXCLUSIONS) {
     if (name === pattern || name.startsWith(pattern)) return true;
+  }
+  if (name.startsWith(PROJECT_TEMPLATE_PAYLOAD_PREFIX)) {
+    return name
+      .split("/")
+      .some((segment) => PROJECT_TEMPLATE_EXCLUDED_SEGMENTS.has(segment.toLowerCase()));
   }
   const ext = path.extname(name);
   if (SOURCE_EXTS.has(ext)) return true;
@@ -353,6 +378,56 @@ function openZip(archivePath: string): Promise<yauzl.ZipFile> {
       }
     );
   });
+}
+
+/**
+ * The project plugins inside each of an archive's project templates (#13825):
+ * for every template id, the `<dir>` names found under
+ * `project-templates/<id>/.daintree/plugins/`. Read from the central
+ * directory's entry names alone — no entry is opened, parsed or extracted — so
+ * the install confirmation can name them without running or trusting anything.
+ */
+export async function readArchiveTemplateProjectPlugins(
+  archivePath: string,
+  templateIds: readonly string[]
+): Promise<Map<string, string[]>> {
+  const found = new Map<string, Set<string>>(templateIds.map((id) => [id, new Set<string>()]));
+  if (templateIds.length === 0) return new Map();
+  const stat = await fs.stat(archivePath);
+  if (stat.size > MAX_DNTR_BYTES) {
+    throw new Error(`Archive size ${stat.size} exceeds ${MAX_DNTR_BYTES} byte limit`);
+  }
+  const zipfile = await openZip(archivePath);
+  if (zipfile.entryCount > MAX_DNTR_ENTRIES) {
+    zipfile.close();
+    throw new Error(`Archive exceeds ${MAX_DNTR_ENTRIES} entry limit`);
+  }
+  await new Promise<void>((resolve, reject) => {
+    zipfile.on("entry", (entry: yauzl.Entry) => {
+      const segments = normalizePath(entry.fileName).split("/");
+      // Folded the way macOS and Windows resolve names, as `.DAINTREE/Plugins/`
+      // (or `pluginſ`) is the folder discovery reads there. The plugin's
+      // folder name is shown as written.
+      const folded = segments.map(foldFileName);
+      if (
+        segments.length > 5 &&
+        folded[0] === PROJECT_TEMPLATES_DIR &&
+        folded[2] === ".daintree" &&
+        folded[3] === "plugins" &&
+        segments[4] !== ""
+      ) {
+        found.get(folded[1])?.add(segments[4]);
+      }
+      zipfile.readEntry();
+    });
+    zipfile.on("end", () => resolve());
+    zipfile.on("error", (err) => {
+      zipfile.close();
+      reject(err);
+    });
+    zipfile.readEntry();
+  });
+  return new Map([...found].map(([id, dirs]) => [id, [...dirs].sort()]));
 }
 
 /**
@@ -894,26 +969,15 @@ export async function verifyPluginArchive(archivePath: string): Promise<VerifyRe
         return resolve({ valid: false, error: "plugin.json not found in archive" });
       }
 
-      const stripLeading = (p: string) => (p.startsWith("./") ? p.slice(2) : p);
-
-      if (manifest.main) {
-        const mainPath = stripLeading(manifest.main);
-        if (!entryNames.has(mainPath)) {
-          return resolve({
-            valid: false,
-            error: `manifest.main "${manifest.main}" is not present in the archive`,
-          });
-        }
-      }
-
-      for (const view of manifest.contributes.views) {
-        const viewPath = stripLeading(view.componentPath);
-        if (!entryNames.has(viewPath)) {
-          return resolve({
-            valid: false,
-            error: `view componentPath "${view.componentPath}" is not present in the archive`,
-          });
-        }
+      // Excluded entries were refused above, so an asset the packer's filter
+      // would strip is reported here as absent rather than slipping through.
+      for (const asset of collectPluginManifestAssets(manifest)) {
+        if (!asset.required || entryNames.has(asset.path)) continue;
+        const label =
+          asset.field === "main"
+            ? `manifest.main "${asset.ref}"`
+            : describePluginManifestAsset(asset);
+        return resolve({ valid: false, error: `${label} is not present in the archive` });
       }
 
       resolve({ valid: true, manifest, entryCount: entryIndex });

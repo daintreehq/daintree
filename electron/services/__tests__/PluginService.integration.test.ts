@@ -41,6 +41,7 @@ vi.mock("electron", () => ({
 }));
 vi.mock("../../ipc/utils.js", () => ({
   broadcastToRenderer: vi.fn(),
+  broadcastToProjectRenderers: vi.fn(),
   isWithheldFromView: vi.fn(() => false),
 }));
 vi.mock("../../store.js", () => ({
@@ -170,6 +171,7 @@ import {
   clearPluginSkillRegistry,
 } from "../plugin/PluginSkillRegistry.js";
 import { broadcastToRenderer } from "../../ipc/utils.js";
+import { flushPluginPushes } from "../plugin/pluginPushBatcher.js";
 
 function makeCtx(pluginId: string, overrides: Partial<PluginIpcContext> = {}): PluginIpcContext {
   return {
@@ -543,6 +545,30 @@ describe("PluginService integration — toolbar button contributions", () => {
     });
   });
 
+  it("registers a popover button against its view's panel kind, with no action", async () => {
+    await writePlugin("acme.inbox", {
+      name: "acme.inbox",
+      version: "1.0.0",
+      contributes: {
+        panels: [{ id: "inbox", name: "Inbox", iconId: "list", color: "#abc" }],
+        views: [{ id: "inbox", componentPath: "dist/inbox.js", location: "panel" }],
+        toolbarButtons: [
+          { id: "open", label: "Inbox", iconId: "list", popover: { viewId: "inbox" } },
+        ],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.0.0");
+    await service.initialize();
+
+    const config = getToolbarButtonConfig("acme.inbox.open");
+    expect(config?.popover?.viewId).toBe("inbox");
+    // The kind the popover mounts is the one this plugin's own panel registered.
+    const panelKindId = config?.popover?.panelKindId ?? "";
+    expect(getPanelKindConfig(panelKindId)?.extensionId).toBe("acme.inbox");
+    expect(config).not.toHaveProperty("actionId");
+  });
+
   it("defaults priority to 3 when omitted", async () => {
     await writePlugin("acme.default-prio", {
       name: "acme.default-prio",
@@ -876,9 +902,9 @@ describe("PluginService integration — skill contributions (#10892)", () => {
     await service.initialize();
 
     // Searchable and loadable through the main-process registry the MCP tools use.
-    const found = searchPluginSkills({ query: "tdd" });
+    const found = searchPluginSkills({ query: "tdd" }, { projectId: null });
     expect(found.skills.map((s) => s.id)).toContain("acme.skill-plugin.tdd-workflow");
-    const loaded = loadPluginSkill("acme.skill-plugin.tdd-workflow");
+    const loaded = loadPluginSkill("acme.skill-plugin.tdd-workflow", { projectId: null });
     expect(loaded?.name).toBe("TDD Workflow");
     expect(loaded?.description).toBe("Test-driven development workflow.");
     expect(loaded?.body).toContain("Write a failing test first.");
@@ -887,8 +913,61 @@ describe("PluginService integration — skill contributions (#10892)", () => {
     service.unloadPlugin("acme.skill-plugin");
     await Promise.resolve();
 
-    expect(loadPluginSkill("acme.skill-plugin.tdd-workflow")).toBeNull();
-    expect(searchPluginSkills({ query: "tdd" }).skills).toEqual([]);
+    expect(loadPluginSkill("acme.skill-plugin.tdd-workflow", { projectId: null })).toBeNull();
+    expect(searchPluginSkills({ query: "tdd" }, { projectId: null }).skills).toEqual([]);
+  });
+
+  it("loads a project plugin's skills for its own project only (#13831)", async () => {
+    const projectId = "d".repeat(64);
+    const instanceKey = `project__${projectId}__acme.project-skills`;
+    const projectRoot = path.join(tmpDir, "project-skills");
+    const pluginsParent = path.join(projectRoot, ".daintree", "plugins");
+    const dir = path.join(pluginsParent, "acme.project-skills");
+    await fs.mkdir(path.join(dir, "skills"), { recursive: true });
+    await fs.writeFile(
+      path.join(dir, "plugin.json"),
+      JSON.stringify({
+        name: "acme.project-skills",
+        version: "1.0.0",
+        scope: "project",
+        engines: { daintree: ">=0.0.0" },
+        contributes: {
+          skills: [{ id: "reconcile", name: "Reconcile", path: "./skills/reconcile.md" }],
+        },
+      })
+    );
+    await fs.writeFile(path.join(dir, "skills", "reconcile.md"), "# Reconcile\n", "utf8");
+
+    const service = new PluginService(path.join(tmpDir, "installed"), "0.0.0");
+    const seam = service as unknown as {
+      loadPlugin(
+        root: string,
+        dirName: string,
+        opts: {
+          isBuiltin: boolean;
+          disabled: Set<string>;
+          origin: "project";
+          instanceKey: string;
+          binding: { projectId: string; projectRoot: string };
+        }
+      ): Promise<unknown>;
+    };
+    await seam.loadPlugin(pluginsParent, "acme.project-skills", {
+      isBuiltin: false,
+      disabled: new Set(),
+      origin: "project",
+      instanceKey,
+      binding: { projectId, projectRoot },
+    });
+
+    const skillId = `${instanceKey}.reconcile`;
+    expect(loadPluginSkill(skillId, { projectId })?.body).toBe("# Reconcile\n");
+    expect(loadPluginSkill(skillId, { projectId: "e".repeat(64) })).toBeNull();
+    expect(searchPluginSkills({}, { projectId: null }).skills).toEqual([]);
+
+    service.unloadPlugin(instanceKey);
+    await Promise.resolve();
+    expect(loadPluginSkill(skillId, { projectId })).toBeNull();
   });
 });
 
@@ -1221,6 +1300,7 @@ describe("PluginService integration — panel badges (#10585)", () => {
     vi.mocked(broadcastToRenderer).mockClear();
 
     host.setPanelBadge("panel-1", { kind: "label", text: "CI", color: "success" });
+    flushPluginPushes();
 
     const payloads = badgeBroadcasts("plugin:panel-badges-changed");
     expect(payloads).toContainEqual({
@@ -1236,6 +1316,7 @@ describe("PluginService integration — panel badges (#10585)", () => {
     vi.mocked(broadcastToRenderer).mockClear();
 
     host.setPanelBadge("p1", null); // clear just p1
+    flushPluginPushes();
 
     const last = badgeBroadcasts("plugin:panel-badges-changed").at(-1) as {
       badges: Record<string, unknown>;
@@ -1280,6 +1361,7 @@ describe("PluginService integration — panel badges (#10585)", () => {
     vi.mocked(broadcastToRenderer).mockClear();
 
     expect(() => host.setPanelBadge("p1", { kind: "dot" })).not.toThrow();
+    flushPluginPushes();
     expect(badgeBroadcasts("plugin:panel-badges-changed")).toEqual([]);
   });
 

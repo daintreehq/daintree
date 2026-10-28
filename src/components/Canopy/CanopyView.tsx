@@ -1,202 +1,159 @@
 import {
+  Suspense,
+  lazy,
   useCallback,
-  useDeferredValue,
   useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
-import type { KeyboardEvent } from "react";
 import { Keyboard, RefreshCw } from "lucide-react";
 import { formatWaitAge } from "@/lib/projectRowStatus";
 import { Telescope } from "@/components/icons";
 import { useCanopyStore } from "@/store/canopyStore";
-import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
-import { useProjectStore } from "@/store/projectStore";
-import { useScratchStore } from "@/store/scratchStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { actionService } from "@/services/ActionService";
 import { notify } from "@/lib/notify";
 import { latestUndoOnly, UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
 import { pluralize } from "@/lib/pluralize";
-import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
-import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { isMac } from "@/lib/platform";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { clientErrorCode } from "@/utils/clientAppError";
-import {
-  CANOPY_URGENT_PRIORITY,
-  type CanopyReadMark,
-  type CanopyScreenSearchTarget,
-} from "@shared/types/ipc/canopy";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
-import { CANOPY_SEEN_HEARTBEAT_MS, canopyViewIsWatched, reportCanopySeen } from "@/lib/canopySeen";
-import {
-  isProjectViewCached,
-  subscribeProjectViewLifecycle,
-  subscribeProjectViewObservability,
-} from "@/lib/viewCacheState";
+import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
+import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { useOverlayClaim } from "@/hooks/useOverlayState";
 import { useEffectiveCombo } from "@/hooks";
 import { usePreferencesStore } from "@/store/preferencesStore";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { AppDialog } from "@/components/ui/AppDialog";
-import { consumePaletteFocusRestoreSuppression } from "@/components/ui/paletteFocusRestore";
 import { Button } from "@/components/ui/button";
 import { KbdChord } from "@/components/ui/Kbd";
 import { SearchField } from "@/components/ui/SearchField";
+import { Spinner } from "@/components/ui/Spinner";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Badge } from "@/components/ui/badge";
-import { systemClient } from "@/clients/systemClient";
 import { useFrozenBackdrop } from "./useFrozenBackdrop";
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
 import { Callout } from "@/components/ui/Callout";
-import { buildPilotGroups, type PilotWorkspaceMeta } from "@/components/Pilot/pilotRows";
-import {
-  buildCanopyInbox,
-  itemArchived,
-  itemNeedsAttention,
-  itemPriority,
-  itemSubject,
-  repliedAt,
-  searchTerms,
-  splitInbox,
-  unmatchedTerms,
-  type CanopyItem,
-} from "./canopyModel";
-import { CANOPY_REVEAL_MS, nextCanopyOrder } from "./canopyOrder";
-import {
-  CanopyCard,
-  canopyCardDomId,
-  type CanopyCardHandle,
-  type CanopyCardHandlers,
-  type CanopyPaneFocus,
-} from "./CanopyCard";
+import { itemNeedsAttention, repliedAt, type CanopyItem } from "./canopyModel";
+import { isWorkerEntry } from "./canopyInboxProjection";
+import { CanopyCard, canopyCardDomId } from "./CanopyCard";
 import { CanopyRow } from "./CanopyRow";
-import { CanopyRowMenu, type CanopyRowMenuActions } from "./CanopyRowMenu";
+import { CanopyRowMenu } from "./CanopyRowMenu";
 import { SectionBar } from "./CanopySectionBar";
-import { CanopyStatusBar } from "./CanopyStatusBar";
+import {
+  CanopyTrashSection,
+  useTrashExpiryAnnouncer,
+  type CanopyTrashSectionHandle,
+} from "./CanopyTrashSection";
+import { CanopyEmptyLine } from "./CanopyEmptyLine";
+import { CanopyStatusBar, formatModelBytes } from "./CanopyStatusBar";
 import { CanopyPlace } from "./CanopyPlace";
 import { CanopyPitch } from "./CanopyPitch";
-import { CANOPY_BETA_TERMS, CANOPY_TITLE, CANOPY_WAITLIST_URL } from "./canopyTerms";
-import { useListReorderMotion } from "./useListReorderMotion";
+import { CANOPY_TITLE } from "./canopyTerms";
 import { CanopyHeaderCenter, CanopyHostPicker, useCanopyHostRows } from "./CanopyHostPicker";
-import { CanopyHostOffer } from "./CanopyHostOffer";
+import { CanopyHostOffer, CanopyHostOutdated } from "./CanopyHostOffer";
+import { useCanopyInboxData } from "./useCanopyInboxData";
+import { useCanopyInboxOrder } from "./useCanopyInboxOrder";
+import { useCanopyInboxSearch } from "./useCanopyInboxSearch";
+import { useCanopyInboxFilters } from "./useCanopyInboxFilters";
+import { useCanopyInboxFocus } from "./useCanopyInboxFocus";
+import { useCanopyInboxUndo } from "./useCanopyInboxUndo";
+import { useCanopyInboxActions } from "./useCanopyInboxActions";
+import { useCanopyInboxKeyboard } from "./useCanopyInboxKeyboard";
 import {
-  ownCanopyApi,
-  ownCanopyTerminalApi,
-  remoteCanopyApi,
-  remoteCanopyTerminalApi,
-  useRemoteCanopy,
-} from "./canopyHostSource";
-import { canopyOwnHostId, type CanopyScope } from "@/store/canopyStore";
-import { retryHostProjects, useHostProjectLists } from "@/components/Hosts/hostProjects";
+  NO_CANOPY_REPLY,
+  isCanopyReplyTarget,
+  registerCanopyReplyDictation,
+  type CanopyReplyDictation,
+} from "@/services/canopyReplyDictation";
+import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
+import { isActiveVoiceSession } from "@shared/types";
+import { placeOf } from "./canopyInboxPlace";
+import { restoreInItsProject } from "./canopyRestoreElsewhere";
+import type { CanopyTrashItem } from "./canopyTrash";
+import { parseAllHostsKey } from "./canopyAllHosts";
+import { CanopyAssistantPane, CanopyAssistantRow } from "./CanopyAssistantList";
+import { canopyAssistantDomId } from "./openAssistantItem";
+import { CANOPY_ROLE_FILTERS, type CanopyRoleFilter } from "./canopyAssistants";
+import { isFullAgentDirectory } from "@shared/types/agentDirectory";
+import { CanopyBulkEnableDialog } from "./CanopyBulkEnableDialog";
+import type { BulkTarget } from "@shared/utils/canopyBulkEnable";
+import { canopyBulkTransport, ownCanopyApi, remoteCanopyApi } from "./canopyHostSource";
+import { ALL_HOSTS_ID, canopyOwnHostId } from "@/store/canopyStore";
 import { describeHostMenuState, type HostMenuRow } from "@/components/Hosts/hostModel";
-import { isNewWindowClick, switchToHost } from "@/components/Hosts/hostSwitching";
+import { isNewWindowClick } from "@/components/Hosts/hostSwitching";
 import type { HostId } from "@shared/types/remoteHosts";
+import { readsWithHostedService, type CanopyTrashEntry } from "@shared/types/ipc/canopy";
 
-/** No other host's projects to list: one array, so the lookup's key stays put. */
-const NO_HOSTS: readonly HostId[] = [];
+// Loaded on first use: the dialog pulls in Pilot's row and band modules.
+const LazyParkRunDialog = lazy(() =>
+  import("@/components/Fleet/ParkRunDialog").then((m) => ({ default: m.ParkRunDialog }))
+);
 
-/** Ages are minute-grained, as in Pilot. */
-const AGE_TICK_MS = 30_000;
-
-/** How long the search waits on the typing before reading terminals for it. */
-const SCREEN_SEARCH_DEBOUNCE_MS = 150;
-/** The most runs, words and word length one search asks of the terminals: main's own caps. */
-const SCREEN_SEARCH_MAX_RUNS = 500;
-const SCREEN_SEARCH_MAX_TERMS = 16;
-const SCREEN_SEARCH_MAX_TERM_LENGTH = 200;
-
-/** "3m ago", or "just now" — never "just now ago". */
-function agoPhrase(sinceMs: number, nowMs: number): string {
-  const age = formatWaitAge(sinceMs, nowMs);
-  return age === "just now" ? age : `${age} ago`;
-}
-/** An ask that pages the user: placed in the list at once, whatever is held. */
-function isUrgentItem(item: CanopyItem): boolean {
-  const card = item.card;
-  return (
-    card !== null &&
-    card.priority >= CANOPY_URGENT_PRIORITY &&
-    card.handledAt === null &&
-    item.disposition === null
-  );
-}
-
-/** An error toast whose one recovery is the place the action can be done by hand. */
-function failToast(
-  title: string,
-  error: unknown,
-  recovery: { label: string; onClick: () => void }
-) {
-  notify({
-    type: "error",
-    title,
-    message: formatErrorMessage(error, "Something went wrong."),
-    context: { eventKind: "agent" },
-    duration: 6000,
-    actions: [recovery],
-  });
+interface HostIssue {
+  hostId: HostId;
+  text: string;
+  action: string | null;
+  act: (() => void) | null;
+  /** Something wrong with the host, not a read still on its way. */
+  trouble: boolean;
+  /** A choice the user made, neither wrong nor on its way: listed plainly, and no read is retrying. */
+  settled?: boolean;
+  /** A link coming up or a first read on its way: still owed, so the all-clear waits, but never drawn. */
+  connecting?: boolean;
 }
 
 /**
- * ⌘↑/⌘↓ on macOS, Alt+↑/↓ elsewhere (Slack's channel switch): the agent above
- * or below, from anywhere in the panel. Ctrl+↑/↓ is not used off the Mac
- * because terminals send it to the program as its own key.
+ * A host's link coming up: dialling, or a first read refused while it dials.
+ * The link reads `connected` a moment before the `resync` reread lands, so the
+ * refusal outlives the dial by that much.
  */
-function agentStepOf(event: KeyboardEvent<HTMLElement>): -1 | 1 | null {
-  if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return null;
-  // An input method's own keys: switching agents would unmount what it is composing in.
-  if (event.nativeEvent.isComposing || event.keyCode === 229) return null;
-  if (event.shiftKey) return null;
-  const chord = isMac()
-    ? event.metaKey && !event.ctrlKey && !event.altKey
-    : event.altKey && !event.ctrlKey && !event.metaKey;
-  if (!chord) return null;
-  return event.key === "ArrowUp" ? -1 : 1;
-}
-
-/** Where the keyboard is inside the pane: the reply composer, the live terminal, or neither. */
-function paneFocusOf(element: Element | null): CanopyPaneFocus {
-  if (!element) return null;
-  if (element.closest("[data-canopy-detail] .cm-editor")) return "composer";
-  if (element.closest("[data-canopy-detail] [data-canopy-terminal]")) return "terminal";
-  return null;
-}
-
-const FEEDBACK_MAILTO = "mailto:greg@daintree.org?subject=Canopy%20beta%20feedback";
-
-/** The beta's standing terms, said every time the inbox is open. */
-function BetaNotice() {
+function hostDialling(linkStatus: string | undefined, error: unknown): boolean {
   return (
-    <div className="flex shrink-0 items-center gap-4 border-b border-border-default px-4 py-2">
-      <p className="flex min-w-0 flex-1 items-center gap-2 text-xs text-text-secondary">
-        <Badge tone="warning" size="sm">
-          Beta
-        </Badge>
-        <span className="min-w-0">{CANOPY_BETA_TERMS}</span>
-      </p>
-      <Button
-        variant="link"
-        size="xs"
-        className="shrink-0"
-        onClick={() => void systemClient.openExternal(FEEDBACK_MAILTO)}
-      >
-        Send feedback
-      </Button>
-      <Button
-        variant="outline"
-        size="xs"
-        className="shrink-0"
-        onClick={() => void systemClient.openExternal(CANOPY_WAITLIST_URL)}
-      >
-        Paid plan waitlist
-      </Button>
-    </div>
+    linkStatus === "connecting" ||
+    ((linkStatus === "disconnected" || linkStatus === "connected") &&
+      clientErrorCode(error) === "HOST_DISCONNECTED")
   );
+}
+
+/** The link to a host was tried and failed, as the host menu says. */
+function hostLinkFailed(linkStatus: string | undefined): boolean {
+  return (
+    linkStatus === "unreachable" ||
+    linkStatus === "version-mismatch" ||
+    linkStatus === "driven-elsewhere"
+  );
+}
+
+function HostIssueList({ issues }: { issues: readonly HostIssue[] }) {
+  return (
+    <ul className="flex flex-col gap-1.5">
+      {issues.map((issue) => (
+        <li key={issue.hostId} className="flex items-center gap-2">
+          <span className="min-w-0 flex-1 truncate">{issue.text}</span>
+          {issue.act && (
+            <Button variant="outline" size="xs" onClick={issue.act}>
+              {issue.action}
+            </Button>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** "3m ago", or "just now" — never "just now ago". */
+const NO_TRASH: readonly CanopyTrashEntry[] = [];
+/** How long a run put back from the Trash is waited for, to select it once it is back. */
+const RESTORED_SELECT_MS = 5000;
+
+function agoPhrase(sinceMs: number, nowMs: number): string {
+  const age = formatWaitAge(sinceMs, nowMs);
+  return age === "just now" ? age : `${age} ago`;
 }
 
 /**
@@ -254,18 +211,78 @@ async function hideCanopy(): Promise<void> {
  * population, with the words and the controls to act without leaving the panel.
  */
 export function CanopyView() {
+  const [bulkTargets, setBulkTargets] = useState<readonly BulkTarget[] | null>(null);
+  // Frozen when the person opens it: hosts listed later are not in this run.
+  const openBulk = useCallback((rows: readonly HostMenuRow[]) => {
+    setBulkTargets(
+      rows.map((row) => ({
+        hostId: row.hostId,
+        name: row.name,
+        connected: row.connection === null || row.connection.status === "connected",
+      }))
+    );
+  }, []);
+  // The panel put away — closed, or its project view cached — takes the run with it.
+  const panelOpen = useCanopyStore((s) => s.isOpen);
+  useEffect(() => {
+    if (!panelOpen) setBulkTargets(null);
+  }, [panelOpen]);
+  const transportFor = useCallback(
+    (target: BulkTarget) =>
+      canopyBulkTransport(target.hostId, {
+        own: target.hostId === canopyOwnHostId(),
+        keepOpen: () => {
+          const { isOpen, hostId } = useCanopyStore.getState();
+          return isOpen && target.hostId === hostId;
+        },
+      }),
+    []
+  );
+  return (
+    <>
+      <CanopyPanel onEnableAll={openBulk} />
+      <CanopyBulkEnableDialog
+        isOpen={bulkTargets !== null}
+        onClose={() => setBulkTargets(null)}
+        targets={bulkTargets ?? NO_BULK_TARGETS}
+        deps={{ transportFor }}
+      />
+    </>
+  );
+}
+
+const NO_BULK_TARGETS: readonly BulkTarget[] = [];
+
+function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow[]) => void }) {
   const isOpen = useCanopyStore((s) => s.isOpen);
   const close = useCanopyStore((s) => s.close);
   const activated = useCanopyStore((s) => s.snapshot?.activated ?? null);
+  // The offer to turn reading on is one press from the list, never in front of it.
+  const [pitchOpen, setPitchOpen] = useState(false);
+  useEffect(() => {
+    if (!isOpen || activated !== false) setPitchOpen(false);
+  }, [isOpen, activated]);
+  const outdatedOwnHost = useCanopyStore((s) => s.outdatedHost);
   const applySnapshot = useCanopyStore((s) => s.applySnapshot);
   // Another host the panel shows, or null for the window's own.
   const hostId = useCanopyStore((s) => s.hostId);
   const setHostId = useCanopyStore((s) => s.setHostId);
+  useEffect(() => setPitchOpen(false), [hostId]);
+  const allHosts = hostId === ALL_HOSTS_ID;
   const hostRows = useCanopyHostRows(hostId ?? canopyOwnHostId());
-  const hostPicker = hostRows ? <CanopyHostPicker rows={hostRows} onPick={setHostId} /> : null;
+  const hostPicker = hostRows ? (
+    <CanopyHostPicker
+      rows={hostRows}
+      onPick={setHostId}
+      onEnableAll={() => onEnableAll(hostRows)}
+      allHostsShown={allHosts}
+      onPickAll={() => setHostId(ALL_HOSTS_ID)}
+    />
+  ) : null;
   // The host shown was removed, or hosts can't be shown here at all: the panel
   // goes back to the window's own host, and the picker says so.
-  const hostListed = hostId === null || (hostRows?.some((row) => row.hostId === hostId) ?? false);
+  const hostListed =
+    hostId === null || allHosts || (hostRows?.some((row) => row.hostId === hostId) ?? false);
   useEffect(() => {
     if (!hostListed) setHostId(null);
   }, [hostListed, setHostId]);
@@ -323,7 +340,10 @@ export function CanopyView() {
 
   // Main watches screens closely, and writes words, only while some view says
   // a panel is open on its host: another host's own Canopy does that for it.
-  const showingOwnHost = hostId === null;
+  // All hosts reads this one too, and needs no host list to be of any use: with
+  // no other host to join, it is this host alone.
+  const readingAll = allHosts && hostRows !== null;
+  const showingOwnHost = hostId === null || allHosts;
   useEffect(() => {
     if (!isOpen || !showingOwnHost) return;
     const unsubscribe = window.electron.canopy.onSnapshotUpdated(applySnapshot);
@@ -339,8 +359,23 @@ export function CanopyView() {
       <img src={still} alt="" draggable={false} className="h-screen w-screen max-w-none" />
     );
 
+  // Every host together: each host's own Canopy says whether it is on, inside
+  // the inbox, and none is turned on by being listed.
+  if (readingAll) {
+    return (
+      <CanopyInbox
+        backdrop={backdrop}
+        restoreOpener={restoreOnReplace}
+        hostId={ALL_HOSTS_ID}
+        hostRow={null}
+        hostRows={hostRows}
+        hostPicker={hostPicker}
+      />
+    );
+  }
+
   // Another host: its own Canopy says whether it is on, inside the inbox.
-  if (hostId !== null) {
+  if (hostId !== null && !allHosts) {
     const hostRow = hostRows?.find((row) => row.hostId === hostId) ?? null;
     return (
       <CanopyInbox
@@ -348,6 +383,7 @@ export function CanopyView() {
         restoreOpener={restoreOnReplace}
         hostId={hostId}
         hostRow={hostRow}
+        hostRows={null}
         hostPicker={hostPicker}
       />
     );
@@ -382,9 +418,33 @@ export function CanopyView() {
     );
   }
 
-  // Until the user turns it on, Canopy is offered, not run: no list, no
-  // terminals, and nothing read.
-  if (activated === false) {
+  // The window's own host is on a Daintree from before Canopy read locally:
+  // nothing it read is shown, and Canopy isn't offered until it is updated.
+  if (outdatedOwnHost && !allHosts) {
+    return (
+      <AppDialog
+        isOpen={isOpen}
+        onClose={close}
+        size="workspace"
+        maxHeight="h-[min(90vh,1100px)]"
+        restoreFocusTo={restoreOnReplace}
+        preferRestoreFocusTo
+        backdrop={backdrop}
+        data-testid="canopy-dialog"
+      >
+        <AppDialog.Header>
+          <AppDialog.Title icon={<Telescope />}>{CANOPY_TITLE}</AppDialog.Title>
+          <CanopyHeaderCenter>{hostPicker}</CanopyHeaderCenter>
+          <AppDialog.CloseButton />
+        </AppDialog.Header>
+        <CanopyHostOutdated hostName="this host" />
+      </AppDialog>
+    );
+  }
+
+  // Until the user turns it on, nothing is read: the list is what Daintree
+  // observes, and the pitch waits behind the offer in the status bar.
+  if (activated === false && pitchOpen) {
     return (
       <CanopyPitch
         isOpen={isOpen}
@@ -403,7 +463,9 @@ export function CanopyView() {
       restoreOpener={restoreOnReplace}
       hostId={null}
       hostRow={null}
+      hostRows={null}
       hostPicker={hostPicker}
+      onOfferReading={activated === false ? () => setPitchOpen(true) : null}
     />
   );
 }
@@ -475,14 +537,20 @@ function CanopyShortcuts() {
       heading: "In a reply or the terminal",
       rows: [
         { keys: [`${step}+ArrowUp`, `${step}+ArrowDown`], label: "Next agent" },
-        { keys: ["Enter"], label: "In a reply: send, then move to the next agent" },
+        { keys: ["Enter"], label: "In a reply: send" },
+        {
+          keys: ["Cmd+Enter"],
+          label: "In a reply: send, then go to the next agent below that needs you or is unread",
+        },
         { keys: ["Shift+Enter"], label: "New line in a reply" },
         { keys: ["Escape"], label: "Back to the list from a reply" },
         ...(paneClose
           ? [
               {
                 keys: [paneClose],
-                label: isMac() ? "Close Canopy" : "In a reply: close Canopy",
+                label: isMac()
+                  ? "Trash the agent's terminal; Z takes it back"
+                  : "In a reply: trash the agent's terminal; Z takes it back",
               },
             ]
           : []),
@@ -543,7 +611,9 @@ function CanopyInbox({
   restoreOpener,
   hostId,
   hostRow,
+  hostRows,
   hostPicker,
+  onOfferReading = null,
 }: {
   backdrop: React.ReactNode;
   /** What had the keyboard when the panel opened, while it is still there. */
@@ -552,1103 +622,287 @@ function CanopyInbox({
   hostId: HostId | null;
   /** That host as the host menu draws it, while it is in the host list. */
   hostRow: HostMenuRow | null;
+  /** The hosts read together when `hostId` is All hosts. */
+  hostRows: readonly HostMenuRow[] | null;
   hostPicker: React.ReactNode;
+  /** The window's own host with its reader off: opens the pitch. */
+  onOfferReading?: (() => void) | null;
 }) {
   const isOpen = useCanopyStore((s) => s.isOpen);
   const close = useCanopyStore((s) => s.close);
-  // Another host is read through its own Canopy and shown as it read it: its
-  // runs can be read, archived and marked here, and nothing else is done to
-  // them until it can reach them. The window's own stores never hold its data.
-  const otherHost = hostId !== null;
-  const hostName = hostRow?.name ?? hostId ?? "";
-  const remote = useRemoteCanopy(hostId, isOpen);
-  const api = useMemo(() => (hostId === null ? ownCanopyApi : remoteCanopyApi(hostId)), [hostId]);
-  const terminalApi = useMemo(
-    () => (hostId === null ? ownCanopyTerminalApi : remoteCanopyTerminalApi(hostId)),
-    [hostId]
-  );
-  const ownCanopy = useCanopyStore((s) => s.snapshot);
-  const ownFleet = useFleetSnapshotStore((s) => s.snapshot);
-  const canopy = otherHost ? remote.canopy : ownCanopy;
-  const fleet = otherHost ? remote.fleet : ownFleet;
-  const projects = useProjectStore((s) => s.projects);
-  const scratches = useScratchStore((s) => s.scratches);
-  const hostProjects = useHostProjectLists(hostId === null ? NO_HOSTS : [hostId]);
-  const storedScope = useCanopyStore((s) => s.scope);
-  const setScope = useCanopyStore((s) => s.setScope);
-  // "This project" is the window's own project: another host shows all of its own.
-  const scope: CanopyScope = otherHost ? "all" : storedScope;
-  // The link came back: its project names may have changed while it was away.
-  const recoveries = remote.epoch;
-  useEffect(() => {
-    if (hostId !== null && recoveries > 0) retryHostProjects(hostId);
-  }, [hostId, recoveries]);
-
-  // Main reads only the screens in scope, so the agents a project view hides
-  // cost nothing. Said again whenever another host's link comes back.
-  useEffect(() => {
-    if (!isOpen) return;
-    safeFireAndForget(api.setScope(scope === "project" ? getViewWorkspaceId() : null));
-  }, [isOpen, scope, api, recoveries]);
-
-  const [nowMs, setNowMs] = useState(() => Date.now());
-  useEffect(() => {
-    if (!isOpen) return;
-    const handle = setInterval(() => setNowMs(Date.now()), AGE_TICK_MS);
-    return () => clearInterval(handle);
-  }, [isOpen]);
-
-  const workspaces = useMemo(() => {
-    const map = new Map<string, PilotWorkspaceMeta>();
-    // Another host's workspace ids mean something only there: named from its own list.
-    if (hostId !== null) {
-      for (const project of hostProjects.get(hostId) ?? []) {
-        map.set(project.id, {
-          kind: "project",
-          name: project.name,
-          ...(project.emoji ? { emoji: project.emoji } : {}),
-        });
-      }
-      return map;
-    }
-    for (const project of projects) {
-      map.set(project.id, {
-        kind: "project",
-        name: project.name,
-        lastOpened: project.lastOpened,
-        ...(project.emoji ? { emoji: project.emoji } : {}),
-        ...(project.color ? { color: project.color } : {}),
-      });
-    }
-    for (const scratch of scratches) {
-      map.set(scratch.id, {
-        kind: "scratch",
-        name: scratch.name,
-        lastOpened: scratch.lastOpened,
-      });
-    }
-    return map;
-  }, [hostId, hostProjects, projects, scratches]);
-
-  const baseItems = useMemo(() => {
-    if (!fleet) return [];
-    // No project on another host is the one this window shows.
-    const here = otherHost ? null : getViewWorkspaceId();
-    const runs =
-      scope === "project" ? fleet.runs.filter((run) => run.workspaceId === here) : fleet.runs;
-    const groups = buildPilotGroups(runs, {
-      workspaces,
-      currentWorkspaceId: here,
-      nowMs,
-    });
-    const cards = new Map((canopy?.cards ?? []).map((card) => [card.runId, card]));
-    return buildCanopyInbox(
-      groups,
-      cards,
-      {
-        failed: (canopy?.lastError ?? null) !== null,
-        failedRuns: new Set(canopy?.failedRuns ?? []),
-      },
-      new Map((canopy?.dispositions ?? []).map((entry) => [entry.runId, entry])),
-      new Map((canopy?.seen ?? []).map((entry) => [entry.runId, entry])),
-      nowMs,
-      new Map((canopy?.glances ?? []).map((entry) => [entry.runId, entry])),
-      new Map((canopy?.reads ?? []).map((entry) => [entry.runId, entry]))
-    );
-  }, [fleet, workspaces, nowMs, canopy, scope, otherHost]);
-
-  // Every run shows the moment the panel opens, in the order it was left — or,
-  // the first time, by what Daintree observes of each — and moves to its place
-  // as the readings the open set off land. Once they have, or after
-  // CANOPY_REVEAL_MS, the list holds still between pauses like always. Only
-  // words not yet written show as skeletons.
-  const owedOnOpen = useMemo(() => {
-    // Main hasn't answered the open yet: the snapshot in hand is from before
-    // it, and says nothing about what the open will read.
-    if (canopy?.active !== true) return true;
-    const due = new Set(canopy.wordsDue ?? []);
-    const reading = canopy.busy;
-    return baseItems.some(
-      (item) =>
-        due.has(item.runId) ||
-        item.card?.describing === true ||
-        (reading && item.card === null && item.disposition === null)
-    );
-  }, [baseItems, canopy]);
-  const openedAtRef = useRef<number | null>(null);
-  const [revealed, setRevealed] = useState(false);
-  const [revealWake, setRevealWake] = useState(0);
-  // Showing another host is an opening of its own list.
-  const revealHostRef = useRef(hostId);
-  useLayoutEffect(() => {
-    if (!isOpen) {
-      openedAtRef.current = null;
-      setRevealed(false);
-      return;
-    }
-    if (revealHostRef.current !== hostId) {
-      revealHostRef.current = hostId;
-      openedAtRef.current = null;
-      if (revealed) {
-        setRevealed(false);
-        return;
-      }
-    }
-    if (revealed) return;
-    if (openedAtRef.current === null) openedAtRef.current = Date.now();
-    const left = openedAtRef.current + CANOPY_REVEAL_MS - Date.now();
-    if (!owedOnOpen || left <= 0) {
-      setRevealed(true);
-      return;
-    }
-    const timer = setTimeout(() => setRevealWake((n) => n + 1), left);
-    return () => clearTimeout(timer);
-  }, [isOpen, revealed, owedOnOpen, revealWake, hostId]);
-
-  // The list moves only at moments the user can expect it to; see `nextCanopyOrder`.
-  // Each host keeps its own order: the same run ids mean other runs elsewhere.
-  const refreshedAt = canopy?.refreshedAt ?? null;
-  const ownOrder = useCanopyStore((s) => s.orders[scope]);
-  const hostOrder = useCanopyStore((s) => (hostId === null ? undefined : s.hostOrders[hostId]));
-  const order = (otherHost ? hostOrder : ownOrder) ?? null;
-  const setOrder = useCanopyStore((s) => s.setOrder);
-  const setHostOrder = useCanopyStore((s) => s.setHostOrder);
-  const orderKey = `${hostId ?? ""}|${scope}`;
-  const [pointerInList, setPointerInList] = useState(false);
-  const lastInteractionRef = useRef(0);
-  const pressingRef = useRef(false);
-  // A row's context menu is open: the list holds still under it.
-  const menuOpenRef = useRef(false);
-  const lastRankRef = useRef(0);
-  const openedRef = useRef(false);
-  const orderKeyRef = useRef(orderKey);
-  const [rankWake, setRankWake] = useState(0);
-  const [rankRequest, setRankRequest] = useState(0);
-  const rankRequestSeenRef = useRef(0);
-  useLayoutEffect(() => {
-    if (!isOpen) {
-      openedRef.current = false;
-      return;
-    }
-    if (baseItems.length === 0) return;
-    const now = Date.now();
-    const opening = !openedRef.current || orderKeyRef.current !== orderKey;
-    if (opening) {
-      openedRef.current = true;
-      orderKeyRef.current = orderKey;
-      // What the user sees on opening counts as just ranked.
-      lastRankRef.current = now;
-    }
-    const step = nextCanopyOrder(order, {
-      fresh: baseItems.map((item) => item.runId),
-      priorities: new Map(baseItems.map((item) => [item.runId, itemPriority(item, nowMs)])),
-      urgent: baseItems.filter(isUrgentItem).map((item) => item.runId),
-      refreshedAt,
-      now,
-      opening,
-      revealing: !revealed,
-      requested: rankRequest !== rankRequestSeenRef.current,
-      pressing: pressingRef.current || menuOpenRef.current,
-      pointerInList,
-      lastInteractionAt: lastInteractionRef.current,
-      lastRankAt: lastRankRef.current,
-    });
-    if (step.kind === "set") {
-      if (step.ranked) {
-        lastRankRef.current = now;
-        rankRequestSeenRef.current = rankRequest;
-      }
-      if (hostId === null) setOrder(scope, step.order);
-      else setHostOrder(hostId, step.order);
-      return;
-    }
-    if (step.kind === "hold") return;
-    const timer = setTimeout(() => setRankWake((n) => n + 1), step.ms);
-    return () => clearTimeout(timer);
-  }, [
-    isOpen,
-    scope,
-    hostId,
-    orderKey,
-    baseItems,
-    order,
-    setOrder,
-    setHostOrder,
-    refreshedAt,
-    pointerInList,
-    rankWake,
-    rankRequest,
-    revealed,
-    nowMs,
-  ]);
-  const items = useMemo(() => {
-    const ranks = new Map((order?.ids ?? []).map((id, index) => [id, index]));
-    const rankOf = (item: CanopyItem, index: number) => ranks.get(item.runId) ?? ranks.size + index;
-    return baseItems
-      .map((item, index) => ({ item, rank: rankOf(item, index) }))
-      .sort((a, b) => a.rank - b.rank)
-      .map(({ item }) => item);
-  }, [baseItems, order]);
-  const inbox = useMemo(() => splitInbox(items), [items]);
-  // The search the panel opens on: the runs whose names, words or terminal
-  // hold every word of it. Typed straight into, it never reaches a row's keys.
-  const [query, setQuery] = useState("");
-  const searchRef = useRef<HTMLInputElement>(null);
-  const appliedQuery = useDeferredValue(query);
-  const terms = useMemo(() => searchTerms(appliedQuery), [appliedQuery]);
-  const searching = terms.length > 0;
-  const searchKey = `${hostId ?? ""}|${terms.join(" ")}`;
-  // The words each run's names and words leave unfound, asked of its terminal
-  // on the host it runs on: only ids come back. A run with more words left
-  // than main takes is not asked, rather than the whole ask refused.
-  const screenTargets = useMemo(() => {
-    const targets: CanopyScreenSearchTarget[] = [];
-    if (terms.length === 0) return targets;
-    for (const item of items) {
-      const left = unmatchedTerms(item, terms);
-      if (
-        left.length === 0 ||
-        left.length > SCREEN_SEARCH_MAX_TERMS ||
-        left.some((term) => term.length > SCREEN_SEARCH_MAX_TERM_LENGTH)
-      ) {
-        continue;
-      }
-      targets.push({ runId: item.runId, spawnedAt: item.row.run.spawnedAt, terms: left });
-      if (targets.length === SCREEN_SEARCH_MAX_RUNS) break;
-    }
-    return targets;
-  }, [items, terms]);
-  // The ask as a value: a terminal's matches stand only for the very runs,
-  // incarnations and words they were found for, on the host that found them.
-  const screenAsk = useMemo(
-    () => (screenTargets.length === 0 ? null : `${hostId ?? ""}|${JSON.stringify(screenTargets)}`),
-    [screenTargets, hostId]
-  );
-  const screenTargetsRef = useRef(screenTargets);
-  useEffect(() => {
-    screenTargetsRef.current = screenTargets;
-  });
-  const [screenHits, setScreenHits] = useState<{
-    ask: string;
-    runIds: ReadonlySet<string>;
-  } | null>(null);
-  // Asked again as screens are read anew, since a terminal's words move on.
-  useEffect(() => {
-    if (!isOpen || screenAsk === null) return;
-    let live = true;
-    const timer = setTimeout(() => {
-      api.searchScreens(screenTargetsRef.current).then(
-        (runIds) => {
-          if (live) setScreenHits({ ask: screenAsk, runIds: new Set(runIds) });
-        },
-        // A host that can't search its screens still matches what the panel
-        // holds, and its search has still settled.
-        () => {
-          if (!live) return;
-          setScreenHits((hits) =>
-            hits?.ask === screenAsk ? hits : { ask: screenAsk, runIds: new Set() }
-          );
-        }
-      );
-    }, SCREEN_SEARCH_DEBOUNCE_MS);
-    return () => {
-      live = false;
-      clearTimeout(timer);
-    };
-  }, [isOpen, screenAsk, api, refreshedAt]);
-  const onScreen = screenHits !== null && screenHits.ask === screenAsk ? screenHits.runIds : null;
-  const shownInbox = useMemo(() => {
-    if (!searching) return inbox;
-    const matches = (item: CanopyItem) =>
-      onScreen?.has(item.runId) === true || unmatchedTerms(item, terms).length === 0;
-    return { inbox: inbox.inbox.filter(matches), archived: inbox.archived.filter(matches) };
-  }, [inbox, searching, onScreen, terms]);
-  const unreadOnly = useCanopyStore((s) => s.unreadOnly);
-  const setUnreadOnly = useCanopyStore((s) => s.setUnreadOnly);
-  // A run read while the Unread filter is on stays listed until the filter is
-  // turned off — or the panel closes, or shows another scope: reading the row
-  // in front of you must not pull it out from under you, nor shift every row
-  // beneath it, but a fresh look starts from what is unread now.
-  const [keptUnread, setKeptUnread] = useState<ReadonlySet<string>>(() => new Set());
-  useEffect(() => {
-    setKeptUnread((kept) => (kept.size === 0 ? kept : new Set()));
-  }, [isOpen, scope, hostId]);
-  useEffect(() => {
-    setKeptUnread((kept) => {
-      if (!unreadOnly) return kept.size === 0 ? kept : new Set();
-      const added = inbox.inbox.filter((item) => item.unread && !kept.has(item.runId));
-      return added.length === 0 ? kept : new Set([...kept, ...added.map((item) => item.runId)]);
-    });
-  }, [unreadOnly, inbox]);
-  // The inbox as listed: every run in it, or with the filter on, the unread.
-  const listed = useMemo(
-    () =>
-      unreadOnly
-        ? shownInbox.inbox.filter((item) => item.unread || keptUnread.has(item.runId))
-        : shownInbox.inbox,
-    [unreadOnly, shownInbox, keptUnread]
-  );
-  const archivedExpanded = useCanopyStore((s) => s.archivedExpanded);
-  const setArchivedExpanded = useCanopyStore((s) => s.setArchivedExpanded);
-  // A search finds archived runs too, shown under their bar without unfolding it for good.
-  const archivedShown = archivedExpanded || searching;
-  // What the keyboard walks: the list, then the archived runs once they are shown.
-  const visible = useMemo(
-    () => [...listed, ...(archivedShown ? shownInbox.archived : [])],
-    [listed, shownInbox, archivedShown]
-  );
-  // What the open panel shows counts as seen: its urgent prompts leave the
-  // toolbar badge. Runs another scope or the Unread filter hides stay on it.
-  // Before paint, so a close in the same moment can't lose it.
-  const acknowledge = useCanopyStore((s) => s.acknowledge);
-  useLayoutEffect(() => {
-    // A view nobody can see acknowledges nothing, for the moment before it
-    // closes; and the badge counts the window's own host, never another's runs.
-    if (!isOpen || otherHost || isProjectViewCached()) return;
-    acknowledge(visible.map((item) => item.runId));
-  }, [isOpen, otherHost, visible, acknowledge]);
-  // Main holds a native page back only for an ask the panel shows: told the
-  // rows as listed, filters included, whenever they change — and told again
-  // when another host's link comes back, having dropped what it was told.
-  const shownKey = isOpen ? visible.map((item) => item.runId).join(" ") : null;
-  useEffect(() => {
-    if (shownKey === null) return;
-    safeFireAndForget(api.setShown(shownKey === "" ? [] : shownKey.split(" ")));
-  }, [shownKey, api, recoveries]);
-  const listRef = useRef<HTMLDivElement>(null);
-  // A search narrows the list, and a terminal's matches landing widen it: neither is a move.
-  const filterKey = searching ? `${searchKey}|${[...(onScreen ?? [])].join(" ")}` : "";
-  useListReorderMotion(listRef, listed.map((item) => item.runId).join(" "), filterKey);
-  // A list unmounted under the pointer never says the pointer left.
-  const listShown = listed.length > 0;
-  useEffect(() => {
-    if (!listShown) setPointerInList(false);
-  }, [listShown]);
-
-  // The search found runs, but only read ones the Unread filter hides: every
-  // place that says why the list is empty says that, not "no match".
-  const onlyReadMatch = searching && visible.length === 0 && shownInbox.inbox.length > 0;
-  // A search's outcome is said once, when it settles: the runs are in, the
-  // terminals have answered and the typing has stopped. Never per keystroke,
-  // and never again for a match a terminal adds later.
-  const searchSettled = fleet !== null && (screenAsk === null || onScreen !== null);
-  const outcome =
-    !searching || !searchSettled
-      ? null
-      : visible.length > 0
-        ? pluralize(visible.length, "match", "matches")
-        : onlyReadMatch
-          ? "No unread matches"
-          : "No matches";
-  const announceKey = `${searchKey}|${unreadOnly}`;
-  const announcedRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (!searching) {
-      announcedRef.current = null;
-      return;
-    }
-    if (outcome === null || query !== appliedQuery || announcedRef.current === announceKey) return;
-    const timer = window.setTimeout(() => {
-      announcedRef.current = announceKey;
-      useAnnouncerStore.getState().announce(outcome, "polite");
-    }, UI_DOHERTY_THRESHOLD);
-    return () => window.clearTimeout(timer);
-  }, [searching, outcome, announceKey, query, appliedQuery]);
-
-  const [focusedId, setFocusedId] = useState<string | null>(null);
-  // Where the keyboard goes in the next agent's pane, for the run it was meant for.
-  const [paneFocus, setPaneFocus] = useState<{ runId: string; focus: CanopyPaneFocus } | null>(
-    null
-  );
-  const focusedIndex = visible.findIndex((item) => item.runId === focusedId);
-  const activeIndex = focusedIndex === -1 ? 0 : focusedIndex;
-  // Nothing is open until a run is chosen or landed on; before that the pane
-  // shows the list's first run. A chosen run stays open when it moves into the
-  // folded Archived group, so the pane never vanishes under the user's typing.
-  // While searching, only a match is ever open.
-  const focusedItem =
-    focusedIndex !== -1
-      ? visible[focusedIndex]!
-      : searching
-        ? (visible[0] ?? null)
-        : (items.find((item) => item.runId === focusedId) ?? listed[0] ?? null);
-  const visibleRef = useRef<CanopyItem[]>([]);
-  const selectedRef = useRef<string | null>(null);
-  // An answer or a reply settles after the panel may have closed, and a new
-  // one opened over the same ids: only this one's own may move the keyboard.
-  const mountedRef = useRef(false);
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-    };
-  }, []);
-  // The host the list shows: two hosts can each have a run under the same id.
-  const listHostRef = useRef(hostId);
-  useEffect(() => {
-    visibleRef.current = visible;
-    selectedRef.current = focusedItem?.runId ?? null;
-    listHostRef.current = hostId;
-  });
-  const bodyRef = useRef<HTMLDivElement>(null);
-  // Anything the user does in the panel holds the list still for a while, and
-  // a press holds it until it is let go.
-  useEffect(() => {
-    const body = bodyRef.current;
-    if (!isOpen || !body) return;
-    const note = () => {
-      lastInteractionRef.current = Date.now();
-    };
-    const press = () => {
-      pressingRef.current = true;
-    };
-    const release = () => {
-      if (!pressingRef.current) return;
-      pressingRef.current = false;
-      note();
-      setRankWake((n) => n + 1);
-    };
-    const events = ["pointerdown", "keydown", "wheel", "input"] as const;
-    for (const type of events) body.addEventListener(type, note, { capture: true, passive: true });
-    body.addEventListener("pointerdown", press, { capture: true, passive: true });
-    window.addEventListener("pointerup", release, { capture: true, passive: true });
-    window.addEventListener("pointercancel", release, { capture: true, passive: true });
-    return () => {
-      for (const type of events) body.removeEventListener(type, note, { capture: true });
-      body.removeEventListener("pointerdown", press, { capture: true });
-      window.removeEventListener("pointerup", release, { capture: true });
-      window.removeEventListener("pointercancel", release, { capture: true });
-      pressingRef.current = false;
-    };
-  }, [isOpen]);
-  const detailRef = useRef<CanopyCardHandle>(null);
-
-  // Where the keyboard goes when the panel closes: the terminal "Go to
-  // terminal" just focused, rather than whatever opened the panel.
-  const focusAfterCloseRef = useRef<HTMLElement | null>(null);
-  // A deliberate act on a run reads it at once — going to it, a click,
-  // answering, replying — through the turn it showed. Merely arriving on it
-  // reads it only once it has stayed in front of the user (main's dwell).
-  const readNow = useCallback(
-    (item: CanopyItem) => {
-      if (!item.unread) return;
-      safeFireAndForget(
-        api.setRead(item.runId, { spawnedAt: item.row.run.spawnedAt }, true, item.readMark?.turn)
-      );
-    },
-    [api]
-  );
-
-  // The run selected, its row brought into view, the keyboard left where it is.
-  const selectNow = useCallback((runId: string) => {
-    setPaneFocus(null);
-    setFocusedId(runId);
-    document.getElementById(canopyCardDomId(runId))?.scrollIntoView({ block: "nearest" });
-  }, []);
-
-  const focusCardNow = useCallback((runId: string) => {
-    setPaneFocus(null);
-    setFocusedId(runId);
-    const element = document.getElementById(canopyCardDomId(runId));
-    element?.focus({ preventScroll: false });
-    element?.scrollIntoView({ block: "nearest" });
-  }, []);
-
-  // The run the pane shows is one the user has in front of them: it counts as
-  // looked at when it opens there, each minute it stays, and as it stops
-  // showing — while anyone can see the panel at all. Another host's run shows
-  // only its reading here, not its terminal: no look is told of it.
-  const shownRunId = isOpen && !otherHost ? (focusedItem?.runId ?? null) : null;
-  useEffect(() => {
-    if (shownRunId === null) return;
-    // One look, reconciled whenever it could stop or start being true — the
-    // window behind another app, the view cached — so it always ends.
-    let looking = false;
-    const sync = () => {
-      const next = canopyViewIsWatched();
-      if (next === looking) return;
-      looking = next;
-      reportCanopySeen(shownRunId, next, "panel");
-    };
-    sync();
-    const heartbeat = window.setInterval(() => {
-      sync();
-      if (looking) reportCanopySeen(shownRunId, true, "panel");
-    }, CANOPY_SEEN_HEARTBEAT_MS);
-    const offObservable = subscribeProjectViewObservability(sync);
-    window.addEventListener("focus", sync);
-    window.addEventListener("blur", sync);
-    return () => {
-      window.clearInterval(heartbeat);
-      offObservable();
-      window.removeEventListener("focus", sync);
-      window.removeEventListener("blur", sync);
-      if (looking) reportCanopySeen(shownRunId, false, "panel");
-    };
-  }, [shownRunId]);
-
-  // Land the keyboard in the search on open, with the top of the list selected —
-  // at once when the search is there, so nothing typed goes astray. Otherwise
-  // two frames, so it lands after the palette's own first-tabbable focus rather
-  // than racing it, and cancelled on cleanup so a StrictMode replay schedules it afresh.
-  const landedRef = useRef(false);
-  // The user pressed something in the panel since it opened, header included:
-  // where they put the keyboard stands, and the landing gives way to it.
-  const touchedRef = useRef(false);
-  useEffect(() => {
-    if (!isOpen) return;
-    touchedRef.current = false;
-    const touch = (event: Event) => {
-      const target = event.target;
-      if (target instanceof Element && target.closest('[data-testid="canopy-dialog"]')) {
-        touchedRef.current = true;
-      }
-    };
-    window.addEventListener("pointerdown", touch, { capture: true, passive: true });
-    window.addEventListener("keydown", touch, { capture: true, passive: true });
-    return () => {
-      window.removeEventListener("pointerdown", touch, { capture: true });
-      window.removeEventListener("keydown", touch, { capture: true });
-    };
-  }, [isOpen]);
-  useEffect(() => {
-    if (!isOpen) {
-      landedRef.current = false;
-      setFocusedId(null);
-      setQuery("");
-      return;
-    }
-    focusAfterCloseRef.current = null;
-    if (landedRef.current || items.length === 0) return;
-    const target = visible[0]?.runId ?? null;
-    const land = () => {
-      landedRef.current = true;
-      // The user got there first — clicked a row, a control or into a
-      // terminal while the frames were held back: their place stands.
-      if (touchedRef.current) return;
-      const search = searchRef.current;
-      if (search) {
-        if (target !== null) setFocusedId(target);
-        search.focus();
-      } else if (target !== null) {
-        focusCardNow(target);
-      }
-    };
-    if (searchRef.current) {
-      land();
-      return;
-    }
-    let inner = 0;
-    const outer = requestAnimationFrame(() => {
-      inner = requestAnimationFrame(land);
-    });
-    return () => {
-      cancelAnimationFrame(outer);
-      cancelAnimationFrame(inner);
-    };
-  }, [isOpen, items, visible, focusCardNow]);
-
-  // The focused card left (trashed, answered into another section, exited):
-  // put the keyboard on the card that took its place instead of dropping it on
-  // the page. Only when focus really was lost — a composer the user is typing
-  // in elsewhere keeps it.
-  const lastIndexRef = useRef(0);
-  const refreshRef = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
-    if (focusedIndex !== -1) lastIndexRef.current = focusedIndex;
-    if (!landedRef.current || focusedId === null) return;
-    // The keyboard is on its way into the new run's pane (⌘↑/⌘↓, or Send):
-    // the old pane unmounting drops it on the page for a moment, which is not
-    // a run leaving.
-    if (paneFocus?.runId === focusedId && items.some((item) => item.runId === focusedId)) return;
-    const active = document.activeElement;
-    if (active !== null && active !== document.body && active.isConnected) return;
-    if (visible.length === 0) {
-      // The last run left: the one control still in reach is Refresh.
-      refreshRef.current?.focus();
-      return;
-    }
-    // Either the card left, or it moved section and its node was replaced.
-    const target =
-      focusedIndex !== -1
-        ? visible[focusedIndex]!
-        : visible[Math.min(lastIndexRef.current, visible.length - 1)]!;
-    focusCardNow(target.runId);
-  }, [focusedIndex, focusedId, visible, focusCardNow, paneFocus, items]);
-
-  // A new search selects its top match, as opening selects the top run; a
-  // match leaving under the same search gives its place to the next.
-  // A search with no match yet still owes its top match, should a terminal find one.
-  const searchedRef = useRef(appliedQuery);
-  const topOwedRef = useRef(false);
-  useEffect(() => {
-    if (!isOpen) {
-      searchedRef.current = "";
-      topOwedRef.current = false;
-      return;
-    }
-    if (searchedRef.current !== appliedQuery) {
-      searchedRef.current = appliedQuery;
-      const top = visible[0];
-      topOwedRef.current = top === undefined;
-      if (top) selectNow(top.runId);
-      else setFocusedId(null);
-      return;
-    }
-    if (!searching || focusedIndex !== -1 || visible.length === 0) return;
-    const index = topOwedRef.current ? 0 : Math.min(lastIndexRef.current, visible.length - 1);
-    topOwedRef.current = false;
-    selectNow(visible[index]!.runId);
-  }, [isOpen, appliedQuery, searching, focusedIndex, visible, selectNow]);
-
-  // Select a run and take the keyboard into its pane — its composer or its
-  // terminal — rather than onto its row.
-  const openPaneNow = useCallback((runId: string, focus: CanopyPaneFocus) => {
-    setPaneFocus({ runId, focus });
-    setFocusedId(runId);
-    document.getElementById(canopyCardDomId(runId))?.scrollIntoView({ block: "nearest" });
-  }, []);
-
-  // The last triage the user did here, to take back with Z or the toast's
-  // Undo. One deep, as in mail: only the newest action can be undone.
-  const undoRef = useRef<(() => void) | null>(null);
-  // Another host's list starts afresh: no run open from the last one, and Z
-  // never takes back, unseen, what was done on a host no longer shown.
-  const shownHostRef = useRef(hostId);
-  useEffect(() => {
-    if (shownHostRef.current === hostId) return;
-    shownHostRef.current = hostId;
-    setFocusedId(null);
-    setPaneFocus(null);
-    undoRef.current = null;
-  }, [hostId]);
-  /**
-   * Holds Z for an action from its press, not from when main answers: a Z
-   * pressed before then waits for it, and an action pressed after takes Z
-   * over. `land` hands over the action's undo once main has done it (with an
-   * Undo toast when one is given); `forget` gives Z up when main did nothing.
-   */
-  const reserveUndo = useCallback(() => {
-    let landed: (() => void) | null = null;
-    let asked = false;
-    const undo = () => {
-      if (landed) landed();
-      else asked = true;
-    };
-    undoRef.current = undo;
-    return {
-      land: (restoreOnce: () => void, toast?: { title: string; message: string }) => {
-        // Z and the toast's Undo take back the same one action, once: the
-        // second of them finds it done.
-        let done = false;
-        const restore = () => {
-          if (done) return;
-          done = true;
-          restoreOnce();
-        };
-        landed = restore;
-        if (asked) {
-          restore();
-          return;
-        }
-        if (!toast) return;
-        notify({
-          type: "success",
-          transient: true,
-          title: toast.title,
-          message: toast.message,
-          context: { eventKind: "agent" },
-          duration: UNDO_TOAST_DURATION_MS,
-          actions: [
-            {
-              label: "Undo",
-              onClick: () => {
-                if (undoRef.current === undo) undoRef.current = null;
-                restore();
-              },
-            },
-          ],
-        });
-      },
-      forget: () => {
-        if (undoRef.current === undo) undoRef.current = null;
-      },
-    };
-  }, []);
-  // Z takes the newest action back from anywhere in the panel: a row, the
-  // folded Archived bar, or Refresh once the last row archived away — never
-  // from the pane's terminal or composer, or any text field, where Z is a letter.
-  useEffect(() => {
-    const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.defaultPrevented || event.shiftKey || event.altKey) return;
-      if (event.key !== "z" && event.key !== "Z") return;
-      const target = event.target instanceof Element ? event.target : null;
-      if (!target?.closest('[data-testid="canopy-dialog"]')) return;
-      if (
-        target.closest(
-          'input, textarea, select, [contenteditable="true"], [data-canopy-terminal], [data-canopy-detail] .cm-editor'
-        )
-      ) {
-        return;
-      }
-      event.preventDefault();
-      // Held down, Z undoes once: a repeat must not take the slot from an
-      // action pressed since.
-      if (event.repeat) return;
-      const undo = undoRef.current;
-      undoRef.current = null;
-      undo?.();
-    };
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, []);
-  /**
-   * Undo of a read change: each run back to what it was (`before`), wherever
-   * it is still as the change left it (`after`) — a new turn, or a change from
-   * another view since, stands.
-   */
-  const undoReads = useCallback(
-    (before: CanopyReadMark[], after: CanopyReadMark[]) => {
-      const was = new Map(before.map((mark) => [mark.runId, mark]));
-      const restores = after.flatMap((left) => {
-        const mark = was.get(left.runId);
-        return mark !== undefined && mark.spawnedAt === left.spawnedAt
-          ? [{ mark, expectVersion: left.version }]
-          : [];
-      });
-      if (restores.length > 0) safeFireAndForget(api.restoreReads(restores));
-    },
-    [api]
-  );
-
-  /**
-   * Where the cursor goes once a run is dealt with — archived, answered,
-   * replied to: the next run after it that needs you or has something unread,
-   * else the one before it that does, else simply its neighbour.
-   */
-  const nextAfter = useCallback((runId: string): CanopyItem | undefined => {
-    const order = visibleRef.current;
-    const index = order.findIndex((candidate) => candidate.runId === runId);
-    const wanted = (candidate: CanopyItem) =>
-      candidate.runId !== runId && (itemNeedsAttention(candidate) || candidate.unread);
-    return (
-      order.slice(index + 1).find(wanted) ??
-      order.slice(0, Math.max(index, 0)).find(wanted) ??
-      (index === -1 ? undefined : (order[index + 1] ?? order[index - 1]))
-    );
-  }, []);
-
-  const handlers = useMemo<CanopyCardHandlers>(() => {
-    const openRun = (item: CanopyItem, newWindow = false) => {
-      readNow(item);
-      if (hostId !== null) {
-        // Another host's run: the window moves to that host and project (or a
-        // new one opens there, or the window already showing it comes
-        // forward), and the pane is focused wherever it lands. The panel
-        // stays open on a switch that didn't happen; its toast says why, and
-        // its Retry closes the panel once it lands.
-        const focusIntent = { intent: "focus-panel", panelId: item.runId } as const;
-        void switchToHost(hostId, newWindow, item.workspaceId, {
-          focusIntent,
-          onLanded: () => {
-            // A panel since closed, or showing another host, is the user's newer choice.
-            if (!mountedRef.current || listHostRef.current !== hostId) return;
-            if (useCanopyStore.getState().isOpen) close();
-          },
-        });
-        return;
-      }
-      const args = { runId: item.runId, workspaceId: item.workspaceId };
-      if (item.workspaceId !== getViewWorkspaceId()) {
-        // The switch replaces this view, so the panel closes first.
-        close();
-        void actionService.dispatch("pilot.openRun", args, { source: "user" });
-        return;
-      }
-      // Here already: focus the terminal while the panel is still open, and
-      // close only once that worked. `pilot.openRun` arms the palette's
-      // focus-restore suppression on success, so the close can't hand focus
-      // back to whatever opened the panel.
-      void actionService.dispatch("pilot.openRun", args, { source: "user" }).then((result) => {
-        if (!result.ok) return;
-        // `pilot.openRun` arms the palettes' one-shot restore suppression; this
-        // is a dialog, which hands focus on by its own target instead, so the
-        // flag is taken here rather than left for the next palette to close.
-        consumePaletteFocusRestoreSuppression();
-        focusAfterCloseRef.current =
-          document.activeElement instanceof HTMLElement ? document.activeElement : null;
-        close();
-      });
-    };
-    // The incarnation on screen, so main refuses a terminal respawned since.
-    const target = (item: CanopyItem) => ({ spawnedAt: item.row.run.spawnedAt });
-    const goTo = (item: CanopyItem) => ({ label: "Go to terminal", onClick: () => openRun(item) });
-    const archive = (item: CanopyItem, expectTurn?: number) =>
-      expectTurn === undefined
-        ? api.archive(item.runId, target(item))
-        : api.archive(item.runId, target(item), expectTurn);
-    const unarchive = (item: CanopyItem) => api.unarchive(item.runId, target(item));
-    const archiveFailed =
-      (item: CanopyItem) =>
-      (error: unknown): void =>
-        failToast("Couldn't archive", error, goTo(item));
-    const unarchiveFailed =
-      (item: CanopyItem) =>
-      (error: unknown): void =>
-        failToast("Couldn't move to inbox", error, goTo(item));
-    return {
-      onOpen: openRun,
-      // Escape from the pane lands on the run's row; a run folded away in
-      // Archived has no row to land on, so the keyboard takes the fold instead
-      // — still in the list, where the next Escape closes the panel.
-      // With no row to land on (folded into Archived, or hidden by Unread),
-      // the fold takes it, else the list's first row, else Refresh: always
-      // somewhere in the list, where the next Escape closes the panel.
-      onLeavePane: (item) => {
-        if (document.getElementById(canopyCardDomId(item.runId))) {
-          focusCardNow(item.runId);
-          return;
-        }
-        const fold = document.querySelector<HTMLElement>('[aria-controls="canopy-archived"]');
-        if (fold) {
-          fold.focus();
-          return;
-        }
-        const first = visibleRef.current[0];
-        if (first) focusCardNow(first.runId);
-        else refreshRef.current?.focus();
-      },
-      onSent: (item, via) => {
-        readNow(item);
-        // Typed straight into the terminal: the keys stay there, since a menu
-        // or a prompt may have more to ask. The reply still moves the run out
-        // of the queue, and its pane stays open where the user is typing.
-        if (via === "terminal") return;
-        // The user moved to another run while the reply was on its way, or
-        // closed the panel: their choice stands.
-        if (
-          !mountedRef.current ||
-          listHostRef.current !== hostId ||
-          selectedRef.current !== item.runId
-        ) {
-          return;
-        }
-        // Replied from the composer: on to the next run that needs you, into
-        // its composer, as Send moves on in a mail queue. The answered one
-        // leaves the queue when main's handled reading lands.
-        const next = nextAfter(item.runId);
-        if (!next || next.runId === item.runId) return;
-        if (searchRef.current !== null && document.activeElement === searchRef.current) {
-          selectNow(next.runId);
-        } else {
-          openPaneNow(next.runId, "composer");
-        }
-      },
-      onArchive: (item) => {
-        if (itemArchived(item)) {
-          const turn = item.readMark?.turn ?? 0;
-          const undo = reserveUndo();
-          safeFireAndForget(
-            unarchive(item).then(
-              () =>
-                undo.land(() =>
-                  // Main archives it again only while it has done nothing since
-                  // it came back: otherwise that would hide what it did.
-                  safeFireAndForget(archive(item, turn).catch(archiveFailed(item)))
-                ),
-              (error: unknown) => {
-                undo.forget();
-                unarchiveFailed(item)(error);
-              }
-            )
-          );
-          return;
-        }
-        // The cursor moves on before the run leaves, as archiving does in mail —
-        // only off the run it is on: a row archived from its hover button
-        // leaves the user where they were.
-        if (selectedRef.current === item.runId) {
-          const next = nextAfter(item.runId);
-          if (next) focusCardNow(next.runId);
-        }
-        const before = item.readMark;
-        // No toast: the user archived it and watched it leave, and Z takes it back.
-        const undo = reserveUndo();
-        safeFireAndForget(
-          archive(item).then(
-            (after) => {
-              // Refused — the run left, or was respawned: nothing to undo.
-              if (after === null) return undo.forget();
-              undo.land(() => {
-                safeFireAndForget(unarchive(item).catch(unarchiveFailed(item)));
-                // Archiving read it; taking it back puts back what was unread.
-                if (before) undoReads([before], [after]);
-              });
-            },
-            (error: unknown) => {
-              undo.forget();
-              archiveFailed(item)(error);
-            }
-          )
-        );
-      },
-      onSendFailed: (item, error) => failToast("Couldn't send to agent", error, goTo(item)),
-      onAnswer: function answer(item, label) {
-        readNow(item);
-        // On to the next run that needs you, as a reply from the composer does —
-        // on its row, where the next answer is one key away.
-        const next = nextAfter(item.runId);
-        safeFireAndForget(
-          terminalApi.answer(item.runId, target(item), label).then(
-            () => {
-              if (
-                !mountedRef.current ||
-                listHostRef.current !== hostId ||
-                selectedRef.current !== item.runId
-              ) {
-                return;
-              }
-              if (!next || next.runId === item.runId) return;
-              // Back in the search since: the selection moves on, the keyboard stays to type.
-              if (searchRef.current !== null && document.activeElement === searchRef.current) {
-                selectNow(next.runId);
-              } else {
-                focusCardNow(next.runId);
-              }
-            },
-            (error: unknown) => failToast("Couldn't answer", error, goTo(item))
-          )
-        );
-      },
-      // No toast on success: the user watched the name change. A refusal says
-      // so and keeps the name it had.
-      onRename: (item, title) => {
-        const rename = (): Promise<void> =>
-          api.rename(item.runId, target(item), title).catch((error: unknown) => {
-            failToast("Couldn't rename terminal", error, {
-              label: "Retry",
-              onClick: () => safeFireAndForget(rename()),
-            });
-            throw error;
-          });
-        return rename();
-      },
-      onTrash: (item) => {
-        // The trash keeps a terminal only briefly, and its own countdown sits
-        // behind this panel, in whichever project the run is in: so the way
-        // back is offered here, on the toast and on Z. The receipt means
-        // something only to the host that trashed it, so Undo goes back there
-        // whichever host the panel shows by then.
-        const trashedOn = api;
-        const undo = reserveUndo();
-        safeFireAndForget(
-          trashedOn.trash(item.runId, target(item)).then(
-            (receipt) => {
-              if (receipt === null) return undo.forget();
-              undo.land(
-                () =>
-                  safeFireAndForget(
-                    trashedOn.untrash(receipt).catch((error: unknown) =>
-                      // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
-                      notify({
-                        type: "error",
-                        title: "Couldn't restore terminal",
-                        message: formatErrorMessage(error, "It has left the trash."),
-                        context: { eventKind: "agent" },
-                        duration: 6000,
-                      })
-                    )
-                  ),
-                { title: "Terminal trashed", message: itemSubject(item) }
-              );
-            },
-            (error: unknown) => {
-              undo.forget();
-              failToast("Couldn't trash terminal", error, goTo(item));
-            }
-          )
-        );
-      },
-    };
-  }, [
-    close,
-    readNow,
-    focusCardNow,
-    selectNow,
-    openPaneNow,
-    nextAfter,
-    reserveUndo,
-    undoReads,
+  const {
+    otherHost,
+    everyHost,
+    readerOff,
+    ownHostId,
+    hostName,
+    remote,
+    remotes,
+    participants,
     api,
     terminalApi,
+    readings,
+    canopy,
+    fleet,
+    projects,
+    storedScope,
+    setScope,
+    scope,
+    recoveries,
+    nowMs,
+    baseItems,
+    workspaces,
+  } = useCanopyInboxData({ isOpen, hostId, hostRow, hostRows });
+
+  const {
+    items,
+    inbox,
+    band,
+    owedOnOpen,
+    revealed,
+    reorderWaiting,
+    refreshedAt,
+    bodyRef,
+    enterList,
+    leaveList,
+    listHidden,
+    menuOpenChanged,
+    requestRank,
+    placeOrder,
+    orderWake,
+  } = useCanopyInboxOrder({
+    isOpen,
     hostId,
-  ]);
+    otherHost,
+    scope,
+    canopy,
+    baseItems,
+    nowMs,
+    observedAt: readerOff ? (fleet?.changedAt ?? null) : null,
+  });
+  const { query, setQuery, appliedQuery, terms, searching, searchKey, screenAsk, onScreen } =
+    useCanopyInboxSearch({ isOpen, hostId, items, api, refreshedAt });
+  const {
+    roleFilter,
+    setRoleFilter,
+    workersShown,
+    assistantsShown,
+    assistantsReadable,
+    directory,
+    seeAssistantHandback,
+    assistantItems,
+    assistantAsks,
+    workOf,
+    showWorkOf,
+    workPartial,
+    workLabelOf,
+    shownAssistants,
+    bandAssistants,
+    listedAssistants,
+    showWork,
+    inWork,
+    shownInbox,
+    unreadOnly,
+    setUnreadOnly,
+    listed,
+    bandSize,
+    archivedExpanded,
+    setArchivedExpanded,
+    archivedShown,
+    visible,
+    projection,
+    workerNavigation,
+    firstAssistant,
+    listRef,
+    scrollerRef,
+    acknowledgeOpened,
+    onlyReadMatch,
+  } = useCanopyInboxFilters({
+    isOpen,
+    hostId,
+    otherHost,
+    everyHost,
+    ownHostId,
+    hostRows,
+    hasHostPicker: hostPicker !== null,
+    participants,
+    projects,
+    storedScope,
+    scope,
+    setScope,
+    api,
+    recoveries,
+    fleet,
+    inbox,
+    band,
+    query,
+    appliedQuery,
+    terms,
+    searching,
+    searchKey,
+    screenAsk,
+    onScreen,
+    listHidden,
+  });
+  // The band has rows of its own: only then do the band headings show.
+  const bandShown = bandSize > 0 || bandAssistants.length > 0;
+  // A row asked for from the recording indicator is looked for once its
+  // host's runs are in, or its host has failed: in All hosts, that host's own.
+  const revealRunId = useCanopyStore((s) => s.replyReveal?.runId ?? null);
+  const revealHost =
+    everyHost && revealRunId !== null ? (parseAllHostsKey(revealRunId)?.hostId ?? null) : null;
+  const revealReading =
+    revealHost === null ? undefined : readings.find((reading) => reading.hostId === revealHost);
+  const revealRunsLoaded =
+    revealReading === undefined
+      ? fleet !== null
+      : revealReading.fleet !== null || revealReading.error !== null;
+  const {
+    searchRef,
+    refreshRef,
+    detailRef,
+    focusedIndex,
+    activeIndex,
+    focusedItem,
+    paneFocus,
+    replyFocus,
+    settleReplyFocus,
+    assistantRefusal,
+    selectedAssistant,
+    selectNow,
+    focusCardNow,
+    openPaneNow,
+    selectRow,
+    selectAssistant,
+    focusAssistantNow,
+    openAssistant,
+    settlePaneFocus,
+    nextAfter,
+    moveOnTo,
+    moveOnTarget,
+    leavePane,
+    showsHost,
+    isSelected,
+    captureFocusAfterClose,
+    closeForTerminal,
+    focusAfterClose,
+  } = useCanopyInboxFocus({
+    isOpen,
+    close,
+    hostId,
+    ownHostId,
+    otherHost,
+    everyHost,
+    items,
+    loaded: revealRunsLoaded,
+    listed,
+    visible,
+    workerNavigation,
+    workersShown,
+    shownAssistants,
+    firstAssistant,
+    inWork,
+    searching,
+    query,
+    appliedQuery,
+    setQuery,
+    roleFilter,
+    seeAssistantHandback,
+  });
 
-  /** U: read or unread, by hand. Z takes it back. */
-  const toggleRead = useCallback(
-    (item: CanopyItem) => {
-      if (itemArchived(item)) return;
-      const read = item.unread;
-      const send = () =>
-        api.setRead(item.runId, { spawnedAt: item.row.run.spawnedAt }, read, item.readMark?.turn);
-      const undo = reserveUndo();
-      safeFireAndForget(
-        send().then(
-          (after) => {
-            if (!after) return undo.forget();
-            // A run Canopy had no mark for had nothing unread.
-            const before = item.readMark ?? {
-              ...after,
-              readTurn: after.turn,
-              markedUnreadAt: null,
-            };
-            undo.land(() => undoReads([before], [after]));
-          },
-          (error: unknown) => {
-            undo.forget();
-            failToast(read ? "Couldn't mark as read" : "Couldn't mark as unread", error, {
-              label: "Retry",
-              onClick: () => safeFireAndForget(send()),
-            });
-          }
-        )
-      );
-    },
-    [reserveUndo, undoReads, api]
+  const openedRunId = focusedItem?.runId ?? null;
+  useLayoutEffect(() => {
+    if (openedRunId !== null) acknowledgeOpened(openedRunId);
+  }, [openedRunId, acknowledgeOpened]);
+  // The list is placed once the run this render selects is known: the band
+  // never loses it under the user, even when a rank lands with the selection.
+  useLayoutEffect(() => placeOrder(openedRunId), [placeOrder, openedRunId, orderWake]);
+  const { reserveUndo, undoReads, undoLine } = useCanopyInboxUndo({ hostId, api });
+
+  // A held reorder is said once, not row by row as its scores land.
+  const sortShown = workersShown && reorderWaiting;
+  useEffect(() => {
+    if (sortShown) {
+      useAnnouncerStore
+        .getState()
+        .announce("The inbox has a new order. Sort now applies it", "polite");
+    }
+  }, [sortShown]);
+  // Sort now leaves once the order is applied, by the user or a pause: the
+  // keyboard on it stays in the panel, on the search.
+  const sortFocusedRef = useRef(false);
+  useLayoutEffect(() => {
+    if (sortShown || !sortFocusedRef.current) return;
+    sortFocusedRef.current = false;
+    searchRef.current?.focus({ preventScroll: true });
+  }, [sortShown, searchRef]);
+  const {
+    readNow,
+    handlers,
+    toggleRead,
+    markAllRead,
+    askRename,
+    rowMenu,
+    setAside,
+    parkRunId,
+    closePark,
+    trashArm,
+    renameAsk,
+    refreshes,
+    refresh,
+  } = useCanopyInboxActions({
+    hostId,
+    ownHostId,
+    api,
+    terminalApi,
+    listed,
+    focusedItem,
+    searchRef,
+    detailRef,
+    selectNow,
+    focusCardNow,
+    openPaneNow,
+    nextAfter,
+    moveOnTarget,
+    leavePane,
+    showsHost,
+    isSelected,
+    captureFocusAfterClose,
+    closeForTerminal,
+    reserveUndo,
+    undoReads,
+    menuOpenChanged,
+    requestRank,
+  });
+
+  // The dictation key goes to the selected agent's reply wherever the keyboard
+  // is in Canopy; with no agent's pane showing, nowhere, never the grid behind.
+  const dictationRef = useRef<() => CanopyReplyDictation>(() => NO_CANOPY_REPLY);
+  useEffect(() => {
+    dictationRef.current = () =>
+      (selectedAssistant === null && focusedItem !== null
+        ? detailRef.current?.dictation()
+        : undefined) ?? NO_CANOPY_REPLY;
+  });
+  useEffect(() => registerCanopyReplyDictation(() => dictationRef.current()), []);
+  // The row a dictation is writing its reply into, wherever the selection has
+  // gone since: marked in the list while it records (#14778).
+  const dictatingRow = useVoiceRecordingStore((s) =>
+    isActiveVoiceSession(s.status) && isCanopyReplyTarget(s.activeTarget)
+      ? s.activeTarget?.canopyRow
+      : undefined
   );
+  const dictatingRunId = dictatingRow?.hostScope === hostId ? dictatingRow.runId : null;
 
-  /**
-   * Every unread run in the inbox as listed, read through the turn the list
-   * showed: anything that lands after the press stays unread. Undo puts back
-   * what each was, unless it has done something since.
-   */
-  const markAllRead = () => {
-    const unread = listed.filter((item) => item.unread);
-    if (unread.length === 0) return;
-    const before = unread.flatMap((item) => (item.readMark ? [item.readMark] : []));
-    const undo = reserveUndo();
-    safeFireAndForget(
-      api
-        .markAllRead(
-          unread.map((item) => ({
-            runId: item.runId,
-            spawnedAt: item.row.run.spawnedAt,
-            turn: item.readMark?.turn ?? 0,
-          }))
-        )
-        .then(
-          (after) =>
-            undo.land(() => undoReads(before, after), {
-              title: "Marked as read",
-              message: pluralize(unread.length, "agent"),
-            }),
-          (error: unknown) => {
-            undo.forget();
-            failToast("Couldn't mark as read", error, { label: "Retry", onClick: markAllRead });
-          }
-        )
-    );
-  };
+  // The host a selected run is on, for the pane beside it; null for the window's own.
+  const focusedHostId = focusedItem ? placeOf(focusedItem, hostId, ownHostId).hostId : null;
+
+  const focusedRow =
+    everyHost && focusedHostId !== null
+      ? (hostRows ?? []).find((row) => row.hostId === focusedHostId)
+      : undefined;
+  const focusedLinkStatus =
+    focusedRow?.isLocal === false ? focusedRow.connection?.status : undefined;
 
   // Each group is its own Tab stop: the selected row when it is in the group,
   // else the group's first.
@@ -1656,249 +910,14 @@ function CanopyInbox({
     focusedItem !== null && group.some((run) => run.runId === focusedItem.runId)
       ? focusedItem.runId === item.runId
       : index === 0;
-  // A row took focus (click, Tab, pointer): it is the selection, with the
-  // keyboard on the row rather than carried into the pane.
-  const selectRow = (runId: string) => {
-    setPaneFocus(null);
-    setFocusedId(runId);
-  };
-
-  // ⌘↑/⌘↓ from anywhere in the panel, the live terminal and the composer
-  // included: taken in the capture phase, before xterm or CodeMirror can, so
-  // the user can work down the list — reply, next, reply — without leaving the
-  // keyboard where it is. The keyboard lands in the same place on the next run.
-  const onAgentStepKeyDownCapture = (event: KeyboardEvent<HTMLElement>) => {
-    const step = agentStepOf(event);
-    if (step === null || visible.length === 0) return;
-    // Renaming: ⌘↑/↓ move the caret in the name, not to another agent.
-    if (event.target instanceof Element && event.target.closest("[data-canopy-rename]")) return;
-    event.preventDefault();
-    event.stopPropagation();
-    // From the open run, clamped at the ends rather than wrapping: the bottom
-    // of the list is the end of it. An open run that is not in the list
-    // (archived and folded away) steps onto the list's first or last row.
-    const current = visible.findIndex((item) => item.runId === focusedItem?.runId);
-    const next =
-      current === -1
-        ? visible[step > 0 ? 0 : visible.length - 1]!
-        : visible[Math.min(visible.length - 1, Math.max(0, current + step))]!;
-    if (next.runId === focusedItem?.runId) return;
-    const focus = paneFocusOf(document.activeElement);
-    // From the search the selection moves and the keyboard stays to type.
-    if (event.target === searchRef.current) selectNow(next.runId);
-    else if (focus === null) focusCardNow(next.runId);
-    else openPaneNow(next.runId, focus);
-  };
-
-  // On the list's own wrapper rather than the palette body: the body only acts
-  // on keys aimed at itself, and here focus is always on a card or its controls.
-  const onNavigationKeyDown = (event: KeyboardEvent<HTMLElement>) => {
-    if (visible.length === 0) return;
-    // Only from a row of the list: the pane holds a live terminal and a
-    // composer whose keys belong to the agent, and the fold owns its own keys.
-    if (!(event.target instanceof Element) || !event.target.closest("[data-canopy-card]")) return;
-    // Shift+F10 or the Menu key: the selected row's menu, as a right-click
-    // opens it. Replayed as a contextmenu on the row, since the menu has no
-    // way to be opened by hand, and macOS sends none for these keys itself.
-    if (
-      event.key === "ContextMenu" ||
-      (event.key === "F10" && event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey)
-    ) {
-      const row = visible[activeIndex]
-        ? document.getElementById(canopyCardDomId(visible[activeIndex]!.runId))
-        : null;
-      if (!row) return;
-      event.preventDefault();
-      event.stopPropagation();
-      const rect = row.getBoundingClientRect();
-      row.dispatchEvent(
-        new MouseEvent("contextmenu", {
-          bubbles: true,
-          cancelable: true,
-          clientX: rect.left + 8,
-          clientY: rect.top + rect.height / 2,
-        })
-      );
-      return;
-    }
-    // The selected run's own chords (Trash is ⌘⌫) go to it before the
-    // modifier guard below, which keeps app shortcuts out of plain navigation.
-    if ((event.metaKey || event.ctrlKey) && event.key === "Backspace") {
-      if (detailRef.current?.handleKey(event)) return;
-    }
-    // ⌥U marks every unread run listed read. By the key's place, not its
-    // character: on a Mac ⌥U is the umlaut dead key and types no "u".
-    if (event.code === "KeyU" && event.altKey && !event.metaKey && !event.ctrlKey) {
-      event.preventDefault();
-      if (!event.repeat) markAllRead();
-      return;
-    }
-    if (event.metaKey || event.ctrlKey || event.altKey) return;
-    // Back to the search: "/" from any row, or up off the top of the list.
-    const search = searchRef.current;
-    if (search && (event.key === "/" || (event.key === "ArrowUp" && activeIndex === 0))) {
-      event.preventDefault();
-      search.focus();
-      if (event.key === "/") search.select();
-      return;
-    }
-    let next: number | null = null;
-    if (event.key === "ArrowDown" || event.key === "j") {
-      next = Math.min(visible.length - 1, activeIndex + 1);
-    } else if (event.key === "ArrowUp" || event.key === "k") {
-      next = Math.max(0, activeIndex - 1);
-    } else if (event.key === "Home") {
-      next = 0;
-    } else if (event.key === "End") {
-      next = visible.length - 1;
-    }
-    if (next !== null) {
-      event.preventDefault();
-      focusCardNow(visible[next]!.runId);
-      return;
-    }
-    // Keys aimed at the list's selected row act on the selected agent.
-    const selected = visible[activeIndex];
-    if (!selected) return;
-    if (event.key === "Enter") {
-      event.preventDefault();
-      handlers.onOpen(selected);
-      return;
-    }
-    if (event.key === "F2") {
-      event.preventDefault();
-      askRename(selected);
-      return;
-    }
-    if ((event.key === "u" || event.key === "U") && !event.shiftKey) {
-      event.preventDefault();
-      if (!event.repeat) toggleRead(selected);
-      return;
-    }
-    detailRef.current?.handleKey(event);
-  };
-
-  // The search keeps every plain key for its text; only the list's moves, Go to
-  // terminal and the modifier chords act from it, on the selected run. Tab takes
-  // the keyboard down to that run's row, where the one-key actions are.
-  const onSearchKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    // The IME owns the key: nothing of the search's or the panel's acts on it.
-    if (event.nativeEvent.isComposing || event.keyCode === 229) {
-      event.stopPropagation();
-      return;
-    }
-    const plain = !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey;
-    const selected = focusedIndex !== -1 ? visible[focusedIndex]! : (visible[0] ?? null);
-    if (plain && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
-      event.preventDefault();
-      if (visible.length === 0) return;
-      const step = event.key === "ArrowDown" ? 1 : -1;
-      selectNow(visible[Math.min(visible.length - 1, Math.max(0, activeIndex + step))]!.runId);
-      return;
-    }
-    if (plain && event.key === "Enter") {
-      if (!selected) return;
-      event.preventDefault();
-      handlers.onOpen(selected);
-      return;
-    }
-    if (plain && event.key === "Tab") {
-      if (!selected) return;
-      event.preventDefault();
-      // The dialog's own Tab wrap must not take the keyboard on from the row.
-      event.stopPropagation();
-      focusCardNow(selected.runId);
-      return;
-    }
-    if ((event.metaKey || event.ctrlKey) && event.key === "Backspace") {
-      if (selected?.runId === focusedItem?.runId) detailRef.current?.handleKey(event);
-      return;
-    }
-    if (event.code === "KeyU" && event.altKey && !event.metaKey && !event.ctrlKey) {
-      event.preventDefault();
-      if (!event.repeat) markAllRead();
-    }
-  };
-
+  // The inbox list is one listbox over workers and band assistants, so it has
+  // one Tab stop between them: a selected band assistant, else the worker rows'.
+  const assistantHoldsStop = bandAssistants.some((a) => a.id === selectedAssistant?.id);
   // Over the whole inbox, whatever the filter shows: a read approval still blocks its agent.
-  const needsYou = inbox.inbox.filter(itemNeedsAttention).length;
-  // Trash from a row's menu arms it as its first press does; the pane's
-  // button or ⌘⌫ confirms. Bumped per request, for the run it names.
-  const [trashArm, setTrashArm] = useState<{ runId: string; request: number } | null>(null);
-  // A request is for the run it named while it stays open: coming back to it
-  // later must not find Trash armed.
-  const openRunId = focusedItem?.runId ?? null;
-  useEffect(() => {
-    if (trashArm !== null && openRunId !== trashArm.runId) setTrashArm(null);
-  }, [trashArm, openRunId]);
-  // Rename from a row — its menu, or F2 — opens the run and starts the rename
-  // in its title bar, where a grid pane's is.
-  const [renameAsk, setRenameAsk] = useState<{ runId: string; request: number } | null>(null);
-  useEffect(() => {
-    if (renameAsk !== null && openRunId !== renameAsk.runId) setRenameAsk(null);
-  }, [renameAsk, openRunId]);
-  // Requests are for a run on the host they were made on.
-  useEffect(() => {
-    setTrashArm(null);
-    setRenameAsk(null);
-  }, [hostId]);
-  const askRename = (item: CanopyItem) => {
-    focusCardNow(item.runId);
-    setRenameAsk((ask) => ({ runId: item.runId, request: (ask?.request ?? 0) + 1 }));
-  };
+  const needsYouWorkers = projection.needsYou.filter(isWorkerEntry).length;
+  const needsYouAssistants = projection.needsYou.length - needsYouWorkers;
+  const needsYou = projection.needsYou.length;
 
-  const rowMenu: CanopyRowMenuActions = {
-    onOpen: handlers.onOpen,
-    // The run already open keeps its pane mounted, so the composer is focused
-    // directly; another run's pane takes the keyboard there as it opens.
-    onReply: (item) => {
-      if (focusedItem?.runId === item.runId && detailRef.current?.focusComposer()) return;
-      openPaneNow(item.runId, "composer");
-    },
-    onToggleRead: toggleRead,
-    onReread: function reread(item) {
-      safeFireAndForget(
-        api.reread(item.runId, { spawnedAt: item.row.run.spawnedAt }).catch((error: unknown) =>
-          failToast("Couldn't read the screen again", error, {
-            label: "Go to terminal",
-            onClick: () => handlers.onOpen(item),
-          })
-        )
-      );
-    },
-    onArchive: handlers.onArchive,
-    onRename: askRename,
-    onTrash: (item) => {
-      focusCardNow(item.runId);
-      setTrashArm((arm) => ({ runId: item.runId, request: (arm?.request ?? 0) + 1 }));
-    },
-    onOpenChange: (open) => {
-      menuOpenRef.current = open;
-      if (open) return;
-      // Closing releases the hold, it doesn't move the list: the idle wait starts from here.
-      lastInteractionRef.current = Date.now();
-      setRankWake((n) => n + 1);
-    },
-  };
-
-  // A press spins the button until the refresh it asked for is done, cards
-  // included. The background polls never do: they are not news.
-  const [refreshes, setRefreshes] = useState(0);
-  const refresh = () => {
-    setRefreshes((n) => n + 1);
-    safeFireAndForget(
-      api
-        .refresh()
-        .catch((error: unknown) =>
-          failToast("Couldn't refresh Canopy", error, { label: "Retry", onClick: refresh })
-        )
-        .finally(() => {
-          setRefreshes((n) => n - 1);
-          // What the user asked to see, in order now.
-          setRankRequest((n) => n + 1);
-        })
-    );
-  };
   const unreadCount = inbox.inbox.filter((item) => item.unread).length;
   // The section bar speaks for what the search shows; the header keeps the whole inbox.
   const shownUnreadCount = shownInbox.inbox.filter((item) => item.unread).length;
@@ -1910,16 +929,172 @@ function CanopyInbox({
   const linkStatus = hostRow?.isLocal === false ? hostRow.connection?.status : undefined;
   // Picking a host that isn't connected dials it: its first read is refused
   // while the link comes up, which is connecting, not trouble.
-  const connecting =
-    linkStatus === "connecting" ||
-    (linkStatus === "disconnected" && clientErrorCode(remote.error) === "HOST_DISCONNECTED");
+  const connecting = hostDialling(linkStatus, remote.error);
   // The link dropped after the agents were read: what is listed is what it last showed.
   const linkDown = fleet !== null && linkStatus !== undefined && linkStatus !== "connected";
-  // Connecting stays quiet only until there are rows: rows kept from before say they are old.
+  // Connecting stays quiet only until there are rows: rows kept from before say
+  // they are old, until the link is back up and only their reread is owed.
   const hostTrouble =
-    otherHost && (remote.error !== null || linkDown) && !(connecting && fleet === null);
+    otherHost &&
+    (remote.error !== null || linkDown) &&
+    !(connecting && (fleet === null || linkStatus === "connected"));
+  // That host runs a Daintree from before Canopy read locally, and still sends
+  // its screens to the former hosted service: none of it is shown here, nor is
+  // it offered to be turned on, until the host is updated.
+  const hostOutdated = otherHost && canopy != null && readsWithHostedService(canopy);
   // Canopy is off on that host: its own offer, for it alone.
-  const hostOffer = otherHost && canopy?.activated === false;
+  const hostOffer = otherHost && canopy?.activated === false && !hostOutdated;
+  // Its list is what that host observed; the offer takes the panel only once asked for.
+  const [hostOfferOpen, setHostOfferOpen] = useState(false);
+  useEffect(() => {
+    if (!hostOffer) setHostOfferOpen(false);
+  }, [hostOffer]);
+  useEffect(() => {
+    setHostOfferOpen(false);
+  }, [hostId]);
+  const hostOfferShown = hostOffer && hostOfferOpen;
+  const hostHeld = hostOfferShown || hostOutdated;
+  const offerReading =
+    readerOff && !hostOutdated
+      ? (onOfferReading ?? (hostOffer ? () => setHostOfferOpen(true) : null))
+      : null;
+
+  // Canopy's Trash: every agent run the host's trash holds, any project's.
+  const trashRef = useRef<CanopyTrashSectionHandle>(null);
+  // A run put back from the Trash comes into the inbox selected, once it is
+  // back in the fleet: the same run, or the pane resuming its session. Anything
+  // the user selects from the press on, another host or the panel closing, wins.
+  const shownRunId = selectedAssistant?.id ?? focusedItem?.runId ?? null;
+  const shownRunIdRef = useRef(shownRunId);
+  useLayoutEffect(() => {
+    shownRunIdRef.current = shownRunId;
+  });
+  const [restored, setRestored] = useState<{
+    runId: string;
+    from: string | null;
+    request: number;
+  } | null>(null);
+  const restoreRequests = useRef(0);
+  const onRestoring = useCallback(() => {
+    const request = ++restoreRequests.current;
+    const from = shownRunIdRef.current;
+    // Waited for from when main says which run it is: a resume takes longer
+    // than a restore, and its run has a new id.
+    return (runId: string | null) => {
+      if (runId === null || request !== restoreRequests.current) return;
+      // The run itself, arrived first and shown with nothing else to show, is no choice of the user's.
+      if (shownRunIdRef.current !== from && shownRunIdRef.current !== runId) return;
+      setRestored({ runId, from, request });
+    };
+  }, []);
+  useEffect(() => {
+    restoreRequests.current += 1;
+    setRestored(null);
+  }, [hostId, isOpen]);
+  const onRestoreElsewhere = useCallback(
+    (item: CanopyTrashItem) =>
+      restoreInItsProject(
+        item,
+        { hostId, ownHostId },
+        {
+          closeForTerminal,
+          // A panel since closed, or showing another host, is the user's newer choice.
+          stillShows: () => showsHost(hostId) && useCanopyStore.getState().isOpen,
+        }
+      ),
+    [hostId, ownHostId, closeForTerminal, showsHost]
+  );
+  useEffect(() => {
+    if (restored === null) return;
+    const handle = setTimeout(() => {
+      setRestored(null);
+      // It never came back: a keyboard left waiting for it goes to the search.
+      const active = document.activeElement;
+      if (active === null || active === document.body) searchRef.current?.focus();
+    }, RESTORED_SELECT_MS);
+    return () => clearTimeout(handle);
+  }, [restored, searchRef]);
+  useEffect(() => {
+    if (restored === null) return;
+    // Another run picked meanwhile is the user's choice; the inbox landing on
+    // the restored run itself, with nothing else to show, is this one arriving.
+    if (shownRunId !== restored.from && shownRunId !== restored.runId) {
+      setRestored(null);
+      return;
+    }
+    if (!visible.some((item) => item.runId === restored.runId)) return;
+    setRestored(null);
+    // The keyboard follows it from the Trash, or from nowhere; the search keeps it.
+    const active = document.activeElement;
+    if (
+      active === null ||
+      active === document.body ||
+      active.closest("#canopy-trash, [aria-controls=canopy-trash], [data-canopy-card]") !== null
+    ) {
+      focusCardNow(restored.runId);
+    } else {
+      selectNow(restored.runId);
+    }
+  }, [restored, shownRunId, visible, focusCardNow, selectNow]);
+  // Back in the fleet, whatever the panel's filters show: a run that left the
+  // trash near its deadline was restored, not let go.
+  const fleetRunIdsRef = useRef<ReadonlySet<string>>(new Set());
+  useEffect(() => {
+    fleetRunIdsRef.current = new Set((fleet?.runs ?? []).map((run) => run.runId));
+  }, [fleet]);
+  const isBackInFleet = useCallback((runId: string) => fleetRunIdsRef.current.has(runId), []);
+  const trashEntries = canopy?.trash ?? NO_TRASH;
+  // This view's own project's trash is in its dock too, which says its expiries itself.
+  const dockAnnounces = useCallback(
+    (workspaceId: string) => {
+      if (otherHost && !everyHost) return false;
+      const here = getViewWorkspaceId();
+      if (!everyHost) return workspaceId === here;
+      const place = parseAllHostsKey(workspaceId);
+      return place !== null && place.hostId === ownHostId && place.id === here;
+    },
+    [otherHost, everyHost, ownHostId]
+  );
+  const trashActed = useTrashExpiryAnnouncer({
+    active: isOpen,
+    entries: trashEntries,
+    workspaces,
+    scopeKey: hostId ?? "",
+    dockAnnounces,
+    isBackInFleet,
+  });
+  // Up off the Trash bar: the inbox's last row, else the search.
+  const leaveTrashUp = () => {
+    const last = projection.navigation[projection.navigation.length - 1];
+    if (!last) searchRef.current?.focus();
+    else if (last.role === "worker") focusCardNow(last.item.runId);
+    else focusAssistantNow(last.item.id);
+  };
+
+  const { onAssistantKeyDown, onAgentStepKeyDownCapture, onNavigationKeyDown, onSearchKeyDown } =
+    useCanopyInboxKeyboard({
+      visible,
+      listed,
+      shownAssistants,
+      navigation: projection.navigation,
+      focusedIndex,
+      activeIndex,
+      focusedItem,
+      selectedAssistant,
+      searchRef,
+      detailRef,
+      selectNow,
+      focusCardNow,
+      openPaneNow,
+      focusAssistantNow,
+      selectAssistant,
+      openAssistant,
+      onOpen: handlers.onOpen,
+      askRename,
+      toggleRead,
+      markAllRead,
+      onPastEnd: () => trashRef.current?.focusHeader() ?? false,
+    });
 
   // What the panel can say about another host before it has its agents.
   const hostSummary =
@@ -1927,48 +1102,350 @@ function CanopyInbox({
       ? `Can't reach ${hostName}`
       : otherHost && fleet === null && connecting
         ? `Connecting to ${hostName}…`
-        : hostOffer
-          ? `Canopy is off on ${hostName}`
-          : null;
+        : hostOutdated
+          ? `Update Daintree on ${hostName}`
+          : hostOfferShown
+            ? `Canopy is off on ${hostName}`
+            : null;
+  // A run that needs the user, held out of the band until the list may re-rank:
+  // nothing is concluded meanwhile.
+  const unsorted = inbox.inbox.some((item) => itemNeedsAttention(item) && !band.has(item.runId))
+    ? { words: "Not every agent is sorted yet", allClear: false }
+    : null;
+  // What the line and the empty band both say while no agent needs the user, and
+  // whether it is the all-clear itself: only the last branch draws it.
+  const nothingWaiting: { words: string; allClear: boolean } = readerOff
+    ? (unsorted ?? { words: "No agent is waiting on you", allClear: false })
+    : // "Nothing" is a conclusion: qualified while some screens
+      // can't be read at all, withheld while Daintree can't see its
+      // agents, and held back while any run in the inbox has yet to
+      // be read at all — readings owed, a retry waiting, however
+      // long they take, and after a scope switch too.
+      (canopy?.lastError ?? null) !== null
+      ? (unsorted ?? { words: "Nothing needs you that Canopy could read", allClear: false })
+      : // Rows kept from a host that can't be reached are as last seen, as a
+        // degraded fleet's are: nothing current is concluded from them.
+        fleet?.degraded || hostTrouble
+        ? { words: "Can't tell who needs you right now", allClear: false }
+        : owedOnOpen ||
+            canopy?.waiting !== undefined ||
+            (canopy?.busy === true && inbox.inbox.some((item) => item.card === null))
+          ? { words: "Checking who needs you…", allClear: false }
+          : // A screen that can't be read yet (starting, hibernating)
+            // has no reading at all: nothing is concluded about it.
+            inbox.inbox.some((item) => item.card === null)
+            ? { words: "Not every agent could be read yet", allClear: false }
+            : (unsorted ?? { words: "Nothing needs you", allClear: true });
+  const ownHostLabel = (hostRows ?? []).find((row) => row.hostId === ownHostId)?.name ?? "This Mac";
+  const needsYouLead = `${[
+    needsYouWorkers > 0 ? pluralize(needsYouWorkers, "agent") : null,
+    needsYouAssistants > 0 ? pluralize(needsYouAssistants, "assistant") : null,
+  ]
+    .filter(Boolean)
+    .join(" and ")} ${needsYou === 1 ? "needs" : "need"} you`;
   const summaryLine =
     fleet === null
       ? "Reading agents…"
-      : fleet.degraded && items.length === 0
+      : fleet.degraded && items.length === 0 && needsYou === 0
         ? "Can't tell who needs you right now"
-        : items.length === 0
+        : items.length === 0 && needsYou === 0
           ? scope === "project" && fleet.runs.length > 0
             ? "No agents in this project"
             : "No agents are running"
           : // What needs you leads; what is new follows. The list's own heading
             // counts the agents.
             [
-              needsYou > 0
-                ? `${pluralize(needsYou, "agent")} ${needsYou === 1 ? "needs" : "need"} you`
-                : // "Nothing" is a conclusion: qualified while some screens
-                  // can't be read at all, withheld while Daintree can't see its
-                  // agents, and held back while any run in the inbox has yet to
-                  // be read at all — readings owed, a retry waiting, however
-                  // long they take, and after a scope switch too.
-                  (canopy?.lastError ?? null) !== null
-                  ? "Nothing needs you that Canopy could read"
-                  : fleet.degraded
-                    ? "Can't tell who needs you right now"
-                    : owedOnOpen ||
-                        canopy?.waiting !== undefined ||
-                        (canopy?.busy === true && inbox.inbox.some((item) => item.card === null))
-                      ? "Checking who needs you…"
-                      : // A screen that can't be read yet (starting, hibernating)
-                        // has no reading at all: nothing is concluded about it.
-                        inbox.inbox.some((item) => item.card === null)
-                        ? "Not every agent could be read yet"
-                        : "Nothing needs you",
+              needsYou > 0 ? needsYouLead : nothingWaiting.words,
               unreadCount > 0 ? `${unreadCount.toLocaleString()} unread` : null,
             ]
               .filter(Boolean)
               .join(" · ");
 
+  // Each host in All hosts says for itself why it can't be read; the list says so too.
+  const hostIssues = useMemo((): HostIssue[] => {
+    if (!everyHost) return [];
+    return readings.flatMap((reading): HostIssue[] => {
+      const row = (hostRows ?? []).find((candidate) => candidate.hostId === reading.hostId);
+      const name = row?.name ?? "This Mac";
+      const remoteHost = reading.hostId !== ownHostId;
+      const linkStatus = remoteHost && row?.isLocal === false ? row.connection?.status : undefined;
+      const retry = () => remotes.retry(reading.hostId);
+      // Its agents were read before the link dropped: they are kept, and old,
+      // whatever the reads since have said.
+      if (reading.fleet !== null && linkStatus !== undefined && linkStatus !== "connected") {
+        return [
+          {
+            hostId: reading.hostId,
+            text: `${name} isn't connected. Its agents are as last seen`,
+            action: "Retry",
+            act: retry,
+            trouble: true,
+          },
+        ];
+      }
+      const linkFailed = hostLinkFailed(linkStatus);
+      if (remoteHost && (reading.error !== null || (linkFailed && reading.fleet === null))) {
+        if (linkFailed || !hostDialling(linkStatus, reading.error)) {
+          return [
+            {
+              hostId: reading.hostId,
+              text: `Can't reach ${name}`,
+              action: "Retry",
+              act: retry,
+              trouble: true,
+            },
+          ];
+        }
+        return [
+          {
+            hostId: reading.hostId,
+            text: `Connecting to ${name}…`,
+            action: null,
+            act: null,
+            trouble: false,
+            connecting: true,
+          },
+        ];
+      }
+      // A host not heard in full says nothing yet: no conclusion is drawn about it.
+      if (reading.canopy === null || reading.fleet === null) {
+        return [
+          {
+            hostId: reading.hostId,
+            text: remoteHost ? `Connecting to ${name}…` : `Reading ${name}…`,
+            action: null,
+            act: null,
+            trouble: false,
+            connecting: true,
+          },
+        ];
+      }
+      if (readsWithHostedService(reading.canopy)) {
+        return [
+          {
+            hostId: reading.hostId,
+            text: `Update Daintree on ${name} to read its agents`,
+            action: "Show",
+            act: () => useCanopyStore.getState().setHostId(reading.hostId),
+            trouble: true,
+          },
+        ];
+      }
+      if (!reading.canopy.activated) {
+        return [
+          {
+            hostId: reading.hostId,
+            text: `Canopy is off on ${name}`,
+            action: "Set up",
+            act: () => useCanopyStore.getState().setHostId(reading.hostId),
+            trouble: false,
+            settled: true,
+          },
+        ];
+      }
+      // Its own model, downloaded on that host: until it is there, nothing there is read.
+      const model = reading.canopy.model;
+      if (model && model.status !== "ready") {
+        const where = remoteHost ? ` on ${name}` : "";
+        const hostApi = remoteHost ? remoteCanopyApi(reading.hostId) : ownCanopyApi;
+        return [
+          model.status === "failed"
+            ? {
+                hostId: reading.hostId,
+                text: `Couldn't download Canopy's model${where}`,
+                action: "Retry",
+                act: () => void hostApi.retryModel().catch(() => {}),
+                trouble: true,
+              }
+            : {
+                hostId: reading.hostId,
+                text:
+                  model.status === "downloading"
+                    ? `Downloading Canopy's model${where}… ${formatModelBytes(model.received)} of ${formatModelBytes(model.total)}`
+                    : `Waiting for Canopy's model${where}…`,
+                action: null,
+                act: null,
+                trouble: false,
+              },
+        ];
+      }
+      if (reading.canopy.lastError) {
+        return [
+          {
+            hostId: reading.hostId,
+            text: `Canopy couldn't read every agent on ${name}`,
+            action: null,
+            act: null,
+            trouble: true,
+          },
+        ];
+      }
+      return [];
+    });
+  }, [everyHost, readings, hostRows, ownHostId, remotes]);
+  const hostTroubles = hostIssues.filter((issue) => issue.trouble);
+  const hostProgress = hostIssues.filter((issue) => !issue.trouble);
+  // Connecting is the same on every open, so it is silent: the header and the band
+  // still hold back the all-clear, and a spinner by the picker says so past the gate.
+  const hostProgressShown = hostProgress.filter((issue) => !issue.connecting);
+  // A closed panel holds no readings, so it would be connecting for as long as it stays shut.
+  const connectingSomewhere = isOpen && hostIssues.some((issue) => issue.connecting);
+  const showConnecting = useDohertyGate(connectingSomewhere) && connectingSomewhere;
+  const retryingSomewhere =
+    everyHost &&
+    (hostProgress.some((issue) => !issue.settled) ||
+      readings.some((reading) => reading.canopy?.activated === true && reading.canopy.waiting));
+  // The header's count moves to the first run in the band, first lifting whatever
+  // keeps one of the band's runs out of the list.
+  const countedWorkers = projection.needsYou.filter(isWorkerEntry).map((entry) => entry.item);
+  const showNeedsYou = () => {
+    const first = countedWorkers[0];
+    // Workers lead the band; with none asking, the first assistant that is.
+    const askingAssistant = assistantItems.find((item) => item.ask !== null);
+    if (!first && !askingAssistant) return;
+    const listedIds = new Set(listed.map((item) => item.runId));
+    const shownIds = new Set(shownAssistants.map((item) => item.id));
+    const hiddenWorker = countedWorkers.some((item) => !listedIds.has(item.runId));
+    const hiddenAssistant = assistantItems.some(
+      (item) => item.ask !== null && !shownIds.has(item.id)
+    );
+    if (hiddenWorker || hiddenAssistant) {
+      if (unreadOnly) setUnreadOnly(false);
+      if (query !== "") setQuery("");
+      if (workOf !== null) showWorkOf(null);
+    }
+    // Whatever the role filter hides of what the header counts comes back.
+    if ((first && !workersShown) || (askingAssistant && !assistantsShown)) setRoleFilter("all");
+    if (first) {
+      selectNow(first.runId);
+      // The row may only mount once the filters are lifted: scroll to it then too.
+      requestAnimationFrame(() => selectNow(first.runId));
+    } else {
+      const id = askingAssistant!.id;
+      selectAssistant(id);
+      requestAnimationFrame(() => selectAssistant(id));
+    }
+    searchRef.current?.focus({ preventScroll: true });
+  };
+  // What the empty band says: the header's own caution about hosts and readings,
+  // or that a filter is hiding what the header counts. Only the all-clear has
+  // words of its own, so the band settles the header's conclusion rather than
+  // repeating it; a qualified line is the header's own, word for word.
+  const bandEmptyWords =
+    needsYou > 0
+      ? `${needsYouLead}, but a filter hides ${needsYou === 1 ? "it" : "them"}`
+      : (hostSummary ??
+        (fleet !== null && hostTroubles.length > 0
+          ? "Not every host could be read"
+          : fleet !== null && retryingSomewhere
+            ? "Checking who needs you…"
+            : nothingWaiting.allClear
+              ? "No action needed"
+              : nothingWaiting.words));
+  const headerText =
+    hostSummary ??
+    (needsYou === 0 && fleet !== null && hostTroubles.length > 0
+      ? "Not every host could be read"
+      : needsYou === 0 && fleet !== null && retryingSomewhere
+        ? "Checking who needs you…"
+        : summaryLine);
+  // The count is a control when it leads the line: it takes the user to the band.
+  const headerWords =
+    needsYou > 0 && headerText === summaryLine ? (
+      <>
+        <button
+          type="button"
+          data-testid="canopy-needs-you-count"
+          onClick={showNeedsYou}
+          className="rounded-sm text-text-primary outline-hidden hover:underline focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-selection-outline"
+        >
+          {needsYouLead}
+        </button>
+        {headerText.slice(needsYouLead.length)}
+      </>
+    ) : (
+      headerText
+    );
+
+  // With assistants to list, or only assistants asked for, the list shows
+  // even when no worker runs.
+  // The relationship filter keeps the list, and its banner, up even with nothing in it.
+  const listsAssistants =
+    (assistantsShown && (assistantItems.length > 0 || !workersShown)) || workOf !== null;
+  // A trash, or the undo line of one just made, keeps the list up with no
+  // agent left running: the way back stays where the user left it.
+  const trashListed = trashEntries.length > 0;
+  const listsTrash = trashListed || undoLine !== null;
+  // One clause each, as the empty line wants; with none running anywhere, it
+  // names the way to start one.
+  const assistantsEmpty: string | null = !assistantsReadable
+    ? `Assistants on ${hostName} can't be listed from this window yet`
+    : workOf !== null
+      ? directory !== null && isFullAgentDirectory(directory)
+        ? "This assistant isn't running any more"
+        : null
+      : directory === null
+        ? null
+        : searching
+          ? `No assistant matches “${appliedQuery.trim()}”`
+          : !isFullAgentDirectory(directory)
+            ? "Daintree couldn't list every assistant just now"
+            : scope === "project"
+              ? "No assistant is running in this project"
+              : "Start an assistant from the Assistant panel";
+  // Shown in place of rows only when none is in the band either.
+  const assistantsEmptyShown =
+    listedAssistants.length === 0 && bandAssistants.length === 0 && assistantsEmpty !== null;
+  // All hosts lists this machine's assistants alone: said once, with the list or its empty line.
+  const ownAssistantsOnly = `Only ${ownHostLabel}'s assistants are listed`;
+  const inboxEmpty: { words: string; note?: string } = searching
+    ? {
+        words:
+          shownInbox.inbox.length > 0
+            ? `Nothing unread matches “${appliedQuery.trim()}”`
+            : `Nothing matches “${appliedQuery.trim()}”`,
+      }
+    : workOf !== null
+      ? {
+          words: workPartial
+            ? "None found on the hosts that could be read"
+            : "No worker in the inbox was started by or handed to this assistant",
+        }
+      : items.length === 0
+        ? {
+            words: "No agents are running",
+            ...(trashListed ? { note: "Restore one from the Trash below" } : {}),
+          }
+        : unreadOnly && inbox.inbox.length > 0
+          ? {
+              words: "Nothing unread",
+              note: "Each agent shows here again when it does something new",
+            }
+          : {
+              words: "Every agent is archived",
+              note: "Each comes back when it has something new to say",
+            };
+
   const headerControls = (
     <>
+      <SegmentedRadioGroup<CanopyRoleFilter>
+        aria-label="Roles to show"
+        density="compact"
+        className="mr-3"
+        value={roleFilter}
+        onChange={setRoleFilter}
+        testId="canopy-role-filter"
+        options={CANOPY_ROLE_FILTERS.map((filter) =>
+          filter.id === "assistants" && assistantAsks > 0
+            ? {
+                value: filter.id,
+                label: filter.label,
+                ariaLabel: `${filter.label}, ${assistantAsks} asking for you`,
+                trailing: <span className="tabular-nums">{assistantAsks}</span>,
+              }
+            : { value: filter.id, label: filter.label }
+        )}
+      />
       {!otherHost && (
         <SegmentedRadioGroup<"all" | "project">
           aria-label="Agents to show"
@@ -1983,22 +1460,25 @@ function CanopyInbox({
         />
       )}
       <CanopyShortcuts />
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            ref={refreshRef}
-            variant="ghost"
-            size="icon-xs"
-            aria-label="Refresh"
-            aria-busy={refreshes > 0 || undefined}
-            disabled={canopy === null}
-            onClick={refresh}
-          >
-            <SpinningIcon icon={RefreshCw} active={refreshes > 0} />
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">Refresh</TooltipContent>
-      </Tooltip>
+      {/* Nothing is read while the reader is off, so there is nothing to refresh. */}
+      {!readerOff && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              ref={refreshRef}
+              variant="ghost"
+              size="icon-xs"
+              aria-label="Refresh"
+              aria-busy={refreshes > 0 || undefined}
+              disabled={canopy === null}
+              onClick={refresh}
+            >
+              <SpinningIcon icon={RefreshCw} active={refreshes > 0} />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Refresh</TooltipContent>
+        </Tooltip>
+      )}
       <AppDialog.CloseButton />
     </>
   );
@@ -2012,8 +1492,8 @@ function CanopyInbox({
       // The panel lands on its first run itself, two frames in; the dialog's own
       // first-control focus would race it. With no rows to land on, the first
       // control takes focus instead of leaving it on whatever opened the panel.
-      initialFocus={items.length > 0 && !hostOffer ? "none" : "first"}
-      restoreFocusTo={() => focusAfterCloseRef.current ?? restoreOpener()}
+      initialFocus={items.length > 0 && !hostHeld ? "none" : "first"}
+      restoreFocusTo={() => focusAfterClose() ?? restoreOpener()}
       preferRestoreFocusTo
       backdrop={backdrop}
       data-testid="canopy-dialog"
@@ -2025,11 +1505,28 @@ function CanopyInbox({
           <>
             <span className="flex min-w-0 flex-1 basis-0 items-center">
               <AppDialog.Title icon={<Telescope />}>{CANOPY_TITLE}</AppDialog.Title>
-              <span className="mx-3 min-w-0 flex-1 truncate text-sm text-text-secondary">
-                {hostSummary ?? summaryLine}
+              <span
+                className="mx-3 min-w-0 flex-1 truncate text-sm text-text-secondary"
+                data-testid="canopy-summary"
+              >
+                {headerWords}
               </span>
             </span>
-            {hostPicker}
+            <span className="relative flex min-w-0 items-center">
+              {hostPicker}
+              {showConnecting && (
+                // Out of the picker's flow, so it stays where it was, and inside the 12px the
+                // header's right part leaves beside it.
+                <span
+                  role="status"
+                  aria-label="Connecting to hosts"
+                  data-testid="canopy-hosts-connecting"
+                  className="absolute top-1/2 left-full -translate-y-1/2 text-text-secondary"
+                >
+                  <Spinner size="xs" />
+                </span>
+              )}
+            </span>
             <span className="ml-3 flex min-w-0 flex-1 basis-0 items-center justify-end">
               {headerControls}
             </span>
@@ -2037,8 +1534,11 @@ function CanopyInbox({
         ) : (
           <>
             <AppDialog.Title icon={<Telescope />}>{CANOPY_TITLE}</AppDialog.Title>
-            <span className="mr-3 ml-3 min-w-0 flex-1 truncate text-sm text-text-secondary">
-              {hostSummary ?? summaryLine}
+            <span
+              className="mr-3 ml-3 min-w-0 flex-1 truncate text-sm text-text-secondary"
+              data-testid="canopy-summary"
+            >
+              {headerWords}
             </span>
             {headerControls}
           </>
@@ -2051,7 +1551,6 @@ function CanopyInbox({
         onKeyDownCapture={onAgentStepKeyDownCapture}
         onKeyDown={onNavigationKeyDown}
       >
-        {canopy?.tier === "free" && <BetaNotice />}
         {hostTrouble && (
           <div className="flex shrink-0 flex-col gap-2 border-b border-border-default p-3">
             <Callout
@@ -2075,13 +1574,45 @@ function CanopyInbox({
             </Callout>
           </div>
         )}
+        {everyHost && (hostTroubles.length > 0 || hostProgressShown.length > 0) && (
+          <div
+            data-testid="canopy-host-issues"
+            className="flex shrink-0 flex-col gap-2 border-b border-border-default p-3"
+          >
+            {hostTroubles.length > 0 && (
+              <Callout severity="warning" size="compact" title="Not every host is being read">
+                <HostIssueList issues={hostTroubles} />
+              </Callout>
+            )}
+            {/* Reads still on their way, and a reader the user left off: noted, never a warning. */}
+            {hostProgressShown.length > 0 && (
+              <Callout severity="neutral" size="compact">
+                <HostIssueList issues={hostProgressShown} />
+              </Callout>
+            )}
+          </div>
+        )}
         {otherHost && fleet === null && !hostTrouble && connecting && (
           <p className="flex flex-1 items-center justify-center text-sm text-text-secondary">
             Connecting to {hostName}…
           </p>
         )}
-        {hostOffer && (
+        {hostOutdated && (
+          <CanopyHostOutdated
+            hostName={hostName}
+            {...(canopy?.mode === "on"
+              ? {
+                  onTurnOff: async () => {
+                    await api.setMode("unset");
+                    if (useCanopyStore.getState().hostId === hostId) remote.retry();
+                  },
+                }
+              : {})}
+          />
+        )}
+        {hostOfferShown && (
           <CanopyHostOffer
+            onBack={() => setHostOfferOpen(false)}
             hostName={hostName}
             onTurnOn={async () => {
               // Hidden there, it can't be turned on until it is shown again:
@@ -2093,15 +1624,15 @@ function CanopyInbox({
             }}
           />
         )}
-        {!hostOffer && (fleet?.degraded === true || canopy?.lastError) && (
+        {!hostHeld && (fleet?.degraded === true || canopy?.lastError) && (
           <div className="flex shrink-0 flex-col gap-2 border-b border-border-default p-3">
             {/* Daintree can't see its agents right now: the rows are the last
                 it saw, and nothing is read until it can again. */}
             {fleet?.degraded === true && (
               <Callout severity="warning" size="compact" title="Agent status is unavailable">
                 {fleet.lastSuccessfulAt !== null
-                  ? `These are the agents Daintree saw ${agoPhrase(fleet.lastSuccessfulAt, nowMs)}. Canopy reads them again once it can.`
-                  : "Daintree hasn't been able to list its agents yet. Canopy reads them once it can."}
+                  ? `These are the agents Daintree saw ${agoPhrase(fleet.lastSuccessfulAt, nowMs)}.${readerOff ? "" : " Canopy reads them again once it can."}`
+                  : `Daintree hasn't been able to list its agents yet.${readerOff ? "" : " Canopy reads them once it can."}`}
               </Callout>
             )}
             {canopy?.lastError && (
@@ -2121,7 +1652,7 @@ function CanopyInbox({
             )}
           </div>
         )}
-        {!hostOffer && items.length > 0 && (
+        {!hostHeld && (items.length > 0 || listsAssistants || listsTrash) && (
           // An inbox: what needs you down a sidebar, most urgent first, the rest
           // folded away beneath it, and the selected agent's own terminal beside
           // it, drawn as its pane.
@@ -2142,7 +1673,8 @@ function CanopyInbox({
                   aria-expanded={visible.length > 0}
                   aria-controls={
                     [
-                      listed.length > 0 ? "canopy-inbox-list" : null,
+                      listed.length > 0 || bandAssistants.length > 0 ? "canopy-inbox-list" : null,
+                      listedAssistants.length > 0 ? "canopy-assistants" : null,
                       archivedShown && shownInbox.archived.length > 0 ? "canopy-archived" : null,
                     ]
                       .filter((id) => id !== null)
@@ -2150,116 +1682,284 @@ function CanopyInbox({
                   }
                   aria-autocomplete="list"
                   aria-activedescendant={
-                    focusedItem && visible.includes(focusedItem)
-                      ? canopyCardDomId(focusedItem.runId)
-                      : undefined
+                    selectedAssistant !== null
+                      ? canopyAssistantDomId(selectedAssistant.id)
+                      : focusedItem && visible.includes(focusedItem)
+                        ? canopyCardDomId(focusedItem.runId)
+                        : undefined
                   }
                   autoComplete="off"
                   spellCheck={false}
                 />
               </div>
               <div
+                ref={scrollerRef}
                 className="canopy-inbox flex min-h-0 flex-1 flex-col overflow-y-auto select-none"
                 data-canopy-list=""
                 // Its rows have menus of their own: the app's Shift+F10 stands down here.
                 data-row-menu=""
                 // Still placing runs as the open's readings land.
                 data-revealing={revealed ? undefined : "true"}
+                // A band heading pins under the Inbox bar: rows scrolled to clear both.
+                data-band-headings={workersShown && bandShown ? "" : undefined}
               >
-                <SectionBar
-                  id="canopy-inbox-label"
-                  label="Inbox"
-                  count={listed.length}
-                  trailing={
-                    // The last button's padding hangs into the bar's own, so its
-                    // words end on the field's right edge and the rows' meters.
-                    <span className="-mr-2.5 flex items-center gap-1">
-                      <Button
-                        variant="ghost"
-                        size="xs"
-                        pressed={unreadOnly}
-                        onClick={() => setUnreadOnly(!unreadOnly)}
-                      >
-                        Unread
-                        {shownUnreadCount > 0 && (
-                          <span className="tabular-nums">{shownUnreadCount}</span>
-                        )}
-                      </Button>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
+                {workOf !== null && (
+                  <div
+                    className="flex shrink-0 items-center gap-2 px-3 py-2 text-xs"
+                    data-testid="canopy-work-of"
+                  >
+                    <span className="min-w-0 flex-1 text-text-primary">
+                      Showing the work of {workOf.name}
+                      {workPartial && (
+                        <span className="text-text-secondary">
+                          {" "}
+                          · Some hosts couldn't be read, so this may be incomplete
+                        </span>
+                      )}
+                    </span>
+                    <Button
+                      variant="outline"
+                      size="xs"
+                      onClick={(event) => {
+                        // The button leaves with the banner: the keyboard stays in the
+                        // panel, on the search unless the whole list leaves with it.
+                        const listStays =
+                          items.length > 0 ||
+                          (assistantsShown && (assistantItems.length > 0 || !workersShown));
+                        (listStays ? searchRef : refreshRef).current?.focus({
+                          preventScroll: true,
+                          focusVisible: event.detail === 0,
+                        });
+                        showWorkOf(null);
+                      }}
+                    >
+                      Show all
+                    </Button>
+                  </div>
+                )}
+                {workersShown && (
+                  <>
+                    <SectionBar
+                      id="canopy-inbox-label"
+                      label="Inbox"
+                      count={listed.length}
+                      trailing={
+                        // The last button's padding hangs into the bar's own, so its
+                        // words end on the field's right edge and the rows' meters.
+                        <span className="-mr-2.5 flex items-center gap-1">
+                          {sortShown && (
+                            <Button
+                              variant="ghost"
+                              size="xs"
+                              onFocus={() => {
+                                sortFocusedRef.current = true;
+                              }}
+                              onBlur={() => {
+                                sortFocusedRef.current = false;
+                              }}
+                              onClick={requestRank}
+                            >
+                              Sort now
+                            </Button>
+                          )}
                           <Button
                             variant="ghost"
                             size="xs"
-                            disabled={!listedUnread}
-                            onClick={markAllRead}
+                            pressed={unreadOnly}
+                            onClick={() => setUnreadOnly(!unreadOnly)}
                           >
-                            Mark all read
+                            Unread
+                            {shownUnreadCount > 0 && (
+                              <span className="tabular-nums">{shownUnreadCount}</span>
+                            )}
                           </Button>
-                        </TooltipTrigger>
-                        <TooltipContent side="bottom">
-                          <KbdChord shortcut="Alt+U" />
-                        </TooltipContent>
-                      </Tooltip>
-                    </span>
-                  }
-                />
-                {listed.length > 0 ? (
-                  <div
-                    ref={listRef}
-                    id="canopy-inbox-list"
-                    role="listbox"
-                    aria-labelledby="canopy-inbox-label"
-                    // A mouse or pen resting over a row; a touch has no hover to hold for.
-                    onPointerEnter={(event) => {
-                      if (event.pointerType !== "touch") setPointerInList(true);
-                    }}
-                    onPointerLeave={() => {
-                      // Leaving releases the hold, it doesn't move the list:
-                      // the idle wait starts from here.
-                      lastInteractionRef.current = Date.now();
-                      setPointerInList(false);
-                    }}
-                  >
-                    {listed.map((item, index) => {
-                      const replied = repliedAt(item);
-                      return (
-                        <CanopyRowMenu key={item.runId} item={item} {...rowMenu}>
-                          <CanopyRow
-                            item={item}
-                            domId={canopyCardDomId(item.runId)}
-                            isSelected={focusedItem?.runId === item.runId}
-                            // Words are coming whenever screens are read, so the slot
-                            // for them is held from the start.
-                            reserveDetail
-                            tabbable={tabStop(listed, item, index)}
-                            unread={item.unread}
-                            nowMs={nowMs}
-                            asideLabel={
-                              replied !== null ? `Replied ${agoPhrase(replied, nowMs)}` : null
-                            }
-                            onSelect={() => selectRow(item.runId)}
-                            onClick={() => readNow(item)}
-                            onOpen={(event) => handlers.onOpen(item, isNewWindowClick(event))}
-                            onArchive={() => handlers.onArchive(item)}
-                          />
-                        </CanopyRowMenu>
-                      );
-                    })}
-                  </div>
-                ) : searching &&
-                  shownInbox.inbox.length === 0 &&
-                  shownInbox.archived.length > 0 ? null : (
-                  // A search whose only matches are archived lets their bar below say so.
-                  <p className="px-3 pb-3 text-xs text-text-secondary">
-                    {searching
-                      ? shownInbox.inbox.length > 0
-                        ? `Nothing unread matches “${appliedQuery.trim()}”.`
-                        : `Nothing matches “${appliedQuery.trim()}”.`
-                      : unreadOnly && inbox.inbox.length > 0
-                        ? "Nothing unread. Each agent shows here again when it does something new."
-                        : "Every agent is archived. Each comes back when it has something new to say."}
-                  </p>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="xs"
+                                disabled={!listedUnread}
+                                onClick={markAllRead}
+                              >
+                                Mark all read
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent side="bottom">
+                              <KbdChord shortcut="Alt+U" />
+                            </TooltipContent>
+                          </Tooltip>
+                        </span>
+                      }
+                    />
+                    {/* An empty band says so above the listbox, not inside it: an option
+                        group holds options, and this one would hold only words. Its name
+                        is for the screen reader; on screen the words stand alone, rather
+                        than a heading stacked over a line about nothing. */}
+                    {!bandShown && listed.length > 0 && (
+                      <div role="group" aria-labelledby="canopy-needs-you-label">
+                        <span
+                          id="canopy-needs-you-label"
+                          className="sr-only"
+                          data-testid="canopy-needs-you"
+                        >
+                          Needs you
+                        </span>
+                        <CanopyEmptyLine>{bandEmptyWords}</CanopyEmptyLine>
+                      </div>
+                    )}
+                    {listed.length > 0 || bandAssistants.length > 0 ? (
+                      <div
+                        ref={listRef}
+                        id="canopy-inbox-list"
+                        role="listbox"
+                        aria-labelledby="canopy-inbox-label"
+                        onPointerEnter={(event) => enterList(event.pointerType)}
+                        onPointerLeave={leaveList}
+                      >
+                        {[
+                          {
+                            id: "canopy-needs-you",
+                            label: "Needs you",
+                            from: 0,
+                            to: bandSize,
+                            assistants: bandAssistants,
+                          },
+                          {
+                            id: "canopy-everything-else",
+                            label: "Everything else",
+                            from: bandSize,
+                            to: listed.length,
+                            assistants: [],
+                          },
+                        ]
+                          // An empty band is already said above the listbox, under the same id.
+                          .filter(
+                            (group) =>
+                              group.from < group.to ||
+                              group.assistants.length > 0 ||
+                              group.id !== "canopy-needs-you"
+                          )
+                          .map((group) => (
+                            <div
+                              key={group.id}
+                              role="group"
+                              aria-labelledby={`${group.id}-label`}
+                              hidden={group.from === group.to && group.assistants.length === 0}
+                            >
+                              {/* Pinned under the Inbox bar while its own rows scroll, so a
+                                scrolled list still says which band it is in; the next
+                                group's heading takes its place. With the band empty,
+                                everything else is the whole list: its name is only
+                                the screen reader's. */}
+                              <div
+                                id={`${group.id}-label`}
+                                className={
+                                  bandShown
+                                    ? "canopy-inbox-band-heading flex h-7 items-center px-3 text-xs font-medium text-text-secondary"
+                                    : "sr-only"
+                                }
+                                data-testid={group.id}
+                              >
+                                {group.label}
+                              </div>
+                              {listed.slice(group.from, group.to).map((item, offset) => {
+                                const index = group.from + offset;
+                                const replied = repliedAt(item);
+                                return (
+                                  <CanopyRowMenu key={item.runId} item={item} {...rowMenu}>
+                                    <CanopyRow
+                                      item={item}
+                                      domId={canopyCardDomId(item.runId)}
+                                      isSelected={focusedItem?.runId === item.runId}
+                                      tabbable={!assistantHoldsStop && tabStop(listed, item, index)}
+                                      unread={item.unread}
+                                      nowMs={nowMs}
+                                      asideLabel={
+                                        replied !== null
+                                          ? `Replied ${agoPhrase(replied, nowMs)}`
+                                          : null
+                                      }
+                                      workLabel={workLabelOf(item)}
+                                      dictating={dictatingRunId === item.runId}
+                                      onSelect={() => selectRow(item.runId)}
+                                      onClick={() => readNow(item)}
+                                      onOpen={(event) =>
+                                        handlers.onOpen(item, isNewWindowClick(event))
+                                      }
+                                      onArchive={() => handlers.onArchive(item)}
+                                    />
+                                  </CanopyRowMenu>
+                                );
+                              })}
+                              {group.assistants.map((item, index) => (
+                                <CanopyAssistantRow
+                                  key={item.id}
+                                  item={item}
+                                  isSelected={selectedAssistant?.id === item.id}
+                                  tabbable={
+                                    assistantHoldsStop
+                                      ? selectedAssistant?.id === item.id
+                                      : listed.length === 0 && index === 0
+                                  }
+                                  onSelect={() => selectAssistant(item.id)}
+                                  onOpen={() => openAssistant(item)}
+                                  onKeyDown={(event) => onAssistantKeyDown(event, item)}
+                                />
+                              ))}
+                            </div>
+                          ))}
+                      </div>
+                    ) : (searching || workOf !== null) &&
+                      shownInbox.inbox.length === 0 &&
+                      shownInbox.archived.length > 0 ? null : (
+                      // A search whose only matches are archived lets their bar below say so.
+                      <CanopyEmptyLine note={inboxEmpty.note}>{inboxEmpty.words}</CanopyEmptyLine>
+                    )}
+                  </>
                 )}
+                {assistantsShown &&
+                  (listedAssistants.length > 0 || bandAssistants.length === 0 || everyHost) && (
+                    <>
+                      <SectionBar
+                        id="canopy-assistants-label"
+                        label="Assistants"
+                        count={listedAssistants.length > 0 ? listedAssistants.length : undefined}
+                        countNoun="assistant"
+                      />
+                      {everyHost && !assistantsEmptyShown && (
+                        <p className="px-3 pb-2 text-xs text-text-secondary">{ownAssistantsOnly}</p>
+                      )}
+                      {listedAssistants.length > 0 ? (
+                        <div
+                          id="canopy-assistants"
+                          role="listbox"
+                          aria-labelledby="canopy-assistants-label"
+                        >
+                          {listedAssistants.map((item, index) => (
+                            <CanopyAssistantRow
+                              key={item.id}
+                              item={item}
+                              isSelected={selectedAssistant?.id === item.id}
+                              tabbable={
+                                selectedAssistant !== null
+                                  ? selectedAssistant.id === item.id
+                                  : index === 0
+                              }
+                              onSelect={() => selectAssistant(item.id)}
+                              onOpen={() => openAssistant(item)}
+                              onKeyDown={(event) => onAssistantKeyDown(event, item)}
+                            />
+                          ))}
+                        </div>
+                      ) : (
+                        assistantsEmptyShown && (
+                          <CanopyEmptyLine note={everyHost ? ownAssistantsOnly : undefined}>
+                            {assistantsEmpty}
+                          </CanopyEmptyLine>
+                        )
+                      )}
+                    </>
+                  )}
                 {shownInbox.archived.length > 0 && (
                   <>
                     <SectionBar
@@ -2290,7 +1990,6 @@ function CanopyInbox({
                               item={item}
                               domId={canopyCardDomId(item.runId)}
                               isSelected={focusedItem?.runId === item.runId}
-                              reserveDetail={false}
                               tabbable={tabStop(shownInbox.archived, item, index)}
                               unread={false}
                               compact
@@ -2300,6 +1999,8 @@ function CanopyInbox({
                                   ? `Archived ${agoPhrase(item.disposition.at, nowMs)}`
                                   : null
                               }
+                              workLabel={workLabelOf(item)}
+                              dictating={dictatingRunId === item.runId}
                               onSelect={() => selectRow(item.runId)}
                               onClick={() => readNow(item)}
                               onOpen={(event) => handlers.onOpen(item, isNewWindowClick(event))}
@@ -2311,102 +2012,201 @@ function CanopyInbox({
                     )}
                   </>
                 )}
+                <CanopyTrashSection
+                  ref={trashRef}
+                  entries={trashEntries}
+                  workspaces={workspaces}
+                  terms={terms}
+                  api={api}
+                  scopeKey={hostId ?? ""}
+                  onLeaveUp={leaveTrashUp}
+                  onSearch={() => {
+                    searchRef.current?.focus();
+                    searchRef.current?.select();
+                  }}
+                  onRestoring={onRestoring}
+                  onRestoreElsewhere={onRestoreElsewhere}
+                  acted={trashActed}
+                />
               </div>
-              <CanopyStatusBar link={canopy?.link} waiting={canopy?.waiting} />
+              {undoLine && (
+                <div
+                  data-canopy-undo-line=""
+                  className="flex h-8 shrink-0 items-center gap-2 border-t border-divider px-3 text-xs text-text-secondary"
+                >
+                  <span role="status" className="min-w-0 flex-1 truncate">
+                    {undoLine.message}
+                  </span>
+                  <KbdChord shortcut="Z" />
+                  <Button
+                    variant="link"
+                    size="xs"
+                    className="h-auto shrink-0 p-0"
+                    onClick={undoLine.undo}
+                  >
+                    Undo
+                  </Button>
+                </div>
+              )}
+              <CanopyStatusBar
+                host={otherHost ? hostName : null}
+                onRetryModel={() => void api.retryModel().catch(() => {})}
+                reader={canopy?.reader}
+                model={canopy?.model}
+                waiting={canopy?.waiting}
+                offer={offerReading}
+              />
             </div>
             {/* Inset on every side: the top one puts the place line level with the
                 search beside it, and the card's top with the Inbox bar's. */}
             <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-surface-canvas p-2">
-              {focusedItem && (
-                <CanopyPlace
-                  item={focusedItem}
-                  id={`canopy-place-${focusedItem.runId}`}
-                  hostId={hostId ?? ""}
-                  runBranch={api.runBranch}
-                />
-              )}
-              {focusedItem ? (
-                <CanopyCard
-                  key={`${hostId ?? ""}:${focusedItem.runId}`}
-                  ref={detailRef}
-                  item={focusedItem}
-                  domId={`canopy-detail-${focusedItem.runId}`}
-                  describedBy={`canopy-place-${focusedItem.runId}`}
-                  initialFocus={paneFocus?.runId === focusedItem.runId ? paneFocus.focus : null}
-                  armTrash={trashArm?.runId === focusedItem.runId ? trashArm.request : undefined}
-                  renameRequest={
-                    renameAsk?.runId === focusedItem.runId ? renameAsk.request : undefined
+              {selectedAssistant !== null ? (
+                <CanopyAssistantPane
+                  key={selectedAssistant.id}
+                  item={selectedAssistant}
+                  refusal={
+                    assistantRefusal?.id === selectedAssistant.id ? assistantRefusal.text : null
                   }
-                  onInitialFocusSettled={() =>
-                    setPaneFocus((current) =>
-                      current?.runId === focusedItem.runId ? null : current
-                    )
-                  }
-                  otherHostId={hostId ?? undefined}
-                  terminalApi={terminalApi}
-                  reconnecting={otherHost && linkStatus !== undefined && linkStatus !== "connected"}
-                  {...handlers}
+                  onOpen={() => openAssistant(selectedAssistant)}
+                  showingWork={workOf?.assistantId === selectedAssistant.id}
+                  onShowWork={() => showWork(selectedAssistant)}
                 />
               ) : (
-                <div className="flex flex-1 flex-col items-center justify-center gap-1 text-center">
-                  {onlyReadMatch ? (
-                    <>
-                      <p className="text-sm text-text-primary">No unread agent matches</p>
-                      <p className="text-xs text-text-secondary">
-                        Turn off Unread to see every agent that matches.
-                      </p>
-                    </>
-                  ) : searching ? (
-                    <>
-                      <p className="text-sm text-text-primary">No agent matches</p>
-                      <p className="text-xs text-text-secondary">
-                        Try other words, or press Esc to clear the search.
-                      </p>
-                    </>
-                  ) : unreadOnly && inbox.inbox.length > 0 ? (
-                    <>
-                      <p className="text-sm text-text-primary">Nothing unread</p>
-                      <p className="text-xs text-text-secondary">
-                        Turn off Unread to see every agent's terminal here.
-                      </p>
-                    </>
-                  ) : (
-                    <>
-                      <p className="text-sm text-text-primary">Nothing in the inbox</p>
-                      <p className="text-xs text-text-secondary">
-                        Open an archived agent to see its terminal here.
-                      </p>
-                    </>
+                <>
+                  {focusedItem && (
+                    <CanopyPlace
+                      item={focusedItem}
+                      id={`canopy-place-${focusedItem.runId}`}
+                      hostId={everyHost ? (focusedHostId ?? "") : (hostId ?? "")}
+                      runBranch={api.runBranch}
+                    />
                   )}
-                </div>
+                  {focusedItem ? (
+                    <CanopyCard
+                      key={`${hostId ?? ""}:${focusedItem.runId}`}
+                      ref={detailRef}
+                      item={focusedItem}
+                      domId={`canopy-detail-${focusedItem.runId}`}
+                      describedBy={`canopy-place-${focusedItem.runId}`}
+                      initialFocus={paneFocus?.runId === focusedItem.runId ? paneFocus.focus : null}
+                      armTrash={
+                        trashArm?.runId === focusedItem.runId ? trashArm.request : undefined
+                      }
+                      renameRequest={
+                        renameAsk?.runId === focusedItem.runId ? renameAsk.request : undefined
+                      }
+                      onInitialFocusSettled={() => settlePaneFocus(focusedItem.runId)}
+                      dictationRequest={
+                        replyFocus?.runId === focusedItem.runId ? replyFocus.id : undefined
+                      }
+                      onDictationSettled={settleReplyFocus}
+                      otherHostId={(everyHost ? focusedHostId : hostId) ?? undefined}
+                      hostScope={hostId}
+                      aside={setAside}
+                      terminalApi={terminalApi}
+                      workLabel={workLabelOf(focusedItem)}
+                      moveOnTo={moveOnTo}
+                      reconnecting={
+                        everyHost
+                          ? focusedLinkStatus !== undefined && focusedLinkStatus !== "connected"
+                          : otherHost && linkStatus !== undefined && linkStatus !== "connected"
+                      }
+                      {...handlers}
+                    />
+                  ) : (
+                    <div className="flex flex-1 flex-col items-center justify-center gap-1 text-center">
+                      {!workersShown ? (
+                        <>
+                          <p className="text-sm text-text-primary">No assistant to show</p>
+                          <p className="text-xs text-text-secondary">
+                            Start one from the Assistant panel and it shows up here.
+                          </p>
+                        </>
+                      ) : onlyReadMatch ? (
+                        <>
+                          <p className="text-sm text-text-primary">No unread agent matches</p>
+                          <p className="text-xs text-text-secondary">
+                            Turn off Unread to see every agent that matches.
+                          </p>
+                        </>
+                      ) : searching ? (
+                        <>
+                          <p className="text-sm text-text-primary">No agent matches</p>
+                          <p className="text-xs text-text-secondary">
+                            Try other words, or press Esc to clear the search.
+                          </p>
+                        </>
+                      ) : unreadOnly && inbox.inbox.length > 0 ? (
+                        <>
+                          <p className="text-sm text-text-primary">Nothing unread</p>
+                          <p className="text-xs text-text-secondary">
+                            Turn off Unread to see every agent's terminal here.
+                          </p>
+                        </>
+                      ) : (
+                        <>
+                          <p className="text-sm text-text-primary">Nothing in the inbox</p>
+                          <p className="text-xs text-text-secondary">
+                            Open an archived agent to see its terminal here.
+                          </p>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </>
               )}
             </div>
           </div>
         )}
-        {!hostOffer && fleet !== null && !fleet.degraded && items.length === 0 && (
-          <div className="flex flex-1 flex-col items-center justify-center gap-3">
-            {scope === "project" && fleet.runs.length > 0 ? (
-              <>
+        {!hostHeld &&
+          fleet !== null &&
+          !fleet.degraded &&
+          items.length === 0 &&
+          !listsAssistants &&
+          !listsTrash && (
+            <div className="flex flex-1 flex-col items-center justify-center gap-3">
+              {scope === "project" && fleet.runs.length > 0 ? (
+                <>
+                  <p className="text-sm text-text-secondary">
+                    No agents in this project. Other projects have{" "}
+                    {pluralize(fleet.runs.length, "agent")}.
+                  </p>
+                  <Button variant="outline" size="sm" onClick={() => setScope("all")}>
+                    Show all projects
+                  </Button>
+                </>
+              ) : everyHost ? (
                 <p className="text-sm text-text-secondary">
-                  No agents in this project. Other projects have{" "}
-                  {pluralize(fleet.runs.length, "agent")}.
+                  {hostIssues.length > 0
+                    ? "No agents on the hosts that answered."
+                    : "No agents are running on any host. Each one shows up here once it starts."}
                 </p>
-                <Button variant="outline" size="sm" onClick={() => setScope("all")}>
-                  Show all projects
-                </Button>
-              </>
-            ) : otherHost ? (
-              <p className="text-sm text-text-secondary">
-                No agents are running on {hostName}. Each one shows up here once it starts.
-              </p>
-            ) : (
-              <p className="text-sm text-text-secondary">
-                Launch an agent from the toolbar and it shows up here.
-              </p>
-            )}
-          </div>
+              ) : otherHost ? (
+                <p className="text-sm text-text-secondary">
+                  No agents are running on {hostName}. Each one shows up here once it starts.
+                </p>
+              ) : (
+                <p className="text-sm text-text-secondary">
+                  Launch an agent from the toolbar and it shows up here.
+                </p>
+              )}
+            </div>
+          )}
+        {offerReading && !hostHeld && items.length === 0 && !listsAssistants && !listsTrash && (
+          <CanopyStatusBar
+            host={otherHost ? hostName : null}
+            model={undefined}
+            reader={undefined}
+            waiting={undefined}
+            offer={offerReading}
+          />
         )}
       </div>
+      {parkRunId !== null && (
+        <Suspense fallback={null}>
+          <LazyParkRunDialog key={parkRunId} runId={parkRunId} onClose={closePark} />
+        </Suspense>
+      )}
     </AppDialog>
   );
 }

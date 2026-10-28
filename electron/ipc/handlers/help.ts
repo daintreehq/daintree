@@ -13,6 +13,7 @@ import {
 } from "../endpoint.js";
 import { getEndpointRegistry } from "../endpointRegistry.js";
 import { peekDriveLeaseService } from "../../services/DriveLeaseService.js";
+import * as globalAssistant from "./helpGlobalAssistant.js";
 import { installDetachedAdoption } from "./helpDetachedAdoption.js";
 import { createLogger } from "../../utils/logger.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
@@ -587,6 +588,28 @@ async function handleListPastSessions(
   });
 }
 
+/**
+ * The project's own starter prompts for the assistant's empty state. The path
+ * comes from main's record of the view's workspace, never the renderer, and a
+ * view may only ask about the project it is bound to.
+ */
+async function handleGetStarterPrompts(
+  ctx: import("../types.js").IpcContext,
+  projectId: string
+): Promise<string[]> {
+  if (typeof projectId !== "string" || !projectId) return [];
+  if (!ctx.projectId || ctx.projectId !== projectId) return [];
+  const [{ loadProjectStarterPrompts }, { projectStore }, { scratchStore }] = await Promise.all([
+    import("../../services/AssistantUserConfig.js"),
+    import("../../services/ProjectStore.js"),
+    import("../../services/ScratchStore.js"),
+  ]);
+  const projectPath =
+    projectStore.getProjectById(projectId)?.path ?? scratchStore.getScratchById(projectId)?.path;
+  if (!projectPath) return [];
+  return loadProjectStarterPrompts(projectPath);
+}
+
 async function handleTakePendingHibernation(
   ctx: import("../types.js").IpcContext,
   projectId: string,
@@ -723,6 +746,45 @@ export const helpNamespace = defineIpcNamespace({
       withContext: true,
     }),
     revokeSession: op(HELP_METHOD_CHANNELS.revokeSession, handleRevokeSession),
+    ensureGlobalAssistant: op(
+      HELP_METHOD_CHANNELS.ensureGlobalAssistant,
+      globalAssistant.handleEnsureGlobalAssistant,
+      { withContext: true }
+    ),
+    getGlobalAssistantState: op(
+      HELP_METHOD_CHANNELS.getGlobalAssistantState,
+      globalAssistant.handleGetGlobalAssistantState
+    ),
+    attachGlobalAssistant: op(
+      HELP_METHOD_CHANNELS.attachGlobalAssistant,
+      globalAssistant.handleAttachGlobalAssistant,
+      { withContext: true }
+    ),
+    detachGlobalAssistant: op(
+      HELP_METHOD_CHANNELS.detachGlobalAssistant,
+      globalAssistant.handleDetachGlobalAssistant,
+      { withContext: true }
+    ),
+    claimGlobalAssistantInput: op(
+      HELP_METHOD_CHANNELS.claimGlobalAssistantInput,
+      globalAssistant.handleClaimGlobalAssistantInput,
+      { withContext: true }
+    ),
+    releaseGlobalAssistantInput: op(
+      HELP_METHOD_CHANNELS.releaseGlobalAssistantInput,
+      globalAssistant.handleReleaseGlobalAssistantInput,
+      { withContext: true }
+    ),
+    restartGlobalAssistant: op(
+      HELP_METHOD_CHANNELS.restartGlobalAssistant,
+      globalAssistant.handleRestartGlobalAssistant,
+      { withContext: true }
+    ),
+    discardGlobalAssistant: op(
+      HELP_METHOD_CHANNELS.discardGlobalAssistant,
+      globalAssistant.handleDiscardGlobalAssistant,
+      { withContext: true }
+    ),
     getPinnedActionContext: op(
       HELP_METHOD_CHANNELS.getPinnedActionContext,
       handleGetPinnedActionContext,
@@ -757,6 +819,9 @@ export const helpNamespace = defineIpcNamespace({
       withContext: true,
     }),
     listPastSessions: op(HELP_METHOD_CHANNELS.listPastSessions, handleListPastSessions, {
+      withContext: true,
+    }),
+    getStarterPrompts: op(HELP_METHOD_CHANNELS.getStarterPrompts, handleGetStarterPrompts, {
       withContext: true,
     }),
     reportPanelOpen: op(HELP_METHOD_CHANNELS.reportPanelOpen, handleReportPanelOpen, {

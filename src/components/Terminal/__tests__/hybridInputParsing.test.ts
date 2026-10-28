@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { CompletionTrigger } from "@shared/types";
-import { appendAgentContextToDraft, formatAgentContextBlock } from "@shared/utils/agentContextDrag";
+import {
+  appendAgentContextToDraft,
+  closingFenceForOpenBlock,
+  formatAgentContextBlock,
+} from "@shared/utils/agentContextDrag";
 import {
   getActiveCompletionContext,
   getDaintreeAtClaim,
@@ -17,6 +21,9 @@ import {
   formatAtFileToken,
   formatAtFileTokenForCwd,
   RESERVED_AT_TOKEN_PATHS,
+  getAllAtContextReferences,
+  resolveTokenExpansions,
+  type ComposerTrigger,
 } from "../hybridInputParsing";
 
 const ALL: ReadonlySet<CompletionTrigger> = new Set(["/", "$", "@"]);
@@ -134,6 +141,25 @@ describe("getActiveCompletionContext", () => {
   it("returns null when the caret precedes the trigger or follows the token", () => {
     expect(getActiveCompletionContext("check @diff", 3, ALL)).toBeNull();
     expect(getActiveCompletionContext("@diff rest", "@diff r".length, ALL)).toBeNull();
+  });
+
+  it("opens `#` only where it is an active trigger", () => {
+    const withHash: ReadonlySet<ComposerTrigger> = new Set([...ALL, "#"]);
+    expect(getActiveCompletionContext("see #148", 8, ALL)).toBeNull();
+    expect(getActiveCompletionContext("see #148", 8, withHash)).toMatchObject({
+      triggerChar: "#",
+      start: 4,
+      query: "148",
+    });
+  });
+
+  it("lets go of `#` text that isn't a reference once the token ends", () => {
+    const withHash: ReadonlySet<ComposerTrigger> = new Set([...ALL, "#"]);
+    expect(getActiveCompletionContext("# Heading", "# Heading".length, withHash)).toBeNull();
+    expect(getActiveCompletionContext("## Heading", 2, withHash)).toBeNull();
+    expect(getActiveCompletionContext("#include <stdio.h>", 18, withHash)).toBeNull();
+    expect(getActiveCompletionContext("a#b", 3, withHash)).toBeNull();
+    expect(getActiveCompletionContext("color:#fff", 10, withHash)).toBeNull();
   });
 });
 
@@ -554,5 +580,45 @@ describe("context tokens inside a handoff block", () => {
     expect(getAllAtSelectionTokens(withOpenFence)).toEqual([]);
     // The user's own fence was closed before the block, not by it.
     expect(withOpenFence).toContain("const a = 1;\n```\n\n```daintree-context\n");
+  });
+});
+
+describe("plugin context references (#13795)", () => {
+  it("are read outside handoff blocks only", () => {
+    const draft = appendAgentContextToDraft(
+      "look at @rec:1",
+      formatAgentContextBlock({ text: "quoted @rec:2", title: "Card" })
+    );
+    expect(getAllAtContextReferences(draft).map((t) => t.id)).toEqual(["1"]);
+  });
+
+  it("splice a block expansion onto lines of its own", () => {
+    const text = "compare @rec:1 with this";
+    const start = text.indexOf("@rec:1");
+    const out = resolveTokenExpansions(text, [
+      { start, end: start + 6, replacement: "```daintree-context\nbody\n```", block: true },
+    ]);
+    expect(out).toBe("compare\n```daintree-context\nbody\n```\nwith this");
+  });
+
+  it("close the user's open fence around a block and reopen it after", () => {
+    const text = "```\nconst a = 1; @rec:1\nconst b = 2;\n```\nPlease fix.";
+    const start = text.indexOf("@rec:1");
+    const out = resolveTokenExpansions(text, [
+      { start, end: start + 6, replacement: "```daintree-context\nbody\n```", block: true },
+    ]);
+    expect(out).toBe(
+      "```\nconst a = 1;\n```\n```daintree-context\nbody\n```\n```\nconst b = 2;\n```\nPlease fix."
+    );
+    // The user's closing fence still closes their block: nothing is left open.
+    expect(closingFenceForOpenBlock(out)).toBeNull();
+  });
+
+  it("leave an inline expansion where it was", () => {
+    const text = "see @rec:1 now";
+    const out = resolveTokenExpansions(text, [
+      { start: 4, end: 10, replacement: "[Couldn't attach @rec:1 from Kanban: timed out]" },
+    ]);
+    expect(out).toBe("see [Couldn't attach @rec:1 from Kanban: timed out] now");
   });
 });

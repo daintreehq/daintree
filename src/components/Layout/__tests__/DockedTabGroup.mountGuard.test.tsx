@@ -8,7 +8,7 @@
  * focuses the active tab once its stable wrapper has been moved in — a
  * synchronous step, no MutationObserver.
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { beforeAll, describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, fireEvent, render } from "@testing-library/react";
 import type { PtyPanelData } from "@shared/types/panel";
 import type { TabGroup } from "@/types";
@@ -49,9 +49,11 @@ vi.mock("@/store", () => ({
       addPanelToGroup: addPanelToGroupMock,
       tabGroups: mockTabGroups,
     }),
-  useTerminalInputStore: (
-    selector: (s: { hybridInputEnabled: boolean; hybridInputAutoFocus: boolean }) => unknown
-  ) => selector({ hybridInputEnabled: false, hybridInputAutoFocus: false }),
+  useTerminalInputStore: Object.assign(
+    (selector: (s: { hybridInputEnabled: boolean; hybridInputAutoFocus: boolean }) => unknown) =>
+      selector({ hybridInputEnabled: false, hybridInputAutoFocus: false }),
+    { getState: () => ({ hybridInputEnabled: false, hybridInputAutoFocus: false }) }
+  ),
   usePortalStore: (selector: (s: { isOpen: boolean; width: number }) => unknown) =>
     selector({ isOpen: false, width: 0 }),
   useFocusStore: (
@@ -88,12 +90,35 @@ vi.mock("@/services/terminal/panelDuplicationService", () => ({
   buildPanelDuplicateOptions: vi.fn(),
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     fit: () => ({ cols: 80, rows: 24 }),
     applyRendererPolicy: vi.fn(),
     focus: vi.fn(),
-  },
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
+
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
+});
+
+// The badge hook reads the real panel and plugin stores; these suites stub the store layer.
+vi.mock("../DockChipBadge", () => ({
+  useDockChipBadge: () => null,
+  DockChipBadge: () => null,
+}));
+
+vi.mock("@/components/Panel/PluginPanelActivity", () => ({
+  usePluginPanelActivity: () => null,
+  PluginPanelActivityDockCue: () => null,
+  pluginPanelActivityLabelSuffix: () => "",
 }));
 
 vi.mock("../dockPanelPortalContext", () => ({
@@ -146,7 +171,17 @@ vi.mock("@/components/Terminal/TerminalIcon", () => ({
 }));
 
 vi.mock("@/components/Terminal/terminalFocus", () => ({
-  getTerminalFocusTarget: () => "terminal",
+  getTerminalFocusTarget: ({ preferredTarget }: { preferredTarget?: string }) =>
+    preferredTarget ?? "terminal",
+}));
+
+// The real module reaches the panel store graph this suite stubs out.
+let mockRequest: { id: string; surface: string } | null = null;
+let mockHeldSurface: { id: string; surface: string } | null = null;
+vi.mock("@/components/Terminal/paneFocusRequest", () => ({
+  requestedPaneSurface: (id: string) => (mockRequest?.id === id ? mockRequest.surface : null),
+  paneSurfaceHoldingFocus: (id: string) =>
+    mockHeldSurface?.id === id ? mockHeldSurface.surface : null,
 }));
 
 // Active Popover mock: captures the Radix callbacks. Focus-driven dismissal is
@@ -278,9 +313,11 @@ import {
   type DragHandleContextValue,
 } from "@/components/DragDrop/DragHandleContext";
 import { handleDockFocusOutside } from "../dockPopoverGuard";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { createTerminalPaintPlane } from "@/services/TerminalInstanceService";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
 import { TerminalRefreshTier } from "@/types";
+
+const terminalInstanceService = createTerminalPaintPlane();
 
 function makePanel(overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   return {
@@ -320,11 +357,47 @@ describe("DockedTabGroup mount-time close guard (#6602)", () => {
     capturedOnOpenChange = null;
     capturedOnOpenAutoFocus = null;
     capturedOnFocusOutside = null;
+    mockRequest = null;
+    mockHeldSurface = null;
     vi.mocked(terminalInstanceService.focus).mockClear();
   });
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  // A drop or type-anywhere that asked the showing tab for its hybrid input
+  // keeps it; an ask of a tab that isn't showing changes nothing.
+  it.each([
+    ["the active tab", "t-2", false],
+    ["a tab that isn't showing", "t-1", true],
+  ])("leaves a hybrid input asked of %s to its pane", (_, askedId, focusesTerminal) => {
+    mockActiveDockTerminalId = "t-2";
+    mockTabGroups.set("g-1", makeGroup(["t-1", "t-2"], "t-2"));
+    mockRequest = { id: askedId, surface: "hybridInput" };
+    const panels = [makePanel({ id: "t-1" }), makePanel({ id: "t-2" })];
+
+    render(<DockedTabGroup group={makeGroup(["t-1", "t-2"], "t-2")} panels={panels} />);
+
+    if (focusesTerminal) {
+      expect(terminalInstanceService.focus).toHaveBeenCalledWith("t-2");
+    } else {
+      expect(terminalInstanceService.focus).not.toHaveBeenCalled();
+    }
+  });
+
+  // What the user does inside the pane stays inside it: the popover's focus
+  // pass re-runs on chrome changes, and must not pull the keyboard out of the
+  // input bar for a terminal home.
+  it("leaves the keyboard on the active tab's hybrid input while it holds it", () => {
+    mockActiveDockTerminalId = "t-2";
+    mockTabGroups.set("g-1", makeGroup(["t-1", "t-2"], "t-2"));
+    mockHeldSurface = { id: "t-2", surface: "hybridInput" };
+    const panels = [makePanel({ id: "t-1" }), makePanel({ id: "t-2" })];
+
+    render(<DockedTabGroup group={makeGroup(["t-1", "t-2"], "t-2")} panels={panels} />);
+
+    expect(terminalInstanceService.focus).not.toHaveBeenCalled();
   });
 
   it("wires onFocusOutside to the focus-dismissal guard and never closes on mount", () => {

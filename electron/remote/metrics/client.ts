@@ -2,10 +2,18 @@ import type {
   HostAttentionEvent,
   HostFleetSubmitPayload,
   HostFleetTargetList,
+  HostLinkActivity,
+  HostLinkActivityResult,
   HostMetricsEvent,
   HostMetricsSnapshot,
+  HostProcessInventoryResult,
   HostWorktreeEntry,
+  RemoteProcessInventory,
 } from "../../../shared/types/ipc/hostMetrics.js";
+import type {
+  ProcessInventorySnapshot,
+  ProcessTreeSample,
+} from "../../../shared/types/processes.js";
 import {
   LOCAL_HOST_ID,
   isLocalHostId,
@@ -16,22 +24,32 @@ import {
 } from "../../../shared/types/remoteHosts.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { Lane } from "../link/frames.js";
-import { ControlKind } from "../link/messages.js";
+import { ControlKind, type HostSummaryFrame } from "../link/messages.js";
+import { stampNow, type ElapsedStamp } from "../link/elapsed.js";
 import type { LinkSession } from "../link/session.js";
 import type { FleetCaller } from "./hostOps.js";
 import {
   AttentionPayloadSchema,
   FleetTargetListSchema,
+  LinkActivitySchema,
   MetricsLinkMethod,
+  ProcessInventorySchema,
   WorktreeListSchema,
   normalizeFleetOpId,
 } from "./linkMethods.js";
+import { boundProcessInventory } from "./processInventoryWire.js";
 import { HOST_METRICS_INTERVAL_MS } from "./sampler.js";
+import { receiveSummary, type SummaryReceipt } from "./summaryReceipt.js";
 import { WorktreeChangeWatch } from "./worktreeChanges.js";
 import { EmptyPayloadSchema } from "../host/linkMethods.js";
 import { connectionKey } from "../client/connection.js";
 import { admitHostNotice } from "../hybrid/hostNoticeBudget.js";
 import { displaySafeText } from "../../../shared/utils/displaySafeText.js";
+import { createLogger } from "../../utils/logger.js";
+import { createKeyedLogLimiter } from "../../utils/keyedLogLimiter.js";
+
+const logger = createLogger("main:client");
+const logLimiter = createKeyedLogLimiter();
 
 /** ~15 minutes of summaries at the sample cadence. */
 export const HOST_METRICS_RING_SIZE = Math.ceil((15 * 60_000) / HOST_METRICS_INTERVAL_MS);
@@ -48,6 +66,8 @@ export interface HostMetricsClientOptions {
     get(hostId: HostId): MetricsConnection | undefined;
     connectionState(hostId: HostId): HostConnectionState;
     onSessionOpened(listener: (hostId: HostId, session: LinkSession) => void): () => void;
+    /** This Shell launch, as every host it dials knows it. */
+    readonly localClient?: { clientId: string; clientName: string };
   };
   registry: {
     list(): HostDescriptor[];
@@ -62,6 +82,11 @@ export interface HostMetricsClientOptions {
   emit(event: HostMetricsEvent): void;
   /** Present an opted-in host's attention event in one view; false when no view took it. */
   deliverAttention(event: HostAttentionEvent): boolean;
+  /**
+   * This machine's own verdict on a host's waiting agent (#14701): dropped,
+   * inbox only, or announced. Announced when absent.
+   */
+  waitingPolicy?(): "silent" | "quiet" | "announce";
   /** This machine's fleet and worktree reads, for the "local" host. */
   local: {
     listFleetTargets(): Promise<HostFleetTargetList>;
@@ -72,6 +97,8 @@ export interface HostMetricsClientOptions {
       opId: string | null
     ): Promise<void>;
     listWorktrees(): Promise<HostWorktreeEntry[]>;
+    /** This machine's processes, as its own Processes view lists them. */
+    processInventory(): Promise<ProcessInventorySnapshot>;
     /** Told when this machine's worktree list may show something else. */
     onWorktreesMaybeChanged?(listener: () => void): () => void;
   };
@@ -80,6 +107,8 @@ export interface HostMetricsClientOptions {
   worktreesChangedDelayMs?: number;
   /** How long a fleet submit whose answer was lost waits for its host to come back and say. */
   fleetReconcileMs?: number;
+  /** This machine's clocks, for when a summary arrived; real ones by default. */
+  clock?: () => ElapsedStamp;
 }
 
 /** Long enough for a dropped link's automatic reconnect; short enough not to hold a broadcast. */
@@ -99,6 +128,72 @@ function isHostFleetRefusal(error: unknown): boolean {
 function isUnknownOutcome(error: unknown): boolean {
   const code = (error as { code?: unknown } | null)?.code;
   return code === "OUTCOME_UNKNOWN" || code === "HOST_DISCONNECTED";
+}
+
+function isUnsupported(error: unknown): boolean {
+  return (error as { code?: unknown } | null)?.code === "UNSUPPORTED";
+}
+
+/** Names and reasons another machine wrote, made safe to show as one line here. */
+function displaySafeActivity(activity: HostLinkActivity): HostLinkActivity {
+  const name = (text: string | null) => (text === null ? null : displaySafeText(text));
+  return {
+    ...activity,
+    events: activity.events.map((event) => {
+      const safe = { ...event, clientName: displaySafeText(event.clientName) };
+      switch (safe.kind) {
+        case "link-dropped":
+          return { ...safe, reason: displaySafeText(safe.reason) };
+        case "session-ended":
+          return { ...safe, reason: name(safe.reason) };
+        case "refused":
+          return { ...safe, detail: name(safe.detail) };
+        default:
+          return safe;
+      }
+    }),
+    drivers: activity.drivers.map((driver) => ({
+      ...driver,
+      projectName: name(driver.projectName),
+      holder: { ...driver.holder, clientName: displaySafeText(driver.holder.clientName) },
+    })),
+    attached: activity.attached.map((shell) => ({
+      ...shell,
+      clientName: displaySafeText(shell.clientName),
+    })),
+  };
+}
+
+/** Titles, names and labels another machine wrote, made safe to show here. */
+function displaySafeInventory(inventory: RemoteProcessInventory): RemoteProcessInventory {
+  const text = (value: string | undefined) =>
+    value === undefined ? undefined : displaySafeText(value);
+  const name = (value: string | null) => (value === null ? null : displaySafeText(value));
+  const sample = (tree: ProcessTreeSample | null): ProcessTreeSample | null =>
+    tree && {
+      ...tree,
+      members: tree.members.map((member) => ({ ...member, comm: displaySafeText(member.comm) })),
+    };
+  return {
+    ...inventory,
+    terminals: inventory.terminals.map((terminal) => ({
+      ...terminal,
+      title: text(terminal.title),
+      projectName: name(terminal.projectName),
+      sample: sample(terminal.sample),
+    })),
+    closedTerminalProcesses: inventory.closedTerminalProcesses.map((closed) => ({
+      ...closed,
+      comm: displaySafeText(closed.comm),
+      projectName: name(closed.projectName),
+      origin: closed.origin && { ...closed.origin, title: text(closed.origin.title) },
+    })),
+    plugins: inventory.plugins.map((plugin) => ({
+      ...plugin,
+      label: name(plugin.label),
+      sample: sample(plugin.sample),
+    })),
+  };
 }
 
 function invalid(message: string): AppError {
@@ -121,11 +216,15 @@ function requireString(value: unknown, field: string, max: number): string {
  */
 export class HostMetricsClient {
   private readonly rings = new Map<HostId, HostMetricsSummary[]>();
+  /** When each held summary arrived and how old it could be then, kept beside it rather than in it. */
+  private readonly receipts = new WeakMap<HostMetricsSummary, SummaryReceipt>();
   /** Each known host's address: a new address is another machine, whose history starts empty. */
   private readonly known = new Map<HostId, string>();
   /** Hosts dialled for their notifications, so turning them on dials once, not on every change. */
   private readonly dialledForNotifications = new Set<HostId>();
   private readonly disposers: Array<() => void> = [];
+  /** Told of every recorded summary; empty unless something in main asked (#14463). */
+  private readonly summaryListeners = new Set<(hostId: HostId) => void>();
   private stopLocal: (() => void) | null = null;
   private stopLocalWorktrees: (() => void) | null = null;
   private localWorktrees: WorktreeChangeWatch | null = null;
@@ -149,6 +248,15 @@ export class HostMetricsClient {
     this.stopLocal = null;
     this.stopLocalWorktrees?.();
     this.stopLocalWorktrees = null;
+    this.summaryListeners.clear();
+  }
+
+  /** Hears each summary as it is recorded; it never asks a host for one. */
+  onSummary(listener: (hostId: HostId) => void): () => void {
+    this.summaryListeners.add(listener);
+    return () => {
+      this.summaryListeners.delete(listener);
+    };
   }
 
   getSnapshots(): HostMetricsSnapshot[] {
@@ -157,6 +265,11 @@ export class HostMetricsClient {
 
   latest(hostId: HostId): HostMetricsSummary | null {
     return this.rings.get(hostId)?.[0] ?? null;
+  }
+
+  /** When a summary this client holds arrived, and what its frame proved about its age (#14462). */
+  receiptOf(summary: HostMetricsSummary): SummaryReceipt | null {
+    return this.receipts.get(summary) ?? null;
   }
 
   /** Agents a connected host last reported working and waiting; unknown while it isn't connected. */
@@ -268,9 +381,76 @@ export class HostMetricsClient {
     return parsed.data.map((entry) => ({ ...entry, hostId }));
   }
 
-  /** Record a summary: the host's own id in it is replaced by the id this Shell knows it by. */
-  record(hostId: HostId, summary: HostMetricsSummary): void {
+  /**
+   * What a host saw happen to its links, who drives each of its projects and
+   * which Shells are attached to it. A host from before it could say answers
+   * `supported: false`.
+   */
+  async linkActivity(payload: unknown): Promise<HostLinkActivityResult> {
+    const hostId = this.hostIdOf(payload);
+    if (isLocalHostId(hostId)) throw invalid("Link activity is read from a remote host");
+    let answer: unknown;
+    try {
+      answer = await this.connection(hostId).callHost(MetricsLinkMethod.LINK_ACTIVITY, null);
+    } catch (error) {
+      if (isUnsupported(error)) return { supported: false };
+      throw error;
+    }
+    const parsed = LinkActivitySchema.safeParse(answer);
+    if (!parsed.success)
+      throw new AppError({
+        code: "INTERNAL",
+        message: `Host ${hostId} sent invalid link activity`,
+      });
+    const self = this.options.manager.localClient;
+    return {
+      supported: true,
+      activity: displaySafeActivity(parsed.data),
+      self: self ? { clientId: self.clientId, clientName: self.clientName } : null,
+    };
+  }
+
+  /**
+   * The processes a host runs, as its Processes view lists them, read over a
+   * session that needs no view bound. This machine answers from its own
+   * inventory. A host from before it could say answers `supported: false`.
+   */
+  async processInventory(payload: unknown): Promise<HostProcessInventoryResult> {
+    const hostId = this.hostIdOf(payload);
+    if (isLocalHostId(hostId)) {
+      return {
+        supported: true,
+        inventory: boundProcessInventory(await this.options.local.processInventory()),
+      };
+    }
+    let answer: unknown;
+    try {
+      answer = await this.connection(hostId).callHost(MetricsLinkMethod.PROCESS_INVENTORY, null);
+    } catch (error) {
+      if (isUnsupported(error)) return { supported: false };
+      throw error;
+    }
+    const parsed = ProcessInventorySchema.safeParse(answer);
+    if (!parsed.success)
+      throw new AppError({
+        code: "INTERNAL",
+        message: `Host ${hostId} sent an invalid process inventory`,
+      });
+    return { supported: true, inventory: displaySafeInventory(parsed.data) };
+  }
+
+  /**
+   * Record a summary: the host's own id in it is replaced by the id this Shell
+   * knows it by, and the frame's timing is kept beside it, never shown.
+   */
+  record(hostId: HostId, frame: HostSummaryFrame, session?: LinkSession): void {
+    const at = (this.options.clock ?? stampNow)();
+    const { timing, ...summary } = frame;
     const stamped: HostMetricsSummary = { ...summary, hostId };
+    this.receipts.set(
+      stamped,
+      receiveSummary(timing, (nonce) => session?.pingSentAt(nonce) ?? null, at)
+    );
     let ring = this.rings.get(hostId);
     if (!ring) {
       ring = [];
@@ -279,6 +459,13 @@ export class HostMetricsClient {
     ring.unshift(stamped);
     if (ring.length > this.ringSize) ring.length = this.ringSize;
     this.options.emit({ type: "summary", summary: stamped });
+    for (const listener of [...this.summaryListeners]) {
+      try {
+        listener(hostId);
+      } catch (error) {
+        logger.warn("A summary listener threw", { error });
+      }
+    }
   }
 
   private hostIdOf(payload: unknown): HostId {
@@ -308,11 +495,16 @@ export class HostMetricsClient {
   }
 
   private wire(hostId: HostId, session: LinkSession): void {
-    session.on(Lane.CONTROL, ControlKind.HOST_SUMMARY, (summary) => this.record(hostId, summary));
+    session.on(Lane.CONTROL, ControlKind.HOST_SUMMARY, (frame) =>
+      this.record(hostId, frame, session)
+    );
     session.registerCallHandler(MetricsLinkMethod.ATTENTION, AttentionPayloadSchema, (payload) => {
       const descriptor = this.options.registry.get(hostId);
       // Opt-in per host, and off until the user turns it on.
       if (descriptor?.notificationsEnabled !== true) return null;
+      // This screen's choices decide, before the notice counts against the host's share.
+      const policy = this.options.waitingPolicy?.() ?? "announce";
+      if (policy === "silent") return null;
       // The host's one notice budget, and its names shown as text, never as layout.
       if (!admitHostNotice(hostId)) return null;
       this.options.deliverAttention({
@@ -321,9 +513,11 @@ export class HostMetricsClient {
         hostName: descriptor.name,
         kind: payload.kind,
         terminalId: payload.terminalId,
+        projectId: payload.projectId ?? null,
         projectName: payload.projectName === null ? null : displaySafeText(payload.projectName),
         agentName: payload.agentName === null ? null : displaySafeText(payload.agentName),
-        quiet: payload.quiet,
+        // A host from before #14701 may still have judged it quiet by its own hours.
+        quiet: policy === "quiet" || payload.quiet,
       });
       return null;
     });
@@ -362,7 +556,14 @@ export class HostMetricsClient {
       try {
         this.options.manager.connect(host.id);
       } catch (error) {
-        console.warn(`[HostMetrics] Couldn't dial ${host.id} for notifications:`, error);
+        const suppressedCount = logLimiter.take("dial-notifications");
+        if (suppressedCount !== null) {
+          logger.warn("Couldn't dial a host for notifications", {
+            hostId: host.id,
+            error,
+            suppressedCount,
+          });
+        }
       }
     }
     if (hosts.length > 0 && !this.stopLocal && this.options.localLoop) {

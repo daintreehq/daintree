@@ -32,8 +32,17 @@ import { coercePromptAnswer, PluginFrontendMethod } from "./pluginFrontendReques
  */
 function cancelValueFor(kind: PluginUiPromptParams["kind"]): PluginUiPromptResultValue {
   if (kind === "confirm") return false;
-  if (kind === "sendToAgent") return { status: "cancelled" };
+  if (kind === "sendToAgent" || kind === "runRecipe") return { status: "cancelled" };
   return undefined;
+}
+
+/**
+ * Prompts whose answer is work the user started from the dialog — the
+ * send-to-agent picker's new-agent rows, and a recipe run (#13797). Once
+ * accepted, the work is the user's: an abort waits for its outcome.
+ */
+function answersWithStartedWork(kind: PluginUiPromptParams["kind"]): boolean {
+  return kind === "sendToAgent" || kind === "runRecipe";
 }
 
 /**
@@ -45,6 +54,7 @@ function busyValueFor(params: PluginUiPromptParams): PluginUiPromptResultValue {
   if (params.kind === "sendToAgent") {
     return { status: "refused", reason: promptOpensDialog(params) ? "prompt-open" : "busy" };
   }
+  if (params.kind === "runRecipe") return { status: "refused", reason: "prompt-open" };
   return cancelValueFor(params.kind);
 }
 
@@ -55,10 +65,11 @@ function capFor(opensDialog: boolean): number {
 /**
  * A send-to-agent settles in the view it was delivered to. That view may
  * already have drafted, or started the agent the user picked, so moving it to
- * a new driver or re-asking there could draft the same text twice.
+ * a new driver or re-asking there could draft the same text twice. A recipe
+ * run is the same: re-asking elsewhere could start it twice.
  */
 function settlesWhereShown(params: PluginUiPromptParams): boolean {
-  return params.kind === "sendToAgent";
+  return answersWithStartedWork(params.kind);
 }
 
 /**
@@ -69,7 +80,9 @@ function settlesWhereShown(params: PluginUiPromptParams): boolean {
  * should have answered is what is missing.
  */
 function timeoutValueFor(params: PluginUiPromptParams): PluginUiPromptResultValue {
-  if (params.kind === "sendToAgent") return { status: "refused", reason: "project-unavailable" };
+  if (answersWithStartedWork(params.kind)) {
+    return { status: "refused", reason: "project-unavailable" };
+  }
   return cancelValueFor(params.kind);
 }
 
@@ -477,7 +490,7 @@ export class PluginUIPromptDispatcher {
         pluginId,
         cancelValue,
         opensDialog,
-        answersAbort: opensDialog && params.kind === "sendToAgent",
+        answersAbort: opensDialog && answersWithStartedWork(params.kind),
         cleanup,
       });
 

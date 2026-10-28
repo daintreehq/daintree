@@ -1,15 +1,10 @@
-import { useCallback, useRef, useState } from "react";
-import { Badge } from "@/components/ui/badge";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { systemClient } from "@/clients/systemClient";
-import {
-  CANOPY_BETA_TERMS,
-  CANOPY_PRIVACY_URL,
-  CANOPY_REDACTION,
-  CANOPY_SENDS,
-} from "@/components/Canopy/canopyTerms";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { CANOPY_LOCAL } from "@/components/Canopy/canopyTerms";
+import { formatModelBytes } from "@/components/Canopy/CanopyStatusBar";
 import { useCanopyStore } from "@/store/canopyStore";
-import type { CanopyMode } from "@shared/types/ipc/canopy";
+import type { CanopyMode, CanopyModelInfo } from "@shared/types/ipc/canopy";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsDependents, SettingsGroup, SettingsRow } from "./SettingsGroup";
@@ -24,39 +19,81 @@ export function CanopySettingsTab() {
   // flipped before the first lands would act on the mode the first replaced.
   // Held in a ref, not shown: a change takes a moment, too short to dim for.
   const pending = useRef(false);
-  const [failure, setFailure] = useState<{ mode: CanopyMode; message: string } | null>(null);
+  const [failure, setFailure] = useState<{ retry: () => void; message: string } | null>(null);
+  const [info, setInfo] = useState<CanopyModelInfo | null>(null);
 
-  const setMode = useCallback(
-    (next: CanopyMode) => {
+  // Only what is on this machine: a failed look leaves the row out, nothing more.
+  const loadModels = useCallback(() => {
+    window.electron.canopy.getModel().then(setInfo, () => setInfo(null));
+  }, []);
+
+  // A download finishing changes what is on this machine.
+  const modelStatus = snapshot?.model?.status;
+  useEffect(() => {
+    loadModels();
+  }, [loadModels, modelStatus]);
+
+  const act = useCallback(
+    (run: () => Promise<Parameters<typeof applySnapshot>[0]>, retry: () => void) => {
       if (pending.current) return;
       pending.current = true;
       setFailure(null);
-      window.electron.canopy
-        .setMode(next)
+      run()
         .then(applySnapshot, (error: unknown) =>
-          setFailure({ mode: next, message: formatErrorMessage(error, "Try again in a moment.") })
+          setFailure({ retry, message: formatErrorMessage(error, "Try again in a moment.") })
         )
         .finally(() => {
           pending.current = false;
+          loadModels();
         });
     },
-    [applySnapshot]
+    [applySnapshot, loadModels]
   );
+
+  const setMode = useCallback(
+    (next: CanopyMode) =>
+      act(
+        () => window.electron.canopy.setMode(next),
+        () => setMode(next)
+      ),
+    [act]
+  );
+  const retryModel = useCallback(
+    () =>
+      act(
+        () => window.electron.canopy.retryModel(),
+        () => retryModel()
+      ),
+    [act]
+  );
+  const removeModels = useCallback(
+    () =>
+      act(
+        () => window.electron.canopy.removeModels(),
+        () => removeModels()
+      ),
+    [act]
+  );
+
   const hidden = mode === "hidden";
   const activated = mode === "on";
+  const model = snapshot?.model;
+  const installed = info?.installed === true ? info : null;
+  const installedSize = installed ? formatModelBytes(installed.bytes) : "";
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   return (
     <div className="space-y-8">
       <SettingsSection
         title="Reading"
-        description={`One inbox of every agent, read off its screen. ${CANOPY_SENDS} ${CANOPY_REDACTION}`}
+        description={`One inbox of every agent, read off its screen. ${CANOPY_LOCAL}`}
         id="canopy-activation"
       >
         {failure && (
           <SettingsLoadErrorBanner
             title="Couldn't change Canopy"
             message={failure.message}
-            onRetry={() => setMode(failure.mode)}
+            onRetry={failure.retry}
           />
         )}
         <SettingsGroup>
@@ -73,41 +110,78 @@ export function CanopySettingsTab() {
             <SettingsSwitchCard
               id="canopy-read-terminals"
               title="Read agent terminals"
-              subtitle="When off, nothing leaves this computer and Canopy deletes its readings from this computer."
+              subtitle="Downloads a small model the first time. When off, Canopy lets the model go and deletes its readings."
               isEnabled={activated}
               onChange={() => setMode(activated ? "unset" : "on")}
             />
           </SettingsDependents>
-          <SettingsRow
-            id="canopy-plan"
-            label="Plan"
-            description={snapshot?.tier === "priority" ? "Priority processing" : CANOPY_BETA_TERMS}
-            control={
-              snapshot?.tier === "priority" ? (
-                <span className="text-xs text-text-secondary">Paid</span>
-              ) : (
-                <Badge tone="warning" size="sm">
-                  Beta
-                </Badge>
-              )
-            }
-          />
-          <SettingsRow
-            id="canopy-privacy"
-            label="Privacy policy"
-            description="How Daintree handles what Canopy sends"
-            control={
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => void systemClient.openExternal(CANOPY_PRIVACY_URL)}
-              >
-                Open
-              </Button>
-            }
-          />
         </SettingsGroup>
       </SettingsSection>
+
+      {activated && model && model.status !== "ready" && (
+        <SettingsSection title="Model" id="canopy-model">
+          <SettingsGroup>
+            <SettingsRow
+              id="canopy-model-status"
+              label={
+                model.status === "downloading"
+                  ? "Downloading…"
+                  : model.status === "failed"
+                    ? "Download failed"
+                    : "Not downloaded yet"
+              }
+              description={
+                model.status === "downloading"
+                  ? `${formatModelBytes(model.received)} of ${formatModelBytes(model.total)}. Rows show the screen's own words until it's done.`
+                  : model.status === "failed"
+                    ? model.error
+                    : "Canopy downloads it as soon as it's on."
+              }
+              control={
+                model.status === "downloading" ? null : (
+                  <Button variant="outline" size="sm" onClick={retryModel}>
+                    {model.status === "failed" ? "Retry" : "Download"}
+                  </Button>
+                )
+              }
+            />
+          </SettingsGroup>
+        </SettingsSection>
+      )}
+
+      {installed && (
+        <SettingsSection title="Downloaded model" id="canopy-model-files">
+          <SettingsGroup>
+            <SettingsRow
+              id="canopy-delete-model"
+              label={installed.name}
+              description={`${installedSize} on this computer${activated ? "" : ". Turning Canopy on again downloads it"}`}
+              control={
+                <Button variant="ghost-danger" size="sm" onClick={() => setConfirmDelete(true)}>
+                  Delete model
+                </Button>
+              }
+            />
+          </SettingsGroup>
+        </SettingsSection>
+      )}
+      <ConfirmDialog
+        isOpen={confirmDelete}
+        onClose={() => setConfirmDelete(false)}
+        variant="destructive"
+        title={`Delete '${installed?.name ?? ""}'?`}
+        description={
+          activated
+            ? `Frees ${installedSize}. Canopy turns off, and turning it on again downloads the model.`
+            : `Frees ${installedSize}. Turning Canopy on again downloads the model.`
+        }
+        confirmLabel="Delete model"
+        cancelLabel="Cancel"
+        onConfirm={() => {
+          setConfirmDelete(false);
+          removeModels();
+        }}
+      />
     </div>
   );
 }

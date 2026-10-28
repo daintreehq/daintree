@@ -90,7 +90,8 @@ vi.mock("@/components/Project/RunningTaskList", () => ({
   },
 }));
 
-import { QuickRun, QuickRunToggle, useQuickRunExpanded } from "../QuickRun";
+import { QuickRun } from "../QuickRun";
+import { QuickRunToggle, useQuickRunExpanded } from "../QuickRunToggle";
 
 /** The panel as the sidebar footer mounts it: only while its toggle is open. */
 function Footer({ projectId }: { projectId: string }) {
@@ -340,6 +341,35 @@ describe("QuickRun", () => {
 
     expect(input.getAttribute("aria-expanded")).toBe("false");
     expect(document.activeElement).toBe(input);
+  });
+
+  it("claims Escape only when it shuts the suggestions", () => {
+    localStorage.setItem(
+      "daintree_cmd_history_test-project",
+      JSON.stringify([{ command: "npm test", timestamp: 1 }])
+    );
+    render(<Footer projectId="test-project" />);
+    const input = openPanel();
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+
+    // fireEvent returns false once a handler prevented the default.
+    expect(fireEvent.keyDown(input, { key: "Escape" })).toBe(false);
+    expect(fireEvent.keyDown(input, { key: "Escape" })).toBe(true);
+  });
+
+  it("claims Escape from a toggle only when it shuts the suggestions", () => {
+    localStorage.setItem(
+      "daintree_cmd_history_test-project",
+      JSON.stringify([{ command: "npm test", timestamp: 1 }])
+    );
+    render(<Footer projectId="test-project" />);
+    const input = openPanel();
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    const toggle = screen.getByRole("button", { name: "Auto-restart" });
+
+    expect(fireEvent.keyDown(toggle, { key: "Escape" })).toBe(false);
+    expect(input.getAttribute("aria-expanded")).toBe("false");
+    expect(fireEvent.keyDown(toggle, { key: "Escape" })).toBe(true);
   });
 
   it("captions the destination with the branch, not the worktree's folder name", () => {

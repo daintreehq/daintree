@@ -6,6 +6,7 @@ import {
   persistSessionSnapshotAsync,
   isSessionPersistSuppressed,
 } from "./terminalSessionPersistence.js";
+import { isHostThrowawayTerminalId } from "../../../shared/config/hostThrowaway.js";
 
 const EVENT_DRIVEN_SNAPSHOT_THROTTLE_MS = 2000;
 
@@ -146,10 +147,12 @@ export class SessionSnapshotter {
   // serialized immediately, and the timer then fired and serialized identical
   // content because it had never looked at the epoch.
   //
-  // Serializing up to 10k lines must not block the pty-host event loop, so the
+  // Serializing a full mirror (DEFAULT_SCROLLBACK lines) must not block the pty-host event loop, so the
   // work is async and every await is followed by a lifecycle re-check.
   private async captureAsync(trigger: CaptureTrigger): Promise<void> {
     if (!TERMINAL_SESSION_PERSISTENCE_ENABLED) return;
+    // A throwaway run (#14445) keeps nothing for recovery, its screen included.
+    if (isHostThrowawayTerminalId(this.host.id)) return;
     if (isSessionPersistSuppressed()) return;
     // Agent terminals are event-driven only: their scrollback is captured on a
     // state settle, never on the debounce.

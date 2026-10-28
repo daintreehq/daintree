@@ -268,9 +268,14 @@ function makeHostDeps(): PluginHostFactoryDeps {
     pluginBadges: new Map(),
     pluginToolbarBadges: new Map(),
     emitToolbarBadges: () => {},
+    pluginToolbarStates: new Map(),
+    emitToolbarStates: () => {},
     pluginWorktreeCardStatuses: new Map(),
     emitWorktreeCardStatuses: () => {},
     worktreeCardStatusGeneration: () => 0,
+    pluginWorktreeReviewChecks: new Map(),
+    emitWorktreeReviewChecks: () => {},
+    worktreeReviewChecksGeneration: () => 0,
     worktreeCardTargetRevision: () => 0,
     isWorktreeCardTargetRetired: () => false,
     pluginPanelMenus: new Map(),
@@ -294,10 +299,13 @@ function makeHostDeps(): PluginHostFactoryDeps {
     isPathUnder: () => false,
     expandAllowedPathEntries: async () => [],
     subscribeWorktreeEvent: vi.fn(() => () => {}),
+    getWorktreeCustomTitles: vi.fn(() => ({})),
+    subscribeWorktreeCustomTitles: vi.fn(() => () => {}),
     registerHandler: vi.fn(),
     validateAndBuildActionDescriptor: vi.fn(),
     safeAppendAudit: vi.fn(),
     safeArgsHash: () => "",
+    pluginNotificationsBlocked: async () => false,
   } as unknown as PluginHostFactoryDeps;
 }
 

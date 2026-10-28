@@ -129,3 +129,19 @@ describe("agentCapabilities representative happy-path wire safety", () => {
     }
   );
 });
+
+describe("agentCapabilities isAgentEnabled (#14702)", () => {
+  it("answers from this machine's toolbar pins, for an agent only a host defines too", async () => {
+    storeMock.get.mockImplementation(((key: string) =>
+      key === "agentToolbarPins"
+        ? { "host-only-agent": true, [sampleAgentId]: false }
+        : { agents: { [sampleAgentId]: { pinned: true } } }) as never);
+    try {
+      await expect(callOp("isAgentEnabled", "host-only-agent")).resolves.toBe(true);
+      // Never from the retired agent-settings field.
+      await expect(callOp("isAgentEnabled", sampleAgentId)).resolves.toBe(false);
+    } finally {
+      storeMock.get.mockImplementation(() => ({ agents: {} }));
+    }
+  });
+});

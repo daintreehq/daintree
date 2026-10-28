@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 
 const platform = vi.hoisted(() => ({ mac: true }));
 
@@ -21,9 +21,14 @@ import {
   PROJECT_SETTINGS_TAB_IDS,
   type SettingsTab,
 } from "../settingsTabIds";
-import { ownerForTab } from "../settingsTabRegistry";
+import { getSettingsTabEntry, ownerForTab } from "../settingsTabRegistry";
 import { _resetHostPlatformForTests, setHostPlatformInfo } from "@/hooks/useHostPlatform";
-import { STORE_KEY_OWNERSHIP } from "../../../../electron/storeOwnership";
+import {
+  _resetSettingOwnersShownForTests,
+  ownerOfSetting,
+  sharedSettingOwner,
+} from "@/hooks/useSettingsOwner";
+import { SETTINGS_SEARCH_INDEX } from "../settingsSearchIndex";
 
 const ALL_TABS: SettingsTab[] = [...GLOBAL_SETTINGS_TAB_IDS, ...PROJECT_SETTINGS_TAB_IDS];
 
@@ -35,6 +40,7 @@ function attachToHost(hostName: string | null = "studio-01") {
 beforeEach(() => {
   platform.mac = true;
   _resetHostPlatformForTests();
+  _resetSettingOwnersShownForTests();
 });
 
 afterEach(() => {
@@ -48,30 +54,31 @@ describe("settings tab owners", () => {
     for (const tab of PROJECT_SETTINGS_TAB_IDS) expect(ownerForTab(tab), tab).toBe("host");
   });
 
-  it("follows the store ownership of the settings each single-owner tab writes", () => {
-    const writes: [SettingsTab, (keyof typeof STORE_KEY_OWNERSHIP)[]][] = [
-      ["agents", ["agentSettings", "userAgentRegistry", "agentUpdateSettings"]],
-      ["environment", ["globalEnvironmentVariables"]],
-      ["mcp", ["mcpServer"]],
-      ["plugins", ["plugins", "pluginCapabilityConsent"]],
-      ["code-forge", ["forgeCredentials", "forgeDefaultProviderId"]],
-      ["run-history", ["runHistory"]],
-      ["assistant", ["helpAssistant"]],
-      ["keyboard", ["keybindingOverrides"]],
-      ["terminalAppearance", ["appTheme"]],
-      ["voice", ["voiceInput"]],
-      ["hosts", ["remoteHosts", "hostMode"]],
-    ];
-    for (const [tab, keys] of writes) {
-      for (const key of keys) {
-        expect(STORE_KEY_OWNERSHIP[key], `${tab} writes ${key}`).toBe(ownerForTab(tab));
-      }
+  it("reads each tab's owner from the settings it writes", () => {
+    for (const tab of ALL_TABS) {
+      const entry = getSettingsTabEntry(tab);
+      expect(entry?.settings.length, tab).toBeGreaterThan(0);
+      const owners = new Set(entry?.settings.map((ref) => ownerOfSetting(ref)));
+      expect(ownerForTab(tab), tab).toBe(owners.size === 1 ? [...owners][0] : "mixed");
+    }
+  });
+
+  it("files the pages the owner issue named under the owner their settings declare", () => {
+    expect(ownerForTab("agents")).toBe("host");
+    expect(ownerForTab("environment")).toBe("host");
+    expect(ownerForTab("keyboard")).toBe("device");
+    expect(ownerForTab("voice")).toBe("device");
+    expect(ownerForTab("hosts")).toBe("device");
+    // The toolbar's agent pins are this machine's too (#14702).
+    expect(ownerForTab("toolbar")).toBe("device");
+    for (const tab of ["general", "terminal", "troubleshooting"] as const) {
+      expect(ownerForTab(tab), tab).toBe("mixed");
     }
   });
 });
 
 describe("settings header owner chip", () => {
-  it("renders nothing for any tab in a local window", () => {
+  it("renders nothing for any tab in a local window with no hosts in use", () => {
     setHostPlatformInfo({ hostName: null });
     for (const tab of ALL_TABS) {
       const { container, unmount } = render(<SettingsOwnerHeaderChip tab={tab} />);
@@ -103,6 +110,18 @@ describe("settings header owner chip", () => {
     expect(screen.getByText("This machine")).toBeTruthy();
   });
 
+  it("names the owner in a local window once hosts are in use", async () => {
+    Object.assign(window, {
+      electron: { remoteHosts: { isInUse: vi.fn(() => Promise.resolve(true)) } },
+    });
+    const { container } = render(<SettingsOwnerHeaderChip tab="keyboard" />);
+    await waitFor(() => expect(container.textContent).toContain("This Mac"));
+    cleanup();
+    render(<SettingsOwnerHeaderChip tab="agents" />);
+    await waitFor(() => expect(screen.getByText("Shared with Shells")).toBeTruthy());
+    delete (window as { electron?: unknown }).electron;
+  });
+
   it("leaves a mixed page's header alone; its sections name their own owners", () => {
     attachToHost();
     const { container } = render(<SettingsOwnerHeaderChip tab="general" />);
@@ -118,5 +137,29 @@ describe("settings header owner chip", () => {
       </h3>
     );
     expect(container.querySelector("h3")?.textContent).toBe("Agents, Settings on studio-01");
+  });
+});
+
+describe("settings header owner chip with another machine picked (#14706)", () => {
+  it("names the picked host over its work settings, even from a local window", () => {
+    render(<SettingsOwnerHeaderChip tab="general" picked="studio-03" />);
+    expect(screen.getByText("Settings on studio-03")).toBeTruthy();
+  });
+
+  it("says a device page is this machine's own, even from a local window", () => {
+    render(<SettingsOwnerHeaderChip tab="keyboard" picked={null} />);
+    expect(screen.getByText("This Mac")).toBeTruthy();
+  });
+
+  it("leaves open only pages whose every result names the machine being edited", () => {
+    // A pick keeps this machine's pages and search results; a host mark among them
+    // would name the window's host while another machine is the one being edited.
+    const leftOpen = SETTINGS_SEARCH_INDEX.filter(
+      (entry) => !entry.plugin && ownerForTab(entry.tab) === "device"
+    );
+    expect(leftOpen.length).toBeGreaterThan(0);
+    for (const entry of leftOpen) {
+      if (entry.settings) expect(sharedSettingOwner(entry.settings), entry.id).toBe("device");
+    }
   });
 });

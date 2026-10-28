@@ -11,12 +11,27 @@ const { loggerMock } = vi.hoisted(() => ({
 vi.mock("../../../utils/logger.js", () => ({
   createLogger: () => loggerMock,
 }));
+// Every path under /p is in one project, so a drive-lease check traces there.
+vi.mock("../../driveLeaseTargetResolvers.js", () => ({
+  createLeaseTargetResolvers: () => ({
+    projectsForPath: (p: string) => (p.startsWith("/p/") ? ["project-a"] : []),
+    describeTerminal: () => "missing",
+    projectsForOperation: () => [],
+    projectsForDevPreviewPanel: () => [],
+    projectsForHelpSession: () => [],
+    currentProjectId: () => null,
+  }),
+}));
 
 import { PluginDevWorkerMainBridge } from "../PluginDevWorkerMainBridge.js";
+import {
+  inertPluginTaskHandle,
+  pluginTaskAbortReason,
+} from "../../../../shared/utils/pluginTasks.js";
 import { PluginDevWorkerHostProxy } from "../pluginDevWorkerHostProxy.js";
 import { PluginInvokeTimeoutError, runWithInvokeDeadline } from "../pluginInvokeDeadline.js";
 import type { PluginIpcContext } from "../../../../shared/types/plugin.js";
-import { databaseBackupApprovers } from "../pluginInternalApprovers.js";
+import { databaseBackupApprovers, databaseWriteAuthorizers } from "../pluginInternalApprovers.js";
 import { parseWorkerToHostMessage } from "../../../schemas/pluginDevWorker.js";
 import { PLUGIN_PUSH_MAX_PAYLOAD_BYTES } from "../../../../shared/config/pluginBudgets.js";
 import {
@@ -26,6 +41,12 @@ import {
   setPluginFrontendRouter,
 } from "../pluginFrontendRouting.js";
 import type { ClientEndpoint } from "../../../ipc/endpoint.js";
+import { assertPluginCallerDrives } from "../pluginDriveLease.js";
+import { ENDED_SERVICE_INVOCATION, currentServiceInvocation } from "../pluginServiceInvocation.js";
+import {
+  _resetDriveLeaseServiceForTesting,
+  type DriveLeaseService,
+} from "../../DriveLeaseService.js";
 
 class FakeWorkerHost extends EventEmitter {
   sent: any[] = [];
@@ -61,14 +82,26 @@ function makeHost() {
     onDidChangeActiveWorktree: vi.fn((_cb: any) => vi.fn()),
     onDidChangeWorktrees: vi.fn((_cb: any) => vi.fn()),
     onDidWake: vi.fn((_cb: any) => vi.fn()),
+    onDidChangeTerminalLifecycle: vi.fn((_cb: any) => vi.fn()),
     registerForgeProvider: vi.fn(() => vi.fn()),
     registerFileDecorationProvider: vi.fn(() => vi.fn()),
+    registerWorktreeSetupStep: vi.fn((_stepId: string, _handler: any) => vi.fn()),
+    registerContextProvider: vi.fn(async () => vi.fn()),
+    registerWorktreeDeleteNotesProvider: vi.fn(() => vi.fn()),
     invalidateFileDecorations: vi.fn(),
     setPanelBadge: vi.fn(async () => {}),
     setToolbarButtonBadge: vi.fn(async () => {}),
+    setToolbarButtonState: vi.fn(async () => {}),
     setContext: vi.fn(async () => {}),
     setWorktreeCardStatus: vi.fn(async () => {}),
+    setWorktreeReviewChecks: vi.fn(async () => {}),
+    setPanelActivity: vi.fn(async () => {}),
     setPanelMenuItems: vi.fn(async () => {}),
+    tasks: {
+      start: vi.fn(async (_options: unknown): Promise<unknown> => {
+        throw new Error("no task");
+      }),
+    },
     showToast: vi.fn(async () => {}),
     notify: vi.fn(async (_options: unknown) => ({ id: "n-1" })),
     showQuickPick: vi.fn(async (): Promise<unknown> => undefined),
@@ -76,6 +109,9 @@ function makeHost() {
     agents: {
       list: vi.fn(async () => [{ terminalId: "t-1", canDraft: true }]),
       listAll: vi.fn(async () => ({ agents: [], degraded: false, lastSuccessfulAt: 1 })),
+      interrupt: vi.fn(async () => ({ status: "sent", cancelKey: "advertised" })),
+      sendKeys: vi.fn(async () => ({ status: "sent", keys: ["Enter"] })),
+      submit: vi.fn(async () => ({ status: "not-found" })),
     },
     terminals: {
       readScreen: vi.fn(async (): Promise<unknown> => ({
@@ -101,7 +137,11 @@ function makeHost() {
       // concrete value (the default-inferred `Promise<undefined>` would reject it).
       get: vi.fn(async (): Promise<unknown> => undefined),
       set: vi.fn(async () => {}),
+      unset: vi.fn(async () => {}),
       onDidChange: vi.fn(() => vi.fn()),
+    },
+    system: {
+      openExternal: vi.fn(async () => {}),
     },
     storage: {
       // Annotated `Promise<unknown>` so a test can `mockResolvedValueOnce` a
@@ -140,6 +180,22 @@ function makeHost() {
         bytes: 1234,
         revision: "a".repeat(64),
       })),
+    },
+    artifacts: {
+      import: vi.fn(),
+      download: vi.fn(
+        async (
+          _request: unknown,
+          options: { onProgress?: (p: unknown) => void; signal?: AbortSignal }
+        ): Promise<unknown> => {
+          options.onProgress?.({ transferredBytes: 5, totalBytes: 5, attempt: 1 });
+          return { id: "a".repeat(32) };
+        }
+      ),
+      upload: vi.fn(),
+      stat: vi.fn(async (): Promise<unknown> => null),
+      list: vi.fn(async (): Promise<unknown> => []),
+      release: vi.fn(async (): Promise<unknown> => true),
     },
   };
 }
@@ -345,6 +401,30 @@ describe("PluginDevWorkerMainBridge", () => {
     expect(workerHost.sent.find((m) => m.requestId === "c-bk2")).toMatchObject({ ok: false });
   });
 
+  it("answers db.authorizeWrite from the host's internal authorizer, in the worker's call", async () => {
+    const { host, workerHost } = makeBridge();
+    const db = { resolve: vi.fn(), open: vi.fn() };
+    const authorize = vi.fn(async (_id: string, _path?: string) => {
+      throw Object.assign(new Error("DRIVEN_ELSEWHERE: someone else drives"), {
+        code: "DRIVEN_ELSEWHERE",
+      });
+    });
+    databaseWriteAuthorizers.set(db as never, authorize);
+    (host as unknown as { db: unknown }).db = db;
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "c-aw",
+      method: "db.authorizeWrite",
+      params: { id: "ledger", path: "/p/.daintree/data/x/ledger.db" },
+    });
+    await flush();
+    expect(authorize).toHaveBeenCalledWith("ledger", "/p/.daintree/data/x/ledger.db");
+    expect(workerHost.sent.find((m) => m.requestId === "c-aw")).toMatchObject({
+      ok: false,
+      errorFields: { code: "DRIVEN_ELSEWHERE" },
+    });
+  });
+
   it("carries a host error's primitive fields to the worker, not just its message", async () => {
     const { host, workerHost } = makeBridge();
     host.getWorktrees.mockRejectedValueOnce(
@@ -411,16 +491,242 @@ describe("PluginDevWorkerMainBridge", () => {
     expect(refused).toMatchObject({ ok: false, error: expect.stringMatching(/at most 32 keys/) });
   });
 
+  it("relays setToolbarButtonState as a call and returns the host's rejection (#13785)", async () => {
+    const { host, workerHost } = makeBridge();
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "c-ts",
+      method: "setToolbarButtonState",
+      params: { buttonId: "sync", state: { pressed: true } },
+    });
+    await flush();
+    expect(host.setToolbarButtonState).toHaveBeenCalledWith("sync", { pressed: true });
+    const ok = workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "c-ts");
+    expect(ok).toMatchObject({ ok: true });
+
+    host.setToolbarButtonState.mockRejectedValueOnce(
+      new Error(
+        "setToolbarButtonState: invalid state — disabledReason: a disabled button needs a disabledReason"
+      )
+    );
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "c-ts-bad",
+      method: "setToolbarButtonState",
+      params: { buttonId: "sync", state: { disabled: true } },
+    });
+    await flush();
+    const refused = workerHost.sent.find(
+      (m) => m.type === "host-result" && m.requestId === "c-ts-bad"
+    );
+    expect(refused).toMatchObject({ ok: false, error: expect.stringMatching(/disabledReason/) });
+  });
+
+  it("relays setPanelActivity as a call and returns the host's rejection (#13820)", async () => {
+    const { host, workerHost } = makeBridge();
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "c-pa",
+      method: "setPanelActivity",
+      params: { panelId: "panel-1", activity: { state: "working" } },
+    });
+    await flush();
+    expect(host.setPanelActivity).toHaveBeenCalledWith("panel-1", { state: "working" });
+    expect(
+      workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "c-pa")
+    ).toMatchObject({ ok: true });
+
+    host.setPanelActivity.mockRejectedValueOnce(
+      new Error('setPanelActivity: panel "panel-2" belongs to another plugin')
+    );
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "c-pa-foreign",
+      method: "setPanelActivity",
+      params: { panelId: "panel-2", activity: { state: "waiting" } },
+    });
+    await flush();
+    expect(
+      workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "c-pa-foreign")
+    ).toMatchObject({ ok: false, error: expect.stringMatching(/belongs to another plugin/) });
+  });
+
+  describe("tasks (#13819)", () => {
+    function fakeTask(id = "t-1") {
+      const controller = new AbortController();
+      return {
+        controller,
+        handle: {
+          id,
+          signal: controller.signal,
+          report: vi.fn(),
+          finish: vi.fn(async (_result: unknown) => {}),
+        },
+      };
+    }
+
+    async function start(workerHost: FakeWorkerHost, requestId = "c-ts") {
+      workerHost.emit("worker-message", {
+        type: "host-call",
+        requestId,
+        method: "tasks.start",
+        params: {
+          subscriptionId: "s-cancel",
+          options: { title: "Import", cancellable: true, retry: { actionId: "acme.demo.go" } },
+        },
+      });
+      await flush();
+      return workerHost.sent.find((m) => m.type === "host-result" && m.requestId === requestId);
+    }
+
+    const cancelEvents = (workerHost: FakeWorkerHost) =>
+      workerHost.sent.filter(
+        (m) => m.type === "subscription-event" && m.subscriptionId === "s-cancel"
+      );
+
+    it("starts on the host, relays the user's cancel, routes reports and finishes", async () => {
+      const { host, workerHost } = makeBridge();
+      const { controller, handle } = fakeTask();
+      host.tasks.start.mockResolvedValueOnce(handle);
+
+      expect(await start(workerHost)).toMatchObject({ ok: true, result: { id: "t-1" } });
+      expect(host.tasks.start).toHaveBeenCalledWith({
+        title: "Import",
+        cancellable: true,
+        retry: { actionId: "acme.demo.go" },
+      });
+
+      workerHost.emit("worker-message", {
+        type: "host-notify",
+        method: "tasks.report",
+        params: {
+          reports: [
+            { taskId: "t-1", progress: { fraction: 0.5 } },
+            { taskId: "someone-else", progress: { fraction: 1 } },
+          ],
+        },
+      });
+      await flush();
+      expect(handle.report).toHaveBeenCalledTimes(1);
+      expect(handle.report).toHaveBeenCalledWith({ fraction: 0.5 });
+
+      controller.abort(pluginTaskAbortReason("cancelled"));
+      expect(cancelEvents(workerHost)).toMatchObject([{ payload: { cause: "cancelled" } }]);
+
+      workerHost.emit("worker-message", {
+        type: "host-call",
+        requestId: "c-tf",
+        method: "tasks.finish",
+        params: { taskId: "t-1", result: { outcome: "cancelled" } },
+      });
+      await flush();
+      expect(handle.finish).toHaveBeenCalledWith({ outcome: "cancelled" });
+      workerHost.emit("worker-message", {
+        type: "host-notify",
+        method: "tasks.report",
+        params: { reports: [{ taskId: "t-1", progress: { fraction: 0.9 } }] },
+      });
+      await flush();
+      expect(handle.report).toHaveBeenCalledTimes(1);
+    });
+
+    it("says so when the host handed back an inert handle", async () => {
+      const { host, workerHost } = makeBridge();
+      const handle = inertPluginTaskHandle();
+      host.tasks.start.mockResolvedValueOnce(handle);
+      expect(await start(workerHost)).toMatchObject({
+        ok: true,
+        result: { id: handle.id, inert: true },
+      });
+      expect(cancelEvents(workerHost)).toEqual([]);
+    });
+
+    it("keeps a real task cancelled before start answered, and tells the worker first", async () => {
+      const { host, workerHost } = makeBridge();
+      const { controller, handle } = fakeTask();
+      controller.abort();
+      host.tasks.start.mockResolvedValueOnce(handle);
+
+      const result = await start(workerHost);
+      expect(result).toMatchObject({ ok: true, result: { id: "t-1" } });
+      expect(result.result).not.toHaveProperty("inert");
+      const cancelAt = workerHost.sent.findIndex(
+        (m) => m.type === "subscription-event" && m.subscriptionId === "s-cancel"
+      );
+      expect(cancelAt).toBeGreaterThanOrEqual(0);
+      expect(cancelAt).toBeLessThan(workerHost.sent.indexOf(result));
+
+      workerHost.emit("worker-message", {
+        type: "host-call",
+        requestId: "c-tf",
+        method: "tasks.finish",
+        params: { taskId: "t-1", result: { outcome: "cancelled" } },
+      });
+      await flush();
+      expect(handle.finish).toHaveBeenCalledWith({ outcome: "cancelled" });
+    });
+
+    it("stops relaying cancels once the worker generation is retired", async () => {
+      const { host, workerHost } = makeBridge();
+      const { controller, handle } = fakeTask();
+      host.tasks.start.mockResolvedValueOnce(handle);
+      await start(workerHost);
+
+      workerHost.emit("exit", 139, false);
+      controller.abort();
+      expect(cancelEvents(workerHost)).toEqual([]);
+    });
+  });
+
+  it("relays setWorktreeReviewChecks as a call and returns the host's rejection (#13806)", async () => {
+    const { host, workerHost } = makeBridge();
+    const checks = [{ label: "broken", severity: "warning", command: "acme.demo.open" }];
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "c-rc",
+      method: "setWorktreeReviewChecks",
+      params: { worktreeId: "/repo/wt", checks },
+    });
+    await flush();
+    expect(host.setWorktreeReviewChecks).toHaveBeenCalledWith("/repo/wt", checks);
+    expect(
+      workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "c-rc")
+    ).toMatchObject({
+      ok: true,
+    });
+
+    host.setWorktreeReviewChecks.mockRejectedValueOnce(
+      new Error('setWorktreeReviewChecks: "/other" is not a worktree this plugin can see')
+    );
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "c-rc-foreign",
+      method: "setWorktreeReviewChecks",
+      params: { worktreeId: "/other", checks: null },
+    });
+    await flush();
+    expect(
+      workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "c-rc-foreign")
+    ).toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/not a worktree this plugin can see/),
+    });
+  });
+
   it("relays setWorktreeCardStatus as a call and returns the host's rejection (#13704)", async () => {
     const { host, workerHost } = makeBridge();
     workerHost.emit("worker-message", {
       type: "host-call",
       requestId: "c-ws",
       method: "setWorktreeCardStatus",
-      params: { worktreeId: "/repo/wt", status: { label: "up" } },
+      params: { worktreeId: "/repo/wt", status: { label: "up", command: "acme.demo.open" } },
     });
     await flush();
-    expect(host.setWorktreeCardStatus).toHaveBeenCalledWith("/repo/wt", { label: "up" });
+    // Relayed as sent: the host qualifies the command, as it vets the rest.
+    expect(host.setWorktreeCardStatus).toHaveBeenCalledWith("/repo/wt", {
+      label: "up",
+      command: "acme.demo.open",
+    });
     const ok = workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "c-ws");
     expect(ok).toMatchObject({ ok: true });
 
@@ -519,6 +825,32 @@ describe("PluginDevWorkerMainBridge", () => {
       ok: true,
       result: { path: "/data/out.pdf", bytes: 1234, revision: "a".repeat(64) },
     });
+  });
+
+  it("routes an artifact download with this call's signal and relays its progress", async () => {
+    const { host, workerHost } = makeBridge();
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "art1",
+      method: "artifacts.download",
+      params: {
+        target: { url: "https://api.example.com/a" },
+        options: { attempts: 2 },
+        progressSubscriptionId: "s9",
+      },
+    });
+    await flush();
+    const [request, options] = host.artifacts.download.mock.calls[0]!;
+    expect(request).toEqual({ url: "https://api.example.com/a" });
+    expect(options).toMatchObject({ attempts: 2 });
+    expect(options.signal).toBeInstanceOf(AbortSignal);
+    expect(workerHost.sent).toContainEqual({
+      type: "subscription-event",
+      subscriptionId: "s9",
+      payload: { transferredBytes: 5, totalBytes: 5, attempt: 1 },
+    });
+    const result = workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "art1");
+    expect(result).toMatchObject({ ok: true, result: { id: "a".repeat(32) } });
   });
 
   it("replies host-result ok:false when the host method throws", async () => {
@@ -772,6 +1104,29 @@ describe("PluginDevWorkerMainBridge", () => {
     });
   });
 
+  it("routes a terminal-lifecycle subscription to host.onDidChangeTerminalLifecycle (#13814)", async () => {
+    const { host, workerHost } = makeBridge();
+    let emitLifecycle: ((e: unknown) => void) | undefined;
+    host.onDidChangeTerminalLifecycle.mockImplementation((cb: any) => {
+      emitLifecycle = cb;
+      return vi.fn();
+    });
+    workerHost.emit("worker-message", {
+      type: "subscribe",
+      subscriptionId: "s-term",
+      kind: "terminal-lifecycle",
+    });
+    expect(host.onDidChangeTerminalLifecycle).toHaveBeenCalled();
+    // A discrete stream: no debounce option is passed through.
+    expect(host.onDidChangeTerminalLifecycle.mock.calls[0]).toHaveLength(1);
+    emitLifecycle?.({ type: "spawned", terminalId: "t1", kind: "shell", timestamp: 1 });
+    const evt = workerHost.sent.find((m) => m.type === "subscription-event");
+    expect(evt).toMatchObject({
+      subscriptionId: "s-term",
+      payload: { type: "spawned", terminalId: "t1", kind: "shell", timestamp: 1 },
+    });
+  });
+
   it("disposes a subscription on unsubscribe", async () => {
     const { host, workerHost } = makeBridge();
     const dispose = vi.fn();
@@ -853,6 +1208,44 @@ describe("PluginDevWorkerMainBridge", () => {
     });
     await flush();
     expect(host.settings.get).toHaveBeenCalledWith("ref", "project");
+  });
+
+  it("forwards settings.unset with an omitted scope as undefined", async () => {
+    const { host, workerHost } = makeBridge();
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "su1",
+      method: "settings.unset",
+      params: { key: "token" },
+    });
+    await flush();
+    expect(host.settings.unset).toHaveBeenCalledWith("token", undefined);
+    const reply = workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "su1");
+    expect(reply).toMatchObject({ ok: true });
+  });
+
+  it("forwards system.openExternal to the host and relays its rejection", async () => {
+    const { host, workerHost } = makeBridge();
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "oe1",
+      method: "system.openExternal",
+      params: { url: "https://example.com/a" },
+    });
+    await flush();
+    expect(host.system.openExternal).toHaveBeenCalledWith("https://example.com/a");
+
+    host.system.openExternal.mockRejectedValueOnce(new Error("RATE_LIMITED: slow down"));
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "oe2",
+      method: "system.openExternal",
+      params: { url: "https://example.com/b" },
+    });
+    await flush();
+    const reply = workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "oe2");
+    expect(reply).toMatchObject({ ok: false });
+    expect(JSON.stringify(reply)).toContain("RATE_LIMITED");
   });
 
   it("opens a storage subscription and pushes events to the worker", async () => {
@@ -1366,6 +1759,118 @@ describe("PluginDevWorkerMainBridge", () => {
     await expect(resultPromise).resolves.toEqual({ "a.ts": { badge: "M" } });
   });
 
+  it("registerWorktreeSetupStep binds a handler that runs the worker's and cancels it on abort (#13807)", async () => {
+    const { host, workerHost } = makeBridge();
+    workerHost.emit("worker-message", {
+      type: "host-notify",
+      method: "registerWorktreeSetupStep",
+      registrationKey: "worktreeSetupStep:db",
+      params: { stepId: "db" },
+    });
+    await flush();
+    expect(host.registerWorktreeSetupStep).toHaveBeenCalledTimes(1);
+    const [stepId, handler] = host.registerWorktreeSetupStep.mock.calls[0] as unknown as [
+      string,
+      (ctx: Record<string, unknown>) => Promise<void>,
+    ];
+    expect(stepId).toBe("db");
+
+    const context = {
+      projectId: "project-1",
+      worktreeId: "/repo/wt",
+      worktreePath: "/repo/wt",
+      branch: null,
+    };
+    const ok = handler({ ...context, signal: new AbortController().signal });
+    const first = workerHost.sent.find(
+      (m) => m.type === "invoke" && m.kind === "worktree-setup-step"
+    );
+    // The signal stays behind: it cannot cross the port.
+    expect(first).toEqual({
+      type: "invoke",
+      requestId: first.requestId,
+      kind: "worktree-setup-step",
+      stepId: "db",
+      context,
+    });
+    workerHost.emit("worker-message", {
+      type: "invoke-result",
+      requestId: first.requestId,
+      ok: true,
+      result: null,
+    });
+    await expect(ok).resolves.toBeUndefined();
+
+    const controller = new AbortController();
+    const cancelled = handler({ ...context, signal: controller.signal });
+    const second = workerHost.sent.filter(
+      (m) => m.type === "invoke" && m.kind === "worktree-setup-step"
+    )[1];
+    controller.abort(new Error("timed out"));
+    await expect(cancelled).rejects.toThrow();
+    expect(workerHost.sent.at(-1)).toEqual({ type: "invoke-cancel", requestId: second.requestId });
+  });
+
+  it("unregisterWorktreeSetupStep disposes the host registration", async () => {
+    const { host, workerHost } = makeBridge();
+    const dispose = vi.fn();
+    host.registerWorktreeSetupStep.mockReturnValueOnce(dispose);
+    workerHost.emit("worker-message", {
+      type: "host-notify",
+      method: "registerWorktreeSetupStep",
+      params: { stepId: "db" },
+    });
+    await flush();
+    workerHost.emit("worker-message", {
+      type: "host-notify",
+      method: "unregisterWorktreeSetupStep",
+      params: { stepId: "db" },
+    });
+    expect(dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("registerContextProvider round-trips search and cancels the worker call when main stops waiting (#13795)", async () => {
+    const { host, workerHost } = makeBridge();
+    workerHost.emit("worker-message", {
+      type: "host-notify",
+      method: "registerContextProvider",
+      registrationKey: "contextProvider:cards",
+      params: { descriptor: { id: "cards" } },
+    });
+    await flush();
+    expect(host.registerContextProvider).toHaveBeenCalledTimes(1);
+    const [descriptor, proxyImpl] = host.registerContextProvider.mock.calls[0] as unknown as [
+      { id: string },
+      {
+        search: (q: string, o: { signal: AbortSignal }) => Promise<unknown>;
+        resolve: (id: string, o: { signal: AbortSignal }) => Promise<unknown>;
+      },
+    ];
+    expect(descriptor).toEqual({ id: "cards" });
+
+    const found = proxyImpl.search("fix", { signal: new AbortController().signal });
+    const search = workerHost.sent.find(
+      (m) => m.type === "invoke" && m.kind === "context-provider-method" && m.method === "search"
+    );
+    expect(search).toMatchObject({ providerId: "cards", args: ["fix"] });
+    workerHost.emit("worker-message", {
+      type: "invoke-result",
+      requestId: search.requestId,
+      ok: true,
+      result: [{ id: "1", label: "Fix" }],
+    });
+    await expect(found).resolves.toEqual([{ id: "1", label: "Fix" }]);
+
+    const controller = new AbortController();
+    const resolving = proxyImpl.resolve("7", { signal: controller.signal });
+    const resolve = workerHost.sent.find(
+      (m) => m.type === "invoke" && m.kind === "context-provider-method" && m.method === "resolve"
+    );
+    controller.abort(new Error("timed out"));
+    await expect(resolving).rejects.toThrow();
+    expect(workerHost.sent).toContainEqual({ type: "invoke-cancel", requestId: resolve.requestId });
+  });
+
   it("unregisterFileDecorationProvider disposes the host registration", async () => {
     const { host, workerHost } = makeBridge();
     const dispose = vi.fn();
@@ -1384,6 +1889,70 @@ describe("PluginDevWorkerMainBridge", () => {
       params: { providerId: "acme.demo.deco" },
     });
     expect(dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("registerWorktreeDeleteNotesProvider round-trips provideNotes and cancels it at the host's deadline (#13805)", async () => {
+    const { host, workerHost, bridge } = makeBridge();
+    workerHost.emit("worker-message", {
+      type: "host-notify",
+      method: "registerWorktreeDeleteNotesProvider",
+      registrationKey: "worktreeDeleteNotesProvider:notes",
+      params: { descriptor: { id: "notes" } },
+    });
+    expect(host.registerWorktreeDeleteNotesProvider).toHaveBeenCalledTimes(1);
+    const [descriptor, proxyImpl] = host.registerWorktreeDeleteNotesProvider.mock
+      .calls[0] as unknown as [
+      { id: string },
+      { provideNotes: (worktree: unknown, signal?: AbortSignal) => Promise<unknown> },
+    ];
+    expect(descriptor).toEqual({ id: "notes" });
+
+    const answered = proxyImpl.provideNotes({ id: "/repo/wt" });
+    const first = workerHost.sent.find(
+      (m) => m.type === "invoke" && m.kind === "worktree-delete-notes"
+    );
+    expect(first).toMatchObject({ providerId: "notes", worktree: { id: "/repo/wt" } });
+    workerHost.emit("worker-message", {
+      type: "invoke-result",
+      requestId: first.requestId,
+      ok: true,
+      result: [{ severity: "info", text: "hi" }],
+    });
+    await expect(answered).resolves.toEqual([{ severity: "info", text: "hi" }]);
+
+    const deadline = new AbortController();
+    const abandoned = proxyImpl.provideNotes({ id: "/repo/wt" }, deadline.signal);
+    expect(bridge.pendingInvokeCount).toBe(1);
+    deadline.abort(new Error("timed out"));
+    await expect(abandoned).rejects.toThrow();
+    expect(bridge.pendingInvokeCount).toBe(0);
+    expect(workerHost.sent.some((m) => m.type === "invoke-cancel")).toBe(true);
+  });
+
+  it("keeps worktree delete notes and decoration providers apart when they share an id", async () => {
+    const { host, workerHost } = makeBridge();
+    const disposeNotes = vi.fn();
+    const disposeDeco = vi.fn();
+    host.registerWorktreeDeleteNotesProvider.mockReturnValueOnce(disposeNotes);
+    host.registerFileDecorationProvider.mockReturnValueOnce(disposeDeco);
+    workerHost.emit("worker-message", {
+      type: "host-notify",
+      method: "registerWorktreeDeleteNotesProvider",
+      params: { descriptor: { id: "shared" } },
+    });
+    workerHost.emit("worker-message", {
+      type: "host-notify",
+      method: "registerFileDecorationProvider",
+      params: { descriptor: { id: "shared", scopes: ["pr"] } },
+    });
+    await flush();
+    workerHost.emit("worker-message", {
+      type: "host-notify",
+      method: "unregisterWorktreeDeleteNotesProvider",
+      params: { providerId: "shared" },
+    });
+    expect(disposeNotes).toHaveBeenCalledTimes(1);
+    expect(disposeDeco).not.toHaveBeenCalled();
   });
 
   it("fails pending invokes when the worker crashes (#12216)", async () => {
@@ -2522,6 +3091,47 @@ describe("PluginDevWorkerMainBridge handler invoke deadline", () => {
   });
 });
 
+describe("PluginDevWorkerMainBridge input to launched agents (#14018)", () => {
+  it.each([
+    [
+      "agents.interrupt",
+      { terminalId: "t-1" },
+      "interrupt",
+      ["t-1"],
+      { status: "sent", cancelKey: "advertised" },
+    ],
+    [
+      "agents.sendKeys",
+      { terminalId: "t-1", input: { choose: "Yes" } },
+      "sendKeys",
+      ["t-1", { choose: "Yes" }],
+      { status: "sent", keys: ["Enter"] },
+    ],
+    [
+      "agents.submit",
+      { terminalId: "t-1", text: "/compact" },
+      "submit",
+      ["t-1", "/compact"],
+      { status: "not-found" },
+    ],
+  ] as const)("routes %s to the real host", async (method, params, hostMethod, args, result) => {
+    const { host, workerHost } = makeBridge();
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: `in-${hostMethod}`,
+      method,
+      params,
+    });
+    await flush();
+
+    expect(host.agents[hostMethod]).toHaveBeenCalledWith(...args);
+    expect(workerHost.sent.find((m) => m.requestId === `in-${hostMethod}`)).toMatchObject({
+      ok: true,
+      result,
+    });
+  });
+});
+
 describe("PluginDevWorkerMainBridge app-wide agent list (#13154)", () => {
   it("routes agents.listAll to the real host", async () => {
     const { host, workerHost } = makeBridge();
@@ -2591,6 +3201,34 @@ describe("PluginDevWorkerMainBridge focused-panel subscription", () => {
       (m: any) => m.type === "subscription-event" && m.subscriptionId === "s-focus"
     );
     expect(evt.payload).toEqual(focus);
+  });
+});
+
+describe("PluginDevWorkerMainBridge project-presence subscription", () => {
+  it("subscribes project-presence through the host with the caller's window and pushes each change", async () => {
+    const { host, workerHost } = makeBridge();
+    let deliver: ((presence: unknown) => void) | undefined;
+    (host as any).onDidChangeProjectPresence = vi.fn(async (cb: (presence: unknown) => void) => {
+      deliver = cb;
+      return vi.fn();
+    });
+    workerHost.emit("worker-message", {
+      type: "subscribe",
+      subscriptionId: "s-presence",
+      kind: "project-presence",
+      debounceMs: 400,
+    });
+    await flush();
+
+    expect((host as any).onDidChangeProjectPresence).toHaveBeenCalledWith(expect.any(Function), {
+      debounceMs: 400,
+    });
+    const presence = { projectId: "p1", state: "background" };
+    deliver?.(presence);
+    const evt = workerHost.sent.find(
+      (m: any) => m.type === "subscription-event" && m.subscriptionId === "s-presence"
+    );
+    expect(evt.payload).toEqual(presence);
   });
 });
 
@@ -2793,7 +3431,8 @@ describe("PluginDevWorkerMainBridge invocation scope", () => {
     await flush();
     expect(seen).toEqual({ "from-b": "b", "from-a": "a", background: null });
 
-    // Once A's invocation settles, a late call naming it belongs to nobody.
+    // Once A's invocation settles, a late call naming it reaches nobody's
+    // frontend; the drive lease still holds it to A's caller (#14251).
     workerHost.emit("worker-message", {
       type: "invoke-result",
       requestId: invokeA.requestId,
@@ -2809,5 +3448,264 @@ describe("PluginDevWorkerMainBridge invocation scope", () => {
     });
     await flush();
     expect(seen["late-a"]).toBeNull();
+  });
+});
+
+describe("PluginDevWorkerMainBridge late host calls and the drive lease (#14251)", () => {
+  const PROJECT = "project-a";
+  const DRIVER = leaseEndpoint("remote:-9", "client-c");
+  const WATCHER = leaseEndpoint("remote:-4", "client-b");
+  const OTHER = leaseEndpoint("remote:-7", "client-d");
+  let holder: ClientEndpoint | null;
+
+  function leaseEndpoint(endpointId: string, clientId: string): ClientEndpoint {
+    return {
+      endpointId,
+      clientId,
+      projectId: PROJECT,
+      kind: "remote-view",
+      handle: -1,
+      send: vi.fn(),
+      request: vi.fn(),
+      onClose: () => ({ dispose: () => {} }),
+      isClosed: () => false,
+    };
+  }
+
+  beforeEach(() => {
+    holder = DRIVER;
+    const service = {
+      projectsDrivenElsewhere: (caller: Pick<ClientEndpoint, "endpointId">) => {
+        const out = new Map<string, unknown>();
+        if (holder && holder.endpointId !== caller.endpointId) {
+          out.set(PROJECT, {
+            leaseId: 1,
+            endpointId: holder.endpointId,
+            clientId: holder.clientId,
+            clientName: "greg-mbp",
+            isHostLocal: false,
+            acquiredAt: 0,
+          });
+        }
+        return out;
+      },
+      dispose: () => undefined,
+    };
+    _resetDriveLeaseServiceForTesting(service as unknown as DriveLeaseService);
+  });
+
+  afterEach(() => {
+    _resetDriveLeaseServiceForTesting(null);
+    _resetPluginFrontendRoutingForTesting();
+  });
+
+  /** A bridge whose db and fs writes are held to the lease as the host's are. */
+  /** `caller` null makes the invoke outside any caller's call. */
+  async function bridgeWithInvoke(caller: ClientEndpoint | null) {
+    setPluginFrontendRouter({ resolve: () => ({ kind: "local" }), onChange: () => () => {} });
+    const { host, workerHost } = makeBridge({ capabilities: [] });
+    const db = { resolve: vi.fn(), open: vi.fn() };
+    databaseWriteAuthorizers.set(db as never, (id: string, p?: string) =>
+      assertPluginCallerDrives("acme.demo", `db write ${id}`, { paths: [p ?? ""] })
+    );
+    (host as unknown as { db: unknown }).db = db;
+    const written: string[] = [];
+    (host.fs.writeFile as any).mockImplementation(async (p: string) => {
+      await assertPluginCallerDrives("acme.demo", "fs.writeFile", { paths: [p] });
+      written.push(p);
+    });
+    workerHost.emit("worker-message", {
+      type: "host-notify",
+      method: "registerHandler",
+      params: { channel: "go", hasSchema: false },
+    });
+    await flush();
+    const wrapper = (host.registerHandler as any).mock.calls[0][1] as (...a: any[]) => unknown;
+    const invokes = () => workerHost.sent.filter((m) => m.type === "invoke");
+    /** Start one invoke per caller, in order, and return their ids. */
+    const invokeAs = async (...callers: Array<ClientEndpoint | null>) => {
+      const before = invokes().length;
+      for (const by of callers) {
+        if (by === null) void wrapper({}, {});
+        else void runInPluginInvocation("acme.demo", by, () => wrapper({}, {}));
+      }
+      await flush();
+      return invokes()
+        .slice(before)
+        .map((m) => m.requestId as string);
+    };
+    const settleIds = (ids: readonly string[]) => {
+      for (const requestId of ids) {
+        workerHost.emit("worker-message", {
+          type: "invoke-result",
+          requestId,
+          ok: true,
+          result: null,
+        });
+      }
+    };
+    const [invocationId] = await invokeAs(caller);
+    const settle = () => settleIds([invocationId]);
+    const answer = (requestId: string) =>
+      workerHost.sent.find((m) => m.type === "host-result" && m.requestId === requestId);
+    const call = async (requestId: string, method: string, params: unknown, id?: string) => {
+      workerHost.emit("worker-message", {
+        type: "host-call",
+        requestId,
+        method,
+        params,
+        ...(id !== undefined && { invocationId: id }),
+      });
+      await vi.waitFor(() => expect(answer(requestId)).toBeDefined(), { timeout: 5000 });
+      return answer(requestId);
+    };
+    let seq = 0;
+    /**
+     * Make the late writes a plugin's timer would, and collect main's answers.
+     * One at a time: the guard's resolvers are a lazily imported mock, and two
+     * calls racing that first import don't both get it.
+     */
+    const lateWrites = async (id: string | undefined) => {
+      const tag = `w${seq++}`;
+      const db = await call(
+        `${tag}-db`,
+        "db.authorizeWrite",
+        { id: "ledger", path: "/p/.daintree/data/x/ledger.db" },
+        id
+      );
+      const fs = await call(
+        `${tag}-fs`,
+        "fs.writeFile",
+        { path: "/p/notes.md", contents: "x" },
+        id
+      );
+      return { db, fs };
+    };
+    return { invocationId, settle, lateWrites, written, invokeAs, settleIds };
+  }
+
+  const refused = { ok: false, errorFields: { code: "DRIVEN_ELSEWHERE" } };
+
+  it("refuses a watching view's writes made after its call returned", async () => {
+    const { invocationId, settle, lateWrites, written } = await bridgeWithInvoke(WATCHER);
+    settle();
+    const late = await lateWrites(invocationId);
+    expect(late.db).toMatchObject(refused);
+    expect(late.fs).toMatchObject(refused);
+    expect(written).toEqual([]);
+  });
+
+  it("holds post-return work to the lease as the call that started it: the driver's goes ahead", async () => {
+    const { invocationId, settle, lateWrites, written } = await bridgeWithInvoke(DRIVER);
+    settle();
+    const late = await lateWrites(invocationId);
+    expect(late.db).toMatchObject({ ok: true });
+    expect(late.fs).toMatchObject({ ok: true });
+    expect(written).toEqual(["/p/notes.md"]);
+  });
+
+  it("judges post-return work against the lease as it stands, so a takeover counts", async () => {
+    const { invocationId, settle, lateWrites, written } = await bridgeWithInvoke(DRIVER);
+    settle();
+    holder = OTHER;
+    const late = await lateWrites(invocationId);
+    expect(late.db).toMatchObject(refused);
+    expect(late.fs).toMatchObject(refused);
+    expect(written).toEqual([]);
+  });
+
+  it("refuses a call naming an invocation the bridge can't place, where someone drives", async () => {
+    const { lateWrites, written } = await bridgeWithInvoke(DRIVER);
+    const late = await lateWrites("i999");
+    expect(late.db).toMatchObject(refused);
+    expect(late.fs).toMatchObject(refused);
+    expect(written).toEqual([]);
+  });
+
+  it("lets a call naming an invocation it can't place write a project nobody drives", async () => {
+    const { lateWrites, written } = await bridgeWithInvoke(DRIVER);
+    holder = null;
+    const late = await lateWrites("i999");
+    expect(late.db).toMatchObject({ ok: true });
+    expect(late.fs).toMatchObject({ ok: true });
+    expect(written).toEqual(["/p/notes.md"]);
+  });
+
+  it("remembers the last 1,024 returned calls, then holds the oldest's work as nobody's", async () => {
+    const { invocationId, settle, lateWrites, invokeAs, settleIds } =
+      await bridgeWithInvoke(DRIVER);
+    settle();
+    settleIds(await invokeAs(...Array<ClientEndpoint>(1023).fill(DRIVER)));
+    expect((await lateWrites(invocationId)).fs).toMatchObject({ ok: true });
+
+    const [next] = await invokeAs(DRIVER);
+    settleIds([next]);
+    const late = await lateWrites(invocationId);
+    expect(late.db).toMatchObject(refused);
+    expect(late.fs).toMatchObject(refused);
+    expect((await lateWrites(next)).fs).toMatchObject({ ok: true });
+  });
+
+  it("holds each returned call's late work to its own caller, interleaved", async () => {
+    const { invocationId, settle, lateWrites, invokeAs, settleIds } =
+      await bridgeWithInvoke(DRIVER);
+    const [watcherId] = await invokeAs(WATCHER);
+    settle();
+    settleIds([watcherId]);
+    expect((await lateWrites(watcherId)).fs).toMatchObject(refused);
+    expect((await lateWrites(invocationId)).fs).toMatchObject({ ok: true });
+    expect((await lateWrites(watcherId)).db).toMatchObject(refused);
+  });
+
+  it("still checks a returned call's work once routing is gone and the lease remains", async () => {
+    const { invocationId, settle, lateWrites, written } = await bridgeWithInvoke(WATCHER);
+    settle();
+    _resetPluginFrontendRoutingForTesting();
+    expect((await lateWrites(invocationId)).fs).toMatchObject(refused);
+    expect((await lateWrites("i999")).fs).toMatchObject(refused);
+    expect(written).toEqual([]);
+  });
+
+  it("keeps work with no invocation id background, even while a watcher's call is open", async () => {
+    const { lateWrites, written } = await bridgeWithInvoke(WATCHER);
+    const late = await lateWrites(undefined);
+    expect(late.db).toMatchObject({ ok: true });
+    expect(late.fs).toMatchObject({ ok: true });
+    expect(written).toEqual(["/p/notes.md"]);
+  });
+
+  it("checks a live call from a watcher as before", async () => {
+    const { invocationId, lateWrites } = await bridgeWithInvoke(WATCHER);
+    const live = await lateWrites(invocationId);
+    expect(live.db).toMatchObject(refused);
+    expect(live.fs).toMatchObject(refused);
+  });
+
+  it("leaves an invocation that had no caller unchecked once it settles, as it was while open", async () => {
+    const { invocationId, settle, lateWrites, written } = await bridgeWithInvoke(null);
+    const live = await lateWrites(invocationId);
+    expect(live.fs).toMatchObject({ ok: true });
+    settle();
+    const late = await lateWrites(invocationId);
+    expect(late.db).toMatchObject({ ok: true });
+    expect(late.fs).toMatchObject({ ok: true });
+    expect(written).toEqual(["/p/notes.md", "/p/notes.md"]);
+  });
+
+  it("keeps an ended service invocation's work inside the ended service call", async () => {
+    const { host, workerHost } = makeBridge({ capabilities: [] });
+    let seen: unknown;
+    (host.showConfirm as any).mockImplementation(async () => {
+      seen = currentServiceInvocation();
+      return true;
+    });
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "c-s",
+      method: "showConfirm",
+      params: { options: { title: "late" } },
+      invocationId: "s999",
+    });
+    await vi.waitFor(() => expect(seen).toBe(ENDED_SERVICE_INVOCATION));
   });
 });

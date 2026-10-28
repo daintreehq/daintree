@@ -13,6 +13,7 @@ import {
   sanitizeAgentContextSourceLabel,
   setAgentContextDragData,
   validateAgentContextPayload,
+  validateAgentContextReferencePayload,
 } from "../agentContextDrag.js";
 
 describe("validateAgentContextPayload", () => {
@@ -124,6 +125,56 @@ describe("setAgentContextDragData", () => {
       setAgentContextDragData({ setData, effectAllowed: "all" }, { v: 1, text: "" })
     ).toThrow(TypeError);
     expect(setData).not.toHaveBeenCalled();
+  });
+});
+
+describe("reference payloads (#13795)", () => {
+  it("accepts a provider reference and normalises its label", () => {
+    expect(
+      validateAgentContextReferencePayload({
+        v: 2,
+        reference: { prefix: "rec", id: "142", label: " Fix\nlogin " },
+      })
+    ).toEqual({ v: 2, reference: { prefix: "rec", id: "142", label: "Fix login" } });
+  });
+
+  it.each([
+    ["a reserved prefix", { prefix: "diff", id: "1" }],
+    ["an uppercase prefix", { prefix: "Rec", id: "1" }],
+    ["an id that isn't one token", { prefix: "rec", id: "two words" }],
+    ["a label over the limit", { prefix: "rec", id: "1", label: "x".repeat(121) }],
+    ["no reference", undefined],
+  ])("refuses %s", (_name, reference) => {
+    expect(validateAgentContextReferencePayload({ v: 2, reference })).toBeNull();
+  });
+
+  it("round-trips through encode and decode, and keeps v1 decoding unchanged", () => {
+    const reference = { v: 2 as const, reference: { prefix: "rec", id: "142" } };
+    expect(decodeAgentContextDragPayload(encodeAgentContextDragPayload(reference))).toEqual(
+      reference
+    );
+    expect(decodeAgentContextDragPayload(JSON.stringify({ v: 1, text: "body" }))).toEqual({
+      v: 1,
+      text: "body",
+    });
+    expect(() =>
+      encodeAgentContextDragPayload({ v: 2, reference: { prefix: "diff", id: "1" } })
+    ).toThrow(TypeError);
+  });
+
+  it("puts the label, or the reference itself, on the plain-text fallback", () => {
+    const setData = vi.fn();
+    setAgentContextDragData(
+      { setData, effectAllowed: "all" },
+      { v: 2, reference: { prefix: "rec", id: "142", label: "Fix login" } }
+    );
+    expect(setData).toHaveBeenCalledWith("text/plain", "Fix login");
+    setData.mockClear();
+    setAgentContextDragData(
+      { setData, effectAllowed: "all" },
+      { v: 2, reference: { prefix: "rec", id: "142" } }
+    );
+    expect(setData).toHaveBeenCalledWith("text/plain", "@rec:142");
   });
 });
 

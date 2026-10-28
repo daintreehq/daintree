@@ -13,13 +13,8 @@ import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import { useActionPrefsStore } from "@/store/actionPrefsStore";
 import { usePaletteStore, type PaletteId } from "@/store/paletteStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
-import {
-  UI_PALETTE_ENTER_DURATION,
-  UI_PALETTE_EXIT_DURATION,
-  UI_ENTER_EASING,
-  UI_EXIT_EASING,
-} from "@/lib/animationUtils";
-import { cn } from "@/lib/utils";
+import { UI_PALETTE_EXIT_DURATION } from "@/lib/animationUtils";
+import { PaletteScopeChip } from "@/components/ui/PaletteScopeChip";
 import { isMac } from "@/lib/platform";
 import { parseChord } from "@/lib/kbdShortcut";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
@@ -120,36 +115,6 @@ function PrefixDiscoverabilityRow() {
   );
 }
 
-type ModeChipProps = {
-  label: string;
-  isVisible: boolean;
-  id?: string;
-};
-
-function ModeChip({ label, isVisible, id }: ModeChipProps) {
-  return (
-    <span
-      id={id}
-      role="status"
-      aria-live="polite"
-      className={cn(
-        "inline-flex items-center gap-1 px-1.5 py-0.5 rounded-[var(--radius-sm)]",
-        "bg-overlay-subtle text-xs text-text-secondary select-none shrink-0 origin-left",
-        "transition-[opacity,scale] motion-reduce:transition-opacity motion-reduce:scale-100",
-        isVisible ? "opacity-100 scale-100" : "opacity-0 scale-95"
-      )}
-      style={{
-        transitionDuration: isVisible
-          ? `${UI_PALETTE_ENTER_DURATION}ms`
-          : `${UI_PALETTE_EXIT_DURATION}ms`,
-        transitionTimingFunction: isVisible ? UI_ENTER_EASING : UI_EXIT_EASING,
-      }}
-    >
-      {label}
-    </span>
-  );
-}
-
 type ActionPaletteProps = Pick<
   UseActionPaletteReturn,
   | "isOpen"
@@ -169,6 +134,8 @@ type ActionPaletteProps = Pick<
   | "pinAction"
   | "unpinAction"
   | "hideAction"
+  | "argPrompt"
+  | "argBack"
 >;
 
 export function ActionPalette({
@@ -189,6 +156,8 @@ export function ActionPalette({
   pinAction,
   unpinAction,
   hideAction,
+  argPrompt,
+  argBack,
 }: ActionPaletteProps) {
   const handleSelect = useCallback(
     (item: ActionPaletteItemType) => {
@@ -365,11 +334,23 @@ export function ActionPalette({
   // Settled results only: mid-filter the list can be momentarily empty for a
   // query that will match.
   const offersProjectSearch =
-    activeMode === null && !isStale && results.length === 0 && looksLikePath(query);
+    activeMode === null && !argPrompt && !isStale && results.length === 0 && looksLikePath(query);
   const activeIsPinned = activeItem !== undefined && pinnedActionIds.includes(activeItem.id);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {
+      // While a plugin command's arguments are being collected the input is the
+      // answer field: no row controls, no mode prefixes, and Escape steps back
+      // one field instead of clearing text or closing the palette.
+      if (argPrompt) {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          e.stopPropagation();
+          argBack();
+        }
+        return;
+      }
+
       // The row's pin and hide controls are presentational spans — ARIA forbids
       // interactive descendants of `role="option"` — so the only keyboard path
       // to them is here, against whichever row aria-activedescendant names.
@@ -447,6 +428,8 @@ export function ActionPalette({
       usePaletteStore.getState().openPalette(route.paletteId);
     },
     [
+      argPrompt,
+      argBack,
       activeMode,
       query,
       results,
@@ -465,7 +448,7 @@ export function ActionPalette({
   // body and the prefix-hint footer. The seen flag is an extra clause, not a
   // replacement: within its one showing the row still comes and goes with the
   // query, so typing and clearing brings it back.
-  const showPrefixHints = !hasSeenPrefixHint && activeMode === null && !query.trim();
+  const showPrefixHints = !hasSeenPrefixHint && activeMode === null && !argPrompt && !query.trim();
 
   // Consumed by an opening that actually showed the row, and only once it
   // closes. Marking on open would clear the flag under the user mid-read, since
@@ -494,7 +477,7 @@ export function ActionPalette({
       // presentational spans with a mouse tooltip — so the chord that reaches
       // them rides the footer, and only while the row actually offers it.
       const rowHints: { keys: string[]; label: string }[] = [];
-      if (activeItem && activeItem.danger !== "confirm") {
+      if (!argPrompt && activeItem && activeItem.danger !== "confirm") {
         rowHints.push({ keys: PIN_CHORD_KEYS, label: activeIsPinned ? "unpin" : "pin" });
         if (!activeIsPinned && canHideIndex(selectedIndex)) {
           rowHints.push({ keys: HIDE_CHORD_KEYS, label: "hide" });
@@ -513,7 +496,19 @@ export function ActionPalette({
           ? { keys: ["↵"], label: `to ${toHintPhrase(selectedItem.title.replace(/…$/, ""))}` }
           : null;
 
-      if (activeMode === "commands") {
+      if (argPrompt) {
+        body = (
+          <PaletteFooterHints
+            primaryHint={
+              enterHint ?? {
+                keys: ["↵"],
+                label: argPrompt.kind === "string" ? "to continue" : "to choose",
+              }
+            }
+            hints={[{ keys: ["Esc"], label: "back" }]}
+          />
+        );
+      } else if (activeMode === "commands") {
         // Backspace keeps its chip: inside a mode it pops the scope rather than
         // deleting a character, which is the one thing here a user can't infer
         // from every other list they've used. Only while the field is empty,
@@ -553,6 +548,7 @@ export function ActionPalette({
       );
     },
     [
+      argPrompt,
       activeMode,
       query,
       offersProjectSearch,
@@ -565,7 +561,19 @@ export function ActionPalette({
     ]
   );
 
-  const chipNode = chipShouldRender ? <ModeChip label={chipLabel} isVisible={chipVisible} /> : null;
+  // A scrim click still closes everything; Escape (from the dialog's backstop
+  // or the escape stack) retreats one field.
+  const handleClose = useCallback(
+    (reason?: "escape" | "backdrop") => {
+      if (argPrompt && reason !== "backdrop") argBack();
+      else close();
+    },
+    [argPrompt, argBack, close]
+  );
+
+  const chipNode = chipShouldRender ? (
+    <PaletteScopeChip label={chipLabel} isVisible={chipVisible} />
+  ) : null;
 
   return (
     <SearchablePalette<ActionPaletteItemType>
@@ -578,7 +586,7 @@ export function ActionPalette({
       onSelectPrevious={selectPrevious}
       onSelectNext={selectNext}
       onConfirm={confirmSelection}
-      onClose={close}
+      onClose={handleClose}
       onHoverIndex={setSelectedIndex}
       onKeyDown={handleKeyDown}
       inputPrefix={chipNode}
@@ -596,25 +604,32 @@ export function ActionPalette({
             onSelect={handleSelect}
             onHoverIndex={onHoverIndex}
             isPinned={isPinned}
-            onPin={pinAction}
-            onUnpin={unpinAction}
-            onHide={hideAction}
+            onPin={argPrompt ? undefined : pinAction}
+            onUnpin={argPrompt ? undefined : unpinAction}
+            onHide={argPrompt ? undefined : hideAction}
             footerHintId={footerHintId}
             // Redundant on this path — the search body has no headers to throw
             // the count off — but stated anyway so a row announces the same way
             // whichever body rendered it.
             posInSet={index + 1}
             setSize={results.length}
-            highlightQuery={query}
+            highlightQuery={argPrompt ? undefined : query}
+            showCategory={!argPrompt}
           />
         );
       }}
       renderBody={showSections ? renderSectionedBody : undefined}
-      label="Actions"
+      label={
+        argPrompt
+          ? argPrompt.total > 1
+            ? `${argPrompt.actionTitle} · ${argPrompt.step} of ${argPrompt.total}`
+            : argPrompt.actionTitle
+          : "Actions"
+      }
       shortcut={actionPaletteShortcut}
       ariaLabel="Command palette"
-      searchPlaceholder="Find an action"
-      searchAriaLabel="Search actions"
+      searchPlaceholder={argPrompt ? argPrompt.fieldTitle : "Find an action"}
+      searchAriaLabel={argPrompt ? argPrompt.fieldTitle : "Search actions"}
       listId="action-palette-list"
       itemIdPrefix="action-option"
       emptyMessage="No actions yet"

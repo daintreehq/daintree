@@ -27,7 +27,7 @@ const TRANSIENT_FAILURE_JITTER_MS = 30_000;
 const AUTH_FAILURE_BACKOFF_SCHEDULE_MS = [5 * 60_000, 15 * 60_000, 30 * 60_000, 60 * 60_000];
 /**
  * Consecutive auth failures before the failure is treated as confirmed. Until
- * then the per-card "Forge authentication failed" stripe stays suppressed (the
+ * then the per-card "Git authentication failed" stripe stays suppressed (the
  * card shows the softer transient state) so a single blip doesn't alarm every
  * worktree. The first three failures span ~20min (5+15) before escalation.
  */

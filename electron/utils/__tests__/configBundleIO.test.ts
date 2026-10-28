@@ -301,14 +301,31 @@ describe("sections that never travel in a file (#13346)", () => {
         exportedAt: EXPORTED_AT,
         app: "daintree",
         sections: {
-          hibernation: { enabled: true },
+          sessionRestore: { enabled: true },
           permissionBypass: { globalSkipPermissions: true },
         },
       })
     );
     expect(result.ok).toBe(true);
-    expect(Object.keys(result.sections)).toEqual(["hibernation"]);
+    expect(Object.keys(result.sections)).toEqual(["sessionRestore"]);
     expect(result.unknownSections).toEqual(["permissionBypass"]);
+  });
+
+  it("files a retired section from an older export under unknown, so it can't be applied (#13840)", () => {
+    const result = parseConfigBundle(
+      JSON.stringify({
+        schemaVersion: CONFIG_BUNDLE_SCHEMA_VERSION,
+        exportedAt: EXPORTED_AT,
+        app: "daintree",
+        sections: {
+          hibernation: { enabled: true, inactiveThresholdHours: 24 },
+          sessionRestore: { enabled: false },
+        },
+      })
+    );
+    expect(result.ok).toBe(true);
+    expect(Object.keys(result.sections)).toEqual(["sessionRestore"]);
+    expect(result.unknownSections).toEqual(["hibernation"]);
   });
 });
 

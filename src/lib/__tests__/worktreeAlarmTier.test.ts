@@ -1,5 +1,44 @@
 import { describe, it, expect } from "vitest";
-import { computeAlarmTier, formatAlarmDetail } from "../worktreeAlarmTier";
+import { computeAlarmTier, formatAlarmDetail, isPullRequestWarning } from "../worktreeAlarmTier";
+import type { CIStatus, PRMergeIntent } from "@shared/types/forge";
+
+describe("isPullRequestWarning", () => {
+  const ci = (state: CIStatus["state"]): CIStatus => ({
+    state,
+    total: 1,
+    passed: 0,
+    failed: state === "failure" ? 1 : 0,
+    pending: state === "pending" ? 1 : 0,
+    rawData: null,
+  });
+  const armed: PRMergeIntent = { kind: "auto-merge", method: null, enabledAt: null };
+  it("warns for failing CI on a live PR", () => {
+    expect(isPullRequestWarning({ state: "open", ciStatus: ci("failure") })).toBe(true);
+  });
+
+  it("never warns for a closed or declined PR, whatever its last CI said", () => {
+    expect(isPullRequestWarning({ state: "closed", ciStatus: ci("failure") })).toBe(false);
+    expect(isPullRequestWarning({ state: "declined", ciStatus: ci("failure") })).toBe(false);
+  });
+
+  it("does not treat pending CI as a warning", () => {
+    expect(isPullRequestWarning({ state: "open", ciStatus: ci("pending") })).toBe(false);
+  });
+
+  it("warns for a head that moved only while a merge is armed", () => {
+    expect(
+      isPullRequestWarning({ state: "open", mergeIntent: armed, headMovedWhileArmed: true })
+    ).toBe(true);
+    expect(
+      isPullRequestWarning({ state: "open", mergeIntent: null, headMovedWhileArmed: true })
+    ).toBe(false);
+    expect(isPullRequestWarning({ state: "open", mergeIntent: armed })).toBe(false);
+  });
+
+  it("has nothing to say without a PR", () => {
+    expect(isPullRequestWarning(undefined)).toBe(false);
+  });
+});
 
 describe("computeAlarmTier", () => {
   describe("tier 0 (none)", () => {

@@ -21,6 +21,7 @@ import { buildAgentCapabilitiesPreloadBindings } from "../handlers/agentCapabili
 import { buildGlobalRecipesPreloadBindings } from "../handlers/globalRecipes.preload.js";
 import { buildConnectivityPreloadBindings } from "../handlers/connectivity.preload.js";
 import { buildProjectPresencePreloadBindings } from "../handlers/projectPresence.preload.js";
+import { buildProjectPresentationPreloadBindings } from "../handlers/projectPresentation.preload.js";
 import { buildPrivacyPreloadBindings } from "../handlers/privacy.preload.js";
 import { buildOnboardingPreloadBindings } from "../handlers/onboarding.preload.js";
 
@@ -342,6 +343,33 @@ describe("leaf preload namespace bindings", () => {
 
       expect(invoke).toHaveBeenCalledTimes(1);
       expect(invoke).toHaveBeenCalledWith("project-presence:get-snapshot");
+    });
+  });
+
+  describe("projectPresentation", () => {
+    it("routes each op to its channel with no project id, forwarding only the op's own args", async () => {
+      const invoke = vi.fn().mockResolvedValue(null);
+      const bindings = buildProjectPresentationPreloadBindings(invoke);
+
+      await bindings.get();
+      await bindings.setLevel("forgeStats", "demoted");
+      await bindings.answerSuggestion("abc", "declined");
+      await bindings.setToolbarEnabled(false);
+      await bindings.setPluginButtonPromoted("p.run", true);
+      await bindings.resetToolbar();
+      await bindings.setLauncherGroupOrder(["recipes"]);
+      await bindings.setFeaturedLaunchEntry("acme.records.new");
+
+      expect(invoke.mock.calls).toEqual([
+        ["project-presentation:get"],
+        ["project-presentation:set-level", "forgeStats", "demoted"],
+        ["project-presentation:answer-suggestion", "abc", "declined"],
+        ["project-presentation:set-toolbar-enabled", false],
+        ["project-presentation:set-plugin-button-promoted", "p.run", true],
+        ["project-presentation:reset-toolbar"],
+        ["project-presentation:set-launcher-group-order", ["recipes"]],
+        ["project-presentation:set-featured-launch-entry", "acme.records.new"],
+      ]);
     });
   });
 

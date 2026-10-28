@@ -23,6 +23,7 @@ import type {
   PersistableFlowStatus,
 } from "@/types";
 import { cn } from "@/lib/utils";
+import { isMac } from "@/lib/platform";
 import { reportCanopySent } from "@/lib/canopySeen";
 import { BANNER_ENTER_DURATION, BANNER_EXIT_DURATION } from "@/lib/animationUtils";
 import { XtermAdapter } from "./XtermAdapter";
@@ -44,6 +45,7 @@ import {
 } from "@/services/terminal/agentEndRecovery";
 import { RestoreRecoveryGate } from "./RestoreRecoveryGate";
 import { MemoryPressureGate } from "./MemoryPressureGate";
+import { DriveLeaseGate } from "./DriveLeaseGate";
 import { InlineStatusBanner } from "./InlineStatusBanner";
 import { PluginKindSetupStrip } from "@/components/Plugin/PluginSetupStrip";
 import { useForceResumeCycleWatchdog } from "@/hooks/terminal/useForceResumeCycleWatchdog";
@@ -72,6 +74,7 @@ import {
   panelHoldKey,
   useMemoryPressureWaitStore,
 } from "@/store/memoryPressureWaitStore";
+import { useDriveLeaseWaitStore } from "@/store/driveLeaseWaitStore";
 import type { AgentCliDetail } from "@shared/types/ipc";
 import {
   useErrorStore,
@@ -79,14 +82,19 @@ import {
   getTerminalRefreshTier,
   useTerminalInputStore,
 } from "@/store";
+import { selectHomeFocusTarget } from "@/store/terminalInputStore";
 import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
-import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
+import { selectMicNoticeForPanel, useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { useTerminalLogic } from "@/hooks/useTerminalLogic";
 import { useIsHibernated } from "@/hooks/useIsHibernated";
 import { errorsClient } from "@/clients";
 import type { AgentState } from "@/types";
 import { isBuiltInAgentId, type BuiltInAgentId } from "@shared/config/agentIds";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import {
+  load as loadTerminalService,
+  peek as peekTerminalService,
+  with as withTerminalService,
+} from "@/services/terminal/terminalInstanceServiceAccessor";
 import { notifyWorktreeTerminalAttached } from "@/services/terminal/worktreeRevealCoordinator";
 import { actionService } from "@/services/ActionService";
 import {
@@ -100,7 +108,6 @@ import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { terminalClient } from "@/clients";
-import { logWarn } from "@/utils/logger";
 import { useHelpPanelStore, selectActiveSlot } from "@/store/helpPanelStore";
 import { openSendToAgentPaletteWithText } from "@/hooks/useSendToAgentPalette";
 import { formatForTerminalPaste } from "@shared/utils/terminalInputProtocol";
@@ -111,16 +118,24 @@ const LazyHybridInputBar = lazy(() =>
 );
 import {
   getTerminalClickTarget,
-  getTerminalFocusTarget,
   isLikelyAtSynthesizedPointer,
-  resolvePaneFocusAction,
-  shouldRecordXtermFocusPreference,
+  resolveTerminalPaneFocus,
   shouldShowHybridInputBar,
   shouldSuppressUnfocusedClick,
   type TerminalFocusTarget,
 } from "./terminalFocus";
 import { decideChromeAction } from "./multiSelectGestures";
 import { registerPanelFocusHandler } from "@/components/Panel/panelFocusRegistry";
+import { submitComposerText } from "./submitComposerText";
+import {
+  captureFocusEpoch,
+  holdPaneFocus,
+  isFocusEpochCurrent,
+  paneSurfaceHoldingFocus,
+  requestPaneFocus,
+  requestedForDictation,
+  requestedPaneSurface,
+} from "./paneFocusRequest";
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
 import { isPtyPanel } from "@shared/types/panel";
 import { useSessionLostBanner } from "./useSessionLostBanner";
@@ -129,6 +144,7 @@ import { useTerminalInputBlock } from "@/hooks/useHostConnection";
 import { ControlConfirmedBanner, TerminalInputBlockBanner } from "./TerminalInputBlockBanner";
 import { useControlConfirmed } from "@/components/Recovery/takeControl";
 import { WorktreeMoveBanner } from "./WorktreeMoveBanner";
+import { VoiceMicNoticeBanner } from "./VoiceMicNoticeBanner";
 import type { TerminalRuntimeIdentity } from "@shared/types/panel";
 
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
@@ -136,7 +152,7 @@ import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 export type {};
 
 /**
- * Live selection/focus state of a pane's xterm, for `resolvePaneFocusAction`.
+ * Live selection/focus state of a pane's xterm, for `resolveTerminalPaneFocus`.
  * Ownership is measured against `hostElement` — the xterm host specifically,
  * not the pane container, which also holds the input bar and toolbar.
  */
@@ -144,7 +160,7 @@ function readXtermSelectionState(id: string): {
   hasSelection: boolean;
   xtermOwnsDomFocus: boolean;
 } {
-  const managed = terminalInstanceService.get(id);
+  const managed = peekTerminalService()?.get(id) ?? null;
   if (!managed) return { hasSelection: false, xtermOwnsDomFocus: false };
   return {
     hasSelection: managed.terminal.hasSelection(),
@@ -427,6 +443,11 @@ function TerminalPaneComponent({
   // `dismissedRestartPrompt` either way, so acknowledging a lost session still
   // never suppresses a later exit-error banner (issue #10823).
   const [isSearchOpen, setIsSearchOpen] = useState(false);
+  // The surface that held the keyboard when search opened, for its close. Kept
+  // with its pane id: a tab switch reuses this component for another terminal.
+  const searchReturnRef = useRef<{ paneId: string; surface: TerminalFocusTarget | null } | null>(
+    null
+  );
   const [isUpdateCwdOpen, setIsUpdateCwdOpen] = useState(false);
   const [isAutoRestarting, setIsAutoRestarting] = useState(false);
   const [completionBannerDismissed, setCompletionBannerDismissed] = useState(false);
@@ -496,8 +517,9 @@ function TerminalPaneComponent({
 
     removePanel(id);
     // The notes belong to the pane the user was looking at; the launch that
-    // replaces it takes them over (#12835).
-    void addPanel({ ...options, scratchpad: panel.scratchpad });
+    // replaces it takes them over (#12835). It replays the gate's command, so
+    // the launch's first prompt goes with it (#14592).
+    void addPanel({ ...options, scratchpad: panel.scratchpad, launchPrompt: panel.firstPrompt });
   };
 
   /**
@@ -553,6 +575,7 @@ function TerminalPaneComponent({
         stateChangeTrigger: pty?.stateChangeTrigger,
         isRestarting: pty?.isRestarting ?? false,
         exitBehavior: pty?.exitBehavior,
+        sessionPreservingExit: pty?.sessionPreservingExit === true,
         isTrashedOrRemoved: terminal?.location === "trash" || terminal === undefined,
         spawnStatus: pty?.spawnStatus,
         eagerAttach: pty?.eagerAttach ?? false,
@@ -566,6 +589,7 @@ function TerminalPaneComponent({
     stateChangeTrigger,
     isRestarting,
     exitBehavior,
+    sessionPreservingExit,
     isTrashedOrRemoved,
     spawnStatus,
     eagerAttach,
@@ -574,9 +598,13 @@ function TerminalPaneComponent({
   const isHeldForMemoryPressure = useMemoryPressureWaitStore(
     (state) => state.heldPanelIds[id] === true
   );
-  // Either hold replaces the terminal with a gate of its own, so focus, find
-  // and the composer all treat the two alike.
-  const isHeldPane = isHeldForRecovery || isHeldForMemoryPressure;
+  const isMarkedWaitingForControl = useDriveLeaseWaitStore(
+    (state) => state.heldPanelIds[id] === true
+  );
+  const isWaitingForControl = isMarkedWaitingForControl && spawnStatus === "spawning";
+  // Each hold replaces the terminal with a gate of its own, so focus, find
+  // and the composer all treat them alike.
+  const isHeldPane = isHeldForRecovery || isHeldForMemoryPressure || isWaitingForControl;
   // Keyboard navigation into a held pane lands on its recovery surface, which
   // has no terminal or input bar to take focus (#12434).
   const recoveryGateRef = useRef<HTMLDivElement>(null);
@@ -609,24 +637,20 @@ function TerminalPaneComponent({
     isRestarting ||
     followsDriver ||
     hostSwitchPending;
-  // Focus routing ignores a pending switch: moving focus to xterm for it would
-  // flip the pane's stored preference, so a switch that fails or comes back
-  // would leave the keyboard off the composer the user was in.
+  // Focus routing ignores a pending switch: it is brief and window-wide, and
+  // moving the keyboard to xterm for it would leave it there once the switch
+  // lands or fails, off the composer the user was in.
   const isHybridInputDisabledForFocus = isHybridInputDisabled && !hostSwitchPending;
 
   const isHibernated = useIsHibernated(id);
 
-  // Pre-audio confirmation cue. Subscribes to both fields so a target swap
-  // mid-arming repaints the right pane on the next render.
-  const isVoiceArming = useVoiceRecordingStore(
-    (s) => s.status === "arming" && s.activeTarget?.panelId === id
-  );
+  // Pre-audio confirmation cue. Follows the pending target rather than the
+  // session's, so it also shows while a new start waits behind a session that
+  // is still finishing.
+  const isVoiceArming = useVoiceRecordingStore((s) => s.pendingTarget?.panelId === id);
+  const voiceMicNotice = useVoiceRecordingStore((s) => selectMicNoticeForPanel(s, id));
 
   const hybridInputEnabled = useTerminalInputStore((state) => state.hybridInputEnabled);
-  const preferredTerminalFocusTarget = usePanelStore((state) => state.preferredTerminalFocusTarget);
-  const setPreferredTerminalFocusTarget = usePanelStore(
-    (state) => state.setPreferredTerminalFocusTarget
-  );
   // Panel kind is always "terminal" for PTY panels; live identity is runtime chrome.
   const kind = "terminal" as const;
   // The stored kind, which for a PTY-backed plugin panel names the plugin's kind.
@@ -759,7 +783,11 @@ function TerminalPaneComponent({
     autoRestartTimerRef.current = setTimeout(() => {
       autoRestartTimerRef.current = null;
       const currentTerminal = usePanelStore.getState().panelsById[id];
-      if (!currentTerminal || currentTerminal.location === "trash") {
+      if (
+        !currentTerminal ||
+        currentTerminal.location === "trash" ||
+        (isPtyPanel(currentTerminal) && currentTerminal.sessionPreservingExit === true)
+      ) {
         setIsAutoRestarting(false);
         return;
       }
@@ -774,6 +802,9 @@ function TerminalPaneComponent({
     if (exitCode === 130) return;
     if (isTrashedOrRemoved) return;
     if (isRestarting) return;
+    // Sleep, hibernation, idle close and quit end the process on purpose; a
+    // respawn here would outlive the teardown in a project being closed (#13841).
+    if (sessionPreservingExit) return;
 
     scheduleAutoRestart();
 
@@ -784,7 +815,7 @@ function TerminalPaneComponent({
         setIsAutoRestarting(false);
       }
     };
-  }, [isExited, exitBehavior, exitCode, isTrashedOrRemoved, isRestarting]);
+  }, [isExited, exitBehavior, exitCode, isTrashedOrRemoved, isRestarting, sessionPreservingExit]);
 
   const isDragging = useIsDragging();
 
@@ -841,7 +872,7 @@ function TerminalPaneComponent({
 
       for (const result of results) {
         if (result.isClear) {
-          const managed = terminalInstanceService.get(id);
+          const managed = peekTerminalService()?.get(id) ?? null;
           if (managed?.terminal) {
             try {
               managed.terminal.clear();
@@ -864,6 +895,11 @@ function TerminalPaneComponent({
       // A held pane has no terminal to search (#12434), and its query would
       // land in whichever search bar the document happens to hold.
       if (!isFocused || isHeldPane) return;
+      // Remembered only on the way in, so a second Cmd+F from the search
+      // field doesn't make the field the place to return to.
+      if (!isSearchOpen || searchReturnRef.current?.paneId !== id) {
+        searchReturnRef.current = { paneId: id, surface: paneSurfaceHoldingFocus(id) };
+      }
       setIsSearchOpen(true);
       requestAnimationFrame(() => {
         document.querySelector<HTMLInputElement>("[data-terminal-search-input]")?.focus();
@@ -872,7 +908,7 @@ function TerminalPaneComponent({
 
     window.addEventListener("daintree:find-in-panel", handleFindInPanel);
     return () => window.removeEventListener("daintree:find-in-panel", handleFindInPanel);
-  }, [isFocused, isHeldPane]);
+  }, [id, isFocused, isHeldPane, isSearchOpen]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     // The Scratchpad is its own editor: its copy, Enter and Space are the
@@ -883,7 +919,7 @@ function TerminalPaneComponent({
     // This is needed because agent terminals focus the hybrid input bar, so
     // xterm's built-in copy handler never receives the copy event.
     if (e.metaKey && e.key === "c") {
-      const managed = terminalInstanceService.get(id);
+      const managed = peekTerminalService()?.get(id) ?? null;
       if (managed?.terminal.hasSelection()) {
         const nativeSelection = window.getSelection()?.toString() ?? "";
         if (nativeSelection.length === 0) {
@@ -920,7 +956,7 @@ function TerminalPaneComponent({
   const handleClick = (e?: React.MouseEvent) => {
     const target = e?.target as HTMLElement | null;
     const isBufferClick = !!target?.closest(".xterm");
-    const managed = terminalInstanceService.get(id);
+    const managed = peekTerminalService()?.get(id) ?? null;
     if (isBufferClick && managed?.terminal.hasSelection()) {
       // Prevent ContentPanel from calling onFocus() which triggers parent
       // re-renders. Don't call setFocused() either — it triggers a
@@ -1012,26 +1048,19 @@ function TerminalPaneComponent({
     );
 
     const shouldSuppress = shouldSuppressUnfocusedClick({
-      location,
       isFocused,
       isCursorPointer: xtermElement.classList.contains("xterm-cursor-pointer"),
       isShiftKey: e.shiftKey,
+      isAltKey: e.altKey,
+      isMac: isMac(),
     });
 
-    // A physical click that reaches xterm is an explicit "I want the terminal"
-    // gesture — record it so subsequent Cmd-Opt-Arrow navigation stays on
-    // xterm across panes. Classify the click first: a suppressed activation
-    // click is swallowed before xterm sees it, and recording there is what
-    // used to destroy the remembered hybrid-input target (#11465).
-    if (shouldRecordXtermFocusPreference({ isAtSynthesized, shouldSuppress })) {
-      setPreferredTerminalFocusTarget("xterm");
-    }
-
     if (!shouldSuppress) {
-      // Pass-through cases — already-focused panes, dock panes, link cells,
-      // shift+click. Let the click reach xterm so selection, cursor
-      // positioning, and mouse reporting work natively. The xterm focus
-      // listener (TerminalInstanceService) records the focus event.
+      // Pass-through cases — already-focused panes, link cells, the
+      // force-selection click. Let the click reach xterm so selection, cursor
+      // positioning, and mouse reporting work natively. The keyboard moving to
+      // this pane's terminal stays this pane's business: the next pane anyone
+      // arrives at still lands on home.
       return;
     }
 
@@ -1056,30 +1085,36 @@ function TerminalPaneComponent({
       // Element was detached (e.g. LRU view eviction). Safe to ignore.
     }
 
-    // Activate the pane only. The `isFocused` effect below owns the resolved
-    // handoff via getTerminalFocusTarget / resolvePaneFocusAction, so forcing
-    // xterm focus here would both duplicate that resolver and defeat it —
-    // landing DOM focus on xterm fires `focusin`, which unconditionally
-    // records "xterm" and overwrites the target we just preserved.
+    // Activate the pane only. The `isFocused` effect below owns the handoff to
+    // home via resolveTerminalPaneFocus; forcing xterm focus here would put the
+    // keyboard on the terminal before the pane's own pass sees it, which then
+    // keeps it there (#11465).
     setFocused(id);
   };
 
-  // A file drop that finds neither the terminal nor the input bar holding the
-  // keyboard lands where a click on the terminal would have put it.
+  // A file let go over the terminal lands where a click there would have put
+  // the keyboard, in the grid and the dock alike: the pointerdown handler above
+  // and the `isFocused` pass below, read the same way at the drop.
   const getDropClickTarget = (): TerminalFocusTarget =>
     getTerminalClickTarget({
-      location,
       isFocused,
-      preferredTarget: usePanelStore.getState().preferredTerminalFocusTarget,
+      home: selectHomeFocusTarget(useTerminalInputStore.getState()),
       hasHybridInputSurface: showHybridInputBar,
       isInputDisabled: isHybridInputDisabledForFocus,
       hybridInputEnabled,
+      ...readXtermSelectionState(id),
+      hybridInputOwnsDomFocus: paneSurfaceHoldingFocus(id) === "hybridInput",
     });
 
   const handleXtermPointerNoop = () => {};
 
   const handleRestart = () => {
     restartTerminal(id);
+    inputTracker.reset();
+  };
+
+  const handleStartWithoutPluginTools = () => {
+    void restartTerminal(id, { allowMissingPluginTools: true });
     inputTracker.reset();
   };
 
@@ -1114,13 +1149,22 @@ function TerminalPaneComponent({
   const isRebuildingDisplay = retryingAttachId === id;
   const handleRetryAttach = useCallback(() => {
     setRetryingAttachId(id);
-    void terminalInstanceService
-      .recoverPoisonedTerminal(id, { manual: true })
-      .finally(() => setRetryingAttachId((current) => (current === id ? null : current)));
+    const service = peekTerminalService();
+    // No service means its load failed: loading it again is the retry, and
+    // XtermAdapter attaches the moment it lands. A repeat failure leaves the
+    // banner up.
+    void (
+      service
+        ? service.recoverPoisonedTerminal(id, { manual: true })
+        : loadTerminalService().then(
+            () => undefined,
+            () => undefined
+          )
+    ).finally(() => setRetryingAttachId((current) => (current === id ? null : current)));
   }, [id]);
 
   useEffect(() => {
-    terminalInstanceService.setFocused(id, isFocused);
+    peekTerminalService()?.setFocused(id, isFocused);
 
     // Selection alone never pulls focus into a held pane — restore selects a
     // pane on boot, and a recovery surface grabbing the keyboard there is a
@@ -1134,22 +1178,33 @@ function TerminalPaneComponent({
     // Read selection and focus ownership synchronously, before any handoff.
     // Deciding up front (rather than inside the deferred RAF) also keeps focus
     // from briefly landing on the ContentPanel container, which made screen
-    // readers announce the container instead of the input bar.
-    const action = resolvePaneFocusAction({
-      focusTarget: getTerminalFocusTarget({
-        preferredTarget: preferredTerminalFocusTarget,
-        hasHybridInputSurface: showHybridInputBar,
-        isInputDisabled: isHybridInputDisabledForFocus,
-        hybridInputEnabled,
-      }),
+    // readers announce the container instead of the input bar. A surface a
+    // caller asked for (a drop, type-anywhere) outranks home; a keyboard the
+    // user already put on one of this pane's surfaces stays there. Home is
+    // read rather than subscribed to: changing the setting isn't an arrival.
+    const action = resolveTerminalPaneFocus({
+      requested: requestedPaneSurface(id),
+      home: selectHomeFocusTarget(useTerminalInputStore.getState()),
+      hasHybridInputSurface: showHybridInputBar,
+      isInputDisabled: isHybridInputDisabledForFocus,
+      hybridInputEnabled,
       ...readXtermSelectionState(id),
+      hybridInputOwnsDomFocus: paneSurfaceHoldingFocus(id) === "hybridInput",
+      keepOwnedSurface: true,
     });
 
     if (action === "preserve") return;
 
+    // A hybrid input still loading its lazy chunk takes the keyboard when it
+    // mounts, unless something has moved it since (#10541).
+    holdPaneFocus(id, action);
+    // A press or a newer request before the frame supersedes this handoff.
+    const epoch = captureFocusEpoch();
+
     if (action === "hybridInput") {
       // A RAF defers the handoff until the pane has painted.
       const rafId = requestAnimationFrame(() => {
+        if (!isFocusEpochCurrent(epoch)) return;
         // A click into the notes can land between scheduling and this frame.
         if (isScratchpadElement(document.activeElement, id)) return;
         inputBarRef.current?.focusWithCursorAtEnd();
@@ -1161,8 +1216,9 @@ function TerminalPaneComponent({
     }
 
     const rafId = requestAnimationFrame(() => {
+      if (!isFocusEpochCurrent(epoch)) return;
       if (isScratchpadElement(document.activeElement, id)) return;
-      terminalInstanceService.focus(id);
+      peekTerminalService()?.focus(id);
     });
     return () => cancelAnimationFrame(rafId);
   }, [
@@ -1171,54 +1227,62 @@ function TerminalPaneComponent({
     isHeldPane,
     showHybridInputBar,
     hybridInputEnabled,
-    preferredTerminalFocusTarget,
     isHybridInputDisabledForFocus,
   ]);
 
   useEffect(() => {
-    // The registry is invoked on tab switches inside a focused tab group —
-    // the destination tab needs focus routed to whichever sub-target the
-    // user is currently using. Honor the preference rather than always
-    // forcing the input; that's what the old model did, and tab switching
-    // would otherwise yank focus out of xterm against the user's intent.
-    return registerPanelFocusHandler(id, () => {
+    // The registry is how callers arrive at a pane they didn't just select: a
+    // tab switch inside a focused tab group, `panel.focus`, Enter from the grid,
+    // a dock pane revealed late. Each lands on home. A caller that names a
+    // surface, or a request still current for this pane, gets that one
+    // instead; a held pane has only its recovery controls.
+    return registerPanelFocusHandler(id, (surface) => {
+      // Dictation asks for the composer by name and nothing else. A recovery
+      // control or the terminal isn't one: Enter after dictating would press the
+      // control or reach the agent's prompt. The ask stays current, so the
+      // composer takes it once it can; any other way in still falls back as
+      // before (#14770).
+      const forDictation = surface === "hybridInput" && requestedForDictation(id);
       if (isHeldPane) {
+        if (forDictation) return false;
         const gate = recoveryGateRef.current;
         if (!gate) return false;
         (gate.querySelector<HTMLElement>("button:not([disabled])") ?? gate).focus();
         return gate.contains(document.activeElement);
       }
-      const action = resolvePaneFocusAction({
-        focusTarget: getTerminalFocusTarget({
-          preferredTarget: usePanelStore.getState().preferredTerminalFocusTarget,
-          hasHybridInputSurface: showHybridInputBar,
-          isInputDisabled: isHybridInputDisabledForFocus,
-          hybridInputEnabled,
-        }),
+      const action = resolveTerminalPaneFocus({
+        requested: surface ?? requestedPaneSurface(id),
+        home: selectHomeFocusTarget(useTerminalInputStore.getState()),
+        hasHybridInputSurface: showHybridInputBar,
+        isInputDisabled: isHybridInputDisabledForFocus,
+        hybridInputEnabled,
         ...readXtermSelectionState(id),
       });
       // An xterm that already owns the keyboard while holding a selection is a
       // completed handoff — the pane has focus, just not on the input bar.
       if (action === "preserve") return true;
+      // A requested hybrid input resolves to the terminal only when the bar
+      // can't take the keyboard now.
+      if (forDictation && action === "xterm") return false;
       if (action === "hybridInput") {
         // The bar is rendered but its editor may still be lazy-loading. Decline
-        // rather than falling through to xterm: focusing xterm flips the stored
-        // preferred target, so a transient miss would silently and permanently
-        // move the user off the input bar.
+        // rather than falling through to xterm: the pane's own pass keeps a
+        // keyboard it finds on the terminal, so a transient miss would leave
+        // the user off the input bar.
         return inputBarRef.current?.focusWithCursorAtEnd() ?? false;
       }
       // Verify rather than predict. Neither map membership nor `isOpened` is
       // liveness — an instance is registered before its xterm opens, and the
       // flag stays true after a detach — so the only trustworthy signal is
       // whether focus actually landed inside this pane.
-      terminalInstanceService.focus(id);
+      peekTerminalService()?.focus(id);
       return containerRef.current?.contains(document.activeElement) ?? false;
     });
   }, [id, isHeldPane, showHybridInputBar, isHybridInputDisabledForFocus, hybridInputEnabled]);
 
   // Sync agent state to terminal service for scroll management
   useEffect(() => {
-    terminalInstanceService.setAgentState(id, agentState ?? "idle");
+    peekTerminalService()?.setAgentState(id, agentState ?? "idle");
   }, [id, agentState]);
 
   // Per-pane dismiss state resets when the agent leaves the completed phase —
@@ -1304,14 +1368,14 @@ function TerminalPaneComponent({
   const handleSendToAssistant = useCallback(() => {
     const helpTid = selectActiveSlot(useHelpPanelStore.getState()).terminalId;
     if (!helpTid || helpTid === id) return;
-    const state = terminalInstanceService.getAgentState(helpTid);
+    const state = peekTerminalService()?.getAgentState(helpTid);
     if (state !== "idle" && state !== "waiting") return;
     const _helpPanel = usePanelStore.getState().panelsById[helpTid];
     if (_helpPanel && isPtyPanel(_helpPanel) && _helpPanel.isInputLocked === true) return;
-    const text = terminalInstanceService.captureBufferText(id, 20000);
+    const text = peekTerminalService()?.captureBufferText(id, 20000) ?? "";
     if (!text) return;
 
-    const managed = terminalInstanceService.get(helpTid);
+    const managed = peekTerminalService()?.get(helpTid) ?? null;
     // Buffer text is whatever the agent printed, escape sequences included, so
     // it can't reach the parser as it stands. No managed instance means no mode
     // to read, and wrapped is the safe reading of text we cannot ask about.
@@ -1321,14 +1385,14 @@ function TerminalPaneComponent({
         bracketedPasteMode: managed ? managed.terminal.modes.bracketedPasteMode : true,
       })
     );
-    terminalInstanceService.notifyUserInput(helpTid);
+    withTerminalService((service) => service.notifyUserInput(helpTid), helpTid);
     const help = useHelpPanelStore.getState();
     help.setOpen(true);
     help.requestFocus();
   }, [id]);
 
   const handleSendToAgent = useCallback(() => {
-    const text = terminalInstanceService.captureBufferText(id, 20000);
+    const text = peekTerminalService()?.captureBufferText(id, 20000) ?? "";
     if (!text) return;
     openSendToAgentPaletteWithText(text, id);
   }, [id]);
@@ -1519,6 +1583,7 @@ function TerminalPaneComponent({
             onUpdateCwd={handleUpdateCwd}
             onRetry={handleRestart}
             onTrash={handleTrash}
+            onStartWithoutPluginTools={handleStartWithoutPluginTools}
             isRestarting={isRestarting}
           />
         )}
@@ -1626,6 +1691,10 @@ function TerminalPaneComponent({
         />
       </BannerSlot>
 
+      <BannerSlot visible={voiceMicNotice !== null}>
+        {voiceMicNotice && <VoiceMicNoticeBanner notice={voiceMicNotice} />}
+      </BannerSlot>
+
       <BannerSlot visible={showInjectionBanner}>
         <InlineStatusBanner
           icon={injectionStatus === "waiting" ? Hourglass : Folders}
@@ -1685,6 +1754,8 @@ function TerminalPaneComponent({
               onLaunchAnyway={() => launchDespiteMemoryPressure(panelHoldKey(id))}
               onCancel={() => onClose(true)}
             />
+          ) : isWaitingForControl ? (
+            <DriveLeaseGate agentId={agentId} containerRef={recoveryGateRef} />
           ) : spawnStatus === "spawning" && !eagerAttach ? (
             <TerminalStartupPlaceholder agentId={agentId} onCancel={() => onClose()} />
           ) : spawnStatus === "failed" ? (
@@ -1737,23 +1808,19 @@ function TerminalPaneComponent({
                       terminalId={id}
                       onClose={() => {
                         setIsSearchOpen(false);
-                        // Restore focus to whichever sub-target the user is
-                        // currently using — read at RAF time (not from the
-                        // render closure) so a same-frame preference flip
-                        // between onClose and the focus call is honored.
-                        requestAnimationFrame(() => {
-                          const focusTarget = getTerminalFocusTarget({
-                            preferredTarget: usePanelStore.getState().preferredTerminalFocusTarget,
-                            hasHybridInputSurface: showHybridInputBar,
-                            isInputDisabled: isHybridInputDisabled,
-                            hybridInputEnabled,
-                          });
-                          if (focusTarget === "hybridInput") {
-                            inputBarRef.current?.focusWithCursorAtEnd();
-                          } else {
-                            terminalInstanceService.focus(id);
-                          }
-                        });
+                        // Restoring isn't arriving: the keyboard goes back to
+                        // the surface that had it when search opened, home when
+                        // neither did, resolved against what the pane can take
+                        // by then. Asked now rather than a frame later, so it
+                        // can't land after the user has moved to another pane;
+                        // a hybrid input's own deferred grab is called off by
+                        // this pane losing the selection.
+                        const opened = searchReturnRef.current;
+                        searchReturnRef.current = null;
+                        const surface =
+                          (opened?.paneId === id ? opened.surface : null) ??
+                          selectHomeFocusTarget(useTerminalInputStore.getState());
+                        requestPaneFocus(id, surface);
                       }}
                     />
                   )}
@@ -1793,29 +1860,22 @@ function TerminalPaneComponent({
                     restartKey={restartKey}
                     onActivate={handleClick}
                     onSend={({ trackerData, text, imagePaths }) => {
-                      if (!isInputLocked && !isRestarting) {
-                        terminalInstanceService.notifyUserInput(id);
-                        reportCanopySent(id);
-                        // submit now rejects when the PTY is gone (#8706); the
-                        // single-pane path has no recovery UI for that, so
-                        // swallow to log instead of leaking an unhandled
-                        // rejection. Banners/agent-state surface the dead pane.
-                        const submission =
-                          imagePaths !== undefined && imagePaths.length > 0
-                            ? terminalClient.submitWithImages(id, text, imagePaths)
-                            : terminalClient.submit(id, text);
-                        submission.catch((err) => {
-                          logWarn("[TerminalPane] submit failed", { id, error: err });
-                        });
-                        handleInput(trackerData);
-                      }
+                      if (isInputLocked || isRestarting) return;
+                      withTerminalService((service) => service.notifyUserInput(id), id);
+                      reportCanopySent(id);
+                      const accepted = submitComposerText(id, text, imagePaths);
+                      handleInput(trackerData);
+                      return accepted;
                     }}
                     onSendKey={(key) => {
                       if (!isInputLocked && !isRestarting) {
                         if (key === "escape") {
-                          terminalInstanceService.clearDirectingState(id, "escape-key");
+                          withTerminalService(
+                            (service) => service.clearDirectingState(id, "escape-key"),
+                            id
+                          );
                         } else {
-                          terminalInstanceService.notifyUserInput(id);
+                          withTerminalService((service) => service.notifyUserInput(id), id);
                         }
                         if (key === "enter") reportCanopySent(id);
                         terminalClient.sendKey(id, key);

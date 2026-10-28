@@ -13,15 +13,28 @@ import {
   usePluginProjectSurfacesStore,
 } from "@/store/pluginProjectSurfacesStore";
 import { usePluginManagerStore } from "@/store/pluginManagerStore";
+import { useHostConnectionStore } from "@/store/hostConnectionStore";
+import {
+  resetPluginLaunchEntriesStoreForTests,
+  usePluginLaunchEntriesStore,
+} from "@/store/pluginLaunchEntriesStore";
 import { registerPanelKind, unregisterPanelKind } from "@shared/config/panelKindRegistry";
+import { fileEditorSlotKey } from "@shared/types/plugin";
 import type {
   LoadedPluginInfo,
   PluginManifest,
   ProjectPluginInfo,
   ProjectSurfaceChoice,
+  ProjectSurfaceChoiceUpdate,
+  ProjectSurfaceChoices,
+  ProjectSurfaceSlotState,
+  ProjectSurfacesSnapshot,
 } from "@shared/types/plugin";
 
 const PROJECT_ID = "a".repeat(64);
+
+const runHostUpdate = vi.hoisted(() => vi.fn());
+vi.mock("@/components/Hosts/hostUpdate", () => ({ runHostUpdate }));
 
 vi.mock("@/store/projectStore", () => ({
   useProjectStore: (selector: (s: unknown) => unknown) =>
@@ -145,18 +158,19 @@ const pluginApi = {
   setProjectPluginMuted: vi.fn().mockResolvedValue(undefined),
   setProjectPluginVisibility: vi.fn().mockResolvedValue(undefined),
   setPluginVisibilityDefault: vi.fn().mockResolvedValue(undefined),
+  setProjectInstanceEnabled: vi.fn().mockResolvedValue(undefined),
   setProjectPluginTrust: vi.fn().mockResolvedValue(undefined),
   // Main records the answer against the slot's owner and returns the new set.
-  setProjectSurfaceChoice: vi.fn((_slot: string, choice: ProjectSurfaceChoice | null) =>
-    Promise.resolve({
-      projectId: PROJECT_ID,
-      choices:
-        choice === null
-          ? {}
-          : { emptyCanvas: { pluginId: "acme.dashboard", choice, decidedAt: 2 } },
-    })
-  ),
+  setProjectSurfaceChoices: vi.fn((updates: ProjectSurfaceChoiceUpdate[]) => {
+    const { choice } = updates[0]!;
+    return Promise.resolve(
+      canvasSnapshot(
+        choice === null ? {} : { emptyCanvas: { pluginId: "acme.dashboard", choice, decidedAt: 2 } }
+      )
+    );
+  }),
   activateStagedProjectPlugin: vi.fn().mockResolvedValue(undefined),
+  setLaunchGroupHidden: vi.fn().mockResolvedValue([]),
   reloadProjectPlugins: vi.fn().mockResolvedValue(undefined),
   getSettingValues: vi.fn().mockResolvedValue({
     values: {},
@@ -214,11 +228,33 @@ afterEach(() => {
   cleanup();
   __resetProjectPluginStoreForTesting();
   _resetPluginProjectSurfacesStoreForTest();
+  useHostConnectionStore.getState().reset();
+  resetPluginLaunchEntriesStoreForTests();
   unregisterPanelKind(CANVAS_KIND_ID);
 });
 
 const CANVAS_KIND_ID = `project:${PROJECT_ID}/acme.dashboard/overview`;
 const CANVAS_OWNER = `project__${PROJECT_ID}__acme.dashboard`;
+
+function canvasSlot(refused: ProjectSurfaceSlotState["refused"] = []): ProjectSurfaceSlotState {
+  return {
+    mode: "exclusive",
+    options: [
+      {
+        pluginId: CANVAS_OWNER,
+        scope: "project",
+        value: { kind: "view", viewId: "overview", panelKindId: CANVAS_KIND_ID },
+      },
+    ],
+    defaultOptionId: CANVAS_OWNER,
+    refused,
+  };
+}
+
+/** What main returns once it has recorded an answer: the canvas owner plus the answers. */
+function canvasSnapshot(choices: ProjectSurfaceChoices): ProjectSurfacesSnapshot {
+  return { projectId: PROJECT_ID, revision: 2, slots: { emptyCanvas: canvasSlot() }, choices };
+}
 
 /** A running project plugin whose empty-canvas claim can render, answered or not. */
 function claimEmptyCanvas(choice?: ProjectSurfaceChoice) {
@@ -235,6 +271,7 @@ function claimEmptyCanvas(choice?: ProjectSurfaceChoice) {
   });
   act(() => {
     usePluginProjectSurfacesStore.setState({
+      slots: { emptyCanvas: canvasSlot() },
       surfaces: {
         emptyCanvas: { pluginId: CANVAS_OWNER, panelKindId: CANVAS_KIND_ID },
       },
@@ -266,84 +303,259 @@ describe("ProjectPluginsTab", () => {
     expect(labels).toContain("Enable for this session");
   });
 
-  it("discloses which plugin owns the empty canvas and resets the answer", async () => {
+  it("discloses which plugin set up the empty canvas and resets the answer", async () => {
     seed([projectPlugin()]);
     claimEmptyCanvas("stock");
     render(<ProjectPluginsTab />);
     await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
 
-    // A remembered "use the launcher" is never silent: the plugin is named, the
+    // A remembered "use Daintree's" is never silent: the plugin is named, the
     // answer is stated, and it can be undone from here.
-    const section = screen.getByTestId("project-plugins-empty-canvas");
-    expect(section.textContent).toContain("Acme Dashboard draws what this project shows");
-    expect(section.textContent).toContain("You chose the launcher, so it's hidden.");
+    const row = screen.getByTestId("project-surface-row-emptyCanvas");
+    expect(row.textContent).toContain("Empty canvas");
+    expect(row.textContent).toContain("Set up by Acme Dashboard.");
+    expect(row.textContent).toContain("You chose Daintree's own, so it's hidden.");
 
-    fireEvent.click(within(section).getByRole("button", { name: "Reset choice" }));
+    fireEvent.click(within(row).getByRole("button", { name: "Ask again about the canvas" }));
 
     await waitFor(() =>
-      expect(pluginApi.setProjectSurfaceChoice).toHaveBeenCalledWith("emptyCanvas", null)
+      expect(pluginApi.setProjectSurfaceChoices).toHaveBeenCalledWith([
+        { slot: "emptyCanvas", choice: null },
+      ])
     );
-    await waitFor(() =>
-      expect(section.textContent).toContain("You haven't chosen yet, so it shows.")
-    );
-    expect(
-      within(section).getByRole("button", { name: "Reset choice" }).hasAttribute("disabled")
-    ).toBe(true);
+    await waitFor(() => expect(row.textContent).toContain("You haven't chosen yet, so it shows."));
+    // Nothing is remembered now, so there is nothing left to reset.
+    expect(within(row).queryByRole("button", { name: "Ask again about the canvas" })).toBeNull();
   });
 
-  it("switches the empty canvas to the launcher from settings", async () => {
+  it("lists a plugin's default editor by pattern, says what matching files open in, and resets it (#13811)", async () => {
+    const slot = fileEditorSlotKey("content/*.json");
+    const editorSlot: ProjectSurfaceSlotState = {
+      mode: "exclusive",
+      options: [
+        {
+          pluginId: CANVAS_OWNER,
+          scope: "project",
+          value: { kind: "data", data: { editorId: "e" } },
+        },
+      ],
+      defaultOptionId: CANVAS_OWNER,
+      refused: [],
+    };
+    seed([projectPlugin()]);
+    act(() => {
+      usePluginProjectSurfacesStore.setState({
+        slots: { [slot]: editorSlot },
+        choices: { [slot]: { pluginId: "acme.dashboard", choice: "stock", decidedAt: 1 } },
+        choicesLoaded: true,
+      });
+    });
+    pluginApi.setProjectSurfaceChoices.mockImplementationOnce(() =>
+      Promise.resolve({
+        projectId: PROJECT_ID,
+        revision: 3,
+        slots: { [slot]: editorSlot },
+        choices: {},
+      })
+    );
+    render(<ProjectPluginsTab />);
+    await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
+
+    const row = screen.getByTestId(`project-surface-row-${slot}`);
+    expect(row.textContent).toContain("Editor for content/*.json");
+    expect(row.textContent).toContain("Set up by Acme Dashboard.");
+    expect(row.textContent).toContain("so matching files open in Source.");
+
+    fireEvent.click(within(row).getByRole("button", { name: "Ask again about the editor" }));
+    await waitFor(() =>
+      expect(pluginApi.setProjectSurfaceChoices).toHaveBeenCalledWith([{ slot, choice: null }])
+    );
+    await waitFor(() =>
+      expect(row.textContent).toContain("You haven't chosen yet, so matching files open in it.")
+    );
+  });
+
+  it("lists a launcher group the project hid and shows it again from its reset (#13788)", async () => {
+    seed([projectPlugin()]);
+    act(() => usePluginLaunchEntriesStore.setState({ hiddenPluginIds: [CANVAS_OWNER] }));
+    render(<ProjectPluginsTab />);
+    await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
+
+    // Named from the project plugin list even while none of its entries are
+    // loaded: the hide is still remembered, so it has to stay findable.
+    const row = screen.getByTestId(`hidden-launch-group-${CANVAS_OWNER}`);
+    expect(row.textContent).toContain("Acme Dashboard");
+
+    fireEvent.click(
+      within(row).getByRole("button", { name: "Reset Acme Dashboard's launch entries" })
+    );
+    await waitFor(() =>
+      expect(pluginApi.setLaunchGroupHidden).toHaveBeenCalledWith(CANVAS_OWNER, false)
+    );
+    // The row stays, switched on, so the control the user just used is still
+    // there to undo it with; only the reset goes, as nothing is left to reset.
+    await waitFor(() => expect(row.textContent).toContain("empty-canvas tiles are back"));
+    expect(
+      within(row).queryByRole("button", { name: "Reset Acme Dashboard's launch entries" })
+    ).toBeNull();
+    const toggle = screen.getByTestId(`hidden-launch-group-switch-${CANVAS_OWNER}`);
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+
+    fireEvent.click(toggle);
+    await waitFor(() =>
+      expect(pluginApi.setLaunchGroupHidden).toHaveBeenCalledWith(CANVAS_OWNER, true)
+    );
+  });
+
+  it("switches the empty canvas to Daintree's own from settings", async () => {
     seed([projectPlugin()]);
     claimEmptyCanvas();
     render(<ProjectPluginsTab />);
     await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
 
-    const section = screen.getByTestId("project-plugins-empty-canvas");
-    expect(section.textContent).toContain("You haven't chosen yet, so it shows.");
+    const row = screen.getByTestId("project-surface-row-emptyCanvas");
+    expect(row.textContent).toContain("You haven't chosen yet, so it shows.");
     // Nothing to reset until something has been chosen.
-    expect(
-      within(section).getByRole("button", { name: "Reset choice" }).hasAttribute("disabled")
-    ).toBe(true);
+    expect(within(row).queryByRole("button", { name: "Ask again about the canvas" })).toBeNull();
 
-    fireEvent.click(screen.getByTestId("project-empty-canvas-switch"));
+    const toggle = screen.getByTestId("project-surface-switch-emptyCanvas");
+    expect(toggle.getAttribute("aria-label")).toBe("Use Acme Dashboard's canvas");
+    fireEvent.click(toggle);
 
     await waitFor(() =>
-      expect(pluginApi.setProjectSurfaceChoice).toHaveBeenCalledWith("emptyCanvas", "stock")
+      expect(pluginApi.setProjectSurfaceChoices).toHaveBeenCalledWith([
+        { slot: "emptyCanvas", choice: "stock", ownerId: CANVAS_OWNER },
+      ])
     );
     await waitFor(() =>
-      expect(section.textContent).toContain("You chose the launcher, so it's hidden.")
+      expect(row.textContent).toContain("You chose Daintree's own, so it's hidden.")
     );
   });
 
   it("says so when the canvas choice couldn't be saved", async () => {
     seed([projectPlugin()]);
     claimEmptyCanvas();
-    pluginApi.setProjectSurfaceChoice.mockRejectedValueOnce(new Error("ENOSPC"));
+    pluginApi.setProjectSurfaceChoices.mockRejectedValueOnce(new Error("ENOSPC"));
     render(<ProjectPluginsTab />);
     await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
 
-    fireEvent.click(screen.getByTestId("project-empty-canvas-switch"));
+    fireEvent.click(screen.getByTestId("project-surface-switch-emptyCanvas"));
 
-    const section = screen.getByTestId("project-plugins-empty-canvas");
-    expect((await within(section).findByRole("alert")).textContent).toContain(
+    const row = screen.getByTestId("project-surface-row-emptyCanvas");
+    expect((await within(row).findByRole("alert")).textContent).toContain(
       "Couldn't save the canvas choice"
     );
-    // Nothing was recorded, so the section still describes what is on disk.
-    expect(section.textContent).toContain("You haven't chosen yet, so it shows.");
+    // Nothing was recorded, so the row still describes what is on disk.
+    expect(row.textContent).toContain("You haven't chosen yet, so it shows.");
 
-    fireEvent.click(within(section).getByRole("button", { name: "Retry" }));
+    fireEvent.click(within(row).getByRole("button", { name: "Retry" }));
 
     await waitFor(() =>
-      expect(section.textContent).toContain("You chose the launcher, so it's hidden.")
+      expect(row.textContent).toContain("You chose Daintree's own, so it's hidden.")
     );
-    expect(within(section).queryByRole("alert")).toBeNull();
+    expect(within(row).queryByRole("alert")).toBeNull();
   });
 
-  it("says nothing about the empty canvas when no plugin claims it", async () => {
+  it("names a plugin whose claim on a slot isn't shown under that slot", async () => {
+    seed([
+      projectPlugin(),
+      projectPlugin({
+        id: "zeta.board",
+        instanceId: `project__${PROJECT_ID}__zeta.board`,
+        displayName: "Zeta Board",
+        dirName: "zeta",
+      }),
+    ]);
+    claimEmptyCanvas();
+    act(() => {
+      usePluginProjectSurfacesStore.setState({
+        slots: {
+          emptyCanvas: canvasSlot([
+            {
+              slot: "emptyCanvas",
+              pluginId: `project__${PROJECT_ID}__zeta.board`,
+              reason: "outranked",
+              heldBy: CANVAS_OWNER,
+            },
+          ]),
+        },
+      });
+    });
+    render(<ProjectPluginsTab />);
+    await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
+
+    const row = screen.getByTestId("project-surface-row-emptyCanvas");
+    expect(row.textContent).toContain("Set up by Acme Dashboard.");
+    expect(row.textContent).toContain(
+      "Zeta Board's claim isn't shown: Acme Dashboard also claims it in this project"
+    );
+  });
+
+  it("lists a slot no plugin holds when a claim on it was refused, with no switch", async () => {
+    seed([projectPlugin()]);
+    act(() => {
+      usePluginProjectSurfacesStore.setState({
+        slots: {
+          emptyCanvas: {
+            mode: "exclusive",
+            options: [],
+            defaultOptionId: null,
+            refused: [
+              { slot: "emptyCanvas", pluginId: "installed.board", reason: "installed-exclusive" },
+            ],
+          },
+        },
+        choicesLoaded: true,
+      });
+    });
+    render(<ProjectPluginsTab />);
+    await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
+
+    const row = screen.getByTestId("project-surface-row-emptyCanvas");
+    expect(row.textContent).toContain("Daintree's own is showing.");
+    expect(row.textContent).toContain(
+      "installed.board's claim isn't shown: Only a project's own plugins can replace it."
+    );
+    expect(screen.queryByTestId("project-surface-switch-emptyCanvas")).toBeNull();
+  });
+
+  it("says nothing about slots when no plugin claims one", async () => {
     seed([projectPlugin()]);
     render(<ProjectPluginsTab />);
     await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
 
-    expect(screen.queryByTestId("project-plugins-empty-canvas")).toBeNull();
+    expect(screen.queryByTestId("project-plugins-surfaces")).toBeNull();
+  });
+
+  it("says why it can't list slots when the host's build lacks the read, with the update", async () => {
+    seed([projectPlugin()]);
+    const why =
+      "studio-01 runs Daintree 0.47.0 and this machine runs 0.46.0. This needs both on the same build.";
+    act(() => {
+      useHostConnectionStore.setState({
+        hostId: "studio-01",
+        hostName: "studio-01",
+        connection: {
+          status: "connected",
+          rttMs: null,
+          handshake: {
+            version: "0.47.0",
+            commit: "c0ffee0",
+            protocolVersion: 1,
+            platform: "darwin",
+            arch: "arm64",
+          },
+          buildMismatch: { kind: "version", local: "0.46.0", remote: "0.47.0" },
+        },
+      });
+      usePluginProjectSurfacesStore.setState({ readFailure: why });
+    });
+    render(<ProjectPluginsTab />);
+
+    const section = await screen.findByTestId("project-plugins-surfaces");
+    expect(section.textContent).toContain(why);
+    fireEvent.click(within(section).getByRole("button", { name: "Update this machine" }));
+    expect(runHostUpdate).toHaveBeenCalledWith("local", "studio-01");
   });
 
   it("describes the empty canvas only once its answer is known and the claim can render", async () => {
@@ -356,18 +568,18 @@ describe("ProjectPluginsTab", () => {
     await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
 
     // Before the answer is read, "you haven't chosen yet" could be false.
-    expect(screen.queryByTestId("project-plugins-empty-canvas")).toBeNull();
+    expect(screen.queryByTestId("project-plugins-surfaces")).toBeNull();
 
     act(() => {
       usePluginProjectSurfacesStore.setState({ choicesLoaded: true });
     });
-    expect(screen.getByTestId("project-plugins-empty-canvas")).toBeTruthy();
+    expect(screen.getByTestId("project-surface-row-emptyCanvas")).toBeTruthy();
 
     // A claim whose view cannot render leaves the canvas stock: nothing to describe.
     act(() => {
       unregisterPanelKind(CANVAS_KIND_ID);
     });
-    expect(screen.queryByTestId("project-plugins-empty-canvas")).toBeNull();
+    expect(screen.queryByTestId("project-plugins-surfaces")).toBeNull();
   });
 
   it("mutes a project plugin through its own switch, not the folder trust control", async () => {
@@ -393,6 +605,43 @@ describe("ProjectPluginsTab", () => {
     const pane = await screen.findByTestId("project-plugin-detail");
     expect(pane.textContent).toContain("Switched off on its own");
     expect(pane.textContent).not.toContain("turned off as a folder");
+  });
+
+  it("tells a plugin that lost the empty canvas which plugin holds it and why", async () => {
+    const loser = projectPlugin({
+      id: "zeta.board",
+      instanceId: `project__${PROJECT_ID}__zeta.board`,
+      displayName: "Zeta Board",
+      dirName: "zeta",
+    });
+    seed([projectPlugin(), loser]);
+    act(() => {
+      usePluginProjectSurfacesStore.setState({
+        slots: {
+          emptyCanvas: canvasSlot([
+            {
+              slot: "emptyCanvas",
+              pluginId: `project__${PROJECT_ID}__zeta.board`,
+              reason: "outranked",
+              heldBy: CANVAS_OWNER,
+            },
+          ]),
+        },
+      });
+    });
+    render(<ProjectPluginsTab />);
+    await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
+
+    await select("Zeta Board");
+    const pane = await screen.findByTestId("project-plugin-detail");
+    expect(pane.textContent).toContain("Empty canvas not shown");
+    // The holder by its display name, so the author knows which manifest to change.
+    expect(pane.textContent).toContain("Acme Dashboard also claims it in this project");
+
+    // The winner's own pane says nothing about a conflict it won.
+    await select("Acme Dashboard");
+    const winner = await screen.findByTestId("project-plugin-detail");
+    expect(winner.textContent).not.toContain("not shown");
   });
 
   it("offers a staged plugin's activation in place of a switch that would read as on", async () => {
@@ -486,6 +735,58 @@ describe("ProjectPluginsTab", () => {
       subtab: "acme.forge.acme",
     });
     window.removeEventListener("daintree:open-settings-tab", opened);
+  });
+
+  it("lands a section link to a forge plugin on its Code forge pointer, not a form it doesn't show", async () => {
+    pluginApi.list.mockResolvedValue([
+      installed({
+        manifest: {
+          name: "acme.forge",
+          version: "1.0.0",
+          displayName: "Acme Forge",
+          contributes: {
+            ...EMPTY_CONTRIBUTES,
+            views: [{ id: "prefs", componentPath: "dist/prefs.js", location: "settings" }],
+            forgeProviders: [
+              {
+                id: "acme",
+                name: "Acme",
+                matches: ["acme.test"],
+                slots: { settingsTab: "acme.settingsTab" },
+              },
+            ],
+          },
+        } as LoadedPluginInfo["manifest"],
+        instanceId: "acme.forge",
+      }),
+    ]);
+    seed([]);
+    act(() =>
+      usePluginManagerStore
+        .getState()
+        .requestSettings({ pluginId: "acme.forge", section: "custom", home: "project" })
+    );
+    render(<ProjectPluginsTab />);
+
+    await waitFor(() =>
+      expect(document.activeElement?.hasAttribute("data-settings-section-title")).toBe(true)
+    );
+    expect(screen.getByRole("button", { name: "Open Code forge" })).toBeTruthy();
+    expect(usePluginManagerStore.getState().settingsRequest).toBeNull();
+
+    // Again with its pane already showing: the pane doesn't answer for the
+    // heading before it is focused.
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+    act(() =>
+      usePluginManagerStore
+        .getState()
+        .requestSettings({ pluginId: "acme.forge", section: "custom", home: "project" })
+    );
+    await waitFor(() =>
+      expect(document.activeElement?.hasAttribute("data-settings-section-title")).toBe(true)
+    );
+    expect(usePluginManagerStore.getState().settingsRequest).toBeNull();
+    usePluginManagerStore.setState({ settingsRequest: null });
   });
 
   it("clears the override rather than storing an explicit allow when re-enabling", async () => {
@@ -672,6 +973,35 @@ describe("ProjectPluginsTab settings deep link and lifecycle", () => {
     render(<ProjectPluginsTab />);
 
     const field = await screen.findByLabelText("API key");
+    await waitFor(() => expect(document.activeElement).toBe(field));
+    await waitFor(() => expect(usePluginManagerStore.getState().settingsRequest).toBeNull());
+  });
+
+  it("hands a link to an installed plugin's field to that plugin's own form", async () => {
+    Element.prototype.scrollIntoView = vi.fn();
+    pluginApi.list.mockResolvedValue([
+      installed({
+        manifest: {
+          name: "acme.tools",
+          version: "2.0.0",
+          displayName: "Acme Tools",
+          contributes: {
+            ...EMPTY_CONTRIBUTES,
+            settings: [{ id: "token", type: "string", label: "Token", scope: "project" }],
+          },
+        },
+      }),
+    ]);
+    seed([]);
+    act(() =>
+      usePluginManagerStore
+        .getState()
+        .requestSettings({ pluginId: "acme.tools", key: "token", home: "project" })
+    );
+    render(<ProjectPluginsTab />);
+
+    const pane = await screen.findByTestId("installed-plugin-detail");
+    const field = await within(pane).findByLabelText("Token");
     await waitFor(() => expect(document.activeElement).toBe(field));
     await waitFor(() => expect(usePluginManagerStore.getState().settingsRequest).toBeNull());
   });
@@ -1122,5 +1452,178 @@ describe("ProjectPluginsTab failures and state honesty", () => {
     fireEvent.click(within(fresh).getByRole("button", { name: "Review" }));
     const pane = await screen.findByTestId("project-plugin-detail");
     expect(within(pane).getByRole("button", { name: "Activate plugin" })).toBeTruthy();
+  });
+});
+
+describe("ProjectPluginsTab per-project packages", () => {
+  const INSTANCE_KEY = `project__${PROJECT_ID}__installed__acme.tools`;
+
+  function packageRow(enabledInProjects: string[] = []): LoadedPluginInfo {
+    return installed({ instanceMode: "project", enabledInProjects });
+  }
+
+  /** The package's running instance as `list()` reports it: a project-keyed row. */
+  function instanceRow(): LoadedPluginInfo {
+    return installed({ instanceId: INSTANCE_KEY, origin: "project", projectId: PROJECT_ID });
+  }
+
+  async function openPicker() {
+    fireEvent.click(screen.getByTestId("project-plugin-selector-trigger"));
+    return screen.findByRole("listbox", { name: "Plugins" });
+  }
+
+  it("lists the package once, even while this project's instance is running", async () => {
+    pluginApi.list.mockResolvedValue([packageRow([PROJECT_ID]), instanceRow()]);
+    seed([]);
+    render(<ProjectPluginsTab />);
+    await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
+
+    const list = await openPicker();
+    expect(within(list).getAllByText("Acme Tools")).toHaveLength(1);
+    expect(within(list).queryByText("Installed")).toBeNull();
+    expect(within(list).getByText("On")).toBeTruthy();
+  });
+
+  it("reads Off for a package this project hasn't turned on", async () => {
+    pluginApi.list.mockResolvedValue([packageRow(["other-project"])]);
+    seed([]);
+    render(<ProjectPluginsTab />);
+    await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
+    await select("Acme Tools");
+
+    expect(screen.getByTestId("project-plugin-selector-status").textContent).toBe("Off");
+    const toggle = screen.getByTestId("installed-plugin-instance-switch");
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    // The visibility overlay belongs to plugins that run everywhere.
+    expect(screen.queryByTestId("installed-plugin-visibility-switch")).toBeNull();
+  });
+
+  it("turns the instance on for the current project only, and stays on once main has it", async () => {
+    pluginApi.list.mockResolvedValue([packageRow()]);
+    pluginApi.setProjectInstanceEnabled.mockImplementationOnce(async () => {
+      // What main reports from here on: this project is in the package's list.
+      pluginApi.list.mockResolvedValue([packageRow([PROJECT_ID]), instanceRow()]);
+    });
+    seed([]);
+    render(<ProjectPluginsTab />);
+    await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
+    await select("Acme Tools");
+
+    const toggle = screen.getByTestId("installed-plugin-instance-switch");
+    fireEvent.click(toggle);
+
+    await waitFor(() =>
+      expect(pluginApi.setProjectInstanceEnabled).toHaveBeenCalledWith("acme.tools", true)
+    );
+    await waitFor(() => expect(useProjectPluginStore.getState().instanceToggling.size).toBe(0));
+    expect(pluginApi.setProjectInstanceEnabled).toHaveBeenCalledTimes(1);
+    expect(pluginApi.setProjectPluginVisibility).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(useProjectPluginStore.getState().instanceEnabled["acme.tools"]).toBe(true)
+    );
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByTestId("project-plugin-selector-status").textContent).toBe("On");
+  });
+
+  it("opens a settings link for this project's instance on the package's pane", async () => {
+    Element.prototype.scrollIntoView = vi.fn();
+    const settings = [
+      { id: "apiKey", type: "string" as const, label: "API key", scope: "project" as const },
+    ];
+    const withSettings = { ...EMPTY_CONTRIBUTES, settings };
+    pluginApi.list.mockResolvedValue([
+      installed({
+        instanceMode: "project",
+        enabledInProjects: [PROJECT_ID],
+        manifest: { ...installed().manifest, contributes: withSettings },
+      }),
+      installed({
+        instanceId: INSTANCE_KEY,
+        origin: "project",
+        projectId: PROJECT_ID,
+        manifest: { ...installed().manifest, contributes: withSettings },
+      }),
+    ]);
+    seed([]);
+    act(() =>
+      usePluginManagerStore
+        .getState()
+        .requestSettings({ pluginId: INSTANCE_KEY, key: "apiKey", home: "project" })
+    );
+    render(<ProjectPluginsTab />);
+
+    const field = await screen.findByLabelText("API key");
+    expect(screen.getByTestId("installed-plugin-instance-switch")).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(field));
+    await waitFor(() => expect(usePluginManagerStore.getState().settingsRequest).toBeNull());
+    usePluginManagerStore.setState({ settingsRequest: null });
+  });
+
+  it("drops the instance's settings the moment it's turned off here", async () => {
+    const settings = [
+      { id: "apiKey", type: "string" as const, label: "API key", scope: "project" as const },
+    ];
+    const manifest = { ...installed().manifest, contributes: { ...EMPTY_CONTRIBUTES, settings } };
+    // The list stays stale: it still carries the running instance after the switch.
+    pluginApi.list.mockResolvedValue([
+      installed({ instanceMode: "project", enabledInProjects: [PROJECT_ID], manifest }),
+      installed({ instanceId: INSTANCE_KEY, origin: "project", projectId: PROJECT_ID, manifest }),
+    ]);
+    seed([]);
+    render(<ProjectPluginsTab />);
+    await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
+    await select("Acme Tools");
+    expect(await screen.findByLabelText("API key")).toBeTruthy();
+
+    pluginApi.setProjectInstanceEnabled.mockImplementationOnce(async () => {
+      // Main has it off now; the tab's own copy of the list has not been re-read.
+      pluginApi.list.mockResolvedValue([
+        installed({ instanceMode: "project", enabledInProjects: [], manifest }),
+      ]);
+    });
+    fireEvent.click(screen.getByTestId("installed-plugin-instance-switch"));
+
+    await waitFor(() => expect(screen.queryByLabelText("API key")).toBeNull());
+    await waitFor(() => expect(useProjectPluginStore.getState().instanceToggling.size).toBe(0));
+    expect(screen.queryByLabelText("API key")).toBeNull();
+    expect(pluginApi.setProjectInstanceEnabled).toHaveBeenCalledWith("acme.tools", false);
+  });
+
+  it("states a failed toggle on its row and retries the same write", async () => {
+    pluginApi.list.mockResolvedValue([packageRow()]);
+    pluginApi.setProjectInstanceEnabled.mockRejectedValueOnce(new Error("EACCES"));
+    seed([]);
+    render(<ProjectPluginsTab />);
+    await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
+    await select("Acme Tools");
+
+    const toggle = screen.getByTestId("installed-plugin-instance-switch");
+    fireEvent.click(toggle);
+
+    const alert = await screen.findByRole("alert");
+    const row = alert.closest<HTMLElement>("[data-settings-row]");
+    expect(row!.contains(toggle)).toBe(true);
+    expect(alert.textContent).toContain("Couldn't turn on Acme Tools in this project");
+    expect(alert.textContent).toContain("EACCES");
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+
+    fireEvent.click(within(alert).getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(pluginApi.setProjectInstanceEnabled).toHaveBeenCalledTimes(2));
+    expect(pluginApi.setProjectInstanceEnabled.mock.calls[1]).toEqual(["acme.tools", true]);
+    await waitFor(() => expect(screen.queryAllByRole("alert")).toHaveLength(0));
+  });
+
+  it("sends a globally disabled package to the plugin manager rather than offering a switch", async () => {
+    pluginApi.list.mockResolvedValue([
+      installed({ instanceMode: "project", enabledInProjects: [PROJECT_ID], disabled: true }),
+    ]);
+    seed([]);
+    render(<ProjectPluginsTab />);
+    await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
+    await select("Acme Tools");
+
+    expect(screen.getByTestId("project-plugin-selector-status").textContent).toBe("Off");
+    expect(screen.getByText("Turned off everywhere")).toBeTruthy();
+    expect(screen.queryByTestId("installed-plugin-instance-switch")).toBeNull();
   });
 });

@@ -6,7 +6,6 @@ import { render, cleanup } from "@testing-library/react";
 import { PostHydrationListeners } from "@/components/PostHydrationListeners";
 import { PERF_MARKS } from "@shared/perf/marks";
 
-const hibernation = vi.fn();
 const idleTerminal = vi.fn();
 const parkRelease = vi.fn();
 const diskSpace = vi.fn();
@@ -15,6 +14,7 @@ const tokenHealth = vi.fn();
 const rateLimit = vi.fn();
 const recipeFocus = vi.fn();
 const devServerSync = vi.fn();
+const devPreviewOffer = vi.fn();
 const soundPlayback = vi.fn();
 const storeUpdate = vi.fn();
 const pluginUpdateCheck = vi.fn();
@@ -22,9 +22,6 @@ const hostMemoryPause = vi.fn();
 const keepAwake = vi.fn();
 const mark = vi.fn();
 
-vi.mock("@/hooks/useHibernationNotifications", () => ({
-  useHibernationNotifications: () => hibernation(),
-}));
 vi.mock("@/hooks/useIdleTerminalNotifications", () => ({
   useIdleTerminalNotifications: () => idleTerminal(),
 }));
@@ -61,13 +58,13 @@ vi.mock("@/hooks/usePluginUpdateCheckListener", () => ({
 vi.mock("@/hooks/app", () => ({
   useRecipeFocusReload: () => recipeFocus(),
   useWorktreeDevServerStateSync: () => devServerSync(),
+  useDevPreviewOfferSync: () => devPreviewOffer(),
 }));
 vi.mock("@/utils/performance", () => ({
   markRendererPerformance: (name: string) => mark(name),
 }));
 
 const allHooks = [
-  hibernation,
   idleTerminal,
   parkRelease,
   diskSpace,
@@ -76,6 +73,7 @@ const allHooks = [
   rateLimit,
   recipeFocus,
   devServerSync,
+  devPreviewOffer,
   soundPlayback,
   storeUpdate,
   pluginUpdateCheck,

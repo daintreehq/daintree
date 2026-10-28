@@ -41,12 +41,16 @@ export function useIdleTerminalNotifications(): void {
           // equivalent toast-path handler (unused while priority is "low").
           actions: [
             {
-              label: "Close them",
+              label: "Sleep project",
               variant: "primary" as const,
               actionId: "idleTerminalNotify.closeProject",
               actionArgs: { projectId: project.projectId },
               onClick: () => {
-                void idleTerminalClient.closeProject(project.projectId);
+                // Lazy: the store graph it needs has no business loading
+                // with this app-lifetime listener.
+                void import("@/lib/sleepIdleTerminalProject").then(({ sleepIdleTerminalProject }) =>
+                  sleepIdleTerminalProject(project.projectId)
+                );
               },
             },
             {

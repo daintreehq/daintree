@@ -15,6 +15,7 @@ import type {
 import type { NotificationSettings } from "@shared/types/ipc/api";
 import type { RelocationPreview, RelocationRequest } from "@shared/types/projectRelocation";
 import type { AgentPreset } from "@shared/config/agentRegistry";
+import type { ProjectTemplateSelection } from "@shared/types/plugin";
 import type {
   ProjectSwitchOutgoingState,
   ProjectSwitchPayload,
@@ -260,8 +261,10 @@ export const projectClient = {
       return await window.electron.project.addBrowserAllowedHost(projectId, hostname);
     } catch (error) {
       // A remote host whose Daintree predates the channel refuses it as one it
-      // doesn't know; save the way that build did instead.
-      if (clientErrorCode(error) !== "CHANNEL_NOT_REMOTABLE") throw error;
+      // doesn't know (said as a build skew once the Shell knows the builds
+      // differ); save the way that build did instead.
+      const code = clientErrorCode(error);
+      if (code !== "CHANNEL_NOT_REMOTABLE" && code !== "HOST_BUILD_SKEW") throw error;
       console.warn(
         "[projectClient] Host has no field-level allow-list write; saving the settings whole"
       );
@@ -312,8 +315,12 @@ export const projectClient = {
     return window.electron.project.getNotificationOverrides(projectIds);
   },
 
-  createFolder: (parentPath: string, folderName: string): Promise<string> => {
-    return window.electron.project.createFolder(parentPath, folderName);
+  createFolder: (
+    parentPath: string,
+    folderName: string,
+    template?: ProjectTemplateSelection
+  ): Promise<string> => {
+    return window.electron.project.createFolder(parentPath, folderName, template);
   },
 
   initGit: (directoryPath: string): Promise<void> => {

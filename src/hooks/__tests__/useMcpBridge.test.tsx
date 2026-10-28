@@ -759,6 +759,9 @@ describe("useMcpBridge", () => {
     expect(pending?.approvalReason).toBeUndefined();
     expect(pending?.callerInfo?.userAgent).toContain("studio-01");
     expect(mocks.buildPreview).not.toHaveBeenCalled();
+    // That host's lines already carry its plugins' notes (#13805); this view's
+    // plugins know nothing of its worktree.
+    expect(pending?.worktreeDeleteNotesTargetId).toBeUndefined();
 
     useMcpConfirmStore.getState().resolveCurrent("approved");
     await dispatched;
@@ -1224,6 +1227,9 @@ describe("useMcpBridge", () => {
     await Promise.resolve();
     expect(useMcpConfirmStore.getState().current?.requestId).toBe("req-preview");
     expect(useMcpConfirmStore.getState().current?.previewPending).toBe(true);
+    // Plugin notes (#13805) are asked by the dialog for the worktree the delete
+    // names, and never hold the approval the preview gates.
+    expect(useMcpConfirmStore.getState().current?.worktreeDeleteNotesTargetId).toBe("wt-1");
 
     // The fresh preview patches the pending item in place and re-enables
     // approval once it resolves.

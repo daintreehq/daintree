@@ -43,6 +43,14 @@ const projectTargetingMock = vi.hoisted(() => ({
   setOsNotifications: vi.fn((input: { pluginId: string; enabled: boolean }) =>
     Promise.resolve(input.enabled)
   ),
+  getWorktreeDeleteNotes: vi.fn((_input: { pluginId: string }) => Promise.resolve(true)),
+  setWorktreeDeleteNotes: vi.fn((input: { pluginId: string; enabled: boolean }) =>
+    Promise.resolve(input.enabled)
+  ),
+  getPanelAttention: vi.fn((_input: { pluginId: string }) => Promise.resolve(false)),
+  setPanelAttention: vi.fn((input: { pluginId: string; enabled: boolean }) =>
+    Promise.resolve(input.enabled)
+  ),
 }));
 
 // The Performance tab is earned by main having a snapshot for the plugin.
@@ -60,6 +68,12 @@ beforeEach(() => {
   projectTargetingMock.getOsNotifications.mockResolvedValue(false);
   projectTargetingMock.setOsNotifications.mockReset();
   projectTargetingMock.setOsNotifications.mockImplementation((input) =>
+    Promise.resolve(input.enabled)
+  );
+  projectTargetingMock.getPanelAttention.mockReset();
+  projectTargetingMock.getPanelAttention.mockResolvedValue(false);
+  projectTargetingMock.setPanelAttention.mockReset();
+  projectTargetingMock.setPanelAttention.mockImplementation((input) =>
     Promise.resolve(input.enabled)
   );
   getPerfSnapshotsMock.mockClear();
@@ -344,6 +358,47 @@ describe("PluginDetailPane OS notifications switch (#13505)", () => {
     renderPane(withCapabilities(["project:dispatch"]));
     expect(screen.queryByTestId("plugin-os-notifications-switch")).toBeNull();
     expect(projectTargetingMock.getOsNotifications).not.toHaveBeenCalled();
+  });
+});
+
+describe("PluginDetailPane worktree delete notes switch (#13805)", () => {
+  const notesSwitch = () => screen.getByTestId("plugin-worktree-delete-notes-switch");
+  function withNotes(caps: BuiltInPluginCapability[] = []): LoadedPluginInfo {
+    const base = withCapabilities(caps);
+    return {
+      ...base,
+      manifest: {
+        ...base.manifest,
+        contributes: { ...base.manifest.contributes, worktreeDeleteNotes: [{ id: "notes" }] },
+      },
+    };
+  }
+
+  it("earns the Permissions tab on its own, starts on, and turns off for this plugin", async () => {
+    renderPane(withNotes());
+    // No capabilities, so the capability blurb stays out of the tab.
+    expect(screen.queryByText(/They aren.t a sandbox/)).toBeNull();
+    await vi.waitFor(() => expect(notesSwitch().hasAttribute("disabled")).toBe(false));
+    expect(notesSwitch().getAttribute("aria-checked")).toBe("true");
+    expect(projectTargetingMock.getWorktreeDeleteNotes).toHaveBeenCalledWith({
+      pluginId: "acme.demo",
+    });
+
+    fireEvent.click(notesSwitch());
+    await vi.waitFor(() => expect(notesSwitch().getAttribute("aria-checked")).toBe("false"));
+    expect(projectTargetingMock.setWorktreeDeleteNotes).toHaveBeenCalledWith({
+      pluginId: "acme.demo",
+      enabled: false,
+    });
+  });
+
+  it("says a failed off is still on, rather than promising it comes back after a restart", async () => {
+    projectTargetingMock.setWorktreeDeleteNotes.mockRejectedValueOnce(new Error("disk full"));
+    renderPane(withNotes());
+    await vi.waitFor(() => expect(notesSwitch().hasAttribute("disabled")).toBe(false));
+    fireEvent.click(notesSwitch());
+    await vi.waitFor(() => expect(screen.getByText("Couldn't turn this off.")).toBeTruthy());
+    expect(screen.queryByText(/after a restart/)).toBeNull();
   });
 });
 
@@ -663,6 +718,41 @@ describe("PluginDetailPane overview contributions (#11302)", () => {
     expect(screen.getByText("Opened by the plugin")).toBeTruthy();
   });
 
+  it("says which panels report their own activity (#13820)", () => {
+    renderOverview(
+      withContributes({
+        panels: [
+          { ...PANEL, reportsActivity: true },
+          { ...PANEL, id: "acme.demo.notes", name: "Demo notes", reportsActivity: false },
+        ],
+      })
+    );
+    expect(screen.getAllByText("Reports activity")).toHaveLength(1);
+    const row = screen.getByText("Demo board").closest("li");
+    expect(row && within(row).queryByText("Reports activity")).toBeTruthy();
+  });
+
+  it("offers the attention views switch, off until turned on, only for panels that report (#13821)", async () => {
+    renderOverview(withContributes({ panels: [{ ...PANEL, reportsActivity: true }] }));
+    const attentionSwitch = () => screen.getByTestId("plugin-panel-attention-switch");
+    await vi.waitFor(() => expect(attentionSwitch().hasAttribute("disabled")).toBe(false));
+    expect(attentionSwitch().getAttribute("aria-checked")).toBe("false");
+    expect(projectTargetingMock.getPanelAttention).toHaveBeenCalledWith({ pluginId: "acme.demo" });
+
+    fireEvent.click(screen.getByRole("switch", { name: "Show in attention views" }));
+    await vi.waitFor(() => expect(attentionSwitch().getAttribute("aria-checked")).toBe("true"));
+    expect(projectTargetingMock.setPanelAttention).toHaveBeenCalledWith({
+      pluginId: "acme.demo",
+      enabled: true,
+    });
+  });
+
+  it("offers no attention views switch when no panel reports activity", () => {
+    renderOverview(withContributes({ panels: [{ ...PANEL, reportsActivity: false }] }));
+    expect(screen.queryByTestId("plugin-panel-attention-switch")).toBeNull();
+    expect(projectTargetingMock.getPanelAttention).not.toHaveBeenCalled();
+  });
+
   it("omits both sections entirely when the plugin contributes neither", () => {
     renderOverview(makePlugin());
     expect(screen.queryByText("Commands")).toBeNull();
@@ -867,5 +957,37 @@ describe("PluginDetailPane performance and styles tabs", () => {
     renderDetail(withPanel({ disabled: true }));
     await act(async () => {});
     expect(screen.queryByRole("tab", { name: "Styles" })).toBeNull();
+  });
+});
+
+describe("PluginDetailPane works with (#13817)", () => {
+  function withWorksWith(worksWith: string[]): LoadedPluginInfo {
+    const base = makePlugin();
+    return { ...base, manifest: { ...base.manifest, worksWith } };
+  }
+
+  it("leaves the section out when the manifest lists no plugins", () => {
+    renderOverview(withWorksWith([]));
+    expect(screen.queryByText("Works with")).toBeNull();
+  });
+
+  it("says, for each listed plugin, whether it is here", () => {
+    render(
+      <TooltipProvider>
+        <PluginDetailPane
+          plugin={withWorksWith(["acme.linear", "acme.missing"])}
+          checkingUpdate={false}
+          upToDate={false}
+          onUninstall={vi.fn()}
+          onCheckForUpdate={vi.fn()}
+          worksWithPeers={new Map([["acme.linear", { name: "Linear", turnedOff: false }]])}
+        />
+      </TooltipProvider>
+    );
+
+    const rows = within(screen.getByText("Works with").parentElement!)
+      .getAllByRole("listitem")
+      .map((row) => row.textContent);
+    expect(rows).toEqual(["Linearacme.linearInstalled", "acme.missingNot installed"]);
   });
 });

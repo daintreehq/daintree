@@ -2,6 +2,7 @@ import { create } from "zustand";
 import type { ReactNode } from "react";
 import type { ActionId } from "@shared/types/actions";
 import type { NotificationEventKind } from "@/lib/notify";
+import type { NotificationPluginSource } from "@shared/types/ipc/maps";
 import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
 import { useUIStore } from "@/store/uiStore";
 
@@ -73,6 +74,7 @@ export interface Notification {
     worktreeId?: string;
     panelId?: string;
     eventKind?: NotificationEventKind;
+    plugin?: NotificationPluginSource;
   };
   /**
    * Number of events collapsed into this toast. `undefined` means a single

@@ -4,6 +4,17 @@ import type { PtyClient } from "../../services/PtyClient.js";
 import { CHANNELS } from "../channels.js";
 import type { ProjectPushTarget } from "../utils.js";
 
+/**
+ * What ties a watch to a Daintree Assistant rather than a worker: main's own
+ * hold on the run, asked again on every use, and a way to hear it end before
+ * any output says so.
+ */
+export interface AssistantWatchBinding {
+  isBound(): boolean;
+  onEnded(end: () => void): () => void;
+  mayType(webContentsId: number): boolean;
+}
+
 interface GridSize {
   cols: number;
   rows: number;
@@ -42,6 +53,14 @@ interface Watch {
   mayResize: () => boolean;
   /** End the stream, telling the view, with no size to hand back. */
   end: () => void;
+  /** Tell the view the PTY's grid again, so its panel measures against it afresh. */
+  announceGrid: () => void;
+  binding: AssistantWatchBinding | null;
+  /**
+   * A panel reading this host from another machine. No view here holds the
+   * terminal's own pane still for it, so its hold is published for them to.
+   */
+  remote: boolean;
 }
 
 /** At most one terminal per view: the one its canopy panel has selected. */
@@ -53,6 +72,8 @@ const watches = new Map<number, Watch>();
  */
 const holders = new Map<string, number>();
 const MAX_PENDING_HOLDS = 8;
+let publishedSizeHolds = "[]";
+const sizeHoldListeners = new Set<(terminalIds: string[]) => void>();
 
 const sameSize = (a: GridSize | null, b: GridSize | null): boolean =>
   a !== null && b !== null && a.cols === b.cols && a.rows === b.rows;
@@ -105,7 +126,9 @@ export async function watchTerminal(
    * awaited anything; by default, the one running now.
    */
   launchGeneration: number | null = ptyClient.getLiveGeneration(runId),
-  mayResize: () => boolean = () => true
+  mayResize: () => boolean = () => true,
+  binding: AssistantWatchBinding | null = null,
+  remote = false
 ): Promise<CanopyTerminalView> {
   stopWatch(sender.id);
   const watchId = ++nextWatchId;
@@ -172,6 +195,7 @@ export async function watchTerminal(
     send({ kind: "resize", watchId, runId, cols: applied.cols, rows: applied.rows });
   };
   let releaseMirror: (() => void) | undefined;
+  let releaseBinding: (() => void) | undefined;
   const watch: Watch = {
     watchId,
     runId,
@@ -184,9 +208,17 @@ export async function watchTerminal(
     // otherwise hand the successor's generation to this stream.
     launchGeneration,
     isCurrent: () =>
-      watch.launchGeneration === null || ptyClient.isLiveGeneration(runId, watch.launchGeneration),
+      (watch.launchGeneration === null ||
+        ptyClient.isLiveGeneration(runId, watch.launchGeneration)) &&
+      (binding === null || binding.isBound()),
     mayResize,
+    binding,
+    remote,
     end: () => end(),
+    announceGrid: () => {
+      const grid = watch.appliedSize ?? watch.ownerSize;
+      if (grid) send({ kind: "resize", watchId, runId, cols: grid.cols, rows: grid.rows });
+    },
     stop: (restore) => {
       const held = holders.get(runId) === sender.id;
       if (held) holders.delete(runId);
@@ -204,12 +236,16 @@ export async function watchTerminal(
           ptyClient.resize(runId, watch.ownerSize.cols, watch.ownerSize.rows);
         }
       }
+      // After the size is handed back, so the pane's own fit lands last.
+      if (held) publishSizeHolds();
       ptyClient.off("data", forward);
       ptyClient.off("data-mirror", forward);
       ptyClient.off("resize-result", onResize);
       ptyClient.off("exit", onExit);
       ptyClient.off("host-crash", end);
+      if (binding || remote) ptyClient.off("spawn-result", onSpawnResult);
       releaseMirror?.();
+      releaseBinding?.();
     },
   };
   function end() {
@@ -221,6 +257,12 @@ export async function watchTerminal(
   function onExit(id: string) {
     if (id === runId) end();
   }
+  // A duplicate spawn settling is when a successor under the id takes over; an
+  // assistant's may print nothing for a while, so its stream ends here instead,
+  // as a remote panel's does: its hold would keep the successor's panes frozen.
+  function onSpawnResult(id: string) {
+    if (id === runId && !watch.isCurrent()) end();
+  }
 
   // Registered before anything is wired, so a throw part-way still unwinds.
   watches.set(sender.id, watch);
@@ -230,7 +272,10 @@ export async function watchTerminal(
     ptyClient.on("resize-result", onResize);
     ptyClient.on("exit", onExit);
     ptyClient.on("host-crash", end);
+    if (binding || remote) ptyClient.on("spawn-result", onSpawnResult);
     releaseMirror = ptyClient.acquireIpcDataMirror(runId);
+    // A replacement can be silent: the successor may print nothing for a while.
+    releaseBinding = binding?.onEnded(end);
   } catch (error) {
     stopWatch(sender.id);
     throw error;
@@ -336,6 +381,57 @@ export function resizeWatchedTerminal(
   if (watch.pendingHolds.length > MAX_PENDING_HOLDS) watch.pendingHolds.shift();
   holders.set(watch.runId, webContentsId);
   ptyClient.resize(watch.runId, cols, rows);
+  publishSizeHolds();
+}
+
+/**
+ * The terminals a panel on another machine holds at its own size, while it may.
+ * The windows here freeze those panes at the PTY's grid instead of fitting them,
+ * as a panel in their own view does by holding the pane itself.
+ */
+export function remoteSizeHolds(): string[] {
+  const held: string[] = [];
+  for (const [runId, holder] of holders) {
+    const watch = watches.get(holder);
+    if (watch?.remote && watch.heldSize !== null && watch.isCurrent() && watch.mayResize()) {
+      held.push(runId);
+    }
+  }
+  return held.sort();
+}
+
+/** Tell the listeners when {@link remoteSizeHolds} changed; also after a drive lease moves. */
+export function publishSizeHolds(): void {
+  const held = remoteSizeHolds();
+  const serialized = JSON.stringify(held);
+  if (serialized === publishedSizeHolds) return;
+  publishedSizeHolds = serialized;
+  for (const listener of sizeHoldListeners) listener(held);
+}
+
+/**
+ * The drive lease moved. A panel on another machine that lost the drive lets
+ * go of its hold with nothing handed back, so the new driver's panes fit
+ * again; one that may size again is told the PTY's grid, which has it ask for
+ * its own once more.
+ */
+export function followDriveLeaseChange(): void {
+  for (const [viewId, watch] of watches) {
+    if (!watch.remote || !watch.isCurrent()) continue;
+    if (!watch.mayResize()) {
+      if (holders.get(watch.runId) === viewId) holders.delete(watch.runId);
+      watch.heldSize = null;
+      watch.pendingHolds = [];
+    } else if (watch.heldSize === null) {
+      watch.announceGrid();
+    }
+  }
+  publishSizeHolds();
+}
+
+export function onSizeHoldsChange(listener: (terminalIds: string[]) => void): () => void {
+  sizeHoldListeners.add(listener);
+  return () => sizeHoldListeners.delete(listener);
 }
 
 /** End the view's stream and any watch request it still has in flight. */
@@ -344,9 +440,29 @@ export function stopTerminalWatch(webContentsId: number): void {
   stopWatch(webContentsId);
 }
 
+/**
+ * End one stream, and only if it is still the view's: a pane letting go late —
+ * one leaving with its dialog's exit animation — must not end, or cancel the
+ * request for, the stream another pane in the same view opened since.
+ */
+export function stopTerminalWatchById(webContentsId: number, watchId: number): void {
+  if (watches.get(webContentsId)?.watchId === watchId) stopWatch(webContentsId);
+}
+
 export function stopAllTerminalWatches(): void {
   requests.clear();
   for (const id of [...watches.keys()]) stopWatch(id);
+}
+
+/**
+ * End every worker stream Canopy opened, leaving the assistants people chose
+ * to watch, which never needed Canopy on. A request still in flight is
+ * cancelled either way: it is checked again on arrival.
+ */
+export function stopWorkerTerminalWatches(): void {
+  for (const [id, watch] of [...watches]) {
+    if (watch.binding === null) stopWatch(id);
+  }
 }
 
 /**
@@ -356,14 +472,19 @@ export function stopAllTerminalWatches(): void {
 export function watchedTerminal(
   webContentsId: number,
   watchId: number
-): { runId: string; spawnedAt: number } | null {
+): { runId: string; spawnedAt: number; assistant: boolean; mayType: boolean } | null {
   const watch = watches.get(webContentsId);
   if (!watch || watch.watchId !== watchId) return null;
   if (!watch.isCurrent()) {
     watch.end();
     return null;
   }
-  return { runId: watch.runId, spawnedAt: watch.spawnedAt };
+  return {
+    runId: watch.runId,
+    spawnedAt: watch.spawnedAt,
+    assistant: watch.binding !== null,
+    mayType: watch.binding === null || watch.binding.mayType(webContentsId),
+  };
 }
 
 /** Test seam: what each view is watching. */

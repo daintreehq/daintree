@@ -9,6 +9,21 @@ import {
 } from "../projectSettingsCodec.js";
 
 describe("decode", () => {
+  it("repairs a stored vocabulary into entries, dropping what has no term", () => {
+    const result = decode({
+      runCommands: [],
+      voiceDictionary: ["Daintree", { term: "PtyClient", heardAs: ["PTY client"] }, { nope: 1 }],
+    });
+    expect(result.ok && result.settings.voiceDictionary).toEqual([
+      { term: "Daintree", heardAs: [], source: "manual", addedAt: 0 },
+      { term: "PtyClient", heardAs: ["PTY client"], source: "manual", addedAt: 0 },
+    ]);
+    expect(decode({ runCommands: [], voiceDictionary: "x" })).toEqual({
+      ok: true,
+      settings: expect.not.objectContaining({ voiceDictionary: expect.anything() }),
+    });
+  });
+
   it("returns empty defaults for non-object input", () => {
     expect(decode(null)).toEqual({ ok: true, settings: { runCommands: [] } });
     expect(decode(undefined)).toEqual({ ok: true, settings: { runCommands: [] } });

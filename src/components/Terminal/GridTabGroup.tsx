@@ -103,6 +103,7 @@ export const GridTabGroup = React.memo(function GridTabGroup({
       const pty = isPtyPanel(p) ? p : null;
       let presetColor = pty?.agentPresetColor;
       let fallbackTooltip: string | undefined;
+      let presetName: string | undefined;
       if (pty?.launchAgentId && pty.agentPresetId) {
         const presets = getMergedPresets(
           pty.launchAgentId,
@@ -111,7 +112,10 @@ export const GridTabGroup = React.memo(function GridTabGroup({
           projectPresetsByAgent[pty.launchAgentId]
         );
         const live = presets.find((f) => f.id === pty.agentPresetId);
-        if (live) presetColor = live.color ?? presetColor;
+        if (live) {
+          presetColor = live.color ?? presetColor;
+          presetName = live.name;
+        }
         if (pty.isUsingFallback && pty.originalPresetId) {
           const original = presets.find((f) => f.id === pty.originalPresetId);
           const originalName = original?.name ?? pty.originalPresetId;
@@ -147,6 +151,7 @@ export const GridTabGroup = React.memo(function GridTabGroup({
         presetColor,
         isUsingFallback: pty?.isUsingFallback,
         fallbackTooltip,
+        presetName,
         hasDangerousFlags,
       };
     });
@@ -173,10 +178,10 @@ export const GridTabGroup = React.memo(function GridTabGroup({
     [panels, handBackRunIds]
   );
 
-  // Restore focus to the destination tab when switching tabs within a focused
-  // group. The registry handler routes to either xterm or the hybrid input
-  // depending on the user's current `preferredTerminalFocusTarget`, so tab
-  // switching no longer forces input focus when the user has chosen xterm.
+  // Hand focus to the destination tab when switching tabs within a focused
+  // group. The registry handler routes it to the tab's home, xterm or the
+  // hybrid input as the setting says, so tab switching never forces the input
+  // on someone who types in the terminal.
   // The existing TerminalPane focus effect uses double-rAF which races with
   // HybridInputBar's CodeMirror editor reinitialization on terminalId change.
   const prevActiveTabIdRef = useRef(activeTabId);
@@ -249,18 +254,22 @@ export const GridTabGroup = React.memo(function GridTabGroup({
 
   const handleTabClose = useCallback(
     (tabId: string) => {
-      if (tabId === activeTabId) {
-        const currentIndex = panels.findIndex((p) => p.id === tabId);
-        const nextPanel = panels[currentIndex + 1] ?? panels[currentIndex - 1];
-        if (nextPanel) {
-          setActiveTab(group.id, nextPanel.id);
-          setFocused(nextPanel.id);
-        }
-      }
       requestPanelClose({
         hideIds: [tabId],
         commit: () => {
           trashPanel(tabId);
+        },
+        // Switching tabs unmounts the closing view, so it waits for a guarded
+        // close to be approved: a cancelled close must leave the view, and any
+        // unsaved work in it, where it was.
+        onOutcome: (closing) => {
+          if (!closing || tabId !== activeTabId) return;
+          const currentIndex = panels.findIndex((p) => p.id === tabId);
+          const nextPanel = panels[currentIndex + 1] ?? panels[currentIndex - 1];
+          if (nextPanel) {
+            setActiveTab(group.id, nextPanel.id);
+            setFocused(nextPanel.id);
+          }
         },
       });
     },

@@ -1,34 +1,74 @@
-import { useEffect } from "react";
+import { useEffect, useSyncExternalStore, type MouseEvent } from "react";
+import { isOwnPluginAction } from "@shared/utils/remotePluginContributions";
+import { cn } from "@/lib/utils";
 import { usePluginAttribution } from "@/hooks/usePluginAttribution";
+import { actionService } from "@/services/ActionService";
+import {
+  getRegisteredPluginActionsSnapshot,
+  subscribeToRegisteredPluginActions,
+} from "@/services/plugin/registeredPluginActions";
 import { useProjectStore } from "@/store/projectStore";
 import {
   usePluginWorktreeCardStatusStore,
   worktreeCardStatusesFor,
   type WorktreeCardPluginStatus,
 } from "@/store/pluginWorktreeCardStatusStore";
+import type { ActionId } from "@shared/types/actions";
 import type { PluginWorktreeCardStatus } from "@shared/types/plugin";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
+import { FocusHandoffGuard } from "../FocusHandoffGuard";
+
+interface PluginStatusChipProps {
+  pluginId: string;
+  worktreeId: string;
+  status: PluginWorktreeCardStatus;
+  registeredActions: ReadonlyMap<string, string>;
+  tabIndex?: number;
+  onBeforeRun?: () => void;
+}
 
 function PluginStatusChip({
   pluginId,
+  worktreeId,
   status,
-}: {
-  pluginId: string;
-  status: PluginWorktreeCardStatus;
-}) {
+  registeredActions,
+  tabIndex,
+  onBeforeRun,
+}: PluginStatusChipProps) {
   const { name } = usePluginAttribution(pluginId);
+  // Runs only the plugin's own action, and only while it is registered; until
+  // then the chip is the plain status it always was (#13776).
+  const command =
+    status.command !== undefined && isOwnPluginAction(pluginId, status.command)
+      ? status.command
+      : undefined;
+  const actionTitle = command !== undefined ? registeredActions.get(command) : undefined;
+
+  const handleClick = (event: MouseEvent<HTMLButtonElement>) => {
+    // A press (or Enter/Space, which click it) must never reach the card and
+    // select the worktree, whether or not the chip runs anything.
+    event.stopPropagation();
+    if (command === undefined || actionTitle === undefined) return;
+    onBeforeRun?.();
+    void actionService.dispatch(command as ActionId, { worktreeId }, { source: "user" });
+  };
+
   return (
     <Tooltip>
       <TooltipTrigger asChild>
         {/* A button so the status is reachable by keyboard and its tooltip
-            opens on focus; it does nothing else, so a press (or Enter/Space,
-            which click it) must not reach the card and select the worktree. */}
+            opens on focus, even when it has no command to run. */}
         <button
           type="button"
           data-no-dnd
+          tabIndex={tabIndex}
           aria-label={`${name}: ${status.label}`}
-          onClick={(event) => event.stopPropagation()}
-          className="inline-flex h-6 min-w-0 max-w-full items-center rounded-[var(--radius-sm)] px-1 text-xs text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+          onClick={handleClick}
+          className={cn(
+            "inline-flex h-6 min-w-0 max-w-full items-center rounded-[var(--radius-sm)] px-1 text-xs text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary",
+            actionTitle !== undefined &&
+              "cursor-pointer transition-colors duration-150 ease-out hover:text-text-primary"
+          )}
         >
           <span className="min-w-0 truncate">{status.label}</span>
         </button>
@@ -39,6 +79,11 @@ function PluginStatusChip({
           {status.tooltip && (
             <span className="whitespace-pre-wrap break-words text-text-secondary">
               {status.tooltip}
+            </span>
+          )}
+          {actionTitle !== undefined && (
+            <span className="text-text-secondary">
+              {actionTitle.length > 0 ? `Click: ${actionTitle}` : "Click to run"}
             </span>
           )}
         </div>
@@ -65,19 +110,57 @@ export function useWorktreePluginStatuses(worktreeId: string): WorktreeCardPlugi
 /**
  * The statuses plugins put on this worktree's card (#13704): one quiet chip per
  * plugin, each named after its plugin, so two plugins marking the same card
- * never hide each other. Read-only, and drawn like the attachment chips.
+ * never hide each other. Drawn like the attachment chips. A chip whose status
+ * names a registered command of its plugin runs it with `{ worktreeId }` when
+ * clicked (#13776). The overview passes `tabIndex={-1}` (F2 reaches its row's
+ * controls), `onBeforeRun` to get out of the way as a command starts, as its
+ * context-menu actions do, and `onFocusLost` for a focused chip that goes.
  */
 export function WorktreePluginStatusChips({
+  worktreeId,
   statuses,
+  tabIndex,
+  onBeforeRun,
+  onFocusLost,
 }: {
+  worktreeId: string;
   statuses: readonly WorktreeCardPluginStatus[];
+  tabIndex?: number;
+  onBeforeRun?: () => void;
+  onFocusLost?: () => void;
 }) {
+  // Subscribed, not read from ActionService: a command registering after its
+  // status arrived must still make the chip clickable.
+  const registeredActions = useSyncExternalStore(
+    subscribeToRegisteredPluginActions,
+    getRegisteredPluginActionsSnapshot,
+    getRegisteredPluginActionsSnapshot
+  );
   if (statuses.length === 0) return null;
   return (
     <>
-      {statuses.map(({ pluginId, status }) => (
-        <PluginStatusChip key={pluginId} pluginId={pluginId} status={status} />
-      ))}
+      {statuses.map(({ pluginId, status }) => {
+        const chip = (
+          <PluginStatusChip
+            key={pluginId}
+            pluginId={pluginId}
+            worktreeId={worktreeId}
+            status={status}
+            registeredActions={registeredActions}
+            tabIndex={tabIndex}
+            onBeforeRun={onBeforeRun}
+          />
+        );
+        // Each chip guarded on its own: one plugin clearing its status while
+        // its chip has focus must hand the keyboard back, even as others stay.
+        return onFocusLost ? (
+          <FocusHandoffGuard key={pluginId} onFocusLeaving={onFocusLost}>
+            {chip}
+          </FocusHandoffGuard>
+        ) : (
+          chip
+        );
+      })}
     </>
   );
 }

@@ -4,6 +4,7 @@ import type { PtyClient } from "../services/PtyClient.js";
 import type { WorkspaceClient } from "../services/WorkspaceClient.js";
 import { projectStore } from "../services/ProjectStore.js";
 import { journalAgentSession } from "../services/pty/agentSessionJournal.js";
+import { attributeClose } from "../services/pty/closeAttribution.js";
 import { sealAndDrainCapturedSessionPersistence } from "../services/pty/agentSessionCapturePersistence.js";
 import { isAssistantTerminalRecord } from "../services/assistantTerminal.js";
 import type { AssistantLaneSnapshot } from "../services/HelpSessionService.js";
@@ -24,9 +25,9 @@ import { getCrashLoopGuard } from "../services/CrashLoopGuardService.js";
 import { getPanelSuspectLedger } from "../services/PanelSuspectLedgerService.js";
 import { getDatabaseMaintenanceService } from "../services/DatabaseMaintenanceService.js";
 import { getPeriodicCleanupService } from "../services/PeriodicCleanupService.js";
-import { getHibernationService } from "../services/HibernationService.js";
 import { getIdleTerminalNotificationService } from "../services/IdleTerminalNotificationService.js";
 import { getSystemSleepService } from "../services/SystemSleepService.js";
+import { disposeMemoryLeakAutoRestart } from "../services/MemoryLeakAutoRestartService.js";
 import { getOsDndService } from "../services/OsDndService.js";
 import { isE2EMode } from "../setup/runtimeFlags.js";
 import { getServiceConnectivityRegistry } from "../services/connectivity/index.js";
@@ -57,6 +58,11 @@ import { isSmokeTest } from "../setup/environment.js";
 import { stopPerformanceTraceIfActive } from "../utils/performanceTrace.js";
 import { getProcessDeathLogger } from "../services/ProcessDeathLogger.js";
 import { isSignalShutdown, clearSafetyBeltTimer } from "./signalShutdownState.js";
+import {
+  getAttachedShells,
+  isExitConfirmationPending,
+  setExitConfirmationPending,
+} from "./attachedShells.js";
 import {
   noteChildProcessGone,
   noteRendererGone,
@@ -156,7 +162,8 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
     const canShowDialog =
       !isE2EMode && !isSignalShutdown() && deps.windowRegistry?.getPrimary()?.browserWindow != null;
 
-    if (isConfirmingQuit) {
+    // A signal never waits on the update dialog.
+    if (isConfirmingQuit || (isExitConfirmationPending() && !isSignalShutdown())) {
       event.preventDefault();
       return;
     }
@@ -165,16 +172,23 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
       event.preventDefault();
 
       const activeCount = getActiveAgentCount(getAgentAvailabilityStore());
-      if (activeCount > 0) {
+      const attachedShells = getAttachedShells();
+      if (activeCount > 0 || attachedShells.length > 0) {
         isConfirmingQuit = true;
+        setExitConfirmationPending(true);
         let confirmed = false;
         try {
           const primaryWindow = deps.windowRegistry?.getPrimary()?.browserWindow ?? null;
-          confirmed = await showQuitWarning(activeCount, dialog.showMessageBox, primaryWindow);
+          confirmed = await showQuitWarning(
+            { activeAgents: activeCount, attachedShells },
+            dialog.showMessageBox,
+            primaryWindow
+          );
         } catch (error) {
           console.error("[MAIN] Error showing quit warning:", error);
         } finally {
           isConfirmingQuit = false;
+          setExitConfirmationPending(false);
         }
 
         if (!confirmed) {
@@ -292,6 +306,15 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
   // `haltDeferredQueue` above: after the quit-confirmation dialog, because
   // stopping is permanent and a cancelled quit must never reach it.
   cancelBackgroundRestores();
+
+  // Stop the memory-leak auto-restart before the terminals are snapshotted and
+  // swept (#14703): a restart it decides mid-quit would relaunch a terminal
+  // behind the sweep and overwrite the session the sweep persists for it.
+  try {
+    disposeMemoryLeakAutoRestart();
+  } catch (err) {
+    console.warn("[MAIN] disposeMemoryLeakAutoRestart at quit failed:", err);
+  }
 
   // Capture the open-window manifest and latch its writes off, for the same
   // reason and in the same place (#11492). Two hazards this closes: a pending
@@ -416,6 +439,26 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
         console.warn("[MAIN] Assistant lane snapshot at quit failed:", err);
       }
 
+      // The global assistant belongs to no project, so the per-project kills
+      // below never reach it: admission closes and its conversation is
+      // captured alongside them, bounded so a stuck agent cannot hold the quit (#14159).
+      let globalShutdown: Promise<unknown> = Promise.resolve();
+      try {
+        const { beginGlobalAssistantShutdown } = await import("../services/globalAssistant.js");
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        globalShutdown = Promise.race([
+          beginGlobalAssistantShutdown(),
+          new Promise<void>((resolve) => {
+            timer = setTimeout(resolve, PROJECT_GRACEFUL_KILL_TIMEOUT_MS);
+            timer.unref?.();
+          }),
+        ])
+          .catch((err) => console.warn("[MAIN] Global assistant shutdown failed:", err))
+          .finally(() => clearTimeout(timer));
+      } catch (err) {
+        console.warn("[MAIN] Global assistant shutdown failed:", err);
+      }
+
       const allProjects = projectStore.getAllProjects();
       const projectIds = allProjects.map((p) => p.id);
       // Cap each project's graceful kill independently (in parallel) rather
@@ -465,6 +508,9 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
             });
         })
       );
+
+      // Started before the project kills so the two waits overlap.
+      await globalShutdown;
 
       // The assistant's captures are excluded from the grid writes below, but
       // they are its lane's resume pointer: a Codex lane has no id until this
@@ -586,6 +632,9 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
                 agentModelId: info.agentModelId,
                 cwd: info.cwd ?? undefined,
                 branch: info.worktreeId ? branchByWorktree.get(info.worktreeId) : undefined,
+                // Quitting ends no pane the user had not closed; one sitting in
+                // the trash was closed by the user before the quit.
+                ...attributeClose(info, "shutdown"),
               },
               { terminalId: result.id, generation: generationById.get(result.id) }
             );
@@ -737,6 +786,13 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
           .catch((err) => {
             console.warn("[MAIN] Plugin managed-process shutdown failed:", err);
           }),
+        // Retire the Element Picker source host (#13871) if anything started
+        // it. Importing the module creates nothing, so this is free otherwise.
+        import("../services/elementPicker/index.js")
+          .then(({ shutdownElementPickerHost }) => shutdownElementPickerHost())
+          .catch((err) => {
+            console.warn("[MAIN] Element Picker host shutdown failed:", err);
+          }),
         import("../services/IdleBackgroundAutoCloseService.js")
           .then(({ getIdleBackgroundAutoCloseService }) =>
             getIdleBackgroundAutoCloseService().stop()
@@ -761,11 +817,6 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
           }
           setResourceProfileService(null);
 
-          try {
-            getHibernationService().stop();
-          } catch (err) {
-            console.warn("[MAIN] HibernationService.stop failed:", err);
-          }
           try {
             getIdleTerminalNotificationService().stop();
           } catch (err) {

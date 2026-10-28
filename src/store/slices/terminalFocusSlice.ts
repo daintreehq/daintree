@@ -1,6 +1,6 @@
 import type { StateCreator } from "zustand";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { isRuntimeAgentTerminal } from "@/utils/terminalType";
 import { isTerminalVisible } from "@/lib/terminalVisibility";
@@ -9,8 +9,8 @@ import {
   pickDockCloseFocusId,
   type GetPanelGroupInfo,
 } from "@/store/panelFocusFallback";
-import type { TerminalFocusTarget } from "@/components/Terminal/terminalFocus";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
+import { exitProjectHome } from "@/store/storeAccessors";
 
 type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
 
@@ -71,16 +71,6 @@ export interface TerminalFocusSlice {
    * referenced panel is removed or when focus state is reset.
    */
   previousFocusedId: string | null;
-  /**
-   * Session-wide preference for which sub-element of an agent pane should
-   * receive focus on panel activation. Updated by clicks and focus events on
-   * xterm vs the hybrid input. Cmd-Opt-Arrow navigation reads this so the user
-   * stays in the same "mode" as they move between panes. Treat as preference,
-   * not DOM truth — disabled inputs, missing hybrid bars, and hibernated
-   * xterms still resolve to xterm via the availability resolver.
-   */
-  preferredTerminalFocusTarget: TerminalFocusTarget;
-  setPreferredTerminalFocusTarget: (target: TerminalFocusTarget) => void;
   maximizedId: string | null;
   /** Tracks whether maximize is for a single panel or a tab group */
   maximizeTarget: MaximizeTarget;
@@ -240,14 +230,6 @@ export const createTerminalFocusSlice =
     return {
       focusedId: null,
       previousFocusedId: null,
-      preferredTerminalFocusTarget: "hybridInput",
-      setPreferredTerminalFocusTarget: (target) => {
-        // Idempotent: skip the set when the value is unchanged so DOM focus
-        // listeners don't cause notification storms or feedback loops with the
-        // TerminalPane focus useEffect.
-        if (get().preferredTerminalFocusTarget === target) return;
-        set({ preferredTerminalFocusTarget: target });
-      },
       maximizedId: null,
       maximizeTarget: null,
       activeDockTerminalId: null,
@@ -299,9 +281,9 @@ export const createTerminalFocusSlice =
           // pane take wakeForFocus. Skip non-PTY panels.
           if (focusActuallyChanged && terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
             if (terminal.location === "dock" && !wasActiveDockTerminal) {
-              terminalInstanceService.wake(id);
+              peekTerminalService()?.wake(id);
             } else {
-              terminalInstanceService.wakeForFocus(id);
+              peekTerminalService()?.wakeForFocus(id);
             }
           }
           // Only ping when selection actually changes — re-focusing the already
@@ -547,6 +529,10 @@ export const createTerminalFocusSlice =
       focusOrMaximizeByIndex: (index, findByIndex, getPanelGroup) => {
         const targetId = findByIndex(index);
         if (!targetId) return;
+        // Index navigation addresses grid cells, so it is a request for the
+        // grid — including the branch that maximizes the focused cell without
+        // going through `activateTerminal`.
+        exitProjectHome();
         const {
           focusedId,
           maximizedId,
@@ -620,9 +606,9 @@ export const createTerminalFocusSlice =
           // wakeForFocus avoids the alt-screen clobber; a first reveal from the
           // parked/offscreen dock is a genuine wake.
           if (get().activeDockTerminalId === id) {
-            terminalInstanceService.wakeForFocus(id);
+            peekTerminalService()?.wakeForFocus(id);
           } else {
-            terminalInstanceService.wake(id);
+            peekTerminalService()?.wake(id);
           }
         }
         if (isPtyPanel(terminal) && terminal.agentState === "waiting") {
@@ -687,6 +673,13 @@ export const createTerminalFocusSlice =
         // this non-dock location as grid and hand it the grid focus pointer.
         if (terminal.location === "dialog") return;
 
+        // The same goes for the project's Home, which hides the grid of every
+        // worktree — so unlike the maximize check below, a grid panel in
+        // another worktree counts too. The dock stays visible on Home.
+        if (terminal.location === "grid" || terminal.location === undefined) {
+          exitProjectHome();
+        }
+
         // Activation means "show me this panel", so a fullscreen cell rendering
         // over the grid has to go — otherwise the panel lands focused and
         // invisible, and every keystroke flows into a pane the user can't see
@@ -736,9 +729,9 @@ export const createTerminalFocusSlice =
           const isFirstDockReveal =
             terminal.location === "dock" && get().activeDockTerminalId !== id;
           if (isFirstDockReveal) {
-            terminalInstanceService.wake(id);
+            peekTerminalService()?.wake(id);
           } else {
-            terminalInstanceService.wakeForFocus(id);
+            peekTerminalService()?.wakeForFocus(id);
           }
         }
 

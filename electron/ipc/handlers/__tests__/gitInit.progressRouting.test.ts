@@ -17,7 +17,11 @@ const { windowMock, appViews, gitMock } = vi.hoisted(() => ({
     isDestroyed: () => boolean;
     send: (...a: unknown[]) => void;
   }>,
-  gitMock: { init: vi.fn(async () => undefined) },
+  gitMock: {
+    init: vi.fn(async () => undefined),
+    add: vi.fn(async () => undefined),
+    commit: vi.fn(async () => undefined),
+  },
 }));
 
 vi.mock("electron", () => ({ ipcMain: ipcMainMock }));
@@ -47,6 +51,7 @@ import { CHANNELS } from "../../channels.js";
 import { getIpcDispatcher } from "../../dispatcher.js";
 import { getEndpointRegistry, _resetEndpointRegistryForTesting } from "../../endpointRegistry.js";
 import type { ClientEndpoint, HostFrame } from "../../endpoint.js";
+import type { WorkspaceClient } from "../../../services/WorkspaceClient.js";
 
 type Handler = (event: unknown, ...args: unknown[]) => Promise<unknown>;
 
@@ -144,6 +149,75 @@ describe("project:init-git-guided progress routing", () => {
     ).toBe(true);
     expect(bystander.send).not.toHaveBeenCalled();
     expect(localView.send).not.toHaveBeenCalled();
+  });
+});
+
+describe("git init refreshes a workspace host loaded before the repository existed (#14178)", () => {
+  let directoryPath: string;
+  let cleanup: () => void;
+  const refreshProjectAfterGitInit = vi.fn(async (_path: string) => true);
+
+  beforeEach(async () => {
+    ipcHandlers.clear();
+    windowMock.mockReset().mockReturnValue(null);
+    gitMock.init.mockReset().mockResolvedValue(undefined);
+    gitMock.commit.mockReset().mockResolvedValue(undefined);
+    refreshProjectAfterGitInit.mockReset().mockResolvedValue(true);
+    directoryPath = await mkdtemp(path.join(os.tmpdir(), "daintree-gitinit-"));
+    cleanup = registerGitInitHandlers({
+      worktreeService: { refreshProjectAfterGitInit } as unknown as WorkspaceClient,
+    });
+  });
+
+  afterEach(async () => {
+    cleanup();
+    await rm(directoryPath, { recursive: true, force: true });
+  });
+
+  function guided(options: Record<string, unknown>) {
+    const handler = ipcHandlers.get(CHANNELS.PROJECT_INIT_GIT_GUIDED) as Handler;
+    return handler({ sender: { id: 5 } }, { directoryPath, createGitignore: false, ...options });
+  }
+
+  it("refreshes after a guided init with its initial commit", async () => {
+    await expect(guided({ createInitialCommit: true })).resolves.toMatchObject({
+      outcome: "success",
+    });
+    expect(gitMock.commit).toHaveBeenCalled();
+    expect(refreshProjectAfterGitInit).toHaveBeenCalledExactlyOnceWith(directoryPath);
+  });
+
+  it("refreshes when the repository exists but the commit was skipped for identity", async () => {
+    gitMock.commit.mockRejectedValueOnce(new Error("Please tell me who you are: user.email"));
+    await expect(guided({ createInitialCommit: true })).resolves.toMatchObject({
+      outcome: "error",
+    });
+    expect(refreshProjectAfterGitInit).toHaveBeenCalledExactlyOnceWith(directoryPath);
+  });
+
+  it("refreshes when a step after init fails", async () => {
+    gitMock.commit.mockRejectedValueOnce(new Error("disk full"));
+    await expect(guided({ createInitialCommit: true })).rejects.toThrow("disk full");
+    expect(refreshProjectAfterGitInit).toHaveBeenCalledExactlyOnceWith(directoryPath);
+  });
+
+  it("leaves the host alone when init itself failed", async () => {
+    gitMock.init.mockRejectedValueOnce(new Error("permission denied"));
+    await expect(guided({ createInitialCommit: false })).rejects.toThrow("permission denied");
+    expect(refreshProjectAfterGitInit).not.toHaveBeenCalled();
+  });
+
+  it("still reports a completed init when the refresh fails", async () => {
+    refreshProjectAfterGitInit.mockRejectedValueOnce(new Error("host gone"));
+    await expect(guided({ createInitialCommit: false })).resolves.toMatchObject({
+      outcome: "success",
+    });
+  });
+
+  it("refreshes after a plain init", async () => {
+    const handler = ipcHandlers.get(CHANNELS.PROJECT_INIT_GIT) as Handler;
+    await handler({ sender: { id: 5 } }, directoryPath);
+    expect(refreshProjectAfterGitInit).toHaveBeenCalledExactlyOnceWith(directoryPath);
   });
 });
 

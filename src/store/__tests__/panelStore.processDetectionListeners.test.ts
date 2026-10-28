@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type AgentStateHandler = (data: {
   terminalId: string;
@@ -191,8 +191,8 @@ vi.mock("@/clients", () => ({
 const applyAgentPromotionMock = vi.fn();
 const clearAgentPromotionMock = vi.fn();
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     prewarmTerminal: vi.fn(),
     sendPtyResize: vi.fn(),
     applyRendererPolicy: vi.fn(),
@@ -212,8 +212,11 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     cleanup: vi.fn(),
     applyAgentPromotion: applyAgentPromotionMock,
     clearAgentPromotion: clearAgentPromotionMock,
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 // Mock window.electron for resource monitoring listener
 (globalThis as Record<string, unknown>).window = globalThis.window ?? {};
@@ -236,10 +239,17 @@ vi.mock("@/services/TerminalInstanceService", () => ({
 const { usePanelStore, setupTerminalStoreListeners, cleanupTerminalStoreListeners } =
   await import("../panelStore");
 import type { PtyPanelData } from "@shared/types/panel";
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 
 function getPtyPanel(id: string): PtyPanelData | undefined {
   return usePanelStore.getState().panelsById[id] as PtyPanelData | undefined;
 }
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
+});
 
 describe("terminalStore process detection listeners", () => {
   beforeEach(() => {
@@ -619,7 +629,7 @@ describe("terminalStore process detection listeners", () => {
     beforeEach(async () => {
       const mod = await import("@/services/TerminalInstanceService");
       terminalInstanceService =
-        mod.terminalInstanceService as unknown as typeof terminalInstanceService;
+        mod.createTerminalPaintPlane() as unknown as typeof terminalInstanceService;
     });
 
     // FUTURE_SAB: `suspended` is no longer a wake-triggering status as of

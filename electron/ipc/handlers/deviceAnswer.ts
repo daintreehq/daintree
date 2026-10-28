@@ -1,3 +1,4 @@
+// eager-import-allow: reads device-answer settings to report idle status without loading the optional listener service
 import { z } from "zod";
 import { defineIpcNamespace, op, opValidated } from "../define.js";
 import { store } from "../../store.js";

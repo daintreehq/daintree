@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { PluginCapabilityConsentStore } from "../PluginCapabilityConsentStore.js";
 
 function makeStore(initial: Record<string, unknown> = {}) {
@@ -9,6 +9,11 @@ function makeStore(initial: Record<string, unknown> = {}) {
   const store = new PluginCapabilityConsentStore(saveConfig, () => config);
   return { store, saveConfig, getConfig: () => config };
 }
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
 
 describe("PluginCapabilityConsentStore", () => {
   it("reports no grant before one is minted, and a grant after", () => {
@@ -254,6 +259,102 @@ describe("PluginCapabilityConsentStore", () => {
       expect(store.setGrant(identity, true)).toBe(false);
       expect(store.hasGrant(identity)).toBe(false);
       expect(reopen(getConfig()).hasGrant(identity)).toBe(false);
+    });
+  });
+
+  describe("grantAll — the offer-back after a replacing install (#14019)", () => {
+    const grants = [
+      { pluginId: "acme.x", capability: "terminal:read", scopeKey: "global" },
+      { pluginId: "acme.x", capability: "project:dispatch", scopeKey: "global" },
+      { pluginId: "acme.x", capability: "external-link", site: "example.com", scopeKey: "global" },
+    ] as const;
+
+    it("mints every grant in one write that survives a reopen", () => {
+      const { store, saveConfig, getConfig } = makeStore();
+      expect(store.grantAll(grants)).toBe(true);
+      expect(saveConfig).toHaveBeenCalledTimes(1);
+      const reopened = new PluginCapabilityConsentStore(
+        () => {},
+        () => getConfig()
+      );
+      for (const grant of grants) expect(reopened.hasGrant(grant)).toBe(true);
+    });
+
+    it("rolls the whole batch back when the write fails, keeping what was there before", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(1_000);
+      const { store, saveConfig, getConfig } = makeStore();
+      store.grant(grants[0]);
+      const before = store.list();
+      vi.setSystemTime(2_000);
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      saveConfig.mockImplementation(() => {
+        throw new Error("disk full");
+      });
+
+      // The duplicate must not overwrite the snapshot of what it replaced.
+      expect(store.grantAll([...grants, grants[0]])).toBe(false);
+      expect(store.list()).toEqual(before);
+      expect(
+        new PluginCapabilityConsentStore(
+          () => {},
+          () => getConfig()
+        ).list()
+      ).toEqual(before);
+    });
+
+    it("lists one plugin's grants in every scope and nobody else's", () => {
+      const { store } = makeStore();
+      store.grantAll([
+        ...grants,
+        { pluginId: "acme.x", capability: "shell:exec", scopeKey: "project-1" },
+        { pluginId: "acme.y", capability: "shell:exec" },
+      ]);
+      const listed = store.listForPlugin("acme.x");
+      expect(listed.map((r) => [r.capability, r.scopeKey]).sort()).toEqual(
+        [
+          ["external-link", "global"],
+          ["project:dispatch", "global"],
+          ["shell:exec", "project-1"],
+          ["terminal:read", "global"],
+        ].sort()
+      );
+    });
+  });
+
+  describe("external-link grants", () => {
+    const link = { pluginId: "acme.x", capability: "external-link", site: "example.com" } as const;
+
+    it("keys a grant by hostname and persists it across a reopen", () => {
+      const { store, getConfig } = makeStore();
+      store.grant(link);
+      expect(store.hasGrant(link)).toBe(true);
+      expect(store.hasGrant({ ...link, site: "other.example" })).toBe(false);
+      expect(store.hasGrant({ ...link, scopeKey: "proj-1" })).toBe(false);
+      const reopened = makeStore(getConfig()).store;
+      expect(reopened.hasGrant(link)).toBe(true);
+      expect(reopened.list()[0]?.site).toBe("example.com");
+    });
+
+    it("drops a persisted link grant that has no hostname instead of widening it", () => {
+      const { store } = makeStore({
+        grants: [
+          { pluginId: "acme.x", capability: "external-link", scopeKey: "global", approvedAt: 1 },
+          { pluginId: "acme.x", capability: "external-link", site: "", approvedAt: 1 },
+        ],
+      });
+      expect(store.list()).toEqual([]);
+      expect(store.hasGrant({ pluginId: "acme.x", capability: "external-link", site: "" })).toBe(
+        false
+      );
+    });
+
+    it("is purged with the rest of a plugin's grants", () => {
+      const { store } = makeStore();
+      store.grant(link);
+      store.grant({ pluginId: "acme.x", capability: "shell:exec" });
+      expect(store.revokeAllForPlugin("acme.x")).toBe(true);
+      expect(store.list()).toEqual([]);
     });
   });
 });

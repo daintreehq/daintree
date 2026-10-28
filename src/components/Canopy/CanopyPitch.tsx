@@ -1,9 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { BellRing, ListChecks, Hourglass, Send } from "lucide-react";
+import { BellRing, ListChecks, Hourglass, HardDrive } from "lucide-react";
 import { Telescope } from "@/components/icons";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
-import { systemClient } from "@/clients/systemClient";
 import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
 import { CanopyRow } from "./CanopyRow";
 import { SectionBar } from "./CanopySectionBar";
@@ -11,14 +10,7 @@ import { CANOPY_DEMO_FRAME_COUNT, canopyDemoItems } from "./canopyDemo";
 import { itemNeedsAttention } from "./canopyModel";
 import { useListReorderMotion } from "./useListReorderMotion";
 import { CanopyHeaderCenter } from "./CanopyHostPicker";
-import {
-  CANOPY_BETA_TERMS,
-  CANOPY_PRIVACY_URL,
-  CANOPY_REDACTION,
-  CANOPY_SENDS,
-  CANOPY_STOP,
-  CANOPY_TITLE,
-} from "./canopyTerms";
+import { CANOPY_LOCAL, CANOPY_STOP, CANOPY_TITLE } from "./canopyTerms";
 
 /** Long enough to read a row that just rose to the top. */
 const DEMO_FRAME_MS = 3_200;
@@ -32,7 +24,7 @@ const POINTS = [
   {
     icon: ListChecks,
     title: "Where every run has got to",
-    body: "What each agent is doing, how far through it is, and whether its tests pass and its work is committed.",
+    body: "What each agent is doing, how far through it is, and what it reports about its tests and its commits.",
   },
   {
     icon: Hourglass,
@@ -45,7 +37,7 @@ interface CanopyPitchProps {
   isOpen: boolean;
   onClose: () => void;
   backdrop?: React.ReactNode;
-  /** The user agreed to send their agents' screens to be read. */
+  /** The user turned Canopy on: its model downloads and screens are read on this computer. */
   onTurnOn: () => Promise<void>;
   /** The user doesn't want Canopy: its ways in go, all but Settings. */
   onHide: () => Promise<void>;
@@ -63,7 +55,7 @@ const FAILED: Record<"on" | "hide", string> = {
 /**
  * What Canopy shows until the user turns it on: what it does, beside its inbox
  * playing a made-up fleet through the moments it is for, and what turning it on
- * sends where. Nothing here reads a terminal; nothing is read until they agree.
+ * does. Nothing here reads a terminal; nothing is read until they turn it on.
  */
 export function CanopyPitch({
   isOpen,
@@ -77,7 +69,7 @@ export function CanopyPitch({
   const [pending, setPending] = useState<"on" | "hide" | null>(null);
   const [failed, setFailed] = useState<"on" | "hide" | null>(null);
   // The keyboard lands on the offer's heading, not on Turn on: a reflexive
-  // Enter after the shortcut must not agree to sending anything. The dialog
+  // Enter after the shortcut must not start a download. The dialog
   // is told to place no focus of its own, so this is the only move.
   const headingRef = useRef<HTMLHeadingElement>(null);
   useEffect(() => {
@@ -148,24 +140,12 @@ export function CanopyPitch({
               ))}
             </ul>
             <div className="flex flex-col gap-3">
-              {/* What turning it on sends, at the same size as the rest of the
-                  offer: the one paragraph here the user is agreeing to. */}
+              {/* What turning it on does, at the same size as the rest of the offer. */}
               <div className="flex gap-2 text-sm leading-6 text-text-secondary">
-                <Send className="mt-1.5 size-3.5 shrink-0" aria-hidden="true" />
-                <div className="flex flex-col gap-2">
-                  <p>{CANOPY_SENDS}</p>
-                  <p>
-                    {CANOPY_REDACTION} {CANOPY_STOP}{" "}
-                    <Button
-                      variant="link"
-                      size="xs"
-                      className="h-auto p-0 text-sm"
-                      onClick={() => void systemClient.openExternal(CANOPY_PRIVACY_URL)}
-                    >
-                      Privacy policy
-                    </Button>
-                  </p>
-                </div>
+                <HardDrive className="mt-1.5 size-3.5 shrink-0" aria-hidden="true" />
+                <p>
+                  {CANOPY_LOCAL} {CANOPY_STOP}
+                </p>
               </div>
               {/* Turning it on and not wanting it are the same size, side by
                   side: the close button is the "not now". */}
@@ -188,7 +168,6 @@ export function CanopyPitch({
                   {failed ? FAILED[failed] : ""}
                 </p>
               </div>
-              <p className="text-xs text-text-secondary">{CANOPY_BETA_TERMS}</p>
             </div>
           </div>
         </section>
@@ -250,7 +229,6 @@ function DemoInbox({ paused }: { paused: boolean }) {
             unread={itemNeedsAttention(item)}
             nowMs={nowMs}
             tabbable={false}
-            reserveDetail
             onSelect={noop}
             onClick={noop}
             onOpen={noop}

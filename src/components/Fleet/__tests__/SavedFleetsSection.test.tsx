@@ -65,7 +65,7 @@ vi.mock("@/services/ActionService", () => ({
 // SavedFleetRow uses computeSavedScopePaneCount directly to render the live
 // count and decide aria-disabled. Mock it with the same terminalIds-length
 // heuristic so the row's staleness check agrees with the section's.
-vi.mock("@/services/actions/definitions/fleetActions", () => ({
+vi.mock("@/services/actions/definitions/fleetSavedScope", () => ({
   computeSavedScopePaneCount: vi.fn((scope: { terminalIds?: string[]; stateFilter?: string }) => {
     if (scope.terminalIds) return scope.terminalIds.length;
     return 3;
@@ -73,7 +73,7 @@ vi.mock("@/services/actions/definitions/fleetActions", () => ({
 }));
 
 import { actionService } from "@/services/ActionService";
-import { computeSavedScopePaneCount } from "@/services/actions/definitions/fleetActions";
+import { computeSavedScopePaneCount } from "@/services/actions/definitions/fleetSavedScope";
 import { SavedFleetsSection } from "../SavedFleetsSection";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";

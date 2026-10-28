@@ -64,4 +64,24 @@ describe("PluginViewBlockedPlaceholder", () => {
     expect(screen.getByText("Docker Console is blocked on this computer")).toBeTruthy();
     expect(onRetry).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ["blocked here", true],
+    ["driven elsewhere", false],
+  ])("offers a host's way out beside its own action when %s", (_label, drivingHere) => {
+    seedDriveLeaseView(lease(drivingHere));
+    const showWorktrees = vi.fn();
+    render(
+      <PluginViewBlockedPlaceholder
+        pluginDisplayName="Docker Console"
+        onRetry={vi.fn()}
+        leave={{ label: "Show worktrees", onClick: showWorktrees }}
+      />
+    );
+    expect(
+      screen.getByRole("button", { name: drivingHere ? "Try again" : "Take control" })
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Show worktrees" }));
+    expect(showWorktrees).toHaveBeenCalledTimes(1);
+  });
 });

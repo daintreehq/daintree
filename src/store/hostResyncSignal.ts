@@ -1,4 +1,5 @@
 import { logWarn } from "@/utils/logger";
+import { PLUGIN_VIEW_RESYNC_EVENT } from "@shared/utils/pluginProjectPresence";
 
 const listeners = new Set<() => void>();
 
@@ -19,5 +20,11 @@ export function notifyHostResync(): void {
     } catch (error) {
       logWarn("[HostResync] A listener failed", { error });
     }
+  }
+  // Plugin views keep state from host pushes too, behind their own SDK copy.
+  try {
+    globalThis.dispatchEvent?.(new Event(PLUGIN_VIEW_RESYNC_EVENT));
+  } catch (error) {
+    logWarn("[HostResync] Telling plugin views failed", { error });
   }
 }

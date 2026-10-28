@@ -1,7 +1,41 @@
 import { create } from "zustand";
 import type { EditorState } from "@codemirror/state";
+import { makeDraftKey } from "@/lib/draftKey";
+import type { TerminalFocusTarget } from "@/components/Terminal/terminalFocus";
+import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
+import {
+  VOICE_RECENT_PROMPTS_MAX,
+  VOICE_RECENT_PROMPT_MAX_CHARS,
+} from "@shared/config/voiceCorrection";
 
 const MAX_HISTORY_SIZE = 100;
+// Terminals with sends on record. A closed pane clears its own; this bounds the
+// ones that never close here, such as another project's agent a reply went to.
+const MAX_SENT_PROMPT_TERMINALS = 64;
+
+/** A prompt as it was sent to a terminal, as the composer wrote it, for dictation cleanup. */
+export interface SentPrompt {
+  text: string;
+  sentAt: number;
+  /** Counts every send to the terminal, so a window over them never moves with the cap. */
+  seq: number;
+}
+
+// By the terminal sent to rather than the composer that sent it, so the pane
+// and a Canopy reply typing to the same agent share one record. A view keeps
+// only what it sent.
+function sentPromptKey(terminalId: string): string {
+  return makeDraftKey(terminalId, getViewWorkspaceId() ?? undefined);
+}
+
+// Cut when recorded, so a pasted wall of text is kept only as its opening; by
+// UTF-16 unit, never splitting a surrogate pair, whatever the language.
+function boundSentPrompt(text: string): string {
+  if (text.length <= VOICE_RECENT_PROMPT_MAX_CHARS) return text;
+  let cut = text.slice(0, VOICE_RECENT_PROMPT_MAX_CHARS - 1);
+  if (/[\uD800-\uDBFF]$/.test(cut)) cut = cut.slice(0, -1);
+  return `${cut}…`;
+}
 
 // Controller registry — module-level Map (not Zustand state) to avoid triggering
 // subscriber rerenders when HybridInputBar mounts/unmounts.
@@ -25,18 +59,6 @@ export function triggerStashInput(terminalId: string): void {
 
 export function triggerPopStash(terminalId: string): void {
   inputControllers.get(terminalId)?.pop();
-}
-
-/**
- * Creates a composite key for draft inputs that includes the project context.
- * This allows draft inputs to persist across project switches by associating
- * them with both the project and terminal ID.
- *
- * Key format: `{projectId}:{terminalId}` when projectId is provided,
- * otherwise just `{terminalId}` for backward compatibility.
- */
-function makeDraftKey(terminalId: string, projectId?: string): string {
-  return projectId ? `${projectId}:${terminalId}` : terminalId;
 }
 
 function deleteTerminalKeys<V>(map: Map<string, V>, terminalId: string): Map<string, V> {
@@ -112,8 +134,16 @@ export interface TerminalInputState {
    *  transcription, prompt history, the type-anywhere rescue), so a mounted
    *  editor can detect the external mutation and sync its document. */
   externalDraftRevision: number;
+  /**
+   * The latest outside write that moves the composer's caret to the end of
+   * the draft. Writes that keep it (dictation lands where its anchor is, not
+   * where the user is typing) don't advance it.
+   */
+  caretMovingDraftRevision: number;
   lastTypedAgentTarget: LastTypedAgentTarget | null;
   commandHistory: Map<string, string[]>;
+  /** The latest sends to each terminal, in send order, repeats and all; never reordered. */
+  sentPrompts: Map<string, SentPrompt[]>;
   historyIndex: Map<string, number>;
   tempDraft: Map<string, string>;
   pendingDrafts: Map<string, string>;
@@ -122,7 +152,7 @@ export interface TerminalInputState {
   setHybridInputAutoFocus: (enabled: boolean) => void;
   getDraftInput: (terminalId: string, projectId?: string) => string;
   setDraftInput: (terminalId: string, value: string, projectId?: string) => void;
-  bumpExternalDraftRevision: () => void;
+  bumpExternalDraftRevision: (options?: { keepsSelection?: boolean }) => void;
   recordLastTypedAgentTarget: (terminalId: string, workspaceId: string) => void;
   clearDraftInput: (terminalId: string, projectId?: string) => void;
   clearAllDraftInputs: () => void;
@@ -134,6 +164,14 @@ export interface TerminalInputState {
   popStashedEditorState: (terminalId: string, projectId?: string) => EditorState | undefined;
   hasStashedEditorState: (terminalId: string, projectId?: string) => boolean;
   addToHistory: (terminalId: string, command: string, projectId?: string) => void;
+  /**
+   * Notes a prompt sent to `terminalId`, as written, for its dictations'
+   * cleanup. Returns the record, null for a blank prompt.
+   */
+  recordSentPrompt: (terminalId: string, text: string, sentAt?: number) => SentPrompt | null;
+  /** Takes back a send the terminal turned down, if it is still on record. */
+  retractSentPrompt: (terminalId: string, sent: SentPrompt) => void;
+  getSentPrompts: (terminalId: string) => readonly SentPrompt[];
   navigateHistory: (
     terminalId: string,
     direction: "up" | "down",
@@ -154,13 +192,23 @@ export interface TerminalInputState {
   getDraftProjectIds: () => string[];
 }
 
+/**
+ * The surface every arrival at an agent pane puts the keyboard on, before
+ * availability: the **Focus first** setting, and nothing the user did in some
+ * other pane.
+ */
+export const selectHomeFocusTarget = (state: TerminalInputState): TerminalFocusTarget =>
+  state.hybridInputAutoFocus ? "hybridInput" : "xterm";
+
 export const useTerminalInputStore = create<TerminalInputState>()((set, get) => ({
   hybridInputEnabled: true,
   hybridInputAutoFocus: true,
   draftInputs: new Map(),
   externalDraftRevision: 0,
+  caretMovingDraftRevision: 0,
   lastTypedAgentTarget: null,
   commandHistory: new Map(),
+  sentPrompts: new Map(),
   historyIndex: new Map(),
   tempDraft: new Map(),
   pendingDrafts: new Map(),
@@ -183,16 +231,7 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
   isVoiceSubmitting: (panelId) => get().voiceSubmittingPanels.has(panelId),
 
   setHybridInputEnabled: (enabled) => set({ hybridInputEnabled: enabled }),
-  setHybridInputAutoFocus: (enabled) => {
-    set({ hybridInputAutoFocus: enabled });
-    // Re-seed the session-wide focus preference whenever the user (or
-    // hydration) flips this setting. Dynamic import dodges the import cycle
-    // with panelStore, which already imports this store dynamically the other
-    // way around.
-    void import("./panelStore").then(({ usePanelStore }) => {
-      usePanelStore.getState().setPreferredTerminalFocusTarget(enabled ? "hybridInput" : "xterm");
-    });
-  },
+  setHybridInputAutoFocus: (enabled) => set({ hybridInputAutoFocus: enabled }),
   getDraftInput: (terminalId, projectId) => {
     const key = makeDraftKey(terminalId, projectId);
     return get().draftInputs.get(key) ?? "";
@@ -222,8 +261,13 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
       newDraftInputs.delete(key);
       return { draftInputs: newDraftInputs };
     }),
-  bumpExternalDraftRevision: () =>
-    set((state) => ({ externalDraftRevision: state.externalDraftRevision + 1 })),
+  bumpExternalDraftRevision: (options) =>
+    set((state) => {
+      const externalDraftRevision = state.externalDraftRevision + 1;
+      return options?.keepsSelection
+        ? { externalDraftRevision }
+        : { externalDraftRevision, caretMovingDraftRevision: externalDraftRevision };
+    }),
 
   recordLastTypedAgentTarget: (terminalId, workspaceId) =>
     set((state) => {
@@ -332,6 +376,44 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
       };
     }),
 
+  recordSentPrompt: (terminalId, text, sentAt = Date.now()) => {
+    const trimmed = text.trim();
+    if (trimmed === "") return null;
+    const key = sentPromptKey(terminalId);
+    const existing = get().sentPrompts.get(key) ?? [];
+    const sent: SentPrompt = {
+      text: boundSentPrompt(trimmed),
+      sentAt,
+      seq: (existing[existing.length - 1]?.seq ?? -1) + 1,
+    };
+    set((state) => {
+      const next = new Map(state.sentPrompts);
+      // Re-inserted, so the map's first key is the terminal sent to longest ago.
+      next.delete(key);
+      next.set(key, [...existing, sent].slice(-VOICE_RECENT_PROMPTS_MAX));
+      if (next.size > MAX_SENT_PROMPT_TERMINALS) next.delete(next.keys().next().value!);
+      return { sentPrompts: next };
+    });
+    return sent;
+  },
+
+  // By the record itself: a count that restarted after the terminal's record
+  // was cleared can give a newer send the same seq.
+  retractSentPrompt: (terminalId, sent) =>
+    set((state) => {
+      const key = sentPromptKey(terminalId);
+      const existing = state.sentPrompts.get(key);
+      if (!existing?.includes(sent)) return state;
+      const next = new Map(state.sentPrompts);
+      next.set(
+        key,
+        existing.filter((prompt) => prompt !== sent)
+      );
+      return { sentPrompts: next };
+    }),
+
+  getSentPrompts: (terminalId) => get().sentPrompts.get(sentPromptKey(terminalId)) ?? [],
+
   navigateHistory: (terminalId, direction, currentInput, projectId) => {
     const state = get();
     const key = makeDraftKey(terminalId, projectId);
@@ -409,6 +491,7 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
       const newPendingDrafts = deleteTerminalKeys(state.pendingDrafts, terminalId);
       const newStashed = deleteTerminalKeys(state.stashedEditorStates, terminalId);
       const newHistory = deleteTerminalKeys(state.commandHistory, terminalId);
+      const newSent = deleteTerminalKeys(state.sentPrompts, terminalId);
       const newIndex = deleteTerminalKeys(state.historyIndex, terminalId);
       const newTempDraft = deleteTerminalKeys(state.tempDraft, terminalId);
       const newVoiceSubmitting = state.voiceSubmittingPanels.has(terminalId)
@@ -428,6 +511,7 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
         newPendingDrafts !== state.pendingDrafts ||
         newStashed !== state.stashedEditorStates ||
         newHistory !== state.commandHistory ||
+        newSent !== state.sentPrompts ||
         newIndex !== state.historyIndex ||
         newTempDraft !== state.tempDraft ||
         newVoiceSubmitting !== state.voiceSubmittingPanels ||
@@ -440,6 +524,7 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
         pendingDrafts: newPendingDrafts,
         stashedEditorStates: newStashed,
         commandHistory: newHistory,
+        sentPrompts: newSent,
         historyIndex: newIndex,
         tempDraft: newTempDraft,
         voiceSubmittingPanels: newVoiceSubmitting,
@@ -461,6 +546,7 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
         preserveTerminalIds
       );
       const newHistory = deleteProjectKeys(state.commandHistory, projectId, preserveTerminalIds);
+      const newSent = deleteProjectKeys(state.sentPrompts, projectId, preserveTerminalIds);
       const newIndex = deleteProjectKeys(state.historyIndex, projectId, preserveTerminalIds);
       const newTempDraft = deleteProjectKeys(state.tempDraft, projectId, preserveTerminalIds);
 
@@ -479,6 +565,7 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
         newPendingDrafts !== state.pendingDrafts ||
         newStashed !== state.stashedEditorStates ||
         newHistory !== state.commandHistory ||
+        newSent !== state.sentPrompts ||
         newIndex !== state.historyIndex ||
         newTempDraft !== state.tempDraft ||
         newLastTyped !== state.lastTypedAgentTarget;
@@ -490,6 +577,7 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
         pendingDrafts: newPendingDrafts,
         stashedEditorStates: newStashed,
         commandHistory: newHistory,
+        sentPrompts: newSent,
         historyIndex: newIndex,
         tempDraft: newTempDraft,
         lastTypedAgentTarget: newLastTyped,

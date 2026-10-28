@@ -687,6 +687,61 @@ describe("ProjectSettingsManager caching", () => {
     });
   });
 
+  it("puts another machine's global choices under the project's own overrides (#14701)", async () => {
+    const shell = {
+      completedEnabled: false,
+      waitingEnabled: false,
+      waitingEscalationDelayMs: 60_000,
+    };
+    expect(manager.getEffectiveNotificationSettings(null, shell)).toMatchObject(shell);
+
+    await manager.saveProjectSettings(projectId, {
+      runCommands: [],
+      notificationOverrides: { waitingEnabled: true },
+    });
+    await manager.getProjectSettings(projectId);
+    expect(manager.getEffectiveNotificationSettings(projectId, shell)).toMatchObject({
+      completedEnabled: false,
+      waitingEnabled: true,
+      waitingEscalationDelayMs: 60_000,
+    });
+    // This machine's own values are untouched for its own reads.
+    expect(manager.getEffectiveNotificationSettings(projectId)).toMatchObject({
+      completedEnabled: true,
+      waitingEscalationDelayMs: 30_000,
+    });
+  });
+
+  describe("isNotificationsMuted (#13818)", () => {
+    it("reads a cold project's file, and counts only both of its own switches off", async () => {
+      const settingsPath = path.join(tempDir, projectId, "settings.json");
+      await fs.writeFile(
+        settingsPath,
+        JSON.stringify({
+          runCommands: [],
+          notificationOverrides: { completedEnabled: false, waitingEnabled: false },
+        }),
+        "utf-8"
+      );
+      expect(await manager.isNotificationsMuted(projectId)).toBe(true);
+
+      await manager.saveProjectSettings(projectId, {
+        runCommands: [],
+        notificationOverrides: { completedEnabled: false },
+      });
+      expect(await manager.isNotificationsMuted(projectId)).toBe(false);
+    });
+
+    it("leaves a project with no overrides unmuted, whatever the global defaults", async () => {
+      const store = {
+        get: vi.fn(() => ({ enabled: true, completedEnabled: false, waitingEnabled: false })),
+        set: vi.fn(),
+      } as unknown as ConstructorParameters<typeof ProjectSettingsManager>[1];
+      const coldManager = new ProjectSettingsManager(tempDir, store);
+      expect(await coldManager.isNotificationsMuted(projectId)).toBe(false);
+    });
+  });
+
   describe("addBrowserAllowedHost", () => {
     const readFromDisk = () =>
       new ProjectSettingsManager(tempDir, createMockStore()).getProjectSettings(projectId);
@@ -782,6 +837,60 @@ describe("ProjectSettingsManager caching", () => {
         "Example.com",
       ]);
       expect((await readFromDisk()).browserAllowedHosts).toEqual(["Example.com"]);
+    });
+  });
+
+  describe("changeVoiceDictionary", () => {
+    const readFromDisk = () =>
+      new ProjectSettingsManager(tempDir, createMockStore()).getProjectSettings(projectId);
+    const entry = (term: string) => ({
+      term,
+      heardAs: [],
+      source: "manual" as const,
+      addedAt: 1,
+    });
+
+    it("merges the vocabulary into the settings on disk", async () => {
+      await manager.saveProjectSettings(projectId, {
+        runCommands: [],
+        devServerCommand: "npm start",
+      });
+
+      const saved = await manager.changeVoiceDictionary(projectId, (e) => [
+        ...e,
+        entry("Daintree"),
+      ]);
+
+      expect(saved.map((e) => e.term)).toEqual(["Daintree"]);
+      const settings = await readFromDisk();
+      expect(settings.voiceDictionary?.map((e) => e.term)).toEqual(["Daintree"]);
+      expect(settings.devServerCommand).toBe("npm start");
+    });
+
+    it("keeps the vocabulary through a save built from a copy read before the change", async () => {
+      await manager.changeVoiceDictionary(projectId, () => [entry("Kept")]);
+      const copyBeforeChange = await manager.getProjectSettings(projectId);
+
+      const remove = manager.changeVoiceDictionary(projectId, () => []);
+      const add = manager.changeVoiceDictionary(projectId, (e) => [...e, entry("Added")]);
+      const staleSave = manager.saveProjectSettings(projectId, {
+        ...copyBeforeChange,
+        devServerCommand: "pnpm dev",
+      });
+      await Promise.all([remove, add, staleSave]);
+
+      const settings = await readFromDisk();
+      expect(settings.devServerCommand).toBe("pnpm dev");
+      expect(settings.voiceDictionary?.map((e) => e.term)).toEqual(["Added"]);
+    });
+
+    it("ignores a vocabulary a whole save carries", async () => {
+      await manager.saveProjectSettings(projectId, {
+        runCommands: [],
+        voiceDictionary: [entry("Smuggled")],
+      });
+
+      expect((await readFromDisk()).voiceDictionary).toBeUndefined();
     });
   });
 });

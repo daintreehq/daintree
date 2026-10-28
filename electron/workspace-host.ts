@@ -34,6 +34,7 @@ import { isStatusReportCurrent } from "./workspace-host/StatusTimingRecorder.js"
 import { ensureSerializable } from "../shared/utils/serialization.js";
 import { formatErrorMessage } from "../shared/utils/errorMessage.js";
 import { initForgeBridge } from "./workspace-host/forgeBridge.js";
+import { initWorktreeSetupBridge } from "./workspace-host/worktreeSetupBridge.js";
 import { createHostShutdown } from "./workspace-host/hostShutdown.js";
 import {
   closeAllParcelWatcherSubscriptions,
@@ -470,6 +471,9 @@ const workspaceService = new WorkspaceService(sendEvent);
 // inbound result has a bridge to route to. See
 // `docs/architecture/forge-provider-abstraction.md` for the rationale.
 const forgeBridge = initForgeBridge(sendEvent);
+// Plugin worktree setup steps run in main or a plugin worker (#13807); the
+// create tail reaches them through this bridge, the same way.
+const worktreeSetupBridge = initWorktreeSetupBridge(sendEvent);
 
 /**
  * Idempotent teardown shared by both shutdown triggers — the parent's `dispose`
@@ -489,7 +493,11 @@ const forgeBridge = initForgeBridge(sendEvent);
  * `hostShutdown.ts`.
  */
 const shutdown = createHostShutdown({
-  disposers: [() => workspaceService.dispose(), () => forgeBridge.dispose()],
+  disposers: [
+    () => workspaceService.dispose(),
+    () => forgeBridge.dispose(),
+    () => worktreeSetupBridge.dispose(),
+  ],
   settle: closeAllParcelWatcherSubscriptions,
   getPending: () => {
     const stats = getParcelWatcherLifecycleStats();
@@ -687,7 +695,8 @@ port.on("message", async (rawMsg: any) => {
           request.status,
           request.ignoreWhitespace,
           request.offset,
-          request.maxBytes
+          request.maxBytes,
+          request.side
         );
         break;
 
@@ -994,6 +1003,10 @@ port.on("message", async (rawMsg: any) => {
       // raw envelope across.
       case "forge:rpc-result":
         forgeBridge.handleResult(request);
+        break;
+
+      case "worktree-setup:result":
+        worktreeSetupBridge.handleResult(request);
         break;
 
       default:

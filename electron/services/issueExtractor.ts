@@ -1,3 +1,5 @@
+import { isIssueSkipBranch } from "./issueBranchClaim.js";
+
 const ISSUE_PATTERNS = [/issue-(\d+)/i, /issues?\/(\d+)/i, /#(\d+)/, /gh-(\d+)/i, /jira-(\d+)/i];
 
 // A pure memo keyed by every branch name the workspace host has seen, so it is
@@ -13,8 +15,6 @@ function cacheIssue(key: string, value: number | null): number | null {
   issueCache.set(key, value);
   return value;
 }
-
-const SKIP_BRANCHES = ["main", "master", "develop", "staging", "production", "release", "hotfix"];
 
 /** Test-only: the memo's current entry count. */
 export function getIssueCacheSizeForTest(): number {
@@ -37,8 +37,7 @@ export function extractIssueNumberSync(branchName: string, folderName?: string):
     return issueCache.get(cacheKey)!;
   }
 
-  const lowerBranch = trimmedBranch.toLowerCase();
-  if (SKIP_BRANCHES.some((skip) => lowerBranch === skip || lowerBranch.startsWith(`${skip}/`))) {
+  if (isIssueSkipBranch(trimmedBranch)) {
     return cacheIssue(cacheKey, null);
   }
 

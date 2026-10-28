@@ -29,6 +29,7 @@ const SOURCE_GLYPH: Record<string, string> = {
   menu: "m",
   agent: "a",
   "context-menu": "c",
+  plugin: "p",
 };
 
 export interface ReportEnvInfo {

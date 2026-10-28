@@ -16,9 +16,11 @@ import { useRecipeStore } from "@/store/recipeStore";
 import { formatPath, middleTruncatePath, shortSha } from "@/utils/textParsing";
 import { RotatingTip } from "./contentGridTips";
 import { RecipeRunner } from "./RecipeRunner/RecipeRunner";
+import { PluginLaunchBand } from "./PluginLaunchBand";
 import { ResumeSessionLine } from "./ResumeSessionLine";
 import { LauncherQuickActions } from "./LauncherQuickActions";
 import { TourInviteCard } from "@/components/Tour/TourInviteCard";
+import { useProjectWelcomeStore } from "@/store/projectWelcomeStore";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 
 const PATH_TRUNCATE_LENGTH = 52;
@@ -171,6 +173,9 @@ export function ContentGridEmptyState({
   // IPC resolves, so we also need `!isLoading` to avoid flashing
   // `RecipeRunnerEmpty` ("Create your first recipe…") while in-repo recipes are
   // still in flight.
+  // One welcome at a time: while the project's application offers its own,
+  // the Daintree tour's invitation waits (#14106).
+  const projectWelcomeOffered = useProjectWelcomeStore((state) => state.offer !== null);
   const recipesProjectId = useRecipeStore((state) => state.currentProjectId);
   const recipesLoading = useRecipeStore((state) => state.isLoading);
   const { homeDir } = useHomeDir();
@@ -494,6 +499,17 @@ export function ContentGridEmptyState({
               </div>
             )}
 
+            {/* Shares the recipes' step: the band renders nothing for most
+                projects, and a step of its own would leave a hole in the
+                ladder whenever it is absent. */}
+            {hasLaunchTarget && hasProjectContext && (
+              <PluginLaunchBand
+                activeWorktreeId={activeWorktreeId}
+                cwd={defaultCwd}
+                className={cn("w-full", SECTION_ENTRY, SECTION_ENTRY_DELAY_3)}
+              />
+            )}
+
             {showProjectPulse && hasLaunchTarget && activeWorktreeId && (
               <div
                 className={cn("w-full flex justify-center", SECTION_ENTRY, SECTION_ENTRY_DELAY_4)}
@@ -517,7 +533,7 @@ export function ContentGridEmptyState({
             {/* Last in the column: the tour's invitation is teaching content, and
                 nothing below the launch anchor may move it. It renders its own
                 section only while the tour is on offer, so there's no gap. */}
-            {hasLaunchTarget && (
+            {hasLaunchTarget && !projectWelcomeOffered && (
               <TourInviteCard
                 focusAfterDismiss={(options) =>
                   containerRef.current

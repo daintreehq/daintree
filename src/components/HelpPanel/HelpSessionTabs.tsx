@@ -42,7 +42,7 @@ import { NewSessionWithAgentLabel } from "./NewSessionWithAgentLabel";
  * which leaves hue as the only carrier and fails exactly the reader who most needs a
  * second cue.
  */
-function TabStateIndicator({ agentState }: { agentState: AgentState | null | undefined }) {
+export function TabStateIndicator({ agentState }: { agentState: AgentState | null | undefined }) {
   if (agentState === "working") {
     return (
       <SpinnerCircle
@@ -67,7 +67,7 @@ function TabStateIndicator({ agentState }: { agentState: AgentState | null | und
  * one (#13442) — a single-agent strip has nothing to tell apart. The agent's
  * own mark in the leading 14px box a grid tab gives its terminal icon.
  */
-function TabAgentMark({ agentId }: { agentId: string }) {
+export function TabAgentMark({ agentId }: { agentId: string }) {
   const config = getAgentConfig(agentId);
   const Icon = config?.icon ?? SquareTerminal;
   return (
@@ -185,6 +185,8 @@ interface SessionTabChipProps {
   onOpenSession?: () => void;
   /** Whether the strip spans several agents, so each lane names its own. */
   showAgent: boolean;
+  /** A full strip: background lanes give their hover close back to their label. */
+  isCrowded: boolean;
   newSessionAgentIds: readonly string[];
   canOpenSessionWithAgent: boolean;
   onOpenSessionWithAgent?: (agentId: string) => void;
@@ -210,6 +212,7 @@ function SessionTabChip({
   canOpenSession,
   onOpenSession,
   showAgent,
+  isCrowded,
   newSessionAgentIds,
   canOpenSessionWithAgent,
   onOpenSessionWithAgent,
@@ -274,12 +277,18 @@ function SessionTabChip({
       {agentName && tab.agentId && <TabAgentMark agentId={tab.agentId} />}
       <TabStateIndicator agentState={agentState} />
       <TabLabel label={tab.label} isTaskTitle={tab.fullTitle !== undefined} labelRef={labelRef} />
-      <DocumentTabClose
-        title={title}
-        isActive={isActive}
-        onClose={() => onClose(tab.slot)}
-        className="-my-1 -mr-1.5"
-      />
+      {/* A background lane's close is invisible until hover but still holds its 24px,
+          and three lanes at the panel's narrow widths spent that room clipping every
+          label to "Ses… 1". Crowded, only the selected lane draws one, as a browser's
+          narrow tabs do; Delete and the lane's own menu still close any of them. */}
+      {(isActive || !isCrowded) && (
+        <DocumentTabClose
+          title={title}
+          isActive={isActive}
+          onClose={() => onClose(tab.slot)}
+          className="-my-1 -mr-1.5"
+        />
+      )}
       {agentState && (
         <span id={stateId} className="sr-only">
           {agentState}
@@ -480,14 +489,15 @@ export function HelpSessionTabs({
     (e: React.KeyboardEvent<HTMLDivElement>) => {
       // The focused lane, whichever element the key reached the list through.
       const focused = document.activeElement;
+      const order = tabs.map((t) => t.slot);
       const current =
         focused && listRef.current?.contains(focused)
-          ? tabs.findIndex((t) => focused.getAttribute("data-slot") === String(t.slot))
+          ? order.findIndex((id) => focused.getAttribute("data-slot") === String(id))
           : -1;
       if (current === -1) return;
       // Wrap, which is what the pattern specifies for a horizontal tablist.
       const focusAt = (index: number) => {
-        const slot = tabs[((index % tabs.length) + tabs.length) % tabs.length]?.slot;
+        const slot = order[((index % order.length) + order.length) % order.length];
         if (slot !== undefined) focusSlot(slot);
       };
 
@@ -506,11 +516,11 @@ export function HelpSessionTabs({
           break;
         case "End":
           e.preventDefault();
-          focusAt(tabs.length - 1);
+          focusAt(order.length - 1);
           break;
         default: {
           if (!isTabCloseKey(e.key)) break;
-          const tab = tabs[current];
+          const tab = tabs.find((t) => t.slot === order[current]);
           if (!tab) return;
           e.preventDefault();
           armKeyboardClose(tab.slot);
@@ -559,6 +569,7 @@ export function HelpSessionTabs({
               canOpenSession={canOpenSession}
               onOpenSession={onOpenSession}
               showAgent={showAgent}
+              isCrowded={tabs.length >= MAX_ASSISTANT_SLOTS}
               newSessionAgentIds={newSessionAgentIds}
               canOpenSessionWithAgent={canOpenSessionWithAgent}
               onOpenSessionWithAgent={onOpenSessionWithAgent}

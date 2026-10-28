@@ -1,5 +1,5 @@
-import type { AgentSettings } from "@shared/types/agentSettings";
-import type { AgentAvailabilityState } from "@shared/types";
+import type { AgentAvailabilityState, AgentToolbarPins } from "@shared/types";
+import { agentToolbarPin } from "@shared/types/ipc/agentToolbarPins";
 import type { ToolbarPinnedState } from "@shared/types/toolbar";
 import { isAgentButtonOnToolbar } from "@shared/utils/agentPinned";
 import { isLauncherItemOnToolbar, launcherItemToolbarButtonId } from "@shared/types/toolbar";
@@ -31,7 +31,7 @@ export interface PinnableAgent {
  * group via a stable sort.
  *
  * Built-in agents and everything else answer the same question from different
- * stores. A built-in reads `agentSettingsStore` through `isAgentButtonOnToolbar`;
+ * stores. A built-in reads `agentToolbarPinsStore` through `isAgentButtonOnToolbar`;
  * a plugin or user-defined agent has no entry there and reads the explicit
  * `true` its launcher-item pin writes into `pinnedButtons` (#12217). Before
  * that they could not be pinned at all and were hard-coded into the unpinned
@@ -43,7 +43,7 @@ export interface PinnableAgent {
 export function sortAgentsByToolbarPin<T extends PinnableAgent>(
   agents: ReadonlyArray<T>,
   leftButtons: readonly string[],
-  agentSettings: AgentSettings | null | undefined,
+  agentPins: Readonly<AgentToolbarPins> | null | undefined,
   // Required rather than defaulted: a caller that forgets it would silently
   // demote every right-side agent out of the pinned group, and there is no
   // value of this argument that is safe to guess.
@@ -74,7 +74,7 @@ export function sortAgentsByToolbarPin<T extends PinnableAgent>(
   for (const agent of agents) {
     const onToolbar = isBuiltInAgentId(agent.id)
       ? isAgentButtonOnToolbar(
-          agentSettings?.agents?.[agent.id],
+          agentToolbarPin(agentPins, agent.id),
           agent.availability,
           // Identical to `toolbarIdFor(agent)` on this branch — a built-in
           // agent's toolbar id is its agent id.

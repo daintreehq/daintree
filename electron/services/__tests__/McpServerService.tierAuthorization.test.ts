@@ -1058,6 +1058,12 @@ describe("McpServerService", () => {
         description: "Stop the turn an agent this MCP session created is running",
       }),
       createManifestEntry({
+        id: "terminal.restartOnPresetOwned" as ActionId,
+        title: "Restart Owned Agent on Preset",
+        description: "Respawn an agent this MCP session created on another preset",
+        danger: "confirm",
+      }),
+      createManifestEntry({
         id: "terminal.sendKeysOwned" as ActionId,
         title: "Press Keys in Owned Terminal",
         description: "Answer a dialog in a terminal this MCP session created",
@@ -1250,12 +1256,6 @@ describe("McpServerService", () => {
         id: "cliAvailability.get" as ActionId,
         title: "Get CLI Availability",
         description: "Read cached agent CLI availability",
-        kind: "query",
-      }),
-      createManifestEntry({
-        id: "hibernation.getConfig" as ActionId,
-        title: "Get Hibernation Config",
-        description: "Read auto-hibernation configuration",
         kind: "query",
       }),
       createManifestEntry({
@@ -1682,6 +1682,18 @@ describe("McpServerService", () => {
         danger: "confirm",
       }),
       createManifestEntry({
+        id: "forge.enableAutoMerge" as ActionId,
+        title: "Merge PR when ready",
+        description: "Arm auto-merge on a pull request via the forge provider",
+        danger: "confirm",
+      }),
+      createManifestEntry({
+        id: "forge.disableAutoMerge" as ActionId,
+        title: "Cancel merge when ready",
+        description: "Cancel a pull request's pending auto-merge via the forge provider",
+        danger: "confirm",
+      }),
+      createManifestEntry({
         id: "forge.convertPRToDraft" as ActionId,
         title: "Convert PR to draft",
         description: "Convert a pull request to draft via the forge provider",
@@ -1806,7 +1818,6 @@ describe("McpServerService", () => {
       "keybinding.getOverrides",
       "system.getResourceProfileSnapshot",
       "cliAvailability.get",
-      "hibernation.getConfig",
       "project.update",
       "project.saveSettings",
       "project.muteNotifications",
@@ -1827,7 +1838,13 @@ describe("McpServerService", () => {
     // through the MCP control plane on any tier. (The arming primitives
     // terminal.arm/disarm/disarmAll, which only edit the broadcast membership
     // set, left MCP with the core/full split too.)
-    const NEVER_EXPOSED_VIA_MCP = ["terminal.bulkCommand"] as const;
+    // The "merge when ready" writes (#13747) were never on a tier: their caller
+    // is the Review Hub's confirm, and agents have `gh pr merge --auto`.
+    const NEVER_EXPOSED_VIA_MCP = [
+      "terminal.bulkCommand",
+      "forge.enableAutoMerge",
+      "forge.disableAutoMerge",
+    ] as const;
 
     // External tier (apiKey) curates MCP_TOOL_ALLOWLIST independently from the
     // in-app tool sets. Focus and theme actions once sat on the in-app ladder

@@ -124,10 +124,9 @@ describe("TerminalInstanceService fully-settled waits", () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
-    ({ terminalInstanceService: service } =
-      (await import("../TerminalInstanceService")) as unknown as {
-        terminalInstanceService: SettleTestService;
-      });
+    service = (await (
+      await import("../terminalInstanceServiceAccessor")
+    ).load()) as unknown as SettleTestService;
     service.instances.clear();
   });
 

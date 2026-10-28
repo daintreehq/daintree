@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { ProjectResourceBadge } from "@/components/Project";
+import { ProjectResourceBadge } from "@/components/Project/ProjectResourceBadge";
 import { useKeepAwakeStore } from "@/store/keepAwakeStore";
 
 /**

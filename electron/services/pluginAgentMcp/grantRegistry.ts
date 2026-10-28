@@ -23,6 +23,11 @@ export interface PluginMcpGrant {
   readonly projectId: string;
   readonly terminalId: string;
   readonly launchAgentIdHint?: string;
+  /**
+   * Issued to the project's Daintree Assistant rather than to an agent the user
+   * launched, so the Assistant's own answer is checked on every request too.
+   */
+  readonly consumer?: "assistant";
   readonly issuedAt: number;
 }
 
@@ -33,10 +38,16 @@ export interface IssuePluginMcpGrantParams {
   projectId: string;
   terminalId: string;
   launchAgentIdHint?: string;
+  consumer?: "assistant";
 }
 
 export type PluginMcpGrantRevokeReason =
-  "terminal-exited" | "relaunched" | "plugin-unloaded" | "access-reduced" | "server-stopped";
+  | "terminal-exited"
+  | "relaunched"
+  | "plugin-unloaded"
+  | "access-reduced"
+  | "tools-regrouped"
+  | "server-stopped";
 
 /** What is remembered of a revoked grant: public identifiers and the reason, never the digest. */
 export interface RevokedPluginMcpGrant {
@@ -108,12 +119,17 @@ export class PluginMcpGrantRegistry {
     if (!params.terminalId) {
       throw new Error("plugin MCP grant: terminal id is required");
     }
-    const { databases, databaseWrites, pluginEndpointId } = params.scope;
+    const { databases, databaseWrites, pluginEndpointId, pluginGroups } = params.scope;
     if (!databases && !pluginEndpointId) {
       throw new Error("plugin MCP grant: the scope reaches no tools");
     }
     if (databaseWrites === true && !databases) {
       throw new Error("plugin MCP grant: database writes need the database tools");
+    }
+    if (pluginGroups !== undefined && (!pluginEndpointId || pluginGroups.length === 0)) {
+      throw new Error(
+        "plugin MCP grant: tool groups need the plugin's endpoint and at least one group"
+      );
     }
     const token = randomBytes(32).toString("base64url");
     const grant: PluginMcpGrant = Object.freeze({
@@ -124,6 +140,13 @@ export class PluginMcpGrantRegistry {
         databases,
         ...(databaseWrites === true ? { databaseWrites } : {}),
         ...(pluginEndpointId ? { pluginEndpointId } : {}),
+        ...(pluginGroups !== undefined
+          ? {
+              pluginGroups: Object.freeze(
+                pluginGroups.map((group) => Object.freeze({ id: group.id, access: group.access }))
+              ),
+            }
+          : {}),
       }),
       serverName: params.serverName,
       projectId: params.projectId,
@@ -131,6 +154,7 @@ export class PluginMcpGrantRegistry {
       ...(params.launchAgentIdHint !== undefined
         ? { launchAgentIdHint: params.launchAgentIdHint }
         : {}),
+      ...(params.consumer !== undefined ? { consumer: params.consumer } : {}),
       issuedAt: now,
     });
     this.byDigest.set(grant.bearerSha256, grant);
@@ -140,6 +164,7 @@ export class PluginMcpGrantRegistry {
       pluginInstanceId: grant.pluginInstanceId,
       projectId: grant.projectId,
       terminalId: grant.terminalId,
+      ...(grant.consumer !== undefined ? { consumer: grant.consumer } : {}),
     });
     return { grant, token };
   }
@@ -311,6 +336,22 @@ export class PluginMcpGrantRegistry {
     return this.revokeWhere(
       (grant) => grant.pluginInstanceId === pluginInstanceId && !isAllowed(grant),
       "access-reduced"
+    );
+  }
+
+  /**
+   * Revoke every grant reaching an endpoint's tool groups, in any project: the
+   * plugin moved a tool into or out of a group, so what the user allowed no
+   * longer names the tools it did. Held grants go too — they were issued
+   * against the old grouping.
+   */
+  revokeRegrouped(pluginInstanceId: string, endpointId: string): PluginMcpGrant[] {
+    return this.revokeWhere(
+      (grant) =>
+        grant.pluginInstanceId === pluginInstanceId &&
+        grant.scope.pluginEndpointId === endpointId &&
+        grant.scope.pluginGroups !== undefined,
+      "tools-regrouped"
     );
   }
 

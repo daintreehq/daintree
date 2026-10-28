@@ -4,52 +4,34 @@ import { SITE_PREVIEW_METHOD_CHANNELS } from "../sitePreview.preload.js";
 import type { IpcContext } from "../../types.js";
 
 const bridge = vi.hoisted(() => ({
-  listCandidates: vi.fn(() => []),
-  bind: vi.fn(async () => ({ sessionId: "s1" })),
   detach: vi.fn(async () => undefined),
   setMode: vi.fn(async () => ({ sessionId: "s1" })),
-  getState: vi.fn(() => null),
+  clearSelection: vi.fn(async () => undefined),
+  clearHover: vi.fn(async () => undefined),
   disposeAll: vi.fn(async () => undefined),
 }));
 
-/** The deps `registerSitePreviewHandlers` hands the bridge, `push` among them. */
-const captured = vi.hoisted(() => ({ deps: null as { push?: unknown } | null }));
+const lifecycle = vi.hoisted(() => ({
+  created: 0,
+  reset: vi.fn(),
+}));
 
 vi.mock("../../../services/SitePreviewBridge.js", () => ({
-  getSitePreviewBridge: (deps?: { push?: unknown }) => {
-    if (deps) captured.deps = deps;
+  getSitePreviewBridge: (deps?: unknown) => {
+    if (deps) lifecycle.created += 1;
     return bridge;
   },
-  resetSitePreviewBridge: vi.fn(),
+  resetSitePreviewBridge: lifecycle.reset,
 }));
 
-vi.mock("../../../services/sitePreview/builtinGuestAdapters.js", () => ({
-  registerBuiltinGuestAdapters: () => () => undefined,
-}));
-
-const projectViews = vi.hoisted(
-  () => new Map<string, Array<{ id: number; isDestroyed: () => boolean; send: unknown }>>()
-);
-
-vi.mock("../../../window/webContentsRegistry.js", () => ({
-  getWebContentsForProject: (projectId: string) => projectViews.get(projectId) ?? [],
-}));
-
-// The namespace wires `ipcMain.handle` on register; the routing under test is
-// the push closure, not the registration.
+// The namespace wires `ipcMain.handle` on register; what is under test is the
+// handler bodies and the registration's disposal, not the wiring.
 vi.mock("../../utils.js", () => ({
   typedHandle: () => () => undefined,
   typedHandleValidated: () => () => undefined,
   typedHandleWithContext: () => () => undefined,
   typedHandleWithContextValidated: () => () => undefined,
 }));
-
-const localPlugins = vi.hoisted(() => new Set<string>());
-vi.mock("../../../services/PluginService.js", () => ({
-  pluginService: { hasPlugin: (pluginId: string) => localPlugins.has(pluginId) },
-}));
-
-const ADAPTER_ID = "daintree.sveltekit-builder.guest";
 
 function ctx(projectId: string | null): IpcContext {
   return {
@@ -71,13 +53,15 @@ describe("sitePreview handlers", () => {
   beforeEach(() => {
     vi.resetModules();
     Object.values(bridge).forEach((fn) => fn.mockClear());
+    lifecycle.created = 0;
+    lifecycle.reset.mockClear();
   });
 
   it("exposes no way to evaluate caller-supplied script in a guest", async () => {
     const names = Object.keys(await ops());
-    // A bind names a host-registered adapter; the host loads the body. An
-    // `evaluate` op here would be arbitrary code execution inside the user's
-    // site, so this is a boundary worth pinning rather than a naming preference.
+    // An `evaluate` op here would be arbitrary code execution inside the
+    // user's site, so this is a boundary worth pinning rather than a naming
+    // preference.
     expect(names.filter((name) => /eval|exec|inject|script/i.test(name))).toEqual([]);
     expect(names.sort()).toEqual(Object.keys(SITE_PREVIEW_METHOD_CHANNELS).sort());
   });
@@ -87,216 +71,57 @@ describe("sitePreview handlers", () => {
     for (const spec of Object.values(await ops())) {
       expect(declared.has(spec.channel)).toBe(true);
     }
-    expect(declared.has(CHANNELS.SITE_PREVIEW_EVENT)).toBe(true);
   });
 
   it("refuses every operation from a sender with no project", async () => {
     const all = await ops();
-    await expect(all.listCandidates.handler(ctx(null))).rejects.toThrow(/project/i);
-    await expect(
-      all.bind.handler(ctx(null), { panelId: "p", adapterId: ADAPTER_ID, mode: "browse" })
-    ).rejects.toThrow(/project/i);
     await expect(all.detach.handler(ctx(null), { sessionId: "s1" })).rejects.toThrow(/project/i);
-    await expect(all.getState.handler(ctx(null), { sessionId: "s1" })).rejects.toThrow(/project/i);
-    expect(bridge.bind).not.toHaveBeenCalled();
+    await expect(
+      all.setMode.handler(ctx(null), { sessionId: "s1", mode: "select" })
+    ).rejects.toThrow(/project/i);
+    await expect(all.clearSelection.handler(ctx(null), { sessionId: "s1" })).rejects.toThrow(
+      /project/i
+    );
+    await expect(all.clearHover.handler(ctx(null), { sessionId: "s1" })).rejects.toThrow(
+      /project/i
+    );
+    for (const fn of Object.values(bridge)) expect(fn).not.toHaveBeenCalled();
   });
 
   it("passes the context's project to the bridge, not anything from the payload", async () => {
     const all = await ops();
-    await all.bind.handler(ctx("project-a"), {
-      panelId: "panel-1",
-      adapterId: ADAPTER_ID,
-      // A caller-supplied project must not be able to reach the bridge; the
-      // schema is strict, so this is rejected before the handler body runs.
-      mode: "select",
-    });
-    expect(bridge.bind).toHaveBeenCalledWith({
-      projectId: "project-a",
-      panelId: "panel-1",
-      adapterId: ADAPTER_ID,
-      mode: "select",
-      subscriberWebContentsId: 1,
-    });
-  });
+    await all.detach.handler(ctx("project-a"), { sessionId: "s1" });
+    await all.setMode.handler(ctx("project-a"), { sessionId: "s1", mode: "select" });
+    await all.clearSelection.handler(ctx("project-a"), { sessionId: "s1" });
+    await all.clearHover.handler(ctx("project-a"), { sessionId: "s1" });
 
-  it("gives the bridge the sender as the binding's subscriber", async () => {
-    const all = await ops();
-    await all.bind.handler(
-      { ...ctx("project-a"), webContentsId: 9 },
-      {
-        panelId: "panel-1",
-        adapterId: ADAPTER_ID,
-      }
-    );
-    // The address observations go back to is the sender the host proved, and it
-    // is never something the payload can name.
-    expect(bridge.bind).toHaveBeenCalledWith(
-      expect.objectContaining({ subscriberWebContentsId: 9 })
-    );
-    expect(
-      all.bind.schema.safeParse({ panelId: "p", adapterId: ADAPTER_ID, webContentsId: 3 }).success
-    ).toBe(false);
-  });
-
-  it("defaults the mode to browse when the caller omits it", async () => {
-    const all = await ops();
-    await all.bind.handler(ctx("project-a"), { panelId: "panel-1", adapterId: ADAPTER_ID });
-    expect(bridge.bind).toHaveBeenCalledWith(expect.objectContaining({ mode: "browse" }));
+    expect(bridge.detach).toHaveBeenCalledWith("project-a", "s1");
+    expect(bridge.setMode).toHaveBeenCalledWith("project-a", "s1", "select");
+    expect(bridge.clearSelection).toHaveBeenCalledWith("project-a", "s1");
+    expect(bridge.clearHover).toHaveBeenCalledWith("project-a", "s1");
   });
 
   it("rejects payloads carrying fields the contract does not define", async () => {
     const all = await ops();
-    const parsed = all.bind.schema.safeParse({
-      panelId: "panel-1",
-      adapterId: ADAPTER_ID,
-      projectId: "project-b",
-    });
-    expect(parsed.success).toBe(false);
-  });
-
-  it("accepts no way to put script on the wire", async () => {
-    const all = await ops();
-    // The body is the host's to choose. A payload carrying source is not a
-    // larger bind, it is a different contract, and the schema must refuse it.
-    expect(
-      all.bind.schema.safeParse({
-        panelId: "panel-1",
-        adapterId: ADAPTER_ID,
-        runtimeSource: "globalThis.x = 1",
-      }).success
-    ).toBe(false);
-    expect(all.bind.schema.safeParse({ panelId: "panel-1" }).success).toBe(false);
-    expect(all.bind.schema.safeParse({ panelId: "panel-1", adapterId: "" }).success).toBe(false);
-    expect(
-      all.bind.schema.safeParse({ panelId: "panel-1", adapterId: "x".repeat(600) }).success
-    ).toBe(false);
-  });
-});
-
-/**
- * A guest observation carries the user's page structure, their selection and
- * source locations from their repository. It goes to the view that established
- * the binding, and to nothing else — a second window on the same project, and
- * every other plugin view sharing that renderer realm, never asked for it.
- */
-describe("sitePreview event routing", () => {
-  function view(id: number) {
-    return { id, isDestroyed: () => false, send: vi.fn() };
-  }
-
-  async function push(
-    payload: { kind: string; projectId: string },
-    route: { subscriberWebContentsId: number }
-  ) {
-    const { registerSitePreviewHandlers } = await import("../sitePreview.js");
-    const dispose = registerSitePreviewHandlers({});
-    const send = captured.deps?.push as
-      ((p: unknown, r: { subscriberWebContentsId: number }) => void) | undefined;
-    expect(send).toBeTypeOf("function");
-    send?.(payload, route);
-    dispose();
-  }
-
-  beforeEach(() => {
-    vi.resetModules();
-    projectViews.clear();
-    captured.deps = null;
-  });
-
-  it("delivers only to the view that bound, not to the project's other views", async () => {
-    const owner = view(1);
-    const bystander = view(2);
-    projectViews.set("project-a", [owner, bystander]);
-
-    await push({ kind: "guest-event", projectId: "project-a" }, { subscriberWebContentsId: 1 });
-
-    expect(owner.send).toHaveBeenCalledTimes(1);
-    expect(owner.send).toHaveBeenCalledWith(CHANNELS.SITE_PREVIEW_EVENT, {
-      kind: "guest-event",
-      projectId: "project-a",
-    });
-    expect(bystander.send).not.toHaveBeenCalled();
-  });
-
-  it("delivers nothing when the subscriber is no longer a live view of the project", async () => {
-    const replacement = view(2);
-    projectViews.set("project-a", [replacement]);
-
-    // The view that bound was destroyed or evicted; its successor is a
-    // different WebContents that never established this binding.
-    await push({ kind: "guest-event", projectId: "project-a" }, { subscriberWebContentsId: 1 });
-
-    expect(replacement.send).not.toHaveBeenCalled();
-  });
-
-  it("never reaches a view of another project that happens to share the id", async () => {
-    const foreign = view(1);
-    projectViews.set("project-b", [foreign]);
-    projectViews.set("project-a", []);
-
-    await push({ kind: "guest-event", projectId: "project-a" }, { subscriberWebContentsId: 1 });
-
-    expect(foreign.send).not.toHaveBeenCalled();
-  });
-});
-
-describe("sitePreview plugin presence", () => {
-  const PLUGIN = "daintree.sveltekit-builder";
-  const parity = {
-    isPluginLoadedOnHost: vi.fn(async (_hostId: string, _pluginId: string) => false),
-  };
-
-  async function isPluginEnabled(projectId: string): Promise<boolean> {
-    const { registerSitePreviewHandlers } = await import("../sitePreview.js");
-    const dispose = registerSitePreviewHandlers({});
-    const ask = (
-      captured.deps as {
-        isPluginEnabled?: (pluginId: string, projectId: string) => Promise<boolean>;
-      } | null
-    )?.isPluginEnabled;
-    expect(ask).toBeTypeOf("function");
-    try {
-      return await ask!(PLUGIN, projectId);
-    } finally {
-      dispose();
-    }
-  }
-
-  beforeEach(async () => {
-    vi.resetModules();
-    captured.deps = null;
-    localPlugins.clear();
-    parity.isPluginLoadedOnHost.mockReset();
-    parity.isPluginLoadedOnHost.mockResolvedValue(false);
-    const { _resetRemoteServicesForTest } = await import("../../../remote/runtime.js");
-    _resetRemoteServicesForTest();
-  });
-
-  it("asks this machine's plugin service for a local project", async () => {
-    localPlugins.add(PLUGIN);
-    await expect(isPluginEnabled("project-a")).resolves.toBe(true);
-    expect(parity.isPluginLoadedOnHost).not.toHaveBeenCalled();
-  });
-
-  it("asks the host for a view bound to a remote host, whatever is loaded here", async () => {
-    const { registerRemoteService } = await import("../../../remote/runtime.js");
-    registerRemoteService(
-      "pluginParityClient",
-      parity as unknown as Parameters<typeof registerRemoteService<"pluginParityClient">>[1]
+    expect(all.detach.schema.safeParse({ sessionId: "s1", projectId: "project-b" }).success).toBe(
+      false
     );
-    // Disabled here, enabled on the host: the host's answer decides.
-    parity.isPluginLoadedOnHost.mockResolvedValue(true);
-    await expect(isPluginEnabled("studio-01:project-a")).resolves.toBe(true);
-    expect(parity.isPluginLoadedOnHost).toHaveBeenCalledWith("studio-01", PLUGIN);
-
-    // Enabled here, absent on the host: refused.
-    localPlugins.add(PLUGIN);
-    parity.isPluginLoadedOnHost.mockResolvedValue(false);
-    await expect(isPluginEnabled("studio-01:project-a")).resolves.toBe(false);
+    expect(
+      all.setMode.schema.safeParse({ sessionId: "s1", mode: "select", script: "x" }).success
+    ).toBe(false);
+    expect(all.setMode.schema.safeParse({ sessionId: "s1", mode: "inspect" }).success).toBe(false);
+    expect(all.clearHover.schema.safeParse({ sessionId: "" }).success).toBe(false);
+    expect(all.clearSelection.schema.safeParse({ sessionId: "x".repeat(200) }).success).toBe(false);
   });
 
-  it("refuses a remote-bound view when the remote hosts client isn't running", async () => {
-    localPlugins.add(PLUGIN);
-    await expect(isPluginEnabled("studio-01:project-a")).resolves.toBe(false);
+  it("creates the bridge on registration and disposes and resets it on teardown", async () => {
+    const { registerSitePreviewHandlers } = await import("../sitePreview.js");
+    const dispose = registerSitePreviewHandlers({});
+    expect(lifecycle.created).toBe(1);
+    expect(bridge.disposeAll).not.toHaveBeenCalled();
+
+    dispose();
+    expect(bridge.disposeAll).toHaveBeenCalledTimes(1);
+    expect(lifecycle.reset).toHaveBeenCalledTimes(1);
   });
 });

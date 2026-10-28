@@ -166,6 +166,10 @@ describe("Remote Hosts build gate tree-shaking", () => {
         input.startsWith("electron/remote/host/") || input === "electron/remote/hostBoot.ts"
     );
     expect(hostModules.filter((input) => !SHELL_SAFE_HOST_MODULES.has(input))).toEqual([]);
+    // Dictation into a host's pane asks from here; answering is the Host's.
+    expect(remote).toContain("electron/remote/voice/client.ts");
+    expect(remote).not.toContain("electron/remote/voice/host.ts");
+    expect(remote).not.toContain("electron/remote/voice/hostInstall.ts");
     // The WSL client is what a Windows build is for.
     expect(remote).toContain("electron/remote/client/wslTransport.ts");
   });

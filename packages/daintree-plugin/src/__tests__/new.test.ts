@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { scaffoldPlugin, runNew, findProjectRoot } from "../commands/new.js";
 import { runNewFromArgv } from "../commands/newCommand.js";
 import { runValidate } from "../commands/validate.js";
@@ -26,6 +27,21 @@ beforeEach(async () => {
 afterEach(async () => {
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
+
+const packagesDir = fileURLToPath(new URL("../../../", import.meta.url));
+
+// What the scaffold must pin: the workspace versions it ships beside, so a
+// minor bump of any of them can never leave new plugins on the previous minor.
+const toolchain = {
+  sdk: await readVersion("plugin-sdk"),
+  vite: await readVersion("plugin-vite"),
+  cli: await readVersion("daintree-plugin"),
+};
+
+async function readVersion(dir: string): Promise<string> {
+  const raw = await fs.readFile(path.join(packagesDir, dir, "package.json"), "utf8");
+  return (JSON.parse(raw) as { version: string }).version;
+}
 
 async function readJson(file: string): Promise<Record<string, unknown>> {
   return JSON.parse(await fs.readFile(file, "utf8"));
@@ -270,8 +286,8 @@ describe("scaffoldPlugin", () => {
     });
   }
 
-  // #10513: the scaffold's engine range must satisfy host versions past 0.11.
-  // `^0.11.0` resolves to `>=0.11.0 <0.12.0` and would be rejected by the host.
+  // #10513: the scaffold's engine range must be open-ended; a 0.x caret range
+  // excludes every later minor and would draw the host's compatibility warning.
   for (const template of TEMPLATE_KINDS) {
     it(`"${template}" template pins an open-ended engine range satisfying recent hosts`, async () => {
       const result = await scaffoldPlugin({
@@ -286,9 +302,12 @@ describe("scaffoldPlugin", () => {
       expect(range).toBeDefined();
       const semver = await import("semver");
       // A current host version must satisfy the scaffolded range — the bug was a
-      // caret range that excluded everything past 0.11.x.
-      expect(semver.satisfies("0.19.1", range!)).toBe(true);
+      // caret range that excluded every later minor. A host older than the
+      // features a scaffold emits must not.
+      expect(semver.satisfies("0.41.0", range!)).toBe(true);
+      expect(semver.satisfies("0.46.3", range!)).toBe(true);
       expect(semver.satisfies("1.0.0", range!)).toBe(true);
+      expect(semver.satisfies("0.40.9", range!)).toBe(false);
     });
   }
 
@@ -311,7 +330,9 @@ describe("scaffoldPlugin", () => {
         // Every scaffold emits a script that shells out to the CLI, so a clone
         // without a global install would fail at `npm run validate`.
         expect(scripts.validate).toBe("daintree-plugin validate");
-        expect(dev["daintree-plugin"]).toBe("^0.1.0");
+        expect(dev["daintree-plugin"]).toBe(`^${toolchain.cli}`);
+        expect(dev["@daintreehq/plugin-sdk"]).toBe(`^${toolchain.sdk}`);
+        expect(dev["@daintreehq/plugin-vite"]).toBe(`^${toolchain.vite}`);
         // Tracks the host's TypeScript major; every template typechecks on 6.
         expect(dev.typescript).toBe("^6.0.0");
       }
@@ -567,10 +588,11 @@ describe("scaffoldPlugin --project", () => {
     }
   });
 
-  it("leaves out the tour-authoring skill, since project plugins can't contribute tours", async () => {
+  it("ships the tour-authoring skill, since project plugins can contribute tours", async () => {
     const result = await scaffoldProject();
-    expect(result.files.some((file) => file.startsWith(".claude/"))).toBe(false);
-    await expect(fs.access(path.join(result.dir, ".claude"))).rejects.toThrow();
+    expect(result.files).toContain(".claude/skills/daintree-tour/SKILL.md");
+    const gitignore = await fs.readFile(path.join(result.dir, ".gitignore"), "utf8");
+    expect(gitignore.split("\n")).toContain(".tour-preview/");
   });
 
   it("marks the manifest as project scope and passes the project-origin schema", async () => {
@@ -844,11 +866,13 @@ describe("runNew --project", () => {
 
     await runNew("dash", { yes: true, publisher: "acme", project: true });
 
-    const manifest = await readJson(
-      path.join(root, ".daintree", "plugins", "acme.dash", "plugin.json")
-    );
+    const pluginDir = path.join(root, ".daintree", "plugins", "acme.dash");
+    const manifest = await readJson(path.join(pluginDir, "plugin.json"));
     expect(manifest.name).toBe("acme.dash");
     expect(manifest.scope).toBe("project");
+    // With no --template, --project scaffolds the application, already built.
+    expect((manifest.application as { name: string }).name).toBe("Dash");
+    await expect(fs.access(path.join(pluginDir, "dist", "index.js"))).resolves.toBeUndefined();
     await expect(
       fs.access(path.join(root, ".daintree", "recipes", "acme.dash-watch.json"))
     ).resolves.toBeUndefined();
@@ -857,15 +881,15 @@ describe("runNew --project", () => {
   it.each(["mcp", "full"] as const)(
     "refuses the %s template under --project instead of writing an unloadable manifest",
     async (template) => {
-      // The project-origin schema rejects `contributes.mcpServers`, so these two
-      // templates would scaffold a manifest the host silently declines to load.
+      // The project-origin schema rejects an unbridged `contributes.mcpServers`,
+      // so these two templates would scaffold a manifest the host declines to load.
       const root = path.join(tmpDir, `proj-${template}`);
       await fs.mkdir(path.join(root, ".daintree"), { recursive: true });
       cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(root);
 
       await expect(
         runNew("dash", { yes: true, publisher: "acme", project: true, template })
-      ).rejects.toThrow(/may not declare/);
+      ).rejects.toThrow(/may only declare when a contributes\.agentMcp\[\]\.source/);
       await expect(fs.access(path.join(root, ".daintree", "plugins"))).rejects.toThrow();
     }
   );
@@ -982,7 +1006,7 @@ describe("runNewFromArgv end to end", () => {
           "--project",
         ])
       ).rejects.toThrow(
-        `The "${template}" template contributes an MCP server, which a project-local plugin may not declare`
+        `The "${template}" template contributes an MCP server for Daintree to call, which a project-local plugin may only declare when a contributes.agentMcp[].source serves its tools to agents`
       );
 
       // Neither the plugin nor its watcher recipe, and no stray standalone

@@ -19,9 +19,12 @@ import { BUNDLE_SINK_PREFIX } from "../../projects/linkMethods.js";
 import { ClientUploadTransport } from "../ClientUploadTransport.js";
 import type { HostFileEndpoint } from "../HostFileService.js";
 import { HostInbox } from "../hostInbox.js";
-import { HostUploadService } from "../HostUploadService.js";
+import { HostUploadService, type HostUploadServiceOptions } from "../HostUploadService.js";
 import { createHostUploadClient } from "../uploadClient.js";
-import type { TransferDestination } from "../../../../shared/types/ipc/fileTransfer.js";
+import type {
+  FileTransferEvent,
+  TransferDestination,
+} from "../../../../shared/types/ipc/fileTransfer.js";
 import { UPLOAD_SINK_PREFIX, UploadLinkMethod } from "../uploadLinkMethods.js";
 
 const HOST = "studio-01";
@@ -74,9 +77,15 @@ async function setup(
     rootsFor?: (projectId: string) => Promise<string[]>;
     outcomeTtlMs?: number;
     maxPendingPerSession?: number;
+    /** Transfers the host's bulk receiver takes at once. */
+    maxIncoming?: number;
+    onInboxFile?: HostUploadServiceOptions["onInboxFile"];
   } = {}
 ) {
-  const { host, client } = await openSessionPair(socketDir);
+  const { host, client } = await openSessionPair(
+    socketDir,
+    options.maxIncoming === undefined ? {} : { transfers: { maxIncoming: options.maxIncoming } }
+  );
   sessions.push(host, client);
   const endpoint = new FakeEndpoint();
   const inbox = new HostInbox({ root: inboxRoot });
@@ -87,6 +96,7 @@ async function setup(
     maxPendingPerSession: options.maxPendingPerSession,
     leaseIdFor: () => (options.leaseId ? options.leaseId() : 1),
     inbox,
+    onInboxFile: options.onInboxFile,
     freeBytes: async () => (options.freeBytes === undefined ? null : options.freeBytes),
   });
   service.attach(host, endpoint);
@@ -163,6 +173,31 @@ describe("uploads into the host inbox", () => {
     expect(await listFilesBucket()).toHaveLength(1);
   });
 
+  it("lets the uploading endpoint open what it placed or reused, and nothing it didn't", async () => {
+    const onInboxFile = vi.fn();
+    const { upload, endpoint } = await setup({ onInboxFile });
+    const placed = await upload(TEXT("screenshot bytes"), "shot.txt");
+    expect(onInboxFile).toHaveBeenCalledWith(endpoint, "p1", placed.hostPath);
+
+    onInboxFile.mockClear();
+    const reused = await upload(TEXT("screenshot bytes"), "shot.txt");
+    expect(reused.deduplicated).toBe(true);
+    expect(onInboxFile).toHaveBeenCalledWith(endpoint, "p1", placed.hostPath);
+
+    onInboxFile.mockClear();
+    await expect(
+      upload(TEXT("added"), "added.txt", { kind: "worktree", directory: project })
+    ).resolves.toMatchObject({ hostPath: path.join(project, "added.txt") });
+    expect(onInboxFile).not.toHaveBeenCalled();
+  });
+
+  it("grants nothing for an upload that didn't land", async () => {
+    const onInboxFile = vi.fn();
+    const { upload } = await setup({ onInboxFile, driving: () => false });
+    await expect(upload(TEXT("refused"), "refused.txt")).rejects.toBeTruthy();
+    expect(onInboxFile).not.toHaveBeenCalled();
+  });
+
   it("does not reuse a file whose content changed on the host", async () => {
     const { upload } = await setup();
     const content = bytes("original");
@@ -186,6 +221,16 @@ describe("uploads into the host inbox", () => {
     const result = await upload(bytesTransferSource(bytes("x")), "../..\\evil\u0007name.txt");
     expect(path.basename(result.hostPath)).toBe("evilname.txt");
     expect(path.dirname(path.dirname(result.hostPath))).toBe(path.join(inboxRoot, "files"));
+  });
+
+  it("shortens a name too long for the host's filesystem, keeping its extension", async () => {
+    const { upload } = await setup();
+    const stem = "界".repeat(100);
+    const result = await upload(TEXT("long"), `${stem}.txt`);
+    const placed = path.basename(result.hostPath);
+    expect(placed.endsWith(".txt")).toBe(true);
+    expect(stem.startsWith(placed.slice(0, -".txt".length))).toBe(true);
+    expect(await fs.readFile(result.hostPath, "utf8")).toBe("long");
   });
 
   it("names pasted images by timestamp and content in clipboard/", async () => {
@@ -276,6 +321,18 @@ describe("Add to project", () => {
     });
     expect(await fs.readFile(path.join(project, "docs", "spec.md"), "utf8")).toBe("spec");
     expect(await fs.readdir(path.join(project, "docs"))).toEqual(["spec.md"]);
+  });
+
+  it("adds a long non-ASCII name the host's filesystem can hold under that name", async () => {
+    const { upload } = await setup();
+    // 244 bytes: a name Linux can hold, though its temporary entry must be shorter.
+    const name = `${"界".repeat(80)}.txt`;
+    const result = await upload(bytesTransferSource(bytes("notes")), name, {
+      kind: "worktree",
+      directory: project,
+    });
+    expect(result.hostPath).toBe(path.join(project, name));
+    expect(await fs.readdir(project)).toEqual([name]);
   });
 
   it("never overwrites an existing file without confirmation", async () => {
@@ -653,6 +710,49 @@ describe("operation records", () => {
     expect(records(service).size).toBe(0);
   });
 
+  it("leaves a newer attempt's placement alone after waiting out an older one", async () => {
+    const { upload, client, service, inbox } = await setup();
+    let releasePlacing!: () => void;
+    const placing = new Promise<void>((resolve) => {
+      releasePlacing = resolve;
+    });
+    const realPlace = inbox.place.bind(inbox);
+    vi.spyOn(inbox, "place").mockImplementation(async (...args) => {
+      await placing;
+      return realPlace(...args);
+    });
+    const source = TEXT("draft");
+    const first = upload(source, "draft.txt", undefined, { opId: "op-draft" });
+    const key = () =>
+      [...records(service).keys()].find((candidate) => candidate.endsWith("op-draft"));
+    const stateOf = () =>
+      (records(service).get(key() ?? "") as { state?: string } | undefined)?.state;
+    await vi.waitFor(() => expect(stateOf()).toBe("placing"));
+
+    const waiting = vi.spyOn(
+      service as unknown as { priorOutcome(...args: unknown[]): Promise<unknown> },
+      "priorOutcome"
+    );
+    const retry = client.call(UploadLinkMethod.PREPARE, {
+      endpointId: "view-7",
+      name: "draft.txt",
+      size: source.size,
+      sha256: source.sha256,
+      opId: "op-draft",
+      destination: { kind: "inbox", bucket: "files" },
+    });
+    await vi.waitFor(() => expect(waiting).toHaveBeenCalled());
+    // While the retry waits, a newer attempt of the operation is placing under its id.
+    const older = records(service).get(key()!) as Record<string, unknown>;
+    const newer = { ...older, settled: new Promise<void>(() => {}), settle: () => {} };
+    records(service).set(key()!, newer);
+    releasePlacing();
+
+    await expect(retry).resolves.toEqual({ status: "refused", reason: "busy" });
+    expect(records(service).get(key()!)).toBe(newer);
+    await first;
+  });
+
   it("expires an operation that was prepared and then abandoned", async () => {
     const { client, service } = await setup({ outcomeTtlMs: 1 });
     const prepare = (opId: string, content: string) => {
@@ -926,6 +1026,208 @@ describe("operation ids", () => {
       webContentsId: 9,
     });
     expect(path.basename(second.hostPath)).toBe("b.txt");
+  });
+});
+
+describe("a remote window's drop", () => {
+  const windowUploads = (
+    transport: ClientUploadTransport,
+    sendToView: Parameters<typeof createHostUploadClient>[0]["sendToView"] = () => {}
+  ) =>
+    createHostUploadClient({
+      transport,
+      hostForView: () => HOST,
+      hostLabel: () => "studio-01",
+      sendToView,
+      localLabel: "This Mac",
+      // Short retry waits that still let the receiver free up between them.
+      random: () => 0.1,
+    });
+  const toInbox = (index: number) => ({
+    hostId: HOST,
+    bytes: bytes(`screenshot ${index}`),
+    name: `shot-${index}.txt`,
+    mimeType: null,
+    destination: { kind: "inbox", bucket: "files" } as const,
+    opId: `op-shot-${index}`,
+  });
+  /** The link comes back: a new session, and the view's endpoint on it, for the same Shell. */
+  const relink = async (
+    transport: ClientUploadTransport,
+    service: HostUploadService,
+    endpoint: FakeEndpoint
+  ) => {
+    const { host, client } = await openSessionPair(socketDir);
+    sessions.push(host, client);
+    service.attach(host, new FakeEndpoint("session-2:view-7", "view-7", endpoint.clientId));
+    transport.noteEndpointOpened(HOST, { session: client, webContentsId: 7, endpointId: "view-7" });
+  };
+  /** Cuts the link the first time a transfer reports progress short of its end. */
+  const dropMidTransfer = (cut: () => void) => {
+    let dropped = false;
+    return {
+      dropped: () => dropped,
+      sendToView: (_id: number, event: FileTransferEvent) => {
+        if (dropped || event.type !== "progress" || event.transferredBytes >= event.totalBytes) {
+          return;
+        }
+        dropped = true;
+        cut();
+      },
+    };
+  };
+
+  it("queues a drop larger than the host admits at once, and every file lands", async () => {
+    const { transport, client } = await setup();
+    const call = vi.spyOn(client, "call");
+    const send = vi.spyOn(client.transfers, "send");
+    const uploads = windowUploads(transport);
+    const results = await Promise.all(
+      Array.from({ length: 24 }, (_, index) => uploads.uploadBytes(7, toInbox(index)))
+    );
+    expect(results.map((result) => path.basename(result.hostPath))).toEqual(
+      Array.from({ length: 24 }, (_, index) => `shot-${index}.txt`)
+    );
+    expect(await listFilesBucket()).toHaveLength(24);
+    // Waited its turn rather than being turned away and retried.
+    const answers = await Promise.allSettled(call.mock.results.map((result) => result.value));
+    expect(
+      answers.filter(
+        (answer) =>
+          answer.status === "rejected" ||
+          (answer.value as { status?: string } | undefined)?.status === "refused"
+      )
+    ).toEqual([]);
+    expect(send).toHaveBeenCalledTimes(24);
+  });
+
+  it("sends a file the bulk receiver turned away busy again under its id", async () => {
+    const { transport, client, inbox } = await setup({ maxIncoming: 1 });
+    // The first file holds the receiver's only slot until another has been turned away.
+    let releasePlacing!: () => void;
+    const placing = new Promise<void>((resolve) => {
+      releasePlacing = resolve;
+    });
+    const realPlace = inbox.place.bind(inbox);
+    vi.spyOn(inbox, "place").mockImplementation(async (...args) => {
+      await placing;
+      return realPlace(...args);
+    });
+    let refusedBusy = 0;
+    const realSend = client.transfers.send.bind(client.transfers);
+    vi.spyOn(client.transfers, "send").mockImplementation(async (...args) => {
+      try {
+        return await realSend(...args);
+      } catch (error) {
+        if ((error as { code?: string }).code === "RATE_LIMITED") {
+          refusedBusy += 1;
+          releasePlacing();
+        }
+        throw error;
+      }
+    });
+    const prepare = vi.spyOn(client, "call");
+    const uploads = windowUploads(transport);
+    const results = await Promise.all(
+      Array.from({ length: 3 }, (_, index) => uploads.uploadBytes(7, toInbox(index)))
+    );
+    expect(results.map((result) => path.basename(result.hostPath))).toEqual([
+      "shot-0.txt",
+      "shot-1.txt",
+      "shot-2.txt",
+    ]);
+    expect(await listFilesBucket()).toHaveLength(3);
+    expect(refusedBusy).toBeGreaterThan(0);
+    const preparedIds = prepare.mock.calls.map(([, payload]) => (payload as { opId: string }).opId);
+    expect(new Set(preparedIds)).toEqual(new Set(["op-shot-0", "op-shot-1", "op-shot-2"]));
+    expect(preparedIds.length).toBeGreaterThan(3);
+  });
+
+  it("resumes an upload whose link dropped mid-transfer, and places it once", async () => {
+    const { transport, client: firstLink, service, endpoint } = await setup();
+    const content = new Uint8Array(4 * 1024 * 1024).fill(7);
+    const drop = dropMidTransfer(() => {
+      firstLink.close("network went away");
+      void relink(transport, service, endpoint);
+    });
+    const result = await windowUploads(transport, drop.sendToView).uploadBytes(7, {
+      hostId: HOST,
+      bytes: content,
+      name: "big.bin",
+      mimeType: null,
+      destination: { kind: "inbox", bucket: "files" },
+      opId: "op-big",
+    });
+    expect(drop.dropped()).toBe(true);
+    expect(path.basename(result.hostPath)).toBe("big.bin");
+    expect((await fs.readFile(result.hostPath)).equals(Buffer.from(content))).toBe(true);
+    expect(await listFilesBucket()).toHaveLength(1);
+  });
+
+  it("resumes an upload whose link dropped while the host was still preparing it", async () => {
+    let releaseRoots!: () => void;
+    const roots = new Promise<void>((resolve) => {
+      releaseRoots = resolve;
+    });
+    const {
+      transport,
+      client: firstLink,
+      service,
+      endpoint,
+    } = await setup({
+      rootsFor: async () => {
+        await roots;
+        return [project];
+      },
+    });
+    const operations = (service as unknown as { operations: Map<string, unknown> }).operations;
+    const pending = windowUploads(transport).uploadBytes(7, {
+      hostId: HOST,
+      bytes: bytes("spec"),
+      name: "spec.md",
+      mimeType: null,
+      destination: { kind: "worktree", directory: project },
+      opId: "op-spec",
+    });
+    // The prepare reached the host; its answer never comes back on this link.
+    await vi.waitFor(() => expect(operations.size).toBe(1));
+    firstLink.close("network went away");
+    await relink(transport, service, endpoint);
+    releaseRoots();
+    await expect(pending).resolves.toMatchObject({ hostPath: path.join(project, "spec.md") });
+    expect(await fs.readFile(path.join(project, "spec.md"), "utf8")).toBe("spec");
+    expect(await fs.readdir(project)).toEqual(["spec.md"]);
+  });
+
+  it("asks again about a replacement its link cut off, never replacing on the old answer", async () => {
+    const { transport, client: firstLink, service, endpoint } = await setup();
+    await fs.writeFile(path.join(project, "notes.bin"), "mine");
+    const content = new Uint8Array(4 * 1024 * 1024).fill(9);
+    const drop = dropMidTransfer(() => {
+      firstLink.close("network went away");
+      void relink(transport, service, endpoint);
+    });
+    const uploads = windowUploads(transport, drop.sendToView);
+    const send = (opId: string, replaceToken?: string) =>
+      uploads.uploadBytes(7, {
+        hostId: HOST,
+        bytes: content,
+        name: "notes.bin",
+        mimeType: null,
+        destination:
+          replaceToken === undefined
+            ? { kind: "worktree", directory: project }
+            : { kind: "worktree", directory: project, replaceToken },
+        opId,
+      });
+    const clash = await send("op-ask");
+    expect(clash.conflict).toBe(true);
+    const resumed = await send("op-replace", clash.replaceToken);
+    expect(drop.dropped()).toBe(true);
+    expect(resumed).toMatchObject({ conflict: true, hostPath: path.join(project, "notes.bin") });
+    expect(resumed.replaceToken).not.toBe(clash.replaceToken);
+    expect(await fs.readFile(path.join(project, "notes.bin"), "utf8")).toBe("mine");
+    expect(await fs.readdir(project)).toEqual(["notes.bin"]);
   });
 });
 

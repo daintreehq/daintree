@@ -1,44 +1,48 @@
-import type { AgentSettings, AgentSettingsEntry } from "../types/agentSettings.js";
 import type { AgentAvailabilityState } from "../types/ipc/system.js";
+import { agentToolbarPin, type AgentToolbarPins } from "../types/ipc/agentToolbarPins.js";
 import { isAgentInstalled } from "./agentAvailability.js";
 
 /**
- * Returns true only when the entry explicitly sets `pinned: true`. Missing
- * entries and missing `pinned` fields resolve to `false` — used by routing
- * paths (e.g. `getPinnedAgents`) that need to know whether a user has
- * deliberately pinned an agent. For toolbar visibility prefer
- * `isAgentToolbarVisible` so a missing `pinned` value follows live CLI
- * availability (tri-state semantics — see #7673).
+ * Every resolver here takes one agent's pin from this machine's toolbar pins
+ * (`agentToolbarPin(pins, id)`, #14702): `true` an explicit pin, `false` an
+ * explicit unpin, `undefined` no intent.
  */
-export function isAgentPinned(entry: AgentSettingsEntry | undefined | null): boolean {
-  if (!entry) return false;
-  return entry.pinned === true;
+export type AgentPin = boolean | undefined;
+
+/**
+ * True only for an explicit pin. An unset pin resolves to `false` — used by
+ * routing paths that need to know whether the user deliberately pinned an
+ * agent. For toolbar visibility prefer `isAgentToolbarVisible` so an unset pin
+ * follows live CLI availability (tri-state semantics — see #7673).
+ */
+export function isAgentPinned(pin: AgentPin): boolean {
+  return pin === true;
 }
 
 export function isAgentPinnedById(
-  settings: AgentSettings | null | undefined,
+  pins: Readonly<AgentToolbarPins> | null | undefined,
   agentId: string
 ): boolean {
-  return isAgentPinned(settings?.agents?.[agentId]);
+  return isAgentPinned(agentToolbarPin(pins, agentId));
 }
 
 /**
  * Tri-state resolver for whether an agent button should appear in the toolbar.
  *
- *  - `pinned: true`  → always visible (explicit user pin)
- *  - `pinned: false` → always hidden  (explicit user unpin)
- *  - `pinned: undefined` or no entry → follow live CLI availability — visible
- *    when the binary is installed, hidden when missing
+ *  - `true`  → always visible (explicit user pin)
+ *  - `false` → always hidden  (explicit user unpin)
+ *  - `undefined` → follow live CLI availability — visible when the binary is
+ *    installed, hidden when missing
  *
  * Canonical selector for `Toolbar.tsx` and `ToolbarSettingsTab.tsx`; both
  * surfaces must use this so they never disagree (see #7673).
  */
 export function isAgentToolbarVisible(
-  entry: AgentSettingsEntry | undefined | null,
+  pin: AgentPin,
   availability: AgentAvailabilityState | undefined
 ): boolean {
-  if (entry?.pinned === true) return true;
-  if (entry?.pinned === false) return false;
+  if (pin === true) return true;
+  if (pin === false) return false;
   return isAgentInstalled(availability);
 }
 
@@ -62,11 +66,11 @@ export function isAgentToolbarVisible(
  * installed ones.
  */
 export function isAgentButtonOnToolbar(
-  entry: AgentSettingsEntry | undefined | null,
+  pin: AgentPin,
   availability: AgentAvailabilityState | undefined,
   isPositioned: boolean
 ): boolean {
-  if (entry?.pinned === true) return true;
-  if (entry?.pinned === false) return false;
+  if (pin === true) return true;
+  if (pin === false) return false;
   return isPositioned && isAgentInstalled(availability);
 }

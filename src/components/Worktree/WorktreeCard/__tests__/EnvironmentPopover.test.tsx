@@ -1,8 +1,8 @@
 /**
  * @vitest-environment jsdom
  */
-import { describe, it, expect, vi, beforeAll } from "vitest";
-import { render, screen, fireEvent, act } from "@testing-library/react";
+import { describe, it, expect, vi, beforeAll, afterEach } from "vitest";
+import { render, screen, fireEvent, act, waitFor } from "@testing-library/react";
 import type { ComponentProps, ReactNode } from "react";
 import { EnvironmentPopover } from "../EnvironmentPopover";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -15,6 +15,11 @@ vi.mock("react-dom", async () => {
 vi.mock("@/clients/systemClient", () => ({
   systemClient: { openExternal: vi.fn(() => Promise.resolve()) },
 }));
+
+vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
+
+import { systemClient } from "@/clients/systemClient";
+import { notify } from "@/lib/notify";
 
 class ResizeObserverStub {
   observe() {}
@@ -291,5 +296,122 @@ describe("EnvironmentPopover content", () => {
     openPopover();
     expect(screen.queryByRole("button", { name: "Preview endpoint" })).toBeNull();
     expect(screen.getByRole("button", { name: "Open endpoint in browser" })).toBeTruthy();
+  });
+
+  describe("in a view on a remote host", () => {
+    const forward = vi.fn();
+
+    function bindToHost() {
+      window.__DAINTREE_HOST_ID__ = { id: "build-box" };
+      Object.defineProperty(window, "electron", {
+        configurable: true,
+        writable: true,
+        value: { portForwards: { forward } },
+      });
+    }
+
+    afterEach(() => {
+      delete (window as { __DAINTREE_HOST_ID__?: unknown }).__DAINTREE_HOST_ID__;
+      delete (window as { electron?: unknown }).electron;
+      forward.mockReset();
+      vi.mocked(systemClient.openExternal).mockClear();
+      vi.mocked(notify).mockClear();
+    });
+
+    it("offers no preview, since the host refuses every endpoint session", () => {
+      bindToHost();
+      renderPopover({
+        resourceEndpoint: "http://box.example.ts.net:5173",
+        onPreviewEndpoint: vi.fn(),
+      });
+      openPopover();
+      expect(screen.queryByRole("button", { name: "Preview endpoint" })).toBeNull();
+      expect(screen.getByRole("button", { name: "Open endpoint in browser" })).toBeTruthy();
+    });
+
+    it("forwards a host loopback endpoint's port before opening it here", async () => {
+      bindToHost();
+      forward.mockResolvedValue({ localPort: 8080 });
+      renderPopover({ resourceEndpoint: "http://127.0.0.1:8080" });
+      openPopover();
+
+      fireEvent.click(screen.getByRole("button", { name: "Open endpoint in browser" }));
+
+      await waitFor(() => expect(systemClient.openExternal).toHaveBeenCalledTimes(1));
+      // Opened outside Daintree, so it is kept while in use rather than until stopped.
+      expect(forward).toHaveBeenCalledWith(
+        expect.objectContaining({ hostId: "build-box", remotePort: 8080, origin: "oauth-callback" })
+      );
+      expect(systemClient.openExternal).toHaveBeenCalledWith("http://127.0.0.1:8080/");
+    });
+
+    it("opens nothing and says why when the port is taken on this machine", async () => {
+      bindToHost();
+      forward.mockResolvedValue({ localPort: 8081 });
+      renderPopover({ resourceEndpoint: "http://127.0.0.1:8080" });
+      openPopover();
+
+      fireEvent.click(screen.getByRole("button", { name: "Open endpoint in browser" }));
+
+      await waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
+      expect(systemClient.openExternal).not.toHaveBeenCalled();
+      expect(vi.mocked(notify).mock.calls[0]?.[0]).toMatchObject({
+        type: "error",
+        message: expect.stringContaining("Port 8080 is in use on this machine"),
+      });
+    });
+
+    it("opens the endpoint once a retry gets the forward through", async () => {
+      bindToHost();
+      forward.mockRejectedValueOnce(new Error("host gone")).mockResolvedValueOnce({
+        localPort: 8080,
+      });
+      renderPopover({ resourceEndpoint: "http://127.0.0.1:8080" });
+      openPopover();
+
+      fireEvent.click(screen.getByRole("button", { name: "Open endpoint in browser" }));
+      await waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
+      expect(systemClient.openExternal).not.toHaveBeenCalled();
+
+      act(() => void vi.mocked(notify).mock.calls[0]?.[0].action?.onClick());
+
+      await waitFor(() =>
+        expect(systemClient.openExternal).toHaveBeenCalledWith("http://127.0.0.1:8080/")
+      );
+      expect(forward).toHaveBeenCalledTimes(2);
+    });
+
+    it("opens a non-loopback endpoint as is, with no forward", async () => {
+      bindToHost();
+      renderPopover({ resourceEndpoint: "https://gpu.staging.dev" });
+      openPopover();
+
+      fireEvent.click(screen.getByRole("button", { name: "Open endpoint in browser" }));
+
+      await waitFor(() =>
+        expect(systemClient.openExternal).toHaveBeenCalledWith("https://gpu.staging.dev")
+      );
+      expect(forward).not.toHaveBeenCalled();
+    });
+  });
+
+  it("offers to open the worktree on the machine the status named, and closes itself once asked", () => {
+    const onOpenOnHost = vi.fn();
+    renderPopover({ resourceSsh: "dt-feature-x", onOpenOnHost });
+    const dialog = openPopover();
+
+    expect(dialog.textContent).toContain("dt-feature-x");
+    fireEvent.click(screen.getByRole("button", { name: "Open on its machine" }));
+
+    expect(onOpenOnHost).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("shows the machine without the offer where it can't be opened as a host", () => {
+    renderPopover({ resourceSsh: "dt-feature-x" });
+    const dialog = openPopover();
+
+    expect(dialog.textContent).toContain("dt-feature-x");
+    expect(screen.queryByRole("button", { name: "Open on its machine" })).toBeNull();
   });
 });

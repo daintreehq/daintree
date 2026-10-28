@@ -14,6 +14,7 @@ import {
   isBuiltInAgent,
   setUserRegistry,
 } from "../agentRegistry.js";
+import { LAUNCH_MCP_ENV_VARS, LAUNCH_MCP_FORMATS } from "../launchMcp.js";
 import { isBuiltInAgentId } from "../agentIds.js";
 import type { PluginAgentContribution } from "../../types/plugin.js";
 
@@ -82,6 +83,45 @@ describe("pluginAgentRegistry (issue #9560)", () => {
     const config = getEffectiveAgentConfig("acme-agent");
     expect(config).toBeDefined();
     expect("detection" in (config as object)).toBe(false);
+  });
+
+  describe("declared launchMcp (#13803)", () => {
+    it.each(LAUNCH_MCP_FORMATS)("maps %s onto capabilities.launchMcp", (format) => {
+      registerPluginAgents("acme.plugin", [{ ...ACME_AGENT, launchMcp: { format } }]);
+      const injection = getEffectiveAgentConfig("acme-agent")?.capabilities?.launchMcp;
+      expect(injection?.format).toBe(format);
+      const envVar = (injection as { envVar?: string } | undefined)?.envVar;
+      expect(envVar).toBe(LAUNCH_MCP_ENV_VARS[format as keyof typeof LAUNCH_MCP_ENV_VARS]);
+    });
+
+    it("pins the env var even when a manifest object carries its own", () => {
+      registerPluginAgents("acme.plugin", [
+        {
+          ...ACME_AGENT,
+          launchMcp: { format: "opencode-config-content", envVar: "NODE_OPTIONS" },
+        } as PluginAgentContribution,
+      ]);
+      expect(getEffectiveAgentConfig("acme-agent")?.capabilities?.launchMcp).toEqual({
+        format: "opencode-config-content",
+        envVar: LAUNCH_MCP_ENV_VARS["opencode-config-content"],
+      });
+    });
+
+    it("leaves capabilities absent when no mechanism is declared", () => {
+      registerPluginAgents("acme.plugin", [ACME_AGENT]);
+      expect(getEffectiveAgentConfig("acme-agent")?.capabilities).toBeUndefined();
+    });
+
+    it("survives the structured clone the snapshot broadcast goes through", () => {
+      registerPluginAgents("acme.plugin", [
+        { ...ACME_AGENT, launchMcp: { format: "gemini-system-defaults" } },
+      ]);
+      const cloned = structuredClone(getPluginAgentRegistry());
+      expect(cloned["acme-agent"]?.capabilities?.launchMcp).toEqual({
+        format: "gemini-system-defaults",
+        envVar: LAUNCH_MCP_ENV_VARS["gemini-system-defaults"],
+      });
+    });
   });
 
   describe("declared resume (#13687)", () => {

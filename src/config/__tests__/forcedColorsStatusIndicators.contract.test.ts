@@ -8,7 +8,10 @@ import { readIndexCss } from "@/__tests__/support/hostCss";
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(TEST_DIR, "../../..");
 const SIDEBAR_CSS = path.join(REPO_ROOT, "src/styles/components/sidebar.css");
-const TOOLBAR_TSX = path.join(REPO_ROOT, "src/components/Layout/Toolbar.tsx");
+const TOOLBAR_OVERFLOW_MENU_TSX = path.join(
+  REPO_ROOT,
+  "src/components/Layout/ToolbarOverflowMenu.tsx"
+);
 
 // Issue #8936: status indicators (toolbar pips, ActivityLight) and the
 // SettingsSwitch toggle lose all state in forced-colors / Windows High Contrast
@@ -139,7 +142,7 @@ describe("forced-colors status-indicator contract (#8936)", () => {
     for (const selector of [".toolbar-badge", ".toolbar-problems-badge", ".toolbar-menu-pip"]) {
       expect(rule![1]).toContain(selector);
     }
-    expect(fs.readFileSync(TOOLBAR_TSX, "utf8")).toContain("toolbar-menu-pip");
+    expect(fs.readFileSync(TOOLBAR_OVERFLOW_MENU_TSX, "utf8")).toContain("toolbar-menu-pip");
   });
 });
 

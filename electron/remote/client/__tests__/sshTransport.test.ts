@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import net from "node:net";
 import path from "node:path";
 import { PassThrough } from "node:stream";
@@ -10,6 +11,7 @@ import { LinkClient, type LinkClientState } from "../LinkClient.js";
 import { bridgeChild, type BridgeChild } from "../../__tests__/harness/bridgeChild.js";
 import {
   PROBE_COMMAND,
+  SSH_COMMAND_TIMEOUT_MS,
   SshTransport,
   attachCommandFor,
   buildAttachArgs,
@@ -24,6 +26,7 @@ import {
   buildStreamLocalCheckArgs,
   controlPathFor,
   controlPathOption,
+  exitStaleSshMasters,
   isForwardablePath,
   isValidSshTarget,
   parseProbeOutput,
@@ -31,6 +34,7 @@ import {
   type SshSpawner,
   type SshStreamSpawner,
 } from "../sshTransport.js";
+import { remoteShellArgs, scpArgs } from "../remoteShell.js";
 import { HostModeOffError, SshAccessError, TransportError } from "../transport.js";
 import {
   TEST_HANDSHAKE,
@@ -41,11 +45,19 @@ import {
 
 const COMMON = [
   "-o",
+  "IgnoreUnknown=*",
+  "-o",
+  "RemoteCommand=none",
+  "-o",
+  "RequestTTY=no",
+  "-o",
   "BatchMode=yes",
   "-o",
-  "ServerAliveInterval=15",
+  "ConnectTimeout=10",
   "-o",
-  "ServerAliveCountMax=3",
+  "ServerAliveInterval=5",
+  "-o",
+  "ServerAliveCountMax=4",
   "-o",
   "ForwardAgent=no",
   "-o",
@@ -66,6 +78,46 @@ describe("ssh argument construction", () => {
       'ControlPath="/Users/g/Library/Application Support/Daintree/rh/cm-%C"'
     );
     expect(controlPathOption('/tmp/a"b\\c/cm-%C')).toBe('ControlPath="/tmp/a\\"b\\\\c/cm-%C"');
+  });
+
+  it("overrides the user's RemoteCommand and RequestTTY on every call that names a command", () => {
+    const calls = [
+      buildProbeArgs("studio", "/cp/cm-%C"),
+      buildCatArgs("studio", "/cp/cm-%C", "/home/g/host.json"),
+      buildAttachArgs("studio", "/cp/cm-%C", "daintree --attach-stdio"),
+      buildStreamLocalCheckArgs("studio", "/cp/cm-%C", "/run/user/1/daintree/host.sock"),
+      remoteShellArgs("studio", "/cp/cm-%C", "true"),
+      scpArgs("studio", "/cp/cm-%C", "/tmp/a", "/tmp/b", "ssh"),
+    ];
+    for (const args of calls) {
+      const ignore = args.indexOf("IgnoreUnknown=*");
+      expect(ignore).toBeGreaterThan(-1);
+      expect(args.indexOf("RemoteCommand=none")).toBeGreaterThan(ignore);
+      expect(args).toContain("RequestTTY=no");
+    }
+  });
+
+  // ssh's connect timeout applies per address, so a host whose IPv6 and IPv4
+  // routes both drop packets takes two of them: both must end before the
+  // command deadline, or the deadline cuts ssh off before it says why.
+  it("lets ssh give up on an unreachable host before the command deadline, on every call that can dial", () => {
+    const calls = [
+      buildProbeArgs("studio", "/cp/cm-%C"),
+      buildCatArgs("studio", "/cp/cm-%C", "/home/g/host.json"),
+      buildAttachArgs("studio", "/cp/cm-%C", "daintree --attach-stdio"),
+      buildStreamLocalCheckArgs("studio", "/cp/cm-%C", "/run/user/1/daintree/host.sock"),
+      buildForwardArgs("studio", "/l/l.sock", "/run/user/1/daintree/host.sock"),
+      remoteShellArgs("studio", "/cp/cm-%C", "true"),
+      scpArgs("studio", "/cp/cm-%C", "/tmp/a", "/tmp/b", "ssh"),
+    ];
+    for (const args of calls) {
+      const timeouts = args
+        .filter((arg) => arg.startsWith("ConnectTimeout="))
+        .map((arg) => Number(arg.slice("ConnectTimeout=".length)));
+      expect(timeouts).toHaveLength(1);
+      expect(timeouts[0]).toBeGreaterThan(0);
+      expect(2 * timeouts[0]! * 1000).toBeLessThan(SSH_COMMAND_TIMEOUT_MS);
+    }
   });
 
   it("builds the probe, discovery read and forward commands", () => {
@@ -107,9 +159,11 @@ describe("ssh argument construction", () => {
       "-o",
       "ForwardX11=no",
       "-o",
-      "ServerAliveInterval=15",
+      "ConnectTimeout=10",
       "-o",
-      "ServerAliveCountMax=3",
+      "ServerAliveInterval=5",
+      "-o",
+      "ServerAliveCountMax=4",
       "-o",
       "ControlPath=none",
       "-o",
@@ -165,13 +219,13 @@ describe("ssh argument construction", () => {
     expect(() => new SshTransport({ target: "-x", clientDir: "/tmp/x" })).toThrow(TransportError);
   });
 
-  it("uses cm2-%C when it fits and a short hash when it would not", () => {
+  it("uses cm3-%C when it fits and a short hash when it would not", () => {
     expect(controlPathFor("/Users/g/.config/Daintree/ssh", "studio", "darwin")).toBe(
-      "/Users/g/.config/Daintree/ssh/cm2-%C"
+      "/Users/g/.config/Daintree/ssh/cm3-%C"
     );
     const long = "/Users/somebody/Library/Application Support/Daintree/ssh";
     const hashed = controlPathFor(long, "studio", "darwin");
-    expect(hashed).toMatch(/\/cm2-[0-9a-f]{16}$/);
+    expect(hashed).toMatch(/\/cm3-[0-9a-f]{16}$/);
     expect(controlPathFor(long, "studio", "darwin")).toBe(hashed);
     expect(controlPathFor(long, "other", "darwin")).not.toBe(hashed);
   });
@@ -441,6 +495,37 @@ describe("SshTransport with an injected ssh", () => {
     await conn.dispose();
     expect(dedicated.killed).toBe(true);
     for (const p of proxies) p.close();
+  });
+
+  it("cancels the forward an attempt abandoned mid-request may have left on the master", async () => {
+    const calls: string[][] = [];
+    const abort = new AbortController();
+    const spawner: SshSpawner = (args) => {
+      calls.push(args);
+      const child = new FakeChild();
+      const command = args.at(-1)!;
+      if (command === PROBE_COMMAND) child.finish(0, "Darwin\n501\n/Users/g\n");
+      else if (command.startsWith("cat -- "))
+        child.finish(
+          0,
+          JSON.stringify({ version: 1, socketPath: DARWIN_SOCKET, token: "a".repeat(64), pid: 1 })
+        );
+      // The master takes the forward; its answer never reaches the abandoned attempt.
+      else if (args.includes("forward")) setImmediate(() => abort.abort());
+      else child.finish(0);
+      return child;
+    };
+    const transport = new SshTransport({
+      target: "studio",
+      clientDir: path.join(root, "c"),
+      spawn: spawner,
+    });
+    await expect(transport.open(abort.signal)).rejects.toThrow("Connection cancelled");
+    const forward = calls.find((args) => args.includes("forward"))!;
+    const cancel = calls.find((args) => args.includes("cancel"));
+    expect(cancel?.at(-3)).toBe(forward.at(-3));
+    // Nor does it start a dedicated forward for an attempt nobody is waiting on.
+    expect(calls.some((args) => args.includes("-N"))).toBe(false);
   });
 
   it("reports ssh's own stderr when the host cannot be reached", async () => {
@@ -958,5 +1043,77 @@ describe("closing masters when the app quits", () => {
     } finally {
       rmSync(clientDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("exitStaleSshMasters", () => {
+  it("tells every master a crashed launch left to exit, by its own socket, and removes the socket", async () => {
+    // Short: a unix socket path has to fit sun_path.
+    const clientDir = mkdtempSync(path.join(os.tmpdir(), "rh-"));
+    const servers: net.Server[] = [];
+    const socketAt = (name: string) =>
+      new Promise<string>((resolve) => {
+        const server = net.createServer();
+        servers.push(server);
+        const socketPath = path.join(clientDir, name);
+        server.listen(socketPath, () => resolve(socketPath));
+      });
+    try {
+      const current = await socketAt("cm2-7f3a");
+      const older = await socketAt("cm1-9b1c");
+      // A link's own forwarded socket is not a master.
+      const linkSocket = await socketAt("l-1234abcd-0011.sock");
+      writeFileSync(path.join(clientDir, "cm2-notes"), "not a socket");
+      const runs: string[][] = [];
+
+      await exitStaleSshMasters(
+        async (_command, args) => {
+          runs.push([...args]);
+          return { code: 0, stdout: "", stderr: "", spawnError: null, timedOut: false };
+        },
+        clientDir,
+        1_000
+      );
+
+      expect(runs.map((args) => args[args.indexOf("-o") + 1]).sort()).toEqual(
+        [controlPathOption(older), controlPathOption(current)].sort()
+      );
+      for (const args of runs) {
+        // No user config: its own forwards and options would ride along.
+        expect(args.slice(0, 2)).toEqual(["-F", "/dev/null"]);
+        expect(args[args.indexOf("-O") + 1]).toBe("exit");
+      }
+      expect(existsSync(current)).toBe(false);
+      expect(existsSync(older)).toBe(false);
+      expect(existsSync(linkSocket)).toBe(true);
+      expect(existsSync(path.join(clientDir, "cm2-notes"))).toBe(true);
+    } finally {
+      await Promise.all(servers.map((server) => new Promise((resolve) => server.close(resolve))));
+      rmSync(clientDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the socket of a master that wouldn't exit, so it can still be reached", async () => {
+    const clientDir = mkdtempSync(path.join(os.tmpdir(), "rh-"));
+    const server = net.createServer();
+    try {
+      const socketPath = path.join(clientDir, "cm2-7f3a");
+      await new Promise<void>((resolve) => server.listen(socketPath, () => resolve()));
+      await exitStaleSshMasters(
+        async () => ({ code: 255, stdout: "", stderr: "", spawnError: null, timedOut: false }),
+        clientDir,
+        1_000
+      );
+      expect(existsSync(socketPath)).toBe(true);
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+      rmSync(clientDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does nothing when there is no control directory yet", async () => {
+    const run = vi.fn();
+    await exitStaleSshMasters(run, path.join(os.tmpdir(), "rh-missing-dir-x"), 1_000);
+    expect(run).not.toHaveBeenCalled();
   });
 });

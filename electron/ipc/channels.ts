@@ -87,6 +87,9 @@ export const CHANNELS = {
   FILES_READ: "files:read",
   FILES_TRASH: "files:trash",
 
+  FILE_DOCUMENT_READ: "file-document:read",
+  FILE_DOCUMENT_SAVE: "file-document:save",
+
   DIFF_MEDIA_READ_FILE_VERSIONS: "diff-media:read-file-versions",
 
   FILE_BROWSER_LIST_DIRECTORY: "file-browser:list-directory",
@@ -171,6 +174,7 @@ export const CHANNELS = {
 
   APP_GET_STATE: "app:get-state",
   APP_SET_STATE: "app:set-state",
+  APP_PANEL_GRID_CONFIG_CHANGED: "app:panel-grid-config-changed",
   APP_GET_VERSION: "app:get-version",
   APP_GET_VERSION_INFO: "app:get-version-info",
   APP_HYDRATE: "app:hydrate",
@@ -238,6 +242,9 @@ export const CHANNELS = {
   PROJECT_OPEN_DIALOG: "project:open-dialog",
   PROJECT_ON_SWITCH: "project:on-switch",
   PROJECT_FOCUS_ON_ACTIVATE: "project:focus-on-activate",
+  PROJECT_PANEL_RECOVERY_QUERY: "project:panel-recovery-query",
+  PROJECT_PANEL_RECOVERY_REPLY: "project:panel-recovery-reply",
+  PROJECT_PANEL_RECOVERY_STATE: "project:panel-recovery-state",
   PROJECT_BACKGROUND_RESIZE: "project:background-resize",
   PROJECT_GET_SETTINGS: "project:get-settings",
   PROJECT_SAVE_SETTINGS: "project:save-settings",
@@ -256,6 +263,8 @@ export const CHANNELS = {
   CANOPY_TERMINAL_DATA: "canopy:terminal-data",
   CANOPY_TRASH_REQUESTED: "canopy:trash-requested",
   CANOPY_RESTORE_REQUESTED: "canopy:restore-requested",
+  CANOPY_REMOVE_REQUESTED: "canopy:remove-requested",
+  CANOPY_RESUME_REQUESTED: "canopy:resume-requested",
   CANOPY_RENAME_REQUESTED: "canopy:rename-requested",
   FLEET_GET_SNAPSHOT: "fleet:get-snapshot",
   FLEET_PARK_RUN: "fleet:park-run",
@@ -270,6 +279,11 @@ export const CHANNELS = {
   CANOPY_REFRESH: "canopy:refresh",
   CANOPY_TRASH: "canopy:trash",
   CANOPY_UNTRASH: "canopy:untrash",
+  CANOPY_RESTORE_TRASHED: "canopy:restore-trashed",
+  CANOPY_REMOVE_TRASHED: "canopy:remove-trashed",
+  CANOPY_EMPTY_TRASH: "canopy:empty-trash",
+  CANOPY_RESUME_STARTED: "canopy:resume-started",
+  CANOPY_RESUME_SETTLED: "canopy:resume-settled",
   CANOPY_REREAD: "canopy:reread",
   CANOPY_SET_SHOWN: "canopy:set-shown",
   CANOPY_ARCHIVE: "canopy:archive",
@@ -284,9 +298,17 @@ export const CHANNELS = {
   CANOPY_RUN_BRANCH: "canopy:run-branch",
   CANOPY_SEARCH_SCREENS: "canopy:search-screens",
   CANOPY_WATCH_TERMINAL: "canopy:watch-terminal",
+  CANOPY_WATCH_ASSISTANT_TERMINAL: "canopy:watch-assistant-terminal",
+  CANOPY_RESOLVE_ASSISTANT: "canopy:resolve-assistant",
+  CANOPY_READ_AGENT_DIRECTORY: "canopy:read-agent-directory",
+  CANOPY_READ_ASSISTANT_WORK: "canopy:read-assistant-work",
   CANOPY_UNWATCH_TERMINAL: "canopy:unwatch-terminal",
   CANOPY_CAPTURE_BACKDROP: "canopy:capture-backdrop",
   CANOPY_SET_MODE: "canopy:set-mode",
+  CANOPY_GET_MODEL: "canopy:get-model",
+  CANOPY_GET_SIZE_HOLDS: "canopy:get-size-holds",
+  CANOPY_RETRY_MODEL: "canopy:retry-model",
+  CANOPY_REMOVE_MODELS: "canopy:remove-models",
   CANOPY_RENAME: "canopy:rename",
   CANOPY_TERMINAL_INPUT: "canopy:terminal-input",
   CANOPY_TERMINAL_RESIZE: "canopy:terminal-resize",
@@ -346,6 +368,7 @@ export const CHANNELS = {
   AGENT_SETTINGS_SET_RESUME_ON_RESTART: "agent-settings:set-resume-on-restart",
   AGENT_SETTINGS_RESET: "agent-settings:reset",
   AGENT_SETTINGS_STAMP_VERSION: "agent-settings:stamp-version",
+  AGENT_SETTINGS_CHANGED: "agent-settings:changed",
 
   AGENT_HELP_GET: "agent-help:get",
 
@@ -370,6 +393,8 @@ export const CHANNELS = {
   TERMINAL_CONFIG_SET_MEMORY_LEAK_DETECTION: "terminal-config:set-memory-leak-detection",
   TERMINAL_CONFIG_SET_MEMORY_LEAK_AUTO_RESTART: "terminal-config:set-memory-leak-auto-restart",
   TERMINAL_CONFIG_SET_CACHED_PROJECT_VIEWS: "terminal-config:set-cached-project-views",
+  TERMINAL_CONFIG_DEVICE_CHANGED: "terminal-config:device-changed",
+  TERMINAL_CONFIG_HOST_CHANGED: "terminal-config:host-changed",
 
   ACCESSIBILITY_GET_ENABLED: "accessibility:get-enabled",
   ACCESSIBILITY_SUPPORT_CHANGED: "accessibility:support-changed",
@@ -431,9 +456,6 @@ export const CHANNELS = {
   KEEP_AWAKE_GET_STATE: "keep-awake:get-state",
   KEEP_AWAKE_UPDATE_CONFIG: "keep-awake:update-config",
   KEEP_AWAKE_STATE_CHANGED: "keep-awake:state-changed",
-  HIBERNATION_GET_CONFIG: "hibernation:get-config",
-  HIBERNATION_UPDATE_CONFIG: "hibernation:update-config",
-  HIBERNATION_PROJECT_HIBERNATED: "hibernation:project-hibernated",
 
   IDLE_TERMINAL_GET_CONFIG: "idle-terminal:get-config",
   IDLE_TERMINAL_UPDATE_CONFIG: "idle-terminal:update-config",
@@ -585,18 +607,26 @@ export const CHANNELS = {
   DEV_PREVIEW_STATE_CHANGED: "dev-preview:state-changed",
   DEV_PREVIEW_ALL_SESSIONS_CHANGED: "dev-preview:all-sessions-changed",
 
-  // Site-preview bridge — binding a caller to a dev-preview guest and receiving
-  // validated observations back from the runtime installed inside it. There is
-  // deliberately no "evaluate in guest" channel; see handlers/sitePreview.ts.
-  SITE_PREVIEW_LIST_CANDIDATES: "site-preview:list-candidates",
-  SITE_PREVIEW_BIND: "site-preview:bind",
+  // Site-preview bridge — the lifecycle commands for an Element Picker binding
+  // on a dev-preview guest. There is deliberately no "evaluate in guest"
+  // channel; see handlers/sitePreview.ts.
   SITE_PREVIEW_DETACH: "site-preview:detach",
   SITE_PREVIEW_SET_MODE: "site-preview:set-mode",
-  SITE_PREVIEW_RESELECT: "site-preview:reselect",
   SITE_PREVIEW_CLEAR_SELECTION: "site-preview:clear-selection",
   SITE_PREVIEW_CLEAR_HOVER: "site-preview:clear-hover",
-  SITE_PREVIEW_GET_STATE: "site-preview:get-state",
-  SITE_PREVIEW_EVENT: "site-preview:event",
+
+  // Core Element Picker — the dev preview's own picker. Binding and the page's
+  // traffic stay on the machine showing the preview; the source workspace and
+  // what is read through it run where the worktree is. See handlers/elementPicker.ts.
+  ELEMENT_PICKER_BIND: "element-picker:bind",
+  ELEMENT_PICKER_RESELECT: "element-picker:reselect",
+  ELEMENT_PICKER_WORKSPACE_OPEN: "element-picker:workspace-open",
+  ELEMENT_PICKER_WORKSPACE_CLOSE: "element-picker:workspace-close",
+  ELEMENT_PICKER_RESOLVE: "element-picker:resolve",
+  ELEMENT_PICKER_DESCRIBE_PROJECT: "element-picker:describe-project",
+  ELEMENT_PICKER_SOURCE_REVISIONS: "element-picker:source-revisions",
+  ELEMENT_PICKER_EVENT: "element-picker:event",
+  ELEMENT_PICKER_SOURCE_CHANGED: "element-picker:source-changed",
 
   COMMANDS_LIST: "commands:list",
   COMMANDS_GET: "commands:get",
@@ -635,8 +665,18 @@ export const CHANNELS = {
   HELP_ADOPT_DETACHED_SESSION: "help:adopt-detached-session",
   HELP_DISCARD_CONVERSATION: "help:discard-conversation",
   HELP_LIST_PAST_SESSIONS: "help:list-past-sessions",
+  HELP_GET_STARTER_PROMPTS: "help:get-starter-prompts",
   HELP_REPORT_PANEL_OPEN: "help:report-panel-open",
   HELP_GET_PINNED_ACTION_CONTEXT: "help:get-pinned-action-context",
+  HELP_GLOBAL_ASSISTANT_ENSURE: "help:global-assistant-ensure",
+  HELP_GLOBAL_ASSISTANT_STATE: "help:global-assistant-state",
+  HELP_GLOBAL_ASSISTANT_ATTACH: "help:global-assistant-attach",
+  HELP_GLOBAL_ASSISTANT_DETACH: "help:global-assistant-detach",
+  HELP_GLOBAL_ASSISTANT_CLAIM_INPUT: "help:global-assistant-claim-input",
+  HELP_GLOBAL_ASSISTANT_RELEASE_INPUT: "help:global-assistant-release-input",
+  HELP_GLOBAL_ASSISTANT_RESTART: "help:global-assistant-restart",
+  HELP_GLOBAL_ASSISTANT_DISCARD: "help:global-assistant-discard",
+  HELP_GLOBAL_ASSISTANT_CHANGED: "help:global-assistant-changed",
 
   CLIPBOARD_SAVE_IMAGE: "clipboard:save-image",
   CLIPBOARD_THUMBNAIL_FROM_PATH: "clipboard:thumbnail-from-path",
@@ -861,9 +901,11 @@ export const CHANNELS = {
 
   // Voice Input channels
   VOICE_INPUT_GET_SETTINGS: "voice-input:get-settings",
+  VOICE_INPUT_GET_LAST_TERMS: "voice-input:get-last-terms",
   VOICE_INPUT_SET_SETTINGS: "voice-input:set-settings",
   VOICE_INPUT_START: "voice-input:start",
   VOICE_INPUT_STOP: "voice-input:stop",
+  VOICE_INPUT_CANCEL: "voice-input:cancel",
   VOICE_INPUT_AUDIO_CHUNK: "voice-input:audio-chunk",
   VOICE_INPUT_TRANSCRIPTION_DELTA: "voice-input:transcription-delta",
   VOICE_INPUT_TRANSCRIPTION_COMPLETE: "voice-input:transcription-complete",
@@ -874,9 +916,37 @@ export const CHANNELS = {
   VOICE_INPUT_OPEN_MIC_SETTINGS: "voice-input:open-mic-settings",
   VOICE_INPUT_VALIDATE_API_KEY: "voice-input:validate-api-key",
   VOICE_INPUT_CORRECT: "voice-input:correct",
+  VOICE_INPUT_CORRECTION_PROGRESS: "voice-input:correction-progress",
+  VOICE_INPUT_PREFETCH_CORRECTIONS: "voice-input:prefetch-corrections",
+  VOICE_INPUT_REWRITE: "voice-input:rewrite",
   VOICE_INPUT_FLUSH_PARAGRAPH: "voice-input:flush-paragraph",
   VOICE_INPUT_PARAGRAPH_BOUNDARY: "voice-input:paragraph-boundary",
   VOICE_INPUT_FILE_TOKEN_RESOLVED: "voice-input:file-token-resolved",
+  VOICE_INPUT_SESSION_ENDED: "voice-input:session-ended",
+  VOICE_DICTIONARY_ADD: "voice-dictionary:add",
+  VOICE_DICTIONARY_REMOVE: "voice-dictionary:remove",
+  VOICE_DICTIONARY_UPDATE: "voice-dictionary:update",
+  VOICE_DICTIONARY_ACCEPT_SUGGESTION: "voice-dictionary:accept-suggestion",
+  VOICE_DICTIONARY_DISMISS_SUGGESTION: "voice-dictionary:dismiss-suggestion",
+  VOICE_DICTIONARY_RECORD_SUGGESTIONS: "voice-dictionary:record-suggestions",
+  VOICE_DICTIONARY_GET_PROJECT: "voice-dictionary:get-project",
+  VOICE_DICTIONARY_ADD_TO_PROJECT: "voice-dictionary:add-to-project",
+  VOICE_DICTIONARY_REMOVE_FROM_PROJECT: "voice-dictionary:remove-from-project",
+  VOICE_DICTIONARY_UPDATE_IN_PROJECT: "voice-dictionary:update-in-project",
+  VOICE_INPUT_GET_LIVE_SESSION: "voice-input:get-live-session",
+  VOICE_INPUT_LIVE_SESSION: "voice-input:live-session",
+  VOICE_INPUT_STOP_LIVE: "voice-input:stop-live",
+  VOICE_INPUT_STOP_REQUESTED: "voice-input:stop-requested",
+  VOICE_INPUT_REVEAL_LIVE: "voice-input:reveal-live",
+  VOICE_INPUT_REVEAL_REQUESTED: "voice-input:reveal-requested",
+  VOICE_INPUT_PUBLISH_DETAILS: "voice-input:publish-details",
+  VOICE_INPUT_LIVE_LEVEL: "voice-input:live-level",
+  VOICE_INPUT_SET_PAUSED_LIVE: "voice-input:set-paused-live",
+  VOICE_INPUT_PAUSE_REQUESTED: "voice-input:pause-requested",
+  RECENT_DICTATIONS_RECORD: "recent-dictations:record",
+  RECENT_DICTATIONS_SET_CORRECTED_TEXT: "recent-dictations:set-corrected-text",
+  RECENT_DICTATIONS_LIST: "recent-dictations:list",
+  RECENT_DICTATIONS_CHANGED: "recent-dictations:changed",
 
   // Help assistant settings channels
   HELP_ASSISTANT_GET_SETTINGS: "help-assistant:get-settings",
@@ -1024,6 +1094,7 @@ export const CHANNELS = {
   FORGE_GET_PR_TOOLTIP: "forge:get-pr-tooltip",
   FORGE_GET_ISSUES_BY_NUMBERS: "forge:get-issues-by-numbers",
   FORGE_GET_PRS_BY_NUMBERS: "forge:get-prs-by-numbers",
+  FORGE_GET_REFERENCES_BY_NUMBERS: "forge:get-references-by-numbers",
   FORGE_GET_PR_REVIEW_THREADS: "forge:get-pr-review-threads",
   FORGE_LIST_ISSUE_COMMENTS: "forge:list-issue-comments",
   FORGE_RESOLVE_AUTHOR_AVATAR: "forge:resolve-author-avatar",
@@ -1034,6 +1105,8 @@ export const CHANNELS = {
   FORGE_CLOSE_PR: "forge:close-pr",
   FORGE_REOPEN_PR: "forge:reopen-pr",
   FORGE_MERGE_PR: "forge:merge-pr",
+  FORGE_ENABLE_AUTO_MERGE: "forge:enable-auto-merge",
+  FORGE_DISABLE_AUTO_MERGE: "forge:disable-auto-merge",
   FORGE_CONVERT_PR_TO_DRAFT: "forge:convert-pr-to-draft",
   FORGE_MARK_PR_READY_FOR_REVIEW: "forge:mark-pr-ready-for-review",
   FORGE_COMMENT_ON_PR: "forge:comment-on-pr",
@@ -1084,6 +1157,20 @@ export const CHANNELS = {
   PLUGIN_CHECK_FOR_UPDATE: "plugin:check-for-update",
   PLUGIN_INVOKE: "plugin:invoke",
   PLUGIN_TOOLBAR_BUTTONS: "plugin:toolbar-buttons",
+  PLUGIN_LAUNCH_ENTRIES: "plugin:launch-entries",
+  PLUGIN_LAYOUTS: "plugin:layouts",
+  PLUGIN_LAUNCH_GROUPS_HIDDEN_GET: "plugin:launch-groups-hidden-get",
+  PLUGIN_LAUNCH_GROUP_HIDDEN_SET: "plugin:launch-group-hidden-set",
+  PLUGIN_NOTIFICATION_SILENCES_GET: "plugin:notification-silences-get",
+  PLUGIN_NOTIFICATION_SILENCE_SET: "plugin:notification-silence-set",
+  PLUGIN_SEARCH_PROVIDERS_GET: "plugin:search-providers-get",
+  PLUGIN_SEARCH_PROVIDERS_QUERY: "plugin:search-providers-query",
+  PLUGIN_SEARCH_PROVIDERS_CANCEL: "plugin:search-providers-cancel",
+  PLUGIN_SEARCH_PROVIDER_SHOWN_SET: "plugin:search-provider-shown-set",
+  PLUGIN_CONTEXT_PROVIDERS_GET: "plugin:context-providers-get",
+  PLUGIN_CONTEXT_PROVIDER_SEARCH: "plugin:context-provider-search",
+  PLUGIN_CONTEXT_REFERENCES_RESOLVE: "plugin:context-references-resolve",
+  PLUGIN_CONTEXT_PROVIDERS_ENABLED_SET: "plugin:context-providers-enabled-set",
   PLUGIN_KEYBINDINGS: "plugin:keybindings",
   PLUGIN_CONTEXT_MENU_ITEMS: "plugin:context-menu-items",
   PLUGIN_VALIDATE_ACTION_IDS: "plugin:validate-action-ids",
@@ -1093,15 +1180,26 @@ export const CHANNELS = {
   PLUGIN_ACTIONS_UNREGISTER: "plugin:actions-unregister",
   PLUGIN_PANEL_KINDS_GET: "plugin:panel-kinds-get",
   /**
-   * Project surfaces (§7.8) claimed in the SENDER's project. Never takes a
-   * project id from the caller — a renderer asking for another project's
-   * surfaces is the leak project scope exists to prevent.
+   * The SENDER project's slot state (§7.8): arbitrated claims, refusals and
+   * the user's answers, with one revision. Never takes a project id from the
+   * caller — a renderer asking for another project's slots is the leak project
+   * scope exists to prevent.
    */
   PLUGIN_PROJECT_SURFACES_GET: "plugin:project-surfaces-get",
-  /** The SENDER project's remembered answers about its surface claims (plugin surface or stock). */
-  PLUGIN_PROJECT_SURFACE_CHOICES_GET: "plugin:project-surface-choices-get",
-  /** Remember one surface answer for the SENDER's project, about the slot's current owner. */
+  PLUGIN_FILE_EDITOR_CHOICES_GET: "plugin:file-editor-choices-get",
+  PLUGIN_FILE_EDITOR_CHOICE_SET: "plugin:file-editor-choice-set",
+  /** Remember one slot answer for the SENDER's project, resolved against what is on offer. */
   PLUGIN_PROJECT_SURFACE_CHOICE_SET: "plugin:project-surface-choice-set",
+  /** Remember an answer about several slots in one write, all or none, for the SENDER's project. */
+  PLUGIN_PROJECT_SURFACE_CHOICES_SET: "plugin:project-surface-choices-set",
+  /** The SENDER project's first-open layout seed (#13782). */
+  PLUGIN_PROJECT_LAYOUT_SEED_GET: "plugin:project-layout-seed-get",
+  /** Compare-and-set the SENDER project's layout seed, so only one view ever consumes it. */
+  PLUGIN_PROJECT_LAYOUT_SEED_ADVANCE: "plugin:project-layout-seed-advance",
+  /** The SENDER project's answer to its application's welcome tour (#14106). */
+  PLUGIN_PROJECT_WELCOME_GET: "plugin:project-welcome-get",
+  /** Record that the user skipped or finished the SENDER project's application welcome. */
+  PLUGIN_PROJECT_WELCOME_SET: "plugin:project-welcome-set",
   /** Project-local plugins: the sender project's rows, valid and invalid alike. */
   PLUGIN_PROJECT_LIST: "plugin:project-list",
   /** Project-local plugins: record the trust decision for the SENDER's project. */
@@ -1116,6 +1214,8 @@ export const CHANNELS = {
   PLUGIN_PROJECT_VISIBILITY_GET: "plugin:project-visibility-get",
   /** Installed plugins: hide or show one installed plugin in the SENDER's project. */
   PLUGIN_PROJECT_VISIBILITY_SET: "plugin:project-visibility-set",
+  /** Installed per-project packages: turn one on or off in the SENDER's project. */
+  PLUGIN_PROJECT_INSTANCE_SET_ENABLED: "plugin:project-instance-set-enabled",
   /** Installed plugins: whether one plugin is hidden in projects that have not decided. */
   PLUGIN_VISIBILITY_DEFAULT_SET: "plugin:visibility-default-set",
   /** Lazy activation: force the plugin owning a contributed panel view to `activate()` before its module loads. */
@@ -1130,6 +1230,10 @@ export const CHANNELS = {
   PLUGIN_REPORT_PUSH_LISTENERS: "plugin:report-push-listeners",
   /** Renderer → main, fire-and-forget: the kind of panel holding DOM focus in this view (#13221). */
   PLUGIN_REPORT_FOCUSED_PANEL: "plugin:report-focused-panel",
+  /** The asking view's own project presence (#13813). */
+  PLUGIN_PROJECT_PRESENCE_GET: "plugin:project-presence-get",
+  /** Main → a project's renderers: that project's presence changed. */
+  PLUGIN_PROJECT_PRESENCE_CHANGED: "plugin:project-presence-changed",
   /** Every tracked plugin's `PluginPerfSnapshot`. */
   PLUGIN_PERF_SNAPSHOTS_GET: "plugin:perf-snapshots-get",
   PLUGIN_CAPTURE_PANEL: "plugin:capture-panel",
@@ -1142,10 +1246,26 @@ export const CHANNELS = {
   PLUGIN_RUNTIME_STATUSES_GET: "plugin:runtime-statuses-get",
   /** Retire a plugin's backend generation and start a fresh one (panel recovery). */
   PLUGIN_RESTART_WORKER: "plugin:restart-worker",
+  /** The user's Cancel on a plugin task (#13819). */
+  PLUGIN_TASK_CANCEL: "plugin:task-cancel",
+  /** The user's Dismiss on an interrupted plugin task (#13819). */
+  PLUGIN_TASK_DISMISS: "plugin:task-dismiss",
+  /** A plugin view importing files its person chose as artifacts (#14100). */
+  PLUGIN_ARTIFACTS_IMPORT: "plugin:artifacts-import",
+  /** A lease-bearing playback URL for one of a plugin's artifacts, for the calling view. */
+  PLUGIN_ARTIFACT_SOURCE: "plugin:artifact-source",
+  /** The view stopped playing a source: its lease ends. */
+  PLUGIN_ARTIFACT_SOURCE_RELEASE: "plugin:artifact-source-release",
   PLUGIN_AGENTS_GET: "plugin:agents-get",
   PLUGIN_RECIPES_GET: "plugin:recipes-get",
   /** Plugin tours visible in the sender's project (#12773). */
   PLUGIN_TOURS_GET: "plugin:tours-get",
+  PLUGIN_PROJECT_TEMPLATES_GET: "plugin:project-templates-get",
+  PLUGIN_PROJECT_TEMPLATE_PREVIEW: "plugin:project-template-preview",
+  /** Plugin views that mount outside the panel grid, visible in the sender's project (#13770). */
+  PLUGIN_HOSTED_VIEWS_GET: "plugin:hosted-views-get",
+  /** Every theme an installed plugin offers, app-wide (#13832). */
+  PLUGIN_THEMES_GET: "plugin:themes-get",
   /** Plugin-shipped custom icons visible in the sender's project (#13143). */
   PLUGIN_ICONS_GET: "plugin:icons-get",
   /** Append one run timestamp to a plugin recipe's sidecar metadata (#11860). */
@@ -1154,6 +1274,10 @@ export const CHANNELS = {
   PLUGIN_RECIPE_METADATA_UPDATE: "plugin:recipe-metadata-update",
   PLUGIN_FORGE_PROVIDERS_GET: "plugin:forge-providers-get",
   PLUGIN_FILE_DECORATIONS_GET: "plugin:file-decorations-get",
+  /** The plugins a worktree delete confirmation asks for notes (#13805). */
+  PLUGIN_WORKTREE_DELETE_NOTE_SOURCES_GET: "plugin:worktree-delete-note-sources-get",
+  /** One plugin's notes for a worktree about to be deleted (#13805). */
+  PLUGIN_WORKTREE_DELETE_NOTES_GET: "plugin:worktree-delete-notes-get",
   PLUGIN_WORKTREE_STATUS_GET: "plugin:worktree-status-get",
   PLUGIN_GET_AUDIT_RECORDS: "plugin:get-audit-records",
   PLUGIN_GET_AUDIT_CONFIG: "plugin:get-audit-config",
@@ -1168,6 +1292,26 @@ export const CHANNELS = {
   PLUGIN_SETTINGS_REVEAL_SECRET: "plugin:settings-reveal-secret",
   /** Which declared `required` settings a plugin still has unset, for the panel setup strip. */
   PLUGIN_SETTINGS_REQUIRED_STATUS: "plugin:settings-required-status",
+  /** A plugin's `contributes.setup` checklist as the host sees it, for the setup strip and settings (#13824). */
+  PLUGIN_SETUP_STATUS: "plugin:setup-status",
+  /** Skip or restore one setup step in the sender's project. */
+  PLUGIN_SETUP_STEP_SKIPPED_SET: "plugin:setup-step-skipped-set",
+  /** A plugin's `contributes.account` status for its settings row. Never carries a token. */
+  PLUGIN_ACCOUNT_STATUS: "plugin:account-status",
+  /** Start the declared OAuth sign-in from the settings row's click (#13823). */
+  PLUGIN_ACCOUNT_CONNECT: "plugin:account-connect",
+  PLUGIN_ACCOUNT_CANCEL_CONNECT: "plugin:account-cancel-connect",
+  /** Store a pasted API token for a `kind: "token"` account. */
+  PLUGIN_ACCOUNT_SET_TOKEN: "plugin:account-set-token",
+  PLUGIN_ACCOUNT_DISCONNECT: "plugin:account-disconnect",
+  /** Every declared connection's settings row status (#14102). Never carries a token. */
+  PLUGIN_ACCOUNT_LIST: "plugin:account-list",
+  /** Run a connection's declared test with its stored tokens; answers what the service said. */
+  PLUGIN_ACCOUNT_TEST: "plugin:account-test",
+  /** Which connection the sender's project uses for a plugin, and its choices. */
+  PLUGIN_ACCOUNT_BINDING_GET: "plugin:account-binding-get",
+  /** Choose the connection the sender's project uses for a plugin. */
+  PLUGIN_ACCOUNT_BINDING_SET: "plugin:account-binding-set",
   /** Cancel an in-flight plugin install by its job id (#11302). */
   PLUGIN_CANCEL_INSTALL: "plugin:cancel-install",
   /** Phase/entry progress for an in-flight install, targeted at the initiating window (#11302). */
@@ -1249,6 +1393,18 @@ export const CHANNELS = {
   // the Plugin Manager, never by a prompt.
   PLUGIN_CAPABILITY_GET_OS_NOTIFICATIONS: "plugin-capability:get-os-notifications",
   PLUGIN_CAPABILITY_SET_OS_NOTIFICATIONS: "plugin-capability:set-os-notifications",
+  // The per-plugin "Show notes when deleting a worktree" switch (#13805). On by
+  // default; off means the plugin isn't asked.
+  PLUGIN_CAPABILITY_GET_WORKTREE_DELETE_NOTES: "plugin-capability:get-worktree-delete-notes",
+  PLUGIN_CAPABILITY_SET_WORKTREE_DELETE_NOTES: "plugin-capability:set-worktree-delete-notes",
+  // The per-plugin "Show in attention views" switch (#13821): whether a
+  // plugin's panel activity reports appear as rows in Pilot, the dock pills and
+  // the sidebar filters. Set only from the Plugin Manager, never by a prompt.
+  PLUGIN_CAPABILITY_GET_PANEL_ATTENTION: "plugin-capability:get-panel-attention",
+  PLUGIN_CAPABILITY_SET_PANEL_ATTENTION: "plugin-capability:set-panel-attention",
+  // Every instance id with that switch on, so each view can join reports
+  // against it without one read per plugin.
+  PLUGIN_CAPABILITY_LIST_PANEL_ATTENTION: "plugin-capability:list-panel-attention",
 
   // Plugin managed-process channels (#9234) — child processes spawned by a
   // plugin via `host.process.spawn` (gated on `shell:exec`). `list` is the
@@ -1273,6 +1429,46 @@ export const CHANNELS = {
   AGENT_DEFAULTS_SET: "agent-defaults:set",
   AGENT_DEFAULTS_MIGRATE_LEGACY: "agent-defaults:migrate-legacy",
   AGENT_DEFAULTS_CHANGED: "agent-defaults:changed",
+
+  // This machine's toolbar agent pins (#14702)
+  AGENT_TOOLBAR_PINS_GET: "agent-toolbar-pins:get",
+  AGENT_TOOLBAR_PINS_SET: "agent-toolbar-pins:set",
+  AGENT_TOOLBAR_PINS_CHANGED: "agent-toolbar-pins:changed",
+
+  // Per-project presentation profile (#13771)
+  PROJECT_PRESENTATION_GET: "project-presentation:get",
+  PROJECT_PRESENTATION_SET_LEVEL: "project-presentation:set-level",
+  PROJECT_PRESENTATION_ANSWER_SUGGESTION: "project-presentation:answer-suggestion",
+  PROJECT_PRESENTATION_SET_TOOLBAR_ENABLED: "project-presentation:set-toolbar-enabled",
+  PROJECT_PRESENTATION_SET_PLUGIN_BUTTON_PROMOTED:
+    "project-presentation:set-plugin-button-promoted",
+  PROJECT_PRESENTATION_RESET_TOOLBAR: "project-presentation:reset-toolbar",
+  PROJECT_PRESENTATION_SET_LAUNCHER_GROUP_ORDER: "project-presentation:set-launcher-group-order",
+  PROJECT_PRESENTATION_SET_FEATURED_LAUNCH_ENTRY: "project-presentation:set-featured-launch-entry",
+  PROJECT_PRESENTATION_CHANGED: "project-presentation:changed",
+
+  // The sender project's own theme (#13833)
+  PROJECT_THEME_GET: "project-theme:get",
+  PROJECT_THEME_SET_THEME: "project-theme:set-theme",
+  PROJECT_THEME_ANSWER_SUGGESTION: "project-theme:answer-suggestion",
+  PROJECT_THEME_RESET_SUGGESTION: "project-theme:reset-suggestion",
+  PROJECT_THEME_CHANGED: "project-theme:changed",
+
+  // The sender project's custom worktree titles (#14022)
+  WORKTREE_TITLES_HYDRATE: "worktree-titles:hydrate",
+  WORKTREE_TITLES_SET: "worktree-titles:set",
+  WORKTREE_TITLES_PRUNE: "worktree-titles:prune",
+  WORKTREE_TITLES_CHANGED: "worktree-titles:changed",
+
+  // The sender project's review marks (#14584)
+  REVIEW_MARKS_HYDRATE: "review-marks:hydrate",
+  REVIEW_MARKS_MARK: "review-marks:mark",
+  REVIEW_MARKS_MARK_CAPTURED: "review-marks:mark-captured",
+  REVIEW_MARKS_CLEAR: "review-marks:clear",
+  REVIEW_MARKS_CAPTURE: "review-marks:capture",
+  REVIEW_MARKS_COMPARE: "review-marks:compare",
+  REVIEW_MARKS_FILE_SINCE: "review-marks:file-since",
+  REVIEW_MARKS_CHANGED: "review-marks:changed",
 
   // Per-service connectivity channels
   CONNECTIVITY_GET_STATE: "connectivity:get-state",
@@ -1381,6 +1577,7 @@ export const CHANNELS = {
   FILE_TRANSFER_UPLOAD_LOCAL_FILE: "file-transfer:upload-local-file",
   FILE_TRANSFER_UPLOAD_BYTES: "file-transfer:upload-bytes",
   FILE_TRANSFER_DOWNLOAD: "file-transfer:download",
+  FILE_TRANSFER_GRANT_CLICKED_FILE: "file-transfer:grant-clicked-file",
   FILE_TRANSFER_CANCEL: "file-transfer:cancel",
   FILE_TRANSFER_ANSWER_HOST_PICK: "file-transfer:answer-host-pick",
   FILE_TRANSFER_GET_PREVIEW_CAPABILITY: "file-transfer:get-preview-capability",
@@ -1414,17 +1611,26 @@ export const CHANNELS = {
   HOST_METRICS_LIST_FLEET_TARGETS: "host-metrics:list-fleet-targets",
   HOST_METRICS_SUBMIT_FLEET: "host-metrics:submit-fleet",
   HOST_METRICS_LIST_WORKTREES: "host-metrics:list-worktrees",
+  HOST_METRICS_LINK_ACTIVITY: "host-metrics:link-activity",
+  HOST_METRICS_PROCESS_INVENTORY: "host-metrics:process-inventory",
   HOST_METRICS_EVENT: "host-metrics:event",
 
   // Remote Hosts: canopyHost (shell).
   CANOPY_HOST_INVOKE: "canopy-host:invoke",
   CANOPY_HOST_RELEASE: "canopy-host:release",
+  CANOPY_HOST_LIST_ASSISTANTS: "canopy-host:list-assistants",
+  CANOPY_HOST_READ_ASSISTANT_WORK: "canopy-host:read-assistant-work",
+  CANOPY_HOST_WATCH_ASSISTANT: "canopy-host:watch-assistant",
+  CANOPY_HOST_RESOLVE_ASSISTANT: "canopy-host:resolve-assistant",
+  CANOPY_HOST_ASSISTANT_INVOKE: "canopy-host:assistant-invoke",
+  CANOPY_HOST_RELEASE_ASSISTANT: "canopy-host:release-assistant",
   CANOPY_HOST_EVENT: "canopy-host:event",
 
   // Remote Hosts: portForwards (shell).
   PORT_FORWARDS_LIST: "port-forwards:list",
   PORT_FORWARDS_FORWARD: "port-forwards:forward",
   PORT_FORWARDS_STOP: "port-forwards:stop",
+  PORT_FORWARDS_RELEASE: "port-forwards:release",
   PORT_FORWARDS_LIST_HOST_PORTS: "port-forwards:list-host-ports",
   PORT_FORWARDS_EVENT: "port-forwards:event",
 
@@ -1439,6 +1645,10 @@ export const CHANNELS = {
   SETTINGS_COPY_APPLY: "settings-copy:apply",
   SETTINGS_COPY_STATUS: "settings-copy:status",
   SETTINGS_COPY_UNDO: "settings-copy:undo",
+
+  // Remote Hosts: hostSettings (shell).
+  HOST_SETTINGS_READ: "host-settings:read",
+  HOST_SETTINGS_UPDATE: "host-settings:update",
 } as const;
 
 export type ChannelName = (typeof CHANNELS)[keyof typeof CHANNELS];

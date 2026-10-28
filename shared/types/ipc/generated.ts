@@ -110,6 +110,14 @@ export interface GeneratedIpcInvokeMap {
     args: [value: "never" | "always" | "on-focus"];
     result: import("../agentSettings.js").AgentSettings;
   };
+  "agent-toolbar-pins:get": {
+    args: [];
+    result: import("./agentToolbarPins.js").AgentToolbarPinsSnapshot;
+  };
+  "agent-toolbar-pins:set": {
+    args: [agentId: string, pinned: boolean];
+    result: import("./agentToolbarPins.js").AgentToolbarPinsSnapshot;
+  };
   "app:clear-quarantined-panel": {
     args: [panelId: string];
     result: { cleared: boolean };
@@ -130,19 +138,41 @@ export interface GeneratedIpcInvokeMap {
     args: [options: import("./agent.js").SaveArtifactOptions];
     result: import("./agent.js").SaveArtifactResult | null;
   };
+  "canopy-host:assistant-invoke": {
+    args: [
+      consumer: string,
+      channel:
+        | "canopy:resolve-assistant"
+        | "canopy:terminal-input"
+        | "canopy:terminal-send-key"
+        | "canopy:terminal-submit"
+        | "canopy:unwatch-terminal"
+        | "canopy:watch-assistant-terminal",
+      args: unknown[],
+    ];
+    result:
+      | void
+      | import("./canopy.js").CanopyTerminalView
+      | import("./canopy.js").AssistantOpenDestination
+      | null;
+  };
   "canopy-host:invoke": {
     args: [
       hostId: string,
       channel:
         | "canopy:answer"
         | "canopy:archive"
+        | "canopy:empty-trash"
         | "canopy:get-snapshot"
         | "canopy:mark-all-read"
         | "canopy:mark-seen"
         | "canopy:refresh"
+        | "canopy:remove-trashed"
         | "canopy:rename"
         | "canopy:reread"
         | "canopy:restore-reads"
+        | "canopy:restore-trashed"
+        | "canopy:retry-model"
         | "canopy:run-branch"
         | "canopy:search-screens"
         | "canopy:set-active"
@@ -151,6 +181,7 @@ export interface GeneratedIpcInvokeMap {
         | "canopy:set-scope"
         | "canopy:set-shown"
         | "canopy:terminal-input"
+        | "canopy:terminal-resize"
         | "canopy:terminal-send-key"
         | "canopy:terminal-submit"
         | "canopy:trash"
@@ -166,16 +197,55 @@ export interface GeneratedIpcInvokeMap {
       | number
       | void
       | string[]
+      | import("./canopy.js").CanopyTerminalView
       | import("./canopy.js").CanopyReadMark
       | import("./canopy.js").CanopySnapshot
       | import("./canopy.js").CanopyReadMark[]
-      | import("./canopy.js").CanopyTerminalView
       | import("./fleet.js").FleetSnapshot
+      | import("./canopy.js").CanopyRestoreOutcome
       | null;
+  };
+  "canopy-host:list-assistants": {
+    args: [hostId: string, projectId?: string | undefined];
+    result: import("./canopyHost.js").HostAssistantDirectory;
+  };
+  "canopy-host:read-assistant-work": {
+    args: [hostId: string];
+    result: import("../assistantWork.js").AssistantWorkReading;
   };
   "canopy-host:release": {
     args: [hostId: string];
     result: void;
+  };
+  "canopy-host:release-assistant": {
+    args: [consumer: string];
+    result: void;
+  };
+  "canopy-host:resolve-assistant": {
+    args: [
+      consumer: string,
+      subject: {
+        hostId: string;
+        scope: { kind: "project"; projectId: string } | { kind: "global" };
+        terminalId: string;
+        incarnation: number;
+        lane?: number | undefined;
+      },
+    ];
+    result: import("./canopy.js").AssistantOpenDestination | null;
+  };
+  "canopy-host:watch-assistant": {
+    args: [
+      consumer: string,
+      subject: {
+        hostId: string;
+        scope: { kind: "project"; projectId: string } | { kind: "global" };
+        terminalId: string;
+        incarnation: number;
+        lane?: number | undefined;
+      },
+    ];
+    result: import("./canopy.js").CanopyTerminalView;
   };
   "canopy:answer": {
     args: [runId: string, target: import("./canopy.js").CanopyTarget, label: string];
@@ -192,6 +262,18 @@ export interface GeneratedIpcInvokeMap {
   "canopy:capture-backdrop": {
     args: [];
     result: Uint8Array<ArrayBufferLike> | null;
+  };
+  "canopy:empty-trash": {
+    args: [targets: (import("./canopy.js").CanopyTrashTarget & { runId: string })[]];
+    result: number;
+  };
+  "canopy:get-model": {
+    args: [];
+    result: import("./canopy.js").CanopyModelInfo;
+  };
+  "canopy:get-size-holds": {
+    args: [];
+    result: string[];
   };
   "canopy:get-snapshot": {
     args: [];
@@ -213,8 +295,73 @@ export interface GeneratedIpcInvokeMap {
     args: [runId: string];
     result: void;
   };
+  "canopy:read-agent-directory": {
+    args: [options?: { projectId?: string | undefined } | undefined];
+    result: {
+      coverage: "ok" | "stale" | "unreachable" | "unsupported";
+      observedAt: number | null;
+      complete: boolean;
+      omitted: number;
+      entries: (
+        | {
+            state: "live";
+            role: "assistant" | "worker";
+            subject: {
+              hostId: string;
+              scope: { kind: "project"; projectId: string } | { kind: "global" };
+              terminalId: string;
+              incarnation: number;
+              lane?: number | undefined;
+            };
+            agentId: string | null;
+            agentState:
+              "completed" | "waiting" | "idle" | "working" | "directing" | "exited" | null;
+            waitingReason: "error" | "prompt" | "question" | "approval" | null;
+            since: number | null;
+            label: string | null;
+            attached: boolean | null;
+            handback: { observedAt: number } | null;
+            confirmations?:
+              | {
+                  waiting: { actionId: string; since: number; expiresAt: number }[];
+                  omitted: number;
+                }
+              | undefined;
+            notices?:
+              | {
+                  pending: number;
+                  ready: number;
+                  delivery: "failed" | "blocked" | "idle" | "scheduled" | "held" | "outstanding";
+                }
+              | null
+              | undefined;
+          }
+        | {
+            state: "resumable";
+            role: "assistant";
+            hostId: string;
+            scope: { kind: "project"; projectId: string };
+            lane: number;
+            agentId: string | null;
+            capturedAt: number;
+          }
+      )[];
+    };
+  };
+  "canopy:read-assistant-work": {
+    args: [];
+    result: import("../assistantWork.js").AssistantWorkReading;
+  };
   "canopy:refresh": {
     args: [];
+    result: void;
+  };
+  "canopy:remove-models": {
+    args: [];
+    result: import("./canopy.js").CanopySnapshot;
+  };
+  "canopy:remove-trashed": {
+    args: [runId: string, target: import("./canopy.js").CanopyTrashTarget];
     result: void;
   };
   "canopy:rename": {
@@ -225,9 +372,37 @@ export interface GeneratedIpcInvokeMap {
     args: [runId: string, target: import("./canopy.js").CanopyTarget];
     result: void;
   };
+  "canopy:resolve-assistant": {
+    args: [
+      subject: {
+        hostId: string;
+        scope: { kind: "project"; projectId: string } | { kind: "global" };
+        terminalId: string;
+        incarnation: number;
+        lane?: number | undefined;
+      },
+    ];
+    result: import("./canopy.js").AssistantOpenDestination | null;
+  };
   "canopy:restore-reads": {
     args: [restores: import("./canopy.js").CanopyReadRestore[]];
     result: void;
+  };
+  "canopy:restore-trashed": {
+    args: [runId: string, target: import("./canopy.js").CanopyTrashTarget];
+    result: import("./canopy.js").CanopyRestoreOutcome;
+  };
+  "canopy:resume-settled": {
+    args: [requestId: string, answer: import("./canopy.js").CanopyResumeAnswer];
+    result: void;
+  };
+  "canopy:resume-started": {
+    args: [requestId: string];
+    result: number | null;
+  };
+  "canopy:retry-model": {
+    args: [];
+    result: import("./canopy.js").CanopySnapshot;
   };
   "canopy:run-branch": {
     args: [runId: string, target: import("./canopy.js").CanopyTarget];
@@ -242,7 +417,11 @@ export interface GeneratedIpcInvokeMap {
     result: import("./canopy.js").CanopySnapshot;
   };
   "canopy:set-mode": {
-    args: [mode: import("./canopy.js").CanopyMode, expectRevision?: number | undefined];
+    args: [
+      mode: import("./canopy.js").CanopyMode,
+      expectRevision?: number | undefined,
+      expectHostEpoch?: string | undefined,
+    ];
     result: import("./canopy.js").CanopySnapshot;
   };
   "canopy:set-read": {
@@ -291,8 +470,21 @@ export interface GeneratedIpcInvokeMap {
     result: void;
   };
   "canopy:unwatch-terminal": {
-    args: [];
+    args: [watchId?: number | undefined];
     result: void;
+  };
+  "canopy:watch-assistant-terminal": {
+    args: [
+      subject: {
+        hostId: string;
+        scope: { kind: "project"; projectId: string } | { kind: "global" };
+        terminalId: string;
+        incarnation: number;
+        lane?: number | undefined;
+      },
+      inputStamp?: import("./help.js").GlobalAssistantInputStamp | undefined,
+    ];
+    result: import("./canopy.js").CanopyTerminalView;
   };
   "canopy:watch-terminal": {
     args: [runId: string, target: import("./canopy.js").CanopyTarget];
@@ -609,6 +801,646 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("../editor.js").EditorSetConfigPayload];
     result: void;
   };
+  "element-picker:bind": {
+    args: [payload: { panelId: string; mode?: "browse" | "select" | undefined }];
+    result: import("./sitePreview.js").SitePreviewBindingState;
+  };
+  "element-picker:describe-project": {
+    args: [payload: { workspaceId: string; url: string }];
+    result:
+      | {
+          status: "described";
+          context: {
+            adapter: "sveltekit";
+            appPath: string;
+            route: {
+              routeId: string;
+              files: {
+                role: "data" | "page" | "layout";
+                file: { workspaceId: string; path: string };
+              }[];
+            } | null;
+            routes: {
+              directory: string;
+              source: "default" | "svelte.config" | "vite.config" | "unresolved";
+              basePath: string | null;
+              complete: boolean;
+            };
+            toolchain: {
+              versions: {
+                svelte: string | null;
+                kit: string | null;
+                tailwind: string | null;
+                vite: string | null;
+              };
+              verdict: "tested" | "untested";
+              reasons: string[];
+              missingInstall: ("svelte" | "kit" | "tailwind" | "vite")[];
+            };
+            diagnostics: {
+              code: "unresolved-layout-reset" | "duplicate-route-id" | "traversal-truncated";
+              message: string;
+              files: string[];
+            }[];
+          };
+        }
+      | { status: "none" }
+      | {
+          status: "unavailable";
+          reason: "failed" | "cancelled" | "busy" | "budget-exhausted" | "unknown-workspace";
+        };
+  };
+  "element-picker:reselect": {
+    args: [
+      payload: {
+        sessionId: string;
+        elementId?: string | undefined;
+        framework?:
+          "svelte" | "react" | "vue" | "angular" | "astro" | "preact" | "solid" | undefined;
+        locator?:
+          | {
+              loc: { file: string; line: number; column: number };
+              index: number;
+              component?: { file: string; line: number; column: number } | undefined;
+            }
+          | undefined;
+        reveal?: boolean | undefined;
+      },
+    ];
+    result: boolean;
+  };
+  "element-picker:resolve": {
+    args: [
+      payload: {
+        requestId: string;
+        sessionId: string;
+        documentEpoch: number;
+        workspaceId: string;
+        observations: {
+          elementId: string;
+          tagName: string;
+          label: string;
+          bounds: { x: number; y: number; width: number; height: number }[];
+          detections: {
+            framework: string;
+            signals: {
+              via: "global" | "expando" | "attribute" | "document-sample";
+              name: string;
+            }[];
+          }[];
+          componentChain: {
+            nearestId: string | null;
+            components: {
+              componentId: string;
+              framework: string;
+              name: {
+                value: string;
+                extraction:
+                  | { kind: "runtime-field"; field: string }
+                  | { kind: "generated-stack-frame"; field: string; frameIndex: number }
+                  | { kind: "attribute"; attribute: string };
+              } | null;
+              environment: "unknown" | "client" | "server";
+              rootElementIds: string[];
+              rootsComplete: boolean;
+              sourceCandidates: (
+                | {
+                    location: {
+                      lineBase: 0 | 1;
+                      columnBase: 0 | 1;
+                      columnUnit: "utf16";
+                      line: number;
+                      column: number;
+                      end?: { line: number; column: number } | undefined;
+                    };
+                    candidateId: string;
+                    framework: string;
+                    extraction:
+                      | { kind: "runtime-field"; field: string }
+                      | { kind: "generated-stack-frame"; field: string; frameIndex: number }
+                      | { kind: "attribute"; attribute: string };
+                    file: string;
+                    kind: "element-creation";
+                  }
+                | {
+                    location: {
+                      lineBase: 0 | 1;
+                      columnBase: 0 | 1;
+                      columnUnit: "utf16";
+                      line: number;
+                      column: number;
+                      end?: { line: number; column: number } | undefined;
+                    };
+                    candidateId: string;
+                    framework: string;
+                    extraction:
+                      | { kind: "runtime-field"; field: string }
+                      | { kind: "generated-stack-frame"; field: string; frameIndex: number }
+                      | { kind: "attribute"; attribute: string };
+                    file: string;
+                    kind: "component-invocation";
+                  }
+                | {
+                    location: {
+                      lineBase: 0 | 1;
+                      columnBase: 0 | 1;
+                      columnUnit: "utf16";
+                      line: number;
+                      column: number;
+                      end?: { line: number; column: number } | undefined;
+                    };
+                    candidateId: string;
+                    framework: string;
+                    extraction:
+                      | { kind: "runtime-field"; field: string }
+                      | { kind: "generated-stack-frame"; field: string; frameIndex: number }
+                      | { kind: "attribute"; attribute: string };
+                    file: string;
+                    kind: "component-definition";
+                  }
+                | {
+                    location: {
+                      lineBase: 0 | 1;
+                      columnBase: 0 | 1;
+                      columnUnit: "utf16";
+                      line: number;
+                      column: number;
+                      end?: { line: number; column: number } | undefined;
+                    } | null;
+                    candidateId: string;
+                    framework: string;
+                    extraction:
+                      | { kind: "runtime-field"; field: string }
+                      | { kind: "generated-stack-frame"; field: string; frameIndex: number }
+                      | { kind: "attribute"; attribute: string };
+                    file: string;
+                    kind: "template-location";
+                  }
+                | {
+                    candidateId: string;
+                    framework: string;
+                    extraction:
+                      | { kind: "runtime-field"; field: string }
+                      | { kind: "generated-stack-frame"; field: string; frameIndex: number }
+                      | { kind: "attribute"; attribute: string };
+                    file: string;
+                    kind: "file-hint";
+                  }
+              )[];
+              renderParentId?: string | null | undefined;
+              ownerId?: string | null | undefined;
+            }[];
+            truncated: boolean;
+          };
+          sourceCandidates: (
+            | {
+                location: {
+                  lineBase: 0 | 1;
+                  columnBase: 0 | 1;
+                  columnUnit: "utf16";
+                  line: number;
+                  column: number;
+                  end?: { line: number; column: number } | undefined;
+                };
+                candidateId: string;
+                framework: string;
+                extraction:
+                  | { kind: "runtime-field"; field: string }
+                  | { kind: "generated-stack-frame"; field: string; frameIndex: number }
+                  | { kind: "attribute"; attribute: string };
+                file: string;
+                kind: "element-creation";
+              }
+            | {
+                location: {
+                  lineBase: 0 | 1;
+                  columnBase: 0 | 1;
+                  columnUnit: "utf16";
+                  line: number;
+                  column: number;
+                  end?: { line: number; column: number } | undefined;
+                };
+                candidateId: string;
+                framework: string;
+                extraction:
+                  | { kind: "runtime-field"; field: string }
+                  | { kind: "generated-stack-frame"; field: string; frameIndex: number }
+                  | { kind: "attribute"; attribute: string };
+                file: string;
+                kind: "component-invocation";
+              }
+            | {
+                location: {
+                  lineBase: 0 | 1;
+                  columnBase: 0 | 1;
+                  columnUnit: "utf16";
+                  line: number;
+                  column: number;
+                  end?: { line: number; column: number } | undefined;
+                };
+                candidateId: string;
+                framework: string;
+                extraction:
+                  | { kind: "runtime-field"; field: string }
+                  | { kind: "generated-stack-frame"; field: string; frameIndex: number }
+                  | { kind: "attribute"; attribute: string };
+                file: string;
+                kind: "component-definition";
+              }
+            | {
+                location: {
+                  lineBase: 0 | 1;
+                  columnBase: 0 | 1;
+                  columnUnit: "utf16";
+                  line: number;
+                  column: number;
+                  end?: { line: number; column: number } | undefined;
+                } | null;
+                candidateId: string;
+                framework: string;
+                extraction:
+                  | { kind: "runtime-field"; field: string }
+                  | { kind: "generated-stack-frame"; field: string; frameIndex: number }
+                  | { kind: "attribute"; attribute: string };
+                file: string;
+                kind: "template-location";
+              }
+            | {
+                candidateId: string;
+                framework: string;
+                extraction:
+                  | { kind: "runtime-field"; field: string }
+                  | { kind: "generated-stack-frame"; field: string; frameIndex: number }
+                  | { kind: "attribute"; attribute: string };
+                file: string;
+                kind: "file-hint";
+              }
+          )[];
+          capabilities: {
+            names:
+              | { state: "available" }
+              | { state: "unknown" }
+              | {
+                  state: "unavailable";
+                  reason: "not-exposed" | "production-build" | "no-framework" | "unmapped";
+                };
+            chain:
+              | { state: "available" }
+              | { state: "unknown" }
+              | {
+                  state: "unavailable";
+                  reason: "not-exposed" | "production-build" | "no-framework" | "unmapped";
+                };
+            componentSelection:
+              | { state: "available" }
+              | { state: "unknown" }
+              | {
+                  state: "unavailable";
+                  reason: "not-exposed" | "production-build" | "no-framework" | "unmapped";
+                };
+            file:
+              | { state: "available" }
+              | { state: "unknown" }
+              | {
+                  state: "unavailable";
+                  reason: "not-exposed" | "production-build" | "no-framework" | "unmapped";
+                };
+            line:
+              | { state: "available" }
+              | { state: "unknown" }
+              | {
+                  state: "unavailable";
+                  reason: "not-exposed" | "production-build" | "no-framework" | "unmapped";
+                };
+            exactRange:
+              | { state: "available" }
+              | { state: "unknown" }
+              | {
+                  state: "unavailable";
+                  reason: "not-exposed" | "production-build" | "no-framework" | "unmapped";
+                };
+          };
+          frameworkEvidence: (
+            | {
+                kind: "svelte";
+                ancestry: {
+                  type: string;
+                  file: string;
+                  line: number;
+                  column: number;
+                  componentTag?: string | undefined;
+                }[];
+                sameLocCount: number;
+                unmapped: boolean;
+                sameLocCountPartial?: true | undefined;
+                locIndex?: number | undefined;
+                structure?: { file: string; path: { tag: string; index: number }[] } | undefined;
+              }
+            | {
+                kind: "generic";
+                framework: string;
+                fields: { name: string; value: string | number | boolean | null }[];
+              }
+          )[];
+          phase: "selection";
+          context?:
+            | {
+                selector: string;
+                markup: string;
+                styles: { property: string; value: string }[];
+                markupTruncated?: true | undefined;
+                shadowHosts?: { elementId: string; tagName: string; label: string }[] | undefined;
+                shadowHostsTruncated?: true | undefined;
+              }
+            | undefined;
+        }[];
+        knownRevisions: { file: { workspaceId: string; path: string }; revision: string }[];
+        budget: {
+          maxFiles: number;
+          maxFileBytes: number;
+          maxNetworkRequests: number;
+          maxNetworkBytes: number;
+          deadlineMs: number;
+        };
+      },
+    ];
+    result: {
+      requestId: string;
+      documentEpoch: number;
+      outcomes: {
+        elementId: string;
+        results: (
+          | {
+              state: "observed";
+              target: {
+                file: { workspaceId: string; path: string };
+                location: {
+                  lineBase: 0 | 1;
+                  columnBase: 0 | 1;
+                  columnUnit: "utf16";
+                  line: number;
+                  column: number;
+                  end?: { line: number; column: number } | undefined;
+                } | null;
+              };
+              fileRevision: string | null;
+              candidateId: string;
+              claim:
+                | "element-creation"
+                | "component-invocation"
+                | "component-definition"
+                | "template-location"
+                | "file-hint";
+            }
+          | {
+              state: "mapped";
+              target: {
+                file: { workspaceId: string; path: string };
+                location: {
+                  lineBase: 0 | 1;
+                  columnBase: 0 | 1;
+                  columnUnit: "utf16";
+                  line: number;
+                  column: number;
+                  end?: { line: number; column: number } | undefined;
+                } | null;
+              };
+              fileRevision: string | null;
+              sourceMap: {
+                mapUrl: string | null;
+                mapRevision: string;
+                sourceCheck: "unchecked" | "matches" | "differs";
+              };
+              candidateId: string;
+              claim:
+                | "element-creation"
+                | "component-invocation"
+                | "component-definition"
+                | "template-location"
+                | "file-hint";
+            }
+          | {
+              state: "verified";
+              target: {
+                file: { workspaceId: string; path: string };
+                location: {
+                  lineBase: 0 | 1;
+                  columnBase: 0 | 1;
+                  columnUnit: "utf16";
+                  line: number;
+                  column: number;
+                  end?: { line: number; column: number } | undefined;
+                } | null;
+              };
+              fileRevision: string;
+              candidateId: string;
+              claim:
+                | "element-creation"
+                | "component-invocation"
+                | "component-definition"
+                | "template-location"
+                | "file-hint";
+              sourceMap?:
+                | {
+                    mapUrl: string | null;
+                    mapRevision: string;
+                    sourceCheck: "unchecked" | "matches" | "differs";
+                  }
+                | undefined;
+              placedBy?: "structure" | undefined;
+              definition?:
+                | {
+                    file: { workspaceId: string; path: string };
+                    fileRevision: string;
+                    specifier: string;
+                  }
+                | undefined;
+            }
+          | {
+              alternatives: (
+                | {
+                    state: "observed";
+                    target: {
+                      file: { workspaceId: string; path: string };
+                      location: {
+                        lineBase: 0 | 1;
+                        columnBase: 0 | 1;
+                        columnUnit: "utf16";
+                        line: number;
+                        column: number;
+                        end?: { line: number; column: number } | undefined;
+                      } | null;
+                    };
+                    fileRevision: string | null;
+                  }
+                | {
+                    state: "mapped";
+                    target: {
+                      file: { workspaceId: string; path: string };
+                      location: {
+                        lineBase: 0 | 1;
+                        columnBase: 0 | 1;
+                        columnUnit: "utf16";
+                        line: number;
+                        column: number;
+                        end?: { line: number; column: number } | undefined;
+                      } | null;
+                    };
+                    fileRevision: string | null;
+                    sourceMap: {
+                      mapUrl: string | null;
+                      mapRevision: string;
+                      sourceCheck: "unchecked" | "matches" | "differs";
+                    };
+                  }
+                | {
+                    state: "verified";
+                    target: {
+                      file: { workspaceId: string; path: string };
+                      location: {
+                        lineBase: 0 | 1;
+                        columnBase: 0 | 1;
+                        columnUnit: "utf16";
+                        line: number;
+                        column: number;
+                        end?: { line: number; column: number } | undefined;
+                      } | null;
+                    };
+                    fileRevision: string;
+                    sourceMap?:
+                      | {
+                          mapUrl: string | null;
+                          mapRevision: string;
+                          sourceCheck: "unchecked" | "matches" | "differs";
+                        }
+                      | undefined;
+                    placedBy?: "structure" | undefined;
+                  }
+              )[];
+              candidateId: string;
+              claim:
+                | "element-creation"
+                | "component-invocation"
+                | "component-definition"
+                | "template-location"
+                | "file-hint";
+              state: "ambiguous";
+            }
+          | {
+              held:
+                | {
+                    state: "observed";
+                    target: {
+                      file: { workspaceId: string; path: string };
+                      location: {
+                        lineBase: 0 | 1;
+                        columnBase: 0 | 1;
+                        columnUnit: "utf16";
+                        line: number;
+                        column: number;
+                        end?: { line: number; column: number } | undefined;
+                      } | null;
+                    };
+                    fileRevision: string | null;
+                  }
+                | {
+                    state: "mapped";
+                    target: {
+                      file: { workspaceId: string; path: string };
+                      location: {
+                        lineBase: 0 | 1;
+                        columnBase: 0 | 1;
+                        columnUnit: "utf16";
+                        line: number;
+                        column: number;
+                        end?: { line: number; column: number } | undefined;
+                      } | null;
+                    };
+                    fileRevision: string | null;
+                    sourceMap: {
+                      mapUrl: string | null;
+                      mapRevision: string;
+                      sourceCheck: "unchecked" | "matches" | "differs";
+                    };
+                  }
+                | {
+                    state: "verified";
+                    target: {
+                      file: { workspaceId: string; path: string };
+                      location: {
+                        lineBase: 0 | 1;
+                        columnBase: 0 | 1;
+                        columnUnit: "utf16";
+                        line: number;
+                        column: number;
+                        end?: { line: number; column: number } | undefined;
+                      } | null;
+                    };
+                    fileRevision: string;
+                    sourceMap?:
+                      | {
+                          mapUrl: string | null;
+                          mapRevision: string;
+                          sourceCheck: "unchecked" | "matches" | "differs";
+                        }
+                      | undefined;
+                    placedBy?: "structure" | undefined;
+                  };
+              currentFileRevision: string | null;
+              reason: "file-changed" | "file-missing" | "map-changed" | "document-changed";
+              candidateId: string;
+              claim:
+                | "element-creation"
+                | "component-invocation"
+                | "component-definition"
+                | "template-location"
+                | "file-hint";
+              state: "stale";
+            }
+          | {
+              reason:
+                | "cancelled"
+                | "unsupported"
+                | "mismatch"
+                | "file-missing"
+                | "outside-workspace"
+                | "map-missing"
+                | "budget-exhausted";
+              candidateId: string;
+              claim:
+                | "element-creation"
+                | "component-invocation"
+                | "component-definition"
+                | "template-location"
+                | "file-hint";
+              state: "unavailable";
+              read?:
+                { file: { workspaceId: string; path: string }; fileRevision: string } | undefined;
+            }
+        )[];
+      }[];
+    };
+  };
+  "element-picker:source-revisions": {
+    args: [payload: { workspaceId: string; paths: string[] }];
+    result: import("./elementPicker.js").ElementPickerSourceRevisionsResult;
+  };
+  "element-picker:workspace-close": {
+    args: [payload: { workspaceId: string }];
+    result: { closed: boolean };
+  };
+  "element-picker:workspace-open": {
+    args: [
+      payload: {
+        panelId: string;
+        worktreeId: string;
+        serverCwd?: string | undefined;
+        appPath?: string | undefined;
+        previewOrigin?: string | undefined;
+      },
+    ];
+    result: import("./elementPicker.js").ElementPickerWorkspaceOpenResult;
+  };
   "event-inspector:clear": {
     args: [];
     result: void;
@@ -629,6 +1461,22 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("./fileBrowser.js").FileBrowserStatPathsPayload];
     result: import("./fileBrowser.js").FileBrowserStatPathsResult;
   };
+  "file-document:read": {
+    args: [payload: { rootPath: string; filePath: string; maxBytes: number }];
+    result: import("../plugin/fileEditors.js").PluginFileDocumentReadResult;
+  };
+  "file-document:save": {
+    args: [
+      payload: {
+        rootPath: string;
+        filePath: string;
+        maxBytes: number;
+        text: string;
+        expectedRevision: string;
+      },
+    ];
+    result: import("../plugin/fileEditors.js").PluginFileDocumentSaveResult;
+  };
   "file-transfer:answer-host-pick": {
     args: [payload: import("./fileTransfer.js").AnswerHostPickPayload];
     result: void;
@@ -648,6 +1496,10 @@ export interface GeneratedIpcInvokeMap {
   "file-transfer:get-upload-preferences": {
     args: [];
     result: import("./fileTransfer.js").UploadPreferences;
+  };
+  "file-transfer:grant-clicked-file": {
+    args: [payload: import("./fileTransfer.js").GrantClickedFilePayload];
+    result: void;
   };
   "file-transfer:set-upload-preferences": {
     args: [patch: Partial<import("./fileTransfer.js").UploadPreferences>];
@@ -798,6 +1650,10 @@ export interface GeneratedIpcInvokeMap {
     ];
     result: import("../forge.js").PR;
   };
+  "forge:disable-auto-merge": {
+    args: [payload: { cwd: string; prNumber: number }];
+    result: import("../forge.js").DisableAutoMergeResult;
+  };
   "forge:dismiss-review": {
     args: [payload: { cwd: string; prNumber: number; reviewId: number; message: string }];
     result: import("../forge.js").PullRequestReview;
@@ -819,6 +1675,18 @@ export interface GeneratedIpcInvokeMap {
     ];
     result: import("../forge.js").PR;
   };
+  "forge:enable-auto-merge": {
+    args: [
+      payload: {
+        cwd: string;
+        prNumber: number;
+        mergeMethod?: "merge" | "squash" | "rebase" | undefined;
+        expectedHeadSha: string;
+        expectedBaseRef?: string | undefined;
+      },
+    ];
+    result: import("../forge.js").EnableAutoMergeResult;
+  };
   "forge:get-checks": {
     args: [payload: { cwd: string; prNumber: number }];
     result: { checks: import("./forge.js").ForgeCheckRun[] } | null;
@@ -832,7 +1700,7 @@ export interface GeneratedIpcInvokeMap {
     result: import("./forge.js").ForgeFirstPageCachePayload | null;
   };
   "forge:get-issue-tooltip": {
-    args: [payload: { cwd: string; issueNumber: number }];
+    args: [payload: { cwd: string; issueNumber: number } & import("./forge.js").IssueLinkTarget];
     result: import("../forge.js").IssueTooltipData | null;
   };
   "forge:get-issues-by-numbers": {
@@ -858,6 +1726,10 @@ export interface GeneratedIpcInvokeMap {
   "forge:get-rate-limit-details": {
     args: [payload: { cwd: string }];
     result: import("../forge.js").RateLimitDetails | null;
+  };
+  "forge:get-references-by-numbers": {
+    args: [payload: { cwd: string; numbers: number[] }];
+    result: import("../forge.js").ForgeReferenceLookupResult[] | null;
   };
   "forge:get-repo-stats": {
     args: [payload: { cwd: string; bypassCache?: boolean | undefined }];
@@ -893,6 +1765,8 @@ export interface GeneratedIpcInvokeMap {
         mergeMethod?: "merge" | "squash" | "rebase" | undefined;
         commitTitle?: string | undefined;
         commitMessage?: string | undefined;
+        expectedHeadSha?: string | undefined;
+        expectedBaseRef?: string | undefined;
       },
     ];
     result: import("../forge.js").MergePRResult;
@@ -1030,7 +1904,7 @@ export interface GeneratedIpcInvokeMap {
         updates: Partial<
           Omit<
             import("../project.js").TerminalRecipe,
-            "id" | "worktreeId" | "projectId" | "createdAt"
+            "id" | "projectId" | "worktreeId" | "createdAt"
           >
         >;
       },
@@ -1064,6 +1938,42 @@ export interface GeneratedIpcInvokeMap {
   "help:get-pinned-action-context": {
     args: [sessionId: string];
     result: import("./help.js").PinnedActionContextSnapshot | null;
+  };
+  "help:get-starter-prompts": {
+    args: [projectId: string];
+    result: string[];
+  };
+  "help:global-assistant-attach": {
+    args: [];
+    result: import("./help.js").GlobalAssistantAttachment;
+  };
+  "help:global-assistant-claim-input": {
+    args: [attachmentId: string];
+    result: import("./help.js").GlobalAssistantView;
+  };
+  "help:global-assistant-detach": {
+    args: [attachmentId: string];
+    result: void;
+  };
+  "help:global-assistant-discard": {
+    args: [expectedGeneration?: number | undefined];
+    result: import("./help.js").GlobalAssistantView;
+  };
+  "help:global-assistant-ensure": {
+    args: [];
+    result: import("./help.js").GlobalAssistantView;
+  };
+  "help:global-assistant-release-input": {
+    args: [attachmentId: string];
+    result: import("./help.js").GlobalAssistantView;
+  };
+  "help:global-assistant-restart": {
+    args: [expectedGeneration?: number | undefined];
+    result: import("./help.js").GlobalAssistantView;
+  };
+  "help:global-assistant-state": {
+    args: [];
+    result: import("./help.js").GlobalAssistantView;
   };
   "help:list-past-sessions": {
     args: [projectId: string];
@@ -1131,14 +2041,6 @@ export interface GeneratedIpcInvokeMap {
     args: [terminalId: string];
     result: void;
   };
-  "hibernation:get-config": {
-    args: [];
-    result: import("./hibernation.js").HibernationConfig;
-  };
-  "hibernation:update-config": {
-    args: [config: Partial<import("./hibernation.js").HibernationConfig>];
-    result: import("./hibernation.js").HibernationConfig;
-  };
   "host-files:get-picker-roots": {
     args: [];
     result: import("./hostFiles.js").HostPickerRoots;
@@ -1151,6 +2053,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("./hostMetrics.js").HostMetricsSnapshot[];
   };
+  "host-metrics:link-activity": {
+    args: [payload: { hostId: string }];
+    result: import("./hostMetrics.js").HostLinkActivityResult;
+  };
   "host-metrics:list-fleet-targets": {
     args: [payload: { hostId: string }];
     result: import("./hostMetrics.js").HostFleetTargetList;
@@ -1158,6 +2064,10 @@ export interface GeneratedIpcInvokeMap {
   "host-metrics:list-worktrees": {
     args: [payload: { hostId: string }];
     result: import("./hostMetrics.js").HostWorktreeEntry[];
+  };
+  "host-metrics:process-inventory": {
+    args: [payload: { hostId: string }];
+    result: import("./hostMetrics.js").HostProcessInventoryResult;
   };
   "host-metrics:submit-fleet": {
     args: [payload: import("./hostMetrics.js").HostFleetSubmitPayload];
@@ -1174,6 +2084,14 @@ export interface GeneratedIpcInvokeMap {
   "host-mode:set-enabled": {
     args: [payload: import("./hostMode.js").SetHostModePayload];
     result: import("./hostMode.js").HostModeStatus;
+  };
+  "host-settings:read": {
+    args: [payload: import("../hostSettings.js").HostSettingsReadPayload];
+    result: import("../hostSettings.js").HostSettingsSnapshot;
+  };
+  "host-settings:update": {
+    args: [payload: import("../hostSettings.js").HostSettingsUpdatePayload];
+    result: import("../hostSettings.js").HostSettingsUpdateResult;
   };
   "host-switch:cancel": {
     args: [payload: import("./hostSwitch.js").HostSwitchOpPayload];
@@ -1225,7 +2143,7 @@ export interface GeneratedIpcInvokeMap {
   };
   "idle-terminal:close-project": {
     args: [projectId: string];
-    result: void;
+    result: import("./project.js").PluginWorkStopped | null;
   };
   "idle-terminal:dismiss-project": {
     args: [projectId: string];
@@ -1262,7 +2180,11 @@ export interface GeneratedIpcInvokeMap {
     result: void;
   };
   "mcp-server:adopt-terminal": {
-    args: [payload: { terminalId: string; orchestratorPaneId: string }];
+    args: [
+      payload:
+        | { terminalId: string; orchestratorPaneId: string }
+        | { terminalId: string; recipient: "global-assistant" },
+    ];
     result: import("./mcpServer.js").TerminalAdoptionResult;
   };
   "mcp-server:clear-audit-log": {
@@ -1511,11 +2433,19 @@ export interface GeneratedIpcInvokeMap {
   };
   "plugin-agent-mcp:set-plugin-access": {
     args: [
-      payload: {
-        pluginInstanceId: string;
-        access: "off" | "read-only" | "read-write" | null;
-        scope: "project" | "all-projects";
-      },
+      payload:
+        | {
+            pluginInstanceId: string;
+            access: "off" | "read-only" | "read-write" | null;
+            scope: "project" | "all-projects";
+            groups?: string[] | undefined;
+          }
+        | {
+            pluginInstanceId: string;
+            access: "off" | "read-only" | "read-write";
+            scope: "assistant";
+            groups?: string[] | undefined;
+          },
     ];
     result: import("./pluginAgentMcp.js").ProjectAgentToolsSnapshot;
   };
@@ -1527,9 +2457,21 @@ export interface GeneratedIpcInvokeMap {
     args: [input: import("../pluginCapabilityConsent.js").PluginOsNotificationsQuery];
     result: boolean;
   };
+  "plugin-capability:get-panel-attention": {
+    args: [input: import("../pluginCapabilityConsent.js").PluginPanelAttentionQuery];
+    result: boolean;
+  };
   "plugin-capability:get-project-targeting": {
     args: [input: import("../pluginCapabilityConsent.js").PluginProjectTargetingQuery];
     result: boolean;
+  };
+  "plugin-capability:get-worktree-delete-notes": {
+    args: [input: import("../pluginCapabilityConsent.js").PluginWorktreeDeleteNotesQuery];
+    result: boolean;
+  };
+  "plugin-capability:list-panel-attention": {
+    args: [];
+    result: string[];
   };
   "plugin-capability:resolve-consent": {
     args: [input: import("../pluginCapabilityConsent.js").PluginCapabilityResolveConsentInput];
@@ -1539,8 +2481,16 @@ export interface GeneratedIpcInvokeMap {
     args: [input: import("../pluginCapabilityConsent.js").PluginOsNotificationsUpdate];
     result: boolean;
   };
+  "plugin-capability:set-panel-attention": {
+    args: [input: import("../pluginCapabilityConsent.js").PluginPanelAttentionUpdate];
+    result: boolean;
+  };
   "plugin-capability:set-project-targeting": {
     args: [input: import("../pluginCapabilityConsent.js").PluginProjectTargetingUpdate];
+    result: boolean;
+  };
+  "plugin-capability:set-worktree-delete-notes": {
+    args: [input: import("../pluginCapabilityConsent.js").PluginWorktreeDeleteNotesUpdate];
     result: boolean;
   };
   "plugin-mcp:call-tool": {
@@ -1599,6 +2549,42 @@ export interface GeneratedIpcInvokeMap {
     args: [pluginId?: string | undefined];
     result: import("./pluginProcess.js").PluginProcessInfo[];
   };
+  "plugin:account-binding-get": {
+    args: [pluginId: string];
+    result: import("../plugin.js").PluginAccountBindingUiStatus;
+  };
+  "plugin:account-binding-set": {
+    args: [pluginId: string, binding: import("../plugin.js").PluginAccountBinding | null];
+    result: import("../plugin.js").PluginAccountBindingUiStatus;
+  };
+  "plugin:account-cancel-connect": {
+    args: [pluginId: string, connectionId?: string | undefined];
+    result: void;
+  };
+  "plugin:account-connect": {
+    args: [pluginId: string, connectionId?: string | undefined, signInId?: string | undefined];
+    result: import("../plugin.js").PluginAccountConnectResult;
+  };
+  "plugin:account-disconnect": {
+    args: [pluginId: string, connectionId?: string | undefined];
+    result: void;
+  };
+  "plugin:account-list": {
+    args: [pluginId: string];
+    result: import("../plugin.js").PluginAccountUiStatus[];
+  };
+  "plugin:account-set-token": {
+    args: [pluginId: string, token: string, connectionId?: string | undefined];
+    result: import("../plugin.js").PluginAccountUiStatus;
+  };
+  "plugin:account-status": {
+    args: [pluginId: string, connectionId?: string | undefined];
+    result: import("../plugin.js").PluginAccountUiStatus | null;
+  };
+  "plugin:account-test": {
+    args: [pluginId: string, connectionId?: string | undefined];
+    result: import("../plugin.js").PluginAccountVerification;
+  };
   "plugin:actions-get": {
     args: [];
     result: import("../plugin.js").PluginActionDescriptor[];
@@ -1618,6 +2604,18 @@ export interface GeneratedIpcInvokeMap {
   "plugin:agents-get": {
     args: [];
     result: Record<string, import("../../config/agentRegistry.js").AgentConfig>;
+  };
+  "plugin:artifact-source": {
+    args: [pluginId: string, artifactId: string];
+    result: import("../pluginArtifacts.js").PluginArtifactSource;
+  };
+  "plugin:artifact-source-release": {
+    args: [url: string];
+    result: boolean;
+  };
+  "plugin:artifacts-import": {
+    args: [pluginId: string, paths: string[]];
+    result: import("../pluginArtifacts.js").PluginArtifact[];
   };
   "plugin:backup-databases": {
     args: [pluginId: string];
@@ -1655,6 +2653,22 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: { pluginId: string; item: import("../plugin.js").ContextMenuContribution }[];
   };
+  "plugin:context-provider-search": {
+    args: [prefix: string, query: string];
+    result: import("../pluginContextProvider.js").ContextProviderItem[];
+  };
+  "plugin:context-providers-enabled-set": {
+    args: [pluginId: string, enabled: boolean];
+    result: import("../pluginContextProvider.js").ContextProviderEntry[];
+  };
+  "plugin:context-providers-get": {
+    args: [];
+    result: import("../pluginContextProvider.js").ContextProviderEntry[];
+  };
+  "plugin:context-references-resolve": {
+    args: [references: import("../pluginContextProvider.js").ContextReference[]];
+    result: import("../pluginContextProvider.js").ContextReferenceResolution[];
+  };
   "plugin:export-audit-log": {
     args: [records: import("./pluginAudit.js").PluginActionAuditRecord[]];
     result: boolean;
@@ -1662,6 +2676,14 @@ export interface GeneratedIpcInvokeMap {
   "plugin:file-decorations-get": {
     args: [scope: string, paths: string[]];
     result: Record<string, import("../forge.js").FileDecoration>;
+  };
+  "plugin:file-editor-choice-set": {
+    args: [key: `view:${string}` | `edit:${string}`, choice: string | null];
+    result: Readonly<Record<`view:${string}` | `edit:${string}`, string>>;
+  };
+  "plugin:file-editor-choices-get": {
+    args: [];
+    result: Readonly<Record<`view:${string}` | `edit:${string}`, string>>;
   };
   "plugin:forge-providers-get": {
     args: [];
@@ -1678,6 +2700,10 @@ export interface GeneratedIpcInvokeMap {
   "plugin:get-diagnostics-snapshot": {
     args: [];
     result: import("./pluginDiagnostics.js").PluginDiagnosticsSnapshot;
+  };
+  "plugin:hosted-views-get": {
+    args: [];
+    result: import("../plugin.js").PluginHostedViewDescriptor[];
   };
   "plugin:icons-get": {
     args: [];
@@ -1707,9 +2733,33 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: { pluginId: string; item: import("../plugin.js").KeybindingContribution }[];
   };
+  "plugin:launch-entries": {
+    args: [];
+    result: import("../plugin.js").PluginLaunchEntryConfig[];
+  };
+  "plugin:launch-group-hidden-set": {
+    args: [pluginId: string, hidden: boolean];
+    result: string[];
+  };
+  "plugin:launch-groups-hidden-get": {
+    args: [];
+    result: string[];
+  };
+  "plugin:layouts": {
+    args: [];
+    result: import("../plugin.js").PluginLayoutConfig[];
+  };
   "plugin:list": {
     args: [];
     result: import("../plugin.js").LoadedPluginInfo[];
+  };
+  "plugin:notification-silence-set": {
+    args: [pluginId: string, silenced: boolean];
+    result: import("./maps.js").PluginNotificationSilence[];
+  };
+  "plugin:notification-silences-get": {
+    args: [];
+    result: import("./maps.js").PluginNotificationSilence[];
   };
   "plugin:panel-kinds-get": {
     args: [];
@@ -1731,9 +2781,29 @@ export interface GeneratedIpcInvokeMap {
     args: [pluginId: string];
     result: void;
   };
+  "plugin:project-instance-set-enabled": {
+    args: [pluginId: string, enabled: boolean];
+    result: void;
+  };
+  "plugin:project-layout-seed-advance": {
+    args: [
+      from: import("../plugin.js").ProjectLayoutSeedStatus,
+      to: import("../plugin.js").ProjectLayoutSeedStatus,
+      outcome?: import("../plugin.js").ProjectLayoutSeedOutcome | undefined,
+    ];
+    result: import("../plugin.js").ProjectLayoutSeedAdvance;
+  };
+  "plugin:project-layout-seed-get": {
+    args: [];
+    result: import("../plugin.js").ProjectLayoutSeedRecord | null;
+  };
   "plugin:project-list": {
     args: [];
     result: import("../plugin.js").ProjectPluginInfo[];
+  };
+  "plugin:project-presence-get": {
+    args: [];
+    result: import("../plugin.js").PluginProjectPresence | null;
   };
   "plugin:project-reload": {
     args: [];
@@ -1748,16 +2818,28 @@ export interface GeneratedIpcInvokeMap {
     result: void;
   };
   "plugin:project-surface-choice-set": {
-    args: [slot: "emptyCanvas", choice: import("../plugin.js").ProjectSurfaceChoice | null];
-    result: import("../plugin.js").ProjectSurfaceChoicesSnapshot;
+    args: [
+      slot: import("../plugin/projectSurfaces.js").ProjectSurfaceSlotKey,
+      choice: import("../plugin/projectSurfaces.js").ProjectSurfaceChoice | null,
+      optionId?: string | undefined,
+    ];
+    result: import("../plugin/projectSurfaces.js").ProjectSurfacesSnapshot;
   };
-  "plugin:project-surface-choices-get": {
-    args: [];
-    result: import("../plugin.js").ProjectSurfaceChoicesSnapshot | null;
+  "plugin:project-surface-choices-set": {
+    args: [updates: import("../plugin/projectSurfaces.js").ProjectSurfaceChoiceUpdate[]];
+    result: import("../plugin/projectSurfaces.js").ProjectSurfacesSnapshot;
   };
   "plugin:project-surfaces-get": {
     args: [];
-    result: Partial<Record<"emptyCanvas", import("../plugin.js").ProjectSurfaceClaim>>;
+    result: import("../plugin/projectSurfaces.js").ProjectSurfacesSnapshot | null;
+  };
+  "plugin:project-template-preview": {
+    args: [payload: { pluginId: string; templateId: string }];
+    result: import("../plugin.js").ProjectTemplatePreview;
+  };
+  "plugin:project-templates-get": {
+    args: [];
+    result: import("../plugin.js").ProjectTemplateDescriptor[];
   };
   "plugin:project-visibility-get": {
     args: [];
@@ -1766,6 +2848,19 @@ export interface GeneratedIpcInvokeMap {
   "plugin:project-visibility-set": {
     args: [pluginId: string, visible: boolean | null];
     result: void;
+  };
+  "plugin:project-welcome-get": {
+    args: [ownerId: string, tourId: string];
+    result: import("../plugin.js").ProjectWelcomeRecord | null;
+  };
+  "plugin:project-welcome-set": {
+    args: [
+      ownerId: string,
+      tourId: string,
+      version: number,
+      status: import("../plugin.js").ProjectWelcomeStatus,
+    ];
+    result: import("../plugin.js").ProjectWelcomeRecord;
   };
   "plugin:recipe-metadata-update": {
     args: [recipeId: string, updates: import("../project.js").PluginRecipeMetadataPatch];
@@ -1794,6 +2889,22 @@ export interface GeneratedIpcInvokeMap {
   "plugin:runtime-statuses-get": {
     args: [];
     result: import("../plugin.js").PluginRuntimeStatus[];
+  };
+  "plugin:search-provider-shown-set": {
+    args: [key: string, shown: boolean];
+    result: import("../plugin.js").PluginSearchProviderInfo[];
+  };
+  "plugin:search-providers-cancel": {
+    args: [];
+    result: void;
+  };
+  "plugin:search-providers-get": {
+    args: [];
+    result: import("../plugin.js").PluginSearchProviderInfo[];
+  };
+  "plugin:search-providers-query": {
+    args: [request: import("../plugin.js").PluginSearchQueryRequest];
+    result: import("../plugin.js").PluginSearchQueryResponse;
   };
   "plugin:set-audit-enabled": {
     args: [enabled: boolean];
@@ -1847,6 +2958,26 @@ export interface GeneratedIpcInvokeMap {
     ];
     result: void;
   };
+  "plugin:setup-status": {
+    args: [pluginId: string, projectId: string | null];
+    result: import("../plugin.js").PluginSetupUiStatus;
+  };
+  "plugin:setup-step-skipped-set": {
+    args: [pluginId: string, stepId: string, skipped: boolean];
+    result: void;
+  };
+  "plugin:task-cancel": {
+    args: [pluginId: string, taskId: string];
+    result: boolean;
+  };
+  "plugin:task-dismiss": {
+    args: [pluginId: string, taskId: string];
+    result: boolean;
+  };
+  "plugin:themes-get": {
+    args: [];
+    result: import("../../theme/types.js").AppColorScheme[];
+  };
   "plugin:toolbar-buttons": {
     args: [];
     result: import("../../config/toolbarButtonRegistry.js").ToolbarButtonConfig[];
@@ -1871,6 +3002,14 @@ export interface GeneratedIpcInvokeMap {
     args: [pluginId: string, hidden: boolean];
     result: void;
   };
+  "plugin:worktree-delete-note-sources-get": {
+    args: [];
+    result: import("../plugin.js").WorktreeDeleteNoteSource[];
+  };
+  "plugin:worktree-delete-notes-get": {
+    args: [input: { worktreeId: string; pluginId: string }];
+    result: import("../plugin.js").WorktreeDeleteNotesAnswer | null;
+  };
   "plugin:worktree-status-get": {
     args: [path: string];
     result: import("../plugin.js").PluginWorktreeStatus | null;
@@ -1886,6 +3025,10 @@ export interface GeneratedIpcInvokeMap {
   "port-forwards:list-host-ports": {
     args: [payload: { hostId: string }];
     result: import("./portForwards.js").HostListeningPort[];
+  };
+  "port-forwards:release": {
+    args: [payload: import("./portForwards.js").ReleasePortForwardsPayload];
+    result: void;
   };
   "port-forwards:stop": {
     args: [payload: { forwardId: string }];
@@ -1925,7 +3068,7 @@ export interface GeneratedIpcInvokeMap {
   };
   "portal:show": {
     args: [payload: import("../portal.js").PortalShowPayload];
-    result: void;
+    result: boolean;
   };
   "privacy:clear-cache": {
     args: [];
@@ -2023,6 +3166,52 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("./projectPresence.js").ProjectPresenceSnapshot;
   };
+  "project-presentation:answer-suggestion": {
+    args: [hash: string, answer: import("./projectPresentation.js").PresentationSuggestionAnswer];
+    result: import("./projectPresentation.js").ProjectPresentationSnapshot;
+  };
+  "project-presentation:get": {
+    args: [];
+    result: import("./projectPresentation.js").ProjectPresentationSnapshot | null;
+  };
+  "project-presentation:reset-toolbar": {
+    args: [];
+    result: import("./projectPresentation.js").ProjectPresentationSnapshot;
+  };
+  "project-presentation:set-featured-launch-entry": {
+    args: [ref: string | null];
+    result: import("./projectPresentation.js").ProjectPresentationSnapshot;
+  };
+  "project-presentation:set-launcher-group-order": {
+    args: [order: string[]];
+    result: import("./projectPresentation.js").ProjectPresentationSnapshot;
+  };
+  "project-presentation:set-level": {
+    args: [
+      feature:
+        | "forgeStats"
+        | "copyTree"
+        | "resumeSessions"
+        | "terminal"
+        | "fileBrowser"
+        | "browser"
+        | "devServer"
+        | "branchChip"
+        | "gitDetail"
+        | "launcherAgents"
+        | "launcherPanels",
+      level: "hidden" | "shown" | "demoted" | null,
+    ];
+    result: import("./projectPresentation.js").ProjectPresentationSnapshot;
+  };
+  "project-presentation:set-plugin-button-promoted": {
+    args: [buttonId: string, promoted: boolean];
+    result: import("./projectPresentation.js").ProjectPresentationSnapshot;
+  };
+  "project-presentation:set-toolbar-enabled": {
+    args: [enabled: boolean];
+    result: import("./projectPresentation.js").ProjectPresentationSnapshot;
+  };
   "project-relocation:apply": {
     args: [request: import("../projectRelocation.js").RelocationRequest];
     result: import("../project.js").Project;
@@ -2030,6 +3219,22 @@ export interface GeneratedIpcInvokeMap {
   "project-relocation:preview": {
     args: [request: import("../projectRelocation.js").RelocationRequest];
     result: import("../projectRelocation.js").RelocationPreview;
+  };
+  "project-theme:answer-suggestion": {
+    args: [schemeId: string, answer: import("../../theme/types.js").ProjectThemeSuggestionAnswer];
+    result: import("./projectTheme.js").ProjectThemeSnapshot;
+  };
+  "project-theme:get": {
+    args: [];
+    result: import("./projectTheme.js").ProjectThemeSnapshot | null;
+  };
+  "project-theme:reset-suggestion": {
+    args: [];
+    result: import("./projectTheme.js").ProjectThemeSnapshot;
+  };
+  "project-theme:set-theme": {
+    args: [schemeId: string | null];
+    result: import("./projectTheme.js").ProjectThemeSnapshot;
   };
   "project:add-browser-allowed-host": {
     args: [payload: { projectId: string; hostname: string }];
@@ -2120,6 +3325,18 @@ export interface GeneratedIpcInvokeMap {
     args: [projectId: string];
     result: import("./project.js").ProjectSleepResult;
   };
+  "recent-dictations:list": {
+    args: [];
+    result: import("../voice.js").RecentDictation[];
+  };
+  "recent-dictations:record": {
+    args: [dictation: import("../voice.js").RecentDictation];
+    result: void;
+  };
+  "recent-dictations:set-corrected-text": {
+    args: [update: { id: string; correctedText: string }];
+    result: void;
+  };
   "remote-hosts:add": {
     args: [payload: import("./remoteHosts.js").AddHostPayload];
     result: import("../remoteHosts.js").HostDescriptor;
@@ -2133,7 +3350,7 @@ export interface GeneratedIpcInvokeMap {
     result: boolean;
   };
   "remote-hosts:connect": {
-    args: [payload: { hostId: string }];
+    args: [payload: { hostId: string; restart?: boolean | undefined }];
     result: import("../remoteHosts.js").HostConnectionState;
   };
   "remote-hosts:disconnect": {
@@ -2227,6 +3444,113 @@ export interface GeneratedIpcInvokeMap {
   "remote-hosts:update": {
     args: [payload: import("./remoteHosts.js").UpdateHostPayload];
     result: import("../remoteHosts.js").HostDescriptor;
+  };
+  "review-marks:capture": {
+    args: [worktreeId: string];
+    result: import("./reviewMarks.js").ReviewMarkCaptureOutcome;
+  };
+  "review-marks:clear": {
+    args: [worktreeId: string, basedOn: number];
+    result: import("./reviewMarks.js").ReviewMarkClearOutcome;
+  };
+  "review-marks:compare": {
+    args: [worktreeId: string];
+    result: import("./reviewMarks.js").ReviewMarkCompareOutcome;
+  };
+  "review-marks:file-since": {
+    args: [worktreeId: string, request: import("./reviewMarks.js").ReviewFileSinceRequest];
+    result: import("./reviewMarks.js").ReviewMarkFileSinceOutcome;
+  };
+  "review-marks:hydrate": {
+    args: [];
+    result: import("./reviewMarks.js").ReviewMarksSnapshot | null;
+  };
+  "review-marks:mark": {
+    args: [
+      worktreeId: string,
+      point: {
+        version: 1;
+        capturedAt: number;
+        worktreePath: string;
+        gitDir: string;
+        commonDir: string;
+        objectFormat: "sha1" | "sha256";
+        head:
+          | { kind: "branch"; branch: string; commit: string }
+          | { kind: "detached"; commit: string }
+          | { kind: "unborn"; branch: string };
+        base: {
+          requested: { kind: "branch"; branch: string } | { kind: "ref"; ref: string };
+          ref: string | null;
+          tip: string | null;
+          mergeBases: string[];
+        };
+        entries: {
+          head: { mode: "100644" | "100755" | "120000" | "160000"; oid: string } | null;
+          index:
+            | { kind: "absent" }
+            | { mode: "100644" | "100755" | "120000" | "160000"; oid: string; kind: "entry" }
+            | { kind: "intent-to-add"; mode: "100644" | "100755" | "120000" | "160000" }
+            | {
+                kind: "conflicted";
+                stages: {
+                  mode: "100644" | "100755" | "120000" | "160000";
+                  oid: string;
+                  stage: 1 | 2 | 3;
+                }[];
+              };
+          worktree:
+            | { kind: "absent" }
+            | { kind: "file"; mode: "100644" | "100755"; oid: string; size: number }
+            | { kind: "symlink"; oid: string }
+            | { kind: "directory" }
+            | { kind: "submodule"; commit: string | null; contents: "unknown" | "clean" | "dirty" }
+            | {
+                kind: "unverifiable";
+                reason:
+                  "unreadable" | "file-too-large" | "byte-limit" | "deadline" | "special-file";
+              };
+          path: string;
+          pathBytes?: string | undefined;
+        }[];
+        incomplete: {
+          reasons: (
+            | "unreadable"
+            | "file-too-large"
+            | "byte-limit"
+            | "deadline"
+            | "special-file"
+            | "path-limit"
+            | "nested-repository"
+            | "untracked-directory"
+            | "submodule-contents"
+            | "base-unavailable"
+            | "change-set-too-large"
+          )[];
+          uncovered: {
+            reason:
+              | "unreadable"
+              | "file-too-large"
+              | "byte-limit"
+              | "deadline"
+              | "special-file"
+              | "path-limit"
+              | "nested-repository"
+              | "untracked-directory"
+              | "submodule-contents";
+            path: string;
+            pathBytes?: string | undefined;
+          }[];
+          uncoveredCount: number | null;
+        } | null;
+      },
+      basedOn: number,
+    ];
+    result: import("./reviewMarks.js").ReviewMarkSaveOutcome;
+  };
+  "review-marks:mark-captured": {
+    args: [worktreeId: string, captureId: string, basedOn: number];
+    result: import("./reviewMarks.js").ReviewMarkSaveOutcome;
   };
   "run-history:append": {
     args: [input: import("./runHistory.js").RunHistoryAppendInput];
@@ -2324,10 +3648,6 @@ export interface GeneratedIpcInvokeMap {
     args: [keys: string[]];
     result: void;
   };
-  "site-preview:bind": {
-    args: [payload: { panelId: string; adapterId: string; mode?: "browse" | "select" | undefined }];
-    result: import("./sitePreview.js").SitePreviewBindingState;
-  };
   "site-preview:clear-hover": {
     args: [payload: { sessionId: string }];
     result: void;
@@ -2339,26 +3659,6 @@ export interface GeneratedIpcInvokeMap {
   "site-preview:detach": {
     args: [payload: { sessionId: string }];
     result: void;
-  };
-  "site-preview:get-state": {
-    args: [payload: { sessionId: string }];
-    result: import("./sitePreview.js").SitePreviewBindingState | null;
-  };
-  "site-preview:list-candidates": {
-    args: [];
-    result: import("./sitePreview.js").SitePreviewCandidate[];
-  };
-  "site-preview:reselect": {
-    args: [
-      payload: {
-        sessionId: string;
-        loc: { file: string; line: number; column: number };
-        index?: number | undefined;
-        component?: { file: string; line: number; column: number } | undefined;
-        occurrence?: string | undefined;
-      },
-    ];
-    result: boolean;
   };
   "site-preview:set-mode": {
     args: [payload: { sessionId: string; mode: "browse" | "select" }];
@@ -2407,6 +3707,17 @@ export interface GeneratedIpcInvokeMap {
         wantsWebgl: number;
         terminalCount: number;
         countsByTier: Record<string, number>;
+        bufferMemory?:
+          | {
+              sampledAt: number;
+              terminals: {
+                terminalId: string;
+                normalLines: number;
+                alternateLines: number;
+                cols: number;
+              }[];
+            }
+          | undefined;
       },
     ];
     result: void;
@@ -2603,6 +3914,7 @@ export interface GeneratedIpcInvokeMap {
         id?: string | undefined;
         kind?: string | undefined;
         launchAgentId?: string | undefined;
+        pluginPanelKindId?: string | undefined;
         projectId?: string | undefined;
         cwd?: string | undefined;
         shell?: string | undefined;
@@ -2645,6 +3957,8 @@ export interface GeneratedIpcInvokeMap {
                 "user" | "menu" | "keybinding" | "agent" | "context-menu" | "plugin" | undefined;
             }
           | undefined;
+        requiredPluginTools?: string[] | undefined;
+        allowMissingPluginTools?: boolean | undefined;
       },
     ];
     result: string;
@@ -2662,6 +3976,143 @@ export interface GeneratedIpcInvokeMap {
   "terminal:trash": {
     args: [id: string];
     result: void;
+  };
+  "voice-dictionary:accept-suggestion": {
+    args: [__0: { word: string; utterance?: string | undefined }];
+    result: import("./api.js").VoiceDictionaryState;
+  };
+  "voice-dictionary:add": {
+    args: [
+      input: {
+        term: string;
+        heardAs?: string[] | undefined;
+        source?: "manual" | "learned" | "imported" | undefined;
+        addedAt?: number | undefined;
+      },
+    ];
+    result: import("./api.js").VoiceDictionaryState;
+  };
+  "voice-dictionary:add-to-project": {
+    args: [
+      __0: {
+        projectId: string;
+        term: string;
+        source?: "manual" | "learned" | "imported" | undefined;
+        addedAt?: number | undefined;
+        heardAs?: string[] | undefined;
+      },
+    ];
+    result: import("./api.js").VoiceDictionaryEntry[];
+  };
+  "voice-dictionary:dismiss-suggestion": {
+    args: [__0: { word: string; utterance?: string | undefined }];
+    result: import("./api.js").VoiceDictionaryState;
+  };
+  "voice-dictionary:get-project": {
+    args: [__0: { projectId: string }];
+    result: import("./api.js").VoiceDictionaryEntry[];
+  };
+  "voice-dictionary:record-suggestions": {
+    args: [__0: { candidates: { word: string; original: string }[] }];
+    result: import("./api.js").VoiceDictionaryState;
+  };
+  "voice-dictionary:remove": {
+    args: [__0: { term: string }];
+    result: import("./api.js").VoiceDictionaryState;
+  };
+  "voice-dictionary:remove-from-project": {
+    args: [__0: { term: string; projectId: string }];
+    result: import("./api.js").VoiceDictionaryEntry[];
+  };
+  "voice-dictionary:update": {
+    args: [
+      __0: { term: string; changes: { term?: string | undefined; heardAs?: string[] | undefined } },
+    ];
+    result: import("./api.js").VoiceDictionaryState;
+  };
+  "voice-dictionary:update-in-project": {
+    args: [
+      __0: {
+        term: string;
+        projectId: string;
+        changes: { term?: string | undefined; heardAs?: string[] | undefined };
+      },
+    ];
+    result: import("./api.js").VoiceDictionaryEntry[];
+  };
+  "voice-input:cancel": {
+    args: [sessionId: string];
+    result: void;
+  };
+  "voice-input:flush-paragraph": {
+    args: [sessionId: string];
+    result: { rawText: string | null };
+  };
+  "voice-input:get-last-terms": {
+    args: [];
+    result: import("../voice.js").LastDictationTerms | null;
+  };
+  "voice-input:get-live-session": {
+    args: [];
+    result: import("../voice.js").VoiceLiveSessionUpdate;
+  };
+  "voice-input:prefetch-corrections": {
+    args: [
+      payload: {
+        sessionId: string;
+        requests: {
+          rawText: string;
+          terminalId?: string | undefined;
+          sessionId?: string | undefined;
+          outsideView?: true | undefined;
+          recentContext?: string[] | undefined;
+          followingText?: string | undefined;
+          recentPrompts?: string[] | undefined;
+          startsPrompt?: boolean | undefined;
+          uncertain?: { from: number; to: number }[] | undefined;
+          pauses?: number[] | undefined;
+        }[];
+      },
+    ];
+    result: void;
+  };
+  "voice-input:publish-details": {
+    args: [request: import("../voice.js").VoicePublishDetailsRequest];
+    result: boolean;
+  };
+  "voice-input:reveal-live": {
+    args: [sessionId: string];
+    result: boolean;
+  };
+  "voice-input:rewrite": {
+    args: [request: { selectedText: string; instruction: string }];
+    result: import("../voice.js").VoiceRewriteOutcome;
+  };
+  "voice-input:set-paused-live": {
+    args: [request: import("../voice.js").VoicePauseRequest];
+    result: boolean;
+  };
+  "voice-input:start": {
+    args: [
+      sessionId: string,
+      options?:
+        | {
+            terminalId?: string | undefined;
+            intent?: "rewrite" | "dictation" | undefined;
+            outsideView?: true | undefined;
+            workspaceName?: string | undefined;
+          }
+        | undefined,
+    ];
+    result: import("../voice.js").VoiceStartOutcome;
+  };
+  "voice-input:stop": {
+    args: [sessionId: string];
+    result: { rawText: string | null };
+  };
+  "voice-input:stop-live": {
+    args: [request: import("../voice.js").VoiceStopRequest];
+    result: boolean;
   };
   "watchdog:restart": {
     args: [];
@@ -2746,6 +4197,18 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { worktreeId: string; enabled: boolean }];
     result: void;
   };
+  "worktree-titles:hydrate": {
+    args: [legacyTitles: Record<string, string>];
+    result: import("./worktreeTitles.js").WorktreeTitlesSnapshot | null;
+  };
+  "worktree-titles:prune": {
+    args: [staleWorktreeIds: string[]];
+    result: import("./worktreeTitles.js").WorktreeTitlesSnapshot;
+  };
+  "worktree-titles:set": {
+    args: [worktreeId: string, title: string | null];
+    result: import("./worktreeTitles.js").WorktreeTitlesSnapshot;
+  };
   "worktree:attach-issue": {
     args: [payload: import("./worktree.js").AttachIssuePayload];
     result: void;
@@ -2765,9 +4228,9 @@ export interface GeneratedIpcInvokeMap {
           sourcePrNumber?: number | undefined;
           sourcePrTitle?: string | undefined;
           sourcePrUrl?: string | undefined;
-          sourcePrState?: "merged" | "open" | "closed" | undefined;
+          sourcePrState?: "open" | "merged" | "closed" | undefined;
           sourcePrLinkedIssueNumber?: number | undefined;
-          submoduleInit?: "inherit" | "all" | "none" | undefined;
+          submoduleInit?: "none" | "inherit" | "all" | undefined;
           collisionPolicy?: "error" | "suffix" | undefined;
         };
         opId?: string | undefined;

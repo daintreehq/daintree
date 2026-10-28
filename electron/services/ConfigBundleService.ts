@@ -26,6 +26,9 @@ import {
 import type { CliAvailability } from "../../shared/types/ipc/system.js";
 import { buildDefaultKeybindings } from "../../shared/config/defaultKeybindings.js";
 import { BUILT_IN_APP_SCHEMES } from "../../shared/theme/themes.js";
+import { isPluginThemeId } from "../../shared/theme/pluginThemes.js";
+import { getPluginTheme } from "./plugin/PluginThemeRegistry.js";
+import { persistColorSchemeSelection } from "./appThemePluginSelection.js";
 import type { TerminalRecipe, UserAgentConfig } from "../../shared/types/index.js";
 import {
   validatePathPattern,
@@ -77,6 +80,7 @@ import {
 import {
   customPresetIds,
   mergeAgentEntry,
+  withoutLegacyPin,
   mergeEnv,
   projectAgentEntry,
   projectAgents,
@@ -85,7 +89,6 @@ import {
   agentUpdateChecksSection,
   assistantModelsSection,
   globalEnvironmentSection,
-  hibernationSection,
   idleBackgroundAutoCloseSection,
   idleTerminalNotifySection,
   permissionBypassSection,
@@ -366,10 +369,44 @@ function refusedNotificationReason(key: string): string {
     : "Not a supported notification setting";
 }
 
+/**
+ * A custom scheme as it would be stored, or null when it fails validation. The
+ * incoming object is kept rather than the parse, so a newer build's fields
+ * survive; only its extensions take the parsed form, which strips the keys
+ * that could shadow a theme token. Every compare against the stored scheme
+ * uses this form, so a re-imported bundle converges on unchanged.
+ */
+function toStoredScheme(scheme: Record<string, unknown>): Record<string, unknown> | null {
+  const parsed = appCustomSchemesWriteSchema.safeParse([scheme]);
+  if (!parsed.success) return null;
+  const extensions = parsed.data[0]?.extensions;
+  return extensions === undefined ? scheme : { ...scheme, extensions };
+}
+
 function recipeRefusal(recipe: Record<string, unknown>): string | null {
   if (typeof recipe.name !== "string" || !recipe.name.trim()) return "Recipe has no name";
   if (!Array.isArray(recipe.terminals)) return "Recipe has no terminals";
   return null;
+}
+
+/**
+ * A copy recorded before pins left agent settings (#14702) holds them in its
+ * agent entries, and migration 039 has since taken them off the live ones.
+ * Compared and put back without them, so the undo neither reads the migration
+ * as an edit nor writes a pin back into agent settings.
+ */
+function withoutLegacyPins(section: ConfigBundleSectionId, leaves: UndoLeaf[]): UndoLeaf[] {
+  const isAgentEntry = (key: string) =>
+    section === "agentSettings" || (section === "permissionBypass" && key.startsWith("agents."));
+  return leaves.map((leaf) => {
+    if (!isAgentEntry(leaf.key)) return leaf;
+    const { before, after } = leaf;
+    return {
+      key: leaf.key,
+      ...(before !== undefined ? { before: withoutLegacyPin(before) } : {}),
+      ...(after !== undefined ? { after: withoutLegacyPin(after) } : {}),
+    };
+  });
 }
 
 export class ConfigBundleService {
@@ -388,7 +425,6 @@ export class ConfigBundleService {
       this.notificationSettingsSection(),
       this.worktreeConfigSection(),
       this.globalRecipesSection(),
-      hibernationSection(),
       sessionRestoreSection(),
       idleTerminalNotifySection(),
       idleBackgroundAutoCloseSection(),
@@ -644,12 +680,13 @@ export class ConfigBundleService {
         results.push({ section, leaves: leaves.map(({ key }) => ({ key, status: "failed" })) });
         continue;
       }
+      const comparable = withoutLegacyPins(section, leaves);
       try {
         results.push({
           section,
           leaves: handler.undo
-            ? await handler.undo(leaves)
-            : await this.undoLeaves(handler, leaves),
+            ? await handler.undo(comparable)
+            : await this.undoLeaves(handler, comparable),
         });
       } catch (error) {
         console.error(`[ConfigBundleService] Failed to undo ${section}:`, error);
@@ -1079,6 +1116,7 @@ export class ConfigBundleService {
   }
 
   private appThemeSection(): SectionHandler {
+    const RESERVED_THEME_ID = "That id is reserved for plugin themes";
     const SCALAR_FIELDS = [
       "colorSchemeId",
       "followSystem",
@@ -1098,9 +1136,17 @@ export class ConfigBundleService {
     const validateScalar = (field: string, value: unknown): string | null => {
       switch (field) {
         case "colorSchemeId":
+          if (typeof value !== "string" || value.trim() === "") return "Not a valid theme id";
+          // A plugin theme travels as an id only; it applies where the plugin
+          // offering it is installed, and its palette is persisted from there.
+          return isPluginThemeId(value.trim()) && !getPluginTheme(value.trim())
+            ? "The plugin that offers this theme isn't installed"
+            : null;
         case "preferredDarkSchemeId":
         case "preferredLightSchemeId":
-          return typeof value === "string" && value.trim() !== "" ? null : "Not a valid theme id";
+          if (typeof value !== "string" || value.trim() === "") return "Not a valid theme id";
+          // Same rule as the Appearance slot setters.
+          return isPluginThemeId(value.trim()) ? "A plugin theme can't be a preferred theme" : null;
         case "followSystem":
           return typeof value === "boolean" ? null : "Not a boolean";
         case "colorVisionMode":
@@ -1152,7 +1198,8 @@ export class ConfigBundleService {
             const key = `theme:${String(scheme.id)}`;
             const existing = currentById.get(String(scheme.id));
             if (!existing) result.add.push(key);
-            else if (sameValue(scheme, existing)) result.unchanged.push(key);
+            else if (sameValue(toStoredScheme(scheme) ?? scheme, existing))
+              result.unchanged.push(key);
             else result.update.push(key);
           }
         }
@@ -1170,10 +1217,13 @@ export class ConfigBundleService {
           );
           for (const scheme of incoming.customSchemes.filter(isRecord)) {
             const id = String(scheme.id);
-            if (sameValue(scheme, currentById.get(id))) continue;
-            if (!appCustomSchemesWriteSchema.safeParse([scheme]).success) {
-              check.skipped.set(`theme:${id}`, "Theme definition is not valid");
+            if (isPluginThemeId(id)) {
+              check.skipped.set(`theme:${id}`, RESERVED_THEME_ID);
+              continue;
             }
+            const stored = toStoredScheme(scheme);
+            if (sameValue(stored ?? scheme, currentById.get(id))) continue;
+            if (!stored) check.skipped.set(`theme:${id}`, "Theme definition is not valid");
           }
         }
         for (const field of SCALAR_FIELDS) {
@@ -1209,17 +1259,24 @@ export class ConfigBundleService {
           const pending = new Map<string, Record<string, unknown>>();
           for (const scheme of incomingSchemes) {
             const id = String(scheme.id);
-            if (sameValue(scheme, mergedById.get(id))) {
+            // Imported themes resolve before plugin themes, so one under a
+            // plugin theme's id would stand in for it.
+            if (isPluginThemeId(id)) {
+              results.push(skippedLeaf(`theme:${id}`, RESERVED_THEME_ID));
+              continue;
+            }
+            const stored = toStoredScheme(scheme);
+            if (sameValue(stored ?? scheme, mergedById.get(id))) {
               results.push(unchangedLeaf(`theme:${id}`));
               continue;
             }
-            if (!appCustomSchemesWriteSchema.safeParse([scheme]).success) {
+            if (!stored) {
               results.push(skippedLeaf(`theme:${id}`, "Theme definition is not valid"));
               continue;
             }
             // Last one wins if the bundle repeats an id, so each id reports once.
-            mergedById.set(id, scheme);
-            pending.set(id, scheme);
+            mergedById.set(id, stored);
+            pending.set(id, stored);
           }
 
           if (pending.size > 0) {
@@ -1259,7 +1316,12 @@ export class ConfigBundleService {
           }
           const normalized =
             typeof value === "string" && field !== "accentColorOverride" ? value.trim() : value;
-          store.set(`appTheme.${field}` as never, normalized as never);
+          if (field === "colorSchemeId" && isPluginThemeId(normalized)) {
+            // Writes the palette beside the id, so the next boot paints it.
+            persistColorSchemeSelection(normalized);
+          } else {
+            store.set(`appTheme.${field}` as never, normalized as never);
+          }
           wrote = true;
           results.push(
             sameValue(readTheme()[field], normalized)
@@ -1293,6 +1355,12 @@ export class ConfigBundleService {
           else next[field] = snapshotRecord[field];
         }
         store.set("appTheme", next as never);
+        // The palette snapshot isn't portable, so an import of another plugin
+        // theme replaced it; rebuild it for a restored plugin theme still offered.
+        const restoredId = next.colorSchemeId;
+        if (isPluginThemeId(restoredId) && getPluginTheme(restoredId)) {
+          persistColorSchemeSelection(restoredId);
+        }
         // A rollback that left the caption strip on the imported theme would be
         // the same stale-strip bug, just reached from the other direction.
         await this.deps.refreshTitleBar();

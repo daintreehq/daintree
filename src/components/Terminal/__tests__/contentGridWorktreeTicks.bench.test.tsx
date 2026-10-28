@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { Profiler, type ProfilerOnRenderCallback } from "react";
 import { act, cleanup, render } from "@testing-library/react";
 import { DndContext } from "@dnd-kit/core";
 import type { WorktreeSnapshot } from "@shared/types";
 import type { PtyPanelData } from "@shared/types/panel";
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 
 // A worktree status tick (modifiedCount, lastActivityTimestamp, ahead/behind)
 // replaces the store's Map. The content grid only reads the active worktree's
@@ -42,8 +43,8 @@ vi.mock("@/clients", () => ({
   cliAvailabilityClient: { refresh: vi.fn() },
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     cleanup: vi.fn(),
     applyRendererPolicy: vi.fn(),
     onPanelBackgrounded: vi.fn(),
@@ -56,8 +57,11 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     scheduleBatchResize: vi.fn(),
     resize: vi.fn().mockReturnValue(null),
     getInstance: vi.fn(),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("@/store/persistence/panelPersistence", () => ({
   panelPersistence: {
@@ -261,6 +265,12 @@ function measure(mode: Mode, targetId: string, label: string) {
   }
   return r;
 }
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
+});
 
 describe("ContentGrid worktree-tick re-renders", () => {
   afterEach(() => {

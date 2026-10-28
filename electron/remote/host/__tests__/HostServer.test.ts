@@ -5,7 +5,12 @@ import net from "node:net";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { encodeFrame, FrameDecoder, Lane, type LinkFrame } from "../../link/frames.js";
-import { ControlKind, frameToMessage, messageToFrame } from "../../link/messages.js";
+import {
+  ControlKind,
+  frameToMessage,
+  messageToFrame,
+  type LinkMessage,
+} from "../../link/messages.js";
 import { LinkClient, type LinkClientState } from "../../client/LinkClient.js";
 import { createDirectTransport } from "../../client/transport.js";
 import { HostServer, MAX_PENDING_HANDSHAKES, type HostSessionContext } from "../HostServer.js";
@@ -16,6 +21,7 @@ import {
   type HostSocketLocation,
 } from "../hostSocketPath.js";
 import { readDiscoveryFile, removeDiscoveryFile, writeDiscoveryFile } from "../discoveryFile.js";
+import { processStartTime } from "../hostSocketLock.js";
 import { logBuffer } from "../../../services/LogBuffer.js";
 import {
   TEST_HANDSHAKE,
@@ -105,7 +111,8 @@ async function rawHello(token: string, clientId: string) {
 async function helloOn(
   server: HostServer,
   clientId: string,
-  resume: { id: string; secret: string } | null
+  resume: { id: string; secret: string } | null,
+  deviceId?: string
 ) {
   const raw = await rawConnect();
   raw.socket.write(
@@ -116,7 +123,12 @@ async function helloOn(
         body: {
           handshake: TEST_HANDSHAKE,
           token: server.token,
-          client: { clientId, clientName: "n", platform: "linux" },
+          client: {
+            clientId,
+            clientName: "n",
+            platform: "linux",
+            ...(deviceId ? { deviceId } : {}),
+          },
           resumeSessionId: resume?.id ?? null,
           resumeSecret: resume?.secret ?? null,
         },
@@ -172,7 +184,11 @@ describe("HostServer socket and discovery", () => {
       socketPath: location.socketPath,
       token: server.token,
       pid: process.pid,
+      ...(info?.startedAt && { startedAt: info.startedAt }),
     });
+    if (process.platform === "darwin" || process.platform === "linux") {
+      expect(info?.startedAt).toBe(processStartTime(process.pid)?.replace(/\s+/g, " "));
+    }
     expect(server.token).toMatch(/^[0-9a-f]{64}$/);
   });
 
@@ -505,6 +521,53 @@ describe("HostServer authentication", () => {
 });
 
 describe("HostServer session resume", () => {
+  it("keeps a link that answers after a wake on the session it had (#14365)", async () => {
+    const server = await startServer({ resumeGraceMs: 60_000 });
+    const seen: HostSessionContext[] = [];
+    server.onSession((ctx) => seen.push(ctx));
+    const client = startClient(server, { wakeProbeMs: 200 });
+    await waitFor(() => seen.length === 1 && client.getState().status === "connected");
+    const session = client.session;
+    client.noteSystemResumed();
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(client.session).toBe(session);
+    expect(session?.isOpen).toBe(true);
+    expect(seen).toHaveLength(1);
+  });
+
+  it("resumes the session a link that died in a sleep held, when it is redialled on wake (#14365)", async () => {
+    const server = await startServer({ resumeGraceMs: 60_000 });
+    const seen: HostSessionContext[] = [];
+    server.onSession((ctx) => seen.push(ctx));
+    const client = startClient(server, { wakeProbeMs: 30 });
+    await waitFor(() => seen.length === 1 && client.getState().status === "connected");
+    // The host still reads but never answers, as the far end of a link lost
+    // while the Shell slept: whatever the Shell says on the way out reaches it.
+    const stale = seen[0]!.session as unknown as { post: (message: LinkMessage) => string };
+    const post = stale.post.bind(stale);
+    stale.post = (message) =>
+      message.lane === Lane.CONTROL && message.kind === ControlKind.PONG ? "queued" : post(message);
+    client.noteSystemResumed();
+    await waitFor(() => seen.length === 2 && client.getState().status === "connected");
+    expect(seen[1]).toMatchObject({ sessionId: seen[0]!.sessionId, resumed: true });
+  });
+
+  it("lets a Shell on another build in, and logs both builds with the session", async () => {
+    const server = await startServer();
+    const seen: HostSessionContext[] = [];
+    server.onSession((ctx) => seen.push(ctx));
+    const client = startClient(server, { handshake: { ...TEST_HANDSHAKE, version: "0.9.0" } });
+    await waitFor(() => seen.length === 1 && client.getState().status === "connected");
+
+    const started = logged("main:HostServer").find(
+      (entry) => entry.message === "Remote session started"
+    );
+    expect(started?.context).toMatchObject({
+      sessionId: seen[0]!.sessionId,
+      buildMismatch: { kind: "version", local: TEST_HANDSHAKE.version, remote: "0.9.0" },
+    });
+  });
+
   it("logs a link's life on both ends with the session id, and never a credential", async () => {
     const server = await startServer({ resumeGraceMs: 60_000 });
     const seen: HostSessionContext[] = [];
@@ -675,6 +738,83 @@ describe("HostServer session resume", () => {
         }),
       })
     );
+  });
+
+  it("names its process alike on every session and through a Host mode toggle, so only a restart reads as one (#14184)", async () => {
+    let server = await startServer({ resumeGraceMs: 20 });
+    const seen: HostSessionContext[] = [];
+    const expired: string[] = [];
+    server.onSession((ctx) => seen.push(ctx));
+    server.onSessionExpired((info) => expired.push(info.sessionId));
+    // Slower to redial than the grace window, so the dropped session expires first.
+    const client = startClient(server, { backoff: { initialMs: 200, maxMs: 200, jitter: 0 } });
+    const restarted: boolean[] = [];
+    const sessions: Array<{ sessionId: string; resumed: boolean }> = [];
+    client.onSession(({ hostRestarted, sessionId, resumed }) => {
+      restarted.push(hostRestarted);
+      sessions.push({ sessionId, resumed });
+    });
+    await waitFor(() => restarted.length === 1);
+
+    // A session that expired while this process stayed up.
+    const firstId = seen[0]!.sessionId;
+    seen[0]!.session.close("test drop");
+    await waitFor(() => expired.includes(firstId));
+    await waitFor(() => restarted.length === 2);
+    expect(sessions[1]).toMatchObject({ resumed: false });
+    expect(sessions[1]!.sessionId).not.toBe(firstId);
+
+    // Host mode off and on again: a new server, the same process and terminals.
+    await server.close();
+    server = await startServer();
+    await waitFor(() => restarted.length === 3);
+
+    // Another process listening at the same place: the host restarted.
+    await server.close();
+    await startServer({ launchId: "another-process" });
+    await waitFor(() => restarted.length === 4);
+
+    expect(restarted).toEqual([false, false, false, true]);
+    expect(logged("main:LinkClient")).toContainEqual(
+      expect.objectContaining({
+        message: "Remote host restarted; the previous session ended with it",
+      })
+    );
+  });
+
+  it("tells a Shell how its previous process ended only when it restarted (#14368)", async () => {
+    const previousEnd = {
+      crashCause: "external-kill" as const,
+      cause: "watchdog-deadlock" as const,
+      watchdogKillReason: "unresponsive-under-pressure" as const,
+      missedBeats: 12,
+      at: 1_000,
+    };
+    // The process this Shell first meets recorded an unclean end before it:
+    // nothing ended under this Shell, so it says nothing of it.
+    let server = await startServer({ launchId: "first", previousEnd });
+    const client = startClient(server);
+    const ends: Array<{ restarted: boolean; previousEnd: unknown }> = [];
+    client.onSession(({ hostRestarted, previousEnd: end }) =>
+      ends.push({ restarted: hostRestarted, previousEnd: end })
+    );
+    await waitFor(() => ends.length === 1);
+
+    // Killed, and the next process recorded how.
+    await server.close();
+    server = await startServer({ launchId: "second", previousEnd });
+    await waitFor(() => ends.length === 2);
+
+    // A planned restart leaves no record.
+    await server.close();
+    await startServer({ launchId: "third" });
+    await waitFor(() => ends.length === 3);
+
+    expect(ends).toEqual([
+      { restarted: false, previousEnd: undefined },
+      { restarted: true, previousEnd },
+      { restarted: true, previousEnd: undefined },
+    ]);
   });
 
   it("does not resume a session for a different client id", async () => {
@@ -1005,9 +1145,11 @@ describe("HostServer session cap", () => {
     await waitFor(() => seen.length === 2);
     one.socket.destroy();
     await waitFor(() => resumable.size === 1);
-    // Only what a resume must match is parked, never the dropped session.
+    // A few identifiers and a timer are parked, never the dropped session; the
+    // Shell's name stays so its session's end can still name it.
     expect(Object.keys(resumable.get(seen[0]!.sessionId)!).sort()).toEqual([
       "clientId",
+      "clientName",
       "parkedAt",
       "sessionId",
       "timer",
@@ -1032,5 +1174,243 @@ describe("HostServer session cap", () => {
     expect(seen).toHaveLength(3);
     two.socket.destroy();
     three.socket.destroy();
+  });
+});
+
+describe("HostServer and a relaunched Shell (#13909)", () => {
+  const INSTALL = "5b1f6c3e-8d2a-4f4e-9c1b-0a7e2d9f3c41";
+  const OTHER_INSTALL = "c0e9a1d2-3b4c-4d5e-8f6a-7b8c9d0e1f2a";
+
+  async function watched(server: HostServer) {
+    const seen: HostSessionContext[] = [];
+    const parked: string[] = [];
+    const expired: Array<{ sessionId: string; clientId: string; cause: string }> = [];
+    server.onSession((ctx) => seen.push(ctx));
+    server.onSessionDetached((info) => parked.push(info.sessionId));
+    server.onSessionExpired((info) =>
+      expired.push({ sessionId: info.sessionId, clientId: info.clientId, cause: info.cause })
+    );
+    const park = async (opened: Awaited<ReturnType<typeof helloOn>>) => {
+      opened.raw.socket.destroy();
+      await waitFor(() => parked.includes(opened.welcome.sessionId));
+    };
+    return { seen, expired, park };
+  }
+
+  it("ends the install's parked session as soon as it starts a fresh one", async () => {
+    const server = await startServer({ resumeGraceMs: 60_000 });
+    const { expired, park } = await watched(server);
+    const crashed = await helloOn(server, "launch-1", null, INSTALL);
+    await park(crashed);
+    expect(expired).toEqual([]);
+
+    const relaunched = await helloOn(server, "launch-2", null, INSTALL);
+    expect(relaunched.welcome.resumed).toBe(false);
+    expect(expired).toEqual([
+      { sessionId: crashed.welcome.sessionId, clientId: "launch-1", cause: "session-replaced" },
+    ]);
+
+    // Ended for good: its secret resumes nothing.
+    const late = await helloOn(server, "launch-1", {
+      id: crashed.welcome.sessionId,
+      secret: crashed.welcome.resumeSecret,
+    });
+    expect(late.welcome.resumed).toBe(false);
+    expect(expired).toHaveLength(1);
+    relaunched.raw.socket.destroy();
+    late.raw.socket.destroy();
+  });
+
+  it("leaves other installs, Shells that name none, and a live session of the same install alone", async () => {
+    const server = await startServer({ resumeGraceMs: 60_000 });
+    const { seen, expired, park } = await watched(server);
+    const otherInstall = await helloOn(server, "ana-launch", null, OTHER_INSTALL);
+    await park(otherInstall);
+    const unnamed = await helloOn(server, "old-shell", null);
+    await park(unnamed);
+    const stale = [
+      await helloOn(server, "launch-0", null, INSTALL),
+      await helloOn(server, "launch-1", null, INSTALL),
+    ];
+    for (const opened of stale) await park(opened);
+    const sibling = await helloOn(server, "sibling-launch", null, INSTALL);
+    const siblingSession = seen.at(-1)!.session;
+
+    const relaunched = await helloOn(server, "launch-2", null, INSTALL);
+    expect(expired.map((info) => [info.clientId, info.cause])).toEqual([
+      ["launch-0", "session-replaced"],
+      ["launch-1", "session-replaced"],
+    ]);
+    expect(siblingSession.isOpen).toBe(true);
+    // Nothing marked it to end once it parks either: it is held for resume.
+    await park(sibling);
+    expect(expired).toHaveLength(2);
+
+    const back = await helloOn(server, "ana-launch", {
+      id: otherInstall.welcome.sessionId,
+      secret: otherInstall.welcome.resumeSecret,
+    });
+    expect(back.welcome.resumed).toBe(true);
+    relaunched.raw.socket.destroy();
+    back.raw.socket.destroy();
+  });
+
+  it("ends nothing for a resume or a refused HELLO naming the install", async () => {
+    const server = await startServer({ resumeGraceMs: 60_000 });
+    const { expired, park } = await watched(server);
+    // Two launches sharing the install's id, both attached before either drops.
+    const one = await helloOn(server, "launch-1", null, INSTALL);
+    const two = await helloOn(server, "launch-2", null, INSTALL);
+    await park(one);
+    await park(two);
+
+    const intruder = await rawConnect();
+    intruder.socket.write(
+      encodeFrame(
+        messageToFrame({
+          lane: Lane.CONTROL,
+          kind: ControlKind.HELLO,
+          body: {
+            handshake: TEST_HANDSHAKE,
+            token: "not-the-token",
+            client: { clientId: "launch-x", clientName: "n", platform: "linux", deviceId: INSTALL },
+            resumeSessionId: null,
+          },
+        })
+      )
+    );
+    await closedSocket(intruder.socket);
+    expect(intruder.frames.map((f) => frameToMessage(f)?.body)).toContainEqual(
+      expect.objectContaining({ reason: "unauthorized" })
+    );
+    expect(expired).toEqual([]);
+
+    // One resuming leaves the other's parked session to it.
+    const resumed = await helloOn(
+      server,
+      "launch-1",
+      { id: one.welcome.sessionId, secret: one.welcome.resumeSecret },
+      INSTALL
+    );
+    expect(resumed.welcome.resumed).toBe(true);
+    expect(expired).toEqual([]);
+    const back = await helloOn(
+      server,
+      "launch-2",
+      { id: two.welcome.sessionId, secret: two.welcome.resumeSecret },
+      INSTALL
+    );
+    expect(back.welcome.resumed).toBe(true);
+    expect(expired).toEqual([]);
+    resumed.raw.socket.destroy();
+    back.raw.socket.destroy();
+  });
+});
+
+describe("HostServer link history", () => {
+  it("records when it started listening, and forgets it once closed", async () => {
+    const before = Date.now();
+    const server = await startServer();
+    expect(server.listeningSince).toBeGreaterThanOrEqual(before);
+    await server.close();
+    expect(server.listeningSince).toBeNull();
+  });
+
+  it("records a drop held for resume, the resume, and the session ending", async () => {
+    const server = await startServer({ resumeGraceMs: 60_000 });
+    const seen: HostSessionContext[] = [];
+    server.onSession((ctx) => seen.push(ctx));
+    const client = startClient(server);
+    // Only a Shell that has its WELCOME can ask to resume.
+    await waitFor(() => seen.length === 1 && client.getState().status === "connected");
+    const sessionId = seen[0]!.sessionId;
+    (seen[0]!.session as unknown as { socket: net.Socket }).socket.destroy();
+    await waitFor(() => seen.length === 2 && client.getState().status === "connected");
+    await client.stop();
+    await waitFor(() => server.linkHistory().events.length === 4);
+
+    const who = { clientId: "client-a", clientName: "greg-mbp", sessionId };
+    expect(server.linkHistory()).toEqual({
+      truncated: false,
+      events: [
+        expect.objectContaining({
+          ...who,
+          kind: "session-ended",
+          cause: "goodbye",
+          reason: expect.any(String),
+        }),
+        expect.objectContaining({ ...who, kind: "session-resumed", overLiveLink: false }),
+        expect.objectContaining({
+          ...who,
+          kind: "link-dropped",
+          reason: "socket closed",
+          by: "transport",
+        }),
+        expect.objectContaining({ ...who, kind: "session-started", previousNotResumed: null }),
+      ],
+    });
+  });
+
+  it("names why a Shell's previous session wasn't resumed on the session it got instead", async () => {
+    const server = await startServer({ resumeGraceMs: 20 });
+    const seen: HostSessionContext[] = [];
+    const expired: string[] = [];
+    server.onSession((ctx) => seen.push(ctx));
+    server.onSessionExpired((info) => expired.push(info.sessionId));
+    const client = startClient(server, { backoff: { initialMs: 200, maxMs: 200, jitter: 0 } });
+    await waitFor(() => seen.length === 1 && client.getState().status === "connected");
+    const firstId = seen[0]!.sessionId;
+    seen[0]!.session.close("test drop");
+    await waitFor(() => expired.includes(firstId));
+    await waitFor(() => seen.length === 2);
+
+    const kinds = server
+      .linkHistory()
+      .events.map((event) =>
+        event.kind === "session-started"
+          ? [event.kind, event.sessionId, event.previousNotResumed]
+          : event.kind === "session-ended"
+            ? [event.kind, event.sessionId, event.cause]
+            : event.kind === "link-dropped"
+              ? [event.kind, event.sessionId, event.reason]
+              : [event.kind]
+      );
+    expect(kinds).toEqual([
+      ["session-started", seen[1]!.sessionId, "session-unknown"],
+      ["session-ended", firstId, "grace-expired"],
+      ["link-dropped", firstId, "test drop"],
+      ["session-started", firstId, null],
+    ]);
+  });
+
+  it("counts a launch retrying into the same refusal on one entry, never keeping the token", async () => {
+    const server = await startServer();
+    for (let i = 0; i < 3; i++) {
+      const raw = await rawHello("f".repeat(64), "c1");
+      await closedSocket(raw.socket);
+    }
+    const accepted = await rawHello(server.token, "c1");
+    await waitFor(() => server.sessions.length === 1);
+    const again = await rawHello("f".repeat(64), "c1");
+    await closedSocket(again.socket);
+
+    const { events } = server.linkHistory();
+    expect(
+      events.map((event) => [event.kind, event.kind === "refused" ? event.count : null])
+    ).toEqual([
+      ["refused", 1],
+      ["session-started", null],
+      ["refused", 3],
+    ]);
+    expect(events[2]).toMatchObject({
+      kind: "refused",
+      reason: "unauthorized",
+      clientId: "c1",
+      clientName: "n",
+      detail: null,
+    });
+    expect(JSON.stringify(events)).not.toContain(server.token);
+    expect(JSON.stringify(events)).not.toContain("f".repeat(64));
+    accepted.socket.destroy();
   });
 });

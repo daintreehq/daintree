@@ -3,7 +3,7 @@ import type { CanopyHostEvent } from "../../../shared/types/ipc/canopyHost.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { getLocalClientRef } from "../../ipc/localEndpoint.js";
 import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
-import { registerRemoteService } from "../runtime.js";
+import { getRemoteService, registerRemoteService } from "../runtime.js";
 import { CanopyHostsClient, type CanopyHostsClientOptions } from "./client.js";
 import { createLocalCanopyViewers } from "./localViewers.js";
 
@@ -64,6 +64,22 @@ export function installCanopyHostsClient(options: InstallCanopyHostsClientOption
     localClient: getLocalClientRef(),
     send,
     watchView,
+    readLocalAgents: async (options) => {
+      const { getLocalAgentDirectory } =
+        await import("../../services/assistants/localAgentDirectory.js");
+      return getLocalAgentDirectory().read(options);
+    },
+    readLocalAssistantWork: async () => {
+      const { readLocalAssistantWork } =
+        await import("../../services/assistants/localAssistantWork.js");
+      return readLocalAssistantWork();
+    },
+    ownSenderFor: (hostId) => getRemoteService("hostControlLinkClient")?.senderIdOf(hostId) ?? null,
+    localAssistants: async () => {
+      const { localAssistantBySessionKey } =
+        await import("../../services/assistants/localAssistantWork.js");
+      return localAssistantBySessionKey;
+    },
   });
   client.start();
   const unregister = registerRemoteService("canopyHosts", client);

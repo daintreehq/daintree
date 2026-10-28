@@ -95,6 +95,16 @@ Before accepting a new agent-state source, the proposal must answer yes to all o
 
 If the proposal fails any of these, it does not belong in the state-tracking layer. Either reshape it as a Daintree-side UX feature that surfaces data the PTY layer already produces, or file it as a vendor feature request.
 
+## Canopy
+
+Canopy is the one sanctioned interpretation layer: a reader the user opted into, reading agent screens with a local model it downloaded. It may suggest where a run lands in the existing attention buckets (`FleetRunRow.canopy`, placed by `canopyPlacement` in `shared/utils/canopyRefinement.ts`), within these limits:
+
+- It sits alongside the observed `agentState`/`waitingReason` and never rewrites them.
+- It never clears an approval or error Daintree observed.
+- It never changes a park, snooze or read mark, and never places a run against a park or snooze. A read mark never hides an ask Canopy read, just as it never hides an observed question.
+- It holds one verdict per agent turn.
+- It disappears entirely when the reader is turned off or its model is removed or replaced.
+
 ## Related
 
 - [agent-activity-monitoring.md](./agent-activity-monitoring.md) — the implementation of the detection layer

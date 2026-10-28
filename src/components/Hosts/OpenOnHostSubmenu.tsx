@@ -23,7 +23,7 @@ import { isNewWindowClick } from "./hostSwitching";
  * matched by its remotes, or to set one up there. The branch is left alone:
  * "Continue this branch on…" is what hands a branch over.
  */
-async function openOnHost(
+export async function openProjectOnHost(
   hostId: string,
   projectId: string,
   newWindow: boolean,
@@ -73,7 +73,7 @@ function TargetItem({
               : target.name
       }
       onClick={(event) => {
-        void openOnHost(target.hostId, projectId, isNewWindowClick(event), source);
+        void openProjectOnHost(target.hostId, projectId, isNewWindowClick(event), source);
       }}
     >
       <span className="mr-2 flex w-3.5 shrink-0 justify-center text-text-secondary">

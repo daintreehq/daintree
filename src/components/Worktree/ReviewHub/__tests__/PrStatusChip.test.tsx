@@ -6,7 +6,11 @@ import { render, cleanup } from "@testing-library/react";
 import type { CIStatusState, NormalizedPRState } from "@shared/types/forge";
 
 vi.mock("@/clients/forgeClient", () => ({
-  forgeClient: { getChecks: vi.fn() },
+  forgeClient: {
+    getChecks: vi.fn(),
+    getPR: vi.fn(() => Promise.resolve(null)),
+    getRepoMetadata: vi.fn(() => Promise.resolve(null)),
+  },
 }));
 
 import { PrStatusChip } from "../PrStatusChip";
@@ -60,5 +64,61 @@ describe("PrStatusChip", () => {
         unmount();
       }
     }
+  });
+
+  it("shows a pending merge GitHub reports, whoever armed it (#13747)", () => {
+    const { getByTestId } = render(
+      <PrStatusChip
+        hasRemote
+        worktreePath="/tmp/wt"
+        onOpenExternal={() => undefined}
+        worktreePR={{
+          prNumber: 42,
+          prUrl: "https://github.com/o/r/pull/42",
+          prState: "open",
+          mergeIntent: { kind: "auto-merge", method: "squash", enabledAt: 1, enabledBy: "octocat" },
+        }}
+      />
+    );
+    expect(getByTestId("pr-merge-intent").textContent).toBe("auto-merge · squash");
+    expect(getByTestId("pr-checks-trigger").getAttribute("aria-label")).toMatch(/armed by octocat/);
+  });
+
+  it("flags a head that moved while armed", () => {
+    const { getByTestId } = render(
+      <PrStatusChip
+        hasRemote
+        worktreePath="/tmp/wt"
+        onOpenExternal={() => undefined}
+        worktreePR={{
+          prNumber: 42,
+          prUrl: "https://github.com/o/r/pull/42",
+          prState: "open",
+          mergeIntent: { kind: "queued", position: null },
+          headMovedWhileArmed: true,
+        }}
+      />
+    );
+    expect(getByTestId("pr-merge-intent").textContent).toBe("queued");
+    expect(getByTestId("pr-checks-trigger").getAttribute("aria-label")).toMatch(
+      /without another review/
+    );
+  });
+
+  it("drops a stale intent once the PR has merged", () => {
+    const { queryByTestId } = render(
+      <PrStatusChip
+        hasRemote
+        worktreePath="/tmp/wt"
+        onOpenExternal={() => undefined}
+        worktreePR={{
+          prNumber: 42,
+          prUrl: "https://github.com/o/r/pull/42",
+          prState: "merged",
+          mergeIntent: { kind: "queued", position: 1 },
+        }}
+      />
+    );
+    expect(queryByTestId("pr-merge-intent")).toBeNull();
   });
 });

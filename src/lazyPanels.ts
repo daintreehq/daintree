@@ -144,6 +144,12 @@ export const LazyResumeSessionsPalette = lazy(() =>
   }))
 );
 
+export const LazyRecentDictationsPalette = lazy(() =>
+  import("./components/Terminal/RecentDictationsPalette").then((m) => ({
+    default: m.RecentDictationsPalette,
+  }))
+);
+
 export const LazyLogLevelPalette = lazyWithPreload(
   () => import("./components/LogLevelPalette/LogLevelPalette"),
   (m) => m.LogLevelPalette
@@ -192,6 +198,12 @@ export const LazyPluginConfirmDialog = lazyWithPreload(
 );
 export const preloadPluginConfirmDialog = LazyPluginConfirmDialog.preload;
 
+export const LazyLayoutApplyConfirmDialog = lazy(() =>
+  import("./components/Layout/LayoutApplyConfirmDialog").then((m) => ({
+    default: m.LayoutApplyConfirmDialog,
+  }))
+);
+
 export const LazyPluginArchiveInstallConfirmDialog = lazy(() =>
   import("./components/Plugin/PluginArchiveInstallConfirmDialog").then((m) => ({
     default: m.PluginArchiveInstallConfirmDialog,
@@ -222,6 +234,11 @@ export const LazyPluginInputBoxDialog = lazy(() =>
 export const LazyPluginConfirmPromptDialog = lazy(() =>
   import("./components/Plugin/PluginConfirmPromptDialog").then((m) => ({
     default: m.PluginConfirmPromptDialog,
+  }))
+);
+export const LazyPluginRunRecipeDialog = lazy(() =>
+  import("./components/Plugin/PluginRunRecipeDialog").then((m) => ({
+    default: m.PluginRunRecipeDialog,
   }))
 );
 export const LazyPluginCapabilityConfirmDialog = lazyWithPreload(
@@ -277,6 +294,11 @@ export const LazyGitForcePushConfirmDialog = lazyWithPreload(
   (m) => m.GitForcePushConfirmDialog
 );
 export const preloadGitForcePushConfirmDialog = LazyGitForcePushConfirmDialog.preload;
+
+export const LazyProjectSleepConfirmDialog = lazyWithPreload(
+  () => import("./components/Project/ProjectSleepConfirmDialog"),
+  (m) => m.ProjectSleepConfirmDialog
+);
 
 export const LazyRecipeConflictDialog = lazyWithPreload(
   () => import("./components/TerminalRecipe/RecipeConflictDialog"),

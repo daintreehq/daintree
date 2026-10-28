@@ -60,7 +60,7 @@ export const CAPABILITY_META = {
   },
   "agent:read": {
     label: "Read agent activity",
-    description: "Observe running agent sessions",
+    description: "Observe agent sessions and when terminals start and exit",
     severity: "neutral",
   },
   "agent:register": {
@@ -70,7 +70,7 @@ export const CAPABILITY_META = {
   },
   "agent:input": {
     label: "Send input to agents",
-    description: "Type and submit text into running agent sessions",
+    description: "Type, press keys and submit text in running agent sessions",
     severity: "warning",
   },
   "terminal:read": {
@@ -135,6 +135,16 @@ export const CAPABILITY_META = {
     label: "Send system notifications",
     description: "Show notifications outside Daintree, once you turn it on",
     severity: "neutral",
+  },
+  "artifact:store": {
+    label: "Keep files in Daintree's cache",
+    description: "Copy files you choose or it downloads into a cache it can play and upload from",
+    severity: "neutral",
+  },
+  "preview:inspect": {
+    label: "Inspect previewed pages",
+    description: "Read the page and DOM in a preview to recognise a framework",
+    severity: "warning",
   },
 } satisfies Record<BuiltInPluginCapability, CapabilityMeta>;
 

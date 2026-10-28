@@ -1,58 +1,56 @@
 import { describe, it, expect } from "vitest";
-import { applyDictationCommands } from "../voiceDictationCommands.js";
+import {
+  applyDictationCommands,
+  extractSendCommand,
+  pendingCommandStart,
+  trailingDictationCommands,
+} from "../voiceDictationCommands.js";
 
 describe("applyDictationCommands", () => {
-  describe("individual commands at end of utterance", () => {
-    it("replaces trailing 'period' with '.'", () => {
-      expect(applyDictationCommands("hello period")).toBe("hello.");
-    });
-
-    it("replaces trailing 'full stop' with '.'", () => {
-      expect(applyDictationCommands("hello full stop")).toBe("hello.");
-    });
-
-    it("replaces trailing 'comma' with ','", () => {
-      expect(applyDictationCommands("hello comma")).toBe("hello,");
-    });
-
-    it("replaces trailing 'question mark' with '?'", () => {
-      expect(applyDictationCommands("are you there question mark")).toBe("are you there?");
-    });
-
-    it("replaces trailing 'exclamation point' with '!'", () => {
-      expect(applyDictationCommands("watch out exclamation point")).toBe("watch out!");
-    });
-
-    it("replaces trailing 'exclamation mark' with '!'", () => {
-      expect(applyDictationCommands("watch out exclamation mark")).toBe("watch out!");
-    });
-
+  describe("break commands at end of utterance", () => {
     it("replaces trailing 'new paragraph' with '\\n\\n'", () => {
       expect(applyDictationCommands("hello new paragraph")).toBe("hello\n\n");
     });
 
     it("replaces trailing 'new line' with '\\n'", () => {
-      expect(applyDictationCommands("hello new line")).toBe("hello\n");
-    });
-  });
-
-  describe("command-only utterances", () => {
-    it("replaces a standalone 'period'", () => {
-      expect(applyDictationCommands("period")).toBe(".");
+      expect(applyDictationCommands("fix the bug new line")).toBe("fix the bug\n");
     });
 
     it("replaces a standalone 'new paragraph'", () => {
       expect(applyDictationCommands("new paragraph")).toBe("\n\n");
     });
+
+    it("matches case-insensitively", () => {
+      expect(applyDictationCommands("hello New Paragraph")).toBe("hello\n\n");
+    });
   });
 
-  describe("case insensitivity", () => {
-    it("replaces uppercase commands", () => {
-      expect(applyDictationCommands("hello PERIOD")).toBe("hello.");
+  describe("model punctuation around the command", () => {
+    it("matches when the model adds a full stop after the command", () => {
+      expect(applyDictationCommands("Hello, new paragraph.")).toBe("Hello,\n\n");
     });
 
-    it("replaces mixed-case commands", () => {
-      expect(applyDictationCommands("hello New Paragraph")).toBe("hello\n\n");
+    it("matches a standalone command with punctuation and capitals", () => {
+      expect(applyDictationCommands("New line.")).toBe("\n");
+    });
+
+    it("matches a comma before the command", () => {
+      expect(applyDictationCommands("Done, new line")).toBe("Done,\n");
+    });
+  });
+
+  describe("spoken punctuation words are not commands", () => {
+    it.each([
+      "What's the retention period",
+      "Separate them with a comma",
+      "Hello comma",
+      "Stop at the full stop",
+      "Is it done question mark",
+      "Great exclamation point",
+      "Great exclamation mark",
+      "period",
+    ])("leaves %j literal", (input) => {
+      expect(applyDictationCommands(input)).toBe(input);
     });
   });
 
@@ -65,74 +63,149 @@ describe("applyDictationCommands", () => {
     it("leaves empty string unchanged", () => {
       expect(applyDictationCommands("")).toBe("");
     });
-
-    it("leaves text without any commands unchanged", () => {
-      const input = "the quick brown fox";
-      expect(applyDictationCommands(input)).toBe(input);
-    });
   });
 
   describe("chained trailing commands", () => {
-    it("replaces 'hello comma new paragraph' as a chain", () => {
-      expect(applyDictationCommands("hello comma new paragraph")).toBe("hello,\n\n");
+    it("replaces a chain of break commands", () => {
+      expect(applyDictationCommands("hello new line new paragraph")).toBe("hello\n\n\n");
     });
 
-    it("replaces the trailing chain only when literal text intervenes", () => {
-      // "world" interrupts the chain, so only "period" at the tail fires.
-      expect(applyDictationCommands("hello comma world period")).toBe("hello comma world.");
-    });
-
-    it("preserves a chain that ends in a formatting command followed by punctuation", () => {
-      // Chain produces a paragraph break followed by a literal comma — the
-      // downstream split-on-\\n\\n yields ["hello", ","] which the handler
-      // emits as two paragraphs.
-      expect(applyDictationCommands("hello new paragraph comma")).toBe("hello\n\n,");
+    it("replaces only the trailing chain when literal text intervenes", () => {
+      expect(applyDictationCommands("new line world new paragraph")).toBe("new line world\n\n");
     });
   });
 
-  describe("whitespace handling", () => {
-    it("handles multiple spaces between text and command", () => {
-      expect(applyDictationCommands("hello   period")).toBe("hello.");
+  describe("whitespace and boundaries", () => {
+    it("handles extra whitespace around the command", () => {
+      expect(applyDictationCommands("hello   new line   ")).toBe("hello\n");
     });
 
-    it("handles trailing whitespace after command", () => {
-      expect(applyDictationCommands("hello period   ")).toBe("hello.");
-    });
-
-    it("preserves leading whitespace before the literal portion", () => {
-      // Leading whitespace before "hello" is preserved; only the trailing chain replaces.
-      expect(applyDictationCommands("  hello period")).toBe("  hello.");
+    it("does not match a command embedded in a longer word", () => {
+      expect(applyDictationCommands("a new lines")).toBe("a new lines");
     });
   });
 
-  describe("idempotence", () => {
-    it("running twice produces the same result", () => {
-      const once = applyDictationCommands("hello period");
-      const twice = applyDictationCommands(once);
-      expect(twice).toBe(once);
-    });
+  it("is idempotent", () => {
+    const once = applyDictationCommands("hello new line");
+    expect(applyDictationCommands(once)).toBe(once);
+  });
+});
+
+describe("extractSendCommand", () => {
+  it.each([
+    ["fix the login bug send it", "fix the login bug"],
+    ["Fix the login bug. Send it!", "Fix the login bug"],
+    ["fix the login bug Send  It ", "fix the login bug"],
+    ["Send it.", ""],
+    ["send it", ""],
+    ["Tie the knot send it", "Tie the knot"],
+    ["Is it right or not? Send it.", "Is it right or not"],
+    ["Looks good, just send it.", "Looks good, just"],
+    ["Don't wait, just send it.", "Don't wait, just"],
+    ["Fix the login bug, send it.", "Fix the login bug"],
+    ["Fix the login bug. Send it.", "Fix the login bug"],
+    ["Fix it send it", "Fix it"],
+    ["Where should I put the handler? Send it.", "Where should I put the handler"],
+    ["Don't forget the tests. Send it.", "Don't forget the tests"],
+    ["Fix the bug and send it", "Fix the bug and"],
+    ["When ready send it", "When ready"],
+  ])("strips the trailing command from %j", (input, text) => {
+    expect(extractSendCommand(input)).toEqual({ text, send: true });
   });
 
-  describe("word-boundary safety", () => {
-    it("does not match 'period' inside 'periodic'", () => {
-      expect(applyDictationCommands("periodic")).toBe("periodic");
-    });
-
-    it("matches a trailing command after a word that starts with the same prefix", () => {
-      // "periodic" is preserved; the trailing standalone "period" still fires.
-      expect(applyDictationCommands("periodic period")).toBe("periodic.");
-    });
+  it.each([
+    "then send it to the API",
+    "send it to the API",
+    "resend it",
+    "we should send items later",
+    "",
+    "hello",
+    "Fix the bug but don't send it.",
+    "Fix the bug but don’t send it.",
+    "fix the bug but dont send it",
+    "Fix the bug but DON'T SEND IT",
+    "Fix the bug, but do not send it.",
+    "Not send it",
+    "We never send it.",
+    "It won't send it",
+    "It won’t send it",
+    "I can't send it",
+    "I can’t send it",
+    "I cannot send it",
+    "You shouldn't send it.",
+    "You shouldnt send it",
+    "I didn't send it.",
+    "I didn’t send it",
+    "It doesn't send it",
+    "It doesnt send it",
+    "I wouldn't send it.",
+    "We couldn't send it",
+    "This isn't send it",
+    "Remember not to send it.",
+    "Don't just send it.",
+    "Please don’t just send it",
+    "Do not yet send it",
+    "Draft the reply to the client but don't actually send it.",
+    "Write the migration email but do not ever send it.",
+    "Draft the Slack update and let me review it before you send it.",
+    "Log the payload right before we send it.",
+    "Where should the webhook handler send it?",
+    "Where should the webhook handler send it",
+    "How do we send it",
+    "Fix the bug, send it?",
+    "Maybe I'll send it",
+    "I’ll send it.",
+    "They send it",
+    "You should send it",
+    "I want to send it",
+    "The bot will send it.",
+    "Never actually send it",
+    "I have no plans to send it",
+    "When should the webhook handler send it",
+    "How should the webhook handler send it",
+    "No service should ever send it",
+    "I’ll eventually send it",
+    "We actually send it",
+  ])("leaves %j literal", (input) => {
+    expect(extractSendCommand(input)).toEqual({ text: input, send: false });
   });
 
-  describe("documented limitations", () => {
-    // The trailing-anchor design is end-of-utterance only. Legitimate trailing
-    // nouns that happen to be command words will convert. This is the same
-    // tradeoff the legacy Deepgram dictation mode made — kept for parity. If a
-    // user dislikes it, the manual paragraphing strategy disables the post-processor.
-    it("converts a trailing noun that happens to spell a command (known tradeoff)", () => {
-      expect(applyDictationCommands("I studied the Jurassic period")).toBe(
-        "I studied the Jurassic."
-      );
-    });
+  it("leaves break commands before it for applyDictationCommands", () => {
+    const { text } = extractSendCommand("hello new line send it");
+    expect(applyDictationCommands(text)).toBe("hello\n");
   });
+});
+
+describe("trailingDictationCommands", () => {
+  it("says where a trailing chain starts and the breaks it stands for", () => {
+    const text = "Fix it, new line new paragraph.";
+    const chain = trailingDictationCommands(text);
+    expect(chain).toEqual({ start: text.indexOf(" new"), replacement: "\n\n\n" });
+  });
+
+  it("finds nothing when the commands don't end the text", () => {
+    expect(trailingDictationCommands("a new line inside quoted strings")).toBeNull();
+  });
+});
+
+describe("pendingCommandStart", () => {
+  it.each([
+    ["fix the bug, send", "send"],
+    ["fix the bug, send it.", "send it."],
+    ["accept a new line", "new line"],
+    ["add a New", "New"],
+    ["hello new line new", "new line new"],
+    ["hello new line send", "new line send"],
+    ["send it new paragraph", "new paragraph"],
+    ["Fix this—new", "new"],
+  ])("finds where %j could still end in commands", (text, tail) => {
+    expect(text.slice(pendingCommandStart(text))).toBe(tail);
+  });
+
+  it.each(["fix the bug", "send it to the API", "a new line here", "line", "it", ""])(
+    "finds nothing pending in %j",
+    (text) => {
+      expect(pendingCommandStart(text)).toBe(-1);
+    }
+  );
 });

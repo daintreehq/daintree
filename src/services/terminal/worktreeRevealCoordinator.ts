@@ -1,4 +1,7 @@
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import {
+  load as loadTerminalService,
+  peek as peekTerminalService,
+} from "@/services/terminal/terminalInstanceServiceAccessor";
 import { isDocumentHidden, revealUntilStable } from "./revealUntilStable";
 
 // Per-attempt budget for the attach-settle wait. Matches the registry's own
@@ -111,7 +114,8 @@ export function createWorktreeRevealCoordinator(): WorktreeRevealCoordinator {
         for (let attempt = 0; attempt < ATTACH_WAIT_ATTEMPTS; attempt++) {
           if (isStale()) return;
           try {
-            await terminalInstanceService.waitForAttachSettled(obligation.id, {
+            const service = await loadTerminalService();
+            await service.waitForAttachSettled(obligation.id, {
               timeoutMs: ATTACH_SETTLE_TIMEOUT_MS,
             });
             attached = true;
@@ -137,7 +141,7 @@ export function createWorktreeRevealCoordinator(): WorktreeRevealCoordinator {
         // repaintForReveal reports false, so the loop keeps retrying.
         const painted = await revealUntilStable(
           obligation.id,
-          (target) => terminalInstanceService.repaintForReveal(target),
+          (target) => peekTerminalService()?.repaintForReveal(target) ?? false,
           () => isStale() || isDocumentHidden(),
           "[worktreeReveal]"
         );

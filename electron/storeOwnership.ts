@@ -1,165 +1,63 @@
+import {
+  SETTING_CATALOG,
+  type SettingDeclaration,
+  type SettingEntry,
+  type SettingOwner,
+} from "../shared/config/settingOwnership.js";
 import type { AuditLogsStoreSchema, StoreSchema, WindowStatesStoreSchema } from "./store.js";
 
-/**
- * Who owns each persisted setting when a window is attached to a remote host.
- *
- * - `host`: everything about the work — agents, accounts, environment, MCP,
- *   plugins, forge, run history, per-project state. A remote window reads and
- *   writes the connected host's value, and its settings page names the host.
- * - `device`: the screen, keyboard and this machine — theme, keybindings,
- *   terminal appearance, window geometry, GPU, voice, privacy, updates, crash
- *   recovery and the host list itself. Always this machine's.
- * - `split`: a key holding both; its fields are classified below.
- *
- * Nothing is synced between hosts. The records are total over their schemas,
- * so a new store key or field that doesn't declare an owner fails typecheck.
- */
-export type SettingOwner = "host" | "device";
-
-export const STORE_KEY_OWNERSHIP = {
-  // Store-file bookkeeping; each machine's own and never crosses a link.
-  _schemaVersion: "device",
-  windowState: "device",
-  terminalConfig: "split",
-  hibernation: "host",
-  sessionRestore: "host",
-  windowOpening: "device",
-  // Each machine holds its own power assertion for its own agents; a remote
-  // window's keep-awake split answers from this machine, so it edits this one.
-  keepAwake: "device",
-  idleTerminalNotify: "host",
-  idleTerminalDismissals: "host",
-  idleTerminalNotifiedAt: "host",
-  parkedRuns: "host",
-  snoozedRuns: "host",
-  idleBackgroundAutoClose: "host",
-  pluginBackgroundUpdateCheck: "host",
-  appState: "split",
-  legacyWorkspaceStateOwnerId: "host",
-  userConfig: "host",
-  worktreeConfig: "host",
-  agentSettings: "host",
-  notificationSettings: "host",
-  userAgentRegistry: "host",
-  agentUpdateSettings: "host",
-  keybindingOverrides: "device",
-  projectEnv: "host",
-  globalEnvironmentVariables: "host",
-  appAgentConfig: "host",
-  windowStates: "device",
-  worktreeIssueMap: "host",
-  wslGitByWorktree: "host",
-  rosettaWarningDismissed: "device",
-  // Consent to read the agents of the machine Canopy runs on, which is the host.
-  canopyMode: "host",
-  appTheme: "device",
-  privacy: "device",
-  agentSessionHistory: "host",
-  voiceInput: "device",
-  mcpServer: "host",
-  helpAssistant: "host",
-  pendingErrors: "device",
-  errorFingerprints: "device",
-  gpu: "device",
-  crashRecovery: "device",
-  onboarding: "device",
-  orchestrationMilestones: "device",
-  shortcutHintCounts: "device",
-  shortcutHintHoveredKeys: "device",
-  forgeEnableDismissedPaths: "host",
-  updateChannel: "device",
-  dismissedUpdateVersion: "device",
-  dismissedUpdateAt: "device",
-  versionFirstRun: "device",
-  lastUpdateCheck: "device",
-  pendingUpdateVersion: "device",
-  pendingUpdateInstallStage: "device",
-  storeUpdateNotificationsEnabled: "device",
-  lastNotifiedStoreVersion: "device",
-  storeNotifierEtag: "device",
-  logLevelOverrides: "device",
-  plugins: "host",
-  forgeDefaultProviderId: "host",
-  forgeCredentials: "host",
-  forgeAudit: "host",
-  runHistory: "host",
-  pluginMcpAudit: "host",
-  pluginMcpConsent: "host",
-  pluginMcpConfig: "host",
-  pluginCapabilityConsent: "host",
-  projectPluginTrust: "host",
-  projectPluginVisibility: "host",
-  projectSurfaceChoices: "host",
-  projectAgentMcpEnablement: "host",
-  projectAgentMcpAccess: "host",
-  pluginAgentMcpAccess: "host",
-  workspaceKeepResident: "host",
-  // Dev servers run on the host, so a user Stop is recorded where the panel's server lives.
-  devPreviewUserStopped: "host",
-  remoteHosts: "device",
-  hostMode: "device",
-  // This machine's own listener and the devices paired to it.
-  deviceAnswer: "device",
-  remoteHostsPreferences: "device",
-  // What this machine lets a host's plugins do with its clipboard.
-  remoteHostPluginClipboardGrants: "device",
-  // Which host plugins may run their view code on this machine, and what code.
-  remoteHostPluginViewConsent: "device",
-} as const satisfies Record<keyof StoreSchema, SettingOwner | "split">;
-
-/** terminalConfig: behaviour runs where the terminals run; appearance is how this screen draws them. */
-export const TERMINAL_CONFIG_FIELD_OWNERSHIP = {
-  scrollbackLines: "host",
-  performanceMode: "host",
-  hybridInputEnabled: "host",
-  hybridInputAutoFocus: "host",
-  resourceMonitoringEnabled: "host",
-  memoryLeakDetectionEnabled: "host",
-  memoryLeakAutoRestartThresholdMb: "host",
-  screenReaderMode: "device",
-  cachedProjectViews: "device",
-  fontSize: "device",
-  fontFamily: "device",
-  colorSchemeId: "device",
-  customSchemes: "device",
-  recentSchemeIds: "device",
-} as const satisfies Record<keyof StoreSchema["terminalConfig"], SettingOwner>;
+export type { SettingOwner };
 
 /**
- * appState: panel layout and the terminal list move with the host; zoom,
- * sidebar and panel sizes, and palette habits stay with the client.
+ * Main's ownership tables, derived from the shared catalog
+ * (`shared/config/settingOwnership.ts`). Each is held exactly to its schema: a
+ * store key or field the catalog doesn't declare, or one it declares that the
+ * schema no longer has, fails typecheck.
  */
-export const APP_STATE_FIELD_OWNERSHIP = {
-  activeWorktreeId: "host",
-  terminals: "host",
-  recipes: "host",
-  panelGridConfig: "host",
-  mruList: "host",
-  focusMode: "host",
-  fleetScopeMode: "host",
-  sidebarWidth: "device",
-  focusPanelState: "device",
-  diagnosticsHeight: "device",
-  dockedPopoverHeight: "device",
-  hasSeenWelcome: "device",
-  developerMode: "device",
-  actionMruList: "device",
-  actionPinnedIds: "device",
-  actionHiddenIds: "device",
-} as const satisfies Record<keyof StoreSchema["appState"], SettingOwner>;
+function exactlyOver<Keys extends PropertyKey>() {
+  return <T extends Record<Keys, unknown>>(table: T & Record<Exclude<keyof T, Keys>, never>): T =>
+    table;
+}
 
-export const WINDOW_STATES_STORE_OWNERSHIP = {
-  windowStates: "device",
-} as const satisfies Record<keyof WindowStatesStoreSchema, SettingOwner>;
+/** A split key is `split` when its fields' owners differ. */
+function entryOwner(entry: SettingEntry): SettingOwner | "split" {
+  if (!("fields" in entry)) return entry.owner;
+  const owners = new Set(Object.values(entry.fields).map((field) => field.owner));
+  if (owners.size > 1) return "split";
+  return owners.has("device") ? "device" : "host";
+}
 
-export const AUDIT_LOGS_STORE_OWNERSHIP = {
-  mcpAuditLog: "host",
-  mcpTurnOutcomeLog: "host",
-  pluginAuditLog: "host",
-  forgeAuditLog: "host",
-  runHistoryRecords: "host",
-  pluginMcpAuditLog: "host",
-} as const satisfies Record<keyof AuditLogsStoreSchema, SettingOwner>;
+function entryOwners<T extends Readonly<Record<string, SettingEntry>>>(entries: T) {
+  return Object.fromEntries(
+    Object.entries(entries).map(([key, entry]) => [key, entryOwner(entry)])
+  ) as { readonly [K in keyof T]: SettingOwner | "split" };
+}
+
+function declaredOwners<T extends Readonly<Record<string, SettingDeclaration>>>(declarations: T) {
+  return Object.fromEntries(
+    Object.entries(declarations).map(([key, declaration]) => [key, declaration.owner])
+  ) as { readonly [K in keyof T]: SettingOwner };
+}
+
+const config = SETTING_CATALOG.config.entries;
+
+export const STORE_KEY_OWNERSHIP = exactlyOver<keyof StoreSchema>()(entryOwners(config));
+
+export const TERMINAL_CONFIG_FIELD_OWNERSHIP = exactlyOver<keyof StoreSchema["terminalConfig"]>()(
+  declaredOwners(config.terminalConfig.fields)
+);
+
+export const APP_STATE_FIELD_OWNERSHIP = exactlyOver<keyof StoreSchema["appState"]>()(
+  declaredOwners(config.appState.fields)
+);
+
+export const WINDOW_STATES_STORE_OWNERSHIP = exactlyOver<keyof WindowStatesStoreSchema>()(
+  declaredOwners(SETTING_CATALOG["window-states"].entries)
+);
+
+export const AUDIT_LOGS_STORE_OWNERSHIP = exactlyOver<keyof AuditLogsStoreSchema>()(
+  declaredOwners(SETTING_CATALOG["audit-logs"].entries)
+);
 
 export function ownerOfStoreKey(key: keyof StoreSchema): SettingOwner | "split" {
   return STORE_KEY_OWNERSHIP[key];

@@ -209,13 +209,13 @@ export type {
   AgentDefaultsSnapshot,
   AgentDefaultsPatch,
   AgentDefaultsLegacyCandidates,
+  // This machine's toolbar agent pins (#14702)
+  AgentToolbarPins,
+  AgentToolbarPinsSnapshot,
   // Project presence types
   ProjectPresenceState,
   ProjectPresenceEntry,
   ProjectPresenceSnapshot,
-  // Hibernation types
-  HibernationConfig,
-  HibernationProjectHibernatedPayload,
   // Idle terminal notification types
   IdleTerminalNotifyConfig,
   IdleTerminalNotifyPayload,
@@ -292,7 +292,12 @@ export type {
   ElectronAPI,
   NotificationSettings,
   VoiceInputSettings,
+  VoiceInputSettingsPatch,
   SuggestedDictionaryEntry,
+  DismissedSuggestion,
+  VoiceDictionaryEntry,
+  VoiceDictionarySource,
+  VoiceDictionaryState,
   VoiceInputStatus,
   VoiceTranscriptionModel,
   VoiceTranscriptionProvider,
@@ -312,6 +317,7 @@ export type {
   AdaptiveBackoffMetrics,
   // Terminal config
   TerminalConfig,
+  TerminalConfigChange,
   // Worktree config
   WorktreeConfig,
   // IPC Contract Maps
@@ -379,6 +385,7 @@ export {
   supportsExactSessionCapture,
   mintAssignedSessionId,
   stripAssignedSessionIdArgs,
+  stripConversationSelectorFlags,
   buildLaunchCommandFromFlags,
   isAgentBypassSupported,
   resolveEffectiveBypass,
@@ -489,6 +496,7 @@ export type { EventContext } from "./events.js";
 export type {
   TerminalTaskType,
   TerminalKillOptions,
+  TerminalExitContext,
   TerminalActivityStatus,
   TerminalActivity,
   TerminalActivityPayload,
@@ -553,8 +561,38 @@ export {
 } from "./portal.js";
 
 // Voice types - canonical phase model for voice session and transcript lifecycle
-export type { VoiceInputError, VoiceInputErrorSeverity, VoiceTranscriptPhase } from "./voice.js";
-export { isActiveVoiceSession } from "./voice.js";
+export type {
+  RecentDictation,
+  VoiceInputError,
+  VoiceInputErrorSeverity,
+  VoiceLiveLevel,
+  VoiceLiveSessionUpdate,
+  VoiceMicSignal,
+  VoicePauseRequest,
+  VoicePublishDetailsRequest,
+  VoiceRevealRequest,
+  VoiceSessionClockAnchor,
+  VoiceSessionPhase,
+  VoiceSessionSnapshot,
+  VoiceTargetChrome,
+  VoiceSessionElsewhere,
+  VoiceSessionKind,
+  VoiceStopRequest,
+  VoiceKeytermSource,
+  VoiceSentTerm,
+  LastDictationTerms,
+  VoiceSessionEndReason,
+  VoiceStartOutcome,
+  VoiceTranscriptPhase,
+} from "./voice.js";
+export {
+  isActiveVoiceSession,
+  MAX_RECENT_DICTATIONS,
+  VOICE_REPLAY_AUDIO_LOST_CODE,
+  VOICE_STOP_AUDIO_LOST_CODE,
+  VOICE_SNAPSHOT_TRANSCRIPT_MAX_LENGTH,
+  voiceLevelFromRms,
+} from "./voice.js";
 
 // Workspace Host types - IPC protocol for workspace management
 export type {
@@ -677,6 +715,7 @@ export type {
   ChecklistItemId,
   TourOnboardingState,
   TourProgressUpdate,
+  TourOutcome,
   HelpAssistantTier,
 } from "./ipc/maps.js";
 

@@ -24,6 +24,7 @@ vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
 
 import type { ActionId } from "@shared/types/actions";
 import { MCP_EXTERNAL_TIER_TOOLS } from "@shared/config/mcpExternalTierAllowlist";
+import { GLOBAL_ASSISTANT_TOOL_IDS } from "@shared/config/globalAssistant";
 import { ActionService } from "@/services/ActionService";
 import { VIEWLESS_ACTIONS } from "../../../../electron/services/viewless/viewlessActionCatalog";
 import { createActionRegistry } from "./helpers/wireSurface";
@@ -36,11 +37,15 @@ const VIEWLESS_ARTIFACT_PATH = path.resolve(
   __dirname,
   "../../../../electron/services/mcp-server/generated/mcpViewlessBaseManifest.ts"
 );
+const GLOBAL_ARTIFACT_PATH = path.resolve(
+  __dirname,
+  "../../../../electron/services/mcp-server/generated/mcpGlobalAssistantBaseManifest.ts"
+);
 
 /**
  * The tools the session server runs in main whatever views are open: its
  * `VIEWLESS_MAIN_PROCESS_TOOLS`, which can't be imported into this renderer
- * test. `sessionServer.test.ts` holds the generated surface to that set, so a
+ * test. `sessionServer.workspaceBound.test.ts` holds the generated surface to that set, so a
  * tool added there and missed here fails.
  */
 const MAIN_PROCESS_TOOLS = [
@@ -221,5 +226,19 @@ describe("MCP external base manifest artifact", () => {
       ].join("\n")
     );
     await expectArtifact(VIEWLESS_ARTIFACT_PATH, rendered);
+  }, 60_000);
+
+  it("describes the global assistant's root tools", async () => {
+    const entries = await buildExpectedEntries([...GLOBAL_ASSISTANT_TOOL_IDS]);
+    const rendered = await renderArtifact(
+      entries,
+      GLOBAL_ARTIFACT_PATH,
+      "MCP_GLOBAL_ASSISTANT_BASE_MANIFEST",
+      [
+        "// The whole tool surface of the global assistant (#14453), which has no",
+        "// project and no view: its root tools, and nothing it would be refused.",
+      ].join("\n")
+    );
+    await expectArtifact(GLOBAL_ARTIFACT_PATH, rendered);
   }, 60_000);
 });

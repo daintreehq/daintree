@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { beforeAll, describe, it, expect, vi, beforeEach } from "vitest";
 import type { PanelInstance } from "@shared/types/panel";
 
 const fullWakeMock = vi.fn();
@@ -9,15 +9,18 @@ const setFocusedMock = vi.fn();
 const logWarnMock = vi.fn();
 const notifyWarmReactivationCompleteMock = vi.fn();
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     fullWakeForVisibilityRestore: fullWakeMock,
     repaintForReveal: repaintForRevealMock,
     revealTerminal: revealTerminalMock,
     isFocused: isFocusedMock,
     setFocused: setFocusedMock,
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("@/utils/logger", () => ({
   logWarn: logWarnMock,
@@ -88,6 +91,15 @@ beforeEach(() => {
   mockPanelsById = {};
   mockFocusedId = null;
   mockHelpTerminalId = null;
+});
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  // Imported here, not statically: a static import would evaluate the mocked
+  // logger before the hoisted factory's mock functions exist.
+  const { load } = await import("@/services/terminal/terminalInstanceServiceAccessor");
+  await load();
 });
 
 describe("wakeActiveWorktreeTerminals", () => {

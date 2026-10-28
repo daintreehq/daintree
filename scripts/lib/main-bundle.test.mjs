@@ -4,13 +4,18 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { MAIN_BUNDLE_EXTERNAL, mainBundleStubsPlugin } from "./main-bundle.mjs";
+import {
+  MAIN_BUNDLE_EXTERNAL,
+  VUE_ENV_SWITCH_FILTER,
+  mainBundlePlugins,
+  mainBundleStubsPlugin,
+} from "./main-bundle.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
-async function bundle(contents) {
+async function bundle(contents, plugins = [mainBundleStubsPlugin()], resolveDir = root) {
   const result = await build({
-    stdin: { contents, resolveDir: root, loader: "js" },
+    stdin: { contents, resolveDir, loader: "js" },
     bundle: true,
     write: false,
     metafile: true,
@@ -18,7 +23,7 @@ async function bundle(contents) {
     format: "esm",
     target: "node22",
     external: MAIN_BUNDLE_EXTERNAL,
-    plugins: [mainBundleStubsPlugin()],
+    plugins,
     absWorkingDir: root,
     logLevel: "silent",
   });
@@ -83,5 +88,150 @@ describe("mainBundleStubsPlugin", () => {
 
     expect(inputs.some((p) => p.includes("node_modules/ajv/dist/2020.js"))).toBe(true);
     expect(inputs.some((p) => p.includes("node_modules/ajv-formats/"))).toBe(true);
+  });
+});
+
+const VUE_SWITCHED = ["compiler-core", "compiler-dom", "shared"];
+
+/** Which of each switched Vue package's builds a bundle carries, wherever the install resolves from. */
+function vueBuilds(inputs) {
+  return inputs
+    .filter((p) => /\/@vue\/[^/]+\/dist\//.test(p))
+    .map((p) => p.slice(p.lastIndexOf("/@vue/") + 1))
+    .sort();
+}
+
+describe("vueProductionCompilerPlugin", () => {
+  const source = `import { parse } from "@vue/compiler-dom";
+    const [root] = parse("<div><MyButton v-if='ok' /></div>").children;
+    export const tags = root.children.map((node) => [node.tag, node.tagType]);
+    export const env = () => process.env.NODE_ENV;`;
+
+  it("bundles only the production build of Vue's compiler, nested packages included", async () => {
+    const { inputs, code } = await bundle(source, mainBundlePlugins({ isProd: true }));
+
+    expect(vueBuilds(inputs)).toEqual(
+      VUE_SWITCHED.map((pkg) => `@vue/${pkg}/dist/${pkg}.cjs.prod.js`)
+    );
+    const mod = await run(code);
+    expect(mod.tags).toEqual([["MyButton", 1]]);
+    // Only Vue's own switch is folded: anything else still reads NODE_ENV when it runs.
+    const previous = process.env.NODE_ENV;
+    try {
+      process.env.NODE_ENV = "read-at-runtime";
+      expect(mod.env()).toBe("read-at-runtime");
+    } finally {
+      if (previous === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = previous;
+    }
+  });
+
+  it("leaves a development bundle both of Vue's builds, as before", async () => {
+    const { inputs } = await bundle(source, mainBundlePlugins({ isProd: false }));
+
+    expect(vueBuilds(inputs)).toEqual(
+      VUE_SWITCHED.flatMap((pkg) => [
+        `@vue/${pkg}/dist/${pkg}.cjs.js`,
+        `@vue/${pkg}/dist/${pkg}.cjs.prod.js`,
+      ])
+    );
+  });
+
+  it("parses templates for the Vue resolver exactly as the development build does", async () => {
+    // Tests run Vue's development build; a packaged app now runs the production one.
+    const entry = `export { TemplateIndex } from ${JSON.stringify(
+      path.join(root, "electron/services/elementPicker/worker/resolvers/vue/template.ts")
+    )};`;
+    const [production, development] = await Promise.all(
+      [true, false].map(async (isProd) => {
+        const { code } = await bundle(entry, mainBundlePlugins({ isProd }));
+        return (await run(code)).TemplateIndex;
+      })
+    );
+    const files = [
+      [
+        "<template>",
+        "  <!-- <button>old</button> -->",
+        '  <div class="wrap">',
+        '    <MyButton v-if="ok" @click="go" />',
+        "    <template #footer><span>{{ label }}</span></template>",
+        "  </div>",
+        "</template>",
+        "<script setup>",
+        "const html = '<b>not a tag</b>';",
+        "</script>",
+      ].join("\n"),
+      '\uFEFF<template><button class="first">a</button>\r\n  <i>b</i></template>\r\n',
+      "<template><div><p></div></template>",
+      '<template lang="pug">\nbutton.cta Go\n</template>\n',
+      "<template><a/></template><template><b/></template>",
+    ];
+
+    const lookups = async (TemplateIndex, text) => {
+      const index = new TemplateIndex();
+      const found = [];
+      for (const [line, row] of text.split("\n").entries()) {
+        for (let column = 1; column <= row.length; column += 1) {
+          if (row[column - 1] === "<") found.push(await index.tagAt(text, line + 1, column));
+        }
+      }
+      return found;
+    };
+    for (const text of files) {
+      expect(await lookups(production, text), text).toEqual(await lookups(development, text));
+    }
+    // Not a vacuous match: the production build finds tags, components among them.
+    const results = await lookups(production, files[0]);
+    expect(results).toContainEqual({
+      status: "found",
+      tag: expect.objectContaining({ tag: "MyButton", tagType: 1 }),
+    });
+  });
+
+  it("matches only the entry files that switch, on either path separator", () => {
+    for (const pkg of VUE_SWITCHED) {
+      expect(VUE_ENV_SWITCH_FILTER.test(`/repo/node_modules/@vue/${pkg}/index.js`)).toBe(true);
+      expect(
+        VUE_ENV_SWITCH_FILTER.test(
+          `C:\\repo\\node_modules\\@vue\\compiler-dom\\node_modules\\@vue\\${pkg}\\index.js`
+        )
+      ).toBe(true);
+      expect(VUE_ENV_SWITCH_FILTER.test(`/repo/node_modules/@vue/${pkg}/dist/${pkg}.cjs.js`)).toBe(
+        false
+      );
+    }
+    for (const other of [
+      "/repo/node_modules/@vue/compiler-sfc/index.js",
+      "/repo/node_modules/@vue/shared-utils/index.js",
+      "/repo/node_modules/vue/index.js",
+      "/repo/src/@vue/shared/index.js",
+    ]) {
+      expect(VUE_ENV_SWITCH_FILTER.test(other), other).toBe(false);
+    }
+  });
+
+  it.each([
+    ["no longer reads NODE_ENV", "module.exports = require('./dist/shared.cjs.js');"],
+    [
+      "names NODE_ENV but switches some other way",
+      "// reads process.env.NODE_ENV\nmodule.exports = require(process.env['NODE_ENV'] === 'production' ? './p.js' : './d.js');",
+    ],
+  ])("fails the build when a switched entry file %s", async (_case, shim) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "main-bundle-vue-"));
+    try {
+      const pkg = path.join(dir, "node_modules/@vue/shared");
+      fs.mkdirSync(pkg, { recursive: true });
+      fs.writeFileSync(
+        path.join(pkg, "package.json"),
+        JSON.stringify({ name: "@vue/shared", main: "index.js" })
+      );
+      fs.writeFileSync(path.join(pkg, "index.js"), shim);
+
+      await expect(
+        bundle(`import "@vue/shared";`, mainBundlePlugins({ isProd: true }), dir)
+      ).rejects.toThrow(/no longer switches on process\.env\.NODE_ENV === "production"/);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

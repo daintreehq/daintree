@@ -96,3 +96,12 @@ export function ProjectTile({
     </div>
   );
 }
+
+/**
+ * How much a folded band is holding. Only while folded: expanded, the rows are
+ * the count, and printing it as well would be chrome naming what is already on
+ * screen.
+ */
+export function BandCollapsedCount({ count }: { count: number }) {
+  return <span className="shrink-0 text-3xs tabular-nums">{count}</span>;
+}

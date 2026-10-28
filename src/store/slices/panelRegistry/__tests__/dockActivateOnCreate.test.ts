@@ -12,8 +12,10 @@
  * panel when `activateDockOnCreate: true` and `location === "dock"`.
  */
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { beforeAll, describe, it, expect, beforeEach, vi } from "vitest";
+import { createTerminalPaintPlane } from "@/services/TerminalInstanceService";
+
+const terminalInstanceService = createTerminalPaintPlane();
 
 const acknowledgeWaitingMock = vi.fn();
 const acknowledgeWorkingPulseMock = vi.fn();
@@ -74,8 +76,8 @@ vi.mock("@/clients", () => ({
   },
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     // No attached renderer xterm in these tests — spawn falls back to the
     // default/estimated dims path.
     get: vi.fn(() => null),
@@ -87,8 +89,11 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     setInputLocked: vi.fn(),
     sendPtyResize: vi.fn(),
     wake: vi.fn(),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("../persistence", async () => {
   const actual = await vi.importActual<typeof import("../persistence")>("../persistence");
@@ -104,6 +109,14 @@ beforeEach(() => {
 });
 
 const { usePanelStore } = await import("../../../panelStore");
+const { load: loadTerminalService } =
+  await import("@/services/terminal/terminalInstanceServiceAccessor");
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
+});
 
 async function drainMicrotasks(iterations = 20): Promise<void> {
   for (let i = 0; i < iterations; i++) {

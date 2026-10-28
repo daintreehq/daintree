@@ -15,10 +15,29 @@ import type {
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { DEFAULT_GITIGNORE_TEMPLATE_ID } from "../../../../shared/config/gitignoreTemplates.js";
 import { AppError } from "../../../utils/errorTypes.js";
+import { logWarn } from "../../../utils/logger.js";
+import type { HandlerDependencies } from "../../types.js";
 import { getGitignoreTemplate } from "./gitignoreTemplates.js";
 
-export function registerGitInitHandlers(): () => void {
+export function registerGitInitHandlers(
+  deps: Pick<HandlerDependencies, "worktreeService"> = {}
+): () => void {
   const handlers: Array<() => void> = [];
+
+  // A workspace host that loaded the folder before it had a repository keeps
+  // showing none until it is replaced (#14178). Its failure must not turn a
+  // completed init into a failed one: the folder is a repository either way,
+  // and the sidebar's Retry still reaches the replacement.
+  const refreshWorkspaceHost = async (directoryPath: string): Promise<void> => {
+    try {
+      await deps.worktreeService?.refreshProjectAfterGitInit(directoryPath);
+    } catch (error) {
+      logWarn("Couldn't refresh the workspace host after git init", {
+        directoryPath,
+        error: formatErrorMessage(error, "Workspace host refresh failed"),
+      });
+    }
+  };
 
   const handleProjectInitGit = async (directoryPath: string): Promise<void> => {
     if (typeof directoryPath !== "string" || !directoryPath) {
@@ -36,6 +55,7 @@ export function registerGitInitHandlers(): () => void {
 
     const git = await createHardenedGit(directoryPath);
     await git.init();
+    await refreshWorkspaceHost(directoryPath);
   };
   handlers.push(typedHandle(CHANNELS.PROJECT_INIT_GIT, handleProjectInitGit));
 
@@ -173,17 +193,20 @@ export function registerGitInitHandlers(): () => void {
               "Repository initialized — initial commit skipped",
               identityHelp
             );
+            await refreshWorkspaceHost(directoryPath);
             return { outcome: "error" as const, completedSteps };
           }
           throw commitError;
         }
       }
 
+      await refreshWorkspaceHost(directoryPath);
       emitProgress("complete", "success", "Git initialization complete");
       return { outcome: "success" as const, completedSteps };
     } catch (error) {
       const errorMessage = formatErrorMessage(error, "Git initialization failed");
       emitProgress("error", "error", "Git initialization failed", errorMessage);
+      if (completedSteps.includes("init")) await refreshWorkspaceHost(directoryPath);
       throw new AppError({
         code: "INTERNAL",
         message: errorMessage,

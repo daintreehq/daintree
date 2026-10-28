@@ -12,6 +12,7 @@ Electron IDE for orchestrating AI coding agents — many agent terminals running
 npm run dev            # Main + Renderer (Vite)
 npm test -- <path>     # the ONLY way to run unit tests locally: the files you changed
 npm test               # full vitest suite: CI only (6 shards). NEVER run it locally
+npm run typecheck:changed  # only the TS projects your branch touches: use this locally
 npm run check          # typecheck + codegen/guard checks + lint and e2e-wait ratchets + format:check
 npm run fix            # prettier --write + eslint --fix
 npm run build          # production build
@@ -20,7 +21,7 @@ npm run rebuild        # rebuild native modules after an install failure
 
 `npm install` for dev, `npm ci` for CI; `postinstall` rebuilds `node-pty` for Electron. Native-module errors → `npm run rebuild`.
 
-Use `npm run typecheck`, never a bare `tsc -b` — the project-reference graph emits build artifacts and phantom TS6305s outside the wrapper.
+Typecheck runs on the TypeScript 7 native compiler (`typescript7`; `typescript` stays on TS6 for typescript-eslint). Use `npm run typecheck` or `typecheck:changed`, never a bare `tsc -b` — the project-reference graph emits build artifacts and phantom TS6305s outside the wrapper.
 
 ## Architecture
 
@@ -30,7 +31,7 @@ Use `npm run typecheck`, never a bare `tsc -b` — the project-reference graph e
 
 Each project gets its own `WebContentsView` and V8 context via `ProjectViewManager`, with LRU eviction under memory pressure — so renderer state is **per project view**, not global. Per-window services live in `WindowContext.services`; PtyClient and WorkspaceClient are shared globals.
 
-**Cross-store reads go through `src/store/storeAccessors.ts`** — never import a partner store at module eval (TDZ; see `docs/architecture/store-init-order.md`). 116 store creation sites across 115 files — 114 app-global `create()`, plus two `zustand/vanilla`: `shortcutHintStore` (module singleton) and `createWorktreeStore`, the sole per-project-view factory.
+**Cross-store reads go through `src/store/storeAccessors.ts`** — never import a partner store at module eval (TDZ; see `docs/architecture/store-init-order.md`). Stores are app-global, except `createWorktreeStore`, the sole per-project-view factory.
 
 **Durable state spans two engines with separate migrations:** better-sqlite3 + drizzle (`npm run db:generate`) and electron-store JSON (`electron/store.ts`).
 
@@ -39,6 +40,8 @@ Each project gets its own `WebContentsView` and V8 context via `ProjectViewManag
 Panels are a 7-member union in `shared/types/panel.ts` (`terminal`, `browser`, `dev-preview`, `review`, `file`, `file-browser`, `diff`) with per-kind modules in `src/panels/<kind>/` and the registry in `shared/config/panelKindRegistry.ts`.
 
 Plugins are manifest-driven, activate out-of-process in unsandboxed `utilityProcess.fork` workers (builtins are the exception and load in-process), and contribute actions, panels, agents, toolbar buttons, and forge providers under capability + consent gating. GitHub ships as a builtin forge plugin (`plugins/builtin/github`) so the host stays forge-neutral. Author SDK = the `packages/*` npm workspace (`npm run packages:build`).
+
+**Vanilla Daintree pays nothing for plugins:** with no consumer, a plugin capability costs nothing at runtime (`docs/plugins/architecture.md`, "Vanilla install and the cheap empty path").
 
 ## Generated code and ratchets
 
@@ -71,19 +74,21 @@ CI on PRs: `npm run check` split into `static` (typecheck, guards, format) and `
 
 ## Repository workflow
 
+**NEVER put anything in the repo root that isn't project config or a top-level doc.** No preview or harness HTML pages, scratch scripts, logs, reports or audit dumps, tracked or not. Temporary output goes in `.tmp/` (gitignored); anything worth keeping goes in the directory it belongs to. No exceptions.
+
 - **Gitflow** — all PRs target `develop`, never `main` (release merges only).
 - **Never operate in the main worktree** when a session has its own; other trees have live sessions in them.
 - Use the `gh` CLI for all GitHub operations — plain HTTP fetches fail on auth.
 - `.daintree/recipes/*.json` are intentionally tracked. Never remove or gitignore them.
 - `.planning/` is gitignored and the pre-commit hook rejects it.
-- Skip issues labelled **`human-review`** (not solvable autonomously; 10-20x cost) and **`monitoring`** (blocked on an external event — checkable, not workable; sweep monthly via the `monitoring-sweep` skill).
+- Skip issues labelled **`human-review`** (not solvable autonomously; 10-20x cost) and **`monitoring`** (blocked on an external event — checkable, not workable).
 - `AGENTS.md` and `GEMINI.md` point here. Update this file, not those.
 
 ## Product invariants
 
-**Never modify user-owned agent config** — `~/.claude/`, `~/.gemini/`, `~/.codex/`, user hooks, or CLAUDE.md/AGENTS.md files in the user's own projects — not even additive CLI injection like `--settings`. If a capability needs it, the capability is out of scope; use passive observation instead (output parsing, OSC titles, process tree, `AgentPatternDetector`-style regex). Precedent #4100. The one sanctioned shape is a **display-only** launch switch declared as a registry capability with a user-facing setting — `inlineModeFlag`/`altScreenFlag` and `decorations` (Codex's `-c tui.whimsy=false`, default off since the composer sparkles made every idle pane repaint at 15 fps). Those change how the CLI draws, never what it does or which config it loads. The second sanctioned shape is adding a **Daintree-owned** MCP server beside the user's own: an agent launch in a project, while the MCP listener is running, is handed Daintree's own endpoints — the orchestration server when the project's tier is not `off`, and any plugin endpoints on for that project — through the additive launch mechanism its registry entry declares (`capabilities.launchMcp`, `shared/config/launchMcp.ts`: Claude's `--mcp-config <file>`, Codex's `-c mcp_servers.*`, Gemini's system-defaults file, opencode's `OPENCODE_CONFIG_CONTENT`, …). Any file is written by Daintree under `userData` (0600, deleted on PTY exit); bearers travel in that file or the PTY env, never argv. It adds to the user's config and never replaces it (no `--strict-mcp-config`), and nothing is ever written into the repository or the agent's own config dir.
+**Never modify user-owned agent config** — `~/.claude/`, `~/.gemini/`, `~/.codex/`, user hooks, or CLAUDE.md/AGENTS.md files in the user's own projects — not even additive CLI injection like `--settings`. If a capability needs it, the capability is out of scope; use passive observation instead (output parsing, OSC titles, process tree, `AgentPatternDetector`-style regex). Precedent #4100. Two sanctioned exceptions: a **display-only** launch switch declared as a registry capability with a user-facing setting (`inlineModeFlag`/`altScreenFlag`, `decorations`), and handing an agent Daintree's **own** MCP servers beside the user's through `capabilities.launchMcp` — additive only, nothing written into the repo or the agent's config dir (`docs/plugins/agent-extensions.md`, "Reaching an agent").
 
-**Surface observations, not interpretations.** Agent state comes from passive PTY output heuristics (`AgentStateService`, FSM in `shared/utils/agentFsm.ts`) and is frequently wrong; MCP tools and UI should expose what we saw, never what we concluded from it. `running` is a runtime status, not an agent state. One written exception: a reader the user opted into (Canopy, on the paid tier) may suggest where a run lands in the existing attention buckets — `FleetRunRow.canopy`, placed by `canopyPlacement` — provided every placement is attributed and quotes the screen's own words as evidence, sits alongside the observed `agentState`/`waitingReason` and never rewrites them, never clears an approval or error Daintree observed, never changes a park, snooze or read mark and never places a run against a park or snooze (a read mark never hides an ask it read, just as it never hides an observed question), holds one verdict per agent turn, and disappears entirely when the reader is turned off or the tier lapses.
+**Surface observations, not interpretations.** Agent state comes from passive PTY output heuristics (`AgentStateService`, FSM in `shared/utils/agentFsm.ts`) and is frequently wrong; MCP tools and UI should expose what we saw, never what we concluded from it. `running` is a runtime status, not an agent state. The one exception is Canopy, the opt-in local-model reader, which may suggest an attention bucket beside the observed state but never replace it (`docs/architecture/agent-state-tracking-strategy.md`, "Canopy").
 
 **Never commit credentials, tokens, or customer data**, and never log terminal contents or prompt bodies on paths that leave the machine.
 
@@ -92,8 +97,6 @@ CI on PRs: `npm run check` split into `static` (typecheck, guards, format) and `
 Daintree has a strict, heavily litigated visual and interaction contract. The rules load automatically when you touch matching files: `.claude/rules/design-system.md` (colour vocabulary, accent restraint, motion, loading gates, icons), `.claude/rules/user-signals.md` (microcopy, notify routing, runtime-signal tiers, destructive-action tiers), `.claude/rules/overlay-focus.md` (tooltip and focus restoration on overlay close), `.claude/rules/settings-pages.md` (the section → group → row grammar every settings page is built from).
 
 Two things worth knowing before you write any UI: check `src/components/ui/` before hand-rolling a surface, and accent colour is at most **one** load-bearing signal per focus region — in doubt, no accent.
-
-Themes are their own discipline — use the `daintree-theme-creator` skill rather than editing palettes by hand.
 
 ## Code and prose style
 

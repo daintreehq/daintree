@@ -40,7 +40,6 @@ const registerMocks = vi.hoisted(() => ({
   registerAppHandlers: vi.fn(),
   registerPortalHandlers: vi.fn(),
   registerMenuHandlers: vi.fn(),
-  registerHibernationHandlers: vi.fn(),
   registerIdleTerminalHandlers: vi.fn(),
   registerSystemSleepHandlers: vi.fn(),
   registerAppVersionInfoHandlers: vi.fn(),
@@ -70,6 +69,7 @@ const registerMocks = vi.hoisted(() => ({
   registerForgeDataHandlers: vi.fn(),
   registerForgeAuditHandlers: vi.fn(),
   registerVoiceInputHandlers: vi.fn(),
+  registerVoiceDictionaryHandlers: vi.fn(),
   registerMcpServerHandlers: vi.fn(),
   registerHelpAssistantHandlers: vi.fn(),
   registerWebviewHandlers: vi.fn(),
@@ -87,6 +87,7 @@ const registerMocks = vi.hoisted(() => ({
   registerConnectivityHandlers: vi.fn(),
   registerAgentDefaultsHandlers: vi.fn(),
   registerProjectPresenceHandlers: vi.fn(),
+  registerProjectPresentationHandlers: vi.fn(),
   registerScratchHandlers: vi.fn(),
   registerWatchdogHandlers: vi.fn(),
 }));
@@ -156,9 +157,6 @@ vi.mock("../handlers/portal.js", () => ({
 }));
 vi.mock("../handlers/menu.js", () => ({
   registerMenuHandlers: registerMocks.registerMenuHandlers,
-}));
-vi.mock("../handlers/hibernation.js", () => ({
-  registerHibernationHandlers: registerMocks.registerHibernationHandlers,
 }));
 vi.mock("../handlers/idleTerminals.js", () => ({
   registerIdleTerminalHandlers: registerMocks.registerIdleTerminalHandlers,
@@ -247,6 +245,9 @@ vi.mock("../handlers/forgeAudit.js", () => ({
 vi.mock("../handlers/voiceInput.js", () => ({
   registerVoiceInputHandlers: registerMocks.registerVoiceInputHandlers,
 }));
+vi.mock("../handlers/voiceDictionary.js", () => ({
+  registerVoiceDictionaryHandlers: registerMocks.registerVoiceDictionaryHandlers,
+}));
 vi.mock("../handlers/mcpServer.js", () => ({
   registerMcpServerHandlers: registerMocks.registerMcpServerHandlers,
 }));
@@ -294,6 +295,9 @@ vi.mock("../handlers/agentDefaults.js", () => ({
 }));
 vi.mock("../handlers/projectPresence.js", () => ({
   registerProjectPresenceHandlers: registerMocks.registerProjectPresenceHandlers,
+}));
+vi.mock("../handlers/projectPresentation.js", () => ({
+  registerProjectPresentationHandlers: registerMocks.registerProjectPresentationHandlers,
 }));
 vi.mock("../handlers/scratch/index.js", () => ({
   registerScratchHandlers: registerMocks.registerScratchHandlers,

@@ -12,8 +12,15 @@ import { store } from "../store.js";
 import {
   resolveAppTheme,
   getAppThemeCssVariables,
+  getAppThemeFallbackType,
   applyAccentOverrideToScheme,
+  isCssDeclarationValue,
 } from "../../shared/theme/index.js";
+import { withSelectedPluginTheme } from "../../shared/theme/pluginThemes.js";
+import {
+  readProjectThemeChoice,
+  resolveProjectThemeOverride,
+} from "../../shared/theme/projectThemes.js";
 import type { AppColorScheme, AppThemeConfig } from "../../shared/theme/index.js";
 import type { Project } from "../../shared/types/project.js";
 import { WINDOWS_CAPTION_WIDTH_PX } from "../../shared/config/windowChrome.js";
@@ -101,10 +108,16 @@ export function resolveE2EPreloadArgs(): string[] {
  * light appearance. Accepts a pre-read theme config so callers that already
  * hold one avoid a redundant full-store read (every `store.get()` re-reads
  * the config file from disk).
+ *
+ * With a `projectId`, the project's own theme wins when it has one that
+ * resolves (#13833).
  */
 export function resolveInitialColorSchemeId(
-  themeConfig: Partial<AppThemeConfig> = store.get("appTheme")
+  themeConfig: Partial<AppThemeConfig> = store.get("appTheme"),
+  projectId?: string | null
 ): string {
+  const override = resolveProjectOverrideScheme(themeConfig, projectId);
+  if (override) return override.id;
   if (
     themeConfig &&
     typeof themeConfig === "object" &&
@@ -115,9 +128,66 @@ export function resolveInitialColorSchemeId(
   ) {
     return themeConfig.colorSchemeId.trim();
   }
-  return process.env.DAINTREE_SCREENSHOT_SCALE || nativeTheme.shouldUseDarkColors
-    ? "daintree"
-    : "bondi";
+  return systemPrefersDark() ? "daintree" : "bondi";
+}
+
+/** The OS appearance as the boot paths read it; screenshot runs are pinned to dark. */
+function systemPrefersDark(): boolean {
+  return Boolean(process.env.DAINTREE_SCREENSHOT_SCALE) || nativeTheme.shouldUseDarkColors;
+}
+
+/**
+ * Resolves the persisted scheme for a boot paint. An id that names no scheme
+ * (a custom theme since deleted, or dropped as invalid) falls back to a
+ * built-in of the polarity the user was on rather than always the dark one.
+ * A selected plugin theme resolves from its persisted snapshot, since every
+ * boot paint runs before any plugin has loaded (#13832).
+ */
+export function resolveInitialAppScheme(
+  colorSchemeId: string,
+  themeConfig: Partial<AppThemeConfig> | undefined,
+  customSchemes: AppColorScheme[]
+): AppColorScheme {
+  return resolveAppTheme(
+    colorSchemeId,
+    withSelectedPluginTheme(customSchemes, themeConfig),
+    getAppThemeFallbackType(colorSchemeId, themeConfig ?? {}, systemPrefersDark())
+  );
+}
+
+/** The imported themes in a theme config, migrating the legacy string encoding in memory only. */
+function readCustomSchemes(themeConfig: Partial<AppThemeConfig> | undefined): AppColorScheme[] {
+  const rawSchemes = (themeConfig as Record<string, unknown> | undefined)?.customSchemes;
+  if (rawSchemes === undefined) return [];
+  return migrateCustomSchemes(rawSchemes, appCustomSchemesReadSchema, appCustomSchemesWriteSchema)
+    .schemes;
+}
+
+/** The project's own theme when it has one that resolves (#13833), else null. */
+export function resolveProjectOverrideScheme(
+  themeConfig: Partial<AppThemeConfig> | undefined,
+  projectId: string | null | undefined,
+  customSchemes?: AppColorScheme[]
+): AppColorScheme | null {
+  const choice = readProjectThemeChoice(themeConfig, projectId);
+  if (!choice) return null;
+  return resolveProjectThemeOverride(choice, customSchemes ?? readCustomSchemes(themeConfig));
+}
+
+/**
+ * The scheme a view of `projectId` shows: the project's own theme when it has
+ * one that resolves, else the global selection. Without a project it is the
+ * global selection, which is what a window shows with no project open.
+ */
+export function resolveProjectAppScheme(
+  projectId: string | null | undefined,
+  themeConfig: Partial<AppThemeConfig> = store.get("appTheme") ?? {}
+): AppColorScheme {
+  const customSchemes = readCustomSchemes(themeConfig);
+  return (
+    resolveProjectOverrideScheme(themeConfig, projectId, customSchemes) ??
+    resolveInitialAppScheme(resolveInitialColorSchemeId(themeConfig), themeConfig, customSchemes)
+  );
 }
 
 /**
@@ -127,21 +197,15 @@ export function resolveInitialColorSchemeId(
  * (#9573). Accent override is intentionally omitted — applyAccentOverrideToScheme
  * does not touch surface-canvas, so the base scheme value is correct.
  */
-export function resolveInitialCanvasBackgroundColor(): string {
-  const themeConfig = store.get("appTheme") ?? {};
-  const colorSchemeId = resolveInitialColorSchemeId(themeConfig);
-  let customSchemes: AppColorScheme[] = [];
-  const rawSchemes = (themeConfig as Record<string, unknown>).customSchemes;
-  if (rawSchemes !== undefined) {
-    const result = migrateCustomSchemes(
-      rawSchemes,
-      appCustomSchemesReadSchema,
-      appCustomSchemesWriteSchema
-    );
-    customSchemes = result.schemes;
-  }
-  const scheme = resolveAppTheme(colorSchemeId, customSchemes);
-  return scheme.tokens["surface-canvas"];
+export function resolveInitialCanvasBackgroundColor(projectId?: string | null): string {
+  return resolveProjectAppScheme(projectId).tokens["surface-canvas"];
+}
+
+export interface SkeletonCssOptions {
+  /** Drop the entrance animations, for a project switch that reveals the skeleton. */
+  instantReveal?: boolean;
+  /** The project the view shows, so the skeleton paints its own theme when it has one (#13833). */
+  projectId?: string | null;
 }
 
 /**
@@ -156,7 +220,7 @@ export function resolveInitialCanvasBackgroundColor(): string {
 export function buildSkeletonCss(
   project?: Pick<Project, "color"> | null,
   preReadThemeConfig?: Partial<AppThemeConfig>,
-  options?: { instantReveal?: boolean }
+  options?: SkeletonCssOptions
 ): string {
   const appState = store.get("appState");
   const sidebarWidth = appState?.sidebarWidth ?? 350;
@@ -187,7 +251,9 @@ export function buildSkeletonCss(
       }
     }
   }
-  const scheme = resolveAppTheme(colorSchemeId, customSchemes);
+  const scheme =
+    resolveProjectOverrideScheme(themeConfig, options?.projectId, customSchemes) ??
+    resolveInitialAppScheme(colorSchemeId, themeConfig, customSchemes);
   // Paint the destination project's accent on cold starts. Safe to call
   // unconditionally — a missing or invalid color returns the scheme unchanged.
   const themedScheme = applyAccentOverrideToScheme(scheme, project?.color);
@@ -207,8 +273,12 @@ export function buildSkeletonCss(
   // sibling of `#startup-skeleton`, so the app never inherits this block.
   const lines: string[] = ["#startup-skeleton {"];
 
-  // Theme tokens (--theme-surface-canvas, --theme-border-default, etc.)
+  // Theme tokens (--theme-surface-canvas, --theme-border-default, etc.).
+  // Values are written into stylesheet text, so one that could end its
+  // declaration or the rule is left out; the renderer sets every variable
+  // inline once it mounts.
   for (const [prop, value] of Object.entries(themeVars)) {
+    if (!isCssDeclarationValue(value)) continue;
     lines.push(`  ${prop}: ${value};`);
   }
 
@@ -291,7 +361,7 @@ export async function insertSkeletonCss(wc: WebContents, css: string): Promise<v
 export function injectSkeletonCss(
   wc: WebContents,
   project?: Pick<Project, "color"> | null,
-  options?: { instantReveal?: boolean }
+  options?: SkeletonCssOptions
 ): Promise<void> {
   return insertSkeletonCss(wc, buildSkeletonCss(project, undefined, options));
 }

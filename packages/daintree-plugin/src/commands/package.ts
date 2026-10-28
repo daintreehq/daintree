@@ -6,9 +6,14 @@ import {
   isExcludedArchiveEntry,
   verifyPluginArchive,
 } from "../../../../electron/services/PluginArchive.js";
+import { isOutsidePluginDir } from "../../../../electron/services/plugin/pluginManifestAssetFiles.js";
 import { resolveVitePlan, runVitePlanBuild } from "../lib/viteBuild.js";
 import { runValidate } from "./validate.js";
-import { isPluginCustomIconRef } from "../../../../shared/config/pluginCustomIcon.js";
+import { PROJECT_TEMPLATES_DIR } from "../../../../electron/utils/pluginArchiveConstants.js";
+import {
+  collectPluginManifestAssets,
+  describePluginManifestAsset,
+} from "../../../../shared/config/pluginManifestAssets.js";
 import { parseJsonText } from "../lib/parseJsonText.js";
 
 /**
@@ -42,49 +47,53 @@ async function dntrignoreKept(dir: string): Promise<Set<string>> {
       cwd: dir,
       ignoreFiles: [DNTRIGNORE_FILENAME],
       ignore: ["node_modules/**", ".git/**"],
-      dot: false,
+      // Dotfiles too, so a project template's `.gitignore` or `.daintree/`
+      // survives the intersection. Harmless for everything else: the other
+      // passes still skip dotfiles, and this set only ever narrows them.
+      dot: true,
       onlyFiles: true,
     })
   );
 }
 
 /**
- * Paths the manifest points at, which the archive is invalid without.
- * `verifyPluginArchive` already rejects a missing `main` or view
- * `componentPath`, but only after the `.dntr` has been written — and a dry run
- * never reaches it at all. Skills aren't verified there either: a dropped skill
- * just goes quiet at runtime. Since `.dntrignore` makes excluding these easy for
- * the first time, check them up front instead.
+ * Every file in each declared project template's `project-templates/<id>/`
+ * folder (#13825). A template is a project's starting files, so this pass
+ * ignores `.gitignore` (a template's own `.gitignore` describes the project it
+ * creates, not this plugin) and keeps dotfiles. A symlink is refused rather
+ * than dropped: the host copies regular files only, and a template quietly
+ * missing a file is worse than a packaging error.
  */
-function requiredManifestPaths(manifest: MinimalManifest): string[] {
-  const refs = new Set<string>();
-  // Normalized exactly the way `verifyPluginArchive` normalizes (strip a
-  // leading `./`, nothing else). Being more lenient here — folding backslashes,
-  // say — would let a reference pass this check and then fail verification
-  // after the archive had already been written, which is the failure mode this
-  // check exists to remove.
-  const add = (ref?: string) => {
-    if (ref) refs.add(ref.startsWith("./") ? ref.slice(2) : ref);
-  };
-  add(manifest.main);
-  for (const view of manifest.contributes?.views ??
-    manifest.contributes?.experimental_views ??
-    []) {
-    add(view.componentPath);
+async function projectTemplateFiles(dir: string, manifest: MinimalManifest): Promise<string[]> {
+  const ids = (manifest.contributes?.projectTemplates ?? []).map((template) => template.id);
+  if (ids.length === 0) return [];
+  // The glob starts inside each template folder, so a link at the folder
+  // itself (or at `project-templates/`) would be followed without ever being
+  // listed. Check those two levels directly.
+  for (const rel of [PROJECT_TEMPLATES_DIR, ...ids.map((id) => `${PROJECT_TEMPLATES_DIR}/${id}`)]) {
+    const stat = await fs.lstat(path.join(dir, rel)).catch(() => null);
+    if (stat?.isSymbolicLink()) {
+      throw new Error(`${rel} is a symbolic link. Project templates must be real folders.`);
+    }
   }
-  for (const skill of manifest.contributes?.skills ?? []) {
-    add(skill.path);
+  const entries = await globby(
+    ids.map((id) => `${PROJECT_TEMPLATES_DIR}/${id}/**/*`),
+    {
+      cwd: dir,
+      dot: true,
+      onlyFiles: false,
+      followSymbolicLinks: false,
+      objectMode: true,
+      ignore: ["**/node_modules/**", "**/.git/**"],
+    }
+  );
+  const links = entries.filter((entry) => entry.dirent.isSymbolicLink()).map((e) => e.path);
+  if (links.length > 0) {
+    throw new Error(
+      `Project templates may only contain files and folders, not symbolic links: ${links.sort().join(", ")}`
+    );
   }
-  // Custom SVG icons (#13143): a dropped one silently falls back to the generic
-  // glyph at runtime, so catch it while packaging instead.
-  for (const entry of [
-    ...(manifest.contributes?.panels ?? []),
-    ...(manifest.contributes?.toolbarButtons ?? []),
-    ...(manifest.contributes?.processTools ?? []),
-  ]) {
-    if (isPluginCustomIconRef(entry.iconId)) add(entry.iconId);
-  }
-  return [...refs];
+  return entries.filter((entry) => entry.dirent.isFile()).map((entry) => entry.path);
 }
 
 export interface PackageOptions {
@@ -105,42 +114,70 @@ export interface PackageResult {
 interface MinimalManifest {
   name: string;
   version: string;
-  main?: string;
   contributes?: {
-    views?: Array<{ componentPath?: string }>;
-    /** @deprecated Renamed to `views` in the 1.0 freeze; still honored here. */
-    experimental_views?: Array<{ componentPath?: string }>;
-    skills?: Array<{ path?: string }>;
-    panels?: Array<{ iconId?: string }>;
-    toolbarButtons?: Array<{ iconId?: string }>;
-    processTools?: Array<{ iconId?: string }>;
+    projectTemplates?: Array<{ id: string }>;
   };
 }
 
 /**
  * Top-level directories that must be packaged even when `.gitignore` lists them
  * (build output is gitignored by convention but is exactly what ships). Derived
- * from `main` and any view `componentPath`, defaulting to `dist`.
+ * from every module the manifest names — `main`, views and tour scenes —
+ * defaulting to `dist`.
  */
-function protectedDirs(manifest: MinimalManifest): string[] {
+function protectedDirs(manifest: unknown): string[] {
   const dirs = new Set<string>(["dist"]);
-  const add = (ref?: string) => {
-    if (!ref) return;
-    // The leading `./` has to come off before splitting, or the top segment is
-    // "." and a gitignored custom output dir (`main: "./build/index.js"`) never
-    // gets preserved — the manifest is valid and the file exists, but it would
-    // be left out of the archive.
-    const normalized = ref.replace(/\\/g, "/").replace(/^\.\//, "");
-    const top = normalized.split("/")[0];
+  for (const asset of collectPluginManifestAssets(manifest)) {
+    if (!asset.module && !asset.built) continue;
+    const top = asset.path.replace(/\\/g, "/").split("/")[0];
     if (top && top !== "." && top !== "..") dirs.add(top);
-  };
-  add(manifest.main);
-  for (const view of manifest.contributes?.views ??
-    manifest.contributes?.experimental_views ??
-    []) {
-    add(view.componentPath);
   }
   return [...dirs];
+}
+
+/**
+ * Check every manifest-referenced file against what will actually ship, before
+ * the `.dntr` is written — a dry run never reaches `verifyPluginArchive` at
+ * all, and `.dntrignore` makes excluding one of these easy. A required file
+ * that is missing, ignored or stripped by the archive filter fails; so does one
+ * reached through a symlink that leaves the plugin directory, since globby would
+ * otherwise pack whatever the link points at. A missing optional file (local
+ * tour narration) only warns: the chapter plays silently.
+ */
+async function checkManifestAssets(
+  dir: string,
+  manifest: unknown,
+  files: ReadonlySet<string>
+): Promise<void> {
+  const realDir = await fs.realpath(dir);
+  const missing: string[] = [];
+  const escaped: string[] = [];
+  for (const asset of collectPluginManifestAssets(manifest)) {
+    if (!files.has(asset.path)) {
+      if (asset.required) missing.push(describePluginManifestAsset(asset));
+      else
+        console.warn(
+          `${describePluginManifestAsset(asset)} isn't in the archive — that chapter will play silently.`
+        );
+      continue;
+    }
+    const real = await fs.realpath(path.join(dir, asset.path));
+    if (isOutsidePluginDir(path.relative(realDir, real))) {
+      escaped.push(describePluginManifestAsset(asset));
+    }
+  }
+  if (missing.length > 0) {
+    throw new Error(
+      `Manifest references ${missing.length === 1 ? "a file that isn't" : "files that aren't"} in the archive: ${missing.join(", ")}. ` +
+        `Check .gitignore and ${DNTRIGNORE_FILENAME}, or run the build first.`
+    );
+  }
+  if (escaped.length > 0) {
+    throw new Error(
+      `Manifest references ${escaped.length === 1 ? "a file that resolves" : "files that resolve"} outside the plugin directory through a symlink: ${escaped.join(", ")}. ` +
+        `The host refuses these at load; copy the file into the plugin instead.`
+    );
+  }
 }
 
 /**
@@ -158,9 +195,8 @@ export async function runPackage(opts: PackageOptions = {}): Promise<PackageResu
     throw new Error(`Manifest validation failed:\n  ${validation.errors.join("\n  ")}`);
   }
 
-  const manifest = parseJsonText(
-    await fs.readFile(path.join(dir, "plugin.json"), "utf8")
-  ) as MinimalManifest;
+  const rawManifest = parseJsonText(await fs.readFile(path.join(dir, "plugin.json"), "utf8"));
+  const manifest = rawManifest as MinimalManifest;
 
   // A dry run is a no-side-effects preview — never trigger the Vite build.
   // A plugin with a Node server entry needs both passes, or `dist/server.js`
@@ -179,7 +215,7 @@ export async function runPackage(opts: PackageOptions = {}): Promise<PackageResu
 
   // Build output / manifest-referenced dirs must ship even if gitignored.
   const preserved = await globby(
-    protectedDirs(manifest).map((d) => `${d}/**/*`),
+    protectedDirs(rawManifest).map((d) => `${d}/**/*`),
     { cwd: dir, dot: false, onlyFiles: true }
   );
 
@@ -188,8 +224,12 @@ export async function runPackage(opts: PackageOptions = {}): Promise<PackageResu
   // above), but `.dntrignore` states shipping policy, so it has to reach stray
   // files living *inside* a protected dir — `dist/docs/**` being the case that
   // motivated it.
+  const templatePayload = await projectTemplateFiles(dir, manifest);
+
   const kept = await dntrignoreKept(dir);
-  const candidates = new Set<string>([...gitignored, ...preserved].filter((f) => kept.has(f)));
+  const candidates = new Set<string>(
+    [...gitignored, ...preserved, ...templatePayload].filter((f) => kept.has(f))
+  );
   // The manifest is the one file no policy may drop.
   candidates.add("plugin.json");
 
@@ -203,13 +243,18 @@ export async function runPackage(opts: PackageOptions = {}): Promise<PackageResu
     throw new Error("plugin.json not found in the plugin directory");
   }
 
-  const missing = requiredManifestPaths(manifest).filter((ref) => !files.includes(ref));
-  if (missing.length > 0) {
+  const emptyTemplates = (manifest.contributes?.projectTemplates ?? [])
+    .map((template) => template.id)
+    .filter((id) => !files.some((f) => f.startsWith(`${PROJECT_TEMPLATES_DIR}/${id}/`)));
+  if (emptyTemplates.length > 0) {
     throw new Error(
-      `Manifest references ${missing.length === 1 ? "a file that isn't" : "files that aren't"} in the archive: ${missing.join(", ")}. ` +
-        `Check .gitignore and ${DNTRIGNORE_FILENAME}, or run the build first.`
+      `Project ${emptyTemplates.length === 1 ? "template has" : "templates have"} no files to ship: ` +
+        `${emptyTemplates.map((id) => `${PROJECT_TEMPLATES_DIR}/${id}/`).join(", ")}. ` +
+        `Add the template's files there, or check ${DNTRIGNORE_FILENAME}.`
     );
   }
+
+  await checkManifestAssets(dir, rawManifest, new Set(files));
 
   if (opts.verbose || opts.dryRun) {
     for (const f of files) {

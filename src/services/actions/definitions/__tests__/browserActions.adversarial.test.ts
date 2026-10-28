@@ -269,6 +269,42 @@ describe("browserActions adversarial", () => {
     expect(systemClientMock.openExternal).toHaveBeenCalledWith("https://stored.example");
   });
 
+  it("browser.openExternal keeps a host's page forwarded for as long as the system browser uses it", async () => {
+    const forward = vi.fn(
+      async ({ hostId, remotePort }: { hostId: string; remotePort: number }) => ({
+        forwardId: "f1",
+        hostId,
+        remotePort,
+        localPort: remotePort,
+        origin: "oauth-callback" as const,
+        label: null,
+        createdAt: 1,
+      })
+    );
+    const electron = Object.getOwnPropertyDescriptor(window, "electron");
+    window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
+    Object.defineProperty(window, "electron", {
+      configurable: true,
+      writable: true,
+      value: { portForwards: { forward } },
+    });
+    try {
+      setPanelState({ focusedId: "b1", panelsById: { b1: { kind: "browser" } } });
+      const run = setupActions();
+      await run("browser.openExternal", { url: "http://localhost:3000/app" });
+
+      // The panel's own hold goes when it closes; the system browser's page needs its own.
+      expect(forward).toHaveBeenCalledWith(
+        expect.objectContaining({ hostId: "studio-01", remotePort: 3000, origin: "oauth-callback" })
+      );
+      expect(systemClientMock.openExternal).toHaveBeenCalledWith("http://localhost:3000/app");
+    } finally {
+      delete (window as { __DAINTREE_HOST_ID__?: unknown }).__DAINTREE_HOST_ID__;
+      if (electron) Object.defineProperty(window, "electron", electron);
+      else delete (window as { electron?: unknown }).electron;
+    }
+  });
+
   it("browser.openExternal throws when neither explicit url nor stored browserUrl exists", async () => {
     setPanelState({
       focusedId: "b1",

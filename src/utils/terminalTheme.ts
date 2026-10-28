@@ -22,7 +22,6 @@ export interface InputBarColors {
   chipColor: string;
   errorColor: string;
   successColor: string;
-  voiceCursor: string;
   // The shell, also from the terminal palette: a terminal stays dark under a
   // light app theme, and app tokens land dark-on-dark on it.
   shellBg: string;
@@ -46,8 +45,53 @@ export interface InputBarColors {
   placeholder: string;
   placeholderSelected: string;
   placeholderMore: string;
+  /**
+   * Dictated words not yet written into the draft, and a cleanup streaming
+   * over them until it lands, fitted to 4.5:1 against the resting shell and
+   * the listening fill: they are the user's words, only provisional, so the
+   * italic says so and the ink stays readable.
+   */
+  interim: string;
+  /**
+   * A voice send's progress: the bar along the shell's foot. Neutral, as
+   * progress is status and the shell's perimeter already spends the accent.
+   * Fitted to 3:1 against the shell, resting and selected, and the pane
+   * around it.
+   */
+  waitEdge: string;
+  /** The wait's caption, on the border: fitted to 4.5:1 over the pane, the shell and the wash. */
+  waitCaption: string;
+  /**
+   * The mic's listening orbit. The shell's own accent, so the orbit and the
+   * listening shell around it are one signal in one hue, leaned toward the
+   * foreground only as far as 3:1 against the listening fill and the mic's
+   * disc needs: it is the one mark that says the mic is hearing.
+   */
+  voiceSignal: string;
+  /**
+   * The ring round a paused mic: neutral, as a pause is the user's and not a
+   * signal, fitted to 3:1 against the mic's disc at rest and hovered.
+   */
+  voiceHeld: string;
+  /**
+   * The live insertion caret's quietest opacity, 0.55 to 1: the level's floor,
+   * raised where 0.55 would leave the caret under 3:1 against the listening fill.
+   */
+  voiceCaretFloor: number;
   isDark: boolean;
 }
+
+/** How much accent the listening shell's fill carries (`HybridInputBar`). */
+export const VOICE_LISTENING_FILL_MIX = 12;
+
+/** The mic's disc over the shell's fill, at rest and hovered (`VoiceInputButton`). */
+const VOICE_DISC_MIXES = [12, 18] as const;
+
+/** The orbit's dot at the quietest a listening voice leaves it (`VoiceInputButton`). */
+export const VOICE_ORBIT_MIN_OPACITY = 0.82;
+
+/** The live insertion caret at the quietest a voice leaves it, before contrast fitting. */
+const VOICE_CARET_MIN_OPACITY = 0.55;
 
 type Rgb = readonly [number, number, number];
 
@@ -117,6 +161,12 @@ function fromOklab([L, a, b]: Rgb): Rgb {
     clamp(-1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s),
     clamp(-0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s),
   ];
+}
+
+/** `x` at `alpha` painted over opaque `y`, as the compositor blends it. */
+function over(x: Rgb, y: Rgb, alpha: number): Rgb {
+  const blend = (i: 0 | 1 | 2) => x[i] * alpha + y[i] * (1 - alpha);
+  return [blend(0), blend(1), blend(2)];
 }
 
 /** What `color-mix(in oklab, x p%, y)` paints, for opaque x and y. */
@@ -189,6 +239,12 @@ export function resolveInputBarColors(theme: ITheme): InputBarColors {
   let focusRing = mix(acInk?.css ?? accent, 60, background);
   let placeholderPct = 67;
   let placeholderSelectedPct = 72;
+  let interimPct = 67;
+  let waitEdgePct = 60;
+  let waitCaptionPct = 72;
+  let voiceSignal = acInk?.css ?? accent;
+  let voiceHeldPct = 60;
+  let voiceCaretFloor = VOICE_CARET_MIN_OPACITY;
   if (fg && bg) {
     const rest = mixOklab(bg, BLACK, restDim);
     const hover = mixOklab(bg, BLACK, hoverDim);
@@ -198,6 +254,18 @@ export function resolveInputBarColors(theme: ITheme): InputBarColors {
       100,
       Math.max(placeholderPct + 6, fitMix(fg, bg, 48, 4.6, [selected]) ?? 100)
     );
+    const listeningFill = acInk ? [mixOklab(acInk.rgb, bg, VOICE_LISTENING_FILL_MIX / 100)] : [];
+    interimPct = fitMix(fg, bg, 48, 4.6, [rest, ...listeningFill]) ?? 100;
+    waitEdgePct = fitMix(fg, bg, 40, 3.1, [rest, selected, bg]) ?? 100;
+    waitCaptionPct = fitMix(fg, bg, 48, 4.6, [rest, selected, bg]) ?? 100;
+    voiceHeldPct =
+      fitMix(
+        fg,
+        bg,
+        40,
+        3.1,
+        VOICE_DISC_MIXES.map((p) => over(fg, rest, p / 100))
+      ) ?? 100;
     if (acInk) {
       const ringPct = fitMix(acInk.rgb, bg, 60, 3.1, [bg]);
       // A cursor too close to its background (Rosé Pine Dawn's) cannot reach
@@ -207,6 +275,38 @@ export function resolveInputBarColors(theme: ITheme): InputBarColors {
         ringPct !== null
           ? mix(acInk.css, ringPct, background)
           : mix(fgCss, fitMix(fg, acInk.rgb, 0, 3.1, [bg]) ?? 100, acInk.css);
+      // The disc is the foreground at low alpha over the listening fill, and
+      // the dot is the signal at its quietest opacity over the disc: fit what
+      // the compositor actually paints, not the opaque inks.
+      const listening = mixOklab(acInk.rgb, bg, VOICE_LISTENING_FILL_MIX / 100);
+      const discs = VOICE_DISC_MIXES.map((p) => over(fg, listening, p / 100));
+      // A palette that cannot reach 3:1 at any lean goes all the way to the
+      // foreground, as every other fit here does.
+      let lean = 100;
+      for (let p = 0; p < 100; p++) {
+        const ink = mixOklab(fg, acInk.rgb, p / 100);
+        const reads = discs.every(
+          (disc) => contrast(over(ink, disc, VOICE_ORBIT_MIN_OPACITY), disc) >= 3.1
+        );
+        if (reads) {
+          lean = p;
+          break;
+        }
+      }
+      // Emitted as a resolved colour: the orbit derives its alpha steps from it
+      // with relative colour syntax, once per frame.
+      const signal = mixOklab(fg, acInk.rgb, lean / 100);
+      if (lean > 0) voiceSignal = toHex(signal);
+      // The insertion caret dims further with a quiet voice than the orbit
+      // does. Raise its floor only where the quietest step would drop under
+      // 3:1 against the listening fill, keeping the hue it shares with the orbit.
+      voiceCaretFloor = 1;
+      for (let p = Math.round(VOICE_CARET_MIN_OPACITY * 100); p <= 100; p++) {
+        if (contrast(over(signal, listening, p / 100), listening) >= 3.1) {
+          voiceCaretFloor = p / 100;
+          break;
+        }
+      }
     }
   }
 
@@ -218,7 +318,6 @@ export function resolveInputBarColors(theme: ITheme): InputBarColors {
     chipColor: theme.cyan ?? theme.brightCyan ?? theme.cursor ?? "#58a6ff",
     errorColor: theme.red ?? "#f44747",
     successColor: theme.green ?? "#89d185",
-    voiceCursor: theme.yellow ?? theme.brightYellow ?? "#e5c07b",
     shellBg: mix(background, restDim * 100, "black"),
     shellBorder: mix(foreground, isDark ? 7 : 9, "transparent"),
     shellBorderHover: mix(foreground, isDark ? 11 : 14, "transparent"),
@@ -232,6 +331,12 @@ export function resolveInputBarColors(theme: ITheme): InputBarColors {
     placeholder: mix(fgCss, placeholderPct, background),
     placeholderSelected: mix(fgCss, placeholderSelectedPct, background),
     placeholderMore: mix(fgCss, Math.max(85, placeholderSelectedPct), background),
+    interim: mix(fgCss, interimPct, background),
+    waitEdge: mix(fgCss, waitEdgePct, background),
+    waitCaption: mix(fgCss, waitCaptionPct, background),
+    voiceSignal,
+    voiceHeld: mix(fgCss, voiceHeldPct, background),
+    voiceCaretFloor,
     isDark,
   };
 }

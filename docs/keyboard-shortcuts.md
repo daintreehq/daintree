@@ -50,6 +50,7 @@ Default keyboard shortcuts shipped with Daintree. This page lists defaults only 
 | Focus next terminal | `⌃+Tab` | `Ctrl+Tab` |
 | Focus previous terminal | `⌃+⇧+Tab` | `Ctrl+Shift+Tab` |
 | Toggle focus between current and previously focused panel | `` ⌘+⌥+` `` | `` Ctrl+Alt+` `` |
+| Switch between hybrid input and terminal | `⌘+⌥+E` | `Ctrl+Alt+E` |
 | Switch to next tab in focused panel | `⌘+⇧+]` | `Ctrl+Shift+]` |
 | Switch to previous tab in focused panel | `⌘+⇧+[` | `Ctrl+Shift+[` |
 | Toggle maximize terminal | `⌃+⇧+F` | `Ctrl+Shift+F` |
@@ -209,9 +210,11 @@ Default keyboard shortcuts shipped with Daintree. This page lists defaults only 
 
 | Action | macOS | Windows/Linux |
 | --- | --- | --- |
-| Toggle voice dictation | `⌘+.` | `Ctrl+.` (Windows), `Ctrl+Alt+,` (Linux) |
+| Toggle voice dictation | `⌘+D` | `Ctrl+.` (Windows), `Ctrl+Alt+,` (Linux) |
+| Rewrite the selected prompt text by voice | `⌘+⇧+⌥+.` | `Ctrl+Shift+Alt+.` (Windows), `Ctrl+Shift+Alt+,` (Linux) |
 | Toggle voice dictation in Daintree Assistant | `⌘+⇧+⌥+V` | `Ctrl+Shift+Alt+V` |
 | Pause or resume voice dictation | `⌃+⇧+Space` | `Ctrl+Shift+Space` |
+| Stop voice dictation and send the prompt | `⌘+⇧+Enter` | `Ctrl+Alt+D` (Windows), `Ctrl+Shift+Alt+.` (Linux) |
 
 ## App
 

@@ -11,30 +11,49 @@ import { subscribeFleetFailureAutoClear } from "./fleetFailureStore";
 import { subscribeFleetRunWatcher } from "./fleetRunStore";
 import { useTerminalInputStore, unregisterInputController } from "./terminalInputStore";
 import { subscribeFleetBroadcastResult } from "@/components/Fleet/fleetRawInputBroadcast";
+import { getCachedStagingStatus } from "@/components/Worktree/ReviewHub/stagingStatusCache";
 import { useConsoleCaptureStore } from "./consoleCaptureStore";
 import { useResourceMonitoringStore } from "./resourceMonitoringStore";
 import { useVoiceRecordingStore } from "./voiceRecordingStore";
+import { subscribeDictationRangeTracking } from "./dictationRangeStore";
+import { subscribeRecentDictationsSync } from "@/services/recentDictations";
+import { trackComposerSurface } from "@/lib/composerSurface";
 import { usePluginPanelBadgeStore } from "./pluginPanelBadgeStore";
+import { usePluginPanelActivityStore } from "./pluginPanelActivityStore";
+import { usePluginPanelAttentionStore } from "./pluginPanelAttentionStore";
 import { usePluginPanelToolbarStore } from "./pluginPanelToolbarStore";
 import { usePluginPanelMenuStore } from "./pluginPanelMenuStore";
+import { usePluginPanelOpenRequestStore } from "./pluginPanelOpenRequestStore";
 import { useLayoutUndoStore } from "./layoutUndoStore";
 import { useCliAvailabilityStore } from "./cliAvailabilityStore";
 import { useAgentSettingsStore } from "./agentSettingsStore";
 import { useHelpPanelStore } from "./helpPanelStore";
 import { usePortalStore } from "./portalStore";
+import {
+  applicationDefaultRoute,
+  selectProjectMainAreaRoute,
+  useProjectHomeStore,
+} from "./projectHomeStore";
+import { useProjectPluginStore } from "./projectPluginStore";
+import { newlyMarkedWorktreeIds, useReviewMarksStore } from "./reviewMarksStore";
+import { useDiffViewedStore } from "./diffViewedStore";
 import { removeArtifactsForTerminal } from "@/hooks/useArtifacts";
 import { forgetPanelActivity } from "@/utils/panelProps";
 import {
   setPanelStoreAccessor,
   setPanelStoreClearForSwitchAccessor,
   setPanelExtensionStateAccessor,
+  setPanelTitleAccessor,
   setWorktreeSelectionAccessor,
   setWorktreeIdSetAccessor,
   setWorktreeGitDirAccessor,
   setWorktreePathIndexAccessor,
+  setViewedMarkSourcesAccessor,
   setFleetArmingClearAccessor,
   setFleetArmedIdsAccessor,
   setFleetLastArmedIdAccessor,
+  setProjectHomeExitAccessor,
+  setPanelMaximizeAccessor,
   resetStoreAccessorsForTesting,
 } from "./storeAccessors";
 import { getCurrentViewStoreOrNull } from "./createWorktreeStore";
@@ -43,10 +62,16 @@ import { debounce } from "@/utils/debounce";
 import { DisposableStore, toDisposable } from "@/utils/disposable";
 import { logDebug, logInfo, logWarn } from "@/utils/logger";
 import { isPtyPanel } from "@shared/types/panel";
+import { isQuickSwitchablePanel } from "@/utils/quickSwitcher";
 import { terminalClient } from "@/clients";
+import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 import { createFocusFollowBreaker } from "./focusFollowBreaker";
 import { subscribeFocusedPanelReporter } from "./focusedPanelReporter";
 import { initAgentDefaultsSync } from "@/services/agentDefaultsSync";
+import { initTerminalConfigSync } from "@/services/terminalConfigSync";
+import { initAgentSettingsSync } from "@/services/agentSettingsSync";
+import { initPanelGridConfigSync } from "@/services/panelGridConfigSync";
+import { initAgentToolbarPinsSync } from "@/services/agentToolbarPinsSync";
 import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
 
 // Thunk form: read the live mruList at fire time, not at schedule time. A
@@ -76,11 +101,24 @@ export function initStoreOrchestrator(): () => void {
     const s = usePanelStore.getState();
     return { panelsById: s.panelsById, panelIds: s.panelIds, tabGroups: s.tabGroups };
   });
-  setPanelStoreClearForSwitchAccessor(() => {
-    usePanelStore.getState().clearTerminalStoreForSwitch();
+  setPanelStoreClearForSwitchAccessor((options) => {
+    const state = usePanelStore.getState();
+    if (options?.destroyInstances) {
+      for (const id of state.panelIds) {
+        try {
+          peekTerminalService()?.destroy(id);
+        } catch (error) {
+          logWarn(`Failed to destroy terminal instance ${id}`, { error });
+        }
+      }
+    }
+    state.clearTerminalStoreForSwitch();
   });
   setPanelExtensionStateAccessor((panelId, patch) =>
     usePanelStore.getState().setPanelExtensionState(panelId, patch)
+  );
+  setPanelTitleAccessor((panelId, title) =>
+    usePanelStore.getState().updateTitle(panelId, title, "automation")
   );
   setWorktreeSelectionAccessor(() => ({
     activeWorktreeId: useWorktreeSelectionStore.getState().activeWorktreeId,
@@ -106,11 +144,27 @@ export function initStoreOrchestrator(): () => void {
     }
     return index;
   });
+  setViewedMarkSourcesAccessor((worktreePath) => ({
+    worktrees: getCurrentViewStoreOrNull()?.getState().worktrees ?? null,
+    stagingStatus: getCachedStagingStatus(worktreePath),
+  }));
   setFleetArmingClearAccessor(() => {
     useFleetArmingStore.getState().clear();
   });
   setFleetArmedIdsAccessor(() => useFleetArmingStore.getState().armedIds);
   setFleetLastArmedIdAccessor(() => useFleetArmingStore.getState().lastArmedId);
+  // Only Home alone hides the grid. A split already shows the panel being
+  // revealed, so it stays put while agents are launched, chosen and focused
+  // beside the application (#14107).
+  setProjectHomeExitAccessor(() => {
+    const home = useProjectHomeStore.getState();
+    const fallback = applicationDefaultRoute(useProjectPluginStore.getState().application);
+    if (selectProjectMainAreaRoute(home, fallback) === "home") home.showGrid();
+  });
+  setPanelMaximizeAccessor({
+    isMaximized: () => usePanelStore.getState().maximizedId !== null,
+    exit: () => usePanelStore.getState().exitMaximize(),
+  });
 
   if (cleanupFn) return cleanupFn;
 
@@ -119,7 +173,11 @@ export function initStoreOrchestrator(): () => void {
   // navigates away within the grace window.
   setActiveContextAccessors({
     getActiveWorktreeId: () => useWorktreeSelectionStore.getState().activeWorktreeId,
-    getFocusedPanelId: () => usePanelStore.getState().focusedId,
+    // The project's Home alone hides the grid, focused panel and all, so while
+    // it shows nothing focused is on screen — and a notice from that panel is
+    // exactly the attention signal Home must never swallow.
+    getFocusedPanelId: () =>
+      useProjectHomeStore.getState().presented ? null : usePanelStore.getState().focusedId,
     subscribeActiveContext: (cb) => {
       const unsubWorktree = useWorktreeSelectionStore.subscribe((state, prev) => {
         if (state.activeWorktreeId !== prev.activeWorktreeId) cb();
@@ -128,9 +186,13 @@ export function initStoreOrchestrator(): () => void {
         (state) => state.focusedId,
         () => cb()
       );
+      const unsubHome = useProjectHomeStore.subscribe((state, prev) => {
+        if (state.presented !== prev.presented) cb();
+      });
       return () => {
         unsubWorktree();
         unsubPanel();
+        unsubHome();
       };
     },
   });
@@ -298,11 +360,10 @@ export function initStoreOrchestrator(): () => void {
     );
   }
 
-  // 1c. Terminal MRU recording: append the newly focused terminal to the
-  //     MRU list and persist it (debounced) unless suppressed. Only PTY
-  //     panels (kind "terminal") become quick-switcher items, so non-PTY
-  //     panels (browser, dev-preview, review) must not pollute the capped
-  //     MRU list with entries the switcher will never show (#9922).
+  // 1c. Panel MRU recording: append the newly focused panel to the MRU list
+  //     and persist it (debounced) unless suppressed. Only panels the quick
+  //     switcher lists are recorded, so help/overlay terminals and dialog
+  //     panels never eat the capped list (#9922).
   disposables.add(
     toDisposable(
       usePanelStore.subscribe(
@@ -311,12 +372,7 @@ export function initStoreOrchestrator(): () => void {
           if (!focusedId) return;
           if (isMruRecordingSuppressed()) return;
           const panel = usePanelStore.getState().panelsById[focusedId];
-          // Only record panels the quick switcher can actually show — mirror
-          // its item filter (PTY kind, persisted, has a live PTY). Help/overlay
-          // terminals carry excludeFromPersistence and must not eat the cap.
-          if (!panel || !isPtyPanel(panel)) return;
-          if (panel.excludeFromPersistence === true) return;
-          if (panel.hasPty === false) return;
+          if (!panel || !isQuickSwitchablePanel(panel)) return;
           usePanelStore.getState().recordMru(`terminal:${focusedId}`);
           debouncedPersistMruList();
         }
@@ -404,10 +460,20 @@ export function initStoreOrchestrator(): () => void {
             // resource-metrics store above this leaks otherwise: badges are
             // keyed by panelId and nothing else drops them when a panel closes.
             usePluginPanelBadgeStore.getState().removePanel(removedId);
+            // Activity reports and their seen marks, keyed the same way (#13820).
+            usePluginPanelActivityStore.getState().removePanel(removedId);
+            // A park or snooze on its attention row (#13821).
+            usePluginPanelAttentionStore.getState().removePanel(removedId);
             // Header button states are keyed the same way and leak the same way.
             usePluginPanelToolbarStore.getState().clearPanel(removedId);
             usePluginPanelMenuStore.getState().removePanel(removedId);
-            useVoiceRecordingStore.getState().clearPanelBuffer(removedId);
+            usePluginPanelOpenRequestStore.getState().clearPanel(removedId);
+            // A session still dictating into it is stopped by the voice
+            // service, which keeps its words for recovery (#14637) and clears
+            // the buffer once it has.
+            if (useVoiceRecordingStore.getState().activeTarget?.panelId !== removedId) {
+              useVoiceRecordingStore.getState().clearPanelBuffer(removedId);
+            }
             // Drop the dictation lock if it was pinned to this panel — panelIds
             // are ephemeral and a stale lock would silently break routing.
             useVoiceRecordingStore.getState().clearLockedTarget(removedId);
@@ -443,6 +509,20 @@ export function initStoreOrchestrator(): () => void {
         },
         { equalityFn: shallow }
       )
+    )
+  );
+
+  // Marking a worktree reviewed clears its per-file Viewed marks (#14585), in
+  // every view of the project, since each view keeps its own.
+  disposables.add(
+    toDisposable(
+      useReviewMarksStore.subscribe((state, prev) => {
+        for (const worktreeId of newlyMarkedWorktreeIds(prev, state)) {
+          const worktrees = getCurrentViewStoreOrNull()?.getState().worktrees;
+          const path = worktrees?.get(worktreeId)?.path ?? worktreeId;
+          useDiffViewedStore.getState().clearWorktree(path);
+        }
+      })
     )
   );
 
@@ -516,6 +596,9 @@ export function initStoreOrchestrator(): () => void {
               // The view's menu goes with it; the backend's list is the
               // backend's, and comes back with a restored panel.
               usePluginPanelMenuStore.getState().setViewItems(id, []);
+              // An open request the view never saw was meant for the panel
+              // the user just closed; a restored one comes back as they left it.
+              usePluginPanelOpenRequestStore.getState().clearPanel(id);
               // Drop an inactive worktree's stashed maximize when its panel is
               // trashed (#11183). `trashPanel` doesn't shrink `panelIds`, so the
               // removal subscriber above never fires for this — the same
@@ -571,15 +654,25 @@ export function initStoreOrchestrator(): () => void {
   //     target settles. Same orchestrator-scoped lifecycle as 5a–5d (#10930).
   disposables.add(toDisposable(subscribeFleetRunWatcher()));
 
-  // 5. Availability → agent-settings re-normalization: installed/missing state
+  // 5f. Dictation ranges: carry each dictation's text range through every
+  //     draft edit, and release them once the draft is sent or cleared
+  //     (#14597). Disposing drops the records, since unmapped ranges go stale.
+  disposables.add(toDisposable(subscribeDictationRangeTracking()));
+
+  // 5g. Recent dictations (#14637): main holds the app session's list; this
+  //     view keeps a copy current for the voice menu and palette.
+  disposables.add(toDisposable(subscribeRecentDictationsSync()));
+  disposables.add(toDisposable(trackComposerSurface()));
+
+  // 5. Availability → agent-settings re-normalization: real availability data
   //    is the input to `normalizeAgentSelection`, so re-run normalization any
   //    time a fresh availability snapshot lands (see issue #5158). Fires on
   //    the `hasRealData: false → true` transition AND on subsequent
   //    `availability` reference changes — the latter covers the focus-refresh
   //    path in `useAgentLauncher`, where a user who installs a CLI outside
-  //    Daintree needs their tray/toolbar state to reconcile without an app
-  //    restart. `cliAvailabilityStore` only swaps the `availability` object
-  //    on real IPC completion, so ref equality is a reliable trigger.
+  //    Daintree needs the new agent's entry without an app restart.
+  //    `cliAvailabilityStore` only swaps the `availability` object on real IPC
+  //    completion, so ref equality is a reliable trigger.
   disposables.add(
     toDisposable(
       useCliAvailabilityStore.subscribe(
@@ -595,24 +688,8 @@ export function initStoreOrchestrator(): () => void {
     )
   );
 
-  // 6. Loading-race backstop for the same availability → settings sync.
-  // If the first real CLI snapshot lands while agent settings are still
-  // hydrating, the subscription above intentionally does not refresh a store
-  // that is mid-initialize. Re-check when the settings store becomes ready so
-  // first-run default pins are not missed on fast availability probes.
-  disposables.add(
-    toDisposable(
-      useAgentSettingsStore.subscribe((state, prevState) => {
-        const becameReady =
-          state.isInitialized &&
-          !state.isLoading &&
-          (!prevState.isInitialized || prevState.isLoading);
-        if (!becameReady) return;
-        if (!useCliAvailabilityStore.getState().hasRealData) return;
-        refreshAgentSettingsFromAvailability();
-      })
-    )
-  );
+  // 6. This machine's toolbar agent pins (#14702), kept current across views.
+  disposables.add(toDisposable(initAgentToolbarPinsSync()));
 
   // 7. The Daintree Assistant and the web chat Portal share the right edge, so
   //    only one is open at a time: opening either closes the other. Keyed on the
@@ -664,6 +741,13 @@ export function initStoreOrchestrator(): () => void {
 
   // The host's assistant agent and default terminal agent (#13345).
   disposables.add(toDisposable(initAgentDefaultsSync()));
+
+  // Terminal settings, as saved on whichever machine owns each (#14699).
+  disposables.add(toDisposable(initTerminalConfigSync()));
+
+  // Agent settings from the host and the grid layout from this machine (#14700).
+  disposables.add(toDisposable(initAgentSettingsSync()));
+  disposables.add(toDisposable(initPanelGridConfigSync()));
 
   cleanupFn = () => {
     disposables.dispose();

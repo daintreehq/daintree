@@ -5,9 +5,13 @@ import type { PtyClient } from "../../../services/PtyClient.js";
 import {
   activeTerminalWatches,
   beginWatchRequest,
+  followDriveLeaseChange,
+  onSizeHoldsChange,
+  remoteSizeHolds,
   resizeWatchedTerminal,
   stopAllTerminalWatches,
   stopTerminalWatch,
+  stopWorkerTerminalWatches,
   watchTerminal,
   watchedTerminal,
 } from "../canopyTerminalWatch.js";
@@ -122,10 +126,15 @@ describe("watchTerminal", () => {
     const { pty } = fakePty();
     const { sender } = fakeSender();
     const first = await open(pty, sender, "run-1", 100);
-    expect(watchedTerminal(1, first.watchId!)).toEqual({ runId: "run-1", spawnedAt: 100 });
+    expect(watchedTerminal(1, first.watchId!)).toEqual({
+      runId: "run-1",
+      spawnedAt: 100,
+      assistant: false,
+      mayType: true,
+    });
     const second = await open(pty, sender, "run-2", 200);
     expect(watchedTerminal(1, first.watchId!)).toBeNull();
-    expect(watchedTerminal(1, second.watchId!)).toEqual({ runId: "run-2", spawnedAt: 200 });
+    expect(watchedTerminal(1, second.watchId!)).toMatchObject({ runId: "run-2", spawnedAt: 200 });
   });
 
   it("holds one watch per view: a new one ends the last and frees its mirror", async () => {
@@ -371,5 +380,193 @@ describe("resizeWatchedTerminal", () => {
     expect(() => resizeWatchedTerminal(pty, sender.id, view.watchId!, 3, 1)).toThrow();
     expect(() => resizeWatchedTerminal(pty, sender.id, view.watchId!, 90.5, 30)).toThrow();
     expect(resizes(pty)).toEqual([]);
+  });
+});
+
+describe("an assistant's watch", () => {
+  function binding() {
+    const state = { bound: true, mayType: true, end: null as (() => void) | null };
+    const release = vi.fn();
+    return {
+      state,
+      release,
+      binding: {
+        isBound: () => state.bound,
+        onEnded: (end: () => void) => {
+          state.end = end;
+          return release;
+        },
+        mayType: () => state.mayType,
+      },
+    };
+  }
+
+  function openAssistant(pty: PtyClient, sender: WebContents, b: ReturnType<typeof binding>) {
+    return watchTerminal(
+      pty,
+      sender,
+      "assistant-1",
+      100,
+      beginWatchRequest(sender.id),
+      1,
+      () => true,
+      b.binding
+    );
+  }
+
+  it("ends the moment main lets go of the session, with no output to say so", async () => {
+    const { pty, releases } = fakePty();
+    const { sender, sent } = fakeSender();
+    const b = binding();
+    const view = await openAssistant(pty, sender, b);
+    expect(watchedTerminal(1, view.watchId!)).toMatchObject({ assistant: true, mayType: true });
+    b.state.bound = false;
+    b.state.end?.();
+    expect(sent).toEqual([{ kind: "ended", watchId: view.watchId, runId: "assistant-1" }]);
+    expect(watchedTerminal(1, view.watchId!)).toBeNull();
+    expect(b.release).toHaveBeenCalledTimes(1);
+    expect(releases[0]).toHaveBeenCalledTimes(1);
+    // A replaced run gets no size handed back from this view.
+    expect(vi.mocked(pty.resize)).not.toHaveBeenCalled();
+  });
+
+  it("ends on a same-id respawn that prints nothing", async () => {
+    const { pty, emitter, generation } = fakePty();
+    const { sender, sent } = fakeSender();
+    const view = await openAssistant(pty, sender, binding());
+    generation.current = 2;
+    emitter.emit("spawn-result", "other", { success: true });
+    expect(sent).toEqual([]);
+    emitter.emit("spawn-result", "assistant-1", { success: true });
+    expect(sent).toEqual([{ kind: "ended", watchId: view.watchId, runId: "assistant-1" }]);
+  });
+
+  it("keeps a refused duplicate spawn's original running stream open", async () => {
+    const { pty, emitter } = fakePty();
+    const { sender, sent } = fakeSender();
+    const view = await openAssistant(pty, sender, binding());
+    emitter.emit("spawn-result", "assistant-1", { success: false });
+    expect(sent).toEqual([]);
+    expect(watchedTerminal(1, view.watchId!)).not.toBeNull();
+  });
+
+  it("outlives Canopy's worker streams being stopped", async () => {
+    const { pty } = fakePty();
+    const assistantView = fakeSender(1);
+    const workerView = fakeSender(2);
+    const assistant = await openAssistant(pty, assistantView.sender, binding());
+    const worker = await open(pty, workerView.sender, "run-1");
+    stopWorkerTerminalWatches();
+    expect(watchedTerminal(1, assistant.watchId!)).not.toBeNull();
+    expect(watchedTerminal(2, worker.watchId!)).toBeNull();
+  });
+
+  it("refuses input once the session is no longer the one bound, before any event", async () => {
+    const { pty } = fakePty();
+    const { sender } = fakeSender();
+    const b = binding();
+    const view = await openAssistant(pty, sender, b);
+    b.state.bound = false;
+    expect(watchedTerminal(1, view.watchId!)).toBeNull();
+    expect(b.release).toHaveBeenCalledTimes(1);
+  });
+
+  it("starts nothing for a session replaced while its snapshot was read", async () => {
+    const { pty, resolveSnapshots } = fakePty("manual");
+    const { sender } = fakeSender();
+    const b = binding();
+    const pending = openAssistant(pty, sender, b);
+    b.state.bound = false;
+    resolveSnapshots({ data: "successor", cols: 80, rows: 24 });
+    expect(await pending).toEqual({ watchId: null, snapshot: null });
+    expect(b.release).toHaveBeenCalledTimes(1);
+  });
+
+  it("says when another view holds the input, and lets go on unwatch", async () => {
+    const { pty } = fakePty();
+    const { sender } = fakeSender();
+    const b = binding();
+    const view = await openAssistant(pty, sender, b);
+    b.state.mayType = false;
+    expect(watchedTerminal(1, view.watchId!)).toMatchObject({ assistant: true, mayType: false });
+    stopTerminalWatch(1);
+    expect(b.release).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("a panel on another machine holding the size (#14497)", () => {
+  async function openRemote(fake: ReturnType<typeof fakePty>, authority: { may: boolean }) {
+    const { sender, sent } = fakeSender(-5);
+    const view = await watchTerminal(
+      fake.pty,
+      sender,
+      "run-1",
+      100,
+      beginWatchRequest(sender.id),
+      1,
+      () => authority.may,
+      null,
+      true
+    );
+    return { view, sent };
+  }
+
+  it("ends a hold whose terminal was silently replaced, unfreezing the successor's panes", async () => {
+    const fake = fakePty();
+    const heard: string[][] = [];
+    const off = onSizeHoldsChange((ids) => heard.push(ids));
+    const { view, sent } = await openRemote(fake, { may: true });
+    resizeWatchedTerminal(fake.pty, -5, view.watchId!, 100, 30);
+    expect(remoteSizeHolds()).toEqual(["run-1"]);
+    fake.generation.current = 2;
+    fake.emitter.emit("spawn-result", "run-1", { success: true });
+    expect(remoteSizeHolds()).toEqual([]);
+    expect(heard.at(-1)).toEqual([]);
+    expect(sent).toContainEqual(expect.objectContaining({ kind: "ended" }));
+    // Nothing of the predecessor's is handed to the successor.
+    expect(fake.pty.resize).toHaveBeenCalledTimes(1);
+    off();
+  });
+
+  it("lets go without handing back when the drive moves, and asks again when it returns", async () => {
+    const fake = fakePty();
+    const authority = { may: true };
+    const { view, sent } = await openRemote(fake, authority);
+    resizeWatchedTerminal(fake.pty, -5, view.watchId!, 100, 30);
+    fake.emitter.emit("resize-result", "run-1", {
+      launchGeneration: 1,
+      requestedCols: 100,
+      requestedRows: 30,
+      appliedCols: 100,
+      appliedRows: 30,
+      outcome: "applied",
+    });
+
+    authority.may = false;
+    followDriveLeaseChange();
+    expect(remoteSizeHolds()).toEqual([]);
+
+    // The new driver's pane takes the PTY.
+    fake.emitter.emit("resize-result", "run-1", {
+      launchGeneration: 1,
+      requestedCols: 160,
+      requestedRows: 45,
+      appliedCols: 160,
+      appliedRows: 45,
+      outcome: "applied",
+    });
+    sent.length = 0;
+    authority.may = true;
+    followDriveLeaseChange();
+    // Nothing is held until the panel asks, and it is told the grid to ask against.
+    expect(remoteSizeHolds()).toEqual([]);
+    expect(sent).toEqual([
+      { kind: "resize", watchId: view.watchId, runId: "run-1", cols: 160, rows: 45 },
+    ]);
+
+    vi.mocked(fake.pty.resize).mockClear();
+    stopTerminalWatch(-5);
+    // The hold was given up with the drive, so there is nothing to hand back.
+    expect(fake.pty.resize).not.toHaveBeenCalled();
   });
 });

@@ -127,7 +127,17 @@ const {
     currentProject: { id: "proj-default", path: "/repo" } as { id: string; path: string } | null,
   },
   preferencesState: { reduceAnimations: false },
-  terminalInputState: { hybridInputEnabled: true } as { hybridInputEnabled: boolean },
+  terminalInputState: {
+    hybridInputEnabled: true,
+    getDraftInput: vi.fn((): string => ""),
+    setDraftInput: vi.fn(),
+    bumpExternalDraftRevision: vi.fn(),
+  } as {
+    hybridInputEnabled: boolean;
+    getDraftInput: (terminalId: string, projectId?: string) => string;
+    setDraftInput: (terminalId: string, value: string, projectId?: string) => void;
+    bumpExternalDraftRevision: () => void;
+  },
   worktreeSelectionState: {
     activeWorktreeId: null as string | null,
     focusedWorktreeId: null as string | null,
@@ -242,13 +252,16 @@ vi.mock("@/clients", () => ({
   },
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     focus: vi.fn(),
     setFocused: vi.fn(),
     notifyUserInput: (...args: unknown[]) => mockNotifyUserInput(...args),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("@/components/Terminal/MissingCliGate", () => ({
   MissingCliGate: ({ agentId, onRunAnyway }: { agentId: string; onRunAnyway: () => void }) => (
@@ -591,6 +604,7 @@ beforeEach(() => {
           takePendingHibernation: mockTakePendingHibernation,
           restorePendingHibernation: vi.fn().mockResolvedValue(false),
           getPinnedActionContext: vi.fn().mockResolvedValue({}),
+          getStarterPrompts: vi.fn().mockResolvedValue([]),
         },
         helpAssistant: {
           getSettings: mockGetHelpAssistantSettings,
@@ -697,6 +711,113 @@ describe("HelpPanel — empty state hero (Daintree-relevant entry points)", () =
     expect(mockProvisionSession).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: "claude" })
     );
+  });
+
+  it("still offers the stock starters to a user who has launched an agent before", async () => {
+    helpPanelState.autoLaunchEnabled = false;
+    helpPanelState.preferredAgentId = "claude";
+    panelStoreState.panelIds = ["old-term"];
+    panelStoreState.panelsById = {
+      "old-term": { id: "old-term", kind: "terminal", launchAgentId: "claude", cwd: "/repo" },
+    };
+    cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
+
+    render(<HelpPanel width={380} />);
+
+    expect(
+      await screen.findByRole("button", { name: /How do I set up a new worktree\?/i })
+    ).toBeTruthy();
+  });
+
+  it("replaces the stock starters with the project's own and launches with exactly that text", async () => {
+    helpPanelState.autoLaunchEnabled = false;
+    helpPanelState.preferredAgentId = "claude";
+    cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
+    mockGetFolderPath.mockResolvedValue("/help");
+    mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "proj-term" } });
+    const getStarterPrompts = vi.fn().mockResolvedValue(["Walk me through the release process"]);
+    Object.assign(window.electron.help, { getStarterPrompts });
+
+    render(<HelpPanel width={380} />);
+
+    const chip = await screen.findByRole("button", {
+      name: /Walk me through the release process/i,
+    });
+    expect(getStarterPrompts).toHaveBeenCalledWith("proj-default");
+    expect(screen.queryByRole("button", { name: /How do I set up a new worktree\?/i })).toBeNull();
+
+    await act(async () => {
+      fireEvent.click(chip);
+    });
+
+    expect(mockDispatch).toHaveBeenCalledWith(
+      "agent.launch",
+      expect.objectContaining({ prompt: "Walk me through the release process" }),
+      { source: "user" }
+    );
+  });
+
+  it("shows no starter cards until the project's prompts have loaded", async () => {
+    helpPanelState.autoLaunchEnabled = false;
+    helpPanelState.preferredAgentId = "claude";
+    cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
+    let resolvePrompts: (prompts: string[]) => void = () => {};
+    Object.assign(window.electron.help, {
+      getStarterPrompts: vi.fn(
+        () =>
+          new Promise<string[]>((resolve) => {
+            resolvePrompts = resolve;
+          })
+      ),
+    });
+
+    render(<HelpPanel width={380} />);
+
+    expect(await screen.findByTestId("help-start-assistant")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /How do I set up a new worktree\?/i })).toBeNull();
+
+    await act(async () => {
+      resolvePrompts([]);
+    });
+
+    expect(
+      await screen.findByRole("button", { name: /How do I set up a new worktree\?/i })
+    ).toBeTruthy();
+  });
+
+  it("drafts a starter into a session that went live after the card rendered, without launching", async () => {
+    helpPanelState.autoLaunchEnabled = false;
+    helpPanelState.preferredAgentId = "claude";
+    cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
+    terminalInputState.getDraftInput = vi.fn(() => "already typed");
+    terminalInputState.setDraftInput = vi.fn();
+    terminalInputState.bumpExternalDraftRevision = vi.fn();
+
+    render(<HelpPanel width={380} />);
+    const chip = await screen.findByRole("button", { name: /How do I set up a new worktree\?/i });
+
+    helpPanelState.terminalId = "live-term";
+    await act(async () => {
+      fireEvent.click(chip);
+    });
+
+    expect(terminalInputState.setDraftInput).toHaveBeenCalledWith(
+      "live-term",
+      "already typed\nHow do I set up a new worktree?",
+      "proj-default"
+    );
+    expect(terminalInputState.bumpExternalDraftRevision).toHaveBeenCalled();
+    expect(mockDispatch).not.toHaveBeenCalledWith(
+      "agent.launch",
+      expect.anything(),
+      expect.anything()
+    );
+    expect(mockProvisionSession).not.toHaveBeenCalled();
+    expect(helpPanelState.setAutoLaunchEnabled).not.toHaveBeenCalled();
   });
 
   it("asks which agent runs the assistant, instead of a Start CTA, when several could", () => {

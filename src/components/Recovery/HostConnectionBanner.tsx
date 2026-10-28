@@ -2,9 +2,13 @@ import { useEffect, useState } from "react";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/Spinner";
-import { useDohertyGate } from "@/hooks/useDeferredLoading";
+import { useDeferredLoading, useDohertyGate } from "@/hooks/useDeferredLoading";
 import { reconnectHost } from "@/hooks/useHostConnection";
-import { selectHostBannerVariant, useHostConnectionStore } from "@/store/hostConnectionStore";
+import {
+  HOST_LINK_SETTLE_MS,
+  selectHostBannerVariant,
+  useHostConnectionStore,
+} from "@/store/hostConnectionStore";
 import { runHostUpdate } from "@/components/Hosts/hostUpdate";
 import {
   openHostsSettingsTab,
@@ -27,9 +31,13 @@ function useNow(active: boolean): number {
 }
 
 /**
- * The window's link to its host, in the recovery banner family. Transient
- * states (reconnecting, checking an unanswered mutation) sit behind the 400ms
- * gate so a blip that recovers on its own never flashes a banner.
+ * The window's link to its host, in the recovery banner family. A link that
+ * was up and is retrying on its own (reconnecting, unreachable, restarting)
+ * shows nothing until the drop has lasted the settle window: the panes are
+ * already read-only, and most drops come back inside it. The window stays
+ * one drop across back-off swaps between those variants, so they never
+ * restart it. Other transient states (a first connect, checking an
+ * unanswered mutation) sit behind the 400ms gate.
  *
  * Never a live region: a link retrying on back-off swaps between these
  * variants every few seconds, and each swap would be read out again. The
@@ -43,12 +51,18 @@ export function HostConnectionBanner() {
   const detail = useHostConnectionStore((s) =>
     s.connection?.status === "unreachable" ? s.connection.detail : null
   );
+  const everConnected = useHostConnectionStore((s) => s.everConnected);
+  const dropped =
+    everConnected &&
+    (variant === "reconnecting" || variant === "unreachable" || variant === "restarting");
   const transient =
-    variant === "reconnecting" || variant === "connecting" || variant === "checking";
+    !dropped && (variant === "connecting" || variant === "checking" || variant === "restarting");
+  const droppedShown = useDeferredLoading(dropped, HOST_LINK_SETTLE_MS);
   const transientShown = useDohertyGate(transient);
-  const now = useNow(variant === "unreachable");
+  const now = useNow(variant === "unreachable" || variant === "host-mode-off");
 
   if (variant === null) return null;
+  if (dropped && !droppedShown) return null;
   if (transient && !transientShown) return null;
 
   const { title, description } = getHostConnectionBannerCopy(
@@ -58,6 +72,23 @@ export function HostConnectionBanner() {
     now,
     detail
   );
+
+  if (variant === "restarting") {
+    // The host's own word that it is coming back: calm for as long as that
+    // holds, and Retry doesn't wait for the next dial.
+    return (
+      <InlineStatusBanner
+        icon={Spinner}
+        title={title}
+        description={description}
+        severity="warning"
+        role="status"
+        ariaLive="off"
+        animated={false}
+        action={{ id: "reconnect", label: "Retry", variant: "primary", onClick: reconnectHost }}
+      />
+    );
+  }
 
   if (transient) {
     return (
@@ -89,7 +120,9 @@ export function HostConnectionBanner() {
   }
 
   if (variant === "host-mode-off" && hostId !== null) {
-    // Trying again finds the same: setting Host mode up there is what helps.
+    // A host that is set up checks back by itself and comes back once its
+    // Daintree does; Retry doesn't wait for the next check. Setting Host mode
+    // up is for one that never had it.
     return (
       <InlineStatusBanner
         title={title}
@@ -98,12 +131,12 @@ export function HostConnectionBanner() {
         role="status"
         ariaLive="off"
         animated={false}
-        action={{
-          id: "set-up",
-          label: "Set up…",
-          variant: "primary",
-          onClick: () => runHostUpdate("host", hostId),
-        }}
+        action={{ id: "reconnect", label: "Retry", variant: "primary", onClick: reconnectHost }}
+        trailingSlot={
+          <Button variant="ghost" size="sm" onClick={() => runHostUpdate("host", hostId)}>
+            Set up…
+          </Button>
+        }
       />
     );
   }

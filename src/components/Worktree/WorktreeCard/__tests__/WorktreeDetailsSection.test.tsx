@@ -10,6 +10,7 @@ import type { WorktreeChanges } from "@shared/types/git";
 import type { ComputedSubtitle } from "../hooks/useWorktreeStatus";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { actionService } from "@/services/ActionService";
+import { useReviewMarksStore } from "@/store/reviewMarksStore";
 import {
   WorktreeDetailsSection,
   WorktreeDeleteErrorBanner,
@@ -433,6 +434,53 @@ describe("WorktreeDetailsSection activity chip (collapsed row)", () => {
   });
 });
 
+describe("WorktreeDetailsSection — quiet git detail (#13777)", () => {
+  const quietDetail = <div data-testid="quiet-git-detail">git identity</div>;
+  const worktree = {
+    ...withChanges({ lastCommitTimestampMs: Date.now() - 120_000, lastCommitMessage: "fix: x" }),
+  };
+
+  it("leaves the activity to the expanded panel's own last-active line", () => {
+    const resting = renderSection({ worktree, quietGitDetail: quietDetail });
+    expect(screen.queryByRole("group", { name: "Last activity" })).toBeNull();
+    expect(screen.queryByTestId("quiet-git-detail")).toBeNull();
+    resting.unmount();
+
+    renderSection({ worktree, quietGitDetail: quietDetail, isExpanded: true });
+    expect(screen.getByTestId("quiet-git-detail")).not.toBeNull();
+    // Exactly one: the panel's line, not a second chip beside it.
+    expect(screen.getAllByRole("group", { name: "Last activity" })).toHaveLength(1);
+  });
+
+  it("keeps the dirty-state summary on the resting row", () => {
+    const { container } = renderSection({ worktree, quietGitDetail: quietDetail });
+    expect(container.textContent).toContain("3 files");
+  });
+
+  it("takes the Review Hub shortcut off the resting row", () => {
+    renderSection({
+      reviewState: "has-changes",
+      onOpenReviewHub: vi.fn(),
+      quietGitDetail: quietDetail,
+    });
+    expect(screen.queryByLabelText("Open Review & commit")).toBeNull();
+  });
+
+  it("keeps the shortcut while the worktree is conflicted, where it is the way out", () => {
+    renderSection({
+      reviewState: "conflicted",
+      onOpenReviewHub: vi.fn(),
+      quietGitDetail: quietDetail,
+      worktree: withChanges({
+        changedFileCount: 1,
+        changes: [{ path: "a.ts", status: "conflicted", insertions: null, deletions: null }],
+      }),
+    });
+    expect(screen.getByText("Conflicts need review")).not.toBeNull();
+    expect(screen.getByLabelText("Open Review & commit")).not.toBeNull();
+  });
+});
+
 // Issue #12087 — the banners mount as bare siblings of the card's `relative
 // z-10` content column, under a full-card select overlay whose click handler
 // selects the worktree. Their buttons have to reach the user AND stop the click
@@ -615,8 +663,121 @@ describe("WorktreeDetailsSection — repository command approval", () => {
     expect(screen.getByRole("button", { name: /run setup/i })).toBeDefined();
   });
 
+  it("keeps a failed plugin step retryable after a resource action overwrote the lifecycle slot (#13807)", () => {
+    renderSection({
+      worktree: {
+        ...baseWorktree,
+        setupStatus: {
+          state: "failed",
+          stage: "plugin-steps",
+          startedAt: 1,
+          error: 'Acme "Provision DB" failed: quota exceeded',
+        },
+        lifecycleStatus: {
+          phase: "resource-status",
+          state: "success",
+          startedAt: 2,
+          completedAt: 3,
+        },
+      },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /retry setup/i }));
+    expect(actionService.dispatch).toHaveBeenCalledWith(
+      "worktree.lifecycle.retrySetup",
+      { worktreeId: baseWorktree.id },
+      expect.objectContaining({ source: "user" })
+    );
+    expect(document.body.textContent).toContain('Acme "Provision DB" failed: quota exceeded');
+  });
+
+  it("offers no retry while setup is still running, whatever an overwritten slot says", () => {
+    renderSection({
+      worktree: {
+        ...baseWorktree,
+        setupStatus: { state: "running", stage: "plugin-steps", startedAt: 1 },
+        lifecycleStatus: { phase: "resource-status", state: "failed", startedAt: 2, error: "down" },
+      },
+    });
+
+    expect(screen.queryByRole("button", { name: /retry setup/i })).toBeNull();
+  });
+
+  it("asks to allow plugin steps, not to approve commands, when those are what setup waits on", () => {
+    renderSection({
+      worktree: {
+        ...baseWorktree,
+        lifecycleCommandsNeedApproval: true,
+        setupStatus: { state: "needs-approval", stage: "plugin-steps", startedAt: 1 },
+      },
+    });
+
+    expect(screen.getByText("Setup is waiting for you to allow plugin steps")).toBeDefined();
+    expect(screen.getByRole("button", { name: /review steps/i })).toBeDefined();
+  });
+
   it("stays out of the way when nothing needs approval", () => {
     renderSection();
     expect(screen.queryByTestId("worktree-command-approval")).toBeNull();
+  });
+});
+
+describe("WorktreeDetailsSection review change hint", () => {
+  const COMMIT = "c".repeat(40);
+
+  function setMark() {
+    useReviewMarksStore.setState({
+      marks: {
+        "test-wt": {
+          markedAt: 2000,
+          capturedAt: 1000,
+          head: { kind: "branch", branch: "feature/test", commit: COMMIT },
+          base: { ref: null, tip: null },
+          complete: true,
+          pathCount: 1,
+          revision: 1,
+        },
+      },
+      loaded: true,
+    });
+  }
+
+  afterEach(() => {
+    useReviewMarksStore.setState({ marks: {}, revision: 0, loaded: false });
+  });
+
+  it("shows the hint beside the file count once HEAD has moved", () => {
+    setMark();
+    renderSection({ worktree: withChanges({ headOid: "d".repeat(40) }) });
+    expect(screen.getByText(/Changed since review/)).toBeDefined();
+    expect(screen.getByText(/3 files/)).toBeDefined();
+  });
+
+  it("shows nothing when the marked worktree hasn't been seen to move", () => {
+    setMark();
+    renderSection({ worktree: withChanges({ headOid: COMMIT, latestFileMtime: 900 }) });
+    expect(screen.queryByText(/Changed since review/)).toBeNull();
+  });
+
+  it("shows nothing without a mark", () => {
+    renderSection({ worktree: withChanges({ headOid: "d".repeat(40) }) });
+    expect(screen.queryByText(/Changed since review/)).toBeNull();
+  });
+
+  it("shows nothing for a mark made on another branch", () => {
+    setMark();
+    renderSection({
+      worktree: { ...withChanges({ headOid: "d".repeat(40) }), branch: "feature/other" },
+    });
+    expect(screen.queryByText(/Changed since review/)).toBeNull();
+  });
+
+  it("shows the hint on a clean worktree whose HEAD moved", () => {
+    setMark();
+    renderSection({
+      worktree: withChanges({ headOid: "d".repeat(40), changedFileCount: 0 }),
+      hasChanges: false,
+    });
+    expect(screen.getByText(/Changed since review/)).toBeDefined();
   });
 });

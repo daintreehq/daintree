@@ -83,17 +83,28 @@ vi.mock("../../../window/windowRef.js", () => ({
   getMainWindow: () => harness?.win ?? null,
 }));
 
+vi.mock("../../utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../utils.js")>()),
+  broadcastToRenderer: vi.fn(),
+}));
+
 import {
   handleAcknowledgeConsent,
   handleGetOsNotifications,
+  handleGetPanelAttention,
   handleGetProjectTargeting,
+  handleListPanelAttention,
   handleResolveConsent,
   handleSetOsNotifications,
+  handleGetWorktreeDeleteNotes,
+  handleSetWorktreeDeleteNotes,
+  handleSetPanelAttention,
   handleSetProjectTargeting,
   registerPluginCapabilityHandlers,
   _resetCapabilityConsentBridgeForTest,
 } from "../pluginCapability.js";
 import { registerAppView, unregisterAppView } from "../../../window/webContentsRegistry.js";
+import { broadcastToRenderer } from "../../utils.js";
 import {
   getPluginCapabilityConsentService,
   getPluginCapabilityConsentStore,
@@ -594,6 +605,73 @@ describe("pluginCapability consent bridge — decisions", () => {
   });
 });
 
+describe("pluginCapability consent bridge — offer-back after a replacing install (#14019)", () => {
+  const GRANTS = [
+    { pluginId: "acme.x", capability: "terminal:read", scopeKey: "global" },
+    { pluginId: "acme.x", capability: "project:dispatch", scopeKey: "global" },
+  ] as const;
+
+  function offerBack() {
+    return getPluginCapabilityConsentService().offerRestore({
+      pluginId: "acme.x",
+      pluginDisplayName: "Acme",
+      grants: GRANTS,
+      declaredCapabilities: ["terminal:read", "project:dispatch"],
+      isCurrent: () => true,
+    });
+  }
+
+  it("pushes one prompt listing the grants, and restores them all on approval", async () => {
+    const dispose = registerPluginCapabilityHandlers();
+    const restored = offerBack();
+
+    expect(harness!.appWebContents.send).toHaveBeenCalledTimes(1);
+    const pushed = harness!.appWebContents.send.mock.calls[0][1] as {
+      name: string;
+      payload: Record<string, unknown> & { requestId: string };
+    };
+    expect(pushed.name).toBe("plugin-capability:consent-request");
+    expect(pushed.payload).toEqual({
+      requestId: pushed.payload.requestId,
+      pluginId: "acme.x",
+      pluginDisplayName: "Acme",
+      restore: ["terminal:read", "project:dispatch"],
+      declaredCapabilities: ["terminal:read", "project:dispatch"],
+    });
+
+    const { requestId } = pushed.payload;
+    await handleAcknowledgeConsent(ctx(harness!.appWebContents.id), { requestId });
+    await handleResolveConsent(ctx(harness!.appWebContents.id), {
+      requestId,
+      decision: "approved-and-pin",
+    });
+
+    await expect(restored).resolves.toBe(true);
+    const store = getPluginCapabilityConsentStore();
+    for (const grant of GRANTS) expect(store.hasGrant(grant)).toBe(true);
+    // The switch reads back on, so "Allow project targeting" is on again.
+    await expect(handleGetProjectTargeting({ pluginId: "acme.x" })).resolves.toBe(true);
+
+    dispose();
+  });
+
+  it("leaves the grants off when the offer is declined", async () => {
+    const dispose = registerPluginCapabilityHandlers();
+    const restored = offerBack();
+    const requestId = pushedRequestId(harness!.appWebContents);
+
+    await handleResolveConsent(ctx(harness!.appWebContents.id), {
+      requestId,
+      decision: "rejected",
+    });
+
+    await expect(restored).resolves.toBe(false);
+    expect(getPluginCapabilityConsentStore().list()).toEqual([]);
+
+    dispose();
+  });
+});
+
 describe("pluginCapability project targeting switch (#13119)", () => {
   it("is off until turned on, and off again once turned off", async () => {
     expect(await handleGetProjectTargeting({ pluginId: "acme.orchestrator" })).toBe(false);
@@ -680,6 +758,65 @@ describe("pluginCapability OS notifications switch (#13505)", () => {
   });
 });
 
+describe("pluginCapability attention views switch (#13821)", () => {
+  const provenanceBroadcasts = () =>
+    vi
+      .mocked(broadcastToRenderer)
+      .mock.calls.filter(
+        ([channel, payload]) =>
+          channel === "events:push" &&
+          JSON.stringify(payload) ===
+            JSON.stringify({ name: "plugin:provenance-changed", payload: {} })
+      ).length;
+
+  beforeEach(() => vi.mocked(broadcastToRenderer).mockClear());
+
+  it("is its own off-by-default grant, listed by instance id", async () => {
+    expect(await handleGetPanelAttention({ pluginId: "acme.board" })).toBe(false);
+    expect(await handleListPanelAttention()).toEqual([]);
+
+    expect(await handleSetPanelAttention({ pluginId: "acme.board", enabled: true })).toBe(true);
+    await handleSetOsNotifications({ pluginId: "acme.other", enabled: true });
+
+    expect(await handleGetPanelAttention({ pluginId: "acme.board" })).toBe(true);
+    expect(await handleGetOsNotifications({ pluginId: "acme.board" })).toBe(false);
+    expect(await handleListPanelAttention()).toEqual(["acme.board"]);
+
+    expect(await handleSetPanelAttention({ pluginId: "acme.board", enabled: false })).toBe(false);
+    expect(await handleListPanelAttention()).toEqual([]);
+  });
+
+  it("announces every flip, so each view re-reads the granted set", async () => {
+    await handleSetPanelAttention({ pluginId: "acme.board", enabled: true });
+    await handleSetPanelAttention({ pluginId: "acme.board", enabled: false });
+    expect(provenanceBroadcasts()).toBe(2);
+  });
+
+  it("still announces a failed save, since a failed off is revoked in memory", async () => {
+    await handleSetPanelAttention({ pluginId: "acme.board", enabled: true });
+    vi.mocked(broadcastToRenderer).mockClear();
+    vi.spyOn(getPluginCapabilityConsentStore(), "setGrant").mockReturnValue(false);
+
+    await expect(
+      handleSetPanelAttention({ pluginId: "acme.board", enabled: false })
+    ).rejects.toThrow(/could not be saved/);
+    expect(provenanceBroadcasts()).toBe(1);
+  });
+
+  it("is purged on uninstall and rejects malformed input", async () => {
+    await handleSetPanelAttention({ pluginId: "acme.board", enabled: true });
+    getPluginCapabilityConsentService().revokeAllForPlugin("acme.board");
+    expect(await handleListPanelAttention()).toEqual([]);
+    vi.mocked(broadcastToRenderer).mockClear();
+
+    await expect(handleGetPanelAttention({ pluginId: "" })).rejects.toThrow(/pluginId/);
+    await expect(
+      handleSetPanelAttention({ pluginId: "acme.board", enabled: "yes" as never })
+    ).rejects.toThrow(/enabled/);
+    expect(provenanceBroadcasts()).toBe(0);
+  });
+});
+
 // ── Host mode: consent goes to the frontend that drives the project ──
 
 import {
@@ -731,6 +868,33 @@ describe("pluginCapability consent bridge — Host mode routing", () => {
       { timeoutMs: expect.any(Number) }
     );
     expect(harness!.appWebContents.send).not.toHaveBeenCalled();
+    dispose();
+  });
+
+  it("never forwards an offer-back to a remote frontend or holds it for nobody (#14019)", async () => {
+    const offer = () =>
+      getPluginCapabilityConsentService().offerRestore({
+        pluginId: "acme.x",
+        pluginDisplayName: "Acme",
+        grants: [{ pluginId: "acme.x", capability: "project:dispatch", scopeKey: "global" }],
+        declaredCapabilities: ["project:dispatch"],
+        isCurrent: () => true,
+      });
+    // Would approve if asked, so forwarding the offer would show up as a restore.
+    const request = vi.fn(async () => "approved-and-pin");
+    frontend = {
+      kind: "remote",
+      endpoint: { request, isClosed: () => false } as unknown as ClientEndpoint,
+    };
+    const dispose = registerPluginCapabilityHandlers();
+    await expect(offer()).resolves.toBe(false);
+    expect(request).not.toHaveBeenCalled();
+
+    frontend = { kind: "none", reason: "vacant" };
+    await expect(offer()).resolves.toBe(false);
+
+    expect(harness!.appWebContents.send).not.toHaveBeenCalled();
+    expect(getPluginCapabilityConsentStore().list()).toEqual([]);
     dispose();
   });
 
@@ -790,5 +954,32 @@ describe("pluginCapability consent bridge — a driver that lost the lease", () 
     const settled = await startGatedCall();
     expect(settled.ok).toBe(false);
     dispose();
+  });
+});
+
+describe("pluginCapability worktree delete notes switch (#13805)", () => {
+  afterEach(async () => {
+    await handleSetWorktreeDeleteNotes({ pluginId: "acme.records", enabled: true });
+  });
+
+  it("starts on, turns off for that plugin alone, and turns back on", async () => {
+    expect(await handleGetWorktreeDeleteNotes({ pluginId: "acme.records" })).toBe(true);
+    expect(await handleSetWorktreeDeleteNotes({ pluginId: "acme.records", enabled: false })).toBe(
+      false
+    );
+    expect(await handleGetWorktreeDeleteNotes({ pluginId: "acme.records" })).toBe(false);
+    expect(await handleGetWorktreeDeleteNotes({ pluginId: "acme.other" })).toBe(true);
+    expect(await handleSetWorktreeDeleteNotes({ pluginId: "acme.records", enabled: true })).toBe(
+      true
+    );
+  });
+
+  it("rejects malformed input", async () => {
+    await expect(handleGetWorktreeDeleteNotes({ pluginId: "../escape" })).rejects.toThrow(
+      /pluginId/
+    );
+    await expect(
+      handleSetWorktreeDeleteNotes({ pluginId: "acme.records", enabled: "no" as never })
+    ).rejects.toThrow(/enabled/);
   });
 });

@@ -1,4 +1,11 @@
-import { HOST_CONTROL_OUTCOMES } from "../../../shared/types/hostControl.js";
+import {
+  HOST_CONTROL_OUTCOMES,
+  HOST_ENSURE_ACCEPTABLE,
+  HOST_WATCH_DELIVERIES,
+  HOST_WATCH_LOST_REASONS,
+  HOST_WATCH_STATUSES,
+} from "../../../shared/types/hostControl.js";
+import { isHostSettingKey } from "../../../shared/types/hostSettings.js";
 import {
   AGENT_LAST_MESSAGE_UNAVAILABLE_REASONS,
   type AgentLastMessageUnavailableReason,
@@ -123,6 +130,7 @@ function finiteNumber(value: unknown): number | null {
 
 const HOST_ID_PATTERN = /^[\w.-]{1,64}$/;
 const HOST_OUTCOMES: ReadonlySet<string> = new Set(HOST_CONTROL_OUTCOMES);
+const ENSURE_ACCEPTABLE: ReadonlySet<string> = new Set(HOST_ENSURE_ACCEPTABLE);
 
 function auditHostId(value: unknown): string | null {
   return typeof value === "string" && HOST_ID_PATTERN.test(value) ? value : null;
@@ -142,6 +150,11 @@ function projectHostList(result: unknown): Record<string, unknown> {
     projectCounts: record.hosts.map((host) => {
       const projects = asRecord(host)?.projects;
       return Array.isArray(projects) ? projects.length : null;
+    }),
+    // Whether each page was the whole list, never its cursor, which names the query.
+    projectsComplete: record.hosts.map((host) => {
+      const complete = asRecord(asRecord(host)?.projectInventory)?.complete;
+      return typeof complete === "boolean" ? complete : null;
     }),
   };
 }
@@ -176,6 +189,30 @@ function projectPanelCapture(result: unknown): Record<string, unknown> {
   };
 }
 
+const WATCH_STATUSES: ReadonlySet<string> = new Set(HOST_WATCH_STATUSES);
+const WATCH_LOST_REASONS: ReadonlySet<string> = new Set(HOST_WATCH_LOST_REASONS);
+const WATCH_DELIVERIES: ReadonlySet<string> = new Set(HOST_WATCH_DELIVERIES);
+
+const WATCH_ID_PATTERN = /^hw-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function auditWatchId(value: unknown): string | null {
+  return typeof value === "string" && WATCH_ID_PATTERN.test(value) ? value : null;
+}
+
+/** A watch's id, host, kind of condition and where it stands. */
+function projectHostWatch(value: unknown): Record<string, unknown> {
+  const watch = asRecord(value);
+  const condition = asRecord(watch?.condition);
+  return {
+    watchId: auditWatchId(watch?.watchId),
+    hostId: auditHostId(watch?.hostId),
+    on: condition === null ? null : condition.connection != null ? "connection" : "capacity",
+    status: fromSet(watch?.status, WATCH_STATUSES),
+    lostReason: fromSet(watch?.lostReason, WATCH_LOST_REASONS),
+    delivery: fromSet(watch?.delivery, WATCH_DELIVERIES),
+  };
+}
+
 const AUDIT_RESULT_PROJECTIONS: ReadonlyMap<string, (result: unknown) => unknown> = new Map<
   string,
   (result: unknown) => unknown
@@ -199,6 +236,68 @@ const AUDIT_RESULT_PROJECTIONS: ReadonlyMap<string, (result: unknown) => unknown
       };
     },
   ],
+  [
+    "host.ensureProject",
+    // Where it stands, never the paths or questions' words (#14140).
+    (result) => {
+      const record = asRecord(result);
+      if (record === null) return { status: "unrecognized" };
+      const answer = asRecord(record.answer);
+      const project = asRecord(answer?.project);
+      return {
+        outcome: fromSet(record.outcome, HOST_OUTCOMES),
+        hostId: auditHostId(record.hostId),
+        status: typeof answer?.status === "string" ? answer.status : null,
+        projectId: auditId(project?.projectId),
+        how: typeof project?.how === "string" ? project.how : null,
+        questions: Array.isArray(answer?.questions)
+          ? answer.questions
+              .map((q) => asRecord(q)?.reason)
+              .filter((reason): reason is string => typeof reason === "string")
+          : null,
+      };
+    },
+  ],
+  [
+    "host.settings",
+    // Which hosts and settings, and how each went: never a value or the ticket (#14167).
+    (result) => {
+      const record = asRecord(result);
+      if (record === null) return { status: "unrecognized" };
+      return {
+        outcome: fromSet(record.outcome, HOST_OUTCOMES),
+        ticketed: typeof record.ticket === "string",
+        hosts: Array.isArray(record.hosts)
+          ? record.hosts.map((entry) => {
+              const host = asRecord(entry);
+              return {
+                hostId: auditHostId(host?.hostId),
+                outcome: fromSet(host?.outcome, HOST_OUTCOMES),
+                keys: Array.isArray(host?.settings)
+                  ? host.settings
+                      .map((leaf) => asRecord(leaf)?.key)
+                      .filter((key): key is string => isHostSettingKey(key))
+                  : null,
+              };
+            })
+          : null,
+      };
+    },
+  ],
+  [
+    "host.watch",
+    // Which watches and where each stands, never the note or what the host's figures were (#14463).
+    (result) => {
+      const record = asRecord(result);
+      if (record === null) return { status: "unrecognized" };
+      const listed = Array.isArray(record.watches) ? record.watches : [];
+      return {
+        outcome: fromSet(record.outcome, HOST_OUTCOMES),
+        armed: record.armed === true,
+        watches: listed.map(projectHostWatch),
+      };
+    },
+  ],
   ["plugin.capturePanel", projectPanelCapture],
   ["project.runCommand", projectCommandRun],
 ]);
@@ -218,6 +317,86 @@ const AUDIT_ARGS_PROJECTIONS: ReadonlyMap<string, (args: unknown) => unknown> = 
   string,
   (args: unknown) => unknown
 >([
+  [
+    "host.watch",
+    // What was watched for and for how long, never the note.
+    (args) => {
+      const record = asRecord(args);
+      const connection = record?.connection;
+      const pressure = record?.memoryPressureAtMost;
+      return {
+        operation:
+          record?.operation === "arm" ||
+          record?.operation === "cancel" ||
+          record?.operation === "list"
+            ? record.operation
+            : null,
+        hostId: auditHostId(record?.hostId),
+        connection: connection === "connected" || connection === "disconnected" ? connection : null,
+        memoryAvailableBytesAtLeast: finiteNumber(record?.memoryAvailableBytesAtLeast),
+        cpuIdleCoresAtLeast: finiteNumber(record?.cpuIdleCoresAtLeast),
+        memoryPressureAtMost: pressure === "normal" || pressure === "warn" ? pressure : null,
+        expiresInSeconds: finiteNumber(record?.expiresInSeconds),
+        noted: typeof record?.note === "string",
+        watchId: auditWatchId(record?.watchId),
+      };
+    },
+  ],
+  [
+    "host.list",
+    // Which host and whether it searched or paged, never the words searched for.
+    (args) => {
+      const record = asRecord(args);
+      return {
+        includeAgents: record?.includeAgents === true,
+        projectId: typeof record?.projectId === "string" ? record.projectId : null,
+        hostId: auditHostId(record?.hostId),
+        projectQuery: typeof record?.projectQuery === "string",
+        projectCursor: typeof record?.projectCursor === "string",
+      };
+    },
+  ],
+  [
+    "host.settings",
+    // The hosts and settings named, never the values proposed or the ticket.
+    (args) => {
+      const record = asRecord(args);
+      const patch = asRecord(record?.patch);
+      return {
+        operation:
+          record?.operation === "read" ||
+          record?.operation === "preview" ||
+          record?.operation === "apply"
+            ? record.operation
+            : null,
+        hostIds: Array.isArray(record?.hostIds) ? record.hostIds.map(auditHostId) : null,
+        keys: patch ? Object.keys(patch).filter(isHostSettingKey) : null,
+        ticketed: typeof record?.ticket === "string",
+      };
+    },
+  ],
+  [
+    "host.ensureProject",
+    // A host folder is the host's to keep: only whether one was named.
+    (args) => {
+      const record = asRecord(args);
+      const copy = record?.copy;
+      return {
+        hostId: auditHostId(record?.hostId),
+        worktree: typeof record?.worktree === "boolean" ? record.worktree : null,
+        worktreePath: typeof record?.worktreePath === "string" ? "<path>" : null,
+        copy: copy === "new" ? "new" : typeof copy === "string" ? "<path>" : null,
+        // A malformed call is audited too: only the answers the schema names.
+        accept: Array.isArray(record?.accept)
+          ? record.accept
+              .filter(
+                (item): item is string => typeof item === "string" && ENSURE_ACCEPTABLE.has(item)
+              )
+              .join(",")
+          : null,
+      };
+    },
+  ],
   [
     "project.runCommand",
     (args) => {
@@ -264,7 +443,10 @@ function projectHostCallArgs(args: unknown): Record<string, unknown> {
     projectId: auditId(record?.projectId),
     tool,
     callId: auditId(record?.callId),
+    newCallId: auditId(record?.newCallId),
   };
+  // Only a throwaway call (#14444) carries the key, so a project call's record is as it was.
+  if (record?.throwaway === true) out.throwaway = true;
   for (const [key, value] of Object.entries(withoutWrittenText(projected ?? {}))) {
     out[`args.${key}`] = value;
   }

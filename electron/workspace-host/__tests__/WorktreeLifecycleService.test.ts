@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { stubProcessKillForFile } from "../../__tests__/helpers/processKillGuard.js";
 import path from "path";
 
 /** Normalize a path to forward slashes for cross-platform mock matching */
@@ -1767,6 +1768,10 @@ describe("WorktreeLifecycleService", () => {
   });
 
   describe("signal capture and abort/timeout markers", () => {
+    // The manual child's process group 12345 is made up; the timeout and abort
+    // paths signal it, then escalate to SIGKILL after 5s (#14418).
+    const killSpy = stubProcessKillForFile();
+
     function makeManualChild(pid: number | undefined = 12345) {
       const listeners: Record<string, ((...args: unknown[]) => void)[]> = {};
       const child = {
@@ -1831,6 +1836,9 @@ describe("WorktreeLifecycleService", () => {
         expect(result.timedOut).toBe(true);
         expect(result.signalName).toBe("SIGKILL");
         expect(result.output).toContain("[Process timed out after 1000ms");
+        if (process.platform !== "win32") {
+          expect(killSpy()).toHaveBeenCalledWith(-12345, "SIGTERM");
+        }
       } finally {
         vi.useRealTimers();
       }
@@ -1841,19 +1849,30 @@ describe("WorktreeLifecycleService", () => {
       const { child, fireClose } = makeManualChild();
       mockSpawn.mockReturnValue(child as never);
 
-      const p = service.runCommands(["slow-cmd"], {
-        cwd: "/t",
-        env: {},
-        signal: ac.signal,
-        onProgress: vi.fn(),
-      });
-      await Promise.resolve();
-      ac.abort();
-      fireClose(null, "SIGTERM");
-      const result = await p;
+      vi.useFakeTimers();
+      let result: Awaited<ReturnType<typeof service.runCommands>>;
+      try {
+        const p = service.runCommands(["slow-cmd"], {
+          cwd: "/t",
+          env: {},
+          signal: ac.signal,
+          onProgress: vi.fn(),
+        });
+        await Promise.resolve();
+        ac.abort();
+        fireClose(null, "SIGTERM");
+        result = await p;
+        await vi.advanceTimersByTimeAsync(5_000);
+      } finally {
+        vi.useRealTimers();
+      }
 
       expect(result.aborted).toBe(true);
       expect(result.output).toContain("[Process aborted:");
+      if (process.platform !== "win32") {
+        expect(killSpy()).toHaveBeenCalledWith(-12345, "SIGTERM");
+        expect(killSpy()).toHaveBeenCalledWith(-12345, "SIGKILL");
+      }
     });
   });
 
@@ -2133,6 +2152,64 @@ describe("WorktreeLifecycleService", () => {
       expect(monitor.needsApproval).toBe(true);
       // The connect command is from the same unapproved file, so it is withheld.
       expect(monitor.setResourceConnectCommand).toHaveBeenLastCalledWith(undefined);
+    });
+
+    describe("plugin setup steps (#13807)", () => {
+      const DB = {
+        pluginId: "acme",
+        pluginName: "Acme",
+        pluginVersion: "1.0.0",
+        stepId: "db",
+        label: "Provision DB",
+        timeoutMs: 60_000,
+      };
+
+      it("asks to allow a plugin step even when no repository command waits", async () => {
+        serveFiles({});
+
+        const review = await service.getCommandReview(WT, ROOT, [DB]);
+
+        expect(review?.sources).toEqual([]);
+        expect(review?.pluginSteps).toEqual([
+          { pluginId: "acme", pluginName: "Acme", stepId: "db", label: "Provision DB" },
+        ]);
+        expect(await service.pendingPluginSteps([DB], ROOT)).toEqual([DB]);
+      });
+
+      it("allows it once for the project, and asks again for a new version", async () => {
+        serveFiles({});
+        const review = await service.getCommandReview(WT, ROOT, [DB]);
+        await service.approveCommandReview(WT, ROOT, review!.fingerprint, [DB]);
+
+        expect(await service.getCommandReview("/another-wt", ROOT, [DB])).toBeNull();
+        expect(await service.pendingPluginSteps([DB], ROOT)).toEqual([]);
+        const upgraded = { ...DB, pluginVersion: "2.0.0" };
+        expect(await service.pendingPluginSteps([upgraded], ROOT)).toEqual([upgraded]);
+      });
+
+      it("refuses an approval for steps that changed after they were shown", async () => {
+        serveFiles({});
+        const review = await service.getCommandReview(WT, ROOT, [DB]);
+
+        await expect(
+          service.approveCommandReview(WT, ROOT, review!.fingerprint, [
+            DB,
+            { ...DB, stepId: "seed", label: "Seed fixtures" },
+          ])
+        ).rejects.toThrow("changed after you reviewed them");
+        expect(approved.size).toBe(0);
+      });
+
+      it("approves commands and plugin steps shown together in one go", async () => {
+        serveFiles({ "/wt/.daintree/config.json": { setup: ["npm ci"] } });
+        const review = await service.getCommandReview(WT, ROOT, [DB]);
+        expect(review?.sources).toHaveLength(1);
+        expect(review?.pluginSteps).toHaveLength(1);
+
+        await service.approveCommandReview(WT, ROOT, review!.fingerprint, [DB]);
+
+        expect(await service.getCommandReview(WT, ROOT, [DB])).toBeNull();
+      });
     });
 
     it("reads attachments from the project root, never a branch's copy", async () => {

@@ -6,21 +6,27 @@ import { notifyRemoteViewEndpointOpened } from "../ipc/hostSendRelay.js";
 import { setRemoteBoundViewFilter } from "../ipc/utils.js";
 import { releaseWindowTerminalPort, setRemoteViewHooks } from "../window/portDistribution.js";
 import { getPtyClient } from "../window/serviceRefs.js";
+import { onWebContentsDestroyed } from "../window/webContentsDestroyed.js";
 import { resolveLiveWebContents } from "../window/webContentsRegistry.js";
 import { getWindowRegistry } from "../window/windowRef.js";
 import { toDisposable } from "../utils/lifecycle.js";
 import { isRemoteHostSupported } from "./buildGate.js";
 import { initRemoteHostsClient } from "./client/initClient.js";
-import { closeSshMasters } from "./client/sshTransport.js";
+import { defaultCommandRunner } from "./client/commandRunner.js";
+import { closeSshMasters, exitStaleSshMasters } from "./client/sshTransport.js";
 import { installViewReverseRequests } from "./client/viewRequests.js";
 import { installHostFileClient } from "./files/clientInstall.js";
 import { installHostUploadClient } from "./files/uploadClient.js";
 import { installHostMetricsClient } from "./metrics/clientInstall.js";
 import { installCanopyHostsClient } from "./canopy/clientInstall.js";
+import { installDeviceAnswerHostsClient } from "./deviceAnswer/clientInstall.js";
+import { installVoicePaneHostsClient } from "./voice/clientInstall.js";
 import { installHostControl, installHostControlLinkClient } from "./assistant/install.js";
+import { getRemoteService } from "./runtime.js";
 import {
   acceptLocalPushForRemoteView,
   installHybridSplits,
+  installNotificationPolicyPush,
   ViewVisibilityReporter,
 } from "./hybrid/index.js";
 import { installClipboardSplits } from "./hybrid/clipboard.js";
@@ -28,6 +34,7 @@ import { installPickerSplits } from "./hybrid/pickers.js";
 import { installPluginClient } from "./plugins/install.js";
 import { installPluginInstallSplits, installPluginParityClient } from "./plugins/parity/install.js";
 import { installSettingsCopyClient } from "./settingsCopy/install.js";
+import { installSettingsControlClient } from "./settingsControl/install.js";
 import { installPortForwardClient } from "./ports/clientInstall.js";
 import { installHostSwitchService } from "./projects/clientInstall.js";
 import type { HostDescriptor } from "../../shared/types/remoteHosts.js";
@@ -47,6 +54,9 @@ import {
   installWorktreePortRedelivery,
   redeliverClientWorktreePort,
 } from "./worktreePort/attach.js";
+import { createLogger } from "../utils/logger.js";
+
+const logger = createLogger("main:boot");
 
 // The composition root owns window creation; it installs the opener through this module.
 export { setRemoteHostsWindowOpener } from "./client/initClient.js";
@@ -75,10 +85,21 @@ export interface StartRemoteHostsOptions {
 }
 
 type Teardown = () => void | Promise<void>;
+type Role = "shell" | "host";
 
-/** Run in reverse on stop, so each piece goes before what it was built on. */
-let teardowns: Teardown[] = [];
+/**
+ * Run in reverse on stop, so each piece goes before what it was built on. Each
+ * names its role, so the Shell alone can be stopped and started again against
+ * a Host that stays up (the integration harness's relaunch).
+ */
+let ledger: Array<{ role: Role; teardown: Teardown }> = [];
 let started = false;
+/** The running Shell; one that has stopped installs nothing on a late first use. */
+let shellLaunch: object | null = null;
+
+function ownedBy(role: Role): { push(teardown: Teardown): void } {
+  return { push: (teardown) => ledger.push({ role, teardown }) };
+}
 
 /** Each ssh master may take this long to answer `-O exit` at quit; they are asked together. */
 const MASTER_EXIT_TIMEOUT_MS = 1_000;
@@ -86,6 +107,9 @@ const MASTER_EXIT_TIMEOUT_MS = 1_000;
 const HOST_CALL_CONNECT_MS = 10_000;
 
 function startClient(options: StartRemoteHostsOptions): void {
+  const launch = {};
+  shellLaunch = launch;
+  const teardowns = ownedBy("shell");
   // First in, so it runs last: port forwards and links are cancelled on the
   // masters first. ControlPersist keeps a master across reconnects while the
   // app runs; on stop, every master this process used is told to exit, so no
@@ -114,7 +138,7 @@ function startClient(options: StartRemoteHostsOptions): void {
   // Everything a remote view needs beyond the host list, installed the first
   // time a host is actually used so a user who never adds one runs none of it.
   const activate = (): void => {
-    if (activated || !started) return;
+    if (activated || shellLaunch !== launch) return;
     activated = true;
     teardowns.push(installClientTerminalPortOverride(hostForView));
     teardowns.push(installClientWorktreePortOverride(hostForView));
@@ -226,6 +250,14 @@ function startClient(options: StartRemoteHostsOptions): void {
       holdHost: (hostId) => client.manager.hold(hostId),
     })
   );
+  // A host's own settings read and changed by name, with no view needed (#14167).
+  teardowns.push(
+    installSettingsControlClient({
+      client: client.client,
+      sessionFor: usedSessionFor,
+      holdHost: (hostId) => client.manager.hold(hostId),
+    })
+  );
   const hostEntry = (hostId: string) =>
     client.client.list().find((entry) => entry.descriptor.id === hostId);
   teardowns.push(
@@ -239,14 +271,24 @@ function startClient(options: StartRemoteHostsOptions): void {
       sessionFor: client.sessionFor,
       connectionFor: (hostId) => hostEntry(hostId)?.descriptor.connection ?? null,
       clientDir: path.join(app.getPath("userData"), "rh"),
+      hostName: (hostId) => hostEntry(hostId)?.descriptor.name ?? null,
+      watchView(webContentsId, onGone) {
+        const wc = resolveLiveWebContents(webContentsId);
+        if (wc) return onWebContentsDestroyed(wc, onGone);
+        queueMicrotask(onGone);
+        return () => {};
+      },
     })
   );
+  // This machine's alert choices, sent to every host it opens a session to (#14701).
+  teardowns.push(installNotificationPolicyPush(client.manager));
   // Host summaries and notifications: dials only hosts whose notifications are on.
   teardowns.push(
     installHostMetricsClient({
       manager: client.manager,
       registry: client.registry,
       hostForView: client.hostForView,
+      openHostForNotice: (windowId, notice) => client.client.openHostForNotice(windowId, notice),
     })
   );
   // Canopy reading a host the view isn't bound to, This Mac included.
@@ -257,6 +299,16 @@ function startClient(options: StartRemoteHostsOptions): void {
       hostForView: client.hostForView,
     })
   );
+  // A device paired here answers the agents on the hosts this Shell is connected to.
+  teardowns.push(
+    installDeviceAnswerHostsClient({
+      registry: client.registry,
+      manager: client.manager,
+      sessionFor: client.sessionFor,
+    })
+  );
+  // Dictation into a host's pane reads the pane's context from that host (#14782).
+  teardowns.push(installVoicePaneHostsClient({ sessionFor: client.sessionFor }));
   // This Shell's assistants' reach into its hosts: `host.list` and `host.call` (#13493).
   const observeHosts = () =>
     client.client.list().map(({ descriptor, connection, summary }) => ({
@@ -265,11 +317,15 @@ function startClient(options: StartRemoteHostsOptions): void {
       connection,
       lastSeenAt: descriptor.lastSeenAt,
       summary,
+      summaryReceipt: summary
+        ? (getRemoteService("hostMetrics")?.receiptOf(summary) ?? null)
+        : null,
+      lastHandshake: descriptor.lastHandshake,
+      disconnectedByPerson: client.client.isDisconnectedByPerson(descriptor.id),
     }));
   teardowns.push(
     installHostControl({
       observeHosts,
-      hasHosts: () => client.registry.list().length > 0,
       listHostProjects: (hostId) => client.client.listHostProjects({ hostId }),
       // Never one the person disconnected: listing it isn't a call to it.
       connect: async (hostId, timeoutMs) => {
@@ -279,6 +335,18 @@ function startClient(options: StartRemoteHostsOptions): void {
       },
       isHostControlEnabled: (hostId) =>
         client.registry.get(hostId)?.assistantControlEnabled === true,
+      // What `host.watch` hears (#14463): nothing a host isn't already sending.
+      watchHosts: (listener) => {
+        const offs = [
+          client.registry.onChange(() => listener.changed()),
+          client.manager.onStateChange(() => listener.changed()),
+          getRemoteService("hostMetrics")?.onSummary((hostId) => listener.summary(hostId)) ??
+            (() => {}),
+        ];
+        return () => {
+          for (const off of offs) off();
+        };
+      },
     })
   );
   // The sender each session proves to a host before a call is relayed there.
@@ -326,27 +394,65 @@ export async function startRemoteHosts(options: StartRemoteHostsOptions): Promis
     try {
       await ensureWorkspaceClient({});
     } catch (error) {
-      console.warn("[RemoteHosts] Workspace client failed; remote worktree ports are off:", error);
+      logger.warn("Workspace client failed; remote worktree ports are off", { error });
     }
   }
   if (!started) return;
+  // A master a crashed launch left behind still holds its port forwards; this
+  // launch would otherwise reuse it. Only the system ssh transport makes masters.
+  if (!options.createTransport) {
+    await exitStaleSshMasters(
+      defaultCommandRunner,
+      path.join(app.getPath("userData"), "rh"),
+      MASTER_EXIT_TIMEOUT_MS
+    );
+    if (!started) return;
+  }
+  // This machine's throwaway runs (#14445), for its own assistants and any
+  // Shell's; owned by the host role, so a Shell restarted alone keeps them.
+  const { registerHostThrowawayRuns } = await import("../services/throwaway/index.js");
+  if (!started) return;
+  ownedBy("host").push(registerHostThrowawayRuns());
   startClient(options);
   if (__DAINTREE_REMOTE_HOST_ROLE__ && isRemoteHostSupported()) {
     const { startHostRole } = await import("./hostBoot.js");
-    const listenError = await startHostRole(options, (teardown) => teardowns.push(teardown));
+    const host = ownedBy("host");
+    const listenError = await startHostRole(options, (teardown) => host.push(teardown));
     if (listenError) throw new HostModeListenError(listenError.error);
   }
 }
 
-export async function stopRemoteHosts(): Promise<void> {
-  started = false;
-  const pending = teardowns;
-  teardowns = [];
-  for (const teardown of pending.reverse()) {
+async function drain(role?: Role): Promise<void> {
+  const pending = ledger.filter((entry) => role === undefined || entry.role === role);
+  ledger = role === undefined ? [] : ledger.filter((entry) => entry.role !== role);
+  for (const { teardown } of pending.reverse()) {
     try {
       await teardown();
     } catch (error) {
       console.error("[RemoteHosts] Teardown step failed:", error);
     }
   }
+}
+
+export async function stopRemoteHosts(): Promise<void> {
+  started = false;
+  shellLaunch = null;
+  await drain();
+}
+
+/**
+ * @internal Tests only: the Shell quits, as the app's own stop takes it down
+ * (its links say GOODBYE), while the Host in this process keeps running.
+ */
+export async function _stopRemoteShellForTesting(): Promise<void> {
+  shellLaunch = null;
+  await drain("shell");
+}
+
+/** @internal Tests only: the Shell launches again beside the Host that stayed up. */
+export function _startRemoteShellForTesting(options: StartRemoteHostsOptions): void {
+  if (!started || shellLaunch !== null) {
+    throw new Error("Only a stopped Shell beside a running Host can start again");
+  }
+  startClient(options);
 }

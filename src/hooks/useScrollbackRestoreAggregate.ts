@@ -1,5 +1,8 @@
 import { useCallback, useSyncExternalStore } from "react";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import {
+  peek as peekTerminalService,
+  subscribeWhenReady,
+} from "@/services/terminal/terminalInstanceServiceAccessor";
 import type { ScrollbackRestoreAggregate } from "@/services/terminal/scrollbackRestoreAggregate";
 
 /**
@@ -7,26 +10,30 @@ import type { ScrollbackRestoreAggregate } from "@/services/terminal/scrollbackR
  * `TerminalInstanceService`. Three separate `useSyncExternalStore` calls, each
  * returning a primitive `number`, keep snapshots referentially stable — a
  * single object snapshot would allocate a new reference every render and loop
- * indefinitely.
+ * indefinitely. Mounted on the empty project view, so every count reads 0
+ * until the service loads.
  */
 export function useScrollbackRestoreAggregate(): ScrollbackRestoreAggregate {
   const subscribe = useCallback(
     (onStoreChange: () => void) =>
-      terminalInstanceService.subscribeScrollbackRestoreState(onStoreChange),
+      subscribeWhenReady(
+        (service) => service.subscribeScrollbackRestoreState(onStoreChange),
+        onStoreChange
+      ),
     []
   );
 
   const pendingCount = useSyncExternalStore(
     subscribe,
-    useCallback(() => terminalInstanceService.getScrollbackRestorePendingCount(), [])
+    useCallback(() => peekTerminalService()?.getScrollbackRestorePendingCount() ?? 0, [])
   );
   const inProgressCount = useSyncExternalStore(
     subscribe,
-    useCallback(() => terminalInstanceService.getScrollbackRestoreInProgressCount(), [])
+    useCallback(() => peekTerminalService()?.getScrollbackRestoreInProgressCount() ?? 0, [])
   );
   const totalCount = useSyncExternalStore(
     subscribe,
-    useCallback(() => terminalInstanceService.getScrollbackRestoreTotalCount(), [])
+    useCallback(() => peekTerminalService()?.getScrollbackRestoreTotalCount() ?? 0, [])
   );
 
   return { pendingCount, inProgressCount, totalCount };

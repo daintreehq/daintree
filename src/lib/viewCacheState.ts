@@ -73,8 +73,8 @@ function ensureArmed(): void {
   if (armed) return;
   armed = true;
 
-  // `TerminalInstanceService` constructs its controllers at module scope, so
-  // importing anything downstream of it runs this in node-like suites where
+  // The terminal service accessor subscribes at module scope, so importing
+  // anything downstream of it runs this in node-like suites where
   // `window` is not merely empty but undeclared — a bare read is a
   // ReferenceError, not something `?.` can catch. No window, no view lifecycle;
   // not-cached is the right answer.
@@ -165,8 +165,8 @@ export function subscribeProjectViewObservability(
     listener(next);
   };
   const offLifecycle = subscribeProjectViewLifecycle(check);
-  // `TerminalInstanceService` subscribes at module scope, so suites that stub a
-  // bare `document` object reach this too.
+  // A terminal service built in a suite that stubs a bare `document` object
+  // reaches this too.
   const canListen =
     typeof document !== "undefined" && typeof document.addEventListener === "function";
   if (canListen) {

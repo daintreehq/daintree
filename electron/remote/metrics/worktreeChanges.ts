@@ -1,4 +1,9 @@
 import type { HostWorktreeEntry } from "../../../shared/types/ipc/hostMetrics.js";
+import { createLogger } from "../../utils/logger.js";
+import { createKeyedLogLimiter } from "../../utils/keyedLogLimiter.js";
+
+const logger = createLogger("main:worktreeChanges");
+const logLimiter = createKeyedLogLimiter();
 
 /**
  * How long a burst of worktree and agent changes is gathered before the list is
@@ -82,7 +87,10 @@ export class WorktreeChangeWatch {
     try {
       signature = worktreesSignature(await this.options.list());
     } catch (error) {
-      console.warn("[HostMetrics] Couldn't read worktrees:", error);
+      const suppressedCount = logLimiter.take("read-worktrees");
+      if (suppressedCount !== null) {
+        logger.warn("Couldn't read worktrees", { error, suppressedCount });
+      }
     }
     this.reading = false;
     if (this.disposed) return;

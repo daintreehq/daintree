@@ -36,10 +36,4 @@ It needs `INWORLD_API_KEY` and `CLOUDFLARE_API_TOKEN` (uploads go through `wrang
 1. Record one file per chapter, named by chapter id (`welcome`, `worktrees`, …; `.wav`, `.m4a`, `.mp3`, `.flac` or `.ogg`). A chapter that names a shortcut needs two, `pilot.mac` and `pilot.pc`, each reading that keyboard's key names. Read the narration as written in `tourChapters.ts` — small ad-libs are fine, but reworded sentences shift the cues.
 2. Put them in one folder and run `npm run tour:audio -- --recordings <folder>`.
 
-The script encodes each recording to Ogg Opus with `ffmpeg`, transcribes it with Inworld speech-to-text (`inworld/inworld-stt-1` by default; `--stt-model` picks another model Inworld routes, e.g. `groq/whisper-large-v3`) to get word timestamps, lands every cue on the word as actually spoken, uploads, and rewrites the manifest. Words the recogniser mishears are interpolated between their neighbours; if fewer than 60% of words line up, that chapter fails and nothing is published for it. A chapter without a recording keeps its previous audio. Preview the result with the harness below before committing.
-
-## Previewing
-
-`tour-preview.html` renders the dialog outside Electron with a stubbed onboarding bridge: `?theme=<id>`, `?chapter=<id>`, `?t=<seconds>` to freeze a moment, `?muted=1`, `?keyboard=mac|pc` to narrate and draw one keyboard. `window.__tour` is the live player.
-
-`DAINTREE_SHOT_TOUR=1 npx playwright test --project=screenshots tour-dialog-review` captures the dialog's states (paused, playing, long caption, end card, held, finish, track hover, stage focus, transition, short window) across themes into `artifacts/tour-dialog-shots/` (`DAINTREE_SHOT_DIR` overrides), and asserts the focus handoffs in a real browser.
+The script encodes each recording to Ogg Opus with `ffmpeg`, transcribes it with Inworld speech-to-text (`inworld/inworld-stt-1` by default; `--stt-model` picks another model Inworld routes, e.g. `groq/whisper-large-v3`) to get word timestamps, lands every cue on the word as actually spoken, uploads, and rewrites the manifest. Words the recogniser mishears are interpolated between their neighbours; if fewer than 60% of words line up, that chapter fails and nothing is published for it. A chapter without a recording keeps its previous audio.

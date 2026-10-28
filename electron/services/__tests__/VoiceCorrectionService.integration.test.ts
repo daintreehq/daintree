@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { VoiceCorrectionService } from "../VoiceCorrectionService.js";
+import { getAgentConfig } from "../../../shared/config/agentRegistry.js";
+import { getBuiltinSlashCommands } from "../../../shared/types/slashCommands.js";
+import { buildVoiceCommandVocabulary } from "../../../shared/utils/voiceAgentCommands.js";
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
 
@@ -21,7 +24,7 @@ describe("VoiceCorrectionService integration", () => {
       const result = await svc.correct(
         { rawText: "um so we need to like update the racked component" },
         {
-          model: "gpt-5.6-luna",
+          model: "gpt-6.1-terra",
           apiKey: OPENAI_API_KEY,
           customDictionary: ["React", "Daintree"],
         }
@@ -51,7 +54,7 @@ describe("VoiceCorrectionService integration", () => {
       const result = await svc.correct(
         { rawText: input },
         {
-          model: "gpt-5.6-luna",
+          model: "gpt-6.1-terra",
           apiKey: OPENAI_API_KEY,
           customDictionary: [],
         }
@@ -75,7 +78,7 @@ describe("VoiceCorrectionService integration", () => {
       const result = await svc.correct(
         { rawText: "we need to update the daintree work tree dashboard" },
         {
-          model: "gpt-5.6-luna",
+          model: "gpt-6.1-terra",
           apiKey: OPENAI_API_KEY,
           customDictionary: ["Daintree", "Worktree"],
         }
@@ -91,7 +94,7 @@ describe("VoiceCorrectionService integration", () => {
   );
 
   it.skipIf(!OPENAI_API_KEY)(
-    "gpt-5.6-luna: corrects technical terms and removes fillers",
+    "gpt-6.1-terra: corrects technical terms and removes fillers",
     async () => {
       svc = new VoiceCorrectionService();
 
@@ -99,13 +102,13 @@ describe("VoiceCorrectionService integration", () => {
       const result = await svc.correct(
         { rawText: input },
         {
-          model: "gpt-5.6-luna",
+          model: "gpt-6.1-terra",
           apiKey: OPENAI_API_KEY,
           customDictionary: ["React", "Daintree"],
         }
       );
 
-      console.log("Model:    ", "gpt-5.6-luna");
+      console.log("Model:    ", "gpt-6.1-terra");
       console.log("Raw:      ", input);
       console.log("Corrected:", result.confirmedText);
 
@@ -117,7 +120,7 @@ describe("VoiceCorrectionService integration", () => {
   );
 
   it.skipIf(!OPENAI_API_KEY)(
-    "gpt-5.6-luna: output contains no preamble, quotes, or explanatory text",
+    "gpt-6.1-terra: output contains no preamble, quotes, or explanatory text",
     async () => {
       svc = new VoiceCorrectionService();
 
@@ -125,13 +128,13 @@ describe("VoiceCorrectionService integration", () => {
       const result = await svc.correct(
         { rawText: input },
         {
-          model: "gpt-5.6-luna",
+          model: "gpt-6.1-terra",
           apiKey: OPENAI_API_KEY,
           customDictionary: [],
         }
       );
 
-      console.log("Model:    ", "gpt-5.6-luna");
+      console.log("Model:    ", "gpt-6.1-terra");
       console.log("Raw:      ", input);
       console.log("Corrected:", result.confirmedText);
 
@@ -146,7 +149,7 @@ describe("VoiceCorrectionService integration", () => {
   );
 
   it.skipIf(!OPENAI_API_KEY)(
-    "gpt-5.6-luna: returns already-correct input verbatim (idempotency)",
+    "gpt-6.1-terra: returns already-correct input verbatim (idempotency)",
     async () => {
       svc = new VoiceCorrectionService();
 
@@ -154,13 +157,13 @@ describe("VoiceCorrectionService integration", () => {
       const result = await svc.correct(
         { rawText: input },
         {
-          model: "gpt-5.6-luna",
+          model: "gpt-6.1-terra",
           apiKey: OPENAI_API_KEY,
           customDictionary: [],
         }
       );
 
-      console.log("Model:    ", "gpt-5.6-luna");
+      console.log("Model:    ", "gpt-6.1-terra");
       console.log("Raw:      ", input);
       console.log("Corrected:", result.confirmedText);
 
@@ -173,7 +176,7 @@ describe("VoiceCorrectionService integration", () => {
   );
 
   it.skipIf(!OPENAI_API_KEY)(
-    "gpt-5.6-luna: handles paragraph-length input (multi-clause)",
+    "gpt-6.1-terra: handles paragraph-length input (multi-clause)",
     async () => {
       svc = new VoiceCorrectionService();
 
@@ -182,13 +185,13 @@ describe("VoiceCorrectionService integration", () => {
       const result = await svc.correct(
         { rawText: input },
         {
-          model: "gpt-5.6-luna",
+          model: "gpt-6.1-terra",
           apiKey: OPENAI_API_KEY,
           customDictionary: [],
         }
       );
 
-      console.log("Model:    ", "gpt-5.6-luna");
+      console.log("Model:    ", "gpt-6.1-terra");
       console.log("Raw:      ", input);
       console.log("Corrected:", result.confirmedText);
 
@@ -200,5 +203,64 @@ describe("VoiceCorrectionService integration", () => {
       expect(result.confirmedText).not.toMatch(/^(here is|the corrected)/i);
     },
     20_000
+  );
+});
+
+// The model's half of command recognition: invocations at the start of a
+// prompt become the agent's own commands, and sentences that only mention
+// those words stay prose.
+describe("VoiceCorrectionService integration — target commands", () => {
+  const claude = {
+    agentId: "claude" as const,
+    agentName: "Claude",
+    isAssistant: false,
+    vocabulary: buildVoiceCommandVocabulary(
+      getBuiltinSlashCommands("claude"),
+      getAgentConfig("claude")!.completionSources!
+    ),
+  };
+  const settings = {
+    model: "gpt-6.1-terra",
+    apiKey: OPENAI_API_KEY,
+    customDictionary: [],
+    commandTarget: claude,
+  };
+
+  it.skipIf(!OPENAI_API_KEY).each([
+    ["run the compact command", /^\/compact\b/],
+    ["run the review skill on the last commit", /^\/review\b.*last commit/i],
+  ])(
+    "writes %j as the agent's command",
+    async (rawText, expected) => {
+      const result = await new VoiceCorrectionService().correct(
+        { rawText, startsPrompt: true },
+        settings
+      );
+      expect(result.confirmedText).toMatch(expected);
+    },
+    15_000
+  );
+
+  it
+    .skipIf(!OPENAI_API_KEY)
+    .each([
+      "the review skill is broken",
+      "compact cars use less space",
+      "compact the conversation",
+      "clear the build cache and rebuild",
+      "explain the compact command",
+      "we should review the last commit later",
+      "don't compact the conversation yet",
+    ])(
+    "leaves %j as prose",
+    async (rawText) => {
+      const result = await new VoiceCorrectionService().correct(
+        { rawText, startsPrompt: true },
+        settings
+      );
+      expect(result.failed).not.toBe(true);
+      expect(result.confirmedText).not.toMatch(/^[/$]/);
+    },
+    15_000
   );
 });

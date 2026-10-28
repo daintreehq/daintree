@@ -3,6 +3,7 @@ import { render, act } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { _resetForTests, registerEscape } from "@/lib/escapeStack";
 import { ESCAPE_BACKSTOP_DIALOG_ATTR } from "@/lib/dialogEscapeBackstop";
+import { claimVoiceWaitKeys } from "@/lib/voiceWaitKeys";
 import type { PaletteId } from "@/store/paletteStore";
 
 function parseComboLite(combo: string) {
@@ -207,6 +208,70 @@ describe("useGlobalKeybindings — isolated surfaces", () => {
     } finally {
       surface.remove();
     }
+  });
+
+  function pressDictationIn(
+    ownsDictation: boolean,
+    html: string,
+    key: { actionId: string; combo: string; event: KeyboardEventInit } = {
+      actionId: "voiceInput.toggle",
+      combo: "Cmd+D",
+      event: { key: "d", code: "KeyD", metaKey: true },
+    }
+  ) {
+    mocks.keybindingService.getEffectiveCombo.mockImplementation((id: string) =>
+      id === key.actionId ? key.combo : undefined
+    );
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: { actionId: key.actionId },
+      chordPrefix: false,
+      shouldConsume: true,
+    });
+    render(<Host />);
+    const owner = document.createElement("section");
+    if (ownsDictation) owner.setAttribute("data-dictation-owner", "");
+    const surface = document.createElement("div");
+    surface.setAttribute("data-keybindings-isolated", "");
+    surface.innerHTML = html;
+    owner.appendChild(surface);
+    document.body.appendChild(owner);
+    try {
+      pressIn(surface.querySelector("textarea")!, key.event);
+    } finally {
+      owner.remove();
+    }
+  }
+
+  it.each([
+    ["its live terminal", '<div class="xterm"><textarea></textarea></div>'],
+    ["its reply", '<div class="cm-editor"><textarea></textarea></div>'],
+  ])("lets the dictation key through from %s, for Canopy to route", (_where, html) => {
+    pressDictationIn(true, html);
+    expect(mocks.actionService.dispatch).toHaveBeenCalledWith(
+      "voiceInput.toggle",
+      undefined,
+      expect.anything()
+    );
+  });
+
+  // #14920: stopping with a send is a dictation key too.
+  it("lets stop-and-send through from a reply that owns its dictation", () => {
+    pressDictationIn(true, '<div class="cm-editor"><textarea></textarea></div>', {
+      actionId: "voiceInput.stopAndSend",
+      combo: "Cmd+Alt+D",
+      event: { key: "d", code: "KeyD", metaKey: true, altKey: true },
+    });
+    expect(mocks.actionService.dispatch).toHaveBeenCalledWith(
+      "voiceInput.stopAndSend",
+      undefined,
+      expect.anything()
+    );
+  });
+
+  it("keeps the dictation key out of an isolated surface that doesn't route it", () => {
+    pressDictationIn(false, '<div class="cm-editor"><textarea></textarea></div>');
+    expect(mocks.keybindingService.resolveKeybinding).not.toHaveBeenCalled();
+    expect(mocks.actionService.dispatch).not.toHaveBeenCalled();
   });
 });
 
@@ -887,6 +952,41 @@ describe("useGlobalKeybindings — palette Escape capture", () => {
       expect(event.defaultPrevented).toBe(false);
     } finally {
       xterm.remove();
+    }
+  });
+});
+
+describe("useGlobalKeybindings — a dictated send waiting on its cleanup (#14780)", () => {
+  it("leaves Escape at the page to the waiting send, not the escape stack", () => {
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: undefined,
+      chordPrefix: false,
+      shouldConsume: false,
+    });
+    const escapeHandler = vi.fn();
+    registerEscape(escapeHandler);
+    // Mounted before the claim, as at app start, so its listener hears the key first.
+    render(<Host />);
+    const cancel = vi.fn();
+    const release = claimVoiceWaitKeys({
+      holds: () => false,
+      editor: () => null,
+      isSelected: () => false,
+      sendNow: vi.fn(),
+      cancel,
+    });
+
+    try {
+      act(() => {
+        document.body.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })
+        );
+      });
+
+      expect(cancel).toHaveBeenCalledTimes(1);
+      expect(escapeHandler).not.toHaveBeenCalled();
+    } finally {
+      release();
     }
   });
 });

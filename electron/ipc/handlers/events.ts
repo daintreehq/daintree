@@ -2,6 +2,7 @@ import { CHANNELS } from "../channels.js";
 import type { HandlerDependencies } from "../types.js";
 import type { DaintreeEventMap } from "../../services/events.js";
 import type { IpcEventBusMap } from "../../../shared/types/ipc/maps.js";
+import type { ActionSource } from "../../../shared/types/actions.js";
 import { broadcastToRenderer, typedHandle } from "../utils.js";
 
 const ALLOWED_RENDERER_EVENTS: ReadonlySet<keyof DaintreeEventMap> = new Set(["action:dispatched"]);
@@ -44,6 +45,7 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   "window:disk-space-status": "external",
   "window:sample-blink-memory": "external",
   "window:sample-renderer-elu": "external",
+  "window:sample-terminal-buffers": "external",
   "system:wake": "external",
   "system:memory-pressure": "external",
   "system:power-policy-changed": "external",
@@ -70,6 +72,8 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   "terminal:submit-status": "external",
   // Broadcast by the MCP server handlers whenever a hand-over starts or ends.
   "terminal:adoptions-changed": "external",
+  // Broadcast by the Canopy handlers whenever a panel on another machine takes or lets go of a terminal's size.
+  "terminal:canopy-size-holds-changed": "external",
 
   // Sent project-scoped by the MCP terminal-notify service.
   "terminal:notify-state": "external",
@@ -88,15 +92,21 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   "plugin:actions-changed": "external",
   "plugin:panel-kinds-changed": "external",
   "plugin:toolbar-buttons-changed": "external",
+  "plugin:launch-entries-changed": "external",
+  "plugin:layouts-changed": "external",
   "plugin:keybindings-changed": "external",
   "plugin:context-menu-items-changed": "external",
   "plugin:agents-changed": "external",
   "plugin:recipes-changed": "external",
   "plugin:tours-changed": "external",
+  "plugin:hosted-views-changed": "external",
+  "plugin:themes-changed": "external",
   "plugin:icons-changed": "external",
   "plugin:decorations-changed": "external",
   "plugin:panel-badges-changed": "external",
   "plugin:panel-badges-cleared": "external",
+  "plugin:panel-activity-changed": "external",
+  "plugin:tasks-changed": "external",
   "plugin:panel-menus-changed": "external",
   "plugin:provenance-changed": "external",
   // PluginService sends this itself, scoped like runtime status below.
@@ -109,9 +119,14 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   // PluginService sends this itself, scoped like runtime status.
   "plugin:toolbar-badges-changed": "external",
   // PluginService sends this itself, scoped like runtime status.
+  "plugin:toolbar-states-changed": "external",
+  // PluginService sends this itself, scoped like runtime status.
   "plugin:context-keys-changed": "external",
   // PluginService sends this itself, to the status's own project only.
   "plugin:worktree-card-statuses-changed": "external",
+  "plugin:worktree-review-checks-changed": "external",
+  // PluginService sends this itself, to the status's own project only.
+  "plugin:terminal-statuses-changed": "external",
   // Project-local plugin events: ProjectPluginController sends them itself via
   // `broadcastToProjectRenderers`, so only that project's views receive them.
   // Relaying here would fan them out to every window.
@@ -119,7 +134,7 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   "plugin:project-plugins-changed": "external",
   "plugin:project-plugin-staged": "external",
   "plugin:project-plugin-visibility-changed": "external",
-  "plugin:project-surface-choices-changed": "external",
+  "plugin:project-surfaces-changed": "external",
   "forge:remote-changed": "external",
   "plugin:bg-update-available": "external",
   "project-groups:update": "external",
@@ -130,6 +145,8 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   "terminal:exit": "external",
   "terminal:spawn-result": "external",
   "terminal:resize-result": "external",
+  // MemoryLeakAutoRestartService sends this itself, to the one view it picked.
+  "terminal:memory-leak-restart-requested": "external",
 } as const satisfies Record<keyof IpcEventBusMap, "bus" | "external">;
 
 const EVENT_BUS_RELAYED_EVENTS = (
@@ -153,6 +170,7 @@ function safeJsonSize(value: unknown): number | null {
 }
 
 const RESERVED_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+const MAX_PLUGIN_ID_LENGTH = 256;
 const SAFE_ARGS_MAX_BYTES = 1024;
 
 /**
@@ -184,6 +202,21 @@ function sanitizeSafeArgs(value: unknown): Record<string, unknown> | undefined {
   return result;
 }
 
+// A Record rather than a list so a new ActionSource member fails typecheck here
+// instead of being silently dropped at the IPC boundary (#13759).
+const ACTION_SOURCES: Record<ActionSource, true> = {
+  user: true,
+  keybinding: true,
+  menu: true,
+  agent: true,
+  "context-menu": true,
+  plugin: true,
+};
+
+function isActionSource(value: unknown): value is ActionSource {
+  return typeof value === "string" && Object.hasOwn(ACTION_SOURCES, value);
+}
+
 function normalizeActionDispatchedPayload(
   payload: unknown
 ): DaintreeEventMap["action:dispatched"] | null {
@@ -193,15 +226,7 @@ function normalizeActionDispatchedPayload(
   if (typeof actionId !== "string" || !actionId.trim() || actionId.length > 200) return null;
 
   const source = payload.source;
-  if (
-    source !== "user" &&
-    source !== "keybinding" &&
-    source !== "menu" &&
-    source !== "agent" &&
-    source !== "context-menu"
-  ) {
-    return null;
-  }
+  if (!isActionSource(source)) return null;
 
   const timestampRaw = payload.timestamp;
   const timestamp =
@@ -251,11 +276,15 @@ function normalizeActionDispatchedPayload(
     typeof payload.confirmed === "boolean" ? payload.confirmed : undefined;
 
   // Plugin-action audit fields. Both are renderer-controlled strings crossing
-  // a trust boundary, so cap/shape them: `pluginId` to a sane length and
-  // `argsHash` to a strict 64-char lowercase-hex SHA-256 digest.
+  // a trust boundary, so cap/shape them: `pluginId` to the plugin-id bound the
+  // remote frontend contract uses (a project plugin's instance id carries a
+  // 64-char project hash, so it routinely exceeds 100) and `argsHash` to a
+  // strict 64-char lowercase-hex SHA-256 digest.
   const pluginIdRaw = payload.pluginId;
   const pluginId =
-    typeof pluginIdRaw === "string" && pluginIdRaw.trim().length > 0 && pluginIdRaw.length <= 100
+    typeof pluginIdRaw === "string" &&
+    pluginIdRaw.trim().length > 0 &&
+    pluginIdRaw.length <= MAX_PLUGIN_ID_LENGTH
       ? pluginIdRaw
       : undefined;
 

@@ -112,9 +112,12 @@ describe("cloneAndOpen", () => {
     host.clone.mockImplementation(
       (options: ExecuteCloneOptions) =>
         new Promise<void>((_, reject) => {
-          options.signal.addEventListener("abort", () =>
-            reject(new AppError({ code: "CANCELLED", message: "Clone cancelled" }))
-          );
+          const cancel = () =>
+            reject(new AppError({ code: "CANCELLED", message: "Clone cancelled" }));
+          // On a slow runner the cancel can land while the destination checks are
+          // still on disk, so the clone starts with its signal already aborted.
+          if (options.signal.aborted) cancel();
+          else options.signal.addEventListener("abort", cancel);
         })
     );
     const opId = nextOpId();

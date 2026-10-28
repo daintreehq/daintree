@@ -322,7 +322,7 @@ describe("sweepDeletedWorktreeCleanup", () => {
     expect(getExpiry()).toBeNull();
   });
 
-  it("records an inbox-only notification naming the terminals it trashed", () => {
+  it("leaves no notification behind when it trashes terminals", () => {
     setPanels([
       { id: "t1", worktreeId: "wt-1" },
       { id: "t2", worktreeId: "wt-1" },
@@ -331,30 +331,8 @@ describe("sweepDeletedWorktreeCleanup", () => {
     addRow({ expiresAt: NOW - 1 });
     sweepDeletedWorktreeCleanup(makeDeps());
 
-    expect(notify).toHaveBeenCalledTimes(1);
-    const call = vi.mocked(notify).mock.calls[0];
-    expect(call).toBeDefined();
-    const payload = call![0];
-    // Inbox-only: the sweep fires unattended, so it must never toast.
-    expect(payload.priority).toBe("low");
-    expect(payload.type).toBe("info");
-    expect(payload.title).toBe("Deleted worktree cleaned up");
-    // Past tense: the inbox is usually read long after the trash TTL has killed the PTYs.
-    expect(payload.message).toBe("Closed 2 terminals left open in feature/x.");
-    expect(payload.context).toEqual({ worktreeId: "wt-1", eventKind: "agent" });
-    // No restore/undo — the trash window is far shorter than inbox dwell time.
-    expect(payload.action).toBeUndefined();
-    expect(payload.actions).toBeUndefined();
-  });
-
-  it("uses singular phrasing for a single surviving terminal", () => {
-    addRow({ expiresAt: NOW - 1 });
-    sweepDeletedWorktreeCleanup(makeDeps());
-
-    expect(notify).toHaveBeenCalledTimes(1);
-    const call = vi.mocked(notify).mock.calls[0];
-    expect(call).toBeDefined();
-    expect(call![0].message).toBe("Closed 1 terminal left open in feature/x.");
+    expect(bulkTrashByWorktree).toHaveBeenCalledTimes(1);
+    expect(notify).not.toHaveBeenCalled();
   });
 
   it("stays silent when the sweep had no surviving terminals to trash", () => {
@@ -375,7 +353,7 @@ describe("sweepDeletedWorktreeCleanup", () => {
     expect(bulkTrashByWorktree).not.toHaveBeenCalled();
   });
 
-  it("collapses a same-tick burst into one inbox entry (#11260)", () => {
+  it("leaves no notification behind for a same-tick burst", () => {
     setPanels([
       { id: "t1", worktreeId: "wt-1" },
       { id: "t2", worktreeId: "wt-2" },
@@ -389,33 +367,7 @@ describe("sweepDeletedWorktreeCleanup", () => {
     sweepDeletedWorktreeCleanup(makeDeps());
 
     expect(bulkTrashByWorktree).toHaveBeenCalledTimes(3);
-    expect(notify).toHaveBeenCalledTimes(1);
-    const payload = vi.mocked(notify).mock.calls[0]![0];
-    expect(payload.priority).toBe("low");
-    expect(payload.title).toBe("Deleted worktrees cleaned up");
-    expect(payload.message).toBe("Closed 4 terminals left open in 3 worktrees.");
-    expect(payload.context?.eventKind).toBe("agent");
-    expect(payload.action).toBeUndefined();
-    expect(payload.actions).toBeUndefined();
-    // No single worktree owns a multi-row sweep, so the entry must not pin one.
-    expect(payload.context?.worktreeId).toBeUndefined();
-  });
-
-  it("counts only the rows that actually expired on this tick", () => {
-    setPanels([
-      { id: "t1", worktreeId: "wt-1" },
-      { id: "t2", worktreeId: "wt-2" },
-    ]);
-    usePanelStore.setState({ bulkTrashByWorktree });
-    addRow({ id: "wt-1", title: "feature/a", expiresAt: NOW - 1 });
-    // Still counting down — it must not appear in this tick's summary.
-    addRow({ id: "wt-2", title: "feature/b", expiresAt: NOW + 30_000 });
-    sweepDeletedWorktreeCleanup(makeDeps());
-
-    expect(notify).toHaveBeenCalledTimes(1);
-    const message = vi.mocked(notify).mock.calls[0]![0].message;
-    expect(message).toContain("feature/a");
-    expect(message).not.toContain("feature/b");
+    expect(notify).not.toHaveBeenCalled();
   });
 
   it("holds every previewed row while the grouped clear dialog is open", () => {
@@ -566,7 +518,7 @@ describe("sweepDeletedWorktreeCleanup", () => {
     // whole "eventually gives up" guarantee.
     sweepDeletedWorktreeCleanup(makeDeps({ now: () => afterCap + pinned }));
     expect(bulkTrashByWorktree).toHaveBeenCalledTimes(1);
-    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify).not.toHaveBeenCalled();
   });
 
   it("eventually trashes a row an abandoned close-confirm held past its cap", () => {
@@ -768,7 +720,7 @@ describe("sweepDeletedWorktreeCleanup", () => {
     expect(bulkTrashByWorktree).toHaveBeenCalledTimes(1);
   });
 
-  it("cleans up a burst that ran out while unobserved with one inbox entry", () => {
+  it("cleans up a burst that ran out while unobserved without a notification", () => {
     setPanels([
       { id: "t1", worktreeId: "wt-1" },
       { id: "t2", worktreeId: "wt-2" },
@@ -785,11 +737,7 @@ describe("sweepDeletedWorktreeCleanup", () => {
     sweepDeletedWorktreeCleanup(makeDeps({ ...OBSERVED, now: () => at }));
 
     expect(bulkTrashByWorktree).toHaveBeenCalledTimes(3);
-    expect(notify).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(notify).mock.calls[0]?.[0]).toMatchObject({
-      title: "Deleted worktrees cleaned up",
-      priority: "low",
-    });
+    expect(notify).not.toHaveBeenCalled();
   });
 
   it("neither spends nor trashes while the window is hidden", () => {

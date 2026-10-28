@@ -40,3 +40,50 @@ export function resolveViewWorkspace(input: {
 
   return null;
 }
+
+/**
+ * This view's own open project row, for a store selector — a store-owned
+ * reference, never a fresh object, so an unrelated collection edit doesn't
+ * re-render the caller.
+ *
+ * A closed project stays in `projects` — reopening it from the switcher
+ * depends on the row surviving — while this view keeps its seeded id, so
+ * {@link resolveViewWorkspace} still finds it after `closeActiveProject`.
+ * Mirrors `getProjectForCurrentLocation`, which drops closed rows for the same
+ * reason: the welcome screen that replaces a closed project must keep its
+ * no-sidebar state (#5023). Literal `=== "closed"` because `status` is
+ * optional and an absent one is not closed.
+ */
+export function selectViewProject(
+  viewWorkspaceId: string | null,
+  state: { projects: readonly Project[]; currentProject: Project | null }
+): Project | undefined {
+  const resolved = resolveViewWorkspace({
+    viewWorkspaceId,
+    projects: state.projects,
+    currentProject: state.currentProject,
+    scratches: [],
+    currentScratch: null,
+  });
+  if (resolved?.kind !== "project") return undefined;
+  return resolved.project.status === "closed" ? undefined : resolved.project;
+}
+
+/**
+ * This view's own scratch row, for a store selector. Only meaningful once
+ * {@link selectViewProject} has found no project, since resolution is
+ * project-first.
+ */
+export function selectViewScratch(
+  viewWorkspaceId: string | null,
+  state: { scratches: readonly Scratch[]; currentScratch: Scratch | null }
+): Scratch | undefined {
+  const resolved = resolveViewWorkspace({
+    viewWorkspaceId,
+    projects: [],
+    currentProject: null,
+    scratches: state.scratches,
+    currentScratch: state.currentScratch,
+  });
+  return resolved?.kind === "scratch" ? resolved.scratch : undefined;
+}

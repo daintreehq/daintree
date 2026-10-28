@@ -36,6 +36,11 @@ vi.mock("../../../services/ProjectStore.js", () => ({
   projectStore: projectStoreMock,
 }));
 
+const layoutSeedsMock = vi.hoisted(() => ({
+  captureProjectLayoutSeed: vi.fn<(projectId: string, firstOpen: boolean) => unknown>(),
+}));
+vi.mock("../../../services/plugin/projectLayoutSeeds.js", () => layoutSeedsMock);
+
 vi.mock("../../../services/ProjectSwitchService.js", () => ({
   ProjectSwitchService: class MockProjectSwitchService {
     onSwitch = vi.fn();
@@ -53,6 +58,7 @@ vi.mock("../../../projectMenuState.js", () => ({
 // needs a baseline of its own (#12231).
 const pluginLifecycleMock = vi.hoisted(() => ({
   notifyProjectPluginsClosed: vi.fn<(projectId: string) => void>(),
+  notifyProjectPluginsRemoved: vi.fn<(projectId: string) => void>(),
 }));
 vi.mock("../../../window/projectPluginLifecycle.js", () => pluginLifecycleMock);
 
@@ -172,6 +178,11 @@ describe("project:close handler", () => {
       teardownMock.gracefulTeardownAndJournalProject.mock.invocationCallOrder[0]!
     );
     expect(projectStoreMock.clearProjectState).toHaveBeenCalledWith("project-active");
+    // With its state gone, its next open must not pass for a first one (#13782).
+    expect(layoutSeedsMock.captureProjectLayoutSeed).toHaveBeenCalledWith("project-active", false);
+    expect(layoutSeedsMock.captureProjectLayoutSeed.mock.invocationCallOrder[0]!).toBeLessThan(
+      projectStoreMock.clearProjectState.mock.invocationCallOrder[0]!
+    );
     expect(projectStoreMock.clearCurrentProject).toHaveBeenCalled();
     expect(projectStoreMock.updateProjectStatus).toHaveBeenCalledWith("project-active", "closed");
 

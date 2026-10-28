@@ -2,20 +2,24 @@
  * @vitest-environment jsdom
  */
 import { renderHook, act } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useTerminalVisibilityObserver } from "../useTerminalVisibilityObserver";
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 
 const mocks = vi.hoisted(() => ({
   getAttachGeneration: vi.fn(() => 1),
   setVisible: vi.fn(),
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     getAttachGeneration: mocks.getAttachGeneration,
     setVisible: mocks.setVisible,
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 /**
  * Retains every callback ever registered, including across `disconnect()`, so a
@@ -115,6 +119,12 @@ function setup(
 
   return { view, updateVisibility, container };
 }
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
+});
 
 describe("useTerminalVisibilityObserver", () => {
   const RealIntersectionObserver = globalThis.IntersectionObserver;

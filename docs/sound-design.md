@@ -161,9 +161,9 @@ Applied in order to the raw synthesis output:
 
 ## The Sounds
 
-The generator produces **14 distinct sounds** (`scripts/generate-sounds.mjs`, `variantGenerators` + `staticSounds`). Ten are **variant** sounds (4 pre-baked variants each, no-repeat round-robin at playback): `chime`, `complete`, `waiting`, `ping`, `all-clear`, `git-commit`, `git-push`, `worktree-create`, `agent-spawned`, `context-injected`. Four are **static** (single file, no variants): `error`, `pulse`, `git-push-error`, `worktree-delete`.
+The generator produces **17 distinct sounds** (`scripts/generate-sounds.mjs`, `variantGenerators` + `staticSounds`). Ten are **variant** sounds (4 pre-baked variants each, no-repeat round-robin at playback): `chime`, `complete`, `waiting`, `ping`, `all-clear`, `git-commit`, `git-push`, `worktree-create`, `agent-spawned`, `context-injected`. Seven are **static** (single file, no variants): `error`, `pulse`, `git-push-error`, `worktree-delete`, `dictation-start`, `dictation-stop`, `dictation-error`.
 
-`electron/services/SoundService.ts` `SOUND_FILES` (the canonical map of `SoundId` → base filename) lists all 14; `ALLOWED_SOUND_FILES` is derived from it.
+`electron/services/SoundService.ts` `SOUND_FILES` (the canonical map of `SoundId` → base filename) lists all 17; `ALLOWED_SOUND_FILES` is derived from it.
 
 ### Earcon families
 
@@ -173,8 +173,9 @@ The generator produces **14 distinct sounds** (`scripts/generate-sounds.mjs`, `v
 | Ambient | `pulse` | Repeating "still working" presence cue during background work |
 | Git | `git-commit`, `git-push`, `git-push-error` | VCS action confirmations and failures |
 | Worktree | `worktree-create`, `worktree-delete`, `all-clear`, `context-injected` | Worktree lifecycle, all-clear, and context injection |
+| Dictation | `dictation-start`, `dictation-stop`, `dictation-error` | Dictation listening, stop, and failure cues |
 
-The five core agent-state sounds are documented in detail below; the remaining nine follow the same DSP architecture with notes drawn from the JI palette (see `genAllClear`, `genGitCommit`, `genGitPush`, `genWorktreeCreate`, `genAgentSpawned`, `genContextInjected` and the static `gitPushError` / `worktreeDelete` constants in `scripts/generate-sounds.mjs`).
+The five core agent-state sounds are documented in detail below; the remaining twelve follow the same DSP architecture with notes drawn from the JI palette (see `genAllClear`, `genGitCommit`, `genGitPush`, `genWorktreeCreate`, `genAgentSpawned`, `genContextInjected` and the static `gitPushError` / `worktreeDelete` / `dictationStart` / `dictationStop` / `dictationError` constants in `scripts/generate-sounds.mjs`).
 
 ### chime.wav — General Notification
 

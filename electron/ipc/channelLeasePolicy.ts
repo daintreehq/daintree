@@ -12,7 +12,8 @@ import { CHANNEL_LOCALITY, getChannelLocality } from "./channelLocality.js";
  *   project is the one the call targets, found through
  *   {@link CHANNEL_LEASE_TARGETS}, not the one the caller is showing.
  * - `handler`: the handler enforces the lease itself, per terminal rather
- *   than per caller's project (terminal input, submit and resizes).
+ *   than per caller's project (terminal input, submit and resizes), or per
+ *   change for a channel that also reads (a plugin's host calls).
  *
  * The dispatcher applies it to link calls from remote views, and to calls
  * from this machine's own views once the lease service exists (Host mode);
@@ -37,14 +38,13 @@ export const CHANNEL_LEASE_POLICY = {
   "agent-capabilities:get-ccr-presets": "free",
   "agent-capabilities:get-registry": "free",
   "agent-capabilities:get-resolved-model-list": "free",
-  "agent-capabilities:is-agent-enabled": "free",
   "agent-help:get": "free",
   "agent-defaults:changed": "free",
   "agent-defaults:get": "free",
   "agent-defaults:migrate-legacy": "free",
   "agent-defaults:set": "free",
   "agent-presets:updated": "free",
-  "agent-session:clear": "free",
+  "agent-session:clear": "driver",
   "agent-session:delete-bookmark": "free",
   "agent-session:get-retention": "free",
   "agent-session:list": "free",
@@ -52,7 +52,8 @@ export const CHANNEL_LEASE_POLICY = {
   "agent-session:prepare-bookmark": "driver",
   "agent-session:promote-bookmark": "free",
   "agent-session:rename-bookmark": "free",
-  "agent-session:set-retention": "free",
+  "agent-session:set-retention": "driver",
+  "agent-settings:changed": "free",
   "agent-settings:get": "free",
   "agent-settings:reset": "free",
   "agent-settings:set": "free",
@@ -81,6 +82,7 @@ export const CHANNEL_LEASE_POLICY = {
   // resizes or restores a run's terminal is checked per run in the handler.
   "canopy:answer": "handler",
   "canopy:archive": "free",
+  "canopy:empty-trash": "handler",
   "canopy:get-snapshot": "free",
   "canopy:mark-all-read": "free",
   "canopy:mark-seen": "free",
@@ -89,12 +91,23 @@ export const CHANNEL_LEASE_POLICY = {
   "canopy:rename": "driver",
   "canopy:rename-requested": "free",
   "canopy:reread": "free",
+  "canopy:resolve-assistant": "free",
   "canopy:restore-reads": "free",
+  "canopy:remove-requested": "free",
+  "canopy:resume-requested": "free",
+  "canopy:remove-trashed": "handler",
   "canopy:restore-requested": "free",
+  "canopy:restore-trashed": "handler",
+  "canopy:resume-settled": "handler",
+  "canopy:resume-started": "handler",
   "canopy:run-branch": "free",
   "canopy:search-screens": "free",
   "canopy:set-active": "free",
   "canopy:set-mode": "free",
+  "canopy:get-model": "free",
+  "canopy:get-size-holds": "free",
+  "canopy:retry-model": "free",
+  "canopy:remove-models": "free",
   "canopy:set-read": "free",
   "canopy:set-scope": "free",
   "canopy:set-shown": "free",
@@ -109,6 +122,7 @@ export const CHANNEL_LEASE_POLICY = {
   "canopy:unarchive": "free",
   "canopy:untrash": "handler",
   "canopy:unwatch-terminal": "free",
+  "canopy:watch-assistant-terminal": "free",
   "canopy:watch-terminal": "free",
   "claude:list-subagents": "free",
   "claude:read-subagent-transcript": "free",
@@ -167,6 +181,13 @@ export const CHANNEL_LEASE_POLICY = {
   "drive-lease:take-over": "free",
   "editor:get-config": "free",
   "editor:set-config": "free",
+  // Reads the worktree and watches what it read; nothing it does changes the project.
+  "element-picker:describe-project": "free",
+  "element-picker:resolve": "free",
+  "element-picker:source-changed": "free",
+  "element-picker:source-revisions": "free",
+  "element-picker:workspace-close": "free",
+  "element-picker:workspace-open": "free",
   "event-inspector:clear": "free",
   "event-inspector:event-batch": "free",
   "event-inspector:get-events": "free",
@@ -178,6 +199,8 @@ export const CHANNEL_LEASE_POLICY = {
   "file-browser:list-directory": "free",
   "file-browser:stat-paths": "free",
   "file-watch:fingerprint": "free",
+  "file-document:read": "free",
+  "file-document:save": "driver",
   "files:read": "free",
   "files:trash": "driver",
   "files:search": "free",
@@ -211,9 +234,11 @@ export const CHANNEL_LEASE_POLICY = {
   "forge:convert-pr-to-draft": "free",
   "forge:create-issue": "free",
   "forge:create-pr": "free",
+  "forge:disable-auto-merge": "free",
   "forge:dismiss-review": "free",
   "forge:edit-issue": "free",
   "forge:edit-pr": "free",
+  "forge:enable-auto-merge": "free",
   "forge:get-checks": "free",
   "forge:get-ci-status": "free",
   "forge:get-credential-status": "free",
@@ -229,6 +254,7 @@ export const CHANNEL_LEASE_POLICY = {
   "forge:get-project-health": "free",
   "forge:get-providers": "free",
   "forge:get-prs-by-numbers": "free",
+  "forge:get-references-by-numbers": "free",
   "forge:get-rate-limit-details": "free",
   "forge:get-repo-metadata": "free",
   "forge:get-repo-stats": "free",
@@ -308,9 +334,20 @@ export const CHANNEL_LEASE_POLICY = {
   "help:discard-conversation": "driver",
   "help:get-folder-path": "free",
   "help:get-pinned-action-context": "free",
+  "help:global-assistant-ensure": "free",
+  "help:global-assistant-state": "free",
+  "help:global-assistant-attach": "free",
+  "help:global-assistant-detach": "free",
+  "help:global-assistant-claim-input": "free",
+  "help:global-assistant-release-input": "free",
+  "help:global-assistant-restart": "free",
+  "help:global-assistant-discard": "free",
+  "help:global-assistant-changed": "free",
+  "help:get-starter-prompts": "free",
   "help:list-past-sessions": "free",
   "help:list-pending-hibernation-slots": "free",
   "help:mark-terminal": "free",
+  "help:open-assistant-content-folder": "free",
   "help:peek-pending-hibernation": "free",
   "help:provision-session": "driver",
   "help:report-panel-open": "free",
@@ -318,9 +355,6 @@ export const CHANNEL_LEASE_POLICY = {
   "help:revoke-session": "driver",
   "help:take-pending-hibernation": "driver",
   "help:unmark-terminal": "free",
-  "hibernation:get-config": "free",
-  "hibernation:project-hibernated": "free",
-  "hibernation:update-config": "free",
   "host-files:get-picker-roots": "free",
   "host-files:list-directory": "free",
   "idle-background:closed": "free",
@@ -377,8 +411,6 @@ export const CHANNEL_LEASE_POLICY = {
   "mcp-server:tool-call-started": "free",
   "mcp-server:turn-outcome-alert": "free",
   "notification:session-mute-set": "free",
-  "notification:settings-get": "free",
-  "notification:settings-set": "free",
   "notification:show-watch": "free",
   "notification:sync-watched": "free",
   "notification:update": "free",
@@ -393,9 +425,14 @@ export const CHANNEL_LEASE_POLICY = {
   // the default for every project, so an observing window cannot do it.
   "plugin-agent-mcp:set-plugin-access": "driver",
   "plugin-capability:get-os-notifications": "free",
+  "plugin-capability:get-panel-attention": "free",
   "plugin-capability:get-project-targeting": "free",
+  "plugin-capability:get-worktree-delete-notes": "free",
+  "plugin-capability:list-panel-attention": "free",
   "plugin-capability:set-os-notifications": "free",
+  "plugin-capability:set-panel-attention": "free",
   "plugin-capability:set-project-targeting": "free",
+  "plugin-capability:set-worktree-delete-notes": "free",
   "plugin-mcp:call-tool": "free",
   "plugin-mcp:get-config": "free",
   "plugin-mcp:get-full-schema": "free",
@@ -431,7 +468,9 @@ export const CHANNEL_LEASE_POLICY = {
   "plugin:install-from-path": "free",
   "plugin:install-from-url": "free",
   "plugin:install-progress": "free",
-  "plugin:invoke": "free",
+  // One channel for a plugin's reads and writes: each host API that changes a
+  // project checks the calling view's lease itself (`assertPluginCallerDrives`).
+  "plugin:invoke": "handler",
   "plugin:keybindings": "free",
   "plugin:list": "free",
   "plugin:perf-snapshots-changed": "free",
@@ -439,9 +478,14 @@ export const CHANNEL_LEASE_POLICY = {
   "plugin:perf-snapshots-subscribe": "free",
   "plugin:perf-snapshots-unsubscribe": "free",
   "plugin:report-focused-panel": "free",
+  "plugin:project-presence-changed": "free",
+  "plugin:project-presence-get": "free",
   "plugin:report-push-listeners": "free",
   "plugin:report-view-metrics": "free",
   "plugin:tours-get": "free",
+  "plugin:project-templates-get": "free",
+  "plugin:project-template-preview": "free",
+  "plugin:hosted-views-get": "free",
   "plugin:panel-kinds-get": "free",
   "plugin:panel-reload-request": "free",
   "plugin:panel-reload-response": "free",
@@ -452,11 +496,18 @@ export const CHANNEL_LEASE_POLICY = {
   "plugin:project-reload": "driver",
   "plugin:project-set-muted": "driver",
   "plugin:project-set-trust": "driver",
+  "plugin:file-editor-choice-set": "driver",
+  "plugin:file-editor-choices-get": "free",
   "plugin:project-surface-choice-set": "driver",
-  "plugin:project-surface-choices-get": "free",
+  "plugin:project-surface-choices-set": "driver",
   "plugin:project-surfaces-get": "free",
+  "plugin:project-layout-seed-get": "free",
+  "plugin:project-layout-seed-advance": "driver",
+  "plugin:project-welcome-get": "free",
+  "plugin:project-welcome-set": "driver",
   "plugin:project-visibility-get": "free",
   "plugin:project-visibility-set": "driver",
+  "plugin:project-instance-set-enabled": "driver",
   "plugin:recipe-metadata-update": "free",
   "plugin:recipe-record-use": "free",
   "plugin:recipes-get": "free",
@@ -472,11 +523,45 @@ export const CHANNEL_LEASE_POLICY = {
   "plugin:settings-reveal-secret": "free",
   "plugin:settings-set-value": "free",
   "plugin:settings-required-status": "free",
+  "plugin:task-cancel": "driver",
+  // The plugin's own cache, not the project: anyone attached may fill or play it.
+  "plugin:artifacts-import": "free",
+  "plugin:artifact-source": "free",
+  "plugin:artifact-source-release": "free",
+  "plugin:task-dismiss": "free",
+  "plugin:setup-status": "free",
+  "plugin:setup-step-skipped-set": "driver",
+  "plugin:account-status": "free",
+  "plugin:account-connect": "free",
+  "plugin:account-cancel-connect": "free",
+  "plugin:account-set-token": "free",
+  "plugin:account-disconnect": "free",
+  "plugin:account-list": "free",
+  "plugin:account-test": "free",
+  "plugin:account-binding-get": "free",
+  // A project's choice, like a setup skip.
+  "plugin:account-binding-set": "driver",
   "plugin:toolbar-buttons": "free",
+  "plugin:launch-entries": "free",
+  "plugin:layouts": "free",
+  "plugin:launch-groups-hidden-get": "free",
+  "plugin:launch-group-hidden-set": "driver",
+  "plugin:notification-silences-get": "free",
+  "plugin:notification-silence-set": "free",
+  "plugin:search-providers-get": "free",
+  "plugin:search-providers-query": "free",
+  "plugin:search-providers-cancel": "free",
+  "plugin:search-provider-shown-set": "driver",
+  "plugin:context-providers-get": "free",
+  "plugin:context-provider-search": "free",
+  "plugin:context-references-resolve": "free",
+  "plugin:context-providers-enabled-set": "driver",
   "plugin:uninstall": "free",
   "plugin:validate-action-ids": "free",
   "plugin:validate-manifest": "free",
   "plugin:visibility-default-set": "free",
+  "plugin:worktree-delete-note-sources-get": "free",
+  "plugin:worktree-delete-notes-get": "free",
   "plugin:worktree-status-get": "free",
   "pr:cleared": "free",
   "pr:detected": "free",
@@ -500,6 +585,15 @@ export const CHANNEL_LEASE_POLICY = {
   "project-match:take-pending-setup": "driver",
   "project-presence:changed": "free",
   "project-presence:get-snapshot": "free",
+  "project-presentation:answer-suggestion": "driver",
+  "project-presentation:changed": "free",
+  "project-presentation:get": "free",
+  "project-presentation:reset-toolbar": "driver",
+  "project-presentation:set-featured-launch-entry": "driver",
+  "project-presentation:set-launcher-group-order": "driver",
+  "project-presentation:set-level": "driver",
+  "project-presentation:set-plugin-button-promoted": "driver",
+  "project-presentation:set-toolbar-enabled": "driver",
   "project-relocation:apply": "driver",
   "project-relocation:preview": "free",
   "project:add": "free",
@@ -561,6 +655,14 @@ export const CHANNEL_LEASE_POLICY = {
   "project:updated": "free",
   "project:worktree-load-status": "free",
   "project:write-claude-md": "driver",
+  "review-marks:capture": "free",
+  "review-marks:changed": "free",
+  "review-marks:clear": "driver",
+  "review-marks:compare": "free",
+  "review-marks:file-since": "free",
+  "review-marks:hydrate": "free",
+  "review-marks:mark": "driver",
+  "review-marks:mark-captured": "driver",
   "run-history:append": "free",
   "run-history:clear": "free",
   "run-history:get-records": "free",
@@ -603,13 +705,10 @@ export const CHANNEL_LEASE_POLICY = {
   "system:show-item-in-folder-unconfined": "free",
   "system:start-agent-update": "free",
   "terminal-config:get": "free",
-  "terminal-config:set-hybrid-input-auto-focus": "free",
-  "terminal-config:set-hybrid-input-enabled": "free",
+  "terminal-config:host-changed": "free",
   "terminal-config:set-memory-leak-auto-restart": "free",
   "terminal-config:set-memory-leak-detection": "free",
-  "terminal-config:set-performance-mode": "free",
   "terminal-config:set-resource-monitoring": "free",
-  "terminal-config:set-scrollback": "free",
   "terminal:acknowledge-data": "free",
   "terminal:activity": "free",
   "terminal:agent-title-state": "free",
@@ -636,7 +735,6 @@ export const CHANNEL_LEASE_POLICY = {
   "terminal:locate": "free",
   "terminal:reconnect": "free",
   "terminal:reconnect-bulk": "free",
-  "terminal:reduce-scrollback": "free",
   "terminal:release-worker-ingest-port": "free",
   "terminal:replay-history": "free",
   "terminal:request-worker-ingest-port": "free",
@@ -662,6 +760,10 @@ export const CHANNEL_LEASE_POLICY = {
   "user-agent-registry:get": "free",
   "user-agent-registry:remove": "free",
   "user-agent-registry:update": "free",
+  "voice-dictionary:add-to-project": "driver",
+  "voice-dictionary:get-project": "free",
+  "voice-dictionary:remove-from-project": "driver",
+  "voice-dictionary:update-in-project": "driver",
   "watchdog:restart": "free",
   "workspace-residency:get": "free",
   "workspace-residency:set": "free",
@@ -671,6 +773,11 @@ export const CHANNEL_LEASE_POLICY = {
   "worktree-config:reprobe-wsl": "free",
   "worktree-config:set-pattern": "free",
   "worktree-config:set-wsl-git": "free",
+  "worktree-titles:changed": "free",
+  "worktree-titles:hydrate": "free",
+  // Clears only titles of worktrees the host confirms are gone, whoever asks.
+  "worktree-titles:prune": "free",
+  "worktree-titles:set": "driver",
   "worktree:activated": "free",
   "worktree:attach-issue": "driver",
   "worktree:create": "driver",
@@ -711,24 +818,37 @@ export type LeaseArgPath = readonly [index: number, ...keys: string[]];
  * - `caller`: the project the calling view is bound to, for a handler that acts
  *   on exactly that (`ctx.projectId`).
  * - `every-project`: host-wide, so it changes every project anyone drives here;
- *   with `when`, only for a call whose argument at `when.at` is `when.equals`.
+ *   with `when`, only for a call whose argument at `when.at` is `when.equals`,
+ *   or, with `absent`, is missing (undefined or null).
  * - `optional: true` skips an argument that is absent; `optional: "caller"`
  *   falls back to the caller's project instead, and `"current-project"` to
  *   this Host's current project, for a handler that falls back to it.
  *   Otherwise an absent argument leaves the target unresolved, and the call
  *   is refused.
  * - `unowned: "allow"`: a path inside no registered project changes none.
+ * - `missing: "allow"`: a terminal this Host confirms it no longer has changes
+ *   none, for a call that only ends one: the pane closing after the host has
+ *   already ended it. One that exists with no project, or whose lookup fails,
+ *   is still unresolved.
  */
 export type LeaseTargetSource =
   | { readonly from: "caller" }
   | {
       readonly from: "every-project";
-      readonly when?: { readonly at: LeaseArgPath; readonly equals: string };
+      readonly when?:
+        | { readonly at: LeaseArgPath; readonly equals: string }
+        | { readonly at: LeaseArgPath; readonly absent: true };
     }
   | {
-      readonly from: "project" | "worktree" | "terminal";
+      readonly from: "project" | "worktree";
       readonly at: LeaseArgPath;
       readonly optional?: true | "caller" | "current-project";
+    }
+  | {
+      readonly from: "terminal";
+      readonly at: LeaseArgPath;
+      readonly optional?: true | "caller" | "current-project";
+      readonly missing?: "allow";
     }
   | {
       readonly from: "path";
@@ -756,6 +876,7 @@ const PROJECT_FIELD: LeaseTarget = [{ from: "project", at: [0, "projectId"] }];
 const CWD_ARG: LeaseTarget = [{ from: "path", at: [0] }];
 const CWD_FIELD: LeaseTarget = [{ from: "path", at: [0, "cwd"] }];
 const TERMINAL_ARG: LeaseTarget = [{ from: "terminal", at: [0] }];
+const ENDED_TERMINAL_ARG: LeaseTarget = [{ from: "terminal", at: [0], missing: "allow" }];
 const WORKTREE_FIELD: LeaseTarget = [{ from: "worktree", at: [0, "worktreeId"] }];
 const WORKTREE_PATH_FIELD: LeaseTarget = [{ from: "path", at: [0, "worktreePath"] }];
 
@@ -765,7 +886,14 @@ const WORKTREE_PATH_FIELD: LeaseTarget = [{ from: "path", at: [0, "worktreePath"
  * gate checks the lease on every project it names, not the caller's own.
  */
 export const CHANNEL_LEASE_TARGETS = {
+  // With no worktree it clears every project's history.
+  "agent-session:clear": [
+    { from: "worktree", at: [0, "worktreeId"], optional: true },
+    { from: "every-project", when: { at: [0, "worktreeId"], absent: true } },
+  ],
   "agent-session:prepare-bookmark": [{ from: "terminal", at: [0, "terminalId"] }],
+  // A shorter window prunes every project's history the moment it is saved.
+  "agent-session:set-retention": [{ from: "every-project" }],
   "app:set-state": CALLER,
   "artifact:apply-patch": CWD_FIELD,
   "artifact:save-to-file": [{ from: "path", at: [0, "cwd"], optional: "caller", unowned: "allow" }],
@@ -793,6 +921,7 @@ export const CHANNEL_LEASE_TARGETS = {
   "dev-preview:stop-by-panel": [{ from: "dev-preview-panel", at: [0, "panelId"] }],
   "dev-preview:stop-by-worktree": WORKTREE_FIELD,
   "dev-preview:stop-dev-server-by-worktree": WORKTREE_FIELD,
+  "file-document:save": [{ from: "path", at: [0, "rootPath"] }],
   "files:trash": WORKTREE_PATH_FIELD,
   "git:abort-repository-operation": CWD_ARG,
   "git:checkout-ours-theirs": CWD_FIELD,
@@ -834,9 +963,30 @@ export const CHANNEL_LEASE_TARGETS = {
   "plugin:project-reload": CALLER,
   "plugin:project-set-muted": CALLER,
   "plugin:project-set-trust": CALLER,
+  "plugin:file-editor-choice-set": CALLER,
+  "plugin:launch-group-hidden-set": CALLER,
+  // Stopping a task stops work done for whoever drives the project. A project
+  // plugin's task is always the caller's project's; an app-wide one's, the
+  // caller's too.
+  "plugin:task-cancel": CALLER,
+  "plugin:setup-step-skipped-set": CALLER,
+  "plugin:account-binding-set": CALLER,
+  "plugin:search-provider-shown-set": CALLER,
+  "plugin:context-providers-enabled-set": CALLER,
   "plugin:project-surface-choice-set": CALLER,
+  "plugin:project-surface-choices-set": CALLER,
+  "plugin:project-layout-seed-advance": CALLER,
+  "plugin:project-welcome-set": CALLER,
   "plugin:project-visibility-set": CALLER,
+  "plugin:project-instance-set-enabled": CALLER,
   "project-match:take-pending-setup": PROJECT_FIELD,
+  "project-presentation:answer-suggestion": CALLER,
+  "project-presentation:reset-toolbar": CALLER,
+  "project-presentation:set-featured-launch-entry": CALLER,
+  "project-presentation:set-launcher-group-order": CALLER,
+  "project-presentation:set-level": CALLER,
+  "project-presentation:set-plugin-button-promoted": CALLER,
+  "project-presentation:set-toolbar-enabled": CALLER,
   "project-relocation:apply": PROJECT_FIELD,
   "project:add-browser-allowed-host": PROJECT_FIELD,
   "project:add-recipe": PROJECT_FIELD,
@@ -861,8 +1011,12 @@ export const CHANNEL_LEASE_TARGETS = {
   "project:update-inrepo-recipe": PROJECT_FIELD,
   "project:update-recipe": PROJECT_FIELD,
   "project:write-claude-md": PROJECT_FIELD,
-  "terminal:graceful-kill": TERMINAL_ARG,
-  "terminal:kill": TERMINAL_ARG,
+  // The marks are the caller's project's; the worktree named is checked against its own.
+  "review-marks:clear": CALLER,
+  "review-marks:mark": CALLER,
+  "review-marks:mark-captured": CALLER,
+  "terminal:graceful-kill": ENDED_TERMINAL_ARG,
+  "terminal:kill": ENDED_TERMINAL_ARG,
   "terminal:restart-service": [{ from: "every-project" }],
   "terminal:restore": TERMINAL_ARG,
   // With no projectId the handler spawns into this Host's current project.
@@ -870,9 +1024,13 @@ export const CHANNEL_LEASE_TARGETS = {
     { from: "project", at: [0, "projectId"], optional: "current-project" },
     { from: "path", at: [0, "cwd"], optional: true, unowned: "allow" },
   ],
-  "terminal:trash": TERMINAL_ARG,
+  "terminal:trash": ENDED_TERMINAL_ARG,
   "terminal:update-title": [{ from: "terminal", at: [0, "id"] }],
   "terminal:update-worktree-id": [{ from: "terminal", at: [0, "id"] }],
+  "voice-dictionary:add-to-project": PROJECT_FIELD,
+  "voice-dictionary:remove-from-project": PROJECT_FIELD,
+  "voice-dictionary:update-in-project": PROJECT_FIELD,
+  "worktree-titles:set": CALLER,
   "worktree:attach-issue": WORKTREE_FIELD,
   "worktree:create": [{ from: "path", at: [0, "rootPath"] }],
   "worktree:delete": WORKTREE_FIELD,

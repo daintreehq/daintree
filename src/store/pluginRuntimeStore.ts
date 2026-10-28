@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { logError } from "@/utils/logger";
+import type { PromptTemplateContribution, TerminalLinkContribution } from "@shared/types/plugin";
 
 /**
  * Renderer mirror of live plugin runtime state: which plugins are disabled, so
@@ -26,25 +27,39 @@ export interface PluginRuntimeMeta {
   devMode: boolean;
   /** `manifest.displayName` when the manifest declares one, else the manifest id. */
   displayName: string;
+}
+
+/** A prompt template a loaded plugin contributes, with who it belongs to. */
+export interface PluginPromptTemplate {
+  /** `{instanceId}::{template id}`: unique across plugins, which may reuse an id. */
+  key: string;
+  pluginId: string;
+  pluginName: string;
+  /** Owning project for a project plugin; null for an installed or builtin one. */
+  projectId: string | null;
+  template: PromptTemplateContribution;
+}
+
+/** A terminal link matcher a loaded plugin declares, with who it belongs to. */
+export interface PluginTerminalLink {
+  /** `{instanceId}::{matcher id}`: unique across plugins, which may reuse an id. */
+  key: string;
+  pluginId: string;
+  pluginName: string;
+  /** Owning project for a project plugin; null for an installed or builtin one. */
+  projectId: string | null;
   /**
-   * Fully qualified `contributes.previewTools[].id`s this plugin's manifest
-   * declares. `src/registry/devPreviewToolRegistry.ts` admits a registered tool
-   * only when its id is in here, so a renderer module side effect alone can no
-   * longer put a tool in the dev-preview toolbar — the manifest is the gate.
-   *
-   * Empty for every plugin that declares none, which is all but the built-ins
-   * that ship one. It arrives in the same commit as `disabledPluginIds`, so a
-   * tool is never admitted against one snapshot and enable-checked against
-   * another.
-   *
-   * Optional only for the hand-built meta literals in tests that predate the
-   * field; a real snapshot always sets it. Absent reads as "declares none",
-   * which is the conservative direction — the tool stays hidden.
+   * The command a click dispatches, rewritten from the manifest's namespace
+   * into the instance's — the same rewrite main gives a project plugin's
+   * commands, so it never reaches a same-named installed plugin's action.
    */
-  previewToolIds?: ReadonlySet<string>;
+  actionId: string;
+  link: TerminalLinkContribution;
 }
 
 interface PluginRuntimeState {
+  promptTemplates: readonly PluginPromptTemplate[];
+  terminalLinks: readonly PluginTerminalLink[];
   disabledPluginIds: ReadonlySet<string>;
   /**
    * Keyed by plugin *instance* id — the host-side key every contribution
@@ -86,8 +101,31 @@ let pullSeq = 0;
 // routine in dev).
 let committedSeq = 0;
 
+function sameSet(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
+  return a.size === b.size && [...a].every((id) => b.has(id));
+}
+
+function sameMeta(
+  a: ReadonlyMap<string, PluginRuntimeMeta>,
+  b: ReadonlyMap<string, PluginRuntimeMeta>
+): boolean {
+  if (a.size !== b.size) return false;
+  for (const [id, meta] of a) {
+    const other = b.get(id);
+    if (
+      other === undefined ||
+      other.devMode !== meta.devMode ||
+      other.displayName !== meta.displayName
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 async function pullPluginRuntimeSnapshot(
-  set: (state: Partial<PluginRuntimeState>) => void
+  set: (state: Partial<PluginRuntimeState>) => void,
+  get: () => PluginRuntimeState
 ): Promise<void> {
   const seq = ++pullSeq;
   try {
@@ -96,6 +134,8 @@ async function pullPluginRuntimeSnapshot(
     committedSeq = seq;
     const disabledPluginIds = new Set<string>();
     const pluginMetaById = new Map<string, PluginRuntimeMeta>();
+    const promptTemplates: PluginPromptTemplate[] = [];
+    const terminalLinks: PluginTerminalLink[] = [];
     for (const p of list) {
       // Both maps key on the instance id for the same reason: every consumer
       // holds a contribution's `pluginId`, which is this key, never the bare
@@ -105,6 +145,35 @@ async function pullPluginRuntimeSnapshot(
       // silently overwrite the other's metadata.
       const id = p.instanceId;
       if (p.disabled) disabledPluginIds.add(id);
+      // A disabled or blocklisted plugin never ran, so what it declares is not on
+      // offer. Nor does a per-project package's own row: only its instances
+      // run, and each arrives as its own row.
+      if (!p.disabled && !p.blocklisted && p.instanceMode !== "project") {
+        const pluginName = p.manifest.displayName?.trim() || p.manifest.name;
+        for (const template of p.manifest.contributes?.promptTemplates ?? []) {
+          promptTemplates.push({
+            key: `${id}::${template.id}`,
+            pluginId: id,
+            pluginName,
+            projectId: p.projectId,
+            template,
+          });
+        }
+        const ownPrefix = `${p.manifest.name}.`;
+        for (const link of p.manifest.contributes?.terminalLinks ?? []) {
+          // The manifest gate admits only the plugin's own namespace; anything
+          // else could only have dodged it, so it gets no link at all.
+          if (!link.actionId.startsWith(ownPrefix)) continue;
+          terminalLinks.push({
+            key: `${id}::${link.id}`,
+            pluginId: id,
+            pluginName,
+            projectId: p.projectId,
+            actionId: `${id}.${link.actionId.slice(ownPrefix.length)}`,
+            link,
+          });
+        }
+      }
       pluginMetaById.set(id, {
         devMode: p.devMode,
         // Falls back to the manifest id, never the instance key: the key
@@ -113,17 +182,26 @@ async function pullPluginRuntimeSnapshot(
         // no min length, so a blank one is well-formed and would otherwise
         // render as an empty label everywhere a plugin is named.
         displayName: p.manifest.displayName?.trim() || p.manifest.name,
-        // Declared ids travel verbatim: unlike most contributions the host does
-        // not namespace a preview tool id, because the renderer entry registers
-        // with that same literal.
-        previewToolIds: new Set(
-          (p.manifest.contributes?.previewTools ?? []).map((tool) => tool.id)
-        ),
       });
     }
     // One commit: a consumer must never read a plugin's dev-mode flag from a
     // different snapshot than the disabled set it renders against.
-    set({ disabledPluginIds, pluginMetaById });
+    // An unchanged slice keeps its identity: pulls run on every action change
+    // and every picker opening, and a new object re-renders whatever reads it
+    // (a new template array would also reset the picker's highlight).
+    const current = get();
+    const next: Partial<PluginRuntimeState> = {};
+    if (!sameSet(disabledPluginIds, current.disabledPluginIds)) {
+      next.disabledPluginIds = disabledPluginIds;
+    }
+    if (!sameMeta(pluginMetaById, current.pluginMetaById)) next.pluginMetaById = pluginMetaById;
+    if (JSON.stringify(promptTemplates) !== JSON.stringify(current.promptTemplates)) {
+      next.promptTemplates = promptTemplates;
+    }
+    if (JSON.stringify(terminalLinks) !== JSON.stringify(current.terminalLinks)) {
+      next.terminalLinks = terminalLinks;
+    }
+    if (Object.keys(next).length > 0) set(next);
   } catch (err) {
     logError("Failed to load plugin runtime state", err);
   }
@@ -139,7 +217,10 @@ async function pullPluginRuntimeSnapshot(
  * set stays empty (plugins read as enabled), matching prod optimism before the
  * first snapshot.
  */
-function ensureSubscribed(set: (state: Partial<PluginRuntimeState>) => void): boolean {
+function ensureSubscribed(
+  set: (state: Partial<PluginRuntimeState>) => void,
+  get: () => PluginRuntimeState
+): boolean {
   if (initialized) return false;
   initialized = true;
 
@@ -149,7 +230,7 @@ function ensureSubscribed(set: (state: Partial<PluginRuntimeState>) => void): bo
   }
 
   const offProvenance = plugin.onProvenanceChanged(() => {
-    void pullPluginRuntimeSnapshot(set);
+    void pullPluginRuntimeSnapshot(set, get);
   });
   // Project plugins come and go without a provenance change: trusting a
   // folder, muting or reloading one pushes a project-plugins snapshot instead,
@@ -158,29 +239,41 @@ function ensureSubscribed(set: (state: Partial<PluginRuntimeState>) => void): bo
   const offProjectPlugins =
     typeof events?.on === "function"
       ? events.on("plugin:project-plugins-changed", () => {
-          void pullPluginRuntimeSnapshot(set);
+          void pullPluginRuntimeSnapshot(set, get);
+        })
+      : undefined;
+  // A dev-attached plugin (`daintree-plugin dev`) is loaded and reloaded with
+  // no provenance change either, but registers its actions once it is
+  // listable, so this is when its terminal links become known.
+  const offActions =
+    typeof plugin.onActionsChanged === "function"
+      ? plugin.onActionsChanged(() => {
+          void pullPluginRuntimeSnapshot(set, get);
         })
       : undefined;
   unsubscribe = () => {
     offProvenance();
     offProjectPlugins?.();
+    offActions?.();
   };
   return true;
 }
 
-export const usePluginRuntimeStore = create<PluginRuntimeState>((set) => ({
+export const usePluginRuntimeStore = create<PluginRuntimeState>((set, get) => ({
+  promptTemplates: [],
+  terminalLinks: [],
   disabledPluginIds: new Set<string>(),
   pluginMetaById: new Map<string, PluginRuntimeMeta>(),
   init: () => {
-    if (ensureSubscribed(set)) void pullPluginRuntimeSnapshot(set);
+    if (ensureSubscribed(set, get)) void pullPluginRuntimeSnapshot(set, get);
   },
   refresh: () => {
     // Subscribes without pulling twice — `pullSeq` would discard the first of
     // two same-tick pulls, so a rejected second one could throw away the only
     // successful snapshot.
-    ensureSubscribed(set);
+    ensureSubscribed(set, get);
     if (typeof window.electron?.plugin?.list !== "function") return;
-    void pullPluginRuntimeSnapshot(set);
+    void pullPluginRuntimeSnapshot(set, get);
   },
 }));
 
@@ -192,6 +285,8 @@ export function _resetPluginRuntimeStoreForTest(): void {
   pullSeq = 0;
   committedSeq = 0;
   usePluginRuntimeStore.setState({
+    promptTemplates: [],
+    terminalLinks: [],
     disabledPluginIds: new Set<string>(),
     pluginMetaById: new Map<string, PluginRuntimeMeta>(),
   });

@@ -1,5 +1,12 @@
 import { z } from "zod";
 import { EXCHANGE_STATES } from "../exchange/types.js";
+import { AgentDirectorySchema } from "../../../shared/types/agentDirectory.js";
+import {
+  HOST_THROWAWAY_FAILURES,
+  HOST_THROWAWAY_REFUSALS,
+  HostThrowawayCallSchema,
+  HostThrowawayToolResultSchema,
+} from "../../../shared/types/hostThrowaway.js";
 
 /**
  * Session-level methods between a Shell and a host for the Shell's
@@ -25,6 +32,13 @@ export const AssistantLinkMethod = {
    */
   MCP_CALL: "assistant.mcp-call",
   /**
+   * Shell → Host: MCP_CALL for the Shell's global Assistant (#14545), so the
+   * session the host admits knows whose it is. Its own method, so a host from
+   * before this answers UNSUPPORTED before anything runs, and the Shell sends
+   * the call again as MCP_CALL: that host admits it as any assistant's.
+   */
+  GLOBAL_MCP_CALL: "assistant.global-mcp-call",
+  /**
    * Host → Shell: what this host saw of terminals one of the Shell's
    * assistants asked to hear about through MCP_CALL (#13500). Each names the
    * call that armed it, so the Shell types it only into the run that made
@@ -34,6 +48,14 @@ export const AssistantLinkMethod = {
    */
   RELAY_NOTICES: "assistant.relay-notices",
   /**
+   * Shell → Host: whether this host still holds notices the Shell's calls
+   * asked for (#13930), by callId: `watching` while it does, `settled` once it
+   * has nothing more for that call, `unknown` for a call it has no record of,
+   * as after a restart. Also sends at once what waits for this sender. A host
+   * from before this answers UNSUPPORTED.
+   */
+  RELAY_NOTICE_STATUS: "assistant.relay-notice-status",
+  /**
    * Host → Shell: ask the person about one confirm-gated call a Shell
    * assistant is making through MCP_CALL, while no view here can (#13501).
    * Bound to that call, its action and exact arguments, and answered once;
@@ -41,6 +63,26 @@ export const AssistantLinkMethod = {
    * UNSUPPORTED, which leaves the call refused as needing a view.
    */
   RELAY_APPROVE: "assistant.relay-approve",
+  /**
+   * Shell → Host: run one throwaway tool for one of the Shell's assistants
+   * (#14444), with no project. Its own method, so a host from before this
+   * answers UNSUPPORTED rather than failing MCP_CALL's payload check.
+   */
+  THROWAWAY_CALL: "assistant.throwaway-call",
+  /**
+   * Shell → Host: one of the Shell's help sessions ended, so the throwaway
+   * runs it launched there go now rather than at their time limits (#14447).
+   * The sender is the one the session proved. A host from before this answers
+   * UNSUPPORTED, and its runs end on their limits.
+   */
+  THROWAWAY_RELEASE: "assistant.throwaway-release",
+  /**
+   * Shell → Host: this host's workers and assistants, as its own directory
+   * reads them, for `host.list` with `includeAgents` (#14455). Passive, and
+   * naming a run grants nothing over it. A host from before this answers
+   * UNSUPPORTED.
+   */
+  AGENTS: "assistant.agents",
 } as const;
 
 /** What a v0.44 Shell calls for the exchanges it sent, answered from retired records (#13496). */
@@ -164,6 +206,14 @@ export const McpCallPayloadSchema = z
   .strict();
 export type McpCallPayload = z.infer<typeof McpCallPayloadSchema>;
 
+/**
+ * A relayed call as the Shell's runtime hands it on (#14545): its payload,
+ * and whether the Shell's global Assistant made it, which the runtime knows
+ * from its own lane and never from the model's arguments. That travels as
+ * the method a call is sent by, GLOBAL_MCP_CALL, never as a payload field.
+ */
+export type RelayCallRequest = McpCallPayload & { global?: true };
+
 export const RELAY_REFUSALS = ["control-off", "no-project", "server-off"] as const;
 export type RelayRefusal = (typeof RELAY_REFUSALS)[number];
 
@@ -196,6 +246,66 @@ export const McpCallAnswerSchema = z.discriminatedUnion("status", [
     .strip(),
 ]);
 export type McpCallAnswer = z.infer<typeof McpCallAnswerSchema>;
+
+export const ThrowawayCallPayloadSchema = z
+  .object({
+    /** With the sender the host authenticated, the only owner of what the call launches. */
+    helpSessionId: id,
+    tier: z.enum(["core", "full"]),
+    callId: id,
+    resend: z.boolean(),
+    call: HostThrowawayCallSchema,
+    /** How long this one call may run on the host; a run's own time limit is its launch's. */
+    runMs: z.number().int().min(1_000).max(MAX_RELAY_RUN_MS),
+  })
+  .strict();
+export type ThrowawayCallPayload = z.infer<typeof ThrowawayCallPayloadSchema>;
+
+export const ThrowawayCallAnswerSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("done"), result: HostThrowawayToolResultSchema }).strip(),
+  /** The tool ran and failed; `not-found` too for a run that isn't the caller's. */
+  z.object({ status: z.literal("failed"), reason: z.enum(HOST_THROWAWAY_FAILURES) }).strip(),
+  z.object({ status: z.literal("unknown") }).strip(),
+  z.object({ status: z.literal("conflict") }).strip(),
+  /** Refused before anything ran; a reason this Shell doesn't know reads as turned off. */
+  z
+    .object({
+      status: z.literal("refused"),
+      reason: z.union([
+        z.enum(HOST_THROWAWAY_REFUSALS),
+        z
+          .string()
+          .max(64)
+          .transform(() => "throwaway-off" as const),
+      ]),
+    })
+    .strip(),
+]);
+export type ThrowawayCallAnswer = z.infer<typeof ThrowawayCallAnswerSchema>;
+
+export const ThrowawayReleasePayloadSchema = z.object({ helpSessionId: id }).strict();
+export type ThrowawayReleasePayload = z.infer<typeof ThrowawayReleasePayloadSchema>;
+
+export const AgentsPayloadSchema = z.object({ projectId: id.optional() }).strict();
+export type AgentsPayload = z.infer<typeof AgentsPayloadSchema>;
+
+export const AgentsAnswerSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("done"), directory: AgentDirectorySchema }).strip(),
+  /** This host doesn't take work from other machines' assistants; nothing was read. */
+  z
+    .object({
+      status: z.literal("refused"),
+      reason: z.union([
+        z.literal("control-off"),
+        z
+          .string()
+          .max(64)
+          .transform(() => "control-off" as const),
+      ]),
+    })
+    .strip(),
+]);
+export type AgentsAnswer = z.infer<typeof AgentsAnswerSchema>;
 
 /** Notices one relay-notices call carries; the host sends the rest in the next. */
 export const MAX_RELAY_NOTICES_PER_CALL = 32;
@@ -249,6 +359,32 @@ export const RelayNoticesPayloadSchema = z
   .object({ notices: z.array(RelayNoticeSchema).min(1).max(MAX_RELAY_NOTICES_PER_CALL) })
   .strip();
 export type RelayNoticesPayload = z.infer<typeof RelayNoticesPayloadSchema>;
+
+/**
+ * How long a relayed call's notices are taken (#13500), and so how long its
+ * host keeps them for the Shell, across any session the Shell holds (#13930).
+ */
+export const RELAY_NOTICE_WINDOW_MS = 24 * 60 * 60_000;
+/** Calls one notice-status ask names: as many as a Shell follows notices for. */
+export const MAX_RELAY_NOTICE_STATUS_CALLS = 256;
+
+const relayNoticeCallSchema = z.object({ helpSessionId: id, callId: id }).strip();
+
+export const RelayNoticeStatusPayloadSchema = z
+  .object({ calls: z.array(relayNoticeCallSchema).min(1).max(MAX_RELAY_NOTICE_STATUS_CALLS) })
+  .strip();
+export type RelayNoticeStatusPayload = z.infer<typeof RelayNoticeStatusPayloadSchema>;
+
+export const RelayNoticeStatusAnswerSchema = z
+  .object({
+    calls: z
+      .array(
+        relayNoticeCallSchema.extend({ status: z.enum(["watching", "settled", "unknown"]) }).strip()
+      )
+      .max(MAX_RELAY_NOTICE_STATUS_CALLS),
+  })
+  .strip();
+export type RelayNoticeStatusAnswer = z.infer<typeof RelayNoticeStatusAnswerSchema>;
 
 /** Lines a relayed approval's preview may carry, and how long each may be. */
 export const MAX_RELAY_APPROVAL_LINES = 200;

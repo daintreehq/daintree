@@ -1,4 +1,4 @@
-import type { TourOnboardingState } from "../types/ipc/maps.js";
+import type { TourOnboardingState, TourOutcome } from "../types/ipc/maps.js";
 
 /**
  * Tour progress is persisted per tour id. The built-in tour owns a bare id;
@@ -28,4 +28,23 @@ export function tourProgressFor(
 ): TourOnboardingState {
   if (tours && Object.prototype.hasOwnProperty.call(tours, tourId)) return tours[tourId]!;
   return { ...DEFAULT_TOUR_PROGRESS };
+}
+
+export const TOUR_OUTCOMES: readonly TourOutcome[] = [
+  "completed",
+  "dismissed",
+  "superseded",
+  "withdrawn",
+  "failed",
+];
+
+export function isTourOutcome(value: unknown): value is TourOutcome {
+  return typeof value === "string" && (TOUR_OUTCOMES as readonly string[]).includes(value);
+}
+
+/** Same bound the manifest puts on chapter ids and tour versions. */
+const TOUR_TOKEN_MAX = 64;
+
+export function isTourToken(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= TOUR_TOKEN_MAX;
 }

@@ -3,13 +3,37 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Project } from "@shared/types/project";
-import type { ProjectSleepResult, ProjectStatusEntry } from "@shared/types/ipc/project";
+import type {
+  BulkProjectStatsEntry,
+  ProjectSleepResult,
+  ProjectStatusEntry,
+} from "@shared/types/ipc/project";
+import { ProjectSleepConfirmDialog } from "@/components/Project/ProjectSleepConfirmDialog";
+import { projectClient } from "@/clients/projectClient";
 import { projectPresenceClient } from "@/clients/projectPresenceClient";
 import { terminalClient } from "@/clients/terminalClient";
+import { useProjectSleepConfirmStore } from "@/store/projectSleepConfirmStore";
 import { useProjectStatsStore } from "@/store/projectStatsStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useSystemMemoryNoticeStore } from "@/store/systemMemoryNoticeStore";
 import { SidebarMemoryNotice } from "../SidebarMemoryNotice";
+
+function bulkEntry(overrides: Partial<BulkProjectStatsEntry> = {}): BulkProjectStatsEntry {
+  return {
+    processCount: 0,
+    terminalCount: 0,
+    estimatedMemoryMB: 0,
+    terminalTypes: {},
+    processIds: [],
+    activeAgentCount: 0,
+    waitingAgentCount: 0,
+    blockedAgentCount: 0,
+    completedAgentCount: 0,
+    unacknowledgedCompletedAgentCount: 0,
+    snoozedAgentCount: 0,
+    ...overrides,
+  };
+}
 
 const READING = "Swap is 91% full.";
 const DETAIL = "Swap is 91% full. Restarting your Mac clears this.";
@@ -18,6 +42,7 @@ function renderRow() {
   return render(
     <TooltipProvider>
       <SidebarMemoryNotice />
+      <ProjectSleepConfirmDialog />
     </TooltipProvider>
   );
 }
@@ -44,6 +69,7 @@ const initialSleep = useProjectStore.getState().sleepProject;
 
 afterEach(() => {
   cleanup();
+  useProjectSleepConfirmStore.getState().resolveConfirmation(false);
   vi.restoreAllMocks();
   useSystemMemoryNoticeStore.setState({ notice: null });
   useProjectStore.setState({ projects: [], currentProject: null, sleepProject: initialSleep });
@@ -215,6 +241,10 @@ describe("SidebarMemoryNotice", () => {
       otherWindows: [],
     });
     vi.spyOn(terminalClient, "getAll").mockResolvedValue([]);
+    vi.spyOn(projectClient, "getBulkStats").mockResolvedValue({
+      a: bulkEntry({ terminalMemoryMB: 512 }),
+      b: bulkEntry(),
+    });
     const { container } = renderRow();
 
     const sleepItem = openMenu(container).querySelector("[data-sidebar-memory-sleep]")!;
@@ -222,10 +252,16 @@ describe("SidebarMemoryNotice", () => {
     const dialog = await findDialog();
     expect(dialog.textContent).toContain("Sleep 2 idle projects?");
     const listed = Array.from(
-      dialog.querySelectorAll("[data-sleep-idle-projects] li"),
+      dialog.querySelectorAll("[data-sleep-projects] li"),
       (li) => li.textContent
     );
-    expect(listed).toEqual(["Project a/repos/a", "Project b/repos/b"]);
+    expect(listed).toEqual([
+      "Project aAbout 512 MB/repos/a",
+      "Project bMemory unavailable/repos/b",
+    ]);
+    // One reading of two says so, rather than passing for a bound on the batch.
+    expect(dialog.textContent).toContain("About 512 MB across the 1 project measured, estimated");
+
     expect(dialog.textContent).toContain("Their terminals will be stopped");
     expect(dialog.textContent).toContain("4 waiting agents");
     expect(sleepProject).not.toHaveBeenCalled();

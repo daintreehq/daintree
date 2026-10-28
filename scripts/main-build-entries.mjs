@@ -28,6 +28,17 @@ export const MAIN_STATIC_ESM_ENTRIES = [
   // utilityProcess by openaiVadProcess (#12577); needs its own entry so
   // esbuild emits a standalone bundle at the resolved path.
   "electron/services/voice/openaiVadWorker.ts",
+  // Canopy's local screen reader (#14448): the ONNX model in a utilityProcess
+  // forked by canopyReaderProcess, so a native abort never takes down main.
+  "electron/services/canopy/canopyReaderWorker.ts",
+  // Element Picker source host (#13871): forked as a utilityProcess on the
+  // first resolve and retired when idle, so resolvers never load in main.
+  "electron/services/elementPicker/host-bootstrap.ts",
+  "electron/services/elementPicker/host.ts",
+  // A plugin's own resolver host (#14075): one per plugin instance, forked on
+  // its first resolve, so plugin code never shares the core host's process.
+  "electron/services/elementPicker/plugin-resolver-bootstrap.ts",
+  "electron/services/elementPicker/plugin-resolver-host.ts",
   // Multi-threading workers: per-terminal analysis (headless xterm +
   // activity detection) inside pty-host, SQLite maintenance off the main
   // event loop, and copytree generation inside workspace-host. Each is

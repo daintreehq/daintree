@@ -73,11 +73,11 @@ vi.mock("@/services/ActionService", () => ({
   },
 }));
 vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+  createTerminalPaintPlane: () => ({
     get: () => undefined,
     getTerminal: () => undefined,
     getSelection: () => "",
-  },
+  }),
 }));
 vi.mock("@/hooks/usePluginContextMenuItems", () => ({ usePluginContextMenuItems: () => [] }));
 vi.mock("@/store/voiceRecordingStore", () => ({

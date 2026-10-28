@@ -1,6 +1,10 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook } from "@testing-library/react";
+import { EditorState } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
+import { isolateHistory, undo, undoDepth } from "@codemirror/commands";
+import { createComposerHistory } from "../../inputEditorExtensions/composerHistory";
 import { useFleetMirror } from "../useFleetMirror";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
@@ -25,6 +29,7 @@ describe("useFleetMirror", () => {
   let setValue: ReturnType<typeof vi.fn>;
   let viewDispatch: ReturnType<typeof vi.fn>;
   let editorViewRef: { current: any };
+  let mirroredDraft: string;
 
   beforeEach(() => {
     setDraftInput = vi.fn();
@@ -39,8 +44,9 @@ describe("useFleetMirror", () => {
       },
     };
 
+    mirroredDraft = "";
     vi.mocked(useTerminalInputStore).mockImplementation((_selector: unknown) => {
-      return "" as any;
+      return mirroredDraft as any;
     });
 
     (useTerminalInputStore as any).getState = vi.fn(() => ({
@@ -100,6 +106,27 @@ describe("useFleetMirror", () => {
   it("clears resolution preview when not primary or disabled", () => {
     render({ isFleetPrimary: false, disabled: false } as any);
     expect(clear).toHaveBeenCalled();
+  });
+
+  it("follower takes the primary's draft without making it, or its own past edits, undoable", () => {
+    const view = new EditorView({
+      parent: document.createElement("div"),
+      state: EditorState.create({ doc: "", extensions: [createComposerHistory()] }),
+    });
+    view.dispatch({ changes: { from: 0, insert: "mine" }, userEvent: "input.type" });
+    view.dispatch({ annotations: isolateHistory.of("after") });
+    // An own deletion: undoing it would put "in" back into the mirrored text.
+    view.dispatch({ changes: { from: 1, to: 3 }, userEvent: "delete" });
+    editorViewRef.current = view;
+    mirroredDraft = "driver text";
+
+    render({ isFleetFollower: true, value: "me" });
+
+    expect(view.state.doc.toString()).toBe("driver text");
+    expect(undoDepth(view.state)).toBe(0);
+    expect(undo(view)).toBe(false);
+    expect(view.state.doc.toString()).toBe("driver text");
+    view.destroy();
   });
 
   it("clears resolution preview when primary but disabled", () => {

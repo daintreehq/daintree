@@ -27,6 +27,7 @@ import { BaseDivergence, type BaseDivergenceHost } from "./BaseDivergence.js";
 import { GitStatusPass, type GitStatusPassHost } from "./GitStatusPass.js";
 import type { StatusAdmissionController } from "./StatusAdmissionController.js";
 import { withTimeout } from "../utils/withTimeout.js";
+import type { ClaimedIssue, IssueClaimProvenance } from "../services/issueBranchClaim.js";
 
 // Hard ceiling for individual filesystem syscalls on the poll path. On a
 // healthy disk these return in well under a millisecond; on a stalled mount
@@ -58,6 +59,13 @@ const HEARTBEAT_GAP_CEILING_MS = 360_000;
 // fresh data on app launch.
 const STATUS_INITIAL_DELAY_MIN_MS = 2_000;
 const STATUS_INITIAL_DELAY_MAX_MS = 5_000;
+
+// A monitor started without a git-status pass publishes `worktreeChanges:
+// null` ("Checking status…"), and a background worktree under a git-only
+// watcher otherwise waits a full 5-minute poll for its first real status
+// (#13749). Retries double from the deadline, capped, while it stays null.
+const FIRST_STATUS_DEADLINE_MS = 5_000;
+const FIRST_STATUS_RETRY_MAX_MS = 30_000;
 
 function randomBetween(minMs: number, maxMs: number): number {
   if (maxMs <= minMs) return minMs;
@@ -157,6 +165,8 @@ export class WorktreeMonitor {
 
   // Issue/PR state
   private _issueNumber: number | undefined;
+  /** Set when an issues provider claimed `_issueNumber` from the branch name (#13744). */
+  private _issueClaim: IssueClaimProvenance | undefined;
   private prNumber: number | undefined;
   private prUrl: string | undefined;
   private prState: import("../../shared/types/forge.js").NormalizedPRState | undefined;
@@ -253,6 +263,7 @@ export class WorktreeMonitor {
   // monitors so N monitors starting together don't fork git simultaneously.
   // Cleared by `clearTimers()` so `stop()` cancels the deferred poll.
   private initialStatusTimer: NodeJS.Timeout | null = null;
+  private firstStatusTimer: NodeJS.Timeout | null = null;
 
   // Extra state
   private _createdAt: number | undefined;
@@ -355,6 +366,9 @@ export class WorktreeMonitor {
   // see — declaring these public keeps that check from flagging them dead.
   get lastStatBaselineAt(): number {
     return this.statPrecheck.baselineCapturedAt;
+  }
+  get statBaselineRevision(): number {
+    return this.statPrecheck.baselineRevision;
   }
   set lastFullStatusAt(value: number) {
     this.statPrecheck.fullStatusCapturedAt = value;
@@ -580,6 +594,9 @@ export class WorktreeMonitor {
       },
       get issueNumber() {
         return monitor._issueNumber;
+      },
+      get issueClaim() {
+        return monitor._issueClaim;
       },
       get prNumber() {
         return monitor.prNumber;
@@ -875,6 +892,10 @@ export class WorktreeMonitor {
       },
       set issueNumber(value: number | undefined) {
         monitor._issueNumber = value;
+        monitor._issueClaim = undefined;
+      },
+      setClaimedIssue(claim: ClaimedIssue) {
+        monitor.setClaimedIssue(claim);
       },
       get branchDerivedTitle() {
         return monitor._branchDerivedTitle;
@@ -1209,6 +1230,9 @@ export class WorktreeMonitor {
       // starts here needs it back. No-op when a timer is already armed.
       this.scheduleNextPoll();
       this.reportWritesMissedWhilePaused();
+      // Agent work can lift a suspend that cleared the first-status recovery,
+      // and the refresh below may not land a status either.
+      this.rearmFirstStatusRecovery(this._pollAbortController);
     }
     if (this._hasInitialStatus) {
       this.triggerRefreshIfUpdating();
@@ -1253,6 +1277,10 @@ export class WorktreeMonitor {
     return this._issueNumber;
   }
 
+  get issueClaim(): IssueClaimProvenance | undefined {
+    return this._issueClaim;
+  }
+
   get createdAt(): number | undefined {
     return this._createdAt;
   }
@@ -1274,8 +1302,20 @@ export class WorktreeMonitor {
     return this.watcherController.watcherArmed;
   }
 
+  /** A code-forge number (or none): drops any branch claim with the old number. */
   setIssueNumber(issueNumber: number | undefined): void {
     this._issueNumber = issueNumber;
+    this._issueClaim = undefined;
+  }
+
+  /** An issues provider's branch-claimed issue (#13744). */
+  setClaimedIssue(claim: ClaimedIssue, issueId?: string): void {
+    this._issueNumber = claim.number;
+    this._issueClaim = {
+      issueProviderId: claim.issueProviderId,
+      issueKey: claim.issueKey,
+      ...(issueId ? { issueId } : {}),
+    };
   }
 
   setIssueTitle(title: string | undefined): void {
@@ -1371,10 +1411,25 @@ export class WorktreeMonitor {
    * reaches model context, so the bound has to hold no matter who writes it.
    */
   setSetupStatus(status: WorktreeSetupStatus | undefined): void {
-    this._setupStatus =
-      status && status.error !== undefined
-        ? { ...status, error: status.error.slice(0, WORKTREE_SETUP_ERROR_MAX_LENGTH) }
-        : status;
+    if (!status) {
+      this._setupStatus = undefined;
+      return;
+    }
+    this._setupStatus = {
+      ...status,
+      ...(status.error !== undefined
+        ? { error: status.error.slice(0, WORKTREE_SETUP_ERROR_MAX_LENGTH) }
+        : {}),
+      ...(status.pluginSteps
+        ? {
+            pluginSteps: status.pluginSteps.map((step) =>
+              step.error !== undefined
+                ? { ...step, error: step.error.slice(0, WORKTREE_SETUP_ERROR_MAX_LENGTH) }
+                : { ...step }
+            ),
+          }
+        : {}),
+    };
   }
 
   get lifecyclePhaseResults(): readonly WorktreeLifecyclePhaseResult[] {
@@ -1621,6 +1676,7 @@ export class WorktreeMonitor {
       this.initialStatusTimer = setTimeout(() => {
         this.initialStatusTimer = null;
         if (!this._isRunning) return;
+        const lifecycle = this._pollAbortController;
         // updateGitStatus already surfaces non-removal errors via mood=error
         // + emit; the catch here just prevents the unhandled rejection from
         // bubbling out of the fire-and-forget timer.
@@ -1630,6 +1686,7 @@ export class WorktreeMonitor {
           })
           .finally(() => {
             this.scheduleNextPoll();
+            this.rearmFirstStatusRecovery(lifecycle);
           });
       }, delayMs);
       this.initialStatusTimer.unref?.();
@@ -1648,19 +1705,64 @@ export class WorktreeMonitor {
       this.watcherController.start();
     }
 
-    // Skipping the initial git status scan is a perf optimization — freshly
-    // created worktrees are clean by definition, and bulk-loading a project
-    // runs its own refreshAll later. But we still have to (a) emit the
-    // current (default-clean) snapshot so the renderer can add the worktree
-    // to its store (the store only grows on worktree-update events), and
-    // (b) schedule polling so changes after file-watcher events get picked
-    // up. start() does both via updateGitStatus + scheduleNextPoll; this
-    // mirrors that contract minus the expensive git invocation.
+    // Skipping the initial git status scan is a perf optimization — bulk-
+    // loading a project runs its own refreshAll later. But we still have to
+    // (a) emit a snapshot so the renderer can add the worktree to its store
+    // (the store only grows on worktree-update events) — its null
+    // worktreeChanges reads as "Checking status…" — and (b) schedule polling
+    // so changes after file-watcher events get picked up. start() does both
+    // via updateGitStatus + scheduleNextPoll; this mirrors that contract minus
+    // the expensive git invocation, and the first-status recovery owes the
+    // snapshot a real status when nothing else delivers one.
     this._hasInitialStatus = true;
     this.emitUpdate();
 
     this.scheduleNextPoll();
     this.fetchScheduler.schedule(true);
+    this.armFirstStatusRecovery();
+  }
+
+  /**
+   * Owe a placeholder snapshot its first real status. A bulk project load's
+   * refreshAll usually lands it first, in which case the pass is skipped. A
+   * suspend clears the timer; resume's catch-up re-arms it if that pass also
+   * leaves the status unresolved.
+   */
+  private armFirstStatusRecovery(delayMs: number = FIRST_STATUS_DEADLINE_MS): void {
+    // An armed deadline is never pushed back.
+    if (this.firstStatusTimer) return;
+    const lifecycle = this._pollAbortController;
+    this.firstStatusTimer = setTimeout(() => {
+      this.firstStatusTimer = null;
+      if (!this._isRunning || this.worktreeChanges !== null) return;
+      void this.queueStatusPassThenPoll(
+        () => true,
+        () => this.worktreeChanges === null
+      ).finally(() => {
+        this.rearmFirstStatusRecovery(lifecycle, Math.min(delayMs * 2, FIRST_STATUS_RETRY_MAX_MS));
+      });
+    }, delayMs);
+    this.firstStatusTimer.unref?.();
+  }
+
+  /**
+   * Re-arm after a pass that may have published the first status settles.
+   * `lifecycle` is the controller pinned when that pass began: a stop-then-
+   * start swaps it, and the old lifecycle's completion must not act on the new.
+   */
+  private rearmFirstStatusRecovery(
+    lifecycle: AbortController,
+    delayMs: number = FIRST_STATUS_DEADLINE_MS
+  ): void {
+    if (
+      lifecycle !== this._pollAbortController ||
+      !this._isRunning ||
+      !this.statusWorkAllowed ||
+      this.worktreeChanges !== null
+    ) {
+      return;
+    }
+    this.armFirstStatusRecovery(delayMs);
   }
 
   stop(): void {
@@ -1886,6 +1988,7 @@ export class WorktreeMonitor {
     if (this.resumeCatchUpWaiting) return;
     const token = {};
     this.resumeCatchUpWaiting = token;
+    const lifecycle = this._pollAbortController;
     const release = (): void => {
       if (this.resumeCatchUpWaiting === token) this.resumeCatchUpWaiting = null;
     };
@@ -1894,7 +1997,12 @@ export class WorktreeMonitor {
       const force = this.resumeCatchUpNeedsForce || this.isElevated;
       this.resumeCatchUpNeedsForce = false;
       return force;
-    }).finally(release);
+    }).finally(() => {
+      release();
+      // The suspend cleared any first-status recovery; a catch-up that still
+      // left the status unresolved hands the job back to it.
+      this.rearmFirstStatusRecovery(lifecycle);
+    });
   }
 
   /**
@@ -1929,6 +2037,10 @@ export class WorktreeMonitor {
     if (this.initialStatusTimer) {
       clearTimeout(this.initialStatusTimer);
       this.initialStatusTimer = null;
+    }
+    if (this.firstStatusTimer) {
+      clearTimeout(this.firstStatusTimer);
+      this.firstStatusTimer = null;
     }
     if (this.watcherController.currentMode === "recursive") {
       this.recursiveLostToPause = true;
@@ -2083,6 +2195,10 @@ export class WorktreeMonitor {
       clearTimeout(this.initialStatusTimer);
       this.initialStatusTimer = null;
     }
+    if (this.firstStatusTimer) {
+      clearTimeout(this.firstStatusTimer);
+      this.firstStatusTimer = null;
+    }
     this.watcherController.clearRetryTimer();
     this.clearResourcePollTimer();
     this.fetchScheduler.clearTimer();
@@ -2172,10 +2288,13 @@ export class WorktreeMonitor {
    * N monitors waking or resuming together are serialized across its slots
    * instead of all forking git at once.
    */
-  private async queueStatusPassThenPoll(forceRefresh: () => boolean): Promise<void> {
+  private async queueStatusPassThenPoll(
+    forceRefresh: () => boolean,
+    stillNeeded: () => boolean = () => true
+  ): Promise<void> {
     const run = (): Promise<void> => {
       // Paused again while this sat in the queue — the next resume queues its own.
-      if (!this.statusWorkAllowed) return Promise.resolve();
+      if (!this.statusWorkAllowed || !stillNeeded()) return Promise.resolve();
       if (this._isUpdating) {
         // A pass that started before this request would make updateGitStatus
         // return early and drop it. Park it on the pending flag instead; the

@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { formatTimeAgo } from "@/utils/timeAgo";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
-import { actionService } from "@/services/ActionService";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { CloudOff, KeyRound } from "@/components/icons";
 import type { LucideIcon } from "lucide-react";
@@ -17,8 +16,6 @@ interface UpstreamSyncBadgeProps {
   fetchAuthFailed: boolean;
   fetchNetworkFailed: boolean;
   hasAuthFailedSignIn: boolean;
-  /** Provider whose settings the sign-in affordance routes to; null hides nothing but routes to the tab root. */
-  authProviderId?: string | null;
   containerGapClass: string;
   baseBranchName?: string | null;
   baseAheadCount?: number | null;
@@ -55,7 +52,6 @@ export function UpstreamSyncBadge({
   fetchAuthFailed,
   fetchNetworkFailed,
   hasAuthFailedSignIn,
-  authProviderId,
   containerGapClass,
   baseBranchName,
   baseAheadCount,
@@ -175,24 +171,16 @@ export function UpstreamSyncBadge({
   // Keeps the tooltip's "Last fetched" age moving between fetches.
   const nowMs = useGlobalMinuteClock();
 
-  const handleSignInClick = useCallback(
-    (event: React.MouseEvent) => {
-      event.stopPropagation();
-      // Auth failures suspend background fetches indefinitely (#9736). Clearing the
-      // suspension and re-fetching only happens on an explicit user action, so kick
-      // it off here — fire-and-forget, the settings tab below is the recovery path
-      // if the token still needs fixing.
-      safeFireAndForget(window.electron.worktree.retryAuthFetch(), {
-        context: "Retry auth-suspended fetch from sync badge",
-      });
-      void actionService.dispatch(
-        "app.settings.openTab",
-        authProviderId ? { tab: "code-forge", subtab: authProviderId } : { tab: "code-forge" },
-        { source: "user" }
-      );
-    },
-    [authProviderId]
-  );
+  const handleRetryClick = useCallback((event: React.MouseEvent) => {
+    event.stopPropagation();
+    // Auth failures suspend background fetches indefinitely (#9736). Clearing the
+    // suspension and re-fetching only happens on an explicit user action. No
+    // settings route: `git fetch` authenticates with the SSH key or Git's
+    // credential helper, never the forge token Daintree stores (#14208).
+    safeFireAndForget(window.electron.worktree.retryAuthFetch(), {
+      context: "Retry auth-suspended fetch from sync badge",
+    });
+  }, []);
 
   const isAuthActionable = fetchAuthFailed && hasAuthFailedSignIn;
 
@@ -203,10 +191,10 @@ export function UpstreamSyncBadge({
   // the PR and issue badges dropped their age glyph. The age lives in the
   // tooltip as "Last fetched". Worst first, so a line never carries two: an
   // auth failure is the only one the user has to act on.
-  // The failure and the way out of it are separate facts. Without a matched
-  // forge provider there is no reconnect to offer, but the fetches are still
-  // suspended and the counts still frozen, so the key stays and only the
-  // button goes.
+  // The failure and the way out of it are separate facts. The Retry button is
+  // only offered on cards with a matched forge provider, but without one the
+  // fetches are still suspended and the counts still frozen, so the key stays
+  // and only the button goes.
   const status: SyncStatus | null = fetchAuthFailed
     ? "auth"
     : fetchNetworkFailed
@@ -353,12 +341,12 @@ export function UpstreamSyncBadge({
         <TooltipTrigger asChild>
           <button
             type="button"
-            onClick={handleSignInClick}
+            onClick={handleRetryClick}
             data-no-dnd
             className="group flex items-center w-fit max-w-full min-w-0 -my-1 py-1 text-left text-3xs font-mono tabular-nums cursor-pointer rounded-[var(--radius-sm)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
             data-testid="upstream-sync-indicator"
             data-fetch-auth-failed="true"
-            aria-label={`Forge authentication failed — click to reconnect${
+            aria-label={`Git authentication failed — click to retry${
               accessibleSummary ? `. ${accessibleSummary}` : ""
             }`}
           >
@@ -372,14 +360,16 @@ export function UpstreamSyncBadge({
               {/* The verb is what makes a line of metadata read as a control.
                   shrink-0 with the counts: a long base name gives way first. */}
               <span className="text-status-warning shrink-0 font-sans group-hover:underline">
-                Reconnect
+                Retry
               </span>
             </span>
           </button>
         </TooltipTrigger>
         <TooltipContent side="right" className="text-xs">
-          <div>Forge authentication failed</div>
-          <div className="mb-1 text-text-secondary">Click to reconnect your code forge</div>
+          <div>Git authentication failed</div>
+          <div className="mb-1 text-text-secondary">
+            Check your SSH key or Git credential helper, then click to retry
+          </div>
           {detail}
         </TooltipContent>
       </Tooltip>

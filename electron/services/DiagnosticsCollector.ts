@@ -428,7 +428,6 @@ async function collectGit() {
 
 const SAFE_STORE_KEYS = [
   "appState",
-  "hibernation",
   "terminalConfig",
   "keybindingOverrides",
   "worktreeConfig",
@@ -682,28 +681,26 @@ async function collectMemoryTrends() {
 }
 
 // Composite memory attribution for support exports: Electron working-set +
-// terminal descendant RSS grouped by project, each with freshness metadata.
+// terminal descendant RSS grouped by project, plus renderer terminal buffer
+// estimates per project view (line counts and widths only), each with
+// freshness metadata.
 // The rollup exposes only process basenames (`comm`), never command lines or
 // paths; the final redactDeep pass covers the rest.
 async function collectMemoryAttribution(deps: HandlerDependencies) {
   try {
     const { getCompositeMemorySnapshot } = await import("./memoryAccounting.js");
-    return await getCompositeMemorySnapshot(deps.ptyClient ?? null);
+    return await getCompositeMemorySnapshot(deps.ptyClient ?? null, {
+      rendererTerminalBuffers: deps,
+    });
   } catch {
     return { error: "Failed to collect memory attribution" };
   }
 }
 
-// Hibernation + resource-profile runtime state. Both are global singletons
-// reached via their own getters — not threaded through HandlerDependencies.
+// Resource-profile runtime state. A global singleton reached via its own
+// getter — not threaded through HandlerDependencies.
 async function collectResourceState() {
   const result: Record<string, unknown> = {};
-  try {
-    const { getHibernationService } = await import("./HibernationService.js");
-    result.hibernation = getHibernationService().getSnapshot();
-  } catch {
-    result.hibernation = { error: "Failed to get hibernation state" };
-  }
   try {
     const { getResourceProfileService } = await import("../window/serviceRefs.js");
     const svc = getResourceProfileService();

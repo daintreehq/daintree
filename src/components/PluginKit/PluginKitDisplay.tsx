@@ -44,15 +44,8 @@ import {
   str,
   PluginStyleScope,
 } from "./kitProps";
-import {
-  COLORS,
-  Swatch,
-  chartColor,
-  foldParts,
-  share,
-  slotColors,
-  valueFormats,
-} from "./PluginKitCharts";
+import { COLORS, chartColor, foldParts, share, slotColors, valueFormats } from "./kitChartModel";
+import { Swatch } from "./kitChartFrame";
 import { renderIconSource } from "./PluginKitIcons";
 import { pluginKitOverlays } from "./PluginKitOverlays";
 import { severityGlyph } from "./PluginKitPatterns";

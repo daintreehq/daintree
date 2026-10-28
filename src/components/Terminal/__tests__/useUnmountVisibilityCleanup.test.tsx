@@ -2,16 +2,26 @@
  * @vitest-environment jsdom
  */
 import { renderHook } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { useUnmountVisibilityCleanup } from "../useUnmountVisibilityCleanup";
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 
 const mocks = vi.hoisted(() => ({
   getAttachGeneration: vi.fn(() => 1),
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: { getAttachGeneration: mocks.getAttachGeneration },
-}));
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = { getAttachGeneration: mocks.getAttachGeneration };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
+});
 
 describe("useUnmountVisibilityCleanup", () => {
   afterEach(() => {

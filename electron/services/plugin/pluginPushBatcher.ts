@@ -272,7 +272,88 @@ function isGone(target: PluginPushTarget): boolean {
   }
 }
 
+/**
+ * Latest-wins publication of a plugin's replaceable state — its panel badges,
+ * its panel activity — where every event carries the plugin's complete map.
+ * A burst of changes (a fleet badged one panel at a time) marks the state
+ * dirty under one key; the flush sends it once, read from the authoritative
+ * map at that moment rather than captured when it changed (#14128).
+ *
+ * Only replaceable state belongs here: an entry is a "send what is current"
+ * thunk, so dropping all but the last per key loses nothing. Nothing is
+ * scheduled until something is published.
+ */
+export class PluginStatePublisher {
+  private pending = new Map<string, { kind: string; pluginId: string; send: () => void }>();
+  private scheduled = false;
+  private readonly schedule: (flush: () => void) => void;
+
+  constructor(options: { schedule?: (flush: () => void) => void } = {}) {
+    this.schedule = options.schedule ?? ((flush) => void setImmediate(flush));
+  }
+
+  /** Mark `kind` of `pluginId`'s state changed; `send` publishes what is current when it runs. */
+  publish(kind: string, pluginId: string, send: () => void): void {
+    const key = `${kind}\0${pluginId}`;
+    // Re-inserted, so the flush order follows each key's latest change.
+    this.pending.delete(key);
+    this.pending.set(key, { kind, pluginId, send });
+    if (!this.scheduled) {
+      this.scheduled = true;
+      this.schedule(() => {
+        sharedBatcher?.flush();
+        this.flush();
+      });
+    }
+  }
+
+  /**
+   * Forget `pluginId`'s pending publications, for an unload that sends its own
+   * clear. Returns the kinds dropped: a renderer may still show state whose
+   * clear was among them, so the unload must clear those too.
+   */
+  discard(pluginId: string): Set<string> {
+    const kinds = new Set<string>();
+    for (const [key, entry] of this.pending) {
+      if (entry.pluginId !== pluginId) continue;
+      this.pending.delete(key);
+      kinds.add(entry.kind);
+    }
+    return kinds;
+  }
+
+  /** Drop everything pending, so a flush already scheduled sends nothing. */
+  clear(): void {
+    this.pending.clear();
+  }
+
+  flush(): void {
+    this.scheduled = false;
+    if (this.pending.size === 0) return;
+    const pending = this.pending;
+    this.pending = new Map();
+    // Re-entrant publishes from a send land in the fresh map, for the next flush.
+    for (const { pluginId, send } of pending.values()) {
+      try {
+        send();
+      } catch (err) {
+        console.warn(`[PluginPush] could not publish state for "${pluginId}"`, err);
+      }
+    }
+  }
+
+  /** Test seam: publications waiting for the next flush. */
+  pendingCount(): number {
+    return this.pending.size;
+  }
+}
+
+/** {@link PluginStatePublisher} kinds, shared by the host that publishes and the unload that clears. */
+export const PLUGIN_STATE_PANEL_BADGES = "panel-badges";
+export const PLUGIN_STATE_PANEL_ACTIVITY = "panel-activity";
+
 let sharedBatcher: PluginPushBatcher | null = null;
+let sharedStatePublisher: PluginStatePublisher | null = null;
 
 /** The process-wide batcher every plugin push goes through. */
 export function getPluginPushBatcher(): PluginPushBatcher {
@@ -280,14 +361,27 @@ export function getPluginPushBatcher(): PluginPushBatcher {
   return sharedBatcher;
 }
 
-/** Test seam: drop the shared batcher so a test starts from a clean queue. */
-export function resetPluginPushBatcherForTests(): void {
-  sharedBatcher = null;
+/** The process-wide publisher for plugins' replaceable state snapshots. */
+export function getPluginStatePublisher(): PluginStatePublisher {
+  sharedStatePublisher ??= new PluginStatePublisher();
+  return sharedStatePublisher;
 }
 
-/** Deliver everything already pushed, before a send that must follow it. */
+/** Test seam: drop the shared batcher and publisher so a test starts from clean queues. */
+export function resetPluginPushBatcherForTests(): void {
+  sharedBatcher = null;
+  sharedStatePublisher?.clear();
+  sharedStatePublisher = null;
+}
+
+/**
+ * Deliver everything already pushed, before a send that must follow it. Panel
+ * pushes go first, so a state snapshot never reaches a renderer ahead of a
+ * panel update the plugin made before changing that state.
+ */
 export function flushPluginPushes(): void {
   sharedBatcher?.flush();
+  sharedStatePublisher?.flush();
 }
 
 /** Queue one plugin push; its recipients are resolved when the queue flushes. */

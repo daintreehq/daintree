@@ -3,39 +3,87 @@ import type {
   VoiceInputSettings,
   VoiceInputStatus,
 } from "../../../shared/types/ipc/api.js";
-
-export interface CorrectionWord {
-  word: string;
-  confidence: number;
-  start?: number;
-  end?: number;
-}
-
-export interface SegmentConfidence {
-  minConfidence: number;
-  wordCount: number;
-  uncertainWords: string[];
-  words: CorrectionWord[];
-}
+import { TRANSCRIPTION_ITEM_FAILED_CODE } from "../../../shared/types/voice.js";
+import type { VoiceSessionReport } from "../../../shared/types/voiceSessionSummary.js";
+import type { VoiceTextSpan } from "../../../shared/utils/voiceUncertainWords.js";
 
 export type VoiceTranscriptionEvent =
-  // `itemId` identifies the committed audio segment a delta/completion belongs
-  // to. Providers without per-segment identity (Deepgram) omit it, and the
-  // renderer falls back to strictly sequential reconciliation.
-  | { type: "delta"; text: string; itemId?: string }
-  | { type: "complete"; text: string; confidence?: SegmentConfidence; itemId?: string }
+  // `itemId` identifies the audio segment a delta/completion belongs to. A
+  // delta without one is reconciled strictly sequentially by the renderer.
+  // `replace` marks a delta carrying the item's whole text so far rather than
+  // an addition: Deepgram revises its interim hypothesis in place.
+  | { type: "delta"; text: string; itemId?: string; replace?: boolean }
+  // `endOfSpeech` marks a completion the speaker paused after, rather than one
+  // the provider cut mid-speech; only those may carry a spoken "send it". One
+  // with no text and no item only marks that the utterance ended.
+  // `endsAtPause` marks a segment the provider closed at a pause though the
+  // speaker may have gone on since: it ends what was said for break commands
+  // ("new line"), but never carries a send. `incomplete` marks one whose
+  // transcript never came (it failed, or was settled with its interim text),
+  // so words around it may be missing.
+  // `paused` marks one the speaker paused after, as the provider heard it,
+  // short pauses inside speech included. Never a cut at a length cap, a final
+  // forced or flushed by a stop, or an incomplete transcript. It drives no
+  // command; cleanup reads where the speaker stopped from it (#14897).
+  // `uncertain` spans the words in `text` the provider scored below its own
+  // cut-off; absent from a provider that reports no word confidence.
+  | {
+      type: "complete";
+      text: string;
+      uncertain?: VoiceTextSpan[];
+      itemId?: string;
+      endOfSpeech?: boolean;
+      endsAtPause?: boolean;
+      paused?: boolean;
+      incomplete?: boolean;
+    }
   | { type: "paragraph_boundary" }
+  // Speech began, before any transcript of it: Deepgram's own VAD, or for Grok,
+  // which reports nothing of the kind, a level check over the outgoing audio.
+  // Main-only: it holds back a spoken send and never reaches the renderer.
+  | { type: "speech_started" }
   | { type: "error"; error: VoiceInputError }
-  | { type: "status"; status: VoiceInputStatus };
+  | { type: "status"; status: VoiceInputStatus }
+  // The terms a request actually carried, after the provider's own sanitizing,
+  // limits and retries. Internal: the handler records it and never forwards it.
+  | { type: "terms_sent"; terms: string[]; keytermAttempt?: "full" | "trimmed" | "none" };
+
+/** A provider event as the service forwards it, tagged with its dictation session. */
+export type VoiceSessionEvent = VoiceTranscriptionEvent & { sessionId: string };
 
 export type VoiceStartResult = { ok: true } | { ok: false; error: string };
 
+/** What one start needs beyond its settings. Runtime only, never persisted. */
+export interface TranscriptionStartContext {
+  /**
+   * Bias terms still being assembled, in place of `settings.keyterms`. Never
+   * rejects. A provider that sends them after its socket opens connects
+   * without waiting for them.
+   */
+  keyterms?: Promise<string[]>;
+}
+
+/** A provider's share of the session summary: counts only, for its latest session. */
+export type ProviderSessionStats = Pick<
+  VoiceSessionReport,
+  "delayTier" | "droppedConnect" | "droppedReplay" | "reconnects"
+>;
+
+/** For a session whose provider never started. */
+export const NO_PROVIDER_SESSION_STATS: ProviderSessionStats = {
+  delayTier: null,
+  droppedConnect: 0,
+  droppedReplay: 0,
+  reconnects: 0,
+};
+
 // Ceiling for audio held before it can be sent — both in the IPC handler while
 // the provider is being brought up, and in each provider while its socket
-// connects. 24kHz mono PCM16 ≈ 48KB/s, so ~150KB ≈ 3s, the point past which
-// voice context is lost anyway. Caps memory if chunks are large.
-export const AUDIO_BUFFER_MAX_CHUNKS = 100;
-export const AUDIO_BUFFER_MAX_BYTES = 150_000;
+// connects or reconnects. Sized to the renderer's own startup queue
+// (`MAX_QUEUED_CHUNKS`: 150 chunks of 100ms, 24kHz mono PCM16 = 4,800 bytes
+// each, so 15s), so nothing the renderer can hold is lost one hop later.
+export const AUDIO_BUFFER_MAX_CHUNKS = 150;
+export const AUDIO_BUFFER_MAX_BYTES = 720_000;
 
 export const AUDIO_BUFFER_OVERFLOW_CODE = "audio_buffer_overflow";
 
@@ -48,16 +96,21 @@ export function createAudioBufferOverflowError(): VoiceInputError {
   };
 }
 
-// Providers emit a neutral, fully-confident stub: the real word-level
-// confidence/correction pass lives in VoiceCorrectionService, not the
-// transcription stream. Both providers reuse this so the renderer's confidence
-// shape stays consistent regardless of backend.
-export const STUB_CONFIDENCE: SegmentConfidence = {
-  minConfidence: 1.0,
-  wordCount: 0,
-  uncertainWords: [],
-  words: [],
-};
+/** Transient: the session keeps running, only one passage went untranscribed. */
+export function createTranscriptionItemFailedError(): VoiceInputError {
+  return {
+    severity: "transient",
+    code: TRANSCRIPTION_ITEM_FAILED_CODE,
+    message: "Part of what you said didn't transcribe.",
+  };
+}
+
+// Upgrade statuses worth another attempt: concurrency/rate limits and server
+// faults. 400/401/402/403 mean bad params, key, credits, or scope.
+export function isRetryableHttpStatus(statusCode: number | undefined): boolean {
+  if (statusCode === undefined) return false;
+  return statusCode === 408 || statusCode === 429 || (statusCode >= 500 && statusCode < 600);
+}
 
 /**
  * One concrete transcription backend (OpenAI Realtime, Deepgram, …). The
@@ -76,15 +129,25 @@ export interface TranscriptionProvider {
    * timer exists.
    */
   readonly hasServerVAD: boolean;
-  start(settings: VoiceInputSettings): Promise<VoiceStartResult>;
+  /** `sessionId` is the renderer-minted dictation session id, for correlation. */
+  start(
+    settings: VoiceInputSettings,
+    sessionId: string,
+    context?: TranscriptionStartContext
+  ): Promise<VoiceStartResult>;
   sendAudioChunk(chunk: ArrayBuffer): void;
   /**
    * Flush the current audio segment at a user-driven paragraph boundary (Enter
-   * pressed mid-utterance). A no-op for server-VAD providers, which segment on
-   * their own.
+   * pressed mid-utterance). Server-VAD providers ask the backend to finalise
+   * what it has buffered.
    */
   commitParagraphBoundary(): void;
   stopGracefully(): Promise<void>;
+  /**
+   * Counts for the session last started, which survive its stop and drain
+   * and reset only on the next start().
+   */
+  getSessionStats(): ProviderSessionStats;
   stop(): void;
   destroy(): void;
   onEvent(listener: (event: VoiceTranscriptionEvent) => void): () => void;

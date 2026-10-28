@@ -30,7 +30,7 @@ const systemSleepMock = vi.hoisted(() => ({
 }));
 
 const pluginServiceMock = vi.hoisted(() => ({
-  waitForInit: vi.fn(async () => {}),
+  waitForCatalog: vi.fn(async () => {}),
   listPlugins: vi.fn(() => [] as unknown[]),
   checkForUpdate: vi.fn(async (_id: string) => ({ status: "up-to-date" }) as unknown),
 }));
@@ -73,7 +73,7 @@ describe("PluginUpdateCheckService", () => {
   beforeEach(() => {
     storeState.value = { enabled: false, lastCheckedAt: null };
     powerMonitorMock.getSystemIdleTime.mockReturnValue(120);
-    pluginServiceMock.waitForInit.mockResolvedValue(undefined);
+    pluginServiceMock.waitForCatalog.mockResolvedValue(undefined);
     pluginServiceMock.listPlugins.mockReturnValue([]);
     pluginServiceMock.checkForUpdate.mockResolvedValue({ status: "up-to-date" });
     broadcastMock.mockClear();

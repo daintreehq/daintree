@@ -2,8 +2,10 @@ import { persistAgentSession, type AgentSessionRecord } from "./agentSessionHist
 import { isClaudeSessionWithoutTranscript } from "../claude/ClaudeSessionStore.js";
 import { getAgentSessionRetentionDays } from "./agentSessionRetention.js";
 import { getLifecycleLedger } from "./lifecycleLedger.js";
+import { hasCanopyTrashRemoval } from "./canopyTrashRemovals.js";
 import { events } from "../events.js";
 import { createLogger } from "../../utils/logger.js";
+import { isHostThrowawayWorkspaceId } from "../../../shared/config/hostThrowaway.js";
 
 const logger = createLogger("main:AgentSessionJournal");
 
@@ -58,6 +60,9 @@ export async function journalAgentSessionRecord(
   record: Omit<AgentSessionRecord, "savedAt">,
   ctx: JournalCloseContext
 ): Promise<AgentSessionRecord | null> {
+  // A throwaway host run (#14445) leaves nothing to resume, whichever close
+  // path reached it; refused before the ledger, so it claims nothing either.
+  if (isHostThrowawayWorkspaceId(record.projectId)) return null;
   const ledger = getLifecycleLedger();
   // A null generation is an explicit "frozen but unknown" — fail open without
   // consulting the current (possibly respawned) generation. Omitted falls back
@@ -96,11 +101,20 @@ export async function journalAgentSessionRecord(
     }
   }
 
+  // Removed from Canopy's Trash while its process was still ending: the close
+  // lands already out of the Trash, so no later read can bring the row back.
+  // The note is not spent here: a write that fails and is retried lands the
+  // same way.
+  const landing =
+    record.trash && record.terminal && hasCanopyTrashRemoval(record.terminal)
+      ? { ...record, trash: { ...record.trash, removedAt: Date.now() } }
+      : record;
+
   let persisted: AgentSessionRecord | null;
   try {
     const { app } = await import("electron");
     persisted = await persistAgentSession(
-      record,
+      landing,
       app.getPath("userData"),
       getAgentSessionRetentionDays()
     );

@@ -20,7 +20,9 @@ import {
   supportsSessionIdAssignment,
   mintAssignedSessionId,
   stripAssignedSessionIdArgs,
+  stripConversationSelectorFlags,
   relaunchResumeAsAssignedSession,
+  supportsExactSessionCapture,
   DEFAULT_AGENT_SETTINGS,
   DEFAULT_DANGEROUS_ARGS,
   agentClipboardDirectory,
@@ -163,8 +165,40 @@ describe("buildResumeLatestCommand", () => {
     expect(buildResumeLatestCommand("my-custom-agent")).toBeUndefined();
   });
 
-  it("returns undefined for a rolling-history agent", () => {
-    expect(buildResumeLatestCommand("kimi")).toBeUndefined();
+  it("uses a rolling-history agent's own args as its resume-latest form (#13847)", () => {
+    // Nothing is captured for these, so their args are the only way back to the
+    // conversation after a restore.
+    expect(buildResumeLatestCommand("kimi")).toBe("kimi --continue");
+    expect(buildResumeLatestCommand("aider", ["--no-auto-commits"])).toBe(
+      "aider --no-auto-commits --restore-chat-history"
+    );
+  });
+
+  it("keeps the registry's default args when the pane hands over no captured flags", () => {
+    // A deleted preset voids the captured flags. Aider must still resume with
+    // auto-commits off, as the fresh launch this replaced always did.
+    expect(buildResumeLatestCommand("aider")).toBe(
+      "aider --no-auto-commits --restore-chat-history"
+    );
+    expect(buildResumeLatestCommand("aider", ["--model", "sonnet"])).toBe(
+      "aider --no-auto-commits --model 'sonnet' --restore-chat-history"
+    );
+  });
+
+  it("returns undefined for a rolling-history agent whose only way back is a picker", () => {
+    // Interpreter declares empty args rather than a picker that would block the PTY.
+    expect(buildResumeLatestCommand("interpreter")).toBeUndefined();
+  });
+
+  it("returns undefined for a named-target agent, whose args need the target", () => {
+    expect(buildResumeLatestCommand("amp")).toBeUndefined();
+  });
+
+  it("resumes Cursor's latest chat with --continue but never claims a capturable id", () => {
+    expect(buildResumeLatestCommand("cursor")).toBe("cursor-agent --continue");
+    expect(buildResumeCommand("cursor", "chat-1")).toBe("cursor-agent --resume chat-1");
+    // Cursor prints no id, so bookmarking (a kill-then-capture) must refuse it.
+    expect(supportsExactSessionCapture("cursor")).toBe(false);
   });
 
   it("uses a project-scoped agent's own args as its resume-latest form (#13687)", () => {
@@ -176,12 +210,16 @@ describe("buildResumeLatestCommand", () => {
   });
 
   it("returns undefined for session-id agents that don't declare resumeLatestArgs", () => {
-    // Copilot/Goose/Qwen/Mistral are session-id agents that didn't ship a
-    // resume-latest fallback; should return undefined.
+    // Copilot's and Goose's "latest" isn't confined to the launch directory, so
+    // they deliberately ship no fallback.
     expect(buildResumeLatestCommand("copilot")).toBeUndefined();
     expect(buildResumeLatestCommand("goose")).toBeUndefined();
-    expect(buildResumeLatestCommand("qwen")).toBeUndefined();
-    expect(buildResumeLatestCommand("mistral")).toBeUndefined();
+  });
+
+  it("falls back to --continue for Qwen and Mistral when the id capture missed (#13847)", () => {
+    expect(buildResumeLatestCommand("qwen")).toBe("qwen --continue");
+    expect(buildResumeLatestCommand("mistral", ["--trust"])).toBe("vibe --trust --continue");
+    expect(buildResumeLatestCommand("mistral")).toBe("vibe --trust --continue");
   });
 
   it("returns opencode --continue for opencode without flags", () => {
@@ -1875,5 +1913,43 @@ describe("plugin-declared resume (#13687)", () => {
       },
     ]);
     expect(buildResumeLatestCommand("pi")).toBe("pi --continue");
+  });
+
+  it("keeps a plugin's default option and its value together on a resume-latest (#13847)", () => {
+    registerPluginAgents("me.extra-agents", [
+      {
+        ...plugin,
+        id: "pi",
+        command: "pi",
+        args: ["--profile", "latest"],
+        resume: { kind: "project-scoped", args: ["--resume", "latest"] },
+      },
+    ]);
+    // The fallback's own `latest` must not stand in for the profile's value.
+    expect(buildResumeLatestCommand("pi")).toBe("pi --profile 'latest' --resume latest");
+    expect(buildResumeLatestCommand("pi", ["--profile", "latest", "--fast"])).toBe(
+      "pi --profile 'latest' --fast --resume latest"
+    );
+  });
+});
+
+describe("stripConversationSelectorFlags (#13746)", () => {
+  it("drops Claude's resume, assign and continue selectors and keeps everything else", () => {
+    expect(
+      stripConversationSelectorFlags(
+        ["--model", "opus", "--continue", "--resume", "abc", "--session-id", "def", "--verbose"],
+        "claude"
+      )
+    ).toEqual(["--model", "opus", "--verbose"]);
+  });
+
+  it("drops Codex's two-word resume-latest", () => {
+    expect(stripConversationSelectorFlags(["resume", "--last", "--full-auto"], "codex")).toEqual([
+      "--full-auto",
+    ]);
+  });
+
+  it("leaves an agent without a session-id resume untouched", () => {
+    expect(stripConversationSelectorFlags(["--continue"], "no-such-agent")).toEqual(["--continue"]);
   });
 });

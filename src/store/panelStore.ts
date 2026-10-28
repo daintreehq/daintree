@@ -36,10 +36,11 @@ import {
 } from "@shared/types/panel";
 import { TerminalRefreshTier as TerminalRefreshTierEnum } from "@/types";
 import { terminalRegistryController } from "@/controllers";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 import { useWorktreeSelectionStore } from "./worktreeStore";
 import { isAssistantFocused } from "./macroFocusStore";
 import { isMcpSpawnFocusSuppressed } from "./mcpSpawnFocusGuard";
+import { exitProjectHome } from "./storeAccessors";
 import type { CrashType } from "@shared/types/pty-host";
 import type { TabGroup } from "@shared/types/panel";
 import { isRuntimeAgentTerminal } from "@/utils/terminalType";
@@ -570,6 +571,9 @@ export const usePanelStore = create<PanelGridState>()(
           if (!options.preserveMaximize) {
             get().exitMaximize();
           }
+          // Home hides the grid outright, so it goes even when the maximize
+          // stays: the grid is where the panel the user asked for lands.
+          exitProjectHome();
           const focusedByCommit = focusesOnCommit && get().focusedId === id;
           if (!focusedByCommit) {
             if (focusedBeforeCreate !== id) {
@@ -682,6 +686,7 @@ export const usePanelStore = create<PanelGridState>()(
           // visible rather than parked behind a fullscreen cell (#11060). It came
           // from the dock, so it can never be the panel/group being maximized.
           get().exitMaximize();
+          exitProjectHome();
           set({
             focusedId: id,
             activeDockTerminalId: null,
@@ -721,6 +726,7 @@ export const usePanelStore = create<PanelGridState>()(
           // visible rather than parked behind a fullscreen cell (#11060). It came
           // from the dock, so it can never be the panel/group being maximized.
           get().exitMaximize();
+          exitProjectHome();
           set({
             focusedId: nextFocusedId,
             ...(shouldClearDock && { activeDockTerminalId: null }),
@@ -981,6 +987,7 @@ export const usePanelStore = create<PanelGridState>()(
         // the popover instead and leaves the grid's fullscreen view alone.
         if (!landsInDock) {
           get().exitMaximize();
+          exitProjectHome();
         }
         set({
           focusedId: id,
@@ -1035,6 +1042,7 @@ export const usePanelStore = create<PanelGridState>()(
         // be the group currently maximized.
         if (!landsInDock) {
           get().exitMaximize();
+          exitProjectHome();
         }
         set({
           focusedId: focusId,
@@ -1066,6 +1074,7 @@ export const usePanelStore = create<PanelGridState>()(
         const restored = get().panelsById[id];
         if (restored !== undefined && restored.location !== "dock") {
           get().exitMaximize();
+          if (isGridPanelLocation(restored.location)) exitProjectHome();
         }
       },
 
@@ -1084,6 +1093,13 @@ export const usePanelStore = create<PanelGridState>()(
         });
         if (landedInGrid) {
           get().exitMaximize();
+        }
+        const revealedInGrid = memberIds.some((id) => {
+          const restored = get().panelsById[id];
+          return restored !== undefined && isGridPanelLocation(restored.location);
+        });
+        if (revealedInGrid) {
+          exitProjectHome();
         }
       },
 
@@ -1179,6 +1195,8 @@ export const usePanelStore = create<PanelGridState>()(
 
         if (committedLocation === "grid") {
           const previousFocusedId = state.focusedId;
+          // It takes focus in the grid, so the grid has to be what's showing.
+          exitProjectHome();
           set({
             focusedId: id,
             activeDockTerminalId: null,
@@ -1241,7 +1259,7 @@ export const usePanelStore = create<PanelGridState>()(
 
         for (const tid of state.panelIds) {
           try {
-            terminalInstanceService.destroy(tid);
+            peekTerminalService()?.destroy(tid);
           } catch (error) {
             logWarn(`Failed to destroy terminal instance ${tid}`, { error });
           }
@@ -1287,14 +1305,14 @@ export const usePanelStore = create<PanelGridState>()(
         flushPanelPersistence();
 
         const allTerminalIds = [...state.panelIds];
-        terminalInstanceService.suppressResizesDuringProjectSwitch(
+        peekTerminalService()?.suppressResizesDuringProjectSwitch(
           allTerminalIds,
           PROJECT_SWITCH_RESIZE_SUPPRESSION_MS
         );
 
         for (const tid of state.panelIds) {
           try {
-            terminalInstanceService.detachForProjectSwitch(tid);
+            peekTerminalService()?.detachForProjectSwitch(tid);
           } catch (error) {
             logWarn(`Failed to detach terminal instance ${tid}`, { error });
           }
@@ -1333,14 +1351,14 @@ export const usePanelStore = create<PanelGridState>()(
         flushPanelPersistence();
 
         const allTerminalIds = [...state.panelIds];
-        terminalInstanceService.suppressResizesDuringProjectSwitch(
+        peekTerminalService()?.suppressResizesDuringProjectSwitch(
           allTerminalIds,
           PROJECT_SWITCH_RESIZE_SUPPRESSION_MS
         );
 
         for (const tid of state.panelIds) {
           try {
-            terminalInstanceService.detachForProjectSwitch(tid);
+            peekTerminalService()?.detachForProjectSwitch(tid);
           } catch (error) {
             logWarn(`Failed to detach terminal instance ${tid}`, { error });
           }

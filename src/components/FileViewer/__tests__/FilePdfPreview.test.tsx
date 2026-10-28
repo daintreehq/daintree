@@ -215,6 +215,25 @@ describe("FilePdfPreview", () => {
       expect(titles.size).toBe(4);
     });
 
+    it("names a remote host's refusal as control, not as a PDF that couldn't be displayed", async () => {
+      fetchMock.mockResolvedValue({
+        ...status(403),
+        headers: new Headers({ "x-daintree-refusal": "driven-elsewhere" }),
+      } as ProbeResponse);
+      const onError = vi.fn<(error: PdfPreviewError) => void>();
+      const { container } = render(
+        <FilePdfPreview
+          filePath="/repo/spec.pdf"
+          rootPath="/repo"
+          label="spec.pdf"
+          onError={onError}
+        />
+      );
+      await waitFor(() => expect(onError).toHaveBeenCalledTimes(1));
+      expect(firstReported(onError)).toMatchObject({ refusal: "driven-elsewhere" });
+      expect(container.querySelector("iframe")).toBeNull();
+    });
+
     it("reports a probe the network layer refused outright", async () => {
       fetchMock.mockRejectedValue(new TypeError("Failed to fetch"));
       const onError = vi.fn<(error: PdfPreviewError) => void>();

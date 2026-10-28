@@ -1,5 +1,5 @@
 import type { AppErrorCode, AppErrorDetails } from "../../shared/types/appError";
-import { pickAppErrorDetails } from "@shared/utils/ipcErrorSerialization";
+import { decodeAppErrorWire } from "@shared/utils/appErrorWire";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 /**
@@ -36,24 +36,6 @@ export class ClientAppError extends Error {
   }
 }
 
-// Matches the prefix injected by the preload's `_reconstructAppError`. Group 1
-// is the AppError code (uppercase identifier). Group 2 is the optional
-// urlencoded userMessage (without leading `|`). Group 3 is the optional
-// urlencoded JSON `details`, marked by a leading `#` (which a urlencoded
-// userMessage can never start with). Group 4 is the original human-readable
-// message that follows the closing `]`.
-const ENCODED_APP_ERROR_PATTERN =
-  /^\[AppError\|([A-Z_]+)(?:\|(?!#)([^\]]*?))?(?:\|#([^\]|]*))?\] (.*)$/s;
-
-function decodeDetails(encoded: string): AppErrorDetails | undefined {
-  try {
-    const parsed: unknown = JSON.parse(decodeURIComponent(encoded));
-    return pickAppErrorDetails(parsed);
-  } catch {
-    return undefined;
-  }
-}
-
 /**
  * Realm-safe guard. Decodes the `[AppError|<code>] message` prefix that the
  * preload sets when an IPC handler throws an `AppError`, and as a side effect
@@ -70,24 +52,14 @@ export function isClientAppError(
   if (!(e instanceof Error)) return false;
 
   // Preferred path: decode the prefix the preload injected.
-  const match = ENCODED_APP_ERROR_PATTERN.exec(e.message);
-  if (match) {
-    const [, code, encodedUserMsg, encodedDetails, originalMessage] = match;
+  const decoded = decodeAppErrorWire(e.message);
+  if (decoded) {
     const target = e as Error & { code?: string; userMessage?: string; details?: AppErrorDetails };
     target.name = "AppError";
-    target.code = code;
-    if (encodedUserMsg !== undefined) {
-      try {
-        target.userMessage = decodeURIComponent(encodedUserMsg);
-      } catch {
-        target.userMessage = encodedUserMsg;
-      }
-    }
-    if (encodedDetails !== undefined) {
-      const details = decodeDetails(encodedDetails);
-      if (details !== undefined) target.details = details;
-    }
-    e.message = originalMessage ?? e.message;
+    target.code = decoded.code;
+    if (decoded.userMessage !== undefined) target.userMessage = decoded.userMessage;
+    if (decoded.details !== undefined) target.details = decoded.details;
+    e.message = decoded.message;
     return true;
   }
 

@@ -39,14 +39,22 @@ export const OPEN_WINDOWS_MANIFEST_VERSION = 1;
 export const MAX_RESTORED_WINDOWS = 8;
 
 /**
- * Hard cap on background projects stored per window. Deliberately larger than
- * any machine's warm-view ceiling (5): the ceiling is a *runtime* budget that
- * moves with RAM tier and memory pressure, so truncating to it here would burn
- * the smaller number into the manifest and permanently lose projects the next
- * launch had room for. Restore-time admission applies the real ceiling; this
- * bound exists only so a corrupt or hand-edited manifest can't name thousands.
+ * Hard cap on this machine's background projects stored per window.
+ * Deliberately larger than any machine's warm-view ceiling (5): the ceiling is
+ * a *runtime* budget that moves with RAM tier and memory pressure, so
+ * truncating to it here would burn the smaller number into the manifest and
+ * permanently lose projects the next launch had room for. Restore-time
+ * admission applies the real ceiling; this bound exists only so a corrupt or
+ * hand-edited manifest can't name thousands.
  */
 export const MAX_BACKGROUND_PROJECTS_PER_WINDOW = 8;
+
+/**
+ * The same bound for a window's background projects on other machines
+ * (`<hostId>:<projectId>`), counted apart (#13932): one shared cap let a
+ * window's host projects push out local ones that would have restored.
+ */
+export const MAX_BACKGROUND_HOST_PROJECTS_PER_WINDOW = 8;
 
 export interface OpenWindowRecord {
   /**
@@ -177,18 +185,46 @@ function withBackgroundProjectIds(record: OpenWindowRecord, raw: unknown): OpenW
  */
 function parseBackgroundProjectIds(raw: unknown, foregroundId: string | null): string[] {
   if (!Array.isArray(raw)) return [];
+  return capBackgroundProjectIds(
+    raw.filter((value): value is string => typeof value === "string"),
+    foregroundId
+  );
+}
 
+/**
+ * A window's background list as the manifest keeps it: empty ids, duplicates
+ * and `foregroundId` dropped, and the most recent
+ * {@link MAX_BACKGROUND_PROJECTS_PER_WINDOW} of this machine's workspaces kept
+ * apart from the most recent {@link MAX_BACKGROUND_HOST_PROJECTS_PER_WINDOW} of
+ * other machines', each kind in its own order. This machine's come first, so a
+ * build that predates the split (one cap of 8 across both) still reads every
+ * local one; the two are restored apart, so nothing ranks one kind against
+ * the other.
+ */
+export function capBackgroundProjectIds(
+  ids: Iterable<string>,
+  foregroundId: string | null = null
+): string[] {
   const seen = new Set<string>();
-  const ids: string[] = [];
-  for (const value of raw) {
-    if (typeof value !== "string" || value.length === 0) continue;
-    if (value === foregroundId) continue;
-    if (seen.has(value)) continue;
-    seen.add(value);
-    ids.push(value);
-    if (ids.length >= MAX_BACKGROUND_PROJECTS_PER_WINDOW) break;
+  const local: string[] = [];
+  const remote: string[] = [];
+  for (const id of ids) {
+    if (id.length === 0 || id === foregroundId || seen.has(id)) continue;
+    seen.add(id);
+    const kind = isRemoteWorkspaceKey(id) ? remote : local;
+    const cap =
+      kind === remote
+        ? MAX_BACKGROUND_HOST_PROJECTS_PER_WINDOW
+        : MAX_BACKGROUND_PROJECTS_PER_WINDOW;
+    if (kind.length < cap) kind.push(id);
+    if (
+      local.length >= MAX_BACKGROUND_PROJECTS_PER_WINDOW &&
+      remote.length >= MAX_BACKGROUND_HOST_PROJECTS_PER_WINDOW
+    ) {
+      break;
+    }
   }
-  return ids;
+  return [...local, ...remote];
 }
 
 /**
@@ -250,12 +286,15 @@ export function filterRestorableWindows(
     )
     .map((record) => {
       // Background ids are filtered by the same rule and for the same reason,
-      // one level down: a deleted project is skipped, never substituted. A
-      // window whose whole background list was deleted still restores — it just
+      // one level down: a deleted project is skipped, never substituted, and a
+      // host's project is kept for the host to vouch for (#13932). A window
+      // whose whole background list was deleted still restores — it just
       // restores the one project it was showing, which is exactly today's
       // behaviour.
       if (!record.backgroundProjectIds) return record;
-      const surviving = record.backgroundProjectIds.filter((id) => existingWorkspaceIds.has(id));
+      const surviving = record.backgroundProjectIds.filter(
+        (id) => existingWorkspaceIds.has(id) || isRemoteWorkspaceKey(id)
+      );
       if (surviving.length === record.backgroundProjectIds.length) return record;
       if (surviving.length === 0) {
         const { backgroundProjectIds: _dropped, ...rest } = record;

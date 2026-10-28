@@ -94,6 +94,10 @@ declare module "@daintreehq/plugin-ui" {
     PluginEmojiPickerProps,
     PluginEmptyStateProps,
     PluginFileDropzoneProps,
+    PluginFileDropzoneBaseProps,
+    PluginMediaSource,
+    PluginMediaPlayerProps,
+    PluginMediaThumbnailProps,
     PluginFileTreeEntry,
     PluginFileTreeItem,
     PluginFileTreeNode,
@@ -182,6 +186,12 @@ declare module "@daintreehq/plugin-ui" {
     PluginToolbarProps,
     PluginTooltipProps,
     PluginTruncatedTooltipProps,
+    PluginVirtualGridComponent,
+    PluginVirtualGridCountProps,
+    PluginVirtualGridItemState,
+    PluginVirtualGridItemsProps,
+    PluginVirtualGridProps,
+    PluginVirtualGridSelection,
     PluginVirtualListComponent,
     PluginVirtualListCountProps,
     PluginVirtualListItemsProps,
@@ -368,6 +378,11 @@ declare module "@daintreehq/plugin-ui" {
   export type VirtualListProps<T = unknown> = PluginVirtualListProps<T>;
   export type VirtualListItemsProps<T = unknown> = PluginVirtualListItemsProps<T>;
   export type VirtualListCountProps = PluginVirtualListCountProps;
+  export type VirtualGridProps<T = unknown> = PluginVirtualGridProps<T>;
+  export type VirtualGridItemsProps<T = unknown> = PluginVirtualGridItemsProps<T>;
+  export type VirtualGridCountProps = PluginVirtualGridCountProps;
+  export type VirtualGridItemState = PluginVirtualGridItemState;
+  export type VirtualGridSelection = PluginVirtualGridSelection;
   export type DataTableProps<T = unknown> = PluginDataTableProps<T>;
   export type DataTableColumn<T = unknown> = PluginDataTableColumn<T>;
   export type DataTableRowKey<T = unknown> = PluginDataTableRowKey<T>;
@@ -469,6 +484,10 @@ declare module "@daintreehq/plugin-ui" {
   export type MultiSelectProps = PluginMultiSelectProps;
   export type TagInputProps = PluginTagInputProps;
   export type FileDropzoneProps = PluginFileDropzoneProps;
+  export type FileDropzoneBaseProps = PluginFileDropzoneBaseProps;
+  export type MediaArtifactSource = PluginMediaSource;
+  export type MediaPlayerProps = PluginMediaPlayerProps;
+  export type MediaThumbnailProps = PluginMediaThumbnailProps;
   export type EmojiPickerProps = PluginEmojiPickerProps;
   export type ChartColor = PluginChartColor;
   export type ChartSeries = PluginChartSeries;
@@ -693,6 +712,14 @@ declare module "@daintreehq/plugin-ui" {
    */
   export const VirtualList: PluginVirtualListComponent;
   /**
+   * Cards in as many equal columns as fit (`minColumnWidth`, `maxColumns`),
+   * windowed by row so thousands cost what a screenful does. It fills its
+   * container's height. With `selection` (a `useSelection` result) or
+   * `onItemActivate` it is a keyboard grid: the arrow keys move a cursor in two
+   * dimensions and clicks and keys select as a `DataTable` row does.
+   */
+  export const VirtualGrid: PluginVirtualGridComponent;
+  /**
    * A table with a sticky header and a body virtualised by default
    * (`virtualize={false}` draws a plain table). Sorting is controlled: the
    * table reports `onSortChange` and you sort `rows`. With `onRowClick` it is a
@@ -844,8 +871,12 @@ declare module "@daintreehq/plugin-ui" {
   export const MultiSelect: ComponentType<MultiSelectProps>;
   /** Free-text tags: Enter or a comma adds, Backspace removes the last, duplicates are skipped. */
   export const TagInput: ComponentType<TagInputProps>;
-  /** A drop target and a button for the system file dialog, handing you `File` objects. */
+  /** A drop target and a button for the system file dialog, handing you `File` objects or imported artifacts. */
   export const FileDropzone: ComponentType<FileDropzoneProps>;
+  /** An audio or video artifact with the system's own controls; pauses when the person moves away. */
+  export const MediaPlayer: ComponentType<MediaPlayerProps>;
+  /** A still for an artifact: the image, a video's first frame, or a glyph. */
+  export const MediaThumbnail: ComponentType<MediaThumbnailProps>;
   /** Daintree's emoji picker in a popover opened from `trigger`. The trigger shows while the kit loads. */
   export const EmojiPicker: ComponentType<EmojiPickerProps>;
   /** Categories as columns or bars, grouped or stacked, with a point tooltip and a hidden data table. */
@@ -1525,4 +1556,49 @@ declare module "@daintreehq/plugin-ui" {
   export const SourceList: ComponentType<SourceListProps>;
   /** A question a run is waiting on, with its answers. */
   export const DecisionRequest: ComponentType<DecisionRequestProps>;
+
+  // Filters and saved views: a structured filter over a declared field schema,
+  // and named sets of filter, sort and column choices.
+  import type {
+    PluginFilter,
+    PluginFilterBuilderProps,
+    PluginFilterCondition,
+    PluginFilterField,
+    PluginFilterFieldType,
+    PluginFilterOperator,
+    PluginFilterValue,
+    PluginSavedView,
+    PluginSavedViewState,
+    PluginSavedViewsProps,
+  } from "@daintreehq/plugin-sdk/react";
+
+  export type Filter = PluginFilter;
+  export type FilterCondition = PluginFilterCondition;
+  export type FilterOperator = PluginFilterOperator;
+  export type FilterValue = PluginFilterValue;
+  export type FilterField = PluginFilterField;
+  export type FilterFieldType = PluginFilterFieldType;
+  export type FilterBuilderProps = PluginFilterBuilderProps;
+  export type SavedViewState = PluginSavedViewState;
+  export type SavedView = PluginSavedView;
+  export type SavedViewsProps = PluginSavedViewsProps;
+
+  /** Field, comparison and value rows editing a plain JSON filter; rows the schema no longer allows stay, marked. */
+  export const FilterBuilder: ComponentType<FilterBuilderProps>;
+  /** A compact menu of named filter, sort and column choices: switch, save, rename, revert, remove. */
+  export const SavedViews: ComponentType<SavedViewsProps>;
+  /**
+   * `value` as a filter over `fields`, copied, or `null` when any condition is
+   * incomplete or outside the schema. Never run a `null` as "no filter".
+   */
+  export function readFilter(value: unknown, fields: readonly FilterField[]): Filter | null;
+  /**
+   * Whether one record, given as its values by field id, passes `filter`. A
+   * filter `readFilter` refuses matches nothing; no conditions match everything.
+   */
+  export function matchesFilter(
+    filter: Filter,
+    values: Readonly<Record<string, unknown>>,
+    fields: readonly FilterField[]
+  ): boolean;
 }

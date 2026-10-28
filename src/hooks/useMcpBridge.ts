@@ -1371,6 +1371,9 @@ export function useMcpBridge(): void {
                     : {}),
                   previewPending,
                   ...(hostLines !== undefined ? { preview: hostLines } : {}),
+                  ...(hostLines === undefined && previewTarget?.kind === "worktreeDelete"
+                    ? { worktreeDeleteNotesTargetId: previewTarget.worktreeId }
+                    : {}),
                   ...((hasAsyncPreview || hostLines !== undefined) && previewTarget
                     ? { previewTitle: mcpConfirmPreviewTitle(previewTarget) }
                     : {}),

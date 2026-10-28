@@ -28,18 +28,31 @@ const mockGetWindowForWebContents = vi.fn<(wc: { id: number }) => { id: number }
 const mockIsCachedViewWebContents = vi.fn<(webContentsId: number) => boolean>();
 const mockListProjectPlugins = vi.fn();
 const mockSetProjectPluginTrust = vi.fn();
-const mockGetProjectSurfaceChoices = vi.fn();
+const mockGetProjectSurfacesSnapshot = vi.fn();
 const mockSetProjectSurfaceChoice = vi.fn();
+const mockSetProjectSurfaceChoices = vi.fn();
 const mockActivateStagedProjectPlugin = vi.fn();
 const mockSetProjectPluginMuted = vi.fn();
 const mockGetProjectPluginVisibility = vi.fn();
 const mockSetProjectPluginVisibility = vi.fn();
+const mockGetInstalledPackageMode = vi.fn();
+const mockSetProjectInstanceEnabled = vi.fn();
+const mockGetProjectById = vi.fn<(projectId: string) => { path: string } | undefined>();
+
+vi.mock("../../../services/ProjectStore.js", () => ({
+  projectStore: { getProjectById: (projectId: string) => mockGetProjectById(projectId) },
+}));
 const mockSetPluginVisibilityDefault = vi.fn();
 const mockReloadProjectPlugins = vi.fn();
 const mockRestartPluginWorker = vi.fn();
+const mockCancelPluginTask = vi.fn((_pluginId: string, _taskId: string) => true);
+const mockDismissPluginTask = vi.fn((_pluginId: string, _taskId: string) => true);
 const mockListPluginRuntimeStatuses = vi.fn();
 const mockGetDataBackupSource = vi.fn();
 const mockIsRemoteUnsupported = vi.fn<(pluginId: string) => boolean>();
+const mockConnectAccountFromUi = vi.fn();
+const mockSetAccountTokenFromUi = vi.fn();
+const mockCancelAccountConnectFromUi = vi.fn();
 const mockResolveActiveWorktreeIdForProject =
   vi.fn<(projectId: string) => Promise<string | null>>();
 
@@ -62,6 +75,20 @@ vi.mock("../../../window/webContentsRegistry.js", async (importOriginal) => ({
   isCachedViewWebContents: (...args: [number]) => mockIsCachedViewWebContents(...args),
 }));
 
+// Per-project hiding of installed plugins, held in memory: the real overlay
+// reads electron-store, which this suite does not stand up. Only the two reads
+// the contribution selector makes are replaced, so the selector itself is real.
+const hiddenPlugins = vi.hoisted(() => new Set<string>());
+vi.mock("../../../services/plugin/projectPluginVisibility.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../services/plugin/projectPluginVisibility.js")>()),
+  hasProjectPluginVisibilityOverrides: () => hiddenPlugins.size > 0,
+  isPluginVisibleInProject: (pluginId: string, projectId: string | null) =>
+    !hiddenPlugins.has(`${projectId}|${pluginId}`),
+}));
+function hidePluginInProject(projectId: string, pluginId: string): void {
+  hiddenPlugins.add(`${projectId}|${pluginId}`);
+}
+
 const { mockStableArgsSha256 } = vi.hoisted(() => ({ mockStableArgsSha256: vi.fn() }));
 vi.mock("../../../utils/pluginMcpHash.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../utils/pluginMcpHash.js")>();
@@ -77,7 +104,51 @@ const { mockGetPluginRecipes, mockRecordPluginRecipeUse, mockUpdatePluginRecipeM
   }));
 
 const mockGetPluginTours = vi.hoisted(() => vi.fn((): unknown[] => []));
+const silencedPlugins = vi.hoisted(() => new Set<string>());
+vi.mock("../../../services/plugin/pluginNotificationSilences.js", () => ({
+  getPluginNotificationSilences: () => [...silencedPlugins],
+  setPluginNotificationSilenced: (pluginId: string, silenced: boolean) => {
+    if (silenced) silencedPlugins.add(pluginId);
+    else silencedPlugins.delete(pluginId);
+    return [...silencedPlugins];
+  },
+}));
 const mockMetricsRecordInvoke = vi.hoisted(() => vi.fn());
+const {
+  mockGetProjectLayoutSeed,
+  mockAdvanceProjectLayoutSeed,
+  mockReleaseProjectLayoutSeedClaim,
+  mockGetProjectWelcome,
+  mockSetProjectWelcome,
+} = vi.hoisted(() => ({
+  mockGetProjectLayoutSeed: vi.fn(),
+  mockAdvanceProjectLayoutSeed: vi.fn(),
+  mockReleaseProjectLayoutSeedClaim: vi.fn(),
+  mockGetProjectWelcome: vi.fn(),
+  mockSetProjectWelcome: vi.fn(),
+}));
+
+vi.mock("../../../services/plugin/projectApplicationWelcomes.js", () => ({
+  getProjectWelcome: mockGetProjectWelcome,
+  setProjectWelcome: mockSetProjectWelcome,
+  isProjectWelcomeStatus: (value: unknown) => value === "skipped" || value === "completed",
+  isWelcomeVersion: (value: unknown) =>
+    typeof value === "number" && Number.isSafeInteger(value) && value > 0,
+}));
+
+vi.mock("../../../services/plugin/projectLayoutSeeds.js", () => ({
+  getProjectLayoutSeed: mockGetProjectLayoutSeed,
+  advanceProjectLayoutSeed: mockAdvanceProjectLayoutSeed,
+  releaseProjectLayoutSeedClaim: mockReleaseProjectLayoutSeedClaim,
+  isProjectLayoutSeedStatus: (value: unknown) =>
+    value === "pending" ||
+    value === "offered" ||
+    value === "applying" ||
+    value === "failed" ||
+    value === "settled",
+  isProjectLayoutSeedOutcome: (value: unknown) =>
+    value === "applied" || value === "opened" || value === "dismissed" || value === "ineligible",
+}));
 
 vi.mock("../../../services/PluginService.js", () => ({
   pluginService: {
@@ -98,11 +169,15 @@ vi.mock("../../../services/PluginService.js", () => ({
     // No-op for tests that don't care about implicit activation; the IPC
     // handler awaits it before resolving the impl set.
     activatePluginsForFileDecorationScope: vi.fn().mockResolvedValue(undefined),
-    // The three pull handlers (getActions / getPanelKinds / toolbarButtons)
-    // await waitForInit() so a renderer that mounts before startup activation
-    // settles still gets a populated snapshot — resolved-immediately in tests
-    // since we don't exercise the gate here.
+    listWorktreeDeleteNoteSources: vi.fn(() => []),
+    getWorktreeDeleteNotes: vi.fn().mockResolvedValue(null),
+    // The pull handlers (getActions / getPanelKinds / toolbarButtons, …)
+    // await waitForCatalog() so a renderer that mounts before the startup scan
+    // settles still gets a populated snapshot; only diagnostics waits for full
+    // startup. Resolved-immediately unless a test exercises a gate.
     waitForInit: vi.fn().mockResolvedValue(undefined),
+    waitForCatalog: vi.fn().mockResolvedValue(undefined),
+    waitForCatalogWithin: vi.fn().mockResolvedValue(undefined),
     getPluginRecipes: () => mockGetPluginRecipes(),
     getPluginTours: () => mockGetPluginTours(),
     recordPluginRecipeUse: (recipeId: string, timestamp: number) =>
@@ -111,19 +186,30 @@ vi.mock("../../../services/PluginService.js", () => ({
       mockUpdatePluginRecipeMetadata(recipeId, updates),
     listProjectPlugins: (...args: unknown[]) => mockListProjectPlugins(...args),
     setProjectPluginTrust: (...args: unknown[]) => mockSetProjectPluginTrust(...args),
-    getProjectSurfaceChoices: (...args: unknown[]) => mockGetProjectSurfaceChoices(...args),
+    getProjectSurfacesSnapshot: (...args: unknown[]) => mockGetProjectSurfacesSnapshot(...args),
     setProjectSurfaceChoice: (...args: unknown[]) => mockSetProjectSurfaceChoice(...args),
+    setProjectSurfaceChoices: (...args: unknown[]) => mockSetProjectSurfaceChoices(...args),
     activateStagedProjectPlugin: (...args: unknown[]) => mockActivateStagedProjectPlugin(...args),
     setProjectPluginMuted: (...args: unknown[]) => mockSetProjectPluginMuted(...args),
     getProjectPluginVisibility: (...args: unknown[]) => mockGetProjectPluginVisibility(...args),
     setProjectPluginVisibility: (...args: unknown[]) => mockSetProjectPluginVisibility(...args),
+    getInstalledPackageMode: (...args: unknown[]) => mockGetInstalledPackageMode(...args),
+    setProjectInstanceEnabled: (...args: unknown[]) => mockSetProjectInstanceEnabled(...args),
     setPluginVisibilityDefault: (...args: unknown[]) => mockSetPluginVisibilityDefault(...args),
     reloadProjectPlugins: (...args: unknown[]) => mockReloadProjectPlugins(...args),
     restartPluginWorker: (...args: unknown[]) => mockRestartPluginWorker(...args),
+    cancelPluginTask: (pluginId: string, taskId: string) => mockCancelPluginTask(pluginId, taskId),
+    dismissPluginTask: (pluginId: string, taskId: string) =>
+      mockDismissPluginTask(pluginId, taskId),
     listPluginRuntimeStatuses: (...args: unknown[]) => mockListPluginRuntimeStatuses(...args),
     getDataBackupSource: (...args: unknown[]) => mockGetDataBackupSource(...args),
     metrics: { recordInvoke: (...args: unknown[]) => mockMetricsRecordInvoke(...args) },
     isRemoteUnsupported: (pluginId: string) => mockIsRemoteUnsupported(pluginId),
+    connectAccountFromUi: (...args: unknown[]) => mockConnectAccountFromUi(...args),
+    setAccountTokenFromUi: (...args: unknown[]) => mockSetAccountTokenFromUi(...args),
+    cancelAccountConnectFromUi: (...args: unknown[]) => mockCancelAccountConnectFromUi(...args),
+    getPluginDisplayName: (pluginId: string) =>
+      pluginId === "acme.tools" ? "Acme Tools" : pluginId.split("__").at(-1),
   },
 }));
 
@@ -197,6 +283,12 @@ import {
   clearAllPluginContributionScopes,
   setPluginContributionScope,
 } from "../../../services/plugin/PluginContributionBroadcaster.js";
+import {
+  clearPluginHostedViewRegistry,
+  registerPluginHostedViews,
+} from "../../../services/plugin/PluginHostedViewRegistry.js";
+import type { PluginHostedViewDescriptor } from "../../../../shared/types/plugin.js";
+import { MAX_PROJECT_SURFACE_UPDATES } from "../../../../shared/types/plugin.js";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -220,6 +312,7 @@ beforeEach(() => {
   mockIsCachedViewWebContents.mockReturnValue(false);
   mockGetActiveWorktreeIdForWindow.mockResolvedValue(null);
   clearAllPluginContributionScopes();
+  hiddenPlugins.clear();
   _resetIpcGuardForTesting();
   markIpcSecurityReady();
 });
@@ -247,13 +340,17 @@ describe("registerPluginHandlers", () => {
     expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:panel-kinds-get");
     expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:agents-get");
     expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:forge-providers-get");
+    expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:context-providers-get");
+    expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:context-provider-search");
+    expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:context-references-resolve");
+    expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:context-providers-enabled-set");
   });
 
-  it("PLUGIN_LIST answers only after waitForInit() resolves", async () => {
+  it("PLUGIN_LIST answers only after waitForCatalog() resolves", async () => {
     const { pluginService } = await import("../../../services/PluginService.js");
-    const waitForInit = vi.mocked(pluginService.waitForInit);
+    const waitForCatalog = vi.mocked(pluginService.waitForCatalog);
     let releaseGate: () => void = () => {};
-    waitForInit.mockReturnValueOnce(
+    waitForCatalog.mockReturnValueOnce(
       new Promise<void>((resolve) => {
         releaseGate = resolve;
       })
@@ -271,11 +368,11 @@ describe("registerPluginHandlers", () => {
     expect(mockListPlugins).toHaveBeenCalledTimes(1);
   });
 
-  it("PLUGIN_SET_ENABLED applies only after waitForInit() resolves", async () => {
+  it("PLUGIN_SET_ENABLED applies only after waitForCatalog() resolves", async () => {
     const { pluginService } = await import("../../../services/PluginService.js");
-    const waitForInit = vi.mocked(pluginService.waitForInit);
+    const waitForCatalog = vi.mocked(pluginService.waitForCatalog);
     let releaseGate: () => void = () => {};
-    waitForInit.mockReturnValueOnce(
+    waitForCatalog.mockReturnValueOnce(
       new Promise<void>((resolve) => {
         releaseGate = resolve;
       })
@@ -1701,11 +1798,11 @@ describe("pull handlers wait for PluginService init (#9285)", () => {
     ) => unknown;
   }
 
-  it("PLUGIN_ACTIONS_GET reads the registry only after waitForInit() resolves", async () => {
+  it("PLUGIN_ACTIONS_GET reads the registry only after waitForCatalog() resolves", async () => {
     const { pluginService } = await import("../../../services/PluginService.js");
-    const waitForInit = vi.mocked(pluginService.waitForInit);
+    const waitForCatalog = vi.mocked(pluginService.waitForCatalog);
     let releaseGate: () => void = () => {};
-    waitForInit.mockReturnValueOnce(
+    waitForCatalog.mockReturnValueOnce(
       new Promise<void>((resolve) => {
         releaseGate = resolve;
       })
@@ -1720,20 +1817,25 @@ describe("pull handlers wait for PluginService init (#9285)", () => {
     expect(mockListPluginActions).toHaveBeenCalledTimes(1);
   });
 
-  it("PLUGIN_PROJECT_SURFACE_CHOICE_SET records an answer only after waitForInit() resolves", async () => {
+  it("PLUGIN_PROJECT_SURFACE_CHOICE_SET records an answer only after waitForCatalog() resolves", async () => {
     // The answer is recorded against the slot's owner, read from the claim
     // registry that startup activation fills.
     const { pluginService } = await import("../../../services/PluginService.js");
-    const waitForInit = vi.mocked(pluginService.waitForInit);
+    const waitForCatalog = vi.mocked(pluginService.waitForCatalog);
     let releaseGate: () => void = () => {};
-    waitForInit.mockReturnValueOnce(
+    waitForCatalog.mockReturnValueOnce(
       new Promise<void>((resolve) => {
         releaseGate = resolve;
       })
     );
     const project = "a".repeat(64);
     mockGetProjectForWebContents.mockReturnValue(project);
-    mockSetProjectSurfaceChoice.mockReturnValue({ projectId: project, choices: {} });
+    mockSetProjectSurfaceChoice.mockReturnValue({
+      projectId: project,
+      revision: 1,
+      slots: {},
+      choices: {},
+    });
     const handler = getHandler("plugin:project-surface-choice-set");
     const inFlight = handler({ sender: { id: 1 } }, "emptyCanvas", "stock") as Promise<unknown>;
     await Promise.resolve();
@@ -1741,49 +1843,62 @@ describe("pull handlers wait for PluginService init (#9285)", () => {
     expect(mockSetProjectSurfaceChoice).not.toHaveBeenCalled();
     releaseGate();
     await inFlight;
-    expect(mockSetProjectSurfaceChoice).toHaveBeenCalledWith(project, "emptyCanvas", "stock");
+    expect(mockSetProjectSurfaceChoice).toHaveBeenCalledWith(
+      project,
+      "emptyCanvas",
+      "stock",
+      undefined
+    );
   });
 
-  it("PLUGIN_PROJECT_SURFACE_CHOICES_GET reads only after waitForInit() resolves", async () => {
-    // Same await depth as the setter, so a read sent after a write lands after it.
+  it("PLUGIN_PROJECT_SURFACES_GET reads only after waitForCatalog() resolves", async () => {
+    // Same await depth as the setter, so a read sent after a write lands after
+    // it — and a read before init would report "no surfaces" for a project
+    // whose plugins have not loaded yet.
     const { pluginService } = await import("../../../services/PluginService.js");
-    const waitForInit = vi.mocked(pluginService.waitForInit);
+    const waitForCatalog = vi.mocked(pluginService.waitForCatalog);
     let releaseGate: () => void = () => {};
-    waitForInit.mockReturnValueOnce(
+    waitForCatalog.mockReturnValueOnce(
       new Promise<void>((resolve) => {
         releaseGate = resolve;
       })
     );
     const project = "a".repeat(64);
     mockGetProjectForWebContents.mockReturnValue(project);
-    mockGetProjectSurfaceChoices.mockReturnValue({});
-    const handler = getHandler("plugin:project-surface-choices-get");
+    const snapshot = { projectId: project, revision: 0, slots: {}, choices: {} };
+    mockGetProjectSurfacesSnapshot.mockReturnValue(snapshot);
+    const handler = getHandler("plugin:project-surfaces-get");
     const inFlight = handler({ sender: { id: 1 } }) as Promise<unknown>;
     await Promise.resolve();
     await Promise.resolve();
-    expect(mockGetProjectSurfaceChoices).not.toHaveBeenCalled();
+    expect(mockGetProjectSurfacesSnapshot).not.toHaveBeenCalled();
     releaseGate();
-    expect(await inFlight).toEqual({ projectId: project, choices: {} });
+    expect(await inFlight).toEqual(snapshot);
   });
 
-  it("answers a surface-choices read sent after a write with that write", async () => {
+  it("answers a surfaces read sent after a write with that write", async () => {
     // Renderers adopt only what main returns, so a read queued behind a write
     // must not overtake it on the way through init.
     const { pluginService } = await import("../../../services/PluginService.js");
-    const waitForInit = vi.mocked(pluginService.waitForInit);
+    const waitForCatalog = vi.mocked(pluginService.waitForCatalog);
     let releaseGate: () => void = () => {};
     const gate = new Promise<void>((resolve) => {
       releaseGate = resolve;
     });
-    waitForInit.mockReturnValueOnce(gate).mockReturnValueOnce(gate);
+    waitForCatalog.mockReturnValueOnce(gate).mockReturnValueOnce(gate);
     const project = "a".repeat(64);
     let disk = {};
     const written = { emptyCanvas: { pluginId: "acme.dashboard", choice: "stock", decidedAt: 1 } };
     mockSetProjectSurfaceChoice.mockImplementation(() => {
       disk = written;
-      return { projectId: project, choices: disk };
+      return { projectId: project, revision: 2, slots: {}, choices: disk };
     });
-    mockGetProjectSurfaceChoices.mockImplementation(() => disk);
+    mockGetProjectSurfacesSnapshot.mockImplementation(() => ({
+      projectId: project,
+      revision: 2,
+      slots: {},
+      choices: disk,
+    }));
     mockGetProjectForWebContents.mockReturnValue(project);
 
     const write = getHandler("plugin:project-surface-choice-set")(
@@ -1791,20 +1906,20 @@ describe("pull handlers wait for PluginService init (#9285)", () => {
       "emptyCanvas",
       "stock"
     ) as Promise<unknown>;
-    const read = getHandler("plugin:project-surface-choices-get")({
+    const read = getHandler("plugin:project-surfaces-get")({
       sender: { id: 1 },
     }) as Promise<unknown>;
     releaseGate();
 
     await write;
-    expect(await read).toEqual({ projectId: project, choices: written });
+    expect(await read).toEqual({ projectId: project, revision: 2, slots: {}, choices: written });
   });
 
-  it("PLUGIN_TOOLBAR_BUTTONS reads the registry only after waitForInit() resolves", async () => {
+  it("PLUGIN_TOOLBAR_BUTTONS reads the registry only after waitForCatalog() resolves", async () => {
     const { pluginService } = await import("../../../services/PluginService.js");
-    const waitForInit = vi.mocked(pluginService.waitForInit);
+    const waitForCatalog = vi.mocked(pluginService.waitForCatalog);
     let releaseGate: () => void = () => {};
-    waitForInit.mockReturnValueOnce(
+    waitForCatalog.mockReturnValueOnce(
       new Promise<void>((resolve) => {
         releaseGate = resolve;
       })
@@ -1819,11 +1934,36 @@ describe("pull handlers wait for PluginService init (#9285)", () => {
     expect(mockGetPluginToolbarButtonIds).toHaveBeenCalledTimes(1);
   });
 
-  it("PLUGIN_PANEL_KINDS_GET reads the registry only after waitForInit() resolves", async () => {
+  it("catalog reads answer while startup activation is still pending; diagnostics waits for it (#14127)", async () => {
     const { pluginService } = await import("../../../services/PluginService.js");
-    const waitForInit = vi.mocked(pluginService.waitForInit);
+    let releaseInit: () => void = () => {};
+    vi.mocked(pluginService.waitForInit).mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        releaseInit = resolve;
+      })
+    );
+    const getDiagnosticsSnapshot = vi.fn(() => ({ plugins: [] }));
+    Object.assign(pluginService, { getDiagnosticsSnapshot });
+
+    await getHandler("plugin:list")();
+    await getHandler("plugin:toolbar-buttons")({ sender: { id: 1 } });
+    await getHandler("plugin:panel-kinds-get")({ sender: { id: 1 } });
+    expect(mockListPlugins).toHaveBeenCalledTimes(1);
+    expect(mockGetPluginToolbarButtonIds).toHaveBeenCalledTimes(1);
+
+    const diagnostics = getHandler("plugin:get-diagnostics-snapshot")() as Promise<unknown>;
+    await vi.waitFor(() => expect(pluginService.waitForInit).toHaveBeenCalledTimes(1));
+    expect(getDiagnosticsSnapshot).not.toHaveBeenCalled();
+    releaseInit();
+    await diagnostics;
+    expect(getDiagnosticsSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it("PLUGIN_PANEL_KINDS_GET reads the registry only after waitForCatalog() resolves", async () => {
+    const { pluginService } = await import("../../../services/PluginService.js");
+    const waitForCatalog = vi.mocked(pluginService.waitForCatalog);
     let releaseGate: () => void = () => {};
-    waitForInit.mockReturnValueOnce(
+    waitForCatalog.mockReturnValueOnce(
       new Promise<void>((resolve) => {
         releaseGate = resolve;
       })
@@ -1846,11 +1986,11 @@ describe("pull handlers wait for PluginService init (#9285)", () => {
     expect(resolved).toBe(true);
   });
 
-  it("PLUGIN_CONTEXT_MENU_ITEMS reads the registry only after waitForInit() resolves", async () => {
+  it("PLUGIN_CONTEXT_MENU_ITEMS reads the registry only after waitForCatalog() resolves", async () => {
     const { pluginService } = await import("../../../services/PluginService.js");
-    const waitForInit = vi.mocked(pluginService.waitForInit);
+    const waitForCatalog = vi.mocked(pluginService.waitForCatalog);
     let releaseGate: () => void = () => {};
-    waitForInit.mockReturnValueOnce(
+    waitForCatalog.mockReturnValueOnce(
       new Promise<void>((resolve) => {
         releaseGate = resolve;
       })
@@ -1951,11 +2091,11 @@ describe("PLUGIN_FORGE_PROVIDERS_GET handler", () => {
     )![1] as (...args: unknown[]) => unknown;
   }
 
-  it("reads the registry only after waitForInit() resolves", async () => {
+  it("reads the registry only after waitForCatalog() resolves", async () => {
     const { pluginService } = await import("../../../services/PluginService.js");
-    const waitForInit = vi.mocked(pluginService.waitForInit);
+    const waitForCatalog = vi.mocked(pluginService.waitForCatalog);
     let releaseGate: () => void = () => {};
-    waitForInit.mockReturnValueOnce(
+    waitForCatalog.mockReturnValueOnce(
       new Promise<void>((resolve) => {
         releaseGate = resolve;
       })
@@ -1972,7 +2112,59 @@ describe("PLUGIN_FORGE_PROVIDERS_GET handler", () => {
   });
 });
 
+describe("worktree delete notes handlers (#13805)", () => {
+  const SENDER = { sender: { id: 1 } };
+
+  function handlerFor(channel: string) {
+    registerPluginHandlers();
+    return mockIpcMainHandle.mock.calls.find((c: unknown[]) => c[0] === channel)![1] as (
+      ...args: unknown[]
+    ) => unknown;
+  }
+
+  it("asks only about the sender's own project, never one the payload names", async () => {
+    const { pluginService } = await import("../../../services/PluginService.js");
+    mockGetProjectForWebContents.mockReturnValue("project-b");
+    vi.mocked(pluginService.getWorktreeDeleteNotes).mockResolvedValueOnce({ status: "no-answer" });
+
+    await handlerFor("plugin:worktree-delete-note-sources-get")(SENDER);
+    expect(pluginService.listWorktreeDeleteNoteSources).toHaveBeenCalledWith("project-b");
+
+    await expect(
+      handlerFor("plugin:worktree-delete-notes-get")(SENDER, {
+        worktreeId: "/repo/wt",
+        pluginId: "acme.sync",
+        projectId: "project-a",
+      })
+    ).resolves.toEqual({ status: "no-answer" });
+    expect(pluginService.getWorktreeDeleteNotes).toHaveBeenCalledWith(
+      "project-b",
+      "acme.sync",
+      "/repo/wt"
+    );
+  });
+
+  it("has nothing to ask from a sender with no project, and refuses a malformed request", async () => {
+    const { pluginService } = await import("../../../services/PluginService.js");
+    mockGetProjectForWebContents.mockReturnValue(null);
+    await expect(handlerFor("plugin:worktree-delete-note-sources-get")(SENDER)).resolves.toEqual(
+      []
+    );
+    await expect(
+      handlerFor("plugin:worktree-delete-notes-get")(SENDER, { worktreeId: "/wt", pluginId: "a" })
+    ).resolves.toBeNull();
+    expect(pluginService.listWorktreeDeleteNoteSources).not.toHaveBeenCalled();
+
+    mockGetProjectForWebContents.mockReturnValue("project-b");
+    await expect(
+      handlerFor("plugin:worktree-delete-notes-get")(SENDER, { worktreeId: "", pluginId: "a" })
+    ).rejects.toThrow(/worktreeId/);
+  });
+});
+
 describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
+  const SENDER = { sender: { id: 1 } };
+
   function getHandler() {
     registerPluginHandlers();
     return mockIpcMainHandle.mock.calls.find(
@@ -1982,8 +2174,8 @@ describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
 
   it("returns {} for empty scope or empty paths without calling the registry", async () => {
     const handler = getHandler();
-    expect(await handler({}, "", ["a.ts"])).toEqual({});
-    expect(await handler({}, "worktree-diff:/r", [])).toEqual({});
+    expect(await handler(SENDER, "", ["a.ts"])).toEqual({});
+    expect(await handler(SENDER, "worktree-diff:/r", [])).toEqual({});
     expect(mockGetFileDecorationImpls).not.toHaveBeenCalled();
   });
 
@@ -2009,11 +2201,41 @@ describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
     };
     mockGetFileDecorationImpls.mockReturnValue([first, second]);
     const handler = getHandler();
-    const result = await handler({}, "worktree-diff:/r", ["a.ts", "b.ts"]);
+    const result = await handler(SENDER, "worktree-diff:/r", ["a.ts", "b.ts"]);
     expect(result).toEqual({
       "a.ts": { badge: "1", color: "text-status-warning", tooltip: "from second" },
       "b.ts": { badge: "2" },
     });
+  });
+
+  it("orders a project plugin ahead of an installed one regardless of load order", async () => {
+    const entry = (pluginId: string, badge: string) => ({
+      pluginId,
+      contributionId: "d",
+      impl: { provideDecorations: vi.fn().mockResolvedValue({ "a.ts": { badge } }) },
+    });
+    setPluginContributionScope("p.project", "proj-a");
+    mockGetFileDecorationImpls.mockReturnValue([
+      entry("p.installed", "I"),
+      entry("p.project", "P"),
+    ]);
+    mockGetProjectForWebContents.mockReturnValue("proj-a");
+    const handler = getHandler();
+    const result = await handler(SENDER, "worktree-files:/r", ["a.ts"]);
+    expect(result).toEqual({ "a.ts": { badge: "P" } });
+  });
+
+  it("keeps another project's plugin out of the result", async () => {
+    const provide = vi.fn().mockResolvedValue({ "a.ts": { badge: "P" } });
+    setPluginContributionScope("p.project", "proj-a");
+    mockGetFileDecorationImpls.mockReturnValue([
+      { pluginId: "p.project", contributionId: "d", impl: { provideDecorations: provide } },
+    ]);
+    mockGetProjectForWebContents.mockReturnValue("proj-b");
+    const handler = getHandler();
+    const result = await handler(SENDER, "worktree-files:/r", ["a.ts"]);
+    expect(result).toEqual({});
+    expect(provide).not.toHaveBeenCalled();
   });
 
   it("deduplicates requested paths before invoking impls", async () => {
@@ -2022,7 +2244,7 @@ describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
       { pluginId: "p", contributionId: "d", impl: { provideDecorations: provide } },
     ]);
     const handler = getHandler();
-    await handler({}, "s:1", ["a.ts", "a.ts", "b.ts"]);
+    await handler(SENDER, "s:1", ["a.ts", "a.ts", "b.ts"]);
     expect(provide).toHaveBeenCalledWith("s:1", ["a.ts", "b.ts"]);
   });
 
@@ -2043,7 +2265,7 @@ describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
     ]);
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const handler = getHandler();
-    expect(await handler({}, "s:1", ["a.ts"])).toEqual({ "a.ts": { badge: "3" } });
+    expect(await handler(SENDER, "s:1", ["a.ts"])).toEqual({ "a.ts": { badge: "3" } });
     warn.mockRestore();
   });
 
@@ -2064,7 +2286,7 @@ describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
     ]);
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const handler = getHandler();
-    await handler({}, "worktree-diff:/r", ["a.ts"]);
+    await handler(SENDER, "worktree-diff:/r", ["a.ts"]);
     // Healthy provider is not audited; only the rejecting one is.
     expect(mockAuditAppend).toHaveBeenCalledTimes(1);
     const record = mockAuditAppend.mock.calls[0][0];
@@ -2102,7 +2324,7 @@ describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
       ]);
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
       const handler = getHandler();
-      const promise = handler({}, "worktree-diff:/r", ["a.ts"]) as Promise<unknown>;
+      const promise = handler(SENDER, "worktree-diff:/r", ["a.ts"]) as Promise<unknown>;
       await vi.advanceTimersByTimeAsync(3000);
       await promise;
       expect(mockAuditAppend).toHaveBeenCalledTimes(1);
@@ -2134,7 +2356,7 @@ describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
       },
     ]);
     const handler = getHandler();
-    await handler({}, "worktree-diff:/r", ["a.ts"]);
+    await handler(SENDER, "worktree-diff:/r", ["a.ts"]);
     expect(mockAuditAppend).not.toHaveBeenCalled();
   });
 
@@ -2161,7 +2383,7 @@ describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
       ]);
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
       const handler = getHandler();
-      const promise = handler({}, "s:1", ["a.ts"]) as Promise<unknown>;
+      const promise = handler(SENDER, "s:1", ["a.ts"]) as Promise<unknown>;
       await vi.advanceTimersByTimeAsync(3000);
       await promise;
       expect(mockAuditAppend).toHaveBeenCalledTimes(2);
@@ -2192,7 +2414,7 @@ describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
       },
     ]);
     const handler = getHandler();
-    expect(await handler({}, "s:1", ["a.ts"])).toEqual({});
+    expect(await handler(SENDER, "s:1", ["a.ts"])).toEqual({});
   });
 
   // Issue #9953: the renderer reads `decoration.url` as the click target
@@ -2217,7 +2439,7 @@ describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
       },
     ]);
     const handler = getHandler();
-    const result = (await handler({}, "worktree-diff:/r", ["a.ts"])) as Record<
+    const result = (await handler(SENDER, "worktree-diff:/r", ["a.ts"])) as Record<
       string,
       { badge?: string; tooltip?: string; color?: string; url?: string }
     >;
@@ -2245,7 +2467,7 @@ describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
       },
     ]);
     const handler = getHandler();
-    expect(await handler({}, "s:1", ["a.ts"])).toEqual({
+    expect(await handler(SENDER, "s:1", ["a.ts"])).toEqual({
       "a.ts": { url: "https://example.test/run/42" },
     });
   });
@@ -2268,7 +2490,7 @@ describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
       },
     ]);
     const handler = getHandler();
-    expect(await handler({}, "s:1", ["a.ts"])).toEqual({
+    expect(await handler(SENDER, "s:1", ["a.ts"])).toEqual({
       "a.ts": { url: "https://example.test/replacement" },
     });
   });
@@ -2287,7 +2509,7 @@ describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
       },
     ]);
     const handler = getHandler();
-    expect(await handler({}, "s:1", ["a.ts"])).toEqual({ "a.ts": { badge: "7" } });
+    expect(await handler(SENDER, "s:1", ["a.ts"])).toEqual({ "a.ts": { badge: "7" } });
   });
 
   it("drops decorations for paths the caller did not request", async () => {
@@ -2304,7 +2526,7 @@ describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
       },
     ]);
     const handler = getHandler();
-    expect(await handler({}, "s:1", ["requested.ts"])).toEqual({
+    expect(await handler(SENDER, "s:1", ["requested.ts"])).toEqual({
       "requested.ts": { badge: "1" },
     });
   });
@@ -2327,12 +2549,67 @@ describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
         },
       ]);
       const handler = getHandler();
-      const promise = handler({}, "s:1", ["a.ts"]) as Promise<unknown>;
+      const promise = handler(SENDER, "s:1", ["a.ts"]) as Promise<unknown>;
       await vi.advanceTimersByTimeAsync(3000);
       expect(await promise).toEqual({ "a.ts": { badge: "4" } });
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  describe("scoped to the sender's project (#13765)", () => {
+    const LOCAL_A = "acme.local-a";
+    const localImpl = {
+      pluginId: LOCAL_A,
+      contributionId: "d",
+      impl: { provideDecorations: vi.fn().mockResolvedValue({ "a.ts": { badge: "A" } }) },
+    };
+    const globalImpl = {
+      pluginId: "acme.global",
+      contributionId: "d",
+      impl: { provideDecorations: vi.fn().mockResolvedValue({ "a.ts": { tooltip: "G" } }) },
+    };
+
+    it("activates and queries only the providers the sender's project can see", async () => {
+      const { pluginService } = await import("../../../services/PluginService.js");
+      setPluginContributionScope(LOCAL_A, "project-a");
+      mockGetProjectForWebContents.mockReturnValue("project-b");
+      mockGetFileDecorationImpls.mockReturnValue([localImpl, globalImpl]);
+
+      expect(await getHandler()(SENDER, "s:1", ["a.ts"])).toEqual({ "a.ts": { tooltip: "G" } });
+      expect(pluginService.activatePluginsForFileDecorationScope).toHaveBeenCalledWith(
+        "s:1",
+        "project-b"
+      );
+      expect(localImpl.impl.provideDecorations).not.toHaveBeenCalled();
+    });
+
+    it("neither activates nor queries an installed plugin the sender's project hides", async () => {
+      const { pluginService } = await import("../../../services/PluginService.js");
+      hidePluginInProject("project-b", "acme.global");
+      mockGetFileDecorationImpls.mockReturnValue([globalImpl]);
+
+      mockGetProjectForWebContents.mockReturnValue("project-b");
+      expect(await getHandler()(SENDER, "s:1", ["a.ts"])).toEqual({});
+      expect(globalImpl.impl.provideDecorations).not.toHaveBeenCalled();
+      expect(pluginService.activatePluginsForFileDecorationScope).toHaveBeenCalledWith(
+        "s:1",
+        "project-b"
+      );
+
+      mockGetProjectForWebContents.mockReturnValue("project-c");
+      expect(await getHandler()(SENDER, "s:1", ["a.ts"])).toEqual({ "a.ts": { tooltip: "G" } });
+    });
+
+    it("still serves the owning project's own provider", async () => {
+      setPluginContributionScope(LOCAL_A, "project-a");
+      mockGetProjectForWebContents.mockReturnValue("project-a");
+      mockGetFileDecorationImpls.mockReturnValue([localImpl, globalImpl]);
+
+      expect(await getHandler()(SENDER, "s:1", ["a.ts"])).toEqual({
+        "a.ts": { badge: "A", tooltip: "G" },
+      });
+    });
   });
 });
 
@@ -2479,9 +2756,9 @@ describe("plugin install jobs (#11302)", () => {
 
     it("plugin:tours-get returns the tours after init, for a sender with no project (#12773)", async () => {
       const { pluginService } = await import("../../../services/PluginService.js");
-      const waitForInit = vi.mocked(pluginService.waitForInit);
+      const waitForCatalog = vi.mocked(pluginService.waitForCatalog);
       let releaseGate: () => void = () => {};
-      waitForInit.mockReturnValueOnce(new Promise<void>((resolve) => (releaseGate = resolve)));
+      waitForCatalog.mockReturnValueOnce(new Promise<void>((resolve) => (releaseGate = resolve)));
       const tour = { id: "acme.tools.welcome", pluginId: "acme.tools", title: "Welcome" };
       mockGetPluginTours.mockReturnValueOnce([tour]);
 
@@ -2492,10 +2769,84 @@ describe("plugin install jobs (#11302)", () => {
       await expect(inFlight).resolves.toEqual([tour]);
     });
 
+    it("plugin:hosted-views-get serves each project only the views it may see (#13770)", async () => {
+      const LOCAL = "project__project-a__acme.local";
+      const view = (pluginId: string): PluginHostedViewDescriptor => ({
+        id: `plugin-view:${pluginId}/prefs`,
+        pluginId,
+        viewId: "prefs",
+        location: "settings",
+        name: `${pluginId} settings`,
+        componentPath: `plugin://${pluginId}/prefs.js`,
+      });
+      registerPluginHostedViews("acme.tools", [view("acme.tools")]);
+      registerPluginHostedViews(LOCAL, [view(LOCAL)]);
+      setPluginContributionScope(LOCAL, "project-a");
+      const pull = () => getHandler("plugin:hosted-views-get")({ sender: { id: 1 } });
+
+      try {
+        // A project plugin's view reaches only its own project.
+        mockGetProjectForWebContents.mockReturnValue("project-b");
+        await expect(pull()).resolves.toEqual([view("acme.tools")]);
+        mockGetProjectForWebContents.mockReturnValue("project-a");
+        await expect(pull()).resolves.toEqual([view("acme.tools"), view(LOCAL)]);
+
+        // An installed plugin's view reaches only projects that show it.
+        hidePluginInProject("project-a", "acme.tools");
+        await expect(pull()).resolves.toEqual([view(LOCAL)]);
+        mockGetProjectForWebContents.mockReturnValue("project-b");
+        await expect(pull()).resolves.toEqual([view("acme.tools")]);
+      } finally {
+        clearPluginHostedViewRegistry();
+      }
+    });
+
+    it("plugin:recipes-get serves only the recipes the sender's project shows, after init (#13765)", async () => {
+      const { pluginService } = await import("../../../services/PluginService.js");
+      const waitForCatalog = vi.mocked(pluginService.waitForCatalog);
+      let releaseGate: () => void = () => {};
+      waitForCatalog.mockReturnValueOnce(new Promise<void>((resolve) => (releaseGate = resolve)));
+      mockGetPluginRecipes.mockReturnValue([registered]);
+      hidePluginInProject("project-a", "acme.tools");
+      mockGetProjectForWebContents.mockReturnValue("project-a");
+
+      try {
+        const inFlight = getHandler("plugin:recipes-get")({
+          sender: { id: 1 },
+        }) as Promise<unknown>;
+        await Promise.resolve();
+        expect(mockGetPluginRecipes).not.toHaveBeenCalled();
+        releaseGate();
+        await expect(inFlight).resolves.toEqual([]);
+
+        mockGetProjectForWebContents.mockReturnValue("project-b");
+        await expect(getHandler("plugin:recipes-get")({ sender: { id: 1 } })).resolves.toEqual([
+          registered,
+        ]);
+        // A sender with no project binding is not a project that hid anything.
+        mockGetProjectForWebContents.mockReturnValue(null);
+        await expect(getHandler("plugin:recipes-get")({ sender: { id: 1 } })).resolves.toEqual([
+          registered,
+        ]);
+      } finally {
+        mockGetPluginRecipes.mockReturnValue([]);
+      }
+    });
+
+    // The metadata writes resolve the recipe through the sender's project view,
+    // so each starts from a registry that holds it and a sender to resolve.
+    const sender = { sender: { id: 1 } };
+    afterEach(() => {
+      mockGetPluginRecipes.mockReturnValue([]);
+      mockRecordPluginRecipeUse.mockReset();
+      mockUpdatePluginRecipeMetadata.mockReset();
+    });
+
     it("plugin:recipe-record-use forwards a valid id and timestamp", async () => {
+      mockGetPluginRecipes.mockReturnValue([registered]);
       const handler = getHandler("plugin:recipe-record-use");
       mockRecordPluginRecipeUse.mockResolvedValueOnce(registered);
-      await expect(handler({}, "acme.tools.deploy", 1234)).resolves.toEqual(registered);
+      await expect(handler(sender, "acme.tools.deploy", 1234)).resolves.toEqual(registered);
       expect(mockRecordPluginRecipeUse).toHaveBeenCalledWith("acme.tools.deploy", 1234);
     });
 
@@ -2503,6 +2854,7 @@ describe("plugin install jobs (#11302)", () => {
       // TS types are not runtime guarantees across contextBridge — a buggy or
       // hostile renderer can send anything, and a NaN timestamp would otherwise
       // be persisted as a run that sorts unpredictably forever.
+      mockGetPluginRecipes.mockReturnValue([registered]);
       const handler = getHandler("plugin:recipe-record-use");
       for (const args of [
         ["", 1] as const,
@@ -2512,16 +2864,17 @@ describe("plugin install jobs (#11302)", () => {
         ["acme.tools.deploy", -5] as const,
         ["acme.tools.deploy", "1234"] as const,
       ]) {
-        await expect(handler({}, ...args)).rejects.toThrow();
+        await expect(handler(sender, ...args)).rejects.toThrow();
       }
       expect(mockRecordPluginRecipeUse).not.toHaveBeenCalled();
     });
 
     it("plugin:recipe-metadata-update accepts only the two user-owned fields", async () => {
+      mockGetPluginRecipes.mockReturnValue([registered]);
       const handler = getHandler("plugin:recipe-metadata-update");
       mockUpdatePluginRecipeMetadata.mockResolvedValue(registered);
 
-      await handler({}, "acme.tools.deploy", { showInEmptyState: false, autoAssign: null });
+      await handler(sender, "acme.tools.deploy", { showInEmptyState: false, autoAssign: null });
       expect(mockUpdatePluginRecipeMetadata).toHaveBeenCalledWith("acme.tools.deploy", {
         showInEmptyState: false,
         autoAssign: null,
@@ -2530,11 +2883,12 @@ describe("plugin install jobs (#11302)", () => {
       // Provenance is resolved from the registry, never taken from the caller —
       // an unknown key is dropped rather than reaching the store.
       mockUpdatePluginRecipeMetadata.mockClear();
-      await handler({}, "acme.tools.deploy", { pluginId: "evil.plugin", terminals: [] });
+      await handler(sender, "acme.tools.deploy", { pluginId: "evil.plugin", terminals: [] });
       expect(mockUpdatePluginRecipeMetadata).toHaveBeenCalledWith("acme.tools.deploy", {});
     });
 
     it("plugin:recipe-metadata-update rejects malformed patch values", async () => {
+      mockGetPluginRecipes.mockReturnValue([registered]);
       const handler = getHandler("plugin:recipe-metadata-update");
       mockUpdatePluginRecipeMetadata.mockResolvedValue(registered);
       for (const patch of [
@@ -2543,9 +2897,47 @@ describe("plugin install jobs (#11302)", () => {
         { showInEmptyState: "yes" },
         { autoAssign: "sometimes" },
       ]) {
-        await expect(handler({}, "acme.tools.deploy", patch)).rejects.toThrow();
+        await expect(handler(sender, "acme.tools.deploy", patch)).rejects.toThrow();
       }
       expect(mockUpdatePluginRecipeMetadata).not.toHaveBeenCalled();
+    });
+
+    it("refuses a metadata write to a recipe the sender's project cannot see (#13796)", async () => {
+      const LOCAL = "project__project-a__acme.local";
+      const local = {
+        ...registered,
+        id: `${LOCAL}.boot`,
+        origin: { kind: "plugin" as const, pluginId: LOCAL, contributionId: "boot" },
+      };
+      setPluginContributionScope(LOCAL, "project-a");
+      hidePluginInProject("project-b", "acme.tools");
+      mockGetPluginRecipes.mockReturnValue([registered, local]);
+      mockRecordPluginRecipeUse.mockResolvedValue(local);
+      mockUpdatePluginRecipeMetadata.mockResolvedValue(local);
+      const recordUse = getHandler("plugin:recipe-record-use");
+      const update = getHandler("plugin:recipe-metadata-update");
+
+      // Another project's plugin recipe, from a foreign project and from a
+      // sender with no project at all.
+      for (const project of ["project-b", null]) {
+        mockGetProjectForWebContents.mockReturnValue(project);
+        await expect(recordUse(sender, local.id, 1)).rejects.toThrow(/not found/);
+        await expect(update(sender, local.id, { showInEmptyState: true })).rejects.toThrow(
+          /not found/
+        );
+      }
+      // An installed plugin hidden in the sender's project.
+      mockGetProjectForWebContents.mockReturnValue("project-b");
+      await expect(recordUse(sender, registered.id, 1)).rejects.toThrow(/not found/);
+      // An id the registry does not hold at all.
+      await expect(recordUse(sender, "acme.tools.missing", 1)).rejects.toThrow(/not found/);
+      expect(mockRecordPluginRecipeUse).not.toHaveBeenCalled();
+      expect(mockUpdatePluginRecipeMetadata).not.toHaveBeenCalled();
+
+      // The owning project writes through.
+      mockGetProjectForWebContents.mockReturnValue("project-a");
+      await expect(recordUse(sender, local.id, 1)).resolves.toEqual(local);
+      await expect(update(sender, local.id, { showInEmptyState: true })).resolves.toEqual(local);
     });
   });
 });
@@ -2609,31 +3001,36 @@ describe("project-local plugin handlers", () => {
     ).rejects.toThrow(/no project/);
   });
 
-  it("reads surface choices for the sender's project, named by that project", async () => {
-    const choices = { emptyCanvas: { pluginId: "acme.dashboard", choice: "stock", decidedAt: 1 } };
-    mockGetProjectSurfaceChoices.mockReturnValue(choices);
+  it("reads the sender's project slot state, named by that project", async () => {
+    const snapshot = {
+      projectId: PROJECT,
+      revision: 3,
+      slots: {},
+      choices: { emptyCanvas: { pluginId: "acme.dashboard", choice: "stock", decidedAt: 1 } },
+    };
+    mockGetProjectSurfacesSnapshot.mockReturnValue(snapshot);
     mockGetProjectForWebContents.mockReturnValue(PROJECT);
 
-    expect(await getHandler("plugin:project-surface-choices-get")({ sender: { id: 1 } })).toEqual({
-      projectId: PROJECT,
-      choices,
-    });
-    expect(mockGetProjectSurfaceChoices).toHaveBeenCalledWith(PROJECT);
+    expect(await getHandler("plugin:project-surfaces-get")({ sender: { id: 1 } })).toEqual(
+      snapshot
+    );
+    // The project comes from the sender's registration; the call takes no argument.
+    expect(mockGetProjectSurfacesSnapshot).toHaveBeenCalledWith(PROJECT);
   });
 
   it("answers null, not an empty set, for a sender with no project binding yet", async () => {
     // An empty set would read as "never answered" and re-ask a user who did.
     mockGetProjectForWebContents.mockReturnValue(null);
 
-    expect(
-      await getHandler("plugin:project-surface-choices-get")({ sender: { id: 1 } })
-    ).toBeNull();
-    expect(mockGetProjectSurfaceChoices).not.toHaveBeenCalled();
+    expect(await getHandler("plugin:project-surfaces-get")({ sender: { id: 1 } })).toBeNull();
+    expect(mockGetProjectSurfacesSnapshot).not.toHaveBeenCalled();
   });
 
   it("records a surface choice against the sender's project without naming a plugin", async () => {
     const snapshot = {
       projectId: PROJECT,
+      revision: 4,
+      slots: {},
       choices: { emptyCanvas: { pluginId: "acme.dashboard", choice: "stock", decidedAt: 1 } },
     };
     mockSetProjectSurfaceChoice.mockReturnValue(snapshot);
@@ -2643,26 +3040,111 @@ describe("project-local plugin handlers", () => {
     // Main answers about the slot's current owner; the renderer only says which
     // canvas it wants.
     expect(await set({ sender: { id: 1 } }, "emptyCanvas", "stock")).toEqual(snapshot);
-    expect(mockSetProjectSurfaceChoice).toHaveBeenCalledWith(PROJECT, "emptyCanvas", "stock");
+    expect(mockSetProjectSurfaceChoice).toHaveBeenCalledWith(
+      PROJECT,
+      "emptyCanvas",
+      "stock",
+      undefined
+    );
 
     await set({ sender: { id: 1 } }, "emptyCanvas", null);
-    expect(mockSetProjectSurfaceChoice).toHaveBeenLastCalledWith(PROJECT, "emptyCanvas", null);
+    expect(mockSetProjectSurfaceChoice).toHaveBeenLastCalledWith(
+      PROJECT,
+      "emptyCanvas",
+      null,
+      undefined
+    );
+
+    // A selectable answer names its option; main checks it against what is on offer.
+    await set({ sender: { id: 1 } }, "emptyCanvas", "surface", "acme.side");
+    expect(mockSetProjectSurfaceChoice).toHaveBeenLastCalledWith(
+      PROJECT,
+      "emptyCanvas",
+      "surface",
+      "acme.side"
+    );
   });
 
   it("rejects an unknown surface slot or choice, and a sender with no project", async () => {
     mockGetProjectForWebContents.mockReturnValue(PROJECT);
     const set = getHandler("plugin:project-surface-choice-set");
 
-    await expect(set({ sender: { id: 1 } }, "projectHome", "stock")).rejects.toThrow(
+    await expect(set({ sender: { id: 1 } }, "defaultLayout", "stock")).rejects.toThrow(
+      /unknown surface slot/
+    );
+    await expect(set({ sender: { id: 1 } }, "fileEditor:", "stock")).rejects.toThrow(
       /unknown surface slot/
     );
     await expect(set({ sender: { id: 1 } }, "emptyCanvas", "hidden")).rejects.toThrow(
       /choice must be/
     );
+    await expect(set({ sender: { id: 1 } }, "emptyCanvas", "surface", "")).rejects.toThrow(
+      /optionId must be/
+    );
+    await expect(set({ sender: { id: 1 } }, "emptyCanvas", "surface", 7)).rejects.toThrow(
+      /optionId must be/
+    );
 
     mockGetProjectForWebContents.mockReturnValue(null);
     await expect(set({ sender: { id: 1 } }, "emptyCanvas", "stock")).rejects.toThrow(/no project/);
     expect(mockSetProjectSurfaceChoice).not.toHaveBeenCalled();
+  });
+
+  it("records an answer about several slots in the sender's project, once init has run", async () => {
+    const { pluginService } = await import("../../../services/PluginService.js");
+    const waitForCatalog = vi.mocked(pluginService.waitForCatalog);
+    let releaseGate: () => void = () => {};
+    waitForCatalog.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        releaseGate = resolve;
+      })
+    );
+    const snapshot = { projectId: PROJECT, revision: 5, slots: {}, choices: {} };
+    mockSetProjectSurfaceChoices.mockReturnValue(snapshot);
+    mockGetProjectForWebContents.mockReturnValue(PROJECT);
+    const updates = [{ slot: "emptyCanvas", choice: "stock" }];
+
+    const inFlight = getHandler("plugin:project-surface-choices-set")(
+      { sender: { id: 1 } },
+      updates
+    ) as Promise<unknown>;
+    await Promise.resolve();
+    await Promise.resolve();
+    // The owner each answer is about comes from the claim registry, which
+    // startup activation fills.
+    expect(mockSetProjectSurfaceChoices).not.toHaveBeenCalled();
+    releaseGate();
+
+    expect(await inFlight).toEqual(snapshot);
+    expect(mockSetProjectSurfaceChoices).toHaveBeenCalledWith(PROJECT, updates);
+  });
+
+  it("rejects a malformed multi-slot answer before main sees any of it", async () => {
+    mockGetProjectForWebContents.mockReturnValue(PROJECT);
+    const set = getHandler("plugin:project-surface-choices-set");
+    const ok = { slot: "emptyCanvas", choice: "stock" };
+
+    await expect(set({ sender: { id: 1 } }, [])).rejects.toThrow(/at least one slot/);
+    await expect(set({ sender: { id: 1 } }, "emptyCanvas")).rejects.toThrow(/at least one slot/);
+    const oneTooMany = Array.from({ length: MAX_PROJECT_SURFACE_UPDATES + 1 }, () => ok);
+    await expect(set({ sender: { id: 1 } }, oneTooMany)).rejects.toThrow(/more updates than/);
+    await expect(set({ sender: { id: 1 } }, [null])).rejects.toThrow(/must be an object/);
+    await expect(
+      set({ sender: { id: 1 } }, [{ slot: "defaultLayout", choice: "stock" }])
+    ).rejects.toThrow(/unknown surface slot/);
+    await expect(
+      set({ sender: { id: 1 } }, [{ slot: "emptyCanvas", choice: "hidden" }])
+    ).rejects.toThrow(/choice must be/);
+    await expect(
+      set({ sender: { id: 1 } }, [{ slot: "emptyCanvas", choice: "surface", optionId: "" }])
+    ).rejects.toThrow(/optionId must be/);
+    await expect(
+      set({ sender: { id: 1 } }, [{ slot: "emptyCanvas", choice: "stock", ownerId: 7 }])
+    ).rejects.toThrow(/ownerId must be/);
+
+    mockGetProjectForWebContents.mockReturnValue(null);
+    await expect(set({ sender: { id: 1 } }, [ok])).rejects.toThrow(/no project/);
+    expect(mockSetProjectSurfaceChoices).not.toHaveBeenCalled();
   });
 
   it("activates a staged plugin by manifest id and rejects a malformed one", async () => {
@@ -2746,6 +3228,209 @@ describe("project-local plugin handlers", () => {
       getHandler("plugin:project-visibility-set")({ sender: { id: 1 } }, "acme.tools", "maybe")
     ).rejects.toThrow(/boolean or null/);
     expect(mockSetProjectPluginVisibility).not.toHaveBeenCalled();
+  });
+
+  describe("per-project enable of an installed package", () => {
+    const setEnabled = (...args: unknown[]) =>
+      getHandler("plugin:project-instance-set-enabled")({ sender: { id: 1 } }, ...args);
+
+    beforeEach(() => {
+      mockGetProjectForWebContents.mockReturnValue(PROJECT);
+      mockGetProjectById.mockImplementation((id) =>
+        id === PROJECT ? { path: "/repo/sender" } : { path: "/repo/other" }
+      );
+      mockGetInstalledPackageMode.mockReturnValue("project");
+      mockSetProjectInstanceEnabled.mockResolvedValue(undefined);
+    });
+
+    it("enables and disables in the sender's project, with the sender's root", async () => {
+      await setEnabled("acme.ledger", true);
+      await setEnabled("acme.ledger", false);
+      expect(mockSetProjectInstanceEnabled.mock.calls).toEqual([
+        [PROJECT, "/repo/sender", "acme.ledger", true],
+        [PROJECT, "/repo/sender", "acme.ledger", false],
+      ]);
+    });
+
+    it("ignores any extra argument naming another project", async () => {
+      await setEnabled("acme.ledger", true, "b".repeat(64), "/repo/other");
+      expect(mockGetProjectById).toHaveBeenCalledWith(PROJECT);
+      expect(mockSetProjectInstanceEnabled).toHaveBeenCalledWith(
+        PROJECT,
+        "/repo/sender",
+        "acme.ledger",
+        true
+      );
+    });
+
+    it("rejects a sender with no project", async () => {
+      mockGetProjectForWebContents.mockReturnValue(null);
+      await expect(setEnabled("acme.ledger", true)).rejects.toMatchObject({
+        code: "VALIDATION",
+        message: expect.stringMatching(/no project/),
+      });
+      expect(mockSetProjectInstanceEnabled).not.toHaveBeenCalled();
+    });
+
+    it("rejects a non-boolean value and a malformed id", async () => {
+      await expect(setEnabled("acme.ledger", "yes")).rejects.toMatchObject({
+        code: "VALIDATION",
+        message: expect.stringMatching(/must be a boolean/),
+      });
+      await expect(setEnabled("../../etc/passwd", true)).rejects.toMatchObject({
+        code: "VALIDATION",
+      });
+      expect(mockSetProjectInstanceEnabled).not.toHaveBeenCalled();
+    });
+
+    it("rejects an id that is not an installed package", async () => {
+      mockGetInstalledPackageMode.mockReturnValue(null);
+      await expect(setEnabled("acme.ghost", true)).rejects.toMatchObject({ code: "NOT_FOUND" });
+      expect(mockSetProjectInstanceEnabled).not.toHaveBeenCalled();
+    });
+
+    it("rejects a singleton package, and an instanced one that is switched off", async () => {
+      mockGetInstalledPackageMode.mockReturnValue("singleton");
+      await expect(setEnabled("acme.plain", true)).rejects.toMatchObject({
+        code: "UNSUPPORTED",
+        message: expect.stringMatching(/runs once for every project/),
+      });
+      mockGetInstalledPackageMode.mockReturnValue("project-unavailable");
+      await expect(setEnabled("acme.ledger", true)).rejects.toMatchObject({
+        code: "UNSUPPORTED",
+        message: expect.stringMatching(/turned off or blocked/),
+      });
+      expect(mockSetProjectInstanceEnabled).not.toHaveBeenCalled();
+    });
+
+    it("rejects a sender whose project is no longer known", async () => {
+      mockGetProjectById.mockReturnValue(undefined);
+      await expect(setEnabled("acme.ledger", true)).rejects.toMatchObject({ code: "NOT_FOUND" });
+      expect(mockSetProjectInstanceEnabled).not.toHaveBeenCalled();
+    });
+  });
+
+  it("reads the SENDER project's layout seed, and nothing for a sender with no project", async () => {
+    mockGetProjectForWebContents.mockReturnValue(PROJECT);
+    mockGetProjectLayoutSeed.mockReturnValue({ status: "pending", at: 1 });
+    const get = getHandler("plugin:project-layout-seed-get");
+
+    expect(await get({ sender: { id: 1 } })).toEqual({ status: "pending", at: 1 });
+    expect(mockGetProjectLayoutSeed).toHaveBeenCalledWith(PROJECT);
+
+    mockGetProjectLayoutSeed.mockClear();
+    mockGetProjectForWebContents.mockReturnValue(null);
+    expect(await get({ sender: { id: 1 } })).toBeNull();
+    expect(mockGetProjectLayoutSeed).not.toHaveBeenCalled();
+  });
+
+  it("advances the SENDER project's layout seed and validates its arguments", async () => {
+    mockGetProjectForWebContents.mockReturnValue(PROJECT);
+    const result = { advanced: true, record: { status: "settled", outcome: "applied", at: 2 } };
+    mockAdvanceProjectLayoutSeed.mockReturnValue(result);
+    const advance = getHandler("plugin:project-layout-seed-advance");
+
+    expect(await advance({ sender: { id: 1 } }, "pending", "settled", "applied")).toEqual(result);
+    expect(mockAdvanceProjectLayoutSeed).toHaveBeenCalledWith(
+      PROJECT,
+      "pending",
+      "settled",
+      "applied",
+      1
+    );
+
+    mockAdvanceProjectLayoutSeed.mockClear();
+    await expect(advance({ sender: { id: 1 } }, "pending", "gone")).rejects.toThrow(
+      /unknown status/
+    );
+    await expect(advance({ sender: { id: 1 } }, "pending", "settled", "won")).rejects.toThrow(
+      /unknown outcome/
+    );
+    mockGetProjectForWebContents.mockReturnValue(null);
+    await expect(advance({ sender: { id: 1 } }, "pending", "offered")).rejects.toThrow(
+      /no project/
+    );
+    expect(mockAdvanceProjectLayoutSeed).not.toHaveBeenCalled();
+  });
+
+  it("lets a claim on the seed lapse with the view that holds it (#14106)", async () => {
+    const { EventEmitter } = await import("node:events");
+    mockGetProjectForWebContents.mockReturnValue(PROJECT);
+    const advance = getHandler("plugin:project-layout-seed-advance");
+    const view = Object.assign(new EventEmitter(), { id: 7, isDestroyed: () => false });
+
+    mockAdvanceProjectLayoutSeed.mockReturnValue({
+      advanced: true,
+      record: { status: "applying", outcome: "applied", at: 1 },
+    });
+    await advance({ sender: view }, "pending", "applying", "applied");
+    expect(mockAdvanceProjectLayoutSeed).toHaveBeenLastCalledWith(
+      PROJECT,
+      "pending",
+      "applying",
+      "applied",
+      7
+    );
+    // A reload replaces the renderer that was applying.
+    view.emit("did-navigate");
+    expect(mockReleaseProjectLayoutSeedClaim).toHaveBeenCalledWith(PROJECT, 7);
+    expect(view.listenerCount("render-process-gone")).toBe(0);
+
+    // A claim that ends normally stops watching its view.
+    mockReleaseProjectLayoutSeedClaim.mockClear();
+    await advance({ sender: view }, "failed", "applying");
+    mockAdvanceProjectLayoutSeed.mockReturnValue({
+      advanced: true,
+      record: { status: "settled", outcome: "applied", at: 2 },
+    });
+    await advance({ sender: view }, "applying", "settled");
+    expect(view.listenerCount("did-navigate")).toBe(0);
+    view.emit("render-process-gone");
+    expect(mockReleaseProjectLayoutSeedClaim).not.toHaveBeenCalled();
+  });
+
+  it("reads and records the SENDER project's application welcome (#14106)", async () => {
+    mockGetProjectForWebContents.mockReturnValue(PROJECT);
+    const get = getHandler("plugin:project-welcome-get");
+    const set = getHandler("plugin:project-welcome-set");
+    mockGetProjectWelcome.mockReturnValue({ version: 1, status: "skipped", at: 1 });
+    mockSetProjectWelcome.mockReturnValue({ version: 2, status: "completed", at: 2 });
+
+    expect(await get({ sender: { id: 1 } }, "acme.ledger", "welcome")).toEqual({
+      version: 1,
+      status: "skipped",
+      at: 1,
+    });
+    expect(mockGetProjectWelcome).toHaveBeenCalledWith(PROJECT, "acme.ledger", "welcome");
+    expect(await set({ sender: { id: 1 } }, "acme.ledger", "welcome", 2, "completed")).toEqual({
+      version: 2,
+      status: "completed",
+      at: 2,
+    });
+    expect(mockSetProjectWelcome).toHaveBeenCalledWith(
+      PROJECT,
+      "acme.ledger",
+      "welcome",
+      2,
+      "completed"
+    );
+
+    mockSetProjectWelcome.mockClear();
+    await expect(
+      set({ sender: { id: 1 } }, "acme.ledger", "welcome", 0, "completed")
+    ).rejects.toThrow(/positive integer/);
+    await expect(
+      set({ sender: { id: 1 } }, "acme.ledger", "welcome", 1, "started")
+    ).rejects.toThrow(/unknown status/);
+    await expect(set({ sender: { id: 1 } }, 3, "welcome", 1, "skipped")).rejects.toThrow(
+      /must be strings/
+    );
+    mockGetProjectForWebContents.mockReturnValue(null);
+    expect(await get({ sender: { id: 1 } }, "acme.ledger", "welcome")).toBeNull();
+    await expect(
+      set({ sender: { id: 1 } }, "acme.ledger", "welcome", 1, "skipped")
+    ).rejects.toThrow(/no project/);
+    expect(mockSetProjectWelcome).not.toHaveBeenCalled();
   });
 
   it("sets the visibility default and validates its arguments", async () => {
@@ -2962,8 +3647,8 @@ describe("cross-project plugin control", () => {
     expect(mockUnregisterPluginAction).not.toHaveBeenCalled();
   });
 
-  it("applies the same ownership rule to a project plugin's settings view", async () => {
-    const settingsKind = `plugin-settings-view:${INSTANCE_A}`;
+  it("applies the same ownership rule to a project plugin's view hosted outside the grid", async () => {
+    const settingsKind = `plugin-view:${INSTANCE_A}/prefs`;
     mockGetProjectForWebContents.mockReturnValue(PROJECT_B);
     await expect(
       getHandler("plugin:activate-for-view")({ sender: { id: 1 } }, settingsKind)
@@ -2971,7 +3656,7 @@ describe("cross-project plugin control", () => {
     await expect(
       getHandler("plugin:activate-for-view")(
         { sender: { id: 1 } },
-        "plugin-settings-view:project____acme.dashboard"
+        "plugin-view:project____acme.dashboard/prefs"
       )
     ).rejects.toThrow(/different project/);
     expect(mockActivatePluginForView).not.toHaveBeenCalled();
@@ -2990,6 +3675,28 @@ describe("cross-project plugin control", () => {
     await expect(
       getHandler("plugin:settings-required-status")({ sender: { id: 1 } }, "../evil", null)
     ).rejects.toThrow(/invalid plugin id/);
+  });
+
+  it("reads and skips setup steps only for the sender's own project (#13824)", async () => {
+    mockGetProjectForWebContents.mockReturnValue(PROJECT_B);
+    await expect(
+      getHandler("plugin:setup-status")({ sender: { id: 1 } }, INSTANCE_A, PROJECT_A)
+    ).rejects.toThrow(/different project/);
+    await expect(
+      getHandler("plugin:setup-status")({ sender: { id: 1 } }, "../evil", null)
+    ).rejects.toThrow(/invalid plugin id/);
+    await expect(
+      getHandler("plugin:setup-step-skipped-set")({ sender: { id: 1 } }, INSTANCE_A, "sync", true)
+    ).rejects.toThrow(/different project/);
+    await expect(
+      getHandler("plugin:setup-step-skipped-set")({ sender: { id: 1 } }, "acme.t", "sync", "yes")
+    ).rejects.toThrow(/malformed skipped flag/);
+
+    // A skip is remembered per project, so a window with none can't make one.
+    mockGetProjectForWebContents.mockReturnValue(null);
+    await expect(
+      getHandler("plugin:setup-step-skipped-set")({ sender: { id: 1 } }, "acme.t", "sync", true)
+    ).rejects.toThrow(/no project/);
   });
 
   it("rejects a malformed project panel kind id rather than skipping the check", async () => {
@@ -3070,6 +3777,68 @@ describe("cross-project plugin control", () => {
       `project__${PROJECT_B}__acme.dashboard`,
       "acme.dashboard",
     ]);
+  });
+});
+
+describe("plugin tasks (#13819)", () => {
+  const PROJECT_A = "a".repeat(64);
+  const PROJECT_B = "b".repeat(64);
+  const INSTANCE_A = `project__${PROJECT_A}__acme.importer`;
+
+  function getHandler(channel: string) {
+    registerPluginHandlers();
+    return mockIpcMainHandle.mock.calls.find((c: unknown[]) => c[0] === channel)![1] as (
+      ...args: unknown[]
+    ) => unknown;
+  }
+
+  beforeEach(() => {
+    mockCancelPluginTask.mockClear();
+    mockDismissPluginTask.mockClear();
+  });
+
+  it.each(["plugin:task-cancel", "plugin:task-dismiss"])(
+    "%s reaches the sender's own project plugin and an app-wide one",
+    async (channel) => {
+      mockGetProjectForWebContents.mockReturnValue(PROJECT_A);
+      expect(await getHandler(channel)(senderEvent, INSTANCE_A, "t-1")).toBe(true);
+      expect(await getHandler(channel)(senderEvent, "acme.importer", "t-2")).toBe(true);
+      const service =
+        channel === "plugin:task-cancel" ? mockCancelPluginTask : mockDismissPluginTask;
+      expect(service.mock.calls).toEqual([
+        [INSTANCE_A, "t-1"],
+        ["acme.importer", "t-2"],
+      ]);
+    }
+  );
+
+  it.each(["plugin:task-cancel", "plugin:task-dismiss"])(
+    "%s refuses another project's plugin",
+    async (channel) => {
+      mockGetProjectForWebContents.mockReturnValue(PROJECT_B);
+      await expect(getHandler(channel)(senderEvent, INSTANCE_A, "t-1")).rejects.toThrow(
+        /different project/
+      );
+      expect(mockCancelPluginTask).not.toHaveBeenCalled();
+      expect(mockDismissPluginTask).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([
+    ["../../etc/passwd", "t-1", /malformed plugin id/],
+    ["acme.importer", "", /malformed task id/],
+    ["acme.importer", 7, /malformed task id/],
+    ["acme.importer", "x".repeat(65), /malformed task id/],
+  ])("refuses plugin id %j with task id %j", async (pluginId, taskId, error) => {
+    await expect(getHandler("plugin:task-cancel")(senderEvent, pluginId, taskId)).rejects.toThrow(
+      error
+    );
+    expect(mockCancelPluginTask).not.toHaveBeenCalled();
+  });
+
+  it("passes the service's refusal back as false", async () => {
+    mockCancelPluginTask.mockReturnValueOnce(false);
+    expect(await getHandler("plugin:task-cancel")(senderEvent, "acme.importer", "t-1")).toBe(false);
   });
 });
 
@@ -3325,5 +4094,215 @@ describe("plugin:invoke over the link", () => {
       pluginId: "acme.local-only",
       reason: { kind: "remote-unsupported" },
     });
+  });
+});
+
+describe("plugin account sign-in from a window on another machine (#14111)", () => {
+  const PROJECT = "c".repeat(64);
+  const SHELL_REDIRECT = "http://127.0.0.1:50001/oauth/callback";
+  const client = {
+    clientId: "client-greg-mbp",
+    clientName: "greg-mbp",
+    platform: "darwin" as const,
+    kind: "remote" as const,
+  };
+
+  function remoteEndpoint() {
+    return {
+      endpointId: "s1:ep-1",
+      clientId: client.clientId,
+      projectId: PROJECT,
+      kind: "remote-view" as const,
+      handle: -7,
+      send: vi.fn(),
+      request: vi.fn(),
+      onClose: () => ({ dispose: () => {} }),
+      isClosed: () => false,
+    };
+  }
+
+  type Broker = {
+    start: (
+      key: string,
+      state: string,
+      build: (redirectUri: string | null) => string
+    ) => Promise<unknown>;
+  };
+
+  beforeEach(() => {
+    _resetIpcDispatcherForTesting();
+    getIpcDispatcher().setInvokeEnveloper(async (_channel, _args, call) => {
+      try {
+        return wrapSuccess(await call());
+      } catch (error) {
+        return wrapError(error);
+      }
+    });
+    mockConnectAccountFromUi.mockReset();
+    mockSetAccountTokenFromUi.mockReset();
+  });
+
+  afterEach(() => {
+    _resetIpcDispatcherForTesting();
+  });
+
+  it("asks the calling window's own Shell to run the browser, and signs in here", async () => {
+    registerPluginHandlers();
+    getIpcDispatcher().allowHybridOverLink("plugin:account-connect");
+    const endpoint = remoteEndpoint();
+    endpoint.request.mockResolvedValue({
+      success: true,
+      code: "synthetic-code",
+      redirectUri: SHELL_REDIRECT,
+    });
+    let caught: unknown;
+    mockConnectAccountFromUi.mockImplementation(
+      async (_pluginId: string, _connectionId: string, broker: Broker) => {
+        caught = await broker.start("session", "synthetic-state", (redirectUri) =>
+          redirectUri === null
+            ? "https://auth.example.com/authorize?state=synthetic-state"
+            : "unexpected"
+        );
+        return { status: "cancelled" };
+      }
+    );
+
+    const envelope = await getIpcDispatcher().invokeForEndpoint(
+      { endpoint, client },
+      "plugin:account-connect",
+      ["acme.tracker", "work", "click-1"]
+    );
+
+    expect(envelope).toMatchObject({ ok: true, data: { status: "cancelled" } });
+    expect(mockConnectAccountFromUi).toHaveBeenCalledWith(
+      "acme.tracker",
+      "work",
+      expect.objectContaining({ start: expect.any(Function), cancel: expect.any(Function) })
+    );
+    expect(endpoint.request).toHaveBeenCalledWith(
+      "plugin.account-sign-in",
+      {
+        signInId: "click-1",
+        pluginId: "acme.tracker",
+        connectionId: "work",
+        authUrl: "https://auth.example.com/authorize?state=synthetic-state",
+      },
+      expect.objectContaining({ timeoutMs: expect.any(Number), signal: expect.anything() })
+    );
+    expect(caught).toEqual({ success: true, code: "synthetic-code", redirectUri: SHELL_REDIRECT });
+  });
+
+  it("refuses a sign-in from another machine that names no click", async () => {
+    registerPluginHandlers();
+    getIpcDispatcher().allowHybridOverLink("plugin:account-connect");
+    const endpoint = remoteEndpoint();
+    for (const args of [
+      ["acme.tracker", "work"],
+      ["acme.tracker", "work", ""],
+      ["acme.tracker", "work", 7],
+    ]) {
+      const envelope = await getIpcDispatcher().invokeForEndpoint(
+        { endpoint, client },
+        "plugin:account-connect",
+        args
+      );
+      expect(envelope.ok).toBe(false);
+    }
+    expect(mockConnectAccountFromUi).not.toHaveBeenCalled();
+    expect(endpoint.request).not.toHaveBeenCalled();
+  });
+
+  it("refuses another project's plugin by the window's own binding", async () => {
+    registerPluginHandlers();
+    getIpcDispatcher().allowHybridOverLink("plugin:account-connect");
+    const endpoint = remoteEndpoint();
+    const envelope = await getIpcDispatcher().invokeForEndpoint(
+      { endpoint, client },
+      "plugin:account-connect",
+      [`project__${"d".repeat(64)}__acme.tracker`, undefined, "click-1"]
+    );
+    expect(envelope.ok).toBe(false);
+    expect(mockConnectAccountFromUi).not.toHaveBeenCalled();
+    expect(endpoint.request).not.toHaveBeenCalled();
+  });
+
+  it("keeps a token pasted on another machine in this host's keychain", async () => {
+    registerPluginHandlers();
+    mockSetAccountTokenFromUi.mockResolvedValue({ connected: true });
+    const envelope = await getIpcDispatcher().invokeForEndpoint(
+      { endpoint: remoteEndpoint(), client },
+      "plugin:account-set-token",
+      ["acme.tracker", "synthetic-token", "work"]
+    );
+    expect(envelope).toMatchObject({ ok: true, data: { connected: true } });
+    expect(mockSetAccountTokenFromUi).toHaveBeenCalledWith(
+      "acme.tracker",
+      "synthetic-token",
+      "work"
+    );
+  });
+
+  it("lets a window on another machine cancel its sign-in on the host", async () => {
+    registerPluginHandlers();
+    const envelope = await getIpcDispatcher().invokeForEndpoint(
+      { endpoint: remoteEndpoint(), client },
+      "plugin:account-cancel-connect",
+      ["acme.tracker", "work"]
+    );
+    expect(envelope.ok).toBe(true);
+    expect(mockCancelAccountConnectFromUi).toHaveBeenCalledWith("acme.tracker", "work");
+  });
+
+  it("signs a window on this machine in with this machine's own loopback", async () => {
+    registerPluginHandlers();
+    mockConnectAccountFromUi.mockResolvedValue({ status: "cancelled" });
+    const connect = mockIpcMainHandle.mock.calls.find(
+      (c: unknown[]) => c[0] === "plugin:account-connect"
+    )![1] as (...args: unknown[]) => Promise<unknown>;
+    await connect({ sender: { id: 1 } }, "acme.tracker");
+    expect(mockConnectAccountFromUi).toHaveBeenCalledWith("acme.tracker", undefined, undefined);
+  });
+});
+
+describe("plugin notification silences (#13818)", () => {
+  const PROJECT = "c".repeat(64);
+  const PROJECT_INSTANCE = `project__${PROJECT}__acme.records`;
+
+  function getHandler(channel: string) {
+    registerPluginHandlers();
+    return mockIpcMainHandle.mock.calls.find((c: unknown[]) => c[0] === channel)![1] as (
+      ...args: unknown[]
+    ) => unknown;
+  }
+
+  beforeEach(() => silencedPlugins.clear());
+
+  it("silences and lists plugins by name, with a project plugin's project", async () => {
+    const set = getHandler("plugin:notification-silence-set");
+    await set({ sender: { id: 1 } }, "acme.tools", true);
+    const listed = await set({ sender: { id: 1 } }, PROJECT_INSTANCE, true);
+
+    expect(listed).toEqual([
+      { pluginId: "acme.tools", name: "Acme Tools", projectId: null },
+      { pluginId: PROJECT_INSTANCE, name: "acme.records", projectId: PROJECT },
+    ]);
+    expect(await getHandler("plugin:notification-silences-get")({ sender: { id: 1 } })).toEqual(
+      listed
+    );
+
+    expect(await set({ sender: { id: 1 } }, "acme.tools", false)).toEqual([
+      { pluginId: PROJECT_INSTANCE, name: "acme.records", projectId: PROJECT },
+    ]);
+  });
+
+  it("rejects a malformed plugin id and a non-boolean flag", async () => {
+    const set = getHandler("plugin:notification-silence-set");
+    await expect(set({ sender: { id: 1 } }, "../../etc/passwd", true)).rejects.toThrow(
+      /malformed plugin id/
+    );
+    await expect(set({ sender: { id: 1 } }, "acme.tools", "yes")).rejects.toThrow(
+      /malformed silenced flag/
+    );
+    expect(silencedPlugins.size).toBe(0);
   });
 });

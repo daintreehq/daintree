@@ -5,10 +5,11 @@
 // `"types": ["@daintreehq/plugin-sdk/view-globals"]` in tsconfig, or
 // `/// <reference types="@daintreehq/plugin-sdk/view-globals" />` in one file.
 //
-// Only the documented plugin-view surface is declared: `invoke`, `on` and
-// `onPanel`. Everything else the host puts on `window.electron` is the app's
-// own and can change without notice, so it is deliberately absent here — a
-// view that reaches for it should get a type error.
+// Only the documented plugin-view surface is declared: `invoke`, `on`,
+// `onPanel` and the project-presence pair. Everything else the host puts on
+// `window.electron` is the app's own and can change without notice, so it is
+// deliberately absent here — a view that reaches for it should get a type
+// error.
 //
 // Self-contained on purpose: importing the bridge type from `/react` would
 // pull React's declarations into a view that does not use React. The SDK's
@@ -29,6 +30,21 @@ declare global {
       panelId: string,
       callback: (payload: unknown) => void
     ): () => void;
+    /**
+     * This view's own project presence, or `null` in a view with no project.
+     * Absent on a Daintree that predates it.
+     */
+    getProjectPresence?(): Promise<DaintreePluginProjectPresence | null>;
+    /** Receive presence changes pushed to this view's project. Returns the unsubscribe. */
+    onProjectPresenceChanged?(
+      callback: (presence: DaintreePluginProjectPresence) => void
+    ): () => void;
+  }
+
+  /** A project's presence: shown in some window, open behind another, or closed. */
+  interface DaintreePluginProjectPresence {
+    readonly projectId: string;
+    readonly state: "foreground" | "background" | "closed";
   }
 
   /** What a plugin view may use on `window.electron`. */

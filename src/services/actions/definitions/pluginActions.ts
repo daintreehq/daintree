@@ -1,40 +1,18 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
+import type { ActionContext } from "@shared/types/actions";
 import { defineAction } from "../defineAction";
 import { z } from "zod";
-import { pluginClient } from "@/clients/pluginClient";
-import { parseProjectPluginInstanceKey } from "@shared/types/plugin";
-import { pluginDocumentRuntime } from "@/services/plugin/pluginDocumentRuntime";
+import { isRemoteBoundView } from "@/clients/operationsClient";
 import {
-  hasViewUnsavedChanges,
-  requestUserViewReload,
-} from "@/services/plugin/pluginPanelLifecycle";
-import { usePanelStore } from "@/store/panelStore";
-import { usePluginManagerStore } from "@/store/pluginManagerStore";
-import { useProjectStore } from "@/store/projectStore";
-import { resolvePluginSettingsTarget } from "@/services/plugin/pluginSettingsHome";
-import { usePluginPanelReloadConfirmStore } from "@/store/pluginPanelReloadConfirmStore";
-import { isBuiltInPanelKind } from "@shared/types/panel";
-import { getPanelKindConfig, panelKindHasPty } from "@shared/config/panelKindRegistry";
-import {
-  PanelCaptureRefusedError,
-  assertPanelCapturable,
-  consoleMessagesForPlugin,
-  locatePanelFrame,
-  sameRect,
-} from "@/services/plugin/pluginPanelCapture";
-import { ConfirmationStagedError, confirmationStagedMessage } from "../confirmationStaged";
-import { UnactionableTargetError } from "../unactionableTarget";
-import { actionService } from "@/services/ActionService";
-import { notify } from "@/lib/notify";
-import { systemClient } from "@/clients/systemClient";
-import { revealCopy } from "@/components/FileViewer/revealCopy";
-import { formatErrorMessage } from "@shared/utils/errorMessage";
-
-/** The folder part of a path main returned, kept in the platform's own separators. */
-function dirnameOf(filePath: string): string {
-  const cut = Math.max(filePath.lastIndexOf("/"), filePath.lastIndexOf("\\"));
-  return cut > 0 ? filePath.slice(0, cut) : filePath;
-}
+  ReloadPanelArgsSchema,
+  CapturePanelArgsSchema,
+  ValidateArgsSchema,
+  DiagnosticsArgsSchema,
+  OpenSettingsArgsSchema,
+  BackupDatabasesArgsSchema,
+  SetNotificationsSilencedArgsSchema,
+} from "./pluginActionArgs";
+import type { PluginActionRunId } from "./pluginActions.impl";
 
 /**
  * The plugin-authoring feedback loop (#12214). An agent writing a plugin into a
@@ -50,9 +28,22 @@ function dirnameOf(filePath: string): string {
  * `window.electron.plugin`, so there is nothing to short-circuit past.
  */
 
-/** Bounds the log tail so one call can't ship a whole 500-line ring buffer. */
-const DIAGNOSTICS_LOG_LIMIT_DEFAULT = 50;
-const DIAGNOSTICS_LOG_LIMIT_MAX = 500;
+/**
+ * Run bodies load on first dispatch (#14275), as the git actions do (#14239).
+ * Every view registers these at boot for menus and the MCP manifest, but an
+ * empty view runs none of them. `isEnabled` and `disabledReason` stay here:
+ * menus read them without dispatching. A failed chunk load rejects inside
+ * `run`, which ActionService turns into an error result like any other failure.
+ */
+async function runPluginAction(
+  id: PluginActionRunId,
+  args: unknown,
+  ctx: ActionContext,
+  callbacks: ActionCallbacks
+): Promise<unknown> {
+  const { pluginActionRuns } = await import("./pluginActions.impl");
+  return pluginActionRuns[id](args, ctx, callbacks);
+}
 
 export function registerPluginActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
   actions.set("plugin.reloadWindow", () =>
@@ -68,16 +59,8 @@ export function registerPluginActions(actions: ActionRegistry, callbacks: Action
       dangerRationale:
         "Replaces the whole project document, discarding every view's in-memory state — unsaved edits included — for all panels in the window, not just the plugin that needs it.",
       scope: "renderer",
-      run: async (_args, ctx) => {
-        // An MCP caller has already cleared the host confirmation; a second
-        // dialog would let a cancel return ok:true with nothing reloaded.
-        if (
-          ctx?.hostConfirmed === true ||
-          (await pluginDocumentRuntime.requestReloadConfirmation())
-        ) {
-          await window.electron.window.reload();
-        }
-      },
+      run: (args: unknown, ctx: ActionContext) =>
+        runPluginAction("plugin.reloadWindow", args, ctx, callbacks),
     })
   );
   actions.set("plugin.reloadPanel", () =>
@@ -100,9 +83,7 @@ export function registerPluginActions(actions: ActionRegistry, callbacks: Action
       // No focused-panel fallback, so the palette has nothing to act on.
       palette: { mode: "hidden" },
       scope: "renderer",
-      argsSchema: z.object({
-        panelId: z.string().min(1).describe("The plugin panel to reload; focus is never assumed."),
-      }),
+      argsSchema: ReloadPanelArgsSchema,
       resultSchema: z.object({
         panelId: z.string(),
         // `scheduled`: a mounted view was handed the reload; nothing reports
@@ -117,24 +98,8 @@ export function registerPluginActions(actions: ActionRegistry, callbacks: Action
         idempotentHint: false,
         openWorldHint: false,
       },
-      run: async ({ panelId }) => {
-        const confirm = usePluginPanelReloadConfirmStore.getState();
-        const approved = confirm.consumeApproval(panelId);
-        const panel = usePanelStore.getState().panelsById[panelId];
-        if (!panel) throw new Error(`No panel with id "${panelId}"`);
-        const kind = panel.kind ?? "terminal";
-        if (isBuiltInPanelKind(kind) || panelKindHasPty(kind)) {
-          throw new Error(`Panel "${panelId}" is not a plugin panel`);
-        }
-        if (!approved && hasViewUnsavedChanges(panelId)) {
-          confirm.request({ panelId, panelTitle: panel.title });
-          throw new ConfirmationStagedError(confirmationStagedMessage("Reloading this panel"));
-        }
-        const outcome: "scheduled" | "not-mounted" = requestUserViewReload(panelId)
-          ? "scheduled"
-          : "not-mounted";
-        return { panelId, outcome };
-      },
+      run: (args: unknown, ctx: ActionContext) =>
+        runPluginAction("plugin.reloadPanel", args, ctx, callbacks),
     })
   );
   actions.set("plugin.capturePanel", () =>
@@ -150,9 +115,7 @@ export function registerPluginActions(actions: ActionRegistry, callbacks: Action
       denyPluginDispatch: true,
       palette: { mode: "hidden" },
       scope: "renderer",
-      argsSchema: z.object({
-        panelId: z.string().min(1).describe("The plugin panel to capture; focus is never assumed."),
-      }),
+      argsSchema: CapturePanelArgsSchema,
       resultSchema: z.object({
         panelId: z.string(),
         pluginId: z.string(),
@@ -183,53 +146,8 @@ export function registerPluginActions(actions: ActionRegistry, callbacks: Action
         idempotentHint: true,
         openWorldHint: false,
       },
-      run: async ({ panelId }) => {
-        const panel = usePanelStore.getState().panelsById[panelId];
-        // Refusals of the target itself: a retry with the same id cannot work.
-        if (!panel) throw new UnactionableTargetError(`No panel with id "${panelId}"`);
-        const kind = panel.kind ?? "terminal";
-        const pluginId = getPanelKindConfig(kind)?.extensionId;
-        if (isBuiltInPanelKind(kind) || panelKindHasPty(kind) || !pluginId) {
-          throw new UnactionableTargetError(`Panel "${panelId}" is not a plugin panel`);
-        }
-        const capture = window.electron?.plugin?.capturePanel;
-        if (!capture) throw new Error("Panel capture isn't available in this window");
-
-        const frame = locatePanelFrame(panelId);
-        const rect = assertPanelCapturable(panelId, frame, panel.location);
-        const shot = await capture(rect);
-        // Anything that opened, moved or closed while the pixels were taken
-        // may be in them; those bytes are dropped rather than returned. The
-        // record itself is replaced whenever the view persists state, so only
-        // what decides where and what the panel shows is compared.
-        const current = usePanelStore.getState().panelsById[panelId];
-        if (
-          !current ||
-          current.kind !== panel.kind ||
-          current.location !== panel.location ||
-          locatePanelFrame(panelId) !== frame ||
-          !sameRect(rect, assertPanelCapturable(panelId, frame, current.location))
-        ) {
-          throw new PanelCaptureRefusedError(
-            `Panel "${panelId}" changed while it was captured; retry`
-          );
-        }
-
-        const { messages, omitted } = consoleMessagesForPlugin(shot.consoleMessages, pluginId);
-        return {
-          panelId,
-          pluginId,
-          image: {
-            mimeType: "image/png" as const,
-            data: shot.pngBase64,
-            width: Math.round(rect.width),
-            height: Math.round(rect.height),
-          },
-          consoleScope: "plugin" as const,
-          consoleMessages: messages,
-          consoleOmitted: omitted,
-        };
-      },
+      run: (args: unknown, ctx: ActionContext) =>
+        runPluginAction("plugin.capturePanel", args, ctx, callbacks),
     })
   );
   actions.set("plugin.validate", () =>
@@ -242,14 +160,7 @@ export function registerPluginActions(actions: ActionRegistry, callbacks: Action
       kind: "query",
       danger: "safe",
       scope: "renderer",
-      argsSchema: z.object({
-        path: z
-          .string()
-          .min(1)
-          .describe(
-            "Plugin directory or manifest file, absolute or project-relative, inside the open project or the managed plugins directory."
-          ),
-      }),
+      argsSchema: ValidateArgsSchema,
       examples: [
         {
           args: { path: ".daintree/plugins/acme.dashboard" },
@@ -275,7 +186,8 @@ export function registerPluginActions(actions: ActionRegistry, callbacks: Action
         idempotentHint: true,
         destructiveHint: false,
       },
-      run: async (args) => pluginClient.validateManifest(args.path),
+      run: (args: unknown, ctx: ActionContext) =>
+        runPluginAction("plugin.validate", args, ctx, callbacks),
     })
   );
 
@@ -289,23 +201,7 @@ export function registerPluginActions(actions: ActionRegistry, callbacks: Action
       kind: "query",
       danger: "safe",
       scope: "renderer",
-      argsSchema: z.object({
-        pluginId: z
-          .string()
-          .min(1)
-          .describe(
-            "Manifest id, publisher.name. For a project plugin, the manifest id, not its directory."
-          ),
-        logLimit: z
-          .number()
-          .int()
-          .min(1)
-          .max(DIAGNOSTICS_LOG_LIMIT_MAX)
-          .optional()
-          .describe(
-            `Newest log lines to return (default ${DIAGNOSTICS_LOG_LIMIT_DEFAULT}, max ${DIAGNOSTICS_LOG_LIMIT_MAX}).`
-          ),
-      }),
+      argsSchema: DiagnosticsArgsSchema,
       examples: [
         {
           args: { pluginId: "acme.dashboard" },
@@ -349,98 +245,8 @@ export function registerPluginActions(actions: ActionRegistry, callbacks: Action
         idempotentHint: false,
         destructiveHint: false,
       },
-      run: async (args, ctx) => {
-        const limit = args.logLimit ?? DIAGNOSTICS_LOG_LIMIT_DEFAULT;
-        const snapshot = await pluginClient.getDiagnosticsSnapshot();
-
-        // A project plugin runs under an instance key
-        // (`project__{projectId}__{publisher.name}`), never its bare manifest
-        // id — but the manifest id is the only one its author knows, because it
-        // is the one they wrote. Parse the key rather than matching its tail: a
-        // suffix test also matches the SAME id owned by a different open
-        // project, and the snapshot is app-global, so it would hand this
-        // project's agent another project's log lines.
-        const matches = (candidate: string): boolean => {
-          if (candidate === args.pluginId) return true;
-          const parsed = parseProjectPluginInstanceKey(candidate);
-          if (!parsed || parsed.manifestId !== args.pluginId) return false;
-          // Only this caller's own project. Without a project on the sender
-          // there is no owner to compare against, so no instance key qualifies.
-          return ctx.projectId !== undefined && parsed.projectId === ctx.projectId;
-        };
-        const entry = snapshot.plugins.find((p) => matches(p.pluginId));
-
-        if (entry) {
-          // Rebuilt field by field rather than spread: the snapshot entry also
-          // carries install provenance and the action audit trail, neither of
-          // which belongs in an authoring diagnostic.
-          return {
-            // The id the caller asked with, not the instance key it happens to
-            // run under — the key names a project and is not theirs to hold.
-            pluginId: args.pluginId,
-            displayName: entry.displayName,
-            version: entry.version,
-            loaded: true,
-            disabled: entry.disabled,
-            devMode: entry.devMode,
-            projectState: null,
-            loadError: entry.loadError
-              ? {
-                  message: entry.loadError.message,
-                  stack: entry.loadError.stack ?? null,
-                  at: entry.loadError.at ?? null,
-                }
-              : null,
-            logLines: entry.logLines.slice(-limit).map((line) => ({
-              ts: line.ts,
-              level: line.level,
-              message: line.message,
-            })),
-            logLinesAvailable: entry.logLines.length,
-          };
-        }
-
-        // The snapshot only covers plugins the host is running, and the case an
-        // author hits most is the one it therefore omits: a manifest the
-        // project refused. Fall back to the project's own list so a rejected
-        // plugin reports its rejection instead of reading as nonexistent.
-        const projectPlugins = await pluginClient.getProjectPlugins();
-        const projectEntry = projectPlugins.find(
-          (p) => p.id === args.pluginId || p.dirName === args.pluginId
-        );
-        if (projectEntry) {
-          return {
-            pluginId: projectEntry.id,
-            displayName: projectEntry.displayName,
-            version: projectEntry.version,
-            loaded: false,
-            disabled: false,
-            devMode: false,
-            projectState: projectEntry.state,
-            loadError: projectEntry.error
-              ? { message: projectEntry.error, stack: null, at: null }
-              : null,
-            logLines: [],
-            logLinesAvailable: 0,
-          };
-        }
-
-        // Reported as manifest ids: an instance key names a project the caller
-        // may not own, and is not a value they could pass back here anyway.
-        const known = [
-          ...snapshot.plugins.map(
-            (p) => parseProjectPluginInstanceKey(p.pluginId)?.manifestId ?? p.pluginId
-          ),
-          ...projectPlugins.map((p) => p.id),
-        ]
-          .filter((id, index, all) => all.indexOf(id) === index)
-          .sort();
-        throw new Error(
-          known.length > 0
-            ? `No plugin "${args.pluginId}". Known ids: ${known.join(", ")}`
-            : `No plugin "${args.pluginId}", and no plugins are loaded or discovered in this project.`
-        );
-      },
+      run: (args: unknown, ctx: ActionContext) =>
+        runPluginAction("plugin.diagnostics", args, ctx, callbacks),
     })
   );
 
@@ -449,7 +255,7 @@ export function registerPluginActions(actions: ActionRegistry, callbacks: Action
       id: "plugin.openSettings",
       title: "Open plugin settings",
       description:
-        "Show a plugin's settings in the one place they live: the plugin manager for an installed plugin's own settings, Project settings → Plugins for a project plugin or a project-scoped setting. A declared key is requested for landing; an undeclared one is ignored.",
+        "Show a plugin's settings where they live: the plugin manager for an installed plugin's own settings, Project settings → Plugins for a project plugin or project-scoped setting. Lands on a declared key or section; anything undeclared is ignored.",
       category: "plugins",
       kind: "command",
       danger: "safe",
@@ -461,57 +267,18 @@ export function registerPluginActions(actions: ActionRegistry, callbacks: Action
       // agent has nothing to gain from moving the user's settings dialog.
       mcpVisibility: "hidden",
       scope: "renderer",
-      argsSchema: z.object({
-        pluginId: z
-          .string()
-          .min(1)
-          .describe(
-            "An instance key (exact; an installed plugin's is its manifest id), or the manifest id of this project's own plugin."
-          ),
-        key: z
-          .string()
-          .min(1)
-          .optional()
-          .describe("A setting id from the plugin's contributes.settings to land on."),
-      }),
+      argsSchema: OpenSettingsArgsSchema,
       resultSchema: z.object({
         pluginId: z.string(),
         /** Where the request was sent. The home lands on it once it renders. */
         home: z.enum(["plugin-manager", "project-settings"]),
         /** The declared setting the request asked to land on, or null. */
         requestedKey: z.string().nullable(),
+        /** The section the request asked to land on, when the plugin has it, or null. */
+        requestedSection: z.enum(["account", "setup", "custom"]).nullable(),
       }),
-      run: async ({ pluginId, key }, ctx) => {
-        const projectId = ctx?.projectId ?? useProjectStore.getState().currentProject?.id ?? null;
-        const resolution = resolvePluginSettingsTarget(
-          pluginId,
-          key,
-          await pluginClient.list(),
-          projectId
-        );
-        if (!resolution.ok) {
-          throw new Error(
-            {
-              "not-found": `No plugin "${pluginId}" is loaded here`,
-              ambiguous: `"${pluginId}" names more than one plugin here — pass its instance key`,
-              "no-settings": `Plugin "${pluginId}" has no settings`,
-              "needs-project": `Plugin "${pluginId}" keeps ${key === undefined ? "its settings" : `"${key}"`} in Project settings, and no project is open`,
-            }[resolution.reason]
-          );
-        }
-        const { target } = resolution;
-        usePluginManagerStore.getState().requestSettings({
-          pluginId: target.plugin.instanceId,
-          home: target.home,
-          ...(target.key !== undefined ? { key: target.key } : {}),
-        });
-        if (target.home === "project") callbacks.onOpenSettingsTab({ tab: "project:plugins" });
-        return {
-          pluginId,
-          home: target.home === "project" ? "project-settings" : "plugin-manager",
-          requestedKey: target.key ?? null,
-        };
-      },
+      run: (args: unknown, ctx: ActionContext) =>
+        runPluginAction("plugin.openSettings", args, ctx, callbacks),
     })
   );
 
@@ -535,59 +302,44 @@ export function registerPluginActions(actions: ActionRegistry, callbacks: Action
       // its own included, with nothing the user asked for behind it.
       denyPluginDispatch: true,
       scope: "renderer",
-      argsSchema: z.object({
-        pluginId: z.string().min(1).describe("The plugin instance key whose data to back up."),
-      }),
+      argsSchema: BackupDatabasesArgsSchema,
       // Every outcome, failures included, is reported by the notice below.
       selfNotifiesOnExecutionError: true,
-      run: async ({ pluginId }) => {
-        const retry = () =>
-          void actionService.dispatch("plugin.backupDatabases", { pluginId }, { source: "user" });
-        let outcome;
-        try {
-          outcome = await pluginClient.backupDatabases(pluginId);
-        } catch (error) {
-          notify({
-            type: "error",
-            priority: "high",
-            title: "Couldn't back up plugin data",
-            message: formatErrorMessage(error, "The backup stopped before any file was written."),
-            action: { label: "Try again", onClick: retry },
-          });
-          throw error;
-        }
-        if (outcome.status === "cancelled") return outcome;
-        if (outcome.status === "no-data") {
-          notify({
-            type: "info",
-            priority: "high",
-            transient: true,
-            duration: 4000,
-            message: `${outcome.pluginName} has no data to back up yet`,
-          });
-          return outcome;
-        }
-        const [first] = outcome.paths;
-        const reveal = revealCopy();
-        notify({
-          type: "success",
-          priority: "high",
-          title: `${outcome.pluginName} data backed up`,
-          message:
-            outcome.paths.length === 1
-              ? `Saved to ${first}`
-              : `${outcome.paths.length} databases saved to ${dirnameOf(first!)}`,
-          ...(first !== undefined
-            ? {
-                action: {
-                  label: reveal.label,
-                  onClick: () => void systemClient.showItemInFolderUnconfined(first),
-                },
-              }
-            : {}),
-        });
-        return outcome;
-      },
+      // Main refuses it for a remote-bound view on purpose: the save dialog
+      // would open on the host's screen.
+      isEnabled: () => !isRemoteBoundView(),
+      disabledReason: () =>
+        isRemoteBoundView()
+          ? "Plugin data can't be backed up from a window on another host"
+          : undefined,
+      run: (args: unknown, ctx: ActionContext) =>
+        runPluginAction("plugin.backupDatabases", args, ctx, callbacks),
+    })
+  );
+
+  actions.set("plugin.setNotificationsSilenced", () =>
+    defineAction({
+      id: "plugin.setNotificationsSilenced",
+      title: "Silence plugin notifications",
+      description:
+        "Stop one plugin's toasts and notifications, or let them through again. A project plugin is silenced in its own project only. Main holds them back before any window sees them; rows already in the inbox stay.",
+      category: "plugins",
+      kind: "command",
+      danger: "safe",
+      nonRepeatable: true,
+      // Needs a plugin id, and there is no focused-plugin fallback to act on.
+      palette: { mode: "hidden" },
+      // The notification row's menu and Settings → Notifications. It turns off
+      // what a plugin can tell the user, so it is the user's alone: in no
+      // assistant or external tier, and hidden from tool listings too.
+      mcpVisibility: "hidden",
+      // A plugin reaching this could lift its own silence or silence a rival.
+      denyPluginDispatch: true,
+      scope: "renderer",
+      argsSchema: SetNotificationsSilencedArgsSchema,
+      selfNotifiesOnExecutionError: true,
+      run: (args: unknown, ctx: ActionContext) =>
+        runPluginAction("plugin.setNotificationsSilenced", args, ctx, callbacks),
     })
   );
 
@@ -625,21 +377,8 @@ export function registerPluginActions(actions: ActionRegistry, callbacks: Action
         idempotentHint: true,
         destructiveHint: false,
       },
-      run: async () => {
-        await pluginClient.reloadProjectPlugins();
-        const plugins = await pluginClient.getProjectPlugins();
-        return {
-          plugins: plugins.map((p) => ({
-            id: p.id,
-            dirName: p.dirName,
-            displayName: p.displayName,
-            version: p.version,
-            state: p.state,
-            error: p.error ?? null,
-            collidesWithGlobal: p.collidesWithGlobal,
-          })),
-        };
-      },
+      run: (args: unknown, ctx: ActionContext) =>
+        runPluginAction("plugin.reloadProject", args, ctx, callbacks),
     })
   );
 }

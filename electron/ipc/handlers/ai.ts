@@ -66,6 +66,12 @@ export function registerAiHandlers(deps: HandlerDependencies): () => void {
   const agentHelpService = new AgentHelpService();
   const userAgentRegistryService = new UserAgentRegistryService();
 
+  // Every write tells every view of this host (#14700): a view that kept its
+  // boot copy would launch an agent with options another view has changed.
+  const notifyAgentSettingsChanged = () => {
+    broadcastToRenderer(CHANNELS.AGENT_SETTINGS_CHANGED, store.get("agentSettings"));
+  };
+
   const handleAgentSettingsGet = async () => {
     return store.get("agentSettings");
   };
@@ -91,13 +97,15 @@ export function registerAiHandlers(deps: HandlerDependencies): () => void {
       ...(currentSettings.agents?.[safeAgentType] ?? {}),
       ...settings,
     };
-    // Strip retired legacy keys — never persist them back. Object spread of
-    // `{ pinned: undefined }` keeps the key on `merged`, but electron-store
-    // serializes via JSON.stringify which drops `undefined` values, so the
-    // field is removed from the persisted record. This is the mechanism the
-    // renderer migration relies on to clear eagerly-seeded pin values
-    // (see #7673 + migrateAgentSettings in src/store/agentSettingsStore.ts).
-    const { selected: _s, enabled: _e, ...safeEntry } = merged as Record<string, unknown>;
+    // Strip retired keys — never persist them back. `pinned` lives in this
+    // machine's toolbar pins now (#14702), so a write from an older Shell or an
+    // agent's settings action can't bring it back as agent configuration.
+    const {
+      selected: _s,
+      enabled: _e,
+      pinned: _p,
+      ...safeEntry
+    } = merged as Record<string, unknown>;
     const updatedAgents = {
       ...currentSettings.agents,
       [safeAgentType]: safeEntry,
@@ -107,6 +115,7 @@ export function registerAiHandlers(deps: HandlerDependencies): () => void {
     // address per-agent leaves via dot-path because user-defined agent IDs may
     // contain dots, which dot-prop would interpret as nested keys.
     store.set("agentSettings.agents", updatedAgents);
+    notifyAgentSettingsChanged();
     return {
       ...currentSettings.root,
       agents: updatedAgents,
@@ -132,6 +141,7 @@ export function registerAiHandlers(deps: HandlerDependencies): () => void {
             store.get("agentSettings", DEFAULT_AGENT_SETTINGS)
           );
           store.set("agentSettings.globalSkipPermissions", value);
+          notifyAgentSettingsChanged();
           return {
             ...currentSettings.root,
             globalSkipPermissions: value,
@@ -152,6 +162,7 @@ export function registerAiHandlers(deps: HandlerDependencies): () => void {
             store.get("agentSettings", DEFAULT_AGENT_SETTINGS)
           );
           store.set("agentSettings.globalUseAltScreen", value);
+          notifyAgentSettingsChanged();
           return {
             ...currentSettings.root,
             globalUseAltScreen: value,
@@ -171,6 +182,7 @@ export function registerAiHandlers(deps: HandlerDependencies): () => void {
             store.get("agentSettings", DEFAULT_AGENT_SETTINGS)
           );
           store.set("agentSettings.resumeOnRestart", value);
+          notifyAgentSettingsChanged();
           return {
             ...currentSettings.root,
             resumeOnRestart: value,
@@ -182,11 +194,10 @@ export function registerAiHandlers(deps: HandlerDependencies): () => void {
   });
   handlers.push(agentSettingsGlobalNamespace.register());
 
-  // Stamps `settingsVersion` on the persisted store. The renderer migration
-  // (see migrateAgentSettings in agentSettingsStore.ts, #7673) calls this only
-  // after every per-agent pin clear has succeeded — stamping inside the
-  // generic AGENT_SETTINGS_SET handler would race with concurrent user pin
-  // toggles, prematurely marking the store migrated while stale pins remained.
+  // Stamps `settingsVersion` on the persisted store. The renderer's pin
+  // migration (#7673) called this only after every per-agent pin clear had
+  // succeeded. Pins are this machine's since #14702 and no renderer here calls
+  // it; it stays for an older Shell's window on this host.
   const handleAgentSettingsStampVersion = async (version: unknown) => {
     if (typeof version !== "number" || !Number.isInteger(version) || version < 1) {
       throw new Error("Invalid settingsVersion");
@@ -198,6 +209,7 @@ export function registerAiHandlers(deps: HandlerDependencies): () => void {
       return current;
     }
     store.set("agentSettings.settingsVersion", version);
+    notifyAgentSettingsChanged();
     return { ...current, settingsVersion: version };
   };
   handlers.push(
@@ -215,6 +227,7 @@ export function registerAiHandlers(deps: HandlerDependencies): () => void {
         [safeAgentType]: DEFAULT_AGENT_SETTINGS.agents[safeAgentType] ?? {},
       };
       store.set("agentSettings.agents", updatedAgents);
+      notifyAgentSettingsChanged();
       return {
         ...currentSettings.root,
         agents: updatedAgents,
@@ -235,6 +248,7 @@ export function registerAiHandlers(deps: HandlerDependencies): () => void {
             }
           : DEFAULT_AGENT_SETTINGS;
       store.set("agentSettings", reset);
+      notifyAgentSettingsChanged();
       return reset;
     }
   };

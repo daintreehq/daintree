@@ -28,6 +28,7 @@
           "identity",
           "clone"
         ],
+        "referencePrefixes": { "issue": "#", "pr": "#" },
         "slots": {
           "settingsTab": "github.forgeSettingsTab",
           "icon": "github.providerIcon",

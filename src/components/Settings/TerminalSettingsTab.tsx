@@ -4,7 +4,8 @@ import { cn } from "@/lib/utils";
 import { notify } from "@/lib/notify";
 import { latestUndoOnly, UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
-import { joinBadges, useSettingsOwnerMarker } from "@/hooks/useSettingsOwner";
+import { SECTION_SETTINGS } from "@/components/Settings/settingsSectionOwners";
+import { useSettingsRowOwnerNote } from "@/hooks/useSettingsOwner";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import { SettingsNumberInput } from "@/components/Settings/SettingsNumberInput";
 import { SettingsPresetGroup } from "@/components/Settings/SettingsPresetGroup";
@@ -27,15 +28,18 @@ import {
   usePerformanceModeStore,
   useScrollbackStore,
   useScreenReaderStore,
-  useTerminalInputStore,
   useTwoPaneSplitStore,
 } from "@/store";
 import type { ScreenReaderMode } from "@/store";
 import type { PanelLayoutStrategy } from "@/types";
 import {
-  getScrollbackForType,
+  AGENT_SCROLLBACK_MAX_LINES,
   estimateMemoryUsage,
+  getScrollbackForType,
   PERFORMANCE_MODE_SCROLLBACK,
+  PLAIN_SCROLLBACK_MAX_LINES,
+  PLAIN_SCROLLBACK_MIN_LINES,
+  SCROLLBACK_ESTIMATE_COLUMNS,
 } from "@/utils/scrollbackConfig";
 import { formatBytes } from "@/lib/formatBytes";
 import { actionService } from "@/services/ActionService";
@@ -49,57 +53,6 @@ import {
 import { SCROLLBACK_DEFAULT } from "@shared/config/scrollback";
 import { computeDefaultCachedViews } from "@shared/config/cachedProjectViews";
 import type { HardwareInfo } from "@shared/types/ipc/system";
-import { isRemoteShellSupported } from "@/lib/remoteHosts";
-import {
-  refreshUploadPreferences,
-  setInterceptCtrlVImages,
-  shouldInterceptCtrlVImages,
-} from "@/components/Terminal/uploads/ctrlVImagePaste";
-
-/**
- * Ctrl+V in an agent terminal of a window attached to a remote host sends this
- * machine's clipboard image. Shown only once remote hosts are in use.
- */
-function RemoteClipboardImagesRow() {
-  const [inUse, setInUse] = useState(false);
-  const [enabled, setEnabled] = useState(shouldInterceptCtrlVImages);
-  useEffect(() => {
-    if (!isRemoteShellSupported()) return;
-    let cancelled = false;
-    const check = async () => {
-      if (!(await window.electron.remoteHosts.isInUse()) || cancelled) return;
-      await refreshUploadPreferences();
-      if (cancelled) return;
-      setEnabled(shouldInterceptCtrlVImages());
-      setInUse(true);
-    };
-    check().catch((error: unknown) =>
-      logWarn("[TerminalSettings] Remote hosts check failed", { error })
-    );
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-  if (!inUse) return null;
-  const update = (next: boolean) => {
-    setEnabled(next);
-    setInterceptCtrlVImages(next).catch((error: unknown) => {
-      setEnabled(!next);
-      logError("[TerminalSettings] Failed to save the Ctrl+V image setting", error);
-    });
-  };
-  return (
-    <SettingsSwitchCard
-      id="terminal-remote-clipboard-images"
-      title="Send my clipboard images to remote agents on Ctrl+V"
-      subtitle="In a window attached to another machine, an agent's Ctrl+V gets the image on this computer's clipboard instead of the host's. With no image on the clipboard, Ctrl+V goes to the agent unchanged."
-      isEnabled={enabled}
-      onChange={() => update(!enabled)}
-      isModified={!enabled}
-      onReset={() => update(true)}
-    />
-  );
-}
 
 const STRATEGIES: Array<{
   id: PanelLayoutStrategy;
@@ -157,7 +110,6 @@ const TYPICAL_TERMINAL_COUNTS: { agent: number; plain: number } = {
 
 const TERMINAL_SUBTABS: SettingsSubtabItem[] = [
   { id: "performance", label: "Performance" },
-  { id: "input", label: "Input" },
   { id: "layout", label: "Layout" },
   { id: "scrollback", label: "Scrollback" },
   { id: "accessibility", label: "Accessibility" },
@@ -165,8 +117,7 @@ const TERMINAL_SUBTABS: SettingsSubtabItem[] = [
 
 const TERMINAL_SUBTAB_IDS = TERMINAL_SUBTABS.map((s) => s.id);
 
-type SaveGroup =
-  "resources" | "project-views" | "input" | "grid-layout" | "scrollback" | "accessibility";
+type SaveGroup = "resources" | "project-views" | "grid-layout" | "scrollback" | "accessibility";
 
 interface SaveFailure {
   group: SaveGroup;
@@ -187,16 +138,14 @@ interface TerminalSettingsTabProps {
 
 export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSettingsTabProps) {
   // Terminal behaviour runs where the terminals do; limits, cached views and assistive
-  // settings belong to this screen. A remote window says whose on each section.
-  const ownerMarker = useSettingsOwnerMarker();
+  // settings belong to this screen. A remote window says whose on each section, and on
+  // performance mode, the odd row out in its section.
+  const rowOwnerNote = useSettingsRowOwnerNote();
   const layoutConfig = useLayoutConfigStore((state) => state.layoutConfig);
 
   const performanceMode = usePerformanceModeStore((state) => state.performanceMode);
 
   const scrollbackLines = useScrollbackStore((state) => state.scrollbackLines);
-
-  const hybridInputEnabled = useTerminalInputStore((state) => state.hybridInputEnabled);
-  const hybridInputAutoFocus = useTerminalInputStore((state) => state.hybridInputAutoFocus);
 
   const screenReaderMode = useScreenReaderStore((state) => state.screenReaderMode);
   const resourceMonitoringEnabled = useResourceMonitoringStore((state) => state.enabled);
@@ -271,11 +220,6 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
       });
   }, [initializeFromHardware]);
 
-  const memoryEstimate = useMemo(() => {
-    const base = performanceMode ? PERFORMANCE_MODE_SCROLLBACK : scrollbackLines;
-    return estimateMemoryUsage(TYPICAL_TERMINAL_COUNTS, base);
-  }, [performanceMode, scrollbackLines]);
-
   const scrollbackLimits = useMemo(() => {
     const effectiveBase = performanceMode ? PERFORMANCE_MODE_SCROLLBACK : scrollbackLines;
     const types: Array<{ isAgent: boolean; label: string }> = [
@@ -283,12 +227,24 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
       { isAgent: false, label: "Shells and dev servers" },
     ];
     return types.map(({ isAgent, label }) => ({
+      isAgent,
       label,
       limit: performanceMode
         ? PERFORMANCE_MODE_SCROLLBACK
         : getScrollbackForType(isAgent, effectiveBase),
     }));
   }, [performanceMode, scrollbackLines]);
+
+  // Priced from the limits shown above, so performance mode's flat cap is
+  // estimated as what terminals actually keep rather than as a base to scale.
+  const memoryEstimate = useMemo(() => {
+    const limitFor = (isAgent: boolean) =>
+      scrollbackLimits.find((l) => l.isAgent === isAgent)?.limit ?? 0;
+    return estimateMemoryUsage(TYPICAL_TERMINAL_COUNTS, {
+      agent: limitFor(true),
+      plain: limitFor(false),
+    });
+  }, [scrollbackLimits]);
 
   const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
 
@@ -395,20 +351,6 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
     );
   };
 
-  const setHybridInputEnabled = (enabled: boolean) =>
-    persist(
-      "input",
-      () => dispatchSetting("terminalConfig.setHybridInputEnabled", { enabled }),
-      "Failed to persist hybrid input setting"
-    );
-
-  const setHybridInputAutoFocus = (enabled: boolean) =>
-    persist(
-      "input",
-      () => dispatchSetting("terminalConfig.setHybridInputAutoFocus", { enabled }),
-      "Failed to persist hybrid input focus setting"
-    );
-
   const handleScreenReaderModeChange = (mode: ScreenReaderMode) =>
     persist(
       "accessibility",
@@ -453,13 +395,16 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
 
       <div {...subtabPanelProps("terminal", effectiveSubtab)} className="space-y-8">
         {effectiveSubtab === "performance" && (
-          <SettingsSection title="Terminal resources" badge={ownerMarker("host")}>
+          <SettingsSection title="Terminal resources" settings={SECTION_SETTINGS.terminalResources}>
             {saveError("resources")}
             <SettingsGroup>
               <SettingsSwitchCard
                 id="terminal-performance-mode"
                 title="Performance mode"
-                subtitle={`Cuts scrollback to ${PERFORMANCE_MODE_SCROLLBACK} lines and turns off animations, for low-end hardware or high-density workflows. Existing terminals keep their scrollback until respawned.`}
+                subtitle={rowOwnerNote(
+                  `Cuts scrollback to ${PERFORMANCE_MODE_SCROLLBACK} lines and turns off animations, for low-end hardware or high-density workflows. Existing terminals keep their scrollback until respawned.`,
+                  "terminalConfig.performanceMode"
+                )}
                 isEnabled={performanceMode}
                 onChange={() => void setPerformanceMode(!performanceMode)}
                 ariaLabel="Performance Mode Toggle"
@@ -540,7 +485,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
         {effectiveSubtab === "performance" && (
           <SettingsSection
             title="Panel limits"
-            badge={ownerMarker("device")}
+            settings={SECTION_SETTINGS.panelLimits}
             id="terminal-panel-limits"
             description="When warnings appear as you open more panels. Limits are detected from your hardware on first launch."
           >
@@ -632,13 +577,13 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
         )}
 
         {effectiveSubtab === "performance" && (
-          <SettingsSection title="Project views" badge={ownerMarker("device")}>
+          <SettingsSection title="Project views" settings={SECTION_SETTINGS.projectViews}>
             {saveError("project-views")}
             <SettingsGroup>
               <SettingsPresetGroup
                 id="terminal-cached-project-views"
                 label="Cached project views"
-                description={`Project views kept loaded in memory. More keeps switching back near-instant; fewer saves memory. ${
+                description={`Project views kept loaded across all windows, counting the one each window shows. Shown projects always stay loaded. More keeps switching back near-instant; fewer saves memory. ${
                   defaultCachedViews !== null
                     ? `Default on this machine: ${defaultCachedViews}.`
                     : "The default scales with your RAM."
@@ -658,45 +603,12 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
           </SettingsSection>
         )}
 
-        {effectiveSubtab === "input" && (
-          <SettingsSection title="Agent input" badge={ownerMarker("host")}>
-            {saveError("input")}
-            <SettingsGroup>
-              <SettingsSwitchCard
-                id="terminal-hybrid-input"
-                title="Hybrid input bar"
-                subtitle="Show the multi-line input bar at the bottom of agent terminals"
-                isEnabled={hybridInputEnabled}
-                onChange={() => void setHybridInputEnabled(!hybridInputEnabled)}
-                isModified={!hybridInputEnabled}
-                onReset={() => void setHybridInputEnabled(true)}
-              />
-
-              <SettingsDependents
-                disabled={!hybridInputEnabled}
-                reason="Turn on the hybrid input bar to choose where focus starts"
-              >
-                <SettingsSwitchCard
-                  id="terminal-hybrid-autofocus"
-                  title="Focus the input bar first"
-                  subtitle="Agent panes start with the input bar focused instead of the terminal. Clicking either still wins, and Cmd-Opt-Arrow and dropped files follow whichever you're using."
-                  isEnabled={hybridInputAutoFocus}
-                  onChange={() => void setHybridInputAutoFocus(!hybridInputAutoFocus)}
-                  isModified={!hybridInputAutoFocus}
-                  onReset={() => void setHybridInputAutoFocus(true)}
-                />
-              </SettingsDependents>
-              <RemoteClipboardImagesRow />
-            </SettingsGroup>
-          </SettingsSection>
-        )}
-
         {effectiveSubtab === "layout" && (
           <>
             <SettingsSection
               title="Two-pane split"
               id="terminal-two-pane-split"
-              badge={ownerMarker("device")}
+              settings={SECTION_SETTINGS.twoPaneSplit}
             >
               <SettingsGroup>
                 <SettingsSwitchCard
@@ -778,7 +690,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
 
             <SettingsSection
               title="Grid layout"
-              badge={ownerMarker("host")}
+              settings={SECTION_SETTINGS.gridLayout}
               id="terminal-grid-layout"
               description="How panels arrange in the grid as you add more"
             >
@@ -847,13 +759,14 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
             title="Scrollback history"
             id="terminal-scrollback"
             description="Background terminals may temporarily reduce scrollback under memory pressure"
-            badge={joinBadges("New terminals", ownerMarker("host"))}
+            badge="New terminals"
+            settings={SECTION_SETTINGS.scrollback}
           >
             {saveError("scrollback")}
             <SettingsGroup>
               <SettingsPresetGroup
                 label="Base scrollback"
-                description={`Every terminal scales from this: agent terminals keep 10× it and shells 0.3×, within their own limits. Default: ${SCROLLBACK_DEFAULT.toLocaleString()}.`}
+                description={`Every terminal scales from this: agent terminals keep 10× it, up to ${AGENT_SCROLLBACK_MAX_LINES.toLocaleString()} lines (fewer on the efficiency profile), and shells 0.3×, from ${PLAIN_SCROLLBACK_MIN_LINES.toLocaleString()} to ${PLAIN_SCROLLBACK_MAX_LINES.toLocaleString()}. Default: ${SCROLLBACK_DEFAULT.toLocaleString()}.`}
                 options={SCROLLBACK_OPTIONS}
                 value={scrollbackLines}
                 onChange={(value) => void handleScrollbackChange(value)}
@@ -883,7 +796,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
             <SettingsGroup id="memory-details">
               <SettingsRow
                 label="Estimated scrollback memory"
-                description={`A typical session of ${TYPICAL_TERMINAL_COUNTS.agent} agents (${formatBytes(memoryEstimate.agent)}) and ${TYPICAL_TERMINAL_COUNTS.plain} terminals (${formatBytes(memoryEstimate.plain)})`}
+                description={`A typical session of ${TYPICAL_TERMINAL_COUNTS.agent} agents (${formatBytes(memoryEstimate.agent)}) and ${TYPICAL_TERMINAL_COUNTS.plain} terminals (${formatBytes(memoryEstimate.plain)}) with full history, at ${SCROLLBACK_ESTIMATE_COLUMNS} columns wide`}
                 control={
                   <span className="font-mono text-xs font-medium text-text-primary">
                     {formatBytes(memoryEstimate.total)}
@@ -895,7 +808,10 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
         )}
 
         {effectiveSubtab === "accessibility" && (
-          <SettingsSection title="Assistive technology" badge={ownerMarker("device")}>
+          <SettingsSection
+            title="Assistive technology"
+            settings={SECTION_SETTINGS.assistiveTechnology}
+          >
             {saveError("accessibility")}
             <SettingsGroup>
               <SettingsPresetGroup

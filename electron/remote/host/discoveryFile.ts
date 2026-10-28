@@ -17,6 +17,13 @@ export interface HostDiscoveryInfo {
   token: string;
   pid: number;
   /**
+   * When `pid` started, as `ps -o lstart=` (macOS, whitespace collapsed) or
+   * /proc field 22 (Linux) reports it: a reader tells this host from a stranger
+   * that inherited the pid after a crash. Absent from older hosts and where the
+   * platform can't say.
+   */
+  startedAt?: string;
+  /**
    * The argv that runs the host's build (its executable, and its app folder
    * when unpackaged), so a Shell whose ssh server refuses socket forwarding
    * can start `<command> --attach-stdio` there instead.
@@ -29,6 +36,7 @@ const DiscoverySchema = z.object({
   socketPath: z.string().min(1).max(1024),
   token: z.string().regex(/^[0-9a-f]{64}$/),
   pid: z.number().int().min(0),
+  startedAt: z.string().min(1).max(64).optional(),
   command: z.array(z.string().min(1).max(4096)).min(1).max(4).optional(),
 });
 

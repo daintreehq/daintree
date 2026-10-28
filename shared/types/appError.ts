@@ -1,11 +1,21 @@
 import type { PluginHostError } from "./remoteHosts.js";
+import type { RequiredPluginToolsError } from "./ipc/pluginAgentMcp.js";
 
 /**
  * Structured, allowlisted error details that survive IPC serialization and
  * the packaged-build sanitiser (unlike `context`, which is stripped). Keep
  * every member small and free of paths, secrets and user content.
  */
-export type AppErrorDetails = PluginHostError;
+export type AppErrorDetails = PluginHostError | RequiredPluginToolsError | HostSwitchOnScreenError;
+
+/**
+ * A host switch that failed and is showing why on the window's own switch
+ * screen: whoever asked for it says nothing more, so the failure reads once.
+ */
+export interface HostSwitchOnScreenError {
+  code: "HOST_SWITCH_ON_SCREEN";
+  switchId: string;
+}
 
 /**
  * Discriminated codes carried by `AppError` (main process) and
@@ -65,11 +75,17 @@ export type AppErrorCode =
   // the details travel as `AppErrorDetails`.
   | "PLUGIN_NOT_ON_HOST"
   | "PLUGIN_INCOMPATIBLE"
+  // A plugin action returned a result its own `resultSchema` rejects. Crosses
+  // to the renderer so the dispatch reports it as the built-in code does.
+  | "RESULT_VALIDATION_ERROR"
   // The link to the window's host is down. For a mutation this is an unknown
   // outcome, not a failure: resolve it through the operation id.
   | "HOST_DISCONNECTED"
   | "OUTCOME_UNKNOWN"
   | "HOST_VERSION_MISMATCH"
+  // A host's port couldn't be forwarded to the same port here: something on
+  // this machine, or another forward, already has it.
+  | "PORT_IN_USE"
   // A host's settings changed after the copy to it was previewed; it applies
   // nothing and asks for a fresh preview rather than write over the change.
   | "SETTINGS_PREVIEW_STALE"
@@ -86,6 +102,12 @@ export type AppErrorCode =
   | "NO_FRONTEND_ATTACHED"
   // A channel reached a host over the link that has no host-side meaning.
   | "CHANNEL_NOT_REMOTABLE"
+  // The window's host refused a channel its build doesn't have, while its build
+  // differs from this machine's. The link stays up; only that call fails.
+  | "HOST_BUILD_SKEW"
   // Another frontend holds the drive lease for this project.
   | "DRIVEN_ELSEWHERE"
+  // An agent launch that requires a plugin's agent tools was refused because
+  // they couldn't be handed over; the per-plugin states travel as details.
+  | "REQUIRED_PLUGIN_TOOLS_UNAVAILABLE"
   | "INTERNAL";

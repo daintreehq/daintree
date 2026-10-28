@@ -12,7 +12,13 @@
  */
 
 import type { HostLogEvent } from "./host-log.js";
-import type { BranchInfo, CreateWorktreeOptions, RepoState, WorktreeChanges } from "./git.js";
+import type {
+  BranchInfo,
+  CreateWorktreeOptions,
+  GitDiffSide,
+  RepoState,
+  WorktreeChanges,
+} from "./git.js";
 import type {
   Worktree,
   WorktreeMood,
@@ -137,6 +143,10 @@ export interface WorktreeSnapshot {
   prCiStatus?: CIStatusState;
   prTitle?: string;
   issueTitle?: string;
+  /** Owner of `issueNumber` (#13744); absent means the code forge's number. */
+  issueProviderId?: string;
+  issueId?: string;
+  issueKey?: string;
   /**
    * Offline-derived sentence-cased title parsed from `issue-<n>-<slug>`
    * branches, used as a fallback headline when `issueTitle` hasn't been
@@ -614,6 +624,7 @@ export type WorkspaceHostRequest =
       ignoreWhitespace?: boolean;
       offset?: number;
       maxBytes?: number;
+      side?: GitDiffSide;
     }
   // App-wide workspace power policy. The host keeps it as a separate input
   // from its own project-lifecycle state and derives permissions from both.
@@ -749,7 +760,48 @@ export type WorkspaceHostRequest =
       forgeRequestId: string;
       ok: false;
       error: string;
+    }
+  // Answer to a `worktree-setup:list` or `worktree-setup:run` event (#13807),
+  // correlated by `setupRequestId`. A cancelled run gets none.
+  | {
+      type: "worktree-setup:result";
+      setupRequestId: string;
+      ok: true;
+      value: unknown;
+    }
+  | {
+      type: "worktree-setup:result";
+      setupRequestId: string;
+      ok: false;
+      error: string;
     };
+
+/**
+ * A plugin's worktree setup step as main declares it to the workspace host
+ * (#13807): enough to show it, ask for it to be allowed, and run it.
+ */
+export interface WorktreeSetupStepDescriptor {
+  pluginId: string;
+  pluginName: string;
+  pluginVersion: string;
+  stepId: string;
+  label: string;
+  timeoutMs: number;
+}
+
+/** The worktree a plugin setup step runs for, as the host knows it. */
+export interface WorktreeSetupStepTarget {
+  worktreeId: string;
+  worktreePath: string;
+  branch: string | null;
+}
+
+/**
+ * How a plugin setup step ended. `skipped` — the plugin was not there to run
+ * it: unloaded, hidden for the project, not activating, or with no handler.
+ */
+export type WorktreeSetupStepRunOutcome =
+  { state: "succeeded" } | { state: "failed" | "timed-out" | "skipped"; error: string };
 
 /**
  * Forge RPC methods the workspace-host can request from main. The
@@ -773,7 +825,19 @@ export type ForgeRpcMethod =
   | "getCIStatuses"
   | "probeOpenPRList"
   | "getRateLimit"
-  | "clearPullRequestCaches";
+  | "clearPullRequestCaches"
+  | "resolveIssueBranchClaim"
+  | "getIssueForLink";
+
+/**
+ * Result of `resolveIssueBranchClaim` (#13744): the literal keys the project's
+ * issues provider claims in branch names, `null` when none does, or `"retry"`
+ * while the answer isn't knowable yet (plugin scan still running, or the
+ * provider failed to report) — the host keeps what it has and asks again.
+ */
+export type ForgeIssueBranchClaimResult =
+  | { status: "resolved"; claim: { providerId: string; keys: string[] } | null }
+  | { status: "retry" };
 
 /**
  * Result shape for `resolveProvider` — used by typed parsing of
@@ -1026,7 +1090,14 @@ export type WorkspaceHostEvent =
   // surfaces a single escalation toast instead of the per-card auth stripe.
   // Re-armed by `retry-auth-fetch` / credential rotation so a later
   // re-confirmation can re-signal.
-  | { type: "fetch-auth-failure-confirmed"; reason: import("./ipc/errors.js").GitOperationReason }
+  | {
+      type: "fetch-auth-failure-confirmed";
+      reason: import("./ipc/errors.js").GitOperationReason;
+      /** Folder name of the repo, never its path. */
+      repoName: string;
+      /** The remote whose fetch kept failing, e.g. `origin`. */
+      remote: string;
+    }
   // A switched-to view's report that its worktree statuses landed (or that its
   // deadline passed first), relayed by the host with its own load marks
   // attached. Main folds it into the switch's `projectswitch.status-timing`
@@ -1097,6 +1168,8 @@ export type WorkspaceHostEvent =
       providerId?: string;
       /** Provider-agnostic linked projection (dual-shipped alongside legacy fields during migration). */
       linked?: PluginWorktreeLinked | null;
+      /** Set for an issues provider's branch-claimed issue (#13744). */
+      issueProvenance?: { issueProviderId: string; issueKey: string; issueId?: string };
     }
   | {
       type: "issue-not-found";
@@ -1184,6 +1257,19 @@ export type WorkspaceHostEvent =
       namespacedId?: string;
       args: unknown[];
     }
+  // Plugin worktree setup steps (#13807). The handlers live in main or a
+  // plugin worker, so the host asks main which steps its project declares
+  // (`list`) and to run one (`run`), each answered by `worktree-setup:result`.
+  // `cancel` aborts a run whose worktree went away. The project is the one this
+  // host serves; main reads it from its own record, never from the event.
+  | { type: "worktree-setup:list"; setupRequestId: string }
+  | {
+      type: "worktree-setup:run";
+      setupRequestId: string;
+      step: WorktreeSetupStepDescriptor;
+      target: WorktreeSetupStepTarget;
+    }
+  | { type: "worktree-setup:cancel"; setupRequestId: string }
   // WSL git opt-in entry is no longer reachable from the live worktree set
   // (#9926). Fired both on individual worktree removal (via the host's
   // `removeMonitor` chokepoint) and as a bulk self-heal pass at the end of

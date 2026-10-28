@@ -15,6 +15,8 @@ import {
   resetViewReloadBudget,
   requestUserViewReload,
   setViewUnsavedChanges,
+  subscribeViewUnsavedChanges,
+  getViewUnsavedPanelIds,
   syncPluginPanels,
   type PluginPanelSnapshotEntry,
 } from "@/services/plugin/pluginPanelLifecycle";
@@ -420,5 +422,48 @@ describe("unsaved changes (#12611)", () => {
     syncPluginPanels([], new Set());
 
     expect(hasViewUnsavedChanges("p1")).toBe(false);
+  });
+
+  it("outlives panel sweeps for a view hosted outside the grid (#14095)", () => {
+    // A sidebar or Home view reports its mounts under an id the panel store
+    // never lists; a sweep for an unrelated panel must not read it as removed.
+    const unmount = reportViewMounted("sidebar:acme/notes", { kindId: "k", pluginId: "x" });
+    setViewUnsavedChanges("sidebar:acme/notes", {}, true);
+    syncPluginPanels([panel()]);
+    syncPluginPanels([], new Set());
+
+    expect(hasViewUnsavedChanges("sidebar:acme/notes")).toBe(true);
+    unmount();
+  });
+});
+
+describe("view unsaved-change signal (#13815)", () => {
+  it("notifies only when a panel's unsaved status flips", () => {
+    const listener = vi.fn();
+    const unsubscribe = subscribeViewUnsavedChanges(listener);
+    const a = {};
+    const b = {};
+    setViewUnsavedChanges("p1", a, true);
+    setViewUnsavedChanges("p1", b, true);
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(getViewUnsavedPanelIds()).toEqual(["p1"]);
+    setViewUnsavedChanges("p1", a, false);
+    expect(listener).toHaveBeenCalledTimes(1);
+    setViewUnsavedChanges("p1", b, false);
+    expect(listener).toHaveBeenCalledTimes(2);
+    expect(getViewUnsavedPanelIds()).toEqual([]);
+    unsubscribe();
+    setViewUnsavedChanges("p1", a, true);
+    expect(listener).toHaveBeenCalledTimes(2);
+  });
+
+  it("notifies when a removed panel drops its flag", () => {
+    syncPluginPanels([{ panelId: "p1", kindId: "k", pluginId: "x", location: "grid" }]);
+    setViewUnsavedChanges("p1", {}, true);
+    const listener = vi.fn();
+    subscribeViewUnsavedChanges(listener);
+    syncPluginPanels([], new Set());
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(getViewUnsavedPanelIds()).toEqual([]);
   });
 });

@@ -111,6 +111,14 @@ export type SubprocessSpawner = (
  */
 export type ProcessTreeKiller = (pid: number) => void | Promise<void>;
 
+/** Why a server's tools may have changed: it said so, it exited on its own, or the host stopped it. */
+export type ToolsInvalidatedReason = "changed" | "exited" | "stopped";
+export type ToolsInvalidatedListener = (
+  pluginId: string,
+  serverId: string,
+  reason: ToolsInvalidatedReason
+) => void;
+
 interface PendingCall {
   resolve: (value: unknown) => void;
   reject: (reason: Error) => void;
@@ -226,6 +234,7 @@ export class PluginMcpSupervisor {
    * never leaves a timer that would respawn a server the host has dropped.
    */
   private readonly settingChangeTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly toolsInvalidatedListeners = new Set<ToolsInvalidatedListener>();
 
   constructor(options?: { spawner?: SubprocessSpawner; killTree?: ProcessTreeKiller }) {
     this.spawner = options?.spawner ?? defaultSpawner;
@@ -544,6 +553,15 @@ export class PluginMcpSupervisor {
       error?: unknown;
       method?: unknown;
     };
+    // A request from the server carries an id from its own id space, which can
+    // equal one of ours: it must never be read as the answer to our call. The
+    // handshake declared no client capabilities, so only `ping` is ours to
+    // answer; anything else (sampling, roots, elicitation) is refused rather
+    // than left for the server to wait on.
+    if (typeof message.method === "string" && message.id !== undefined && message.id !== null) {
+      this.answerServerRequest(state, message.id, message.method);
+      return;
+    }
     if (typeof message.id === "number") {
       const pending = state.pendingCalls.get(message.id);
       if (!pending) return;
@@ -571,9 +589,49 @@ export class PluginMcpSupervisor {
       // pre-notification tool list (the `.then` identity guard then no-ops). The
       // next enumeration starts a fresh fetch.
       state.toolsListInflight = null;
+      this.emitToolsInvalidated(state, "changed");
       return;
     }
     // Other notifications (no id) are ignored — we don't subscribe to any.
+  }
+
+  private answerServerRequest(state: SupervisedServerState, id: unknown, method: string): void {
+    const stdin = state.subprocess?.stdin;
+    if (!stdin) return;
+    const frame =
+      method === "ping"
+        ? { jsonrpc: "2.0" as const, id, result: {} }
+        : {
+            jsonrpc: "2.0" as const,
+            id,
+            error: { code: -32601, message: `Method not found: ${method}` },
+          };
+    try {
+      writeFrame(stdin, frame);
+    } catch {
+      // stdin closed with the server; its exit handler reports it.
+    }
+  }
+
+  /**
+   * Fires whenever a server's tool list may no longer be what was last read:
+   * it exited, crashed, was stopped or restarted, or said its tools changed.
+   */
+  onDidInvalidateTools(listener: ToolsInvalidatedListener): () => void {
+    this.toolsInvalidatedListeners.add(listener);
+    return () => {
+      this.toolsInvalidatedListeners.delete(listener);
+    };
+  }
+
+  private emitToolsInvalidated(state: SupervisedServerState, reason: ToolsInvalidatedReason): void {
+    for (const listener of this.toolsInvalidatedListeners) {
+      try {
+        listener(state.pluginId, state.serverId, reason);
+      } catch (err) {
+        console.error("[PluginMcpSupervisor] tools-invalidated listener threw:", err);
+      }
+    }
   }
 
   private attachStderrReader(state: SupervisedServerState): void {
@@ -641,6 +699,7 @@ export class PluginMcpSupervisor {
       state.pendingCalls.delete(id);
       pending.reject(new Error(state.lastError ?? "MCP server exited"));
     }
+    this.emitToolsInvalidated(state, "exited");
   }
 
   /**
@@ -655,6 +714,9 @@ export class PluginMcpSupervisor {
     serverId: string;
     tool: string;
     args?: Record<string, unknown>;
+    /** Aborting sends `notifications/cancelled` and drops whatever the server answers later. */
+    signal?: AbortSignal;
+    timeoutMs?: number;
   }): Promise<unknown> {
     const state = this.states.get(stateKey(input.pluginId, input.serverId));
     if (!state) {
@@ -673,8 +735,9 @@ export class PluginMcpSupervisor {
       state,
       "tools/call",
       { name: input.tool, arguments: input.args ?? {} },
-      TOOL_CALL_TIMEOUT_MS,
-      () => plainError("TIMEOUT", `tools/call "${input.tool}" timed out`)
+      input.timeoutMs ?? TOOL_CALL_TIMEOUT_MS,
+      () => plainError("TIMEOUT", `tools/call "${input.tool}" timed out`),
+      input.signal
     );
   }
 
@@ -690,25 +753,52 @@ export class PluginMcpSupervisor {
     method: string,
     params: Record<string, unknown>,
     timeoutMs: number,
-    makeTimeoutError: () => Error
+    makeTimeoutError: () => Error,
+    signal?: AbortSignal
   ): Promise<unknown> {
     const stdin = state.subprocess?.stdin;
     if (!stdin) {
       return Promise.reject(plainError("NOT_READY", "subprocess has no stdin stream"));
     }
+    if (signal?.aborted) {
+      return Promise.reject(abortReason(signal));
+    }
     const requestId = state.nextRequestId++;
     const promise = new Promise<unknown>((resolve, reject) => {
+      const settle = (): void => {
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
+      };
+      const onAbort = (): void => {
+        if (state.pendingCalls.get(requestId)?.timer !== timer) return;
+        state.pendingCalls.delete(requestId);
+        settle();
+        // The server may already have acted; cancellation only tells it to
+        // stop, and the answer it may still send matches no pending call.
+        try {
+          writeFrame(stdin, {
+            jsonrpc: "2.0" as const,
+            method: "notifications/cancelled",
+            params: { requestId, reason: "The caller cancelled the request." },
+          });
+        } catch {
+          // stdin closed with the server; nothing is left to cancel.
+        }
+        reject(abortReason(signal!));
+      };
       const timer = setTimeout(() => {
         state.pendingCalls.delete(requestId);
+        signal?.removeEventListener("abort", onAbort);
         reject(makeTimeoutError());
       }, timeoutMs);
+      signal?.addEventListener("abort", onAbort, { once: true });
       state.pendingCalls.set(requestId, {
         resolve: (value) => {
-          clearTimeout(timer);
+          settle();
           resolve(value);
         },
         reject: (reason) => {
-          clearTimeout(timer);
+          settle();
           reject(reason);
         },
         timer,
@@ -893,6 +983,7 @@ export class PluginMcpSupervisor {
     state.toolsCache = null;
     state.toolsListInflight = null;
     state.surfacedToolCount = 0;
+    this.emitToolsInvalidated(state, "stopped");
     const subprocess = state.subprocess;
     if (!subprocess) return;
     const pid = state.pid;
@@ -1236,6 +1327,10 @@ function parseToolsListResult(result: unknown): {
   const nextCursor =
     typeof obj.nextCursor === "string" && obj.nextCursor.length > 0 ? obj.nextCursor : undefined;
   return { tools, nextCursor };
+}
+
+function abortReason(signal: AbortSignal): Error {
+  return signal.reason instanceof Error ? signal.reason : plainError("ABORTED", "Request aborted");
 }
 
 function plainError(code: string, message: string): Error & { code: string } {

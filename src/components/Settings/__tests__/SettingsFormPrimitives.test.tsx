@@ -223,6 +223,24 @@ describe("SettingsSelect", () => {
     expect(screen.getByLabelText("Language").textContent).toContain("English");
   });
 
+  it("shows an option's icon in the trigger once it is selected", () => {
+    const Mark = ({ size }: { size?: number }) => <svg data-testid="mark" width={size} />;
+    render(
+      <SettingsSelect
+        label="Provider"
+        value="a"
+        onValueChange={() => {}}
+        options={[
+          { value: "a", label: "Alpha", icon: Mark },
+          { value: "b", label: "Beta" },
+        ]}
+      />
+    );
+    const trigger = screen.getByLabelText("Provider");
+    expect(trigger.textContent).toContain("Alpha");
+    expect(trigger.querySelector('[data-testid="mark"]')).not.toBeNull();
+  });
+
   it("sets aria-invalid when error is provided", () => {
     render(
       <SettingsSelect

@@ -18,6 +18,7 @@
 // class instances. Requests that expect a reply carry a `requestId`.
 
 import type {
+  PluginAccountRef,
   PluginIdentity,
   PluginIpcContext,
   PluginSettingsScope,
@@ -31,21 +32,34 @@ import type {
   PluginPtyProcessSpawnOptions,
   PluginProcessMode,
   PluginPanelBadge,
+  PluginToolbarButtonRuntimeState,
   PluginContextValue,
   PluginWorktreeCardStatus,
+  PluginWorktreeReviewCheck,
+  PluginTerminalStatus,
+  PluginPanelActivity,
+  PluginTaskProgress,
+  PluginTaskResult,
+  PluginTaskAbortCause,
+  PluginTaskStartOptions,
   PanelMenuItemContribution,
   BuiltInPluginCapability,
+  PluginActionResultSchema,
   PluginFsWriteOptions,
   PluginMcpCaller,
   PluginMcpJsonSchema,
   PluginMcpToolAnnotations,
   PluginSendToAgentOptions,
+  PluginRunRecipeOptions,
   PluginTerminalReadScreenOptions,
+  PluginAgentKeysInput,
   PluginFsReadFilesEncoding,
   PluginFsWalkOptions,
   PluginWorktreeSnapshot,
   PluginWorktreesChange,
+  PluginWorktreeSetupStepContext,
 } from "./plugin.js";
+import type { PluginServiceCaller } from "./pluginServices.js";
 
 /** Async host methods the worker proxy relays to main and awaits a reply for. */
 export type PluginHostCallMethod =
@@ -57,8 +71,12 @@ export type PluginHostCallMethod =
   | "sendToActiveAgent"
   | "agents.list"
   | "agents.listAll"
+  | "agents.interrupt"
+  | "agents.sendKeys"
+  | "agents.submit"
   | "terminals.readScreen"
   | "sendToAgent"
+  | "runRecipe"
   | "showToast"
   | "notify"
   | "dispatch"
@@ -67,19 +85,29 @@ export type PluginHostCallMethod =
   // A call, not a notify like the badges: main owns the per-plugin key cap,
   // and its rejection has to reach the plugin's `await` (#13506).
   | "setContext"
+  | "setToolbarButtonState"
   // A call for the same reason: whether the worktree is one this plugin may
   // reach is main's answer, and its refusal has to reach the caller (#13704).
   | "setWorktreeCardStatus"
+  | "setWorktreeReviewChecks"
+  // Likewise: main decides whether the terminal is one the plugin may reach (#13802).
+  | "setTerminalStatus"
+  // Likewise: main decides whether the panel is one of this plugin's (#13820).
+  | "setPanelActivity"
   | "actions.list"
   | "actions.get"
   | "settings.get"
   | "settings.set"
+  | "settings.unset"
   | "settings.open"
   | "settings.missingRequired"
+  | "account.getState"
+  | "account.getAccessToken"
   | "storage.get"
   | "storage.set"
   | "storage.delete"
   | "db.resolve"
+  | "db.authorizeWrite"
   | "db.prepareBackup"
   | "fs.readFile"
   | "fs.readFileBytes"
@@ -101,12 +129,28 @@ export type PluginHostCallMethod =
   | "clipboard.readText"
   | "system.openPath"
   | "system.showItemInFolder"
+  | "system.openExternal"
   | "documents.renderPdf"
+  | "artifacts.import"
+  | "artifacts.download"
+  | "artifacts.upload"
+  | "artifacts.stat"
+  | "artifacts.list"
+  | "artifacts.release"
   | "showQuickPick"
   | "showInputBox"
   | "showConfirm"
   | "process.spawn"
-  | "process.restart";
+  | "process.restart"
+  // Plugin tasks (#13819). Starting and finishing answer the caller; progress
+  // is a coalesced `tasks.report` notify below.
+  | "tasks.start"
+  | "tasks.finish"
+  // Services between plugins (#14105). Both answer with a typed outcome; the
+  // call's own deadline is main's, so the worker waits past it (see
+  // pluginHostCallDeadline).
+  | "services.call"
+  | "services.status";
 
 /** Fire-and-forget host methods (no reply needed). */
 export type PluginHostNotifyMethod =
@@ -120,6 +164,16 @@ export type PluginHostNotifyMethod =
   | "setPanelMenuItems"
   | "registerFileDecorationProvider"
   | "unregisterFileDecorationProvider"
+  | "registerWorktreeSetupStep"
+  | "unregisterWorktreeSetupStep"
+  | "registerSearchProvider"
+  | "unregisterSearchProvider"
+  | "registerContextProvider"
+  | "unregisterContextProvider"
+  | "registerService"
+  | "unregisterService"
+  | "registerWorktreeDeleteNotesProvider"
+  | "unregisterWorktreeDeleteNotesProvider"
   | "mcp.registerTools"
   | "mcp.unregisterTools"
   | "logger.info"
@@ -131,6 +185,9 @@ export type PluginHostNotifyMethod =
   // reply for the worker to await.
   | "process.write"
   | "process.resize"
+  // Task progress, the latest report per task over one coalescing window
+  // (#13819). Void in the public handle contract, like `process.write`.
+  | "tasks.report"
   // A push the worker refused before it crossed the port (over the size cap,
   // or not clonable), reported so main's metrics count it. Carries no payload.
   | "pushRejected";
@@ -156,9 +213,12 @@ export type PluginWorkerSubscriptionKind =
   | "worktrees"
   | "settings"
   | "storage"
+  | "account"
   | "agent-state"
+  | "terminal-lifecycle"
   | "all-agents"
   | "focused-panel"
+  | "project-presence"
   | "panel-lifecycle"
   | "system-wake"
   | "push-listeners"
@@ -171,8 +231,17 @@ export type PluginWorkerSubscriptionKind =
  * Callback kinds main invokes back in the worker. `file-decoration-method`
  * round-trips a registered `FileDecorationProviderImpl` method (just
  * `provideDecorations`, which is async — see {@link RegisterFileDecorationProviderParams}).
+ * `worktree-delete-notes` runs the bound `WorktreeDeleteNotesProviderImpl`'s
+ * `provideNotes` for one worktree (#13805).
  * `mcp-tool` runs one tool of a roster bound through `host.mcp.registerTools`,
- * and is the one kind main can cancel (`invoke-cancel`).
+ * `worktree-setup-step` one handler bound through
+ * `host.registerWorktreeSetupStep`, `search-provider` asks a quick switcher
+ * provider bound through `host.registerSearchProvider`, and
+ * `context-provider-method` asks a `host.registerContextProvider` impl to
+ * search or resolve (#13795), and `service-method` runs one method of a
+ * service bound through `host.registerService` for another plugin's call
+ * (#14105); they are the kinds main can cancel (`invoke-cancel`), each handing
+ * the plugin a signal.
  * `command` is the odd one out: nothing is registered ahead of it. The handler
  * module for a manifest-declared command is imported by the worker on first
  * dispatch, from the absolute path main resolved (#12274), so there is no
@@ -182,7 +251,16 @@ export type PluginWorkerSubscriptionKind =
  * the host calls and consumes synchronously, which can't cross this async port.
  */
 export type PluginWorkerInvokeKind =
-  "action" | "command" | "handler" | "file-decoration-method" | "mcp-tool";
+  | "action"
+  | "command"
+  | "handler"
+  | "file-decoration-method"
+  | "mcp-tool"
+  | "worktree-setup-step"
+  | "search-provider"
+  | "context-provider-method"
+  | "service-method"
+  | "worktree-delete-notes";
 
 /** Messages sent main → worker. */
 export type PluginHostToWorkerMessage =
@@ -263,6 +341,41 @@ export type PluginHostToWorkerMessage =
       method: string;
       args: unknown[];
     }
+  /** Ask the bound worktree delete notes provider about one worktree (#13805). */
+  | {
+      type: "invoke";
+      requestId: string;
+      kind: "worktree-delete-notes";
+      providerId: string;
+      worktree: PluginWorktreeSnapshot;
+    }
+  /**
+   * Ask a registered context provider to search (the user's text after its
+   * prefix) or resolve (one item id). Cancellable like `mcp-tool`: the worker
+   * hands the plugin a signal that a matching `invoke-cancel` aborts.
+   */
+  | {
+      type: "invoke";
+      requestId: string;
+      kind: "context-provider-method";
+      providerId: string;
+      method: "search" | "resolve";
+      args: [string];
+    }
+  /**
+   * Run one method of a service the worker bound through `host.registerService`
+   * for another plugin's `host.services.call` (#14105). `caller` is the host's
+   * record of who called. Cancellable like `context-provider-method`.
+   */
+  | {
+      type: "invoke";
+      requestId: string;
+      kind: "service-method";
+      serviceName: string;
+      method: string;
+      args: unknown;
+      caller: PluginServiceCaller;
+    }
   /**
    * Run one tool of an `agentMcp` roster the worker registered. `caller` is the
    * host's provenance for the call, copied field by field on the main side so
@@ -278,7 +391,31 @@ export type PluginHostToWorkerMessage =
       caller: PluginMcpCaller;
     }
   /**
-   * Abort an in-flight `mcp-tool` invoke — the main-side counterpart of the
+   * Run the worktree setup step handler the worker bound for `stepId`. The
+   * worker builds the handler's `signal` itself; `invoke-cancel` aborts it.
+   */
+  | {
+      type: "invoke";
+      requestId: string;
+      kind: "worktree-setup-step";
+      stepId: string;
+      context: WorktreeSetupStepWireContext;
+    }
+  /**
+   * Ask a runtime search provider the worker registered (#13792). The worker
+   * hands the provider an `AbortSignal` that a matching `invoke-cancel` aborts.
+   */
+  | {
+      type: "invoke";
+      requestId: string;
+      kind: "search-provider";
+      providerId: string;
+      query: string;
+      context: { mode: "scoped" | "blended"; limit: number };
+    }
+  /**
+   * Abort an in-flight `mcp-tool`, `worktree-setup-step`, `search-provider`,
+   * `context-provider-method` or `service-method` invoke — the main-side counterpart of the
    * worker's `host-cancel`, since an `AbortSignal` cannot cross the port. Main
    * has already settled the caller by the time this is sent, so any
    * `invoke-result` that follows for this id is dropped.
@@ -359,6 +496,8 @@ export type PluginWorkerToHostMessage =
       debounceMs?: number;
       /** Handle id for `process-exit` / `process-crash` / `process-data` subscriptions. */
       processId?: string;
+      /** The project an `account` subscription's binding is read for; its `key` names the connection. */
+      projectId?: string;
     }
   /** Close a previously opened subscription. */
   | { type: "unsubscribe"; subscriptionId: string }
@@ -376,7 +515,11 @@ export interface RegisterActionParams {
     kind: "command" | "query";
     danger: "safe" | "confirm";
     keywords?: string[];
+    when?: string;
+    enablement?: string;
     inputSchema?: Record<string, unknown>;
+    /** Crosses explicitly, like `requires`; main compiles and enforces it. */
+    resultSchema?: PluginActionResultSchema;
     /**
      * Per-action capability intent (#11299). Must cross the port explicitly:
      * the bridge reconstructs the descriptor field by field, so an omitted
@@ -442,6 +585,12 @@ export interface SetToolbarButtonBadgeParams {
   badge: PluginPanelBadge | null;
 }
 
+/** Params for `setToolbarButtonState` (`host-call`). `null` clears the state. */
+export interface SetToolbarButtonStateParams {
+  buttonId: string;
+  state: PluginToolbarButtonRuntimeState | null;
+}
+
 /** Params for `setContext` (`host-call`). `null` clears the key. */
 export interface SetContextParams {
   key: string;
@@ -452,6 +601,24 @@ export interface SetContextParams {
 export interface SetWorktreeCardStatusParams {
   worktreeId: string;
   status: PluginWorktreeCardStatus | null;
+}
+
+/** Params for `setWorktreeReviewChecks` (`host-call`). `null` clears the list. */
+export interface SetWorktreeReviewChecksParams {
+  worktreeId: string;
+  checks: readonly PluginWorktreeReviewCheck[] | null;
+}
+
+/** Params for `setTerminalStatus` (`host-call`). `null` clears the status. */
+export interface SetTerminalStatusParams {
+  terminalId: string;
+  status: PluginTerminalStatus | null;
+}
+
+/** Params for `setPanelActivity` (`host-call`). `null` clears the report. */
+export interface SetPanelActivityParams {
+  panelId: string;
+  activity: PluginPanelActivity | null;
 }
 
 /** Params for `setPanelMenuItems` (`host-notify`). `null` clears the list. */
@@ -479,6 +646,83 @@ export interface UnregisterFileDecorationProviderParams {
 }
 
 /**
+ * Params for `registerWorktreeSetupStep` and `unregisterWorktreeSetupStep`
+ * (`host-notify`). The handler stays in the worker; main runs it through a
+ * `worktree-setup-step` invoke.
+ */
+export interface WorktreeSetupStepRegistrationParams {
+  stepId: string;
+}
+
+/** A {@link PluginWorktreeSetupStepContext} without its signal, which cannot cross the port. */
+export type WorktreeSetupStepWireContext = Omit<PluginWorktreeSetupStepContext, "signal">;
+
+/**
+ * Params for `registerSearchProvider` and `unregisterSearchProvider`
+ * (`host-notify`). Only the id travels; the provider function stays in the
+ * worker and main asks it through a `search-provider` invoke.
+ */
+export interface SearchProviderRegistrationParams {
+  providerId: string;
+}
+
+/**
+ * Params for `registerContextProvider` (`host-notify`, #13795). Only the
+ * descriptor travels; `search` and `resolve` stay in the worker and main asks
+ * them through a `context-provider-method` invoke.
+ */
+export interface RegisterContextProviderParams {
+  descriptor: { id: string };
+}
+
+/** Params for `unregisterContextProvider` (`host-notify`). */
+export interface UnregisterContextProviderParams {
+  providerId: string;
+}
+
+/**
+ * Params for `registerService` (`host-notify`, #14105). Only the name and the
+ * method names travel; the handlers stay in the worker and main runs them
+ * through a `service-method` invoke.
+ */
+export interface RegisterServiceParams {
+  name: string;
+  methods: string[];
+}
+
+/** Params for `unregisterService` (`host-notify`). */
+export interface UnregisterServiceParams {
+  name: string;
+}
+
+/** Params for `services.call` (`host-call`). The signal travels as `host-cancel`. */
+export interface ServicesCallParams {
+  name: string;
+  method: string;
+  args: unknown;
+  timeoutMs?: number;
+}
+
+/** Params for `services.status` (`host-call`). */
+export interface ServicesStatusParams {
+  name: string;
+}
+
+/**
+ * Params for `registerWorktreeDeleteNotesProvider` (`host-notify`, #13805). The
+ * `provideNotes` impl stays in the worker; main asks it through a
+ * `worktree-delete-notes` invoke.
+ */
+export interface RegisterWorktreeDeleteNotesProviderParams {
+  descriptor: { id: string };
+}
+
+/** Params for `unregisterWorktreeDeleteNotesProvider` (`host-notify`). */
+export interface UnregisterWorktreeDeleteNotesProviderParams {
+  providerId: string;
+}
+
+/**
  * Params for `mcp.registerTools` (`host-notify`). Only what an agent is shown
  * travels; each tool's `execute` stays in the worker and main runs it through an
  * `mcp-tool` invoke. The host re-validates the whole roster — the worker is the
@@ -493,6 +737,7 @@ export interface RegisterMcpToolsParams {
       inputSchema: PluginMcpJsonSchema;
       outputSchema?: PluginMcpJsonSchema;
       annotations?: PluginMcpToolAnnotations;
+      group?: string;
     }
   >;
 }
@@ -526,9 +771,20 @@ export interface SettingsSetParams {
   scope: PluginSettingsScope;
 }
 
+/** Params for `settings.unset` (`host-call`). Omitted `scope` targets the key's declared scope. */
+export interface SettingsUnsetParams {
+  key: string;
+  scope?: PluginSettingsScope;
+}
+
 /** Params for `settings.open` (`host-call`). `key` omitted opens the plugin's settings home. */
 export interface SettingsOpenParams {
   key?: string;
+}
+
+/** Params for `account.getState` / `account.getAccessToken` (`host-call`). Omitted means no ref. */
+export interface AccountCallParams {
+  ref?: PluginAccountRef;
 }
 
 /** Params for `storage.get` (`host-call`). */
@@ -593,6 +849,23 @@ export interface SendToActiveAgentParams {
   options?: { submit?: boolean };
 }
 
+/** Params for `agents.interrupt` (`host-call`). */
+export interface AgentsInterruptParams {
+  terminalId: string;
+}
+
+/** Params for `agents.sendKeys` (`host-call`). */
+export interface AgentsSendKeysParams {
+  terminalId: string;
+  input: PluginAgentKeysInput;
+}
+
+/** Params for `agents.submit` (`host-call`). */
+export interface AgentsSubmitParams {
+  terminalId: string;
+  text: string;
+}
+
 /** Params for `terminals.readScreen` (`host-call`). */
 export interface TerminalsReadScreenParams {
   terminalId: string;
@@ -603,6 +876,12 @@ export interface TerminalsReadScreenParams {
 export interface SendToAgentParams {
   text: string;
   options?: PluginSendToAgentOptions;
+}
+
+/** Params for `runRecipe` (`host-call`). */
+export interface RunRecipeParams {
+  recipeId: string;
+  options?: PluginRunRecipeOptions;
 }
 
 /** Params for `showQuickPick` (`host-call`). */
@@ -702,12 +981,42 @@ export interface SystemPathParams {
   targetPath: string;
 }
 
+/** Params for `system.openExternal` (`host-call`). */
+export interface SystemOpenExternalParams {
+  url: string;
+}
+
 /**
  * Params for `documents.renderPdf` (`host-call`). The options are forwarded
  * untouched: the host is the one that validates them, since the worker is the
  * untrusted side.
  */
 export interface DocumentsRenderPdfParams {
+  options: unknown;
+}
+
+/**
+ * Params for the creating `artifacts.*` calls (`host-call`). Arguments travel
+ * as sent, minus what can't be cloned: the signal rides the call's own
+ * `host-cancel`, and `onProgress` becomes `progressSubscriptionId`, whose
+ * `subscription-event`s carry `PluginArtifactProgress` values.
+ */
+export interface ArtifactsTransferParams {
+  /** `import`'s source, `download`'s and `upload`'s request. */
+  target: unknown;
+  /** `upload`'s artifact id. */
+  artifactId?: unknown;
+  options: unknown;
+  progressSubscriptionId?: string;
+}
+
+/** Params for `artifacts.stat` / `artifacts.release` (`host-call`). */
+export interface ArtifactsIdParams {
+  artifactId: unknown;
+}
+
+/** Params for `artifacts.list` (`host-call`). */
+export interface ArtifactsListParams {
   options: unknown;
 }
 
@@ -732,6 +1041,42 @@ export interface ProcessSpawnParams {
 export interface ProcessSpawnResult {
   id: string;
   mode: PluginProcessMode;
+}
+
+/**
+ * Params for `tasks.start` (`host-call`). The user's Cancel arrives as a
+ * `subscription-event` keyed by `subscriptionId`, which the worker registers
+ * before the call so a cancel can't race ahead of it.
+ */
+export interface TaskStartParams {
+  subscriptionId: string;
+  options: PluginTaskStartOptions;
+}
+
+/**
+ * The `subscription-event` payload that aborts a worker-side task signal:
+ * whether the user cancelled or the host interrupted.
+ */
+export interface TaskAbortEvent {
+  cause: PluginTaskAbortCause;
+}
+
+/** Result of `tasks.start` (`host-call`): the host-assigned task id. */
+export interface TaskStartResult {
+  id: string;
+  /** The plugin had unloaded: the worker hands back an inert handle. */
+  inert?: true;
+}
+
+/** Params for `tasks.report` (`host-notify`): one coalescing window's latest report per task. */
+export interface TaskReportParams {
+  reports: Array<{ taskId: string; progress: PluginTaskProgress }>;
+}
+
+/** Params for `tasks.finish` (`host-call`). */
+export interface TaskFinishParams {
+  taskId: string;
+  result: PluginTaskResult;
 }
 
 /** Params for `process.kill` (`host-notify`) and `process.restart` (`host-call`). */

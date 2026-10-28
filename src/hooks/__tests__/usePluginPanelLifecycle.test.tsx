@@ -7,6 +7,8 @@ interface FakePanel {
   kind?: string;
   pluginPanelKindId?: string;
   location?: string;
+  title?: string;
+  activityStatus?: string;
 }
 
 const store = vi.hoisted(() => {
@@ -33,9 +35,18 @@ vi.mock("@/store/panelStore", () => ({
 }));
 
 const kinds = vi.hoisted(() => new Map<string, string>());
+const registryListeners = vi.hoisted(() => new Set<() => void>());
+const kindLookups = vi.hoisted(() =>
+  vi.fn((id: string) =>
+    kinds.has(id) ? { id, extensionId: kinds.get(id) || undefined } : undefined
+  )
+);
 vi.mock("@shared/config/panelKindRegistry", () => ({
-  getPanelKindConfig: (id: string) =>
-    kinds.has(id) ? { id, extensionId: kinds.get(id) } : undefined,
+  getPanelKindConfig: kindLookups,
+  subscribeToPanelKindRegistry: (listener: () => void) => {
+    registryListeners.add(listener);
+    return () => registryListeners.delete(listener);
+  },
 }));
 
 const syncMock = vi.hoisted(() =>
@@ -49,6 +60,8 @@ const onPanelKindsChanged = vi.fn<(cb: () => void) => () => void>();
 
 beforeEach(() => {
   syncMock.mockClear();
+  kindLookups.mockClear();
+  registryListeners.clear();
   kinds.clear();
   kinds.set("acme.dash", "acme");
   store.state.panelsById = {};
@@ -99,7 +112,7 @@ describe("usePluginPanelLifecycle", () => {
     ]);
   });
 
-  it("re-collects when the panel map changes identity", () => {
+  it("re-collects when a panel is added", () => {
     renderHook(() => usePluginPanelLifecycle());
     syncMock.mockClear();
 
@@ -114,8 +127,7 @@ describe("usePluginPanelLifecycle", () => {
     renderHook(() => usePluginPanelLifecycle());
     syncMock.mockClear();
 
-    // Focus/title/resize churn replaces state but not `panelsById` — rescanning
-    // every panel on each of those would be pure waste.
+    // Focus and resize churn replaces state but not `panelsById`.
     for (const listener of store.listeners) listener(store.state);
 
     expect(syncMock).not.toHaveBeenCalled();
@@ -128,18 +140,15 @@ describe("usePluginPanelLifecycle", () => {
     expect(lastCall()[0]).toHaveLength(0);
 
     // A plugin finishing its load registers the kind; no panel record moved, so
-    // only the kind broadcast can surface the panel.
+    // only the registry change can surface the panel.
     kinds.set("acme.dash", "acme");
-    const emit = onPanelKindsChanged.mock.calls[0]?.[0];
-    expect(emit).toBeTypeOf("function");
-    emit!();
+    expect(registryListeners.size).toBe(1);
+    for (const listener of registryListeners) listener();
 
     expect(lastCall()[0]).toHaveLength(1);
   });
 
   it("stops collecting after unmount", () => {
-    const stopKinds = vi.fn();
-    onPanelKindsChanged.mockReturnValue(stopKinds);
     const { unmount } = renderHook(() => usePluginPanelLifecycle());
 
     unmount();
@@ -147,7 +156,7 @@ describe("usePluginPanelLifecycle", () => {
     store.set({ p1: { kind: "acme.dash", location: "grid" } });
 
     expect(syncMock).not.toHaveBeenCalled();
-    expect(stopKinds).toHaveBeenCalledTimes(1);
+    expect(registryListeners.size).toBe(0);
   });
 
   it("works without a plugin bridge", () => {
@@ -158,6 +167,126 @@ describe("usePluginPanelLifecycle", () => {
     });
     expect(() => renderHook(() => usePluginPanelLifecycle())).not.toThrow();
     expect(syncMock).toHaveBeenCalled();
+  });
+});
+
+describe("structural gating (#14126)", () => {
+  const terminals = (n: number): Record<string, FakePanel> => {
+    const panels: Record<string, FakePanel> = {};
+    for (let i = 0; i < n; i++) panels[`t${i}`] = { kind: "terminal", location: "grid" };
+    return panels;
+  };
+
+  const churn = (times: number, field: "activityStatus" | "title"): void => {
+    const ids = Object.keys(store.state.panelsById).filter((id) => id.startsWith("t"));
+    for (let i = 0; i < times; i++) {
+      const id = ids[i % ids.length]!;
+      store.set({
+        ...store.state.panelsById,
+        [id]: { ...store.state.panelsById[id], [field]: `${field}-${i}` },
+      });
+    }
+  };
+
+  function mountWithInventory(panels: Record<string, FakePanel>) {
+    const reportPanelInventory = vi.fn<(ids: string[]) => Promise<void>>(() => Promise.resolve());
+    Object.defineProperty(window, "electron", {
+      configurable: true,
+      writable: true,
+      value: { plugin: { reportPanelInventory } },
+    });
+    kinds.set("terminal", "");
+    store.state.panelsById = panels;
+    renderHook(() => usePluginPanelLifecycle());
+    expect(reportPanelInventory).toHaveBeenCalledTimes(1);
+    syncMock.mockClear();
+    kindLookups.mockClear();
+    reportPanelInventory.mockClear();
+    return reportPanelInventory;
+  }
+
+  it.each([20, 100])(
+    "does no lifecycle work for activity or title churn across %i vanilla terminals",
+    (count) => {
+      const report = mountWithInventory(terminals(count));
+
+      churn(60, "activityStatus");
+      churn(60, "title");
+
+      expect(syncMock).not.toHaveBeenCalled();
+      expect(kindLookups).not.toHaveBeenCalled();
+      expect(report).not.toHaveBeenCalled();
+    }
+  );
+
+  it("does no lifecycle work for churn alongside plugin panels", () => {
+    const report = mountWithInventory({
+      ...terminals(100),
+      p1: { kind: "acme.dash", location: "grid" },
+      s1: { kind: "terminal", pluginPanelKindId: "acme.dash", location: "dock" },
+    });
+
+    churn(60, "activityStatus");
+    store.set({ ...store.state.panelsById, p1: { ...store.state.panelsById.p1, title: "x" } });
+    // A fresh object carrying the same structural fields is still not a change.
+    store.set({ ...store.state.panelsById, s1: { ...store.state.panelsById.s1 } });
+
+    expect(syncMock).not.toHaveBeenCalled();
+    expect(kindLookups).not.toHaveBeenCalled();
+    expect(report).not.toHaveBeenCalled();
+  });
+
+  it("collects exactly once per structural transition", () => {
+    mountWithInventory({ ...terminals(3), p1: { kind: "acme.dash", location: "grid" } });
+    const step = (next: Record<string, FakePanel>) => {
+      syncMock.mockClear();
+      kindLookups.mockClear();
+      store.set(next);
+      expect(syncMock).toHaveBeenCalledTimes(1);
+      expect(kindLookups).toHaveBeenCalledTimes(Object.keys(next).length);
+    };
+    const current = () => store.state.panelsById;
+
+    step({ ...current(), t9: { kind: "terminal", location: "grid" } });
+    const { t9: _gone, ...withoutT9 } = current();
+    step(withoutT9);
+    step({ ...current(), p1: { ...current().p1, location: "trash" } });
+    step({ ...current(), p1: { ...current().p1, location: "grid" } });
+    step({ ...current(), t0: { ...current().t0, kind: "acme.dash" } });
+    step({ ...current(), t1: { ...current().t1, pluginPanelKindId: "acme.dash" } });
+    step({ ...current(), t1: { kind: "terminal", location: "grid" } });
+    // Same key count: one panel replaced by another.
+    const { t2: _swapped, ...withoutT2 } = current();
+    step({ ...withoutT2, t7: { kind: "terminal", location: "grid" } });
+    const { t7: _last, ...withoutT7 } = current();
+    step(withoutT7);
+
+    // Churn after a structural write still costs nothing: the baseline moved.
+    syncMock.mockClear();
+    churn(5, "activityStatus");
+    expect(syncMock).not.toHaveBeenCalled();
+  });
+
+  it("collects on a registry change without asking main for kinds again", () => {
+    const getPanelKinds = vi.fn(() => Promise.resolve([]));
+    Object.defineProperty(window, "electron", {
+      configurable: true,
+      writable: true,
+      value: { plugin: { getPanelKinds, onPanelKindsChanged } },
+    });
+    store.state.panelsById = { p1: { kind: "acme.dash", location: "grid" } };
+    kinds.clear();
+    renderHook(() => usePluginPanelLifecycle());
+    expect(lastCall()[0]).toHaveLength(0);
+
+    kinds.set("acme.dash", "acme");
+    for (const listener of registryListeners) listener();
+
+    expect(lastCall()[0]).toHaveLength(1);
+    // `usePluginPanelKinds` owns the pull; its result reaches us as a registry
+    // mutation.
+    expect(getPanelKinds).not.toHaveBeenCalled();
+    expect(onPanelKindsChanged).not.toHaveBeenCalled();
   });
 });
 

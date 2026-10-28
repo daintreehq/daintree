@@ -7,7 +7,7 @@ import type { ActivityHeadlineGenerator } from "../ActivityHeadlineGenerator.js"
 import type { AgentStateService } from "./AgentStateService.js";
 import type { SemanticBufferManager } from "./SemanticBufferManager.js";
 import type { TerminalForensicsBuffer } from "./TerminalForensicsBuffer.js";
-import type { TerminalInfo } from "./types.js";
+import { DEFAULT_SCROLLBACK, type TerminalInfo } from "./types.js";
 import { computeDefaultTitle } from "./terminalTitle.js";
 import { logIdentityDebug } from "./identityDebug.js";
 import { buildPatternConfig } from "./terminalActivityPatterns.js";
@@ -26,6 +26,7 @@ export interface TerminalAgentDetectionHost {
   reconfigureActivityMonitor(agentId: string, patternConfig?: PatternDetectionConfig): void;
   startActivityMonitor(): void;
   stopActivityMonitor(): void;
+  growScrollback(targetLines: number): void;
 }
 
 /**
@@ -91,6 +92,10 @@ export function handleAgentDetection(
       }
 
       terminal.detectedAgentId = detectedAgentId;
+      // A shell's mirror starts at the plain-shell ceiling; an agent gets the
+      // agent size. Grown only on the identity change so a governor trim of
+      // a live agent isn't undone by the next poll. Never shrunk on demotion.
+      host.growScrollback(DEFAULT_SCROLLBACK);
       // A new agent session invalidates the previous session's observed task
       // title (mirrors the renderer's identityReducer clear) — otherwise a
       // relaunched or different agent journals the old session's title.

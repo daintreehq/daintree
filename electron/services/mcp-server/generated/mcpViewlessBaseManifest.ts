@@ -19,6 +19,75 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "agent",
     danger: "safe",
     description:
+      "Each agent CLI's current model ids and names, to turn a model the user names into an id. With none named, launch without a model.",
+    enabled: true,
+    examples: [
+      {
+        args: {
+          agentId: "codex",
+        },
+        description: "Find the id of a Codex model the user asked for by name",
+      },
+    ],
+    id: "agent.listModels",
+    inputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        agentId: {
+          description: "One agent's models; omit for every listed agent.",
+          type: "string",
+          minLength: 1,
+        },
+      },
+    },
+    kind: "query",
+    name: "agent.listModels",
+    outputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        agents: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              agentId: {
+                type: "string",
+              },
+              models: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    id: {
+                      type: "string",
+                    },
+                    name: {
+                      type: "string",
+                    },
+                  },
+                  required: ["id", "name"],
+                  additionalProperties: false,
+                },
+              },
+            },
+            required: ["agentId", "models"],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ["agents"],
+      additionalProperties: false,
+    },
+    requiresArgs: false,
+    title: "List agent models",
+  },
+  {
+    band: "reversible",
+    category: "agent",
+    danger: "safe",
+    description:
       "Read this machine's Codex account quota, as Codex reports it: how much of each rate-limit window is used and when it resets.",
     enabled: true,
     id: "agent.readQuota",
@@ -115,6 +184,147 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     },
     requiresArgs: false,
     title: "Read Codex quota",
+  },
+  {
+    band: "reversible",
+    category: "agent",
+    danger: "safe",
+    description:
+      "List closed agent sessions that can be relaunched, from the on-disk journal: which sessions exist, no transcript text. Needs a worktree or project scope and fails when none resolves. Old sessions are pruned, so absence proves nothing.",
+    enabled: true,
+    examples: [
+      {
+        args: {
+          worktreeId: "wt-1",
+        },
+        description: "List the most recent resumable sessions for one worktree",
+      },
+      {
+        args: {
+          projectId: "proj-1",
+          limit: 50,
+        },
+        description: "List up to 50 resumable sessions across one project",
+      },
+    ],
+    id: "agentSessionHistory.list",
+    inputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        worktreeId: {
+          description: "Only this worktree.",
+          type: "string",
+          minLength: 1,
+        },
+        projectId: {
+          description: "Only this project; combines with `worktreeId`.",
+          type: "string",
+          minLength: 1,
+        },
+        limit: {
+          default: 20,
+          description: "Max records, newest first (default 20, max 100).",
+          type: "integer",
+          minimum: 1,
+          maximum: 100,
+        },
+        offset: {
+          default: 0,
+          description: "Records to skip, for paging (default 0).",
+          type: "integer",
+          minimum: 0,
+          maximum: 9007199254740991,
+        },
+      },
+    },
+    kind: "query",
+    name: "agentSessionHistory.list",
+    outputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        sessions: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              sessionId: {
+                type: "string",
+              },
+              agentId: {
+                type: "string",
+              },
+              worktreeId: {
+                type: ["string", "null"],
+              },
+              title: {
+                type: ["string", "null"],
+              },
+              projectId: {
+                type: ["string", "null"],
+              },
+              savedAt: {
+                type: "number",
+              },
+              agentLaunchFlags: {
+                type: "array",
+                items: {
+                  type: "string",
+                },
+              },
+              agentModelId: {
+                type: "string",
+              },
+              cwd: {
+                type: "string",
+              },
+              branch: {
+                type: "string",
+              },
+              bookmark: {
+                type: "object",
+                properties: {
+                  bookmarkedAt: {
+                    type: "number",
+                  },
+                  label: {
+                    type: "string",
+                  },
+                  sourceLocation: {
+                    type: "string",
+                    enum: ["grid", "dock"],
+                  },
+                  agentPresetId: {
+                    type: "string",
+                  },
+                  originalPresetId: {
+                    type: "string",
+                  },
+                  isInputLocked: {
+                    type: "boolean",
+                  },
+                },
+                required: ["bookmarkedAt", "label"],
+                additionalProperties: false,
+              },
+            },
+            required: ["sessionId", "agentId", "worktreeId", "title", "projectId", "savedAt"],
+            additionalProperties: false,
+          },
+        },
+        total: {
+          type: "number",
+        },
+        hasMore: {
+          type: "boolean",
+        },
+      },
+      required: ["sessions", "total", "hasMore"],
+      additionalProperties: false,
+    },
+    requiresArgs: false,
+    title: "List resumable sessions",
   },
   {
     band: "reversible",
@@ -813,6 +1023,225 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
   },
   {
     band: "reversible",
+    category: "git",
+    danger: "safe",
+    description:
+      "Summarise a worktree's git history: commit heatmap, counts over a window, current streak. For trends, not current changes. A wider window or the delta against main walks more history, so ask only when needed.",
+    enabled: true,
+    id: "git.getProjectPulse",
+    inputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        worktreeId: {
+          description:
+            "Worktree id from the worktree listing. Omit it and the path for the active worktree; fails when none is active.",
+          type: "string",
+          minLength: 1,
+        },
+        worktreePath: {
+          description:
+            "Absolute worktree root, instead of the id. The id wins if both; the path is never swapped for the active one.",
+          type: "string",
+          minLength: 1,
+        },
+        rangeDays: {
+          default: 60,
+          description: "Days of commit activity to aggregate. Wider windows walk more history.",
+          anyOf: [
+            {
+              type: "number",
+              const: 60,
+            },
+            {
+              type: "number",
+              const: 120,
+            },
+            {
+              type: "number",
+              const: 180,
+            },
+          ],
+        },
+        includeDelta: {
+          type: "boolean",
+        },
+        includeRecentCommits: {
+          type: "boolean",
+        },
+        forceRefresh: {
+          type: "boolean",
+        },
+      },
+    },
+    kind: "query",
+    name: "git.getProjectPulse",
+    outputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        worktreeId: {
+          type: "string",
+        },
+        worktreePath: {
+          type: "string",
+        },
+        branch: {
+          type: "string",
+        },
+        mainBranch: {
+          type: "string",
+        },
+        rangeDays: {
+          default: 60,
+          description: "Days of commit activity to aggregate. Wider windows walk more history.",
+          anyOf: [
+            {
+              type: "number",
+              const: 60,
+            },
+            {
+              type: "number",
+              const: 120,
+            },
+            {
+              type: "number",
+              const: 180,
+            },
+          ],
+        },
+        generatedAt: {
+          type: "number",
+        },
+        heatmap: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              date: {
+                type: "string",
+              },
+              count: {
+                type: "number",
+              },
+              level: {
+                type: "number",
+              },
+              isToday: {
+                type: "boolean",
+              },
+              isMostRecentActive: {
+                type: "boolean",
+              },
+              isBeforeProject: {
+                type: "boolean",
+              },
+            },
+            required: ["date", "count", "level"],
+            additionalProperties: false,
+          },
+        },
+        commitsInRange: {
+          type: "number",
+        },
+        activeDays: {
+          type: "number",
+        },
+        projectAgeDays: {
+          type: "number",
+        },
+        currentStreakDays: {
+          type: "number",
+        },
+        recentCommits: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              sha: {
+                type: "string",
+              },
+              subject: {
+                type: "string",
+              },
+              authorName: {
+                type: "string",
+              },
+              timestamp: {
+                type: "number",
+              },
+            },
+            required: ["sha", "subject", "timestamp"],
+            additionalProperties: false,
+          },
+        },
+        uncommitted: {
+          type: "object",
+          properties: {
+            changedFiles: {
+              type: "number",
+            },
+            insertions: {
+              type: "number",
+            },
+            deletions: {
+              type: "number",
+            },
+            lastUpdated: {
+              type: "number",
+            },
+          },
+          required: ["changedFiles"],
+          additionalProperties: false,
+        },
+        deltaToMain: {
+          type: "object",
+          properties: {
+            baseBranch: {
+              type: "string",
+            },
+            headBranch: {
+              type: "string",
+            },
+            ahead: {
+              type: "number",
+            },
+            behind: {
+              type: "number",
+            },
+            filesChanged: {
+              type: "number",
+            },
+            insertions: {
+              type: "number",
+            },
+            deletions: {
+              type: "number",
+            },
+          },
+          required: ["baseBranch", "ahead", "behind"],
+          additionalProperties: false,
+        },
+      },
+      required: [
+        "worktreeId",
+        "worktreePath",
+        "mainBranch",
+        "rangeDays",
+        "generatedAt",
+        "heatmap",
+        "commitsInRange",
+        "activeDays",
+        "projectAgeDays",
+        "recentCommits",
+      ],
+      additionalProperties: false,
+    },
+    requiresArgs: false,
+    title: "Get project pulse",
+  },
+  {
+    band: "reversible",
     category: "project",
     danger: "safe",
     description:
@@ -1048,6 +1477,59 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
   },
   {
     band: "reversible",
+    category: "agent",
+    danger: "safe",
+    description:
+      "List the slash commands an agent CLI offers, including project-local ones, before driving the agent with one. An empty list means it has none.",
+    enabled: true,
+    id: "slashCommands.list",
+    inputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        projectId: {
+          description:
+            "Project id from the project listing. Omit it and the path for the active project; an unknown id is rejected, not retargeted, once open projects are known.",
+          type: "string",
+          minLength: 1,
+        },
+        projectPath: {
+          description: "Absolute project root, instead of the id. The id wins if both.",
+          type: "string",
+          minLength: 1,
+        },
+        agentId: {
+          description: "Agent ID. Defaults to 'claude' when omitted.",
+          type: "string",
+          enum: [
+            "claude",
+            "opencode",
+            "aider",
+            "gemini",
+            "antigravity",
+            "codex",
+            "grok",
+            "cursor",
+            "copilot",
+            "goose",
+            "amp",
+            "crush",
+            "qwen",
+            "kimi",
+            "interpreter",
+            "mistral",
+            "kiro",
+          ],
+        },
+      },
+    },
+    kind: "query",
+    name: "slashCommands.list",
+    requiresArgs: false,
+    title: "List slash commands",
+  },
+  {
+    band: "reversible",
     category: "terminal",
     danger: "safe",
     description:
@@ -1079,6 +1561,28 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           },
           description:
             "Panels closed. Empty means nothing closed (none to act on, already in the trash, or teardown failed): treat it as a failed close.",
+        },
+        processes: {
+          description: "Each closed panel's process after the close: closed is not stopped.",
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              terminalId: {
+                type: "string",
+              },
+              exited: {
+                description: "The host saw it exit; false: not yet; null: unknown.",
+                type: ["boolean", "null"],
+              },
+              trashExpiresAt: {
+                description: "Unix ms the host starts stopping it unless restored; null: unknown.",
+                type: ["number", "null"],
+              },
+            },
+            required: ["terminalId", "exited", "trashExpiresAt"],
+            additionalProperties: false,
+          },
         },
       },
       required: ["closedIds"],
@@ -1240,7 +1744,7 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           type: "boolean",
         },
         generation: {
-          description: "Sending to another assistant: its generation from the assistant listing.",
+          description: "Run you read: assistant-listing generation or host-listing incarnation.",
           type: "integer",
           minimum: 0,
           maximum: 9007199254740991,
@@ -1377,6 +1881,12 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
             type: "string",
             pattern: "^(Up|Down|Left|Right|Enter|Escape|Tab|Space|Backspace|[a-z0-9])$",
           },
+        },
+        generation: {
+          description: "Run you read: assistant-listing generation or host-listing incarnation.",
+          type: "integer",
+          minimum: 0,
+          maximum: 9007199254740991,
         },
         notify: {
           description: "As on a send: hear, with its reply, when the turn these keys unblock ends.",
@@ -1525,7 +2035,7 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "worktree",
     danger: "safe",
     description:
-      "Wait for a worktree's post-create setup (config copy, submodules, setup script, provisioning) and report where it got. Setup can outlive creation, so work started earlier may see an unpopulated tree. A zero timeout reads without blocking; running out of time is not a failure.",
+      "Wait for a worktree's post-create setup (config copy, submodules, setup script, provisioning, plugin steps) and report where it got. Setup can outlive creation, so earlier work may see an unpopulated tree. A zero timeout reads without blocking; timing out is not a failure.",
     enabled: true,
     id: "worktree.waitUntilReady",
     inputSchema: {
@@ -1571,13 +2081,13 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           type: "string",
           enum: ["pending", "running", "ready", "failed", "timed-out", "needs-approval", "unknown"],
           description:
-            "pending, running (config copy, submodules, setup script or provisioning), ready, failed, timed-out, needs-approval (repo setup commands await the user's approval; you can't give it), or unknown (not created by this host, or it restarted since).",
+            "pending, running (config copy, submodules, setup script, provisioning, plugin steps), ready, failed, timed-out, needs-approval (awaits the user's approval; you can't give it), or unknown (not created by this host, or it restarted since).",
         },
         stage: {
           anyOf: [
             {
               type: "string",
-              enum: ["copy-config", "submodules", "setup-script"],
+              enum: ["copy-config", "submodules", "setup-script", "plugin-steps"],
             },
             {
               type: "null",

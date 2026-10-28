@@ -44,6 +44,8 @@ export class RemoteViewEndpoint implements ClientEndpoint {
   /** The link session it belongs to, the id the Shell logs for the same link. */
   readonly linkSessionId: string;
   projectId: string | null;
+  /** The Shell's name for this open of `clientEndpointId`; null from a Shell that names none. */
+  readonly openId: string | null;
   /** Bumped on every rebind; answers to requests made under an older binding are stale. */
   generation = 0;
   private closed = false;
@@ -58,6 +60,7 @@ export class RemoteViewEndpoint implements ClientEndpoint {
       clientId: string;
       linkSessionId: string;
       projectId: string | null;
+      openId?: string | null;
       handle?: number;
     },
     private readonly transport: RemoteEndpointTransport
@@ -67,6 +70,7 @@ export class RemoteViewEndpoint implements ClientEndpoint {
     this.clientId = params.clientId;
     this.linkSessionId = params.linkSessionId;
     this.projectId = params.projectId;
+    this.openId = params.openId ?? null;
     this.handle = params.handle ?? allocateRemoteHandle();
   }
 

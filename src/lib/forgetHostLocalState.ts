@@ -4,6 +4,7 @@ import { forgetBuildMismatchNotices } from "@/components/Hosts/buildMismatchNoti
 import { QUICK_RUN_KEY_PREFIXES } from "@/components/Project/quickRunStorageKeys";
 import { useCommandHistoryStore } from "@/store/commandHistoryStore";
 import { backupKeyFor } from "@/store/persistence/safeStorage";
+import { SIDEBAR_VIEW_KEY_PREFIX } from "@/store/sidebarViewStore";
 import { useTwoPaneSplitStore } from "@/store/twoPaneSplitStore";
 import { useUrlHistoryStore } from "@/store/urlHistoryStore";
 import { logWarn } from "@/utils/logger";
@@ -28,6 +29,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * (often the host's own view, already gone) are taken out on disk here.
  */
 function scrubStoredRecord(storageKey: string, field: string, hostId: HostId): void {
+  // storage-key: daintree-command-history daintree-url-history daintree-two-pane-split
   const raw = localStorage.getItem(storageKey);
   if (raw === null) return;
   let parsed: unknown;
@@ -41,11 +43,14 @@ function scrubStoredRecord(storageKey: string, field: string, hostId: HostId): v
   if (!isRecord(record)) return;
   const kept = withoutHost(record, hostId);
   if (!kept) return;
+  // storage-key: daintree-command-history daintree-url-history daintree-two-pane-split
   localStorage.setItem(
     storageKey,
     JSON.stringify({ ...parsed, state: { ...parsed.state, [field]: kept } })
   );
 }
+
+const HOST_KEYED_KEY_PREFIXES = [...QUICK_RUN_KEY_PREFIXES, SIDEBAR_VIEW_KEY_PREFIX];
 
 const HOST_KEYED_STORES = [
   { store: useCommandHistoryStore, field: "history" },
@@ -55,7 +60,7 @@ const HOST_KEYED_STORES = [
 
 /**
  * Drop what this view's renderer keeps under a removed host's id: prompt and
- * URL history, split layouts, QuickRun's toggles and build notices, all keyed
+ * URL history, split layouts, sidebar view picks, QuickRun's toggles and build notices, all keyed
  * by the host's id. Stored copies are scrubbed first, then each store's own
  * state, so its next write records the removal rather than bringing it back.
  */
@@ -70,11 +75,12 @@ export function forgetHostLocalState(hostId: HostId): void {
     const doomed: string[] = [];
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
-      const prefix = key && QUICK_RUN_KEY_PREFIXES.find((p) => key.startsWith(p));
+      const prefix = key && HOST_KEYED_KEY_PREFIXES.find((p) => key.startsWith(p));
       if (key && prefix && parseHostScopedKey(key.slice(prefix.length)).hostId === hostId) {
         doomed.push(key);
       }
     }
+    // storage-key: daintree_cmd_history_ daintree_quickrun_autorestart_ daintree_quickrun_expanded_ daintree-sidebar-view:
     for (const key of doomed) localStorage.removeItem(key);
   } catch (error) {
     logWarn("Clearing a removed host's stored state failed", { error });

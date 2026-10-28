@@ -1,13 +1,18 @@
-import { Terminal, IDisposable } from "@xterm/xterm";
-import { FitAddon } from "@xterm/addon-fit";
-import { SerializeAddon } from "@xterm/addon-serialize";
+import type { Terminal, IDisposable } from "@xterm/xterm";
+import type { FitAddon } from "@xterm/addon-fit";
+import type { SerializeAddon } from "@xterm/addon-serialize";
 import type { ImageAddon } from "@xterm/addon-image";
 import type { SearchAddon } from "@xterm/addon-search";
-import { WebLinksAddon } from "@xterm/addon-web-links";
+import type { WebLinksAddon } from "@xterm/addon-web-links";
+import { getLoadedXtermCore, loadXtermCore } from "./xtermCore";
 import { systemClient } from "@/clients/systemClient";
 import { FileLinksAddon, HoverCallback } from "./FileLinksAddon";
 import { ImageLinksAddon, OnActivateFigure } from "./ImageLinksAddon";
 import { SuggestedCommandLinksAddon, OnRunSuggestedCommand } from "./SuggestedCommandLinksAddon";
+import {
+  PluginTerminalLinksAddon,
+  type PluginTerminalLinkHandlers,
+} from "./PluginTerminalLinksAddon";
 
 const IMAGE_ADDON_OPTIONS = { pixelLimit: 2_000_000, storageLimit: 8 };
 
@@ -91,6 +96,7 @@ export interface TerminalAddons {
   fileLinksDisposable: IDisposable | null;
   imageLinksDisposable: IDisposable | null;
   commandLinksDisposable: IDisposable | null;
+  pluginLinksDisposable: IDisposable | null;
   webLinksAddon: WebLinksAddon | null;
 }
 
@@ -109,6 +115,7 @@ export async function setupTerminalAddons(terminal: Terminal): Promise<TerminalA
   // restore doesn't build them for terminals that may never be shown (#9809).
   // WebGL is managed separately by TerminalWebGLManager (focused terminal only).
 
+  const { FitAddon, SerializeAddon } = await loadXtermCore();
   const fitAddon = new FitAddon();
   const serializeAddon = new SerializeAddon();
   terminal.loadAddon(fitAddon);
@@ -142,6 +149,7 @@ export async function setupTerminalAddons(terminal: Terminal): Promise<TerminalA
     fileLinksDisposable: null,
     imageLinksDisposable: null,
     commandLinksDisposable: null,
+    pluginLinksDisposable: null,
     webLinksAddon: null,
   };
 }
@@ -189,6 +197,22 @@ export function createImageLinksAddon(
   return terminal.registerLinkProvider(addon);
 }
 
+export function createPluginTerminalLinksAddon(
+  terminal: Terminal,
+  handlers: PluginTerminalLinkHandlers
+): IDisposable {
+  const addon = new PluginTerminalLinksAddon(terminal, handlers);
+  const registration = terminal.registerLinkProvider(addon);
+  // Composed for the same reason as the file links: dropping the registration
+  // leaves an already-provided link able to activate.
+  return {
+    dispose: () => {
+      registration.dispose();
+      addon.dispose();
+    },
+  };
+}
+
 export function createSuggestedCommandLinksAddon(
   terminal: Terminal,
   isEnabled: () => boolean,
@@ -211,6 +235,7 @@ export function createWebLinksAddon(
   onActivate: (event: MouseEvent, uri: string) => void,
   hoverHandlers?: WebLinksHoverHandlers
 ): WebLinksAddon {
+  const { WebLinksAddon } = getLoadedXtermCore();
   const addon = new WebLinksAddon(onActivate, {
     hover: hoverHandlers ? (event, text) => hoverHandlers.hover(event, text) : undefined,
     leave: hoverHandlers ? () => hoverHandlers.leave() : undefined,

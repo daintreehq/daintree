@@ -30,6 +30,15 @@ interface InitializeResult {
  */
 export const READINESS_PROBE_TOOL = "actions.getContext";
 
+export interface SseProbeOptions extends ProbeOptions {
+  /**
+   * The tool `tools/list` must carry. A session whose tool set leaves out
+   * {@link READINESS_PROBE_TOOL}, as the global assistant's does (#14483),
+   * names one its own set always lists.
+   */
+  readinessTool?: string;
+}
+
 /**
  * Active readiness probe — POSTs an MCP `initialize` request to the bound
  * MCP server and verifies the server responds with HTTP 200 plus a real
@@ -105,12 +114,13 @@ export async function probeMcpServer(
 export async function probeMcpSseServer(
   port: number,
   bearerToken: string,
-  options: ProbeOptions = {}
+  options: SseProbeOptions = {}
 ): Promise<void> {
   const maxAttempts = options.maxAttempts ?? PROBE_MAX_ATTEMPTS;
   const baseDelayMs = options.baseDelayMs ?? PROBE_BASE_DELAY_MS;
   const requestTimeoutMs = options.requestTimeoutMs ?? PROBE_SSE_REQUEST_TIMEOUT_MS;
   const hardTimeoutMs = options.hardTimeoutMs ?? PROBE_SSE_HARD_TIMEOUT_MS;
+  const readinessTool = options.readinessTool ?? READINESS_PROBE_TOOL;
 
   const deadline = Date.now() + hardTimeoutMs;
   let lastError: Error | null = null;
@@ -124,7 +134,7 @@ export async function probeMcpSseServer(
     const perAttemptTimeout = Math.min(requestTimeoutMs, remaining);
 
     try {
-      await sendSseInitialize(port, bearerToken, perAttemptTimeout);
+      await sendSseInitialize(port, bearerToken, perAttemptTimeout, readinessTool);
       return;
     } catch (err) {
       lastError = err instanceof Error ? err : new Error(String(err));
@@ -293,7 +303,12 @@ interface ParsedSseEvent {
   data: string;
 }
 
-function sendSseInitialize(port: number, bearerToken: string, timeoutMs: number): Promise<void> {
+function sendSseInitialize(
+  port: number,
+  bearerToken: string,
+  timeoutMs: number,
+  readinessTool: string
+): Promise<void> {
   const initializeBody = JSON.stringify({
     jsonrpc: "2.0",
     id: 1,
@@ -440,10 +455,10 @@ function sendSseInitialize(port: number, bearerToken: string, timeoutMs: number)
         (tool) =>
           tool &&
           typeof tool === "object" &&
-          (tool as Record<string, unknown>).name === READINESS_PROBE_TOOL
+          (tool as Record<string, unknown>).name === readinessTool
       );
       if (!hasManifestBackedTool) {
-        settle(() => reject(new Error(`tools/list response missing ${READINESS_PROBE_TOOL}`)));
+        settle(() => reject(new Error(`tools/list response missing ${readinessTool}`)));
         return;
       }
       settle(() => resolve());

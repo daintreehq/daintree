@@ -518,4 +518,23 @@ describe("buildSwitchHydrateResult — terminal config", () => {
     const stored = await buildSwitchHydrateResult("project-1");
     expect(stored.terminalConfig?.cachedProjectViews).toBe(effectiveCachedProjectViews(2));
   });
+
+  // A view seeds from the payload as it is: anything left to correct would be
+  // corrected by writing settings during hydration (#14699).
+  it("carries the same normalized values terminalConfig.get reports", async () => {
+    const { buildSwitchHydrateResult } = await import("../AppHydrationService.js");
+    const { readTerminalConfig } = await import("../terminalConfig.js");
+    mockState.terminalConfig = {
+      scrollbackLines: 0,
+      customSchemes: JSON.stringify([
+        { id: "mine", name: "Mine", type: "dark", builtin: false, colors: { background: "#000" } },
+      ]),
+    } as unknown as typeof mockState.terminalConfig;
+
+    const result = await buildSwitchHydrateResult("project-1");
+
+    expect(result.terminalConfig).toEqual(readTerminalConfig());
+    expect(result.terminalConfig.scrollbackLines).toBeGreaterThan(0);
+    expect(result.terminalConfig.customSchemes).toEqual([expect.objectContaining({ id: "mine" })]);
+  });
 });

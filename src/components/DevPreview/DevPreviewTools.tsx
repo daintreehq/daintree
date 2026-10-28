@@ -20,12 +20,12 @@ import {
 // createElement rather than JSX on `tool.Button` and friends: the React Compiler
 // can fold an alias of a registered component into an intrinsic element name,
 // which renders an empty unknown tag instead of the tool.
-import {
-  useDevPreviewTools,
-  type DevPreviewTool,
-  type DevPreviewToolContext,
-  type DevPreviewToolSurfaceProps,
-} from "@/registry/devPreviewToolRegistry";
+import type {
+  DevPreviewToolContext,
+  DevPreviewToolDefinition,
+  DevPreviewToolSurfaceProps,
+} from "@/services/devPreviewTools/types";
+import { BUILT_IN_DEV_PREVIEW_TOOLS } from "@/services/devPreviewTools/builtInTools";
 
 export interface DevPreviewToolHostProps {
   panelId: string;
@@ -74,10 +74,9 @@ function useToolContext({
   };
 }
 
-function useActiveTool(panelId: string): DevPreviewTool | undefined {
-  const tools = useDevPreviewTools();
+function useActiveTool(panelId: string): DevPreviewToolDefinition | undefined {
   const activeId = useDevPreviewToolStore((s) => s.activeByPanel[panelId]);
-  return activeId ? tools.find((tool) => tool.id === activeId) : undefined;
+  return activeId ? BUILT_IN_DEV_PREVIEW_TOOLS.find((tool) => tool.id === activeId) : undefined;
 }
 
 /** One tool in one preview: what its toggle and its surfaces are tagged with. */
@@ -147,7 +146,7 @@ function focusVisible(element: Element | null | undefined): boolean {
  * worktrees never shows a button the old answer earned.
  */
 function useToolApplies(
-  tool: DevPreviewTool,
+  tool: DevPreviewToolDefinition,
   context: DevPreviewToolContext,
   active: boolean
 ): boolean {
@@ -185,7 +184,7 @@ function DevPreviewToolButton({
   active,
   onToggle,
 }: {
-  tool: DevPreviewTool;
+  tool: DevPreviewToolDefinition;
   context: DevPreviewToolContext;
   active: boolean;
   onToggle: () => void;
@@ -202,16 +201,14 @@ function DevPreviewToolButton({
   );
 }
 
-/** Toolbar toggles for every enabled tool that applies to this preview. */
+/** Toolbar toggles for every tool that applies to this preview. */
 export function DevPreviewToolButtons(props: DevPreviewToolHostProps) {
-  const tools = useDevPreviewTools();
   const context = useToolContext(props);
   const activeId = useDevPreviewToolStore((s) => s.activeByPanel[props.panelId]);
   const toggle = useDevPreviewToolStore((s) => s.toggle);
-  if (tools.length === 0) return null;
   return (
     <>
-      {tools.map((tool) => (
+      {BUILT_IN_DEV_PREVIEW_TOOLS.map((tool) => (
         <ErrorBoundary key={tool.id} variant="component" componentName={`${tool.label} button`}>
           <DevPreviewToolButton
             tool={tool}
@@ -240,7 +237,7 @@ function DevPreviewToolSurface({
   context,
   chrome,
 }: {
-  tool: DevPreviewTool;
+  tool: DevPreviewToolDefinition;
   Surface: ComponentType<DevPreviewToolSurfaceProps>;
   role: string;
   handle: DevPreviewToolSessionHandle | null;
@@ -289,7 +286,10 @@ function DevPreviewToolSurface({
  * Whether the tool is ready to be shown: a tool that owns a session waits for
  * it, so no surface ever renders against a session that does not exist yet.
  */
-function ready(tool: DevPreviewTool, handle: DevPreviewToolSessionHandle | null): boolean {
+function ready(
+  tool: DevPreviewToolDefinition,
+  handle: DevPreviewToolSessionHandle | null
+): boolean {
   return tool.createSession === undefined || handle?.session != null;
 }
 

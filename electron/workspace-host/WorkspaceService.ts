@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import PQueue from "p-queue";
 import { existsSync } from "fs";
 import { stat, readFile, readdir, access, mkdir, realpath } from "fs/promises";
-import { resolve as pathResolve, isAbsolute, dirname } from "path";
+import { resolve as pathResolve, isAbsolute, dirname, basename } from "path";
 import { validateBranchName } from "../../shared/utils/pathPattern.js";
 import {
   findNestedWorktreePaths,
@@ -47,10 +47,6 @@ import type {
 } from "../../shared/types/worktree.js";
 
 /**
- * What {@link WorkspaceService.runLifecycleSetup} learned, as a value rather
- * than as mutable state a later phase can overwrite.
- */
-/**
  * What `createWorktree` produced: the canonical id AND the branch the host
  * actually landed on after any collision recovery.
  */
@@ -60,37 +56,6 @@ interface CreatedWorktree {
   setupState: WorktreeSetupState;
 }
 
-type LifecycleSetupOutcome =
-  | { ok: true }
-  | { ok: false; timedOut: boolean; error: string }
-  // The repository's commands have not been approved, so nothing ran. Only the
-  // user can change that, from the worktree card.
-  | { ok: false; needsApproval: true };
-
-/** What a setup that stopped for approval was asked to do, so approving can finish it. */
-interface SetupAwaitingApproval {
-  provisionResource: boolean;
-  environmentId?: string;
-}
-
-/** The setup status a finished setup run settles on. */
-function setupStatusForOutcome(
-  outcome: LifecycleSetupOutcome,
-  startedAt: number,
-  completedAt: number
-): WorktreeSetupStatus {
-  if (outcome.ok) return { state: "ready", startedAt, completedAt };
-  if ("needsApproval" in outcome) {
-    return { state: "needs-approval", stage: "setup-script", startedAt, completedAt };
-  }
-  return {
-    state: outcome.timedOut ? "timed-out" : "failed",
-    stage: "setup-script",
-    startedAt,
-    completedAt,
-    error: outcome.error,
-  };
-}
 import type {
   WorkspaceHostEvent,
   WorkspaceFetchResult,
@@ -106,8 +71,8 @@ import type {
   PluginWorktreeLinkedPR,
 } from "../../shared/types/plugin.js";
 import type { GitOperationReason } from "../../shared/types/ipc/errors.js";
-import type { CIStatus, NormalizedPRState } from "../../shared/types/forge.js";
-import type { WorktreeChanges } from "../../shared/types/git.js";
+import type { CIStatus, NormalizedPRState, PRMergeIntent } from "../../shared/types/forge.js";
+import type { GitDiffSide, WorktreeChanges } from "../../shared/types/git.js";
 import type {
   SubmoduleAtRiskCommit,
   SubmoduleDeleteRisk,
@@ -132,16 +97,22 @@ import {
   clearGitCommonDirCache,
 } from "../utils/gitUtils.js";
 import { extractIssueNumberSync, extractIssueNumber } from "../services/issueExtractor.js";
+import { claimIssueFromBranch, setIssueBranchClaim } from "../services/issueBranchClaim.js";
+import { getForgeBridge } from "./forgeBridge.js";
 import { pullRequestService } from "../services/PullRequestService.js";
 import { events } from "../services/events.js";
 import {
-  LIFECYCLE_COMMANDS_NEED_APPROVAL_ERROR,
   WorktreeLifecycleService,
   ownResource,
   type ResolvedResourceEnvironments,
   type WorkspaceHostContext,
 } from "./WorktreeLifecycleService.js";
 import { WorktreeMonitor, type WorktreePollingPermissions } from "./WorktreeMonitor.js";
+import {
+  WorktreeSetupCoordinator,
+  setupStatusForOutcome,
+  type PluginSetupOutcome,
+} from "./WorktreeSetupCoordinator.js";
 import { StatusAdmissionController } from "./StatusAdmissionController.js";
 import {
   ACTIVE_WORKSPACE_POLLING_POLICY,
@@ -165,6 +136,18 @@ function dependsOnRemote(monitor: WorktreeMonitor): string {
     baseRemote: monitor.baseRemote,
     availableRemotes: monitor.availableRemotes,
   }).primaryRemote;
+}
+
+/**
+ * A repo's folder name from its common dir: `/x/repo/.git` → `repo`, and a bare
+ * `/x/repo.git` → `repo`. Lets the auth toast name the repo without the path.
+ */
+export function repoNameFromCommonDir(commonDir: string): string {
+  const trimmed = commonDir.replace(/[\\/]+$/, "");
+  const leaf = basename(trimmed);
+  const name =
+    leaf.toLowerCase() === ".git" ? basename(dirname(trimmed)) : leaf.replace(/\.git$/i, "");
+  return name || "this repository";
 }
 import { waitForPathExists } from "../utils/fs.js";
 import { markHostPerformance } from "../utils/hostPerformance.js";
@@ -224,6 +207,10 @@ export { probeGitLfsAvailable } from "./worktreeUtils.js";
 
 // Configuration
 const DEFAULT_ACTIVE_WORKTREE_INTERVAL_MS = 2000;
+// Cold start: the plugin scan that knows the issues provider usually lands
+// within seconds of the project loading.
+const ISSUE_CLAIM_RETRY_MS = 5_000;
+const ISSUE_CLAIM_MAX_RETRIES = 6;
 const DEFAULT_BACKGROUND_WORKTREE_INTERVAL_MS = 10000;
 // Default cap on concurrent background `git-only` file watchers per
 // workspace-host. Matches the `balanced` profile's `backgroundGitWatcherCap`
@@ -589,6 +576,13 @@ export class WorkspaceService {
   private forgeReselectSeq = 0;
   private forgeReselectTimer: NodeJS.Timeout | null = null;
   private forgeReselectRetries = 0;
+  // Re-asks main for the issues provider's branch keys while the answer isn't
+  // knowable yet (cold-start plugin scan) — see `refreshIssueBranchClaim`.
+  private issueClaimRetryTimer: NodeJS.Timeout | null = null;
+  private issueClaimRetries = 0;
+  private issueClaimSeq = 0;
+  private issueClaimInFlight = false;
+  private issueClaimRefreshQueued = false;
   private forgeRemoteProbeSeq = 0;
   private forgeRemoteReprobeTimer: NodeJS.Timeout | null = null;
   // Bumped whenever a `.git/config` write is OBSERVED. A baseline read that
@@ -645,12 +639,7 @@ export class WorkspaceService {
   private projectId: string | null = null;
   private projectEnvVars: Record<string, string> = {};
   private lifecycleService = new WorktreeLifecycleService();
-  // Keyed by monitor, not id, so a setup intent dies with the incarnation it
-  // was recorded for: delete-then-recreate at the same path must not inherit it.
-  private setupAwaitingApproval = new WeakMap<WorktreeMonitor, SetupAwaitingApproval>();
-  // Monitors whose approved setup is already being resumed, so a second
-  // approval arriving meanwhile does not run it again once the first settles.
-  private resumingApprovedSetup = new WeakSet<WorktreeMonitor>();
+  private readonly setupCoordinator: WorktreeSetupCoordinator;
   private listService = new WorktreeListService();
   private readonly fileDiffCache = new FileDiffCache();
   private prService: PRIntegrationService;
@@ -801,8 +790,8 @@ export class WorkspaceService {
         // not surface as an unhandled rejection.
         void this.refreshStatusForFetchSiblings(worktreeId).catch(() => {});
       },
-      onAuthFailureConfirmed: (commonDir, _remote, reason) =>
-        this.handleAuthFailureConfirmed(commonDir, reason),
+      onAuthFailureConfirmed: (commonDir, remote, reason) =>
+        this.handleAuthFailureConfirmed(commonDir, remote, reason),
       readRemotes: createRemoteInventoryReader(async (worktreePath) => {
         try {
           const { availableRemotes, succeeded } = await readRemotesWithStatus(
@@ -855,6 +844,8 @@ export class WorkspaceService {
             state: data.prState,
             ciStatus: resolvedCiStatus,
             baseRef: data.baseRef,
+            mergeIntent: data.mergeIntent,
+            headMovedWhileArmed: data.headMovedWhileArmed,
           },
           issue:
             data.issueNumber && data.issueTitle
@@ -957,6 +948,48 @@ export class WorkspaceService {
           return;
         }
 
+        // An issues provider's branch-claimed issue (#13744): its title rides
+        // on the claim, and `linked` stays the code forge's — it can't name a
+        // second provider's issue.
+        if (data.issueProvenance) {
+          const claim = monitor.issueClaim;
+          const number = monitor.issueNumber;
+          if (
+            !claim ||
+            number === undefined ||
+            claim.issueProviderId !== data.issueProvenance.issueProviderId ||
+            claim.issueKey !== data.issueProvenance.issueKey
+          ) {
+            return;
+          }
+          monitor.setClaimedIssue(
+            { number, issueProviderId: claim.issueProviderId, issueKey: claim.issueKey },
+            data.issueProvenance.issueId
+          );
+          monitor.setIssueTitle(data.issueTitle);
+          if (data.issueLastUpdatedAt !== undefined) {
+            monitor.setIssueLastUpdatedAt(data.issueLastUpdatedAt);
+          }
+          if (monitor.hasInitialStatus) {
+            this.emitUpdate(monitor);
+          }
+          this.sendEvent({
+            type: "issue-detected",
+            worktreeId,
+            issueNumber: number,
+            issueTitle: data.issueTitle,
+            issueLastUpdatedAt: data.issueLastUpdatedAt,
+            branchName: data.branchName,
+            providerId: data.issueProvenance.issueProviderId,
+            linked: monitor.getSnapshot().linked ?? null,
+            issueProvenance: monitor.issueClaim,
+          });
+          return;
+        }
+        // A code-forge result can't describe a number an issues provider
+        // claimed — it raced the claim and names a different issue.
+        if (monitor.issueClaim) return;
+
         // Keep the private flat issue number in lockstep so the
         // onIssueNotFound guard (`monitor.issueNumber !== issueNumber`)
         // matches forge-resolved issues, not just branch-parsed ones.
@@ -1057,6 +1090,21 @@ export class WorkspaceService {
       lifecycleService: this.lifecycleService,
     });
 
+    this.setupCoordinator = new WorktreeSetupCoordinator({
+      lifecycleService: this.lifecycleService,
+      getProjectRootPath: () => this.projectRootPath,
+      getProjectEnvVars: () => this.projectEnvVars,
+      getMonitor: (id) => this.monitors.get(id),
+      getMonitors: () => this.monitors.values(),
+      getLifecycleContext: () => this.getLifecycleContext(),
+      emitUpdate: (monitor) => this.emitUpdate(monitor),
+      runResourceAction: (requestId, worktreeId, action) =>
+        this.runResourceAction(requestId, worktreeId, action),
+      whenResourceActionsIdle: (worktreeId) => this.resourceActionExecutor.whenIdle(worktreeId),
+      initResourceConfig: (monitor, worktreePath) =>
+        this.initResourceConfigAsync(monitor, worktreePath),
+    });
+
     this.attachmentService = new AttachmentService(
       {
         getProjectRootPath: () => this.projectRootPath,
@@ -1125,6 +1173,7 @@ export class WorkspaceService {
       if (!existsSync(projectRootPath)) {
         throw new Error(`Project directory does not exist: ${projectRootPath}`);
       }
+      if (this.projectRootPath !== projectRootPath) this.setupCoordinator.forgetPluginSetupSteps();
       this.projectRootPath = projectRootPath;
       this.projectId = projectId;
       if (wslGitByWorktree && typeof wslGitByWorktree === "object") {
@@ -1172,6 +1221,7 @@ export class WorkspaceService {
 
       // Backstop for a disabled or silently-degraded git watcher (#11155).
       this.startForgeRemoteDetection();
+      this.refreshIssueBranchClaim();
       this.listService.setGit(this.git, projectRootPath);
 
       // #6669: clean up at startup so externally-deleted worktrees (kept in
@@ -1389,8 +1439,11 @@ export class WorkspaceService {
           }
 
           if (branchChanged && wt.branch) {
-            const syncIssueNumber = extractIssueNumberSync(wt.branch, wt.name);
-            if (syncIssueNumber) {
+            const claimed = claimIssueFromBranch(wt.branch, wt.name);
+            const syncIssueNumber = claimed ? null : extractIssueNumberSync(wt.branch, wt.name);
+            if (claimed) {
+              existingMonitor.setClaimedIssue(claimed);
+            } else if (syncIssueNumber) {
               existingMonitor.setIssueNumber(syncIssueNumber);
             } else {
               existingMonitor.setIssueNumber(undefined);
@@ -1625,6 +1678,7 @@ export class WorkspaceService {
 
     this.resourceActionExecutor.cleanupResourceActionState(id);
     this.attachmentService.handleWorktreeRemoved(id);
+    this.setupCoordinator.cancelPluginSetup(monitor);
     monitor.stop();
     this.monitors.delete(id);
     this.emitGate.forget(monitor);
@@ -1904,7 +1958,9 @@ export class WorkspaceService {
     wt = enrichedWt;
 
     await ensureNoteFile(wt.path);
-    const issueNumber = wt.branch ? extractIssueNumberSync(wt.branch, wt.name) : null;
+    const claimedIssue = wt.branch ? claimIssueFromBranch(wt.branch, wt.name) : null;
+    const issueNumber =
+      claimedIssue?.number ?? (wt.branch ? extractIssueNumberSync(wt.branch, wt.name) : null);
     const interval = isActive ? this.pollIntervalActive : this.pollIntervalBackground;
 
     let createdAt: number | undefined;
@@ -1967,7 +2023,11 @@ export class WorkspaceService {
       this.statusAdmission
     );
 
-    monitor.setIssueNumber(issueNumber ?? undefined);
+    if (claimedIssue) {
+      monitor.setClaimedIssue(claimedIssue);
+    } else {
+      monitor.setIssueNumber(issueNumber ?? undefined);
+    }
     monitor.setCreatedAt(createdAt);
     monitor.setAttachments(this.attachmentService.projectionFor(wt.id));
 
@@ -2029,7 +2089,7 @@ export class WorkspaceService {
       await this.initResourceConfigAsync(monitor, wt.path);
       // Existing worktrees have no setup history to say commands were skipped,
       // so this is how their cards learn there is something to review.
-      await this.refreshLifecycleCommandApproval(monitor).catch((err) => {
+      await this.setupCoordinator.refreshLifecycleCommandApproval(monitor).catch((err) => {
         console.warn("[WorkspaceHost] Command approval check failed:", err);
       });
       // Emit a secondary update if config was loaded and monitor is running.
@@ -2122,6 +2182,116 @@ export class WorkspaceService {
     }
   }
 
+  /**
+   * Ask main which literal issue keys the project's issues provider claims in
+   * branch names (#13744), then re-read every worktree's issue against them.
+   * No claim is the safe state while the answer is in flight; a `retry`
+   * answer keeps the current claim and asks again shortly.
+   */
+  private refreshIssueBranchClaim(): void {
+    const projectRootPath = this.projectRootPath;
+    if (!projectRootPath) return;
+    if (this.issueClaimRetryTimer) {
+      clearTimeout(this.issueClaimRetryTimer);
+      this.issueClaimRetryTimer = null;
+    }
+    let bridge: ReturnType<typeof getForgeBridge>;
+    try {
+      bridge = getForgeBridge();
+    } catch {
+      return;
+    }
+    // Identical in-flight requests are joined at the bridge and in main, so a
+    // request started now could hand back an answer read before the change
+    // that prompted it. Ask again once the one in flight settles instead.
+    if (this.issueClaimInFlight) {
+      this.issueClaimRefreshQueued = true;
+      return;
+    }
+    this.issueClaimInFlight = true;
+    const seq = ++this.issueClaimSeq;
+    const settle = (): boolean => {
+      this.issueClaimInFlight = false;
+      if (this.issueClaimRefreshQueued) {
+        this.issueClaimRefreshQueued = false;
+        this.refreshIssueBranchClaim();
+        return false;
+      }
+      return true;
+    };
+    bridge.resolveIssueBranchClaim(projectRootPath).then(
+      (result) => {
+        if (!settle()) return;
+        if (seq !== this.issueClaimSeq || this.projectRootPath !== projectRootPath) return;
+        if (result.status === "retry") {
+          this.scheduleIssueBranchClaimRetry();
+          return;
+        }
+        this.issueClaimRetries = 0;
+        if (setIssueBranchClaim(result.claim)) this.reapplyIssueBranchClaims();
+      },
+      () => {
+        if (!settle()) return;
+        if (seq !== this.issueClaimSeq || this.projectRootPath !== projectRootPath) return;
+        this.scheduleIssueBranchClaimRetry();
+      }
+    );
+  }
+
+  private scheduleIssueBranchClaimRetry(): void {
+    if (this.issueClaimRetries >= ISSUE_CLAIM_MAX_RETRIES || this.issueClaimRetryTimer) return;
+    this.issueClaimRetries += 1;
+    this.issueClaimRetryTimer = setTimeout(() => {
+      this.issueClaimRetryTimer = null;
+      this.refreshIssueBranchClaim();
+    }, ISSUE_CLAIM_RETRY_MS);
+    this.issueClaimRetryTimer.unref?.();
+  }
+
+  private clearIssueBranchClaim(): void {
+    this.issueClaimSeq += 1;
+    this.issueClaimRetries = 0;
+    this.issueClaimRefreshQueued = false;
+    if (this.issueClaimRetryTimer) {
+      clearTimeout(this.issueClaimRetryTimer);
+      this.issueClaimRetryTimer = null;
+    }
+    setIssueBranchClaim(null);
+  }
+
+  /**
+   * Re-derive each worktree's issue after the claimed keys changed: a branch
+   * the provider now claims becomes its issue, and one it no longer claims
+   * goes back to the built-in code-forge patterns.
+   */
+  private reapplyIssueBranchClaims(): void {
+    for (const monitor of this.monitors.values()) {
+      const branch = monitor.branch;
+      if (!branch) continue;
+      const claimed = claimIssueFromBranch(branch, monitor.name);
+      const current = monitor.issueClaim;
+      if (claimed) {
+        if (
+          current?.issueProviderId === claimed.issueProviderId &&
+          current.issueKey === claimed.issueKey
+        ) {
+          continue;
+        }
+        monitor.setClaimedIssue(claimed);
+        // `linked.issue` named the code forge's issue for the old number.
+        const linked = monitor.getSnapshot().linked;
+        if (linked?.issue) {
+          monitor.setLinked(linked.pr ? { providerId: linked.providerId, pr: linked.pr } : null);
+        }
+      } else {
+        if (!current) continue;
+        monitor.setIssueNumber(extractIssueNumberSync(branch, monitor.name) ?? undefined);
+      }
+      monitor.setIssueTitle(undefined);
+      if (monitor.hasInitialStatus) this.emitUpdate(monitor);
+    }
+  }
+
   private async extractIssueNumberAsync(
     monitor: WorktreeMonitor,
     branchName: string,
@@ -2175,6 +2345,8 @@ export class WorkspaceService {
       state: NormalizedPRState;
       ciStatus?: CIStatus;
       baseRef?: string;
+      mergeIntent?: PRMergeIntent | null;
+      headMovedWhileArmed?: boolean;
     };
     issue?: { number: number; title?: string };
   }): PluginWorktreeLinked {
@@ -2193,6 +2365,8 @@ export class WorkspaceService {
         state: params.pr.state,
         ...(params.pr.ciStatus ? { ciStatus: params.pr.ciStatus } : {}),
         ...(params.pr.baseRef ? { baseRef: params.pr.baseRef } : {}),
+        ...(params.pr.mergeIntent !== undefined ? { mergeIntent: params.pr.mergeIntent } : {}),
+        ...(params.pr.headMovedWhileArmed ? { headMovedWhileArmed: true } : {}),
       };
     }
     if (params.issue) {
@@ -2769,16 +2943,22 @@ export class WorkspaceService {
    * session (the renderer turns it into one toast). The per-commondir guard
    * dedups the fan-out across sibling worktrees; it's reset by
    * `retryAuthFetch()` / credential rotation so a re-confirmation re-notifies.
-   * The raw commondir path never leaves the host — only the classified reason
-   * crosses the IPC boundary.
+   * The raw commondir path never leaves the host — only the repo's folder
+   * name, the remote name and the classified reason cross the IPC boundary.
    */
   private handleAuthFailureConfirmed(
     commonDir: string,
+    remote: string,
     reason: import("../../shared/types/ipc/errors.js").GitOperationReason
   ): void {
     if (this.authFailureConfirmedNotified.has(commonDir)) return;
     this.authFailureConfirmedNotified.add(commonDir);
-    this.sendEvent({ type: "fetch-auth-failure-confirmed", reason });
+    this.sendEvent({
+      type: "fetch-auth-failure-confirmed",
+      reason,
+      repoName: repoNameFromCommonDir(commonDir),
+      remote,
+    });
   }
 
   /**
@@ -3760,7 +3940,7 @@ export class WorkspaceService {
       // observe a worktree this process created without a setup status. An
       // absent status means "some other process created this", and a caller
       // that saw the create must never have to guess which it is looking at.
-      this.setWorktreeSetupStatus(canonicalWorktreeId, {
+      this.setupCoordinator.setWorktreeSetupStatus(canonicalWorktreeId, {
         state: "pending",
         startedAt: Date.now(),
       });
@@ -3850,7 +4030,7 @@ export class WorkspaceService {
       // alone does not identify an incarnation.
       const setupGeneration = this.monitors.get(canonicalWorktreeId)?.generation;
       const setSetupStatus = (status: WorktreeSetupStatus): void =>
-        this.setWorktreeSetupStatus(canonicalWorktreeId, status, setupGeneration);
+        this.setupCoordinator.setWorktreeSetupStatus(canonicalWorktreeId, status, setupGeneration);
       void (async () => {
         // Invalidate first so any racing list() call after this emission
         // doesn't return a stale cached snapshot that excludes the new worktree.
@@ -3900,12 +4080,22 @@ export class WorkspaceService {
           stage: "setup-script",
           startedAt: setupStartedAt,
         });
-        const setup = await this.runLifecycleSetup(
+        const setup = await this.setupCoordinator.runLifecycleSetup(
           canonicalWorktreeId,
           canonicalPath,
           rootPath,
           options.provisionResource ?? options.worktreeMode === "remote-worker"
         );
+        // Plugin steps follow a setup script that succeeded and never one that
+        // did not: a step may well depend on what the script installed. They
+        // run for this tail's incarnation only — a replacement at the same path
+        // has a tail of its own.
+        const tailMonitor = this.monitors.get(canonicalWorktreeId);
+        const ownsMonitor = tailMonitor !== undefined && tailMonitor.generation === setupGeneration;
+        const plugins: PluginSetupOutcome =
+          setup.ok && ownsMonitor
+            ? await this.setupCoordinator.runPluginSetupSteps(tailMonitor, setupStartedAt)
+            : { outcome: setup };
 
         // The verdict comes from what these steps RETURNED. Neither a submodule
         // failure, nor a non-zero setup script, nor a failed auto-provision
@@ -3922,9 +4112,17 @@ export class WorkspaceService {
             startedAt: setupStartedAt,
             completedAt,
             error: submoduleFailure,
+            ...(plugins.pluginSteps ? { pluginSteps: plugins.pluginSteps } : {}),
           });
         } else {
-          setSetupStatus(setupStatusForOutcome(setup, setupStartedAt, completedAt));
+          setSetupStatus(
+            setupStatusForOutcome(plugins.outcome, setupStartedAt, completedAt, plugins.pluginSteps)
+          );
+          if (ownsMonitor)
+            await this.setupCoordinator.refreshApprovalAfterPluginSteps(
+              tailMonitor,
+              plugins.outcome
+            );
         }
       })().catch((err) => {
         const message = formatErrorMessage(err, "createWorktree async tail failed");
@@ -4115,350 +4313,16 @@ export class WorkspaceService {
     };
   }
 
-  /**
-   * Write a setup status onto a worktree's monitor and emit it.
-   *
-   * Silently does nothing when the monitor is gone — the create tail runs after
-   * the result has been returned, so the worktree can be deleted mid-tail and
-   * that is not an error.
-   *
-   * `expectedGeneration` guards the case that IS an error. Worktree ids are
-   * paths, and delete-then-recreate at the same path is a supported workflow,
-   * so an id alone does not identify an incarnation. Without the check, a tail
-   * still running for a deleted worktree would stamp its `running`, `failed` or
-   * `ready` onto the fresh monitor that replaced it — reporting the old
-   * worktree's setup outcome as the new one's. `generation` exists to tell the
-   * two apart.
-   */
-  private setWorktreeSetupStatus(
-    worktreeId: string,
-    status: WorktreeSetupStatus,
-    expectedGeneration?: number
-  ): void {
-    const monitor = this.monitors.get(worktreeId);
-    if (!monitor) return;
-    if (expectedGeneration !== undefined && monitor.generation !== expectedGeneration) return;
-    monitor.setSetupStatus(status);
-    this.emitUpdate(monitor);
+  retryLifecycleSetup(worktreeId: string): Promise<void> {
+    return this.setupCoordinator.retryLifecycleSetup(worktreeId);
   }
 
-  /**
-   * Run the setup script and, when configured, the auto-provision that follows
-   * it, and REPORT the outcome.
-   *
-   * The verdict is composed from what each step returns, never from reading
-   * `lifecycleStatus` back afterwards. That read is unsound as a completion
-   * signal in two ways this method exists to avoid: the field is one generic
-   * slot that a later phase overwrites (auto-provision writes
-   * `phase: "resource-provision"` over the setup result), and it is never
-   * written at all when the project declares no setup commands. Inferring
-   * "ready" from it therefore reported success both for a provision that failed
-   * and for a setup that never ran.
-   *
-   * Neither failure throws — a non-zero setup script and a failed provision both
-   * RESOLVE — so a caller that only catches learns nothing.
-   */
-  private async runLifecycleSetup(
-    worktreeId: string,
-    worktreePath: string,
-    projectRootPath: string,
-    provisionResource?: boolean,
-    environmentId?: string
-  ): Promise<LifecycleSetupOutcome> {
-    const ctx: WorkspaceHostContext = this.getLifecycleContext() ?? {
-      projectRootPath,
-      projectEnvVars: this.projectEnvVars,
-      getMonitor: (id) => this.monitors.get(id),
-      emitUpdate: (m) => this.emitUpdate(m),
-    };
-
-    // Ids are paths, so the monitor is pinned before the first await: only the
-    // incarnation this run started against may record or clear what it was
-    // asked to do.
-    const monitorAtStart = this.monitors.get(worktreeId);
-    const recordAwaitingApproval = (awaiting: boolean): void => {
-      const live = this.monitors.get(worktreeId);
-      if (!live || live !== monitorAtStart) return;
-      if (!awaiting) {
-        this.setupAwaitingApproval.delete(live);
-        return;
-      }
-      this.setupAwaitingApproval.set(live, {
-        provisionResource: provisionResource ?? false,
-        ...(environmentId !== undefined ? { environmentId } : {}),
-      });
-    };
-
-    const { shouldProvision, needsApproval } = await this.lifecycleService.runLifecycleSetup(
-      worktreeId,
-      worktreePath,
-      ctx,
-      provisionResource,
-      environmentId
-    );
-
-    if (needsApproval) {
-      recordAwaitingApproval(true);
-      return { ok: false, needsApproval: true };
-    }
-
-    // Read immediately, before auto-provision can overwrite the slot.
-    const settled = this.monitors.get(worktreeId)?.lifecycleStatus;
-    if (settled?.phase === "setup" && settled.state !== "success") {
-      if (settled.state === "failed" || settled.state === "timed-out") {
-        recordAwaitingApproval(false);
-        return {
-          ok: false,
-          timedOut: settled.state === "timed-out",
-          error: settled.error ?? "Setup script failed",
-        };
-      }
-    }
-
-    if (shouldProvision && this.projectRootPath) {
-      const provision = await this.runResourceAction(
-        `auto-provision-${worktreeId}`,
-        worktreeId,
-        "provision"
-      );
-      if (!provision.success) {
-        // Provisioning re-checks approval against the config as it is now, so
-        // commands that changed after setup read them are waiting for approval
-        // rather than failed — and approving them should finish the job.
-        if (provision.error === LIFECYCLE_COMMANDS_NEED_APPROVAL_ERROR) {
-          recordAwaitingApproval(true);
-          return { ok: false, needsApproval: true };
-        }
-        recordAwaitingApproval(false);
-        return {
-          ok: false,
-          timedOut: false,
-          error: provision.error ?? "Resource provisioning failed",
-        };
-      }
-    }
-
-    recordAwaitingApproval(false);
-    return { ok: true };
+  getLifecycleCommandReview(worktreeId: string): Promise<LifecycleCommandReview | null> {
+    return this.setupCoordinator.getLifecycleCommandReview(worktreeId);
   }
 
-  /**
-   * Re-run the lifecycle setup script for an existing worktree without
-   * recreating it. Surfaced via the `run-lifecycle-setup` port action so the
-   * worktree card can offer a "Retry setup" affordance after a failed/timed-out
-   * setup. Same idempotence assumption as resource provisioning — the user
-   * authors setup scripts knowing they may be re-run in place.
-   */
-  async retryLifecycleSetup(worktreeId: string): Promise<void> {
-    const monitor = this.monitors.get(worktreeId);
-    if (!monitor) {
-      throw new Error(`Worktree not found: ${worktreeId}`);
-    }
-    if (!this.projectRootPath) {
-      throw new Error("Cannot retry setup before a project is loaded");
-    }
-    if (monitor.lifecycleStatus?.state === "running") {
-      throw new Error("Setup is already running");
-    }
-
-    // Set running synchronously *before* the first await so a second concurrent
-    // request (rapid clicks, multi-window, retry-after-error) sees the in-flight
-    // state and is rejected by the guard above. `runLifecycleSetup` re-sets the
-    // same state with full command-progress metadata once config loads.
-    const startedAt = Date.now();
-    monitor.setLifecycleStatus({
-      phase: "setup",
-      state: "running",
-      startedAt,
-    });
-    // Kept in lockstep with the create tail's own transitions: a retry that
-    // left `setupStatus` reading `failed` while the script was demonstrably
-    // running again would make the readiness contract a lie the moment anyone
-    // used the retry affordance.
-    monitor.setSetupStatus({ state: "running", stage: "setup-script", startedAt });
-    this.emitUpdate(monitor);
-
-    // A setup that stopped for approval resumes with what it was originally
-    // asked to do; a plain retry never provisions.
-    const intent = this.setupAwaitingApproval.get(monitor);
-    let outcome: LifecycleSetupOutcome;
-    try {
-      outcome = await this.runLifecycleSetup(
-        worktreeId,
-        monitor.path,
-        this.projectRootPath,
-        intent?.provisionResource ?? false,
-        intent?.environmentId
-      );
-    } catch (err) {
-      const message = formatErrorMessage(err, "Setup retry failed");
-      // BOTH statuses have to settle here. `runLifecycleSetup` writes the
-      // terminal `lifecycleStatus` itself on the paths it completes, but a
-      // throw skips that — and the guard above rejects a retry while
-      // `lifecycleStatus.state === "running"`, so leaving it running would make
-      // the FIRST failed retry the last one this worktree ever accepts.
-      const live = this.monitors.get(worktreeId);
-      if (live) {
-        live.setLifecycleStatus({
-          phase: "setup",
-          state: "failed",
-          startedAt,
-          completedAt: Date.now(),
-          error: message,
-        });
-      }
-      this.setWorktreeSetupStatus(worktreeId, {
-        state: "failed",
-        stage: "setup-script",
-        startedAt,
-        completedAt: Date.now(),
-        error: message,
-      });
-      throw err;
-    }
-
-    // Settle `lifecycleStatus` when the run left it running.
-    //
-    // The guard at the top of this method rejects a retry while that field
-    // reads `running`, and `lifecycleService.runLifecycleSetup` returns early
-    // WITHOUT writing any status when the project declares no setup commands —
-    // so the `running` stamped above was never replaced, and the first retry on
-    // such a project was the last one it would ever accept. The status is
-    // written here rather than by removing the pre-set, because the pre-set is
-    // what makes the guard reject a concurrent second request.
-    const live = this.monitors.get(worktreeId);
-    if (live?.lifecycleStatus?.phase === "setup" && live.lifecycleStatus.state === "running") {
-      const settledState = outcome.ok
-        ? "success"
-        : "needsApproval" in outcome
-          ? "needs-approval"
-          : outcome.timedOut
-            ? "timed-out"
-            : "failed";
-      live.setLifecycleStatus({
-        ...live.lifecycleStatus,
-        state: settledState,
-        completedAt: Date.now(),
-        ...(!outcome.ok && "error" in outcome ? { error: outcome.error } : {}),
-      });
-      this.emitUpdate(live);
-    }
-
-    this.setWorktreeSetupStatus(worktreeId, setupStatusForOutcome(outcome, startedAt, Date.now()));
-  }
-
-  /**
-   * The repository commands this worktree would run that still need the
-   * user's approval, or `null`. Also brings the worktree's approval flag up to
-   * date, since whoever asks is about to act on the answer.
-   *
-   * Reached only through the worktree port from the renderer's review dialog.
-   * Deliberately not an action: approval is the user's decision, and nothing
-   * on the action surface — which is also the MCP tool surface — can grant it.
-   */
-  async getLifecycleCommandReview(worktreeId: string): Promise<LifecycleCommandReview | null> {
-    const monitor = this.monitors.get(worktreeId);
-    if (!monitor) throw new Error(`Worktree not found: ${worktreeId}`);
-    const projectRootPath = this.projectRootPath;
-    if (!projectRootPath) throw new Error("Cannot review commands before a project is loaded");
-    const review = await this.lifecycleService.getCommandReview(monitor.path, projectRootPath);
-    this.applyCommandApprovalFlag(monitor, projectRootPath, review !== null);
-    // What approving sets running straight away is part of what is approved.
-    const intent = this.setupAwaitingApproval.get(monitor);
-    if (review && intent?.provisionResource) {
-      const label = await this.lifecycleService.setupProvisionLabel(
-        monitor.path,
-        projectRootPath,
-        intent.environmentId,
-        monitor.worktreeMode
-      );
-      if (label) return { ...review, provisionAfterSetup: label };
-    }
-    return review;
-  }
-
-  /**
-   * Approve the commands a review showed, identified by its fingerprint.
-   *
-   * Approval is by content, so every worktree in the project that carries the
-   * same commands is cleared by it: their flags and published connect commands
-   * are refreshed. A setup this worktree skipped for approval is then resumed —
-   * that is what the user just approved it for. Other worktrees' skipped setups
-   * are left for their own cards.
-   */
-  async approveLifecycleCommands(worktreeId: string, fingerprint: string): Promise<void> {
-    const monitor = this.monitors.get(worktreeId);
-    if (!monitor) throw new Error(`Worktree not found: ${worktreeId}`);
-    const projectRootPath = this.projectRootPath;
-    if (!projectRootPath) throw new Error("Cannot approve commands before a project is loaded");
-
-    await this.lifecycleService.approveCommandReview(monitor.path, projectRootPath, fingerprint);
-
-    await Promise.all(
-      [...this.monitors.values()].map(async (m) => {
-        try {
-          // Only a monitor that was (or may have been) waiting, or that has no
-          // connect command published, can have had one withheld. Re-deriving
-          // an approved sibling's would drop the endpoint its last status check
-          // substituted in.
-          if (m.lifecycleCommandsNeedApproval !== false || m.resourceConnectCommand === undefined) {
-            await this.initResourceConfigAsync(m, m.path);
-          }
-          await this.refreshLifecycleCommandApproval(m);
-        } catch (err) {
-          console.warn("[WorkspaceService] Failed to refresh command approval:", err);
-        }
-      })
-    );
-
-    const live = this.monitors.get(worktreeId);
-    if (
-      live === monitor &&
-      this.setupAwaitingApproval.has(live) &&
-      !this.resumingApprovedSetup.has(live)
-    ) {
-      this.resumingApprovedSetup.add(live);
-      void (async () => {
-        // A resource action in flight — an automatic status check, say — holds
-        // the lifecycle slot, and a retry started under it would be refused as
-        // "already running", losing the setup the user just approved.
-        await this.resourceActionExecutor.whenIdle(worktreeId);
-        if (this.monitors.get(worktreeId) !== monitor) return;
-        if (!this.setupAwaitingApproval.has(monitor)) return;
-        await this.retryLifecycleSetup(worktreeId);
-      })()
-        .catch((err) => {
-          console.warn("[WorkspaceService] Setup after approval failed to start:", err);
-        })
-        .finally(() => {
-          this.resumingApprovedSetup.delete(monitor);
-        });
-    }
-  }
-
-  /** Re-derive a worktree's "commands need approval" flag from disk. */
-  private async refreshLifecycleCommandApproval(monitor: WorktreeMonitor): Promise<void> {
-    const projectRootPath = this.projectRootPath;
-    if (!projectRootPath) return;
-    const review = await this.lifecycleService.getCommandReview(monitor.path, projectRootPath);
-    this.applyCommandApprovalFlag(monitor, projectRootPath, review !== null);
-  }
-
-  private applyCommandApprovalFlag(
-    monitor: WorktreeMonitor,
-    projectRootPath: string,
-    needsApproval: boolean
-  ): void {
-    // The answer was read for this incarnation in this project; a monitor that
-    // has since been replaced, or a project that has since switched, gets none.
-    if (this.monitors.get(monitor.id) !== monitor || this.projectRootPath !== projectRootPath) {
-      return;
-    }
-    if (monitor.lifecycleCommandsNeedApproval === needsApproval) return;
-    monitor.setLifecycleCommandsNeedApproval(needsApproval);
-    if (monitor.isRunning && monitor.hasInitialStatus) {
-      this.emitUpdate(monitor);
-    }
+  approveLifecycleCommands(worktreeId: string, fingerprint: string): Promise<void> {
+    return this.setupCoordinator.approveLifecycleCommands(worktreeId, fingerprint);
   }
 
   private async runLifecycleTeardown(
@@ -4466,6 +4330,9 @@ export class WorkspaceService {
     monitor: WorktreeMonitor,
     force: boolean
   ): Promise<void> {
+    // A plugin step still setting the worktree up is setting up one that is
+    // about to be gone.
+    this.setupCoordinator.cancelPluginSetup(monitor);
     // First, while the worktree's own stack is still up for its detach to talk to.
     await this.attachmentService.detachForDelete(worktreeId);
     const ctx = this.getLifecycleContext();
@@ -5465,7 +5332,8 @@ export class WorkspaceService {
     status: string,
     ignoreWhitespace?: boolean,
     offset?: number,
-    maxBytes?: number
+    maxBytes?: number,
+    side?: GitDiffSide
   ): Promise<void> {
     // A sentinel is a marker, not diff content — it is never windowed, and
     // totalBytes 0 is what tells the caller to read `diff` as a marker.
@@ -5520,7 +5388,7 @@ export class WorkspaceService {
       // per window.
       const continuation = (offset ?? 0) > 0;
       const cacheKeyFor = (source: "file" | "git"): string =>
-        FileDiffCache.key(source, cwd, gitPath, status, ignoreWhitespace === true);
+        FileDiffCache.key(source, cwd, gitPath, status, ignoreWhitespace === true, side);
       const serveFromCache = (key: string, freshness: string | null): boolean => {
         const cached = freshness === null ? null : this.fileDiffCache.get(key, freshness);
         if (cached === null) return false;
@@ -5541,10 +5409,12 @@ export class WorkspaceService {
       // replaced, so the "large file, small diff" case that the old gate
       // wrongly refused now succeeds (#11531). lstat, not stat: a symlink's
       // diff is its target path, whatever size the file it points at is.
+      // The staged side never reads the working-tree file, so its size is no
+      // reason to refuse a patch built from the index; the patch cap still holds.
       try {
         const { lstat } = await import("fs/promises");
         const stats = await lstat(absolutePath);
-        if (stats.size > GIT_FILE_DIFF_MAX_SOURCE_BYTES) {
+        if (side !== "staged" && stats.size > GIT_FILE_DIFF_MAX_SOURCE_BYTES) {
           sendSentinel("FILE_TOO_LARGE");
           return;
         }
@@ -5556,7 +5426,15 @@ export class WorkspaceService {
 
       const git = await createHardenedGit(cwd);
 
-      if (status === "untracked" || status === "added") {
+      // The staged side is the index blob, never the working-tree file, so only
+      // the unstaged side of a file git does not know yet is inlined from disk.
+      const inlinesWorktreeFile =
+        side === "staged"
+          ? false
+          : side === "unstaged"
+            ? status === "untracked"
+            : status === "untracked" || status === "added";
+      if (inlinesWorktreeFile) {
         const { readFile } = await import("fs/promises");
         // Taken before the read: a write that lands after it changes the key,
         // so the next window recomputes instead of serving what this read saw.
@@ -5617,12 +5495,19 @@ export class WorkspaceService {
       // recognise as a gitlink (#12309).
       // Capped while git runs, since the stat gate above fails open for a
       // deleted file and never sees the HEAD blob.
+      // HEAD is pinned to the commit the freshness key was taken against, so a
+      // HEAD that moves away and back mid-diff cannot pass off a patch against
+      // the other commit as fresh. The staged side leaves it off when HEAD is
+      // unborn: `--cached` alone then diffs the index against the empty tree.
+      const baseRefArgs =
+        side === "unstaged"
+          ? []
+          : side === "staged"
+            ? ["--cached", ...(freshness ? [freshness.head] : [])]
+            : [freshness?.head ?? "HEAD"];
       const diff = await runWithCappedStdout(cwd, GIT_FILE_DIFF_MAX_PATCH_BYTES, (capped) =>
         capped.diff([
-          // Pinned to the commit the freshness key was taken against, so a HEAD
-          // that moves away and back mid-diff cannot pass off a patch against
-          // the other commit as fresh.
-          freshness?.head ?? "HEAD",
+          ...baseRefArgs,
           "--no-ext-diff",
           "--no-textconv",
           "--no-color",
@@ -5947,6 +5832,8 @@ export class WorkspaceService {
     const remoteSelectionChanged = args.forgeRemote !== this.forgeRemoteName;
     this.forgeRemoteName = args.forgeRemote;
     pullRequestService.setForgeSettings(args);
+    // The issues binding may be what changed; its branch keys go with it.
+    this.refreshIssueBranchClaim();
     // A backgrounded host re-resolves when it is foregrounded; refreshing now
     // would query the forge for a project nothing is showing (#12519).
     if (!this.backgrounded) void pullRequestService.refresh();
@@ -6040,6 +5927,9 @@ export class WorkspaceService {
    */
   notifyForgeProviderRegistryUpdated(): void {
     pullRequestService.notifyForgeProviderRegistryUpdated();
+    // The issues provider may have just become available (#13744).
+    this.issueClaimRetries = 0;
+    this.refreshIssueBranchClaim();
   }
 
   updateForgeCredentials(
@@ -6104,6 +5994,8 @@ export class WorkspaceService {
         worktreeId: string;
         branch?: string;
         issueNumber?: number;
+        issueProviderId?: string;
+        issueKey?: string;
         isMainWorktree?: boolean;
       }> = [];
       for (const monitor of this.monitors.values()) {
@@ -6111,6 +6003,8 @@ export class WorkspaceService {
           worktreeId: monitor.id,
           branch: monitor.branch,
           issueNumber: monitor.issueNumber,
+          issueProviderId: monitor.issueClaim?.issueProviderId,
+          issueKey: monitor.issueClaim?.issueKey,
           isMainWorktree: monitor.isMainWorktree,
         });
       }
@@ -6148,6 +6042,7 @@ export class WorkspaceService {
     // start probe re-seeds it, and an in-flight probe from this project must
     // not signal against the incoming one.
     this.stopForgeRemoteDetection();
+    this.clearIssueBranchClaim();
 
     this.activeWorktreeId = null;
     this.mainBranch = "main";
@@ -6187,7 +6082,13 @@ export class WorkspaceService {
 
     try {
       if (this.projectRootPath) {
-        await this.runLifecycleSetup(worktreeId, monitor.path, this.projectRootPath, false, envKey);
+        await this.setupCoordinator.runLifecycleSetup(
+          worktreeId,
+          monitor.path,
+          this.projectRootPath,
+          false,
+          envKey
+        );
       }
     } catch (err) {
       const message = formatErrorMessage(err, "switchWorktreeEnvironment lifecycle setup failed");
@@ -6287,6 +6188,7 @@ export class WorkspaceService {
     this.deferredCredentialUpdates.clear();
     this.resourceActionExecutor.dispose();
     this.attachmentService.dispose();
+    this.setupCoordinator.dispose();
     for (const monitor of this.monitors.values()) {
       monitor.stop();
     }
@@ -6296,6 +6198,7 @@ export class WorkspaceService {
     this.authFailureConfirmedNotified.clear();
     this.pollQueue.clear();
     this.stopForgeRemoteDetection();
+    this.clearIssueBranchClaim();
     this.listService.invalidateCache();
     this.fileDiffCache.dispose();
   }

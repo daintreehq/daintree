@@ -297,6 +297,8 @@ function KitMarkdownEditor({
   defaultMode,
   onModeChange,
   layout,
+  fill,
+  header,
   onSubmit,
   onCancel,
   minRows,
@@ -316,6 +318,7 @@ function KitMarkdownEditor({
   const baseId = useId();
   const rootRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const previewRef = useRef<HTMLDivElement>(null);
   const controlled = str(value);
   const [ownText, setOwnText] = useState(() => str(defaultValue) ?? "");
   const text = controlled ?? ownText;
@@ -346,6 +349,7 @@ function KitMarkdownEditor({
     return () => observer.disconnect();
   }, [layoutMode]);
   const split = layoutMode === "split" || (layoutMode === "auto" && wide);
+  const filling = fill === true;
 
   // The text area grows with its text between its row bounds; the preview
   // keeps the height the source had, so switching sides moves nothing below.
@@ -353,6 +357,13 @@ function KitMarkdownEditor({
   useLayoutEffect(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
+    if (filling) {
+      // The pane sizes it: drop what the row-bounded growth left behind.
+      textarea.style.height = "";
+      textarea.style.overflowY = "";
+      setSourceHeight(null);
+      return;
+    }
     const measure = () => {
       // Hidden behind Preview it has no box to measure; the last height stands.
       if (textarea.closest("[hidden]")) return;
@@ -382,7 +393,64 @@ function KitMarkdownEditor({
     });
     observer.observe(textarea);
     return () => observer.disconnect();
-  }, [text, rowsMin, rowsMax, activeMode, split]);
+  }, [text, rowsMin, rowsMax, activeMode, split, filling]);
+
+  // Side by side in a fill editor, the pane the pointer or the caret is in
+  // leads and the other follows by scroll fraction. The leader is a ref, not a
+  // flag raised around the write: the follower's own scroll event arrives
+  // later and must not be taken for a lead.
+  const resyncRef = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    const source = textareaRef.current;
+    const view = previewRef.current;
+    if (!filling || !split || !source || !view) return;
+    let leader: HTMLElement = source;
+    let frame = 0;
+    const follow = (from: HTMLElement, to: HTMLElement) => {
+      const fromRange = from.scrollHeight - from.clientHeight;
+      const toRange = to.scrollHeight - to.clientHeight;
+      if (fromRange <= 0 || toRange <= 0) return;
+      const next = Math.round((from.scrollTop / fromRange) * toRange);
+      if (Math.abs(to.scrollTop - next) >= 1) to.scrollTop = next;
+    };
+    const schedule = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => follow(leader, leader === source ? view : source));
+    };
+    resyncRef.current = schedule;
+    const pairs: [HTMLElement, HTMLElement][] = [
+      [source, view],
+      [view, source],
+    ];
+    const events = ["pointerenter", "wheel", "touchstart", "focus", "keydown"] as const;
+    const cleanups = pairs.map(([from]) => {
+      const take = () => {
+        if (leader === from) return;
+        leader = from;
+        // A frame queued for the old leader would move the new one.
+        cancelAnimationFrame(frame);
+      };
+      const scroll = () => {
+        if (leader === from) schedule();
+      };
+      for (const name of events) from.addEventListener(name, take, { passive: true });
+      from.addEventListener("scroll", scroll, { passive: true });
+      return () => {
+        for (const name of events) from.removeEventListener(name, take);
+        from.removeEventListener("scroll", scroll);
+      };
+    });
+    return () => {
+      resyncRef.current = null;
+      cancelAnimationFrame(frame);
+      for (const cleanup of cleanups) cleanup();
+    };
+  }, [filling, split]);
+
+  // New text changes both scroll ranges without a scroll event.
+  useEffect(() => {
+    resyncRef.current?.();
+  }, [text]);
 
   const setText = (next: string) => {
     if (controlled === undefined) setOwnText(next);
@@ -468,9 +536,12 @@ function KitMarkdownEditor({
       spellCheck
       onChange={(event: ChangeEvent<HTMLTextAreaElement>) => setText(event.target.value)}
       onKeyDown={onKeyDown}
-      // The frame draws the field's ring; the text area is its content.
-      // eslint-disable-next-line component-contract/no-unpaired-outline-suppression -- the frame rings it through has-[textarea:focus-visible]
-      className="block rounded-none border-0 bg-transparent focus-visible:outline-hidden disabled:opacity-100"
+      className={cn(
+        // The frame draws the field's ring; the text area is its content.
+        // eslint-disable-next-line component-contract/no-unpaired-outline-suppression -- the frame rings it through has-[textarea:focus-visible]
+        "block rounded-none border-0 bg-transparent focus-visible:outline-hidden disabled:opacity-100",
+        filling && "h-full overflow-y-auto"
+      )}
     />
   );
   const source = split ? (
@@ -483,6 +554,7 @@ function KitMarkdownEditor({
       role="tabpanel"
       aria-labelledby={tabId("write")}
       hidden={activeMode !== "write"}
+      className={filling ? "min-h-0 flex-1" : undefined}
     >
       {textarea}
     </div>
@@ -499,13 +571,17 @@ function KitMarkdownEditor({
       role={split ? "region" : "tabpanel"}
       aria-labelledby={split ? undefined : tabId("preview")}
       aria-label={split ? "Preview" : undefined}
-      tabIndex={split ? undefined : 0}
+      ref={previewRef}
+      tabIndex={split && !filling ? undefined : 0}
       // Mounted behind Write too, so the Preview tab's aria-controls always
       // resolves; its content renders only while it shows.
       hidden={!showPreview}
       data-kit-markdown-preview=""
-      className="min-w-0 overflow-auto px-3 py-2 focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
-      style={{ height: previewHeight }}
+      className={cn(
+        "min-w-0 overflow-auto px-3 py-2 focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
+        filling && "min-h-0 flex-1"
+      )}
+      style={filling ? undefined : { height: previewHeight }}
     >
       {!showPreview ? null : text.trim() === "" ? (
         <p className="text-sm text-text-secondary">Nothing to preview</p>
@@ -537,6 +613,7 @@ function KitMarkdownEditor({
       </Toolbar>
     ) : null;
 
+  const headerContent = node(header);
   const footerContent = node(footer);
   return (
     <div
@@ -544,10 +621,20 @@ function KitMarkdownEditor({
       ref={rootRef}
       data-kit-markdown-editor=""
       data-mode={split ? "split" : activeMode}
-      className={cn("flex min-w-0 flex-col gap-2", str(className))}
+      className={cn(
+        "flex min-w-0 flex-col gap-2",
+        filling && "h-full min-h-0 flex-1",
+        str(className)
+      )}
     >
+      {headerContent === null ? null : (
+        <div className={cn("min-w-0 shrink-0", filling && "max-h-[40%] overflow-auto")}>
+          {headerContent}
+        </div>
+      )}
       <div
         className={cn(
+          filling && "min-h-0 flex-1",
           // The Textarea's field, drawn around the strip and the body so the
           // two read as one control; its ring sits on the frame.
           "flex min-w-0 flex-col overflow-hidden rounded-[var(--radius-md)] border bg-surface-input",
@@ -581,9 +668,13 @@ function KitMarkdownEditor({
           ) : null}
         </div>
         {split ? (
-          <div className="grid min-w-0 grid-cols-2">
+          <div className={cn("grid min-w-0 grid-cols-2", filling && "min-h-0 flex-1 grid-rows-1")}>
             {source}
-            <div className="min-w-0 border-l border-divider">{preview}</div>
+            <div
+              className={cn("min-w-0 border-l border-divider", filling && "flex min-h-0 flex-col")}
+            >
+              {preview}
+            </div>
           </div>
         ) : (
           <>

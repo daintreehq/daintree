@@ -17,7 +17,7 @@ vi.mock("../../../KeybindingService", () => ({
 }));
 vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
 
-// forgeActions reaches the renderer-only client/store layer at module load.
+// The forge run bodies reach the renderer-only client/store layer when they load.
 // A real object rather than `{}`, so the dispatch tests below can point
 // individual methods at fixtures.
 const forgeClientStub = vi.hoisted(() => ({}) as Record<string, ReturnType<typeof vi.fn>>);

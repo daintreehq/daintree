@@ -517,7 +517,10 @@ export interface MemoryPressureActions {
    * implying it covers every webview this action tears down.
    */
   destroyHiddenWebviews: (tier: 1 | 2) => Promise<number>;
-  /** Returns the number of terminals killed. */
+  /**
+   * Puts opted-in idle projects to sleep early (#13852). Returns the number of
+   * terminals killed.
+   */
   hibernateIdleProjects: () => Promise<number>;
   /** Returns the number of cached project views evicted. */
   evictCachedProjectViews?: () => Promise<number> | number;
@@ -534,6 +537,13 @@ export interface MemoryPressureActions {
    * see that (#11674). The counts are logged, never used to gate escalation.
    */
   trimPtyHostState?: () => Promise<TrimStateSummary>;
+  /**
+   * Asks the active project views to drop the scrollback of terminals they
+   * aren't showing — the renderer's copy, which is larger than the host's.
+   * Fire-and-forget and unacknowledged, so like the webview push it never
+   * counts as productive work.
+   */
+  trimRendererScrollback?: () => void;
   /**
    * Optional Blink memory sampler. If wired, called once per poll BEFORE
    * pressure evaluation so renderer samples land alongside the metrics
@@ -1152,6 +1162,12 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
               tier1TrimFailed = true;
             }
 
+            try {
+              actions.trimRendererScrollback?.();
+            } catch {
+              /* non-critical */
+            }
+
             await new Promise<void>((resolve) => setTimeout(resolve, RECLAIM_SETTLE_MS));
           }
 
@@ -1206,8 +1222,9 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
               beforeMb: Math.round(beforeMb),
               afterMb: Math.round(afterMb),
               // Attributable to the portal-tab teardown only. The scrollback
-              // trim cannot move this inside the settle window whatever it did,
-              // so a zero here is not evidence either lever failed.
+              // trims (host and renderer) cannot move this inside the settle
+              // window whatever they did, so a zero here is not evidence any
+              // lever failed.
               deltaMb: Math.round(deltaMb),
               // Portal tabs are the only part of this lever whose outcome main
               // can observe (the webview push is fire-and-forget), so this is a
@@ -1311,6 +1328,21 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
                 error: String(err),
               });
             }
+            // Before the view and host levers: a sleep reads the project's
+            // workspace host to prove nothing is mid-lifecycle there, and the
+            // two levers below take away the hosts background projects hold,
+            // which leaves every candidate blocked. Sleep evicts its own
+            // project's views and host anyway.
+            let tier2TerminalsHibernated = 0;
+            try {
+              tier2TerminalsHibernated = await actions.hibernateIdleProjects();
+            } catch (err) {
+              tier2ActionFailed = true;
+              logWarn("memory-pressure-tier2-action-failed", {
+                action: "hibernateIdleProjects",
+                error: String(err),
+              });
+            }
             let tier2ViewsEvicted = 0;
             try {
               tier2ViewsEvicted = (await actions.evictCachedProjectViews?.()) ?? 0;
@@ -1331,16 +1363,6 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
               tier2ActionFailed = true;
               logWarn("memory-pressure-tier2-action-failed", {
                 action: "reclaimDormantWorkspaceHosts",
-                error: String(err),
-              });
-            }
-            let tier2TerminalsHibernated = 0;
-            try {
-              tier2TerminalsHibernated = await actions.hibernateIdleProjects();
-            } catch (err) {
-              tier2ActionFailed = true;
-              logWarn("memory-pressure-tier2-action-failed", {
-                action: "hibernateIdleProjects",
                 error: String(err),
               });
             }

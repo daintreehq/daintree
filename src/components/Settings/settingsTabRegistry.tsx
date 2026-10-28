@@ -36,7 +36,8 @@ import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import { AGENT_REGISTRY } from "@shared/config/agentRegistry";
 import { GeneralTab } from "./GeneralTab";
 import { isRemoteShellSupported } from "@/lib/remoteHosts";
-import type { SettingsOwner } from "@/hooks/useSettingsOwner";
+import { SECTION_SETTINGS } from "./settingsSectionOwners";
+import { settingsOwnerOf, type SettingRef, type SettingsOwner } from "@/hooks/useSettingsOwner";
 import type {
   GlobalSettingsTab,
   ProjectSettingsTab,
@@ -66,6 +67,8 @@ export interface SettingsSectionMeta {
     readonly settingId: string;
     readonly label: string;
   };
+  /** What this entry writes when it differs from its section's or its tab's. */
+  readonly settings?: readonly SettingRef[];
 }
 
 export interface SettingsTabEntry {
@@ -81,11 +84,17 @@ export interface SettingsTabEntry {
    */
   readonly contentScope?: "global" | "project";
   /**
-   * Whose values the tab edits in a window attached to another host: the host's, this
-   * machine's, or both (each section then names its own). Required, so a new tab can't
-   * leave the question unanswered; follows the ownership of the settings it writes.
+   * The settings the tab writes. Its owner is read from the settings catalog (#14694), so
+   * a tab can't name a machine that isn't the one its settings live on: the header names
+   * the owner they share, and a page holding both leaves each section to name its own.
+   * A section or row of another owner marks itself.
    */
-  readonly owner: SettingsOwner;
+  readonly settings: readonly SettingRef[];
+  /**
+   * What each section of a mixed page writes, by the section name search lists it under,
+   * so a result names the owner its heading does.
+   */
+  readonly sectionSettings?: Readonly<Record<string, readonly SettingRef[]>>;
   readonly group: string;
   readonly label: string;
   readonly headerTitle?: string;
@@ -108,6 +117,11 @@ export interface LazySettingsTabEntry extends SettingsTabEntry {
   readonly needsOnSettingsChange?: boolean;
   readonly needsProjectForm?: boolean;
   readonly needsOnNavigateToTab?: boolean;
+  /**
+   * Hand the tab `isActive`. Visited tabs stay mounted while hidden, so a tab that
+   * holds a live resource (an open mic) uses it to let go when it stops showing.
+   */
+  readonly needsIsActive?: boolean;
 }
 
 export interface EagerSettingsTabEntry extends SettingsTabEntry {
@@ -274,7 +288,7 @@ const HOSTS_TAB = {
   id: "hosts",
   scope: "global",
   group: "Integrations",
-  owner: "device",
+  settings: ["remoteHosts", "hostMode"],
   label: "Hosts",
   icon: <Server className="w-4 h-4" />,
   importKind: "lazy",
@@ -328,12 +342,21 @@ export const SETTINGS_REGISTRY = [
     id: "general",
     scope: "global",
     group: "General",
-    owner: "mixed",
+    settings: ["sessionRestore", "windowOpening"],
+    sectionSettings: {
+      "System status": SECTION_SETTINGS.systemStatus,
+      Updates: SECTION_SETTINGS.updates,
+      Startup: SECTION_SETTINGS.startup,
+      "Opening folders": SECTION_SETTINGS.openingFolders,
+      "Keep awake": SECTION_SETTINGS.keepAwake,
+      "Background projects": SECTION_SETTINGS.backgroundProjects,
+      "Interface elements": SECTION_SETTINGS.interfaceElements,
+    },
     label: "General",
     icon: <Settings2 className="w-4 h-4" />,
     importKind: "eager",
     Component: GeneralTab,
-    searchNavDescription: "About, system status, hibernation, and display settings",
+    searchNavDescription: "About, system status, background projects, and display settings",
     searchNavKeywords: ["general", "settings", "about", "status"],
     sections: [
       {
@@ -447,38 +470,28 @@ export const SETTINGS_REGISTRY = [
         ],
       },
       {
-        id: "general-hibernation",
-        subtab: "hibernation",
-        subtabLabel: "Hibernation",
-        section: "Background projects",
-        title: "Hibernate inactive projects",
-        description:
-          "Automatically stop terminals and servers for inactive projects. Reduces system resource usage.",
-        keywords: ["hibernate", "sleep", "inactive", "stop", "resources", "idle", "auto"],
-      },
-      {
-        id: "general-hibernation-threshold",
-        subtab: "hibernation",
-        subtabLabel: "Hibernation",
-        section: "Background projects",
-        title: "Hibernate after",
-        description: "How long before a project is hibernated: 12h, 24h, 48h, or 72h",
-        keywords: ["hibernate", "threshold", "hours", "timeout", "inactivity"],
-      },
-      {
         id: "general-idle-terminal-notify",
-        subtab: "hibernation",
-        subtabLabel: "Hibernation",
+        subtab: "background",
+        subtabLabel: "Background",
         section: "Background projects",
         title: "Notify me about idle terminals",
         description:
-          "Notify when background project terminals have been idle past a threshold. Includes Close Them / Mute project actions.",
-        keywords: ["idle", "notify", "terminal", "background", "reminder", "inactive", "close"],
+          "Notify when background project terminals have been idle past a threshold. Includes Sleep project / Mute project actions.",
+        keywords: [
+          "idle",
+          "notify",
+          "terminal",
+          "background",
+          "reminder",
+          "inactive",
+          "close",
+          "sleep",
+        ],
       },
       {
         id: "general-idle-terminal-threshold",
-        subtab: "hibernation",
-        subtabLabel: "Hibernation",
+        subtab: "background",
+        subtabLabel: "Background",
         section: "Background projects",
         title: "Remind after",
         description: "Minutes of inactivity before notifying: 30m, 1h, 2h, or 4h",
@@ -486,8 +499,8 @@ export const SETTINGS_REGISTRY = [
       },
       {
         id: "general-idle-background-auto-close",
-        subtab: "hibernation",
-        subtabLabel: "Hibernation",
+        subtab: "background",
+        subtabLabel: "Background",
         section: "Background projects",
         title: "Close idle projects automatically",
         description:
@@ -496,12 +509,40 @@ export const SETTINGS_REGISTRY = [
       },
       {
         id: "general-idle-background-threshold",
-        subtab: "hibernation",
-        subtabLabel: "Hibernation",
+        subtab: "background",
+        subtabLabel: "Background",
         section: "Background projects",
         title: "Close after",
         description: "Minutes of inactivity before auto-closing: 15m, 30m, 1h, or 2h",
         keywords: ["idle", "threshold", "minutes", "auto-close", "memory", "background"],
+      },
+      {
+        id: "general-idle-background-include-shells",
+        subtab: "background",
+        subtabLabel: "Background",
+        section: "Background projects",
+        title: "Include projects with idle terminals",
+        description:
+          "Also sleep projects whose shells have nothing running and whose agents sit at their prompt",
+        keywords: [
+          "idle",
+          "shell",
+          "agent",
+          "terminal",
+          "sleep",
+          "memory",
+          "background",
+          "project",
+        ],
+      },
+      {
+        id: "general-idle-shell-threshold",
+        subtab: "background",
+        subtabLabel: "Background",
+        section: "Background projects",
+        title: "Sleep after",
+        description: "Time off screen with no terminal activity before sleeping: 1h, 2h, 4h, or 8h",
+        keywords: ["idle", "shell", "threshold", "hours", "sleep", "memory", "background"],
       },
       {
         id: "general-project-pulse",
@@ -527,8 +568,20 @@ export const SETTINGS_REGISTRY = [
         subtabLabel: "Display",
         section: "Interface elements",
         title: "Grid panel agent highlights",
-        description: "Show waiting and working state borders on grid panels",
-        keywords: ["agent", "highlight", "border", "waiting", "working", "grid", "panel", "state"],
+        description:
+          "Show waiting and working state borders on grid panels, including plugin-reported activity",
+        keywords: [
+          "agent",
+          "highlight",
+          "border",
+          "waiting",
+          "working",
+          "grid",
+          "panel",
+          "state",
+          "plugin",
+          "activity",
+        ],
       },
       {
         id: "general-dock-agent-highlights",
@@ -565,7 +618,7 @@ export const SETTINGS_REGISTRY = [
     id: "terminalAppearance",
     scope: "global",
     group: "General",
-    owner: "device",
+    settings: ["appTheme", "terminalConfig.fontSize"],
     label: "Appearance",
     icon: <SquareTerminal className="w-4 h-4" />,
     importKind: "lazy",
@@ -647,7 +700,7 @@ export const SETTINGS_REGISTRY = [
     id: "keyboard",
     scope: "global",
     group: "General",
-    owner: "device",
+    settings: ["keybindingOverrides"],
     label: "Keyboard",
     headerTitle: "Keyboard shortcuts",
     icon: <Keyboard className="w-4 h-4" />,
@@ -686,7 +739,7 @@ export const SETTINGS_REGISTRY = [
     id: "notifications",
     scope: "global",
     group: "General",
-    owner: "mixed",
+    settings: ["notificationSettings"],
     label: "Notifications",
     icon: <Bell className="w-4 h-4" />,
     importKind: "lazy",
@@ -724,7 +777,14 @@ export const SETTINGS_REGISTRY = [
     id: "privacy",
     scope: "global",
     group: "General",
-    owner: "mixed",
+    settings: ["privacy", "agentSessionHistory"],
+    sectionSettings: {
+      "Telemetry & diagnostics": SECTION_SETTINGS.privacy,
+      "Log retention": SECTION_SETTINGS.privacy,
+      "Data folder": SECTION_SETTINGS.privacy,
+      "Clear cache": SECTION_SETTINGS.privacy,
+      "Reset all app data": SECTION_SETTINGS.privacy,
+    },
     label: "Privacy & data",
     icon: <Shield className="w-4 h-4" />,
     importKind: "lazy",
@@ -804,7 +864,7 @@ export const SETTINGS_REGISTRY = [
     id: "import-export",
     scope: "global",
     group: "General",
-    owner: "device",
+    settings: ["_schemaVersion"],
     label: "Import & export",
     icon: <ArrowDownUp className="w-4 h-4" />,
     importKind: "lazy",
@@ -835,7 +895,15 @@ export const SETTINGS_REGISTRY = [
     id: "terminal",
     scope: "global",
     group: "Terminal",
-    owner: "mixed",
+    settings: ["terminalConfig.scrollbackLines", "terminalConfig.resourceMonitoringEnabled"],
+    sectionSettings: {
+      "Performance mode": SECTION_SETTINGS.performanceMode,
+      "Panel limits": SECTION_SETTINGS.panelLimits,
+      "Two-pane split layout": SECTION_SETTINGS.twoPaneSplit,
+      "Scrollback history": SECTION_SETTINGS.scrollback,
+      "Grid layout": SECTION_SETTINGS.gridLayout,
+      "Screen reader mode": SECTION_SETTINGS.assistiveTechnology,
+    },
     label: "Panel grid",
     icon: <LayoutGrid className="w-4 h-4" />,
     importKind: "lazy",
@@ -884,25 +952,6 @@ export const SETTINGS_REGISTRY = [
         description:
           "Turn off soft warning banner and confirmation dialog while keeping the hard limit",
         keywords: ["disable", "warning", "panel", "nag", "dismiss", "suppress"],
-      },
-      {
-        id: "terminal-hybrid-input",
-        subtab: "input",
-        subtabLabel: "Input",
-        section: "Hybrid input bar",
-        title: "Hybrid input bar",
-        description: "Show the multi-line input bar on agent terminals",
-        keywords: ["input", "hybrid", "bar", "multi-line", "agent", "textarea"],
-      },
-      {
-        id: "terminal-hybrid-autofocus",
-        subtab: "input",
-        subtabLabel: "Input",
-        section: "Hybrid input bar",
-        title: "Auto-focus input",
-        description:
-          "Selecting a pane focuses the input bar or the terminal (xterm); dropped files follow whichever you're using",
-        keywords: ["focus", "autofocus", "input", "pane", "select", "drop", "file"],
       },
       {
         id: "terminal-two-pane-split",
@@ -987,7 +1036,11 @@ export const SETTINGS_REGISTRY = [
     id: "worktree",
     scope: "global",
     group: "Terminal",
-    owner: "mixed",
+    settings: ["worktreeConfig", "storage:daintree-preferences"],
+    sectionSettings: {
+      "Worktree path pattern": SECTION_SETTINGS.worktreePathPattern,
+      "Always-hidden files": SECTION_SETTINGS.clientPreferences,
+    },
     label: "Worktree",
     headerTitle: "Worktree paths",
     icon: <FolderGit2 className="w-4 h-4" />,
@@ -1049,7 +1102,15 @@ export const SETTINGS_REGISTRY = [
     id: "toolbar",
     scope: "global",
     group: "Terminal",
-    owner: "mixed",
+    // Agent pins are this machine's like the rest of the toolbar (#14702).
+    settings: ["storage:daintree-toolbar-preferences", "agentToolbarPins"],
+    sectionSettings: {
+      "Left side buttons": SECTION_SETTINGS.toolbarLayout,
+      "Right side buttons": SECTION_SETTINGS.toolbarLayout,
+      "Not on the toolbar": SECTION_SETTINGS.toolbarLayout,
+      "Launcher palette": SECTION_SETTINGS.toolbarLayout,
+      "Toolbar customization": SECTION_SETTINGS.toolbarLayout,
+    },
     label: "Toolbar",
     headerTitle: "Toolbar customization",
     // Not the gear: that is project General's glyph, and global General's sliders
@@ -1104,7 +1165,7 @@ export const SETTINGS_REGISTRY = [
     id: "environment",
     scope: "global",
     group: "Terminal",
-    owner: "host",
+    settings: ["globalEnvironmentVariables"],
     label: "Environment",
     headerTitle: "Environment variables",
     icon: <KeyRound className="w-4 h-4" />,
@@ -1152,7 +1213,7 @@ export const SETTINGS_REGISTRY = [
     id: "assistant",
     scope: "global",
     group: "Assistant",
-    owner: "host",
+    settings: ["helpAssistant"],
     label: "Daintree Assistant",
     icon: <DaintreeIcon className="w-4 h-4" size={16} />,
     importKind: "lazy",
@@ -1264,7 +1325,10 @@ export const SETTINGS_REGISTRY = [
     id: "agents",
     scope: "global",
     group: "Integrations",
-    owner: "host",
+    settings: ["agentSettings", "userAgentRegistry", "agentUpdateSettings"],
+    sectionSettings: {
+      Input: SECTION_SETTINGS.agentInput,
+    },
     label: "CLI agents",
     icon: <Plug className="w-4 h-4" />,
     importKind: "lazy",
@@ -1310,6 +1374,35 @@ export const SETTINGS_REGISTRY = [
           "launch",
           "keyboard shortcut",
           ...BUILT_IN_AGENT_IDS,
+        ],
+      },
+      {
+        id: "agents-hybrid-input",
+        subtab: "general",
+        subtabLabel: "General",
+        section: "Input",
+        title: "Hybrid input",
+        description: "Show the multi-line input at the bottom of agent terminals",
+        keywords: ["input", "hybrid", "bar", "multi-line", "agent", "textarea", "typing"],
+      },
+      {
+        id: "agents-hybrid-focus",
+        subtab: "general",
+        subtabLabel: "General",
+        section: "Input",
+        title: "Focus first",
+        description:
+          "Switching to an agent pane focuses its hybrid input or its terminal, and a file dropped on another pane's terminal goes there too",
+        keywords: [
+          "focus",
+          "autofocus",
+          "hybrid",
+          "input",
+          "terminal",
+          "pane",
+          "select",
+          "drop",
+          "file",
         ],
       },
       {
@@ -1383,7 +1476,7 @@ export const SETTINGS_REGISTRY = [
     id: "code-forge",
     scope: "global",
     group: "Integrations",
-    owner: "host",
+    settings: ["forgeCredentials", "forgeDefaultProviderId"],
     label: "Code forge",
     headerTitle: "Code forge",
     icon: <GitBranch className="w-4 h-4" />,
@@ -1422,6 +1515,7 @@ export const SETTINGS_REGISTRY = [
           "github",
           "gitlab",
           "gitea",
+          "linear",
           "API",
         ],
       },
@@ -1474,7 +1568,7 @@ export const SETTINGS_REGISTRY = [
     // editorClient.setConfig({ projectId }) and projectClient.saveSettings(projectId).
     contentScope: "project",
     group: "Integrations",
-    owner: "host",
+    settings: ["projectPluginAccountBindings"],
     label: "Integrations",
     icon: <Blocks className="w-4 h-4" />,
     importKind: "lazy",
@@ -1542,12 +1636,13 @@ export const SETTINGS_REGISTRY = [
     id: "voice",
     scope: "global",
     group: "Integrations",
-    owner: "device",
+    settings: ["voiceInput"],
     label: "Voice input",
     icon: <Mic className="w-4 h-4" />,
     importKind: "lazy",
     importer: LazyVoiceInputSettingsTab.preload,
     LazyComponent: LazyVoiceInputSettingsTab,
+    needsIsActive: true,
     searchNavDescription: "Speech-to-text transcription and AI text correction settings",
     searchNavKeywords: [
       "voice",
@@ -1555,8 +1650,12 @@ export const SETTINGS_REGISTRY = [
       "speech",
       "dictation",
       "openai",
-      "whisper",
+      "deepgram",
+      "grok",
+      "xai",
       "transcription",
+      "push to talk",
+      "shortcut",
     ],
     sections: [
       {
@@ -1571,7 +1670,31 @@ export const SETTINGS_REGISTRY = [
         section: "Speech-to-text",
         title: "OpenAI API key",
         description: "Configure your OpenAI API key for realtime speech recognition",
-        keywords: ["openai", "api", "key", "speech-to-text", "stt", "whisper"],
+        keywords: ["openai", "api", "key", "speech-to-text", "stt"],
+        requiresEnabled: VOICE_REQUIRES_ENABLED,
+      },
+      {
+        id: "voice-provider",
+        section: "Speech-to-text",
+        title: "Transcription provider",
+        description: "Choose which provider transcribes your microphone audio",
+        keywords: ["provider", "openai", "deepgram", "grok", "xai", "stt", "privacy", "audio"],
+        requiresEnabled: VOICE_REQUIRES_ENABLED,
+      },
+      {
+        id: "voice-mic-access",
+        section: "Microphone",
+        title: "Microphone access",
+        description: "Check or grant the operating system's permission to record",
+        keywords: ["mic", "permission", "privacy", "denied", "blocked"],
+        requiresEnabled: VOICE_REQUIRES_ENABLED,
+      },
+      {
+        id: "voice-input-device",
+        section: "Microphone",
+        title: "Input device",
+        description: "Choose the device dictation records from",
+        keywords: ["mic", "device", "input", "audio", "headset"],
         requiresEnabled: VOICE_REQUIRES_ENABLED,
       },
       {
@@ -1586,8 +1709,24 @@ export const SETTINGS_REGISTRY = [
         id: "voice-paragraph-breaks",
         section: "Speech-to-text",
         title: "Paragraph breaks",
-        description: "Insert paragraph breaks via spoken commands",
-        keywords: ["paragraph", "break", "enter", "formatting", "spoken"],
+        description: "Add breaks with spoken commands, or by hand with Shift+Enter",
+        keywords: ["paragraph", "break", "new line", "newline", "formatting", "spoken"],
+        requiresEnabled: VOICE_REQUIRES_ENABLED,
+      },
+      {
+        id: "voice-recording-mode",
+        section: "Speech-to-text",
+        title: "Recording mode",
+        description: "Toggle dictation on and off, or hold the shortcut to record",
+        keywords: ["recording", "mode", "push to talk", "hold", "toggle", "ptt"],
+        requiresEnabled: VOICE_REQUIRES_ENABLED,
+      },
+      {
+        id: "voice-shortcuts",
+        section: "Speech-to-text",
+        title: "Dictation shortcuts",
+        description: "Start, pause, cancel and send while dictating, with a link to rebind them",
+        keywords: ["shortcut", "keybinding", "hotkey", "pause", "escape", "enter", "rebind"],
         requiresEnabled: VOICE_REQUIRES_ENABLED,
       },
       {
@@ -1599,10 +1738,18 @@ export const SETTINGS_REGISTRY = [
         requiresEnabled: VOICE_REQUIRES_ENABLED,
       },
       {
+        id: "voice-learn-words",
+        section: "Speech-to-text",
+        title: "Learn words from corrections",
+        description: "Suggest dictionary terms when you fix a mishearing before sending",
+        keywords: ["dictionary", "suggest", "learn", "corrections", "mishearing"],
+        requiresEnabled: VOICE_REQUIRES_ENABLED,
+      },
+      {
         id: "voice-ai-correction-enable",
         section: "AI text correction",
         title: "AI text correction",
-        description: "Enable AI-powered post-processing to clean up transcribed text",
+        description: "Correct the whole passage once when you stop dictating",
         keywords: ["correction", "ai", "cleanup", "post-process", "filler"],
         requiresEnabled: VOICE_REQUIRES_ENABLED,
       },
@@ -1610,8 +1757,24 @@ export const SETTINGS_REGISTRY = [
         id: "voice-custom-instructions",
         section: "AI text correction",
         title: "Custom instructions",
-        description: "Add project-specific rules for AI text correction",
-        keywords: ["instructions", "prompt", "rules", "custom", "project-specific"],
+        description: "Add your own rules to the correction prompt in every project",
+        keywords: ["instructions", "prompt", "rules", "custom"],
+        requiresEnabled: VOICE_AI_REQUIRES_ENABLED,
+      },
+      {
+        id: "voice-cleanup-model",
+        section: "AI text correction",
+        title: "Cleanup model",
+        description: "GPT-6.1 Terra or GPT-6 Luna for cleanup and spoken rewrites",
+        keywords: ["model", "terra", "luna", "gpt", "openai", "rewrite", "cleanup"],
+        requiresEnabled: VOICE_AI_REQUIRES_ENABLED,
+      },
+      {
+        id: "voice-resolve-file-links",
+        section: "AI text correction",
+        title: "Resolve file references",
+        description: 'Voice commands like "link to the input component" insert @file references',
+        keywords: ["file", "reference", "link", "mention", "@"],
         requiresEnabled: VOICE_AI_REQUIRES_ENABLED,
       },
     ],
@@ -1623,7 +1786,7 @@ export const SETTINGS_REGISTRY = [
     id: "portal",
     scope: "global",
     group: "Integrations",
-    owner: "device",
+    settings: ["storage:portal-storage"],
     label: "Portal",
     headerTitle: "Portal links",
     icon: <PanelRight className="w-4 h-4" />,
@@ -1661,7 +1824,7 @@ export const SETTINGS_REGISTRY = [
     id: "mcp",
     scope: "global",
     group: "Integrations",
-    owner: "host",
+    settings: ["mcpServer"],
     label: "MCP server",
     icon: <McpServerIcon className="w-4 h-4" />,
     importKind: "lazy",
@@ -1724,7 +1887,7 @@ export const SETTINGS_REGISTRY = [
     id: "plugins",
     scope: "global",
     group: "Integrations",
-    owner: "host",
+    settings: ["plugins", "pluginCapabilityConsent"],
     label: "Plugins",
     icon: <Package className="w-4 h-4" />,
     importKind: "lazy",
@@ -1747,8 +1910,11 @@ export const SETTINGS_REGISTRY = [
         section: "Plugins",
         title: "Plugin manager",
         description:
-          "Open the plugin manager to install from a file or URL, enable or disable, uninstall, and check for updates.",
+          "Open the plugin manager to install from a file or URL, enable or disable, uninstall, check for updates, and change a plugin's settings and connected accounts.",
         keywords: [
+          "plugin settings",
+          "connections",
+          "accounts",
           "install",
           "plugin",
           "plugins",
@@ -1771,7 +1937,7 @@ export const SETTINGS_REGISTRY = [
     id: "plugin-actions",
     scope: "global",
     group: "Integrations",
-    owner: "host",
+    settings: ["pluginCapabilityConsent"],
     label: "Plugin actions",
     headerTitle: "Plugin actions",
     icon: <ScrollText className="w-4 h-4" />,
@@ -1796,7 +1962,7 @@ export const SETTINGS_REGISTRY = [
     id: "canopy",
     scope: "global",
     group: "Integrations",
-    owner: "host",
+    settings: ["canopyMode"],
     label: "Canopy",
     icon: <Telescope className="w-4 h-4" />,
     importKind: "lazy",
@@ -1834,7 +2000,7 @@ export const SETTINGS_REGISTRY = [
     id: "run-history",
     scope: "global",
     group: "Integrations",
-    owner: "host",
+    settings: ["runHistory"],
     label: "Run history",
     headerTitle: "Run history",
     icon: <History className="w-4 h-4" />,
@@ -1880,7 +2046,13 @@ export const SETTINGS_REGISTRY = [
     id: "troubleshooting",
     scope: "global",
     group: "Support",
-    owner: "mixed",
+    settings: ["agentSettings", "gpu", "logLevelOverrides"],
+    sectionSettings: {
+      "Hardware acceleration": SECTION_SETTINGS.hardwareAcceleration,
+      "System health check": SECTION_SETTINGS.systemStatus,
+      "Application logs": SECTION_SETTINGS.logging,
+      "Developer mode": SECTION_SETTINGS.developerTools,
+    },
     label: "Troubleshooting",
     icon: <LifeBuoy className="w-4 h-4" />,
     importKind: "lazy",
@@ -1965,7 +2137,7 @@ export const SETTINGS_REGISTRY = [
     id: "project:general",
     scope: "project",
     group: "Project",
-    owner: "host",
+    settings: ["projectPresentation"],
     label: "General",
     icon: <SettingsIcon className="w-4 h-4" />,
     importKind: "lazy",
@@ -1978,7 +2150,7 @@ export const SETTINGS_REGISTRY = [
     id: "project:context",
     scope: "project",
     group: "Project",
-    owner: "host",
+    settings: ["projectPresentation"],
     label: "Context",
     icon: <FileCode className="w-4 h-4" />,
     importKind: "lazy",
@@ -1991,7 +2163,7 @@ export const SETTINGS_REGISTRY = [
     id: "project:variables",
     scope: "project",
     group: "Project",
-    owner: "host",
+    settings: ["projectEnv"],
     label: "Variables",
     icon: <KeyRound className="w-4 h-4" />,
     importKind: "lazy",
@@ -2004,7 +2176,7 @@ export const SETTINGS_REGISTRY = [
     id: "project:automation",
     scope: "project",
     group: "Project",
-    owner: "host",
+    settings: ["worktreeConfig"],
     label: "Worktree setup",
     // Not GitBranch: project Code Forge already uses it, and two sections in the same
     // nav list sharing one glyph makes the icon useless for telling them apart.
@@ -2019,7 +2191,7 @@ export const SETTINGS_REGISTRY = [
     id: "project:recipes",
     scope: "project",
     group: "Project",
-    owner: "host",
+    settings: ["appState.recipes"],
     label: "Recipes",
     icon: <Workflow className="w-4 h-4" />,
     importKind: "lazy",
@@ -2032,7 +2204,7 @@ export const SETTINGS_REGISTRY = [
     id: "project:commands",
     scope: "project",
     group: "Project",
-    owner: "host",
+    settings: ["projectPresentation"],
     label: "Commands",
     icon: <Command className="w-4 h-4" />,
     importKind: "lazy",
@@ -2045,7 +2217,7 @@ export const SETTINGS_REGISTRY = [
     id: "project:notifications",
     scope: "project",
     group: "Project",
-    owner: "host",
+    settings: ["idleTerminalNotify"],
     label: "Notifications",
     icon: <Bell className="w-4 h-4" />,
     importKind: "lazy",
@@ -2058,7 +2230,7 @@ export const SETTINGS_REGISTRY = [
     id: "project:code-forge",
     scope: "project",
     group: "Project",
-    owner: "host",
+    settings: ["forgeEnableDismissedPaths"],
     label: "Code forge",
     icon: <GitBranch className="w-4 h-4" />,
     importKind: "lazy",
@@ -2071,7 +2243,7 @@ export const SETTINGS_REGISTRY = [
     id: "project:plugins",
     scope: "project",
     group: "Project",
-    owner: "host",
+    settings: ["projectPluginTrust", "projectPluginVisibility"],
     label: "Plugins",
     icon: <Package className="w-4 h-4" />,
     importKind: "lazy",
@@ -2103,9 +2275,10 @@ export function contentScopeForTab(tab: SettingsTab): "global" | "project" {
   return entry?.contentScope ?? scopeForTab(tab);
 }
 
-/** Whose values the tab edits when the window belongs to another host. */
+/** Whose values the tab edits, from the owners the catalog declares for its settings. */
 export function ownerForTab(tab: SettingsTab): SettingsOwner {
-  return getSettingsTabEntry(tab)?.owner ?? "host";
+  const settings = getSettingsTabEntry(tab)?.settings;
+  return settings ? settingsOwnerOf(settings) : "host";
 }
 
 type ProjectScopedEntry = Extract<(typeof SETTINGS_REGISTRY)[number], { scope: "project" }>;
@@ -2122,7 +2295,7 @@ export const PROJECT_SETTINGS_SECTIONS: Readonly<
   "project:general": {
     tabLabel: "General",
     searchNavDescription: "Project name, emoji, color, icon, and dev server configuration",
-    searchNavKeywords: ["project", "name", "emoji", "color", "icon", "dev server"],
+    searchNavKeywords: ["project", "name", "emoji", "color", "icon", "theme", "dev server"],
     sections: [
       {
         id: "project-name",
@@ -2130,6 +2303,21 @@ export const PROJECT_SETTINGS_SECTIONS: Readonly<
         title: "Project name",
         description: "Display name for the project",
         keywords: ["name", "title", "label"],
+      },
+      {
+        id: "project-theme",
+        section: "Project identity",
+        settings: SECTION_SETTINGS.projectTheme,
+        title: "Theme",
+        description: "Show this project in its own theme instead of the global one",
+        keywords: ["theme", "appearance", "colors", "dark", "light", "suggested"],
+      },
+      {
+        id: "project-features",
+        section: "Features",
+        title: "Features",
+        description: "Show, demote or hide built-in surfaces such as forge stats in this project",
+        keywords: ["features", "presentation", "profile", "hide", "demote", "forge", "toolbar"],
       },
       {
         id: "project-dev-server",
@@ -2156,8 +2344,8 @@ export const PROJECT_SETTINGS_SECTIONS: Readonly<
   },
   "project:context": {
     tabLabel: "Context",
-    searchNavDescription: "Excluded paths and copy tree settings",
-    searchNavKeywords: ["project", "context", "exclude", "paths", "copy tree"],
+    searchNavDescription: "Excluded paths, copy tree settings and dictation vocabulary",
+    searchNavKeywords: ["project", "context", "exclude", "paths", "copy tree", "dictation"],
     sections: [
       {
         id: "project-excluded-paths",
@@ -2173,6 +2361,13 @@ export const PROJECT_SETTINGS_SECTIONS: Readonly<
         description:
           "Configure context size limits, file size limits, and include/exclude patterns",
         keywords: ["copy", "tree", "context", "size", "limit", "include", "exclude"],
+      },
+      {
+        id: "project-dictation-vocabulary",
+        section: "Dictation vocabulary",
+        title: "Dictation vocabulary",
+        description: "Project terms sent with dictation, shared through the repo",
+        keywords: ["voice", "dictation", "dictionary", "vocabulary", "terms", "heard as"],
       },
     ],
   },

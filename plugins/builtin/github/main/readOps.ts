@@ -2,6 +2,8 @@ import type { GraphQlQueryResponseData } from "@octokit/graphql";
 import type {
   CheckRun,
   CIStatus,
+  FetchOptions,
+  ForgeNumberReference,
   Issue,
   IssueComment,
   IssueTooltipData,
@@ -9,10 +11,12 @@ import type {
   Page,
   PR,
   PRListProbeResult,
+  PRMergeMethod,
   PRSnapshot,
   PRTooltipData,
   PushErrorClassification,
   RateLimitInfo,
+  RepoMergeSettings,
   RepoMetadata,
   RepoRef,
   ReviewThread,
@@ -32,6 +36,7 @@ import {
   GRAPHQL_BATCH_CHUNK_SIZE,
   buildBatchBranchPRQuery,
   buildBatchPRsQuery,
+  buildBatchReferencesQuery,
   buildBatchRequiredChecksQuery,
 } from "./GitHubQueries.js";
 import { gitHubRateLimitService } from "./GitHubRateLimitService.js";
@@ -64,10 +69,12 @@ import {
 } from "./GitHubPRs.js";
 import {
   mapIssueGraphQLStates,
+  mapMergeMethod,
   mapPRGraphQLStates,
   toForgeIssue,
   toForgeIssueComment,
   toForgePR,
+  toForgeNumberReference,
   gitHubIssueToForgeIssue,
 } from "./mappers.js";
 import {
@@ -640,9 +647,16 @@ export async function getIssueImpl(repo: RepoRef, number: number): Promise<Issue
   });
 }
 
-export async function getPRImpl(repo: RepoRef, number: number): Promise<PR | null> {
+export async function getPRImpl(
+  repo: RepoRef,
+  number: number,
+  options?: FetchOptions
+): Promise<PR | null> {
+  const fresh = options?.fresh === true;
   const key = `${repo.owner}/${repo.repo}:${number}`;
-  return dedupe(getPRInflight, key, false, async () => {
+  // A fresh read never joins one already in flight: that one may predate a
+  // write the caller is about to preview against.
+  return dedupe(getPRInflight, key, fresh, async () => {
     const requestedAt = Date.now();
     const response = await runQuery(
       GET_PR_QUERY,
@@ -651,7 +665,8 @@ export async function getPRImpl(repo: RepoRef, number: number): Promise<PR | nul
         repo: repo.repo,
         number,
       },
-      "GET_PR_QUERY"
+      "GET_PR_QUERY",
+      fresh
     );
     const pr = (response?.repository as Record<string, unknown> | undefined)?.pullRequest as
       Record<string, unknown> | null | undefined;
@@ -764,13 +779,15 @@ export async function findPRByBranchImpl(repo: RepoRef, branchName: string): Pro
 
 export async function findPRsByNumbersImpl(
   repo: RepoRef,
-  prNumbers: number[]
+  prNumbers: number[],
+  options?: FetchOptions
 ): Promise<Map<number, PR | null>> {
   const unique = uniquePositiveIntegers(prNumbers);
   if (unique.length === 0) return new Map<number, PR | null>();
+  const fresh = options?.fresh === true;
 
   const inflightKey = buildNumberBatchInflightKey(repo, unique);
-  return dedupe(findPRsByNumbersInflight, inflightKey, false, async () => {
+  return dedupe(findPRsByNumbersInflight, inflightKey, fresh, async () => {
     const result = new Map<number, PR | null>();
 
     const block = gitHubRateLimitService.shouldBlockRequest("graphql");
@@ -784,7 +801,7 @@ export async function findPRsByNumbersImpl(
 
       let response: GraphQlQueryResponseData;
       try {
-        response = await runQuery(query, {}, "BATCH_PRS_QUERY");
+        response = await runQuery(query, {}, "BATCH_PRS_QUERY", fresh);
       } catch {
         // Omit this chunk so callers treat it as transient and keep stale data.
         continue;
@@ -809,6 +826,79 @@ export async function findPRsByNumbersImpl(
 
     return result;
   });
+}
+
+/**
+ * The `repository` of a references response that failed only because some of
+ * its numbers name nothing. Each of those is a `NOT_FOUND` on its own alias,
+ * one this chunk asked for and holding `null`, and the rest of the chunk's
+ * data is still there; any other error leaves the whole chunk unanswered.
+ */
+function repositoryDespiteMissingNumbers(
+  error: unknown,
+  aliases: ReadonlySet<string>
+): Record<string, unknown> | null {
+  const cause = error instanceof Error ? error.cause : undefined;
+  if (!cause || typeof cause !== "object") return null;
+  const { errors, data } = cause as { errors?: unknown; data?: unknown };
+  if (!Array.isArray(errors) || errors.length === 0) return null;
+  if (!data || typeof data !== "object") return null;
+  const repository = (data as Record<string, unknown>).repository;
+  if (!repository || typeof repository !== "object") return null;
+  const answered = repository as Record<string, unknown>;
+  const onlyMissingNumbers = errors.every((entry) => {
+    const { type, path } = (entry ?? {}) as { type?: unknown; path?: unknown };
+    return (
+      type === "NOT_FOUND" &&
+      Array.isArray(path) &&
+      path.length === 2 &&
+      path[0] === "repository" &&
+      typeof path[1] === "string" &&
+      aliases.has(path[1]) &&
+      answered[path[1]] === null
+    );
+  });
+  return onlyMissingNumbers ? answered : null;
+}
+
+export async function findReferencesByNumbersImpl(
+  repo: RepoRef,
+  numbers: number[]
+): Promise<Map<number, ForgeNumberReference | null>> {
+  const result = new Map<number, ForgeNumberReference | null>();
+  const unique = uniquePositiveIntegers(numbers);
+  if (unique.length === 0) return result;
+
+  for (let start = 0; start < unique.length; start += GRAPHQL_BATCH_CHUNK_SIZE) {
+    // Per chunk: the response before this one may have spent the budget.
+    if (gitHubRateLimitService.shouldBlockRequest("graphql").blocked) break;
+    const chunk = unique.slice(start, start + GRAPHQL_BATCH_CHUNK_SIZE);
+    const query = buildBatchReferencesQuery(repo.owner, repo.repo, chunk);
+    if (!query) continue;
+
+    let repository: Record<string, unknown> | null;
+    try {
+      const response = await runQuery(query, {}, "BATCH_REFERENCES_QUERY");
+      repository = (response?.repository as Record<string, unknown> | undefined) ?? null;
+    } catch (error) {
+      repository = repositoryDespiteMissingNumbers(error, new Set(chunk.map((n) => `r${n}`)));
+    }
+    if (!repository) continue;
+
+    for (const number of chunk) {
+      const alias = `r${number}`;
+      if (!(alias in repository)) continue;
+      const node = repository[alias];
+      if (node === null) {
+        result.set(number, null);
+        continue;
+      }
+      const reference = toForgeNumberReference(node);
+      if (reference) result.set(number, reference);
+    }
+  }
+
+  return result;
 }
 
 export async function getCIStatusesImpl(
@@ -1107,6 +1197,7 @@ export async function getRepoMetadataImpl(repo: RepoRef): Promise<RepoMetadata> 
     .map((n) => (typeof n.topic?.name === "string" ? n.topic.name : null))
     .filter((s): s is string => s !== null);
 
+  const mergeSettings = toRepoMergeSettings(repository);
   return {
     defaultBranch,
     isPrivate: repository.isPrivate === true,
@@ -1115,7 +1206,27 @@ export async function getRepoMetadataImpl(repo: RepoRef): Promise<RepoMetadata> 
     description: (repository.description as string | null | undefined) ?? null,
     license,
     topics,
+    ...(mergeSettings ? { mergeSettings } : {}),
     rawData: repository,
+  };
+}
+
+/**
+ * The repository's merge flags → {@link RepoMergeSettings}. `undefined` when
+ * the response carried none of them, so an older cached shape can't read as
+ * "nothing allowed".
+ */
+function toRepoMergeSettings(repository: Record<string, unknown>): RepoMergeSettings | undefined {
+  if (typeof repository.autoMergeAllowed !== "boolean") return undefined;
+  const allowedMethods: PRMergeMethod[] = [];
+  if (repository.mergeCommitAllowed === true) allowedMethods.push("merge");
+  if (repository.squashMergeAllowed === true) allowedMethods.push("squash");
+  if (repository.rebaseMergeAllowed === true) allowedMethods.push("rebase");
+  const viewerDefaultMethod = mapMergeMethod(repository.viewerDefaultMergeMethod);
+  return {
+    allowedMethods,
+    ...(viewerDefaultMethod ? { viewerDefaultMethod } : {}),
+    autoMergeAllowed: repository.autoMergeAllowed,
   };
 }
 

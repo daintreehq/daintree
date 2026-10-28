@@ -91,6 +91,22 @@ export interface ProjectSwitchOutgoingState {
 export type ProjectFocusOnActivateIntent =
   | { intent: "focus-next-waiting" }
   | { intent: "focus-panel"; panelId: string }
+  /**
+   * Land with this worktree selected instead of the one the project last had.
+   * One that's gone by then leaves the project as it opens, and says so.
+   */
+  | { intent: "focus-worktree"; worktreeId: string }
+  /**
+   * "Open in Assistant" on a lane of this project: show that exact lane if it
+   * still runs the same session, and nothing else — never a launch or resume.
+   */
+  | { intent: "open-assistant"; subject: import("../agentDirectory.js").AgentDirectorySubject }
+  /**
+   * Restore from Canopy's Trash a run of this project, which had no view open
+   * to resume it in: ask this project's host again from here, and land on the
+   * pane it comes back in.
+   */
+  | { intent: "restore-trashed"; runId: string; spawnedAt: number; expiresAt: number }
   | {
       /**
        * A plugin's OS banner was clicked (#13505): run its first action, which
@@ -201,6 +217,22 @@ export interface ProjectSleepResult {
   rendererViewsEvicted: number;
   /** True when the project's workspace-host process was evicted. */
   workspaceEvicted: boolean;
+  /**
+   * Plugin work the sleep stopped, as observed just before its plugins were
+   * unloaded (#14093). Absent when it stopped none. The unload itself runs
+   * after the sleep returns, so the processes are signalled, not confirmed gone.
+   */
+  pluginWorkStopped?: PluginWorkStopped;
+}
+
+/** What a sleep interrupted in the project's own plugins. */
+export interface PluginWorkStopped {
+  /** Unfinished tasks, which return as interrupted rather than resuming. */
+  tasks: Array<{ pluginName: string; title: string }>;
+  /** Managed processes with a live OS child. */
+  processes: number;
+  /** Plugin calls still in flight, which end without an answer. */
+  calls: number;
 }
 
 /** Project resource statistics */

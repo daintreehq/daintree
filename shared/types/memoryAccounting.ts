@@ -74,10 +74,67 @@ export interface TerminalWorkloadSlice {
   byProject: TerminalWorkloadProject[];
 }
 
+/** Buffer line counts one renderer reported for one of its xterm terminals. */
+export interface RendererTerminalBufferCounts {
+  terminalId: string;
+  /** `buffer.normal.length`: scrollback plus viewport rows actually held. */
+  normalLines: number;
+  /** `buffer.alternate.length`: the alternate screen, viewport rows only. */
+  alternateLines: number;
+  cols: number;
+}
+
+/**
+ * One renderer terminal's buffer footprint, estimated as
+ * `(normalLines + alternateLines) × cols × 12` — cell storage only, not a heap
+ * measurement. Already part of the renderer's process memory, so never added
+ * to the Electron total.
+ */
+export interface RendererTerminalBufferEntry extends RendererTerminalBufferCounts {
+  estimatedBytes: number;
+}
+
+/**
+ * - `fresh` — an active view answered this request.
+ * - `last-known` — the view is cached, or didn't answer in time, and these are
+ *   the counts it last reported.
+ * - `unavailable` — the view has never reported and can't be asked now. Never a zero.
+ */
+export type RendererTerminalBufferStatus = "fresh" | "last-known" | "unavailable";
+
+/** Buffer estimate for one project view (one renderer). */
+export interface RendererTerminalBufferView {
+  webContentsId: number;
+  windowId: number | null;
+  projectId: string;
+  state: "loading" | "active" | "cached";
+  status: RendererTerminalBufferStatus;
+  /** When the renderer read the counts; null when unavailable. */
+  sampledAt: number | null;
+  ageMs: number | null;
+  /** Sum over `terminals`; null when unavailable. */
+  estimatedBytes: number | null;
+  terminals: RendererTerminalBufferEntry[] | null;
+}
+
+/** Renderer terminal buffer estimates across every resident project view, cached ones included. */
+export interface RendererTerminalBufferSlice {
+  views: RendererTerminalBufferView[];
+  /** Sum over views that have counts; null when none do. */
+  estimatedBytes: number | null;
+  /** False when any view is `unavailable`, so `estimatedBytes` leaves it out. */
+  complete: boolean;
+}
+
 /** The unified snapshot combining both slices, each with independent freshness. */
 export interface CompositeMemorySnapshot {
   /** When this snapshot was assembled (not when either slice was sampled). */
   timestamp: number;
   electron: ElectronMemorySlice;
   terminalWorkloads: TerminalWorkloadSlice;
+  /**
+   * Renderer xterm buffer estimates. Absent when the caller didn't ask for it:
+   * only user-pulled reads (the popover, diagnostics) sample renderers.
+   */
+  rendererTerminalBuffers?: RendererTerminalBufferSlice;
 }

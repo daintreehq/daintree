@@ -67,6 +67,7 @@ export class StatPrecheck {
   private cachedCommonDir: string | null = null;
   private baseline: GitFileStatBaseline | null = null;
   private baselineAt: number = 0;
+  private revision: number = 0;
   private fullStatusAt: number = 0;
 
   constructor(private readonly host: StatPrecheckHost) {}
@@ -74,6 +75,11 @@ export class StatPrecheck {
   /** Test-only: when the current baseline was captured. */
   get baselineCapturedAt(): number {
     return this.baselineAt;
+  }
+
+  /** Test-only: completed baseline observations, independent of wall-clock adjustments. */
+  get baselineRevision(): number {
+    return this.revision;
   }
 
   /** Test-only: force the full-status budget to a specific timestamp. */
@@ -220,6 +226,7 @@ export class StatPrecheck {
         this.baselinesMatch(this.baseline, fresh)
       ) {
         this.baselineAt = checkStartedAt;
+        this.revision += 1;
         return true;
       }
     } catch {
@@ -245,6 +252,7 @@ export class StatPrecheck {
       if (fresh !== null) {
         this.baseline = fresh;
         this.baselineAt = Date.now();
+        this.revision += 1;
       } else {
         this.baseline = null;
       }

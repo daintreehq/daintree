@@ -253,6 +253,45 @@ describe("WebContentsCdpService", () => {
     expect(lease.contexts.get(1)).toBe(MAIN_FRAME_ID);
   });
 
+  it("names the main frame's default world by its unique id, for that document only", async () => {
+    const lease = await acquireCdpLease(asWebContents(wc), ["Page", "Runtime"]);
+    const created = (id: number, frameId: string, uniqueId: string, isDefault = true) => ({
+      context: { id, uniqueId, auxData: { isDefault, frameId } },
+    });
+    wc.debugger.emit(
+      "message",
+      {},
+      "Runtime.executionContextCreated",
+      created(1, MAIN_FRAME_ID, "u-1")
+    );
+    // Unknown until the frame tree says which frame is the main one.
+    expect(lease.mainWorldUniqueId()).toBeNull();
+    await lease.refreshMainFrameId();
+
+    wc.debugger.emit("message", {}, "Runtime.executionContextCreated", created(2, "f-ad", "u-2"));
+    wc.debugger.emit(
+      "message",
+      {},
+      "Runtime.executionContextCreated",
+      created(3, MAIN_FRAME_ID, "u-3", false)
+    );
+    expect(lease.mainWorldUniqueId()).toBe("u-1");
+
+    // The next document reuses context ids; its world's unique id is new.
+    wc.debugger.emit("message", {}, "Runtime.executionContextsCleared", {});
+    expect(lease.mainWorldUniqueId()).toBeNull();
+    wc.debugger.emit(
+      "message",
+      {},
+      "Runtime.executionContextCreated",
+      created(1, MAIN_FRAME_ID, "u-4")
+    );
+    expect(lease.mainWorldUniqueId()).toBe("u-4");
+
+    wc.debugger.emit("message", {}, "Runtime.executionContextDestroyed", { executionContextId: 1 });
+    expect(lease.mainWorldUniqueId()).toBeNull();
+  });
+
   it("reads the main frame id from the frame tree on request", async () => {
     const lease = await acquireCdpLease(asWebContents(wc), ["Page", "Runtime"]);
     expect(lease.mainFrameId).toBeNull();

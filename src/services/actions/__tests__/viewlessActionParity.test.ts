@@ -24,8 +24,15 @@ import type { ActionId } from "@shared/types/actions";
 import { z } from "zod";
 import { VIEWLESS_ACTIONS } from "../../../../electron/services/viewless/viewlessActionCatalog";
 import {
+  AgentSessionHistoryListArgsSchema,
+  GitGetProjectPulseArgsSchema,
+  SlashCommandsListArgsSchema,
+  AgentListModelsArgsSchema,
+  AgentListPresetsArgsSchema,
+  RecipeListArgsSchema,
   VIEWLESS_FORGE_ARGS_SCHEMAS,
   WorktreeCreateWithRecipeArgsSchema,
+  WorktreeWaitForPullRequestArgsSchema,
 } from "../../../../electron/services/viewless/viewlessArgsSchemas";
 import { createActionRegistry } from "./helpers/wireSurface";
 
@@ -68,6 +75,13 @@ describe("viewless argument schemas", () => {
   const schemas: Record<string, z.ZodType> = {
     ...VIEWLESS_FORGE_ARGS_SCHEMAS,
     "worktree.createWithRecipe": WorktreeCreateWithRecipeArgsSchema,
+    "slashCommands.list": SlashCommandsListArgsSchema,
+    "recipe.list": RecipeListArgsSchema,
+    "agent.listPresets": AgentListPresetsArgsSchema,
+    "agent.listModels": AgentListModelsArgsSchema,
+    "worktree.waitForPullRequest": WorktreeWaitForPullRequestArgsSchema,
+    "agentSessionHistory.list": AgentSessionHistoryListArgsSchema,
+    "git.getProjectPulse": GitGetProjectPulseArgsSchema,
   };
 
   it.each(Object.entries(schemas))(

@@ -291,13 +291,16 @@ vi.mock("@/clients", () => ({
   },
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     focus: vi.fn(),
     setFocused: vi.fn(),
     notifyUserInput: (...args: unknown[]) => mockNotifyUserInput(...args),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("@/components/Terminal/MissingCliGate", () => ({
   MissingCliGate: ({ agentId, onRunAnyway }: { agentId: string; onRunAnyway: () => void }) => (
@@ -701,6 +704,9 @@ beforeEach(() => {
   // Default: visibility is "visible"
   Object.defineProperty(document, "hidden", { configurable: true, get: () => false });
 });
+
+/** The project lanes' tabs, not the global assistant's beside them. */
+const LANE_TABS = '[role="tab"]:not([data-slot="global"])';
 
 describe("HelpPanel — + New session destructive reset", () => {
   function setupBoundTerminal(opts: {
@@ -1245,7 +1251,7 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
     };
 
     const { container } = render(<HelpPanel width={380} />);
-    const tabs = Array.from(container.querySelectorAll<HTMLElement>('[role="tab"]'));
+    const tabs = Array.from(container.querySelectorAll<HTMLElement>(LANE_TABS));
 
     expect(tabs.map((t) => t.getAttribute("aria-label"))).toEqual(["Session 1", "Session 3"]);
     expect(new Set(tabs.map((t) => t.id)).size).toBe(2);
@@ -1351,7 +1357,7 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
     });
 
     const { container } = render(<HelpPanel width={380} />);
-    const tabs = Array.from(container.querySelectorAll<HTMLElement>('[role="tab"]'));
+    const tabs = Array.from(container.querySelectorAll<HTMLElement>(LANE_TABS));
 
     expect(tabs.map((t) => t.getAttribute("aria-label"))).toEqual(["Session 1", "fix auth tests"]);
     // Full titles reach the pointer through the app tooltip, never a native `title`.
@@ -1378,7 +1384,7 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
     });
 
     const { container } = render(<HelpPanel width={380} />);
-    const tab = container.querySelectorAll<HTMLElement>('[role="tab"]')[1]!;
+    const tab = container.querySelectorAll<HTMLElement>(LANE_TABS)[1]!;
     // The visible label only — the tab also holds its screen-reader state text.
     const label = tab.querySelector(".truncate")!.textContent!;
 
@@ -1401,7 +1407,7 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
     });
 
     const { container } = render(<HelpPanel width={380} />);
-    const tabs = Array.from(container.querySelectorAll<HTMLElement>('[role="tab"]'));
+    const tabs = Array.from(container.querySelectorAll<HTMLElement>(LANE_TABS));
 
     expect(tabs.map((t) => t.getAttribute("aria-label"))).toEqual(["Session 1", "Session 2"]);
   });

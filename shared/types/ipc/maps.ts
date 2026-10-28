@@ -1,6 +1,20 @@
 import type { GitRemoteCommitPreview, StagingStatus } from "../git.js";
 import type { AgentId } from "../agent.js";
-import type { VoiceInputError, VoiceInputStatus } from "../voice.js";
+import type {
+  VoiceInputError,
+  VoiceInputStatus,
+  VoiceLiveSessionUpdate,
+  VoiceLiveLevel,
+  VoicePauseRequest,
+  VoiceRevealRequest,
+  VoiceSessionEndReason,
+  VoiceStopRequest,
+} from "../voice.js";
+import type {
+  VoiceCorrectionTiming,
+  VoiceCorrectionVerdict,
+  VoiceSessionReport,
+} from "../voiceSessionSummary.js";
 import type {
   Project,
   ProjectAddOptions,
@@ -15,11 +29,13 @@ import type { AgentSettings } from "../agentSettings.js";
 import type { AgentPreset } from "../../config/agentRegistry.js";
 import type { UserAgentRegistry, UserAgentConfig } from "../userAgentRegistry.js";
 import type { KeyAction } from "../keymap.js";
+import type { TerminalExitContext } from "../terminal.js";
 import type {
   KeybindingImportResult,
   MicPermissionStatus,
   NotificationSettings,
   VoiceInputSettings,
+  VoiceInputSettingsPatch,
 } from "./api.js";
 
 import type { TerminalActivityPayload } from "./terminal.js";
@@ -101,6 +117,7 @@ import type {
 import type { DevPreviewStateChangedPayload, DevPreviewAllSessionsPayload } from "./devPreview.js";
 import type { ServiceConnectivityPayload } from "./connectivity.js";
 import type { AgentDefaultsSnapshot } from "./agentDefaults.js";
+import type { AgentToolbarPinsSnapshot } from "./agentToolbarPins.js";
 import type { SanitizedTelemetryEvent, TelemetryPreviewState } from "./telemetryPreview.js";
 import type { ProjectPulse, PulseRangeDays } from "../pulse.js";
 import type { GitCommitListOptions, GitCommitListResponse } from "../git.js";
@@ -113,7 +130,6 @@ import type {
   TerminalResourceBatchPayload,
   BroadcastWriteResultPayload,
 } from "../pty-host.js";
-import type { HibernationProjectHibernatedPayload } from "./hibernation.js";
 import type { KeepAwakeState } from "./keepAwake.js";
 import type { IdleTerminalNotifyPayload } from "./idleTerminals.js";
 import type { IdleBackgroundClosedPayload } from "./idleBackgroundAutoClose.js";
@@ -145,7 +161,6 @@ import type {
   Issue,
   PR,
   Page,
-  RepoMetadata,
   ListOptions,
   ForgeUser,
 } from "../forge.js";
@@ -183,11 +198,38 @@ export interface TourOnboardingState {
   dismissed: boolean;
   /** Chapter the user last reached, so a reopened tour resumes there. */
   lastChapter: number;
+  /**
+   * Id of the chapter last reached. Resume keys on it rather than on the
+   * index, so reordered chapters still land in the right place. Absent on
+   * records written before chapter ids were kept.
+   */
+  lastChapterId?: string;
+  /** The tour's declared content version this progress was recorded against. */
+  contentVersion?: string;
+  /** The content version that was playing when the tour was last completed. */
+  completedVersion?: string;
+  /** How the last run that opened ended. */
+  lastOutcome?: TourOutcome;
+  /** The run {@link lastOutcome} belongs to, as `help.tour.show` reported it. */
+  lastRunId?: string;
 }
+
+/**
+ * How one run of a tour ended. `completed`: played to the end of its last
+ * chapter. `dismissed`: closed before that. `superseded`: another tour opened
+ * over it. `withdrawn`: its plugin was disabled or reloaded while it was open.
+ * `failed`: it couldn't be loaded.
+ */
+export type TourOutcome = "completed" | "dismissed" | "superseded" | "withdrawn" | "failed";
 
 export interface TourProgressUpdate {
   completed?: boolean;
   lastChapter?: number;
+  lastChapterId?: string;
+  /** Stamped on every write by a versioned tour; `null` for an unversioned one. */
+  contentVersion?: string | null;
+  lastOutcome?: TourOutcome;
+  lastRunId?: string;
 }
 
 export interface OnboardingState {
@@ -235,6 +277,11 @@ export interface MainProcessToastPayload {
    */
   rateLimitKey?: string;
   /**
+   * Threaded through to `notify({ rateLimitLabel })`: how the overflow summary
+   * names the source when `rateLimitKey` is an internal id.
+   */
+  rateLimitLabel?: string;
+  /**
    * Routing priority threaded through to `notify({ priority })`. Omit for the
    * default `"high"` (toast when focused). `"low"` routes to the history inbox
    * only — never a toast or OS notification — for signals the user can act on
@@ -272,6 +319,38 @@ export interface MainProcessToastPayload {
     projectId: string;
     code: import("../appError.js").AppErrorCode | null;
   };
+  /**
+   * Threaded through to `notify({ context })`: what a plugin's toast or
+   * notification is about and which plugin raised it (#13818). Main sets every
+   * field from the plugin's own binding and its checked target, never from
+   * what the plugin wrote.
+   */
+  context?: {
+    projectId?: string;
+    worktreeId?: string;
+    panelId?: string;
+    plugin?: NotificationPluginSource;
+  };
+}
+
+/**
+ * The plugin a notification came from: its instance id, which is the key a
+ * silence is stored under (a project plugin's names its project), and the
+ * display name the inbox shows.
+ */
+export interface NotificationPluginSource {
+  id: string;
+  name: string;
+}
+
+/** One plugin the user silenced, as Settings → Notifications lists it (#13818). */
+export interface PluginNotificationSilence {
+  /** The plugin's instance id, as a notification's `context.plugin.id` names it. */
+  pluginId: string;
+  /** Its display name while it is loaded, else its manifest id. */
+  name: string;
+  /** The project a project plugin's silence covers; `null` for an installed plugin. */
+  projectId: string | null;
 }
 
 // IPC Contract Maps
@@ -709,7 +788,14 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: ProjectStats;
   };
   "project:create-folder": {
-    args: [payload: { parentPath: string; folderName: string }];
+    args: [
+      payload: {
+        parentPath: string;
+        folderName: string;
+        /** Copied in once the folder exists (#13825); the digest is the previewed list's. */
+        template?: import("../plugin.js").ProjectTemplateSelection;
+      },
+    ];
     result: string;
   };
   "project:init-git": {
@@ -1174,12 +1260,12 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: Issue | null;
   };
   "forge:get-pr": {
-    args: [payload: { cwd: string; prNumber: number }];
+    args: [payload: { cwd: string; prNumber: number; fresh?: boolean }];
     result: PR | null;
   };
   "forge:get-repo-metadata": {
     args: [payload: { cwd: string }];
-    result: RepoMetadata;
+    result: import("./forge.js").ForgeRepoMetadataPayload;
   };
   "forge:get-current-user": {
     args: [payload: { cwd: string }];
@@ -1196,22 +1282,10 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: VoiceInputSettings;
   };
   "voice-input:set-settings": {
-    args: [patch: Partial<VoiceInputSettings>];
+    args: [patch: VoiceInputSettingsPatch];
     result: void;
   };
 
-  "voice-input:start": {
-    args: [];
-    result: { ok: true } | { ok: false; error: string };
-  };
-  "voice-input:stop": {
-    args: [];
-    result: { rawText: string | null };
-  };
-  "voice-input:flush-paragraph": {
-    args: [];
-    result: { rawText: string | null };
-  };
   "voice-input:check-mic-permission": {
     args: [];
     result: MicPermissionStatus;
@@ -1229,8 +1303,40 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: { valid: boolean; error?: string };
   };
   "voice-input:correct": {
-    args: [request: { rawText: string; recentContext?: string[] }];
-    result: { action: "no_change" | "replace"; correctedText: string };
+    args: [
+      request: {
+        rawText: string;
+        recentContext?: string[];
+        /** The draft after the passage, bounded: context cleanup never rewrites, sent to OpenAI and never logged. */
+        followingText?: string;
+        /** The prompts last sent to `terminalId`, oldest first, bounded: sent to OpenAI with the passage, never logged. */
+        recentPrompts?: string[];
+        /** The panel the passage was dictated into: it picks the project vocabulary and the agent's commands. */
+        terminalId?: string;
+        /** Nothing but whitespace comes before the passage in the draft. */
+        startsPrompt?: boolean;
+        /** The dictation the passage came from: its context was read while it ran. */
+        sessionId?: string;
+        /** Spans of `rawText` the recogniser was unsure of. */
+        uncertain?: Array<{ from: number; to: number }>;
+        /** Positions in `rawText` where the speaker paused, each straight after a word. */
+        pauses?: number[];
+        /** Dictated into a terminal outside the asking view: cleaned up without its project's vocabulary. */
+        outsideView?: true;
+        /** Streams the reply: its text so far comes back as `voice-input:correction-progress` under this id. */
+        streamId?: string;
+      },
+    ];
+    // `failed`: the request failed or was cancelled, leaving the raw text.
+    // `timing`: main's share of the wait, timings only.
+    result: {
+      action: "no_change" | "replace";
+      correctedText: string;
+      failed?: true;
+      /** Why the passage came back as it did: a code, never text. */
+      verdict?: VoiceCorrectionVerdict;
+      timing?: VoiceCorrectionTiming;
+    };
   };
 
   // Crash Recovery channels
@@ -1454,7 +1560,7 @@ export interface IpcEventMap {
 
   // Terminal events
   "terminal:data": [id: string, data: string | Uint8Array];
-  "terminal:exit": [id: string, exitCode: number];
+  "terminal:exit": [id: string, exitCode: number, context?: TerminalExitContext];
   "terminal:error": [id: string, error: string];
   "terminal:trashed": { id: string; expiresAt: number };
   "terminal:restored": { id: string };
@@ -1481,6 +1587,9 @@ export interface IpcEventMap {
   // Every terminal currently handed to an orchestrating pane (#12490). The
   // whole list on each change: it is small and rarely changes.
   "terminal:adoptions-changed": import("./mcpServer.js").TerminalAdoptionEntry[];
+  // The terminals a Canopy panel on another machine holds at its own size (#14497);
+  // their panes follow the PTY's grid instead of fitting.
+  "terminal:canopy-size-holds-changed": string[];
   // A pane's pending terminal notices changed; project-scoped send.
   "terminal:notify-state": import("../terminalNotify.js").PaneNotifyState;
   "terminal:reliability-metric": TerminalReliabilityMetricPayload;
@@ -1489,6 +1598,9 @@ export interface IpcEventMap {
   "terminal:send-key": [id: string, key: string];
   "terminal:spawn-result": [id: string, result: SpawnResult];
   "terminal:resize-result": [id: string, result: TerminalResizeResult];
+  // The host's memory-leak policy picked this view to restart a terminal over
+  // its auto-restart threshold (#14703). Sent to one view of the project only.
+  "terminal:memory-leak-restart-requested": { terminalId: string; thresholdMb: number };
   "terminal:backend-crashed": {
     crashType: string;
     code: number | null;
@@ -1505,7 +1617,9 @@ export interface IpcEventMap {
   // App-wide terminal-host memory pause (#12375), sent to each window's active
   // view on every change. Views that missed it pull `terminal:get-host-memory-pause`.
   "terminal:host-memory-pause": import("../pty-host.js").HostMemoryPauseSnapshot;
-  "terminal:reduce-scrollback": { terminalIds: string[]; targetLines: number };
+  // Memory-pressure reclaim for the receiving view: every terminal it isn't
+  // showing drops to `targetLines` of scrollback, under the reducer's guards.
+  "terminal:reduce-scrollback": { targetLines: number };
   "terminal:restore-scrollback": { terminalIds: string[] };
 
   // Watchdog deadlock detector — emitted once when the main-process watchdog
@@ -1578,6 +1692,18 @@ export interface IpcEventMap {
   // Where projects are open may have changed — re-read with
   // `project-presence:get-snapshot`, which answers per window (#12597).
   "project-presence:changed": void;
+  "recent-dictations:changed": void;
+  // The sender project's presentation profile changed (#13771); main sends it to every view of that project.
+  "project-presentation:changed": import("./projectPresentation.js").ProjectPresentationSnapshot;
+
+  // The sender project's own theme changed (#13833); main sends it to every view of that project.
+  "project-theme:changed": import("./projectTheme.js").ProjectThemeChange;
+
+  // The sender project's custom worktree titles changed (#14022); main sends them to every view of that project.
+  "worktree-titles:changed": import("./worktreeTitles.js").WorktreeTitlesSnapshot;
+
+  // The sender project's review marks changed (#14584); main sends them to every view of that project.
+  "review-marks:changed": import("./reviewMarks.js").ReviewMarksSnapshot;
 
   /**
    * MCP server runtime-state transition. Distinct from
@@ -1632,6 +1758,8 @@ export interface IpcEventMap {
     requestId: string;
     actionId: string;
     args: unknown;
+    /** The calling plugin, from its host's closure; absent for host-internal dispatches. */
+    pluginId?: string;
   };
 
   /**
@@ -1769,6 +1897,7 @@ export interface IpcEventMap {
   "project:on-switch": ProjectSwitchPayload;
   "project:worktree-load-status": ProjectWorktreeLoadStatusPayload;
   "project:focus-on-activate": ProjectFocusOnActivateIntent;
+  "project:panel-recovery-query": string;
   "project:background-resize": { width: number; height: number };
   "project:stats-updated": ProjectStatusMap;
   "fleet:snapshot-updated": FleetSnapshot;
@@ -1776,6 +1905,8 @@ export interface IpcEventMap {
   "canopy:terminal-data": import("./canopy.js").CanopyTerminalData;
   "canopy:trash-requested": import("./canopy.js").CanopyTrashRequest;
   "canopy:restore-requested": import("./canopy.js").CanopyRestoreRequest;
+  "canopy:remove-requested": import("./canopy.js").CanopyRemoveRequest;
+  "canopy:resume-requested": import("./canopy.js").CanopyResumeRequest;
   "canopy:rename-requested": import("./canopy.js").CanopyRenameRequest;
   "project:updated": Project;
   /**
@@ -1810,6 +1941,9 @@ export interface IpcEventMap {
   // Per-plugin perf snapshots, pushed only to renderers that subscribed and at
   // most once a second. Carries every tracked plugin, not just the changed ones.
   "plugin:perf-snapshots-changed": import("../pluginMetrics.js").PluginPerfSnapshot[];
+
+  // A project's presence changed (#13813), pushed to that project's renderers.
+  "plugin:project-presence-changed": import("../plugin.js").PluginProjectPresence;
 
   // System events
   "system:wake": SystemWakePayload;
@@ -1847,6 +1981,9 @@ export interface IpcEventMap {
   // blocking time so ProcessMemoryMonitor can see sustained event-loop
   // saturation. Renderer replies via SYSTEM_REPORT_RENDERER_ELU.
   "window:sample-renderer-elu": { requestId: string };
+  // Main asks an active renderer, on demand, for its xterm buffer line counts.
+  // Renderer replies through system:report-terminal-renderer-diagnostics.
+  "window:sample-terminal-buffers": { requestId: string };
   "window:disk-space-status": {
     status: "normal" | "warning" | "critical";
     availableMb: number;
@@ -1875,7 +2012,8 @@ export interface IpcEventMap {
   // Dev Preview events
   "dev-preview:state-changed": DevPreviewStateChangedPayload;
   "dev-preview:all-sessions-changed": DevPreviewAllSessionsPayload;
-  "site-preview:event": import("./sitePreview.js").SitePreviewPushPayload;
+  "element-picker:event": import("./elementPicker.js").ElementPickerPushPayload;
+  "element-picker:source-changed": import("./elementPicker.js").ElementPickerSourceChangedPush;
 
   // Webview console events
   "webview:console-message": import("./webviewConsole.js").SerializedConsoleRow;
@@ -1942,17 +2080,70 @@ export interface IpcEventMap {
     panelId: string;
   };
 
-  // Voice input events
-  "voice-input:transcription-delta": { text: string; itemId?: string };
-  "voice-input:transcription-complete": { text: string; willCorrect: boolean; itemId?: string };
-  "voice-input:paragraph-boundary": { rawText: string | null };
-  "voice-input:file-token-resolved": {
-    description: string;
-    replacement: string;
-    resolved: boolean;
+  // Voice input events. Every one carries the id of the session it belongs to.
+  "voice-input:transcription-delta": {
+    sessionId: string;
+    text: string;
+    itemId?: string;
+    replace?: boolean;
   };
-  "voice-input:error": VoiceInputError;
-  "voice-input:status": VoiceInputStatus;
+  "voice-input:transcription-complete": {
+    sessionId: string;
+    text: string;
+    willCorrect: boolean;
+    /** The words as transcribed, when heard-as rules rewrote them into `text`. */
+    heard?: string;
+    itemId?: string;
+    /** Set when spoken file references in this transcript may follow; their result names it. */
+    transcriptId?: string;
+    /** The utterance ended with a spoken "send it", already stripped from `text`. */
+    send?: boolean;
+    /** The text with its spoken opening command written as typed, to use when it starts the prompt. */
+    commandText?: string;
+    /** Spans of `text` the recogniser was unsure of. */
+    uncertain?: Array<{ from: number; to: number }>;
+    /** Spans of `heard` the recogniser was unsure of. */
+    heardUncertain?: Array<{ from: number; to: number }>;
+    /** Spans of `commandText` the recogniser was unsure of. */
+    commandUncertain?: Array<{ from: number; to: number }>;
+    /**
+     * Where the speaker paused in `text`, each straight after a word. With no
+     * words, `[0]` marks a pause after the words that landed before it.
+     */
+    pauses?: number[];
+    /** Where the speaker paused in `heard`. */
+    heardPauses?: number[];
+    /** Where the speaker paused in `commandText`. */
+    commandPauses?: number[];
+  };
+  "voice-input:paragraph-boundary": { sessionId: string; rawText: string | null };
+  /** A streaming correction's text so far, cut at a word boundary; only ever grows. */
+  "voice-input:correction-progress": { streamId: string; text: string };
+  "voice-input:file-token-resolved": {
+    sessionId: string;
+    transcriptId: string;
+    /** Every reference detected, with its worktree-relative path or null for a miss. Sent only when one resolved. */
+    references: Array<{ description: string; path: string | null }>;
+  };
+  "voice-input:error": { sessionId: string; error: VoiceInputError };
+  "voice-input:status": { sessionId: string; status: VoiceInputStatus };
+  "voice-input:session-ended": {
+    sessionId: string;
+    reason: VoiceSessionEndReason;
+    report: VoiceSessionReport;
+  };
+  // To every view whenever the live session changes. Not keyed to a session:
+  // it names the one live elsewhere, or none.
+  "voice-input:live-session": VoiceLiveSessionUpdate;
+  // To the owner: another view's dictation key, or a page's, asked it to stop.
+  "voice-input:stop-requested": VoiceStopRequest;
+  // Another view's indicator, to the owner and to the view on screen in the
+  // owner's window, which goes to the owner's workspace on the owner's host.
+  "voice-input:reveal-requested": VoiceRevealRequest;
+  // The live session's input level, to the views on screen that don't own it.
+  "voice-input:live-level": VoiceLiveLevel;
+  // To the owner: another view's control panel paused or resumed it.
+  "voice-input:pause-requested": VoicePauseRequest;
 
   // Demo mode events (main → renderer command forwarding)
   "demo:exec-move-to": DemoMoveToPayload;
@@ -1971,9 +2162,6 @@ export interface IpcEventMap {
    * re-reads the config it mirrors rather than trusting a pushed snapshot.
    */
   "config-bundle:imported": undefined;
-
-  // Hibernation events
-  "hibernation:project-hibernated": HibernationProjectHibernatedPayload;
 
   // Keep-awake events
   "keep-awake:state-changed": KeepAwakeState;
@@ -2024,6 +2212,20 @@ export interface IpcEventMap {
   // Host-owned agent defaults changed (#13345)
   "agent-defaults:changed": AgentDefaultsSnapshot;
 
+  // A saved agent settings change on the host, the whole slice (#14700)
+  "agent-settings:changed": import("../agentSettings.js").AgentSettings;
+
+  // This machine's saved grid layout changed (#14700)
+  "app:panel-grid-config-changed": import("../config.js").PanelGridConfig;
+
+  // A saved terminal-config change, one owner's fields each (#14699)
+  "terminal-config:device-changed": Partial<import("./config.js").TerminalConfig>;
+  "terminal-config:host-changed": Partial<import("./config.js").TerminalConfig>;
+
+  // This machine's toolbar agent pins changed (#14702)
+  "agent-toolbar-pins:changed": AgentToolbarPinsSnapshot;
+  "help:global-assistant-changed": import("./help.js").GlobalAssistantView;
+
   // Plugin action registry events
   "plugin:actions-changed": {
     actions: import("../plugin.js").PluginActionDescriptor[];
@@ -2043,6 +2245,19 @@ export interface IpcEventMap {
   "plugin:toolbar-buttons-changed": {
     buttons: import("../../config/toolbarButtonRegistry.js").ToolbarButtonConfig[];
     complete: boolean;
+  };
+
+  // Plugin launch-entry registry events (main → renderer, #13788). No
+  // `complete` flag: every snapshot replaces the renderer's set wholesale, and
+  // nothing is swept against it.
+  "plugin:launch-entries-changed": {
+    entries: import("../plugin.js").PluginLaunchEntryConfig[];
+  };
+
+  // Plugin layout registry events (main → renderer, #13780). Same wholesale
+  // replacement as launch entries.
+  "plugin:layouts-changed": {
+    layouts: import("../plugin.js").PluginLayoutConfig[];
   };
 
   // Plugin keybinding registry events (main → renderer). Same `complete` flag
@@ -2070,10 +2285,10 @@ export interface IpcEventMap {
   };
 
   // Plugin recipe registry events (main → renderer, #11860). Carries the full
-  // effective plugin recipe list — manifest content with the user's sidecar
-  // metadata already overlaid — so the renderer replaces its plugin tier
-  // wholesale rather than reconciling per-plugin. Same `complete` flag
-  // semantics as toolbar buttons.
+  // effective plugin recipe list the receiving view's project shows (#13765) —
+  // manifest content with the user's sidecar metadata already overlaid — so the
+  // renderer replaces its plugin tier wholesale rather than reconciling
+  // per-plugin. Same `complete` flag semantics as toolbar buttons.
   "plugin:recipes-changed": {
     recipes: import("../project.js").TerminalRecipe[];
     complete: boolean;
@@ -2082,6 +2297,20 @@ export interface IpcEventMap {
   // Plugin tour registry snapshot (main → renderer, scoped to the view's project).
   "plugin:tours-changed": {
     tours: import("../plugin.js").PluginTourDescriptor[];
+  };
+
+  // Plugin views that mount outside the panel grid (#13770), scoped to the
+  // view's project. A full snapshot every time; the renderer replaces its copy.
+  "plugin:hosted-views-changed": {
+    views: import("../plugin.js").PluginHostedViewDescriptor[];
+  };
+
+  // Every theme an installed plugin offers (#13832), app-wide. A full snapshot
+  // every time; the renderer replaces its copy. `fallbackSchemeId` is set when
+  // main replaced a selected plugin theme that is no longer offered.
+  "plugin:themes-changed": {
+    themes: import("../appTheme.js").AppColorScheme[];
+    fallbackSchemeId?: string;
   };
 
   // Plugin-shipped custom icons visible to this view (#13143). A full
@@ -2113,12 +2342,37 @@ export interface IpcEventMap {
     pluginId: string;
   };
 
+  // A plugin's activity reports on its own panels changed (main → renderer,
+  // #13820). Carries the plugin's COMPLETE current map (panelId → report),
+  // never a delta; an empty `activity` clears them, which is also how an
+  // unload or a worker swap is sent.
+  "plugin:panel-activity-changed": {
+    pluginId: string;
+    activity: Record<string, import("../plugin.js").PluginPanelActivityReport>;
+  };
+
+  // A plugin's tasks changed (main → renderer, #13819). Carries the plugin's
+  // COMPLETE current list, oldest first, never a delta; an empty `tasks` clears
+  // them. Interrupted tasks stay in it after the plugin unloads, until dismissed.
+  "plugin:tasks-changed": {
+    pluginId: string;
+    tasks: import("../plugin.js").PluginTaskSnapshot[];
+  };
+
   // A plugin's toolbar-button badges changed (main → renderer, #13503). Carries
   // the plugin's COMPLETE current map (manifest button id → badge), never a
   // delta; an empty `badges` clears them, which is also how an unload is sent.
   "plugin:toolbar-badges-changed": {
     pluginId: string;
     badges: Record<string, import("../plugin.js").PluginPanelBadge>;
+  };
+
+  // A plugin's toolbar-button state changed (main → renderer, #13785). Carries
+  // the plugin's COMPLETE current map (manifest button id → state), never a
+  // delta; an empty `states` clears it, which is also how an unload is sent.
+  "plugin:toolbar-states-changed": {
+    pluginId: string;
+    states: Record<string, import("../plugin.js").PluginToolbarButtonRuntimeState>;
   };
 
   // A plugin's `when`-clause context keys changed (main → renderer, #13506).
@@ -2137,6 +2391,26 @@ export interface IpcEventMap {
     pluginId: string;
     projectId: string;
     statuses: Record<string, import("../plugin.js").PluginWorktreeCardStatus>;
+  };
+
+  // A plugin's readiness checks in one project changed (main → renderer,
+  // #13806). Carries the plugin's COMPLETE map for that project (worktreeId →
+  // checks), never a delta; an empty `checks` clears them, which is also how an
+  // unload, a worker swap or a project close is sent.
+  "plugin:worktree-review-checks-changed": {
+    pluginId: string;
+    projectId: string;
+    checks: Record<string, import("../plugin.js").PluginWorktreeReviewCheck[]>;
+  };
+
+  // A plugin's terminal header statuses in one project changed (main →
+  // renderer, #13802). Carries the plugin's COMPLETE map for that project
+  // (terminalId → status), never a delta; an empty `statuses` clears them, which
+  // is also how an unload, a worker swap or a project close is sent.
+  "plugin:terminal-statuses-changed": {
+    pluginId: string;
+    projectId: string;
+    statuses: Record<string, import("../plugin.js").PluginTerminalStatus>;
   };
 
   // A plugin's runtime panel menus changed (main → renderer, #13213). Carries
@@ -2198,10 +2472,11 @@ export interface IpcEventMap {
   // renders from the push rather than refetching.
   "plugin:project-plugin-visibility-changed": import("../plugin.js").ProjectPluginVisibilityChangedEvent;
 
-  // A project's remembered answers about its plugin surface claims changed
-  // (main → renderer, project-scoped). Carries the full set, so every view of
-  // the project — the canvas and its settings disclosure — agrees at once.
-  "plugin:project-surface-choices-changed": import("../plugin.js").ProjectSurfaceChoicesChangedEvent;
+  // A project's slot state changed — a plugin claimed or released a slot, a
+  // claim was refused, or the user answered (main → renderer, project-scoped).
+  // Signal-only with the new revision: every view of the project re-reads the
+  // snapshot, so the canvas and its settings disclosure agree at once.
+  "plugin:project-surfaces-changed": import("../plugin.js").ProjectSurfacesChangedEvent;
 
   // The project's git remote table changed (main → renderer, #11155) — e.g.
   // `git remote add origin`. Signal-only and project-scoped: the renderer drops
@@ -2286,7 +2561,8 @@ export interface IpcEventMap {
    * the primary) — unlike the MCP consent push there is no initiating renderer,
    * because the call originates in the plugin's own utility process. The
    * renderer replies via `plugin-capability:resolve-consent`, correlated by
-   * `requestId`.
+   * `requestId`. The same push carries the one-approval offer-back after a
+   * replacing install (#14019), told apart by its `restore` list.
    */
   "plugin-capability:consent-request": import("../pluginCapabilityConsent.js").PluginCapabilityConsentRequestEvent;
 
@@ -2325,6 +2601,7 @@ export type IpcEventBusMap = Pick<
   | "window:disk-space-status"
   | "window:sample-blink-memory"
   | "window:sample-renderer-elu"
+  | "window:sample-terminal-buffers"
   // System wake (per-webContents)
   | "system:wake"
   // System memory pressure episode edges (window-scoped)
@@ -2348,6 +2625,10 @@ export type IpcEventBusMap = Pick<
   | "plugin:panel-kinds-changed"
   // Plugin toolbar button registry (global broadcast)
   | "plugin:toolbar-buttons-changed"
+  // Plugin launch-entry registry (global broadcast)
+  | "plugin:launch-entries-changed"
+  // Plugin layout registry (global broadcast)
+  | "plugin:layouts-changed"
   // Plugin keybinding registry (global broadcast)
   | "plugin:keybindings-changed"
   // Plugin context-menu item registry (global broadcast)
@@ -2357,18 +2638,30 @@ export type IpcEventBusMap = Pick<
   // Plugin recipe registry (global broadcast)
   | "plugin:recipes-changed"
   | "plugin:tours-changed"
+  | "plugin:hosted-views-changed"
+  | "plugin:themes-changed"
   | "plugin:icons-changed"
   // Plugin file-decoration invalidation (global broadcast)
   | "plugin:decorations-changed"
   // Plugin panel-badge state (global broadcast)
   | "plugin:panel-badges-changed"
   | "plugin:panel-badges-cleared"
+  // Plugin panel activity reports (project-scoped for a project instance)
+  | "plugin:panel-activity-changed"
+  // Plugin tasks (project-scoped for a project instance)
+  | "plugin:tasks-changed"
   // Plugin toolbar-button badges (project-scoped for a project instance)
   | "plugin:toolbar-badges-changed"
+  // Plugin toolbar-button state (project-scoped for a project instance)
+  | "plugin:toolbar-states-changed"
   // Plugin `when`-clause context keys (project-scoped for a project instance)
   | "plugin:context-keys-changed"
   // Plugin worktree card statuses (always scoped to the status's own project)
   | "plugin:worktree-card-statuses-changed"
+  // Plugin worktree readiness checks (always scoped to the checks' own project)
+  | "plugin:worktree-review-checks-changed"
+  // Plugin terminal header statuses (always scoped to the status's own project)
+  | "plugin:terminal-statuses-changed"
   // Plugin runtime panel menus (project-scoped for a project instance)
   | "plugin:panel-menus-changed"
   // Plugin action handlers in flight (project-scoped for a project instance)
@@ -2386,7 +2679,7 @@ export type IpcEventBusMap = Pick<
   | "plugin:project-plugins-changed"
   | "plugin:project-plugin-staged"
   | "plugin:project-plugin-visibility-changed"
-  | "plugin:project-surface-choices-changed"
+  | "plugin:project-surfaces-changed"
   // Project's git remotes changed — re-resolve the forge provider (global broadcast)
   | "forge:remote-changed"
   // Background plugin update check found updates (global broadcast)
@@ -2411,11 +2704,13 @@ export type IpcEventBusMap = Pick<
   | "terminal:spawn-result"
   // Terminal observability
   | "terminal:resize-result"
+  | "terminal:memory-leak-restart-requested"
   | "terminal:reliability-metric"
   | "terminal:status"
   | "terminal:submit-status"
   // Terminals handed to an orchestrating pane (global broadcast)
   | "terminal:adoptions-changed"
+  | "terminal:canopy-size-holds-changed"
   | "terminal:notify-state"
   // Agent session journaled — resume surfaces refetch (global broadcast)
   | "agent-session:recorded"

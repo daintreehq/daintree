@@ -69,6 +69,11 @@ export function mapTerminalInfo(
     lastInputTime: t.lastInputTime,
     lastTypedInputAt: t.lastTypedInputAt,
     lastOutputTime: t.lastOutputTime,
+    hasPendingSubmission: ctx.ptyManager.hasPendingSubmission(t.id),
+    // Nothing reads a PTY whose reads are paused, so the span ends there too.
+    outputObservedSince: ctx.getPauseCoordinator(t.id)?.isReadPaused
+      ? undefined
+      : (ctx.ptyManager.analysisObservedSince(t.id) ?? undefined),
     spawnedAt: t.spawnedAt,
     isTrashed: ctx.ptyManager.isInTrash(t.id),
     trashExpiresAt: t.trashExpiresAt,

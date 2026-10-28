@@ -16,6 +16,9 @@ import { YAML_MERGE_SCHEMA } from "../utils/yamlMergeSchema.js";
  *   1. Global:      ~/.daintree/assistant/
  *   2. Per-project: <project>/.daintree/assistant/   (git-trackable, like recipes)
  *
+ * Plugins' Assistant knowledge (#13828) arrives already read, and is mirrored
+ * after both under names of its own, never over either.
+ *
  * Inside each source the layout is agent-native hidden folders:
  *   .claude/commands/   Claude Code slash commands (*.md)
  *   .claude/skills/     Claude-only skills (<name>/SKILL.md)
@@ -117,6 +120,17 @@ const MIRROR_DEST_ROOTS = [
   "reference",
 ] as const;
 
+// Where a plugin's Assistant skills go for each backend (#13828). Copilot reads
+// .agents/skills as well as .claude/skills, so it gets one copy, not two.
+const PLUGIN_SKILL_DEST_ROOTS: Record<string, string> = {
+  claude: ".claude/skills",
+  codex: ".agents/skills",
+  copilot: ".agents/skills",
+};
+
+/** Session folder holding each plugin's Assistant reference files, one folder per plugin. */
+export const PLUGIN_REFERENCE_ROOT = "reference/plugins";
+
 // Dest roots whose first path segment below the root is a skill directory.
 // Casefold collision handling is per skill directory, so it applies to these
 // only — a nested command or reference file is not a skill bundle.
@@ -182,6 +196,48 @@ export function stripExecutableFrontmatter(content: string): string {
   return `---\n${body}---\n${content.slice(match[0].length)}`;
 }
 
+// Frontmatter a plugin skill keeps: what describes it and when it applies.
+// Every other key (tools, hooks, model, effort, a forked context or subagent,
+// a shell) changes how the CLI runs the skill, which knowledge may not.
+const PLUGIN_SKILL_FRONTMATTER_KEYS = new Set([
+  "description",
+  "when_to_use",
+  "argument-hint",
+  "arguments",
+  "disable-model-invocation",
+  "user-invocable",
+  "license",
+  "compatibility",
+  "metadata",
+]);
+
+/**
+ * A plugin skill's SKILL.md as mirrored: only descriptive frontmatter kept,
+ * `name` set to the directory it is mirrored under (Agent Skills requires the
+ * two to match, and the directory is what keeps two plugins' skills apart),
+ * and `preamble` placed ahead of the body. Throws when the frontmatter can't
+ * be parsed.
+ */
+export function namePluginSkillManifest(content: string, name: string, preamble: string): string {
+  const text = content.replace(/^\uFEFF/, "");
+  const match = FRONTMATTER_PATTERN.exec(text);
+  let record: Record<string, unknown> = {};
+  if (match) {
+    const parsed = parseYaml(match[2], { schema: YAML_MERGE_SCHEMA });
+    if (parsed !== null && parsed !== undefined) {
+      if (typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("frontmatter is not a mapping");
+      }
+      record = parsed as Record<string, unknown>;
+    }
+  }
+  for (const key of Object.keys(record)) {
+    if (!PLUGIN_SKILL_FRONTMATTER_KEYS.has(key.toLowerCase())) delete record[key];
+  }
+  const body = match ? text.slice(match[0].length) : text;
+  return `---\n${dumpYaml({ name, ...record }, { lineWidth: -1 })}---\n\n${preamble}${body}`;
+}
+
 export function getGlobalAssistantContentDir(): string {
   return path.join(os.homedir(), ...ASSISTANT_CONTENT_DIR_SEGMENTS);
 }
@@ -198,8 +254,24 @@ export interface AssistantContentSyncInput {
   sessionPath: string;
   projectPath: string;
   agentId: string;
+  /** Plugin knowledge to mirror beside the user's content, already read and sanitized. */
+  pluginContent?: readonly AssistantPluginContent[];
   /** Test seam — defaults to ~/.daintree/assistant. */
   globalContentDir?: string;
+}
+
+/**
+ * One plugin's Assistant knowledge as files (#13828). Mirrored after the
+ * user's content and never over it: a plugin whose files would land where the
+ * user's already do is left out whole.
+ */
+export interface AssistantPluginContent {
+  /** The plugin's MCP server key in this launch; names its reference folder. */
+  key: string;
+  /** Skill directory name → its files, posix relpath → text. */
+  skills: ReadonlyMap<string, ReadonlyMap<string, string>>;
+  /** Files under `reference/plugins/<key>/`, posix relpath → text. */
+  references: ReadonlyMap<string, string>;
 }
 
 /**
@@ -221,8 +293,10 @@ export interface AssistantContentSyncResult {
   failedCopies: string[];
   /** Managed dest relpaths that are stale or unverifiable but still present. */
   staleFailures: string[];
-  /** Reference files mirrored into `<session>/reference/`. */
+  /** The user's reference files mirrored into `<session>/reference/`. */
   referenceFiles: number;
+  /** Keys of the plugins whose every file was mirrored. */
+  pluginContent: string[];
 }
 
 interface ManifestShape {
@@ -295,7 +369,7 @@ async function writeManifest(sessionPath: string, files: string[]): Promise<void
   );
 }
 
-interface WalkState {
+export interface WalkState {
   files: Map<string, string>;
   visitedDirs: Set<string>;
   truncated: boolean;
@@ -311,6 +385,8 @@ interface WalkState {
   containRoot?: string;
   /** Entries skipped because they resolve outside `containRoot`. */
   escapedLinks: string[];
+  /** Relative paths not to walk into or collect. */
+  skip?: (rel: string) => boolean;
 }
 
 function isAbsentError(err: unknown): boolean {
@@ -328,7 +404,11 @@ function isWithin(real: string, root: string): boolean {
   return real === root || real.startsWith(root + path.sep);
 }
 
-async function collectSourceFiles(rootAbs: string, containRoot?: string): Promise<WalkState> {
+export async function collectSourceFiles(
+  rootAbs: string,
+  containRoot?: string,
+  skip?: (rel: string) => boolean
+): Promise<WalkState> {
   const state: WalkState = {
     files: new Map(),
     visitedDirs: new Set(),
@@ -336,6 +416,7 @@ async function collectSourceFiles(rootAbs: string, containRoot?: string): Promis
     unreadableDirs: [],
     containRoot,
     escapedLinks: [],
+    skip,
   };
   try {
     const rootReal = await fs.realpath(rootAbs);
@@ -378,6 +459,7 @@ async function walkDir(
     if (entry.name.startsWith(".")) continue;
     const entryAbs = path.join(dirAbs, entry.name);
     const entryRel = relPrefix ? `${relPrefix}/${entry.name}` : entry.name;
+    if (state.skip?.(entryRel)) continue;
 
     let isDir = entry.isDirectory();
     let isFile = entry.isFile();
@@ -684,25 +766,68 @@ export async function syncAssistantContent(
     }
   }
 
+  // Plugin knowledge joins `desired` as generated text (its source path left
+  // empty) so ownership, retirement and verification treat it like any other
+  // mirrored file. A plugin's files are all-or-nothing: one that would land on
+  // or inside a path the user's content (or an earlier plugin) already claims,
+  // or that the cleanup validator would refuse to own, leaves the plugin out.
+  const generated = new Map<string, string>();
+  const pluginRels = new Map<string, string[]>();
+  const pluginSkillRoot = PLUGIN_SKILL_DEST_ROOTS[input.agentId];
+  const claimed = [...desired.keys()].map(foldPath);
+  for (const content of input.pluginContent ?? []) {
+    const files = new Map<string, string>();
+    const units: string[] = [];
+    for (const [dirName, skillFiles] of content.skills) {
+      const unit = `${pluginSkillRoot}/${dirName}`;
+      units.push(unit);
+      for (const [rel, text] of skillFiles) files.set(`${unit}/${rel}`, text);
+    }
+    if (content.references.size > 0) {
+      const unit = `${PLUGIN_REFERENCE_ROOT}/${content.key}`;
+      units.push(unit);
+      for (const [rel, text] of content.references) files.set(`${unit}/${rel}`, text);
+    }
+    const foldedUnits = units.map(foldPath);
+    const foldedFiles = [...files.keys()].map(foldPath);
+    const nests = (a: string, b: string) =>
+      a === b || a.startsWith(b + "/") || b.startsWith(a + "/");
+    const collides =
+      claimed.some((rel) => foldedUnits.some((unit) => nests(rel, unit))) ||
+      // Two of its own files that one case-insensitive volume would merge.
+      foldedFiles.some((rel, index) =>
+        foldedFiles.some((other, j) => j > index && nests(rel, other))
+      );
+    if (collides || [...files.keys()].some((rel) => !isUnderMirrorRoot(rel))) {
+      console.warn(
+        "[AssistantContentMirror] Leaving out plugin knowledge whose files would collide with other assistant content:",
+        content.key
+      );
+      continue;
+    }
+    for (const [rel, text] of files) {
+      desired.set(rel, "");
+      generated.set(rel, text);
+      claimed.push(foldPath(rel));
+    }
+    pluginRels.set(content.key, [...files.keys()]);
+  }
+
   const sessionBase = path.resolve(input.sessionPath);
   const chainCache = new Map<string, ChainVerdict>();
   const previous = await readManifest(input.sessionPath);
 
   let removed = 0;
-  const staleRels: string[] = [];
-  for (const staleRel of previous) {
-    if (desired.has(staleRel)) continue;
-    if (!isUnderMirrorRoot(staleRel)) continue;
-    staleRels.push(staleRel);
+  const removeManaged = async (staleRel: string): Promise<void> => {
     const segments = staleRel.split("/");
     const staleAbs = path.resolve(sessionBase, ...segments);
-    if (!staleAbs.startsWith(sessionBase + path.sep)) continue;
+    if (!staleAbs.startsWith(sessionBase + path.sep)) return;
     if ((await verifyRealDirChain(sessionBase, segments.slice(0, -1), chainCache)) !== "ok") {
       console.warn(
         "[AssistantContentMirror] Skipping stale-file removal through a symlinked directory:",
         staleRel
       );
-      continue;
+      return;
     }
     try {
       await fs.rm(staleAbs, { force: true });
@@ -711,6 +836,13 @@ export async function syncAssistantContent(
     } catch (err) {
       console.warn("[AssistantContentMirror] Failed to remove stale mirrored file:", staleAbs, err);
     }
+  };
+  const staleRels: string[] = [];
+  for (const staleRel of previous) {
+    if (desired.has(staleRel)) continue;
+    if (!isUnderMirrorRoot(staleRel)) continue;
+    staleRels.push(staleRel);
+    await removeManaged(staleRel);
   }
 
   // Superset manifest: every desired path is owned before its copy starts,
@@ -744,7 +876,10 @@ export async function syncAssistantContent(
       } catch {
         // ENOENT — nothing at the destination yet
       }
-      if (sanitizeRels.has(destRel)) {
+      const text = generated.get(destRel);
+      if (text !== undefined) {
+        await fs.writeFile(destAbs, text, "utf-8");
+      } else if (sanitizeRels.has(destRel)) {
         const original = await fs.readFile(sourceAbs, "utf-8");
         await fs.writeFile(destAbs, stripExecutableFrontmatter(original), "utf-8");
       } else {
@@ -752,8 +887,27 @@ export async function syncAssistantContent(
       }
       copied += 1;
     } catch (err) {
-      console.warn("[AssistantContentMirror] Failed to mirror file:", sourceAbs, err);
+      console.warn("[AssistantContentMirror] Failed to mirror file:", sourceAbs || destRel, err);
       copyFailedRels.add(destRel);
+    }
+  }
+
+  // A plugin is delivered whole or not at all: when one of its files couldn't
+  // be written, the ones that were are retired like stale files, so the
+  // session never offers a skill the prompt doesn't introduce.
+  for (const [key, rels] of pluginRels) {
+    if (rels.every((rel) => !copyFailedRels.has(rel))) continue;
+    console.warn(
+      "[AssistantContentMirror] Retiring plugin knowledge that couldn't be mirrored whole:",
+      key
+    );
+    pluginRels.delete(key);
+    for (const rel of rels) {
+      desired.delete(rel);
+      generated.delete(rel);
+      copyFailedRels.delete(rel);
+      staleRels.push(rel);
+      await removeManaged(rel);
     }
   }
 
@@ -809,10 +963,18 @@ export async function syncAssistantContent(
 
   let referenceFiles = 0;
   for (const destRel of desired.keys()) {
-    if (destRel.startsWith(`${REFERENCE_MAPPING.destDir}/`) && !copyFailedRels.has(destRel)) {
+    if (
+      destRel.startsWith(`${REFERENCE_MAPPING.destDir}/`) &&
+      !copyFailedRels.has(destRel) &&
+      !generated.has(destRel)
+    ) {
       referenceFiles += 1;
     }
   }
+
+  // Only plugins delivered whole remain, so the prompt never names a skill or
+  // file the session lacks.
+  const pluginContent = [...pluginRels.keys()];
 
   return {
     copied,
@@ -822,6 +984,7 @@ export async function syncAssistantContent(
     failedCopies,
     staleFailures,
     referenceFiles,
+    pluginContent,
   };
 }
 

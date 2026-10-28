@@ -95,6 +95,13 @@ export interface CdpLease {
   readonly mainFrameId: string | null;
   /** Bumped on every `Runtime.executionContextsCleared`, i.e. once per document. */
   readonly navigationGeneration: number;
+  /**
+   * The CDP `uniqueId` of the main frame's default world, or null when the
+   * frame tree is unread or that world has not been announced. Unlike a
+   * context id it is never reused, so an evaluate aimed at it fails once its
+   * document is gone instead of landing in whatever replaced it.
+   */
+  mainWorldUniqueId(): string | null;
   readonly invalidated: boolean;
   /** Re-read `Page.getFrameTree`. Callers refresh after a navigation. */
   refreshMainFrameId(): Promise<string | null>;
@@ -119,6 +126,8 @@ interface Entry {
   webContentsId: number;
   domains: Map<CdpDomain, DomainState>;
   contexts: Map<number, string | undefined>;
+  /** `uniqueId` per tracked context; kept in step with `contexts`. */
+  uniqueIds: Map<number, string>;
   /** First default world seen since the last clear — the provisional main frame. */
   firstContextId: number | null;
   mainFrameId: string | null;
@@ -168,14 +177,18 @@ function evictOneContext(entry: Entry): void {
     if (id === entry.firstContextId) continue;
     if (entry.mainFrameId !== null && owner === entry.mainFrameId) continue;
     entry.contexts.delete(id);
+    entry.uniqueIds.delete(id);
     return;
   }
 }
 
 function trackContexts(entry: Entry, method: string, params: unknown): void {
   if (method === "Runtime.executionContextCreated") {
-    const context = (params as { context?: { id?: number; auxData?: Record<string, unknown> } })
-      ?.context;
+    const context = (
+      params as {
+        context?: { id?: number; uniqueId?: unknown; auxData?: Record<string, unknown> };
+      }
+    )?.context;
     if (!context || typeof context.id !== "number") return;
     // Non-default worlds are extension/isolated worlds: no reader trusts them,
     // and keeping them would spend the cap on entries nothing can use.
@@ -188,15 +201,21 @@ function trackContexts(entry: Entry, method: string, params: unknown): void {
       if (entry.contexts.size >= MAX_TRACKED_CONTEXTS) return;
     }
     entry.contexts.set(context.id, frameId);
+    if (typeof context.uniqueId === "string") entry.uniqueIds.set(context.id, context.uniqueId);
+    else entry.uniqueIds.delete(context.id);
     return;
   }
   if (method === "Runtime.executionContextDestroyed") {
     const id = (params as { executionContextId?: unknown })?.executionContextId;
-    if (typeof id === "number") entry.contexts.delete(id);
+    if (typeof id === "number") {
+      entry.contexts.delete(id);
+      entry.uniqueIds.delete(id);
+    }
     return;
   }
   if (method === "Runtime.executionContextsCleared") {
     entry.contexts.clear();
+    entry.uniqueIds.clear();
     entry.firstContextId = null;
     entry.navigationGeneration++;
     // `mainFrameId` is deliberately kept: a frame keeps its id across a
@@ -217,6 +236,7 @@ function ensureEntry(wc: Electron.WebContents): Entry {
     webContentsId,
     domains: new Map(),
     contexts: new Map(),
+    uniqueIds: new Map(),
     firstContextId: null,
     mainFrameId: null,
     navigationGeneration: 0,
@@ -283,6 +303,7 @@ function invalidateEntry(entry: Entry): void {
     state.disablePromise = null;
   }
   entry.contexts.clear();
+  entry.uniqueIds.clear();
   entry.navigationGeneration++;
   const leases = [...entry.leases];
   entry.leases.clear();
@@ -393,6 +414,7 @@ function disableDomain(entry: Entry, domain: CdpDomain): Promise<void> {
       // Nothing reports contexts with the domain off, so a stale snapshot would
       // read as current.
       entry.contexts.clear();
+      entry.uniqueIds.clear();
     }
   })().finally(() => {
     if (state.disablePromise === promise) state.disablePromise = null;
@@ -425,6 +447,15 @@ class LeaseImpl implements CdpLease {
 
   get navigationGeneration(): number {
     return this.entry.navigationGeneration;
+  }
+
+  mainWorldUniqueId(): string | null {
+    const main = this.entry.mainFrameId;
+    if (main === null) return null;
+    for (const [id, owner] of this.entry.contexts) {
+      if (owner === main) return this.entry.uniqueIds.get(id) ?? null;
+    }
+    return null;
   }
 
   get invalidated(): boolean {
@@ -556,6 +587,7 @@ export function __resetCdpLeasesForTests(): void {
     for (const lease of entry.leases) lease.retire();
     entry.leases.clear();
     entry.contexts.clear();
+    entry.uniqueIds.clear();
     entry.domains.clear();
     dropEntry(entry);
   }

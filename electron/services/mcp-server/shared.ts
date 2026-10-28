@@ -148,8 +148,14 @@ export type HelpSessionTerminalResolver = (helpSessionId: string) => string | nu
  * lane is in, which is all a local assistant caller may reach.
  */
 export interface AssistantControlBinding {
-  control: NonNullable<import("./sessionServer.js").SessionServerDeps["assistantControl"]>;
+  control: NonNullable<
+    import("./sessionServerDepsContract.js").SessionServerDeps["assistantControl"]
+  >;
   sessionProject(helpSessionId: string): string | null;
+  /** The global Assistant's steer of workers it didn't launch (#14551); absent, it has none. */
+  steer?: NonNullable<import("./sessionServerDepsContract.js").SessionServerDeps["globalSteer"]>;
+  /** The agent the help session runs, so confirmations can follow its skip setting (#14141). */
+  sessionAgent?(helpSessionId: string): string | null;
 }
 /**
  * What an agent pane's workspace-bound dispatch carries beyond an external
@@ -196,6 +202,12 @@ export interface WorkspaceDispatchOptions {
   relay?: {
     linkSessionId: string;
     readOnly: boolean;
+    /**
+     * One of this machine's own assistants reaching another of its projects
+     * (#14024): a change runs through this machine's own view of it, or here
+     * while no view shows it, and never while another machine drives it.
+     */
+    local?: true;
     /**
      * Asks the person at the requesting Shell, in its own window, about this
      * one call when no view here can (#13501). Absent, an unapproved
@@ -1236,13 +1248,26 @@ export interface McpRelaySession {
  * Who a relayed session acts for (#13493), as the host established it: the
  * requesting Shell's link session (its drive-lease identity), the sender it
  * proved, the Shell assistant's own help session, and the Shell's name for
- * display. Never one of this machine's own help sessions.
+ * display. Never one of this machine's own help sessions, except a `local`
+ * caller's: this machine's assistant in another of its projects.
  */
 export interface McpRelayCaller {
   linkSessionId: string;
   senderId: string;
   helpSessionId: string;
   shellName: string;
+  /**
+   * One of this machine's own assistants reaching another of its projects
+   * (#14024), set only by the in-process relay, never from anything a link
+   * carries: its standing to change a project is this machine's own views'.
+   */
+  local?: true;
+  /**
+   * The calling Shell's global Assistant (#14545), from the relay payload its
+   * runtime built from its own lane, never from a tool's arguments. Absent
+   * from an older Shell, so such a caller is an ordinary assistant here.
+   */
+  global?: true;
   /**
    * Takes the notices this session's calls arm (#13500), for the Shell to
    * type into the run that asked. Absent, a relayed call can't ask for one.

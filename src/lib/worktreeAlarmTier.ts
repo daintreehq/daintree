@@ -1,4 +1,5 @@
 import type { CIStatusState } from "@shared/types/forge";
+import type { PluginWorktreeLinkedPR } from "@shared/types/plugin";
 import { pluralize } from "@/lib/pluralize";
 
 export type AlarmTier = 0 | 1 | 2 | 3;
@@ -59,6 +60,23 @@ export function computeAlarmTier(input: AlarmTierInput): AlarmDescriptor {
     return { tier: 1, kind: "behind", label: "Behind", tone: "warning" };
   }
   return NONE;
+}
+
+/**
+ * Whether a linked PR's badge is saying something the user must see: failing
+ * CI, or commits that landed under an armed merge (which `PRBadge` marks with
+ * a warning triangle). Quiet git detail (#13777) keeps exactly these badges.
+ * Closed and declined PRs never warn, as in {@link AlarmTierInput.ciState}.
+ */
+export function isPullRequestWarning(
+  pr:
+    | Pick<PluginWorktreeLinkedPR, "state" | "ciStatus" | "mergeIntent" | "headMovedWhileArmed">
+    | null
+    | undefined
+): boolean {
+  if (!pr || pr.state === "closed" || pr.state === "declined") return false;
+  if (computeAlarmTier({ ciState: pr.ciStatus?.state }).tier > 0) return true;
+  return pr.state === "open" && pr.mergeIntent != null && pr.headMovedWhileArmed === true;
 }
 
 /**

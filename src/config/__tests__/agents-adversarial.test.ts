@@ -309,6 +309,21 @@ describe("Preset fallback chain sanitization", () => {
     expect(primary?.fallbacks).toEqual(["backup-a", "backup-b"]);
   });
 
+  it("keeps the rate-limit opt-in only when it is exactly true (#14370)", () => {
+    const stringy = { id: "string", name: "String" };
+    Reflect.set(stringy, "fallbackOnRateLimit", "true");
+    const result = getMergedPresets("claude", [
+      { id: "on", name: "On", fallbackOnRateLimit: true },
+      stringy,
+      { id: "off", name: "Off", fallbackOnRateLimit: false },
+    ]);
+    expect(result.map((p) => [p.id, p.fallbackOnRateLimit])).toEqual([
+      ["on", true],
+      ["string", undefined],
+      ["off", undefined],
+    ]);
+  });
+
   it("strips self-references from fallbacks", () => {
     const bad = [
       { id: "me", name: "Me", fallbacks: ["me", "other"] },

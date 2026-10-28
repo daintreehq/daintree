@@ -14,7 +14,13 @@ const PANE_MODULES: Record<string, { path: string; name: string }> = {
 async function loadRegistry() {
   vi.resetModules();
   const loaded: string[] = [];
+  const loadXtermCore = vi.fn(() => Promise.resolve({}));
+  const loadTerminalService = vi.fn(() => Promise.resolve({}));
   vi.doMock("@/components/Terminal/TerminalPane", () => ({ TerminalPane: () => null }));
+  vi.doMock("@/services/terminal/xtermCore", () => ({ loadXtermCore }));
+  vi.doMock("@/services/terminal/terminalInstanceServiceAccessor", () => ({
+    load: loadTerminalService,
+  }));
   for (const { path, name } of Object.values(PANE_MODULES)) {
     vi.doMock(path, () => {
       loaded.push(name);
@@ -22,7 +28,7 @@ async function loadRegistry() {
     });
   }
   const registry = await import("../registry");
-  return { ...registry, loaded };
+  return { ...registry, loaded, loadXtermCore, loadTerminalService };
 }
 
 // The first import transforms the registry's whole graph, which a loaded
@@ -70,11 +76,26 @@ describe("preloadRestoredPanes", () => {
     }
   });
 
-  it("ignores terminals, unknown kinds and plugin kinds", async () => {
+  it("loads no pane chunk for terminals, unknown kinds or plugin kinds", async () => {
     const { preloadRestoredPanes, loaded } = await loadRegistry();
     preloadRestoredPanes(["terminal", undefined, "acme.dashboard.overview", "project:x", "nope"]);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(loaded).toEqual([]);
+  });
+
+  it("warms xterm and the terminal service once for restored terminals", async () => {
+    const { preloadRestoredPanes, loadXtermCore, loadTerminalService } = await loadRegistry();
+    preloadRestoredPanes(["terminal", "diff", "terminal"]);
+    expect(loadXtermCore).toHaveBeenCalledTimes(1);
+    expect(loadTerminalService).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves xterm and the terminal service unloaded when nothing restored has a PTY", async () => {
+    const { preloadRestoredPanes, loadXtermCore, loadTerminalService } = await loadRegistry();
+    preloadRestoredPanes(["diff", "file", "browser", "dev-preview", undefined, "acme.dashboard"]);
+    preloadRestoredPanes([]);
+    expect(loadXtermCore).not.toHaveBeenCalled();
+    expect(loadTerminalService).not.toHaveBeenCalled();
   });
 });
 

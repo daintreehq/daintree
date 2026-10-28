@@ -35,6 +35,17 @@ export function getAppMetricsSnapshot(
   return refreshAppMetricsSnapshot();
 }
 
+/**
+ * The cached sweep and when it was taken, or null when none has succeeded.
+ * Never sweeps: for callers on a hot path that would rather go without.
+ */
+export function peekAppMetricsSnapshot(): {
+  metrics: readonly Electron.ProcessMetric[];
+  sampledAt: number;
+} | null {
+  return cachedMetrics === null ? null : { metrics: cachedMetrics, sampledAt: cachedAt };
+}
+
 /** Force a fresh sweep and prime the cache for read-through consumers. */
 export function refreshAppMetricsSnapshot(): Electron.ProcessMetric[] {
   const metrics = app.getAppMetrics();

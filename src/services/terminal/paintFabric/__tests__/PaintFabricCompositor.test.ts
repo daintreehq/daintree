@@ -644,6 +644,18 @@ describe("PaintFabricCompositor resize coordination", () => {
     expect(only.plane.cancelActiveResizePass).not.toHaveBeenCalled();
   });
 
+  it("bulk scrollback policy calls fan out to every surface (#14215)", () => {
+    // Each surface owns its own terminals' visibility, so a view-wide reclaim
+    // or profile re-derive must reach all of them.
+    const { compositor, a, b } = makeCompositor();
+    compositor.reduceScrollbackHidden(500);
+    compositor.restoreScrollbackAll();
+    for (const plane of [a, b]) {
+      expect(plane.reduceScrollbackHidden).toHaveBeenCalledWith(500);
+      expect(plane.restoreScrollbackAll).toHaveBeenCalledTimes(1);
+    }
+  });
+
   it("cancelActiveResizePass fans out to every surface", () => {
     const { compositor, a, b } = makeCompositor();
     compositor.cancelActiveResizePass();

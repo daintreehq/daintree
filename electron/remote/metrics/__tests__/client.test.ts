@@ -9,6 +9,7 @@ import type {
   HostDescriptor,
   HostMetricsSummary,
 } from "../../../../shared/types/remoteHosts.js";
+import type { ProcessInventorySnapshot } from "../../../../shared/types/processes.js";
 import { Lane } from "../../link/frames.js";
 import { ControlKind } from "../../link/messages.js";
 import type { LinkSession } from "../../link/session.js";
@@ -71,7 +72,20 @@ function summary(sampledAt: number, working = 0): HostMetricsSummary {
   };
 }
 
-function harness(hosts: HostDescriptor[]) {
+function inventoryAnswer() {
+  return {
+    terminals: [],
+    closedTerminalProcesses: [],
+    cleanup: null,
+    plugins: [],
+    complete: true,
+    samplesAvailable: true,
+    sampledAt: 9,
+    truncated: false,
+  };
+}
+
+function harness(hosts: HostDescriptor[], extra: Partial<HostMetricsClientOptions> = {}) {
   let list = hosts;
   const registryListeners = new Set<() => void>();
   const sessionListeners = new Set<(hostId: string, session: LinkSession) => void>();
@@ -89,6 +103,15 @@ function harness(hosts: HostDescriptor[]) {
     listFleetTargets: vi.fn(async () => ({ targets: [], complete: true })),
     submitFleet: vi.fn(async () => {}),
     listWorktrees: vi.fn(async (): Promise<HostWorktreeEntry[]> => []),
+    processInventory: vi.fn(async (): Promise<ProcessInventorySnapshot> => ({
+      terminals: [],
+      closedTerminalProcesses: [],
+      cleanup: null,
+      plugins: [],
+      complete: true,
+      samplesAvailable: true,
+      sampledAt: 5,
+    })),
     worktreesHeard: null as (() => void) | null,
     onWorktreesMaybeChanged(listener: () => void) {
       local.worktreesHeard = listener;
@@ -125,6 +148,7 @@ function harness(hosts: HostDescriptor[]) {
             }
           : undefined,
       connectionState: (hostId) => states.get(hostId) ?? { status: "disconnected" },
+      localClient: { clientId: "launch-me", clientName: "greg-mbp" },
       onSessionOpened(listener) {
         sessionListeners.add(listener);
         return () => sessionListeners.delete(listener);
@@ -153,6 +177,7 @@ function harness(hosts: HostDescriptor[]) {
     ringSize: 3,
     fleetReconcileMs: 200,
     worktreesChangedDelayMs: 5,
+    ...extra,
   };
   const client = new HostMetricsClient(options);
   return {
@@ -176,6 +201,199 @@ function harness(hosts: HostDescriptor[]) {
 }
 
 describe("HostMetricsClient", () => {
+  it("reads a host's link activity, names this launch, and shows its words as plain text", async () => {
+    const h = harness([descriptor("studio")]);
+    h.hook.call = async () => ({
+      observedAt: 10,
+      listeningSince: 1,
+      version: "0.46.0",
+      commit: "abc",
+      events: [
+        {
+          kind: "link-dropped",
+          at: 9,
+          clientId: "launch-me",
+          clientName: "greg\u202e-mbp",
+          sessionId: "s1",
+          reason: "socket\nclosed",
+          by: "transport",
+        },
+      ],
+      eventsTruncated: false,
+      drivers: [
+        {
+          projectId: "p1",
+          projectName: "dain\u200btree",
+          holder: {
+            leaseId: 1,
+            endpointId: "s1:e1",
+            clientId: "launch-me",
+            clientName: "greg-mbp",
+            isHostLocal: false,
+            acquiredAt: 2,
+          },
+          state: "away",
+          awayUntil: 25,
+        },
+      ],
+      attached: [],
+      unknownField: true,
+    });
+    const result = await h.client.linkActivity({ hostId: "studio" });
+    expect(h.calls).toEqual([
+      { hostId: "studio", method: MetricsLinkMethod.LINK_ACTIVITY, payload: null },
+    ]);
+    expect(result).toMatchObject({
+      supported: true,
+      self: { clientId: "launch-me", clientName: "greg-mbp" },
+      activity: {
+        events: [{ clientName: "greg-mbp", reason: "socket closed" }],
+        drivers: [{ projectName: "daintree", state: "away", awayUntil: 25 }],
+      },
+    });
+    expect(result.supported && result.activity).not.toHaveProperty("unknownField");
+  });
+
+  it("never asks this machine's own link activity over a link", async () => {
+    const h = harness([descriptor("studio")]);
+    await expect(h.client.linkActivity({ hostId: "local" })).rejects.toMatchObject({
+      code: "VALIDATION",
+    });
+    expect(h.calls).toEqual([]);
+  });
+
+  it("says a host from before link activity can't report it, and passes other failures on", async () => {
+    const h = harness([descriptor("old")]);
+    h.hook.call = async () => {
+      throw Object.assign(new Error("Unknown method"), { code: "UNSUPPORTED" });
+    };
+    await expect(h.client.linkActivity({ hostId: "old" })).resolves.toEqual({ supported: false });
+
+    h.hook.call = async () => ({ observedAt: "soon" });
+    await expect(h.client.linkActivity({ hostId: "old" })).rejects.toMatchObject({
+      code: "INTERNAL",
+    });
+
+    h.hook.down.add("old");
+    await expect(h.client.linkActivity({ hostId: "old" })).rejects.toMatchObject({
+      code: "HOST_DISCONNECTED",
+    });
+  });
+
+  it("reads a host's process inventory over its link and shows its words as plain text", async () => {
+    const h = harness([descriptor("studio")]);
+    h.hook.call = async () => ({
+      terminals: [
+        {
+          id: "t1",
+          projectId: "p1",
+          projectName: "dain\u200btree",
+          kind: "terminal",
+          title: "build\u202e\nwatch",
+          cwd: "/srv/daintree",
+          detectedAgentId: "agent-from-the-future",
+          isAssistantTerminal: false,
+          spawnedAt: 1,
+          isTrashed: false,
+          rootPid: 40,
+          sample: {
+            cpuPercent: 250,
+            memoryKb: 10,
+            processCount: 12,
+            members: [{ pid: 41, comm: "no\nde", cpuPercent: 1, memoryKb: 2, argv: ["x"] }],
+          },
+          agentTree: "a-shape-from-the-future",
+          env: { SECRET: "1" },
+        },
+      ],
+      closedTerminalProcesses: [],
+      cleanup: null,
+      plugins: [],
+      complete: true,
+      samplesAvailable: true,
+      sampledAt: 9,
+      truncated: false,
+    });
+    const result = await h.client.processInventory({ hostId: "studio" });
+    expect(h.calls).toEqual([
+      { hostId: "studio", method: MetricsLinkMethod.PROCESS_INVENTORY, payload: null },
+    ]);
+    if (!result.supported) throw new Error("expected an inventory");
+    const [terminal] = result.inventory.terminals;
+    expect(terminal).toMatchObject({
+      title: "build watch",
+      projectName: "daintree",
+      cwd: "/srv/daintree",
+      agentTree: "unknown",
+      sample: { cpuPercent: 250, processCount: 12, members: [{ pid: 41, comm: "no de" }] },
+    });
+    expect(terminal.detectedAgentId).toBeUndefined();
+    expect(terminal).not.toHaveProperty("env");
+    expect(terminal.sample?.members[0]).not.toHaveProperty("argv");
+  });
+
+  it("leaves out a row it can't read and says the list is incomplete", async () => {
+    const h = harness([descriptor("studio")]);
+    h.hook.call = async () => ({
+      ...inventoryAnswer(),
+      plugins: [
+        {
+          source: "plugin-worker",
+          id: "w1",
+          pluginId: "acme",
+          label: null,
+          pid: 7,
+          spawnedAt: null,
+          sample: null,
+        },
+        { source: "plugin-from-the-future", id: "w2" },
+      ],
+    });
+    const result = await h.client.processInventory({ hostId: "studio" });
+    expect(result).toMatchObject({
+      supported: true,
+      inventory: { plugins: [{ id: "w1" }], truncated: true },
+    });
+    if (result.supported) expect(result.inventory.plugins).toHaveLength(1);
+  });
+
+  it("answers this machine's own process inventory without a link", async () => {
+    const h = harness([descriptor("studio")]);
+    await expect(h.client.processInventory({ hostId: "local" })).resolves.toMatchObject({
+      supported: true,
+      inventory: { sampledAt: 5, truncated: false },
+    });
+    expect(h.local.processInventory).toHaveBeenCalledTimes(1);
+    expect(h.calls).toEqual([]);
+  });
+
+  it("says a host from before process inventory can't report it, and passes other failures on", async () => {
+    const h = harness([descriptor("old")]);
+    h.hook.call = async () => {
+      throw Object.assign(new Error("Unknown method"), { code: "UNSUPPORTED" });
+    };
+    await expect(h.client.processInventory({ hostId: "old" })).resolves.toEqual({
+      supported: false,
+    });
+
+    h.hook.call = async () => ({ ...inventoryAnswer(), terminals: new Array(501).fill(null) });
+    await expect(h.client.processInventory({ hostId: "old" })).rejects.toMatchObject({
+      code: "INTERNAL",
+    });
+    h.hook.call = async () => ({ ...inventoryAnswer(), sampledAt: "soon" });
+    await expect(h.client.processInventory({ hostId: "old" })).rejects.toMatchObject({
+      code: "INTERNAL",
+    });
+
+    h.hook.down.add("old");
+    await expect(h.client.processInventory({ hostId: "old" })).rejects.toMatchObject({
+      code: "HOST_DISCONNECTED",
+    });
+    await expect(h.client.processInventory({ hostId: "nowhere" })).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+  });
+
   it("dials only hosts whose notifications are on, once each", () => {
     const h = harness([descriptor("studio-01", true), descriptor("studio-02")]);
     h.client.start();
@@ -232,6 +450,84 @@ describe("HostMetricsClient", () => {
     h.client.dispose();
   });
 
+  it("keeps a frame's timing beside its summary, bounded by the ping it followed (#14462)", async () => {
+    const h = harness([descriptor("studio-01")]);
+    h.client.start();
+    // This Shell's pings, dated an hour back on its own clocks.
+    const longAgo = { wall: Date.now() - 3_600_000, mono: performance.now() - 3_600_000 };
+    const p = await openSessionPair(dir, {}, { clock: () => longAgo });
+    open.push(p.host, p.client);
+    h.openSession("studio-01", p.client);
+    p.client.ping();
+    await waitFor(() => p.host.peerPingNonce === 0);
+    const post = (timing: object) =>
+      p.host.post({
+        lane: Lane.CONTROL,
+        kind: ControlKind.HOST_SUMMARY,
+        body: { ...summary(1), timing } as never,
+      });
+
+    post({ sampleAgeMs: 200, afterPing: 0 });
+    await waitFor(() => h.emitted.length === 1);
+    const held = h.client.latest("studio-01")!;
+    expect(held).not.toHaveProperty("timing");
+    expect(JSON.stringify(h.emitted)).not.toContain("timing");
+    // However quick the trip looked, the frame can be as old as the ping it followed.
+    const receipt = h.client.receiptOf(held)!;
+    expect(receipt.hostAgeMs).toBe(200);
+    expect(receipt.maxAgeMs).toBeGreaterThanOrEqual(3_600_200);
+
+    post({ sampleAgeMs: 200, afterPing: 7 });
+    await waitFor(() => h.emitted.length === 2);
+    expect(h.client.receiptOf(h.client.latest("studio-01")!)).toMatchObject({
+      hostAgeMs: 200,
+      maxAgeMs: null,
+    });
+    expect(h.client.receiptOf(summary(1))).toBeNull();
+    h.client.dispose();
+  });
+
+  it("bounds a frame after a reconnect or host restart by the new session's pings alone", async () => {
+    const h = harness([descriptor("studio-01")]);
+    h.client.start();
+    const longAgo = { wall: Date.now() - 3_600_000, mono: performance.now() - 3_600_000 };
+    const before = await openSessionPair(dir, {}, { clock: () => longAgo });
+    open.push(before.host, before.client);
+    h.openSession("studio-01", before.client);
+    before.client.ping();
+    await waitFor(() => before.host.peerPingNonce === 0);
+    before.host.post({
+      lane: Lane.CONTROL,
+      kind: ControlKind.HOST_SUMMARY,
+      body: { ...summary(500), timing: { sampleAgeMs: 0, afterPing: 0 } } as never,
+    });
+    await waitFor(() => h.emitted.length === 1);
+    const old = h.client.latest("studio-01")!;
+    before.client.close("reconnecting");
+
+    // The restarted host numbers from zero again, and its clock reads earlier.
+    const now = { wall: Date.now(), mono: performance.now() };
+    const after = await openSessionPair(dir, {}, { clock: () => now });
+    open.push(after.host, after.client);
+    h.openSession("studio-01", after.client);
+    after.client.ping();
+    await waitFor(() => after.host.peerPingNonce === 0);
+    after.host.post({
+      lane: Lane.CONTROL,
+      kind: ControlKind.HOST_SUMMARY,
+      body: { ...summary(1), timing: { sampleAgeMs: 50, afterPing: 0 } } as never,
+    });
+    await waitFor(() => h.emitted.length === 2);
+    const fresh = h.client.latest("studio-01")!;
+    expect(fresh.sampledAt).toBe(1);
+    const bound = h.client.receiptOf(fresh)!.maxAgeMs!;
+    expect(bound).toBeGreaterThanOrEqual(50);
+    expect(bound).toBeLessThan(3_600_000);
+    // The summary from before keeps the bound its own session gave it.
+    expect(h.client.receiptOf(old)!.maxAgeMs).toBeGreaterThanOrEqual(3_600_000);
+    h.client.dispose();
+  });
+
   it("presents attention only for hosts the user opted in to", async () => {
     const h = harness([descriptor("quiet"), descriptor("loud", true)]);
     h.client.start();
@@ -243,6 +539,7 @@ describe("HostMetricsClient", () => {
     const payload = {
       kind: "waiting",
       terminalId: "t1",
+      projectId: "p1",
       projectName: "app",
       agentName: "Claude",
       quiet: true,
@@ -256,11 +553,34 @@ describe("HostMetricsClient", () => {
         hostName: "name-loud",
         kind: "waiting",
         terminalId: "t1",
+        projectId: "p1",
         projectName: "app",
         agentName: "Claude",
         quiet: true,
       },
     ]);
+    h.client.dispose();
+  });
+
+  it("carries the host's project id, a null one, and none from a host that predates it", async () => {
+    const h = harness([descriptor("loud", true)]);
+    h.client.start();
+    const loud = await openSessionPair(dir);
+    open.push(loud.host, loud.client);
+    h.openSession("loud", loud.client);
+    const base = { kind: "waiting", projectName: "app", agentName: null, quiet: false };
+    await loud.host.call(MetricsLinkMethod.ATTENTION, {
+      ...base,
+      terminalId: "a",
+      projectId: "p9",
+    });
+    await loud.host.call(MetricsLinkMethod.ATTENTION, {
+      ...base,
+      terminalId: "b",
+      projectId: null,
+    });
+    await loud.host.call(MetricsLinkMethod.ATTENTION, { ...base, terminalId: "c" });
+    expect(h.attention.map((e) => e.projectId)).toEqual(["p9", null, null]);
     h.client.dispose();
   });
 
@@ -359,6 +679,40 @@ describe("HostMetricsClient", () => {
     }
     expect(h.attention).toHaveLength(6);
     expect(h.attention[0]).toMatchObject({ projectName: "ppa", agentName: null });
+    h.client.dispose();
+  });
+
+  it("judges a host's waiting agent by this machine's choices, before its notice budget (#14701)", async () => {
+    let policy: "silent" | "quiet" | "announce" = "silent";
+    const h = harness([descriptor("loud", true)], { waitingPolicy: () => policy });
+    h.client.start();
+    const loud = await openSessionPair(dir);
+    open.push(loud.host, loud.client);
+    h.openSession("loud", loud.client);
+    const attend = (terminalId: string, quiet = false) =>
+      loud.host.call(MetricsLinkMethod.ATTENTION, {
+        kind: "waiting",
+        terminalId,
+        projectName: null,
+        agentName: null,
+        quiet,
+      });
+
+    // Waiting alerts off here: nothing shows, and none of the host's share is spent.
+    for (let i = 0; i < 8; i++) await attend(`off-${i}`);
+    expect(h.attention).toEqual([]);
+
+    policy = "quiet";
+    await attend("quiet");
+    policy = "announce";
+    await attend("loud");
+    // An older host that judged it quiet by its own hours still can't make it loud.
+    await attend("host-quiet", true);
+    expect(h.attention.map((e) => [e.terminalId, e.quiet])).toEqual([
+      ["quiet", true],
+      ["loud", false],
+      ["host-quiet", true],
+    ]);
     h.client.dispose();
   });
 
@@ -497,6 +851,24 @@ describe("HostMetricsClient", () => {
       h.client.submitFleet({ hostId: "studio-01", terminalId: "t1", text: "x", opId: "op-3" })
     ).rejects.toMatchObject({ code: "DRIVEN_ELSEWHERE" });
     expect(h.calls).toHaveLength(1);
+    h.client.dispose();
+  });
+
+  it("tells summary listeners of each recorded summary without dialling anything (#14463)", () => {
+    const h = harness([descriptor("studio-01")]);
+    h.client.start();
+    const heard: string[] = [];
+    const off = h.client.onSummary((hostId) => heard.push(hostId));
+    const offThrowing = h.client.onSummary(() => {
+      throw new Error("listener broke");
+    });
+    h.client.record("studio-01", summary(1));
+    offThrowing();
+    off();
+    h.client.record("studio-01", summary(2));
+    expect(heard).toEqual(["studio-01"]);
+    expect(h.client.latest("studio-01")?.sampledAt).toBe(2);
+    expect(h.connect).not.toHaveBeenCalled();
     h.client.dispose();
   });
 

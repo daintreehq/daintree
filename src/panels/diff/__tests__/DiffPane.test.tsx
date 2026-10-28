@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type { ReactNode } from "react";
-import { act, render, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GitStatus } from "@shared/types/git";
 import type { DiffChangeSetEntry } from "@shared/types/git";
@@ -278,6 +278,31 @@ describe("DiffPane — current-file resolution", () => {
     // The viewed marker follows the resolved entry, not the first path match.
     fireEvent.click(screen.getByRole("button", { name: "Viewed" }));
     expect(toggleViewedMock).toHaveBeenCalledWith(WORKTREE_PATH, "unstaged:a.ts");
+  });
+
+  it("fetches each twin of a partially staged file from its own side of the index", () => {
+    const changeSet: DiffChangeSetEntry[] = [
+      { path: "a.ts", status: "modified", viewedKey: "staged:a.ts", side: "staged" },
+      { path: "a.ts", status: "modified", viewedKey: "unstaged:a.ts", side: "unstaged" },
+    ];
+    const sourcesFor = (viewedKey: string) => {
+      useDiffContentMock.mockClear();
+      seedPanel({ filePath: "a.ts", fileStatus: "modified", viewedKey, changeSet });
+      renderPane();
+      const [subject, nextSubject] = useDiffContentMock.mock.calls.at(-1)!;
+      return [subject?.source, nextSubject?.source];
+    };
+
+    expect(sourcesFor("staged:a.ts")).toEqual(["staged", "unstaged"]);
+    cleanup();
+    expect(sourcesFor("unstaged:a.ts")[0]).toBe("unstaged");
+  });
+
+  it("leaves entries that name no side on the panel's own source", () => {
+    seedPanel({ filePath: "a.ts", fileStatus: "modified", changeSet: [entry("a.ts")] });
+    renderPane();
+
+    expect(useDiffContentMock.mock.calls.at(-1)![0]?.source).toBe("working-tree");
   });
 
   it("falls back to path+status when the cursor names an entry the set no longer has", () => {

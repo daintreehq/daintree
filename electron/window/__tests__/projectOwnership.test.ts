@@ -265,6 +265,43 @@ describe("releaseCachedOwner", () => {
     expect(releaseCachedOwner(null, "p", "P")).toBeNull();
   });
 
+  it.each([
+    ["takes a project still coming back in the background there", true],
+    ["still fails for a view loading for that window's own switch", false],
+  ])("%s", (_label, backgroundRestore) => {
+    const pvm = {
+      ...makePvm("q", ["q"]),
+      getAllViews: vi.fn(() => [
+        { projectId: "studio-01:p", state: "loading", view: { webContents: makeWebContents() } },
+      ]),
+      releaseCachedView: vi.fn(() => false),
+      abandonBackgroundRestore: vi.fn(() => backgroundRestore),
+    };
+    const owner = {
+      context: makeContext(2, pvm as never),
+      projectViewManager: pvm,
+      state: "cached",
+    } as never;
+    if (backgroundRestore) {
+      expect(releaseCachedOwner(owner, "studio-01:p", "P")).toBeNull();
+    } else {
+      expect(() => releaseCachedOwner(owner, "studio-01:p", "P")).toThrow(
+        expect.objectContaining({ code: "PROJECT_OPEN_FAILED" })
+      );
+    }
+    expect(pvm.abandonBackgroundRestore).toHaveBeenCalledWith("studio-01:p");
+  });
+
+  it("never abandons anything for a settled cached view it can't release", () => {
+    const { owner, pvm } = ownerIn("cached", false);
+    const abandon = vi.fn(() => true);
+    Object.assign(pvm, { abandonBackgroundRestore: abandon });
+    expect(() => releaseCachedOwner(owner, "p", "P")).toThrow(
+      expect.objectContaining({ code: "PROJECT_OPEN_FAILED" })
+    );
+    expect(abandon).not.toHaveBeenCalled();
+  });
+
   it("leaves a cached view alone while its own window is switching to it", () => {
     const { owner, pvm } = ownerIn("cached", true);
     const release = claimProjectActivation("p", 2);

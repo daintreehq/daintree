@@ -99,12 +99,15 @@ type LegacyStoreV0 = Omit<
   | "forgeAudit"
   | "runHistory"
   | "pluginMcpAudit"
+  | "voiceInput"
 > & {
   appState: Omit<StoreSchema["appState"], "terminals"> & {
     terminals: Array<Omit<StoreSchema["appState"]["terminals"][number], "location">>;
     /** Retired by migration 019. */
     fleetDeckOpen: boolean;
   };
+  /** Retired by migration 035. */
+  hibernation: { enabled: boolean; inactiveThresholdHours: number };
   notificationSettings: Omit<
     StoreSchema["notificationSettings"],
     | "completedSoundFile"
@@ -142,6 +145,11 @@ type LegacyStoreV0 = Omit<
   forgeAudit: Omit<StoreSchema["forgeAudit"], "auditLog"> & { auditLog: RingRecord[] };
   runHistory: { records: RingRecord[] };
   pluginMcpAudit: Omit<StoreSchema["pluginMcpAudit"], "auditLog"> & { auditLog: RingRecord[] };
+  // `deviceLabel` came later with no migration; reads fill it from defaults.
+  voiceInput: Omit<StoreSchema["voiceInput"], "dictionary" | "deviceLabel"> & {
+    /** Turned into `dictionary` entries by migration 036. */
+    customDictionary: string[];
+  };
 };
 
 /**
@@ -298,7 +306,12 @@ export function createHeavyMigrationFixture(): LegacyStoreV0 {
     idleTerminalNotifiedAt: {},
     parkedRuns: {},
     snoozedRuns: {},
-    idleBackgroundAutoClose: { enabled: false, thresholdMinutes: 15 },
+    idleBackgroundAutoClose: {
+      enabled: false,
+      thresholdMinutes: 15,
+      includeIdleShells: false,
+      idleShellThresholdMinutes: 60,
+    },
     pluginBackgroundUpdateCheck: { enabled: false, lastCheckedAt: null },
     appState: {
       activeWorktreeId: "wt-0",
@@ -351,6 +364,7 @@ export function createHeavyMigrationFixture(): LegacyStoreV0 {
       enabled: true,
       openaiApiKey: "",
       deepgramApiKey: "",
+      xaiApiKey: "",
       language: "en",
       customDictionary: [],
       transcriptionProvider: "deepgram",
@@ -365,6 +379,7 @@ export function createHeavyMigrationFixture(): LegacyStoreV0 {
       projectId: "",
       recordingMode: "push-to-talk",
       suggestedDictionary: [],
+      dismissedSuggestions: [],
       learnFromCorrections: false,
     },
     mcpServer: {
@@ -661,7 +676,12 @@ export interface MigrationGrade {
   notificationMisses: number;
   /** 009/020 — the legacy window geometry reaches the window-states store. */
   windowStateMisses: number;
-  /** 012 — every surviving agent entry is pinned-shaped. */
+  /**
+   * 012/039 — every surviving agent entry lost `selected`/`enabled` (012) and
+   * then the pin 012 gave it (039). This corpus is below agent-settings
+   * `settingsVersion` 1, whose pins were never shown, so none reach this
+   * machine's `agentToolbarPins`, which 039 still has to create.
+   */
   agentPinMisses: number;
   /** 013 — the 100 phantom pins are gone and exactly 100 entries remain. */
   phantomPinMisses: number;
@@ -923,7 +943,7 @@ async function buildHarness(): Promise<MigrationHarness> {
           agentPresetMisses += 1;
           continue;
         }
-        if (entry.pinned !== (i % 3 !== 0)) agentPinMisses += 1;
+        if ("pinned" in entry) agentPinMisses += 1;
         if ("selected" in entry) agentPinMisses += 1;
         if ("enabled" in entry) agentPinMisses += 1;
         if (entry.presetId !== `preset-${i}`) agentPresetMisses += 1;
@@ -932,6 +952,9 @@ async function buildHarness(): Promise<MigrationHarness> {
         const presets = entry.customPresets;
         if (!Array.isArray(presets) || presets[0] !== `custom-${i}`) agentPresetMisses += 1;
       }
+
+      const toolbarPins = asRecord(config.agentToolbarPins);
+      agentPinMisses += toolbarPins === null ? 1 : Object.keys(toolbarPins).length;
 
       // --- 018
       let notesArchiveMisses = 0;
@@ -963,10 +986,11 @@ async function buildHarness(): Promise<MigrationHarness> {
         auditRingMisses += Math.abs(ringLength(auditLogs, key) - expected);
       }
 
-      // --- 004 / 005 / 007 / 014 / 015 / 019 / 021 / 024 / 025 / 026 / 027
+      // --- 004 / 005 / 007 / 014 / 015 / 019 / 021 / 024 / 025 / 026 / 027 / 040
       let scalarMigrationMisses = 0;
       const voice = asRecord(config.voiceInput);
-      if (voice?.correctionModel !== "gpt-5.6-luna") scalarMigrationMisses += 1;
+      // 025 lands the fixture's gpt-5-nano on gpt-5.6-luna, then 040 moves it on.
+      if (voice?.correctionModel !== "gpt-6.1-terra") scalarMigrationMisses += 1;
       if (voice?.transcriptionModel !== "gpt-live-transcribe") scalarMigrationMisses += 1;
       if (asRecord(config.terminalConfig)?.scrollbackLines !== 1000) scalarMigrationMisses += 1;
       const checklist = asRecord(asRecord(config.onboarding)?.checklist);
@@ -1000,6 +1024,16 @@ async function buildHarness(): Promise<MigrationHarness> {
       }
       const mcpServer = asRecord(config.mcpServer);
       if (mcpServer === null || "fullToolSurface" in mcpServer) scalarMigrationMisses += 1;
+      // 035 drops the retired hibernation setting outright.
+      if ("hibernation" in config) scalarMigrationMisses += 1;
+      // 036 replaces the flat word list with structured entries.
+      if (voice === null || "customDictionary" in voice || !Array.isArray(voice.dictionary)) {
+        scalarMigrationMisses += 1;
+      }
+      // 037 turns dictation cleanup on over the fixture's stored `false`.
+      if (voice?.correctionEnabled !== true) scalarMigrationMisses += 1;
+      // 038 moves only toggle onto tap-or-hold; the fixture's push-to-talk stays.
+      if (voice?.recordingMode !== "push-to-talk") scalarMigrationMisses += 1;
       // 029 keys the single tour record to the built-in tour and hoists mute.
       const onboarding = asRecord(config.onboarding);
       if (onboarding === null || "tour" in onboarding) scalarMigrationMisses += 1;

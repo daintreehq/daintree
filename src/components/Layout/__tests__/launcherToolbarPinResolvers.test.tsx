@@ -119,11 +119,11 @@ describe("isAgentButtonOnToolbar (#11680)", () => {
     // A fresh profile pins from the launcher before any array write lands, and
     // `buildInitialAgentPinUpdates` stamps `true` for the first few installed
     // agents with no position at all.
-    expect(isAgentButtonOnToolbar({ pinned: true }, "missing", false)).toBe(true);
+    expect(isAgentButtonOnToolbar(true, "missing", false)).toBe(true);
   });
 
   it("lets an explicit hide win over a position", () => {
-    expect(isAgentButtonOnToolbar({ pinned: false }, "ready", true)).toBe(false);
+    expect(isAgentButtonOnToolbar(false, "ready", true)).toBe(false);
   });
 });
 

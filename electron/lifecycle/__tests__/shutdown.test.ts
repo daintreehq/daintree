@@ -207,11 +207,6 @@ vi.mock("../../services/HelpSessionService.js", () => ({
   helpSessionService: helpSessionMock,
 }));
 
-const hibernationMock = vi.hoisted(() => ({ stop: vi.fn() }));
-vi.mock("../../services/HibernationService.js", () => ({
-  getHibernationService: vi.fn(() => hibernationMock),
-}));
-
 const idleTerminalMock = vi.hoisted(() => ({ stop: vi.fn() }));
 vi.mock("../../services/IdleTerminalNotificationService.js", () => ({
   getIdleTerminalNotificationService: vi.fn(() => idleTerminalMock),
@@ -313,6 +308,12 @@ const deferredInitQueueMock = vi.hoisted(() => ({
 }));
 
 vi.mock("../../window/deferredInitQueue.js", () => deferredInitQueueMock);
+
+const memoryLeakAutoRestartMock = vi.hoisted(() => ({
+  disposeMemoryLeakAutoRestart: vi.fn(),
+}));
+
+vi.mock("../../services/MemoryLeakAutoRestartService.js", () => memoryLeakAutoRestartMock);
 
 const openWindowsTrackerMock = vi.hoisted(() => ({
   freezeAndSnapshotOpenWindows: vi.fn(),
@@ -534,6 +535,87 @@ describe("registerShutdownHandler", () => {
     expect(quitWarningMock.showQuitWarning).toHaveBeenCalled();
     expect(crashRecoveryMock.cleanupOnExit).not.toHaveBeenCalled();
     expect(appMock.exit).not.toHaveBeenCalled();
+  });
+
+  it("asks before quitting when a Shell is attached, even with no agents working", async () => {
+    quitWarningMock.getActiveAgentCount.mockReturnValue(0);
+    quitWarningMock.showQuitWarning.mockResolvedValue(false);
+    const { setAttachedShellsProvider } = await import("../attachedShells.js");
+    setAttachedShellsProvider(() => [{ clientName: "MacBook Pro" }]);
+
+    try {
+      const { beforeQuitCb } = await setup({
+        windowRegistry: {
+          getPrimary: () => ({ browserWindow: {} as Electron.BrowserWindow }),
+        } as unknown as ShutdownDeps["windowRegistry"],
+      });
+      const event = makeEvent();
+      await beforeQuitCb(event);
+
+      expect(quitWarningMock.showQuitWarning).toHaveBeenCalledWith(
+        { activeAgents: 0, attachedShells: [{ clientName: "MacBook Pro" }] },
+        expect.anything(),
+        expect.anything()
+      );
+      expect(appMock.exit).not.toHaveBeenCalled();
+    } finally {
+      setAttachedShellsProvider(null);
+    }
+  });
+
+  it("holds the shared confirmation flag while the quit dialog is open", async () => {
+    const { isExitConfirmationPending } = await import("../attachedShells.js");
+    let answer: (confirmed: boolean) => void = () => {};
+    quitWarningMock.getActiveAgentCount.mockReturnValue(1);
+    quitWarningMock.showQuitWarning.mockReturnValue(
+      new Promise<boolean>((resolve) => {
+        answer = resolve;
+      })
+    );
+
+    const { beforeQuitCb } = await setup({
+      windowRegistry: {
+        getPrimary: () => ({ browserWindow: {} as Electron.BrowserWindow }),
+      } as unknown as ShutdownDeps["windowRegistry"],
+    });
+    const pending = beforeQuitCb(makeEvent());
+    expect(isExitConfirmationPending()).toBe(true);
+    answer(false);
+    await pending;
+    expect(isExitConfirmationPending()).toBe(false);
+  });
+
+  it("does not let a pending update dialog hold back a signal shutdown", async () => {
+    const { setExitConfirmationPending } = await import("../attachedShells.js");
+    signalShutdownMock.isSignalShutdown.mockReturnValue(true);
+    setExitConfirmationPending(true);
+
+    try {
+      const { beforeQuitCb } = await setup();
+      const exited = new Promise<void>((resolve) => {
+        appMock.exit.mockImplementationOnce(() => resolve());
+      });
+      await beforeQuitCb(makeEvent());
+      await exited;
+
+      expect(crashRecoveryMock.cleanupOnExit).toHaveBeenCalled();
+    } finally {
+      setExitConfirmationPending(false);
+    }
+  });
+
+  it("does not ask about attached Shells when there is no window to ask in", async () => {
+    const { setAttachedShellsProvider } = await import("../attachedShells.js");
+    setAttachedShellsProvider(() => [{ clientName: "MacBook Pro" }]);
+
+    try {
+      const { beforeQuitCb } = await setup();
+      await beforeQuitCb(makeEvent());
+
+      expect(quitWarningMock.showQuitWarning).not.toHaveBeenCalled();
+    } finally {
+      setAttachedShellsProvider(null);
+    }
   });
 
   it("halts the deferred init queue before the cleanup chain starts", async () => {
@@ -955,7 +1037,7 @@ describe("registerShutdownHandler", () => {
   // reactivation could race the async teardown. They now live in `before-quit`
   // so they are disposed exactly once at app quit time.
   describe("global service disposal moved from last-window-close (issue #8604)", () => {
-    it("disposes hibernation, idle-terminal, system-sleep, and the connectivity registry", async () => {
+    it("disposes idle-terminal, system-sleep, and the connectivity registry", async () => {
       const { beforeQuitCb } = await setup({});
       await beforeQuitCb(makeEvent());
 
@@ -963,7 +1045,6 @@ describe("registerShutdownHandler", () => {
         expect(appMock.exit).toHaveBeenCalledWith(0);
       });
 
-      expect(hibernationMock.stop).toHaveBeenCalledTimes(1);
       expect(idleTerminalMock.stop).toHaveBeenCalledTimes(1);
       expect(systemSleepMock.dispose).toHaveBeenCalledTimes(1);
       expect(connectivityRegistryMock.dispose).toHaveBeenCalledTimes(1);
@@ -1066,8 +1147,8 @@ describe("registerShutdownHandler", () => {
     });
 
     it("still exits cleanly when a moved disposal throws", async () => {
-      hibernationMock.stop.mockImplementationOnce(() => {
-        throw new Error("hibernation boom");
+      idleTerminalMock.stop.mockImplementationOnce(() => {
+        throw new Error("idle-terminal boom");
       });
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
@@ -1079,11 +1160,11 @@ describe("registerShutdownHandler", () => {
       });
 
       expect(warnSpy).toHaveBeenCalledWith(
-        "[MAIN] HibernationService.stop failed:",
+        "[MAIN] IdleTerminalNotificationService.stop failed:",
         expect.any(Error)
       );
       // Sibling disposals still run.
-      expect(idleTerminalMock.stop).toHaveBeenCalled();
+      expect(systemSleepMock.dispose).toHaveBeenCalled();
       expect(notificationServiceMock.dispose).toHaveBeenCalled();
 
       warnSpy.mockRestore();
@@ -1422,6 +1503,31 @@ describe("registerShutdownHandler", () => {
       expect(record.agentId).toBe("claude");
       expect(record.cwd).toBe("/repo");
       expect(record.branch).toBe("feature/x");
+      // Quitting closed nothing the user had: never a Trash entry.
+      expect(record.closedBy).toBe("shutdown");
+      expect(record.trash).toBeUndefined();
+    });
+
+    it("stops the memory-leak auto-restart before any terminal is snapshotted or killed (#14703)", async () => {
+      // A restart decided mid-quit would relaunch a terminal behind the sweep
+      // and overwrite the session the writeback below persists for it.
+      projectStoreMock.getAllProjects.mockReturnValue([{ id: "proj-1" }] as never);
+      const getAllTerminalsAsync = vi.fn(async () => [agentTerminal]);
+      const gracefulKillByProject = vi.fn(async () => [{ id: "t1", agentSessionId: "sess-1" }]);
+      const ptyClient = makePtyClient({ getAllTerminalsAsync, gracefulKillByProject });
+      const { beforeQuitCb } = await setup({ getPtyClient: () => ptyClient });
+
+      await beforeQuitCb(makeEvent());
+      await vi.waitFor(() => expect(appMock.exit).toHaveBeenCalled());
+
+      const { disposeMemoryLeakAutoRestart } = memoryLeakAutoRestartMock;
+      expect(disposeMemoryLeakAutoRestart).toHaveBeenCalledTimes(1);
+      const disposedAt = disposeMemoryLeakAutoRestart.mock.invocationCallOrder[0]!;
+      expect(disposedAt).toBeLessThan(getAllTerminalsAsync.mock.invocationCallOrder[0]!);
+      expect(disposedAt).toBeLessThan(gracefulKillByProject.mock.invocationCallOrder[0]!);
+      expect(disposedAt).toBeLessThan(
+        projectStoreMock.enqueueProjectStateUpdate.mock.invocationCallOrder[0]!
+      );
     });
 
     describe("passive capture barrier (#12433)", () => {

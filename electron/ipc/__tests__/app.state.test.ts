@@ -102,6 +102,7 @@ vi.mock("../../services/ProjectStore.js", () => ({
     getAllProjects: vi.fn(() => []),
     getProjectById: vi.fn(() => null),
     getProjectStateWithRecovery: vi.fn(),
+    wasStateUnreadableThisSession: vi.fn(() => false),
     saveProjectState: vi.fn(),
     enqueueProjectStateUpdate: vi.fn(async () => undefined),
     readInRepoPresets: vi.fn(async () => ({})),
@@ -172,6 +173,13 @@ vi.mock("../../services/prefetchHydrateCache.js", () => ({
   consumePrefetchedHydrateResult: vi.fn(() => null),
 }));
 
+// Decided by default, the steady state of every project past its first open,
+// so the cache tests below are not also first-hydrate tests (#13782).
+vi.mock("../../services/plugin/projectLayoutSeeds.js", () => ({
+  getProjectLayoutSeed: vi.fn(() => ({ status: "settled", at: 0 })),
+  captureProjectLayoutSeed: vi.fn(),
+}));
+
 vi.mock("../../window/webContentsRegistry.js", () => ({
   getWindowForWebContents: vi.fn(() => null),
   getAppWebContents: vi.fn(() => null),
@@ -179,16 +187,24 @@ vi.mock("../../window/webContentsRegistry.js", () => ({
   getProjectForWebContents: vi.fn(() => null),
 }));
 
+const broadcastToRendererMock = vi.hoisted(() => vi.fn());
+
 vi.mock("../../ipc/utils.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../ipc/utils.js")>();
   return {
     ...actual,
     assertIpcSecurityReady: vi.fn(),
+    broadcastToRenderer: broadcastToRendererMock,
   };
 });
 
 import { registerAppStateHandlers } from "../handlers/app/state.js";
+import { CHANNELS } from "../channels.js";
 import { consumePrefetchedHydrateResult } from "../../services/prefetchHydrateCache.js";
+import {
+  captureProjectLayoutSeed,
+  getProjectLayoutSeed,
+} from "../../services/plugin/projectLayoutSeeds.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import { getWindowForWebContents } from "../../window/webContentsRegistry.js";
 import { markPerformance } from "../../utils/performance.js";
@@ -256,6 +272,8 @@ describe("app:boot handler", () => {
       state: null,
       quarantinedPath: undefined,
     });
+    vi.mocked(projectStore.wasStateUnreadableThisSession).mockReturnValue(false);
+    vi.mocked(getProjectLayoutSeed).mockReturnValue({ status: "settled", at: 0 });
   });
 
   it("boots with the effective cached-view count when none is stored, as terminalConfig.get reports it", async () => {
@@ -462,6 +480,126 @@ describe("app:boot handler", () => {
     expect(result.quarantinedPanels.map((p) => p.id)).toEqual(["other-project-bad"]);
   });
 
+  describe("agents an unclean end cut short (#14382)", () => {
+    const project = { id: "proj-a", name: "A", path: "/projects/a" };
+    const HOST_END = { cause: "watchdog-deadlock", at: 5_000, missedBeats: 3 };
+    let saved: Record<string, unknown>;
+    let events: unknown;
+
+    beforeEach(async () => {
+      vi.mocked(projectStore.getCurrentProject).mockReturnValue(
+        project as unknown as ReturnType<typeof projectStore.getCurrentProject>
+      );
+      vi.mocked(projectStore.getProjectById).mockReturnValue(
+        project as unknown as ReturnType<typeof projectStore.getProjectById>
+      );
+      saved = {
+        projectId: project.id,
+        sidebarWidth: 350,
+        terminals: [
+          {
+            id: "agent",
+            kind: "terminal",
+            launchAgentId: "claude",
+            agentSessionId: "sess-1",
+            title: "Claude",
+            location: "grid",
+            cwd: "/projects/a",
+          },
+        ],
+      };
+      // The save lands a tick later, as a queued write does.
+      vi.mocked(projectStore.enqueueProjectStateUpdate).mockImplementation(async (_id, updater) => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        const next = await updater(saved as never);
+        if (next) saved = next as unknown as Record<string, unknown>;
+      });
+      vi.mocked(projectStore.getProjectStateWithRecovery).mockImplementation(async () => ({
+        state: structuredClone(saved) as never,
+        quarantinedPath: undefined,
+      }));
+      events = [{ crashId: "c1", ...HOST_END, workspaceIds: [project.id] }];
+      const storeModule = await import("../../store.js");
+      vi.mocked(storeModule.store.get).mockImplementation(((key: string) =>
+        key === "hostEndRestoreHolds"
+          ? events
+          : defaultStoreGet(key)) as typeof storeModule.store.get);
+      vi.mocked(storeModule.store.set).mockImplementation(((key: string, value: unknown) => {
+        if (key === "hostEndRestoreHolds") events = value;
+        else defaultStoreSet(key, value);
+      }) as typeof storeModule.store.set);
+      vi.mocked(storeModule.store.delete).mockImplementation(((key: string) => {
+        if (key === "hostEndRestoreHolds") events = undefined;
+      }) as typeof storeModule.store.delete);
+    });
+
+    type Hydrated = { appState: { terminals: Array<{ id: string; restoreRecovery?: unknown }> } };
+
+    it("hands them back held, and a pane resumed afterwards stays resumed", async () => {
+      const result = (await invokeBoot()) as Hydrated;
+
+      expect(result.appState.terminals[0].restoreRecovery).toEqual({
+        reason: "host-ended-uncleanly",
+        sessionId: "sess-1",
+        hostEnd: HOST_END,
+      });
+      expect((saved.terminals as Array<{ restoreRecovery?: unknown }>)[0].restoreRecovery).toEqual(
+        result.appState.terminals[0].restoreRecovery
+      );
+      expect(events).toBeUndefined();
+
+      // The user resumes it; the next restore leaves it to resume as usual.
+      (saved.terminals as Array<Record<string, unknown>>)[0].restoreRecovery = undefined;
+      const next = (await invokeBoot()) as Hydrated;
+      expect(next.appState.terminals[0].restoreRecovery).toBeUndefined();
+    });
+
+    it("still hands them back held when saving the hold fails, and stays due", async () => {
+      vi.mocked(projectStore.enqueueProjectStateUpdate).mockRejectedValueOnce(new Error("disk"));
+
+      const result = (await invokeBoot()) as Hydrated;
+
+      expect(result.appState.terminals[0].restoreRecovery).toMatchObject({
+        reason: "host-ended-uncleanly",
+        hostEnd: HOST_END,
+      });
+      expect(events).toEqual([expect.objectContaining({ workspaceIds: [project.id] })]);
+    });
+
+    it("saves held the legacy terminals a first open migrates", async () => {
+      legacyOwnerRef.current = project.id;
+      globalAppStateRef.current = {
+        ...globalAppStateRef.current,
+        terminals: (saved.terminals as unknown[]).map((t) => ({ ...(t as object) })),
+      };
+      saved = {};
+      vi.mocked(projectStore.getProjectStateWithRecovery).mockResolvedValue({
+        state: null,
+        quarantinedPath: undefined,
+      });
+
+      await invokeBoot();
+
+      expect(
+        (saved.terminals as Array<{ restoreRecovery?: unknown }>)[0].restoreRecovery
+      ).toMatchObject({
+        reason: "host-ended-uncleanly",
+      });
+    });
+
+    it("never serves a cached payload built before the hold", async () => {
+      legacyOwnerRef.current = project.id;
+      vi.mocked(consumePrefetchedHydrateResult).mockReturnValue({
+        appState: { terminals: [{ id: "agent" }] },
+      } as never);
+
+      const result = (await invokeBoot()) as Hydrated;
+
+      expect(consumePrefetchedHydrateResult).not.toHaveBeenCalled();
+      expect(result.appState.terminals[0].restoreRecovery).toBeDefined();
+    });
+  });
+
   it("does not consult the ledger filter outside of safe mode", async () => {
     crashGuard.isSafeMode.mockReturnValue(false);
     panelSuspectLedger.getQuarantinedPanelIds.mockReturnValue(new Set(["a"]));
@@ -496,7 +634,8 @@ describe("app:boot handler", () => {
 
   it("propagates the cache-hit fast path from handleAppHydrate (no disk read)", async () => {
     const cachedResult = {
-      appState: { terminals: [], sidebarWidth: 350 },
+      // Nothing the slow path would build, so only the cache can supply it.
+      appState: { terminals: [], sidebarWidth: 777 },
       terminalConfig: {
         scrollbackLines: 3000,
         performanceMode: false,
@@ -524,11 +663,60 @@ describe("app:boot handler", () => {
       path: "/p",
     } as unknown as ReturnType<typeof projectStoreModule.projectStore.getCurrentProject>);
     legacyOwnerRef.current = "p1";
+    // Saved since the hover.
+    const storeModule = await import("../../store.js");
+    vi.mocked(storeModule.store.get).mockImplementation((key: string) =>
+      key === "terminalConfig"
+        ? { scrollbackLines: 2500, performanceMode: true, resourceMonitoringEnabled: false }
+        : defaultStoreGet(key)
+    );
 
     const result = (await invokeBoot()) as Record<string, unknown>;
-    expect(result.terminalConfig).toEqual(cachedResult.terminalConfig);
+    expect(result.appState).toEqual(cachedResult.appState);
+    expect(projectStoreModule.projectStore.getProjectStateWithRecovery).not.toHaveBeenCalled();
+    // The saved values, not the prefetch's copy (#14699).
+    expect(result.terminalConfig).toMatchObject({
+      scrollbackLines: 2500,
+      performanceMode: true,
+      resourceMonitoringEnabled: false,
+    });
     expect(result.crashPending).toBeNull();
     expect(result.crashConfig).toEqual({ autoRestoreOnCrash: false });
+  });
+
+  it("answers the grid and agent settings saved since the hover on the cache-hit path", async () => {
+    vi.mocked(consumePrefetchedHydrateResult).mockReturnValue({
+      appState: { terminals: [], panelGridConfig: { strategy: "automatic", value: 3 } },
+      terminalConfig: { scrollbackLines: 3000, performanceMode: false },
+      project: null,
+      agentSettings: { agents: {}, globalSkipPermissions: false },
+      agentDefaults: { defaultAgent: "claude" },
+    } as unknown as ReturnType<typeof consumePrefetchedHydrateResult>);
+    vi.mocked(projectStore.getCurrentProject).mockReturnValue({
+      id: "p1",
+      name: "P",
+      path: "/p",
+    } as unknown as ReturnType<typeof projectStore.getCurrentProject>);
+    legacyOwnerRef.current = "p1";
+    const storeModule = await import("../../store.js");
+    vi.mocked(storeModule.store.get).mockImplementation(((key: string) => {
+      if (key === "appState.panelGridConfig") return { strategy: "fixed-rows", value: 2 };
+      if (key === "agentSettings") {
+        return { agents: {}, globalSkipPermissions: true, defaultAgent: "codex" };
+      }
+      return defaultStoreGet(key);
+    }) as typeof storeModule.store.get);
+
+    const result = (await invokeBoot()) as {
+      appState: Record<string, unknown>;
+      agentSettings: Record<string, unknown>;
+      agentDefaults: Record<string, unknown>;
+    };
+
+    expect(consumePrefetchedHydrateResult).toHaveBeenCalledWith("p1");
+    expect(result.appState.panelGridConfig).toEqual({ strategy: "fixed-rows", value: 2 });
+    expect(result.agentSettings).toMatchObject({ globalSkipPermissions: true });
+    expect(result.agentDefaults).toEqual({ defaultAgent: "codex" });
   });
 
   it("surfaces the boot-time database recovery on the slow path", async () => {
@@ -1514,6 +1702,128 @@ describe("app:boot handler", () => {
       expect(calls[0]![1]).toEqual({ hit: false, projectId: "p1", reason: "panel-filter" });
       expect(consumePrefetchedHydrateResult).not.toHaveBeenCalled();
     });
+
+    it("skips the cache for a project whose first-open layout seed is undecided", async () => {
+      // The prefetch skips the state read the seed is decided from (#13782).
+      setCurrentProject();
+      vi.mocked(getProjectLayoutSeed).mockReturnValue(null);
+
+      await invokeBoot();
+
+      const calls = prefetchMarkCalls();
+      expect(calls[0]![1]).toEqual({
+        hit: false,
+        projectId: "p1",
+        reason: "layout-seed-undecided",
+      });
+      expect(consumePrefetchedHydrateResult).not.toHaveBeenCalled();
+      expect(captureProjectLayoutSeed).toHaveBeenCalledWith("p1", true);
+    });
+
+    it("still uses the cache when the seed record can't be read", async () => {
+      setCurrentProject();
+      vi.mocked(getProjectLayoutSeed).mockImplementationOnce(() => {
+        throw new Error("EACCES");
+      });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      await invokeBoot();
+
+      expect(prefetchMarkCalls()[0]![1]).toEqual({ hit: false, projectId: "p1", reason: "miss" });
+      warn.mockRestore();
+    });
+  });
+
+  describe("first-open layout seed (#13782)", () => {
+    const setCurrentProject = () => {
+      vi.mocked(projectStore.getCurrentProject).mockReturnValue({
+        id: "p1",
+        name: "P",
+        path: "/p",
+      } as unknown as ReturnType<typeof projectStore.getCurrentProject>);
+      legacyOwnerRef.current = "p1";
+    };
+
+    it("records a project with no saved state as a first open", async () => {
+      setCurrentProject();
+      await invokeBoot();
+      expect(captureProjectLayoutSeed).toHaveBeenCalledWith("p1", true);
+    });
+
+    it("records a project with saved state, even an empty one, as not a first open", async () => {
+      setCurrentProject();
+      vi.mocked(projectStore.getProjectStateWithRecovery).mockResolvedValue({
+        state: { projectId: "p1", sidebarWidth: 350, terminals: [] },
+      } as unknown as Awaited<ReturnType<typeof projectStore.getProjectStateWithRecovery>>);
+      await invokeBoot();
+      expect(captureProjectLayoutSeed).toHaveBeenCalledWith("p1", false);
+    });
+
+    it("does not count a state file that was quarantined as missing", async () => {
+      setCurrentProject();
+      vi.mocked(projectStore.getProjectStateWithRecovery).mockResolvedValue({
+        state: null,
+        quarantinedPath: "/p/state.json.corrupted.1",
+      });
+      await invokeBoot();
+      expect(captureProjectLayoutSeed).toHaveBeenCalledWith("p1", false);
+    });
+
+    it("does not count a state file that was unreadable this session as missing", async () => {
+      // Quarantine can fail to rename, leaving no recovery path to report.
+      setCurrentProject();
+      vi.mocked(projectStore.wasStateUnreadableThisSession).mockReturnValue(true);
+      await invokeBoot();
+      expect(captureProjectLayoutSeed).toHaveBeenCalledWith("p1", false);
+    });
+
+    it("does not count a safe-mode boot as a first open", async () => {
+      setCurrentProject();
+      crashGuard.isSafeMode.mockReturnValue(true);
+      await invokeBoot();
+      expect(captureProjectLayoutSeed).toHaveBeenCalledWith("p1", false);
+    });
+
+    it("does not count the heir of legacy global terminals as a first open", async () => {
+      setCurrentProject();
+      globalAppStateRef.current = {
+        ...DEFAULT_GLOBAL_APP_STATE,
+        terminals: [{ id: "t1", type: "terminal", title: "Shell", cwd: "/p", location: "grid" }],
+      };
+      await invokeBoot();
+      expect(captureProjectLayoutSeed).toHaveBeenCalledWith("p1", false);
+    });
+
+    it("still counts a project as new when another project owns the legacy terminals", async () => {
+      vi.mocked(projectStore.getCurrentProject).mockReturnValue({
+        id: "p1",
+        name: "P",
+        path: "/p",
+      } as unknown as ReturnType<typeof projectStore.getCurrentProject>);
+      globalAppStateRef.current = {
+        ...DEFAULT_GLOBAL_APP_STATE,
+        terminals: [{ id: "t1", type: "terminal", title: "Shell", cwd: "/p", location: "grid" }],
+      };
+      legacyOwnerRef.current = "p-other";
+      await invokeBoot();
+      expect(captureProjectLayoutSeed).toHaveBeenCalledWith("p1", true);
+    });
+
+    it("records nothing for a view with no project row", async () => {
+      await invokeBoot();
+      expect(captureProjectLayoutSeed).not.toHaveBeenCalled();
+    });
+
+    it("hydrates normally when the seed can't be recorded", async () => {
+      setCurrentProject();
+      vi.mocked(captureProjectLayoutSeed).mockImplementationOnce(() => {
+        throw new Error("EACCES");
+      });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const result = await invokeBoot();
+      expect(result.workspaceId).toBe("p1");
+      warn.mockRestore();
+    });
   });
 
   it("does not hydrate a closed URL project before the project view binding is ready", async () => {
@@ -1618,6 +1928,54 @@ describe("app:set-state handler", () => {
     expect(written).toMatchObject({ sidebarWidth: 350, hasSeenWelcome: true, focusMode: true });
   });
 
+  it("changes the grid strategy without touching the stored count", async () => {
+    vi.mocked(storeModule.store.get).mockImplementation(((key: string) =>
+      key === "appState"
+        ? { terminals: [], panelGridConfig: { strategy: "automatic", value: 6 } }
+        : undefined) as never);
+    await invokeSetState({ panelGridConfig: { strategy: "fixed-rows" } });
+    const calls = vi.mocked(storeModule.store.set).mock.calls as unknown as unknown[][];
+    expect((calls[0]![1] as Record<string, unknown>).panelGridConfig).toEqual({
+      strategy: "fixed-rows",
+      value: 6,
+    });
+  });
+
+  it("tells this machine's views the saved grid when it changes, and only then (#14700)", async () => {
+    vi.mocked(storeModule.store.get).mockImplementation(((key: string) =>
+      key === "appState"
+        ? { terminals: [], panelGridConfig: { strategy: "automatic", value: 6 } }
+        : undefined) as never);
+    broadcastToRendererMock.mockClear();
+
+    await invokeSetState({ panelGridConfig: { value: 6 } });
+    await invokeSetState({ sidebarWidth: 300 });
+    expect(broadcastToRendererMock).not.toHaveBeenCalledWith(
+      CHANNELS.APP_PANEL_GRID_CONFIG_CHANGED,
+      expect.anything()
+    );
+
+    await invokeSetState({ panelGridConfig: { strategy: "fixed-rows" } });
+    expect(
+      broadcastToRendererMock.mock.calls.filter(
+        ([channel]) => channel === CHANNELS.APP_PANEL_GRID_CONFIG_CHANGED
+      )
+    ).toEqual([[CHANNELS.APP_PANEL_GRID_CONFIG_CHANGED, { strategy: "fixed-rows", value: 6 }]]);
+  });
+
+  it("changes the grid count without touching the stored strategy", async () => {
+    vi.mocked(storeModule.store.get).mockImplementation(((key: string) =>
+      key === "appState"
+        ? { terminals: [], panelGridConfig: { strategy: "fixed-columns", value: 3 } }
+        : undefined) as never);
+    await invokeSetState({ panelGridConfig: { value: 5 } });
+    const calls = vi.mocked(storeModule.store.set).mock.calls as unknown as unknown[][];
+    expect((calls[0]![1] as Record<string, unknown>).panelGridConfig).toEqual({
+      strategy: "fixed-columns",
+      value: 5,
+    });
+  });
+
   it("drops cleared fields from the merged object instead of writing undefined", async () => {
     vi.mocked(storeModule.store.get).mockImplementation(((key: string) => {
       if (key === "appState") {
@@ -1652,6 +2010,37 @@ describe("app:set-state handler", () => {
 
     await invokeSetState({ focusMode: true });
     expect(crashService.scheduleBackup).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps plugin panel and worktree path MRU ids while dropping malformed ones (#13763)", async () => {
+    vi.mocked(projectStore.getCurrentProject).mockReturnValue(null);
+    const projectPluginPanel = `terminal:project:${"a".repeat(64)}/acme/dashboard-${"0".repeat(36)}`;
+
+    await invokeSetState({
+      mruList: [
+        "terminal:acme.dashboard-1234",
+        projectPluginPanel,
+        "worktree:/Users/me/repo-wt",
+        "worktree:C:\\repo\\wt",
+        "terminal:acme.dashboard-1234",
+        "terminal:",
+        "panel:x",
+        "terminal:bad\nid",
+        `terminal:${"x".repeat(1025)}`,
+        42,
+      ],
+    });
+
+    const calls = vi.mocked(storeModule.store.set).mock.calls as unknown as unknown[][];
+    const written = calls.filter((call) => call[0] === "appState").at(-1)?.[1] as {
+      mruList?: string[];
+    };
+    expect(written.mruList).toEqual([
+      "terminal:acme.dashboard-1234",
+      projectPluginPanel,
+      "worktree:/Users/me/repo-wt",
+      "worktree:C:\\repo\\wt",
+    ]);
   });
 });
 
@@ -1765,6 +2154,95 @@ describe("app:hydrate host fields", () => {
       expect.anything()
     );
   });
+
+  it("records a remote Shell view's first open of a host project as one (#13782)", async () => {
+    // The fresh state this hydrate writes is the host's, so a later local open
+    // would find it and could never count as first.
+    const { getIpcDispatcher, _resetIpcDispatcherForTesting } = await import("../dispatcher.js");
+    const { wrapSuccess } = await import("../../../shared/utils/ipcErrorSerialization.js");
+    vi.mocked(projectStore.getProjectById).mockReturnValueOnce({
+      id: "p-remote",
+      name: "R",
+      path: "/r",
+    } as never);
+    vi.mocked(projectStore.getProjectStateWithRecovery).mockResolvedValueOnce({
+      state: null,
+    } as never);
+    _resetIpcDispatcherForTesting();
+    const dispatcher = getIpcDispatcher();
+    dispatcher.setInvokeEnveloper(async (_c, _a, call) => wrapSuccess(await call()));
+    const release = dispatcher.allowHybridOverLink("app:hydrate");
+    const cleanup = registerAppStateHandlers();
+    const endpoint = {
+      endpointId: "s1:view-3",
+      clientId: "client-1",
+      projectId: "p-remote",
+      kind: "remote-view" as const,
+      handle: -6,
+      send: vi.fn(),
+      request: vi.fn(),
+      onClose: vi.fn(() => ({ dispose: () => undefined })),
+      isClosed: () => false,
+    };
+
+    await dispatcher.invokeForEndpoint(
+      { endpoint, client: { clientId: "client-1", kind: "remote" } as never },
+      "app:hydrate",
+      []
+    );
+
+    cleanup();
+    release();
+    _resetIpcDispatcherForTesting();
+    expect(captureProjectLayoutSeed).toHaveBeenCalledWith("p-remote", true);
+  });
+
+  it("does not count a remote first open as one while unclaimed legacy terminals could be its own", async () => {
+    // A remote view never claims the legacy record, so it stays unowned here
+    // and could still be this project's history (#13782).
+    const { getIpcDispatcher, _resetIpcDispatcherForTesting } = await import("../dispatcher.js");
+    const { wrapSuccess } = await import("../../../shared/utils/ipcErrorSerialization.js");
+    globalAppStateRef.current = {
+      ...DEFAULT_GLOBAL_APP_STATE,
+      terminals: [{ id: "t1", type: "terminal", title: "Shell", cwd: "/r", location: "grid" }],
+    };
+    vi.mocked(projectStore.getProjectById).mockReturnValueOnce({
+      id: "p-remote",
+      name: "R",
+      path: "/r",
+    } as never);
+    vi.mocked(projectStore.getProjectStateWithRecovery).mockResolvedValueOnce({
+      state: null,
+    } as never);
+    _resetIpcDispatcherForTesting();
+    const dispatcher = getIpcDispatcher();
+    dispatcher.setInvokeEnveloper(async (_c, _a, call) => wrapSuccess(await call()));
+    const release = dispatcher.allowHybridOverLink("app:hydrate");
+    const cleanup = registerAppStateHandlers();
+    const endpoint = {
+      endpointId: "s1:view-4",
+      clientId: "client-1",
+      projectId: "p-remote",
+      kind: "remote-view" as const,
+      handle: -7,
+      send: vi.fn(),
+      request: vi.fn(),
+      onClose: vi.fn(() => ({ dispose: () => undefined })),
+      isClosed: () => false,
+    };
+
+    await dispatcher.invokeForEndpoint(
+      { endpoint, client: { clientId: "client-1", kind: "remote" } as never },
+      "app:hydrate",
+      []
+    );
+
+    cleanup();
+    release();
+    _resetIpcDispatcherForTesting();
+    expect(legacyOwnerRef.current).toBeUndefined();
+    expect(captureProjectLayoutSeed).toHaveBeenCalledWith("p-remote", false);
+  });
 });
 
 describe("app:set-state while another screen drives the view's project", () => {
@@ -1826,8 +2304,11 @@ describe("app:set-state while another screen drives the view's project", () => {
       "proj-1",
       expect.objectContaining({ clientId: "local" })
     );
-    expect(written()).toMatchObject({ sidebarWidth: 420, diagnosticsHeight: 300 });
-    expect(written()).not.toHaveProperty("panelGridConfig");
+    expect(written()).toMatchObject({
+      sidebarWidth: 420,
+      diagnosticsHeight: 300,
+      panelGridConfig: mixed.panelGridConfig,
+    });
     expect(written()).not.toHaveProperty("activeWorktreeId");
     expect(written()).not.toHaveProperty("focusMode");
   });
@@ -1871,5 +2352,73 @@ describe("app:set-state while another screen drives the view's project", () => {
       panelGridConfig: mixed.panelGridConfig,
       activeWorktreeId: "wt-stale",
     });
+  });
+});
+
+describe("app:set-state grid layout patch (#14700)", () => {
+  let storeModule: typeof import("../../store.js");
+  let stored: Record<string, unknown>;
+
+  async function invokeSetState(payload: unknown) {
+    ipcHandlers.clear();
+    const cleanup = registerAppStateHandlers();
+    const handler = ipcHandlers.get("app:set-state");
+    if (!handler) throw new Error("app:set-state handler not registered");
+    await handler(makeInvokeEvent(), payload);
+    cleanup();
+  }
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    storeModule = await import("../../store.js");
+    stored = { terminals: [], panelGridConfig: { strategy: "automatic", value: 4 } };
+    vi.mocked(storeModule.store.get).mockImplementation(((key: string) =>
+      key === "appState" ? stored : undefined) as never);
+    vi.mocked(storeModule.store.set).mockImplementation(((key: string, value: unknown) => {
+      if (key === "appState") stored = value as Record<string, unknown>;
+    }) as never);
+  });
+
+  afterEach(() => {
+    vi.mocked(projectStore.getCurrentProject).mockReturnValue(null);
+  });
+
+  it.each([0, -1, 11, 2.5])("refuses a count of %s", async (value) => {
+    await invokeSetState({ panelGridConfig: { value } });
+
+    expect(stored.panelGridConfig).toEqual({ strategy: "automatic", value: 4 });
+  });
+
+  it.each([1, 10])("keeps a count of %s", async (value) => {
+    await invokeSetState({ panelGridConfig: { value } });
+
+    expect(stored.panelGridConfig).toEqual({ strategy: "automatic", value });
+  });
+
+  it("merges over the count saved while the same write waited on its MRU save", async () => {
+    vi.mocked(projectStore.getCurrentProject).mockReturnValue({
+      id: "proj-1",
+      name: "p",
+      path: "/p",
+    } as never);
+    let release!: () => void;
+    vi.mocked(projectStore.enqueueProjectStateUpdate).mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }) as never
+    );
+
+    const pending = invokeSetState({
+      mruList: ["terminal:a"],
+      panelGridConfig: { strategy: "fixed-rows" },
+    });
+    await vi.waitFor(() => expect(release).toBeTypeOf("function"));
+    // Another view changes the count while this write is parked.
+    stored = { ...stored, panelGridConfig: { strategy: "automatic", value: 7 } };
+    release();
+    await pending;
+
+    expect(stored.panelGridConfig).toEqual({ strategy: "fixed-rows", value: 7 });
   });
 });

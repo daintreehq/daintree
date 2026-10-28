@@ -126,6 +126,7 @@ vi.mock("../TerminalAddonManager", () => ({
     fileLinksDisposable: null,
     imageLinksDisposable: null,
     commandLinksDisposable: null,
+    pluginLinksDisposable: null,
     webLinksAddon: null,
   })),
   createImageAddon: createImageAddonMock,
@@ -232,10 +233,9 @@ describe("TerminalInstanceService attach failure recovery (#11776)", () => {
     rebuiltTerminals.length = 0;
     control.disposeCounter = 0;
     control.opensCleanly = true;
-    ({ terminalInstanceService: service } =
-      (await import("../TerminalInstanceService")) as unknown as {
-        terminalInstanceService: RecoveryTestService;
-      });
+    service = (await (
+      await import("../terminalInstanceServiceAccessor")
+    ).load()) as unknown as RecoveryTestService;
     service.instances.clear();
     vi.spyOn(service.restoreController, "fetchAndRestore").mockResolvedValue(true);
     vi.spyOn(service.rendererPolicy, "applyRendererPolicy").mockImplementation(() => {});

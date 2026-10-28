@@ -32,7 +32,11 @@ const storeMock = vi.hoisted(() => {
 // Consent pins are purged when an upgrade actually swaps (#12612 binding tests);
 // stubbed so those assertions don't stand up real consent persistence.
 const consentMock = vi.hoisted(() => ({ revokeAllForPlugin: vi.fn(() => true) }));
-const capConsentMock = vi.hoisted(() => ({ revokeAllForPlugin: vi.fn(() => true) }));
+const capConsentMock = vi.hoisted(() => ({
+  revokeAllForPlugin: vi.fn(() => true),
+  listGrantsForPlugin: vi.fn((): unknown[] => []),
+  offerRestore: vi.fn(async () => false),
+}));
 
 vi.mock("electron", () => ({
   app: appMock,

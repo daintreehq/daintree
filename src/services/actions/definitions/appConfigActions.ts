@@ -4,7 +4,6 @@ import { z } from "zod";
 import {
   agentSettingsClient,
   appClient,
-  hibernationClient,
   sessionRestoreClient,
   windowOpeningClient,
   idleTerminalClient,
@@ -12,9 +11,14 @@ import {
   worktreeConfigClient,
 } from "@/clients";
 import { dispatchEscape } from "@/lib/escapeStack";
+import { sleepIdleTerminalProject } from "@/lib/sleepIdleTerminalProject";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { OPEN_FOLDERS_IN_NEW_WINDOW_VALUES } from "@shared/types/windowOpen";
 import { RESUME_ON_RESTART_VALUES } from "@shared/types/agentSettings";
+import {
+  IDLE_SHELL_THRESHOLD_MINUTES,
+  type IdleBackgroundAutoCloseConfig,
+} from "@shared/types/ipc/idleBackgroundAutoClose";
 
 const ProjectIdArgsSchema = z.object({ projectId: z.string().min(1) });
 
@@ -22,6 +26,8 @@ const ProjectIdArgsSchema = z.object({ projectId: z.string().min(1) });
 const SessionRestoreConfigPatchSchema = z.object({ enabled: z.boolean().optional() });
 
 const OpenFoldersInNewWindowSchema = z.enum(OPEN_FOLDERS_IN_NEW_WINDOW_VALUES);
+
+const IdleShellThresholdSchema = z.literal(IDLE_SHELL_THRESHOLD_MINUTES);
 
 /** Shared by `windowOpening.updateConfig`'s declared schema and its body. */
 // Strict so a misspelt field fails validation instead of reaching main as an
@@ -75,6 +81,10 @@ export function registerAppConfigActions(
     category: "settings",
     kind: "command",
     danger: "safe",
+    // Custom flags, bypass mode and presets persist into every later launch of
+    // the agent, which is the configuration a plugin's own agent.launch is
+    // refused (#13762).
+    denyPluginDispatch: true,
     scope: "renderer",
     argsSchema: z.object({ agentId: z.string(), settings: AgentSettingsEntrySchema }),
     run: async (args: unknown) => {
@@ -198,45 +208,6 @@ export function registerAppConfigActions(
     },
   }));
 
-  actions.set("hibernation.getConfig", () => ({
-    id: "hibernation.getConfig",
-    title: "Get hibernation config",
-    description:
-      "Read the auto-hibernation configuration that governs when idle worktrees are suspended to reclaim host memory. No arguments. Returns { enabled, inactiveThresholdHours }: `enabled` is whether auto-hibernation is on; `inactiveThresholdHours` is how long a worktree must be idle before it hibernates.",
-    category: "settings",
-    kind: "query",
-    danger: "safe",
-    scope: "renderer",
-    resultSchema: z.object({
-      enabled: z.boolean(),
-      inactiveThresholdHours: z.number(),
-    }),
-    run: async () => {
-      return await hibernationClient.getConfig();
-    },
-  }));
-
-  actions.set("hibernation.updateConfig", () => ({
-    id: "hibernation.updateConfig",
-    title: "Update hibernation config",
-    description: "Update auto-hibernation configuration",
-    category: "settings",
-    kind: "command",
-    danger: "safe",
-    scope: "renderer",
-    // Config-patch tool: a palette pick dispatches `{}` (an empty patch that
-    // changes nothing). Belongs in Settings, not the palette. Stays an MCP tool.
-    palette: { mode: "hidden" },
-    argsSchema: z.object({
-      enabled: z.boolean().optional(),
-      inactiveThresholdHours: z.number().int().positive().optional(),
-    }),
-    run: async (args: unknown) => {
-      const config = args as { enabled?: boolean; inactiveThresholdHours?: number };
-      return await hibernationClient.updateConfig(config);
-    },
-  }));
-
   actions.set("idleTerminalNotify.getConfig", () => ({
     id: "idleTerminalNotify.getConfig",
     title: "Get idle terminal notification config",
@@ -277,9 +248,9 @@ export function registerAppConfigActions(
 
   actions.set("idleTerminalNotify.closeProject", () => ({
     id: "idleTerminalNotify.closeProject",
-    title: "Close idle terminals",
+    title: "Sleep idle project",
     description:
-      "Close (hibernate) the idle terminals in a background project. Args: { projectId }. Used as the recovery action on an idle-terminal inbox notification.",
+      "Put a background project whose terminals have gone idle to sleep: its terminals stop with their sessions saved, and reopening it resumes them. Args: { projectId }. Used as the recovery action on an idle-terminal inbox notification.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -293,7 +264,7 @@ export function registerAppConfigActions(
     argsSchema: ProjectIdArgsSchema,
     run: async (args: unknown) => {
       const { projectId } = ProjectIdArgsSchema.parse(args);
-      await idleTerminalClient.closeProject(projectId);
+      await sleepIdleTerminalProject(projectId);
     },
   }));
 
@@ -326,6 +297,8 @@ export function registerAppConfigActions(
     resultSchema: z.object({
       enabled: z.boolean(),
       thresholdMinutes: z.number(),
+      includeIdleShells: z.boolean(),
+      idleShellThresholdMinutes: IdleShellThresholdSchema,
     }),
     run: async () => {
       return await idleBackgroundAutoCloseClient.getConfig();
@@ -346,9 +319,11 @@ export function registerAppConfigActions(
     argsSchema: z.object({
       enabled: z.boolean().optional(),
       thresholdMinutes: z.number().int().positive().optional(),
+      includeIdleShells: z.boolean().optional(),
+      idleShellThresholdMinutes: IdleShellThresholdSchema.optional(),
     }),
     run: async (args: unknown) => {
-      const config = args as { enabled?: boolean; thresholdMinutes?: number };
+      const config = args as Partial<IdleBackgroundAutoCloseConfig>;
       return await idleBackgroundAutoCloseClient.updateConfig(config);
     },
   }));

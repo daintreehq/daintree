@@ -2,7 +2,14 @@ import { useEffect, useEffectEvent, useMemo, useRef, useState, useCallback } fro
 import { useEffectiveCombo, useKeybindingDisplay } from "@/hooks/useKeybinding";
 import { useTabLoad } from "@/hooks";
 import { getAgentIds, getAgentConfig, getMergedPresets, type AgentPreset } from "@/config/agents";
-import { useAgentSettingsStore, useCliAvailabilityStore, useAgentPreferencesStore } from "@/store";
+import {
+  useAgentSettingsStore,
+  useAgentToolbarPinsStore,
+  useCliAvailabilityStore,
+  useAgentPreferencesStore,
+} from "@/store";
+import { useSettingsRowOwnerNote } from "@/hooks/useSettingsOwner";
+import { agentToolbarPin } from "@shared/types/ipc/agentToolbarPins";
 import { cliAvailabilityClient } from "@/clients";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
@@ -30,6 +37,7 @@ import { actionService } from "@/services/ActionService";
 import { AgentHelpOutput } from "./AgentHelpOutput";
 import { AgentInstallSection } from "@/components/agents/AgentCard";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { AgentInputSettings } from "./AgentInputSettings";
 import { AgentInventorySection } from "./AgentInventorySection";
 import { AgentQuotaSection } from "./AgentQuotaSection";
 import { isAgentLaunchable, isAgentReady } from "../../../shared/utils/agentAvailability";
@@ -176,11 +184,15 @@ export function AgentSettings({
     initialize,
     refresh,
     updateAgent,
-    setAgentPinned,
     setGlobalSkipPermissions,
     setGlobalUseAltScreen,
     reset,
   } = useAgentSettingsStore();
+  // The toolbar is this screen's, so its pins are this machine's even on a
+  // host's agent page (#14702).
+  const agentPins = useAgentToolbarPinsStore((state) => state.pins);
+  const setAgentPinned = useAgentToolbarPinsStore((state) => state.setAgentPinned);
+  const rowOwnerNote = useSettingsRowOwnerNote();
 
   const cliAvailability = useCliAvailabilityStore((state) => state.availability);
   const isCliLoading = useCliAvailabilityStore((state) => state.isLoading);
@@ -373,7 +385,7 @@ export function AgentSettings({
             color: config.color,
             Icon: config.icon,
             usageUrl: config.usageUrl,
-            selected: isAgentToolbarVisible(entry, cliAvailability?.[id]),
+            selected: isAgentToolbarVisible(agentToolbarPin(agentPins, id), cliAvailability?.[id]),
             availability: cliAvailability?.[id],
             // What a launch would actually do — the launch preset and the global
             // switch included — not the legacy per-agent boolean.
@@ -387,7 +399,14 @@ export function AgentSettings({
           };
         })
         .filter((a): a is NonNullable<typeof a> => a !== null),
-    [agentIds, effectiveSettings, cliAvailability, ccrPresetsByAgent, projectPresetsByAgent]
+    [
+      agentIds,
+      agentPins,
+      effectiveSettings,
+      cliAvailability,
+      ccrPresetsByAgent,
+      projectPresetsByAgent,
+    ]
   );
 
   const activeAgent = activeAgentId ? agentOptions.find((a) => a.id === activeAgentId) : null;
@@ -553,6 +572,8 @@ export function AgentSettings({
         </SettingsSection>
       )}
 
+      {isGeneralActive && <AgentInputSettings />}
+
       {!isGeneralActive && activeAgent && (
         <>
           {/* First on the page when it renders at all: an agent that is missing,
@@ -573,14 +594,20 @@ export function AgentSettings({
               <SettingsSwitchCard
                 id="agents-enable"
                 title="Pin to toolbar"
-                subtitle={`Show ${activeAgent.name} in the toolbar for quick access`}
-                isEnabled={isAgentToolbarVisible(activeEntry, cliAvailability?.[activeAgent.id])}
+                subtitle={rowOwnerNote(
+                  `Show ${activeAgent.name} in the toolbar for quick access`,
+                  "agentToolbarPins"
+                )}
+                isEnabled={isAgentToolbarVisible(
+                  agentToolbarPin(agentPins, activeAgent.id),
+                  cliAvailability?.[activeAgent.id]
+                )}
                 onChange={() => {
                   // Tri-state toggle (#7673): flip the *currently visible* state so
-                  // an undefined-pinned installed agent gets `pinned: false` (hide)
-                  // and an undefined-pinned missing agent gets `pinned: true` (show).
+                  // an unset pin on an installed agent becomes `false` (hide) and
+                  // an unset pin on a missing agent becomes `true` (show).
                   const current = isAgentToolbarVisible(
-                    activeEntry,
+                    agentToolbarPin(agentPins, activeAgent.id),
                     cliAvailability?.[activeAgent.id]
                   );
                   void (async () => {
@@ -590,7 +617,7 @@ export function AgentSettings({
                 }}
                 // No modified bar: pinning has no stable default to differ from. First
                 // run pins only the first few installed agents and explicitly unpins the
-                // rest (buildInitialAgentPinUpdates), so any "default" comparison lights
+                // rest (seedAgentToolbarPinsIfUnset), so any "default" comparison lights
                 // the bar on agents the user never touched.
               />
 

@@ -159,6 +159,7 @@ const CREATE_TABLES_SQL = `
     stats_last_updated INTEGER,
     git_backed INTEGER,
     archived_at INTEGER,
+    never_auto_sleep INTEGER NOT NULL DEFAULT 0,
     group_id TEXT
   );
   CREATE TABLE IF NOT EXISTS app_state (
@@ -855,6 +856,22 @@ describe("ProjectStore autoParkedAt", () => {
     // A status-only update must not stomp the existing marker.
     store.updateProjectStatus(projectId, "closed");
     expect(store.getProjectById(projectId)?.autoParkedAt).toBe(t);
+  });
+
+  it("round-trips neverAutoSleep without touching pinned", () => {
+    expect(store.getProjectById(projectId)?.neverAutoSleep).toBeUndefined();
+
+    store.updateProject(projectId, { neverAutoSleep: true });
+    const on = store.getProjectById(projectId);
+    expect(on?.neverAutoSleep).toBe(true);
+    expect(on?.pinned).toBeUndefined();
+
+    store.updateProject(projectId, { pinned: true });
+    expect(store.getProjectById(projectId)?.neverAutoSleep).toBe(true);
+
+    store.updateProject(projectId, { neverAutoSleep: false });
+    expect(store.getProjectById(projectId)?.neverAutoSleep).toBeUndefined();
+    expect(store.getProjectById(projectId)?.pinned).toBe(true);
   });
 
   it("clears autoParkedAt when the project is reopened (setCurrentProject)", async () => {

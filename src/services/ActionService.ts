@@ -21,6 +21,7 @@ import { currentHostId, getHostPlatformInfo, isRemoteWindow } from "@/hooks/useH
 import { isClientAppError } from "@/utils/clientAppError";
 import { PartialSuccessError } from "@shared/utils/partialSuccess";
 import { TerminalInOtherProjectError } from "@shared/utils/terminalInOtherProject";
+import { parsePluginPaletteArgs, type PluginPaletteArgs } from "@/lib/pluginPaletteArgs";
 import { ConfirmationStagedError } from "./actions/confirmationStaged";
 import { UnactionableTargetError } from "./actions/unactionableTarget";
 import {
@@ -29,7 +30,11 @@ import {
   toNonRendererOwnedTools,
 } from "@shared/config/helpAssistantTierAllowlists";
 import { deriveBand } from "../../shared/utils/actionRiskBand.js";
-import { elevatedDangerRationale, resolveEffectiveActionDanger } from "./actions/effectiveDanger";
+import {
+  AGENT_LAUNCH_ACTION_ID,
+  elevatedDangerRationale,
+  resolveEffectiveActionDanger,
+} from "./actions/effectiveDanger";
 
 /**
  * Fields that should be redacted from event payloads to prevent secret leakage.
@@ -309,6 +314,8 @@ export class ActionService {
   private pluginIdsSeen = new Set<string>();
   private onlyHereCache: { hostId: string; pluginIds: string[]; at: number } | null = null;
   private requiresArgsCache = new Map<ActionId, boolean>();
+  /** Palette prompt specs for plugin commands, `null` for ones the palette can't prompt. */
+  private paletteArgsCache = new Map<ActionId, PluginPaletteArgs | null>();
   /**
    * Lazily-filled JSON schema cache. Populated on first `toManifestEntry()` for
    * a given id; `.has(id)` distinguishes "not computed yet" from "computed but
@@ -345,6 +352,7 @@ export class ActionService {
     if (typed.pluginId) this.pluginIdsSeen.add(typed.pluginId);
     this.registry.set(definition.id, typed);
     this.requiresArgsCache.set(definition.id, requiresArgs);
+    this.paletteArgsCache.delete(definition.id);
   }
 
   /** Whether an action id is present in the registry. */
@@ -436,7 +444,27 @@ export class ActionService {
   unregister(id: ActionId): void {
     this.registry.delete(id);
     this.requiresArgsCache.delete(id);
+    this.paletteArgsCache.delete(id);
     this.schemaCache.delete(id);
+  }
+
+  /**
+   * The prompts the palette can use to collect a plugin command's required
+   * arguments, or null when the action isn't a plugin command with a small flat
+   * schema. Reads the raw schema directly and memoizes per registration, so
+   * re-registering yields a new object — callers compare identity to detect it.
+   */
+  getPluginPaletteArgs(id: ActionId): PluginPaletteArgs | null {
+    const cached = this.paletteArgsCache.get(id);
+    if (cached !== undefined) return cached;
+    const definition = this.registry.get(id);
+    if (!definition) return null;
+    const spec =
+      definition.pluginId && definition.kind === "command" && this.requiresArgsCache.get(id)
+        ? parsePluginPaletteArgs(definition.rawInputSchema)
+        : null;
+    this.paletteArgsCache.set(id, spec);
+    return spec;
   }
 
   /**
@@ -662,9 +690,15 @@ export class ActionService {
       effectiveDanger === "confirm" &&
       (source === "plugin" || (source === "agent" && !options?.confirmed))
     ) {
+      // A plugin has no confirmation to give, so the configured-launch refusal
+      // names what to drop rather than pointing at a dialog it can't reach.
+      const pluginLaunchConfig =
+        source === "plugin" && actionId === AGENT_LAUNCH_ACTION_ID && definition.danger === "safe";
       const error: ActionError = {
         code: "CONFIRMATION_REQUIRED",
-        message: `Action "${actionId}" requires explicit confirmation from ${source} sources.`,
+        message: pluginLaunchConfig
+          ? `Action "${actionId}" can't take agentLaunchFlags, env, systemPrompt, presetId, or a prompt or model starting with "-" from a plugin: plugins can give an agent a task, not choose how it runs.`
+          : `Action "${actionId}" requires explicit confirmation from ${source} sources.`,
       };
       return { ok: false, error };
     }
@@ -712,6 +746,9 @@ export class ActionService {
         // terminals a dialog listed, so an injected `contextOverride` must not
         // be able to claim an approval that raises the agent terminal cap.
         hostApprovedRecipeRun: options?.hostApprovedRecipeRun,
+        // Same unconditional stamp: a plugin's identity comes from the host's
+        // own bridge closure, never from a context the caller could shape.
+        callerPluginId: source === "plugin" ? options?.callerPluginId : undefined,
       };
       const result = await definition.run(validatedArgs, runContext);
       // Enforce the action's own result contract. Zod objects strip unknown
@@ -766,7 +803,11 @@ export class ActionService {
         danger: definition.danger,
         safeArgs: this.extractSafeBreadcrumbArgs(args, definition),
         confirmed: options?.confirmed,
-        pluginId: definition.pluginId,
+        // A plugin's dispatch is audited under the plugin that made it rather
+        // than the action's owner, which a built-in action doesn't have (#13759).
+        pluginId:
+          (source === "plugin" && options?.callerPluginId ? options.callerPluginId : undefined) ??
+          definition.pluginId,
       });
       if (!definition.suppressShortcutHint)
         this.emitShortcutHint(actionId, source, overlayEpochBeforeRun);
@@ -807,16 +848,22 @@ export class ActionService {
         // `TerminalInOtherProjectError` gets its own code (#13120) and, unlike
         // the others, plain `details`: its fields are the point, and custom
         // `Error` properties are dropped by the structured clone to plugins.
+        // A plugin action's result is checked in main, against the JSON Schema
+        // only main holds, and comes back as a decoded AppError: it is the same
+        // failure the `resultSchema` gate above reports for a built-in, so it
+        // takes the same code rather than reading as a retriable execution error.
         code:
-          err instanceof ConfirmationStagedError
-            ? "CONFIRMATION_REQUIRED"
-            : err instanceof PartialSuccessError
-              ? "PARTIAL_SUCCESS"
-              : err instanceof UnactionableTargetError
-                ? "VALIDATION_ERROR"
-                : err instanceof TerminalInOtherProjectError
-                  ? "TERMINAL_IN_OTHER_PROJECT"
-                  : "EXECUTION_ERROR",
+          definition.pluginId && isClientAppError(err) && err.code === "RESULT_VALIDATION_ERROR"
+            ? "RESULT_VALIDATION_ERROR"
+            : err instanceof ConfirmationStagedError
+              ? "CONFIRMATION_REQUIRED"
+              : err instanceof PartialSuccessError
+                ? "PARTIAL_SUCCESS"
+                : err instanceof UnactionableTargetError
+                  ? "VALIDATION_ERROR"
+                  : err instanceof TerminalInOtherProjectError
+                    ? "TERMINAL_IN_OTHER_PROJECT"
+                    : "EXECUTION_ERROR",
         message,
         details: err instanceof TerminalInOtherProjectError ? err.toDetails() : err,
       };
@@ -970,6 +1017,7 @@ export class ActionService {
     if (definition.mcpVisibility) entry.mcpVisibility = definition.mcpVisibility;
     if (definition.deprecated) entry.deprecated = { ...definition.deprecated };
     if (definition.pluginId) entry.pluginId = definition.pluginId;
+    if (definition.pluginId && definition.pluginName) entry.pluginName = definition.pluginName;
     if (definition.examples) entry.examples = structuredClone(definition.examples);
     if (definition.dangerRationale) entry.dangerRationale = definition.dangerRationale;
     if (paletteHidden) entry.paletteHidden = true;
@@ -1117,9 +1165,9 @@ export class ActionService {
   }): Promise<void> {
     if (!isElectronApiAvailable()) return;
 
-    // Plugin actions feed the plugin-action audit log: compute the SHA-256
-    // digest of the (already redacted) args in the renderer so raw args need
-    // never cross IPC for fingerprinting. Built-in actions skip this entirely.
+    // Plugin-attributed dispatches feed the plugin-action audit log: compute
+    // the SHA-256 digest of the (already redacted) args in the renderer so raw
+    // args need never cross IPC for fingerprinting. Everything else skips it.
     const argsHash = payload.pluginId !== undefined ? await sha256Hex(payload.args) : undefined;
 
     try {

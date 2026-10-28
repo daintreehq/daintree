@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render as rtlRender } from "@testing-library/react";
 import { createRef, type KeyboardEvent, type ReactElement } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -8,11 +8,14 @@ import type { FleetRunRow } from "@shared/types/ipc/fleet";
 import type { CanopyCard as CanopyCardData, CanopyCategory } from "@shared/types/ipc/canopy";
 import { buildPilotGroups } from "@/components/Pilot/pilotRows";
 import { buildCanopyInbox, type CanopyItem } from "../canopyModel";
+import { useVoiceRecordingStore, type VoiceRecordingTarget } from "@/store/voiceRecordingStore";
+import { DICTATION_OWNER_ATTR, canopyReplyVoiceId } from "@/services/canopyReplyDictation";
 import {
   TRASH_CONFIRM_MS,
   CanopyCard,
   type CanopyCardHandle,
   type CanopyCardHandlers,
+  type CanopyPaneFocus,
 } from "../CanopyCard";
 
 interface ComposerProps {
@@ -22,6 +25,11 @@ interface ComposerProps {
   onSend: (payload: { text: string; imagePaths?: string[] }) => void;
   onSendKey: (key: string) => void;
   submitText?: (text: string, imagePaths: string[]) => Promise<boolean>;
+  voiceTarget?: VoiceRecordingTarget;
+  modEnterSend?: () => {
+    submitText: (text: string, imagePaths: readonly string[]) => Promise<boolean>;
+    sendEnter: () => void;
+  };
 }
 
 interface TerminalProps {
@@ -34,12 +42,16 @@ interface TerminalProps {
   }) => void;
 }
 
-const { submit, sendKey, composerProps, terminalProps } = vi.hoisted(() => ({
-  submit: vi.fn(async (..._args: unknown[]) => {}),
-  sendKey: vi.fn(async (..._args: unknown[]) => {}),
-  composerProps: { current: null as ComposerProps | null },
-  terminalProps: { current: null as TerminalProps | null },
-}));
+const { submit, sendKey, composerProps, terminalProps, composerFocus, dictationFocus } = vi.hoisted(
+  () => ({
+    submit: vi.fn(async (..._args: unknown[]) => {}),
+    sendKey: vi.fn(async (..._args: unknown[]) => {}),
+    composerFocus: vi.fn(),
+    dictationFocus: vi.fn(),
+    composerProps: { current: null as ComposerProps | null },
+    terminalProps: { current: null as TerminalProps | null },
+  })
+);
 
 // The live terminal needs a canvas and a PTY host; here only what it is handed matters.
 vi.mock("../CanopyTerminal", () => ({
@@ -49,12 +61,32 @@ vi.mock("../CanopyTerminal", () => ({
   },
 }));
 
-vi.mock("@/components/Terminal/HybridInputBar", () => ({
-  HybridInputBar: (props: ComposerProps) => {
-    composerProps.current = props;
-    return <div data-testid="composer" />;
-  },
-}));
+vi.mock("@/components/Terminal/HybridInputBar", async () => {
+  const { useImperativeHandle } = await import("react");
+  return {
+    HybridInputBar: (
+      props: ComposerProps & {
+        ref?: React.Ref<{ focus: () => void; focusForDictation: () => void }>;
+      }
+    ) => {
+      composerProps.current = props;
+      useImperativeHandle(props.ref, () => ({
+        focus: composerFocus,
+        focusForDictation: () => {
+          composerFocus();
+          dictationFocus();
+        },
+      }));
+      return (
+        <div data-testid="composer">
+          <div className="cm-editor">
+            <div tabIndex={-1} data-editor-content="" />
+          </div>
+        </div>
+      );
+    },
+  };
+});
 
 beforeEach(() => {
   Object.defineProperty(window, "electron", {
@@ -64,6 +96,8 @@ beforeEach(() => {
   });
   submit.mockClear();
   sendKey.mockClear();
+  composerFocus.mockClear();
+  dictationFocus.mockReset();
   composerProps.current = null;
   terminalProps.current = null;
 });
@@ -257,12 +291,98 @@ describe("CanopyCard", () => {
     await act(async () => (await composer()).onSendKey("escape"));
     expect(sendKey).not.toHaveBeenCalled();
     expect(h.onLeavePane).toHaveBeenCalledTimes(1);
-    // Arrows steer the agent's menu; only Enter answers and moves the panel on.
+    // Arrows steer the agent's menu; only Enter answers it, and stays on the run.
     await act(async () => (await composer()).onSendKey("up"));
     expect(sendKey).toHaveBeenCalledWith(7, "up");
     expect(h.onSent).not.toHaveBeenCalled();
     await act(async () => (await composer()).onSendKey("enter"));
     expect(h.onSent).toHaveBeenCalledTimes(1);
+    expect(h.onSent).toHaveBeenLastCalledWith(
+      expect.objectContaining({ runId: "run-1" }),
+      undefined
+    );
+  });
+
+  describe("⌘↩", () => {
+    const named = (runId: string, title: string): CanopyItem => {
+      const item = itemFor("question", {}, runId);
+      return { ...item, row: { ...item.row, title } };
+    };
+
+    it("moves on to the run the reply named at the press, through the stream open when the send lands", async () => {
+      const h = handlers();
+      const item = itemFor("question");
+      const view = render(
+        <CanopyCard item={item} {...PROPS} {...h} moveOnTo={named("run-2", "Pick a port")} />
+      );
+      await streamOpens({ watchId: 7 });
+      const route = (await composer()).modEnterSend!();
+      // A dictated send lands after its wait: the list has moved, the stream reopened.
+      view.rerender(
+        <CanopyCard item={item} {...PROPS} {...h} moveOnTo={named("run-3", "Bump the deps")} />
+      );
+      await streamOpens({ watchId: 8 });
+
+      await act(async () => {
+        await route.submitText("Keep it read-only", []);
+      });
+      expect(submit).toHaveBeenCalledWith(8, "Keep it read-only", undefined);
+      expect(h.onSent).toHaveBeenLastCalledWith(item, "run-2");
+
+      // An empty reply's Enter answers the agent's menu, and moves on the same way.
+      await act(async () => route.sendEnter());
+      expect(sendKey).toHaveBeenCalledWith(8, "enter");
+      expect(h.onSent).toHaveBeenLastCalledWith(item, "run-2");
+      expect(h.onSent).toHaveBeenCalledTimes(2);
+
+      // Enter carries nowhere to go: it stays.
+      await act(async () => {
+        await (
+          await composer()
+        ).submitText!("and stay", []);
+      });
+      expect(h.onSent).toHaveBeenLastCalledWith(item, undefined);
+    });
+
+    it("sends and stays with nothing to name, and moves nowhere on a send main refused", async () => {
+      const h = handlers();
+      const item = itemFor("question");
+      const view = render(<CanopyCard item={item} {...PROPS} {...h} />);
+      await streamOpens({ watchId: 7 });
+
+      await act(async () => {
+        await (await composer()).modEnterSend!().submitText("no one below", []);
+      });
+      expect(h.onSent).toHaveBeenLastCalledWith(item, undefined);
+
+      view.rerender(
+        <CanopyCard item={item} {...PROPS} {...h} moveOnTo={named("run-2", "Pick a port")} />
+      );
+      submit.mockRejectedValueOnce(new Error("gone"));
+      let took: boolean | undefined;
+      await act(async () => {
+        took = await (await composer()).modEnterSend!().submitText("refused", []);
+      });
+      expect(took).toBe(false);
+      expect(h.onSendFailed).toHaveBeenCalledTimes(1);
+      expect(h.onSent).toHaveBeenCalledTimes(1);
+    });
+
+    it("names where it goes in a line kept under the reply, blank with nowhere to go", async () => {
+      const h = handlers();
+      const item = itemFor("question");
+      const view = render(
+        <CanopyCard item={item} {...PROPS} {...h} moveOnTo={named("run-2", "Pick a port")} />
+      );
+      await composer();
+      const line = () => view.container.querySelector<HTMLElement>("[data-canopy-move-on]");
+      expect(line()?.textContent).toContain("Send and go to");
+      expect(line()?.textContent).toContain("Pick a port");
+
+      view.rerender(<CanopyCard item={item} {...PROPS} {...h} moveOnTo={null} />);
+      expect(line()).not.toBeNull();
+      expect(line()!.textContent).toBe("");
+    });
   });
 
   it("hands Reply to the live terminal while it asks for a secret", async () => {
@@ -328,6 +448,252 @@ describe("CanopyCard", () => {
     expect(h.onLeavePane).not.toHaveBeenCalled();
     fireEvent.keyDown(editor, { key: "Escape" });
     expect(h.onLeavePane).toHaveBeenCalledTimes(1);
+  });
+
+  describe("dictating a reply (#14777)", () => {
+    beforeEach(() => {
+      // This view is p1's, the project the fixtures' runs are in.
+      window.__DAINTREE_INITIAL_PROJECT__ = { id: "p1" };
+    });
+    afterEach(() => {
+      delete window.__DAINTREE_INITIAL_PROJECT__;
+      useVoiceRecordingStore.setState({ micNotice: null });
+    });
+
+    function renderWithHandle(
+      item: CanopyItem,
+      props: {
+        otherHostId?: string;
+        hostScope?: string | null;
+        reconnecting?: boolean;
+        initialFocus?: CanopyPaneFocus;
+        dictationRequest?: number;
+        onDictationSettled?: (request: number) => void;
+      } = {}
+    ) {
+      const ref = createRef<CanopyCardHandle>();
+      const view = render(
+        <CanopyCard ref={ref} item={item} {...PROPS} {...handlers()} {...props} />
+      );
+      return { ...view, ref };
+    }
+
+    it("gives the reply a dictation of its own, apart from the pane's, typed to this run", async () => {
+      renderWithHandle(itemFor("question"));
+      expect((await composer()).voiceTarget).toEqual({
+        panelId: canopyReplyVoiceId("run-1"),
+        panelTitle: "Reply to Fix flaky panel tests",
+        surface: "canopy-reply",
+        terminalId: "run-1",
+        canopyRow: { runId: "run-1", hostScope: null },
+      });
+    });
+
+    it("names its row as the list has it, under the host the panel lists it on (#14778)", async () => {
+      renderWithHandle(itemFor("question", {}, "6.studio.run-1"), {
+        otherHostId: "studio",
+        hostScope: "*",
+      });
+      expect((await composer()).voiceTarget!.canopyRow).toEqual({
+        runId: "6.studio.run-1",
+        hostScope: "*",
+      });
+    });
+
+    const frame = () =>
+      act(async () => {
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+      });
+
+    it("hands the keyboard to the reply when sent back to it, whatever has focus as it opens (#14778)", async () => {
+      // The indicator that asked keeps focus as the pane mounts.
+      const indicator = document.createElement("button");
+      document.body.append(indicator);
+      indicator.focus();
+      const settled = vi.fn();
+      renderWithHandle(itemFor("question"), { dictationRequest: 1, onDictationSettled: settled });
+      await composer();
+      await frame();
+      await frame();
+      expect(dictationFocus).toHaveBeenCalled();
+      expect(settled).not.toHaveBeenCalled();
+
+      // The user pressing anything is theirs: the handoff stands down and settles.
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "j" }));
+      expect(settled).toHaveBeenCalledTimes(1);
+      expect(settled).toHaveBeenCalledWith(1);
+      const stopped = dictationFocus.mock.calls.length;
+      await frame();
+      await frame();
+      expect(dictationFocus.mock.calls.length).toBe(stopped);
+      indicator.remove();
+    });
+
+    it("takes a request on a pane already showing, and settles once the reply has the keyboard (#14778)", async () => {
+      dictationFocus.mockImplementation(() => {
+        document.querySelector<HTMLElement>("[data-editor-content]")?.focus();
+      });
+      const settled = vi.fn();
+      const item = itemFor("question");
+      const view = renderWithHandle(item, { onDictationSettled: settled });
+      await composer();
+      await frame();
+      await frame();
+      expect(dictationFocus).not.toHaveBeenCalled();
+
+      view.rerender(
+        <CanopyCard
+          item={item}
+          {...PROPS}
+          {...handlers()}
+          dictationRequest={2}
+          onDictationSettled={settled}
+        />
+      );
+      await frame();
+      await frame();
+      expect(document.activeElement?.closest(".cm-editor")).not.toBeNull();
+      expect(settled).toHaveBeenCalledTimes(1);
+      expect(settled).toHaveBeenCalledWith(2);
+      const landed = dictationFocus.mock.calls.length;
+      await frame();
+      expect(dictationFocus.mock.calls.length).toBe(landed);
+    });
+
+    it("names no terminal for main to read when another project's view has the run", async () => {
+      window.__DAINTREE_INITIAL_PROJECT__ = { id: "p2" };
+      renderWithHandle(itemFor("question"));
+      const target = (await composer()).voiceTarget!;
+      expect(target.panelId).toBe(canopyReplyVoiceId("run-1"));
+      expect(target.terminalId).toBeUndefined();
+      expect(target.otherHostId).toBeUndefined();
+    });
+
+    it("names no terminal of this machine's for another host's run", async () => {
+      renderWithHandle(itemFor("question"), { otherHostId: "host-2" });
+      const target = (await composer()).voiceTarget!;
+      expect(target.panelId).toBe(canopyReplyVoiceId("run-1", "host-2"));
+      expect(target.otherHostId).toBe("host-2");
+      expect(target.terminalId).toBeUndefined();
+    });
+
+    it("takes the dictation key from its live terminal and its reply alike", async () => {
+      const { container } = renderWithHandle(itemFor("question"));
+      await composer();
+      const owner = `[${DICTATION_OWNER_ATTR}]`;
+      expect(container.querySelector("[data-canopy-terminal]")!.closest(owner)).not.toBeNull();
+      expect(container.querySelector("[data-testid=composer]")!.closest(owner)).not.toBeNull();
+    });
+
+    it("dictates into the reply once its stream is open", async () => {
+      const { ref } = renderWithHandle(itemFor("question"));
+      await composer();
+      expect(ref.current!.dictation()).toMatchObject({
+        ok: false,
+        message: expect.stringContaining("still connecting"),
+      });
+
+      await streamOpens({ watchId: 7 });
+      const dictation = ref.current!.dictation();
+      expect(dictation.ok).toBe(true);
+      if (dictation.ok) expect(dictation.target.panelId).toBe(canopyReplyVoiceId("run-1"));
+    });
+
+    it("says it can't while the run asks for a secret, the readers' or the live screen's", async () => {
+      const secretCard = renderWithHandle(itemFor("question", { secretPrompt: true }));
+      expect(secretCard.ref.current!.dictation()).toMatchObject({
+        ok: false,
+        message: expect.stringContaining("secret"),
+      });
+      secretCard.unmount();
+
+      const { ref } = renderWithHandle(itemFor("question"));
+      await composer();
+      await streamOpens({ watchId: 7, secretPrompt: true });
+      expect(ref.current!.dictation()).toMatchObject({
+        ok: false,
+        message: expect.stringContaining("secret"),
+      });
+    });
+
+    it("shows a microphone notice for the reply's own dictation, not the pane's", async () => {
+      const { container } = renderWithHandle(itemFor("question"));
+      await composer();
+      const lost = (panelId: string) =>
+        act(() => {
+          useVoiceRecordingStore.setState({
+            micNotice: { kind: "lost", target: { panelId }, deviceLabel: "AirPods" },
+          });
+        });
+
+      lost("run-1");
+      expect(container.textContent).not.toContain("Microphone lost");
+      lost(canopyReplyVoiceId("run-1"));
+      expect(container.textContent).toContain("Microphone lost");
+    });
+
+    it("keeps handing the keyboard to a loading reply while the dictation key is held", async () => {
+      const { ref } = renderWithHandle(itemFor("question"));
+      await composer();
+      await streamOpens({ watchId: 7 });
+      const dictation = ref.current!.dictation();
+      if (!dictation.ok) throw new Error("expected a reply to dictate into");
+      const frame = () =>
+        act(async () => {
+          await new Promise((resolve) => requestAnimationFrame(resolve));
+        });
+
+      dictation.focus();
+      await frame();
+      await frame();
+      const before = composerFocus.mock.calls.length;
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "d", metaKey: true, repeat: true }));
+      await frame();
+      expect(composerFocus.mock.calls.length).toBeGreaterThan(before);
+
+      // A fresh press is the user going elsewhere: the handoff stands down.
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "j" }));
+      const stopped = composerFocus.mock.calls.length;
+      await frame();
+      await frame();
+      expect(composerFocus.mock.calls.length).toBe(stopped);
+    });
+
+    it("says it can't once the terminal has ended, or while its host reconnects", async () => {
+      const ended = renderWithHandle(itemFor("question"));
+      await composer();
+      await act(async () =>
+        terminalProps.current!.onStreamChange({ watchId: null, ended: true, secretPrompt: false })
+      );
+      expect(ended.ref.current!.dictation()).toMatchObject({
+        ok: false,
+        message: expect.stringContaining("ended"),
+      });
+      ended.unmount();
+
+      const { ref } = renderWithHandle(itemFor("question"), { reconnecting: true });
+      await composer();
+      await streamOpens({ watchId: 7 });
+      expect(ref.current!.dictation()).toMatchObject({
+        ok: false,
+        message: expect.stringContaining("reconnecting"),
+      });
+    });
+  });
+
+  it("keeps the row on an Escape the reply already used, to cancel its dictation", async () => {
+    const h = handlers();
+    const { container } = render(<CanopyCard item={itemFor("question")} {...PROPS} {...h} />);
+    await composer();
+    await streamOpens({ watchId: 7 });
+    const editor = document.createElement("div");
+    editor.className = "cm-editor";
+    container.querySelector("[data-testid=composer]")!.appendChild(editor);
+    // As CodeMirror's keymap does when dictation takes the key.
+    editor.addEventListener("keydown", (event) => event.preventDefault());
+
+    fireEvent.keyDown(editor, { key: "Escape" });
+    expect(h.onLeavePane).not.toHaveBeenCalled();
   });
 
   it("takes the first choice on Y only when the readers judged the action safe", () => {
@@ -408,6 +774,38 @@ describe("CanopyCard", () => {
     }
   });
 
+  it("answers by clicking a choice, through the same guarded path as its number", () => {
+    const h = handlers();
+    const { container } = render(
+      <CanopyCard
+        item={itemFor("approval", { options: ["Yes", "No"], risk: "none" })}
+        {...PROPS}
+        {...h}
+      />
+    );
+    const buttons = container.querySelectorAll<HTMLButtonElement>("[data-canopy-choices] button");
+    expect(buttons[1]!.textContent).toContain("No");
+    fireEvent.click(buttons[1]!);
+    expect(h.onAnswer).toHaveBeenCalledWith(expect.anything(), "No");
+    const names = Array.from(buttons).map((b) => b.textContent);
+    expect(names.some((n) => n?.includes("Reply"))).toBe(true);
+    expect(names.some((n) => n?.includes("Go to terminal"))).toBe(true);
+  });
+
+  it("takes two clicks on a risky choice, and none while reconnecting", () => {
+    const h = handlers();
+    const item = itemFor("approval", { options: ["Yes", "No"], risk: "caution" });
+    const { container, rerender } = render(<CanopyCard item={item} {...PROPS} {...h} />);
+    const first = () => container.querySelector<HTMLButtonElement>("[data-canopy-choices] button")!;
+    fireEvent.click(first());
+    expect(h.onAnswer).not.toHaveBeenCalled();
+    expect(first().textContent).toContain("Press again");
+    fireEvent.click(first());
+    expect(h.onAnswer).toHaveBeenCalledWith(expect.anything(), "Yes");
+    rerender(<CanopyCard item={item} {...PROPS} {...h} reconnecting />);
+    expect(first().disabled).toBe(true);
+  });
+
   it("keeps a secret out of the composer, which records history", async () => {
     const { container } = renderCard(
       itemFor("question", { question: "Password:", secretPrompt: true })
@@ -444,18 +842,20 @@ describe("CanopyCard", () => {
     expect(h.onOpen).toHaveBeenCalledTimes(1);
   });
 
-  it("takes Cmd+W from inside the pane as closing Canopy, leaving the agent's terminal alone", () => {
+  it("takes Cmd+W from inside the pane as trashing the agent's terminal, leaving Canopy open", () => {
     useCanopyStore.setState({ isOpen: true });
-    const { pane, h } = renderCard(itemFor("working"));
+    const item = itemFor("working");
+    const { pane, h } = renderCard(item);
     expect(pane.hasAttribute("data-close-owner")).toBe(true);
     const request = new Event("daintree:close-request", { cancelable: true });
     pane.querySelector("[data-canopy-terminal]")!.dispatchEvent(request);
     // Not bubbling: the hook hands it to the owner itself.
-    expect(useCanopyStore.getState().isOpen).toBe(true);
+    expect(h.onTrash).not.toHaveBeenCalled();
     pane.dispatchEvent(request);
     expect(request.defaultPrevented).toBe(true);
-    expect(useCanopyStore.getState().isOpen).toBe(false);
-    expect(h.onTrash).not.toHaveBeenCalled();
+    expect(h.onTrash).toHaveBeenCalledTimes(1);
+    expect(h.onTrash).toHaveBeenCalledWith(item);
+    expect(useCanopyStore.getState().isOpen).toBe(true);
   });
 
   it("trashes only on a second press, and stands down if none comes", () => {
@@ -645,6 +1045,34 @@ describe("CanopyCard", () => {
     it("draws nothing for a completion with no hand-back", () => {
       const { container } = renderCard(withRun({ agentState: "completed" }));
       expect(chip(container)).toBeNull();
+    });
+  });
+
+  describe("summary strip", () => {
+    it("carries what the row leaves out: the summary, progress, reports and the assistant", () => {
+      const view = render(
+        <CanopyCard
+          item={itemFor("finished", {
+            summary: "Shipped the rounding fix.",
+            progress: 75,
+            steps: { done: 4, total: 6, current: "Run tests" },
+            tests: "passing",
+          })}
+          {...PROPS}
+          {...handlers()}
+          workLabel="Started by Claude"
+        />
+      );
+      const strip = view.container.querySelector("[data-canopy-summary]")!;
+      expect(strip.textContent).toContain("Shipped the rounding fix.");
+      expect(strip.textContent).toContain("Reported: tests pass");
+      expect(strip.textContent).toContain("Started by Claude");
+      expect(strip.querySelector("[role=progressbar]")?.getAttribute("aria-valuenow")).toBe("75");
+    });
+
+    it("is absent when there is nothing to say", () => {
+      const { container } = renderCard(itemFor("idle", { summary: null, headline: null }));
+      expect(container.querySelector("[data-canopy-summary]")).toBeNull();
     });
   });
 });

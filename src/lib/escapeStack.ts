@@ -9,9 +9,25 @@ interface EscapeEntry {
 
 const stack: EscapeEntry[] = [];
 
-export function registerEscape(handler: EscapeHandler): { id: symbol; unregister: () => void } {
+/**
+ * Consulted only when the stack is empty and nothing else claimed the key.
+ * Kept out of `hasHandlers()` on purpose: the keybinding capture handler
+ * dispatches the stack whenever it has entries, which would take Escape away
+ * from an open Radix menu or popover before it could close itself.
+ */
+const fallbacks: Array<{ handler: () => boolean }> = [];
+
+export function registerEscape(
+  handler: EscapeHandler,
+  /**
+   * `bottom` for a surface painted beneath every dialog and palette whenever
+   * it opened: one already open when it registers still closes first.
+   */
+  { position = "top" }: { position?: "top" | "bottom" } = {}
+): { id: symbol; unregister: () => void } {
   const id = Symbol("escape");
-  stack.push({ id, handler });
+  if (position === "bottom") stack.unshift({ id, handler });
+  else stack.push({ id, handler });
   return {
     id,
     unregister: () => {
@@ -41,6 +57,31 @@ export function hasHandlers(): boolean {
   return stack.length > 0;
 }
 
+/** The handler returns whether it acted, so an idle fallback leaves the key alone. */
+export function registerEscapeFallback(handler: () => boolean): () => void {
+  // Its own entry, so disposing one registration never takes out another that
+  // shares the callback.
+  const entry = { handler };
+  fallbacks.push(entry);
+  return () => {
+    const idx = fallbacks.indexOf(entry);
+    if (idx !== -1) fallbacks.splice(idx, 1);
+  };
+}
+
+export function dispatchEscapeFallback(): boolean {
+  for (let i = fallbacks.length - 1; i >= 0; i--) {
+    try {
+      if (fallbacks[i]!.handler()) return true;
+    } catch (err) {
+      logError("Escape fallback threw", err);
+      return true;
+    }
+  }
+  return false;
+}
+
 export function _resetForTests(): void {
   stack.length = 0;
+  fallbacks.length = 0;
 }

@@ -7,16 +7,21 @@ import type { ReactNode } from "react";
 import { PluginSettingsForm, lockedSecretStorageText } from "../PluginSettingsForm";
 import type {
   LoadedPluginInfo,
-  PluginRuntimeStatusChangedEvent,
+  PluginHostedViewDescriptor,
   PluginSettingsUiValues,
   PluginSettingsViewContext,
+  PluginViewHostContext,
   SettingDefinition,
 } from "@shared/types/plugin";
 import { _resetPluginRuntimeStatusStoreForTest } from "@/store/pluginRuntimeStatusStore";
 import {
-  _resetPluginSettingsViewRuntimesForTest,
-  _settingsViewRemovalSignalForTest,
-} from "@/components/Plugin/PluginSettingsView";
+  _resetPluginHostedViewsStoreForTest,
+  usePluginHostedViewsStore,
+} from "@/store/pluginHostedViewsStore";
+import {
+  _pluginHostedViewRemovalSignalForTest,
+  _resetPluginHostedViewRuntimesForTest,
+} from "@/components/Plugin/PluginHostedView";
 
 /** Build a complete settings-UI payload; overrides fill in only what a test cares about. */
 function uiValues(over: Partial<PluginSettingsUiValues> = {}): PluginSettingsUiValues {
@@ -37,6 +42,9 @@ vi.mock("@/store/projectStore", () => ({
 }));
 
 const madeFor = vi.hoisted(() => [] as Array<Record<string, unknown>>);
+const lastSettingsContext = vi.hoisted(() => ({
+  current: undefined as PluginSettingsViewContext | undefined,
+}));
 
 // The loader is exercised by its own suites; here it only has to show what the
 // settings home handed it.
@@ -46,18 +54,56 @@ vi.mock("@/components/Plugin/PluginViewContent", () => ({
     return function FakeContent(props: {
       panelId: string;
       settingsContext?: PluginSettingsViewContext;
+      hostContext?: PluginViewHostContext;
     }) {
+      lastSettingsContext.current = props.settingsContext;
       return (
         <div
           data-testid="fake-settings-view"
           data-panel-id={props.panelId}
           data-scope={props.settingsContext?.scope}
           data-project={props.settingsContext?.projectId ?? ""}
-        />
+          data-page={props.settingsContext?.page ?? ""}
+          data-host={props.hostContext?.kind}
+        >
+          <input aria-label="Fake cadence" data-testid="fake-cadence" />
+        </div>
       );
     };
   },
+  pluginViewHostContext: (kind: string) => ({ kind }),
 }));
+
+/** Main's side of the hosted-view snapshot this project view is served. */
+const hosted = vi.hoisted(() => ({
+  views: [] as PluginHostedViewDescriptor[],
+  listeners: new Set<(payload: { views: PluginHostedViewDescriptor[] }) => void>(),
+}));
+
+const SETTINGS_VIEW_ID = "plugin-view:acme.test/prefs";
+
+function settingsViewDescriptor(componentPath: string): PluginHostedViewDescriptor {
+  return {
+    id: SETTINGS_VIEW_ID,
+    pluginId: "acme.test",
+    viewId: "prefs",
+    location: "settings",
+    name: "acme.test settings",
+    componentPath,
+  };
+}
+
+/** Serve this snapshot to the view, as the first pull would, before anything renders. */
+function serveHostedViews(views: PluginHostedViewDescriptor[]): void {
+  hosted.views = views;
+  usePluginHostedViewsStore.setState({ views });
+}
+
+/** A later snapshot pushed by main: a reload, a stop, the plugin hidden here. */
+function pushHostedViews(views: PluginHostedViewDescriptor[]): void {
+  hosted.views = views;
+  act(() => hosted.listeners.forEach((cb) => cb({ views })));
+}
 
 // The real Select lazy-loads Radix. This stand-in keeps the trigger's own props (its
 // label wiring and disabled state) and lets a test pick an option with a click.
@@ -110,12 +156,19 @@ vi.mock("@/components/ui/select", () => {
 });
 
 const pluginApi = {
+  getHostedViews: vi.fn(async () => hosted.views),
+  onHostedViewsChanged: vi.fn((cb: (payload: { views: PluginHostedViewDescriptor[] }) => void) => {
+    hosted.listeners.add(cb);
+    return () => hosted.listeners.delete(cb);
+  }),
   getSettingValues: vi.fn(),
   setSettingValue: vi.fn().mockResolvedValue(undefined),
   deleteSettingValue: vi.fn().mockResolvedValue(undefined),
   revealSecretSetting: vi.fn(),
   pickPath: vi.fn(),
   pathExists: vi.fn(),
+  getSetupStatus: vi.fn(),
+  setSetupStepSkipped: vi.fn(),
 };
 
 function makePlugin(settings: SettingDefinition[]): LoadedPluginInfo {
@@ -159,7 +212,9 @@ beforeEach(() => {
   currentProjectId = null;
   madeFor.length = 0;
   vi.clearAllMocks();
-  _resetPluginSettingsViewRuntimesForTest();
+  hosted.views = [];
+  _resetPluginHostedViewRuntimesForTest();
+  _resetPluginHostedViewsStoreForTest();
   _resetPluginRuntimeStatusStoreForTest();
   Element.prototype.scrollIntoView = vi.fn();
   pluginApi.setSettingValue.mockResolvedValue(undefined);
@@ -167,6 +222,8 @@ beforeEach(() => {
   pluginApi.getSettingValues.mockResolvedValue(uiValues());
   pluginApi.pickPath.mockResolvedValue(null);
   pluginApi.pathExists.mockResolvedValue(true);
+  pluginApi.getSetupStatus.mockResolvedValue({ steps: [] });
+  pluginApi.setSetupStepSkipped.mockResolvedValue(undefined);
   (window as unknown as { electron: unknown }).electron = { plugin: pluginApi };
 });
 
@@ -954,12 +1011,17 @@ describe("a keychain that gave no key this session", () => {
   });
 });
 
+/**
+ * A plugin that declares a settings view. Given a module URL, main serves that
+ * view to this project too — the running case every home normally sees.
+ */
 function makeViewPlugin(
   settings: SettingDefinition[],
   settingsViewPath?: string,
   overrides: { declaresView?: boolean; disabled?: boolean } = {}
 ): LoadedPluginInfo {
   const declaresView = overrides.declaresView ?? settingsViewPath !== undefined;
+  if (settingsViewPath !== undefined) serveHostedViews([settingsViewDescriptor(settingsViewPath)]);
   return {
     manifest: {
       name: "acme.test",
@@ -1001,7 +1063,6 @@ function makeViewPlugin(
     devMode: false,
     pluginDanger: "safe",
     blocklisted: false,
-    ...(settingsViewPath ? { settingsViewPath } : {}),
   };
 }
 
@@ -1017,12 +1078,13 @@ describe("PluginSettingsForm custom settings section", () => {
     const view = screen.getByTestId("fake-settings-view");
     expect(view.getAttribute("data-scope")).toBe("user");
     expect(view.getAttribute("data-project")).toBe("");
+    expect(view.getAttribute("data-host")).toBe("settings");
     // Below the declared fields, in its own host-owned group.
     const field = document.getElementById("plugin-setting-acme.test-apiKey")!;
     expect(field.compareDocumentPosition(view) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.getByTestId("plugin-settings-view").closest(".settings-card")).not.toBeNull();
     expect(madeFor[0]).toMatchObject({
-      id: "plugin-settings-view:acme.test",
+      id: SETTINGS_VIEW_ID,
       componentPath: "plugin://a/settings.js",
       extensionId: "acme.test",
       standalone: true,
@@ -1046,6 +1108,7 @@ describe("PluginSettingsForm custom settings section", () => {
   });
 
   it("says a stopped plugin's section needs it enabled, instead of dropping it", () => {
+    serveHostedViews([]);
     render(
       <PluginSettingsForm
         plugin={makeViewPlugin([], undefined, { declaresView: true, disabled: true })}
@@ -1056,7 +1119,7 @@ describe("PluginSettingsForm custom settings section", () => {
     expect(screen.getByText("Available when the plugin is enabled")).toBeTruthy();
   });
 
-  it("unmounts a running section the home knows has stopped, before its list catches up", () => {
+  it("unmounts a running section the home knows has stopped, before its snapshot catches up", () => {
     currentProjectId = "proj-1";
     const plugin = makeViewPlugin([], "plugin://a/settings.js");
     const { rerender } = render(<PluginSettingsForm plugin={plugin} viewScope="project" />);
@@ -1067,30 +1130,44 @@ describe("PluginSettingsForm custom settings section", () => {
     expect(screen.getByText("Available while the plugin is running")).toBeTruthy();
   });
 
-  it("retires a cached runtime when its plugin stops or reloads, with no settings page open", () => {
-    const listeners: Array<(payload: PluginRuntimeStatusChangedEvent) => void> = [];
-    Object.defineProperty(window, "electron", {
-      configurable: true,
-      writable: true,
-      value: {
-        plugin: pluginApi,
-        events: {
-          on: (_name: string, cb: (payload: PluginRuntimeStatusChangedEvent) => void) => {
-            listeners.push(cb);
-            return () => {};
-          },
-        },
-      },
-    });
-    const push = (status: PluginRuntimeStatusChangedEvent["status"]) =>
-      listeners.forEach((cb) => cb({ pluginId: "acme.test", status }));
-    const status = (viewGeneration: number | null) => ({
-      pluginId: "acme.test",
-      viewGeneration,
-      worker: null,
-      dev: null,
-    });
+  it("says the section isn't available here when this project isn't served it", () => {
+    // Running, but main serves this project no section for it.
+    serveHostedViews([]);
+    render(
+      <PluginSettingsForm
+        plugin={makeViewPlugin([{ id: "region", type: "string", label: "Region" }], undefined, {
+          declaresView: true,
+        })}
+        viewScope="user"
+      />
+    );
 
+    expect(screen.queryByTestId("fake-settings-view")).toBeNull();
+    expect(screen.getByText("Not available in this project")).toBeTruthy();
+    // The generated fields are the host's own and keep working.
+    expect(screen.getByText("Region")).toBeTruthy();
+  });
+
+  it("waits for the first snapshot rather than calling a served section unavailable", async () => {
+    let resolvePull: (views: PluginHostedViewDescriptor[]) => void = () => {};
+    pluginApi.getHostedViews.mockImplementationOnce(
+      () => new Promise((resolve) => (resolvePull = resolve))
+    );
+    render(
+      <PluginSettingsForm
+        plugin={makeViewPlugin([], undefined, { declaresView: true })}
+        viewScope="user"
+      />
+    );
+    expect(screen.queryByText(/^Available/)).toBeNull();
+    expect(screen.queryByTestId("fake-settings-view")).toBeNull();
+
+    await act(async () => resolvePull([settingsViewDescriptor("plugin://a/settings.js")]));
+
+    expect(screen.getByTestId("fake-settings-view")).toBeTruthy();
+  });
+
+  it("retires a cached runtime when its plugin reloads or stops, with no settings page open", () => {
     // Mounted once, then the page closes: the runtime stays cached.
     render(
       <PluginSettingsForm
@@ -1099,114 +1176,84 @@ describe("PluginSettingsForm custom settings section", () => {
       />
     );
     cleanup();
-    const signal = _settingsViewRemovalSignalForTest("acme.test")!;
+    const signal = _pluginHostedViewRemovalSignalForTest(SETTINGS_VIEW_ID)!;
     expect(signal.aborted).toBe(false);
 
-    // Still the same generation: nothing to retire.
-    push(status(3));
+    // The same module still served: nothing to retire.
+    pushHostedViews([settingsViewDescriptor("plugin://a/__dtv-3/settings.js")]);
     expect(signal.aborted).toBe(false);
 
     // Reloaded onto a new module: retired at once, not on the next visit.
-    push(status(4));
+    pushHostedViews([settingsViewDescriptor("plugin://b/__dtv-4/settings.js")]);
     expect(signal.aborted).toBe(true);
-    expect(_settingsViewRemovalSignalForTest("acme.test")).toBeUndefined();
+    expect(_pluginHostedViewRemovalSignalForTest(SETTINGS_VIEW_ID)).toBeUndefined();
 
-    // Stopped: the same, for the runtime minted after the reload.
+    // Stopped (or hidden here): the same, for the runtime minted after the reload.
     render(
       <PluginSettingsForm
-        plugin={makeViewPlugin([], "plugin://a/__dtv-4/settings.js")}
+        plugin={makeViewPlugin([], "plugin://b/__dtv-4/settings.js")}
         viewScope="user"
       />
     );
     cleanup();
-    const next = _settingsViewRemovalSignalForTest("acme.test")!;
-    push(null);
+    const next = _pluginHostedViewRemovalSignalForTest(SETTINGS_VIEW_ID)!;
+    pushHostedViews([]);
     expect(next.aborted).toBe(true);
   });
 
-  it("swaps a mounted view for the reloaded module while the page stays open", async () => {
-    const listeners: Array<(payload: PluginRuntimeStatusChangedEvent) => void> = [];
-    const list = vi.fn(async () => [makeViewPlugin([], "plugin://b/__dtv-4/settings.js")]);
-    Object.defineProperty(window, "electron", {
-      configurable: true,
-      writable: true,
-      value: {
-        plugin: { ...pluginApi, list },
-        events: {
-          on: (name: string, cb: (payload: PluginRuntimeStatusChangedEvent) => void) => {
-            if (name === "plugin:runtime-status-changed") listeners.push(cb);
-            return () => {};
-          },
-        },
-      },
-    });
-    const push = (viewGeneration: number) =>
-      act(() =>
-        listeners.forEach((cb) =>
-          cb({
-            pluginId: "acme.test",
-            status: { pluginId: "acme.test", viewGeneration, worker: null, dev: null },
-          })
-        )
-      );
+  it("offers a retry when the first snapshot couldn't be read, and mounts once it is", async () => {
+    pluginApi.getHostedViews.mockRejectedValueOnce(new Error("ipc down"));
     render(
       <PluginSettingsForm
-        plugin={makeViewPlugin([], "plugin://a/__dtv-3/settings.js")}
+        plugin={makeViewPlugin([], undefined, { declaresView: true })}
         viewScope="user"
       />
     );
-    push(3);
-    expect(screen.getByTestId("fake-settings-view")).toBeTruthy();
 
-    // A dev rebuild: the live generation moves on, the props do not.
-    push(4);
+    const retry = await screen.findByRole("button", { name: "Retry" });
+    expect(screen.getByText("Couldn't load this section")).toBeTruthy();
 
-    await waitFor(() =>
-      expect(madeFor.at(-1)?.componentPath).toBe("plugin://b/__dtv-4/settings.js")
-    );
-    expect(screen.getByTestId("fake-settings-view")).toBeTruthy();
-    expect(list).toHaveBeenCalled();
+    hosted.views = [settingsViewDescriptor("plugin://a/settings.js")];
+    fireEvent.click(retry);
+
+    expect(await screen.findByTestId("fake-settings-view")).toBeTruthy();
+    expect(screen.queryByText("Couldn't load this section")).toBeNull();
   });
 
-  it("says the reloaded section couldn't load when the inventory never catches up", async () => {
-    const listeners: Array<(payload: PluginRuntimeStatusChangedEvent) => void> = [];
-    const list = vi.fn(async () => [makeViewPlugin([], "plugin://a/__dtv-3/settings.js")]);
-    Object.defineProperty(window, "electron", {
-      configurable: true,
-      writable: true,
-      value: {
-        plugin: { ...pluginApi, list },
-        events: {
-          on: (name: string, cb: (payload: PluginRuntimeStatusChangedEvent) => void) => {
-            if (name === "plugin:runtime-status-changed") listeners.push(cb);
-            return () => {};
-          },
-        },
-      },
-    });
+  it("rides a reload through its empty snapshot onto the new module", () => {
     render(
       <PluginSettingsForm
         plugin={makeViewPlugin([], "plugin://a/__dtv-3/settings.js")}
         viewScope="user"
       />
     );
-    act(() =>
-      listeners.forEach((cb) =>
-        cb({
-          pluginId: "acme.test",
-          status: { pluginId: "acme.test", viewGeneration: 4, worker: null, dev: null },
-        })
-      )
-    );
-    expect(screen.getByText("Reloading…")).toBeTruthy();
+    expect(screen.getByTestId("fake-settings-view")).toBeTruthy();
 
-    await waitFor(
-      () => expect(screen.getByText(/Couldn't load the reloaded section/)).toBeTruthy(),
-      {
-        timeout: 5000,
-      }
+    // Main unloads before the replacement registers: for a moment nothing is
+    // served, and the section says only what it sees.
+    pushHostedViews([]);
+    expect(screen.queryByTestId("fake-settings-view")).toBeNull();
+    expect(screen.getByText("Not available in this project")).toBeTruthy();
+
+    pushHostedViews([settingsViewDescriptor("plugin://b/__dtv-4/settings.js")]);
+    expect(screen.getByTestId("fake-settings-view")).toBeTruthy();
+    expect(madeFor.at(-1)?.componentPath).toBe("plugin://b/__dtv-4/settings.js");
+  });
+
+  it("swaps a mounted view for the reloaded module while the page stays open", () => {
+    render(
+      <PluginSettingsForm
+        plugin={makeViewPlugin([], "plugin://a/__dtv-3/settings.js")}
+        viewScope="user"
+      />
     );
-    expect(list.mock.calls.length).toBe(5);
+    expect(screen.getByTestId("fake-settings-view")).toBeTruthy();
+
+    // A dev rebuild: main serves the new module; the props never change.
+    pushHostedViews([settingsViewDescriptor("plugin://b/__dtv-4/settings.js")]);
+
+    expect(madeFor.at(-1)?.componentPath).toBe("plugin://b/__dtv-4/settings.js");
+    expect(screen.getByTestId("fake-settings-view")).toBeTruthy();
   });
 
   it("renders nothing for a plugin with neither fields nor a view", () => {
@@ -1312,15 +1359,209 @@ describe("PluginSettingsForm settings edited by the plugin's own section", () =>
       />
     );
 
-    await waitFor(() => expect(onFocusHandled).toHaveBeenCalledWith(3));
+    // The fake view never answers, as a view built before it could: the host
+    // stops waiting and lands on the whole section.
+    await waitFor(() => expect(onFocusHandled).toHaveBeenCalledWith(3), { timeout: 3000 });
     const section = screen.getByTestId("fake-settings-view").closest(".settings-highlight");
     expect(section).not.toBeNull();
+  });
+
+  it("hands the key to the section, which lands on its own control and answers", async () => {
+    const onFocusHandled = vi.fn();
+    render(
+      <PluginSettingsForm
+        plugin={makeViewPlugin([cadence, channel], "plugin://a/settings.js")}
+        viewScope="user"
+        focusRequest={{ key: "cadence", nonce: 4 }}
+        onFocusHandled={onFocusHandled}
+      />
+    );
+
+    await waitFor(() => expect(lastSettingsContext.current?.focus?.key).toBe("cadence"));
+    expect(onFocusHandled).not.toHaveBeenCalled();
+    const control = screen.getByTestId("fake-cadence");
+    const acknowledge = lastSettingsContext.current!.focus!.acknowledge;
+    act(() => {
+      control.focus();
+      acknowledge(true);
+    });
+
+    expect(onFocusHandled).toHaveBeenCalledWith(4);
+    expect(document.activeElement).toBe(control);
+    // Answered: the host doesn't also land on the whole section.
+    expect(document.querySelector(".settings-highlight")).toBeNull();
+    await waitFor(() => expect(lastSettingsContext.current?.focus).toBeUndefined());
+    // A second answer for the same request does nothing.
+    act(() => acknowledge(false));
+    expect(onFocusHandled).toHaveBeenCalledTimes(1);
+    expect(document.querySelector(".settings-highlight")).toBeNull();
+  });
+
+  it("falls back to landing on the section when the view can't show the key", async () => {
+    const onFocusHandled = vi.fn();
+    render(
+      <PluginSettingsForm
+        plugin={makeViewPlugin([cadence, channel], "plugin://a/settings.js")}
+        viewScope="user"
+        focusRequest={{ key: "cadence", nonce: 5 }}
+        onFocusHandled={onFocusHandled}
+      />
+    );
+
+    await waitFor(() => expect(lastSettingsContext.current?.focus?.nonce).toBe(5));
+    act(() => lastSettingsContext.current!.focus!.acknowledge(false));
+
+    expect(onFocusHandled).toHaveBeenCalledWith(5);
+    expect(screen.getByTestId("fake-settings-view").closest(".settings-highlight")).not.toBeNull();
   });
 
   it("still shows the field when the plugin declares no section to edit it", () => {
     render(<PluginSettingsForm plugin={makeViewPlugin([cadence, channel])} viewScope="user" />);
 
     expect(screen.getByText("Posting cadence")).toBeTruthy();
+  });
+});
+
+describe("PluginSettingsForm custom section pages (#14101)", () => {
+  function withPages(plugin: LoadedPluginInfo): LoadedPluginInfo {
+    return {
+      ...plugin,
+      manifest: {
+        ...plugin.manifest,
+        contributes: {
+          ...plugin.manifest.contributes,
+          views: [
+            {
+              id: "prefs",
+              componentPath: "dist/prefs.js",
+              location: "settings",
+              pages: [
+                { id: "columns", title: "Column mapping", description: "Statuses to columns" },
+              ],
+            },
+          ],
+        },
+      },
+    } as LoadedPluginInfo;
+  }
+
+  it("lists the pages, opens one in the same mount, and goes back to its Open button", async () => {
+    render(
+      <PluginSettingsForm
+        plugin={withPages(makeViewPlugin([], "plugin://a/settings.js"))}
+        viewScope="user"
+      />
+    );
+    const view = screen.getByTestId("fake-settings-view");
+    expect(view.getAttribute("data-page")).toBe("");
+
+    const open = screen.getByRole("button", { name: "Open Column mapping" });
+    fireEvent.click(open);
+
+    const heading = await screen.findByRole("heading", { name: "Column mapping" });
+    expect(document.activeElement).toBe(heading);
+    // The same view instance, now told which page is open.
+    expect(screen.getByTestId("fake-settings-view")).toBe(view);
+    expect(view.getAttribute("data-page")).toBe("columns");
+    expect(screen.queryByRole("button", { name: "Open Column mapping" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Back to all settings" }));
+    const reopened = await screen.findByRole("button", { name: "Open Column mapping" });
+    await waitFor(() => expect(document.activeElement).toBe(reopened));
+    expect(view.getAttribute("data-page")).toBe("");
+  });
+
+  it("opens a page from a deep link and lands on its heading", async () => {
+    const onFocusHandled = vi.fn();
+    render(
+      <PluginSettingsForm
+        plugin={withPages(makeViewPlugin([], "plugin://a/settings.js"))}
+        viewScope="user"
+        focusRequest={{ section: "custom", page: "columns", nonce: 12 }}
+        onFocusHandled={onFocusHandled}
+      />
+    );
+
+    await waitFor(() => expect(onFocusHandled).toHaveBeenCalledWith(12));
+    expect(document.activeElement).toBe(screen.getByRole("heading", { name: "Column mapping" }));
+    expect(screen.getByTestId("fake-settings-view").getAttribute("data-page")).toBe("columns");
+  });
+});
+
+describe("PluginSettingsForm custom section links (#14101 review)", () => {
+  function withPages(plugin: LoadedPluginInfo): LoadedPluginInfo {
+    return {
+      ...plugin,
+      manifest: {
+        ...plugin.manifest,
+        contributes: {
+          ...plugin.manifest.contributes,
+          views: [
+            {
+              id: "prefs",
+              componentPath: "dist/prefs.js",
+              location: "settings",
+              pages: [{ id: "columns", title: "Column mapping" }],
+            },
+          ],
+        },
+      },
+    } as LoadedPluginInfo;
+  }
+
+  it("goes back to the section's root for a link that names no page", async () => {
+    const plugin = withPages(makeViewPlugin([], "plugin://a/settings.js"));
+    const onFocusHandled = vi.fn();
+    const { rerender } = render(<PluginSettingsForm plugin={plugin} viewScope="user" />);
+    fireEvent.click(screen.getByRole("button", { name: "Open Column mapping" }));
+    await screen.findByRole("heading", { name: "Column mapping" });
+
+    rerender(
+      <PluginSettingsForm
+        plugin={plugin}
+        viewScope="user"
+        focusRequest={{ section: "custom", nonce: 21 }}
+        onFocusHandled={onFocusHandled}
+      />
+    );
+
+    await waitFor(() => expect(onFocusHandled).toHaveBeenCalledWith(21));
+    expect(screen.queryByRole("heading", { name: "Column mapping" })).toBeNull();
+    expect(screen.getByTestId("fake-settings-view").getAttribute("data-page")).toBe("");
+  });
+
+  it("keeps focus in the section when a reload drops the open page", async () => {
+    const base = makeViewPlugin([], "plugin://a/settings.js");
+    const { rerender } = render(<PluginSettingsForm plugin={withPages(base)} viewScope="user" />);
+    fireEvent.click(screen.getByRole("button", { name: "Open Column mapping" }));
+    const heading = await screen.findByRole("heading", { name: "Column mapping" });
+    expect(document.activeElement).toBe(heading);
+
+    rerender(<PluginSettingsForm plugin={{ ...base, loadedAt: 2 }} viewScope="user" />);
+
+    await waitFor(() =>
+      expect(screen.queryByRole("heading", { name: "Column mapping" })).toBeNull()
+    );
+    const section = document.getElementById("plugin-settings-view-acme.test")!;
+    await waitFor(() => expect(section.contains(document.activeElement)).toBe(true));
+  });
+
+  it("lands a page link on the section, with focus, when the plugin can't show it", async () => {
+    serveHostedViews([]);
+    const onFocusHandled = vi.fn();
+    render(
+      <PluginSettingsForm
+        plugin={withPages(makeViewPlugin([], undefined, { declaresView: true, disabled: true }))}
+        viewScope="user"
+        focusRequest={{ section: "custom", page: "columns", nonce: 22 }}
+        onFocusHandled={onFocusHandled}
+      />
+    );
+
+    await waitFor(() => expect(onFocusHandled).toHaveBeenCalledWith(22), { timeout: 3000 });
+    const section = document.getElementById("plugin-settings-view-acme.test")!;
+    expect(section.classList.contains("settings-highlight")).toBe(true);
+    expect(document.activeElement).toBe(section);
   });
 });
 
@@ -1340,5 +1581,94 @@ describe("PluginSettingsForm after the plugin reloads with new declarations", ()
     );
 
     await waitFor(() => expect(pluginApi.getSettingValues).toHaveBeenCalledTimes(2));
+  });
+});
+
+describe("PluginSettingsForm setup checklist (#13824)", () => {
+  function withSetup(plugin: LoadedPluginInfo): LoadedPluginInfo {
+    return {
+      ...plugin,
+      manifest: {
+        ...plugin.manifest,
+        contributes: {
+          ...plugin.manifest.contributes,
+          setup: [
+            { id: "sync", title: "Run the first sync", done: { kind: "context", when: "x" } },
+          ],
+        },
+      },
+    } as LoadedPluginInfo;
+  }
+
+  const STATUS = {
+    steps: [
+      {
+        id: "sync",
+        title: "Run the first sync",
+        description: null,
+        check: { kind: "observed", done: false },
+        action: null,
+        skipped: false,
+      },
+    ],
+  };
+
+  it("puts the checklist above the plugin's own fields", async () => {
+    currentProjectId = "proj-1";
+    pluginApi.getSetupStatus.mockResolvedValue(STATUS);
+    render(
+      <PluginSettingsForm
+        plugin={withSetup(makePlugin([{ id: "apiKey", type: "string", label: "API key" }]))}
+      />
+    );
+
+    const group = await screen.findByRole("group", { name: "Setup · 0 of 1" });
+    const field = screen.getByLabelText("API key");
+    expect(group.compareDocumentPosition(field) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(pluginApi.getSetupStatus).toHaveBeenCalledWith("acme.test", "proj-1");
+
+    fireEvent.click(screen.getByRole("button", { name: "Skip: Run the first sync" }));
+    expect(pluginApi.setSetupStepSkipped).toHaveBeenCalledWith("acme.test", "sync", true);
+  });
+
+  it("lands a setup deep link on the checklist once it has loaded", async () => {
+    pluginApi.getSetupStatus.mockResolvedValue(STATUS);
+    const onFocusHandled = vi.fn();
+    render(
+      <PluginSettingsForm
+        plugin={withSetup(makePlugin([{ id: "apiKey", type: "string", label: "API key" }]))}
+        focusRequest={{ section: "setup", nonce: 11 }}
+        onFocusHandled={onFocusHandled}
+      />
+    );
+
+    await waitFor(() => expect(onFocusHandled).toHaveBeenCalledWith(11));
+    const group = screen.getByRole("group", { name: "Setup · 0 of 1" });
+    expect(group.closest(".settings-highlight")).not.toBeNull();
+    // Landing focuses the checklist; it never runs a step.
+    expect(pluginApi.setSetupStepSkipped).not.toHaveBeenCalled();
+  });
+
+  it("shows a checklist for a plugin with nothing else to configure", async () => {
+    pluginApi.getSetupStatus.mockResolvedValue(STATUS);
+    render(<PluginSettingsForm plugin={withSetup(makePlugin([]))} />);
+    expect(await screen.findByRole("group", { name: "Setup · 0 of 1" })).toBeTruthy();
+  });
+
+  it("shows what it can see with no project open, and offers no skip", async () => {
+    pluginApi.getSetupStatus.mockResolvedValue(STATUS);
+    render(<PluginSettingsForm plugin={withSetup(makePlugin([]))} />);
+    await screen.findByRole("group", { name: "Setup · 0 of 1" });
+    expect(screen.queryByRole("button", { name: /^Skip/ })).toBeNull();
+  });
+
+  it("keeps an installed plugin's checklist out of Project settings", async () => {
+    currentProjectId = "proj-1";
+    pluginApi.getSetupStatus.mockResolvedValue(STATUS);
+    const { container } = render(
+      <PluginSettingsForm plugin={withSetup(makePlugin([]))} viewScope="project" />
+    );
+    expect(container.textContent).toBe("");
+    expect(pluginApi.getSetupStatus).not.toHaveBeenCalled();
   });
 });

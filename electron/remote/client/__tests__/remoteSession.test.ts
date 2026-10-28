@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type net from "node:net";
+import { z } from "zod";
 
 type InvokeListener = (event: unknown, ...args: unknown[]) => unknown;
 
@@ -57,6 +58,7 @@ import {
   broadcastToRenderer,
   typedHandleWithContext,
 } from "../../../ipc/utils.js";
+import { CHANNELS } from "../../../ipc/channels.js";
 import { getIpcDispatcher } from "../../../ipc/dispatcher.js";
 import {
   getEndpointRegistry,
@@ -83,6 +85,7 @@ import {
 import { HostRegistry, type RemoteHostsStore } from "../HostRegistry.js";
 import {
   RemoteHostManager,
+  type HostConnection,
   type ReverseRequestAnswerer,
   type ViewSink,
 } from "../RemoteHostManager.js";
@@ -98,6 +101,8 @@ import { ControlKind } from "../../link/messages.js";
 const HOST_CHANNEL = "git:get-file-diff";
 const SHELL_CHANNEL = "window:new";
 const EVENT_CHANNEL = "terminal:data";
+// A host channel the harness host never registers, as one build's host lacks a newer one's.
+const MISSING_ON_HOST = "plugin:project-surfaces-get";
 const HOST_ID = "studio-01";
 
 const VIEW_A = 11; // studio-01:proj-1
@@ -175,6 +180,7 @@ async function startHarness(
     reverseRequests?: ReverseRequestAnswerer;
     assistantLive?: SessionHostOptions["assistantLive"];
     agentActive?: SessionHostOptions["agentActive"];
+    mcpBindingLive?: SessionHostOptions["mcpBindingLive"];
     resumeGraceMs?: number;
   } = {}
 ) {
@@ -206,7 +212,7 @@ async function startHarness(
     describeProject: (projectId) =>
       projectId === "proj-1" ? { projectId, path: "/srv/proj-1", name: "one" } : null,
     listProjects: () => [
-      { id: "proj-1", name: "one", path: "/srv/proj-1", emoji: "🌲" },
+      { id: "proj-1", name: "one", path: "/srv/proj-1", emoji: "🌲", frontendAttached: false },
       // Only the listed fields cross the link, whatever else the store holds.
       { id: "proj-2", name: "two", path: "/srv/proj-2", status: "active" } as never,
     ],
@@ -214,6 +220,7 @@ async function startHarness(
     maxEndpointsPerSession: options.maxEndpoints,
     assistantLive: options.assistantLive,
     agentActive: options.agentActive,
+    mcpBindingLive: options.mcpBindingLive,
   });
 
   const registry = new HostRegistry(memoryStore());
@@ -499,6 +506,8 @@ describe("remote session wiring", () => {
     const envelope = await invoke(HOST_CHANNEL, VIEW_A, {});
     expect(envelope.ok).toBe(true);
     expect(hostContexts.at(-1)!.endpoint).toBe(endpoint);
+    // The resume's own reconcile, answered by now, repaired nothing and repainted nothing more.
+    expect(h.sink.resyncs).toHaveLength(1);
   });
 
   it("tells endpoint listeners when a view's endpoint opens and again on a resumed session", async () => {
@@ -623,6 +632,90 @@ describe("remote session wiring", () => {
     expect(hostContexts).toHaveLength(1);
   });
 
+  /** A second Shell, on an older build than the harness host, routing this test's views. */
+  async function connectOlderShell() {
+    const registry = new HostRegistry(memoryStore());
+    registry.add({ name: HOST_ID, connection: { kind: "ssh", target: "studio.example" } });
+    const sink = recordingSink();
+    const older = new RemoteHostManager({
+      registry,
+      createTransport: () =>
+        createDirectTransport({ socketPath: h.server.socketPath, token: h.server.token }),
+      handshake: () => ({ ...TEST_HANDSHAKE, version: "0.9.0" }),
+      client: { clientId: "client-2", clientName: "other", platform: "darwin" },
+      views: sink.sink,
+      session: { pingIntervalMs: 0, idleTimeoutMs: 0 },
+    });
+    cleanups.push(() => older.disposeAll());
+    getIpcDispatcher().setRemoteRouter(
+      new RemoteRouterImpl(older, new WindowHostBinding(), {
+        projectKeyFor: (id) => projectKeys.get(id) ?? null,
+        windowIdFor: () => null,
+      })
+    );
+    older.connect(HOST_ID);
+    await waitFor(() => older.connectionState(HOST_ID).status === "connected");
+    return sink;
+  }
+
+  it("names the host and both builds when a host on another build doesn't have a channel (#13918)", async () => {
+    await startHarness();
+    // This Shell's build has the channel; the host's never registered it.
+    ipcMainMock.handle(MISSING_ON_HOST, () => "answered here");
+    await connectOlderShell();
+
+    const envelope = await invoke(MISSING_ON_HOST, VIEW_A);
+    expect(envelope.ok).toBe(false);
+    if (envelope.ok) return;
+    expect(envelope.error.code).toBe("HOST_BUILD_SKEW");
+    for (const text of [envelope.error.message, envelope.error.userMessage]) {
+      expect(text).toContain(HOST_ID);
+      expect(text).toContain("1.2.3");
+      expect(text).toContain("0.9.0");
+    }
+  });
+
+  it("logs once, with both builds, an event a host on another build sends that this build doesn't know", async () => {
+    await startHarness();
+    const sink = await connectOlderShell();
+    await invoke(HOST_CHANNEL, VIEW_A, {});
+    logBuffer.clear();
+
+    broadcastToRenderer(CHANNELS.EVENTS_PUSH, { name: "made:up", payload: {} });
+    broadcastToRenderer(CHANNELS.EVENTS_PUSH, { name: "made:up", payload: {} });
+    // Shell-owned: dropped on purpose, not for want of knowing it.
+    broadcastToRenderer(CHANNELS.EVENTS_PUSH, { name: "system:wake", payload: {} });
+    broadcastToRenderer(EVENT_CHANNEL, "term-all", "hi");
+    await waitFor(() => (sink.delivered.get(VIEW_A)?.length ?? 0) === 1);
+
+    const drops = logBuffer
+      .getFiltered({ sources: ["main:RemoteHostManager"] })
+      .filter((entry) => entry.message.startsWith("Dropped a push"))
+      .map((entry) => entry.context);
+    expect(drops).toEqual([
+      expect.objectContaining({
+        hostId: HOST_ID,
+        name: "made:up",
+        buildMismatch: { kind: "version", local: "0.9.0", remote: "1.2.3" },
+      }),
+    ]);
+  });
+
+  it("keeps the plain refusal when the builds match", async () => {
+    await startHarness();
+    ipcMainMock.handle(MISSING_ON_HOST, () => "answered here");
+    await connect();
+
+    const envelope = await invoke(MISSING_ON_HOST, VIEW_A);
+    expect(envelope.ok).toBe(false);
+    if (envelope.ok) return;
+    expect(envelope.error).toMatchObject({
+      code: "CHANNEL_NOT_REMOTABLE",
+      message: `Channel ${MISSING_ON_HOST} has no context handler on this host`,
+    });
+    expect(envelope.error.userMessage).toBeUndefined();
+  });
+
   it("records when the host was last seen and its handshake", async () => {
     await startHarness();
     await connect();
@@ -657,8 +750,9 @@ describe("remote session wiring", () => {
     }
     await connect();
     const connection = h.manager.get(HOST_ID)!;
+    // Readiness crosses as the host said it, and a host that didn't say (#14122) still lists.
     await expect(connection.listProjects()).resolves.toEqual([
-      { id: "proj-1", name: "one", path: "/srv/proj-1", emoji: "🌲" },
+      { id: "proj-1", name: "one", path: "/srv/proj-1", emoji: "🌲", frontendAttached: false },
       { id: "proj-2", name: "two", path: "/srv/proj-2" },
     ]);
     expect(getEndpointRegistry().getRemote()).toHaveLength(0);
@@ -712,6 +806,157 @@ describe("remote session wiring", () => {
       // Resumed, not replaced: the close owed from the outage reaches the host.
       await waitFor(() => getEndpointRegistry().getRemote().length === 0);
     }
+  });
+
+  describe("endpoint changes still queued when the link drops (#13917)", () => {
+    /** A grace long enough that a busy worker still resumes rather than starting over. */
+    const RESUMABLE = { resumeGraceMs: 10_000 };
+
+    /** Run `act`, then drop the link in the same tick so what it queued is never written. */
+    async function dropWith(act: (connection: HostConnection) => void): Promise<void> {
+      const connection = h.manager.get(HOST_ID)!;
+      const session = connection.currentSession!;
+      const sessionId = connection.lastSessionId;
+      act(connection);
+      expect(session.queuedBytes(Lane.CONTROL)).toBeGreaterThan(0);
+      for (const socket of h.sockets.splice(0)) socket.destroy();
+      await waitFor(
+        () => connection.currentSession !== null && connection.currentSession !== session
+      );
+      // Resumed, not replaced: the host kept what it had, lost frames and all.
+      expect(connection.lastSessionId).toBe(sessionId);
+    }
+
+    it("opens the endpoint on resume and tells the view it missed events", async () => {
+      await startHarness(RESUMABLE);
+      await connect();
+
+      await dropWith((connection) => connection.send(VIEW_B, "proj-2", HOST_CHANNEL, [{}]));
+
+      const envelope = await invoke(HOST_CHANNEL, VIEW_B, {});
+      expect(envelope).toEqual(wrapSuccess({ answeredFor: "proj-2", remote: true }));
+      await waitFor(() => h.sink.resyncs.length === 1);
+      expect(h.sink.resyncs).toEqual([{ webContentsId: VIEW_B, reason: "reattached" }]);
+    });
+
+    it("moves the endpoint to the view's project on resume", async () => {
+      await startHarness(RESUMABLE);
+      await connect();
+      await invoke(HOST_CHANNEL, VIEW_A, {});
+      const endpoint = getEndpointRegistry().getRemote()[0]!;
+
+      await dropWith((connection) => connection.send(VIEW_A, "proj-2", HOST_CHANNEL, [{}]));
+
+      await waitFor(() => endpoint.projectId === "proj-2");
+      expect(getEndpointRegistry().getRemote()).toEqual([endpoint]);
+    });
+
+    it("closes the endpoint of a view closed just before the drop, and keeps the rest", async () => {
+      await startHarness(RESUMABLE);
+      await connect();
+      await invoke(HOST_CHANNEL, VIEW_A, {});
+      await invoke(HOST_CHANNEL, VIEW_B, {});
+      const kept = getEndpointRegistry()
+        .getRemote()
+        .find((endpoint) => endpoint.projectId === "proj-1")!;
+      const ghost = getEndpointRegistry()
+        .getRemote()
+        .find((endpoint) => endpoint.projectId === "proj-2")!;
+
+      await dropWith(() => h.sink.gone(VIEW_B));
+
+      await waitFor(() => ghost.isClosed());
+      expect(ghost.closeCause).toBe("client-closed");
+      expect(getEndpointRegistry().getRemote()).toEqual([kept]);
+      const envelope = await invoke(HOST_CHANNEL, VIEW_A, {});
+      expect(envelope.ok).toBe(true);
+      expect(hostContexts.at(-1)!.endpoint).toBe(kept);
+    });
+
+    it("ends with the reopened view when a close and reopen under one id were both lost", async () => {
+      await startHarness(RESUMABLE);
+      await connect();
+      await invoke(HOST_CHANNEL, VIEW_A, {});
+      const closed = getEndpointRegistry().getRemote()[0]!;
+
+      await dropWith((connection) => {
+        connection.retireView(VIEW_A);
+        connection.send(VIEW_A, "proj-1", HOST_CHANNEL, [{}]);
+      });
+
+      await waitFor(() => closed.isClosed());
+      expect(closed.closeCause).toBe("client-closed");
+      const envelope = await invoke(HOST_CHANNEL, VIEW_A, {});
+      expect(envelope.ok).toBe(true);
+      const reopened = hostContexts.at(-1)!.endpoint;
+      expect(reopened).not.toBe(closed);
+      expect(getEndpointRegistry().getRemote()).toEqual([reopened]);
+    });
+
+    it("opens a view whose repeated open the lost closes crowded out once they are gone", async () => {
+      await startHarness({ ...RESUMABLE, maxEndpoints: 2 });
+      await connect();
+      await invoke(HOST_CHANNEL, VIEW_A, {});
+      await invoke(HOST_CHANNEL, VIEW_B, {});
+      const viewC = 14;
+      projectKeys.set(viewC, `${HOST_ID}:proj-1`);
+
+      await dropWith((connection) => {
+        h.sink.gone(VIEW_B);
+        connection.send(viewC, "proj-1", HOST_CHANNEL, [{}]);
+      });
+
+      await waitFor(() => h.sink.resyncs.some((resync) => resync.webContentsId === viewC));
+      expect(h.sink.resyncs).toContainEqual({ webContentsId: viewC, reason: "reattached" });
+      const envelope = await invoke(HOST_CHANNEL, viewC, {});
+      expect(envelope).toEqual(wrapSuccess({ answeredFor: "proj-1", remote: true }));
+      expect(getEndpointRegistry().getRemote()).toHaveLength(2);
+    });
+
+    it("asks for the reconcile before the views' streams move to the resumed session", async () => {
+      await startHarness(RESUMABLE);
+      await connect();
+      await invoke(HOST_CHANNEL, VIEW_A, {});
+      const connection = h.manager.get(HOST_ID)!;
+      const askedBeforeStreams: boolean[] = [];
+      let call: { mock: { calls: unknown[][] } } | null = null;
+      cleanups.push(
+        connection.onSessionOpened((session) => {
+          call = vi.spyOn(session, "call");
+        }),
+        connection.onEndpointOpened(() => {
+          const asked = call?.mock.calls.some(
+            ([method]) => method === LinkMethod.ENDPOINT_RECONCILE
+          );
+          askedBeforeStreams.push(asked ?? false);
+        })
+      );
+
+      for (const socket of h.sockets.splice(0)) socket.destroy();
+
+      await waitFor(() => askedBeforeStreams.length === 1);
+      expect(askedBeforeStreams).toEqual([true]);
+    });
+
+    it("still opens what was lost on a host too old to reconcile", async () => {
+      await startHarness(RESUMABLE);
+      // A host from before the reconcile call has no handler for it.
+      cleanups.push(
+        h.server.onSession(({ session }) => {
+          session.registerCallHandler(LinkMethod.ENDPOINT_RECONCILE, z.unknown(), () => {
+            throw new AppError({ code: "UNSUPPORTED", message: "Unknown method" });
+          });
+        })
+      );
+      await connect();
+      await invoke(HOST_CHANNEL, VIEW_A, {});
+
+      await dropWith((connection) => connection.send(VIEW_B, "proj-2", HOST_CHANNEL, [{}]));
+
+      const envelope = await invoke(HOST_CHANNEL, VIEW_B, {});
+      expect(envelope).toEqual(wrapSuccess({ answeredFor: "proj-2", remote: true }));
+      expect((await invoke(HOST_CHANNEL, VIEW_A, {})).ok).toBe(true);
+    });
   });
 
   it("delivers nothing to a view that now belongs to another host", async () => {
@@ -1015,6 +1260,94 @@ describe("remote session wiring", () => {
     });
   });
 
+  describe("MCP bindings (#14228)", () => {
+    /** Projects an external MCP session on the host is bound to, live. */
+    const bound = new Set<string>();
+    const startWithBindings = (options: { resumeGraceMs?: number } = {}) =>
+      startHarness({
+        ...options,
+        mcpBindingLive: (endpoint) => bound.has(endpoint.projectId ?? ""),
+      });
+
+    beforeEach(() => bound.clear());
+
+    it("tells the Shell which views a session on the host is bound to, through a dropped link", async () => {
+      bound.add("proj-1");
+      await startWithBindings({ resumeGraceMs: 10_000 });
+      await connect();
+      await invoke(HOST_CHANNEL, VIEW_A, {});
+      await invoke(HOST_CHANNEL, VIEW_B, {});
+      const connection = h.manager.get(HOST_ID)!;
+      // Already bound when the view opened: no change needed to hear it.
+      await waitFor(() => connection.hasLiveMcpBinding(VIEW_A));
+      expect(connection.hasLiveMcpBinding(VIEW_B)).toBe(false);
+
+      bound.add("proj-2");
+      h.sessionHost.refreshMcpBindings();
+      await waitFor(() => connection.hasLiveMcpBinding(VIEW_B));
+
+      // The session lives on the host while the link is down.
+      h.allowConnect.value = false;
+      for (const socket of h.sockets.splice(0)) socket.destroy();
+      await waitFor(() => connection.unavailableEnvelope() !== null);
+      expect(connection.hasLiveMcpBinding(VIEW_A)).toBe(true);
+
+      // It drops while nobody is attached to hear; the resumed session says so.
+      bound.clear();
+      h.sessionHost.refreshMcpBindings();
+      h.allowConnect.value = true;
+      await waitFor(() => connection.unavailableEnvelope() === null);
+      await waitFor(
+        () => !connection.hasLiveMcpBinding(VIEW_A) && !connection.hasLiveMcpBinding(VIEW_B)
+      );
+    });
+
+    it("forgets a view's answer when it closes", async () => {
+      bound.add("proj-1");
+      await startWithBindings();
+      await connect();
+      await invoke(HOST_CHANNEL, VIEW_A, {});
+      const connection = h.manager.get(HOST_ID)!;
+      await waitFor(() => connection.hasLiveMcpBinding(VIEW_A));
+
+      h.sink.gone(VIEW_A);
+      expect(connection.hasLiveMcpBinding(VIEW_A)).toBe(false);
+    });
+
+    it("takes the host's word only for the project the view is on now, and only well-formed", async () => {
+      // No reader: every answer here is one this test sends.
+      await startHarness();
+      const hostSessions: LinkSession[] = [];
+      cleanups.push(h.server.onSession((ctx) => hostSessions.push(ctx.session)));
+      await connect();
+      await invoke(HOST_CHANNEL, VIEW_B, {});
+      const connection = h.manager.get(HOST_ID)!;
+      const say = (projectId: string, liveBinding: unknown) =>
+        hostSessions.at(-1)!.call(LinkMethod.ENDPOINT_MCP_BINDING, {
+          endpoints: [{ endpointId: "view-12", projectId, liveBinding }],
+        });
+
+      await say("proj-2", true);
+      expect(connection.hasLiveMcpBinding(VIEW_B)).toBe(true);
+
+      // A session bound to the old project says nothing about the new one.
+      projectKeys.set(VIEW_B, `${HOST_ID}:proj-1`);
+      await invoke(HOST_CHANNEL, VIEW_B, {});
+      expect(connection.hasLiveMcpBinding(VIEW_B)).toBe(false);
+
+      // Said about the project it left, either way: ignored.
+      await say("proj-2", true);
+      expect(connection.hasLiveMcpBinding(VIEW_B)).toBe(false);
+      await say("proj-1", true);
+      expect(connection.hasLiveMcpBinding(VIEW_B)).toBe(true);
+      await say("proj-2", false);
+      expect(connection.hasLiveMcpBinding(VIEW_B)).toBe(true);
+
+      await expect(say("proj-1", "no")).rejects.toMatchObject({ code: "VALIDATION" });
+      expect(connection.hasLiveMcpBinding(VIEW_B)).toBe(true);
+    });
+  });
+
   it("carries host summaries and session calls on a link no view is bound to", async () => {
     await startHarness();
     const summary = {
@@ -1056,6 +1389,7 @@ describe("remote session wiring", () => {
         quietHoursEndMin: 0,
         quietHoursWeekdays: [],
       }),
+      shellDecides: () => false,
       now: Date.now,
     });
     cleanups.push(disposeHost);

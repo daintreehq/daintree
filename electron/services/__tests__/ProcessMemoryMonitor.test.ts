@@ -1327,6 +1327,24 @@ describe("ProcessMemoryMonitor", () => {
       );
     });
 
+    it("asks the renderers to trim at the same step as the host, and survives a throw (#14215)", async () => {
+      const trimPtyHostState = vi.fn(async () => makeTrimSummary());
+      const trimRendererScrollback = vi.fn(() => {
+        throw new Error("send failed");
+      });
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 350 * 1024, 100)]);
+      stop = startAppMetricsMonitor({ ...mockActions, trimPtyHostState, trimRendererScrollback });
+
+      await advancePolls(WARMUP_INTERVALS + 1);
+
+      expect(trimPtyHostState).toHaveBeenCalledTimes(1);
+      expect(trimRendererScrollback).toHaveBeenCalledTimes(1);
+      expect(logInfo).toHaveBeenCalledWith(
+        "memory-pressure-tier1-reclaim",
+        expect.objectContaining({ ptyTrimFailed: false })
+      );
+    });
+
     it("awaits the pty-host trim before opening the settle window (#11674)", async () => {
       // Fire-and-forget left the host still processing the trim while the
       // sampler was already reading the "after" footprint, so the bracket
@@ -1455,6 +1473,42 @@ describe("ProcessMemoryMonitor", () => {
       const destroyIdx = callOrder.lastIndexOf("destroyHiddenWebviews");
       const hibernateIdx = callOrder.indexOf("hibernateIdleProjects");
       expect(destroyIdx).toBeLessThan(hibernateIdx);
+    });
+
+    it("sleeps idle projects before views and hosts are reclaimed out from under the sleep (#13852)", async () => {
+      // A sleep reads its project's workspace host to prove nothing is
+      // mid-lifecycle; the view eviction and dormant-host reclaim take those
+      // hosts away, so running them first would leave nothing it may sleep.
+      const callOrder: string[] = [];
+      mockActions.destroyHiddenWebviews = vi.fn(async (tier: 1 | 2) => {
+        callOrder.push(`destroyHiddenWebviews(${tier})`);
+        return 0;
+      });
+      mockActions.hibernateIdleProjects = vi.fn(async () => {
+        callOrder.push("hibernateIdleProjects");
+        return 0;
+      });
+      mockActions.evictCachedProjectViews = vi.fn(() => {
+        callOrder.push("evictCachedProjectViews");
+        return 0;
+      });
+      mockActions.reclaimDormantWorkspaceHosts = vi.fn(() => {
+        callOrder.push("reclaimDormantWorkspaceHosts");
+        return 0;
+      });
+
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 350 * 1024, 100)]);
+      stop = startAppMetricsMonitor(mockActions);
+
+      await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2);
+
+      const tier2 = callOrder.slice(callOrder.indexOf("destroyHiddenWebviews(2)"));
+      expect(tier2.slice(0, 4)).toEqual([
+        "destroyHiddenWebviews(2)",
+        "hibernateIdleProjects",
+        "evictCachedProjectViews",
+        "reclaimDormantWorkspaceHosts",
+      ]);
     });
 
     it("holds tier 2 back while tier 1's measured reclaim is still fresh", async () => {
@@ -1705,6 +1759,19 @@ describe("ProcessMemoryMonitor", () => {
       await advanceMinutes(20);
 
       expect(gapsInMinutes(passes[1])).toEqual([5, 5, 5]);
+    });
+
+    it("never counts the renderer scrollback request as productive (#14215)", async () => {
+      // The request is unacknowledged: sending it proves nothing was reclaimed,
+      // so an otherwise empty pass still backs off.
+      mockActions.trimRendererScrollback = vi.fn();
+      stop = startAppMetricsMonitor(mockActions);
+
+      await advanceMinutes(15);
+
+      expect(passes[1]).toHaveLength(2);
+      expect(mockActions.trimRendererScrollback).toHaveBeenCalledTimes(2);
+      expect(gapsInMinutes(passes[1])).toEqual([10]);
     });
 
     it("neither grows nor forgets the backoff on a pass whose evidence is incomplete", async () => {
@@ -1980,6 +2047,22 @@ describe("ProcessMemoryMonitor", () => {
         "memory-pressure-tier2-reclaim",
         expect.objectContaining({ workspaceHostsReclaimed: 0 })
       );
+    });
+
+    it("keeps pulling the view and host levers when the sleep lever throws", async () => {
+      mockGetAppMetrics.mockReturnValue(underPressure);
+      mockActions.hibernateIdleProjects = vi.fn().mockRejectedValue(new Error("sweep failed"));
+      mockActions.reclaimDormantWorkspaceHosts = vi.fn(() => 0);
+
+      stop = startAppMetricsMonitor(mockActions);
+      await advanceToTier2();
+
+      expect(logWarn).toHaveBeenCalledWith(
+        "memory-pressure-tier2-action-failed",
+        expect.objectContaining({ action: "hibernateIdleProjects" })
+      );
+      expect(mockActions.evictCachedProjectViews).toHaveBeenCalledTimes(1);
+      expect(mockActions.reclaimDormantWorkspaceHosts).toHaveBeenCalledTimes(1);
     });
 
     it("logs tier-2 escalation inputs instead of a no-action delta", async () => {

@@ -181,6 +181,27 @@ describe("a zero-build plugin importing the SDK", () => {
     });
   }, 30_000);
 
+  it("resolves @daintreehq/plugin-sdk/operations to the app's copy", async () => {
+    const out = await runPlugin(
+      path.join(tmp, "project/.daintree/plugins/acme.ops"),
+      [
+        'import { createOperationManager, OperationError, OPERATION_TERMINAL_STATES } from "@daintreehq/plugin-sdk/operations";',
+        "export async function probe() {",
+        "  return {",
+        "    create: typeof createOperationManager,",
+        '    retryable: new OperationError("X", "x", { retryable: false }).retryable,',
+        "    terminal: OPERATION_TERMINAL_STATES,",
+        "  };",
+        "}",
+      ].join("\n")
+    );
+    expect(JSON.parse(out)).toEqual({
+      create: "function",
+      retryable: false,
+      terminal: ["succeeded", "failed", "cancelled", "abandoned"],
+    });
+  }, 30_000);
+
   it("prefers an SDK the plugin installed itself", async () => {
     const pluginDir = path.join(tmp, "project/.daintree/plugins/acme.own");
     const ownSdk = path.join(pluginDir, "node_modules/@daintreehq/plugin-sdk");

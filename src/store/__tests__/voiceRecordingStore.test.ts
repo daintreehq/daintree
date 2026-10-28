@@ -1,9 +1,11 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import {
   isVoiceMicPending,
+  selectMicNoticeForPanel,
   useVoiceRecordingStore,
   type RecentDictationTarget,
 } from "../voiceRecordingStore";
+import { joinCompletedSegments } from "@/lib/voiceTranscriptSegments";
 
 const PANEL_ID = "panel-1";
 const TARGET = { panelId: PANEL_ID };
@@ -15,15 +17,79 @@ function reset() {
     status: "idle",
     lastError: null,
     activeTarget: null,
+    pendingTarget: null,
     lockedTarget: null,
     recentTargets: [],
     elapsedSeconds: 0,
     audioLevel: 0,
     micSignal: "pending",
+    micDeviceLabel: null,
+    micNotice: null,
     panelBuffers: {},
     announcement: null,
+    sessionElsewhere: null,
+    sessionElsewhereRevision: -1,
+    dictationCancelConfirm: null,
   });
 }
+
+describe("voiceRecordingStore — session elsewhere (#14601)", () => {
+  beforeEach(reset);
+
+  const elsewhere = {
+    sessionId: "s1",
+    hostId: "local",
+    projectId: "p-a",
+    projectName: "Alpha",
+    details: null,
+  };
+
+  it("takes main's report of the live session", () => {
+    useVoiceRecordingStore.getState().applyLiveSessionUpdate({ revision: 1, session: elsewhere });
+    expect(useVoiceRecordingStore.getState().sessionElsewhere).toEqual(elsewhere);
+
+    useVoiceRecordingStore.getState().applyLiveSessionUpdate({ revision: 2, session: null });
+    expect(useVoiceRecordingStore.getState().sessionElsewhere).toBeNull();
+  });
+
+  it("keeps a newer push over an older snapshot that resolves after it", () => {
+    useVoiceRecordingStore.getState().applyLiveSessionUpdate({ revision: 3, session: null });
+    useVoiceRecordingStore.getState().applyLiveSessionUpdate({ revision: 2, session: elsewhere });
+
+    expect(useVoiceRecordingStore.getState().sessionElsewhere).toBeNull();
+  });
+
+  it("takes the first report whatever its revision", () => {
+    useVoiceRecordingStore.getState().applyLiveSessionUpdate({ revision: 0, session: elsewhere });
+    expect(useVoiceRecordingStore.getState().sessionElsewhere).toEqual(elsewhere);
+    expect(useVoiceRecordingStore.getState().sessionElsewhereRevision).toBe(0);
+  });
+
+  it("takes a pull of the same revision as the push it already has", () => {
+    useVoiceRecordingStore.getState().applyLiveSessionUpdate({ revision: 5, session: null });
+    useVoiceRecordingStore.getState().applyLiveSessionUpdate({ revision: 5, session: elsewhere });
+
+    expect(useVoiceRecordingStore.getState().sessionElsewhere).toEqual(elsewhere);
+    expect(useVoiceRecordingStore.getState().sessionElsewhereRevision).toBe(5);
+  });
+
+  it("keeps the stored revision when it refuses an older report", () => {
+    useVoiceRecordingStore.getState().applyLiveSessionUpdate({ revision: 7, session: elsewhere });
+    useVoiceRecordingStore.getState().applyLiveSessionUpdate({ revision: 6, session: null });
+
+    expect(useVoiceRecordingStore.getState().sessionElsewhereRevision).toBe(7);
+  });
+
+  it("never persists it", () => {
+    useVoiceRecordingStore.getState().applyLiveSessionUpdate({ revision: 1, session: elsewhere });
+    const persisted = useVoiceRecordingStore.persist
+      .getOptions()
+      .partialize?.(useVoiceRecordingStore.getState());
+
+    expect(persisted).not.toHaveProperty("sessionElsewhere");
+    expect(persisted).not.toHaveProperty("sessionElsewhereRevision");
+  });
+});
 
 describe("voiceRecordingStore — setArming", () => {
   beforeEach(reset);
@@ -67,6 +133,62 @@ describe("voiceRecordingStore — setArming", () => {
     const state = useVoiceRecordingStore.getState();
     expect(state.status).toBe("connecting");
     expect(state.activeTarget).toEqual(TARGET);
+    expect(state.pendingTarget).toBeNull();
+  });
+
+  // #14604: the running or finishing session's transcripts still route by
+  // activeTarget, so arming the next target must not take it over.
+  for (const status of [
+    "connecting",
+    "recording",
+    "paused",
+    "reconnecting",
+    "finishing",
+  ] as const) {
+    it(`leaves a ${status} session's target and status alone while the next start waits`, () => {
+      const next = { panelId: "panel-2" };
+      useVoiceRecordingStore.getState().beginSession(TARGET);
+      useVoiceRecordingStore.getState().setStatus(status);
+      useVoiceRecordingStore.getState().setMicSignal("live");
+      useVoiceRecordingStore
+        .getState()
+        .setLastError({ severity: "transient", code: "ws_close_1006", message: "Dropped" });
+
+      useVoiceRecordingStore.getState().setArming(next);
+
+      const state = useVoiceRecordingStore.getState();
+      expect(state.activeTarget).toEqual(TARGET);
+      expect(state.status).toBe(status);
+      expect(state.micSignal).toBe("live");
+      expect(state.pendingTarget).toEqual(next);
+      expect(state.lastError).toBeNull();
+
+      useVoiceRecordingStore.getState().finishSession();
+      expect(useVoiceRecordingStore.getState().pendingTarget).toEqual(next);
+      useVoiceRecordingStore.getState().beginSession(next);
+      expect(useVoiceRecordingStore.getState().activeTarget).toEqual(next);
+      expect(useVoiceRecordingStore.getState().pendingTarget).toBeNull();
+    });
+  }
+});
+
+describe("voiceRecordingStore — errorPanelId (#14628)", () => {
+  beforeEach(reset);
+  afterEach(reset);
+
+  it("pins an errored session to the panel it ended in and clears on the next start", () => {
+    useVoiceRecordingStore.getState().setArming(TARGET);
+    useVoiceRecordingStore.getState().finishSession({ nextStatus: "error" });
+    expect(useVoiceRecordingStore.getState().errorPanelId).toBe(PANEL_ID);
+
+    useVoiceRecordingStore.getState().setArming({ panelId: "panel-2" });
+    expect(useVoiceRecordingStore.getState().errorPanelId).toBeNull();
+  });
+
+  it("does not pin a clean finish", () => {
+    useVoiceRecordingStore.getState().setArming(TARGET);
+    useVoiceRecordingStore.getState().finishSession();
+    expect(useVoiceRecordingStore.getState().errorPanelId).toBeNull();
   });
 });
 
@@ -102,6 +224,60 @@ describe("voiceRecordingStore — micSignal (#13105)", () => {
     for (const status of ["idle", "arming", "paused", "finishing", "error"] as const) {
       expect(isVoiceMicPending({ status, micSignal: "pending" })).toBe(false);
     }
+  });
+});
+
+describe("voiceRecordingStore — micNotice (#14606)", () => {
+  beforeEach(reset);
+
+  const lost = { kind: "lost" as const, target: TARGET, deviceLabel: "AirPods Pro" };
+  const silent = {
+    kind: "silent" as const,
+    target: TARGET,
+    deviceLabel: "AirPods Pro",
+    bluetooth: true,
+    builtIn: null,
+  };
+
+  it("clears the notice and the device name when a new session arms or begins", () => {
+    for (const enter of [
+      () => useVoiceRecordingStore.getState().setArming(TARGET),
+      () => useVoiceRecordingStore.getState().beginSession(TARGET),
+    ]) {
+      useVoiceRecordingStore.setState({ micNotice: lost, micDeviceLabel: "AirPods Pro" });
+      enter();
+      expect(useVoiceRecordingStore.getState().micNotice).toBeNull();
+      expect(useVoiceRecordingStore.getState().micDeviceLabel).toBeNull();
+    }
+  });
+
+  it("keeps a lost notice past the session's end, but not a silent one", () => {
+    for (const [notice, kept] of [
+      [lost, true],
+      [silent, false],
+    ] as const) {
+      useVoiceRecordingStore.getState().beginSession(TARGET);
+      useVoiceRecordingStore.setState({ micNotice: notice, micDeviceLabel: "AirPods Pro" });
+      useVoiceRecordingStore.getState().finishSession({ preserveLiveText: true });
+      expect(useVoiceRecordingStore.getState().micNotice).toBe(kept ? notice : null);
+      expect(useVoiceRecordingStore.getState().micDeviceLabel).toBeNull();
+    }
+  });
+
+  it("dismisses only the notice it was given, even against a newer one of the same kind", () => {
+    const newer = { ...lost, deviceLabel: "USB Mic" };
+    useVoiceRecordingStore.getState().setMicNotice(newer);
+    useVoiceRecordingStore.getState().dismissMicNotice(lost);
+    expect(useVoiceRecordingStore.getState().micNotice).toBe(newer);
+    useVoiceRecordingStore.getState().dismissMicNotice(newer);
+    expect(useVoiceRecordingStore.getState().micNotice).toBeNull();
+  });
+
+  it("hands a notice only to the pane it happened on", () => {
+    expect(selectMicNoticeForPanel({ micNotice: lost }, PANEL_ID)).toBe(lost);
+    expect(selectMicNoticeForPanel({ micNotice: lost }, "panel-2")).toBeNull();
+    expect(selectMicNoticeForPanel({ micNotice: lost }, null)).toBeNull();
+    expect(selectMicNoticeForPanel({ micNotice: null }, PANEL_ID)).toBeNull();
   });
 });
 
@@ -144,17 +320,6 @@ describe("voiceRecordingStore — transcript phase transitions", () => {
     useVoiceRecordingStore.getState().resetParagraphState(PANEL_ID);
 
     expect(useVoiceRecordingStore.getState().panelBuffers[PANEL_ID]?.liveText).toBe("");
-  });
-
-  it("after resetParagraphState, setDraftLengthAtSegmentStart can set a new anchor", () => {
-    useVoiceRecordingStore.getState().beginSession(TARGET);
-    useVoiceRecordingStore.getState().setDraftLengthAtSegmentStart(PANEL_ID, 20);
-    useVoiceRecordingStore.getState().resetParagraphState(PANEL_ID);
-    useVoiceRecordingStore.getState().setDraftLengthAtSegmentStart(PANEL_ID, 21);
-
-    expect(
-      useVoiceRecordingStore.getState().panelBuffers[PANEL_ID]?.draftLengthAtSegmentStart
-    ).toBe(21);
   });
 
   it("finishSession resets transcriptPhase to idle regardless of prior phase", () => {
@@ -299,14 +464,6 @@ describe("voiceRecordingStore — identified items (#13109)", () => {
     expect(buffer().transcriptPhase).toBe("idle");
   });
 
-  it("consumes a legacy segment anchor so a later flush can't slice at it", () => {
-    const store = useVoiceRecordingStore.getState();
-    store.setDraftLengthAtSegmentStart(PANEL_ID, 5);
-    store.appendDelta("hello", "item-a");
-    store.completeSegment("Hello.", "item-a");
-    expect(buffer().draftLengthAtSegmentStart).toBe(-1);
-  });
-
   it("an unidentified completion clears identified item state", () => {
     const store = useVoiceRecordingStore.getState();
     store.appendDelta("stale", "item-a");
@@ -314,6 +471,41 @@ describe("voiceRecordingStore — identified items (#13109)", () => {
     expect(buffer().liveItems).toEqual([]);
     store.appendDelta("fresh", "item-b");
     expect(buffer().liveText).toBe("fresh");
+  });
+
+  it("a paragraph reset keeps the session's earlier text behind its break (#14637)", () => {
+    const store = useVoiceRecordingStore.getState();
+    store.completeSegment("First line.", "item-a");
+    store.resetParagraphState(PANEL_ID);
+    store.completeSegment("Second.", "item-b");
+    // "New paragraph" reaches the store as two breaks in a row.
+    store.resetParagraphState(PANEL_ID);
+    store.resetParagraphState(PANEL_ID);
+    store.completeSegment("Third.", "item-c");
+    store.resetParagraphState(PANEL_ID);
+    expect(joinCompletedSegments(store.consumeCompletedSegments(PANEL_ID))).toBe(
+      "First line.\nSecond.\n\nThird."
+    );
+    expect(buffer().completedSegments).toEqual([]);
+  });
+
+  it("dropping the last segment takes the breaks after it, and only that segment", () => {
+    const store = useVoiceRecordingStore.getState();
+    store.completeSegment("Keep.", "item-a");
+    store.resetParagraphState(PANEL_ID);
+    store.completeSegment("Scratched.", "item-b");
+    store.resetParagraphState(PANEL_ID);
+    store.dropLastCompletedSegment(PANEL_ID);
+    expect(buffer().completedSegments).toEqual(["Keep.", "\n"]);
+    store.dropLastCompletedSegment(PANEL_ID);
+    store.dropLastCompletedSegment(PANEL_ID);
+    expect(buffer().completedSegments).toEqual([]);
+  });
+
+  it("a paragraph reset before any text records no break", () => {
+    const store = useVoiceRecordingStore.getState();
+    store.resetParagraphState(PANEL_ID);
+    expect(buffer().completedSegments).toEqual([]);
   });
 
   it("paragraph reset preserves other items' interim text", () => {
@@ -334,6 +526,52 @@ describe("voiceRecordingStore — identified items (#13109)", () => {
     expect(buffer().liveItems).toEqual([]);
     expect(buffer().liveText).toBe("");
     expect(buffer().completedSegments).toEqual(["first second"]);
+  });
+
+  it("finishSession keeps the preview as the caller committed it", () => {
+    const store = useVoiceRecordingStore.getState();
+    store.appendDelta("Um, so the", "item-a");
+    store.finishSession({ preserveLiveText: true, committedLiveText: "So the" });
+    expect(buffer().completedSegments).toEqual(["So the"]);
+  });
+
+  it("finishSession keeps nothing of a preview the caller committed as empty", () => {
+    const store = useVoiceRecordingStore.getState();
+    store.appendDelta("Um", "item-a");
+    store.finishSession({ preserveLiveText: true, committedLiveText: "" });
+    expect(buffer().completedSegments).toEqual([]);
+  });
+
+  it("a replacing delta revises its item's preview instead of appending (#14640)", () => {
+    const store = useVoiceRecordingStore.getState();
+    store.appendDelta("hello", "item-a", true);
+    store.appendDelta("Hello world", "item-a", true);
+    expect(buffer().liveText).toBe("Hello world");
+    expect(buffer().transcriptPhase).toBe("interim");
+
+    // A stop that never saw the final keeps only the latest revision.
+    store.finishSession({ preserveLiveText: true });
+    expect(buffer().completedSegments).toEqual(["Hello world"]);
+  });
+
+  it("a replacing delta can shorten or retract its item's preview", () => {
+    const store = useVoiceRecordingStore.getState();
+    store.appendDelta("hello world", "item-a", true);
+    store.appendDelta("hello", "item-a", true);
+    expect(buffer().liveText).toBe("hello");
+
+    store.appendDelta("", "item-a", true);
+    expect(buffer().liveText).toBe("");
+    store.finishSession({ preserveLiveText: true });
+    expect(buffer().completedSegments).toEqual([]);
+  });
+
+  it("a replacing delta leaves other items' previews alone", () => {
+    const store = useVoiceRecordingStore.getState();
+    store.appendDelta("first", "item-a");
+    store.appendDelta("sec", "item-b", true);
+    store.appendDelta("Second", "item-b", true);
+    expect(buffer().liveText).toBe("first Second");
   });
 
   it("beginSession clears items left from a previous session", () => {
@@ -585,5 +823,35 @@ describe("voiceRecordingStore cross-view write merge (#11351)", () => {
     // Disk mirrors memory: one entry per panel, and the older distinct target was
     // not evicted by stale duplicates of the retitled one.
     expect(readTargets(backing).map((t) => t.panelTitle)).toEqual(["Ship the parser fix", "Alpha"]);
+  });
+});
+
+describe("voiceRecordingStore — a first Escape waiting on the second (#14927)", () => {
+  beforeEach(reset);
+
+  const confirm = { panelId: PANEL_ID, sessionId: "s1", expiresAt: 1_000 };
+
+  it.each([
+    ["the session ends", () => useVoiceRecordingStore.getState().finishSession()],
+    [
+      "the session ends in an error",
+      () => useVoiceRecordingStore.getState().finishSession({ nextStatus: "error" }),
+    ],
+    ["the next session begins", () => useVoiceRecordingStore.getState().beginSession(TARGET, "s2")],
+  ])("stands down when %s", (_label, act) => {
+    useVoiceRecordingStore.getState().beginSession(TARGET, "s1");
+    useVoiceRecordingStore.getState().setDictationCancelConfirm(confirm);
+
+    act();
+
+    expect(useVoiceRecordingStore.getState().dictationCancelConfirm).toBeNull();
+  });
+
+  it("stands down when a session with no target ends", () => {
+    useVoiceRecordingStore.getState().setDictationCancelConfirm(confirm);
+
+    useVoiceRecordingStore.getState().finishSession();
+
+    expect(useVoiceRecordingStore.getState().dictationCancelConfirm).toBeNull();
   });
 });

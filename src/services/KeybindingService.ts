@@ -10,8 +10,7 @@ import { isMac } from "@/lib/platform";
 import { formatChordText } from "@/lib/kbdShortcut";
 import { BUILT_IN_ACTION_IDS } from "@shared/config/actionIds";
 import { KEY_ACTION_VALUES } from "@shared/types/keymap";
-import { evaluate } from "@shared/utils/whenClause/evaluator";
-import { parse } from "@shared/utils/whenClause/parser";
+import { evaluateWhenClause } from "@shared/utils/whenClause/evaluateWhenClause";
 import type { WhenClauseContext } from "@shared/utils/whenClause/types";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 
@@ -26,21 +25,6 @@ const builtInActionIdSet: ReadonlySet<string> = new Set([
   ...BUILT_IN_ACTION_IDS,
   ...KEY_ACTION_VALUES,
 ]);
-
-const whenAstCache = new Map<string, ReturnType<typeof parse>>();
-
-function evaluateWhenClause(when: string, ctx: WhenClauseContext): boolean {
-  try {
-    let ast = whenAstCache.get(when);
-    if (!ast) {
-      ast = parse(when);
-      whenAstCache.set(when, ast);
-    }
-    return evaluate(ast, ctx);
-  } catch {
-    return false;
-  }
-}
 
 class KeybindingService {
   private bindings: Map<string, RegisteredKeybindingConfig[]> = new Map();

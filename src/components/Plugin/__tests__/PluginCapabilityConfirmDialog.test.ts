@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { capabilityAction, reachesThisComputer, titleFor } from "../PluginCapabilityConfirmDialog";
+import {
+  capabilityAction,
+  externalLinkTitleFor,
+  reachesThisComputer,
+  restoreTitleFor,
+  titleFor,
+} from "../PluginCapabilityConfirmDialog";
 import { CAPABILITY_META } from "../capabilityMeta";
 import { BUILT_IN_PLUGIN_CAPABILITIES, type BuiltInPluginCapability } from "@shared/types/plugin";
 
@@ -53,5 +59,15 @@ describe("PluginCapabilityConfirmDialog microcopy", () => {
     );
     expect(reachesThisComputer("clipboard:read")).toBe(true);
     expect(reachesThisComputer("shell:exec")).toBe(false);
+  });
+
+  it("names the plugin and the hostname in the link prompt", () => {
+    expect(externalLinkTitleFor("Acme CRM", "app.example.com")).toBe(
+      "Allow 'Acme CRM' to open links to app.example.com?"
+    );
+  });
+
+  it("asks a question naming the plugin when offering its permissions back (#14019)", () => {
+    expect(restoreTitleFor("Agent Grid")).toBe("Restore permissions for 'Agent Grid'?");
   });
 });

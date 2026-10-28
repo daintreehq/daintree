@@ -70,7 +70,7 @@ async function importFresh() {
   const configModule = await import("../paintFabric/paintFabricConfig");
   const clientsModule = await import("@/clients");
   return {
-    terminalInstanceService: serviceModule.terminalInstanceService,
+    terminalInstanceService: serviceModule.createTerminalPaintPlane(),
     PaintFabricCompositor: compositorModule.PaintFabricCompositor,
     PRIMARY_SURFACE_ID: configModule.PRIMARY_SURFACE_ID,
     MAX_PAINT_FABRIC_SURFACES: configModule.MAX_PAINT_FABRIC_SURFACES,

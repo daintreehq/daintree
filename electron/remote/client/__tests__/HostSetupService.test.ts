@@ -152,6 +152,22 @@ describe("HostSetupService", () => {
         confirmed: { detail: "everything" } as never,
       })
     ).toThrow(/confirmed/);
+    expect(() =>
+      setup.install({
+        opId: "op-3",
+        connection: { kind: "ssh", target: "studio" },
+        allowDowngrade: "yes" as never,
+      })
+    ).toThrow(/allowDowngrade/);
+    for (const applyStaged of [{}, { version: "1.4.0; rm -rf ~" }, "1.4.0"]) {
+      expect(() =>
+        setup.install({
+          opId: "op-4",
+          connection: { kind: "ssh", target: "studio" },
+          applyStaged: applyStaged as never,
+        })
+      ).toThrow(/applyStaged/);
+    }
   });
 
   it("bootstraps a fresh Linux host over ssh: the unit on stdin, then a handoff that never starts a backend", async () => {

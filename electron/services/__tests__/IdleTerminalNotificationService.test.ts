@@ -10,7 +10,9 @@ const storeMock = vi.hoisted(() => ({
 
 const projectStoreMock = vi.hoisted(() => ({
   getCurrentProjectId: vi.fn<() => string | null>(() => null),
-  getAllProjects: vi.fn<() => Array<{ id: string; name: string; path: string }>>(() => []),
+  getAllProjects: vi.fn<
+    () => Array<{ id: string; name: string; path: string; neverAutoSleep?: boolean }>
+  >(() => []),
 }));
 
 const ptyManagerMock = vi.hoisted(() => ({
@@ -22,17 +24,34 @@ const ptyManagerMock = vi.hoisted(() => ({
   off: vi.fn(),
 }));
 
-vi.mock("../../window/serviceRefs.js", () => ({ getPtyClient: () => ptyManagerMock }));
+const workspaceClientMock = vi.hoisted(() => ({ evictProject: vi.fn() }));
+vi.mock("../../window/serviceRefs.js", () => ({
+  getPtyClient: () => ptyManagerMock,
+  getWorkspaceClientRef: () => workspaceClientMock,
+}));
 vi.mock("../../store.js", () => ({ store: storeMock }));
 vi.mock("../ProjectStore.js", () => ({ projectStore: projectStoreMock }));
 
 const broadcastToRendererMock = vi.hoisted(() => vi.fn());
 const writeHibernatedMarkerMock = vi.hoisted(() => vi.fn());
-const hibernateProjectOnDemandMock = vi.hoisted(() =>
-  vi.fn(async (_projectId: string, _projectName: string) => 0)
+type SleepOutcome =
+  | {
+      status: "slept";
+      terminalsKilled: number;
+      rendererViewsEvicted: number;
+      workspaceEvicted: boolean;
+      pluginWorkStopped?: { tasks: unknown[]; processes: number; calls: number };
+    }
+  | { status: "already-closed" };
+const sleepProjectMock = vi.hoisted(() =>
+  vi.fn<(projectId: string, options: unknown, deps: unknown) => Promise<SleepOutcome>>()
 );
 
-vi.mock("../../utils/logger.js", () => ({ logInfo: vi.fn(), logError: vi.fn() }));
+vi.mock("../../utils/logger.js", () => ({
+  logInfo: vi.fn(),
+  logError: vi.fn(),
+  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+}));
 
 vi.mock("../../ipc/utils.js", () => ({
   broadcastToRenderer: broadcastToRendererMock,
@@ -48,11 +67,16 @@ vi.mock("../pty/terminalSessionPersistence.js", () => ({
   writeHibernatedMarker: writeHibernatedMarkerMock,
 }));
 
-vi.mock("../HibernationService.js", () => ({
-  getHibernationService: () => ({
-    hibernateProjectOnDemand: hibernateProjectOnDemandMock,
-  }),
+vi.mock("../projectSleep.js", () => ({ sleepProject: sleepProjectMock }));
+
+const pluginWorkReader = vi.hoisted(() => vi.fn<(projectId: string) => unknown[]>(() => []));
+vi.mock("../plugin/projectPluginWork.js", () => ({
+  loadProjectPluginWorkReader: async () => pluginWorkReader,
 }));
+
+function slept(terminalsKilled: number): SleepOutcome {
+  return { status: "slept", terminalsKilled, rendererViewsEvicted: 1, workspaceEvicted: true };
+}
 
 import { IdleTerminalNotificationService } from "../IdleTerminalNotificationService.js";
 import type { PtyClient } from "../PtyClient.js";
@@ -78,6 +102,8 @@ function makeTerminal(overrides: Record<string, unknown> = {}) {
     agentState: "idle",
     lastInputTime: Date.now() - 2 * SIXTY_MIN_MS,
     lastOutputTime: Date.now() - 2 * SIXTY_MIN_MS,
+    lastTypedInputAt: Date.now() - 2 * SIXTY_MIN_MS,
+    lastOutputChangeAt: Date.now() - 2 * SIXTY_MIN_MS,
     hasPty: true,
     ...overrides,
   };
@@ -90,7 +116,7 @@ async function runCheck(service: IdleTerminalNotificationService): Promise<void>
 describe("IdleTerminalNotificationService", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    hibernateProjectOnDemandMock.mockImplementation(async () => 0);
+    sleepProjectMock.mockReset().mockResolvedValue(slept(0));
     for (const k of Object.keys(storeBacking)) delete storeBacking[k];
   });
 
@@ -224,6 +250,16 @@ describe("IdleTerminalNotificationService", () => {
       ]);
     });
 
+    it("doesn't suggest sleeping a project that opted out of automatic sleep", async () => {
+      setup();
+      projectStoreMock.getAllProjects.mockReturnValue([
+        { ...makeProject("proj-1", "Old"), neverAutoSleep: true },
+      ]);
+      const service = makeService();
+      await runCheck(service);
+      expect(broadcastToRendererMock).not.toHaveBeenCalled();
+    });
+
     it("skips the current active project", async () => {
       setup();
       projectStoreMock.getCurrentProjectId.mockReturnValue("proj-1");
@@ -248,9 +284,89 @@ describe("IdleTerminalNotificationService", () => {
         makeTerminal({ id: "t1" }),
         makeTerminal({
           id: "t2",
-          lastInputTime: Date.now() - 5 * 60 * 1000, // recent
-          lastOutputTime: Date.now() - 5 * 60 * 1000,
+          lastTypedInputAt: Date.now() - 5 * 60 * 1000, // recent
+          lastOutputChangeAt: Date.now() - 5 * 60 * 1000,
         }),
+      ]);
+      const service = makeService();
+      await runCheck(service);
+      expect(broadcastToRendererMock).not.toHaveBeenCalled();
+    });
+
+    // A spinner or a TUI repainting its status line moves the raw output clock
+    // on every frame, and xterm's own focus reports move the raw input clock,
+    // without anything changing on screen or in the composer (#13845).
+    it("counts a terminal that only redraws an unchanged screen as idle", async () => {
+      setup();
+      ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([
+        makeTerminal({ lastOutputTime: Date.now(), lastInputTime: Date.now() }),
+      ]);
+      const service = makeService();
+      await runCheck(service);
+
+      expect(broadcastToRendererMock).toHaveBeenCalledTimes(1);
+      const [, payload] = broadcastToRendererMock.mock.calls[0];
+      expect(payload.projects[0].idleMinutes).toBeGreaterThanOrEqual(119);
+    });
+
+    it("treats a recent visible change as activity", async () => {
+      setup();
+      ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([
+        makeTerminal({ lastOutputChangeAt: Date.now() - 5 * 60 * 1000 }),
+      ]);
+      const service = makeService();
+      await runCheck(service);
+      expect(broadcastToRendererMock).not.toHaveBeenCalled();
+    });
+
+    it("treats recent typing as activity", async () => {
+      setup();
+      ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([
+        makeTerminal({ lastTypedInputAt: Date.now() - 5 * 60 * 1000 }),
+      ]);
+      const service = makeService();
+      await runCheck(service);
+      expect(broadcastToRendererMock).not.toHaveBeenCalled();
+    });
+
+    // A shell whose prompt landed inside its first resize window never gets a
+    // change stamp, and an untouched prompt never changes again.
+    it("counts a terminal with no real activity as idle since it spawned", async () => {
+      setup();
+      ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([
+        makeTerminal({
+          lastTypedInputAt: undefined,
+          lastOutputChangeAt: undefined,
+          lastOutputTime: Date.now(),
+          spawnedAt: Date.now() - 2 * SIXTY_MIN_MS,
+        }),
+      ]);
+      const service = makeService();
+      await runCheck(service);
+
+      expect(broadcastToRendererMock).toHaveBeenCalledTimes(1);
+      const [, payload] = broadcastToRendererMock.mock.calls[0];
+      expect(payload.projects[0].idleMinutes).toBeGreaterThanOrEqual(119);
+    });
+
+    it("doesn't count a freshly spawned terminal with no activity yet as idle", async () => {
+      setup();
+      ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([
+        makeTerminal({
+          lastTypedInputAt: undefined,
+          lastOutputChangeAt: undefined,
+          spawnedAt: Date.now() - 5 * 60 * 1000,
+        }),
+      ]);
+      const service = makeService();
+      await runCheck(service);
+      expect(broadcastToRendererMock).not.toHaveBeenCalled();
+    });
+
+    it("never calls a terminal idle when nothing about its activity is known", async () => {
+      setup();
+      ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([
+        makeTerminal({ lastTypedInputAt: undefined, lastOutputChangeAt: undefined }),
       ]);
       const service = makeService();
       await runCheck(service);
@@ -264,8 +380,8 @@ describe("IdleTerminalNotificationService", () => {
         makeTerminal({
           id: "t2",
           hasPty: false,
-          lastInputTime: Date.now(),
-          lastOutputTime: Date.now(),
+          lastTypedInputAt: Date.now(),
+          lastOutputChangeAt: Date.now(),
         }),
       ]);
       const service = makeService();
@@ -453,8 +569,8 @@ describe("IdleTerminalNotificationService", () => {
       ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([
         makeTerminal({
           projectId: "proj-1",
-          lastInputTime: Date.now() - 60 * 1000,
-          lastOutputTime: Date.now() - 60 * 1000,
+          lastTypedInputAt: Date.now() - 60 * 1000,
+          lastOutputChangeAt: Date.now() - 60 * 1000,
         }),
       ]);
 
@@ -478,8 +594,8 @@ describe("IdleTerminalNotificationService", () => {
       ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([
         makeTerminal({
           projectId: "proj-1",
-          lastInputTime: Date.now() - 60 * 1000,
-          lastOutputTime: Date.now() - 60 * 1000,
+          lastTypedInputAt: Date.now() - 60 * 1000,
+          lastOutputChangeAt: Date.now() - 60 * 1000,
         }),
       ]);
 
@@ -509,36 +625,52 @@ describe("IdleTerminalNotificationService", () => {
   });
 
   describe("closeProject", () => {
-    it("delegates to HibernationService so DevPreview callbacks run", async () => {
+    it("puts the project to sleep as the user, the same Sleep the switcher runs", async () => {
       projectStoreMock.getAllProjects.mockReturnValue([makeProject("proj-1", "Old")]);
-      hibernateProjectOnDemandMock.mockResolvedValueOnce(2);
+      sleepProjectMock.mockResolvedValueOnce(slept(2));
 
       const service = makeService();
-      const killed = await service.closeProject("proj-1");
+      const provider = () => [] as ProjectViewManager[];
+      service.setProjectViewManagersProvider(provider);
+      const result = await service.closeProject("proj-1");
 
-      expect(killed).toBe(2);
-      expect(hibernateProjectOnDemandMock).toHaveBeenCalledWith("proj-1", "Old", "user-initiated");
+      expect(result).toEqual({ terminalsKilled: 2, pluginWorkStopped: null });
+      // The reminder that offered it was automatic; pressing it is not (#13845).
+      expect(sleepProjectMock).toHaveBeenCalledWith(
+        "proj-1",
+        { initiator: "user" },
+        {
+          ptyClient: ptyManagerMock,
+          workspaceClient: workspaceClientMock,
+          projectViewManagers: provider,
+          pluginWork: pluginWorkReader,
+        }
+      );
       const dismissals = storeBacking.idleTerminalDismissals as Record<string, number>;
       expect(dismissals["proj-1"]).toBeGreaterThan(0);
     });
 
-    it("falls back to projectId when the project is not in the store", async () => {
-      projectStoreMock.getAllProjects.mockReturnValue([]);
-      hibernateProjectOnDemandMock.mockResolvedValueOnce(1);
+    it("passes on the plugin work the sleep stopped (#14093)", async () => {
+      projectStoreMock.getAllProjects.mockReturnValue([makeProject("proj-1")]);
+      const pluginWorkStopped = { tasks: [], processes: 1, calls: 0 };
+      sleepProjectMock.mockResolvedValueOnce({
+        status: "slept",
+        terminalsKilled: 0,
+        rendererViewsEvicted: 1,
+        workspaceEvicted: true,
+        pluginWorkStopped,
+      });
 
       const service = makeService();
-      await service.closeProject("ghost-proj");
-
-      expect(hibernateProjectOnDemandMock).toHaveBeenCalledWith(
-        "ghost-proj",
-        "ghost-proj",
-        "user-initiated"
-      );
+      expect(await service.closeProject("proj-1")).toEqual({
+        terminalsKilled: 0,
+        pluginWorkStopped,
+      });
     });
 
     it("does NOT set a dismissal cooldown when 0 terminals were killed", async () => {
       projectStoreMock.getAllProjects.mockReturnValue([makeProject("proj-1")]);
-      hibernateProjectOnDemandMock.mockResolvedValueOnce(0);
+      sleepProjectMock.mockResolvedValueOnce(slept(0));
 
       const service = makeService();
       await service.closeProject("proj-1");
@@ -546,9 +678,20 @@ describe("IdleTerminalNotificationService", () => {
       expect(storeBacking.idleTerminalDismissals).toBeUndefined();
     });
 
-    it("re-throws errors from hibernateProjectOnDemand", async () => {
+    it("reports nothing killed for a project that was already asleep", async () => {
+      sleepProjectMock.mockResolvedValueOnce({ status: "already-closed" });
+
+      const service = makeService();
+      expect(await service.closeProject("proj-1")).toEqual({
+        terminalsKilled: 0,
+        pluginWorkStopped: null,
+      });
+      expect(storeBacking.idleTerminalDismissals).toBeUndefined();
+    });
+
+    it("re-throws a failed sleep", async () => {
       projectStoreMock.getAllProjects.mockReturnValue([makeProject("proj-1")]);
-      hibernateProjectOnDemandMock.mockRejectedValueOnce(new Error("boom"));
+      sleepProjectMock.mockRejectedValueOnce(new Error("boom"));
 
       const service = makeService();
       await expect(service.closeProject("proj-1")).rejects.toThrow("boom");
@@ -556,9 +699,9 @@ describe("IdleTerminalNotificationService", () => {
 
     it("rejects empty projectId without delegating", async () => {
       const service = makeService();
-      const killed = await service.closeProject("");
-      expect(killed).toBe(0);
-      expect(hibernateProjectOnDemandMock).not.toHaveBeenCalled();
+      const result = await service.closeProject("");
+      expect(result).toEqual({ terminalsKilled: 0, pluginWorkStopped: null });
+      expect(sleepProjectMock).not.toHaveBeenCalled();
     });
   });
 

@@ -25,6 +25,16 @@ const ObservationSchema = z.object({
       commit: z.string().max(64),
     })
     .optional(),
+  // A malformed value drops only itself: the setting the rest records still counts.
+  windows: z.boolean().optional().catch(undefined),
+  stagedUpdate: z
+    .object({
+      version: z.string().min(1).max(64),
+      installsOnQuit: z.boolean(),
+      ready: z.boolean(),
+    })
+    .optional()
+    .catch(undefined),
   stopped: z.literal(true).optional(),
   enabled: z.boolean(),
   startAtLogin: z.boolean(),
@@ -34,6 +44,7 @@ const ObservationSchema = z.object({
     state: z.enum(["ok", "warning", "unavailable", "unknown"]),
     detail: z.string().max(MAX_TEXT),
     checked: z.boolean(),
+    checkedAt: z.number().int().min(0).optional(),
   }),
 });
 
@@ -64,6 +75,15 @@ export function parseHostModeStatus(text: string): HostModeObservation | null {
   if (!parsed.success) return null;
   const { daintreeHostMode: _marker, ...observation } = parsed.data;
   return observation;
+}
+
+/** What the last process here recorded; null when there is no usable file. */
+export async function readHostModeStatusFile(dir: string): Promise<HostModeObservation | null> {
+  try {
+    return parseHostModeStatus(await fs.readFile(path.join(dir, HOST_MODE_STATUS_NAME), "utf8"));
+  } catch {
+    return null;
+  }
 }
 
 export async function writeHostModeStatusFile(

@@ -7,33 +7,60 @@ import {
   formatAgentContextBlock,
 } from "@shared/utils/agentContextDrag";
 import { draftUnchangedSince, useTokenResolution } from "../useTokenResolution";
+import {
+  subscribeDictationRangeTracking,
+  useDictationRangeStore,
+} from "@/store/dictationRangeStore";
+import { useTerminalInputStore } from "@/store/terminalInputStore";
+import { planVoiceWords } from "@/services/voiceInsertion";
+
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
+
+// The service mock never evaluates the real module, so nothing builds it.
+await loadTerminalService();
 
 const cachedSelection = vi.hoisted(() => ({ value: null as string | null }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     get: () => undefined,
     getCachedSelection: () => cachedSelection.value,
     clearDirectingState: () => {},
     notifyUserInput: () => {},
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("@/store/commandHistoryStore", () => ({
   useCommandHistoryStore: { getState: () => ({ recordPrompt: vi.fn() }) },
 }));
 
 // learnFromCorrections=false short-circuits the dictionary-learning side effect.
-vi.mock("@/store/voiceRecordingStore", () => ({
-  useVoiceRecordingStore: {
-    getState: () => ({ learnFromCorrections: false, panelBuffers: {} }),
+const voiceState = vi.hoisted(() => ({
+  value: {
+    learnFromCorrections: false,
+    panelBuffers: {} as Record<
+      string,
+      {
+        sessionCorrectedText?: string;
+        sessionDraftStart?: number;
+        dictationSessionId?: string;
+        projectId?: string;
+      }
+    >,
+    setSessionCorrectedText: (_panelId: string, _text: string | null) => {},
   },
+}));
+vi.mock("@/store/voiceRecordingStore", () => ({
+  useVoiceRecordingStore: { getState: () => voiceState.value },
 }));
 
 type Params = Parameters<typeof useTokenResolution>[0];
 type Latest = NonNullable<Params["latestRef"]["current"]>;
 
-function setup(overrides: Partial<Latest> = {}) {
+function setup(overrides: Partial<Latest> = {}, paramOverrides: Partial<Params> = {}) {
   const onSend = vi.fn<Latest["onSend"]>();
   const addToHistory = vi.fn<Latest["addToHistory"]>();
   const latest: Latest = {
@@ -55,6 +82,7 @@ function setup(overrides: Partial<Latest> = {}) {
     terminalId: "t1",
     cwd: "/repo",
     agentId: undefined,
+    ...paramOverrides,
   };
   const { result } = renderHook(() => useTokenResolution(params));
   return {
@@ -282,6 +310,31 @@ describe("useTokenResolution.sendText", () => {
     expect(clearDraftInput).toHaveBeenCalledTimes(1);
   });
 
+  it("leaves what a dictated send held back instead of clearing the draft (#14804)", async () => {
+    const { sendText, onSend, applyEditorValue, clearDraftInput } = setup();
+    const keepDraft = vi.fn();
+    await act(async () => {
+      await sendText("Hello world.", { keepDraft });
+    });
+
+    expect(onSend.mock.calls[0]![0].text).toBe("Hello world.");
+    expect(keepDraft).toHaveBeenCalledTimes(1);
+    expect(applyEditorValue).not.toHaveBeenCalled();
+    expect(clearDraftInput).not.toHaveBeenCalled();
+  });
+
+  it("holds nothing back over a draft that changed while the send was out", async () => {
+    const { sendText, onSend, clearDraftInput } = setup();
+    const keepDraft = vi.fn();
+    await act(async () => {
+      await sendText("Hello world.", { keepDraft, isDraftUnchanged: () => false });
+    });
+
+    expect(onSend).toHaveBeenCalledTimes(1);
+    expect(keepDraft).not.toHaveBeenCalled();
+    expect(clearDraftInput).not.toHaveBeenCalled();
+  });
+
   it("sends no image paths for a draft without any", async () => {
     const { sendText, onSend } = setup();
     await act(async () => {
@@ -297,6 +350,94 @@ describe("useTokenResolution.sendText", () => {
  * history are a single transaction that commits only once the terminal has
  * actually taken the text.
  */
+describe("useTokenResolution.sendText — plugin context references (#13795)", () => {
+  const resolveContextReferences = vi.fn();
+  const getWorkingDiff = vi.fn();
+
+  beforeEach(() => {
+    getWorkingDiff.mockReset().mockResolvedValue("BODY");
+    resolveContextReferences.mockReset().mockResolvedValue([
+      {
+        status: "resolved",
+        pluginId: "acme.kanban",
+        pluginName: "Kanban",
+        title: "Fix login",
+        text: "Card body mentioning @diff",
+      },
+    ]);
+    Object.assign(window, {
+      electron: { git: { getWorkingDiff }, plugin: { resolveContextReferences } },
+    });
+  });
+
+  it("reads the item at send into a handoff block attributed to the plugin", async () => {
+    const { sendText, onSend, addToHistory } = setup();
+    const text = "fix @rec:142 please";
+    await act(async () => {
+      await sendText(text);
+    });
+
+    expect(resolveContextReferences).toHaveBeenCalledWith([{ prefix: "rec", id: "142" }]);
+    const sent = onSend.mock.calls[0]![0].text;
+    expect(sent).toContain(
+      "```daintree-context\nKanban: Fix login\n\nCard body mentioning @diff\n```"
+    );
+    // The @diff inside the quoted card was never fetched.
+    expect(getWorkingDiff).not.toHaveBeenCalled();
+    expect(addToHistory).toHaveBeenCalledWith("t1", text, undefined);
+  });
+
+  it("sends references as typed on another host's terminal and asks no plugin", async () => {
+    const { sendText, onSend } = setup({}, { expandContext: false });
+    await act(async () => {
+      await sendText("fix @rec:142");
+    });
+    expect(resolveContextReferences).not.toHaveBeenCalled();
+    expect(onSend.mock.calls[0]![0].text).toBe("fix @rec:142");
+  });
+});
+
+describe("useTokenResolution.sendText — the pane's acceptance (#14692)", () => {
+  it("hands on what onSend returned, after the composer has been reset", async () => {
+    const { sendText, onSend, clearDraftInput } = setup();
+    const accepted = Promise.resolve(true);
+    onSend.mockReturnValue(accepted);
+    const onHandedOff = vi.fn((_accepted: Promise<boolean> | void) => {
+      expect(clearDraftInput).toHaveBeenCalledTimes(1);
+    });
+
+    await act(async () => {
+      await sendText("ship it", { onHandedOff });
+    });
+
+    expect(onHandedOff).toHaveBeenCalledTimes(1);
+    expect(onHandedOff.mock.calls[0]![0]).toBe(accepted);
+  });
+
+  it("hands on nothing from a pane that reports nothing", async () => {
+    const { sendText } = setup();
+    const onHandedOff = vi.fn();
+
+    await act(async () => {
+      await sendText("ship it", { onHandedOff });
+    });
+
+    expect(onHandedOff).toHaveBeenCalledWith(undefined);
+  });
+
+  it("is not told about a targeted submit, accepted or refused", async () => {
+    const { sendText } = setup();
+    const onHandedOff = vi.fn();
+
+    await act(async () => {
+      await sendText("ship it", { submit: async () => true, onHandedOff });
+      await sendText("ship it", { submit: async () => false, onHandedOff });
+    });
+
+    expect(onHandedOff).not.toHaveBeenCalled();
+  });
+});
+
 describe("useTokenResolution.sendText — targeted submit", () => {
   beforeEach(() => {
     (window as unknown as { electron: unknown }).electron = {
@@ -341,6 +482,8 @@ describe("useTokenResolution.sendText — targeted submit", () => {
 
     expect(applyEditorValue).toHaveBeenCalledTimes(1);
     expect(applyEditorValue.mock.calls[0]![0]).toBe("");
+    // A sent prompt is not something Cmd+Z brings back.
+    expect(applyEditorValue.mock.calls[0]![1]).toMatchObject({ resetHistory: true });
     expect(clearDraftInput).toHaveBeenCalledTimes(1);
     // Exactly one delivery: the targeted submit replaces the pane's own send
     // rather than joining it, or the agent would get the text twice.
@@ -399,6 +542,85 @@ describe("useTokenResolution.sendText — targeted submit", () => {
     expect(addToHistory).toHaveBeenCalledWith("t1", "check @diff\n\nAND THIS", undefined);
   });
 
+  describe("recording sends for the terminal's dictation cleanup (#14855)", () => {
+    const sent = () =>
+      useTerminalInputStore
+        .getState()
+        .getSentPrompts("t1")
+        .map((prompt) => prompt.text);
+
+    beforeEach(() => {
+      useTerminalInputStore.setState({ sentPrompts: new Map() });
+    });
+
+    it("records a send as written, composed, as it goes", async () => {
+      let take!: (ok: boolean) => void;
+      const { sendText, onSend } = setup();
+      onSend.mockReturnValue(new Promise<boolean>((resolve) => (take = resolve)));
+
+      await act(async () => {
+        await sendText("review @diff for Terra", { compose: (draft) => `${draft} and log it` });
+      });
+      expect(sent()).toEqual(["review @diff for Terra and log it"]);
+
+      await act(async () => take(true));
+      expect(sent()).toEqual(["review @diff for Terra and log it"]);
+    });
+
+    it("keeps sends in the order they went, whichever the terminal answers first", async () => {
+      const takes: Array<(ok: boolean) => void> = [];
+      const { sendText, onSend } = setup();
+      onSend.mockImplementation(() => new Promise<boolean>((resolve) => takes.push(resolve)));
+
+      await act(async () => {
+        await sendText("first");
+      });
+      await act(async () => {
+        await sendText("second");
+      });
+      await act(async () => takes[1]!(true));
+      await act(async () => takes[0]!(true));
+
+      expect(sent()).toEqual(["first", "second"]);
+      expect(
+        useTerminalInputStore
+          .getState()
+          .getSentPrompts("t1")
+          .map((prompt) => prompt.seq)
+      ).toEqual([0, 1]);
+    });
+
+    it("takes back what the terminal turned down, and never notes a refused submit", async () => {
+      const { sendText, onSend } = setup();
+      onSend
+        .mockResolvedValueOnce(true)
+        .mockResolvedValueOnce(false)
+        .mockRejectedValueOnce(new Error("gone"));
+
+      for (const text of ["landed", "refused by the pane", "lost on the way"]) {
+        await act(async () => {
+          await sendText(text);
+        });
+      }
+      await act(async () => {
+        await sendText("never went", { submit: vi.fn().mockResolvedValue(false) });
+      });
+      await act(async () => {
+        await sendText("submitted", { submit: vi.fn().mockResolvedValue(true) });
+      });
+
+      expect(sent()).toEqual(["landed", "submitted"]);
+    });
+
+    it("records a send whose handler says nothing about taking it", async () => {
+      const { sendText } = setup();
+      await act(async () => {
+        await sendText("fire and forget");
+      });
+      expect(sent()).toEqual(["fire and forget"]);
+    });
+  });
+
   it("sends a composed instruction even when the draft is empty", async () => {
     const submit = vi.fn().mockResolvedValue(true);
     const { sendText } = setup();
@@ -443,5 +665,363 @@ describe("useTokenResolution.sendText — targeted submit", () => {
 
     expect(sent).toBe(false);
     expect(submit).not.toHaveBeenCalled();
+  });
+});
+
+describe("useTokenResolution dictionary learning", () => {
+  const defaults = { ...voiceState.value };
+  const installElectron = (value: Record<string, unknown>) =>
+    Object.defineProperty(window, "electron", { value, configurable: true, writable: true });
+
+  beforeEach(() => {
+    voiceState.value = { ...defaults };
+    useTerminalInputStore.setState({ draftInputs: new Map() });
+    useDictationRangeStore.setState({ drafts: {}, anchors: {} });
+  });
+
+  /** The draft as it is sent, with the session's dictated words where they sit in it. */
+  const dictated = (draft: string, words: string, sessionId = "s1") => {
+    useTerminalInputStore.getState().setDraftInput("t1", draft);
+    const from = draft.indexOf(words);
+    const span = { from, to: from + words.length };
+    useDictationRangeStore
+      .getState()
+      .recordUtterance({ sessionId, panelId: "t1" }, { insertion: span, words: span });
+  };
+
+  it("reports a corrected mishearing to main instead of rewriting settings itself", async () => {
+    const recordSuggestions = vi
+      .fn()
+      .mockResolvedValue({ dictionary: [], suggestedDictionary: [] });
+    const getSettings = vi.fn();
+    const setSettings = vi.fn();
+    installElectron({
+      git: { getWorkingDiff: vi.fn() },
+      voiceInput: { getSettings, setSettings },
+      voiceDictionary: { recordSuggestions },
+    });
+    const setSessionCorrectedText = vi.fn();
+    voiceState.value = {
+      learnFromCorrections: true,
+      panelBuffers: {
+        t1: {
+          sessionCorrectedText: "use zoo stand for state",
+          sessionDraftStart: 0,
+          dictationSessionId: "s1",
+        },
+      },
+      setSessionCorrectedText,
+    };
+    dictated("use Zustand for state", "use Zustand for state");
+
+    const { sendText, onSend } = setup();
+    await act(async () => {
+      await sendText("use Zustand for state");
+    });
+
+    expect(onSend).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() =>
+      expect(recordSuggestions).toHaveBeenCalledWith({
+        candidates: [{ word: "Zustand", original: "zoo stand" }],
+      })
+    );
+    expect(setSessionCorrectedText).toHaveBeenCalledWith("t1", null);
+    expect(getSettings).not.toHaveBeenCalled();
+    expect(setSettings).not.toHaveBeenCalled();
+  });
+
+  it("leaves a newer session's baseline alone on a send that doesn't take it (#14804)", async () => {
+    const recordSuggestions = vi
+      .fn()
+      .mockResolvedValue({ dictionary: [], suggestedDictionary: [] });
+    installElectron({
+      git: { getWorkingDiff: vi.fn() },
+      voiceDictionary: { recordSuggestions },
+    });
+    const setSessionCorrectedText = vi.fn();
+    voiceState.value = {
+      learnFromCorrections: true,
+      panelBuffers: {
+        t1: {
+          sessionCorrectedText: "the nxt prompt",
+          sessionDraftStart: "Hello world. ".length,
+          dictationSessionId: "newer",
+        },
+      },
+      setSessionCorrectedText,
+    };
+    dictated("Hello world. The next prompt.", "The next prompt.", "newer");
+
+    const { sendText, onSend } = setup();
+    await act(async () => {
+      await sendText("Hello world.", { dictationSessions: new Set(["stopped"]) });
+    });
+
+    expect(onSend).toHaveBeenCalledTimes(1);
+    expect(setSessionCorrectedText).not.toHaveBeenCalled();
+    expect(recordSuggestions).not.toHaveBeenCalled();
+  });
+
+  it("still learns from a session the send takes", async () => {
+    const recordSuggestions = vi
+      .fn()
+      .mockResolvedValue({ dictionary: [], suggestedDictionary: [] });
+    installElectron({
+      git: { getWorkingDiff: vi.fn() },
+      voiceDictionary: { recordSuggestions },
+    });
+    const setSessionCorrectedText = vi.fn();
+    voiceState.value = {
+      learnFromCorrections: true,
+      panelBuffers: {
+        t1: {
+          sessionCorrectedText: "use zoo stand for state",
+          sessionDraftStart: 0,
+          dictationSessionId: "s1",
+        },
+      },
+      setSessionCorrectedText,
+    };
+    dictated("use Zustand for state", "use Zustand for state");
+
+    const { sendText } = setup();
+    await act(async () => {
+      await sendText("use Zustand for state", { dictationSessions: new Set(["s1"]) });
+    });
+
+    expect(setSessionCorrectedText).toHaveBeenCalledWith("t1", null);
+    await vi.waitFor(() =>
+      expect(recordSuggestions).toHaveBeenCalledWith({
+        candidates: [{ word: "Zustand", original: "zoo stand" }],
+      })
+    );
+  });
+
+  it("still sends when main can't be reached", async () => {
+    const recordSuggestions = vi.fn().mockRejectedValue(new Error("gone"));
+    installElectron({
+      git: { getWorkingDiff: vi.fn() },
+      voiceDictionary: { recordSuggestions },
+    });
+    voiceState.value = {
+      ...defaults,
+      learnFromCorrections: true,
+      panelBuffers: {
+        t1: {
+          sessionCorrectedText: "use zoo stand for state",
+          sessionDraftStart: 0,
+          dictationSessionId: "s1",
+        },
+      },
+    };
+    dictated("use Zustand for state", "use Zustand for state");
+
+    const { sendText, onSend } = setup();
+    await act(async () => {
+      await expect(sendText("use Zustand for state")).resolves.toBe(true);
+    });
+    expect(onSend).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() =>
+      expect(recordSuggestions).toHaveBeenCalledWith({
+        candidates: [{ word: "Zustand", original: "zoo stand" }],
+      })
+    );
+  });
+
+  it("reports nothing while learning from corrections is off", async () => {
+    const recordSuggestions = vi.fn();
+    installElectron({
+      git: { getWorkingDiff: vi.fn() },
+      voiceDictionary: { recordSuggestions },
+    });
+    voiceState.value = {
+      ...defaults,
+      learnFromCorrections: false,
+      panelBuffers: {
+        t1: {
+          sessionCorrectedText: "use zoo stand for state",
+          sessionDraftStart: 0,
+          dictationSessionId: "s1",
+        },
+      },
+    };
+    dictated("use Zustand for state", "use Zustand for state");
+
+    const { sendText } = setup();
+    await act(async () => {
+      await sendText("use Zustand for state");
+    });
+    expect(recordSuggestions).not.toHaveBeenCalled();
+  });
+
+  const learning = (
+    recordSuggestions: ReturnType<typeof vi.fn>,
+    learnFromCorrections = true,
+    sent: string | null = "use Zustand for state"
+  ) => {
+    installElectron({
+      git: { getWorkingDiff: vi.fn() },
+      voiceDictionary: { recordSuggestions },
+    });
+    const state = {
+      learnFromCorrections,
+      panelBuffers: {
+        t1: {
+          sessionCorrectedText: "use zoo stand for state",
+          sessionDraftStart: 0,
+          dictationSessionId: "s1",
+        },
+      } as Record<
+        string,
+        {
+          sessionCorrectedText?: string;
+          sessionDraftStart?: number;
+          dictationSessionId?: string;
+          projectId?: string;
+        }
+      >,
+      setSessionCorrectedText: (panelId: string, text: string | null) => {
+        const buffer = state.panelBuffers[panelId];
+        if (buffer) buffer.sessionCorrectedText = text ?? undefined;
+      },
+    };
+    voiceState.value = state;
+    if (sent) dictated(sent, sent);
+    return state;
+  };
+
+  it("drops the baseline on a send even while learning is off (#14645)", async () => {
+    const state = learning(vi.fn(), false);
+    const { sendText } = setup();
+    await act(async () => {
+      await sendText("use Zustand for state");
+    });
+    expect(state.panelBuffers.t1!.sessionCorrectedText).toBeUndefined();
+  });
+
+  it("keeps the baseline when the submit is refused (#14645)", async () => {
+    const recordSuggestions = vi.fn();
+    const state = learning(recordSuggestions);
+    const { sendText } = setup();
+    await act(async () => {
+      await sendText("use Zustand for state", { submit: async () => false });
+    });
+    expect(state.panelBuffers.t1!.sessionCorrectedText).toBe("use zoo stand for state");
+    expect(recordSuggestions).not.toHaveBeenCalled();
+  });
+
+  it("diffs against the baseline the send began with, and leaves a newer one alone (#14645)", async () => {
+    const recordSuggestions = vi.fn().mockResolvedValue(undefined);
+    const state = learning(recordSuggestions);
+    const { sendText } = setup();
+    await act(async () => {
+      await sendText("use Zustand for state", {
+        submit: async () => {
+          // A dictation finishing while the submit is on its way.
+          state.panelBuffers.t1 = {
+            sessionCorrectedText: "next passage",
+            sessionDraftStart: 30,
+            dictationSessionId: "s2",
+          };
+          return true;
+        },
+      });
+    });
+
+    await vi.waitFor(() =>
+      expect(recordSuggestions).toHaveBeenCalledWith({
+        candidates: [{ word: "Zustand", original: "zoo stand" }],
+      })
+    );
+    expect(state.panelBuffers.t1!.sessionCorrectedText).toBe("next passage");
+  });
+
+  it("leaves a newer session's baseline that says the same words (#14645)", async () => {
+    const state = learning(vi.fn().mockResolvedValue(undefined));
+    const { sendText } = setup();
+    await act(async () => {
+      await sendText("use Zustand for state", {
+        submit: async () => {
+          state.panelBuffers.t1 = { ...state.panelBuffers.t1!, dictationSessionId: "s2" };
+          return true;
+        },
+      });
+    });
+    expect(state.panelBuffers.t1!.sessionCorrectedText).toBe("use zoo stand for state");
+  });
+
+  it("leaves the baseline of a draft under another key alone (#14645)", async () => {
+    const recordSuggestions = vi.fn();
+    const state = learning(recordSuggestions);
+    state.panelBuffers.t1!.projectId = "project-a";
+    const { sendText } = setup({ projectId: "isolated-composer" });
+    await act(async () => {
+      await sendText("use Zustand for state");
+    });
+    expect(state.panelBuffers.t1!.sessionCorrectedText).toBe("use zoo stand for state");
+    expect(recordSuggestions).not.toHaveBeenCalled();
+  });
+
+  it("compares only the dictated part of the draft, in its sentence (#14645)", async () => {
+    const recordSuggestions = vi.fn().mockResolvedValue(undefined);
+    const state = learning(recordSuggestions, true, null);
+    state.panelBuffers.t1 = {
+      ...state.panelBuffers.t1!,
+      sessionCorrectedText: "daintree first",
+      sessionDraftStart: 5,
+    };
+    dictated("open Daintree first", "Daintree first");
+    const { sendText } = setup();
+    await act(async () => {
+      await sendText("open Daintree first");
+    });
+    await vi.waitFor(() =>
+      expect(recordSuggestions).toHaveBeenCalledWith({
+        candidates: [{ word: "Daintree", original: "daintree" }],
+      })
+    );
+  });
+
+  it("learns only from words dictated between the user's own text (#14634)", async () => {
+    const recordSuggestions = vi.fn().mockResolvedValue(undefined);
+    const state = learning(recordSuggestions, true, null);
+    const unsubscribe = subscribeDictationRangeTracking();
+    try {
+      const inputs = useTerminalInputStore.getState();
+      const typed = "Ask about state. Then ship it.";
+      inputs.setDraftInput("t1", typed);
+      // Dictated at the caret after the first sentence, written as the voice service writes it.
+      const plan = planVoiceWords(typed, { from: 16, to: 16, edited: false }, "use zoo stand");
+      inputs.setDraftInput("t1", plan.next);
+      useDictationRangeStore
+        .getState()
+        .recordUtterance(
+          { sessionId: "s1", panelId: "t1" },
+          { insertion: plan.insertion, words: plan.words }
+        );
+      expect(inputs.getDraftInput("t1")).toBe("Ask about state. use zoo stand Then ship it.");
+      state.panelBuffers.t1 = {
+        ...state.panelBuffers.t1!,
+        sessionCorrectedText: "use zoo stand",
+        sessionDraftStart: plan.words.from,
+      };
+
+      // Typing ahead of the dictation moves it; the correction lands inside it.
+      inputs.setDraftInput("t1", "Quick: Ask about state. use zoo stand Then ship it.");
+      const sent = "Quick: Ask about state. use Zustand Then ship it.";
+      inputs.setDraftInput("t1", sent);
+
+      const { sendText } = setup();
+      await act(async () => {
+        await sendText(sent);
+      });
+
+      await vi.waitFor(() => expect(recordSuggestions).toHaveBeenCalledTimes(1));
+      expect(recordSuggestions).toHaveBeenCalledWith({
+        candidates: [{ word: "Zustand", original: "zoo stand" }],
+      });
+    } finally {
+      unsubscribe();
+    }
   });
 });

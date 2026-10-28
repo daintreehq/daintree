@@ -276,9 +276,8 @@ describe("triage orderings are recomputed, not read back", () => {
 });
 
 /**
- * The IPC fallback arm mirrors `pty-host.ts`'s call sequence because that file
- * has no seam to import — zero exports, and a module body that throws outside a
- * UtilityProcess. The mirror is only worth having if drift in the original is
+ * The IPC fallback arm mirrors the call sequence of the fallback block in
+ * `electron/pty-host/visualOutputRouter.ts` rather than driving it. The mirror is only worth having if drift in the original is
  * caught, so the extraction is driven against synthetic sources here and
  * against the real file below.
  */
@@ -331,7 +330,7 @@ describe("pty-host IPC fallback drift guard", () => {
     expect(extractIpcFallbackSequence(unbalanced)).toBeNull();
   });
 
-  it("agrees with the shipped pty-host.ts today", () => {
+  it("agrees with the shipped visual-output router today", () => {
     expect(ipcFallbackSequenceMisses()).toBe(0);
   });
 
@@ -398,7 +397,7 @@ describe("pty-host IPC fallback drift guard", () => {
     expect(ipcFallbackMirrorMissesIn("nothing here")).toBe(6);
   });
 
-  it("agrees with what the shipped pty-host.ts actually contains today", () => {
+  it("agrees with what the shipped visual-output router actually contains today", () => {
     expect(ipcFallbackMirrorMisses()).toBe(0);
   });
 });

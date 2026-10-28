@@ -46,6 +46,7 @@ const BASE_PANEL_FIELDS = [
   "worktreeGitDir",
   "location",
   "backgroundRestoreLocation",
+  "pendingDockWorktreeId",
   "extensionState",
   "extensionStateVersion",
   "pluginId",
@@ -54,15 +55,18 @@ const BASE_PANEL_FIELDS = [
 ] as const satisfies readonly (keyof PanelSnapshot)[];
 const BASE_PANEL_FIELD_SET: ReadonlySet<string> = new Set(BASE_PANEL_FIELDS);
 
-// Fields Main can author out-of-band, so the delta states which of them this
-// renderer actually changed rather than letting the serialized value speak for
-// itself (#11461). `agentSessionId` is captured by the graceful-shutdown path
-// straight into project state and never pushed back into the live store: an
-// ordinary post-exit save omits a value it never had (which must not erase what
-// Main just wrote), and a stale sibling window carries one it no longer owns
-// (which must not resurrect a session another window consumed).
+// Fields the delta states this renderer actually changed rather than letting the
+// serialized value speak for itself (#11461). `agentSessionId` is captured by the
+// graceful-shutdown path straight into project state and never pushed back into
+// the live store: an ordinary post-exit save omits a value it never had (which
+// must not erase what Main just wrote), and a stale sibling window carries one it
+// no longer owns (which must not resurrect a session another window consumed).
+// `holdOnRestart` (#14017) is set in one window, and a sibling's agent-state save
+// carries the copy from before, which must not erase the plugin's hold.
+// Mirrors Main's `TERMINAL_FIELD_LEVEL_MERGE`.
 const TERMINAL_TRACKED_FIELDS = [
   "agentSessionId",
+  "holdOnRestart",
 ] as const satisfies readonly (keyof PanelSnapshot)[];
 
 export function panelToSnapshot(
@@ -143,6 +147,12 @@ function buildPanelSnapshot(
     ...(t.location === "background" && {
       backgroundRestoreLocation: t.backgroundRestoreLocation === "dock" ? "dock" : "grid",
     }),
+    // Survives a save made before the plugin registers, so the next boot still
+    // knows the grid placement is a stopgap (#13907).
+    ...(t.location === "grid" &&
+      t.pendingDockWorktreeId !== undefined && {
+        pendingDockWorktreeId: t.pendingDockWorktreeId,
+      }),
     ...(t.extensionState !== undefined && { extensionState: t.extensionState }),
     // Written only alongside a bag, and only ever the version the record
     // already carries. Re-deriving it from the registry here would re-stamp a
@@ -685,12 +695,14 @@ export class PanelPersistence {
   }
 
   /**
-   * Drop the cached previous-snapshot entry for a project so the next
-   * `primeProject` reseeds it. Used when a project is removed and in tests that
-   * need a clean cache (the cache is otherwise process-lived).
+   * Drop the cached previous-snapshot entries for a project so the next
+   * `primeProject` / `primeTabGroups` reseed them. Used when a view restores a
+   * project it dropped (its baseline predates whatever was saved meanwhile) and
+   * in tests that need a clean cache (the cache is otherwise process-lived).
    */
   clearProjectSnapshotCache(projectId: string): void {
     this.persistedTerminalsByProject.delete(projectId);
+    this.persistedTabGroupsByProject.delete(projectId);
   }
 
   /**

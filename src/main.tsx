@@ -40,9 +40,12 @@ import { installPluginDocumentRuntime } from "./services/plugin/pluginDocumentRu
 import { installProjectSwitchStatusTiming } from "./services/projectSwitchStatusTiming";
 import { installRunningPluginActions } from "./services/plugin/runningPluginActions";
 import { usePluginContextKeyStore } from "./store/pluginContextKeyStore";
+import { usePluginProjectSurfacesStore } from "./store/pluginProjectSurfacesStore";
+import { usePluginHostedViewsStore } from "./store/pluginHostedViewsStore";
 import { installAppPluginKitHost } from "./services/plugin/appPluginKitHost";
 import { getSafeBootPromise } from "./lib/bootPromise";
 import { isRemoteShellSupported } from "./lib/remoteHosts";
+import { answerBufferSamplesUntilLoaded } from "./services/terminal/terminalInstanceServiceAccessor";
 
 let cleanupGlobalErrorHandlers: (() => void) | undefined;
 let cleanupScrollbarGutterWatch: (() => void) | undefined;
@@ -100,6 +103,10 @@ async function bootstrap() {
 
   cleanupOrchestrator = initStoreOrchestrator();
 
+  // The terminal service loads with the first terminal (#14267); until then,
+  // main's buffer samples get this view's empty answer instead of a timeout.
+  answerBufferSamplesUntilLoaded();
+
   // Synchronous with module evaluation, so it is listening before main's
   // `did-finish-load` gate lets it send `project:on-switch` to a new view.
   installProjectSwitchStatusTiming();
@@ -109,6 +116,11 @@ async function bootstrap() {
   // Plugin `when`-clause keys replay at the same point, and a keybinding can
   // fire before any hook that would otherwise subscribe the store has mounted.
   usePluginContextKeyStore.getState().init();
+  // A project plugin's default editors (#13811) decide where a file opens, and
+  // an agent's `file.openPanel` or a terminal link can ask before any slot
+  // frame or file panel has mounted to start these.
+  usePluginProjectSurfacesStore.getState().init();
+  usePluginHostedViewsStore.getState().init();
   // Before the first render: a kit view reads its host as it draws.
   cleanupPluginKitHost = installAppPluginKitHost();
 

@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { dispatchEscape } from "@/lib/escapeStack";
+import { dispatchEscape, dispatchEscapeFallback } from "@/lib/escapeStack";
 import { backstopAlreadyConsumedEscape } from "@/lib/dialogEscapeBackstop";
 
 export function useGlobalEscapeDispatcher(): void {
@@ -18,7 +18,7 @@ export function useGlobalEscapeDispatcher(): void {
       // the dialog from the escape stack mid-event — so dispatching now
       // would walk one layer deeper and close the dialog underneath.
       if (backstopAlreadyConsumedEscape()) return;
-      if (dispatchEscape()) {
+      if (dispatchEscape() || dispatchEscapeFallback()) {
         e.preventDefault();
       }
     };

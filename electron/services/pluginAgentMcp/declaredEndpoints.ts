@@ -1,4 +1,8 @@
-import type { LoadedPluginInfo, PluginManifest } from "../../../shared/types/plugin.js";
+import type {
+  LoadedPluginInfo,
+  PluginAgentMcpContribution,
+  PluginManifest,
+} from "../../../shared/types/plugin.js";
 import {
   pluginManifestIdFromInstanceKey,
   projectIdFromPluginInstanceKey,
@@ -30,6 +34,27 @@ export function declaresDatabaseWrites(manifest: Readonly<PluginManifest>): bool
   return (manifest.contributes.databases ?? []).some((database) =>
     (database.queries ?? []).some((query) => query.mode === "write")
   );
+}
+
+/** An `agentMcp` endpoint as settings and scope resolution see it, groups included. */
+export function declaredPluginEndpointOf(
+  endpoint: Readonly<PluginAgentMcpContribution>
+): NonNullable<DeclaredAgentMcpPlugin["pluginEndpoint"]> {
+  return {
+    id: endpoint.id,
+    name: endpoint.name,
+    ...(endpoint.description !== undefined ? { description: endpoint.description } : {}),
+    ...(endpoint.groups !== undefined && endpoint.groups.length > 0
+      ? {
+          groups: endpoint.groups.map((group) => ({
+            id: group.id,
+            name: group.name,
+            ...(group.description !== undefined ? { description: group.description } : {}),
+            access: group.access,
+          })),
+        }
+      : {}),
+  };
 }
 
 /**
@@ -76,15 +101,7 @@ export function listDeclaredAgentMcpPlugins(
       ...(manifest.mcpName !== undefined ? { mcpName: manifest.mcpName } : {}),
       hasDatabases,
       ...(hasDatabaseWrites ? { hasDatabaseWrites: true as const } : {}),
-      ...(endpoint
-        ? {
-            pluginEndpoint: {
-              id: endpoint.id,
-              name: endpoint.name,
-              ...(endpoint.description !== undefined ? { description: endpoint.description } : {}),
-            },
-          }
-        : {}),
+      ...(endpoint ? { pluginEndpoint: declaredPluginEndpointOf(endpoint) } : {}),
     });
   }
   return declared;
@@ -94,17 +111,32 @@ export function listDeclaredAgentMcpPlugins(
  * Everything a manifest declares that decides what an agent credential for it
  * can reach, and under which name: its capabilities and their scopes (a tool
  * reading through `host.fs` reaches exactly the declared paths), its `agentMcp`
- * endpoints, its databases, and its `mcpName` (a grant carries the server name
- * the agent was handed, which a renamed plugin would no longer answer to). Two
+ * endpoints and any contributed server one bridges, its databases, and its
+ * `mcpName` (a grant carries the server name the agent was handed, which a
+ * renamed plugin would no longer answer to). Two
  * generations of a plugin with the same surface expose the same authority, so
  * a credential issued against one may keep working against the other; any
  * difference, including a reordering, reads as a change.
  */
 export function agentMcpSurfaceOf(manifest: Readonly<PluginManifest>): string {
+  const bridged = new Set(
+    (manifest.contributes.agentMcp ?? []).flatMap((endpoint) =>
+      endpoint.source ? [endpoint.source.mcpServer] : []
+    )
+  );
   return JSON.stringify({
     capabilities: [...(manifest.capabilities ?? [])].sort(),
     scopes: manifest.scopes ?? null,
     agentMcp: manifest.contributes.agentMcp ?? [],
+    // A bridged server's command, args and env are what its tools run as.
+    // Omitted when nothing is bridged, so other plugins' fingerprints hold.
+    ...(bridged.size > 0
+      ? {
+          bridgedServers: (manifest.contributes.mcpServers ?? []).filter((server) =>
+            bridged.has(server.id)
+          ),
+        }
+      : {}),
     databases: manifest.contributes.databases ?? [],
     mcpName: manifest.mcpName ?? null,
   });

@@ -15,7 +15,9 @@ vi.mock("@/store/terminalInputStore", () => {
     bumpExternalDraftRevision: vi.fn(),
   };
   const getState = () => fns;
-  return { useTerminalInputStore: Object.assign(getState, { getState }) };
+  return {
+    useTerminalInputStore: Object.assign(getState, { getState, subscribe: () => () => {} }),
+  };
 });
 
 vi.mock("@/store/panelStore", () => {
@@ -64,13 +66,15 @@ vi.mock("@/services/KeybindingService", () => ({
   },
 }));
 
-type DeltaPayload = { text: string; itemId?: string };
-type CompletePayload = { text: string; willCorrect: boolean; itemId?: string };
+type DeltaPayload = { sessionId: string; text: string; itemId?: string; replace?: boolean };
+type CompletePayload = { sessionId: string; text: string; willCorrect: boolean; itemId?: string };
+
+const SESSION_ID = "session-1";
 
 const callbacks: {
   delta: ((payload: DeltaPayload) => void) | null;
   complete: ((payload: CompletePayload) => void) | null;
-  boundary: ((payload: { rawText: string | null }) => void) | null;
+  boundary: ((payload: { sessionId: string; rawText: string | null }) => void) | null;
 } = { delta: null, complete: null, boundary: null };
 
 function stubElectron() {
@@ -84,13 +88,25 @@ function stubElectron() {
         callbacks.complete = cb;
         return () => {};
       }),
-      onParagraphBoundary: vi.fn((cb: (payload: { rawText: string | null }) => void) => {
-        callbacks.boundary = cb;
-        return () => {};
-      }),
+      onParagraphBoundary: vi.fn(
+        (cb: (payload: { sessionId: string; rawText: string | null }) => void) => {
+          callbacks.boundary = cb;
+          return () => {};
+        }
+      ),
+      onCorrectionProgress: vi.fn(() => () => {}),
       onFileTokenResolved: vi.fn(() => () => {}),
       onError: vi.fn(() => () => {}),
       onStatus: vi.fn(() => () => {}),
+      onSessionEnded: vi.fn(() => () => {}),
+      onLiveSession: vi.fn(() => () => {}),
+      onStopRequested: vi.fn(() => () => {}),
+      onRevealRequested: vi.fn(() => () => {}),
+      onLiveLevel: vi.fn(() => () => {}),
+      onPauseRequested: vi.fn(() => () => {}),
+      publishDetails: vi.fn().mockResolvedValue(undefined),
+      setPausedLive: vi.fn().mockResolvedValue(true),
+      getLiveSession: vi.fn().mockResolvedValue({ revision: 0, session: null }),
       getSettings: vi.fn().mockResolvedValue({ enabled: false }),
     },
     systemSleep: {
@@ -124,9 +140,12 @@ async function setup() {
   return { liveText };
 }
 
-const delta = (text: string, itemId?: string) => callbacks.delta!({ text, itemId });
+const delta = (text: string, itemId?: string) =>
+  callbacks.delta!({ sessionId: SESSION_ID, text, itemId });
+const revise = (text: string, itemId: string) =>
+  callbacks.delta!({ sessionId: SESSION_ID, text, itemId, replace: true });
 const complete = (text: string, itemId?: string) =>
-  callbacks.complete!({ text, willCorrect: false, itemId });
+  callbacks.complete!({ sessionId: SESSION_ID, text, willCorrect: false, itemId });
 
 describe("VoiceRecordingService — identified items (#13109)", () => {
   beforeEach(() => {
@@ -159,27 +178,13 @@ describe("VoiceRecordingService — identified items (#13109)", () => {
     expect(liveText()).toBe("");
   });
 
-  it("appends each completion to the current draft rather than a stale segment offset", async () => {
-    await setup();
-    draftState.draft = "prefix";
-
-    delta("one", "item-a");
-    complete("One.", "item-a");
-    // User types between segments; a later item must not slice it away.
-    draftState.draft += " typed";
-    delta("two", "item-b");
-    complete("Two.", "item-b");
-
-    expect(draftState.draft).toBe("prefix One. typed Two.");
-  });
-
   it("keeps later items' previews across a paragraph split inside an earlier item", async () => {
     const { liveText } = await setup();
 
     delta("first", "item-a");
     delta("later", "item-b");
     complete("First.", "item-a");
-    callbacks.boundary!({ rawText: null });
+    callbacks.boundary!({ sessionId: SESSION_ID, rawText: null });
     complete("Second para.", "item-a");
 
     expect(draftState.draft).toBe("First.\nSecond para.");
@@ -195,6 +200,57 @@ describe("VoiceRecordingService — identified items (#13109)", () => {
 
     expect(draftState.draft).toBe("keep");
     expect(liveText()).toBe("");
+  });
+
+  it("replaces a revised preview and writes each span's final once (#14640)", async () => {
+    const { liveText } = await setup();
+    draftState.draft = "existing";
+
+    revise("hello", "span-0");
+    revise("Hello world", "span-0");
+    expect(liveText()).toBe("Hello world");
+    expect(draftState.draft).toBe("existing");
+
+    complete("Hello, world.", "span-0");
+    expect(draftState.draft).toBe("existing Hello, world.");
+    expect(liveText()).toBe("");
+
+    revise("next", "span-1");
+    revise("Next one", "span-1");
+    expect(liveText()).toBe("Next one");
+    complete("Next one.", "span-1");
+    expect(draftState.draft).toBe("existing Hello, world. Next one.");
+    expect(liveText()).toBe("");
+  });
+
+  it("shows a shortened or retracted revision without touching the draft", async () => {
+    const { liveText } = await setup();
+    draftState.draft = "existing";
+
+    revise("hello world", "span-0");
+    revise("Hello", "span-0");
+    expect(liveText()).toBe("Hello");
+    revise("", "span-0");
+    expect(liveText()).toBe("");
+    expect(draftState.draft).toBe("existing");
+
+    complete("", "span-0");
+    revise("Next", "span-1");
+    complete("Next.", "span-1");
+    expect(draftState.draft).toBe("existing Next.");
+    expect(liveText()).toBe("");
+  });
+
+  it("anchors the session at a final that arrives without any interim", async () => {
+    await setup();
+    draftState.draft = "existing";
+
+    complete("Yes.", "span-0");
+    revise("and", "span-1");
+
+    const { useVoiceRecordingStore } = await import("@/store/voiceRecordingStore");
+    const start = useVoiceRecordingStore.getState().panelBuffers[PANEL_ID]?.sessionDraftStart;
+    expect(draftState.draft.slice(start)).toBe("Yes.");
   });
 
   it("still splices unidentified completions at the segment start", async () => {

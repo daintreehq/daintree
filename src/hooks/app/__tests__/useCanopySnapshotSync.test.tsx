@@ -10,7 +10,6 @@ function snapshot(mode: CanopySnapshot["mode"], sequence: number): CanopySnapsho
     sequence,
     mode,
     activated: mode === "on",
-    tier: "free",
     dispositions: [],
     seen: [],
     reads: [],

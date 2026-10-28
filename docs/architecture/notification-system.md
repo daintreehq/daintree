@@ -93,7 +93,7 @@ Three sibling rules live beside it in the renderer `no-restricted-syntax` block 
 | --- | --- | --- |
 | Banned error+low (#6885) | `type: "error"` with `priority: "low"` | raise the priority, or `console.warn` |
 | Action-free error (#8097) | `type: "error"` with no `action`/`actions` | wire a recovery action (Title-Message-Action), or annotate when the surrounding UI _is_ the recovery surface |
-| Unprotected success toast (#8249) | `type: "success"` with none of `transient: true`, `priority: "low"`, or a `correlationId` | pick one of the three, or drop the notify — the in-place UI change is usually the signal |
+| Unprotected success toast (#8249) | `type: "success"` with none of `transient: true`, `priority: "low"`, or a `correlationId` | drop the notify when the user did it and the result is on screen — the change is the confirmation; otherwise pick one of the three |
 | Missing `context.eventKind` | an inline-literal payload with no `context.eventKind` | add the kind so `EVENT_POLICY` can resolve priority/placement/duration centrally |
 
 The last rule skips spread-bearing payloads (`notify({ ...payload })`) and variable-reference contexts, neither of which can be checked statically; the remaining legacy sites carry the annotation.
@@ -125,7 +125,7 @@ Persist v1→v2 (`migrate` at `src/store/slices/notificationHistorySlice.ts`) ad
 
 `supersedeKey` retires a prior inbox row when a later notify carries the same key (resolving-event pairs like "disconnected" → "reconnected"); `correlationId` threads conversational entries. They are independent axes.
 
-**Quiet hours** are backfilled by store **migration 017** (`electron/services/migrations/017-add-notification-quiet-hours.ts`, version 17) which adds `quietHoursEnabled/StartMin/EndMin/Weekdays` to `notificationSettings`. The renderer mirrors them into `useNotificationSettingsStore` and evaluates `isScheduledQuietNow` (`shared/utils/quietHours.ts`) in `notify()`.
+**Quiet hours** are backfilled by store **migration 017** (`electron/services/migrations/017-add-notification-quiet-hours.ts`, version 17) which adds `quietHoursEnabled/StartMin/EndMin/Weekdays` to `notificationSettings`. The renderer mirrors them into `useNotificationSettingsStore` and evaluates `isScheduledQuietNow` (`shared/utils/quietHours.ts`) in `notify()`. Notification settings are always the machine at the keyboard's: a window attached to a remote host reads and writes this machine's, and this machine applies its own quiet hours, on its own clock, to what a host sends it (#14701; [Remote hosts](./remote-hosts.md), Notifications).
 
 ## Main-process services
 
@@ -134,12 +134,14 @@ The renderer `notify()` covers in-app surfaces. The main process owns OS-native 
 | Service | File | Responsibility |
 | --- | --- | --- |
 | `notificationService` | `electron/services/NotificationService.ts` | Window title `(N) Daintree` + macOS dock badge; OS-native banner via `Notification`; click-to-navigate `showWatchNotification` |
-| `AgentNotificationService` | `electron/services/AgentNotificationService.ts` | Completion/waiting notifications + working-pulse / all-clear sounds from agent-state events; debounce/burst/boot grace windows; consults quiet hours + OS-DND |
+| `AgentNotificationService` | `electron/services/AgentNotificationService.ts` | Completion/waiting notifications + working-pulse / all-clear sounds from agent-state events; debounce/burst/boot grace windows; consults quiet hours + OS-DND; a remote Shell's views go by that Shell's own alert choices |
 | `IdleTerminalNotificationService` | `electron/services/IdleTerminalNotificationService.ts` | Fires when an agent sits idle past a per-project threshold (15–1440 min); coordinates with `SystemSleepService` |
 | `WindowsStoreNotifierService` | `electron/services/WindowsStoreNotifierService.ts` | Polls the update feed (~8h) for Store builds and surfaces an update-available signal |
 | `OsDndService` | `electron/services/OsDndService.ts` | Surfaces OS Do-Not-Disturb / Focus state to the renderer |
 
 **OS-DND is display-only and a sound gate — never a toast suppressor.** `OsDndService` probes macOS Focus via `~/Library/DoNotDisturb/DB/Assertions.json` and the private `_NSDoNotDisturbEnabled/Disabled` Darwin notifications; Windows/Linux are left `undefined` (fail-soft). It is consumed by the informational-audio gate in `AgentNotificationService` (working pulse and all-clear) and by the read-only DND indicators in the renderer (toolbar button + Notification Center). The OS already silences its own native banners, so gating in-app toasts on it would double-suppress (`src/store/notificationSettingsStore.ts`, `electron/services/OsDndService.ts` class JSDoc).
+
+**Plugin notifications are attributed and gated in main (#13818).** `host.showToast` and `host.notify` (`electron/services/plugin/pluginHostNotificationsApi.ts`) reach the renderer as `NOTIFICATION_SHOW_TOAST` with a `context` main builds from the plugin's own binding: `plugin` (instance id + display name, rendered as "<Plugin> · <Project>" and offering "Silence <Plugin>" on the inbox row), the bound `projectId`, and a `panelId`/`worktreeId` target the host checked against the panel kind registry and the plugin's visible worktrees. Before the plugin's rate budget is spent, main drops the call if the instance id is in `pluginNotificationSilences` (`electron/services/plugin/pluginNotificationSilences.ts`; a project plugin's instance id names its project, so its silence is per project) or the notification's project is muted (both of its own `completedEnabled`/`waitingEnabled` overrides off, `ProjectSettingsManager.isNotificationsMuted`). `delivery: "passive"` maps to `priority: "low"`; there is no plugin urgency level, quiet-hours bypass, badge or window-title count. Settings → Notifications lists the silences with an Unsilence.
 
 Session mute crosses the process boundary: `setSessionQuietUntil` (`src/lib/notify.ts`) writes the module-level `_quietUntil`, mirrors to `useNotificationSettingsStore` for the toolbar bell, and calls `window.electron.notification.setSessionMuteUntil` so main-side completion notifications and working-pulse sounds honour the same window.
 

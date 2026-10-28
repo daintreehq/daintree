@@ -3,6 +3,8 @@ import type { IpcEnvelope } from "../../shared/types/ipc/errors.js";
 import { isIpcEnvelope } from "../../shared/types/ipc/errors.js";
 import { deserializeError, wrapError } from "../../shared/utils/ipcErrorSerialization.js";
 import { AppError } from "../utils/errorTypes.js";
+import { createLogger } from "../utils/logger.js";
+import { createKeyedLogLimiter } from "../utils/keyedLogLimiter.js";
 import { requiresDriveLease } from "./channelLeasePolicy.js";
 import { getChannelLocality } from "./channelLocality.js";
 import { notifyIpcEnvelopeRejected } from "./envelopeRejections.js";
@@ -65,7 +67,21 @@ function afterLease<T>(verdict: LeaseVerdict, call: () => T): T | Promise<T> {
 type LocalInvokeListener = (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown;
 type LocalSendListener = (event: IpcMainEvent, ...args: unknown[]) => unknown;
 
+const logger = createLogger("main:IpcDispatcher");
+const refusalLogLimiter = createKeyedLogLimiter();
+
+/** Refusals and drops here are expected outcomes, so they go out at info and at most once a window per key. */
+function logRefusal(message: string, key: string, context: Record<string, unknown>): void {
+  const suppressedCount = refusalLogLimiter.take(key);
+  if (suppressedCount !== null) logger.info(message, { ...context, suppressedCount });
+}
+
 function notRemotable(channel: string, reason: string): AppError {
+  logRefusal("Channel refused for remote routing", `not-remotable:${channel}:${reason}`, {
+    code: "CHANNEL_NOT_REMOTABLE",
+    channel,
+    reason,
+  });
   return new AppError({
     code: "CHANNEL_NOT_REMOTABLE",
     message: `Channel ${channel} ${reason}`,
@@ -139,6 +155,11 @@ export class IpcDispatcherImpl implements IpcDispatcher<IpcContext> {
 
   setRemoteRouter(router: RemoteRouter | null): void {
     this.router = router;
+  }
+
+  /** The remote host a window view is bound to, whose host channels it forwards there; null for this one. */
+  hostForSender(webContentsId: number): ReturnType<RemoteRouter["hostForSender"]> {
+    return this.router?.hostForSender(webContentsId) ?? null;
   }
 
   /** Install the drive-lease gate; the disposer removes it if it is still the one installed. */
@@ -246,7 +267,6 @@ export class IpcDispatcherImpl implements IpcDispatcher<IpcContext> {
     const listeners = this.sendListeners.get(channel);
     const refusal = this.refuseOverLink(channel, listeners !== undefined && listeners.size > 0);
     if (refusal) {
-      console.warn(`[IPC] Dropped link send: ${refusal.message}`);
       return;
     }
     const ctx = buildEndpointContext(invocation);
@@ -257,8 +277,16 @@ export class IpcDispatcherImpl implements IpcDispatcher<IpcContext> {
         })
       )
     ).then((envelope) => {
-      if (!envelope.ok) {
-        console.warn(`[IPC] Link send on ${channel} failed: ${envelope.error.message}`);
+      // Refusals by the lease gate and the locality check are logged where they are made.
+      if (
+        !envelope.ok &&
+        envelope.error.code !== "DRIVEN_ELSEWHERE" &&
+        envelope.error.code !== "CHANNEL_NOT_REMOTABLE"
+      ) {
+        logRefusal("Link send failed", `link-send-failed:${channel}:${envelope.error.code}`, {
+          channel,
+          code: envelope.error.code,
+        });
       }
     });
   }
@@ -367,18 +395,19 @@ export class IpcDispatcherImpl implements IpcDispatcher<IpcContext> {
     if (router === null || hostId === null) {
       const verdict = this.checkLease(channel, { kind: "local", sender: event.sender }, args);
       if (verdict === null) return listener(event, ...args);
-      if (!isPendingVerdict(verdict)) {
-        console.warn(`[IPC] Dropped send: ${verdict.message}`);
-        return undefined;
-      }
+      // The gate logs its refusal where it makes it.
+      if (!isPendingVerdict(verdict)) return undefined;
       // Only a send whose target needed a lookup waits for it; the rest keep
       // their order with the sends around them.
       void verdict.then(
         (refusal) => {
-          if (refusal) console.warn(`[IPC] Dropped send: ${refusal.message}`);
-          else listener(event, ...args);
+          if (!refusal) listener(event, ...args);
         },
-        (error: unknown) => console.warn(`[IPC] Dropped send on ${channel}:`, error)
+        (error: unknown) =>
+          logger.warn("Send dropped: lease check failed", {
+            channel,
+            error: error instanceof Error ? error.name : typeof error,
+          })
       );
       return undefined;
     }
@@ -391,7 +420,11 @@ export class IpcDispatcherImpl implements IpcDispatcher<IpcContext> {
       router.forwardSend(hostId, event.sender.id, channel, args);
       return undefined;
     }
-    console.warn(`[IPC] Dropped send on unclassified channel ${channel} from a remote-bound view`);
+    logRefusal("Send dropped", `send-unclassified:${channel}`, {
+      code: "CHANNEL_NOT_REMOTABLE",
+      channel,
+      reason: "unclassified",
+    });
     return undefined;
   }
 }

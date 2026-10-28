@@ -5,9 +5,12 @@ import type { PendingHostSwitch, RemoteHostsEvent } from "@shared/types/ipc/remo
 const m = vi.hoisted(() => ({ notify: vi.fn((_payload: unknown) => "toast-1") }));
 vi.mock("@/lib/notify", () => ({ notify: m.notify }));
 
-import { useNotificationStore } from "@/store/notificationStore";
 import { usePendingHostSwitchStore } from "@/store/pendingHostSwitchStore";
-import { pendingHostSwitchTitle, watchPendingHostSwitch } from "../pendingHostSwitchFeedback";
+import {
+  pendingHostSwitchHeading,
+  pendingHostSwitchStatus,
+  watchPendingHostSwitch,
+} from "../pendingHostSwitchFeedback";
 import {
   _resetTerminalInputGateForTesting,
   isHostSwitchPending,
@@ -32,7 +35,6 @@ function harness(snapshot: PendingHostSwitch | null = null) {
       return () => void (listener = null);
     }),
     getPendingSwitch: vi.fn(async () => snapshot),
-    cancelPendingSwitch: vi.fn(async () => true),
   };
   const stop = watchPendingHostSwitch(api);
   const send = (next: PendingHostSwitch | null) =>
@@ -44,107 +46,48 @@ async function flushMicrotasks(): Promise<void> {
   for (let i = 0; i < 5; i += 1) await Promise.resolve();
 }
 
-type NotifyCall = {
-  title: string;
-  message: string;
-  actions: Array<{ label: string; onClick: () => void }>;
-};
-
-let update: ReturnType<typeof vi.fn<(id: string, patch: Record<string, unknown>) => void>>;
-let dismiss: ReturnType<typeof vi.fn<(id: string) => void>>;
-
 beforeEach(() => {
-  vi.useFakeTimers();
   m.notify.mockClear();
-  update = vi.fn<(id: string, patch: Record<string, unknown>) => void>();
-  dismiss = vi.fn<(id: string) => void>();
-  useNotificationStore.setState({ updateNotification: update, dismissNotification: dismiss });
   usePendingHostSwitchStore.setState({ pending: null });
 });
 
 afterEach(() => {
   _resetTerminalInputGateForTesting();
-  vi.useRealTimers();
 });
 
-describe("pendingHostSwitchTitle", () => {
-  it("says what the switch is waiting on", () => {
-    expect(pendingHostSwitchTitle(pending())).toBe("Connecting to studio-02…");
-    expect(pendingHostSwitchTitle(pending({ phase: "starting" }))).toBe(
-      "Starting Daintree on studio-02…"
+describe("pendingHostSwitchHeading", () => {
+  it("holds across the waiting phases and changes only for a switch that gave up", () => {
+    const waiting = ["connecting", "starting", "opening"] as const;
+    for (const phase of waiting) {
+      expect(pendingHostSwitchHeading(pending({ phase }))).toBe("Switching to studio-02");
+    }
+    expect(pendingHostSwitchHeading(pending({ phase: "opening", projectName: "api" }))).toBe(
+      "Switching to studio-02"
     );
-    expect(pendingHostSwitchTitle(pending({ phase: "opening", projectName: "api" }))).toBe(
-      "Opening api on studio-02…"
+    expect(pendingHostSwitchHeading(pending({ phase: "failed" }))).toBe(
+      "Couldn't switch to studio-02"
     );
-    expect(pendingHostSwitchTitle(pending({ phase: "opening" }))).toBe("Opening studio-02…");
+  });
+});
+
+describe("pendingHostSwitchStatus", () => {
+  it("names the phase, never the project, so learning its name rewords nothing", () => {
+    expect(pendingHostSwitchStatus("connecting")).toBe("Connecting…");
+    expect(pendingHostSwitchStatus("starting")).toBe("Starting Daintree on the host…");
+    expect(pendingHostSwitchStatus("opening")).toBe("Opening the project…");
   });
 });
 
 describe("watchPendingHostSwitch", () => {
-  it("shows nothing for a switch that lands inside the loading gate", () => {
+  it("follows the window's switch into the store, and never raises a notice for it", () => {
     const { send, stop } = harness();
     send(pending());
-    vi.advanceTimersByTime(300);
+    expect(usePendingHostSwitchStore.getState().pending?.phase).toBe("connecting");
+    send(pending({ phase: "failed", failure: { code: "HOST_DISCONNECTED", message: "down" } }));
+    expect(usePendingHostSwitchStore.getState().pending?.phase).toBe("failed");
     send(null);
-    vi.advanceTimersByTime(10_000);
-
+    expect(usePendingHostSwitchStore.getState().pending).toBeNull();
     expect(m.notify).not.toHaveBeenCalled();
-    stop();
-  });
-
-  it("shows one progress notice for a slow switch, follows its phase and withdraws it when it ends", () => {
-    const { send, stop } = harness();
-    send(pending());
-    vi.advanceTimersByTime(400);
-
-    expect(m.notify).toHaveBeenCalledTimes(1);
-    const shown = m.notify.mock.calls[0]![0] as NotifyCall;
-    expect(shown.title).toBe("Connecting to studio-02…");
-    expect(shown.actions.map((action) => action.label)).toEqual(["Cancel"]);
-
-    send(pending({ phase: "opening", projectName: "api" }));
-    expect(update).toHaveBeenLastCalledWith(
-      "toast-1",
-      expect.objectContaining({ title: "Opening api on studio-02…" })
-    );
-    expect(m.notify).toHaveBeenCalledTimes(1);
-
-    send(null);
-    expect(dismiss).toHaveBeenCalledWith("toast-1");
-    stop();
-  });
-
-  it("adds Still working… once the wait passes five seconds", () => {
-    const { send, stop } = harness();
-    send(pending());
-    vi.advanceTimersByTime(4_900);
-    expect(update).not.toHaveBeenCalled();
-
-    vi.advanceTimersByTime(200);
-    expect(update).toHaveBeenLastCalledWith("toast-1", { message: "Still working…" });
-    stop();
-  });
-
-  it("cancels the switch it was shown for", () => {
-    const { api, send, stop } = harness();
-    send(pending({ switchId: "sw-7" }));
-    vi.advanceTimersByTime(400);
-
-    (m.notify.mock.calls[0]![0] as NotifyCall).actions[0]!.onClick();
-    expect(api.cancelPendingSwitch).toHaveBeenCalledWith({ switchId: "sw-7" });
-    stop();
-  });
-
-  it("starts over for a newer switch rather than relabelling the old notice", () => {
-    const { send, stop } = harness();
-    send(pending({ switchId: "sw-1" }));
-    vi.advanceTimersByTime(400);
-    send(pending({ switchId: "sw-2", hostName: "studio-03" }));
-
-    expect(dismiss).toHaveBeenCalledWith("toast-1");
-    vi.advanceTimersByTime(400);
-    expect(m.notify).toHaveBeenCalledTimes(2);
-    expect((m.notify.mock.calls[1]![0] as NotifyCall).title).toBe("Connecting to studio-03…");
     stop();
   });
 
@@ -162,16 +105,13 @@ describe("watchPendingHostSwitch", () => {
     second.stop();
   });
 
-  it("drops Cancel once the switch has committed, and keeps typing held until it clears", () => {
+  it("keeps typing held from the first moment until the switch clears, committed or failed", () => {
     const { send, stop } = harness();
     send(pending({ phase: "opening", projectName: "api" }));
-    vi.advanceTimersByTime(400);
-    expect((m.notify.mock.calls[0]![0] as NotifyCall).actions.map((a) => a.label)).toEqual([
-      "Cancel",
-    ]);
-
+    expect(isHostSwitchPending()).toBe(true);
     send(pending({ phase: "opening", projectName: "api", committed: true }));
-    expect(update).toHaveBeenLastCalledWith("toast-1", expect.objectContaining({ actions: [] }));
+    expect(isHostSwitchPending()).toBe(true);
+    send(pending({ phase: "failed" }));
     expect(isHostSwitchPending()).toBe(true);
 
     send(null);
@@ -205,16 +145,44 @@ describe("watchPendingHostSwitch", () => {
     expect(revealed).toBeNull();
   });
 
-  it("shows a notice held back in the background once the window is looked at again", () => {
-    const { send, stop } = harness();
-    m.notify.mockReturnValueOnce("");
-    send(pending());
-    vi.advanceTimersByTime(400);
-    expect(m.notify).toHaveBeenCalledTimes(1);
+  it("lets go of the switch when the view is cached, so the view a switch left never blocks its sends", async () => {
+    let listener: ((event: RemoteHostsEvent) => void) | null = null;
+    let cached: (() => void) | null = null;
+    let revealed: (() => void) | null = null;
+    let answer!: (pending: PendingHostSwitch | null) => void;
+    const api = {
+      onEvent: vi.fn((callback: (event: RemoteHostsEvent) => void) => {
+        listener = callback;
+        return () => void (listener = null);
+      }),
+      getPendingSwitch: vi.fn(
+        () => new Promise<PendingHostSwitch | null>((resolve) => (answer = resolve))
+      ),
+    };
+    const stop = watchPendingHostSwitch(api, {
+      onViewRevealed: (callback) => {
+        revealed = callback;
+        return () => void (revealed = null);
+      },
+      onViewCached: (callback) => {
+        cached = callback;
+        return () => void (cached = null);
+      },
+    });
+    listener!({ type: "switch-pending", pending: pending({ hostName: "studio-03" }) });
+    expect(isHostSwitchPending()).toBe(true);
 
-    window.dispatchEvent(new Event("focus"));
-    expect(m.notify).toHaveBeenCalledTimes(2);
+    // Shown, asks, and is cached before the answer comes back.
+    revealed!();
+    cached!();
+    expect(usePendingHostSwitchStore.getState().pending).toBeNull();
+    expect(isHostSwitchPending()).toBe(false);
+    answer(pending({ hostName: "studio-03" }));
+    await flushMicrotasks();
+    expect(isHostSwitchPending()).toBe(false);
+
     stop();
+    expect(cached).toBeNull();
   });
 
   it("ignores a snapshot that answers after it was torn down", async () => {
@@ -231,21 +199,5 @@ describe("watchPendingHostSwitch", () => {
     await flushMicrotasks();
 
     expect(usePendingHostSwitchStore.getState().pending).toBeNull();
-  });
-
-  it("doesn't show early, or twice, when the window is looked at again before the gate", () => {
-    const { send, stop } = harness();
-    send(pending());
-    vi.advanceTimersByTime(100);
-    window.dispatchEvent(new Event("focus"));
-    expect(m.notify).not.toHaveBeenCalled();
-
-    vi.advanceTimersByTime(300);
-    window.dispatchEvent(new Event("focus"));
-    expect(m.notify).toHaveBeenCalledTimes(1);
-
-    send(null);
-    expect(dismiss).toHaveBeenCalledWith("toast-1");
-    stop();
   });
 });

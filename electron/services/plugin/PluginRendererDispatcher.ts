@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { CHANNELS } from "../../ipc/channels.js";
 import { getWindowRegistry, getProjectViewManager } from "../../window/windowRef.js";
 import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
+import { getProjectForWebContents } from "../../window/webContentsRegistry.js";
 import { resolveTargetWebContents, type PluginTargetProjectId } from "./rendererTargeting.js";
 import { thawThenSend } from "../../utils/thawThenSend.js";
 import type { ClientEndpoint } from "../../ipc/endpoint.js";
@@ -19,6 +20,7 @@ import type {
 } from "../../../shared/types/actions.js";
 import type { PluginAgentPane } from "../../../shared/types/plugin.js";
 import { maskTerminalInOtherProject } from "../../../shared/utils/terminalInOtherProject.js";
+import { isLocalHostId, parseHostScopedKey } from "../../../shared/types/remoteHosts.js";
 import { z } from "zod";
 
 /** More panes than any grid holds; a longer answer is truncated, not trusted. */
@@ -279,7 +281,7 @@ export class PluginRendererDispatcher {
         },
       });
     }
-    const sent = this.sendDispatchToWebContents(webContents, actionId, args);
+    const sent = this.sendDispatchToWebContents(webContents, actionId, args, pluginId);
     // A project-bound plugin gets the uniform miss for a terminal in another
     // project, as a bound MCP session does (#13120).
     return projectId != null ? sent.then(maskTerminalInOtherProject) : sent;
@@ -347,11 +349,18 @@ export class PluginRendererDispatcher {
    * Send a plugin-sourced action dispatch to one renderer and await its
    * response. The Shell uses this directly for a host's plugin, having already
    * scoped the view to the host and project that asked.
+   *
+   * `pluginId` is the calling plugin, taken from its host's closure and never
+   * from the plugin's own payload. The renderer stamps it on the
+   * `action:dispatched` event, so a dispatch of a built-in action still lands
+   * in the plugin audit log under the plugin that made it (#13759). The Shell
+   * passes none for a host's plugin: that id has no provenance on this machine.
    */
   sendDispatchToWebContents(
     webContents: Electron.WebContents,
     actionId: string,
-    args: unknown
+    args: unknown,
+    pluginId?: string
   ): Promise<ActionDispatchResult> {
     return new Promise((resolve) => {
       if (this.deps.isDisposed()) {
@@ -420,6 +429,7 @@ export class PluginRendererDispatcher {
               requestId,
               actionId,
               args,
+              ...(pluginId !== undefined ? { pluginId } : {}),
             });
           } catch {
             clearTimeout(timer);
@@ -509,6 +519,43 @@ export class PluginRendererDispatcher {
       projectId,
       detail: "Plugin agents.list",
     });
+  }
+
+  /**
+   * {@link sendAgentsListToRenderer} that also names the project the panes came
+   * from (#13802), taken from the very view that answered so a focus change
+   * mid-read cannot attribute them to another project. `projectId` is `null`
+   * when no local view answered (Host-mode routing, no view): the panes carry
+   * no project of their own, so a caller must not file anything against them.
+   */
+  async sendAgentsListWithProject(
+    projectId?: PluginTargetProjectId,
+    pluginId?: string
+  ): Promise<{ projectId: string | null; agents: PluginAgentPane[] }> {
+    if (projectId != null) {
+      return { projectId, agents: await this.sendAgentsListToRenderer(projectId, pluginId) };
+    }
+    const frontend = this.routedFrontend(null, pluginId);
+    if ((frontend !== null && frontend.kind !== "local") || this.deps.isDisposed()) {
+      return { projectId: null, agents: [] };
+    }
+    const webContents = resolveTargetWebContents(null, "Plugin agents.list");
+    if (!webContents) return { projectId: null, agents: [] };
+    const viewKey = getProjectForWebContents(webContents.id);
+    // A view bound to another machine's host is keyed `<hostId>:<projectId>`;
+    // this machine's plugins have no business filing statuses against it.
+    const owner =
+      viewKey !== null && isLocalHostId(parseHostScopedKey(viewKey).hostId) ? viewKey : null;
+    // Same response shape as `sendAgentsListToRenderer`: the channel's listener
+    // keeps the first extractor registered, so the two must agree.
+    const agents = await this.requestFromWebContents<PluginAgentPane[]>(webContents, {
+      requestChannel: CHANNELS.PLUGIN_AGENTS_LIST_REQUEST,
+      responseChannel: CHANNELS.PLUGIN_AGENTS_LIST_RESPONSE,
+      buildRequest: (requestId) => ({ requestId }),
+      extract: (payload) => projectAgentPanes((payload as { agents?: unknown }).agents),
+      fallback: [],
+    });
+    return { projectId: owner, agents };
   }
 
   /**

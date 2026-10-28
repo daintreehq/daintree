@@ -1,6 +1,6 @@
 {
   "name": "@daintreehq/plugin-sdk",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Public surface for Daintree plugins \u2014 manifest, host API, activation contract, React hooks, file helpers, data helpers, and the in-memory mock host for tests.",
   "license": "Apache-2.0",
   "repository": {
@@ -41,6 +41,16 @@
       "types": "./dist/data.d.ts",
       "import": "./dist/data.js",
       "default": "./dist/data.js"
+    },
+    "./operations": {
+      "types": "./dist/operations.d.ts",
+      "import": "./dist/operations.js",
+      "default": "./dist/operations.js"
+    },
+    "./element-picker": {
+      "types": "./dist/element-picker.d.ts",
+      "import": "./dist/element-picker.js",
+      "default": "./dist/element-picker.js"
     },
     "./testing": {
       "types": "./dist/testing.d.ts",

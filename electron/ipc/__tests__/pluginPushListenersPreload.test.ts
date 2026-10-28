@@ -5,18 +5,20 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PRELOAD_CTS = path.resolve(__dirname, "..", "..", "preload.cts");
+const PLUGIN_PUSH_TS = path.resolve(__dirname, "..", "..", "preload", "pluginPush.ts");
 
 /**
  * Main delivers every plugin push inside a batch message, so a preload that
  * stopped listening for batches would silently deliver nothing to any plugin
  * view. Read as text: `preload.cts` is CommonJS for the Electron sandbox and
- * pulls in `electron` at module scope.
+ * pulls in `electron` at module scope. The transport itself lives in
+ * `preload/pluginPush.ts`; the entry point only creates it.
  */
 describe("preload unpacks batched plugin pushes", () => {
   it("listens on the batch channel and replays entries through the per-channel dispatcher", async () => {
-    const source = await readFile(PRELOAD_CTS, "utf8");
+    const source = await readFile(PLUGIN_PUSH_TS, "utf8");
     expect(source).toContain(
-      'import { PLUGIN_PUSH_BATCH_CHANNEL } from "./services/plugin/pluginPushProtocol.js";'
+      'import { PLUGIN_PUSH_BATCH_CHANNEL } from "../services/plugin/pluginPushProtocol.js";'
     );
     expect(source).toMatch(/ipcRenderer\.on\(PLUGIN_PUSH_BATCH_CHANNEL,/);
     expect(source).toMatch(
@@ -37,7 +39,7 @@ describe("preload unpacks batched plugin pushes", () => {
  */
 describe("preload reports plugin push listeners", () => {
   it("reports on the dedicated channel, whole-set, from the subscriber registry", async () => {
-    const source = await readFile(PRELOAD_CTS, "utf8");
+    const source = await readFile(PLUGIN_PUSH_TS, "utf8");
     expect(source).toMatch(
       /ipcRenderer\.send\(CHANNELS\.PLUGIN_REPORT_PUSH_LISTENERS, listeners\)/
     );
@@ -47,9 +49,9 @@ describe("preload reports plugin push listeners", () => {
   });
 
   it("marks a change when a (channel, panel) bucket appears or empties", async () => {
-    const source = await readFile(PRELOAD_CTS, "utf8");
+    const source = await readFile(PLUGIN_PUSH_TS, "utf8");
     const pushOn = source.indexOf("function _pluginPushOn(");
-    const body = source.slice(pushOn, source.indexOf("\n}\n", pushOn));
+    const body = source.slice(pushOn, source.indexOf("\n  }\n", pushOn));
     expect(body).toMatch(
       /entry\.subscribers\.set\(panelId, set\);\s*_markPluginListenersChanged\(\);/
     );
@@ -59,9 +61,15 @@ describe("preload reports plugin push listeners", () => {
   });
 
   it("reports once at load and flushes before every plugin invoke", async () => {
+    const transport = await readFile(PLUGIN_PUSH_TS, "utf8");
+    expect(transport).toMatch(/^ {2}_markPluginListenersChanged\(\);$/m);
+    expect(transport).toMatch(
+      /function _pluginInvoke\([\s\S]{0,80}_flushPluginListenerReport\(\);/
+    );
+    expect(transport).toMatch(/invoke: _pluginInvoke,/);
     const source = await readFile(PRELOAD_CTS, "utf8");
-    expect(source).toMatch(/^_markPluginListenersChanged\(\);$/m);
-    expect(source).toMatch(/function _pluginInvoke\([\s\S]{0,80}_flushPluginListenerReport\(\);/);
+    // Created at module load, so the initial report is queued before any page script runs.
+    expect(source).toMatch(/^\} = createPluginPushTransport\(ipcRenderer, _unwrappingInvoke\);$/m);
     expect(source).toContain("...buildPluginPreloadBindings(_pluginInvoke),");
     expect(source).toMatch(
       /_pluginInvoke\(CHANNELS\.PLUGIN_INVOKE, pluginId, channel, \.\.\.args\)/

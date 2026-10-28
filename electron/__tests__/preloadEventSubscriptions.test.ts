@@ -34,7 +34,7 @@ const fakeElectron = {
     },
   },
   ipcRenderer,
-  webFrame: { getZoomFactor: () => 1 },
+  webFrame: { getZoomFactor: () => 1, clearCache: vi.fn() },
   webUtils: { getPathForFile: () => "" },
 };
 
@@ -45,12 +45,31 @@ interface TerminalBridge {
 
 interface PluginBridge {
   onToolbarBadgesChanged: (cb: (payload: unknown) => void) => () => void;
+  onToolbarStatesChanged: (cb: (payload: unknown) => void) => () => void;
   onWorktreeCardStatusesChanged: (cb: (payload: unknown) => void) => () => void;
+  onWorktreeReviewChecksChanged: (cb: (payload: unknown) => void) => () => void;
+}
+
+interface AppBridge {
+  isViewCached: () => boolean;
+  onPanelGridConfigChanged: (cb: (payload: unknown) => void) => () => void;
+}
+
+interface ProjectPresentationBridge {
+  onChanged: (cb: (payload: unknown) => void) => () => void;
+}
+
+interface TerminalConfigBridge {
+  onChanged: (cb: (change: unknown) => void) => () => void;
 }
 
 const originalWindow = (globalThis as { window?: unknown }).window;
 let terminal: TerminalBridge;
 let plugin: PluginBridge;
+let projectPresentation: ProjectPresentationBridge;
+let app: AppBridge;
+let terminalConfig: TerminalConfigBridge;
+let agentSettings: { onChanged: (cb: (settings: unknown) => void) => () => void };
 
 beforeAll(async () => {
   const fakeWindow = {
@@ -80,10 +99,23 @@ beforeAll(async () => {
     module,
     module.exports
   );
-  const api = exposed.electron as { terminal?: TerminalBridge; plugin?: PluginBridge } | undefined;
+  const api = exposed.electron as
+    | {
+        terminal?: TerminalBridge;
+        plugin?: PluginBridge;
+        projectPresentation?: ProjectPresentationBridge;
+        terminalConfig?: TerminalConfigBridge;
+        agentSettings?: typeof agentSettings;
+        app?: AppBridge;
+      }
+    | undefined;
   expect(api?.terminal, "preload did not expose window.electron.terminal").toBeDefined();
   terminal = api!.terminal!;
   plugin = api!.plugin!;
+  projectPresentation = api!.projectPresentation!;
+  app = api!.app!;
+  terminalConfig = api!.terminalConfig!;
+  agentSettings = api!.agentSettings!;
 });
 
 afterAll(() => {
@@ -93,6 +125,42 @@ afterAll(() => {
 describe("preload event subscriptions", () => {
   beforeEach(() => {
     ipcRenderer.removeAllListeners("terminal:activity");
+  });
+
+  it("names whose half each terminal-config change is, and detaches both channels on dispose", () => {
+    const channels = ["terminal-config:device-changed", "terminal-config:host-changed"];
+    const received: unknown[] = [];
+    const dispose = terminalConfig.onChanged((change) => received.push(change));
+
+    ipcRenderer.emit(channels[0], {}, { fontSize: 16 });
+    ipcRenderer.emit(channels[1], {}, { resourceMonitoringEnabled: true });
+    expect(received).toEqual([
+      { owner: "device", config: { fontSize: 16 } },
+      { owner: "host", config: { resourceMonitoringEnabled: true } },
+    ]);
+
+    dispose();
+    dispose();
+    ipcRenderer.emit(channels[0], {}, { fontSize: 18 });
+    expect(received).toHaveLength(2);
+    for (const channel of channels) expect(ipcRenderer.listenerCount(channel)).toBe(0);
+  });
+
+  it("hands on each saved agent settings and grid change until disposed (#14700)", () => {
+    const pushes: Array<[string, (cb: (payload: unknown) => void) => () => void]> = [
+      ["agent-settings:changed", agentSettings.onChanged],
+      ["app:panel-grid-config-changed", app.onPanelGridConfigChanged],
+    ];
+    for (const [channel, subscribe] of pushes) {
+      const received: unknown[] = [];
+      const dispose = subscribe((payload) => received.push(payload));
+      ipcRenderer.emit(channel, {}, { saved: 1 });
+      dispose();
+      dispose();
+      ipcRenderer.emit(channel, {}, { saved: 2 });
+      expect(received).toEqual([{ saved: 1 }]);
+      expect(ipcRenderer.listenerCount(channel)).toBe(0);
+    }
   });
 
   it("delivers each terminal:activity push exactly once after repeated subscribe/unsubscribe cycles", () => {
@@ -131,6 +199,30 @@ describe("preload event subscriptions", () => {
     expect(ipcRenderer.listenerCount("events:push")).toBe(busListenersBefore);
   });
 
+  it("passes a session-preserving teardown's exit context through, and nothing else (#13841)", () => {
+    const exits: unknown[][] = [];
+    const dispose = terminal.onExit((...args) => exits.push(args));
+
+    ipcRenderer.emit(
+      "events:push",
+      {},
+      { name: "terminal:exit", payload: ["t1", 0, { preserveSession: true }] }
+    );
+    ipcRenderer.emit(
+      "events:push",
+      {},
+      { name: "terminal:exit", payload: ["t2", 0, { preserveSession: "yes", extra: 1 }] }
+    );
+    ipcRenderer.emit("events:push", {}, { name: "terminal:exit", payload: ["t3", 0, null] });
+    dispose();
+
+    expect(exits).toEqual([
+      ["t1", 0, { preserveSession: true }],
+      ["t2", 0],
+      ["t3", 0],
+    ]);
+  });
+
   it("replays each plugin's latest toolbar-badge map to a late subscriber (#13503)", () => {
     // Wire the bus, then leave the toolbar-badge event with no subscriber, as a
     // restored view's did-finish-load replay finds it.
@@ -150,6 +242,26 @@ describe("preload event subscriptions", () => {
     ]);
 
     push({ pluginId: "p1", badges: { needs: { kind: "dot" } } });
+    expect(received).toHaveLength(3);
+    dispose();
+  });
+
+  it("replays each plugin's latest toolbar-state map to a late subscriber (#13785)", () => {
+    terminal.onExit(() => {})();
+    const push = (payload: unknown) =>
+      ipcRenderer.emit("events:push", {}, { name: "plugin:toolbar-states-changed", payload });
+    push({ pluginId: "p1", states: { sync: { pressed: true } } });
+    push({ pluginId: "p2", states: { run: { busy: true } } });
+    push({ pluginId: "p1", states: {} });
+
+    const received: unknown[] = [];
+    const dispose = plugin.onToolbarStatesChanged((payload) => received.push(payload));
+    expect(received).toEqual([
+      { pluginId: "p2", states: { run: { busy: true } } },
+      { pluginId: "p1", states: {} },
+    ]);
+
+    push({ pluginId: "p1", states: { sync: { pressed: false } } });
     expect(received).toHaveLength(3);
     dispose();
   });
@@ -176,5 +288,100 @@ describe("preload event subscriptions", () => {
       { pluginId: "p1", projectId: "A", statuses: {} },
     ]);
     dispose();
+  });
+
+  it("replays each plugin's latest review checks per project to a late subscriber (#13806)", () => {
+    terminal.onExit(() => {})();
+    const push = (payload: unknown) =>
+      ipcRenderer.emit(
+        "events:push",
+        {},
+        { name: "plugin:worktree-review-checks-changed", payload }
+      );
+    const check = (label: string) => ({ label, severity: "warning" });
+    push({ pluginId: "p1", projectId: "A", checks: { "/a": [check("one")] } });
+    push({ pluginId: "p1", projectId: "B", checks: { "/b": [check("two")] } });
+    push({ pluginId: "p2", projectId: "A", checks: { "/a": [check("three")] } });
+    push({ pluginId: "p1", projectId: "A", checks: {} });
+
+    const received: unknown[] = [];
+    const dispose = plugin.onWorktreeReviewChecksChanged((payload) => received.push(payload));
+    expect(received).toEqual([
+      { pluginId: "p1", projectId: "B", checks: { "/b": [check("two")] } },
+      { pluginId: "p2", projectId: "A", checks: { "/a": [check("three")] } },
+      { pluginId: "p1", projectId: "A", checks: {} },
+    ]);
+    dispose();
+  });
+
+  it("delivers each project-presentation:changed push once and detaches on dispose", () => {
+    const received: unknown[] = [];
+    const dispose = projectPresentation.onChanged((payload) => received.push(payload));
+    ipcRenderer.emit("project-presentation:changed", {}, { projectId: "p1" });
+    expect(received).toEqual([{ projectId: "p1" }]);
+
+    dispose();
+    ipcRenderer.emit("project-presentation:changed", {}, { projectId: "p2" });
+    expect(received).toEqual([{ projectId: "p1" }]);
+    expect(ipcRenderer.listenerCount("project-presentation:changed")).toBe(0);
+  });
+
+  it("drops Blink's memory cache once a view has stayed cached for a moment", () => {
+    vi.useFakeTimers();
+    try {
+      fakeElectron.webFrame.clearCache.mockClear();
+
+      ipcRenderer.emit("app:view-cached", {});
+      expect(app.isViewCached()).toBe(true);
+      expect(fakeElectron.webFrame.clearCache).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(2_000);
+      expect(fakeElectron.webFrame.clearCache).toHaveBeenCalledTimes(1);
+
+      ipcRenderer.emit("app:view-warm-activated", {});
+      vi.advanceTimersByTime(10_000);
+      expect(fakeElectron.webFrame.clearCache).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("never clears the cache of a view that became active again first", () => {
+    vi.useFakeTimers();
+    try {
+      fakeElectron.webFrame.clearCache.mockClear();
+
+      // A freeze can hold the cached signal until the next activation, which
+      // then delivers both back to back.
+      ipcRenderer.emit("app:view-cached", {});
+      ipcRenderer.emit("app:view-warm-activated", {});
+      vi.advanceTimersByTime(10_000);
+      expect(fakeElectron.webFrame.clearCache).not.toHaveBeenCalled();
+
+      // A cache storm schedules one clear, not one per signal.
+      ipcRenderer.emit("app:view-cached", {});
+      vi.advanceTimersByTime(1_000);
+      ipcRenderer.emit("app:view-cached", {});
+      vi.advanceTimersByTime(2_000);
+      expect(fakeElectron.webFrame.clearCache).toHaveBeenCalledTimes(1);
+      ipcRenderer.emit("app:view-warm-activated", {});
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("still latches the cached state when clearing the cache throws", () => {
+    vi.useFakeTimers();
+    try {
+      fakeElectron.webFrame.clearCache.mockImplementationOnce(() => {
+        throw new Error("renderer tearing down");
+      });
+      ipcRenderer.emit("app:view-cached", {});
+      expect(() => vi.advanceTimersByTime(2_000)).not.toThrow();
+      expect(app.isViewCached()).toBe(true);
+      ipcRenderer.emit("app:view-warm-activated", {});
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

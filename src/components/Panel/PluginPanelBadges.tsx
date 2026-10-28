@@ -1,9 +1,14 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useSyncExternalStore } from "react";
 import type { PluginPanelBadge, PluginPanelBadgeColor } from "@shared/types/plugin";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { usePanelBadges, usePluginPanelBadgeStore } from "@/store/pluginPanelBadgeStore";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
+import { usePanelStore } from "@/store/panelStore";
 import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
+import {
+  getPanelKindRegistrySnapshot,
+  subscribeToPanelKindRegistry,
+} from "@shared/config/panelKindRegistry";
 import { cn } from "@/lib/utils";
 import { SEVERITY_VISUAL } from "@/lib/statusSeverity";
 import { HEADER_CHIP_CLASS } from "@/components/Terminal/terminalHeaderChip";
@@ -18,6 +23,10 @@ import { HEADER_CHIP_CLASS } from "@/components/Terminal/terminalHeaderChip";
  * emphasis rather than a health hue (#12002). It stays distinct from
  * `default`, because a typed value that renders identically to another is
  * worse than no value at all.
+ * On a panel of a kind the plugin did not contribute — an agent's terminal, a
+ * built-in, another plugin's panel — every badge is drawn neutral and names its
+ * plugin, so no plugin can paint what reads as a failure Daintree observed on
+ * a pane that isn't its own (#13766).
  * Multiple plugins on one panel render in plugin-id order for stability.
  */
 // `success` sits at the ink end of the neutral ramp rather than one step off
@@ -44,18 +53,22 @@ const LABEL_COLOR: Record<PluginPanelBadgeColor, string> = {
  * One plugin badge drawn in full — the panel header's form, also used by a
  * toolbar button's tray and overflow rows (#13503). A menu row passes
  * `live={false}`: it names the badge in its own label, and a status region per
- * row would announce one badge once for every menu that shows it.
+ * row would announce one badge once for every menu that shows it. `foreign`
+ * marks a badge on a panel its plugin does not own: drawn at `default`, with
+ * the plugin named in its tooltip.
  */
 export function PluginBadgeIndicator({
   pluginId,
   badge,
   live = true,
+  foreign = false,
 }: {
   pluginId: string;
   badge: PluginPanelBadge;
   live?: boolean;
+  foreign?: boolean;
 }) {
-  const color = badge.color ?? "default";
+  const color = foreign ? "default" : (badge.color ?? "default");
   // A primitive selector, read per badge rather than once over the whole map in
   // the parent: the meta record is rebuilt on every provenance pull, so
   // selecting it whole would re-render every badge on pulls that changed
@@ -67,16 +80,16 @@ export function PluginBadgeIndicator({
   const pluginName = usePluginRuntimeStore(
     (s) => s.pluginMetaById.get(pluginId)?.displayName ?? pluginManifestIdFromInstanceKey(pluginId)
   );
+  const signed = foreign && badge.tooltip ? `${pluginName}: ${badge.tooltip}` : badge.tooltip;
+  const label =
+    signed ?? (badge.kind === "label" ? `${pluginName}: ${badge.text}` : `${pluginName} status`);
+  const tooltip = signed ?? (foreign ? label : undefined);
   // Warning and error dots draw their severity glyph: two same-size discs told
   // apart only by hue are one mark under forced colours.
   const DotGlyph = color === "warning" || color === "error" ? SEVERITY_VISUAL[color] : null;
   const indicator =
     badge.kind === "dot" && DotGlyph ? (
-      <span
-        role="status"
-        aria-label={badge.tooltip ?? `${pluginName} status`}
-        className="inline-flex w-3 h-3 shrink-0"
-      >
+      <span role="status" aria-label={label} className="inline-flex w-3 h-3 shrink-0">
         <DotGlyph.Icon
           aria-hidden="true"
           data-severity-glyph=""
@@ -86,23 +99,23 @@ export function PluginBadgeIndicator({
     ) : badge.kind === "dot" ? (
       <span
         role="status"
-        aria-label={badge.tooltip ?? `${pluginName} status`}
+        aria-label={label}
         className={`status-mark w-2 h-2 rounded-full shrink-0 ${DOT_COLOR[color]}`}
       />
     ) : (
       <span
         role="status"
-        aria-label={badge.tooltip ?? `${pluginName}: ${badge.text}`}
+        aria-label={label}
         className={cn(HEADER_CHIP_CLASS, "border-transparent", LABEL_COLOR[color])}
       >
         {badge.text}
       </span>
     );
 
-  const content = badge.tooltip ? (
+  const content = tooltip ? (
     <Tooltip>
       <TooltipTrigger asChild>{indicator}</TooltipTrigger>
-      <TooltipContent side="bottom">{badge.tooltip}</TooltipContent>
+      <TooltipContent side="bottom">{tooltip}</TooltipContent>
     </Tooltip>
   ) : (
     indicator
@@ -115,11 +128,32 @@ export function PluginBadgeIndicator({
   );
 }
 
+/**
+ * The plugin whose kind the panel is, the same owner its menus resolve: a
+ * PTY-backed plugin panel is a `terminal` that keeps its plugin kind apart
+ * (#13213). Null for a built-in, a kind no longer registered, or a panel this
+ * view doesn't hold, so an unresolved owner draws neutral.
+ */
+export function usePanelOwnerPluginId(panelId: string): string | null {
+  const registry = useSyncExternalStore(
+    subscribeToPanelKindRegistry,
+    getPanelKindRegistrySnapshot,
+    getPanelKindRegistrySnapshot
+  );
+  const pluginKind = usePanelStore((s) => s.panelsById[panelId]?.pluginPanelKindId);
+  const kind = usePanelStore((s) => s.panelsById[panelId]?.kind);
+  const config =
+    (pluginKind !== undefined ? registry[pluginKind] : undefined) ??
+    (kind !== undefined ? registry[kind] : undefined);
+  return config?.extensionId ?? null;
+}
+
 export function PluginPanelBadges({ panelId }: { panelId: string }) {
   const init = usePluginPanelBadgeStore((s) => s.init);
   useEffect(() => init(), [init]);
 
   const badges = usePanelBadges(panelId);
+  const owner = usePanelOwnerPluginId(panelId);
   const entries = useMemo(
     () => Object.entries(badges).sort(([a], [b]) => a.localeCompare(b)),
     [badges]
@@ -148,7 +182,12 @@ export function PluginPanelBadges({ panelId }: { panelId: string }) {
   return (
     <>
       {entries.map(([pluginId, badge]) => (
-        <PluginBadgeIndicator key={pluginId} pluginId={pluginId} badge={badge} />
+        <PluginBadgeIndicator
+          key={pluginId}
+          pluginId={pluginId}
+          badge={badge}
+          foreign={pluginId !== owner}
+        />
       ))}
     </>
   );

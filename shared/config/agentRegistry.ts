@@ -200,6 +200,12 @@ export interface AgentPreset {
    * `FALLBACK_CHAIN_MAX` entries.
    */
   fallbacks?: string[];
+  /**
+   * Also walk `fallbacks` when the agent hits a plan or rate limit (#14370).
+   * Off by default: a hop ends the running conversation and starts a fresh one
+   * on the next preset, so turning this on is the consent for that.
+   */
+  fallbackOnRateLimit?: boolean;
 }
 
 /** Max fallback presets that can be chained after the primary. */
@@ -336,7 +342,10 @@ interface AgentSessionIdResumeBase {
    * ["resume", "--last"] for Codex). When present, the relaunch path uses
    * these args as a fallback when `sessionIdPattern` capture missed
    * (timeout, no match). Scoped to the launch CWD by the underlying CLI.
-   * Omit for agents that have no resume-latest flag.
+   * Omit for agents that have no resume-latest flag, or whose "latest" is
+   * machine-wide rather than per directory (Copilot `--continue`): the restore
+   * election hands out one fallback per agent and directory, so a global latest
+   * would reopen whichever project's conversation closed last.
    */
   resumeLatestArgs?: string[];
   /**
@@ -406,13 +415,16 @@ export type AgentSessionIdResume = AgentSessionIdResumeBase &
  * Discriminated union describing how an agent's prior session can be resumed.
  * The `kind` field selects the shape:
  *
- * - `session-id` — agent emits a session ID on quit (Claude/Gemini/Codex/etc.).
+ * - `session-id` — agent resumes an exact session by ID (Claude/Gemini/Codex/etc.).
  *   `quitCommand` is sent to the running process; `sessionIdPattern` (a regex
  *   with one capture group) is matched against the post-quit output to harvest
- *   the ID, which is then passed to `args(id)` on the next launch.
+ *   the ID, which is then passed to `args(id)` on the next launch. An agent that
+ *   prints no ID omits the pattern and resumes by `resumeLatestArgs` (Cursor).
  * - `rolling-history` — agent has no session model but records a chronological
  *   history that can be resumed in order. `args()` returns the resume flags;
- *   no ID is captured.
+ *   no ID is captured, so on restore they are the agent's resume-latest form
+ *   and must reopen the most recent history in the launch directory. Leave
+ *   them empty when the CLI only offers a picker.
  * - `named-target` — agent resumes a user-named target (e.g. a plan name).
  *   `argsForTarget(name)` produces the launch args for the chosen target.
  * - `project-scoped` — agent stores session state on disk keyed by project
@@ -768,6 +780,17 @@ export interface AgentConfig {
     softNewlineSequence?: string;
     /** Input sequences the activity monitor should ignore (default: ["\x1b\r"]) */
     ignoredInputSequences?: string[];
+    /**
+     * Option/Alt+letter chords the CLI documents as commands of its own, as
+     * lowercase letters (Claude Code's Option+P model switcher is `"p"`). The
+     * composer sends each to the agent as the terminal would, ESC and the
+     * letter, instead of typing the character Option makes of it. List only
+     * documented commands: Option types real characters on many layouts, and
+     * any chord left out keeps typing them. Chords that edit the CLI's own
+     * prompt (word jumps, word deletes) stay out, since the composer is the
+     * prompt.
+     */
+    altChords?: string[];
     /**
      * Which key this CLI binds to cancelling the turn it is running, as the CLI
      * itself advertises it. See {@link AgentInterruptStrategy} — omitted means

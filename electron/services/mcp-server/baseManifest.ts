@@ -1,5 +1,6 @@
 import type { ActionManifestEntry } from "../../../shared/types/actions.js";
 import { MCP_EXTERNAL_BASE_MANIFEST } from "./generated/mcpExternalBaseManifest.js";
+import { MCP_GLOBAL_ASSISTANT_BASE_MANIFEST } from "./generated/mcpGlobalAssistantBaseManifest.js";
 import { MCP_VIEWLESS_BASE_MANIFEST } from "./generated/mcpViewlessBaseManifest.js";
 
 /**
@@ -53,4 +54,18 @@ export function getViewlessHelpBaseManifest(): ActionManifestEntry[] {
   return [...MCP_EXTERNAL_BASE_MANIFEST, ...MCP_VIEWLESS_BASE_MANIFEST].map((entry) => ({
     ...entry,
   }));
+}
+
+/**
+ * The tool surface of the global assistant (#14453): its root tools and
+ * nothing else, generated from the action registry as the others are. It is a
+ * viewless help session, but the project help surface describes none of these,
+ * so it gets its own catalog rather than adding them to that one, which every
+ * viewless project assistant lists.
+ *
+ * Discovery only. The session's tier, its host access and the global dispatch
+ * gate still decide what it may list and run.
+ */
+export function getGlobalAssistantBaseManifest(): ActionManifestEntry[] {
+  return MCP_GLOBAL_ASSISTANT_BASE_MANIFEST.map((entry) => ({ ...entry }));
 }

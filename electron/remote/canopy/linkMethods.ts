@@ -1,5 +1,10 @@
 import { z } from "zod";
-import { CANOPY_HOST_CHANNELS } from "../../../shared/types/ipc/canopyHost.js";
+import {
+  ASSISTANT_VIEWER_CHANNELS,
+  CANOPY_HOST_CHANNELS,
+} from "../../../shared/types/ipc/canopyHost.js";
+import { AgentDirectorySchema } from "../../../shared/types/agentDirectory.js";
+import { AssistantWorkHostReadingSchema } from "../../../shared/types/assistantWork.js";
 
 /**
  * Session-level methods behind Canopy reading a host the view isn't bound to.
@@ -12,6 +17,20 @@ export const CanopyLinkMethod = {
   RELEASE: "canopy.release",
   /** Host → Shell: a push to the viewer was lost, and the viewer with it; read again. */
   VIEWER_LOST: "canopy.viewer-lost",
+  /**
+   * Shell → Host: one call of a person's assistant viewer (#14163). A host
+   * from before this answers UNSUPPORTED, which the Shell says as that host's
+   * assistants being unavailable; its workers still read through `invoke`.
+   */
+  ASSISTANT_INVOKE: "canopy.assistant-invoke",
+  /** Shell → Host: the assistants this host holds, for a person's picker. */
+  ASSISTANTS: "canopy.assistants",
+  /**
+   * Shell → Host: which of this host's workers an assistant made or holds
+   * (#14166). A host from before this answers UNSUPPORTED, which the Shell
+   * says as unread rather than as no work.
+   */
+  ASSISTANT_WORK: "canopy.assistant-work",
 } as const;
 
 /**
@@ -48,3 +67,31 @@ export type CanopyInvokePayload = z.infer<typeof CanopyInvokePayloadSchema>;
 export const CanopyReleasePayloadSchema = z.object({ viewerId });
 
 export const CanopyViewerLostPayloadSchema = z.object({ viewerId });
+
+export const CanopyAssistantInvokePayloadSchema = z.object({
+  viewerId,
+  channel: z.enum(ASSISTANT_VIEWER_CHANNELS),
+  args: z.array(z.unknown()).max(MAX_CANOPY_INVOKE_ARGS),
+  interactive: z.boolean().optional(),
+});
+export type CanopyAssistantInvokePayload = z.infer<typeof CanopyAssistantInvokePayloadSchema>;
+
+export const CanopyAssistantsPayloadSchema = z.object({
+  projectId: z.string().min(1).max(256).optional(),
+});
+
+/** A host's answer: its assistant viewer protocol, and its assistants as it read them. */
+export const CanopyAssistantsAnswerSchema = z.object({
+  version: z.number().int().positive(),
+  directory: AgentDirectorySchema,
+});
+export type CanopyAssistantsAnswer = z.infer<typeof CanopyAssistantsAnswerSchema>;
+
+export const CanopyAssistantWorkPayloadSchema = z.object({});
+
+/** A host's answer: its assistant work protocol, and its workers' links as it read them. */
+export const CanopyAssistantWorkAnswerSchema = z.object({
+  version: z.number().int().positive(),
+  reading: AssistantWorkHostReadingSchema,
+});
+export type CanopyAssistantWorkAnswer = z.infer<typeof CanopyAssistantWorkAnswerSchema>;

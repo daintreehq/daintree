@@ -207,6 +207,25 @@ describe("WorktreeMenuItems — Launch", () => {
     expect(labels.slice(2)).toEqual(["Terminal", "Browser", "Dev preview"]);
   });
 
+  it("drops the dev preview's launch row where the project hides it, keeping its server controls", () => {
+    const { container } = renderWorktreeMenu({
+      onLaunchAgent: vi.fn(),
+      hideDevPreview: true,
+      devServerState: "running",
+      onStopDevServer: vi.fn(),
+      onRestartDevServer: vi.fn(),
+    });
+
+    const launchSub = Array.from(container.querySelectorAll("[data-menu-sub]")).find(
+      (sub) => sub.firstElementChild?.textContent?.trim() === "Launch"
+    );
+    const labels = Array.from(launchSub?.querySelectorAll("[data-menu-item]") ?? []).map(
+      (el) => el.textContent
+    );
+    expect(labels).toEqual(["Terminal", "Browser"]);
+    expect(container.textContent).toMatch(/Stop dev server/);
+  });
+
   it("explains an unavailable agent instead of leaving a bare disabled row", () => {
     renderWorktreeMenu({
       launchAgents: [{ id: "codex", name: "Codex", isEnabled: false }],
@@ -225,6 +244,94 @@ describe("WorktreeMenuItems — Launch", () => {
     fireEvent.click(screen.getByText("More agents and panels…"));
 
     expect(onOpenPanelPalette).toHaveBeenCalledWith("context-menu");
+  });
+});
+
+describe("WorktreeMenuItems — quiet git detail", () => {
+  function subRows(container: HTMLElement, label: string): Array<string | undefined> {
+    const sub = Array.from(container.querySelectorAll("[data-menu-sub]")).find(
+      (node) => node.firstElementChild?.textContent?.trim() === label
+    );
+    return Array.from(
+      sub
+        ?.querySelector("[data-menu-subcontent]")
+        ?.querySelectorAll("[data-menu-item], [data-menu-separator]") ?? []
+    ).map((n) => (n.hasAttribute("data-menu-separator") ? "—" : n.textContent?.trim()));
+  }
+
+  it("folds Review and the issue and PR rows into the one Git submenu", () => {
+    const { container } = renderWorktreeMenu({ ...fullyPopulated(), quietGit: true });
+
+    expect(rootRowLabels(container)).toEqual([
+      "Launch",
+      "Open",
+      "Git",
+      "Sessions",
+      "Recipes",
+      "Runtime",
+      "Copy",
+      "Organize",
+      "Extensions",
+      "Delete worktree…",
+    ]);
+    const git = subRows(container, "Git");
+    expect(git.slice(0, 3)).toEqual([
+      "Review worktree",
+      "View uncommitted changes0",
+      "Compare with another worktree…",
+    ]);
+    expect(git).toContain("Fetch");
+    expect(git).toContain("Force push with lease…");
+    expect(git.slice(-6)).toEqual([
+      "—",
+      "Open issue #42",
+      "Open PR #7",
+      "—",
+      "Change linked issue…",
+      "Unlink issue #42",
+    ]);
+    // The worktree's own plan file is not git, so it moves to Open.
+    expect(subRows(container, "Open")).toContain("View plan");
+    expect(git).not.toContain("View plan");
+  });
+
+  it.each([
+    ["fully populated", () => fullyPopulated()],
+    // Review and Linked work both empty: only the git rows themselves fold in.
+    ["sparse", () => ({})],
+  ])("never doubles or strands a separator inside Git (%s)", (_label, props) => {
+    const { container } = renderWorktreeMenu({ ...props(), quietGit: true });
+    const git = subRows(container, "Git");
+
+    expect(git.length).toBeGreaterThan(0);
+    expect(git[0]).not.toBe("—");
+    expect(git[git.length - 1]).not.toBe("—");
+    git.forEach((row, i) => {
+      if (row === "—") expect(git[i + 1]).not.toBe("—");
+    });
+  });
+
+  it("gives a workspace root no Git submenu, quiet or not", () => {
+    const { container } = renderWorkspaceRootMenu({ quietGit: true, onOpenReviewHub: vi.fn() });
+
+    expect(rootRowLabels(container)).not.toContain("Git");
+    expect(rootRowLabels(container)).not.toContain("Review");
+  });
+
+  it("keeps View plan in Linked work while git detail is shown", () => {
+    const { container } = renderWorktreeMenu(fullyPopulated());
+
+    expect(subRows(container, "Linked work")[0]).toBe("View plan");
+    expect(subRows(container, "Open")).not.toContain("View plan");
+  });
+
+  it("dispatches a folded row exactly as the shown menu does", () => {
+    const onOpenReviewHub = vi.fn();
+    renderWorktreeMenu({ ...fullyPopulated(), onOpenReviewHub, quietGit: true });
+
+    fireEvent.click(screen.getByText("Review worktree"));
+
+    expect(onOpenReviewHub).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -611,12 +718,22 @@ describe("WorktreeMenuItems — Extensions", () => {
     expect(labels).toEqual(["gregpriday.video-manager", "zeta"]);
   });
 
-  it("dispatches the plugin's own action id with the surface source", () => {
-    renderWorktreeMenu({ pluginItems: [item("acme", "Do the thing", "acme.go")] }, "context-menu");
+  it("dispatches the plugin's own action id with the clicked worktree and the surface source", () => {
+    renderWorktreeMenu(
+      {
+        worktree: makeWorktree({ id: "/wt/a" }),
+        pluginItems: [item("acme", "Do the thing", "acme.go")],
+      },
+      "context-menu"
+    );
 
     fireEvent.click(screen.getByText("Do the thing"));
 
-    expect(dispatch).toHaveBeenCalledWith("acme.go", undefined, { source: "context-menu" });
+    expect(dispatch).toHaveBeenCalledWith(
+      "acme.go",
+      { worktreeId: "/wt/a" },
+      { source: "context-menu" }
+    );
   });
 });
 

@@ -9,7 +9,10 @@ const ipcMainMock = vi.hoisted(() => ({
 }));
 
 const leaseRef = vi.hoisted(() => ({
-  current: null as null | { isDriving: (projectId: string, ep: { clientId: string }) => boolean },
+  current: null as null | {
+    isDriving: (projectId: string, ep: { clientId: string }) => boolean;
+    getHolder: (projectId: string) => null;
+  },
 }));
 
 vi.mock("electron", () => ({
@@ -313,7 +316,7 @@ describe("terminal input and the drive lease", () => {
 
   it("drops a non-driver's input on every path, remote or local", async () => {
     const isDriving = vi.fn(() => false);
-    leaseRef.current = { isDriving };
+    leaseRef.current = { isDriving, getHolder: () => null };
 
     remoteSend(CHANNELS.TERMINAL_INPUT, "term-a", "rm -rf\r");
     remoteSend(CHANNELS.TERMINAL_SEND_KEY, "term-a", "enter");
@@ -334,7 +337,7 @@ describe("terminal input and the drive lease", () => {
   });
 
   it("refuses a non-driver's submit as DRIVEN_ELSEWHERE", async () => {
-    leaseRef.current = { isDriving: () => false };
+    leaseRef.current = { isDriving: () => false, getHolder: () => null };
     const envelope = await remoteInvoke(CHANNELS.TERMINAL_SUBMIT, "term-a", "make test");
     expect(envelope.ok).toBe(false);
     expect(envelope.ok ? null : envelope.error.code).toBe("DRIVEN_ELSEWHERE");
@@ -342,7 +345,7 @@ describe("terminal input and the drive lease", () => {
   });
 
   it("lets the driver type and submit", async () => {
-    leaseRef.current = { isDriving: () => true };
+    leaseRef.current = { isDriving: () => true, getHolder: () => null };
     remoteSend(CHANNELS.TERMINAL_INPUT, "term-a", "ls\r");
     remoteSend(CHANNELS.TERMINAL_BROADCAST_WRITE, ["term-a"], "x");
     const envelope = await remoteInvoke(CHANNELS.TERMINAL_SUBMIT, "term-a", "make test");
@@ -409,21 +412,21 @@ describe("terminal:resize and the drive lease", () => {
 
   it("drops a remote resize while another client drives the project", async () => {
     const isDriving = vi.fn(() => false);
-    leaseRef.current = { isDriving };
+    leaseRef.current = { isDriving, getHolder: () => null };
     remoteResize("term-a");
     await vi.waitFor(() => expect(isDriving).toHaveBeenCalledWith("project-a", endpoint));
     expect(ptyClient.resize).not.toHaveBeenCalled();
   });
 
   it("resizes for the driving client", async () => {
-    leaseRef.current = { isDriving: () => true };
+    leaseRef.current = { isDriving: () => true, getHolder: () => null };
     remoteResize("term-a");
     await vi.waitFor(() => expect(ptyClient.resize).toHaveBeenCalledWith("term-a", 100, 30));
   });
 
   it("drops a local window's resize while a remote client drives", () => {
     const isDriving = vi.fn(() => false);
-    leaseRef.current = { isDriving };
+    leaseRef.current = { isDriving, getHolder: () => null };
     localResize("term-a");
     expect(isDriving).toHaveBeenCalledWith(
       "project-a",

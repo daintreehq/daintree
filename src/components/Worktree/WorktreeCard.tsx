@@ -7,6 +7,7 @@ import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { useWorktreeTerminals } from "../../hooks/useWorktreeTerminals";
 
 import { useDroppable } from "@dnd-kit/core";
+import { useBuiltInSidebarViewHidden } from "@/components/Sidebar/sidebarViewContext";
 import type { SyntheticListenerMap } from "@dnd-kit/core/dist/hooks/utilities";
 import type { WorktreeDragData } from "../DragDrop/DndProvider";
 import { useDndPlaceholder, useIsWorktreeSortDragging } from "../DragDrop/dndPlaceholderContext";
@@ -37,8 +38,11 @@ import { humanizeAppError } from "@shared/utils/errorMessage";
 import { getGitRecoveryAction } from "@shared/utils/gitOperationErrors";
 import { isClientGitError } from "@/utils/clientGitError";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
+import { exitProjectHome } from "@/store/storeAccessors";
 import { issueAttachPayload } from "@/utils/linkProviderIssue";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
+import { useResolvedPresentation } from "@/hooks/useResolvedPresentation";
+import { QuietGitDetails } from "./WorktreeCard/QuietGitDetails";
 import { cn } from "../../lib/utils";
 import {
   copyableBranchName,
@@ -47,7 +51,8 @@ import {
 } from "@/lib/worktreeFilters";
 import { getWorktreeHeadline } from "@/lib/worktreeHeadline";
 import { getAgentConfig, getAgentIds } from "@/config/agents";
-import { getAgentSettingsEntry } from "@/types";
+import { agentToolbarPin } from "@shared/types/ipc/agentToolbarPins";
+import { useAgentToolbarPinsStore } from "@/store/agentToolbarPinsStore";
 import type { UseAgentLauncherReturn } from "@/hooks/useAgentLauncher";
 import { isAgentLaunchable } from "../../../shared/utils/agentAvailability";
 import { isAgentPinned } from "../../../shared/utils/agentPinned";
@@ -92,6 +97,7 @@ import { bulkParkAgents, selectParkTargets, type BulkParkVerb } from "@/lib/park
 import { devServerMenuState } from "./utils/devServerMenuState";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { CHIP_LABELS, WorktreeStatusTick } from "./WorktreeCard/WorktreeStatusTick";
+import { canOpenResourceBoxOnHost } from "@/components/Hosts/resourceHostHandoff";
 
 const HOVER_REVALIDATE_DELAY = 150;
 const REVALIDATE_FRESHNESS_GATE = 10_000;
@@ -196,6 +202,7 @@ export function WorktreeCard({
   const trackTerminalFocus = useWorktreeSelectionStore((state) => state.trackTerminalFocus);
 
   const getRecipesForWorktree = useRecipeStore((state) => state.getRecipesForWorktree);
+  const agentPins = useAgentToolbarPinsStore((state) => state.pins);
   const recipes = getRecipesForWorktree(worktree.id);
 
   const resourceEnvironments = useProjectSettingsStore(
@@ -292,6 +299,11 @@ export function WorktreeCard({
     [worktree.id]
   );
   const pluginItems = usePluginContextMenuItems("worktree", pluginMenuContext);
+  // Only an explicit quiet: a folder without a repository resolves to hidden,
+  // and its cards already have no git detail to move.
+  const presentation = useResolvedPresentation();
+  const quietGit = presentation.gitDetail === "demoted";
+  const hideDevPreview = presentation.devServer === "hidden";
 
   // Border accent flash — fires once when the dominant *execution* state for
   // this card meaningfully changes. `directing` is excluded because it's
@@ -469,6 +481,7 @@ export function WorktreeCard({
     handleTerminateAll,
     handleClearHistory,
     handleResourceTeardown,
+    handleResourceOpenOnHost,
     confirmAttachmentMove,
   } = useWorktreeActions({
     worktree,
@@ -733,10 +746,12 @@ export function WorktreeCard({
       onSelect();
     }
 
-    // Focus the terminal (Dock or Grid)
+    // Focus the terminal (Dock or Grid). A grid pane is hidden while the
+    // project's Home shows; the dock stays on screen beside it.
     if (terminal.location === "dock") {
       openDockTerminal(terminal.id);
     } else {
+      exitProjectHome();
       setFocused(terminal.id);
     }
 
@@ -766,7 +781,7 @@ export function WorktreeCard({
 
   const launchAgents = (() => {
     return agentIds
-      .filter((agentId) => isAgentPinned(getAgentSettingsEntry(agentSettings, agentId)))
+      .filter((agentId) => isAgentPinned(agentToolbarPin(agentPins, agentId)))
       .map((agentId) => {
         const config = getAgentConfig(agentId);
         const available = isAgentLaunchable(agentAvailability?.[agentId]);
@@ -792,7 +807,7 @@ export function WorktreeCard({
   // cycling: a backgrounded agent is not counted there, so it must not mark
   // the card either. Every terminal here already belongs to this (existing)
   // worktree, so the orphan check has nothing to do.
-  const { runsById } = useWorktreeAgentBucketInputs();
+  const { runsById, pluginByWorktreeId } = useWorktreeAgentBucketInputs();
   const isInTrash = usePanelStore((state) => state.isInTrash);
   const chipState = computeChipState(
     deriveWorktreeAgentBuckets(
@@ -800,7 +815,8 @@ export function WorktreeCard({
         .filter((t) => isAgentTerminal(t) && isTerminalVisible(t, isInTrash, NO_WORKTREE_IDS))
         .map((t) => t.id),
       runsById,
-      isWorktreeMergedForCleanup(worktree)
+      isWorktreeMergedForCleanup(worktree),
+      pluginByWorktreeId.get(worktree.id)
     )
   );
 
@@ -813,6 +829,9 @@ export function WorktreeCard({
   const { activeTerminal: draggedPanel } = useDndPlaceholder();
   const isCrossWorktreePanelDrag =
     draggedPanel !== null && (draggedPanel.worktreeId ?? null) !== worktree.id;
+  // Under a plugin's sidebar view the card keeps its box, so it would still
+  // catch a terminal dropped onto the view in front of it.
+  const isHiddenInSidebar = useBuiltInSidebarViewHidden();
 
   const { setNodeRef, isOver, over, active } = useDroppable({
     id: `worktree-drop-${worktree.id}`,
@@ -820,7 +839,8 @@ export function WorktreeCard({
       type: "worktree",
       worktreeId: worktree.id,
     },
-    disabled: (isActive && !isCrossWorktreePanelDrag) || isWorktreeSortDragging,
+    disabled:
+      (isActive && !isCrossWorktreePanelDrag) || isWorktreeSortDragging || isHiddenInSidebar,
   });
 
   const droppableRef = (node: HTMLElement | null) => {
@@ -1088,6 +1108,8 @@ export function WorktreeCard({
     onStopDevServer: handleStopDevServer,
     onRestartDevServer: handleRestartDevServer,
     pluginItems,
+    quietGit,
+    hideDevPreview,
   };
 
   const ariaStatusParts: string[] = [spineState];
@@ -1544,6 +1566,11 @@ export function WorktreeCard({
                   devServerSession={devServerSession}
                   onCheckResourceStatus={hasStatusCommand ? handleResourceStatus : undefined}
                   onPreviewEndpoint={handlePreviewEndpoint}
+                  onOpenOnHost={
+                    canOpenResourceBoxOnHost(worktree.resourceStatus?.ssh)
+                      ? handleResourceOpenOnHost
+                      : undefined
+                  }
                   onAttachmentAction={handleAttachmentAction}
                   onCleanupWorktree={
                     chipState === "cleanup" && !isMainWorktree
@@ -1556,6 +1583,7 @@ export function WorktreeCard({
                     onOpenPlan: openPlanFileForThisWorktree,
                   }}
                   gitStateIndicator={gitStateIndicator}
+                  quietGit={quietGit}
                   menu={menuActions}
                 />
 
@@ -1601,6 +1629,17 @@ export function WorktreeCard({
                     onDismissError={dismissError}
                     onRetryError={handleErrorRetry}
                     onOpenReviewHub={openReviewHubForThisWorktree}
+                    quietGitDetail={
+                      quietGit ? (
+                        <QuietGitDetails
+                          worktree={worktree}
+                          branchLabel={branchLabel}
+                          isActive={isActive}
+                          onOpenIssue={worktree.issueNumber ? handleOpenIssueExternal : undefined}
+                          onOpenPR={worktree.linked?.pr ? handleOpenPRExternal : undefined}
+                        />
+                      ) : undefined
+                    }
                     isLifecycleRunning={isLifecycleRunning}
                     lifecycleLabel={lifecycleLabel}
                     isBeingDeleted={isBeingDeleted}

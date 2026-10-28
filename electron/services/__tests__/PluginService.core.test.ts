@@ -242,10 +242,14 @@ vi.mock("../plugin/PluginDevWorkerMainBridge.js", () => ({
 }));
 
 import { PluginService } from "../PluginService.js";
-import { type PluginIpcContext } from "../../../shared/types/plugin.js";
+import {
+  SIDEBAR_VIEW_DEFAULT_PRIORITY,
+  type PluginIpcContext,
+} from "../../../shared/types/plugin.js";
 import { registerPanelKind } from "../../../shared/config/panelKindRegistry.js";
 import { registerToolbarButton } from "../../../shared/config/toolbarButtonRegistry.js";
 import { registerPluginMenuItem } from "../pluginMenuRegistry.js";
+import { getPluginHostedViews } from "../plugin/PluginHostedViewRegistry.js";
 
 function makeCtx(pluginId: string, overrides: Partial<PluginIpcContext> = {}): PluginIpcContext {
   return {
@@ -355,6 +359,31 @@ describe("PluginService", () => {
       .mock.calls.find((call) => call[0]?.id === "acme.dock-plugin.wide");
     expect(wideCall).toBeDefined();
     expect(Object.prototype.hasOwnProperty.call(wideCall![0], "dockable")).toBe(false);
+  });
+
+  it("forwards a panel contribution's scope into registerPanelKind, and nothing when omitted (#13778)", async () => {
+    await writePlugin("scope-plugin", {
+      name: "acme.scope-plugin",
+      version: "1.0.0",
+      contributes: {
+        panels: [
+          { id: "records", name: "Records", iconId: "eye", color: "#111", scope: "project" },
+          { id: "notes", name: "Notes", iconId: "eye", color: "#222" },
+        ],
+      },
+    });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    expect(registerPanelKind).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "acme.scope-plugin.records", scope: "project" })
+    );
+    const notesCall = vi
+      .mocked(registerPanelKind)
+      .mock.calls.find((call) => call[0]?.id === "acme.scope-plugin.notes");
+    expect(notesCall).toBeDefined();
+    expect(Object.prototype.hasOwnProperty.call(notesCall![0], "scope")).toBe(false);
   });
 
   it("stamps the first tour declared against a panel onto its kind as a qualified tourId (#12774)", async () => {
@@ -496,17 +525,100 @@ describe("PluginService", () => {
     expect(Object.prototype.hasOwnProperty.call(plain, "hasPluginSettings")).toBe(false);
     expect(Object.prototype.hasOwnProperty.call(plain, "hasRequiredSettings")).toBe(false);
 
-    const listed = service.listPlugins();
-    const withView = listed.find((p) => p.instanceId === "acme.settings-plugin");
-    expect(withView?.settingsViewPath).toMatch(/^plugin:\/\/.*dist\/prefs\.js$/);
-    expect(listed.find((p) => p.instanceId === "acme.plain-plugin")?.settingsViewPath).toBe(
-      undefined
-    );
+    // Served as a hosted view instead: outside the grid, under this load's authority.
+    const hosted = getPluginHostedViews().filter((v) => v.pluginId.startsWith("acme."));
+    expect(hosted).toEqual([
+      {
+        id: "plugin-view:acme.settings-plugin/prefs",
+        pluginId: "acme.settings-plugin",
+        viewId: "prefs",
+        location: "settings",
+        name: "acme.settings-plugin settings",
+        componentPath: expect.stringMatching(/^plugin:\/\/.*dist\/prefs\.js$/),
+      },
+    ]);
 
-    // The settings view activates its plugin like a panel view does.
+    // The settings view activates its plugin like a panel view does, and only
+    // a view the plugin actually hosts outside the grid resolves.
     await expect(
-      service.activatePluginForView("plugin-settings-view:acme.settings-plugin")
+      service.activatePluginForView("plugin-view:acme.settings-plugin/prefs", true)
+    ).resolves.toMatchObject({
+      ok: true,
+      recoveryComponentPath: expect.stringMatching(/dist\/prefs\.js$/),
+    });
+    await expect(
+      service.activatePluginForView("plugin-view:acme.settings-plugin/board", true)
     ).resolves.toEqual({ ok: true });
+
+    // Unloading withdraws it.
+    service.unloadPlugin("acme.settings-plugin");
+    expect(getPluginHostedViews().some((v) => v.pluginId === "acme.settings-plugin")).toBe(false);
+  });
+
+  it("serves sidebar views as hosted views carrying their switcher entry", async () => {
+    await writePlugin("sidebar-plugin", {
+      name: "acme.sidebar-plugin",
+      displayName: "Acme Beads",
+      version: "1.0.0",
+      contributes: {
+        views: [
+          {
+            id: "board",
+            componentPath: "dist/board.js",
+            location: "sidebar",
+            name: "Board",
+            iconId: "list",
+            priority: 250,
+            when: "isGitBacked",
+          },
+          { id: "docs", componentPath: "dist/docs.js", location: "sidebar", name: "Docs" },
+        ],
+      },
+    });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    // A sidebar view is never a panel kind, so nothing can spawn one.
+    expect(
+      vi
+        .mocked(registerPanelKind)
+        .mock.calls.some((call) => String(call[0]?.id).startsWith("acme.sidebar-plugin."))
+    ).toBe(false);
+    const hosted = getPluginHostedViews().filter((v) => v.pluginId === "acme.sidebar-plugin");
+    expect(hosted).toEqual([
+      {
+        id: "plugin-view:acme.sidebar-plugin/board",
+        pluginId: "acme.sidebar-plugin",
+        viewId: "board",
+        location: "sidebar",
+        name: "Acme Beads Board",
+        title: "Board",
+        pluginName: "Acme Beads",
+        iconId: "list",
+        priority: 250,
+        when: "isGitBacked",
+        componentPath: expect.stringMatching(/^plugin:\/\/.*dist\/board\.js$/),
+      },
+      {
+        id: "plugin-view:acme.sidebar-plugin/docs",
+        pluginId: "acme.sidebar-plugin",
+        viewId: "docs",
+        location: "sidebar",
+        name: "Acme Beads Docs",
+        title: "Docs",
+        pluginName: "Acme Beads",
+        // Undeclared, it sorts below the worktree list.
+        priority: SIDEBAR_VIEW_DEFAULT_PRIORITY,
+        componentPath: expect.stringMatching(/^plugin:\/\/.*dist\/docs\.js$/),
+      },
+    ]);
+    await expect(
+      service.activatePluginForView("plugin-view:acme.sidebar-plugin/board", true)
+    ).resolves.toMatchObject({
+      ok: true,
+      recoveryComponentPath: expect.stringMatching(/dist\/board\.js$/),
+    });
   });
 
   it("skips directories without plugin.json", async () => {
@@ -806,6 +918,46 @@ describe("PluginService", () => {
         pluginId: "acme.toolbar-test",
       })
     );
+  });
+
+  it("offers settings from the panels and toolbar buttons of an account-only plugin (#14101)", async () => {
+    await writePlugin("account-only", {
+      name: "acme.account-only",
+      version: "1.0.0",
+      // An account calls out over the network, so the manifest has to say so.
+      capabilities: ["network:fetch"],
+      contributes: {
+        panels: [{ id: "board", name: "Board", iconId: "eye", color: "#111" }],
+        views: [{ id: "board", componentPath: "dist/board.js", location: "panel" }],
+        toolbarButtons: [
+          { id: "open", label: "Open", iconId: "puzzle", actionId: "acme.account-only.go" },
+        ],
+        account: { kind: "token", label: "Acme" },
+      },
+    });
+    await writePlugin("bare-toolbar", {
+      name: "acme.bare-toolbar",
+      version: "1.0.0",
+      contributes: {
+        toolbarButtons: [
+          { id: "open", label: "Open", iconId: "puzzle", actionId: "acme.bare-toolbar.go" },
+        ],
+      },
+    });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const panel = vi
+      .mocked(registerPanelKind)
+      .mock.calls.find((call) => call[0]?.id === "acme.account-only.board")?.[0];
+    expect(panel).toMatchObject({ hasPluginSettings: true });
+    const button = (id: string) =>
+      vi.mocked(registerToolbarButton).mock.calls.find((call) => call[0]?.id === id)?.[0];
+    expect(button("acme.account-only.open")).toMatchObject({ hasPluginSettings: true });
+    expect(
+      Object.prototype.hasOwnProperty.call(button("acme.bare-toolbar.open"), "hasPluginSettings")
+    ).toBe(false);
   });
 
   it("registers menu items from plugin manifest", async () => {

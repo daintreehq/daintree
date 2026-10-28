@@ -2,7 +2,7 @@ import { ChevronDown } from "lucide-react";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
 import { ScrollPill } from "@/components/ui/ScrollPill";
 import { useUnseenOutput } from "@/hooks/useUnseenOutput";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 
 export interface TerminalScrollIndicatorProps {
   terminalId: string;
@@ -21,8 +21,8 @@ export function TerminalScrollIndicator({ terminalId }: TerminalScrollIndicatorP
 
   const handleClick = (e: React.MouseEvent) => {
     e.stopPropagation();
-    terminalInstanceService.resumeAutoScroll(terminalId);
-    requestAnimationFrame(() => terminalInstanceService.focus(terminalId));
+    peekTerminalService()?.resumeAutoScroll(terminalId);
+    requestAnimationFrame(() => peekTerminalService()?.focus(terminalId));
   };
 
   // Rendered inside `TerminalChipRow`, which owns the position, insets and

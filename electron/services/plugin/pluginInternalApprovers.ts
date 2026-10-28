@@ -4,14 +4,14 @@
 // objects is not. Kept free of heavy imports so the worker bridge can use it.
 
 import type {
-  BuiltinPluginFsApi,
   PluginDatabaseApi,
+  PluginFsApi,
   PluginHostApi,
 } from "../../../shared/types/plugin.js";
 
 /** Approves a file another host component writes, through `host.fs`'s write gate. */
 export const fsWriteApprovers = new WeakMap<
-  BuiltinPluginFsApi,
+  PluginFsApi,
   (op: string, targetPath: string) => Promise<string>
 >();
 
@@ -30,6 +30,29 @@ export function approvePluginDatabaseBackup(
   const approve = databaseBackupApprovers.get(db);
   if (!approve) return Promise.reject(new Error("db.backup is not available on this host"));
   return approve(id, destPath);
+}
+
+/**
+ * Refuses a write to a declared database when the call it runs in may not
+ * change the project the database is in. Resolves when the write may go ahead.
+ */
+export const databaseWriteAuthorizers = new WeakMap<
+  PluginDatabaseApi,
+  (id: string, openedPath?: string) => Promise<void>
+>();
+
+/**
+ * Ask whether the current call may write a plugin's database, opened at
+ * `openedPath`. Used by the worker bridge.
+ */
+export function approvePluginDatabaseWrite(
+  db: PluginDatabaseApi,
+  id: string,
+  openedPath?: string
+): Promise<void> {
+  const authorize = databaseWriteAuthorizers.get(db);
+  if (!authorize) return Promise.reject(new Error("db writes are not available on this host"));
+  return authorize(id, openedPath);
 }
 
 /**

@@ -172,7 +172,7 @@ describe("TerminalInstanceService — watching a project another frontend drives
 
     gate = (await import("../inputGate")) as InputGate;
     gate.setDriveLeaseSnapshot(null);
-    const candidate: unknown = (await import("../TerminalInstanceService")).terminalInstanceService;
+    const candidate: unknown = await (await import("../terminalInstanceServiceAccessor")).load();
     if (!reachesWatchState(candidate)) throw new Error("service shape changed");
     service = candidate;
     service.instances.clear();
@@ -397,5 +397,112 @@ describe("TerminalInstanceService — watching a project another frontend drives
     service.destroy("t1");
 
     expect(locked("t1")).toBe(false);
+  });
+});
+
+describe("TerminalInstanceService — a terminal a Canopy panel on another machine holds (#14497)", () => {
+  let service: WatchTestService;
+  let gate: InputGate;
+  let pushHolds: (terminalIds: string[]) => void;
+  let hydrate: string[];
+
+  beforeEach(async () => {
+    vi.resetModules();
+    vi.clearAllMocks();
+    capturedResizeResultCb = null;
+    getInfo.mockReset();
+    answerFrom({});
+    pushHolds = () => {};
+    hydrate = [];
+    Object.defineProperty(window, "electron", {
+      configurable: true,
+      value: {
+        events: {
+          on: vi.fn((name: string, callback: (terminalIds: string[]) => void) => {
+            if (name === "terminal:canopy-size-holds-changed") pushHolds = callback;
+            return () => {};
+          }),
+        },
+        canopy: { getSizeHolds: vi.fn(async () => hydrate) },
+      },
+    });
+
+    gate = (await import("../inputGate")) as InputGate;
+    gate.setDriveLeaseSnapshot(null);
+    const candidate: unknown = await (await import("../terminalInstanceServiceAccessor")).load();
+    if (!reachesWatchState(candidate)) throw new Error("service shape changed");
+    service = candidate;
+    service.instances.clear();
+  });
+
+  afterEach(() => {
+    service.dispose();
+    gate.setDriveLeaseSnapshot(null);
+    Reflect.deleteProperty(window, "electron");
+  });
+
+  const grid = (id: string) => {
+    const { cols, rows } = service.instances.get(id)!.terminal;
+    return [cols, rows];
+  };
+  const locked = (id: string) => service.resizeController.isResizeLocked(id);
+
+  it("freezes a pane held before this view heard of it, at the PTY's grid, and no other", async () => {
+    hydrate = ["t1"];
+    answerFrom({ t1: [99, 30] });
+    await service.prewarmTerminal("t1", "terminal", {});
+    await service.prewarmTerminal("t2", "terminal", {});
+    await settle();
+
+    expect(locked("t1")).toBe(true);
+    expect(grid("t1")).toEqual([99, 30]);
+    expect(locked("t2")).toBe(false);
+    service.resizeController.sendPtyResize("t1", 140, 40);
+    expect(resize).not.toHaveBeenCalled();
+  });
+
+  it("follows the panel's resizes and re-fits only that pane once it lets go", async () => {
+    await service.prewarmTerminal("t1", "terminal", {});
+    await service.prewarmTerminal("t2", "terminal", {});
+    await settle();
+    pushHolds(["t1"]);
+    await settle();
+    capturedResizeResultCb!("t1", echo(80, 20));
+    expect(grid("t1")).toEqual([80, 20]);
+
+    const pass = vi.spyOn(service, "runResizePass").mockImplementation(() => {});
+    pushHolds([]);
+
+    expect(locked("t1")).toBe(false);
+    expect(pass).toHaveBeenCalledWith(["t1"], { immediate: true });
+    expect(service.instances.get("t1")!.reassertPtyGrid).toBe(true);
+  });
+
+  it("reads the holds again when the link to the host comes back, a missed release included", async () => {
+    hydrate = ["t1"];
+    await service.prewarmTerminal("t1", "terminal", {});
+    await settle();
+    expect(locked("t1")).toBe(true);
+    vi.spyOn(service, "runResizePass").mockImplementation(() => {});
+
+    hydrate = [];
+    const { notifyHostResync } = await import("@/store/hostResyncSignal");
+    notifyHostResync();
+    await settle();
+
+    expect(locked("t1")).toBe(false);
+  });
+
+  it("keeps a pane held while another frontend still drives the project", async () => {
+    await service.prewarmTerminal("t1", "terminal", {});
+    gate.setDriveLeaseSnapshot(lease());
+    pushHolds(["t1"]);
+    await settle();
+    const pass = vi.spyOn(service, "runResizePass").mockImplementation(() => {});
+
+    pushHolds([]);
+
+    expect(locked("t1")).toBe(true);
+    expect(pass).not.toHaveBeenCalled();
   });
 });

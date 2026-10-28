@@ -79,6 +79,7 @@ const ALL_SPAWN_ERROR_CODES: readonly SpawnErrorCode[] = [
   "PENDING_SPAWNS_CAPPED",
   "TERMINAL_ALREADY_LIVE",
   "SPAWN_TIMEOUT",
+  "REQUIRED_PLUGIN_TOOLS",
   "UNKNOWN",
 ] as const;
 
@@ -369,5 +370,68 @@ describe("SpawnErrorBanner", () => {
         Object.defineProperty(navigator, "clipboard", { configurable: true, value: original });
       }
     });
+  });
+});
+
+describe("SpawnErrorBanner — required plugin tools", () => {
+  const error: SpawnError = {
+    code: "REQUIRED_PLUGIN_TOOLS",
+    message: "refused",
+    pluginTools: [
+      { pluginInstanceId: "acme.ledger", pluginDisplayName: "Ledger", state: "pending-load" },
+      { pluginInstanceId: "acme.notes", pluginDisplayName: "Notes", state: "disabled-access" },
+      { pluginInstanceId: "acme.ok", pluginDisplayName: "Fine", state: "ready" },
+    ],
+  };
+
+  it("names each missing plugin with its reason, and not the ready ones", () => {
+    render(
+      <SpawnErrorBanner
+        terminalId="t-1"
+        error={error}
+        onUpdateCwd={vi.fn()}
+        onRetry={vi.fn()}
+        onTrash={vi.fn()}
+        onStartWithoutPluginTools={vi.fn()}
+      />
+    );
+    const text = document.body.textContent ?? "";
+    expect(text).toContain("Ledger: it's still loading");
+    expect(text).toContain("Notes: its agent tools are off in this project");
+    expect(text).not.toContain("Fine");
+  });
+
+  it("keeps Retry primary and offers starting without the tools from the overflow", () => {
+    const onRetry = vi.fn();
+    const onStart = vi.fn();
+    render(
+      <SpawnErrorBanner
+        terminalId="t-1"
+        error={error}
+        onUpdateCwd={vi.fn()}
+        onRetry={onRetry}
+        onTrash={vi.fn()}
+        onStartWithoutPluginTools={onStart}
+      />
+    );
+    const overflow = screen.getByTestId("overflow-content");
+    expect(overflow.textContent).not.toContain("Retry");
+    fireEvent.click(screen.getByText("Start without them"));
+    expect(onStart).toHaveBeenCalledWith("t-1");
+    expect(onRetry).not.toHaveBeenCalled();
+  });
+
+  it("offers no start-without choice for any other failure", () => {
+    render(
+      <SpawnErrorBanner
+        terminalId="t-1"
+        error={{ code: "EIO", message: "io" }}
+        onUpdateCwd={vi.fn()}
+        onRetry={vi.fn()}
+        onTrash={vi.fn()}
+        onStartWithoutPluginTools={vi.fn()}
+      />
+    );
+    expect(screen.queryByText("Start without them")).toBeNull();
   });
 });

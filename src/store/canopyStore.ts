@@ -1,9 +1,18 @@
 import { create } from "zustand";
 import { getViewWorkspaceId } from "./viewWorkspaceId";
 import { LOCAL_HOST_ID, type HostId } from "@shared/types/remoteHosts";
+import { AGENT_DIRECTORY_ENTRIES_MAX } from "@shared/types/agentDirectory";
 import type { CanopyOrder } from "@/components/Canopy/canopyOrder";
+import { canopyResumeFresh, type CanopyResume } from "@/components/Canopy/canopyResume";
+import {
+  isCanopyRoleFilter,
+  type AssistantHandbacksSeen,
+  type CanopyRoleFilter,
+} from "@/components/Canopy/canopyAssistants";
+import type { CanopyReplyRow } from "./voiceRecordingStore";
 import {
   CANOPY_URGENT_PRIORITY,
+  readsWithHostedService,
   type CanopyCard,
   type CanopyMode,
   type CanopySnapshot,
@@ -22,8 +31,20 @@ interface CanopyState {
   snapshot: CanopySnapshot | null;
   open: () => void;
   close: () => void;
+  /**
+   * Closes after "Go to terminal", remembering where the panel stood: an
+   * opening within `CANOPY_RESUME_MS` lands there, any other close forgets it.
+   */
+  closeForTerminal: (resume: CanopyResume) => void;
+  resume: CanopyResume | null;
   toggle: () => void;
   applySnapshot: (snapshot: CanopySnapshot) => void;
+  /**
+   * The window's own host runs a Daintree from before Canopy read locally: its
+   * snapshot is held inert (no cards, not on) and nothing it read is shown or
+   * turned on from here until it is updated.
+   */
+  outdatedHost: boolean;
   /**
    * The urgent prompt each run last showed while the panel was open, as
    * `spawnedAt:revision`. The toolbar badge counts only the urgent prompts not
@@ -41,7 +62,9 @@ interface CanopyState {
   /**
    * The host the panel shows when it isn't the window's own: picked in the
    * panel's header, and back to the window's own host each time it opens.
-   * Only the panel reads it; the toolbar always counts the window's own host.
+   * `ALL_HOSTS_ID` is the one exception, a read scope over every host that is
+   * restored on open. Only the panel reads it; the toolbar always counts the
+   * window's own host.
    */
   hostId: HostId | null;
   setHostId: (hostId: HostId | null) => void;
@@ -51,22 +74,70 @@ interface CanopyState {
   /** The inbox's "Archived" group is unfolded; kept across opens. */
   archivedExpanded: boolean;
   setArchivedExpanded: (expanded: boolean) => void;
+  /** The inbox's "Trash" group is unfolded; kept across opens. */
+  trashExpanded: boolean;
+  setTrashExpanded: (expanded: boolean) => void;
   /** The inbox shows only unread runs; kept across opens for the session. */
   unreadOnly: boolean;
   setUnreadOnly: (unreadOnly: boolean) => void;
   /** Every project's agents, or only the project this view shows; remembered across launches. */
   scope: CanopyScope;
   setScope: (scope: CanopyScope) => void;
+  /** Workers, Daintree Assistants or both; remembered across launches. */
+  roleFilter: CanopyRoleFilter;
+  setRoleFilter: (roleFilter: CanopyRoleFilter) => void;
+  /**
+   * "Show its work": the inbox narrowed to the workers one assistant made or
+   * was handed (#14166), by its exact run. For this opening only: a closed
+   * panel opens on the whole inbox, and no other assistant ever inherits it.
+   */
+  workOf: CanopyWorkOf | null;
+  showWorkOf: (workOf: CanopyWorkOf | null) => void;
+  /** Each assistant's newest handback the person has had in front of them. */
+  assistantHandbacksSeen: AssistantHandbacksSeen;
+  seeAssistantHandback: (assistantId: string, observedAt: number) => void;
+  /**
+   * The row a dictation is writing a reply into, asked for from the recording
+   * indicator (#14778): the panel opens on its host and selects it with the
+   * keyboard in its reply, then settles the request whether or not it could.
+   */
+  replyReveal: CanopyReplyReveal | null;
+  /** Opens the panel on the row; false when Canopy is hidden and can't open. */
+  revealReply: (row: CanopyReplyRow) => boolean;
+  /** The request was met or refused; a newer one stands. */
+  settleReplyReveal: (id: number) => void;
+}
+
+export interface CanopyReplyReveal extends CanopyReplyRow {
+  id: number;
 }
 
 export type CanopyScope = "all" | "project";
 
+/** The assistant whose work the inbox is narrowed to: its exact run, and its name as shown. */
+export interface CanopyWorkOf {
+  assistantId: string;
+  name: string;
+}
+
 export type { CanopyOrder };
 
+/** The panel's "All hosts" scope: not a host, and never a target for anything that writes. */
+export const ALL_HOSTS_ID: HostId = "*";
+
+export function isAllHosts(hostId: HostId | null): boolean {
+  return hostId === ALL_HOSTS_ID;
+}
+
 const SCOPE_STORAGE_KEY = "daintree-canopy-scope";
+const ALL_HOSTS_STORAGE_KEY = "daintree-canopy-all-hosts";
 /** Read by every project view, so a view opened or reloaded since still opens on the order last shown. */
 const ORDER_STORAGE_KEY = "daintree-canopy-order";
 export const CANOPY_ACKNOWLEDGED_STORAGE_KEY = "daintree-canopy-acknowledged";
+export const CANOPY_ROLE_STORAGE_KEY = "daintree-canopy-role";
+const HANDBACKS_SEEN_STORAGE_KEY = "daintree-canopy-assistant-handbacks";
+/** Assistants whose seen handback is kept at most, the oldest seen dropped first: as many as one directory names. */
+const MAX_HANDBACKS_SEEN = AGENT_DIRECTORY_ENTRIES_MAX;
 
 function promptKey(card: Pick<CanopyCard, "spawnedAt" | "revision">): string {
   return `${card.spawnedAt}:${card.revision}`;
@@ -132,12 +203,98 @@ export function isCanopyUnacknowledged(
   return acknowledged[card.runId] !== promptKey(card);
 }
 
+function loadHostId(): HostId | null {
+  try {
+    return window.localStorage.getItem(ALL_HOSTS_STORAGE_KEY) === "1" ? ALL_HOSTS_ID : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveAllHosts(on: boolean): void {
+  try {
+    if (on) window.localStorage.setItem(ALL_HOSTS_STORAGE_KEY, "1");
+    else window.localStorage.removeItem(ALL_HOSTS_STORAGE_KEY);
+  } catch {
+    // Best effort: the choice still holds for this session.
+  }
+}
+
 function loadScope(): CanopyScope {
   try {
     return window.localStorage.getItem(SCOPE_STORAGE_KEY) === "project" ? "project" : "all";
   } catch {
     return "all";
   }
+}
+
+function loadRoleFilter(): CanopyRoleFilter {
+  try {
+    const stored = window.localStorage.getItem(CANOPY_ROLE_STORAGE_KEY);
+    return isCanopyRoleFilter(stored) ? stored : "all";
+  } catch {
+    return "all";
+  }
+}
+
+function saveRoleFilter(roleFilter: CanopyRoleFilter): void {
+  try {
+    window.localStorage.setItem(CANOPY_ROLE_STORAGE_KEY, roleFilter);
+  } catch {
+    // Best effort: the choice still holds for this session.
+  }
+}
+
+function readHandbacksSeen(): Record<string, number> {
+  try {
+    const parsed: unknown = JSON.parse(
+      window.localStorage.getItem(HANDBACKS_SEEN_STORAGE_KEY) ?? "null"
+    );
+    if (!parsed || typeof parsed !== "object") return {};
+    const clean: Record<string, number> = {};
+    for (const [id, at] of Object.entries(parsed)) {
+      if (typeof at === "number" && Number.isFinite(at)) clean[id] = at;
+    }
+    return clean;
+  } catch {
+    return {};
+  }
+}
+
+/** Each assistant's newest seen of the two, kept to the cap. */
+function mergeHandbacksSeen(
+  held: AssistantHandbacksSeen,
+  stored: AssistantHandbacksSeen
+): Record<string, number> {
+  const next: Record<string, number> = { ...held };
+  for (const [id, at] of Object.entries(stored)) next[id] = Math.max(next[id] ?? -Infinity, at);
+  const ids = Object.keys(next);
+  for (const id of ids.slice(0, Math.max(0, ids.length - MAX_HANDBACKS_SEEN))) delete next[id];
+  return next;
+}
+
+/**
+ * Merged over what is stored and what this view holds, since every project
+ * view writes the key: the newest seen of each wins, and a failed write still
+ * leaves this view's copy right.
+ */
+function saveHandbackSeen(
+  held: AssistantHandbacksSeen,
+  assistantId: string,
+  observedAt: number
+): Record<string, number> {
+  const next = mergeHandbacksSeen(held, readHandbacksSeen());
+  const newest = Math.max(next[assistantId] ?? -Infinity, observedAt);
+  delete next[assistantId];
+  next[assistantId] = newest;
+  const ids = Object.keys(next);
+  for (const id of ids.slice(0, Math.max(0, ids.length - MAX_HANDBACKS_SEEN))) delete next[id];
+  try {
+    window.localStorage.setItem(HANDBACKS_SEEN_STORAGE_KEY, JSON.stringify(next));
+  } catch {
+    // Best effort: this view still keeps it for the session.
+  }
+  return next;
 }
 
 /** Project orders kept at most, the least recently saved dropped first. */
@@ -177,10 +334,10 @@ function storedIds(value: unknown): string[] | null {
 
 /**
  * Ranked for no scan this view has seen, so the open places it afresh by what
- * is known now, starting from the order it was left in.
+ * is known now, starting from the order it was left in — the band too.
  */
 function unranked(ids: string[]): CanopyOrder {
-  return { ids, rankedFor: null, urgent: [] };
+  return { ids, rankedFor: null, urgent: [], band: [] };
 }
 
 /** Where a host's stored order came from: its own slot, or, for this machine, the old one. */
@@ -261,6 +418,19 @@ function saveScope(scope: CanopyScope): void {
   }
 }
 
+let replyRevealSeq = 0;
+
+function opened(state: CanopyState): Partial<CanopyState> {
+  if (canopyResumeFresh(state.resume, Date.now())) {
+    return { isOpen: true, hostId: state.resume!.hostId };
+  }
+  return {
+    isOpen: true,
+    resume: null,
+    hostId: state.hostId === ALL_HOSTS_ID ? ALL_HOSTS_ID : null,
+  };
+}
+
 /**
  * Open state for the canopy panel, and the latest cards main pushed.
  *
@@ -269,7 +439,7 @@ function saveScope(scope: CanopyScope): void {
  * snapshot is kept across closes so reopening shows the last cards at once,
  * while main rescans in the background.
  */
-export const useCanopyStore = create<CanopyState>((set) => ({
+export const useCanopyStore = create<CanopyState>((set, get) => ({
   isOpen: false,
   mode: "unset",
   seedMode: (mode) => set((state) => (state.snapshot === null ? { mode } : state)),
@@ -289,8 +459,11 @@ export const useCanopyStore = create<CanopyState>((set) => ({
       }
       return { orders: { ...state.orders, [scope]: order } };
     }),
-  hostId: null,
-  setHostId: (hostId) => set({ hostId: hostId === canopyOwnHostId() ? null : hostId }),
+  hostId: loadHostId(),
+  setHostId: (hostId) => {
+    saveAllHosts(hostId === ALL_HOSTS_ID);
+    set({ hostId: hostId === canopyOwnHostId() ? null : hostId });
+  },
   setHostOrder: (hostId, order) =>
     set((state) => {
       if (!sameIds(state.hostOrders[hostId]?.ids, order.ids)) saveOrder(hostId, "all", order.ids);
@@ -298,6 +471,8 @@ export const useCanopyStore = create<CanopyState>((set) => ({
     }),
   archivedExpanded: false,
   setArchivedExpanded: (expanded) => set({ archivedExpanded: expanded }),
+  trashExpanded: false,
+  setTrashExpanded: (expanded) => set({ trashExpanded: expanded }),
   unreadOnly: false,
   setUnreadOnly: (unreadOnly) => set({ unreadOnly }),
   scope: loadScope(),
@@ -305,22 +480,64 @@ export const useCanopyStore = create<CanopyState>((set) => ({
     saveScope(scope);
     set({ scope });
   },
-  // Every opening starts on the window's own host.
-  open: () =>
+  roleFilter: loadRoleFilter(),
+  setRoleFilter: (roleFilter) => {
+    saveRoleFilter(roleFilter);
+    set({ roleFilter });
+  },
+  workOf: null,
+  showWorkOf: (workOf) => set({ workOf }),
+  assistantHandbacksSeen: readHandbacksSeen(),
+  seeAssistantHandback: (assistantId, observedAt) =>
     set((state) =>
-      state.mode === "hidden" || state.isOpen ? state : { isOpen: true, hostId: null }
+      (state.assistantHandbacksSeen[assistantId] ?? -Infinity) >= observedAt
+        ? state
+        : {
+            assistantHandbacksSeen: saveHandbackSeen(
+              state.assistantHandbacksSeen,
+              assistantId,
+              observedAt
+            ),
+          }
     ),
-  close: () => set({ isOpen: false }),
+  resume: null,
+  // Every opening starts on the window's own host, unless the user chose All
+  // hosts or is coming back from "Go to terminal".
+  open: () => set((state) => (state.mode === "hidden" || state.isOpen ? state : opened(state))),
+  close: () => set({ isOpen: false, workOf: null, resume: null, replyReveal: null }),
+  closeForTerminal: (resume) => set({ isOpen: false, workOf: null, resume, replyReveal: null }),
   toggle: () =>
     set((state) =>
       state.isOpen
-        ? { isOpen: false }
+        ? { isOpen: false, workOf: null, resume: null, replyReveal: null }
         : state.mode === "hidden"
           ? state
-          : { isOpen: true, hostId: null }
+          : opened(state)
     ),
-  applySnapshot: (snapshot) =>
+  replyReveal: null,
+  // On the host the row was listed under, which is where its reply's draft is:
+  // All hosts names a run apart from its own host's list. A narrowing to one
+  // assistant's work is for the opening it was made in.
+  revealReply: (row) => {
+    if (get().mode === "hidden") return false;
+    set((state) => ({
+      isOpen: true,
+      resume: null,
+      workOf: state.isOpen ? state.workOf : null,
+      hostId: row.hostScope,
+      replyReveal: { ...row, id: ++replyRevealSeq },
+    }));
+    return true;
+  },
+  settleReplyReveal: (id) =>
+    set((state) => (state.replyReveal?.id === id ? { replyReveal: null } : state)),
+  outdatedHost: false,
+  applySnapshot: (received) =>
     set((state) => {
+      const outdated = readsWithHostedService(received);
+      const snapshot: CanopySnapshot = outdated
+        ? { ...received, activated: false, cards: [], glances: [] }
+        : received;
       // A pull answered after a newer push is older news.
       const held = state.snapshot?.sequence;
       if (held !== undefined && snapshot.sequence !== undefined && snapshot.sequence < held) {
@@ -328,14 +545,34 @@ export const useCanopyStore = create<CanopyState>((set) => ({
       }
       const mode = snapshot.mode;
       // Hidden from another view, or from Settings: a panel this view held open goes too.
-      if (mode === "hidden") return { snapshot, mode, isOpen: false };
-      return { snapshot, mode };
+      if (mode === "hidden") {
+        return {
+          snapshot,
+          mode,
+          outdatedHost: outdated,
+          isOpen: false,
+          workOf: null,
+          resume: null,
+          replyReveal: null,
+        };
+      }
+      return { snapshot, mode, outdatedHost: outdated };
     }),
 }));
 
 // A sibling project view opened the panel: its badge cleared, so this one does too.
 if (typeof window !== "undefined") {
   window.addEventListener("storage", (event) => {
+    if (event.key === HANDBACKS_SEEN_STORAGE_KEY) {
+      // Merged, never replaced: a sibling's write can have raced this view's own.
+      useCanopyStore.setState((state) => ({
+        assistantHandbacksSeen: mergeHandbacksSeen(
+          state.assistantHandbacksSeen,
+          readHandbacksSeen()
+        ),
+      }));
+      return;
+    }
     if (event.key !== CANOPY_ACKNOWLEDGED_STORAGE_KEY) return;
     useCanopyStore.setState({ acknowledged: readAcknowledged() });
   });

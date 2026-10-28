@@ -10,9 +10,9 @@ import {
 } from "./webContentsRegistry.js";
 import { getFocusedPanelTracker } from "../services/FocusedPanelTracker.js";
 import { distributePortsToView, releaseAllTerminalWorkerPorts } from "./portDistribution.js";
-import { resolveInitialColorSchemeId } from "./skeletonCss.js";
-import { resolveAppTheme } from "../../shared/theme/index.js";
+import { resolveInitialCanvasBackgroundColor } from "./skeletonCss.js";
 import { PtyClient } from "../services/PtyClient.js";
+import { startTerminalLifecycleObserver } from "../services/pty/TerminalLifecycleObserver.js";
 import type { MainProcessWatchdogClient } from "../services/MainProcessWatchdogClient.js";
 import { CliAvailabilityService } from "../services/CliAvailabilityService.js";
 import { AgentVersionService } from "../services/AgentVersionService.js";
@@ -22,13 +22,15 @@ import { PortalManager } from "../services/PortalManager.js";
 import { EventBuffer } from "../services/EventBuffer.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { getEndpointRegistry } from "../ipc/endpointRegistry.js";
-import { createApplicationMenu } from "../menu.js";
+import { createApplicationMenu, rebuildApplicationMenuIfPluginVisibilityChanged } from "../menu.js";
 import { onPluginToursChanged } from "../services/plugin/PluginTourRegistry.js";
+import { onProjectPresenceChanged } from "./projectPresenceChanges.js";
 import { ProjectSwitchService } from "../services/ProjectSwitchService.js";
 import { notificationService } from "../services/NotificationService.js";
 import { projectStore } from "../services/ProjectStore.js";
 import { logInfo } from "../utils/logger.js";
 import { SCROLLBACK_BACKGROUND } from "../../shared/config/scrollback.js";
+import { reduceHiddenRendererScrollback } from "./rendererScrollbackReclaim.js";
 import type { HostMemoryPauseSnapshot } from "../../shared/types/pty-host.js";
 import { isDemoMode } from "../setup/environment.js";
 import type { WindowContext, WindowRegistry } from "./WindowRegistry.js";
@@ -143,7 +145,7 @@ export async function initPerWindowServices(
       run: async () => {
         try {
           const { pluginService } = await import("../services/PluginService.js");
-          await pluginService.waitForInit();
+          await pluginService.waitForCatalog();
           pluginMenuInitSettled = true;
           if (!win.isDestroyed()) {
             createApplicationMenu(win, cliService);
@@ -157,28 +159,45 @@ export async function initPerWindowServices(
 
   // Plugin tours are listed in Help, and unlike other plugin menu items they
   // must leave it when their plugin is disabled or uninstalled (#12773), so the
-  // menu is rebuilt when the tour set changes. Debounced: one plugin load or
-  // unload can change it several times in a tick.
-  let tourMenuRebuild: ReturnType<typeof setTimeout> | null = null;
-  const unsubscribeTours = onPluginToursChanged(() => {
-    if (tourMenuRebuild) return;
-    tourMenuRebuild = setTimeout(() => {
-      tourMenuRebuild = null;
+  // menu is rebuilt when the tour set changes — which a per-project visibility
+  // change also signals. Plugin menu items and tours are filtered by this
+  // window's project too (#13765), so a project switch or a focus change may
+  // call for a different menu; those rebuild only when it actually differs,
+  // since a rebuild dismisses a menu the user has open. Debounced: one plugin
+  // load or unload can change the tour set several times in a tick.
+  let pluginMenuRebuild: ReturnType<typeof setTimeout> | null = null;
+  let pluginMenuRebuildForced = false;
+  const schedulePluginMenuRebuild = (force: boolean): void => {
+    if (force) pluginMenuRebuildForced = true;
+    if (pluginMenuRebuild) return;
+    pluginMenuRebuild = setTimeout(() => {
+      pluginMenuRebuild = null;
+      const forced = pluginMenuRebuildForced;
+      pluginMenuRebuildForced = false;
       if (win.isDestroyed()) return;
       // The menu is app-wide but built against one window's state; let the
-      // focused window build it when there is one.
+      // focused window build it when there is one. A context check needs the
+      // focused window outright: with none focused, every window would build
+      // the menu for its own project in turn.
       const focused = BrowserWindow.getFocusedWindow();
-      if (focused && focused !== win) return;
+      if (focused ? focused !== win : !forced) return;
       try {
-        createApplicationMenu(win, cliService);
+        if (forced) createApplicationMenu(win, cliService);
+        else rebuildApplicationMenuIfPluginVisibilityChanged(win, cliService);
       } catch (err) {
-        console.error("[MAIN] Plugin tour menu rebuild failed:", err);
+        console.error("[MAIN] Plugin menu rebuild failed:", err);
       }
     }, 50);
-  });
+  };
+  const unsubscribeTours = onPluginToursChanged(() => schedulePluginMenuRebuild(true));
+  const unsubscribePresence = onProjectPresenceChanged(() => schedulePluginMenuRebuild(false));
+  const onFocus = (): void => schedulePluginMenuRebuild(false);
+  win.on("focus", onFocus);
   win.once("closed", () => {
     unsubscribeTours();
-    if (tourMenuRebuild) clearTimeout(tourMenuRebuild);
+    unsubscribePresence();
+    win.removeListener("focus", onFocus);
+    if (pluginMenuRebuild) clearTimeout(pluginMenuRebuild);
   });
 
   // Arm the drain trigger immediately. All tasks for this window are now
@@ -206,12 +225,9 @@ export async function initPerWindowServices(
   ctx.services.eventBuffer.start();
   // Match the main app view's background color so portal WebContentsView's
   // first paint blends with the window chrome instead of flashing white when a
-  // tab is created or returned to after an overlay (#9207). Custom-scheme
-  // precision isn't load-bearing here — the goal is "not white", so we resolve
-  // the base scheme without threading customSchemes through this code path.
-  const portalBackgroundColor = resolveAppTheme(resolveInitialColorSchemeId(), []).tokens[
-    "surface-canvas"
-  ];
+  // tab is created or returned to after an overlay (#9207). Resolved with the
+  // custom schemes, so a custom light theme doesn't get a dark built-in canvas.
+  const portalBackgroundColor = resolveInitialCanvasBackgroundColor();
   ctx.services.portalManager = new PortalManager(win, portalBackgroundColor);
   // OS foreground for the plugin focus tracker (#13221). The window's own
   // focus/blur, because a child view's webContents doesn't reliably blur when
@@ -373,6 +389,15 @@ export function ensureCriticalServices(windowRegistry: WindowRegistry | undefine
     deferStart: true,
   });
   setPtyClientRef(ptyClient);
+  // Main-lifetime, like the client: every spawn from here on is observed, so a
+  // plugin's terminal-lifecycle feed (#13814) can attribute each terminal's
+  // exit, trash and restore to the project it launched in.
+  startTerminalLifecycleObserver(ptyClient);
+  // The host's memory-leak policy decides restarts itself, with or without a
+  // view on the project (#14703).
+  void import("../services/memoryLeakAutoRestartLive.js")
+    .then(({ startMemoryLeakAutoRestart }) => startMemoryLeakAutoRestart(ptyClient))
+    .catch((err: unknown) => console.warn("[MAIN] Memory-leak auto-restart failed to start:", err));
 
   // Keep the host's fallback-eligible project set current (#12557). The
   // registry spans every window, and `ptyClient` is a process-wide singleton,
@@ -544,6 +569,12 @@ export function ensureCriticalServices(windowRegistry: WindowRegistry | undefine
     void ptyClient!.trimState(SCROLLBACK_BACKGROUND, "all").catch(() => {
       /* non-critical */
     });
+    // The renderer's copy of the same terminals is the larger one. Its guards
+    // still hold here: the host's "all" scope is no licence to drop history
+    // the user is reading.
+    if (windowRegistry) {
+      reduceHiddenRendererScrollback(windowRegistry.all().map((wCtx) => wCtx.browserWindow));
+    }
   });
   // The memory pause reaches the UI once, app-wide, never per pane (#12375).
   // Sent on every change, the release included, to each window's active view;

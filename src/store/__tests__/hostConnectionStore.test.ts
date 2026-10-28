@@ -63,6 +63,22 @@ describe("hostConnectionStore", () => {
     expect(variant()).toBe("unreachable");
   });
 
+  it("holds a host that said it was shutting down as restarting, through every dial", () => {
+    const store = useHostConnectionStore.getState();
+    store.bindHost("studio-01", "studio-01");
+    store.applyConnection(connected);
+    const variant = () => selectHostBannerVariant(useHostConnectionStore.getState());
+    store.applyConnection({ status: "connecting", attempt: 1, restarting: true });
+    expect(variant()).toBe("restarting");
+    store.applyConnection({
+      status: "unreachable",
+      lastSeenAt: null,
+      detail: "Daintree isn't running in Host mode there (no host.json).",
+      restarting: true,
+    });
+    expect(variant()).toBe("restarting");
+  });
+
   it("prefers the link's record of when it last heard from the host over noticing the drop", () => {
     const store = useHostConnectionStore.getState();
     store.bindHost("studio-01", "studio-01");

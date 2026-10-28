@@ -24,14 +24,17 @@ vi.mock("@/clients", () => ({
   },
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     destroy: vi.fn(),
     applyRendererPolicy: vi.fn(),
     onPanelBackgrounded: vi.fn(),
     resize: vi.fn().mockReturnValue({ cols: 80, rows: 24 }),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("@/store/persistence/panelPersistence", () => ({
   panelPersistence: {
@@ -72,6 +75,8 @@ const { filterEligibleIds } = await import("@/components/Fleet/fleetExecution");
 const { runManagedFleetBroadcast } = await import("@/components/Fleet/fleetEnterBroadcast");
 const { needsCrossHostResendConfirmation } = await import("@/components/Fleet/crossHostFleet");
 const { registerFleetActions } = await import("../fleetActions");
+// The run bodies load on first dispatch; load them here, under the mocks above.
+await import("../fleetActions.impl");
 const { useFleetRunStore } = await import("@/store/fleetRunStore");
 
 type ActionRegistry = Awaited<
@@ -795,6 +800,7 @@ describe("fleet.retryFailures", () => {
     const registry = await buildRegistry();
     const first = run(registry, "fleet.retryFailures");
     // Second call happens while the first is awaiting the broadcast.
+    await vi.waitFor(() => expect(runManagedFleetBroadcast).toHaveBeenCalledTimes(1));
     await run(registry, "fleet.retryFailures");
     expect(runManagedFleetBroadcast).toHaveBeenCalledTimes(1);
     (resolveBroadcast as ((value: BroadcastResult) => void) | null)?.({

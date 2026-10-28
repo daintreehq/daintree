@@ -93,7 +93,10 @@ export async function setAgentSettings(
 }
 
 export async function setAgentPinned(page: Page, agentId: string, pinned: boolean): Promise<void> {
-  await setAgentSettings(page, agentId, { pinned });
+  await page.evaluate(({ id, value }) => window.electron.agentToolbarPins.set(id, value), {
+    id: agentId,
+    value: pinned,
+  });
 }
 
 /** Close Settings if it is open and wait until it has actually gone. */

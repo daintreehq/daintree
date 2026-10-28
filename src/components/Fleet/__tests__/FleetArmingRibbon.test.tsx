@@ -761,16 +761,78 @@ describe("FleetArmingRibbon", () => {
     dispatchSpy.mockRestore();
   });
 
+  // A dictated send waiting on its cleanup blurs the composer to the page, and
+  // an Enter there means "send it now", never "confirm the fleet action" (#14780).
+  it("leaves a pending action unconfirmed when Enter is for a waiting dictated send", async () => {
+    useFleetArmingStore.getState().armIds(["a", "b", "c"]);
+    useFleetPendingActionStore.setState({
+      pending: { kind: "kill", targetCount: 3, sessionLossCount: 0 },
+    });
+    const actionServiceModule = await import("@/services/ActionService");
+    const dispatchSpy = vi.spyOn(actionServiceModule.actionService, "dispatch");
+    render(<FleetArmingRibbon />);
+    const { claimVoiceWaitKeys } = await import("@/lib/voiceWaitKeys");
+    const sendNow = vi.fn();
+    const release = claimVoiceWaitKeys({
+      holds: () => false,
+      editor: () => null,
+      isSelected: () => false,
+      sendNow,
+      cancel: vi.fn(),
+    });
+
+    try {
+      fireEvent.keyDown(document.body, { key: "Enter" });
+      // The Enter that started the wait, held down, repeats at the page.
+      fireEvent.keyDown(document.body, { key: "Enter", repeat: true });
+
+      expect(sendNow).toHaveBeenCalledTimes(1);
+      expect(dispatchSpy.mock.calls.find((c) => c[0] === "fleet.kill")).toBeUndefined();
+    } finally {
+      release();
+      dispatchSpy.mockRestore();
+    }
+  });
+
+  it("doesn't count an Escape that called off a waiting dictated send toward an interrupt", async () => {
+    seed([makeAgent("t1", "working"), makeAgent("t2", "working")]);
+    useFleetArmingStore.getState().armIds(["t1", "t2"]);
+    const actionServiceModule = await import("@/services/ActionService");
+    const dispatchSpy = vi.spyOn(actionServiceModule.actionService, "dispatch");
+    render(<FleetArmingRibbon />);
+    const { claimVoiceWaitKeys } = await import("@/lib/voiceWaitKeys");
+    // Calling the send off ends its wait, and its hold on the keys with it.
+    const release = claimVoiceWaitKeys({
+      holds: () => false,
+      editor: () => null,
+      isSelected: () => false,
+      sendNow: vi.fn(),
+      cancel: () => release(),
+    });
+
+    try {
+      fireEvent.keyDown(document.body, { key: "Escape" });
+      fireEvent.keyDown(document.body, { key: "Escape" });
+
+      expect(dispatchSpy.mock.calls.some((c) => c[0] === "fleet.interrupt")).toBe(false);
+    } finally {
+      release();
+      dispatchSpy.mockRestore();
+    }
+  });
+
   // This listener is capture-phase, so without a modal guard it beat a focused
   // dialog button to the Enter and confirmed a destructive fleet action instead
   // of activating that button (issue #11106).
   describe.each([
     // Inside the dialog's own subtree — a webview dialog's Cancel button.
-    { name: "a modal dialog owns", portaled: false },
+    { name: "a modal dialog owns", portaled: false, role: "dialog" },
     // Outside it — Radix menus and selects portal their content under <body>,
     // so an ancestry check would miss this one.
-    { name: "portaled content of an open modal owns", portaled: true },
-  ])("ignores Enter that $name", ({ portaled }) => {
+    { name: "portaled content of an open modal owns", portaled: true, role: "dialog" },
+    // A destructive AppDialog without a preview.
+    { name: "a modal alertdialog owns", portaled: false, role: "alertdialog" },
+  ])("ignores Enter that $name", ({ portaled, role }) => {
     it("leaves the fleet action undispatched", async () => {
       useFleetArmingStore.getState().armIds(["a", "b", "c"]);
       useFleetPendingActionStore.setState({
@@ -781,7 +843,7 @@ describe("FleetArmingRibbon", () => {
       render(<FleetArmingRibbon />);
 
       const modal = document.createElement("div");
-      modal.setAttribute("role", "dialog");
+      modal.setAttribute("role", role);
       modal.setAttribute("aria-modal", "true");
       document.body.appendChild(modal);
 

@@ -1,5 +1,6 @@
 import type {
   PluginLoadError,
+  ProjectApplicationState,
   ProjectPluginInfo,
   ProjectPluginTrustDecision,
   ProjectPluginTrustRecord,
@@ -14,7 +15,12 @@ import type {
   DiscoveredProjectPlugin,
   ProjectPluginDiscoveryResult,
 } from "./projectPluginDiscovery.js";
+import type { ProjectApplicationPreflightFailure } from "./projectApplicationPreflight.js";
 import { createLogger } from "../../utils/logger.js";
+import {
+  resolveProjectApplication,
+  type ProjectApplicationCandidate,
+} from "../../../shared/utils/projectApplication.js";
 
 /**
  * Everything the controller needs from the rest of the host, injected exactly
@@ -67,6 +73,21 @@ export interface ProjectPluginControllerDeps {
   emitToProject: (projectId: string, name: string, payload: unknown) => void;
   /** Current row status, so a project closed behind our back can be reconciled. */
   isProjectClosed: (projectId: string) => boolean;
+  /** Whether the running Daintree falls outside an `engines.daintree` range. */
+  isEngineIncompatible: (range: string) => boolean;
+  /** INSTANCE key of the plugin holding this project's Home slot, or `null`. */
+  getProjectHomeHolder: (projectId: string) => string | null;
+  /**
+   * Check an application owner's payload on disk before it loads (#14113):
+   * its required files, and its databases against their declared schema. Reads
+   * only. Resolves the failure, or `null` when the payload may load.
+   */
+  preflightApplication: (args: {
+    projectId: string;
+    projectRoot: string;
+    dir: string;
+    manifest: Readonly<PluginManifest>;
+  }) => Promise<ProjectApplicationPreflightFailure | null>;
 }
 
 interface ProjectEntry {
@@ -97,6 +118,28 @@ interface ProjectEntry {
   loggedRejections: Map<string, string>;
   /** manifest id → instance key, for everything currently loaded. */
   loaded: Map<string, string>;
+  /** Manifest ids whose last load was refused or threw, until the next attempt. */
+  refused: Set<string>;
+  /**
+   * Application owners whose payload failed its preflight, and what it found,
+   * until the next attempt. Kept apart from `refused` because nothing of the
+   * payload ran: the reason is a fact about the files, not a load error.
+   */
+  preflight: Map<string, ProjectApplicationPreflightFailure & { at: number }>;
+}
+
+/**
+ * What a `"session"` grant leaves behind when its project closes: the decision's
+ * own bookkeeping, and nothing about what was running. `known` is the part that
+ * matters — without it a reopen would stage every plugin the user had already
+ * said yes to, and seeding it from the reopen's scan instead would wave through
+ * a plugin that appeared while the project was closed.
+ */
+interface SessionGrant {
+  decidedAt: number;
+  known: Set<string>;
+  staged: Set<string>;
+  muted: Set<string>;
 }
 
 /**
@@ -143,6 +186,13 @@ const EVENT_PLUGIN_STAGED = "plugin:project-plugin-staged";
  */
 export class ProjectPluginController {
   private readonly entries = new Map<string, ProjectEntry>();
+  /**
+   * Session grants of projects that are closed right now. A grant moves here
+   * when its entry is deleted and back onto the next entry when the project
+   * reopens, so it never sits in both places. The controller lives as long as
+   * the app, which is exactly how long "for this session" means.
+   */
+  private readonly sessionGrants = new Map<string, SessionGrant>();
   /**
    * One serialization chain per project. Two rapid switches into the same
    * project would otherwise interleave their scans and their loads, and the
@@ -235,9 +285,12 @@ export class ProjectPluginController {
     // runs behind us in the chain, so a generation read at task start would be
     // the already-bumped one, compare equal to itself, and let this open load
     // plugins the user has just turned off (#12230).
+    // The generation as well as the entry: `requested?.generation` read inside
+    // the callback is exactly the task-start read described above.
     const requested = this.entries.get(projectId);
+    const requestedGeneration = requested?.generation;
     return this.serialize(projectId, () =>
-      this.doOpen(projectId, projectRoot, requested, requested?.generation)
+      this.doOpen(projectId, projectRoot, requested, requestedGeneration)
     );
   }
 
@@ -321,7 +374,9 @@ export class ProjectPluginController {
    * `plugin://` authorities invalidated, workers killed by the unload cascade.
    *
    * Trust is NOT forgotten here. A close is not a revoke, and re-prompting on
-   * every reopen would defeat the "once, at the folder" contract.
+   * every reopen would defeat the "once, at the folder" contract. A persisted
+   * decision is re-read from disk on reopen; a session grant has no record, so
+   * it is set aside in {@link sessionGrants} until then.
    */
   async onProjectClosed(projectId: string): Promise<void> {
     // Invalidate in-flight work synchronously, BEFORE queueing, so a scan or a
@@ -330,6 +385,17 @@ export class ProjectPluginController {
     if (entry) entry.generation++;
     const done = this.serialize(projectId, async () => {
       await this.unloadAll(projectId);
+      // Read at the end of the queue rather than at request time, so a stage, a
+      // mute or an activation that ran ahead of this close is what reopens.
+      const closing = this.entries.get(projectId);
+      if (closing?.decision === "session" && !this.disposed) {
+        this.sessionGrants.set(projectId, {
+          decidedAt: closing.decidedAt,
+          known: new Set(closing.known),
+          staged: new Set(closing.staged),
+          muted: new Set(closing.muted),
+        });
+      }
       this.entries.delete(projectId);
     });
     void done.then(() => {
@@ -345,8 +411,9 @@ export class ProjectPluginController {
    * Record the user's answer to the trust gate.
    *
    * `"session"` is held in memory and never written, which is what makes it a
-   * session grant rather than a slow yes. `"disabled"` IS written — a remembered
-   * no is the difference between a gate and a nag.
+   * session grant rather than a slow yes. It lasts until the app quits, through
+   * any number of closes. `"disabled"` IS written — a remembered no is the
+   * difference between a gate and a nag.
    */
   async setTrust(projectId: string, decision: ProjectPluginTrustDecision): Promise<void> {
     const pending = this.entries.get(projectId);
@@ -397,6 +464,13 @@ export class ProjectPluginController {
         // `revoke` is a no-op — it re-reads `this.entries`, which the close has
         // already emptied — but the consent purge and the write are not: both
         // run off the captured entry's own `known`/`discovered` sets.
+        //
+        // That close also set aside any session grant the entry held, and this
+        // is the one place a grant can be waiting when a new decision lands —
+        // a reopen consumes it, so every other branch below has an entry and no
+        // grant to drop. Left behind, it would outrank the "disabled" written
+        // here on the next open.
+        this.sessionGrants.delete(projectId);
         requested.decision = "disabled";
         await this.revoke(projectId, requested);
         const stored = this.persist(projectId, requested);
@@ -681,8 +755,15 @@ export class ProjectPluginController {
       // Only a loaded instance can have failed at load or activation, and only
       // its own key answers for it: a stale row for a manifest id this project
       // no longer runs must not inherit another generation's error. A muted one
-      // never loads, so it never has one.
-      const loadError = loadedInstance ? this.deps.getPluginLoadError(loadedInstance) : undefined;
+      // never loads, so it never has one. An application payload refused by
+      // its preflight never loaded either, and its row says what was found
+      // rather than reading clean.
+      const preflight = !loadedInstance && !muted ? entry.preflight.get(manifestId) : undefined;
+      const loadError = loadedInstance
+        ? this.deps.getPluginLoadError(loadedInstance)
+        : preflight
+          ? { message: preflight.problems.join("\n"), at: preflight.at }
+          : undefined;
       return {
         projectId,
         id: manifestId,
@@ -691,6 +772,7 @@ export class ProjectPluginController {
         version: d.manifest.version,
         ...(d.manifest.description !== undefined ? { description: d.manifest.description } : {}),
         capabilities: [...(d.manifest.capabilities ?? [])],
+        ...(d.manifest.worksWith?.length ? { worksWith: [...d.manifest.worksWith] } : {}),
         ...(d.manifest.contributes.databases?.length
           ? { databases: d.manifest.contributes.databases.map((db) => ({ ...db })) }
           : {}),
@@ -699,6 +781,9 @@ export class ProjectPluginController {
           : {}),
         ...(d.manifest.contributes.views?.some((v) => v.location === "settings")
           ? { declaresSettingsView: true }
+          : {}),
+        ...(d.manifest.contributes.worktreeDeleteNotes?.length
+          ? { declaresWorktreeDeleteNotes: true }
           : {}),
         dirName: d.dirName,
         state,
@@ -744,10 +829,56 @@ export class ProjectPluginController {
     }
   }
 
+  /**
+   * The project's application (#14097), resolved from the plugins on disk and
+   * what this controller has loaded. `null` when no plugin declares one. Read
+   * live on every call, so a mute, a revoke or a failed load is reflected the
+   * moment it lands rather than when something re-registers.
+   */
+  getProjectApplication(projectId: string): ProjectApplicationState | null {
+    const entry = this.entries.get(projectId);
+    if (!entry) return null;
+    const candidates: ProjectApplicationCandidate[] = [];
+    for (const d of entry.discovered) {
+      const application = d.manifest?.application;
+      if (!d.manifest || application === undefined) continue;
+      const manifestId = d.manifest.name;
+      const instanceId = entry.loaded.get(manifestId);
+      const range = d.manifest.engines?.daintree;
+      const preflight = entry.preflight.get(manifestId);
+      candidates.push({
+        manifestId,
+        version: d.manifest.version,
+        application,
+        ...(instanceId !== undefined ? { instanceId } : {}),
+        staged: entry.staged.has(manifestId),
+        muted: entry.muted.has(manifestId),
+        loadFailed:
+          entry.refused.has(manifestId) ||
+          (instanceId !== undefined && this.deps.getPluginLoadError(instanceId) !== undefined),
+        engineIncompatible: range !== undefined && this.deps.isEngineIncompatible(range),
+        ...(preflight !== undefined && {
+          preflight: { reason: preflight.reason, problems: preflight.problems },
+        }),
+      });
+    }
+    if (candidates.length === 0) return null;
+    return resolveProjectApplication({
+      candidates,
+      trusted: this.isEnabled(entry),
+      homeHeldBy: this.deps.getProjectHomeHolder(projectId),
+    });
+  }
+
   /** The trust state a renderer needs to decide whether to prompt. */
   getTrustState(projectId: string): ProjectPluginTrustState {
     const entry = this.entries.get(projectId);
     if (!entry) {
+      // `enabled` is permission to run, not "running": a closed project with a
+      // persisted enable reports true as well.
+      if (this.sessionGrants.has(projectId)) {
+        return { projectId, decision: "session", enabled: true, persisted: false };
+      }
       const record = this.deps.readTrust(projectId);
       return {
         projectId,
@@ -788,6 +919,7 @@ export class ProjectPluginController {
       entry.loaded.clear();
     }
     this.entries.clear();
+    this.sessionGrants.clear();
   }
 
   // ---------------------------------------------------------------------
@@ -796,22 +928,45 @@ export class ProjectPluginController {
     const existing = this.entries.get(projectId);
     if (existing) return existing;
 
-    const record = this.deps.readTrust(projectId);
+    // A session grant outranks whatever is on disk. The two do coexist — "Enable
+    // for this session" is offered over a remembered "Keep disabled", and writes
+    // nothing over it — and the answer given in this session is the newer one.
+    const grant = this.sessionGrants.get(projectId);
+    this.sessionGrants.delete(projectId);
+    const record = grant ? undefined : this.deps.readTrust(projectId);
     const entry: ProjectEntry = {
       projectRoot,
       generation: 0,
-      decision: record?.decision ?? null,
+      decision: grant ? "session" : (record?.decision ?? null),
       persisted: record !== undefined,
-      decidedAt: record?.decidedAt ?? 0,
-      known: new Set(record?.knownPluginIds ?? []),
-      staged: new Set(record?.stagedPluginIds ?? []),
-      muted: new Set(record?.mutedPluginIds ?? []),
+      decidedAt: grant?.decidedAt ?? record?.decidedAt ?? 0,
+      // A grant is consumed here, so its sets are handed over rather than copied.
+      known: grant?.known ?? new Set(record?.knownPluginIds ?? []),
+      staged: grant?.staged ?? new Set(record?.stagedPluginIds ?? []),
+      muted: grant?.muted ?? new Set(record?.mutedPluginIds ?? []),
       discovered: [],
       loggedRejections: new Map(),
       loaded: new Map(),
+      refused: new Set(),
+      preflight: new Map(),
     };
     this.entries.set(projectId, entry);
     return entry;
+  }
+
+  /**
+   * An application's engine range is checked before it runs, not after: an
+   * owner this Daintree can't run would otherwise claim the project's Home and
+   * activate while being reported unavailable. Every other plugin keeps the
+   * advisory range (#12589).
+   */
+  private isIncompatibleApplication(manifest: Readonly<PluginManifest>): boolean {
+    const range = manifest.engines?.daintree;
+    return (
+      manifest.application !== undefined &&
+      range !== undefined &&
+      this.deps.isEngineIncompatible(range)
+    );
   }
 
   private isEnabled(entry: ProjectEntry): boolean {
@@ -951,6 +1106,14 @@ export class ProjectPluginController {
         continue;
       }
 
+      // Before the loaded shortcut, so an owner already running from a manifest
+      // whose range has since moved past this Daintree is taken down too.
+      if (this.isIncompatibleApplication(d.manifest)) {
+        const loadedKey = entry.loaded.get(manifestId);
+        if (loadedKey) this.unloadOne(entry, manifestId, loadedKey);
+        continue;
+      }
+
       if (entry.loaded.has(manifestId)) continue;
       await this.load(projectId, entry, d, generation);
     }
@@ -972,6 +1135,26 @@ export class ProjectPluginController {
   ): Promise<void> {
     const manifestId = d.manifest.name;
     const instanceKey = makeProjectPluginInstanceKey(projectId, manifestId);
+    if (this.isIncompatibleApplication(d.manifest)) {
+      logger.warn("Not loading a project application outside its engines.daintree range", {
+        projectId,
+        manifestId,
+        range: d.manifest.engines?.daintree,
+      });
+      return;
+    }
+    entry.refused.delete(manifestId);
+    const previousPreflight = entry.preflight.get(manifestId);
+    entry.preflight.delete(manifestId);
+    if (d.manifest.application !== undefined) {
+      // Say the application is loading while it does, so the project's views
+      // are not left on the previous state, or a failure being retried,
+      // meanwhile.
+      this.emitChanged(projectId);
+      if (!(await this.passesPreflight(projectId, entry, d, generation, previousPreflight))) {
+        return;
+      }
+    }
     try {
       const ok = await this.deps.loadProjectPlugin({
         projectId,
@@ -981,7 +1164,10 @@ export class ProjectPluginController {
         manifest: d.manifest,
         isCurrent: () => this.stillCurrent(projectId, entry, generation),
       });
-      if (!ok) return;
+      if (!ok) {
+        entry.refused.add(manifestId);
+        return;
+      }
       if (!this.stillCurrent(projectId, entry, generation)) {
         // A close or revoke ran while this load was in flight, so its teardown
         // sweep never saw this instance. Undo it here rather than leaving a
@@ -991,8 +1177,62 @@ export class ProjectPluginController {
       }
       entry.loaded.set(manifestId, instanceKey);
     } catch (err) {
+      entry.refused.add(manifestId);
       logger.error("Loading a project plugin threw", err, { projectId, manifestId });
     }
+  }
+
+  /**
+   * An application owner's payload is checked on disk before any of its code
+   * runs (#14113), so a checkout that left a required file out, or a database
+   * a newer copy of the application already migrated, leaves the project on
+   * the standard workspace with the reason rather than running against it.
+   * Nothing of a previous payload is kept to fall back to: its files are the
+   * ones that changed. The retry is the next reconcile — a watcher settle once
+   * the files land, a project switch, or Reload from folder — which comes back
+   * through here.
+   */
+  private async passesPreflight(
+    projectId: string,
+    entry: ProjectEntry,
+    d: DiscoveredProjectPlugin & { manifest: Readonly<PluginManifest> },
+    generation: number,
+    previous: ProjectApplicationPreflightFailure | undefined
+  ): Promise<boolean> {
+    const manifestId = d.manifest.name;
+    let failure: ProjectApplicationPreflightFailure | null = null;
+    try {
+      failure = await this.deps.preflightApplication({
+        projectId,
+        projectRoot: entry.projectRoot,
+        dir: d.dir,
+        manifest: d.manifest,
+      });
+    } catch (err) {
+      // A check that could not run is not evidence against the payload, and
+      // refusing on it would hide the application over a question nobody
+      // answered. The load goes ahead as it did before there was a preflight.
+      logger.error("Project application preflight threw", err, { projectId, manifestId });
+    }
+    // A close or revoke overtook the check, so what it found describes a load
+    // nobody is waiting for.
+    if (!this.stillCurrent(projectId, entry, generation)) return false;
+    if (failure === null) return true;
+    entry.preflight.set(manifestId, { ...failure, at: Date.now() });
+    // Every project switch reconciles, so only a new finding is news.
+    if (
+      previous?.reason !== failure.reason ||
+      previous.problems.join("\n") !== failure.problems.join("\n")
+    ) {
+      logger.warn("Not loading a project application whose payload failed its preflight", {
+        projectId,
+        manifestId,
+        version: d.manifest.version,
+        reason: failure.reason,
+        problems: failure.problems.join("; "),
+      });
+    }
+    return false;
   }
 
   private unloadOne(
@@ -1016,6 +1256,10 @@ export class ProjectPluginController {
     for (const [manifestId, instanceKey] of [...entry.loaded]) {
       this.unloadOne(entry, manifestId, instanceKey);
     }
+    // Nothing loads again until the next enabled reconcile, and that checks
+    // the files afresh. A finding kept until then would describe files that
+    // may since have been fixed, or replaced by another version.
+    entry.preflight.clear();
     await Promise.resolve();
   }
 
@@ -1050,6 +1294,7 @@ export class ProjectPluginController {
       projectId,
       plugins: this.listProjectPlugins(projectId),
       trust: this.getTrustState(projectId),
+      application: this.getProjectApplication(projectId),
     });
   }
 }

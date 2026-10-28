@@ -1,14 +1,13 @@
 /**
- * SitePreviewBridge: binds a caller to a running dev-preview guest, installs an
- * approved runtime inside it over CDP, and turns the guest's push traffic into
- * validated, epoch-stamped observations.
+ * SitePreviewBridge: binds the Element Picker to a running dev-preview guest,
+ * installs its bootstrap inside it over CDP, and turns the guest's push traffic
+ * into validated, epoch-stamped observations.
  *
  * Why CDP and not a preload: `will-attach-webview` in `electron/window/createWindow.ts`
  * strips `preload` and forces `sandbox` + `contextIsolation` on every `<webview>`,
  * deliberately. The guest therefore has no privileged bridge of its own and the
  * only way in is the debugger session. `Runtime.addBinding` gives the reverse
- * direction; the script must run in the MAIN world because `__svelte_meta` is a
- * DOM-node expando and expandos are per-world.
+ * direction.
  *
  * Trust model. The guest is a page the user is building and is assumed hostile:
  * a compromise there can call the binding with anything. So the session id
@@ -18,10 +17,8 @@
  * here. What survives validation is an observation, forwarded as such.
  *
  * There is intentionally no "evaluate this script in the guest" operation, and
- * no caller-supplied body either: a bind names a host-registered guest adapter
- * (`sitePreview/guestAdapters.ts`) and the host loads that adapter's text
- * itself. The only other thing evaluated is a fixed host-authored mode poke.
- * See `sitePreview/guestRuntime.ts`.
+ * no caller-supplied body either: what runs in the guest is loaded by the host
+ * itself, from the picker's asset catalog or a registered provider's entry.
  */
 
 import { randomBytes, randomUUID } from "node:crypto";
@@ -29,42 +26,26 @@ import { webContents as electronWebContents } from "electron";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import type {
   SitePreviewBindingState,
-  SitePreviewCandidate,
   SitePreviewDetachReason,
   SitePreviewMode,
-  SitePreviewPushPayload,
 } from "../../shared/types/ipc/sitePreview.js";
+import type { ElementPickerRejection } from "../../shared/elementPicker/protocol.js";
 import { isExpectedCdpError } from "../utils/webContentsLifecycle.js";
 import { acquireCdpLease, type CdpLease } from "./cdp/WebContentsCdpService.js";
 import { AppError } from "../utils/errorTypes.js";
 import { getWebviewDialogService } from "./WebviewDialogService.js";
 import { getProjectForWebContents } from "../window/webContentsRegistry.js";
-import {
-  DOCUMENT_READY,
-  validateGuestEnvelope,
-  type GuestEnvelopeRejection,
-} from "./sitePreview/guestProtocol.js";
-import {
-  buildDisposeSource,
-  buildGuestRuntimeSource,
-  buildModeUpdateSource,
-  buildClearHoverSource,
-  buildClearSelectionSource,
-  buildReselectSource,
-} from "./sitePreview/guestRuntime.js";
-import {
-  loadGuestAdapterSource,
-  resolveGuestAdapter,
-  type GuestAdapter,
-} from "./sitePreview/guestAdapters.js";
-import {
-  DEFAULT_GUEST_ORIGIN_POLICY,
-  originPolicyAllows,
-  type GuestOriginPolicy,
-} from "./sitePreview/originPolicy.js";
+import { DEFAULT_GUEST_ORIGIN_POLICY, originPolicyAllows } from "./sitePreview/originPolicy.js";
 import { onWebContentsDestroyed } from "../window/webContentsDestroyed.js";
+import type { CoreGuestAssetLoader } from "./elementPicker/guestAssets.js";
+import type { CoreGuest, CoreGuestReselectRequest } from "./elementPicker/coreGuest.js";
+import type { ElementPickerReselectRequest } from "../../shared/types/ipc/elementPicker.js";
+import type { ElementPickerPushPayload, ElementPickerSink } from "./elementPicker/types.js";
 
 const DEV_PREVIEW_PANEL_KIND = "dev-preview";
+
+/** Why the bridge refused a guest envelope: the picker's own verdicts, plus the two it decides itself. */
+type GuestEnvelopeRejection = ElementPickerRejection | "foreign-context" | "rate-limited";
 
 /**
  * Ceiling on envelopes one binding will *parse* per second. A hostile page can
@@ -106,61 +87,16 @@ const ABUSE_WINDOW_MS = 10_000;
  */
 let installCounter = 0;
 
-interface GuestDescriptor {
-  webContentsId: number;
-  panelId: string;
-  projectId: string | null;
-  url: string | null;
-}
-
-/**
- * Where one binding's traffic goes. A guest observation carries the structure
- * of the user's page, what they selected in it and the source locations behind
- * that, so it is addressed to the view that asked for it rather than offered to
- * every view of the project: a second window on the same project, or any other
- * plugin view sharing that renderer realm, has no part in the binding.
- */
-export interface SitePreviewPushRoute {
-  /** The `WebContents` the bind call came from. */
-  subscriberWebContentsId: number;
-}
-
 export interface SitePreviewBridgeDeps {
-  /** Every live dev-preview guest, with the project that embeds it. */
-  listGuests: () => GuestDescriptor[];
   getWebContents: (webContentsId: number) => Electron.WebContents | null;
   resolveWebContentsId: (panelId: string) => number | undefined;
   getPanelKind: (webContentsId: number) => string | undefined;
   /** The project that owns the view embedding this guest, resolved host-side. */
   resolveGuestProject: (wc: Electron.WebContents) => string | null;
-  /**
-   * Deliver one observation. The route is the host's, not the payload's: it
-   * names the single view the binding was established from, and the transport
-   * must send there and nowhere else. It is a second argument rather than a
-   * field so nothing about the addressing crosses the wire.
-   */
-  push: (payload: SitePreviewPushPayload, route: SitePreviewPushRoute) => void;
   newSessionId: () => string;
   newBindingName: () => string;
-  /** The guest runtime registry. Injected so tests need no real asset on disk. */
-  resolveGuestAdapter: (
-    adapterId: string
-  ) => Pick<GuestAdapter, "id" | "pluginId" | "origins"> | null;
-  loadGuestAdapterSource: (adapterId: string) => Promise<string>;
-  /**
-   * Whether the plugin that owns an adapter is loaded right now.
-   *
-   * Registration is a startup fact and says nothing about lifecycle: every
-   * shipped adapter is registered whether or not its plugin is enabled, so
-   * without this the host would load and evaluate a disabled plugin's guest
-   * body for any caller authorised to name the panel. The UI hiding the tool is
-   * a different guarantee, made in a different process.
-   *
-   * `projectId` is the binding's project as this process keys it; for a view
-   * bound to a remote host that names the host, whose plugins are the ones the
-   * view uses.
-   */
-  isPluginEnabled: (pluginId: string, projectId: string) => Promise<boolean>;
+  /** The core picker's fixed asset catalog. Injected so tests need no build output. */
+  loadCoreGuestAsset: CoreGuestAssetLoader;
 }
 
 interface Binding {
@@ -175,18 +111,15 @@ interface Binding {
    */
   subscriberWebContentsId: number;
   bindingName: string;
-  /** The guest adapter this binding names, and the plugin that owns it. */
-  adapterId: string;
-  pluginId: string;
-  /** The adapter's body, resolved host-side at bind time. */
-  runtimeSource: string;
-  /** Where the adapter may run; checked against the guest's URL on every install. */
-  origins: GuestOriginPolicy;
+  /** The picker's guest: its bootstrap, the extractors it installs, and its commands. */
+  core: CoreGuest;
+  /** Where this binding's traffic goes: the view that made it, through the picker's push route. */
+  sink: ElementPickerSink;
   /**
-   * True while the guest shows a document outside `origins`. The binding stays
-   * — the user's preview is still the same panel — but nothing is installed,
-   * the CDP binding is removed, and guest traffic is ignored until a document
-   * back inside the policy is installed.
+   * True while the guest shows a document outside the origin policy. The
+   * binding stays — the user's preview is still the same panel — but nothing is
+   * installed, the CDP binding is removed, and guest traffic is ignored until a
+   * document back inside the policy is installed.
    */
   suspended: boolean;
   mode: SitePreviewMode;
@@ -200,9 +133,6 @@ interface Binding {
   lastDropLogAt: number;
   abuseWindowStart: number;
   abuseWindowDrops: number;
-  scriptIdentifier: string | null;
-  /** Install id of the runtime currently in the guest, for a matched disposal. */
-  installId: number;
   /**
    * Page + Runtime lease. The bridge does not own those domains — the console
    * capture instruments the same guest — and the lease is also where the
@@ -213,8 +143,8 @@ interface Binding {
   detached: boolean;
   /**
    * Serialises the CDP work a binding does. Reloads arrive in bursts, and two
-   * overlapping reinstalls would interleave remove/add and leave the guest
-   * running a script whose identifier the host no longer holds.
+   * overlapping reinstalls would interleave and leave the guest running a
+   * bootstrap the host no longer tracks.
    */
   queue: Promise<void>;
   /** True while a reinstall is queued; further navigations fold into it. */
@@ -228,23 +158,10 @@ interface Binding {
   installedEpoch: number | null;
 }
 
-function defaultListGuests(): GuestDescriptor[] {
-  const dialogs = getWebviewDialogService();
-  const out: GuestDescriptor[] = [];
-  for (const wc of electronWebContents.getAllWebContents()) {
-    if (wc.isDestroyed()) continue;
-    if (dialogs.getPanelKind(wc.id) !== DEV_PREVIEW_PANEL_KIND) continue;
-    const panelId = dialogs.getPanelId(wc.id);
-    if (!panelId) continue;
-    out.push({
-      webContentsId: wc.id,
-      panelId,
-      projectId: resolveEmbedderProject(wc),
-      url: wc.getURL() || null,
-    });
-  }
-  return out;
-}
+// Behind a dynamic import like the rest of elementPicker/: main must not
+// evaluate the picker's code until a core bind first asks for an asset.
+const loadCoreGuestAsset: CoreGuestAssetLoader = async (id) =>
+  (await import("./elementPicker/guestAssets.js")).loadCoreGuestAsset(id);
 
 /**
  * A `<webview>` guest is never itself a registered project view, so its project
@@ -270,11 +187,8 @@ export class SitePreviewBridge {
   /** Set once the owning handler is disposing; no new work is accepted after. */
   private closed = false;
 
-  constructor(
-    deps: Partial<SitePreviewBridgeDeps> & Pick<SitePreviewBridgeDeps, "push" | "isPluginEnabled">
-  ) {
+  constructor(deps: Partial<SitePreviewBridgeDeps> = {}) {
     this.deps = {
-      listGuests: defaultListGuests,
       getWebContents: (id) => {
         const wc = electronWebContents.fromId(id);
         return wc && !wc.isDestroyed() ? wc : null;
@@ -287,26 +201,9 @@ export class SitePreviewBridge {
       // binding by name. It is obfuscation, not authorisation — anything running
       // in the document can enumerate globals and find it either way.
       newBindingName: () => `__daintreeSitePreview_${randomBytes(8).toString("hex")}`,
-      resolveGuestAdapter,
-      loadGuestAdapterSource,
+      loadCoreGuestAsset,
       ...deps,
     };
-  }
-
-  /** Dev-preview panels the given project could bind to. */
-  listCandidates(projectId: string): SitePreviewCandidate[] {
-    const boundByPanel = new Map<string, string>();
-    for (const binding of this.bindings.values()) {
-      if (binding.projectId === projectId) boundByPanel.set(binding.panelId, binding.sessionId);
-    }
-    return this.deps
-      .listGuests()
-      .filter((guest) => guest.projectId === projectId)
-      .map((guest) => ({
-        panelId: guest.panelId,
-        url: guest.url,
-        boundSessionId: boundByPanel.get(guest.panelId) ?? null,
-      }));
   }
 
   getState(projectId: string, sessionId: string): SitePreviewBindingState | null {
@@ -327,29 +224,89 @@ export class SitePreviewBridge {
     });
   }
 
-  async bind(input: {
+  /**
+   * Bind the core Element Picker to a dev preview: an app-built bootstrap in
+   * an isolated world, and per-framework extractors loaded only once the page
+   * is seen to use their framework.
+   *
+   * Traffic goes to `sink`, addressed to the view that bound. A panel holds
+   * one binding: binding it again supersedes the previous one.
+   */
+  async bindElementPicker(input: {
     projectId: string;
     panelId: string;
-    adapterId: string;
     mode: SitePreviewMode;
-    /** The sender's WebContents; this binding's traffic goes there and nowhere else. */
     subscriberWebContentsId: number;
+    sink: ElementPickerSink;
   }): Promise<SitePreviewBindingState> {
-    return this.withPanelLock(input.panelId, () => this.bindLocked(input));
+    return this.withPanelLock(input.panelId, () => this.bindElementPickerLocked(input));
   }
 
-  /** Per-plugin teardown counter; see {@link disposeForPlugin}. */
-  private readonly disposeGenerations = new Map<string, number>();
-
-  private async bindLocked(input: {
+  private async bindElementPickerLocked(input: {
     projectId: string;
     panelId: string;
-    adapterId: string;
     mode: SitePreviewMode;
     subscriberWebContentsId: number;
+    sink: ElementPickerSink;
   }): Promise<SitePreviewBindingState> {
-    const { projectId, panelId, adapterId, mode, subscriberWebContentsId } = input;
+    const { projectId, panelId, mode, subscriberWebContentsId, sink } = input;
+    this.assertOpen(panelId);
+    const { webContentsId, wc } = this.resolveBindTarget(projectId, panelId);
 
+    // Loaded on the first core bind, so an app that never opens the picker
+    // never evaluates its schemas.
+    const { CoreGuest } = await import("./elementPicker/coreGuest.js");
+    this.assertOpen(panelId);
+
+    for (const existing of [...this.bindings.values()]) {
+      if (existing.panelId === panelId) {
+        await this.teardown(existing, "rebound");
+      }
+    }
+    this.assertOpen(panelId);
+
+    const base = this.newBinding({
+      panelId,
+      projectId,
+      webContentsId,
+      subscriberWebContentsId,
+      mode,
+      sink,
+    });
+    // The guest's callbacks close over the finished binding; none of them runs
+    // before `commitBinding` publishes it.
+    const binding: Binding = {
+      ...base,
+      core: new CoreGuest({
+        sessionId: base.sessionId,
+        projectId,
+        bindingName: base.bindingName,
+        send: (method, params) => this.send(wc, method, params),
+        enqueue: (work) => this.enqueue(binding, work),
+        loadAsset: this.deps.loadCoreGuestAsset,
+        emit: (payload) => this.emit(binding, payload),
+        liveEpoch: () =>
+          binding.detached || binding.suspended || this.closed ? null : binding.documentEpoch,
+        mainWorld: () =>
+          binding.lease === null
+            ? null
+            : {
+                uniqueId: binding.lease.mainWorldUniqueId(),
+                generation: binding.lease.navigationGeneration,
+              },
+        evaluateTimeoutMs: GUEST_EVALUATE_TIMEOUT_MS,
+      }),
+    };
+    await this.commitBinding(binding, wc);
+    // The install's own awaits are where a shutdown most often lands. The
+    // shutdown owns this binding's teardown; handing back its session would give
+    // the caller a binding that is gone or going.
+    this.assertOpen(panelId);
+    return toState(binding);
+  }
+
+  /** The bridge is closing; a bind that awaited past that point must not add a binding. */
+  private assertOpen(panelId: string): void {
     if (this.closed) {
       throw new AppError({
         code: "CANCELLED",
@@ -357,16 +314,18 @@ export class SitePreviewBridge {
         context: { panelId },
       });
     }
+  }
 
-    const adapter = this.deps.resolveGuestAdapter(adapterId);
-    if (!adapter) {
-      throw new AppError({
-        code: "NOT_FOUND",
-        message: "No guest runtime is registered under that id",
-        context: { panelId, adapterId },
-      });
-    }
-
+  /**
+   * The guest a bind may attach to: a live dev preview, in the project the
+   * caller named. The caller states a project; the host proves it. Without
+   * this a renderer could name a panel id belonging to another project's view
+   * and receive its guest traffic.
+   */
+  private resolveBindTarget(
+    projectId: string,
+    panelId: string
+  ): { webContentsId: number; wc: Electron.WebContents } {
     const webContentsId = this.deps.resolveWebContentsId(panelId);
     if (webContentsId === undefined) {
       throw new AppError({
@@ -390,9 +349,6 @@ export class SitePreviewBridge {
         context: { panelId, webContentsId },
       });
     }
-    // The caller states a project; the host proves it. Without this a renderer
-    // could name a panel id belonging to another project's view and receive its
-    // guest traffic.
     if (this.deps.resolveGuestProject(wc) !== projectId) {
       throw new AppError({
         code: "PERMISSION",
@@ -400,87 +356,20 @@ export class SitePreviewBridge {
         context: { panelId, projectId },
       });
     }
+    return { webContentsId, wc };
+  }
 
-    // Read before the first await that follows, so the comparison at the
-    // commit point below is against what was true when this bind was allowed.
-    const disposeGeneration = this.disposeGenerations.get(adapter.pluginId) ?? 0;
-
-    // Asked before the body is read, so a disabled plugin's code is never even
-    // loaded, let alone evaluated in the user's page.
-    if (!(await this.deps.isPluginEnabled(adapter.pluginId, projectId))) {
-      throw new AppError({
-        code: "UNSUPPORTED",
-        message: "The plugin that owns that site preview runtime is not enabled",
-        context: { panelId, adapterId, pluginId: adapter.pluginId },
-      });
-    }
-
-    // Loaded before anything is torn down: a failed read would otherwise leave
-    // the panel with no binding at all.
-    const runtimeSource = await this.deps.loadGuestAdapterSource(adapterId);
-    // Asked again: the read above is an await, and a disable that landed under
-    // it would otherwise be beaten by this bind.
-    if (!(await this.deps.isPluginEnabled(adapter.pluginId, projectId))) {
-      throw new AppError({
-        code: "UNSUPPORTED",
-        message: "The plugin that owns that site preview runtime is not enabled",
-        context: { panelId, adapterId, pluginId: adapter.pluginId },
-      });
-    }
-    // The read is the first await a bind performs, so a shutdown can complete
-    // underneath it. `disposeAll` has already walked the bindings map by then
-    // and would never see the one this call is about to add.
-    if (this.closed) {
-      throw new AppError({
-        code: "CANCELLED",
-        message: "The site preview bridge is shutting down",
-        context: { panelId },
-      });
-    }
-
-    // Rebinding the same panel supersedes the previous session rather than
-    // running two runtimes that would fight over the global.
-    for (const existing of [...this.bindings.values()]) {
-      if (existing.panelId === panelId) {
-        await this.teardown(existing, "rebound");
-      }
-    }
-    // The predecessor's teardown is another await a shutdown can finish
-    // under, and it removed the predecessor from the map first — so the
-    // shutdown's walk saw nothing, and a successor added now would outlive it.
-    if (this.closed) {
-      throw new AppError({
-        code: "CANCELLED",
-        message: "The site preview bridge is shutting down",
-        context: { panelId },
-      });
-    }
-
-    // The commit point: everything above was awaited and could be stale, and
-    // nothing below here awaits before the binding is in the map. A teardown
-    // for this plugin that started at any point since this bind was allowed
-    // means the bind was for a lifetime that has ended.
-    if ((this.disposeGenerations.get(adapter.pluginId) ?? 0) !== disposeGeneration) {
-      throw new AppError({
-        code: "UNSUPPORTED",
-        message: "The plugin that owns that site preview runtime is not enabled",
-        context: { panelId, adapterId, pluginId: adapter.pluginId },
-      });
-    }
-
-    const binding: Binding = {
+  private newBinding(
+    init: Pick<
+      Binding,
+      "panelId" | "projectId" | "webContentsId" | "subscriberWebContentsId" | "mode" | "sink"
+    >
+  ): Omit<Binding, "core"> {
+    return {
+      ...init,
       sessionId: this.deps.newSessionId(),
-      panelId,
-      projectId,
-      webContentsId,
-      subscriberWebContentsId,
       bindingName: this.deps.newBindingName(),
-      adapterId,
-      pluginId: adapter.pluginId,
-      runtimeSource,
-      origins: adapter.origins ?? DEFAULT_GUEST_ORIGIN_POLICY,
       suspended: false,
-      mode,
       documentEpoch: 0,
       lastSequence: -1,
       guestReady: false,
@@ -490,8 +379,6 @@ export class SitePreviewBridge {
       lastDropLogAt: 0,
       abuseWindowStart: 0,
       abuseWindowDrops: 0,
-      scriptIdentifier: null,
-      installId: 0,
       lease: null,
       disposers: [],
       detached: false,
@@ -499,7 +386,10 @@ export class SitePreviewBridge {
       reinstallQueued: false,
       installedEpoch: null,
     };
+  }
 
+  /** Publishes the binding and installs its guest; a failed install takes the binding down again. */
+  private async commitBinding(binding: Binding, wc: Electron.WebContents): Promise<void> {
     this.bindings.set(binding.sessionId, binding);
     try {
       this.attachListeners(binding, wc);
@@ -510,11 +400,10 @@ export class SitePreviewBridge {
       throw new AppError({
         code: "INTERNAL",
         message: "Failed to install the site preview runtime",
-        context: { panelId, webContentsId },
+        context: { panelId: binding.panelId, webContentsId: binding.webContentsId },
         cause: err instanceof Error ? err : undefined,
       });
     }
-    return toState(binding);
   }
 
   async detach(projectId: string, sessionId: string): Promise<void> {
@@ -541,36 +430,21 @@ export class SitePreviewBridge {
     // the page, and the document standing there is one the policy excluded.
     // The next install bakes the mode in from `binding.mode`.
     if (binding.suspended) return toState(binding);
-    const wc = this.deps.getWebContents(binding.webContentsId);
-    if (wc) {
-      // Fixed host-authored source with one enum member interpolated — the guest
-      // never gets to choose what runs here. No `contextId`, so it lands in the
-      // main frame's default world, which is the only one the runtime runs in.
-      await this.send(wc, "Runtime.evaluate", {
-        expression: buildModeUpdateSource(mode),
-        timeout: GUEST_EVALUATE_TIMEOUT_MS,
-      });
-    }
+    await binding.core.setMode(mode);
     return toState(binding);
   }
 
   /**
-   * Closes the bridge synchronously, then cleans up. The synchronous half
-   * matters: a bind already queued behind a resolved lock would otherwise
-   * install into a guest nothing owns any more.
+   * Select again, in a core picker binding's page, the element the view had
+   * selected: by the id the page reported while it is still the same node,
+   * else by the framework's locator. False when the page found nothing, and
+   * while suspended: a locator is a path in the user's repository, and the
+   * document standing there is one the policy excluded.
    */
-  /**
-   * Select the element compiled from `loc` in the guest, as a click would, so
-   * the runtime re-observes it and the view re-resolves it with fresh proof.
-   * False when the runtime found nothing — the caller keeps its stale state.
-   */
-  async reselect(
+  async reselectElementPicker(
     projectId: string,
     sessionId: string,
-    loc: { file: string; line: number; column: number },
-    index = 0,
-    component: { file: string; line: number; column: number } | null = null,
-    occurrence: string | null = null
+    request: ElementPickerReselectRequest
   ): Promise<boolean> {
     const binding = this.bindings.get(sessionId);
     if (!binding || binding.projectId !== projectId) {
@@ -580,28 +454,10 @@ export class SitePreviewBridge {
         context: { sessionId },
       });
     }
-    // The one op that carries data *into* the guest. A suspended binding is
-    // showing a document the policy excluded, and these are worktree-relative
-    // source paths: evaluating them there would hand a third-party page the
-    // layout of the user's repository.
     if (binding.suspended) return false;
-    // `buildReselectSource` JSON-encodes every value, which is what keeps a
-    // path from closing the literal it lands in. This bounds the shape as
-    // well, so a caller that reaches the bridge without the IPC schema cannot
-    // widen what gets embedded — an object with a `toJSON`, a non-finite
-    // number, anything but a plain location.
-    if (!isSourceLocation(loc)) return false;
-    if (component !== null && !isSourceLocation(component)) return false;
-    if (!Number.isSafeInteger(index) || index < 0) return false;
-    if (occurrence !== null && !isPlainString(occurrence)) return false;
-    const wc = this.deps.getWebContents(binding.webContentsId);
-    if (!wc) return false;
-    const result = (await this.send(wc, "Runtime.evaluate", {
-      expression: buildReselectSource(loc, index, component, occurrence),
-      returnByValue: true,
-      timeout: GUEST_EVALUATE_TIMEOUT_MS,
-    })) as { result?: { value?: unknown } } | undefined;
-    return result?.result?.value === true;
+    const plain = plainReselectRequest(request);
+    if (plain === null) return false;
+    return binding.core.reselect(plain);
   }
 
   /** Drop the guest's selection so the page stops highlighting what the drawer refused. */
@@ -617,12 +473,7 @@ export class SitePreviewBridge {
     // Nothing of ours is in a suspended binding's page, so this would only
     // poke whatever off-policy document is standing there.
     if (binding.suspended) return;
-    const wc = this.deps.getWebContents(binding.webContentsId);
-    if (!wc) return;
-    await this.send(wc, "Runtime.evaluate", {
-      expression: buildClearSelectionSource(),
-      timeout: GUEST_EVALUATE_TIMEOUT_MS,
-    });
+    await binding.core.clearSelection();
   }
 
   /** The pointer left the preview for the host; the guest stops drawing what it hovered. */
@@ -637,41 +488,16 @@ export class SitePreviewBridge {
     }
     // As above: a suspended binding has no runtime to tell.
     if (binding.suspended) return;
-    const wc = this.deps.getWebContents(binding.webContentsId);
-    if (!wc) return;
-    await this.send(wc, "Runtime.evaluate", {
-      expression: buildClearHoverSource(),
-      timeout: GUEST_EVALUATE_TIMEOUT_MS,
-    });
+    await binding.core.clearHover();
   }
 
   /**
-   * Drop every binding a plugin's adapters back, because that plugin is no
-   * longer loaded.
-   *
-   * The install-time check keeps a disabled plugin's runtime out of a *new*
-   * document; this is what removes the one already in the page. Without it a
-   * binding made while the plugin was enabled would keep reading the site and
-   * pushing observations at a renderer whose plugin is gone, until the user
-   * happened to navigate.
+   * Closes the bridge synchronously, then cleans up. The synchronous half
+   * matters: a bind already queued behind a resolved lock would otherwise
+   * install into a guest nothing owns any more.
    */
-  async disposeForPlugin(pluginId: string): Promise<void> {
-    // Bumped synchronously, before the first await: `teardown` removes a
-    // binding from the map before it awaits its CDP cleanup, so a bind sitting
-    // on the predecessor's teardown would otherwise find an empty map here,
-    // pass its own (already-read, now stale) enabled check, and install a
-    // runtime that nothing is left to remove. A bind compares this counter
-    // synchronously at the instant it commits; re-reading the boolean cannot
-    // close the gap, because that read is itself an await.
-    this.disposeGenerations.set(pluginId, (this.disposeGenerations.get(pluginId) ?? 0) + 1);
-    for (const binding of [...this.bindings.values()]) {
-      if (binding.pluginId !== pluginId) continue;
-      await this.withPanelLock(binding.panelId, () => this.teardown(binding, "owner-disabled"));
-    }
-  }
-
   async disposeAll(): Promise<void> {
-    // Set before any await: `bindLocked` and `installRuntime` both check it, so
+    // Set before any await: binds and `installRuntime` both check it, so
     // a bind already queued behind a resolved lock cannot install into a guest
     // nothing owns any more.
     this.closed = true;
@@ -758,7 +584,7 @@ export class SitePreviewBridge {
 
     if (params.name !== binding.bindingName) return;
     const contextId = params.executionContextId;
-    if (typeof contextId !== "number" || !isTrustedContext(binding, contextId)) {
+    if (typeof contextId !== "number" || !binding.core.isTrustedContext(contextId)) {
       this.drop(binding, "foreign-context");
       return;
     }
@@ -771,8 +597,16 @@ export class SitePreviewBridge {
       this.drop(binding, "rate-limited");
       return;
     }
+    this.handleEnvelope(binding, payload);
+  }
 
-    const verdict = validateGuestEnvelope(payload, {
+  /**
+   * An envelope admitted against the picker's contract. The host reads two of
+   * its events itself, because they decide what it injects next.
+   */
+  private handleEnvelope(binding: Binding, payload: string): void {
+    const core = binding.core;
+    const verdict = core.admit(payload, {
       sessionId: binding.sessionId,
       documentEpoch: binding.documentEpoch,
       lastSequence: binding.lastSequence,
@@ -781,32 +615,30 @@ export class SitePreviewBridge {
       this.drop(binding, verdict.reason);
       return;
     }
-
     binding.lastSequence = verdict.envelope.sequence;
-    // The one payload fact the host acts on. Everything else in the event is
-    // the adapter's to validate, and is forwarded uninterpreted.
-    if (verdict.envelope.event.type === DOCUMENT_READY) binding.guestReady = true;
-
+    const event = verdict.envelope.event;
+    if (event.type === "documentReady") binding.guestReady = true;
     this.emit(binding, {
-      kind: "guest-event",
+      kind: "picker-event",
       sessionId: binding.sessionId,
       panelId: binding.panelId,
       projectId: binding.projectId,
       documentEpoch: binding.documentEpoch,
       sequence: verdict.envelope.sequence,
-      event: verdict.envelope.event,
+      event,
     });
+    core.onGuestEvent(binding.documentEpoch, event);
   }
 
   /**
-   * The only way out of this class. Every push is addressed to the binding's
-   * own subscriber, so a new event kind cannot reach a view that never bound:
-   * what a guest observation carries — the page's structure, the user's
-   * selection, source locations in their repository — belongs to the one view
-   * that asked for it, not to every view of the project.
+   * The only way out of this class. Every push goes to the binding's own sink,
+   * which is addressed to the view that bound: what a guest observation carries
+   * — the page's structure, the user's selection, source locations in their
+   * repository — belongs to the one view that asked for it, not to every view
+   * of the project.
    */
-  private emit(binding: Binding, payload: SitePreviewPushPayload): void {
-    this.deps.push(payload, { subscriberWebContentsId: binding.subscriberWebContentsId });
+  private emit(binding: Binding, payload: ElementPickerPushPayload): void {
+    binding.sink(payload);
   }
 
   private admitForParsing(binding: Binding): boolean {
@@ -829,9 +661,6 @@ export class SitePreviewBridge {
       console.warn("[SitePreviewBridge] dropped guest envelope", {
         sessionId: binding.sessionId,
         panelId: binding.panelId,
-        // Which runtime is misbehaving, and whose it is.
-        adapterId: binding.adapterId,
-        pluginId: binding.pluginId,
         reason,
         droppedMessages: binding.droppedMessages,
       });
@@ -854,6 +683,9 @@ export class SitePreviewBridge {
     binding.documentEpoch++;
     binding.lastSequence = -1;
     binding.guestReady = false;
+    // Before any await: an extractor install or probe still in flight was for
+    // the document that just went, and must not land in this one.
+    binding.core.invalidate();
 
     const wc = this.deps.getWebContents(binding.webContentsId);
     if (!wc) return;
@@ -914,26 +746,21 @@ export class SitePreviewBridge {
     // the allowance ends the moment anything commits.
     const initialDocument = binding.documentEpoch === 0 && binding.installedEpoch === null;
     // The policy is checked per document, not per binding: the preview can
-    // navigate anywhere, and the runtime goes only where the adapter said. It
+    // navigate anywhere, and the runtime goes only where the policy allows. It
     // is checked before the double-install guard below, because an install
     // that read its epoch under a navigation has satisfied that guard for a
     // document it never looked at.
-    if (!originPolicyAllows(binding.origins, wc.getURL(), { initialDocument })) {
+    if (!originPolicyAllows(DEFAULT_GUEST_ORIGIN_POLICY, wc.getURL(), { initialDocument })) {
       await this.suspend(binding, wc);
       return;
     }
     // A navigation can queue a reinstall while the bind's own install is still
     // awaiting CDP; by the time both run they read the same epoch. Installing
-    // twice for one epoch restarts the prelude's sequence at 0 and the host then
-    // drops every message from the second runtime as a replay.
-    if (binding.installedEpoch === binding.documentEpoch && binding.scriptIdentifier !== null) {
-      return;
-    }
-    // `Page` is what makes `Page.addScriptToEvaluateOnNewDocument` take effect
-    // at all — without the domain enabled it still returns an identifier and the
-    // script silently never installs. `Runtime` carries both the binding calls
-    // and the execution contexts that tell the main frame's world apart from an
-    // iframe's.
+    // twice for one epoch restarts the bootstrap's sequence at 0 and the host
+    // then drops every message from the second one as a replay.
+    if (binding.installedEpoch === binding.documentEpoch) return;
+    // `Page` carries the frame tree and the isolated world the bootstrap runs
+    // in. `Runtime` carries both the binding calls and the execution contexts.
     //
     // Leased, not enabled: the console capture instruments the same guest, and
     // whichever of the two enables `Runtime` first is the only one CDP replays
@@ -962,8 +789,8 @@ export class SitePreviewBridge {
     if (binding.detached || this.closed) return;
 
     if (binding.suspended) {
-      // Cleared before the install, not after: the runtime reports
-      // `documentReady` from inside the evaluate below, and a message arriving
+      // Cleared before the install, not after: the bootstrap reports
+      // `documentReady` from inside the install below, and a message arriving
       // on a still-suspended binding would be ignored.
       binding.suspended = false;
       this.emit(binding, {
@@ -975,114 +802,58 @@ export class SitePreviewBridge {
       });
     }
 
-    await this.send(wc, "Runtime.addBinding", { name: binding.bindingName });
-
-    if (binding.scriptIdentifier) {
-      await this.send(wc, "Page.removeScriptToEvaluateOnNewDocument", {
-        identifier: binding.scriptIdentifier,
-      });
-      binding.scriptIdentifier = null;
-    }
-
-    const installId = ++installCounter;
-    // Read once: both can change across the awaits below, and the source bakes
-    // in whatever was read here.
-    const epoch = binding.documentEpoch;
-    const installedMode = binding.mode;
-    const source = buildGuestRuntimeSource({
-      sessionId: binding.sessionId,
-      installId,
-      documentEpoch: epoch,
-      bindingName: binding.bindingName,
-      mode: installedMode,
-      runtimeSource: binding.runtimeSource,
-      // Travels with the script, because the script outlives the host's chance
-      // to check: it runs in the next document before the navigation is seen.
-      origins: binding.origins,
-    });
-
-    const added = (await this.send(wc, "Page.addScriptToEvaluateOnNewDocument", { source })) as
-      { identifier?: string } | undefined;
-    const identifier = added?.identifier ?? null;
-    // Re-check after the await: a teardown that ran while this was in flight has
-    // already removed whatever it knew about, so this registration would outlive
-    // the binding unless it is undone here.
-    if (binding.detached || this.closed) {
-      if (identifier) {
-        await this.send(wc, "Page.removeScriptToEvaluateOnNewDocument", { identifier }).catch(
-          () => undefined
-        );
-      }
-      return;
-    }
-    binding.scriptIdentifier = identifier;
-    binding.installId = installId;
-
-    // A navigation under the awaits above can have replaced the document with
-    // one outside the policy. The reinstall it queued will remove the script
-    // just registered; the evaluate is what would put the runtime into the
-    // live document, and that is the one thing not to do.
-    if (!originPolicyAllows(binding.origins, wc.getURL(), { initialDocument })) return;
-
-    // The new-document script only runs on the *next* document, so evaluate it
-    // once into the current one. Without this, binding would require a reload.
-    const evaluated = (await this.send(wc, "Runtime.evaluate", {
-      expression: source,
-      timeout: GUEST_EVALUATE_TIMEOUT_MS,
-    })) as { exceptionDetails?: { text?: string } } | undefined;
-    if (evaluated?.exceptionDetails) {
-      // A throw here means the runtime never took hold in the live document, so
-      // reporting the bind as successful would be a lie. The new-document copy
-      // is removed by the caller's failure path.
-      throw new AppError({
-        code: "INTERNAL",
-        message: "The site preview runtime threw while initialising in the guest",
-        context: { panelId: binding.panelId, detail: evaluated.exceptionDetails.text },
-      });
-    }
-    binding.installedEpoch = epoch;
-
-    // `setMode` runs outside this queue, so a switch made while the install was
-    // awaiting CDP poked a runtime that did not exist yet, and the source above
-    // baked in the old mode. Left alone, the host reports Browse while the page
-    // is still intercepting clicks.
-    if (binding.mode !== installedMode && !binding.detached && !this.closed) {
-      await this.send(wc, "Runtime.evaluate", {
-        expression: buildModeUpdateSource(binding.mode),
-        timeout: GUEST_EVALUATE_TIMEOUT_MS,
-      });
-    }
+    await this.installCore(binding, binding.core);
   }
 
   /**
-   * Withhold the runtime from a document outside the adapter's origins. The
-   * new-document script registered for the previous document has already run
-   * in this one by the time the navigation is observed, so this is a removal,
-   * not just a skipped install: the script goes, the CDP binding goes (which
-   * is what closes the tap), and the runtime already in the page is told to
-   * dispose itself, as on teardown. The binding itself survives, so a document
-   * back inside the policy installs without the renderer rebinding.
+   * The core picker installs into the current document only — no new-document
+   * script — because its bootstrap does not need to run before the page's own
+   * code, and a registration that outlives the document is how an old epoch's
+   * guest would end up in the next one.
+   */
+  private async installCore(binding: Binding, core: CoreGuest): Promise<void> {
+    const frameId = binding.lease?.mainFrameId ?? null;
+    if (frameId === null) {
+      throw new AppError({
+        code: "INTERNAL",
+        message: "The dev preview's main frame could not be read",
+        context: { panelId: binding.panelId },
+      });
+    }
+    const installId = ++installCounter;
+    // Read once: both can change across the awaits below.
+    const epoch = binding.documentEpoch;
+    const installedMode = binding.mode;
+    const installed = await core.install({
+      epoch,
+      installId,
+      mode: installedMode,
+      origins: DEFAULT_GUEST_ORIGIN_POLICY,
+      frameId,
+    });
+    // Not installed means the document went under the install; the navigation
+    // that replaced it queues its own, which this must not mark as done.
+    if (!installed || binding.detached || this.closed) return;
+    binding.installedEpoch = epoch;
+    if (binding.mode !== installedMode) await core.setMode(binding.mode);
+  }
+
+  /**
+   * Withhold the runtime from a document outside the origin policy. The CDP
+   * binding goes (which is what closes the tap), and anything of ours still in
+   * the page is told to dispose itself, as on teardown. The binding itself
+   * survives, so a document back inside the policy installs without the
+   * renderer rebinding.
    */
   private async suspend(binding: Binding, wc: Electron.WebContents): Promise<void> {
-    // A second document outside the policy has nothing of ours in it: the
-    // first suspension removed the script, so nothing ran there.
+    // A second document outside the policy has nothing of ours in it.
     if (binding.suspended) return;
-    if (binding.scriptIdentifier) {
-      await this.tryCdp(wc, "Page.removeScriptToEvaluateOnNewDocument", {
-        identifier: binding.scriptIdentifier,
-      });
-      binding.scriptIdentifier = null;
-    }
+    binding.core.invalidate();
     // Before the first install there is no lease, no binding and no runtime;
     // the CDP calls would only fail against a domain nothing enabled.
     if (binding.lease) {
       await this.tryCdp(wc, "Runtime.removeBinding", { name: binding.bindingName });
-      if (binding.installId > 0) {
-        await this.tryCdp(wc, "Runtime.evaluate", {
-          expression: buildDisposeSource(binding.installId),
-          timeout: GUEST_EVALUATE_TIMEOUT_MS,
-        });
-      }
+      await binding.core.disposeInGuest();
     }
     binding.guestReady = false;
     if (binding.detached || this.closed) return;
@@ -1125,6 +896,7 @@ export class SitePreviewBridge {
     if (binding.detached) return;
     binding.detached = true;
     this.bindings.delete(binding.sessionId);
+    binding.core.invalidate();
 
     for (const dispose of binding.disposers.reverse()) {
       try {
@@ -1138,9 +910,9 @@ export class SitePreviewBridge {
     }
     binding.disposers.length = 0;
 
-    // Let an install that is already past its detached-guard settle, so the
-    // identifier removed below is the one actually installed — but never wait on
-    // it indefinitely: its `Runtime.evaluate` runs in a page that may be hostile.
+    // Let an install that is already past its detached-guard settle, so what is
+    // disposed below is what was actually installed — but never wait on it
+    // indefinitely: its `Runtime.evaluate` runs in a page that may be hostile.
     await Promise.race([
       binding.queue.catch(() => undefined),
       new Promise<void>((resolve) => setTimeout(resolve, GUEST_EVALUATE_TIMEOUT_MS).unref?.()),
@@ -1148,25 +920,11 @@ export class SitePreviewBridge {
 
     const wc = this.deps.getWebContents(binding.webContentsId);
     if (wc) {
-      // Each removal stands alone: one failure must not skip the others, and
+      // Each removal stands alone: one failure must not skip the other, and
       // removing the binding is the one that actually closes the tap.
-      if (binding.scriptIdentifier) {
-        await this.tryCdp(wc, "Page.removeScriptToEvaluateOnNewDocument", {
-          identifier: binding.scriptIdentifier,
-        });
-      }
       await this.tryCdp(wc, "Runtime.removeBinding", { name: binding.bindingName });
-      if (binding.installId > 0) {
-        // Best effort, and matched on install id so a detach cannot kill a newer
-        // runtime that already took the global. The guest's own listeners and
-        // overlay would otherwise outlive the binding.
-        await this.tryCdp(wc, "Runtime.evaluate", {
-          expression: buildDisposeSource(binding.installId),
-          timeout: GUEST_EVALUATE_TIMEOUT_MS,
-        });
-      }
+      await binding.core.disposeInGuest();
     }
-    binding.scriptIdentifier = null;
     // Released last: `Runtime.removeBinding` and the disposal evaluate above
     // both need the domain still enabled.
     const lease = binding.lease;
@@ -1180,30 +938,6 @@ export class SitePreviewBridge {
       reason,
     });
   }
-}
-
-/**
- * A sub-frame gets the binding too — CDP exposes it target-wide — so an
- * embedded third-party iframe can call it. Only the main frame's default world
- * is the page that was bound. Before the frame tree is known, a default-world
- * context is provisionally trusted: the alternative is dropping the guest's
- * whole first document.
- */
-function isTrustedContext(binding: Binding, contextId: number): boolean {
-  const lease = binding.lease;
-  // No context knowledge at all — nothing has announced a context since the
-  // domain came on. Degrade to the unfiltered behaviour rather than dropping
-  // every observation: this check is defence in depth, not the load-bearing
-  // boundary. A sub-frame that forges a call still has to match the session,
-  // epoch and sequence, and the worst it achieves is desynchronising the
-  // inspector for its own page.
-  if (!lease || lease.contexts.size === 0) return true;
-  if (!lease.contexts.has(contextId)) return false;
-  // With the frame tree unread (`Page.getFrameTree` failed), a default world is
-  // the best signal available; with it read, the main frame's world is the only
-  // one that counts.
-  if (!lease.mainFrameId) return true;
-  return lease.contexts.get(contextId) === lease.mainFrameId;
 }
 
 /**
@@ -1226,6 +960,42 @@ function isPlainString(value: unknown): boolean {
   return typeof value === "string";
 }
 
+/**
+ * The reselect request rebuilt from fields the bridge has looked at: it is
+ * JSON-encoded into host-authored guest source, and nothing it carries is the
+ * caller's to shape beyond these.
+ */
+function plainReselectRequest(
+  request: ElementPickerReselectRequest
+): CoreGuestReselectRequest | null {
+  const out: CoreGuestReselectRequest = {};
+  if (request.elementId !== undefined) {
+    if (!isPlainString(request.elementId)) return null;
+    out.elementId = request.elementId;
+  }
+  if (request.framework !== undefined) {
+    if (!isPlainString(request.framework)) return null;
+    out.framework = request.framework;
+  }
+  if (request.locator !== undefined) {
+    const { loc, index, component } = request.locator;
+    if (!isSourceLocation(loc) || !Number.isSafeInteger(index) || index < 0) return null;
+    if (component !== undefined && !isSourceLocation(component)) return null;
+    out.locator = {
+      loc: { file: loc.file, line: loc.line, column: loc.column },
+      index,
+      ...(component === undefined
+        ? {}
+        : { component: { file: component.file, line: component.line, column: component.column } }),
+    };
+  }
+  if (request.reveal !== undefined) {
+    if (typeof request.reveal !== "boolean") return null;
+    out.reveal = request.reveal;
+  }
+  return out;
+}
+
 function toState(binding: Binding): SitePreviewBindingState {
   return {
     sessionId: binding.sessionId,
@@ -1241,9 +1011,7 @@ function toState(binding: Binding): SitePreviewBindingState {
 
 let instance: SitePreviewBridge | null = null;
 
-export function getSitePreviewBridge(
-  deps?: Partial<SitePreviewBridgeDeps> & Pick<SitePreviewBridgeDeps, "push" | "isPluginEnabled">
-): SitePreviewBridge {
+export function getSitePreviewBridge(deps?: Partial<SitePreviewBridgeDeps>): SitePreviewBridge {
   if (!instance) {
     if (!deps) {
       throw new AppError({
@@ -1253,15 +1021,6 @@ export function getSitePreviewBridge(
     }
     instance = new SitePreviewBridge(deps);
   }
-  return instance;
-}
-
-/**
- * The bridge if one exists, without creating it. For callers on a lifecycle
- * path — a plugin unloading — that must not bring the bridge into being just to
- * ask it to let go of something it was never holding.
- */
-export function peekSitePreviewBridge(): SitePreviewBridge | null {
   return instance;
 }
 

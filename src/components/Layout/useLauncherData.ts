@@ -3,6 +3,7 @@ import { useShallow } from "zustand/react/shallow";
 import { useProjectStore, useWorktreeSelectionStore } from "@/store";
 import { useScratchStore } from "@/store/scratchStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { useAgentToolbarPinsStore } from "@/store/agentToolbarPinsStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
@@ -50,6 +51,7 @@ export function useLauncherData(): LauncherData {
   const currentProject = useProjectStore((s) => s.currentProject);
   const currentScratch = useScratchStore((s) => s.currentScratch);
   const agentSettings = useAgentSettingsStore((s) => s.settings);
+  const agentPins = useAgentToolbarPinsStore((s) => s.pins);
   const agentAvailability = useCliAvailabilityStore((s) => s.availability);
   const hasRealData = useCliAvailabilityStore((s) => s.hasRealData);
   const leftButtons = useToolbarPreferencesStore(useShallow((s) => s.layout.leftButtons));
@@ -126,7 +128,7 @@ export function useLauncherData(): LauncherData {
     const { sorted, pinnedCount } = sortAgentsByToolbarPin(
       launchable,
       leftButtons,
-      agentSettings,
+      agentPins,
       rightButtons,
       pinnedButtons
     );
@@ -139,6 +141,7 @@ export function useLauncherData(): LauncherData {
     };
   }, [
     agentAvailability,
+    agentPins,
     agentSettings,
     isAvailabilityLoading,
     leftButtons,

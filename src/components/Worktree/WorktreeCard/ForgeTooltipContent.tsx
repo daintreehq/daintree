@@ -22,7 +22,13 @@ import { forgeNotConnectedLabel, useRemoteHostName } from "@/hooks/useSettingsOw
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, avatarUrlAtSize } from "@/components/ui/Avatar";
-import { getPrStateColor, getPrStateGlyph } from "@/lib/prStateGlyph";
+import {
+  getIssueStateColor,
+  getIssueStateLabel,
+  getPrStateColor,
+  getPrStateGlyph,
+  getPrStateLabel,
+} from "@/lib/prStateGlyph";
 import { getCIStatusVisual } from "@/lib/worktreeCIStatus";
 
 /**
@@ -208,6 +214,8 @@ interface CardHeaderProps {
   colorClass: string;
   stateLabel: string;
   number: number;
+  /** A tracker's own identifier (`ENG-42`) in place of `#number` (#13744). */
+  reference?: string;
   title?: string;
   /** Right-aligned on the status line — the PR's CI rollup. */
   trailing?: React.ReactNode;
@@ -224,13 +232,21 @@ interface CardHeaderProps {
  * and gets four lines before it clamps: the card is where the title the
  * sidebar had to truncate is read in full.
  */
-function CardHeader({ Glyph, colorClass, stateLabel, number, title, trailing }: CardHeaderProps) {
+function CardHeader({
+  Glyph,
+  colorClass,
+  stateLabel,
+  number,
+  reference,
+  title,
+  trailing,
+}: CardHeaderProps) {
   return (
     <div className="space-y-1">
       <div className="flex items-center gap-1.5 text-2xs">
         <Glyph className={cn("w-3.5 h-3.5 shrink-0", colorClass)} aria-hidden="true" />
         <span className={cn("font-medium", colorClass)}>{stateLabel}</span>
-        <span className="text-text-secondary tabular-nums">#{number}</span>
+        <span className="text-text-secondary tabular-nums">{reference ?? `#${number}`}</span>
         {trailing}
       </div>
       {title && (
@@ -243,15 +259,11 @@ function CardHeader({ Glyph, colorClass, stateLabel, number, title, trailing }: 
 }
 
 function issueStateVisual(state: NormalizedIssueState | undefined) {
-  return state === "closed"
-    ? { Glyph: CircleCheck, colorClass: "text-pr-merged", label: "Closed" }
-    : { Glyph: CircleDot, colorClass: "text-pr-open", label: "Open" };
-}
-
-function prStateLabel(state: string | undefined, isDraft: boolean): string {
-  if (state === "merged") return "Merged";
-  if (state === undefined || state === "open") return isDraft ? "Draft" : "Open";
-  return "Closed";
+  return {
+    Glyph: state === "closed" ? CircleCheck : CircleDot,
+    colorClass: getIssueStateColor(state),
+    label: getIssueStateLabel(state),
+  };
 }
 
 /** The CI rollup, in words, for the status line of a PR card. */
@@ -389,9 +401,11 @@ function MetaRow({
 interface IssueTooltipContentProps {
   data: IssueTooltipData;
   freshness?: TooltipFreshness;
+  /** The link's own identifier when its tracker has one (`ENG-42`). */
+  issueKey?: string;
 }
 
-export function IssueTooltipContent({ data, freshness }: IssueTooltipContentProps) {
+export function IssueTooltipContent({ data, freshness, issueKey }: IssueTooltipContentProps) {
   const { Glyph, colorClass, label } = issueStateVisual(data.state);
 
   return (
@@ -401,6 +415,7 @@ export function IssueTooltipContent({ data, freshness }: IssueTooltipContentProp
         colorClass={colorClass}
         stateLabel={label}
         number={data.number}
+        reference={issueKey}
         title={data.title}
       />
 
@@ -437,7 +452,7 @@ export function PRTooltipContent({ data, freshness, ciStatus }: PRTooltipContent
       <CardHeader
         Glyph={getPrStateGlyph(data.state, data.isDraft)}
         colorClass={getPrStateColor(data.state, data.isDraft)}
-        stateLabel={prStateLabel(data.state, data.isDraft)}
+        stateLabel={getPrStateLabel(data.state, data.isDraft)}
         number={data.number}
         title={data.title}
         trailing={showCI ? <CIStatusItem status={ciStatus} /> : undefined}
@@ -462,6 +477,8 @@ export function PRTooltipContent({ data, freshness, ciStatus }: PRTooltipContent
 interface TooltipFallbackProps {
   type: "issue" | "pr";
   number: number;
+  /** A tracker's own identifier (`ENG-42`) in place of `#number` (#13744). */
+  reference?: string;
   /** What the badge already knows — never say less than the badge did. */
   title?: string;
   prState?: string;
@@ -484,6 +501,7 @@ interface TooltipFallbackProps {
 export function TooltipFallback({
   type,
   number,
+  reference,
   title,
   prState,
   ciStatus,
@@ -495,7 +513,7 @@ export function TooltipFallback({
       ? {
           Glyph: getPrStateGlyph(prState),
           colorClass: getPrStateColor(prState),
-          label: prStateLabel(prState, false),
+          label: getPrStateLabel(prState, false),
         }
       : // A badge knows an issue's number and title but not whether it's
         // still open, so the header claims neither.
@@ -510,6 +528,7 @@ export function TooltipFallback({
         colorClass={header.colorClass}
         stateLabel={header.label}
         number={number}
+        reference={reference}
         title={title}
         trailing={
           type === "pr" && ciStatus && (prState === undefined || prState === "open") ? (
@@ -558,6 +577,8 @@ function joinList(parts: (string | false | null | undefined)[]): string {
 interface DescribeOptions {
   /** Speak the title too — for a trigger whose own name doesn't carry it. */
   includeTitle?: boolean;
+  /** A tracker's own identifier (`ENG-42`) in place of `#number` (#13744). */
+  issueKey?: string;
 }
 
 function describeMeta(
@@ -591,7 +612,7 @@ export function describeIssueTooltip(
   options: DescribeOptions = {}
 ): string {
   return joinList([
-    `${issueStateVisual(data.state).label} issue #${data.number}`,
+    `${issueStateVisual(data.state).label} issue ${options.issueKey ?? `#${data.number}`}`,
     ...describeMeta(data, freshness, options),
   ]);
 }
@@ -604,7 +625,7 @@ export function describePRTooltip(
 ): string {
   const ci = getCIStatusVisual(ciStatus);
   return joinList([
-    `${prStateLabel(data.state, data.isDraft)} pull request #${data.number}`,
+    `${getPrStateLabel(data.state, data.isDraft)} pull request #${data.number}`,
     ci && (data.state === "open" || data.state === undefined) ? ci.ariaLabel : null,
     ...describeMeta(data, freshness, options),
   ]);

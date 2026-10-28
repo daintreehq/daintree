@@ -8,7 +8,6 @@ import {
   getDeletedWorktreeTerminalIds,
   useWorktreeSelectionStore,
 } from "@/store/worktreeStore";
-import { useLayoutConfigStore } from "@/store";
 import type {
   AgentState,
   PanelKind,
@@ -27,7 +26,7 @@ import { RECONNECT_TIMEOUT_MS } from "./reconnectManager";
 import type { ActionFrecencyEntry, ActionUsageEntry } from "@shared/types/actions";
 import { panelPersistence } from "@/store/persistence/panelPersistence";
 import { draftInputPersistence } from "@/store/persistence/draftInputPersistence";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { setGpuHardwareAvailable } from "@/services/terminal/terminalInstanceServiceAccessor";
 import { logDebug, logInfo, logWarn, logError } from "@/utils/logger";
 import { PERF_MARKS } from "@shared/perf/marks";
 import {
@@ -44,11 +43,12 @@ import { useCanopyStore } from "@/store/canopyStore";
 import { useResourceProfileStore } from "@/store/resourceProfileStore";
 import type { AgentPreset } from "@/config/agents";
 import type { HydrationBatchToken } from "@/store/slices/panelRegistry/types";
-import { normalizeAndApplyScrollback } from "./scrollbackConfig";
+import { applyBootTerminalConfig, beginTerminalConfigRead } from "@/services/terminalConfigSync";
+import { applyBootPanelGridConfig, beginPanelGridConfigRead } from "@/services/panelGridConfigSync";
 import { ensureHydrationBootstrap } from "./bootstrapGuard";
 import { dispatchRecoveryNotifications } from "./recoveryNotifications";
 import { scheduleScrollbackRestore } from "./scrollbackRestoreScheduler";
-import { restorePanelsPhase } from "./panelRestorePhase";
+import { resolveVisiblePanelId, restorePanelsPhase } from "./panelRestorePhase";
 import { isRemoteWindow, setHostPlatformInfo } from "@/hooks/useHostPlatform";
 import { agentClipboardDirectory } from "@shared/types/agentSettings";
 import { isRemoteShellSupported } from "@/lib/remoteHosts";
@@ -152,7 +152,12 @@ export interface HydrationOptions {
     sessionLostOnRestore?: SessionLostReason;
     conversationCwd?: string;
     restoreRecovery?: PanelRestoreRecovery;
+    restoreProvenance?: import("@shared/types/panel").TerminalRestoreProvenance;
+    lastAgentObservation?: import("@shared/types/panel").TerminalAgentObservation;
+    launchedByPluginId?: string;
+    holdOnRestart?: true;
     scratchpad?: import("@shared/types/panel").TerminalScratchpad;
+    firstPrompt?: import("@shared/types/panel").TerminalFirstPrompt;
     env?: Record<string, string>;
     extensionState?: Record<string, unknown>;
     pluginId?: string;
@@ -229,6 +234,15 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
   try {
     await withRendererSpan(PERF_MARKS.HYDRATE_BOOTSTRAP, () => ensureHydrationBootstrap());
 
+    // A fresh read is asked for here, so a saved change heard while it travels
+    // wins over its answer. The prefetched payload is the boot one.
+    const applyTerminalConfig = prefetchedHydrateResult
+      ? applyBootTerminalConfig
+      : beginTerminalConfigRead();
+    const applyPanelGridConfig = prefetchedHydrateResult
+      ? applyBootPanelGridConfig
+      : beginPanelGridConfigRead();
+
     // Use the pre-fetched hydration payload when available, eliminating a
     // ~50-150ms IPC round-trip. Fall back to the IPC pull model otherwise.
     const hydrateResult = prefetchedHydrateResult
@@ -284,7 +298,7 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
         // The switcher reloads scratches whenever it opens; a boot miss self-heals.
       });
 
-    terminalInstanceService.setGPUHardwareAvailable(gpuWebGLHardware ?? true);
+    setGpuHardwareAvailable(gpuWebGLHardware ?? true);
 
     useDistributionStore.getState().setIsWindowsStore(Boolean(hydrateResult.isWindowsStore));
     // Before the toolbar first paints, so a hidden Canopy's button never shows.
@@ -305,7 +319,8 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
 
     dispatchRecoveryNotifications(hydrateResult);
 
-    normalizeAndApplyScrollback(terminalConfig, logHydrationInfo);
+    // Before any terminal is restored, so each one opens with these values.
+    applyTerminalConfig(terminalConfig);
 
     if (!appState) {
       logWarn("App state returned undefined during hydration, using defaults");
@@ -571,17 +586,19 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
 
         const prefetchedReconnectResults = await reconnectPrefetchPromise;
 
-        // The per-project MRU head is the terminal the user last had on screen.
-        // It is persisted as `terminal:<id>`; strip the prefix to recover the
-        // saved panel id so restorePanelsPhase can jump it to the front of the
-        // restore queue (#10527). A non-terminal head (browser/dev-preview MRU
-        // entry) yields undefined, degrading to the existing ordering.
-        const MRU_TERMINAL_PREFIX = "terminal:";
-        const mruHead = appState.mruList?.[0];
-        const visiblePanelId =
-          typeof mruHead === "string" && mruHead.startsWith(MRU_TERMINAL_PREFIX)
-            ? mruHead.slice(MRU_TERMINAL_PREFIX.length)
-            : undefined;
+        // The per-project MRU head is the terminal the user last had on screen;
+        // restorePanelsPhase jumps it to the front of the restore queue (#10527).
+        const savedPanelsById = new Map(
+          (appState.terminals ?? [])
+            .filter((saved) => saved && typeof saved.id === "string")
+            .map((saved) => [saved.id, saved])
+        );
+        const visiblePanelId = resolveVisiblePanelId(appState.mruList, (savedId) => {
+          const saved = savedPanelsById.get(savedId);
+          if (!saved || backendTerminalMap.has(savedId)) return false;
+          const kind = inferKind(saved, currentWorkspaceId);
+          return kind === "assistant" || !panelKindHasPty(kind);
+        });
 
         const restoreResult = await restorePanelsPhase(appState.terminals, {
           addPanel,
@@ -826,9 +843,7 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
       appState.panelGridConfig ??
       (appState as unknown as { terminalGridConfig?: typeof appState.panelGridConfig })
         .terminalGridConfig;
-    if (layoutConfig) {
-      useLayoutConfigStore.getState().setLayoutConfig(layoutConfig);
-    }
+    applyPanelGridConfig(layoutConfig);
 
     // Restore focus mode from per-project state (hydrate returns per-project focus mode)
     if (options.setFocusMode && appState.focusMode !== undefined) {

@@ -11,6 +11,8 @@ type AddTerminalOptions = AddPanelOptions;
 export type AnyActionDefinition = ActionDefinition<any, any> & {
   /** Present on synthetic definitions backing plugin-contributed actions. */
   pluginId?: string;
+  /** The providing plugin's manifest name, set beside {@link pluginId}. */
+  pluginName?: string;
   /**
    * Raw JSON-Schema object for plugin-contributed actions. Plugins cannot
    * ship a Zod schema across IPC, so they declare a plain JSON Schema object
@@ -79,6 +81,8 @@ export interface ActionCallbacks {
       removeOnExit?: boolean;
       agentLaunchFlags?: string[];
       spawnedBy?: TerminalSpawnSource;
+      /** The plugin behind a plugin dispatch, from `ActionContext.callerPluginId` only. */
+      launchedByPluginId?: string;
       focusPolicy?: AddPanelFocusPolicy;
       requestedId?: string;
       force?: boolean;

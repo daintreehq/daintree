@@ -42,6 +42,7 @@ vi.mock("@/hooks/app/useHomeDir", () => ({ useHomeDir: () => ({ homeDir: "/home/
 vi.mock("@/store/cliAvailabilityStore", () => {
   const state = {
     availability: {},
+    details: {},
     isLoading: false,
     isRefreshing: false,
     initialize: vi.fn().mockResolvedValue(undefined),
@@ -69,7 +70,11 @@ vi.mock("@/store/agentSettingsStore", () => {
   };
 });
 
-vi.mock("@/clients", () => ({ systemClient: { onWake: vi.fn(() => () => {}) } }));
+const getHostAgentLimit = vi.fn();
+vi.mock("@/clients", () => ({
+  systemClient: { onWake: vi.fn(() => () => {}) },
+  terminalClient: { getHostAgentLimit: () => getHostAgentLimit() },
+}));
 
 vi.mock("@/utils/logger", () => ({
   logError: vi.fn(),
@@ -236,5 +241,133 @@ describe("useAgentLauncher — declined launches name their reason (#13382)", ()
 
     expect(launched).toMatchObject({ terminalId: "browser-1", location: "grid" });
     expect(onDecline).not.toHaveBeenCalled();
+  });
+});
+
+describe("useAgentLauncher — the launching plugin (#14017)", () => {
+  beforeEach(() => {
+    addPanel.mockReset();
+    addPanel.mockResolvedValue("terminal-1");
+    setElectron(true);
+  });
+
+  afterEach(() => {
+    setElectron(false);
+  });
+
+  it("stamps it on an agent pane, so only that plugin may hold the pane later", async () => {
+    const { result } = renderHook(() => useAgentLauncher());
+
+    await act(async () => {
+      await result.current.launchAgent("claude", {
+        force: true,
+        launchedByPluginId: "acme.orchestrator",
+      });
+    });
+
+    expect(addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({ launchAgentId: "claude", launchedByPluginId: "acme.orchestrator" }),
+      expect.anything()
+    );
+  });
+
+  it("leaves a plain shell unowned, since restore never holds one", async () => {
+    const { result } = renderHook(() => useAgentLauncher());
+
+    await act(async () => {
+      await result.current.launchAgent("terminal", { launchedByPluginId: "acme.orchestrator" });
+    });
+
+    expect(addPanel).toHaveBeenCalledOnce();
+    expect(addPanel.mock.calls[0]?.[0]).not.toHaveProperty("launchedByPluginId");
+  });
+});
+
+describe("useAgentLauncher — no host agent ceiling (#14810)", () => {
+  beforeEach(() => {
+    addPanel.mockReset();
+    addPanel.mockResolvedValue("terminal-1");
+    getHostAgentLimit.mockReset();
+    setElectron(true);
+  });
+
+  afterEach(() => {
+    setElectron(false);
+  });
+
+  it("launches an agent without asking the host how many are live", async () => {
+    getHostAgentLimit.mockResolvedValue({ host: "Studio", count: 40, limit: 2 });
+    const onDecline = vi.fn();
+    const { result } = renderHook(() => useAgentLauncher());
+
+    let launched: unknown;
+    await act(async () => {
+      launched = await result.current.launchAgent("claude", { force: true, onDecline });
+    });
+
+    expect(getHostAgentLimit).not.toHaveBeenCalled();
+    expect(addPanel).toHaveBeenCalledOnce();
+    expect(launched).toMatchObject({ terminalId: "terminal-1" });
+    expect(launched).not.toHaveProperty("hostAgentLimit");
+    expect(onDecline).not.toHaveBeenCalled();
+  });
+});
+
+describe("useAgentLauncher — the launch prompt record (#14592)", () => {
+  beforeEach(() => {
+    addPanel.mockReset();
+    addPanel.mockResolvedValue("terminal-1");
+    setElectron(true);
+  });
+
+  afterEach(() => {
+    setElectron(false);
+  });
+
+  const launchedOptions = (): Record<string, unknown> =>
+    addPanel.mock.calls[0]?.[0] as Record<string, unknown>;
+
+  it("records the prompt as the caller wrote it, not with the handback instruction", async () => {
+    const { result } = renderHook(() => useAgentLauncher());
+
+    await act(async () => {
+      await result.current.launchAgent("claude", {
+        force: true,
+        prompt: "Fix the flaky test\n\nWhen you have finished…",
+        promptAsWritten: "Fix the flaky test",
+        handbackCode: "abc123",
+      });
+    });
+
+    expect(launchedOptions().launchPrompt).toEqual({
+      text: "Fix the flaky test",
+      via: "launch",
+      at: expect.any(Number),
+    });
+  });
+
+  it("records a prompt passed with no handback as it is", async () => {
+    const { result } = renderHook(() => useAgentLauncher());
+
+    await act(async () => {
+      await result.current.launchAgent("claude", { force: true, prompt: "Line one\nline two" });
+    });
+
+    expect(launchedOptions().launchPrompt).toMatchObject({ text: "Line one\nline two" });
+  });
+
+  it("writes no record for a launch with no prompt, or one that starts no agent", async () => {
+    const { result } = renderHook(() => useAgentLauncher());
+
+    await act(async () => {
+      await result.current.launchAgent("claude", { force: true });
+    });
+    await act(async () => {
+      await result.current.launchAgent("terminal", { prompt: "ls" });
+    });
+
+    expect(addPanel).toHaveBeenCalledTimes(2);
+    expect(addPanel.mock.calls[0]?.[0]).not.toHaveProperty("launchPrompt");
+    expect(addPanel.mock.calls[1]?.[0]).not.toHaveProperty("launchPrompt");
   });
 });

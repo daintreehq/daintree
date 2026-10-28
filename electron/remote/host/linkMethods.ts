@@ -18,12 +18,22 @@ export const LinkMethod = {
   NOTE_ACTIVE_PROJECT: "host.note-active-project",
   /** Shell → Host: the project this Shell last showed here, if the Host still has it. */
   LAST_ACTIVE_PROJECT: "host.last-active-project",
+  /**
+   * Shell → Host, on a resumed session: the endpoints this Shell holds. Any
+   * other the Host kept for it, and not opened again since, was closed in a
+   * frame still queued when the link dropped.
+   */
+  ENDPOINT_RECONCILE: "endpoint.reconcile",
   /** Host → Shell: these endpoints missed events; repaint them from a fresh snapshot. */
   ENDPOINT_RESYNC: "endpoint.resync",
   /** Host → Shell: whether a live Daintree Assistant is pinned to each of these endpoints. */
   ENDPOINT_ASSISTANT: "endpoint.assistant",
   /** Host → Shell: whether an agent in each of these endpoints' projects is active here. */
   ENDPOINT_AGENT_ACTIVITY: "endpoint.agent-activity",
+  /** Host → Shell: whether the user granted each of these endpoints' projects residency here. */
+  ENDPOINT_RESIDENCY: "endpoint.residency",
+  /** Host → Shell: whether an MCP session here is bound live to each of these endpoints' projects. */
+  ENDPOINT_MCP_BINDING: "endpoint.mcp-binding",
 } as const;
 
 export interface HostInfo {
@@ -46,6 +56,10 @@ export type EndpointResyncReason = "overflow" | "reattached";
 export interface EndpointResyncPayload {
   endpointIds: string[];
   reason: EndpointResyncReason;
+}
+
+export interface EndpointReconcilePayload {
+  endpointIds: string[];
 }
 
 /**
@@ -75,6 +89,34 @@ export interface EndpointAgentActivityState {
 
 export interface EndpointAgentActivityPayload {
   endpoints: EndpointAgentActivityState[];
+}
+
+/**
+ * The host-side "keep this workspace resident" grant for an endpoint's project.
+ * Same `projectId` rule as {@link EndpointAssistantState}.
+ */
+export interface EndpointResidencyState {
+  endpointId: string;
+  projectId: string | null;
+  keepResident: boolean;
+}
+
+export interface EndpointResidencyPayload {
+  endpoints: EndpointResidencyState[];
+}
+
+/**
+ * Whether an external MCP session on the host is bound, over a live transport,
+ * to an endpoint's project. Same `projectId` rule as {@link EndpointAssistantState}.
+ */
+export interface EndpointMcpBindingState {
+  endpointId: string;
+  projectId: string | null;
+  liveBinding: boolean;
+}
+
+export interface EndpointMcpBindingPayload {
+  endpoints: EndpointMcpBindingState[];
 }
 
 const endpointId = z.string().min(1).max(256);
@@ -110,6 +152,8 @@ export const HostProjectListSchema = z
         name: z.string().max(1024),
         path: hostPath,
         emoji: z.string().max(MAX_PROJECT_EMOJI_LENGTH).optional(),
+        /** Absent from a host that predates it (#14122). */
+        frontendAttached: z.boolean().optional(),
       })
       .strip()
   )
@@ -118,6 +162,10 @@ export const HostProjectListSchema = z
 export const EndpointResyncPayloadSchema = z.object({
   endpointIds: z.array(endpointId).max(4096),
   reason: z.enum(["overflow", "reattached"]),
+});
+
+export const EndpointReconcilePayloadSchema = z.object({
+  endpointIds: z.array(endpointId).max(4096),
 });
 
 export const EndpointAssistantPayloadSchema = z.object({
@@ -139,6 +187,30 @@ export const EndpointAgentActivityPayloadSchema = z.object({
         endpointId,
         projectId: z.string().min(1).max(256).nullable(),
         active: z.boolean(),
+      })
+    )
+    .max(4096),
+});
+
+export const EndpointResidencyPayloadSchema = z.object({
+  endpoints: z
+    .array(
+      z.object({
+        endpointId,
+        projectId: z.string().min(1).max(256).nullable(),
+        keepResident: z.boolean(),
+      })
+    )
+    .max(4096),
+});
+
+export const EndpointMcpBindingPayloadSchema = z.object({
+  endpoints: z
+    .array(
+      z.object({
+        endpointId,
+        projectId: z.string().min(1).max(256).nullable(),
+        liveBinding: z.boolean(),
       })
     )
     .max(4096),

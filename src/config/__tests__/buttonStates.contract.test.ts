@@ -32,8 +32,6 @@ const ICON_MARGIN = /(^|\s)m[lr]-(?:\d|px|\[)/;
 const ALLOWED: Record<string, string> = {
   "src/components/Layout/Toolbar.tsx:spinner":
     "copy-tree toolbar button waits on a Doherty gate before its spinner; toolbar lane",
-  "src/components/Project/ProjectSwitcher.tsx:spinner":
-    "trigger shows list loading, not an action in flight",
   "src/components/Layout/LocalCommitsDropdown.tsx:label":
     "load-more keeps the 5s 'Still working…' copy the loading rules require",
   "plugins/builtin/github/renderer/components/GitHubResourceList.tsx:label":

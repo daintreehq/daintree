@@ -5,12 +5,13 @@ import { choiceCardVariants } from "@/components/ui/card";
 import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { AgentCliStep } from "./AgentCliStep";
+import { AgentInputStep } from "./AgentInputStep";
 import { SystemRequirementsSection } from "./SystemRequirementsSection";
 import { AGENT_REGISTRY } from "@/config/agents";
 import { BrandMark } from "@/components/icons";
 import { AgentCard } from "@/components/agents/AgentCard";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
-import { useAgentSettingsStore } from "@/store";
+import { useAgentSettingsStore, useAgentToolbarPinsStore } from "@/store";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { cliAvailabilityClient } from "@/clients";
 import { logError } from "@/utils/logger";
@@ -273,6 +274,7 @@ export type WizardStep =
   | { type: "privacy" }
   | { type: "cli" }
   | { type: "permissions" }
+  | { type: "input" }
   | { type: "complete" };
 
 export interface WizardState {
@@ -290,6 +292,7 @@ export type WizardAction =
   | { type: "PRIVACY_CONTINUE" }
   | { type: "CLI_CONTINUE" }
   | { type: "PERMISSIONS_CONTINUE" }
+  | { type: "INPUT_CONTINUE" }
   | { type: "BACK" }
   | { type: "SET_AVAILABILITY"; payload: CliAvailability }
   | { type: "INIT_SELECTIONS"; payload: Record<string, boolean> }
@@ -297,14 +300,14 @@ export type WizardAction =
   | { type: "RESET"; availability: CliAvailability; isFirstRun: boolean };
 
 // First-run walks every step (appearance → agents → privacy → cli →
-// permissions → complete); re-runs from Settings start at `agents` and skip the
-// first-run-only consent steps (privacy, permissions — returning users already
-// have those toggles in Settings). This is the MAXIMUM flow; `visibleFlowSteps`
-// narrows it to the route a given run actually takes, which is what the
-// "Step n of n" display counts.
+// permissions → input → complete); re-runs from Settings start at `agents` and
+// skip the first-run-only steps (privacy, permissions, input — returning users
+// already have those settings in Settings). This is the MAXIMUM flow;
+// `visibleFlowSteps` narrows it to the route a given run actually takes, which
+// is what the "Step n of n" display counts.
 export function flowSteps(isFirstRun: boolean): WizardStep["type"][] {
   return isFirstRun
-    ? ["appearance", "agents", "privacy", "cli", "permissions", "complete"]
+    ? ["appearance", "agents", "privacy", "cli", "permissions", "input", "complete"]
     : ["agents", "cli", "complete"];
 }
 
@@ -334,6 +337,10 @@ export const STEP_META: Record<WizardStep["type"], { title: string; subtitle: st
     title: "Agent permissions",
     subtitle:
       "Keep prompts on unless you trust agents to run commands and edit files without asking",
+  },
+  input: {
+    title: "Agent input",
+    subtitle: "Choose how you type into agent terminals",
   },
   complete: {
     title: "Setup complete",
@@ -447,6 +454,13 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
     case "PERMISSIONS_CONTINUE":
       return {
         ...state,
+        step: state.isFirstRun ? { type: "input" } : { type: "complete" },
+        history: [...state.history, state.step],
+      };
+
+    case "INPUT_CONTINUE":
+      return {
+        ...state,
         step: { type: "complete" },
         history: [...state.history, state.step],
       };
@@ -519,7 +533,8 @@ export function AgentSetupWizard({
   const [hasFatalHealthFailure, setHasFatalHealthFailure] = useState(false);
   const [isHealthChecking, setIsHealthChecking] = useState(true);
 
-  const { setAgentPinned, setGlobalSkipPermissions } = useAgentSettingsStore();
+  const setGlobalSkipPermissions = useAgentSettingsStore((s) => s.setGlobalSkipPermissions);
+  const setAgentPinned = useAgentToolbarPinsStore((s) => s.setAgentPinned);
   const isAvailabilityLoading = useCliAvailabilityStore((s) => s.isLoading || s.isRefreshing);
   const [isSaving, setIsSaving] = useState(false);
   const [isInstalling, setIsInstalling] = useState(false);
@@ -794,6 +809,11 @@ export function AgentSetupWizard({
     }
   }, [permissionsEnabled, setGlobalSkipPermissions]);
 
+  const handleInputContinue = useCallback(() => {
+    directionRef.current = 1;
+    dispatch({ type: "INPUT_CONTINUE" });
+  }, []);
+
   const handleBack = useCallback(() => {
     directionRef.current = -1;
     dispatch({ type: "BACK" });
@@ -986,6 +1006,7 @@ export function AgentSetupWizard({
                   onPermissionsChange={setPermissionsEnabled}
                 />
               )}
+              {state.step.type === "input" && <AgentInputStep onBusyChange={setIsSaving} />}
               {state.step.type === "complete" && (
                 <CompleteStep installedAgents={installedAgents} hasWorkspace={hasWorkspace} />
               )}
@@ -1100,6 +1121,18 @@ export function AgentSetupWizard({
               className={cn(isSaving && ARIA_DISABLED_CLASSES)}
               variant="contrast"
               onClick={isSaving ? undefined : handlePermissionsContinue}
+            >
+              Continue
+              <ArrowRight aria-hidden="true" />
+            </Button>
+          )}
+          {/* Each choice is saved as it's made; isSaving holds the step while one is. */}
+          {state.step.type === "input" && (
+            <Button
+              aria-disabled={isSaving || undefined}
+              className={cn(isSaving && ARIA_DISABLED_CLASSES)}
+              variant="contrast"
+              onClick={isSaving ? undefined : handleInputContinue}
             >
               Continue
               <ArrowRight aria-hidden="true" />

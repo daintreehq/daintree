@@ -8,7 +8,7 @@
  * render harness (no source-string assertions) and verify the store wiring: the
  * dock popover only closes when moveTerminalToGrid succeeds.
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { beforeAll, describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import type { PtyPanelData } from "@shared/types/panel";
 import { UI_TRANSIENT_HINT_DWELL_MS } from "@/lib/animationUtils";
@@ -20,6 +20,9 @@ const moveTerminalToGridMock = vi.fn();
 let mockActiveDockTerminalId: string | null = null;
 let mockDockAgentState: string | undefined = undefined;
 let mockIsAgent = false;
+let mockPluginActivity: { pluginId: string; shown: string; description: string } | null = null;
+let mockDeprioritized = false;
+let mockShowDockHighlights = false;
 let capturedOnOpenChange: ((open: boolean) => void) | null = null;
 let capturedOnOpenAutoFocus: ((event: { preventDefault: () => void }) => void) | null = null;
 let capturedOnFocusOutside: ((event: { preventDefault: () => void }) => void) | null = null;
@@ -34,16 +37,18 @@ vi.mock("@/store", () => ({
       backendStatus: "connected",
       showDockAgentHighlights: false,
     }),
-  useTerminalInputStore: (
-    selector: (s: { hybridInputEnabled: boolean; hybridInputAutoFocus: boolean }) => unknown
-  ) => selector({ hybridInputEnabled: false, hybridInputAutoFocus: false }),
+  useTerminalInputStore: Object.assign(
+    (selector: (s: { hybridInputEnabled: boolean; hybridInputAutoFocus: boolean }) => unknown) =>
+      selector({ hybridInputEnabled: false, hybridInputAutoFocus: false }),
+    { getState: () => ({ hybridInputEnabled: false, hybridInputAutoFocus: false }) }
+  ),
   usePortalStore: (selector: (s: { isOpen: boolean; width: number }) => unknown) =>
     selector({ isOpen: false, width: 0 }),
   useFocusStore: (
     selector: (s: { isFocusMode: boolean; gestureSidebarHidden: boolean }) => unknown
   ) => selector({ isFocusMode: false, gestureSidebarHidden: false }),
   usePreferencesStore: (selector: (s: { showDockAgentHighlights: boolean }) => unknown) =>
-    selector({ showDockAgentHighlights: false }),
+    selector({ showDockAgentHighlights: mockShowDockHighlights }),
 }));
 
 vi.mock("@/store/agentSettingsStore", () => ({
@@ -65,12 +70,39 @@ vi.mock("@/config/agents", () => ({
   getMergedPresets: () => [],
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     fit: () => ({ cols: 80, rows: 24 }),
     applyRendererPolicy: vi.fn(),
     focus: vi.fn(),
-  },
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
+
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
+});
+
+// The badge hook reads the real panel and plugin stores; these suites stub the store layer.
+vi.mock("../DockChipBadge", () => ({
+  useDockChipBadge: () => null,
+  DockChipBadge: () => null,
+}));
+
+// The activity hook reads the real panel, registry and plugin stores too.
+vi.mock("@/components/Panel/PluginPanelActivity", () => ({
+  usePluginPanelActivity: () => mockPluginActivity,
+  PluginPanelActivityDockCue: ({ activity }: { activity: { shown: string } }) => (
+    <span data-plugin-panel-activity={activity.shown} />
+  ),
+  pluginPanelActivityLabelSuffix: (activity: { description: string } | null) =>
+    activity ? ` — ${activity.description}` : "",
 }));
 
 vi.mock("../dockPanelPortalContext", () => ({
@@ -80,7 +112,7 @@ vi.mock("../dockPanelPortalContext", () => ({
 vi.mock("../useDockBlockedState", () => ({
   useDockBlockedState: () => null,
   getDockDisplayAgentState: () => mockDockAgentState,
-  isDockAgentStateDeprioritized: () => false,
+  isDockAgentStateDeprioritized: () => mockDeprioritized,
 }));
 
 vi.mock("../dockPopoverGuard", () => ({
@@ -119,7 +151,15 @@ vi.mock("@/components/Terminal/TerminalIcon", () => ({
 }));
 
 vi.mock("@/components/Terminal/terminalFocus", () => ({
-  getTerminalFocusTarget: () => "terminal",
+  getTerminalFocusTarget: ({ preferredTarget }: { preferredTarget?: string }) =>
+    preferredTarget ?? "terminal",
+}));
+
+let mockRequestedSurface: string | null = null;
+let mockHeldSurface: string | null = null;
+vi.mock("@/components/Terminal/paneFocusRequest", () => ({
+  requestedPaneSurface: () => mockRequestedSurface,
+  paneSurfaceHoldingFocus: () => mockHeldSurface,
 }));
 
 // Popover mock: captures the Radix callbacks (onOpenChange, onOpenAutoFocus,
@@ -168,8 +208,10 @@ vi.mock("@dnd-kit/core", () => ({
 import { DockedTerminalItem } from "../DockedTerminalItem";
 import { DragHandleProvider } from "@/components/DragDrop/DragHandleContext";
 import { handleDockFocusOutside } from "../dockPopoverGuard";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { createTerminalPaintPlane } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
+
+const terminalInstanceService = createTerminalPaintPlane();
 
 function makeTerminal(overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   return {
@@ -292,6 +334,60 @@ describe("DockedTerminalItem plain-terminal activity cue (#11187)", () => {
   beforeEach(() => {
     mockActiveDockTerminalId = null;
     mockDockAgentState = undefined;
+    mockPluginActivity = null;
+  });
+
+  it("gives a PTY plugin panel's own report the cue slot and the accessible name (#13820)", () => {
+    mockPluginActivity = {
+      pluginId: "acme",
+      shown: "waiting",
+      description: "Reported by Acme: Waiting — Pick a branch",
+    };
+    const { container } = render(
+      <DockedTerminalItem terminal={makeTerminal({ id: "t-1", activityStatus: "working" })} />
+    );
+    expect(container.querySelector('[data-plugin-panel-activity="waiting"]')).not.toBeNull();
+    expect(container.querySelector("[data-dock-activity-state]")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: /— Reported by Acme: Waiting — Pick a branch/ })
+    ).not.toBeNull();
+  });
+
+  it("keeps a plain PTY plugin panel's chip un-dimmed while its plugin reports it waiting", () => {
+    mockDeprioritized = true;
+    mockShowDockHighlights = true;
+    try {
+      const resting = render(<DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />);
+      const restingChip = resting.container.querySelector("[data-dock-item]");
+      expect(restingChip?.className).toContain("border-transparent");
+      resting.unmount();
+
+      mockPluginActivity = {
+        pluginId: "acme",
+        shown: "waiting",
+        description: "Reported by Acme: Waiting",
+      };
+      const waiting = render(<DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />);
+      const chip = waiting.container.querySelector("[data-dock-item]");
+      expect(chip?.className).not.toContain("border-transparent");
+      expect(chip?.className).not.toBe(restingChip?.className);
+    } finally {
+      mockDeprioritized = false;
+      mockShowDockHighlights = false;
+    }
+  });
+
+  it("never lets a plugin's report displace an observed agent state", () => {
+    mockDockAgentState = "working";
+    mockPluginActivity = {
+      pluginId: "acme",
+      shown: "failed",
+      description: "Reported by Acme: Failed",
+    };
+    const { container } = render(<DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />);
+    expect(container.querySelector("[data-plugin-panel-activity]")).toBeNull();
+    expect(screen.getByRole("button", { name: /— agent working/ })).not.toBeNull();
+    expect(screen.queryByRole("button", { name: /Reported by/ })).toBeNull();
   });
 
   it("shows a running spinner and 'command running' accessible name while a plain command runs", () => {
@@ -367,6 +463,8 @@ describe("DockedTerminalItem mount-time close guard (#6602)", () => {
     capturedOnOpenChange = null;
     capturedOnOpenAutoFocus = null;
     capturedOnFocusOutside = null;
+    mockRequestedSurface = null;
+    mockHeldSurface = null;
     vi.mocked(terminalInstanceService.focus).mockClear();
   });
 
@@ -437,6 +535,27 @@ describe("DockedTerminalItem mount-time close guard (#6602)", () => {
     // The popover container ref settles synchronously on mount, so the stable
     // wrapper is moved in and the terminal is focused — no MutationObserver.
     expect(terminalInstanceService.focus).toHaveBeenCalledWith("t-1");
+  });
+
+  // A drop or type-anywhere that asked the pane for its hybrid input; focusing
+  // the terminal here would end that ask before the bar could take it.
+  it("leaves the keyboard to a hybrid input the pane was asked for", () => {
+    mockActiveDockTerminalId = "t-1";
+    mockRequestedSurface = "hybridInput";
+    render(<DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />);
+
+    expect(terminalInstanceService.focus).not.toHaveBeenCalled();
+  });
+
+  // What the user does inside the pane stays inside it: the focus pass re-runs
+  // on chrome changes, and must not pull the keyboard out of the input bar for
+  // a terminal home.
+  it("leaves the keyboard on a hybrid input that holds it", () => {
+    mockActiveDockTerminalId = "t-1";
+    mockHeldSurface = "hybridInput";
+    render(<DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />);
+
+    expect(terminalInstanceService.focus).not.toHaveBeenCalled();
   });
 
   it("does not focus an MCP-created dock terminal", () => {

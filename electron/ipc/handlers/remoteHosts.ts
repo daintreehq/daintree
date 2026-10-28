@@ -1,3 +1,4 @@
+// eager-import-allow: reads configured hosts and Host mode via store.get for the synchronous remote-host usage probe without starting remote services
 import { defineIpcNamespace, op } from "../define.js";
 import type { IpcContext } from "../types.js";
 import os from "node:os";
@@ -118,7 +119,7 @@ export const remoteHostsNamespace = defineIpcNamespace({
     ),
     connect: op(
       REMOTE_HOSTS_METHOD_CHANNELS.connect,
-      async (payload: { hostId: string }): Promise<HostConnectionState> =>
+      async (payload: { hostId: string; restart?: boolean }): Promise<HostConnectionState> =>
         requireRemoteService("remoteHostsClient").connect(payload)
     ),
     disconnect: op(

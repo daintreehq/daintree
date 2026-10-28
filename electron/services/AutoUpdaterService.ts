@@ -1,12 +1,19 @@
 // eager-import-allow: reads updater config via store.get and the staged installer via sync fs
 import { existsSync, readFileSync } from "fs";
 import path from "path";
-import { app, ipcMain } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, autoUpdater as nativeAutoUpdater } from "electron";
 import electronUpdater from "electron-updater";
 import type { UpdateInfo, ProgressInfo } from "electron-updater";
 import * as semver from "semver";
 import { CHANNELS } from "../ipc/channels.js";
 import { broadcastToRenderer } from "../ipc/utils.js";
+import {
+  getAttachedShells,
+  type AttachedShell,
+  isExitConfirmationPending,
+  setExitConfirmationPending,
+} from "../lifecycle/attachedShells.js";
+import { showUpdateWarning } from "../utils/quitWarning.js";
 import { requestGracefulShutdownForUpdate } from "../lifecycle/shutdownCoordinator.js";
 import { getSystemSleepService } from "./SystemSleepService.js";
 import { trackEvent } from "./TelemetryService.js";
@@ -17,6 +24,7 @@ import { PRODUCT_NAME, PRODUCT_WEBSITE } from "../utils/productBranding.js";
 import { isTrustedRendererUrl } from "../../shared/utils/trustedRenderer.js";
 import { isWindowsStoreBuild } from "../../shared/config/distribution.js";
 import { notifyAppImageRelocated } from "./appImageRelocation.js";
+import { getStagedUpdate, setStagedUpdate } from "./stagedUpdateState.js";
 import { armRelaunch } from "../lifecycle/armRelaunch.js";
 import { stripLaunchTargets } from "../lifecycle/launchIntent.js";
 import { routeAppImageRelaunchThroughWaiter } from "./appImageUpdateRelaunch.js";
@@ -207,6 +215,12 @@ class AutoUpdaterService {
   private notAvailableHandler: ((info: UpdateInfo) => void) | null = null;
   private errorHandler: ((err: Error) => void) | null = null;
   private progressHandler: ((progress: ProgressInfo) => void) | null = null;
+  private nativeDownloadedHandler: (() => void) | null = null;
+  private nativeErrorHandler: (() => void) | null = null;
+  // Downloads handed to macOS's own updater that it hasn't said it has yet. A
+  // staged update is ready only once none is outstanding, so an earlier
+  // handoff finishing late never vouches for a later download.
+  private nativeHandoffsPending = 0;
   private downloadedHandler: ((info: UpdateInfo) => void) | null = null;
 
   // Persist how far an install attempt got, for the next boot to act on.
@@ -497,6 +511,34 @@ class AutoUpdaterService {
     });
   }
 
+  /**
+   * The user-facing "Restart to update" asks first when other machines are
+   * attached to this host, since the restart disconnects them. The dialog
+   * must come before the install — on macOS Squirrel closes every window
+   * ahead of `before-quit`. Cancelling leaves the update staged.
+   */
+  private async confirmAttachedShells(shells: AttachedShell[]): Promise<boolean> {
+    if (this.installInFlight || isExitConfirmationPending()) return false;
+    setExitConfirmationPending(true);
+    try {
+      const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null;
+      return await showUpdateWarning(shells, dialog.showMessageBox, win);
+    } catch (error) {
+      console.error("[MAIN] Error showing update warning:", error);
+      return false;
+    } finally {
+      setExitConfirmationPending(false);
+    }
+  }
+
+  async confirmAndQuitAndInstall(): Promise<boolean> {
+    if (isWindowsStoreBuild()) return false;
+    if (this.menuState !== "ready" || !this.updateDownloaded) return false;
+    const shells = getAttachedShells();
+    if (shells.length > 0 && !(await this.confirmAttachedShells(shells))) return false;
+    return this.quitAndInstallIfReady();
+  }
+
   quitAndInstallIfReady(): boolean {
     if (isWindowsStoreBuild()) return false;
     if (this.menuState !== "ready" || !this.updateDownloaded) return false;
@@ -783,6 +825,10 @@ class AutoUpdaterService {
     // during the await window and install the old channel's payload.
     autoUpdater.autoInstallOnAppQuit = false;
     this.updateDownloaded = false;
+    // macOS's own updater keeps whatever it was handed and installs it on
+    // quit; nothing here takes that back, so a Shell restarting this host must
+    // still be told. Elsewhere the cleared download installs nothing.
+    if (process.platform !== "darwin") setStagedUpdate(null);
     this.lastBroadcastVersion = null;
     // The staged payload belongs to the channel being left; a renderer that
     // mounts before the new channel's first check must not be handed it.
@@ -1124,10 +1170,35 @@ class AutoUpdaterService {
         // version arrived in. A stage left over from an earlier update would
         // otherwise be read back on the next boot and blamed on this one.
         this.forgetInstallStage();
+        // A Mac hands the download to its native updater after this event;
+        // quitting installs it only once that says it has it (below).
+        if (process.platform === "darwin") this.nativeHandoffsPending += 1;
+        setStagedUpdate({
+          version: info.version,
+          installsOnQuit: installsOnQuit(),
+          ready: process.platform !== "darwin",
+        });
         this.setMenuState("ready");
         broadcastToRenderer(CHANNELS.UPDATE_DOWNLOADED, { version: info.version });
       };
       autoUpdater.on("update-downloaded", this.downloadedHandler);
+
+      if (process.platform === "darwin") {
+        this.nativeDownloadedHandler = () => {
+          this.nativeHandoffsPending = Math.max(0, this.nativeHandoffsPending - 1);
+          const staged = getStagedUpdate();
+          if (staged && !staged.ready && this.nativeHandoffsPending === 0) {
+            setStagedUpdate({ ...staged, ready: true });
+          }
+        };
+        nativeAutoUpdater.on("update-downloaded", this.nativeDownloadedHandler);
+        // A handoff that failed will never say it landed: it stops counting,
+        // and the staged update waits for one that does.
+        this.nativeErrorHandler = () => {
+          this.nativeHandoffsPending = 0;
+        };
+        nativeAutoUpdater.on("error", this.nativeErrorHandler);
+      }
 
       // AppImageUpdater installs a versioned image under the new version's
       // name and deletes the old one, then emits this from inside the install —
@@ -1158,7 +1229,14 @@ class AutoUpdaterService {
           console.warn("[MAIN] Quit-and-install called before download completed");
           return;
         }
-        this.startQuitAndInstall();
+        const shells = getAttachedShells();
+        if (shells.length === 0) {
+          this.startQuitAndInstall();
+          return;
+        }
+        void this.confirmAttachedShells(shells).then((confirmed) => {
+          if (confirmed && this.updateDownloaded) this.startQuitAndInstall();
+        });
       });
 
       // Handle manual check-for-updates request from renderer
@@ -1298,6 +1376,16 @@ class AutoUpdaterService {
       autoUpdater.off("update-downloaded", this.downloadedHandler);
       this.downloadedHandler = null;
     }
+    if (this.nativeDownloadedHandler) {
+      nativeAutoUpdater.off("update-downloaded", this.nativeDownloadedHandler);
+      this.nativeDownloadedHandler = null;
+    }
+    if (this.nativeErrorHandler) {
+      nativeAutoUpdater.off("error", this.nativeErrorHandler);
+      this.nativeErrorHandler = null;
+    }
+    this.nativeHandoffsPending = 0;
+    setStagedUpdate(null);
 
     try {
       ipcMain.removeHandler(CHANNELS.UPDATE_QUIT_AND_INSTALL);

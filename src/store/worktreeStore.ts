@@ -1,5 +1,8 @@
 import { create, type StateCreator } from "zustand";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import {
+  peek as peekTerminalService,
+  with as withTerminalService,
+} from "@/services/terminal/terminalInstanceServiceAccessor";
 import {
   clearWorktreeRevealObligations,
   replaceWorktreeRevealObligations,
@@ -25,6 +28,8 @@ import {
   supersedeDeferredHostOwnedWrite,
 } from "@/store/persistence/hostOwnedWrites";
 
+let createDialogOpenings = 0;
+
 interface CreateDialogState {
   isOpen: boolean;
   initialIssue: Issue | null;
@@ -34,6 +39,15 @@ interface CreateDialogState {
   initialAgentId: string | null;
   initialPrompt: string | null;
   onCreated?: (worktreeId: string) => void;
+  /**
+   * The panel kind of the project plugin's `worktreeCreate` view this opening
+   * was handed to. Per opening, so "Standard dialog…" can move one opening to
+   * the stock dialog without touching the saved choice; absent, the stock
+   * dialog shows.
+   */
+  surfacePanelKindId?: string;
+  /** Identifies this opening, so a plugin view's late `close()` can't end a later one. */
+  openingId?: number;
 }
 
 /** What a failed creation's Retry reopens the dialog with. The prompt stays in memory only. */
@@ -397,8 +411,13 @@ interface WorktreeSelectionState {
       initialAgentId?: string | null;
       initialPrompt?: string | null;
       onCreated?: (worktreeId: string) => void;
+      surfacePanelKindId?: string;
     }
   ) => void;
+  /** Moves the open create dialog to the stock dialog, keeping what it was opened with. */
+  showStockCreateDialog: () => void;
+  /** Closes the plugin-owned create dialog only if it is still the opening `openingId`. */
+  closeSurfaceCreateDialog: (openingId: number | undefined) => void;
   openCreateDialogForPR: (pr: PR) => void;
   closeCreateDialog: () => void;
   openBulkCreateDialog: (selectedIssues: Issue[], onComplete?: () => void) => void;
@@ -1231,9 +1250,28 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
         initialAgentId: options?.initialAgentId ?? null,
         initialPrompt: options?.initialPrompt ?? null,
         onCreated: options?.onCreated,
+        surfacePanelKindId: options?.surfacePanelKindId,
+        openingId: ++createDialogOpenings,
       },
     });
   },
+
+  closeSurfaceCreateDialog: (openingId) => {
+    const { createDialog } = get();
+    if (
+      !createDialog.isOpen ||
+      createDialog.surfacePanelKindId === undefined ||
+      createDialog.openingId !== openingId
+    ) {
+      return;
+    }
+    get().closeCreateDialog();
+  },
+
+  showStockCreateDialog: () =>
+    set((state) => ({
+      createDialog: { ...state.createDialog, surfacePanelKindId: undefined },
+    })),
 
   openCreateDialogForPR: (pr) => {
     // Restore the worktree sidebar (only) before opening a dialog that needs
@@ -1621,7 +1659,10 @@ function applyWorktreeTerminalPolicy(
     // BACKGROUND->active transition. It returns early on same-tier VISIBLE,
     // so pair active grid promotion with an explicit wake to pull any bytes
     // that arrived while the renderer was hidden or not yet mounted.
-    terminalInstanceService.applyRendererPolicy(terminal.id, targetTier);
+    withTerminalService(
+      (service) => service.applyRendererPolicy(terminal.id, targetTier),
+      terminal.id
+    );
     if (
       targetTier !== TerminalRefreshTier.BACKGROUND &&
       (!isPtyPanel(terminal) || terminal.hasPty !== false) &&
@@ -1637,7 +1678,7 @@ function applyWorktreeTerminalPolicy(
       // would arm the coordinator across every suite that stubs the service.
       let wakeVerdict: boolean | undefined;
       try {
-        wakeVerdict = terminalInstanceService.wake(terminal.id);
+        wakeVerdict = peekTerminalService()?.wake(terminal.id);
       } catch (error) {
         wakeVerdict = false;
         logErrorWithContext(error, {

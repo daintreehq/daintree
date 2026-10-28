@@ -27,6 +27,20 @@ describe("contributes.databases", () => {
     ]);
   });
 
+  it("accepts a whole, non-negative schemaVersion and refuses anything else", () => {
+    const parse = (schemaVersion: unknown) =>
+      parseProject(
+        projectManifest({
+          capabilities: ["fs:project-write"],
+          contributes: { databases: [{ id: "ledger", schemaVersion }] },
+        })
+      );
+    const accepted = parse(3);
+    expect(accepted.success && accepted.data.contributes.databases?.[0]?.schemaVersion).toBe(3);
+    expect(parse(0).success).toBe(true);
+    for (const bad of [-1, 1.5, "3"]) expect(parse(bad).success).toBe(false);
+  });
+
   it("requires fs:project-write for a project database", () => {
     const result = parseProject(
       projectManifest({ contributes: { databases: [{ id: "ledger" }] } })

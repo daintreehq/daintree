@@ -1,4 +1,5 @@
 import { useWaitingTerminals } from "@/hooks/useTerminalSelectors";
+import { usePluginAttentionWaitingRows } from "@/hooks/usePluginPanelAttentionRows";
 import { compareWaitingAttention } from "@shared/utils/waitingReasonDisplay";
 import { STATE_COLORS, STATE_ICONS } from "@/components/Worktree/terminalStateConfig";
 import { AgentStatusContainer, type AgentStatusConfig } from "./AgentStatusContainer";
@@ -24,5 +25,13 @@ interface WaitingContainerProps {
 
 export function WaitingContainer({ compact = false }: WaitingContainerProps) {
   const terminals = useWaitingTerminals();
-  return <AgentStatusContainer terminals={terminals} config={WAITING_CONFIG} compact={compact} />;
+  const pluginRows = usePluginAttentionWaitingRows();
+  return (
+    <AgentStatusContainer
+      terminals={terminals}
+      pluginRows={pluginRows}
+      config={WAITING_CONFIG}
+      compact={compact}
+    />
+  );
 }

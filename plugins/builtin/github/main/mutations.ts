@@ -1,8 +1,11 @@
 import type {
   CreateIssueInput,
   CreatePRInput,
+  DisableAutoMergeResult,
   EditIssueInput,
   EditPRInput,
+  EnableAutoMergeInput,
+  EnableAutoMergeResult,
   ForgeLabel,
   ForgeUser,
   Issue,
@@ -20,8 +23,12 @@ import type {
 import { GitHubAuth, GITHUB_API_TIMEOUT_MS } from "./GitHubAuth.js";
 import {
   GET_PR_NODE_ID_QUERY,
+  GET_PR_MERGE_STATE_QUERY,
   CONVERT_PR_TO_DRAFT_MUTATION,
   MARK_PR_READY_FOR_REVIEW_MUTATION,
+  ENABLE_PR_AUTO_MERGE_MUTATION,
+  DISABLE_PR_AUTO_MERGE_MUTATION,
+  DEQUEUE_PR_MUTATION,
 } from "./GitHubQueries.js";
 import {
   bumpIssueCommentsEpoch,
@@ -32,6 +39,8 @@ import {
 } from "./GitHubCaches.js";
 import {
   isoToMs,
+  mapMergeIntent,
+  mapMergeStatus,
   restToForgeIssue,
   restToForgeLabels,
   restToForgePR,
@@ -452,10 +461,19 @@ export async function mergePRImpl(
   input?: MergePRInput
 ): Promise<MergePRResult> {
   const token = requireGitHubToken();
+  // REST `sha` pins the head; only a read before the write can pin the base.
+  if (input?.expectedBaseRef) {
+    assertPinned(prNumber, await fetchPRMergeState(repo, prNumber), {
+      expectedBaseRef: input.expectedBaseRef,
+    });
+  }
   const requestBody: Record<string, unknown> = {};
   if (input?.mergeMethod) requestBody.merge_method = input.mergeMethod;
   if (input?.commitTitle) requestBody.commit_title = input.commitTitle;
   if (input?.commitMessage) requestBody.commit_message = input.commitMessage;
+  // Without `sha` GitHub merges whatever the head is now, and its 409 below
+  // can never fire.
+  if (input?.expectedHeadSha) requestBody.sha = input.expectedHeadSha;
 
   const url = `https://api.github.com/repos/${repo.owner}/${repo.repo}/pulls/${prNumber}/merge`;
   const response = await fetch(url, {
@@ -468,6 +486,14 @@ export async function mergePRImpl(
     const text = await response.text().catch(() => "");
     // Classify by status, not message substring (lesson from #7079).
     if (response.status === 405) {
+      // This endpoint can't merge through a merge queue, and its 405 doesn't
+      // say so. Ask the PR itself rather than parse the message.
+      const state = await fetchPRMergeState(repo, prNumber).catch(() => null);
+      if (state?.mergeQueueRequired) {
+        throw new Error(
+          `Pull request #${prNumber} targets a branch that merges through a merge queue — use Merge when ready to add it to the queue.`
+        );
+      }
       throw new Error(
         `Pull request #${prNumber} is not mergeable — it may be a draft, have conflicts, or fail required checks.`
       );
@@ -497,6 +523,149 @@ export async function mergePRImpl(
     merged: typeof data.merged === "boolean" ? data.merged : true,
     message: typeof data.message === "string" ? data.message : "",
   };
+}
+
+interface PRMergeStateRead {
+  id: string;
+  headSha: string | null;
+  baseRef: string | null;
+  mergeQueueRequired: boolean;
+  inQueue: boolean;
+  autoMergeArmed: boolean;
+  immediatelyMergeable: boolean;
+}
+
+// Uncached on purpose: every caller is about to write against this state.
+async function fetchPRMergeState(repo: RepoRef, prNumber: number): Promise<PRMergeStateRead> {
+  const response = await dispatchQuery(
+    GET_PR_MERGE_STATE_QUERY,
+    { owner: repo.owner, repo: repo.repo, number: prNumber },
+    "GET_PR_MERGE_STATE_QUERY"
+  );
+  const pr = (response as { repository?: { pullRequest?: Record<string, unknown> | null } | null })
+    ?.repository?.pullRequest;
+  if (!pr || typeof pr.id !== "string" || !pr.id) {
+    throw new Error(`Pull request #${prNumber} not found.`);
+  }
+  const mergeQueueRequired = pr.isMergeQueueEnabled === true;
+  const status = mapMergeStatus(pr.mergeStateStatus);
+  return {
+    id: pr.id,
+    headSha: typeof pr.headRefOid === "string" && pr.headRefOid ? pr.headRefOid : null,
+    baseRef: typeof pr.baseRefName === "string" && pr.baseRefName ? pr.baseRefName : null,
+    mergeQueueRequired,
+    inQueue: pr.isInMergeQueue === true,
+    autoMergeArmed: pr.autoMergeRequest != null,
+    // GitHub won't arm auto-merge on these, and the same three are what `gh pr
+    // merge --auto` treats as mergeable now. A queue branch always arms.
+    immediatelyMergeable:
+      !mergeQueueRequired &&
+      (status === "clean" || status === "has_hooks" || status === "unstable"),
+  };
+}
+
+function headMovedError(prNumber: number): Error {
+  return new Error(
+    `Pull request #${prNumber} has new commits since you reviewed it — review the new head and try again.`
+  );
+}
+
+function retargetedError(prNumber: number, expected: string): Error {
+  return new Error(
+    `Pull request #${prNumber} no longer targets ${expected} — review where it merges and try again.`
+  );
+}
+
+// The head pin can't see a retarget: the same commits can move to another base.
+function assertPinned(
+  prNumber: number,
+  state: PRMergeStateRead,
+  pins: { expectedHeadSha?: string; expectedBaseRef?: string }
+): void {
+  if (pins.expectedHeadSha && state.headSha && state.headSha !== pins.expectedHeadSha) {
+    throw headMovedError(prNumber);
+  }
+  if (pins.expectedBaseRef && state.baseRef && state.baseRef !== pins.expectedBaseRef) {
+    throw retargetedError(prNumber, pins.expectedBaseRef);
+  }
+}
+
+function alreadyMergeable(prNumber: number): EnableAutoMergeResult {
+  return {
+    prNumber,
+    outcome: "already-mergeable",
+    message: `Pull request #${prNumber} can already be merged, so GitHub won't arm auto-merge for it.`,
+  };
+}
+
+/**
+ * Arm "merge when ready" against the head the caller reviewed. Never merges:
+ * a PR GitHub reports as mergeable now comes back `already-mergeable` for the
+ * caller to put back in front of the user.
+ */
+export async function enableAutoMergeImpl(
+  repo: RepoRef,
+  prNumber: number,
+  input: EnableAutoMergeInput
+): Promise<EnableAutoMergeResult> {
+  const before = await fetchPRMergeState(repo, prNumber);
+  assertPinned(prNumber, before, input);
+  if (before.immediatelyMergeable) return alreadyMergeable(prNumber);
+
+  let response: unknown;
+  try {
+    response = await dispatchQuery(
+      ENABLE_PR_AUTO_MERGE_MUTATION,
+      {
+        id: before.id,
+        expectedHeadOid: input.expectedHeadSha,
+        // A merge queue picks its own method and GitHub ignores ours there.
+        mergeMethod:
+          !before.mergeQueueRequired && input.mergeMethod ? input.mergeMethod.toUpperCase() : null,
+      },
+      "enablePullRequestAutoMerge"
+    );
+  } catch (error) {
+    // GraphQL rejections carry no stable code, so classify by what the PR
+    // reports now: it may have turned clean, or moved, between read and write.
+    const after = await fetchPRMergeState(repo, prNumber).catch(() => null);
+    if (after) assertPinned(prNumber, after, input);
+    if (after?.immediatelyMergeable) return alreadyMergeable(prNumber);
+    throw error;
+  }
+  clearPRCaches();
+  const pullRequest = (
+    response as { enablePullRequestAutoMerge?: { pullRequest?: unknown } } | null
+  )?.enablePullRequestAutoMerge?.pullRequest;
+  const mergeIntent =
+    pullRequest && typeof pullRequest === "object"
+      ? (mapMergeIntent(pullRequest as Record<string, unknown>) ?? null)
+      : null;
+  return { prNumber, outcome: "armed", mergeIntent };
+}
+
+/**
+ * Cancel a pending merge, whichever form it is in when the request runs: a
+ * queued PR is dequeued, an armed one disarmed.
+ */
+export async function disableAutoMergeImpl(
+  repo: RepoRef,
+  prNumber: number
+): Promise<DisableAutoMergeResult> {
+  const state = await fetchPRMergeState(repo, prNumber);
+  if (state.inQueue) {
+    await dispatchQuery(DEQUEUE_PR_MUTATION, { id: state.id }, "dequeuePullRequest");
+    clearPRCaches();
+    return { prNumber, outcome: "dequeued" };
+  }
+  if (!state.autoMergeArmed) return { prNumber, outcome: "not-pending" };
+  await dispatchQuery(
+    DISABLE_PR_AUTO_MERGE_MUTATION,
+    { id: state.id },
+    "disablePullRequestAutoMerge"
+  );
+  clearPRCaches();
+  return { prNumber, outcome: "disarmed" };
 }
 
 /**

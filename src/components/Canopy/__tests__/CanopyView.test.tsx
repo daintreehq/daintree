@@ -36,15 +36,55 @@ afterAll(() => {
 
 const dispatchMock = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
 vi.mock("@/services/ActionService", () => ({ actionService: { dispatch: dispatchMock } }));
+interface ReplyRoute {
+  submitText: (text: string, imagePaths: readonly string[]) => Promise<boolean>;
+  sendEnter: () => void;
+}
+// What the pane hands its terminal and reply, for a test to open the stream and send.
+const pane = vi.hoisted(() => ({
+  stream: null as
+    ((state: { watchId: number; ended: boolean; secretPrompt: boolean }) => void) | null,
+  reply: null as {
+    submitText: (text: string, imagePaths: readonly string[]) => Promise<boolean>;
+    modEnterSend?: () => ReplyRoute;
+    ref?: React.Ref<{ focus: () => void }>;
+  } | null,
+  /** The reply draws an editor that takes the keyboard; off, it draws nothing. */
+  editable: false,
+}));
 // The pane's live terminal needs a canvas and a PTY host; the list is what is tested here.
 vi.mock("../CanopyTerminal", () => ({
-  CanopyTerminal: ({ runId }: { runId: string }) => (
-    <div data-canopy-terminal="" data-run={runId}>
-      <textarea aria-label="Terminal input" />
-    </div>
-  ),
+  CanopyTerminal: ({
+    runId,
+    onStreamChange,
+  }: {
+    runId: string;
+    onStreamChange: NonNullable<typeof pane.stream>;
+  }) => {
+    pane.stream = onStreamChange;
+    return (
+      <div data-canopy-terminal="" data-run={runId}>
+        <textarea aria-label="Terminal input" />
+      </div>
+    );
+  },
 }));
-vi.mock("@/components/Terminal/HybridInputBar", () => ({ HybridInputBar: () => null }));
+vi.mock("@/components/Terminal/HybridInputBar", async () => {
+  const { useImperativeHandle, useRef } = await import("react");
+  return {
+    HybridInputBar: (props: NonNullable<typeof pane.reply>) => {
+      pane.reply = props;
+      const editor = useRef<HTMLDivElement>(null);
+      useImperativeHandle(props.ref, () => ({ focus: () => editor.current?.focus() }));
+      if (!pane.editable) return null;
+      return (
+        <div className="cm-editor">
+          <div ref={editor} tabIndex={-1} data-reply-editor="" />
+        </div>
+      );
+    },
+  };
+});
 vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
 const lifecycle = vi.hoisted(() => new Set<(phase: string) => void>());
 const viewCached = vi.hoisted(() => ({ current: false }));
@@ -59,8 +99,9 @@ vi.mock("@/lib/viewCacheState", async (importOriginal) => ({
 
 import { notify } from "@/lib/notify";
 import { CanopyView } from "../CanopyView";
-import { CANOPY_BETA_TERMS, CANOPY_TITLE, CANOPY_WAITLIST_URL } from "../canopyTerms";
+import { CANOPY_TITLE } from "../canopyTerms";
 import { useCanopyStore } from "@/store/canopyStore";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { useProjectStore } from "@/store/projectStore";
 import { __resetCanopySeenForTests } from "@/lib/canopySeen";
@@ -83,7 +124,6 @@ function run(runId: string, overrides: Partial<FleetSnapshot["runs"][number]> = 
 const canopySnapshot: CanopySnapshot = {
   mode: "on",
   activated: true,
-  tier: "priority",
   dispositions: [],
   seen: [],
   reads: [],
@@ -95,6 +135,13 @@ const canopySnapshot: CanopySnapshot = {
   lastError: null,
   failedRuns: [],
   glances: [],
+};
+
+let fleetApi = {
+  parkRun: vi.fn(async (_runId: string, _input?: unknown) => {}),
+  unparkRun: vi.fn(async (_runId: string) => {}),
+  snoozeRun: vi.fn(async (_runId: string, _option: string) => {}),
+  unsnoozeRun: vi.fn(async (_runId: string) => {}),
 };
 
 function installElectron(
@@ -153,6 +200,14 @@ function installElectron(
         [] as string[]
     ),
     captureBackdrop: vi.fn(async () => null),
+    // No assistants: a full, empty directory of this machine.
+    readAgentDirectory: vi.fn(async () => ({
+      coverage: "ok" as const,
+      observedAt: 1,
+      complete: true,
+      omitted: 0,
+      entries: [],
+    })),
     rename: vi.fn(async (_runId: string, _target: { spawnedAt: number }, _title: string) => {}),
     setMode: vi.fn(async (mode: CanopySnapshot["mode"], _expectRevision?: number) => ({
       ...snapshot,
@@ -161,12 +216,32 @@ function installElectron(
       activated: mode === "on",
     })),
   };
+  fleetApi = {
+    parkRun: vi.fn(async () => {}),
+    unparkRun: vi.fn(async () => {}),
+    snoozeRun: vi.fn(async () => {}),
+    unsnoozeRun: vi.fn(async () => {}),
+  };
   Object.defineProperty(window, "electron", {
-    value: { canopy, terminal: { restore: vi.fn() }, system: { openExternal: vi.fn() } },
+    value: {
+      canopy,
+      fleet: fleetApi,
+      terminal: { restore: vi.fn() },
+      system: { openExternal: vi.fn() },
+    },
     configurable: true,
     writable: true,
   });
   return canopy;
+}
+
+async function openOffer() {
+  await act(async () => {
+    fireEvent.click(
+      within(document.body).getByRole("button", { name: "Turn on reading", hidden: true })
+    );
+  });
+  await frames();
 }
 
 function screenButton(root: HTMLElement, name: string): HTMLElement {
@@ -177,6 +252,20 @@ function screenButton(root: HTMLElement, name: string): HTMLElement {
   return found;
 }
 
+/** The header's line beside the title. */
+function summaryWords() {
+  return document.querySelector("[data-testid=canopy-summary]")?.textContent ?? "";
+}
+
+/** What the empty Needs you band says, above the listbox; null while it has rows. */
+function bandWords() {
+  return (
+    document.querySelector(
+      "[role=group][aria-labelledby=canopy-needs-you-label] [data-canopy-empty-line]"
+    )?.textContent ?? null
+  );
+}
+
 /** Drain the landing effect's two animation frames. */
 async function frames() {
   await act(async () => {
@@ -184,7 +273,40 @@ async function frames() {
   });
 }
 
+/** jsdom lays nothing out: rows are in view only when a test says so. */
+type FakeEntry = { target: Element; isIntersecting: boolean; intersectionRatio: number };
+type FakeObserverState = { cb: (entries: FakeEntry[]) => void; targets: Set<Element> };
+const observers = new Set<FakeObserverState>();
+class FakeIntersectionObserver {
+  private state: FakeObserverState;
+  constructor(cb: (entries: FakeEntry[]) => void) {
+    this.state = { cb, targets: new Set() };
+    observers.add(this.state);
+  }
+  observe(el: Element) {
+    this.state.targets.add(el);
+  }
+  unobserve(el: Element) {
+    this.state.targets.delete(el);
+  }
+  disconnect() {
+    observers.delete(this.state);
+  }
+}
+const realIntersectionObserver = globalThis.IntersectionObserver;
+function setInView(runId: string, ratio: number) {
+  act(() => {
+    for (const { cb, targets } of observers) {
+      const target = [...targets].find((el) => el.id === `canopy-card-${runId}`);
+      if (target) cb([{ target, isIntersecting: ratio > 0, intersectionRatio: ratio }]);
+    }
+  });
+}
+
 beforeEach(() => {
+  observers.clear();
+  window.localStorage.removeItem("daintree-canopy-acknowledged");
+  vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
   __resetCanopySeenForTests();
   __resetCanopyPlaceForTests();
   vi.spyOn(document, "hasFocus").mockReturnValue(true);
@@ -217,6 +339,7 @@ afterEach(() => {
   });
   window.localStorage.removeItem("daintree-canopy-order");
   vi.useRealTimers();
+  vi.stubGlobal("IntersectionObserver", realIntersectionObserver);
   vi.clearAllMocks();
   vi.restoreAllMocks();
 });
@@ -467,26 +590,54 @@ describe("CanopyView search", () => {
 });
 
 describe("CanopyView", () => {
-  it("reads nothing until the user turns it on, showing a demo and what it sends", async () => {
-    const canopy = installElectron({ ...canopySnapshot, activated: false, tier: "free" });
-    useCanopyStore.setState({ snapshot: { ...canopySnapshot, activated: false, tier: "free" } });
+  it("lists the agents Daintree observes with the reader off, offering reading beside them", async () => {
+    const canopy = installElectron({ ...canopySnapshot, activated: false, cards: [], glances: [] });
+    useCanopyStore.setState({
+      snapshot: { ...canopySnapshot, activated: false, cards: [], glances: [] },
+    });
     render(<CanopyView />);
     await frames();
     const dialog = document.querySelector<HTMLElement>("[data-testid=canopy-dialog]")!;
-    expect(dialog.textContent).toContain(
-      "sends your agents' terminal output to Daintree's servers"
-    );
-    // What it sends, how far redaction goes, and how to stop, said where consent is given.
-    expect(dialog.textContent).toContain("recent scrollback");
-    expect(dialog.textContent).toContain("This can miss some secrets.");
+    expect(dialog.querySelector("[role=listbox]")).not.toBeNull();
+    expect(dialog.querySelectorAll("[data-canopy-card]").length).toBeGreaterThan(0);
+    expect(dialog.textContent).not.toContain("Reading the screen");
+    expect(dialog.textContent).not.toContain("Checking who needs you");
+    expect(dialog.querySelector('button[aria-label="Refresh"]')).toBeNull();
+    expect(dialog.querySelector("[data-canopy-pitch], #canopy-pitch-title")).toBeNull();
+    expect(canopy.setMode).not.toHaveBeenCalled();
+    await openOffer();
+    expect(document.getElementById("canopy-pitch-title")).not.toBeNull();
+    expect(canopy.setMode).not.toHaveBeenCalled();
+  });
+
+  it("still offers reading, quietly, when the reader is off and no agent runs", async () => {
+    const off = { ...canopySnapshot, activated: false, cards: [], glances: [] };
+    installElectron(off);
+    useCanopyStore.setState({ snapshot: off });
+    useFleetSnapshotStore.setState({
+      snapshot: { ...useFleetSnapshotStore.getState().snapshot!, runs: [] },
+    });
+    render(<CanopyView />);
+    await frames();
+    expect(document.body.textContent).toContain("Launch an agent from the toolbar");
+    await openOffer();
+    expect(document.getElementById("canopy-pitch-title")).not.toBeNull();
+  });
+
+  it("reads nothing until the user turns it on, showing a demo and what turning it on does", async () => {
+    const canopy = installElectron({ ...canopySnapshot, activated: false });
+    useCanopyStore.setState({ snapshot: { ...canopySnapshot, activated: false } });
+    render(<CanopyView />);
+    await frames();
+    await openOffer();
+    const dialog = document.querySelector<HTMLElement>("[data-testid=canopy-dialog]")!;
+    // What turning it on does, and how to stop, said where it is turned on.
+    expect(dialog.textContent).toContain("Nothing it reads leaves this computer.");
     expect(dialog.textContent).toContain("Settings > Canopy");
+    expect(dialog.textContent).not.toMatch(/servers|paid|beta|privacy/i);
     expect(within(document.body).getByRole("dialog", { name: CANOPY_TITLE })).toBeTruthy();
     // The keyboard lands on the offer's heading: Enter alone agrees to nothing.
     expect(document.activeElement?.id).toBe("canopy-pitch-title");
-    fireEvent.click(screenButton(dialog, "Privacy policy"));
-    expect(window.electron.system.openExternal).toHaveBeenLastCalledWith(
-      "https://daintree.org/privacy"
-    );
     // The demo's made-up agents, never the user's own runs, and nothing streamed.
     const rows = [...dialog.querySelectorAll<HTMLElement>("[data-canopy-card]")];
     expect(rows.length).toBeGreaterThan(0);
@@ -494,7 +645,6 @@ describe("CanopyView", () => {
     expect(rows.every((row) => row.closest("[inert]") !== null)).toBe(true);
     expect(dialog.querySelector("[role=listbox]")).toBeNull();
     expect(dialog.querySelector("[data-canopy-terminal]")).toBeNull();
-    expect(canopy.markSeen).not.toHaveBeenCalled();
 
     await act(async () => {
       fireEvent.click(screenButton(dialog, "Turn on Canopy"));
@@ -510,7 +660,6 @@ describe("CanopyView", () => {
       ...canopySnapshot,
       mode: "unset" as const,
       activated: false,
-      tier: "free" as const,
     };
     const canopy = installElectron(off);
     useCanopyStore.setState({ snapshot: off, mode: "unset" });
@@ -518,6 +667,7 @@ describe("CanopyView", () => {
     notifySpy.mockClear();
     render(<CanopyView />);
     await frames();
+    await openOffer();
     const dialog = document.querySelector<HTMLElement>("[data-testid=canopy-dialog]")!;
     await act(async () => {
       fireEvent.click(screenButton(dialog, "Hide Canopy"));
@@ -543,7 +693,6 @@ describe("CanopyView", () => {
       ...canopySnapshot,
       mode: "unset" as const,
       activated: false,
-      tier: "free" as const,
     };
     const canopy = installElectron(off);
     useCanopyStore.setState({ snapshot: off, mode: "unset" });
@@ -551,6 +700,7 @@ describe("CanopyView", () => {
     notifySpy.mockClear();
     render(<CanopyView />);
     await frames();
+    await openOffer();
     const dialog = document.querySelector<HTMLElement>("[data-testid=canopy-dialog]")!;
     await act(async () => {
       fireEvent.click(screenButton(dialog, "Hide Canopy"));
@@ -577,7 +727,6 @@ describe("CanopyView", () => {
       ...canopySnapshot,
       mode: "unset" as const,
       activated: false,
-      tier: "free" as const,
     };
     const canopy = installElectron(off);
     useCanopyStore.setState({ snapshot: off, mode: "unset" });
@@ -585,6 +734,7 @@ describe("CanopyView", () => {
     notifySpy.mockClear();
     render(<CanopyView />);
     await frames();
+    await openOffer();
     const dialog = document.querySelector<HTMLElement>("[data-testid=canopy-dialog]")!;
     await act(async () => {
       fireEvent.click(screenButton(dialog, "Hide Canopy"));
@@ -609,7 +759,6 @@ describe("CanopyView", () => {
       ...canopySnapshot,
       mode: "unset" as const,
       activated: false,
-      tier: "free" as const,
     };
     const canopy = installElectron(off);
     canopy.setMode.mockRejectedValueOnce(new Error("rate limited"));
@@ -617,6 +766,7 @@ describe("CanopyView", () => {
     vi.mocked(notify).mockClear();
     render(<CanopyView />);
     await frames();
+    await openOffer();
     const dialog = document.querySelector<HTMLElement>("[data-testid=canopy-dialog]")!;
     await act(async () => {
       fireEvent.click(screenButton(dialog, "Hide Canopy"));
@@ -624,38 +774,6 @@ describe("CanopyView", () => {
     expect(useCanopyStore.getState().isOpen).toBe(true);
     expect(dialog.textContent).toContain("Couldn't hide Canopy. Try again.");
     expect(vi.mocked(notify)).not.toHaveBeenCalled();
-  });
-
-  it("tells a free user every time that the beta is free, and a paying one never", async () => {
-    installElectron({ ...canopySnapshot, tier: "free" });
-    useCanopyStore.setState({ snapshot: { ...canopySnapshot, tier: "free" } });
-    const free = render(<CanopyView />);
-    await frames();
-    const notice = CANOPY_BETA_TERMS;
-    const dialog = document.querySelector<HTMLElement>("[data-testid=canopy-dialog]")!;
-    expect(dialog.textContent).toContain(notice);
-    // No free tier promised past the beta.
-    expect(dialog.textContent).not.toContain("slower queue");
-    expect(dialog.textContent).not.toContain("$");
-    const openExternal = vi.mocked(window.electron.system.openExternal);
-    fireEvent.click(screenButton(dialog, "Send feedback"));
-    expect(openExternal).toHaveBeenLastCalledWith(
-      "mailto:greg@daintree.org?subject=Canopy%20beta%20feedback"
-    );
-    // The waitlist is a page on the website, opened in the browser.
-    fireEvent.click(screenButton(dialog, "Paid plan waitlist"));
-    expect(openExternal).toHaveBeenLastCalledWith(CANOPY_WAITLIST_URL);
-    expect(new URL(CANOPY_WAITLIST_URL).protocol).toBe("https:");
-    expect(screenButton(dialog, "Paid plan waitlist")).toBeTruthy();
-    free.unmount();
-
-    installElectron();
-    useCanopyStore.setState({ snapshot: canopySnapshot });
-    render(<CanopyView />);
-    await frames();
-    expect(document.querySelector("[data-testid=canopy-dialog]")?.textContent).not.toContain(
-      notice
-    );
   });
 
   it("shows a pressed refresh as busy until it is done", async () => {
@@ -692,9 +810,9 @@ describe("CanopyView", () => {
     expect(document.body.textContent).toContain("Move down or up");
     expect(document.body.textContent).toContain("First or last agent");
     expect(document.body.textContent).toContain("Close Canopy");
-    // Off the Mac, only from a reply: the terminal keeps Ctrl+W for the shell.
-    expect(document.body.textContent).toMatch(/in a reply: close Canopy/i);
-    expect(document.body.textContent).not.toMatch(/trash the agent's terminal/i);
+    // In the pane it trashes the agent's terminal; off the Mac only from a
+    // reply, since the terminal keeps Ctrl+W for the shell.
+    expect(document.body.textContent).toMatch(/in a reply: trash the agent's terminal/i);
   });
 
   it("steps to the next agent with ⌘↓ from inside its terminal, keeping the keyboard in the pane", async () => {
@@ -832,6 +950,174 @@ describe("CanopyView", () => {
     expect(document.activeElement).toBe(chosen);
   });
 
+  describe("after a reply or an answer", () => {
+    const approvalCard = (runId: string): CanopyCard => ({
+      ...stuckCard(runId),
+      category: "approval",
+      wordsCategory: "approval",
+      question: "Do you want to proceed?",
+      options: ["Yes", "No"],
+      risk: "none",
+    });
+
+    beforeEach(() => {
+      pane.stream = null;
+      pane.reply = null;
+      pane.editable = true;
+      useFleetSnapshotStore.setState({
+        snapshot: {
+          runs: [
+            run("waiting", {
+              agentState: "waiting",
+              waitingReason: "approval",
+              since: NOW - 60_000,
+              title: "Approve the migration",
+            }),
+            run("asking", {
+              agentState: "waiting",
+              waitingReason: "question",
+              since: NOW - 40_000,
+              title: "Pick a port",
+            }),
+            run("working", { agentState: "working", since: NOW - 30_000, title: "Tidy the store" }),
+          ],
+          changedAt: NOW,
+          degraded: false,
+          lastSuccessfulAt: NOW,
+        },
+      });
+    });
+
+    /** The first row chosen, its terminal's stream open and its reply loaded. */
+    async function replyingTo(snapshot: CanopySnapshot = canopySnapshot) {
+      const canopy = installElectron(snapshot);
+      useCanopyStore.setState({ snapshot });
+      const terminalSubmit = vi.fn(async (..._args: unknown[]) => {});
+      const terminalSendKey = vi.fn(async (..._args: unknown[]) => {});
+      Object.assign(canopy, { terminalSubmit, terminalSendKey });
+      const view = render(<CanopyView />);
+      await frames();
+      const first = cards(view.container)[0]!;
+      act(() => first.focus());
+      await act(async () => pane.stream!({ watchId: 7, ended: false, secretPrompt: false }));
+      await vi.waitFor(() => expect(pane.reply).not.toBeNull());
+      const moveOnLine = () =>
+        document.querySelector<HTMLElement>("[data-canopy-move-on]")?.textContent ?? null;
+      const replyEditor = () => document.querySelector<HTMLElement>("[data-reply-editor]")!;
+      return { ...view, canopy, first, terminalSubmit, moveOnLine, replyEditor };
+    }
+
+    afterEach(() => {
+      pane.editable = false;
+    });
+
+    it("stays on the agent a reply was sent to, the keyboard in its reply", async () => {
+      const { container, terminalSubmit, replyEditor } = await replyingTo();
+      expect(liveRun(container)).toBe("waiting");
+      const editor = replyEditor();
+      act(() => editor.focus());
+
+      await act(async () => {
+        await pane.reply!.submitText("Yes, go ahead", []);
+      });
+      await frames();
+
+      expect(terminalSubmit).toHaveBeenCalledWith(7, "Yes, go ahead", undefined);
+      expect(liveRun(container)).toBe("waiting");
+      expect(selectedRun(container)).toBe("waiting");
+      expect(document.activeElement).toBe(editor);
+    });
+
+    it("moves on with ⌘↩ to the agent the reply names, into its reply, and names none past the last", async () => {
+      const { container, moveOnLine, replyEditor } = await replyingTo();
+      expect(moveOnLine()).toContain("Send and go to");
+      expect(moveOnLine()).toContain("Pick a port");
+      act(() => replyEditor().focus());
+
+      const route = pane.reply!.modEnterSend!();
+      await act(async () => {
+        await route.submitText("Yes, go ahead", []);
+      });
+      await frames();
+
+      expect(liveRun(container)).toBe("asking");
+      expect(selectedRun(container)).toBe("asking");
+      expect(document.activeElement?.hasAttribute("data-reply-editor")).toBe(true);
+      expect(document.activeElement?.closest("[data-canopy-detail]")?.id).toBe(
+        "canopy-detail-asking"
+      );
+      // Nothing below needs the user: ⌘↩ from here would send and stay.
+      expect(moveOnLine()).toBe("");
+    });
+
+    it("stays when the agent ⌘↩ named was parked before the send landed", async () => {
+      const { container } = await replyingTo();
+      const route = pane.reply!.modEnterSend!();
+      act(() => {
+        const snapshot = useFleetSnapshotStore.getState().snapshot!;
+        useFleetSnapshotStore.setState({
+          snapshot: {
+            ...snapshot,
+            runs: snapshot.runs.map((r) =>
+              r.runId === "asking" ? { ...r, park: { parkedAt: NOW } } : r
+            ),
+          },
+        });
+      });
+
+      await act(async () => {
+        await route.submitText("Yes, go ahead", []);
+      });
+
+      expect(liveRun(container)).toBe("waiting");
+    });
+
+    it("stays on the agent a choice answered, the keyboard on its row as the choice goes", async () => {
+      const snapshot = { ...canopySnapshot, cards: [approvalCard("waiting")] };
+      const { container, canopy } = await replyingTo(snapshot);
+      const answer = vi.fn(
+        async (_runId: string, _target: { spawnedAt: number }, _label: string) => {}
+      );
+      Object.assign(canopy, { answer });
+      const yes = [...document.querySelectorAll<HTMLElement>("[data-canopy-choices] button")].find(
+        (button) => button.textContent?.includes("Yes")
+      )!;
+      act(() => yes.focus());
+
+      await act(async () => {
+        fireEvent.click(yes);
+      });
+
+      expect(answer).toHaveBeenCalledWith("waiting", { spawnedAt: NOW - 3_600_000 }, "Yes");
+      expect(liveRun(container)).toBe("waiting");
+      expect(document.activeElement?.id).toBe("canopy-card-waiting");
+    });
+
+    it("leaves the keyboard on Reply when the user went there while the answer was on its way", async () => {
+      const snapshot = { ...canopySnapshot, cards: [approvalCard("waiting")] };
+      const { canopy } = await replyingTo(snapshot);
+      let settle!: () => void;
+      const answer = vi.fn(
+        (_runId: string, _target: { spawnedAt: number }, _label: string) =>
+          new Promise<void>((resolve) => (settle = resolve))
+      );
+      Object.assign(canopy, { answer });
+      const choices = [...document.querySelectorAll<HTMLElement>("[data-canopy-choices] button")];
+      const yes = choices.find((button) => button.textContent?.includes("Yes"))!;
+      const reply = choices.find((button) => button.textContent?.includes("Reply"))!;
+      act(() => yes.focus());
+      await act(async () => {
+        fireEvent.click(yes);
+      });
+      act(() => reply.focus());
+
+      await act(async () => settle());
+
+      expect(answer).toHaveBeenCalledTimes(1);
+      expect(document.activeElement).toBe(reply);
+    });
+  });
+
   it("archives the selected run with E and moves the cursor on to the next", async () => {
     const canopy = installElectron();
     vi.mocked(notify).mockClear();
@@ -847,6 +1133,52 @@ describe("CanopyView", () => {
     expect(vi.mocked(notify)).not.toHaveBeenCalled();
     fireEvent.keyDown(second!, { key: "z" });
     expect(canopy.unarchive).toHaveBeenCalledWith("waiting", { spawnedAt: NOW - 3_600_000 });
+  });
+
+  it("names an archive in an Undo line that takes it back, then goes away", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const canopy = installElectron();
+      vi.mocked(notify).mockClear();
+      const { container } = render(<CanopyView />);
+      await frames();
+      await act(async () => {
+        fireEvent.keyDown(cards(container)[0]!, { key: "e" });
+      });
+      const line = () => container.ownerDocument.querySelector("[data-canopy-undo-line]");
+      expect(line()?.textContent).toContain("Archived '");
+      expect(vi.mocked(notify)).not.toHaveBeenCalled();
+      const undo = [...line()!.querySelectorAll("button")].find((b) => b.textContent === "Undo")!;
+      await act(async () => {
+        fireEvent.click(undo);
+      });
+      expect(canopy.unarchive).toHaveBeenCalledWith("waiting", { spawnedAt: NOW - 3_600_000 });
+      expect(line()).toBeNull();
+      // Z after the button finds it done.
+      fireEvent.keyDown(cards(container)[0]!, { key: "z" });
+      expect(canopy.unarchive).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("drops the Undo line after ten seconds", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      installElectron();
+      const { container } = render(<CanopyView />);
+      await frames();
+      await act(async () => {
+        fireEvent.keyDown(cards(container)[0]!, { key: "e" });
+      });
+      expect(container.ownerDocument.querySelector("[data-canopy-undo-line]")).not.toBeNull();
+      await act(async () => {
+        vi.advanceTimersByTime(10_001);
+      });
+      expect(container.ownerDocument.querySelector("[data-canopy-undo-line]")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("renames the selected run from F2 on its row, in its title bar", async () => {
@@ -1033,7 +1365,7 @@ describe("CanopyView", () => {
     const rows = cards(container);
     expect(rows.length).toBeGreaterThan(1);
     for (const row of rows) {
-      const meta = row.querySelector("[data-canopy-meta]");
+      const meta = row.querySelector("[data-canopy-where]");
       expect(meta?.textContent).toContain("🌳");
       expect(meta?.textContent).toContain("app");
     }
@@ -1131,6 +1463,80 @@ describe("CanopyView", () => {
     await act(async () => {});
     expect(useCanopyStore.getState().isOpen).toBe(true);
     delete (window as { __DAINTREE_INITIAL_PROJECT__?: unknown }).__DAINTREE_INITIAL_PROJECT__;
+  });
+
+  describe("reopening after Go to terminal", () => {
+    beforeEach(() => {
+      (window as { __DAINTREE_INITIAL_PROJECT__?: unknown }).__DAINTREE_INITIAL_PROJECT__ = {
+        id: "p1",
+      };
+    });
+    afterEach(() => {
+      delete (window as { __DAINTREE_INITIAL_PROJECT__?: unknown }).__DAINTREE_INITIAL_PROJECT__;
+      vi.useRealTimers();
+    });
+
+    async function goToTerminalFrom(container: HTMLElement, runId: string) {
+      const card = cards(container).find((c) => c.id === `canopy-card-${runId}`)!;
+      act(() => card.focus());
+      fireEvent.keyDown(card, { key: "Enter" });
+      await act(async () => {});
+      expect(useCanopyStore.getState().isOpen).toBe(false);
+    }
+
+    it("lands on the run it was left on, keeping the search, with the keyboard in the search", async () => {
+      installElectron();
+      const { container } = render(<CanopyView />);
+      await frames();
+      await goToTerminalFrom(container, "asking");
+      expect(useCanopyStore.getState().resume?.runId).toBe("asking");
+
+      act(() => useCanopyStore.getState().open());
+      await frames();
+      expect(selectedRun(container)).toBe("asking");
+      expect(document.activeElement).toBe(searchInput());
+      expect(useCanopyStore.getState().resume).toBeNull();
+    });
+
+    it("keeps the search it was left with, and gives a gone run's place to its neighbour", async () => {
+      installElectron();
+      const { container } = render(<CanopyView />);
+      await frames();
+      fireEvent.change(searchInput(), { target: { value: "a" } });
+      await frames();
+      const listed = cards(container).map((c) => c.id.replace(/^canopy-card-/, ""));
+      expect(listed.length).toBeGreaterThan(1);
+      await goToTerminalFrom(container, listed[1]!);
+
+      // The run it was left on has since gone.
+      const { resume } = useCanopyStore.getState();
+      useCanopyStore.setState({
+        resume: { ...resume!, runId: "gone", order: ["gone", ...listed] },
+      });
+      act(() => useCanopyStore.getState().open());
+      await frames();
+      expect(searchInput().value).toBe("a");
+      expect(selectedRun(container)).toBe(listed[0]);
+    });
+
+    it("opens as it does today after a plain close, or after thirty minutes", async () => {
+      installElectron();
+      const { container } = render(<CanopyView />);
+      await frames();
+      fireEvent.keyDown(cards(container)[1]!, { key: "ArrowDown" });
+      act(() => useCanopyStore.getState().close());
+      act(() => useCanopyStore.getState().open());
+      await frames();
+      expect(selectedRun(container)).toBe(cards(container)[0]!.id.replace(/^canopy-card-/, ""));
+
+      await goToTerminalFrom(container, "asking");
+      const { resume } = useCanopyStore.getState();
+      useCanopyStore.setState({ resume: { ...resume!, at: Date.now() - 31 * 60 * 1000 } });
+      act(() => useCanopyStore.getState().open());
+      await frames();
+      expect(selectedRun(container)).toBe(cards(container)[0]!.id.replace(/^canopy-card-/, ""));
+      expect(useCanopyStore.getState().resume).toBeNull();
+    });
   });
 
   it("looks at a run the arrow keys move onto, leaving the reading to the look", async () => {
@@ -1249,6 +1655,8 @@ describe("CanopyView", () => {
       "Read again",
       "Archive",
       "Rename…",
+      "Park…",
+      "Snooze…",
       "Trash terminal…",
     ]);
     expect(
@@ -1258,6 +1666,48 @@ describe("CanopyView", () => {
     ).toBe("E");
     fireEvent.click(items.find((item) => item.textContent?.startsWith("Archive"))!);
     expect(canopy.archive).toHaveBeenCalledWith("waiting", { spawnedAt: NOW - 3_600_000 });
+  });
+
+  it("snoozes a run from the row's menu and wakes one that is snoozed", async () => {
+    installElectron();
+    const { container } = render(<CanopyView />);
+    await frames();
+    fireEvent.contextMenu(cards(container)[1]!, { clientX: 5, clientY: 5 });
+    const trigger = (await within(document.body).findAllByRole("menuitem", { hidden: true })).find(
+      (item) => item.textContent?.startsWith("Snooze")
+    )!;
+    fireEvent.keyDown(trigger, { key: "ArrowRight" });
+    const fifteen = await within(document.body).findByRole("menuitem", {
+      name: "15 minutes",
+      hidden: true,
+    });
+    fireEvent.click(fifteen);
+    expect(fleetApi.snoozeRun).toHaveBeenCalledWith(
+      cards(container)[1]!.id.replace(/^canopy-card-/, ""),
+      "15m"
+    );
+    expect(fleetApi.parkRun).not.toHaveBeenCalled();
+  });
+
+  it("offers Unpark only for a parked run, and lifts the park", async () => {
+    installElectron();
+    const fleet = useFleetSnapshotStore.getState().snapshot!;
+    const target = fleet.runs[0]!.runId;
+    useFleetSnapshotStore.setState({
+      snapshot: {
+        ...fleet,
+        runs: fleet.runs.map((r) =>
+          r.runId === target ? { ...r, park: { parkedAt: NOW - 1000 } as typeof r.park } : r
+        ),
+      },
+    });
+    const { container } = render(<CanopyView />);
+    await frames();
+    const parkedCard = cards(container).find((card) => card.id.endsWith(target))!;
+    fireEvent.contextMenu(parkedCard, { clientX: 5, clientY: 5 });
+    const items = await within(document.body).findAllByRole("menuitem", { hidden: true });
+    fireEvent.click(items.find((item) => item.textContent === "Unpark")!);
+    expect(fleetApi.unparkRun).toHaveBeenCalledWith(target);
   });
 
   it("shows neither the offer nor the inbox until main says whether Canopy is on", async () => {
@@ -1462,6 +1912,45 @@ describe("CanopyView", () => {
     expect(container.ownerDocument.body.textContent).toContain("2 agents need you · 1 unread");
   });
 
+  it("holds exactly the runs the header counts in the Needs you band, ahead of the rest", async () => {
+    installElectron({ ...canopySnapshot, reads: [unreadMark("working", 1)] });
+    const { container } = render(<CanopyView />);
+    await frames();
+    const body = container.ownerDocument.body;
+    const band = body.querySelector("[aria-labelledby=canopy-needs-you-label]")!;
+    const rest = body.querySelector("[aria-labelledby=canopy-everything-else-label]")!;
+    expect(band.querySelectorAll("[data-canopy-card]")).toHaveLength(2);
+    expect([...rest.querySelectorAll("[data-canopy-card]")].map((card) => card.id)).toEqual([
+      "canopy-card-working",
+    ]);
+    expect(body.textContent).toContain("2 agents need you");
+  });
+
+  it("says a filter hides what the header counts when the band is empty under Unread", async () => {
+    installElectron({ ...canopySnapshot, reads: [unreadMark("working", 1)] });
+    const { container } = render(<CanopyView />);
+    await frames();
+    const body = container.ownerDocument.body;
+    fireEvent.click(screenButton(body, "Unread1"));
+    const band = body.querySelector("[aria-labelledby=canopy-needs-you-label]")!;
+    expect(band.querySelectorAll("[data-canopy-card]")).toHaveLength(0);
+    expect(bandWords()).toBe("2 agents need you, but a filter hides them");
+  });
+
+  it("takes the header count to the band and lifts the Unread filter that hides a member", async () => {
+    installElectron({ ...canopySnapshot, reads: [unreadMark("working", 1)] });
+    const { container } = render(<CanopyView />);
+    await frames();
+    const body = container.ownerDocument.body;
+    fireEvent.click(screenButton(body, "Unread1"));
+    expect(cards(container).map((card) => card.id)).toEqual(["canopy-card-working"]);
+    fireEvent.click(body.querySelector<HTMLElement>("[data-testid=canopy-needs-you-count]")!);
+    await frames();
+    expect(useCanopyStore.getState().unreadOnly).toBe(false);
+    const first = body.querySelector("[aria-labelledby=canopy-needs-you-label] [data-canopy-card]");
+    expect(first?.getAttribute("aria-selected")).toBe("true");
+  });
+
   it("opens the selected row's menu from Shift+F10", async () => {
     installElectron();
     const { container } = render(<CanopyView />);
@@ -1493,20 +1982,20 @@ describe("CanopyView", () => {
       fireEvent.keyDown(cards(container)[0]!, { key: "Backspace", metaKey: true, ctrlKey: true });
     });
     expect(canopy.trash).toHaveBeenCalledWith("done", { spawnedAt: NOW - 3_600_000 });
-    // The trash keeps it only briefly and its countdown is behind the panel:
-    // the way back is the toast's Undo, and Z.
-    const toast = vi.mocked(notify).mock.calls.at(-1)![0];
-    expect(toast.title).toBe("Terminal trashed");
-    const undo = toast.actions?.find((action) => action.label === "Undo");
-    expect(undo).toBeTruthy();
+    // No toast: the panel's undo line names it, and it and Z take it back.
+    expect(vi.mocked(notify)).not.toHaveBeenCalled();
+    const line = container.ownerDocument.querySelector("[data-canopy-undo-line]");
+    expect(line?.textContent).toContain("Trashed '");
+    const undo = [...line!.querySelectorAll("button")].find((b) => b.textContent === "Undo")!;
     await act(async () => {
-      fireEvent.keyDown(document.activeElement ?? document.body, { key: "z" });
+      fireEvent.click(undo);
     });
     // By the receipt the trash gave, so only that trash of that terminal comes back.
     expect(canopy.untrash).toHaveBeenCalledWith(7);
-    // The toast's Undo, pressed after Z, finds it done: once only.
+    expect(container.ownerDocument.querySelector("[data-canopy-undo-line]")).toBeNull();
+    // Z, pressed after the line's Undo, finds it done: once only.
     await act(async () => {
-      undo!.onClick();
+      fireEvent.keyDown(document.activeElement ?? document.body, { key: "z" });
     });
     expect(canopy.untrash).toHaveBeenCalledTimes(1);
   });
@@ -1521,13 +2010,15 @@ describe("CanopyView", () => {
       },
     };
     useFleetSnapshotStore.setState(working);
-    // Opening, with words still owed for the working run.
-    const owed = { ...canopySnapshot, wordsDue: ["working"] };
+    // Opening, with the working run's first reading still under way.
+    const owed = { ...canopySnapshot, busy: true };
     useCanopyStore.setState({ snapshot: owed });
     installElectron(owed);
     const first = render(<CanopyView />);
     await frames();
-    expect(first.container.ownerDocument.body.textContent).toContain("Checking who needs you…");
+    // A conclusion held back is the header's own words in the band, never its all-clear.
+    expect(summaryWords()).toContain("Checking who needs you…");
+    expect(bandWords()).toBe("Checking who needs you…");
     first.unmount();
 
     useCanopyStore.setState({ isOpen: true });
@@ -1537,7 +2028,8 @@ describe("CanopyView", () => {
     installElectron(failing);
     render(<CanopyView />);
     await frames();
-    expect(document.body.textContent).toContain("Nothing needs you that Canopy could read");
+    expect(summaryWords()).toContain("Nothing needs you that Canopy could read");
+    expect(bandWords()).toBe("Nothing needs you that Canopy could read");
   });
 
   it("counts as seen only the urgent asks it shows, not those the Unread filter hides", async () => {
@@ -1556,8 +2048,64 @@ describe("CanopyView", () => {
 
     act(() => useCanopyStore.getState().setUnreadOnly(false));
     await frames();
-    // Shown now: its ask leaves the toolbar badge.
+    // Listed now, but not looked at: its ask stays on the toolbar badge.
+    expect(useCanopyStore.getState().acknowledged.working).toBeUndefined();
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    setInView("working", 1);
+    act(() => void vi.advanceTimersByTime(1000));
     expect(useCanopyStore.getState().acknowledged.working).toBe(`${NOW - 3_600_000}:2`);
+  });
+
+  it("keeps the ask of a row nobody scrolled to, and of one in view for under a second or half", async () => {
+    const snap = {
+      ...canopySnapshot,
+      cards: [stuckCard("waiting"), stuckCard("asking"), stuckCard("working")],
+    };
+    useCanopyStore.setState({ snapshot: snap, acknowledged: {} });
+    installElectron(snap);
+    render(<CanopyView />);
+    await frames();
+    // The landing selects the top row, whose pane is open: only it counts as seen.
+    expect(Object.keys(useCanopyStore.getState().acknowledged)).toEqual(["waiting"]);
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    setInView("working", 0.3);
+    setInView("asking", 0.6);
+    act(() => void vi.advanceTimersByTime(900));
+    setInView("asking", 0);
+    act(() => void vi.advanceTimersByTime(1000));
+    expect(Object.keys(useCanopyStore.getState().acknowledged)).toEqual(["waiting"]);
+
+    setInView("asking", 0.6);
+    act(() => void vi.advanceTimersByTime(1000));
+    expect(Object.keys(useCanopyStore.getState().acknowledged)).toEqual(["waiting", "asking"]);
+  });
+
+  it("counts the ask of a row whose pane is opened as seen, in view or not", async () => {
+    const snap = { ...canopySnapshot, cards: [stuckCard("waiting"), stuckCard("working")] };
+    useCanopyStore.setState({ snapshot: snap, acknowledged: {} });
+    installElectron(snap);
+    const { container } = render(<CanopyView />);
+    await frames();
+    const keys = () => Object.keys(useCanopyStore.getState().acknowledged);
+    expect(keys()).not.toContain("working");
+    fireEvent.click(cards(container).find((card) => card.id === "canopy-card-working")!);
+    await frames();
+    expect(keys()).toContain("working");
+  });
+
+  it("does not start the second while the window is unfocused", async () => {
+    const snap = { ...canopySnapshot, cards: [stuckCard("waiting"), stuckCard("working")] };
+    useCanopyStore.setState({ snapshot: snap, acknowledged: {} });
+    installElectron(snap);
+    render(<CanopyView />);
+    await frames();
+    vi.mocked(document.hasFocus).mockReturnValue(false);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    setInView("working", 1);
+    act(() => void vi.advanceTimersByTime(2000));
+    expect(Object.keys(useCanopyStore.getState().acknowledged)).toEqual(["waiting"]);
   });
 
   it('withholds "Nothing needs you" while a read waits to be retried or agent status is unavailable', async () => {
@@ -1582,12 +2130,15 @@ describe("CanopyView", () => {
     installElectron(retrying);
     const first = render(<CanopyView />);
     await frames();
-    expect(document.body.textContent).toContain("Checking who needs you…");
-    // Once the retry is through, the conclusion stands.
+    expect(summaryWords()).toContain("Checking who needs you…");
+    expect(bandWords()).toBe("Checking who needs you…");
+    // Once the retry is through, the conclusion stands: the header draws it and
+    // the band settles it in words of its own.
     act(() => useCanopyStore.getState().applySnapshot({ ...canopySnapshot, cards: [calm] }));
     await frames();
-    expect(document.body.textContent).toContain("Nothing needs you");
+    expect(summaryWords()).toBe("Nothing needs you");
     expect(document.body.textContent).not.toContain("Checking who needs you…");
+    expect(bandWords()).toBe("No action needed");
     first.unmount();
 
     useCanopyStore.setState({ isOpen: true, snapshot: canopySnapshot });
@@ -1595,7 +2146,97 @@ describe("CanopyView", () => {
     installElectron();
     render(<CanopyView />);
     await frames();
-    expect(document.body.textContent).toContain("Can't tell who needs you right now");
+    expect(summaryWords()).toContain("Can't tell who needs you right now");
+    expect(bandWords()).toBe("Can't tell who needs you right now");
+  });
+
+  it("draws no heading over an empty band or over the rest, until the band has rows", async () => {
+    const working = run("working", { agentState: "working", since: NOW - 30_000 });
+    useFleetSnapshotStore.setState({
+      snapshot: { runs: [working], changedAt: NOW, degraded: false, lastSuccessfulAt: NOW },
+    });
+    const calm = {
+      ...stuckCard("working"),
+      priority: 5,
+      attentionScore: 5,
+      headline: "Running the suite",
+    };
+    const settled = { ...canopySnapshot, cards: [calm] };
+    useCanopyStore.setState({ snapshot: settled });
+    installElectron(settled);
+    const { container } = render(<CanopyView />);
+    await frames();
+    const body = container.ownerDocument.body;
+    const band = body.querySelector("[role=group][aria-labelledby=canopy-needs-you-label]")!;
+    expect(bandWords()).toBe("No action needed");
+    // Words, not options: outside the listbox, which still holds the run.
+    expect(band.closest("[role=listbox]")).toBeNull();
+    expect(band.querySelector("[role=option]")).toBeNull();
+    expect(cards(container).map((card) => card.id)).toEqual(["canopy-card-working"]);
+    // Both groups keep their names for the screen reader; neither is drawn.
+    const labelHidden = (id: string) => body.querySelector(`#${id}`)?.classList.contains("sr-only");
+    expect(labelHidden("canopy-needs-you-label")).toBe(true);
+    expect(labelHidden("canopy-everything-else-label")).toBe(true);
+    expect(body.querySelector("[data-canopy-list]")!.hasAttribute("data-band-headings")).toBe(
+      false
+    );
+
+    // An agent stops for the user: the band has a row, and both headings show.
+    act(() =>
+      useFleetSnapshotStore.setState({
+        snapshot: {
+          runs: [
+            working,
+            run("waiting", {
+              agentState: "waiting",
+              waitingReason: "approval",
+              since: NOW - 10_000,
+            }),
+          ],
+          changedAt: NOW + 1,
+          degraded: false,
+          lastSuccessfulAt: NOW,
+        },
+      })
+    );
+    await frames();
+    expect(bandWords()).toBeNull();
+    expect(labelHidden("canopy-needs-you-label")).toBe(false);
+    expect(labelHidden("canopy-everything-else-label")).toBe(false);
+    expect(body.querySelector("[data-canopy-list]")!.hasAttribute("data-band-headings")).toBe(true);
+  });
+
+  it("words the empty band as the header does with the reader off, never as the all-clear", async () => {
+    useFleetSnapshotStore.setState({
+      snapshot: {
+        runs: [run("working", { agentState: "working", since: NOW - 30_000 })],
+        changedAt: NOW,
+        degraded: false,
+        lastSuccessfulAt: NOW,
+      },
+    });
+    const off = { ...canopySnapshot, activated: false, cards: [], glances: [] };
+    installElectron(off);
+    useCanopyStore.setState({ snapshot: off });
+    render(<CanopyView />);
+    await frames();
+    expect(summaryWords()).toContain("No agent is waiting on you");
+    expect(bandWords()).toBe("No agent is waiting on you");
+  });
+
+  it("says nothing is unread in a line of its own, with when each comes back", async () => {
+    installElectron();
+    const { container } = render(<CanopyView />);
+    await frames();
+    fireEvent.click(screenButton(container.ownerDocument.body, "Unread"));
+    await frames();
+    expect(cards(container)).toHaveLength(0);
+    const line = [...document.querySelectorAll("[data-canopy-empty-line]")].find(
+      (candidate) => candidate.querySelector("p")?.textContent === "Nothing unread"
+    );
+    expect(line?.textContent).toBe(
+      "Nothing unreadEach agent shows here again when it does something new"
+    );
   });
 
   it("lists a working run with the rest and lands on the top of the list", async () => {
@@ -1612,7 +2253,12 @@ describe("CanopyView", () => {
     await frames();
     expect(cards(container).map((card) => card.id)).toEqual(["canopy-card-working"]);
     expect(liveRun(container)).toBe("working");
-    expect(container.ownerDocument.body.textContent).not.toContain("Everything else");
+    const body = container.ownerDocument.body;
+    expect(body.querySelector("#canopy-needs-you-label")).not.toBeNull();
+    expect(
+      body.querySelector("[role=group][aria-labelledby=canopy-needs-you-label]")?.textContent
+    ).toContain("Not every agent could be read yet");
+    expect(body.querySelector("#canopy-everything-else-label")).not.toBeNull();
   });
 
   it("tells main when a look at the shown run starts and ends, and starts none while the window is away", async () => {
@@ -1640,6 +2286,7 @@ describe("CanopyView", () => {
           ids: ["waiting", "asking", "working"],
           rankedFor: canopySnapshot.refreshedAt,
           urgent: [],
+          band: ["waiting", "asking"],
         },
       },
     });
@@ -1692,17 +2339,210 @@ describe("CanopyView", () => {
     expect(order()).toEqual(["working", "waiting", "asking"]);
   });
 
+  it("holds a replied row in the band while it is selected, and lets it go at a later re-rank", async () => {
+    installElectron();
+    const { container } = render(<CanopyView />);
+    await frames();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const body = container.ownerDocument.body;
+    const band = () =>
+      [
+        ...body.querySelectorAll<HTMLElement>(
+          "[aria-labelledby=canopy-needs-you-label] [data-canopy-card]"
+        ),
+      ].map((card) => card.id.replace("canopy-card-", ""));
+    const press = (card: HTMLElement) => {
+      fireEvent.pointerDown(card);
+      fireEvent.pointerUp(card);
+      fireEvent.click(card);
+    };
+    const sortNow = () =>
+      Array.from(body.querySelectorAll<HTMLButtonElement>("button")).find(
+        (button) => button.textContent === "Sort now"
+      );
+    expect(band()).toEqual(["waiting", "asking"]);
+    press(cards(container)[1]!);
+    // The reply lands as handled, with no scan behind it.
+    const replied = {
+      ...canopySnapshot,
+      dispositions: [
+        { runId: "asking", spawnedAt: NOW - 3_600_000, kind: "replied" as const, at: NOW },
+      ],
+    };
+    act(() => useCanopyStore.setState({ snapshot: replied }));
+    expect(band()).toEqual(["waiting", "asking"]);
+    expect(body.querySelector("#canopy-card-asking")?.textContent).toContain("Replied");
+    expect(body.textContent).toContain("1 agent needs you");
+    expect(sortNow()).toBeUndefined();
+    // A scan lands and the list re-ranks once left alone: still selected, it
+    // stays in the band.
+    act(() => useCanopyStore.setState({ snapshot: { ...replied, refreshedAt: NOW + 10_000 } }));
+    expect(sortNow()).toBeDefined();
+    act(() => {
+      vi.advanceTimersByTime(20_000);
+    });
+    expect(sortNow()).toBeUndefined();
+    expect(band()).toEqual(["waiting", "asking"]);
+
+    // Moving on doesn't take it out from under the user; the next re-rank does.
+    press(cards(container)[0]!);
+    expect(band()).toEqual(["waiting", "asking"]);
+    // Back on it in the same render a Sort now lands in: the rank pins it.
+    expect(sortNow()).toBeDefined();
+    act(() => {
+      fireEvent.click(cards(container)[1]!);
+      fireEvent.click(sortNow()!);
+    });
+    expect(band()).toEqual(["waiting", "asking"]);
+    press(cards(container)[0]!);
+    act(() => {
+      vi.advanceTimersByTime(10_000);
+    });
+    expect(band()).toEqual(["waiting"]);
+    expect(body.textContent).toContain("1 agent needs you");
+  });
+
+  it("keeps a run whose reading crosses the floor out of the band until the list may re-rank", async () => {
+    installElectron();
+    const { container } = render(<CanopyView />);
+    await frames();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const doc = container.ownerDocument;
+    const band = () =>
+      [
+        ...doc.querySelectorAll<HTMLElement>(
+          "[aria-labelledby=canopy-needs-you-label] [data-canopy-card]"
+        ),
+      ].map((card) => card.id.replace("canopy-card-", ""));
+    const sortNow = () =>
+      Array.from(doc.querySelectorAll<HTMLButtonElement>("button")).find(
+        (button) => button.textContent === "Sort now"
+      );
+    const list = doc.querySelector<HTMLElement>("[role=listbox]")!;
+    fireEvent.pointerEnter(list);
+    // Read as needing the user, though not as an urgent ask.
+    act(() =>
+      useCanopyStore.setState({
+        snapshot: {
+          ...canopySnapshot,
+          refreshedAt: NOW + 10_000,
+          cards: [{ ...stuckCard("working"), priority: 84, attentionScore: 84 }],
+        },
+      })
+    );
+    expect(band()).toEqual(["waiting", "asking"]);
+    expect(doc.body.textContent).toContain("2 agents need you");
+    expect(sortNow()).toBeDefined();
+    fireEvent.pointerLeave(list);
+    act(() => {
+      vi.advanceTimersByTime(10_000);
+    });
+    expect(band()).toEqual(["waiting", "asking", "working"]);
+    expect(doc.body.textContent).toContain("3 agents need you");
+  });
+
+  it("takes an ask that turns urgent into the band at once, while a crossing still waits", async () => {
+    installElectron();
+    const { container } = render(<CanopyView />);
+    await frames();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const doc = container.ownerDocument;
+    const band = () =>
+      [
+        ...doc.querySelectorAll<HTMLElement>(
+          "[aria-labelledby=canopy-needs-you-label] [data-canopy-card]"
+        ),
+      ].map((card) => card.id.replace("canopy-card-", ""));
+    fireEvent.pointerEnter(doc.querySelector<HTMLElement>("[role=listbox]")!);
+    const land = (refreshedAt: number, card: CanopyCard) =>
+      act(() =>
+        useCanopyStore.setState({ snapshot: { ...canopySnapshot, refreshedAt, cards: [card] } })
+      );
+    land(NOW + 10_000, { ...stuckCard("working"), priority: 84, attentionScore: 84 });
+    expect(band()).toEqual(["waiting", "asking"]);
+    land(NOW + 20_000, stuckCard("working"));
+    expect(band()).toEqual(["working", "waiting", "asking"]);
+    expect(doc.body.textContent).toContain("3 agents need you");
+  });
+
+  it("takes an approval Daintree sees into the band at once, whatever an earlier reading said", async () => {
+    const fleet = (agentState: "working" | "waiting") => ({
+      snapshot: {
+        runs: [
+          run("late", {
+            agentState,
+            ...(agentState === "waiting" ? { waitingReason: "approval" as const } : {}),
+            // Well after the reading below was taken.
+            since: agentState === "waiting" ? NOW + 60_000 : NOW - 30_000,
+          }),
+        ],
+        changedAt: NOW,
+        degraded: false,
+        lastSuccessfulAt: NOW,
+      },
+    });
+    useFleetSnapshotStore.setState(fleet("working"));
+    const calm = {
+      ...canopySnapshot,
+      cards: [{ ...stuckCard("late"), priority: 10, attentionScore: 10 }],
+    };
+    useCanopyStore.setState({ snapshot: calm });
+    installElectron(calm);
+    const { container } = render(<CanopyView />);
+    await frames();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    expect(summaryWords()).toBe("Nothing needs you");
+    fireEvent.pointerEnter(container.ownerDocument.querySelector<HTMLElement>("[role=listbox]")!);
+    act(() => useFleetSnapshotStore.setState(fleet("waiting")));
+    const band = container.ownerDocument.querySelector("[aria-labelledby=canopy-needs-you-label]");
+    expect(band?.querySelector("#canopy-card-late")).not.toBeNull();
+    expect(summaryWords()).toContain("1 agent needs you");
+  });
+
+  it('withholds "Nothing needs you" while a run that needs the user waits to join the band', async () => {
+    useFleetSnapshotStore.setState({
+      snapshot: {
+        runs: [run("working", { agentState: "working", since: NOW - 30_000 })],
+        changedAt: NOW,
+        degraded: false,
+        lastSuccessfulAt: NOW,
+      },
+    });
+    const read = (priority: number) => ({
+      ...canopySnapshot,
+      refreshedAt: NOW + priority,
+      cards: [{ ...stuckCard("working"), priority, attentionScore: priority }],
+    });
+    useCanopyStore.setState({ snapshot: read(5) });
+    installElectron(read(5));
+    const { container } = render(<CanopyView />);
+    await frames();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    expect(summaryWords()).toBe("Nothing needs you");
+    const list = container.ownerDocument.querySelector<HTMLElement>("[role=listbox]")!;
+    fireEvent.pointerEnter(list);
+    act(() => useCanopyStore.setState({ snapshot: read(84) }));
+    expect(summaryWords()).toBe("Not every agent is sorted yet");
+    expect(bandWords()).toBe("Not every agent is sorted yet");
+    // Nor "nothing … that Canopy could read" while some screens can't be read.
+    act(() => useCanopyStore.setState({ snapshot: { ...read(84), lastError: "Read failed" } }));
+    expect(summaryWords()).toBe("Not every agent is sorted yet");
+    fireEvent.pointerLeave(list);
+    act(() => {
+      vi.advanceTimersByTime(10_000);
+    });
+    expect(summaryWords()).toContain("1 agent needs you");
+    expect(bandWords()).toBeNull();
+  });
+
   it("shows every run at once while the cards it is owed are written, and places each as it lands", async () => {
-    const owed = { ...canopySnapshot, wordsDue: ["working"] };
+    const owed = { ...canopySnapshot, busy: true };
     installElectron(owed);
     useCanopyStore.setState({ snapshot: owed });
     const { container } = render(<CanopyView />);
     await frames();
     const order = () => cards(container).map((card) => card.id.replace("canopy-card-", ""));
     expect(order()).toEqual(["waiting", "asking", "working"]);
-    // Placing runs as their scores land is what the open is for: the pointer
-    // resting on the list doesn't hold it.
-    fireEvent.pointerEnter(container.ownerDocument.querySelector<HTMLElement>("[role=listbox]")!);
     act(() =>
       useCanopyStore.setState({
         snapshot: {
@@ -1720,8 +2560,191 @@ describe("CanopyView", () => {
     expect(order()).toEqual(["waiting", "working", "asking"]);
   });
 
+  it("ends the reveal when the pointer comes into the list, and offers the order it holds back", async () => {
+    const owed = { ...canopySnapshot, busy: true };
+    installElectron(owed);
+    useCanopyStore.setState({ snapshot: owed });
+    const said: string[] = [];
+    const unsubscribe = useAnnouncerStore.subscribe((state, before) => {
+      if (state.polite && state.polite !== before.polite) said.push(state.polite.msg);
+    });
+    const { container } = render(<CanopyView />);
+    await frames();
+    const doc = container.ownerDocument;
+    const order = () => cards(container).map((card) => card.id.replace("canopy-card-", ""));
+    const revealing = () => doc.querySelector("[data-canopy-list][data-revealing]") !== null;
+    const sortNow = () =>
+      Array.from(doc.querySelectorAll<HTMLButtonElement>("button")).find(
+        (button) => button.textContent === "Sort now"
+      );
+    expect(revealing()).toBe(true);
+    fireEvent.pointerEnter(doc.querySelector<HTMLElement>("[role=listbox]")!);
+    expect(revealing()).toBe(false);
+    expect(sortNow()).toBeUndefined();
+    const land = (refreshedAt: number, priority: number) =>
+      act(() =>
+        useCanopyStore.setState({
+          snapshot: {
+            ...owed,
+            refreshedAt,
+            // Far enough above the quiet question to pass it, were the list not held.
+            cards: [
+              { ...stuckCard("working"), priority, attentionScore: priority },
+              quietQuestion("asking"),
+            ],
+          },
+        })
+      );
+    land(NOW + 10_000, 84);
+    await frames();
+    expect(order()).toEqual(["waiting", "asking", "working"]);
+    expect(sortNow()).toBeDefined();
+    land(NOW + 20_000, 83);
+    await frames();
+    const offers = said.filter((msg) => msg.includes("Sort now"));
+    unsubscribe();
+    expect(offers).toHaveLength(1);
+
+    fireEvent.click(sortNow()!);
+    await frames();
+    expect(order()).toEqual(["waiting", "working", "asking"]);
+    expect(sortNow()).toBeUndefined();
+  });
+
+  it("ends the reveal when the user moves the selection, and holds the next score for the pause", async () => {
+    const owed = { ...canopySnapshot, busy: true };
+    installElectron(owed);
+    useCanopyStore.setState({ snapshot: owed });
+    const { container } = render(<CanopyView />);
+    await frames();
+    const doc = container.ownerDocument;
+    const order = () => cards(container).map((card) => card.id.replace("canopy-card-", ""));
+    const before = selectedRun(container);
+    expect(doc.querySelector("[data-canopy-list][data-revealing]")).not.toBeNull();
+    fireEvent.keyDown(searchInput(), { key: "ArrowDown" });
+    expect(selectedRun(container)).not.toBe(before);
+    expect(doc.querySelector("[data-canopy-list][data-revealing]")).toBeNull();
+    // The user has just moved: the score waits for the pause, as always.
+    act(() =>
+      useCanopyStore.setState({
+        snapshot: {
+          ...owed,
+          refreshedAt: NOW + 10_000,
+          cards: [
+            { ...stuckCard("working"), priority: 84, attentionScore: 84 },
+            quietQuestion("asking"),
+          ],
+        },
+      })
+    );
+    await frames();
+    expect(order()).toEqual(["waiting", "asking", "working"]);
+  });
+
+  it("ends the reveal when ⌘↓ steps to the next agent from its terminal", async () => {
+    vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+    const owed = { ...canopySnapshot, busy: true };
+    installElectron(owed);
+    useCanopyStore.setState({ snapshot: owed });
+    const { container } = render(<CanopyView />);
+    await frames();
+    const doc = container.ownerDocument;
+    const before = liveRun(container);
+    expect(doc.querySelector("[data-canopy-list][data-revealing]")).not.toBeNull();
+    terminalInput(container).focus();
+    fireEvent.keyDown(terminalInput(container), { key: "ArrowDown", metaKey: true });
+    expect(liveRun(container)).not.toBe(before);
+    expect(doc.querySelector("[data-canopy-list][data-revealing]")).toBeNull();
+  });
+
+  it.each([
+    ["typing in the search", () => fireEvent.input(searchInput(), { target: { value: "a" } })],
+    [
+      "scrolling the list",
+      () => fireEvent.wheel(document.querySelector<HTMLElement>("[data-canopy-list]")!),
+    ],
+    [
+      "pressing on the list's scrollbar",
+      () => fireEvent.pointerDown(document.querySelector<HTMLElement>("[data-canopy-list]")!),
+    ],
+  ])("ends the reveal on %s", async (_, interact) => {
+    const owed = { ...canopySnapshot, busy: true };
+    installElectron(owed);
+    useCanopyStore.setState({ snapshot: owed });
+    const { container } = render(<CanopyView />);
+    await frames();
+    const revealing = () =>
+      container.ownerDocument.querySelector("[data-canopy-list][data-revealing]") !== null;
+    expect(revealing()).toBe(true);
+    act(() => interact());
+    expect(revealing()).toBe(false);
+  });
+
+  it("keeps revealing when the list is scrolled for it, not by the user", async () => {
+    const owed = { ...canopySnapshot, busy: true };
+    installElectron(owed);
+    useCanopyStore.setState({ snapshot: owed });
+    const { container } = render(<CanopyView />);
+    await frames();
+    const list = container.ownerDocument.querySelector<HTMLElement>("[data-canopy-list]")!;
+    act(() => {
+      fireEvent.scroll(list);
+    });
+    expect(list.hasAttribute("data-revealing")).toBe(true);
+  });
+
+  it("keeps an offered order on offer when an ask turns urgent, and says it once", async () => {
+    installElectron();
+    const said: string[] = [];
+    const unsubscribe = useAnnouncerStore.subscribe((state, before) => {
+      if (state.polite && state.polite !== before.polite) said.push(state.polite.msg);
+    });
+    const { container } = render(<CanopyView />);
+    await frames();
+    const doc = container.ownerDocument;
+    const sortNow = () =>
+      Array.from(doc.querySelectorAll<HTMLButtonElement>("button")).find(
+        (button) => button.textContent === "Sort now"
+      );
+    fireEvent.pointerEnter(doc.querySelector<HTMLElement>("[role=listbox]")!);
+    act(() =>
+      useCanopyStore.setState({
+        snapshot: {
+          ...canopySnapshot,
+          refreshedAt: NOW + 10_000,
+          cards: [
+            { ...stuckCard("working"), priority: 84, attentionScore: 84 },
+            quietQuestion("asking"),
+          ],
+        },
+      })
+    );
+    await frames();
+    expect(sortNow()).toBeDefined();
+    sortNow()!.focus();
+    // An urgent ask arrives: it is placed at once, and the held reorder stays held.
+    act(() =>
+      useCanopyStore.setState({
+        snapshot: {
+          ...canopySnapshot,
+          refreshedAt: NOW + 10_000,
+          cards: [
+            { ...stuckCard("working"), priority: 84, attentionScore: 84 },
+            quietQuestion("asking"),
+            { ...stuckCard("waiting"), priority: 95, attentionScore: 95 },
+          ],
+        },
+      })
+    );
+    await frames();
+    unsubscribe();
+    expect(sortNow()).toBeDefined();
+    expect(doc.activeElement).toBe(sortNow());
+    expect(said.filter((msg) => msg.includes("Sort now"))).toHaveLength(1);
+  });
+
   it("stops revealing once the cards it was owed have landed, and holds still after", async () => {
-    const owed = { ...canopySnapshot, wordsDue: ["working"] };
+    const owed = { ...canopySnapshot, busy: true };
     installElectron(owed);
     useCanopyStore.setState({ snapshot: owed });
     const { container } = render(<CanopyView />);
@@ -1774,7 +2797,7 @@ describe("CanopyView", () => {
 
   it("holds still like always once the open's readings have had their time", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-    const owed = { ...canopySnapshot, wordsDue: ["working"] };
+    const owed = { ...canopySnapshot, busy: true };
     installElectron(owed);
     useCanopyStore.setState({ snapshot: owed });
     const { container } = render(<CanopyView />);
@@ -1783,6 +2806,8 @@ describe("CanopyView", () => {
     act(() => {
       vi.advanceTimersByTime(CANOPY_REVEAL_MS);
     });
+    // Over by the clock alone, before the pointer comes in.
+    expect(container.ownerDocument.querySelector("[data-canopy-list][data-revealing]")).toBeNull();
     fireEvent.pointerEnter(container.ownerDocument.querySelector<HTMLElement>("[role=listbox]")!);
     act(() =>
       useCanopyStore.setState({
@@ -1804,7 +2829,7 @@ describe("CanopyView", () => {
     const reading = {
       ...canopySnapshot,
       cards: [{ ...stuckCard("working"), describing: true }],
-      link: { host: "canopy.daintree.org", inFlight: 1, classifyMs: 380, readMs: null },
+      reader: { model: "Light", inFlight: 1, readMs: 9 },
     };
     installElectron(reading);
     useCanopyStore.setState({ snapshot: reading });
@@ -1813,7 +2838,7 @@ describe("CanopyView", () => {
     const heading = container.ownerDocument.querySelector("#canopy-inbox-label")!.parentElement!;
     expect(heading.textContent).not.toMatch(/Updating|Starting|retry/);
     const footer = container.ownerDocument.querySelector("[data-canopy-status]")!;
-    expect(footer.textContent).toBe("canopy.daintree.org1 in flight · classify 380 ms");
+    expect(footer.textContent).toBe("Light model, on this computer9 ms a screen");
     // Under the list, in the same column, not over the pane beside it.
     const column = container.ownerDocument.querySelector("[data-canopy-list]")!.parentElement!;
     expect(column.lastElementChild).toBe(footer);

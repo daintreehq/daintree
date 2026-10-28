@@ -559,7 +559,27 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // 54_700 → 55_500 for #13662's `terminal.placeOwned`: one owned tool for
   // parking a panel and bringing it back, with the three-field receipt its
   // output schema advertises so a caller can tell a move from a no-op.
-  const MAX_EXTERNAL_PAYLOAD_BYTES = 55_500;
+  // 55_500 → 56_010 for #14017, measured at 56_005 B: the optional `restored`
+  // object on each `terminal.list` row, saying when restore rebuilt the pane,
+  // whether it resumed, restarted or held it, and the agent state saved before
+  // the restart, so an orchestrator can tell a finished, restored session from
+  // live work. Output only; its description trimmed before measuring.
+  // 56_010 → 56_210 for #14122, measured at 56_205 B: `frontendAttached` on
+  // each `workspace.list` row, whether a call that needs a frontend reaches one
+  // there, a remote Shell's driving view included, which `hasLiveView` cannot
+  // say. Output only; `slashCommands.list`'s description gave back the clause
+  // its host-side form made untrue, and the field's own was trimmed first.
+  // 56_210 → 57_200 for #14369's `terminal.restartOnPresetOwned`, measured at
+  // 57_189 B (+984). Most of it is the tool's own contract rather than prose:
+  // two required ids and a three-field result, whose `agentSessionIdCleared`
+  // is what tells a caller the agent no longer has its brief.
+  // 57_200 → 57_700 for #14474, measured at 57_689 B: `processes` on
+  // `terminal.closeOwned`'s result, what the host saw of each closed panel's
+  // process. A close trashes the panel and its agent runs on through the grace,
+  // so `closedIds` alone told a cancelling caller the work had stopped. The
+  // result schema is closed, so the field must be advertised or a client's
+  // validator refuses the answer; its descriptions were trimmed first.
+  const MAX_EXTERNAL_PAYLOAD_BYTES = 57_700;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
   // Every byte #11909 spends sits on an externally advertised tool, so both
   // totals moved by the identical amount. Only this one needed the ratchet
@@ -796,7 +816,101 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // instead of its lanes.
   // 129_000 → 129_800 for #13662's `terminal.placeOwned`, the same cost the
   // external ceiling above pays; it carries no unscoped twin to remove.
-  const MAX_COHORT_PAYLOAD_BYTES = 129_800;
+  // 129_800 → 129_830 for #13742, measured at 129_814 B: the `ssh` target a
+  // ready resource status may report, in `worktree.resource.status`'s output.
+  // 129_830 → 130_130 for #13806, measured at 130_111 B: the `pluginChecks`
+  // list in `worktree.reviewReadiness`'s output, a separate attributed array
+  // so the closed item id set stays closed. Output only, so the external
+  // ceiling does not move.
+  // 130_130 → 130_630 for #14017, measured at 130_623 B: the same `restored`
+  // object the external ceiling above pays for. The plugin-only hold action it
+  // ships with is hidden from MCP and costs nothing here.
+  // 130_630 → 131_000 for #14122, measured at 130_990 B: the same
+  // `workspace.list` field the external ceiling above pays for, and its twin on
+  // each project `host.list` names, null when a host doesn't say.
+  // 131_000 → 134_500 for `host.ensureProject` (#14140), measured at
+  // 134_486 B: its description, the host, worktree, worktreePath, copy and
+  // accept arguments, and an output schema of the shared outcome fields beside
+  // one answer: the project made ready (its ids, path, worktree, how it got
+  // there, what stayed on this machine and which recipes weren't run), the
+  // questions for the person with the copies they choose between, or that it
+  // is still working. Offered to this machine's assistant only, so the
+  // external ceiling does not move.
+  // 134_500 → 137_400 for #14160, measured at 137_349 B: `host.list`'s optional
+  // `includeAgents` / `projectId` arguments and the typed agent directory each
+  // host entry may carry. The external ceiling does not move; `host.list` is
+  // an assistant-only tool.
+  // 137_400 → 137_600 for #14086, measured at 137_581 B: the raw Linux readings
+  // (`memoryPressureSomeAvg10`, `temperatureCelsius` and its zone, `metricsScope`)
+  // on each `host.list` load, which replace the invented bands a Linux host no
+  // longer sends. Optional and output only; no external tool lists hosts.
+  // 137_600 → 138_700 for #14168, measured at 138_586 B (+1_005): the capacity
+  // facts `host.list` now carries per host (cores, memory, age, platform), each
+  // flat and null when unmeasured, in place of a composite score.
+  // 138_700 → 141_400 for `host.settings` (#14167), measured at 141_370 B
+  // (+2_784): its description, the operation, hostIds, keys, patch and ticket
+  // arguments (the patch one value per named setting, so nothing else can be
+  // asked for), and an output schema of the shared outcome fields, the ticket,
+  // and each host's outcome with the values read and proposed. Offered to this
+  // machine's assistant only, so the external ceiling does not move.
+  // 141_400 → 142_200 for #14165, measured at 142_191 B (+821): the Daintree
+  // confirmations an assistant's calls wait on and its terminal notices, on
+  // each live assistant `host.list` names, so the global assistant reads the
+  // same decisions Canopy shows. Output only, and the notice delivery is its
+  // status alone; no external tool lists hosts.
+  // 142_200 → 142_350 for #14240, measured at 142_318 B (+127): `host.call`'s
+  // optional `newCallId`, the caller's own id for a first send, so a write
+  // whose whole answer was lost can still be resent under it. Assistant-only,
+  // so the external ceiling does not move.
+  // 142_350 → 143_330 for the same tool, measured at 143_314 B, carried
+  // in-app for the external⊆in-app invariant.
+  // 143_330 → 143_530 for #14444, measured at 143_512 B (+198): `host.call`'s
+  // optional `throwaway` target, the second kind a call may name instead of a
+  // projectId, with the six tools it takes. Assistant-only, so the external
+  // ceiling does not move.
+  // 143_530 → 145_830 for #14461, measured at 145_808 B (+2_296): each
+  // `host.list` entry's observed link flags, the build its handshake named and
+  // the CLIs its summary lists, so a host that is down says how. Output only,
+  // and `host.list` is assistant-only, so the external ceiling does not move.
+  // 145_830 → 146_860 for #14457, measured at 146_841 B (+1_033): `host.list`'s
+  // optional `hostId`, `projectQuery` and `projectCursor` arguments and each
+  // host's `projectInventory` (whether its page is the whole list, the total,
+  // offset and omitted count, the next cursor and whether the list changed), so
+  // a page of 50 can no longer pass for a whole list. Assistant-only, so the
+  // external ceiling does not move.
+  // 146_860 → 151_050 for `host.watch` (#14463), measured at 151_008 B
+  // (+4_167): its description, the operation, hostId, link and capacity
+  // conditions, expiry, note and watchId arguments, and an output schema of the
+  // shared outcome fields, each watch's condition, status, timestamps and
+  // notice delivery, and the host as observed (link, last seen, the sample's
+  // time and the three figures a watch reads), so a notice is evidence rather
+  // than a verdict. Assistant-only, so the external ceiling does not move.
+  // 151_050 → 151_340 for #14462, measured at 151_316 B (+308): each host
+  // load's `receivedAt` and `staleReason`, and `ageMs` now nullable, so a
+  // sample's age is bounded without comparing clocks and an unbounded one
+  // says so. Output only, and `host.list` is assistant-only, so the external
+  // ceiling does not move.
+  // 151_340 → 152_850 for #14474, measured at 152_839 B: the same
+  // `processes` field on `terminal.close`, `terminal.closeOwned` and
+  // `terminal.closeAll`, which share one result schema, and a clause on
+  // `terminal.closeMany` saying its results carry it.
+  // 152_850 → 152_910 for #14448, measured at 152_899 B (+60): `canopyModel`
+  // joins the host settings an assistant may read and change, so its name sits
+  // in the keys it reads, the patch it previews and the settings it gets back.
+  // 152_910 → 152_980 for #14550, measured at 152_971 (+61): each
+  // `terminal.sendCommandMany` item takes the `generation` an assistant send
+  // needs, with a clause on `sends` saying so.
+  // 152_980 → 153_235 for #14548, measured at 153_225 B (+254 over #14550's
+  // 152_971): `generation` joins `terminal.sendKeys` and its owned twin, so an
+  // assistant can press keys in another assistant's run.
+  // 153_235 → 153_350 for #14551, measured at 153_339 B (+114 over #14548's
+  // 153_225): `terminal.interruptOwned` takes `generation` too, so the global
+  // Assistant interrupts the run it read; the shared description got shorter.
+  // 153_350 → 153_540 for #14570, measured at 153_535 B (+193 over develop's
+  // 153_342): `host.switch` takes `projectId` and `terminalId`, so another
+  // host's waiting notice lands on the agent's terminal. In-app only, so the
+  // external ceiling does not move.
+  const MAX_COHORT_PAYLOAD_BYTES = 153_540;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

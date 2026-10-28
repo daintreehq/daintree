@@ -2,18 +2,15 @@
  * E2E: Voice Input — OpenAI Realtime Backend
  *
  * Covers the voice-input subsystem migrated to OpenAI in #7831/#7833/#7835.
- * The renderer's audio capture path requires `getUserMedia` + `AudioContext`
- * + AudioWorklet — out of reach for headless CI — so the WS protocol surface
- * is exercised via direct IPC (`window.electron.voiceInput.*`) against a
- * local `ws.WebSocketServer` mock. The transcript-handling integration in
- * `voiceInput.ts` (spoken-command paragraphing, complete event splitting)
- * still runs the same code path; only the audio source is skipped.
+ * The WS protocol surface is exercised via direct IPC (`window.electron.voiceInput.*`)
+ * against the shared transcription mock (helpers/transcriptionMock.ts). The
+ * transcript-handling integration in `voiceInput.ts` (spoken-command paragraphing,
+ * complete event splitting) still runs the same code path; only the audio source
+ * is skipped. The key-to-mock path with real capture is core-voice-fake-mic.spec.ts.
  */
 
-/* eslint-disable @typescript-eslint/no-explicit-any -- window.electron is untyped in Playwright evaluate() */
-import { test, expect, type Page } from "@playwright/test";
-import { WebSocketServer, type WebSocket } from "ws";
-import { mkdtempSync, writeFileSync, readFileSync, existsSync } from "fs";
+import { test, expect } from "@playwright/test";
+import { mkdtempSync, readFileSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
 import {
@@ -24,223 +21,24 @@ import {
   type AppContext,
 } from "../../helpers/launch";
 import { removePathSync } from "../../helpers/fixtures";
+import { createTranscriptionMock, type TranscriptionMock } from "../../helpers/transcriptionMock";
+import {
+  installEventCapture,
+  getCapturedEvents,
+  clearCapturedEvents,
+  getVoiceSessionId,
+  ipcStart,
+  ipcStop,
+  ipcSendAudio,
+  ipcSetSettings,
+  ipcGetSettings,
+  seedVoiceConfig,
+} from "../../helpers/voice";
 import { openSettings } from "../../helpers/panels";
 import { SEL } from "../../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG } from "../../helpers/timeouts";
 
-// ---------------------------------------------------------------------------
-// Mock OpenAI Realtime WebSocket server
-// ---------------------------------------------------------------------------
-
-interface MockScenario {
-  /** Send these events as soon as the client sends `session.update`. */
-  onSessionUpdate?: (ws: WebSocket) => void;
-  /** Send these events when the client sends `input_audio_buffer.commit`. */
-  onCommit?: (ws: WebSocket) => void;
-}
-
-interface MockState {
-  scenario: MockScenario;
-  /** All non-audio messages received from the client, parsed. */
-  received: Array<{ type: string; raw: Record<string, unknown> }>;
-  /** Number of `input_audio_buffer.append` messages received. */
-  audioAppendCount: number;
-  sockets: Set<WebSocket>;
-}
-
-function createMockServer(state: MockState): WebSocketServer {
-  const wss = new WebSocketServer({ port: 0, host: "127.0.0.1" });
-
-  wss.on("connection", (ws) => {
-    state.sockets.add(ws);
-    ws.on("close", () => state.sockets.delete(ws));
-
-    ws.on("message", (data) => {
-      let parsed: Record<string, unknown>;
-      try {
-        parsed = JSON.parse(data.toString()) as Record<string, unknown>;
-      } catch {
-        return;
-      }
-      const type = typeof parsed.type === "string" ? parsed.type : "";
-
-      if (type === "input_audio_buffer.append") {
-        state.audioAppendCount += 1;
-        return;
-      }
-
-      state.received.push({ type, raw: parsed });
-
-      if (type === "session.update") {
-        state.scenario.onSessionUpdate?.(ws);
-      } else if (type === "input_audio_buffer.commit") {
-        state.scenario.onCommit?.(ws);
-      }
-    });
-  });
-
-  return wss;
-}
-
-function send(ws: WebSocket, event: Record<string, unknown>): void {
-  ws.send(JSON.stringify(event));
-}
-
-/**
- * Mimics the `?intent=transcription` endpoint: a committed segment's transcript
- * arrives as `conversation.item.done` with the text on the `input_audio`
- * content part (preceded by the `conversation.item.added` item shell).
- */
-function sendTranscript(ws: WebSocket, transcript: string): void {
-  send(ws, {
-    type: "conversation.item.added",
-    item: { content: [{ type: "input_audio" }] },
-  });
-  send(ws, {
-    type: "conversation.item.done",
-    item: { content: [{ type: "input_audio", transcript }] },
-  });
-}
-
-function resetMockState(state: MockState): void {
-  state.scenario = {};
-  state.received = [];
-  state.audioAppendCount = 0;
-  for (const sock of state.sockets) {
-    try {
-      sock.close();
-    } catch {
-      // ignore
-    }
-  }
-  state.sockets.clear();
-}
-
-// ---------------------------------------------------------------------------
-// Renderer event capture — installs IPC listeners that buffer events on window
-// ---------------------------------------------------------------------------
-
-interface CapturedEvents {
-  statuses: string[];
-  deltas: string[];
-  completes: Array<{ text: string; willCorrect: boolean }>;
-  paragraphBoundaries: Array<{ rawText: string | null }>;
-  errors: Array<string | { message?: string }>;
-}
-
-async function installEventCapture(window: Page): Promise<void> {
-  await window.evaluate(() => {
-    const w = window as any;
-    if (w.__voiceCapture__) return;
-    const captured = {
-      statuses: [] as string[],
-      deltas: [] as string[],
-      completes: [] as Array<{ text: string; willCorrect: boolean }>,
-      paragraphBoundaries: [] as Array<{ rawText: string | null }>,
-      errors: [] as Array<string | { message?: string }>,
-    };
-    w.__voiceCapture__ = captured;
-    const v = w.electron.voiceInput;
-    v.onStatus((status: string) => captured.statuses.push(status));
-    v.onTranscriptionDelta((payload: { text: string }) => captured.deltas.push(payload.text));
-    v.onTranscriptionComplete((payload: { text: string; willCorrect: boolean }) =>
-      captured.completes.push(payload)
-    );
-    v.onParagraphBoundary((payload: { rawText: string | null }) =>
-      captured.paragraphBoundaries.push(payload)
-    );
-    v.onError((error: string | { message?: string }) => captured.errors.push(error));
-  });
-}
-
-async function getCapturedEvents(window: Page): Promise<CapturedEvents> {
-  return await window.evaluate(() => {
-    const w = window as any;
-    return JSON.parse(JSON.stringify(w.__voiceCapture__)) as CapturedEvents;
-  });
-}
-
-async function clearCapturedEvents(window: Page): Promise<void> {
-  await window.evaluate(() => {
-    const w = window as any;
-    const c = w.__voiceCapture__;
-    c.statuses.length = 0;
-    c.deltas.length = 0;
-    c.completes.length = 0;
-    c.paragraphBoundaries.length = 0;
-    c.errors.length = 0;
-  });
-}
-
-// ---------------------------------------------------------------------------
-// IPC wrappers (run in renderer context, where window.electron exists)
-// ---------------------------------------------------------------------------
-
-async function ipcStart(window: Page): Promise<{ ok: boolean; error?: string }> {
-  return await window.evaluate(async () => {
-    return await (window as any).electron.voiceInput.start();
-  });
-}
-
-async function ipcStop(window: Page): Promise<void> {
-  await window.evaluate(async () => {
-    await (window as any).electron.voiceInput.stop();
-  });
-}
-
-/**
- * Pushes one audio chunk above MIN_COMMIT_BYTES so the service's commit path
- * fires. E2E drives the voice IPC directly without real mic capture, so without
- * this the interval/stop commits are skipped as undersized and no transcript
- * is ever requested.
- */
-async function ipcSendAudio(window: Page, bytes = 6_000): Promise<void> {
-  await window.evaluate((n) => {
-    (window as any).electron.voiceInput.sendAudioChunk(new ArrayBuffer(n));
-  }, bytes);
-}
-
-async function ipcSetSettings(window: Page, patch: Record<string, unknown>): Promise<void> {
-  await window.evaluate(async (p) => {
-    await (window as any).electron.voiceInput.setSettings(p);
-  }, patch);
-}
-
-async function ipcGetSettings(window: Page): Promise<Record<string, unknown>> {
-  return await window.evaluate(async () => {
-    return await (window as any).electron.voiceInput.getSettings();
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Config seeding (electron-store config.json)
-// ---------------------------------------------------------------------------
-
 const PRE_SEEDED_KEY = "sk-e2e-test-key-not-real";
-
-/**
- * Replaces the `voiceInput` object in electron-store's config.json. Must be
- * called AFTER an initial launch (electron-store creates the file lazily on
- * first .get/.set). Migration tests rely on the full-object replacement to
- * place legacy fields without defaults clobbering them.
- */
-function seedVoiceConfig(
-  userDataDir: string,
-  voiceInput: Record<string, unknown>,
-  schemaVersion?: number
-): void {
-  const configPath = path.join(userDataDir, "config.json");
-  let config: Record<string, unknown> = {};
-  if (existsSync(configPath)) {
-    config = JSON.parse(readFileSync(configPath, "utf-8")) as Record<string, unknown>;
-  }
-  config.voiceInput = voiceInput;
-  // Session 1 wrote the CURRENT schema version, so a seed that leaves it alone
-  // exercises only the read-time safety net — every store migration is skipped
-  // as already-applied. Backdating makes the numbered migrations actually run.
-  if (schemaVersion !== undefined) config._schemaVersion = schemaVersion;
-  writeFileSync(configPath, JSON.stringify(config));
-}
 
 // ===========================================================================
 // Section 1 — settings migration on cold start
@@ -325,13 +123,14 @@ test.describe.serial("E2E: Voice Input — Settings migration on cold start", ()
     expect(migrated.openaiApiKey).toBe("sk-legacy-correction-key");
     expect(migrated.correctionApiKey).toBeUndefined();
     expect(migrated.transcriptionModel).toBe("gpt-live-transcribe");
-    // The retired gpt-5-mini correction model migrates to gpt-5.6-luna (#11365).
-    expect(migrated.correctionModel).toBe("gpt-5.6-luna");
+    // Migration 025 lands the retired gpt-5-mini on gpt-5.6-luna (#11365); the
+    // read-time normalizer then carries it on to gpt-6.1-terra and persists it.
+    expect(migrated.correctionModel).toBe("gpt-6.1-terra");
 
     expect(onDisk.voiceInput.openaiApiKey).toBe("sk-legacy-correction-key");
     expect(onDisk.voiceInput.correctionApiKey).toBeUndefined();
     expect(onDisk.voiceInput.transcriptionModel).toBe("gpt-live-transcribe");
-    expect(onDisk.voiceInput.correctionModel).toBe("gpt-5.6-luna");
+    expect(onDisk.voiceInput.correctionModel).toBe("gpt-6.1-terra");
     // Advancement, not a hard-coded latest — the exact number moves with every
     // future migration.
     expect(onDisk._schemaVersion).toBeGreaterThan(26);
@@ -340,7 +139,11 @@ test.describe.serial("E2E: Voice Input — Settings migration on cold start", ()
     // choice must survive the model upgrade untouched (#9175).
     expect(migrated.transcriptionProvider).toBe("deepgram");
     expect(migrated.deepgramApiKey).toBe("dg-existing");
-    expect(migrated.customDictionary).toEqual(["Daintree"]);
+    // Migration 036 turns the word list into structured entries (#14598).
+    expect((migrated.dictionary as { term: string }[]).map((entry) => entry.term)).toEqual([
+      "Daintree",
+    ]);
+    expect(onDisk.voiceInput.customDictionary).toBeUndefined();
   });
 });
 
@@ -351,29 +154,11 @@ test.describe.serial("E2E: Voice Input — Settings migration on cold start", ()
 
 test.describe.serial("E2E: Voice Input — Realtime IPC and settings UI", () => {
   let ctx: AppContext;
-  let mockServer: WebSocketServer;
-  let mockState: MockState;
+  let mock: TranscriptionMock;
   let userDataDir: string;
-  let mockPort: number;
 
   test.beforeAll(async () => {
-    mockState = {
-      scenario: {},
-      received: [],
-      audioAppendCount: 0,
-      sockets: new Set(),
-    };
-    mockServer = createMockServer(mockState);
-    await new Promise<void>((resolve) => {
-      if (mockServer.address()) {
-        resolve();
-        return;
-      }
-      mockServer.on("listening", () => resolve());
-    });
-    const addr = mockServer.address();
-    if (!addr || typeof addr === "string") throw new Error("Mock server failed to bind");
-    mockPort = addr.port;
+    mock = await createTranscriptionMock();
 
     userDataDir = mkdtempSync(path.join(tmpdir(), "daintree-e2e-voice-ipc-"));
 
@@ -387,10 +172,10 @@ test.describe.serial("E2E: Voice Input — Realtime IPC and settings UI", () => 
       enabled: true,
       openaiApiKey: PRE_SEEDED_KEY,
       language: "en",
-      customDictionary: [],
+      dictionary: [],
       transcriptionModel: "gpt-live-transcribe",
       correctionEnabled: false,
-      correctionModel: "gpt-5.6-luna",
+      correctionModel: "gpt-6.1-terra",
       correctionCustomInstructions: "",
       paragraphingStrategy: "spoken-command",
       resolveFileLinks: true,
@@ -399,9 +184,7 @@ test.describe.serial("E2E: Voice Input — Realtime IPC and settings UI", () => 
 
     ctx = await launchApp({
       userDataDir,
-      env: {
-        DAINTREE_REALTIME_WS_URL: `ws://127.0.0.1:${mockPort}`,
-      },
+      env: mock.env(),
     });
     await installEventCapture(ctx.window);
   });
@@ -412,13 +195,13 @@ test.describe.serial("E2E: Voice Input — Realtime IPC and settings UI", () => 
       await closeApp(ctx.app);
       if (pid) await waitForProcessExit(pid).catch(() => {});
     }
-    await new Promise<void>((resolve) => mockServer.close(() => resolve()));
+    await mock?.close();
     removePathSync(userDataDir);
   });
 
   test.describe.serial("IPC lifecycle", () => {
     test.beforeEach(async () => {
-      resetMockState(mockState);
+      mock.reset();
       await clearCapturedEvents(ctx.window);
       // Restore defaults so a failed/aborted prior test cannot leak settings state
       // (e.g. the "manual paragraphing" test below switching to manual mid-run).
@@ -426,10 +209,7 @@ test.describe.serial("E2E: Voice Input — Realtime IPC and settings UI", () => 
     });
 
     test("start → session.updated → status 'recording'; stop → commit → completed transcript", async () => {
-      mockState.scenario = {
-        onSessionUpdate: (ws) => send(ws, { type: "session.updated" }),
-        onCommit: (ws) => sendTranscript(ws, "hello world"),
-      };
+      mock.script({ text: "hello world" });
 
       const startResult = await ipcStart(ctx.window);
       expect(startResult).toEqual({ ok: true });
@@ -448,7 +228,7 @@ test.describe.serial("E2E: Voice Input — Realtime IPC and settings UI", () => 
         .toContain("hello world");
 
       // Protocol-level proof: session.update arrived before commit.
-      const types = mockState.received.map((m) => m.type);
+      const types = mock.control.map((m) => m.type);
       expect(types).toContain("session.update");
       expect(types).toContain("input_audio_buffer.commit");
       expect(types.indexOf("session.update")).toBeLessThan(
@@ -457,7 +237,7 @@ test.describe.serial("E2E: Voice Input — Realtime IPC and settings UI", () => 
 
       // session.update payload must carry the realtime contract the server expects.
       // Catches silent regressions if VoiceTranscriptionService drops a required field.
-      const sessionUpdate = mockState.received.find((m) => m.type === "session.update");
+      const sessionUpdate = mock.control.find((m) => m.type === "session.update");
       expect(sessionUpdate).toBeDefined();
       const session = (sessionUpdate!.raw as { session: Record<string, unknown> }).session;
       expect(session.type).toBe("transcription");
@@ -477,23 +257,16 @@ test.describe.serial("E2E: Voice Input — Realtime IPC and settings UI", () => 
       expect(audio.input.turn_detection).toBeNull();
 
       const captured = await getCapturedEvents(ctx.window);
-      expect(captured.completes).toEqual([{ text: "hello world", willCorrect: false }]);
+      const sessionId = await getVoiceSessionId(ctx.window);
+      expect(captured.completes).toEqual([{ sessionId, text: "hello world", willCorrect: false }]);
     });
 
     test("delta events surface to renderer as onTranscriptionDelta in order", async () => {
-      mockState.scenario = {
-        onSessionUpdate: (ws) => {
-          send(ws, { type: "session.updated" });
-          send(ws, {
-            type: "conversation.item.input_audio_transcription.delta",
-            delta: "hello ",
-          });
-          send(ws, {
-            type: "conversation.item.input_audio_transcription.delta",
-            delta: "world",
-          });
-        },
-        onCommit: (ws) => sendTranscript(ws, "hello world"),
+      mock.script({ text: "hello world" });
+      mock.hooks.onSessionUpdate = (conn) => {
+        for (const delta of ["hello ", "world"]) {
+          conn.send({ type: "conversation.item.input_audio_transcription.delta", delta });
+        }
       };
 
       await ipcStart(ctx.window);
@@ -513,17 +286,13 @@ test.describe.serial("E2E: Voice Input — Realtime IPC and settings UI", () => 
     });
 
     test("spoken-command paragraphing strips a trailing 'new paragraph' command", async () => {
-      mockState.scenario = {
-        onSessionUpdate: (ws) => send(ws, { type: "session.updated" }),
-        onCommit: (ws) => sendTranscript(ws, "hello new paragraph"),
-      };
+      mock.script({ text: "hello new paragraph" });
 
       await ipcStart(ctx.window);
       await ipcSendAudio(ctx.window);
       await ipcStop(ctx.window);
 
-      // The IPC handler applies applyDictationCommands → "hello\n\n", then
-      // split + filter(Boolean) drops the trailing empty paragraph.
+      // The trailing command closes the utterance and emits a boundary after its text.
       await expect
         .poll(async () => (await getCapturedEvents(ctx.window)).completes.map((c) => c.text), {
           timeout: T_MEDIUM,
@@ -531,16 +300,15 @@ test.describe.serial("E2E: Voice Input — Realtime IPC and settings UI", () => 
         .toEqual(["hello"]);
 
       const captured = await getCapturedEvents(ctx.window);
-      expect(captured.paragraphBoundaries).toEqual([]);
+      expect(captured.paragraphBoundaries).toEqual([
+        { sessionId: captured.completes[0].sessionId, rawText: null, correctionId: null },
+      ]);
     });
 
     test("paragraphing 'manual' strategy passes spoken commands through as literal text", async () => {
       await ipcSetSettings(ctx.window, { paragraphingStrategy: "manual" });
 
-      mockState.scenario = {
-        onSessionUpdate: (ws) => send(ws, { type: "session.updated" }),
-        onCommit: (ws) => sendTranscript(ws, "hello new paragraph world"),
-      };
+      mock.script({ text: "hello new paragraph world" });
 
       await ipcStart(ctx.window);
       await ipcSendAudio(ctx.window);
@@ -555,19 +323,7 @@ test.describe.serial("E2E: Voice Input — Realtime IPC and settings UI", () => 
     });
 
     test("graceful drain: stop awaits server completed before resolving", async () => {
-      let commitArrivedAt = 0;
-      let completeSentAt = 0;
-
-      mockState.scenario = {
-        onSessionUpdate: (ws) => send(ws, { type: "session.updated" }),
-        onCommit: (ws) => {
-          commitArrivedAt = Date.now();
-          setTimeout(() => {
-            completeSentAt = Date.now();
-            sendTranscript(ws, "drained transcript");
-          }, 300);
-        },
-      };
+      mock.script({ text: "drained transcript", delayMs: 300 });
 
       await ipcStart(ctx.window);
       await ipcSendAudio(ctx.window);
@@ -575,6 +331,10 @@ test.describe.serial("E2E: Voice Input — Realtime IPC and settings UI", () => 
       const stopStartedAt = Date.now();
       await ipcStop(ctx.window);
       const stopReturnedAt = Date.now();
+
+      const commitArrivedAt =
+        mock.control.find((m) => m.type === "input_audio_buffer.commit")?.t ?? 0;
+      const completeSentAt = mock.sent.find((m) => m.type === "conversation.item.done")?.t ?? 0;
 
       // The commit and the delayed completed must both be observed before stop() returns.
       expect(commitArrivedAt).toBeGreaterThan(0);
@@ -590,15 +350,11 @@ test.describe.serial("E2E: Voice Input — Realtime IPC and settings UI", () => 
     });
 
     test("server 'error' event surfaces as onError; stop afterwards is idempotent", async () => {
-      mockState.scenario = {
-        onSessionUpdate: (ws) => {
-          send(ws, { type: "session.updated" });
-          send(ws, {
-            type: "error",
-            error: { message: "Invalid auth token", type: "invalid_request_error" },
-          });
-        },
-      };
+      mock.hooks.onSessionUpdate = (conn) =>
+        conn.send({
+          type: "error",
+          error: { message: "Invalid auth token", type: "invalid_request_error" },
+        });
 
       await ipcStart(ctx.window);
 

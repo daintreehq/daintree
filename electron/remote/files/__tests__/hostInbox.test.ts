@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -5,8 +6,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   detectImageType,
   HostInbox,
+  nameLength,
   reconcileImageExtension,
   sanitizeInboxName,
+  truncateName,
 } from "../hostInbox.js";
 
 let base: string;
@@ -52,8 +55,55 @@ describe("names", () => {
     expect(sanitizeInboxName("...hidden")).toBe("hidden");
     expect(sanitizeInboxName("\u0007")).toBe("file");
     const long = sanitizeInboxName(`${"x".repeat(500)}.pdf`);
-    expect(long.length).toBeLessThanOrEqual(200);
+    expect(long.length).toBeLessThanOrEqual(255);
     expect(long.endsWith(".pdf")).toBe(true);
+  });
+
+  it("bounds a name in bytes on Linux, keeping its extension and whole characters", () => {
+    const fits = `${"界".repeat(80)}.txt`;
+    expect(sanitizeInboxName(fits, "linux")).toBe(fits);
+
+    const long = sanitizeInboxName(`${"界".repeat(100)}.txt`, "linux");
+    expect(Buffer.byteLength(long)).toBeLessThanOrEqual(255);
+    // As much of the name as fits: one more character wouldn't.
+    expect(Buffer.byteLength(long) + Buffer.byteLength("界")).toBeGreaterThan(255);
+    expect(long.endsWith(".txt")).toBe(true);
+    expect("界".repeat(100).startsWith(long.slice(0, -".txt".length))).toBe(true);
+
+    const emoji = sanitizeInboxName(`${"😀".repeat(70)}.md`, "linux");
+    expect(Buffer.byteLength(emoji)).toBeLessThanOrEqual(255);
+    expect(emoji).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+    expect(emoji.endsWith(".md")).toBe(true);
+  });
+
+  it("keeps a long name's start when its extension alone is too long to keep whole", () => {
+    for (const platform of ["linux", "darwin"] as const) {
+      const name = sanitizeInboxName(`${"a".repeat(300)}.${"b".repeat(300)}`, platform);
+      expect(nameLength(name, platform)).toBeLessThanOrEqual(255);
+      expect(name.startsWith("a".repeat(200))).toBe(true);
+    }
+    expect(sanitizeInboxName(".bashrc", "linux")).toBe("bashrc");
+  });
+
+  it("truncates to whole characters within the limit", () => {
+    expect(truncateName("ab😀", 3, "linux")).toBe("ab");
+    expect(truncateName("ab😀", 6, "linux")).toBe("ab😀");
+    expect(truncateName("ab😀", 3, "darwin")).toBe("ab");
+    expect(truncateName("ab😀", 4, "darwin")).toBe("ab😀");
+    expect(truncateName("界界", 5, "linux")).toBe("界");
+  });
+
+  it("bounds a name in UTF-16 units on macOS and Windows, where a CJK name holds more bytes", () => {
+    for (const platform of ["darwin", "win32"] as const) {
+      const cjk = `${"界".repeat(100)}.txt`;
+      expect(sanitizeInboxName(cjk, platform)).toBe(cjk);
+      const long = sanitizeInboxName(`${"x".repeat(500)}.pdf`, platform);
+      expect(long.length).toBeLessThanOrEqual(255);
+      expect(long.endsWith(".pdf")).toBe(true);
+      const emoji = sanitizeInboxName("😀".repeat(200), platform);
+      expect(emoji.length).toBeLessThanOrEqual(255);
+      expect(emoji).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+    }
   });
 
   it("checks image extensions against the content", () => {
@@ -63,6 +113,55 @@ describe("names", () => {
     expect(reconcileImageExtension("a.gif", png)).toBe("a.png");
     expect(reconcileImageExtension("a.jpg", new Uint8Array([1, 2, 3]))).toBe("a.bin");
     expect(reconcileImageExtension("notes.txt", png)).toBe("notes.txt");
+  });
+});
+
+describe("placing a name at the limit", () => {
+  const webp = Buffer.from("RIFF\0\0\0\0WEBPVP8 ");
+
+  it("keeps a corrected image extension within the limit, and still finds the file again", async () => {
+    const inbox = new HostInbox({ root });
+    await inbox.ensure();
+    // Fits exactly as named; the content is WebP, so `.png` becomes the longer `.webp`.
+    const name = `${"x".repeat(251)}.png`;
+    const sha256 = crypto.createHash("sha256").update(webp).digest("hex");
+    const part = await inbox.createPart();
+    await part.handle.write(webp);
+    await part.handle.close();
+    const placed = await inbox.place("files", part.path, name, sha256);
+    const placedName = path.basename(placed);
+    expect(placedName.endsWith(".webp")).toBe(true);
+    expect(placedName.length).toBeLessThanOrEqual(255);
+    expect(name.startsWith(placedName.slice(0, -".webp".length))).toBe(true);
+    expect(await inbox.findDuplicate("files", name, sha256, webp.byteLength)).toBe(placed);
+  });
+
+  it("does the same for a non-ASCII name, counted as this host's filesystem counts it", async () => {
+    const inbox = new HostInbox({ root });
+    await inbox.ensure();
+    // 255 bytes, so the longer `.webp` forces a cut on Linux.
+    const name = `${"界".repeat(83)}ab.png`;
+    const sha256 = crypto.createHash("sha256").update(webp).digest("hex");
+    const part = await inbox.createPart();
+    await part.handle.write(webp);
+    await part.handle.close();
+    const placed = await inbox.place("files", part.path, name, sha256);
+    const placedName = path.basename(placed);
+    expect(placedName.endsWith(".webp")).toBe(true);
+    expect(nameLength(placedName)).toBeLessThanOrEqual(255);
+    expect(await inbox.findDuplicate("files", name, sha256, webp.byteLength)).toBe(placed);
+  });
+
+  it("keeps a name that fits as it is", async () => {
+    const inbox = new HostInbox({ root });
+    await inbox.ensure();
+    const name = `${"y".repeat(251)}.txt`;
+    const content = Buffer.from("notes");
+    const sha256 = crypto.createHash("sha256").update(content).digest("hex");
+    const part = await inbox.createPart();
+    await part.handle.write(content);
+    await part.handle.close();
+    expect(path.basename(await inbox.place("files", part.path, name, sha256))).toBe(name);
   });
 });
 

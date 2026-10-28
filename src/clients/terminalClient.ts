@@ -1,6 +1,7 @@
 import type {
   TerminalSpawnOptions,
   TerminalKillOptions,
+  TerminalExitContext,
   AgentStateChangePayload,
   AgentDetectedPayload,
   AgentExitedPayload,
@@ -26,7 +27,11 @@ import type {
 import type { PanelTitleMode } from "@shared/types/panel";
 import type { TerminalSubmissionLookup } from "@shared/types/terminalSubmission";
 import type { TerminalOutputActivityLookup } from "@shared/types/terminalStatus";
-import { isValidTerminalGeometry, normalizeTerminalGridDimension } from "@shared/types/terminal";
+import {
+  isValidTerminalGeometry,
+  normalizeTerminalGridDimension,
+  toSnapshotContinuation,
+} from "@shared/types/terminal";
 import { isImageAttachmentPath, MAX_SUBMIT_IMAGE_PATHS } from "@shared/utils/imageAttachmentInput";
 import { PERF_MARKS } from "@shared/perf/marks";
 import { logDebug, logWarn } from "@/utils/logger";
@@ -165,16 +170,24 @@ const FULL_RESET_SEQUENCE = "\x1bc";
  * The reset's snapshot, or null. Geometry that is not a whole grid is dropped
  * to 0×0 rather than rejecting the payload: the restore path treats an
  * unusable grid as "no geometry" and replays verbatim, which beats losing the
- * repaint over a bad size.
+ * repaint over a bad size. A malformed continuation is dropped the same way.
  */
 function parseResetSnapshot(raw: unknown): SerializedTerminalSnapshot | null {
   if (!raw || typeof raw !== "object") return null;
-  const { data, cols, rows } = raw as { data?: unknown; cols?: unknown; rows?: unknown };
+  const { data, cols, rows, continuation } = raw as {
+    data?: unknown;
+    cols?: unknown;
+    rows?: unknown;
+    continuation?: unknown;
+  };
   if (typeof data !== "string") return null;
   const geometry = { cols, rows };
-  return isValidTerminalGeometry(geometry)
+  const snapshot: SerializedTerminalSnapshot = isValidTerminalGeometry(geometry)
     ? { data, cols: geometry.cols, rows: geometry.rows }
     : { data, cols: 0, rows: 0 };
+  const checked = toSnapshotContinuation(continuation);
+  if (checked) snapshot.continuation = checked;
+  return snapshot;
 }
 
 function handlePortReset(id: string, snapshot: SerializedTerminalSnapshot | null): void {
@@ -192,6 +205,8 @@ function handlePortReset(id: string, snapshot: SerializedTerminalSnapshot | null
     return;
   }
 
+  // Never the continuation's escape tail: nothing on this path fences the
+  // output after it, and a chunk the snapshot holds could complete the tail.
   const repaint = FULL_RESET_SEQUENCE + (snapshot?.data ?? "");
   const cbs = dataCallbacks.get(id);
   if (cbs) {
@@ -861,7 +876,9 @@ export const terminalClient = {
     };
   },
 
-  onExit: (callback: (id: string, exitCode: number) => void): (() => void) => {
+  onExit: (
+    callback: (id: string, exitCode: number, context?: TerminalExitContext) => void
+  ): (() => void) => {
     return window.electron.terminal.onExit(callback);
   },
 
@@ -1163,9 +1180,7 @@ export const terminalClient = {
     return window.electron.terminal.onSpawnResult(callback);
   },
 
-  onReduceScrollback: (
-    callback: (data: { terminalIds: string[]; targetLines: number }) => void
-  ): (() => void) => {
+  onReduceScrollback: (callback: (data: { targetLines: number }) => void): (() => void) => {
     return window.electron.terminal.onReduceScrollback(callback);
   },
 

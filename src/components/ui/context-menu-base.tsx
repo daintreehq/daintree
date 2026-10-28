@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import { OVERLAY_MOTION_CLASS, OVERLAY_SIDE_OFFSET } from "./overlayMotion";
 import { BrandSurfaceReset } from "@/components/icons/BrandSurface";
 import { useScrollShadowOverlays } from "@/components/ui/ScrollShadow";
+import { useDialogOverlayZClass } from "./dialogLayer";
 import { primeOnEvent, useRadixPrimitives } from "./radix-loader";
 import { useIsDockPopoverChild } from "./DockPopoverChildContext";
 import { MenuActionSourceContext } from "./menu-source";
@@ -231,6 +232,7 @@ const ContextMenuSubContent = React.forwardRef<
     ref
   ) => {
     const radix = useRadixPrimitives();
+    const dialogOverlayZ = useDialogOverlayZClass();
     // See `layer-press-focus-guard.ts`: an ancestor pulling focus while an item
     // is pressed would otherwise close the submenu before the item's click.
     const pressGuard = useLayerPressFocusGuard(ref);
@@ -264,6 +266,7 @@ const ContextMenuSubContent = React.forwardRef<
               // Escapes the toolbar's drag region via the portal — see `.app-no-drag` (#12347).
               "app-no-drag",
               "relative z-[var(--z-popover)] min-w-[10rem] max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto rounded-[var(--radius-lg)] surface-overlay shadow-overlay p-1 text-text-primary",
+              dialogOverlayZ,
               OVERLAY_MOTION_CLASS,
               className
             )}
@@ -310,6 +313,7 @@ const ContextMenuContent = React.forwardRef<
     ref
   ) => {
     const radix = useRadixPrimitives();
+    const dialogOverlayZ = useDialogOverlayZClass();
     const pressGuard = useLayerPressFocusGuard(ref);
     const { ref: shadowRef, topShadow, bottomShadow } = useScrollShadowOverlays(pressGuard.ref);
     const isDockPopoverChild = useIsDockPopoverChild();
@@ -377,6 +381,7 @@ const ContextMenuContent = React.forwardRef<
               // Escapes the toolbar's drag region via the portal — see `.app-no-drag` (#12347).
               "app-no-drag",
               "relative z-[var(--z-popover)] min-w-[10rem] max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto rounded-[var(--radius-lg)] surface-overlay shadow-overlay p-1 text-text-primary",
+              dialogOverlayZ,
               OVERLAY_MOTION_CLASS,
               className
             )}

@@ -589,6 +589,41 @@ describe("makePluginViewHost", () => {
     }
   });
 
+  it("lets the view title its own panel, in the dialog presentation too (#13778)", async () => {
+    const capturedProps: PanelViewProps[] = [];
+    vi.doMock(VIEW_MODULE, () => ({
+      default: function CapturingView(props: PanelViewProps) {
+        capturedProps.push(props);
+        return <div data-testid="plugin-view" />;
+      },
+    }));
+
+    try {
+      const { setPanelTitleAccessor } = await import("@/store/storeAccessors");
+      const writes: Array<[string, string]> = [];
+      setPanelTitleAccessor((panelId, title) => writes.push([panelId, title]));
+      const { makePluginViewHost } = await import("../PluginViewHost");
+      const Host = makePluginViewHost(makeConfig());
+
+      render(
+        <Host
+          id="panel-titled"
+          title="Dashboard"
+          location="dialog"
+          isFocused={false}
+          onFocus={(): void => {}}
+          onClose={(): void => {}}
+        />
+      );
+
+      await waitFor(() => expect(screen.queryByTestId("plugin-view")).toBeTruthy());
+      act(() => capturedProps[capturedProps.length - 1]!.setTitle?.("Record #42"));
+      expect(writes).toEqual([["panel-titled", "Record #42"]]);
+    } finally {
+      vi.doUnmock(VIEW_MODULE);
+    }
+  });
+
   it("gives each panel its own view when a tab group switches between two of one kind (#12609)", async () => {
     // `GridTabGroup` renders one `GridPanel` for whichever tab is active, so
     // switching tabs re-renders the SAME host with another panel's id. Reusing

@@ -16,15 +16,12 @@ export function shouldShowHybridInputBar(options: {
  * Resolve which child component should receive focus when the terminal pane
  * gains focus.
  *
- * This is an *availability resolver*: it takes the user's current preference
- * and gates it on whether the hybrid input is actually focusable. The hybrid
- * input renders for live agent terminals and for normal terminals temporarily
- * participating in a Fleet broadcast; when it's missing, disabled, or the
- * feature is turned off, focus falls back to xterm.
- *
- * `preferredTarget` is session state owned by `panelStore` — it tracks which
- * sub-element the user is currently using so navigation (Cmd-Opt-Arrow) stays
- * in the same mode across panes.
+ * This is an *availability resolver*: it takes the surface wanted (the pane's
+ * home, from the **Focus first** setting, or one a caller named) and gates it
+ * on whether the hybrid input is actually focusable. The hybrid input renders
+ * for live agent terminals and for normal terminals temporarily participating
+ * in a Fleet broadcast; when it's missing, disabled, or the feature is turned
+ * off, focus falls back to xterm.
  */
 export function getTerminalFocusTarget(options: {
   preferredTarget: TerminalFocusTarget;
@@ -60,72 +57,129 @@ export type PaneFocusAction = "preserve" | "hybridInput" | "xterm";
  * buffer events, never to DOM blur.
  *
  * `preserve` therefore means "focus is already where it belongs" — callers
- * treat it as a completed handoff, not a failure.
+ * treat it as a completed handoff, not a failure. A caller that asked for the
+ * hybrid input by name gets it regardless: preserving would report a handoff
+ * to the surface it named that never happened.
  */
 export function resolvePaneFocusAction(options: {
   focusTarget: TerminalFocusTarget;
   hasSelection: boolean;
   xtermOwnsDomFocus: boolean;
+  /** The target is the surface a caller asked for, not the pane's own pick. */
+  requested?: boolean;
 }): PaneFocusAction {
   if (options.focusTarget !== "hybridInput") return "xterm";
-  if (options.hasSelection && options.xtermOwnsDomFocus) return "preserve";
+  if (!options.requested && options.hasSelection && options.xtermOwnsDomFocus) return "preserve";
   return "hybridInput";
 }
 
 /**
- * Whether a pointerdown on the xterm area of an *unfocused* grid pane should
- * be swallowed before xterm sees it. Prevents stray clicks from poking at
- * cursor positions, mouse-mode handlers, or kicking off selection on a pane
- * that the user is just trying to activate.
+ * What an agent pane does with focus: the surface a caller asked for, else
+ * home, gated on what the pane can take right now, then on whether its xterm
+ * holds a selection and the keyboard. A surface a caller asked for by name
+ * skips that last check.
  *
- * Intentionally narrow: only applies to the unfocused grid case, only for
- * non-pointer (non-link) cells, and never for shift+click — xterm's
- * SelectionService treats shift as the override gesture to bypass PTY mouse
- * reporting and force native text selection, so the event must reach xterm.
+ * The pane's own pass (`keepOwnedSurface`), run as the pane becomes selected or
+ * what it can take changes, isn't an arrival anyone asked for: a keyboard
+ * already on one of its usable surfaces stays there. That is what keeps a click
+ * into the hybrid input of an unselected pane, or terminal typing in a pane
+ * whose input bar just appeared, where the user put it.
+ */
+export function resolveTerminalPaneFocus(options: {
+  requested: TerminalFocusTarget | null;
+  home: TerminalFocusTarget;
+  hasHybridInputSurface: boolean;
+  isInputDisabled: boolean;
+  hybridInputEnabled: boolean;
+  hasSelection: boolean;
+  xtermOwnsDomFocus: boolean;
+  hybridInputOwnsDomFocus?: boolean;
+  keepOwnedSurface?: boolean;
+}): PaneFocusAction {
+  const {
+    requested,
+    home,
+    hasSelection,
+    xtermOwnsDomFocus,
+    hybridInputOwnsDomFocus = false,
+    keepOwnedSurface = false,
+    ...availability
+  } = options;
+  if (keepOwnedSurface && requested === null) {
+    if (xtermOwnsDomFocus) return "preserve";
+    if (
+      hybridInputOwnsDomFocus &&
+      getTerminalFocusTarget({ preferredTarget: "hybridInput", ...availability }) === "hybridInput"
+    ) {
+      return "preserve";
+    }
+  }
+  const focusTarget = getTerminalFocusTarget({
+    preferredTarget: requested ?? home,
+    ...availability,
+  });
+  return resolvePaneFocusAction({
+    focusTarget,
+    requested: requested === focusTarget,
+    hasSelection,
+    xtermOwnsDomFocus,
+  });
+}
+
+/**
+ * Where a click on an agent pane's terminal puts the keyboard, which is where
+ * a file let go over it lands. A selected pane passes the click to xterm. An
+ * unselected one swallows it to select the pane, whose own focus pass keeps a
+ * keyboard already on one of its surfaces and otherwise lands on home.
+ *
+ * Ownership is the caller's read of `document.activeElement`, never
+ * `document.hasFocus()`: a drag out of Finder blurs the window, but the
+ * element that held the keyboard still holds it.
+ */
+export function getTerminalClickTarget(
+  options: Omit<
+    Parameters<typeof resolveTerminalPaneFocus>[0],
+    "requested" | "keepOwnedSurface"
+  > & {
+    /** The pane is the selected one, so a click reaches its xterm. */
+    isFocused: boolean;
+  }
+): TerminalFocusTarget {
+  const { isFocused, ...pane } = options;
+  if (isFocused) return "xterm";
+  const action = resolveTerminalPaneFocus({ ...pane, requested: null, keepOwnedSurface: true });
+  if (action !== "preserve") return action;
+  return pane.xtermOwnsDomFocus ? "xterm" : "hybridInput";
+}
+
+/**
+ * Whether a pointerdown on the xterm area of an *unfocused* pane, in the grid
+ * or the dock, should be swallowed before xterm sees it. Prevents stray clicks
+ * from poking at cursor positions, mouse-mode handlers, or kicking off
+ * selection on a pane that the user is just trying to activate; the pane then
+ * hands the keyboard to its home like any other arrival.
+ *
+ * Intentionally narrow: only applies to the unfocused case, only for
+ * non-pointer (non-link) cells, and never for the force-selection click —
+ * xterm's SelectionService treats it as the override gesture to bypass PTY
+ * mouse reporting and force native text selection, so the event must reach
+ * xterm. That is Shift everywhere, plus Option on macOS, where
+ * `macOptionClickForcesSelection` is on and xterm checks Option, not Shift.
  * The redirect to hybrid input vs xterm is *not* decided here — callers
  * consult `getTerminalFocusTarget` separately.
  */
 export function shouldSuppressUnfocusedClick(options: {
-  location: string;
   isFocused: boolean;
   isCursorPointer: boolean;
   isShiftKey: boolean;
+  isAltKey?: boolean;
+  isMac?: boolean;
 }): boolean {
-  if (options.location !== "grid") return false;
   if (options.isFocused) return false;
   if (options.isCursorPointer) return false;
   if (options.isShiftKey) return false;
+  if (options.isMac && options.isAltKey) return false;
   return true;
-}
-
-/**
- * Where a plain click on a pane's terminal would put the keyboard: the
- * activation click on an unfocused grid pane is swallowed, and the pane hands
- * the keyboard to its remembered target; any other click reaches xterm. A file
- * drop that finds neither of the pane's surfaces holding the keyboard lands
- * there, as that click would have.
- *
- * Link cells and Shift, the click's other exemptions, are left out: xterm
- * tracks no link hover while a native drag is over it, and nobody Shift-drops
- * a file to select terminal text.
- */
-export function getTerminalClickTarget(options: {
-  location: string;
-  isFocused: boolean;
-  preferredTarget: TerminalFocusTarget;
-  hasHybridInputSurface: boolean;
-  isInputDisabled: boolean;
-  hybridInputEnabled: boolean;
-}): TerminalFocusTarget {
-  const { location, isFocused, ...focus } = options;
-  return shouldSuppressUnfocusedClick({
-    location,
-    isFocused,
-    isCursorPointer: false,
-    isShiftKey: false,
-  })
-    ? getTerminalFocusTarget(focus)
-    : "xterm";
 }
 
 /**
@@ -149,28 +203,4 @@ export function isLikelyAtSynthesizedPointer(
 ): boolean {
   if (lastMoveAt === null) return true;
   return now - lastMoveAt > thresholdMs;
-}
-
-/**
- * Whether a pointerdown on xterm should record `"xterm"` as the session-wide
- * focus preference. Only a deliberate click that lands in xterm counts as the
- * explicit "I want the terminal" gesture.
- *
- * The two exclusions are independent. AT cursor routing does reach xterm, but
- * it isn't a mode switch — a screen reader reading terminal output must not
- * clobber a hybrid-input preference. `shouldSuppress` marks the activation
- * click on an unfocused grid pane, which should restore the remembered target
- * the same way `Cmd+<n>` does rather than overwrite it (#11465); a physical
- * one is swallowed before xterm sees it, and an AT-routed one is already
- * excluded by the rule above.
- *
- * Callers must pair this with *not* forcing xterm focus on the suppressed
- * path — DOM focus on xterm fires `focusin`, which records `"xterm"`
- * unconditionally and would undo the preservation.
- */
-export function shouldRecordXtermFocusPreference(options: {
-  isAtSynthesized: boolean;
-  shouldSuppress: boolean;
-}): boolean {
-  return !options.isAtSynthesized && !options.shouldSuppress;
 }

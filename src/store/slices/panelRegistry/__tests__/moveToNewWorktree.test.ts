@@ -47,8 +47,8 @@ vi.mock("@/clients", () => ({
   },
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     cleanup: vi.fn(),
     applyRendererPolicy: vi.fn(),
     onPanelBackgrounded: vi.fn(),
@@ -61,8 +61,11 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     captureBufferText: mockCaptureBufferText,
     addAgentStateListener: mockAddAgentStateListener,
     setInputLocked: vi.fn(),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("@/store/worktreeStore", () => ({
   useWorktreeSelectionStore: {

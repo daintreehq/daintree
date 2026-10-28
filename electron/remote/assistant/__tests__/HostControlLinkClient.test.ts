@@ -1,13 +1,26 @@
 import { describe, expect, it, vi } from "vitest";
+
+const loggerMock = vi.hoisted(() => ({
+  debug: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+}));
+
+vi.mock("../../../utils/logger.js", () => ({
+  createLogger: () => loggerMock,
+}));
 import { AppError } from "../../../utils/errorTypes.js";
 import type { LinkSession } from "../../link/session.js";
-import { HostControlLinkClient } from "../HostControlLinkClient.js";
+import { HostControlLinkClient, type RelayNoticeReceiver } from "../HostControlLinkClient.js";
 import {
   AssistantLinkMethod,
   type McpCallPayload,
   type RelayApproveAnswer,
   type RelayApprovePayload,
+  type RelayNoticeStatusAnswer,
   type RelayNoticesPayload,
+  type ThrowawayCallPayload,
 } from "../linkMethods.js";
 
 const CREDENTIAL = "C".repeat(43);
@@ -108,14 +121,308 @@ describe("HostControlLinkClient.relayCall (#13493)", () => {
   });
 });
 
+describe("HostControlLinkClient.relayCall for the global Assistant (#14545)", () => {
+  const DONE = { status: "done", result: { isError: false, structured: null, text: "ok" } };
+
+  it("sends the global Assistant's call by its own method, with no field an older host refuses", async () => {
+    const { relay, calls } = client((method) =>
+      method === AssistantLinkMethod.GLOBAL_MCP_CALL ? DONE : null
+    );
+
+    await expect(relay.relayCall("studio", { ...PAYLOAD, global: true }, 105_000)).resolves.toEqual(
+      DONE
+    );
+
+    expect(calls.map((call) => call.method)).toEqual([
+      AssistantLinkMethod.AUTHENTICATE,
+      AssistantLinkMethod.GLOBAL_MCP_CALL,
+    ]);
+    expect(calls[1]).toEqual({
+      method: AssistantLinkMethod.GLOBAL_MCP_CALL,
+      payload: PAYLOAD,
+      timeoutMs: 105_000,
+    });
+  });
+
+  it("keeps sending by its own method to a host that takes it", async () => {
+    const { relay, calls } = client((method) =>
+      method === AssistantLinkMethod.GLOBAL_MCP_CALL ? DONE : null
+    );
+
+    await relay.relayCall("studio", { ...PAYLOAD, global: true }, 105_000);
+    await relay.relayCall("studio", { ...PAYLOAD, callId: "call-2", global: true }, 105_000);
+
+    expect(calls.map((call) => call.method)).toEqual([
+      AssistantLinkMethod.AUTHENTICATE,
+      AssistantLinkMethod.GLOBAL_MCP_CALL,
+      AssistantLinkMethod.GLOBAL_MCP_CALL,
+    ]);
+  });
+
+  it("asks again on a new session, which may be to a newer build of the host", async () => {
+    let modern = false;
+    const calls: string[] = [];
+    const sessionOf = () =>
+      ({
+        isOpen: true,
+        call: vi.fn(async (method: string) => {
+          calls.push(method);
+          if (method === AssistantLinkMethod.GLOBAL_MCP_CALL && !modern) {
+            throw new AppError({ code: "UNSUPPORTED", message: "Unknown method" });
+          }
+          return method === AssistantLinkMethod.AUTHENTICATE ? null : DONE;
+        }),
+      }) as unknown as LinkSession;
+    let session = sessionOf();
+    const relay = new HostControlLinkClient({
+      credential: () => CREDENTIAL,
+      session: async () => session,
+      onSessionOpened: () => () => {},
+    });
+
+    await relay.relayCall("studio", { ...PAYLOAD, global: true }, 105_000);
+    modern = true;
+    session = sessionOf();
+    await relay.relayCall("studio", { ...PAYLOAD, callId: "call-2", global: true }, 105_000);
+
+    expect(calls).toEqual([
+      AssistantLinkMethod.AUTHENTICATE,
+      AssistantLinkMethod.GLOBAL_MCP_CALL,
+      AssistantLinkMethod.MCP_CALL,
+      AssistantLinkMethod.AUTHENTICATE,
+      AssistantLinkMethod.GLOBAL_MCP_CALL,
+    ]);
+  });
+
+  it("sends a project assistant's call as MCP_CALL", async () => {
+    const { relay, calls } = client((method) =>
+      method === AssistantLinkMethod.MCP_CALL ? DONE : null
+    );
+
+    await relay.relayCall("studio", PAYLOAD, 105_000);
+
+    expect(calls.map((call) => call.method)).toEqual([
+      AssistantLinkMethod.AUTHENTICATE,
+      AssistantLinkMethod.MCP_CALL,
+    ]);
+  });
+
+  it("sends the same call as MCP_CALL to a host from before it, and asks that session no more", async () => {
+    const { relay, calls } = client((method) => {
+      if (method === AssistantLinkMethod.GLOBAL_MCP_CALL) {
+        throw new AppError({ code: "UNSUPPORTED", message: "Unknown method" });
+      }
+      return method === AssistantLinkMethod.MCP_CALL ? DONE : null;
+    });
+    const resent = { ...PAYLOAD, resend: true, global: true as const };
+
+    await expect(relay.relayCall("studio", resent, 105_000)).resolves.toEqual(DONE);
+    await relay.relayCall("studio", { ...PAYLOAD, callId: "call-2", global: true }, 105_000);
+
+    expect(calls.map((call) => call.method)).toEqual([
+      AssistantLinkMethod.AUTHENTICATE,
+      AssistantLinkMethod.GLOBAL_MCP_CALL,
+      AssistantLinkMethod.MCP_CALL,
+      AssistantLinkMethod.MCP_CALL,
+    ]);
+    // Nothing ran on the refusal, so the call goes again unchanged, resend flag and all.
+    expect(calls[2]!.payload).toEqual({ ...PAYLOAD, resend: true });
+    expect(calls[3]!.payload).toEqual({ ...PAYLOAD, callId: "call-2" });
+  });
+
+  it.each(["OUTCOME_UNKNOWN", "HOST_DISCONNECTED", "VALIDATION"])(
+    "never sends it again after %s, which may mean it ran",
+    async (code) => {
+      const { relay, calls } = client((method) => {
+        if (method === AssistantLinkMethod.GLOBAL_MCP_CALL) {
+          throw new AppError({ code: code as "VALIDATION", message: "no" });
+        }
+        return method === AssistantLinkMethod.MCP_CALL ? DONE : null;
+      });
+
+      await expect(
+        relay.relayCall("studio", { ...PAYLOAD, global: true }, 105_000)
+      ).rejects.toMatchObject({ code });
+      expect(calls.map((call) => call.method)).toEqual([
+        AssistantLinkMethod.AUTHENTICATE,
+        AssistantLinkMethod.GLOBAL_MCP_CALL,
+      ]);
+    }
+  );
+
+  it("never sends it again after an unreadable answer", async () => {
+    const { relay, calls } = client((method) =>
+      method === AssistantLinkMethod.GLOBAL_MCP_CALL ? null : DONE
+    );
+
+    await expect(
+      relay.relayCall("studio", { ...PAYLOAD, global: true }, 105_000)
+    ).rejects.toMatchObject({ code: "INTERNAL" });
+    expect(calls.map((call) => call.method)).toEqual([
+      AssistantLinkMethod.AUTHENTICATE,
+      AssistantLinkMethod.GLOBAL_MCP_CALL,
+    ]);
+  });
+});
+
+describe("HostControlLinkClient.throwawayCall (#14446)", () => {
+  const THROWAWAY: ThrowawayCallPayload = {
+    helpSessionId: "help-1",
+    tier: "core",
+    callId: "call-1",
+    resend: false,
+    call: { tool: "throwaway.status", args: { runId: "run-1" } },
+    runMs: 90_000,
+  };
+
+  it("proves the sender once, then sends the call over its own method with its own timeout", async () => {
+    const { relay, calls } = client((method) =>
+      method === AssistantLinkMethod.THROWAWAY_CALL
+        ? { status: "failed", reason: "not-found" }
+        : null
+    );
+    await expect(relay.throwawayCall("studio", THROWAWAY, 105_000)).resolves.toEqual({
+      status: "failed",
+      reason: "not-found",
+    });
+    await relay.throwawayCall("studio", { ...THROWAWAY, callId: "call-2" }, 105_000);
+    expect(calls.map((call) => call.method)).toEqual([
+      AssistantLinkMethod.AUTHENTICATE,
+      AssistantLinkMethod.THROWAWAY_CALL,
+      AssistantLinkMethod.THROWAWAY_CALL,
+    ]);
+    expect(calls[1]).toMatchObject({ payload: THROWAWAY, timeoutMs: 105_000 });
+  });
+
+  it("reports a proof that got no answer as never sent, sending nothing of the call", async () => {
+    const { relay, calls } = client((method) => {
+      if (method === AssistantLinkMethod.AUTHENTICATE) {
+        throw new AppError({ code: "OUTCOME_UNKNOWN", message: "no answer" });
+      }
+      return null;
+    });
+    await expect(relay.throwawayCall("studio", THROWAWAY, 105_000)).rejects.toMatchObject({
+      code: "HOST_DISCONNECTED",
+    });
+    expect(calls.map((call) => call.method)).toEqual([AssistantLinkMethod.AUTHENTICATE]);
+  });
+
+  it("names a host from before throwaway agents unsupported, and an unreadable answer invalid", async () => {
+    const old = client((method) => {
+      if (method === AssistantLinkMethod.THROWAWAY_CALL) {
+        throw new AppError({ code: "UNSUPPORTED", message: "Unknown method" });
+      }
+      return null;
+    });
+    await expect(old.relay.throwawayCall("studio", THROWAWAY, 105_000)).rejects.toMatchObject({
+      code: "UNSUPPORTED",
+    });
+    const garbled = client((method) =>
+      method === AssistantLinkMethod.THROWAWAY_CALL ? { status: "failed", reason: "busy" } : null
+    );
+    await expect(garbled.relay.throwawayCall("studio", THROWAWAY, 105_000)).rejects.toMatchObject({
+      code: "INTERNAL",
+    });
+  });
+});
+
+describe("HostControlLinkClient.agents (#14455)", () => {
+  const DIRECTORY = { coverage: "ok", observedAt: 7, complete: true, omitted: 0, entries: [] };
+
+  it("proves the sender, then asks for the host's agents with the filter and timeout given", async () => {
+    const { relay, calls } = client((method) =>
+      method === AssistantLinkMethod.AGENTS ? { status: "done", directory: DIRECTORY } : null
+    );
+
+    await expect(relay.agents("studio", { projectId: "p" }, 5_000)).resolves.toEqual({
+      status: "done",
+      directory: DIRECTORY,
+    });
+    expect(calls.map((call) => call.method)).toEqual([
+      AssistantLinkMethod.AUTHENTICATE,
+      AssistantLinkMethod.AGENTS,
+    ]);
+    expect(calls[1]).toMatchObject({ payload: { projectId: "p" }, timeoutMs: 5_000 });
+  });
+
+  it("asks nothing of the host until its sender is proven, nor when the proof fails", async () => {
+    let prove: (() => void) | undefined;
+    const pending = client((method) =>
+      method === AssistantLinkMethod.AUTHENTICATE
+        ? new Promise<null>((resolve) => (prove = () => resolve(null)))
+        : { status: "done", directory: DIRECTORY }
+    );
+    const read = pending.relay.agents("studio", {});
+    await vi.waitFor(() => expect(prove).toBeDefined());
+    expect(pending.calls.map((call) => call.method)).toEqual([AssistantLinkMethod.AUTHENTICATE]);
+    prove?.();
+    await read;
+    expect(pending.calls.map((call) => call.method)).toEqual([
+      AssistantLinkMethod.AUTHENTICATE,
+      AssistantLinkMethod.AGENTS,
+    ]);
+
+    const refused = client((method) => {
+      if (method === AssistantLinkMethod.AUTHENTICATE) {
+        throw new AppError({ code: "PERMISSION", message: "another sender" });
+      }
+      return { status: "done", directory: DIRECTORY };
+    });
+    await expect(refused.relay.agents("studio", {})).rejects.toMatchObject({ code: "PERMISSION" });
+    expect(refused.calls.map((call) => call.method)).toEqual([AssistantLinkMethod.AUTHENTICATE]);
+  });
+
+  it("reads a refusal it doesn't know as control off", async () => {
+    const { relay } = client((method) =>
+      method === AssistantLinkMethod.AGENTS ? { status: "refused", reason: "later" } : null
+    );
+    await expect(relay.agents("studio", {})).resolves.toEqual({
+      status: "refused",
+      reason: "control-off",
+    });
+  });
+
+  it("names a host from before it unsupported, and an unreadable answer invalid", async () => {
+    const old = client((method) => {
+      if (method === AssistantLinkMethod.AGENTS) {
+        throw new AppError({ code: "UNSUPPORTED", message: "Unknown method" });
+      }
+      return null;
+    });
+    await expect(old.relay.agents("studio", {})).rejects.toMatchObject({ code: "UNSUPPORTED" });
+
+    const garbled = client((method) =>
+      method === AssistantLinkMethod.AGENTS
+        ? { status: "done", directory: { ...DIRECTORY, coverage: "everything" } }
+        : null
+    );
+    await expect(garbled.relay.agents("studio", {})).rejects.toMatchObject({ code: "INTERNAL" });
+  });
+});
+
 describe("HostControlLinkClient relay notices (#13500)", () => {
-  function opened(receiver?: {
-    receiveNotices(hostId: string, payload: RelayNoticesPayload): null;
-  }) {
+  type Receiver = RelayNoticeReceiver;
+
+  function receiver(calls: ReturnType<Receiver["noticeCalls"]> = []) {
+    return {
+      receiveNotices: vi.fn((_hostId: string, _payload: RelayNoticesPayload): null => null),
+      noticeCalls: vi.fn((_hostId: string) => calls),
+      receiveNoticeStatus: vi.fn((_hostId: string, _answer: RelayNoticeStatusAnswer) => {}),
+    } satisfies Receiver;
+  }
+
+  function opened(
+    taker?: Receiver,
+    answer: (method: string, payload: unknown) => unknown = () => null
+  ) {
     const handlers = new Map<string, (payload: unknown) => unknown>();
+    const calls: Array<{ method: string; payload: unknown }> = [];
     const session = {
       isOpen: true,
-      call: vi.fn(async () => null),
+      call: vi.fn(async (method: string, payload: unknown) => {
+        calls.push({ method, payload });
+        return answer(method, payload);
+      }),
       registerCallHandler: (
         method: string,
         schema: { parse(v: unknown): unknown },
@@ -132,11 +439,12 @@ describe("HostControlLinkClient relay notices (#13500)", () => {
         open = listener;
         return () => {};
       },
-      ...(receiver ? { noticeReceiver: () => receiver } : {}),
+      noticeStatusDelayMs: 1_000,
+      ...(taker ? { noticeReceiver: () => taker } : {}),
     });
     relay.start();
     open("studio", session);
-    return { relay, handlers };
+    return { relay, handlers, calls };
   }
 
   const PAYLOAD_NOTICES = {
@@ -150,12 +458,18 @@ describe("HostControlLinkClient relay notices (#13500)", () => {
       },
     ],
   };
+  const AWAITED = [{ helpSessionId: "help-1", callId: "call-1" }];
+  const STATUS: RelayNoticeStatusAnswer = {
+    calls: [{ helpSessionId: "help-1", callId: "call-1", status: "unknown" }],
+  };
+  const statusAnswer = (method: string) =>
+    method === AssistantLinkMethod.RELAY_NOTICE_STATUS ? STATUS : null;
 
   it("hands a host's notices on with the host the connection names", () => {
-    const receiveNotices = vi.fn((_hostId: string, _payload: RelayNoticesPayload): null => null);
-    const { relay, handlers } = opened({ receiveNotices });
+    const taker = receiver();
+    const { relay, handlers } = opened(taker);
     expect(handlers.get(AssistantLinkMethod.RELAY_NOTICES)!(PAYLOAD_NOTICES)).toBeNull();
-    expect(receiveNotices).toHaveBeenCalledWith("studio", PAYLOAD_NOTICES);
+    expect(taker.receiveNotices).toHaveBeenCalledWith("studio", PAYLOAD_NOTICES);
     relay.dispose();
   });
 
@@ -163,6 +477,114 @@ describe("HostControlLinkClient relay notices (#13500)", () => {
     const { relay, handlers } = opened();
     expect(handlers.get(AssistantLinkMethod.RELAY_NOTICES)!(PAYLOAD_NOTICES)).toBeNull();
     relay.dispose();
+  });
+
+  it("proves its sender on a new session and asks after the calls it still awaits (#13930)", async () => {
+    const taker = receiver(AWAITED);
+    const { relay, calls } = opened(taker, statusAnswer);
+
+    await vi.waitFor(() =>
+      expect(taker.receiveNoticeStatus).toHaveBeenCalledWith("studio", STATUS)
+    );
+    expect(calls).toEqual([
+      { method: AssistantLinkMethod.AUTHENTICATE, payload: { credential: CREDENTIAL } },
+      { method: AssistantLinkMethod.RELAY_NOTICE_STATUS, payload: { calls: AWAITED } },
+    ]);
+    relay.dispose();
+  });
+
+  it("asks nothing of a new session while it awaits no notices there", async () => {
+    const taker = receiver();
+    const { relay, calls } = opened(taker);
+    await Promise.resolve();
+    expect(taker.noticeCalls).toHaveBeenCalledWith("studio");
+    expect(calls).toEqual([]);
+    relay.dispose();
+  });
+
+  it("asks once after a burst of notices, a little later", async () => {
+    vi.useFakeTimers();
+    try {
+      const taker = receiver();
+      const { relay, handlers, calls } = opened(taker, statusAnswer);
+      await vi.advanceTimersByTimeAsync(0);
+      taker.noticeCalls.mockReturnValue(AWAITED);
+      handlers.get(AssistantLinkMethod.RELAY_NOTICES)!(PAYLOAD_NOTICES);
+      handlers.get(AssistantLinkMethod.RELAY_NOTICES)!(PAYLOAD_NOTICES);
+      expect(calls).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(calls.map((call) => call.method)).toEqual([
+        AssistantLinkMethod.AUTHENTICATE,
+        AssistantLinkMethod.RELAY_NOTICE_STATUS,
+      ]);
+      expect(taker.receiveNoticeStatus).toHaveBeenCalledTimes(1);
+      relay.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("asks a little after a call that asked for notices answers", async () => {
+    vi.useFakeTimers();
+    try {
+      const taker = receiver();
+      const { relay, calls } = opened(taker, (method) => {
+        if (method === AssistantLinkMethod.MCP_CALL) {
+          return { status: "done", result: { isError: false, structured: null, text: "ok" } };
+        }
+        return statusAnswer(method);
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      await relay.relayCall("studio", { ...PAYLOAD, tool: "terminal.list" }, 1_000);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(taker.noticeCalls).toHaveBeenCalledTimes(1);
+
+      taker.noticeCalls.mockReturnValue(AWAITED);
+      await relay.relayCall(
+        "studio",
+        { ...PAYLOAD, tool: "terminal.notifyWhenIdle", args: { terminalId: "t-1" } },
+        1_000
+      );
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(calls.at(-1)).toEqual({
+        method: AssistantLinkMethod.RELAY_NOTICE_STATUS,
+        payload: { calls: AWAITED },
+      });
+      expect(taker.receiveNoticeStatus).toHaveBeenCalledWith("studio", STATUS);
+      relay.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("leaves an older host that can't say alone, and holds nothing it couldn't read", async () => {
+    const warn = loggerMock.warn;
+    warn.mockClear();
+    try {
+      const old = receiver(AWAITED);
+      const unsupported = opened(old, (method) => {
+        if (method === AssistantLinkMethod.RELAY_NOTICE_STATUS) {
+          throw new AppError({ code: "UNSUPPORTED", message: "no such method" });
+        }
+        return null;
+      });
+      await vi.waitFor(() => expect(unsupported.calls).toHaveLength(2));
+      await Promise.resolve();
+      expect(old.receiveNoticeStatus).not.toHaveBeenCalled();
+      expect(warn).not.toHaveBeenCalled();
+      unsupported.relay.dispose();
+
+      const garbled = receiver(AWAITED);
+      const invalid = opened(garbled, (method) =>
+        method === AssistantLinkMethod.RELAY_NOTICE_STATUS ? { calls: "nope" } : null
+      );
+      await vi.waitFor(() => expect(warn).toHaveBeenCalled());
+      expect(garbled.receiveNoticeStatus).not.toHaveBeenCalled();
+      invalid.relay.dispose();
+    } finally {
+      warn.mockClear();
+    }
   });
 });
 

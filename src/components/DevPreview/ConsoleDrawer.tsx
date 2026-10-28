@@ -11,7 +11,7 @@ import {
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import { XtermAdapter } from "../Terminal/XtermAdapter";
-import { terminalInstanceService } from "../../services/TerminalInstanceService";
+import { with as withTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 import { TerminalRefreshTier } from "@/types";
 import type { DevPreviewStatus } from "@/hooks/useDevServer";
 import { useConsoleCaptureStore, ZERO_COUNTS } from "@/store/consoleCaptureStore";
@@ -172,7 +172,8 @@ export function ConsoleDrawer({
   const isOutputVisible = isPanelVisible && isOpen && activeTab === "output";
 
   useEffect(() => {
-    if (terminalId !== null) terminalInstanceService.setVisible(terminalId, isOutputVisible);
+    if (terminalId === null) return;
+    withTerminalService((service) => service.setVisible(terminalId, isOutputVisible));
   }, [terminalId, isOutputVisible]);
 
   const getRefreshTier = useCallback(() => {

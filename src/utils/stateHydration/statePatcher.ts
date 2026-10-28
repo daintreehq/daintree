@@ -12,6 +12,8 @@ import type {
   PanelTitleMode,
   RestoreRecoveryReason,
   SessionLostReason,
+  TerminalFirstPrompt,
+  TerminalRestoreProvenance,
   TerminalSpawnSource,
 } from "@shared/types/panel";
 import type { GitStatus } from "@shared/types/git";
@@ -55,13 +57,23 @@ import {
   resolveRespawnAgentId,
 } from "@shared/utils/savedAgentIdentity";
 import { isAbsolute } from "@shared/utils/path";
-import { panelKindIsDockable, type PersistedPanelKindRef } from "@shared/config/panelKindRegistry";
+import {
+  getPanelKindConfig,
+  panelKindIsDockable,
+  type PersistedPanelKindRef,
+} from "@shared/config/panelKindRegistry";
 import { restoredExtensionStateVersion } from "@shared/utils/panelExtensionState";
 import { getDeserializer } from "@/config/panelKindSerialisers";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { resolveAgentRuntimeSettings } from "@/utils/agentRuntimeSettings";
 import { sanitizeConversationCwd, sanitizeRestoreRecovery } from "@/utils/restoreRecovery";
+import {
+  readLastSeen,
+  sanitizeAgentObservation,
+  sanitizeLiveRestoreProvenance,
+} from "@shared/utils/restoreProvenance";
 import { sanitizeScratchpad } from "@/lib/terminalScratchpad";
+import { sanitizeFirstPrompt } from "@shared/utils/firstPrompt";
 
 /**
  * Args for building addPanel options from hydration data.
@@ -133,6 +145,7 @@ export interface SavedTerminalData {
   worktreeId?: string;
   location?: string;
   backgroundRestoreLocation?: string;
+  pendingDockWorktreeId?: string | null;
   command?: string;
   isInputLocked?: boolean;
   browserUrl?: string;
@@ -207,6 +220,17 @@ export interface SavedTerminalData {
   restoreRecovery?: unknown;
   /** Untrusted on-disk value (#12835) — sanitized via `sanitizeScratchpad`. */
   scratchpad?: unknown;
+  /** Untrusted on-disk value (#14592) — sanitized via `sanitizeFirstPrompt`. */
+  firstPrompt?: unknown;
+  /**
+   * Untrusted on-disk values (#14017), sanitized in `restoreProvenance.ts` and
+   * {@link readLaunchedByPluginId}. The saved `agentState` pair is never read as
+   * an observation: it also carries the renderer's overlays and guesses.
+   */
+  restoreProvenance?: unknown;
+  lastAgentObservation?: unknown;
+  launchedByPluginId?: unknown;
+  holdOnRestart?: unknown;
   /** @deprecated pre-#5459 legacy key; read-only fallback, never written. */
   agentFlavorId?: string;
   /** @deprecated pre-#5459 legacy key; read-only fallback, never written. */
@@ -333,6 +357,24 @@ function normalizePtyKind(kind: PanelKind | undefined): PanelKind {
   return kind;
 }
 
+function readLaunchedByPluginId(saved: SavedTerminalData): string | undefined {
+  const value = saved.launchedByPluginId;
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+/**
+ * The plugin hold and its owner (#14017), carried by every path that brings a
+ * saved pane back, so a reconnect or a second restart doesn't drop either.
+ */
+function pluginHoldArgs(
+  saved: SavedTerminalData
+): Pick<AddTerminalArgs, "launchedByPluginId" | "holdOnRestart"> {
+  return {
+    launchedByPluginId: readLaunchedByPluginId(saved),
+    holdOnRestart: saved.holdOnRestart === true ? true : undefined,
+  };
+}
+
 /**
  * Validate a `lastActiveAt` timestamp from a saved snapshot before
  * propagating it to the live panel via `AddTerminalArgs.lastActiveAt`
@@ -446,8 +488,16 @@ export function buildArgsForBackendTerminal(
     extensionState: saved.extensionState,
     extensionStateVersion: restoredExtensionStateVersion(saved),
     pluginId: saved.pluginId,
+    // The PTY outlived the view, so this is the same process restore last
+    // rebuilt, if it rebuilt it at all — kept as it was, never restamped.
+    restoreProvenance: sanitizeLiveRestoreProvenance(saved.restoreProvenance),
+    lastAgentObservation:
+      readLastSeen(backendTerminal.agentState, backendTerminal.lastStateChange) ??
+      sanitizeAgentObservation(saved.lastAgentObservation),
+    ...pluginHoldArgs(saved),
     lastActiveAt: sanitizeLastActiveAt(saved.lastActiveAt),
     scratchpad: sanitizeScratchpad(saved.scratchpad),
+    firstPrompt: sanitizeFirstPrompt(saved.firstPrompt),
   };
 }
 
@@ -532,8 +582,14 @@ export function buildArgsForReconnectedFallback(
     extensionState: saved.extensionState,
     extensionStateVersion: restoredExtensionStateVersion(saved),
     pluginId: saved.pluginId,
+    restoreProvenance: sanitizeLiveRestoreProvenance(saved.restoreProvenance),
+    lastAgentObservation:
+      readLastSeen(reconnectedTerminal.agentState, reconnectedTerminal.lastStateChange) ??
+      sanitizeAgentObservation(saved.lastAgentObservation),
+    ...pluginHoldArgs(saved),
     lastActiveAt: sanitizeLastActiveAt(saved.lastActiveAt),
     scratchpad: sanitizeScratchpad(saved.scratchpad),
+    firstPrompt: sanitizeFirstPrompt(saved.firstPrompt),
   };
 }
 
@@ -590,6 +646,28 @@ export interface BuildArgsForRespawnOptions {
    * it would have resumed on the hold. Absent means `"always"`.
    */
   resumeOnRestart?: ResumeOnRestart;
+  /**
+   * When this restore pass began, stamped on every pane it rebuilds (#14017) so
+   * panes from one pass share one time. Absent means now.
+   */
+  restoredAt?: number;
+}
+
+/**
+ * The first prompt a respawned pane keeps (#14592). One that resumes or is held
+ * carries on its run. One that starts over keeps a launch record only when it
+ * runs the saved launch command again, which carries that prompt; a sent
+ * prompt never rides a command, and a new conversation was never handed one.
+ */
+function restoredFirstPrompt(
+  saved: SavedTerminalData,
+  command: string | undefined,
+  continuesRun: boolean
+): TerminalFirstPrompt | undefined {
+  const record = sanitizeFirstPrompt(saved.firstPrompt);
+  if (!record || continuesRun) return record;
+  const savedCommand = saved.command?.trim();
+  return record.via === "launch" && savedCommand && command === savedCommand ? record : undefined;
 }
 
 export function buildArgsForRespawn(
@@ -644,6 +722,8 @@ export function buildArgsForRespawn(
   // The exact conversation this respawn would replay, which a hold by the
   // resume setting keeps so the pane can still resume it (#13509).
   let resumedSessionId: string | undefined;
+  // True once the command is the agent's resume command, named or not (#14017).
+  let resumed = false;
   let presetEnv: Record<string, string> | undefined;
   let preset: AgentPreset | undefined;
   // Bypass-reconciled launch flags (#10432); falls back to the raw saved flags
@@ -814,6 +894,7 @@ export function buildArgsForRespawn(
         : buildResumeCommand(agentId, saved.agentSessionId, resumeFlags);
       if (resumeCmd) {
         command = resumeCmd;
+        resumed = true;
         // The conversation this pane is reattaching to. Carried onto the
         // respawn so it's on the terminal record from the moment the PTY
         // exists, rather than only if a later teardown manages to observe it.
@@ -904,6 +985,7 @@ export function buildArgsForRespawn(
             : "no-resume-path");
       if (resumeLatestCmd) {
         command = resumeLatestCmd;
+        resumed = true;
       } else if (hasPersistedFlags) {
         command = buildFromPersistedFlags();
         sessionLostOnRestore = getElseReason();
@@ -936,10 +1018,18 @@ export function buildArgsForRespawn(
 
     // Last, so every hold restore itself decided keeps its own reason. A pane
     // with nothing exact to resume is held too: "never" has to mean nothing
-    // starts, not only that no conversation is reopened.
-    if (!restoreRecovery && (options?.resumeOnRestart ?? "always") !== "always") {
+    // starts, not only that no conversation is reopened. The launching plugin's
+    // hold (#14017) names this pane, so it outranks the setting, and holds
+    // under "always" as well.
+    const policyHold: RestoreRecoveryReason | undefined =
+      saved.holdOnRestart === true
+        ? "held-by-plugin"
+        : (options?.resumeOnRestart ?? "always") !== "always"
+          ? "resume-deferred"
+          : undefined;
+    if (!restoreRecovery && policyHold !== undefined) {
       restoreRecovery = {
-        reason: "resume-deferred",
+        reason: policyHold,
         ...(resumedSessionId !== undefined && { sessionId: resumedSessionId }),
       };
     }
@@ -954,6 +1044,16 @@ export function buildArgsForRespawn(
   const respawnKind = normalizePtyKind(kind);
   const isDevPreview = kind === "dev-preview";
   const location = (saved.location === "dock" ? "dock" : "grid") as "grid" | "dock";
+
+  const lastSeen = isAgentPanel ? sanitizeAgentObservation(saved.lastAgentObservation) : undefined;
+  const restoreProvenance: TerminalRestoreProvenance | undefined =
+    respawnKind === "terminal"
+      ? {
+          at: options?.restoredAt ?? Date.now(),
+          disposition: restoreRecovery ? "held" : resumed ? "resume" : "fresh",
+          ...(lastSeen !== undefined && { lastSeen }),
+        }
+      : undefined;
 
   // Stale-preset split-brain: when saved.agentPresetId was set but the preset
   // no longer resolves (deleted custom preset, CCR route removed from config),
@@ -1024,6 +1124,11 @@ export function buildArgsForRespawn(
       ? coldLaunch.conversationCwd
       : sanitizeConversationCwd(saved.conversationCwd),
     restoreRecovery,
+    restoreProvenance,
+    // Carried as the pane's own until its new process reports something, so a
+    // pane held again, or resumed and closed before reporting, keeps it (#14017).
+    lastAgentObservation: lastSeen,
+    ...pluginHoldArgs(saved),
     // Prefer the launch env captured in the snapshot (#10922) so the restored
     // session replays the same provider environment (e.g. a Z.AI/GLM preset or a
     // recipe's inline env) even when that preset/recipe no longer resolves in the
@@ -1036,6 +1141,7 @@ export function buildArgsForRespawn(
     restore: true,
     lastActiveAt: sanitizeLastActiveAt(saved.lastActiveAt),
     scratchpad: sanitizeScratchpad(saved.scratchpad),
+    firstPrompt: restoredFirstPrompt(saved, command, Boolean(restoreRecovery) || resumed),
   };
 }
 
@@ -1060,10 +1166,31 @@ export function buildArgsForNonPtyRecreation(
   // would strand in the global-only grid bucket, invisible once a worktree is
   // active (#11375 point 3). A worktree-less panel adopts the active worktree so
   // it returns VISIBLY to the grid; a dockable kind keeps its dock placement.
-  const rescueDockToGrid = savedLocation === "dock" && !panelKindIsDockable(kind);
-  const location = rescueDockToGrid ? "grid" : savedLocation;
-  const worktreeId =
-    rescueDockToGrid && saved.worktreeId == null && activeWorktreeId != null
+  //
+  // A kind that isn't registered YET is not a kind that's gone (#13907): the
+  // plugin host starts after panel restore, so a plugin panel's kind is absent
+  // on every cold start. The rescue is only a stopgap there — the dock request
+  // (and the worktree it was docked with, which the rescue overwrites) is
+  // carried as `pendingDockWorktreeId` until the kind registers. A pending
+  // request already saved from an earlier boot is kept the same way, and
+  // honored outright if the kind has registered by now.
+  const pluginOwned = saved.pluginId !== undefined || kind.includes(".");
+  const kindRegistered = getPanelKindConfig(kind) !== undefined;
+  const kindPending = !kindRegistered && pluginOwned;
+  const savedPending = saved.pendingDockWorktreeId;
+  const honorPending = savedPending !== undefined && panelKindIsDockable(kind);
+  const requestedDock = savedLocation === "dock" || honorPending;
+  const rescueDockToGrid = requestedDock && !panelKindIsDockable(kind);
+  const location = rescueDockToGrid ? "grid" : requestedDock ? "dock" : "grid";
+  const pendingDockWorktreeId =
+    kindPending && !honorPending && (savedLocation === "dock" || savedPending !== undefined)
+      ? savedLocation === "dock"
+        ? (saved.worktreeId ?? null)
+        : (savedPending ?? null)
+      : undefined;
+  const worktreeId = honorPending
+    ? (savedPending ?? undefined)
+    : rescueDockToGrid && saved.worktreeId == null && activeWorktreeId != null
       ? activeWorktreeId
       : saved.worktreeId;
   const base: AddTerminalArgs = {
@@ -1073,6 +1200,7 @@ export function buildArgsForNonPtyRecreation(
     cwd: resolveSavedCwd(saved.cwd, projectRoot),
     worktreeId,
     location,
+    ...(pendingDockWorktreeId !== undefined && { pendingDockWorktreeId }),
     requestedId: saved.id,
     exitBehavior: saved.exitBehavior,
     agentPresetId: readPresetId(saved),

@@ -12,6 +12,7 @@ import type {
   ProjectPluginTrustRecord,
 } from "../../../../shared/types/plugin.js";
 import { makeProjectPluginInstanceKey } from "../../../../shared/types/plugin.js";
+import type { ProjectApplicationPreflightFailure } from "../projectApplicationPreflight.js";
 
 const PROJECT_A = "a".repeat(64);
 const PROJECT_B = "b".repeat(64);
@@ -87,6 +88,11 @@ function makeHarness(): Harness {
       events.push({ projectId, name, payload });
     }),
     isProjectClosed: vi.fn(() => false),
+    isEngineIncompatible: vi.fn((_range: string) => false),
+    getProjectHomeHolder: vi.fn((_projectId: string): string | null => null),
+    preflightApplication: vi.fn(
+      async (_args: unknown): Promise<ProjectApplicationPreflightFailure | null> => null
+    ),
   };
 
   return {
@@ -170,18 +176,219 @@ describe("trust gate", () => {
     expect(h.controller.getTrustState(PROJECT_A).persisted).toBe(false);
   });
 
-  it("a session grant does not survive a close", async () => {
+  it("a session grant survives a close, a sleep or an idle auto-close (#13843)", async () => {
     h.setDiscovery(ROOT_A, [discovered("acme.dashboard")]);
     await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
     await h.controller.setTrust(PROJECT_A, "session");
+
+    for (let reopen = 0; reopen < 2; reopen++) {
+      // A second close notification for the same project finds no entry and
+      // must leave the retained grant alone.
+      await h.controller.onProjectClosed(PROJECT_A);
+      await h.controller.onProjectClosed(PROJECT_A);
+      expect(h.controller.getTrustState(PROJECT_A)).toEqual({
+        projectId: PROJECT_A,
+        decision: "session",
+        enabled: true,
+        persisted: false,
+      });
+
+      h.deps.loadProjectPlugin.mockClear();
+      h.events.length = 0;
+      await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+
+      expect(h.deps.loadProjectPlugin).toHaveBeenCalledTimes(1);
+      expect(h.events.some((e) => e.name === "plugin:project-trust-prompt")).toBe(false);
+      expect(h.controller.getTrustState(PROJECT_A).decision).toBe("session");
+    }
+    expect(h.deps.writeTrust).not.toHaveBeenCalled();
+  });
+});
+
+describe("a session grant across a close (#13843)", () => {
+  function loadedNames(): string[] {
+    return h.deps.loadProjectPlugin.mock.calls.map(
+      (call) => (call[0] as { manifest: PluginManifest }).manifest.name
+    );
+  }
+
+  async function grantSessionThenClose(plugins: DiscoveredProjectPlugin[]): Promise<void> {
+    h.setDiscovery(ROOT_A, plugins);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    await h.controller.setTrust(PROJECT_A, "session");
+    await h.controller.onProjectClosed(PROJECT_A);
+    h.deps.loadProjectPlugin.mockClear();
+    h.events.length = 0;
+  }
+
+  it("stages a plugin that appeared while the project was closed", async () => {
+    await grantSessionThenClose([discovered("acme.dashboard")]);
+
+    h.setDiscovery(ROOT_A, [discovered("acme.dashboard"), discovered("acme.newcomer")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+
+    expect(loadedNames()).toEqual(["acme.dashboard"]);
+    const staged = h.events.filter((e) => e.name === "plugin:project-plugin-staged");
+    expect(staged.map((e) => (e.payload as { pluginId: string }).pluginId)).toEqual([
+      "acme.newcomer",
+    ]);
+    expect(h.events.some((e) => e.name === "plugin:project-trust-prompt")).toBe(false);
+
+    // The stage is part of the grant now: declined, it stays declined — not
+    // re-announced, and not quietly run either, since it is already known.
+    await h.controller.onProjectClosed(PROJECT_A);
+    h.deps.loadProjectPlugin.mockClear();
+    h.events.length = 0;
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    expect(loadedNames()).toEqual(["acme.dashboard"]);
+    expect(h.events.some((e) => e.name === "plugin:project-plugin-staged")).toBe(false);
+    expect(h.deps.writeTrust).not.toHaveBeenCalled();
+  });
+
+  it("keeps the ids a close interrupted mid-activation", async () => {
+    const started: string[] = [];
+    let gated = false;
+    let reachedFirst!: () => void;
+    const firstLoadStarted = new Promise<void>((resolve) => {
+      reachedFirst = resolve;
+    });
+    let releaseFirst: (() => void) | undefined;
+    h.deps.loadProjectPlugin.mockImplementation(
+      async ({ manifest }: { manifest: Readonly<PluginManifest> }) => {
+        started.push(manifest.name);
+        if (!gated) {
+          gated = true;
+          reachedFirst();
+          await new Promise<void>((resolve) => {
+            releaseFirst = resolve;
+          });
+        }
+        return true;
+      }
+    );
+    h.setDiscovery(ROOT_A, [discovered("acme.dashboard"), discovered("acme.deploy")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+
+    const granting = h.controller.setTrust(PROJECT_A, "session");
+    await firstLoadStarted;
+    const closing = h.controller.onProjectClosed(PROJECT_A);
+    releaseFirst!();
+    await granting;
+    await closing;
+
+    expect(started).toEqual(["acme.dashboard"]);
+    expect(h.controller.loadedInstanceKeys()).toEqual([]);
+
+    // Both ids were consented to at the click, so both run on reopen — the one
+    // the close cut off is not mistaken for new.
+    started.length = 0;
+    h.events.length = 0;
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    expect(started.sort()).toEqual(["acme.dashboard", "acme.deploy"]);
+    expect(h.events.some((e) => e.name === "plugin:project-plugin-staged")).toBe(false);
+  });
+
+  it("keeps a muted plugin muted", async () => {
+    h.setDiscovery(ROOT_A, [discovered("acme.dashboard"), discovered("acme.deploy")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    await h.controller.setTrust(PROJECT_A, "session");
+    await h.controller.setMuted(PROJECT_A, "acme.dashboard", true);
     await h.controller.onProjectClosed(PROJECT_A);
 
+    h.deps.loadProjectPlugin.mockClear();
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+
+    expect(loadedNames()).toEqual(["acme.deploy"]);
+  });
+
+  it("outranks a remembered no without overwriting it", async () => {
+    const disabled: ProjectPluginTrustRecord = {
+      decision: "disabled",
+      decidedAt: 1,
+      knownPluginIds: ["acme.dashboard"],
+      stagedPluginIds: [],
+      mutedPluginIds: [],
+    };
+    h.trust.set(PROJECT_A, disabled);
+    await grantSessionThenClose([discovered("acme.dashboard")]);
+
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+
+    expect(loadedNames()).toEqual(["acme.dashboard"]);
+    expect(h.trust.get(PROJECT_A)).toEqual(disabled);
+  });
+
+  it("survives the sweep of a project closed behind the controller's back", async () => {
+    await grantSessionThenClose([discovered("acme.dashboard")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+
+    h.setDiscovery(ROOT_B, []);
+    h.deps.isProjectClosed.mockImplementation((id: string) => id === PROJECT_A);
+    await h.controller.onProjectOpened(PROJECT_B, ROOT_B);
+    expect(h.controller.loadedInstanceKeys()).toEqual([]);
+
+    h.deps.isProjectClosed.mockReturnValue(false);
     h.deps.loadProjectPlugin.mockClear();
     h.events.length = 0;
     await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
 
+    expect(loadedNames()).toEqual(["acme.dashboard"]);
+    expect(h.events.some((e) => e.name === "plugin:project-trust-prompt")).toBe(false);
+  });
+
+  it("is forgotten by a revoke that lands after the close", async () => {
+    h.setDiscovery(ROOT_A, [discovered("acme.dashboard")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    await h.controller.setTrust(PROJECT_A, "session");
+
+    // The close is queued first, so the revoke's task finds no entry — only
+    // the grant the close set aside.
+    const closing = h.controller.onProjectClosed(PROJECT_A);
+    const revoking = h.controller.setTrust(PROJECT_A, "disabled");
+    await closing;
+    await revoking;
+
+    expect(h.controller.getTrustState(PROJECT_A).decision).toBe("disabled");
+    h.deps.loadProjectPlugin.mockClear();
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
     expect(h.deps.loadProjectPlugin).not.toHaveBeenCalled();
-    expect(h.events.some((e) => e.name === "plugin:project-trust-prompt")).toBe(true);
+  });
+
+  it("is forgotten by a revoke made after it was restored", async () => {
+    await grantSessionThenClose([discovered("acme.dashboard")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    await h.controller.setTrust(PROJECT_A, "disabled");
+    await h.controller.onProjectClosed(PROJECT_A);
+
+    expect(h.controller.getTrustState(PROJECT_A).decision).toBe("disabled");
+    h.deps.loadProjectPlugin.mockClear();
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    expect(h.deps.loadProjectPlugin).not.toHaveBeenCalled();
+  });
+
+  it("is not created by a session click that loses to a close", async () => {
+    h.setDiscovery(ROOT_A, [discovered("acme.dashboard")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+
+    const closing = h.controller.onProjectClosed(PROJECT_A);
+    const granting = h.controller.setTrust(PROJECT_A, "session");
+    await closing;
+    await expect(granting).rejects.toThrow(/closed before the decision was saved/);
+
+    expect(h.controller.getTrustState(PROJECT_A).decision).toBeNull();
+  });
+
+  it("ends with the controller", async () => {
+    await grantSessionThenClose([discovered("acme.dashboard")]);
+
+    h.controller.dispose();
+
+    expect(h.controller.getTrustState(PROJECT_A)).toEqual({
+      projectId: PROJECT_A,
+      decision: null,
+      enabled: false,
+      persisted: false,
+    });
   });
 });
 
@@ -498,6 +705,22 @@ describe("listProjectPlugins", () => {
     await h.controller.setTrust(PROJECT_A, "enabled");
     expect(h.controller.listProjectPlugins(PROJECT_A)[0]!.loadError).toBeUndefined();
   });
+
+  it("carries the manifest's worksWith to the manager, and only when it lists some", async () => {
+    const worksWith = ["acme.linear", "daintree.github"];
+    h.setDiscovery(ROOT_A, [
+      {
+        ...discovered("acme.dashboard"),
+        manifest: { ...manifestFor("acme.dashboard"), worksWith },
+      },
+      discovered("acme.plain"),
+    ]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+
+    const rows = h.controller.listProjectPlugins(PROJECT_A);
+    expect(rows.find((row) => row.id === "acme.dashboard")!.worksWith).toEqual(worksWith);
+    expect("worksWith" in rows.find((row) => row.id === "acme.plain")!).toBe(false);
+  });
 });
 
 describe("notifyLoadErrorChanged", () => {
@@ -752,6 +975,25 @@ describe("races", () => {
     releaseScan!([discovered("acme.dashboard")]);
     await opening;
     await closing;
+
+    expect(h.deps.loadProjectPlugin).not.toHaveBeenCalled();
+  });
+
+  it("does not start a plugin when a revoke is requested right behind a warm open (#12230)", async () => {
+    h.setDiscovery(ROOT_A, [discovered("acme.dashboard")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    await h.controller.setTrust(PROJECT_A, "enabled");
+    // The folder goes away and comes back, so the warm open below has a known
+    // plugin to load rather than one that is already running.
+    h.setDiscovery(ROOT_A, []);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    h.setDiscovery(ROOT_A, [discovered("acme.dashboard")]);
+    h.deps.loadProjectPlugin.mockClear();
+
+    const opening = h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    const revoking = h.controller.setTrust(PROJECT_A, "disabled");
+    await opening;
+    await revoking;
 
     expect(h.deps.loadProjectPlugin).not.toHaveBeenCalled();
   });
@@ -1189,5 +1431,409 @@ describe("per-plugin mute", () => {
     await h.controller.setMuted(PROJECT_A, "acme.dashboard", false);
 
     expect(h.deps.writeTrust.mock.calls.length).toBe(writes);
+  });
+});
+
+describe("project application (#14097)", () => {
+  const APP = { name: "Ledger", destination: "home" as const };
+
+  function withApplication(name: string): DiscoveredProjectPlugin {
+    const d = discovered(name);
+    return {
+      ...d,
+      manifest: {
+        ...d.manifest!,
+        engines: { daintree: ">=0.1.0" },
+        application: APP,
+        contributes: {
+          ...d.manifest!.contributes,
+          panels: [{ id: "home", name: "Home", iconId: "puzzle", color: "#ffffff" }],
+          views: [{ id: "home", componentPath: "dist/home.js", location: "panel" }],
+          surfaces: { projectHome: { viewId: "home" } },
+        },
+      } as unknown as Readonly<PluginManifest>,
+    };
+  }
+
+  function enable(ids: string[], muted: string[] = []): void {
+    h.trust.set(PROJECT_A, {
+      decision: "enabled",
+      decidedAt: 0,
+      knownPluginIds: ids,
+      stagedPluginIds: [],
+      mutedPluginIds: muted,
+    });
+  }
+
+  function lastApplication(): unknown {
+    const changed = h.events.filter((e) => e.name === "plugin:project-plugins-changed").at(-1);
+    return (changed!.payload as { application: unknown }).application;
+  }
+
+  it("publishes null when no plugin declares an application", async () => {
+    enable(["acme.dashboard"]);
+    h.setDiscovery(ROOT_A, [discovered("acme.dashboard")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    expect(lastApplication()).toBeNull();
+  });
+
+  it("publishes the loaded owner's application as active", async () => {
+    enable(["acme.ledger"]);
+    h.setDiscovery(ROOT_A, [withApplication("acme.ledger")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    expect(lastApplication()).toEqual({
+      status: "active",
+      ownerId: "acme.ledger",
+      version: "1.0.0",
+      instanceId: makeProjectPluginInstanceKey(PROJECT_A, "acme.ledger"),
+      application: APP,
+      fallback: null,
+    });
+  });
+
+  it("falls back while the project's plugins are untrusted", async () => {
+    h.setDiscovery(ROOT_A, [withApplication("acme.ledger")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    expect(h.controller.getProjectApplication(PROJECT_A)).toMatchObject({
+      status: "disabled",
+      reason: "untrusted",
+      fallback: "standard-workspace",
+    });
+  });
+
+  it("falls back when the owner is muted, and returns when it is switched back on", async () => {
+    enable(["acme.ledger"], ["acme.ledger"]);
+    h.setDiscovery(ROOT_A, [withApplication("acme.ledger")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    expect(lastApplication()).toMatchObject({ status: "disabled", reason: "muted" });
+
+    await h.controller.setMuted(PROJECT_A, "acme.ledger", false);
+    expect(lastApplication()).toMatchObject({ status: "active" });
+  });
+
+  it("is unavailable when the owner's load is refused", async () => {
+    enable(["acme.ledger"]);
+    h.deps.loadProjectPlugin.mockResolvedValue(false);
+    h.setDiscovery(ROOT_A, [withApplication("acme.ledger")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    expect(lastApplication()).toMatchObject({
+      status: "unavailable",
+      reason: "load-failed",
+      fallback: "standard-workspace",
+    });
+  });
+
+  it("does not load an owner outside its engine range, and reports it unavailable", async () => {
+    enable(["acme.ledger", "acme.dashboard"]);
+    h.deps.isEngineIncompatible.mockReturnValue(true);
+    const dashboard = discovered("acme.dashboard");
+    h.setDiscovery(ROOT_A, [
+      withApplication("acme.ledger"),
+      { ...dashboard, manifest: { ...dashboard.manifest!, engines: { daintree: ">=99.0.0" } } },
+    ]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    expect(h.deps.isEngineIncompatible).toHaveBeenCalledWith(">=0.1.0");
+    // The range stays advisory for a plugin that declares no application.
+    expect(h.controller.loadedManifestIds(PROJECT_A)).toEqual(["acme.dashboard"]);
+    expect(lastApplication()).toMatchObject({
+      status: "unavailable",
+      reason: "engine-incompatible",
+    });
+  });
+
+  it("tells the project's views the application is loading while its owner loads", async () => {
+    enable(["acme.ledger"]);
+    let finish: (ok: boolean) => void = () => {};
+    h.deps.loadProjectPlugin.mockImplementation(
+      () => new Promise<boolean>((resolve) => (finish = resolve))
+    );
+    h.setDiscovery(ROOT_A, [withApplication("acme.ledger")]);
+    const opening = h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    await vi.waitFor(() => expect(h.deps.loadProjectPlugin).toHaveBeenCalled());
+    expect(lastApplication()).toMatchObject({ status: "loading", fallback: "standard-workspace" });
+
+    finish(true);
+    await opening;
+    expect(lastApplication()).toMatchObject({ status: "active" });
+  });
+
+  it("does not load an incompatible owner when it is turned on from staging", async () => {
+    h.trust.set(PROJECT_A, {
+      decision: "enabled",
+      decidedAt: 0,
+      knownPluginIds: ["acme.ledger"],
+      stagedPluginIds: ["acme.ledger"],
+      mutedPluginIds: [],
+    });
+    h.deps.isEngineIncompatible.mockReturnValue(true);
+    h.setDiscovery(ROOT_A, [withApplication("acme.ledger")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    await h.controller.activateStaged(PROJECT_A, "acme.ledger");
+    expect(h.deps.loadProjectPlugin).not.toHaveBeenCalled();
+    expect(lastApplication()).toMatchObject({
+      status: "unavailable",
+      reason: "engine-incompatible",
+    });
+  });
+
+  it("takes down a loaded owner once its range no longer admits this Daintree", async () => {
+    enable(["acme.ledger"]);
+    h.setDiscovery(ROOT_A, [withApplication("acme.ledger")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    expect(h.controller.loadedManifestIds(PROJECT_A)).toEqual(["acme.ledger"]);
+
+    h.deps.isEngineIncompatible.mockReturnValue(true);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    expect(h.deps.unloadProjectPlugin).toHaveBeenCalledWith(
+      makeProjectPluginInstanceKey(PROJECT_A, "acme.ledger")
+    );
+    expect(h.controller.loadedManifestIds(PROJECT_A)).toEqual([]);
+  });
+
+  it("reports a retried load as loading, not as the failure it is retrying", async () => {
+    enable(["acme.ledger"]);
+    h.deps.loadProjectPlugin.mockResolvedValueOnce(false);
+    h.setDiscovery(ROOT_A, [withApplication("acme.ledger")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    expect(lastApplication()).toMatchObject({ reason: "load-failed" });
+
+    let finish: (ok: boolean) => void = () => {};
+    h.deps.loadProjectPlugin.mockImplementationOnce(
+      () => new Promise<boolean>((resolve) => (finish = resolve))
+    );
+    const retry = h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    await vi.waitFor(() => expect(h.deps.loadProjectPlugin).toHaveBeenCalledTimes(2));
+    expect(lastApplication()).toMatchObject({ status: "loading" });
+    finish(true);
+    await retry;
+    expect(lastApplication()).toMatchObject({ status: "active" });
+  });
+
+  it("is disabled while the owner waits to be turned on, and active once it is", async () => {
+    h.trust.set(PROJECT_A, {
+      decision: "enabled",
+      decidedAt: 0,
+      knownPluginIds: ["acme.ledger"],
+      stagedPluginIds: ["acme.ledger"],
+      mutedPluginIds: [],
+    });
+    h.setDiscovery(ROOT_A, [withApplication("acme.ledger")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    expect(lastApplication()).toMatchObject({ status: "disabled", reason: "staged" });
+
+    await h.controller.activateStaged(PROJECT_A, "acme.ledger");
+    expect(lastApplication()).toMatchObject({ status: "active" });
+  });
+
+  it("treats a load that throws as failed, and clears the failure when a reload succeeds", async () => {
+    enable(["acme.ledger"]);
+    h.deps.loadProjectPlugin.mockRejectedValueOnce(new Error("worker failed to fork"));
+    h.setDiscovery(ROOT_A, [withApplication("acme.ledger")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    expect(lastApplication()).toMatchObject({ status: "unavailable", reason: "load-failed" });
+
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    expect(lastApplication()).toMatchObject({ status: "active" });
+  });
+
+  it("falls back once trust is revoked", async () => {
+    enable(["acme.ledger"]);
+    h.setDiscovery(ROOT_A, [withApplication("acme.ledger")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    await h.controller.setTrust(PROJECT_A, "disabled");
+    const application = lastApplication() as Record<string, unknown>;
+    expect(application).toMatchObject({ status: "disabled", reason: "untrusted" });
+    expect(application.instanceId).toBeUndefined();
+  });
+
+  it("is replaced when another plugin holds the Home it lands on", async () => {
+    enable(["acme.ledger"]);
+    h.deps.getProjectHomeHolder.mockReturnValue("project:other");
+    h.setDiscovery(ROOT_A, [withApplication("acme.ledger")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    expect(lastApplication()).toMatchObject({ status: "replaced", heldBy: "project:other" });
+  });
+
+  it("applies neither application when two plugins declare one", async () => {
+    enable(["acme.ledger", "acme.books"]);
+    h.setDiscovery(ROOT_A, [withApplication("acme.ledger"), withApplication("acme.books")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    expect(lastApplication()).toMatchObject({
+      status: "unavailable",
+      reason: "owner-ambiguous",
+      candidates: ["acme.books", "acme.ledger"],
+    });
+  });
+
+  it("knows nothing about a project it has not opened", () => {
+    expect(h.controller.getProjectApplication(PROJECT_B)).toBeNull();
+  });
+
+  describe("payload preflight (#14113)", () => {
+    const MISSING = {
+      reason: "assets-missing" as const,
+      problems: ['views[0].componentPath "dist/home.js" is missing from the plugin'],
+    };
+    const instanceKey = makeProjectPluginInstanceKey(PROJECT_A, "acme.ledger");
+
+    it("checks an owner's payload before loading it, and only an owner's", async () => {
+      enable(["acme.ledger", "acme.dashboard"]);
+      h.setDiscovery(ROOT_A, [withApplication("acme.ledger"), discovered("acme.dashboard")]);
+      await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+
+      expect(h.deps.preflightApplication).toHaveBeenCalledExactlyOnceWith({
+        projectId: PROJECT_A,
+        projectRoot: ROOT_A,
+        dir: "/tmp/plugins/ledger",
+        manifest: expect.objectContaining({ name: "acme.ledger" }),
+      });
+      expect(h.deps.preflightApplication.mock.invocationCallOrder[0]).toBeLessThan(
+        h.deps.loadProjectPlugin.mock.invocationCallOrder[0]!
+      );
+    });
+
+    it("does not load a payload that fails, and says what it found", async () => {
+      enable(["acme.ledger"]);
+      h.deps.preflightApplication.mockResolvedValue(MISSING);
+      h.setDiscovery(ROOT_A, [withApplication("acme.ledger")]);
+      await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+
+      expect(h.deps.loadProjectPlugin).not.toHaveBeenCalled();
+      expect(lastApplication()).toEqual({
+        status: "unavailable",
+        ownerId: "acme.ledger",
+        version: "1.0.0",
+        application: APP,
+        reason: "assets-missing",
+        problems: MISSING.problems,
+        fallback: "standard-workspace",
+      });
+      const row = h.controller.listProjectPlugins(PROJECT_A)[0]!;
+      expect(row.state).toBe("blocked");
+      expect(row.loadError?.message).toBe(MISSING.problems[0]);
+    });
+
+    it("reports a database written by a newer copy as schema-too-new", async () => {
+      enable(["acme.ledger"]);
+      const problems = ['database "ledger" is at schema version 4, but version 1.0.0 declares 3'];
+      h.deps.preflightApplication.mockResolvedValue({ reason: "schema-too-new", problems });
+      h.setDiscovery(ROOT_A, [withApplication("acme.ledger")]);
+      await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+
+      expect(h.deps.loadProjectPlugin).not.toHaveBeenCalled();
+      expect(lastApplication()).toMatchObject({
+        status: "unavailable",
+        reason: "schema-too-new",
+        problems,
+      });
+    });
+
+    it("retries on the next reconcile, and clears the finding once the payload passes", async () => {
+      enable(["acme.ledger"]);
+      h.deps.preflightApplication.mockResolvedValueOnce(MISSING);
+      h.setDiscovery(ROOT_A, [withApplication("acme.ledger")]);
+      await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+      expect(lastApplication()).toMatchObject({ reason: "assets-missing" });
+
+      // The watcher's rescan after the missing file lands: nothing was loaded,
+      // so it names no ids and the open pass is what retries.
+      await h.controller.reloadChanged(PROJECT_A, ROOT_A, []);
+
+      expect(h.deps.preflightApplication).toHaveBeenCalledTimes(2);
+      expect(h.controller.loadedManifestIds(PROJECT_A)).toEqual(["acme.ledger"]);
+      const application = lastApplication() as Record<string, unknown>;
+      expect(application).toMatchObject({ status: "active" });
+      expect(application.problems).toBeUndefined();
+      expect(h.controller.listProjectPlugins(PROJECT_A)[0]!.loadError).toBeUndefined();
+    });
+
+    it("takes a running owner down when its update fails, and settles its reload as not kept", async () => {
+      enable(["acme.ledger"]);
+      h.setDiscovery(ROOT_A, [withApplication("acme.ledger")]);
+      await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+      expect(h.controller.loadedManifestIds(PROJECT_A)).toEqual(["acme.ledger"]);
+
+      h.deps.preflightApplication.mockResolvedValueOnce(MISSING);
+      await h.controller.reloadChanged(PROJECT_A, ROOT_A, ["acme.ledger"]);
+
+      expect(h.deps.unloadProjectPlugin).toHaveBeenCalledWith(instanceKey, { reload: true });
+      expect(h.deps.loadProjectPlugin).toHaveBeenCalledTimes(1);
+      expect(h.controller.loadedManifestIds(PROJECT_A)).toEqual([]);
+      expect(h.deps.settleProjectPluginReload).toHaveBeenCalledExactlyOnceWith(instanceKey, false);
+      expect(lastApplication()).toMatchObject({ status: "unavailable", reason: "assets-missing" });
+    });
+
+    it("loads nothing when a close overtakes the check, whatever the check found", async () => {
+      for (const found of [null, MISSING]) {
+        h = makeHarness();
+        enable(["acme.ledger"]);
+        let finish!: (result: typeof found) => void;
+        h.deps.preflightApplication.mockImplementationOnce(
+          () => new Promise((resolve) => (finish = resolve))
+        );
+        h.setDiscovery(ROOT_A, [withApplication("acme.ledger")]);
+        const opening = h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+        await vi.waitFor(() => expect(h.deps.preflightApplication).toHaveBeenCalled());
+        const closing = h.controller.onProjectClosed(PROJECT_A);
+        finish(found);
+        await opening;
+        await closing;
+
+        expect(h.deps.loadProjectPlugin).not.toHaveBeenCalled();
+        expect(h.controller.loadedManifestIds(PROJECT_A)).toEqual([]);
+      }
+    });
+
+    it("forgets the finding with the project, so a reopen checks the files again", async () => {
+      enable(["acme.ledger"]);
+      h.deps.preflightApplication.mockResolvedValueOnce(MISSING);
+      h.setDiscovery(ROOT_A, [withApplication("acme.ledger")]);
+      await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+      await h.controller.onProjectClosed(PROJECT_A);
+
+      await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+
+      expect(h.deps.preflightApplication).toHaveBeenCalledTimes(2);
+      expect(lastApplication()).toMatchObject({ status: "active" });
+    });
+
+    it("drops the finding when trust is revoked, so it never describes files nobody re-checked", async () => {
+      enable(["acme.ledger"]);
+      h.deps.preflightApplication.mockResolvedValueOnce(MISSING);
+      h.setDiscovery(ROOT_A, [withApplication("acme.ledger")]);
+      await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+      expect(h.controller.listProjectPlugins(PROJECT_A)[0]!.loadError).toBeDefined();
+
+      await h.controller.setTrust(PROJECT_A, "disabled");
+
+      expect(h.controller.listProjectPlugins(PROJECT_A)[0]!.loadError).toBeUndefined();
+      expect(lastApplication()).toMatchObject({ status: "disabled", reason: "untrusted" });
+      expect((lastApplication() as Record<string, unknown>).problems).toBeUndefined();
+    });
+
+    it("loads as before when the check itself throws", async () => {
+      enable(["acme.ledger"]);
+      h.deps.preflightApplication.mockRejectedValueOnce(new Error("disk went away"));
+      h.setDiscovery(ROOT_A, [withApplication("acme.ledger")]);
+      await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+
+      expect(h.controller.loadedManifestIds(PROJECT_A)).toEqual(["acme.ledger"]);
+      expect(lastApplication()).toMatchObject({ status: "active" });
+    });
+
+    it("leaves a muted owner's row clean, and checks again when it is switched back on", async () => {
+      enable(["acme.ledger"]);
+      h.deps.preflightApplication.mockResolvedValueOnce(MISSING);
+      h.setDiscovery(ROOT_A, [withApplication("acme.ledger")]);
+      await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+      await h.controller.setMuted(PROJECT_A, "acme.ledger", true);
+
+      expect(h.controller.listProjectPlugins(PROJECT_A)[0]!.loadError).toBeUndefined();
+      expect(lastApplication()).toMatchObject({ status: "disabled", reason: "muted" });
+
+      await h.controller.setMuted(PROJECT_A, "acme.ledger", false);
+      expect(h.deps.preflightApplication).toHaveBeenCalledTimes(2);
+      expect(lastApplication()).toMatchObject({ status: "active" });
+    });
   });
 });

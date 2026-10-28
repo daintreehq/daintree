@@ -1,3 +1,4 @@
+// eager-import-allow: reads saved user-stopped previews only when the session service is created on demand, after its dynamic imports
 import { lstat } from "node:fs/promises";
 import { app } from "electron";
 import { z } from "zod";
@@ -33,7 +34,6 @@ import type {
   DevPreviewProxyService as DevPreviewProxyServiceType,
   ResolveRemoteUpstream,
 } from "../../services/DevPreviewProxyService.js";
-import { getHibernationService } from "../../services/HibernationService.js";
 import { events } from "../../services/events.js";
 import { withTimeout } from "../../utils/withTimeout.js";
 
@@ -325,14 +325,6 @@ export function registerDevPreviewHandlers(deps: HandlerDependencies): () => voi
 
   const cleanups: Array<() => void> = [namespace.register()];
 
-  const unsubHibernation = getHibernationService().onProjectHibernated((projectId) => {
-    // Skip if the session service was never created — no sessions exist to stop.
-    if (!sessionService) return;
-    sessionService.stopByProject(projectId).catch((err) => {
-      console.error("[DevPreview] Failed to stop sessions during hibernation:", err);
-    });
-  });
-
   // External removals (`git worktree remove`, an IDE) never pass through the
   // UI delete path that stops the dev server first (#9084), so the workspace
   // host's removal event is the only signal that its server is now running in
@@ -363,7 +355,6 @@ export function registerDevPreviewHandlers(deps: HandlerDependencies): () => voi
   return () => {
     disposed = true;
     unsubWorktreeRemove();
-    unsubHibernation();
     if (sessionService) {
       if (liveSessionService === sessionService) liveSessionService = null;
       sessionService.dispose();

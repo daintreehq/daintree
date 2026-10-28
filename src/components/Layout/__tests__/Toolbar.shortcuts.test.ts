@@ -4,8 +4,8 @@ import path from "path";
 import { readToolbarCss } from "@/__tests__/support/cssManifest";
 import { extractAtRuleBlocks } from "./cssBlocks";
 import { readIndexCss } from "@/__tests__/support/hostCss";
+import { readToolbarSource } from "./toolbarSource";
 
-const TOOLBAR_PATH = path.resolve(__dirname, "../Toolbar.tsx");
 const PROBLEMS_BUTTON_PATH = path.resolve(__dirname, "../ToolbarProblemsButton.tsx");
 const PORTAL_BUTTON_PATH = path.resolve(__dirname, "../ToolbarPortalButton.tsx");
 const SETTINGS_BUTTON_PATH = path.resolve(__dirname, "../ToolbarSettingsButton.tsx");
@@ -39,7 +39,7 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
       voiceSource,
       pluginTraySource,
     ] = await Promise.all([
-      fs.readFile(TOOLBAR_PATH, "utf-8"),
+      readToolbarSource(),
       fs.readFile(PROBLEMS_BUTTON_PATH, "utf-8"),
       fs.readFile(PORTAL_BUTTON_PATH, "utf-8"),
       fs.readFile(SETTINGS_BUTTON_PATH, "utf-8"),
@@ -278,7 +278,7 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
       // definition here is what makes this an agreement check rather than a
       // restatement of either side.
       const definitionSource = await fs.readFile(COPY_TREE_ACTION_PATH, "utf-8");
-      const copyTreeAction = definitionSource.match(/id: "worktree\.copyTree"[\s\S]*?run: async/);
+      const copyTreeAction = definitionSource.match(/id: "worktree\.copyTree"[\s\S]*?run:/);
       expect(copyTreeAction).not.toBeNull();
       if (!copyTreeAction![0].includes("suppressShortcutHint: true")) return;
 
@@ -324,7 +324,7 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
       // belongs in it — asserted against its neighbours rather than as a
       // standalone literal, so deleting the effect fails here too.
       const evictionEffect = source.match(
-        /Close open dropdowns when their buttons move into overflow[\s\S]*?\}, \[leftOverflow, rightOverflow\]\);/
+        /Close open dropdowns when their buttons move into overflow[\s\S]*?\}, \[\s*measuredLeftOverflow,\s*measuredRightOverflow,\s*demotedIds[^\]]*\]\);/
       );
       expect(evictionEffect).not.toBeNull();
       expect(evictionEffect![0]).toContain('overflowSet.has("notification-center")');
@@ -407,7 +407,8 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
   // tray that now owns un-promoted contributions.
   describe("PluginToolbarButton aria-keyshortcuts — issue #8938", () => {
     it("calls useAriaKeyshortcuts with the plugin actionId", () => {
-      expect(pluginTraySource).toContain("useAriaKeyshortcuts(config.actionId)");
+      // A popover button has none (#13784), so the empty id names no binding.
+      expect(pluginTraySource).toContain('useAriaKeyshortcuts(config.actionId ?? "")');
     });
 
     it("renders aria-keyshortcuts on the plugin Button", () => {

@@ -3,8 +3,8 @@
    * Type-checks the Playwright suites and configs, which no other project
    * includes.
    *
-   * Same regime as tsconfig.perf.json: specs import renderer `__preview__`
-   * fixtures and shared modules through the `@/` and `@shared/` aliases, so
+   * Same regime as tsconfig.perf.json: specs import renderer and shared
+   * modules through the `@/` and `@shared/` aliases, so
    * this uses bundler resolution with DOM and JSX, and keeps
    * `noUncheckedIndexedAccess` off to match electron/ and shared/, which make
    * up most of the transitive graph. `src/types` and `electron/types` supply

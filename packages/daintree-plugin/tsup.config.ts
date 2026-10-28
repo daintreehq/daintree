@@ -2,6 +2,7 @@ import { build } from "esbuild";
 import { defineConfig } from "tsup";
 import { HOST_IMPORTMAP_SPECIFIERS } from "../plugin-vite/src/hostImportMap";
 import { pluginStyleContractEsbuild } from "../../scripts/lib/plugin-style-contract.mjs";
+import { stageReferenceApp } from "./src/scaffold/referenceApp";
 
 export default defineConfig({
   entry: {
@@ -43,6 +44,9 @@ export default defineConfig({
   // `clean`. Every host specifier stays bare for the page's import map, which
   // is what gives the page and the plugin's scenes one React and one tour.
   onSuccess: async () => {
+    // `new --project` copies the reference application, built, from beside
+    // the bundle; staged after `clean`, and only the files a scaffold receives.
+    await stageReferenceApp("../../plugins/sample-project/acme.requests", "dist/reference-app");
     await build({
       entryPoints: ["src/tour/preview/browser/harness.tsx"],
       outdir: "dist/tour-preview",

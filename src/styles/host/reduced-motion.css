@@ -38,6 +38,10 @@
     animation: skeleton-reveal 0s var(--anti-flicker-delay) backwards;
   }
 
+  .daintree-mark-stroke {
+    animation: none;
+  }
+
   .tour-click-ring {
     display: none;
   }

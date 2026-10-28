@@ -115,8 +115,8 @@ const initializeBackendTierMock = vi.fn();
 const setGPUHardwareAvailableMock = vi.fn();
 const setTargetSizeMock = vi.fn();
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     fetchAndRestore: fetchAndRestoreMock,
     restoreFetchedState: restoreFetchedStateMock,
     initializeBackendTier: initializeBackendTierMock,
@@ -126,8 +126,11 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     notifyScrollbackRestoreListeners: vi.fn(),
     addInstanceDestroyedListener: vi.fn(() => () => {}),
     notifyRestoreSettledWaiters: vi.fn(),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 const notifyMock = vi.fn().mockReturnValue("notification-id");
 vi.mock("@/lib/notify", () => ({
@@ -135,6 +138,11 @@ vi.mock("@/lib/notify", () => ({
 }));
 
 const { hydrateAppState } = await import("../stateHydration");
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock so restore reaches it through the accessor.
+const { load: loadTerminalService } =
+  await import("@/services/terminal/terminalInstanceServiceAccessor");
+await loadTerminalService();
 const { panelPersistence } = await import("@/store/persistence/panelPersistence");
 
 function makeMockManagedTerminal(id: string) {
@@ -660,6 +668,49 @@ describe("hydrateAppState", () => {
         requestedId: "agent-1",
       })
     );
+  });
+
+  it("restores the last-focused terminal first when a non-PTY panel heads the MRU (#10527, #13763)", async () => {
+    appClientMock.hydrate.mockResolvedValue({
+      appState: {
+        terminals: [
+          { id: "browser-1", kind: "browser", title: "Browser", cwd: "/project", location: "grid" },
+          {
+            id: "term-a",
+            kind: "terminal",
+            title: "A",
+            cwd: "/project",
+            location: "grid",
+            worktreeId: "wt-active",
+          },
+          {
+            id: "term-b",
+            kind: "terminal",
+            title: "B",
+            cwd: "/project",
+            location: "grid",
+            worktreeId: "wt-active",
+          },
+        ],
+        activeWorktreeId: "wt-active",
+        mruList: ["terminal:browser-1", "terminal:term-b", "terminal:term-a"],
+      },
+      terminalConfig,
+      project,
+      agentSettings,
+    });
+    const addPanel = vi.fn().mockResolvedValue("panel-id");
+
+    await hydrateAppState({
+      addPanel,
+      setActiveWorktree: vi.fn(),
+      loadRecipes: vi.fn().mockResolvedValue(undefined),
+      openDiagnosticsDock: vi.fn(),
+    });
+
+    const restoredTitles = addPanel.mock.calls.map((call) => (call[0] as { title?: string }).title);
+    expect(restoredTitles.indexOf("B")).toBeGreaterThanOrEqual(0);
+    expect(restoredTitles.indexOf("B")).toBeLessThan(restoredTitles.indexOf("A"));
   });
 
   describe("prefetchedHydrateResult", () => {

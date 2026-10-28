@@ -1,36 +1,16 @@
+import { hostname } from "node:os";
 import { CHANNELS } from "../../ipc/channels.js";
 import { LOCAL_CLIENT_ID } from "../../ipc/endpoint.js";
+import { getRemoteService } from "../../remote/runtime.js";
 import { store } from "../../store.js";
 import { getAllAppWebContents } from "../../window/webContentsRegistry.js";
-import { getFleetSnapshotServiceRef, getPtyClient } from "../../window/serviceRefs.js";
 import type { DeviceAnswerEvent } from "../../../shared/types/ipc/deviceAnswer.js";
-import { peekDriveLeaseService } from "../DriveLeaseService.js";
-import { projectStore } from "../ProjectStore.js";
-import { scratchStore } from "../ScratchStore.js";
-import { planListedChoice } from "../../../shared/utils/terminalChoice.js";
-import { answerRefused, answerRunByLabel } from "../terminalAnswer.js";
-import { redactSecrets } from "../redactSecrets.js";
-import { DeviceAnswerService, type DevicePrincipal } from "./DeviceAnswerService.js";
+import { LOCAL_HOST_ID, isLocalHostId } from "../../../shared/types/remoteHosts.js";
+import { answerRefused } from "../terminalAnswer.js";
+import { DeviceAnswerService } from "./DeviceAnswerService.js";
 import { sanitizeDeviceAnswerSettings } from "./deviceAnswerSettings.js";
-import { isRunStillWaiting, listWaitingRuns } from "./deviceAnswerRuns.js";
-
-/**
- * A paired device stands in the drive lease as this machine's own windows
- * do: it drives a project wherever they do, and never one a remote Shell
- * holds. It never takes the lease.
- */
-function deviceDrivesRun(device: DevicePrincipal, runId: string): boolean {
-  const lease = peekDriveLeaseService();
-  if (!lease) return true;
-  const projectId = getPtyClient()?.getTerminalProjectId(runId) ?? null;
-  if (projectId === null) return true;
-  return lease.isDriving(projectId, {
-    endpointId: `device:${device.id}`,
-    clientId: LOCAL_CLIENT_ID,
-  });
-}
-
-const DRIVEN_ELSEWHERE = "This project is being driven from another screen. Nothing was pressed.";
+import type { DeviceWaitingList, DeviceWaitingRun } from "./deviceAnswerRuns.js";
+import { answerLocalRun, listLocalWaitingRuns } from "./localDeviceAnswer.js";
 
 /** Settings belong to this machine's own windows, never to a remote Shell. */
 function broadcastLocal(event: DeviceAnswerEvent): void {
@@ -44,46 +24,81 @@ function broadcastLocal(event: DeviceAnswerEvent): void {
   }
 }
 
+function thisMachineName(): string {
+  try {
+    return hostname() || "This computer";
+  } catch {
+    return "This computer";
+  }
+}
+
+/** Longest waiting first, whichever machine it waits on. */
+function bySince(a: DeviceWaitingRun, b: DeviceWaitingRun): number {
+  return (a.since ?? Infinity) - (b.since ?? Infinity);
+}
+
+async function listWaiting(options: { hosts: boolean }): Promise<DeviceWaitingList> {
+  const remote = options.hosts ? getRemoteService("deviceAnswerHosts") : undefined;
+  let hostsUnlisted = false;
+  const [local, hosts] = await Promise.all([
+    listLocalWaitingRuns(),
+    // Hosts that can't be read never hide this machine's own runs.
+    remote
+      ? Promise.resolve()
+          .then(() => remote.listWaiting())
+          .catch((error: unknown) => {
+            console.warn(
+              "[DeviceAnswer] Couldn't list connected hosts:",
+              (error as Error)?.message
+            );
+            hostsUnlisted = true;
+            return [];
+          })
+      : [],
+  ]);
+  const name = thisMachineName();
+  const runs: DeviceWaitingRun[] = [
+    ...local.map((run) => ({ ...run, hostId: LOCAL_HOST_ID, host: name })),
+    ...hosts.flatMap(({ hostId, host, runs: hostRuns }) =>
+      hostRuns.map((run) => ({ ...run, hostId, host }))
+    ),
+  ];
+  return {
+    runs: runs.sort(bySince),
+    hosts: hosts.map(({ hostId, host, status }) => ({ hostId, host, status })),
+    ...(hostsUnlisted ? { hostsUnlisted } : {}),
+  };
+}
+
 export function createDeviceAnswerService(): DeviceAnswerService {
   return new DeviceAnswerService({
     readSettings: () => sanitizeDeviceAnswerSettings(store.get("deviceAnswer")),
     writeSettings: (settings) => store.set("deviceAnswer", settings),
-    listWaiting: () =>
-      listWaitingRuns({
-        fleet: () => getFleetSnapshotServiceRef()?.getLastBroadcast() ?? null,
-        pty: () => getPtyClient(),
-        projectName: (workspaceId) =>
-          projectStore.getProjectById(workspaceId)?.name ??
-          scratchStore.getScratchById(workspaceId)?.name ??
-          null,
-      }),
-    answer: async ({ device, runId, spawnedAt, label, stillAllowed }) => {
-      const pty = getPtyClient();
-      if (!pty) throw answerRefused("Daintree's terminals aren't running. Nothing was pressed.");
-      const fleet = getFleetSnapshotServiceRef()?.getLastBroadcast() ?? null;
-      if (!isRunStillWaiting(fleet, runId, spawnedAt)) {
-        throw answerRefused("That agent isn't waiting any more. Nothing was pressed.");
+    listWaiting,
+    answer: async ({ device, hostId, runId, spawnedAt, label, stillAllowed }) => {
+      if (isLocalHostId(hostId)) {
+        // A device paired here stands in the drive lease as this machine's own
+        // windows do: it drives a project wherever they do, and never one a
+        // remote Shell holds.
+        await answerLocalRun({
+          standing: { endpointId: `device:${device.id}`, clientId: LOCAL_CLIENT_ID },
+          runId,
+          spawnedAt,
+          label,
+          stillAllowed,
+        });
+        return;
       }
-      if (!deviceDrivesRun(device, runId)) throw answerRefused(DRIVEN_ELSEWHERE);
-      await answerRunByLabel({
-        pty,
-        runId,
-        spawnedAt,
-        label,
-        // Only an option of the list on screen now, never text near a composer,
-        // matched as the device was sent it and pressed from the list as drawn.
-        plan: (screen, wanted) => planListedChoice(screen, wanted, redactSecrets),
-        stillAllowed: () => {
-          const refusal = stillAllowed();
-          if (refusal !== null) return refusal;
-          // Control can move to another screen between keys.
-          if (!deviceDrivesRun(device, runId)) {
-            return "Another screen took control of that project. Nothing more was pressed.";
-          }
-          return null;
-        },
-      });
+      const hosts = getRemoteService("deviceAnswerHosts");
+      if (!hosts) throw answerRefused("Remote hosts aren't running here. Nothing was pressed.");
+      // Asked once, before the host is: from there the host's own lease and
+      // the link decide each key, so removing the device mid-answer stops only
+      // the answers it hasn't sent yet.
+      const refusal = stillAllowed();
+      if (refusal !== null) throw answerRefused(refusal);
+      await hosts.answer({ hostId, runId, spawnedAt, label });
     },
+    hostName: (hostId) => getRemoteService("deviceAnswerHosts")?.hostName(hostId) ?? null,
     onStatusChanged: (status) => broadcastLocal({ type: "status-changed", status }),
   });
 }

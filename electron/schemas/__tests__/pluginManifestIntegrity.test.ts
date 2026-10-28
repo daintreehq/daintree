@@ -227,6 +227,119 @@ describe("location: settings views", () => {
   });
 });
 
+describe("location: sidebar views", () => {
+  function sidebarView(id: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
+    return { id, componentPath: "./view/sidebar.js", location: "sidebar", name: "Board", ...extra };
+  }
+
+  it("accepts several sidebar views with no panel of their own", () => {
+    const result = manifestWith({
+      views: [sidebarView("board", { priority: 200, when: "isGitBacked" }), sidebarView("docs")],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects a sidebar view without a name", () => {
+    const { name: _omit, ...unnamed } = sidebarView("board");
+    const result = manifestWith({ views: [unnamed] });
+    expect(result.success).toBe(false);
+    expect(issueWithCode(result, "sidebar_view_name_missing")?.path).toEqual([
+      "contributes",
+      "views",
+      0,
+      "name",
+    ]);
+  });
+
+  it.each(["activeSidebarView == 'acme.my-plugin.board'", "isGitBacked && !activeSidebarView"])(
+    "rejects a sidebar view whose when reads activeSidebarView: %s",
+    (when) => {
+      const result = manifestWith({ views: [sidebarView("board", { when })] });
+      expect(result.success).toBe(false);
+      expect(issueWithCode(result, "sidebar_view_when_reads_active_view")?.path).toEqual([
+        "contributes",
+        "views",
+        0,
+        "when",
+      ]);
+    }
+  );
+
+  it("rejects a sidebar view that shares a panel's id", () => {
+    const result = manifestWith({ panels: [panel("rich")], views: [sidebarView("rich")] });
+    expect(result.success).toBe(false);
+    expect(errorCodes(result)).toContain("sidebar_view_panel_id_collision");
+  });
+
+  it.each([
+    ["panel", { name: "Rich" }, "name"],
+    ["panel", { priority: 5 }, "priority"],
+    ["settings", { when: "isGitBacked" }, "when"],
+    ["fileEditor", { name: "Records" }, "name"],
+  ])("rejects a %s view that sets the sidebar-only %o", (location, extra, field) => {
+    const result = manifestWith({
+      panels: [panel("rich")],
+      views: [{ ...view(location === "panel" ? "rich" : "prefs"), location, ...extra }],
+    });
+    expect(result.success).toBe(false);
+    expect(issueWithCode(result, "view_sidebar_field_misplaced")?.path).toEqual([
+      "contributes",
+      "views",
+      0,
+      field,
+    ]);
+  });
+
+  it.each([
+    ["panel", { description: "Rich" }, "description"],
+    ["panel", { title: "Rich" }, "title"],
+    ["sidebar", { pages: [{ id: "a", title: "A" }] }, "pages"],
+    ["fileEditor", { title: "Records" }, "title"],
+  ])("rejects a %s view that sets the settings-only %o", (location, extra, field) => {
+    const base =
+      location === "sidebar"
+        ? sidebarView("board")
+        : { ...view(location === "panel" ? "rich" : "prefs"), location };
+    const result = manifestWith({ panels: [panel("rich")], views: [{ ...base, ...extra }] });
+    expect(result.success).toBe(false);
+    expect(issueWithCode(result, "view_settings_field_misplaced")?.path).toEqual([
+      "contributes",
+      "views",
+      0,
+      field,
+    ]);
+  });
+
+  it("accepts a settings view's title, description and pages", () => {
+    const result = manifestWith({
+      views: [
+        {
+          ...view("prefs"),
+          location: "settings",
+          title: "Board layout",
+          description: "Columns and swimlanes",
+          pages: [{ id: "columns", title: "Columns" }],
+        },
+      ],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects a project surface that names a sidebar view", () => {
+    const result = getPluginManifestSchema("project").safeParse({
+      name: "acme.my-plugin",
+      version: "1.0.0",
+      scope: "project",
+      contributes: {
+        views: [sidebarView("board")],
+        surfaces: { emptyCanvas: { viewId: "board" } },
+      },
+    });
+    expect(result.success).toBe(false);
+    expect(errorCodes(result)).toContain("surface_view_ref_sidebar");
+  });
+});
+
 describe("MCP server ${settings:*} token references (#10620)", () => {
   it("accepts tokens that name declared settings across command/args/env", () => {
     const result = manifestWith({
@@ -303,8 +416,11 @@ describe("MCP server ${settings:*} token references (#10620)", () => {
   });
 });
 
-describe("contributes.fileEditors (#12323)", () => {
-  function fileEditor(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+describe("contributes.fileEditors (#12323, #13809)", () => {
+  const builtinSchema = getPluginManifestSchema("builtin");
+  const projectSchema = getPluginManifestSchema("project");
+
+  function slotEditor(overrides: Record<string, unknown> = {}): Record<string, unknown> {
     return {
       id: "markdown",
       slot: "markdown.editor",
@@ -313,36 +429,214 @@ describe("contributes.fileEditors (#12323)", () => {
     };
   }
 
-  it("accepts a well-formed entry and defaults the group to empty", () => {
-    expect(manifestWith({ fileEditors: [fileEditor()] }).success).toBe(true);
+  function viewEditor(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      id: "records",
+      view: "records-editor",
+      mode: "edit",
+      extensions: ["json"],
+      ...overrides,
+    };
+  }
+
+  const editorView = {
+    id: "records-editor",
+    componentPath: "dist/editor.js",
+    location: "fileEditor",
+  };
+
+  function builtinWith(contributes: Record<string, unknown>) {
+    return builtinSchema.safeParse({ name: "daintree.my-plugin", version: "1.0.0", contributes });
+  }
+
+  function projectWith(contributes: Record<string, unknown>) {
+    return projectSchema.safeParse({
+      name: "acme.my-plugin",
+      version: "1.0.0",
+      scope: "project",
+      contributes,
+    });
+  }
+
+  it("accepts a slot-backed entry from a built-in plugin and defaults the group to empty", () => {
+    expect(builtinWith({ fileEditors: [slotEditor()] }).success).toBe(true);
     const bare = manifestWith({});
     expect(bare.success && bare.data.contributes.fileEditors).toEqual([]);
   });
 
-  it("accepts an explicit byte ceiling and refuses one above the host ceiling", () => {
-    expect(manifestWith({ fileEditors: [fileEditor({ maxBytes: 2 * 1024 * 1024 })] }).success).toBe(
+  it("refuses a slot-backed entry from any other origin", () => {
+    const result = manifestWith({ fileEditors: [slotEditor()] });
+    expect(result.success).toBe(false);
+    expect(issueWithCode(result, "fileEditors_slot_builtin_only")?.path).toEqual([
+      "contributes",
+      "fileEditors",
+      0,
+      "slot",
+    ]);
+  });
+
+  it("accepts a view-backed entry from an installed plugin", () => {
+    const result = manifestWith({ views: [editorView], fileEditors: [viewEditor()] });
+    expect(result.success).toBe(true);
+    expect(
+      manifestWith({
+        views: [editorView],
+        fileEditors: [viewEditor({ mode: "view", extensions: ["csv"] })],
+      }).success
+    ).toBe(true);
+  });
+
+  it("requires exactly one of slot and view, and a mode with a view", () => {
+    expect(
+      builtinWith({ views: [editorView], fileEditors: [viewEditor({ slot: "markdown.editor" })] })
+        .success
+    ).toBe(false);
+    expect(builtinWith({ fileEditors: [{ id: "x", extensions: ["md"] }] }).success).toBe(false);
+    expect(
+      manifestWith({ views: [editorView], fileEditors: [viewEditor({ mode: undefined })] }).success
+    ).toBe(false);
+    expect(builtinWith({ fileEditors: [slotEditor({ mode: "edit" })] }).success).toBe(false);
+  });
+
+  it("requires a view-backed entry to name one of its own fileEditor views", () => {
+    const missing = manifestWith({ fileEditors: [viewEditor()] });
+    expect(issueWithCode(missing, "file_editor_view_ref_unknown")).toBeDefined();
+    const panelView = manifestWith({
+      panels: [panel("records-editor")],
+      views: [{ id: "records-editor", componentPath: "dist/editor.js", location: "panel" }],
+      fileEditors: [viewEditor()],
+    });
+    expect(issueWithCode(panelView, "file_editor_view_ref_unknown")).toBeDefined();
+  });
+
+  it("does not require a panel for a fileEditor view, and refuses one sharing a panel id", () => {
+    expect(manifestWith({ views: [editorView] }).success).toBe(true);
+    const collision = manifestWith({ panels: [panel("records-editor")], views: [editorView] });
+    expect(issueWithCode(collision, "file_editor_view_panel_id_collision")).toBeDefined();
+  });
+
+  it("refuses a surface claim naming a fileEditor view", () => {
+    const result = projectWith({
+      views: [editorView],
+      surfaces: { emptyCanvas: { viewId: "records-editor" } },
+    });
+    expect(issueWithCode(result, "surface_view_ref_file_editor")).toBeDefined();
+  });
+
+  it("accepts paths only from a project plugin", () => {
+    const paths = ["content/entries/*.json", "data/**/*.record"];
+    expect(projectWith({ views: [editorView], fileEditors: [viewEditor({ paths })] }).success).toBe(
       true
     );
-    expect(manifestWith({ fileEditors: [fileEditor({ maxBytes: 0 })] }).success).toBe(false);
     expect(
-      manifestWith({ fileEditors: [fileEditor({ maxBytes: 65 * 1024 * 1024 })] }).success
+      projectWith({
+        views: [editorView],
+        fileEditors: [viewEditor({ extensions: undefined, paths })],
+      }).success
+    ).toBe(true);
+    const installed = manifestWith({ views: [editorView], fileEditors: [viewEditor({ paths })] });
+    expect(issueWithCode(installed, "fileEditors_paths_project_only")).toBeDefined();
+  });
+
+  it("accepts a default only on a project plugin's view-backed Edit editor with paths (#13811)", () => {
+    const paths = ["content/*.json"];
+    expect(
+      projectWith({ views: [editorView], fileEditors: [viewEditor({ paths, default: true })] })
+        .success
+    ).toBe(true);
+
+    const installed = manifestWith({
+      views: [editorView],
+      fileEditors: [viewEditor({ default: true })],
+    });
+    expect(issueWithCode(installed, "fileEditors_default_project_only")?.path).toEqual([
+      "contributes",
+      "fileEditors",
+      0,
+      "default",
+    ]);
+
+    for (const entry of [
+      // By extension only: a default would reach every file of the type.
+      viewEditor({ default: true }),
+      viewEditor({ paths, mode: "view", default: true }),
+    ]) {
+      const result = projectWith({ views: [editorView], fileEditors: [entry] });
+      expect(issueWithCode(result, "fileEditors_default_invalid")).toBeDefined();
+    }
+  });
+
+  it("refuses one plugin making two editors the default for the same pattern", () => {
+    const result = projectWith({
+      views: [editorView],
+      fileEditors: [
+        viewEditor({ paths: ["content/*.json"], default: true }),
+        viewEditor({ id: "pages", paths: ["pages/*.json", "content/*.json"], default: true }),
+      ],
+    });
+    expect(issueWithCode(result, "fileEditors_default_duplicate")?.path).toEqual([
+      "contributes",
+      "fileEditors",
+      1,
+      "paths",
+    ]);
+    // Without the flag, sharing a pattern only adds a choice.
+    expect(
+      projectWith({
+        views: [editorView],
+        fileEditors: [
+          viewEditor({ paths: ["content/*.json"], default: true }),
+          viewEditor({ id: "pages", paths: ["content/*.json"] }),
+        ],
+      }).success
+    ).toBe(true);
+  });
+
+  it("refuses paths that reach outside the project or negate", () => {
+    for (const pattern of [
+      "/etc/*.json",
+      "../x.json",
+      "a/../b.json",
+      "C:/x.json",
+      "a\\b",
+      "!x.json",
+    ]) {
+      expect(
+        projectWith({ views: [editorView], fileEditors: [viewEditor({ paths: [pattern] })] })
+          .success
+      ).toBe(false);
+    }
+  });
+
+  it("requires extensions or paths", () => {
+    expect(
+      manifestWith({ views: [editorView], fileEditors: [viewEditor({ extensions: undefined })] })
+        .success
     ).toBe(false);
   });
 
-  it("requires bare lower-case extensions without the dot", () => {
-    expect(manifestWith({ fileEditors: [fileEditor({ extensions: [".md"] })] }).success).toBe(
+  it("accepts an explicit byte ceiling and refuses one above the host ceiling", () => {
+    expect(builtinWith({ fileEditors: [slotEditor({ maxBytes: 2 * 1024 * 1024 })] }).success).toBe(
+      true
+    );
+    expect(builtinWith({ fileEditors: [slotEditor({ maxBytes: 0 })] }).success).toBe(false);
+    expect(builtinWith({ fileEditors: [slotEditor({ maxBytes: 65 * 1024 * 1024 })] }).success).toBe(
       false
     );
-    expect(manifestWith({ fileEditors: [fileEditor({ extensions: ["MD"] })] }).success).toBe(false);
-    expect(manifestWith({ fileEditors: [fileEditor({ extensions: [] })] }).success).toBe(false);
+  });
+
+  it("requires bare lower-case extensions without the dot", () => {
+    expect(builtinWith({ fileEditors: [slotEditor({ extensions: [".md"] })] }).success).toBe(false);
+    expect(builtinWith({ fileEditors: [slotEditor({ extensions: ["MD"] })] }).success).toBe(false);
+    expect(builtinWith({ fileEditors: [slotEditor({ extensions: [] })] }).success).toBe(false);
   });
 
   it("is strict about unknown fields", () => {
-    expect(manifestWith({ fileEditors: [fileEditor({ component: "x" })] }).success).toBe(false);
+    expect(builtinWith({ fileEditors: [slotEditor({ component: "x" })] }).success).toBe(false);
   });
 
   it("rejects duplicate ids", () => {
-    const result = manifestWith({ fileEditors: [fileEditor(), fileEditor()] });
+    const result = builtinWith({ fileEditors: [slotEditor(), slotEditor()] });
     expect(result.success).toBe(false);
   });
 });

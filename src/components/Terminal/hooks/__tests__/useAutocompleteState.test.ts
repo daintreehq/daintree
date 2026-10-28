@@ -100,6 +100,93 @@ describe("useAutocompleteState", () => {
     });
   });
 
+  describe("`#` selection", () => {
+    function hashContext(query: string): ActiveCompletionContext {
+      return { triggerChar: "#", start: 6, tokenEnd: 7 + query.length, query };
+    }
+
+    it("starts a `#` session with nothing selected", () => {
+      render(
+        base({
+          activeCompletionContext: hashContext("33"),
+          autocompleteItems: [item("ref:issue:3330")],
+          selectedIndex: 0,
+        })
+      );
+      expect(setSelectedIndex).toHaveBeenCalledWith(-1);
+    });
+
+    it("selects nothing when rows arrive for the same query", () => {
+      const { rerender } = render(
+        base({ activeCompletionContext: hashContext(""), autocompleteItems: [], selectedIndex: 0 })
+      );
+      setSelectedIndex.mockClear();
+      rerender(
+        base({
+          activeCompletionContext: hashContext(""),
+          autocompleteItems: [item("ref:issue:1"), item("ref:pr:2")],
+          selectedIndex: -1,
+        })
+      );
+      expect(setSelectedIndex).not.toHaveBeenCalled();
+    });
+
+    it("goes back to no selection when the chosen row leaves, never to its neighbour", () => {
+      const rows = [item("ref:issue:1"), item("ref:pr:2"), item("ref:issue:3")];
+      const { rerender } = render(
+        base({
+          activeCompletionContext: hashContext(""),
+          autocompleteItems: rows,
+          selectedIndex: -1,
+        })
+      );
+      // The user arrows to the second row.
+      rerender(
+        base({
+          activeCompletionContext: hashContext(""),
+          autocompleteItems: rows,
+          selectedIndex: 1,
+        })
+      );
+      setSelectedIndex.mockClear();
+      rerender(
+        base({
+          activeCompletionContext: hashContext(""),
+          autocompleteItems: [item("ref:issue:1"), item("ref:issue:3")],
+          selectedIndex: 1,
+        })
+      );
+      expect(setSelectedIndex).toHaveBeenCalledWith(-1);
+    });
+
+    it("keeps the chosen row when it survives a refresh", () => {
+      const rows = [item("ref:issue:1"), item("ref:pr:2")];
+      const { rerender } = render(
+        base({
+          activeCompletionContext: hashContext(""),
+          autocompleteItems: rows,
+          selectedIndex: -1,
+        })
+      );
+      rerender(
+        base({
+          activeCompletionContext: hashContext(""),
+          autocompleteItems: rows,
+          selectedIndex: 1,
+        })
+      );
+      setSelectedIndex.mockClear();
+      rerender(
+        base({
+          activeCompletionContext: hashContext(""),
+          autocompleteItems: [item("ref:issue:9"), ...rows],
+          selectedIndex: 1,
+        })
+      );
+      expect(setSelectedIndex).toHaveBeenCalledWith(2);
+    });
+  });
+
   describe("outside click", () => {
     it("registers pointerdown listener when autocomplete is open", () => {
       const addSpy = vi.spyOn(document, "addEventListener");

@@ -74,6 +74,16 @@ function isUnder(root: string, candidate: string): boolean {
   return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
 }
 
+/** A save the host refused because another screen drives the project says so in its own words. */
+function saveErrorMessage(error: unknown): string {
+  const message = formatErrorMessage(error, "Save failed");
+  const { code, userMessage } = (error ?? {}) as { code?: unknown; userMessage?: unknown };
+  if (code !== "DRIVEN_ELSEWHERE") return message;
+  return typeof userMessage === "string"
+    ? userMessage
+    : message.replace(/^DRIVEN_ELSEWHERE:\s*/, "");
+}
+
 const RECOVER_ACK_TIMEOUT_MS = 10_000;
 const RECOVER_ACK_RETRY_MS = 500;
 
@@ -305,7 +315,7 @@ export async function activate(
         if (code === "TARGET_UNAVAILABLE" || message.startsWith("TARGET_UNAVAILABLE")) {
           return { status: "unavailable" };
         }
-        return { status: "error", message };
+        return { status: "error", message: saveErrorMessage(error) };
       }
     }
   );
@@ -338,7 +348,7 @@ export async function activate(
         const message = formatErrorMessage(error, "Save failed");
         if (code === "TARGET_EXISTS" || message.startsWith("TARGET_EXISTS"))
           return { status: "exists" };
-        return { status: "error", message };
+        return { status: "error", message: saveErrorMessage(error) };
       }
     }
   );
@@ -398,7 +408,7 @@ export async function activate(
       title: "Markdown: Recover drafts…",
       description:
         "List unsaved Markdown drafts whose panel is gone and reopen one in Edit mode in its own project and worktree.",
-      category: "files",
+      category: "Markdown",
       kind: "command",
       danger: "safe",
       keywords: ["markdown", "draft", "recover", "unsaved", "restore"],

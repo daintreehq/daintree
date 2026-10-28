@@ -47,6 +47,23 @@ describe("noticeBuildMismatch", () => {
     });
   });
 
+  it("warns again once this machine moves to another build", () => {
+    noticeBuildMismatch(
+      "h1",
+      "studio-01",
+      { kind: "version", local: "1.4.0", remote: "1.3.0" },
+      build("1.3.0")
+    );
+    noticeBuildMismatch(
+      "h1",
+      "studio-01",
+      { kind: "version", local: "1.5.0", remote: "1.3.0" },
+      build("1.3.0")
+    );
+    expect(notify).toHaveBeenCalledTimes(2);
+    expect(notify.mock.calls[1]![0].message).toContain("1.3.0");
+  });
+
   it("offers to update this machine when the host is ahead", () => {
     noticeBuildMismatch(
       "h1",

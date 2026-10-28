@@ -756,6 +756,125 @@ describe("createWindowWithState", () => {
         height: 705,
       });
     });
+
+    describe("across relaunches at 125%", () => {
+      // 1920x1080 at 125% with a 48px taskbar: a 1536x816 DIP work area.
+      const workArea = { x: 0, y: 0, width: 1536, height: 816 };
+      type Rect = { x: number; y: number; width: number; height: number };
+
+      // A window that reports itself a few pixels larger than it was created or
+      // set with, the way a hidden-title-bar window does at fractional scaling.
+      function simulateFractionalScaling() {
+        let placed: Rect | null = null;
+        const report = (): Rect => ({
+          ...placed!,
+          width: placed!.width + 5,
+          height: placed!.height + 8,
+        });
+        const current = (): Rect => {
+          if (!placed) {
+            const opts = constructorCalls.at(-1) as Partial<Rect>;
+            placed = {
+              x: opts.x ?? 0,
+              y: opts.y ?? 0,
+              width: opts.width ?? 0,
+              height: opts.height ?? 0,
+            };
+          }
+          return report();
+        };
+        winInstance.getBounds.mockImplementation(current);
+        winInstance.getNormalBounds.mockImplementation(current);
+        winInstance.setBounds.mockImplementation((b: Rect) => {
+          placed = { ...b };
+        });
+        winInstance.setSize.mockImplementation((width: number, height: number) => {
+          current();
+          placed = { ...placed!, width, height };
+        });
+        winInstance.center.mockImplementation(() => {
+          current();
+          placed = {
+            ...placed!,
+            x: Math.round((workArea.width - placed!.width) / 2),
+            y: Math.round((workArea.height - placed!.height) / 2),
+          };
+        });
+        return () => {
+          placed = null;
+        };
+      }
+
+      function relaunch(
+        times: number,
+        projectPath?: string,
+        initial: Record<string, unknown> = {}
+      ): Rect[] {
+        let saved = structuredClone(initial);
+        windowStatesStoreMock.get.mockImplementation(() => structuredClone(saved));
+        windowStatesStoreMock.set.mockImplementation((_key: string, value: typeof saved) => {
+          saved = structuredClone(value);
+        });
+        const resetWindow = simulateFractionalScaling();
+        const history: Rect[] = [];
+        for (let i = 0; i < times; i++) {
+          resetWindow();
+          eventHandlers.clear();
+          createWindowWithState({ show: false }, projectPath);
+          eventHandlers.get("close")!();
+          const { x, y, width, height } = (saved as Record<string, Rect>)[
+            projectPath ?? "__legacy__"
+          ];
+          history.push({ x, y, width, height });
+        }
+        return history;
+      }
+
+      beforeEach(() => {
+        setPlatform("win32");
+        const display = { workArea, bounds: { x: 0, y: 0, width: 1536, height: 864 } };
+        screenMock.getDisplayMatching.mockReturnValue(display);
+        screenMock.getPrimaryDisplay.mockReturnValue(display);
+      });
+
+      afterEach(() => {
+        windowStatesStoreMock.get.mockReset();
+        windowStatesStoreMock.set.mockReset();
+        winInstance.getBounds.mockReset();
+        winInstance.getNormalBounds.mockReset();
+        winInstance.setBounds.mockReset();
+        winInstance.setSize.mockReset();
+        winInstance.center.mockReset();
+        const display = {
+          workArea: { x: 0, y: 0, width: 1920, height: 1080 },
+          bounds: { x: 0, y: 0, width: 1920, height: 1080 },
+        };
+        screenMock.getDisplayMatching.mockReturnValue(display);
+        screenMock.getPrimaryDisplay.mockReturnValue(display);
+      });
+
+      it("keeps a no-project window's size from its first launch on", () => {
+        const history = relaunch(5);
+        expect(history[0]).toMatchObject({ width: 1200, height: 800 });
+        for (const bounds of history) expect(bounds).toEqual(history[0]);
+      });
+
+      it("keeps a project window's size once the work area pulls it up", () => {
+        // Low enough on screen that the reported height runs past the taskbar.
+        const history = relaunch(5, "/home/user/project-a", {
+          "/home/user/project-a": {
+            x: 168,
+            y: 14,
+            width: 1200,
+            height: 800,
+            isMaximized: false,
+            isFullScreen: false,
+          },
+        });
+        expect(history[0]).toEqual({ x: 168, y: 8, width: 1200, height: 800 });
+        for (const bounds of history) expect(bounds).toEqual(history[0]);
+      });
+    });
   });
 
   describe("close handler", () => {

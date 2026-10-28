@@ -1,6 +1,7 @@
 // Forges
 export { GitHubIcon } from "./GitHubIcon";
 export { GitLabIcon } from "./GitLabIcon";
+export { LinearIcon } from "./LinearIcon";
 
 // AI Agent icons
 export { ClaudeIcon } from "./ClaudeIcon";
@@ -21,6 +22,9 @@ export { AmpIcon } from "./AmpIcon";
 export { AiderIcon } from "./AiderIcon";
 export { GrokIcon } from "./GrokIcon";
 
+// Speech-to-text providers
+export { DeepgramIcon } from "./DeepgramIcon";
+
 // JavaScript ecosystem
 export { NpmIcon } from "./NpmIcon";
 export { YarnIcon } from "./YarnIcon";
@@ -29,7 +33,6 @@ export { BunIcon } from "./BunIcon";
 export { NodeIcon } from "./NodeIcon";
 export { DenoIcon } from "./DenoIcon";
 export { ViteIcon } from "./ViteIcon";
-export { SvelteIcon } from "./SvelteIcon";
 export { WebpackIcon } from "./WebpackIcon";
 export { EsbuildIcon } from "./EsbuildIcon";
 export { TurboIcon } from "./TurboIcon";

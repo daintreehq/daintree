@@ -117,6 +117,8 @@ export const config: AgentConfig = {
     args: (sessionId: string) => ["session", "--resume", "--session-id", sessionId],
     quitCommand: "/exit",
     sessionIdPattern: "session closed\\s*·\\s*([\\w-]+)",
+    // No `resumeLatestArgs`: a bare `session --resume` takes the most recent
+    // session from Goose's one global store, not the launch directory's.
   },
   authCheck: {
     configPaths: {

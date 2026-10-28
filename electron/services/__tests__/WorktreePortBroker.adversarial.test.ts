@@ -927,6 +927,7 @@ describe("WorktreePortBroker host override", () => {
 });
 
 const PRELOAD_CTS = path.resolve(__dirname, "../../preload.cts");
+const WORKTREE_PORT_CLIENT_TS = path.resolve(__dirname, "../../preload/worktreePortClient.ts");
 
 /**
  * The broker only reuses a port the renderer has acknowledged (#12576), and its
@@ -937,10 +938,15 @@ describe("preload worktree port receipt", () => {
   let listener: string;
 
   beforeAll(async () => {
-    const source = await readFile(PRELOAD_CTS, "utf8");
+    // The entry point must still create the client at load, which is what wires this listener.
+    const entry = await readFile(PRELOAD_CTS, "utf8");
+    expect(entry).toMatch(
+      /^const worktreePortClient = connectWorktreePortClient\(ipcRenderer\);$/m
+    );
+    const source = await readFile(WORKTREE_PORT_CLIENT_TS, "utf8");
     const start = source.indexOf('ipcRenderer.on("worktree-port"');
     expect(start).toBeGreaterThan(-1);
-    const end = source.indexOf("\n});", start);
+    const end = source.indexOf("\n  });", start);
     expect(end).toBeGreaterThan(start);
     listener = source.slice(start, end);
   });
@@ -975,7 +981,7 @@ describe("preload worktree request without a port", () => {
   let branch: string;
 
   beforeAll(async () => {
-    const source = await readFile(PRELOAD_CTS, "utf8");
+    const source = await readFile(WORKTREE_PORT_CLIENT_TS, "utf8");
     const start = source.indexOf("if (!this.port) {\n      // Main can't see this rejection");
     expect(start).toBeGreaterThan(-1);
     const end = source.indexOf("\n    }\n", start);

@@ -10,6 +10,7 @@ import {
   isWorktreeMergedForCleanup,
   type WorktreeAgentBuckets,
 } from "../worktreeAgentBuckets";
+import type { PluginWorktreeAttention } from "../pluginPanelAttention";
 
 const NOW = 1_700_000_000_000;
 
@@ -220,5 +221,46 @@ describe("deriveWorktreeAgentBuckets with Canopy's readings", () => {
       canopy: { kind: "stalled", quote: "Running", readAt: NOW, stalledSince: NOW - 900_000 },
     });
     expect(buckets([stalled])).toMatchObject({ working: true, attention: false });
+  });
+});
+
+describe("deriveWorktreeAgentBuckets with plugin panel rows (#13821)", () => {
+  const plugin = (facts: Partial<PluginWorktreeAttention>): PluginWorktreeAttention => ({
+    working: false,
+    attention: false,
+    finished: false,
+    unseen: false,
+    ...facts,
+  });
+
+  it("puts a worktree with only a waiting plugin panel in Attention", () => {
+    expect(deriveWorktreeAgentBuckets([], new Map(), false, plugin({ attention: true }))).toEqual({
+      working: false,
+      attention: true,
+      finished: false,
+      finishedUnseen: false,
+      cleanup: false,
+    });
+  });
+
+  it("keeps a finished agent's worktree out of Finished while a plugin panel is waiting", () => {
+    const handedBack = atPrompt("a", { handBack: { stoppedAt: NOW - 1000 } });
+    expect(buckets([handedBack]).finished).toBe(true);
+    const withPlugin = deriveWorktreeAgentBuckets(
+      ["a"],
+      indexFleetRuns([handedBack]),
+      false,
+      plugin({ attention: true })
+    );
+    expect(withPlugin).toMatchObject({ attention: true, finished: false, finishedUnseen: false });
+  });
+
+  it("reads an unread plugin report as Finished, unseen, and a working one as Working", () => {
+    expect(
+      deriveWorktreeAgentBuckets([], new Map(), false, plugin({ finished: true, unseen: true }))
+    ).toMatchObject({ finished: true, finishedUnseen: true });
+    expect(
+      deriveWorktreeAgentBuckets([], new Map(), true, plugin({ working: true }))
+    ).toMatchObject({ working: true, finished: false, cleanup: false });
   });
 });

@@ -174,7 +174,6 @@ describe("a relayed session (#13493)", () => {
     const routePane = (): OwnPane =>
       relayNoticePane("relay-principal", {
         projectId: "project-1",
-        linkSessionId: "link-1",
         helpSessionId: "help-1",
         deliver: vi.fn(),
       });
@@ -187,6 +186,8 @@ describe("a relayed session (#13493)", () => {
         prepareLaunch: vi.fn().mockResolvedValue(pending),
         prepareKeys: vi.fn().mockResolvedValue(pending),
         forgetTarget: vi.fn(),
+        holdTarget: vi.fn(),
+        settleTargetHold: vi.fn(),
         supersede: vi.fn(),
         releaseHold: vi.fn(),
       } satisfies TerminalNotifyHandlers;
@@ -207,7 +208,7 @@ describe("a relayed session (#13493)", () => {
 
       expect(result.isError).not.toBe(true);
       const [pane] = handlers.prepareLaunch.mock.calls[0]!;
-      expect(pane.relay).toMatchObject({ linkSessionId: "link-1", callId: "call-9" });
+      expect(pane.relay).toMatchObject({ helpSessionId: "help-1", callId: "call-9" });
       expect(relay.deps.dispatchAction).toHaveBeenCalledTimes(1);
       expect(pending.complete).toHaveBeenCalledWith({ ran: true });
     });
@@ -476,5 +477,59 @@ describe("host.call on this machine's own assistant session (#13493)", () => {
     expect(result.isError).not.toBe(true);
     expect(result.structuredContent).toMatchObject({ outcome: "ok", callId: "c1" });
     expect(run).toHaveBeenCalledWith("host.call", args, { tier: "full" });
+  });
+});
+
+// #14552: the global Assistant's runtime refuses what it may not relay, so the target never names it.
+describe("a relayed session for the calling Shell's global Assistant", () => {
+  const SEARCH_RESULTS = {
+    totalMatches: 4,
+    results: [
+      entry("terminal.list"),
+      entry("agent.launch", "command"),
+      entry("project.runCommand", "command"),
+      entry("project.runCheck", "command"),
+    ],
+  };
+
+  async function searched(global: boolean) {
+    const relay = await relayed("full", {
+      dispatchAction: vi.fn().mockResolvedValue({ result: { ok: true, result: SEARCH_RESULTS } }),
+      relay: {
+        shellName: "greg-mbp",
+        ...(global ? { global: true as const } : {}),
+        refuseWrite: vi.fn(() => null),
+      },
+    });
+    const result = await relay.client.callTool({
+      name: "actions.search",
+      arguments: { query: "run" },
+    });
+    const [first] = result.content as Array<{ text: string }>;
+    const ids = (JSON.parse(first!.text) as { results: ActionManifestEntry[] }).results.map(
+      (found) => found.id
+    );
+    const listed = (await relay.client.listTools()).tools.map((tool) => tool.name);
+    return { ids, listed };
+  }
+
+  it("finds only the tools the global Assistant may call through host.call", async () => {
+    const { ids, listed } = await searched(true);
+    expect(ids).toEqual(["terminal.list", "agent.launch"]);
+    expect(listed).toEqual(expect.arrayContaining(["terminal.list", "agent.launch"]));
+    for (const withheld of ["project.runCommand", "project.runCheck"]) {
+      expect(listed).not.toContain(withheld);
+    }
+  });
+
+  it("leaves another machine's project assistant finding the command runner", async () => {
+    const { ids, listed } = await searched(false);
+    expect(ids).toEqual([
+      "terminal.list",
+      "agent.launch",
+      "project.runCommand",
+      "project.runCheck",
+    ]);
+    expect(listed).toContain("project.runCommand");
   });
 });

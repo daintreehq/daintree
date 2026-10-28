@@ -10,7 +10,12 @@ import { useAutocompleteApply } from "../useAutocompleteApply";
 type Params = Parameters<typeof useAutocompleteApply>[0];
 type Latest = NonNullable<Params["latestRef"]["current"]>;
 
-function setup(doc: string, item: AutocompleteItem, context: ActiveCompletionContext) {
+function setup(
+  doc: string,
+  item: AutocompleteItem,
+  context: ActiveCompletionContext,
+  selectedIndex = 0
+) {
   const view = new EditorView({
     state: EditorState.create({ doc, selection: { anchor: doc.length } }),
   });
@@ -19,7 +24,7 @@ function setup(doc: string, item: AutocompleteItem, context: ActiveCompletionCon
   const setActiveCompletionContext = vi.fn<Params["setActiveCompletionContext"]>();
   const latest: Latest = {
     autocompleteItems: [item],
-    selectedIndex: 0,
+    selectedIndex,
     activeCompletionContext: context,
   };
 
@@ -67,6 +72,35 @@ describe("useAutocompleteApply", () => {
     enterAction: "execute",
     insert: "literal",
   };
+
+  it("completes the row it is told to when none is selected, splicing over the `#` token", () => {
+    const reference: AutocompleteItem = {
+      key: "ref:pr:14843",
+      label: "#14843",
+      insertText: "#14843",
+      enterAction: "insert",
+      insert: "literal",
+    };
+    const hashContext: ActiveCompletionContext = {
+      triggerChar: "#",
+      start: 4,
+      tokenEnd: 8,
+      query: "148",
+    };
+    const { applyAutocompleteSelection, applyEditorValue, view } = setup(
+      "see #148",
+      reference,
+      hashContext,
+      -1
+    );
+    try {
+      expect(applyAutocompleteSelection("complete")).toBe(false);
+      expect(applyAutocompleteSelection("complete", 0)).toBe(true);
+      expect(applyEditorValue.mock.calls[0]![0]).toBe("see #14843 ");
+    } finally {
+      view.destroy();
+    }
+  });
 
   it("inserts the canonical token on click, never the display label", () => {
     const { handleAutocompleteSelect, applyEditorValue, sendText, view } = setup(

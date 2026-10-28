@@ -54,6 +54,36 @@ describe("StatPrecheck", () => {
     expect(skip).toBe(true);
   });
 
+  it.each([0, -1])("counts completed checks when the clock moves by %i ms", async (clockStep) => {
+    vi.mocked(stat).mockResolvedValue(makeStatResult(1_000));
+    const now = vi.spyOn(Date, "now").mockReturnValue(10_000);
+    try {
+      const precheck = new StatPrecheck(makeHost());
+      await precheck.recordFullPass("/repo/.git");
+      const before = precheck.baselineRevision;
+      const capturedAt = precheck.baselineCapturedAt;
+
+      now.mockReturnValue(capturedAt + clockStep);
+      expect(await precheck.shouldSkip("/repo/.git", true)).toBe(true);
+      expect(precheck.baselineCapturedAt).toBeLessThanOrEqual(capturedAt);
+      expect(precheck.baselineRevision).toBeGreaterThan(before);
+
+      const skipped = precheck.baselineRevision;
+      vi.mocked(stat).mockResolvedValue(makeStatResult(2_000));
+      expect(await precheck.shouldSkip("/repo/.git", true)).toBe(false);
+      expect(precheck.baselineRevision).toBe(skipped);
+
+      await precheck.recordFullPass("/repo/.git");
+      expect(precheck.baselineRevision).toBeGreaterThan(skipped);
+      const recorded = precheck.baselineRevision;
+      vi.mocked(stat).mockRejectedValue(new Error("EACCES"));
+      await precheck.recordFullPass("/repo/.git");
+      expect(precheck.baselineRevision).toBe(recorded);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
   it("falls through when a stat mtime moved since the baseline", async () => {
     vi.mocked(stat).mockResolvedValue(makeStatResult(1_000));
     const precheck = new StatPrecheck(makeHost());

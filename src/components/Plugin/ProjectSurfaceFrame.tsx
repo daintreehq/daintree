@@ -1,20 +1,21 @@
-import { useRef, type ReactNode } from "react";
-import { Puzzle, Search } from "lucide-react";
-import type { ProjectSurfaceChoice } from "@shared/types/plugin";
+import { useEffect, useId, useRef, type ReactNode } from "react";
+import {
+  PROJECT_SURFACE_SLOT_CATALOGUE,
+  type ProjectSurfaceChoice,
+  type ProjectSurfaceSlot,
+} from "@shared/types/plugin";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
+import { ProjectSurfaceConsentNotice } from "@/components/Plugin/ProjectSurfaceConsentNotice";
 import { PluginKindSetupStrip } from "@/components/Plugin/PluginSetupStrip";
-import { Button } from "@/components/ui/button";
+import { frameSurfaceSlot } from "@/components/Plugin/framedSurfaceSlots";
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
 import { SurfaceHeader } from "@/components/ui/SurfaceHeader";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useRenderableSurfaceClaim } from "@/hooks/useRenderableSurfaceClaim";
-import { actionService } from "@/services/ActionService";
 import {
   selectFailedSave,
   selectSurfaceChoice,
   usePluginProjectSurfacesStore,
 } from "@/store/pluginProjectSurfacesStore";
-import { useProjectPluginStore } from "@/store/projectPluginStore";
 
 /**
  * A manifest's panel name has no length cap, so the strip caps it twice over.
@@ -22,7 +23,7 @@ import { useProjectPluginStore } from "@/store/projectPluginStore";
  * This is the coarse half, and it bounds the accessible name and the tooltip as
  * much as the pixels. It cannot be the only half: 32 characters of "WWWW" are
  * not 32 characters of "llll", so a character count alone can never promise the
- * Launcher segment — the way back — still fits. The switch is also allowed to
+ * stock segment — the way back — still fits. The switch is also allowed to
  * shrink in the strip, which is what actually holds that promise at any width.
  */
 const PANEL_LABEL_MAX_CHARS = 32;
@@ -37,51 +38,63 @@ function capLabel(name: string): string {
     : name;
 }
 
-/** Position of each answer's segment in the strip, which is how focus finds it. */
+/** Position of each answer's segment in the switch, which is how focus finds it. */
 const SEGMENT_INDEX: Record<ProjectSurfaceChoice, number> = { surface: 0, stock: 1 };
 
 /**
- * Wraps the content grid's empty region so a project plugin's `emptyCanvas`
- * surface reads as the project's empty canvas and can never become a dead end.
+ * Wraps a slot's region so a project plugin's claim on it reads as the
+ * project's own version of that place and can never become a dead end. The
+ * empty canvas is the first slot framed this way; every framed slot gets the
+ * same strip, question and failure row, worded from its catalogue declaration,
+ * so the user learns them once.
  *
  * On its own a claimed surface looks like one more panel — even to the person
- * who wrote the manifest. So the host keeps a strip of its own chrome above the
- * region: a switch naming the plugin's panel and the stock launcher, and while
- * the surface shows, the launcher's palette entry, so the region still offers a
- * way to start something.
+ * who wrote the manifest. So the host keeps a strip of its own chrome beside
+ * the region: a switch naming the plugin's panel and the slot's stock content,
+ * and while the surface shows, whatever the mount site passes as
+ * `surfaceActions` — the stock content's own anchors, so the region still
+ * offers what stock would have.
  *
  * The strip carries those two things and nothing else. It is 32px of chrome
  * framing a full-bleed view someone else drew, so anything in it is competing
  * with that view for the same glance — which is why the switch is the only thing
- * with a fill, and why the palette entry is an icon rather than the sentence it
- * used to be. A "No panels open" label lived here too and was cut: it was not
+ * with a fill. A "No panels open" label lived here too and was cut: it was not
  * actionable, it was not a degraded state, and sitting flush against the switch
  * with no separator it read as a third, disabled segment.
  *
- * The strip sits ABOVE the region, in flow, never floated over it. Plugins draw
- * their own toolbars, most often top-right, and a control pinned into that
- * corner got painted over by exactly that. Out of the plugin's box, no plugin
- * layout can reach it and no author has to reserve room for it.
+ * The strip sits in flow on the side the slot declares, never floated over the
+ * region. Plugins draw their own toolbars, most often top-right, and a control
+ * pinned into that corner got painted over by exactly that. Out of the plugin's
+ * box, no plugin layout can reach it and no author has to reserve room for it.
  *
- * The first time a claim would show in a project, a notice names the plugin and
- * asks whether to keep it. Any answer — the notice's or the switch's — is
- * remembered per project in Daintree's own store and disclosed in project
- * plugin settings, so the notice fires once.
+ * The first time a claim would show in a project, the plugin's consent notice
+ * asks whether to keep it ({@link ProjectSurfaceConsentNotice}). Any answer —
+ * the notice's or the switch's — is remembered per project in Daintree's own
+ * store and disclosed in project plugin settings, so the notice fires once.
  *
- * A passthrough when no `emptyCanvas` claim exists, which is most projects: no
- * wrapper element, no strip, nothing to lay out around.
+ * A passthrough when no claim on `slot` can render, which is most projects: no
+ * wrapper element, no strip, nothing to lay out around. Frames an exclusive
+ * slot: a selectable slot's options outnumber a two-way switch, so its consumer
+ * draws its own picker.
  */
-export function ProjectSurfaceFrame({ children }: { children: ReactNode }) {
-  const renderable = useRenderableSurfaceClaim("emptyCanvas");
+export function ProjectSurfaceFrame({
+  slot,
+  surfaceActions,
+  children,
+}: {
+  slot: ProjectSurfaceSlot;
+  /** Host controls repeated in the strip while the plugin's surface stands in for stock. */
+  surfaceActions?: ReactNode;
+  children: ReactNode;
+}) {
+  const { label, stockLabel, noun, switchPlacement } = PROJECT_SURFACE_SLOT_CATALOGUE[slot];
+  const renderable = useRenderableSurfaceClaim(slot);
   const choicesLoaded = usePluginProjectSurfacesStore((s) => s.choicesLoaded);
-  const choice = usePluginProjectSurfacesStore((s) => selectSurfaceChoice(s, "emptyCanvas"));
-  const failedSave = usePluginProjectSurfacesStore((s) => selectFailedSave(s, "emptyCanvas"));
+  const choice = usePluginProjectSurfacesStore((s) => selectSurfaceChoice(s, slot));
+  const failedSave = usePluginProjectSurfacesStore((s) => selectFailedSave(s, slot));
   const setSurfaceChoice = usePluginProjectSurfacesStore((s) => s.setSurfaceChoice);
+  const setSurfaceChoices = usePluginProjectSurfacesStore((s) => s.setSurfaceChoices);
   const dismissFailedSave = usePluginProjectSurfacesStore((s) => s.dismissFailedSave);
-  const claimPluginId = renderable?.claim.pluginId;
-  const pluginDisplayName = useProjectPluginStore(
-    (s) => s.plugins.find((p) => p.instanceId === claimPluginId)?.displayName
-  );
   const stripRef = useRef<HTMLDivElement>(null);
   /**
    * Whether the last input that reached this frame was a pointer.
@@ -95,11 +108,19 @@ export function ProjectSurfaceFrame({ children }: { children: ReactNode }) {
    * user nothing, a missing one strands a keyboard user.
    */
   const viaPointerRef = useRef(false);
-
   // `useProjectSurface`'s own test. Without it the strip could offer a surface
-  // the region will not draw, or show it pressed while the stock canvas is what
-  // is actually on screen.
-  if (renderable === null || !choicesLoaded) {
+  // the region will not draw, or show it pressed while the stock content is
+  // what is actually on screen.
+  const framing = renderable !== null && choicesLoaded;
+  const frameId = useId();
+
+  // On screen as a place the plugin's consent question can be asked.
+  useEffect(
+    () => (framing ? frameSurfaceSlot(slot, frameId) : undefined),
+    [framing, slot, frameId]
+  );
+
+  if (!framing) {
     return <>{children}</>;
   }
 
@@ -108,9 +129,9 @@ export function ProjectSurfaceFrame({ children }: { children: ReactNode }) {
   const showing: ProjectSurfaceChoice = choice ?? "surface";
   const choose = (next: ProjectSurfaceChoice) => {
     // Pressing the segment already showing changes nothing, so it answers
-    // nothing either — least of all the first-show question, silently.
+    // nothing either — least of all the consent question, silently.
     if (next === showing) return;
-    void setSurfaceChoice("emptyCanvas", next);
+    void setSurfaceChoice(slot, next);
   };
   /**
    * Land focus on the segment now showing.
@@ -121,31 +142,102 @@ export function ProjectSurfaceFrame({ children }: { children: ReactNode }) {
    * now showing is the stable place to put them.
    */
   const restoreFocus = () => {
-    const now =
-      selectSurfaceChoice(usePluginProjectSurfacesStore.getState(), "emptyCanvas") ?? "surface";
+    const now = selectSurfaceChoice(usePluginProjectSurfacesStore.getState(), slot) ?? "surface";
     stripRef.current
-      ?.querySelectorAll<HTMLButtonElement>("button")
+      ?.querySelectorAll<HTMLButtonElement>('[role="radio"]')
       [SEGMENT_INDEX[now]]?.focus({ preventScroll: true, focusVisible: !viaPointerRef.current });
   };
-  const answer = async (next: ProjectSurfaceChoice) => {
-    await setSurfaceChoice("emptyCanvas", next);
-    restoreFocus();
-  };
-  const retryFailedSave = async (next: ProjectSurfaceChoice | null) => {
-    await setSurfaceChoice("emptyCanvas", next);
+  const retryFailedSave = async () => {
+    if (failedSave === null) return;
+    await setSurfaceChoices(failedSave.updates);
     // Only on success. A retry that fails again leaves the row — and this
     // button — standing, and moving focus off it would be taking the control
     // away at the moment the user most wants to press it a second time.
-    if (selectFailedSave(usePluginProjectSurfacesStore.getState(), "emptyCanvas") === null) {
+    if (selectFailedSave(usePluginProjectSurfacesStore.getState(), slot) === null) {
       restoreFocus();
     }
   };
   const panelLabel = capLabel(config.name);
 
+  const strip = (
+    <SurfaceHeader
+      ref={stripRef}
+      density="compact"
+      role="group"
+      aria-label={label}
+      className="gap-3 px-2"
+      data-testid="project-surface-strip"
+    >
+      {/* `shrink` AND `min-w-0`, both load-bearing and neither sufficient
+          alone: `min-w-0` only lowers the floor a flex item may shrink TO,
+          while the control's own `shrink-0` says it never shrinks at all.
+          tailwind-merge resolves the pair to the caller's `shrink`, so this
+          is the one place the switch is allowed to give way.
+
+          It has to be able to. The label is capped by character count, which
+          cannot know how wide those characters render — 32 wide glyphs in a
+          narrow window would otherwise push the stock segment, the way back,
+          off the end of the row. */}
+      <div className="flex min-w-0 items-center">
+        <SegmentedRadioGroup
+          className="min-w-0 shrink"
+          density="compact"
+          aria-label={`${noun.charAt(0).toUpperCase()}${noun.slice(1)} view`}
+          options={[
+            {
+              value: "surface",
+              label: panelLabel,
+              ariaLabel: panelLabel === config.name ? undefined : config.name,
+              tooltip: panelLabel === config.name ? undefined : config.name,
+            },
+            { value: "stock", label: stockLabel },
+          ]}
+          value={showing}
+          onChange={choose}
+        />
+      </div>
+      {/* Stock carries these itself, so the strip only repeats them while the
+          plugin's surface is standing in for it. */}
+      {showing === "surface" && surfaceActions}
+    </SurfaceHeader>
+  );
+  // Single-line by construction, like the consent notice: a `title` and no
+  // `description`, one 40px row rather than a card.
+  const notice =
+    failedSave !== null ? (
+      <InlineStatusBanner
+        title={`Couldn't save the ${noun} choice`}
+        severity="error"
+        role="alert"
+        action={{
+          id: "retry",
+          label: "Retry",
+          variant: "primary",
+          onClick: () => void retryFailedSave(),
+        }}
+        onClose={() => {
+          dismissFailedSave();
+          restoreFocus();
+        }}
+      />
+    ) : (
+      <ProjectSurfaceConsentNotice slot={slot} frameId={frameId} onAnswered={restoreFocus} />
+    );
+  // The surface's plugin still needs setting up: said here, in the host's own
+  // chrome beside the region, never inside the plugin's box. Only while the
+  // surface is what's showing — stock needs no plugin set up.
+  const setup = showing === "surface" && <PluginKindSetupStrip kind={config.id} />;
+  const region = (
+    <div className="relative min-h-0 min-w-0 flex-1" data-testid="project-surface-region">
+      {children}
+    </div>
+  );
+
   return (
     <div
       className="flex h-full w-full min-h-0 min-w-0 flex-col"
       data-testid="project-surface-frame"
+      data-project-surface-slot={slot}
       onPointerDownCapture={() => {
         viaPointerRef.current = true;
       }}
@@ -153,122 +245,23 @@ export function ProjectSurfaceFrame({ children }: { children: ReactNode }) {
         viaPointerRef.current = false;
       }}
     >
-      <SurfaceHeader
-        ref={stripRef}
-        density="compact"
-        role="group"
-        aria-label="Empty canvas"
-        className="gap-3 px-2"
-        data-testid="project-surface-strip"
-      >
-        {/* `shrink` AND `min-w-0`, both load-bearing and neither sufficient
-            alone: `min-w-0` only lowers the floor a flex item may shrink TO,
-            while the control's own `shrink-0` says it never shrinks at all.
-            tailwind-merge resolves the pair to the caller's `shrink`, so this
-            is the one place the switch is allowed to give way.
-
-            It has to be able to. The label is capped by character count, which
-            cannot know how wide those characters render — 32 wide glyphs in a
-            narrow window would otherwise push the Launcher segment, the way
-            back, off the end of the row. */}
-        <div className="flex min-w-0 items-center">
-          <SegmentedRadioGroup
-            className="min-w-0 shrink"
-            density="compact"
-            aria-label="Canvas view"
-            options={[
-              {
-                value: "surface",
-                label: panelLabel,
-                ariaLabel: panelLabel === config.name ? undefined : config.name,
-                tooltip: panelLabel === config.name ? undefined : config.name,
-              },
-              { value: "stock", label: "Launcher" },
-            ]}
-            value={showing}
-            onChange={choose}
-          />
-        </div>
-        {/* The stock launcher carries this same entry as its anchor, so the strip
-            only repeats it while the plugin's surface is standing in for it.
-            Icon-only: at 32px the label is the widest thing in the strip and it
-            says nothing the icon and its tooltip do not. */}
-        {showing === "surface" && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span className="inline-flex shrink-0">
-                <Button
-                  variant="ghost"
-                  size="icon-xs"
-                  aria-label="Search agents &amp; panels…"
-                  onClick={() => {
-                    void actionService.dispatch("panel.palette", undefined, { source: "user" });
-                  }}
-                >
-                  <Search aria-hidden="true" />
-                </Button>
-              </span>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">Search agents &amp; panels…</TooltipContent>
-          </Tooltip>
-        )}
-      </SurfaceHeader>
-      {/* Both notices are single-line by construction: a `title` and no
-          `description`, which is the layout `InlineStatusBanner` already draws
-          for that shape — one 40px row, not the 112px card this surface used to
-          stack on a 32px strip. The description slot is what made it a card, so
-          the rule is simply never to pass one here. */}
-      {failedSave !== null ? (
-        <InlineStatusBanner
-          title="Couldn't save the canvas choice"
-          severity="error"
-          role="alert"
-          action={{
-            id: "retry",
-            label: "Retry",
-            variant: "primary",
-            onClick: () => void retryFailedSave(failedSave.choice),
-          }}
-          onClose={() => {
-            dismissFailedSave();
-            restoreFocus();
-          }}
-        />
+      {/* The chrome mirrors around the region, so the strip is always its outer
+          edge and the rows it explains sit between it and the region. */}
+      {switchPlacement === "above" ? (
+        <>
+          {strip}
+          {notice}
+          {setup}
+          {region}
+        </>
       ) : (
-        choice === null && (
-          <InlineStatusBanner
-            icon={Puzzle}
-            title={`${pluginDisplayName ?? config.name} replaced the launcher`}
-            severity="neutral"
-            role="status"
-            // Equal weight, deliberately: one variant, one size, both answers.
-            // Each is a single click from being reversed — the switch directly
-            // above, and the reset in project plugin settings — so promoting
-            // either one is picking for the user.
-            actions={[
-              {
-                id: "keep",
-                label: "Keep it",
-                variant: "primary",
-                onClick: () => void answer("surface"),
-              },
-              {
-                id: "stock",
-                label: "Use the launcher",
-                variant: "primary",
-                onClick: () => void answer("stock"),
-              },
-            ]}
-          />
-        )
+        <>
+          {region}
+          {setup}
+          {notice}
+          {strip}
+        </>
       )}
-      {/* The surface's plugin still needs setting up: said here, in the host's
-          own chrome above the region, never inside the plugin's box. Only while
-          the surface is what's showing — the launcher needs no plugin set up. */}
-      {showing === "surface" && <PluginKindSetupStrip kind={config.id} />}
-      <div className="relative min-h-0 min-w-0 flex-1" data-testid="project-surface-region">
-        {children}
-      </div>
     </div>
   );
 }

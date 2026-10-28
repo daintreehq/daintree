@@ -11,6 +11,9 @@ const clientMocks = vi.hoisted(() => ({
 
 vi.mock("@/clients/pluginClient", () => ({ pluginClient: clientMocks }));
 
+const remoteBound = vi.hoisted(() => ({ value: false }));
+vi.mock("@/clients/operationsClient", () => ({ isRemoteBoundView: () => remoteBound.value }));
+
 const notifyMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
 
@@ -40,6 +43,9 @@ const captureHelpers = vi.hoisted(() => {
 vi.mock("@/services/plugin/pluginPanelCapture", () => captureHelpers);
 
 import { registerPluginActions } from "../pluginActions";
+// The run bodies load on first dispatch (#14275). Evaluate them here, as they
+// always were, rather than under the window stub a test swaps in before run().
+import "../pluginActions.impl";
 import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
 import type { ActionContext } from "@shared/types/actions";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -57,9 +63,9 @@ import { useProjectStore } from "@/store/projectStore";
 import { registerPanelKind, unregisterPanelKind } from "@shared/config/panelKindRegistry";
 
 /**
- * These actions ignore the callbacks entirely — they reach main through the
- * plugin client, never through renderer UI hooks — but the registrar signature
- * is shared, so the shape still has to be satisfied. Spelled out rather than
+ * Only `plugin.openSettings` uses a callback (`onOpenSettingsTab`); the rest
+ * reach main through the plugin client, never through renderer UI hooks — but
+ * the registrar signature is shared, so the shape still has to be satisfied. Spelled out rather than
  * asserted from an empty object: the assertion would be an unsafe one, and a
  * literal turns a future change to the interface into a compile error here
  * instead of a silent hole.
@@ -609,6 +615,7 @@ describe("plugin.openSettings", () => {
       pluginId: "acme.linear",
       home: "plugin-manager",
       requestedKey: "apiKey",
+      requestedSection: null,
     });
     expect(onOpenSettingsTab).not.toHaveBeenCalled();
     const state = usePluginManagerStore.getState();
@@ -676,9 +683,52 @@ describe("plugin.openSettings", () => {
       pluginId: "acme.linear",
       home: "project-settings",
       requestedKey: null,
+      requestedSection: null,
     });
     expect(onOpenSettingsTab).toHaveBeenCalledWith({ tab: "project:plugins" });
     expect(usePluginManagerStore.getState().settingsRequest?.pluginId).toBe(PROJECT_KEY);
+  });
+
+  it("lands on a section and a declared page, in the home the scope names (#14101)", async () => {
+    clientMocks.list.mockResolvedValue([
+      {
+        ...loaded("acme.linear", { settings: [] }),
+        manifest: {
+          name: "acme.linear",
+          contributes: {
+            settings: [],
+            views: [
+              {
+                id: "prefs",
+                componentPath: "dist/prefs.js",
+                location: "settings",
+                pages: [{ id: "columns", title: "Columns" }],
+              },
+            ],
+          },
+        },
+      },
+    ]);
+
+    const { result, onOpenSettingsTab } = await openSettings({
+      pluginId: "acme.linear",
+      section: "custom",
+      page: "columns",
+      scope: "project",
+    });
+    expect(result).toMatchObject({ home: "project-settings", requestedSection: "custom" });
+    expect(onOpenSettingsTab).toHaveBeenCalledWith({ tab: "project:plugins" });
+    expect(usePluginManagerStore.getState().settingsRequest).toMatchObject({
+      pluginId: "acme.linear",
+      home: "project",
+      section: "custom",
+      page: "columns",
+    });
+
+    // A section it doesn't have is dropped, like an undeclared key.
+    const account = await openSettings({ pluginId: "acme.linear", section: "account" });
+    expect(account.result).toMatchObject({ home: "plugin-manager", requestedSection: null });
+    expect(usePluginManagerStore.getState().settingsRequest?.section).toBeUndefined();
   });
 
   it("never reaches another project's plugin", async () => {
@@ -774,6 +824,16 @@ describe("plugin.backupDatabases", () => {
     expect(payload.type).toBe("error");
     expect(payload.message).toBe("backup.db already exists in /tmp.");
     expect(payload.action.label).toBe("Try again");
+  });
+
+  it("is not enabled in a remote-bound view", () => {
+    const def = definition("plugin.backupDatabases");
+    const ctx = {} as Parameters<NonNullable<typeof def.isEnabled>>[0];
+    remoteBound.value = true;
+    expect(def.isEnabled?.(ctx)).toBe(false);
+    expect(def.disabledReason?.(ctx)).toBeTruthy();
+    remoteBound.value = false;
+    expect(def.isEnabled?.(ctx)).toBe(true);
   });
 
   it("is UI only: closed to plugins and hidden from agents", () => {

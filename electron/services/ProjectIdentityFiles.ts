@@ -5,6 +5,13 @@ import {
   type ProjectTerminalSettings,
 } from "../../shared/types/project.js";
 import type { AgentPreset } from "../../shared/config/agentRegistry.js";
+import type { VoiceDictionaryEntry } from "../../shared/types/ipc/api.js";
+import {
+  DICTIONARY_CONTROL_CHARACTERS,
+  MAX_DICTIONARY_TERM_LENGTH,
+  sanitizeDictionary,
+} from "../../shared/utils/voiceDictionary.js";
+import { AppError } from "../utils/errorTypes.js";
 import path from "path";
 import fs from "fs/promises";
 import { createHash } from "crypto";
@@ -14,6 +21,8 @@ import { UTF8_BOM, isValidProjectId } from "./projectStorePaths.js";
 import { safeRecipeFilename } from "../utils/recipeFilename.js";
 import { stripUtf8Bom } from "../utils/stripUtf8Bom.js";
 import { TerminalRecipeSchema } from "../schemas/ipc.js";
+import { BUILT_IN_APP_SCHEMES } from "../../shared/theme/themes.js";
+import { isPluginThemeId, parsePluginThemeId } from "../../shared/theme/pluginThemes.js";
 import {
   sanitizeRecipeTerminals,
   MAX_TERMINALS_PER_RECIPE,
@@ -65,6 +74,38 @@ const DAINTREE_PROJECT_JSON = `${DAINTREE_DIR}/project.json`;
 const DAINTREE_SETTINGS_JSON = `${DAINTREE_DIR}/settings.json`;
 const DAINTREE_RECIPES_DIR = `${DAINTREE_DIR}/recipes`;
 const DAINTREE_PRESETS_DIR = `${DAINTREE_DIR}/presets`;
+const IN_REPO_SETTINGS_VERSION = 1;
+
+/**
+ * A vocabulary entry as committed: the term and how it is misheard. Who added
+ * it and when are one machine's history and would only churn the diff.
+ */
+function toSharedDictionaryEntry(entry: VoiceDictionaryEntry): { term: string; heardAs: string[] } {
+  return { term: entry.term, heardAs: entry.heardAs };
+}
+
+/** Cap on the committed vocabulary: every term in it goes into each correction request. */
+export const MAX_SHARED_DICTIONARY_ENTRIES = 500;
+
+const isUsableSharedPhrase = (phrase: string) =>
+  phrase.length <= MAX_DICTIONARY_TERM_LENGTH && !DICTIONARY_CONTROL_CHARACTERS.test(phrase);
+
+/**
+ * The committed vocabulary as dictation uses it. Anyone who can push to the
+ * repo writes this file, and its terms are quoted into the correction model's
+ * prompt, so a term or heard-as phrase too long to add here, or holding a line
+ * break or other control character, is left out, and the list is capped.
+ */
+function usableSharedDictionary(entries: readonly VoiceDictionaryEntry[]): VoiceDictionaryEntry[] {
+  const out: VoiceDictionaryEntry[] = [];
+  for (const entry of entries) {
+    if (out.length >= MAX_SHARED_DICTIONARY_ENTRIES) break;
+    if (!isUsableSharedPhrase(entry.term)) continue;
+    const heardAs = entry.heardAs.filter(isUsableSharedPhrase);
+    out.push(heardAs.length === entry.heardAs.length ? entry : { ...entry, heardAs });
+  }
+  return out;
+}
 
 // Only accept safe agent subdirectory names: letters, numbers, dot, dash,
 // underscore. Prevents path traversal via a crafted `.daintree/presets/../x`
@@ -107,10 +148,37 @@ function buildShareableTerminalSettings(
   return Object.keys(result).length > 0 ? result : undefined;
 }
 
+/** What `.daintree/project.json` says about the project, as this build reads it. */
+export interface InRepoProjectIdentity {
+  id?: string;
+  name?: string;
+  emoji?: string;
+  color?: string;
+  /** The theme the repository suggests: a built-in id or `plugin:{pluginId}:{themeId}`. */
+  theme?: string;
+  found: boolean;
+}
+
+const MAX_THEME_ID_LENGTH = 200;
+
+/**
+ * A suggested theme id, or undefined for one the repository cannot name. An
+ * imported theme lives on one machine under an id nobody else has, so only a
+ * built-in or a plugin theme can be suggested; whether it exists here is
+ * decided where it would be shown.
+ */
+function parseSuggestedThemeId(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const id = value.trim();
+  if (!id || id.length > MAX_THEME_ID_LENGTH) return undefined;
+  if (isPluginThemeId(id)) return parsePluginThemeId(id) ? id : undefined;
+  return BUILT_IN_APP_SCHEMES.some((scheme) => scheme.id === id) ? id : undefined;
+}
+
 export class ProjectIdentityFiles {
-  async readInRepoProjectIdentity(
-    projectPath: string
-  ): Promise<{ id?: string; name?: string; emoji?: string; color?: string; found: boolean }> {
+  private readonly settingsWriteQueues = new Map<string, Promise<void>>();
+
+  async readInRepoProjectIdentity(projectPath: string): Promise<InRepoProjectIdentity> {
     const filePath = path.join(projectPath, DAINTREE_PROJECT_JSON);
     try {
       let content = await fs.readFile(filePath, "utf-8");
@@ -127,10 +195,7 @@ export class ProjectIdentityFiles {
         return { found: false };
       }
 
-      const result: { id?: string; name?: string; emoji?: string; color?: string; found: boolean } =
-        {
-          found: true,
-        };
+      const result: InRepoProjectIdentity = { found: true };
 
       // The move anchor (#11282). A malformed id is dropped without discarding
       // the rest of the identity — a hand-edited or truncated value must not
@@ -150,6 +215,10 @@ export class ProjectIdentityFiles {
       if (typeof parsed.color === "string" && parsed.color.trim().length > 0) {
         result.color = parsed.color.trim();
       }
+
+      // A suggestion only (#13833): nothing applies it until the user accepts.
+      const theme = parseSuggestedThemeId(parsed.theme);
+      if (theme !== undefined) result.theme = theme;
 
       return result;
     } catch {
@@ -184,19 +253,28 @@ export class ProjectIdentityFiles {
     // does not supply would be *erased* by any ordinary name/emoji/color edit —
     // silently disarming move detection (#11282). Carry the on-disk value
     // forward whenever the caller doesn't name one.
+    //
+    // The suggested theme (#13833) is the repository's, never edited from
+    // Daintree, so it is always carried forward the same way.
     let id = data.id !== undefined && isValidProjectId(data.id) ? data.id : undefined;
-    if (id === undefined) {
-      const existing = await this.readInRepoProjectIdentity(projectPath);
-      id = existing.id;
-    }
+    const existing = await this.readInRepoProjectIdentity(projectPath);
+    if (id === undefined) id = existing.id;
 
-    const payload: { version: 1; id?: string; name?: string; emoji?: string; color?: string } = {
+    const payload: {
+      version: 1;
+      id?: string;
+      name?: string;
+      emoji?: string;
+      color?: string;
+      theme?: string;
+    } = {
       version: 1,
     };
     if (id !== undefined) payload.id = id;
     if (data.name !== undefined) payload.name = data.name;
     if (data.emoji !== undefined) payload.emoji = data.emoji;
     if (data.color !== undefined) payload.color = data.color;
+    if (existing.theme !== undefined) payload.theme = existing.theme;
 
     const attemptWrite = async (ensureDir: boolean): Promise<void> => {
       if (ensureDir) {
@@ -228,27 +306,160 @@ export class ProjectIdentityFiles {
     }
   }
 
+  /**
+   * Rewrites `.daintree/settings.json` from the shareable settings. The
+   * vocabulary on disk is kept whatever `settings` carries: a whole-settings
+   * save holds a copy read earlier, and a teammate's committed terms must not
+   * be replaced by it. Only {@link changeInRepoVoiceDictionary} changes it.
+   * The field is carried over verbatim from any file that parses, a newer
+   * version's included; one that doesn't parse is replaced as it always was,
+   * since nothing in it could be read.
+   */
   async writeInRepoSettings(projectPath: string, settings: ProjectSettings): Promise<void> {
-    await this.assertDaintreeDirNotSymlink(projectPath);
+    return this.queueSettingsWrite(projectPath, async () => {
+      await this.assertDaintreeDirNotSymlink(projectPath);
+      const payload: { version: 1 } & Partial<ProjectSettings> = { version: 1 };
+
+      for (const key of Object.keys(PROJECT_SETTINGS_SHAREABILITY) as Array<
+        keyof ProjectSettings
+      >) {
+        if (PROJECT_SETTINGS_SHAREABILITY[key] !== "shareable") continue;
+        if (key === "voiceDictionary") continue;
+        if (key === "terminalSettings") {
+          const shareableTerminal = buildShareableTerminalSettings(settings.terminalSettings);
+          if (shareableTerminal !== undefined) payload.terminalSettings = shareableTerminal;
+          continue;
+        }
+        const value = settings[key];
+        if (!shouldWriteValue(value)) continue;
+        // Assigning a wider union into the specific key type — safe because we
+        // pulled `value` straight from `settings[key]`. The cast is a writer-side
+        // concession to keep the loop generic.
+        (payload as Record<keyof ProjectSettings, unknown>)[key] = value;
+      }
+
+      const existing = await this.readSettingsFileObject(projectPath).catch(() => null);
+      if (existing && Object.hasOwn(existing, "voiceDictionary")) {
+        (payload as Record<string, unknown>).voiceDictionary = existing.voiceDictionary;
+      }
+
+      await this.writeSettingsFile(projectPath, payload);
+    });
+  }
+
+  /**
+   * The vocabulary committed in `.daintree/settings.json`, less what dictation
+   * can't use (see {@link usableSharedDictionary}). `found` is false when the
+   * file or its vocabulary is absent. A file that exists but can't be read or
+   * parsed, or was written by a newer schema, throws.
+   */
+  async readInRepoVoiceDictionary(
+    projectPath: string
+  ): Promise<{ found: boolean; entries: VoiceDictionaryEntry[] }> {
+    const existing = await this.readSettingsFileForPatch(projectPath);
+    if (!existing || !Object.hasOwn(existing, "voiceDictionary")) {
+      return { found: false, entries: [] };
+    }
+    return {
+      found: true,
+      entries: usableSharedDictionary(sanitizeDictionary(existing.voiceDictionary, 0)),
+    };
+  }
+
+  /**
+   * One read-modify-write of the committed vocabulary, patched into the file
+   * as it is now so every other field survives. `apply` gets every committed
+   * entry, so an entry dictation leaves out stays in the file. Writes nothing
+   * when `apply` returns the list it was given, and refuses to grow the list
+   * past {@link MAX_SHARED_DICTIONARY_ENTRIES}, where a new term would never be
+   * read back. Returns the list as {@link readInRepoVoiceDictionary} reads it.
+   */
+  async changeInRepoVoiceDictionary(
+    projectPath: string,
+    apply: (entries: VoiceDictionaryEntry[]) => VoiceDictionaryEntry[]
+  ): Promise<VoiceDictionaryEntry[]> {
+    return this.queueSettingsWrite(projectPath, async () => {
+      await this.assertDaintreeDirNotSymlink(projectPath);
+      const existing = (await this.readSettingsFileForPatch(projectPath)) ?? { version: 1 };
+      const current = sanitizeDictionary(existing.voiceDictionary, 0);
+      const next = apply(current);
+      if (next === current) return usableSharedDictionary(current);
+      if (next.length > current.length && next.length > MAX_SHARED_DICTIONARY_ENTRIES) {
+        throw new AppError({
+          code: "VALIDATION",
+          message: `A shared vocabulary can't hold more than ${MAX_SHARED_DICTIONARY_ENTRIES} terms`,
+        });
+      }
+      await this.writeSettingsFile(projectPath, {
+        ...existing,
+        voiceDictionary: next.map(toSharedDictionaryEntry),
+      });
+      return usableSharedDictionary(next);
+    });
+  }
+
+  /**
+   * The settings file's raw object, or null when there is none. Throws for a
+   * file that can't be read or parsed, or that a newer build wrote, so a patch
+   * never replaces content it couldn't see.
+   */
+  private async readSettingsFileForPatch(
+    projectPath: string
+  ): Promise<Record<string, unknown> | null> {
+    const parsed = await this.readSettingsFileObject(projectPath);
+    const version = parsed?.version;
+    if (typeof version === "number" && version > IN_REPO_SETTINGS_VERSION) {
+      throw new Error(`${DAINTREE_SETTINGS_JSON} was written by a newer version of Daintree`);
+    }
+    return parsed;
+  }
+
+  /** The settings file's raw object, or null when there is none; throws when it can't be read or parsed. */
+  private async readSettingsFileObject(
+    projectPath: string
+  ): Promise<Record<string, unknown> | null> {
+    let content: string;
+    try {
+      content = await fs.readFile(path.join(projectPath, DAINTREE_SETTINGS_JSON), "utf-8");
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") return null;
+      throw error;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(stripUtf8Bom(content));
+    } catch {
+      // V8's SyntaxError quotes the text around the fault, and thrown IPC
+      // errors are logged where logs leave the machine, so it isn't passed on.
+      throw new AppError({
+        code: "VALIDATION",
+        message: `${DAINTREE_SETTINGS_JSON} isn't valid JSON`,
+      });
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error(`${DAINTREE_SETTINGS_JSON} is not a settings object`);
+    }
+    return parsed as Record<string, unknown>;
+  }
+
+  private queueSettingsWrite<T>(projectPath: string, write: () => Promise<T>): Promise<T> {
+    const key = path.resolve(projectPath);
+    const previous = this.settingsWriteQueues.get(key) ?? Promise.resolve();
+    const result = previous.then(write);
+    const settled = result.then(
+      () => undefined,
+      () => undefined
+    );
+    this.settingsWriteQueues.set(key, settled);
+    void settled.then(() => {
+      if (this.settingsWriteQueues.get(key) === settled) this.settingsWriteQueues.delete(key);
+    });
+    return result;
+  }
+
+  private async writeSettingsFile(projectPath: string, payload: object): Promise<void> {
     const daintreeDir = path.join(projectPath, DAINTREE_DIR);
     const filePath = path.join(projectPath, DAINTREE_SETTINGS_JSON);
-
-    const payload: { version: 1 } & Partial<ProjectSettings> = { version: 1 };
-
-    for (const key of Object.keys(PROJECT_SETTINGS_SHAREABILITY) as Array<keyof ProjectSettings>) {
-      if (PROJECT_SETTINGS_SHAREABILITY[key] !== "shareable") continue;
-      if (key === "terminalSettings") {
-        const shareableTerminal = buildShareableTerminalSettings(settings.terminalSettings);
-        if (shareableTerminal !== undefined) payload.terminalSettings = shareableTerminal;
-        continue;
-      }
-      const value = settings[key];
-      if (!shouldWriteValue(value)) continue;
-      // Assigning a wider union into the specific key type — safe because we
-      // pulled `value` straight from `settings[key]`. The cast is a writer-side
-      // concession to keep the loop generic.
-      (payload as Record<keyof ProjectSettings, unknown>)[key] = value;
-    }
 
     const attemptWrite = async (ensureDir: boolean): Promise<void> => {
       if (ensureDir) {

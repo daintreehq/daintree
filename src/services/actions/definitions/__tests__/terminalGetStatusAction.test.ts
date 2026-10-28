@@ -1173,10 +1173,12 @@ describe("terminal.getStatus output activity (#12495)", () => {
     );
 
     const pending = callGetStatus(setupActions(), { includeOutput: {} });
-    await Promise.resolve();
-
-    expect(getSerializedStatesMock).toHaveBeenCalledTimes(1);
-    expect(terminalClientMock.getOutputActivity).toHaveBeenCalledTimes(1);
+    // The run body loads on first dispatch (#14273), so wait for the reads to
+    // be issued rather than counting microtasks; neither can settle meanwhile.
+    await vi.waitFor(() => {
+      expect(getSerializedStatesMock).toHaveBeenCalledTimes(1);
+      expect(terminalClientMock.getOutputActivity).toHaveBeenCalledTimes(1);
+    });
     releaseOutput(snapshotMap({ t1: "alpha" }));
     releaseActivity({ t1: { status: "read", lastOutputChangeAt: 3 } });
     const result = await pending;

@@ -1,4 +1,5 @@
 // eager-import-allow: reads boot config via store.get synchronously while wiring global services
+import os from "node:os";
 import { app, dialog, ipcMain, powerMonitor } from "electron";
 import {
   LATEST_SCHEMA_VERSION,
@@ -10,10 +11,7 @@ import { getServiceConnectivityRegistry } from "../services/connectivity/index.j
 import { notificationService } from "../services/NotificationService.js";
 import { getActionBreadcrumbService } from "../services/ActionBreadcrumbService.js";
 import { getPluginActionAuditService } from "../services/PluginActionAuditService.js";
-import {
-  initializeHibernationService,
-  getHibernationService,
-} from "../services/HibernationService.js";
+import { getHibernationService } from "../services/HibernationService.js";
 import {
   evictSessionFiles,
   SESSION_EVICTION_TTL_MS,
@@ -37,11 +35,15 @@ import {
   hasSustainedRendererSaturation,
 } from "../services/ProcessMemoryMonitor.js";
 import {
+  countLiveAgentTerminals,
   createDefaultSystemMemoryPressureMonitor,
   summarizeSystemMemoryWorkloads,
+  WORKLOADS_READ_TIMEOUT_MS,
   readDarwinKernelPressureLevel,
 } from "../services/SystemMemoryPressureMonitor.js";
 import { publishSystemMemoryPressure } from "./systemMemoryPressureDelivery.js";
+import { getSharedTerminalSnapshot } from "../services/sharedTerminalSnapshot.js";
+import { withTimeout } from "../utils/withTimeout.js";
 
 import { startDiskSpaceMonitor } from "../services/DiskSpaceMonitor.js";
 import { runScratchCleanup } from "../services/ScratchCleanupService.js";
@@ -63,6 +65,7 @@ import {
 } from "../utils/logger.js";
 import { effectiveCachedProjectViews } from "../utils/cachedProjectViews.js";
 import { SCROLLBACK_BACKGROUND } from "../../shared/config/scrollback.js";
+import { reduceHiddenRendererScrollback } from "./rendererScrollbackReclaim.js";
 import type { WorkerResourceSnapshot } from "../../shared/types/workerGovernance.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { CHANNELS } from "../ipc/channels.js";
@@ -78,19 +81,30 @@ import type { ProjectViewManager } from "./ProjectViewManager.js";
 import {
   getProjectStatsService,
   getFleetSnapshotService,
+  getRunAttentionService,
+  getRunHandBackService,
 } from "../ipc/handlers/projectCrud/index.js";
+import { findCoordinationHold } from "../services/coordinationHolds.js";
 import { registerDeferredTask } from "./deferredInitQueue.js";
+import {
+  collectActiveProjectIds,
+  collectShownProjectIds,
+  projectViewManagersFrom,
+} from "./activeProjectIds.js";
 import { isSmokeTest } from "../setup/environment.js";
 import { setPluginDirResolver, setPluginTourAudioResolver } from "../setup/protocols.js";
 import { isE2EFaultMode, isE2EMode } from "../setup/runtimeFlags.js";
 import { activateOpenFileInstaller } from "../setup/openFileInstall.js";
 import { projectStore } from "../services/ProjectStore.js";
+import { trackProjectVisibility } from "../services/projectVisibilityClock.js";
+import { getProjectPresenceTracker } from "../services/ProjectPresenceTracker.js";
 import { getCompositeMemorySnapshot } from "../services/memoryAccounting.js";
 import { scratchStore } from "../services/ScratchStore.js";
 import { registerCommands } from "../services/commands/index.js";
 import { store, wasStoreFreshAtBoot } from "../store.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import type { ResourceProfile } from "../../shared/types/resourceProfile.js";
+import type { IdleBackgroundAutoCloseService } from "../services/IdleBackgroundAutoCloseService.js";
 import {
   setCcrConfigService,
   getResourceProfileService,
@@ -105,6 +119,7 @@ import {
   getStopProcessMemoryMonitor,
   setStopProcessMemoryMonitor,
   getPtyClient,
+  getMcpServerServiceRef,
   getWorkspaceClientRef,
   setAutoUpdaterServiceRef,
   getAutoUpdaterServiceRef,
@@ -552,6 +567,14 @@ export async function initGlobalServices(
     isPlaintextEnabled: () => store.get("appState")?.developerMode?.pluginAuditPlaintext === true,
   });
 
+  // Where each project is shown, for plugins (#13813). Not deferred: the plugin
+  // lifecycle seam loads a project's own plugins on the first switch, without
+  // waiting for the plugin host task, and they read this on activation.
+  const presenceViews = projectViewManagersFrom(windowRegistry);
+  getProjectPresenceTracker().setShownReader(() =>
+    collectShownProjectIds(presenceViews, "project-presence")
+  );
+
   // ── Group 1: cheap synchronous wires ──
   // These were previously run on the same tick as loadRenderer(), contending
   // with the renderer for event-loop time while React hydrated and painted.
@@ -569,33 +592,35 @@ export async function initGlobalServices(
   });
 
   registerDeferredTask({
+    name: "project-visibility-clock",
+    run: () => {
+      // Idle gates measure from when a project was last on screen (#13844). The
+      // sweeps observe too, but only this catches a project that comes and goes
+      // between two of them. The same union the reclaim guards read.
+      trackProjectVisibility(() =>
+        collectActiveProjectIds(
+          projectViewManagersFrom(windowRegistry),
+          projectStore.getCurrentProjectId(),
+          "project-visibility-clock"
+        )
+      );
+    },
+  });
+
+  registerDeferredTask({
     name: "hibernation-service",
     run: () => {
-      const svc = initializeHibernationService();
-      // Let user-initiated hibernation reach every window's cached project
-      // renderers so it can evict them (#10668). Lazy lambda — windows open and
-      // close after this wires, so re-read the registry on each call. Same
-      // pattern ResourceProfileService uses below.
-      svc.setProjectViewManagersProvider(
+      // Let Sleep reach every window's cached project renderers so it can
+      // evict them (#10668). Lazy lambda — windows open and close after this
+      // wires, so re-read the registry on each call. Same pattern
+      // ResourceProfileService uses below.
+      getHibernationService().setProjectViewManagersProvider(
         () =>
           windowRegistry
             ?.all()
             .map((wCtx) => wCtx.services.projectViewManager)
             .filter((pvm): pvm is ProjectViewManager => pvm !== undefined) ?? []
       );
-      // Keep background hibernation off a running Daintree Assistant (#11477).
-      // The same binding + PTY-liveness pair `ProjectViewManager` is wired with
-      // in main.ts: the binding alone survives an assistant that exited under
-      // its own steam, and `hasTerminal` is PtyClient's synchronous main-local
-      // spawn registry, so it is authoritative from the assistant's first
-      // instant. Lazy, like the provider above — the PtyClient is not resolved
-      // yet at wiring time.
-      svc.setHasLiveAssistantBackend((projectId) => {
-        // Any live lane floors the project (#12108) — hibernating it would
-        // revoke every lane, taking running siblings with it.
-        const backends = helpSessionService.getAssistantBackends(projectId);
-        return backends.some((backend) => getPtyClient()?.hasTerminal(backend.terminalId) === true);
-      });
     },
   });
 
@@ -725,6 +750,10 @@ export async function initGlobalServices(
     },
   });
 
+  // Set once the idle auto-close scheduler is wired; until then the pressure
+  // ladder's sleep lever has nothing to run and reports nothing done.
+  let idleSleepService: IdleBackgroundAutoCloseService | null = null;
+
   registerDeferredTask({
     name: "app-metrics-monitor",
     run: () => {
@@ -740,11 +769,33 @@ export async function initGlobalServices(
                 windowRegistry ? windowRegistry.all().map((wCtx) => wCtx.browserWindow) : []
               );
             },
-            async () =>
-              summarizeSystemMemoryWorkloads(
-                await getCompositeMemorySnapshot(getPtyClient()),
-                (projectId) => projectStore.getProjectById(projectId)?.name?.trim() || null
-              )
+            async () => {
+              const pty = getPtyClient();
+              const [snapshot, terminals] = await Promise.all([
+                getCompositeMemorySnapshot(pty),
+                // Inside the publish's own deadline, so a slow shard costs the
+                // count alone rather than every other figure with it.
+                pty
+                  ? withTimeout(
+                      getSharedTerminalSnapshot(pty),
+                      WORKLOADS_READ_TIMEOUT_MS / 2,
+                      "terminal snapshot for memory workloads"
+                    ).catch(() => null)
+                  : null,
+              ]);
+              const totalMemoryBytes = os.totalmem();
+              return summarizeSystemMemoryWorkloads(
+                snapshot,
+                (projectId) => projectStore.getProjectById(projectId)?.name?.trim() || null,
+                {
+                  agentsRunning: countLiveAgentTerminals(terminals),
+                  memoryTotalMb:
+                    Number.isFinite(totalMemoryBytes) && totalMemoryBytes > 0
+                      ? Math.round(totalMemoryBytes / (1024 * 1024))
+                      : null,
+                }
+              );
+            }
           );
       setStopAppMetricsMonitor(
         startAppMetricsMonitor({
@@ -756,12 +807,7 @@ export async function initGlobalServices(
                 try {
                   if (wCtx.services.portalManager) {
                     const evictedTabIds = await wCtx.services.portalManager.destroyHiddenTabs();
-                    if (evictedTabIds.length > 0) {
-                      tabsEvicted += evictedTabIds.length;
-                      sendToRenderer(wCtx.browserWindow, CHANNELS.PORTAL_TABS_EVICTED, {
-                        tabIds: evictedTabIds,
-                      });
-                    }
+                    tabsEvicted += evictedTabIds.length;
                   }
                 } catch {
                   /* non-critical */
@@ -778,7 +824,8 @@ export async function initGlobalServices(
             }
             return tabsEvicted;
           },
-          hibernateIdleProjects: () => getHibernationService().hibernateUnderMemoryPressure(),
+          hibernateIdleProjects: async () =>
+            (await idleSleepService?.sleepUnderMemoryPressure()) ?? 0,
           evictCachedProjectViews: () => {
             if (!windowRegistry) return 0;
             let viewsEvicted = 0;
@@ -797,6 +844,10 @@ export async function initGlobalServices(
             if (!client) return { trimmed: 0, skipped: 0, shardsTotal: 0, shardsFailed: 0 };
             // Graduated lever: never at the cost of a working agent's history.
             return client.trimState(SCROLLBACK_BACKGROUND, "idle-only");
+          },
+          trimRendererScrollback: () => {
+            if (!windowRegistry) return;
+            reduceHiddenRendererScrollback(windowRegistry.all().map((wCtx) => wCtx.browserWindow));
           },
           sampleBlinkMemory: () => {
             if (!windowRegistry) return;
@@ -1076,7 +1127,39 @@ export async function initGlobalServices(
             .map((wCtx) => wCtx.services.projectViewManager)
             .filter((pvm): pvm is ProjectViewManager => pvm !== undefined) ?? []
       );
+      // Wired BEFORE start() as well; every source is resolved per call, since
+      // the services behind it are created and replaced after this runs.
+      svc.setCoordinationHoldProvider((projectId, ownerOf) => {
+        const ptyClient = getPtyClient();
+        const fleet = getFleetSnapshotService()?.getLastBroadcast() ?? null;
+        const fleetProjects = new Map(fleet?.runs.map((r) => [r.runId, r.workspaceId]));
+        const handBacks = getRunHandBackService();
+        const attention = getRunAttentionService();
+        return findCoordinationHold(projectId, {
+          projectOfTerminal: (id) =>
+            ptyClient?.getTerminalProjectId(id) ?? fleetProjects.get(id) ?? ownerOf(id),
+          waitingRunProjectIds: () =>
+            fleet?.runs.filter((r) => r.agentState === "waiting").map((r) => r.workspaceId) ?? [],
+          unseenHandBackRunIds: () => handBacks?.listUnseenRunIds() ?? [],
+          gatedParks: () => attention?.listGatedParks() ?? [],
+          replyWaitTerminalIds: () =>
+            getMcpServerServiceRef()?.getPendingReplyWaitTerminalIds() ?? [],
+          notifyProjectIds: () =>
+            getMcpServerServiceRef()?.getNotifyProjectIdsWithPendingWork() ?? [],
+        });
+      });
+      // Resolved here rather than per read: the provider is asked synchronously
+      // at every teardown gate, and PluginService stays off this file's static
+      // graph (#9285).
+      const [{ pluginService }, { pluginWorkHold }] = await Promise.all([
+        import("../services/PluginService.js"),
+        import("../services/plugin/projectPluginWork.js"),
+      ]);
+      svc.setPluginWorkProvider((projectId) =>
+        pluginWorkHold(pluginService.getProjectPluginWork(projectId))
+      );
       svc.start();
+      idleSleepService = svc;
     },
   });
 
@@ -1216,7 +1299,6 @@ export async function initGlobalServices(
       const svc = new ResourceProfileService({
         getPtyClient: () => getPtyClient(),
         getWorkspaceClient: () => getWorkspaceClientRef(),
-        getHibernationService: () => getHibernationService(),
         getAllProjectViewManagers: () =>
           windowRegistry
             ?.all()
@@ -1249,18 +1331,18 @@ export async function initGlobalServices(
 
   // CLI control socket (F32) — lets the `daintree-plugin` CLI install/uninstall
   // into this running instance. Registered after `plugin-service` and gated
-  // internally on `pluginService.waitForInit()`, so the socket only accepts a
-  // `plugin.install` once activation has settled. Skipped under smoke test (no
+  // internally on `pluginService.waitForCatalog()`, so the socket only accepts a
+  // `plugin.install` once the startup scan has settled. Skipped under smoke test (no
   // CLI driving a headless boot) to avoid leaving a socket behind.
   if (!isSmokeTest) {
     registerDeferredTask({
       name: "plugin-cli-server",
       run: async () => {
         // Fire-and-forget: startPluginCliServer() internally awaits
-        // pluginService.waitForInit() (which only settles after startup
-        // activation), so awaiting it here would stall every later deferred
-        // task behind plugin activation. The waitForReady gate guarantees no
-        // CLI request is serviced before init settles, so binding async is safe.
+        // pluginService.waitForCatalog() (which only settles after the startup
+        // scan), so awaiting it here would stall every later deferred task
+        // behind it. The waitForReady gate guarantees no CLI request is
+        // serviced before the scan settles, so binding async is safe.
         const { startPluginCliServer } = await import("../services/PluginCliServer.js");
         void startPluginCliServer()
           .then(() => console.log("[MAIN] Plugin CLI control socket listening"))
@@ -1469,6 +1551,15 @@ export async function initGlobalServices(
     run: async () => {
       const { initializeScratchCleanup } = await import("../services/ScratchCleanupService.js");
       initializeScratchCleanup();
+    },
+  });
+
+  registerDeferredTask({
+    name: "assistant-run-checkpoint-retention",
+    run: async () => {
+      const { requestAssistantRunCheckpointRetention } =
+        await import("../services/AssistantRunCheckpointService.js");
+      await requestAssistantRunCheckpointRetention();
     },
   });
 

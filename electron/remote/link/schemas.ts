@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { IpcEnvelope } from "../../../shared/types/ipc/errors.js";
 import { MAX_TERMINAL_GRID_DIMENSION } from "../../../shared/types/terminal.js";
+import { MAX_HOST_SUMMARY_DRIVERS } from "../../../shared/types/remoteHosts.js";
 import { BULK_CHUNK_BYTES, Lane, type LinkFrame } from "./frames.js";
 import {
   BulkKind,
@@ -27,6 +28,8 @@ const shortText = z.string().max(4096);
 const channel = z.string().min(1).max(256);
 const args = z.array(z.unknown()).max(64);
 const epochMs = z.number().finite();
+/** A project name a host sends: longer ones are cut there, since a body over its bounds ends the session. */
+export const MAX_PROJECT_NAME_CHARS = 1024;
 
 export const HandshakeSchema = z.object({
   version: z.string().min(1).max(64),
@@ -57,6 +60,34 @@ const WelcomeSchema = z.object({
   sessionId: id,
   resumed: z.boolean(),
   resumeSecret: z.string().max(256).optional(),
+  hostLaunchId: id.optional(),
+  // One this side cannot read (a cause added after it) is dropped rather than
+  // failing the WELCOME: the session matters more than saying why the last one ended.
+  previousEnd: z
+    .object({
+      crashCause: z.enum([
+        "uncaught-exception",
+        "native-crash",
+        "suspended-then-lost",
+        "power-loss",
+        "external-kill",
+        "unknown",
+      ]),
+      cause: z.literal("watchdog-deadlock").optional(),
+      watchdogKillReason: z
+        .enum([
+          "unresponsive",
+          "unresponsive-under-pressure",
+          "no-progress-under-external-pressure",
+        ])
+        .optional()
+        .catch(undefined),
+      missedBeats: z.number().int().min(1).max(1_000_000).optional().catch(undefined),
+      pressureEvidence: z.string().max(256).optional().catch(undefined),
+      at: epochMs,
+    })
+    .optional()
+    .catch(undefined),
 });
 
 const RejectSchema = z.object({
@@ -68,13 +99,16 @@ const RejectSchema = z.object({
     .optional(),
 });
 
-const PingSchema = z.object({ sentAt: epochMs });
+const PingSchema = z.object({ sentAt: epochMs, nonce: z.number().int().min(0).optional() });
 
 const EndpointSchema = z.object({ endpointId: id, projectId: id.nullable() });
+// An older host reads OPEN with `EndpointSchema`, which strips `openId`.
+const EndpointOpenSchema = EndpointSchema.extend({ openId: id.optional() });
 const EndpointCloseSchema = z.object({ endpointId: id });
 
-const DriveLeaseHolderSchema = z.object({
+export const DriveLeaseHolderSchema = z.object({
   leaseId: u32,
+  tenureId: id.optional(),
   endpointId: id,
   clientId: id,
   clientName: z.string().max(256),
@@ -87,26 +121,57 @@ const DriveLeaseStateSchema = z.object({
   holder: DriveLeaseHolderSchema.nullable(),
 });
 
+/** One project's lease as its host sees it; summaries and the activity read both carry these. */
+export const DriverObservationSchema = z.object({
+  projectId: id,
+  projectName: z.string().max(MAX_PROJECT_NAME_CHARS).nullable(),
+  holder: DriveLeaseHolderSchema,
+  state: z.enum(["live", "away"]),
+  awayUntil: epochMs.nullable(),
+});
+
 const nullableCount = z.number().finite().min(0).nullable();
 const count = z.number().int().min(0);
+const coreCount = z.number().int().min(1);
+const percent = z.number().finite().min(0).max(100);
 
 const HostSummarySchema = z.object({
   hostId: id,
   sampledAt: epochMs,
   platform: z.enum(["darwin", "linux"]),
   cpuPercent: z.number().finite().nullable(),
+  cpuLogicalCoreCount: coreCount.nullable().optional(),
+  cpuLoadAverage1m: z.number().finite().min(0).nullable().optional(),
+  cpuPerformanceCoreCount: coreCount.nullable().optional(),
+  cpuEfficiencyCoreCount: coreCount.nullable().optional(),
+  cpuPerformancePercent: percent.nullable().optional(),
+  cpuEfficiencyPercent: percent.nullable().optional(),
+  metricsScope: z.enum(["host", "cgroup"]).nullable().optional(),
+  cpuCapacityCores: z.number().finite().positive().nullable().optional(),
+  memoryPressureSomeAvg10: percent.nullable().optional(),
+  temperatureCelsius: z.number().finite().min(-100).max(250).nullable().optional(),
+  temperatureZone: z.string().max(256).nullable().optional(),
   memoryPressure: z.enum(["normal", "warn", "critical"]).nullable(),
   memoryUsedBytes: nullableCount,
   memoryTotalBytes: nullableCount,
   swapUsedBytes: nullableCount,
   swapTotalBytes: nullableCount,
+  swapInBytesPerSec: nullableCount.optional(),
+  swapOutBytesPerSec: nullableCount.optional(),
   thermal: z.enum(["nominal", "fair", "serious", "critical"]).nullable(),
   cpuPressure: z.number().finite().nullable(),
   agentsObserved: z.object({ working: count, waiting: count, idle: count }).nullable(),
   projectCount: count.nullable(),
   worktreeCount: count.nullable(),
   driver: DriveLeaseHolderSchema.nullable(),
+  drivers: z.array(DriverObservationSchema).max(MAX_HOST_SUMMARY_DRIVERS).nullable().optional(),
   agentClis: z.array(z.object({ agentId: id, version: z.string().max(256).nullable() })).max(256),
+  timing: z
+    .object({
+      sampleAgeMs: z.number().finite().min(0).nullable(),
+      afterPing: z.number().int().min(0).nullable(),
+    })
+    .optional(),
   forges: z
     .array(
       z.object({
@@ -174,6 +239,16 @@ const TerminalResetSchema = z.object({
       data: z.string(),
       cols: z.number().int().min(1).max(MAX_TERMINAL_GRID_DIMENSION),
       rows: z.number().int().min(1).max(MAX_TERMINAL_GRID_DIMENSION),
+      // Absent from a host that does not forward stream offsets. One this side
+      // cannot read is dropped rather than failing the frame, which would end
+      // the session over metadata the repaint can do without.
+      continuation: z
+        .object({
+          pendingEscapeTail: z.string().nullable(),
+          streamOffset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
+        })
+        .optional()
+        .catch(undefined),
     })
     .nullable(),
   seq: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
@@ -208,7 +283,7 @@ const BODY_SCHEMAS: Record<number, Record<number, z.ZodType>> = {
     [ControlKind.REJECT]: RejectSchema,
     [ControlKind.PING]: PingSchema,
     [ControlKind.PONG]: PingSchema,
-    [ControlKind.ENDPOINT_OPEN]: EndpointSchema,
+    [ControlKind.ENDPOINT_OPEN]: EndpointOpenSchema,
     [ControlKind.ENDPOINT_REBIND]: EndpointSchema,
     [ControlKind.ENDPOINT_CLOSE]: EndpointCloseSchema,
     [ControlKind.HOST_SUMMARY]: HostSummarySchema,

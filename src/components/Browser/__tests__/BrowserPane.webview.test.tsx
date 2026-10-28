@@ -344,6 +344,22 @@ describe("BrowserPane webview lifecycle regression", () => {
       expect(getWebviewElement(container).getAttribute("src")).toBe("http://localhost:5173/");
     });
 
+    it("holds the forward for this panel and lets it go when the panel closes", async () => {
+      window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
+      const forward = forwardTo(5173);
+      const release = vi.fn(() => Promise.resolve());
+      Reflect.set(window.electron, "portForwards", { forward, release });
+      const { unmount } = render(<BrowserPane {...baseProps} />);
+      await act(async () => {});
+      expect(forward).toHaveBeenCalledWith(
+        expect.objectContaining({ panelId: "browser-panel-1", samePort: true })
+      );
+      expect(release).not.toHaveBeenCalled();
+
+      unmount();
+      expect(release).toHaveBeenCalledWith({ panelId: "browser-panel-1" });
+    });
+
     it("forwards again on Retry once a failed forward is fixed, and only then attaches", async () => {
       window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
       const forward = vi

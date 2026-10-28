@@ -173,6 +173,25 @@ describe("agent MCP over the worker bridge", () => {
     });
   });
 
+  it("carries each tool's group across the port, and hands a forged one on for the host to judge", async () => {
+    const { host, proxy } = makeConnectedPair();
+    await proxy.host.mcp.registerTools("data", {
+      search: {
+        description: "Searches.",
+        inputSchema: { type: "object" },
+        group: "search",
+        execute: () => null,
+      },
+    });
+    await flush();
+    expect(host.rosters[0].tools.search.group).toBe("search");
+
+    const bridge = makeBridge();
+    bridge.workerHost.emit("worker-message", registerNotify({ peek: { ...WIRE_TOOL, group: 7 } }));
+    await flush();
+    expect(bridge.host.rosters[0].tools.peek.group).toBe(7);
+  });
+
   it.each(["readOnly", "readOnlyHint"])(
     "rejects a forged top-level %s claim before it reaches the host",
     async (key) => {
@@ -616,7 +635,7 @@ describe("worker-side host.mcp", () => {
     proxy.handleMessage({ type: "invoke-cancel", requestId: "i1" });
 
     expect(seen?.aborted).toBe(true);
-    expect((proxy as any).mcpInvokeAborts.size).toBe(0);
+    expect((proxy as any).contributions.mcpInvokeAborts.size).toBe(0);
     expect(sent.some((m) => m.type === "invoke-result")).toBe(false);
   });
 

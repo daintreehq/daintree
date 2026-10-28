@@ -14,6 +14,39 @@ describe("ResyncCoordinator", () => {
     ]);
   });
 
+  it("tells each reopened view the host restarted when its process changed (#14184)", () => {
+    const resync = vi.fn();
+    new ResyncCoordinator({ resync }).onSessionAttached("studio-01", {
+      resumed: false,
+      reopened: [11, 12],
+      hostRestarted: true,
+    });
+
+    expect(resync.mock.calls).toEqual([
+      [11, "studio-01", "host-restarted"],
+      [12, "studio-01", "host-restarted"],
+    ]);
+  });
+
+  it("tells each reopened view how the restarted host's previous process ended (#14368)", () => {
+    const resync = vi.fn();
+    const previousEnd = { crashCause: "external-kill" as const, at: 1_000 };
+    const coordinator = new ResyncCoordinator({ resync });
+    coordinator.onSessionAttached("studio-01", {
+      resumed: false,
+      reopened: [11],
+      hostRestarted: true,
+      previousEnd,
+    });
+    // Only a restart is about the previous process.
+    coordinator.onSessionAttached("studio-01", { resumed: false, reopened: [12], previousEnd });
+
+    expect(resync.mock.calls).toEqual([
+      [11, "studio-01", "host-restarted", previousEnd],
+      [12, "studio-01", "reconnected"],
+    ]);
+  });
+
   it("leaves a resumed session to the host's own announcement", () => {
     const resync = vi.fn();
     new ResyncCoordinator({ resync }).onSessionAttached("studio-01", {

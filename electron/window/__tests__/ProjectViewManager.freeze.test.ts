@@ -139,6 +139,10 @@ import {
   registerCachedViewWebContents,
   unregisterCachedViewWebContents,
 } from "../webContentsRegistry.js";
+import {
+  _resetDictationViewHoldsForTests,
+  holdDictationView,
+} from "../../services/voice/dictationViewHold.js";
 
 function createMockWindow() {
   return {
@@ -265,6 +269,34 @@ describe("ProjectViewManager — efficiency freeze", () => {
     const gcOrder = initialWc.executeJavaScript.mock.invocationCallOrder[0];
     const freezeOrder = vi.mocked(freezeWebContents).mock.invocationCallOrder[0];
     expect(gcOrder).toBeLessThan(freezeOrder);
+  });
+
+  describe("a view a dictation still needs (#14773)", () => {
+    afterEach(() => _resetDictationViewHoldsForTests());
+
+    it("isn't frozen as the user leaves it", async () => {
+      manager.setEfficiencyFreeze(true);
+      vi.advanceTimersByTime(500);
+      vi.mocked(freezeWebContents).mockClear();
+      holdDictationView(initialWc.id);
+
+      await manager.switchTo("proj-b", "/path/b");
+
+      expect(vi.mocked(freezeWebContents)).not.toHaveBeenCalled();
+    });
+
+    it("is skipped by the batch freeze, and frozen once the dictation lets go", async () => {
+      await manager.switchTo("proj-b", "/path/b");
+      const release = holdDictationView(initialWc.id);
+
+      manager.setEfficiencyFreeze(true);
+      vi.advanceTimersByTime(500);
+      expect(vi.mocked(freezeWebContents)).not.toHaveBeenCalled();
+
+      release();
+      manager.refreezeUnprotectedCachedViews();
+      expect(vi.mocked(freezeWebContents)).toHaveBeenCalledWith(initialWc);
+    });
   });
 
   it("deactivateCurrentView does not freeze when efficiency is off", async () => {
@@ -1058,6 +1090,40 @@ describe("ProjectViewManager — MCP session bindings stay thawed (#11790)", () 
     await manager.switchTo("proj-b", "/path/b");
 
     expect(frozeProjA()).toBe(false);
+  });
+
+  it("never freezes a cached view of a host's project an MCP session there is bound to (#14228)", async () => {
+    const boundRemoteViews = new Set<number>();
+    manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      cachedProjectViews: 3,
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
+      remoteMcpBindingLive: (webContentsId) => boundRemoteViews.has(webContentsId),
+    });
+    (manager as unknown as { waitForPaint: () => Promise<string> }).waitForPaint = () =>
+      Promise.resolve("signal");
+    manager.registerInitialView(
+      { webContents: createMockWebContents(), setBounds: vi.fn() } as never,
+      "proj-a",
+      "/path/a"
+    );
+    await manager.switchToHostProject("studio-02", "proj-r", "/srv/r");
+    const remoteWc = manager.getAllViews().find((v) => v.projectId.startsWith("studio-02"))!.view
+      .webContents;
+    await manager.switchTo("proj-b", "/path/b");
+    boundRemoteViews.add(remoteWc.id);
+    const frozeRemote = () =>
+      vi.mocked(freezeWebContents).mock.calls.some((call) => (call[0] as unknown) === remoteWc);
+
+    manager.setEfficiencyFreeze(true);
+    vi.advanceTimersByTime(500);
+    expect(frozeRemote()).toBe(false);
+
+    // Once the host says the session dropped, the next pass freezes it like any other.
+    boundRemoteViews.clear();
+    manager.refreezeUnprotectedCachedViews();
+    expect(frozeRemote()).toBe(true);
   });
 
   it("re-freezes a view thawed for a dispatch once the lease is gone", async () => {

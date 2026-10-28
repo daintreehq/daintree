@@ -165,9 +165,9 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     forceXtermReflowMock.mockReset();
-    const imported = await import("../TerminalInstanceService");
+    const imported = await import("../terminalInstanceServiceAccessor");
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-    service = imported.terminalInstanceService as unknown as FullWakeTestService;
+    service = (await imported.load()) as unknown as FullWakeTestService;
     service.instances.clear();
   });
 
@@ -639,9 +639,9 @@ describe("TerminalInstanceService.revealTerminal (foreground reveal routing)", (
 
   beforeEach(async () => {
     vi.clearAllMocks();
-    const imported = await import("../TerminalInstanceService");
+    const imported = await import("../terminalInstanceServiceAccessor");
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-    service = imported.terminalInstanceService as unknown as FullWakeTestService;
+    service = (await imported.load()) as unknown as FullWakeTestService;
     service.instances.clear();
   });
 
@@ -743,9 +743,9 @@ describe("TerminalInstanceService.wake verdict (#11640)", () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
-    const imported = await import("../TerminalInstanceService");
+    const imported = await import("../terminalInstanceServiceAccessor");
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-    service = imported.terminalInstanceService as unknown as FullWakeTestService;
+    service = (await imported.load()) as unknown as FullWakeTestService;
     service.instances.clear();
   });
 
@@ -808,9 +808,9 @@ describe("TerminalInstanceService.repaintForReveal grid reconcile", () => {
     // method before exercising it here.
     vi.restoreAllMocks();
     forceXtermReflowMock.mockReset();
-    const imported = await import("../TerminalInstanceService");
+    const imported = await import("../terminalInstanceServiceAccessor");
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-    service = imported.terminalInstanceService as unknown as FullWakeTestService;
+    service = (await imported.load()) as unknown as FullWakeTestService;
     service.instances.clear();
   });
 
@@ -996,9 +996,9 @@ describe("fullWakeForVisibilityRestore streaming-quiescence gate (#10863 wake-pa
     vi.restoreAllMocks();
     vi.clearAllMocks();
     forceXtermReflowMock.mockReset();
-    const imported = await import("../TerminalInstanceService");
+    const imported = await import("../terminalInstanceServiceAccessor");
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-    service = imported.terminalInstanceService as unknown as FullWakeTestService;
+    service = (await imported.load()) as unknown as FullWakeTestService;
     service.instances.clear();
   });
 

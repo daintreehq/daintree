@@ -10,11 +10,11 @@ import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { Check } from "lucide-react";
 import { useSearchablePalette } from "@/hooks/useSearchablePalette";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
-import { useAppThemeStore, injectSchemeToDOM } from "@/store/appThemeStore";
+import { useAppThemeStore, injectSchemeToDOM, resolveCommittedScheme } from "@/store/appThemeStore";
+import { selectSelectableSchemes } from "@/theme/selectableSchemes";
 import { notify } from "@/lib/notify";
 import { appThemeClient } from "@/clients/appThemeClient";
 import { BUILT_IN_APP_SCHEMES } from "@/config/appColorSchemes";
-import { resolveAppTheme } from "@shared/theme";
 import type { AppColorScheme } from "@shared/types/appTheme";
 import type { FuseResultMatch } from "@/hooks/useSearchablePalette";
 import { THEME_MODE_LABEL, searchThemes } from "./themeSearch";
@@ -69,7 +69,7 @@ function ThemeListItem({
       className={cn(
         PALETTE_ROW_CLASS,
         "w-full text-left px-3 rounded-[var(--radius-md)] flex items-center gap-3",
-        scheme.location ? "py-2" : "py-1.5"
+        scheme.location || scheme.plugin ? "py-2" : "py-1.5"
       )}
     >
       <div className="flex-1 min-w-0">
@@ -90,6 +90,11 @@ function ThemeListItem({
             </div>
           </TruncatedTooltip>
         )}
+        {!scheme.location && scheme.plugin && (
+          <TruncatedTooltip content={`From ${scheme.plugin.name}`} focusable={false}>
+            <div className="text-xs text-text-secondary truncate">From {scheme.plugin.name}</div>
+          </TruncatedTooltip>
+        )}
       </div>
       <PaletteStrip scheme={scheme} variant="compact" />
       {/* Reserved whether or not it is filled, so the strips hold one column. */}
@@ -105,13 +110,26 @@ function ThemeListItem({
   );
 }
 
+/**
+ * The saved theme, read when it is restored rather than when the palette
+ * opened: it can change underneath an open palette, as when the plugin that
+ * offered it goes away and main moves the selection. In a project with its own
+ * theme that is the project's.
+ */
+function committedScheme(): AppColorScheme {
+  return resolveCommittedScheme(useAppThemeStore.getState());
+}
+
 export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
   const selectedSchemeId = useAppThemeStore((s) => s.selectedSchemeId);
-  const customSchemes = useAppThemeStore((s) => s.customSchemes);
+  const selectableSchemes = useAppThemeStore(selectSelectableSchemes);
   const setSelectedSchemeId = useAppThemeStore((s) => s.setSelectedSchemeId);
   const themePaletteShortcut = useEffectiveCombo("app.theme.pick");
 
-  const allSchemes = useMemo(() => [...BUILT_IN_APP_SCHEMES, ...customSchemes], [customSchemes]);
+  const allSchemes = useMemo(
+    () => [...BUILT_IN_APP_SCHEMES, ...selectableSchemes],
+    [selectableSchemes]
+  );
 
   const {
     query,
@@ -171,11 +189,8 @@ export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
     if (!isOpen && wasOpenRef.current) {
       wasOpenRef.current = false;
       livePreviewReadyRef.current = false;
-      const originalId = originalSchemeIdRef.current;
-      if (!committedRef.current && originalId) {
-        const latestCustom = useAppThemeStore.getState().customSchemes;
-        const originalScheme = resolveAppTheme(originalId, latestCustom);
-        injectSchemeToDOM(originalScheme);
+      if (!committedRef.current && originalSchemeIdRef.current) {
+        injectSchemeToDOM(committedScheme());
       }
       originalSchemeIdRef.current = null;
       committedRef.current = false;
@@ -190,9 +205,8 @@ export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
     if (results.length === 0) {
       // Nothing left to try, so go back to the saved theme rather than keep
       // painting one the filter has hidden, which no row or footer could name.
-      const originalId = originalSchemeIdRef.current;
-      if (livePreviewReadyRef.current && originalId) {
-        injectSchemeToDOM(resolveAppTheme(originalId, useAppThemeStore.getState().customSchemes));
+      if (livePreviewReadyRef.current && originalSchemeIdRef.current) {
+        injectSchemeToDOM(committedScheme());
       }
       return;
     }

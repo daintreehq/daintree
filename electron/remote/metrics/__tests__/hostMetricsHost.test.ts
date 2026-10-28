@@ -9,12 +9,23 @@ import {
   removeTempDir,
   waitFor,
 } from "../../link/__tests__/linkTestUtils.js";
-import { AttentionPayloadSchema, MetricsLinkMethod } from "../linkMethods.js";
+import {
+  AttentionPayloadSchema,
+  MAX_PROCESS_TERMINALS,
+  MetricsLinkMethod,
+  ProcessInventorySchema,
+} from "../linkMethods.js";
+import type { ProcessInventorySnapshot } from "../../../../shared/types/processes.js";
 import { EmptyPayloadSchema } from "../../host/linkMethods.js";
-import type { HostWorktreeEntry } from "../../../../shared/types/ipc/hostMetrics.js";
+import type {
+  HostLinkActivity,
+  HostWorktreeEntry,
+} from "../../../../shared/types/ipc/hostMetrics.js";
 import {
   ATTENTION_COOLDOWN_MS,
   installHostMetricsHostWith,
+  installLinkActivityHost,
+  installProcessInventoryHost,
   type MetricsHostDeps,
   type MetricsSessionSource,
   type WaitingEvent,
@@ -112,6 +123,7 @@ function deps(overrides: Partial<MetricsHostDeps> = {}): MetricsHostDeps & {
       return () => (waiting = null);
     },
     notificationSettings: () => NO_QUIET_HOURS,
+    shellDecides: () => false,
     now: () => (clock += 1000),
     fireWaiting: (payload) => waiting?.(payload),
     ...overrides,
@@ -173,6 +185,88 @@ describe("installHostMetricsHostWith", () => {
     server.attach(p.host, "late");
     await waitFor(() => seen.length === 1);
     expect(seen).toEqual([42]);
+    dispose();
+  });
+
+  it("stamps each frame with the sample's age and the newest ping it followed (#14462)", async () => {
+    const server = new FakeServer();
+    const latest = summary(42);
+    const ageOf = vi.fn((s: HostMetricsSummary) => (s === latest ? 600_000 : null));
+    const dispose = installHostMetricsHostWith(
+      server,
+      deps({ loop: { subscribe: () => () => {}, latest: () => latest, ageOf } })
+    );
+    const p = await pair();
+    const seen: unknown[] = [];
+    p.client.on(Lane.CONTROL, ControlKind.HOST_SUMMARY, (body) => seen.push(body.timing));
+    p.client.ping();
+    p.client.ping();
+    await waitFor(() => p.host.peerPingNonce === 1);
+    server.attach(p.host, "late");
+    await waitFor(() => seen.length === 1);
+    // A cached sample handed to a Shell that just attached carries its real age, not zero.
+    expect(seen).toEqual([{ sampleAgeMs: 600_000, afterPing: 1 }]);
+    dispose();
+  });
+
+  it("stamps every live sample for each Shell with that Shell's own newest ping", async () => {
+    const server = new FakeServer();
+    let publish: ((summary: HostMetricsSummary) => void) | null = null;
+    let age = 10;
+    const dispose = installHostMetricsHostWith(
+      server,
+      deps({
+        loop: {
+          subscribe: (listener) => {
+            publish = listener;
+            return () => (publish = null);
+          },
+          latest: () => null,
+          ageOf: () => age,
+        },
+      })
+    );
+    const a = await pair();
+    const b = await pair();
+    const seenA: unknown[] = [];
+    const seenB: unknown[] = [];
+    a.client.on(Lane.CONTROL, ControlKind.HOST_SUMMARY, (body) => seenA.push(body.timing));
+    b.client.on(Lane.CONTROL, ControlKind.HOST_SUMMARY, (body) => seenB.push(body.timing));
+    a.client.ping();
+    for (let i = 0; i < 3; i += 1) b.client.ping();
+    await waitFor(() => a.host.peerPingNonce === 0 && b.host.peerPingNonce === 2);
+    server.attach(a.host, "a");
+    server.attach(b.host, "b");
+    publish!(summary(1));
+    await waitFor(() => seenA.length === 1 && seenB.length === 1);
+    a.client.ping();
+    await waitFor(() => a.host.peerPingNonce === 1);
+    age = 20;
+    publish!(summary(2));
+    await waitFor(() => seenA.length === 2 && seenB.length === 2);
+    expect(seenA).toEqual([
+      { sampleAgeMs: 10, afterPing: 0 },
+      { sampleAgeMs: 20, afterPing: 1 },
+    ]);
+    expect(seenB).toEqual([
+      { sampleAgeMs: 10, afterPing: 2 },
+      { sampleAgeMs: 20, afterPing: 2 },
+    ]);
+    dispose();
+  });
+
+  it("names no ping before the Shell sent one, and no age from a loop that can't say", async () => {
+    const server = new FakeServer();
+    const dispose = installHostMetricsHostWith(
+      server,
+      deps({ loop: { subscribe: () => () => {}, latest: () => summary(42) } })
+    );
+    const p = await pair();
+    const seen: unknown[] = [];
+    p.client.on(Lane.CONTROL, ControlKind.HOST_SUMMARY, (body) => seen.push(body.timing));
+    server.attach(p.host, "late");
+    await waitFor(() => seen.length === 1);
+    expect(seen).toEqual([{ sampleAgeMs: null, afterPing: null }]);
     dispose();
   });
 
@@ -374,6 +468,7 @@ describe("installHostMetricsHostWith", () => {
     const payload: WaitingEvent = {
       kind: "waiting",
       terminalId: "t1",
+      projectId: "p1",
       projectName: "app",
       agentName: "Claude",
     };
@@ -388,32 +483,48 @@ describe("installHostMetricsHostWith", () => {
     dispose();
   });
 
-  it("applies its own notification policy before any Shell hears about a waiting agent", async () => {
+  it("judges a waiting agent by its own settings only for a Shell that leaves it to this host", async () => {
     const server = new FakeServer();
     let clock = new Date(2026, 8, 25, 12, 0).getTime();
     let settings = { ...NO_QUIET_HOURS, waitingEnabled: false };
-    const d = deps({ now: () => clock, notificationSettings: () => settings });
+    const d = deps({
+      now: () => clock,
+      notificationSettings: () => settings,
+      shellDecides: (clientId) => clientId === "mac",
+    });
     const dispose = installHostMetricsHostWith(server, d);
-    const p = await pair();
-    server.attach(p.host, "shell");
+    const legacy = await pair();
+    const mac = await pair();
+    server.attach(legacy.host, "legacy");
+    server.attach(mac.host, "mac");
     const heard: AttentionPayload[] = [];
-    p.client.registerCallHandler(MetricsLinkMethod.ATTENTION, AttentionPayloadSchema, (body) => {
-      heard.push(body);
+    const heardByMac: AttentionPayload[] = [];
+    legacy.client.registerCallHandler(
+      MetricsLinkMethod.ATTENTION,
+      AttentionPayloadSchema,
+      (body) => {
+        heard.push(body);
+        return null;
+      }
+    );
+    mac.client.registerCallHandler(MetricsLinkMethod.ATTENTION, AttentionPayloadSchema, (body) => {
+      heardByMac.push(body);
       return null;
     });
     const event = (terminalId: string): WaitingEvent => ({
       kind: "waiting",
       terminalId,
+      projectId: null,
       projectName: null,
       agentName: null,
     });
 
-    // Waiting notifications off on this host: nothing leaves it.
+    // Waiting notifications off on this host: nothing reaches a Shell that left it to the host.
     d.fireWaiting(event("off"));
     settings = { ...NO_QUIET_HOURS, enabled: false };
-    d.fireWaiting(event("off"));
+    d.fireWaiting(event("disabled"));
 
-    // This host's quiet hours cover noon: the Shell is told to keep it quiet.
+    // This host's quiet hours cover noon: that Shell is told to keep it quiet.
     settings = {
       ...NO_QUIET_HOURS,
       quietHoursEnabled: true,
@@ -429,7 +540,157 @@ describe("installHostMetricsHostWith", () => {
     d.fireWaiting(event("loud"));
     await waitFor(() => heard.length === 2);
     expect(heard[1]).toMatchObject({ terminalId: "loud", quiet: false });
-    expect(heard.some((body) => body.terminalId === "off")).toBe(false);
+    expect(heard.some((body) => body.terminalId === "off" || body.terminalId === "disabled")).toBe(
+      false
+    );
+
+    // The Shell that decides for itself hears every one, unjudged.
+    await waitFor(() => heardByMac.length === 4);
+    expect(heardByMac.map((body) => [body.terminalId, body.quiet])).toEqual([
+      ["off", false],
+      ["disabled", false],
+      ["quiet", false],
+      ["loud", false],
+    ]);
     dispose();
+  });
+
+  it("keeps each Shell's reminder cooldown apart from another's", async () => {
+    const server = new FakeServer();
+    let clock = new Date(2026, 8, 25, 12, 0).getTime();
+    let settings = { ...NO_QUIET_HOURS, waitingEnabled: false };
+    const d = deps({
+      now: () => clock,
+      notificationSettings: () => settings,
+      shellDecides: (clientId) => clientId === "mac",
+    });
+    const dispose = installHostMetricsHostWith(server, d);
+    const legacy = await pair();
+    const mac = await pair();
+    server.attach(legacy.host, "legacy");
+    server.attach(mac.host, "mac");
+    const heard = { legacy: 0, mac: 0 };
+    for (const [name, p] of [
+      ["legacy", legacy],
+      ["mac", mac],
+    ] as const) {
+      p.client.registerCallHandler(MetricsLinkMethod.ATTENTION, AttentionPayloadSchema, () => {
+        heard[name]++;
+        return null;
+      });
+    }
+    const event: WaitingEvent = {
+      kind: "waiting",
+      terminalId: "t1",
+      projectId: null,
+      projectName: null,
+      agentName: null,
+    };
+
+    // Only the Shell that decides for itself hears it while this host has waiting off.
+    d.fireWaiting(event);
+    await waitFor(() => heard.mac === 1);
+    // Turned on here, and the agent waits again inside the window: the Shell
+    // this host held it back from hears now; the other is still cooling down.
+    settings = NO_QUIET_HOURS;
+    clock += 1_000;
+    d.fireWaiting(event);
+    await waitFor(() => heard.legacy === 1);
+    expect(heard.mac).toBe(1);
+    dispose();
+  });
+});
+
+describe("installLinkActivityHost", () => {
+  const activity: HostLinkActivity = {
+    observedAt: 1,
+    listeningSince: 1,
+    version: "0.46.0",
+    commit: "abc",
+    events: [],
+    eventsTruncated: false,
+    drivers: [],
+    attached: [],
+  };
+
+  it("answers sessions attached before and after it, reading afresh each time", async () => {
+    const server = new FakeServer();
+    const before = await pair();
+    server.attach(before.host, "early");
+    let reads = 0;
+    const dispose = installLinkActivityHost(server, () => ({ ...activity, observedAt: ++reads }));
+    const after = await pair();
+    server.attach(after.host, "late");
+
+    expect(await before.client.call(MetricsLinkMethod.LINK_ACTIVITY, null)).toMatchObject({
+      observedAt: 1,
+    });
+    expect(await after.client.call(MetricsLinkMethod.LINK_ACTIVITY, null)).toMatchObject({
+      observedAt: 2,
+    });
+    dispose();
+  });
+
+  it("stops wiring new sessions once disposed", async () => {
+    const server = new FakeServer();
+    installLinkActivityHost(server, () => activity)();
+    const p = await pair();
+    server.attach(p.host, "late");
+    await expect(p.client.call(MetricsLinkMethod.LINK_ACTIVITY, null)).rejects.toMatchObject({
+      code: "UNSUPPORTED",
+    });
+  });
+});
+
+describe("installProcessInventoryHost", () => {
+  const snapshot = (terminalCount: number): ProcessInventorySnapshot => ({
+    terminals: Array.from({ length: terminalCount }, (_, index) => ({
+      id: `t${index}`,
+      projectId: null,
+      projectName: null,
+      cwd: "/home",
+      isAssistantTerminal: false,
+      spawnedAt: 1,
+      isTrashed: false,
+      rootPid: null,
+      sample: null,
+    })),
+    closedTerminalProcesses: [],
+    cleanup: null,
+    plugins: [],
+    complete: true,
+    samplesAvailable: true,
+    sampledAt: 3,
+  });
+
+  it("answers sessions with no view bound, before and after it, reading afresh and bounded", async () => {
+    const server = new FakeServer();
+    const before = await pair();
+    server.attach(before.host, "early");
+    const read = vi.fn(async () => snapshot(MAX_PROCESS_TERMINALS + 5));
+    const dispose = installProcessInventoryHost(server, read);
+    const after = await pair();
+    server.attach(after.host, "late");
+    expect(read).not.toHaveBeenCalled();
+
+    for (const p of [before, after]) {
+      const answer = ProcessInventorySchema.parse(
+        await p.client.call(MetricsLinkMethod.PROCESS_INVENTORY, null)
+      );
+      expect(answer.terminals).toHaveLength(MAX_PROCESS_TERMINALS);
+      expect(answer.truncated).toBe(true);
+    }
+    expect(read).toHaveBeenCalledTimes(2);
+    dispose();
+  });
+
+  it("stops wiring new sessions once disposed", async () => {
+    const server = new FakeServer();
+    installProcessInventoryHost(server, async () => snapshot(1))();
+    const p = await pair();
+    server.attach(p.host, "late");
+    await expect(p.client.call(MetricsLinkMethod.PROCESS_INVENTORY, null)).rejects.toMatchObject({
+      code: "UNSUPPORTED",
+    });
   });
 });

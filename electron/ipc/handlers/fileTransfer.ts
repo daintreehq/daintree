@@ -1,3 +1,4 @@
+// eager-import-allow: reads upload preferences via store.get synchronously for IPC replies and the preference read-modify-write
 import { CHANNELS } from "../channels.js";
 import { defineIpcNamespace, op } from "../define.js";
 import { onWithContext } from "../utils.js";
@@ -5,10 +6,12 @@ import { getRemoteService, requireRemoteService } from "../../remote/runtime.js"
 import { store } from "../../store.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { FILE_TRANSFER_METHOD_CHANNELS } from "./fileTransfer.preload.js";
+import { recordArtifactSelectionGrants } from "../../services/plugin/artifactSelectionGrants.js";
 import type {
   AnswerHostPickPayload,
   DownloadPayload,
   DownloadResult,
+  GrantClickedFilePayload,
   LocalFileStat,
   UploadBytesPayload,
   UploadLocalFilePayload,
@@ -73,6 +76,12 @@ export const fileTransferNamespace = defineIpcNamespace({
         requireRemoteService("hostFileClient").download(ctx.webContentsId, payload),
       { withContext: true }
     ),
+    grantClickedFile: op(
+      FILE_TRANSFER_METHOD_CHANNELS.grantClickedFile,
+      async (ctx, payload: GrantClickedFilePayload): Promise<void> =>
+        requireRemoteService("hostFileClient").grantClickedFile(ctx.webContentsId, payload),
+      { withContext: true }
+    ),
     cancel: op(
       FILE_TRANSFER_METHOD_CHANNELS.cancel,
       async (ctx, payload: { opId: string }): Promise<void> => {
@@ -102,13 +111,16 @@ export const fileTransferNamespace = defineIpcNamespace({
 });
 
 /**
- * Local files the person chose in a remote-bound view: the preload reports
- * each dropped or pasted File's path as it resolves it, over a channel the
- * page itself can't reach. Only these are ever read for an upload.
+ * Local files the person chose in a view: the preload reports each dropped or
+ * pasted File's path as it resolves it, over a channel the page itself can't
+ * reach. Only these are ever read for an upload from a remote-bound view, or
+ * imported as a plugin artifact from a local one.
  */
 function registerLocalSourceGrants(): () => void {
   return onWithContext(CHANNELS.FILE_TRANSFER_GRANT_LOCAL_SOURCES, (ctx, paths: unknown) => {
     getRemoteService("hostUploadClient")?.grantLocalSources(ctx.webContentsId, paths);
+    // The same choice, for a plugin view importing it as an artifact (#14100).
+    if (ctx.endpoint.kind === "local-view") recordArtifactSelectionGrants(ctx.webContentsId, paths);
   });
 }
 

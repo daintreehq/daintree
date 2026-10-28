@@ -10,9 +10,13 @@ import {
   getImplForNamespace,
   getImplForNamespaceActivating,
   getIssueImplForNamespace,
+  readIssueLinkTarget,
+  resolveIssueLinkForCwd,
+  resolveIssueLinkUrl,
   stampIssueProvider,
   type ResolvedForgeContext,
 } from "./forgeResolution.js";
+import type { IssueLinkTarget } from "../../../shared/types/ipc/forge.js";
 import { auditForgeCall, summarizeForgeArgs } from "../../services/forge/forgeAuditService.js";
 import type {
   CreateIssueInput,
@@ -22,6 +26,8 @@ import type {
   Issue,
   IssueCloseReason,
   IssueComment,
+  DisableAutoMergeResult,
+  EnableAutoMergeResult,
   MergePRResult,
   PR,
   PRDraftStateResult,
@@ -609,6 +615,27 @@ function assertPRNumber(prNumber: unknown): asserts prNumber is number {
   }
 }
 
+// A full object id (SHA-1 or SHA-256): forges match the pin exactly.
+function assertHeadSha(sha: unknown): asserts sha is string {
+  if (typeof sha !== "string" || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(sha)) {
+    throw new Error("Invalid head commit");
+  }
+}
+
+function assertBaseRef(ref: unknown): asserts ref is string | undefined {
+  if (ref !== undefined && (typeof ref !== "string" || !ref.trim() || ref.length > 255)) {
+    throw new Error("Invalid base branch");
+  }
+}
+
+function assertMergeMethod(
+  method: unknown
+): asserts method is "merge" | "squash" | "rebase" | undefined {
+  if (method !== undefined && method !== "merge" && method !== "squash" && method !== "rebase") {
+    throw new Error("Invalid merge method");
+  }
+}
+
 async function handleForgeCreatePR(payload: {
   cwd: string;
   head: string;
@@ -694,19 +721,16 @@ async function handleForgeMergePR(payload: {
   mergeMethod?: "merge" | "squash" | "rebase";
   commitTitle?: string;
   commitMessage?: string;
+  expectedHeadSha?: string;
+  expectedBaseRef?: string;
 }): Promise<MergePRResult> {
   checkRateLimit(CHANNELS.FORGE_MERGE_PR, 5, 10_000);
   if (!payload || typeof payload !== "object") throw new Error("Invalid payload");
   assertCwd(payload.cwd);
   assertPRNumber(payload.prNumber);
-  if (
-    payload.mergeMethod !== undefined &&
-    payload.mergeMethod !== "merge" &&
-    payload.mergeMethod !== "squash" &&
-    payload.mergeMethod !== "rebase"
-  ) {
-    throw new Error("Invalid merge method");
-  }
+  assertMergeMethod(payload.mergeMethod);
+  if (payload.expectedHeadSha !== undefined) assertHeadSha(payload.expectedHeadSha);
+  assertBaseRef(payload.expectedBaseRef);
   const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
   const impl = getImplForNamespace(namespaceId);
   return auditForgeCall(
@@ -724,7 +748,72 @@ async function handleForgeMergePR(payload: {
         ...(typeof payload.commitMessage === "string"
           ? { commitMessage: payload.commitMessage }
           : {}),
+        ...(payload.expectedHeadSha ? { expectedHeadSha: payload.expectedHeadSha } : {}),
+        ...(payload.expectedBaseRef ? { expectedBaseRef: payload.expectedBaseRef } : {}),
       })
+  );
+}
+
+async function handleForgeEnableAutoMerge(payload: {
+  cwd: string;
+  prNumber: number;
+  mergeMethod?: "merge" | "squash" | "rebase";
+  expectedHeadSha: string;
+  expectedBaseRef?: string;
+}): Promise<EnableAutoMergeResult> {
+  checkRateLimit(CHANNELS.FORGE_ENABLE_AUTO_MERGE, 5, 10_000);
+  if (!payload || typeof payload !== "object") throw new Error("Invalid payload");
+  assertCwd(payload.cwd);
+  assertPRNumber(payload.prNumber);
+  assertMergeMethod(payload.mergeMethod);
+  assertHeadSha(payload.expectedHeadSha);
+  assertBaseRef(payload.expectedBaseRef);
+  const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
+  const impl = getImplForNamespace(namespaceId);
+  const autoMerge = impl.autoMerge;
+  if (!autoMerge) {
+    throw new Error("The active forge provider does not support merge when ready");
+  }
+  return auditForgeCall(
+    {
+      providerId: namespaceId,
+      methodName: "enableAutoMerge",
+      repoOwner: repoRef.owner,
+      repoName: repoRef.repo,
+      argsSummary: summarizeForgeArgs("enableAutoMerge", payload.prNumber),
+    },
+    () =>
+      autoMerge.enable(repoRef, payload.prNumber, {
+        ...(payload.mergeMethod ? { mergeMethod: payload.mergeMethod } : {}),
+        expectedHeadSha: payload.expectedHeadSha,
+        ...(payload.expectedBaseRef ? { expectedBaseRef: payload.expectedBaseRef } : {}),
+      })
+  );
+}
+
+async function handleForgeDisableAutoMerge(payload: {
+  cwd: string;
+  prNumber: number;
+}): Promise<DisableAutoMergeResult> {
+  checkRateLimit(CHANNELS.FORGE_DISABLE_AUTO_MERGE, 5, 10_000);
+  if (!payload || typeof payload !== "object") throw new Error("Invalid payload");
+  assertCwd(payload.cwd);
+  assertPRNumber(payload.prNumber);
+  const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
+  const impl = getImplForNamespace(namespaceId);
+  const autoMerge = impl.autoMerge;
+  if (!autoMerge) {
+    throw new Error("The active forge provider does not support merge when ready");
+  }
+  return auditForgeCall(
+    {
+      providerId: namespaceId,
+      methodName: "disableAutoMerge",
+      repoOwner: repoRef.owner,
+      repoName: repoRef.repo,
+      argsSummary: summarizeForgeArgs("disableAutoMerge", payload.prNumber),
+    },
+    () => autoMerge.disable(repoRef, payload.prNumber)
   );
 }
 
@@ -838,6 +927,8 @@ export const forgePRWritesNamespace = defineIpcNamespace({
     closePR: op(CHANNELS.FORGE_CLOSE_PR, handleForgeClosePR),
     reopenPR: op(CHANNELS.FORGE_REOPEN_PR, handleForgeReopenPR),
     mergePR: op(CHANNELS.FORGE_MERGE_PR, handleForgeMergePR),
+    enableAutoMerge: op(CHANNELS.FORGE_ENABLE_AUTO_MERGE, handleForgeEnableAutoMerge),
+    disableAutoMerge: op(CHANNELS.FORGE_DISABLE_AUTO_MERGE, handleForgeDisableAutoMerge),
     convertPRToDraft: op(CHANNELS.FORGE_CONVERT_PR_TO_DRAFT, handleForgeConvertPRToDraft),
     markPRReadyForReview: op(
       CHANNELS.FORGE_MARK_PR_READY_FOR_REVIEW,
@@ -896,7 +987,7 @@ export function registerForgeHandlers(): () => void {
   cleanups.push(
     typedHandleWithContext(
       CHANNELS.FORGE_OPEN_ISSUE,
-      async (ctx, payload: { cwd: string; issueNumber: number }) => {
+      async (ctx, payload: { cwd: string; issueNumber: number } & IssueLinkTarget) => {
         checkRateLimit(CHANNELS.FORGE_OPEN_ISSUE, 20, 10_000);
         if (!payload || typeof payload !== "object") {
           throw new Error("Invalid payload");
@@ -911,9 +1002,9 @@ export function registerForgeHandlers(): () => void {
         ) {
           throw new Error("Invalid issue number");
         }
-        const { namespaceId, repoRef } = await resolveForCwd(payload.cwd, "issues");
-        const impl = getIssueImplForNamespace(namespaceId);
-        const url = impl.buildIssueUrl(repoRef, payload.issueNumber);
+        const target = readIssueLinkTarget(payload);
+        const context = await resolveIssueLinkForCwd(payload.cwd, target);
+        const url = await resolveIssueLinkUrl(context, payload.issueNumber, target);
         return openForCaller(ctx, url);
       }
     )
@@ -926,7 +1017,7 @@ export function registerForgeHandlers(): () => void {
   cleanups.push(
     typedHandle(
       CHANNELS.FORGE_GET_ISSUE_URL,
-      async (payload: { cwd: string; issueNumber: number }) => {
+      async (payload: { cwd: string; issueNumber: number } & IssueLinkTarget) => {
         checkRateLimit(CHANNELS.FORGE_GET_ISSUE_URL, 10, 10_000);
         if (!payload || typeof payload !== "object") {
           throw new Error("Invalid payload");
@@ -941,9 +1032,9 @@ export function registerForgeHandlers(): () => void {
         ) {
           throw new Error("Invalid issue number");
         }
-        const { namespaceId, repoRef } = await resolveForCwd(payload.cwd, "issues");
-        const impl = getIssueImplForNamespace(namespaceId);
-        return impl.buildIssueUrl(repoRef, payload.issueNumber);
+        const target = readIssueLinkTarget(payload);
+        const context = await resolveIssueLinkForCwd(payload.cwd, target);
+        return resolveIssueLinkUrl(context, payload.issueNumber, target);
       }
     )
   );

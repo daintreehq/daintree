@@ -1,16 +1,13 @@
 import { describe, it, expect, beforeAll } from "vitest";
-import fs from "fs/promises";
-import path from "path";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import { OVERFLOW_MENU_META } from "../Toolbar";
-
-const TOOLBAR_PATH = path.resolve(__dirname, "../Toolbar.tsx");
+import { readToolbarSource } from "./toolbarSource";
 
 describe("Toolbar — agent registry zero-touch guarantee (issue #5070)", () => {
   let source: string;
 
   beforeAll(async () => {
-    source = await fs.readFile(TOOLBAR_PATH, "utf-8");
+    source = await readToolbarSource();
   });
 
   describe("BUILT_IN_AGENT_IDS invariants", () => {

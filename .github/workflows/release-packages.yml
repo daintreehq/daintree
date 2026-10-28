@@ -143,54 +143,12 @@ jobs:
             exit 1
           fi
 
-      # Pack the exact tarballs npm would publish and install them into an
-      # empty project from the tarballs alone. The workspace symlinks hide a
-      # whole class of defects (a relative import that escapes `dist`, a peer
-      # that only resolves from the monorepo root, a bin with the wrong shebang),
-      # and this is the only step that sees the packages the way an author does.
-      - name: Pack and smoke-install the tarballs
-        run: |
-          set -euo pipefail
-          tarballs="$(mktemp -d)"
-          for dir in $PUBLISH_WORKSPACES; do
-            npm pack --workspace="$dir" --pack-destination "$tarballs" >/dev/null
-          done
-          ls -1 "$tarballs"
-          consumer="$(mktemp -d)"
-          cd "$consumer"
-          npm init -y >/dev/null
-          # Every tarball in one install so `create-daintree-plugin`'s
-          # dependency on `daintree-plugin` resolves to the sibling tarball, not
-          # the registry (where it may not exist yet). Peers are installed
-          # explicitly so every entry point can actually be imported.
-          npm install --no-audit --no-fund "$tarballs"/*.tgz react@19 react-dom@19 zod@4 vite@8 lucide-react@1 >/dev/null
-          node --input-type=module -e "
-            const sdk = await import('@daintreehq/plugin-sdk');
-            if (typeof sdk.PLUGIN_STYLE_ROOT_ATTRIBUTE !== 'string') throw new Error('sdk: PLUGIN_STYLE_ROOT_ATTRIBUTE missing');
-            if (typeof sdk.PLUGIN_PROCESS_STREAM_CHANNEL !== 'string') throw new Error('sdk: PLUGIN_PROCESS_STREAM_CHANNEL missing');
-            await import('@daintreehq/plugin-sdk/react');
-            await import('@daintreehq/plugin-sdk/files');
-            const testing = await import('@daintreehq/plugin-sdk/testing');
-            if (typeof testing.createMockHost !== 'function') throw new Error('sdk/testing: createMockHost missing');
-            const vite = await import('@daintreehq/plugin-vite');
-            if (typeof vite.daintreePlugin !== 'function') throw new Error('plugin-vite: daintreePlugin missing');
-            const tour = await import('@daintreehq/tour');
-            if (typeof tour.TourPlayer !== 'function') throw new Error('tour: TourPlayer missing');
-            const tourReact = await import('@daintreehq/tour/react');
-            if (typeof tourReact.useCue !== 'function') throw new Error('tour/react: useCue missing');
-            const kit = await import('@daintreehq/tour/kit');
-            if (typeof kit.MockCursor !== 'function') throw new Error('tour/kit: MockCursor missing');
-            const mockApp = await import('@daintreehq/tour/mock-app');
-            if (typeof mockApp.MockApp !== 'function') throw new Error('tour/mock-app: MockApp missing');
-            console.log('entry points import ok');
-          "
-          # Through `.bin`, so the `bin` mapping, the shebang and the executable
-          # bit are all exercised, not just the file behind them.
-          ./node_modules/.bin/daintree-plugin --version
-          ./node_modules/.bin/daintree-plugin --help >/dev/null
-          ./node_modules/.bin/create-daintree-plugin --version
-          ./node_modules/.bin/create-daintree-plugin --help >/dev/null
-          echo "tarball smoke install ok"
+      # Pack the exact tarballs npm would publish and use them the way an author
+      # outside this repo does: import every exports subpath, run the bins, and
+      # scaffold, typecheck, build, validate and package a plugin against them.
+      # The same script runs on every PR in ci.yml, so a failure here is rare.
+      - name: Pack and smoke-test the tarballs as a consumer
+        run: node scripts/ci/packages-consumer-smoke.mjs
 
       # Publish in dependency order: plugin-sdk first (others peer/depend on it),
       # then the vite preset and the CLIs, and the standalone tour engine last.

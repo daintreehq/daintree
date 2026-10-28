@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PortalVisibilityController } from "../PortalVisibilityController";
 import { usePortalStore } from "@/store";
 import { useUIStore } from "@/store/uiStore";
+import { __resetProjectViewCacheStateForTests } from "@/lib/viewCacheState";
 
 function deferredPromise() {
   let resolve!: () => void;
@@ -29,7 +30,9 @@ describe("PortalVisibilityController", () => {
   let evictionCallbacks: Array<(data: { tabId: string }) => void> = [];
   const portal = {
     create: vi.fn<({ tabId, url }: { tabId: string; url: string }) => Promise<void>>(),
-    show: vi.fn<({ tabId, bounds }: { tabId: string; bounds: unknown }) => Promise<void>>(),
+    show: vi.fn<
+      ({ tabId, bounds }: { tabId: string; bounds: unknown }) => Promise<boolean | void>
+    >(),
     hide: vi.fn<() => Promise<void>>(),
     onTabEvicted: vi.fn((cb: (data: { tabId: string }) => void) => {
       evictionCallbacks.push(cb);
@@ -37,7 +40,43 @@ describe("PortalVisibilityController", () => {
         evictionCallbacks = evictionCallbacks.filter((c) => c !== cb);
       };
     }),
-    onTabsEvicted: vi.fn(() => vi.fn()),
+    onTabsEvicted: vi.fn((cb: (payload: { tabIds: string[] }) => void) => {
+      tabsEvictedCallbacks.push(cb);
+      return () => {
+        tabsEvictedCallbacks = tabsEvictedCallbacks.filter((c) => c !== cb);
+      };
+    }),
+    onNavEvent: vi.fn((cb: (data: { tabId: string; title: string; url: string }) => void) => {
+      navCallbacks.push(cb);
+      return () => {
+        navCallbacks = navCallbacks.filter((c) => c !== cb);
+      };
+    }),
+  };
+  let tabsEvictedCallbacks: Array<(payload: { tabIds: string[] }) => void> = [];
+  let navCallbacks: Array<(data: { tabId: string; title: string; url: string }) => void> = [];
+  let viewCached = false;
+  let revealCallbacks: Array<() => void> = [];
+  let cachedCallbacks: Array<() => void> = [];
+  const cacheView = () => {
+    viewCached = true;
+    for (const cb of cachedCallbacks) cb();
+  };
+  const app = {
+    isViewCached: vi.fn(() => viewCached),
+    onViewCached: vi.fn((cb: () => void) => {
+      cachedCallbacks.push(cb);
+      return () => {
+        cachedCallbacks = cachedCallbacks.filter((c) => c !== cb);
+      };
+    }),
+    onViewWarmActivated: vi.fn(() => () => {}),
+    onViewRevealed: vi.fn((cb: () => void) => {
+      revealCallbacks.push(cb);
+      return () => {
+        revealCallbacks = revealCallbacks.filter((c) => c !== cb);
+      };
+    }),
   };
   const storage = new Map<string, string>();
   const localStorageMock = {
@@ -58,6 +97,12 @@ describe("PortalVisibilityController", () => {
     vi.clearAllMocks();
     storage.clear();
     evictionCallbacks = [];
+    tabsEvictedCallbacks = [];
+    navCallbacks = [];
+    revealCallbacks = [];
+    cachedCallbacks = [];
+    viewCached = false;
+    __resetProjectViewCacheStateForTests();
 
     portal.create.mockResolvedValue(undefined);
     portal.show.mockResolvedValue(undefined);
@@ -77,6 +122,7 @@ describe("PortalVisibilityController", () => {
     Object.defineProperty(window, "electron", {
       value: {
         portal,
+        app,
         window: { getZoomFactor: vi.fn(() => 1) },
       },
       configurable: true,
@@ -452,5 +498,186 @@ describe("PortalVisibilityController", () => {
 
     expect(usePortalStore.getState().createdTabs.has("tab-2")).toBe(false);
     expect(usePortalStore.getState().tabs.some((t) => t.id === "tab-2")).toBe(true);
+  });
+
+  describe("tabs main released (#14537)", () => {
+    const BOUNDS = { x: 10, y: 21, width: 301, height: 401 };
+    const openWithCreatedTab = () =>
+      usePortalStore.setState({
+        isOpen: true,
+        activeTabId: "tab-1",
+        tabs: [
+          { id: "tab-1", title: "A", url: "https://example.com/a", partition: "persist:p" },
+          { id: "tab-2", title: "B", url: "https://example.com/b" },
+        ],
+        createdTabs: new Set<string>(["tab-1", "tab-2"]),
+      });
+    const settle = () =>
+      act(async () => {
+        await vi.runAllTimersAsync();
+      });
+
+    beforeEach(() => {
+      const placeholder = Object.assign(document.createElement("div"), {
+        getBoundingClientRect: () => DOMRect.fromRect(createPlaceholderRect()),
+      });
+      vi.spyOn(document, "getElementById").mockReturnValue(placeholder);
+    });
+
+    it("brings the selected tab back when main evicts it", async () => {
+      openWithCreatedTab();
+      render(<PortalVisibilityController />);
+
+      act(() => {
+        for (const cb of evictionCallbacks) cb({ tabId: "tab-1" });
+      });
+      await settle();
+
+      expect(portal.create).toHaveBeenCalledWith({
+        tabId: "tab-1",
+        url: "https://example.com/a",
+        partition: "persist:p",
+        isRestore: true,
+      });
+      expect(portal.show).toHaveBeenCalledWith({ tabId: "tab-1", bounds: BOUNDS });
+      expect(usePortalStore.getState().createdTabs.has("tab-1")).toBe(true);
+    });
+
+    it("waits for its reveal when memory pressure takes a cached view's selected tab", async () => {
+      openWithCreatedTab();
+      viewCached = true;
+      render(<PortalVisibilityController />);
+
+      act(() => {
+        for (const cb of tabsEvictedCallbacks) cb({ tabIds: ["tab-1", "tab-2"] });
+      });
+      await settle();
+
+      // Shown from here it would cover the project in front.
+      expect(portal.create).not.toHaveBeenCalled();
+      expect(portal.show).not.toHaveBeenCalled();
+
+      viewCached = false;
+      act(() => {
+        for (const cb of revealCallbacks) cb();
+      });
+      await settle();
+
+      expect(portal.create).toHaveBeenCalledTimes(1);
+      expect(portal.create).toHaveBeenCalledWith(
+        expect.objectContaining({ tabId: "tab-1", isRestore: true })
+      );
+      expect(portal.show).toHaveBeenCalledWith({ tabId: "tab-1", bounds: BOUNDS });
+      expect(usePortalStore.getState().createdTabs.has("tab-1")).toBe(true);
+      expect(usePortalStore.getState().createdTabs.has("tab-2")).toBe(false);
+    });
+
+    it("holds a restore whose view is cached mid-create until the view's reveal", async () => {
+      openWithCreatedTab();
+      usePortalStore.setState({ createdTabs: new Set<string>(), isOpen: false });
+      const createRequest = deferredPromise();
+      portal.create.mockImplementationOnce(() => createRequest.promise);
+      render(<PortalVisibilityController />);
+
+      act(() => {
+        usePortalStore.setState({ isOpen: true });
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(portal.create).toHaveBeenCalledTimes(1);
+
+      cacheView();
+      createRequest.resolve();
+      await settle();
+      expect(portal.show).not.toHaveBeenCalled();
+
+      viewCached = false;
+      act(() => {
+        for (const cb of revealCallbacks) cb();
+      });
+      await settle();
+
+      expect(portal.show).toHaveBeenCalledWith({ tabId: "tab-1", bounds: BOUNDS });
+      expect(usePortalStore.getState().createdTabs.has("tab-1")).toBe(true);
+    });
+
+    it("never hides the window's portal from a cached view", async () => {
+      openWithCreatedTab();
+      render(<PortalVisibilityController />);
+      act(() => {
+        useUIStore.setState({ overlayStack: ["portal-close-confirm"] });
+      });
+      expect(portal.hide).toHaveBeenCalledTimes(1);
+
+      act(() => {
+        cacheView();
+        for (const cb of navCallbacks) {
+          cb({ tabId: "tab-1", title: "A next", url: "https://example.com/a/next" });
+        }
+      });
+
+      expect(usePortalStore.getState().tabs[0]!.url).toBe("https://example.com/a/next");
+      expect(portal.hide).toHaveBeenCalledTimes(1);
+    });
+
+    it("comes back at the page's latest URL, navigated while the dock was collapsed", async () => {
+      openWithCreatedTab();
+      usePortalStore.setState({ isOpen: false });
+      viewCached = true;
+      render(<PortalVisibilityController />);
+
+      act(() => {
+        for (const cb of navCallbacks) {
+          cb({ tabId: "tab-1", title: "A next", url: "https://example.com/a/next" });
+        }
+        for (const cb of evictionCallbacks) cb({ tabId: "tab-1" });
+      });
+      viewCached = false;
+      act(() => {
+        for (const cb of revealCallbacks) cb();
+        usePortalStore.setState({ isOpen: true });
+      });
+      await settle();
+
+      expect(portal.create).toHaveBeenCalledWith(
+        expect.objectContaining({ tabId: "tab-1", url: "https://example.com/a/next" })
+      );
+    });
+
+    it("recreates a selected tab that main reports missing on show", async () => {
+      openWithCreatedTab();
+      portal.show.mockResolvedValueOnce(false).mockResolvedValue(true);
+      render(<PortalVisibilityController />);
+
+      // An overlay closing re-shows the tab without creating it.
+      act(() => {
+        useUIStore.setState({ overlayStack: ["settings"] });
+      });
+      act(() => {
+        useUIStore.setState({ overlayStack: [] });
+      });
+      await settle();
+
+      expect(portal.create).toHaveBeenCalledTimes(1);
+      expect(portal.show).toHaveBeenCalledTimes(2);
+      expect(usePortalStore.getState().createdTabs.has("tab-1")).toBe(true);
+    });
+
+    it("retries a just-created tab once when it is gone again by the show", async () => {
+      openWithCreatedTab();
+      usePortalStore.setState({ createdTabs: new Set<string>(), isOpen: false });
+      portal.show.mockResolvedValue(false);
+      render(<PortalVisibilityController />);
+
+      act(() => {
+        usePortalStore.setState({ isOpen: true });
+      });
+      await settle();
+
+      expect(portal.create).toHaveBeenCalledTimes(2);
+      expect(portal.show).toHaveBeenCalledTimes(2);
+      expect(usePortalStore.getState().createdTabs.has("tab-1")).toBe(false);
+    });
   });
 });

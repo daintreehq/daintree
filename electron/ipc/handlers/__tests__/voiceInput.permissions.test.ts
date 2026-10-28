@@ -19,6 +19,12 @@ vi.mock("electron", () => ({
   BrowserWindow: { fromWebContents: vi.fn(() => null) },
 }));
 
+// The live-session report goes to every app view; these tests have none.
+vi.mock("../../../window/webContentsRegistry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../window/webContentsRegistry.js")>()),
+  getAllAppWebContents: vi.fn(() => []),
+}));
+
 const linuxSoundSettingsMock = vi.hoisted(() => ({
   openLinuxSoundSettings: vi.fn<
     (
@@ -39,6 +45,7 @@ vi.mock("../../../utils/logger.js", () => ({
   logInfo: vi.fn(),
   logWarn: logWarnMock,
   logError: vi.fn(),
+  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 
 vi.mock("../../../services/ProjectStore.js", () => ({
@@ -193,7 +200,7 @@ describe("voiceInput — microphone permission handlers", () => {
       await expect(openMicSettings()).resolves.toBe(false);
       expect(logDebugMock).toHaveBeenCalledWith(
         expect.any(String),
-        expect.objectContaining({ error: "spawn pavucontrol ENOENT", command: "pavucontrol" })
+        expect.objectContaining({ errorName: "Error", command: "pavucontrol" })
       );
       expect(logWarnMock).toHaveBeenCalledTimes(1);
     });
@@ -215,8 +222,9 @@ describe("voiceInput — microphone permission handlers", () => {
       await expect(openMicSettings()).resolves.toBe(false);
       expect(logDebugMock).toHaveBeenCalledWith(
         expect.any(String),
-        expect.objectContaining({ error: "no handler registered" })
+        expect.objectContaining({ errorName: "Error" })
       );
+      expect(JSON.stringify(logDebugMock.mock.calls)).not.toContain("no handler registered");
     });
   });
 });

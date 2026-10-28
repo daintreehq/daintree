@@ -20,6 +20,8 @@ import { formatBytes } from "@/lib/formatBytes";
 import { notify } from "@/lib/notify";
 import { isMac } from "@/lib/platform";
 import { getHostPlatformInfo } from "@/hooks/useHostPlatform";
+import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
+import { isClientAppError } from "@/utils/clientAppError";
 import { mintOperationId } from "@/clients/operationsClient";
 import { askUploadQuestion } from "@/components/Terminal/uploads/uploadConfirm";
 
@@ -65,7 +67,7 @@ export interface RemoteMaterializerDeps {
   }): Promise<{ filePath: string; thumbnailDataUrl: string }>;
   confirmLargeUpload(request: { name: string; bytes: number; hostLabel: string }): Promise<boolean>;
   confirmReplace(request: { name: string; folder: string; hostLabel: string }): Promise<boolean>;
-  reportFailure(failure: { title: string; message: string }): void;
+  reportFailure(failure: { title: string; message: string; code?: string }): void;
   mintOperationId(): string;
 }
 
@@ -91,12 +93,16 @@ function dirname(p: string): string {
   return idx > 0 ? p.slice(0, idx) : "/";
 }
 
+// The bridge strips `code` and `userMessage` off an IPC error and leaves them
+// in an `[AppError|…]` message prefix; the guard decodes them back onto it.
 function codeOf(error: unknown): string | null {
+  isClientAppError(error);
   if (typeof error !== "object" || error === null || !("code" in error)) return null;
   return typeof error.code === "string" ? error.code : null;
 }
 
 function userMessageOf(error: unknown): string | null {
+  isClientAppError(error);
   if (typeof error !== "object" || error === null || !("userMessage" in error)) return null;
   return typeof error.userMessage === "string" && error.userMessage ? error.userMessage : null;
 }
@@ -305,6 +311,7 @@ export function createRemoteMaterializer(deps: RemoteMaterializerDeps): Material
             (error instanceof MaterializeError
               ? error.message
               : `Couldn't send ${name} to ${deps.hostLabel()}.`),
+          ...(code !== null && { code }),
         });
       }
       throw error;
@@ -325,7 +332,24 @@ export function createViewRemoteMaterializer(hostId: HostId): MaterializeFn {
     saveClipboardImage: (options) => window.electron.clipboard.saveImage(options),
     confirmLargeUpload: (request) => askUploadQuestion({ kind: "large", ...request }),
     confirmReplace: (request) => askUploadQuestion({ kind: "replace", ...request }),
-    reportFailure: ({ title, message }) => {
+    reportFailure: ({ title, message, code }) => {
+      const projectId = code === "DRIVEN_ELSEWHERE" ? getViewWorkspaceId() : null;
+      if (projectId) {
+        notify({
+          type: "error",
+          title,
+          message,
+          context: { eventKind: "host" },
+          action: {
+            label: "Take control",
+            onClick: () =>
+              void import("@/components/Recovery/takeControl").then((m) =>
+                m.takeControl(projectId)
+              ),
+          },
+        });
+        return;
+      }
       // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
       notify({ type: "error", title, message, context: { eventKind: "host" } });
     },

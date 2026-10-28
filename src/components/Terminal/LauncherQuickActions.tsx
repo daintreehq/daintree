@@ -10,7 +10,7 @@ import { isPanelLimitError } from "@/services/actions/definitions/panelLimitErro
 import { notify } from "@/lib/notify";
 import { getLaunchOptions, type LaunchOption } from "@/components/TerminalPalette/launchOptions";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
-import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { useAgentToolbarPinsStore } from "@/store/agentToolbarPinsStore";
 import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
 import { isToolbarButtonVisible } from "@/components/Layout/toolbarButtonMetadata";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
@@ -146,7 +146,7 @@ function PaletteSearchButton() {
  */
 export function LauncherQuickActions() {
   const availability = useCliAvailabilityStore((state) => state.availability);
-  const agentSettings = useAgentSettingsStore((state) => state.settings);
+  const agentPins = useAgentToolbarPinsStore((state) => state.pins);
   const toolbarLayout = useToolbarPreferencesStore((state) => state.layout);
 
   const agents = useMemo(() => {
@@ -170,13 +170,13 @@ export function LauncherQuickActions() {
       if (!isBuiltInAgentId(id)) continue;
       const option = byId.get(id);
       if (!option) continue;
-      if (!isToolbarButtonVisible(id, toolbarLayout.pinnedButtons, agentSettings, availability)) {
+      if (!isToolbarButtonVisible(id, toolbarLayout.pinnedButtons, agentPins, availability)) {
         continue;
       }
       result.push(option);
     }
     return result;
-  }, [availability, agentSettings, toolbarLayout]);
+  }, [availability, agentPins, toolbarLayout]);
 
   const dispatch = (actionId: ActionId, args?: Record<string, unknown>) => {
     void actionService.dispatch(actionId, args, { source: "user" });

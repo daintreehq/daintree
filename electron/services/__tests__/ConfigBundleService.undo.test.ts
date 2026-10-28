@@ -83,6 +83,11 @@ vi.mock("../../schemas/customSchemes.js", async () => {
 });
 
 const { ConfigBundleService } = await import("../ConfigBundleService.js");
+const { BUILT_IN_THEME_SOURCES } = await import("../../../shared/theme/builtInThemes/index.js");
+const { compilePluginTheme, makePluginThemeId, toPluginThemeSnapshot } =
+  await import("../../../shared/theme/pluginThemes.js");
+const { clearPluginThemeRegistry, registerPluginThemes } =
+  await import("../plugin/PluginThemeRegistry.js");
 type Captured = import("../ConfigBundleService.js").CapturedSection;
 
 function makeService() {
@@ -225,6 +230,46 @@ describe("undoing a copy", () => {
     expect(storeState.current.agentSettings).toEqual(original);
   });
 
+  it("takes back a copy recorded before pins left agent settings, without writing one back (#14702)", async () => {
+    // The live entries as migration 039 left them: the copy's values, pin gone.
+    storeState.current.agentSettings = {
+      globalSkipPermissions: false,
+      agents: { claude: { customFlags: "--copied", dangerousMode: "on" } },
+    };
+    const captured: Captured[] = [
+      {
+        section: "agentSettings",
+        leaves: [
+          {
+            key: "claude",
+            before: { pinned: true, customFlags: "--host", dangerousMode: "off" },
+            after: { pinned: true, customFlags: "--copied", dangerousMode: "off" },
+          },
+        ],
+      },
+      {
+        section: "permissionBypass",
+        leaves: [
+          {
+            key: "agents.claude",
+            before: { pinned: true, customFlags: "--copied", dangerousMode: "off" },
+            after: { pinned: true, customFlags: "--copied", dangerousMode: "on" },
+          },
+        ],
+      },
+    ];
+
+    const results = await makeService().undo(captured);
+
+    expect(statuses(results)).toEqual({
+      "agentSettings:claude": "restored",
+      "permissionBypass:agents.claude": "restored",
+    });
+    expect(
+      (storeState.current.agentSettings as { agents: { claude: unknown } }).agents.claude
+    ).toEqual({ customFlags: "--host", dangerousMode: "off" });
+  });
+
   it("keeps an agent entry edited since the copy, whole", async () => {
     const { service, captured } = await copy({
       agentSettings: { claude: { customFlags: "--copied" } },
@@ -307,5 +352,49 @@ describe("undoing a copy", () => {
       recentSchemeIds: ["a", "mine"],
       customSchemes: [],
     });
+  });
+});
+
+describe("undoing a copied plugin theme selection (#13832)", () => {
+  const theme = (themeId: string, base: string) => {
+    const source = BUILT_IN_THEME_SOURCES.find((s) => s.id === base)!;
+    return {
+      id: makePluginThemeId("acme.themes", themeId),
+      name: themeId,
+      type: source.type,
+      pluginId: "acme.themes",
+      pluginName: "Acme Themes",
+      palette: source.palette,
+    };
+  };
+
+  it("puts the previous theme's palette back with its id", async () => {
+    const dawn = theme("dawn", "bondi");
+    const noir = theme("noir", "daintree");
+    registerPluginThemes(
+      "acme.themes",
+      [dawn, noir].map((source) => ({ source, scheme: compilePluginTheme(source) }))
+    );
+    try {
+      storeState.current.appTheme = {
+        colorSchemeId: dawn.id,
+        pluginThemeSnapshot: toPluginThemeSnapshot(dawn),
+      };
+
+      const { service, captured } = await copy({ appTheme: { colorSchemeId: noir.id } });
+      expect(storeState.current.appTheme).toEqual({
+        colorSchemeId: noir.id,
+        pluginThemeSnapshot: toPluginThemeSnapshot(noir),
+      });
+
+      await service.undo(captured);
+
+      expect(storeState.current.appTheme).toEqual({
+        colorSchemeId: dawn.id,
+        pluginThemeSnapshot: toPluginThemeSnapshot(dawn),
+      });
+    } finally {
+      clearPluginThemeRegistry();
+    }
   });
 });

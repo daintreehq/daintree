@@ -1,7 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PtyPanelData } from "@shared/types/panel";
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import type { ActionContext } from "@shared/types/actions";
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 
 const mocks = vi.hoisted(() => {
   const storage = new Map<string, string>();
@@ -209,13 +210,19 @@ vi.mock("@/clients", () => ({
   },
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: mocks.terminalInstanceService,
-}));
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = mocks.terminalInstanceService;
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
-vi.mock("@/services/terminal/TerminalInstanceService", () => ({
-  terminalInstanceService: mocks.terminalInstanceService,
-}));
+vi.mock("@/services/terminal/TerminalInstanceService", () => {
+  const terminalInstanceService = mocks.terminalInstanceService;
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("@/services/ActionService", () => ({
   actionService: mocks.actionService,
@@ -400,6 +407,12 @@ beforeEach(() => {
     manualOrder: [],
     quickStateFilter: "all",
   });
+});
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
 });
 
 describe("terminal action hardening", () => {
@@ -704,6 +717,7 @@ describe("terminal action hardening", () => {
         tabGroups: new Map(),
         focusedId: null,
         maximizedId: null,
+        maximizeTarget: null,
         activeDockTerminalId: null,
       };
       useLayoutUndoStore.setState({ undoStack: [], redoStack: [pendingRedo] });

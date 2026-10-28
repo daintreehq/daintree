@@ -71,7 +71,7 @@ describe("TwoPaneSplitLayout coordinated terminal resize", () => {
   it("unlocks into one tracked final resize pass without calling raw fit", async () => {
     const content = await readFile(LAYOUT_PATH, "utf-8");
 
-    expect(content).not.toContain("terminalInstanceService.fit(");
+    expect(content).not.toMatch(/\.fit\(/);
     expect(content).toMatch(
       /dragLockedIdsRef\.current = \[\][\s\S]{0,220}lockResize\(id, false\)[\s\S]{0,180}runResizePass\(ids\)/
     );
@@ -90,7 +90,7 @@ describe("TwoPaneSplitLayout coordinated terminal resize", () => {
   it("registers non-drag layout work with the batch scheduler immediately", async () => {
     const content = await readFile(LAYOUT_PATH, "utf-8");
 
-    expect(content).toContain("terminalInstanceService.scheduleBatchResize(panelIds)");
+    expect(content).toContain("service.scheduleBatchResize(panelIds)");
   });
 
   it("unmount cleanup releases only gesture-owned terminal locks", async () => {

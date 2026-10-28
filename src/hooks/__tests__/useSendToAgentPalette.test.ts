@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
 
 const getCachedSelection = vi.fn<(id: string) => string>();
 const openPalette = vi.fn<(id: string) => void>();
@@ -22,12 +22,15 @@ vi.mock("@/store/paletteStore", () => ({
   usePaletteStore: { getState: () => ({ openPalette }) },
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     getCachedSelection: (id: string) => getCachedSelection(id),
     get: () => undefined,
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("@/clients", () => ({ terminalClient: { write: vi.fn() } }));
 vi.mock("@shared/config/panelKindRegistry", () => ({ panelKindHasPty: () => true }));
@@ -35,6 +38,16 @@ vi.mock("@/utils/terminalChrome", () => ({ deriveTerminalChrome: () => ({ label:
 vi.mock("./useSearchablePalette", () => ({ useSearchablePalette: () => ({}) }));
 
 import { openSendToAgentPalette, openSendToAgentPaletteWithText } from "../useSendToAgentPalette";
+import {
+  __testing as terminalServiceTesting,
+  load as loadTerminalService,
+} from "@/services/terminal/terminalInstanceServiceAccessor";
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
+});
 
 beforeEach(() => {
   getCachedSelection.mockReset();
@@ -77,5 +90,17 @@ describe("openSendToAgentPalette (regression)", () => {
     getCachedSelection.mockReturnValue("selected text");
     expect(openSendToAgentPalette("a")).toBe(true);
     expect(openPalette).toHaveBeenCalledWith("send-to-agent");
+  });
+
+  it("has no selection to send while the terminal service is unloaded", async () => {
+    terminalServiceTesting.reset();
+    getCachedSelection.mockReturnValue("selected text");
+    try {
+      expect(openSendToAgentPalette("a")).toBe(false);
+      expect(getCachedSelection).not.toHaveBeenCalled();
+      expect(openPalette).not.toHaveBeenCalled();
+    } finally {
+      await loadTerminalService();
+    }
   });
 });

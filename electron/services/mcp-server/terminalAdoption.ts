@@ -42,6 +42,12 @@ export interface TerminalAdoptionRecord {
    * process, and ends the hand-over; one for this launch does not.
    */
   launchGeneration?: number;
+  /**
+   * Set when the terminal went to this machine's global assistant (#14161)
+   * rather than a pane: `orchestratorPaneId` is then the assistant's own PTY,
+   * which no view shows as a panel.
+   */
+  recipient?: "global-assistant";
   adoptedAt: number;
 }
 
@@ -67,6 +73,7 @@ export class TerminalAdoptionLedger {
     principalId: string;
     workspaceId?: string;
     launchGeneration?: number;
+    recipient?: "global-assistant";
     now?: number;
   }): TerminalAdoptionOutcome {
     const owner = principalOwnerKey(params.principalId);
@@ -82,6 +89,7 @@ export class TerminalAdoptionLedger {
       ...(params.launchGeneration !== undefined
         ? { launchGeneration: params.launchGeneration }
         : {}),
+      ...(params.recipient !== undefined ? { recipient: params.recipient } : {}),
       adoptedAt: params.now ?? Date.now(),
     };
     this.byTerminal.set(params.terminalId, { record, owner });
@@ -103,6 +111,15 @@ export class TerminalAdoptionLedger {
   /** Who is driving `terminalId`, whoever that is. */
   getForTerminal(terminalId: string): TerminalAdoptionRecord | undefined {
     return this.byTerminal.get(terminalId)?.record;
+  }
+
+  /**
+   * The owner key `terminalId` is held under, with its record, for showing
+   * who drives it (#14166). Read-only: it answers no authority check.
+   */
+  holderOf(terminalId: string): { record: TerminalAdoptionRecord; owner: string } | undefined {
+    const stored = this.byTerminal.get(terminalId);
+    return stored === undefined ? undefined : { record: stored.record, owner: stored.owner };
   }
 
   /** Drop the adoption of one terminal — the user took it back, or it exited. */

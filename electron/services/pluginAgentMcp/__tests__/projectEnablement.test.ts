@@ -16,23 +16,31 @@ vi.mock("../../../store.js", () => ({ store: storeMock }));
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { makeProjectPluginInstanceKey } from "../../../../shared/types/plugin.js";
+import {
+  makeInstalledProjectInstanceKey,
+  makeProjectPluginInstanceKey,
+} from "../../../../shared/types/plugin.js";
 import { pluginMcpGrantRegistry } from "../grantRegistry.js";
 import {
   agentMcpScopeFor,
   allProjectsAgentMcpAccess,
+  assistantAgentMcpAccess,
+  assistantAgentMcpScopeFor,
   hasAnyAgentMcpEnablement,
+  hasAnyAssistantAgentMcpAccess,
   hasLegacyAgentMcpAnswer,
   isAgentMcpEndpointEnabled,
   isAgentMcpEndpointEnabledByDefault,
   isAgentMcpScopeAllowed,
   isPluginMcpGrantAllowed,
   listAgentMcpAccessInstances,
+  listAssistantAgentMcpAccessInstances,
   listLegacyAgentMcpEndpointIds,
   projectAgentMcpAccessAnswer,
   refreshProjectAgentMcpDefaults,
   setAllProjectsAgentMcpAccess,
   setProjectAgentMcpAccess,
+  setProjectAssistantAgentMcpAccess,
 } from "../projectEnablement.js";
 import { _resetProjectMcpDefaultsForTests, refreshProjectMcpDefaults } from "../projectDefaults.js";
 import {
@@ -79,7 +87,8 @@ function issue(
   pluginInstanceId: string,
   projectId: string,
   scope: AgentMcpToolScope = BOTH,
-  terminalId = "t1"
+  terminalId = "t1",
+  consumer?: "assistant"
 ) {
   return pluginMcpGrantRegistry.issue({
     pluginInstanceId,
@@ -87,6 +96,7 @@ function issue(
     serverName: "daintree-ledger",
     projectId,
     terminalId,
+    ...(consumer !== undefined ? { consumer } : {}),
   });
 }
 
@@ -693,6 +703,18 @@ describe("projectEnablement", () => {
       expect(rosters(PROJECT_A, LEDGER_A)).toEqual([true, true]);
     });
 
+    it("never reaches an installed package's per-project instance of the same id", async () => {
+      await withDefaults(PROJECT_A, { plugins: { [LEDGER]: "read-write" } });
+      const installedA = makeInstalledProjectInstanceKey(PROJECT_A, LEDGER);
+
+      expect(rosters(PROJECT_A, installedA)).toEqual([false, false]);
+      expect(isAgentMcpEndpointEnabledByDefault(PROJECT_A, installedA, DB)).toBe(false);
+      expect(
+        isAgentMcpEndpointEnabledByDefault(PROJECT_A, installedA, DATABASE_WRITES_ACCESS_ID)
+      ).toBe(false);
+      expect(rosters(PROJECT_A, LEDGER_A)).toEqual([true, true]);
+    });
+
     it("lets the user's answer beat the default in both directions", async () => {
       await withDefaults(PROJECT_A, { plugins: { [LEDGER]: "read-only" } });
 
@@ -807,6 +829,139 @@ describe("projectEnablement", () => {
       await fs.writeFile(path.join(root, ".daintree", "mcp.json"), "{ not json");
       await refreshProjectMcpDefaults(PROJECT_A, root);
       expect(hasAnyAgentMcpEnablement(PROJECT_A)).toBe(false);
+    });
+  });
+
+  describe("the Daintree Assistant's answer", () => {
+    const WRITES = declared({ hasDatabaseWrites: true });
+
+    it("is off until the user answers, and caps nothing in by itself", () => {
+      setProjectAgentMcpAccess(PROJECT_A, LEDGER, "read-write");
+      expect(assistantAgentMcpAccess(PROJECT_A, LEDGER)).toBe("off");
+      expect(assistantAgentMcpScopeFor(PROJECT_A, declared())).toBeNull();
+      expect(hasAnyAssistantAgentMcpAccess(PROJECT_A)).toBe(false);
+    });
+
+    it("starts at the database reads, with neither declared writes nor the plugin's own tools", () => {
+      setProjectAgentMcpAccess(PROJECT_A, LEDGER, "read-write");
+      setProjectAssistantAgentMcpAccess(PROJECT_A, LEDGER, "read-only");
+
+      expect(agentMcpScopeFor(PROJECT_A, WRITES)).toEqual({ ...BOTH, databaseWrites: true });
+      expect(assistantAgentMcpScopeFor(PROJECT_A, WRITES)).toEqual({ databases: true });
+      // A plugin with no database tools has nothing read only reaches.
+      expect(assistantAgentMcpScopeFor(PROJECT_A, declared({ hasDatabases: false }))).toBeNull();
+    });
+
+    it("reaches what the project's agents reach once changes are allowed, and no more", () => {
+      setProjectAssistantAgentMcpAccess(PROJECT_A, LEDGER, "read-write");
+      expect(assistantAgentMcpScopeFor(PROJECT_A, WRITES)).toBeNull();
+
+      setProjectAgentMcpAccess(PROJECT_A, LEDGER, "read-only");
+      expect(assistantAgentMcpScopeFor(PROJECT_A, WRITES)).toEqual({ databases: true });
+
+      setProjectAgentMcpAccess(PROJECT_A, LEDGER, "read-write");
+      expect(assistantAgentMcpScopeFor(PROJECT_A, WRITES)).toEqual({
+        ...BOTH,
+        databaseWrites: true,
+      });
+    });
+
+    it("is kept per project and per instance", () => {
+      setProjectAgentMcpAccess(PROJECT_A, LEDGER, "read-write");
+      setProjectAgentMcpAccess(PROJECT_A, "acme.crm", "read-write");
+      setProjectAgentMcpAccess(PROJECT_B, LEDGER, "read-write");
+      setProjectAssistantAgentMcpAccess(PROJECT_A, LEDGER, "read-only");
+
+      expect(assistantAgentMcpScopeFor(PROJECT_A, declared())).toEqual({ databases: true });
+      expect(assistantAgentMcpScopeFor(PROJECT_B, declared())).toBeNull();
+      expect(
+        assistantAgentMcpScopeFor(PROJECT_A, declared({ pluginInstanceId: "acme.crm" }))
+      ).toBeNull();
+      expect(listAssistantAgentMcpAccessInstances(PROJECT_A)).toEqual([LEDGER]);
+      expect(listAssistantAgentMcpAccessInstances(PROJECT_B)).toEqual([]);
+    });
+
+    it("forgets the answer when switched off", () => {
+      setProjectAssistantAgentMcpAccess(PROJECT_A, LEDGER, "read-only");
+      setProjectAssistantAgentMcpAccess(PROJECT_A, LEDGER, "off");
+      expect(storeMock.data.get("projectAssistantAgentMcpAccess")).toEqual({});
+      expect(hasAnyAssistantAgentMcpAccess(PROJECT_A)).toBe(false);
+    });
+
+    it("is never answered by the repository's defaults or an every-project answer", async () => {
+      await withDefaults(PROJECT_A, { plugins: { [LEDGER]: "read-write" } });
+      setAllProjectsAgentMcpAccess(LEDGER, "read-write");
+      const projectPlugin = declared({ pluginInstanceId: LEDGER_A, origin: "project" });
+
+      expect(agentMcpScopeFor(PROJECT_A, projectPlugin)).toEqual(BOTH);
+      expect(assistantAgentMcpScopeFor(PROJECT_A, projectPlugin)).toBeNull();
+      expect(assistantAgentMcpScopeFor(PROJECT_A, declared())).toBeNull();
+      expect(hasAnyAssistantAgentMcpAccess(PROJECT_A)).toBe(false);
+    });
+
+    it("ignores a malformed record and an id named like an Object.prototype key", () => {
+      storeMock.data.set("projectAssistantAgentMcpAccess", {
+        [PROJECT_A]: { [LEDGER]: { decidedAt: "soon", access: "read-write" } },
+      });
+      expect(assistantAgentMcpAccess(PROJECT_A, LEDGER)).toBe("off");
+      expect(assistantAgentMcpAccess(PROJECT_A, "__proto__")).toBe("off");
+      expect(assistantAgentMcpAccess(PROJECT_A, "toString")).toBe("off");
+
+      setProjectAssistantAgentMcpAccess(PROJECT_A, "__proto__", "read-only");
+      expect(assistantAgentMcpAccess(PROJECT_A, "__proto__")).toBe("read-only");
+      expect(assistantAgentMcpAccess(PROJECT_A, LEDGER)).toBe("off");
+    });
+
+    it("holds an Assistant grant to both answers, and a terminal grant to the project's alone", () => {
+      setProjectAgentMcpAccess(PROJECT_A, LEDGER, "read-write");
+      setProjectAssistantAgentMcpAccess(PROJECT_A, LEDGER, "read-only");
+      const reads = issue(LEDGER, PROJECT_A, { databases: true }, "help", "assistant").grant;
+      const both = issue(LEDGER, PROJECT_A, BOTH, "help", "assistant").grant;
+      const terminal = issue(LEDGER, PROJECT_A, BOTH, "pane").grant;
+
+      expect(isPluginMcpGrantAllowed(reads)).toBe(true);
+      expect(isPluginMcpGrantAllowed(both)).toBe(false);
+      expect(isPluginMcpGrantAllowed(terminal)).toBe(true);
+    });
+
+    it("revokes the Assistant's grants it no longer covers, and leaves agents' alone", () => {
+      setProjectAgentMcpAccess(PROJECT_A, LEDGER, "read-write");
+      setProjectAssistantAgentMcpAccess(PROJECT_A, LEDGER, "read-write");
+      const assistantBoth = issue(LEDGER, PROJECT_A, BOTH, "help", "assistant");
+      const assistantReads = issue(LEDGER, PROJECT_A, { databases: true }, "help", "assistant");
+      const terminal = issue(LEDGER, PROJECT_A, BOTH, "pane");
+
+      setProjectAssistantAgentMcpAccess(PROJECT_A, LEDGER, "read-only");
+      expect(pluginMcpGrantRegistry.isLive(assistantBoth.grant.credentialId)).toBe(false);
+      expect(pluginMcpGrantRegistry.isLive(assistantReads.grant.credentialId)).toBe(true);
+      expect(pluginMcpGrantRegistry.isLive(terminal.grant.credentialId)).toBe(true);
+
+      setProjectAssistantAgentMcpAccess(PROJECT_A, LEDGER, "off");
+      expect(pluginMcpGrantRegistry.isLive(assistantReads.grant.credentialId)).toBe(false);
+      expect(pluginMcpGrantRegistry.isLive(terminal.grant.credentialId)).toBe(true);
+      expect(pluginMcpGrantRegistry.describeRevoked(assistantReads.token)?.reason).toBe(
+        "access-reduced"
+      );
+    });
+
+    it("revokes the Assistant's grants when the project's agents lose access", () => {
+      setProjectAgentMcpAccess(PROJECT_A, LEDGER, "read-write");
+      setProjectAssistantAgentMcpAccess(PROJECT_A, LEDGER, "read-only");
+      const assistant = issue(LEDGER, PROJECT_A, { databases: true }, "help", "assistant");
+
+      setProjectAgentMcpAccess(PROJECT_A, LEDGER, "off");
+      expect(pluginMcpGrantRegistry.isLive(assistant.grant.credentialId)).toBe(false);
+      // The Assistant's own answer stays, capped to nothing until agents have access again.
+      expect(assistantAgentMcpAccess(PROJECT_A, LEDGER)).toBe("read-only");
+    });
+
+    it("refuses an answer for something that is not a project", () => {
+      expect(() => setProjectAssistantAgentMcpAccess("scratch-1", LEDGER, "read-only")).toThrow(
+        /project workspace id/
+      );
+      expect(() => setProjectAssistantAgentMcpAccess(PROJECT_A, "", "read-only")).toThrow(
+        /plugin id is required/
+      );
     });
   });
 });

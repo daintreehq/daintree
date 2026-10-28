@@ -16,10 +16,12 @@ export async function ensureQuickRunInputVisible(page: Page): Promise<void> {
 
   if (!(await input.isVisible())) {
     await panelTrigger.waitFor({ state: "visible", timeout: T_LONG });
-    if (!(await input.isVisible())) {
+    // A restored-open panel can still be loading its lazy component.
+    if ((await panelTrigger.getAttribute("aria-expanded")) === "false") {
       await panelTrigger.click();
     }
   }
+  await expect(panelTrigger).toHaveAttribute("aria-expanded", "true", { timeout: T_LONG });
   await input.waitFor({ state: "visible", timeout: T_LONG });
 }
 

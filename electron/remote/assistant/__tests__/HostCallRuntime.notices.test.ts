@@ -320,13 +320,275 @@ describe("HostCallRuntime notices from hosts (#13500)", () => {
     expect(queued[0]!.wake.recheck()).toEqual({ kind: "unavailable", reason: "superseded" });
   });
 
-  it("holds its host's link while a recent call may still send a notice", async () => {
+  it("holds its host's link for as long as a call's notices are taken (#13930)", async () => {
     expect(runtime.awaitsNotices("studio")).toBe(false);
     await runtime.call("a", LAUNCH, { tier: "core" });
     expect(runtime.awaitsNotices("studio")).toBe(true);
     expect(runtime.awaitsNotices("other")).toBe(false);
 
-    now += 2 * 60 * 60_000 + 1;
+    // Work on a host can outlast a couple of hours; its notice still has to get back.
+    now += 3 * 60 * 60_000;
+    expect(runtime.awaitsNotices("studio")).toBe(true);
+    now += 21 * 60 * 60_000 + 1;
+    expect(runtime.awaitsNotices("studio")).toBe(false);
+  });
+
+  it("lets the link go once the host has nothing more for the call", async () => {
+    await runtime.call("a", LAUNCH, { tier: "core" });
+    expect(runtime.noticeCalls("studio")).toEqual([{ helpSessionId: "a", callId: "call-1" }]);
+
+    runtime.receiveNoticeStatus("studio", {
+      calls: [{ helpSessionId: "a", callId: "call-1", status: "watching" }],
+    });
+    expect(runtime.awaitsNotices("studio")).toBe(true);
+    runtime.receiveNoticeStatus("studio", {
+      calls: [{ helpSessionId: "a", callId: "call-1", status: "settled" }],
+    });
+    expect(runtime.awaitsNotices("studio")).toBe(false);
+    expect(runtime.noticeCalls("studio")).toEqual([]);
+    expect(queued).toEqual([]);
+
+    // Its notices are still taken: one on its way when the host answered isn't lost.
+    runtime.receiveNotices("studio", { notices: [notice()] });
+    expect(queued).toHaveLength(1);
+  });
+
+  it("asks only after calls the host has answered", async () => {
+    let answer!: (value: McpCallAnswer) => void;
+    relayCall.mockImplementationOnce(
+      () =>
+        new Promise<McpCallAnswer>((resolve) => {
+          answer = resolve;
+        })
+    );
+    const pending = runtime.call("a", LAUNCH, { tier: "core" });
+    await vi.waitFor(() => expect(relayCall).toHaveBeenCalled());
+    expect(runtime.awaitsNotices("studio")).toBe(true);
+    expect(runtime.noticeCalls("studio")).toEqual([]);
+    answer(DONE);
+    await pending;
+    expect(runtime.noticeCalls("studio")).toEqual([{ helpSessionId: "a", callId: "call-1" }]);
+  });
+
+  it("tells the run once that a host lost its notices, naming the host and terminals (#13930)", async () => {
+    relayCall.mockResolvedValueOnce({
+      status: "done",
+      result: {
+        isError: false,
+        structured: { launched: true, terminalId: "host-t-9" },
+        text: null,
+      },
+    } satisfies McpCallAnswer);
+    await runtime.call("a", LAUNCH, { tier: "core" });
+    await runtime.call(
+      "a",
+      { ...LAUNCH, tool: "terminal.notifyWhenIdle", args: { terminalId: "host-t-2" } },
+      { tier: "core" }
+    );
+    runtime.receiveNoticeStatus("studio", {
+      calls: [
+        { helpSessionId: "a", callId: "call-1", status: "unknown" },
+        { helpSessionId: "a", callId: "call-2", status: "unknown" },
+      ],
+    });
+
+    expect(queued).toHaveLength(1);
+    const [{ lane, wake }] = queued;
+    expect(lane).toEqual({ helpSessionId: "a", terminalId: "t-a", projectId: "proj-1" });
+    expect(wake).toMatchObject({
+      kind: "lost",
+      lostNotices: { hostName: "studio-01", terminalIds: ["host-t-9", "host-t-2"] },
+    });
+    expect(wake.recheck()).toEqual({ kind: "ready" });
+    expect(runtime.awaitsNotices("studio")).toBe(false);
+
+    // Told once: the calls are forgotten, so asking again finds nothing to say.
+    runtime.receiveNoticeStatus("studio", {
+      calls: [{ helpSessionId: "a", callId: "call-1", status: "unknown" }],
+    });
+    expect(queued).toHaveLength(1);
+  });
+
+  it("never tells a run that replaced the one that asked, nor one whose host control is off", async () => {
+    await runtime.call("a", LAUNCH, { tier: "core" });
+    await runtime.call("a", { ...LAUNCH, hostId: "other" }, { tier: "core" });
+    runs.set("a", { ...RUN_A, launchGeneration: 2 });
+    runtime.receiveNoticeStatus("studio", {
+      calls: [{ helpSessionId: "a", callId: "call-1", status: "unknown" }],
+    });
+    expect(queued).toEqual([]);
+
+    runs.set("a", { ...RUN_A });
+    control.delete("other");
+    runtime.receiveNoticeStatus("other", {
+      calls: [{ helpSessionId: "a", callId: "call-2", status: "unknown" }],
+    });
+    expect(queued).toEqual([]);
+  });
+
+  it("takes the host from the connection, and the run from the pin, when told of a loss", async () => {
+    await runtime.call("a", LAUNCH, { tier: "core" });
+    runtime.receiveNoticeStatus("other", {
+      calls: [{ helpSessionId: "a", callId: "call-1", status: "unknown" }],
+    });
+    runtime.receiveNoticeStatus("studio", {
+      calls: [{ helpSessionId: "b", callId: "call-1", status: "unknown" }],
+    });
+    expect(queued).toEqual([]);
+    expect(runtime.awaitsNotices("studio")).toBe(true);
+  });
+
+  it("reports a loss for a call whose resend got the answer its first send lost", async () => {
+    relayCall.mockRejectedValueOnce(Object.assign(new Error("lost"), { code: "OUTCOME_UNKNOWN" }));
+    await runtime.call("a", LAUNCH, { tier: "core" });
+    relayCall.mockResolvedValueOnce({
+      status: "done",
+      result: {
+        isError: false,
+        structured: { launched: true, terminalId: "host-t-9" },
+        text: null,
+      },
+    } satisfies McpCallAnswer);
+    await runtime.call("a", { ...LAUNCH, callId: "call-1" }, { tier: "core" });
+
+    runtime.receiveNoticeStatus("studio", {
+      calls: [{ helpSessionId: "a", callId: "call-1", status: "unknown" }],
+    });
+    expect(queued.map(({ wake }) => wake.lostNotices)).toEqual([
+      { hostName: "studio-01", terminalIds: ["host-t-9"] },
+    ]);
+  });
+
+  it("leaves a call whose resend is out alone until the host answers it", async () => {
+    await runtime.call("a", LAUNCH, { tier: "core" });
+    let answer!: (value: McpCallAnswer) => void;
+    relayCall.mockImplementationOnce(
+      () =>
+        new Promise<McpCallAnswer>((resolve) => {
+          answer = resolve;
+        })
+    );
+    const resend = runtime.call("a", { ...LAUNCH, callId: "call-1" }, { tier: "core" });
+    await vi.waitFor(() => expect(relayCall).toHaveBeenCalledTimes(2));
+    runtime.receiveNoticeStatus("studio", {
+      calls: [{ helpSessionId: "a", callId: "call-1", status: "unknown" }],
+    });
+    expect(queued).toEqual([]);
+    expect(runtime.awaitsNotices("studio")).toBe(true);
+
+    answer(DONE);
+    await resend;
+    expect(runtime.noticeCalls("studio")).toEqual([{ helpSessionId: "a", callId: "call-1" }]);
+  });
+
+  it("reports no loss for a terminal whose notice already came", async () => {
+    await runtime.call(
+      "a",
+      { ...LAUNCH, tool: "terminal.notifyWhenIdle", args: { terminalId: "host-t-1" } },
+      { tier: "core" }
+    );
+    await runtime.call(
+      "a",
+      { ...LAUNCH, tool: "terminal.notifyWhenIdle", args: { terminalId: "host-t-2" } },
+      { tier: "core" }
+    );
+    runtime.receiveNotices("studio", { notices: [notice({ callId: "call-1" })] });
+    // One that stopped short of its handback may still be followed by another.
+    runtime.receiveNotices("studio", {
+      notices: [
+        notice({
+          noticeId: "n-2",
+          callId: "call-2",
+          terminalId: "host-t-2",
+          awaitingHandback: true,
+        }),
+      ],
+    });
+    runtime.receiveNoticeStatus("studio", {
+      calls: [
+        { helpSessionId: "a", callId: "call-1", status: "unknown" },
+        { helpSessionId: "a", callId: "call-2", status: "unknown" },
+      ],
+    });
+    expect(queued.map(({ wake }) => wake.kind)).toEqual(["notice", "notice", "lost"]);
+    expect(queued[2]!.wake.lostNotices).toEqual({
+      hostName: "studio-01",
+      terminalIds: ["host-t-2"],
+    });
+  });
+
+  it("follows a batch by the items that ran, naming only those still missing", async () => {
+    relayCall.mockResolvedValueOnce({
+      status: "done",
+      result: {
+        isError: false,
+        structured: {
+          results: [
+            { target: "claude", ok: true, result: { launched: true, terminalId: "host-t-1" } },
+            { target: "codex", ok: true, result: { launched: true, terminalId: "host-t-2" } },
+          ],
+        },
+        text: null,
+      },
+    } satisfies McpCallAnswer);
+    await runtime.call(
+      "a",
+      {
+        ...LAUNCH,
+        tool: "agent.launchMany",
+        args: { agentIds: ["claude", "codex"], notify: true },
+      },
+      { tier: "core" }
+    );
+    relayCall.mockResolvedValueOnce({
+      status: "done",
+      result: {
+        isError: false,
+        structured: {
+          results: [
+            { target: "host-t-3", ok: true, result: { ran: true } },
+            { target: "host-t-4", ok: false, error: { code: "NOT_FOUND" } },
+          ],
+        },
+        text: null,
+      },
+    } satisfies McpCallAnswer);
+    await runtime.call(
+      "a",
+      {
+        ...LAUNCH,
+        tool: "terminal.sendCommandMany",
+        args: {
+          sends: [
+            { terminalId: "host-t-3", command: "go" },
+            { terminalId: "host-t-4", command: "go" },
+          ],
+          notify: true,
+        },
+      },
+      { tier: "core" }
+    );
+    runtime.receiveNotices("studio", { notices: [notice({ callId: "call-1" })] });
+    runtime.receiveNoticeStatus("studio", {
+      calls: [
+        { helpSessionId: "a", callId: "call-1", status: "unknown" },
+        { helpSessionId: "a", callId: "call-2", status: "unknown" },
+      ],
+    });
+
+    const lost = queued.filter(({ wake }) => wake.kind === "lost");
+    expect(lost.map(({ wake }) => wake.lostNotices)).toEqual([
+      { hostName: "studio-01", terminalIds: ["host-t-2", "host-t-3"] },
+    ]);
+  });
+
+  it("reports no loss for a call whose answer never came back, which may never have reached the host", async () => {
+    relayCall.mockRejectedValueOnce(Object.assign(new Error("lost"), { code: "OUTCOME_UNKNOWN" }));
+    await runtime.call("a", LAUNCH, { tier: "core" });
+    runtime.receiveNoticeStatus("studio", {
+      calls: [{ helpSessionId: "a", callId: "call-1", status: "unknown" }],
+    });
+    expect(queued).toEqual([]);
     expect(runtime.awaitsNotices("studio")).toBe(false);
   });
 
@@ -334,5 +596,241 @@ describe("HostCallRuntime notices from hosts (#13500)", () => {
     await runtime.call("a", LAUNCH, { tier: "core" });
     runs.delete("a");
     expect(runtime.awaitsNotices("studio")).toBe(false);
+  });
+
+  describe("with many watches over time (#14459)", () => {
+    const watch = (terminalId: string) => ({
+      ...LAUNCH,
+      tool: "terminal.notifyWhenIdle",
+      args: { terminalId },
+    });
+
+    it("keeps a long watch through many short ones that came and settled", async () => {
+      await runtime.call("a", watch("host-t-long"), { tier: "core" });
+      for (let i = 0; i < 300; i += 1) {
+        const outcome = await runtime.call("a", watch(`host-t-${i}`), { tier: "core" });
+        const callId = outcome.ok ? outcome.value.callId! : "";
+        runtime.receiveNotices("studio", {
+          notices: [notice({ noticeId: `n-${i}`, callId, terminalId: `host-t-${i}` })],
+        });
+        runtime.receiveNoticeStatus("studio", {
+          calls: [{ helpSessionId: "a", callId, status: "settled" }],
+        });
+      }
+      expect(queued).toHaveLength(300);
+
+      expect(runtime.awaitsNotices("studio")).toBe(true);
+      expect(runtime.noticeCalls("studio")).toEqual([{ helpSessionId: "a", callId: "call-1" }]);
+      runtime.receiveNotices("studio", {
+        notices: [notice({ noticeId: "n-long", terminalId: "host-t-long" })],
+      });
+      expect(queued).toHaveLength(301);
+      expect(queued[300]!.wake.id).toBe("n-long");
+
+      // Only the newest settled calls are kept for a notice still on its way.
+      for (const callId of ["call-2", "call-301"]) {
+        runtime.receiveNotices("studio", {
+          notices: [notice({ noticeId: `late-${callId}`, callId, terminalId: "host-t-late" })],
+        });
+      }
+      expect(queued.slice(301).map(({ wake }) => wake.id)).toEqual(["late-call-301"]);
+    });
+
+    const arm = async (sessionId: string, terminalId: string) => {
+      const outcome = await runtime.call(sessionId, watch(terminalId), { tier: "core" });
+      if (!outcome.ok) throw new Error("not eligible");
+      return outcome.value;
+    };
+    const fill = async (): Promise<Array<{ sessionId: string; callId: string }>> => {
+      runs.set("b", { ...RUN_A, sessionId: "b", terminalId: "t-b" });
+      const armed: Array<{ sessionId: string; callId: string }> = [];
+      for (let i = 0; i < 256; i += 1) {
+        const sessionId = i % 2 === 0 ? "a" : "b";
+        const { outcome, callId } = await arm(sessionId, `host-t-${i}`);
+        expect(outcome).toBe("ok");
+        armed.push({ sessionId, callId: callId! });
+      }
+      return armed;
+    };
+
+    it("refuses a watch past a full set, before sending, and forgets none it took", async () => {
+      const armed = await fill();
+      relayCall.mockClear();
+
+      for (const sessionId of ["a", "b"]) {
+        const refused = await arm(sessionId, "host-t-more");
+        expect(refused).toMatchObject({
+          outcome: "rate_limited",
+          callId: null,
+          retryAfterMs: 60_000,
+        });
+      }
+      expect(relayCall).not.toHaveBeenCalled();
+      // A call asking for no notice still goes.
+      const listed = await runtime.call(
+        "a",
+        { ...LAUNCH, tool: "terminal.list", args: {} },
+        {
+          tier: "core",
+        }
+      );
+      expect(listed.ok && listed.value.outcome).toBe("ok");
+
+      expect(runtime.awaitsNotices("studio")).toBe(true);
+      expect(runtime.noticeCalls("studio")).toEqual(
+        armed.map(({ sessionId, callId }) => ({ helpSessionId: sessionId, callId }))
+      );
+      const first = armed[1]!;
+      runtime.receiveNotices("studio", {
+        notices: [notice({ noticeId: "n-b", helpSessionId: "b", callId: first.callId })],
+      });
+      expect(queued.map(({ lane }) => lane.helpSessionId)).toEqual(["b"]);
+    });
+
+    it("takes a watch again once one settles, and still lands the settled one's late notice", async () => {
+      const armed = await fill();
+      const settled = armed[1]!;
+      runtime.receiveNoticeStatus("studio", {
+        calls: [{ helpSessionId: "b", callId: settled.callId, status: "settled" }],
+      });
+
+      expect((await arm("a", "host-t-more")).outcome).toBe("ok");
+      expect((await arm("a", "host-t-most")).outcome).toBe("rate_limited");
+      runtime.receiveNotices("studio", {
+        notices: [notice({ noticeId: "n-late", helpSessionId: "b", callId: settled.callId })],
+      });
+      expect(queued.map(({ lane }) => lane.helpSessionId)).toEqual(["b"]);
+    });
+
+    it("makes room from watches that are over in all but name, and types none of their notices into a newer run", async () => {
+      const armed = await fill();
+      runs.set("b", { ...RUN_A, sessionId: "b", terminalId: "t-b", launchGeneration: 2 });
+
+      expect((await arm("a", "host-t-more")).outcome).toBe("ok");
+      expect(runtime.noticeCalls("studio")).toHaveLength(129);
+      runtime.receiveNotices("studio", {
+        notices: [notice({ noticeId: "n-b", helpSessionId: "b", callId: armed[1]!.callId })],
+      });
+      expect(queued).toEqual([]);
+    });
+
+    it("makes room from watches whose every notice already came, which no host may ever settle", async () => {
+      const armed = await fill();
+      armed.forEach(({ sessionId, callId }, i) =>
+        runtime.receiveNotices("studio", {
+          notices: [
+            notice({
+              noticeId: `n-${i}`,
+              helpSessionId: sessionId,
+              callId,
+              terminalId: `host-t-${i}`,
+            }),
+          ],
+        })
+      );
+      expect((await arm("a", "host-t-more")).outcome).toBe("ok");
+      expect(runtime.noticeCalls("studio")).toHaveLength(1);
+    });
+
+    it("makes room from watches past their time, and only from those", async () => {
+      runs.set("b", { ...RUN_A, sessionId: "b", terminalId: "t-b" });
+      for (let i = 0; i < 128; i += 1) await arm("a", `host-t-a${i}`);
+      now += 12 * 60 * 60_000;
+      for (let i = 0; i < 128; i += 1) await arm("b", `host-t-b${i}`);
+      expect((await arm("a", "host-t-more")).outcome).toBe("rate_limited");
+
+      now += 12 * 60 * 60_000 + 1;
+      expect((await arm("a", "host-t-more")).outcome).toBe("ok");
+      const followed = runtime.noticeCalls("studio");
+      expect(followed).toHaveLength(129);
+      expect(followed.filter(({ helpSessionId }) => helpSessionId === "b")).toHaveLength(128);
+    });
+
+    it("makes room from calls that armed nothing", async () => {
+      relayCall.mockImplementation(
+        async (_hostId: string, payload: { args: { terminalId: string } }) => ({
+          status: "done",
+          result: {
+            isError: false,
+            structured: { armed: false, terminalId: payload.args.terminalId, state: "idle" },
+            text: null,
+          },
+        })
+      );
+      await fill();
+      relayCall.mockImplementation(async () => DONE);
+      expect((await arm("a", "host-t-more")).outcome).toBe("ok");
+      expect(runtime.noticeCalls("studio")).toHaveLength(1);
+    });
+
+    it("keeps every watch that may still owe a notice, however full", async () => {
+      runs.set("b", { ...RUN_A, sessionId: "b", terminalId: "t-b" });
+      const batch = (terminalIds: string[]) => ({
+        ...LAUNCH,
+        tool: "terminal.sendCommandMany",
+        args: {
+          sends: terminalIds.map((terminalId) => ({ terminalId, command: "go" })),
+          notify: true,
+        },
+      });
+      const partial = await runtime.call("a", batch(["host-x", "host-y"]), { tier: "core" });
+      const repeated = await runtime.call("a", batch(["host-z", "host-z"]), { tier: "core" });
+      relayCall.mockImplementationOnce(() => new Promise<McpCallAnswer>(() => {}));
+      void runtime.call("a", watch("host-w"), { tier: "core" });
+      await vi.waitFor(() => expect(relayCall).toHaveBeenCalledTimes(3));
+      const sent = [partial, repeated].map((outcome) => (outcome.ok ? outcome.value.callId! : ""));
+      runtime.receiveNotices("studio", {
+        notices: [
+          notice({ noticeId: "n-x", callId: sent[0]!, terminalId: "host-x" }),
+          notice({ noticeId: "n-z", callId: sent[1]!, terminalId: "host-z" }),
+          notice({ noticeId: "n-w", callId: "call-3", terminalId: "host-w" }),
+        ],
+      });
+      for (let i = 0; i < 253; i += 1) await arm(i % 2 === 0 ? "a" : "b", `host-t-${i}`);
+
+      expect((await arm("b", "host-t-more")).outcome).toBe("rate_limited");
+      expect(runtime.awaitsNotices("studio")).toBe(true);
+      expect(runtime.noticeCalls("studio").map(({ callId }) => callId)).toEqual(
+        expect.arrayContaining(sent)
+      );
+    });
+
+    it("resends a call it already follows, however full", async () => {
+      const armed = await fill();
+      relayCall.mockClear();
+      const first = armed[0]!;
+      await runtime.call("a", { ...watch("host-t-0"), callId: first.callId }, { tier: "core" });
+      await runtime.call("a", { ...watch("host-t-0"), newCallId: first.callId }, { tier: "core" });
+      expect(relayCall).toHaveBeenCalledTimes(2);
+      for (const [, payload] of relayCall.mock.calls) {
+        expect(payload).toMatchObject({ callId: first.callId, resend: true });
+      }
+      expect(runtime.noticeCalls("studio")).toHaveLength(256);
+    });
+
+    it("keeps a settled call's id its own: resent by its session, refused to another", async () => {
+      await arm("a", "host-t-1");
+      runtime.receiveNoticeStatus("studio", {
+        calls: [{ helpSessionId: "a", callId: "call-1", status: "settled" }],
+      });
+      runs.set("b", { ...RUN_A, sessionId: "b", terminalId: "t-b" });
+
+      const taken = await runtime.call(
+        "b",
+        { ...watch("host-t-1"), newCallId: "call-1" },
+        {
+          tier: "core",
+        }
+      );
+      expect(taken.ok && taken.value).toMatchObject({ outcome: "conflict", callId: null });
+      relayCall.mockClear();
+      await runtime.call("a", { ...watch("host-t-1"), newCallId: "call-1" }, { tier: "core" });
+      expect(relayCall).toHaveBeenCalledWith(
+        "studio",
+        expect.objectContaining({ callId: "call-1", resend: true }),
+        expect.any(Number)
+      );
+      expect(runtime.awaitsNotices("studio")).toBe(false);
+    });
   });
 });

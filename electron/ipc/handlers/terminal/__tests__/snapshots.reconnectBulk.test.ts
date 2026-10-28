@@ -775,7 +775,7 @@ describe("terminal:get-serialized-states handler", () => {
     registerTerminalSnapshotHandlers({ ptyClient } as unknown as HandlerDependencies);
     const handler = getHandler();
 
-    const result = await handler({}, ["t-1", "t-1", "t-2"]);
+    const result = await handler(senderEvent(SENDER_A), ["t-1", "t-1", "t-2"]);
 
     // The batch must forward the capture grid per entry, not just the payload:
     // it is what each replay sizes itself to (#11552).
@@ -799,7 +799,7 @@ describe("terminal:get-serialized-states handler", () => {
     registerTerminalSnapshotHandlers({ ptyClient } as unknown as HandlerDependencies);
     const handler = getHandler();
 
-    const result = await handler({}, ["t-ok", "t-fail"]);
+    const result = await handler(senderEvent(SENDER_A), ["t-ok", "t-fail"]);
 
     expect(result).toEqual({
       "t-ok": snapshot("ok"),
@@ -815,13 +815,13 @@ describe("terminal:get-serialized-states handler", () => {
     registerTerminalSnapshotHandlers({ ptyClient } as unknown as HandlerDependencies);
     const handler = getHandler();
 
-    await expect(handler({}, null as unknown as string[])).rejects.toThrow(
+    await expect(handler(senderEvent(SENDER_A), null as unknown as string[])).rejects.toThrow(
       "Invalid terminal IDs: must be an array"
     );
-    await expect(handler({}, ["" as unknown as string])).rejects.toThrow(
+    await expect(handler(senderEvent(SENDER_A), ["" as unknown as string])).rejects.toThrow(
       "Invalid terminal ID in batch payload"
     );
-    await expect(handler({}, new Array(257).fill("id"))).rejects.toThrow(
+    await expect(handler(senderEvent(SENDER_A), new Array(257).fill("id"))).rejects.toThrow(
       "Invalid terminal IDs: maximum 256 IDs allowed"
     );
   });
@@ -1106,6 +1106,27 @@ describe("terminal pool inspection handlers", () => {
       expect((result[0] as { id: string }).id).toBe("t-terminal");
     });
 
+    it("leaves out a host's throwaway runs (#14445)", async () => {
+      const ptyClient = {
+        getAllTerminalsAsync: vi.fn(async () => [
+          { id: "t-terminal", kind: "terminal", projectId: "project-a", cwd: "/tmp" },
+          {
+            id: "daintree-throwaway-1",
+            kind: "terminal",
+            projectId: "daintree:host-throwaway",
+            cwd: "/tmp",
+          },
+        ]),
+      };
+
+      registerTerminalSnapshotHandlers({ ptyClient } as unknown as HandlerDependencies);
+
+      const result = (await getHandler(CHANNELS.TERMINAL_GET_ALL)(undefined)) as Array<{
+        id: string;
+      }>;
+      expect(result.map((terminal) => terminal.id)).toEqual(["t-terminal"]);
+    });
+
     it("includes hasPty and activityTier fields", async () => {
       const ptyClient = {
         getAllTerminalsAsync: vi.fn(async () => [
@@ -1235,5 +1256,97 @@ describe("terminal:search-semantic-buffers", () => {
         ? (result as { data: unknown }).data
         : result;
     expect(data).toEqual(matches);
+  });
+});
+
+describe("serialized-state reads vouch for stream offsets to a remote view (#13916)", () => {
+  const continuation = { pendingEscapeTail: "\x1b[3", streamOffset: 42 };
+  const live: SerializedTerminalSnapshot = { data: "S", cols: 80, rows: 24, continuation };
+  const preserved: SerializedTerminalSnapshot = { data: "P", cols: 80, rows: 24 };
+  const remote = {
+    endpoint: {
+      endpointId: "remote:s:v",
+      clientId: "shell",
+      projectId: "proj-1",
+      kind: "remote-view",
+      handle: -3,
+      send: vi.fn(),
+      request: vi.fn(),
+      onClose: () => ({ dispose: () => undefined }),
+      isClosed: () => false,
+    } as unknown as ClientEndpoint,
+    client: { clientId: "shell", clientName: "s", platform: "darwin", kind: "remote" } as ClientRef,
+  };
+  const ptyClient = {
+    getSerializedStateAsync: vi.fn(async (id: string) =>
+      id === "live" ? live : id === "preserved" ? preserved : null
+    ),
+  };
+  let dispose: (() => void) | undefined;
+
+  beforeEach(() => {
+    dispose = registerTerminalSnapshotHandlers({ ptyClient } as unknown as HandlerDependencies);
+    getIpcDispatcher().setInvokeEnveloper(async (_channel, _args, run) => {
+      try {
+        return { ok: true, data: await run() } as never;
+      } catch (error) {
+        return { ok: false, error } as never;
+      }
+    });
+  });
+
+  afterEach(() => {
+    dispose?.();
+    getIpcDispatcher().setInvokeEnveloper(null);
+  });
+
+  async function remoteRead(channel: string, args: unknown[]): Promise<unknown> {
+    const envelope = await getIpcDispatcher().invokeForEndpoint(remote, channel, args);
+    if (!envelope.ok) throw new Error(JSON.stringify(envelope.error));
+    return envelope.data;
+  }
+
+  function localHandler(channel: string) {
+    const call = (
+      ipcMain.handle as unknown as { mock: { calls: Array<[string, unknown]> } }
+    ).mock.calls.find((c) => c[0] === channel);
+    return call?.[1] as (event: unknown, ...args: unknown[]) => Promise<unknown>;
+  }
+
+  const unwrap = (result: unknown): unknown =>
+    typeof result === "object" && result !== null && "ok" in result
+      ? Reflect.get(result, "data")
+      : result;
+
+  it("marks a live snapshot it answers a remote view with", async () => {
+    await expect(remoteRead(CHANNELS.TERMINAL_GET_SERIALIZED_STATE, ["live"])).resolves.toEqual({
+      ...live,
+      remoteStreamOffsets: true,
+    });
+    await expect(
+      remoteRead(CHANNELS.TERMINAL_GET_SERIALIZED_STATES, [["live", "preserved", "gone"]])
+    ).resolves.toEqual({
+      live: { ...live, remoteStreamOffsets: true },
+      preserved,
+      gone: null,
+    });
+    // The pty client's own object is never written to.
+    expect(live).not.toHaveProperty("remoteStreamOffsets");
+  });
+
+  it("leaves a snapshot with no stream offset unmarked", async () => {
+    await expect(
+      remoteRead(CHANNELS.TERMINAL_GET_SERIALIZED_STATE, ["preserved"])
+    ).resolves.toEqual(preserved);
+  });
+
+  it("never marks what it answers this machine's own views", async () => {
+    const event = { sender: { id: 7 }, senderFrame: { url: "app://daintree" } };
+    expect(
+      unwrap(await localHandler(CHANNELS.TERMINAL_GET_SERIALIZED_STATE)(event, "live"))
+    ).toEqual(live);
+    expect(
+      unwrap(await localHandler(CHANNELS.TERMINAL_GET_SERIALIZED_STATES)(event, ["live"]))
+    ).toEqual({ live });
   });
 });

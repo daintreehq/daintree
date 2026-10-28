@@ -1,4 +1,4 @@
-import { useMemo, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 import {
   getSpawnablePanelKinds,
   subscribeToPanelKindDefinitions,
@@ -6,6 +6,7 @@ import {
 } from "@/registry";
 import {
   panelKindIsDockable,
+  panelKindIsProjectScoped,
   getPanelKindConfig,
   getPanelKindOrigin,
   subscribeToPanelKindRegistry,
@@ -22,8 +23,31 @@ import { notifyRecipeSpawnFailures } from "@/utils/recipeNotify";
 import { getRecipeScope } from "@/utils/recipeScope";
 import { logError } from "@/utils/logger";
 import { isAgentLaunchable } from "@shared/utils/agentAvailability";
+import { isOwnPluginAction } from "@shared/utils/remotePluginContributions";
+import { isBuiltInActionId } from "@shared/utils/builtInActionIds";
+import {
+  getPluginAgentRegistrySnapshot,
+  subscribeToPluginAgentRegistry,
+} from "@shared/config/pluginAgentRegistry";
+import { useUserAgentRegistryStore } from "@/store/userAgentRegistryStore";
+import { evaluateWhenClause } from "@shared/utils/whenClause";
+import { useChromeWhenContext } from "@/hooks/useChromeWhenContext";
+import { usePluginLaunchEntriesStore } from "@/store/pluginLaunchEntriesStore";
+import { isRegisteredAgent } from "@/config/agents";
+import { isBuiltInAgentId } from "@shared/config/agentIds";
 import { TOOLBAR_CUSTOMIZE_LABEL } from "./toolbarMenuStrings";
+import {
+  STOCK_LAUNCHER_ARRANGEMENT,
+  arrangeLauncherGroups,
+  compareLauncherPluginGroups,
+  featuredRefForLaunchEntry,
+  launcherPluginGroupId,
+  type LauncherArrangement,
+} from "@shared/config/launcherArrangement";
+import { useDevPreviewHidden, useLauncherArrangement } from "@/hooks/useResolvedPresentation";
 import type { ActionSource, AgentAvailabilityState, TerminalRecipe } from "@shared/types";
+import type { PluginLaunchEntryConfig, PluginLaunchEntryTarget } from "@shared/types/plugin";
+import type { WhenClauseContext } from "@shared/utils/whenClause";
 import type { RecipeContext } from "@/utils/recipeVariables";
 
 export const AGENT_MRU_PREFIX = "agent.";
@@ -128,7 +152,28 @@ export interface DockLaunchRecipeItem extends DockLaunchItemBase {
   isShadowed: boolean;
 }
 
-export type DockLaunchItem = DockLaunchAgentItem | DockLaunchPanelItem | DockLaunchRecipeItem;
+/** The plugin a launcher group belongs to, named as the group's heading. */
+export interface DockLaunchPluginGroup {
+  pluginId: string;
+  pluginName: string;
+}
+
+/** Where `panel.openPluginPanel` opens a panel entry's panel. */
+export type DockLaunchEntryPresentation = "panel" | "dock" | "dialog";
+
+/** A row a plugin contributed (#13788), rendered by the host from its data. */
+export interface DockLaunchPluginEntryItem extends DockLaunchItemBase, DockLaunchPluginGroup {
+  category: "plugin-entry";
+  /** The runtime entry id `{pluginId}.{entry id}` — what its toolbar pin is keyed by. */
+  entryId: string;
+  iconId: string;
+  target: PluginLaunchEntryTarget;
+  /** Where a panel target opens from this surface. Absent for every other target. */
+  presentation?: DockLaunchEntryPresentation;
+}
+
+export type DockLaunchItem =
+  DockLaunchAgentItem | DockLaunchPanelItem | DockLaunchRecipeItem | DockLaunchPluginEntryItem;
 
 /** Heading a launcher row renders under. `results` is the filtered list. */
 export type DockLaunchBandId =
@@ -138,10 +183,12 @@ export type DockLaunchBandId =
   | "agents"
   | "dock-panels"
   | "grid-panels"
+  | "plugin-entries"
   | "recipes"
   | "needs-setup"
   | "available-agents"
   | "presets"
+  | "more"
   | "actions"
   | "results";
 
@@ -152,11 +199,16 @@ export const DOCK_LAUNCH_BAND_LABELS: Record<DockLaunchBandId, string> = {
   agents: "Agents",
   "dock-panels": "Open in dock",
   "grid-panels": "Open in grid",
+  // Only a fallback: each plugin's group is headed by the plugin's own name
+  // (see `dockLaunchBandLabel`).
+  "plugin-entries": "Plugins",
   recipes: "Recipes",
   "needs-setup": "Needs setup",
   "available-agents": "Available agents",
   presets: "Presets",
-  actions: "More",
+  more: "More",
+  // Never drawn: the footer's two actions are labelled by where they sit.
+  actions: "Actions",
   results: "Search results",
 };
 
@@ -173,11 +225,17 @@ export const DOCK_LAUNCH_CATEGORY_LABELS: Record<DockLaunchItem["category"], str
   agent: "Agent",
   panel: "Panel",
   recipe: "Recipe",
+  "plugin-entry": "Plugin",
 };
 
 /** A row that runs something other than a launchable item. */
 export type DockLaunchCueId =
-  "create-recipe" | "setup-agents" | "manage-agents" | "customize-toolbar";
+  | "create-recipe"
+  | "setup-agents"
+  | "manage-agents"
+  | "customize-toolbar"
+  | "hide-plugin-group"
+  | "more";
 
 /** Heading for each named provenance group, matching the old preset submenu. */
 export const DOCK_LAUNCH_PRESET_GROUP_LABELS: Record<DockLaunchPresetGroup, string> = {
@@ -194,6 +252,10 @@ export const DOCK_LAUNCH_CUE_LABELS: Record<DockLaunchCueId, string> = {
   // The plugin tray's own entry, word for word: two routes to one settings page
   // that disagreed about its name would read as two destinations (#12218).
   "customize-toolbar": TOOLBAR_CUSTOMIZE_LABEL,
+  // It ends its group, under the plugin's own heading, so the plugin's name
+  // would only repeat it; the row's accessible name carries it instead.
+  "hide-plugin-group": "Hide in this project",
+  more: "More",
 };
 
 interface DockLaunchRowBase {
@@ -216,7 +278,14 @@ interface DockLaunchRowBase {
  */
 export type DockLaunchRow =
   | (DockLaunchRowBase & { kind: "item"; item: DockLaunchItem })
-  | (DockLaunchRowBase & { kind: "cue"; cue: DockLaunchCueId })
+  | (DockLaunchRowBase & {
+      kind: "cue";
+      cue: DockLaunchCueId;
+      /** The group a `hide-plugin-group` cue hides; absent on every other cue. */
+      pluginGroup?: DockLaunchPluginGroup;
+      /** What the `more` cue opens, "Agents, panels"; absent on every other cue. */
+      contents?: string;
+    })
   | (DockLaunchRowBase & {
       kind: "preset";
       band: "presets";
@@ -235,6 +304,24 @@ export type DockLaunchRow =
        */
       groupLabel?: string;
     });
+
+/** The plugin group a row belongs to: a plugin entry, or the cue that hides its group. */
+export function getDockLaunchRowPluginGroup(row: DockLaunchRow): DockLaunchPluginGroup | undefined {
+  if (row.kind === "cue") return row.pluginGroup;
+  return row.item.category === "plugin-entry" ? row.item : undefined;
+}
+
+/**
+ * The heading a row's band shows. Every band names itself except a plugin
+ * group, which is headed by the plugin it belongs to — that heading is the
+ * attribution, so a row never has to say whose it is.
+ */
+export function dockLaunchBandLabel(band: DockLaunchBandId, row: DockLaunchRow): string {
+  if (band === "plugin-entries") {
+    return getDockLaunchRowPluginGroup(row)?.pluginName ?? DOCK_LAUNCH_BAND_LABELS[band];
+  }
+  return DOCK_LAUNCH_BAND_LABELS[band];
+}
 
 /** Narrowing helper — the item rows are the only ones carrying a launchable item. */
 export function getDockLaunchRowItem(row: DockLaunchRow): DockLaunchItem | undefined {
@@ -355,6 +442,8 @@ export interface DockLaunchModel {
   recentAgents: DockLaunchAgent[];
   dockPanels: DockLaunchPanelItem[];
   gridPanels: DockLaunchPanelItem[];
+  /** One group per plugin with an entry showing, in heading order, each sorted by priority. */
+  pluginGroups: Array<DockLaunchPluginGroup & { items: DockLaunchPluginEntryItem[] }>;
   recipes: DockLaunchRecipeItem[];
   /** Flat, de-duplicated set fed to Fuse — the recency band is not repeated. */
   searchItems: DockLaunchItem[];
@@ -364,6 +453,23 @@ export interface DockLaunchModel {
    * de-duplicated so a recent agent can't rank twice in the results.
    */
   browseRows: DockLaunchRow[];
+  /**
+   * The rows of the groups this project demotes (#13791), in order. Browse
+   * holds them behind the `more` cue, which opens them in place; search
+   * still finds every item in them through `searchItems`.
+   */
+  moreRows: DockLaunchRow[];
+  /** Every group in drawn order, demoted groups last: `agents`, `panels`, `recipes`, `plugin:{id}`. */
+  groupOrder: string[];
+  /** The groups `moreRows` holds. */
+  demotedGroups: ReadonlySet<string>;
+  /**
+   * The profile or the user has set the group order, so a layout keeps it
+   * rather than reordering groups to balance columns.
+   */
+  fixedOrder: boolean;
+  /** The featured entry's row while it is listed and can launch; the launcher preselects it. */
+  featuredRowKey: string | null;
 }
 
 /**
@@ -397,6 +503,22 @@ export interface BuildDockLaunchModelOptions extends DockLaunchPreconditions {
   mruEntries: ReadonlyArray<{ id: string; lastAccessedAt: number }>;
   surface: DockLaunchSurface;
   agentInventoryState?: DockLaunchInventoryState;
+  /** Every launch entry registered for this project, shown or not. */
+  launchEntries?: ReadonlyArray<PluginLaunchEntryConfig>;
+  /** Plugin ids whose group this project hides. */
+  hiddenPluginIds?: ReadonlyArray<string>;
+  /** The live chrome context entries' `when` clauses are read against. Absent: every clause holds. */
+  whenContext?: WhenClauseContext;
+  /** Whether an agent entry's agent is registered. Absent: the live effective registry. */
+  isAgentRegistered?: (agentId: string) => boolean;
+  /** How the project arranges its launcher (#13791). Absent: stock. */
+  arrangement?: LauncherArrangement;
+  /**
+   * Panel kinds this project keeps out of the launcher's rows and menus — the
+   * dev preview where it hides it (#14069). Search still finds them, so a
+   * project that guessed wrong is never more than a typed word from one.
+   */
+  hiddenPanelKinds?: ReadonlySet<string>;
 }
 
 /**
@@ -431,7 +553,12 @@ function toPanelItem(
   // A grid surface lands everything in the grid regardless of dockability — its
   // launch callback dispatches `location: "grid"`, so claiming "dock" there
   // would misstate the destination just as badly as the redirect this replaced.
-  const location = surface === "dock" && panelKindIsDockable(config.id) ? "dock" : "grid";
+  // The one exception is a project-scoped plugin kind, which `launchPanelKind`
+  // always puts in the dock (#13778).
+  const location =
+    panelKindIsProjectScoped(config.id) || (surface === "dock" && panelKindIsDockable(config.id))
+      ? "dock"
+      : "grid";
   return {
     category: "panel",
     key: `panel:${config.id}`,
@@ -446,6 +573,129 @@ function toPanelItem(
     origin: getPanelKindOrigin(config),
     disabled: panelPrecondition(config.id, preconditions),
   };
+}
+
+/**
+ * Whether a command entry dispatches its own plugin's action. A built-in is
+ * never one, even when its id starts with the plugin's name — a plugin named
+ * `env.global` does not own `env.global.set`.
+ */
+function isOwnLaunchCommand(pluginId: string, actionId: string): boolean {
+  return isOwnPluginAction(pluginId, actionId) && !isBuiltInActionId(actionId);
+}
+
+/**
+ * Where a panel entry opens from `surface`. An explicit placement is the
+ * author's, already checked against the panel at the manifest gate; without
+ * one it lands where this surface lands a panel row of the same kind.
+ */
+function entryPresentation(
+  target: Extract<PluginLaunchEntryTarget, { type: "panel" }>,
+  surface: DockLaunchSurface
+): DockLaunchEntryPresentation {
+  if (target.placement === "dialog") return "dialog";
+  if (target.placement === "dock") return "dock";
+  if (target.placement === "grid") return "panel";
+  if (panelKindIsProjectScoped(target.panelKindId)) return "dock";
+  return surface === "dock" && panelKindIsDockable(target.panelKindId) ? "dock" : "panel";
+}
+
+/**
+ * The launcher row for one entry, or `null` for an entry that names something
+ * outside its own plugin. The manifest gate and main's registration already
+ * refuse those; this is the check at the point of use, so a stale or forged
+ * snapshot still can't make a row open another plugin's panel.
+ */
+function toPluginEntryItem(
+  entry: PluginLaunchEntryConfig,
+  surface: DockLaunchSurface,
+  isAgentRegistered: (agentId: string) => boolean
+): DockLaunchPluginEntryItem | null {
+  const { target } = entry;
+  const base = {
+    category: "plugin-entry" as const,
+    key: `plugin-entry:${entry.id}`,
+    entryId: entry.id,
+    pluginId: entry.pluginId,
+    pluginName: entry.pluginName,
+    name: entry.label,
+    description: entry.description,
+    iconId: entry.iconId,
+    target,
+    // The plugin's name is searchable so typing it narrows to its group, as
+    // "panel" and "recipe" narrow to theirs.
+    searchAliases: [entry.pluginName, "plugin"],
+  };
+  if (target.type === "command") {
+    return isOwnLaunchCommand(entry.pluginId, target.actionId) ? base : null;
+  }
+  if (target.type === "agent") {
+    return isAgentRegistered(target.agentId)
+      ? base
+      : { ...base, disabled: { reason: "Agent not available" } };
+  }
+  const config = getPanelKindConfig(target.panelKindId);
+  // Not registered yet: the plugin's metadata can land before its kinds do.
+  if (!config) return { ...base, disabled: { reason: "Panel not available" } };
+  if (config.extensionId !== entry.pluginId) return null;
+  return { ...base, presentation: entryPresentation(target, surface) };
+}
+
+/**
+ * The plugin groups a surface lists: every entry whose group this project
+ * hasn't hidden and whose `when` holds, one group per plugin. Groups are in
+ * name order, so a plugin can't buy its way up the launcher — only the
+ * project's own arrangement moves one (see `buildDockLaunchModel`); within one,
+ * priority decides and ties keep manifest order.
+ */
+export function buildPluginGroups(
+  entries: ReadonlyArray<PluginLaunchEntryConfig>,
+  {
+    surface,
+    hiddenPluginIds = [],
+    whenContext,
+    isAgentRegistered = isRegisteredAgent,
+  }: {
+    surface: DockLaunchSurface;
+    hiddenPluginIds?: ReadonlyArray<string>;
+    whenContext?: WhenClauseContext;
+    isAgentRegistered?: (agentId: string) => boolean;
+  }
+): DockLaunchModel["pluginGroups"] {
+  const hidden = new Set(hiddenPluginIds);
+  const groups = new Map<string, DockLaunchModel["pluginGroups"][number]>();
+  const shown = entries
+    .filter((entry) => !hidden.has(entry.pluginId))
+    .filter((entry) => !whenContext || evaluateWhenClause(entry.when, whenContext))
+    .sort((a, b) => a.priority - b.priority);
+  for (const entry of shown) {
+    const item = toPluginEntryItem(entry, surface, isAgentRegistered);
+    if (!item) continue;
+    const group = groups.get(entry.pluginId);
+    if (group) group.items.push(item);
+    else
+      groups.set(entry.pluginId, {
+        pluginId: entry.pluginId,
+        pluginName: entry.pluginName,
+        items: [item],
+      });
+  }
+  return [...groups.values()].sort(compareLauncherPluginGroups);
+}
+
+/**
+ * The plugin groups the stock empty-canvas launcher lists: `buildPluginGroups`
+ * over only the entries that opted in with `showInEmptyState`. Kept apart from
+ * `buildDockLaunchModel` so opting in never changes the launcher's own rows.
+ */
+export function buildEmptyCanvasPluginGroups(
+  entries: ReadonlyArray<PluginLaunchEntryConfig>,
+  options: Parameters<typeof buildPluginGroups>[1]
+): DockLaunchModel["pluginGroups"] {
+  return buildPluginGroups(
+    entries.filter((entry) => entry.showInEmptyState === true),
+    options
+  );
 }
 
 /**
@@ -512,11 +762,25 @@ export function buildDockLaunchModel({
   agentInventoryState = "installed",
   hasWorkspace,
   hasProject,
+  launchEntries = [],
+  hiddenPluginIds,
+  whenContext,
+  isAgentRegistered,
+  arrangement = STOCK_LAUNCHER_ARRANGEMENT,
+  hiddenPanelKinds,
 }: BuildDockLaunchModelOptions): DockLaunchModel {
   const preconditions: DockLaunchPreconditions = { hasWorkspace, hasProject };
 
   const panelItems: DockLaunchPanelItem[] = [];
-  const seenKinds = new Set<string>();
+  // A kind a plugin's own entry opens is that entry's to offer, so its bare
+  // automatic row is left out (#13788). Read from every registered entry, not
+  // only the ones showing: hiding the group, or a `when` that doesn't hold,
+  // must not bring back the row the plugin chose to replace.
+  const seenKinds = new Set<string>(
+    launchEntries.flatMap((entry) =>
+      entry.target.type === "panel" ? [entry.target.panelKindId] : []
+    )
+  );
   const terminalConfig = getPanelKindConfig(TERMINAL_KIND_ID);
   if (terminalConfig) {
     panelItems.push(toPanelItem(terminalConfig, surface, preconditions));
@@ -528,8 +792,18 @@ export function buildDockLaunchModel({
     panelItems.push(toPanelItem(config, surface, preconditions));
   }
 
-  const dockPanels = panelItems.filter((item) => item.location === "dock");
-  const gridPanels = panelItems.filter((item) => item.location === "grid");
+  const browsablePanels =
+    hiddenPanelKinds === undefined || hiddenPanelKinds.size === 0
+      ? panelItems
+      : panelItems.filter((item) => !hiddenPanelKinds.has(item.kindId));
+  const dockPanels = browsablePanels.filter((item) => item.location === "dock");
+  const gridPanels = browsablePanels.filter((item) => item.location === "grid");
+  const pluginGroups = buildPluginGroups(launchEntries, {
+    surface,
+    hiddenPluginIds,
+    whenContext,
+    isAgentRegistered,
+  });
 
   // Shadowed recipes stay listed (dimmed, marked "Overridden") rather than
   // vanishing — running one resolves to the winner, so hiding it only hides
@@ -588,37 +862,36 @@ export function buildDockLaunchModel({
     mruEntries
   );
 
-  const browseRows: DockLaunchRow[] = [];
-  const pushRows = (band: DockLaunchBandId, items: ReadonlyArray<DockLaunchItem>) => {
-    for (const item of items) {
-      browseRows.push({ kind: "item", rowKey: item.key, band, item });
-    }
-  };
+  const rowsOf = (band: DockLaunchBandId, items: ReadonlyArray<DockLaunchItem>): DockLaunchRow[] =>
+    items.map((item) => ({ kind: "item", rowKey: item.key, band, item }));
 
   const recentRows = buildRecentBrowseRows(
     agentItems,
     recentAgents.map((agent) => agent.id)
   );
-  browseRows.push(...recentRows);
   const recentKeys = new Set(recentRows.map((row) => (row.kind === "item" ? row.item.key : "")));
 
   // One agent list, pinned first (the host already sorted them). Pinning is
   // row state — the pin glyph stays lit on a pinned row — so it no longer buys
   // a heading of its own, and the whole agent inventory reads as one column.
-  const listedAgents = launchAgents.filter((item) => !recentKeys.has(item.key));
-  if (listedAgents.length > 0) pushRows("agents", listedAgents);
-
-  // Setup and discovery rows follow the launchable agents rather than trailing
-  // the recipes: they are agents too, and the launcher lays agents out as one
-  // column beside the panels and recipes, so the navigation order has to match.
-  if (needsSetupAgents.length > 0) pushRows("needs-setup", needsSetupAgents);
-
+  // The recent rows lead it.
+  const agentRows: DockLaunchRow[] = [
+    ...recentRows,
+    ...rowsOf(
+      "agents",
+      launchAgents.filter((item) => !recentKeys.has(item.key))
+    ),
+    // Setup and discovery rows follow the launchable agents rather than trailing
+    // the recipes: they are agents too, and the launcher lays agents out as one
+    // column beside the panels and recipes, so the navigation order has to match.
+    ...rowsOf("needs-setup", needsSetupAgents),
+    ...rowsOf("available-agents", availableAgents),
+  ];
   if (availableAgents.length > 0) {
-    pushRows("available-agents", availableAgents);
     // Setup belongs to the empty state, not the footer (#11681): it only helps
     // when nothing is installed, and as a permanent row it competed with
     // Manage agents, which already reaches the same settings.
-    browseRows.push({
+    agentRows.push({
       kind: "cue",
       rowKey: "setup-agents",
       band: "available-agents",
@@ -632,17 +905,50 @@ export function buildDockLaunchModel({
   // ending in the word "Grid", a column with no information in it. A heading
   // that states the destination once says the same thing for free, and lets the
   // row spend that width on its name instead.
-  if (dockPanels.length > 0) pushRows("dock-panels", dockPanels);
-  if (gridPanels.length > 0) pushRows("grid-panels", gridPanels);
+  const panelRows = [...rowsOf("dock-panels", dockPanels), ...rowsOf("grid-panels", gridPanels)];
 
-  if (recipeItems.length > 0) {
-    pushRows("recipes", recipeItems);
-  } else {
+  // Each plugin's group ends with the row that hides it. A row rather than a
+  // control on the heading: headings are decorative inside the listbox, so a
+  // button there would be out of reach of the keyboard and the screen reader.
+  const groupRows = new Map<string, DockLaunchRow[]>([
+    ["agents", agentRows],
+    ["panels", panelRows],
+  ]);
+  for (const group of pluginGroups) {
+    groupRows.set(launcherPluginGroupId(group.pluginId), [
+      ...rowsOf("plugin-entries", group.items),
+      {
+        kind: "cue",
+        rowKey: `hide-plugin-group:${group.pluginId}`,
+        band: "plugin-entries",
+        cue: "hide-plugin-group",
+        pluginGroup: { pluginId: group.pluginId, pluginName: group.pluginName },
+      },
+    ]);
+  }
+  groupRows.set(
+    "recipes",
+    recipeItems.length > 0
+      ? rowsOf("recipes", recipeItems)
+      : [{ kind: "cue", rowKey: CREATE_RECIPE_ROW_KEY, band: "recipes", cue: "create-recipe" }]
+  );
+
+  const layout = arrangeLauncherGroups(
+    pluginGroups,
+    arrangement,
+    (id) => (groupRows.get(id)?.length ?? 0) > 0
+  );
+  const browseRows = layout.shown.flatMap((id) => groupRows.get(id) ?? []);
+  const moreRows = layout.demoted.flatMap((id) => groupRows.get(id) ?? []);
+  if (moreRows.length > 0) {
+    // Last in the body, so opening it grows the list downward, and before the
+    // footer, so Manage agents and Customize toolbar never fold away with it.
     browseRows.push({
       kind: "cue",
-      rowKey: CREATE_RECIPE_ROW_KEY,
-      band: "recipes",
-      cue: "create-recipe",
+      rowKey: MORE_ROW_KEY,
+      band: "more",
+      cue: "more",
+      contents: describeMoreContents(layout.demoted),
     });
   }
 
@@ -661,11 +967,99 @@ export function buildDockLaunchModel({
     recentAgents,
     dockPanels,
     gridPanels,
+    pluginGroups,
     recipes: recipeItems,
-    searchItems: [...agentItems, ...panelItems, ...recipeItems],
+    searchItems: [
+      ...agentItems,
+      ...panelItems,
+      ...pluginGroups.flatMap((group) => group.items),
+      ...recipeItems,
+    ],
     browseRows,
+    moreRows,
+    groupOrder: [...layout.shown, ...layout.demoted],
+    demotedGroups: new Set(layout.demoted),
+    fixedOrder: layout.fixedOrder,
+    featuredRowKey: featuredRowKeyOf(pluginGroups, arrangement),
   };
 }
+
+/** Row id of the `more` cue that opens the demoted groups. */
+export const MORE_ROW_KEY = "more";
+
+/**
+ * Splice the demoted groups in under the `more` cue while it is open. Like an
+ * agent's presets, they are rows in the one flat list rather than a nested
+ * menu, so the arrows and `aria-activedescendant` reach them.
+ */
+export function insertMoreRows(
+  rows: ReadonlyArray<DockLaunchRow>,
+  moreRows: ReadonlyArray<DockLaunchRow>,
+  open: boolean
+): DockLaunchRow[] {
+  const at =
+    open && moreRows.length > 0 ? rows.findIndex((row) => row.rowKey === MORE_ROW_KEY) : -1;
+  if (at < 0) return [...rows];
+  return [...rows.slice(0, at + 1), ...moreRows, ...rows.slice(at + 1)];
+}
+
+const MORE_GROUP_NOUNS: Record<string, string> = { agents: "agents", panels: "panels" };
+
+/** "Agents, panels" — what the `more` cue holds, in its order. */
+function describeMoreContents(groups: readonly string[]): string {
+  const text = groups.map((id) => MORE_GROUP_NOUNS[id] ?? id).join(", ");
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/**
+ * The featured entry's row key while it is listed — its group not hidden, its
+ * `when` holding — and can launch. Anything else selects nothing special: the
+ * stored choice stays, and applies again once the entry is back.
+ */
+function featuredRowKeyOf(
+  pluginGroups: DockLaunchModel["pluginGroups"],
+  arrangement: LauncherArrangement
+): string | null {
+  const { featuredEntry, projectId } = arrangement;
+  if (featuredEntry === null || projectId === null) return null;
+  for (const group of pluginGroups) {
+    for (const item of group.items) {
+      if (
+        item.disabled === undefined &&
+        featuredRefForLaunchEntry({ id: item.entryId, pluginId: item.pluginId }, projectId) ===
+          featuredEntry
+      ) {
+        return item.key;
+      }
+    }
+  }
+  return null;
+}
+
+const AGENT_LIST_BANDS: ReadonlySet<DockLaunchBandId> = new Set([
+  "agents",
+  "needs-setup",
+  "available-agents",
+]);
+
+/**
+ * Put the recent rows back at the head of the agent group, wherever the
+ * arrangement placed it, and drop the agents' own copies of them so each agent
+ * is listed once. Rows without the agent group come back unchanged.
+ */
+export function spliceRecentRows(
+  rows: ReadonlyArray<DockLaunchRow>,
+  recentRows: ReadonlyArray<DockLaunchRow>
+): DockLaunchRow[] {
+  const at = rows.findIndex((row) => AGENT_LIST_BANDS.has(row.band));
+  if (at < 0) return [...rows];
+  const recentKeys = new Set(recentRows.map((row) => (row.kind === "item" ? row.item.key : "")));
+  const keep = (row: DockLaunchRow) =>
+    !(row.kind === "item" && row.band === "agents" && recentKeys.has(row.item.key));
+  return [...rows.slice(0, at), ...recentRows, ...rows.slice(at).filter(keep)];
+}
+
+const DEV_PREVIEW_HIDDEN: ReadonlySet<string> = new Set(["dev-preview"]);
 
 /**
  * Store-connected wrapper around {@link buildDockLaunchModel}. Both launcher
@@ -729,6 +1123,34 @@ export function useDockLaunchModel(options: {
   // The map is a stable reference that changes identity on every recorded use,
   // which is exactly the invalidation signal the getter cannot provide.
   const actionUsageEntries = useActionMruStore((s) => s.actionUsageEntries);
+  // An agent entry is disabled while its agent isn't registered, and the
+  // agent can arrive later from another plugin or the user's own agents.
+  const pluginAgentRegistry = useSyncExternalStore(
+    subscribeToPluginAgentRegistry,
+    getPluginAgentRegistrySnapshot,
+    getPluginAgentRegistrySnapshot
+  );
+  const userAgentRegistry = useUserAgentRegistryStore((s) => s.registry);
+  const launchEntries = usePluginLaunchEntriesStore((s) => s.entries);
+  const hiddenPluginIds = usePluginLaunchEntriesStore((s) => s.hiddenPluginIds);
+  const initLaunchEntries = usePluginLaunchEntriesStore((s) => s.init);
+  const whenContext = useChromeWhenContext();
+  const arrangement = useLauncherArrangement();
+  const hiddenPanelKinds = useDevPreviewHidden() ? DEV_PREVIEW_HIDDEN : undefined;
+  useEffect(() => {
+    initLaunchEntries();
+  }, [initLaunchEntries]);
+
+  // Read from the two snapshots themselves, the same tiers the effective
+  // registry merges, so the memo below sees them as inputs: an indirection
+  // through the global registry would be invisible to the React Compiler.
+  const isAgentRegistered = useCallback(
+    (agentId: string) =>
+      isBuiltInAgentId(agentId) ||
+      Object.hasOwn(pluginAgentRegistry, agentId) ||
+      (userAgentRegistry !== null && Object.hasOwn(userAgentRegistry, agentId)),
+    [pluginAgentRegistry, userAgentRegistry]
+  );
 
   const stable = useMemo(
     () =>
@@ -741,6 +1163,12 @@ export function useDockLaunchModel(options: {
         agentInventoryState,
         hasWorkspace,
         hasProject,
+        launchEntries,
+        hiddenPluginIds,
+        whenContext,
+        isAgentRegistered,
+        arrangement,
+        hiddenPanelKinds,
         mruEntries: [],
       }),
     // The two registry snapshots are read for invalidation only — the builder
@@ -754,6 +1182,12 @@ export function useDockLaunchModel(options: {
       agentInventoryState,
       hasWorkspace,
       hasProject,
+      launchEntries,
+      hiddenPluginIds,
+      whenContext,
+      isAgentRegistered,
+      arrangement,
+      hiddenPanelKinds,
       kindRegistry,
       definitionRegistry,
     ]
@@ -774,22 +1208,22 @@ export function useDockLaunchModel(options: {
   // band — splice it back on here. Keyed on the id signature rather than the
   // array, which `selectRecentAgents` mints fresh on every render.
   const recentSignature = recentAgents.map((agent) => agent.id).join(",");
-  const browseRows = useMemo(() => {
+  const { browseRows, moreRows } = useMemo(() => {
     const agentItems = stable.searchItems.filter(
       (item): item is DockLaunchAgentItem => item.category === "agent"
     );
     const recentIds = recentSignature ? recentSignature.split(",") : [];
     const recentRows = buildRecentBrowseRows(agentItems, recentIds);
     // Each agent is listed once. A recently launched agent moves to the top of
-    // the agent column and wears "Recent", rather than appearing twice.
-    const recentKeys = new Set(recentRows.map((row) => (row.kind === "item" ? row.item.key : "")));
-    const rest = stable.browseRows.filter(
-      (row) => !(row.kind === "item" && row.band === "agents" && recentKeys.has(row.item.key))
-    );
-    return [...recentRows, ...rest];
+    // the agent group and wears "Recent", rather than appearing twice — in
+    // More too, when the project demotes its agents.
+    return {
+      browseRows: spliceRecentRows(stable.browseRows, recentRows),
+      moreRows: spliceRecentRows(stable.moreRows, recentRows),
+    };
   }, [stable, recentSignature]);
 
-  return { ...stable, recentAgents, browseRows };
+  return { ...stable, recentAgents, browseRows, moreRows };
 }
 
 /**
@@ -811,6 +1245,15 @@ export function activateCreateRecipeCue(
   }
 }
 
+/**
+ * What a launcher row may add to an agent launch beyond the agent and preset.
+ * Only a plugin's agent entry passes one, and only its first turn — never a
+ * flag, an env var or a preset of the plugin's choosing (#13788).
+ */
+export interface DockLaunchAgentOptions {
+  prompt?: string;
+}
+
 export interface ActivateDockLaunchItemContext {
   cwd: string;
   activeWorktreeId: string | null;
@@ -822,7 +1265,11 @@ export interface ActivateDockLaunchItemContext {
    * undefined silently relaunches the saved preset when the user asked for
    * plain.
    */
-  onLaunchAgent: (agentId: string, presetId?: string | null) => void;
+  onLaunchAgent: (
+    agentId: string,
+    presetId?: string | null,
+    options?: DockLaunchAgentOptions
+  ) => void;
   /** Dispatch source for everything this activation dispatches. Must stay a
    * foreground source, or panel actions silently skip their focus handling. */
   source: ActionSource;
@@ -832,9 +1279,15 @@ export interface ActivateDockLaunchItemContext {
 export function activateDockLaunchCue(
   cue: DockLaunchCueId,
   activeWorktreeId: string | null,
-  source: ActionSource
+  source: ActionSource,
+  pluginGroup?: DockLaunchPluginGroup
 ): void {
   switch (cue) {
+    case "hide-plugin-group":
+      // Remembered per project in Daintree's settings, with the way back in
+      // Project settings → Plugins.
+      if (pluginGroup) hidePluginGroup(pluginGroup);
+      return;
     case "create-recipe":
       activateCreateRecipeCue(activeWorktreeId, source);
       return;
@@ -846,6 +1299,10 @@ export function activateDockLaunchCue(
       return;
     case "customize-toolbar":
       void actionService.dispatch("app.settings.openTab", { tab: "toolbar" }, { source });
+      return;
+    case "more":
+      // Opens in place: the launcher toggles it before it ever gets here, and
+      // it must never close the launcher or run anything.
       return;
   }
   // Every cue names its own destination. This routed on two `if`s and then fell
@@ -885,6 +1342,11 @@ export function activateDockLaunchItem(
   // the caller so no surface can activate it by a path that skipped the check —
   // the row stays navigable precisely because it is inert rather than absent.
   if (item.disabled) return;
+
+  if (item.category === "plugin-entry") {
+    activatePluginLaunchEntry(item, ctx);
+    return;
+  }
 
   if (item.category === "panel") {
     // The menu closes on select, so an action that refuses leaves no trace
@@ -934,4 +1396,79 @@ export function activateDockLaunchItem(
       notifyRecipeSpawnFailures(results, { recipeName: item.recipe.name, worktreeId })
     )
     .catch((error) => logError("Recipe launch from dock failed", error));
+}
+
+/**
+ * Run a plugin's launch entry. Each target goes through the path its own kind
+ * of row already uses, so an entry can do nothing a user couldn't do from that
+ * row: a panel through `panel.openPluginPanel`, a command through its own
+ * action, an agent through the surface's own agent launch with the entry's
+ * prompt and nothing else. Ownership is checked again here, at the point of
+ * dispatch, so no snapshot can turn a row into a side door.
+ */
+function activatePluginLaunchEntry(
+  item: DockLaunchPluginEntryItem,
+  ctx: ActivateDockLaunchItemContext
+): void {
+  const { target } = item;
+  if (target.type === "agent") {
+    ctx.onLaunchAgent(target.agentId, undefined, { prompt: target.prompt });
+    return;
+  }
+
+  let dispatched: ReturnType<typeof actionService.dispatch>;
+  if (target.type === "panel") {
+    if (getPanelKindConfig(target.panelKindId)?.extensionId !== item.pluginId) return;
+    dispatched = actionService.dispatch(
+      "panel.openPluginPanel",
+      {
+        kind: target.panelKindId,
+        presentation: item.presentation,
+        ...(target.args !== undefined ? { initialArgs: target.args } : {}),
+      },
+      { source: ctx.source }
+    );
+  } else {
+    if (!isOwnLaunchCommand(item.pluginId, target.actionId)) return;
+    dispatched = actionService.dispatch(target.actionId, target.args, { source: ctx.source });
+  }
+
+  void dispatched
+    .then((result) => {
+      if (result.ok) return;
+      if (target.type === "panel" && isPanelLimitError(result.error.message)) return;
+      logError("Plugin launch entry refused", result.error);
+      notify({
+        type: "error",
+        title: `Couldn't launch ${item.name.replace(/…$/, "")}`,
+        // The plugin's own wording can name internal ids, and a refusal from
+        // the host names a kind id, so the toast says where to look instead.
+        message: `${item.pluginName} didn't complete it. Check the plugin in Settings → Plugins, then try again.`,
+        priority: "high",
+        context: { eventKind: "uiFeedback" },
+        action: { label: "Retry", onClick: () => activatePluginLaunchEntry(item, ctx) },
+      });
+    })
+    .catch((error) => logError("Plugin launch entry failed", error));
+}
+
+/**
+ * Hide a plugin's group in this project. The launcher closes on select, so a
+ * write main refused would otherwise look like the click did nothing.
+ */
+export function hidePluginGroup(group: DockLaunchPluginGroup): void {
+  void usePluginLaunchEntriesStore
+    .getState()
+    .setGroupHidden(group.pluginId, true)
+    .then((saved) => {
+      if (saved) return;
+      notify({
+        type: "error",
+        title: `Couldn't hide ${group.pluginName}`,
+        message: "The change wasn't saved to this project's settings, so its entries still show.",
+        priority: "high",
+        context: { eventKind: "uiFeedback" },
+        action: { label: "Retry", onClick: () => hidePluginGroup(group) },
+      });
+    });
 }

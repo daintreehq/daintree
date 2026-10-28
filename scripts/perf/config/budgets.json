@@ -566,6 +566,31 @@
         "cachedIndexCountAfterSweep": 0,
         "retainedHeapMb": 4
       }
+    },
+    "PERF-410": {
+      "p95Ms": 450,
+      "maxRegressionPct": 30,
+      "maxMetricValues": {
+        "coldSvelteMs": 330,
+        "coldReactMs": 190,
+        "hostStartMs": 100
+      }
+    },
+    "PERF-411": {
+      "p95Ms": 25,
+      "maxRegressionPct": 150,
+      "maxMetricValues": {
+        "warmSvelteMs": 10,
+        "warmReactMs": 20
+      }
+    },
+    "PERF-412": {
+      "p95Ms": 700,
+      "maxRegressionPct": 100,
+      "maxMetricValues": {
+        "cycleMs": 40,
+        "heapGrowthMb": 0.25
+      }
     }
   }
 }

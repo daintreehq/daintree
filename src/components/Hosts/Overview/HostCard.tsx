@@ -12,15 +12,25 @@ import { HostSparkline } from "./HostSparkline";
 import { HOST_METRICS_HISTORY_SIZE } from "@/store/hostMetricsStore";
 import {
   cpuSeries,
+  describeCoreClusters,
+  describeCpu,
+  describeCpuPressure,
   describeDriver,
+  describeDriverDetail,
+  describeLoad,
   describeMemory,
+  describeMemoryCapacity,
+  describeMemoryPressure,
   describeObservedAgents,
   describeProjects,
   describeRtt,
   describeSwap,
+  describeSwapActivity,
   describeThermal,
   isLive,
+  memoryUsedSeries,
   pressureSeries,
+  reportsMemoryCapacity,
 } from "./overviewModel";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 
@@ -192,8 +202,12 @@ export function HostCard({
   const live = isLive(row);
   const summary = live ? (history[0] ?? row.summary) : null;
   const { state, note } = describeHostMenuState(row);
-  const cpuNow = summary?.cpuPercent ?? null;
+  const cpuNow = summary ? describeCpu(summary) : null;
   const pressureNow = summary?.memoryPressure ?? null;
+  // Capacity charts only from a host that counts used memory without the file cache; others
+  // keep the band. Decided by the host, not the sample, so a missed read is a gap, not a new chart.
+  const capacityChart = summary ? reportsMemoryCapacity(summary) : false;
+  const clusters = summary ? describeCoreClusters(summary) : null;
   const placeState = [row.isCurrent ? "This window" : null, state].filter(Boolean).join(" · ");
   const chart = chartWindow(history.length);
   const span = chart.minutes === 1 ? "minute" : `${chart.minutes} minutes`;
@@ -244,17 +258,26 @@ export function HostCard({
         <div className="flex flex-col gap-1">
           <div className="grid grid-cols-2 gap-3">
             <LoadMeter
-              label={`CPU ${cpuNow === null ? "not measured" : `${Math.round(cpuNow)}%`}`}
+              label={`CPU ${cpuNow ?? "not measured"}`}
               values={cpuSeries(history)}
               windowSize={chart.size}
               chartLabel={`CPU over the last ${span} on ${row.name}`}
             />
-            <LoadMeter
-              label={`Memory pressure ${pressureNow ?? "not measured"}`}
-              values={pressureSeries(history)}
-              windowSize={chart.size}
-              chartLabel={`Memory pressure over the last ${span} on ${row.name}`}
-            />
+            {summary && capacityChart ? (
+              <LoadMeter
+                label={`Memory ${describeMemoryCapacity(summary) ?? "not measured"}`}
+                values={memoryUsedSeries(history)}
+                windowSize={chart.size}
+                chartLabel={`Memory in use over the last ${span} on ${row.name}`}
+              />
+            ) : (
+              <LoadMeter
+                label={`Memory pressure ${pressureNow ?? "not measured"}`}
+                values={pressureSeries(history)}
+                windowSize={chart.size}
+                chartLabel={`Memory pressure over the last ${span} on ${row.name}`}
+              />
+            )}
           </div>
           <span className="text-2xs text-text-secondary">
             Last {span} · updated <TimeAgo timestamp={summary.sampledAt} verbose />
@@ -282,10 +305,25 @@ export function HostCard({
       )}
 
       <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs">
-        {summary && <Fact label="Memory" value={describeMemory(summary)} />}
+        {summary &&
+          (capacityChart ? (
+            <Fact label="Memory pressure" value={describeMemoryPressure(summary)} />
+          ) : (
+            <Fact label="Memory" value={describeMemory(summary)} />
+          ))}
+        {summary && <Fact label="Load (1 min)" value={describeLoad(summary)} />}
+        {clusters && <Fact label="Core clusters" value={clusters.value} detail={clusters.detail} />}
+        {summary && <Fact label="CPU pressure" value={describeCpuPressure(summary)} />}
         {summary && <Fact label="Swap" value={describeSwap(summary)} />}
+        {summary && <Fact label="Swap activity" value={describeSwapActivity(summary)} />}
         {summary && <Fact label="Thermal" value={describeThermal(summary)} />}
-        {summary && <Fact label="Driving" value={describeDriver(summary)} />}
+        {summary && (
+          <Fact
+            label="Driving"
+            value={describeDriver(summary)}
+            detail={describeDriverDetail(summary)}
+          />
+        )}
         <Fact label="Platform" value={row.platform ? PLATFORM_LABEL[row.platform] : null} />
         <Fact label="Link" value={describeRtt(row)} />
       </dl>

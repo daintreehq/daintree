@@ -6,6 +6,17 @@ import { projectClient } from "@/clients";
 import { forgeClient } from "@/clients/forgeClient";
 import { isTokenRelatedError } from "@/lib/forgeErrors";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { LOCAL_HOST_ID } from "@shared/types/remoteHosts";
+import { hasRemoteHosts, useHostList } from "@/components/Hosts/hostList";
+import { getViewHostId } from "@/hooks/useHostConnection";
+import {
+  clearRepoAlias,
+  publishSharedObservation,
+  readNewestSharedObservation,
+  readRepoAlias,
+  writeRepoAlias,
+  type SharedRepoObservation,
+} from "@/lib/sharedRepoStats";
 import { buildCacheKey, getCache, markCountStale, setCache } from "@/lib/forgeResourceCache";
 import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
 import { usePollingLifecycle } from "@/hooks/usePollingLifecycle";
@@ -103,9 +114,75 @@ interface SwitchBackCacheEntry {
 const MAX_SWITCHBACK_CACHE_SIZE = 20;
 const switchBackStatsCache = new Map<string, SwitchBackCacheEntry>();
 
+// The forge account behind this view's counts, per provider and project, for
+// keying cross-host observations (#14199). Looked up only while more than one
+// host is in play, and re-checked every few minutes so a credential change
+// stops reading and writing under the old account. A failed or empty lookup is
+// dropped so a later poll can try again.
+const SHARED_ACCOUNT_TTL_MS = AGING_THRESHOLD_MS;
+const sharedAccountLookups = new Map<string, { lookup: Promise<string | null>; at: number }>();
+
+function resolveSharedAccount(projectPath: string, providerId: string): Promise<string | null> {
+  const key = JSON.stringify([providerId, projectPath]);
+  const existing = sharedAccountLookups.get(key);
+  if (existing && Date.now() - existing.at < SHARED_ACCOUNT_TTL_MS) return existing.lookup;
+  const lookup: Promise<string | null> = Promise.resolve()
+    .then(() => forgeClient.getCurrentUser(projectPath))
+    .then((user) => user?.login ?? null)
+    .catch(() => null)
+    .then((login) => {
+      if (login === null && sharedAccountLookups.get(key)?.lookup === lookup) {
+        sharedAccountLookups.delete(key);
+      }
+      return login;
+    });
+  sharedAccountLookups.set(key, { lookup, at: Date.now() });
+  return lookup;
+}
+
+/**
+ * When a result's issue/PR counts were last read from the forge. Not
+ * `lastUpdated`, which main re-stamps when its activity probe re-serves cached
+ * counts — the per-count stamps are the honest age, and the older of the two
+ * dates the pair. Null for an undated result.
+ */
+function countsObservedAt(stats: ForgeRepositoryStats): number | null {
+  const fallback = stats.lastUpdated ?? null;
+  const issueAt = stats.issueCountRefreshedAt ?? fallback;
+  const prAt = stats.prCountRefreshedAt ?? fallback;
+  if (issueAt === null || prAt === null) return null;
+  return Math.min(issueAt, prAt);
+}
+
+interface SharedOverlay extends SharedRepoObservation {
+  providerId: string;
+  repoKey: string;
+}
+
+function publishSharedStats(
+  hostId: string,
+  projectPath: string,
+  providerId: string,
+  repoKey: string,
+  stats: ForgeRepositoryStats,
+  observedAt: number
+): void {
+  writeRepoAlias(hostId, projectPath, { providerId, repoKey });
+  void resolveSharedAccount(projectPath, providerId).then((account) => {
+    if (account === null) return;
+    publishSharedObservation(providerId, account, repoKey, {
+      issueCount: stats.issueCount,
+      prCount: stats.prCount,
+      observedAt,
+      hostId,
+    });
+  });
+}
+
 /** Test-only: clear the module-level switch-back cache between cases. */
 export function _resetSwitchBackCacheForTests(): void {
   switchBackStatsCache.clear();
+  sharedAccountLookups.clear();
 }
 
 /**
@@ -212,6 +289,29 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
   const mountedRef = useRef(true);
   const lastErrorRef = useRef<string | null>(null);
 
+  // Cross-host continuity (#14199) runs only when more than one host is in
+  // play: this view is on a remote host, or this machine has paired one. A
+  // local-only install never touches the shared store or the account lookup.
+  // The host list is the one the toolbar's host chip already follows, so
+  // reading it here costs no extra request.
+  const viewHostId = getViewHostId();
+  const observerHostId = viewHostId ?? LOCAL_HOST_ID;
+  const hostList = useHostList();
+  const sharingEnabled = viewHostId !== null || hasRemoteHosts(hostList);
+  const sharingEnabledRef = useRef(sharingEnabled);
+  useEffect(() => {
+    sharingEnabledRef.current = sharingEnabled;
+  }, [sharingEnabled]);
+  // A newer observation of this repo made by another host, holding the issue/PR
+  // pills against this host's older answers until one at least as new lands.
+  // Never a fresh result of this host's own: it never earns the reactivation
+  // skip, never feeds the corrective refetch's `lastUpdated` gate, and is never
+  // republished as this host's observation.
+  const sharedOverlayRef = useRef<SharedOverlay | null>(null);
+  // When the issue/PR counts on screen were read from the forge, by whichever
+  // host — what a shared observation must beat to replace them.
+  const shownCountsObservedAtRef = useRef<number | null>(null);
+
   // Local-git-signal trigger state (#11151). Baselines track the main
   // worktree's ahead/behind counts so a genuine *delta* — not a snapshot
   // identity bump from an unrelated field (mood, note, PR state) — drives the
@@ -268,7 +368,20 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
   // (`onRepoStatsAndPageUpdated`). Both paths must run identical preservation
   // logic so a list-fetch-triggered update can't flash a `0` count when stale.
   const applyStatsResult = useCallback(
-    (repoStats: ForgeRepositoryStats, opts: { projectPath: string }) => {
+    (
+      repoStats: ForgeRepositoryStats,
+      opts: {
+        projectPath: string;
+        /**
+         * Set when the result replays counts this view already had (switch-back
+         * cache, persisted record, disk bootstrap) rather than a host answer:
+         * when those counts were read, if known. A seed never publishes a
+         * cross-host observation and never says anything about which
+         * repository the counts come from (#14199).
+         */
+        seed?: { observedAt: number | null };
+      }
+    ) => {
       if (!mountedRef.current) return;
 
       hasAppliedResultRef.current = true;
@@ -345,8 +458,54 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
             : repoStats.prCount,
       };
 
-      setStats(preservedStats);
-      setIsStale(repoStats.stale ?? false);
+      // An answer older than another host's observation keeps that host's
+      // issue/PR counts on screen (#14199); the first one at least as new
+      // retires the overlay, as does a fresh answer showing the counts now come
+      // from a different provider or repository. Undated answers
+      // (provider-less snapshots) never retire it; stale ones and seeds carry
+      // no repo key and are judged on age alone.
+      // A stale answer's `lastUpdated` can be a disk copy's re-stamp, so only its
+      // per-count stamps date it.
+      const incomingObservedAt = opts.seed
+        ? opts.seed.observedAt
+        : shouldPreserve
+          ? countsObservedAt({ ...repoStats, lastUpdated: undefined })
+          : countsObservedAt(repoStats);
+      let displayedStats = preservedStats;
+      const overlay = sharedOverlayRef.current;
+      if (overlay) {
+        const boundElsewhere =
+          overlay.providerId !== providerIdRef.current ||
+          (!opts.seed &&
+            !shouldPreserve &&
+            repoStats.lastUpdated !== undefined &&
+            repoStats.repoKey !== overlay.repoKey);
+        if (!boundElsewhere && (incomingObservedAt ?? -Infinity) < overlay.observedAt) {
+          displayedStats = {
+            ...preservedStats,
+            issueCount: overlay.issueCount ?? preservedStats.issueCount,
+            prCount: overlay.prCount ?? preservedStats.prCount,
+            issueCountRefreshedAt: overlay.observedAt,
+            prCountRefreshedAt: overlay.observedAt,
+          };
+        } else {
+          sharedOverlayRef.current = null;
+        }
+      }
+      const overlaid = displayedStats !== preservedStats;
+      // Counts held over from an earlier result keep that result's age.
+      const countsHeldOver =
+        preservedStats.issueCount !== repoStats.issueCount ||
+        preservedStats.prCount !== repoStats.prCount;
+      if (overlaid && overlay) {
+        shownCountsObservedAtRef.current = overlay.observedAt;
+      } else if (!countsHeldOver) {
+        shownCountsObservedAtRef.current = incomingObservedAt;
+      }
+
+      setStats(displayedStats);
+      // Borrowed counts are never this host's fresh observation.
+      setIsStale(overlaid || (repoStats.stale ?? false));
       const nextLastUpdated = repoStats.lastUpdated ?? null;
       lastUpdatedRef.current = nextLastUpdated;
       setLastUpdated(nextLastUpdated);
@@ -379,11 +538,37 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
           }
           if (oldestKey !== null) switchBackStatsCache.delete(oldestKey);
         }
-        switchBackStatsCache.set(opts.projectPath, {
-          stats: preservedStats,
-          lastUpdated: nextLastUpdated,
-          providerId: providerIdRef.current,
-        });
+        // The fresh tier holds this host's own observations only: counts
+        // borrowed from another host would replay here as fresh. Cached
+        // without the repo key, so a replay is never republished either.
+        if (overlaid) {
+          switchBackStatsCache.delete(opts.projectPath);
+        } else {
+          const { repoKey: _repoKey, ...cachedStats } = displayedStats;
+          switchBackStatsCache.set(opts.projectPath, {
+            stats: cachedStats,
+            lastUpdated: nextLastUpdated,
+            providerId: providerIdRef.current,
+          });
+        }
+
+        if (!opts.seed && sharingEnabledRef.current && providerIdRef.current !== null) {
+          if (repoStats.repoKey && incomingObservedAt !== null) {
+            publishSharedStats(
+              observerHostId,
+              opts.projectPath,
+              providerIdRef.current,
+              repoStats.repoKey,
+              repoStats,
+              incomingObservedAt
+            );
+          } else if (!repoStats.repoKey) {
+            // A dated answer with no repository behind both counts (an issues
+            // provider now owns the issue count) — the old alias would import
+            // the code forge's numbers.
+            clearRepoAlias(observerHostId, opts.projectPath);
+          }
+        }
       }
 
       // Carry the probe-derived cadence forward only on successful reads — a
@@ -417,8 +602,34 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
         resetPollFailures();
       }
     },
-    [recordPollFailure, resetPollFailures]
+    [recordPollFailure, resetPollFailures, observerHostId]
   );
+
+  // Paint another host's newer observation over the issue/PR pills (#14199).
+  // Stale by construction, and the host's own commit count stays — that is this
+  // host's local git, not a repo-level fact.
+  const applySharedOverlay = useCallback((observation: SharedOverlay) => {
+    if (!mountedRef.current) return;
+    sharedOverlayRef.current = observation;
+    shownCountsObservedAtRef.current = observation.observedAt;
+    if (observation.issueCount !== null) {
+      lastKnownCountsRef.current.issueCount = observation.issueCount;
+    }
+    if (observation.prCount !== null) lastKnownCountsRef.current.prCount = observation.prCount;
+    if (!hasAppliedResultRef.current) return;
+    setStats((prev) =>
+      prev
+        ? {
+            ...prev,
+            issueCount: observation.issueCount ?? prev.issueCount,
+            prCount: observation.prCount ?? prev.prCount,
+            issueCountRefreshedAt: observation.observedAt,
+            prCountRefreshedAt: observation.observedAt,
+          }
+        : prev
+    );
+    setIsStale(true);
+  }, []);
 
   // Seed the toolbar from the counts persisted on the project record
   // (issue #11078). Applied as `stale: true` so the pills render real numbers —
@@ -464,7 +675,14 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
             ? { lastUpdated: persisted.lastUpdated }
             : {}),
         },
-        { projectPath }
+        {
+          projectPath,
+          // The record's time is when these counts were last read changed —
+          // a real read of them, unlike a disk copy's re-stamp.
+          seed: {
+            observedAt: providerMatches ? persisted.lastUpdated : null,
+          },
+        }
       );
     },
     [applyStatsResult]
@@ -567,7 +785,10 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
             cached.providerId === providerIdRef.current &&
             Date.now() - cached.lastUpdated < FRESH_THRESHOLD_MS
           ) {
-            applyStatsResult(cached.stats, { projectPath: project.path });
+            applyStatsResult(cached.stats, {
+              projectPath: project.path,
+              seed: { observedAt: countsObservedAt(cached.stats) },
+            });
           } else if (project.lastKnownStats) {
             // Past the freshness window, or the module cache never had this
             // project (a fresh V8 context after view eviction, or a restart),
@@ -575,6 +796,40 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
             // (issue #11078). Seeded as stale, so the poll below still runs and
             // reconciles — the pills just hold their widths while it does.
             seedFromPersistedStats(project.lastKnownStats, project.path, providerIdRef.current);
+          }
+        }
+
+        // Cross-host continuity (#14199): another host may have observed this
+        // repo more recently than anything this host has. Checked on every
+        // fetch, warm reactivations included, since a host switch can land on
+        // a view that never left memory.
+        const resolvedProviderId = providerIdRef.current;
+        const alias =
+          sharingEnabledRef.current && resolvedProviderId !== null
+            ? readRepoAlias(observerHostId, project.path)
+            : null;
+        if (alias && alias.providerId === resolvedProviderId) {
+          const account = await resolveSharedAccount(project.path, alias.providerId);
+          if (fetchGenerationRef.current !== myGeneration) return;
+          if (isInvalidated()) return;
+          const observation =
+            account === null || providerIdRef.current !== alias.providerId
+              ? null
+              : readNewestSharedObservation(
+                  alias.providerId,
+                  account,
+                  alias.repoKey,
+                  observerHostId
+                );
+          if (
+            observation &&
+            observation.observedAt > (shownCountsObservedAtRef.current ?? -Infinity)
+          ) {
+            applySharedOverlay({
+              ...observation,
+              providerId: alias.providerId,
+              repoKey: alias.repoKey,
+            });
           }
         }
 
@@ -707,6 +962,8 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
       }
       // Clear preserved counts on project switch to prevent cross-contamination
       lastKnownCountsRef.current = { issueCount: null, prCount: null };
+      sharedOverlayRef.current = null;
+      shownCountsObservedAtRef.current = null;
       hasAppliedResultRef.current = false;
       statsProjectPathRef.current = null;
 
@@ -814,7 +1071,10 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
             stale: true,
             lastUpdated: cached.stats.lastUpdated,
           };
-          applyStatsResult(bootstrapStats, { projectPath: currentProject.path });
+          applyStatsResult(bootstrapStats, {
+            projectPath: currentProject.path,
+            seed: { observedAt: null },
+          });
         }
 
         const issuesKey = buildCacheKey(currentProject.path, "issue", "open", "created");

@@ -115,6 +115,23 @@ describe("RecipeManager — every row's actions are findable without hovering", 
   });
 });
 
+describe("RecipeManager — a plugin recipe names its plugin", () => {
+  it("names a project plugin by its manifest id, never its instance key (#13796)", () => {
+    const instanceKey = "project__0123abcd__acme.local";
+    seed({
+      plugin: [
+        recipe(`${instanceKey}.boot`, "Boot", {
+          origin: { kind: "plugin", pluginId: instanceKey, contributionId: "boot" },
+        }),
+      ],
+    });
+    renderManager();
+    const [row] = rows();
+    expect(row?.textContent).toContain("From acme.local");
+    expect(row?.textContent).not.toContain("0123abcd");
+  });
+});
+
 describe("RecipeManager — a row does not repeat what its section already says", () => {
   it("never labels a row with the name of the section it sits in", () => {
     seed({ global: GLOBAL, project: PROJECT, team: TEAM, plugin: PLUGIN });

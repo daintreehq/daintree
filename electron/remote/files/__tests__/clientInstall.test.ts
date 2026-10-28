@@ -30,8 +30,9 @@ function setup(bound: string | null = "studio-01") {
     options.onProgress?.(100, 100);
     return { localPath: `${options.destinationDir}/report.bin`, bytes: 100 };
   });
+  const grantClicked = vi.fn(async () => {});
   const client = createHostFileClient({
-    transport: { download } as unknown as ClientFileTransport,
+    transport: { download, grantClicked } as unknown as ClientFileTransport,
     pickers: {} as HostPickerBridge,
     capabilities: new ViewFileCapabilities(() => () => {}),
     hostForView: () => bound,
@@ -39,7 +40,7 @@ function setup(bound: string | null = "studio-01") {
     downloadsDir: () => "/Users/greg/Downloads",
     tempDir: () => os.tmpdir(),
   });
-  return { client, download, events, release };
+  return { client, download, grantClicked, events, release };
 }
 
 const payload = { hostId: "studio-01", hostPath: "/srv/app/report.bin", opId: "op-1" };
@@ -140,5 +141,24 @@ describe("preview capabilities", () => {
     expect(capabilities.capabilityFor(7)).not.toBe(token);
     capabilities.dispose();
     expect(gone.size).toBe(0);
+  });
+});
+
+describe("createHostFileClient.grantClickedFile", () => {
+  it("asks the view's own host to let it open the clicked file", async () => {
+    const { client, grantClicked } = setup();
+    await client.grantClickedFile(7, { hostId: "studio-01", hostPath: "/tmp/shot.png" });
+    expect(grantClicked).toHaveBeenCalledWith("studio-01", "/tmp/shot.png", 7);
+  });
+
+  it("refuses another host than the view's, and a path that isn't absolute", async () => {
+    const { client, grantClicked } = setup();
+    await expect(
+      client.grantClickedFile(7, { hostId: "studio-02", hostPath: "/tmp/shot.png" })
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+    await expect(
+      client.grantClickedFile(7, { hostId: "studio-01", hostPath: "shot.png" })
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+    expect(grantClicked).not.toHaveBeenCalled();
   });
 });

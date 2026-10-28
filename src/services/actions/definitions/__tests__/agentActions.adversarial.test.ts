@@ -34,6 +34,9 @@ const clientsMock = vi.hoisted(() => ({
   agentSettingsClient: {
     get: vi.fn(),
   },
+  agentToolbarPinsClient: {
+    get: vi.fn(),
+  },
   cliAvailabilityClient: {
     get: vi.fn(),
   },
@@ -48,6 +51,10 @@ const clientsMock = vi.hoisted(() => ({
 
 const agentSettingsStoreMock = vi.hoisted(() => ({
   useAgentSettingsStore: { getState: vi.fn() },
+}));
+
+const agentToolbarPinsStoreMock = vi.hoisted(() => ({
+  useAgentToolbarPinsStore: { getState: vi.fn() },
 }));
 
 const cliAvailabilityStoreMock = vi.hoisted(() => ({
@@ -77,6 +84,7 @@ vi.mock("@/store/panelStore", () => ({ usePanelStore: panelStoreMock }));
 vi.mock("@/store/createWorktreeStore", () => currentViewStoreMock);
 vi.mock("@/store/worktreeStore", () => worktreeSelectionMock);
 vi.mock("@/store/agentSettingsStore", () => agentSettingsStoreMock);
+vi.mock("@/store/agentToolbarPinsStore", () => agentToolbarPinsStoreMock);
 vi.mock("@/store/cliAvailabilityStore", () => cliAvailabilityStoreMock);
 vi.mock("@/store/ccrPresetsStore", () => ccrPresetsStoreMock);
 vi.mock("@/store/projectPresetsStore", () => projectPresetsStoreMock);
@@ -100,12 +108,16 @@ vi.mock("@/clients", async (importOriginal) => {
   return {
     ...actual,
     agentSettingsClient: clientsMock.agentSettingsClient,
+    agentToolbarPinsClient: clientsMock.agentToolbarPinsClient,
     cliAvailabilityClient: clientsMock.cliAvailabilityClient,
     agentCapabilitiesClient: clientsMock.agentCapabilitiesClient,
   };
 });
 
 import { registerAgentActions } from "../agentActions";
+// The run bodies load on first dispatch (#14268). Evaluate them here, as they
+// always were, rather than under the window stub a test swaps in before run().
+import "../agentActions.impl";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 
 /**
@@ -311,6 +323,8 @@ describe("agentActions adversarial", () => {
     expect(code).toEqual(expect.stringMatching(/^[a-z0-9]{6}$/));
     expect(options).toMatchObject({
       prompt: `Fix the flaky test\n\n${buildHandbackInstruction(String(code))}`,
+      // The pane records what the caller wrote, never the instruction (#14592).
+      promptAsWritten: "Fix the flaky test",
     });
     // The public result is unchanged: the caller never sees the code.
     expect(result).toEqual(launchedResult());
@@ -539,6 +553,23 @@ describe("agentActions adversarial", () => {
       reply: null,
     });
     expect(parseAgainstSchema(actions, "agent.launch", result).success).toBe(true);
+  });
+
+  it("agent.launch has no host agent limit status or field (#14810)", async () => {
+    const actions = setupActions(makeCallbacks());
+    const result = launchedResult();
+
+    expect(parseAgainstSchema(actions, "agent.launch", result).success).toBe(true);
+    expect(
+      parseAgainstSchema(actions, "agent.launch", { ...result, spawnStatus: "host-agent-limit" })
+        .success
+    ).toBe(false);
+    const parsed = parseAgainstSchema(actions, "agent.launch", {
+      ...result,
+      hostAgentLimit: { host: "Studio", count: 12, limit: 10 },
+    });
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data).toEqual(result);
   });
 
   it("agent.launch reports a cwd outside the worktree it filed under (#13130)", async () => {
@@ -1255,8 +1286,9 @@ describe("agent.listToolbar (#10838)", () => {
   // Drive the normalized renderer stores the toolbar itself reads from, with
   // `hasRealData: true` so the action takes the store path (not the client
   // fallback) — the steady-state case.
+  // This machine's toolbar pins (#14702); null models pins not yet hydrated.
   function setStores(
-    settings: { agents?: Record<string, unknown> } | null,
+    pins: Record<string, unknown> | null,
     availability: Record<string, string>,
     hasRealData = true,
     // Defaults to the steady state (a live probe has completed). Pass false to
@@ -1264,7 +1296,10 @@ describe("agent.listToolbar (#10838)", () => {
     // must not be certified.
     isInitialized = true
   ): void {
-    agentSettingsStoreMock.useAgentSettingsStore.getState.mockReturnValue({ settings });
+    agentToolbarPinsStoreMock.useAgentToolbarPinsStore.getState.mockReturnValue({
+      pins: pins ?? {},
+      revision: pins ? 0 : -1,
+    });
     cliAvailabilityStoreMock.useCliAvailabilityStore.getState.mockReturnValue({
       availability,
       hasRealData,
@@ -1273,10 +1308,10 @@ describe("agent.listToolbar (#10838)", () => {
   }
 
   async function listToolbar(
-    settings: { agents?: Record<string, unknown> },
+    pins: Record<string, unknown>,
     availability: Record<string, string>
   ): Promise<ToolbarRow[]> {
-    setStores(settings, availability);
+    setStores(pins, availability);
     const actions = setupActions(makeCallbacks());
     const result = (await callAction(actions, "agent.listToolbar")) as { agents: ToolbarRow[] };
     return result.agents;
@@ -1289,12 +1324,12 @@ describe("agent.listToolbar (#10838)", () => {
   }
 
   it("returns one row per built-in agent, in registry order", async () => {
-    const rows = await listToolbar({ agents: {} }, {});
+    const rows = await listToolbar({}, {});
     expect(rows.map((r) => r.id)).toEqual([...BUILT_IN_AGENT_IDS]);
   });
 
   it("explicit pin (pinned:true) wins over a missing binary — visible:true, installed:false", async () => {
-    const rows = await listToolbar({ agents: { claude: { pinned: true } } }, { claude: "missing" });
+    const rows = await listToolbar({ claude: true }, { claude: "missing" });
     const claude = rowFor(rows, "claude");
     expect(claude.pinned).toBe(true);
     expect(claude.installed).toBe(false);
@@ -1302,7 +1337,7 @@ describe("agent.listToolbar (#10838)", () => {
   });
 
   it("explicit unpin (pinned:false) wins over an installed binary — visible:false, installed:true", async () => {
-    const rows = await listToolbar({ agents: { codex: { pinned: false } } }, { codex: "ready" });
+    const rows = await listToolbar({ codex: false }, { codex: "ready" });
     const codex = rowFor(rows, "codex");
     expect(codex.pinned).toBe(false);
     expect(codex.installed).toBe(true);
@@ -1310,7 +1345,7 @@ describe("agent.listToolbar (#10838)", () => {
   });
 
   it("omits pinned and follows live availability when no setting is present", async () => {
-    const rows = await listToolbar({ agents: {} }, { gemini: "ready", aider: "missing" });
+    const rows = await listToolbar({}, { gemini: "ready", aider: "missing" });
     const gemini = rowFor(rows, "gemini");
     expect(gemini).not.toHaveProperty("pinned");
     expect(gemini.installed).toBe(true);
@@ -1331,7 +1366,7 @@ describe("agent.listToolbar (#10838)", () => {
   ] as const)(
     "with no pin, availability %s -> installed:%s visible:%s",
     async (state, installed, visible) => {
-      const rows = await listToolbar({ agents: {} }, { gemini: state });
+      const rows = await listToolbar({}, { gemini: state });
       const gemini = rowFor(rows, "gemini");
       expect(gemini.installed).toBe(installed);
       expect(gemini.visible).toBe(visible);
@@ -1339,37 +1374,23 @@ describe("agent.listToolbar (#10838)", () => {
   );
 
   it("treats undefined availability (no entry) as not installed / not visible", async () => {
-    const rows = await listToolbar({ agents: {} }, {});
+    const rows = await listToolbar({}, {});
     const gemini = rowFor(rows, "gemini");
     expect(gemini.installed).toBe(false);
     expect(gemini.visible).toBe(false);
   });
 
-  it("never leaks sensitive agent-settings fields — only the toolbar shape is returned", async () => {
-    const rows = await listToolbar(
-      {
-        agents: {
-          claude: {
-            pinned: true,
-            customFlags: "--dangerously-skip-permissions",
-            env: { SECRET: "shh" },
-            presets: [{ id: "p1" }],
-            dangerousEnabled: true,
-          },
-        },
-      },
-      { claude: "ready" }
-    );
+  it("never reads agent settings — only the toolbar shape is returned", async () => {
+    const rows = await listToolbar({ claude: true }, { claude: "ready" });
     expect(Object.keys(rowFor(rows, "claude")).sort()).toEqual(
       ["displayName", "id", "installed", "pinned", "visible"].sort()
     );
+    expect(agentSettingsStoreMock.useAgentSettingsStore.getState).not.toHaveBeenCalled();
+    expect(clientsMock.agentSettingsClient.get).not.toHaveBeenCalled();
   });
 
   it("treats a non-boolean pinned (corrupted config) as absent — never forwarded", async () => {
-    const rows = await listToolbar(
-      { agents: { claude: { pinned: null as unknown as boolean } } },
-      { claude: "ready" }
-    );
+    const rows = await listToolbar({ claude: null as unknown as boolean }, { claude: "ready" });
     const claude = rowFor(rows, "claude");
     expect(claude).not.toHaveProperty("pinned");
     // Falls through to availability since the bad pin is ignored.
@@ -1377,29 +1398,32 @@ describe("agent.listToolbar (#10838)", () => {
   });
 
   it("reads from the renderer stores without probing the IPC clients in steady state", async () => {
-    await listToolbar({ agents: {} }, {});
-    expect(agentSettingsStoreMock.useAgentSettingsStore.getState).toHaveBeenCalledTimes(1);
+    await listToolbar({}, {});
+    expect(agentToolbarPinsStoreMock.useAgentToolbarPinsStore.getState).toHaveBeenCalledTimes(1);
     expect(cliAvailabilityStoreMock.useCliAvailabilityStore.getState).toHaveBeenCalledTimes(1);
-    expect(clientsMock.agentSettingsClient.get).not.toHaveBeenCalled();
+    expect(clientsMock.agentToolbarPinsClient.get).not.toHaveBeenCalled();
     expect(clientsMock.cliAvailabilityClient.get).not.toHaveBeenCalled();
   });
 
   it("falls back to the cache-aware clients when the stores have not hydrated", async () => {
     setStores(null, {}, false);
-    clientsMock.agentSettingsClient.get.mockResolvedValue({ agents: { codex: { pinned: true } } });
+    clientsMock.agentToolbarPinsClient.get.mockResolvedValue({
+      pins: { codex: true },
+      revision: 0,
+    });
     clientsMock.cliAvailabilityClient.get.mockResolvedValue({ codex: "missing" });
     const actions = setupActions(makeCallbacks());
     const result = (await callAction(actions, "agent.listToolbar")) as { agents: ToolbarRow[] };
-    expect(clientsMock.agentSettingsClient.get).toHaveBeenCalledTimes(1);
+    expect(clientsMock.agentToolbarPinsClient.get).toHaveBeenCalledTimes(1);
     expect(clientsMock.cliAvailabilityClient.get).toHaveBeenCalledTimes(1);
     const codex = rowFor(result.agents, "codex");
     expect(codex.pinned).toBe(true);
     expect(codex.visible).toBe(true);
   });
 
-  it("rejects without a partial result when the settings read fails", async () => {
+  it("rejects without a partial result when the pins read fails", async () => {
     setStores(null, {}, true);
-    clientsMock.agentSettingsClient.get.mockRejectedValue(new Error("IPC error"));
+    clientsMock.agentToolbarPinsClient.get.mockRejectedValue(new Error("IPC error"));
     const actions = setupActions(makeCallbacks());
     await expect(callAction(actions, "agent.listToolbar")).rejects.toThrow("IPC error");
   });
@@ -1417,8 +1441,9 @@ describe("agent.listAvailable", () => {
     toolbarVisible?: boolean;
   };
 
+  // This machine's toolbar pins (#14702); null models pins not yet hydrated.
   function setStores(
-    settings: { agents?: Record<string, unknown> } | null,
+    pins: Record<string, unknown> | null,
     availability: Record<string, string>,
     hasRealData = true,
     // Defaults to the steady state (a live probe has completed). Pass false to
@@ -1426,7 +1451,10 @@ describe("agent.listAvailable", () => {
     // must not be certified.
     isInitialized = true
   ): void {
-    agentSettingsStoreMock.useAgentSettingsStore.getState.mockReturnValue({ settings });
+    agentToolbarPinsStoreMock.useAgentToolbarPinsStore.getState.mockReturnValue({
+      pins: pins ?? {},
+      revision: pins ? 0 : -1,
+    });
     cliAvailabilityStoreMock.useCliAvailabilityStore.getState.mockReturnValue({
       availability,
       hasRealData,
@@ -1435,10 +1463,7 @@ describe("agent.listAvailable", () => {
   }
 
   it("returns the complete effective registry with toolbar fields only for built-ins", async () => {
-    setStores(
-      { agents: { claude: { pinned: true } } },
-      { claude: "ready", "custom-agent": "missing" }
-    );
+    setStores({ claude: true }, { claude: "ready", "custom-agent": "missing" });
     clientsMock.agentCapabilitiesClient.getRegistry.mockResolvedValue({
       "plugin-agent": { name: "Plugin" },
       "custom-agent": { name: "Custom" },
@@ -1487,12 +1512,7 @@ describe("agent.listAvailable", () => {
     // hasRealData is true (cache hydrated) but the live probe has not finished:
     // the availability map here is the synthesized cache, so "missing" must not
     // leak out as an authoritative probe result.
-    setStores(
-      { agents: { claude: { pinned: true } } },
-      { claude: "ready", "new-builtin": "missing" },
-      true,
-      false
-    );
+    setStores({ claude: true }, { claude: "ready", "new-builtin": "missing" }, true, false);
     clientsMock.agentCapabilitiesClient.getRegistry.mockResolvedValue({
       claude: { name: "Claude" },
     });
@@ -1527,19 +1547,18 @@ describe("agent.listAvailable", () => {
   });
 
   it("re-reads authoritative registry membership and never leaks registry/settings details", async () => {
-    setStores(
-      {
+    agentSettingsStoreMock.useAgentSettingsStore.getState.mockReturnValue({
+      settings: {
         agents: {
           claude: {
-            pinned: false,
             env: { SECRET: "shh" },
             customFlags: "--dangerous",
             presets: [{ id: "private" }],
           },
         },
       },
-      { claude: "ready", "plugin-agent": "blocked" }
-    );
+    });
+    setStores({ claude: false }, { claude: "ready", "plugin-agent": "blocked" });
     clientsMock.agentCapabilitiesClient.getRegistry
       .mockResolvedValueOnce({
         claude: { name: "Claude", command: "claude", env: { TOKEN: "secret" } },
@@ -1606,14 +1625,14 @@ describe("agent.listAvailable", () => {
      */
     async function primeDiscoveryImports(): Promise<void> {
       await Promise.all([
-        import("@/store/agentSettingsStore"),
+        import("@/store/agentToolbarPinsStore"),
         import("@/store/cliAvailabilityStore"),
       ]);
     }
 
     it("settles instead of hanging when a discovery read never resolves", async () => {
       await primeDiscoveryImports();
-      setStores({ agents: {} }, { claude: "ready" });
+      setStores({}, { claude: "ready" });
       clientsMock.userAgentRegistryClient.get.mockResolvedValue({});
       // Exactly the shape that shipped broken: an IPC leg that never settles
       // rather than rejecting. Main abandons the dispatch at 30s without
@@ -1630,7 +1649,9 @@ describe("agent.listAvailable", () => {
         // rejection and trips vitest's unhandled-rejection guard.
         const rejects = expect(pending).rejects.toThrow(/still waiting on: agentRegistry$/);
         // The deadline must be the only timer in flight, so advancing to "next"
-        // provably lands on it rather than on something scheduled nearby.
+        // provably lands on it rather than on something scheduled nearby. It
+        // arms once the lazily loaded run body starts, not synchronously.
+        await vi.dynamicImportSettled();
         expect(vi.getTimerCount()).toBe(1);
 
         await vi.advanceTimersToNextTimerAsync();
@@ -1654,7 +1675,7 @@ describe("agent.listAvailable", () => {
 
     it("disarms the deadline once the reads succeed", async () => {
       await primeDiscoveryImports();
-      setStores({ agents: {} }, { claude: "ready" });
+      setStores({}, { claude: "ready" });
       clientsMock.agentCapabilitiesClient.getRegistry.mockResolvedValue({
         claude: { name: "Claude" },
       });
@@ -2539,5 +2560,49 @@ describe("agent.listPresets", () => {
     // this proves the advertised contract itself has no room for a payload.
     const parsed = def.resultSchema!.parse(withPayload);
     expect(JSON.stringify(parsed)).not.toContain("secret");
+  });
+});
+
+describe("agent.launch records the plugin that launched it (#14017)", () => {
+  it("stamps the host-attested plugin behind a plugin dispatch", async () => {
+    const callbacks = makeCallbacks();
+    const actions = setupActions(callbacks);
+
+    await callAction(
+      actions,
+      "agent.launch",
+      { agentId: "claude" },
+      { dispatchSource: "plugin", callerPluginId: "acme.orchestrator" }
+    );
+
+    expect(callbacks.onLaunchAgent).toHaveBeenCalledWith(
+      "claude",
+      expect.objectContaining({ launchedByPluginId: "acme.orchestrator" })
+    );
+  });
+
+  it.each([
+    { dispatchSource: "agent", callerPluginId: "acme.orchestrator" },
+    { dispatchSource: "user" },
+    {},
+  ] as Partial<ActionContext>[])("stamps no plugin for any other dispatch (%o)", async (ctx) => {
+    const callbacks = makeCallbacks();
+    const actions = setupActions(callbacks);
+
+    await callAction(actions, "agent.launch", { agentId: "claude" }, ctx);
+
+    expect(callbacks.onLaunchAgent.mock.calls[0]?.[1]?.launchedByPluginId).toBeUndefined();
+  });
+
+  it("takes no owner from the arguments", async () => {
+    const callbacks = makeCallbacks();
+    const actions = setupActions(callbacks);
+
+    await callAction(actions, "agent.launch", {
+      agentId: "claude",
+      launchedByPluginId: "acme.orchestrator",
+    });
+
+    expect(callbacks.onLaunchAgent.mock.calls[0]?.[1]?.launchedByPluginId).toBeUndefined();
   });
 });

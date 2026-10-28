@@ -5,7 +5,7 @@
  * with a stubbed builder; this is what those decisions turn into.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { TerminalState } from "@shared/types/ipc/terminal";
+import type { BackendTerminalInfo, TerminalState } from "@shared/types/ipc/terminal";
 import type { WorktreeState } from "@shared/types";
 import type { PtyPanelData } from "@shared/types/panel";
 
@@ -16,9 +16,12 @@ vi.mock("@/utils/logger", () => ({
   logError: vi.fn(),
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: { initializeBackendTier: vi.fn(), setTargetSize: vi.fn() },
-}));
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = { initializeBackendTier: vi.fn(), setTargetSize: vi.fn() };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 const resolveResumeLatestSession = vi.hoisted(() =>
   vi.fn(async (_payload: { cwd: string }): Promise<string | null> => null)
@@ -36,19 +39,27 @@ vi.mock("@/utils/agentLaunchCommand", () => ({
   resolveAgentLaunchBaseCommand: (registryCommand: string) => registryCommand,
 }));
 
-vi.mock("@/config/agents", () => ({
-  isRegisteredAgent: (id: string) => ["claude", "codex", "gemini"].includes(id),
-  getAgentConfig: (id: string) => ({ command: id, name: id }),
-  getMergedPreset: () => undefined,
-  sanitizeAgentEnv: (env: Record<string, unknown> | undefined) => {
-    if (!env) return undefined;
-    const result: Record<string, string> = {};
-    for (const [key, value] of Object.entries(env)) {
-      if (typeof value === "string") result[key] = value;
-    }
-    return Object.keys(result).length > 0 ? result : undefined;
-  },
-}));
+vi.mock("@/config/agents", async () => {
+  const registry = await vi.importActual<typeof import("@shared/config/agentRegistry")>(
+    "@shared/config/agentRegistry"
+  );
+  return {
+    isRegisteredAgent: (id: string) => registry.getAgentConfig(id) !== undefined,
+    getAgentConfig: (id: string) => ({
+      command: registry.getAgentConfig(id)?.command ?? id,
+      name: id,
+    }),
+    getMergedPreset: () => undefined,
+    sanitizeAgentEnv: (env: Record<string, unknown> | undefined) => {
+      if (!env) return undefined;
+      const result: Record<string, string> = {};
+      for (const [key, value] of Object.entries(env)) {
+        if (typeof value === "string") result[key] = value;
+      }
+      return Object.keys(result).length > 0 ? result : undefined;
+    },
+  };
+});
 
 vi.mock("@/store/ccrPresetsStore", () => ({
   useCcrPresetsStore: { getState: () => ({ ccrPresetsByAgent: {} }) },
@@ -402,5 +413,131 @@ describe("the resume-on-restart setting through restore (#13509)", () => {
 
     expect(byId.get("a")?.restoreRecovery).toBeUndefined();
     expect(byId.get("a")?.command).toContain("--resume");
+  });
+});
+
+describe("cold restore of agents that resume by history alone (#13847)", () => {
+  const pane = (id: string, launchAgentId: string, overrides: Partial<TerminalState> = {}) =>
+    movedPane(id, { launchAgentId, worktreeId: "/repo", agentLaunchFlags: [], ...overrides });
+
+  it("reopens each lone pane's latest conversation in its own folder", async () => {
+    const byId = await restore([pane("k", "kimi"), pane("c", "cursor")]);
+
+    expect(byId.get("k")?.command).toBe("kimi --continue");
+    expect(byId.get("c")?.command).toBe("cursor-agent --continue");
+    for (const id of ["k", "c"]) {
+      expect(byId.get(id)?.sessionLostOnRestore).toBeUndefined();
+      expect(byId.get(id)?.restoreRecovery).toBeUndefined();
+    }
+  });
+
+  it("gives the folder's latest to one pane and starts its sibling fresh", async () => {
+    const byId = await restore([
+      pane("old", "kimi", { lastActiveAt: 1 }),
+      pane("new", "kimi", { lastActiveAt: 2 }),
+    ]);
+
+    expect(byId.get("new")?.command).toBe("kimi --continue");
+    expect(byId.get("old")?.command).not.toContain("--continue");
+    expect(byId.get("old")?.sessionLostOnRestore).toBe("sibling-owns-resume-latest-slot");
+  });
+
+  it("starts Interpreter fresh rather than leave its picker on the pane", async () => {
+    const byId = await restore([pane("i", "interpreter")]);
+
+    expect(byId.get("i")?.command).not.toContain("--conversations");
+    expect(byId.get("i")?.sessionLostOnRestore).toBe("no-resume-path");
+  });
+
+  it("keeps Aider's auto-commits off when a deleted preset voids its captured flags", async () => {
+    const byId = await restore([
+      pane("a", "aider", {
+        agentLaunchFlags: ["--no-auto-commits", "--model", "sonnet"],
+        agentPresetId: "deleted-preset",
+      }),
+    ]);
+
+    expect(byId.get("a")?.command).toMatch(/^aider --no-auto-commits .*--restore-chat-history$/);
+  });
+});
+
+describe("restore provenance through restore (#14017)", () => {
+  const claudePane = (name: string, overrides: Partial<TerminalState> = {}): TerminalState => ({
+    id: name,
+    title: `Claude ${name}`,
+    kind: "terminal",
+    launchAgentId: "claude",
+    cwd: "/repo",
+    worktreeId: "/repo",
+    location: "grid",
+    ...overrides,
+  });
+
+  it("stamps every pane one pass rebuilds with that pass's time and its own route", async () => {
+    let now = 50_000;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now++);
+    try {
+      const byId = await restore(
+        [
+          claudePane("a", {
+            agentSessionId: "sess-a",
+            lastAgentObservation: { agentState: "idle", at: 40_000 },
+          }),
+          claudePane("b", {
+            agentSessionId: "sess-b",
+            launchedByPluginId: "acme.orchestrator",
+            holdOnRestart: true,
+          }),
+        ],
+        { agentSettings: { agents: { claude: {} } } }
+      );
+
+      const a = byId.get("a")?.restoreProvenance;
+      const b = byId.get("b")?.restoreProvenance;
+      expect(a).toEqual({
+        at: a?.at,
+        disposition: "resume",
+        lastSeen: { agentState: "idle", at: 40_000 },
+      });
+      expect(b?.disposition).toBe("held");
+      expect(b?.at).toBe(a?.at);
+      expect(byId.get("b")?.restoreRecovery).toEqual({
+        reason: "held-by-plugin",
+        sessionId: "sess-b",
+      });
+      expect(byId.get("b")).toMatchObject({
+        launchedByPluginId: "acme.orchestrator",
+        holdOnRestart: true,
+      });
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("keeps a surviving PTY's provenance and invents none for one restore never rebuilt", async () => {
+    const provenance = { at: 30_000, disposition: "resume" as const };
+    const live = (id: string): BackendTerminalInfo => ({
+      id,
+      cwd: "/repo",
+      kind: "terminal",
+      launchAgentId: "claude",
+      spawnedAt: 0,
+      hasPty: true,
+    });
+
+    const byId = await restore(
+      [claudePane("rebuilt", { restoreProvenance: provenance }), claudePane("never")],
+      {
+        agentSettings: { agents: { claude: {} } },
+        backendTerminalMap: new Map([
+          ["rebuilt", live("rebuilt")],
+          ["never", live("never")],
+        ]),
+      }
+    );
+
+    expect(byId.get("rebuilt")?.existingId).toBe("rebuilt");
+    expect(byId.get("rebuilt")?.restoreProvenance).toEqual(provenance);
+    expect(byId.get("never")?.restoreProvenance).toBeUndefined();
   });
 });

@@ -36,7 +36,18 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
-import { FileUnavailableState } from "@/components/FileViewer/FileUnavailableState";
+import {
+  FileUnavailableState,
+  refusalReason,
+  unavailableCopy,
+  type RemoteFileContext,
+} from "@/components/FileViewer/FileUnavailableState";
+import {
+  SaveHostFileButton,
+  TakeControlButton,
+  useRemoteFileContext,
+  useRetryOnControl,
+} from "@/components/FileViewer/hostFileActions";
 import { getFileTypeIcon } from "@/panels/file-browser/fileTypeIcons";
 import { DiffChangeStepper } from "@/components/FileViewer/DiffChangeStepper";
 import { revealCopy } from "@/components/FileViewer/revealCopy";
@@ -56,6 +67,9 @@ import { DiffViewer, FULL_FILE_MAX_LINES } from "@/components/Worktree/DiffViewe
 import type { FullFileUnavailableReason } from "@/components/Worktree/DiffViewer";
 import { FILE_READ_ERROR_MESSAGES } from "@/components/FileViewer/fileReadErrors";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
+import { useReviewMarksStore } from "@/store/reviewMarksStore";
+import type { ReviewFileSinceSide } from "@shared/types/ipc/reviewMarks";
+import { SinceReviewNotice, describeSinceReviewNotice } from "./SinceReviewNotice";
 import type { DiffViewerAnnotations } from "@/components/Worktree/DiffViewer";
 import { useDiffNotesStore } from "@/store/diffNotesStore";
 import type { DiffNoteDeliveryResult } from "@/hooks/useDiffNoteDelivery";
@@ -190,9 +204,23 @@ function buildSubject(
   worktreePath: string,
   filePath: string | undefined,
   status: GitStatus | undefined,
-  currentBranch: string
+  currentBranch: string,
+  worktreeId?: string,
+  sinceReviewSide?: ReviewFileSinceSide,
+  markRevision?: number
 ): DiffSubject | null {
   if (!worktreePath || !filePath) return null;
+  if (diffSource === "since-review") {
+    if (!worktreeId) return null;
+    return {
+      source: "since-review",
+      worktreePath,
+      worktreeId,
+      filePath,
+      side: sinceReviewSide,
+      markRevision,
+    };
+  }
   if (diffSource === "base-branch") {
     // Without both refs there is no comparison to make; render the empty state
     // rather than asking git to diff against undefined.
@@ -299,13 +327,6 @@ export function DiffPane({
   const panelBaseBranch = panel?.baseBranch;
   const panelViewedKey = panel?.viewedKey;
 
-  // Memoized on primitives so the subject identity only moves when what we're
-  // diffing does — `useDiffContent` refetches on subject identity.
-  const subject = useMemo(
-    () =>
-      buildSubject(diffSource, panelBaseBranch, worktreePath, filePath, fileStatus, currentBranch),
-    [diffSource, panelBaseBranch, worktreePath, filePath, fileStatus, currentBranch]
-  );
   const isWorkspace = (changeSet?.length ?? 0) > 1;
 
   // Resolved by identity, never stored: a change set rebuilt from a later poll
@@ -326,6 +347,58 @@ export function DiffPane({
     if (exact !== -1) return exact;
     return changeSet.findIndex((entry) => entry.path === filePath);
   }, [changeSet, filePath, fileStatus, panelViewedKey]);
+
+  // A working-tree panel lists a partially staged file once per side, and each
+  // entry names its own, so the same path fetches a different diff per row. Any
+  // other source already fixes the comparison for the whole panel.
+  const entrySide = currentIndex === -1 ? undefined : changeSet?.[currentIndex]?.side;
+  const effectiveSource =
+    diffSource === undefined || diffSource === "working-tree"
+      ? (entrySide ?? diffSource)
+      : diffSource;
+
+  // Memoized on primitives so the subject identity only moves when what we're
+  // diffing does — `useDiffContent` refetches on subject identity.
+  // The side a since-review diff was asked for; absent lets the host pick the
+  // one that changed. Tagged with its file so a step to another file starts over.
+  const [sinceReviewSideChoice, setSinceReviewSideChoice] = useState<{
+    file: string | undefined;
+    side: ReviewFileSinceSide;
+  } | null>(null);
+  const sinceReviewSide =
+    sinceReviewSideChoice && sinceReviewSideChoice.file === filePath
+      ? sinceReviewSideChoice.side
+      : undefined;
+  // A replaced or cleared mark makes the shown comparison one against a mark
+  // that's gone, so the revision is part of what's being asked for.
+  const markRevision = useReviewMarksStore((state) =>
+    worktreeId ? state.marks[worktreeId]?.revision : undefined
+  );
+  const subject = useMemo(
+    () =>
+      buildSubject(
+        effectiveSource,
+        panelBaseBranch,
+        worktreePath,
+        filePath,
+        fileStatus,
+        currentBranch,
+        worktreeId,
+        sinceReviewSide,
+        markRevision
+      ),
+    [
+      effectiveSource,
+      panelBaseBranch,
+      worktreePath,
+      filePath,
+      fileStatus,
+      currentBranch,
+      worktreeId,
+      sinceReviewSide,
+      markRevision,
+    ]
+  );
 
   // Survives the open file dropping out of the set, so stepping resumes from
   // where the user was rather than jumping to the top.
@@ -364,23 +437,47 @@ export function DiffPane({
   const nextEntry = currentIndex === -1 ? undefined : changeSet?.[currentIndex + 1];
   const nextPath = nextEntry?.path;
   const nextStatus = nextEntry?.status;
+  const nextSide = nextEntry?.side;
+  const nextSource =
+    diffSource === undefined || diffSource === "working-tree"
+      ? (nextSide ?? diffSource)
+      : diffSource;
+  // No prefetch for since-review: each read is a whole comparison of the worktree.
   const nextSubject = useMemo(
     () =>
-      buildSubject(diffSource, panelBaseBranch, worktreePath, nextPath, nextStatus, currentBranch),
-    [diffSource, panelBaseBranch, worktreePath, nextPath, nextStatus, currentBranch]
+      nextSource === "since-review"
+        ? null
+        : buildSubject(
+            nextSource,
+            panelBaseBranch,
+            worktreePath,
+            nextPath,
+            nextStatus,
+            currentBranch
+          ),
+    [nextSource, panelBaseBranch, worktreePath, nextPath, nextStatus, currentBranch]
   );
 
   // Decided from the subject alone, before any content exists: the request's
   // whitespace sensitivity depends on it, so it cannot wait on the verdict that
   // needs the content the request produces.
-  const renderedSupported = isRenderedMarkdownSupported(filePath, diffSource);
+  const renderedSupported = isRenderedMarkdownSupported(filePath, effectiveSource);
   const renderedRequested = diffMarkdownRendered && renderedSupported;
   const renderedContentOptions = useMemo(
     () => (renderedRequested ? { ignoreWhitespace: false } : undefined),
     [renderedRequested]
   );
 
-  const { content, stale, retry } = useDiffContent(subject, nextSubject, renderedContentOptions);
+  const { content, sinceReview, stale, retry } = useDiffContent(
+    subject,
+    nextSubject,
+    renderedContentOptions
+  );
+  const isSinceReview = effectiveSource === "since-review";
+  const sinceReviewNotice = useMemo(
+    () => (isSinceReview && sinceReview ? describeSinceReviewNotice(sinceReview) : null),
+    [isSinceReview, sinceReview]
+  );
 
   const viewedSet = useDiffViewedStore(
     useCallback((state) => selectViewedSet(state, worktreePath), [worktreePath])
@@ -438,6 +535,11 @@ export function DiffPane({
     // worktree move that filePath (relative) alone would miss.
     setPreviewError(null);
   }, [filePath, absolutePath, worktreePath, previewReloadNonce]);
+  const remoteFile = useRemoteFileContext();
+  // A preview the host refused to a watching window loads once this one has control.
+  useRetryOnControl(previewError?.refusal === "driven-elsewhere", () =>
+    setPreviewReloadNonce((nonce) => nonce + 1)
+  );
 
   // dispatch() resolves an ActionDispatchResult and never rejects, so a failed
   // open would otherwise vanish entirely (the #11114 bug FilePane already hit).
@@ -577,25 +679,30 @@ export function DiffPane({
     fileStatus &&
     !isGitlink &&
     isImageDiffCandidate(filePath) &&
-    panel?.diffSource !== "base-branch"
+    panel?.diffSource !== "base-branch" &&
+    !isSinceReview
   );
   // Media shows only the current working-tree version (no side-by-side diff —
   // the media pipeline has no cheap "old vs new" comparison), so unlike
   // isImageMode this applies to every diff source, base-branch included.
-  const isVideoMode = Boolean(filePath && !isGitlink && isVideoFilePath(filePath));
-  const isAudioMode = Boolean(filePath && !isGitlink && isAudioFilePath(filePath));
+  const isVideoMode = Boolean(
+    filePath && !isGitlink && !isSinceReview && isVideoFilePath(filePath)
+  );
+  const isAudioMode = Boolean(
+    filePath && !isGitlink && !isSinceReview && isAudioFilePath(filePath)
+  );
   const isMediaMode = isVideoMode || isAudioMode;
   // PDFs likewise show only the current working-tree version: the built-in
   // viewer renders a whole document, not a comparison, so like media this
   // applies to every diff source.
-  const isPdfMode = Boolean(filePath && !isGitlink && isPdfFilePath(filePath));
+  const isPdfMode = Boolean(filePath && !isGitlink && !isSinceReview && isPdfFilePath(filePath));
 
   // Whether this file *can* show its whole contents, independent of whether the
   // user currently wants to — the toggle stays visible either way so the option
   // is discoverable, and explains itself when it can't be used.
   const sourceAvailability = useMemo(
-    () => getFullFileAvailability(diffSource, fileStatus, isGitlink),
-    [diffSource, fileStatus, isGitlink]
+    () => getFullFileAvailability(effectiveSource, fileStatus, isGitlink),
+    [effectiveSource, fileStatus, isGitlink]
   );
   // An image diff already shows the whole asset, and a diff that hasn't loaded
   // has nothing to expand — folding both into the availability verdict keeps
@@ -699,7 +806,7 @@ export function DiffPane({
 
   const renderedAvailability = getRenderedMarkdownAvailability({
     filePath,
-    diffSource,
+    diffSource: effectiveSource,
     content,
     stale,
     // Only relevant once the rendered layout is the thing waiting on the read —
@@ -1108,6 +1215,13 @@ export function DiffPane({
           outranks both ambient notices; they return once it is dismissed or a
           retry succeeds. Below it, the existing stale-over-full-file order
           stands. */}
+      {sinceReview && sinceReviewNotice && (
+        <SinceReviewNotice
+          outcome={sinceReview}
+          view={sinceReviewNotice}
+          onSideChange={(side) => setSinceReviewSideChoice({ file: filePath, side })}
+        />
+      )}
       {externalError ? (
         <InlineStatusBanner
           icon={XCircle}
@@ -1206,7 +1320,7 @@ export function DiffPane({
             // Already resolved here; the sidebar would otherwise repeat the
             // path→worktree lookup the pane has done above.
             worktreeId={worktreeId ?? null}
-            statusIsLocal={diffSource !== "base-branch"}
+            statusIsLocal={diffSource !== "base-branch" && diffSource !== "since-review"}
             onSelect={(index) => {
               if (index === currentIndex) return;
               selectFileAt(index);
@@ -1244,7 +1358,9 @@ export function DiffPane({
                   description={
                     diffSource === "base-branch"
                       ? "The base or current branch couldn't be resolved, so there's no comparison to make."
-                      : "This panel's worktree couldn't be resolved — it may have been moved or removed."
+                      : diffSource === "since-review"
+                        ? "The worktree couldn't be resolved, so there's no review mark to compare with."
+                        : "This panel's worktree couldn't be resolved — it may have been moved or removed."
                   }
                 />
               </div>
@@ -1280,21 +1396,14 @@ export function DiffPane({
                 // Same body as the file browser and file panel: the cause, the
                 // next step, and the one way out that fits — here the OS app,
                 // which plays codecs Chromium can't.
-                <FileUnavailableState
-                  icon={getFileTypeIcon(filePath).Icon}
-                  title={previewError.title}
-                  description={previewError.description}
-                  data-testid="diff-pane-unavailable"
-                  action={
-                    <Button
-                      variant="contrast"
-                      size="sm"
-                      onClick={() => void handleExternalAction("default-app")}
-                    >
-                      <ExternalLink />
-                      Open in default app
-                    </Button>
-                  }
+                <DiffPreviewUnavailable
+                  filePath={filePath}
+                  hostPath={absolutePath}
+                  error={previewError}
+                  fileReason="MEDIA_FAILED"
+                  remote={remoteFile}
+                  revealLabel={reveal.label}
+                  onExternal={(target) => void handleExternalAction(target)}
                 />
               ) : isAudioMode ? (
                 <FileAudioPreview
@@ -1328,21 +1437,14 @@ export function DiffPane({
                   />
                 </div>
               ) : previewError !== null ? (
-                <FileUnavailableState
-                  icon={getFileTypeIcon(filePath).Icon}
-                  title={previewError.title}
-                  description={previewError.description}
-                  data-testid="diff-pane-unavailable"
-                  action={
-                    <Button
-                      variant="contrast"
-                      size="sm"
-                      onClick={() => void handleExternalAction("default-app")}
-                    >
-                      <ExternalLink />
-                      Open in default app
-                    </Button>
-                  }
+                <DiffPreviewUnavailable
+                  filePath={filePath}
+                  hostPath={absolutePath}
+                  error={previewError}
+                  fileReason="PDF_FAILED"
+                  remote={remoteFile}
+                  revealLabel={reveal.label}
+                  onExternal={(target) => void handleExternalAction(target)}
                 />
               ) : (
                 <FilePdfPreview
@@ -1368,6 +1470,7 @@ export function DiffPane({
               !isMediaMode &&
               !isPdfMode &&
               content &&
+              !sinceReviewNotice?.replacesBody &&
               (showRendered ? (
                 <Suspense fallback={renderedSkeleton}>
                   {renderedSourcePending ? (
@@ -1521,5 +1624,61 @@ export function DiffPane({
         </div>
       )}
     </ContentPanel>
+  );
+}
+
+/**
+ * A preview the diff panel couldn't show, in the shared unavailable body. On
+ * this machine the preview's own words stand, with the OS default app as the
+ * way out. A remote window's host refusal names control or location instead,
+ * and where this computer can't open the host's files, a copy saved here
+ * replaces the default app.
+ */
+function DiffPreviewUnavailable({
+  filePath,
+  hostPath,
+  error,
+  fileReason,
+  remote,
+  revealLabel,
+  onExternal,
+}: {
+  filePath: string;
+  hostPath: string;
+  error: MediaPreviewError;
+  fileReason: "MEDIA_FAILED" | "PDF_FAILED";
+  remote: RemoteFileContext | null;
+  revealLabel: string;
+  onExternal: (target: "reveal" | "default-app") => void;
+}) {
+  const refused = refusalReason(error);
+  const copy =
+    refused !== null || remote?.saveTarget != null
+      ? unavailableCopy(refused ?? fileReason, error.title, remote)
+      : { title: error.title, description: error.description, action: "open" as const };
+  return (
+    <FileUnavailableState
+      icon={getFileTypeIcon(filePath).Icon}
+      title={copy.title}
+      description={copy.description}
+      data-testid="diff-pane-unavailable"
+      action={
+        copy.action === "take-control" ? (
+          <TakeControlButton variant="contrast" />
+        ) : copy.action === "save" ? (
+          <SaveHostFileButton hostPath={hostPath} variant="contrast" />
+        ) : copy.action === "reveal" ? (
+          <Button variant="contrast" size="sm" onClick={() => onExternal("reveal")}>
+            <FolderOpen />
+            {revealLabel}
+          </Button>
+        ) : (
+          <Button variant="contrast" size="sm" onClick={() => onExternal("default-app")}>
+            <ExternalLink />
+            Open in default app
+          </Button>
+        )
+      }
+    />
   );
 }

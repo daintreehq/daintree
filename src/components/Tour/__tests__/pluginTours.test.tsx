@@ -45,6 +45,7 @@ import {
   readPluginTourModule,
 } from "../pluginTours";
 import { TourDialog } from "../TourDialog";
+import { actionService } from "@/services/ActionService";
 
 // The installed-plugin fixture: a hand-written module importing `react` and
 // `@daintreehq/tour/*` bare, as a raw plugin module does through the import map.
@@ -207,5 +208,64 @@ describe("plugin tours", () => {
     const tour = buildPluginTourDefinition(fixtureTour(), module);
     expect(tour.chapters.map((chapter) => chapter.title)).toEqual(["intro", "publish"]);
     expect(tour.mockKit).toBeUndefined();
+  });
+});
+
+describe("plugin tour finish and version (#14098)", () => {
+  const module = { scenes: { intro: () => null, publish: () => null } };
+
+  it("plays without a Finish handoff or version when the manifest declares none", () => {
+    const definition = buildPluginTourDefinition(fixtureTour(), module);
+    expect(definition.finish).toBeUndefined();
+    expect(definition.version).toBeUndefined();
+  });
+
+  it("opens the plugin's settings at the declared setting, as the user's click", () => {
+    const dispatch = vi
+      .spyOn(actionService, "dispatch")
+      .mockResolvedValue({ ok: true, result: undefined });
+    try {
+      const definition = buildPluginTourDefinition(
+        fixtureTour({
+          pluginId: "project__p1__acme.welcome-tour",
+          version: "3",
+          finish: { hint: "Connect your account", action: { kind: "settings", key: "token" } },
+        }),
+        module
+      );
+      expect(definition.version).toBe("3");
+      expect(definition.finish!.hint).toBe("Connect your account");
+      definition.finish!.run();
+      expect(dispatch).toHaveBeenCalledWith(
+        "plugin.openSettings",
+        { pluginId: "project__p1__acme.welcome-tour", key: "token" },
+        { source: "user" }
+      );
+    } finally {
+      dispatch.mockRestore();
+    }
+  });
+
+  it("runs the plugin's own command, through the action's own rules", () => {
+    const dispatch = vi
+      .spyOn(actionService, "dispatch")
+      .mockResolvedValue({ ok: true, result: undefined });
+    try {
+      const definition = buildPluginTourDefinition(
+        fixtureTour({
+          finish: {
+            hint: "Build your first page",
+            action: { kind: "command", actionId: "acme.welcome-tour.start" },
+          },
+        }),
+        module
+      );
+      definition.finish!.run();
+      expect(dispatch).toHaveBeenCalledWith("acme.welcome-tour.start", undefined, {
+        source: "user",
+      });
+    } finally {
+      dispatch.mockRestore();
+    }
   });
 });

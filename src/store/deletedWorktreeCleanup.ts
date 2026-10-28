@@ -10,8 +10,6 @@ import { isPtyPanel } from "@shared/types/panel";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
 import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
-import { notify } from "@/lib/notify";
-import { pluralize } from "@/lib/pluralize";
 
 export const DELETED_WORKTREE_SWEEP_INTERVAL_MS = 1000;
 
@@ -266,48 +264,6 @@ function clampRemaining(remainingMs: number, ttlMs: number): number {
   return Math.max(0, Math.min(remainingMs, ttlMs));
 }
 
-/**
- * The sweep is the one path that closes terminals with nobody watching: the
- * row vanishes and the trash TTL kills the PTYs seconds later, so a user who
- * stepped away would otherwise have no record it happened. The entry is only a
- * record — the inbox is usually read long after the trash window closes, so it
- * carries no restore action and its copy is past tense. Inbox-only — the event
- * is unattended by definition, so a toast would interrupt whatever the user
- * moved on to.
- */
-interface SweptRow {
-  worktreeId: string;
-  title: string;
-  count: number;
-}
-
-/**
- * One inbox entry per sweep pass, not per row (#11260). A burst of deletions is
- * armed with the same TTL at the same moment, so its rows all expire on one
- * tick — announcing each of them wrote N entries describing a single event. The
- * low-priority inbox path skips `notify`'s rate limiter and coalescing
- * entirely, so collapsing the burst has to happen here, at the call site.
- */
-function notifySweepTrashed(swept: readonly SweptRow[]): void {
-  if (swept.length === 0) return;
-  const terminalCount = swept.reduce((n, row) => n + row.count, 0);
-  const single = swept.length === 1 ? swept[0]! : null;
-  const where = single ? single.title : pluralize(swept.length, "worktree");
-  const message = `Closed ${pluralize(terminalCount, "terminal")} left open in ${where}.`;
-  notify({
-    type: "info",
-    title: single ? "Deleted worktree cleaned up" : "Deleted worktrees cleaned up",
-    message,
-    // `agent` is the right domain (these are agent sessions) but its policy
-    // baseline is active/high; pin low so the unattended record stays a record
-    // and never interrupts whatever the user moved on to.
-    priority: "low",
-    // A multi-row sweep has no single worktree to attribute, and pinning one
-    // member's id would make the entry navigate somewhere arbitrary.
-    context: { ...(single ? { worktreeId: single.worktreeId } : {}), eventKind: "agent" },
-  });
-}
-
 export function sweepDeletedWorktreeCleanup(deps: SweepDeps = DEFAULT_DEPS): void {
   const selection = useWorktreeSelectionStore.getState();
   const { deletedWorktrees, setDeletedWorktreeCleanupState } = selection;
@@ -342,7 +298,6 @@ export function sweepDeletedWorktreeCleanup(deps: SweepDeps = DEFAULT_DEPS): voi
   if (deps.isViewCached() || deps.isViewHidden()) return;
 
   const now = deps.now();
-  const swept: SweptRow[] = [];
   // A row can only be armed by a sweep (they are recorded unarmed), so an
   // armed row implies a sweep has run and `lastSweepAt` is set. There is no
   // reachable "armed but never swept" state whose deadline would have to be
@@ -469,9 +424,6 @@ export function sweepDeletedWorktreeCleanup(deps: SweepDeps = DEFAULT_DEPS): voi
     setDeletedWorktreeCleanupState(entry.id, { expiresAt, holdReason: null });
     // Same executor as the row's manual close: terminals land in trash
     // (restorable until trash GC), and trashing the last one prunes the row.
-    // Count first — the executor mirrors this exact filter, and once it runs
-    // the panels have already left the row.
-    const trashedCount = getDeletedWorktreeTerminalIds(entry.id).length;
     try {
       usePanelStore.getState().bulkTrashByWorktree(entry.id);
     } catch (error) {
@@ -485,12 +437,7 @@ export function sweepDeletedWorktreeCleanup(deps: SweepDeps = DEFAULT_DEPS): voi
       console.warn("[DeletedWorktreeCleanup] Trash dispatch failed; retrying next tick", error);
       continue;
     }
-    if (trashedCount > 0) {
-      swept.push({ worktreeId: entry.id, title: entry.title, count: trashedCount });
-    }
   }
-
-  notifySweepTrashed(swept);
 }
 
 /**

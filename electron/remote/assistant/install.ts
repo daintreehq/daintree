@@ -1,62 +1,57 @@
 import type Database from "better-sqlite3";
 import type { HostProjectSummary } from "../../../shared/types/ipc/remoteHosts.js";
-import type { HostId } from "../../../shared/types/remoteHosts.js";
+import { LOCAL_HOST_ID, type HostId } from "../../../shared/types/remoteHosts.js";
 import { isRemoteEndpointHandle } from "../../ipc/endpoint.js";
+import { getLocalAgentDirectory } from "../../services/assistants/localAgentDirectory.js";
 import { helpSessionService } from "../../services/HelpSessionService.js";
-import type { RunbooksHostsState } from "../../services/helpSessionRunbooks.js";
+import { peekGlobalAssistantService } from "../../services/globalAssistant.js";
+import { isGlobalAssistantId } from "../../../shared/config/globalAssistant.js";
 import { setHostControlRuntime } from "../../services/mcp-server/hostControlTools.js";
 import type { LaneWake } from "../../services/mcp-server/terminalNotify.js";
 import { getSharedDb, getSharedSqlite } from "../../services/persistence/db.js";
+import { machineDisplayName } from "../../utils/machineName.js";
 import { getPtyClient } from "../../window/serviceRefs.js";
 import { getProjectForWebContents } from "../../window/webContentsRegistry.js";
 import type { LinkSession } from "../link/session.js";
+import { getLocalSummaryLoop } from "../metrics/localLoop.js";
 import { getRemoteService, registerRemoteService } from "../runtime.js";
-import { HostCallRuntime, type ObservedHost, type OpenRun } from "./HostCallRuntime.js";
+import {
+  HostCallRuntime,
+  type HostCallRuntimeDeps,
+  type ObservedHost,
+  type OpenRun,
+} from "./HostCallRuntime.js";
 import { HostControlLinkClient } from "./HostControlLinkClient.js";
+import { createLocalMcpRelay, LOCAL_RELAY_SENDER_ID } from "./localMcpRelay.js";
+import { relayCallerOf } from "./mcpRelayExecutor.js";
 import { forgetRetiredSends, readRetiredSends } from "./retiredSends.js";
 import { AssistantSenderCredentials } from "./senderCredentials.js";
+import { AppError } from "../../utils/errorTypes.js";
+import { createLogger } from "../../utils/logger.js";
+
+const logger = createLogger("main:install");
 
 declare module "../runtime.js" {
   interface RemoteServices {
     /** What a host's dialogs are checked against: whether this Shell has a call out to it. */
     hostCallRelayClient: Pick<
       HostCallRuntime,
-      "hasCallInFlight" | "awaitsNotices" | "receiveNotices" | "receiveApproval"
+      | "hasCallInFlight"
+      | "awaitsNotices"
+      | "receiveNotices"
+      | "noticeCalls"
+      | "receiveNoticeStatus"
+      | "receiveApproval"
     >;
     hostControlLinkClient: HostControlLinkClient;
   }
 }
 
-const REACHABLE_STATUSES: ReadonlySet<ObservedHost["connection"]["status"]> = new Set([
-  "connected",
-  "connecting",
-  "disconnected",
-]);
-
 /**
- * This machine's hosts as runbook search is told them (#13411), from what
- * `host.list` reads: connected means a host this Shell's assistant controls
- * is connected, or holds no link that said why it is down. `host.list` and
- * `host.call` dial a host with no link, and the Shell lets an unused link go
- * after a few minutes, so a host with none is one the assistant reaches on
- * its next call. Hosts this Shell can't observe are unreported rather than
- * guessed down to "none connected".
+ * The run a help session answers in, when one of this machine's own views
+ * shows it, or when it is this machine's global assistant (#14161), which
+ * main owns and no view holds.
  */
-export function observedRunbooksHostsState(
-  hasHosts: boolean,
-  observed: readonly ObservedHost[] | null,
-  controlEnabled: (hostId: HostId) => boolean
-): RunbooksHostsState | null {
-  if (!hasHosts) return "none";
-  if (observed === null) return null;
-  return observed.some(
-    (host) => controlEnabled(host.hostId) && REACHABLE_STATUSES.has(host.connection.status)
-  )
-    ? "connected"
-    : "configured";
-}
-
-/** The run a help session answers in, when one of this machine's own views shows it. */
 function localRunOf(helpSessionId: string): OpenRun | null {
   const lane = helpSessionService.getSessionLane(helpSessionId);
   if (lane === null) return null;
@@ -64,7 +59,10 @@ function localRunOf(helpSessionId: string): OpenRun | null {
   if (running === null || running.sessionId !== helpSessionId) return null;
   // An assistant a remote Shell's view runs here is that Shell's, never this one's.
   const handle = running.projectViewWebContentsId;
-  if (isRemoteEndpointHandle(handle) || getProjectForWebContents(handle) !== lane.projectId) {
+  if (
+    !isGlobalAssistantId(lane.projectId) &&
+    (isRemoteEndpointHandle(handle) || getProjectForWebContents(handle) !== lane.projectId)
+  ) {
     return null;
   }
   const launchGeneration = getPtyClient()?.getLiveGeneration(running.terminalId) ?? null;
@@ -76,6 +74,17 @@ function localRunOf(helpSessionId: string): OpenRun | null {
     terminalId: running.terminalId,
     launchGeneration,
   };
+}
+
+let localMachineName: string | undefined;
+let mcpServerModule: Promise<typeof import("../../services/McpServerService.js")> | undefined;
+/** Loaded once: a session's end releases and retires through the same load, in order. */
+function mcpServer(): Promise<typeof import("../../services/McpServerService.js")> {
+  mcpServerModule ??= import("../../services/McpServerService.js").catch((error: unknown) => {
+    mcpServerModule = undefined;
+    throw error;
+  });
+  return mcpServerModule;
 }
 
 /** Queues a line on a run's own notice line, the one writer that types into its prompt. */
@@ -98,13 +107,17 @@ function queueOnNoticeLine(
 export interface HostControlInstallDeps {
   /** Every host this Shell knows, as last observed; what `host.list` reads. */
   observeHosts(): ObservedHost[];
-  hasHosts(): boolean;
   /** A connected host's projects, for `host.list` to name. */
   listHostProjects?(hostId: HostId): Promise<readonly HostProjectSummary[]>;
   /** Dials a host this Shell holds no link to, for `host.list` to observe it connected. */
   connect?(hostId: HostId, timeoutMs: number): Promise<unknown>;
   /** The person's "assistant control" switch for a host: whether its assistant reaches it (#13493). */
   isHostControlEnabled(hostId: HostId): boolean;
+  /**
+   * Hears what hosts already report, for `host.watch` (#14463): links, the
+   * host list and summaries. Held only while a watch is armed.
+   */
+  watchHosts?: HostCallRuntimeDeps["watchHosts"];
 }
 
 /**
@@ -112,6 +125,58 @@ export interface HostControlInstallDeps {
  * search is told of this machine's hosts; the returned teardown removes them.
  */
 export function installHostControl(deps: HostControlInstallDeps): () => void {
+  const machineName = (): string => (localMachineName ??= machineDisplayName());
+  // This machine's other projects, reached under its own id (#14024): admitted
+  // as a host admits another machine's calls, and answered back into the
+  // runtime as a host's notices and questions are.
+  const local = createLocalMcpRelay({
+    machineName,
+    hasProject: async (projectId) => {
+      const { projectStore } = await import("../../services/ProjectStore.js");
+      return projectStore.getProjectById(projectId) !== null;
+    },
+    openSession: async (spec) => {
+      const { mcpServerService } = await import("../../services/McpServerService.js");
+      await helpSessionService.ensureAssistantControl();
+      return mcpServerService.openRelaySession({
+        tier: spec.tier,
+        workspaceId: spec.projectId,
+        caller: relayCallerOf(spec),
+      });
+    },
+    // Nor anything the person handed it (#14161), even before its first call.
+    releaseHandOvers: (helpSessionId) => {
+      void mcpServer()
+        .then(({ mcpServerService }) =>
+          mcpServerService.releaseRelayAdoptions(LOCAL_RELAY_SENDER_ID, helpSessionId)
+        )
+        .catch((error: unknown) => {
+          logger.warn("Couldn't release what was handed to an ended assistant", { error });
+        });
+    },
+    retirePrincipal: (senderId, helpSessionId) => {
+      void mcpServer()
+        .then(({ mcpServerService }) =>
+          mcpServerService.retireRelayPrincipal(senderId, helpSessionId)
+        )
+        .catch((error: unknown) => {
+          logger.warn("Couldn't retire a local relay principal", { error });
+        });
+    },
+    receiveNotices: (payload) => runtime.receiveNotices(LOCAL_HOST_ID, payload),
+    receiveApproval: (payload) => runtime.receiveApproval(LOCAL_HOST_ID, payload),
+    throwawayRuns: () => getRemoteService("hostThrowawayRuns") ?? null,
+  });
+  // The global assistant has no window of its own: it is asked in one that
+  // shows it, never the focused one, and not at all while none does.
+  const askingWindow = (helpSessionId: string): number | null => {
+    const webContentsId = isGlobalAssistantId(
+      helpSessionService.getSessionLane(helpSessionId)?.projectId ?? ""
+    )
+      ? (peekGlobalAssistantService()?.presenterWebContentsId() ?? null)
+      : helpSessionService.getWebContentsIdForSessionId(helpSessionId);
+    return webContentsId === null || isRemoteEndpointHandle(webContentsId) ? null : webContentsId;
+  };
   const runtime = new HostCallRuntime({
     getSessionLane: (helpSessionId) => helpSessionService.getSessionLane(helpSessionId),
     callerRun: localRunOf,
@@ -120,34 +185,82 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
     listHostProjects: deps.listHostProjects,
     connect: deps.connect,
     // From provisioning, before the run is confirmed: the view a session was opened in.
+    // The global assistant (#14161) is this machine's own with no view at all.
     inLocalView: (helpSessionId) => {
+      const lane = helpSessionService.getSessionLane(helpSessionId);
+      if (lane !== null && isGlobalAssistantId(lane.projectId)) return true;
       const handle = helpSessionService.getWebContentsIdForSessionId(helpSessionId);
       return handle !== null && !isRemoteEndpointHandle(handle);
     },
     controlEnabled: (hostId) => deps.isHostControlEnabled(hostId),
+    ...(deps.watchHosts ? { watchHosts: deps.watchHosts } : {}),
     // A host's question about a call it would run itself goes to the person in
     // the window of the assistant that made the call (#13501), never the
     // focused one: an assistant a remote Shell's view runs here has none.
     askApproval: async (ask) => {
-      const webContentsId = helpSessionService.getWebContentsIdForSessionId(ask.helpSessionId);
-      if (webContentsId === null || isRemoteEndpointHandle(webContentsId)) return null;
+      const webContentsId = askingWindow(ask.helpSessionId);
+      if (webContentsId === null) return null;
       const { askHostApprovalInWindow } = await import("../client/viewRequests.js");
       return askHostApprovalInWindow(webContentsId, ask);
     },
+    // A host's settings, read and changed by name with no view there (#14167).
+    settingsClient: () => getRemoteService("settingsControlClient") ?? null,
+    askSettingsApproval: async ({ helpSessionId, ...ask }) => {
+      const webContentsId = askingWindow(helpSessionId);
+      if (webContentsId === null) return null;
+      const { askSettingsApprovalInWindow } = await import("../client/viewRequests.js");
+      return askSettingsApprovalInWindow(webContentsId, ask);
+    },
     // A host's notice rides its run's own notice line (#13500).
     queueNotice: queueOnNoticeLine,
+    // Through the Shell's switch service, with no window (#14140).
+    ensureProject: (request) => {
+      const service = getRemoteService("hostSwitchService");
+      if (!service) {
+        return Promise.reject(
+          new AppError({ code: "UNSUPPORTED", message: "No host switch service" })
+        );
+      }
+      return service.ensureForAssistant(request);
+    },
+    local: {
+      name: machineName,
+      projects: async () => {
+        const [{ projectStore }, { isProjectFrontendAttached }] = await Promise.all([
+          import("../../services/ProjectStore.js"),
+          import("../../services/mcp-server/frontendAttachment.js"),
+        ]);
+        return projectStore.getProjectSummaries().map((project) => ({
+          ...project,
+          frontendAttached: isProjectFrontendAttached(project.id),
+        }));
+      },
+      // The sampler reads macOS and treats everything else as Linux, so a
+      // Windows machine has no measurement to offer rather than a borrowed one.
+      latestSummary: () => (process.platform === "win32" ? null : getLocalSummaryLoop().latest()),
+      summaryReceipt: (summary) => getLocalSummaryLoop().receiptOf(summary),
+      relayCall: (payload) => local.relayCall(payload),
+      throwawayCall: (payload) => local.throwawayCall(payload),
+      agents: (options) => getLocalAgentDirectory().read(options),
+    },
+  });
+  // A help session that won't run again holds nothing it made in another
+  // project; one relaunched onto a new PTY is the same assistant and keeps it.
+  const offSessionEnded = helpSessionService.addSessionEndedListener(({ sessionId, reason }) => {
+    // Its watches were the earlier run's, whichever way it ended (#14463).
+    runtime.retireWatches(sessionId);
+    if (reason === "relaunched") return;
+    local.endHelpSession(sessionId);
+    runtime.endHelpSession(sessionId);
   });
   const unregisterRuntime = setHostControlRuntime(runtime);
   const unregisterCallRelay = registerRemoteService("hostCallRelayClient", runtime);
-  // Read at each provision and held for that session; a host that connects later counts from the next.
-  helpSessionService.setRunbooksHostState(() =>
-    observedRunbooksHostsState(deps.hasHosts(), deps.observeHosts(), deps.isHostControlEnabled)
-  );
   return () => {
-    helpSessionService.setRunbooksHostState(null);
+    offSessionEnded();
     unregisterCallRelay();
     unregisterRuntime();
     runtime.dispose();
+    local.dispose();
   };
 }
 
@@ -171,7 +284,7 @@ export function installRetiredSendsNotice(
     pending = readRetiredSends(sqlite);
     if (pending.length === 0) forgetRetiredSends(sqlite);
   } catch (error) {
-    console.warn("[HostControl] Couldn't read the retired inbox's sends:", error);
+    logger.warn("Couldn't read the retired inbox's sends", { error });
     return () => {};
   }
   if (pending.length === 0) return () => {};
@@ -213,7 +326,7 @@ export function installRetiredSendsNotice(
             try {
               forgetRetiredSends(sqlite);
             } catch (error) {
-              console.warn("[HostControl] Couldn't forget the retired inbox's sends:", error);
+              logger.warn("Couldn't forget the retired inbox's sends", { error });
             }
             finish();
           }
@@ -261,7 +374,7 @@ function openDatabase(): Database.Database | null {
 export function installHostControlLinkClient(deps: HostControlLinkClientInstallDeps): () => void {
   const sqlite = openDatabase();
   if (!sqlite) {
-    console.warn("[HostControl] No database; this Shell's assistants can't reach its hosts");
+    logger.warn("No database; this Shell's assistants can't reach its hosts");
     return () => {};
   }
   const credentials = new AssistantSenderCredentials(sqlite);
@@ -274,6 +387,7 @@ export function installHostControlLinkClient(deps: HostControlLinkClientInstallD
   const offHosts = deps.onHostsChanged(forgetRemovedHosts);
   const client = new HostControlLinkClient({
     credential: (hostId) => credentials.credential(hostId),
+    existingCredential: (hostId) => credentials.existing(hostId),
     session: deps.session,
     onSessionOpened: deps.onSessionOpened,
     noticeReceiver: () => getRemoteService("hostCallRelayClient"),
@@ -281,7 +395,8 @@ export function installHostControlLinkClient(deps: HostControlLinkClientInstallD
   });
   client.start();
   // Bounded by each relayed call while it runs, and by the notices those
-  // calls armed (#13500). Holding the link never keeps the host awake.
+  // calls armed until their host has nothing more for them (#13500, #13930).
+  // Holding the link never keeps the host awake.
   const offUseCheck =
     deps.addUseCheck?.((hostId) => {
       const relay = getRemoteService("hostCallRelayClient");

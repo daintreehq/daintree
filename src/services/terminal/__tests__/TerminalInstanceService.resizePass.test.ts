@@ -131,6 +131,7 @@ function makeManaged(visible = true, id = "term"): ManagedTerminal {
     fileLinksDisposable: null,
     imageLinksDisposable: null,
     commandLinksDisposable: null,
+    pluginLinksDisposable: null,
     webLinksAddon: null,
     hoveredLink: null,
   } as ManagedTerminal;
@@ -147,10 +148,9 @@ describe("TerminalInstanceService runResizePass", () => {
     // yield is deterministically driven by fake timers.
     vi.stubGlobal("scheduler", undefined);
 
-    ({ terminalInstanceService: service } =
-      (await import("../TerminalInstanceService")) as unknown as {
-        terminalInstanceService: ResizePassService;
-      });
+    service = (await (
+      await import("../terminalInstanceServiceAccessor")
+    ).load()) as unknown as ResizePassService;
     ({ usePanelStore: panelStore } =
       (await import("@/store/panelStore")) as unknown as PanelStoreModule);
 

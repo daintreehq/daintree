@@ -1,24 +1,34 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { AGENT_DIRECTORY_BYTES_MAX } from "../../../../shared/types/agentDirectory.js";
 import type { LinkSession } from "../../link/session.js";
 import type { MetricsSessionContext } from "../../metrics/hostMetricsHost.js";
 import {
   installHostMcpRelay,
   projectRelayResult,
+  relayCallerOf,
+  THROWAWAY_SHELL_GONE_GRACE_MS,
   type HostMcpRelayDeps,
   type RelayMcpSession,
   type RelayMcpSessionSpec,
 } from "../hostMcpRelay.js";
 import {
   AssistantLinkMethod,
+  MAX_RELAY_NOTICE_STATUS_CALLS,
   MAX_RELAY_RESULT_BYTES,
+  ThrowawayCallAnswerSchema,
+  ThrowawayCallPayloadSchema,
   type McpCallPayload,
 } from "../linkMethods.js";
+import { MAX_RELAY_NOTICES_PER_SENDER } from "../relayNoticeOutbox.js";
 import { SenderSessions } from "../senderSessions.js";
+import type { HostThrowawayExecutor } from "../throwawayRelay.js";
 
 interface FakeLink {
   ctx: MetricsSessionContext;
   call(payload: Partial<McpCallPayload>): Promise<unknown>;
+  /** What the Shell asks over the link with any other method. */
+  ask(method: string, payload: unknown): Promise<unknown>;
   /** What this host called on the Shell over the link. */
   sent: Array<{ method: string; payload: unknown }>;
 }
@@ -42,6 +52,7 @@ function fakeLink(sessionId: string): FakeLink {
   } as unknown as LinkSession;
   return {
     sent,
+    ask: async (method, payload) => handlers.get(method)!(payload),
     ctx: {
       session,
       sessionId,
@@ -82,10 +93,20 @@ function harness(
   });
   const opened: FakeMcpSession[] = [];
   let expire: (info: { sessionId: string }) => void = () => {};
+  let detach: (info: { sessionId: string }) => void = () => {};
+  const sessions = fakes.map((link) => link.ctx);
+  let onSession: (ctx: MetricsSessionContext) => void = () => {};
   const relay = installHostMcpRelay(
     {
-      sessions: fakes.map((link) => link.ctx),
-      onSession: () => () => {},
+      sessions,
+      onSession: (listener) => {
+        onSession = listener;
+        return () => {};
+      },
+      onSessionDetached: (listener) => {
+        detach = listener;
+        return () => {};
+      },
       onSessionExpired: (listener) => {
         expire = listener;
         return () => {};
@@ -115,7 +136,36 @@ function harness(
       ...overrides,
     }
   );
-  return { relay, opened, links: fakes, expire: (sessionId: string) => expire({ sessionId }) };
+  /** A link that attaches later, as a Shell's next session does. */
+  const attach = (sessionId: string, senderId: string | null): FakeLink => {
+    const link = fakeLink(sessionId);
+    if (senderId !== null) senders.bind(link.ctx.session, senderId, sessionId);
+    fakes.push(link);
+    sessions.push(link.ctx);
+    onSession(link.ctx);
+    return link;
+  };
+  return {
+    relay,
+    opened,
+    links: fakes,
+    attach,
+    // A dropped link leaves the server's sessions, though it may still resume.
+    detach: (sessionId: string) => {
+      const index = sessions.findIndex((ctx) => ctx.sessionId === sessionId);
+      if (index >= 0) sessions.splice(index, 1);
+      detach({ sessionId });
+    },
+    // A link expires once its transport is long gone.
+    expire: (sessionId: string) => {
+      for (const link of fakes) {
+        if (link.ctx.sessionId === sessionId) {
+          (link.ctx.session as unknown as { isOpen: boolean }).isOpen = false;
+        }
+      }
+      expire({ sessionId });
+    },
+  };
 }
 
 afterEach(() => {
@@ -151,6 +201,66 @@ describe("installHostMcpRelay", () => {
     expect(opened[0]!.calls).toEqual([
       { tool: "terminal.list", args: { owned: true }, timeoutMs: 90_000, callId: "call-1" },
     ]);
+    relay.dispose();
+  });
+
+  it("marks a session opened by GLOBAL_MCP_CALL as the global Assistant's, and MCP_CALL's as not (#14545)", async () => {
+    const { links, opened, relay } = harness([["link-1", "sender-a"]]);
+    const base = {
+      helpSessionId: "help-g",
+      projectId: "project-1",
+      tier: "core",
+      callId: "call-g",
+      resend: false,
+      tool: "terminal.list",
+      args: {},
+      runMs: 90_000,
+    };
+    await links[0]!.ask(AssistantLinkMethod.GLOBAL_MCP_CALL, base);
+    await links[0]!.call({ helpSessionId: "help-p", callId: "call-p" });
+
+    expect(opened.map((session) => [session.spec.helpSessionId, session.spec.global])).toEqual([
+      ["help-g", true],
+      ["help-p", undefined],
+    ]);
+    // The caller the host's MCP server admits each as.
+    expect(opened.map((session) => relayCallerOf(session.spec).global)).toEqual([true, undefined]);
+    relay.dispose();
+  });
+
+  it("keeps a global and an ordinary session apart under one help session, reusing each (#14545)", async () => {
+    const { links, opened, relay } = harness([["link-1", "sender-a"]]);
+    const send = (global: boolean, callId: string) =>
+      global
+        ? links[0]!.ask(AssistantLinkMethod.GLOBAL_MCP_CALL, {
+            helpSessionId: "help-1",
+            projectId: "project-1",
+            tier: "core",
+            callId,
+            resend: false,
+            tool: "terminal.list",
+            args: {},
+            runMs: 90_000,
+          })
+        : links[0]!.call({ callId });
+    await send(false, "c1");
+    await send(true, "c2");
+    await send(false, "c3");
+    await send(true, "c4");
+
+    expect(
+      opened.map((session) => [session.spec.global, session.calls.map((call) => call.callId)])
+    ).toEqual([
+      [undefined, ["c1", "c3"]],
+      [true, ["c2", "c4"]],
+    ]);
+    relay.dispose();
+  });
+
+  it("refuses a payload that names itself global, so nothing but the method can (#14545)", async () => {
+    const { links, opened, relay } = harness([["link-1", "sender-a"]]);
+    await expect(links[0]!.call({ global: true } as Partial<McpCallPayload>)).rejects.toThrow();
+    expect(opened).toEqual([]);
     relay.dispose();
   });
 
@@ -472,21 +582,23 @@ describe("projectRelayResult", () => {
 });
 
 describe("installHostMcpRelay notices (#13500)", () => {
-  const notice = (linkSessionId: string) => ({
-    linkSessionId,
+  const notice = (callId = "call-1") => ({
     helpSessionId: "help-1",
-    callId: "call-1",
+    callId,
     terminalId: "t-1",
     observation: { kind: "closed" as const },
   });
+  const notifyCall = { tool: "terminal.notifyWhenIdle", args: { terminalId: "t-1" } };
+  const status = (link: FakeLink, calls: Array<{ helpSessionId: string; callId: string }>) =>
+    link.ask(AssistantLinkMethod.RELAY_NOTICE_STATUS, { calls });
 
-  it("carries a session's notices back over the link its call came in on", async () => {
+  it("carries a session's notices back to the sender that made the call, never another Shell", async () => {
     const { links, opened, relay } = harness([
       ["link-1", "sender-a"],
-      ["link-2", "sender-a"],
+      ["link-2", "sender-b"],
     ]);
     await links[0]!.call({});
-    opened[0]!.spec.deliverNotices([notice("link-1")]);
+    opened[0]!.spec.deliverNotices([notice()]);
 
     await vi.waitFor(() => expect(links[0]!.sent).toHaveLength(1));
     expect(links[0]!.sent[0]).toMatchObject({
@@ -497,18 +609,211 @@ describe("installHostMcpRelay notices (#13500)", () => {
     relay.dispose();
   });
 
-  it("drops what an ended link's calls armed, here and in the notice service", async () => {
-    const dropLinkNotices = vi.fn();
-    const { links, opened, relay, expire } = harness([["link-1", "sender-a"]], {
-      dropLinkNotices,
-    });
-    await links[0]!.call({});
+  it("carries what an expired link's call armed over the Shell's next session (#13930)", async () => {
+    const { links, opened, relay, expire, attach } = harness([["link-1", "sender-a"]]);
+    await links[0]!.call(notifyCall);
     expire("link-1");
-    opened[0]!.spec.deliverNotices([notice("link-1")]);
+    const next = attach("link-2", "sender-a");
+    opened[0]!.spec.deliverNotices([notice()]);
 
+    await vi.waitFor(() => expect(next.sent).toHaveLength(1));
+    expect(next.sent[0]).toMatchObject({
+      method: AssistantLinkMethod.RELAY_NOTICES,
+      payload: { notices: [expect.objectContaining({ callId: "call-1", terminalId: "t-1" })] },
+    });
+    expect(opened[0]!.closed).toBe(true);
+    relay.dispose();
+  });
+
+  it("holds them for a new session until it proves the sender, then sends them as it asks", async () => {
+    const senders = new SenderSessions();
+    const { links, opened, relay, expire, attach } = harness([["link-1", "sender-a"]], {
+      senders: () => senders,
+    });
+    senders.bind(links[0]!.ctx.session, "sender-a", "link-1");
+    await links[0]!.call(notifyCall);
+    expire("link-1");
+    senders.forgetSessionId("link-1");
+    const next = attach("link-2", null);
+    opened[0]!.spec.deliverNotices([notice()]);
     await Promise.resolve();
-    expect(dropLinkNotices).toHaveBeenCalledWith("link-1");
-    expect(links[0]!.sent).toEqual([]);
+    expect(next.sent).toEqual([]);
+    await expect(
+      status(next, [{ helpSessionId: "help-1", callId: "call-1" }])
+    ).rejects.toMatchObject({ code: "PERMISSION" });
+
+    senders.bind(next.ctx.session, "sender-a", "link-2");
+    await status(next, [{ helpSessionId: "help-1", callId: "call-1" }]);
+    await vi.waitFor(() =>
+      expect(next.sent.map((sent) => sent.method)).toEqual([AssistantLinkMethod.RELAY_NOTICES])
+    );
+    relay.dispose();
+  });
+
+  it("says which calls it still watches, which are settled, and which it has no record of", async () => {
+    let watching: ReadonlySet<string> = new Set(["call-1"]);
+    const { links, relay } = harness([["link-1", "sender-a"]], {
+      watchingNoticeCalls: (senderId, helpSessionId) =>
+        senderId === "sender-a" && helpSessionId === "help-1" ? watching : new Set(),
+    });
+    await links[0]!.call({ ...notifyCall, callId: "call-1" });
+    await links[0]!.call({ ...notifyCall, callId: "call-2" });
+    await links[0]!.call({ tool: "terminal.list", callId: "call-3" });
+    // A resend of a call this host never ran arms nothing here.
+    await links[0]!.call({ ...notifyCall, callId: "call-4", resend: true });
+
+    expect(
+      await status(links[0]!, [
+        { helpSessionId: "help-1", callId: "call-1" },
+        { helpSessionId: "help-1", callId: "call-2" },
+        { helpSessionId: "help-1", callId: "call-3" },
+        { helpSessionId: "help-1", callId: "call-4" },
+        { helpSessionId: "help-2", callId: "call-1" },
+      ])
+    ).toEqual({
+      calls: [
+        { helpSessionId: "help-1", callId: "call-1", status: "watching" },
+        { helpSessionId: "help-1", callId: "call-2", status: "settled" },
+        { helpSessionId: "help-1", callId: "call-3", status: "unknown" },
+        { helpSessionId: "help-1", callId: "call-4", status: "unknown" },
+        { helpSessionId: "help-2", callId: "call-1", status: "unknown" },
+      ],
+    });
+
+    watching = new Set();
+    expect(await status(links[0]!, [{ helpSessionId: "help-1", callId: "call-1" }])).toEqual({
+      calls: [{ helpSessionId: "help-1", callId: "call-1", status: "settled" }],
+    });
+    relay.dispose();
+  });
+
+  it("counts a notice still on its way, or one it can't read, as watched", async () => {
+    const { links, relay } = harness([["link-1", "sender-a"]], {
+      watchingNoticeCalls: () => {
+        throw new Error("service down");
+      },
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await links[0]!.call({ ...notifyCall, callId: "call-1" });
+    expect(await status(links[0]!, [{ helpSessionId: "help-1", callId: "call-1" }])).toEqual({
+      calls: [{ helpSessionId: "help-1", callId: "call-1", status: "watching" }],
+    });
+    warn.mockRestore();
+    relay.dispose();
+
+    const unanswered = harness([["link-1", "sender-a"]]);
+    (unanswered.links[0]!.ctx.session as unknown as { call: unknown }).call = () =>
+      new Promise(() => {});
+    await unanswered.links[0]!.call({ ...notifyCall, callId: "call-1" });
+    unanswered.opened[0]!.spec.deliverNotices([notice("call-1")]);
+    expect(
+      await status(unanswered.links[0]!, [{ helpSessionId: "help-1", callId: "call-1" }])
+    ).toEqual({ calls: [{ helpSessionId: "help-1", callId: "call-1", status: "watching" }] });
+    unanswered.relay.dispose();
+  });
+
+  it("answers for a watch still armed even once it has no record of the call", async () => {
+    const { links, relay } = harness([["link-1", "sender-a"]], {
+      watchingNoticeCalls: () => new Set(["call-x"]),
+    });
+    expect(await status(links[0]!, [{ helpSessionId: "help-1", callId: "call-x" }])).toEqual({
+      calls: [{ helpSessionId: "help-1", callId: "call-x", status: "watching" }],
+    });
+    relay.dispose();
+  });
+
+  it("keeps no record of a call it refused, so refusals never crowd out one it holds", async () => {
+    const { links, relay } = harness([["link-1", "sender-a"]], {
+      hasProject: async (projectId) => projectId === "project-1",
+    });
+    await links[0]!.call({ ...notifyCall, callId: "call-1" });
+    for (let i = 0; i < MAX_RELAY_NOTICE_STATUS_CALLS; i++) {
+      await links[0]!.call({ ...notifyCall, callId: `refused-${i}`, projectId: "nope" });
+    }
+    expect(
+      await status(links[0]!, [
+        { helpSessionId: "help-1", callId: "call-1" },
+        { helpSessionId: "help-1", callId: "refused-0" },
+      ])
+    ).toEqual({
+      calls: [
+        { helpSessionId: "help-1", callId: "call-1", status: "settled" },
+        { helpSessionId: "help-1", callId: "refused-0", status: "unknown" },
+      ],
+    });
+    relay.dispose();
+  });
+
+  it("lets no refusal crowd out a call it holds, even with its records full", async () => {
+    const { links, relay } = harness([["link-1", "sender-a"]], {
+      hasProject: async (projectId) => projectId === "project-1",
+    });
+    for (let i = 0; i < MAX_RELAY_NOTICE_STATUS_CALLS; i++) {
+      await links[0]!.call({ ...notifyCall, callId: `call-${i}` });
+    }
+    await links[0]!.call({ ...notifyCall, callId: "refused", projectId: "nope" });
+    expect(await status(links[0]!, [{ helpSessionId: "help-1", callId: "call-0" }])).toEqual({
+      calls: [{ helpSessionId: "help-1", callId: "call-0", status: "settled" }],
+    });
+    relay.dispose();
+  });
+
+  it("counts a notice that left for its Shell while it read the notice service as watched", async () => {
+    let handOff: () => void = () => {};
+    const { links, opened, relay } = harness([["link-1", "sender-a"]], {
+      watchingNoticeCalls: async () => {
+        handOff();
+        return new Set();
+      },
+    });
+    // The Shell hasn't answered the notices yet, so they still wait here.
+    (links[0]!.ctx.session as unknown as { call: unknown }).call = () => new Promise(() => {});
+    await links[0]!.call({ ...notifyCall, callId: "call-1" });
+    handOff = () => opened[0]!.spec.deliverNotices([notice("call-1")]);
+    expect(await status(links[0]!, [{ helpSessionId: "help-1", callId: "call-1" }])).toEqual({
+      calls: [{ helpSessionId: "help-1", callId: "call-1", status: "watching" }],
+    });
+    relay.dispose();
+  });
+
+  it("says a call whose notice was crowded out before its Shell took it is gone", async () => {
+    const { links, opened, relay } = harness([["link-1", "sender-a"]]);
+    (links[0]!.ctx.session as unknown as { call: unknown }).call = () => new Promise(() => {});
+    await links[0]!.call({ ...notifyCall, callId: "call-1" });
+    await links[0]!.call({ ...notifyCall, callId: "call-2" });
+    opened[0]!.spec.deliverNotices([
+      notice("call-1"),
+      ...Array.from({ length: MAX_RELAY_NOTICES_PER_SENDER }, () => notice("call-2")),
+    ]);
+    expect(
+      await status(links[0]!, [
+        { helpSessionId: "help-1", callId: "call-1" },
+        { helpSessionId: "help-1", callId: "call-2" },
+      ])
+    ).toEqual({
+      calls: [
+        { helpSessionId: "help-1", callId: "call-1", status: "unknown" },
+        { helpSessionId: "help-1", callId: "call-2", status: "watching" },
+      ],
+    });
+    relay.dispose();
+  });
+
+  it("forgets a retired principal's calls, so its Shell hears their notices are gone", async () => {
+    vi.useFakeTimers();
+    let clock = 0;
+    const { links, relay } = harness([["link-1", "sender-a"]], {
+      now: () => clock,
+      idleMs: 60 * 60_000,
+      retirePrincipal: () => {},
+    });
+    await links[0]!.call({ ...notifyCall, callId: "call-1" });
+    clock = 25 * 60 * 60_000;
+    vi.advanceTimersByTime(60_000);
+
+    expect(await status(links[0]!, [{ helpSessionId: "help-1", callId: "call-1" }])).toEqual({
+      calls: [{ helpSessionId: "help-1", callId: "call-1", status: "unknown" }],
+    });
     relay.dispose();
   });
 });
@@ -545,5 +850,447 @@ describe("installHostMcpRelay approvals (#13501)", () => {
       },
     ]);
     relay.dispose();
+  });
+});
+
+describe("throwaway calls on a host that doesn't run them yet (#14444)", () => {
+  const THROWAWAY = {
+    helpSessionId: "help-1",
+    tier: "core",
+    callId: "call-1",
+    resend: false,
+    call: { tool: "throwaway.launch", args: { agentId: "claude" } },
+    runMs: 90_000,
+  };
+
+  it("tells an authenticated sender they are off, touching no project or session", async () => {
+    const hasProject = vi.fn(async () => true);
+    const { links, opened, relay } = harness([["link-1", "sender-a"]], { hasProject });
+    await expect(links[0]!.ask(AssistantLinkMethod.THROWAWAY_CALL, THROWAWAY)).resolves.toEqual({
+      status: "refused",
+      reason: "throwaway-off",
+    });
+    expect(hasProject).not.toHaveBeenCalled();
+    expect(opened).toHaveLength(0);
+    relay.dispose();
+  });
+
+  it("answers control-off while the person refuses remote control, and nothing to a stranger", async () => {
+    const off = harness([["link-1", "sender-a"]], { acceptsRemoteControl: () => false });
+    await expect(off.links[0]!.ask(AssistantLinkMethod.THROWAWAY_CALL, THROWAWAY)).resolves.toEqual(
+      { status: "refused", reason: "control-off" }
+    );
+    off.relay.dispose();
+    const stranger = harness([["link-1", null]]);
+    await expect(
+      stranger.links[0]!.ask(AssistantLinkMethod.THROWAWAY_CALL, THROWAWAY)
+    ).rejects.toMatchObject({ code: "PERMISSION" });
+    stranger.relay.dispose();
+  });
+
+  it("carries no project, and a newer host's unknown refusal reads as turned off", () => {
+    expect(ThrowawayCallPayloadSchema.safeParse(THROWAWAY).success).toBe(true);
+    expect(
+      ThrowawayCallPayloadSchema.safeParse({ ...THROWAWAY, projectId: "project-1" }).success
+    ).toBe(false);
+    expect(
+      ThrowawayCallPayloadSchema.safeParse({
+        ...THROWAWAY,
+        call: { tool: "terminal.list", args: {} },
+      }).success
+    ).toBe(false);
+    expect(ThrowawayCallAnswerSchema.parse({ status: "refused", reason: "busy" })).toEqual({
+      status: "refused",
+      reason: "throwaway-off",
+    });
+    // Every reason this Shell knows keeps its own meaning.
+    for (const reason of ["control-off", "throwaway-off", "expiry-unsupported"]) {
+      expect(ThrowawayCallAnswerSchema.parse({ status: "refused", reason })).toEqual({
+        status: "refused",
+        reason,
+      });
+    }
+    const run = {
+      runId: "run-1",
+      agentId: "claude",
+      startedAt: 1_000,
+      ageMs: 0,
+      timeLimitMs: null,
+      expiresAt: null,
+      state: "running",
+      endedAt: null,
+      endReason: null,
+    };
+    for (const answer of [
+      { status: "done", result: { tool: "throwaway.launch", run } },
+      { status: "failed", reason: "not-found" },
+      { status: "unknown" },
+      { status: "conflict" },
+    ]) {
+      expect(ThrowawayCallAnswerSchema.parse(answer)).toEqual(answer);
+    }
+    expect(ThrowawayCallAnswerSchema.safeParse({ status: "failed", reason: "busy" }).success).toBe(
+      false
+    );
+  });
+});
+
+describe("throwaway calls on a host that runs them (#14446)", () => {
+  const RUN = {
+    runId: "run-1",
+    agentId: "claude",
+    startedAt: 1_000,
+    ageMs: 0,
+    timeLimitMs: null,
+    expiresAt: null,
+    state: "running" as const,
+    endedAt: null,
+    endReason: null,
+  };
+  const LAUNCH = {
+    helpSessionId: "help-1",
+    tier: "core",
+    callId: "call-1",
+    resend: false,
+    call: { tool: "throwaway.launch", args: { agentId: "claude" } },
+    runMs: 90_000,
+  };
+
+  it("runs them for the proven sender and help session, opening no project session", async () => {
+    const hasProject = vi.fn(async () => true);
+    const run = vi.fn(async () => ({
+      status: "done" as const,
+      result: { tool: "throwaway.launch" as const, run: RUN },
+    }));
+    const { links, opened, relay } = harness([["link-1", "sender-a"]], {
+      hasProject,
+      throwawayRuns: () => ({ run, endOwner: vi.fn() }),
+    });
+    await expect(links[0]!.ask(AssistantLinkMethod.THROWAWAY_CALL, LAUNCH)).resolves.toEqual({
+      status: "done",
+      result: { tool: "throwaway.launch", run: RUN },
+    });
+    expect(run).toHaveBeenCalledWith(
+      { senderId: "sender-a", helpSessionId: "help-1" },
+      LAUNCH.call,
+      { callId: "call-1", timeoutMs: 90_000 }
+    );
+    expect(hasProject).not.toHaveBeenCalled();
+    expect(opened).toHaveLength(0);
+    relay.dispose();
+  });
+
+  it("answers a resend over the Shell's next session from the first send, launching once", async () => {
+    const run = vi.fn(async () => ({
+      status: "done" as const,
+      result: { tool: "throwaway.launch" as const, run: RUN },
+    }));
+    const { links, attach, relay } = harness([["link-1", "sender-a"]], {
+      throwawayRuns: () => ({ run, endOwner: vi.fn() }),
+    });
+    const first = await links[0]!.ask(AssistantLinkMethod.THROWAWAY_CALL, LAUNCH);
+    const next = attach("link-2", "sender-a");
+    await expect(
+      next.ask(AssistantLinkMethod.THROWAWAY_CALL, { ...LAUNCH, resend: true })
+    ).resolves.toEqual(first);
+    // Another Shell's sender under the same id is its own call: no record to resend.
+    const other = attach("link-3", "sender-b");
+    await expect(
+      other.ask(AssistantLinkMethod.THROWAWAY_CALL, { ...LAUNCH, resend: true })
+    ).resolves.toEqual({ status: "unknown" });
+    expect(run).toHaveBeenCalledTimes(1);
+    await other.ask(AssistantLinkMethod.THROWAWAY_CALL, LAUNCH);
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(run).toHaveBeenLastCalledWith(
+      { senderId: "sender-b", helpSessionId: "help-1" },
+      LAUNCH.call,
+      expect.anything()
+    );
+    relay.dispose();
+  });
+
+  it("refuses them while the person refuses remote control, before the executor is read", async () => {
+    const throwawayRuns = vi.fn(() => ({ run: vi.fn(), endOwner: vi.fn() }));
+    const { links, relay } = harness([["link-1", "sender-a"]], {
+      acceptsRemoteControl: () => false,
+      throwawayRuns,
+    });
+    await expect(links[0]!.ask(AssistantLinkMethod.THROWAWAY_CALL, LAUNCH)).resolves.toEqual({
+      status: "refused",
+      reason: "control-off",
+    });
+    expect(throwawayRuns).not.toHaveBeenCalled();
+    relay.dispose();
+  });
+});
+
+describe("throwaway runs of an owner that is gone (#14447)", () => {
+  const LAUNCH = {
+    helpSessionId: "help-1",
+    tier: "core",
+    callId: "call-1",
+    resend: false,
+    call: { tool: "throwaway.launch", args: { agentId: "claude" } },
+    runMs: 90_000,
+  };
+
+  function withRuns(links: Array<[string, string | null]>) {
+    const endOwner = vi.fn<HostThrowawayExecutor["endOwner"]>();
+    const run = vi.fn<HostThrowawayExecutor["run"]>(async () => ({
+      status: "failed",
+      reason: "launch-failed",
+    }));
+    return { endOwner, ...harness(links, { throwawayRuns: () => ({ run, endOwner }) }) };
+  }
+
+  it("closes one help session's runs when its Shell says it ended, for the proven sender only", async () => {
+    const { links, endOwner, relay } = withRuns([
+      ["link-1", "sender-a"],
+      ["link-2", null],
+    ]);
+    await expect(
+      links[0]!.ask(AssistantLinkMethod.THROWAWAY_RELEASE, { helpSessionId: "help-1" })
+    ).resolves.toEqual({});
+    expect(endOwner).toHaveBeenCalledWith(
+      { senderId: "sender-a", helpSessionId: "help-1" },
+      "session-ended"
+    );
+    await expect(
+      links[1]!.ask(AssistantLinkMethod.THROWAWAY_RELEASE, { helpSessionId: "help-1" })
+    ).rejects.toMatchObject({ code: "PERMISSION" });
+    expect(endOwner).toHaveBeenCalledTimes(1);
+    relay.dispose();
+  });
+
+  it("closes a sender's runs once its last link has been gone past the grace", async () => {
+    vi.useFakeTimers();
+    const { links, endOwner, relay, detach } = withRuns([["link-1", "sender-a"]]);
+    await links[0]!.ask(AssistantLinkMethod.THROWAWAY_CALL, LAUNCH);
+    detach("link-1");
+    await vi.advanceTimersByTimeAsync(THROWAWAY_SHELL_GONE_GRACE_MS - 1);
+    expect(endOwner).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(endOwner).toHaveBeenCalledWith({ senderId: "sender-a" }, "shell-gone");
+    relay.dispose();
+  });
+
+  it("keeps a sender's runs while another of its links is open, or one comes back in time", async () => {
+    vi.useFakeTimers();
+    const { links, endOwner, relay, detach, attach } = withRuns([
+      ["link-1", "sender-a"],
+      ["link-2", "sender-a"],
+    ]);
+    await links[0]!.ask(AssistantLinkMethod.THROWAWAY_CALL, LAUNCH);
+    detach("link-1");
+    await vi.advanceTimersByTimeAsync(THROWAWAY_SHELL_GONE_GRACE_MS);
+    expect(endOwner).not.toHaveBeenCalled();
+
+    await links[1]!.ask(AssistantLinkMethod.THROWAWAY_CALL, { ...LAUNCH, callId: "call-2" });
+    detach("link-2");
+    attach("link-3", "sender-a");
+    await vi.advanceTimersByTimeAsync(THROWAWAY_SHELL_GONE_GRACE_MS);
+    expect(endOwner).not.toHaveBeenCalled();
+    relay.dispose();
+  });
+
+  it("counts a last link that never made a throwaway call", async () => {
+    vi.useFakeTimers();
+    const { links, endOwner, relay, detach } = withRuns([
+      ["link-1", "sender-a"],
+      ["link-2", "sender-a"],
+    ]);
+    await links[0]!.ask(AssistantLinkMethod.THROWAWAY_CALL, LAUNCH);
+    detach("link-1");
+    detach("link-2");
+    await vi.advanceTimersByTimeAsync(THROWAWAY_SHELL_GONE_GRACE_MS);
+    expect(endOwner).toHaveBeenCalledWith({ senderId: "sender-a" }, "shell-gone");
+    relay.dispose();
+  });
+
+  it("still names the sender of a link whose resumed transport dropped before proving it", async () => {
+    vi.useFakeTimers();
+    const { links, endOwner, relay, detach, attach } = withRuns([["link-1", "sender-a"]]);
+    await links[0]!.ask(AssistantLinkMethod.THROWAWAY_CALL, LAUNCH);
+    // A new transport takes the link over, then both go before it authenticates.
+    attach("link-1", null);
+    detach("link-1");
+    detach("link-1");
+    await vi.advanceTimersByTimeAsync(THROWAWAY_SHELL_GONE_GRACE_MS);
+    expect(endOwner).toHaveBeenCalledWith({ senderId: "sender-a" }, "shell-gone");
+    relay.dispose();
+  });
+
+  it("gives each last link gone the whole grace, however recently another went", async () => {
+    vi.useFakeTimers();
+    const { links, endOwner, relay, detach, attach } = withRuns([["link-1", "sender-a"]]);
+    await links[0]!.ask(AssistantLinkMethod.THROWAWAY_CALL, LAUNCH);
+    detach("link-1");
+    await vi.advanceTimersByTimeAsync(10_000);
+    // Back without a throwaway call, then gone again.
+    attach("link-2", "sender-a");
+    await vi.advanceTimersByTimeAsync(10_000);
+    detach("link-2");
+    await vi.advanceTimersByTimeAsync(THROWAWAY_SHELL_GONE_GRACE_MS - 1);
+    expect(endOwner).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(endOwner).toHaveBeenCalledTimes(1);
+    relay.dispose();
+  });
+
+  it("closes them at once when the Shell's last link expires, even after its sender was forgotten", async () => {
+    const { links, endOwner, relay, expire } = withRuns([
+      ["link-1", "sender-a"],
+      ["link-2", "sender-b"],
+    ]);
+    await links[0]!.ask(AssistantLinkMethod.THROWAWAY_CALL, LAUNCH);
+    expire("link-2");
+    expect(endOwner).not.toHaveBeenCalledWith({ senderId: "sender-a" }, "shell-gone");
+    expire("link-1");
+    expect(endOwner).toHaveBeenCalledWith({ senderId: "sender-a" }, "shell-gone");
+    relay.dispose();
+  });
+
+  it("arms nothing once disposed", async () => {
+    vi.useFakeTimers();
+    const { links, endOwner, relay, detach } = withRuns([["link-1", "sender-a"]]);
+    await links[0]!.ask(AssistantLinkMethod.THROWAWAY_CALL, LAUNCH);
+    detach("link-1");
+    relay.dispose();
+    await vi.advanceTimersByTimeAsync(THROWAWAY_SHELL_GONE_GRACE_MS);
+    expect(endOwner).not.toHaveBeenCalled();
+  });
+});
+
+describe("a Shell listing this host's agents (#14455)", () => {
+  const DIRECTORY = {
+    coverage: "ok" as const,
+    observedAt: 7,
+    complete: true,
+    omitted: 0,
+    entries: [
+      {
+        state: "live" as const,
+        role: "worker" as const,
+        subject: {
+          hostId: "local",
+          scope: { kind: "project" as const, projectId: "project-1" },
+          terminalId: "t-1",
+          incarnation: 3,
+        },
+        agentId: "claude",
+        agentState: "idle" as const,
+        waitingReason: null,
+        since: null,
+        label: null,
+        attached: null,
+        handback: null,
+      },
+    ],
+  };
+
+  it("answers with its own directory, filtered by the project the Shell names", async () => {
+    const readAgents = vi.fn(async () => DIRECTORY);
+    const openSession = vi.fn();
+    const { links, relay } = harness([["link-1", "sender-a"]], { readAgents, openSession });
+    await expect(
+      links[0]!.ask(AssistantLinkMethod.AGENTS, { projectId: "project-1" })
+    ).resolves.toEqual({ status: "done", directory: DIRECTORY });
+    expect(readAgents).toHaveBeenCalledWith({ projectId: "project-1" });
+    // Listing opens no MCP session, and so takes no tier, grant or ownership.
+    expect(openSession).not.toHaveBeenCalled();
+    relay.dispose();
+  });
+
+  it("reads nothing for a session that proved no sender", async () => {
+    const readAgents = vi.fn(async () => DIRECTORY);
+    const { links, relay } = harness([["link-1", null]], { readAgents });
+    await expect(links[0]!.ask(AssistantLinkMethod.AGENTS, {})).rejects.toMatchObject({
+      code: "PERMISSION",
+    });
+    expect(readAgents).not.toHaveBeenCalled();
+    relay.dispose();
+  });
+
+  it("refuses without reading while this host's own setting is off, or once it goes off", async () => {
+    const readAgents = vi.fn(async () => DIRECTORY);
+    const off = harness([["link-1", "sender-a"]], {
+      readAgents,
+      acceptsRemoteControl: () => false,
+    });
+    await expect(off.links[0]!.ask(AssistantLinkMethod.AGENTS, {})).resolves.toEqual({
+      status: "refused",
+      reason: "control-off",
+    });
+    expect(readAgents).not.toHaveBeenCalled();
+    off.relay.dispose();
+
+    let accepts = true;
+    const revoked = harness([["link-1", "sender-a"]], {
+      acceptsRemoteControl: () => accepts,
+      readAgents: async () => {
+        accepts = false;
+        return DIRECTORY;
+      },
+    });
+    await expect(revoked.links[0]!.ask(AssistantLinkMethod.AGENTS, {})).resolves.toEqual({
+      status: "refused",
+      reason: "control-off",
+    });
+    revoked.relay.dispose();
+  });
+
+  it("is unsupported without a directory, and unreachable when its read throws", async () => {
+    const none = harness([["link-1", "sender-a"]]);
+    await expect(none.links[0]!.ask(AssistantLinkMethod.AGENTS, {})).rejects.toMatchObject({
+      code: "UNSUPPORTED",
+    });
+    none.relay.dispose();
+
+    const broken = harness([["link-1", "sender-a"]], {
+      readAgents: async () => {
+        throw new Error("boom");
+      },
+    });
+    await expect(broken.links[0]!.ask(AssistantLinkMethod.AGENTS, {})).resolves.toEqual({
+      status: "done",
+      directory: {
+        coverage: "unreachable",
+        observedAt: null,
+        complete: false,
+        omitted: 0,
+        entries: [],
+      },
+    });
+    broken.relay.dispose();
+  });
+
+  it("keeps a stale or partial read as it is, and cuts one too large to send", async () => {
+    const stale = { ...DIRECTORY, coverage: "stale" as const, complete: false, omitted: 2 };
+    const partial = harness([["link-1", "sender-a"]], { readAgents: async () => stale });
+    await expect(partial.links[0]!.ask(AssistantLinkMethod.AGENTS, {})).resolves.toEqual({
+      status: "done",
+      directory: stale,
+    });
+    partial.relay.dispose();
+
+    const entry = DIRECTORY.entries[0]!;
+    const many = {
+      ...DIRECTORY,
+      entries: Array.from({ length: 256 }, (_, index) => ({
+        ...entry,
+        subject: { ...entry.subject, terminalId: `t-${index}` },
+        label: "x".repeat(120),
+      })),
+    };
+    const big = harness([["link-1", "sender-a"]], { readAgents: async () => many });
+    const answer = (await big.links[0]!.ask(AssistantLinkMethod.AGENTS, {})) as {
+      directory: { omitted: number; entries: unknown[] };
+    };
+    expect(answer.directory.omitted).toBeGreaterThan(0);
+    expect(answer.directory.omitted + answer.directory.entries.length).toBe(256);
+    expect(new TextEncoder().encode(JSON.stringify(answer.directory)).length).toBeLessThanOrEqual(
+      AGENT_DIRECTORY_BYTES_MAX
+    );
+    big.relay.dispose();
   });
 });

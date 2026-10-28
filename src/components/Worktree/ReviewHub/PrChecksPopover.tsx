@@ -17,6 +17,9 @@ import {
   type PrCheckRow,
 } from "./prChecks";
 import { pluralize } from "@/lib/pluralize";
+import { PrMergeControl } from "./PrMergeControl";
+import { PrMergeConfirmDialog } from "./PrMergeConfirmDialog";
+import type { PrMergeRequest } from "./prMergeModel";
 
 /**
  * Set on the trigger — which is always in the hub's own DOM — while the
@@ -84,6 +87,11 @@ export function PrChecksPopover({
   const [state, setState] = useState<ChecksState>({ kind: "idle" });
   const [sendHint, setSendHint] = useState<string | null>(null);
   const [showSettled, setShowSettled] = useState(false);
+  const [mergeReloadKey, setMergeReloadKey] = useState(0);
+  // Lives outside the popover: opening the confirm moves focus out, which
+  // closes the popover and would unmount a dialog mounted inside it.
+  const [mergeRequest, setMergeRequest] = useState<PrMergeRequest | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
 
   // Monotonic, not a cancelled flag: the popover can be closed and reopened, and
   // the reload re-fired, while an earlier read is still in flight. Only the
@@ -167,6 +175,17 @@ export function PrChecksPopover({
     return () => window.removeEventListener("keydown", onKeyDown, { capture: true });
   }, [open, handleOpenChange]);
 
+  const handleMergeRequest = useCallback((request: PrMergeRequest) => {
+    // The dialog hands focus back to the trigger itself when it closes.
+    suppressCloseFocusRef.current = true;
+    setOpen(false);
+    requestIdRef.current += 1;
+    setSendHint(null);
+    setShowSettled(false);
+    setState({ kind: "idle" });
+    setMergeRequest(request);
+  }, []);
+
   const handleSend = useCallback(() => {
     if (state.kind !== "loaded") return;
     const text = composePrChecksAgentText({ prNumber, prUrl, worktreePath, rows: state.rows });
@@ -198,10 +217,13 @@ export function PrChecksPopover({
       </p>
       <Popover open={open} onOpenChange={handleOpenChange}>
         <PopoverTrigger
+          ref={triggerRef}
           type="button"
           data-testid="pr-checks-trigger"
           aria-label={triggerLabel}
-          {...{ [PR_CHECKS_OPEN_ATTR]: open ? "true" : undefined }}
+          // Also held while the merge confirm is up: the hub's Escape would
+          // otherwise close the whole hub out from under the dialog.
+          {...{ [PR_CHECKS_OPEN_ATTR]: open || mergeRequest !== null ? "true" : undefined }}
           className={cn(
             "group/pr-checks inline-flex items-center rounded-sm cursor-pointer",
             FOCUS_RING
@@ -300,6 +322,13 @@ export function PrChecksPopover({
             </p>
           )}
 
+          <PrMergeControl
+            worktreePath={worktreePath}
+            prNumber={prNumber}
+            reloadKey={mergeReloadKey}
+            onRequest={handleMergeRequest}
+          />
+
           {/* Mounted in every state on purpose. Re-reading used to unmount the
             control that triggered it, which for a keyboard user dropped focus
             onto `document.body` inside an open popover. */}
@@ -309,7 +338,10 @@ export function PrChecksPopover({
               variant="subtle"
               size="sm"
               data-testid="pr-checks-reload"
-              onClick={runFetch}
+              onClick={() => {
+                runFetch();
+                setMergeReloadKey((key) => key + 1);
+              }}
               className={FOOTER_BUTTON_MOTION}
             >
               <RefreshCw aria-hidden="true" />
@@ -344,6 +376,13 @@ export function PrChecksPopover({
           </div>
         </PopoverContent>
       </Popover>
+      <PrMergeConfirmDialog
+        worktreePath={worktreePath}
+        prNumber={prNumber}
+        request={mergeRequest}
+        onClose={() => setMergeRequest(null)}
+        restoreFocusTo={triggerRef}
+      />
     </>
   );
 }

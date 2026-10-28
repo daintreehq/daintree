@@ -6,6 +6,10 @@ import {
   backtickFenceFor,
   closingFenceForOpenBlock,
 } from "@shared/utils/agentContextDrag";
+import {
+  findContextReferences,
+  type ContextReferenceToken,
+} from "@shared/utils/pluginContextReference";
 
 /**
  * Drop the context tokens that sit inside a plugin's handoff block. The block
@@ -38,6 +42,27 @@ export interface TokenExpansion {
   start: number;
   end: number;
   replacement: string;
+  /**
+   * The replacement is a fenced block that must stand on lines of its own: a
+   * fence the text before it leaves open is closed first and reopened after
+   * it, and what follows it on the token's line moves to the next one, so its
+   * closing fence ends it.
+   */
+  block?: boolean;
+}
+
+/**
+ * `out` with `block` started on a fresh line, after any fence `out` leaves
+ * open is closed. Returns that fence, which the caller reopens once the block
+ * is in, so the user's own closing fence still closes their code block rather
+ * than opening a new one over the rest of the prompt.
+ */
+function spliceBlock(out: string, block: string): { out: string; reopen: string | null } {
+  let head = out.replace(/[ \t]+$/, "");
+  const closer = closingFenceForOpenBlock(head);
+  if (head.length > 0 && !head.endsWith("\n")) head += "\n";
+  if (closer !== null) head += `${closer}\n`;
+  return { out: head + block, reopen: closer };
 }
 
 /**
@@ -66,8 +91,20 @@ export function resolveTokenExpansions(
     while (next < sorted.length && sorted[next]!.start < limit) {
       const expansion = sorted[next++]!;
       if (expansion.start < cursor) continue;
-      out += text.slice(cursor, expansion.start) + expansion.replacement;
+      out += text.slice(cursor, expansion.start);
+      if (!expansion.block) {
+        out += expansion.replacement;
+        cursor = expansion.end;
+        continue;
+      }
+      const spliced = spliceBlock(out, expansion.replacement);
+      out = spliced.out;
+      // Spaces after the token would open the next line; a newline is never
+      // skipped, so this can't run past a handoff block, which starts a line.
       cursor = expansion.end;
+      while (cursor < text.length && (text[cursor] === " " || text[cursor] === "\t")) cursor++;
+      if (spliced.reopen !== null) out += `\n${spliced.reopen}`;
+      if (cursor < text.length && text[cursor] !== "\n") out += "\n";
     }
     if (cursor < limit) out += text.slice(cursor, limit);
     cursor = Math.max(cursor, limit);
@@ -85,12 +122,19 @@ export function resolveTokenExpansions(
 }
 
 /**
+ * A char that opens a composer menu: an agent's declared completion triggers,
+ * plus `#`, Daintree's own issue and pull request references, which no agent
+ * declares.
+ */
+export type ComposerTrigger = CompletionTrigger | "#";
+
+/**
  * One completion menu is open at a time, keyed by the trigger char that opened
  * it. `query` is the triggerless token text between the trigger and the caret;
  * `start`/`tokenEnd` bound the whole token in the document.
  */
 export interface ActiveCompletionContext {
-  triggerChar: CompletionTrigger;
+  triggerChar: ComposerTrigger;
   start: number;
   tokenEnd: number;
   query: string;
@@ -99,8 +143,8 @@ export interface ActiveCompletionContext {
 /** Narrow an arbitrary char to a declared trigger without an unsafe assertion. */
 function activeTrigger(
   ch: string,
-  activeTriggers: ReadonlySet<CompletionTrigger>
-): CompletionTrigger | null {
+  activeTriggers: ReadonlySet<ComposerTrigger>
+): ComposerTrigger | null {
   for (const trigger of activeTriggers) {
     if (trigger === ch) return trigger;
   }
@@ -113,12 +157,13 @@ function activeTrigger(
  * FIRST char is an active trigger — a start-or-whitespace boundary that rejects
  * `email@x`, `a/b`, `http://…` while still allowing OTHER triggers inside the
  * token (the `/` in `@src/App.tsx`). A repeated instance of the SAME trigger in
- * the query rejects it (`//help`, `$$foo`, `@@x`, and slash-path `/usr/bin`).
+ * the query rejects it (`//help`, `$$foo`, `@@x`, `## Heading`, and slash-path
+ * `/usr/bin`).
  */
 export function getActiveCompletionContext(
   text: string,
   caret: number,
-  activeTriggers: ReadonlySet<CompletionTrigger>
+  activeTriggers: ReadonlySet<ComposerTrigger>
 ): ActiveCompletionContext | null {
   if (caret < 0 || caret > text.length) return null;
 
@@ -138,6 +183,15 @@ export function getActiveCompletionContext(
   while (tokenEnd < text.length && !/\s/.test(text[tokenEnd]!)) tokenEnd++;
 
   return { triggerChar, start, tokenEnd, query };
+}
+
+/**
+ * Every plugin context reference (`@rec:142`, #13795) outside handoff blocks,
+ * whatever its prefix: which ones a provider holds is decided per project, by
+ * main at send time and by the chip field's provider list in the editor.
+ */
+export function getAllAtContextReferences(text: string): ContextReferenceToken[] {
+  return outsideHandoffBlocks(text, findContextReferences(text));
 }
 
 /** Daintree's own `@` providers; each claims its prefix ahead of `@file`. */

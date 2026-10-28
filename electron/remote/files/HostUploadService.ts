@@ -9,7 +9,7 @@ import type { TransferSink } from "../link/transfer.js";
 import { copyInto, NEW_FILE_FLAGS } from "./exclusiveCopy.js";
 import { componentsBelow, openDirectoryBeneath, type HeldDirectory } from "./hostContainment.js";
 import type { HostFileEndpoint } from "./HostFileService.js";
-import { HostInbox, sanitizeInboxName } from "./hostInbox.js";
+import { HostInbox, sanitizeInboxName, truncateName } from "./hostInbox.js";
 import {
   UPLOAD_SINK_PREFIX,
   UploadLinkMethod,
@@ -42,6 +42,12 @@ export interface HostUploadServiceOptions {
   /** The project's current drive lease, which a replace token is bound to; null when none. */
   leaseIdFor?(projectId: string): number | null;
   inbox: HostInbox;
+  /**
+   * An inbox file now stands for this endpoint's upload, placed or reused:
+   * that endpoint may open exactly it (and no one else's) from then on, while
+   * it is still open on that project.
+   */
+  onInboxFile?(endpoint: HostFileEndpoint, projectId: string, hostPath: string): void;
   maxUploadBytes?: number;
   /** Bytes free for a new file in `dir`, or null when unknown. */
   freeBytes?(dir: string): Promise<number | null>;
@@ -406,21 +412,26 @@ export class HostUploadService {
     if (record.fingerprint !== fingerprint) throw operationInUse();
     if (record.state === "preparing") return { status: "refused", reason: "busy" };
     if (record.state === "placing") {
+      let timer: ReturnType<typeof setTimeout> | undefined;
       const waited = await Promise.race([
         record.settled.then(() => true),
         new Promise<false>((resolve) => {
-          const timer = setTimeout(
+          timer = setTimeout(
             () => resolve(false),
             this.options.retryWaitMs ?? DEFAULT_RETRY_WAIT_MS
           );
           timer.unref?.();
         }),
       ]);
+      clearTimeout(timer);
       if (!waited) return { status: "refused", reason: "busy" };
       record = this.operations.get(key);
       if (!record) return "fresh";
       if (record.fingerprint !== fingerprint) throw operationInUse();
-      if (record.state === "preparing") return { status: "refused", reason: "busy" };
+      // Another attempt of this operation took the id meanwhile: never clear what it holds.
+      if (record.state === "preparing" || record.state === "placing") {
+        return { status: "refused", reason: "busy" };
+      }
     }
     if (record.state === "committed" && record.hostPath !== null) {
       return { status: "done", hostPath: record.hostPath, bytes: record.bytes };
@@ -564,7 +575,11 @@ export class HostUploadService {
         payload.sha256,
         payload.size
       );
-      if (duplicate) return { status: "duplicate", hostPath: duplicate };
+      if (duplicate) {
+        // Reused for bytes this endpoint proved it has: the candidate was re-hashed.
+        this.options.onInboxFile?.(endpoint, projectId, duplicate);
+        return { status: "duplicate", hostPath: duplicate };
+      }
       if (!(await this.hasRoom(this.options.inbox.root, payload.size))) {
         return { status: "refused", reason: "no-space" };
       }
@@ -821,7 +836,9 @@ export class HostUploadService {
       }
       // The bytes go into a temporary entry of our own first, so a failure
       // never touches the final name, and only that entry is ever cleaned up.
-      const tempName = `.${target.name.slice(0, 100)}.daintree-upload-${token.slice(0, 8)}`;
+      // Its share of the name is bounded as the host's filesystem counts it,
+      // so the entry fits wherever the final name does.
+      const tempName = `.${truncateName(target.name, 100)}.daintree-upload-${token.slice(0, 8)}`;
       const source = await fs.open(part.path, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
       let tempExists = false;
       try {
@@ -954,6 +971,9 @@ export class HostUploadService {
           // A replacement can't be taken back; it stands, and a retry is told where it went.
           outcome = placed;
           if (aborted) throw new Error("cancelled");
+          if (target.kind === "inbox") {
+            this.options.onInboxFile?.(pending.endpoint, pending.projectId, placed);
+          }
           return placed;
         } finally {
           settleOutcome(outcome);

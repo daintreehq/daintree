@@ -39,7 +39,9 @@ const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_MAX_TOTAL_BYTES = 1024 * 1024 * 1024;
 const DEFAULT_MAX_CLIPBOARD_IMAGES = 50;
 const DEFAULT_STALE_PART_MS = 60 * 60 * 1000;
-const MAX_NAME_LENGTH = 200;
+/** The longest name a filesystem holds, as {@link nameLength} counts it. */
+const MAX_NAME_LENGTH = 255;
+const MAX_EXTENSION_LENGTH = 20;
 const ID_LENGTH = 12;
 const PART_PREFIX = ".part-";
 const MAX_DIR_ATTEMPTS = 100;
@@ -48,8 +50,37 @@ export function defaultInboxRoot(): string {
   return path.join(os.tmpdir(), HOST_INBOX_DIR_NAME);
 }
 
+/**
+ * A name's length as this host's filesystems limit it: 255 bytes on Linux
+ * (ext4, XFS, Btrfs), 255 UTF-16 units on macOS (APFS) and Windows (NTFS).
+ */
+export function nameLength(name: string, platform: NodeJS.Platform = process.platform): number {
+  return platform === "darwin" || platform === "win32" ? name.length : Buffer.byteLength(name);
+}
+
+/** The longest start of `name` within `max` ({@link nameLength}), never splitting a character. */
+export function truncateName(
+  name: string,
+  max: number,
+  platform: NodeJS.Platform = process.platform
+): string {
+  if (nameLength(name, platform) <= max) return name;
+  let kept = "";
+  let length = 0;
+  for (const char of name) {
+    const size = nameLength(char, platform);
+    if (length + size > max) break;
+    kept += char;
+    length += size;
+  }
+  return kept;
+}
+
 /** A name from the Shell, made safe to create here: no control characters or separators, bounded. */
-export function sanitizeInboxName(name: string): string {
+export function sanitizeInboxName(
+  name: string,
+  platform: NodeJS.Platform = process.platform
+): string {
   let cleaned = "";
   for (const char of name) {
     const code = char.codePointAt(0)!;
@@ -58,9 +89,9 @@ export function sanitizeInboxName(name: string): string {
     cleaned += char;
   }
   cleaned = cleaned.replace(/^[.\s]+/, "").trim();
-  if (cleaned.length > MAX_NAME_LENGTH) {
-    const ext = path.extname(cleaned).slice(0, 20);
-    cleaned = cleaned.slice(0, MAX_NAME_LENGTH - ext.length) + ext;
+  if (nameLength(cleaned, platform) > MAX_NAME_LENGTH) {
+    const ext = truncateName(path.extname(cleaned), MAX_EXTENSION_LENGTH, platform);
+    cleaned = truncateName(cleaned, MAX_NAME_LENGTH - nameLength(ext, platform), platform) + ext;
   }
   return cleaned || "file";
 }
@@ -262,10 +293,11 @@ export class HostInbox {
         const entryDir = path.join(dir, entry);
         const dirStat = await fs.lstat(entryDir).catch(() => null);
         if (!dirStat?.isDirectory()) continue;
-        // The placed name may have had its image extension corrected; the stem is what the user named.
+        // The placed name may have had its image extension corrected (and its
+        // stem shortened to make room); the stem is what the user named.
         const wanted = stemOf(sanitizeInboxName(name));
         const inner = (await fs.readdir(entryDir).catch(() => [] as string[])).find(
-          (innerName) => stemOf(innerName) === wanted
+          (innerName) => sanitizeInboxName(wanted + path.extname(innerName)) === innerName
         );
         if (!inner) continue;
         candidate = path.join(entryDir, inner);
@@ -294,7 +326,8 @@ export class HostInbox {
     const id = sha256.slice(0, ID_LENGTH);
     const stamp = inboxTimestamp(this.now());
     const head = await readHead(partPath);
-    const safeName = reconcileImageExtension(sanitizeInboxName(name), head);
+    // Bounded again: a corrected image extension can be a character longer.
+    const safeName = sanitizeInboxName(reconcileImageExtension(sanitizeInboxName(name), head));
     await this.ensure();
     if (bucket === "clipboard") {
       const detected = detectImageType(head);

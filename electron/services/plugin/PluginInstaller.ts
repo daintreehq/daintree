@@ -28,6 +28,7 @@ import { getPluginMcpSupervisor } from "../PluginMcpSupervisor.js";
 import { getPluginMcpConsentService, getPluginMcpRateLimiter } from "../plugin-mcp/instances.js";
 import { getPluginCapabilityConsentService } from "../plugin-capability/instances.js";
 import { clearProjectPluginVisibilityForPlugin } from "./projectPluginVisibility.js";
+import { findUnusablePluginAssets } from "./pluginManifestAssetFiles.js";
 import { wipeSettingsFile } from "../PluginSettingsStore.js";
 import type {
   PluginManifest,
@@ -38,6 +39,12 @@ import type {
   PluginCheckUpdateResult,
   InstalledPluginRecord,
 } from "../../../shared/types/plugin.js";
+import {
+  EXTERNAL_LINK_CONSENT,
+  PLUGIN_PANEL_ATTENTION_GRANT,
+  type PluginCapabilityIdentity,
+  type PluginGrantKey,
+} from "../../../shared/types/pluginCapabilityConsent.js";
 import type { PluginInstalledRecordsStore } from "./PluginInstalledRecordsStore.js";
 
 // proper-lockfile is CJS-only and ships no bundled types. Require it via the
@@ -66,12 +73,16 @@ const properLockfile: ProperLockfile = req("proper-lockfile");
 const STALE_PARKED_OLD_RE = /\.old-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
- * Minimal view of a loaded plugin the installer needs — only `isBuiltin` is
- * read (to decide whether the on-disk dir is the installer's to delete). The
- * full {@link LoadedPlugin} stays core-owned in PluginService.
+ * Minimal view of a loaded plugin the installer needs: `isBuiltin` (whether the
+ * on-disk dir is the installer's to delete), `devMode` (whether the code on
+ * disk is still the archive the record names) and the manifest a rolled-back
+ * upgrade offers grants back against. The full {@link LoadedPlugin} stays
+ * core-owned in PluginService.
  */
 interface InstallerPluginInfo {
   isBuiltin: boolean;
+  devMode?: boolean;
+  manifest: Readonly<PluginManifest>;
 }
 
 interface PluginInstallerDeps {
@@ -100,6 +111,12 @@ interface PluginInstallerDeps {
    * reload, where the recipes are expected back with their frecency intact.
    */
   purgeRecipeMetadata: (pluginId: string) => Promise<void>;
+  /**
+   * Delete the user-scope settings, secrets, accounts and storage of every
+   * per-project instance an `instanceMode: "project"` package ever had. Wired to
+   * the settings-wiping uninstall only, beside the package's own files.
+   */
+  wipeProjectInstanceData?: (pluginId: string) => Promise<void>;
   /** Lookup for the running or skipped-at-launch plugin (only `isBuiltin` is consumed). */
   getPlugin: (pluginId: string) => InstallerPluginInfo | undefined;
   /** Shared launch-time name reservation set — stays PluginService-owned (read by a test cast). */
@@ -110,6 +127,38 @@ interface PluginInstallerDeps {
   blockedPlugins: Map<string, unknown>;
   /** Version of the installed plugin under this id, loaded, disabled or blocklisted; null when none. */
   getInstalledVersion: (pluginId: string) => string | null;
+  /** How the installed plugin under this id runs, loaded, disabled, blocklisted or catalogued; null when none. */
+  getInstalledInstanceMode: (pluginId: string) => InstalledInstanceMode | null;
+}
+
+/** Whether a package runs as one shared singleton or as one instance per project. */
+export type InstalledInstanceMode = "singleton" | "project";
+
+type InstalledManifestFields = { name?: unknown; version?: unknown; instanceMode?: unknown };
+
+function instanceModeOf(manifest: { instanceMode?: unknown }): InstalledInstanceMode {
+  return manifest.instanceMode === "project" ? "project" : "singleton";
+}
+
+/** The mode a manifest read off disk declares, or null when its field isn't one the schema allows. */
+function declaredInstanceMode(manifest: { instanceMode?: unknown }): InstalledInstanceMode | null {
+  if (manifest.instanceMode === undefined) return "singleton";
+  return manifest.instanceMode === "project" ? "project" : null;
+}
+
+/** The manifest in an installed plugin's folder, or null when it can't be read. */
+async function readInstalledManifest(dir: string): Promise<InstalledManifestFields | null> {
+  try {
+    const raw: unknown = JSON.parse(
+      stripUtf8Bom(await fs.readFile(path.join(dir, "plugin.json"), "utf-8"))
+    );
+    return raw !== null && typeof raw === "object" && !Array.isArray(raw)
+      ? (raw as InstalledManifestFields)
+      : null;
+  } catch {
+    // Unreadable: the caller falls back to the service's record of it.
+    return null;
+  }
 }
 
 /**
@@ -227,6 +276,70 @@ export class PluginInstaller {
         `[PluginService] capability consent purge during ${context} of "${pluginId}" threw:`,
         err
       );
+    }
+  }
+
+  /**
+   * The capability grants a replacing install is about to purge (#14019), read
+   * first so they can be offered back, whether the new version loads or the
+   * upgrade rolls back.
+   * Best-effort like the purge itself: a failed read offers nothing back and
+   * never strands the install.
+   */
+  private _readCapabilityGrants(pluginId: string): PluginCapabilityIdentity[] {
+    try {
+      return getPluginCapabilityConsentService().listGrantsForPlugin(pluginId);
+    } catch (err) {
+      console.error(
+        `[PluginService] reading the capability grants of "${pluginId}" before its upgrade threw:`,
+        err
+      );
+      return [];
+    }
+  }
+
+  /**
+   * Offer back the purged grants the new version still asks for, in one
+   * approval (#14019). Not awaited by the install: the answer can take minutes
+   * and must not hold `install.lock`. The offer only counts while this archive
+   * is still what is installed and, when a version was loaded, while that
+   * exact instance is the one running — a reload of any kind voids it. The
+   * service checks both again on the answer.
+   */
+  private _offerCapabilityGrantsBack(
+    pluginId: string,
+    manifest: Readonly<PluginManifest>,
+    archiveHash: string | null,
+    purged: readonly PluginCapabilityIdentity[],
+    instance?: unknown
+  ): void {
+    const grants = purged.filter((grant) => stillAsksFor(manifest, grant.capability));
+    if (grants.length === 0) return;
+    try {
+      void getPluginCapabilityConsentService()
+        .offerRestore({
+          pluginId,
+          pluginDisplayName: manifest.displayName ?? manifest.name,
+          grants,
+          declaredCapabilities: manifest.capabilities ?? [],
+          isCurrent: () => {
+            const record = this.records.getInstalledRecord(pluginId);
+            if (record === undefined || record.archiveHash !== archiveHash) return false;
+            return instance === undefined || this.deps.getPlugin(pluginId) === instance;
+          },
+        })
+        // The Plugin Manager's switches read these grants; tell it they are back.
+        .then((restored) => {
+          if (restored) this.deps.broadcastProvenanceChanged();
+        })
+        .catch((err: unknown) => {
+          console.error(
+            `[PluginService] offering back the permissions of "${pluginId}" threw:`,
+            err
+          );
+        });
+    } catch (err) {
+      console.error(`[PluginService] offering back the permissions of "${pluginId}" threw:`, err);
     }
   }
 
@@ -373,7 +486,10 @@ export class PluginInstaller {
           );
         }
         try {
-          await fs.cp(archivePath, tmpDir, { recursive: true });
+          // Verbatim, so a relative link between two files inside the plugin
+          // still resolves inside the staged copy instead of being rewritten to
+          // point back into the source directory.
+          await fs.cp(archivePath, tmpDir, { recursive: true, verbatimSymlinks: true });
         } catch (err) {
           return fail(
             "archive_invalid",
@@ -447,6 +563,17 @@ export class PluginInstaller {
       }
       const manifest = parsed.data;
 
+      // Every file the manifest declares has to be there before anything is
+      // swapped (#14091): a tour scene, view or knowledge file that never
+      // shipped otherwise installs clean and only fails once it is opened.
+      const unusable = await findUnusablePluginAssets(tmpDir, manifest);
+      if (unusable.length > 0) {
+        return {
+          status: "failed",
+          errors: unusable.map((message) => ({ code: "archive_invalid", message })),
+        };
+      }
+
       // A matching digest already proves these are the reviewed bytes; this
       // keeps the destination below from ever being a different installed
       // plugin than the one the user approved updating.
@@ -503,9 +630,24 @@ export class PluginInstaller {
       // so a check made before queueing can't be stale by the time this
       // replaces anything: an update queued behind a newer one must not
       // downgrade it, and an install queued behind another must not replace it.
+      const installedManifest = existing ? await readInstalledManifest(finalDir) : null;
       if (replacement) {
-        const refusal = replacement(await this.installedVersion(pluginId, finalDir, existing));
+        const refusal = replacement(this.installedVersion(pluginId, installedManifest));
         if (refusal) return fail("archive_mismatch", refusal);
+      }
+
+      // A mode change strands state either way (#14256): settings, grants and
+      // enablements are keyed by the bare id for a singleton and per project
+      // for instances, and nothing carries one across to the other.
+      const incomingMode = instanceModeOf(manifest);
+      const installedModes = this.installedInstanceModes(pluginId, installedManifest);
+      if (installedModes.some((mode) => mode !== incomingMode)) {
+        return fail(
+          "instance_mode_changed",
+          incomingMode === "project"
+            ? `This update makes "${pluginId}" run separately in each project. Uninstall it first, then install the new version.`
+            : `This update makes "${pluginId}" run once for every project instead of separately in each. Uninstall it first, then install the new version.`
+        );
       }
 
       // Abort before the irreversible swap if the lock was compromised — a
@@ -522,6 +664,9 @@ export class PluginInstaller {
       // slip between "still cancellable" and the first irreversible operation.
       if (!pluginInstallJobs.commit(jobId)) return cancelled;
       pluginInstallJobs.setPhase(jobId, "activating");
+
+      // Read before the unload below drops the running instance.
+      const replacingDevInstance = existing && this.deps.getPlugin(pluginId)?.devMode === true;
 
       if (existing) {
         // A reload rather than a plain unload: agents running against this
@@ -575,7 +720,26 @@ export class PluginInstaller {
       // it can't use a stale pin. Best-effort + durable: a failed persist is
       // logged loudly but never strands the install (worst case is a skipped
       // re-prompt the user can revoke manually).
-      if (existing) {
+      //
+      // The one exception is a byte-identical archive (#14019): no code
+      // changed, so there is nothing for the approvals to be reset against.
+      // Without a prior digest to compare — a directory install, or a record
+      // from before provenance — it counts as new code, and so does a dev
+      // instance, whose code on disk is no longer the archive its record names.
+      //
+      // Capture the prior record first: the new provenance is written before
+      // `loadPlugin`, so a post-swap load failure on an upgrade must restore the
+      // OLD record alongside the OLD directory — otherwise Settings and
+      // `checkForUpdate` would baseline against the version that never loaded.
+      const previousRecord = existing ? this.records.getInstalledRecord(pluginId) : undefined;
+      const sameArchive =
+        hash !== null &&
+        previousRecord?.archiveHash === hash &&
+        previousRecord.devMode !== true &&
+        !replacingDevInstance;
+      let purgedGrants: PluginCapabilityIdentity[] = [];
+      if (existing && !sameArchive) {
+        purgedGrants = this._readCapabilityGrants(pluginId);
         this._purgeConsentPins(pluginId, "upgrade");
       }
 
@@ -585,12 +749,6 @@ export class PluginInstaller {
       // the prior record, so omitting `installedAt` from the patch keeps it.
       // Clear any prior update signal: the user just reinstalled, so whatever
       // `updateAvailable` flagged is now resolved (#9297).
-      //
-      // Capture the prior record first: the new provenance is written before
-      // `loadPlugin`, so a post-swap load failure on an upgrade must restore the
-      // OLD record alongside the OLD directory — otherwise Settings and
-      // `checkForUpdate` would baseline against the version that never loaded.
-      const previousRecord = existing ? this.records.getInstalledRecord(pluginId) : undefined;
       this.records.upsertInstalledRecord(pluginId, {
         source: opts?.source ?? "sideload",
         originalUrl: opts?.originalUrl ?? null,
@@ -630,6 +788,7 @@ export class PluginInstaller {
           });
         }
         this.deps.broadcastProvenanceChanged();
+        this._offerCapabilityGrantsBack(pluginId, manifest, hash, purgedGrants);
         return { status: "installed", pluginId };
       }
 
@@ -651,6 +810,7 @@ export class PluginInstaller {
           finalDir,
           existing ? parked : null,
           previousRecord,
+          purgedGrants,
           `Plugin "${pluginId}" installed but failed to load: ${(err as Error).message}. Retry from Settings.`
         );
       }
@@ -663,6 +823,7 @@ export class PluginInstaller {
           finalDir,
           existing ? parked : null,
           previousRecord,
+          purgedGrants,
           `Plugin "${pluginId}" installed but failed to load. Retry from Settings.`
         );
       }
@@ -679,6 +840,9 @@ export class PluginInstaller {
 
       // setPluginArchiveHash requires the plugin to be loaded; call it after.
       if (hash) this.deps.setPluginArchiveHash(pluginId, hash);
+      // Offered before activation so the dialog queues ahead of any first-use
+      // prompt the new version raises while it starts.
+      this._offerCapabilityGrantsBack(pluginId, manifest, hash, purgedGrants, loaded);
       await this.deps.activatePlugin(pluginId);
 
       this.deps.broadcastProvenanceChanged();
@@ -708,23 +872,30 @@ export class PluginInstaller {
    * old manifest in memory), else what the plugin service holds for it, loaded,
    * disabled or blocklisted.
    */
-  private async installedVersion(
+  private installedVersion(
     pluginId: string,
-    finalDir: string,
-    existing: boolean
-  ): Promise<string | null> {
-    if (existing) {
-      try {
-        const raw: unknown = JSON.parse(
-          stripUtf8Bom(await fs.readFile(path.join(finalDir, "plugin.json"), "utf-8"))
-        );
-        const version = (raw as { version?: unknown } | null)?.version;
-        if (typeof version === "string") return version;
-      } catch {
-        // Unreadable: fall back to the service's record of it.
-      }
-    }
+    installedManifest: InstalledManifestFields | null
+  ): string | null {
+    const version = installedManifest?.version;
+    if (typeof version === "string") return version;
     return this.deps.getInstalledVersion(pluginId);
+  }
+
+  /**
+   * Every mode the plugin installed under `pluginId` is known to run in: the
+   * manifest in its folder when that is this plugin's, and what the plugin
+   * service holds for it. Both count, unlike {@link installedVersion}: a dev
+   * link edited while disabled can say one thing on disk while the service
+   * still runs it, and keeps its state, the other way.
+   */
+  private installedInstanceModes(
+    pluginId: string,
+    installedManifest: InstalledManifestFields | null
+  ): InstalledInstanceMode[] {
+    const declared =
+      installedManifest?.name === pluginId ? declaredInstanceMode(installedManifest) : null;
+    const recorded = this.deps.getInstalledInstanceMode(pluginId);
+    return [declared, recorded].filter((mode): mode is InstalledInstanceMode => mode !== null);
   }
 
   /**
@@ -749,6 +920,7 @@ export class PluginInstaller {
     finalDir: string,
     parked: string | null,
     previousRecord: InstalledPluginRecord | undefined,
+    purgedGrants: readonly PluginCapabilityIdentity[],
     message: string
   ): Promise<PluginInstallResult> {
     const failed: PluginInstallResult = {
@@ -815,7 +987,23 @@ export class PluginInstaller {
         isBuiltin: false,
         disabled: this.records.getDisabledIds(),
       });
-      if (restored) await this.deps.activatePlugin(pluginId);
+      if (restored) {
+        // The old version is running again, but the upgrade already purged its
+        // grants. They are offered back rather than restored: the directory
+        // coming back doesn't prove which code holds the id now (#14019). Only
+        // when the instance registered is the one just reloaded, and bound to it.
+        const current = this.deps.getPlugin(pluginId);
+        if (current !== undefined && current === restored && previousRecord) {
+          this._offerCapabilityGrantsBack(
+            pluginId,
+            current.manifest,
+            previousRecord.archiveHash,
+            purgedGrants,
+            current
+          );
+        }
+        await this.deps.activatePlugin(pluginId);
+      }
     } catch (reloadErr) {
       console.error(
         `[PluginService] Failed to restore "${pluginId}" runtime state after a post-swap load failure:`,
@@ -1237,6 +1425,20 @@ export class PluginInstaller {
       // such write from putting it back.
       if (wipeSettings) {
         await wipeSettingsFile(path.join(this.deps.getSettingsRoot(), `${pluginId}.json`));
+        // The host-managed account's tokens go with the settings they sit beside.
+        await wipeSettingsFile(
+          path.join(this.deps.getSettingsRoot(), "accounts", `${pluginId}.json`)
+        );
+        if (this.deps.wipeProjectInstanceData) {
+          try {
+            await this.deps.wipeProjectInstanceData(pluginId);
+          } catch (err) {
+            console.error(
+              `[PluginService] wiping per-project instance data during uninstall of "${pluginId}" threw:`,
+              err
+            );
+          }
+        }
       }
 
       // Bookkeeping runs only after the filesystem deletion succeeds — if `fs.rm`
@@ -1277,4 +1479,18 @@ export class PluginInstaller {
       );
     }
   }
+}
+
+/**
+ * Whether a new version still asks for what a grant was for (#14019). A
+ * capability is asked for by declaring it; "Show in attention views" by a
+ * panel kind that reports activity. No manifest declares the sites it opens
+ * links to, so a site is never offered back and asks again on first use.
+ */
+function stillAsksFor(manifest: Readonly<PluginManifest>, capability: PluginGrantKey): boolean {
+  if (capability === EXTERNAL_LINK_CONSENT) return false;
+  if (capability === PLUGIN_PANEL_ATTENTION_GRANT) {
+    return manifest.contributes.panels.some((panel) => panel.reportsActivity === true);
+  }
+  return manifest.capabilities?.includes(capability) ?? false;
 }

@@ -1,5 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { z } from "zod";
+
+vi.mock("electron", () => ({
+  webContents: { fromId: vi.fn(() => null), getAllWebContents: vi.fn(() => []) },
+  BrowserWindow: { fromWebContents: vi.fn(() => null), getAllWindows: vi.fn(() => []) },
+}));
+
 import { EndpointRegistryImpl } from "../../../ipc/endpointRegistry.js";
+import { DriveLeaseService } from "../../../services/DriveLeaseService.js";
 import type { EndpointInvocation, RemoteSessionExpiryCause } from "../../../ipc/endpoint.js";
 import { logBuffer } from "../../../services/LogBuffer.js";
 import { wrapSuccess } from "../../../../shared/utils/ipcErrorSerialization.js";
@@ -21,6 +29,7 @@ function fakeLink() {
   const closeListeners = new Set<() => void>();
   const posted: Array<{ lane: number; kind: number; body: unknown }> = [];
   const calls: Array<{ method: string; payload: unknown }> = [];
+  const callHandlers = new Map<string, { schema: z.ZodType; handler: (p: never) => unknown }>();
   const link = {
     isOpen: true,
     isClosed: false,
@@ -43,7 +52,19 @@ function fakeLink() {
       closeListeners.add(cb);
       return () => closeListeners.delete(cb);
     },
-    registerCallHandler: () => () => {},
+    registerCallHandler(method: string, schema: z.ZodType, handler: (p: never) => unknown) {
+      const entry = { schema, handler };
+      callHandlers.set(method, entry);
+      return () => {
+        if (callHandlers.get(method) === entry) callHandlers.delete(method);
+      };
+    },
+    /** What the Shell's CALL would run, its payload validated as the session would. */
+    runCall(method: string, payload: unknown) {
+      const entry = callHandlers.get(method);
+      if (!entry) throw new Error(`no handler for ${method}`);
+      return entry.handler(entry.schema.parse(payload) as never);
+    },
     setInvokeHandler(handler: ((m: unknown) => Promise<IpcEnvelope>) | null) {
       link.invokeHandler = handler;
     },
@@ -86,11 +107,11 @@ function fakeServer() {
       expiredListeners.add(l);
       return () => expiredListeners.delete(l);
     },
-    attach(sessionId: string, link: ReturnType<typeof fakeLink>, resumed = false) {
+    attach(sessionId: string, link: ReturnType<typeof fakeLink>, resumed = false, clientId = "c1") {
       const ctx = {
         sessionId,
         resumed,
-        client: { clientId: "c1", clientName: "greg-mbp", platform: "darwin" as const },
+        client: { clientId, clientName: "greg-mbp", platform: "darwin" as const },
         session: link as unknown as LinkSession,
       };
       for (const l of sessionListeners) l(ctx);
@@ -134,8 +155,17 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function open(link: ReturnType<typeof fakeLink>, endpointId: string, projectId: string | null) {
-  link.emit(Lane.CONTROL, ControlKind.ENDPOINT_OPEN, { endpointId, projectId });
+function open(
+  link: ReturnType<typeof fakeLink>,
+  endpointId: string,
+  projectId: string | null,
+  openId?: string
+) {
+  link.emit(Lane.CONTROL, ControlKind.ENDPOINT_OPEN, {
+    endpointId,
+    projectId,
+    ...(openId ? { openId } : {}),
+  });
 }
 
 describe("SessionHost", () => {
@@ -456,6 +486,209 @@ describe("SessionHost", () => {
   });
 });
 
+describe("SessionHost: endpoint changes a dropped link lost (#13917)", () => {
+  function resumed(): ReturnType<typeof fakeLink> {
+    const link = fakeLink();
+    server.attach("s1", link, true);
+    return link;
+  }
+
+  it("closes what a resumed Shell no longer holds, as the Shell's own close would", () => {
+    const first = fakeLink();
+    server.attach("s1", first);
+    open(first, "view-1", "p1", "o1");
+    open(first, "view-2", "p2", "o2");
+    const kept = host.getEndpoint("s1", "view-1")!;
+    const lost = host.getEndpoint("s1", "view-2")!;
+    first.drop();
+
+    const second = resumed();
+    open(second, "view-1", "p1", "o1");
+    second.runCall(LinkMethod.ENDPOINT_RECONCILE, { endpointIds: ["view-1"] });
+
+    expect(lost.closeCause).toBe("client-closed");
+    expect(host.getEndpoint("s1", "view-2")).toBeUndefined();
+    expect(registry.getRemote()).toEqual([kept]);
+  });
+
+  describe("with the endpoint cap full of what the Shell closed", () => {
+    /** view-2's close was lost; view-3's repeated open finds the allowance of two taken. */
+    function crowded() {
+      const first = fakeLink();
+      server.attach("s1", first);
+      open(first, "view-1", "p1", "o1");
+      open(first, "view-2", "p2", "o2");
+      first.drop();
+      const second = resumed();
+      const opened = vi.fn();
+      host.onEndpointOpened(opened);
+      open(second, "view-1", "p1", "o1");
+      open(second, "view-3", "p3", "o3");
+      expect(host.getEndpoint("s1", "view-3")).toBeUndefined();
+      return { second, opened };
+    }
+
+    it("opens the crowded-out view within the reconcile, and tells it to resync", () => {
+      const { second, opened } = crowded();
+
+      second.runCall(LinkMethod.ENDPOINT_RECONCILE, { endpointIds: ["view-1", "view-3"] });
+
+      expect(host.getEndpoint("s1", "view-2")).toBeUndefined();
+      const reopened = host.getEndpoint("s1", "view-3")!;
+      expect(reopened).toMatchObject({ projectId: "p3", openId: "o3" });
+      // Its bridges are in place before the stream requests behind the call arrive.
+      expect(opened).toHaveBeenCalledWith(reopened, expect.anything());
+      expect(second.calls.at(-1)).toEqual({
+        method: LinkMethod.ENDPOINT_RESYNC,
+        payload: { endpointIds: ["view-3"], reason: "reattached" },
+      });
+    });
+
+    it("opens it on the project the Shell moved it to since", () => {
+      const { second } = crowded();
+      second.emit(Lane.CONTROL, ControlKind.ENDPOINT_REBIND, {
+        endpointId: "view-3",
+        projectId: "p4",
+      });
+      second.runCall(LinkMethod.ENDPOINT_RECONCILE, { endpointIds: ["view-1", "view-3"] });
+      expect(host.getEndpoint("s1", "view-3")?.projectId).toBe("p4");
+    });
+
+    it("leaves closed a crowded-out view the Shell closed before reconciling", () => {
+      const { second } = crowded();
+      second.emit(Lane.CONTROL, ControlKind.ENDPOINT_CLOSE, { endpointId: "view-3" });
+      second.runCall(LinkMethod.ENDPOINT_RECONCILE, { endpointIds: ["view-1", "view-3"] });
+      expect(host.getEndpoint("s1", "view-3")).toBeUndefined();
+      expect(registry.getRemote()).toHaveLength(1);
+    });
+  });
+
+  it("keeps an endpoint opened after the Shell's list, which the control lane put ahead of it", () => {
+    const first = fakeLink();
+    server.attach("s1", first);
+    open(first, "view-1", "p1", "o1");
+    open(first, "view-2", "p2", "o2");
+    first.drop();
+
+    const second = resumed();
+    open(second, "view-1", "p1", "o1");
+    // The Shell had closed view-2 and opened it again since it took the list.
+    open(second, "view-2", "p2", "o3");
+    const reopened = host.getEndpoint("s1", "view-2")!;
+    second.runCall(LinkMethod.ENDPOINT_RECONCILE, { endpointIds: ["view-1"] });
+
+    expect(reopened.isClosed()).toBe(false);
+    expect(registry.getRemote()).toHaveLength(2);
+  });
+
+  it("starts a view afresh when it is opened again under another open, and only then", () => {
+    const link = fakeLink();
+    server.attach("s1", link);
+    open(link, "view-1", "p1", "o1");
+    const first = host.getEndpoint("s1", "view-1")!;
+    open(link, "view-1", "p1", "o1");
+    // A Shell that names no open moves the endpoint, as it always has.
+    open(link, "view-1", "p2");
+    expect(host.getEndpoint("s1", "view-1")).toBe(first);
+    expect(first.projectId).toBe("p2");
+
+    open(link, "view-1", "p1", "o2");
+
+    const reopened = host.getEndpoint("s1", "view-1")!;
+    expect(reopened).not.toBe(first);
+    expect(first.closeCause).toBe("client-closed");
+    expect(reopened.projectId).toBe("p1");
+    expect(registry.getRemote()).toEqual([reopened]);
+  });
+
+  it("tells the Shell to resync a view whose open the drop lost", () => {
+    const first = fakeLink();
+    server.attach("s1", first);
+    open(first, "view-1", "p1", "o1");
+    first.drop();
+
+    const second = resumed();
+    open(second, "view-1", "p1", "o1");
+    open(second, "view-2", "p2", "o2");
+    second.runCall(LinkMethod.ENDPOINT_RECONCILE, { endpointIds: ["view-1", "view-2"] });
+
+    expect(second.calls).toEqual([
+      {
+        method: LinkMethod.ENDPOINT_RESYNC,
+        payload: { endpointIds: ["view-1"], reason: "reattached" },
+      },
+      {
+        method: LinkMethod.ENDPOINT_RESYNC,
+        payload: { endpointIds: ["view-2"], reason: "reattached" },
+      },
+    ]);
+  });
+
+  describe("and the drive lease the lost view held", () => {
+    const GRACE_MS = 1_000;
+    let lease: DriveLeaseService;
+
+    const settle = async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    };
+
+    beforeEach(() => {
+      lease = new DriveLeaseService({
+        registry,
+        releaseGraceMs: GRACE_MS,
+        now: () => 1_000,
+        applyDriveLeases: () => {},
+      });
+      host.onTransportChange((endpointIds, attached) =>
+        lease.noteEndpointTransport(endpointIds, attached)
+      );
+    });
+
+    afterEach(() => lease.dispose());
+
+    /** A laptop holding p closes its view, loses the close with its link, and comes back. */
+    async function laptopLosesItsClose() {
+      const laptop = fakeLink();
+      server.attach("s1", laptop);
+      open(laptop, "view-1", "p", "o1");
+      await settle();
+      const desk = fakeLink();
+      server.attach("s2", desk, false, "c2");
+      open(desk, "view-1", "p", "o1");
+      await settle();
+      expect(lease.getHolder("p")?.endpointId).toBe("remote:s1:view-1");
+      laptop.drop();
+      return {
+        desk: host.getEndpoint("s2", "view-1")!,
+        resume: async () => {
+          resumed().runCall(LinkMethod.ENDPOINT_RECONCILE, { endpointIds: [] });
+          await settle();
+        },
+      };
+    }
+
+    it("gives it up through the release grace, then to the successor", async () => {
+      const { resume } = await laptopLosesItsClose();
+      await resume();
+
+      vi.advanceTimersByTime(GRACE_MS - 1);
+      expect(lease.getHolder("p")?.endpointId).toBe("remote:s1:view-1");
+      vi.advanceTimersByTime(1);
+      expect(lease.getHolder("p")?.endpointId).toBe("remote:s2:view-1");
+    });
+
+    it("leaves a takeover made while the laptop was away where it is", async () => {
+      const { desk, resume } = await laptopLosesItsClose();
+      const taken = lease.takeOver("p", desk);
+      await resume();
+
+      vi.advanceTimersByTime(GRACE_MS * 2);
+      expect(lease.getHolder("p")).toEqual(taken);
+    });
+  });
+});
+
 describe("SessionHost: the project a Shell last showed here", () => {
   const client = (clientName: string) => ({
     clientId: `${clientName}-launch`,
@@ -724,6 +957,191 @@ describe("SessionHost assistant liveness (#13349)", () => {
 
     sessions.refreshAssistants();
     expect(assistantCalls(link)).toHaveLength(1);
+  });
+});
+
+describe("SessionHost residency (#13933)", () => {
+  /** Projects the user granted residency on this host. */
+  let granted: Set<string>;
+  let sessions: SessionHost;
+  let fake: ReturnType<typeof fakeServer>;
+
+  beforeEach(() => {
+    granted = new Set();
+    fake = fakeServer();
+    sessions = new SessionHost(fake, {
+      dispatcher: { invokeForEndpoint: async () => wrapSuccess(null), sendForEndpoint: () => {} },
+      registry: new EndpointRegistryImpl(),
+      keepResident: (endpoint) => granted.has(endpoint.projectId ?? ""),
+    });
+  });
+
+  afterEach(() => sessions.dispose());
+
+  const residencyCalls = (link: ReturnType<typeof fakeLink>) =>
+    link.call.mock.calls
+      .filter(([method]) => method === LinkMethod.ENDPOINT_RESIDENCY)
+      .map(([, payload]) => payload);
+
+  it("answers a view that opens onto a granted project, and only changes after", () => {
+    granted.add("p1");
+    const link = fakeLink();
+    fake.attach("s1", link);
+    open(link, "view-1", "p1");
+    open(link, "view-2", "p2");
+    expect(residencyCalls(link)).toEqual([
+      { endpoints: [{ endpointId: "view-1", projectId: "p1", keepResident: true }] },
+      { endpoints: [{ endpointId: "view-2", projectId: "p2", keepResident: false }] },
+    ]);
+
+    sessions.refreshResidency();
+    expect(residencyCalls(link)).toHaveLength(2);
+
+    granted.delete("p1");
+    granted.add("p2");
+    sessions.refreshResidency();
+    expect(residencyCalls(link).at(-1)).toEqual({
+      endpoints: [
+        { endpointId: "view-1", projectId: "p1", keepResident: false },
+        { endpointId: "view-2", projectId: "p2", keepResident: true },
+      ],
+    });
+  });
+
+  it("answers again for a view that moved between two granted projects", () => {
+    granted.add("p1");
+    granted.add("p2");
+    const link = fakeLink();
+    fake.attach("s1", link);
+    open(link, "view-1", "p1");
+
+    link.emit(Lane.CONTROL, ControlKind.ENDPOINT_REBIND, { endpointId: "view-1", projectId: "p2" });
+
+    expect(residencyCalls(link).at(-1)).toEqual({
+      endpoints: [{ endpointId: "view-1", projectId: "p2", keepResident: true }],
+    });
+  });
+
+  it("tells a resumed Shell every view's answer, including a grant made while it was away", () => {
+    const first = fakeLink();
+    fake.attach("s1", first);
+    open(first, "view-1", "p1");
+    first.drop();
+
+    granted.add("p1");
+    sessions.refreshResidency();
+
+    const second = fakeLink();
+    fake.attach("s1", second, true);
+    expect(residencyCalls(second)).toEqual([
+      { endpoints: [{ endpointId: "view-1", projectId: "p1", keepResident: true }] },
+    ]);
+  });
+});
+
+describe("SessionHost MCP bindings (#14228)", () => {
+  /** Projects an external MCP session here is bound to, live. */
+  let bound: Set<string>;
+  let sessions: SessionHost;
+  let fake: ReturnType<typeof fakeServer>;
+
+  beforeEach(() => {
+    bound = new Set();
+    fake = fakeServer();
+    sessions = new SessionHost(fake, {
+      dispatcher: { invokeForEndpoint: async () => wrapSuccess(null), sendForEndpoint: () => {} },
+      registry: new EndpointRegistryImpl(),
+      mcpBindingLive: (endpoint) => bound.has(endpoint.projectId ?? ""),
+    });
+  });
+
+  afterEach(() => sessions.dispose());
+
+  const flush = async () => {
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+  };
+
+  const bindingCalls = (link: ReturnType<typeof fakeLink>) =>
+    link.call.mock.calls
+      .filter(([method]) => method === LinkMethod.ENDPOINT_MCP_BINDING)
+      .map(([, payload]) => payload);
+
+  it("answers a view that opens onto a bound project, and only changes after", () => {
+    bound.add("p1");
+    const link = fakeLink();
+    fake.attach("s1", link);
+    open(link, "view-1", "p1");
+    open(link, "view-2", "p2");
+    expect(bindingCalls(link)).toEqual([
+      { endpoints: [{ endpointId: "view-1", projectId: "p1", liveBinding: true }] },
+      { endpoints: [{ endpointId: "view-2", projectId: "p2", liveBinding: false }] },
+    ]);
+
+    sessions.refreshMcpBindings();
+    expect(bindingCalls(link)).toHaveLength(2);
+
+    bound.delete("p1");
+    bound.add("p2");
+    sessions.refreshMcpBindings();
+    expect(bindingCalls(link).at(-1)).toEqual({
+      endpoints: [
+        { endpointId: "view-1", projectId: "p1", liveBinding: false },
+        { endpointId: "view-2", projectId: "p2", liveBinding: true },
+      ],
+    });
+  });
+
+  it("answers again for a view that moved between two bound projects", () => {
+    bound.add("p1");
+    bound.add("p2");
+    const link = fakeLink();
+    fake.attach("s1", link);
+    open(link, "view-1", "p1");
+
+    link.emit(Lane.CONTROL, ControlKind.ENDPOINT_REBIND, { endpointId: "view-1", projectId: "p2" });
+
+    expect(bindingCalls(link).at(-1)).toEqual({
+      endpoints: [{ endpointId: "view-1", projectId: "p2", liveBinding: true }],
+    });
+  });
+
+  it("tells a resumed Shell every view's answer, including a session that bound while it was away", () => {
+    const first = fakeLink();
+    fake.attach("s1", first);
+    open(first, "view-1", "p1");
+    first.drop();
+
+    bound.add("p1");
+    sessions.refreshMcpBindings();
+
+    const second = fakeLink();
+    fake.attach("s1", second, true);
+    expect(bindingCalls(second)).toEqual([
+      { endpoints: [{ endpointId: "view-1", projectId: "p1", liveBinding: true }] },
+    ]);
+  });
+
+  it("asks an attached Shell again when it failed to take an answer, but not one from before the call", async () => {
+    const link = fakeLink();
+    fake.attach("s1", link);
+    open(link, "view-1", "p1");
+    link.call.mockRejectedValueOnce(Object.assign(new Error("busy"), { code: "RATE_LIMITED" }));
+    bound.add("p1");
+    sessions.refreshMcpBindings();
+    await flush();
+    vi.advanceTimersByTime(ANSWER_RETRY_MS);
+    expect(bindingCalls(link)).toHaveLength(3);
+    expect(bindingCalls(link).at(-1)).toEqual({
+      endpoints: [{ endpointId: "view-1", projectId: "p1", liveBinding: true }],
+    });
+
+    link.call.mockRejectedValueOnce(Object.assign(new Error("old"), { code: "UNSUPPORTED" }));
+    bound.delete("p1");
+    sessions.refreshMcpBindings();
+    await flush();
+    vi.advanceTimersByTime(ANSWER_RETRY_MS);
+    sessions.refreshMcpBindings();
+    expect(bindingCalls(link)).toHaveLength(4);
   });
 });
 

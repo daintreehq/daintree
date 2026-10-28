@@ -1,5 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
+import type { ActionId } from "@shared/types/actions";
 
 const panelStoreMock = vi.hoisted(() => ({ getState: vi.fn() }));
 const terminalInstanceServiceMock = vi.hoisted(() => ({
@@ -37,9 +38,23 @@ const pendingDestructiveStoreMock = vi.hoisted(() => {
 });
 
 vi.mock("@/store/panelStore", () => ({ usePanelStore: panelStoreMock }));
-vi.mock("@/services/terminal/TerminalInstanceService", () => ({
-  terminalInstanceService: terminalInstanceServiceMock,
+// ActionService is imported by the end-to-end plugin dispatch case; these are
+// what it reaches at module load.
+vi.mock("../../../../store/shortcutHintStore", () => ({
+  shortcutHintStore: {
+    getState: vi.fn(() => ({ counts: {}, show: vi.fn(), incrementCount: vi.fn() })),
+  },
 }));
+vi.mock("../../../KeybindingService", () => ({
+  keybindingService: { getEffectiveCombo: vi.fn(() => null), getDisplayCombo: vi.fn(() => "") },
+}));
+vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
+vi.mock("@/services/terminal/TerminalInstanceService", () => {
+  const terminalInstanceService = terminalInstanceServiceMock;
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 vi.mock("@/clients", () => ({ terminalClient: terminalClientMock }));
 vi.mock("@/store/viewWorkspaceId", () => viewWorkspaceIdMock);
 vi.mock("@/lib/watchNotification", () => ({
@@ -63,6 +78,13 @@ import { registerTerminalLifecycleActions } from "../terminalLifecycleActions";
 import type { TerminalPendingDestructiveActionSnapshot } from "@/store/terminalPendingDestructiveActionStore";
 import { MAX_KILL_BATCH_TERMINALS } from "@shared/types/terminalKillBatch";
 import { TerminalInOtherProjectError } from "@shared/utils/terminalInOtherProject";
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
+});
 
 type MockPanel = {
   id: string;
@@ -423,6 +445,7 @@ type AgentPanel = {
   launchAgentId?: string;
   agentState?: string;
   worktreeId?: string;
+  agentPresetId?: string;
 };
 
 function setRichPanelState(options: { focusedId?: string | null; panels: AgentPanel[] }) {
@@ -431,6 +454,7 @@ function setRichPanelState(options: { focusedId?: string | null; panels: AgentPa
   for (const p of panels) panelsById[p.id] = p;
   const removePanel = vi.fn();
   const restartTerminal = vi.fn();
+  const restartTerminalOnPreset = vi.fn().mockResolvedValue({ success: true });
   const bulkRestartAll = vi.fn().mockResolvedValue(undefined);
   const bulkRestartByWorktree = vi.fn().mockResolvedValue(undefined);
   panelStoreMock.getState.mockImplementation(() => ({
@@ -439,10 +463,11 @@ function setRichPanelState(options: { focusedId?: string | null; panels: AgentPa
     panelsById,
     removePanel,
     restartTerminal,
+    restartTerminalOnPreset,
     bulkRestartAll,
     bulkRestartByWorktree,
   }));
-  return { removePanel, restartTerminal, bulkRestartAll };
+  return { removePanel, restartTerminal, restartTerminalOnPreset, bulkRestartAll };
 }
 
 describe("terminal.kill confirm gate", () => {
@@ -854,6 +879,110 @@ describe("terminal.killBatch", () => {
       failedIds: [],
     });
     expect(removePanel).not.toHaveBeenCalled();
+  });
+});
+
+describe("terminal.restartOnPreset (#13746)", () => {
+  it("refuses without confirmation even when the agent is idle", async () => {
+    // A rate-limited agent is rarely working, and the conversation is lost
+    // whatever its state, so the working-only gate of terminal.restart can't apply.
+    const { restartTerminalOnPreset } = setRichPanelState({
+      focusedId: "p1",
+      panels: [{ id: "p1", location: "grid", detectedAgentId: "codex", agentState: "idle" }],
+    });
+    const run = setupActions();
+
+    await expect(
+      run("terminal.restartOnPreset", { terminalId: "p1", presetId: "work" })
+    ).rejects.toThrow(/confirmed/);
+
+    expect(restartTerminalOnPreset).not.toHaveBeenCalled();
+  });
+
+  it("restarts the pane on the preset once confirmed, and drops its rate-limit chip", async () => {
+    const { useRateLimitObservationStore } = await import("@/store/rateLimitObservationStore");
+    useRateLimitObservationStore.setState({ observedAtByTerminalId: { p1: Date.now() } });
+    const { restartTerminalOnPreset } = setRichPanelState({
+      focusedId: "p1",
+      panels: [{ id: "p1", location: "grid", detectedAgentId: "codex", agentState: "waiting" }],
+    });
+    const run = setupActions();
+
+    await run("terminal.restartOnPreset", { terminalId: "p1", presetId: "work", confirmed: true });
+
+    expect(restartTerminalOnPreset).toHaveBeenCalledWith("p1", "work");
+    expect(useRateLimitObservationStore.getState().observedAtByTerminalId.p1).toBeUndefined();
+  });
+
+  it("keeps an observation the new process made before the restart resolved", async () => {
+    const { useRateLimitObservationStore } = await import("@/store/rateLimitObservationStore");
+    useRateLimitObservationStore.setState({ observedAtByTerminalId: { p1: 1_000 } });
+    const { restartTerminalOnPreset } = setRichPanelState({
+      focusedId: "p1",
+      panels: [{ id: "p1", location: "grid", detectedAgentId: "codex", agentState: "waiting" }],
+    });
+    restartTerminalOnPreset.mockImplementation(async () => {
+      useRateLimitObservationStore.setState({ observedAtByTerminalId: { p1: 2_000 } });
+      return { success: true };
+    });
+    const run = setupActions();
+
+    await run("terminal.restartOnPreset", { terminalId: "p1", presetId: "work", confirmed: true });
+
+    expect(useRateLimitObservationStore.getState().observedAtByTerminalId.p1).toBe(2_000);
+  });
+
+  // The MCP owned tool never forwards `confirmed` (#14369): the host's prompt
+  // or grant is the approval, and the caller learns its brief is gone.
+  it("restarts on a host-attested confirm and says the conversation was cleared", async () => {
+    const pane: AgentPanel = {
+      id: "p1",
+      location: "grid",
+      detectedAgentId: "codex",
+      agentState: "waiting",
+      agentPresetId: "personal",
+    };
+    const { restartTerminalOnPreset } = setRichPanelState({ focusedId: "p1", panels: [pane] });
+    // The receipt reports what the store recorded, not the id the caller sent.
+    restartTerminalOnPreset.mockImplementation(async () => {
+      pane.agentPresetId = "work-resolved";
+      return { success: true };
+    });
+    const run = setupActions();
+
+    const result = await run(
+      "terminal.restartOnPreset",
+      { terminalId: "p1", presetId: "work" },
+      { dispatchSource: "agent", hostConfirmed: true }
+    );
+
+    expect(restartTerminalOnPreset).toHaveBeenCalledWith("p1", "work");
+    expect(result).toEqual({
+      terminalId: "p1",
+      agentPresetId: "work-resolved",
+      agentSessionIdCleared: true,
+    });
+  });
+
+  it("refuses the owned twin outside the MCP main-process path", async () => {
+    const run = setupActions();
+
+    await expect(
+      run("terminal.restartOnPresetOwned", { terminalId: "p1", presetId: "work" })
+    ).rejects.toThrow(/MCP main-process path/);
+  });
+
+  it("reports a respawn that failed instead of claiming success", async () => {
+    const { restartTerminalOnPreset } = setRichPanelState({
+      focusedId: "p1",
+      panels: [{ id: "p1", location: "grid", detectedAgentId: "codex", agentState: "waiting" }],
+    });
+    restartTerminalOnPreset.mockResolvedValue({ success: false, error: 'preset "work" not found' });
+    const run = setupActions();
+
+    await expect(
+      run("terminal.restartOnPreset", { terminalId: "p1", presetId: "work", confirmed: true })
+    ).rejects.toThrow(/not found/);
   });
 });
 
@@ -1711,5 +1840,230 @@ describe("terminal.revealOwned (#12315)", () => {
     expect(schema?.safeParse({ terminalId: "" }).success).toBe(false);
     expect(schema?.safeParse({}).success).toBe(false);
     expect(schema?.safeParse({ terminalId: "terminal-1" }).success).toBe(true);
+  });
+});
+
+describe("restored panes and the plugin hold (#14017)", () => {
+  const getInfo = vi.fn();
+  const setHoldOnRestart = vi.fn();
+  const lastSeen = { agentState: "idle", at: 4_000 };
+
+  function setPanels(panels: Record<string, Record<string, unknown>>) {
+    panelStoreMock.getState.mockImplementation(() => ({
+      focusedId: null,
+      panelIds: Object.keys(panels),
+      panelsById: panels,
+      setHoldOnRestart,
+    }));
+  }
+
+  function definition(id: string): AnyActionDefinition {
+    const actions: ActionRegistry = new Map();
+    registerTerminalLifecycleActions(actions, {} as ActionCallbacks);
+    const factory = actions.get(id);
+    if (!factory) throw new Error(`missing ${id}`);
+    return factory() as AnyActionDefinition;
+  }
+
+  beforeEach(() => {
+    getInfo.mockReset();
+    vi.stubGlobal("window", { electron: { terminal: { getInfo } } });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  describe("terminal.info.get", () => {
+    it("answers for a held pane from the pane itself, with no process measurements", async () => {
+      setPanels({
+        held: {
+          id: "held",
+          kind: "terminal",
+          location: "grid",
+          launchAgentId: "claude",
+          title: "Claude",
+          cwd: "/repo",
+          command: "claude",
+          agentModelId: "opus",
+          restoreRecovery: { reason: "resume-deferred", sessionId: "sess-c" },
+          restoreProvenance: { at: 5_000, disposition: "held", lastSeen },
+        },
+      });
+      const def = definition("terminal.info.get");
+
+      const info = await def.run({ terminalId: "held" }, {} as never);
+
+      expect(getInfo).not.toHaveBeenCalled();
+      expect(info).toEqual({
+        id: "held",
+        kind: "terminal",
+        launchAgentId: "claude",
+        title: "Claude",
+        cwd: "/repo",
+        command: "claude",
+        hasPty: false,
+        agentModelId: "opus",
+        restored: { at: 5_000, disposition: "held", heldReason: "resume-deferred", lastSeen },
+      });
+      expect(info).not.toHaveProperty("spawnedAt");
+      expect(JSON.stringify(info)).not.toContain("sess-c");
+      // What dispatch delivers is the parse, which strips anything undeclared.
+      expect(def.resultSchema?.parse(info)).toMatchObject({
+        hasPty: false,
+        restored: { at: 5_000, disposition: "held", heldReason: "resume-deferred", lastSeen },
+      });
+    });
+
+    it("adds how restore brought a live pane back to the host's record", async () => {
+      setPanels({
+        live: {
+          id: "live",
+          kind: "terminal",
+          location: "grid",
+          cwd: "/repo",
+          restoreProvenance: { at: 5_000, disposition: "resume", lastSeen },
+        },
+      });
+      getInfo.mockResolvedValue({
+        id: "live",
+        cwd: "/repo",
+        spawnedAt: 5_001,
+        lastInputTime: 0,
+        lastOutputTime: 5_100,
+        activityTier: "focused",
+        outputBufferSize: 10,
+        semanticBufferLines: 2,
+        restartCount: 0,
+        hasPty: true,
+      });
+      const def = definition("terminal.info.get");
+
+      const info = await def.run({ terminalId: "live" }, {} as never);
+
+      expect(getInfo).toHaveBeenCalledWith("live");
+      expect(info).toMatchObject({
+        spawnedAt: 5_001,
+        hasPty: true,
+        restored: { at: 5_000, disposition: "resume", lastSeen },
+      });
+      expect(def.resultSchema?.parse(info)).toMatchObject({
+        restored: { at: 5_000, disposition: "resume", lastSeen },
+      });
+    });
+
+    it("reports no restore for a pane restore never rebuilt", async () => {
+      setPanels({ fresh: { id: "fresh", kind: "terminal", location: "grid", cwd: "/repo" } });
+      getInfo.mockResolvedValue({ id: "fresh", cwd: "/repo", spawnedAt: 1 });
+
+      const info = await definition("terminal.info.get").run({ terminalId: "fresh" }, {} as never);
+
+      expect(info).not.toHaveProperty("restored");
+    });
+  });
+
+  describe("terminal.setHoldOnRestart", () => {
+    const pluginCtx = { dispatchSource: "plugin", callerPluginId: "acme.orchestrator" };
+
+    beforeEach(() => {
+      setHoldOnRestart.mockReset();
+      setPanels({
+        own: {
+          id: "own",
+          kind: "terminal",
+          location: "grid",
+          launchAgentId: "claude",
+          launchedByPluginId: "acme.orchestrator",
+        },
+        foreign: {
+          id: "foreign",
+          kind: "terminal",
+          location: "grid",
+          launchAgentId: "claude",
+          launchedByPluginId: "other.plugin",
+        },
+        user: { id: "user", kind: "terminal", location: "grid", launchAgentId: "claude" },
+        // A plain shell restore never holds, so no receipt may claim it will.
+        shell: {
+          id: "shell",
+          kind: "terminal",
+          location: "grid",
+          launchedByPluginId: "acme.orchestrator",
+        },
+      });
+    });
+
+    it("holds and releases a pane the calling plugin launched", async () => {
+      const def = definition("terminal.setHoldOnRestart");
+
+      await expect(def.run({ terminalId: "own", hold: true }, pluginCtx as never)).resolves.toEqual(
+        { terminalId: "own", holdOnRestart: true }
+      );
+      await def.run({ terminalId: "own", hold: false }, pluginCtx as never);
+
+      expect(setHoldOnRestart.mock.calls).toEqual([
+        ["own", true],
+        ["own", false],
+      ]);
+    });
+
+    it.each(["foreign", "user", "shell", "missing"])(
+      "refuses the %s pane, which this plugin did not launch",
+      async (terminalId) => {
+        await expect(
+          definition("terminal.setHoldOnRestart").run(
+            { terminalId, hold: true },
+            pluginCtx as never
+          )
+        ).rejects.toThrow(/launched by this plugin/);
+        expect(setHoldOnRestart).not.toHaveBeenCalled();
+      }
+    );
+
+    it.each([
+      { dispatchSource: "agent" },
+      { dispatchSource: "user" },
+      // A context override can't claim a plugin: only ActionService stamps it.
+      { dispatchSource: "agent", callerPluginId: "acme.orchestrator" },
+      { dispatchSource: "plugin" },
+    ])("refuses a dispatch with no plugin behind it (%o)", async (ctx) => {
+      await expect(
+        definition("terminal.setHoldOnRestart").run({ terminalId: "own", hold: true }, ctx as never)
+      ).rejects.toThrow(/Only the plugin that launched/);
+      expect(setHoldOnRestart).not.toHaveBeenCalled();
+    });
+
+    it("reaches the action only as the plugin the host says is calling", async () => {
+      const { ActionService } = await import("../../../ActionService");
+      const service = new ActionService();
+      service.register(definition("terminal.setHoldOnRestart"));
+      const id = "terminal.setHoldOnRestart" as ActionId;
+      const args = { terminalId: "own", hold: true };
+
+      const own = await service.dispatch(id, args, {
+        source: "plugin",
+        callerPluginId: "acme.orchestrator",
+      });
+      const foreign = await service.dispatch(id, args, {
+        source: "plugin",
+        callerPluginId: "other.plugin",
+      });
+      // A context override can't name the plugin; only the bridge's own option can.
+      const forged = await service.dispatch(id, args, {
+        source: "agent",
+        contextOverride: { dispatchSource: "plugin", callerPluginId: "acme.orchestrator" },
+      });
+
+      expect(own).toMatchObject({ ok: true, result: { terminalId: "own", holdOnRestart: true } });
+      expect(foreign.ok).toBe(false);
+      expect(forged.ok).toBe(false);
+      expect(setHoldOnRestart.mock.calls).toEqual([["own", true]]);
+    });
+
+    it("stays out of the palette and off MCP", () => {
+      const def = definition("terminal.setHoldOnRestart");
+      expect(def.palette).toEqual({ mode: "hidden" });
+      expect(def.mcpVisibility).toBe("hidden");
+    });
   });
 });

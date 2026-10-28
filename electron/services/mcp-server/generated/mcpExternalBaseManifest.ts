@@ -1374,6 +1374,28 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           description:
             "Panels closed. Empty means nothing closed (none to act on, already in the trash, or teardown failed): treat it as a failed close.",
         },
+        processes: {
+          description: "Each closed panel's process after the close: closed is not stopped.",
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              terminalId: {
+                type: "string",
+              },
+              exited: {
+                description: "The host saw it exit; false: not yet; null: unknown.",
+                type: ["boolean", "null"],
+              },
+              trashExpiresAt: {
+                description: "Unix ms the host starts stopping it unless restored; null: unknown.",
+                type: ["number", "null"],
+              },
+            },
+            required: ["terminalId", "exited", "trashExpiresAt"],
+            additionalProperties: false,
+          },
+        },
       },
       required: ["closedIds"],
       additionalProperties: false,
@@ -1560,7 +1582,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
               },
               lastTypedInputAt: {
                 description:
-                  "Epoch ms of the last raw PTY input (keys, paste, broadcast; not sends). Before `lastTransitionAt` means none since. Not proof of delivery or authorship.",
+                  "Epoch ms of last PTY input (keys, paste, broadcast, withdrawn sends). Before `lastTransitionAt` means none since. Not proof of delivery or authorship.",
                 type: "number",
               },
               exitCode: {
@@ -1764,6 +1786,12 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           description:
             "Agent panel `id` this session created or was handed. Required; no focus fallback.",
         },
+        generation: {
+          description: "Run you read: assistant-listing generation or host-listing incarnation.",
+          type: "integer",
+          minimum: 0,
+          maximum: 9007199254740991,
+        },
       },
       required: ["terminalId"],
     },
@@ -1899,6 +1927,38 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                     type: "null",
                   },
                 ],
+              },
+              restored: {
+                type: "object",
+                properties: {
+                  at: {
+                    type: "number",
+                  },
+                  disposition: {
+                    type: "string",
+                    enum: ["resume", "fresh", "held"],
+                  },
+                  heldReason: {
+                    type: "string",
+                  },
+                  lastSeen: {
+                    type: "object",
+                    properties: {
+                      agentState: {
+                        type: "string",
+                      },
+                      at: {
+                        type: "number",
+                      },
+                    },
+                    required: ["agentState"],
+                    additionalProperties: false,
+                  },
+                },
+                required: ["at", "disposition"],
+                additionalProperties: false,
+                description:
+                  "Set when restore rebuilt the pane (`at`, epoch ms). lastSeen: agent state saved before then, not proof a run ended.",
               },
             },
             required: [
@@ -2252,6 +2312,60 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     title: "Read owned agent's last message",
   },
   {
+    band: "destructive-local",
+    category: "terminal",
+    danger: "confirm",
+    dangerRationale:
+      "Ends the agent's conversation and respawns it on another preset. Scrollback is lost.",
+    description:
+      "Respawn an agent panel this session launched on another preset of its agent, in place, after the user confirms: for an agent that hit a plan limit. Its conversation and scrollback are lost. Panels it was handed are refused.",
+    enabled: true,
+    id: "terminal.restartOnPresetOwned",
+    inputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        terminalId: {
+          type: "string",
+          minLength: 1,
+          description: "Panel `id` this session got when launching it. Required.",
+        },
+        presetId: {
+          type: "string",
+          minLength: 1,
+          description: "A preset `id` of the panel's own agent.",
+        },
+      },
+      required: ["terminalId", "presetId"],
+    },
+    keywords: ["preset", "account", "rate limit", "owned"],
+    kind: "command",
+    name: "terminal.restartOnPresetOwned",
+    outputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        terminalId: {
+          type: "string",
+          description: "The pane, respawned in place.",
+        },
+        agentPresetId: {
+          type: "string",
+          description: "Preset it now runs on.",
+        },
+        agentSessionIdCleared: {
+          type: "boolean",
+          const: true,
+          description: "A new conversation started: re-send anything the agent still needs.",
+        },
+      },
+      required: ["terminalId", "agentPresetId", "agentSessionIdCleared"],
+      additionalProperties: false,
+    },
+    requiresArgs: true,
+    title: "Move owned agent to another preset",
+  },
+  {
     band: "reversible",
     category: "terminal",
     danger: "safe",
@@ -2306,7 +2420,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           type: "boolean",
         },
         generation: {
-          description: "Sending to another assistant: its generation from the assistant listing.",
+          description: "Run you read: assistant-listing generation or host-listing incarnation.",
           type: "integer",
           minimum: 0,
           maximum: 9007199254740991,
@@ -2787,8 +2901,13 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
               hasLiveView: {
                 type: "boolean",
               },
+              frontendAttached: {
+                description:
+                  "A frontend is attached: a view here or a driving Shell. If false, only tools the host runs itself run. Null: unknown.",
+                type: ["boolean", "null"],
+              },
             },
-            required: ["workspaceId", "path", "name", "kind", "hasLiveView"],
+            required: ["workspaceId", "path", "name", "kind", "hasLiveView", "frontendAttached"],
             additionalProperties: false,
           },
         },

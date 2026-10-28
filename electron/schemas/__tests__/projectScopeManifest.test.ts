@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { getPluginManifestSchema, PROJECT_SCOPE_UNSCOPED_CONTRIBUTIONS } from "../plugin.js";
+import {
+  ContextMenuContributionSchema,
+  getPluginManifestSchema,
+  PROJECT_SCOPE_UNSCOPED_CONTRIBUTIONS,
+} from "../plugin.js";
 import type { PluginOrigin } from "../../../shared/types/plugin.js";
 
 /**
@@ -159,31 +163,64 @@ const UNSCOPED_SAMPLES: Record<UnscopedGroup, unknown[]> = {
   agents: [
     { id: "acme-agent", name: "Acme", command: "acme", color: "#123456", iconId: "sparkles" },
   ],
-  skills: [{ id: "skill", name: "Skill", path: "skills/skill.md" }],
-  recipes: [{ id: "boot", name: "Boot", terminals: [{ type: "shell" }] }],
-  fileDecorationProviders: [{ id: "dec", scopes: ["file"] }],
-  fileEditors: [{ id: "md", slot: "acme.editor", extensions: ["md"] }],
   processTools: [{ command: "acmetool", iconId: "sparkles" }],
   mcpServers: [{ id: "srv", name: "Srv", command: "node" }],
-  tours: [
-    {
-      id: "welcome",
-      title: "Welcome",
-      componentPath: "tours/welcome.js",
-      chapters: [{ id: "intro", duration: 5, audioUrl: null, narrationHash: "0a1b2c3d" }],
-    },
-  ],
+  themes: [{ id: "midnight", name: "Midnight", type: "dark", path: "themes/midnight.json" }],
 };
 
 type UnscopedGroup = (typeof PROJECT_SCOPE_UNSCOPED_CONTRIBUTIONS)[number][0];
 
 const UNSCOPED_GROUPS = PROJECT_SCOPE_UNSCOPED_CONTRIBUTIONS.map(([group]) => group);
 
+describe('contributes.tours under "scope": "project"', () => {
+  it("accepts a project plugin declaring a tour", () => {
+    const result = parse("project", {
+      scope: "project",
+      contributes: {
+        tours: [
+          {
+            id: "welcome",
+            title: "Welcome",
+            componentPath: "tours/welcome.js",
+            chapters: [{ id: "intro", duration: 5, audioUrl: null, narrationHash: "0a1b2c3d" }],
+          },
+        ],
+      },
+    });
+    expect(errorCodes(result)).not.toContain("tours_project_scope_forbidden");
+    expect(result.success).toBe(true);
+  });
+});
+
+describe('contributes.skills under "scope": "project"', () => {
+  // The skill index records each skill's owning project, so a project plugin's
+  // skills reach only its own project's sessions (#13831).
+  it("accepts a project plugin declaring skills and no main", () => {
+    const result = parse("project", {
+      scope: "project",
+      contributes: { skills: [{ id: "skill", name: "Skill", path: "skills/skill.md" }] },
+    });
+    expect(errorCodes(result)).not.toContain("skills_project_scope_forbidden");
+    expect(result.success).toBe(true);
+  });
+});
+
+describe('contributes.fileDecorationProviders under "scope": "project"', () => {
+  it("accepts a project plugin declaring a decoration provider", () => {
+    const result = parse("project", {
+      scope: "project",
+      contributes: { fileDecorationProviders: [{ id: "dec", scopes: ["worktree-files:*"] }] },
+    });
+    expect(errorCodes(result)).not.toContain("fileDecorationProviders_project_scope_forbidden");
+    expect(result.success).toBe(true);
+  });
+});
+
 /**
  * Every group here still broadcasts app-wide (`PluginContributionBroadcaster`
- * filters panels, actions, toolbar buttons, keybindings and context menus and
- * nothing else), so a project plugin declaring one publishes it to every
- * project. That was unreachable before project-local plugins existed; now it is
+ * filters panels, actions, toolbar buttons, keybindings, context menus and
+ * recipes and nothing else), so a project plugin declaring one publishes it to
+ * every project. That was unreachable before project-local plugins existed; now it is
  * a live leak, and the manifest gate is what turns it into a load-time error.
  */
 describe('structurally-global contributions under "scope": "project"', () => {
@@ -279,9 +316,30 @@ describe('structurally-global contributions under "scope": "project"', () => {
         keybindings: [{ actionId: "acme.project-plugin.go", combo: "Ctrl+Alt+G" }],
         contextMenus: [{ label: "Go", actionId: "acme.project-plugin.go", location: "terminal" }],
         settings: [{ id: "token", type: "string", label: "Token" }],
+        recipes: [{ id: "boot", name: "Boot", terminals: [{ type: "terminal" }] }],
       },
     });
     expect(result.success).toBe(true);
+  });
+});
+
+describe("contextMenus project location", () => {
+  it("accepts a project-location context menu item", () => {
+    const result = ContextMenuContributionSchema.safeParse({
+      label: "Go",
+      actionId: "acme.project-plugin.go",
+      location: "project",
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("still rejects the removed panel location", () => {
+    const result = ContextMenuContributionSchema.safeParse({
+      label: "Go",
+      actionId: "acme.project-plugin.go",
+      location: "panel",
+    });
+    expect(result.success).toBe(false);
   });
 });
 
@@ -302,6 +360,68 @@ describe("contributes.surfaces", () => {
   it("accepts an emptyCanvas claim naming a declared view", () => {
     const result = parse("project", withSurface({ emptyCanvas: { viewId: "overview" } }));
     expect(result.success).toBe(true);
+  });
+
+  it("accepts a projectHome claim naming a declared view", () => {
+    const result = parse("project", withSurface({ projectHome: { viewId: "overview" } }));
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts a worktreeCreate claim naming a declared view", () => {
+    const result = parse("project", withSurface({ worktreeCreate: { viewId: "overview" } }));
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects a worktreeCreate viewId matching no declared view", () => {
+    const result = parse("project", withSurface({ worktreeCreate: { viewId: "nope" } }));
+    expect(result.success).toBe(false);
+    expect(errorCodes(result)).toContain("surface_view_ref_unknown");
+  });
+
+  it("rejects a worktreeCreate claim from an installed plugin", () => {
+    const result = getPluginManifestSchema("user").safeParse({
+      name: "acme.installed",
+      version: "1.0.0",
+      contributes: {
+        panels: [panel],
+        views: [view],
+        surfaces: { worktreeCreate: { viewId: "overview" } },
+      },
+    });
+    expect(result.success).toBe(false);
+    expect(errorCodes(result)).toContain("surfaces_project_scope_only");
+  });
+
+  it("rejects a projectHome viewId matching no declared view", () => {
+    const result = parse("project", withSurface({ projectHome: { viewId: "nope" } }));
+    expect(result.success).toBe(false);
+    expect(errorCodes(result)).toContain("surface_view_ref_unknown");
+  });
+
+  it("rejects a projectHome claim from an installed plugin", () => {
+    const result = getPluginManifestSchema("user").safeParse({
+      name: "acme.installed",
+      version: "1.0.0",
+      contributes: {
+        panels: [panel],
+        views: [view],
+        surfaces: { projectHome: { viewId: "overview" } },
+      },
+    });
+    expect(result.success).toBe(false);
+    expect(errorCodes(result)).toContain("surfaces_project_scope_only");
+  });
+
+  it("rejects a projectHome claim on a PTY panel", () => {
+    const result = parse("project", {
+      scope: "project",
+      contributes: {
+        panels: [{ ...panel, hasPty: true }],
+        views: [view],
+        surfaces: { projectHome: { viewId: "overview" } },
+      },
+    });
+    expect(result.success).toBe(false);
   });
 
   it("rejects an emptyCanvas viewId matching no declared view", () => {
@@ -362,10 +482,56 @@ describe("contributes.surfaces", () => {
   });
 
   it("rejects an unknown surface slot", () => {
-    // The three-slot design is a closed set: a typo (or a slot from a later
+    // The slot catalogue is a closed set: a typo (or a slot from a later
     // phase) must fail loudly rather than validate and never render.
-    const result = parse("project", withSurface({ projectHome: { viewId: "overview" } }));
+    const result = parse("project", withSurface({ sidebarDefault: { viewId: "overview" } }));
     expect(result.success).toBe(false);
+  });
+
+  describe("defaultLayout", () => {
+    const layout = { id: "workbench", name: "Workbench", entries: [{ panel: "overview" }] };
+
+    it("accepts the id of one of the plugin's own layouts", () => {
+      const result = parse(
+        "project",
+        withSurface({ defaultLayout: "workbench" }, { layouts: [layout] })
+      );
+      expect(result.success).toBe(true);
+    });
+
+    it("rejects an id matching no declared layout", () => {
+      const result = parse(
+        "project",
+        withSurface({ defaultLayout: "nope" }, { layouts: [layout] })
+      );
+      expect(result.success).toBe(false);
+      expect(errorCodes(result)).toContain("surface_default_layout_unknown");
+      expect(messageForCode(result, "surface_default_layout_unknown")).toContain(
+        "contributes.layouts"
+      );
+    });
+
+    it("rejects a view-slot shape: it names a layout, not a view", () => {
+      const result = parse(
+        "project",
+        withSurface({ defaultLayout: { viewId: "overview" } }, { layouts: [layout] })
+      );
+      expect(result.success).toBe(false);
+    });
+
+    it("rejects one from an installed plugin", () => {
+      const result = getPluginManifestSchema("user").safeParse({
+        name: "acme.installed",
+        version: "1.0.0",
+        contributes: {
+          panels: [panel],
+          layouts: [layout],
+          surfaces: { defaultLayout: "workbench" },
+        },
+      });
+      expect(result.success).toBe(false);
+      expect(errorCodes(result)).toContain("surfaces_project_scope_only");
+    });
   });
 
   it("rejects a claim on a PTY panel", () => {

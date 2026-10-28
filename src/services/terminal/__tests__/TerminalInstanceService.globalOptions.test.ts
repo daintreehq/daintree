@@ -57,7 +57,7 @@ vi.mock("../TerminalAddonManager", () => ({
 const N = 20;
 const IDS = Array.from({ length: N }, (_, i) => `perf-global-${i}`);
 
-type Svc = (typeof import("../TerminalInstanceService"))["terminalInstanceService"];
+type Svc = import("../TerminalInstanceService").TerminalPaintPlane;
 
 interface Counters {
   fit: number;
@@ -67,7 +67,7 @@ interface Counters {
 }
 
 async function setup() {
-  const { terminalInstanceService } = await import("../TerminalInstanceService");
+  const terminalInstanceService = await (await import("../terminalInstanceServiceAccessor")).load();
   const { terminalClient } = await import("@/clients");
   const { useTerminalFontStore } = await import("@/store");
 

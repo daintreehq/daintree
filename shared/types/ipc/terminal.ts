@@ -3,6 +3,8 @@ import type {
   PanelLocation,
   PanelRestoreRecovery,
   PanelTitleMode,
+  TerminalAgentObservation,
+  TerminalRestoreProvenance,
   TerminalSpawnSource,
 } from "../panel.js";
 import type { AgentId } from "../agent.js";
@@ -24,6 +26,13 @@ export interface TerminalSpawnOptions {
    * `docs/architecture/terminal-identity.md`.
    */
   launchAgentId?: AgentId;
+  /**
+   * The plugin kind a PTY-backed plugin panel was opened as (#13213), which
+   * `kind` no longer names once it collapses to `"terminal"`. Main reads only
+   * its presence, to report the terminal as a plugin's to lifecycle observers
+   * (#13814).
+   */
+  pluginPanelKindId?: string;
   /** Project ID to associate with the terminal (captured at action time to avoid race conditions) */
   projectId?: string;
   /** Working directory for the terminal */
@@ -81,6 +90,14 @@ export interface TerminalSpawnOptions {
    * focused at launch even if focus later changes.
    */
   actionContext?: ActionContext;
+  /**
+   * Plugin instances whose agent tools this agent launch can't do without
+   * (a plugin recipe's `requiresAgentTools`). The launch is refused with
+   * `REQUIRED_PLUGIN_TOOLS_UNAVAILABLE` rather than started without them.
+   */
+  requiredPluginTools?: string[];
+  /** Start this one launch even if required plugin tools are missing. Never persisted. */
+  allowMissingPluginTools?: boolean;
 }
 
 /** Terminal state for app state persistence */
@@ -114,6 +131,8 @@ export interface TerminalState {
   location?: PanelLocation;
   /** Restore target of a parked panel; written only with `location: "background"`. */
   backgroundRestoreLocation?: "grid" | "dock";
+  /** See `BasePanelData.pendingDockWorktreeId`. */
+  pendingDockWorktreeId?: string | null;
   /** Command to execute after shell starts (e.g., 'claude' for AI agents) */
   command?: string;
   isInputLocked?: boolean;
@@ -163,6 +182,14 @@ export interface TerminalState {
   conversationCwd?: string;
   /** Held for recovery instead of launched (#12434). Untrusted until sanitized. */
   restoreRecovery?: PanelRestoreRecovery;
+  /** How restore last rebuilt the pane (#14017). Untrusted until sanitized. */
+  restoreProvenance?: TerminalRestoreProvenance;
+  /** The last agent state the host reported for the pane (#14017). Untrusted until sanitized. */
+  lastAgentObservation?: TerminalAgentObservation;
+  /** The plugin whose `agent.launch` created the pane (#14017). Untrusted until sanitized. */
+  launchedByPluginId?: string;
+  /** The launching plugin asked restore to hold the pane (#14017). Untrusted until sanitized. */
+  holdOnRestart?: true;
   /**
    * Extension ID of the plugin that registered this panel's kind, if applicable.
    * Preserved across save/restore so the placeholder can name the missing plugin

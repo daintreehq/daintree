@@ -1,6 +1,8 @@
 import type { RecipeTerminal, TerminalRecipe } from "@shared/types";
 import { isInRepoRecipeId } from "@shared/utils/recipeFilename";
+import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
 import { pluralize } from "@/lib/pluralize";
+import { recipePanelStepName } from "@/components/Terminal/utils/recipeUtils";
 
 /**
  * Preview lines for an agent-initiated dispatch that would run a recipe
@@ -29,7 +31,9 @@ function truncate(value: string): string {
 
 /** Where the recipe came from, so an approver can tell a plugin's from their own. */
 export function recipeOriginLabel(recipe: TerminalRecipe): string {
-  if (recipe.origin?.kind === "plugin") return `from the ${recipe.origin.pluginId} plugin`;
+  if (recipe.origin?.kind === "plugin") {
+    return `from the ${pluginManifestIdFromInstanceKey(recipe.origin.pluginId)} plugin`;
+  }
   if (isInRepoRecipeId(recipe)) return "shared team recipe";
   return recipe.projectId === undefined ? "global recipe" : "project recipe";
 }
@@ -40,11 +44,16 @@ function describeTerminal(terminal: RecipeTerminal): string[] {
     lines.push(terminal.command ? `$ ${truncate(terminal.command)}` : "$ (default shell)");
   } else if (terminal.type === "dev-preview") {
     lines.push(terminal.devCommand ? `$ ${truncate(terminal.devCommand)}` : "$ (no dev command)");
+  } else if (terminal.type === "plugin-panel") {
+    lines.push(`opens ${recipePanelStepName(terminal)}`);
   } else {
     lines.push(terminal.args ? `${terminal.type} ${truncate(terminal.args)}` : terminal.type);
   }
   if (terminal.initialPrompt) {
     lines.push(`prompt: ${truncate(terminal.initialPrompt)}`);
+  }
+  if (terminal.systemPrompt) {
+    lines.push(`system prompt: ${truncate(terminal.systemPrompt)}`);
   }
   const envKeys = Object.keys(terminal.env ?? {}).sort();
   if (envKeys.length > 0) {

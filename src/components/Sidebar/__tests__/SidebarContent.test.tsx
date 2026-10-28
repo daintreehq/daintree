@@ -16,14 +16,25 @@ const WORKTREE_ACTIONS_TOOLBAR_PATH = path.resolve(
   "../../Worktree/WorktreeCard/WorktreeActionsToolbar.tsx"
 );
 const KEYBOARD_HOOK_PATH = path.resolve(__dirname, "../useWorktreeSidebarKeyboard.ts");
+// The row model and the reorder session live beside SidebarContent (#14351);
+// assertions about that code read the module that owns it.
+const ROW_MODEL_PATH = path.resolve(__dirname, "../sidebarWorktreeModel.ts");
+const MODEL_HOOK_PATH = path.resolve(__dirname, "../useSidebarWorktreeModel.ts");
+const REORDER_HOOK_PATH = path.resolve(__dirname, "../useSidebarReorderSession.ts");
 
 describe("SidebarContent filter scope and sort status — issue #8391", () => {
   let source: string;
   let searchBarSource: string;
+  let rowModelSource: string;
+  let modelHookSource: string;
+  let reorderSource: string;
 
   beforeEach(async () => {
     source = await fs.readFile(SIDEBAR_CONTENT_PATH, "utf-8");
     searchBarSource = await fs.readFile(SEARCH_BAR_PATH, "utf-8");
+    rowModelSource = await fs.readFile(ROW_MODEL_PATH, "utf-8");
+    modelHookSource = await fs.readFile(MODEL_HOOK_PATH, "utf-8");
+    reorderSource = await fs.readFile(REORDER_HOOK_PATH, "utf-8");
   });
 
   it("keeps the visible status text free of live-region attributes (#9665)", () => {
@@ -100,8 +111,8 @@ describe("SidebarContent filter scope and sort status — issue #8391", () => {
 
   it("derives drag-disabled reason with query taking priority over group-by-type", () => {
     // Query-first precedence: hasQuery ? "searching" : isGroupedByType ? "grouped by type" : null
-    expect(source).toMatch(/hasQuery\s*\?[\s\S]*?Drag to reorder is off while searching/);
-    expect(source).toMatch(
+    expect(reorderSource).toMatch(/hasQuery\s*\?[\s\S]*?Drag to reorder is off while searching/);
+    expect(reorderSource).toMatch(
       /isGroupedByType\s*\?[\s\S]*?Drag to reorder is off while grouped by type/
     );
   });
@@ -109,7 +120,7 @@ describe("SidebarContent filter scope and sort status — issue #8391", () => {
   it("exports totalCount from the filter useMemo alongside filteredWorktrees", () => {
     // Both the grouped and ungrouped return paths must report the same total,
     // so assert the count rather than mere presence.
-    expect(source.match(/totalCount: nonMainWorktrees\.length/g)).toHaveLength(2);
+    expect(rowModelSource.match(/totalCount: nonMainWorktrees\.length/g)).toHaveLength(2);
   });
 
   it("derives every non-main count and the filtered list from one shared array (#11433)", () => {
@@ -117,15 +128,15 @@ describe("SidebarContent filter scope and sort status — issue #8391", () => {
     // counts carried a branch-name exclusion the rendered list did not. Every
     // consumer now reads the same `nonMainWorktrees` memo, so they cannot
     // disagree about which worktrees exist.
-    expect(source).toMatch(
+    expect(modelHookSource).toMatch(
       /const nonMainWorktrees = useMemo\(\s*\(\) =>\s*deferredWorktrees\.filter\(\(w\) => w\.id !== mainWorktree\?\.id\)/
     );
     // quick-state counts, chip counts, the main card aggregate, and the list.
     // "All" is the number the user saw read 0 above a visible worktree, so tie
     // it to the shared array directly — iterating it is not enough, the old
     // code iterated too and then skipped the worktree it had already pinned.
-    expect(source).toMatch(/all: nonMainWorktrees\.length/);
-    expect(source).toMatch(/for \(const w of nonMainWorktrees\)/);
+    expect(modelHookSource).toMatch(/all: nonMainWorktrees\.length/);
+    expect(modelHookSource).toMatch(/for \(const w of nonMainWorktrees\)/);
     // Chip counts read a population derived from the same shared array but
     // deliberately WIDER: the main worktree is not a list row yet is still
     // facet-filtered, so excluding it made every facet only it satisfies read
@@ -134,21 +145,23 @@ describe("SidebarContent filter scope and sort status — issue #8391", () => {
     // Main is added because it is facet-filtered; quick-state is applied to the
     // rest because the rows are, so a chip cannot promise matches the quick
     // state has already excluded.
-    expect(source).toMatch(/const countedWorktrees = useMemo\(/);
-    expect(source).toMatch(/mainWorktree \? \[mainWorktree, \.\.\.eligible\] : eligible/);
-    expect(source).toMatch(
+    expect(modelHookSource).toMatch(/const countedWorktrees = useMemo\(/);
+    expect(modelHookSource).toMatch(/mainWorktree \? \[mainWorktree, \.\.\.eligible\] : eligible/);
+    expect(modelHookSource).toMatch(
       /const eligible =\s*quickStateFilter === "all"\s*\?\s*nonMainWorktrees\s*:\s*nonMainWorktrees\.filter\(/
     );
-    expect(source).toMatch(/matchesQuickStateFilter\(quickStateFilter, meta\)/);
-    expect(source).toMatch(/computeChipCounts\(\s*countedWorktrees,/);
-    expect(source).toMatch(/const nonMainCount = nonMainWorktrees\.length;/);
-    expect(source).toMatch(/const filtered = nonMainWorktrees\.filter\(/);
+    expect(modelHookSource).toMatch(/matchesQuickStateFilter\(quickStateFilter, meta\)/);
+    expect(modelHookSource).toMatch(/computeChipCounts\(\s*countedWorktrees,/);
+    expect(modelHookSource).toMatch(/const nonMainCount = nonMainWorktrees\.length;/);
+    expect(rowModelSource).toMatch(/const filtered = nonMainWorktrees\.filter\(/);
     // No second, branch-derived exclusion anywhere in the sidebar: neither the
     // removed helper nor a fresh hardcoded list of "integration" branch names.
     // `next` is deliberately absent from this alternation — it's a plausible
     // ordinary string in UI code, and a false failure here teaches nothing.
-    expect(source).not.toMatch(/integrationWorktree|findIntegrationWorktree/);
-    expect(source).not.toMatch(/["'](?:develop|trunk)["']/);
+    for (const owner of [source, modelHookSource, rowModelSource]) {
+      expect(owner).not.toMatch(/integrationWorktree|findIntegrationWorktree/);
+      expect(owner).not.toMatch(/["'](?:develop|trunk)["']/);
+    }
   });
 
   it("computes showScope from the instant live-query filter state and count comparison", () => {
@@ -163,11 +176,12 @@ describe("SidebarContent filter scope and sort status — issue #8391", () => {
   it("defers the filtering memo only for a sidebar large enough to hold up typing", () => {
     // Small sidebars filter in the keystroke's own frame; past the threshold
     // the memo reads the lagged query so keystrokes stay responsive.
-    expect(source).toContain("const laggedQuery = useDeferredValue(liveQuery)");
-    expect(source).toMatch(
+    expect(modelHookSource).toContain("const laggedQuery = useDeferredValue(liveQuery)");
+    expect(modelHookSource).toMatch(
       /deferredWorktrees\.length > SIDEBAR_DEFER_FILTER_MIN_WORKTREES \? laggedQuery : liveQuery/
     );
-    expect(source).toMatch(/query:\s*deferredQuery/);
+    expect(modelHookSource).toMatch(/query:\s*deferredQuery/);
+    expect(rowModelSource).toMatch(/query:\s*deferredQuery/);
   });
 });
 
@@ -218,8 +232,9 @@ describe("SidebarContent screen-reader announcements — issue #9665", () => {
     // Fires on null → reason and reason → reason, but not reason → null (the
     // re-enable path is owned by the isSortDisabledPrevRef effect) and not when
     // the reason is unchanged (so a stable reason isn't re-spoken every render).
-    expect(source).toContain("prevDragDisabledReasonRef");
-    expect(source).toMatch(/dragDisabledReason !== null && prev !== dragDisabledReason/);
+    const reorderSource = readFileSync(REORDER_HOOK_PATH, "utf-8");
+    expect(reorderSource).toContain("prevDragDisabledReasonRef");
+    expect(reorderSource).toMatch(/dragDisabledReason !== null && prev !== dragDisabledReason/);
   });
 });
 
@@ -430,20 +445,25 @@ describe("Worktrees sidebar control zone — issue #11991", () => {
 
 describe("SidebarContent quick-state empty state — issue #6333 (CTA collapsed by #6934)", () => {
   let source: string;
+  let rowModelSource: string;
+  let modelHookSource: string;
 
   beforeAll(async () => {
     source = await fs.readFile(SIDEBAR_CONTENT_PATH, "utf-8");
+    rowModelSource = await fs.readFile(ROW_MODEL_PATH, "utf-8");
+    modelHookSource = await fs.readFile(MODEL_HOOK_PATH, "utf-8");
   });
 
   describe("store wiring", () => {
     it("subscribes to clearAll from the filter store as clearAllFilters", () => {
-      expect(source).toMatch(
+      expect(modelHookSource).toMatch(
         /const clearAllFilters = useWorktreeFilterStore\(\(state\) => state\.clearAll\)/
       );
     });
 
     it("does not subscribe to clearQuickStateFilter (single-CTA shape since #6934)", () => {
       expect(source).not.toContain("state.clearQuickStateFilter");
+      expect(modelHookSource).not.toContain("state.clearQuickStateFilter");
     });
   });
 
@@ -452,18 +472,24 @@ describe("SidebarContent quick-state empty state — issue #6333 (CTA collapsed 
       // The bypass rules must additionally require !hasFacetFiltersActive so that
       // selecting a popover facet filter (status/type/github/session/activity)
       // suppresses bypass injection and makes the visible list agree with chip counts.
-      expect(source).toMatch(/quickStateFilter === "all"\s*&&\s*!hasFacetFiltersActive/);
-      expect(source).toContain("hasFacetFilters");
+      expect(rowModelSource).toMatch(/quickStateFilter === "all"\s*&&\s*!hasFacetFiltersActive/);
+      expect(rowModelSource).toContain("hasFacetFilters");
     });
 
     it("subscribes to hasFacetFilters from the worktree filter store", () => {
-      expect(source).toContain("useWorktreeFilterStore((state) => state.hasFacetFilters)");
+      // Called inside the selector: the compiled hook would cache a render-time
+      // call on the selected getter and freeze the facet gate.
+      expect(modelHookSource).toContain(
+        "useWorktreeFilterStore((state) => state.hasFacetFilters())"
+      );
     });
   });
 
   describe("filteredWorktrees memo", () => {
     it("computes the counterfactual only when quickStateFilter is non-'all'", () => {
-      expect(source).toMatch(/if \(!withoutQuickStateMatch && quickStateFilter !== "all"\)/);
+      expect(rowModelSource).toMatch(
+        /if \(!withoutQuickStateMatch && quickStateFilter !== "all"\)/
+      );
     });
 
     it("mirrors the same alwaysShowActive bypass in the counterfactual pass", () => {
@@ -471,11 +497,11 @@ describe("SidebarContent quick-state empty state — issue #6333 (CTA collapsed 
       // doesn't claim "would match without quick state" for worktrees that
       // are only ever shown via the bypass — and it must run matchesFilters
       // for the rest.
-      expect(source).toMatch(/if \(alwaysShowActive && isActive && !hasActiveQuery/);
-      expect(source).toMatch(
+      expect(rowModelSource).toMatch(/if \(alwaysShowActive && isActive && !hasActiveQuery/);
+      expect(rowModelSource).toMatch(
         /alwaysShowWaiting[\s\S]*?derived\.hasWaitingAgent[\s\S]*?!hasActiveQuery/
       );
-      expect(source).toMatch(
+      expect(rowModelSource).toMatch(
         /else if \(matchesFilters\(worktree, filters, derived, isActive, devServerSessions\)\) \{\s*withoutQuickStateMatch = true;/
       );
     });
@@ -679,29 +705,27 @@ describe("SidebarContent zero-worktrees empty state — issue #6752 (supersedes 
     expect(source).not.toMatch(/<kbd[^>]*>\s*File → Open Project/);
   });
 
-  it("mounts NewWorktreeDialog from the zero-worktrees branch so populated-sidebar shortcuts still work", () => {
-    // Even without the inline nudge, the dialog mount must remain reachable
-    // from every branch so worktree.createDialog.open dispatched from
-    // elsewhere (command palette, menu) opens correctly.
-    expect(source).toContain("const newWorktreeDialogElement");
-    const branchStart = source.indexOf("if (worktrees.length === 0) {");
-    const branchEnd = source.indexOf("const hasNonMainWorktrees", branchStart);
-    expect(branchStart).toBeGreaterThan(0);
-    expect(branchEnd).toBeGreaterThan(branchStart);
-    const branch = source.slice(branchStart, branchEnd);
-    expect(branch).toContain("{newWorktreeDialogElement}");
-  });
-
-  it("hoists the dialog mount before all early returns so it is reachable from every branch", () => {
-    // The dialog declaration must appear before the first early-return guard
-    // (`isLoading && worktrees.length === 0`); otherwise dispatching
-    // worktree.createDialog.open from outside the populated sidebar (loading,
-    // error, or empty state) would be a no-op.
-    const dialogIdx = source.indexOf("const newWorktreeDialogElement");
-    const firstEarlyReturnIdx = source.indexOf("if (isLoading && worktrees.length === 0)");
-    expect(dialogIdx).toBeGreaterThan(0);
-    expect(firstEarlyReturnIdx).toBeGreaterThan(0);
-    expect(dialogIdx).toBeLessThan(firstEarlyReturnIdx);
+  it("leaves every project dialog to ProjectDialogHost (#13773)", () => {
+    // The zero-worktrees branch, the skeleton and the non-git early return all
+    // used to drop some or all of these mounts, so an action dispatched while
+    // the sidebar sat in one of them opened nothing. The host mounts them once,
+    // outside the sidebar, whatever branch or view is showing.
+    for (const mount of [
+      "<LazyNewWorktreeDialog",
+      "<LazyRecipeEditor",
+      "<LazyRecipeManager",
+      "<BulkCreateWorktreeDialog",
+      "<LazyFleetPickerPalette",
+    ]) {
+      expect(source).not.toContain(mount);
+    }
+    expect(source).not.toContain("useRecipeDialogState");
+    // The triggers stay: the header still opens the picker through the shared
+    // store and warms the New worktree chunk on hover.
+    expect(source).toMatch(
+      /const openFleetPicker = useFleetPickerPaletteStore\(\(s\) => s\.open\)/
+    );
+    expect(source).toContain("onPointerEnter={() => void preloadNewWorktreeDialog()}");
   });
 });
 
@@ -755,7 +779,7 @@ describe("SidebarContent initial loading skeleton — issues #7215, #8804", () =
   });
 
   it("renders the Skeleton primitive in the initial-loading branch with a context-specific label", () => {
-    const branchStart = source.indexOf("if (isLoading && worktrees.length === 0)");
+    const branchStart = source.indexOf("if (showSkeleton && worktrees.length === 0)");
     const branchEnd = source.indexOf("if (worktrees.length === 0)", branchStart);
     expect(branchStart).toBeGreaterThan(0);
     expect(branchEnd).toBeGreaterThan(branchStart);
@@ -765,10 +789,12 @@ describe("SidebarContent initial loading skeleton — issues #7215, #8804", () =
   });
 
   it("preserves the Worktrees header in the loading branch to avoid layout shift on reveal", () => {
-    const branchStart = source.indexOf("if (isLoading && worktrees.length === 0)");
+    const branchStart = source.indexOf("if (showSkeleton && worktrees.length === 0)");
     const branchEnd = source.indexOf("if (worktrees.length === 0)", branchStart);
     const branch = source.slice(branchStart, branchEnd);
-    expect(branch).toMatch(/<h2[^>]*>\s*Worktrees\s*<\/h2>/);
+    // The shared heading draws the same `<h2>` (or the view switcher inside
+    // one, once a plugin adds a sidebar view), so loading keeps the title too.
+    expect(branch).toMatch(/<SidebarViewHeading[^>]*>\s*Worktrees\s*<\/SidebarViewHeading>/);
     // The loading header must be the same height as the loaded one, or the bar
     // changes size when worktrees finish loading and the list jumps (#10318).
     // Both draw the shared sidebar header row, whose height is fixed in one
@@ -780,7 +806,7 @@ describe("SidebarContent initial loading skeleton — issues #7215, #8804", () =
   });
 
   it("uses SkeletonBone with shimmer and no immediate prop (400ms Doherty gate) — #8804", () => {
-    const branchStart = source.indexOf("if (isLoading && worktrees.length === 0)");
+    const branchStart = source.indexOf("if (showSkeleton && worktrees.length === 0)");
     const branchEnd = source.indexOf("if (worktrees.length === 0)", branchStart);
     const branch = source.slice(branchStart, branchEnd);
     expect(branch).toContain("<SkeletonBone");
@@ -789,14 +815,14 @@ describe("SidebarContent initial loading skeleton — issues #7215, #8804", () =
   });
 
   it("marks each card wrapper aria-hidden so the Skeleton primitive owns the live region", () => {
-    const branchStart = source.indexOf("if (isLoading && worktrees.length === 0)");
+    const branchStart = source.indexOf("if (showSkeleton && worktrees.length === 0)");
     const branchEnd = source.indexOf("if (worktrees.length === 0)", branchStart);
     const branch = source.slice(branchStart, branchEnd);
     expect(branch).toContain('aria-hidden="true"');
   });
 
   it("renders the loading branch via WORKTREE_SKELETON_CARDS.map with no row borders — #8804", () => {
-    const branchStart = source.indexOf("if (isLoading && worktrees.length === 0)");
+    const branchStart = source.indexOf("if (showSkeleton && worktrees.length === 0)");
     const branchEnd = source.indexOf("if (worktrees.length === 0)", branchStart);
     const branch = source.slice(branchStart, branchEnd);
     expect(branch).toContain("WORKTREE_SKELETON_CARDS.map");
@@ -813,7 +839,7 @@ describe("SidebarContent initial loading skeleton — issues #7215, #8804", () =
 
   it("renders SkeletonHint as sibling of Skeleton, not nested inside", () => {
     expect(source).toContain("<SkeletonHint");
-    const branchStart = source.indexOf("if (isLoading && worktrees.length === 0)");
+    const branchStart = source.indexOf("if (showSkeleton && worktrees.length === 0)");
     const branchEnd = source.indexOf("if (worktrees.length === 0)", branchStart);
     const branch = source.slice(branchStart, branchEnd);
     expect(branch).toMatch(/<\/Skeleton>[\s\S]*?<SkeletonHint/);
@@ -926,7 +952,8 @@ describe("SidebarContent disconnected project — issue #12576", () => {
     // Retry used to clear the timeout banner over a sidebar with no port, and
     // the zero-worktree branch then told a user with an open project to open one.
     const branch = zeroWorktreeBranch();
-    const gateIdx = branch.indexOf("{!worktreeLoadError && !isProjectDisconnected && (");
+    // Gated on every load failure, a stalled reconnect over an empty list included.
+    const gateIdx = branch.indexOf("{loadFailure === null && !isProjectDisconnected && (");
     const nudgeIdx = branch.indexOf('title="Open a Git repository"');
     expect(gateIdx).toBeGreaterThan(0);
     expect(nudgeIdx).toBeGreaterThan(gateIdx);
@@ -937,9 +964,18 @@ describe("SidebarContent disconnected project — issue #12576", () => {
     // own banner and Restart action, so the fallback stays out of its way, and
     // a cold start that is still loading is not a failure yet.
     expect(source).toMatch(
-      /const loadFailure =\s*worktreeLoadError \?\?\s*\(isProjectDisconnected && !isLoading && error === null \? WORKTREE_DISCONNECTED_MESSAGE : null\);/
+      /const loadFailure =\s*worktreeLoadError \?\?\s*\(isProjectDisconnected && !isLoading && error === null\s*\?\s*WORKTREE_DISCONNECTED_MESSAGE\s*:\s*null\) \?\?/
     );
     expect(zeroWorktreeBranch()).toContain("{worktreeLoadErrorBanner}");
+  });
+
+  it("offers Retry once a lost port has stalled and automatic recovery gave up (#13748, #14313)", () => {
+    // Last in the chain: a reported failure or a missing connection says more.
+    // Gated on the recovery phase too, so the banner never shows while the
+    // view is still retrying on its own.
+    expect(source).toMatch(
+      /WORKTREE_DISCONNECTED_MESSAGE\s*:\s*null\) \?\?\s*\(needsReconnectRetry\(\{ isReconnecting, reconnectingAt, reconnectRecovery \}, now\)\s*\?\s*WORKTREE_RECONNECT_STALLED_MESSAGE\s*:\s*null\);/
+    );
   });
 
   it("never shows the loading skeleton over a reported load failure", () => {
@@ -953,7 +989,7 @@ describe("SidebarContent disconnected project — issue #12576", () => {
     expect(derivation![1]).toContain("worktreeLoadError === null");
     expect(derivation![1]).toContain("error === null");
     expect(source.match(/\bisStoreLoading\b/g)).toHaveLength(2);
-    const branchStart = source.indexOf("if (isLoading && worktrees.length === 0)");
+    const branchStart = source.indexOf("if (showSkeleton && worktrees.length === 0)");
     const branch = source.slice(branchStart, source.indexOf("if (worktrees.length === 0) {"));
     expect(branch).toContain("<Skeleton");
     expect(branch).not.toMatch(/worktreeLoadErrorBanner|<WorktreeLoadErrorBanner|\{errorBanner\}/);
@@ -963,7 +999,7 @@ describe("SidebarContent disconnected project — issue #12576", () => {
     // Retry cannot bring back a crashed host, so any service error — its
     // banner shown or dismissed — keeps Retry off screen.
     expect(source).toMatch(
-      /const worktreeLoadErrorBanner =\s*loadFailure !== null && error === null \?/
+      /const worktreeLoadErrorBanner =\s*loadFailure !== null && error === null && isFailureSettled \?/
     );
   });
 
@@ -991,13 +1027,32 @@ describe("SidebarContent disconnected project — issue #12576", () => {
     expect(source).toContain(
       "const canDismissErrorBanner = worktrees.length > 0 || !isProjectDisconnected;"
     );
-    expect(source).toMatch(/error !== null && \(!bannerDismissed \|\| !canDismissErrorBanner\) \?/);
+    expect(source).toMatch(
+      /error !== null && isFailureSettled && \(!bannerDismissed \|\| !canDismissErrorBanner\) \?/
+    );
+  });
+
+  it("holds every failure banner behind one settle window, with the skeleton standing in (#14311)", () => {
+    // One window covers both banners, fed by whichever failure would show, so
+    // a hand-over from one to the other cannot restart it.
+    expect(source).toMatch(
+      /const sidebarFailure: SidebarFailure \| null =\s*error !== null\s*\?\s*\{ kind: "service-error", message: error \}\s*:\s*loadFailure !== null\s*\?\s*\{ kind: "load-error", message: loadFailure \}\s*:\s*null;/
+    );
+    expect(source).toContain("const isFailureSettled = useSettledSidebarFailure(sidebarFailure);");
+    // Without the skeleton an empty sidebar would sit as a bare header for the
+    // length of the window; once a failure settles it ends the skeleton even
+    // while the store still reads as loading, or a stalled first hydration
+    // would hide its Retry for good.
+    expect(source).toContain(
+      "const showSkeleton = (isLoading || sidebarFailure !== null) && !isFailureSettled;"
+    );
+    expect(source).toContain("if (showSkeleton && worktrees.length === 0)");
   });
 
   it("keeps the loading skeleton ahead of the disconnected fallback", () => {
     // `isInitialized` is false for every cold start, so the fallback may only
     // claim the state once loading has settled.
-    const skeletonIdx = source.indexOf("if (isLoading && worktrees.length === 0)");
+    const skeletonIdx = source.indexOf("if (showSkeleton && worktrees.length === 0)");
     const zeroIdx = source.indexOf("if (worktrees.length === 0) {");
     expect(skeletonIdx).toBeGreaterThan(0);
     expect(skeletonIdx).toBeLessThan(zeroIdx);
@@ -1210,12 +1265,18 @@ describe("Worktree list keyboard grid — issue #6422 / virtualized rewrite", ()
 
   describe("SidebarContent — pinned rows participate in keyboard navigation", () => {
     let source: string;
+    let rowModelSource: string;
+    let modelHookSource: string;
     beforeEach(async () => {
       source = await fs.readFile(SIDEBAR_CONTENT_PATH, "utf-8");
+      rowModelSource = await fs.readFile(ROW_MODEL_PATH, "utf-8");
+      modelHookSource = await fs.readFile(MODEL_HOOK_PATH, "utf-8");
     });
 
     it("prepends the main worktree to keyboardItems when visible", () => {
-      expect(source).toMatch(/if \(mainVisible && mainWorktree\)[\s\S]{0,200}isPinned: true/);
+      expect(modelHookSource).toMatch(
+        /if \(mainVisible && mainWorktree\)[\s\S]{0,200}isPinned: true/
+      );
     });
 
     it("keeps the main worktree as the only row pinned outside Virtuoso (#11433)", () => {
@@ -1223,7 +1284,8 @@ describe("Worktree list keyboard grid — issue #6422 / virtualized rewrite", ()
       // `develop`/`trunk`/`next`, which removed it from the counts and the list.
       // Every other worktree now reaches the grid through sidebarItems. The test
       // above pins down *which* row stays pinned; this one pins the count.
-      expect(source.match(/isPinned: true/g)).toHaveLength(1);
+      const sidebarSource = [source, modelHookSource, rowModelSource].join("\n");
+      expect(sidebarSource.match(/isPinned: true/g)).toHaveLength(1);
     });
   });
 
@@ -1235,7 +1297,7 @@ describe("Worktree list keyboard grid — issue #6422 / virtualized rewrite", ()
       });
 
       it("computes ariaRowCount including pinned, group header, and data rows", async () => {
-        const source = await fs.readFile(SIDEBAR_CONTENT_PATH, "utf-8");
+        const source = await fs.readFile(MODEL_HOOK_PATH, "utf-8");
         expect(source).toMatch(/const ariaRowCount =/);
         expect(source).toMatch(
           /groupedSections[\s\S]*?\.reduce\([\s\S]*?1 \+ s\.worktrees\.length/
@@ -1246,10 +1308,11 @@ describe("Worktree list keyboard grid — issue #6422 / virtualized rewrite", ()
         // With only the main row pinned, the first virtualized row sits one slot
         // past it and the row count starts from the same base. A second pinned
         // slot would have to reintroduce an offset here (#11433).
-        const source = await fs.readFile(SIDEBAR_CONTENT_PATH, "utf-8");
+        const source = await fs.readFile(MODEL_HOOK_PATH, "utf-8");
+        const rowModelSource = await fs.readFile(ROW_MODEL_PATH, "utf-8");
         expect(source).toMatch(/const firstScrollableRowIndex = mainRowIndex \+ 1;/);
         expect(source).toMatch(/const ariaRowCount =\s*\n?\s*mainRowIndex \+/);
-        expect(source).toMatch(/let nextRowIndex = firstScrollableRowIndex;/);
+        expect(rowModelSource).toMatch(/let nextRowIndex = firstScrollableRowIndex;/);
       });
 
       it("StaticWorktreeRow applies aria-rowindex to its role='row' div", async () => {
@@ -1385,9 +1448,11 @@ describe("Worktree list keyboard grid — issue #6422 / virtualized rewrite", ()
   describe("issue #8389 — per-row sidebar subscription stops full-list re-renders", () => {
     let source: string;
     let staticSource: string;
+    let rowModelSource: string;
     beforeEach(async () => {
       source = await fs.readFile(SIDEBAR_CONTENT_PATH, "utf-8");
       staticSource = await fs.readFile(STATIC_ROW_PATH, "utf-8");
+      rowModelSource = await fs.readFile(ROW_MODEL_PATH, "utf-8");
     });
 
     it("StaticWorktreeRow subscribes to its own store slice by id (not a prop object)", () => {
@@ -1428,8 +1493,8 @@ describe("Worktree list keyboard grid — issue #6422 / virtualized rewrite", ()
       // object — and the sidebarItems memo iterates `section.worktrees` to
       // push those items.
       expect(source).toMatch(/<StaticWorktreeRow\s+worktreeId=\{item\.worktreeId\}/);
-      expect(source).toMatch(/for \(const w of section\.worktrees\)/);
-      expect(source).toMatch(/worktreeId:\s*w\.id/);
+      expect(rowModelSource).toMatch(/for \(const w of section\.worktrees\)/);
+      expect(rowModelSource).toMatch(/worktreeId:\s*w\.id/);
       // No render path threads a full worktree object into the row.
       expect(source).not.toMatch(/<StaticWorktreeRow[^>]*\bworktree=\{/);
     });
@@ -1439,7 +1504,7 @@ describe("Worktree list keyboard grid — issue #6422 / virtualized rewrite", ()
       // memo emits (header sentinel + each row). Virtuoso renders the items;
       // the counter still post-increments inside the iteration so each
       // emitted item carries the next 1-based row slot.
-      expect(source).toMatch(/ariaRowIndex:\s*nextRowIndex\+\+/);
+      expect(rowModelSource).toMatch(/ariaRowIndex:\s*nextRowIndex\+\+/);
     });
   });
 
@@ -1463,13 +1528,15 @@ describe("Worktree list keyboard grid — issue #6422 / virtualized rewrite", ()
 
     describe("SidebarContent wires keyboard reorder to applyManualWorktreeReorder", () => {
       let source: string;
+      let reorderSource: string;
       beforeEach(async () => {
         source = await fs.readFile(SIDEBAR_CONTENT_PATH, "utf-8");
+        reorderSource = await fs.readFile(REORDER_HOOK_PATH, "utf-8");
       });
 
       it("imports the shared reorder helper used by drag-end (single source of truth)", () => {
-        expect(source).toContain('from "@/lib/worktreeReorder"');
-        expect(source).toContain("applyManualWorktreeReorder");
+        expect(reorderSource).toContain('from "@/lib/worktreeReorder"');
+        expect(reorderSource).toContain("applyManualWorktreeReorder");
       });
 
       it("renders a sr-only aria-live polite region for keyboard reorder announcements", () => {
@@ -1478,21 +1545,23 @@ describe("Worktree list keyboard grid — issue #6422 / virtualized rewrite", ()
       });
 
       it("receives a worktreeId (not a DOM element) from the keyboard hook and bounds-clamps the move", () => {
-        expect(source).toMatch(
+        expect(reorderSource).toMatch(
           /handleKeyboardReorder = useCallback\(\(worktreeId: string, delta: -1 \| 1\)/
         );
-        expect(source).toMatch(/targetIdx < 0 \|\| targetIdx >= visible\.length/);
+        expect(reorderSource).toMatch(/targetIdx < 0 \|\| targetIdx >= visible\.length/);
       });
 
       it("routes the reorder through useWorktreeFilterStore (manualOrder + manual sort)", () => {
-        expect(source).toMatch(/filterStore\.setManualOrder\(merged\)/);
-        expect(source).toMatch(/filterStore\.setOrderBy\("manual"\)/);
+        expect(reorderSource).toMatch(/filterStore\.setManualOrder\(merged\)/);
+        expect(reorderSource).toMatch(/filterStore\.setOrderBy\("manual"\)/);
       });
 
       it("guards the reorder against grouped-by-type / active-search modes so it never silently mutates manualOrder when the drag handle is hidden", () => {
-        expect(source).toMatch(/isSortDisabledRef\s*=\s*useRef\(false\)/);
-        expect(source).toMatch(/isSortDisabledRef\.current\s*=\s*isSortDisabled/);
-        const guard = source.match(/handleKeyboardReorder = useCallback\([\s\S]*?\}, \[\]\);/);
+        expect(reorderSource).toMatch(/isSortDisabledRef\s*=\s*useRef\(false\)/);
+        expect(reorderSource).toMatch(/isSortDisabledRef\.current\s*=\s*isSortDisabled/);
+        const guard = reorderSource.match(
+          /handleKeyboardReorder = useCallback\([\s\S]*?\}, \[\]\);/
+        );
         expect(guard).toBeTruthy();
         expect(guard?.[0]).toMatch(/if \(isSortDisabledRef\.current\) return;/);
       });
@@ -1612,7 +1681,7 @@ describe("SidebarContent keyboard reorder announcement — issue #8013", () => {
   let source: string;
 
   beforeEach(async () => {
-    source = await fs.readFile(SIDEBAR_CONTENT_PATH, "utf-8");
+    source = await fs.readFile(REORDER_HOOK_PATH, "utf-8");
   });
 
   describe("worktree name in the announcement", () => {
@@ -1675,7 +1744,7 @@ describe("SidebarContent reorder re-enable announcement — issue #8395", () => 
   let source: string;
 
   beforeEach(async () => {
-    source = await fs.readFile(SIDEBAR_CONTENT_PATH, "utf-8");
+    source = await fs.readFile(REORDER_HOOK_PATH, "utf-8");
   });
 
   it("tracks the previous sort-disabled state in a ref", () => {
@@ -1731,7 +1800,7 @@ describe("SidebarContent — workspace with no worktrees (#11405, #11499)", () =
 
   it("answers before the loading skeleton, which would otherwise never resolve", () => {
     const gate = source.indexOf("!workspaceRoot.isGitBacked");
-    const skeleton = source.indexOf("if (isLoading && worktrees.length === 0)");
+    const skeleton = source.indexOf("if (showSkeleton && worktrees.length === 0)");
     expect(gate).toBeGreaterThan(-1);
     expect(skeleton).toBeGreaterThan(-1);
     expect(gate).toBeLessThan(skeleton);
@@ -1994,5 +2063,31 @@ describe("SidebarContent Virtuoso reset wiring — issue #12094", () => {
 
   it("measures the shrink against the rendered item array", () => {
     expect(source).toMatch(/itemCount:\s*sidebarItems\.length/);
+  });
+});
+
+describe("SidebarContent clock reads under React Compiler (#14351)", () => {
+  // Compiled, a bare `Date.now()` is cached with whichever memo block reads it,
+  // so a check that only ages (reconnect escalation, the stalled-reconnect
+  // Retry, the main row's activity window) would keep its first answer. Vitest
+  // runs uncompiled and cannot see that caching; these pin the shape that keeps
+  // the clock a dependency once compiled.
+  it.each([
+    ["SidebarContent", SIDEBAR_CONTENT_PATH],
+    ["the row model hook", MODEL_HOOK_PATH],
+  ])("%s reads the clock through useRenderTime, never Date.now()", async (_label, file) => {
+    const owner = await fs.readFile(file, "utf-8");
+    expect(owner).toContain("const now = useRenderTime();");
+    expect(owner).not.toMatch(/Date\.now\(\)/);
+  });
+
+  it("hands that clock to every check that ages", async () => {
+    const source = await fs.readFile(SIDEBAR_CONTENT_PATH, "utf-8");
+    const modelHookSource = await fs.readFile(MODEL_HOOK_PATH, "utf-8");
+    expect(source).toMatch(/now - reconnectingAt >= RECONNECT_ESCALATE_MS/);
+    expect(source).toMatch(/needsReconnectRetry\([^)]*\}, now\)/);
+    expect(modelHookSource).toMatch(
+      /mainWorktree\.id === activeWorktreeId,\s*devServerSessions,\s*now\s*\)/
+    );
   });
 });

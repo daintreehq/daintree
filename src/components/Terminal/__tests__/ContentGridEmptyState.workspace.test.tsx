@@ -9,6 +9,7 @@ const h = vi.hoisted(() => ({
   panelIds: [] as string[],
   panelsById: {} as Record<string, unknown>,
   recipes: { currentProjectId: null as string | null, isLoading: false },
+  band: false,
   dispatch: vi.fn(() => Promise.resolve()),
 }));
 
@@ -32,6 +33,10 @@ vi.mock("../LauncherQuickActions", () => ({
 }));
 vi.mock("../RecipeRunner/RecipeRunner", () => ({
   RecipeRunner: () => <div data-testid="recipe-runner" />,
+}));
+vi.mock("../PluginLaunchBand", () => ({
+  PluginLaunchBand: ({ className }: { className?: string }) =>
+    h.band ? <div data-testid="plugin-launch-band" className={className} /> : null,
 }));
 vi.mock("../ResumeSessionLine", () => ({
   ResumeSessionLine: () => <div data-testid="resume-session-line" />,
@@ -95,6 +100,7 @@ describe("ContentGridEmptyState — workspace capabilities", () => {
     h.panelsById = {};
     h.recipes.currentProjectId = null;
     h.recipes.isLoading = false;
+    h.band = false;
     h.dispatch.mockClear();
   });
 
@@ -124,6 +130,14 @@ describe("ContentGridEmptyState — workspace capabilities", () => {
       render(<ContentGridEmptyState {...SCRATCH_PROPS} />);
 
       expect(screen.queryByTestId("rotating-tip")).toBeNull();
+    });
+
+    it("leaves out the plugin band, which belongs to a project", () => {
+      h.band = true;
+
+      render(<ContentGridEmptyState {...SCRATCH_PROPS} />);
+
+      expect(screen.queryByTestId("plugin-launch-band")).toBeNull();
     });
 
     it("suppresses the project pulse", () => {
@@ -249,6 +263,24 @@ describe("ContentGridEmptyState — workspace capabilities", () => {
       h.recipes.currentProjectId = "project-1";
       return render(<ContentGridEmptyState {...PROJECT_PROPS} />).container;
     };
+
+    it("adds the plugin band between the recipes and the pulse, on the recipes' step", () => {
+      h.band = true;
+      const container = renderWholeLauncher();
+
+      const sections = animatedSections(container);
+      expect(sections).toHaveLength(7);
+      const at = (id: string) =>
+        sections.findIndex(
+          (el) => el.querySelector(`[data-testid="${id}"]`) ?? el.matches(`[data-testid="${id}"]`)
+        );
+      expect(at("recipe-runner")).toBeGreaterThanOrEqual(0);
+      expect(at("plugin-launch-band")).toBe(at("recipe-runner") + 1);
+      expect(at("project-pulse")).toBe(at("plugin-launch-band") + 1);
+      expect(delayOf(sections[at("plugin-launch-band")]!)).toBe(
+        delayOf(sections[at("recipe-runner")]!)
+      );
+    });
 
     it("animates each launcher section rather than the container as one block", () => {
       const container = renderWholeLauncher();

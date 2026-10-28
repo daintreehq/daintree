@@ -342,6 +342,49 @@ describe("Plugin action registry", () => {
     ).toThrow(/invalid kind/i);
   });
 
+  it("registerPluginAction refuses a category that names a built-in group, however it is spelled", () => {
+    for (const category of ["worktree", "Worktree", "  GIT ", "ter\u0000minal", "agents"]) {
+      expect(() =>
+        service.registerPluginAction("acme.my-plugin", { ...validContribution(), category })
+      ).toThrow(/reserved/);
+    }
+  });
+
+  it("registerPluginAction caps category length after normalising it", () => {
+    expect(() =>
+      service.registerPluginAction("acme.my-plugin", {
+        ...validContribution(),
+        category: "x".repeat(41),
+      })
+    ).toThrow(/longer than 40/);
+    service.registerPluginAction("acme.my-plugin", {
+      ...validContribution(),
+      category: ` ${"x".repeat(40)} `,
+    });
+    expect(service.listPluginActions()[0]!.category).toBe("x".repeat(40));
+  });
+
+  it("registerPluginAction keeps when/enablement on the descriptor and refuses unparsable ones", () => {
+    service.registerPluginAction("acme.my-plugin", {
+      ...validContribution(),
+      when: "acme.my-plugin.ready",
+      enablement: "!acme.my-plugin.busy",
+    });
+    expect(service.listPluginActions()[0]).toMatchObject({
+      when: "acme.my-plugin.ready",
+      enablement: "!acme.my-plugin.busy",
+    });
+    for (const field of ["when", "enablement"] as const) {
+      expect(() =>
+        service.registerPluginAction("acme.my-plugin", {
+          ...validContribution(),
+          id: "acme.my-plugin.other",
+          [field]: "a &&",
+        })
+      ).toThrow(new RegExp(`invalid "${field}" clause`));
+    }
+  });
+
   it("registerPluginAction throws on duplicate id", () => {
     service.registerPluginAction("acme.my-plugin", validContribution());
     expect(() => service.registerPluginAction("acme.my-plugin", validContribution())).toThrow(
@@ -781,6 +824,7 @@ type ActionDescriptorInput = {
   danger: "safe" | "confirm";
   keywords?: string[];
   inputSchema?: Record<string, unknown>;
+  resultSchema?: Record<string, unknown>;
 };
 type ActionHostShape = (pluginId: string) => {
   host: {
@@ -1106,6 +1150,160 @@ describe("createHost — registerAction", () => {
       [{ name: "issue" }]
     );
     expect(result).toBe("ok");
+  });
+
+  describe("resultSchema", () => {
+    const ACTION = "acme.act-test.plan-from-issue";
+    const countSchema = () => ({
+      type: "object",
+      properties: { count: { type: "number" } },
+      required: ["count"],
+    });
+    const dispatch = () =>
+      service.dispatchHandler("acme.act-test", ACTION, makeCtx("acme.act-test"), [{}]);
+
+    it("returns a matching result as the handler sent it, unknown keys included", async () => {
+      const { host } = getHost("acme.act-test");
+      host.registerAction(descriptor({ resultSchema: countSchema() }), () => ({
+        count: 3,
+        extra: "kept",
+      }));
+
+      await expect(dispatch()).resolves.toEqual({ count: 3, extra: "kept" });
+    });
+
+    it("fails a result that doesn't match, without coercing it to fit", async () => {
+      const { host } = getHost("acme.act-test");
+      host.registerAction(descriptor({ resultSchema: countSchema() }), () => ({ count: "3" }));
+
+      const failure = await dispatch().then(
+        () => null,
+        (err: unknown) => err as { code?: unknown; message: string }
+      );
+      expect(failure?.code).toBe("RESULT_VALIDATION_ERROR");
+      expect(failure?.message).toContain(ACTION);
+    });
+
+    it("refuses a result whose JSON outgrows the result cap the clone estimate let through", async () => {
+      // Counted once by the structured-clone estimate, written out 20 times as JSON.
+      const leaf = { text: "x".repeat(1024 * 1024) };
+      const { host } = getHost("acme.act-test");
+      host.registerAction(descriptor({ resultSchema: { type: "object" } }), () => ({
+        items: Array.from({ length: 20 }, () => leaf),
+      }));
+
+      await expect(dispatch()).rejects.toThrow(/^PLUGIN_PAYLOAD_TOO_LARGE: .*as JSON/);
+    });
+
+    it("refuses a schema it can't enforce, and registers nothing", () => {
+      const { host } = getHost("acme.act-test");
+      for (const resultSchema of [
+        { type: "array" },
+        { type: "object", properties: { a: { $ref: "https://example.com/a.json" } } },
+        { type: "object", $async: true },
+        { type: "object", $schema: "http://json-schema.org/draft-04/schema#" },
+      ]) {
+        expect(() => host.registerAction(descriptor({ resultSchema }), () => ({}))).toThrow(
+          /resultSchema/
+        );
+      }
+      expect(service.listPluginActions()).toEqual([]);
+    });
+
+    it("leaves the registered action in place when a replacement's schema is refused", async () => {
+      const { host } = getHost("acme.act-test");
+      host.registerAction(descriptor({ resultSchema: countSchema() }), () => ({ count: 1 }));
+
+      expect(() =>
+        host.registerAction(descriptor({ resultSchema: { type: "string" } }), () => "two")
+      ).toThrow(/resultSchema/);
+
+      await expect(dispatch()).resolves.toEqual({ count: 1 });
+      expect(service.listPluginActions()[0]?.resultSchema).toEqual(countSchema());
+    });
+
+    it("publishes and enforces its own copy, not the plugin's object", async () => {
+      const schema: Record<string, unknown> = countSchema();
+      const { host } = getHost("acme.act-test");
+      host.registerAction(descriptor({ resultSchema: schema }), () => ({ count: 2 }));
+
+      schema.required = ["missing"];
+      (schema.properties as Record<string, unknown>).count = { type: "string" };
+
+      expect(service.listPluginActions()[0]?.resultSchema).toEqual(countSchema());
+      await expect(dispatch()).resolves.toEqual({ count: 2 });
+    });
+
+    it.each([
+      [{ count: 5 }, "resolves"],
+      [{ count: "5" }, "rejects"],
+    ] as const)(
+      "holds a call to the contract it started under when the action is replaced mid-run (%j %s)",
+      async (inFlightResult, outcome) => {
+        let release!: () => void;
+        const gate = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        let started = false;
+        const { host } = getHost("acme.act-test");
+        host.registerAction(descriptor({ resultSchema: countSchema() }), async () => {
+          started = true;
+          await gate;
+          return inFlightResult;
+        });
+
+        const running = dispatch().then(
+          (value) => ({ value }),
+          (err: unknown) => ({ code: (err as { code?: unknown }).code })
+        );
+        try {
+          await vi.waitFor(() => {
+            expect(started).toBe(true);
+          });
+          // The replacement accepts only a string count, the reverse of the first.
+          host.registerAction(
+            descriptor({
+              resultSchema: {
+                type: "object",
+                properties: { count: { type: "string" } },
+                required: ["count"],
+              },
+            }),
+            () => ({ count: "five" })
+          );
+        } finally {
+          release();
+        }
+
+        expect(await running).toEqual(
+          outcome === "resolves" ? { value: inFlightResult } : { code: "RESULT_VALIDATION_ERROR" }
+        );
+        await expect(dispatch()).resolves.toEqual({ count: "five" });
+      }
+    );
+
+    it("names the provider from its manifest, never the contribution", async () => {
+      await writePlugin("named", {
+        name: "acme.named",
+        displayName: "Named Plugin",
+        version: "1.0.0",
+      });
+      const named = new PluginService(tmpDir);
+      await named.initialize();
+      const createHost = (named as unknown as { createHost: ActionHostShape }).createHost;
+      createHost
+        .call(named, "acme.named")
+        .host.registerAction(
+          { ...descriptor(), pluginName: "Someone Else" } as ActionDescriptorInput,
+          () => undefined
+        );
+      createHost.call(named, "acme.act-test").host.registerAction(descriptor(), () => undefined);
+
+      const names = Object.fromEntries(
+        named.listPluginActions().map((action) => [action.pluginId, action.pluginName])
+      );
+      expect(names).toEqual({ "acme.named": "Named Plugin", "acme.act-test": "acme.act-test" });
+    });
   });
 
   it("propagates an async handler rejection through dispatch", async () => {

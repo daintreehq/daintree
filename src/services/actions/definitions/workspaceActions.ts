@@ -8,6 +8,12 @@ const WorkspaceSummarySchema = z.object({
   name: z.string(),
   kind: z.enum(["project", "scratch"]),
   hasLiveView: z.boolean(),
+  frontendAttached: z
+    .boolean()
+    .nullable()
+    .describe(
+      "A frontend is attached: a view here or a driving Shell. If false, only tools the host runs itself run. Null: unknown."
+    ),
 });
 
 export function registerWorkspaceActions(actions: ActionRegistry): void {
@@ -23,7 +29,14 @@ export function registerWorkspaceActions(actions: ActionRegistry): void {
     resultSchema: z.object({ workspaces: z.array(WorkspaceSummarySchema) }),
     mcpOutputSchema: true,
     run: async () => {
-      return { workspaces: await workspaceClient.list() };
+      const workspaces = await workspaceClient.list();
+      // A remote host that predates the field (#14122) doesn't say, which is not "no".
+      return {
+        workspaces: workspaces.map((entry) => ({
+          ...entry,
+          frontendAttached: entry.frontendAttached ?? null,
+        })),
+      };
     },
   }));
 }

@@ -2,7 +2,7 @@ import type { AgentStateChangePayload } from "@shared/types";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
 import { isPtyPanel } from "@shared/types/panel";
 import { terminalRegistryController } from "@/controllers";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { with as withTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 import { logWarn } from "@/utils/logger";
 import { DisposableStore, toDisposable } from "@/utils/disposable";
 import { usePanelStore } from "@/store/panelStore";
@@ -116,7 +116,7 @@ export function setupIdentityListeners(): DisposableStore {
           });
         }
 
-        terminalInstanceService.setAgentState(terminalId, state);
+        withTerminalService((service) => service.setAgentState(terminalId, state), terminalId);
 
         if (terminal.agentState === "directing" && state === "waiting") {
           return;
@@ -350,8 +350,12 @@ export function setupIdentityListeners(): DisposableStore {
             );
           }
 
-          if (result.shouldPromoteAgentId) {
-            terminalInstanceService.applyAgentPromotion(terminalId, result.shouldPromoteAgentId);
+          const promotedAgentId = result.shouldPromoteAgentId;
+          if (promotedAgentId) {
+            withTerminalService(
+              (service) => service.applyAgentPromotion(terminalId, promotedAgentId),
+              terminalId
+            );
           }
 
           return {
@@ -373,7 +377,7 @@ export function setupIdentityListeners(): DisposableStore {
         recordIdentityEventDev("exited", terminalId, {
           agentType: (data as { agentType?: string }).agentType,
         });
-        terminalInstanceService.clearAgentPromotion(terminalId);
+        withTerminalService((service) => service.clearAgentPromotion(terminalId), terminalId);
 
         // `agent:exited` clears live-detection fields for both subcommand
         // demotion and preserved PTY exit. `launchAgentId` is immutable and is

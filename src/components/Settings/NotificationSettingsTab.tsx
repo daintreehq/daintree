@@ -1,12 +1,12 @@
 import { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { SettingsSection } from "./SettingsSection";
-import { useSettingsOwnerMarker, useSettingsRowOwnerNote } from "@/hooks/useSettingsOwner";
 import { SettingsSwitch } from "./SettingsSwitch";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
 import { SettingsDependents, SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { SettingsPresetGroup } from "./SettingsPresetGroup";
+import { SilencedPluginsSection } from "./SilencedPluginsSection";
 import {
   Select,
   SelectContent,
@@ -207,10 +207,6 @@ interface SaveFailure {
 }
 
 export function NotificationSettingsTab() {
-  // The host decides when its agents notify; how a notification reaches this person
-  // (sound, the flash) is this screen's. A remote window names the owner of each part.
-  const ownerMarker = useSettingsOwnerMarker();
-  const rowOwnerNote = useSettingsRowOwnerNote();
   const [settings, setSettings] = useState<NotificationSettings>(DEFAULT_SETTINGS);
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [loadNonce, setLoadNonce] = useState(0);
@@ -375,7 +371,7 @@ export function NotificationSettingsTab() {
 
   return (
     <div className="space-y-8">
-      <SettingsSection title="Agent notifications" badge={ownerMarker("host")}>
+      <SettingsSection title="Agent notifications">
         {loadFailed && (
           <SettingsLoadErrorBanner
             title="Notification settings didn't load"
@@ -444,10 +440,7 @@ export function NotificationSettingsTab() {
             <SwitchRow
               id="notif-all-clear-flash"
               label="Flash when agents stop working"
-              description={rowOwnerNote(
-                "Briefly flash the window, with or without sound, once two or more agents were working and none still is. An agent waiting for input counts as stopped.",
-                "device"
-              )}
+              description="Briefly flash the window, with or without sound, once two or more agents were working and none still is. An agent waiting for input counts as stopped."
               checked={settings.flashEnabled}
               onChange={(v) => update({ flashEnabled: v })}
               {...reset("flashEnabled")}
@@ -456,7 +449,7 @@ export function NotificationSettingsTab() {
         </SettingsGroup>
       </SettingsSection>
 
-      <SettingsSection title="Sound" badge={ownerMarker("device")}>
+      <SettingsSection title="Sound">
         {saveError("sound")}
         <SettingsGroup>
           <SettingsSwitchCard
@@ -485,7 +478,7 @@ export function NotificationSettingsTab() {
             <SwitchRow
               id="notif-working-pulse"
               label={NOTIFICATION_COPY.workingPulse.label}
-              description={rowOwnerNote(NOTIFICATION_COPY.workingPulse.description, "host")}
+              description={NOTIFICATION_COPY.workingPulse.description}
               checked={settings.workingPulseEnabled}
               onChange={(v) => update({ workingPulseEnabled: v })}
               {...reset("workingPulseEnabled")}
@@ -502,7 +495,7 @@ export function NotificationSettingsTab() {
             </SettingsDependents>
             <SettingsSwitchCard
               title="UI feedback sounds"
-              subtitle="Short audio cues for git commit and push, worktree create and delete, agent spawn, and context injection"
+              subtitle="Short audio cues for git commit and push, worktree create and delete, agent spawn, context injection, and dictation start, stop and failure"
               isEnabled={settings.uiFeedbackSoundEnabled}
               onChange={() => update({ uiFeedbackSoundEnabled: !settings.uiFeedbackSoundEnabled })}
               {...reset("uiFeedbackSoundEnabled")}
@@ -513,7 +506,6 @@ export function NotificationSettingsTab() {
 
       <SettingsSection
         title="Quiet hours"
-        badge={ownerMarker("host")}
         description="History still records everything, and agents waiting for input always get through"
       >
         {saveError("quiet")}
@@ -576,6 +568,8 @@ export function NotificationSettingsTab() {
           )}
         </SettingsGroup>
       </SettingsSection>
+
+      <SilencedPluginsSection />
     </div>
   );
 }

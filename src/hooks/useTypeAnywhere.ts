@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { isPtyPanel } from "@shared/types/panel";
 import { usePanelStore } from "@/store";
+import { exitProjectHome } from "@/store/storeAccessors";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useScreenReaderStore } from "@/store/screenReaderStore";
@@ -11,6 +12,7 @@ import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { getTerminalDisplayTitle } from "@/utils/terminalTitleDisplay";
 import { UI_PALETTE_EXIT_DURATION, UI_TYPING_LOCATOR_DWELL_MS } from "@/lib/animationUtils";
 import { focusPanelInput } from "@/components/Panel/panelFocusRegistry";
+import { requestPaneFocus, requestedPaneSurface } from "@/components/Terminal/paneFocusRequest";
 import {
   findPanelIdForElement,
   getFocusTarget,
@@ -198,7 +200,10 @@ export function useTypeAnywhere(): void {
       if (panelStore.maximizedId !== null && panelStore.maximizedId !== targetId) {
         panelStore.exitMaximize();
       }
-      panelStore.setPreferredTerminalFocusTarget("hybridInput");
+      // Home hides every grid pane; the dock stays on screen beside it.
+      if (target.location === "grid" || target.location === undefined) {
+        exitProjectHome();
+      }
       panelStore.setFocused(targetId);
       scrollPanelIntoView(targetId);
       useTypingLocatorStore.getState().showLocator({
@@ -210,15 +215,18 @@ export function useTypeAnywhere(): void {
       // is over — returning to that pane deserves to be announced again.
       locateEpisodeRef.current = null;
 
-      // The pane's own focus effect drives the editor focus, but the editor is a
-      // lazy chunk and its worktree may still be mounting — so poll until DOM
-      // focus actually lands inside the target's hybrid input rather than
-      // trusting any handle's boolean (which reports "a view is mounted", not
-      // "focus landed"). Best-effort: the draft is already safe.
+      // Asked once, so the pane's own focus pass and a hybrid input still
+      // loading its lazy chunk both send the keyboard to the draft. Its
+      // worktree may still be mounting too, so keep trying until DOM focus
+      // actually lands inside the target's hybrid input rather than trusting
+      // any handle's boolean (which reports "a view is mounted", not "focus
+      // landed") — but only while the request is current: a press or a newer
+      // request ends the retries with it. Best-effort: the draft is already safe.
+      requestPaneFocus(targetId, "hybridInput");
       if (focusFrameRef.current !== null) cancelAnimationFrame(focusFrameRef.current);
       let framesLeft = FOCUS_ATTEMPT_FRAMES;
       const settleFocus = () => {
-        if (isFocusInHybridInput(targetId)) {
+        if (isFocusInHybridInput(targetId) || requestedPaneSurface(targetId) !== "hybridInput") {
           focusFrameRef.current = null;
           return;
         }
@@ -226,7 +234,7 @@ export function useTypeAnywhere(): void {
           focusFrameRef.current = null;
           return;
         }
-        focusPanelInput(targetId);
+        focusPanelInput(targetId, "hybridInput");
         focusFrameRef.current = requestAnimationFrame(settleFocus);
       };
       focusFrameRef.current = requestAnimationFrame(settleFocus);

@@ -1,7 +1,10 @@
-import type { GitStatus, WorktreeSnapshot } from "@shared/types";
+import type { GitStatus } from "@shared/types";
 import { actionService } from "@/services/ActionService";
-import { isAbsolute, join, normalize } from "@shared/utils/path";
 import { GIT_FILE_DIFF_MAX_BYTES } from "@shared/config/gitReadLimits";
+import type {
+  ReviewFileSinceSide,
+  ReviewMarkFileSinceOutcome,
+} from "@shared/types/ipc/reviewMarks";
 
 /**
  * Session-scoped LRU so stepping back and forth through a change set doesn't
@@ -24,16 +27,13 @@ export interface CachedDiff {
    * file changed before the user navigated to it still reads as stale.
    */
   freshnessKey: string | undefined;
+  /** What the host said about a since-review file; `content` is derived from it. */
+  sinceReview?: ReviewMarkFileSinceOutcome;
 }
 
 const diffCache = new Map<string, CachedDiff>();
 const inflightDiffRequests = new Map<string, Promise<CachedDiff | null>>();
 let diffCacheGeneration = 0;
-
-// Distinct from undefined (no signal at all): the worktree is tracked but the
-// file is absent from its change list, so a file staged/reverted/committed
-// while its diff is open still reads as changed.
-const FRESHNESS_MISSING = "missing";
 
 /** Identifies what to diff — the two fetch paths differ past this point. */
 export type DiffSubject =
@@ -49,38 +49,17 @@ export type DiffSubject =
       filePath: string;
       baseBranch: string;
       currentBranch: string;
+    }
+  | {
+      source: "since-review";
+      worktreePath: string;
+      worktreeId: string;
+      filePath: string;
+      /** Absent: the host picks the side that changed. */
+      side: ReviewFileSinceSide | undefined;
+      /** The mark's revision when asked, so a replaced mark is a new request. */
+      markRevision: number | undefined;
     };
-
-// Store change paths are absolute (electron/utils/git.ts keys changesMap by
-// absolutePath) while hosts pass worktree-relative paths — resolve both
-// against the worktree root before comparing.
-function comparablePath(worktreePath: string, path: string): string {
-  return isAbsolute(path) ? normalize(path) : join(worktreePath, path);
-}
-
-/**
- * Primitive freshness key for one file from the live worktree store.
- * `changes` is rebuilt wholesale every poll tick, so returning the found entry
- * would defeat Object.is bail-outs — the scalar collapses re-renders to actual
- * changes of this one file (#8635).
- */
-export function selectDiffFreshnessKey(
-  state: { worktrees: Map<string, WorktreeSnapshot> },
-  worktreePath: string,
-  filePath: string
-): string | undefined {
-  const worktreeKey = normalize(worktreePath);
-  const fileKey = comparablePath(worktreePath, filePath);
-  for (const worktree of state.worktrees.values()) {
-    if (normalize(worktree.path) !== worktreeKey) continue;
-    const changes = worktree.worktreeChanges?.changes;
-    if (!changes) return undefined;
-    const entry = changes.find((change) => comparablePath(worktreePath, change.path) === fileKey);
-    if (!entry) return FRESHNESS_MISSING;
-    return `${entry.status}:${entry.mtimeMs ?? entry.mtime ?? ""}:${entry.insertions ?? ""}:${entry.deletions ?? ""}`;
-  }
-  return undefined;
-}
 
 export function _resetDiffCacheForTests(): void {
   diffCache.clear();
@@ -92,7 +71,9 @@ export function diffCacheKey(subject: DiffSubject, ignoreWhitespace: boolean): s
   const tail =
     subject.source === "base-branch"
       ? `${subject.baseBranch}\u0000${subject.currentBranch}`
-      : subject.status;
+      : subject.source === "since-review"
+        ? `${subject.worktreeId}\u0000${subject.side ?? ""}\u0000${subject.markRevision ?? ""}`
+        : subject.status;
   return [
     subject.source,
     subject.worktreePath,
@@ -115,10 +96,39 @@ export function purgeWhitespaceEntriesExcept(live: readonly boolean[]): void {
   }
 }
 
+/**
+ * The text a since-review outcome puts where a patch goes: the exact patch, or
+ * the stand-in against the reviewed commit (the pane labels it), else a
+ * sentinel. A view with nothing to show says so in the pane's notice.
+ */
+export function sinceReviewContent(outcome: ReviewMarkFileSinceOutcome): string {
+  if (outcome.status !== "read") return "NO_CHANGES";
+  const { view } = outcome;
+  switch (view.kind) {
+    case "exact":
+      return view.patch || "NO_CHANGES";
+    case "unavailable":
+      return view.standIn?.patch || "NO_CHANGES";
+    case "binary":
+      return "BINARY_FILE";
+    case "too-large":
+      return "FILE_TOO_LARGE";
+    default:
+      return "NO_CHANGES";
+  }
+}
+
 async function fetchDiffContent(
   subject: DiffSubject,
   ignoreWhitespace: boolean
-): Promise<string | null> {
+): Promise<{ content: string; sinceReview?: ReviewMarkFileSinceOutcome } | null> {
+  if (subject.source === "since-review") {
+    const outcome = await window.electron.reviewMarks.fileSince(subject.worktreeId, {
+      path: subject.filePath,
+      ...(subject.side && { side: subject.side }),
+    });
+    return { content: sinceReviewContent(outcome), sinceReview: outcome };
+  }
   if (subject.source === "base-branch") {
     const result = await window.electron.git.compareWorktrees(
       subject.worktreePath,
@@ -128,7 +138,7 @@ async function fetchDiffContent(
       true,
       ignoreWhitespace
     );
-    return typeof result === "string" ? result || "NO_CHANGES" : null;
+    return typeof result === "string" ? { content: result || "NO_CHANGES" } : null;
   }
 
   // The panes render a whole diff, so they ask for the full transport ceiling
@@ -143,12 +153,14 @@ async function fetchDiffContent(
       status: subject.status,
       ignoreWhitespace,
       maxBytes: GIT_FILE_DIFF_MAX_BYTES,
+      // "working-tree" names no side: it keeps HEAD against the working tree.
+      ...(subject.source !== "working-tree" && { side: subject.source }),
     },
     { source: "user" }
   );
   if (!result.ok) return null;
-  if (result.result.truncated) return "FILE_TOO_LARGE";
-  return result.result.content || "NO_CHANGES";
+  if (result.result.truncated) return { content: "FILE_TOO_LARGE" };
+  return { content: result.result.content || "NO_CHANGES" };
 }
 
 /**
@@ -172,7 +184,9 @@ export function requestDiff(
   // reopen would serve the old diff with no stale banner. The modal this
   // replaced cached nothing here; keep it that way until we can key on commit
   // ids. In-flight dedup still applies — that window is one request's lifetime.
-  const cacheable = subject.source !== "base-branch";
+  // A since-review diff is uncacheable for the same reason: its mark can be
+  // replaced or cleared under an unchanged key.
+  const cacheable = subject.source !== "base-branch" && subject.source !== "since-review";
   if (!bypassCache) {
     if (cacheable) {
       const cached = diffCache.get(key);
@@ -188,9 +202,10 @@ export function requestDiff(
   }
   const generation = diffCacheGeneration;
   const request = fetchDiffContent(subject, ignoreWhitespace)
-    .then((content) => {
-      if (content === null) return null;
-      const entry: CachedDiff = { content, freshnessKey };
+    .then((fetched) => {
+      if (fetched === null) return null;
+      const entry: CachedDiff = { content: fetched.content, freshnessKey };
+      if (fetched.sinceReview) entry.sinceReview = fetched.sinceReview;
       if (cacheable && generation === diffCacheGeneration) cacheDiff(key, entry);
       return entry;
     })

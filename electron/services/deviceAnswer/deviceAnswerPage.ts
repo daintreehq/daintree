@@ -11,6 +11,8 @@ const SCRIPT = String.raw`
 (() => {
   const KEY = "daintree-device-token";
   const POLL_MS = 3000;
+  // An answer whose reply never arrived, or couldn't be read, may have gone in.
+  const UNHEARD = "Couldn't hear back from Daintree. It may have been pressed, so check before answering again.";
   const $ = (id) => document.getElementById(id);
   let token = null;
   let timer = null;
@@ -19,10 +21,27 @@ const SCRIPT = String.raw`
   // Bumped when an answer starts: a list read before it is stale, and a card
   // stays pressed-out until a list read after it replaces it.
   let answerSeq = 0;
+  // When the list last stopped coming back, and when each host that had been
+  // read stopped being readable; both clear once they answer again.
+  let downSince = 0;
+  // When the host list itself last stopped being readable.
+  let hostsDownSince = 0;
+  const hostRead = new Set();
+  const hostDownSince = new Map();
   try { token = localStorage.getItem(KEY); } catch {}
 
   const save = (value) => {
     token = value;
+    if (!value) {
+      // Nothing read under the old pairing is offered under the next one.
+      downSince = 0;
+      hostsDownSince = 0;
+      hostRead.clear();
+      hostDownSince.clear();
+      $("runs").replaceChildren();
+      $("hosts").replaceChildren();
+      $("status").textContent = "";
+    }
     try { value ? localStorage.setItem(KEY, value) : localStorage.removeItem(KEY); } catch {}
   };
 
@@ -61,14 +80,78 @@ const SCRIPT = String.raw`
     return m < 60 ? m + " min" : Math.round(m / 60) + " h";
   };
 
-  const render = (runs) => {
+  // The device's own clock, written the same everywhere rather than by locale.
+  const clock = (ms) => {
+    const at = new Date(ms);
+    return String(at.getHours()).padStart(2, "0") + ":" + String(at.getMinutes()).padStart(2, "0");
+  };
+
+  // Whole minutes, so the count reads the same way for the whole outage.
+  const minutes = (since) => Math.max(0, Math.floor((Date.now() - since) / 60000)) + " min";
+
+  // The cards stay to read, but a list that may be old can't be answered from.
+  const markStale = () => {
+    for (const card of $("runs").querySelectorAll(".run")) {
+      card.classList.add("stale");
+      for (const b of card.querySelectorAll("button")) b.disabled = true;
+    }
+  };
+
+  const render = (runs, reported, unlisted) => {
+    const hosts = Array.isArray(reported)
+      ? reported.filter((host) => host && typeof host.host === "string")
+      : [];
     const list = $("runs");
     list.replaceChildren();
-    $("empty").hidden = runs.length > 0;
+    const empty = $("empty");
+    empty.hidden = runs.length > 0;
+    // Nothing waiting is said outright only when every machine was read.
+    const read = hosts.filter((host) => host.status === "ok").map((host) => host.host);
+    const covered = ["this computer", ...read];
+    empty.textContent = !unlisted && read.length === hosts.length
+      ? "No agent is waiting."
+      : "No agent is waiting on " + (covered.length > 1
+        ? covered.slice(0, -1).join(", ") + " or " + covered[covered.length - 1]
+        : covered[0]) + ".";
+    const notes = $("hosts");
+    notes.replaceChildren();
+    if (unlisted) {
+      if (!hostsDownSince) hostsDownSince = Date.now();
+      notes.append(el("div", "", "Couldn't list the connected hosts since " + clock(hostsDownSince) + ", so their agents aren't shown."));
+    } else {
+      hostsDownSince = 0;
+    }
+    const listed = new Set(hosts.map((host) => host.hostId || host.host));
+    for (const key of [...hostRead]) if (!listed.has(key)) hostRead.delete(key);
+    for (const key of [...hostDownSince.keys()]) if (!listed.has(key)) hostDownSince.delete(key);
+    for (const host of hosts) {
+      const key = host.hostId || host.host;
+      if (host.status === "ok") {
+        hostRead.add(key);
+        hostDownSince.delete(key);
+        continue;
+      }
+      if (host.status === "needs-update") {
+        hostRead.delete(key);
+        hostDownSince.delete(key);
+        notes.append(el("div", "", host.host + " needs a newer Daintree to show its waiting agents here."));
+        continue;
+      }
+      // Only a host seen answering has a time it stopped.
+      if (hostRead.has(key) && !hostDownSince.has(key)) hostDownSince.set(key, Date.now());
+      const since = hostDownSince.get(key);
+      const at = since ? " since " + clock(since) : "";
+      notes.append(el("div", "", host.status === "not-connected"
+        ? "Not connected to " + host.host + at + ", so its agents aren't shown."
+        : "Couldn't read the waiting agents on " + host.host + at + "."));
+    }
+    // Machines are named once there is more than one to tell apart.
+    const named = hosts.length > 0;
     for (const run of runs) {
       const card = el("section", "run");
       const head = el("div", "head");
       head.append(el("strong", "", run.project || "Unknown project"));
+      if (named && run.host) head.append(el("span", "host", run.host));
       if (run.title) head.append(el("span", "title", run.title));
       card.append(head);
       const state = [run.agentId, run.agentState, run.waitingReason].filter(Boolean).join(" · ");
@@ -99,10 +182,16 @@ const SCRIPT = String.raw`
     const result = card.querySelector(".result");
     result.textContent = "Pressing…";
     try {
-      const r = await call("POST", "/api/answer", { runId: run.runId, spawnedAt: run.spawnedAt, label });
-      result.textContent = r.ok ? "Picked “" + label + "”." : (r.data && r.data.error) || "Nothing was pressed.";
+      const r = await call("POST", "/api/answer", {
+        hostId: run.hostId,
+        runId: run.runId,
+        spawnedAt: run.spawnedAt,
+        label,
+      });
+      result.textContent = r.ok ? "Picked “" + label + "”." : (r.data && r.data.error) || UNHEARD;
     } catch {
-      result.textContent = "Couldn't reach Daintree. Nothing was pressed.";
+      // The request may have arrived before the reply was lost.
+      result.textContent = UNHEARD;
     } finally {
       busy = false;
       setTimeout(poll, 600);
@@ -116,18 +205,29 @@ const SCRIPT = String.raw`
     if (!busy) {
       polling = true;
       const seq = answerSeq;
+      const session = token;
       try {
-        const r = await call("GET", "/api/waiting");
-        if (busy || seq !== answerSeq) {
-          // An answer began while this was in flight; the next read shows its result.
+        const r = await call("GET", "/api/waiting?hosts=1");
+        if (token !== session) {
+          // Unpaired while this was in flight; it belongs to the old pairing.
         } else if (r.ok && r.data) {
-          $("status").textContent = "";
-          render(r.data.runs);
+          // An answer that began while this was in flight shows in the next read.
+          if (!busy && seq === answerSeq) {
+            downSince = 0;
+            $("status").textContent = "";
+            render(r.data.runs, r.data.hosts, r.data.hostsUnlisted === true);
+          }
         } else if (r.status !== 401) {
+          // A failed read still means the cards on screen may be old, answer or not.
           $("status").textContent = (r.data && r.data.error) || "Couldn't read the waiting agents.";
+          markStale();
         }
       } catch {
-        $("status").textContent = "Couldn't reach Daintree.";
+        if (token === session) {
+          if (!downSince) downSince = Date.now();
+          $("status").textContent = "Couldn't reach Daintree since " + clock(downSince) + " (" + minutes(downSince) + ").";
+          markStale();
+        }
       } finally {
         polling = false;
       }
@@ -188,9 +288,10 @@ input { width: 100%; padding: 10px; font: inherit; border: 1px solid var(--line)
 button { font: inherit; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--fg); }
 button:disabled { opacity: 0.5; }
 form button { margin-top: 16px; width: 100%; }
+.run.stale .screen { opacity: 0.6; }
 .run { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px; margin: 0 0 12px; }
 .head { display: flex; gap: 8px; flex-wrap: wrap; align-items: baseline; }
-.title, .meta, .note, .result, #status, #empty { color: var(--muted); font-size: 13px; }
+.title, .host, .meta, .note, .result, #status, #hosts, #empty { color: var(--muted); font-size: 13px; }
 .screen { background: var(--screen); border-radius: 6px; padding: 8px; margin: 8px 0; font: 12px/1.35 ui-monospace, Menlo, monospace; white-space: pre-wrap; word-break: break-word; max-height: 40vh; overflow: auto; }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .result { margin-top: 8px; min-height: 1em; }
@@ -225,7 +326,7 @@ export const DEVICE_PAGE_HTML = `<!doctype html>
 <body>
 <div id="pair" hidden>
   <h1>Pair with Daintree</h1>
-  <p>Pairing lets this device see the screens of agents waiting on that computer and pick the options they show. It can't type, start agents or read anything else. You can remove it any time in Daintree's settings.</p>
+  <p>Pairing lets this device see the screens of agents waiting on that computer, and on the hosts it's connected to, and pick the options they show. It can't type, start agents or read anything else. You can remove it any time in Daintree's settings.</p>
   <form id="pair-form" autocomplete="off">
     <label for="code">Pairing code</label>
     <input id="code" inputmode="text" autocapitalize="characters" spellcheck="false" maxlength="16" required>
@@ -238,6 +339,7 @@ export const DEVICE_PAGE_HTML = `<!doctype html>
 <main id="main" hidden>
   <div class="bar"><h1>Waiting agents</h1><button id="forget" type="button">Unpair</button></div>
   <div id="status" role="status"></div>
+  <div id="hosts"></div>
   <div id="empty" hidden>No agent is waiting.</div>
   <div id="runs"></div>
 </main>

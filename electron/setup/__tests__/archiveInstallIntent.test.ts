@@ -9,6 +9,8 @@ const P = (name: string) => nodePath.resolve("/tmp", name);
 
 const archiveMock = vi.hoisted(() => ({
   readArchiveManifest: vi.fn<(p: string) => Promise<PluginManifest>>(),
+  readArchiveTemplateProjectPlugins:
+    vi.fn<(p: string, ids: readonly string[]) => Promise<Map<string, string[]>>>(),
 }));
 
 const deepLinkMock = vi.hoisted(() => {
@@ -413,6 +415,56 @@ describe("archiveInstallIntent", () => {
     // Bidi overrides can repaint the dialog's own trusted copy, so they are
     // stripped from every author-controlled string that crosses IPC.
     expect(recipes.names[1]).not.toContain("\u202E");
+  });
+
+  it("names each project template and the project plugins inside it (#13825)", async () => {
+    const painted = makePainted();
+    deepLinkMock.painted = painted.wc;
+    archiveMock.readArchiveManifest.mockResolvedValue(
+      manifest({
+        contributes: {
+          projectTemplates: [
+            { id: "site", title: "Static \u202Esite", description: "A site." },
+            { id: "notes", title: "Notes", description: "Notes." },
+          ],
+        },
+      } as unknown as Partial<PluginManifest>)
+    );
+    archiveMock.readArchiveTemplateProjectPlugins.mockResolvedValue(
+      new Map([
+        ["site", ["site-tools"]],
+        ["notes", []],
+      ])
+    );
+
+    const { enqueueArchiveInstallIntent } = await importFresh();
+    await enqueueArchiveInstallIntent(P("templates.dntr"));
+
+    expect(archiveMock.readArchiveTemplateProjectPlugins).toHaveBeenCalledWith(
+      P("templates.dntr"),
+      ["site", "notes"]
+    );
+    const [intent] = intentsFrom(painted.sent);
+    expect(intent).toMatchObject({
+      manifest: {
+        projectTemplates: [
+          { title: "Static site", projectPlugins: ["site-tools"] },
+          { title: "Notes", projectPlugins: [] },
+        ],
+      },
+    });
+  });
+
+  it("skips the archive entry scan when no template is declared (#13825)", async () => {
+    const painted = makePainted();
+    deepLinkMock.painted = painted.wc;
+
+    const { enqueueArchiveInstallIntent } = await importFresh();
+    await enqueueArchiveInstallIntent(P("plain.dntr"));
+
+    expect(archiveMock.readArchiveTemplateProjectPlugins).not.toHaveBeenCalled();
+    const [intent] = intentsFrom(painted.sent);
+    expect(intent).toMatchObject({ manifest: { projectTemplates: [] } });
   });
 
   it("reports no recipes for a manifest that contributes none (#11860)", async () => {

@@ -16,7 +16,7 @@
  *
  * Adding an entry here is a real change on the host side: it must also declare
  * the specifier's expected public exports in `HOST_FACADE_REQUIRED_EXPORTS`
- * (vite.config.ts), which is typed against this list and will fail typecheck
+ * (scripts/lib/host-facade-exports.ts), which is typed against this list and will fail typecheck
  * until it does.
  */
 export const HOST_IMPORTMAP_SPECIFIERS = [

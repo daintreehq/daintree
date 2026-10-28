@@ -1,4 +1,13 @@
-import { useEffect, useState, useCallback, useRef, useMemo, type ReactNode } from "react";
+import {
+  lazy,
+  Suspense,
+  useEffect,
+  useState,
+  useCallback,
+  useRef,
+  useMemo,
+  type ReactNode,
+} from "react";
 import { formatElapsedDuration } from "@/utils/formatElapsedDuration";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -17,9 +26,12 @@ import { actionService } from "@/services/ActionService";
 import type { ProcessMetricEntry, HeapStats, DiagnosticsInfo } from "@shared/types/ipc/system";
 import type {
   CompositeMemorySnapshot,
+  RendererTerminalBufferSlice,
   TerminalWorkloadSlice,
 } from "@shared/types/memoryAccounting";
 import type { Project } from "@shared/types";
+import { parseHostScopedKey } from "@shared/types/remoteHosts";
+import { currentHostId, hostScopedKey } from "@/hooks/useHostPlatform";
 import {
   type TrendDirection,
   type MemoryThresholds,
@@ -31,8 +43,15 @@ import {
   formatProcessLabel,
 } from "./ProjectResourceBadge.utils";
 import { pluralize, pluralNoun } from "@/lib/pluralize";
-import { ProcessesDialog } from "./ProcessesDialog";
+import { formatAgo, formatBufferEstimate } from "./processesView";
+import { useKeepMounted } from "@/hooks/useKeepMounted";
 import { useClosedTerminalProcessNotice } from "@/hooks/app/useClosedTerminalProcessNotice";
+import { isLivePluginTask, usePluginTaskStore } from "@/store/pluginTaskStore";
+import { PluginTaskList } from "@/components/Plugin/PluginTaskList";
+
+const LazyProcessesDialog = lazy(() =>
+  import("./ProcessesDialog").then((m) => ({ default: m.ProcessesDialog }))
+);
 
 const MAX_SAMPLES = 12;
 const BADGE_POLL_MS = 10_000;
@@ -188,6 +207,80 @@ function MemorySummary({
       {systemAvailableMB !== null && (
         <MemoryRow label="Available on this machine" value={formatMemory(systemAvailableMB)} />
       )}
+    </div>
+  );
+}
+
+const BUFFER_ESTIMATE_HINT =
+  "Estimated from each terminal's buffer lines × columns × 12 bytes per cell, not measured. Already part of the Daintree app figure above";
+
+/**
+ * Renderer terminal buffers per project view, cached views included (#14213).
+ * A cached view shows the counts it reported on its way into the cache; one
+ * that never reported says so instead of reading as empty.
+ */
+function TerminalBufferBreakdown({
+  slice,
+  projectNames,
+}: {
+  slice: RendererTerminalBufferSlice;
+  projectNames: ReadonlyMap<string, string>;
+}) {
+  if (slice.views.length === 0) return null;
+
+  // Views are keyed host-scoped (`host:project` for a remote project) and
+  // span every window, while the project list is this window's host's, by
+  // bare id. Matching on the full key keeps a bare-id collision on another
+  // host from borrowing a name here.
+  const scopedNames = new Map<string, string>();
+  for (const [id, name] of projectNames) scopedNames.set(hostScopedKey(id), name);
+
+  const rows = slice.views
+    .map((view) => {
+      const { hostId } = parseHostScopedKey(view.projectId);
+      const name =
+        scopedNames.get(view.projectId) ??
+        (hostId !== currentHostId() ? `Project on ${hostId}` : "Unknown project");
+      const cached = view.state === "cached" ? "cached" : null;
+      // Last-known counts carry their age whether the view is cached or an
+      // active one stopped answering; a fresh reading needs none.
+      const age =
+        view.status === "last-known" && view.ageMs !== null
+          ? cached
+            ? `cached ${formatAgo(view.ageMs)}`
+            : `from ${formatAgo(view.ageMs)}`
+          : cached;
+      const label = age ? `${name} · ${age}` : name;
+      return {
+        key: String(view.webContentsId),
+        label,
+        bytes: view.estimatedBytes,
+      };
+    })
+    .sort(
+      (a, b) =>
+        Number(a.bytes === null) - Number(b.bytes === null) ||
+        (b.bytes ?? 0) - (a.bytes ?? 0) ||
+        a.label.localeCompare(b.label)
+    );
+
+  return (
+    <div className="space-y-1" data-testid="terminal-buffer-breakdown">
+      <SectionLabel>Terminal buffers (estimate)</SectionLabel>
+      <MemoryRow
+        label={slice.complete ? "All projects" : "Projects that reported"}
+        hint={BUFFER_ESTIMATE_HINT}
+        value={
+          slice.estimatedBytes !== null ? formatBufferEstimate(slice.estimatedBytes) : "Unavailable"
+        }
+      />
+      {rows.map((row) => (
+        <MemoryRow
+          key={row.key}
+          label={row.label}
+          value={row.bytes !== null ? formatBufferEstimate(row.bytes) : "Unavailable"}
+        />
+      ))}
     </div>
   );
 }
@@ -449,6 +542,7 @@ export function ProjectResourceBadge({
   const samplesRef = useRef<number[]>([]);
   const popoverContentRef = useRef<HTMLDivElement>(null);
   const [processesOpen, setProcessesOpen] = useState(false);
+  const processesDialogMounted = useKeepMounted(processesOpen);
   useClosedTerminalProcessNotice(() => {
     setOpen(false);
     setProcessesOpen(true);
@@ -483,6 +577,18 @@ export function ProjectResourceBadge({
     for (const entry of Object.values(state.stats)) total += entry.activeAgentCount ?? 0;
     return total;
   });
+
+  /**
+   * Tasks plugins run through `host.tasks` (#13819). A running one is work in
+   * flight like an agent's, so it turns the mark over too, and the popover
+   * lists every one with its Cancel. An interrupted task stays listed until
+   * dismissed, but it isn't work.
+   */
+  const pluginTasks = usePluginTaskStore((state) => state.tasks);
+  useEffect(() => {
+    usePluginTaskStore.getState().init();
+  }, []);
+  const livePluginTasks = pluginTasks.filter(isLivePluginTask).length;
 
   // The warning reads the same fresh-or-nothing figure the popover shows, so a
   // stalled read can neither raise it nor hold it up.
@@ -754,7 +860,7 @@ export function ProjectResourceBadge({
     return () => clearInterval(tick);
   }, [open]);
 
-  const isWorking = activeAgents > 0;
+  const isWorking = activeAgents > 0 || livePluginTasks > 0;
 
   // The row used to vanish whenever nothing was running, which made "idle" and
   // "this strip isn't here" the same picture — and idle is half of the question
@@ -777,12 +883,14 @@ export function ProjectResourceBadge({
   // Mounted on every path: the readout can drop out from under an open dialog
   // (activity ending before the first read lands), and the dialog — maybe
   // mid-kill — must not go with it.
-  const processesDialog = (
-    <ProcessesDialog
-      isOpen={processesOpen}
-      onClose={() => setProcessesOpen(false)}
-      restoreFocusTo={() => (readoutRef.current?.isConnected ? readoutRef.current : null)}
-    />
+  const processesDialog = processesDialogMounted && (
+    <Suspense fallback={null}>
+      <LazyProcessesDialog
+        isOpen={processesOpen}
+        onClose={() => setProcessesOpen(false)}
+        restoreFocusTo={() => (readoutRef.current?.isConnected ? readoutRef.current : null)}
+      />
+    </Suspense>
   );
 
   if (!showReadout) {
@@ -924,7 +1032,11 @@ export function ProjectResourceBadge({
         <PopoverContent
           side="top"
           align="start"
-          aria-labelledby="resource-usage-title"
+          aria-labelledby={
+            pluginTasks.length > 0
+              ? "plugin-tasks-title resource-usage-title"
+              : "resource-usage-title"
+          }
           // Focus the popover itself, not its first control. Radix's default
           // landed on the keep-awake row and painted a ring on a settings link
           // nobody had reached for; leaving focus on the readout instead strands
@@ -943,6 +1055,18 @@ export function ProjectResourceBadge({
           className="w-72 p-3"
         >
           <div className="space-y-3">
+            {/* First, and independent of the memory read: work that can be
+              cancelled is the most actionable thing here. */}
+            {pluginTasks.length > 0 && (
+              <div className="space-y-1.5 border-b border-divider pb-2">
+                <SectionLabel id="plugin-tasks-title">Plugin tasks</SectionLabel>
+                {/* Up to 16 tasks a plugin, several plugins: the list scrolls
+                  rather than pushing the popover past the window. */}
+                <div className="max-h-60 overflow-y-auto">
+                  <PluginTaskList tasks={pluginTasks} />
+                </div>
+              </div>
+            )}
             <div className="space-y-1.5">
               {popoverMemoryState === "critical" && (
                 <div className="flex items-start gap-1.5 text-2xs text-text-primary">
@@ -985,6 +1109,12 @@ export function ProjectResourceBadge({
                   Each process is counted in full, so memory two processes share is counted twice
                   and these totals run high.
                 </p>
+                {memorySnapshot?.rendererTerminalBuffers && (
+                  <TerminalBufferBreakdown
+                    slice={memorySnapshot.rendererTerminalBuffers}
+                    projectNames={projectNames}
+                  />
+                )}
               </>
             )}
             {/* Mounted unconditionally: the list is its own read, so a failed

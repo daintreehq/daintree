@@ -1,5 +1,10 @@
 import type { SerializedError, IpcSuccessEnvelope, IpcErrorEnvelope } from "../types/ipc/errors.js";
 import type { AppErrorDetails } from "../types/appError.js";
+import {
+  REQUIRED_PLUGIN_TOOLS_STATES,
+  type RequiredPluginToolStatus,
+  type RequiredPluginToolsState,
+} from "../types/ipc/pluginAgentMcp.js";
 import type { HostPlatform, PluginIncompatibleReason } from "../types/remoteHosts.js";
 
 /**
@@ -115,6 +120,7 @@ function sanitizeCloneValue(value: unknown, seen: WeakSet<object>): unknown {
 const HOST_PLATFORMS: ReadonlySet<string> = new Set<HostPlatform>(["darwin", "linux"]);
 const MAX_DETAIL_STRING_LENGTH = 256;
 const MAX_DETAIL_LIST_LENGTH = 32;
+const REQUIRED_PLUGIN_TOOLS_STATE_SET: ReadonlySet<string> = new Set(REQUIRED_PLUGIN_TOOLS_STATES);
 
 function pickDetailString(value: unknown): string | undefined {
   return typeof value === "string" ? value.slice(0, MAX_DETAIL_STRING_LENGTH) : undefined;
@@ -168,13 +174,43 @@ function pickIncompatibleReason(value: unknown): PluginIncompatibleReason | unde
 
 /**
  * `details` survives the packaged-build strip and crosses the link and the
- * contextBridge, so it is rebuilt field by field from the `PluginHostError`
+ * contextBridge, so it is rebuilt field by field from the `AppErrorDetails`
  * union rather than copied: anything that is not exactly a recognised variant
  * is dropped, and unknown fields never ride along.
  */
+function pickRequiredPluginTools(value: unknown): RequiredPluginToolStatus[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const tools: RequiredPluginToolStatus[] = [];
+  for (const entry of value.slice(0, MAX_DETAIL_LIST_LENGTH)) {
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return undefined;
+    const raw = entry as Record<string, unknown>;
+    const pluginInstanceId = pickDetailString(raw.pluginInstanceId);
+    const pluginDisplayName = pickDetailString(raw.pluginDisplayName);
+    const state = raw.state;
+    if (
+      pluginInstanceId === undefined ||
+      pluginDisplayName === undefined ||
+      typeof state !== "string" ||
+      !REQUIRED_PLUGIN_TOOLS_STATE_SET.has(state)
+    ) {
+      return undefined;
+    }
+    tools.push({ pluginInstanceId, pluginDisplayName, state: state as RequiredPluginToolsState });
+  }
+  return tools;
+}
+
 export function pickAppErrorDetails(value: unknown): AppErrorDetails | undefined {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
   const raw = value as Record<string, unknown>;
+  if (raw.code === "REQUIRED_PLUGIN_TOOLS_UNAVAILABLE") {
+    const tools = pickRequiredPluginTools(raw.tools);
+    return tools === undefined ? undefined : { code: "REQUIRED_PLUGIN_TOOLS_UNAVAILABLE", tools };
+  }
+  if (raw.code === "HOST_SWITCH_ON_SCREEN") {
+    const switchId = pickDetailString(raw.switchId);
+    return switchId === undefined ? undefined : { code: "HOST_SWITCH_ON_SCREEN", switchId };
+  }
   const pluginId = pickDetailString(raw.pluginId);
   const hostId = pickDetailString(raw.hostId);
   if (pluginId === undefined || hostId === undefined) return undefined;

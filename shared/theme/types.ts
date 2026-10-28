@@ -339,6 +339,7 @@ export const EXTENSION_KEYS = [
   "sidebar-card-bg",
   "sidebar-card-shadow",
   "sidebar-hover-bg",
+  "sidebar-row-highlight-bg",
 
   // Toolbar
   "toolbar-agent-hover-bg",
@@ -396,6 +397,31 @@ export interface AppColorScheme {
   extensions?: Partial<Record<ExtensionKey, string>>;
   location?: string;
   heroImage?: string;
+  /** Set only on a theme an installed plugin contributes (#13832), for attribution and grouping. */
+  plugin?: { id: string; name: string };
+}
+
+/**
+ * What a plugin theme is built from: the plugin's palette and overrides, with
+ * the manifest's metadata and the qualified `plugin:{pluginId}:{themeId}` id.
+ */
+export interface PluginThemeSource {
+  id: string;
+  name: string;
+  type: "dark" | "light";
+  pluginId: string;
+  pluginName: string;
+  palette: ThemePalette;
+  tokens?: Record<string, string>;
+  extensions?: Partial<Record<ExtensionKey, string>>;
+}
+
+/**
+ * The selected plugin theme's source, persisted beside the selection so the
+ * boot paths can paint it before any plugin has loaded.
+ */
+export interface PluginThemeSnapshot extends PluginThemeSource {
+  version: 1;
 }
 
 export type ColorVisionMode = "default" | "red-green" | "blue-yellow";
@@ -414,6 +440,25 @@ export interface AppThemeConfig {
    * theme's accent token family. Cleared when set to null/undefined.
    */
   accentColorOverride?: string | null;
+  /** Applies only while its `id` equals `colorSchemeId`; anything else is stale. */
+  pluginThemeSnapshot?: PluginThemeSnapshot;
+  /** Each project's own theme choices (#13833), by project id. */
+  projectThemes?: Record<string, ProjectThemeChoice>;
+}
+
+export type ProjectThemeSuggestionAnswer = "accepted" | "declined";
+
+/**
+ * One project's theme, kept in Daintree's store and never in the repository.
+ * Shaped like the global selection so the plugin snapshot helpers read it too.
+ */
+export interface ProjectThemeChoice {
+  /** The theme this project shows instead of the global one; absent follows global. */
+  colorSchemeId?: string;
+  /** Applies only while its `id` equals `colorSchemeId`, as the global snapshot does. */
+  pluginThemeSnapshot?: PluginThemeSnapshot;
+  /** The answer to the repository's suggested theme, remembered against the theme it named. */
+  suggestionAnswer?: { schemeId: string; answer: ProjectThemeSuggestionAnswer };
 }
 
 /**

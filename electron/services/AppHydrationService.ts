@@ -4,7 +4,9 @@ import { app } from "electron";
 import { store } from "../store.js";
 import { readCanopyMode } from "./canopy/canopyMode.js";
 import { readAgentDefaults } from "./agentDefaults.js";
+import { readAgentToolbarPinsSnapshot } from "./agentToolbarPins.js";
 import { projectStore } from "./ProjectStore.js";
+import { applyHostEndHold, holdTerminalsForHostEnds } from "./hostEndRestoreHold.js";
 import { filterRestorableTerminalSnapshots } from "./projectStateRestore.js";
 import {
   getGpuFeatureStatus,
@@ -17,7 +19,7 @@ import { readGpuDisabledFlagData } from "./gpuDisabledFlag.js";
 import { getCrashLoopGuard } from "./CrashLoopGuardService.js";
 import type { HydrateResult } from "../../shared/types/ipc/app.js";
 import { inferKind } from "../../shared/utils/inferPanelKind.js";
-import { effectiveCachedProjectViews } from "../utils/cachedProjectViews.js";
+import { readTerminalConfig } from "./terminalConfig.js";
 
 /**
  * Build a HydrateResult for project switch payloads.
@@ -32,17 +34,12 @@ import { effectiveCachedProjectViews } from "../utils/cachedProjectViews.js";
  *   - always returns safeMode: false — safe mode is a startup-only condition
  */
 /**
- * The terminal config every hydrate payload carries. It has to report the same
- * effective cached-view count `terminalConfig.get` does: an unset value means
- * "the hardware default", and the renderer can't resolve that tier itself
- * before Settings reads it.
+ * The terminal config every hydrate payload carries: exactly what
+ * `terminalConfig.get` reports, so a view seeded from either reads the same
+ * values and has nothing to correct (or write back) on boot.
  */
 export function readHydrateTerminalConfig(): HydrateResult["terminalConfig"] {
-  const stored = store.get("terminalConfig");
-  return {
-    ...stored,
-    cachedProjectViews: effectiveCachedProjectViews(stored?.cachedProjectViews),
-  };
+  return readTerminalConfig();
 }
 
 export async function buildSwitchHydrateResult(projectId: string): Promise<HydrateResult> {
@@ -85,6 +82,9 @@ export async function buildSwitchHydrateResult(projectId: string): Promise<Hydra
   // so a switch can't serve the previous project's order (#9922).
   let mruListToUse = canInheritLegacyWorkspaceState ? globalAppState.mruList : undefined;
 
+  // The one write this path makes, and only once after an unclean end: a switch
+  // restores straight from this payload, so it must already carry the holds.
+  const hostEnds = await applyHostEndHold(projectId);
   const { state: projectState, quarantinedPath: projectStateQuarantinedPath } =
     await projectStore.getProjectStateWithRecovery(projectId);
 
@@ -123,6 +123,10 @@ export async function buildSwitchHydrateResult(projectId: string): Promise<Hydra
   if (inSafeMode) {
     terminalsToUse = [];
   }
+  // Held in the payload too, so a hold whose save failed still starts nothing.
+  if (hostEnds.length > 0) {
+    terminalsToUse = holdTerminalsForHostEnds(terminalsToUse, hostEnds, projectId).terminals;
+  }
 
   const appState = {
     ...globalAppState,
@@ -141,6 +145,7 @@ export async function buildSwitchHydrateResult(projectId: string): Promise<Hydra
     project: currentProject ?? null,
     agentSettings: store.get("agentSettings"),
     agentDefaults: readAgentDefaults(),
+    agentToolbarPins: readAgentToolbarPinsSnapshot(),
     gpuWebGLHardware,
     gpuHardwareAccelerationDisabled: isGpuDisabledByFlag(app.getPath("userData")),
     gpuDisabledReason: readGpuDisabledFlagData(app.getPath("userData"))?.reason ?? null,

@@ -166,7 +166,10 @@ test.describe.serial("Codex agent: identity, state and resume", () => {
     await expect(panel.locator('[role="status"][aria-label="Agent state: working"]')).toBeVisible();
     await sendFakeAgentCommand(codexBin, "idle");
     await expect(panel).toHaveAttribute("data-agent-state", "waiting", { timeout: T_LONG * 2 });
-    await expect(panel.locator('[role="status"][aria-label="Agent state: waiting"]')).toBeVisible();
+    // A foreground hand-back is presented as finished; the observation stays waiting.
+    await expect(
+      panel.locator('[role="status"][aria-label="Agent state: finished"]')
+    ).toBeVisible();
 
     // timer: PanelPersistence debounceMs (500ms) flush before quit
     await w.waitForTimeout(T_SETTLE * 2);

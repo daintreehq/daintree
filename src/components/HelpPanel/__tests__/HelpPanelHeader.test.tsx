@@ -59,12 +59,14 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
   DropdownMenuSeparator: () => <hr />,
 }));
 
-import { HelpPanelHeader } from "../HelpPanelHeader";
+import { HelpPanelHeader, summarizeLaneActivity } from "../HelpPanelHeader";
 
 function renderHeader(overrides: Partial<ComponentProps<typeof HelpPanelHeader>> = {}) {
   return render(
     <HelpPanelHeader
       agentState={null}
+      scope="project"
+      onScopeChange={vi.fn()}
       canRestartConversation={false}
       canEndSession={false}
       onRestartConversation={vi.fn()}
@@ -78,6 +80,65 @@ function renderHeader(overrides: Partial<ComponentProps<typeof HelpPanelHeader>>
 }
 
 describe("HelpPanelHeader", () => {
+  it("switches scope from a named radio group in place of a title", () => {
+    const onScopeChange = vi.fn();
+    const { getByRole } = renderHeader({ onScopeChange });
+    const group = getByRole("radiogroup", { name: "Assistant scope" });
+    const [project, global] = Array.from(group.querySelectorAll('[role="radio"]'));
+    expect(project!.getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(global!);
+    expect(onScopeChange).toHaveBeenCalledWith("global");
+  });
+
+  it("hands the menu slot to the global run while Global is shown", () => {
+    const { queryByTestId, getByTestId } = renderHeader({
+      scope: "global",
+      canRestartConversation: true,
+      canEndSession: true,
+    });
+    expect(queryByTestId("menu-root")).toBeNull();
+    expect(getByTestId("assistant-global-controls")).not.toBeNull();
+  });
+
+  it("marks the Project option with background lane activity only while Global is shown", () => {
+    const activity = summarizeLaneActivity([
+      { label: "Session 1", agentState: "working" },
+      { label: "Session 2", agentState: "waiting" },
+      { label: "Session 3", agentState: null },
+    ]);
+    expect(activity).toEqual({
+      agentState: "waiting",
+      summary: "Session 1 working, Session 2 waiting",
+    });
+
+    const { getByTestId, rerender } = renderHeader({ scope: "global", projectActivity: activity });
+    const project = getByTestId("assistant-scope-project");
+    expect(project.getAttribute("aria-label")).toBe(
+      "Project, Session 1 working, Session 2 waiting"
+    );
+
+    rerender(
+      <HelpPanelHeader
+        agentState={null}
+        scope="project"
+        onScopeChange={vi.fn()}
+        projectActivity={activity}
+        canRestartConversation={false}
+        canEndSession={false}
+        onRestartConversation={vi.fn()}
+        onEndSession={vi.fn()}
+        onResumePastSession={vi.fn()}
+        onOpenDocs={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+    expect(getByTestId("assistant-scope-project").getAttribute("aria-label")).toBeNull();
+  });
+
+  it("summarizes nothing when no lane reports a state", () => {
+    expect(summarizeLaneActivity([{ label: "Session 1", agentState: null }])).toBeNull();
+  });
+
   it("closes an open overflow menu, not the panel beneath it, on Escape", () => {
     const { getByTestId } = renderHeader();
     // The assistant panel registers its own close on the stack first.

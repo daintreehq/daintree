@@ -13,7 +13,7 @@ const serviceMock = vi.hoisted(() => ({
     thresholdMinutes: 30,
     ...(patch as object),
   })),
-  closeProject: vi.fn().mockResolvedValue(undefined),
+  closeProject: vi.fn().mockResolvedValue({ terminalsKilled: 0, pluginWorkStopped: null }),
   dismissProject: vi.fn(),
 }));
 

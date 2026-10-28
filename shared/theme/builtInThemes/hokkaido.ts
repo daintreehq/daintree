@@ -206,6 +206,10 @@ export const theme: BuiltInThemeSource = {
     "sidebar-card-shadow": "0 1px 2px rgba(44,48,78,0.05)",
     "sidebar-active-bg": "#FFFFFF",
     "sidebar-hover-bg": "#F9F8FC",
+    // The raised plane (#E9E8F1) is the sidebar lavender itself, so a
+    // highlighted row on the sidebar vanished; it lifts to white like the
+    // active worktree and the settings nav.
+    "sidebar-row-highlight-bg": "#FFFFFF",
     "toolbar-agent-hover-bg": "rgba(40,38,48,0.06)",
     "toolbar-control-hover-bg": "rgba(40,38,48,0.06)",
     // Accent restraint: hover affordance is the bg, not an accent foreground.

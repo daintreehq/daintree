@@ -1,3 +1,4 @@
+import { useSyncExternalStore } from "react";
 import { AlertTriangle, Package, RotateCw, XCircle } from "lucide-react";
 import { InlineError } from "@/components/ui/field";
 import { Callout } from "@/components/ui/Callout";
@@ -11,11 +12,22 @@ import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { useTruncationDetection } from "@/hooks/useTruncationDetection";
 import { PluginGlyphTile } from "@/components/Plugin/pluginIcons";
 import { PluginDatabasesSection } from "@/components/Plugin/PluginDatabasesSection";
+import { PluginWorksWith, type WorksWithPeer } from "@/components/Plugin/PluginWorksWith";
+import { PluginGrantSwitch } from "@/components/Plugin/PluginGrantSwitch";
+import {
+  getPanelKindRegistrySnapshot,
+  subscribeToPanelKindRegistry,
+} from "@shared/config/panelKindRegistry";
 import {
   PluginPerformanceSection,
   PluginStylesSection,
 } from "@/components/Plugin/PluginPerformanceTab";
 import { usePluginPerfSnapshot } from "@/hooks/usePluginPerfSnapshot";
+import {
+  describeSurfaceRefusal,
+  surfacePluginFallbackName,
+  useProjectSurfaceRefusals,
+} from "@/hooks/useProjectSurfaceRefusals";
 import {
   BUILT_IN_PLUGIN_CAPABILITIES,
   type ProjectPluginInfo,
@@ -188,6 +200,8 @@ export function ProjectPluginSection({
   );
 }
 
+const NO_PEERS: ReadonlyMap<string, WorksWithPeer> = new Map();
+
 /**
  * Detail for one project plugin.
  *
@@ -197,7 +211,14 @@ export function ProjectPluginSection({
  * commits against exactly that. The only real control is the folder-level one
  * at the bottom, which is why it says what it actually does.
  */
-export function ProjectPluginDetailPane({ plugin }: { plugin: ProjectPluginInfo }) {
+export function ProjectPluginDetailPane({
+  plugin,
+  worksWithPeers = NO_PEERS,
+}: {
+  plugin: ProjectPluginInfo;
+  /** What is installed here, for the manifest's `worksWith`; see `buildWorksWithPeers`. */
+  worksWithPeers?: ReadonlyMap<string, WorksWithPeer>;
+}) {
   const trust = useProjectPluginStore((s) => s.trust);
   const deciding = useProjectPluginStore((s) => s.deciding);
   const activating = useProjectPluginStore((s) => s.activating);
@@ -206,6 +227,11 @@ export function ProjectPluginDetailPane({ plugin }: { plugin: ProjectPluginInfo 
   const decide = useProjectPluginStore((s) => s.decide);
   const activateStaged = useProjectPluginStore((s) => s.activateStaged);
   const reload = useProjectPluginStore((s) => s.reload);
+  const projectPlugins = useProjectPluginStore((s) => s.plugins);
+  const refusals = useProjectSurfaceRefusals(plugin.instanceId);
+  const nameOf = (pluginId: string) =>
+    projectPlugins.find((p) => p.instanceId === pluginId)?.displayName ??
+    surfacePluginFallbackName(pluginId);
 
   const declared = new Set(plugin.capabilities);
   const granted = BUILT_IN_PLUGIN_CAPABILITIES.filter((c) => declared.has(c));
@@ -222,6 +248,19 @@ export function ProjectPluginDetailPane({ plugin }: { plugin: ProjectPluginInfo 
   // The manager has no panel list for a project plugin, so the Styles check is
   // earned by a view having loaded this session rather than by a declaration.
   const hasLoadedViews = plugin.state === "active" && (perfSnapshot?.viewLoads.length ?? 0) > 0;
+  // The manager has no panel list for a project plugin either, so whether its
+  // panels report activity is read off the kinds it registered. Only a loaded
+  // instance has any, which is also the only one with reports to show.
+  const panelKinds = useSyncExternalStore(
+    subscribeToPanelKindRegistry,
+    getPanelKindRegistrySnapshot,
+    getPanelKindRegistrySnapshot
+  );
+  const reportsActivity =
+    instanceId !== "" &&
+    Object.values(panelKinds).some(
+      (kind) => kind.extensionId === instanceId && kind.reportsActivity === true
+    );
 
   return (
     <div className="space-y-6">
@@ -291,6 +330,23 @@ export function ProjectPluginDetailPane({ plugin }: { plugin: ProjectPluginInfo 
         </Callout>
       )}
 
+      {/* A slot claim the plugin declared but isn't drawing. The plugin itself
+          loaded fine, so this is a warning beside it, never its load error. */}
+      {refusals.map((refusal) => {
+        const copy = describeSurfaceRefusal(refusal, nameOf);
+        return (
+          <Callout
+            key={`${refusal.slot}:${refusal.reason}`}
+            severity="warning"
+            size="compact"
+            title={copy.title}
+            data-testid="project-plugin-surface-refusal"
+          >
+            <p>{copy.detail}</p>
+          </Callout>
+        );
+      })}
+
       {granted.length > 0 && (
         <div className="space-y-2">
           <h4 className={SECTION_LABEL_CLASS}>Declared capabilities</h4>
@@ -307,8 +363,22 @@ export function ProjectPluginDetailPane({ plugin }: { plugin: ProjectPluginInfo 
         </div>
       )}
 
+      {/* A real control, unlike the capability list above: it decides whether
+          the host asks this plugin at all, per project instance (#13805). */}
+      {plugin.declaresWorktreeDeleteNotes === true && plugin.instanceId && (
+        <PluginGrantSwitch pluginId={plugin.instanceId} grant="worktree-delete-notes" />
+      )}
+
+      {/* Decides where Daintree shows what the plugin reports, not what the
+          plugin can do (#13821). */}
+      {reportsActivity && <PluginGrantSwitch pluginId={instanceId} grant="panel-attention" />}
+
       {plugin.databases && plugin.databases.length > 0 && (
         <PluginDatabasesSection databases={plugin.databases} origin="project" />
+      )}
+
+      {plugin.worksWith && plugin.worksWith.length > 0 && (
+        <PluginWorksWith ids={plugin.worksWith} peers={worksWithPeers} />
       )}
 
       {logs.hasLogged && (

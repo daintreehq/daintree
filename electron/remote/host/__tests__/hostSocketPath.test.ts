@@ -70,3 +70,22 @@ describe("discovery file parsing", () => {
     expect(tokensEqual("", "")).toBe(false);
   });
 });
+
+describe("discovery file start time", () => {
+  const base = {
+    version: 1,
+    socketPath: "/run/user/1000/daintree-host/host.sock",
+    token: "a".repeat(64),
+    pid: 4242,
+  };
+
+  it("keeps startedAt and accepts files from hosts that wrote none", () => {
+    expect(
+      parseDiscoveryInfo(JSON.stringify({ ...base, startedAt: "Wed Oct 22 10:00:00 2026" }))
+    ).toEqual({
+      ...base,
+      startedAt: "Wed Oct 22 10:00:00 2026",
+    });
+    expect(parseDiscoveryInfo(JSON.stringify(base))).toEqual(base);
+  });
+});

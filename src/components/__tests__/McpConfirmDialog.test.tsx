@@ -29,15 +29,39 @@ vi.mock("@/hooks/useOverlayState", async (importOriginal) => ({
   useOverlayState: () => {},
 }));
 
-const agentSettingsState = vi.hoisted(() => ({ globalSkipPermissions: false }));
+const agentSettingsState = vi.hoisted(() => ({
+  globalSkipPermissions: false,
+  agents: {} as Record<string, Record<string, unknown>>,
+}));
 
 vi.mock("@/store/agentSettingsStore", () => ({
   useAgentSettingsStore: (selector: (state: unknown) => unknown) =>
-    selector({ settings: { globalSkipPermissions: agentSettingsState.globalSkipPermissions } }),
+    selector({
+      settings: {
+        globalSkipPermissions: agentSettingsState.globalSkipPermissions,
+        agents: agentSettingsState.agents,
+      },
+    }),
+}));
+
+const helpPanelState = vi.hoisted(() => ({
+  preferredAgentId: null as string | null,
+  activeSlotAgentId: null as string | null,
+}));
+
+vi.mock("@/store/helpPanelStore", () => ({
+  useHelpPanelStore: (selector: (state: unknown) => unknown) => selector(helpPanelState),
+  selectActiveSlot: (state: typeof helpPanelState) => ({ agentId: state.activeSlotAgentId }),
 }));
 
 const loggerMocks = vi.hoisted(() => ({ logError: vi.fn() }));
 vi.mock("@/utils/logger", () => loggerMocks);
+
+const pluginClientMock = vi.hoisted(() => ({
+  getWorktreeDeleteNoteSources: vi.fn(async () => [] as unknown[]),
+  getWorktreeDeleteNotes: vi.fn(() => new Promise(() => {})),
+}));
+vi.mock("@/clients/pluginClient", () => ({ pluginClient: pluginClientMock }));
 
 vi.mock("@/hooks/useAnimatedPresence", () => ({
   useAnimatedPresence: ({ isOpen }: { isOpen: boolean }) => ({
@@ -71,6 +95,7 @@ function enqueue(
     typedNameTarget?: string;
     offerSessionApproval?: boolean;
     approvalReason?: "above-tier";
+    worktreeDeleteNotesTargetId?: string;
     selectableTargets?: {
       id: string;
       name: string;
@@ -97,6 +122,9 @@ function enqueue(
     ...(overrides.typedNameTarget ? { typedNameTarget: overrides.typedNameTarget } : {}),
     ...(overrides.offerSessionApproval ? { offerSessionApproval: true } : {}),
     ...(overrides.approvalReason ? { approvalReason: overrides.approvalReason } : {}),
+    ...(overrides.worktreeDeleteNotesTargetId
+      ? { worktreeDeleteNotesTargetId: overrides.worktreeDeleteNotesTargetId }
+      : {}),
     ...(overrides.selectableTargets
       ? {
           selectableTargets: overrides.selectableTargets,
@@ -153,6 +181,9 @@ describe("McpConfirmDialog", () => {
       })
     );
     agentSettingsState.globalSkipPermissions = false;
+    agentSettingsState.agents = {};
+    helpPanelState.preferredAgentId = null;
+    helpPanelState.activeSlotAgentId = null;
     loggerMocks.logError.mockReset();
     helpAssistantApi.getSettings = vi.fn().mockResolvedValue({ daintreeConfirmations: "inherit" });
     helpAssistantApi.setSettings = vi.fn().mockResolvedValue(undefined);
@@ -483,6 +514,30 @@ describe("McpConfirmDialog", () => {
       act(() => {
         fireEvent.change(input, { target: { value: "feature/x" } });
       });
+      expect(confirmBtn.hasAttribute("aria-disabled")).toBe(false);
+    } finally {
+      vi.runOnlyPendingTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("asks the plugins about the worktree without holding the approval for them (#13805)", async () => {
+    vi.useFakeTimers();
+    pluginClientMock.getWorktreeDeleteNoteSources.mockResolvedValueOnce([
+      { pluginId: "acme.sync", pluginName: "Acme Sync" },
+    ]);
+    try {
+      void enqueue({ actionTitle: "Delete worktree", worktreeDeleteNotesTargetId: "wt-1" });
+      render(<McpConfirmDialog />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1200);
+      });
+
+      expect(pluginClientMock.getWorktreeDeleteNotes).toHaveBeenCalledWith("wt-1", "acme.sync");
+      expect(screen.getByTestId("worktree-delete-note-pending").textContent).toBe(
+        "Checking with Acme Sync…"
+      );
+      const confirmBtn = screen.getByRole("button", { name: "Delete worktree" });
       expect(confirmBtn.hasAttribute("aria-disabled")).toBe(false);
     } finally {
       vi.runOnlyPendingTimers();
@@ -1139,15 +1194,41 @@ describe("McpConfirmDialog", () => {
       await renderLoaded();
 
       expect(screen.getByRole("radiogroup", { name: PREFERENCE_GROUP })).toBeTruthy();
-      expect(segment("Follow global setting").getAttribute("aria-checked")).toBe("true");
+      expect(segment("Follow agent setting").getAttribute("aria-checked")).toBe("true");
       const text = document.body.textContent ?? "";
-      expect(text).toContain("Follow global setting · asks");
+      expect(text).toContain("Follow agent setting · asks");
       expect(text).toContain("Follows Settings > Agents > Skip permission prompts (off)");
       expect(text).toContain("even if you cancel");
     });
 
+    it("follows the assistant agent's own skip setting over the global (#14141)", async () => {
+      helpPanelState.preferredAgentId = "claude";
+      agentSettingsState.agents = { claude: { dangerousMode: "on" } };
+      void enqueue({ actionTitle: "Delete worktree", sessionOrigin: "help" });
+      await renderLoaded();
+
+      const text = document.body.textContent ?? "";
+      expect(text).toContain("Follow agent setting · doesn't ask");
+      expect(text).toContain("Follows Claude's skip permission prompts setting (on)");
+    });
+
+    it("follows the agent running in this view over a different chosen agent (#14141)", async () => {
+      helpPanelState.preferredAgentId = "codex";
+      helpPanelState.activeSlotAgentId = "claude";
+      agentSettingsState.agents = {
+        claude: { dangerousMode: "off" },
+        codex: { dangerousMode: "on" },
+      };
+      void enqueue({ actionTitle: "Delete worktree", sessionOrigin: "help" });
+      await renderLoaded();
+
+      const text = document.body.textContent ?? "";
+      expect(text).toContain("Follow agent setting · asks");
+      expect(text).toContain("Follows Claude's skip permission prompts setting (off)");
+    });
+
     it.each([
-      ["inherit", true, "Follow global setting · doesn't ask"],
+      ["inherit", true, "Follow agent setting · doesn't ask"],
       ["always-ask", true, "Always ask · asks"],
       ["never-ask", false, "Never ask · doesn't ask"],
     ] as const)(
@@ -1223,7 +1304,7 @@ describe("McpConfirmDialog", () => {
         await Promise.resolve();
       });
 
-      expect(segment("Follow global setting").getAttribute("aria-checked")).toBe("true");
+      expect(segment("Follow agent setting").getAttribute("aria-checked")).toBe("true");
       expect(document.body.textContent ?? "").toContain("Couldn't save that change");
       expect(loggerMocks.logError).toHaveBeenCalled();
     });
@@ -1234,7 +1315,7 @@ describe("McpConfirmDialog", () => {
       await renderLoaded();
 
       expect(document.body.textContent ?? "").toContain("Couldn't read the current setting");
-      for (const label of ["Follow global setting", "Always ask", "Never ask"]) {
+      for (const label of ["Follow agent setting", "Always ask", "Never ask"]) {
         expect(segment(label).hasAttribute("disabled")).toBe(true);
       }
     });
@@ -1287,7 +1368,7 @@ describe("McpConfirmDialog", () => {
         fireEvent.click(segment("Always ask"));
         await Promise.resolve();
       });
-      expect(segment("Follow global setting").getAttribute("aria-checked")).toBe("true");
+      expect(segment("Follow agent setting").getAttribute("aria-checked")).toBe("true");
 
       await act(async () => {
         resolveFirst?.();

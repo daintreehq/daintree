@@ -1,7 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { TerminalRefreshTier } from "@/types";
 import type { PtyPanelData } from "@shared/types/panel";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 
 vi.mock("@/clients", () => ({
   terminalClient: {
@@ -13,13 +14,16 @@ vi.mock("@/clients", () => ({
   },
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     applyRendererPolicy: vi.fn(),
     onPanelBackgrounded: vi.fn(),
     resize: vi.fn().mockReturnValue(null),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("../../persistence/panelPersistence", () => ({
   panelPersistence: {
@@ -32,7 +36,9 @@ vi.mock("../../persistence/panelPersistence", () => ({
 
 const { usePanelStore } = await import("../../panelStore");
 const { terminalClient } = await import("@/clients");
-const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
+const terminalInstanceService = (
+  await import("@/services/TerminalInstanceService")
+).createTerminalPaintPlane();
 const { panelPersistence } = await import("../../persistence/panelPersistence");
 
 function setTerminals(terminals: PtyPanelData[]) {
@@ -59,6 +65,12 @@ function createMockTerminal(
     isVisible: location === "grid",
   };
 }
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
+});
 
 describe("moveTerminalToWorktree", () => {
   beforeEach(() => {

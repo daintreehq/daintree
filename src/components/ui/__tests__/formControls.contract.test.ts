@@ -53,7 +53,7 @@ const RAW_TEXTAREAS: Record<string, string> = {
   "src/components/Terminal/TerminalScratchpad.tsx": "pane editor",
   // The kit's mention field: the primitive's classes on a textarea that also
   // sizes itself and carries the combobox ARIA, bare inside the Composer shell.
-  "src/components/PluginKit/PluginKitTextInputs.tsx": "mention field",
+  "src/components/PluginKit/PluginKitMentionComposer.tsx": "mention field",
 };
 
 describe("form control family", () => {

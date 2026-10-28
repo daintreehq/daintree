@@ -39,9 +39,10 @@ const panelsById: Record<string, unknown> = {};
 
 // Stable across selector calls so a test can assert which mode a toggle asked
 // for — a fresh vi.fn() per call records nothing observable.
-const { setFileViewModeMock, setFilePanelPathMock } = vi.hoisted(() => ({
+const { setFileViewModeMock, setFilePanelPathMock, setFileEditorChoiceMock } = vi.hoisted(() => ({
   setFileViewModeMock: vi.fn(),
   setFilePanelPathMock: vi.fn(),
+  setFileEditorChoiceMock: vi.fn(),
 }));
 // Mutable so a dock test can make this panel the active dock panel (or not) —
 // the pane defers its reveal refresh while parked offscreen (#11588).
@@ -52,6 +53,7 @@ vi.mock("@/store/panelStore", () => ({
       panelsById,
       setFileViewMode: setFileViewModeMock,
       setFilePanelPath: setFilePanelPathMock,
+      setFileEditorChoice: setFileEditorChoiceMock,
       activeDockTerminalId: dockState.activeDockTerminalId,
     }),
 }));
@@ -291,8 +293,31 @@ vi.mock("@/components/Html/HtmlViewer", () => ({
 const fileEditorState = vi.hoisted(() => ({
   resolved: null as null | { maxBytes: number },
   renderedProps: [] as Array<Record<string, unknown>>,
+  // View-backed plugin editors on offer, by mode (#13809).
+  plugin: { edit: [], view: [] } as Record<"edit" | "view", unknown[]>,
+  pluginHostProps: [] as Array<Record<string, unknown>>,
 }));
-vi.mock("@/registry/fileEditorRegistry", () => ({
+// #13811: which project default covers the file is the resolver's business,
+// so the pane is handed one directly.
+const fileDefaultState = vi.hoisted(() => ({ value: null as unknown }));
+vi.mock("@/registry/fileEditorDefaults", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/registry/fileEditorDefaults")>()),
+  useFileEditorDefault: () => fileDefaultState.value,
+}));
+vi.mock("../PluginFileEditorHost", () => ({
+  default: (props: Record<string, unknown>) => {
+    fileEditorState.pluginHostProps.push(props);
+    return <div data-testid="plugin-file-editor-mock" />;
+  },
+}));
+vi.mock("@/registry/fileEditorRegistry", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/registry/fileEditorRegistry")>()),
+  usePluginFileEditorCandidates: (
+    _filePath: string | undefined,
+    _rootPath: string,
+    mode: "edit" | "view",
+    enabled = true
+  ) => (enabled ? fileEditorState.plugin[mode] : []),
   resolveFileEditor: () => null,
   useResolvedFileEditor: () => null,
   useFileEditor: () =>
@@ -306,19 +331,35 @@ vi.mock("@/registry/fileEditorRegistry", () => ({
             extensions: ["md"],
             maxBytes: fileEditorState.resolved.maxBytes,
           },
-          Component: (props: Record<string, unknown>) => {
-            fileEditorState.renderedProps.push(props);
-            return <div data-testid="file-editor-mock" />;
-          },
+          Component: FileEditorMock,
         },
 }));
 
+// One component for every render, as a real registration's is: a fresh one per
+// render would remount the editor each time the pane re-renders.
+function FileEditorMock(props: Record<string, unknown>) {
+  fileEditorState.renderedProps.push(props);
+  return <div data-testid="file-editor-mock" />;
+}
+
 import { FilePane } from "../FilePane";
 import { useFileDocumentStore } from "@/store/fileDocumentStore";
+import { useFileEditorChoicesStore } from "@/store/fileEditorChoicesStore";
+import {
+  _resetPluginProjectSurfacesStoreForTest,
+  usePluginProjectSurfacesStore,
+} from "@/store/pluginProjectSurfacesStore";
+import { fileEditorSlotKey } from "@shared/types/plugin";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { FILE_READ_ERROR_MESSAGES } from "@/components/FileViewer/fileReadErrors";
 import { revealCopy } from "@/components/FileViewer/revealCopy";
 import { ClientAppError } from "@/utils/clientAppError";
+import type { DriveLeaseView } from "@shared/types/ipc/driveLease";
+import {
+  _resetTerminalInputGateForTesting,
+  setDriveLeaseSnapshot,
+} from "@/services/terminal/inputGate";
+import { seedDriveLeaseView } from "@/components/Recovery/driveLeaseState";
 
 /**
  * An element of the SVG FileImagePreview shows, read back from the data URL of
@@ -3819,6 +3860,398 @@ describe("FilePane edit mode (#12323)", () => {
       "Unsaved changes, file changed on disk"
     );
   });
+
+  // #13920: the host refuses a save from a view another screen drives.
+  describe("while another screen drives the project", () => {
+    const drivenElsewhere = {
+      projectId: "proj-1",
+      holder: {
+        leaseId: 1,
+        endpointId: "remote:-9",
+        clientId: "client-c",
+        clientName: "greg-mbp",
+        isHostLocal: false,
+        acquiredAt: 0,
+      },
+      drivingHere: false,
+      isHolderEndpoint: false,
+      viewerIsHostLocal: true,
+    };
+
+    afterEach(() => {
+      seedDriveLeaseView(null);
+    });
+
+    it("withholds Edit, and keeps a persisted edit mode for when control comes back", async () => {
+      seedWorktree();
+      seedDriveLeaseView(drivenElsewhere);
+      await renderPane({ fileViewMode: "edit" });
+      expect(toggleLabels()).toEqual(["Source", "Rendered"]);
+      expect(screen.queryByTestId("file-editor-mock")).toBeNull();
+      expect(setFileViewModeMock).not.toHaveBeenCalled();
+
+      await act(async () => {
+        seedDriveLeaseView({ ...drivenElsewhere, holder: null, drivingHere: true });
+      });
+      expect(toggleLabels()).toEqual(["Source", "Rendered", "Edit"]);
+      expect(await screen.findByTestId("file-editor-mock")).toBeTruthy();
+    });
+
+    it("keeps an open editor with nothing published yet until the pane leaves Edit", async () => {
+      seedWorktree();
+      const view = await renderPane({ fileViewMode: "edit" });
+      const editor = await screen.findByTestId("file-editor-mock");
+      await act(async () => {
+        seedDriveLeaseView(drivenElsewhere);
+      });
+      // Same node: a composition or an unpublished keystroke in it survives.
+      expect(screen.getByTestId("file-editor-mock")).toBe(editor);
+      expect(toggleLabels()).toEqual(["Source", "Rendered", "Edit"]);
+
+      panelsById["file-1"] = {
+        id: "file-1",
+        kind: "file",
+        filePath: "/repo/docs/spec.md",
+        worktreeId: WORKTREE_ID,
+        fileViewMode: "source",
+      };
+      view.rerender(paneElement());
+      await act(async () => {});
+      expect(toggleLabels()).toEqual(["Source", "Rendered"]);
+    });
+
+    it("keeps the editor and its draft when control is taken mid-edit", async () => {
+      seedWorktree();
+      await renderPane({ fileViewMode: "edit" });
+      await act(async () => {
+        useFileDocumentStore.getState().setFileDocument("file-1", {
+          identityKey: "doc",
+          draftText: "# Plan (edited)\n",
+          dirty: true,
+          conflict: false,
+          save: async () => false,
+          discard: async () => {},
+        });
+      });
+      await act(async () => {
+        seedDriveLeaseView(drivenElsewhere);
+      });
+      expect(toggleLabels()).toEqual(["Source", "Rendered", "Edit"]);
+      expect(screen.getByTestId("file-editor-mock")).toBeTruthy();
+    });
+  });
+
+  describe("installed and project plugin editors (#13809)", () => {
+    function candidate(pluginId: string, pluginName: string, mode: "edit" | "view") {
+      return {
+        choiceId: `${pluginId}/main`,
+        pluginId,
+        pluginName,
+        editor: { id: "main", mode, extensions: ["md", "csv"], paths: [], maxBytes: 1024 },
+        view: {
+          id: `plugin-view:${pluginId}/editor`,
+          pluginId,
+          viewId: "editor",
+          location: "fileEditor",
+          name: `${pluginName} fileEditor`,
+          componentPath: `plugin://${pluginId}/editor.js`,
+        },
+      };
+    }
+
+    function radioLabels(): string[] {
+      return screen.queryAllByRole("radio").map((b) => b.textContent ?? "");
+    }
+
+    beforeEach(() => {
+      fileEditorState.pluginHostProps = [];
+      useFileEditorChoicesStore.setState({ choices: {}, loaded: true });
+    });
+
+    afterEach(() => {
+      fileEditorState.plugin = { edit: [], view: [] };
+      useFileEditorChoicesStore.setState({ choices: {}, loaded: false });
+    });
+
+    it("keeps the built-in editor by default and offers the plugin through Edit with…", async () => {
+      seedWorktree();
+      fileEditorState.plugin.edit = [candidate("acme.records", "Acme records", "edit")];
+      await renderPane({ fileViewMode: "edit" });
+      expect(radioLabels()).toEqual(["Source", "Rendered", "Edit"]);
+      expect(await screen.findByTestId("file-editor-mock")).toBeTruthy();
+      expect(screen.queryByTestId("plugin-file-editor-mock")).toBeNull();
+      expect(screen.getByTestId("file-editor-picker").textContent).toContain("Edit with…");
+    });
+
+    it("opens the remembered plugin editor, labelled with the plugin's name", async () => {
+      seedWorktree();
+      fileEditorState.plugin.edit = [candidate("acme.records", "Acme records", "edit")];
+      useFileEditorChoicesStore.setState({
+        choices: { "edit:md": "acme.records/main" },
+        loaded: true,
+      });
+      await renderPane({ fileViewMode: "edit" });
+      expect(radioLabels()).toEqual(["Source", "Rendered", "Edit · Acme records"]);
+      expect(await screen.findByTestId("plugin-file-editor-mock")).toBeTruthy();
+      expect(screen.queryByTestId("file-editor-mock")).toBeNull();
+      expect(fileEditorState.pluginHostProps.at(-1)).toMatchObject({
+        panelId: "file-1",
+        filePath: "/repo/docs/spec.md",
+        rootPath: WORKTREE_PATH,
+      });
+    });
+
+    it("lets a plugin viewer fill Rendered for a type the host can't render", async () => {
+      seedWorktree();
+      fileEditorState.resolved = null;
+      fileEditorState.plugin.view = [candidate("acme.csv", "Acme CSV", "view")];
+      await renderPane({
+        filePath: "/repo/data/table.csv",
+        fileViewMode: "rendered",
+        content: "a,b\n",
+      });
+      expect(radioLabels()).toEqual(["Source", "Rendered · Acme CSV"]);
+      expect(await screen.findByTestId("plugin-file-editor-mock")).toBeTruthy();
+      expect(screen.queryByTestId("file-editor-picker")).toBeNull();
+    });
+
+    it("skips a remembered editor too small for the file and offers one that fits", async () => {
+      seedWorktree();
+      fileEditorState.resolved = { maxBytes: 4 };
+      const roomy = candidate("acme.records", "Acme records", "edit");
+      roomy.editor.maxBytes = 1024;
+      fileEditorState.plugin.edit = [roomy];
+      useFileEditorChoicesStore.setState({ choices: { "edit:md": "host" }, loaded: true });
+      await renderPane({ fileViewMode: "edit", content: "# a long enough file\n" });
+      expect(radioLabels()).toEqual(["Source", "Rendered", "Edit · Acme records"]);
+      expect(await screen.findByTestId("plugin-file-editor-mock")).toBeTruthy();
+    });
+
+    it("keeps the built-in editor while it holds a draft, whatever was picked", async () => {
+      seedWorktree();
+      fileEditorState.plugin.edit = [candidate("acme.records", "Acme records", "edit")];
+      useFileEditorChoicesStore.setState({
+        choices: { "edit:md": "acme.records/main" },
+        loaded: true,
+      });
+      useFileDocumentStore.getState().setFileDocument("file-1", {
+        identityKey: "builtin-doc",
+        draftText: "# Plan (edited)\n",
+        dirty: true,
+        conflict: false,
+        save: async () => true,
+        discard: async () => {},
+      });
+      await renderPane({ fileViewMode: "edit" });
+      expect(radioLabels()).toEqual(["Source", "Rendered", "Edit"]);
+      expect(await screen.findByTestId("file-editor-mock")).toBeTruthy();
+      expect(screen.queryByTestId("plugin-file-editor-mock")).toBeNull();
+      expect(screen.queryByTestId("file-editor-picker")).toBeNull();
+    });
+
+    it("draws only the plugin viewer when the host's own reader refused the file", async () => {
+      seedWorktree();
+      fileEditorState.resolved = null;
+      fileEditorState.plugin.view = [candidate("acme.csv", "Acme CSV", "view")];
+      readMock.mockRejectedValue(new ClientAppError("FILE_TOO_LARGE", "too big"));
+      panelsById["file-1"] = {
+        id: "file-1",
+        kind: "file",
+        filePath: "/repo/data/table.csv",
+        worktreeId: WORKTREE_ID,
+        fileViewMode: "rendered",
+      };
+      render(paneElement());
+      await act(async () => {});
+      expect(await screen.findByTestId("plugin-file-editor-mock")).toBeTruthy();
+      expect(screen.queryByTestId("file-pane-unavailable")).toBeNull();
+    });
+
+    it("never offers plugin editors in the read-only dialog", async () => {
+      seedWorktree();
+      fileEditorState.resolved = null;
+      fileEditorState.plugin.edit = [candidate("acme.records", "Acme records", "edit")];
+      await renderPane({ location: "dialog" });
+      expect(radioLabels()).toEqual(["Source", "Rendered"]);
+    });
+
+    describe("a project plugin's default editor (#13811)", () => {
+      const SLOT = fileEditorSlotKey("docs/*.md");
+
+      function pinnedPanel(fileViewMode: string) {
+        panelsById["file-1"] = {
+          id: "file-1",
+          kind: "file",
+          filePath: "/repo/docs/spec.md",
+          worktreeId: WORKTREE_ID,
+          fileViewMode,
+          fileEditorChoice: "acme.records/main",
+        };
+      }
+
+      afterEach(() => {
+        fileDefaultState.value = null;
+        _resetPluginProjectSurfacesStoreForTest();
+      });
+
+      it("opens the editor pinned to the panel ahead of the built-in", async () => {
+        seedWorktree();
+        fileEditorState.plugin.edit = [candidate("acme.records", "Acme records", "edit")];
+        pinnedPanel("edit");
+        render(paneElement());
+        await act(async () => {});
+        expect(radioLabels()).toEqual(["Source", "Rendered", "Edit · Acme records"]);
+        expect(await screen.findByTestId("plugin-file-editor-mock")).toBeTruthy();
+        expect(screen.queryByTestId("file-editor-mock")).toBeNull();
+      });
+
+      it("falls back to the usual pick when the pinned editor isn't on offer", async () => {
+        seedWorktree();
+        pinnedPanel("edit");
+        render(paneElement());
+        await act(async () => {});
+        expect(radioLabels()).toEqual(["Source", "Rendered", "Edit"]);
+        expect(await screen.findByTestId("file-editor-mock")).toBeTruthy();
+      });
+
+      const owned = {
+        mode: "exclusive" as const,
+        options: [
+          {
+            pluginId: "acme.records",
+            scope: "project" as const,
+            value: { kind: "data" as const, data: { editorId: "main" } },
+          },
+        ],
+        defaultOptionId: "acme.records",
+        refused: [],
+      };
+
+      /** An unanswered default on `docs/*.md`, with main's save answered by `save`. */
+      async function renderAsked(save: (updates: unknown) => Promise<unknown>) {
+        seedWorktree();
+        fileEditorState.resolved = null;
+        fileEditorState.plugin.edit = [candidate("acme.records", "Acme records", "edit")];
+        fileDefaultState.value = {
+          slot: SLOT,
+          pluginId: "acme.records",
+          choiceId: "acme.records/main",
+          choice: null,
+        };
+        Object.defineProperty(window, "electron", {
+          configurable: true,
+          value: { plugin: { setProjectSurfaceChoices: vi.fn(save) } },
+        });
+        usePluginProjectSurfacesStore.setState({
+          slots: { [SLOT]: owned },
+          choices: {},
+          choicesLoaded: true,
+        });
+        pinnedPanel("edit");
+        render(paneElement());
+        await act(async () => {});
+      }
+
+      afterEach(() => {
+        Reflect.deleteProperty(window, "electron");
+      });
+
+      it("asks about an unanswered default in the pane, and Use Daintree's leaves it for Source", async () => {
+        await renderAsked(async () => ({
+          projectId: "p1",
+          revision: 1,
+          slots: { [SLOT]: owned },
+          choices: { [SLOT]: { pluginId: "acme.records", choice: "stock", decidedAt: 1 } },
+        }));
+
+        expect(
+          screen.getByText("acme.records set up this project: Editor for docs/*.md")
+        ).toBeTruthy();
+        await act(async () => {
+          fireEvent.click(screen.getByRole("button", { name: "Use Daintree's" }));
+        });
+        expect(setFileViewModeMock).toHaveBeenCalledWith("file-1", "source");
+      });
+
+      it("keeps the editor and says so when the answer couldn't be saved", async () => {
+        await renderAsked(() => Promise.reject(new Error("ENOSPC")));
+
+        await act(async () => {
+          fireEvent.click(screen.getByRole("button", { name: "Use Daintree's" }));
+        });
+        expect(setFileViewModeMock).not.toHaveBeenCalled();
+        expect(screen.getByRole("alert").textContent).toContain("Couldn't save the editor choice");
+      });
+
+      it("leaves the pane alone when main ends up holding a different answer", async () => {
+        // Another view kept the plugin's editor while this answer was in flight.
+        await renderAsked(async () => ({
+          projectId: "p1",
+          revision: 1,
+          slots: { [SLOT]: owned },
+          choices: { [SLOT]: { pluginId: "acme.records", choice: "surface", decidedAt: 2 } },
+        }));
+
+        await act(async () => {
+          fireEvent.click(screen.getByRole("button", { name: "Use Daintree's" }));
+        });
+        expect(setFileViewModeMock).not.toHaveBeenCalled();
+      });
+
+      it("doesn't ask in a pane where the default's editor isn't on offer", async () => {
+        seedWorktree();
+        fileEditorState.resolved = null;
+        const small = candidate("acme.records", "Acme records", "edit");
+        small.editor.maxBytes = 2;
+        fileEditorState.plugin.edit = [small];
+        fileDefaultState.value = {
+          slot: SLOT,
+          pluginId: "acme.records",
+          choiceId: "acme.records/main",
+          choice: null,
+        };
+        usePluginProjectSurfacesStore.setState({
+          slots: { [SLOT]: owned },
+          choices: {},
+          choicesLoaded: true,
+        });
+        await renderPane({ content: "# a file larger than two bytes\n" });
+        expect(screen.queryByText(/set up this project/)).toBeNull();
+      });
+
+      it("doesn't ask once the default is answered", async () => {
+        seedWorktree();
+        fileEditorState.plugin.edit = [candidate("acme.records", "Acme records", "edit")];
+        fileDefaultState.value = {
+          slot: SLOT,
+          pluginId: "acme.records",
+          choiceId: "acme.records/main",
+          choice: "surface",
+        };
+        pinnedPanel("edit");
+        render(paneElement());
+        await act(async () => {});
+        expect(screen.queryByText(/set up this project/)).toBeNull();
+      });
+    });
+
+    it("does not open a plugin editor before the remembered answers have loaded", async () => {
+      seedWorktree();
+      fileEditorState.resolved = null;
+      fileEditorState.plugin.edit = [candidate("acme.records", "Acme records", "edit")];
+      useFileEditorChoicesStore.setState({ choices: {}, loaded: false });
+      // Keep init from flipping `loaded` during the render under test.
+      const init = useFileEditorChoicesStore.getState().init;
+      useFileEditorChoicesStore.setState({ init: () => {} });
+      try {
+        await renderPane({ fileViewMode: "edit" });
+        expect(radioLabels()).toEqual(["Source", "Rendered"]);
+        expect(screen.queryByTestId("plugin-file-editor-mock")).toBeNull();
+      } finally {
+        useFileEditorChoicesStore.setState({ init });
+      }
+    });
+  });
 });
 
 // A link from untrusted Markdown pins its document's root. Without that, a file
@@ -4027,5 +4460,91 @@ describe("FilePane file menu on its content (#13423)", () => {
         expect.anything()
       )
     );
+  });
+});
+
+describe("FilePane in a remote window (#13925)", () => {
+  const fetchMock = vi.fn();
+  const realFetch = globalThis.fetch;
+  const lease = (drivingHere: boolean): DriveLeaseView => ({
+    projectId: "proj-1",
+    holder: {
+      leaseId: 3,
+      endpointId: "view-9",
+      clientId: "shell-b",
+      clientName: "greg-mbp",
+      isHostLocal: false,
+      acquiredAt: 1,
+    },
+    drivingHere,
+    isHolderEndpoint: drivingHere,
+    viewerIsHostLocal: false,
+  });
+
+  beforeEach(() => {
+    window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
+    (window as { __DAINTREE_INITIAL_PROJECT__?: { id: string } }).__DAINTREE_INITIAL_PROJECT__ = {
+      id: "proj-1",
+    };
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.stubGlobal("fetch", realFetch);
+    fetchMock.mockReset();
+    _resetTerminalInputGateForTesting();
+    delete (window as { __DAINTREE_HOST_ID__?: unknown }).__DAINTREE_HOST_ID__;
+    delete (window as { __DAINTREE_INITIAL_PROJECT__?: unknown }).__DAINTREE_INITIAL_PROJECT__;
+  });
+
+  function renderRemote(filePath: string) {
+    panelsById["file-1"] = { id: "file-1", kind: "file", filePath };
+    return render(
+      <TooltipProvider>
+        <FilePane
+          id="file-1"
+          title={filePath.split("/").pop() ?? filePath}
+          isFocused={false}
+          location="grid"
+          onFocus={() => {}}
+          onClose={() => {}}
+        />
+      </TooltipProvider>
+    );
+  }
+
+  it("says another window has control of a refused image, and loads it once this view drives", async () => {
+    setDriveLeaseSnapshot(lease(false));
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 403,
+      headers: new Headers({ "x-daintree-refusal": "driven-elsewhere" }),
+    });
+    const { container } = renderRemote("/srv/app/assets/logo.png");
+    const image = await waitFor(() => {
+      const found = container.querySelector("img");
+      if (!found) throw new Error("image not rendered");
+      return found;
+    });
+    act(() => {
+      image.dispatchEvent(new Event("error"));
+    });
+
+    await screen.findByText("Another window has control");
+    expect(container.textContent).toContain("greg-mbp has control of this project");
+    expect(container.textContent).not.toMatch(/damaged/);
+    expect(screen.getByRole("button", { name: "Take control" })).toBeTruthy();
+    expect(container.querySelector("img")).toBeNull();
+
+    act(() => setDriveLeaseSnapshot(lease(true)));
+    await waitFor(() => expect(container.querySelector("img")).not.toBeNull());
+  });
+
+  it("offers a copy saved here instead of the default app for a file it can't play", async () => {
+    const { container } = renderRemote("/srv/app/media/demo.mov");
+    await act(async () => {});
+    expect(screen.getByRole("button", { name: /^Save to this/ })).toBeTruthy();
+    expect(container.textContent).not.toMatch(/default app/);
   });
 });

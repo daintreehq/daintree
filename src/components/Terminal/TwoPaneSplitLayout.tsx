@@ -6,7 +6,10 @@ import { hostScopedKey } from "@/hooks/useHostPlatform";
 import type { PanelInstance } from "@shared/types/panel";
 import { TwoPaneSplitDivider, DIVIDER_WIDTH_PX } from "./TwoPaneSplitDivider";
 import { MIN_TERMINAL_WIDTH_PX } from "@/lib/terminalLayout";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import {
+  peek as peekTerminalService,
+  with as withTerminalService,
+} from "@/services/terminal/terminalInstanceServiceAccessor";
 import { isBrowserPanel, isDevPreviewPanel, isReviewPanel } from "@shared/types/panel";
 import {
   isSidebarMeasurementLocked,
@@ -257,7 +260,7 @@ export function TwoPaneSplitLayout({
         const ids = terminals.map((terminal) => terminal.id);
         dragLockedIdsRef.current = ids;
         for (const id of ids) {
-          terminalInstanceService.lockResize(id, true);
+          withTerminalService((service) => service.lockResize(id, true), id);
         }
       } else {
         const ids = dragLockedIdsRef.current;
@@ -265,10 +268,10 @@ export function TwoPaneSplitLayout({
         // frame cannot restore the lock after drag end.
         dragLockedIdsRef.current = [];
         for (const id of ids) {
-          terminalInstanceService.lockResize(id, false);
+          withTerminalService((service) => service.lockResize(id, false), id);
         }
         if (ids.length > 0) {
-          terminalInstanceService.runResizePass(ids);
+          withTerminalService((service) => service.runResizePass(ids));
         }
       }
     },
@@ -278,9 +281,11 @@ export function TwoPaneSplitLayout({
   useEffect(() => {
     if (!isDraggingDivider) return;
     let rafId = 0;
+    // Re-arming refreshes a lock the drag start already queued; going through
+    // with() here would queue a call per frame while the service is unloaded.
     const rearm = () => {
       for (const id of dragLockedIdsRef.current) {
-        terminalInstanceService.lockResize(id, true);
+        peekTerminalService()?.lockResize(id, true);
       }
       rafId = requestAnimationFrame(rearm);
     };
@@ -298,7 +303,7 @@ export function TwoPaneSplitLayout({
       const lockedIds = dragLockedIdsRef.current;
       dragLockedIdsRef.current = [];
       for (const id of lockedIds) {
-        terminalInstanceService.lockResize(id, false);
+        withTerminalService((service) => service.lockResize(id, false), id);
       }
 
       // Flush pending ratio if present
@@ -357,7 +362,7 @@ export function TwoPaneSplitLayout({
 
     if (isDraggingDivider || wasDragging) return;
 
-    terminalInstanceService.scheduleBatchResize(panelIds);
+    withTerminalService((service) => service.scheduleBatchResize(panelIds));
     return undefined;
     // `leftWidth`/`rightWidth` are now ratio-derived calc() strings, so they no
     // longer change on container resize — depend on `clampedRatio` (ratio drags,

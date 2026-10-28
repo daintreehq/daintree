@@ -9,6 +9,7 @@ import {
   type HostRecentUse,
 } from "@shared/types/remoteHosts";
 import { getAgentConfig } from "@shared/config/agentRegistry";
+import { compareReleaseVersions } from "@shared/utils/hostBuildOrder";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { isMac, isWindows } from "@/lib/platform";
 import { pluralize } from "@/lib/pluralize";
@@ -184,12 +185,13 @@ export function describeHostRowStatus(row: HostMenuRow, now: number = Date.now()
   if (connection && connection.status !== "connected" && connection.status !== "local") {
     switch (connection.status) {
       case "connecting":
-        return "Connecting…";
+        return connection.restarting ? "Restarting…" : "Connecting…";
       case "disconnected":
         return `Not connected${lastSeenSuffix(row.lastSeenAt, now)}`;
       case "unreachable":
+        if (connection.restarting) return "Restarting…";
         return connection.hostModeOff
-          ? "Host mode off"
+          ? `Not listening${lastSeenSuffix(row.lastSeenAt, now)}`
           : `Unreachable${lastSeenSuffix(row.lastSeenAt, now)}`;
       case "version-mismatch":
         return `Runs a different build (${connection.remote.version})`;
@@ -242,12 +244,21 @@ export function describeHostMenuState(
     case "local":
       return { state: "Connected", note: null };
     case "connecting":
-      return { state: "Connecting…", note: null };
+      return { state: connection.restarting ? "Restarting…" : "Connecting…", note: null };
     case "disconnected":
       return { state: "Not connected", note: null };
     case "unreachable":
-      // The machine answered; Daintree there isn't hosting, which setting up fixes.
-      if (connection.hostModeOff) return { state: "Host mode off", note: null };
+      // The host said it was shutting down: one restart, not a failed dial each time.
+      if (connection.restarting) return { state: "Restarting…", note: null };
+      // The machine answered and no Daintree is listening there: quit, not
+      // started since a reboot, or never set up all look the same from here.
+      if (connection.hostModeOff) {
+        return {
+          state: "Not listening",
+          note:
+            row.lastSeenAt === null ? null : `Last seen ${formatRelativeTime(row.lastSeenAt, now)}`,
+        };
+      }
       // The same answer the chip gives: SSH reached it and refused the login.
       if (connection.stoppedRetrying) return { state: "Can't log in", note: null };
       return {
@@ -273,10 +284,11 @@ export function hostMenuNoteAge(row: HostMenuRow): { prefix: string; at: number 
   if (connection.status === "connected" && connection.quietSince !== undefined) {
     return { prefix: "Last heard ", at: connection.quietSince };
   }
+  // The same rows describeHostMenuState gives a last-seen note: not one ssh refused.
   if (
     connection.status === "unreachable" &&
-    !connection.hostModeOff &&
-    !connection.stoppedRetrying &&
+    !connection.restarting &&
+    (connection.hostModeOff === true || !connection.stoppedRetrying) &&
     row.lastSeenAt !== null
   ) {
     return { prefix: "Last seen ", at: row.lastSeenAt };
@@ -292,17 +304,8 @@ export function hostMenuRowHasTrouble(row: HostMenuRow): boolean {
   const connection = row.connection;
   if (!connection) return false;
   if (connection.status === "connected") return connection.quietSince !== undefined;
-  return connection.status === "unreachable" || connection.status === "version-mismatch";
-}
-
-/** CPU and memory pressure as last reported; null when the host measured neither. */
-export function describeHostRowMetrics(row: HostMenuRow): string | null {
-  const summary = liveSummary(row);
-  if (!summary) return null;
-  const parts: string[] = [];
-  if (summary.cpuPercent !== null) parts.push(`CPU ${Math.round(summary.cpuPercent)}%`);
-  if (summary.memoryPressure !== null) parts.push(`Memory ${summary.memoryPressure}`);
-  return parts.length > 0 ? parts.join("  ") : null;
+  if (connection.status === "unreachable") return !connection.restarting;
+  return connection.status === "version-mismatch";
 }
 
 /** The host's installed agent CLIs, as its own detection reported them. */
@@ -352,6 +355,8 @@ export function hostChipStatus(
     case "local":
       return drivenBy ? "driven-elsewhere" : "connected";
     case "unreachable":
+      // Between dials of an announced restart: still on its way back.
+      if (connection.restarting) return "connecting";
       // The machine answered in both; what it said is the state, not "unreachable".
       if (connection.hostModeOff) return "host-mode-off";
       if (connection.stoppedRetrying) return "access-denied";
@@ -371,7 +376,7 @@ export function hostChipStatusText(status: HostChipStatus): string | null {
     case "unreachable":
       return "unreachable";
     case "host-mode-off":
-      return "host mode off";
+      return "not listening";
     case "access-denied":
       return "can't log in";
     case "version-mismatch":
@@ -385,23 +390,6 @@ export function hostChipStatusText(status: HostChipStatus): string | null {
   }
 }
 
-function compareVersions(a: string, b: string): number {
-  const parse = (value: string) =>
-    value
-      .split(/[.+-]/)
-      .slice(0, 3)
-      .map((part) => Number.parseInt(part, 10));
-  const left = parse(a);
-  const right = parse(b);
-  for (let i = 0; i < 3; i += 1) {
-    const l = left[i];
-    const r = right[i];
-    if (l === undefined || r === undefined || Number.isNaN(l) || Number.isNaN(r)) return 0;
-    if (l !== r) return l - r;
-  }
-  return 0;
-}
-
 /**
  * Which side a mismatch asks to update: the one that is behind. Builds that
  * can't be ordered (same version, different commit) update the host, since
@@ -412,7 +400,7 @@ export function updateTargetFor(mismatch: HandshakeMismatch): "host" | "local" {
     mismatch.kind === "protocol"
       ? mismatch.remote - mismatch.local
       : mismatch.kind === "version"
-        ? compareVersions(mismatch.remote, mismatch.local)
+        ? (compareReleaseVersions(mismatch.remote, mismatch.local) ?? 0)
         : 0;
   return order > 0 ? "local" : "host";
 }

@@ -12,6 +12,7 @@ interface ContentMountProps {
   panelId: string;
   panelRemovedSignal?: AbortSignal;
   offerRequestReload?: boolean;
+  hostContext?: { kind: string };
 }
 
 const h = vi.hoisted(() => ({
@@ -25,9 +26,11 @@ vi.mock("@/components/Plugin/PluginViewContent", () => ({
     h.mounts.push(props);
     return <div data-testid="content" />;
   },
+  pluginViewHostContext: (kind: string) => ({ kind }),
 }));
 
-import { ProjectSurfaceView, _resetProjectSurfaceRuntimesForTest } from "../ProjectSurfaceView";
+import { ProjectSurfaceView } from "../ProjectSurfaceView";
+import { _resetPluginHostedViewRuntimesForTest } from "../PluginHostedView";
 
 const KIND_ID = "project:p1/acme.dash/overview";
 
@@ -47,13 +50,13 @@ function surfaceKind(componentPath = "plugin://acme.dash/1/overview.js"): PanelK
 
 beforeEach(() => {
   h.mounts = [];
-  _resetProjectSurfaceRuntimesForTest();
+  _resetPluginHostedViewRuntimesForTest();
   registerPanelKind(surfaceKind());
 });
 
 afterEach(() => {
   unregisterPanelKind(KIND_ID);
-  _resetProjectSurfaceRuntimesForTest();
+  _resetPluginHostedViewRuntimesForTest();
 });
 
 describe("ProjectSurfaceView", () => {
@@ -71,6 +74,11 @@ describe("ProjectSurfaceView", () => {
     act(() => syncPluginPanels([], new Set()));
 
     expect(mount?.panelRemovedSignal?.aborted).toBe(false);
+  });
+
+  it("tells its view it is on a surface", () => {
+    render(<ProjectSurfaceView config={surfaceKind()} />);
+    expect(h.mounts.at(-1)?.hostContext?.kind).toBe("surface");
   });
 
   it("offers its view no requestReload, having no panel record to police it (#12609)", () => {

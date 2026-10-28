@@ -1,7 +1,15 @@
 import { isPtyPanel, type PanelKind } from "@shared/types/panel";
+import type { AgentState } from "@shared/types/agent";
 import type { BackendTerminalInfo, TerminalReconnectResult } from "@shared/types/ipc/terminal";
 import { getWorktreePathIndex, getWorktreeSelectionSnapshot } from "@/store/storeAccessors";
+import { cancelDriveLeaseHold, isHeldForDriveLease } from "@/store/driveLeaseWaitStore";
 import { logWarn } from "@/utils/logger";
+import {
+  load as loadTerminalService,
+  with as withTerminalService,
+} from "@/services/terminal/terminalInstanceServiceAccessor";
+import type { TerminalPaintPlane } from "@/services/TerminalInstanceService";
+import { isSpawnUnconfirmed } from "@/store/slices/panelRegistry/unconfirmedSpawn";
 
 export interface HostTerminalResyncOptions {
   /**
@@ -17,6 +25,12 @@ export interface HostTerminalResyncOptions {
    * knows what the driver still shows.
    */
   follow?: boolean;
+  /**
+   * Told of each pane this pass reports gone, with its restart key: after a
+   * host restart these are what the restart ended. One whose agent had
+   * already quit is left out, since nothing in it was running to be ended.
+   */
+  onLost?: (id: string, restartKey: number) => void;
 }
 
 /**
@@ -32,10 +46,8 @@ export async function resyncHostTerminals(
 ): Promise<void> {
   // Taken before asking, so a pane opened while the answer is in flight is
   // never judged against a list that predates it.
-  const [{ usePanelStore }, { terminalInstanceService }] = await Promise.all([
-    import("@/store/panelStore"),
-    import("@/services/TerminalInstanceService"),
-  ]);
+  const { usePanelStore } = await import("@/store/panelStore");
+  const terminalInstanceService = await terminalServiceForResync(usePanelStore.getState());
   const knownBefore = new Set(usePanelStore.getState().panelIds);
   const before = usePanelStore.getState();
   const exitedBefore = new Set(
@@ -48,41 +60,20 @@ export async function resyncHostTerminals(
   const store = usePanelStore.getState();
 
   for (const info of infos) {
-    const panel = store.panelsById[info.id];
-    if (!panel || !isPtyPanel(panel) || panel.isRestarting) continue;
-    if (!info.agentState || typeof info.lastStateChange !== "number") continue;
-    const newIncarnation =
-      info.agentIncarnation !== undefined &&
-      panel.agentIncarnation !== undefined &&
-      info.agentIncarnation !== panel.agentIncarnation;
-    if (!newIncarnation && panel.lastStateChange && info.lastStateChange <= panel.lastStateChange) {
-      continue;
-    }
-    terminalInstanceService.setAgentState(info.id, info.agentState);
-    // Same guard as the live state listener: a waiting report never overwrites
-    // the renderer's directing, which the controller only writes on entry and
-    // so could not restore on later keystrokes.
-    if (!newIncarnation && panel.agentState === "directing" && info.agentState === "waiting") {
-      continue;
-    }
-    store.updateAgentState(
-      info.id,
-      info.agentState,
-      undefined,
-      info.lastStateChange,
-      undefined,
-      undefined,
-      info.waitingReason
-    );
+    takeHostAgentState(info.id, info, store, terminalInstanceService);
   }
+
+  adoptAwaitedTerminals(infos, usePanelStore, terminalInstanceService);
 
   if (options.follow) {
     await followHostTerminals(infos, exitedBefore, usePanelStore);
     if (!options.isCurrent()) return;
   }
 
+  // A spawn whose answer was lost is still this view's own launch, closed or
+  // not: its check attaches it or ends it once the host answers.
   await adoptNewTerminals(
-    infos.filter((info) => !store.panelsById[info.id]),
+    infos.filter((info) => !store.panelsById[info.id] && !isSpawnUnconfirmed(info.id)),
     store.addPanel,
     options
   );
@@ -96,6 +87,78 @@ export async function resyncHostTerminals(
   if (!options.isCurrent()) return;
 
   replayWatchedPanels(usePanelStore.getState());
+}
+
+type ResyncTerminalService = Pick<TerminalPaintPlane, "setAgentState" | "fetchAndRestore">;
+
+/**
+ * A view with no terminal yet has not loaded the service, and an empty host
+ * list gives it nothing to load it for (#14267): its calls wait for the
+ * service the first terminal brings instead.
+ */
+async function terminalServiceForResync(state: PanelState): Promise<ResyncTerminalService> {
+  const hasPtyPanel = state.panelIds.some((id) => {
+    const panel = state.panelsById[id];
+    return panel !== undefined && isPtyPanel(panel);
+  });
+  if (hasPtyPanel) return loadTerminalService();
+  return {
+    setAgentState: (id, agentState) =>
+      withTerminalService((service) => service.setAgentState(id, agentState), id),
+    fetchAndRestore: (id) =>
+      new Promise<boolean>((resolve, reject) =>
+        withTerminalService((service) => {
+          service.fetchAndRestore(id).then(resolve, reject);
+        }, id)
+      ),
+  };
+}
+
+type HostAgentStateRecord = Pick<
+  BackendTerminalInfo,
+  "agentState" | "lastStateChange" | "agentIncarnation" | "waitingReason"
+>;
+
+/**
+ * Take the host's agent state for a pane where it is newer than the pane's, or
+ * belongs to a new incarnation of the agent. `overGuess` takes it whatever its
+ * stamp: the pane holds only the state it guessed at launch, which the host's
+ * own clock never has to be ahead of.
+ */
+export function takeHostAgentState(
+  id: string,
+  record: HostAgentStateRecord,
+  store: Pick<PanelState, "panelsById" | "updateAgentState">,
+  instances: { setAgentState: (id: string, state: AgentState) => void },
+  overGuess = false
+): void {
+  const panel = store.panelsById[id];
+  if (!panel || !isPtyPanel(panel) || panel.isRestarting) return;
+  if (!record.agentState || typeof record.lastStateChange !== "number") return;
+  const newIncarnation =
+    overGuess ||
+    (record.agentIncarnation !== undefined &&
+      panel.agentIncarnation !== undefined &&
+      record.agentIncarnation !== panel.agentIncarnation);
+  if (!newIncarnation && panel.lastStateChange && record.lastStateChange <= panel.lastStateChange) {
+    return;
+  }
+  instances.setAgentState(id, record.agentState);
+  // Same guard as the live state listener: a waiting report never overwrites
+  // the renderer's directing, which the controller only writes on entry and
+  // so could not restore on later keystrokes.
+  if (!newIncarnation && panel.agentState === "directing" && record.agentState === "waiting") {
+    return;
+  }
+  store.updateAgentState(
+    id,
+    record.agentState,
+    undefined,
+    record.lastStateChange,
+    undefined,
+    undefined,
+    record.waitingReason
+  );
 }
 
 /**
@@ -163,7 +226,11 @@ async function observeVanishedTerminals(
       // host's project list, and say nothing about the driver.
       (!options.follow || followsHostLayout(panel)) &&
       !panel.isRestarting &&
+      // Still starting: nothing ran yet to be lost, and its own spawn settles it.
+      panel.spawnStatus !== "spawning" &&
       !panel.spawnError &&
+      // Waiting for control, it has started nothing the host could have lost.
+      !isHeldForDriveLease(id) &&
       // Held for restore recovery: it has no PTY on purpose, and is waiting on the user.
       panel.restoreRecovery === undefined &&
       panel.exitCode === undefined &&
@@ -190,7 +257,7 @@ async function observeVanishedTerminals(
     return;
   }
   if (!options.isCurrent()) return;
-  const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
+  const terminalInstanceService = await loadTerminalService();
   if (!options.isCurrent()) return;
   const state = getState();
   for (const id of live) {
@@ -198,6 +265,9 @@ async function observeVanishedTerminals(
     if (!answer || answer.conflict) continue;
     const panel = state.panelsById[id];
     if (!panel || !isPtyPanel(panel) || panel.isRestarting) continue;
+    // Refused while the probe was out, it now waits for control instead.
+    if (isHeldForDriveLease(id)) continue;
+    if (panel.spawnStatus === "spawning") continue;
     if ((panel.restartKey ?? 0) !== probed.get(id)) continue;
     // A real exit reported while the probe was out already says it all, code included.
     if (panel.exitCode !== undefined || panel.runtimeStatus === "exited") continue;
@@ -218,11 +288,41 @@ async function observeVanishedTerminals(
       // agent as the agent rather than demoting it to a shell.
       state.setRuntimeStatus(id, "exited");
       terminalInstanceService.reportLost(id, "The host no longer has this terminal");
+      if (panel.agentState !== "exited") options.onLost?.(id, panel.restartKey ?? 0);
     }
   }
 }
 
 type PanelStore = typeof import("@/store/panelStore").usePanelStore;
+
+/**
+ * A pane waiting for control whose terminal the host runs after all (the
+ * driver started that id itself): it attaches to it, and the launch it was
+ * holding never runs, so the id isn't spawned twice. One whose launch is
+ * already on its way checks the host for itself before it spawns.
+ */
+function adoptAwaitedTerminals(
+  infos: BackendTerminalInfo[],
+  store: PanelStore,
+  instances: Pick<TerminalPaintPlane, "fetchAndRestore">
+): void {
+  for (const info of infos) {
+    if (info.hasPty === false || info.isTrashed) continue;
+    const panel = store.getState().panelsById[info.id];
+    if (!panel || !isPtyPanel(panel) || panel.spawnStatus !== "spawning") continue;
+    if (!cancelDriveLeaseHold(info.id)) continue;
+    store.setState((current) => {
+      const target = current.panelsById[info.id];
+      if (!target || !isPtyPanel(target) || target.spawnStatus !== "spawning") return current;
+      return {
+        panelsById: { ...current.panelsById, [info.id]: { ...target, spawnStatus: "ready" } },
+      };
+    });
+    instances.fetchAndRestore(info.id).catch((error: unknown) => {
+      logWarn("[HostResync] Couldn't restore an adopted terminal's output", { error });
+    });
+  }
+}
 
 function showsExited(state: PanelState, id: string): boolean {
   const panel = state.panelsById[id];
@@ -279,6 +379,7 @@ async function followHostTerminals(
           [info.id]: {
             ...target,
             exitCode: undefined,
+            sessionPreservingExit: undefined,
             restartKey: (target.restartKey ?? 0) + 1,
             runtimeStatus: deriveRuntimeStatus(target.isVisible, target.flowStatus),
           },

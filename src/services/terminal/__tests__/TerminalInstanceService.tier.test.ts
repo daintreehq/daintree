@@ -66,6 +66,7 @@ vi.mock("../TerminalAddonManager", () => ({
 type TierTestService = {
   instances: Map<string, Record<string, unknown>>;
   applyRendererPolicy: (id: string, tier: TerminalRefreshTier) => void;
+  setVisible: (id: string, isVisible: boolean) => void;
   prewarmTerminal: (
     id: string,
     type: string,
@@ -153,10 +154,9 @@ describe("TerminalInstanceService - Activity Tier", () => {
     vi.useFakeTimers();
     vi.clearAllMocks();
 
-    ({ terminalInstanceService: service } =
-      (await import("../TerminalInstanceService")) as unknown as {
-        terminalInstanceService: TierTestService;
-      });
+    service = (await (
+      await import("../terminalInstanceServiceAccessor")
+    ).load()) as unknown as TierTestService;
     service.instances.clear();
   });
 
@@ -569,6 +569,44 @@ describe("TerminalInstanceService - Activity Tier", () => {
           .lastScrollbackReduceAt
       ).toBeUndefined();
     });
+
+    // #14215: output bumps a hidden pane BACKGROUND → BURST on every chunk.
+    it("keeps a hidden pane's pressure cap when output bumps it to BURST", () => {
+      const managed = makeMockManaged({
+        isVisible: false,
+        lastAppliedTier: TerminalRefreshTier.BACKGROUND,
+        lastScrollbackReduceAt: 12345,
+        scrollbackPressureCapped: true,
+      });
+      managed.terminal.options.scrollback = 500;
+      service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+      service.applyRendererPolicy("t1", TerminalRefreshTier.BURST);
+
+      expect(managed.terminal.options.scrollback).toBe(500);
+      expect(
+        (managed as unknown as { lastScrollbackReduceAt?: number }).lastScrollbackReduceAt
+      ).toBe(12345);
+    });
+
+    it("gives a pressure-capped pane its capacity back when it is revealed", () => {
+      const managed = makeMockManaged({
+        isVisible: false,
+        lastAppliedTier: TerminalRefreshTier.BURST,
+        lastScrollbackReduceAt: 12345,
+        scrollbackPressureCapped: true,
+      });
+      // Below any configured target, so the restore is pure growth.
+      managed.terminal.options.scrollback = 50;
+      service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+      service.setVisible("t1", true);
+
+      expect(managed.terminal.options.scrollback).toBeGreaterThan(50);
+      expect(
+        (managed as unknown as { scrollbackPressureCapped?: boolean }).scrollbackPressureCapped
+      ).toBeUndefined();
+    });
   });
 });
 
@@ -598,10 +636,9 @@ describe("TerminalInstanceService - onUserInput wake for paused-backpressure", (
     vi.useFakeTimers();
     vi.clearAllMocks();
 
-    ({ terminalInstanceService: service } =
-      (await import("../TerminalInstanceService")) as unknown as {
-        terminalInstanceService: InputWakeService;
-      });
+    service = (await (
+      await import("../terminalInstanceServiceAccessor")
+    ).load()) as unknown as InputWakeService;
     ({ usePanelStore: panelStore } =
       (await import("@/store/panelStore")) as unknown as PanelStoreModule);
 

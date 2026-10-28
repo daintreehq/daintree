@@ -218,13 +218,16 @@ vi.mock("@/clients", () => ({
   },
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     focus: vi.fn(),
     setFocused: vi.fn(),
     notifyUserInput: (...args: unknown[]) => mockNotifyUserInput(...args),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("@/components/Terminal/MissingCliGate", () => ({
   MissingCliGate: ({ agentId, onRunAnyway }: { agentId: string; onRunAnyway: () => void }) => (
@@ -256,6 +259,8 @@ vi.mock("@/config/agents", () => ({
 
 vi.mock("@shared/types/agentSettings", () => ({
   reconcileDecorationFlags: (flags: string[]) => flags,
+  reconcileInlineModeFlag: (flags: string[]) => flags,
+  resolveEffectiveInlineMode: () => false,
   resolveKeepDecorations: () => false,
   buildResumeCommand: (...args: unknown[]) => mockBuildResumeCommand(...args),
   buildResumeLatestCommand: (...args: unknown[]) => mockBuildResumeLatestCommand(...args),

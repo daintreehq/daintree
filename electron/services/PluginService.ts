@@ -4,8 +4,12 @@ import { randomBytes } from "node:crypto";
 import path from "path";
 import os from "os";
 import { pathToFileURL } from "url";
-import { app } from "electron";
+import { app, net, webContents } from "electron";
 import { createLogger } from "../utils/logger.js";
+import { PluginArtifactService } from "./plugin/PluginArtifactService.js";
+import { PluginArtifactStore } from "./plugin/PluginArtifactStore.js";
+import { setArtifactSourceResolver } from "../setup/artifactSourceResolver.js";
+import type { PluginArtifact, PluginArtifactSource } from "../../shared/types/pluginArtifacts.js";
 import { PRODUCT_WEBSITE } from "../utils/productBranding.js";
 import { stripUtf8Bom } from "../utils/stripUtf8Bom.js";
 // Aliased to avoid colliding with Vite's auto-injected ESM shim
@@ -25,7 +29,6 @@ interface AjvInstance {
 }
 
 import {
-  DEPRECATED_CONTRIBUTION_ALIASES,
   describeManifestIssues,
   getPluginManifestSchema,
   parsePluginManifestForLoad,
@@ -33,12 +36,14 @@ import {
 } from "../schemas/plugin.js";
 import { getPluginMcpSupervisor } from "./PluginMcpSupervisor.js";
 import { PluginProcessManager } from "./plugin/PluginProcessManager.js";
+import { getWorktreeCustomTitles, onWorktreeCustomTitlesChanged } from "./worktreeCustomTitles.js";
 import {
   actionHandlerArityHint,
   appendHandlerHint,
   channelHandlerArityHint,
 } from "./plugin/pluginHandlerHints.js";
 import { PluginPtyTransport } from "./plugin/PluginPtyTransport.js";
+import { forgetPluginLaunches, forgetPluginLaunchesWhere } from "./plugin/pluginLaunchedAgents.js";
 import { PluginPathNotAllowedError } from "./plugin/pluginFsContainment.js";
 import { e2eSideloadPluginDir, isE2EMode } from "../setup/runtimeFlags.js";
 import { whenPluginDirResolverLive } from "../setup/pluginProtocolReadiness.js";
@@ -53,17 +58,15 @@ import {
   isBuiltInPluginCapability,
   PLUGIN_WORKER_SELF_RESTART_COOLDOWN_MS,
   UNBOUND_PLUGIN_HOST_BINDING,
-  type ProjectSurfaceSlot,
+  type ProjectSurfaceSlotKey,
   type WorkerRestartResult,
 } from "../../shared/types/plugin.js";
 import type {
   PluginManifest,
+  PluginEventRouteWake,
   PluginIpcHandler,
   PluginIpcContext,
   PluginHostApi,
-  BuiltinPluginHostApi,
-  PluginWorkspaceScope,
-  PluginFsApi,
   PluginActivate,
   PluginActionContribution,
   PluginActionDescriptor,
@@ -79,16 +82,24 @@ import type {
   PluginCheckUpdateResult,
   PluginSettingsScope,
   PluginSettingsUiValues,
+  PluginAccountBinding,
+  PluginAccountBindingUiStatus,
+  PluginAccountConnectResult,
+  PluginAccountUiStatus,
+  PluginAccountVerification,
   PluginWorktreeStatus,
   PluginPanelBadge,
+  PluginToolbarButtonRuntimeState,
   PluginContextValue,
   PluginWorktreeCardStatus,
+  PluginWorktreeReviewCheck,
+  PluginTerminalStatus,
+  PluginPanelActivityReport,
   PluginRuntimeStatus,
   PluginWorkerStatus,
   PluginWorkerState,
   PluginWorkerReason,
   PluginProtocolAuthority,
-  ViewContribution,
   PluginHostBinding,
   PluginOrigin,
   ProjectPluginInfo,
@@ -97,8 +108,9 @@ import type {
   ProjectPluginTrustState,
   ProjectPluginVisibility,
   ProjectSurfaceChoice,
+  ProjectSurfaceChoiceUpdate,
   ProjectSurfaceChoices,
-  ProjectSurfaceChoicesSnapshot,
+  ProjectSurfacesSnapshot,
 } from "../../shared/types/plugin.js";
 import {
   PluginFileLogLimiter,
@@ -108,26 +120,36 @@ import {
   type PluginFileLogSuppressed,
 } from "./plugin/pluginFileLog.js";
 import { PluginInstalledRecordsStore } from "./plugin/PluginInstalledRecordsStore.js";
+import { PluginProjectInstanceStore } from "./plugin/PluginProjectInstanceStore.js";
 import { PluginContributionBroadcaster } from "./plugin/PluginContributionBroadcaster.js";
 import {
   getProjectPluginVisibility as readProjectPluginVisibility,
+  isPluginVisibleInProject,
   setPluginVisibilityDefault as writePluginVisibilityDefault,
   setProjectPluginVisibility as writeProjectPluginVisibility,
 } from "./plugin/projectPluginVisibility.js";
+import { selectContributionsForProject } from "./plugin/PluginContributionBroadcaster.js";
 import {
-  setPluginContributionScope,
-  clearPluginContributionScope,
-} from "./plugin/PluginContributionBroadcaster.js";
-import { claimProjectSurface, releasePluginSurfaces } from "./plugin/PluginSurfaceRegistry.js";
+  bumpProjectSurfaceRevision,
+  getProjectSurfaceRevision,
+  getProjectSurfaceSlots,
+} from "./plugin/PluginSurfaceRegistry.js";
 import {
   getProjectSurfaceChoices as readProjectSurfaceChoices,
-  setProjectSurfaceChoice as writeProjectSurfaceChoice,
+  setProjectSurfaceChoices as writeProjectSurfaceChoices,
 } from "./plugin/projectSurfaceChoices.js";
 import {
   ProjectPluginController,
   type ProjectPluginControllerDeps,
 } from "./plugin/ProjectPluginController.js";
-import { peekSitePreviewBridge } from "./SitePreviewBridge.js";
+import { preflightProjectApplication } from "./plugin/projectApplicationPreflight.js";
+import { readPluginManifestForLoad } from "./plugin/pluginManifestLoad.js";
+import {
+  PluginContributionRegistrar,
+  buildPluginViewUrl,
+  qualifyOwnActionId,
+  runUnloadStep,
+} from "./plugin/PluginContributionRegistrar.js";
 import { discoverProjectPlugins } from "./plugin/projectPluginDiscovery.js";
 import { ProjectPluginWatcher } from "./plugin/ProjectPluginWatcher.js";
 import { PluginDevArtifactWatcher } from "./plugin/PluginDevArtifactWatcher.js";
@@ -139,27 +161,45 @@ import {
   resolveLiveWebContents,
 } from "../window/webContentsRegistry.js";
 import { projectStore } from "./ProjectStore.js";
+import { isPluginNotificationSilenced } from "./plugin/pluginNotificationSilences.js";
+
+/** How long a plugin notification waits on a project's mute before going out anyway. */
+const PLUGIN_NOTIFICATION_MUTE_READ_TIMEOUT_MS = 2_000;
 import { store } from "../store.js";
+import { wipeSettingsFile } from "./PluginSettingsStore.js";
+import { isProjectWorkspaceId } from "../../shared/utils/workspaceIds.js";
 import type { EventBusEnvelope } from "../../shared/types/ipc/maps.js";
 import {
+  makeInstalledProjectInstanceKey,
   makeProjectPluginInstanceKey,
   parseProjectPluginInstanceKey,
-  pluginIdFromSettingsViewKindId,
+  parsePluginHostedViewKindId,
   pluginManifestIdFromInstanceKey,
   projectIdFromPluginInstanceKey,
+  type WorktreeDeleteNoteSource,
+  type WorktreeDeleteNotesAnswer,
+  type WorktreeDeleteNotesReport,
 } from "../../shared/types/plugin.js";
 import {
   PluginPanelLifecycleBroker,
   type PanelLifecycleSourceHandle,
 } from "./plugin/PluginPanelLifecycleBroker.js";
-import { PLUGIN_VIEW_GENERATION_PREFIX } from "../../shared/utils/pluginViewUrl.js";
+import {
+  PLUGIN_ACTION_CATEGORY_MAX_LENGTH,
+  isReservedActionCategory,
+  normalizePluginActionCategory,
+} from "../../shared/config/actionCategories.js";
+import { parse as parseWhenClause } from "../../shared/utils/whenClause/index.js";
 import { onWebContentsDestroyed } from "../window/webContentsDestroyed.js";
 import { PluginRendererDispatcher } from "./plugin/PluginRendererDispatcher.js";
 import { PluginPanelReloadDispatcher } from "./plugin/PluginPanelReloadDispatcher.js";
 import { PluginUIPromptDispatcher } from "./plugin/PluginUIPromptDispatcher.js";
 import { PluginSettingsManager } from "./plugin/PluginSettingsManager.js";
+import { PluginAccountService, type AccountSignInBroker } from "./plugin/PluginAccountService.js";
+import { pluginAccountBindings } from "./plugin/pluginAccountBindings.js";
 import { PluginStorageManager } from "./plugin/PluginStorageManager.js";
 import { PluginChannelRegistry } from "./plugin/PluginChannelRegistry.js";
+import { PluginServiceBroker } from "./plugin/PluginServiceBroker.js";
 import {
   PluginBlocklistService,
   findPluginBlocklistMatch,
@@ -171,9 +211,9 @@ import { checkPluginEngineRange, type PluginEngineMismatch } from "./plugin/plug
 import { PluginDevWorkerHost } from "./plugin/PluginDevWorkerHost.js";
 import { PluginDevWorkerMainBridge } from "./plugin/PluginDevWorkerMainBridge.js";
 import { agentMcpEndpointRegistry } from "./pluginAgentMcp/endpointRegistry.js";
-import { registerPluginDatabaseEndpoint } from "./pluginAgentMcp/databaseEndpoint.js";
 import { pluginMcpGrantRegistry } from "./pluginAgentMcp/grantRegistry.js";
 import { agentMcpSurfaceOf } from "./pluginAgentMcp/declaredEndpoints.js";
+import type { AgentMcpServerSourceLookup } from "./pluginAgentMcp/types.js";
 import {
   buildPluginPermissionExecArgv,
   classifyPluginPermissionPaths,
@@ -187,11 +227,14 @@ import {
 } from "./plugin/pluginDangerLattice.js";
 import {
   createHost as createPluginHost,
-  buildScopedFsApi,
+  noteNewestPluginInstance,
   type PluginHostFactoryDeps,
   type PluginWorktreeEventPayload,
   type PluginWorktreeSnapshotFetchResult,
 } from "./plugin/PluginHostFactory.js";
+import { PluginTaskRegistry } from "./plugin/PluginTaskRegistry.js";
+import type { ProjectPluginWork } from "./plugin/projectPluginWork.js";
+import { createPluginEventRoutes, type PluginEventRoutes } from "./plugin/pluginEventRoutes.js";
 import type {
   LoadedPlugin,
   ValidateFn,
@@ -202,80 +245,52 @@ import type { WorktreeSnapshot } from "../../shared/types/workspace-host.js";
 import { toPluginWorktreeStatus } from "../../shared/utils/pluginWorktreeSnapshot.js";
 import { getFleetSnapshotServiceRef, getPtyClient } from "../window/serviceRefs.js";
 import { getWindowForWebContents } from "../window/webContentsRegistry.js";
-import { makePluginTourId } from "../../shared/utils/tourIds.js";
 import type { PublishedPanelMenuItem } from "../../shared/utils/pluginPanelMenuItems.js";
 import type { WorkspaceClient } from "./WorkspaceClient.js";
 import {
-  registerPanelKind,
   toRuntimePanelKindId,
-  unregisterPluginPanelKinds,
   onPanelKindRegistered,
   onPanelKindUnregistered,
   getPanelKindConfig,
   toPersistedPanelKindRef,
 } from "../../shared/config/panelKindRegistry.js";
-import {
-  registerToolbarButton,
-  unregisterPluginToolbarButtons,
-} from "../../shared/config/toolbarButtonRegistry.js";
-import { registerPluginMenuItem, unregisterPluginMenuItems } from "./pluginMenuRegistry.js";
-import {
-  registerPluginKeybinding,
-  unregisterPluginKeybindings,
-} from "./pluginKeybindingRegistry.js";
-import {
-  registerPluginContextMenuItem,
-  unregisterPluginContextMenuItems,
-} from "./pluginContextMenuRegistry.js";
-import {
-  trackPluginExpression,
-  unregisterPlugin as unregisterWhenClausePlugin,
-} from "./WhenClauseService.js";
-import {
-  registerForgeProviders,
-  unregisterForgeProviderImpls,
-  unregisterForgeProviders,
-} from "./forgeProviderRegistry.js";
+import { PluginSearchCoordinator } from "./plugin/PluginSearchService.js";
+import { getHiddenSearchProviders } from "./plugin/searchProviderPreferences.js";
+import { unregisterForgeProviderImpls } from "./forgeProviderRegistry.js";
 import { scrubSecrets } from "../../shared/utils/secretScrubber.js";
 import {
-  registerFileDecorationProviders,
   scopeMatchesPattern,
   unregisterFileDecorationProviderImpls,
-  unregisterFileDecorationProviders,
 } from "./fileDecorationRegistry.js";
+import { unregisterWorktreeDeleteNotesBinding } from "./plugin/worktreeDeleteNotesRegistry.js";
 import {
-  getPluginIdForAgent,
-  registerPluginAgents,
-  unregisterPluginAgents,
-} from "../../shared/config/pluginAgentRegistry.js";
+  collectWorktreeDeleteNotes as collectDeleteNotes,
+  getWorktreeDeleteNotes as getDeleteNotes,
+  listWorktreeDeleteNoteSources as listDeleteNoteSources,
+  type WorktreeDeleteNotesHost,
+  type WorktreeDeleteNotesTarget,
+} from "./plugin/worktreeDeleteNotes.js";
+import { isWorktreeDeleteNotesMuted } from "./plugin/pluginWorktreeDeleteNoteMutes.js";
+import { toPluginWorktreeSnapshot } from "../../shared/utils/pluginWorktreeSnapshot.js";
+import { unregisterWorktreeSetupStepHandlers } from "./worktreeSetupStepRegistry.js";
 import {
-  registerPluginProcessTools,
-  unregisterPluginProcessTools,
-} from "../../shared/config/pluginProcessToolRegistry.js";
-import {
-  makePluginCustomIconKey,
-  type PluginCustomIconAsset,
-} from "../../shared/config/pluginCustomIcon.js";
-import {
-  registerPluginCustomIcons,
-  unregisterPluginCustomIcons,
-} from "../../shared/config/pluginCustomIconRegistry.js";
-import { loadPluginCustomIcons } from "./plugin/pluginIconAssets.js";
-import { registerPluginSkills, unregisterPluginSkills } from "./plugin/PluginSkillRegistry.js";
+  arbitrateContextProviders,
+  getRegisteredContextProviders,
+  unregisterContextProviderImpls,
+} from "./contextProviderRegistry.js";
+import { getContextProvidersOff } from "./plugin/contextProvidersOff.js";
+import type { ContextProviderEntry } from "../../shared/types/pluginContextProvider.js";
+import { reconcilePluginThemeSelection } from "./appThemePluginSelection.js";
 import {
   getPluginRecipe,
   getPluginRecipeOwner,
   getPluginRecipeQualifiedIdsByPlugin,
   getPluginRecipes,
-  registerPluginRecipes,
   setPluginRecipeMetadataSnapshot,
-  unregisterPluginRecipes,
 } from "./plugin/PluginRecipeRegistry.js";
 import {
   getPluginTourRemoteAudio,
   getPluginTours,
-  registerPluginTours,
-  unregisterPluginTours,
   type PluginTourRemoteAudio,
 } from "./plugin/PluginTourRegistry.js";
 import { PluginRecipeMetadataStore } from "./plugin/PluginRecipeMetadataStore.js";
@@ -289,20 +304,43 @@ import {
 } from "../ipc/utils.js";
 import type { ClientEndpoint } from "../ipc/endpoint.js";
 import { getEndpointRegistry } from "../ipc/endpointRegistry.js";
-import { PLUGIN_INVOKE_MAX_RESULT_BYTES } from "../../shared/config/pluginBudgets.js";
+import {
+  PLUGIN_INVOKE_MAX_ARGS_BYTES,
+  PLUGIN_INVOKE_MAX_RESULT_BYTES,
+} from "../../shared/config/pluginBudgets.js";
 import { assertPayloadWithinLimit, estimatePayloadBytes } from "./plugin/pluginPayloadLimits.js";
-import { getPluginPushBatcher, routePluginPush } from "./plugin/pluginPushBatcher.js";
+import {
+  compilePluginActionResultSchema,
+  enforcePluginActionResult,
+  type PluginActionResultCheck,
+} from "./plugin/pluginActionResultSchema.js";
+import {
+  PLUGIN_STATE_PANEL_ACTIVITY,
+  PLUGIN_STATE_PANEL_BADGES,
+  getPluginPushBatcher,
+  getPluginStatePublisher,
+  routePluginPush,
+} from "./plugin/pluginPushBatcher.js";
 import {
   PluginMetricsService,
   classifyInvokeFailure,
   type InvokePromptMark,
 } from "./plugin/PluginMetricsService.js";
 import { markPerformance } from "../utils/performance.js";
-import { deepFreeze } from "../utils/deepFreeze.js";
 import { CHANNELS } from "../ipc/channels.js";
-import type { LoadedPluginInfo, PluginRequiredSettingsStatus } from "../../shared/types/plugin.js";
+import type {
+  LoadedPluginInfo,
+  PluginRequiredSettingsStatus,
+  PluginSetupStepCheck,
+  PluginSetupStepUiAction,
+  PluginSetupStepUiStatus,
+  PluginSetupUiStatus,
+} from "../../shared/types/plugin.js";
+import {
+  getProjectPluginSetupSkips,
+  setProjectPluginSetupStepSkipped,
+} from "./plugin/projectPluginSetupSkips.js";
 import type { PluginRecipeMetadataPatch, TerminalRecipe } from "../../shared/types/project.js";
-import type { PluginToolbarButtonId } from "../../shared/types/toolbar.js";
 import { getPluginActionAuditService } from "./PluginActionAuditService.js";
 import { stableArgsSha256 } from "../utils/pluginMcpHash.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
@@ -491,14 +529,6 @@ function safeStringify(value: unknown): string {
   }
 }
 
-function runUnloadStep(pluginId: string, step: string, fn: () => void): void {
-  try {
-    fn();
-  } catch (err) {
-    console.warn(`[PluginService] Unload step "${step}" for "${pluginId}" threw:`, err);
-  }
-}
-
 /**
  * Append a plugin audit record without ever surfacing an audit failure to the
  * caller. Mirrors the `safeAppend` in `electron/ipc/handlers/plugin.ts` — a
@@ -529,28 +559,6 @@ function safeArgsHash(args: unknown[]): string {
 }
 
 /**
- * Shape-check a workspace scope before it is used to root a filesystem handle.
- * A malformed scope must fail loudly here rather than expand to nothing and
- * look like an out-of-scope path to the plugin that asked. Whether the caller
- * is ENTITLED to the scope is the plugin's own check against its handler
- * context — the host has no per-call sender to verify it against.
- */
-function assertWorkspaceScope(pluginId: string, scope: PluginWorkspaceScope): void {
-  const ok =
-    scope !== null &&
-    typeof scope === "object" &&
-    typeof scope.projectId === "string" &&
-    scope.projectId.length > 0 &&
-    typeof scope.worktreeId === "string" &&
-    scope.worktreeId.length > 0;
-  if (!ok) {
-    throw new Error(
-      `Plugin "${pluginId}" fsForWorkspace: scope must name a projectId and a worktreeId`
-    );
-  }
-}
-
-/**
  * Monotonic counter behind the view-generation segment. Session-scoped and
  * never reset: the renderer's module map is rebuilt whenever main restarts, so
  * a generation only has to be unique within one main-process lifetime.
@@ -569,40 +577,6 @@ export function allocatePluginViewGeneration(): number {
  */
 export function pluginViewGenerationsAllocated(): number {
   return nextPluginViewGeneration - 1;
-}
-
-/**
- * Build the `plugin://{authority}/{PLUGIN_VIEW_GENERATION_PREFIX}{n}/{path}` URL
- * that `PluginViewHost` passes to `import()`. Strips a single leading `./` so
- * the host segment doesn't end up with an awkward `./dist/view.js` path
- * component — the URL handler accepts either form, but the canonical shape
- * matches the protocol docs.
- *
- * The generation segment is what makes a plugin upgrade visible without a Force
- * Reload (#11301). V8 caches ESM module records by URL and Chromium has no
- * eviction API, so a re-imported identical specifier returns the OLD module no
- * matter how thoroughly the React tree remounts. A fresh segment is a specifier
- * V8 has never seen, so the new bundle is actually fetched and evaluated.
- *
- * This is deliberately NOT a per-load cache-buster — that is the thing the
- * renderer's own comment warns against, because one entry per panel open grows
- * the module map without bound. The generation changes only when the plugin is
- * (re)loaded in main: a genuine install, upgrade, or dev reload. That is the
- * same bounded cost plugin authors already pay by hand-versioning their bundle
- * filename every release, minus the manual step.
- *
- * A path SEGMENT rather than a `?v=` query on purpose: a relative import inside
- * the entry module resolves against the entry's URL and inherits a path prefix,
- * but drops the query — so a query would refresh the entry chunk and leave
- * every secondary chunk stale.
- */
-function buildPluginViewUrl(
-  authority: PluginProtocolAuthority,
-  componentPath: string,
-  generation: number
-): string {
-  const normalized = componentPath.startsWith("./") ? componentPath.slice(2) : componentPath;
-  return `plugin://${authority}/${PLUGIN_VIEW_GENERATION_PREFIX}${generation}/${normalized}`;
 }
 
 /**
@@ -750,8 +724,14 @@ export class PluginService {
    * rather than resolving into whatever next occupies that plugin id. The alias
    * keeps plain id semantics by construction — a reload rebinds it — which is
    * exactly what a hand-written `plugin://{pluginId}/…` URL asks for.
+   *
+   * The alias is the registry key, so a project instance's is its qualified
+   * instance key, never the bare manifest id. Each key also records the
+   * instance that owns it: per-project instances of
+   * one installed package share a root, so the root alone can't say whose
+   * authority a request named (#14257).
    */
-  private pluginRootsByAuthority = new Map<string, string>();
+  private pluginRootsByAuthority = new Map<string, { dir: string; pluginId: string }>();
   /** pluginId → the authority minted for its current load; the invalidation and URL-building side. */
   private pluginAuthorities = new Map<string, PluginProtocolAuthority>();
   /**
@@ -773,6 +753,33 @@ export class PluginService {
    */
   private pluginToolbarBadges = new Map<string, Map<string, PluginPanelBadge>>();
   /**
+   * Activity reports set via `host.setPanelActivity`, keyed `pluginId →
+   * panelId → report` (#13820). Scoped like {@link pluginToolbarBadges}: a
+   * project plugin's panels only exist in that project's views.
+   */
+  private pluginPanelActivity = new Map<string, Map<string, PluginPanelActivityReport>>();
+  /** Last revision handed to an accepted activity report; never reset. */
+  private panelActivityRevision = 0;
+  /**
+   * Tasks started via `host.tasks.start` (#13819). Scoped like
+   * {@link pluginToolbarBadges}: a project plugin's tasks show only in that
+   * project's views. Interrupted tasks outlive their plugin's unload.
+   */
+  private pluginTasks = new PluginTaskRegistry((pluginId) => this.emitPluginTasks(pluginId));
+  /**
+   * The session's artifact cache (#14100), created on first use so a run that
+   * never touches artifacts never creates its directory. Null after shutdown.
+   */
+  private artifactService: PluginArtifactService | null | undefined;
+  /** Views whose `destroyed` already revokes their playback leases. */
+  private readonly artifactLeaseViews = new Set<number>();
+  /**
+   * Live toolbar-button state set via `host.setToolbarButtonState`, keyed
+   * `pluginId → buttonId → state` (#13785). Held, scoped, cleared and replayed
+   * exactly like {@link pluginToolbarBadges}.
+   */
+  private pluginToolbarStates = new Map<string, Map<string, PluginToolbarButtonRuntimeState>>();
+  /**
    * `when`-clause context keys set via `host.setContext`, keyed `pluginId → key
    * → value` (#13506). Held, scoped and replayed like
    * {@link pluginToolbarBadges}: a project plugin's keys reach only its own
@@ -791,8 +798,35 @@ export class PluginService {
     string,
     Map<string, Map<string, PluginWorktreeCardStatus>>
   >();
+  /**
+   * Terminal header statuses set via `host.setTerminalStatus`, keyed `pluginId
+   * → projectId → terminalId → status` (#13802). Held, scoped and replayed like
+   * {@link pluginWorktreeCardStatuses}: each bucket reaches only its own
+   * project's views.
+   */
+  private pluginTerminalStatuses = new Map<
+    string,
+    Map<string, Map<string, PluginTerminalStatus>>
+  >();
+  /** Bumped per plugin on each clear of its terminal statuses. */
+  private terminalStatusGenerations = new Map<string, number>();
+  /** Bumped on every project close, so a setter still reading terminals can tell. */
+  private terminalStatusCloseRevision = 0;
+  private closedTerminalStatusProjects = new Map<string, number>();
   /** Bumped per plugin on each clear of its statuses; see `worktreeCardStatusGeneration`. */
   private worktreeCardStatusGenerations = new Map<string, number>();
+  /**
+   * Readiness checks set via `host.setWorktreeReviewChecks`, keyed `pluginId →
+   * projectId → worktreeId → checks` (#13806). Scoped, replayed and cleaned up
+   * exactly like {@link pluginWorktreeCardStatuses}, and retired by the same
+   * removal and close records.
+   */
+  private pluginWorktreeReviewChecks = new Map<
+    string,
+    Map<string, Map<string, readonly PluginWorktreeReviewCheck[]>>
+  >();
+  /** Bumped per plugin on each clear of its checks; see `worktreeReviewChecksGeneration`. */
+  private worktreeReviewChecksGenerations = new Map<string, number>();
   /**
    * When each worktree was removed (`w:{id}`) or project closed (`p:{id}`), so
    * a setter whose worktree read was already in flight — or answered from the
@@ -878,6 +912,14 @@ export class PluginService {
   private pluginActionOwners = new Map<string, Set<string>>();
   private actionValidators = new Map<string, ValidateFn>();
   /**
+   * Compiled `resultSchema` checks, keyed by the descriptor they were built
+   * with rather than by action id. Every registration path stores the very
+   * descriptor `validateAndBuildActionDescriptor` returned, so replacing or
+   * removing an action replaces or drops its check with nothing to evict, and
+   * a dispatch already running keeps the contract it started under.
+   */
+  private actionResultChecks = new WeakMap<PluginActionDescriptor, PluginActionResultCheck>();
+  /**
    * Main-side action handler closures keyed by the same namespaced action id
    * (`{pluginId}.{actionId}`) used by {@link pluginActions}. Populated only via
    * `host.registerAction` — the renderer-side IPC `registerPluginAction` path
@@ -955,6 +997,13 @@ export class PluginService {
   private projectPluginLoadErrors = new Map<string, PluginLoadError>();
   private ajv: AjvInstance | null = null;
   private pluginEventCleanups = new Map<string, Array<() => void>>();
+  /**
+   * Each loaded instance's manifest event routes (#13816). Deliberately apart
+   * from {@link pluginEventCleanups}: those are live subscriptions that keep a
+   * worker from idle disposal, while routes exist to outlive the worker. Torn
+   * down only when the instance unloads.
+   */
+  private pluginEventRoutes = new Map<string, PluginEventRoutes>();
   private workspaceClient: WorkspaceClient | null = null;
   /**
    * Service-level `worktree-activated` listener that evicts stale worktree-scoped
@@ -979,6 +1028,14 @@ export class PluginService {
         if (statuses.size === 0) byProject.delete(projectId);
         if (byProject.size === 0) this.pluginWorktreeCardStatuses.delete(pluginId);
         this.emitWorktreeCardStatuses(pluginId, projectId);
+      }
+    }
+    for (const [pluginId, byProject] of [...this.pluginWorktreeReviewChecks]) {
+      for (const [projectId, checks] of [...byProject]) {
+        if (!checks.delete(payload.worktreeId)) continue;
+        if (checks.size === 0) byProject.delete(projectId);
+        if (byProject.size === 0) this.pluginWorktreeReviewChecks.delete(pluginId);
+        this.emitWorktreeReviewChecks(pluginId, projectId);
       }
     }
   };
@@ -1057,6 +1114,29 @@ export class PluginService {
   private readonly enableTransitions = new Map<string, Promise<void>>();
   private records = new PluginInstalledRecordsStore();
   /**
+   * Installed `instanceMode: "project"` packages, by manifest id: a catalog of
+   * what is on disk and nothing more. No runtime, contributions, worker or
+   * watcher exists for an entry; those belong to the per-project instances
+   * below. Empty on a vanilla install.
+   */
+  private readonly projectInstancePackages = new Map<
+    string,
+    { dir: string; manifest: Readonly<PluginManifest> }
+  >();
+  private readonly projectInstanceStore = new PluginProjectInstanceStore();
+  /** Live instance keys of installed packages. Repository-local plugins are the controller's. */
+  private readonly installedInstanceKeys = new Set<string>();
+  /**
+   * Bumped by a project close and by an instance's disable, so an in-flight
+   * load that was requested before either lands as a no-op instead of
+   * resurrecting what was just turned off. Read at request time.
+   */
+  private readonly installedInstanceProjectEpochs = new Map<string, number>();
+  private readonly installedInstanceEpochs = new Map<string, number>();
+  private readonly installedInstanceChains = new Map<string, Promise<void>>();
+  /** Projects the host has been told are open, with their roots. */
+  private readonly openProjectRoots = new Map<string, string>();
+  /**
    * Manager for child processes spawned via `host.process.spawn` (#9234).
    * Lazily constructed so the `node:child_process` spawn path only wires up
    * when a plugin actually uses it. The stream sink fans each process's
@@ -1134,9 +1214,36 @@ export class PluginService {
    * Owns the coalesced per-tick contribution broadcasts (actions, panel kinds,
    * toolbar buttons, keybindings, context-menu items) plus the
    * cold-start {@link pushSnapshotTo} replay. Constructed in the constructor
-   * after {@link initPromise} is set, so it can await the init gate.
+   * after {@link catalogPromise} is set, so it can await the catalog gate.
    */
   private readonly broadcaster: PluginContributionBroadcaster;
+  /**
+   * Answers the quick switcher's queries to plugin search providers (#13792).
+   * A scoped search may activate a plugin; a blended one never reaches this
+   * `activatePlugin` (the coordinator refuses an unbound runtime provider).
+   */
+  readonly searchCoordinator = new PluginSearchCoordinator({
+    activatePlugin: (pluginId) => this.activatePlugin(pluginId),
+    recordDiagnostic: (pluginId, message) => {
+      const plugin = this.plugins.get(pluginId);
+      if (plugin) this.recordPluginLog(plugin, pluginId, "warn", message);
+    },
+    hiddenProviderKeys: () => new Set(getHiddenSearchProviders()),
+  });
+  /**
+   * Services between plugins (#14105): resolves each `host.services` call to a
+   * provider instance, starts it if needed, and owns the call until it settles.
+   */
+  private readonly services = new PluginServiceBroker({
+    getPlugin: (pluginId) => this.plugins.get(pluginId),
+    isVisibleInProject: (pluginId, projectId) => isPluginVisibleInProject(pluginId, projectId),
+    isActivated: (pluginId) => this.activatedPlugins.has(pluginId),
+    activatePlugin: (pluginId) => this.activatePlugin(pluginId),
+    reportUnresolvedRequired: (pluginId, message) => {
+      const plugin = this.plugins.get(pluginId);
+      if (plugin) this.recordPluginLog(plugin, pluginId, "warn", message);
+    },
+  });
   private readonly panelLifecycleBroker: PluginPanelLifecycleBroker;
   /** Per-plugin cost observations, read by the perf IPC and the dev CLI. */
   readonly metrics: PluginMetricsService;
@@ -1145,15 +1252,45 @@ export class PluginService {
   private disposed = false;
   private readonly disposeRegistrySubscriptions: () => void;
   /**
+   * Set once a startup scan has enumerated every plugin root, which is what
+   * makes the theme catalog authoritative: before it, or after a scan that
+   * threw, a selected plugin theme missing from the catalog may simply not
+   * have loaded yet, so it is replaced only when its own plugin is known to
+   * have loaded without it or to have been removed (#13832).
+   */
+  private pluginThemeCatalogReady = false;
+  private pluginThemeSyncQueued = false;
+  /** Theme-bearing plugins between `unloadPlugin(id, { reload: true })` and its settle. */
+  private readonly pluginThemeReloads = new Set<string>();
+  /** Theme-bearing plugins an unload removed for good since the last sync. */
+  private readonly pluginThemeRemovals = new Set<string>();
+  /** Whether the catalog changed since renderers were last sent it. */
+  private pluginThemeCatalogDirty = false;
+  /**
    * Resolves once {@link initialize} and {@link activateStartupFinishedPlugins}
-   * have both settled (or {@link dispose} has run). Renderer pull-on-mount IPC
-   * handlers await this so a fresh `getActions` / `getPanelKinds` /
-   * `toolbarButtons` call can't return `[]` while plugins are still being
-   * loaded and activated. Settled in `finally` so a plugin activation failure
-   * never permanently deadlocks the renderer (#9285).
+   * have both settled (or {@link dispose} has run): the fully-started gate.
+   * Settled in `finally` so a plugin activation failure never permanently
+   * deadlocks a caller (#9285).
    */
   private readonly initPromise: Promise<void>;
   private resolveInit: (() => void) | null = null;
+  /**
+   * Resolves once {@link initialize} has settled (or startup activation or
+   * {@link dispose} has): the manifest catalog gate (#14127). Renderer
+   * pull-on-mount IPC handlers await this so a fresh `getActions` /
+   * `getPanelKinds` / `toolbarButtons` call can't return `[]` while plugins are
+   * still being scanned, without also waiting on any plugin's activation.
+   */
+  private readonly catalogPromise: Promise<void>;
+  private resolveCatalog: (() => void) | null = null;
+  /**
+   * True while {@link initialize} is enumerating the startup roots. The
+   * registries hold a partial catalog then, so no `complete` snapshot may be
+   * published from them — see the broadcaster's `isRegistryUnsettled` dep.
+   */
+  private catalogScanInFlight = false;
+  /** The in-flight {@link initialize}, so a concurrent call joins it rather than scanning twice. */
+  private initializing: Promise<void> | null = null;
   /**
    * Owns the `host.dispatch()` main→renderer round-trip: the active-renderer
    * resolution, the lazy `ipcMain` response listener, and the pending-request
@@ -1162,6 +1299,8 @@ export class PluginService {
    */
   private readonly dispatcher: PluginRendererDispatcher;
   private readonly panelReloadDispatcher: PluginPanelReloadDispatcher;
+  /** Registers manifest contributions at load and owns their unregister cascade. */
+  private readonly contributions: PluginContributionRegistrar;
   /**
    * Owns the imperative `host.showQuickPick`/`showInputBox`/`showConfirm`
    * main→renderer round-trip (#10522): the active-renderer resolution, the lazy
@@ -1177,6 +1316,8 @@ export class PluginService {
    * lookup callback.
    */
   private readonly settings: PluginSettingsManager;
+  /** Host-managed `contributes.account` sign-ins and their keychain-held tokens (#13823). */
+  private readonly accounts: PluginAccountService;
   /**
    * Owns the per-(plugin, scope, path) private-storage store cache, scope and
    * file-path resolution (including the `"worktree"` scope that resolves the
@@ -1226,6 +1367,9 @@ export class PluginService {
     this.initPromise = new Promise<void>((resolve) => {
       this.resolveInit = resolve;
     });
+    this.catalogPromise = new Promise<void>((resolve) => {
+      this.resolveCatalog = resolve;
+    });
 
     this.metrics = new PluginMetricsService({
       host: {
@@ -1244,9 +1388,9 @@ export class PluginService {
     this.broadcaster = new PluginContributionBroadcaster({
       isDisposed: () => this.disposed,
       listPluginActions: () => this.listPluginActions(),
-      initPromise: this.initPromise,
+      catalogReady: this.catalogPromise,
       listPluginRuntimeStatuses: () => this.listPluginRuntimeStatuses(),
-      isReplacingPlugin: () => this.devReplaceDepth > 0,
+      isRegistryUnsettled: () => this.devReplaceDepth > 0 || this.catalogScanInFlight,
     });
 
     // Ownership is resolved against the live kind registry rather than trusted
@@ -1266,6 +1410,26 @@ export class PluginService {
       resolveWebContents: (id) => resolveLiveWebContents(id),
       isCached: (id) => isCachedViewWebContents(id),
       projectFor: (id) => getProjectForWebContents(id),
+      resolveEndpoint: (handle) => getEndpointRegistry().getByHandle(handle),
+    });
+
+    this.contributions = new PluginContributionRegistrar({
+      broadcaster: this.broadcaster,
+      panelLifecycleBroker: this.panelLifecycleBroker,
+      panelReloadDispatcher: this.panelReloadDispatcher,
+      getWorkspaceClient: () => this.workspaceClient,
+      isCurrent: (pluginId, plugin) => this.plugins.get(pluginId) === plugin,
+      getLoadedPlugin: (pluginId) => this.plugins.get(pluginId),
+      recordPluginLog: (plugin, pluginId, level, message) =>
+        this.recordPluginLog(plugin, pluginId, level, message),
+      pluginDataDir: (pluginId) => this.pluginDataDir(pluginId),
+      publishProjectSurfaces: (projectIds) => this.publishProjectSurfaces(projectIds),
+      themesChanged: (pluginId, change) => {
+        this.pluginThemeCatalogDirty = true;
+        if (change === "reloading") this.pluginThemeReloads.add(pluginId);
+        else if (change === "removed") this.pluginThemeRemovals.add(pluginId);
+        this.schedulePluginThemeSync();
+      },
     });
 
     this.promptDispatcher = new PluginUIPromptDispatcher({
@@ -1280,6 +1444,25 @@ export class PluginService {
       getManifest: (pluginId) =>
         (this.plugins.get(pluginId) ?? this.disabledPlugins.get(pluginId))?.manifest,
       onSettingChanged: (pluginId) => this.emitSettingsChanged(pluginId),
+    });
+
+    this.accounts = new PluginAccountService({
+      getSettingsRoot: () => this.settings.settingsRoot(),
+      getManifest: (pluginId) =>
+        (this.plugins.get(pluginId) ?? this.disabledPlugins.get(pluginId))?.manifest,
+      // The settings row listens for the same event to re-read its status.
+      // An installed plugin's connection can back its project instances'
+      // bindings, so their setup strips and pickers re-read too.
+      onAccountChanged: (pluginId) => {
+        this.emitSettingsChanged(pluginId);
+        if (projectIdFromPluginInstanceKey(pluginId) !== null) return;
+        for (const instanceId of this.plugins.keys()) {
+          if (instanceId !== pluginId && pluginManifestIdFromInstanceKey(instanceId) === pluginId) {
+            this.emitSettingsChanged(instanceId);
+          }
+        }
+      },
+      bindings: pluginAccountBindings,
     });
 
     this.storage = new PluginStorageManager({
@@ -1306,19 +1489,46 @@ export class PluginService {
       getPluginsRoot: () => this.pluginsRoot,
       records: this.records,
       getSettingsRoot: () => this.settings.settingsRoot(),
-      loadPlugin: (root, pluginId, opts) => this.loadPlugin(root, pluginId, opts),
-      unloadPlugin: (pluginId, options) => this.unloadPlugin(pluginId, options),
-      settlePluginReload: (pluginId) => this.settlePluginReload(pluginId),
-      activatePlugin: (pluginId) => this.activatePlugin(pluginId),
+      loadPlugin: async (root, pluginId, opts) => {
+        const before = this.projectInstancePackages.get(pluginId);
+        const loaded = await this.loadPlugin(root, pluginId, opts);
+        if (loaded) return loaded;
+        // A catalog entry counts as this load's result only if this load wrote it:
+        // a replacement that was refused must not be masked by the old entry.
+        const after = this.projectInstancePackages.get(pluginId);
+        return after !== before ? after : null;
+      },
+      unloadPlugin: (pluginId, options) => {
+        this.unloadPackageInstances(pluginId, {
+          uninstall: options?.reload !== true,
+          purge: true,
+        });
+        this.unloadPlugin(pluginId, options);
+      },
+      settlePluginReload: (pluginId) => {
+        this.settlePluginReload(pluginId);
+        void this.reloadPackageInstances(pluginId);
+      },
+      activatePlugin: async (pluginId) => {
+        // A catalog-only package has no singleton to activate.
+        if (!this.plugins.has(pluginId) && this.projectInstancePackages.has(pluginId)) return;
+        await this.activatePlugin(pluginId);
+      },
       setPluginArchiveHash: (pluginId, hash) => this.setPluginArchiveHash(pluginId, hash),
       setEnabled: (pluginId, enabled) => this.setEnabled(pluginId, enabled),
       broadcastProvenanceChanged: () => this.broadcaster.broadcastProvenanceChanged(),
       purgeRecipeMetadata: (pluginId) => this.purgePluginRecipeMetadata(pluginId),
+      wipeProjectInstanceData: (pluginId) => this.wipeInstalledInstanceData(pluginId),
       getPlugin: (pluginId) => this.plugins.get(pluginId) ?? this.disabledPlugins.get(pluginId),
       reservedNames: this.reservedNames,
       disabledPlugins: this.disabledPlugins,
       blockedPlugins: this.blockedPlugins,
       getInstalledVersion: (pluginId) => this.installedPluginVersion(pluginId),
+      getInstalledInstanceMode: (pluginId) => {
+        const installed = this.installedPluginRecord(pluginId);
+        if (!installed) return null;
+        return installed.manifest.instanceMode === "project" ? "project" : "singleton";
+      },
     });
 
     const offRegister = onPanelKindRegistered(() => this.broadcaster.schedulePanelKindsBroadcast());
@@ -1332,11 +1542,12 @@ export class PluginService {
   }
 
   /**
-   * Resolves once startup load + activation has settled. The three pull-on-mount
-   * IPC handlers (`getActions`, `getPanelKinds`, `toolbarButtons`) await this
-   * so a renderer that mounts before plugins activate doesn't observe an empty
-   * registry. Safe to await repeatedly; resolves immediately after the first
-   * settle. {@link dispose} also resolves it to prevent test hangs when a
+   * Resolves once startup load + activation has settled — every
+   * `onStartupFinished` plugin has finished activating or failed to. Only for a
+   * caller that genuinely needs that; one that reads manifest contributions or
+   * the installed set wants {@link waitForCatalog}, and one that needs a single
+   * plugin running awaits that plugin's own activation. Safe to await
+   * repeatedly. {@link dispose} also resolves it to prevent test hangs when a
    * service is torn down without calling {@link activateStartupFinishedPlugins}.
    */
   waitForInit(): Promise<void> {
@@ -1344,11 +1555,40 @@ export class PluginService {
   }
 
   /**
+   * Resolves once the startup scan ({@link initialize}) has settled, so the
+   * loaded, disabled and blocked sets and every manifest contribution
+   * registered at load time are populated (#14127). Independent of the remote
+   * blocklist fetch and of any plugin's activation: one slow `activate()` must
+   * not hold an unrelated catalog read. Also resolved by startup activation and
+   * by {@link dispose}, never rejected.
+   */
+  waitForCatalog(): Promise<void> {
+    return this.catalogPromise;
+  }
+
+  /**
+   * {@link waitForCatalog}, giving up after `ms`, for a caller on a deadline (a
+   * delete confirmation's notes, #13805); whatever has loaded by then is what
+   * it gets.
+   */
+  async waitForCatalogWithin(ms: number): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      this.catalogPromise,
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, ms);
+      }),
+    ]);
+    clearTimeout(timer);
+  }
+
+  /**
    * Whether the manifest scan phase ({@link initialize}) has settled. Forge
    * provider descriptors register at scan-time, so once this is true a
    * hostname-match miss in `resolveForgeProvider` is a definitive "no
-   * provider matches" rather than a cold-start race (#9997). Distinct from
-   * {@link waitForInit}, which also waits for startup activation.
+   * provider matches" rather than a cold-start race (#9997). The boolean form
+   * of {@link waitForCatalog}; {@link waitForInit} also waits for startup
+   * activation.
    */
   get isPluginScanComplete(): boolean {
     return this.initialized;
@@ -1423,6 +1663,7 @@ export class PluginService {
    */
   dispose(): void {
     this.disposed = true;
+    void this.shutdownArtifacts();
     this.metrics.dispose();
     // Native watchers go first: a settled burst arriving mid-teardown would
     // otherwise queue a reload into a service that is going away.
@@ -1439,6 +1680,7 @@ export class PluginService {
     // map the sweep below walks; its held credentials go now rather than
     // whenever that filesystem work settles.
     pluginMcpGrantRegistry.revokeHeld(() => true);
+    forgetPluginLaunchesWhere(() => true);
     for (const waiters of this.projectOpenWaiters.values()) {
       for (const wake of waiters) wake();
     }
@@ -1457,9 +1699,11 @@ export class PluginService {
     this.workspaceClient?.off("worktree-activated", this.onWorktreeActivatedForCache);
     this.workspaceClient?.off("worktree-removed", this.onWorktreeRemovedForCardStatuses);
     this.disposeRegistrySubscriptions();
-    // Settle the init gate so unit tests that tear down the service without
-    // running activateStartupFinishedPlugins() don't hang IPC callers awaiting
-    // waitForInit().
+    // Settle both gates so unit tests that tear down the service without
+    // running initialize() / activateStartupFinishedPlugins() don't hang IPC
+    // callers awaiting them.
+    this.resolveCatalog?.();
+    this.resolveCatalog = null;
     this.resolveInit?.();
     this.resolveInit = null;
     this.dispatcher.dispose();
@@ -1472,6 +1716,7 @@ export class PluginService {
     // unload cascade above left running.
     this.pluginPtyTransport?.dispose();
     this.pluginPtyTransport = null;
+    this.pluginTasks.dispose();
   }
 
   /**
@@ -1505,9 +1750,31 @@ export class PluginService {
     }
   }
 
-  async initialize(): Promise<void> {
-    if (this.initialized) return;
+  initialize(): Promise<void> {
+    if (this.initialized) return Promise.resolve();
+    this.initializing ??= this.runInitialize().finally(() => {
+      this.initializing = null;
+    });
+    return this.initializing;
+  }
 
+  private async runInitialize(): Promise<void> {
+    this.catalogScanInFlight = true;
+    try {
+      await this.scanStartupCatalog();
+    } finally {
+      // Released even when a prerequisite or the scan throws: a failed scan
+      // must not strand every catalog reader.
+      this.catalogScanInFlight = false;
+      this.resolveCatalog?.();
+      this.resolveCatalog = null;
+      // Publish any authoritative snapshot an unload owed while the catalog
+      // was still partial.
+      this.broadcaster.flushDeferredCompleteSnapshots();
+    }
+  }
+
+  private async scanStartupCatalog(): Promise<void> {
     // Reap crash-left staging/parked dirs from the user root BEFORE any
     // user-plugin scan. A parked `<pluginId>.old-<uuid>` dir (no leading dot)
     // can contain a plugin.json, so if it survived into the scan it could be
@@ -1537,10 +1804,11 @@ export class PluginService {
 
     // Resolve the kill-switch blocklist before any scan, so the per-plugin load
     // gate reads one snapshot and the Promise.allSettled fan-out never awaits a
-    // network call (#9428). A cached list is enforced as-is even when stale, so
+    // network call (#9428). A cached list — or, on a fresh profile, the
+    // release-shipped seed (#14127) — is enforced as-is even when stale, so
     // startup never waits on the network while one exists; the revalidated list
-    // is adopted the moment it arrives, unloading anything it newly blocks. With
-    // no cache at all this still waits for the fetch. Fails open: null on any
+    // is adopted the moment it arrives, unloading anything it newly blocks. Only
+    // with neither does this wait for the fetch. Fails open: null on any
     // fetch/parse failure with no cached list.
     const { blocklist, refreshed } = await this.blocklistService.getStartupBlocklist();
     this.startupBlocklist = blocklist;
@@ -1580,6 +1848,13 @@ export class PluginService {
       // installed-id set is authoritative. A partial inventory would read as
       // "uninstalled" and delete live metadata (#6110).
       await this.reconcilePluginRecipeMetadata();
+      // The same holds for the theme catalog: a selected plugin theme it lacks
+      // now is genuinely gone.
+      this.pluginThemeCatalogReady = true;
+      this.schedulePluginThemeSync();
+      // A background-restored project opens without waiting for this scan, so
+      // its instances had no catalog to load from when it did.
+      await this.reconcileInstalledInstancesForOpenProjects();
     } finally {
       // Idempotency must hold even when a scan throws (e.g. EACCES on the
       // user dir): a retry would re-run the built-in scan and trigger
@@ -1890,11 +2165,13 @@ export class PluginService {
     // distributions never register it, so point at the download page instead.
     // The Store owns installs there, so a daintree.org download is wrong.
     const offerDownload = mismatch === "app-too-old" && !isWindowsStoreBuild();
+    const name = manifest.displayName || manifest.name;
     const payload = {
       type: "warning" as const,
       title: "Plugin version mismatch",
-      message: `"${manifest.displayName ?? manifest.name}" targets Daintree ${requiredRange} and may not work on ${this.appVersion}.${remedy}`,
+      message: `"${name}" targets Daintree ${requiredRange} and may not work on ${this.appVersion}.${remedy}`,
       rateLimitKey: `plugin-engine:${pluginId}`,
+      rateLimitLabel: name,
       // An action would otherwise make the toast sticky, and several mismatched
       // plugins at launch would stack up.
       duration: 8000,
@@ -1933,6 +2210,18 @@ export class PluginService {
       instanceKey?: string;
       /** The project this instance is bound to. Absent means app-global. */
       binding?: PluginHostBinding;
+      /**
+       * The manifest discovery read, which an application's preflight checked
+       * (#14113). This load reads `plugin.json` again, and refuses before it
+       * registers anything when what it reads is not what was checked.
+       */
+      checkedManifest?: Readonly<PluginManifest>;
+      /**
+       * This directory is an installed `instanceMode: "project"` package being
+       * loaded as one project's instance. It runs as `origin: "project"` but its
+       * manifest is validated as an installed one.
+       */
+      installedInstance?: boolean;
     }
   ): Promise<LoadedPlugin | null> {
     // Every load path funnels through here — startup scans, a background-
@@ -1950,120 +2239,36 @@ export class PluginService {
     const isProject = origin === "project";
     const isUserInstalled = origin === "user";
     const pluginDir = path.join(root, dirName);
-    const manifestPath = path.join(pluginDir, "plugin.json");
-
-    let content: string;
-    try {
-      content = await fs.readFile(manifestPath, "utf-8");
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-        console.warn(`[PluginService] No plugin.json in ${dirName}, skipping`);
-        return null;
-      }
-      console.error(`[PluginService] Failed to read ${manifestPath}:`, err);
-      return null;
-    }
-
-    let json: unknown;
-    try {
-      json = JSON.parse(stripUtf8Bom(content));
-    } catch {
-      console.error(`[PluginService] Invalid JSON in ${manifestPath}`);
-      return null;
-    }
-
-    const { result: parseResult, droppedTourIssues } = parsePluginManifestForLoad(origin, json);
-    if (droppedTourIssues.length > 0) {
-      console.warn(
-        `[PluginService] Skipping malformed contributes.tours entries in ${dirName}:`,
-        droppedTourIssues
-      );
-    }
-    if (!parseResult.success) {
-      const namespaceIssue = parseResult.error.issues.find(
-        (i) =>
-          i.code === "custom" &&
-          (i as unknown as { params?: { errorCode?: string } }).params?.errorCode ===
-            "namespace_reserved"
-      );
-      if (namespaceIssue) {
-        const inferredName = (json as Record<string, unknown>)?.name;
+    const prepared = await readPluginManifestForLoad(pluginDir, dirName, {
+      isBuiltin: opts.isBuiltin,
+      origin,
+      instanceKey: opts.instanceKey,
+      checkedManifest: opts.checkedManifest,
+      installedInstance: opts.installedInstance,
+    });
+    if (!prepared.ok) {
+      const { refusal } = prepared;
+      if (refusal?.reason === "reserved-namespace") {
         broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
           type: "error",
           title: "Plugin uses a reserved namespace",
-          message: `Plugin "${String(inferredName ?? dirName)}" uses the reserved "daintree.*" namespace, which is restricted to first-party plugins.`,
+          message: `Plugin "${refusal.pluginName}" uses the reserved "daintree.*" namespace, which is restricted to first-party plugins.`,
         });
-        if (isUserInstalled) {
-          this.records.upsertInstalledRecord(String(inferredName ?? dirName), {
-            loadError: { message: namespaceIssue.message, at: Date.now() },
-          });
-        }
       }
-      console.error(`[PluginService] Invalid manifest in ${dirName}:`, parseResult.error.issues);
+      if (refusal && isUserInstalled) {
+        this.records.upsertInstalledRecord(refusal.pluginName, {
+          loadError: { message: refusal.message, at: Date.now() },
+        });
+      }
       return null;
     }
-
-    const manifest = parseResult.data;
+    const manifest = prepared.manifest;
     // The registry key for this instance. Identical to the manifest id for
     // installed and builtin plugins, so every existing key, path and id is
     // byte-for-byte what it was; distinct for a project plugin, which is what
     // keeps two projects' copies of the same id from sharing anything.
     const pluginId = opts.instanceKey ?? manifest.name;
     const binding = opts.binding ?? UNBOUND_PLUGIN_HOST_BINDING;
-
-    // `contributes.fileEditors` is built-in only in v1 (#12323): the editor
-    // slot resolves through the builtin view registry compiled into the host
-    // bundle, which an installed plugin's renderer never reaches, so accepting
-    // the entry would advertise an Edit mode that mounts nothing. The schema
-    // cannot see the origin, so the refusal lives here where it is known.
-    if (!opts.isBuiltin && manifest.contributes.fileEditors.length > 0) {
-      const message =
-        "contributes.fileEditors is only available to built-in plugins — the editor slot resolves through the host-bundled builtin view registry, which an installed plugin's renderer cannot register into.";
-      console.error(`[PluginService] Invalid manifest in ${dirName}: ${message}`);
-      if (isUserInstalled) {
-        this.records.upsertInstalledRecord(manifest.name, {
-          loadError: { message, at: Date.now() },
-        });
-      }
-      return null;
-    }
-
-    // Discovery validated one manifest; this is a second read of the same file.
-    // A rewrite in between — a rebase, an agent edit, a hostile swap — could
-    // hand a DIFFERENT plugin the identity the user already knows and trusts.
-    // Refuse rather than let a renamed manifest inherit a staged-or-known id.
-    if (opts.instanceKey !== undefined) {
-      const expected = parseProjectPluginInstanceKey(opts.instanceKey)?.manifestId;
-      if (expected !== manifest.name) {
-        console.error(
-          `[PluginService] Project plugin in ${dirName} declares "${manifest.name}" but was discovered as "${String(expected)}" — refusing to load`
-        );
-        return null;
-      }
-    }
-    // Manifest-immutability invariant: the parsed manifest is stored on
-    // LoadedPlugin.manifest and read across the whole PluginService lifecycle
-    // (capability checks, contribution loops, host closures). Deep-freeze it so
-    // an accidental in-place mutation of a declared contribution can't poison the
-    // shared record. DEV-only (see deepFreeze) — the Readonly<PluginManifest>
-    // type below is the compile-time half of the same invariant.
-    deepFreeze(manifest);
-
-    // Deprecation surface for the 1.0 freeze: the schema migrates the old
-    // `experimental_*` contribution keys to their stable names before
-    // validation, so warn (once per alias) when an old manifest is still using
-    // them. Inspect the raw JSON because the migrated `manifest` no longer
-    // carries the deprecated keys.
-    const rawContributes = (json as { contributes?: Record<string, unknown> } | null)?.contributes;
-    if (rawContributes && typeof rawContributes === "object") {
-      for (const [deprecated, canonical] of Object.entries(DEPRECATED_CONTRIBUTION_ALIASES)) {
-        if (deprecated in rawContributes) {
-          console.warn(
-            `[PluginService] Plugin "${manifest.name}": contributes.${deprecated} is deprecated — rename it to contributes.${canonical}`
-          );
-        }
-      }
-    }
 
     // Kill-switch: refuse to load any plugin whose name + version matches the
     // remote blocklist (#10891). Checked before the disabled gate so a plugin
@@ -2123,6 +2328,18 @@ export class PluginService {
           isBuiltin: opts.isBuiltin,
         });
       }
+      return null;
+    }
+
+    // An installed package that opted into per-project instances is admitted to
+    // the catalog and stops here: nothing registers, activates or reserves the
+    // global name until a project enables it, and each enablement loads under
+    // its own instance key.
+    if (manifest.instanceMode === "project" && !opts.installedInstance && isUserInstalled) {
+      if (!this.records.getInstalledRecord(manifest.name)) {
+        this.records.upsertInstalledRecord(manifest.name, {});
+      }
+      this.projectInstancePackages.set(manifest.name, { dir: pluginDir, manifest });
       return null;
     }
 
@@ -2236,172 +2453,8 @@ export class PluginService {
       }
     }
 
-    // Custom SVG icons (#13143) are read before any contribution registers so
-    // each `iconId: "./icons/x.svg"` can be rewritten to its runtime key. A
-    // reference that fails to load keeps its authored value, which the
-    // renderer treats as an unknown id and draws the fallback glyph for — the
-    // plugin itself still loads. The assets are only published once the plugin
-    // commits below, so a load that fails part-way leaves none behind.
-    const customIconAssets: PluginCustomIconAsset[] = [];
-    const customIconKeys = new Map<string, string>();
-    try {
-      const icons = await loadPluginCustomIcons(pluginId, pluginDir, manifest.contributes);
-      for (const issue of icons.issues) {
-        console.warn(
-          `[PluginService] Plugin "${manifest.name}": ${issue.path} ${issue.message} — rendering the fallback icon`
-        );
-      }
-      for (const [ref, svg] of icons.loaded) {
-        const key = makePluginCustomIconKey(pluginId, ref);
-        customIconKeys.set(ref, key);
-        customIconAssets.push({
-          key,
-          pluginId,
-          pluginName: manifest.displayName ?? manifest.name,
-          svg,
-        });
-      }
-    } catch (err) {
-      console.warn(
-        `[PluginService] Plugin "${manifest.name}": failed to load custom icons — rendering fallbacks`,
-        err
-      );
-    }
-    const resolveIconId = (iconId: string): string => customIconKeys.get(iconId) ?? iconId;
-
-    // Scope the contribution registries to this plugin's project BEFORE a
-    // single contribution is registered. The registries are module-level
-    // singletons filtered at read/broadcast time by owning plugin id, so a
-    // contribution registered while the index says "global" is broadcast to
-    // every project until the next mutation corrects it. `"global"` is the
-    // explicit no-op form for the unbound roots.
-    setPluginContributionScope(pluginId, binding.projectId ?? "global");
-
-    // Contributed `actionId`s are authored in the plugin's own manifest
-    // namespace (the schema enforces exactly that), but a project plugin's
-    // commands register under its INSTANCE namespace. Left unrewritten, every
-    // declarative toolbar button, menu item, keybinding and context-menu entry
-    // would dispatch an id that either resolves to nothing or — worse — to a
-    // same-named installed plugin's action.
-    const ownPrefix = `${manifest.name}.`;
-    const qualifyActionId = (actionId: string): string =>
-      isProject && actionId.startsWith(ownPrefix)
-        ? `${pluginId}.${actionId.slice(ownPrefix.length)}`
-        : actionId;
-
-    for (const btn of manifest.contributes.toolbarButtons) {
-      // Canonical `{pluginId}.{id}` form (#9281) — matches `registerPluginAction`
-      // and `panelKindRegistry`. The legacy `plugin.{pluginId}.{id}` form lived
-      // here alone and is migrated renderer-side by `toolbarPreferencesStore`'s
-      // v9 migration so existing user pins survive the rename.
-      const buttonId = `${pluginId}.${btn.id}` as PluginToolbarButtonId;
-      registerToolbarButton({
-        id: buttonId,
-        label: btn.label,
-        iconId: resolveIconId(btn.iconId),
-        actionId: qualifyActionId(btn.actionId),
-        priority: btn.priority ?? 3,
-        pluginId,
-      });
-    }
-    if (manifest.contributes.toolbarButtons.length > 0) {
-      this.broadcaster.scheduleToolbarButtonsBroadcast(false);
-    }
-
-    for (const menuItem of manifest.contributes.menuItems) {
-      trackPluginExpression(pluginId, menuItem.when);
-      registerPluginMenuItem(pluginId, {
-        ...menuItem,
-        actionId: qualifyActionId(menuItem.actionId),
-      });
-    }
-
-    for (const keybinding of manifest.contributes.keybindings) {
-      trackPluginExpression(pluginId, keybinding.when);
-      registerPluginKeybinding(pluginId, {
-        ...keybinding,
-        actionId: qualifyActionId(keybinding.actionId),
-      });
-    }
-    if (manifest.contributes.keybindings.length > 0) {
-      this.broadcaster.scheduleKeybindingsBroadcast(false);
-    }
-
-    for (const ctxMenu of manifest.contributes.contextMenus) {
-      trackPluginExpression(pluginId, ctxMenu.when);
-      registerPluginContextMenuItem(pluginId, {
-        ...ctxMenu,
-        actionId: qualifyActionId(ctxMenu.actionId),
-      });
-    }
-    if (manifest.contributes.contextMenus.length > 0) {
-      this.broadcaster.scheduleContextMenuItemsBroadcast(false);
-    }
-
-    // Lazy MCP discovery (#9235): plugin activation no longer eagerly spawns
-    // contributed MCP servers. The subprocess starts on the first tool
-    // enumeration (`plugin-mcp:list-tools`), which resolves the contribution
-    // and calls the (idempotent) supervisor `start()` at the IPC boundary. This
-    // keeps idle plugins from holding live subprocesses they never use.
-
-    if (manifest.contributes.forgeProviders.length > 0) {
-      registerForgeProviders(pluginId, manifest.contributes.forgeProviders);
-      // Wake workspace-hosts whose PR polling paused on a "no provider
-      // matches" resolution so they re-evaluate against the new descriptor
-      // (#9997). Covers both the startup scan and runtime install/enable.
-      this.workspaceClient?.notifyForgeProviderRegistryUpdated();
-    }
-
-    if (manifest.contributes.fileDecorationProviders.length > 0) {
-      registerFileDecorationProviders(pluginId, manifest.contributes.fileDecorationProviders);
-    }
-
-    // Skills (#10892) are read and parsed eagerly here so the built-in MCP
-    // server's `skills.search`/`skills.load` tools query an in-memory registry.
-    // A malformed/unreadable skill file is skipped (with a warning) rather than
-    // failing the plugin load. Torn down per-plugin in unloadPlugin.
-    if (manifest.contributes.skills.length > 0) {
-      await registerPluginSkills(pluginId, pluginDir, manifest.contributes.skills);
-    }
-
-    if (manifest.contributes.agents.length > 0) {
-      registerPluginAgents(pluginId, manifest.contributes.agents, pluginDir);
-      this.broadcaster.scheduleAgentsBroadcast(false);
-      // Mirror the updated registry into the pty-host so its activity monitor
-      // resolves this agent's detection patterns at spawn time (#10587). The
-      // renderer is covered by the broadcast above; the pty-host is a separate
-      // process that never registers agents itself.
-      getPtyClient()?.syncPluginAgentRegistry();
-    }
-
-    // Recipes (#11860) are registered AFTER agents so `ownedAgentIds` can be
-    // resolved against the live registry rather than the manifest: a
-    // cross-plugin agent-id collision resolves first-registered-wins, and a
-    // plugin that lost one must not have its recipe launch the winner's agent.
-    if (manifest.contributes.recipes.length > 0) {
-      const ownedAgentIds = new Set(
-        manifest.contributes.agents
-          .map((agent) => agent.id)
-          .filter((id) => getPluginIdForAgent(id) === pluginId)
-      );
-      registerPluginRecipes(pluginId, manifest.contributes.recipes, ownedAgentIds);
-      this.broadcaster.scheduleRecipesBroadcast(false);
-    }
-
-    if (manifest.contributes.processTools.length > 0) {
-      registerPluginProcessTools(
-        pluginId,
-        manifest.contributes.processTools.map((tool) => ({
-          ...tool,
-          iconId: resolveIconId(tool.iconId),
-        }))
-      );
-      // Mirror into the pty-host, where `ProcessDetector` runs — the renderer
-      // needs no broadcast because the detected icon id already reaches it on
-      // the terminal identity event (#11613).
-      getPtyClient()?.syncPluginProcessToolRegistry();
-    }
-
+    const contributionTarget = { pluginId, plugin, manifest, binding };
+    const pending = await this.contributions.prepare(contributionTarget);
     // Insert the plugin into the registry BEFORE importing its main module so
     // synchronous host-API calls made during module evaluation (e.g., a plugin
     // that calls host.registerAction/registerHandler at import time) see the
@@ -2410,253 +2463,13 @@ export class PluginService {
     // throw "Unknown plugin" even for a correctly loaded plugin.
     // Minted and committed synchronously with the registry insert below, so the
     // authority is resolvable the instant the plugin is addressable.
-    const authority = this.mintPluginAuthority(pluginId, plugin.dir);
-    this.plugins.set(pluginId, plugin);
-    this.claimProjectContextNamespace(pluginId);
-    if (customIconAssets.length > 0) {
-      registerPluginCustomIcons(pluginId, customIconAssets);
-      this.broadcaster.schedulePluginIconsBroadcast();
-    }
-
-    // The host's read-only database endpoint, bound with the plugin rather than
-    // at activation: agents read the data without the plugin's code running.
-    // Unload drops it with the instance's other rosters.
-    if (manifest.contributes.databases.length > 0) {
-      registerPluginDatabaseEndpoint({
-        pluginInstanceId: pluginId,
-        manifestId: manifest.name,
-        declarations: manifest.contributes.databases,
-        boundProjectId: binding.projectId,
-        boundProjectRoot: binding.projectRoot,
-        dataDir: this.pluginDataDir(pluginId),
-        isCurrent: () => this.plugins.get(pluginId) === plugin,
-      });
-    }
-
-    // Panel kinds are published only AFTER the map commit above, with no await
-    // in between (#11728). `registerPanelKind` is what makes a panel
-    // addressable — it carries the `plugin://` `componentPath` and schedules the
-    // `plugin:panel-kinds-changed` broadcast — while the protocol handler's
-    // resolver reads the authority map committed with it. Publishing first, as
-    // this block used to, handed the renderer a URL that the protocol could not
-    // yet resolve; any plugin with an await before the commit (a `skills`
-    // contribution alone was enough) 404'd its own view module, and a rejected
-    // dynamic import is permanent for that specifier. The map commit is now the
-    // single addressability gate, so this ordering is the invariant, not an
-    // incidental arrangement.
-    //
-    // Index views by bare id so the panels loop can attach `componentPath` in
-    // a single registerPanelKind pass (#9229). View ids are pre-namespace; the
-    // runtime panel id is `${manifest.name}.${panel.id}`. The generation lives
-    // on `plugin` (allocated at construction) so every view shares one virtual
-    // namespace, which is what lets relative imports inherit it (#11301).
-    const viewsByBareId = new Map<string, ViewContribution>();
-    const unmatchedViewIds = new Set<string>();
-    for (const view of manifest.contributes.views) {
-      // `componentPath` safety is enforced by `ViewContributionSchema` at
-      // manifest parse. A settings view renders in the plugin's settings home,
-      // never into a panel, so it is left out of the panel match entirely —
-      // `settingsViewPath` builds its URL on demand.
-      if (view.location === "settings") continue;
-      if (viewsByBareId.has(view.id)) {
-        // Two entries with the same bare id — last would silently overwrite
-        // earlier. Surface the authoring mistake; keep the first to make the
-        // outcome deterministic.
-        console.warn(
-          `[PluginService] Plugin "${manifest.name}": views has duplicate entries for id "${view.id}"; keeping the first occurrence`
-        );
-        continue;
-      }
-      viewsByBareId.set(view.id, view);
-      unmatchedViewIds.add(view.id);
-    }
-
-    // A panel kind's menus offer at most one Welcome Tour, so a second tour
-    // naming the same kind is an authoring mistake: keep the first, as views do.
-    const tourIdByPanelId = new Map<string, string>();
-    for (const tour of manifest.contributes.tours) {
-      if (tour.panelKind === undefined) continue;
-      if (tourIdByPanelId.has(tour.panelKind)) {
-        console.warn(
-          `[PluginService] Plugin "${manifest.name}": tours "${tour.id}" is a second tour for panel "${tour.panelKind}"; keeping the first`
-        );
-        continue;
-      }
-      tourIdByPanelId.set(tour.panelKind, makePluginTourId(manifest.name, tour.id));
-    }
-
-    // Every panel of the plugin offers "Plugin settings…" when there is anything
-    // to configure, and checks its required settings when it declares any.
-    // Only present-when-true, so a plugin with no settings registers exactly
-    // the config it did before.
-    const declaredSettings = manifest.contributes.settings;
-    const pluginSettingsKindFlags = {
-      ...(declaredSettings.length > 0 ||
-      manifest.contributes.views.some((v) => v.location === "settings")
-        ? { hasPluginSettings: true }
-        : {}),
-      ...(declaredSettings.some((s) => s.required === true) ? { hasRequiredSettings: true } : {}),
-      // "Back up data…" on every panel of a plugin that declares a database;
-      // main checks what actually exists when it is picked.
-      ...((manifest.contributes.databases?.length ?? 0) > 0 ? { hasPluginDatabases: true } : {}),
-    };
-
-    for (const panel of manifest.contributes.panels) {
-      // A project plugin's panel kinds register under the project-qualified
-      // runtime id, so two projects can each contribute `acme.dash/overview`
-      // without one silently overwriting the other. `toRuntimePanelKindId`
-      // returns null for a project ref with no owning project — that can only
-      // mean a bug in the caller, and inventing the unqualified form here would
-      // alias a project kind onto a global one.
-      const panelId = isProject
-        ? toRuntimePanelKindId(
-            { origin: "project", pluginId: manifest.name, kindId: panel.id },
-            binding.projectId
-          )
-        : `${manifest.name}.${panel.id}`;
-      if (panelId === null) {
-        console.error(
-          `[PluginService] Plugin "${manifest.name}": cannot qualify panel kind "${panel.id}" without an owning project — skipping`
-        );
-        continue;
-      }
-      const view = viewsByBareId.get(panel.id);
-      if (view) unmatchedViewIds.delete(panel.id);
-      const tourId = tourIdByPanelId.get(panel.id);
-      registerPanelKind({
-        ...pluginSettingsKindFlags,
-        id: panelId,
-        name: panel.name,
-        iconId: resolveIconId(panel.iconId),
-        color: panel.color,
-        hasPty: panel.hasPty,
-        canRestart: panel.canRestart,
-        canConvert: panel.canConvert,
-        showInPalette: panel.showInPalette,
-        // Dockable by default; only forward an explicit opt-out (or opt-in) so
-        // absence stays `undefined` and `panelKindIsDockable` applies the
-        // default. #11332.
-        ...(panel.dockable !== undefined ? { dockable: panel.dockable } : {}),
-        // Absence has to survive as `undefined` for the same reason as
-        // `dockable`: a plugin that declares no state version gets its bag
-        // handed over unjudged, and defaulting to 1 here would start refusing
-        // bags on a promise the author never made (#12280).
-        ...(panel.stateVersion !== undefined ? { stateVersion: panel.stateVersion } : {}),
-        ...(tourId !== undefined ? { tourId } : {}),
-        // Authored in the manifest namespace, dispatched in the instance's —
-        // the same rewrite the toolbar and menu contributions above get.
-        ...(panel.menu !== undefined && panel.menu.length > 0
-          ? {
-              pluginMenu: panel.menu.map((item) => ({
-                actionId: qualifyActionId(item.actionId),
-                ...(item.label !== undefined ? { label: item.label } : {}),
-              })),
-            }
-          : {}),
-        // The manifest's own id rides along as `stateKey`: it is what the view
-        // names when it sets a button's state, so it must not be rewritten.
-        ...(panel.toolbar !== undefined && panel.toolbar.length > 0
-          ? {
-              pluginToolbar: panel.toolbar.map((item) => ({
-                actionId: qualifyActionId(item.actionId),
-                stateKey: item.actionId,
-                ...(item.label !== undefined ? { label: item.label } : {}),
-                ...(item.iconId !== undefined ? { iconId: resolveIconId(item.iconId) } : {}),
-                ...(item.status === true ? { status: true } : {}),
-              })),
-            }
-          : {}),
-        // Keyed by the INSTANCE, because `unregisterPluginPanelKinds` matches
-        // on `extensionId` alone: keying by manifest id would make one
-        // project's unload sweep every other project's copies of the same kind.
-        extensionId: pluginId,
-        ...(isProject ? { projectId: binding.projectId, pluginManifestId: manifest.name } : {}),
-        ...(view && !panel.hasPty
-          ? {
-              componentPath: buildPluginViewUrl(
-                authority,
-                view.componentPath,
-                plugin.viewGeneration
-              ),
-            }
-          : {}),
-      });
-      if (view && panel.hasPty) {
-        // A PTY panel with a matching view is contradictory — the view module
-        // would never render because TerminalPane owns the surface. Surface the
-        // collision rather than silently dropping the view.
-        console.warn(
-          `[PluginService] Plugin "${manifest.name}": views entry "${view.id}" matches a panel with hasPty=true; the view will be ignored because PTY panels are rendered by TerminalPane`
-        );
-      }
-    }
-
-    for (const orphanId of unmatchedViewIds) {
-      console.warn(
-        `[PluginService] Plugin "${manifest.name}": views entry "${orphanId}" has no matching contributes.panels entry and will be ignored`
-      );
-    }
-
-    // Tours (#12773) resolve their scene module and bundled audio under this
-    // load's authority and generation, so a reload hands renderers URLs V8 has
-    // never cached. The module itself is imported only when a tour opens.
-    // Project plugins can't declare tours (rejected by the schema).
-    if (manifest.contributes.tours.length > 0) {
-      registerPluginTours(pluginId, manifest.contributes.tours, {
-        pluginName: manifest.displayName ?? manifest.name,
-        pluginUrl: (relativePath) =>
-          buildPluginViewUrl(authority, relativePath, plugin.viewGeneration),
-      });
-      this.broadcaster.scheduleToursBroadcast();
-    }
-
-    // Project surface claims (§7.8). After the panels loop, because a claim
-    // resolves to the RUNTIME panel-kind id that loop just registered — the
-    // renderer mounts a surface through the ordinary plugin-view path, so a
-    // claim naming a kind that never registered would point at nothing.
-    //
-    // Additive only: a claim replaces one slot's content and touches no host
-    // chrome, so the project switcher, the worktree dashboard and the stock
-    // launcher stay reachable even when the claimed view is broken.
-    if (isProject && binding.projectId != null && binding.projectId.length > 0) {
-      const surfaceProjectId = binding.projectId;
-      const surfaces = manifest.contributes.surfaces ?? {};
-      for (const [slot, claim] of Object.entries(surfaces) as [
-        ProjectSurfaceSlot,
-        { viewId: string } | undefined,
-      ][]) {
-        if (claim === undefined) continue;
-        const panelKindId = toRuntimePanelKindId(
-          { origin: "project", pluginId: manifest.name, kindId: claim.viewId },
-          surfaceProjectId
-        );
-        // The schema already cross-checks `viewId` against `contributes.views`,
-        // and a view without a matching panel is a manifest error — so a miss
-        // here means the panels loop skipped the kind (an unqualifiable id, or
-        // a `hasPty` panel whose view is ignored). Skip the slot rather than
-        // publish a claim the renderer cannot resolve.
-        // `componentPath`, not merely a registered kind: the panels loop leaves
-        // it off for a PTY panel (and for a view it skipped), and a claim with
-        // no module to load would hold the project's slot against every other
-        // plugin while rendering nothing.
-        if (panelKindId === null || getPanelKindConfig(panelKindId)?.componentPath === undefined) {
-          console.warn(
-            `[PluginService] Plugin "${manifest.name}": surfaces.${slot} names view "${claim.viewId}", which registered no loadable panel kind — the slot keeps its stock content`
-          );
-          continue;
-        }
-        const result = claimProjectSurface(surfaceProjectId, slot, { pluginId, panelKindId });
-        if (!result.ok) {
-          // Never a silent last-wins: which surface the user sees would then be
-          // a function of directory-scan order. First claim stands and BOTH
-          // plugins are named, because the fix is to change one of the two
-          // manifests and the author cannot do that without knowing the other.
-          console.error(
-            `[PluginService] Project surface conflict: "${manifest.name}" claims surfaces.${slot}, which is already owned by "${result.heldBy}" in this project. The incumbent keeps the slot; only one plugin may claim it.`
-          );
-        }
-      }
-    }
+    this.contributions.registerCommitted(contributionTarget, pending, () => {
+      const authority = this.mintPluginAuthority(pluginId, plugin.dir);
+      this.plugins.set(pluginId, plugin);
+      noteNewestPluginInstance(this.plugins, pluginId, plugin);
+      this.claimProjectContextNamespace(pluginId);
+      return authority;
+    });
 
     // Plugins without a `main` entry contribute no executable code — the
     // provenance record reflects a clean load immediately. Plugins with a
@@ -2693,7 +2506,116 @@ export class PluginService {
       }
     }
 
+    // After command discovery, so a route's command is registered before any
+    // event can wake it — and only if no unload or reload ran meanwhile.
+    if (this.plugins.get(pluginId) === plugin) this.startEventRoutes(pluginId, plugin);
+
     return plugin;
+  }
+
+  /**
+   * Hold a loaded instance's manifest event routes (#13816): host-side
+   * listeners that activate the plugin and run the routed command when an
+   * event happens, without keeping its worker alive in between.
+   */
+  private startEventRoutes(pluginId: string, plugin: LoadedPlugin): void {
+    const routes = plugin.manifest.eventRoutes ?? [];
+    if (routes.length === 0) return;
+    this.stopEventRoutes(pluginId);
+    try {
+      this.pluginEventRoutes.set(
+        pluginId,
+        createPluginEventRoutes(
+          {
+            plugins: this.plugins,
+            declaredCapabilities: (id) => this.declaredCapabilities(id),
+            fetchWorktreeSnapshotsResult: () => this.fetchAllWorktreeSnapshotsResult(),
+            fetchWorktreeSnapshotsForProjectResult: (projectId, projectRoot) =>
+              this.fetchWorktreeSnapshotsForProjectResult(projectId, projectRoot),
+            getWorktreeCustomTitles: (projectId) => this.readWorktreeCustomTitles(projectId),
+            attachWorktreeEvent: (event, handler) =>
+              this.attachWorktreeEvent(pluginId, event, handler),
+            isWorkerFailed: (id) => this.workerStatuses.get(id)?.state === "failed",
+            dispatch: (actionId, wake) =>
+              this.dispatchEventRouteWake(pluginId, plugin, actionId, wake),
+          },
+          pluginId,
+          plugin.binding ?? UNBOUND_PLUGIN_HOST_BINDING,
+          routes
+        )
+      );
+    } catch (err) {
+      console.error(`[PluginService] Starting event routes for "${pluginId}" failed:`, err);
+    }
+  }
+
+  private stopEventRoutes(pluginId: string): void {
+    const routes = this.pluginEventRoutes.get(pluginId);
+    if (!routes) return;
+    this.pluginEventRoutes.delete(pluginId);
+    routes.dispose();
+  }
+
+  /**
+   * Run one routed command for an event wake. Goes through
+   * {@link dispatchHandler} like a renderer's `plugin:invoke`, so activation,
+   * input validation, run tracking, metrics, result checks and the handler
+   * audit all apply; what that IPC handler adds itself — the argument cap and
+   * the audit of a failure that never reached a handler — is added here.
+   *
+   * Never rejects: a wake has no caller to report to, so a failure is audited
+   * and logged and the next event wakes the plugin again.
+   */
+  private async dispatchEventRouteWake(
+    pluginId: string,
+    generation: LoadedPlugin,
+    actionId: string,
+    wake: PluginEventRouteWake
+  ): Promise<void> {
+    if (this.plugins.get(pluginId) !== generation) return;
+    const descriptor = this.pluginActions.get(actionId);
+    if (descriptor?.pluginId !== pluginId || !this.manifestCommandIds.has(actionId)) {
+      // The command failed to register (a collision, an invalid descriptor),
+      // which load already reported.
+      return;
+    }
+    const args: unknown[] = [wake];
+    const start = Date.now();
+    let argsWithinLimit = false;
+    try {
+      assertPayloadWithinLimit(
+        pluginId,
+        `"${wake.event}" event route arguments to "${actionId}"`,
+        args,
+        PLUGIN_INVOKE_MAX_ARGS_BYTES
+      );
+      argsWithinLimit = true;
+      // No renderer made this call: `webContentsId` 0 names none, and the
+      // project is the one the instance is bound to.
+      const ctx: PluginIpcContext = {
+        projectId: generation.binding?.projectId ?? null,
+        worktreeId: null,
+        webContentsId: 0,
+        pluginId,
+      };
+      await this.dispatchHandler(pluginId, actionId, ctx, args);
+    } catch (err) {
+      if (!isAuditedHandlerFailure(err) && this.plugins.get(pluginId) === generation) {
+        safeAppendAudit({
+          pluginId,
+          actionId,
+          recordType: "action-dispatch",
+          result: "error",
+          errorMessage: formatErrorMessage(err, "event route dispatch failed"),
+          argsHash: argsWithinLimit ? safeArgsHash(args) : "",
+          durationMs: Date.now() - start,
+        });
+      }
+      console.warn(
+        `[PluginService] "${wake.event}" event route to "${actionId}" for "${pluginId}" failed:`,
+        err
+      );
+    }
   }
 
   /**
@@ -2973,10 +2895,7 @@ export class PluginService {
       if (this.plugins.get(pluginId) !== plugin || this.blocklistMatchFor(plugin)) return;
       if (typeof mod.activate === "function") {
         const activate = mod.activate as PluginActivate;
-        // A built-in gets the built-in host: the same object plus the
-        // workspace-scoped `fsForWorkspace`, which only this in-process path
-        // ever hands out.
-        const { host, revoke } = this.createBuiltinHost(pluginId);
+        const { host, revoke } = this.createHost(pluginId);
 
         // Pre-register a rollback that undoes activate-time imperative
         // registrations — channels, imperative actions, and every disposer
@@ -3150,8 +3069,16 @@ export class PluginService {
         // toolbar count (#13503).
         this.clearPluginPanelMenus(pluginId);
         if (this.pluginToolbarBadges.delete(pluginId)) this.emitToolbarBadges(pluginId);
+        if (this.pluginToolbarStates.delete(pluginId)) this.emitToolbarStates(pluginId);
+        // What the retiring backend said it was doing is not what the next one
+        // is doing; it reports afresh (#13820).
+        if (this.pluginPanelActivity.delete(pluginId)) this.emitPanelActivity(pluginId);
+        // Work the retiring backend was doing stopped with it (#13819).
+        this.pluginTasks.interrupt(pluginId);
         this.resetPluginContextKeys(pluginId);
         this.clearPluginWorktreeCardStatuses(pluginId);
+        this.clearPluginWorktreeReviewChecks(pluginId);
+        this.clearPluginTerminalStatuses(pluginId);
       },
       // A protocol violation terminates the worker for good (#12276). Provenance
       // is already recorded by `onActivationResult`; this releases the runtime
@@ -3184,6 +3111,10 @@ export class PluginService {
             this.setWorkerStatus(pluginId, "ready", null, null);
           } else {
             this.setWorkerStatus(pluginId, "failed", "activation-failed", result.error);
+            // A respawned or reloaded worker that throws keeps the activation
+            // latch from the generation before it, so a notes check it bound
+            // before throwing would still be asked (#13805).
+            unregisterWorktreeDeleteNotesBinding(pluginId);
           }
         }
         if (result.ok) {
@@ -3472,14 +3403,25 @@ export class PluginService {
         targets.push(plugin.manifest.name);
       }
       if (targets.length === 0) return;
+      const errorsBefore = targets.map((id) => this.getPluginLoadError(id)?.message);
       await Promise.allSettled(targets.map((id) => this.activatePlugin(id)));
+      // Catalog readers no longer wait for this fan-out (#14127), and an
+      // installed plugin's activation error is persisted without a push of its
+      // own: tell the plugin list to pull an outcome it may have missed. Only
+      // on a change, since every provenance push also closes the manager's
+      // open uninstall/update confirmations.
+      if (targets.some((id, i) => this.getPluginLoadError(id)?.message !== errorsBefore[i])) {
+        this.broadcaster.broadcastProvenanceChanged();
+      }
     } finally {
       // Open the init gate even if every plugin's activate() rejected — a
       // crashed plugin must not strand renderer IPC callers awaiting
       // waitForInit() forever. `Promise.allSettled` already swallows
       // individual rejections, but `targets.length === 0` short-circuits
       // before the awaited line, so the finally is what guarantees release
-      // in the no-plugins case.
+      // in the no-plugins case. Fully started implies the catalog is too.
+      this.resolveCatalog?.();
+      this.resolveCatalog = null;
       this.resolveInit?.();
       this.resolveInit = null;
     }
@@ -3556,9 +3498,14 @@ export class PluginService {
     options: { remoteFrontend?: boolean } = {}
   ): Promise<PluginActivationResult> {
     if (typeof panelKindId !== "string" || panelKindId.length === 0) return { ok: true };
-    const settingsPluginId = pluginIdFromSettingsViewKindId(panelKindId);
-    if (settingsPluginId !== null) {
-      return this.activatePluginForSettingsView(settingsPluginId, requestRecoveryPath);
+    const hosted = parsePluginHostedViewKindId(panelKindId);
+    if (hosted !== null) {
+      return this.activatePluginForHostedView(
+        hosted.pluginId,
+        hosted.viewId,
+        requestRecoveryPath,
+        options
+      );
     }
     for (const [pluginId, plugin] of this.plugins) {
       const projectId = plugin.binding?.projectId ?? null;
@@ -3598,7 +3545,7 @@ export class PluginService {
           const view = panel.hasPty
             ? undefined
             : live.manifest.contributes.views.find(
-                (v) => v.id === panel.id && v.location !== "settings"
+                (v) => v.id === panel.id && v.location === "panel"
               );
           if (!view) return { ok: true };
           // Same reason the map re-read above exists: without a live authority
@@ -3628,17 +3575,32 @@ export class PluginService {
   }
 
   /**
-   * {@link activatePluginForView} for a plugin's `location: "settings"` view,
-   * which names no panel kind: the id carries the instance key directly. Same
-   * activation, failure reporting and recovery-URL contract as a panel view.
+   * {@link activatePluginForView} for a view that mounts outside the panel grid
+   * (#13770), which names no panel kind: the id carries the instance key and
+   * the view id directly. Same activation, remote gate, failure reporting and
+   * recovery-URL contract as a panel view.
    */
-  private async activatePluginForSettingsView(
+  private async activatePluginForHostedView(
     pluginId: string,
-    requestRecoveryPath: boolean
+    viewId: string,
+    requestRecoveryPath: boolean,
+    options: { remoteFrontend?: boolean }
   ): Promise<PluginActivationResult> {
     const plugin = this.plugins.get(pluginId);
-    const view = plugin?.manifest.contributes.views.find((v) => v.location === "settings");
+    const view = plugin?.manifest.contributes.views.find(
+      (v) => v.id === viewId && v.location !== "panel"
+    );
     if (!plugin || !view) return { ok: true };
+    if (options.remoteFrontend && plugin.manifest.remote === "unsupported") {
+      console.warn(
+        `[PluginService] Refused to activate "${pluginId}" for a window on another machine: the plugin declares "remote": "unsupported"`
+      );
+      return {
+        ok: false,
+        error: `Plugin "${pluginId}" only works on the machine it runs on`,
+        remoteUnsupported: { pluginId },
+      };
+    }
     await this.activatePlugin(pluginId);
     const loadError = this.getPluginLoadError(pluginId);
     if (loadError) return { ok: false, error: loadError.message, stack: loadError.stack };
@@ -3659,17 +3621,18 @@ export class PluginService {
   }
 
   /**
-   * The `plugin://` URL of a running plugin's settings view under this load's
-   * authority and generation, or `undefined` when it declares none (or has no
-   * live authority, in which case the URL would address nothing).
+   * The `@` context providers a view of `projectId` sees (#13795), each with
+   * whether it holds its prefix there, was refused it, or is switched off.
    */
-  private settingsViewPath(pluginId: string): string | undefined {
-    const plugin = this.plugins.get(pluginId);
-    const view = plugin?.manifest.contributes.views.find((v) => v.location === "settings");
-    if (!plugin || !view) return undefined;
-    const authority = this.pluginAuthorities.get(pluginId);
-    if (!authority) return undefined;
-    return buildPluginViewUrl(authority, view.componentPath, plugin.viewGeneration);
+  getContextProvidersForProject(projectId: string | null): ContextProviderEntry[] {
+    const visible = selectContributionsForProject(
+      getRegisteredContextProviders(),
+      (entry) => entry.pluginId,
+      projectId
+    );
+    if (visible.length === 0) return [];
+    const off = getContextProvidersOff();
+    return arbitrateContextProviders(visible, (pluginId) => off.has(pluginId));
   }
 
   /**
@@ -3678,20 +3641,102 @@ export class PluginService {
    * filter so the activation set is exactly the impl set that will be queried
    * once activation resolves. Runs activations in parallel — one slow plugin
    * must not stall an entire decoration pull.
+   *
+   * `projectId` is the requesting view's project, and is required for the
+   * same reason the handler's impl filter needs it: a plugin that project
+   * hides must not be started by its file views.
    */
-  async activatePluginsForFileDecorationScope(scope: string): Promise<void> {
+  async activatePluginsForFileDecorationScope(
+    scope: string,
+    projectId: string | null
+  ): Promise<void> {
     if (typeof scope !== "string" || scope.length === 0) return;
-    const targets = new Set<string>();
+    const targets: string[] = [];
     for (const [pluginId, plugin] of this.plugins) {
       for (const contribution of plugin.manifest.contributes.fileDecorationProviders) {
         if (contribution.scopes.some((pattern) => scopeMatchesPattern(scope, pattern))) {
-          targets.add(pluginId);
+          targets.push(pluginId);
           break;
         }
       }
     }
-    if (targets.size === 0) return;
-    await Promise.allSettled([...targets].map((id) => this.activatePlugin(id)));
+    const visible = selectContributionsForProject(targets, (id) => id, projectId);
+    if (visible.length === 0) return;
+    await Promise.allSettled(visible.map((id) => this.activatePlugin(id)));
+  }
+
+  private worktreeDeleteNotesHost(): WorktreeDeleteNotesHost {
+    return {
+      plugins: this.plugins,
+      activatePlugin: (pluginId) => this.activatePlugin(pluginId),
+      isActivated: (pluginId) => this.activatedPlugins.has(pluginId),
+      readWorktree: (projectId, worktreeId) =>
+        this.readWorktreeForDeleteNotes(projectId, worktreeId),
+      isMuted: isWorktreeDeleteNotesMuted,
+    };
+  }
+
+  /** The plugins a delete confirmation in `projectId` asks for notes (#13805). */
+  listWorktreeDeleteNoteSources(projectId: string): WorktreeDeleteNoteSource[] {
+    return listDeleteNoteSources(this.worktreeDeleteNotesHost(), projectId);
+  }
+
+  /** One plugin's notes on one of `projectId`'s worktrees, activating it if need be (#13805). */
+  getWorktreeDeleteNotes(
+    projectId: string,
+    pluginId: string,
+    worktreeId: string
+  ): Promise<WorktreeDeleteNotesAnswer | null> {
+    return getDeleteNotes(this.worktreeDeleteNotesHost(), projectId, pluginId, worktreeId);
+  }
+
+  /**
+   * Every source's notes on one worktree, for a confirmation that can't stream
+   * (#13805). `timeoutMs` narrows the per-plugin deadline for a caller that has
+   * already spent some of it.
+   */
+  collectWorktreeDeleteNotes(
+    projectId: string,
+    worktreeId: string,
+    timeoutMs?: number
+  ): Promise<WorktreeDeleteNotesReport[]> {
+    return collectDeleteNotes(
+      { ...this.worktreeDeleteNotesHost(), ...(timeoutMs !== undefined ? { timeoutMs } : {}) },
+      projectId,
+      worktreeId
+    );
+  }
+
+  /**
+   * The worktree a note check asks about, read from the confirmation's own
+   * project — never the ambient one an installed plugin's getters follow, which
+   * may be another window's.
+   */
+  private async readWorktreeForDeleteNotes(
+    projectId: string,
+    worktreeId: string
+  ): Promise<WorktreeDeleteNotesTarget> {
+    let projectRoot: string | undefined;
+    try {
+      const row = projectStore.getProjectById(projectId);
+      projectRoot = row?.status === "closed" ? undefined : row?.path;
+    } catch {
+      return { status: "unavailable" };
+    }
+    if (typeof projectRoot !== "string" || projectRoot.length === 0) return { status: "missing" };
+    const result = await this.fetchWorktreeSnapshotsForProjectResult(projectId, projectRoot);
+    if (result.status !== "ok") return { status: "unavailable" };
+    const snapshot = result.snapshots.find(
+      (candidate) => candidate.id === worktreeId || candidate.worktreeId === worktreeId
+    );
+    if (!snapshot) return { status: "missing" };
+    try {
+      const titles = this.readWorktreeCustomTitles(projectId);
+      const customTitle = Object.hasOwn(titles, snapshot.id) ? (titles[snapshot.id] ?? null) : null;
+      return { status: "ok", worktree: toPluginWorktreeSnapshot(snapshot, customTitle) };
+    } catch {
+      return { status: "unavailable" };
+    }
   }
 
   /**
@@ -3875,7 +3920,7 @@ export class PluginService {
 
   /**
    * Live deps object for {@link createHost} and the host-mediated fs/git/
-   * process/clipboard API builders (`electron/services/plugin/PluginHostFactory.ts`).
+   * process/clipboard API builders (`electron/services/plugin/pluginHost*.ts`).
    * Every Map/Set/collaborator field below is the actual live reference this
    * instance holds — never a snapshot — so the post-await liveness checks
    * inside the extracted host closures (`plugins.get(id) === boundPlugin`,
@@ -3892,6 +3937,12 @@ export class PluginService {
       pluginBadges: this.pluginBadges,
       pluginToolbarBadges: this.pluginToolbarBadges,
       emitToolbarBadges: (pluginId) => this.emitToolbarBadges(pluginId),
+      pluginPanelActivity: this.pluginPanelActivity,
+      emitPanelActivity: (pluginId) => this.emitPanelActivity(pluginId),
+      nextPanelActivityRevision: () => ++this.panelActivityRevision,
+      pluginTasks: this.pluginTasks,
+      pluginToolbarStates: this.pluginToolbarStates,
+      emitToolbarStates: (pluginId) => this.emitToolbarStates(pluginId),
       pluginContextKeys: this.pluginContextKeys,
       emitContextKeys: (pluginId) => this.emitContextKeys(pluginId),
       pluginWorktreeCardStatuses: this.pluginWorktreeCardStatuses,
@@ -3899,7 +3950,18 @@ export class PluginService {
         this.emitWorktreeCardStatuses(pluginId, projectId),
       worktreeCardStatusGeneration: (pluginId) =>
         this.worktreeCardStatusGenerations.get(pluginId) ?? 0,
+      pluginWorktreeReviewChecks: this.pluginWorktreeReviewChecks,
+      emitWorktreeReviewChecks: (pluginId, projectId) =>
+        this.emitWorktreeReviewChecks(pluginId, projectId),
+      worktreeReviewChecksGeneration: (pluginId) =>
+        this.worktreeReviewChecksGenerations.get(pluginId) ?? 0,
       worktreeCardTargetRevision: () => this.worktreeCardTargetRevision,
+      pluginTerminalStatuses: this.pluginTerminalStatuses,
+      emitTerminalStatuses: (pluginId, projectId) => this.emitTerminalStatuses(pluginId, projectId),
+      terminalStatusGeneration: (pluginId) => this.terminalStatusGenerations.get(pluginId) ?? 0,
+      terminalStatusCloseRevision: () => this.terminalStatusCloseRevision,
+      isTerminalStatusProjectClosed: (projectId, sinceRevision) =>
+        (this.closedTerminalStatusProjects.get(projectId) ?? 0) > sinceRevision,
       isWorktreeCardTargetRetired: (projectId, worktreeId, since) =>
         this.isWorktreeCardTargetRetired(projectId, worktreeId, since),
       pluginPanelMenus: this.pluginPanelMenus,
@@ -3910,6 +3972,8 @@ export class PluginService {
       panelReloadDispatcher: this.panelReloadDispatcher,
       promptDispatcher: this.promptDispatcher,
       settings: this.settings,
+      accounts: this.accounts,
+      services: this.services,
       storage: this.storage,
       getHostGitFactory: () => this.hostGitFactory,
       getProcessManager: () => this.getProcessManager(),
@@ -3918,12 +3982,16 @@ export class PluginService {
       fetchWorktreeSnapshotsResult: () => this.fetchAllWorktreeSnapshotsResult(),
       fetchWorktreeSnapshotsForProjectResult: (projectId, projectRoot) =>
         this.fetchWorktreeSnapshotsForProjectResult(projectId, projectRoot),
+      getWorktreeCustomTitles: (projectId) => this.readWorktreeCustomTitles(projectId),
+      // The factory tracks the disposer against the plugin, so an unload drops it.
+      subscribeWorktreeCustomTitles: (listener) => onWorktreeCustomTitlesChanged(listener),
       recordPluginLog: (boundPlugin, pluginId, level, message, fields) =>
         this.recordPluginLog(boundPlugin, pluginId, level, message, fields),
       serializePluginBadges: (pluginId) => this.serializePluginBadges(pluginId),
       serializePluginPanelMenus: (pluginId) => this.serializePluginPanelMenus(pluginId),
       pluginDisplayName: (pluginId) => this.getPluginDisplayName(pluginId),
       pluginDataDir: (pluginId) => this.pluginDataDir(pluginId),
+      artifactService: () => this.getArtifactService(),
       isPathUnder: (root, candidate) => this.isPathUnder(root, candidate),
       expandAllowedPathEntries: (pluginId, options) =>
         this.expandAllowedPathEntries(pluginId, options),
@@ -3949,7 +4017,45 @@ export class PluginService {
       trackPromptWait: (pluginId) => this.metrics.beginPromptWait(pluginId),
       requestWorkerSelfRestart: (pluginId, boundPlugin) =>
         this.requestWorkerSelfRestart(pluginId, boundPlugin),
+      pluginNotificationsBlocked: (pluginId, projectId) =>
+        this.pluginNotificationsBlocked(pluginId, projectId),
     };
+  }
+
+  /**
+   * The user's off switches for a plugin's toasts and notifications (#13818):
+   * the plugin silenced, or the project the notification is about muted. A
+   * project's settings that can't be read mute nothing — the failure is the
+   * settings file's to report, and a lost plugin error would be a second one.
+   */
+  private async pluginNotificationsBlocked(
+    pluginId: string,
+    projectId: string | null
+  ): Promise<boolean> {
+    if (isPluginNotificationSilenced(pluginId)) return true;
+    if (projectId === null) return false;
+    // Bounded: the plugin's notifications queue behind this read, and a file
+    // stuck on a dead mount must not hold every later one back for good.
+    let muted = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      muted = await Promise.race([
+        projectStore.isProjectNotificationsMuted(projectId),
+        new Promise<boolean>((resolve) => {
+          timer = setTimeout(() => {
+            console.warn("[PluginService] A project's notification mute took too long to read");
+            resolve(false);
+          }, PLUGIN_NOTIFICATION_MUTE_READ_TIMEOUT_MS);
+        }),
+      ]);
+    } catch (err) {
+      console.warn("[PluginService] Couldn't read a project's notification mute:", err);
+    } finally {
+      clearTimeout(timer);
+    }
+    // Asked again after the read: the user may have silenced the plugin while
+    // a cold project file was loading.
+    return muted || isPluginNotificationSilenced(pluginId);
   }
 
   /**
@@ -3969,34 +4075,6 @@ export class PluginService {
     const resolved = binding ?? this.plugins.get(pluginId)?.binding ?? UNBOUND_PLUGIN_HOST_BINDING;
     this.hostBindings.set(pluginId, resolved);
     return createPluginHost(this.hostFactoryDeps, pluginId, resolved);
-  }
-
-  /**
-   * The host for a BUILT-IN plugin: {@link createHost}'s object plus
-   * `fsForWorkspace`, the workspace-scoped filesystem handle
-   * (`BuiltinPluginHostApi` in `shared/types/plugin.ts`).
-   *
-   * Only the in-process loader calls this, which is what keeps the method off
-   * the utility-process bridge: a user plugin's host is built by
-   * {@link createHost} and proxied method by method, so a third-party plugin
-   * cannot reach a surface its own host object never had — and has no need to,
-   * since a project-owned plugin's tokens already resolve against its binding.
-   */
-  private createBuiltinHost(pluginId: string): { host: BuiltinPluginHostApi; revoke: () => void } {
-    const { host, revoke } = this.createHost(pluginId);
-    const builtin: BuiltinPluginHostApi = Object.assign(Object.create(host) as PluginHostApi, {
-      fsForWorkspace: (scope: PluginWorkspaceScope): PluginFsApi => {
-        assertWorkspaceScope(pluginId, scope);
-        // Copy the ids: the caller keeps a reference to the object it passed,
-        // and a handle that is "pinned for its life" must not be redirectable
-        // by mutating that object afterwards.
-        return buildScopedFsApi(this.hostFactoryDeps, pluginId, {
-          projectId: scope.projectId,
-          worktreeId: scope.worktreeId,
-        });
-      },
-    });
-    return { host: builtin, revoke };
   }
 
   /**
@@ -4105,6 +4183,7 @@ export class PluginService {
    * the worker its cooperative shutdown.
    */
   async shutdownManagedProcesses(): Promise<void> {
+    await this.shutdownArtifacts();
     for (const { workerHost } of this.pluginWorkers.values()) {
       try {
         workerHost.dispose();
@@ -4113,6 +4192,146 @@ export class PluginService {
       }
     }
     await this.processManager?.shutdownAll();
+  }
+
+  private getArtifactService(): PluginArtifactService | null {
+    if (this.artifactService !== undefined) return this.artifactService;
+    if (this.disposed) return null;
+    const service = new PluginArtifactService({
+      store: new PluginArtifactStore({
+        rootDir: path.join(app.getPath("userData"), "plugin-artifacts"),
+      }),
+      netFetch: (input, init) => net.fetch(input, init),
+    });
+    this.artifactService = service;
+    setArtifactSourceResolver((artifactId, lease) => service.openLeased(artifactId, lease));
+    return service;
+  }
+
+  private async shutdownArtifacts(): Promise<void> {
+    const service = this.artifactService;
+    this.artifactService = null;
+    if (!service) return;
+    setArtifactSourceResolver(null);
+    await service.dispose().catch(() => {});
+  }
+
+  /**
+   * Import files a view's person chose (a drop or the file dialog) as the
+   * plugin's artifacts. `paths` are only ever ones the preload resolved from
+   * real Files for that view; the IPC handler checks the grant first.
+   *
+   * The leaf is refused when it is a symlink, and the opened descriptor must
+   * be the entry that `lstat` saw — on Windows `O_NOFOLLOW` does nothing, so
+   * that compare is what catches a chosen file swapped for a link. All or
+   * nothing: each finished file stays pinned until the batch ends, so a later
+   * one can't evict an earlier one to fit, and a failure releases them all.
+   */
+  async importArtifactSelection(
+    pluginId: string,
+    projectId: string | null,
+    paths: readonly string[]
+  ): Promise<PluginArtifact[]> {
+    const service = this.requireArtifactAccess(pluginId, "importSelection");
+    const imported: PluginArtifact[] = [];
+    const pins: Array<() => void> = [];
+    const refuse = (filePath: string, why: string) =>
+      new Error(`INVALID_PATH: "${path.basename(filePath)}" ${why}`);
+    // A project close between two files has no transfer to abort: the batch
+    // notices it itself, before each file and once done.
+    const closesAtStart = projectId === null ? 0 : service.projectCloseCount(projectId);
+    const requireProjectOpen = () => {
+      if (projectId !== null && service.projectCloseCount(projectId) !== closesAtStart) {
+        throw Object.assign(new Error("ABORT_ERR: the project closed during the import"), {
+          name: "AbortError",
+          code: "ABORT_ERR",
+        });
+      }
+    };
+    try {
+      for (const filePath of paths) {
+        const leaf = await fs.lstat(filePath, { bigint: true });
+        if (leaf.isSymbolicLink()) throw refuse(filePath, "is a link, not a file");
+        const handle = await fs.open(
+          filePath,
+          fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0)
+        );
+        try {
+          const stat = await handle.stat({ bigint: true });
+          if (!stat.isFile()) throw refuse(filePath, "is not a regular file");
+          if (stat.dev !== leaf.dev || stat.ino !== leaf.ino) {
+            throw refuse(filePath, "changed while it was being opened");
+          }
+          // Synchronously before the transfer registers, so an unload or a
+          // project close during the opens leaves nothing running.
+          this.requireArtifactAccess(pluginId, "importSelection");
+          requireProjectOpen();
+          const artifact = await service.importFromHandle({
+            pluginId,
+            projectId,
+            handle,
+            size: Number(stat.size),
+            sourceName: path.basename(filePath),
+          });
+          imported.push(artifact);
+          const pin = service.store.openForRead(pluginId, artifact.id);
+          if (pin) pins.push(pin.unpin);
+        } finally {
+          await handle.close().catch(() => {});
+        }
+      }
+      requireProjectOpen();
+    } catch (error) {
+      for (const artifact of imported) service.store.release(pluginId, artifact.id);
+      throw error;
+    } finally {
+      for (const unpin of pins) unpin();
+    }
+    return imported;
+  }
+
+  /** A playback source for `webContentsId`, revoked when that view goes away. */
+  mintArtifactSource(
+    pluginId: string,
+    artifactId: string,
+    webContentsId: number
+  ): PluginArtifactSource {
+    const service = this.requireArtifactAccess(pluginId, "source");
+    const source = service.mintSource(pluginId, artifactId, webContentsId);
+    if (!this.artifactLeaseViews.has(webContentsId)) {
+      const contents = webContents.fromId(webContentsId);
+      if (contents) {
+        this.artifactLeaseViews.add(webContentsId);
+        contents.once("destroyed", () => {
+          this.artifactLeaseViews.delete(webContentsId);
+          this.artifactService?.store.revokeLeasesForView(webContentsId);
+        });
+      }
+    }
+    return source;
+  }
+
+  revokeArtifactSource(url: string, webContentsId: number): boolean {
+    const lease = /[?&]lease=([0-9a-f]{48})(?:&|$)/.exec(url)?.[1];
+    if (!lease) return false;
+    return this.artifactService?.store.revokeLease(lease, webContentsId) ?? false;
+  }
+
+  private requireArtifactAccess(pluginId: string, op: string): PluginArtifactService {
+    if (!this.plugins.has(pluginId)) {
+      throw new Error(
+        `PLUGIN_UNLOADED: plugin "${pluginId}" artifacts.${op}: plugin is not loaded`
+      );
+    }
+    if (!this.declaredCapabilities(pluginId).has("artifact:store")) {
+      throw new Error(
+        `PERMISSION_REQUIRED: plugin "${pluginId}" artifacts.${op} requires the "artifact:store" capability`
+      );
+    }
+    const service = this.getArtifactService();
+    if (!service)
+      throw new Error(`plugin "${pluginId}" artifacts.${op}: the artifact cache has shut down`);
+    return service;
   }
 
   /**
@@ -4135,12 +4354,13 @@ export class PluginService {
   }
 
   _registerFakePluginForTests(plugin: LoadedPlugin, instanceKey?: string): void {
-    this.mintPluginAuthority(plugin.manifest.name, plugin.dir);
+    this.mintPluginAuthority(instanceKey ?? plugin.manifest.name, plugin.dir);
     // `instanceKey` mirrors the real `loadPlugin`, which keys a project plugin
     // by `project__{projectId}__{name}` while leaving `manifest.name` bare.
     // Without it a test cannot reproduce the shape the registry actually holds
     // for a project plugin, which is where the two diverge (#12214).
     this.plugins.set(instanceKey ?? plugin.manifest.name, plugin);
+    noteNewestPluginInstance(this.plugins, instanceKey ?? plugin.manifest.name, plugin);
   }
 
   _unregisterFakePluginForTests(pluginId: string): void {
@@ -4150,11 +4370,6 @@ export class PluginService {
 
   _createHostForTests(pluginId: string, binding?: PluginHostBinding): PluginHostApi {
     return this.createHost(pluginId, binding).host;
-  }
-
-  /** The built-in host shape (`fsForWorkspace` included) the in-process loader hands a built-in. */
-  _createBuiltinHostForTests(pluginId: string): BuiltinPluginHostApi {
-    return this.createBuiltinHost(pluginId).host;
   }
 
   /** The capabilities a loaded plugin declared, as a Set. Empty when unloaded. */
@@ -4256,29 +4471,18 @@ export class PluginService {
    * dir is prepended as a `user-data` root so every plugin always has a private
    * scratch space. Literal absolute paths are classified by home-dir membership.
    *
-   * `opts.scope` names the project and worktree the tokens resolve against
-   * instead of the plugin's binding (or, unbound, the focused window) — the
-   * expansion behind a built-in host's `fsForWorkspace`. Only the snapshot set
-   * and the `${worktree}` selector change; the declared list, the classes and
-   * the fail-closed drop are the same, so a scope can never reach a path the
-   * ambient expansion of the same manifest could not.
-   *
    * The caller is responsible for `requireLoaded()` re-checks around the await
    * (the plugin may unload mid-call — #9533).
    */
   private async expandAllowedPathEntries(
     pluginId: string,
-    opts: { includeDataDir: boolean; scope?: PluginWorkspaceScope }
+    opts: { includeDataDir: boolean }
   ): Promise<ExpandedFsPath[]> {
     const declared = this.declaredAllowedPaths(pluginId);
     const needsSnapshots = declared.some(
       (entry) => entry.startsWith("${project}") || entry.startsWith("${worktree}")
     );
-    const snapshots = !needsSnapshots
-      ? []
-      : opts.scope
-        ? await this.workspaceScopeSnapshots(opts.scope)
-        : await this.allowedPathSnapshots(pluginId);
+    const snapshots = needsSnapshots ? await this.allowedPathSnapshots(pluginId) : [];
 
     const entries: ExpandedFsPath[] = [];
     if (opts.includeDataDir) {
@@ -4291,7 +4495,7 @@ export class PluginService {
     }
     for (const raw of declared) {
       try {
-        entries.push(this.expandAllowedPathEntry(pluginId, raw, snapshots, opts.scope?.worktreeId));
+        entries.push(this.expandAllowedPathEntry(pluginId, raw, snapshots));
       } catch (err) {
         // Fail-closed on a token with no live worktree: drop just that entry
         // (it contributes no root, so a path that only matched it is still
@@ -4326,48 +4530,12 @@ export class PluginService {
   }
 
   /**
-   * The worktree set a workspace-scoped `${project}` / `${worktree}` expansion
-   * reads, for a project named by the scope rather than by a binding.
-   *
-   * Goes through the same per-project read a bound host uses, so it consults no
-   * window and no focus. A project that is not open (or whose id no longer
-   * matches the path it was opened at) has no root here and resolves `[]`,
-   * which drops the token entries and leaves containment closed — never a
-   * fallback to the ambient aggregate, which is the whole point of the scope.
-   */
-  private async workspaceScopeSnapshots(scope: PluginWorkspaceScope): Promise<WorktreeSnapshot[]> {
-    // A throwing store read degrades like any other failed read — no roots,
-    // containment denies — rather than rejecting a plugin's fs call with a
-    // store error it cannot act on.
-    let projectRoot: string | undefined;
-    try {
-      const row = projectStore.getProjectById(scope.projectId);
-      // A closed project keeps its persisted row, path and all. Reading `.path`
-      // alone would leave a still-warm (or later prewarmed) workspace host
-      // answering with snapshots for a project the user has closed, so closure
-      // is checked here rather than inferred from the pool.
-      projectRoot = row?.status === "closed" ? undefined : row?.path;
-    } catch {
-      return [];
-    }
-    if (typeof projectRoot !== "string" || projectRoot.length === 0) return [];
-    return this.fetchWorktreeSnapshotsForProject(scope.projectId, projectRoot);
-  }
-
-  /**
    * Expand a single `allowedPaths` entry (token or literal) into a typed root.
-   *
-   * `worktreeId`, when given, replaces "the current worktree" as what
-   * `${worktree}` means: a workspace-scoped expansion names its worktree, and
-   * the named one is frequently NOT the current one — that is the case the
-   * scope exists for. An id matching no live snapshot resolves to nothing and
-   * the entry is dropped, exactly as an absent current worktree is.
    */
   private expandAllowedPathEntry(
     pluginId: string,
     raw: string,
-    snapshots: readonly WorktreeSnapshot[],
-    worktreeId?: string
+    snapshots: readonly WorktreeSnapshot[]
   ): ExpandedFsPath {
     const token = raw.startsWith("${worktree}")
       ? "worktree"
@@ -4384,9 +4552,7 @@ export class PluginService {
     }
     const base =
       token === "worktree"
-        ? worktreeId === undefined
-          ? snapshots.find((s) => s.isCurrent === true)?.path
-          : snapshots.find((s) => s.id === worktreeId)?.path
+        ? snapshots.find((s) => s.isCurrent === true)?.path
         : snapshots.find((s) => s.isMainWorktree === true)?.path;
     if (typeof base !== "string" || base.length === 0) {
       throw new PluginPathNotAllowedError(pluginId, raw);
@@ -4502,6 +4668,22 @@ export class PluginService {
   }
 
   /**
+   * A project's custom worktree titles for the plugin projection (#14022). A
+   * store that cannot be read costs the titles, never the worktree read.
+   */
+  private readWorktreeCustomTitles(projectId: string): Readonly<Record<string, string>> {
+    try {
+      return getWorktreeCustomTitles(projectId).titles;
+    } catch (err) {
+      console.error(
+        `[PluginService] Failed to read custom worktree titles for project ${projectId}:`,
+        err
+      );
+      return {};
+    }
+  }
+
+  /**
    * The BrowserWindow id whose visible project the plugin is acting on, or
    * `undefined` when none resolves. Uses the dispatcher's strict scope resolver,
    * not its dispatch-targeting one — the latter scans every window in insertion
@@ -4557,29 +4739,22 @@ export class PluginService {
    * against the plugin so `unloadPlugin()` can dispose it. Returns a disposer
    * that removes just this subscription; safe to call multiple times.
    *
-   * If WorkspaceClient is not yet wired (early plugin activate during boot),
-   * the subscription is queued in `pendingWorktreeSubs` and replayed when
-   * `setWorkspaceClient()` is later called. The returned disposer handles
-   * both the queued and the live state.
+   * Tracked as one of the plugin's live subscriptions, so it keeps the
+   * plugin's worker from being disposed while idle. See
+   * {@link attachWorktreeEvent} for the untracked listener underneath.
    */
   private subscribeWorktreeEvent(
     pluginId: string,
     event: WorkspaceWorktreeEvent,
     handler: (payload?: PluginWorktreeEventPayload) => void
   ): () => void {
-    let boundClient: WorkspaceClient | null = null;
-    let pendingRecord: (typeof this.pendingWorktreeSubs)[number] | null = null;
+    const detach = this.attachWorktreeEvent(pluginId, event, handler);
     let disposed = false;
 
     const dispose = (): void => {
       if (disposed) return;
       disposed = true;
-      if (boundClient) {
-        boundClient.off(event, handler);
-      } else if (pendingRecord) {
-        const idx = this.pendingWorktreeSubs.indexOf(pendingRecord);
-        if (idx >= 0) this.pendingWorktreeSubs.splice(idx, 1);
-      }
+      detach();
       const list = this.pluginEventCleanups.get(pluginId);
       if (!list) return;
       const idx = list.indexOf(dispose);
@@ -4593,6 +4768,27 @@ export class PluginService {
       this.pluginEventCleanups.set(pluginId, list);
     }
     list.push(dispose);
+    return dispose;
+  }
+
+  /**
+   * Listen on WorkspaceClient for the given event without recording a live
+   * subscription for the plugin — what a manifest event route needs, since a
+   * route must not keep the worker from idle disposal (#13816). The caller owns
+   * the returned detach, which is safe to call more than once.
+   *
+   * If WorkspaceClient is not yet wired (early boot), the listener is queued in
+   * `pendingWorktreeSubs` and attached when `setWorkspaceClient()` is later
+   * called. The detach handles both the queued and the live state.
+   */
+  private attachWorktreeEvent(
+    pluginId: string,
+    event: WorkspaceWorktreeEvent,
+    handler: (payload?: PluginWorktreeEventPayload) => void
+  ): () => void {
+    let boundClient: WorkspaceClient | null = null;
+    let pendingRecord: (typeof this.pendingWorktreeSubs)[number] | null = null;
+    let detached = false;
 
     const client = this.workspaceClient;
     if (client) {
@@ -4604,7 +4800,7 @@ export class PluginService {
         event,
         handler,
         activate: (c: WorkspaceClient) => {
-          if (disposed) return;
+          if (detached) return;
           c.on(event, handler);
           boundClient = c;
           pendingRecord = null;
@@ -4613,7 +4809,16 @@ export class PluginService {
       this.pendingWorktreeSubs.push(pendingRecord);
     }
 
-    return dispose;
+    return () => {
+      if (detached) return;
+      detached = true;
+      if (boundClient) {
+        boundClient.off(event, handler);
+      } else if (pendingRecord) {
+        const idx = this.pendingWorktreeSubs.indexOf(pendingRecord);
+        if (idx >= 0) this.pendingWorktreeSubs.splice(idx, 1);
+      }
+    };
   }
 
   /**
@@ -4670,6 +4875,11 @@ export class PluginService {
 
   hasPlugin(pluginId: string): boolean {
     return this.plugins.has(pluginId);
+  }
+
+  /** Whether the plugin is loaded and its latest activation succeeded. */
+  isPluginActivated(pluginId: string): boolean {
+    return this.activatedPlugins.has(pluginId);
   }
 
   /**
@@ -4836,6 +5046,10 @@ export class PluginService {
     // already guarantees this, and the guard mirrors the input-schema check.
     let actionHandler =
       descriptor?.pluginId === pluginId ? this.pluginActionHandlers.get(channel) : undefined;
+    // Read now, before any await: a re-registration while this call runs must
+    // not hold its result to a contract it didn't start under.
+    const resultCheck =
+      descriptor?.pluginId === pluginId ? this.actionResultChecks.get(descriptor) : undefined;
     const handler = this.channels.getHandler(key);
     // Manifest-declared command (#9281): descriptor registered at load time,
     // handler module deferred until first dispatch. Lazy-load now, then fall
@@ -4926,6 +5140,14 @@ export class PluginService {
       assertPayloadWithinLimit(
         pluginId,
         `result of "${channel}"`,
+        actionResult,
+        PLUGIN_INVOKE_MAX_RESULT_BYTES
+      );
+      // Like the size check, a failed dispatch the outer catch records.
+      actionResult = enforcePluginActionResult(
+        pluginId,
+        channel,
+        resultCheck,
         actionResult,
         PLUGIN_INVOKE_MAX_RESULT_BYTES
       );
@@ -5038,6 +5260,15 @@ export class PluginService {
       finalResult,
       PLUGIN_INVOKE_MAX_RESULT_BYTES
     );
+    // A channel handler registered under an action's id is that action's
+    // implementation, so its result answers to the action's contract too.
+    finalResult = enforcePluginActionResult(
+      pluginId,
+      channel,
+      resultCheck,
+      finalResult,
+      PLUGIN_INVOKE_MAX_RESULT_BYTES
+    );
 
     // Audit the success path too (#10517). The catch above records IPC-handler
     // failures; without this, a plugin invoking its own registered handler via
@@ -5080,7 +5311,7 @@ export class PluginService {
    * own. Only reads; nothing about either machine changes.
    */
   async getPluginInventory(options: { includeSecrets?: boolean } = {}): Promise<PluginInventory> {
-    await this.waitForInit();
+    await this.waitForCatalog();
     return buildPluginInventory(this, {
       appVersion: this.appVersion,
       platform: process.platform,
@@ -5103,7 +5334,7 @@ export class PluginService {
     archivePath: string,
     expect: { pluginId?: string; update?: boolean; jobId?: string } = {}
   ): Promise<PluginInstallResult> {
-    await this.waitForInit();
+    await this.waitForCatalog();
     let manifest: PluginManifest;
     try {
       manifest = await readArchiveManifest(archivePath);
@@ -5161,12 +5392,15 @@ export class PluginService {
    * disabled, or was refused by the blocklist; null when none is.
    */
   private installedPluginVersion(pluginId: string): string | null {
+    return this.installedPluginRecord(pluginId)?.manifest.version ?? null;
+  }
+
+  private installedPluginRecord(pluginId: string): { manifest: PluginManifest } | undefined {
     return (
-      (
-        this.plugins.get(pluginId) ??
-        this.disabledPlugins.get(pluginId) ??
-        this.blockedPlugins.get(pluginId)
-      )?.manifest.version ?? null
+      this.plugins.get(pluginId) ??
+      this.disabledPlugins.get(pluginId) ??
+      this.blockedPlugins.get(pluginId) ??
+      this.projectInstancePackages.get(pluginId)
     );
   }
 
@@ -5247,7 +5481,7 @@ export class PluginService {
   /**
    * Nesting depth of in-flight plugin replacements. While non-zero the
    * contribution registries are mid-swap, so no snapshot taken from them is
-   * authoritative — see the broadcaster's `isReplacingPlugin` dep.
+   * authoritative — see the broadcaster's `isRegistryUnsettled` dep.
    */
   private devReplaceDepth = 0;
 
@@ -5619,6 +5853,84 @@ export class PluginService {
     broadcastToProjectRenderers(owningProjectId, CHANNELS.EVENTS_PUSH, event);
   }
 
+  /**
+   * Publish one plugin's complete activity map, scoped like
+   * {@link emitToolbarBadges}. An empty map clears the plugin's reports (#13820).
+   */
+  private emitPanelActivity(pluginId: string): void {
+    if (this.disposed) return;
+    const event = {
+      name: "plugin:panel-activity-changed" as const,
+      payload: { pluginId, activity: this.serializePluginPanelActivity(pluginId) },
+    };
+    const owningProjectId = projectIdFromPluginInstanceKey(pluginId);
+    if (owningProjectId === null) {
+      broadcastToRenderer(CHANNELS.EVENTS_PUSH, event);
+      return;
+    }
+    broadcastToProjectRenderers(owningProjectId, CHANNELS.EVENTS_PUSH, event);
+  }
+
+  /**
+   * Publish one plugin's complete task list, scoped like
+   * {@link emitPanelActivity}. An empty list clears its tasks (#13819).
+   */
+  private emitPluginTasks(pluginId: string): void {
+    if (this.disposed) return;
+    const event = {
+      name: "plugin:tasks-changed" as const,
+      payload: { pluginId, tasks: this.pluginTasks.snapshot(pluginId) },
+    };
+    const owningProjectId = projectIdFromPluginInstanceKey(pluginId);
+    if (owningProjectId === null) {
+      broadcastToRenderer(CHANNELS.EVENTS_PUSH, event);
+      return;
+    }
+    broadcastToProjectRenderers(owningProjectId, CHANNELS.EVENTS_PUSH, event);
+  }
+
+  /** The user's Cancel on a plugin task. False when it isn't running or can't be cancelled. */
+  cancelPluginTask(pluginId: string, taskId: string): boolean {
+    return this.pluginTasks.requestCancel(pluginId, taskId);
+  }
+
+  /** The user's Dismiss on an interrupted plugin task. */
+  dismissPluginTask(pluginId: string, taskId: string): boolean {
+    return this.pluginTasks.dismiss(pluginId, taskId);
+  }
+
+  private serializePluginPanelActivity(
+    pluginId: string
+  ): Record<string, PluginPanelActivityReport> {
+    const panelMap = this.pluginPanelActivity.get(pluginId);
+    if (!panelMap || panelMap.size === 0) return {};
+    return Object.fromEntries(panelMap);
+  }
+
+  /** Publish one plugin's complete toolbar-button state, scoped like {@link emitToolbarBadges}. */
+  private emitToolbarStates(pluginId: string): void {
+    if (this.disposed) return;
+    const event = {
+      name: "plugin:toolbar-states-changed" as const,
+      payload: { pluginId, states: this.serializePluginToolbarStates(pluginId) },
+    };
+    const owningProjectId = projectIdFromPluginInstanceKey(pluginId);
+    if (owningProjectId === null) {
+      broadcastToRenderer(CHANNELS.EVENTS_PUSH, event);
+      return;
+    }
+    broadcastToProjectRenderers(owningProjectId, CHANNELS.EVENTS_PUSH, event);
+  }
+
+  /** One plugin's toolbar-button state (`buttonId → state`), empty when it has none. */
+  private serializePluginToolbarStates(
+    pluginId: string
+  ): Record<string, PluginToolbarButtonRuntimeState> {
+    const buttonMap = this.pluginToolbarStates.get(pluginId);
+    if (!buttonMap || buttonMap.size === 0) return {};
+    return Object.fromEntries(buttonMap);
+  }
+
   /** One plugin's toolbar badges (`buttonId → badge`), empty when it has none. */
   private serializePluginToolbarBadges(pluginId: string): Record<string, PluginPanelBadge> {
     const buttonMap = this.pluginToolbarBadges.get(pluginId);
@@ -5650,6 +5962,81 @@ export class PluginService {
     const statuses = this.pluginWorktreeCardStatuses.get(pluginId)?.get(projectId);
     if (!statuses || statuses.size === 0) return {};
     return Object.fromEntries(statuses);
+  }
+
+  /**
+   * Publish one plugin's complete readiness checks for one project, to that
+   * project's views only. An empty map clears them.
+   */
+  private emitWorktreeReviewChecks(pluginId: string, projectId: string): void {
+    if (this.disposed) return;
+    broadcastToProjectRenderers(projectId, CHANNELS.EVENTS_PUSH, {
+      name: "plugin:worktree-review-checks-changed" as const,
+      payload: {
+        pluginId,
+        projectId,
+        checks: this.serializePluginWorktreeReviewChecks(pluginId, projectId),
+      },
+    });
+  }
+
+  /**
+   * Publish one plugin's complete terminal statuses for one project, to that
+   * project's views only. An empty map clears them (#13802).
+   */
+  private emitTerminalStatuses(pluginId: string, projectId: string): void {
+    if (this.disposed) return;
+    broadcastToProjectRenderers(projectId, CHANNELS.EVENTS_PUSH, {
+      name: "plugin:terminal-statuses-changed" as const,
+      payload: {
+        pluginId,
+        projectId,
+        statuses: this.serializePluginTerminalStatuses(pluginId, projectId),
+      },
+    });
+  }
+
+  /** One plugin's readiness checks in one project (`worktreeId → checks`), empty when none. */
+  private serializePluginWorktreeReviewChecks(
+    pluginId: string,
+    projectId: string
+  ): Record<string, PluginWorktreeReviewCheck[]> {
+    const checks = this.pluginWorktreeReviewChecks.get(pluginId)?.get(projectId);
+    if (!checks || checks.size === 0) return {};
+    return Object.fromEntries([...checks].map(([id, list]) => [id, [...list]]));
+  }
+
+  /** Drop a plugin's readiness checks everywhere, clearing each project's views. */
+  private clearPluginWorktreeReviewChecks(pluginId: string): void {
+    this.worktreeReviewChecksGenerations.set(
+      pluginId,
+      (this.worktreeReviewChecksGenerations.get(pluginId) ?? 0) + 1
+    );
+    const byProject = this.pluginWorktreeReviewChecks.get(pluginId);
+    if (!byProject) return;
+    this.pluginWorktreeReviewChecks.delete(pluginId);
+    for (const projectId of byProject.keys()) this.emitWorktreeReviewChecks(pluginId, projectId);
+  }
+
+  private serializePluginTerminalStatuses(
+    pluginId: string,
+    projectId: string
+  ): Record<string, PluginTerminalStatus> {
+    const statuses = this.pluginTerminalStatuses.get(pluginId)?.get(projectId);
+    if (!statuses || statuses.size === 0) return {};
+    return Object.fromEntries(statuses);
+  }
+
+  /** Drop a plugin's terminal statuses everywhere, clearing each project's views. */
+  private clearPluginTerminalStatuses(pluginId: string): void {
+    this.terminalStatusGenerations.set(
+      pluginId,
+      (this.terminalStatusGenerations.get(pluginId) ?? 0) + 1
+    );
+    const byProject = this.pluginTerminalStatuses.get(pluginId);
+    if (!byProject) return;
+    this.pluginTerminalStatuses.delete(pluginId);
+    for (const projectId of byProject.keys()) this.emitTerminalStatuses(pluginId, projectId);
   }
 
   private retireWorktreeCardTarget(key: string): void {
@@ -5814,6 +6201,119 @@ export class PluginService {
     broadcastToProjectRenderers(owningProjectId, CHANNELS.EVENTS_PUSH, event);
   }
 
+  /**
+   * A plugin's setup checklist (#13824) as the host sees it against
+   * `projectId`: whether each setting and account step is done, each context
+   * step's clause for the renderer to evaluate, each step's action with a
+   * command in the instance's namespace, and which steps the user skipped
+   * there. Reads stored state only — nothing activates, signs in or refreshes.
+   */
+  async getSetupStatusForUi(
+    pluginId: string,
+    projectId: string | null
+  ): Promise<PluginSetupUiStatus> {
+    const manifest = (this.plugins.get(pluginId) ?? this.disabledPlugins.get(pluginId))?.manifest;
+    const steps = manifest?.contributes.setup ?? [];
+    if (!manifest || steps.length === 0) return { steps: [] };
+
+    const settingKeys = steps.flatMap((step) =>
+      step.done.kind === "setting" ? [step.done.key] : []
+    );
+    // One read per distinct connection the steps ask about; `""` is the one
+    // the project uses. An account file that can't be read answers for its
+    // own steps, which stay outstanding; the rest of the checklist stands.
+    const connectionRefs = [
+      ...new Set(
+        steps.flatMap((step) => (step.done.kind === "account" ? [step.done.connection ?? ""] : []))
+      ),
+    ];
+    const [presence, accountStates] = await Promise.all([
+      settingKeys.length > 0
+        ? this.settings.settingPresenceForUi(pluginId, settingKeys, projectId)
+        : Promise.resolve({} as Record<string, string>),
+      Promise.all(
+        connectionRefs.map((connection) =>
+          this.accounts
+            .getStateFor(pluginId, {
+              ...(connection === "" ? {} : { connection }),
+              ...(projectId === null ? {} : { projectId }),
+            })
+            .then((state) => [connection, state.connected] as const)
+            .catch((err: unknown) => {
+              console.warn(`[PluginService] Couldn't read "${pluginId}"'s account for setup:`, err);
+              return [connection, false] as const;
+            })
+        )
+      ).then((entries) => new Map(entries)),
+    ]);
+    const skipped = new Set(
+      projectId === null ? [] : getProjectPluginSetupSkips(projectId, pluginId)
+    );
+
+    const qualify = (actionId: string): string =>
+      qualifyOwnActionId(pluginId, manifest.name, actionId);
+
+    return {
+      steps: steps.map((step): PluginSetupStepUiStatus => {
+        const { done, action } = step;
+        const check: PluginSetupStepCheck =
+          done.kind === "context"
+            ? { kind: "context", when: done.when }
+            : {
+                kind: "observed",
+                done:
+                  done.kind === "setting"
+                    ? presence[done.key] === "set"
+                    : accountStates.get(done.connection ?? "") === true,
+              };
+        let uiAction: PluginSetupStepUiAction | null;
+        if (action?.kind === "command") {
+          uiAction = { kind: "command", actionId: qualify(action.actionId) };
+        } else if (action?.kind === "settings") {
+          uiAction = { kind: "settings", key: action.key ?? null };
+        } else if (done.kind === "setting") {
+          uiAction = { kind: "settings", key: done.key };
+        } else if (done.kind === "account") {
+          uiAction = { kind: "settings", key: null };
+        } else {
+          uiAction = null;
+        }
+        return {
+          id: step.id,
+          title: step.title,
+          description: step.description ?? null,
+          check,
+          action: uiAction,
+          skipped: skipped.has(step.id),
+        };
+      }),
+    };
+  }
+
+  /**
+   * Skip or restore one setup step of `pluginId` in `projectId`. Refuses a step
+   * the plugin doesn't declare, so nothing is remembered for a step that can't
+   * be shown. The project's own views re-read; no other project's skips moved.
+   */
+  setSetupStepSkippedFromUi(
+    projectId: string,
+    pluginId: string,
+    stepId: string,
+    skipped: boolean
+  ): void {
+    const manifest = (this.plugins.get(pluginId) ?? this.disabledPlugins.get(pluginId))?.manifest;
+    const stepIds = (manifest?.contributes.setup ?? []).map((step) => step.id);
+    if (!stepIds.includes(stepId)) {
+      throw new Error(`Plugin "${pluginId}" declares no setup step "${stepId}"`);
+    }
+    const changed = setProjectPluginSetupStepSkipped(projectId, pluginId, stepId, skipped, stepIds);
+    if (!changed || this.disposed) return;
+    broadcastToProjectRenderers(projectId, CHANNELS.EVENTS_PUSH, {
+      name: "plugin:settings-changed" as const,
+      payload: { pluginId },
+    });
+  }
+
   /** {@link PluginSettingsManager.requiredStatusForUi}, for the renderer bridge. */
   async getRequiredSettingsStatusForUi(
     pluginId: string,
@@ -5910,7 +6410,7 @@ export class PluginService {
     // Everything from here to the matching decrement runs against half-swapped
     // contribution registries. Snapshots taken in that window are not
     // authoritative, and the renderer prunes persisted preferences off ones
-    // that claim to be — see the broadcaster's `isReplacingPlugin`.
+    // that claim to be — see the broadcaster's `isRegistryUnsettled`.
     this.devReplaceDepth++;
     const replacing = this.plugins.has(pluginId);
     try {
@@ -5995,6 +6495,8 @@ export class PluginService {
           instanceKey,
           current ? agentMcpSurfaceOf(current.manifest) : null
         );
+        // Nothing came back, so nothing is left to drive the agents it launched.
+        if (!current) forgetPluginLaunches(instanceKey);
       },
       // Grants are held per plugin instance and an instance key names its
       // project, so revoking by instance key purges exactly this project's
@@ -6016,6 +6518,9 @@ export class PluginService {
           ...this.reservedNames,
           ...this.disabledPlugins.keys(),
           ...this.blockedPlugins.keys(),
+          // Catalog-only packages that run per project: a repository plugin with
+          // the same id cannot run beside an enabled instance of one.
+          ...this.projectInstancePackages.keys(),
         ]),
       // The instance's most recent load/activation failure, so a row that
       // loaded but could not run says so instead of reading as clean (#12232).
@@ -6034,6 +6539,16 @@ export class PluginService {
           return false;
         }
       },
+      isEngineIncompatible: (range) => checkPluginEngineRange(this.appVersion, range) !== null,
+      getProjectHomeHolder: (projectId) =>
+        getProjectSurfaceSlots(projectId).projectHome?.defaultOptionId ?? null,
+      preflightApplication: ({ projectId, projectRoot, dir, manifest }) =>
+        preflightProjectApplication({
+          dir,
+          manifest,
+          projectRoot,
+          dataDir: this.pluginDataDir(makeProjectPluginInstanceKey(projectId, manifest.name)),
+        }),
     };
   }
 
@@ -6049,7 +6564,12 @@ export class PluginService {
    */
   async onProjectOpened(projectId: string, projectRoot: string): Promise<void> {
     if (this.disposed) return;
+    this.openProjectRoots.set(projectId, projectRoot);
     const opening = this.projectPlugins.onProjectOpened(projectId, projectRoot);
+    // Queued now, not after the repository scan: the epoch is read at request
+    // time, so a close that lands during the scan makes this a no-op, and
+    // `waitForProjectPlugins` can see the queue.
+    const installed = this.reconcileInstalledInstances(projectId, projectRoot);
     // The open is queued now, so a launch that was waiting for it can wait on
     // the queue instead.
     const waiters = this.projectOpenWaiters.get(projectId);
@@ -6057,7 +6577,7 @@ export class PluginService {
       this.projectOpenWaiters.delete(projectId);
       for (const wake of waiters) wake();
     }
-    await opening;
+    await Promise.all([opening, installed]);
     // Disposed meanwhile: the watcher sync below would build a fresh controller.
     if (this.disposed) return;
     await this.pushSnapshotToProject(projectId);
@@ -6096,6 +6616,15 @@ export class PluginService {
       // Woken by dispose: the getter would build a fresh controller.
       if (this.disposed) return false;
       await this.projectPlugins.whenSettled(projectId);
+      // Follow the queue to its end: an update can append behind the tail read here.
+      for (
+        let tail = this.installedInstanceChains.get(projectId);
+        tail;
+        tail = this.installedInstanceChains.get(projectId)
+      ) {
+        await tail.catch(() => {});
+        if (this.installedInstanceChains.get(projectId) === tail) break;
+      }
       return !this.disposed;
     })();
     try {
@@ -6121,13 +6650,33 @@ export class PluginService {
     pluginMcpGrantRegistry.revokeHeld(
       (instanceId) => projectIdFromPluginInstanceKey(instanceId) === projectId
     );
+    forgetPluginLaunchesWhere(
+      (instanceId) => projectIdFromPluginInstanceKey(instanceId) === projectId
+    );
     // Every plugin's statuses on the closed project's cards, app-global ones
     // included: they described worktrees nobody is looking at any more.
     this.retireWorktreeCardTarget(`p:${projectId}`);
+    // Every plugin's artifacts for this project, app-global ones included,
+    // before the controller-only early return below.
+    this.artifactService?.forgetProject(projectId);
+    this.openProjectRoots.delete(projectId);
+    this.unloadInstalledInstancesOfProject(projectId);
     for (const [pluginId, byProject] of [...this.pluginWorktreeCardStatuses]) {
       if (!byProject.delete(projectId)) continue;
       if (byProject.size === 0) this.pluginWorktreeCardStatuses.delete(pluginId);
       this.emitWorktreeCardStatuses(pluginId, projectId);
+    }
+    for (const [pluginId, byProject] of [...this.pluginWorktreeReviewChecks]) {
+      if (!byProject.delete(projectId)) continue;
+      if (byProject.size === 0) this.pluginWorktreeReviewChecks.delete(pluginId);
+      this.emitWorktreeReviewChecks(pluginId, projectId);
+    }
+    // Terminal chips likewise: the panes they marked went with the project.
+    this.closedTerminalStatusProjects.set(projectId, ++this.terminalStatusCloseRevision);
+    for (const [pluginId, byProject] of [...this.pluginTerminalStatuses]) {
+      if (!byProject.delete(projectId)) continue;
+      if (byProject.size === 0) this.pluginTerminalStatuses.delete(pluginId);
+      this.emitTerminalStatuses(pluginId, projectId);
     }
     if (!this.projectPluginController) return;
     await this.projectPluginController.onProjectClosed(projectId);
@@ -6174,27 +6723,72 @@ export class PluginService {
     await this.syncProjectPluginWatcher(projectId);
   }
 
-  /** This project's remembered answers about its plugin surface claims. */
-  getProjectSurfaceChoices(projectId: string): ProjectSurfaceChoices {
-    return readProjectSurfaceChoices(projectId);
+  /**
+   * Everything this project's views know about its slots — the arbitrated
+   * claims, the refusals and the user's answers — read in one synchronous pass
+   * so the revision describes all three.
+   *
+   * An unreadable answer store yields `choices: null` rather than failing the
+   * whole read: the claims and refusals are still worth showing, and the
+   * renderer already treats an unknown answer as "stay on stock, don't ask".
+   */
+  getProjectSurfacesSnapshot(projectId: string): ProjectSurfacesSnapshot {
+    let choices: ProjectSurfaceChoices | null;
+    try {
+      choices = readProjectSurfaceChoices(projectId);
+    } catch (err) {
+      console.warn("[PluginService] Could not read project surface choices:", err);
+      choices = null;
+    }
+    return {
+      projectId,
+      revision: getProjectSurfaceRevision(projectId),
+      slots: getProjectSurfaceSlots(projectId),
+      choices,
+    };
   }
 
   /**
-   * Remember whether a claimed slot shows the plugin's surface or the stock
-   * content, and tell every view of the project: the canvas and the settings
-   * pane that discloses the answer can be open in different windows.
+   * Remember the user's answer about a slot, and tell every view of the
+   * project: the canvas and the settings pane that discloses the answer can be
+   * open in different windows.
    */
   setProjectSurfaceChoice(
     projectId: string,
-    slot: ProjectSurfaceSlot,
-    choice: ProjectSurfaceChoice | null
-  ): ProjectSurfaceChoicesSnapshot {
-    const snapshot = { projectId, choices: writeProjectSurfaceChoice(projectId, slot, choice) };
-    broadcastToProjectRenderers(projectId, CHANNELS.EVENTS_PUSH, {
-      name: "plugin:project-surface-choices-changed",
-      payload: snapshot,
-    } satisfies EventBusEnvelope);
-    return snapshot;
+    slot: ProjectSurfaceSlotKey,
+    choice: ProjectSurfaceChoice | null,
+    optionId?: string
+  ): ProjectSurfacesSnapshot {
+    return this.setProjectSurfaceChoices(projectId, [{ slot, choice, optionId }]);
+  }
+
+  /**
+   * Remember an answer about several slots in one write — all of them or none
+   * — under one revision and one signal, so no view ever adopts half of it.
+   */
+  setProjectSurfaceChoices(
+    projectId: string,
+    updates: readonly ProjectSurfaceChoiceUpdate[]
+  ): ProjectSurfacesSnapshot {
+    writeProjectSurfaceChoices(projectId, updates);
+    bumpProjectSurfaceRevision(projectId);
+    this.publishProjectSurfaces([projectId]);
+    return this.getProjectSurfacesSnapshot(projectId);
+  }
+
+  /**
+   * The one project-scoped signal that a project's slot state changed — a
+   * claim, a release, a refusal or an answer. Carries only the revision; each
+   * view re-reads the snapshot, which main resolves from the view's own
+   * project.
+   */
+  private publishProjectSurfaces(projectIds: Iterable<string>): void {
+    for (const projectId of new Set(projectIds)) {
+      broadcastToProjectRenderers(projectId, CHANNELS.EVENTS_PUSH, {
+        name: "plugin:project-surfaces-changed",
+        payload: { projectId, revision: getProjectSurfaceRevision(projectId) },
+      } satisfies EventBusEnvelope);
+    }
   }
 
   /** The per-project visibility overlay for INSTALLED plugins. */
@@ -6357,6 +6951,276 @@ export class PluginService {
     await this.onProjectOpened(projectId, root);
   }
 
+  // ----- Installed packages that opt into per-project instances (#14103) -----
+  //
+  // An `instanceMode: "project"` package is one installed package and N
+  // instances, one per project it is enabled in. Each instance loads through the
+  // same path as a repository-local plugin, so its key, settings, storage,
+  // databases, connections and contributions are pinned to the project it was
+  // enabled in; nothing here resolves the focused project.
+
+  private installedInstanceEpoch(projectId: string, instanceKey: string): string {
+    return `${this.installedInstanceProjectEpochs.get(projectId) ?? 0}:${this.installedInstanceEpochs.get(instanceKey) ?? 0}`;
+  }
+
+  private serializeInstalledInstances(projectId: string, task: () => Promise<void>): Promise<void> {
+    const prior = this.installedInstanceChains.get(projectId) ?? Promise.resolve();
+    const next = prior.catch(() => {}).then(task);
+    this.installedInstanceChains.set(projectId, next);
+    const settle = (): void => {
+      if (this.installedInstanceChains.get(projectId) === next) {
+        this.installedInstanceChains.delete(projectId);
+      }
+    };
+    next.then(settle, settle);
+    return next;
+  }
+
+  /**
+   * Load every instance this project has enabled. The empty path is two cheap
+   * checks: no catalogued package, or no enablement in this project, returns
+   * before anything is queued.
+   */
+  private async reconcileInstalledInstances(projectId: string, projectRoot: string): Promise<void> {
+    if (this.projectInstancePackages.size === 0) return;
+    const disabled = this.records.getDisabledIds();
+    const wanted = this.projectInstanceStore
+      .listForProject(projectId)
+      .filter((id) => this.projectInstancePackages.has(id) && !disabled.has(id));
+    if (wanted.length === 0) return;
+    const requested = wanted.map((id) => {
+      const key = makeInstalledProjectInstanceKey(projectId, id);
+      return { id, key, epoch: this.installedInstanceEpoch(projectId, key) };
+    });
+    await this.serializeInstalledInstances(projectId, async () => {
+      for (const { id, key, epoch } of requested) {
+        if (this.disposed) return;
+        if (epoch !== this.installedInstanceEpoch(projectId, key)) continue;
+        await this.loadInstalledInstance(projectId, projectRoot, id, epoch);
+      }
+    });
+  }
+
+  private async reconcileInstalledInstancesForOpenProjects(): Promise<void> {
+    if (this.projectInstancePackages.size === 0) return;
+    for (const [projectId, projectRoot] of [...this.openProjectRoots]) {
+      if (this.openProjectRoots.get(projectId) !== projectRoot) continue;
+      try {
+        await this.reconcileInstalledInstances(projectId, projectRoot);
+      } catch (err) {
+        console.error(`[PluginService] Loading installed instances for ${projectId} threw:`, err);
+      }
+    }
+  }
+
+  private async loadInstalledInstance(
+    projectId: string,
+    projectRoot: string,
+    manifestId: string,
+    epoch: string
+  ): Promise<boolean> {
+    const pkg = this.projectInstancePackages.get(manifestId);
+    if (!pkg) return false;
+    const key = makeInstalledProjectInstanceKey(projectId, manifestId);
+    if (this.plugins.has(key)) return this.installedInstanceKeys.has(key);
+    const isCurrent = (): boolean =>
+      !this.disposed &&
+      this.installedInstanceEpoch(projectId, key) === epoch &&
+      this.projectInstancePackages.get(manifestId) === pkg;
+    let ok = false;
+    try {
+      ok = await this.loadProjectPluginInstance({
+        projectId,
+        projectRoot,
+        dir: pkg.dir,
+        dirName: path.basename(pkg.dir),
+        manifest: pkg.manifest,
+        isCurrent,
+        installedInstance: true,
+      });
+    } catch (err) {
+      console.error(
+        `[PluginService] Loading "${manifestId}" into project ${projectId} threw:`,
+        err
+      );
+    }
+    if (!ok) return false;
+    // A repository-local load of the same identity can be in flight at once; the
+    // registry holds whichever landed, and only ours is ours to track and unload.
+    if (this.plugins.get(key)?.dir !== pkg.dir) return false;
+    this.installedInstanceKeys.add(key);
+    // A close, disable or package replacement landed while this was loading. Its
+    // teardown could not see an instance that was not registered yet.
+    if (!isCurrent()) this.dropInstalledInstance(key, false);
+    return true;
+  }
+
+  private dropInstalledInstance(instanceKey: string, purgeGrants: boolean): void {
+    this.installedInstanceKeys.delete(instanceKey);
+    this.unloadPlugin(instanceKey);
+    if (purgeGrants) {
+      const durable = getPluginCapabilityConsentService().revokeAllForPlugin(instanceKey);
+      if (!durable) {
+        console.error(
+          `[PluginService] capability grants for "${instanceKey}" were revoked in memory but could not be persisted — they may return on next launch`
+        );
+      }
+    }
+  }
+
+  /** A project stopped being live: its instances go, every other project's stay. */
+  private unloadInstalledInstancesOfProject(projectId: string): void {
+    this.installedInstanceProjectEpochs.set(
+      projectId,
+      (this.installedInstanceProjectEpochs.get(projectId) ?? 0) + 1
+    );
+    for (const key of [...this.installedInstanceKeys]) {
+      if (projectIdFromPluginInstanceKey(key) === projectId) this.dropInstalledInstance(key, false);
+    }
+  }
+
+  /**
+   * Take every instance of a package down. An update purges their grants because
+   * the code behind them is about to change; an uninstall also forgets where the
+   * package was enabled. A plain disable keeps both.
+   */
+  private unloadPackageInstances(
+    manifestId: string,
+    opts: { uninstall: boolean; purge: boolean }
+  ): void {
+    for (const key of [...this.installedInstanceKeys]) {
+      if (pluginManifestIdFromInstanceKey(key) !== manifestId) continue;
+      this.installedInstanceEpochs.set(key, (this.installedInstanceEpochs.get(key) ?? 0) + 1);
+      this.dropInstalledInstance(key, opts.purge);
+    }
+    // Instances of a closed project are unloaded but keep their approvals; the
+    // code behind them is about to change or go, so those are purged too.
+    if (opts.purge) {
+      for (const projectId of this.projectInstanceStore.listForPackage(manifestId)) {
+        getPluginCapabilityConsentService().revokeAllForPlugin(
+          makeInstalledProjectInstanceKey(projectId, manifestId)
+        );
+      }
+    }
+    if (opts.uninstall) {
+      this.projectInstanceStore.removePackage(manifestId);
+      this.projectInstancePackages.delete(manifestId);
+    }
+  }
+
+  /** Load a package's instances again in every still-open project that enabled it. */
+  private async reloadPackageInstances(manifestId: string): Promise<void> {
+    if (this.disposed || !this.projectInstancePackages.has(manifestId)) return;
+    for (const projectId of this.projectInstanceStore.listForPackage(manifestId)) {
+      let project: { path: string; status?: string } | null | undefined;
+      try {
+        project = projectStore.getProjectById(projectId);
+      } catch {
+        project = undefined;
+      }
+      if (!project || project.status === "closed") continue;
+      await this.reconcileInstalledInstances(projectId, project.path);
+    }
+  }
+
+  /**
+   * Enable or disable an installed package in one project. The choice is
+   * persisted before anything executes, and only that project's instance is
+   * touched.
+   */
+  async setProjectInstanceEnabled(
+    projectId: string,
+    projectRoot: string,
+    manifestId: string,
+    enabled: boolean
+  ): Promise<void> {
+    if (!isProjectWorkspaceId(projectId)) {
+      throw new Error(`setProjectInstanceEnabled: "${projectId}" is not a project id`);
+    }
+    if (!this.projectInstancePackages.has(manifestId)) {
+      throw new Error(`"${manifestId}" is not an installed package that runs per project`);
+    }
+    this.projectInstanceStore.setEnabled(projectId, manifestId, enabled);
+    if (enabled) {
+      await this.reconcileInstalledInstances(projectId, projectRoot);
+    } else {
+      const key = makeInstalledProjectInstanceKey(projectId, manifestId);
+      this.installedInstanceEpochs.set(key, (this.installedInstanceEpochs.get(key) ?? 0) + 1);
+      // Purged even when the project is closed and the instance is not loaded:
+      // the approvals are the instance's, not the runtime's.
+      this.dropInstalledInstance(key, true);
+    }
+    this.broadcaster.broadcastProvenanceChanged();
+  }
+
+  /**
+   * Delete every per-project instance's user-scope settings and secrets, local
+   * settings, account tokens and user-scope storage for one package. Found by
+   * filename rather than by the enablement list, which an uninstall has already
+   * cleared and which never held projects the package was enabled in before.
+   */
+  private async wipeInstalledInstanceData(manifestId: string): Promise<void> {
+    if (!SCOPED_PLUGIN_NAME_PATTERN.test(manifestId)) return;
+    const isInstanceFile = (name: string): boolean => {
+      if (!name.endsWith(".json")) return false;
+      const parsed = parseProjectPluginInstanceKey(name.slice(0, -".json".length));
+      return parsed?.installed === true && parsed.manifestId === manifestId;
+    };
+    const listDir = async (dir: string): Promise<string[]> => {
+      try {
+        return await fs.readdir(dir);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
+        throw err;
+      }
+    };
+    const settingsRoot = this.settings.settingsRoot();
+    const dirs = [settingsRoot, path.join(settingsRoot, "accounts"), this.storage.storageRoot()];
+    const localRoot = path.join(settingsRoot, "local");
+    for (const projectId of await listDir(localRoot)) {
+      if (isProjectWorkspaceId(projectId)) dirs.push(path.join(localRoot, projectId));
+    }
+    for (const dir of dirs) {
+      for (const name of await listDir(dir)) {
+        if (isInstanceFile(name)) await wipeSettingsFile(path.join(dir, name));
+      }
+    }
+  }
+
+  /** Forget every enablement in a project that was removed from Daintree. */
+  forgetProjectInstances(projectId: string): void {
+    this.unloadInstalledInstancesOfProject(projectId);
+    this.projectInstanceStore.removeProject(projectId);
+  }
+
+  /** Project ids a package is enabled in. */
+  getProjectInstanceProjects(manifestId: string): string[] {
+    return this.projectInstanceStore.listForPackage(manifestId);
+  }
+
+  /**
+   * How an installed or builtin package with this manifest id runs, so a caller
+   * can tell an id that may be turned on per project from one that never can.
+   * `"project-unavailable"` is an instanced package switched off in
+   * Preferences or refused by the blocklist: it is out of the catalog until
+   * that changes.
+   */
+  getInstalledPackageMode(
+    manifestId: string
+  ): "project" | "project-unavailable" | "singleton" | null {
+    if (this.projectInstancePackages.has(manifestId)) {
+      // A disable is persisted before its transition leaves the catalog.
+      return this.records.getDisabledIds().has(manifestId) ? "project-unavailable" : "project";
+    }
+    const parked = this.disabledPlugins.get(manifestId) ?? this.blockedPlugins.get(manifestId);
+    if (parked) {
+      return parked.manifest.instanceMode === "project" && !parked.isBuiltin
+        ? "project-unavailable"
+        : "singleton";
+    }
+    return this.plugins.has(manifestId) ? "singleton" : null;
+  }
+
   /**
    * Load one project plugin under its instance key, bound to its project.
    * Returns false when the manifest was rejected at load.
@@ -6368,6 +7232,7 @@ export class PluginService {
     dirName: string;
     manifest: Readonly<PluginManifest>;
     isCurrent?: () => boolean;
+    installedInstance?: boolean;
   }): Promise<boolean> {
     // `loadPlugin` waits on the same gate, but a project load can sit there for
     // seconds on a relaunch (#12996) — long enough for its project to close or
@@ -6377,7 +7242,23 @@ export class PluginService {
       await this.whenProtocolReady();
       if (this.disposed || args.isCurrent?.() === false) return false;
     }
-    const instanceKey = makeProjectPluginInstanceKey(args.projectId, args.manifest.name);
+    const instanceKey = args.installedInstance
+      ? makeInstalledProjectInstanceKey(args.projectId, args.manifest.name)
+      : makeProjectPluginInstanceKey(args.projectId, args.manifest.name);
+    // A repository plugin and an installed package's instance with the same
+    // manifest id are two identities with separate grants and data, but only one
+    // of them runs in a project: whichever landed first keeps it.
+    const siblingKey = args.installedInstance
+      ? makeProjectPluginInstanceKey(args.projectId, args.manifest.name)
+      : makeInstalledProjectInstanceKey(args.projectId, args.manifest.name);
+    if (this.plugins.has(siblingKey)) {
+      console.error(
+        args.installedInstance
+          ? `[PluginService] "${args.manifest.name}" is enabled in project ${args.projectId} but a repository-local plugin with that id is already running there — not loading the installed package`
+          : `[PluginService] Project ${args.projectId} ships "${args.manifest.name}" but the installed package with that id is already running there — not loading the repository copy`
+      );
+      return false;
+    }
     // Re-derive the parent from the realpath-resolved directory discovery
     // returned, so the load reads through the same resolved path the symlink
     // containment check passed on.
@@ -6390,6 +7271,8 @@ export class PluginService {
       origin: "project",
       instanceKey,
       binding: { projectId: args.projectId, projectRoot: args.projectRoot },
+      checkedManifest: args.manifest,
+      installedInstance: args.installedInstance,
     });
     if (!loaded) {
       this.writePluginFileLog(
@@ -6403,6 +7286,27 @@ export class PluginService {
       const suppressed = this.fileLogLimiter.drain(instanceKey);
       if (suppressed) this.writePluginFileLogSummary(instanceKey, suppressed);
       return false;
+    }
+
+    // The registrations above are already published, so a load that was
+    // overtaken while `loadPlugin` ran is taken back down before it can activate.
+    if (args.installedInstance && args.isCurrent?.() === false) {
+      this.unloadPlugin(instanceKey);
+      return false;
+    }
+    // Both loads passed the check above while the other was still in flight.
+    // The repository copy keeps the project; the installed instance stands down.
+    if (this.plugins.has(siblingKey)) {
+      const installedKey = args.installedInstance ? instanceKey : siblingKey;
+      console.error(
+        `[PluginService] "${args.manifest.name}" loaded from the repository and the installed package at once in project ${args.projectId} — keeping the repository copy`
+      );
+      if (args.installedInstance) {
+        this.unloadPlugin(installedKey);
+        return false;
+      }
+      this.installedInstanceKeys.delete(installedKey);
+      this.unloadPlugin(installedKey);
     }
 
     const activatesOnStartup = this.shouldActivateOnStartup(loaded.manifest);
@@ -6459,6 +7363,10 @@ export class PluginService {
    * persisted intent is read here too.
    */
   private settlePluginReload(pluginId: string): void {
+    // A settled reload speaks for its plugin's themes whether or not anything
+    // loaded, so it counts as a removal for the sync it schedules.
+    if (this.pluginThemeReloads.delete(pluginId)) this.pluginThemeRemovals.add(pluginId);
+    this.schedulePluginThemeSync();
     const current = this.records.getDisabledIds().has(pluginId)
       ? undefined
       : this.plugins.get(pluginId);
@@ -6466,6 +7374,39 @@ export class PluginService {
       pluginId,
       current ? agentMcpSurfaceOf(current.manifest) : null
     );
+    if (!current) forgetPluginLaunches(pluginId);
+  }
+
+  /**
+   * Settle the theme selection against the catalog and publish the catalog,
+   * once per turn however many plugins changed (#13832). Deferred so a disable
+   * has finished moving the plugin aside before the selection is judged, and
+   * skipped after {@link dispose}, whose unload sweep must not read as every
+   * plugin going away.
+   */
+  private schedulePluginThemeSync(): void {
+    if (this.disposed || this.pluginThemeSyncQueued) return;
+    this.pluginThemeSyncQueued = true;
+    queueMicrotask(() => {
+      this.pluginThemeSyncQueued = false;
+      if (this.disposed) return;
+      const removals = new Set(this.pluginThemeRemovals);
+      this.pluginThemeRemovals.clear();
+      let fallbackSchemeId: string | null = null;
+      try {
+        fallbackSchemeId = reconcilePluginThemeSelection(
+          (owner) =>
+            !this.pluginThemeReloads.has(owner) &&
+            (this.pluginThemeCatalogReady || this.plugins.has(owner) || removals.has(owner))
+        );
+      } catch (err) {
+        console.error("[PluginService] Failed to settle the plugin theme selection:", err);
+      }
+      // Renderers pull the catalog on mount, so only a change is worth a push.
+      if (!this.pluginThemeCatalogDirty && fallbackSchemeId === null) return;
+      this.pluginThemeCatalogDirty = false;
+      this.broadcaster.scheduleThemesBroadcast(fallbackSchemeId);
+    });
   }
 
   unloadPlugin(pluginId: string, options?: { reload: true }): void {
@@ -6492,11 +7433,22 @@ export class PluginService {
       }
       agentMcpEndpointRegistry.unregisterPlugin(pluginId);
     });
+    // The agents it launched stay a reloading plugin's for the same reason
+    // (#14018): they keep running, and a reload that ended their reach would
+    // strand them at the next prompt. The record names the instance, not a
+    // generation, so the code loaded next is held to its own capabilities and
+    // consent on every call. Any other unload ends the reach.
+    if (!options?.reload) {
+      runUnloadStep(pluginId, "forgetPluginLaunches", () => forgetPluginLaunches(pluginId));
+    }
     // Drop activation state so a runtime reload (e.g. dev-mode re-scan) can
     // re-activate from scratch — otherwise the fast-path `activatedPlugins`
     // hit would short-circuit `_doActivate` after the new manifest landed.
     this.activatedPlugins.delete(pluginId);
     this.activationPromises.delete(pluginId);
+    // Before the plugin's own cleanup runs: no longer activated, it can start
+    // no new service call, and the calls it made or is answering settle now.
+    runUnloadStep(pluginId, "retireServices", () => this.services.retireInstance(pluginId));
     const cleanup = this.cleanupMap.get(pluginId);
     if (cleanup) {
       try {
@@ -6507,6 +7459,7 @@ export class PluginService {
       this.cleanupMap.delete(pluginId);
     }
     this.flushPluginEventCleanups(pluginId);
+    this.stopEventRoutes(pluginId);
 
     // Capture the unloaded plugin's declared decoration scopes before clearing
     // the registry so we can tell any renderer that was showing them to
@@ -6530,110 +7483,19 @@ export class PluginService {
     // are idempotent — already-cleared keys are silent no-ops. Provider and
     // impl steps are split so a throw in the descriptor unregister doesn't
     // strand the impl unregister and vice versa.
-    // Before the registries clear: a guest runtime is code of this plugin's
-    // running inside the user's previewed site, reading its DOM over a live CDP
-    // binding. The bind-time enablement check keeps it out of the next
-    // document; nothing but this takes it out of the one on screen.
-    runUnloadStep(pluginId, "disposeSitePreviewBindings", () => {
-      void peekSitePreviewBridge()
-        ?.disposeForPlugin(pluginId)
-        .catch(() => undefined);
-    });
     runUnloadStep(pluginId, "removeHandlers", () => this.removeHandlers(pluginId));
     runUnloadStep(pluginId, "unregisterPluginActions", () =>
       this.unregisterPluginActions(pluginId)
     );
-    runUnloadStep(pluginId, "unregisterPluginMenuItems", () => unregisterPluginMenuItems(pluginId));
-    runUnloadStep(pluginId, "unregisterPluginKeybindings", () =>
-      unregisterPluginKeybindings(pluginId)
-    );
-    runUnloadStep(pluginId, "scheduleKeybindingsBroadcast", () =>
-      this.broadcaster.scheduleKeybindingsBroadcast(true)
-    );
-    runUnloadStep(pluginId, "unregisterPluginContextMenuItems", () =>
-      unregisterPluginContextMenuItems(pluginId)
-    );
-    runUnloadStep(pluginId, "scheduleContextMenuItemsBroadcast", () =>
-      this.broadcaster.scheduleContextMenuItemsBroadcast(true)
-    );
-    runUnloadStep(pluginId, "unregisterWhenClausePlugin", () =>
-      unregisterWhenClausePlugin(pluginId)
-    );
-    runUnloadStep(pluginId, "unregisterPluginToolbarButtons", () =>
-      unregisterPluginToolbarButtons(pluginId)
-    );
-    runUnloadStep(pluginId, "scheduleToolbarButtonsBroadcast", () =>
-      this.broadcaster.scheduleToolbarButtonsBroadcast(true)
-    );
-    runUnloadStep(pluginId, "unregisterPluginPanelKinds", () =>
-      unregisterPluginPanelKinds(pluginId)
-    );
-    // Its own step (#9322): the per-subscription disposers already ran via
-    // `flushPluginEventCleanups`, but a disposer lost to an earlier throw would
-    // otherwise strand a listener holding this plugin's closure alive.
-    runUnloadStep(pluginId, "clearPanelLifecycleListeners", () =>
-      this.panelLifecycleBroker.clearPlugin(pluginId)
-    );
-    runUnloadStep(pluginId, "cancelPanelReloads", () =>
-      this.panelReloadDispatcher.cancelPlugin(pluginId)
-    );
-    runUnloadStep(pluginId, "unregisterForgeProviders", () => unregisterForgeProviders(pluginId));
-    runUnloadStep(pluginId, "unregisterForgeProviderImpls", () =>
-      unregisterForgeProviderImpls(pluginId)
-    );
-    // Mirror the load-path notify (loadPlugin, ~line 1152): a runtime disable
-    // removes forge descriptors/impls from the registry, so workspace hosts
-    // whose PR polling resolved (or no-matched) against this provider must
-    // re-evaluate. A spurious notify for a plugin that contributed no forge
-    // provider is harmless — PullRequestService only invalidates a cached
-    // no-match. Without this, live-disable left stale provider resolution.
-    runUnloadStep(pluginId, "notifyForgeProviderRegistryUpdated", () =>
-      this.workspaceClient?.notifyForgeProviderRegistryUpdated()
-    );
-    runUnloadStep(pluginId, "unregisterFileDecorationProviders", () =>
-      unregisterFileDecorationProviders(pluginId)
-    );
-    runUnloadStep(pluginId, "unregisterFileDecorationProviderImpls", () =>
-      unregisterFileDecorationProviderImpls(pluginId)
-    );
-    runUnloadStep(pluginId, "unregisterPluginSkills", () => unregisterPluginSkills(pluginId));
-    // Recipes retract on unload/disable/reload, but their sidecar metadata does
-    // NOT — only an explicit successful uninstall purges that (#11860).
-    runUnloadStep(pluginId, "unregisterPluginRecipes", () => unregisterPluginRecipes(pluginId));
-    runUnloadStep(pluginId, "scheduleRecipesBroadcast", () =>
-      this.broadcaster.scheduleRecipesBroadcast(true)
-    );
-    runUnloadStep(pluginId, "unregisterPluginTours", () => unregisterPluginTours(pluginId));
-    runUnloadStep(pluginId, "scheduleToursBroadcast", () =>
-      this.broadcaster.scheduleToursBroadcast()
-    );
-    runUnloadStep(pluginId, "unregisterPluginAgents", () => unregisterPluginAgents(pluginId));
-    runUnloadStep(pluginId, "scheduleAgentsBroadcast", () =>
-      this.broadcaster.scheduleAgentsBroadcast(true)
-    );
-    // Re-mirror the (now-smaller) registry to the pty-host so it stops resolving
-    // detection patterns for the unloaded plugin's agents (#10587).
-    runUnloadStep(pluginId, "syncPluginAgentRegistryToPtyHost", () =>
-      getPtyClient()?.syncPluginAgentRegistry()
-    );
-    runUnloadStep(pluginId, "unregisterPluginCustomIcons", () => {
-      if (unregisterPluginCustomIcons(pluginId)) this.broadcaster.schedulePluginIconsBroadcast();
-    });
-    runUnloadStep(pluginId, "unregisterPluginProcessTools", () =>
-      unregisterPluginProcessTools(pluginId)
-    );
-    // Re-mirror the (now-smaller) registry so the pty-host stops resolving the
-    // unloaded plugin's command detections. A discrete step from the unregister
-    // above per the unload-cascade contract — a throw in one can't strand the
-    // other (#11613).
-    runUnloadStep(pluginId, "syncPluginProcessToolRegistryToPtyHost", () =>
-      getPtyClient()?.syncPluginProcessToolRegistry()
-    );
+    this.contributions.unregister(pluginId, options);
     // Subscriber disposers already fired in flushPluginEventCleanups() above;
     // this drops any leftover subscriber-set entry and the in-memory settings
     // store caches so a reload starts from disk.
     runUnloadStep(pluginId, "clearPluginSettingsState", () =>
       this.settings.clearPluginSettingsState(pluginId)
+    );
+    runUnloadStep(pluginId, "clearPluginAccountState", () =>
+      this.accounts.clearPluginState(pluginId)
     );
     // Same teardown for private storage: drops leftover subscriber-set entries
     // and the in-memory storage store caches so a reload starts from disk. A
@@ -6730,20 +7592,7 @@ export class PluginService {
     // the signal to retire it. Emitted after both deletes, so the renderer
     // receives a `null` (or, under a dev session, a null `viewGeneration`).
     this.emitRuntimeStatus(pluginId);
-    // Drop the project-scope index entry with the instance it described.
-    // Leaving it behind would keep filtering broadcasts against a plugin id
-    // that no longer exists, and would resurface if the id were reloaded
-    // under a different project.
-    runUnloadStep(pluginId, "clearPluginContributionScope", () =>
-      clearPluginContributionScope(pluginId)
-    );
-
-    // A surface must not outlive the plugin that draws it: the claimed view's
-    // module is unimportable the moment its authority is dropped, so a
-    // surviving claim would leave the project rendering a permanently-failing
-    // view where its stock content used to be. Trust revoke unloads through
-    // this same cascade, so revoking trust releases the slot too.
-    runUnloadStep(pluginId, "releasePluginSurfaces", () => releasePluginSurfaces(pluginId));
+    this.contributions.releaseScope(pluginId);
 
     // Drop any live panel badges this plugin set and tell the renderer to clear
     // them (#10585). Only broadcast when the plugin actually had badges so an
@@ -6752,7 +7601,16 @@ export class PluginService {
       runUnloadStep(pluginId, "clearRunningActions", () => this.emitActionsRunning(pluginId));
     }
 
-    if (this.pluginBadges.delete(pluginId)) {
+    // The clears below are the plugin's last word, so a coalesced badge or
+    // activity publication still waiting is dropped. One may have been the
+    // clear of the last badge a renderer still shows, so it forces the clear
+    // even when the map is already empty (#14128).
+    let discarded = new Set<string>();
+    runUnloadStep(pluginId, "discardPendingState", () => {
+      discarded = getPluginStatePublisher().discard(pluginId);
+    });
+
+    if (this.pluginBadges.delete(pluginId) || discarded.has(PLUGIN_STATE_PANEL_BADGES)) {
       runUnloadStep(pluginId, "clearPanelBadges", () => {
         broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
           name: "plugin:panel-badges-cleared",
@@ -6765,12 +7623,36 @@ export class PluginService {
       runUnloadStep(pluginId, "clearToolbarBadges", () => this.emitToolbarBadges(pluginId));
     }
 
+    if (this.pluginToolbarStates.delete(pluginId)) {
+      runUnloadStep(pluginId, "clearToolbarStates", () => this.emitToolbarStates(pluginId));
+    }
+
+    if (this.pluginPanelActivity.delete(pluginId) || discarded.has(PLUGIN_STATE_PANEL_ACTIVITY)) {
+      runUnloadStep(pluginId, "clearPanelActivity", () => this.emitPanelActivity(pluginId));
+    }
+
+    // After the plugin left `plugins`, so an abort listener that starts again
+    // gets an inert handle instead of a task nothing will ever finish.
+    runUnloadStep(pluginId, "interruptTasks", () => this.pluginTasks.interrupt(pluginId));
+
+    // After the plugin left `plugins`, so a transfer racing the unload cannot
+    // commit into a cache whose owner is gone.
+    runUnloadStep(pluginId, "forgetArtifacts", () => this.artifactService?.forgetPlugin(pluginId));
+
     if (this.pluginContextKeys.delete(pluginId)) {
       runUnloadStep(pluginId, "clearContextKeys", () => this.emitContextKeys(pluginId));
     }
 
     runUnloadStep(pluginId, "clearWorktreeCardStatuses", () =>
       this.clearPluginWorktreeCardStatuses(pluginId)
+    );
+
+    runUnloadStep(pluginId, "clearWorktreeReviewChecks", () =>
+      this.clearPluginWorktreeReviewChecks(pluginId)
+    );
+
+    runUnloadStep(pluginId, "clearTerminalStatuses", () =>
+      this.clearPluginTerminalStatuses(pluginId)
     );
 
     runUnloadStep(pluginId, "clearPanelMenus", () => this.clearPluginPanelMenus(pluginId));
@@ -6795,6 +7677,30 @@ export class PluginService {
    * Memory is joined by pid to `app.getAppMetrics()` in the governance
    * service, not here.
    */
+  /**
+   * What every plugin instance this project owns is doing right now, for the
+   * sleep paths (#14093). Synchronous, so a sleep can ask it again at each of
+   * its gates. App-global plugins are left out: closing a project never unloads
+   * them, so nothing they run is the project's to protect or report.
+   */
+  getProjectPluginWork(projectId: string): ProjectPluginWork[] {
+    const pluginIds = new Set([...this.plugins.keys(), ...this.pluginTasks.pluginIds()]);
+    const work: ProjectPluginWork[] = [];
+    for (const pluginId of pluginIds) {
+      if (projectIdFromPluginInstanceKey(pluginId) !== projectId) continue;
+      const liveTasks = this.pluginTasks
+        .snapshot(pluginId)
+        .filter((task) => task.state !== "interrupted")
+        .map((task) => ({ id: task.id, pluginName: task.pluginName, title: task.title }));
+      const bridge = this.pluginWorkers.get(pluginId)?.bridge;
+      const pendingCalls = bridge ? bridge.pendingInvokeCount + bridge.pendingHostCallCount : 0;
+      const runningProcesses = this.processManager?.runningCount(pluginId) ?? 0;
+      if (liveTasks.length === 0 && pendingCalls === 0 && runningProcesses === 0) continue;
+      work.push({ pluginId, liveTasks, pendingCalls, runningProcesses });
+    }
+    return work;
+  }
+
   getWorkerGovernanceSnapshots(): WorkerResourceSnapshot[] {
     const snapshots: WorkerResourceSnapshot[] = [];
     for (const [pluginId, plugin] of this.plugins) {
@@ -6932,6 +7838,7 @@ export class PluginService {
       pendingHostCallCount: entry.bridge.pendingHostCallCount,
       managedProcessCount: this.processManager?.runningCount(pluginId) ?? 0,
       fsWatcherCount: this.pluginFsWatchers.get(pluginId)?.size ?? 0,
+      liveTaskCount: this.pluginTasks.liveCount(pluginId),
       lastActivityAt: this.pluginWorkerActivity.get(pluginId) ?? null,
       now: opts?.now ?? Date.now(),
       idleDisposeMs: opts?.idleDisposeMs,
@@ -6960,6 +7867,9 @@ export class PluginService {
     this.setWorkerStatus(pluginId, "stopped", "deactivated", null);
     this.activatedPlugins.delete(pluginId);
     this.activationPromises.delete(pluginId);
+    // The services stay declared, so the next call starts a fresh worker; the
+    // ones it bound, and any call a protocol violation cut short, go now.
+    runUnloadStep(pluginId, "retireServices", () => this.services.retireInstance(pluginId));
     const cleanup = this.cleanupMap.get(pluginId);
     if (cleanup) {
       try {
@@ -6982,6 +7892,15 @@ export class PluginService {
     );
     runUnloadStep(pluginId, "unregisterFileDecorationProviderImpls", () =>
       unregisterFileDecorationProviderImpls(pluginId)
+    );
+    runUnloadStep(pluginId, "unregisterWorktreeSetupStepHandlers", () =>
+      unregisterWorktreeSetupStepHandlers(pluginId)
+    );
+    runUnloadStep(pluginId, "unregisterContextProviderImpls", () =>
+      unregisterContextProviderImpls(pluginId)
+    );
+    runUnloadStep(pluginId, "unregisterWorktreeDeleteNotesBinding", () =>
+      unregisterWorktreeDeleteNotesBinding(pluginId)
     );
     runUnloadStep(pluginId, "cancelUiPrompts", () =>
       this.promptDispatcher.cancelForPlugin(pluginId)
@@ -7061,6 +7980,35 @@ export class PluginService {
   }
 
   /**
+   * The loaded instance's `agentMcp` endpoint that serves tools from one of its
+   * own `mcpServers`, with that server's entry and the instance's directory —
+   * everything the host needs to start the server on this backend and serve
+   * the chosen tools. `undefined` for an instance with no such endpoint, or one
+   * without `mcp:expose`, which the agent route never serves.
+   */
+  findAgentMcpServerSource(pluginInstanceId: string): AgentMcpServerSourceLookup | undefined {
+    const plugin = this.plugins.get(pluginInstanceId);
+    if (!plugin || !plugin.manifest.capabilities?.includes("mcp:expose")) return undefined;
+    const endpoint = (plugin.manifest.contributes.agentMcp ?? []).find((entry) => entry.source);
+    const source = endpoint?.source;
+    if (!endpoint || !source) return undefined;
+    const contribution = plugin.manifest.contributes.mcpServers.find(
+      (server) => server.id === source.mcpServer
+    );
+    if (!contribution) return undefined;
+    return {
+      endpointId: endpoint.id,
+      groups: (endpoint.groups ?? []).map((group) => ({ id: group.id, access: group.access })),
+      source,
+      contribution,
+      pluginDir: plugin.dir,
+      declaredQueryNames: (plugin.manifest.contributes.databases ?? []).flatMap((database) =>
+        (database.queries ?? []).map((query) => query.name)
+      ),
+    };
+  }
+
+  /**
    * Resolve the consent-facing metadata for a loaded plugin — the display name
    * and declared capabilities the plugin-MCP `tools/call` handler folds into the
    * consent prompt and tier derivation. Returns `undefined` when the plugin is
@@ -7091,7 +8039,7 @@ export class PluginService {
   getPluginDisplayName(pluginId: string): string {
     const manifest = this.plugins.get(pluginId)?.manifest;
     if (!manifest) return pluginManifestIdFromInstanceKey(pluginId);
-    return manifest.displayName ?? manifest.name;
+    return manifest.displayName || manifest.name;
   }
 
   /**
@@ -7150,12 +8098,9 @@ export class PluginService {
       const blocklisted = blocklistReason !== undefined;
       const pendingRestart = blocklisted ? false : isRunning ? disabled : !disabled;
       const pluginDanger = computePluginDanger(p.manifest);
-      const settingsViewPath = isRunning ? this.settingsViewPath(instanceId) : undefined;
-      const settingsView = settingsViewPath !== undefined ? { settingsViewPath } : {};
       if (p.isBuiltin) {
         return {
           ...identity,
-          ...settingsView,
           manifest: p.manifest,
           dir: p.dir,
           loadedAt,
@@ -7177,7 +8122,6 @@ export class PluginService {
       const record = isProject ? undefined : installed[p.manifest.name];
       return {
         ...identity,
-        ...settingsView,
         manifest: p.manifest,
         dir: p.dir,
         loadedAt,
@@ -7223,7 +8167,33 @@ export class PluginService {
     // never ran (`loadedAt: 0`); the reason drives the "Blocked" badge/banner.
     const blocked = [...this.blockedPlugins].map(([id, p]) => toInfo(id, p, 0, false, p.reason));
 
-    return [...running, ...skipped, ...blocked];
+    // Installed packages that run one instance per project. The package itself
+    // never loads, so its row would otherwise exist only while it is switched
+    // off — and re-enabling one used to drop it from the list entirely. An
+    // enable in flight briefly holds it in both the catalog and the disabled
+    // map; the disabled row stands in until the transition settles.
+    const catalog = [...this.projectInstancePackages]
+      .filter(([id]) => !this.disabledPlugins.has(id) && !this.blockedPlugins.has(id))
+      .map(([id, p]) => ({
+        ...toInfo(
+          id,
+          { manifest: p.manifest as PluginManifest, dir: p.dir, isBuiltin: false },
+          0,
+          false
+        ),
+        // Not running is the steady state of a catalog entry, not a load waiting on a restart.
+        pendingRestart: false,
+      }));
+
+    return [...running, ...skipped, ...blocked, ...catalog].map((info) =>
+      info.origin === "global" && !info.isBuiltin && info.manifest.instanceMode === "project"
+        ? {
+            ...info,
+            instanceMode: "project" as const,
+            enabledInProjects: this.projectInstanceStore.listForPackage(info.instanceId),
+          }
+        : info
+    );
   }
 
   /**
@@ -7237,7 +8207,13 @@ export class PluginService {
    * roots without exposing the private `plugins` map.
    */
   getPluginRootByAuthority(authority: string): string | undefined {
-    return this.pluginRootsByAuthority.get(authority);
+    return this.pluginRootsByAuthority.get(authority)?.dir;
+  }
+
+  /** The root a `plugin://` authority serves and the instance key of the load that owns it. */
+  resolvePluginAuthority(authority: string): { dir: string; pluginId: string } | undefined {
+    const entry = this.pluginRootsByAuthority.get(authority);
+    return entry ? { ...entry } : undefined;
   }
 
   /**
@@ -7252,8 +8228,8 @@ export class PluginService {
     this.invalidatePluginAuthority(pluginId);
     const authority = `pi-${randomBytes(16).toString("hex")}` as PluginProtocolAuthority;
     this.pluginAuthorities.set(pluginId, authority);
-    this.pluginRootsByAuthority.set(authority, dir);
-    this.pluginRootsByAuthority.set(pluginId, dir);
+    this.pluginRootsByAuthority.set(authority, { dir, pluginId });
+    this.pluginRootsByAuthority.set(pluginId, { dir, pluginId });
     return authority;
   }
 
@@ -7290,7 +8266,13 @@ export class PluginService {
     // to transition live; an unknown id stays persist-only (its intent is
     // recorded for the next scan). Guarding here also keeps the isBuiltin choice
     // where it belongs — inside `_applyEnabledToggle`, derived from the map entry.
-    if (!this.plugins.has(pluginId) && !this.disabledPlugins.has(pluginId)) return;
+    if (
+      !this.plugins.has(pluginId) &&
+      !this.disabledPlugins.has(pluginId) &&
+      !this.projectInstancePackages.has(pluginId)
+    ) {
+      return;
+    }
 
     // Serialise live transitions per id so concurrent toggles can't interleave
     // their unload/load map mutations. Swallow the prior chain's rejection —
@@ -7326,6 +8308,18 @@ export class PluginService {
     try {
       if (!enabled) {
         const running = this.plugins.get(pluginId);
+        const catalogued = this.projectInstancePackages.get(pluginId);
+        if (!running && catalogued) {
+          this.unloadPackageInstances(pluginId, { uninstall: false, purge: false });
+          this.projectInstancePackages.delete(pluginId);
+          this.disabledPlugins.set(pluginId, {
+            manifest: catalogued.manifest as PluginManifest,
+            dir: catalogued.dir,
+            isBuiltin: false,
+          });
+          this.reservedNames.add(pluginId);
+          return;
+        }
         if (!running) return; // already not running — nothing to unload
         const { manifest, dir, isBuiltin } = running;
         this.unloadPlugin(pluginId);
@@ -7353,6 +8347,11 @@ export class PluginService {
         // A throw (e.g. a malformed `when` expression in the manifest) must not
         // strand the plugin in neither map — fall through to the restore path.
         console.error(`[PluginService] Re-load of "${pluginId}" threw:`, err);
+      }
+      if (!loaded && this.projectInstancePackages.has(pluginId)) {
+        this.disabledPlugins.delete(pluginId);
+        void this.reloadPackageInstances(pluginId);
+        return;
       }
       if (!loaded) {
         // Manifest error or a throw: restore the reservation. The
@@ -7389,7 +8388,12 @@ export class PluginService {
    */
   setPluginArchiveHash(pluginId: string, archiveHash: string): void {
     const plugin = this.plugins.get(pluginId);
-    if (!plugin) return;
+    if (!plugin) {
+      if (this.projectInstancePackages.has(pluginId) && /^[a-f0-9]{64}$/.test(archiveHash)) {
+        this.records.upsertInstalledRecord(pluginId, { archiveHash });
+      }
+      return;
+    }
     if (!/^[a-f0-9]{64}$/.test(archiveHash)) {
       console.warn(
         `[PluginService] setPluginArchiveHash for "${pluginId}": invalid hash format, ignoring`
@@ -7550,9 +8554,24 @@ export class PluginService {
     if (typeof description !== "string") {
       throw new Error(`Plugin action "${id}" must have a string description`);
     }
-    if (typeof category !== "string" || !category.trim()) {
+    if (typeof category !== "string" || !normalizePluginActionCategory(category)) {
       throw new Error(`Plugin action "${id}" must have a non-empty category`);
     }
+    // The category is a sub-label inside the plugin's own palette group, so a
+    // built-in id would pass for that built-in group's name.
+    const normalizedCategory = normalizePluginActionCategory(category);
+    if (normalizedCategory.length > PLUGIN_ACTION_CATEGORY_MAX_LENGTH) {
+      throw new Error(
+        `Plugin action "${id}" category is longer than ${PLUGIN_ACTION_CATEGORY_MAX_LENGTH} characters`
+      );
+    }
+    if (isReservedActionCategory(normalizedCategory)) {
+      throw new Error(
+        `Plugin action "${id}" category "${normalizedCategory}" is reserved for a built-in group. Pick your own label.`
+      );
+    }
+    const when = this.validateActionClause(id, "when", contribution.when);
+    const enablement = this.validateActionClause(id, "enablement", contribution.enablement);
     if (!PLUGIN_ACTION_KINDS.has(kind as string)) {
       throw new Error(`Plugin action "${id}" has invalid kind "${kind}"`);
     }
@@ -7586,6 +8605,14 @@ export class PluginService {
     // that folds `[]` back into the omitted case and silently re-elevates
     // every opted-in action; `??` would be equivalent to this ternary, since
     // validateActionRequires rejects a null.
+    // Compiled before anything is returned, so a contract the host can't
+    // enforce refuses the registration rather than publishing a schema that
+    // nothing checks.
+    const compiledResult =
+      contribution.resultSchema === undefined
+        ? undefined
+        : compilePluginActionResultSchema(id, contribution.resultSchema);
+
     const dangerCapabilities = requires === undefined ? manifestCapabilities : requires;
     const hasHighRiskCapability = dangerCapabilities.some((p) =>
       CONFIRM_TRIGGERING_CAPABILITIES.has(p)
@@ -7594,22 +8621,54 @@ export class PluginService {
     const effectiveDanger: "safe" | "confirm" =
       danger === "confirm" || hasHighRiskCapability || hasCompoundElevation ? "confirm" : "safe";
 
-    return {
+    const descriptor: PluginActionDescriptor = {
       pluginId,
+      // From the manifest, never the contribution: a plugin names itself once.
+      pluginName: manifest?.displayName?.trim() || manifest?.name,
       id,
       title,
       description,
-      category,
+      category: normalizedCategory,
       kind,
       danger,
       effectiveDanger,
+      when,
+      enablement,
       keywords: Array.isArray(contribution.keywords) ? [...contribution.keywords] : undefined,
       inputSchema:
         contribution.inputSchema && typeof contribution.inputSchema === "object"
           ? { ...contribution.inputSchema }
           : undefined,
+      resultSchema: compiledResult?.schema,
       requires,
     };
+    if (compiledResult) this.actionResultChecks.set(descriptor, compiledResult.check);
+    return descriptor;
+  }
+
+  /**
+   * Validate a command's optional `when` / `enablement` clause. Refused rather
+   * than dropped: a clause that never parses would otherwise hide (or grey out)
+   * the command for good with nothing pointing at the typo.
+   */
+  private validateActionClause(
+    actionId: string,
+    field: "when" | "enablement",
+    raw: unknown
+  ): string | undefined {
+    if (raw === undefined) return undefined;
+    if (typeof raw !== "string" || !raw.trim()) {
+      throw new Error(`Plugin action "${actionId}" has an empty or non-string "${field}" clause`);
+    }
+    try {
+      parseWhenClause(raw);
+    } catch (err) {
+      throw new Error(
+        `Plugin action "${actionId}" has an invalid "${field}" clause: ${formatErrorMessage(err, "could not parse")}`,
+        { cause: err }
+      );
+    }
+    return raw;
   }
 
   /**
@@ -7838,14 +8897,72 @@ export class PluginService {
     return this.settings.revealSecretSettingForUi(pluginId, key, scope, projectId);
   }
 
+  getAccountStatusForUi(
+    pluginId: string,
+    connectionId?: string
+  ): Promise<PluginAccountUiStatus | null> {
+    return this.accounts.getUiStatus(pluginId, connectionId);
+  }
+
+  listAccountConnectionsForUi(pluginId: string): Promise<PluginAccountUiStatus[]> {
+    return this.accounts.listUiStatus(pluginId);
+  }
+
+  connectAccountFromUi(
+    pluginId: string,
+    connectionId?: string,
+    broker?: AccountSignInBroker
+  ): Promise<PluginAccountConnectResult> {
+    return this.accounts.connect(pluginId, connectionId, broker);
+  }
+
+  cancelAccountConnectFromUi(pluginId: string, connectionId?: string): void {
+    this.accounts.cancelConnect(pluginId, connectionId);
+  }
+
+  setAccountTokenFromUi(
+    pluginId: string,
+    token: string,
+    connectionId?: string
+  ): Promise<PluginAccountUiStatus> {
+    return this.accounts.setToken(pluginId, token, connectionId);
+  }
+
+  disconnectAccountFromUi(pluginId: string, connectionId?: string): Promise<void> {
+    return this.accounts.disconnect(pluginId, connectionId);
+  }
+
+  testAccountConnectionFromUi(
+    pluginId: string,
+    connectionId?: string
+  ): Promise<PluginAccountVerification> {
+    return this.accounts.testConnection(pluginId, connectionId);
+  }
+
+  getAccountBindingForUi(
+    pluginId: string,
+    projectId: string
+  ): Promise<PluginAccountBindingUiStatus> {
+    return this.accounts.getBindingUiStatus(pluginId, projectId);
+  }
+
+  setAccountBindingFromUi(
+    pluginId: string,
+    projectId: string,
+    binding: PluginAccountBinding | null
+  ): Promise<PluginAccountBindingUiStatus> {
+    return this.accounts.setBinding(pluginId, projectId, binding);
+  }
+
   /**
    * Replay the current actions / panel-kinds / toolbar-button snapshots to a
    * single target webContents. Used by the cold-start view-ready hook so a
    * freshly-restored WebContentsView (post-LRU eviction or first cold load on
    * project switch) gets a complete plugin state on the same channels its
    * persistent push listeners already consume — no renderer-side changes
-   * needed. Awaits {@link waitForInit} so the snapshot is post-activation, not
-   * the empty pre-init view (#9285).
+   * needed. Awaits {@link waitForCatalog} so the snapshot is the scanned
+   * catalog, not the empty pre-init view (#9285), without waiting on startup
+   * activation (#14127).
    *
    * Toolbar buttons use `complete: false` so the renderer does not stale-prune
    * against this snapshot — replay is authoritative for the target view but
@@ -7904,6 +9021,69 @@ export class PluginService {
         // Silently ignore send failures during window initialization/disposal.
       }
     }
+    for (const pluginId of this.pluginToolbarStates.keys()) {
+      const owningProjectId = projectIdFromPluginInstanceKey(pluginId);
+      if (owningProjectId !== null && !inView(owningProjectId)) continue;
+      const envelope = {
+        name: "plugin:toolbar-states-changed",
+        payload: { pluginId, states: this.serializePluginToolbarStates(pluginId) },
+      };
+      // A local view bound to a remote host shows that host's buttons, so this
+      // machine's state for a same-named plugin would disable or press them.
+      if (
+        projectId === undefined &&
+        isWithheldFromView(webContents.id, CHANNELS.EVENTS_PUSH, [envelope])
+      ) {
+        continue;
+      }
+      try {
+        webContents.send(CHANNELS.EVENTS_PUSH, envelope);
+      } catch {
+        // Silently ignore send failures during window initialization/disposal.
+      }
+    }
+    for (const pluginId of this.pluginPanelActivity.keys()) {
+      const owningProjectId = projectIdFromPluginInstanceKey(pluginId);
+      if (owningProjectId !== null && !inView(owningProjectId)) continue;
+      const envelope = {
+        name: "plugin:panel-activity-changed",
+        payload: { pluginId, activity: this.serializePluginPanelActivity(pluginId) },
+      };
+      // A local view bound to a remote host shows that host's panels, never
+      // this machine's same-named plugin's reports.
+      if (
+        projectId === undefined &&
+        isWithheldFromView(webContents.id, CHANNELS.EVENTS_PUSH, [envelope])
+      ) {
+        continue;
+      }
+      try {
+        webContents.send(CHANNELS.EVENTS_PUSH, envelope);
+      } catch {
+        // Silently ignore send failures during window initialization/disposal.
+      }
+    }
+    for (const pluginId of this.pluginTasks.pluginIds()) {
+      const owningProjectId = projectIdFromPluginInstanceKey(pluginId);
+      if (owningProjectId !== null && !inView(owningProjectId)) continue;
+      const envelope = {
+        name: "plugin:tasks-changed",
+        payload: { pluginId, tasks: this.pluginTasks.snapshot(pluginId) },
+      };
+      // A local view bound to a remote host shows that host's work, never
+      // this machine's same-named plugin's tasks.
+      if (
+        projectId === undefined &&
+        isWithheldFromView(webContents.id, CHANNELS.EVENTS_PUSH, [envelope])
+      ) {
+        continue;
+      }
+      try {
+        webContents.send(CHANNELS.EVENTS_PUSH, envelope);
+      } catch {
+        // Silently ignore send failures during window initialization/disposal.
+      }
+    }
     for (const pluginId of this.pluginContextKeys.keys()) {
       const owningProjectId = projectIdFromPluginInstanceKey(pluginId);
       if (owningProjectId !== null && !inView(owningProjectId)) continue;
@@ -7938,6 +9118,54 @@ export class PluginService {
         };
         // Withheld from a local view bound to a remote host, like the context
         // keys: this machine's statuses are not about the cards it shows.
+        if (
+          projectId === undefined &&
+          isWithheldFromView(webContents.id, CHANNELS.EVENTS_PUSH, [envelope])
+        ) {
+          continue;
+        }
+        try {
+          webContents.send(CHANNELS.EVENTS_PUSH, envelope);
+        } catch {
+          // Silently ignore send failures during window initialization/disposal.
+        }
+      }
+    }
+    for (const [pluginId, byProject] of this.pluginWorktreeReviewChecks) {
+      for (const checksProjectId of byProject.keys()) {
+        if (!inView(checksProjectId)) continue;
+        const envelope = {
+          name: "plugin:worktree-review-checks-changed",
+          payload: {
+            pluginId,
+            projectId: checksProjectId,
+            checks: this.serializePluginWorktreeReviewChecks(pluginId, checksProjectId),
+          },
+        };
+        if (
+          projectId === undefined &&
+          isWithheldFromView(webContents.id, CHANNELS.EVENTS_PUSH, [envelope])
+        ) {
+          continue;
+        }
+        try {
+          webContents.send(CHANNELS.EVENTS_PUSH, envelope);
+        } catch {
+          // Silently ignore send failures during window initialization/disposal.
+        }
+      }
+    }
+    for (const [pluginId, byProject] of this.pluginTerminalStatuses) {
+      for (const statusProjectId of byProject.keys()) {
+        if (!inView(statusProjectId)) continue;
+        const envelope = {
+          name: "plugin:terminal-statuses-changed",
+          payload: {
+            pluginId,
+            projectId: statusProjectId,
+            statuses: this.serializePluginTerminalStatuses(pluginId, statusProjectId),
+          },
+        };
         if (
           projectId === undefined &&
           isWithheldFromView(webContents.id, CHANNELS.EVENTS_PUSH, [envelope])

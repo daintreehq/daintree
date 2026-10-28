@@ -1,4 +1,6 @@
 import type { ActionDispatchResult } from "../../../shared/types/actions.js";
+import { sanitizeAgentToolbarPins } from "../../../shared/types/ipc/agentToolbarPins.js";
+import { PLUGIN_WORKTREE_DELETE_NOTES_TIMEOUT_MS } from "../../../shared/config/pluginBudgets.js";
 import {
   executeViewlessAction,
   hasViewlessImplementation,
@@ -41,6 +43,7 @@ async function loadLiveDeps(): Promise<ViewlessDeps> {
 
   const agents: ViewlessDeps["agents"] = {
     getSettings: async () => store.get("agentSettings") ?? null,
+    getToolbarPins: async () => sanitizeAgentToolbarPins(store.get("agentToolbarPins")),
     // Discovered presets exist for Claude only; a view's store holds them under
     // that agent once a read finds any, and nothing for every other agent.
     getCcrPresets: async (agentId) => {
@@ -105,6 +108,18 @@ async function loadLiveDeps(): Promise<ViewlessDeps> {
       totalMemoryBytes: os.totalmem(),
     },
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    collectWorktreeDeleteNotes: async (projectId, worktreeId) => {
+      const { pluginService } = await import("../PluginService.js");
+      // One deadline for the whole wait, startup included, since the approval
+      // isn't put to anyone until the notes are in.
+      const expiresAt = Date.now() + PLUGIN_WORKTREE_DELETE_NOTES_TIMEOUT_MS;
+      await pluginService.waitForCatalogWithin(PLUGIN_WORKTREE_DELETE_NOTES_TIMEOUT_MS);
+      return pluginService.collectWorktreeDeleteNotes(
+        projectId,
+        worktreeId,
+        Math.max(0, expiresAt - Date.now())
+      );
+    },
   };
 }
 
@@ -130,6 +145,19 @@ export async function spawnHostAssistantLive(
     loadLiveDeps(),
   ]);
   return spawnHostAssistant(project, spec, deps);
+}
+
+/** Restart a terminal of a project no frontend is attached to (#14703); see `restartTerminalWithoutView`. */
+export async function restartTerminalWithoutViewLive(
+  projectId: string,
+  terminalId: string,
+  isCurrent: () => boolean
+): Promise<import("./viewlessTerminalRestart.js").ViewlessRestartOutcome> {
+  const [{ restartTerminalWithoutView }, deps] = await Promise.all([
+    import("./viewlessTerminalRestart.js"),
+    loadLiveDeps(),
+  ]);
+  return restartTerminalWithoutView(projectId, terminalId, deps, isCurrent);
 }
 
 /** The workspace identity a viewless result is stamped with, when it is a project. */

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CHANNELS } from "../../../ipc/channels.js";
 import type { AgentSettings } from "../../../../shared/types/agentSettings.js";
 import { executeViewlessAction } from "../ViewlessActionExecutor.js";
@@ -243,6 +243,31 @@ describe("agent.launch with no frontend", () => {
     expect(invoke.mock.calls.some(([, channel]) => channel === CHANNELS.TERMINAL_SPAWN)).toBe(true);
   });
 
+  it("launches past what the host's RAM once allowed, with no host limit in the answer (#14810)", async () => {
+    const records: Record<string, Record<string, unknown>> = Object.fromEntries(
+      Array.from({ length: 12 }, (_, i) => [
+        `t-${i}`,
+        { kind: "terminal", launchAgentId: "claude" },
+      ])
+    );
+    const { deps, invoke } = launchDeps({ getPtyReader: () => makePty(records) });
+    deps.hostPlatform = { ...deps.hostPlatform, totalMemoryBytes: 8 * 1024 ** 3 };
+    // The dependency the ceiling was read through, full: a check restored here
+    // would decline the launch on it.
+    const readHostAgentLimit = vi.fn(() => ({ host: "Studio", count: 12, limit: 2 }));
+    Object.assign(deps, { readHostAgentLimit });
+
+    const result = await executeViewlessAction(
+      request("agent.launch", { agentId: "claude" }),
+      deps
+    );
+
+    expect(result).toMatchObject({ ok: true, result: { launched: true, spawnStatus: null } });
+    expect((result as { result: object }).result).not.toHaveProperty("hostAgentLimit");
+    expect(readHostAgentLimit).not.toHaveBeenCalled();
+    expect(invoke.mock.calls.some(([, channel]) => channel === CHANNELS.TERMINAL_SPAWN)).toBe(true);
+  });
+
   it("parks an agent launched into the background and records its grid restore target", async () => {
     const { deps, invoke, store } = launchDeps();
 
@@ -337,6 +362,46 @@ describe("agent.launch with no frontend", () => {
     );
   });
 
+  it("records the prompt as the caller wrote it, without the handback instruction (#14592)", async () => {
+    const { deps, invoke, store } = launchDeps();
+
+    const result = await executeViewlessAction(
+      request("agent.launch", {
+        agentId: "claude",
+        worktreeId: "/repo-wt/feature",
+        prompt: "Fix the flaky test\nthen push",
+        handback: true,
+      }),
+      deps
+    );
+
+    const terminalId = (result as { result: { terminalId: string } }).result.terminalId;
+    // The spawn still carries the instruction; only the record goes without it.
+    expect(spawned(invoke).command).toContain("DAINTREE-DONE-");
+    const snapshot = store.read()?.terminals.find((terminal) => terminal.id === terminalId);
+    expect(snapshot?.firstPrompt).toEqual({
+      text: "Fix the flaky test\nthen push",
+      via: "launch",
+      at: expect.any(Number),
+    });
+    // Never handed back to the caller.
+    expect(JSON.stringify(result)).not.toContain("Fix the flaky test");
+  });
+
+  it("writes no record for a launch with no prompt (#14592)", async () => {
+    const { deps, store } = launchDeps();
+
+    const result = await executeViewlessAction(
+      request("agent.launch", { agentId: "claude", worktreeId: "/repo-wt/feature" }),
+      deps
+    );
+
+    const terminalId = (result as { result: { terminalId: string } }).result.terminalId;
+    const snapshot = store.read()?.terminals.find((terminal) => terminal.id === terminalId);
+    expect(snapshot).toBeDefined();
+    expect(snapshot).not.toHaveProperty("firstPrompt");
+  });
+
   it("opens a plain shell for the terminal id", async () => {
     const { deps, invoke } = launchDeps();
 
@@ -364,5 +429,27 @@ describe("agent.listAvailable with no frontend", () => {
       launchable: true,
       source: "built-in",
     });
+  });
+
+  it("reports this machine's toolbar pins, not the agent settings (#14702)", async () => {
+    const { deps } = makeDeps();
+    deps.agents.getAvailability = async () => ({
+      availability: { claude: "ready", gemini: "missing", codex: "ready" },
+      live: true,
+    });
+    deps.agents.getToolbarPins = async () => ({ gemini: true, codex: false });
+
+    const result = await executeViewlessAction(request("agent.listAvailable", undefined), deps);
+
+    const agents = (
+      result as {
+        result: { agents: Array<{ id: string; pinned?: boolean; toolbarVisible?: boolean }> };
+      }
+    ).result.agents;
+    const byId = (id: string) => agents.find((agent) => agent.id === id);
+    expect(byId("gemini")).toMatchObject({ pinned: true, toolbarVisible: true });
+    expect(byId("codex")).toMatchObject({ pinned: false, toolbarVisible: false });
+    expect(byId("claude")).not.toHaveProperty("pinned");
+    expect(byId("claude")).toMatchObject({ toolbarVisible: true });
   });
 });

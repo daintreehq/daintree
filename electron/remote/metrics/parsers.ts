@@ -45,17 +45,6 @@ export function parsePsi(text: string | null): PsiReading | null {
   return null;
 }
 
-/** Share of time some task stalled on memory, mapped to the same three bands macOS reports. */
-export const PSI_MEMORY_WARN_AVG10 = 10;
-export const PSI_MEMORY_CRITICAL_AVG10 = 40;
-
-export function psiToMemoryPressure(reading: PsiReading | null): MemoryPressure | null {
-  if (!reading) return null;
-  if (reading.someAvg10 >= PSI_MEMORY_CRITICAL_AVG10) return "critical";
-  if (reading.someAvg10 >= PSI_MEMORY_WARN_AVG10) return "warn";
-  return "normal";
-}
-
 export interface MeminfoReading {
   totalBytes: number | null;
   availableBytes: number | null;
@@ -80,27 +69,65 @@ export function parseMeminfo(text: string | null): MeminfoReading | null {
   };
 }
 
-export interface CgroupMemoryReading {
-  usedBytes: number;
-  limitBytes: number;
+/** A cgroup v2 byte count or limit. "max" means unlimited and is null, as is anything unreadable. */
+export function parseCgroupBytes(text: string | null): number | null {
+  if (text === null) return null;
+  const trimmed = text.trim();
+  if (!/^\d+$/.test(trimmed)) return null;
+  return finiteOrNull(Number(trimmed));
 }
 
 /**
- * cgroup v2 `memory.current` and `memory.max`. A limit of "max" means the
- * cgroup is not what bounds memory, so the machine's own numbers apply.
+ * The cgroup v2 path of `/proc/self/cgroup` (`0::/system.slice/x.service`) as
+ * its segments, empty for the mount root. Null when there is no v2 entry, so a
+ * v1-only host isn't read as if it had one, or the path is one we won't follow.
  */
-export function parseCgroupMemory(
-  current: string | null,
-  max: string | null
-): CgroupMemoryReading | null {
-  if (current === null || max === null) return null;
-  const limitText = max.trim();
-  if (limitText === "max" || !/^\d+$/.test(limitText)) return null;
-  const usedText = current.trim();
-  if (!/^\d+$/.test(usedText)) return null;
-  const limitBytes = Number(limitText);
-  if (limitBytes <= 0) return null;
-  return { usedBytes: Number(usedText), limitBytes };
+export function parseProcSelfCgroup(text: string | null): string[] | null {
+  if (text === null) return null;
+  for (const line of text.split("\n")) {
+    if (!line.startsWith("0::")) continue;
+    const path = line.slice(3).replace(/ \(deleted\)$/, "");
+    if (!path.startsWith("/")) return null;
+    const segments = path.split("/").filter((segment) => segment.length > 0);
+    if (segments.some((segment) => segment === "." || segment === "..")) return null;
+    return segments;
+  }
+  return null;
+}
+
+/** `cpu.max` (`$MAX $PERIOD`) as the cores it allows; null for "max" or anything unreadable. */
+export function parseCpuMax(text: string | null): number | null {
+  if (text === null) return null;
+  const match = /^(\d+)\s+(\d+)$/.exec(text.trim());
+  if (!match) return null;
+  const quota = Number(match[1]);
+  const period = Number(match[2]);
+  return quota > 0 && period > 0 ? finiteOrNull(quota / period) : null;
+}
+
+/** `cpuset.cpus.effective` (`0-3,8`) as a count of CPUs. */
+export function parseCpuSetCount(text: string | null): number | null {
+  if (text === null) return null;
+  const ids = new Set<number>();
+  const trimmed = text.trim();
+  if (trimmed === "") return null;
+  for (const part of trimmed.split(",")) {
+    const match = /^(\d+)(?:-(\d+))?$/.exec(part.trim());
+    if (!match) return null;
+    const start = Number(match[1]);
+    const end = match[2] === undefined ? start : Number(match[2]);
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end)) return null;
+    if (end < start || end - start > 65_536) return null;
+    for (let id = start; id <= end; id += 1) ids.add(id);
+  }
+  return ids.size > 0 ? ids.size : null;
+}
+
+/** `cpu.stat`'s `usage_usec`: CPU time the cgroup has used, in microseconds. */
+export function parseCgroupCpuUsageUsec(text: string | null): number | null {
+  if (text === null) return null;
+  const match = /^usage_usec\s+(\d+)$/m.exec(text);
+  return match ? finiteOrNull(Number(match[1])) : null;
 }
 
 const SIZE_UNITS: Record<string, number> = {
@@ -127,6 +154,52 @@ export function parseDarwinSwapUsage(
   return { totalBytes: Math.round(totalBytes), usedBytes: Math.round(usedBytes) };
 }
 
+/** Pages swapped in and out since boot; either is null when its counter isn't there. */
+export interface SwapCounters {
+  inPages: number | null;
+  outPages: number | null;
+}
+
+function pageCount(text: string, pattern: RegExp): number | null {
+  const match = pattern.exec(text);
+  if (!match) return null;
+  const value = Number(match[1]);
+  return Number.isSafeInteger(value) ? value : null;
+}
+
+function swapCounters(text: string | null, inKey: RegExp, outKey: RegExp): SwapCounters | null {
+  if (text === null) return null;
+  const inPages = pageCount(text, inKey);
+  const outPages = pageCount(text, outKey);
+  return inPages === null && outPages === null ? null : { inPages, outPages };
+}
+
+/** `/proc/vmstat` or a cgroup's `memory.stat`: `pswpin 123` and `pswpout 456`, in pages. */
+export function parseSwapPageCounters(text: string | null): SwapCounters | null {
+  return swapCounters(text, /^pswpin\s+(\d+)\s*$/m, /^pswpout\s+(\d+)\s*$/m);
+}
+
+/** `vm_stat`'s `Swapins:` and `Swapouts:` lines, in pages of the size its header names. */
+export function parseVmStatSwapCounters(text: string | null): SwapCounters | null {
+  return swapCounters(text, /^Swapins:\s+(\d+)\.?\s*$/m, /^Swapouts:\s+(\d+)\.?\s*$/m);
+}
+
+/** `vm_stat`'s header: `Mach Virtual Memory Statistics: (page size of 16384 bytes)`. */
+export function parseVmStatPageSize(text: string | null): number | null {
+  if (text === null) return null;
+  const size = pageCount(text, /\(page size of (\d+) bytes\)/);
+  return size !== null && size > 0 ? size : null;
+}
+
+/** `getconf PAGESIZE`: the kernel's page size in bytes. */
+export function parsePageSize(text: string | null): number | null {
+  if (text === null) return null;
+  const trimmed = text.trim();
+  if (!/^\d+$/.test(trimmed)) return null;
+  const size = Number(trimmed);
+  return Number.isSafeInteger(size) && size > 0 ? size : null;
+}
+
 /** `/sys/class/thermal/thermal_zone*\/temp`, in millidegrees Celsius. */
 export function parseThermalZoneTemp(text: string | null): number | null {
   if (text === null) return null;
@@ -137,13 +210,49 @@ export function parseThermalZoneTemp(text: string | null): number | null {
   return celsius > 0 && celsius < 150 ? celsius : null;
 }
 
-/** The hottest zone mapped onto the bands macOS's own thermal state uses. */
-export function thermalFromCelsius(hottest: number | null): ThermalState | null {
-  if (hottest === null) return null;
-  if (hottest >= 95) return "critical";
-  if (hottest >= 85) return "serious";
-  if (hottest >= 75) return "fair";
-  return "nominal";
+export interface ThermalZoneReading {
+  /** The directory name, such as `thermal_zone0`. */
+  zone: string;
+  /** The zone's `type` file: what the sensor is attached to. */
+  type: string | null;
+  celsius: number | null;
+}
+
+export interface ThermalObservation {
+  celsius: number;
+  /** "x86_pkg_temp (thermal_zone0)": the sensor type with its directory. */
+  label: string;
+}
+
+/** CPU and SoC sensors say more about the machine's load than the board's ACPI zone. */
+function thermalZoneTier(type: string | null): number {
+  if (type === null) return 1;
+  if (/^(x86_pkg_temp|cpu[-_]?thermal|soc[-_]?thermal)/i.test(type)) return 0;
+  return type.toLowerCase() === "acpitz" ? 2 : 1;
+}
+
+/** The hottest zone of the most CPU-like type, reported as the kernel names it. */
+export function pickThermalZone(zones: readonly ThermalZoneReading[]): ThermalObservation | null {
+  let best: { zone: ThermalZoneReading; tier: number } | null = null;
+  for (const zone of zones) {
+    if (zone.celsius === null) continue;
+    const tier = thermalZoneTier(zone.type);
+    if (
+      !best ||
+      tier < best.tier ||
+      (tier === best.tier &&
+        (zone.celsius > best.zone.celsius! ||
+          (zone.celsius === best.zone.celsius && zone.zone < best.zone.zone)))
+    ) {
+      best = { zone, tier };
+    }
+  }
+  if (!best) return null;
+  const { zone } = best;
+  return {
+    celsius: zone.celsius!,
+    label: zone.type ? `${zone.type} (${zone.zone})` : zone.zone,
+  };
 }
 
 /**
@@ -192,4 +301,57 @@ export function cpuPercentBetween(
   }
   if (total <= 0) return null;
   return Math.min(100, Math.max(0, (busy / total) * 100));
+}
+
+function parseCoreCount(text: string | undefined): number | null {
+  if (!text || !/^\d+$/.test(text)) return null;
+  const value = Number(text);
+  return Number.isSafeInteger(value) && value > 0 ? value : null;
+}
+
+/**
+ * Apple Silicon cluster sizes from `sysctl -n hw.perflevel0.name
+ * hw.perflevel0.logicalcpu hw.perflevel1.name hw.perflevel1.logicalcpu`.
+ * Only the Performance + Efficiency layout counts: other chips name their
+ * levels differently (M5 Pro/Max report Super and Performance), and Intel Macs
+ * have no perflevels at all, so anything else is null rather than relabelled.
+ */
+export function parseDarwinCpuClusters(
+  text: string | null
+): { performance: number; efficiency: number } | null {
+  if (text === null) return null;
+  const lines = text
+    .trim()
+    .split(/\r?\n/)
+    .map((line) => line.trim());
+  if (lines.length !== 4 || lines[0] !== "Performance" || lines[2] !== "Efficiency") return null;
+  const performance = parseCoreCount(lines[1]);
+  const efficiency = parseCoreCount(lines[3]);
+  return performance !== null && efficiency !== null ? { performance, efficiency } : null;
+}
+
+/**
+ * Busy share of each Apple Silicon cluster between two `os.cpus()` readings.
+ * libuv lists cores in kernel logical-cpu-id order, which on Apple Silicon puts
+ * the efficiency cluster first (`ioreg -p IODeviceTree` reports `cluster-type`
+ * E for the lowest ids). That holds only while the cluster sizes account for
+ * every core, so any mismatch leaves both shares null rather than guessing.
+ */
+export function clusterCpuPercentBetween(
+  previous: readonly CpuTimes[] | null,
+  next: readonly CpuTimes[],
+  efficiencyCores: number | null,
+  performanceCores: number | null
+): { efficiency: number | null; performance: number | null } {
+  const unknown = { efficiency: null, performance: null };
+  if (!efficiencyCores || !performanceCores) return unknown;
+  if (efficiencyCores + performanceCores !== next.length) return unknown;
+  if (!previous || previous.length !== next.length) return unknown;
+  return {
+    efficiency: cpuPercentBetween(
+      previous.slice(0, efficiencyCores),
+      next.slice(0, efficiencyCores)
+    ),
+    performance: cpuPercentBetween(previous.slice(efficiencyCores), next.slice(efficiencyCores)),
+  };
 }

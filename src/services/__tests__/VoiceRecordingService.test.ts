@@ -1,12 +1,50 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { isActiveVoiceSession } from "@shared/types";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import {
+  isActiveVoiceSession,
+  type VoiceLiveSessionUpdate,
+  type VoiceLiveLevel,
+  type VoicePauseRequest,
+  type VoiceRevealRequest,
+  type VoiceSessionSnapshot,
+} from "@shared/types";
 
 // Capture suspend/wake callbacks registered by the service.
 const suspendCallbacks = vi.hoisted(() => [] as Array<() => void>);
 
+const focusDictationComposer = vi.hoisted(() => vi.fn());
+// The real one reads the DOM, which these suites stub in part; its own suite
+// is voiceComposerFocus.test.tsx.
+const revealDictationComposer = vi.hoisted(() => vi.fn());
+type DictationReturn = import("@/services/voiceComposerFocus").DictationReturn;
+const beginDictationReturn = vi.hoisted(() =>
+  vi.fn<(panelId: string, options: { pressedHere: boolean }) => DictationReturn | null>(() => null)
+);
+vi.mock("@/services/voiceComposerFocus", () => ({
+  beginDictationReturn,
+  focusDictationComposer,
+  revealDictationComposer,
+}));
+
+// Whether main has this view cached, and its lifecycle edges, as a test drives them.
+const viewLifecycle = vi.hoisted(() => ({
+  cached: false,
+  listeners: new Set<(phase: "cached" | "active" | "revealed") => void>(),
+}));
+vi.mock("@/lib/viewCacheState", () => ({
+  isProjectViewCached: () => viewLifecycle.cached,
+  subscribeProjectViewLifecycle: (listener: (phase: "cached" | "active" | "revealed") => void) => {
+    viewLifecycle.listeners.add(listener);
+    return () => viewLifecycle.listeners.delete(listener);
+  },
+}));
+
+const switchToHost = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock("@/components/Hosts/hostSwitching", () => ({ switchToHost }));
+
 vi.mock("@/store/voiceRecordingStore", () => {
   const state = {
     activeTarget: null as { panelId: string } | null,
+    pendingTarget: null as { panelId: string } | null,
     status: "idle" as string,
     panelBuffers: {} as Record<string, unknown>,
     correctionEnabled: false,
@@ -14,8 +52,12 @@ vi.mock("@/store/voiceRecordingStore", () => {
     lockedTarget: null as { panelId: string } | null,
     recentTargets: [] as Array<unknown>,
     micSignal: "pending" as string,
+    micDeviceLabel: null as string | null,
+    micNotice: null as unknown,
+    sessionElsewhere: null as unknown,
   };
   const fns = {
+    applyLiveSessionUpdate: vi.fn(),
     setLastError: vi.fn(),
     announce: vi.fn(),
     setStatus: vi.fn(),
@@ -24,19 +66,28 @@ vi.mock("@/store/voiceRecordingStore", () => {
     setLearnFromCorrections: vi.fn(),
     setSessionCorrectedText: vi.fn(),
     setArming: vi.fn(),
+    clearPendingTarget: vi.fn(() => {
+      state.pendingTarget = null;
+    }),
     beginSession: vi.fn(),
     finishSession: vi.fn(),
     setAudioLevel: vi.fn(),
     setMicSignal: vi.fn((signal: string) => {
       state.micSignal = signal;
     }),
+    setMicDeviceLabel: vi.fn((label: string | null) => {
+      state.micDeviceLabel = label;
+    }),
+    setMicNotice: vi.fn((notice: unknown) => {
+      state.micNotice = notice;
+    }),
     setElapsedSeconds: vi.fn(),
     appendDelta: vi.fn(),
     completeSegment: vi.fn(),
     setSessionDraftStart: vi.fn(),
-    setDraftLengthAtSegmentStart: vi.fn(),
     setActiveParagraphStart: vi.fn(),
     clearPanelBuffer: vi.fn(),
+    consumeCompletedSegments: vi.fn(() => []),
     lockTarget: vi.fn(),
     unlockTarget: vi.fn(),
     clearLockedTarget: vi.fn(),
@@ -63,20 +114,35 @@ vi.mock("@/store/panelStore", () => {
   return { usePanelStore: Object.assign(getState, { getState, subscribe }), __state: state };
 });
 
+vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
+
+vi.mock("@/store/canopyStore", () => {
+  const state = { isOpen: false, revealReply: vi.fn(() => true) };
+  const getState = () => state;
+  return { useCanopyStore: Object.assign(getState, { getState }), __state: state };
+});
+
 vi.mock("@/store/terminalInputStore", () => {
   const fns = {
     getDraftInput: vi.fn(() => ""),
     setDraftInput: vi.fn(),
     bumpExternalDraftRevision: vi.fn(),
   };
-  const getState = () => fns;
-  return { useTerminalInputStore: Object.assign(getState, { getState }) };
+  const getState = () => ({ ...fns, hybridInputEnabled: true });
+  return {
+    useTerminalInputStore: Object.assign(getState, { getState, subscribe: () => () => {} }),
+  };
 });
 
 vi.mock("@/store/projectStore", () => {
-  const state = { currentProject: null, isSwitching: false };
-  const getState = () => ({ ...state, switchProject: vi.fn() });
-  return { useProjectStore: Object.assign(getState, { getState }) };
+  const state = { currentProject: null as { id: string; name: string } | null, isSwitching: false };
+  const switchProject = vi.fn();
+  const getState = () => ({ ...state, switchProject });
+  return {
+    useProjectStore: Object.assign(getState, { getState }),
+    __switchProject: switchProject,
+    __state: state,
+  };
 });
 
 vi.mock("@/store/createWorktreeStore", () => ({
@@ -150,9 +216,21 @@ function buildElectronStub() {
       onTranscriptionDelta: vi.fn(() => () => {}),
       onTranscriptionComplete: vi.fn(() => () => {}),
       onParagraphBoundary: vi.fn(() => () => {}),
+      onCorrectionProgress: vi.fn(() => () => {}),
       onFileTokenResolved: vi.fn(() => () => {}),
       onError: vi.fn(() => () => {}),
       onStatus: vi.fn(() => () => {}),
+      onSessionEnded: vi.fn(() => () => {}),
+      onLiveSession: vi.fn((_callback: (update: VoiceLiveSessionUpdate) => void) => () => {}),
+      onStopRequested: vi.fn(
+        (_callback: (payload: { sessionId: string; returnToTarget?: boolean }) => void) => () => {}
+      ),
+      onRevealRequested: vi.fn((_callback: (payload: VoiceRevealRequest) => void) => () => {}),
+      onLiveLevel: vi.fn((_callback: (payload: VoiceLiveLevel) => void) => () => {}),
+      onPauseRequested: vi.fn((_callback: (payload: VoicePauseRequest) => void) => () => {}),
+      publishDetails: vi.fn().mockResolvedValue(undefined),
+      setPausedLive: vi.fn().mockResolvedValue(true),
+      getLiveSession: vi.fn().mockResolvedValue({ revision: 0, session: null }),
       getSettings: vi.fn().mockResolvedValue({
         enabled: true,
         openaiApiKey: "sk-key",
@@ -162,8 +240,10 @@ function buildElectronStub() {
       requestMicPermission: vi.fn().mockResolvedValue(true),
       openMicSettings: vi.fn(),
       sendAudioChunk: vi.fn(),
-      start: vi.fn().mockResolvedValue({ ok: true }),
+      start: vi.fn().mockResolvedValue({ status: "started" }),
       stop: vi.fn().mockResolvedValue(undefined),
+      stopLive: vi.fn().mockResolvedValue(true),
+      revealLive: vi.fn().mockResolvedValue(true),
     },
     systemSleep: {
       onSuspend: vi.fn((cb: () => void) => {
@@ -193,12 +273,13 @@ function buildAudioContextMock() {
     connect: vi.fn(),
     disconnect: vi.fn(),
   };
-  const sourceMock = { connect: vi.fn() };
+  const sourceMock = { connect: vi.fn(), disconnect: vi.fn() };
   const ctx = {
     state: "running",
     destination,
     sampleRate: 24000,
     resume: vi.fn().mockResolvedValue(undefined),
+    suspend: vi.fn().mockResolvedValue(undefined),
     close: vi.fn().mockResolvedValue(undefined),
     createGain: vi.fn(() => gainMock),
     createOscillator: vi.fn(() => oscillatorMock),
@@ -211,6 +292,18 @@ function buildAudioContextMock() {
 }
 
 // Set up browser globals for all tests in this suite.
+// The store mock exposes its backing state for tests to prime.
+async function voiceStoreState() {
+  const { __state } = (await import("@/store/voiceRecordingStore")) as unknown as {
+    __state: { activeTarget: { panelId: string } | null };
+  };
+  return __state;
+}
+
+function fakeStream(stream: object): MediaStream {
+  return stream as MediaStream;
+}
+
 function setupGlobals(electronStub = buildElectronStub()) {
   const windowListeners: Record<string, Array<(...args: unknown[]) => void>> = {};
   const documentListeners: Record<string, Array<(...args: unknown[]) => void>> = {};
@@ -225,6 +318,11 @@ function setupGlobals(electronStub = buildElectronStub()) {
     requestAnimationFrame: vi.fn(),
     cancelAnimationFrame: vi.fn(),
   });
+  vi.stubGlobal(
+    "requestAnimationFrame",
+    vi.fn(() => 0)
+  );
+  vi.stubGlobal("cancelAnimationFrame", vi.fn());
 
   vi.stubGlobal("document", {
     visibilityState: "visible",
@@ -334,9 +432,7 @@ describe("VoiceRecordingService — background recording", () => {
     setupGlobals();
 
     // Prime the store with an active target so the suspend handler fires.
-    const { __state } = (await import("@/store/voiceRecordingStore")) as unknown as {
-      __state: { activeTarget: { panelId: string } | null };
-    };
+    const __state = await voiceStoreState();
     __state.activeTarget = { panelId: "panel-1" };
 
     const { voiceRecordingService } = await import("../VoiceRecordingService");
@@ -370,6 +466,69 @@ describe("VoiceRecordingService — background recording", () => {
     expect(gainMock.gain.value).toBe(0);
     expect(oscillatorMock.connect).toHaveBeenCalledWith(gainMock);
     expect(gainMock.connect).toHaveBeenCalledWith(ctx.destination);
+  });
+
+  it("tells main which terminal it is dictating into", async () => {
+    setupGlobals();
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    await voiceRecordingService.start({ panelId: "panel-7", panelTitle: "Terminal" });
+
+    expect(window.electron.voiceInput.start).toHaveBeenCalledWith(expect.any(String), {
+      terminalId: "panel-7",
+    });
+  });
+
+  it("tells main the terminal a Canopy reply types to, not the reply's own id", async () => {
+    setupGlobals();
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    await voiceRecordingService.start({
+      panelId: "isolated-composer:run-7",
+      surface: "canopy-reply",
+      terminalId: "run-7",
+    });
+
+    expect(window.electron.voiceInput.start).toHaveBeenCalledWith(expect.any(String), {
+      terminalId: "run-7",
+    });
+  });
+
+  it("gives main nothing of this view's for a reply to a terminal outside it", async () => {
+    setupGlobals();
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    await voiceRecordingService.start({
+      panelId: "isolated-composer:host-2:run-7",
+      surface: "canopy-reply",
+      otherHostId: "host-2",
+    });
+
+    expect(window.electron.voiceInput.start).toHaveBeenCalledWith(expect.any(String), {
+      outsideView: true,
+    });
+  });
+
+  it("tells main when the session records a rewrite instruction", async () => {
+    setupGlobals();
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const selection = {
+      text: "make me shorter",
+      range: () => ({ from: 0, to: 15 }),
+      onLost: () => {},
+      apply: () => true,
+      release: () => {},
+    };
+    await voiceRecordingService.start({
+      panelId: "panel-7",
+      rewrite: { selection, instruction: [], cancelled: false },
+    });
+
+    expect(window.electron.voiceInput.start).toHaveBeenCalledWith(expect.any(String), {
+      terminalId: "panel-7",
+      intent: "rewrite",
+    });
   });
 
   // Constructed after getUserMedia, the context's synchronous output-device
@@ -413,7 +572,37 @@ describe("VoiceRecordingService — background recording", () => {
     expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledTimes(1);
   });
 
-  it("closes the pre-built AudioContext when the microphone can't be opened", async () => {
+  it("asks for an AudioContext that opens no output device", async () => {
+    const { ctx } = setupGlobals();
+    const audioContextCtor = vi.fn(function () {
+      return ctx;
+    });
+    vi.stubGlobal("AudioContext", audioContextCtor);
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Terminal" });
+
+    expect(audioContextCtor).toHaveBeenCalledWith(
+      expect.objectContaining({ sinkId: { type: "none" } })
+    );
+  });
+
+  it("falls back to the default output when the silent sink is rejected", async () => {
+    const { ctx } = setupGlobals();
+    const audioContextCtor = vi.fn(function (options: { sinkId?: unknown }) {
+      if (options.sinkId) throw new DOMException("unsupported", "NotSupportedError");
+      return ctx;
+    });
+    vi.stubGlobal("AudioContext", audioContextCtor);
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Terminal" });
+
+    expect(audioContextCtor).toHaveBeenCalledTimes(2);
+    expect(window.electron.voiceInput.start).toHaveBeenCalledTimes(1);
+  });
+
+  it("parks the pre-built AudioContext when the microphone can't be opened", async () => {
     const { ctx } = setupGlobals();
     vi.mocked(navigator.mediaDevices.getUserMedia).mockRejectedValue(
       new DOMException("denied", "NotAllowedError")
@@ -422,16 +611,16 @@ describe("VoiceRecordingService — background recording", () => {
     const { voiceRecordingService } = await import("../VoiceRecordingService");
     await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Terminal" });
 
-    expect(ctx.close).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(ctx.suspend).toHaveBeenCalledTimes(1));
+    expect(ctx.close).not.toHaveBeenCalled();
     expect(ctx.createMediaStreamSource).not.toHaveBeenCalled();
   });
 
-  it("closes the pre-built AudioContext when the start is cancelled while the microphone is pending", async () => {
+  it("releases the microphone when the start is cancelled while it is pending", async () => {
     const { ctx } = setupGlobals();
     const getUserMedia = vi.mocked(navigator.mediaDevices.getUserMedia);
-    const stream = await getUserMedia({ audio: true });
-    const getTracks = vi.spyOn(stream, "getTracks");
-    getUserMedia.mockClear();
+    const track = { stop: vi.fn() };
+    const stream = fakeStream({ getTracks: () => [track], getAudioTracks: () => [{}] });
     let grantMicrophone = () => {};
     getUserMedia.mockReturnValue(
       new Promise((resolve) => {
@@ -444,24 +633,31 @@ describe("VoiceRecordingService — background recording", () => {
     await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalled());
 
     await voiceRecordingService.stop();
-    expect(ctx.close).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(ctx.suspend).toHaveBeenCalledTimes(1));
 
     grantMicrophone();
     await starting;
 
     // The stale start still releases the late-arriving microphone, without
-    // closing the already-closed context a second time.
-    expect(getTracks).toHaveBeenCalled();
-    expect(ctx.close).toHaveBeenCalledTimes(1);
+    // releasing the already-released context a second time.
+    expect(track.stop).toHaveBeenCalled();
+    await Promise.resolve();
+    expect(ctx.suspend).toHaveBeenCalledTimes(1);
+    expect(ctx.close).not.toHaveBeenCalled();
     expect(ctx.createMediaStreamSource).not.toHaveBeenCalled();
   });
 
-  it("tears down the keep-alive oscillator and AudioContext when stop() is called", async () => {
-    const { ctx, oscillatorMock, gainMock } = setupGlobals();
+  it("releases the microphone and parks the AudioContext when stop() is called", async () => {
+    const { ctx, oscillatorMock, workletNodes } = setupGlobals();
+    const track = { stop: vi.fn() };
+    vi.mocked(navigator.mediaDevices.getUserMedia).mockResolvedValue(
+      fakeStream({
+        getTracks: () => [track],
+        getAudioTracks: () => [{}],
+      })
+    );
 
-    const { __state } = (await import("@/store/voiceRecordingStore")) as unknown as {
-      __state: { activeTarget: { panelId: string } | null };
-    };
+    const __state = await voiceStoreState();
     __state.activeTarget = { panelId: "panel-1" };
 
     const { voiceRecordingService } = await import("../VoiceRecordingService");
@@ -469,12 +665,160 @@ describe("VoiceRecordingService — background recording", () => {
     await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Terminal" });
     await voiceRecordingService.stop("Dictation stopped.", { skipRemoteStop: true });
 
-    expect(oscillatorMock.stop).toHaveBeenCalled();
-    expect(oscillatorMock.disconnect).toHaveBeenCalled();
-    expect(gainMock.disconnect).toHaveBeenCalled();
-    expect(ctx.close).toHaveBeenCalled();
+    expect(track.stop).toHaveBeenCalled();
+    expect(workletNodes[0]!.port.postMessage).toHaveBeenCalledWith({ type: "dispose" });
+    expect(workletNodes[0]!.disconnect).toHaveBeenCalled();
+    await vi.waitFor(() => expect(ctx.suspend).toHaveBeenCalledTimes(1));
+    expect(oscillatorMock.stop).not.toHaveBeenCalled();
+    expect(ctx.close).not.toHaveBeenCalled();
 
     __state.activeTarget = null;
+  });
+
+  it("reuses the AudioContext and worklet for the next dictation, with a fresh microphone", async () => {
+    const { ctx } = setupGlobals();
+    const audioContextCtor = vi.fn(function () {
+      return ctx;
+    });
+    vi.stubGlobal("AudioContext", audioContextCtor);
+    const tracks = [{ stop: vi.fn() }, { stop: vi.fn() }];
+    const getUserMedia = vi.mocked(navigator.mediaDevices.getUserMedia);
+    for (const track of tracks) {
+      getUserMedia.mockResolvedValueOnce(
+        fakeStream({
+          getTracks: () => [track],
+          getAudioTracks: () => [{}],
+        })
+      );
+    }
+
+    const __state = await voiceStoreState();
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    for (const track of tracks) {
+      __state.activeTarget = { panelId: "panel-1" };
+      await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Terminal" });
+      await voiceRecordingService.stop("Dictation stopped.", { skipRemoteStop: true });
+      expect(track.stop).toHaveBeenCalled();
+    }
+
+    expect(audioContextCtor).toHaveBeenCalledTimes(1);
+    expect(ctx.audioWorklet.addModule).toHaveBeenCalledTimes(1);
+    expect(ctx.createOscillator).toHaveBeenCalledTimes(1);
+    expect(getUserMedia).toHaveBeenCalledTimes(2);
+    expect(ctx.createMediaStreamSource).toHaveBeenCalledTimes(2);
+    // The second start resumes the context the first stop suspended.
+    await vi.waitFor(() => expect(ctx.suspend).toHaveBeenCalledTimes(2));
+    expect(ctx.resume.mock.invocationCallOrder[1]!).toBeGreaterThan(
+      ctx.suspend.mock.invocationCallOrder[0]!
+    );
+    expect(ctx.close).not.toHaveBeenCalled();
+    __state.activeTarget = null;
+  });
+
+  it("resumes for the next dictation only once the last stop's suspend has landed", async () => {
+    const { ctx } = setupGlobals();
+    let suspended!: () => void;
+    ctx.suspend.mockImplementationOnce(
+      () =>
+        new Promise<undefined>((resolve) => {
+          suspended = () => resolve(undefined);
+        })
+    );
+
+    const __state = await voiceStoreState();
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    __state.activeTarget = { panelId: "panel-1" };
+    await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Terminal" });
+    await voiceRecordingService.stop("Dictation stopped.", { skipRemoteStop: true });
+    await vi.waitFor(() => expect(ctx.suspend).toHaveBeenCalledTimes(1));
+
+    __state.activeTarget = { panelId: "panel-1" };
+    const starting = voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Terminal" });
+    await vi.waitFor(() => expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledTimes(2));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(ctx.resume).toHaveBeenCalledTimes(1);
+
+    suspended();
+    await starting;
+    expect(ctx.resume).toHaveBeenCalledTimes(2);
+    expect(window.electron.voiceInput.start).toHaveBeenCalledTimes(2);
+    __state.activeTarget = null;
+  });
+
+  it("closes the parked AudioContext when the system goes to sleep", async () => {
+    const { ctx } = setupGlobals();
+    const __state = await voiceStoreState();
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    voiceRecordingService.initialize();
+    __state.activeTarget = { panelId: "panel-1" };
+    await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Terminal" });
+    await voiceRecordingService.stop("Dictation stopped.", { skipRemoteStop: true });
+    __state.activeTarget = null;
+    expect(ctx.close).not.toHaveBeenCalled();
+
+    for (const cb of suspendCallbacks) cb();
+    expect(ctx.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes the AudioContext on destroy only once the capture on it is released", async () => {
+    const { ctx } = setupGlobals();
+    const __state = await voiceStoreState();
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    __state.activeTarget = { panelId: "panel-1" };
+    await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Terminal" });
+
+    voiceRecordingService.destroy();
+    expect(ctx.close).not.toHaveBeenCalled();
+
+    await voiceRecordingService.stop("Dictation stopped.", { skipRemoteStop: true });
+    expect(ctx.close).toHaveBeenCalledTimes(1);
+    expect(ctx.suspend).not.toHaveBeenCalled();
+    __state.activeTarget = null;
+  });
+
+  it("closes the idle AudioContext after a few minutes, and builds a new one after", async () => {
+    const { ctx } = setupGlobals();
+    const audioContextCtor = vi.fn(function () {
+      return ctx;
+    });
+    vi.stubGlobal("AudioContext", audioContextCtor);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const __state = await voiceStoreState();
+      const { voiceRecordingService } = await import("../VoiceRecordingService");
+      __state.activeTarget = { panelId: "panel-1" };
+      await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Terminal" });
+      await voiceRecordingService.stop("Dictation stopped.", { skipRemoteStop: true });
+
+      vi.advanceTimersByTime(60_000);
+      expect(ctx.close).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(5 * 60_000);
+      expect(ctx.close).toHaveBeenCalledTimes(1);
+
+      __state.activeTarget = { panelId: "panel-1" };
+      await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Terminal" });
+      expect(audioContextCtor).toHaveBeenCalledTimes(2);
+      __state.activeTarget = null;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("builds a fresh AudioContext after the worklet fails to load", async () => {
+    const { ctx } = setupGlobals();
+    const audioContextCtor = vi.fn(function () {
+      return ctx;
+    });
+    vi.stubGlobal("AudioContext", audioContextCtor);
+    ctx.audioWorklet.addModule.mockRejectedValueOnce(new Error("module failed"));
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Terminal" });
+    expect(ctx.close).toHaveBeenCalledTimes(1);
+
+    await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Terminal" });
+    expect(audioContextCtor).toHaveBeenCalledTimes(2);
+    expect(ctx.audioWorklet.addModule).toHaveBeenCalledTimes(2);
   });
 
   it("stops recording when the active panel is moved to trash (panel-close regression)", async () => {
@@ -491,9 +835,7 @@ describe("VoiceRecordingService — background recording", () => {
       }
     );
 
-    const { __state: voiceState } = (await import("@/store/voiceRecordingStore")) as unknown as {
-      __state: { activeTarget: { panelId: string } | null };
-    };
+    const voiceState = await voiceStoreState();
     voiceState.activeTarget = { panelId: "panel-1" };
 
     setupGlobals();
@@ -521,6 +863,186 @@ describe("isActiveVoiceSession helper", () => {
     // press during arming as continuing the start, not stopping a session
     // that hasn't begun.
     expect(isActiveVoiceSession("arming")).toBe(false);
+  });
+});
+
+describe("VoiceRecordingService — the keyboard follows a start (#14770)", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    suspendCallbacks.length = 0;
+    focusDictationComposer.mockClear();
+  });
+
+  afterEach(() => {
+    // The store mock is shared with the suites after this one, and one of them
+    // compares the first arming call with its own start.
+    if (arranged) {
+      arranged.state.status = "idle";
+      arranged.state.activeTarget = null;
+      arranged.state.pendingTarget = null;
+      arranged.state.lockedTarget = null;
+      for (const fn of arranged.calls) fn.mockClear();
+      arranged = null;
+    }
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  type VoiceState = {
+    status: string;
+    activeTarget: { panelId: string } | null;
+    pendingTarget: { panelId: string } | null;
+    lockedTarget: { panelId: string } | null;
+  };
+  let arranged: { state: VoiceState; calls: Mock[] } | null = null;
+
+  async function arrange(recordingMode: "toggle" | "push-to-talk" = "toggle") {
+    const electron = buildElectronStub();
+    electron.voiceInput.getSettings.mockResolvedValue({
+      enabled: true,
+      openaiApiKey: "sk-key",
+      correctionEnabled: false,
+      recordingMode,
+    });
+    setupGlobals(electron);
+
+    const panelState: { focusedId: string | null; panelsById: Record<string, unknown> } =
+      Reflect.get(await import("@/store/panelStore"), "__state");
+    panelState.focusedId = "panel-1";
+    panelState.panelsById = {
+      "panel-1": { id: "panel-1", title: "One", location: "grid", launchAgentId: "claude" },
+      "panel-2": { id: "panel-2", title: "Two", location: "grid", launchAgentId: "claude" },
+    };
+    const voiceState: VoiceState = Reflect.get(
+      await import("@/store/voiceRecordingStore"),
+      "__state"
+    );
+    const { setArming, recordRecentTarget } = (
+      await import("@/store/voiceRecordingStore")
+    ).useVoiceRecordingStore.getState();
+    arranged = { state: voiceState, calls: [vi.mocked(setArming), vi.mocked(recordRecentTarget)] };
+    voiceState.status = "idle";
+    voiceState.activeTarget = null;
+    voiceState.pendingTarget = null;
+    voiceState.lockedTarget = null;
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const startSpy = vi.spyOn(voiceRecordingService, "start").mockResolvedValue();
+    const stopSpy = vi.spyOn(voiceRecordingService, "stop").mockResolvedValue();
+    voiceRecordingService.initialize();
+    await vi.waitFor(() => {
+      expect(electron.voiceInput.getSettings).toHaveBeenCalled();
+    });
+    return { voiceRecordingService, voiceState, startSpy, stopSpy };
+  }
+
+  // The mic button in a pane's input bar.
+  it("asks for the target's composer when a toggle starts dictation, before the mic opens", async () => {
+    const { voiceRecordingService, startSpy } = await arrange();
+
+    await voiceRecordingService.toggle({ panelId: "panel-1" });
+
+    expect(focusDictationComposer).toHaveBeenCalledTimes(1);
+    expect(focusDictationComposer).toHaveBeenCalledWith("panel-1");
+    expect(focusDictationComposer.mock.invocationCallOrder[0]).toBeLessThan(
+      startSpy.mock.invocationCallOrder[0]!
+    );
+  });
+
+  it("asks for it from the dictation key", async () => {
+    const { voiceRecordingService, startSpy } = await arrange();
+
+    await voiceRecordingService.toggleFocusedPanel();
+
+    expect(startSpy).toHaveBeenCalledTimes(1);
+    expect(focusDictationComposer).toHaveBeenCalledTimes(1);
+    expect(focusDictationComposer).toHaveBeenCalledWith("panel-1");
+  });
+
+  it("asks for it from a held key in push-to-talk", async () => {
+    const { voiceRecordingService, startSpy } = await arrange("push-to-talk");
+
+    await voiceRecordingService.toggleFocusedPanel();
+
+    expect(startSpy).toHaveBeenCalledTimes(1);
+    expect(focusDictationComposer).toHaveBeenCalledTimes(1);
+    expect(focusDictationComposer).toHaveBeenCalledWith("panel-1");
+    expect(focusDictationComposer.mock.invocationCallOrder[0]).toBeLessThan(
+      startSpy.mock.invocationCallOrder[0]!
+    );
+  });
+
+  // The resolved target, not the selected pane: the two differ for the assistant.
+  it("names the resolved target in push-to-talk", async () => {
+    const { voiceRecordingService, startSpy } = await arrange("push-to-talk");
+    const { isAssistantFocused } = await import("@/store/macroFocusStore");
+    const helpState: { terminalId: string | null } = Reflect.get(
+      await import("@/store/helpPanelStore"),
+      "__state"
+    );
+    vi.mocked(isAssistantFocused).mockReturnValue(true);
+    helpState.terminalId = "assistant-term-1";
+    const panelState: { panelsById: Record<string, unknown> } = Reflect.get(
+      await import("@/store/panelStore"),
+      "__state"
+    );
+    panelState.panelsById["assistant-term-1"] = { id: "assistant-term-1", location: "background" };
+
+    try {
+      await voiceRecordingService.toggleFocusedPanel();
+    } finally {
+      vi.mocked(isAssistantFocused).mockReturnValue(false);
+      helpState.terminalId = null;
+    }
+
+    expect(startSpy).toHaveBeenCalledWith(expect.objectContaining({ panelId: "assistant-term-1" }));
+    expect(focusDictationComposer).toHaveBeenCalledTimes(1);
+    expect(focusDictationComposer).toHaveBeenCalledWith("assistant-term-1");
+  });
+
+  // The helper decides what a pane other than the selected one gets; the
+  // service names the pane dictation goes to, not the one holding focus.
+  it("names the locked target's pane rather than the focused one", async () => {
+    const { voiceRecordingService, voiceState } = await arrange();
+    voiceState.lockedTarget = { panelId: "panel-2" };
+
+    await voiceRecordingService.toggleFocusedPanel();
+
+    expect(focusDictationComposer).toHaveBeenCalledTimes(1);
+    expect(focusDictationComposer).toHaveBeenCalledWith("panel-2");
+  });
+
+  it("leaves the keyboard alone when the press stops the session", async () => {
+    const { voiceRecordingService, voiceState, stopSpy } = await arrange();
+    voiceState.status = "recording";
+    voiceState.activeTarget = { panelId: "panel-1" };
+
+    await voiceRecordingService.toggle({ panelId: "panel-1" });
+
+    expect(stopSpy).toHaveBeenCalledTimes(1);
+    expect(focusDictationComposer).not.toHaveBeenCalled();
+  });
+
+  it("leaves the keyboard alone when the press stops a session from the key", async () => {
+    const { voiceRecordingService, voiceState, stopSpy } = await arrange("push-to-talk");
+    voiceState.status = "recording";
+    voiceState.activeTarget = { panelId: "panel-1" };
+
+    await voiceRecordingService.toggleFocusedPanel();
+
+    expect(stopSpy).toHaveBeenCalledTimes(1);
+    expect(focusDictationComposer).not.toHaveBeenCalled();
+  });
+
+  it("leaves the keyboard alone when the press cancels the arming window", async () => {
+    const { voiceRecordingService, voiceState, startSpy } = await arrange();
+    voiceState.status = "arming";
+    voiceState.activeTarget = { panelId: "panel-1" };
+
+    await voiceRecordingService.toggle({ panelId: "panel-1" });
+
+    expect(startSpy).not.toHaveBeenCalled();
+    expect(focusDictationComposer).not.toHaveBeenCalled();
   });
 });
 
@@ -651,7 +1173,7 @@ describe("VoiceRecordingService — arming state", () => {
   });
 
   it("Escape during arming routes through finishSession instead of stop()", async () => {
-    const { windowListeners } = setupGlobals();
+    setupGlobals();
 
     const storeModule = (await import("@/store/voiceRecordingStore")) as unknown as {
       useVoiceRecordingStore: {
@@ -667,16 +1189,9 @@ describe("VoiceRecordingService — arming state", () => {
     const stopSpy = vi.spyOn(voiceRecordingService, "stop");
 
     voiceRecordingService.initialize();
+    const { dispatchEscapeFallback } = await import("@/lib/escapeStack");
 
-    const escapeEvent = {
-      key: "Escape",
-      preventDefault: vi.fn(),
-      stopPropagation: vi.fn(),
-    };
-    const keydownListeners = windowListeners["keydown"] ?? [];
-    for (const listener of keydownListeners) {
-      listener(escapeEvent);
-    }
+    expect(dispatchEscapeFallback()).toBe(true);
 
     expect(finishSessionMock).toHaveBeenCalledWith({ nextStatus: "idle" });
     expect(stopSpy).not.toHaveBeenCalled();
@@ -684,6 +1199,145 @@ describe("VoiceRecordingService — arming state", () => {
     storeModule.__state.activeTarget = null;
     storeModule.__state.status = "idle";
   });
+
+  it("leaves a window Escape alone while recording so an open overlay can take it", async () => {
+    const { windowListeners } = setupGlobals();
+
+    const storeModule = (await import("@/store/voiceRecordingStore")) as unknown as {
+      __state: { activeTarget: { panelId: string } | null; status: string };
+    };
+    storeModule.__state.activeTarget = { panelId: "panel-1" };
+    storeModule.__state.status = "recording";
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const stopSpy = vi
+      .spyOn(voiceRecordingService, "stop")
+      .mockImplementation(async () => undefined);
+
+    voiceRecordingService.initialize();
+
+    const escapeEvent = {
+      key: "Escape",
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+    };
+    for (const listener of windowListeners["keydown"] ?? []) {
+      listener(escapeEvent);
+    }
+
+    expect(escapeEvent.stopPropagation).not.toHaveBeenCalled();
+    expect(escapeEvent.preventDefault).not.toHaveBeenCalled();
+    expect(stopSpy).not.toHaveBeenCalled();
+
+    storeModule.__state.activeTarget = null;
+    storeModule.__state.status = "idle";
+  });
+
+  it("an Escape nothing else took cancels the dictation, where the dictation key stops it", async () => {
+    setupGlobals();
+
+    const storeModule = (await import("@/store/voiceRecordingStore")) as unknown as {
+      useVoiceRecordingStore: {
+        getState: () => {
+          finishSession: ReturnType<typeof vi.fn>;
+          announce: ReturnType<typeof vi.fn>;
+        };
+      };
+      __state: { activeTarget: { panelId: string } | null; status: string };
+    };
+    storeModule.__state.activeTarget = { panelId: "panel-1" };
+    storeModule.__state.status = "recording";
+    const { finishSession, announce } = storeModule.useVoiceRecordingStore.getState();
+    finishSession.mockClear();
+    announce.mockClear();
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const stopSpy = vi
+      .spyOn(voiceRecordingService, "stop")
+      .mockImplementation(async () => undefined);
+
+    voiceRecordingService.initialize();
+    const { dispatchEscapeFallback } = await import("@/lib/escapeStack");
+
+    await voiceRecordingService.toggle({ panelId: "panel-1" });
+    expect(stopSpy).toHaveBeenCalledOnce();
+    expect(stopSpy.mock.calls[0]![1]).toMatchObject({ preserveLiveText: true });
+
+    expect(dispatchEscapeFallback()).toBe(true);
+
+    expect(stopSpy).toHaveBeenCalledOnce();
+    expect(stopSpy.mock.calls[0]![1]).toMatchObject({ reason: "user" });
+    expect(finishSession).toHaveBeenCalledWith({ preserveLiveText: false });
+    expect(announce).toHaveBeenCalledWith(expect.stringMatching(/cancelled.*discarded/i));
+
+    storeModule.__state.activeTarget = null;
+    storeModule.__state.status = "idle";
+  });
+
+  it("leaves Escape alone once the session is finishing", async () => {
+    setupGlobals();
+
+    const storeModule = (await import("@/store/voiceRecordingStore")) as unknown as {
+      __state: { activeTarget: { panelId: string } | null; status: string };
+    };
+    storeModule.__state.activeTarget = { panelId: "panel-1" };
+    storeModule.__state.status = "finishing";
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const stopSpy = vi
+      .spyOn(voiceRecordingService, "stop")
+      .mockImplementation(async () => undefined);
+
+    voiceRecordingService.initialize();
+    const { dispatchEscapeFallback } = await import("@/lib/escapeStack");
+
+    expect(dispatchEscapeFallback()).toBe(false);
+    expect(voiceRecordingService.handleEscape("panel-1")).toBe(false);
+    expect(stopSpy).not.toHaveBeenCalled();
+
+    storeModule.__state.activeTarget = null;
+    storeModule.__state.status = "idle";
+  });
+
+  it.each(["connecting", "recording", "paused", "reconnecting"])(
+    "takes a composer's Escape only from the panel it is dictating into (%s)",
+    async (status) => {
+      setupGlobals();
+
+      const storeModule = (await import("@/store/voiceRecordingStore")) as unknown as {
+        useVoiceRecordingStore: {
+          getState: () => { finishSession: ReturnType<typeof vi.fn> };
+        };
+        __state: { activeTarget: { panelId: string } | null; status: string };
+      };
+      storeModule.__state.activeTarget = { panelId: "panel-1" };
+      storeModule.__state.status = status;
+      const { finishSession } = storeModule.useVoiceRecordingStore.getState();
+      finishSession.mockClear();
+
+      const { voiceRecordingService } = await import("../VoiceRecordingService");
+      const stopSpy = vi.spyOn(voiceRecordingService, "stop");
+      const teardownDone = () =>
+        vi.waitFor(() => expect(Reflect.get(voiceRecordingService, "stopPromise")).toBeNull());
+
+      expect(voiceRecordingService.handleEscape("panel-2")).toBe(false);
+      expect(finishSession).not.toHaveBeenCalled();
+
+      expect(voiceRecordingService.handleEscape("panel-1")).toBe(true);
+      expect(finishSession).toHaveBeenCalledExactlyOnceWith({ preserveLiveText: false });
+      await teardownDone();
+
+      voiceRecordingService.initialize();
+      const { dispatchEscapeFallback } = await import("@/lib/escapeStack");
+      expect(dispatchEscapeFallback()).toBe(true);
+      expect(finishSession).toHaveBeenCalledTimes(2);
+      await teardownDone();
+      expect(stopSpy).not.toHaveBeenCalled();
+
+      storeModule.__state.activeTarget = null;
+      storeModule.__state.status = "idle";
+    }
+  );
 });
 
 describe("VoiceRecordingService — microphone device selection", () => {
@@ -754,18 +1408,20 @@ describe("VoiceRecordingService — microphone device selection", () => {
 
     // Override getUserMedia to return a track with a different deviceId
     const getUserMediaMock = vi.mocked(navigator.mediaDevices.getUserMedia);
-    getUserMediaMock.mockResolvedValue({
-      getTracks: () => [{ stop: vi.fn() }],
-      getAudioTracks: () => [
-        {
-          label: "Other Mic",
-          enabled: true,
-          muted: false,
-          readyState: "live",
-          getSettings: () => ({ deviceId: "different-mic-id" }),
-        },
-      ],
-    } as unknown as MediaStream);
+    getUserMediaMock.mockResolvedValue(
+      fakeStream({
+        getTracks: () => [{ stop: vi.fn() }],
+        getAudioTracks: () => [
+          {
+            label: "Other Mic",
+            enabled: true,
+            muted: false,
+            readyState: "live",
+            getSettings: () => ({ deviceId: "different-mic-id" }),
+          },
+        ],
+      })
+    );
 
     const { logWarn } = await import("@/utils/logger");
 
@@ -876,6 +1532,31 @@ describe("VoiceRecordingService — assistant dictation routing (#8887)", () => 
     );
   });
 
+  it.each([
+    ["a plain shell", { id: "p1", kind: "terminal", title: "zsh", location: "grid" }],
+    ["a browser panel", { id: "p1", kind: "browser", title: "Web", location: "grid" }],
+  ])("refuses to start dictation in %s and says to focus an agent terminal", async (_n, entry) => {
+    setupGlobals();
+    const { macro, panel } = await importMocks();
+    macro.isAssistantFocused.mockReturnValue(false);
+    panel.__state.focusedId = "p1";
+    panel.__state.panelsById = { p1: entry };
+
+    const { notify } = await import("@/lib/notify");
+    vi.mocked(notify).mockClear();
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const toggleSpy = vi.spyOn(voiceRecordingService, "toggle").mockResolvedValue();
+
+    await voiceRecordingService.toggleFocusedPanel();
+
+    expect(toggleSpy).not.toHaveBeenCalled();
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(notify).mock.calls[0]![0]).toMatchObject({
+      type: "error",
+      message: expect.stringContaining("agent terminal"),
+    });
+  });
+
   it("never aims dictation at a focused pane held for recovery (#12434)", async () => {
     setupGlobals();
     const { macro, panel } = await importMocks();
@@ -928,7 +1609,12 @@ describe("VoiceRecordingService — assistant dictation routing (#8887)", () => 
     panel.__state.focusedId = "grid-panel-9";
     panel.__state.panelsById = {
       "assistant-term-1": { id: "assistant-term-1", location: "background" },
-      "grid-panel-9": { id: "grid-panel-9", title: "Terminal", location: "grid" },
+      "grid-panel-9": {
+        id: "grid-panel-9",
+        title: "Terminal",
+        location: "grid",
+        launchAgentId: "claude",
+      },
     };
 
     const { voiceRecordingService } = await import("../VoiceRecordingService");
@@ -1010,6 +1696,234 @@ describe("VoiceRecordingService — assistant dictation routing (#8887)", () => 
   });
 });
 
+describe("VoiceRecordingService — Canopy's reply box (#14777)", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    suspendCallbacks.length = 0;
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  const REPLY = {
+    panelId: "isolated-composer:run-1",
+    panelTitle: "Reply to Claude",
+    surface: "canopy-reply" as const,
+    terminalId: "run-1",
+    canopyRow: { runId: "run-1", hostScope: null },
+  };
+
+  type VoiceState = {
+    status: string;
+    activeTarget: object | null;
+    pendingTarget: object | null;
+    lockedTarget: object | null;
+  };
+
+  function hasMockExport<K extends string, T>(mod: object, key: K): mod is Record<K, T> {
+    return key in mod;
+  }
+
+  async function canopyState() {
+    const canopy = await import("@/store/canopyStore");
+    if (!hasMockExport<"__state", { isOpen: boolean; revealReply: Mock }>(canopy, "__state")) {
+      throw new Error("canopyStore mock lacks __state");
+    }
+    return canopy.__state;
+  }
+
+  async function arrange() {
+    setupGlobals();
+    const panel = await import("@/store/panelStore");
+    if (
+      !hasMockExport<"__state", { focusedId: string | null; panelsById: Record<string, unknown> }>(
+        panel,
+        "__state"
+      )
+    ) {
+      throw new Error("panelStore mock lacks __state");
+    }
+    panel.__state.focusedId = "grid-1";
+    panel.__state.panelsById = {
+      "grid-1": { id: "grid-1", title: "Behind", location: "grid", launchAgentId: "claude" },
+    };
+    (await canopyState()).isOpen = true;
+    const voice = await import("@/store/voiceRecordingStore");
+    if (!hasMockExport<"__state", VoiceState>(voice, "__state")) {
+      throw new Error("voiceRecordingStore mock lacks __state");
+    }
+    voice.__state.status = "idle";
+    voice.__state.activeTarget = null;
+    voice.__state.pendingTarget = null;
+    voice.__state.lockedTarget = null;
+    vi.mocked(voice.useVoiceRecordingStore.getState().announce).mockClear();
+    const { notify } = await import("@/lib/notify");
+    vi.mocked(notify).mockClear();
+    const registry = await import("@/services/canopyReplyDictation");
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const toggleSpy = vi.spyOn(voiceRecordingService, "toggle").mockResolvedValue();
+    const stopSpy = vi.spyOn(voiceRecordingService, "stop").mockResolvedValue();
+    return { voiceRecordingService, toggleSpy, stopSpy, registry, panel, voice, notify };
+  }
+
+  afterEach(async () => {
+    (await canopyState()).isOpen = false;
+  });
+
+  it("starts the selected row's reply and moves the keyboard into it, not the grid pane behind", async () => {
+    const { voiceRecordingService, toggleSpy, registry } = await arrange();
+    const focus = vi.fn();
+    registry.registerCanopyReplyDictation(() => ({ ok: true, target: REPLY, focus }));
+
+    await voiceRecordingService.toggleFocusedPanel();
+
+    expect(toggleSpy).toHaveBeenCalledTimes(1);
+    expect(toggleSpy).toHaveBeenCalledWith(REPLY);
+    expect(focus).toHaveBeenCalledTimes(1);
+  });
+
+  it("goes to the reply ahead of a lock on a grid pane, and leaves the lock in place", async () => {
+    const { voiceRecordingService, toggleSpy, registry, voice } = await arrange();
+    voice.__state.lockedTarget = { panelId: "grid-1" };
+    registry.registerCanopyReplyDictation(() => ({ ok: true, target: REPLY, focus: () => {} }));
+
+    await voiceRecordingService.toggleFocusedPanel();
+
+    expect(toggleSpy).toHaveBeenCalledWith(REPLY);
+    expect(voice.__state.lockedTarget).toEqual({ panelId: "grid-1" });
+  });
+
+  it("says why when the selected row can't take a reply, and starts nothing", async () => {
+    const { voiceRecordingService, toggleSpy, registry, voice, notify } = await arrange();
+    const message = "It's asking for a secret. Type it straight into the terminal above.";
+    registry.registerCanopyReplyDictation(() => ({ ok: false, message }));
+
+    await voiceRecordingService.toggleFocusedPanel();
+
+    expect(toggleSpy).not.toHaveBeenCalled();
+    expect(voice.useVoiceRecordingStore.getState().announce).toHaveBeenCalledWith(message);
+    expect(vi.mocked(notify).mock.calls[0]![0]).toMatchObject({ message });
+  });
+
+  it("never falls back to the grid while Canopy has no inbox showing", async () => {
+    const { voiceRecordingService, toggleSpy, notify } = await arrange();
+
+    await voiceRecordingService.toggleFocusedPanel();
+
+    expect(toggleSpy).not.toHaveBeenCalled();
+    expect(vi.mocked(notify).mock.calls[0]![0]).toMatchObject({
+      message: expect.stringContaining("Select an agent in Canopy"),
+    });
+  });
+
+  it("still stops a running session first, wherever it is, and starts no reply", async () => {
+    const { voiceRecordingService, toggleSpy, stopSpy, registry, voice } = await arrange();
+    voice.__state.status = "recording";
+    voice.__state.activeTarget = { panelId: "grid-1" };
+    const focus = vi.fn();
+    registry.registerCanopyReplyDictation(() => ({ ok: true, target: REPLY, focus }));
+
+    await voiceRecordingService.toggleFocusedPanel();
+
+    expect(stopSpy).toHaveBeenCalledTimes(1);
+    expect(toggleSpy).not.toHaveBeenCalled();
+    expect(focus).not.toHaveBeenCalled();
+  });
+
+  it("takes a reply's session back to its own row, wherever Canopy's selection went (#14778)", async () => {
+    const { voiceRecordingService, registry, voice } = await arrange();
+    const canopy = await canopyState();
+    canopy.revealReply.mockClear();
+    const projects = await import("@/store/projectStore");
+    if (!hasMockExport<"__switchProject", Mock>(projects, "__switchProject")) {
+      throw new Error("projectStore mock lacks __switchProject");
+    }
+    projects.__switchProject.mockClear();
+    voice.__state.status = "recording";
+    voice.__state.activeTarget = REPLY;
+    const focus = vi.fn();
+    const unregister = registry.registerCanopyReplyDictation(() => ({
+      ok: true,
+      target: REPLY,
+      focus,
+    }));
+
+    // Still selected: the keyboard goes straight into its reply.
+    await expect(voiceRecordingService.focusActiveTarget()).resolves.toBe(true);
+    expect(focus).toHaveBeenCalledTimes(1);
+    expect(canopy.revealReply).not.toHaveBeenCalled();
+
+    // Another row selected since: Canopy is asked for the dictated row.
+    unregister();
+    const unregisterOther = registry.registerCanopyReplyDictation(() => ({
+      ok: true,
+      target: {
+        ...REPLY,
+        panelId: "isolated-composer:run-2",
+        terminalId: "run-2",
+        canopyRow: { runId: "run-2", hostScope: null },
+      },
+      focus,
+    }));
+    await expect(voiceRecordingService.focusActiveTarget()).resolves.toBe(true);
+    expect(canopy.revealReply).toHaveBeenLastCalledWith(REPLY.canopyRow);
+
+    // Canopy closed: the same, even with the row's own reply still answering
+    // from the panel on its way out.
+    unregisterOther();
+    registry.registerCanopyReplyDictation(() => ({ ok: true, target: REPLY, focus }));
+    canopy.isOpen = false;
+    await expect(voiceRecordingService.focusActiveTarget()).resolves.toBe(true);
+    expect(canopy.revealReply).toHaveBeenCalledTimes(2);
+    expect(canopy.revealReply).toHaveBeenLastCalledWith(REPLY.canopyRow);
+
+    expect(focus).toHaveBeenCalledTimes(1);
+    expect(projects.__switchProject).not.toHaveBeenCalled();
+  });
+
+  it("goes nowhere for a reply when Canopy can't open", async () => {
+    const { voiceRecordingService, voice } = await arrange();
+    const canopy = await canopyState();
+    canopy.isOpen = false;
+    canopy.revealReply.mockClear();
+    canopy.revealReply.mockReturnValueOnce(false);
+    voice.__state.status = "recording";
+    voice.__state.activeTarget = REPLY;
+
+    await expect(voiceRecordingService.focusActiveTarget()).resolves.toBe(false);
+    expect(canopy.revealReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("names the queued reply's row, not the session still draining, when the indicator is clicked", async () => {
+    const { voiceRecordingService, voice } = await arrange();
+    const canopy = await canopyState();
+    canopy.isOpen = false;
+    canopy.revealReply.mockClear();
+    voice.__state.status = "finishing";
+    voice.__state.activeTarget = { panelId: "grid-1" };
+    voice.__state.pendingTarget = REPLY;
+
+    await expect(voiceRecordingService.focusActiveTarget()).resolves.toBe(true);
+    expect(canopy.revealReply).toHaveBeenCalledWith(REPLY.canopyRow);
+  });
+
+  it("keeps a reply's session going when the grid's panels change", async () => {
+    const { voiceRecordingService, stopSpy, panel, voice } = await arrange();
+    voiceRecordingService.initialize();
+    voice.__state.status = "recording";
+    voice.__state.activeTarget = REPLY;
+    const listeners = vi.mocked(panel.usePanelStore.subscribe).mock.calls.map((call) => call[0]);
+    expect(listeners.length).toBeGreaterThan(0);
+
+    const emptied = { ...panel.usePanelStore.getState(), panelsById: {}, panelIds: [] };
+    for (const listener of listeners) listener(emptied);
+
+    expect(stopSpy).not.toHaveBeenCalled();
+  });
+});
+
 describe("VoiceRecordingService — shortcut stops from anywhere (#12832)", () => {
   beforeEach(() => {
     vi.resetModules();
@@ -1024,6 +1938,7 @@ describe("VoiceRecordingService — shortcut stops from anywhere (#12832)", () =
   type VoiceState = {
     status: string;
     activeTarget: { panelId: string } | null;
+    pendingTarget: { panelId: string } | null;
     lockedTarget: { panelId: string } | null;
   };
   type PanelState = { focusedId: string | null; panelsById: Record<string, unknown> };
@@ -1035,6 +1950,7 @@ describe("VoiceRecordingService — shortcut stops from anywhere (#12832)", () =
   async function arrange(options: {
     status: string;
     activeTarget?: { panelId: string } | null;
+    pendingTarget?: { panelId: string } | null;
     recordingMode?: "toggle" | "push-to-talk";
   }) {
     const electron = buildElectronStub();
@@ -1050,8 +1966,8 @@ describe("VoiceRecordingService — shortcut stops from anywhere (#12832)", () =
     if (!hasMockState<PanelState>(panel)) throw new Error("panelStore mock lacks __state");
     panel.__state.focusedId = "panel-b";
     panel.__state.panelsById = {
-      "panel-a": { id: "panel-a", title: "Recording", location: "grid" },
-      "panel-b": { id: "panel-b", title: "Focused", location: "grid" },
+      "panel-a": { id: "panel-a", title: "Recording", location: "grid", launchAgentId: "claude" },
+      "panel-b": { id: "panel-b", title: "Focused", location: "grid", launchAgentId: "claude" },
     };
 
     const voiceModule = await import("@/store/voiceRecordingStore");
@@ -1062,6 +1978,7 @@ describe("VoiceRecordingService — shortcut stops from anywhere (#12832)", () =
     voiceState.status = options.status;
     voiceState.activeTarget =
       options.activeTarget === undefined ? { panelId: "panel-a" } : options.activeTarget;
+    voiceState.pendingTarget = options.pendingTarget ?? null;
     voiceState.lockedTarget = null;
     const finishSession = vi.mocked(voiceModule.useVoiceRecordingStore.getState().finishSession);
     finishSession.mockClear();
@@ -1087,18 +2004,64 @@ describe("VoiceRecordingService — shortcut stops from anywhere (#12832)", () =
     };
   }
 
-  for (const status of ["connecting", "recording", "paused", "reconnecting", "finishing"]) {
+  for (const status of ["connecting", "recording", "paused", "reconnecting"]) {
     it(`stops a ${status} session on another panel instead of retargeting to focus`, async () => {
       const { voiceRecordingService, stopSpy, startSpy, toggleSpy } = await arrange({ status });
 
       await voiceRecordingService.toggleFocusedPanel();
 
       expect(stopSpy).toHaveBeenCalledTimes(1);
-      expect(stopSpy).toHaveBeenCalledWith("Dictation stopped.", { preserveLiveText: true });
+      expect(stopSpy).toHaveBeenCalledWith("Dictation stopped.", {
+        preserveLiveText: true,
+        reason: "user",
+      });
       expect(startSpy).not.toHaveBeenCalled();
       expect(toggleSpy).not.toHaveBeenCalled();
     });
   }
+
+  // #14920: the session panel's Stop is the user's stop, and never a start.
+  for (const status of ["connecting", "recording", "paused", "reconnecting"]) {
+    it(`the session panel's Stop ends a ${status} session as the key does`, async () => {
+      const { voiceRecordingService, stopSpy, startSpy, toggleSpy } = await arrange({ status });
+
+      await voiceRecordingService.stopActiveSession();
+
+      expect(stopSpy).toHaveBeenCalledWith("Dictation stopped.", {
+        preserveLiveText: true,
+        reason: "user",
+      });
+      expect(startSpy).not.toHaveBeenCalled();
+      expect(toggleSpy).not.toHaveBeenCalled();
+    });
+  }
+
+  it.each(["idle", "finishing"])(
+    "the session panel's Stop starts nothing once the session is %s",
+    async (status) => {
+      const { voiceRecordingService, stopSpy, startSpy, toggleSpy } = await arrange({
+        status,
+        activeTarget: status === "idle" ? null : undefined,
+      });
+
+      await voiceRecordingService.stopActiveSession();
+
+      expect(stopSpy).not.toHaveBeenCalled();
+      expect(startSpy).not.toHaveBeenCalled();
+      expect(toggleSpy).not.toHaveBeenCalled();
+    }
+  );
+
+  // #14604: the finishing session is already ending, so the press is the next
+  // session's start rather than a stop that joins the drain.
+  it("starts the next session in the focused panel while another is finishing", async () => {
+    const { voiceRecordingService, stopSpy, toggleSpy } = await arrange({ status: "finishing" });
+
+    await voiceRecordingService.toggleFocusedPanel();
+
+    expect(stopSpy).not.toHaveBeenCalled();
+    expect(toggleSpy).toHaveBeenCalledWith(expect.objectContaining({ panelId: "panel-b" }));
+  });
 
   it("aborts the arming window from a different panel without opening the mic", async () => {
     const { voiceRecordingService, finishSession, stopSpy, startSpy, toggleSpy } = await arrange({
@@ -1194,8 +2157,28 @@ describe("VoiceRecordingService — shortcut stops from anywhere (#12832)", () =
     vi.mocked(keybindingService.matchesEvent).mockReset();
   });
 
-  it("cancels a pending retarget start when joining a stop already in flight", async () => {
-    const { voiceRecordingService, stopSpy } = await arrange({ status: "finishing" });
+  it("cancels a pending start before its capture attaches without touching the finishing session", async () => {
+    const { voiceRecordingService, voiceState, finishSession, stopSpy, toggleSpy } = await arrange({
+      status: "finishing",
+      pendingTarget: { panelId: "panel-c" },
+    });
+    const before: unknown = Reflect.get(voiceRecordingService, "startRequestId");
+
+    await voiceRecordingService.toggleFocusedPanel();
+
+    expect(Reflect.get(voiceRecordingService, "startRequestId")).not.toBe(before);
+    expect(voiceState.pendingTarget).toBeNull();
+    expect(voiceState.activeTarget).toEqual({ panelId: "panel-a" });
+    expect(finishSession).not.toHaveBeenCalled();
+    expect(stopSpy).not.toHaveBeenCalled();
+    expect(toggleSpy).not.toHaveBeenCalled();
+  });
+
+  it("cancels a pending start when an explicit stop joins a drain already in flight", async () => {
+    const { voiceRecordingService, voiceState, stopSpy } = await arrange({
+      status: "finishing",
+      pendingTarget: { panelId: "panel-c" },
+    });
     stopSpy.mockRestore();
     let releaseDrain: () => void = () => {};
     Reflect.set(
@@ -1206,12 +2189,19 @@ describe("VoiceRecordingService — shortcut stops from anywhere (#12832)", () =
       })
     );
     const before: unknown = Reflect.get(voiceRecordingService, "startRequestId");
+    let joined = false;
 
-    const pending = voiceRecordingService.toggleFocusedPanel();
-    releaseDrain();
-    await pending;
+    const stopping = voiceRecordingService.stop("Dictation cancelled.").then(() => {
+      joined = true;
+    });
 
     expect(Reflect.get(voiceRecordingService, "startRequestId")).not.toBe(before);
+    expect(voiceState.pendingTarget).toBeNull();
+    await Promise.resolve();
+    expect(joined).toBe(false);
+    releaseDrain();
+    await stopping;
+    expect(joined).toBe(true);
   });
 
   it("leaves explicit toggle(target) retargeting intact for panel mic buttons", async () => {
@@ -1387,6 +2377,65 @@ describe("VoiceRecordingService — pause/resume (#9191)", () => {
     expect(node.port.postMessage).toHaveBeenCalledWith({ type: "setPaused", value: false });
   });
 
+  it("reads the session's clock for its panel: wall time, paused time, the next auto-stop (#14920)", async () => {
+    setupGlobals();
+    await resetVoiceStoreFns();
+    const voiceState = await getVoiceMockState();
+    voiceState.activeTarget = { panelId: "panel-1" };
+    voiceState.status = "recording";
+    let now = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    expect(voiceRecordingService.getSessionClock()).toBeNull();
+    await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Test" });
+
+    now += 5_000;
+    expect(voiceRecordingService.getSessionClock()).toMatchObject({
+      elapsedMs: 5_000,
+      pausedMs: 0,
+      autoStop: { reason: "idle", remainingMs: 175_000 },
+    });
+
+    voiceRecordingService.pause();
+    now += 20_000;
+    // The wall clock runs on through a pause, which counts its own time.
+    expect(voiceRecordingService.getSessionClock()).toMatchObject({
+      elapsedMs: 25_000,
+      pausedMs: 20_000,
+      autoStop: { reason: "pause", remainingMs: 40_000 },
+    });
+
+    voiceState.status = "paused";
+    voiceRecordingService.resume();
+    now += 1_000;
+    expect(voiceRecordingService.getSessionClock()).toMatchObject({
+      elapsedMs: 26_000,
+      pausedMs: 20_000,
+      autoStop: { reason: "idle", remainingMs: 179_000 },
+    });
+
+    await voiceRecordingService.stop("Dictation stopped.", { preserveLiveText: true });
+    expect(voiceRecordingService.getSessionClock()).toBeNull();
+    voiceRecordingService.destroy();
+  });
+
+  it("forgets the session's clock when torn down mid-session (#14920)", async () => {
+    setupGlobals();
+    await resetVoiceStoreFns();
+    const voiceState = await getVoiceMockState();
+    voiceState.activeTarget = { panelId: "panel-1" };
+    voiceState.status = "recording";
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Test" });
+    voiceRecordingService.pause();
+    expect(voiceRecordingService.getSessionClock()).not.toBeNull();
+
+    voiceRecordingService.destroy();
+    expect(voiceRecordingService.getSessionClock()).toBeNull();
+  });
+
   it("togglePause() is a no-op when status is idle", async () => {
     setupGlobals();
     await resetVoiceStoreFns();
@@ -1426,9 +2475,7 @@ describe("VoiceRecordingService — interim delta handling (#9172)", () => {
       return () => {};
     });
 
-    const { __state } = (await import("@/store/voiceRecordingStore")) as unknown as {
-      __state: { activeTarget: { panelId: string } | null };
-    };
+    const __state = await voiceStoreState();
     __state.activeTarget = { panelId: "panel-1" };
 
     const { useTerminalInputStore } = await import("@/store/terminalInputStore");
@@ -1591,6 +2638,33 @@ describe("VoiceRecordingService — provider configuration gating", () => {
     await expect(voiceRecordingService.refreshConfiguration()).resolves.toBe(false);
   });
 
+  it("keeps a Deepgram user configured while cleanup stays off without an OpenAI key", async () => {
+    const electron = buildElectronStub();
+    electron.voiceInput.getSettings.mockResolvedValue({
+      enabled: true,
+      openaiApiKey: "",
+      deepgramApiKey: "dg-test",
+      transcriptionProvider: "deepgram",
+      correctionEnabled: true,
+    });
+    setupGlobals(electron);
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const { useVoiceRecordingStore } = await import("@/store/voiceRecordingStore");
+    await expect(voiceRecordingService.refreshConfiguration()).resolves.toBe(true);
+    expect(useVoiceRecordingStore.getState().setCorrectionEnabled).toHaveBeenLastCalledWith(false);
+
+    electron.voiceInput.getSettings.mockResolvedValue({
+      enabled: true,
+      openaiApiKey: "sk-key",
+      deepgramApiKey: "dg-test",
+      transcriptionProvider: "deepgram",
+      correctionEnabled: true,
+    });
+    await voiceRecordingService.refreshConfiguration();
+    expect(useVoiceRecordingStore.getState().setCorrectionEnabled).toHaveBeenLastCalledWith(true);
+  });
+
   it("treats an OpenAI user with an OpenAI key as configured", async () => {
     const electron = buildElectronStub();
     electron.voiceInput.getSettings.mockResolvedValue({
@@ -1606,6 +2680,21 @@ describe("VoiceRecordingService — provider configuration gating", () => {
     await expect(voiceRecordingService.refreshConfiguration()).resolves.toBe(true);
   });
 });
+type VoiceRecordingServiceInstance =
+  (typeof import("../VoiceRecordingService"))["voiceRecordingService"];
+
+// Focus a plain terminal, the target a dictation shortcut picks up.
+async function focusTerminalPanel() {
+  const panelState: { focusedId: string | null; panelsById: Record<string, unknown> } = Reflect.get(
+    await import("@/store/panelStore"),
+    "__state"
+  );
+  panelState.focusedId = "panel-1";
+  panelState.panelsById = {
+    "panel-1": { id: "panel-1", title: "Terminal", location: "grid", launchAgentId: "claude" },
+  };
+}
+
 describe("VoiceRecordingService — push-to-talk mode (#9189)", () => {
   beforeEach(() => {
     vi.resetModules();
@@ -1628,6 +2717,14 @@ describe("VoiceRecordingService — push-to-talk mode (#9189)", () => {
     return stub;
   }
 
+  // What the dispatched shortcut does after its keydown: start in the focused
+  // panel, which claims the press so its release can stop the recording.
+  async function startFromPress(service: VoiceRecordingServiceInstance) {
+    await focusTerminalPanel();
+    vi.spyOn(service, "start").mockResolvedValue();
+    await service.toggleFocusedPanel();
+  }
+
   it("toggleFocusedPanel calls start() in push-to-talk mode (not toggle)", async () => {
     const electron = buildPttElectronStub();
     setupGlobals(electron);
@@ -1637,7 +2734,7 @@ describe("VoiceRecordingService — push-to-talk mode (#9189)", () => {
     };
     panel.__state.focusedId = "panel-1";
     panel.__state.panelsById = {
-      "panel-1": { id: "panel-1", title: "Terminal", location: "grid" },
+      "panel-1": { id: "panel-1", title: "Terminal", location: "grid", launchAgentId: "claude" },
     };
 
     const { voiceRecordingService } = await import("../VoiceRecordingService");
@@ -1672,7 +2769,7 @@ describe("VoiceRecordingService — push-to-talk mode (#9189)", () => {
     };
     panel.__state.focusedId = "panel-1";
     panel.__state.panelsById = {
-      "panel-1": { id: "panel-1", title: "Terminal", location: "grid" },
+      "panel-1": { id: "panel-1", title: "Terminal", location: "grid", launchAgentId: "claude" },
     };
 
     const { voiceRecordingService } = await import("../VoiceRecordingService");
@@ -1727,6 +2824,7 @@ describe("VoiceRecordingService — push-to-talk mode (#9189)", () => {
       ctrlKey: false,
     } as unknown as KeyboardEvent;
     for (const listener of keydownListeners) listener(downEvent);
+    await startFromPress(voiceRecordingService);
 
     // Simulate the keyup of the same key.
     const upEvent = { code: "Period" } as unknown as KeyboardEvent;
@@ -1760,6 +2858,7 @@ describe("VoiceRecordingService — push-to-talk mode (#9189)", () => {
 
     const down = { code: "KeyU", key: "U", repeat: false, metaKey: true, shiftKey: true };
     for (const listener of windowListeners["keydown"] ?? []) listener(down);
+    await startFromPress(voiceRecordingService);
     for (const listener of windowListeners["keyup"] ?? []) listener({ code: "KeyU" });
 
     expect(stopSpy).toHaveBeenCalledWith(
@@ -1800,6 +2899,7 @@ describe("VoiceRecordingService — push-to-talk mode (#9189)", () => {
       ctrlKey: false,
     } as unknown as KeyboardEvent;
     for (const listener of keydownListeners) listener(downEvent);
+    await startFromPress(voiceRecordingService);
 
     // Period keyup never arrives (macOS swallows it); only MetaLeft keyup fires.
     const metaUpEvent = { code: "MetaLeft" } as unknown as KeyboardEvent;
@@ -1830,7 +2930,10 @@ describe("VoiceRecordingService — push-to-talk mode (#9189)", () => {
     const keydownListeners = windowListeners["keydown"] ?? [];
     const keyupListeners = windowListeners["keyup"] ?? [];
 
-    // Only the repeating keydown fires — pttActiveKeyCode must not be set.
+    // A real press starts and claims the session; the repeat must not replace it.
+    for (const listener of keydownListeners)
+      listener({ code: "Period", key: ".", repeat: false, metaKey: true });
+    await startFromPress(voiceRecordingService);
     const repeatEvent = {
       code: "Period",
       key: ".",
@@ -1842,11 +2945,12 @@ describe("VoiceRecordingService — push-to-talk mode (#9189)", () => {
     } as unknown as KeyboardEvent;
     for (const listener of keydownListeners) listener(repeatEvent);
 
-    // Now release — keyup should NOT fire stop since no PTT session is tracked.
+    // The release still stops the claimed press, exactly once.
     const upEvent = { code: "Period" } as unknown as KeyboardEvent;
     for (const listener of keyupListeners) listener(upEvent);
+    for (const listener of keyupListeners) listener(upEvent);
 
-    expect(stopSpy).not.toHaveBeenCalled();
+    expect(stopSpy).toHaveBeenCalledTimes(1);
   });
 
   it("window blur stops the session when a PTT press is active", async () => {
@@ -1882,6 +2986,7 @@ describe("VoiceRecordingService — push-to-talk mode (#9189)", () => {
       ctrlKey: false,
     } as unknown as KeyboardEvent;
     for (const listener of keydownListeners) listener(downEvent);
+    await startFromPress(voiceRecordingService);
 
     for (const listener of blurListeners) listener(new Event("blur"));
 
@@ -1960,6 +3065,7 @@ describe("VoiceRecordingService — push-to-talk mode (#9189)", () => {
       ctrlKey: false,
     } as unknown as KeyboardEvent;
     for (const listener of keydownListeners) listener(downEvent);
+    await startFromPress(voiceRecordingService);
 
     // KeyA release while V is still held — must not stop.
     for (const listener of keyupListeners) listener({ code: "KeyA" } as unknown as KeyboardEvent);
@@ -2003,10 +3109,961 @@ describe("VoiceRecordingService — push-to-talk mode (#9189)", () => {
     } as unknown as KeyboardEvent;
     for (const listener of keydownListeners) listener(downEvent);
 
+    await startFromPress(voiceRecordingService);
+
     // ShiftLeft release alone — should NOT stop.
     const shiftUpEvent = { code: "ShiftLeft" } as unknown as KeyboardEvent;
     for (const listener of keyupListeners) listener(shiftUpEvent);
+    expect(stopSpy).not.toHaveBeenCalled();
+
+    // The trigger release still does.
+    for (const listener of keyupListeners) listener({ code: "Period" });
+    expect(stopSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("VoiceRecordingService — a session another view owns (#14601)", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    suspendCallbacks.length = 0;
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  const elsewhere = {
+    sessionId: "remote",
+    hostId: "local",
+    projectId: "project-a",
+    projectName: "Alpha",
+    details: null as VoiceSessionSnapshot | null,
+  };
+  // The owner's report, with only its phase mattering here.
+  const reported = (phase: VoiceSessionSnapshot["phase"]): VoiceSessionSnapshot => ({
+    phase,
+    kind: "dictation",
+    targetTitle: "Claude",
+    targetChrome: null,
+    targetHostId: "local",
+    projectName: "Alpha",
+    worktreeLabel: null,
+    micLabel: null,
+    micSignal: "live",
+    micNotice: null,
+    stopWarning: false,
+    correctionEnabled: false,
+    locked: false,
+    wordCount: 0,
+    transcript: "",
+    provider: null,
+    clock: null,
+  });
+
+  function hasMockState<T>(mod: object): mod is { __state: T } {
+    return "__state" in mod;
+  }
+
+  function hasSwitchMock(mod: object): mod is { __switchProject: Mock<(id: string) => void> } {
+    return "__switchProject" in mod;
+  }
+
+  type VoiceState = {
+    status: string;
+    activeTarget: { panelId: string } | null;
+    lockedTarget: { panelId: string } | null;
+    sessionElsewhere: unknown;
+  };
+  type PanelState = { focusedId: string | null; panelsById: Record<string, unknown> };
+
+  async function arrange(options: {
+    status?: string;
+    sessionElsewhere?: typeof elsewhere | null;
+    recordingMode?: "toggle" | "push-to-talk";
+  }) {
+    const electron = buildElectronStub();
+    electron.voiceInput.getSettings.mockResolvedValue({
+      enabled: true,
+      openaiApiKey: "sk-key",
+      correctionEnabled: false,
+      recordingMode: options.recordingMode ?? "toggle",
+    });
+    const { windowListeners } = setupGlobals(electron);
+
+    const panel = await import("@/store/panelStore");
+    if (!hasMockState<PanelState>(panel)) throw new Error("panelStore mock lacks __state");
+    panel.__state.focusedId = "panel-b";
+    panel.__state.panelsById = {
+      "panel-b": { id: "panel-b", title: "Focused", location: "grid", launchAgentId: "claude" },
+      "panel-c": { id: "panel-c", title: "Later", location: "grid", launchAgentId: "claude" },
+    };
+
+    const voiceModule = await import("@/store/voiceRecordingStore");
+    if (!hasMockState<VoiceState>(voiceModule)) {
+      throw new Error("voiceRecordingStore mock lacks __state");
+    }
+    const voiceState = voiceModule.__state;
+    voiceState.status = options.status ?? "idle";
+    voiceState.activeTarget = voiceState.status === "idle" ? null : { panelId: "panel-a" };
+    voiceState.lockedTarget = null;
+    voiceState.sessionElsewhere =
+      options.sessionElsewhere === undefined ? elsewhere : options.sessionElsewhere;
+    const announce = vi.mocked(voiceModule.useVoiceRecordingStore.getState().announce);
+    announce.mockClear();
+    const applyLiveSessionUpdate = vi.mocked(
+      voiceModule.useVoiceRecordingStore.getState().applyLiveSessionUpdate
+    );
+    applyLiveSessionUpdate.mockClear();
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    voiceRecordingService.initialize();
+    await vi.waitFor(() => {
+      expect(electron.voiceInput.getSettings).toHaveBeenCalled();
+    });
+
+    const stopSpy = vi.spyOn(voiceRecordingService, "stop").mockResolvedValue();
+    const startSpy = vi.spyOn(voiceRecordingService, "start").mockResolvedValue();
+    const toggleSpy = vi.spyOn(voiceRecordingService, "toggle").mockResolvedValue();
+    return {
+      voiceRecordingService,
+      voiceState,
+      panelState: panel.__state,
+      electron,
+      windowListeners,
+      announce,
+      applyLiveSessionUpdate,
+      stopSpy,
+      startSpy,
+      toggleSpy,
+    };
+  }
+
+  it("applies main's reports of where the live session is, pulled and pushed", async () => {
+    const { electron, applyLiveSessionUpdate } = await arrange({ sessionElsewhere: null });
+    await vi.waitFor(() => {
+      expect(applyLiveSessionUpdate).toHaveBeenCalledWith({ revision: 0, session: null });
+    });
+
+    const push = { revision: 4, session: elsewhere };
+    const onLiveSession = electron.voiceInput.onLiveSession.mock.calls[0]![0];
+    onLiveSession(push);
+
+    expect(applyLiveSessionUpdate).toHaveBeenLastCalledWith(push);
+  });
+
+  it("stops the other view's session instead of starting one on the focused panel", async () => {
+    const { voiceRecordingService, electron, announce, stopSpy, startSpy, toggleSpy } =
+      await arrange({});
+
+    await voiceRecordingService.toggleFocusedPanel();
+
+    expect(electron.voiceInput.stopLive).toHaveBeenCalledWith({ sessionId: "remote" });
+    expect(startSpy).not.toHaveBeenCalled();
+    expect(toggleSpy).not.toHaveBeenCalled();
+    expect(stopSpy).not.toHaveBeenCalled();
+    expect(announce).toHaveBeenCalledWith("Stopping dictation in Alpha.");
+  });
+
+  it("stops this view's own session first, leaving the other view alone", async () => {
+    const { voiceRecordingService, electron, stopSpy } = await arrange({ status: "recording" });
+
+    await voiceRecordingService.toggleFocusedPanel();
+
+    expect(stopSpy).toHaveBeenCalledWith("Dictation stopped.", {
+      preserveLiveText: true,
+      reason: "user",
+    });
+    expect(electron.voiceInput.stopLive).not.toHaveBeenCalled();
+  });
+
+  it("starts on the panel focused at the press when nothing runs anywhere (#6959)", async () => {
+    const { voiceRecordingService, electron, panelState, toggleSpy } = await arrange({
+      sessionElsewhere: null,
+    });
+
+    const pressed = voiceRecordingService.toggleFocusedPanel();
+    panelState.focusedId = "panel-c";
+    await pressed;
+
+    expect(electron.voiceInput.stopLive).not.toHaveBeenCalled();
+    expect(toggleSpy).toHaveBeenCalledTimes(1);
+    expect(toggleSpy).toHaveBeenCalledWith(expect.objectContaining({ panelId: "panel-b" }));
+  });
+
+  it("says nothing when the other session was already over", async () => {
+    const { voiceRecordingService, electron, announce, toggleSpy } = await arrange({});
+    electron.voiceInput.stopLive.mockResolvedValue(false);
+
+    await voiceRecordingService.toggleFocusedPanel();
+
+    expect(announce).not.toHaveBeenCalled();
+    expect(toggleSpy).not.toHaveBeenCalled();
+  });
+
+  it("doesn't let the release of a push-to-talk press that stopped it stop anything here", async () => {
+    const { voiceRecordingService, windowListeners, stopSpy } = await arrange({
+      recordingMode: "push-to-talk",
+    });
+    const { keybindingService } = await import("@/services/KeybindingService");
+    vi.mocked(keybindingService.matchesEvent).mockReturnValue(true);
+    await vi.waitFor(() => {
+      expect(voiceRecordingService["recordingMode"]).toBe("push-to-talk");
+    });
+
+    for (const listener of windowListeners["keydown"] ?? []) {
+      listener({ code: "Period", repeat: false });
+    }
+    await voiceRecordingService.toggleFocusedPanel();
+    for (const listener of windowListeners["keyup"] ?? []) listener({ code: "Period" });
 
     expect(stopSpy).not.toHaveBeenCalled();
+  });
+
+  it("takes the person to the other view's session, and says when it couldn't", async () => {
+    const { voiceRecordingService, electron } = await arrange({});
+
+    await expect(voiceRecordingService.revealSessionElsewhere()).resolves.toBe(true);
+    expect(electron.voiceInput.revealLive).toHaveBeenCalledWith("remote");
+
+    electron.voiceInput.revealLive.mockResolvedValueOnce(false);
+    await expect(voiceRecordingService.revealSessionElsewhere()).resolves.toBe(false);
+    electron.voiceInput.revealLive.mockRejectedValueOnce(new Error("gone"));
+    await expect(voiceRecordingService.revealSessionElsewhere()).resolves.toBe(false);
+  });
+
+  describe("controls for the other view's session (#14921)", () => {
+    afterEach(async () => {
+      const voiceModule = await import("@/store/voiceRecordingStore");
+      if (hasMockState<VoiceState>(voiceModule)) voiceModule.__state.sessionElsewhere = null;
+    });
+
+    it("pauses and resumes its own session when another view's panel asks", async () => {
+      const { voiceRecordingService, electron } = await arrange({ status: "recording" });
+      Reflect.set(voiceRecordingService, "sessionId", "mine");
+      const pause = vi.spyOn(voiceRecordingService, "pause").mockImplementation(() => {});
+      const resume = vi.spyOn(voiceRecordingService, "resume").mockImplementation(() => {});
+      const requested = electron.voiceInput.onPauseRequested.mock.calls[0]![0];
+
+      requested({ sessionId: "mine", paused: true });
+      expect(pause).toHaveBeenCalledTimes(1);
+      expect(resume).not.toHaveBeenCalled();
+
+      pause.mockClear();
+      requested({ sessionId: "mine", paused: false });
+      expect(resume).toHaveBeenCalledTimes(1);
+      expect(pause).not.toHaveBeenCalled();
+
+      resume.mockClear();
+      requested({ sessionId: "other", paused: true });
+      requested({ sessionId: "other", paused: false });
+      expect(pause).not.toHaveBeenCalled();
+      expect(resume).not.toHaveBeenCalled();
+      Reflect.set(voiceRecordingService, "sessionId", null);
+    });
+
+    it("pauses the other view's session by the id its panel shows", async () => {
+      const { voiceRecordingService, electron } = await arrange({});
+
+      await expect(voiceRecordingService.setSessionElsewherePaused("remote", true)).resolves.toBe(
+        true
+      );
+      expect(electron.voiceInput.setPausedLive).toHaveBeenCalledWith({
+        sessionId: "remote",
+        paused: true,
+      });
+
+      // A panel left open on an ended session acts on nothing.
+      await expect(voiceRecordingService.setSessionElsewherePaused("gone", false)).resolves.toBe(
+        false
+      );
+      electron.voiceInput.setPausedLive.mockRejectedValueOnce(new Error("gone"));
+      await expect(voiceRecordingService.setSessionElsewherePaused("remote", false)).resolves.toBe(
+        false
+      );
+      expect(electron.voiceInput.setPausedLive).toHaveBeenCalledTimes(2);
+    });
+
+    it.each([
+      { status: "recording" as const, paused: true },
+      { status: "paused" as const, paused: false },
+    ])("has the pause key act on the other view's $status session", async ({ status, paused }) => {
+      const { voiceRecordingService, electron } = await arrange({
+        sessionElsewhere: { ...elsewhere, details: reported(status) },
+      });
+
+      voiceRecordingService.togglePause();
+
+      await vi.waitFor(() => {
+        expect(electron.voiceInput.setPausedLive).toHaveBeenCalledWith({
+          sessionId: "remote",
+          paused,
+        });
+      });
+    });
+
+    it("has the pause key act on the other view's session after one here failed", async () => {
+      const { voiceRecordingService, electron } = await arrange({
+        status: "error",
+        sessionElsewhere: { ...elsewhere, details: reported("recording") },
+      });
+
+      voiceRecordingService.togglePause();
+
+      await vi.waitFor(() => {
+        expect(electron.voiceInput.setPausedLive).toHaveBeenCalledWith({
+          sessionId: "remote",
+          paused: true,
+        });
+      });
+    });
+
+    it("leaves the pause key alone while the other view's session can't pause", async () => {
+      const { voiceRecordingService, electron } = await arrange({
+        sessionElsewhere: { ...elsewhere, details: reported("finishing") },
+      });
+
+      voiceRecordingService.togglePause();
+      await Promise.resolve();
+
+      expect(electron.voiceInput.setPausedLive).not.toHaveBeenCalled();
+    });
+
+    it("stops the other view's session from the panel without taking the person there", async () => {
+      const { voiceRecordingService, electron } = await arrange({});
+
+      await voiceRecordingService.stopSessionElsewhereById("gone");
+      expect(electron.voiceInput.stopLive).not.toHaveBeenCalled();
+
+      await voiceRecordingService.stopSessionElsewhereById("remote");
+      expect(electron.voiceInput.stopLive).toHaveBeenCalledWith({ sessionId: "remote" });
+    });
+  });
+
+  it("asks main for nothing to reveal when no session runs elsewhere", async () => {
+    const { voiceRecordingService, electron } = await arrange({ sessionElsewhere: null });
+
+    await expect(voiceRecordingService.revealSessionElsewhere()).resolves.toBe(false);
+    expect(electron.voiceInput.revealLive).not.toHaveBeenCalled();
+  });
+
+  it("switches to the owner's workspace when on screen in the owner's window", async () => {
+    const { electron } = await arrange({ sessionElsewhere: null });
+    const projectStore = await import("@/store/projectStore");
+    if (!hasSwitchMock(projectStore)) throw new Error("projectStore mock lacks __switchProject");
+    const switchProject = projectStore.__switchProject;
+    switchProject.mockClear();
+    const { useScratchStore } = await import("@/store/scratchStore");
+    const switchScratch = vi.fn().mockResolvedValue(undefined);
+    useScratchStore.setState({ switchScratch });
+    const revealRequested = electron.voiceInput.onRevealRequested.mock.calls[0]![0];
+
+    const projectId = "a".repeat(64);
+    revealRequested({ sessionId: "remote", hostId: "local", workspaceId: projectId });
+    const scratchId = "3f2b8a1c-4d5e-4f60-8a7b-9c0d1e2f3a4b";
+    revealRequested({ sessionId: "remote", hostId: "local", workspaceId: scratchId });
+
+    await vi.waitFor(() => {
+      expect(switchProject).toHaveBeenCalledWith(projectId);
+      expect(switchScratch).toHaveBeenCalledWith(scratchId);
+    });
+    expect(switchProject).toHaveBeenCalledTimes(1);
+    expect(switchToHost).not.toHaveBeenCalled();
+  });
+
+  describe("across hosts (#14773)", () => {
+    beforeEach(() => {
+      switchToHost.mockClear();
+      viewLifecycle.cached = false;
+      viewLifecycle.listeners.clear();
+      revealDictationComposer.mockClear();
+    });
+
+    // The store mock's state outlives resetModules, and later suites press the key.
+    afterEach(async () => {
+      const voiceModule = await import("@/store/voiceRecordingStore");
+      if (hasMockState<VoiceState>(voiceModule)) voiceModule.__state.sessionElsewhere = null;
+    });
+
+    const reveal = (
+      electron: ReturnType<typeof buildElectronStub>,
+      request: { sessionId: string; hostId: string; workspaceId: string | null }
+    ) => electron.voiceInput.onRevealRequested.mock.calls[0]![0](request);
+
+    async function projectSwitch() {
+      const projectStore = await import("@/store/projectStore");
+      if (!hasSwitchMock(projectStore)) throw new Error("projectStore mock lacks __switchProject");
+      projectStore.__switchProject.mockClear();
+      return projectStore.__switchProject;
+    }
+
+    it("takes this Mac's window to the host a session runs on", async () => {
+      const { electron } = await arrange({ sessionElsewhere: null });
+      const switchProject = await projectSwitch();
+
+      reveal(electron, { sessionId: "remote", hostId: "studio-01", workspaceId: "proj-r" });
+
+      await vi.waitFor(() => {
+        expect(switchToHost).toHaveBeenCalledWith("studio-01", false, "proj-r");
+      });
+      expect(switchProject).not.toHaveBeenCalled();
+    });
+
+    it("brings a host's window back to this Mac for a session started here", async () => {
+      const { electron } = await arrange({ sessionElsewhere: null });
+      Reflect.set(window, "__DAINTREE_HOST_ID__", { id: "studio-01" });
+      const switchProject = await projectSwitch();
+
+      reveal(electron, { sessionId: "remote", hostId: "local", workspaceId: "project-a" });
+
+      await vi.waitFor(() => {
+        expect(switchToHost).toHaveBeenCalledWith("local", false, "project-a");
+      });
+      expect(switchProject).not.toHaveBeenCalled();
+    });
+
+    it("opens a project on this view's own host by the id that host knows it by", async () => {
+      const { electron } = await arrange({ sessionElsewhere: null });
+      Reflect.set(window, "__DAINTREE_HOST_ID__", { id: "studio-01" });
+      const switchProject = await projectSwitch();
+
+      reveal(electron, { sessionId: "remote", hostId: "studio-01", workspaceId: "proj-r" });
+
+      await vi.waitFor(() => {
+        expect(switchProject).toHaveBeenCalledWith("proj-r");
+      });
+      expect(switchToHost).not.toHaveBeenCalled();
+    });
+
+    it("goes to the other host's copy of a project that shares this host's id", async () => {
+      const { electron } = await arrange({ sessionElsewhere: null });
+      // This view shows studio-02's copy of the very project id studio-01 dictates in.
+      Reflect.set(window, "__DAINTREE_HOST_ID__", { id: "studio-02" });
+      const projectStore = await import("@/store/projectStore");
+      if (!hasMockState<{ currentProject: { id: string; name: string } | null }>(projectStore)) {
+        throw new Error("projectStore mock lacks __state");
+      }
+      projectStore.__state.currentProject = { id: "proj-r", name: "Remote R" };
+      const switchProject = await projectSwitch();
+
+      try {
+        reveal(electron, { sessionId: "remote", hostId: "studio-01", workspaceId: "proj-r" });
+
+        await vi.waitFor(() => {
+          expect(switchToHost).toHaveBeenCalledWith("studio-01", false, "proj-r");
+        });
+        expect(switchProject).not.toHaveBeenCalled();
+      } finally {
+        projectStore.__state.currentProject = null;
+      }
+    });
+
+    it("waits for the owner's cached view to come on screen before taking the keyboard there", async () => {
+      const { electron, voiceRecordingService, voiceState, panelState } = await arrange({
+        status: "recording",
+      });
+      Reflect.set(voiceRecordingService, "sessionId", "own");
+      // The owner dictates into panel-c; the person last left panel-b selected.
+      voiceState.activeTarget = { panelId: "panel-c" };
+      const activateTerminal = vi.fn((id: string) => {
+        panelState.focusedId = id;
+      });
+      Reflect.set(panelState, "activateTerminal", activateTerminal);
+      viewLifecycle.cached = true;
+
+      reveal(electron, { sessionId: "own", hostId: "local", workspaceId: "project-a" });
+      for (const listener of [...viewLifecycle.listeners]) listener("active");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(activateTerminal).not.toHaveBeenCalled();
+      expect(revealDictationComposer).not.toHaveBeenCalled();
+
+      for (const listener of [...viewLifecycle.listeners]) listener("revealed");
+
+      await vi.waitFor(() => {
+        expect(revealDictationComposer).toHaveBeenCalledWith("panel-c");
+      });
+      expect(activateTerminal).toHaveBeenCalledWith("panel-c");
+      expect(panelState.focusedId).toBe("panel-c");
+      expect(viewLifecycle.listeners.size).toBe(0);
+    });
+
+    it("forgets a reveal whose view was cached again before it came on screen", async () => {
+      const { electron, voiceRecordingService } = await arrange({ status: "recording" });
+      Reflect.set(voiceRecordingService, "sessionId", "own");
+      const focusTarget = vi
+        .spyOn(voiceRecordingService, "focusActiveTarget")
+        .mockResolvedValue(true);
+      viewLifecycle.cached = true;
+
+      reveal(electron, { sessionId: "own", hostId: "local", workspaceId: "project-a" });
+      for (const listener of [...viewLifecycle.listeners]) listener("active");
+      for (const listener of [...viewLifecycle.listeners]) listener("cached");
+      expect(viewLifecycle.listeners.size).toBe(0);
+
+      // The person's own return later is not the reveal's.
+      for (const listener of [...viewLifecycle.listeners]) listener("revealed");
+      await Promise.resolve();
+      expect(focusTarget).not.toHaveBeenCalled();
+    });
+
+    it("takes the keyboard to its pane at once when the owner is already on screen", async () => {
+      const { electron, voiceRecordingService, voiceState } = await arrange({
+        status: "recording",
+      });
+      Reflect.set(voiceRecordingService, "sessionId", "own");
+      vi.spyOn(voiceRecordingService, "focusActiveTarget").mockResolvedValue(true);
+
+      reveal(electron, { sessionId: "own", hostId: "studio-01", workspaceId: "proj-r" });
+
+      await vi.waitFor(() => {
+        expect(revealDictationComposer).toHaveBeenCalledWith(voiceState.activeTarget!.panelId);
+      });
+      expect(switchToHost).not.toHaveBeenCalled();
+    });
+
+    it("gives up on a cached owner that never comes on screen, and on a newer reveal", async () => {
+      const { electron, voiceRecordingService } = await arrange({ status: "recording" });
+      Reflect.set(voiceRecordingService, "sessionId", "own");
+      const focusTarget = vi
+        .spyOn(voiceRecordingService, "focusActiveTarget")
+        .mockResolvedValue(true);
+      viewLifecycle.cached = true;
+      vi.useFakeTimers();
+      try {
+        reveal(electron, { sessionId: "own", hostId: "local", workspaceId: "project-a" });
+        reveal(electron, { sessionId: "own", hostId: "local", workspaceId: "project-a" });
+        expect(viewLifecycle.listeners.size).toBe(1);
+
+        vi.advanceTimersByTime(15_000);
+        expect(viewLifecycle.listeners.size).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+      expect(focusTarget).not.toHaveBeenCalled();
+    });
+
+    it("names the host when stopping a session that runs on one", async () => {
+      const { voiceRecordingService, announce } = await arrange({
+        sessionElsewhere: { ...elsewhere, hostId: "studio-01", projectName: "Remote R" },
+      });
+
+      await voiceRecordingService.toggleFocusedPanel();
+
+      expect(announce).toHaveBeenCalledWith("Stopping dictation in Remote R on studio-01.");
+    });
+  });
+
+  describe("the key taking the person back to the dictation (#14791)", () => {
+    beforeEach(() => {
+      beginDictationReturn.mockReset();
+      beginDictationReturn.mockReturnValue(null);
+      viewLifecycle.cached = false;
+      viewLifecycle.listeners.clear();
+    });
+
+    afterEach(async () => {
+      const voiceModule = await import("@/store/voiceRecordingStore");
+      if (hasMockState<VoiceState & { panelBuffers: Record<string, unknown> }>(voiceModule)) {
+        voiceModule.__state.sessionElsewhere = null;
+        voiceModule.__state.status = "idle";
+        voiceModule.__state.activeTarget = null;
+        voiceModule.__state.panelBuffers = {};
+      }
+    });
+
+    // The owner dictates into panel-a; the person has since selected panel-b.
+    async function arrangeOwner(options: Parameters<typeof arrange>[0] = {}) {
+      const arranged = await arrange({ status: "recording", sessionElsewhere: null, ...options });
+      arranged.panelState.panelsById["panel-a"] = {
+        id: "panel-a",
+        title: "Dictating",
+        location: "grid",
+        launchAgentId: "claude",
+      };
+      const activateTerminal = vi.fn((id: string) => {
+        arranged.panelState.focusedId = id;
+      });
+      Reflect.set(arranged.panelState, "activateTerminal", activateTerminal);
+      const finish = vi.fn<(caret: () => number | null) => void>();
+      const isCurrent = vi.fn(() => true);
+      beginDictationReturn.mockReturnValue({ isCurrent, focus: finish });
+      return { ...arranged, activateTerminal, finish, isCurrent };
+    }
+
+    it("brings the pane forward and its composer back when its key stops it here", async () => {
+      const { voiceRecordingService, stopSpy, activateTerminal, finish } = await arrangeOwner();
+
+      await voiceRecordingService.toggleFocusedPanel({ returnToTarget: true });
+
+      expect(stopSpy).toHaveBeenCalledWith("Dictation stopped.", {
+        preserveLiveText: true,
+        reason: "user",
+      });
+      expect(beginDictationReturn).toHaveBeenCalledWith("panel-a", { pressedHere: true });
+      // Where the keyboard was is read before the stop changes anything.
+      expect(beginDictationReturn.mock.invocationCallOrder[0]).toBeLessThan(
+        stopSpy.mock.invocationCallOrder[0]!
+      );
+      await vi.waitFor(() => {
+        expect(finish).toHaveBeenCalledTimes(1);
+      });
+      expect(activateTerminal).toHaveBeenCalledWith("panel-a");
+      expect(activateTerminal.mock.invocationCallOrder[0]).toBeLessThan(
+        finish.mock.invocationCallOrder[0]!
+      );
+    });
+
+    it("leaves focus alone when the palette or an agent stops it", async () => {
+      const { voiceRecordingService, stopSpy, activateTerminal } = await arrangeOwner();
+
+      await voiceRecordingService.toggleFocusedPanel();
+
+      expect(stopSpy).toHaveBeenCalledTimes(1);
+      expect(beginDictationReturn).not.toHaveBeenCalled();
+      expect(activateTerminal).not.toHaveBeenCalled();
+    });
+
+    it("moves nothing when the keyboard is in its composer already", async () => {
+      const { voiceRecordingService, stopSpy, activateTerminal } = await arrangeOwner();
+      beginDictationReturn.mockReturnValue(null);
+
+      await voiceRecordingService.toggleFocusedPanel({ returnToTarget: true });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(stopSpy).toHaveBeenCalledTimes(1);
+      expect(activateTerminal).not.toHaveBeenCalled();
+    });
+
+    // A push-to-talk press the key claimed, with its start under way on the selected pane.
+    async function holdKey() {
+      const { keybindingService } = await import("@/services/KeybindingService");
+      vi.mocked(keybindingService.matchesEvent).mockReturnValue(true);
+      const arranged = await arrangeOwner({ recordingMode: "push-to-talk" });
+      const { voiceRecordingService, voiceState, windowListeners } = arranged;
+      await vi.waitFor(() => {
+        expect(voiceRecordingService["recordingMode"]).toBe("push-to-talk");
+      });
+      voiceState.status = "idle";
+      voiceState.activeTarget = null;
+      for (const listener of windowListeners["keydown"] ?? []) {
+        listener({ code: "Period", repeat: false, timeStamp: 0 });
+      }
+      await voiceRecordingService.toggleFocusedPanel({ returnToTarget: true });
+      voiceState.status = "recording";
+      voiceState.activeTarget = { panelId: "panel-b" };
+      beginDictationReturn.mockClear();
+      return arranged;
+    }
+
+    it("goes back on the release of a held key", async () => {
+      const { windowListeners, panelState, stopSpy, activateTerminal, finish } = await holdKey();
+      // The person moved on to another pane while holding the key.
+      panelState.focusedId = "panel-c";
+
+      for (const listener of windowListeners["keyup"] ?? []) listener({ code: "Period" });
+
+      expect(stopSpy).toHaveBeenCalledWith(
+        "Dictation stopped.",
+        expect.objectContaining({ reason: "key_release" })
+      );
+      expect(beginDictationReturn).toHaveBeenCalledWith("panel-b", { pressedHere: true });
+      await vi.waitFor(() => {
+        expect(finish).toHaveBeenCalledTimes(1);
+      });
+      expect(activateTerminal).toHaveBeenCalledWith("panel-b");
+    });
+
+    it("stays put when a held key ends because the window lost focus", async () => {
+      const { windowListeners, stopSpy } = await holdKey();
+
+      for (const listener of windowListeners["blur"] ?? []) listener(new Event("blur"));
+
+      expect(stopSpy).toHaveBeenCalledWith(
+        "Dictation stopped.",
+        expect.objectContaining({ reason: "window_blur" })
+      );
+      expect(beginDictationReturn).not.toHaveBeenCalled();
+    });
+
+    it("asks another view's owner to take the person back only for the key", async () => {
+      const { voiceRecordingService, electron } = await arrange({});
+
+      await voiceRecordingService.toggleFocusedPanel({ returnToTarget: true });
+      await voiceRecordingService.toggleFocusedPanel();
+
+      expect(electron.voiceInput.stopLive.mock.calls).toEqual([
+        [{ sessionId: "remote", returnToTarget: true }],
+        [{ sessionId: "remote" }],
+      ]);
+    });
+
+    it("goes back once its cached view is on screen when another view's key asks", async () => {
+      const { voiceRecordingService, voiceState, electron, stopSpy, activateTerminal, finish } =
+        await arrangeOwner();
+      Reflect.set(voiceRecordingService, "sessionId", "own");
+      viewLifecycle.cached = true;
+      const stopRequested = electron.voiceInput.onStopRequested.mock.calls[0]![0];
+
+      stopRequested({ sessionId: "own", returnToTarget: true });
+      expect(stopSpy).toHaveBeenCalledTimes(1);
+      // The key was pressed in another view, so this one's DOM focus says nothing.
+      expect(beginDictationReturn).toHaveBeenCalledWith("panel-a", { pressedHere: false });
+      // The stop finishes and clears the target before the view is shown.
+      voiceState.status = "idle";
+      voiceState.activeTarget = null;
+      for (const listener of [...viewLifecycle.listeners]) listener("active");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(activateTerminal).not.toHaveBeenCalled();
+
+      for (const listener of [...viewLifecycle.listeners]) listener("revealed");
+
+      await vi.waitFor(() => {
+        expect(finish).toHaveBeenCalledTimes(1);
+      });
+      expect(activateTerminal).toHaveBeenCalledWith("panel-a");
+    });
+
+    it("stops without going anywhere when another view's stop doesn't ask", async () => {
+      const { voiceRecordingService, electron, stopSpy } = await arrangeOwner();
+      Reflect.set(voiceRecordingService, "sessionId", "own");
+      const stopRequested = electron.voiceInput.onStopRequested.mock.calls[0]![0];
+
+      stopRequested({ sessionId: "own" });
+
+      expect(stopSpy).toHaveBeenCalledTimes(1);
+      expect(beginDictationReturn).not.toHaveBeenCalled();
+    });
+
+    it("puts the caret after the words the session dictated, where its next ones would go while it runs", async () => {
+      const { voiceRecordingService, voiceState, finish } = await arrangeOwner();
+      const { useDictationRangeStore } = await import("@/store/dictationRangeStore");
+      const ranges = useDictationRangeStore.getState();
+      const draftTarget = { sessionId: "dictation-1", panelId: "panel-a" };
+      Reflect.set(voiceState, "panelBuffers", { "panel-a": { dictationSessionId: "dictation-1" } });
+      // An earlier session's words further on in the same draft, and this
+      // session's id on the same pane in another project's draft.
+      ranges.recordUtterance(
+        { sessionId: "dictation-0", panelId: "panel-a" },
+        { insertion: { from: 30, to: 40 }, words: { from: 30, to: 40 } }
+      );
+      ranges.recordUtterance(
+        { ...draftTarget, projectId: "other" },
+        { insertion: { from: 50, to: 60 }, words: { from: 50, to: 60 } }
+      );
+
+      await voiceRecordingService.toggleFocusedPanel({ returnToTarget: true });
+      await vi.waitFor(() => {
+        expect(finish).toHaveBeenCalledTimes(1);
+      });
+      const caret = finish.mock.calls[0]![0];
+
+      // Nothing dictated yet: the composer's own caret rules.
+      expect(caret()).toBeNull();
+      ranges.recordUtterance(draftTarget, {
+        insertion: { from: 4, to: 17 },
+        words: { from: 4, to: 17 },
+      });
+      // A later session on the pane is not the one the key stopped.
+      Reflect.set(voiceState, "panelBuffers", { "panel-a": { dictationSessionId: "dictation-0" } });
+      expect(caret()).toBe(17);
+      useDictationRangeStore.getState().setAnchor(draftTarget, { from: 20, to: 20 });
+      expect(caret()).toBe(20);
+    });
+
+    it("leaves the caret to the composer for a start that never began its session", async () => {
+      const { voiceRecordingService, voiceState, finish } = await arrangeOwner({
+        status: "arming",
+      });
+      const { useDictationRangeStore } = await import("@/store/dictationRangeStore");
+      // The pane's buffer still names the session before this start.
+      Reflect.set(voiceState, "panelBuffers", { "panel-a": { dictationSessionId: "dictation-0" } });
+      useDictationRangeStore
+        .getState()
+        .recordUtterance(
+          { sessionId: "dictation-0", panelId: "panel-a" },
+          { insertion: { from: 4, to: 17 }, words: { from: 4, to: 17 } }
+        );
+
+      await voiceRecordingService.toggleFocusedPanel({ returnToTarget: true });
+      await vi.waitFor(() => {
+        expect(finish).toHaveBeenCalledTimes(1);
+      });
+
+      expect(finish.mock.calls[0]![0]()).toBeNull();
+    });
+
+    it("brings nothing forward once the person has moved on during the wait", async () => {
+      const { voiceRecordingService, electron, activateTerminal, finish, isCurrent } =
+        await arrangeOwner();
+      Reflect.set(voiceRecordingService, "sessionId", "own");
+      viewLifecycle.cached = true;
+
+      electron.voiceInput.onStopRequested.mock.calls[0]![0]({
+        sessionId: "own",
+        returnToTarget: true,
+      });
+      isCurrent.mockReturnValue(false);
+      for (const listener of [...viewLifecycle.listeners]) listener("revealed");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(activateTerminal).not.toHaveBeenCalled();
+      expect(finish).not.toHaveBeenCalled();
+    });
+  });
+});
+
+describe("VoiceRecordingService — tap-or-hold mode (#14626)", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    suspendCallbacks.length = 0;
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  async function setup(recordingMode = "tap-or-hold") {
+    const electron = buildElectronStub();
+    electron.voiceInput.getSettings.mockResolvedValue({
+      enabled: true,
+      openaiApiKey: "sk-key",
+      correctionEnabled: false,
+      recordingMode,
+    });
+    const { windowListeners } = setupGlobals(electron);
+
+    const { keybindingService } = await import("@/services/KeybindingService");
+    vi.mocked(keybindingService.getEffectiveCombos).mockImplementation((actionId: string) =>
+      actionId === "voiceInput.toggle" ? ["Cmd+D"] : []
+    );
+    vi.mocked(keybindingService.matchesEvent).mockImplementation(
+      (e: KeyboardEvent, combo: string) => combo === "Cmd+D" && e.code === "KeyD"
+    );
+
+    await focusTerminalPanel();
+    // The store mock's state outlives resetModules.
+    const voiceState: { status: string; activeTarget: { panelId: string } | null } = Reflect.get(
+      await import("@/store/voiceRecordingStore"),
+      "__state"
+    );
+    voiceState.status = "idle";
+    voiceState.activeTarget = null;
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const startSpy = vi.spyOn(voiceRecordingService, "start").mockResolvedValue();
+    const stopSpy = vi.spyOn(voiceRecordingService, "stop").mockResolvedValue();
+    voiceRecordingService.initialize();
+    await vi.waitFor(() => {
+      expect(electron.voiceInput.getSettings).toHaveBeenCalled();
+    });
+
+    let now = 1_000;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    const fire = (event: string, payload: unknown) => {
+      for (const listener of windowListeners[event] ?? []) listener(payload);
+    };
+    const keydown = () =>
+      fire("keydown", { code: "KeyD", key: "d", repeat: false, metaKey: true, timeStamp: now });
+    return {
+      service: voiceRecordingService,
+      electron,
+      voiceState,
+      startSpy,
+      stopSpy,
+      advance: (ms: number) => {
+        now += ms;
+      },
+      keydown,
+      // The keydown reaching this listener, then the action it dispatches.
+      press: async () => {
+        keydown();
+        await voiceRecordingService.toggleFocusedPanel();
+      },
+      // The app's order: the global keybinding listener is registered first and
+      // runs the action synchronously, before this listener sees the keydown.
+      pressDispatchingFirst: async () => {
+        const started = voiceRecordingService.toggleFocusedPanel();
+        keydown();
+        await started;
+      },
+      release: (code = "KeyD") => fire("keyup", { code }),
+    };
+  }
+
+  it("starts on the press, through toggle, without waiting for the release", async () => {
+    const t = await setup();
+    await t.press();
+    expect(t.startSpy).toHaveBeenCalledWith(expect.objectContaining({ panelId: "panel-1" }));
+  });
+
+  it("keeps recording when a hold heard no speech, so a thumb lingering on Cmd is a tap", async () => {
+    const t = await setup();
+    await t.press();
+    t.advance(2_000);
+    t.release("MetaLeft");
+    expect(t.stopSpy).not.toHaveBeenCalled();
+  });
+
+  it("stops on release when the action ran before this listener saw the keydown", async () => {
+    const t = await setup("push-to-talk");
+    await t.pressDispatchingFirst();
+    t.release();
+    expect(t.stopSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("hands the claim to the new press when an older press's keyup was swallowed", async () => {
+    const t = await setup("push-to-talk");
+    // Cmd+K Cmd+D with Cmd still held: the D keyup never arrives.
+    t.keydown();
+    t.advance(500);
+    await t.pressDispatchingFirst();
+    t.release("MetaLeft");
+    expect(t.stopSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("never takes a claim made before the keydown happened", async () => {
+    const t = await setup("push-to-talk");
+    // A palette start claims with no key down; a later chord press must not inherit it.
+    await t.service.toggleFocusedPanel();
+    t.advance(5_000);
+    t.keydown();
+    t.release();
+    expect(t.stopSpy).not.toHaveBeenCalled();
+  });
+
+  it.each(["push-to-talk", "tap-or-hold"])(
+    "ignores the release of a %s hold whose session another view stopped (#14601)",
+    async (mode) => {
+      const t = await setup(mode);
+      await t.press();
+      expect(t.startSpy).toHaveBeenCalledTimes(1);
+      t.voiceState.status = "recording";
+      t.voiceState.activeTarget = { panelId: "panel-1" };
+      t.service["sessionId"] = "live";
+      // A hold that heard speech, so its release would stop it.
+      const speech = { samples: 1_600, rms: 0.1, peak: 0.3, zeroFraction: 0 };
+      t.service["noteHeldPressAudio"](speech);
+      t.service["noteHeldPressAudio"](speech);
+      t.advance(1_000);
+
+      const stopRequested = t.electron.voiceInput.onStopRequested.mock.calls[0]![0];
+      stopRequested({ sessionId: "live" });
+      expect(t.stopSpy).toHaveBeenCalledTimes(1);
+
+      t.release();
+      t.release("MetaLeft");
+      expect(t.stopSpy).toHaveBeenCalledTimes(1);
+      expect(t.startSpy).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it("never stops on the release of a press that started nothing, such as Cmd+K Cmd+D", async () => {
+    const t = await setup("push-to-talk");
+    // The keydown matches the voice combo, but the chord ran redraw instead.
+    t.keydown();
+    t.advance(1_000);
+    t.release();
+    expect(t.stopSpy).not.toHaveBeenCalled();
   });
 });

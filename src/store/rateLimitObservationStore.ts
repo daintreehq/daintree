@@ -15,6 +15,12 @@ interface RateLimitObservationState {
    */
   observedAtByTerminalId: Record<string, number>;
   recordObservation: (terminalId: string, observedAt: number, now?: number) => void;
+  /**
+   * Forget a pane's observation, for a pane now running somewhere the banner
+   * wasn't seen. With `observedAt`, only that observation goes: one the new
+   * process made in the meantime is its own.
+   */
+  clearObservation: (terminalId: string, observedAt?: number) => void;
 }
 
 export const useRateLimitObservationStore = create<RateLimitObservationState>((set) => ({
@@ -27,6 +33,15 @@ export const useRateLimitObservationStore = create<RateLimitObservationState>((s
       }
       const previous = next[terminalId];
       if (previous === undefined || observedAt > previous) next[terminalId] = observedAt;
+      return { observedAtByTerminalId: next };
+    }),
+  clearObservation: (terminalId, observedAt) =>
+    set((state) => {
+      const current = state.observedAtByTerminalId[terminalId];
+      if (current === undefined) return state;
+      if (observedAt !== undefined && current !== observedAt) return state;
+      const next = { ...state.observedAtByTerminalId };
+      delete next[terminalId];
       return { observedAtByTerminalId: next };
     }),
 }));

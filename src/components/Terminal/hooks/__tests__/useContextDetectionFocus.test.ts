@@ -11,10 +11,18 @@ const service = vi.hoisted(() => ({
   releaseComposerDraft: vi.fn(),
   clearDirectingState: vi.fn(),
 }));
-vi.mock("@/services/TerminalInstanceService", () => ({ terminalInstanceService: service }));
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = service;
+  return { createTerminalPaintPlane: () => terminalInstanceService };
+});
 
 import { useContextDetection } from "../useContextDetection";
 import { getActiveCompletionContext } from "../../hybridInputParsing";
+
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
+
+// The service mock never evaluates the real module, so nothing builds it.
+await loadTerminalService();
 
 interface LatestRefShape {
   isInHistoryMode: boolean;

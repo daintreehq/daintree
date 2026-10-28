@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { getAppThemeCssVariables } from "../../../shared/theme/index.js";
 import { parseAppThemeContent } from "../appThemeImporter.js";
 
 describe("appThemeImporter", () => {
@@ -22,6 +23,21 @@ describe("appThemeImporter", () => {
     expect(result.scheme.tokens["surface-canvas"]).toBe("#ffffff");
     expect(result.scheme.tokens["surface-panel"]).toBeDefined();
     expect(result.warnings).toEqual([]);
+  });
+
+  it("keeps a file's own id but never one in the plugin theme namespace (#13832)", () => {
+    const tokens = { "surface-canvas": "#101820", "text-primary": "#f0f0f0" };
+    const own = parseAppThemeContent(
+      JSON.stringify({ id: "harbour", name: "Harbour", type: "dark", tokens }),
+      "harbour.json"
+    );
+    expect(own.ok && own.scheme.id).toBe("harbour");
+
+    const claimed = parseAppThemeContent(
+      JSON.stringify({ id: "plugin:acme.themes:midnight", name: "Harbour", type: "dark", tokens }),
+      "harbour.json"
+    );
+    expect(claimed.ok && claimed.scheme.id).toBe("custom-harbour");
   });
 
   it("infers theme type from surface-canvas when missing and warns", () => {
@@ -414,5 +430,65 @@ describe("appThemeImporter", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.errors.some((err) => err.includes("heroImage"))).toBe(true);
+  });
+
+  it("keeps an extension from overriding a contrast-checked token (#13761)", () => {
+    const result = parseAppThemeContent(
+      JSON.stringify({
+        name: "Shadowing",
+        type: "dark",
+        tokens: { "text-primary": "#e6e6e6" },
+        extensions: {
+          "theme-text-primary": "#202020",
+          "toolbar-project-bg": "#123456",
+        },
+      }),
+      "shadowing.json"
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.scheme.extensions).toEqual({ "toolbar-project-bg": "#123456" });
+    expect(getAppThemeCssVariables(result.scheme)["--theme-text-primary"]).toBe("#e6e6e6");
+    expect(result.warnings).toContainEqual({
+      kind: "unknown-tokens",
+      message: "Ignored unknown extensions: theme-text-primary",
+    });
+  });
+
+  it("drops and reports a registered extension whose value would end its declaration", () => {
+    const result = parseAppThemeContent(
+      JSON.stringify({
+        name: "Breakout",
+        type: "dark",
+        tokens: { "text-primary": "#e6e6e6" },
+        extensions: { "panel-grid-bg": "#101010; --theme-text-primary: #202020" },
+      }),
+      "breakout.json"
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.scheme.extensions ?? {}).toEqual({});
+    expect(result.warnings.map((warning) => warning.message)).toContain(
+      "Ignored extensions whose value is not a single CSS value: panel-grid-bg"
+    );
+  });
+
+  it("reports a __proto__ extension key it drops", () => {
+    const result = parseAppThemeContent(
+      '{"name":"Proto","type":"dark","tokens":{"text-primary":"#e6e6e6"},"extensions":{"__proto__":"#000000"}}',
+      "proto.json"
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.scheme.extensions ?? {}).toEqual({});
+    expect(result.warnings.map((warning) => warning.message)).toContain(
+      "Ignored unknown extensions: __proto__"
+    );
   });
 });

@@ -1,12 +1,12 @@
 /**
- * Where a guest adapter may run.
+ * Where the picker's guest runtime may run.
  *
  * A dev preview can navigate. "This panel started on localhost" says nothing
  * about the document it shows a minute later — an OAuth hop, a link to the
  * production site, a redirect — and the runtime the host installs is code that
- * reads the page's DOM and talks back over a CDP binding. An adapter therefore
- * declares the origins it is for, and the bridge checks the guest's URL on
- * every install: at bind, and again on each committed navigation.
+ * reads the page's DOM and talks back over a CDP binding. So the bridge checks
+ * the guest's URL against the policy on every install: at bind, and again on
+ * each committed navigation.
  */
 
 export type GuestOriginPolicy =

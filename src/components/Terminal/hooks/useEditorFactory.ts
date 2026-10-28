@@ -24,20 +24,38 @@ import {
   createTerminalChipTooltip,
   selectionChipField,
   createSelectionChipTooltip,
+  contextReferenceChipField,
+  createContextReferenceChipTooltip,
+  forgeReferenceField,
+  createForgeReferenceTooltip,
   interimWidgetField,
+  dictationFollow,
+  voiceCaret,
+  createCaretTracker,
   pendingAIField,
+  voiceRewriteTracker,
   createAutoSize,
   createCustomKeymap,
   chipPendingDeleteField,
   createChipBackspaceKeymap,
   createCursorBlink,
+  createComposerHistory,
+  createCorrectionReview,
   type AutoSizeConfig,
 } from "../inputEditorExtensions";
 import type { SlashCommand } from "@shared/types";
+import {
+  announceCorrectionShown,
+  rebaseCorrectionBaseline,
+} from "@/services/voiceCorrectionLanding";
 import { recordBuiltCompartmentConfig } from "./useCompartmentDriver";
 
 interface UseEditorFactoryParams {
   terminalId: string;
+  /** Where dictation into this composer is kept, for its correction review. */
+  voiceId: string;
+  /** The draft key (`makeDraftKey`) of the draft this composer edits. */
+  draftKeyRef: React.RefObject<string>;
   editorHostRef: React.RefObject<HTMLDivElement | null>;
   editorViewRef: React.RefObject<EditorView | null>;
   value: string;
@@ -57,6 +75,8 @@ interface UseEditorFactoryParams {
     diffChipTooltipCompartmentRef: React.RefObject<Compartment>;
     terminalChipTooltipCompartmentRef: React.RefObject<Compartment>;
     selectionChipTooltipCompartmentRef: React.RefObject<Compartment>;
+    contextChipTooltipCompartmentRef: React.RefObject<Compartment>;
+    forgeReferenceTooltipCompartmentRef: React.RefObject<Compartment>;
     autoSizeCompartmentRef: React.RefObject<Compartment>;
     keymapCompartmentRef: React.RefObject<Compartment>;
     comboboxCompartmentRef: React.RefObject<Compartment>;
@@ -64,6 +84,7 @@ interface UseEditorFactoryParams {
   contextUpdateRef: React.RefObject<(update: import("@codemirror/view").ViewUpdate) => void>;
   keymapHandlersRef: React.RefObject<{
     onEnter: () => boolean;
+    onModEnter: () => boolean;
     onEscape: () => boolean;
     onArrowUp: () => boolean;
     onArrowDown: () => boolean;
@@ -85,6 +106,8 @@ interface UseEditorFactoryParams {
 
 export function useEditorFactory({
   terminalId,
+  voiceId,
+  draftKeyRef,
   editorHostRef,
   editorViewRef,
   value,
@@ -101,6 +124,11 @@ export function useEditorFactory({
   plainPasteKeymap,
 }: UseEditorFactoryParams) {
   const initialValueRef = useRef(value);
+  // Read when a review swaps, not when the editor was built.
+  const voiceIdRef = useRef(voiceId);
+  useLayoutEffect(() => {
+    voiceIdRef.current = voiceId;
+  }, [voiceId]);
 
   useLayoutEffect(() => {
     const host = editorHostRef.current;
@@ -119,6 +147,8 @@ export function useEditorFactory({
       diffChipTooltipCompartmentRef,
       terminalChipTooltipCompartmentRef,
       selectionChipTooltipCompartmentRef,
+      contextChipTooltipCompartmentRef,
+      forgeReferenceTooltipCompartmentRef,
       autoSizeCompartmentRef,
       keymapCompartmentRef,
       comboboxCompartmentRef,
@@ -129,6 +159,7 @@ export function useEditorFactory({
       extensions: [
         chipPendingDeleteField,
         createChipBackspaceKeymap(),
+        createComposerHistory(),
         themeCompartmentRef.current.of(buildInputBarTheme(effectiveTheme)),
         chipEntranceTheme,
         EditorView.lineWrapping,
@@ -154,12 +185,29 @@ export function useEditorFactory({
         selectionChipTooltipCompartmentRef.current.of(
           !disabled ? createSelectionChipTooltip() : []
         ),
+        contextReferenceChipField,
+        contextChipTooltipCompartmentRef.current.of(
+          !disabled ? createContextReferenceChipTooltip() : []
+        ),
+        forgeReferenceField,
+        forgeReferenceTooltipCompartmentRef.current.of(
+          !disabled ? createForgeReferenceTooltip() : []
+        ),
         interimWidgetField,
+        dictationFollow,
+        voiceCaret,
+        createCaretTracker(() => draftKeyRef.current),
         pendingAIField,
+        voiceRewriteTracker,
+        createCorrectionReview({
+          onShown: announceCorrectionShown,
+          onSwapped: (review, now) => rebaseCorrectionBaseline(voiceIdRef.current, review, now),
+        }),
         EditorView.updateListener.of((update) => contextUpdateRef.current(update)),
         keymapCompartmentRef.current.of(
           createCustomKeymap({
             onEnter: () => keymapHandlersRef.current?.onEnter() ?? false,
+            onModEnter: () => keymapHandlersRef.current?.onModEnter() ?? false,
             onEscape: () => keymapHandlersRef.current?.onEscape() ?? false,
             onArrowUp: () => keymapHandlersRef.current?.onArrowUp() ?? false,
             onArrowDown: () => keymapHandlersRef.current?.onArrowDown() ?? false,

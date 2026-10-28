@@ -31,6 +31,12 @@ import { migration031 } from "./031-assistant-models-per-agent.js";
 import { migration032 } from "./032-assistant-host-consent-defaults.js";
 import { migration033 } from "./033-remove-retired-assistant-cli.js";
 import { migration034 } from "./034-assistant-host-control-fold.js";
+import { migration035 } from "./035-remove-hibernation-setting.js";
+import { migration036 } from "./036-structured-voice-dictionary.js";
+import { migration037 } from "./037-voice-cleanup-on-by-default.js";
+import { migration038 } from "./038-tap-or-hold-recording-mode.js";
+import { migration039 } from "./039-device-agent-toolbar-pins.js";
+import { migration040 } from "./040-voice-cleanup-on-terra.js";
 
 export const migrations: Migration[] = [
   migration002,
@@ -66,4 +72,10 @@ export const migrations: Migration[] = [
   migration032,
   migration033,
   migration034,
+  migration035,
+  migration036,
+  migration037,
+  migration038,
+  migration039,
+  migration040,
 ];

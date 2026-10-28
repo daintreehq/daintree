@@ -30,7 +30,13 @@ import type { PluginMcpAuditRecord } from "../shared/types/ipc/pluginMcpAudit.js
 import { PLUGIN_MCP_AUDIT_DEFAULT_MAX_RECORDS } from "../shared/types/ipc/pluginMcpAudit.js";
 import type { PluginMcpConsentRecord } from "../shared/types/pluginMcpConsent.js";
 import type { PluginCapabilityConsentRecord } from "../shared/types/pluginCapabilityConsent.js";
-import type { ProjectPluginTrustRecord, ProjectSurfaceChoices } from "../shared/types/plugin.js";
+import type {
+  FileEditorChoices,
+  ProjectPluginTrustRecord,
+  ProjectSurfaceChoices,
+  ProjectLayoutSeedRecord,
+  ProjectWelcomeRecord,
+} from "../shared/types/plugin.js";
 import { PLUGIN_MCP_DEFAULT_MAX_TOOLS_PER_SESSION } from "../shared/types/ipc/pluginMcp.js";
 import type { ForgeAuditRecord } from "../shared/types/ipc/forge.js";
 import type { RunParkRecord, RunSnoozeRecord } from "../shared/types/ipc/fleet.js";
@@ -38,7 +44,11 @@ import type { RunHistoryRecord } from "../shared/types/ipc/runHistory.js";
 import type { CanopyMode } from "../shared/types/ipc/canopy.js";
 import type { WindowOpeningConfig } from "../shared/types/ipc/windowOpening.js";
 import { DEFAULT_OPEN_FOLDERS_IN_NEW_WINDOW } from "../shared/types/windowOpen.js";
-import type { SuggestedDictionaryEntry } from "../shared/types/ipc/api.js";
+import type {
+  DismissedSuggestion,
+  SuggestedDictionaryEntry,
+  VoiceDictionaryEntry,
+} from "../shared/types/ipc/api.js";
 import { FORGE_AUDIT_DEFAULT_MAX_RECORDS } from "../shared/types/ipc/forge.js";
 import type { BuiltInAgentId } from "../shared/config/agentIds.js";
 import type { AgentId } from "../shared/types/agent.js";
@@ -94,16 +104,12 @@ export interface StoreSchema {
     memoryLeakAutoRestartThresholdMb?: number;
     cachedProjectViews?: number;
     // Appearance fields written by the terminal-config handlers. Declared so
-    // the device/host split in storeOwnership.ts covers them.
+    // the device/host split in shared/config/settingOwnership.ts covers them.
     fontSize?: TerminalConfig["fontSize"];
     fontFamily?: TerminalConfig["fontFamily"];
     colorSchemeId?: TerminalConfig["colorSchemeId"];
     customSchemes?: TerminalConfig["customSchemes"];
     recentSchemeIds?: TerminalConfig["recentSchemeIds"];
-  };
-  hibernation: {
-    enabled: boolean;
-    inactiveThresholdHours: number;
   };
   /**
    * Whether a relaunch brings back every project that was live, or only the one
@@ -153,6 +159,9 @@ export interface StoreSchema {
   idleBackgroundAutoClose: {
     enabled: boolean;
     thresholdMinutes: number;
+    includeIdleShells: boolean;
+    /** One of `IDLE_SHELL_THRESHOLD_MINUTES`; the service normalizes anything else. */
+    idleShellThresholdMinutes: number;
   };
   pluginBackgroundUpdateCheck: {
     enabled: boolean;
@@ -242,6 +251,20 @@ export interface StoreSchema {
    * main-process migration bookkeeping, not renderer state.
    */
   legacyWorkspaceStateOwnerId?: string;
+  /**
+   * Unclean ends of the app that cut agents short (#14382), each kept until
+   * every workspace that was live when it happened has had its saved agent
+   * panes held for it. Top-level for the reason `legacyWorkspaceStateOwnerId`
+   * is: a crash restore replaces `appState` wholesale.
+   */
+  hostEndRestoreHolds?: Array<{
+    crashId: string;
+    cause: "watchdog-deadlock" | "external-kill" | "unknown";
+    at: number;
+    missedBeats?: number;
+    /** Workspaces still to be held. */
+    workspaceIds: string[];
+  }>;
   userConfig: {
     githubToken?: string;
   };
@@ -249,6 +272,13 @@ export interface StoreSchema {
     pathPattern: string;
   };
   agentSettings: AgentSettings;
+  /**
+   * This machine's toolbar agent pins (#14702), moved out of
+   * `agentSettings.agents[id].pinned` by migration 039. Absent only on a fresh
+   * install that hasn't seeded its first pins yet; see
+   * `electron/services/agentToolbarPins.ts`.
+   */
+  agentToolbarPins?: Record<string, boolean>;
   notificationSettings: {
     enabled: boolean;
     completedEnabled: boolean;
@@ -278,9 +308,8 @@ export interface StoreSchema {
   globalEnvironmentVariables: Record<string, string>;
   appAgentConfig: AppAgentConfig;
   /**
-   * Where the user stands on Canopy: `on` once they agree to send agent screens
-   * off the machine to be read, `hidden` when they don't want it at all. Nothing
-   * is read unless it is `on`.
+   * Where the user stands on Canopy: `on` once they turn it on, `hidden` when
+   * they don't want it at all. Nothing is read unless it is `on`.
    */
   canopyMode: CanopyMode;
   windowStates: Record<
@@ -326,8 +355,9 @@ export interface StoreSchema {
     enabled: boolean;
     openaiApiKey: string;
     deepgramApiKey: string;
+    xaiApiKey: string;
     language: string;
-    customDictionary: string[];
+    dictionary: VoiceDictionaryEntry[];
     transcriptionProvider: string;
     transcriptionModel: string;
     correctionEnabled: boolean;
@@ -336,10 +366,12 @@ export interface StoreSchema {
     paragraphingStrategy: string;
     resolveFileLinks: boolean;
     deviceId: string;
+    deviceLabel: string;
     organizationId: string;
     projectId: string;
     recordingMode: string;
     suggestedDictionary: SuggestedDictionaryEntry[];
+    dismissedSuggestions: DismissedSuggestion[];
     learnFromCorrections: boolean;
   };
   mcpServer: {
@@ -651,6 +683,15 @@ export interface StoreSchema {
   projectPluginTrust?: Record<string, ProjectPluginTrustRecord>;
 
   /**
+   * Which projects an installed `instanceMode: "project"` package is enabled in:
+   * `projectId → manifest ids`. Kept apart from `plugins.installed` because that
+   * record is the package's provenance and a project id is machine-local state.
+   * Absent or empty means no instance anywhere, and the host runs nothing for it.
+   * Additive key with no numbered migration, like `projectPluginTrust`.
+   */
+  pluginProjectInstances?: Record<string, string[]>;
+
+  /**
    * Per-project visibility for INSTALLED (global) plugins: which manifest ids
    * are hidden by default, plus each project's explicit answers, which win in
    * either direction. Absence everywhere means visible.
@@ -679,6 +720,131 @@ export interface StoreSchema {
   projectSurfaceChoices?: Record<string, ProjectSurfaceChoices>;
 
   /**
+   * Per-project "Edit with…" answers (#13809): which file editor opens a
+   * file type's Edit or Rendered mode when more than one matches. Keyed by
+   * project id, then by {@link FileEditorChoiceKey}. Daintree's own settings,
+   * never the repository. Same additive-key convention as above.
+   */
+  projectFileEditorChoices?: Record<string, FileEditorChoices>;
+
+  /**
+   * Per-project first-open layout seed (#13782): whether a project plugin's
+   * `surfaces.defaultLayout` may still be applied or offered here. Keyed by
+   * project id. Decided once, on the project's first hydrate on this machine,
+   * so a `state.json` cleared or quarantined later can never make a project
+   * look new again. Same additive-key convention as above.
+   */
+  projectLayoutSeeds?: Record<string, ProjectLayoutSeedRecord>;
+
+  /**
+   * Per-project application welcomes the user skipped or finished (#14106):
+   * project id → declaring plugin's manifest id → welcome tour id → record.
+   * See `services/plugin/projectApplicationWelcomes.ts`. Same additive-key
+   * convention as above.
+   */
+  projectApplicationWelcomes?: Record<string, Record<string, Record<string, ProjectWelcomeRecord>>>;
+
+  /**
+   * Per-project launcher groups the user hid (#13788): plugin instance ids
+   * whose launch entries this project's launcher leaves out. Keyed by project
+   * id. Daintree's own settings, never the repository, and separate from
+   * `projectPluginVisibility` — hiding a plugin's rows hides nothing else it
+   * contributes. Same additive-key convention as above.
+   */
+  projectHiddenLaunchGroups?: Record<string, string[]>;
+
+  /**
+   * Per-project skipped plugin setup steps (#13824): project id → plugin
+   * instance id → the `contributes.setup` step ids the user skipped there.
+   * Whether a step is done is never stored. Read and written only through
+   * `services/plugin/projectPluginSetupSkips.ts`. Daintree's own settings,
+   * never the repository. Same additive-key convention as above.
+   */
+  projectPluginSetupSkips?: Record<string, Record<string, string[]>>;
+
+  /**
+   * Per-project plugin connection bindings (#14102): project id → plugin
+   * instance id → which connection that project uses. A reference only — the
+   * tokens stay in the owning instance's account file. Read and written only
+   * through `services/plugin/pluginAccountBindings.ts`. Same additive-key
+   * convention as above.
+   */
+  projectPluginAccountBindings?: Record<
+    string,
+    Record<string, { connectionId: string; source: "own" | "machine" }>
+  >;
+
+  /**
+   * Plugin instance ids whose toasts and notifications the user silenced
+   * (#13818). A project plugin's instance id names its project, so its silence
+   * is that project's alone. Read and written only through
+   * `services/plugin/pluginNotificationSilences.ts`. Daintree's own settings,
+   * never the repository. Same additive-key convention as above.
+   */
+  pluginNotificationSilences?: string[];
+
+  /**
+   * Plugin search providers the user turned off in the quick switcher
+   * (#13792), as `{pluginId}.{provider id}` keys. One list serves both scopes:
+   * a project plugin's instance id already names its project, so its key is
+   * per project, and an installed plugin's is global. Same additive-key
+   * convention as above.
+   */
+  hiddenSearchProviders?: string[];
+
+  /**
+   * Plugin instance ids whose `@` context providers the user switched off
+   * (#13795). An installed plugin's id spans every project; a project plugin's
+   * embeds its project, so its switch is that project's alone. Daintree's own
+   * settings, never the repository. Same additive-key convention as above.
+   */
+  pluginContextProvidersOff?: string[];
+
+  /**
+   * Plugin instance ids whose worktree delete notes the user turned off
+   * (#13805). Read and written only through
+   * `services/plugin/pluginWorktreeDeleteNoteMutes.ts`. Same scoping and
+   * additive-key convention as `pluginNotificationSilences`.
+   */
+  pluginWorktreeDeleteNoteMutes?: string[];
+
+  /**
+   * Per-project presentation profiles (#13771): the levels the user set or
+   * accepted for each built-in surface, and their answer to the repository's
+   * `.daintree/presentation.json` suggestion. Read and written only through
+   * `services/projectPresentation/profileStore.ts`, which validates every
+   * entry. Out of the repository for the same reason as
+   * `projectPluginVisibility`. Same additive-key convention as
+   * `projectPluginTrust` above.
+   */
+  projectPresentation?: Record<
+    string,
+    {
+      levels?: Record<string, string>;
+      /** Suggestion hash → answer, the most recent few (`profileStore.ts`). */
+      suggestionAnswers?: Record<string, { answer: "accepted" | "declined"; decidedAt: number }>;
+      /** Bumped on every write; views drop snapshots older than one they hold. */
+      revision?: number;
+    }
+  >;
+
+  /**
+   * Per-workspace custom worktree titles (#14022): worktree id → title, or
+   * `null` for one the user cleared, kept so a view's stale localStorage copy
+   * can't bring it back. Read and written only through
+   * `services/worktreeCustomTitles.ts`, which validates every entry. Same
+   * additive-key convention as `projectPresentation`.
+   */
+  worktreeCustomTitles?: Record<
+    string,
+    {
+      titles?: Record<string, string | null>;
+      /** Bumped on every write; views drop snapshots older than one they hold. */
+      revision?: number;
+    }
+  >;
+
+  /**
    * Plugin agent-tool access, read and written only through
    * `services/pluginAgentMcp/projectEnablement.ts`: the per-endpoint answers
    * given before access levels (`projectAgentMcpEnablement`, read-only now),
@@ -698,6 +864,15 @@ export interface StoreSchema {
   pluginAgentMcpAccess?: Record<
     string,
     { decidedAt: number; access: "off" | "read-only" | "read-write" | null }
+  >;
+  /**
+   * How much of each plugin's agent tools the project's Daintree Assistant may
+   * use, capped at the project's own access. Answered by the user alone: no
+   * repository default and no all-projects answer reach it.
+   */
+  projectAssistantAgentMcpAccess?: Record<
+    string,
+    Record<string, { decidedAt: number; access: "off" | "read-only" | "read-write" }>
   >;
 
   /**
@@ -784,10 +959,6 @@ const storeOptions = {
       hybridInputAutoFocus: true,
       screenReaderMode: "auto" as const,
     },
-    hibernation: {
-      enabled: false,
-      inactiveThresholdHours: 24,
-    },
     // Defaults ON, unlike the opt-in lifecycle toggles around it: every editor
     // that restores a session at all does it without being asked, and the cost
     // here is bounded by the warm-view ceiling rather than by how many projects
@@ -818,6 +989,8 @@ const storeOptions = {
     idleBackgroundAutoClose: {
       enabled: false,
       thresholdMinutes: 15,
+      includeIdleShells: false,
+      idleShellThresholdMinutes: 60,
     },
     // Background plugin update checks default OFF (#10893): a periodic network
     // re-fetch of every URL-installed plugin is an opt-in behavior, not a default.
@@ -888,20 +1061,23 @@ const storeOptions = {
       enabled: false,
       openaiApiKey: "",
       deepgramApiKey: "",
+      xaiApiKey: "",
       language: "en",
-      customDictionary: [],
+      dictionary: [],
       transcriptionProvider: "openai",
       transcriptionModel: "gpt-live-transcribe",
-      correctionEnabled: false,
-      correctionModel: "gpt-5.6-luna",
+      correctionEnabled: true,
+      correctionModel: "gpt-6.1-terra",
       correctionCustomInstructions: "",
       paragraphingStrategy: "spoken-command",
       resolveFileLinks: true,
       deviceId: "",
+      deviceLabel: "",
       organizationId: "",
       projectId: "",
-      recordingMode: "toggle",
+      recordingMode: "tap-or-hold",
       suggestedDictionary: [],
+      dismissedSuggestions: [],
       learnFromCorrections: true,
     },
     mcpServer: {
@@ -984,9 +1160,22 @@ const storeOptions = {
     pluginCapabilityConsent: {},
     projectPluginTrust: {},
     projectSurfaceChoices: {},
+    projectFileEditorChoices: {},
+    projectLayoutSeeds: {},
+    projectApplicationWelcomes: {},
+    projectHiddenLaunchGroups: {},
+    projectPluginSetupSkips: {},
+    projectPluginAccountBindings: {},
+    pluginNotificationSilences: [],
+    hiddenSearchProviders: [],
+    pluginContextProvidersOff: [],
+    pluginWorktreeDeleteNoteMutes: [],
+    projectPresentation: {},
+    worktreeCustomTitles: {},
     projectAgentMcpEnablement: {},
     projectAgentMcpAccess: {},
     pluginAgentMcpAccess: {},
+    projectAssistantAgentMcpAccess: {},
     workspaceKeepResident: {},
   },
   cwd: process.env.DAINTREE_USER_DATA,

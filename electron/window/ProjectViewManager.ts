@@ -48,9 +48,23 @@ import type {
   ProjectSwitchTrace,
 } from "../../shared/types/ipc/project.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
-import { toHostScopedKey, type HostId } from "../../shared/types/remoteHosts.js";
+import {
+  isLocalHostId,
+  parseHostScopedKey,
+  toHostScopedKey,
+  type HostId,
+} from "../../shared/types/remoteHosts.js";
 import { markPerformance } from "../utils/performance.js";
 import { collectGuestPids } from "./ProjectViewLifecycleController.js";
+import {
+  isPanelRecoveryHeldReported,
+  onPanelRecoveryHoldReleased,
+} from "../services/panelRecoveryQuery.js";
+import { repaintWindowTheme, visibleProjectIdOf } from "./projectThemeChrome.js";
+import {
+  isDictationViewHeld,
+  onDictationViewReleased,
+} from "../services/voice/dictationViewHold.js";
 
 // Trailing-edge debounce on freeze entry: the lag-pressure path can flip
 // efficiency on/off without going through the 30 s downgrade hysteresis, so
@@ -246,6 +260,18 @@ export interface ProjectViewManagerOptions {
    */
   remoteAgentActive?: (webContentsId: number) => boolean;
   /**
+   * The residency tier for a view of a host's project (#13933). The user's
+   * grant is in the host's store, not this machine's, so the host tells the
+   * Shell. Absent, no remote view is granted residency.
+   */
+  remoteKeepResident?: (webContentsId: number) => boolean;
+  /**
+   * The bound-session reading for a view of a host's project (#14228). Its MCP
+   * sessions bind on the host, so `mcpViewActivity` below never sees them; the
+   * host tells the Shell instead. Absent, no remote view reads as bound.
+   */
+  remoteMcpBindingLive?: (webContentsId: number) => boolean;
+  /**
    * Why MCP needs this view kept running right now (#11790) — a live session
    * binding, an in-flight dispatch, or neither. Injected from the composition
    * root for the same reason as `assistantBackendsForProject`: electron/window/
@@ -350,7 +376,31 @@ export class ProjectViewManager {
     if (projectId === this.activeProjectIdValue) return;
     this.activeProjectIdValue = projectId;
     notifyProjectPresenceChanged();
+    this.repaintThemeChrome();
   }
+
+  private themeChromeRepaintQueued = false;
+
+  /**
+   * The window chrome follows the project on screen (#13833). Every writer of
+   * `activeProjectId` lands here, as do a settling paint gate and the end of a
+   * cold switch, when the outgoing view stops covering the incoming one.
+   *
+   * Deferred to a microtask, coalesced: a switch moves `activeProjectId` to the
+   * incoming project a few statements BEFORE it arms the bridge that keeps the
+   * outgoing view on screen, so painting synchronously would recolour the
+   * chrome for a project the user cannot see yet.
+   */
+  repaintThemeChrome(): void {
+    if (this.disposed || this.themeChromeRepaintQueued) return;
+    this.themeChromeRepaintQueued = true;
+    queueMicrotask(() => {
+      this.themeChromeRepaintQueued = false;
+      if (this.disposed) return;
+      repaintWindowTheme(this.win, visibleProjectIdOf(this));
+    });
+  }
+  /** The app-wide cap on resident views, every window's current view included (#14218). */
   maxCachedViews = 1;
   memoryPressurePolicy: MemoryPressurePolicy | null = null;
   /** Consecutive sampler readings below the warning edge — see `maybeEvictUnderPressure`. */
@@ -387,9 +437,13 @@ export class ProjectViewManager {
   isTerminalLive?: (terminalId: string) => boolean;
   remoteAssistantLive?: (webContentsId: number) => boolean;
   remoteAgentActive?: (webContentsId: number) => boolean;
+  remoteKeepResident?: (webContentsId: number) => boolean;
+  remoteMcpBindingLive?: (webContentsId: number) => boolean;
   mcpViewActivity?: (workspaceId: string, webContentsId: number) => McpViewActivity | null;
   windowRegistry?: import("./WindowRegistry.js").WindowRegistry;
   private switchChain: Promise<void> = Promise.resolve();
+  /** Switches queued or running on `switchChain`; the idle release waits them out (#14217). */
+  pendingSwitchCount = 0;
   private resizeHandler: (() => void) | null = null;
   private contentAreaGrowthHandler: (() => void) | null = null;
   evictionTimestamps = new Map<string, number>();
@@ -449,6 +503,7 @@ export class ProjectViewManager {
     intent: ProjectFocusOnActivateIntent;
   } | null = null;
   disposed = false;
+  private holdReleaseCleanup: (() => void) | null = null;
   /** One-shot latch so a persistently broken activity callback can't flood the log. */
   private warnedMcpActivityFailure = false;
   private cachedMemoryTimerCleanup: (() => void) | null = null;
@@ -476,8 +531,33 @@ export class ProjectViewManager {
     this.isTerminalLive = opts.isTerminalLive;
     this.remoteAssistantLive = opts.remoteAssistantLive;
     this.remoteAgentActive = opts.remoteAgentActive;
+    this.remoteKeepResident = opts.remoteKeepResident;
+    this.remoteMcpBindingLive = opts.remoteMcpBindingLive;
     this.mcpViewActivity = opts.mcpViewActivity;
     this.windowRegistry = opts.windowRegistry;
+    // A view kept over the cap by its unsaved work (#14095) or by a dictation
+    // (#14773) is evictable again once that work is saved or dropped, or the
+    // dictation and its cleanup are done; nothing else would re-run the cap
+    // until the next cold switch or limit change. Deferred so a view is never
+    // torn down inside its own navigation or IPC callback.
+    const reclaimReleased = (webContentsId: number) => {
+      if (this.disposed) return;
+      const ours = [...this.views.values()].some(
+        (entry) =>
+          !entry.view.webContents.isDestroyed() && entry.view.webContents.id === webContentsId
+      );
+      // Every window's count, not this one's: the cap is app-wide (#14218).
+      if (!ours || EvictionController.scopeViewCount(this) <= this.maxCachedViews) return;
+      setImmediate(() => {
+        if (!this.disposed) EvictionController.evictStaleViews(this, "lru");
+      });
+    };
+    const offRecovery = onPanelRecoveryHoldReleased(reclaimReleased);
+    const offDictation = onDictationViewReleased(reclaimReleased);
+    this.holdReleaseCleanup = () => {
+      offRecovery();
+      offDictation();
+    };
     if (opts.cachedProjectViews != null) {
       this.maxCachedViews = opts.cachedProjectViews;
     }
@@ -590,6 +670,13 @@ export class ProjectViewManager {
           });
         }
         try {
+          this.evictIdleViews();
+        } catch (error) {
+          logWarn("projectview.idle-release.error", {
+            error: formatErrorMessage(error, "evictIdleViews threw"),
+          });
+        }
+        try {
           this.refreezeUnprotectedCachedViews();
         } catch (error) {
           logWarn("projectview.refreeze.error", {
@@ -633,6 +720,14 @@ export class ProjectViewManager {
     // open signal — otherwise a relaunch straight into a trusted project would
     // load none of its plugins until the user switched away and back.
     notifyProjectPluginsOpened(projectId, projectPath);
+    // A new window adds a resident view to an app-wide cap (#14218) without the
+    // switch that would otherwise enforce it. Deferred like the switch's own
+    // sweep, so the window's registry entry and services are in place first.
+    if (EvictionController.scopeViewCount(this) > this.maxCachedViews) {
+      setImmediate(() => {
+        if (!this.disposed) EvictionController.evictStaleViews(this, "lru");
+      });
+    }
   }
 
   /**
@@ -645,12 +740,17 @@ export class ProjectViewManager {
     trace?: ProjectSwitchTrace,
     request?: SwitchRequestOptions
   ): Promise<{ view: WebContentsView; isNew: boolean }> {
+    this.pendingSwitchCount++;
     const task = this.switchChain.then(() =>
       performSwitch(this, projectId, projectPath, trace, request)
     );
     this.switchChain = task.then(
-      () => undefined,
-      () => undefined
+      () => {
+        this.pendingSwitchCount--;
+      },
+      () => {
+        this.pendingSwitchCount--;
+      }
     );
     return task;
   }
@@ -1234,6 +1334,11 @@ export class ProjectViewManager {
     EvictionController.maybeEvictUnderPressure(this);
   }
 
+  /** Returns the number of cached views released — 0 means none had sat unused long enough. */
+  evictIdleViews(): number {
+    return EvictionController.evictIdleViews(this);
+  }
+
   /** Returns the number of cached views evicted — 0 means nothing was eligible. */
   reclaimCachedViewsUnderPressure(): number {
     return EvictionController.evictStaleViews(this, "pressure", true);
@@ -1399,7 +1504,24 @@ export class ProjectViewManager {
    * which is the same vocabulary the MCP session binding stores.
    */
   mcpActivityFor(workspaceId: string, wc: Electron.WebContents): McpViewActivityReading {
-    if (!this.mcpViewActivity || wc.isDestroyed()) return NO_MCP_ACTIVITY;
+    if (wc.isDestroyed()) return NO_MCP_ACTIVITY;
+    const activity = this.localMcpActivityFor(workspaceId, wc);
+    if (activity.liveBinding || isLocalHostId(parseHostScopedKey(workspaceId).hostId)) {
+      return activity;
+    }
+    // A host project's sessions bind on its host (#14228), which says so even
+    // when this machine has never loaded MCP. Only the binding is the host's:
+    // a dispatch lease names a renderer here.
+    return this.remoteMcpBindingLive?.(wc.id) === true
+      ? { ...activity, liveBinding: true }
+      : activity;
+  }
+
+  private localMcpActivityFor(
+    workspaceId: string,
+    wc: Electron.WebContents
+  ): McpViewActivityReading {
+    if (!this.mcpViewActivity) return NO_MCP_ACTIVITY;
     try {
       const activity = this.mcpViewActivity(workspaceId, wc.id);
       return activity ? { ...activity, unknown: false } : NO_MCP_ACTIVITY;
@@ -1452,6 +1574,8 @@ export class ProjectViewManager {
       // A host's assistant runs its tool calls through this view, often one the
       // person never shows (a hub started it); frozen, every call would stall.
       if (this.remoteAssistantLive?.(wc.id) === true) continue;
+      // A dictation started here captures its audio in this renderer (#14773).
+      if (isDictationViewHeld(wc)) continue;
       void freezeWebContents(wc);
     }
   }
@@ -1567,6 +1691,12 @@ export class ProjectViewManager {
     // that can't be read is treated as a dispatch in flight.
     const mcp = this.mcpActivityFor(projectId, wc);
     if (mcp.dispatchLease || mcp.unknown) return false;
+    // Unsaved work the view says nothing would bring back (#14095): moving the
+    // project to another window would destroy it, which a move never means.
+    if (isPanelRecoveryHeldReported(wc)) return false;
+    // A dictation running there, or its cleanup, would end with the view
+    // (#14773). Another window asking for the project brings this one forward.
+    if (isDictationViewHeld(wc)) return false;
     return !EvictionController.hasLiveAssistantBackend(this, projectId, entry);
   }
 
@@ -1581,10 +1711,31 @@ export class ProjectViewManager {
     return true;
   }
 
-  /** Returns true if a cached view existed for the project and was torn down. */
-  destroyView(projectId: string): boolean {
+  /**
+   * Whether an MCP dispatch is in flight against this project's view, or can't
+   * be ruled out. The test an automatic teardown must pass before destroying
+   * the view (#13845): LRU eviction already skips a leased view, and a
+   * teardown nobody asked for can wait for the lease to lapse just as well.
+   * Unlike pressure eviction, unreadable activity counts as a dispatch — an
+   * automatic sleep relieves no emergency, so it has no OOM to weigh against.
+   */
+  isMcpDispatchProtected(projectId: string): boolean {
+    const wc = this.views.get(projectId)?.view.webContents;
+    // Electron 41+ hands back undefined for a destroyed view's webContents.
+    if (!wc || wc.isDestroyed()) return false;
+    const mcp = this.mcpActivityFor(projectId, wc);
+    return mcp.dispatchLease || mcp.unknown;
+  }
+
+  /**
+   * Returns true if a cached view existed for the project and was torn down.
+   * `protectMcpDispatch` leaves a view an MCP dispatch is waiting on alone and
+   * returns false — automatic callers pass it, an explicit user action doesn't.
+   */
+  destroyView(projectId: string, options?: { protectMcpDispatch?: boolean }): boolean {
     const entry = this.views.get(projectId);
     if (!entry) return false;
+    if (options?.protectMcpDispatch && this.isMcpDispatchProtected(projectId)) return false;
 
     if (this.activeProjectId === projectId) {
       this.activeProjectId = null;
@@ -1596,6 +1747,8 @@ export class ProjectViewManager {
 
   dispose(): void {
     this.disposed = true;
+    this.holdReleaseCleanup?.();
+    this.holdReleaseCleanup = null;
     // Before any teardown below: an in-flight restore holds a half-built entry
     // and a pending hydration wait, both of which must settle against a live
     // manager rather than be found dead by their own continuations.

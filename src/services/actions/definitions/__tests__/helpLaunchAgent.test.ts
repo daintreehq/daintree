@@ -13,7 +13,7 @@ const {
   mockGetScratchState,
   mockLogError,
   mockRemovePanel,
-  mockOpenTour,
+  mockRequestTour,
   panelsById,
   controllers,
 } = vi.hoisted(() => ({
@@ -27,7 +27,7 @@ const {
   mockGetScratchState: vi.fn(),
   mockLogError: vi.fn(),
   mockRemovePanel: vi.fn(),
-  mockOpenTour: vi.fn(),
+  mockRequestTour: vi.fn(),
   panelsById: {} as Record<string, unknown>,
   controllers: new Map<
     number,
@@ -86,7 +86,7 @@ vi.mock("@/lib/sidebarToggle", () => ({
   suppressSidebarResizes: vi.fn(),
 }));
 
-vi.mock("@/components/Tour/tourEvents", () => ({ openTour: mockOpenTour }));
+vi.mock("@/components/Tour/tourRequests", () => ({ requestTour: mockRequestTour }));
 
 vi.mock("@/controllers/helpSessionControllerRegistry", () => ({
   acquireHelpSessionController: (slot: number) => {
@@ -111,6 +111,7 @@ vi.mock("@/controllers/helpSessionControllerRegistry", () => ({
 }));
 
 import { registerHelpActions } from "../helpActions";
+import "../helpActions.impl";
 import {
   markHelpPanelRuntimeMounted,
   onHelpPanelRuntimeRequested,
@@ -543,13 +544,21 @@ describe("help.launchAgent", () => {
     mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "term-1" } });
 
     const runPromise = action.run(undefined, stubCtx);
-    // Focus drifts while getFolderPath is still pending.
+    // Focus and the workspace drift while the run body's chunk and
+    // getFolderPath are still pending.
     mockGetContext.mockReturnValue({ focusedWorktreeId: "wt-drifted" });
+    mockGetProjectState.mockReturnValue({
+      currentProject: { id: "proj-drifted", path: "/drifted" },
+    });
     resolveFolder("/mock/help");
     await runPromise;
 
     expect(window.electron.help.provisionSession).toHaveBeenCalledWith(
-      expect.objectContaining({ context: { focusedWorktreeId: "wt-at-launch" } })
+      expect.objectContaining({
+        projectId: "proj-1",
+        projectPath: "/repo",
+        context: { focusedWorktreeId: "wt-at-launch" },
+      })
     );
   });
 
@@ -1686,11 +1695,31 @@ describe("help.tour.show", () => {
   });
 
   it("opens the Daintree tour without arguments and the named tour with one", async () => {
+    mockRequestTour.mockReset();
     const action = helpTourShow();
     await action.run(undefined, {});
     await action.run({}, {});
     const acme = makePluginTourId("acme.tools", "welcome");
     await action.run({ tourId: acme }, {});
-    expect(mockOpenTour.mock.calls).toEqual([[undefined], [undefined], [acme]]);
+    expect(mockRequestTour.mock.calls).toEqual([[["daintree"]], [["daintree"]], [[acme]]]);
+  });
+
+  it("reads a plugin's tour id as its own local id", async () => {
+    mockRequestTour.mockReset();
+    const started = { status: "started", tourId: "acme.tools.welcome", runId: "r1" };
+    mockRequestTour.mockResolvedValue(started);
+    const action = helpTourShow();
+    const result = await action.run({ tourId: "welcome" }, { callerPluginId: "acme.tools" });
+    expect(mockRequestTour).toHaveBeenCalledWith(["acme.tools.welcome"]);
+    // The start result is the action's result, so the plugin's dispatch sees it.
+    expect(result).toBe(started);
+    expect(action.resultSchema!.safeParse(started).success).toBe(true);
+  });
+
+  it("scopes a project plugin's local id to its own instance", async () => {
+    mockRequestTour.mockReset();
+    const instance = "project__p1__acme.tools";
+    await helpTourShow().run({ tourId: "welcome" }, { callerPluginId: instance });
+    expect(mockRequestTour).toHaveBeenCalledWith([`${instance}.welcome`]);
   });
 });

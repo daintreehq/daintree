@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { getEndpointRegistry } from "../../ipc/endpointRegistry.js";
 import { setRemoteVisibleProjectIdsProvider } from "../../window/activeProjectIds.js";
+import { notifyProjectPresenceChanged } from "../../window/projectPresenceChanges.js";
 import type { HostServer } from "../host/HostServer.js";
 import type { LinkSession } from "../link/session.js";
 import { getRemoteService, registerRemoteService } from "../runtime.js";
@@ -27,15 +28,19 @@ type Registry = Pick<ReturnType<typeof getEndpointRegistry>, "get" | "getRemote"
  */
 export class EndpointVisibility {
   private readonly hidden = new Set<string>();
+  /** What `visibleProjectIds` answered when a change was last announced. */
+  private announced: Set<string>;
   private readonly off: () => void;
 
   constructor(private readonly registry: Registry = getEndpointRegistry()) {
+    this.announced = this.visibleProjectIds();
     // Forget closed endpoints so the set never outlives the views it describes.
     this.off = registry.onChange(() => {
       for (const endpointId of [...this.hidden]) {
         const endpoint = registry.get(endpointId);
         if (!endpoint || endpoint.isClosed()) this.hidden.delete(endpointId);
       }
+      this.announceIfChanged();
     });
   }
 
@@ -44,6 +49,23 @@ export class EndpointVisibility {
     if (!endpoint || endpoint.kind !== "remote-view" || endpoint.isClosed()) return;
     if (visible) this.hidden.delete(endpointId);
     else this.hidden.add(endpointId);
+    this.announceIfChanged();
+  }
+
+  /**
+   * A Shell showing or leaving a project changes where projects are open just
+   * as a local switch does, and the idle clock has to hear about it then: a
+   * project a Shell stopped showing must be stamped as it goes, not at the next
+   * sweep (#13844). Only real changes are announced, because every local
+   * endpoint's open and close comes through the registry listener too.
+   */
+  private announceIfChanged(): void {
+    const next = this.visibleProjectIds();
+    const unchanged =
+      next.size === this.announced.size && [...next].every((id) => this.announced.has(id));
+    if (unchanged) return;
+    this.announced = next;
+    notifyProjectPresenceChanged();
   }
 
   isVisible(endpointId: string): boolean {
@@ -100,6 +122,7 @@ export function installEndpointVisibility(
   // Read live on every call, so the close guard's re-check after an await sees
   // views that appeared meanwhile.
   const offGuard = setRemoteVisibleProjectIdsProvider(() => visibility.visibleProjectIds());
+  notifyProjectPresenceChanged();
   const server = options.server === undefined ? getRemoteService("hostServer") : options.server;
   const offSession =
     server?.onSession(({ sessionId, session }) => {
@@ -117,6 +140,8 @@ export function installEndpointVisibility(
   return () => {
     offSession();
     offGuard();
+    // Whatever the Shells were showing just stopped counting as open here.
+    notifyProjectPresenceChanged();
     unregister();
     visibility.dispose();
   };

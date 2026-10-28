@@ -21,6 +21,13 @@ const HANDSHAKE = {
 const CONNECTED: HostConnectionState = { status: "connected", rttMs: 5, handshake: HANDSHAKE };
 const RECONNECTING: HostConnectionState = { status: "connecting", attempt: 2 };
 const UNREACHABLE: HostConnectionState = { status: "unreachable", lastSeenAt: 1, detail: null };
+const RESTARTING: HostConnectionState = { status: "connecting", attempt: 2, restarting: true };
+const RESTART_DIAL_FAILED: HostConnectionState = {
+  status: "unreachable",
+  lastSeenAt: 1,
+  detail: null,
+  restarting: true,
+};
 
 function link(connection: HostConnectionState) {
   useHostConnectionStore.setState({ connection });
@@ -60,7 +67,7 @@ afterEach(() => {
 describe("watchHostConnectionAnnouncements", () => {
   it("says a lost link once, however many back-off cycles it goes through", () => {
     stop = watchHostConnectionAnnouncements("studio-01");
-    for (let cycle = 0; cycle < 4; cycle += 1) {
+    for (let cycle = 0; cycle < 16; cycle += 1) {
       link(RECONNECTING);
       vi.advanceTimersByTime(1_000);
       link(UNREACHABLE);
@@ -86,6 +93,65 @@ describe("watchHostConnectionAnnouncements", () => {
     expect(announce).not.toHaveBeenCalled();
   });
 
+  it("says nothing for a drop that recovers inside the settle window, however it backs off", () => {
+    stop = watchHostConnectionAnnouncements("studio-01");
+    for (let cycle = 0; cycle < 7; cycle += 1) {
+      link(RECONNECTING);
+      vi.advanceTimersByTime(2_000);
+      link(UNREACHABLE);
+      vi.advanceTimersByTime(2_000);
+    }
+    link(CONNECTED);
+    vi.advanceTimersByTime(60_000);
+    expect(announce).not.toHaveBeenCalled();
+  });
+
+  it("says a host's announced restart once, as a restart, and reconnected when it's back", () => {
+    stop = watchHostConnectionAnnouncements("studio-01");
+    for (let cycle = 0; cycle < 20; cycle += 1) {
+      link(RESTARTING);
+      vi.advanceTimersByTime(1_000);
+      link(RESTART_DIAL_FAILED);
+      vi.advanceTimersByTime(1_000);
+    }
+    expect(spoken()).toEqual([
+      "studio-01 is restarting. Terminals are read-only until it reconnects.",
+    ]);
+    link(CONNECTED);
+    vi.advanceTimersByTime(400);
+    expect(spoken()[1]).toBe("Reconnected to studio-01");
+  });
+
+  it("says a drop at the deadline from when the link went down, whatever it turned into meanwhile", () => {
+    stop = watchHostConnectionAnnouncements("studio-01");
+    link(RECONNECTING);
+    vi.advanceTimersByTime(20_000);
+    link(RESTART_DIAL_FAILED);
+    vi.advanceTimersByTime(9_900);
+    expect(announce).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(100);
+    expect(spoken()).toEqual([
+      "studio-01 is restarting. Terminals are read-only until it reconnects.",
+    ]);
+  });
+
+  it("says unreachable once a restart outlasts its grace, and reconnected after", () => {
+    stop = watchHostConnectionAnnouncements("studio-01");
+    link(RESTART_DIAL_FAILED);
+    vi.advanceTimersByTime(29_900);
+    expect(announce).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(100);
+    link(UNREACHABLE);
+    vi.advanceTimersByTime(400);
+    link(CONNECTED);
+    vi.advanceTimersByTime(400);
+    expect(spoken()).toEqual([
+      "studio-01 is restarting. Terminals are read-only until it reconnects.",
+      "studio-01 is unreachable. Terminals are read-only until it reconnects.",
+      "Reconnected to studio-01",
+    ]);
+  });
+
   it("says nothing while the first connect is still trying", () => {
     useHostConnectionStore.setState({ connection: null, everConnected: false });
     stop = watchHostConnectionAnnouncements("studio-01");
@@ -100,7 +166,7 @@ describe("watchHostConnectionAnnouncements", () => {
     stop = watchHostConnectionAnnouncements("studio-01");
     link({ status: "unreachable", lastSeenAt: null, detail: null, hostModeOff: true });
     vi.advanceTimersByTime(400);
-    expect(spoken()).toEqual(["Daintree isn't running in Host mode on studio-01."]);
+    expect(spoken()).toEqual(["Daintree isn't listening on studio-01."]);
 
     // A retry that fails the same way is the same answer, not a new one.
     link(RECONNECTING);
@@ -151,7 +217,7 @@ describe("watchHostConnectionAnnouncements", () => {
   it("doesn't say an outage again when the layout running it is replaced", () => {
     stop = watchHostConnectionAnnouncements("studio-01");
     link(UNREACHABLE);
-    vi.advanceTimersByTime(400);
+    vi.advanceTimersByTime(30_000);
     stop();
     // Teardown resets the store; the next layout binds it again and re-reads the link.
     useHostConnectionStore.getState().reset();
@@ -188,6 +254,8 @@ describe("hostLinkEpisode", () => {
     expect(hostLinkEpisode("reconnecting", "host-mode-off")).toBeNull();
     expect(hostLinkEpisode("reconnecting", "disconnected")).toBeNull();
     expect(hostLinkEpisode("unreachable")).toBe("lost");
+    expect(hostLinkEpisode("restarting")).toBe("restarting");
+    expect(hostLinkEpisode("reconnecting", "restarting")).toBe("lost");
     expect(hostLinkEpisode("connecting")).toBeNull();
     expect(hostLinkEpisode("checking")).toBe("up");
     expect(hostLinkEpisode(null)).toBe("up");

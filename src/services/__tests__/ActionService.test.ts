@@ -1,5 +1,6 @@
 import { beforeAll, afterAll, describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { z } from "zod";
+import { createHash } from "node:crypto";
 
 const hintMocks = vi.hoisted(() => {
   const mockShow = vi.fn();
@@ -34,6 +35,7 @@ vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
 import { ActionService } from "../ActionService";
 import { useUIStore } from "@/store/uiStore";
 import type { ActionDefinition, ActionId } from "@shared/types/actions";
+import { AGENT_LAUNCH_CONFIG_DISPATCH_DANGER_RATIONALE } from "../actions/effectiveDanger";
 import { ConfirmationStagedError } from "../actions/confirmationStaged";
 import { TerminalInOtherProjectError } from "@shared/utils/terminalInOtherProject";
 
@@ -145,6 +147,49 @@ describe("ActionService", () => {
       };
       service.register(action as unknown as ActionDefinition);
       expect(service.get("acme.plugin.maybe" as ActionId)!.requiresArgs).toBe(false);
+    });
+
+    it("exposes palette prompts only for plugin commands with a small flat schema, per registration", () => {
+      const plugin = (id: string, rawInputSchema: Record<string, unknown>) =>
+        ({
+          id: id,
+          title: id,
+          description:
+            "A plugin command used to check which schemas the palette is willing to prompt for.",
+          category: "plugin",
+          kind: "command",
+          danger: "safe",
+          scope: "renderer",
+          pluginId: "acme.plugin",
+          rawInputSchema,
+          run: vi.fn().mockResolvedValue(undefined),
+        }) as unknown as ActionDefinition;
+      const flat = {
+        type: "object",
+        properties: { name: { type: "string" } },
+        required: ["name"],
+      };
+
+      service.register(plugin("acme.plugin.flat", flat));
+      service.register(
+        plugin("acme.plugin.nested", {
+          type: "object",
+          properties: { o: { type: "object", properties: {} } },
+          required: ["o"],
+        })
+      );
+
+      const first = service.getPluginPaletteArgs("acme.plugin.flat");
+      expect(first?.fields.map((f) => f.name)).toEqual(["name"]);
+      expect(service.getPluginPaletteArgs("acme.plugin.flat")).toBe(first);
+      expect(service.getPluginPaletteArgs("acme.plugin.nested")).toBeNull();
+      expect(service.getPluginPaletteArgs("actions.list")).toBeNull();
+
+      service.unregister("acme.plugin.flat");
+      service.register(plugin("acme.plugin.flat", flat));
+      const second = service.getPluginPaletteArgs("acme.plugin.flat");
+      expect(second).not.toBe(first);
+      expect(second?.fields.map((f) => f.name)).toEqual(["name"]);
     });
 
     it("propagates rawOutputSchema onto ActionManifestEntry when no Zod resultSchema is set", () => {
@@ -274,6 +319,80 @@ describe("ActionService", () => {
       expect(mockRun).not.toHaveBeenCalled();
     });
 
+    describe("plugin actions with a result contract (#13817)", () => {
+      const PLUGIN_ACTION = "acme.tool.report" as ActionId;
+      const outputSchema = { type: "object", properties: { total: { type: "integer" } } };
+      const register = (
+        id: ActionId,
+        danger: "safe" | "confirm",
+        run: ActionDefinition["run"],
+        plugin?: Record<string, unknown>
+      ) =>
+        service.register({
+          id,
+          title: "Report",
+          description: "Report action",
+          category: "test",
+          kind: "query",
+          danger,
+          scope: "renderer",
+          run,
+          ...plugin,
+        } as ActionDefinition);
+      const registerPluginAction = (danger: "safe" | "confirm", run: ActionDefinition["run"]) =>
+        register(PLUGIN_ACTION, danger, run, {
+          pluginId: "acme.tool",
+          pluginName: "Tool",
+          rawOutputSchema: structuredClone(outputSchema),
+          mcpOutputSchema: true,
+        });
+      const resultRejection = () =>
+        new Error(
+          `[AppError|RESULT_VALIDATION_ERROR] Plugin action "${PLUGIN_ACTION}" returned a result that does not match its declared resultSchema`
+        );
+
+      it("still refuses plugin dispatch of a confirm-tier action, confirmed or not", async () => {
+        const run = vi.fn().mockResolvedValue({ total: 1 });
+        registerPluginAction("confirm", run);
+
+        for (const confirmed of [undefined, true]) {
+          const result = await service.dispatch(PLUGIN_ACTION, undefined, {
+            source: "plugin",
+            confirmed,
+          });
+          expect(result).toMatchObject({ ok: false, error: { code: "CONFIRMATION_REQUIRED" } });
+        }
+        expect(run).not.toHaveBeenCalled();
+        expect(service.get(PLUGIN_ACTION)).toMatchObject({
+          outputSchema,
+          pluginId: "acme.tool",
+          pluginName: "Tool",
+        });
+      });
+
+      it("reports a result main refused with the code a built-in's rejected result gets", async () => {
+        registerPluginAction("safe", vi.fn().mockRejectedValue(resultRejection()));
+
+        const result = await service.dispatch(PLUGIN_ACTION, undefined, { source: "plugin" });
+
+        expect(result).toMatchObject({
+          ok: false,
+          error: {
+            code: "RESULT_VALIDATION_ERROR",
+            message: `Plugin action "${PLUGIN_ACTION}" returned a result that does not match its declared resultSchema`,
+          },
+        });
+      });
+
+      it("leaves the same throw from a built-in an execution error", async () => {
+        register("actions.list" as ActionId, "safe", vi.fn().mockRejectedValue(resultRejection()));
+
+        const result = await service.dispatch("actions.list", undefined, { source: "user" });
+
+        expect(result).toMatchObject({ ok: false, error: { code: "EXECUTION_ERROR" } });
+      });
+    });
+
     it("gates a statically-safe action when an agent dispatch carries a recipeId (#11860)", async () => {
       // The composite worktree actions are legitimately `safe` on their own but
       // spawn a recipe's terminals when the args name one, which is the gap
@@ -309,6 +428,92 @@ describe("ActionService", () => {
       );
       expect(approved.ok).toBe(true);
       expect(mockRun).toHaveBeenCalledTimes(1);
+    });
+
+    it("refuses a plugin agent.launch that configures the agent, and runs a plain one (#13762)", async () => {
+      const mockRun = vi.fn().mockResolvedValue(undefined);
+      service.register({
+        id: "agent.launch" as ActionId,
+        title: "Launch agent",
+        description:
+          "A test action for validating ActionService dispatch, registration, and manifest entry generation.",
+        category: "agent",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        argsSchema: z.object({
+          agentId: z.string(),
+          cwd: z.string().optional(),
+          prompt: z.string().optional(),
+          interactive: z.boolean().optional(),
+          systemPrompt: z.string().optional(),
+          presetId: z.string().nullable().optional(),
+          env: z.record(z.string(), z.string()).optional(),
+          agentLaunchFlags: z.array(z.string()).optional(),
+        }),
+        run: mockRun,
+      });
+
+      const variants = [
+        { agentLaunchFlags: ["--dangerously-skip-permissions"] },
+        { env: { FOO: "1" } },
+        { systemPrompt: "Be brief." },
+        { presetId: "auto-approve" },
+        { prompt: "--dangerously-skip-permissions" },
+      ];
+      for (const extra of variants) {
+        for (const confirmed of [false, true]) {
+          const blocked = await service.dispatch(
+            "agent.launch",
+            { agentId: "claude", ...extra },
+            { source: "plugin", confirmed }
+          );
+          expect(blocked.ok).toBe(false);
+          if (!blocked.ok) {
+            expect(blocked.error.code).toBe("CONFIRMATION_REQUIRED");
+            // Names what to drop, not a confirmation a plugin can never give.
+            expect(blocked.error.message).toMatch(/agentLaunchFlags, env, systemPrompt, presetId/);
+          }
+        }
+      }
+      expect(mockRun).not.toHaveBeenCalled();
+
+      const plain = await service.dispatch(
+        "agent.launch",
+        {
+          agentId: "claude",
+          cwd: "/videos/ep-1",
+          prompt: "Write the script",
+          interactive: true,
+          agentLaunchFlags: [],
+          env: {},
+        },
+        { source: "plugin" }
+      );
+      expect(plain.ok).toBe(true);
+      for (const source of ["user", "keybinding", "agent"] as const) {
+        const result = await service.dispatch(
+          "agent.launch",
+          { agentId: "claude", ...variants[0], ...variants[1], ...variants[3] },
+          { source }
+        );
+        expect(result.ok).toBe(true);
+      }
+      expect(mockRun).toHaveBeenCalledTimes(4);
+
+      // getDispatchMeta reads the same rule, with the launch's own rationale.
+      const meta = service.getDispatchMeta("agent.launch" as ActionId, {
+        source: "plugin",
+        args: { agentId: "claude", env: { FOO: "1" } },
+      });
+      expect(meta?.danger).toBe("confirm");
+      expect(meta?.dangerRationale).toBe(AGENT_LAUNCH_CONFIG_DISPATCH_DANGER_RATIONALE);
+      expect(
+        service.getDispatchMeta("agent.launch" as ActionId, {
+          source: "plugin",
+          args: { agentId: "claude", prompt: "Write the script" },
+        })?.danger
+      ).toBe("safe");
     });
 
     it("leaves the same action ungated for an agent dispatch that names no recipe (#11860)", async () => {
@@ -784,6 +989,55 @@ describe("ActionService", () => {
           expect(result.error.code).toBe("CONFIRMATION_REQUIRED");
           expect(result.error.message).toContain("did not happen");
         }
+      });
+    });
+
+    // #13780: `layout.apply` holds a plugin to its own layouts by this field, so
+    // it must name the bridge's caller and nobody else.
+    describe("callerPluginId reaches run() only for a plugin dispatch", () => {
+      function safeAction(run: ActionDefinition["run"]): ActionDefinition {
+        return {
+          id: "actions.list",
+          title: "Test Action",
+          description: "A test action",
+          category: "test",
+          kind: "command",
+          danger: "safe",
+          scope: "renderer",
+          run,
+        };
+      }
+
+      it("stamps the plugin the bridge named", async () => {
+        const mockRun = vi.fn().mockResolvedValue(undefined);
+        service.register(safeAction(mockRun));
+
+        await service.dispatch("actions.list", undefined, {
+          source: "plugin",
+          callerPluginId: "acme",
+          contextOverride: { callerPluginId: "other" },
+        });
+
+        expect(mockRun).toHaveBeenCalledWith(
+          undefined,
+          expect.objectContaining({ callerPluginId: "acme" })
+        );
+      });
+
+      it("drops a caller claimed on any other source", async () => {
+        const mockRun = vi.fn().mockResolvedValue(undefined);
+        service.register(safeAction(mockRun));
+
+        await service.dispatch("actions.list", undefined, {
+          source: "user",
+          callerPluginId: "acme",
+          contextOverride: { callerPluginId: "acme" },
+        });
+
+        expect(mockRun).toHaveBeenCalledWith(
+          undefined,
+          expect.objectContaining({ callerPluginId: undefined })
+        );
       });
     });
 
@@ -1263,6 +1517,154 @@ describe("ActionService", () => {
       } finally {
         restore();
       }
+    });
+
+    describe("plugin attribution (#13759)", () => {
+      function register(
+        id: string,
+        {
+          pluginId,
+          danger = "safe",
+          denyPluginDispatch,
+          run = vi.fn().mockResolvedValue(undefined),
+        }: {
+          pluginId?: string;
+          danger?: ActionDefinition["danger"];
+          denyPluginDispatch?: boolean;
+          run?: ActionDefinition["run"];
+        } = {}
+      ) {
+        service.register({
+          id,
+          title: "T",
+          description:
+            "Test action with a short title for verifying title/description field propagation in manifest entries.",
+          category: "test",
+          kind: "command",
+          danger,
+          scope: "renderer",
+          ...(pluginId ? { pluginId } : {}),
+          ...(denyPluginDispatch ? { denyPluginDispatch } : {}),
+          run,
+        });
+      }
+
+      async function emitted(emit: ReturnType<typeof vi.fn>): Promise<unknown> {
+        await vi.waitFor(() => expect(emit).toHaveBeenCalledTimes(1));
+        return emit.mock.calls[0]![1];
+      }
+
+      it("attributes a plugin's dispatch of a built-in action to the caller, hashing the redacted args", async () => {
+        const emit = vi.fn().mockResolvedValue(undefined);
+        const restore = installEmit(emit);
+        try {
+          register("actions.list");
+          await service.dispatch(
+            "actions.list",
+            { apiToken: "s3cret", nested: { password: "hunter2", name: "n" }, count: 2 },
+            { source: "plugin", callerPluginId: "acme.caller" }
+          );
+          const redacted = {
+            apiToken: "[REDACTED]",
+            nested: { password: "[REDACTED]", name: "n" },
+            count: 2,
+          };
+          expect(await emitted(emit)).toMatchObject({
+            source: "plugin",
+            pluginId: "acme.caller",
+            args: redacted,
+            argsHash: createHash("sha256").update(JSON.stringify(redacted)).digest("hex"),
+          });
+        } finally {
+          restore();
+        }
+      });
+
+      it("attributes a plugin's dispatch of another plugin's action to the caller", async () => {
+        const emit = vi.fn().mockResolvedValue(undefined);
+        const restore = installEmit(emit);
+        try {
+          register("actions.list", { pluginId: "acme.owner" });
+          await service.dispatch("actions.list", undefined, {
+            source: "plugin",
+            callerPluginId: "acme.caller",
+          });
+          expect(await emitted(emit)).toMatchObject({ pluginId: "acme.caller" });
+        } finally {
+          restore();
+        }
+      });
+
+      it.each([
+        ["no caller", undefined],
+        ["an empty caller", ""],
+      ])("keeps the owning plugin when a plugin dispatch carries %s", async (_label, caller) => {
+        const emit = vi.fn().mockResolvedValue(undefined);
+        const restore = installEmit(emit);
+        try {
+          register("actions.list", { pluginId: "acme.owner" });
+          await service.dispatch("actions.list", undefined, {
+            source: "plugin",
+            callerPluginId: caller,
+          });
+          expect(await emitted(emit)).toMatchObject({ pluginId: "acme.owner" });
+        } finally {
+          restore();
+        }
+      });
+
+      it("ignores callerPluginId for non-plugin sources", async () => {
+        const emit = vi.fn().mockResolvedValue(undefined);
+        const restore = installEmit(emit);
+        try {
+          register("actions.list");
+          await service.dispatch("actions.list", undefined, {
+            source: "agent",
+            callerPluginId: "acme.caller",
+          });
+          const payload = await emitted(emit);
+          expect(payload).not.toHaveProperty("pluginId");
+          expect(payload).not.toHaveProperty("argsHash");
+        } finally {
+          restore();
+        }
+      });
+
+      it("emits nothing for an attributed plugin dispatch that is refused or fails", async () => {
+        const emit = vi.fn().mockResolvedValue(undefined);
+        const restore = installEmit(emit);
+        // Emission starts hashing attributed args synchronously inside
+        // dispatch, so a refused dispatch that reached it shows here with no
+        // need to wait on digests that settle in no particular order.
+        const digest = vi.spyOn(globalThis.crypto.subtle, "digest");
+        try {
+          register("test.confirm", { danger: "confirm" });
+          register("test.denied", { denyPluginDispatch: true });
+          register("test.throws", { run: vi.fn().mockRejectedValue(new Error("boom")) });
+          register("actions.list");
+          const options = { source: "plugin", callerPluginId: "acme.caller" } as const;
+
+          const refused = await Promise.all(
+            ["test.confirm", "test.denied", "test.throws"].map((id) =>
+              service.dispatch(id, { q: 1 }, options)
+            )
+          );
+          expect(refused.map((r) => (r.ok ? "ok" : r.error.code))).toEqual([
+            "CONFIRMATION_REQUIRED",
+            "RESTRICTED",
+            "EXECUTION_ERROR",
+          ]);
+          expect(digest).not.toHaveBeenCalled();
+
+          // The same dispatch that succeeds does reach the hash.
+          await service.dispatch("actions.list", { q: 1 }, options);
+          expect(digest).toHaveBeenCalledTimes(1);
+          expect(await emitted(emit)).toMatchObject({ actionId: "actions.list" });
+        } finally {
+          digest.mockRestore();
+          restore();
+        }
+      });
     });
 
     it("does not emit action:dispatched when run throws", async () => {

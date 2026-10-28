@@ -3,6 +3,7 @@ import type { PanelKind } from "../../shared/types/panel.js";
 import type { RunCanopyRefinement, RunHandBackRecord } from "../../shared/types/ipc/fleet.js";
 import { isHandBackStop, isHandBackUnseen } from "../../shared/utils/runHandBack.js";
 import { canopyPlacement } from "../../shared/utils/canopyRefinement.js";
+import { isHostThrowawayWorkspaceId } from "../../shared/config/hostThrowaway.js";
 import { getAgentAvailabilityStore } from "./AgentAvailabilityStore.js";
 
 /** Per-project agent tallies derived from the live terminal list. */
@@ -149,7 +150,8 @@ export interface CountableTerminal {
  * (#10989), and whose state is reported separately as presence (#11806).
  * Every other reason is simply "not an agent", with nothing left to say.
  */
-export type RunExclusionReason = "trashed" | "help" | "dev-preview" | "no-pty" | "not-an-agent";
+export type RunExclusionReason =
+  "trashed" | "help" | "throwaway" | "dev-preview" | "no-pty" | "not-an-agent";
 
 /**
  * The single definition of "this terminal is an agent run".
@@ -198,6 +200,9 @@ export function classifyRun(
   // pty-host, which has no availability store.
   if (terminal.isAssistantTerminal === true) return "help";
   if (terminal.id !== undefined && isHelpTerminal(terminal.id)) return "help";
+  // A host's throwaway run (#14445) belongs to the Shell session that started
+  // it: no tally, fleet row, directory entry or fleet send ever reaches it.
+  if (isHostThrowawayWorkspaceId(terminal.projectId)) return "throwaway";
 
   if (terminal.kind === "dev-preview") return "dev-preview";
   if (terminal.hasPty === false) return "no-pty";

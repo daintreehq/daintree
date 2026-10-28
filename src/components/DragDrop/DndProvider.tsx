@@ -88,7 +88,10 @@ import { DndPlaceholderContext, GRID_PLACEHOLDER_ID } from "./dndPlaceholderCont
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { TerminalDragPreview, TERMINAL_DRAG_PREVIEW_WIDTH } from "./TerminalDragPreview";
 import { WorktreeDragPreview } from "./WorktreeDragPreview";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import {
+  peek as peekTerminalService,
+  with as withTerminalService,
+} from "@/services/terminal/terminalInstanceServiceAccessor";
 import { moveTerminalToWorktreeAndFollowRescue } from "@/services/terminal/crossWorktreeMove";
 import { parseAccordionDragId } from "./SortableWorktreeTerminal";
 import { isWorktreeSortDragData, parseWorktreeSortDragId } from "./SortableWorktreeCard";
@@ -702,7 +705,7 @@ export function DndProvider({ children }: DndProviderProps) {
       const terminalId = data?.terminal?.id ?? parseAccordionDragId(dragId) ?? dragId;
 
       setActiveId(dragId);
-      terminalInstanceService.lockResize(terminalId, true);
+      withTerminalService((service) => service.lockResize(terminalId, true), terminalId);
       gridInsertMemoRef.current = null;
 
       // Clear any pending stabilization timers from previous drags
@@ -911,7 +914,10 @@ export function DndProvider({ children }: DndProviderProps) {
       // ALWAYS unlock resize regardless of drop target - fixes stuck resize locks
       // when dropping outside droppable areas (over === null)
       if (draggedId) {
-        setTimeout(() => terminalInstanceService.lockResize(draggedId, false), DURATION_100);
+        setTimeout(
+          () => withTerminalService((service) => service.lockResize(draggedId, false), draggedId),
+          DURATION_100
+        );
       }
 
       // Defensive: cancelDrop should convert rejected drops to onDragCancel.
@@ -1192,12 +1198,12 @@ export function DndProvider({ children }: DndProviderProps) {
 
         for (const terminal of gridTerminalsList) {
           // Flush any pending resize jobs that could have stale dimensions
-          terminalInstanceService.flushResize(terminal.id);
+          peekTerminalService()?.flushResize(terminal.id);
 
           // Force store visibility to true to ensure terminals re-render after drag
           usePanelStore.getState().updateVisibility(terminal.id, true);
 
-          const managed = terminalInstanceService.get(terminal.id);
+          const managed = peekTerminalService()?.get(terminal.id);
           if (managed?.hostElement.isConnected) {
             // Force service visibility true since we know grid terminals should be visible
             managed.isVisible = true;
@@ -1207,9 +1213,9 @@ export function DndProvider({ children }: DndProviderProps) {
             // even after visibility is restored, because writeToTerminal checks lastAppliedTier.
             // The background→active transition also repaints the live buffer.
             const tier = managed.getRefreshTier();
-            terminalInstanceService.applyRendererPolicy(terminal.id, tier);
+            peekTerminalService()?.applyRendererPolicy(terminal.id, tier);
 
-            terminalInstanceService.resetRenderer(terminal.id);
+            peekTerminalService()?.resetRenderer(terminal.id);
           }
         }
 
@@ -1221,15 +1227,15 @@ export function DndProvider({ children }: DndProviderProps) {
             const currentTerminal = usePanelStore.getState().panelsById[draggedId];
             if (currentTerminal?.location !== "dock") return;
 
-            terminalInstanceService.flushResize(draggedId);
-            const managed = terminalInstanceService.get(draggedId);
+            peekTerminalService()?.flushResize(draggedId);
+            const managed = peekTerminalService()?.get(draggedId);
             if (managed?.hostElement.isConnected) {
-              terminalInstanceService.resetRenderer(draggedId);
+              peekTerminalService()?.resetRenderer(draggedId);
             }
           };
 
           // Try immediate refresh first
-          const dims = terminalInstanceService.fit(draggedId);
+          const dims = peekTerminalService()?.fit(draggedId);
           if (dims) {
             // Terminal is already attached to visible container
             refreshDockTerminal();
@@ -1239,7 +1245,7 @@ export function DndProvider({ children }: DndProviderProps) {
 
             const retryFit = () => {
               attempts++;
-              const fitResult = terminalInstanceService.fit(draggedId);
+              const fitResult = peekTerminalService()?.fit(draggedId);
               if (fitResult) {
                 refreshDockTerminal();
                 return;
@@ -1310,7 +1316,7 @@ export function DndProvider({ children }: DndProviderProps) {
         activeData?.terminal?.id ??
         (activeId ? (parseAccordionDragId(activeId) ?? activeId) : null);
       if (terminalId) {
-        terminalInstanceService.lockResize(terminalId, false);
+        withTerminalService((service) => service.lockResize(terminalId, false), terminalId);
       }
     }
 

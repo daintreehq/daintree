@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { EventEmitter } from "events";
 import type { PtyHostSpawnOptions } from "../../../shared/types/pty-host.js";
+import type { TerminalLifecycleObservation } from "../../../shared/utils/pluginTerminalLifecycle.js";
 
 const shared = vi.hoisted(() => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -88,6 +89,8 @@ describe("PtyClient lifecycle ledger", () => {
   let PtyClientClass: typeof import("../PtyClient.js").PtyClient;
   let getLifecycleLedger: typeof import("../pty/lifecycleLedger.js").getLifecycleLedger;
   let disposeLifecycleLedger: typeof import("../pty/lifecycleLedger.js").disposeLifecycleLedger;
+  let events: typeof import("../events.js").events;
+  let startTerminalLifecycleObserver: typeof import("../pty/TerminalLifecycleObserver.js").startTerminalLifecycleObserver;
 
   beforeEach(async () => {
     vi.resetModules();
@@ -98,6 +101,8 @@ describe("PtyClient lifecycle ledger", () => {
 
     ({ PtyClient: PtyClientClass } = await import("../PtyClient.js"));
     ({ getLifecycleLedger, disposeLifecycleLedger } = await import("../pty/lifecycleLedger.js"));
+    ({ events } = await import("../events.js"));
+    ({ startTerminalLifecycleObserver } = await import("../pty/TerminalLifecycleObserver.js"));
 
     // Install after imports: fake timers can stall module re-execution (#11661).
     vi.useFakeTimers();
@@ -318,7 +323,7 @@ describe("PtyClient lifecycle ledger", () => {
     mockChild.emit("message", { type: "exit", id: "t1", exitCode: 0, launchGeneration: 2 });
     expect(ledger.getEntry("t1")?.closedAt).toBeDefined();
     expect(ledger.getEntry("t1")?.exitCode).toBe(0);
-    expect(onExit).toHaveBeenCalledExactlyOnceWith("t1", 0, undefined);
+    expect(onExit).toHaveBeenCalledExactlyOnceWith("t1", 0, undefined, undefined);
     expect(client.hasTerminal("t1")).toBe(false);
   });
 
@@ -391,6 +396,55 @@ describe("PtyClient lifecycle ledger", () => {
     expect(client.isAssistantTerminal("t-assistant")).toBe(true);
     expect(client.isAssistantTerminal("t-grid")).toBe(false);
     expect(client.isAssistantTerminal("t-unknown")).toBe(false);
+  });
+
+  it("reads a terminal's launch attribution off its spawn cache, and nothing else (#13814)", () => {
+    const client = createReadyClient();
+    client.spawn("t1", {
+      ...baseOptions,
+      projectId: "p1",
+      kind: "terminal",
+      pluginPanelKindId: "acme.build",
+      title: "secret title",
+      command: "claude --secret",
+    });
+
+    expect(client.getTerminalLaunchAttribution("t1")).toEqual({
+      projectId: "p1",
+      worktreeId: "wt-a",
+      kind: "terminal",
+      launchAgentId: "claude",
+      pluginPanelKindId: "acme.build",
+      launchGeneration: 1,
+      isAssistantTerminal: undefined,
+    });
+    expect(client.getTerminalLaunchAttribution("t-unknown")).toBeNull();
+  });
+
+  it("attributes an exit to its project after the client has forgotten the terminal (#13814)", () => {
+    const client = createReadyClient();
+    const seen: TerminalLifecycleObservation[] = [];
+    const unsub = events.on("terminal:lifecycle", (observation) => seen.push(observation));
+    const stop = startTerminalLifecycleObserver(client);
+    try {
+      client.spawn("t1", { ...baseOptions, projectId: "p1" });
+      mockChild.emit("message", {
+        type: "spawn-result",
+        id: "t1",
+        result: { success: true, id: "t1", launchGeneration: 1 },
+      });
+      mockChild.emit("message", { type: "exit", id: "t1", exitCode: 3, launchGeneration: 1 });
+
+      expect(client.getTerminalProjectId("t1")).toBeNull();
+      expect(seen.map((o) => [o.type, o.projectId, o.kind, o.agentId])).toEqual([
+        ["spawned", "p1", "agent", "claude"],
+        ["exited", "p1", "agent", "claude"],
+      ]);
+      expect(seen[1]).toMatchObject({ exitCode: 3, worktreeId: "wt-a" });
+    } finally {
+      stop();
+      unsub();
+    }
   });
 
   describe("a spawn refused because the id is still live (#11341, #12498)", () => {

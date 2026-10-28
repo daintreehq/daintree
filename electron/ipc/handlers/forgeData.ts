@@ -1,11 +1,14 @@
 import fs from "fs/promises";
-import { existsSync } from "fs";
 import path from "path";
 import { CHANNELS } from "../channels.js";
 import { broadcastToRenderer, checkRateLimit, typedHandle } from "../utils.js";
 import { defineIpcNamespace, op } from "../define.js";
 import {
+  getIssueForLink,
+  issueToTooltipData,
+  readIssueLinkTarget,
   resolveForCwd,
+  resolveIssueLinkForCwd,
   resolveIssueOverrideForCwd,
   stampIssuePageProvider,
   stampIssueProvider,
@@ -20,6 +23,8 @@ import { normalizeProviderId } from "../../../shared/utils/forgeProviderIds.js";
 import type {
   CheckRun,
   CIStatus,
+  ForgeNumberReference,
+  ForgeReferenceLookupResult,
   ForgeRepoCounts,
   ForgeTokenHealthState,
   Issue,
@@ -41,6 +46,7 @@ import type {
   ForgeRepoCountsUpdatedPayload,
   ForgeRepositoryStats,
   ForgeRepoStatsAndPagePayload,
+  IssueLinkTarget,
 } from "../../../shared/types/ipc/forge.js";
 
 /**
@@ -144,7 +150,16 @@ async function readIssueOverrideCount(
   cwd: string,
   mainWorktreePath: string | undefined,
   bypassCache: boolean
-): Promise<{ count: number | null; clean: boolean } | undefined> {
+): Promise<
+  | {
+      count: number | null;
+      clean: boolean;
+      issuesUrl?: string;
+      /** When the issues provider last read this count, not when it was served. */
+      refreshedAt?: number;
+    }
+  | undefined
+> {
   let context: Awaited<ReturnType<typeof resolveIssueOverrideForCwd>>;
   try {
     context = await resolveIssueOverrideForCwd(cwd, mainWorktreePath);
@@ -153,22 +168,31 @@ async function readIssueOverrideCount(
   }
   if (!context) return undefined;
   const { impl, repoRef } = context;
+  let issuesUrl: string | undefined;
+  try {
+    issuesUrl = impl.buildIssuesUrl(repoRef);
+  } catch {
+    issuesUrl = undefined;
+  }
   try {
     if (impl.repoStats) {
       const snapshot = await impl.repoStats.getRepoStats(repoRef, { bypassCache });
+      const refreshedAt = snapshot.counts.issueCountRefreshedAt ?? snapshot.counts.lastUpdated;
       return {
         count: snapshot.counts.issueCount,
         clean: !snapshot.counts.stale && !snapshot.counts.error && snapshot.source !== "disk",
+        issuesUrl,
+        ...(refreshedAt !== undefined ? { refreshedAt } : {}),
       };
     }
     // A page without a total can't be counted from its length — that's the
     // page size, not the open-issue count.
     const page = await impl.listIssues(repoRef, { state: "open", perPage: 1, bypassCache });
     return page.totalCount === undefined
-      ? { count: null, clean: false }
-      : { count: page.totalCount, clean: true };
+      ? { count: null, clean: false, issuesUrl }
+      : { count: page.totalCount, clean: true, issuesUrl, refreshedAt: Date.now() };
   } catch {
-    return { count: null, clean: false };
+    return { count: null, clean: false, issuesUrl };
   }
 }
 
@@ -376,28 +400,38 @@ export function registerForgeDataHandlers(): () => void {
   );
 
   cleanups.push(
-    typedHandle(CHANNELS.FORGE_GET_PR, async (payload: { cwd: string; prNumber: number }) => {
-      checkRateLimit(CHANNELS.FORGE_GET_PR, 25, 10_000);
-      if (!payload || typeof payload !== "object") {
-        throw new Error("Invalid payload");
+    typedHandle(
+      CHANNELS.FORGE_GET_PR,
+      async (payload: { cwd: string; prNumber: number; fresh?: boolean }) => {
+        checkRateLimit(CHANNELS.FORGE_GET_PR, 25, 10_000);
+        if (!payload || typeof payload !== "object") {
+          throw new Error("Invalid payload");
+        }
+        const cwd = requireCwd(payload.cwd);
+        const prNumber = requirePositiveInt(payload.prNumber, "PR number");
+        const fresh = payload.fresh === true;
+        const read = async () => {
+          const { impl, repoRef, namespaceId } = await resolveForCwd(cwd);
+          return auditForgeCall(
+            {
+              providerId: namespaceId,
+              methodName: "getPR",
+              repoOwner: repoRef.owner,
+              repoName: repoRef.repo,
+              argsSummary: summarizeForgeArgs("getPR", prNumber),
+            },
+            () =>
+              fresh
+                ? impl.getPR(repoRef, prNumber, { fresh: true })
+                : impl.getPR(repoRef, prNumber),
+            (value) => (value === null ? "not-found" : "success")
+          );
+        };
+        // A fresh read joins nothing: an earlier caller's answer, even one
+        // still retained, may predate the write this caller is about to make.
+        return fresh ? read() : coalesce(`${cwd}::getPR::${prNumber}`, read);
       }
-      const cwd = requireCwd(payload.cwd);
-      const prNumber = requirePositiveInt(payload.prNumber, "PR number");
-      return coalesce(`${cwd}::getPR::${prNumber}`, async () => {
-        const { impl, repoRef, namespaceId } = await resolveForCwd(cwd);
-        return auditForgeCall(
-          {
-            providerId: namespaceId,
-            methodName: "getPR",
-            repoOwner: repoRef.owner,
-            repoName: repoRef.repo,
-            argsSummary: summarizeForgeArgs("getPR", prNumber),
-          },
-          () => impl.getPR(repoRef, prNumber),
-          (value) => (value === null ? "not-found" : "success")
-        );
-      });
-    })
+    )
   );
 
   cleanups.push(
@@ -415,7 +449,10 @@ export function registerForgeDataHandlers(): () => void {
           repoOwner: repoRef.owner,
           repoName: repoRef.repo,
         },
-        () => impl.getRepoMetadata(repoRef)
+        async () => ({
+          ...(await impl.getRepoMetadata(repoRef)),
+          autoMergeSupported: Boolean(impl.autoMerge),
+        })
       );
     })
   );
@@ -466,7 +503,12 @@ async function handleForgeGetRepoStats(payload: {
   // Nothing is persisted here: a dead path yields no observation, and writing
   // this zero would overwrite the counts that let the toolbar hold its pill
   // widths if the directory comes back (issue #11078).
-  if (!existsSync(cwd)) {
+  // stat, not access: access accepts a dangling symlink on Windows.
+  const cwdExists = await fs.stat(cwd).then(
+    () => true,
+    () => false
+  );
+  if (!cwdExists) {
     return buildForgeRepositoryStats(0, { issueCount: null, prCount: null });
   }
   let resolved: ResolvedForgeContext;
@@ -505,6 +547,9 @@ async function handleForgeGetRepoStats(payload: {
         counts: {
           ...codeSnapshot.counts,
           issueCount: overrideIssues.count,
+          // The code forge's read time says nothing about when the issues
+          // provider last counted: a count it served from memory is that old.
+          issueCountRefreshedAt: overrideIssues.refreshedAt,
           // The renderer reads freshness off the result, so an issues count
           // that isn't a fresh observation must not ride in as one.
           ...(overrideClean ? {} : { stale: true }),
@@ -515,6 +560,11 @@ async function handleForgeGetRepoStats(payload: {
     : codeSnapshot;
   const { count: commitCount, reliable: commitReliable } = await readCommitCount(cwd);
   const stats = buildForgeRepositoryStats(commitCount, snapshot.counts);
+  // A split blend's issue count belongs to another tracker, so no one key names
+  // both counts' source.
+  if (!split) {
+    stats.repoKey = `${repoRef.host.toLowerCase()}/${repoRef.owner}/${repoRef.repo}`;
+  }
 
   const fresh = snapshot.source === "network" && !snapshot.counts.stale && overrideClean;
 
@@ -643,11 +693,25 @@ async function handleForgeGetProjectHealth(payload: {
         unsupported: true,
       };
     }
-    const result = await impl.projectHealth.getProjectHealth(repoRef, {
-      bypassCache: payload.bypassCache === true,
-    });
+    const bypassCache = payload.bypassCache === true;
+    const [result, overrideIssues] = await Promise.all([
+      impl.projectHealth.getProjectHealth(repoRef, { bypassCache }),
+      readIssueOverrideCount(cwd, repoRef.projectPath, bypassCache),
+    ]);
     if (result.health) {
-      return { ...result.health, hasRemote: true, loading: false, error: result.error };
+      const health = { ...result.health, hasRemote: true, loading: false, error: result.error };
+      if (!overrideIssues) return health;
+      // The project's issues come from another tracker (#13744): the code
+      // forge's count would disagree with the toolbar's, so take the issues
+      // provider's count and list — or hide the chip when it has no count.
+      // Without the tracker's own list the chip would open the code forge's,
+      // so a count with nowhere to go hides like a missing count.
+      const usable = overrideIssues.count !== null && overrideIssues.issuesUrl !== undefined;
+      return {
+        ...health,
+        issueCount: overrideIssues.count ?? 0,
+        ...(usable ? { issuesUrl: overrideIssues.issuesUrl } : { issueCountUnavailable: true }),
+      };
     }
     return buildEmptyForgeProjectHealth({
       error: result.error,
@@ -660,10 +724,12 @@ async function handleForgeGetProjectHealth(payload: {
   }
 }
 
-async function handleForgeGetIssueTooltip(payload: {
-  cwd: string;
-  issueNumber: number;
-}): Promise<IssueTooltipData | null> {
+async function handleForgeGetIssueTooltip(
+  payload: {
+    cwd: string;
+    issueNumber: number;
+  } & IssueLinkTarget
+): Promise<IssueTooltipData | null> {
   checkRateLimit(CHANNELS.FORGE_GET_ISSUE_TOOLTIP, 20, 10_000);
   if (!payload || typeof payload !== "object") return null;
   if (typeof payload.cwd !== "string" || !payload.cwd.trim()) return null;
@@ -675,7 +741,11 @@ async function handleForgeGetIssueTooltip(payload: {
     return null;
   }
   try {
-    const { impl, repoRef } = await resolveForCwd(payload.cwd, "issues");
+    const target = readIssueLinkTarget(payload);
+    const context = await resolveIssueLinkForCwd(payload.cwd, target);
+    const issue = await getIssueForLink(context, target);
+    if (issue !== undefined) return issue ? issueToTooltipData(issue) : null;
+    const { impl, repoRef } = context;
     return (await impl.tooltips?.getIssueTooltip(repoRef, payload.issueNumber)) ?? null;
   } catch {
     return null;
@@ -830,6 +900,7 @@ function projectCIStatus(status: CIStatus): ForgeCIStatusSummary {
     ...(status.requiredChecksPassing !== undefined
       ? { requiredChecksPassing: status.requiredChecksPassing }
       : {}),
+    ...(status.headSha ? { headSha: status.headSha } : {}),
   };
 }
 
@@ -1031,6 +1102,65 @@ async function handleForgeGetChecks(payload: {
   });
 }
 
+/** The distinct numbers one reference lookup answers; a longer draft keeps its first ones. */
+const MAX_REFERENCE_NUMBERS = 50;
+/** GraphQL's `Int`: a bigger number names nothing and would fail the whole query. */
+const MAX_REFERENCE_NUMBER = 2_147_483_647;
+
+/**
+ * What each bare `#N` in a draft names (#14849). An ambient read: `null` says
+ * nothing can be looked up here (no remote, no provider, no credential, or a
+ * provider without the lookup), and is answered without asking the forge.
+ * The code forge answers even when the project's issues live elsewhere,
+ * because `#N` names the repository's own issues and pull requests.
+ */
+async function handleForgeGetReferencesByNumbers(payload: {
+  cwd: string;
+  numbers: number[];
+}): Promise<ForgeReferenceLookupResult[] | null> {
+  checkRateLimit(CHANNELS.FORGE_GET_REFERENCES_BY_NUMBERS, 20, 10_000);
+  if (!payload || typeof payload !== "object") return null;
+  if (typeof payload.cwd !== "string" || !payload.cwd.trim()) return null;
+  if (!Array.isArray(payload.numbers)) return null;
+  const numbers: number[] = [];
+  for (const n of payload.numbers) {
+    if (numbers.length >= MAX_REFERENCE_NUMBERS) break;
+    if (typeof n !== "number" || !Number.isInteger(n) || n <= 0 || n > MAX_REFERENCE_NUMBER) {
+      continue;
+    }
+    if (numbers.includes(n)) continue;
+    numbers.push(n);
+  }
+  if (numbers.length === 0) return [];
+
+  let context: ResolvedForgeContext;
+  try {
+    context = await resolveForCwd(payload.cwd);
+  } catch {
+    return null;
+  }
+  const batch = context.impl.batchLookups;
+  if (!batch?.findReferencesByNumbers) return null;
+  // The provider's own credential, wherever it keeps it: the stored record
+  // isn't the only place a token can come from.
+  const credentials = await context.impl.getCredentials().catch(() => null);
+  if (!credentials) return null;
+
+  let found: Map<number, ForgeNumberReference | null>;
+  try {
+    found = await batch.findReferencesByNumbers(context.repoRef, numbers);
+  } catch {
+    return numbers.map((n) => ({ number: n, status: "unresolved" as const }));
+  }
+  return numbers.map((n) => {
+    if (!found.has(n)) return { number: n, status: "unresolved" as const };
+    const reference = found.get(n);
+    return reference
+      ? { number: n, status: "found" as const, reference }
+      : { number: n, status: "not_found" as const };
+  });
+}
+
 async function handleForgeGetPRReviewThreads(payload: {
   cwd: string;
   prNumber: number;
@@ -1188,6 +1318,10 @@ export const forgeCapabilityDataNamespace = defineIpcNamespace({
     getChecks: op(CHANNELS.FORGE_GET_CHECKS, handleForgeGetChecks),
     getIssuesByNumbers: op(CHANNELS.FORGE_GET_ISSUES_BY_NUMBERS, handleForgeGetIssuesByNumbers),
     getPRsByNumbers: op(CHANNELS.FORGE_GET_PRS_BY_NUMBERS, handleForgeGetPRsByNumbers),
+    getReferencesByNumbers: op(
+      CHANNELS.FORGE_GET_REFERENCES_BY_NUMBERS,
+      handleForgeGetReferencesByNumbers
+    ),
     getPRReviewThreads: op(CHANNELS.FORGE_GET_PR_REVIEW_THREADS, handleForgeGetPRReviewThreads),
     listIssueComments: op(CHANNELS.FORGE_LIST_ISSUE_COMMENTS, handleForgeListIssueComments),
     resolveAuthorAvatar: op(CHANNELS.FORGE_RESOLVE_AUTHOR_AVATAR, handleForgeResolveAuthorAvatar),

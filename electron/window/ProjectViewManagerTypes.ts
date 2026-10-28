@@ -104,7 +104,7 @@ export interface PaintGate {
   resolve: (reason: PaintGateOutcome) => void;
 }
 
-export type EvictionReason = "lru" | "pressure" | "limit-change";
+export type EvictionReason = "lru" | "pressure" | "limit-change" | "idle";
 
 /**
  * How a wait for a view's `session-restore:view-hydrated` signal ended

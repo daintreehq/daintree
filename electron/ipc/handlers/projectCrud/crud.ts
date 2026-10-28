@@ -3,7 +3,10 @@ import path from "path";
 import { CHANNELS } from "../../channels.js";
 import { getWindowForWebContents } from "../../../window/webContentsRegistry.js";
 import { projectStore } from "../../../services/ProjectStore.js";
-import { notifyProjectPluginsClosed } from "../../../window/projectPluginLifecycle.js";
+import {
+  notifyProjectPluginsClosed,
+  notifyProjectPluginsRemoved,
+} from "../../../window/projectPluginLifecycle.js";
 import {
   collectActiveProjectIds,
   projectViewManagersFrom,
@@ -22,6 +25,7 @@ import { pruneWindowStateForPath } from "../../../windowState.js";
 import { gracefulTeardownAndJournalProject } from "../../../services/pty/projectSessionJournal.js";
 import { helpSessionService } from "../../../services/HelpSessionService.js";
 import { logError } from "../../../utils/logger.js";
+import { captureProjectLayoutSeed } from "../../../services/plugin/projectLayoutSeeds.js";
 
 /**
  * Rejection copy for a destructive teardown (close+kill / remove) the pty-host
@@ -146,6 +150,7 @@ export async function removeProjectWithCleanup(
   // and after `removeProject` the controller could no longer resolve the
   // project to reconcile it away.
   notifyProjectPluginsClosed(projectId);
+  notifyProjectPluginsRemoved(projectId);
 
   await projectStore.removeProject(projectId);
   if (removedPath) {
@@ -223,6 +228,9 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
     }
     if (typeof updates !== "object" || updates === null) {
       throw new Error("Invalid updates object");
+    }
+    if (updates.neverAutoSleep !== undefined && typeof updates.neverAutoSleep !== "boolean") {
+      throw new Error("Invalid neverAutoSleep value");
     }
     // `id` and `path` are identity, not metadata: entry-scoped authorization
     // (fileBrowser's project routing) resolves hosts by the row's path, so a
@@ -369,6 +377,14 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
           });
         }
 
+        // A project not opened since layout seeds existed has no seed record
+        // yet, and with its state gone its next open would pass for a first
+        // one (#13782). One that has a record keeps it.
+        try {
+          captureProjectLayoutSeed(projectId, false);
+        } catch (seedError) {
+          logError("project-close-layout-seed-failed", seedError, { projectId });
+        }
         await projectStore.clearProjectState(projectId);
 
         // Read the pointer fresh, not from a snapshot taken before the awaits

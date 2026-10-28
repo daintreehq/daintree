@@ -23,9 +23,10 @@ import { clientErrorText } from "@/utils/clientAppError";
 
 const ORIGIN_LABELS: Record<PortForward["origin"], string> = {
   "dev-preview": "Dev preview",
-  "oauth-callback": "Sign-in, closes when idle",
+  "oauth-callback": "Closes when idle",
   manual: "Forwarded by you",
   detected: "Detected on the host",
+  "browser-panel": "Browser panel",
 };
 
 const TH = "py-1.5 text-left text-xs font-medium text-text-secondary";

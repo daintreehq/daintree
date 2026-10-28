@@ -217,6 +217,33 @@ describe("TerminalProcess typed-input stamp and settled-prompt guard (#12491)", 
     expect(terminal.getSubmission("tok-3")).toMatchObject({ phase: "pty_written" });
   });
 
+  it("admits a strict submission at a question asked in prose (#14475)", async () => {
+    const terminal = createTerminal();
+    settleAtPrompt(terminal, Date.now() - 5_000);
+    Object.assign(info(terminal), { waitingReason: "question" });
+
+    terminal.submit("toFixed", "tok-1", undefined, "settled-prompt-strict");
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(ptyWriteMock.mock.calls.map((c) => c[0])).toEqual(["toFixed", "\r"]);
+    expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "pty_written" });
+  });
+
+  it.each([
+    ["at an approval", { waitingReason: "approval" }],
+    ["at an error", { waitingReason: "error" }],
+  ])("refuses a strict submission %s", async (_label, patch) => {
+    const terminal = createTerminal();
+    settleAtPrompt(terminal, Date.now() - 5_000);
+    Object.assign(info(terminal), patch);
+
+    terminal.submit("brief", "tok-1", undefined, "settled-prompt-strict");
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(ptyWriteMock).not.toHaveBeenCalled();
+    expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "cancelled" });
+  });
+
   it("holds a strict submission behind any line the lane wrote since the prompt settled", async () => {
     const terminal = createTerminal();
     settleAtPrompt(terminal, Date.now() - 5_000);
@@ -336,6 +363,9 @@ describe("TerminalProcess typed-input stamp and settled-prompt guard (#12491)", 
 
     expect(ptyWriteMock.mock.calls.map((c) => c[0])).toEqual(["wake"]);
     expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "cancelled" });
+    // The body is still in the composer: a draft to every reader of the
+    // settle, auto-sleep included (#13854), until the agent settles again.
+    expect(info(terminal).lastTypedInputAt).toBeGreaterThanOrEqual(info(terminal).lastStateChange!);
   });
 
   it("never withdraws an ordinary submission", async () => {

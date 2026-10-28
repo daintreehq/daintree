@@ -14,8 +14,9 @@ import { PortalCloseConfirmDialog, PortalVisibilityController } from "../Portal"
 import { FleetArmingRibbon } from "@/components/Fleet";
 import { TerminalDestructiveActionConfirmDialog } from "@/components/Terminal/TerminalDestructiveActionConfirmDialog";
 import { PluginPanelReloadConfirmDialog } from "@/components/Plugin/PluginPanelReloadConfirmDialog";
-import { MoveOrRenameProjectDialog } from "@/components/Project/MoveOrRenameProjectDialog";
+import { useProjectRelocationStore } from "@/store/projectRelocationStore";
 import { ImportConfigDialog } from "@/components/Config/ImportConfigDialog";
+import { ProjectDialogHost } from "./ProjectDialogHost";
 import { ChordIndicator } from "./ChordIndicator";
 
 import { AllClearOverlay } from "../AllClearOverlay";
@@ -54,7 +55,7 @@ import { useDiagnosticsAutoOpen } from "@/hooks/useDiagnosticsAutoOpen";
 import { useDockPopoverLayerSync } from "@/components/Layout/useOpenDockPopoverId";
 import type { RetryAction } from "@/store";
 import { appClient } from "@/clients";
-import type { CliAvailability, AgentSettings } from "@shared/types";
+import type { CliAvailability } from "@shared/types";
 import { useLayoutState, useOverlayOpen } from "@/hooks";
 import { useKeepMounted } from "@/hooks/useKeepMounted";
 import { useGlobalBannerHeightVar } from "@/hooks/useGlobalBannerHeightVar";
@@ -65,10 +66,14 @@ import {
   suppressSidebarResizes,
   getSidebarAffectedTerminalIds,
 } from "@/lib/sidebarToggle";
-import { terminalInstanceService } from "@/services/terminal/TerminalInstanceService";
+import {
+  peek as peekTerminalService,
+  with as withTerminalService,
+} from "@/services/terminal/terminalInstanceServiceAccessor";
 import { unlockSidebarHydration } from "@/lib/layoutTransitionLock";
 import { logError } from "@/utils/logger";
 import { FileDocumentCloseGuardHost } from "@/panels/file/FileDocumentCloseGuardHost";
+import { PluginPanelCloseGuardHost } from "@/components/Plugin/PluginPanelCloseGuardHost";
 import { onHelpPanelRuntimeRequested } from "@/lib/helpPanelRuntimeGate";
 import { sendHostOwnedWrite } from "@/store/persistence/hostOwnedWrites";
 
@@ -136,6 +141,11 @@ const LazyDemoCursor = lazy(() =>
 const LazyDemoCaptureBridge = lazy(() =>
   import("../Demo/DemoCaptureBridge").then((m) => ({ default: m.DemoCaptureBridge }))
 );
+const LazyMoveOrRenameProjectDialog = lazy(() =>
+  import("@/components/Project/MoveOrRenameProjectDialog").then((m) => ({
+    default: m.MoveOrRenameProjectDialog,
+  }))
+);
 const LazyThemeBrowser = lazy(() =>
   import("../ThemeBrowser/ThemeBrowser").then((m) => ({ default: m.ThemeBrowser }))
 );
@@ -159,7 +169,6 @@ interface AppLayoutProps {
   onRetry?: (id: string, action: RetryAction, args?: Record<string, unknown>) => void;
   onCancelRetry?: (id: string) => void;
   agentAvailability?: CliAvailability;
-  agentSettings?: AgentSettings | null;
   isHydrated?: boolean;
   projectSwitcherPalette: UseProjectSwitcherPaletteReturn;
 }
@@ -195,7 +204,6 @@ export function AppLayout({
   onRetry,
   onCancelRetry,
   agentAvailability,
-  agentSettings,
   isHydrated = true,
   projectSwitcherPalette,
 }: AppLayoutProps) {
@@ -239,6 +247,7 @@ export function AppLayout({
   const workspaceId = getViewWorkspaceId() ?? currentProject?.id;
   const layout = useLayoutState();
   const diagnosticsMounted = useKeepMounted(layout.diagnosticsOpen);
+  const isRelocationPending = useProjectRelocationStore((s) => s.pending !== null);
   const isThemeBrowserOpen = useOverlayOpen("theme-browser");
   const themeBrowserOpen = useThemeBrowserStore((s) => s.isOpen);
   // The sheet moves like the Help panel beside it (200ms decelerating in, 120ms
@@ -836,19 +845,17 @@ export function AppLayout({
   const lockResizeForLayoutDrag = useCallback(() => {
     const ids = getSidebarAffectedTerminalIds();
     dragLockedIdsRef.current = ids;
-    for (const id of ids) {
-      terminalInstanceService.lockResize(id, true);
-    }
+    withTerminalService((service) => {
+      for (const id of ids) service.lockResize(id, true);
+    });
   }, []);
   const unlockResizeForLayoutDrag = useCallback(() => {
     const ids = dragLockedIdsRef.current;
     dragLockedIdsRef.current = [];
-    for (const id of ids) {
-      terminalInstanceService.lockResize(id, false);
-    }
-    if (ids.length > 0) {
-      terminalInstanceService.runResizePass(ids);
-    }
+    withTerminalService((service) => {
+      for (const id of ids) service.lockResize(id, false);
+      if (ids.length > 0) service.runResizePass(ids);
+    });
   }, []);
 
   // Self-heal the drag lock every frame while a divider is being dragged.
@@ -864,8 +871,9 @@ export function AppLayout({
     if (!isSidebarResizing && !isAssistantResizing) return;
     let rafId = 0;
     const rearm = () => {
-      for (const id of dragLockedIdsRef.current) {
-        terminalInstanceService.lockResize(id, true);
+      const service = peekTerminalService();
+      if (service) {
+        for (const id of dragLockedIdsRef.current) service.lockResize(id, true);
       }
       rafId = requestAnimationFrame(rearm);
     };
@@ -963,6 +971,8 @@ export function AppLayout({
           pane so an unmounted (inactive-tab, maximised-away) panel keeps its
           guard (#12323). */}
       <FileDocumentCloseGuardHost />
+      {/* Discard / Cancel for a plugin panel whose view reports unsaved work (#13815). */}
+      <PluginPanelCloseGuardHost />
       {/* Wraps the coordinator and nothing else so its height IS the banner
           height, which useGlobalBannerHeightVar measures (#11893). shrink-0
           keeps #9530's guarantee that the banner's height is subtracted from
@@ -983,7 +993,6 @@ export function AppLayout({
           onToggleFocusMode={handleToggleSidebar}
           hasWorkspace={hasWorkspace}
           agentAvailability={agentAvailability}
-          agentSettings={agentSettings}
           projectSwitcherPalette={projectSwitcherPalette}
         />
         <FleetArmingRibbon />
@@ -991,8 +1000,15 @@ export function AppLayout({
       <TerminalDestructiveActionConfirmDialog />
       <PluginPanelReloadConfirmDialog />
       <PortalCloseConfirmDialog />
-      <MoveOrRenameProjectDialog />
+      {isRelocationPending && (
+        <Suspense fallback={null}>
+          <LazyMoveOrRenameProjectDialog />
+        </Suspense>
+      )}
       <ImportConfigDialog />
+      {/* Not under the sidebar: these open from actions, the palette and
+          keybindings too, so they must answer whatever the sidebar shows. */}
+      {hasWorkspace && isHydrated && <ProjectDialogHost />}
       <div
         {...(chromeInert ? { inert: true } : {})}
         className="flex-1 flex flex-col overflow-hidden"

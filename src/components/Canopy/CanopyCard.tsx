@@ -12,17 +12,36 @@ import type { KeyboardEvent } from "react";
 import {
   Archive,
   ArchiveRestore,
-  CheckCheck,
+  Bell,
+  Clock,
   KeyRound,
+  MessageSquare,
   SquareArrowOutUpRight,
   Trash2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { CLOSE_OWNER_ATTR, CLOSE_REQUEST_EVENT } from "@/lib/closeRequest";
-import { useCanopyStore } from "@/store/canopyStore";
 import { Button } from "@/components/ui/button";
+import { Kbd, KbdChord } from "@/components/ui/Kbd";
+import { ProgressBar } from "@/components/ui/ProgressBar";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { SURFACE_HEADER_FOCUS_LIFT_CLASS, SurfaceHeader } from "@/components/ui/SurfaceHeader";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { CirclePause } from "@/components/icons";
+import {
+  AGENT_SNOOZE_DURATION_OPTIONS,
+  AGENT_SNOOZE_LABEL,
+} from "@shared/utils/agentSnoozeDurations";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { AgentStateChip } from "@/components/Terminal/TerminalAgentIndicator";
@@ -32,6 +51,7 @@ import { isHandBackStop, isHandBackUnseen } from "@shared/utils/runHandBack";
 import type { BrandMarkSurface } from "@/lib/brandIcon";
 import type { HybridInputBarHandle } from "@/components/Terminal/HybridInputBar";
 import { isMac } from "@/lib/platform";
+import { PRESS_AGAIN_CONFIRM_MS } from "@/lib/pressAgain";
 import { isNewWindowClick } from "@/components/Hosts/hostSwitching";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
 import {
@@ -42,10 +62,23 @@ import {
   quickApproveOption,
   type CanopyItem,
 } from "./canopyModel";
-import { KIND_LABEL } from "./CanopyRow";
+import { KIND_LABEL, itemDetail, readerAttribution } from "./CanopyRow";
 import { CanopyTerminal, type CanopyStreamState } from "./CanopyTerminal";
 import { CanopyTitle } from "./CanopyTitle";
+import type { CanopyAsideActions } from "./CanopyRowMenu";
 import { ownCanopyTerminalApi, type CanopyTerminalApi } from "./canopyHostSource";
+import {
+  DICTATION_OWNER_ATTR,
+  canopyReplyVoiceId,
+  type CanopyReplyDictation,
+} from "@/services/canopyReplyDictation";
+import {
+  selectMicNoticeForPanel,
+  useVoiceRecordingStore,
+  type VoiceRecordingTarget,
+} from "@/store/voiceRecordingStore";
+import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
+import { VoiceMicNoticeBanner } from "@/components/Terminal/VoiceMicNoticeBanner";
 
 const LazyHybridInputBar = lazy(() =>
   import("@/components/Terminal/HybridInputBar").then((m) => ({ default: m.HybridInputBar }))
@@ -56,7 +89,7 @@ const WarningGlyph = SEVERITY_GLYPH.warning;
 /** A grid pane's header control: a ghost icon button with a 14px glyph. */
 const CONTROL_ICON = "[&_svg]:size-3.5";
 /** How long a first press of Trash waits for the second before it stands down. */
-export const TRASH_CONFIRM_MS = 4_000;
+export const TRASH_CONFIRM_MS = PRESS_AGAIN_CONFIRM_MS;
 
 export interface CanopyCardHandlers {
   /** `newWindow`: Cmd/Ctrl held, so another host's run opens in a new window. */
@@ -66,9 +99,10 @@ export interface CanopyCardHandlers {
   onArchive: (item: CanopyItem) => void;
   /**
    * Something was sent to the run from the pane: a reply from the composer, or
-   * Return typed straight into the live terminal.
+   * Return typed straight into the live terminal. `moveOnTo`: sent with ⌘↩,
+   * the run the reply named as it was pressed.
    */
-  onSent: (item: CanopyItem, via: "composer" | "terminal") => void;
+  onSent: (item: CanopyItem, moveOnTo?: string) => void;
   /** Main refused what the composer sent; the draft stays in the composer. */
   onSendFailed: (item: CanopyItem, error: unknown) => void;
   /** Pick one of the options the run's dialog shows, by its label. */
@@ -88,6 +122,8 @@ export interface CanopyCardHandle {
    * there is no reply, in the live terminal. Always lands somewhere in the pane.
    */
   focusComposer: () => boolean;
+  /** Where the dictation key dictates for this agent: its reply, or why not. */
+  dictation: () => CanopyReplyDictation;
 }
 
 /** Where the keyboard lands in the pane when it opens: what the user was in on the agent before. */
@@ -104,6 +140,14 @@ interface CanopyCardProps extends CanopyCardHandlers {
   /** The handoff above landed, gave up, or gave way to the user. */
   onInitialFocusSettled?: () => void;
   /**
+   * The recording indicator sent the keyboard back to this reply, which a
+   * dictation is writing into (#14778): each new number is a new request,
+   * whether the pane opens for it or is already showing.
+   */
+  dictationRequest?: number;
+  /** That handoff landed, gave up, or gave way to the user. */
+  onDictationSettled?: (request: number) => void;
+  /**
    * Trash asked for from the row's menu: armed as its first press arms it, for
    * the pane's button or ⌘⌫ to confirm. Each new number is a new request.
    */
@@ -117,10 +161,18 @@ interface CanopyCardProps extends CanopyCardHandlers {
    * offered to it.
    */
   otherHostId?: string;
+  /** The host the panel lists the run under: null for the window's own, else that host or All hosts. */
+  hostScope?: string | null;
+  /** Park and snooze for a run on the window's own host; absent where they can't be offered. */
+  aside?: CanopyAsideActions;
   /** The run's host's Canopy; the window's own by default. */
   terminalApi?: CanopyTerminalApi;
   /** The link to the run's host is down: nothing is typed or answered until it is back. */
   reconnecting?: boolean;
+  /** Which assistant started it or holds it, from main's own records; null when none is known. */
+  workLabel?: string | null;
+  /** Where ⌘↩ from the reply goes on to once it sends, named in the reply; null for nowhere. */
+  moveOnTo?: CanopyItem | null;
 }
 
 /**
@@ -211,11 +263,17 @@ export function CanopyCard({
   onLeavePane,
   initialFocus = null,
   onInitialFocusSettled,
+  dictationRequest,
+  onDictationSettled,
   armTrash,
   renameRequest,
   otherHostId,
+  hostScope = null,
+  aside,
   terminalApi = ownCanopyTerminalApi,
   reconnecting = false,
+  workLabel = null,
+  moveOnTo = null,
 }: CanopyCardProps) {
   const otherHost = otherHostId !== undefined;
   const [stream, setStream] = useState<CanopyStreamState>({
@@ -229,7 +287,9 @@ export function CanopyCard({
   const { row } = item;
   const run = row.run;
   const canReply = canReplyTo(item, stream.secretPrompt);
+  const answerChoices = answerOptions(item);
   const canTrash = canTrashItem(item);
+  const canSetAside = aside?.canSetAside(item) ?? false;
   const archived = itemArchived(item);
   const looksDone = itemLooksDone(item);
   const sectionRef = useRef<HTMLElement>(null);
@@ -375,19 +435,39 @@ export function CanopyCard({
   };
 
   // Cmd+W with the keyboard in this pane — its terminal, its reply or its
-  // title bar — closes Canopy, as it does from the list. Closing the place you
-  // inspect an agent from must not dispose of the agent; trashing it stays on
-  // its own labelled, two-press control.
+  // title bar — closes the agent's terminal to the trash, as Cmd+W on its grid
+  // pane would; the trash keeps it a while, and the toast and Z take it back.
+  // From the list, with no pane in hand, Cmd+W closes Canopy instead.
+  const onTrashRef = useRef(onTrash);
+  const itemRef = useRef(item);
+  useEffect(() => {
+    onTrashRef.current = onTrash;
+    itemRef.current = item;
+  });
   useEffect(() => {
     const section = sectionRef.current;
     if (!section) return;
     const onClose = (event: Event) => {
       event.preventDefault();
-      useCanopyStore.getState().close();
+      onTrashRef.current(itemRef.current);
     };
     section.addEventListener(CLOSE_REQUEST_EVENT, onClose);
     return () => section.removeEventListener(CLOSE_REQUEST_EVENT, onClose);
   }, []);
+
+  // The one path an answer takes, from a number key, Y or a click on a choice:
+  // nothing is pressed into a screen this panel can't see, and a risky action
+  // takes two presses of the same choice.
+  const pressAnswer = (label: string, digit: number | null) => {
+    if (reconnecting) return;
+    const confirms = digit !== null && armedAnswer?.digit === digit && armedAnswer.label === label;
+    if (digit !== null && answerNeedsConfirm(item) && !confirms) {
+      setAnswerArmed({ label, digit, target: trashTarget });
+      return;
+    }
+    setAnswerArmed(null);
+    onAnswer(item, label);
+  };
 
   const handleKey = (event: KeyboardEvent<HTMLElement>): boolean => {
     // One key answers the dialog: its number picks that option, Y the first
@@ -403,15 +483,7 @@ export function CanopyCard({
             : null;
       if (label !== null) {
         event.preventDefault();
-        // Nothing is pressed into a screen this panel can't see.
-        if (event.repeat || reconnecting) return true;
-        const confirms = armedAnswer?.digit === digit && armedAnswer.label === label;
-        if (digit !== null && answerNeedsConfirm(item) && !confirms) {
-          setAnswerArmed({ label, digit, target: trashTarget });
-          return true;
-        }
-        setAnswerArmed(null);
-        onAnswer(item, label);
+        if (!event.repeat) pressAnswer(label, digit);
         return true;
       }
     }
@@ -446,8 +518,14 @@ export function CanopyCard({
   // and its listeners together.
   const stopHandoffRef = useRef<() => void>(() => {});
   useEffect(() => () => stopHandoffRef.current(), []);
-  const focusComposer = (): boolean => {
+  const focusComposer = (forDictation = false, onDone?: () => void): boolean => {
     stopHandoffRef.current();
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      onDone?.();
+    };
     // No reply here (a secret is being asked for, perhaps before the card
     // knows it): the keyboard goes to the live terminal, where it is typed,
     // once the menu that asked has closed.
@@ -456,8 +534,12 @@ export function CanopyCard({
         sectionRef.current
           ?.querySelector<HTMLElement>("[data-canopy-terminal] textarea")
           ?.focus({ preventScroll: true });
+        finish();
       });
-      stopHandoffRef.current = () => cancelAnimationFrame(frame);
+      stopHandoffRef.current = () => {
+        cancelAnimationFrame(frame);
+        finish();
+      };
       return true;
     }
     // The composer is a lazy chunk: on a cold pane it may not exist yet, so
@@ -469,17 +551,23 @@ export function CanopyCard({
       cancelAnimationFrame(frame);
       cancelAnimationFrame(listenFrame);
       window.removeEventListener("pointerdown", stop, true);
-      window.removeEventListener("keydown", stop, true);
+      window.removeEventListener("keydown", onKey, true);
+      finish();
     };
     stopHandoffRef.current = stop;
-    // Listened for after this frame, so the press that chose Reply isn't one.
+    // Listened for after this frame, so the press that chose Reply isn't one,
+    // nor the auto-repeat of a key still held from it (the dictation key, held to talk).
+    const onKey = (event: globalThis.KeyboardEvent) => {
+      if (!event.repeat) stop();
+    };
     listenFrame = requestAnimationFrame(() => {
       window.addEventListener("pointerdown", stop, true);
-      window.addEventListener("keydown", stop, true);
+      window.addEventListener("keydown", onKey, true);
     });
     const attempt = (tries: number) => {
       if (!canReplyRef.current) return stop();
-      composerRef.current?.focus();
+      if (forDictation) composerRef.current?.focusForDictation();
+      else composerRef.current?.focus();
       const landed = sectionRef.current
         ?.querySelector(".cm-editor")
         ?.contains(document.activeElement);
@@ -489,7 +577,70 @@ export function CanopyCard({
     frame = requestAnimationFrame(() => attempt(1));
     return true;
   };
-  useImperativeHandle(ref, () => ({ handleKey, focusComposer }));
+  // Its own dictation, apart from the grid pane's composer on the same terminal.
+  // Main reads keyterms, vocabulary and file links from the terminal only when
+  // this view's project owns it: another project's or host's gives it none.
+  const ownsContext = otherHostId === undefined && run.workspaceId === getViewWorkspaceId();
+  const voiceTarget: VoiceRecordingTarget = {
+    panelId: canopyReplyVoiceId(item.runId, otherHostId),
+    panelTitle: `Reply to ${row.title}`,
+    surface: "canopy-reply",
+    ...(otherHostId !== undefined ? { otherHostId } : {}),
+    ...(ownsContext ? { terminalId: item.runId } : {}),
+    canopyRow: { runId: item.runId, hostScope },
+  };
+  const voiceMicNotice = useVoiceRecordingStore((s) =>
+    selectMicNoticeForPanel(s, voiceTarget.panelId)
+  );
+  const dictation = (): CanopyReplyDictation => {
+    if (!canReply) {
+      return {
+        ok: false,
+        message: "It's asking for a secret. Type it straight into the terminal above.",
+      };
+    }
+    if (reconnecting) {
+      return {
+        ok: false,
+        message: "Its host is reconnecting. Try dictation again once it's back.",
+      };
+    }
+    if (stream.watchId === null) {
+      return {
+        ok: false,
+        message: stream.ended
+          ? "Its terminal has ended, so there's nothing to reply to."
+          : "Its terminal is still connecting. Try dictation again in a moment.",
+      };
+    }
+    return {
+      ok: true,
+      target: voiceTarget,
+      focus: () => {
+        // Already in the reply, expanded or not: there is nothing to hand over.
+        const active = document.activeElement;
+        if (active?.closest(".cm-editor") && active.closest(`[${DICTATION_OWNER_ATTR}]`)) return;
+        // The words go in at the caret the reply showed, not wherever a fresh
+        // editor's focus would put it.
+        focusComposer(true);
+      },
+    };
+  };
+  useImperativeHandle(ref, () => ({ handleKey, focusComposer: () => focusComposer(), dictation }));
+
+  // Sent back here by the recording indicator: the keyboard goes to the
+  // reply, from the indicator or wherever the opening panel put it, and stays
+  // with the user once they press anything themselves.
+  const focusComposerRef = useRef(focusComposer);
+  const onDictationSettledRef = useRef(onDictationSettled);
+  useEffect(() => {
+    focusComposerRef.current = focusComposer;
+    onDictationSettledRef.current = onDictationSettled;
+  });
+  useEffect(() => {
+    if (dictationRequest === undefined) return;
+    focusComposerRef.current(true, () => onDictationSettledRef.current?.(dictationRequest));
+  }, [dictationRequest]);
 
   const agentId = isBuiltInAgentId(run.agentId) ? run.agentId : undefined;
   // The grid's chip rules: nothing while idle, and a settled agent keeps its
@@ -512,6 +663,32 @@ export function CanopyCard({
     agentState !== undefined &&
     agentState !== "idle" &&
     (isHandBack || (agentState !== "completed" && agentState !== "exited"));
+  const { detail, action, progress, facts, contextWarning, readerWritten } = itemDetail(item);
+  // An open question is the pane's anchor, whole and in the screen's words: the
+  // row could only fit a headline, and a summary of it would only say it again.
+  const question =
+    item.kind === "question" && !item.stale && item.card?.question ? item.card.question : null;
+  const shownDetail = question !== null && readerWritten ? null : detail;
+  // The readers' verdict that it is finished is theirs too, so it sits with
+  // their other words, under the same attribution, rather than in the title bar
+  // where it would read as Daintree's own state.
+  const readerSaid = readerWritten || question !== null || looksDone;
+  const detailAttribution = readerSaid ? readerAttribution(item, Date.now()) : null;
+  const summaryNotes = [
+    workLabel,
+    contextWarning,
+    ...facts.map((fact, index) => {
+      const said = fact.charAt(0).toLowerCase() + fact.slice(1);
+      return index === 0 ? `Reported: ${said}` : said;
+    }),
+  ].filter((note): note is string => note !== null && note !== "");
+  const hasSummary =
+    looksDone ||
+    question !== null ||
+    shownDetail !== null ||
+    action !== null ||
+    progress !== null ||
+    summaryNotes.length > 0;
   const brandSurface: BrandMarkSurface = focused
     ? { surface: "surface-panel", extension: "panel-header-focus-bg", lift: "overlay-medium" }
     : { surface: "surface-panel", extension: "panel-header-bg" };
@@ -520,7 +697,11 @@ export function CanopyCard({
   // or to nothing.
   // The draft clears only once main has taken the text: a refused send (the
   // agent exited, the terminal respawned) leaves the reply where it was typed.
-  const submit = async (text: string, imagePaths?: readonly string[]): Promise<boolean> => {
+  const submit = async (
+    text: string,
+    imagePaths?: readonly string[],
+    moveOnTo?: string
+  ): Promise<boolean> => {
     const watchId = stream.watchId;
     if (watchId === null) return false;
     try {
@@ -533,8 +714,42 @@ export function CanopyCard({
       onSendFailed(item, error);
       return false;
     }
-    onSent(item, "composer");
+    onSent(item, moveOnTo);
     return true;
+  };
+  const sendKey = (key: string, moveOnTo?: string) => {
+    // Escape in a dialog means leave: here it goes back to the list rather
+    // than to the agent, where it would interrupt a working turn. The
+    // terminal above still takes it.
+    if (key === "escape") {
+      onLeavePane(item);
+      return;
+    }
+    const watchId = stream.watchId;
+    if (watchId === null) return;
+    terminalApi.terminalSendKey(watchId, key).then(
+      // Only Enter answers anything; arrows and Escape steer the agent's own
+      // menu and are not a reply.
+      () => {
+        if (key === "enter") onSent(item, moveOnTo);
+      },
+      (error: unknown) => onSendFailed(item, error)
+    );
+  };
+  // ⌘↩ sends as Enter does, then moves on to the run the reply names at the
+  // press, wherever the list has gone by the time the send lands. A dictated
+  // send lands after a wait: it goes through the stream open then.
+  const sendRef = useRef({ submit, sendKey });
+  useEffect(() => {
+    sendRef.current = { submit, sendKey };
+  });
+  const routeModEnter = () => {
+    const to = moveOnTo?.runId;
+    return {
+      submitText: (text: string, imagePaths: readonly string[]) =>
+        sendRef.current.submit(text, imagePaths, to),
+      sendEnter: () => sendRef.current.sendKey("enter", to),
+    };
   };
 
   return (
@@ -544,7 +759,7 @@ export function CanopyCard({
       aria-label={`${row.title}, ${KIND_LABEL[item.kind]}`}
       aria-describedby={describedBy}
       data-canopy-detail=""
-      {...{ [CLOSE_OWNER_ATTR]: "" }}
+      {...{ [CLOSE_OWNER_ATTR]: "", [DICTATION_OWNER_ATTR]: "" }}
       onFocusCapture={() => setFocused(true)}
       onBlurCapture={(event) => {
         const next = event.relatedTarget;
@@ -592,16 +807,6 @@ export function CanopyCard({
               </span>
             </span>
           )}
-          {looksDone && (
-            <span
-              role="status"
-              data-canopy-looks-done=""
-              className="flex shrink-0 items-center gap-1 text-text-secondary"
-            >
-              <CheckCheck className="size-3.5 shrink-0" aria-hidden="true" />
-              Looks done
-            </span>
-          )}
         </div>
         <div
           role="toolbar"
@@ -615,6 +820,58 @@ export function CanopyCard({
           >
             {archived ? <ArchiveRestore aria-hidden="true" /> : <Archive aria-hidden="true" />}
           </HeaderControl>
+          {aside !== undefined && canSetAside && (
+            <DropdownMenu>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
+                      aria-label="Park or snooze"
+                      className={CONTROL_ICON}
+                    >
+                      <CirclePause aria-hidden="true" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Park or snooze</TooltipContent>
+              </Tooltip>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onSelect={() => aside.onPark(item)}>
+                  <CirclePause className="size-3.5" aria-hidden="true" />
+                  Park…
+                </DropdownMenuItem>
+                {run.park !== undefined && (
+                  <DropdownMenuItem onSelect={() => aside.onUnpark(item)}>
+                    <Bell className="size-3.5" aria-hidden="true" />
+                    Unpark
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuSub>
+                  <DropdownMenuSubTrigger>
+                    <Clock className="size-3.5" aria-hidden="true" />
+                    Snooze…
+                  </DropdownMenuSubTrigger>
+                  <DropdownMenuSubContent>
+                    {AGENT_SNOOZE_DURATION_OPTIONS.map((option) => (
+                      <DropdownMenuItem key={option} onSelect={() => aside.onSnooze(item, option)}>
+                        {AGENT_SNOOZE_LABEL[option]}
+                      </DropdownMenuItem>
+                    ))}
+                    {run.snooze !== undefined && (
+                      <>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem onSelect={() => aside.onWake(item)}>
+                          Wake now
+                        </DropdownMenuItem>
+                      </>
+                    )}
+                  </DropdownMenuSubContent>
+                </DropdownMenuSub>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
           {canTrash && (
             <HeaderControl
               label="Trash terminal"
@@ -649,6 +906,75 @@ export function CanopyCard({
         )}
       </SurfaceHeader>
 
+      {/* What the row leaves out to stay three lines tall: the summary, how
+          far through its task the run is, and what the agent reported. One
+          line, so the terminal keeps the height: what the reader said reads
+          from the left, and whose words they are and how old sits at the
+          right. Truncated words are whole on hover, and on the screen below. */}
+      {hasSummary && (
+        <div
+          data-canopy-summary=""
+          className="flex h-7 shrink-0 items-center gap-3 border-b border-overlay px-3 text-xs leading-4 text-text-secondary"
+        >
+          {progress !== null && (
+            <span className="flex shrink-0 items-center gap-2 tabular-nums">
+              <ProgressBar value={progress.value} label={progress.spoken} className="w-16" />
+              <span>{progress.label}</span>
+            </span>
+          )}
+          {action !== null && (
+            <TruncatedTooltip content={action}>
+              <span className="max-w-[50%] min-w-0 shrink truncate font-mono text-text-primary">
+                {/^[\w./-]+$/.test(action) && /[./]/.test(action) ? action : `$ ${action}`}
+              </span>
+            </TruncatedTooltip>
+          )}
+          {looksDone && (
+            <span
+              role="status"
+              data-canopy-looks-done=""
+              className="shrink-0 whitespace-nowrap text-text-primary"
+            >
+              Looks done
+            </span>
+          )}
+          {(question ?? shownDetail) !== null && (
+            <TruncatedTooltip content={question ?? shownDetail}>
+              <span
+                className={cn(
+                  // What the reader said keeps a share of the line: the notes
+                  // beside it give way first.
+                  "min-w-[30%] flex-1 truncate",
+                  question !== null && "text-text-primary"
+                )}
+              >
+                {question ?? shownDetail}
+              </span>
+            </TruncatedTooltip>
+          )}
+          {(summaryNotes.length > 0 || detailAttribution !== null) && (
+            <span className="ml-auto flex max-w-[45%] min-w-0 items-center">
+              {summaryNotes.length > 0 && (
+                <TruncatedTooltip content={summaryNotes.join(" · ")}>
+                  <span className="min-w-0 truncate">{summaryNotes.join(" · ")}</span>
+                </TruncatedTooltip>
+              )}
+              {summaryNotes.length > 0 && detailAttribution !== null && (
+                <span aria-hidden="true" className="shrink-0 px-1">
+                  ·
+                </span>
+              )}
+              {/* Last, so it is read as covering everything before it. */}
+              {detailAttribution !== null && (
+                <span data-canopy-attribution="" className="shrink-0 whitespace-nowrap">
+                  {detailAttribution}
+                </span>
+              )}
+            </span>
+          )}
+        </div>
+      )}
+
       <div
         className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-surface-canvas"
         // Escape belongs to the agent here — it interrupts or backs out of a
@@ -680,9 +1006,64 @@ export function CanopyCard({
           api={terminalApi}
           reconnecting={reconnecting}
           onStreamChange={setStream}
-          onSubmitted={() => onSent(item, "terminal")}
+          onSubmitted={() => onSent(item)}
           onGoTo={(event) => onOpen(item, isNewWindowClick(event))}
         />
+        {(answerChoices.length > 0 || (question !== null && canReply)) && (
+          <div
+            role="group"
+            aria-label="Answer"
+            data-canopy-choices=""
+            className="flex shrink-0 flex-wrap items-center gap-1.5 border-t border-overlay px-3 py-2"
+          >
+            {answerChoices.map((choice, index) => {
+              const armed = armedAnswer?.digit === index + 1;
+              return (
+                <Button
+                  key={`${index}:${choice}`}
+                  variant={armed ? "ghost-danger" : "subtle"}
+                  size="xs"
+                  disabled={reconnecting}
+                  data-canopy-choice=""
+                  data-armed={armed || undefined}
+                  aria-keyshortcuts={String(index + 1)}
+                  className={cn("max-w-full", armed && "bg-status-error/10")}
+                  onClick={() => pressAnswer(choice, index + 1)}
+                >
+                  <Kbd className="shrink-0">{index + 1}</Kbd>
+                  <span className="min-w-0 truncate">
+                    {armed ? `Press again: ${choice}` : choice}
+                  </span>
+                </Button>
+              );
+            })}
+            <span className="ml-auto flex shrink-0 items-center gap-1.5">
+              {canReply && (
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  aria-keyshortcuts="R"
+                  onClick={() => composerRef.current?.focus()}
+                >
+                  <MessageSquare aria-hidden="true" />
+                  Reply
+                  <Kbd className="shrink-0">R</Kbd>
+                </Button>
+              )}
+              <Button
+                variant="ghost"
+                size="xs"
+                aria-keyshortcuts="Enter"
+                onClick={(event) => onOpen(item, isNewWindowClick(event))}
+              >
+                <SquareArrowOutUpRight aria-hidden="true" />
+                Go to terminal
+                <Kbd className="shrink-0">↵</Kbd>
+              </Button>
+            </span>
+          </div>
+        )}
+        {canReply && voiceMicNotice && <VoiceMicNoticeBanner notice={voiceMicNotice} />}
         {canReply ? (
           <div ref={replyHostRef} data-keybindings-isolated="" className="contents">
             <Suspense fallback={null}>
@@ -690,6 +1071,7 @@ export function CanopyCard({
                 ref={composerRef}
                 isolated
                 otherHostId={otherHostId}
+                voiceTarget={voiceTarget}
                 terminalId={item.runId}
                 cwd={otherHost ? "" : (run.cwd ?? "")}
                 agentId={agentId}
@@ -697,27 +1079,26 @@ export function CanopyCard({
                 disabled={stream.watchId === null}
                 onSend={({ text, imagePaths }) => void submit(text, imagePaths)}
                 submitText={submit}
-                onSendKey={(key) => {
-                  // Escape in a dialog means leave: here it goes back to the
-                  // list rather than to the agent, where it would interrupt a
-                  // working turn. The terminal above still takes it.
-                  if (key === "escape") {
-                    onLeavePane(item);
-                    return;
-                  }
-                  const watchId = stream.watchId;
-                  if (watchId === null) return;
-                  terminalApi.terminalSendKey(watchId, key).then(
-                    // Only Enter answers anything; arrows and Escape steer the
-                    // agent's own menu and must not move the panel on.
-                    () => {
-                      if (key === "enter") onSent(item, "composer");
-                    },
-                    (error: unknown) => onSendFailed(item, error)
-                  );
-                }}
+                onSendKey={sendKey}
+                modEnterSend={routeModEnter}
               />
             </Suspense>
+            {/* Held whenever the reply is, named or blank, so a target coming
+                and going never resizes the terminal above. */}
+            <p
+              data-canopy-move-on=""
+              className="flex h-6 shrink-0 items-center gap-1.5 px-3.5 pb-1.5 text-xs text-text-secondary"
+            >
+              {moveOnTo !== null && (
+                <>
+                  <KbdChord shortcut="Cmd+Enter" density="compact" />
+                  <span className="shrink-0">Send and go to</span>
+                  <TruncatedTooltip content={moveOnTo.row.title}>
+                    <span className="min-w-0 truncate text-text-primary">{moveOnTo.row.title}</span>
+                  </TruncatedTooltip>
+                </>
+              )}
+            </p>
           </div>
         ) : (
           <p className="flex shrink-0 items-center gap-1.5 px-3.5 py-3 text-xs text-text-secondary">

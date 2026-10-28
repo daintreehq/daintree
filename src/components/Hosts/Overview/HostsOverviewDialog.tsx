@@ -1,10 +1,12 @@
-import { useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { LayoutGrid } from "lucide-react";
 import { LOCAL_HOST_ID, type HostId } from "@shared/types/remoteHosts";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
 import { getViewHostId } from "@/hooks/useHostConnection";
 import { useHostMetricsStore } from "@/store/hostMetricsStore";
+import { ProcessesDialog } from "@/components/Project/ProcessesDialog";
+import { createHostProcessesSource } from "@/components/Project/processesSource";
 import { PluginParitySummary } from "../PluginParitySummary";
 import { PortsView } from "../PortsView";
 import { useHostList } from "../hostList";
@@ -18,7 +20,7 @@ import {
 } from "@/components/Settings/Hosts/hostSettingsRequests";
 import { HostCard } from "./HostCard";
 import { HostFleetTargets } from "./HostFleetTargets";
-import { isLive } from "./overviewModel";
+import { busyCores, isLive } from "./overviewModel";
 import { useOverviewConnections } from "./useOverviewConnections";
 
 const EMPTY_HISTORY: never[] = [];
@@ -37,12 +39,21 @@ export function HostsOverviewDialog({ onClose }: HostsOverviewDialogProps) {
   useOverviewConnections(hostList.hosts);
   const history = useHostMetricsStore((state) => state.history);
   const [addingTo, setAddingTo] = useState<{ hostId: HostId; name: string } | null>(null);
+  const [inspectingId, setInspectingId] = useState<HostId | null>(null);
+  const [processesOpen, setProcessesOpen] = useState(false);
+  const processesTriggerRef = useRef<HTMLElement | null>(null);
   const windowHostId = getViewHostId() ?? LOCAL_HOST_ID;
   const rows = buildHostMenuRows(hostList.hosts, {
     localPlatform: clientPlatform(),
     currentHostId: windowHostId,
     localSummary: history.get(LOCAL_HOST_ID)?.[0] ?? hostList.localSummary,
   });
+
+  const inspected = rows.find((row) => row.hostId === inspectingId) ?? null;
+  const processesSource = useMemo(
+    () => (inspectingId ? createHostProcessesSource(inspectingId) : undefined),
+    [inspectingId]
+  );
 
   const projectLists = useHostProjectLists(rows.filter(isLive).map((row) => row.hostId));
 
@@ -107,6 +118,20 @@ export function HostsOverviewDialog({ onClose }: HostsOverviewDialogProps) {
                       Add project…
                     </Button>
                   )}
+                  {isLive(row) && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      aria-label={`Processes on ${row.name}`}
+                      onClick={(event) => {
+                        processesTriggerRef.current = event.currentTarget;
+                        setInspectingId(row.hostId);
+                        setProcessesOpen(true);
+                      }}
+                    >
+                      Processes
+                    </Button>
+                  )}
                   {!row.isLocal && (
                     <Button
                       variant="ghost"
@@ -124,6 +149,26 @@ export function HostsOverviewDialog({ onClose }: HostsOverviewDialogProps) {
           <PortsView hostId={windowHostId === LOCAL_HOST_ID ? undefined : windowHostId} />
         </div>
       </AppDialog.BodyScroll>
+      {inspected && processesSource && (
+        <ProcessesDialog
+          isOpen={processesOpen}
+          onClose={() => setProcessesOpen(false)}
+          restoreFocusTo={() =>
+            processesTriggerRef.current?.isConnected
+              ? processesTriggerRef.current
+              : document.querySelector<HTMLElement>('[data-testid="host-overview-card"] button')
+          }
+          source={processesSource}
+          canKill={inspected.isCurrent}
+          hostName={inspected.name}
+          hostPlatform={inspected.platform}
+          hostBusyCores={
+            inspected.summary
+              ? (busyCores(history.get(inspected.hostId)?.[0] ?? inspected.summary)?.busy ?? null)
+              : null
+          }
+        />
+      )}
       {addingTo && (
         <HostAddProjectDialog
           hostId={addingTo.hostId}

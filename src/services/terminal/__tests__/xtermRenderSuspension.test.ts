@@ -70,6 +70,32 @@ describe("xtermRenderSuspension", () => {
     expect(isXtermRenderSuspended(terminal)).toBe(false);
   });
 
+  it("keeps painting held until every owner has let go (#14220)", () => {
+    const { terminal, renderService, refresh } = makeTerminal();
+    suspendXtermRender(terminal, "history-refill");
+    suspendXtermRender(terminal);
+
+    // The cached view coming back must not lift a refill's hold.
+    resumeXtermRender(terminal);
+    expect(renderService._isPaused).toBe(true);
+    expect(refresh).not.toHaveBeenCalled();
+
+    resumeXtermRender(terminal, "history-refill");
+    expect(renderService._isPaused).toBe(false);
+    expect(refresh).toHaveBeenCalledWith(0, 23);
+    // One transition into the pause and one out, not one per owner.
+    expect(renderService.handled).toHaveLength(2);
+  });
+
+  it("ignores a resume from an owner that holds no pause", () => {
+    const { terminal, renderService } = makeTerminal();
+    suspendXtermRender(terminal);
+
+    resumeXtermRender(terminal, "history-refill");
+
+    expect(renderService._isPaused).toBe(true);
+  });
+
   it("resumes into the last real observation, so a pane that left the viewport stays paused", () => {
     const { terminal, renderService, refresh, deliver } = makeTerminal();
     suspendXtermRender(terminal);

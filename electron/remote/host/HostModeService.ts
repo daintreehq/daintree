@@ -1,6 +1,13 @@
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
-import type { HostModeStatus, SetHostModePayload } from "../../../shared/types/ipc/hostMode.js";
-import type { HostModeObservation } from "../../../shared/types/ipc/remoteHosts.js";
+import type {
+  AttachedClientInfo,
+  HostModeStatus,
+  SetHostModePayload,
+} from "../../../shared/types/ipc/hostMode.js";
+import type {
+  HostModeObservation,
+  StagedHostUpdate,
+} from "../../../shared/types/ipc/remoteHosts.js";
 import type { AdvertiseState } from "./advertise.js";
 import type { CommandResult, CommandRunner } from "./hostCommands.js";
 import type { HostListener } from "./hostListener.js";
@@ -19,6 +26,9 @@ import {
   type KeychainProbe,
 } from "./keychainPreflight.js";
 import type { StartAtLoginController, StartAtLoginObservation } from "./startAtLogin.js";
+import { createLogger } from "../../utils/logger.js";
+
+const logger = createLogger("main:HostModeService");
 
 declare module "../runtime.js" {
   interface RemoteServices {
@@ -63,6 +73,22 @@ export interface HostModeServiceDeps {
    * SSH (see hostModeStatusFile.ts). Written only when it changes.
    */
   writeStatus?(observation: Omit<HostModeObservation, "pid">): Promise<void>;
+  /**
+   * What an earlier process recorded there. Only its keychain result is taken
+   * back, so the row keeps saying when the check last ran instead of reverting
+   * to "not checked" on every restart.
+   */
+  readStatus?(): Promise<HostModeObservation | null>;
+  /**
+   * What this process is doing that bears on restarting it from another
+   * machine: whether a window is open, and the update its updater holds.
+   * Recorded with the setting while the record is kept; `subscribe` says when
+   * either may have changed.
+   */
+  runtime?: {
+    read(): { windows: boolean; stagedUpdate: StagedHostUpdate | null };
+    subscribe(onChange: () => void): () => void;
+  };
 }
 
 function messageOf(error: unknown): string {
@@ -87,6 +113,8 @@ export class HostModeService {
   private listenError: string | null = null;
   private installError: string | null = null;
   private keychainCheck: KeychainCheck | null = null;
+  private keychainCheckedAt: number | null = null;
+  private restored: Promise<void> = Promise.resolve();
   private preflight: Promise<void> | null = null;
   private observation: StartAtLoginObservation | null = null;
   private pmset: CommandResult | null = null;
@@ -97,10 +125,27 @@ export class HostModeService {
   private disposed = false;
   private recordedStatus: string | null = null;
   private statusWrite: Promise<void> = Promise.resolve();
+  private recordTimer: ReturnType<typeof setTimeout> | null = null;
+  /** A record has been written (or tried) this run, so it is kept current from here on. */
+  private recording = false;
+  private offRuntime: (() => void) | null = null;
 
   constructor(private readonly deps: HostModeServiceDeps) {
     this.advertiser = deps.createAdvertiser(() => this.pushSoon());
     this.wsl = deps.wsl ?? isWslKernel(deps.platform);
+    if (deps.readStatus) {
+      this.restored = deps
+        .readStatus()
+        .then((previous) => {
+          const saved = previous?.keychain;
+          // A check run since construction is newer than anything on disk.
+          if (!saved?.checked || this.keychainCheck) return;
+          this.keychainCheck = { state: saved.state, detail: saved.detail };
+          this.keychainCheckedAt = saved.checkedAt ?? null;
+        })
+        .catch(() => {});
+    }
+    this.offRuntime = deps.runtime?.subscribe(() => this.recordSoon()) ?? null;
   }
 
   /** Listen for Shells; used at boot and by the switch. Concurrent calls share one start. */
@@ -174,11 +219,16 @@ export class HostModeService {
     try {
       await startAtLogin.install();
     } catch (error) {
-      console.warn("[RemoteHosts] Refreshing start at login failed:", messageOf(error));
+      logger.warn("Refreshing start at login failed", { error: messageOf(error) });
       return;
     }
     await this.observe();
     this.push();
+  }
+
+  /** The machines attached right now, read without the observations `getStatus` makes. */
+  getAttachedClients(): AttachedClientInfo[] {
+    return this.listener?.isListening() === true ? this.listener.attachedClients() : [];
   }
 
   getStatus(): Promise<HostModeStatus> {
@@ -212,9 +262,11 @@ export class HostModeService {
       .then(
         (check) => {
           this.keychainCheck = check;
+          this.keychainCheckedAt = Date.now();
         },
         (error: unknown) => {
           this.keychainCheck = { state: "unknown", detail: `Check failed: ${messageOf(error)}` };
+          this.keychainCheckedAt = Date.now();
         }
       )
       .finally(() => {
@@ -230,6 +282,10 @@ export class HostModeService {
     this.disposed = true;
     if (this.pushTimer) clearTimeout(this.pushTimer);
     this.pushTimer = null;
+    if (this.recordTimer) clearTimeout(this.recordTimer);
+    this.recordTimer = null;
+    this.offRuntime?.();
+    this.offRuntime = null;
     this.abort?.abort();
     this.abort = null;
     this.advertiser.stop();
@@ -238,7 +294,9 @@ export class HostModeService {
     await this.starting?.catch(() => {});
     // Before the socket closes: a Shell that sees the drop and looks finds a
     // host that quit on purpose, and doesn't start it again.
-    if (this.recordedStatus !== null) await this.recordStatus({ stopped: true });
+    // A listener whose first record is still waiting on the restore counts as recorded too.
+    if (this.recordedStatus !== null || this.listener !== null)
+      await this.recordStatus({ stopped: true });
     const listener = this.listener;
     this.listener = null;
     this.offListener?.();
@@ -332,7 +390,7 @@ export class HostModeService {
           { cause: error }
         );
       }
-      console.warn("[RemoteHosts] Removing start at login failed:", messageOf(error));
+      logger.warn("Removing start at login failed", { error: messageOf(error) });
     }
   }
 
@@ -344,19 +402,30 @@ export class HostModeService {
         ? this.deps.run("pmset", ["-g"]).catch(() => null)
         : Promise.resolve(null),
     ]);
+    await this.restored;
     this.observation = observation;
     this.pmset = pmset;
     this.observed ??= Promise.resolve();
   }
 
   private recordStatus(extra: { stopped?: true } = {}): Promise<void> {
+    // Not before the earlier result is back: the file would lose it.
+    return this.restored.then(() => this.writeRecordedStatus(extra));
+  }
+
+  private writeRecordedStatus(extra: { stopped?: true }): Promise<void> {
     const write = this.deps.writeStatus;
     if (!write) return Promise.resolve();
+    this.recording = true;
     const settings = this.deps.readSettings();
     const keychain =
       this.keychainCheck ?? classifyKeychainWithoutTrial(this.deps.platform, this.deps.keychain);
+    // A process that has quit holds no windows and installs nothing more.
+    const runtime = extra.stopped ? null : (this.deps.runtime?.read() ?? null);
     const observation: Omit<HostModeObservation, "pid"> = {
       ...extra,
+      ...(runtime ? { windows: runtime.windows } : {}),
+      ...(runtime?.stagedUpdate ? { stagedUpdate: runtime.stagedUpdate } : {}),
       enabled: settings.enabled,
       startAtLogin: settings.startAtLogin,
       startAtLoginInstalled: this.observation?.installed ?? null,
@@ -365,6 +434,7 @@ export class HostModeService {
         state: keychain.state,
         detail: keychain.detail,
         checked: this.keychainCheck !== null,
+        ...(this.keychainCheckedAt !== null && { checkedAt: this.keychainCheckedAt }),
       },
     };
     const text = JSON.stringify(observation);
@@ -375,7 +445,7 @@ export class HostModeService {
       .catch((error: unknown) => {
         // Written again on the next change.
         this.recordedStatus = null;
-        console.warn("[RemoteHosts] Recording Host mode status failed:", messageOf(error));
+        logger.warn("Recording Host mode status failed", { error: messageOf(error) });
       });
     return this.statusWrite;
   }
@@ -383,7 +453,7 @@ export class HostModeService {
   private snapshot(): HostModeStatus {
     const settings = this.deps.readSettings();
     const listening = this.listener?.isListening() === true;
-    const attachedClients = listening ? (this.listener?.attachedClients() ?? []) : [];
+    const attachedClients = this.getAttachedClients();
     const keychain =
       this.keychainCheck ?? classifyKeychainWithoutTrial(this.deps.platform, this.deps.keychain);
     return {
@@ -408,7 +478,7 @@ export class HostModeService {
           installError: this.installError,
           wsl: this.wsl,
         }),
-        keychainRow(keychain),
+        keychainRow(keychain, this.keychainCheckedAt),
         sleepRow(this.deps.platform, this.pmset, this.wsl),
         driversRow(attachedClients),
       ],
@@ -429,7 +499,7 @@ export class HostModeService {
       try {
         this.deps.broadcast(this.snapshot());
       } catch (error) {
-        console.warn("[RemoteHosts] Host mode status push failed:", messageOf(error));
+        logger.warn("Host mode status push failed", { error: messageOf(error) });
       }
       void this.recordStatus();
     });
@@ -442,5 +512,18 @@ export class HostModeService {
       this.push();
     }, this.deps.pushDelayMs ?? 100);
     this.pushTimer.unref?.();
+  }
+
+  /**
+   * Record again after a window opened or closed or an update was staged.
+   * Only once a record is kept this run: a machine that never hosted gets none.
+   */
+  private recordSoon(): void {
+    if (this.disposed || this.recordTimer || !this.recording) return;
+    this.recordTimer = setTimeout(() => {
+      this.recordTimer = null;
+      if (!this.disposed) void this.recordStatus();
+    }, this.deps.pushDelayMs ?? 100);
+    this.recordTimer.unref?.();
   }
 }

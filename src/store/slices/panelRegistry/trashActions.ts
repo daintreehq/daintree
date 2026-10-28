@@ -4,7 +4,7 @@ import { getNarrowPanel } from "./selectors";
 
 type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
 import { terminalClient } from "@/clients";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { with as withTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 import { TerminalRefreshTier } from "@/types";
 import {
   panelKindHasPty,
@@ -27,6 +27,7 @@ import {
   syncWorktreeAttributionToHost,
 } from "./helpers";
 import { logError } from "@/utils/logger";
+import { releaseDriveLeaseHolds } from "@/store/driveLeaseWaitStore";
 import { transferBetweenWorktreeIndex } from "./worktreeIndex";
 import { getWorktreeSelectionSnapshot } from "@/store/storeAccessors";
 
@@ -141,7 +142,10 @@ export const createTrashActions = (
     scheduleTrashExpiry(id, expiresAt);
 
     if (panelKindHasPty(terminal.kind ?? "terminal")) {
-      terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
+      withTerminalService(
+        (service) => service.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE),
+        id
+      );
       return;
     }
   };
@@ -249,7 +253,10 @@ export const createTrashActions = (
     for (const id of trashPanelIds) {
       const terminal = state.panelsById[id];
       if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
-        terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
+        withTerminalService(
+          (service) => service.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE),
+          id
+        );
       }
     }
   };
@@ -331,9 +338,15 @@ export const createTrashActions = (
         if (restoreLocation === "dock") {
           optimizeForDock(id);
         } else {
-          terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
+          withTerminalService(
+            (service) => service.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE),
+            id
+          );
         }
       }
+      // A launch that waited for control in the trash starts once it is back,
+      // if control came meanwhile.
+      releaseDriveLeaseHolds();
     },
 
     restoreTrashedGroup: (groupRestoreId, targetWorktreeId) => {
@@ -462,10 +475,14 @@ export const createTrashActions = (
           if (restoreLocation === "dock") {
             optimizeForDock(id);
           } else {
-            terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
+            withTerminalService(
+              (service) => service.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE),
+              id
+            );
           }
         }
       }
+      releaseDriveLeaseHolds();
     },
 
     markAsTrashed: (id, expiresAt, originalLocation) => {
@@ -514,7 +531,10 @@ export const createTrashActions = (
       scheduleTrashExpiry(id, expiresAt);
 
       if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
-        terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
+        withTerminalService(
+          (service) => service.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE),
+          id
+        );
       }
     },
 
@@ -577,7 +597,10 @@ export const createTrashActions = (
         if (restoreLocation === "dock") {
           optimizeForDock(id);
         } else {
-          terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
+          withTerminalService(
+            (service) => service.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE),
+            id
+          );
         }
       }
     },

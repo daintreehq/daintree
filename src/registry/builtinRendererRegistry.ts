@@ -5,7 +5,7 @@ import type { PanelViewProps } from "@shared/types/plugin";
 
 /**
  * Slot registry for renderer-side views contributed by built-in plugins. The
- * registry exists so host-owned surfaces (NewWorktreeDialog, SidebarContent,
+ * registry exists so host-owned surfaces (NewWorktreeDialog, ProjectDialogHost,
  * CodeForgeSettingsTab, ForgeStatsToolbarButton) can render plugin-contributed
  * components without importing them directly, preserving the plugin boundary.
  * Slot ids are dot-namespaced by plugin (`github.bulkCreateWorktreeDialog`) so
@@ -162,8 +162,8 @@ function resolveEntry(
   // Absence from the runtime mirror is "no snapshot yet", not "enabled": the
   // disabled set starts empty, so gating on it alone renders every owned slot
   // on cold start and drops the default-off ones once the first `plugin.list()`
-  // lands. `fileEditorRegistry.isUsable` and `devPreviewToolRegistry.isDeclared`
-  // already require a known plugin for the same reason; this is the same gate.
+  // lands. `fileEditorRegistry.isUsable` already requires a known plugin for
+  // the same reason; this is the same gate.
   if (!knownPluginIds.has(entry.pluginId)) return null;
   if (disabledPluginIds.has(entry.pluginId)) return null;
   return entry;

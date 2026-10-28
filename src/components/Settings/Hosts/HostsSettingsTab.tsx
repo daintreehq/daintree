@@ -13,6 +13,7 @@ import { SettingsSection } from "../SettingsSection";
 import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "../SettingsGroup";
 import { AddHostDialog } from "./AddHostDialog";
 import { HostDetail } from "./HostDetail";
+import { HostsCopySettingsSection } from "./HostsCopySettingsSection";
 import { connectionLabel, platformLabel, removeHostOutcome } from "./hostLabels";
 import {
   onHostSettingsRequest,
@@ -207,9 +208,11 @@ export default function HostsSettingsTab() {
             </SettingsEmptyRow>
           ) : hosts.length === 0 ? (
             <SettingsEmptyRow action={addButton}>
-              {loaded
-                ? "Add a Mac or Linux machine to run projects and agents on it from here"
-                : "Loading hosts"}
+              {!loaded
+                ? "Loading hosts"
+                : remoteConnectionKind() === "wsl"
+                  ? "Add a WSL distribution to run projects and agents in it from here"
+                  : "Add a Mac or Linux machine to run projects and agents on it from here"}
             </SettingsEmptyRow>
           ) : (
             [...hosts]
@@ -269,6 +272,17 @@ export default function HostsSettingsTab() {
           )}
         </SettingsGroup>
       </SettingsSection>
+
+      <HostsCopySettingsSection
+        hosts={[...hosts]
+          .sort((a, b) => hostNameCollator.compare(a.descriptor.name, b.descriptor.name))
+          .map(({ descriptor, connection }) => ({
+            id: descriptor.id,
+            name: descriptor.name,
+            connected: connection.status === "connected",
+          }))}
+        onOpenHost={setDetailHostId}
+      />
 
       <HostModeGroup />
 

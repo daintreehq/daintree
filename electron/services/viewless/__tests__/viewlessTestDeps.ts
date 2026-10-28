@@ -143,6 +143,7 @@ export function makeDeps(
     send,
     agents: {
       getSettings: async () => null,
+      getToolbarPins: async () => ({}),
       getCcrPresets: async () => undefined,
       getProjectPresets: async () => ({}),
       getCliDetail: async () => ({
@@ -155,6 +156,7 @@ export function makeDeps(
     readTerminalStatus: async () => ({ terminals: [], source: "pty", unavailableFields: [] }),
     hostPlatform: { shellDialect: "posix", tmpDir: "/tmp", totalMemoryBytes: 64 * 1024 ** 3 },
     sleep: async () => {},
+    collectWorktreeDeleteNotes: async () => [],
     ...overrides,
   };
   return { deps, store, invoke, send };

@@ -34,14 +34,17 @@ vi.mock("@/components/DragDrop/SortableWorktreeTerminal", () => ({
 vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch, get: () => undefined, list: () => [] },
 }));
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     get: () => undefined,
     getHoveredLinkText: () => null,
     getHoveredFilePath: () => null,
     getHoveredFileKind: () => null,
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 vi.mock("@/hooks/useSidebarWorktreeOrder", () => ({ useSidebarWorktreeOrder: () => [] }));
 vi.mock("@/hooks/useIsHibernated", () => ({ useIsHibernated: () => false }));
 vi.mock("@/hooks/usePluginContextMenuItems", () => ({ usePluginContextMenuItems: () => [] }));
@@ -80,6 +83,7 @@ vi.mock("@/store", () => {
 });
 
 import { WorktreeTerminalSection } from "../WorktreeTerminalSection";
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 
 const CARD_ITEM = "Worktree card item";
 
@@ -138,6 +142,12 @@ beforeAll(async () => {
 afterEach(() => {
   cleanup();
   dispatch.mockReset();
+});
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
 });
 
 describe("WorktreeTerminalSection — a session row owns its menu", () => {

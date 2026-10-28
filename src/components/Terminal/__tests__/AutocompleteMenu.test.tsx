@@ -133,6 +133,47 @@ describe("AutocompleteMenu", () => {
     expect(hintText({ items: [] }).keys).toEqual([]);
   });
 
+  it("with nothing selected, offers Tab for the first row and says so aloud", () => {
+    const rows: AutocompleteItem[] = ["#14848", "#14843"].map((label) => ({
+      key: label,
+      label,
+      insertText: label,
+    }));
+    const { container } = render(
+      <AutocompleteMenu
+        isOpen
+        items={rows}
+        selectedIndex={-1}
+        onSelect={noop}
+        title="Issues and pull requests"
+        emptyMessage="No matches"
+      />
+    );
+    const header = container.querySelector("kbd")?.closest("[aria-hidden]")?.textContent ?? "";
+    expect(header).toMatch(/insert first/);
+    expect(header).not.toMatch(/↵/);
+    expect(screen.getByRole("status").textContent).toMatch(/Tab/);
+    expect(
+      screen.getAllByRole("option").map((option) => option.getAttribute("aria-selected"))
+    ).toEqual(["false", "false"]);
+  });
+
+  it("makes no Tab promise when the first row is stale", () => {
+    const rows: AutocompleteItem[] = [{ key: "#1", label: "#1", insertText: "#1" }];
+    const { container } = render(
+      <AutocompleteMenu
+        isOpen
+        items={rows}
+        selectedIndex={-1}
+        staleKeys={new Set(["#1"])}
+        onSelect={noop}
+        title="Issues and pull requests"
+        emptyMessage="No matches"
+      />
+    );
+    expect(container.querySelectorAll("kbd")).toHaveLength(0);
+  });
+
   it("speaks the key action on the row Enter acts on, and only there", () => {
     const items: AutocompleteItem[] = [
       { key: "run", label: "/clear", insertText: "/clear", enterAction: "execute" },
@@ -541,6 +582,9 @@ describe("AutocompleteMenu", () => {
       ).toBeNull();
       expect(getComboboxState({ ...base, isOpen: true, items: [] }).activeOptionId).toBeNull();
       expect(getComboboxState({ ...base, isOpen: false }).activeOptionId).toBeNull();
+      expect(
+        getComboboxState({ ...base, isOpen: true, selectedIndex: -1 }).activeOptionId
+      ).toBeNull();
     });
   });
 });

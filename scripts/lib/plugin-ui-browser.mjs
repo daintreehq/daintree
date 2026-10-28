@@ -23,11 +23,9 @@ export function readStringArray(source, constName) {
   return [...body[1].matchAll(/"([^"]+)"/g)].map((match) => match[1]);
 }
 
-/** The `@daintreehq/plugin-ui` entry of vite.config.ts's HOST_FACADE_REQUIRED_EXPORTS. */
-export function facadeRequiredExports(viteConfigSource) {
-  const table = viteConfigSource.slice(
-    viteConfigSource.indexOf("const HOST_FACADE_REQUIRED_EXPORTS")
-  );
+/** The `@daintreehq/plugin-ui` entry of HOST_FACADE_REQUIRED_EXPORTS (scripts/lib/host-facade-exports.ts). */
+export function facadeRequiredExports(source) {
+  const table = source.slice(source.indexOf("const HOST_FACADE_REQUIRED_EXPORTS"));
   const entry = /"@daintreehq\/plugin-ui":\s*\[([^\]]*)\]/.exec(table);
   if (!entry) throw new Error("no @daintreehq/plugin-ui entry in HOST_FACADE_REQUIRED_EXPORTS");
   return [...entry[1].matchAll(/"([^"]+)"/g)].map((match) => match[1]);

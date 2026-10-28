@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IPty } from "node-pty";
 import { TerminalProcess, type TerminalProcessCallbacks } from "../TerminalProcess.js";
+import { gracefulShutdown as runGracefulShutdown } from "../TerminalGracefulShutdown.js";
 import type { SpawnContext } from "../terminalSpawn.js";
 import {
   GRACEFUL_SHUTDOWN_BUFFER_SIZE,
@@ -8,6 +9,7 @@ import {
   GRACEFUL_SHUTDOWN_TIMEOUT_MS,
   IPC_HIGH_WATERMARK_PERCENT,
   IPC_MAX_QUEUE_BYTES,
+  type TerminalInfo,
 } from "../types.js";
 import { SUBMIT_ENTER_DELAY_MS, OUTPUT_SETTLE_MAX_WAIT_MS } from "../terminalInput.js";
 import { getAgentConfig } from "../../../../shared/config/agentRegistry.js";
@@ -484,6 +486,25 @@ describe("TerminalProcess.gracefulShutdown — input-clear prelude", () => {
     expect(terminal.getInfo().agentSessionId).toBeUndefined();
   });
 
+  it("quits Cursor without scraping an id it never prints (#13847)", async () => {
+    // Cursor resumes by `--continue` alone, so resume-looking output during its
+    // teardown must not be taken for a captured chat id.
+    const handles = createMockPty();
+    const terminal = createAgentTerminal(handles, "cursor");
+
+    const shutdownPromise = terminal.gracefulShutdown();
+    await vi.advanceTimersByTimeAsync(GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS);
+    await vi.advanceTimersByTimeAsync(SUBMIT_ENTER_DELAY_MS);
+
+    expect(handles.writeMock.mock.calls.map((c) => c[0]).join("")).toContain("/quit");
+
+    handles.emitData("cursor-agent --resume chat-looks-like-an-id\n");
+    handles.emitExit(0);
+
+    await expect(shutdownPromise).resolves.toBeNull();
+    expect(terminal.getInfo().agentSessionId).toBeUndefined();
+  });
+
   it("skips Enter when the split-write agent demotes during the quit-submit delay", async () => {
     // Mid-flight liveness guard for the split-write path only — a readline/
     // Ratatui CLI writes the body and Enter as separate PTY writes with a delay
@@ -558,6 +579,156 @@ describe("TerminalProcess.gracefulShutdown — input-clear prelude", () => {
 
     await expect(shutdownPromise).resolves.toBeNull();
     expect(terminal.getInfo().agentSessionId).toBeUndefined();
+  });
+});
+
+describe("TerminalProcess.gracefulShutdown — agent waiting on an approval (#13842)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  });
+
+  function waitingOn(
+    terminal: TerminalProcess,
+    waitingReason: NonNullable<ReturnType<TerminalProcess["getInfo"]>["waitingReason"]>
+  ): TerminalProcess {
+    terminal.getInfo().agentState = "waiting";
+    terminal.getInfo().waitingReason = waitingReason;
+    return terminal;
+  }
+
+  // One per shutdown family: split-write /quit, single-write /exit, a bare key
+  // sequence, and Codex's gated Ctrl-C. At a selector any of them can be read
+  // as the answer.
+  it.each(["gemini", "copilot", "amp", "codex"])(
+    "writes nothing into %s and leaves the kill to the caller",
+    async (agentId) => {
+      const handles = createMockPty();
+      const terminal = waitingOn(createAgentTerminal(handles, agentId), "approval");
+
+      await expect(terminal.gracefulShutdown()).resolves.toBeNull();
+      await vi.advanceTimersByTimeAsync(GRACEFUL_SHUTDOWN_TIMEOUT_MS);
+
+      expect(handles.writeMock).not.toHaveBeenCalled();
+      // `PtyManager.gracefulKill` kills a terminal that comes back unkilled.
+      expect(terminal.getInfo().wasKilled).toBeFalsy();
+    }
+  );
+
+  it("still returns an id assigned at launch, since that path writes nothing either", async () => {
+    const handles = createMockPty();
+    const terminal = waitingOn(
+      createAgentTerminalWithSession(handles, "claude", "assigned-at-approval"),
+      "approval"
+    );
+
+    await expect(terminal.gracefulShutdown()).resolves.toBe("assigned-at-approval");
+    expect(handles.writeMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["question", "error", "prompt"] as const)(
+    "still quits through the composer for a %s wait",
+    async (reason) => {
+      const handles = createMockPty();
+      const terminal = waitingOn(createAgentTerminal(handles, "gemini"), reason);
+
+      const promise = terminal.gracefulShutdown();
+      await vi.advanceTimersByTimeAsync(GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS);
+
+      expect(handles.writeMock.mock.calls.map(([data]) => data)).toEqual(["\x05\x15", "/quit"]);
+      handles.emitData("gemini --resume composer-quit\n");
+      await expect(promise).resolves.toBe("composer-quit");
+    }
+  );
+
+  it("refuses before taking the input lock or opening a capture window", async () => {
+    // Taking the lock alone cancels queued input and drops pending submissions,
+    // so a refusal that came after it would still disturb the pane.
+    const acquireInputLock = vi.fn(() => () => {});
+    const enterCaptureMode = vi.fn(() => () => {});
+    const kill = vi.fn();
+    const terminalInfo = {
+      id: "t-host",
+      launchAgentId: "gemini",
+      agentState: "waiting",
+      waitingReason: "approval",
+    } as unknown as TerminalInfo;
+
+    await expect(
+      runGracefulShutdown({
+        terminalInfo,
+        isAgentLive: true,
+        acquireInputLock,
+        enterCaptureMode,
+        kill,
+      })
+    ).resolves.toBeNull();
+
+    expect(acquireInputLock).not.toHaveBeenCalled();
+    expect(enterCaptureMode).not.toHaveBeenCalled();
+    expect(kill).not.toHaveBeenCalled();
+  });
+
+  it("holds back the quit command when an approval is seen during the clear delay", async () => {
+    const handles = createMockPty();
+    const terminal = createAgentTerminal(handles, "copilot");
+
+    const promise = terminal.gracefulShutdown();
+    await Promise.resolve();
+    await Promise.resolve();
+    waitingOn(terminal, "approval");
+    await vi.advanceTimersByTimeAsync(GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS);
+
+    await expect(promise).resolves.toBeNull();
+    expect(handles.writeMock.mock.calls.map(([data]) => data)).toEqual(["\x05\x15"]);
+    expect(terminal.getInfo().wasKilled).toBe(true);
+  });
+
+  it("holds back Enter when an approval is seen between the body and its submit", async () => {
+    const handles = createMockPty();
+    const terminal = createAgentTerminal(handles, "gemini");
+
+    const promise = terminal.gracefulShutdown();
+    await vi.advanceTimersByTimeAsync(GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS);
+    waitingOn(terminal, "approval");
+    await vi.advanceTimersByTimeAsync(SUBMIT_ENTER_DELAY_MS);
+
+    await expect(promise).resolves.toBeNull();
+    expect(handles.writeMock.mock.calls.map(([data]) => data)).toEqual(["\x05\x15", "/quit"]);
+    expect(terminal.getInfo().wasKilled).toBe(true);
+  });
+
+  it("stops Codex's escalation when an approval is seen between presses", async () => {
+    const handles = createMockPty();
+    const terminal = createAgentTerminal(handles, "codex");
+
+    const promise = terminal.gracefulShutdown();
+    await Promise.resolve();
+    await Promise.resolve();
+    // Satisfy the first press's gate so the loop comes back for a second one.
+    handles.emitData("  Ctrl+C again to quit\n");
+    waitingOn(terminal, "approval");
+    await vi.advanceTimersByTimeAsync(CODEX_PER_PRESS_TIMEOUT_MS);
+
+    await expect(promise).resolves.toBeNull();
+    expect(handles.writeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores an approval reason left behind once the agent stopped waiting", async () => {
+    const handles = createMockPty();
+    const terminal = waitingOn(createAgentTerminal(handles, "gemini"), "approval");
+    terminal.getInfo().agentState = "working";
+
+    const promise = terminal.gracefulShutdown();
+    await vi.advanceTimersByTimeAsync(GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS);
+
+    expect(handles.writeMock).toHaveBeenCalledWith("/quit");
+    handles.emitData("gemini --resume after-work\n");
+    await expect(promise).resolves.toBe("after-work");
   });
 });
 
@@ -1185,10 +1356,19 @@ describe("TerminalProcess.gracefulShutdown — outcome logging", () => {
       return soleOutcome();
     },
 
-    // Cursor is registered but ships no resume config at all.
+    async awaitingApproval() {
+      const handles = createMockPty();
+      const terminal = createAgentTerminal(handles, "gemini");
+      terminal.getInfo().agentState = "waiting";
+      terminal.getInfo().waitingReason = "approval";
+      await expect(terminal.gracefulShutdown()).resolves.toBeNull();
+      return soleOutcome();
+    },
+
+    // Crush is registered but ships no resume config at all.
     async noResumeConfig() {
       const handles = createMockPty();
-      const terminal = createAgentTerminal(handles, "cursor");
+      const terminal = createAgentTerminal(handles, "crush");
       await expect(terminal.gracefulShutdown()).resolves.toBeNull();
       return soleOutcome();
     },

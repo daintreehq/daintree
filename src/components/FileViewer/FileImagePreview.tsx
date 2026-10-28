@@ -1,5 +1,7 @@
 import { svgToDataUrl } from "@/lib/svg";
 import { buildDaintreeFileUrl } from "./filePreviewKinds";
+import { useImageErrorHandler } from "./previewRefusal";
+import type { MediaPreviewError } from "./useMediaSourceUrl";
 
 interface FileImagePreviewProps {
   /** Absolute path of the image being previewed. */
@@ -22,7 +24,8 @@ interface FileImagePreviewProps {
    * Ignored for SVG markup, which is re-read and re-sanitized upstream.
    */
   cacheBust?: string;
-  onError?: () => void;
+  /** Called with the host's refusal when a remote window's host refused it; bare for a failed load. */
+  onError?: (error?: MediaPreviewError) => void;
   /** Height cap for the preview surface — dialogs and panes want different ones. */
   maxHeightClassName?: string;
 }
@@ -85,6 +88,11 @@ export function FileImagePreview({
   maxHeightClassName = "max-h-[70vh]",
 }: FileImagePreviewProps) {
   const svg = sanitizedSvg ? renderableSvg(sanitizedSvg) : null;
+  const rasterSrc =
+    cacheBust === undefined
+      ? buildDaintreeFileUrl(filePath, rootPath)
+      : `${buildDaintreeFileUrl(filePath, rootPath)}&v=${encodeURIComponent(cacheBust)}`;
+  const handleRasterError = useImageErrorHandler(rasterSrc, onError);
 
   return (
     <div className="flex items-center justify-center p-6 min-h-[300px]">
@@ -95,7 +103,7 @@ export function FileImagePreview({
             alt={alt}
             className={`max-w-full ${maxHeightClassName} object-contain${svg.sized ? "" : " w-full h-auto"}`}
             draggable={false}
-            onError={onError}
+            onError={() => onError?.()}
           />
         )
       ) : (
@@ -105,15 +113,11 @@ export function FileImagePreview({
           // cacheBust: a rewritten image swaps its bytes in place, and the old
           // frame stays painted until the new one decodes.
           key={filePath}
-          src={
-            cacheBust === undefined
-              ? buildDaintreeFileUrl(filePath, rootPath)
-              : `${buildDaintreeFileUrl(filePath, rootPath)}&v=${encodeURIComponent(cacheBust)}`
-          }
+          src={rasterSrc}
           alt={alt}
           className={`max-w-full ${maxHeightClassName} object-contain rounded-lg`}
           draggable={false}
-          onError={onError}
+          onError={handleRasterError}
         />
       )}
     </div>

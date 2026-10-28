@@ -2,6 +2,7 @@ import { stat } from "fs/promises";
 import type { TerminalInfo } from "./types.js";
 import type { TerminalSubmitGuard } from "../../../shared/types/pty-host.js";
 import {
+  ASSISTANT_SEND_GATE,
   evaluateWakeGate,
   wakeGateOptionsFor,
   type WakeGateSnapshot,
@@ -122,6 +123,17 @@ export class TerminalInputController {
    * pre-Enter delay when the lock engages abandons the Enter instead of
    * submitting whatever the shutdown signal left in the composer.
    */
+  /**
+   * Abandon everything Daintree has not yet written to the PTY — queued
+   * submits and the pending Enter of one in flight — without locking input.
+   * The global assistant's input moved to another window (#14454): what the
+   * previous owner sent must not land in the new owner's line.
+   */
+  cancelPendingInput(): void {
+    this.inputGeneration++;
+    this.host.writeQueue.cancelPendingInput();
+  }
+
   acquireShutdownInputLock(): () => void {
     this.shutdownLockDepth++;
     this.inputGeneration++;
@@ -372,7 +384,10 @@ export class TerminalInputController {
     this.host.writeQueue.submit(text, token, onPtyWritten, admit, imagePaths);
   }
 
-  /** Only at a prompt settled since the lane last wrote to it, and never mid-turn. */
+  /**
+   * Only at a prompt settled since the lane last wrote to it, and never
+   * mid-turn. A prose question is still that prompt (#14475).
+   */
   private admitStrict(): boolean {
     if (this.isInputLocked) return false;
     const terminal = this.host.terminalInfo;
@@ -382,7 +397,7 @@ export class TerminalInputController {
     ) {
       return false;
     }
-    return evaluateWakeGate(wakeGateSnapshot(terminal), { acceptWorking: false }).kind === "ready";
+    return evaluateWakeGate(wakeGateSnapshot(terminal), ASSISTANT_SEND_GATE).kind === "ready";
   }
 
   /**
@@ -493,7 +508,7 @@ export class TerminalInputController {
     } else if (useBracketedPaste && supportsBracketedPaste(terminal)) {
       // See `stage`: an unsanitised body could close the paste itself, and
       // whatever follows would reach the agent as keystrokes, submits included.
-      // Page-derived text (DOM ids, labels) reaches here from SvelteKit Tools.
+      // Page-derived text (DOM ids, labels) reaches here from the Element Picker.
       const payload = formatWithBracketedPaste(body.replace(/\n/g, "\r"));
       bodyWritten = this.writeStrict(payload);
     } else if (body.includes("\n") && !supportsBracketedPaste(terminal)) {
@@ -543,8 +558,11 @@ export class TerminalInputController {
       return;
     }
     // Its requester took it back — the user stopped the pane's notices, or
-    // turned the MCP server off — while the body waited for its Enter.
+    // turned the MCP server off — while the body waited for its Enter. The
+    // body stays in the composer unsent, which is a draft from here on, as a
+    // staged line is.
     if (ctx?.isWithdrawn?.() === true) {
+      this.host.terminalInfo.lastTypedInputAt = Date.now();
       return;
     }
 

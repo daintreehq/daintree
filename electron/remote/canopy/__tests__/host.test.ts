@@ -100,6 +100,8 @@ describe("installCanopyHostWith", () => {
       }),
     ]);
     expect(s.endpoints[0].clientId).toBe("shell-1");
+    // Held to the drive lease by the host's session, not the Shell's claimed client id (#14679).
+    expect(s.endpoints[0].linkSessionId).toBe("s1");
   });
 
   it("drops a viewer whose push the link refused, and tells the Shell to read again", async () => {
@@ -166,5 +168,123 @@ describe("installCanopyHostWith", () => {
     await vi.waitFor(() =>
       expect(s.link.calls).toEqual([[CanopyLinkMethod.VIEWER_LOST, { viewerId: "v1" }]])
     );
+  });
+});
+
+describe("installCanopyHostWith: assistant viewers (#14163)", () => {
+  function hostWith(readAgents?: () => Promise<unknown>) {
+    const endpoints: ClientEndpoint[] = [];
+    const viewers = new CanopyViewers({
+      source: { observeCanopy: vi.fn(() => () => {}), observeFleet: () => null },
+      invoke: async ({ endpoint, client }, channel) => {
+        endpoints.push(endpoint);
+        endpoint.send({ type: "event", channel: "canopy:snapshot-updated", args: [{}] });
+        endpoint.send({ type: "event", channel: "canopy:terminal-data", args: [{ kind: "data" }] });
+        return wrapSuccess({ channel, clientId: client.clientId });
+      },
+    });
+    const link = fakeSession(() => "queued");
+    const ctx: CanopySessionContext = {
+      session: link.session,
+      client: { clientId: "shell-1", clientName: "mbp", platform: "darwin" },
+      sessionId: "s1",
+    };
+    installCanopyHostWith(
+      { sessions: [ctx], onSession: () => () => {} },
+      viewers,
+      readAgents ? { readAgents: readAgents as never } : {}
+    );
+    return { link, endpoints, viewers };
+  }
+
+  it("runs the watch as the session's own client, and streams only the terminal's bytes", async () => {
+    const h = hostWith();
+    await expect(
+      h.link.shellCalls(CanopyLinkMethod.ASSISTANT_INVOKE, {
+        viewerId: "pick",
+        channel: "canopy:watch-assistant-terminal",
+        args: [{}],
+        interactive: true,
+      })
+    ).resolves.toEqual(
+      wrapSuccess({ channel: "canopy:watch-assistant-terminal", clientId: "shell-1" })
+    );
+    expect(h.endpoints[0]!.endpointId).toBe(CANOPY_VIEWER_ENDPOINT_PREFIX + "pick");
+    expect(h.link.posts).toEqual([
+      {
+        lane: Lane.INTERACTIVE,
+        kind: InteractiveKind.CANOPY_TERMINAL,
+        body: {
+          endpointId: CANOPY_VIEWER_ENDPOINT_PREFIX + "pick",
+          channel: "canopy:terminal-data",
+          args: [{ kind: "data" }],
+        },
+      },
+    ]);
+  });
+
+  it("ends the viewer when the Shell releases it or the link closes", async () => {
+    const h = hostWith();
+    const watch = (viewerId: string) =>
+      h.link.shellCalls(CanopyLinkMethod.ASSISTANT_INVOKE, {
+        viewerId,
+        channel: "canopy:watch-assistant-terminal",
+        args: [{}],
+      });
+    await watch("a");
+    await watch("b");
+    h.link.shellCalls(CanopyLinkMethod.RELEASE, { viewerId: "a" });
+    expect(h.endpoints[0]!.isClosed()).toBe(true);
+    expect(h.endpoints[1]!.isClosed()).toBe(false);
+    h.link.close();
+    expect(h.endpoints[1]!.isClosed()).toBe(true);
+  });
+
+  it("answers its assistants alone, with its protocol version", async () => {
+    const live = (role: "worker" | "assistant", terminalId: string) => ({
+      state: "live",
+      role,
+      subject: {
+        hostId: "local",
+        scope: { kind: "project", projectId: "p" },
+        terminalId,
+        incarnation: 1,
+        ...(role === "assistant" ? { lane: 0 } : {}),
+      },
+      agentId: null,
+      agentState: null,
+      waitingReason: null,
+      since: null,
+      label: null,
+      attached: role === "assistant" ? true : null,
+      handback: null,
+    });
+    const readAgents = vi.fn(async () => ({
+      coverage: "ok",
+      observedAt: 1,
+      complete: true,
+      omitted: 0,
+      entries: [live("worker", "w"), live("assistant", "a")],
+    }));
+    const h = hostWith(readAgents);
+    const answer = (await h.link.shellCalls(CanopyLinkMethod.ASSISTANTS, {
+      projectId: "p",
+    })) as { version: number; directory: { entries: Array<{ subject: { terminalId: string } }> } };
+    expect(readAgents).toHaveBeenCalledWith({ projectId: "p", assistantsOnly: true });
+    expect(answer.version).toBe(1);
+    expect(answer.directory.entries.map((entry) => entry.subject.terminalId)).toEqual(["a"]);
+  });
+
+  it("says a read it couldn't make, never an empty inventory", async () => {
+    const failing = hostWith(async () => {
+      throw new Error("pty down");
+    });
+    await expect(failing.link.shellCalls(CanopyLinkMethod.ASSISTANTS, {})).resolves.toMatchObject({
+      directory: { coverage: "unreachable", complete: false },
+    });
+    const none = hostWith();
+    await expect(none.link.shellCalls(CanopyLinkMethod.ASSISTANTS, {})).resolves.toMatchObject({
+      directory: { coverage: "unsupported" },
+    });
   });
 });

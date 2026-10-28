@@ -64,13 +64,13 @@ describe("applyAppThemeToRoot", () => {
 
     applyAppThemeToRoot(
       root,
-      createTestScheme("with-extension", "dark", { "custom-foo": "#123456" })
+      createTestScheme("with-extension", "dark", { "panel-grid-bg": "#123456" })
     );
-    expect(root.style.getPropertyValue("--custom-foo")).toBe("#123456");
+    expect(root.style.getPropertyValue("--panel-grid-bg")).toBe("#123456");
 
     applyAppThemeToRoot(root, createTestScheme("without-extension", "light"));
 
-    expect(root.style.getPropertyValue("--custom-foo")).toBe("");
+    expect(root.style.getPropertyValue("--panel-grid-bg")).toBe("");
   });
 
   it("carries the light chrome on light and hands it back to the stylesheet on dark", () => {
@@ -91,10 +91,22 @@ describe("applyAppThemeToRoot", () => {
     for (const name of lightOnly) expect(root.style.getPropertyValue(name)).toBe("");
   });
 
-  it("lets a theme's own extension override the light chrome", () => {
+  it("keeps the light chrome when a theme's extension names it", () => {
+    // `shadow-modal` is not a registered extension key, so it is an engine
+    // variable a theme cannot replace (#13761).
     const root = document.createElement("div");
     applyAppThemeToRoot(root, createTestScheme("test-light", "light", { "shadow-modal": "none" }));
-    expect(root.style.getPropertyValue("--shadow-modal")).toBe("none");
+    expect(root.style.getPropertyValue("--shadow-modal")).toContain("--theme-shadow-dialog");
+  });
+
+  it("drops a stale unregistered variable once a sanitized theme is applied", () => {
+    const root = document.createElement("div");
+    root.style.setProperty("--custom-foo", "#123456");
+    root.dataset.themeVariableKeys = "--custom-foo";
+
+    applyAppThemeToRoot(root, createTestScheme("test-dark", "dark", { "custom-foo": "#123456" }));
+
+    expect(root.style.getPropertyValue("--custom-foo")).toBe("");
   });
 });
 

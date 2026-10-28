@@ -1,0 +1,646 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+
+// Spoken file references (#14616): a transcript that says an explicit command
+// is tagged, its references resolve in the dictated terminal's worktree, a
+// stop waits for the final utterance's to settle, and a miss sends nothing.
+// Results go to the view that started the session, never the app's current
+// view (#14599).
+
+const ipcMainMock = vi.hoisted(() => ({
+  handle: vi.fn(),
+  removeHandler: vi.fn(),
+  on: vi.fn(),
+  removeListener: vi.fn(),
+}));
+
+vi.mock("electron", () => ({
+  ipcMain: ipcMainMock,
+  systemPreferences: { getMediaAccessStatus: vi.fn(() => "granted") },
+  shell: { openExternal: vi.fn() },
+  BrowserWindow: { fromWebContents: vi.fn(() => null) },
+}));
+
+vi.mock("../../../utils/logger.js", () => ({
+  logDebug: vi.fn(),
+  logInfo: vi.fn(),
+  logWarn: vi.fn(),
+  logError: vi.fn(),
+  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+}));
+
+type ServiceEvent = { type: string; sessionId?: string; [key: string]: unknown };
+type Detected = Array<{ description: string }>;
+
+const shared = vi.hoisted(() => ({
+  listeners: new Set<(e: ServiceEvent) => void>(),
+  providerSessionId: null as string | null,
+  drain: null as null | Promise<void>,
+  projects: new Map<number, string>(),
+  projectPaths: new Map<string, string>(),
+  currentProject: null as null | { name: string; path: string },
+  currentView: { sent: [] as Array<{ channel: string; payload: unknown }> },
+  dictionary: [] as unknown[],
+  /** What the project's file listing returns, and every cleanup request that went out. */
+  listFiles: vi.fn<(cwd: string) => Promise<readonly string[]>>(),
+  correctionModel: undefined as string | undefined,
+  corrected: [] as Array<{ rawText: string; codeNames?: string[] }>,
+  detect: vi.fn<(text: string, settings: unknown, signal?: AbortSignal) => Promise<Detected>>(),
+  resolve:
+    vi.fn<
+      (payload: {
+        cwd: string;
+        description: string;
+        signal?: AbortSignal;
+      }) => Promise<string | null>
+    >(),
+}));
+
+vi.mock("../../../services/VoiceTranscriptionService.js", () => ({
+  VoiceTranscriptionService: function VoiceTranscriptionService(this: Record<string, unknown>) {
+    this.onEvent = function (cb: (e: ServiceEvent) => void) {
+      shared.listeners.add(cb);
+      return () => shared.listeners.delete(cb);
+    };
+    this.keytermsNeededToConnect = function () {
+      return false;
+    };
+    this.start = function (_settings: unknown, sessionId: string) {
+      shared.providerSessionId = sessionId;
+      return Promise.resolve({ ok: true });
+    };
+    this.sendAudioChunk = function () {};
+    this.stopGracefully = function () {
+      return shared.drain ?? Promise.resolve();
+    };
+    this.stop = function () {};
+    this.destroy = function () {};
+    this.commitParagraphBoundary = function () {};
+    this.getSessionStats = () => null;
+  },
+}));
+
+vi.mock("../../../services/VoiceCorrectionService.js", () => ({
+  VoiceCorrectionService: function VoiceCorrectionService(this: Record<string, unknown>) {
+    this.warm = () => Promise.resolve();
+    this.preconnect = () => {};
+    this.detectFileLinkTokens = shared.detect;
+    this.correct = (request: { rawText: string; codeNames?: string[] }) => {
+      shared.corrected.push(request);
+      return Promise.resolve({ action: "no_change", confirmedText: request.rawText });
+    };
+  },
+}));
+
+vi.mock("../../../services/FileSearchService.js", () => ({
+  fileSearchService: { listFiles: shared.listFiles },
+}));
+
+vi.mock("../../../services/VoiceFileLinkResolver.js", () => ({
+  voiceFileLinkResolver: { resolve: shared.resolve },
+}));
+
+vi.mock("../../../services/ProjectStore.js", () => ({
+  projectStore: {
+    getCurrentProject: vi.fn(() => shared.currentProject),
+    getCurrentProjectId: vi.fn(() => null),
+    getProjectById: vi.fn((id: string) => {
+      const path = shared.projectPaths.get(id);
+      return path ? { id, name: id, path } : null;
+    }),
+  },
+}));
+
+// The real module's pure helpers (the names screen) stay; only assembly is faked.
+vi.mock("../../../services/voiceContextKeyterms.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../services/voiceContextKeyterms.js")>()),
+  assembleTaggedKeyterms: vi.fn(() => Promise.resolve([])),
+  formatKeytermPrompt: vi.fn(() => ""),
+}));
+
+vi.mock("../../../store.js", () => ({
+  store: {
+    get: vi.fn((key: string) =>
+      key === "voiceInput"
+        ? {
+            enabled: true,
+            openaiApiKey: "sk-test",
+            correctionEnabled: true,
+            resolveFileLinks: true,
+            paragraphingStrategy: "spoken-command",
+            language: "en",
+            dictionary: shared.dictionary,
+            ...(shared.correctionModel ? { correctionModel: shared.correctionModel } : {}),
+          }
+        : undefined
+    ),
+    set: vi.fn(),
+  },
+}));
+
+vi.mock("../../../window/webContentsRegistry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../window/webContentsRegistry.js")>();
+  return {
+    ...actual,
+    getProjectForWebContents: vi.fn((id: number) => shared.projects.get(id) ?? null),
+    // The live-session report goes to every app view; these tests have none.
+    getAllAppWebContents: vi.fn(() => []),
+    // Another view is current; a send routed through it would land here.
+    getAppWebContents: vi.fn(() => ({
+      isDestroyed: () => false,
+      send: (channel: string, payload: unknown) =>
+        shared.currentView.sent.push({ channel, payload }),
+    })),
+  };
+});
+
+import { registerVoiceInputHandlers } from "../voiceInput.js";
+import { CHANNELS } from "../../channels.js";
+
+type Sent = { channel: string; payload: unknown };
+type FileReferencesPayload = {
+  sessionId: string;
+  transcriptId: string;
+  references: Array<{ description: string; path: string | null }>;
+};
+
+let nextSenderId = 500;
+function makeSender() {
+  const sender = {
+    id: nextSenderId++,
+    sent: [] as Sent[],
+    once: vi.fn(),
+    removeListener: vi.fn(),
+    isDestroyed: () => false,
+    send: vi.fn((channel: string, payload: unknown) => {
+      sender.sent.push({ channel, payload });
+    }),
+  };
+  return sender;
+}
+type FakeSender = ReturnType<typeof makeSender>;
+
+function getHandler(channel: string) {
+  const call = ipcMainMock.handle.mock.calls.find(([c]) => c === channel);
+  if (!call) throw new Error(`No handler registered for channel: ${channel}`);
+  return call[1] as (...args: unknown[]) => Promise<unknown>;
+}
+
+function start(sender: FakeSender, sessionId: string, terminalId?: string) {
+  return getHandler(CHANNELS.VOICE_INPUT_START)(
+    { sender },
+    sessionId,
+    terminalId ? { terminalId } : undefined
+  );
+}
+
+function stop(sender: FakeSender, sessionId: string) {
+  return getHandler(CHANNELS.VOICE_INPUT_STOP)({ sender }, sessionId);
+}
+
+function emitComplete(text: string, sessionId = shared.providerSessionId ?? undefined) {
+  for (const listener of [...shared.listeners]) listener({ type: "complete", text, sessionId });
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
+describe("voiceInput — spoken file references", () => {
+  let cleanup: () => void;
+  let owner: FakeSender;
+  let ptyClient: {
+    hasTerminal: ReturnType<typeof vi.fn>;
+    getTerminalProjectId: ReturnType<typeof vi.fn>;
+    getTerminalAsync: ReturnType<typeof vi.fn>;
+  };
+
+  const completes = (sender: { sent: Sent[] } = owner) =>
+    sender.sent
+      .filter((m) => m.channel === CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE)
+      .map((m) => m.payload as { text: string; transcriptId?: string });
+  const fileReferences = (sender: { sent: Sent[] } = owner) =>
+    sender.sent
+      .filter((m) => m.channel === CHANNELS.VOICE_INPUT_FILE_TOKEN_RESOLVED)
+      .map((m) => m.payload as FileReferencesPayload);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    shared.listeners.clear();
+    shared.providerSessionId = null;
+    shared.drain = null;
+    shared.projects.clear();
+    shared.projectPaths.clear();
+    shared.currentProject = { name: "current", path: "/repo/current" };
+    shared.detect.mockReset();
+    shared.resolve.mockReset();
+    shared.currentView.sent = [];
+    shared.dictionary = [];
+    shared.corrected = [];
+    shared.correctionModel = undefined;
+    shared.listFiles.mockReset().mockResolvedValue([]);
+    owner = makeSender();
+    // The starting view's project, where references resolve without a terminal.
+    shared.projects.set(owner.id, "project-a");
+    shared.projectPaths.set("project-a", "/repo/a");
+    ptyClient = {
+      hasTerminal: vi.fn(() => false),
+      getTerminalProjectId: vi.fn(() => null),
+      getTerminalAsync: vi.fn(async () => null),
+    };
+    const win = {
+      webContents: {
+        send: vi.fn((channel: string, payload: unknown) =>
+          shared.currentView.sent.push({ channel, payload })
+        ),
+      },
+      isDestroyed: vi.fn(() => false),
+    };
+    cleanup = registerVoiceInputHandlers({
+      mainWindow: win as unknown as Electron.BrowserWindow,
+      ptyClient,
+    } as unknown as Parameters<typeof registerVoiceInputHandlers>[0]);
+  });
+
+  afterEach(() => {
+    cleanup?.();
+    vi.useRealTimers();
+  });
+
+  describe("code names", () => {
+    const TERMINAL = "term-1";
+    const correct = (rawText: string) =>
+      getHandler(CHANNELS.VOICE_INPUT_CORRECT)(
+        { sender: owner },
+        { rawText, sessionId: "a", terminalId: TERMINAL }
+      );
+    // A terminal main tracks, owned by `projectId`.
+    const ownedBy = (projectId: string) => {
+      ptyClient.hasTerminal.mockReturnValue(true);
+      ptyClient.getTerminalProjectId.mockReturnValue(projectId);
+    };
+
+    it("tells cleanup the code names a passage spells out, from its repository's files", async () => {
+      ownedBy("project-a");
+      shared.listFiles.mockResolvedValue([
+        "src/services/VoiceRecordingService.ts",
+        "src/styles/dark-mode.css",
+      ]);
+      await start(owner, "a", TERMINAL);
+      await stop(owner, "a");
+      await correct("test the voice recording service in dark mode");
+
+      expect(shared.listFiles).toHaveBeenCalledWith("/repo/a");
+      expect(shared.corrected.at(-1)?.codeNames).toEqual(["VoiceRecordingService"]);
+    });
+
+    it("reads nothing for a terminal another project owns", async () => {
+      ownedBy("project-b");
+      shared.projectPaths.set("project-b", "/repo/b");
+      shared.listFiles.mockResolvedValue(["src/services/VoiceRecordingService.ts"]);
+      await start(owner, "a", TERMINAL);
+      await stop(owner, "a");
+      await correct("test the voice recording service");
+
+      expect(shared.listFiles).not.toHaveBeenCalled();
+      expect(shared.corrected[0]).not.toHaveProperty("codeNames");
+    });
+
+    it("reads nothing for a model whose rules don't know code names", async () => {
+      ownedBy("project-a");
+      shared.correctionModel = "gpt-6-luna";
+      shared.listFiles.mockResolvedValue(["src/services/VoiceRecordingService.ts"]);
+      await start(owner, "a", TERMINAL);
+      await stop(owner, "a");
+      await correct("test the voice recording service");
+
+      expect(shared.listFiles).not.toHaveBeenCalled();
+      expect(shared.corrected[0]).not.toHaveProperty("codeNames");
+    });
+
+    it("cleans up without them when the listing isn't ready in time", async () => {
+      ownedBy("project-a");
+      shared.listFiles.mockReturnValue(new Promise(() => {}));
+      await start(owner, "a", TERMINAL);
+      await stop(owner, "a");
+      await correct("test the voice recording service");
+
+      expect(shared.corrected).toHaveLength(1);
+      expect(shared.corrected[0]).not.toHaveProperty("codeNames");
+    });
+  });
+
+  it("resolves a reference in the final utterance before its stop returns", async () => {
+    await start(owner, "a");
+    const drain = deferred<void>();
+    shared.drain = drain.promise;
+    const detection = deferred<Detected>();
+    shared.detect.mockReturnValueOnce(detection.promise);
+    shared.resolve.mockResolvedValueOnce("src/InputBar.tsx");
+
+    let referencesAtStop: number | null = null;
+    const stopping = stop(owner, "a").then(() => {
+      referencesAtStop = fileReferences().length;
+    });
+    // The drain finishes the final utterance after the stop began.
+    emitComplete("Fix the padding. Link to the input bar component.");
+    drain.resolve();
+    await vi.waitFor(() => expect(shared.detect).toHaveBeenCalledOnce());
+    expect(referencesAtStop).toBeNull();
+
+    detection.resolve([{ description: "input bar component" }]);
+    await stopping;
+
+    const [complete] = completes();
+    expect(complete!.transcriptId).toEqual(expect.any(String));
+    expect(referencesAtStop).toBe(1);
+    expect(fileReferences()).toEqual([
+      {
+        sessionId: "a",
+        transcriptId: complete!.transcriptId,
+        references: [{ description: "input bar component", path: "src/InputBar.tsx" }],
+      },
+    ]);
+    expect(owner.sent.map((m) => m.payload)).toContainEqual({
+      sessionId: "a",
+      reason: "stopped",
+      report: expect.objectContaining({ completedSegments: 1 }),
+    });
+  });
+
+  it("detects references in the words the heard-as rules wrote", async () => {
+    shared.dictionary = [{ term: "Zustand", heardAs: ["zoo stand"], source: "manual", addedAt: 1 }];
+    await start(owner, "a");
+    shared.detect.mockResolvedValueOnce([{ description: "Zustand store" }]);
+    shared.resolve.mockResolvedValueOnce("src/store.ts");
+
+    emitComplete("Link to the zoo stand store.");
+    await stop(owner, "a");
+
+    expect(completes()[0]!.text).toBe("Link to the Zustand store.");
+    expect(shared.detect).toHaveBeenCalledWith(
+      "Link to the Zustand store.",
+      expect.anything(),
+      expect.anything()
+    );
+    expect(fileReferences()).toEqual([
+      expect.objectContaining({
+        references: [{ description: "Zustand store", path: "src/store.ts" }],
+      }),
+    ]);
+  });
+
+  it("sends references to the view that started the session, not the app's current view", async () => {
+    await start(owner, "a");
+    shared.detect.mockResolvedValueOnce([{ description: "router" }]);
+    shared.resolve.mockResolvedValueOnce("src/router.ts");
+
+    emitComplete("Link to the router.");
+    await stop(owner, "a");
+
+    expect(fileReferences()).toEqual([
+      expect.objectContaining({
+        sessionId: "a",
+        references: [{ description: "router", path: "src/router.ts" }],
+      }),
+    ]);
+    expect(shared.currentView.sent).toEqual([]);
+  });
+
+  it("resolves nothing in a view that owns no project, never the app's current one", async () => {
+    const unowned = makeSender();
+    await start(unowned, "a");
+    shared.detect.mockResolvedValueOnce([{ description: "router" }]);
+    shared.resolve.mockResolvedValue("src/router.ts");
+
+    emitComplete("Link to the router.");
+    await stop(unowned, "a");
+
+    expect(shared.detect).toHaveBeenCalledOnce();
+    expect(shared.resolve).not.toHaveBeenCalled();
+    expect(fileReferences(unowned)).toEqual([]);
+    expect(shared.currentView.sent).toEqual([]);
+  });
+
+  it("resolves nothing for a terminal outside the view, not even in the view's own project", async () => {
+    await getHandler(CHANNELS.VOICE_INPUT_START)({ sender: owner }, "a", { outsideView: true });
+    shared.detect.mockResolvedValue([{ description: "router" }]);
+    shared.resolve.mockResolvedValue("src/router.ts");
+
+    emitComplete("Link to the router.");
+    await stop(owner, "a");
+
+    expect(shared.detect).not.toHaveBeenCalled();
+    expect(shared.resolve).not.toHaveBeenCalled();
+    expect(fileReferences()).toEqual([]);
+    expect(completes()).toHaveLength(1);
+    expect(completes()[0]).toMatchObject({ text: expect.stringContaining("router") });
+    expect(completes()[0]!.transcriptId).toBeUndefined();
+  });
+
+  it("sends nothing for a reference that didn't resolve", async () => {
+    await start(owner, "a");
+    shared.detect.mockResolvedValueOnce([{ description: "the old API" }]);
+    shared.resolve.mockResolvedValueOnce(null);
+
+    emitComplete("Link to the old API.");
+    await stop(owner, "a");
+
+    expect(shared.resolve).toHaveBeenCalledOnce();
+    expect(fileReferences()).toEqual([]);
+  });
+
+  it("sends misses beside a hit, so the hit can't take a missed command's words", async () => {
+    await start(owner, "a");
+    shared.detect.mockResolvedValueOnce([
+      { description: "router tests" },
+      { description: "router" },
+    ]);
+    shared.resolve.mockResolvedValueOnce(null).mockResolvedValueOnce("src/router.ts");
+
+    emitComplete("Link to the router tests, then link to the router.");
+    await stop(owner, "a");
+
+    expect(fileReferences()[0]!.references).toEqual([
+      { description: "router tests", path: null },
+      { description: "router", path: "src/router.ts" },
+    ]);
+  });
+
+  it.each([
+    "open a PR",
+    "that is open source",
+    "keep the file open",
+    "at least one test file",
+    "at the top of the file",
+    "open the settings dialog",
+  ])("never tags or detects ordinary speech: %s", async (text) => {
+    await start(owner, "a");
+
+    emitComplete(text);
+    await stop(owner, "a");
+
+    expect(completes()).toEqual([expect.not.objectContaining({ transcriptId: expect.anything() })]);
+    expect(shared.detect).not.toHaveBeenCalled();
+  });
+
+  it("drops a description the transcript doesn't contain", async () => {
+    await start(owner, "a");
+    shared.detect.mockResolvedValueOnce([{ description: "auth service" }]);
+
+    emitComplete("Link to the router.");
+    await stop(owner, "a");
+
+    expect(shared.resolve).not.toHaveBeenCalled();
+    expect(fileReferences()).toEqual([]);
+  });
+
+  it("searches the dictated terminal's worktree", async () => {
+    shared.projects.set(owner.id, "project-a");
+    shared.projectPaths.set("project-a", "/repo/a");
+    ptyClient.hasTerminal.mockReturnValue(true);
+    ptyClient.getTerminalProjectId.mockReturnValue("project-a");
+    ptyClient.getTerminalAsync.mockResolvedValue({
+      id: "term-1",
+      worktreeId: "/repo/a-worktrees/feature",
+      cwd: "/repo/a-worktrees/feature/packages/app",
+    });
+    await start(owner, "a", "term-1");
+    shared.detect.mockResolvedValueOnce([{ description: "router" }]);
+    shared.resolve.mockResolvedValueOnce("src/router.ts");
+
+    emitComplete("Link to the router.");
+    await stop(owner, "a");
+
+    expect(ptyClient.getTerminalAsync).toHaveBeenCalledWith("term-1");
+    expect(shared.resolve).toHaveBeenCalledWith(
+      expect.objectContaining({ cwd: "/repo/a-worktrees/feature", description: "router" })
+    );
+    expect(fileReferences()).toHaveLength(1);
+  });
+
+  it("falls back to the owning project, not the current one, for a terminal another project owns", async () => {
+    shared.projects.set(owner.id, "project-a");
+    shared.projectPaths.set("project-a", "/repo/a");
+    ptyClient.hasTerminal.mockReturnValue(true);
+    ptyClient.getTerminalProjectId.mockReturnValue("project-b");
+    await start(owner, "a", "term-1");
+    shared.detect.mockResolvedValueOnce([{ description: "router" }]);
+    shared.resolve.mockResolvedValueOnce("src/router.ts");
+
+    emitComplete("Link to the router.");
+    await stop(owner, "a");
+
+    expect(ptyClient.getTerminalAsync).not.toHaveBeenCalled();
+    expect(shared.resolve).toHaveBeenCalledWith(expect.objectContaining({ cwd: "/repo/a" }));
+  });
+
+  it("resolves nothing when the owning project is gone", async () => {
+    shared.projects.set(owner.id, "project-gone");
+    await start(owner, "a");
+    shared.detect.mockResolvedValueOnce([{ description: "router" }]);
+
+    emitComplete("Link to the router.");
+    await stop(owner, "a");
+
+    expect(shared.resolve).not.toHaveBeenCalled();
+    expect(fileReferences()).toEqual([]);
+  });
+
+  it("keeps references in spoken order when they resolve out of order", async () => {
+    await start(owner, "a");
+    shared.detect.mockResolvedValueOnce([{ description: "router" }, { description: "store" }]);
+    const router = deferred<string | null>();
+    shared.resolve.mockReturnValueOnce(router.promise).mockResolvedValueOnce("src/store.ts");
+
+    emitComplete("Link to the router and link to the store.");
+    const stopping = stop(owner, "a");
+    await vi.waitFor(() => expect(shared.resolve).toHaveBeenCalledTimes(2));
+    router.resolve("src/router.ts");
+    await stopping;
+
+    expect(fileReferences()[0]!.references).toEqual([
+      { description: "router", path: "src/router.ts" },
+      { description: "store", path: "src/store.ts" },
+    ]);
+  });
+
+  it("stops waiting on a reference once its job deadline passes", async () => {
+    vi.useFakeTimers();
+    await start(owner, "a");
+    // Neither call honours the abort, as a slow local search wouldn't.
+    shared.detect.mockReturnValueOnce(new Promise<Detected>(() => {}));
+
+    emitComplete("Link to the router.");
+    let stopped = false;
+    const stopping = stop(owner, "a").then(() => {
+      stopped = true;
+    });
+    await vi.advanceTimersByTimeAsync(5_900);
+    expect(stopped).toBe(false);
+    await vi.advanceTimersByTimeAsync(200);
+    await stopping;
+
+    expect(stopped).toBe(true);
+    expect(shared.detect.mock.calls[0]![2]!.aborted).toBe(true);
+    expect(fileReferences()).toEqual([]);
+  });
+
+  it("abandons an older session's references when its own view starts a newer one", async () => {
+    await start(owner, "a");
+    const detection = deferred<Detected>();
+    shared.detect.mockReturnValueOnce(detection.promise);
+    shared.resolve.mockResolvedValue("src/router.ts");
+
+    emitComplete("Link to the router.");
+    await vi.waitFor(() => expect(shared.detect).toHaveBeenCalledOnce());
+    await start(owner, "b");
+    expect(shared.detect.mock.calls[0]![2]!.aborted).toBe(true);
+    detection.resolve([{ description: "router" }]);
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(fileReferences()).toEqual([]);
+    expect(shared.currentView.sent).toEqual([]);
+  });
+
+  it("delivers an older session's references to its own view when another view's start supersedes it", async () => {
+    const other = makeSender();
+    await start(owner, "a");
+    const detection = deferred<Detected>();
+    shared.detect.mockReturnValueOnce(detection.promise);
+    shared.resolve.mockResolvedValue("src/router.ts");
+
+    emitComplete("Link to the router.");
+    await vi.waitFor(() => expect(shared.detect).toHaveBeenCalledOnce());
+    let started = false;
+    const starting = start(other, "b").then(() => {
+      started = true;
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    // The newer provider waits for the drain, which includes these references.
+    expect(started).toBe(false);
+    expect(shared.providerSessionId).toBe("a");
+    expect(shared.detect.mock.calls[0]![2]!.aborted).toBe(false);
+
+    detection.resolve([{ description: "router" }]);
+    await starting;
+
+    expect(fileReferences()).toEqual([
+      expect.objectContaining({
+        sessionId: "a",
+        references: [{ description: "router", path: "src/router.ts" }],
+      }),
+    ]);
+    expect(owner.sent.map((m) => m.payload)).toContainEqual({
+      sessionId: "a",
+      reason: "superseded",
+      report: expect.objectContaining({ completedSegments: 1 }),
+    });
+    expect(fileReferences(other)).toEqual([]);
+    expect(shared.currentView.sent).toEqual([]);
+    expect(shared.providerSessionId).toBe("b");
+  });
+});

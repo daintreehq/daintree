@@ -10,7 +10,6 @@ export { useContextInjection } from "./useContextInjection";
 export type { UseContextInjectionReturn, InjectionStatus } from "./useContextInjection";
 
 export { useErrors } from "./useErrors";
-export { useHibernationNotifications } from "./useHibernationNotifications";
 export { useIdleBackgroundCloseNotifications } from "./useIdleBackgroundCloseNotifications";
 export { useDiskSpaceWarnings } from "./useDiskSpaceWarnings";
 
@@ -77,10 +76,10 @@ export { useWindowNotifications } from "./useWindowNotifications";
 export { useWatchedPanelNotifications } from "./useWatchedPanelNotifications";
 
 export { useReEntrySummary } from "./useReEntrySummary";
-export type { ReEntrySummaryState, WorktreeRow } from "./useReEntrySummary";
+export type { ReEntrySummaryState, SummaryRow } from "./useReEntrySummary";
 
 export { useWorktreeActions } from "./useWorktreeActions";
-export type { UseWorktreeActionsOptions, WorktreeActions } from "./useWorktreeActions";
+export type { WorktreeActions } from "./useWorktreeActions";
 
 export { useMenuActions } from "./useMenuActions";
 

@@ -59,14 +59,17 @@ vi.mock("@/services/terminal/TerminalResizeController", () => ({
   getXtermCellDimensions: () => cell.current,
 }));
 const pane = vi.hoisted(() => ({ events: [] as string[] }));
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     holdGeometry: (id: string) => {
       pane.events.push(`hold ${id}`);
       return () => pane.events.push(`release ${id}`);
     },
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("@xterm/addon-webgl", () => {
   throw new Error("no WebGL in jsdom");
@@ -78,6 +81,11 @@ import {
   type CanopyStreamState,
 } from "../CanopyTerminal";
 import type { CanopyTerminalApi } from "../canopyHostSource";
+
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
+
+// The service mock never evaluates the real module, so nothing builds it.
+await loadTerminalService();
 
 let pushChunk: (chunk: CanopyTerminalData) => void = () => {};
 let openStream: (view: CanopyTerminalView) => void = () => {};
@@ -387,7 +395,16 @@ describe("CanopyTerminal", () => {
     unmount();
     await open({ watchId: 7, snapshot: { data: "", cols: 80, rows: 24 } });
     expect(pane.events).toEqual([]);
-    expect(window.electron.canopy.unwatchTerminal).toHaveBeenCalled();
+    // Only the stream it was answered with: never a view-wide release, which
+    // would end a stream another pane opened meanwhile (#14454).
+    expect(vi.mocked(window.electron.canopy.unwatchTerminal).mock.calls).toEqual([[7]]);
+  });
+
+  it("lets go of its own stream by id when it unmounts", async () => {
+    const { unmount } = mount();
+    await open({ watchId: 9, snapshot: { data: "", cols: 80, rows: 24 } });
+    unmount();
+    expect(vi.mocked(window.electron.canopy.unwatchTerminal).mock.calls).toEqual([[9]]);
   });
 
   it("says it couldn't show a terminal the host had no screen for, with the way to see it", async () => {
@@ -455,6 +472,33 @@ describe("CanopyTerminal", () => {
       };
     }
 
+    it("sizes a terminal its host says it takes the size of, at the user's font, freezing no pane here (#14497)", async () => {
+      cell.current = { width: 8, height: 16 };
+      const remote = remoteApi();
+      const view = mountRemote(remote);
+      view.frame.getBoundingClientRect = paneRect;
+      await act(async () =>
+        remote.opens[0]!({
+          watchId: 3,
+          snapshot: { data: "S", cols: 200, rows: 60 },
+          holdsSize: true,
+        })
+      );
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, PAST_SIZE_SETTLE_MS));
+      });
+      expect(remote.api.terminalResize).toHaveBeenCalledWith(3, 99, 30);
+      // Its pane is frozen on its own host, never in this view.
+      expect(pane.events).toEqual([]);
+      // Drawn at the host's grid until the host says the PTY took the new one.
+      expect(xterm.current!.resizes).toEqual([[200, 60]]);
+      await act(async () =>
+        remote.push({ kind: "resize", watchId: 3, runId: "run-1", cols: 99, rows: 30 })
+      );
+      expect(xterm.current!.resizes.at(-1)).toEqual([99, 30]);
+      expect(terminalResize).not.toHaveBeenCalled();
+    });
+
     it("follows the size the host's own window gave the terminal, freezing and sizing nothing", async () => {
       cell.current = { width: 8, height: 16 };
       const remote = remoteApi();
@@ -462,6 +506,7 @@ describe("CanopyTerminal", () => {
       // A pane that fits a grid other than the PTY's: the window's own host would ask for it.
       view.frame.getBoundingClientRect = paneRect;
       await act(async () =>
+        // A host that predates sizing says nothing of it, and is never asked.
         remote.opens[0]!({ watchId: 3, snapshot: { data: "S", cols: 90, rows: 30 } })
       );
       await act(async () => {
@@ -474,6 +519,30 @@ describe("CanopyTerminal", () => {
       expect(xterm.current!.writes).toEqual(["S", "x"]);
       // Nor does the local window's own channel hear any of it.
       expect(terminalResize).not.toHaveBeenCalled();
+    });
+
+    it("sizes and freezes by the terminal's own id when the route says the run is this machine's", async () => {
+      cell.current = { width: 8, height: 16 };
+      const remote = remoteApi();
+      remote.api.ownSizedId = (key) => (key === "own:run-1" ? "run-1" : null);
+      const view = render(
+        <CanopyTerminal
+          runId="own:run-1"
+          spawnedAt={100}
+          api={remote.api}
+          reconnecting={false}
+          onStreamChange={() => {}}
+        />
+      );
+      view.container.querySelector("[data-canopy-terminal]")!.getBoundingClientRect = paneRect;
+      await act(async () =>
+        remote.opens[0]!({ watchId: 3, snapshot: { data: "S", cols: 90, rows: 30 } })
+      );
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, PAST_SIZE_SETTLE_MS));
+      });
+      expect(pane.events).toEqual(["hold run-1"]);
+      expect(remote.api.terminalResize).toHaveBeenCalledWith(3, 99, 30);
     });
 
     it("stops input while the link is down, says so, and starts again from a fresh screen", async () => {

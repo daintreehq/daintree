@@ -11,6 +11,7 @@ import { join, sep } from "node:path";
 const shellMock = vi.hoisted(() => ({
   openPath: vi.fn<(targetPath: string) => Promise<string>>(async () => ""),
   showItemInFolder: vi.fn<(targetPath: string) => void>(),
+  openExternal: vi.fn<(url: string, options?: unknown) => Promise<void>>(async () => {}),
 }));
 
 // On Linux the default app opens through xdg-open rather than shell.openPath;
@@ -46,7 +47,15 @@ vi.mock("../PluginActionAuditService.js", () => ({
 }));
 
 import { PluginService } from "../PluginService.js";
-import { _resetPluginCapabilityServicesForTest } from "../plugin-capability/instances.js";
+import {
+  _resetPluginCapabilityServicesForTest,
+  getPluginCapabilityConsentService,
+} from "../plugin-capability/instances.js";
+import {
+  PLUGIN_EXTERNAL_LINK_BURST,
+  resetPluginExternalLinkBudget,
+} from "../plugin/pluginExternalLinks.js";
+import type { PluginCapabilityConsentDecision } from "../../../shared/types/pluginCapabilityConsent.js";
 import type { PluginManifest, PluginHostApi } from "../../../shared/types/plugin.js";
 
 let svc: PluginService;
@@ -100,6 +109,8 @@ beforeEach(async () => {
   shellMock.openPath.mockClear();
   shellMock.openPath.mockResolvedValue("");
   shellMock.showItemInFolder.mockClear();
+  shellMock.openExternal.mockClear();
+  resetPluginExternalLinkBudget();
   baseDir = mkdtempSync(join(tmpdir(), "plugin-sys-"));
   const pluginsRoot = join(baseDir, "plugins");
   mkdirSync(pluginsRoot, { recursive: true });
@@ -375,5 +386,173 @@ describe("host.system with a driver on another machine", () => {
     frontend = { kind: "none", reason: "vacant" };
     await expect(host.system.openPath(target)).resolves.toBeUndefined();
     expect(shellMock.openPath).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("host.system.openExternal", () => {
+  let frontend: PluginFrontend = { kind: "local" };
+
+  beforeEach(() => {
+    frontend = { kind: "local" };
+    _resetPluginFrontendRoutingForTesting();
+    setPluginFrontendRouter({ resolve: () => frontend, onChange: () => () => {} });
+  });
+
+  afterEach(() => {
+    _resetPluginFrontendRoutingForTesting();
+  });
+
+  const allowAll = () => {
+    const bridge = vi.fn(async () => "approved-and-pin" as PluginCapabilityConsentDecision);
+    getPluginCapabilityConsentService().setConsentBridge(bridge);
+    return bridge;
+  };
+
+  it("opens a normalised https link after the first-use prompt, and asks once per site", async () => {
+    const bridge = allowAll();
+    const host = registerPlugin([]);
+
+    await host.system.openExternal("https://Example.com/a?b=1");
+    await host.system.openExternal("https://example.com/other");
+
+    expect(shellMock.openExternal).toHaveBeenCalledTimes(2);
+    expect(shellMock.openExternal.mock.calls[0]?.[0]).toBe("https://example.com/a?b=1");
+    expect(bridge).toHaveBeenCalledTimes(1);
+    expect(bridge).toHaveBeenCalledWith(
+      expect.objectContaining({ capability: "external-link", site: "example.com" })
+    );
+
+    await host.system.openExternal("https://other.example/");
+    expect(bridge).toHaveBeenCalledTimes(2);
+  });
+
+  it("refuses anything but plain https before it prompts or opens", async () => {
+    const bridge = allowAll();
+    const host = registerPlugin([]);
+    for (const url of [
+      "http://example.com",
+      "file:///etc/hosts",
+      "daintree://x",
+      "mailto:a@example.com",
+      "https://user:pw@example.com",
+      "nonsense",
+    ]) {
+      await expect(host.system.openExternal(url)).rejects.toThrow(/^INVALID_URL:/);
+    }
+    await expect(host.system.openExternal(5 as unknown as string)).rejects.toThrow(/INVALID_URL/);
+    expect(bridge).not.toHaveBeenCalled();
+    expect(shellMock.openExternal).not.toHaveBeenCalled();
+  });
+
+  it("rejects PERMISSION_REQUIRED on a denial, opens nothing, and asks again next time", async () => {
+    const bridge = vi.fn(async () => "rejected" as PluginCapabilityConsentDecision);
+    getPluginCapabilityConsentService().setConsentBridge(bridge);
+    const host = registerPlugin([]);
+
+    await expect(host.system.openExternal("https://example.com")).rejects.toThrow(
+      /PERMISSION_REQUIRED/
+    );
+    await expect(host.system.openExternal("https://example.com")).rejects.toThrow(
+      /PERMISSION_REQUIRED/
+    );
+    expect(bridge).toHaveBeenCalledTimes(2);
+    expect(shellMock.openExternal).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when no prompt can be shown", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const host = registerPlugin([]);
+      await expect(host.system.openExternal("https://example.com")).rejects.toThrow(
+        /PERMISSION_REQUIRED/
+      );
+      expect(shellMock.openExternal).not.toHaveBeenCalled();
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  it("rate limits per plugin, even when every prompt is denied", async () => {
+    const bridge = vi.fn(async () => "rejected" as PluginCapabilityConsentDecision);
+    getPluginCapabilityConsentService().setConsentBridge(bridge);
+    const host = registerPlugin([]);
+    for (let i = 0; i < PLUGIN_EXTERNAL_LINK_BURST; i++) {
+      await expect(host.system.openExternal(`https://s${i}.example`)).rejects.toThrow(
+        /PERMISSION_REQUIRED/
+      );
+    }
+    await expect(host.system.openExternal("https://late.example")).rejects.toThrow(
+      /^RATE_LIMITED:/
+    );
+    expect(bridge).toHaveBeenCalledTimes(PLUGIN_EXTERNAL_LINK_BURST);
+  });
+
+  it("bounds the links waiting on one unanswered prompt", async () => {
+    let release!: (d: PluginCapabilityConsentDecision) => void;
+    const bridge = vi.fn(
+      () => new Promise<PluginCapabilityConsentDecision>((resolve) => (release = resolve))
+    );
+    getPluginCapabilityConsentService().setConsentBridge(bridge);
+    const host = registerPlugin([]);
+
+    const waiting = Array.from({ length: PLUGIN_EXTERNAL_LINK_BURST }, () =>
+      host.system.openExternal("https://example.com/x")
+    );
+    await expect(host.system.openExternal("https://example.com/y")).rejects.toThrow(
+      /^RATE_LIMITED:/
+    );
+    expect(shellMock.openExternal).not.toHaveBeenCalled();
+
+    release("approved-once");
+    await Promise.all(waiting);
+    expect(shellMock.openExternal).toHaveBeenCalledTimes(PLUGIN_EXTERNAL_LINK_BURST);
+  });
+
+  it("opens nothing when the plugin is unloaded while its prompt is open", async () => {
+    let release!: (d: PluginCapabilityConsentDecision) => void;
+    getPluginCapabilityConsentService().setConsentBridge(
+      () => new Promise<PluginCapabilityConsentDecision>((resolve) => (release = resolve))
+    );
+    const host = registerPlugin([]);
+    const pending = host.system.openExternal("https://example.com");
+    const rejected = expect(pending).rejects.toThrow(/PLUGIN_UNLOADED/);
+
+    svc.unloadPlugin("acme.sys");
+    release("approved-and-pin");
+
+    await rejected;
+    expect(shellMock.openExternal).not.toHaveBeenCalled();
+  });
+
+  it("is refused for a driver on another machine, before any prompt", async () => {
+    const bridge = allowAll();
+    frontend = {
+      kind: "remote",
+      endpoint: { request: vi.fn(), isClosed: () => false } as unknown as ClientEndpoint,
+    };
+    const host = registerPlugin([]);
+    await expect(host.system.openExternal("https://example.com")).rejects.toMatchObject({
+      code: "UNSUPPORTED",
+    });
+    expect(bridge).not.toHaveBeenCalled();
+    expect(shellMock.openExternal).not.toHaveBeenCalled();
+  });
+
+  it("audits the open without the URL", async () => {
+    allowAll();
+    const host = registerPlugin([]);
+    await host.system.openExternal("https://example.com/secret-token-123");
+    expect(appendSpy).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(appendSpy.mock.calls[0])).not.toContain("secret-token-123");
+    expect(appendSpy.mock.calls[0]?.[0]).toMatchObject({ channel: "plugin:system-open-external" });
+  });
+
+  it("rejects PLUGIN_UNLOADED after unload", async () => {
+    allowAll();
+    const host = registerPlugin([]);
+    svc.unloadPlugin("acme.sys");
+    await expect(host.system.openExternal("https://example.com")).rejects.toThrow(
+      /PLUGIN_UNLOADED/
+    );
   });
 });

@@ -1,3 +1,5 @@
+import type { TerminalFocusTarget } from "@/components/Terminal/terminalFocus";
+
 /**
  * Panel-id → "focus your primary target" handoff, keyed by panel id and blind
  * to panel kind. Each mounted panel owns exactly one entry: TerminalPane
@@ -5,12 +7,15 @@
  * ContentPanel registers the panel root for every non-PTY kind, and ReviewPane
  * (which bypasses ContentPanel) registers its own container.
  *
+ * A caller that needs one surface of an agent pane rather than its primary
+ * target names it; panels with a single target ignore the name.
+ *
  * Handlers report whether a live target actually took focus. Callers use that
  * to decide whether a focus handoff completed — a panel whose focus target is
  * not mounted yet (lazy chunk still loading, terminal with no live xterm)
  * returns `false` rather than silently swallowing the request.
  */
-type FocusHandler = () => boolean;
+type FocusHandler = (surface?: TerminalFocusTarget) => boolean;
 
 const registry = new Map<string, FocusHandler>();
 
@@ -26,6 +31,6 @@ export function registerPanelFocusHandler(id: string, handler: FocusHandler): ()
 }
 
 /** Returns whether a live focus target accepted the handoff. */
-export function focusPanelInput(id: string): boolean {
-  return registry.get(id)?.() ?? false;
+export function focusPanelInput(id: string, surface?: TerminalFocusTarget): boolean {
+  return registry.get(id)?.(surface) ?? false;
 }

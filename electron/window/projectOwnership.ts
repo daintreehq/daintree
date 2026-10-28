@@ -140,7 +140,24 @@ export function releaseCachedOwner(
     return { ...owner, state: "activating" };
   }
   if (owner.projectViewManager.releaseCachedView(workspaceKey)) return null;
+  // Still coming back in the background there (#12320, #13932): an open the
+  // person asked for outranks a restore nobody is looking at, as it does in
+  // the restoring window itself, rather than failing until the boot settles.
+  if (
+    isBackgroundRestoring(owner.projectViewManager, workspaceKey) &&
+    owner.projectViewManager.abandonBackgroundRestore(workspaceKey)
+  ) {
+    return null;
+  }
   throw cachedViewBusy(projectName);
+}
+
+function isBackgroundRestoring(pvm: ProjectViewManager, workspaceKey: string): boolean {
+  try {
+    return pvm.getAllViews().some((v) => v.projectId === workspaceKey && v.state === "loading");
+  } catch {
+    return false;
+  }
 }
 
 /** Bring a window to the front, restoring it first if it was minimized. */

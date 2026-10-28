@@ -1,13 +1,12 @@
 import os from "node:os";
+import { app } from "electron";
+import { BUILD_COMMIT } from "../buildGate.js";
 import {
   getFleetSnapshotService,
   getProjectStatsService,
 } from "../../ipc/handlers/projectCrud/index.js";
 import { createDriveLeaseGate, getDriveLeaseService } from "../../services/DriveLeaseService.js";
-import {
-  createLeaseTargetResolvers,
-  describeTerminalForScope,
-} from "../../services/driveLeaseTargetResolvers.js";
+import { createLeaseTargetResolvers } from "../../services/driveLeaseTargetResolvers.js";
 import { getIpcDispatcher } from "../../ipc/dispatcher.js";
 import {
   notifyMcpDriveTargetChange,
@@ -17,13 +16,14 @@ import type { AttachedClientInfo } from "../../../shared/types/ipc/hostMode.js";
 import { attachHostFiles, installHostFileService } from "../files/hostInstall.js";
 import { attachHostUploads, installHostUploadService } from "../files/uploadHostInstall.js";
 import { getLocalHandshakeInfo } from "../handshakeInfo.js";
-import { admitHybridHostLegs } from "../hybrid/index.js";
+import { admitHybridHostLegs, installNotificationPolicyHost } from "../hybrid/index.js";
 import { Lane } from "../link/frames.js";
 import { ControlKind, type LinkClientInfo } from "../link/messages.js";
 import type { LinkSession } from "../link/session.js";
 import { attachHostPluginAssets, installPluginHost } from "../plugins/install.js";
 import { installPluginParityHost } from "../plugins/parity/install.js";
 import { installSettingsCopyHost } from "../settingsCopy/install.js";
+import { installSettingsControlHost } from "../settingsControl/install.js";
 import { installHostPortService } from "../ports/hostPorts.js";
 import { installProjectsHost } from "../projects/hostInstall.js";
 import { getRemoteService, registerRemoteService } from "../runtime.js";
@@ -34,18 +34,29 @@ import {
 } from "../terminal/hostAttach.js";
 import { attachWorktreePortBridge, detachWorktreePortBridge } from "../worktreePort/attach.js";
 import { HostServer } from "./HostServer.js";
+import { getHostPreviousEnd } from "../../services/hostPreviousEnd.js";
 import { hostLaunchCommand, hostLocation } from "./hostLocation.js";
 import type { HostSocketLocation } from "./hostSocketPath.js";
 import { initRemoteHostsHost } from "./initHost.js";
-import { installHostMetricsHost } from "../metrics/hostMetricsHost.js";
+import {
+  installHostMetricsHost,
+  installLinkActivityHost,
+  installProcessInventoryHost,
+} from "../metrics/hostMetricsHost.js";
+import { composeLinkActivity } from "./linkActivity.js";
 import { installCanopyHost } from "../canopy/hostInstall.js";
+import { installDeviceAnswerHost } from "../deviceAnswer/hostInstall.js";
+import { installVoicePaneHost } from "../voice/hostInstall.js";
 import { installAssistantSenderHost } from "../assistant/hostSenders.js";
-import { installHostMcpRelay } from "../assistant/hostMcpRelay.js";
+import { installHostMcpRelay, relayCallerOf } from "../assistant/hostMcpRelay.js";
 import { getHelpAssistantSettings } from "../../ipc/handlers/helpAssistant.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import { observeAgents } from "../metrics/hostSources.js";
 import type { RemoteViewEndpoint } from "./RemoteViewEndpoint.js";
 import { createRemoteScopeGate } from "../../ipc/channelRemoteScope.js";
+import { createLogger } from "../../utils/logger.js";
+
+const logger = createLogger("main:hostListener");
 
 declare module "../runtime.js" {
   interface RemoteServices {
@@ -93,12 +104,12 @@ function replaySnapshots(endpoint: RemoteViewEndpoint): void {
   void import("../../services/PluginService.js")
     .then((m) => m.pluginService.pushSnapshotToEndpoint(endpoint))
     .catch((error: unknown) => {
-      console.warn("[RemoteHosts] Plugin snapshot for a remote view failed:", error);
+      logger.warn("Plugin snapshot for a remote view failed", { error });
     });
   void import("../../services/runHistory/runHistoryService.js")
     .then((m) => m.pushRunHistorySnapshotToEndpoint(endpoint))
     .catch((error: unknown) => {
-      console.warn("[RemoteHosts] Run history snapshot for a remote view failed:", error);
+      logger.warn("Run history snapshot for a remote view failed", { error });
     });
 }
 
@@ -156,6 +167,7 @@ async function buildHostListener(
     hostName: os.hostname(),
     launchCommand: hostLaunchCommand(),
     observeWorkingAgents: async () => (await observeAgents())?.working ?? null,
+    previousEnd: getHostPreviousEnd(),
   });
   teardowns.push(() => server.close());
   teardowns.push(registerRemoteService("hostServer", server));
@@ -168,10 +180,16 @@ async function buildHostListener(
 
   teardowns.push(admitHybridHostLegs());
 
+  // Each attached Shell's own alert choices, for what this host sends its views (#14701).
+  teardowns.push(installNotificationPolicyHost(server));
   // Summaries to every attached Shell, and the overview's and fleet's session methods.
   teardowns.push(await installHostMetricsHost(server));
   // Canopy for Shells reading this host from a view bound elsewhere.
   teardowns.push(installCanopyHost(server));
+  // Devices paired with those Shells answering this host's agents, under its own lease.
+  teardowns.push(installDeviceAnswerHost(server));
+  // A Shell dictating into one of this host's panes reads its context here (#14782).
+  teardowns.push(installVoicePaneHost(server));
   // The sender each Shell proves, for the tools this host runs for its
   // assistants, and what v0.44 Shells still read of their retired exchanges (#13496).
   teardowns.push(await installAssistantSenderHost(server));
@@ -180,16 +198,14 @@ async function buildHostListener(
     senders: () => getRemoteService("assistantSenderSessions"),
     acceptsRemoteControl: () => getHelpAssistantSettings().acceptRemoteControl,
     hasProject: async (projectId) => projectStore.getProjectById(projectId) !== null,
-    openSession: async ({
-      tier,
-      projectId,
-      linkSessionId,
-      senderId,
-      helpSessionId,
-      shellName,
-      deliverNotices,
-      requestApproval,
-    }) => {
+    throwawayRuns: () => getRemoteService("hostThrowawayRuns") ?? null,
+    // Loaded on the first read: a host no Shell's assistant lists reads none.
+    readAgents: async (options) => {
+      const { getLocalAgentDirectory } =
+        await import("../../services/assistants/localAgentDirectory.js");
+      return getLocalAgentDirectory().read(options);
+    },
+    openSession: async (spec) => {
       const [{ mcpServerService }, { helpSessionService }] = await Promise.all([
         import("../../services/McpServerService.js"),
         import("../../services/HelpSessionService.js"),
@@ -198,16 +214,9 @@ async function buildHostListener(
       // its assistants for another machine's (#13496).
       await helpSessionService.ensureAssistantControl();
       return mcpServerService.openRelaySession({
-        tier,
-        workspaceId: projectId,
-        caller: {
-          linkSessionId,
-          senderId,
-          helpSessionId,
-          shellName,
-          deliverNotices,
-          requestApproval,
-        },
+        tier: spec.tier,
+        workspaceId: spec.projectId,
+        caller: relayCallerOf(spec),
       });
     },
     retirePrincipal: (senderId, helpSessionId) => {
@@ -216,15 +225,12 @@ async function buildHostListener(
           mcpServerService.retireRelayPrincipal(senderId, helpSessionId)
         )
         .catch((error: unknown) => {
-          console.warn("[RemoteHosts] Couldn't retire a relay principal:", error);
+          logger.warn("Couldn't retire a relay principal", { error });
         });
     },
-    dropLinkNotices: (linkSessionId) => {
-      void import("../../services/McpServerService.js")
-        .then(({ mcpServerService }) => mcpServerService.dropRelayLinkNotices(linkSessionId))
-        .catch((error: unknown) => {
-          console.warn("[RemoteHosts] Couldn't drop an ended link's notices:", error);
-        });
+    watchingNoticeCalls: async (senderId, helpSessionId) => {
+      const { mcpServerService } = await import("../../services/McpServerService.js");
+      return mcpServerService.relayNoticeCallsWatching(senderId, helpSessionId);
     },
   });
   teardowns.push(() => relay.dispose());
@@ -237,11 +243,16 @@ async function buildHostListener(
   teardowns.push(() => uploads.dispose());
   // Port forwards and project moves are per session, not per endpoint.
   teardowns.push(installHostPortService(server));
-  teardowns.push(installProjectsHost(server));
+  // A Shell's assistant bringing a project here asks under the same setting (#14140).
+  teardowns.push(
+    installProjectsHost(server, undefined, () => getHelpAssistantSettings().acceptRemoteControl)
+  );
   // Plugin inventory for attached Shells, and installs one sends on request.
   teardowns.push(installPluginParityHost(server));
   // Settings an attached Shell copies here, previewed and applied on request.
   teardowns.push(installSettingsCopyHost(server));
+  // This machine's own settings, read and changed by name when a Shell asks (#14167).
+  teardowns.push(installSettingsControlHost(server));
   // Plugin prompts go to the project's driving frontend; view bundles are
   // served per endpoint alongside its other streams.
   teardowns.push(installPluginHost());
@@ -253,15 +264,10 @@ async function buildHostListener(
   // Only the holder changes a project: the channels that do are refused to
   // everyone else, from a link or from this machine's own views, on whichever
   // project the call targets.
-  teardowns.push(
-    getIpcDispatcher().setLeaseGate(createDriveLeaseGate(lease, createLeaseTargetResolvers()))
-  );
+  const resolvers = createLeaseTargetResolvers();
+  teardowns.push(getIpcDispatcher().setLeaseGate(createDriveLeaseGate(lease, resolvers)));
   // A remote view reads only its own project's terminals, images and history.
-  teardowns.push(
-    getIpcDispatcher().setScopeGate(
-      createRemoteScopeGate(createLeaseTargetResolvers(), describeTerminalForScope)
-    )
-  );
+  teardowns.push(getIpcDispatcher().setScopeGate(createRemoteScopeGate(resolvers)));
   teardowns.push(
     setMcpDriveTargetResolver((projectId) => {
       const target = lease.getDriveTarget(projectId);
@@ -279,7 +285,8 @@ async function buildHostListener(
     host.sessionHost.onTransportChange((endpointIds, attached) => {
       lease.noteEndpointTransport(endpointIds, attached);
       // The holder can stay the same while it goes from live to reserved and
-      // back, which the lease does not announce.
+      // back, which the lease tells only the project's views, not its holder
+      // listeners.
       notifyMcpDriveTargetChange();
     })
   );
@@ -373,6 +380,38 @@ async function buildHostListener(
     })
   );
 
+  // What a Shell's view of this host shows of its links, drivers and attached Shells.
+  teardowns.push(
+    installLinkActivityHost(server, () => {
+      const { version, commit } = getLocalHandshakeInfo();
+      return composeLinkActivity({
+        now: now(),
+        listeningSince: server.listeningSince,
+        version,
+        commit,
+        history: server.linkHistory(),
+        leases: lease.snapshotLeases(),
+        projectName: (projectId) => projectStore.getProjectById(projectId)?.name ?? null,
+        sessions: server.sessions.map((ctx) => ({
+          sessionId: ctx.sessionId,
+          client: ctx.client,
+          connectedAt: connectedAtBySession.get(ctx.sessionId) ?? now(),
+        })),
+      });
+    })
+  );
+
+  // What a Shell's Processes view of this host lists, read only when it asks.
+  teardowns.push(
+    installProcessInventoryHost(server, async () => {
+      const [{ readLocalProcessInventory }, { getPtyClient }] = await Promise.all([
+        import("../../services/localProcessInventory.js"),
+        import("../../window/serviceRefs.js"),
+      ]);
+      return readLocalProcessInventory(getPtyClient);
+    })
+  );
+
   const listener: HostListener = {
     socketPath: location.socketPath,
     isListening: () => !stopped && server.isListening,
@@ -429,7 +468,12 @@ async function buildHostListener(
   if (stopped) return listener;
   try {
     await server.listen();
-    console.log("[RemoteHosts] Host mode listening");
+    logger.info("Host mode listening", {
+      version: app.getVersion(),
+      buildCommit: BUILD_COMMIT,
+      pid: process.pid,
+      platform: process.platform,
+    });
   } catch (error) {
     // A stop during startup closes the server under listen(); that is not a failure.
     if (stopped) return listener;

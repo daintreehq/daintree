@@ -2,6 +2,8 @@ import type { SerializedTerminalSnapshot } from "../../../shared/types/terminal.
 import { Lane } from "../link/frames.js";
 import { InteractiveKind } from "../link/messages.js";
 import type { LinkSession } from "../link/session.js";
+import { createLogger } from "../../utils/logger.js";
+import { createKeyedLogLimiter } from "../../utils/keyedLogLimiter.js";
 import { safePost, type PortLike } from "./ports.js";
 import {
   MAX_RESUME_TERMINALS,
@@ -12,6 +14,9 @@ import {
   type TerminalInPortMessage,
   type TerminalResumeRequest,
 } from "./protocol.js";
+
+const logger = createLogger("main:ClientTerminalRelay");
+const logLimiter = createKeyedLogLimiter();
 
 /**
  * Client side of one remote view's terminal stream. The view gets a local
@@ -384,6 +389,7 @@ export class ClientTerminalRelay {
     try {
       const forget: string[] = [];
       let answered = true;
+      let failedCalls = 0;
       await Promise.all(
         chunks.map(async (chunk) => {
           try {
@@ -398,6 +404,7 @@ export class ClientTerminalRelay {
             // Without an answer there is no sequence to wait for: adopt whatever
             // arrives next rather than drop it as out of order forever.
             answered = false;
+            failedCalls++;
             for (const t of chunk) forget.push(t.id);
           }
         })
@@ -406,6 +413,24 @@ export class ClientTerminalRelay {
       if (this.session !== session) return;
       if (reset && answered) this.resetOwed = false;
       for (const id of forget) this.positions.delete(id);
+      if (forget.length > 0) {
+        const suppressedCount = logLimiter.take(`resume-forgot:${this.endpointId}:${answered}`);
+        if (suppressedCount !== null) {
+          logger.info(
+            answered
+              ? "Host did not know terminals this client resumed; their positions were dropped"
+              : "Terminal resume got no answer; positions were dropped",
+            {
+              endpointId: this.endpointId,
+              requested: terminals.length,
+              forgotten: forget.length,
+              failedCalls,
+              resetRequested: reset,
+              suppressedCount,
+            }
+          );
+        }
+      }
     } finally {
       this.resumesInFlight--;
     }

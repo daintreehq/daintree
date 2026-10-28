@@ -33,6 +33,15 @@ export function fn<T extends (...args: never[]) => unknown>(value: T | undefined
 // Numbers from untyped JS, by what the prop means. Anything that is not a
 // finite number in range is unset, and the component's default applies.
 
+/** Any finite number. */
+export function finite(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+export function clamp(value: number, lo: number, hi: number): number {
+  return Math.min(hi, Math.max(lo, value));
+}
+
 /** A strictly positive amount: a dimension, a step. */
 export function positive(value: unknown, max: number): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0 && value <= max

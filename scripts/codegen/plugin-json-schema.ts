@@ -4,7 +4,7 @@
 //
 // Two files because the manifest schema is origin-keyed and the two origins
 // genuinely disagree: a project plugin must declare `scope` and is refused
-// eight contribution types an installed plugin may use. One merged file would
+// seven contribution types an installed plugin may use. One merged file would
 // have to accept the union, which is the one thing neither origin does.
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -37,7 +37,7 @@ const TARGETS: Target[] = [
     origin: "project",
     title: "Daintree project plugin manifest",
     intro:
-      'Manifest for a Daintree plugin committed into a project\'s .daintree/plugins/ directory. Such a plugin must declare "scope": "project", and ten contribution types available to installed plugins are refused here.',
+      'Manifest for a Daintree plugin committed into a project\'s .daintree/plugins/ directory. Such a plugin must declare "scope": "project", and seven contribution types available to installed plugins are refused here.',
   },
 ];
 
@@ -48,17 +48,27 @@ const TARGETS: Target[] = [
 // otherwise a manifest that validates here and is still refused at load looks
 // like a host bug.
 const UNENCODED_RULES = [
-  "A panel view's id must equal the id of a declared panel. A location: \"settings\" view is the exception: at most one per plugin, with an id no panel uses. A surface's viewId must name a declared panel view whose panel is not a PTY panel.",
+  'A panel view\'s id must equal the id of a declared panel. A location: "settings" view is the exception: at most one per plugin, with an id no panel uses; so is a location: "fileEditor" view, with an id no panel uses. A surface\'s viewId must name a declared panel view whose panel is not a PTY panel.',
+  "A toolbar button declares exactly one of actionId or popover. A popover's viewId must name a declared panel view whose panel is not a PTY panel.",
   "A panel's menu may name only this plugin's own actions (written \"<plugin name>.<id>\", matching a declared command when the plugin declares commands), each at most once, and a hasPty panel may not have menu entries.",
   'A "project" database needs "scope": "project" and the "fs:project-write" capability; path applies only to a "project" database.',
   'A database query\'s sql must be one statement: for a "read" query, one SELECT, WITH or VALUES statement with no INSERT, UPDATE, DELETE or REPLACE; for a "write" query, one INSERT, REPLACE, UPDATE or DELETE statement, optionally after WITH. Its named placeholders must match its params exactly, and positional (?) placeholders are refused. Query names must be unique across all of a plugin\'s databases, may not be database_schema or database_query, and number at most 16 in all; with any tools the plugin registers, at most 16 together.',
   'A secret setting (type "secret" or secret: true) may not declare a default, since it would ship in plugin.json.',
-  'Under project scope, menuItems, agents, skills, recipes, fileDecorationProviders, fileEditors, processTools, mcpServers, tours and forgeProviders are refused, and "scope": "project" is required.',
+  'Under project scope, menuItems, agents, processTools, themes, forgeProviders and projectTemplates are refused, mcpServers are refused unless every one is named by a contributes.agentMcp[].source, and "scope": "project" is required.',
+  "An agentMcp source must name a declared mcpServers id; its tools may not repeat a name or a serverTool, may not use database_schema, database_query or a declared query name, and count toward the 16-tool budget with declared queries; on an endpoint with groups every tool names a declared group, and on one without, none does.",
+  'A fileEditors entry names exactly one of slot or view. A slot is accepted only for built-in plugins and takes no mode or paths; a view must name one of the plugin\'s location: "fileEditor" views and needs a mode. Every entry declares extensions, paths or both, and paths are accepted only under "scope": "project". default is accepted only under "scope": "project", on a view-backed "mode": "edit" entry with paths, and a pattern may be the default for one entry of a plugin.',
+  'A contextMenus entry may declare kind, extensions or paths only at location "file", and extensions may not be combined with kind "folder". Paths are globs relative to the worktree root.',
+  'A terminalLinks entry sets exactly one of pattern or url, and its actionId must be one of this plugin\'s own actions (written "<plugin name>.<id>", matching a declared command when the plugin declares commands). A pattern must compile as a JavaScript regular expression with the u flag, match no empty text, have at most 16 capture groups, and use no backreference, lookaround or named group; a repeated group may not itself repeat or alternate, and the product of every quantifier\'s maximum (512 for an unbounded one) and every alternation\'s branch count may not exceed 1,000,000. ignoreCase applies only to a pattern. A url host must be a lowercase public domain with at least two labels: no IP address, port, path or wildcard, and nothing loopback, private or local-only. A pathPrefix starts with "/" and has no query, fragment or dot segments.',
   "The reserved daintree.* publisher namespace is accepted only for built-in plugins.",
-  "previewTools and guestAdapters are accepted only for built-in plugins, each id must be namespaced under the plugin's own name, and a preview tool's guestAdapter must name an adapter the same manifest declares.",
   "A command id may not collide with a built-in action id, and some built-in ids refuse plugin dispatch outright.",
   "An agent's session-id resume must use {sessionId} exactly once across its args, and nowhere else; a project-scoped resume's args may not contain it. A sessionIdPattern must compile as a JavaScript regular expression with exactly one capture group.",
+  "assistantKnowledge needs contributes.agentMcp or contributes.databases, must declare instructions, skills or references, and its skill and reference ids must each be unique.",
   "A tour's panelKind must name a declared panel; its chapter ids must be unique; every cue and caption must fall inside its chapter's duration; and a remote chapter audioUrl must be https on a host listed in that tour's audioHosts.",
+  "A command's resultSchema must compile as JSON Schema 2020-12 (or draft-07, when its $schema says so) with every reference resolving inside it and no $async; the command is refused when it registers otherwise.",
+  "worksWith may not repeat an entry or name the plugin itself.",
+  'A services.provides name must be the plugin\'s own name followed by ".<name>", its version a semver version, and its methods unique; a services.requires name must belong to another plugin and its range be a valid semver range; neither list may repeat a name.',
+  'application needs "scope": "project" and engines.daintree. Its destination "home" needs contributes.surfaces.projectHome, and arrangement is allowed only with destination "home"; sidebarViewId and settingsViewId must name declared views at location "sidebar" and "settings"; welcomeTour.id a declared tour with no panelKind; firstWorkflow a declared command of kind "command"; each requiredTools entry a declared agentMcp id; and presentation only features and levels the host offers.',
+  'An eventRoutes entry routes each event at most once, and its command must be the id of a contributes.commands entry that is not danger "confirm". Routing "agentWaiting" requires the "agent:read" capability.',
 ];
 
 function build({ file, origin, title, intro }: Target): string {

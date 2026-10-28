@@ -1,3 +1,5 @@
+import type { AgentDirectorySubject } from "../agentDirectory.js";
+
 /**
  * Narrow, display-only projection of the `ActionContext` snapshot pinned to a
  * help session at provision time (#8772). Returned by
@@ -52,3 +54,53 @@ export interface HelpAdoptedLane {
  */
 export type HelpAdoptResult =
   { status: "adopted"; lane: HelpAdoptedLane } | { status: "absent" } | { status: "occupied" };
+
+export type GlobalAssistantPhase = "absent" | "launching" | "running";
+
+export interface GlobalAssistantAttachmentInfo {
+  attachmentId: string;
+  windowId: number;
+}
+
+/**
+ * What a window may know of the installation's global assistant (#14159).
+ * Never the bearer, the command line or the environment.
+ */
+export interface GlobalAssistantState {
+  phase: GlobalAssistantPhase;
+  /** Bumps with every run, so a panel can tell a new session from the one it showed. */
+  generation: number;
+  agentId: string | null;
+  terminalId: string | null;
+  attachments: GlobalAssistantAttachmentInfo[];
+  /** The attachment whose input is accepted, or null when nobody holds it. */
+  inputOwner: string | null;
+  /** Bumps whenever the input owner changes; a write quotes the epoch it held. */
+  inputEpoch: number;
+}
+
+/**
+ * The global assistant as a window is told it: the lifecycle, and while it
+ * runs, the exact subject — terminal and PTY launch generation — a view watches
+ * it by. A subject that no longer matches is a run that ended or was replaced.
+ */
+export interface GlobalAssistantView extends GlobalAssistantState {
+  subject: AgentDirectorySubject | null;
+}
+
+/**
+ * The input ownership a window held when it opened its view of the global
+ * session. Input through that view is accepted only while the very same
+ * ownership stands: once input moves, even back to this window, the view is
+ * read-only and anything still queued through it is refused.
+ */
+export interface GlobalAssistantInputStamp {
+  attachmentId: string;
+  inputEpoch: number;
+}
+
+/** A window's reader on the global assistant, and the input epoch it holds. */
+export interface GlobalAssistantAttachment {
+  attachmentId: string;
+  state: GlobalAssistantView;
+}

@@ -15,6 +15,9 @@ export interface DeviceAnswerAuditEntry {
   deviceId: string;
   deviceName: string;
   runId: string;
+  /** The connected host the run waits on, as named when answered; absent for this machine's own. */
+  hostId?: string;
+  hostName?: string;
   /** The option the device picked, by its label. */
   label: string;
   outcome: "answered" | "refused";

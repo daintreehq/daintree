@@ -21,9 +21,12 @@ import type { HostSessionContext, HostSessionExpired } from "./HostServer.js";
 import {
   DescribeProjectPayloadSchema,
   EmptyPayloadSchema,
+  EndpointReconcilePayloadSchema,
   LinkMethod,
   MAX_LISTED_PROJECTS,
   type EndpointAgentActivityPayload,
+  type EndpointMcpBindingPayload,
+  type EndpointResidencyPayload,
   type EndpointAssistantPayload,
   type EndpointResyncPayload,
   type EndpointResyncReason,
@@ -96,6 +99,21 @@ export interface SessionHostOptions {
    * endpoint reads as having none.
    */
   agentActive?: (endpoint: RemoteViewEndpoint) => boolean;
+  /**
+   * Whether the user granted this endpoint's project residency on this host.
+   * The grant lives in this host's store, so the Shell's eviction pass can only
+   * honour it if this host tells it (#13933). Read synchronously on every
+   * refresh; absent, every endpoint reads as having none.
+   */
+  keepResident?: (endpoint: RemoteViewEndpoint) => boolean;
+  /**
+   * Whether an external MCP session on this host is bound, over a live
+   * transport, to this endpoint's project. The session runs here, so the
+   * Shell's eviction pass can only rank the view with its own bound views if
+   * this host tells it (#14228). Read synchronously on every refresh; absent,
+   * every endpoint reads as having none.
+   */
+  mcpBindingLive?: (endpoint: RemoteViewEndpoint) => boolean;
   describeProject?: (projectId: string) => ProjectDescription | null;
   listProjects?: () => HostProjectList;
   eventsHighWaterBytes?: number;
@@ -134,11 +152,18 @@ const MAX_REMEMBERED_CLIENTS = 64;
 
 /**
  * What the host tells a Shell about each of its views, for the Shell's
- * eviction pass: a live assistant pinned to the view (#13349), and an active
- * agent in the view's project (#13359).
+ * eviction pass: a live assistant pinned to the view (#13349), an active
+ * agent in the view's project (#13359), the user's keep-resident grant for
+ * the view's project (#13933), and an MCP session bound to the view's project
+ * (#14228).
  */
-type EndpointAnswer = "assistant" | "agents";
-const ENDPOINT_ANSWERS: readonly EndpointAnswer[] = ["assistant", "agents"];
+type EndpointAnswer = "assistant" | "agents" | "resident" | "mcpBinding";
+const ENDPOINT_ANSWERS: readonly EndpointAnswer[] = [
+  "assistant",
+  "agents",
+  "resident",
+  "mcpBinding",
+];
 
 interface SessionState {
   sessionId: string;
@@ -151,6 +176,20 @@ interface SessionState {
   /** Client endpoint ids that missed events and must be told to resync. */
   stale: Set<string>;
   staleReason: EndpointResyncReason;
+  /**
+   * Live endpoints an ENDPOINT_OPEN named on the current link, and those it
+   * created rather than found. A resumed Shell repeats its opens before it
+   * says which endpoints it holds, so an open it made after saying so (which
+   * the control lane can put ahead of the call) is told from one it lost.
+   */
+  openedOnLink: Set<string>;
+  createdOnLink: Set<string>;
+  /**
+   * Opens the current link refused at the endpoint cap, as the Shell has
+   * since moved them (a close drops one), for its reconcile to retry once
+   * closing what it no longer holds has made room.
+   */
+  refusedOnLink: Map<string, { projectId: string | null; openId: string | undefined }>;
   /**
    * What the Shell was last told about each endpoint, per answer, by client
    * endpoint id. An endpoint missing here is owed an answer: cleared when the
@@ -346,6 +385,24 @@ export class SessionHost {
     for (const state of this.states.values()) this.announce(state, "agents");
   }
 
+  /**
+   * A residency grant may have been set or cleared: tell each attached Shell
+   * about every endpoint whose answer changed since it was last told.
+   */
+  refreshResidency(): void {
+    if (this.disposed) return;
+    for (const state of this.states.values()) this.announce(state, "resident");
+  }
+
+  /**
+   * An MCP session may have bound to a project or dropped: tell each attached
+   * Shell about every endpoint whose answer changed since it was last told.
+   */
+  refreshMcpBindings(): void {
+    if (this.disposed) return;
+    for (const state of this.states.values()) this.announce(state, "mcpBinding");
+  }
+
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
@@ -381,8 +438,16 @@ export class SessionHost {
         resyncing: false,
         stale: new Set(),
         staleReason: "reattached",
-        told: { assistant: new Map(), agents: new Map() },
-        answerRetry: { assistant: null, agents: null },
+        openedOnLink: new Set(),
+        createdOnLink: new Set(),
+        refusedOnLink: new Map(),
+        told: {
+          assistant: new Map(),
+          agents: new Map(),
+          resident: new Map(),
+          mcpBinding: new Map(),
+        },
+        answerRetry: { assistant: null, agents: null, resident: null, mcpBinding: null },
         overHighWaterTimer: null,
         handle: undefined as unknown as EndpointSessionHandle,
         lastActiveAt: null,
@@ -421,17 +486,21 @@ export class SessionHost {
   private bindLink(state: SessionState, link: LinkSession): void {
     this.unbindLink(state);
     state.link = link;
+    state.openedOnLink.clear();
+    state.createdOnLink.clear();
+    state.refusedOnLink.clear();
     const s = state;
     s.detach.push(
       link.on(Lane.CONTROL, ControlKind.ENDPOINT_OPEN, (body) =>
-        this.openEndpoint(s, body.endpointId, body.projectId)
+        this.openEndpoint(s, body.endpointId, body.projectId, body.openId)
       ),
       link.on(Lane.CONTROL, ControlKind.ENDPOINT_REBIND, (body) =>
         this.rebindEndpoint(s, body.endpointId, body.projectId)
       ),
-      link.on(Lane.CONTROL, ControlKind.ENDPOINT_CLOSE, (body) =>
-        s.endpoints.get(body.endpointId)?.close("client-closed")
-      ),
+      link.on(Lane.CONTROL, ControlKind.ENDPOINT_CLOSE, (body) => {
+        s.refusedOnLink.delete(body.endpointId);
+        s.endpoints.get(body.endpointId)?.close("client-closed");
+      }),
       link.onWritable(() => this.maybeFinishResync(s)),
       link.registerCallHandler(LinkMethod.HOST_INFO, EmptyPayloadSchema, () =>
         (this.options.hostInfo ?? defaultHostInfo)()
@@ -454,6 +523,11 @@ export class SessionHost {
       ),
       link.registerCallHandler(LinkMethod.LAST_ACTIVE_PROJECT, EmptyPayloadSchema, () =>
         this.lastActiveProject(s.client)
+      ),
+      link.registerCallHandler(
+        LinkMethod.ENDPOINT_RECONCILE,
+        EndpointReconcilePayloadSchema,
+        ({ endpointIds }) => this.reconcileEndpoints(s, endpointIds)
       ),
       link.onClose(() => {
         if (s.link !== link) return;
@@ -507,12 +581,24 @@ export class SessionHost {
     }
   }
 
-  private openEndpoint(state: SessionState, clientEndpointId: string, projectId: string | null) {
+  private openEndpoint(
+    state: SessionState,
+    clientEndpointId: string,
+    projectId: string | null,
+    openId: string | undefined
+  ) {
     const existing = state.endpoints.get(clientEndpointId);
     if (existing && !existing.isClosed()) {
-      this.rebindEndpoint(state, clientEndpointId, projectId);
-      return;
+      if (openId === undefined || existing.openId === null || existing.openId === openId) {
+        state.openedOnLink.add(clientEndpointId);
+        this.rebindEndpoint(state, clientEndpointId, projectId);
+        return;
+      }
+      // The Shell closed this view and opened it again, and the close was lost
+      // with a dropped link: the reopened view starts afresh, as it would have.
+      existing.close("client-closed");
     }
+    state.refusedOnLink.delete(clientEndpointId);
     if (state.endpoints.size >= this.maxEndpoints) {
       logger.warn("Remote session is at its endpoint cap; ignoring a view", {
         sessionId: state.sessionId,
@@ -520,6 +606,11 @@ export class SessionHost {
         clientEndpointId,
         maxEndpoints: this.maxEndpoints,
       });
+      state.refusedOnLink.set(clientEndpointId, { projectId, openId });
+      const oldest = state.refusedOnLink.keys().next().value;
+      if (state.refusedOnLink.size > this.maxEndpoints && oldest !== undefined) {
+        state.refusedOnLink.delete(oldest);
+      }
       return;
     }
     const endpoint = new RemoteViewEndpoint(
@@ -529,10 +620,13 @@ export class SessionHost {
         clientId: state.client.clientId,
         linkSessionId: state.sessionId,
         projectId,
+        openId,
       },
       this.transportFor(state)
     );
     state.endpoints.set(clientEndpointId, endpoint);
+    state.openedOnLink.add(clientEndpointId);
+    state.createdOnLink.add(clientEndpointId);
     logger.info("Remote view endpoint opened", describeEndpoint(endpoint));
     // A new endpoint has no assistant yet, which is what the Shell assumes.
     // Its project's agents may already be working, so that answer is owed.
@@ -545,6 +639,8 @@ export class SessionHost {
       if (state.endpoints.get(clientEndpointId) === endpoint) {
         state.endpoints.delete(clientEndpointId);
         state.stale.delete(clientEndpointId);
+        state.openedOnLink.delete(clientEndpointId);
+        state.createdOnLink.delete(clientEndpointId);
         for (const answer of ENDPOINT_ANSWERS) state.told[answer].delete(clientEndpointId);
         this.publishFrontendCount();
       }
@@ -554,6 +650,8 @@ export class SessionHost {
     state.lastActiveAt = Date.now();
     this.publishFrontendCount();
     this.announce(state, "agents");
+    this.announce(state, "resident");
+    this.announce(state, "mcpBinding");
     for (const listener of [...this.openedListeners]) {
       try {
         listener(endpoint, state.handle);
@@ -565,7 +663,13 @@ export class SessionHost {
 
   private rebindEndpoint(state: SessionState, clientEndpointId: string, projectId: string | null) {
     const endpoint = state.endpoints.get(clientEndpointId);
-    if (!endpoint || endpoint.isClosed() || endpoint.projectId === projectId) return;
+    if (!endpoint || endpoint.isClosed()) {
+      // Moved since its open was refused: opened where it is now, if room is made.
+      const refused = state.refusedOnLink.get(clientEndpointId);
+      if (refused) refused.projectId = projectId;
+      return;
+    }
+    if (endpoint.projectId === projectId) return;
     logger.info("Remote view endpoint rebound", {
       ...describeEndpoint(endpoint),
       nextProjectId: projectId,
@@ -576,10 +680,45 @@ export class SessionHost {
     state.lastActiveAt = Date.now();
     this.publishFrontendCount();
     // The assistant was the old project's, and the move revokes it. The Shell
-    // drops both answers when the view moves, so the new project's agents are
-    // owed one even when it reads the same as the old project's.
+    // drops the other answers when the view moves, so the new project's are
+    // owed even when they read the same as the old project's.
     state.told.agents.delete(clientEndpointId);
+    state.told.resident.delete(clientEndpointId);
+    state.told.mcpBinding.delete(clientEndpointId);
     for (const answer of ENDPOINT_ANSWERS) this.announce(state, answer);
+  }
+
+  /**
+   * A resumed Shell holds `held` and has repeated each one's open on this
+   * link. Any other endpoint kept for it was closed in a frame the drop lost;
+   * one of `held` this link had to create was opened in one, and its view
+   * missed everything sent since.
+   */
+  private reconcileEndpoints(state: SessionState, held: string[]): null {
+    const holds = new Set(held);
+    const lost = [...state.endpoints.values()].filter(
+      (endpoint) =>
+        !holds.has(endpoint.clientEndpointId) &&
+        !state.openedOnLink.has(endpoint.clientEndpointId) &&
+        !endpoint.isClosed()
+    );
+    if (lost.length > 0) {
+      logger.info("Closing remote view endpoints whose close a dropped link lost", {
+        sessionId: state.sessionId,
+        clientId: state.client.clientId,
+        clientEndpointIds: lost.map((endpoint) => endpoint.clientEndpointId),
+      });
+    }
+    // The ordinary close, so the lease, streams and rings go as they would have.
+    for (const endpoint of lost) endpoint.close("client-closed");
+    // Opens the lost ones crowded out of the endpoint cap get their room now,
+    // before the views' stream requests queued behind this call arrive.
+    for (const [id, refused] of [...state.refusedOnLink]) {
+      this.openEndpoint(state, id, refused.projectId, refused.openId);
+    }
+    for (const id of holds) if (state.createdOnLink.has(id)) state.stale.add(id);
+    if (state.stale.size > 0 && !state.resyncing) this.announceResync(state);
+    return null;
   }
 
   private transportFor(state: SessionState): RemoteEndpointTransport {
@@ -708,7 +847,7 @@ export class SessionHost {
   }
 
   private announce(state: SessionState, answer: EndpointAnswer): void {
-    const read = answer === "assistant" ? this.options.assistantLive : this.options.agentActive;
+    const read = this.answerReader(answer);
     const link = state.link;
     if (!read || !link || !link.isOpen) return;
     const told = state.told[answer];
@@ -727,22 +866,7 @@ export class SessionHost {
       changed.push({ endpointId: id, projectId: endpoint.projectId, value });
     }
     if (changed.length === 0) return;
-    const call =
-      answer === "assistant"
-        ? link.call(LinkMethod.ENDPOINT_ASSISTANT, {
-            endpoints: changed.map(({ endpointId, projectId, value }) => ({
-              endpointId,
-              projectId,
-              live: value,
-            })),
-          } satisfies EndpointAssistantPayload)
-        : link.call(LinkMethod.ENDPOINT_AGENT_ACTIVITY, {
-            endpoints: changed.map(({ endpointId, projectId, value }) => ({
-              endpointId,
-              projectId,
-              active: value,
-            })),
-          } satisfies EndpointAgentActivityPayload);
+    const call = this.callAnswer(link, answer, changed);
     void call.catch((error: unknown) => {
       // A Shell from before this call refuses it, and always will.
       const code = (error as { code?: unknown } | null)?.code;
@@ -763,6 +887,62 @@ export class SessionHost {
       retry.unref?.();
       state.answerRetry[answer] = retry;
     });
+  }
+
+  private answerReader(
+    answer: EndpointAnswer
+  ): ((endpoint: RemoteViewEndpoint) => boolean) | undefined {
+    switch (answer) {
+      case "assistant":
+        return this.options.assistantLive;
+      case "agents":
+        return this.options.agentActive;
+      case "resident":
+        return this.options.keepResident;
+      case "mcpBinding":
+        return this.options.mcpBindingLive;
+    }
+  }
+
+  private callAnswer(
+    link: LinkSession,
+    answer: EndpointAnswer,
+    changed: Array<{ endpointId: string; projectId: string | null; value: boolean }>
+  ): Promise<unknown> {
+    switch (answer) {
+      case "assistant":
+        return link.call(LinkMethod.ENDPOINT_ASSISTANT, {
+          endpoints: changed.map(({ endpointId, projectId, value }) => ({
+            endpointId,
+            projectId,
+            live: value,
+          })),
+        } satisfies EndpointAssistantPayload);
+      case "agents":
+        return link.call(LinkMethod.ENDPOINT_AGENT_ACTIVITY, {
+          endpoints: changed.map(({ endpointId, projectId, value }) => ({
+            endpointId,
+            projectId,
+            active: value,
+          })),
+        } satisfies EndpointAgentActivityPayload);
+      case "resident":
+        return link.call(LinkMethod.ENDPOINT_RESIDENCY, {
+          endpoints: changed.map(({ endpointId, projectId, value }) => ({
+            endpointId,
+            projectId,
+            keepResident: value,
+          })),
+        } satisfies EndpointResidencyPayload);
+      case "mcpBinding":
+        return link.call(LinkMethod.ENDPOINT_MCP_BINDING, {
+          endpoints: changed.map(({ endpointId, projectId, value }) => ({
+            endpointId,
+            projectId,
+            liveBinding: value,
+          })),
+        } satisfies EndpointMcpBindingPayload);
+    }
   }
 
   private expire(sessionId: string, cause: RemoteEndpointCloseCause): void {

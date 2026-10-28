@@ -10,8 +10,8 @@ import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
  * HTML-to-PDF rendering behind `host.documents.renderPdf`. Everything here is
  * about the render: option validation, the hardened hidden window, and the
  * request filter. Path containment, capability gates, consent and the write
- * itself stay in `PluginHostFactory`, next to `host.fs.writeFile`, so the two
- * writers cannot drift apart.
+ * itself stay in `pluginHostDocumentsApi.ts`, built on the `host.fs.writeFile`
+ * helpers in `pluginHostFsApi.ts`, so the two writers cannot drift apart.
  */
 
 export const MAX_PDF_BYTES = 50 * 1024 * 1024;

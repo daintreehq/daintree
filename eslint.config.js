@@ -474,8 +474,8 @@ export default tseslint.config(
           // saves, panel docks, undo confirmations). Per CLAUDE.md's notify
           // four-question gate, a success toast is justified only when at
           // least one of three escape hatches is present: `transient: true`
-          // (one-shot, no inbox row written — fine for ambient confirmations
-          // whose recovery surface is the UI itself), `priority: "low"`
+          // (one-shot, no inbox row written — for news the user can't see for
+          // themselves, never to confirm their own visible action), `priority: "low"`
           // (history-only, no toast — fine for background completions), or
           // a `correlationId` (the success threads into an existing
           // notification group — fine for stateful flows like update-check).
@@ -489,7 +489,7 @@ export default tseslint.config(
           selector:
             "CallExpression:matches([callee.name=/^(notify|addNotification)$/], [callee.property.name=/^(notify|addNotification)$/]) > ObjectExpression:has(> Property[key.name='type'][value.value='success']):not(:has(> Property[key.name='transient'][value.value=true])):not(:has(> Property[key.name='priority'][value.value='low'])):not(:has(> Property[key.name='correlationId']))",
           message:
-            'Unprotected success toast. Success is over-used — fires on routine in-place state changes users can already see. Add one of: `transient: true` (one-shot, no inbox row), `priority: "low"` (history-only), or a `correlationId` (threads into an existing notification group). Or annotate with `// eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok` when the call is deliberate. See #8249.',
+            'Unprotected success toast. Success is over-used. When the user did it and the result is on screen, drop the notify: the change is the confirmation. Otherwise add one of: `transient: true` (one-shot, no inbox row), `priority: "low"` (history-only), or a `correlationId` (threads into an existing notification group). Or annotate with `// eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok` when the call is deliberate. See #8249.',
         },
         {
           // why: routing each notify() through the EVENT_POLICY manifest needs a
@@ -739,6 +739,7 @@ export default tseslint.config(
   {
     files: [
       "src/components/Onboarding/**/*.{ts,tsx}",
+      "src/components/Setup/AgentInputStep.tsx",
       "src/components/Setup/AgentSetupWizard.tsx",
       "src/components/Setup/SystemRequirementsSection.tsx",
       "src/components/Worktree/WorktreeCard/WorktreeDetailsSection.tsx",
@@ -755,11 +756,6 @@ export default tseslint.config(
       "src/components/Terminal/hooks/**/*.{ts,tsx}",
       "src/components/Terminal/inputEditorExtensions/**/*.{ts,tsx}",
       "src/store/terminalInputStore.ts",
-      // The composer's visual-review harness. The restriction here is about
-      // keeping heavy packages out of the app bundle; a `__preview__` entry is
-      // its own Vite entrypoint (`hybrid-input-preview.html`) and never reaches
-      // it, and the harness needs a real `EditorState` to seed a stashed draft.
-      "src/components/Terminal/__preview__/hybridInput.tsx",
     ],
     rules: { "no-restricted-imports": "off" },
   },
@@ -1034,7 +1030,6 @@ export default tseslint.config(
       "electron/ipc/handlers/git-write.ts",
       "electron/ipc/handlers/globalRecipes.ts",
       "electron/ipc/handlers/helpAssistant.ts",
-      "electron/ipc/handlers/hibernation.ts",
       "electron/ipc/handlers/idleTerminals.ts",
       "electron/ipc/handlers/keybinding.ts",
       "electron/ipc/handlers/logs.ts",
@@ -1133,21 +1128,22 @@ export default tseslint.config(
     },
   },
 
-  // SDK boundary guard: forge.js imports in shared/types/plugin.ts must
+  // SDK boundary guard: forge.js imports in shared/types/plugin.ts (and the
+  // domain modules it re-exports from shared/types/plugin/) must
   // be classified in shared/types/plugin-sdk.ts. This is the single gate
   // that prevents forge-internal types from leaking into the public SDK
   // surface unclassified. Existing imports are grandfathered; new ones
   // must be accompanied by a corresponding re-export in plugin-sdk.ts.
   // See #9269, docs/plugins/architecture.md#sdk-surface.
   {
-    files: ["shared/types/plugin.ts"],
+    files: ["shared/types/plugin.ts", "shared/types/plugin/**/*.ts"],
     rules: {
       "no-restricted-imports": [
         "warn",
         {
           patterns: [
             {
-              group: ["./forge.js"],
+              group: ["./forge.js", "../forge.js"],
               message:
                 "Forge types imported here become part of the public SDK surface via PluginManifest/PluginHostApi. New forge imports must be classified and re-exported from shared/types/plugin-sdk.ts. See docs/plugins/architecture.md#sdk-surface and #9269.",
             },
@@ -1339,34 +1335,6 @@ export default tseslint.config(
         allow: { "@/components/Terminal/InlineStatusBanner": ["InlineStatusBanner"] },
         gap: "the conflict strip's Compare must stay focusable while unavailable, and a kit Button can only be natively disabled",
       },
-      {
-        file: "plugins/builtin/sveltekit-builder/renderer/AgentComposer.tsx",
-        allow: {
-          "@/components/ui/select": [
-            "Select",
-            "SelectTrigger",
-            "SelectValue",
-            "SelectContent",
-            "SelectItem",
-            "SelectGroup",
-            "SelectLabel",
-          ],
-        },
-        gap: "the kit Select's options cannot carry item markup (agent marks, two-line call sites) or a content width",
-      },
-      {
-        file: "plugins/builtin/sveltekit-builder/renderer/SiteBuilderSurfaces.tsx",
-        allow: {
-          "@/components/ui/select": [
-            "Select",
-            "SelectTrigger",
-            "SelectValue",
-            "SelectContent",
-            "SelectItem",
-          ],
-        },
-        gap: "the kit Select's options cannot carry a per-item class and title, or a content width",
-      },
     ];
 
     const restrict = (entries) => [
@@ -1383,12 +1351,7 @@ export default tseslint.config(
     return [
       {
         files: ["plugins/builtin/*/renderer/**/*.{ts,tsx}"],
-        ignores: [
-          "**/__tests__/**",
-          "**/__preview__/**",
-          "**/*.{test,spec}.{ts,tsx}",
-          "plugins/builtin/sveltekit-builder/renderer/SiteBuilderButton.tsx",
-        ],
+        ignores: ["**/__tests__/**", "**/__preview__/**", "**/*.{test,spec}.{ts,tsx}"],
         rules: { "no-restricted-imports": restrict(kitCovered) },
       },
       ...kitGaps.map(({ file, allow, gap }) => ({

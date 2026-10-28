@@ -17,6 +17,11 @@ import { resolveMcpDriveTarget } from "./driveTarget.js";
  *
  * Read as a call is admitted and again right before each change it makes, so
  * a view that takes the lease in between stops it.
+ *
+ * A `local` call is one of this machine's own assistants reaching another of
+ * its projects (#14024): every view of this machine's is its own, so it
+ * changes a project anyone here drives, or every project while Host-mode
+ * routing is off, and never one another machine drives.
  */
 export type RelayWriteStanding =
   | { kind: "own-view" }
@@ -26,12 +31,20 @@ export type RelayWriteStanding =
 
 export function relayWriteStanding(
   projectId: string,
-  linkSessionId: string | null
+  linkSessionId: string | null,
+  local = false
 ): RelayWriteStanding {
   const target = resolveMcpDriveTarget(projectId);
-  if (target === null) return { kind: "elsewhere", holderName: null };
+  if (target === null) {
+    return local ? { kind: "own-view" } : { kind: "elsewhere", holderName: null };
+  }
   if (target.state === "vacant") return { kind: "vacant" };
   if (target.state === "unavailable") return { kind: "unavailable" };
+  if (local) {
+    return target.endpoint.kind === "local-view"
+      ? { kind: "own-view" }
+      : { kind: "elsewhere", holderName: target.holderName ?? null };
+  }
   if (linkSessionId !== null && target.endpoint.linkSessionId === linkSessionId) {
     return { kind: "own-view" };
   }

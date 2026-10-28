@@ -15,6 +15,11 @@ import {
 import type { ProjectPluginInfo, ProjectPluginState } from "@shared/types/plugin";
 import type { ReactElement } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import {
+  _resetPluginProjectSurfacesStoreForTest,
+  usePluginProjectSurfacesStore,
+} from "@/store/pluginProjectSurfacesStore";
+import { registerPanelKind, unregisterPanelKind } from "@shared/config/panelKindRegistry";
 
 function render(ui: ReactElement, options?: Omit<RenderOptions, "queries">) {
   return rtlRender(ui, { wrapper: TooltipProvider, ...options });
@@ -23,6 +28,9 @@ function render(ui: ReactElement, options?: Omit<RenderOptions, "queries">) {
 const activateStagedProjectPlugin = vi.fn<(pluginId: string) => Promise<void>>();
 const setProjectPluginTrust = vi.fn<(decision: string) => Promise<void>>();
 const reloadProjectPlugins = vi.fn<() => Promise<void>>();
+const getWorktreeDeleteNotes = vi.fn<(input: { pluginId: string }) => Promise<boolean>>();
+const setWorktreeDeleteNotes =
+  vi.fn<(input: { pluginId: string; enabled: boolean }) => Promise<boolean>>();
 
 function plugin(overrides: Partial<ProjectPluginInfo> & { state: ProjectPluginState }) {
   return {
@@ -48,10 +56,13 @@ beforeEach(() => {
   activateStagedProjectPlugin.mockReset().mockResolvedValue(undefined);
   setProjectPluginTrust.mockReset().mockResolvedValue(undefined);
   reloadProjectPlugins.mockReset().mockResolvedValue(undefined);
+  getWorktreeDeleteNotes.mockReset().mockResolvedValue(true);
+  setWorktreeDeleteNotes.mockReset().mockImplementation(async ({ enabled }) => enabled);
   Object.defineProperty(window, "electron", {
     configurable: true,
     value: {
       plugin: { activateStagedProjectPlugin, setProjectPluginTrust, reloadProjectPlugins },
+      pluginCapability: { getWorktreeDeleteNotes, setWorktreeDeleteNotes },
     },
   });
 });
@@ -59,6 +70,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   __resetProjectPluginStoreForTesting();
+  _resetPluginProjectSurfacesStoreForTest();
 });
 
 describe("ProjectPluginSection load errors", () => {
@@ -88,6 +100,33 @@ describe("ProjectPluginSection load errors", () => {
     );
 
     expect(screen.getAllByRole("listitem")[0]!.textContent).not.toContain("Error");
+  });
+
+  it("offers the worktree delete notes switch for the project's own instance (#13805)", async () => {
+    const instanceId = "project__proj-a__acme.dashboard";
+    render(
+      <ProjectPluginDetailPane
+        plugin={plugin({ state: "active", instanceId, declaresWorktreeDeleteNotes: true })}
+      />
+    );
+    await act(async () => {});
+    expect(getWorktreeDeleteNotes).toHaveBeenCalledWith({ pluginId: instanceId });
+    const toggle = screen.getByTestId("plugin-worktree-delete-notes-switch");
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    await act(async () => {
+      toggle.click();
+    });
+    expect(setWorktreeDeleteNotes).toHaveBeenCalledWith({ pluginId: instanceId, enabled: false });
+  });
+
+  it("has no notes switch for a plugin that declares no check", () => {
+    render(
+      <ProjectPluginDetailPane
+        plugin={plugin({ state: "active", instanceId: "project__proj-a__acme.dashboard" })}
+      />
+    );
+    expect(screen.queryByTestId("plugin-worktree-delete-notes-switch")).toBeNull();
+    expect(getWorktreeDeleteNotes).not.toHaveBeenCalled();
   });
 
   it("renders the real cause in the detail pane", () => {
@@ -194,6 +233,75 @@ describe("ProjectPluginSection", () => {
 
     screen.getAllByRole("listitem")[0]?.querySelector("button")?.click();
     expect(onSelect).toHaveBeenCalledWith(null);
+  });
+});
+
+describe("ProjectPluginDetailPane slot refusals", () => {
+  const WINNER = "project__proj-a__acme.dashboard";
+  const LOSER = "project__proj-a__zeta.board";
+  const winner = plugin({ state: "active", id: "acme.dashboard", instanceId: WINNER });
+  const loser = plugin({
+    state: "active",
+    id: "zeta.board",
+    instanceId: LOSER,
+    displayName: "Zeta Board",
+    dirName: "zeta",
+  });
+
+  function refuse(reason: "outranked" | "unresolved-view") {
+    act(() => {
+      useProjectPluginStore.setState({ plugins: [winner, loser] });
+      usePluginProjectSurfacesStore.setState({
+        slots: {
+          emptyCanvas: {
+            mode: "exclusive",
+            options: [
+              {
+                pluginId: WINNER,
+                scope: "project",
+                value: { kind: "view", viewId: "overview" },
+              },
+            ],
+            defaultOptionId: WINNER,
+            refused: [
+              {
+                slot: "emptyCanvas",
+                pluginId: LOSER,
+                reason,
+                ...(reason === "outranked" ? { heldBy: WINNER } : {}),
+              },
+            ],
+          },
+        },
+      });
+    });
+  }
+
+  it("warns beside a loaded plugin that lost its slot, naming the holder", () => {
+    refuse("outranked");
+    render(<ProjectPluginDetailPane plugin={loser} />);
+
+    const callout = screen.getByTestId("project-plugin-surface-refusal");
+    expect(callout.textContent).toContain("Empty canvas not shown");
+    expect(callout.textContent).toContain("Acme Dashboard also claims it");
+    // A lost slot is not a failed load.
+    expect(screen.queryByText("Error")).toBeNull();
+  });
+
+  it("explains a claim whose view registered nothing", () => {
+    refuse("unresolved-view");
+    render(<ProjectPluginDetailPane plugin={loser} />);
+
+    expect(screen.getByTestId("project-plugin-surface-refusal").textContent).toContain(
+      "didn't register anything Daintree can show"
+    );
+  });
+
+  it("says nothing on the pane of the plugin that holds the slot", () => {
+    refuse("outranked");
+    render(<ProjectPluginDetailPane plugin={winner} />);
+
+    expect(screen.queryByTestId("project-plugin-surface-refusal")).toBeNull();
   });
 });
 
@@ -352,5 +460,59 @@ describe("ProjectPluginDetailPane", () => {
       });
       expect(screen.queryByText("Performance")).toBeNull();
     });
+  });
+});
+
+describe("ProjectPluginDetailPane attention views switch (#13821)", () => {
+  const instanceId = "project__proj-a__acme.dashboard";
+  const getPanelAttention = vi.fn(() => Promise.resolve(false));
+
+  function registerKind(reportsActivity: boolean): void {
+    registerPanelKind({
+      id: "project:proj-a/acme.dashboard/board",
+      name: "Board",
+      iconId: "puzzle",
+      color: "#abcdef",
+      hasPty: false,
+      canRestart: false,
+      canConvert: false,
+      extensionId: instanceId,
+      reportsActivity,
+    });
+  }
+
+  beforeEach(() => {
+    getPanelAttention.mockClear();
+    Object.defineProperty(window, "electron", {
+      configurable: true,
+      value: {
+        plugin: { activateStagedProjectPlugin, setProjectPluginTrust, reloadProjectPlugins },
+        pluginCapability: {
+          getPanelAttention,
+          setPanelAttention: vi.fn((input: { enabled: boolean }) => Promise.resolve(input.enabled)),
+        },
+      },
+    });
+  });
+
+  afterEach(() => {
+    unregisterPanelKind("project:proj-a/acme.dashboard/board");
+  });
+
+  it("offers the switch for this project's instance once it registers a reporting panel", async () => {
+    registerKind(true);
+    render(<ProjectPluginDetailPane plugin={plugin({ state: "active", instanceId })} />);
+
+    expect(screen.getByTestId("plugin-panel-attention-switch")).toBeTruthy();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(getPanelAttention).toHaveBeenCalledWith({ pluginId: instanceId });
+  });
+
+  it("offers nothing when its panels do not report activity", () => {
+    registerKind(false);
+    render(<ProjectPluginDetailPane plugin={plugin({ state: "active", instanceId })} />);
+    expect(screen.queryByTestId("plugin-panel-attention-switch")).toBeNull();
   });
 });

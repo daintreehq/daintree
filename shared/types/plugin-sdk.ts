@@ -23,6 +23,7 @@ export type {
   PanelContribution,
   PanelMenuItemContribution,
   ToolbarButtonContribution,
+  ToolbarButtonPopover,
   MenuItemContribution,
   MenuItemLocation,
   ViewContribution,
@@ -31,18 +32,43 @@ export type {
   PluginCapability,
   BuiltInPluginCapability,
   PluginActionContribution,
+  PluginActionResultSchema,
   KeybindingContribution,
   ContextMenuContribution,
   ContextMenuLocation,
+  TerminalLinkContribution,
+  TerminalLinkUrlContribution,
+  TerminalLinkSubject,
+  TerminalLinkPatternArgs,
+  TerminalLinkUrlArgs,
   PluginManifestScopes,
   PluginNetworkScope,
   PluginFsScope,
   PluginLocalSocketScope,
+  WorktreeDeleteNotesContribution,
 } from "./plugin.js";
 
 // ── View component props ────────────────────────────────────────────
 
-export type { PanelViewProps } from "./plugin.js";
+export type {
+  PanelViewProps,
+  PluginViewHostContext,
+  PluginViewHostKind,
+  PluginSettingsViewContext,
+  PluginSettingsViewFocus,
+  PluginSettingsPageContribution,
+} from "./plugin.js";
+
+// ── Application navigation (view-facing) ───────────────────────────
+
+export type {
+  PluginApplicationNavigationApi,
+  PluginNavigationIntent,
+  PluginNavigationLocation,
+  PluginNavigationParamValue,
+  PluginNavigationRefusal,
+  PluginNavigationResult,
+} from "./plugin.js";
 // A value, not a type: a bundled view marking its own portal container needs
 // the attribute name at runtime. A raw `plugin://` view cannot import this, so
 // `PanelViewProps.styleRootAttributes` carries the same thing as a prop.
@@ -61,13 +87,32 @@ export type {
 
 export type { PluginFocusedPanel, PluginFocusedPanelKind } from "./plugin.js";
 
+// ── Project presence (worker-facing) ────────────────────────────────
+
+export type { PluginProjectPresence, PluginProjectPresenceState } from "./plugin.js";
+
 // ── System wake (worker-facing) ─────────────────────────────────────
 
 export type { PluginSystemWakeEvent } from "./plugin.js";
 
+// ── Event routes (manifest + worker-facing) ─────────────────────────
+
+export type { PluginEventRoute, PluginEventRouteEvent, PluginEventRouteWake } from "./plugin.js";
+
 // ── Manifest root ───────────────────────────────────────────────────
 
-export type { PluginManifest, PluginAuthor } from "./plugin.js";
+export type {
+  PluginManifest,
+  PluginAuthor,
+  AssistantKnowledgeContribution,
+  AssistantKnowledgeEntry,
+  PluginApplicationDescriptor,
+  PluginApplicationDestination,
+  PluginApplicationNavigation,
+  PluginApplicationNavigationParam,
+  PluginApplicationSection,
+  PluginApplicationTourRef,
+} from "./plugin.js";
 
 // ── Activation contract ─────────────────────────────────────────────
 
@@ -86,9 +131,23 @@ export type {
   PluginNotifyAction,
   PluginNotifyOptions,
   PluginNotifyResult,
+  PluginNotifyTarget,
+  PluginTaskApi,
+  PluginTaskHandle,
+  PluginTaskProgress,
+  PluginTaskResult,
+  PluginTaskStartOptions,
   PluginPanelBadge,
+  PluginToolbarButtonRuntimeState,
   PluginContextValue,
   PluginWorktreeCardStatus,
+  PluginWorktreeReviewCheck,
+  PluginWorktreeDeleteNote,
+  WorktreeDeleteNotesProviderDescriptor,
+  WorktreeDeleteNotesProviderImpl,
+  PluginTerminalStatus,
+  PluginPanelActivity,
+  PluginPanelActivityState,
   PluginPanelBadgeColor,
   PluginPanelToolbarItemState,
   PluginQuickPickItem,
@@ -131,10 +190,31 @@ export type {
   PluginPdfMargins,
 } from "./plugin.js";
 
+// ── Artifacts (host.artifacts) ──────────────────────────────────────
+
+export type {
+  PluginArtifact,
+  PluginArtifactApi,
+  PluginArtifactCreateOptions,
+  PluginArtifactDownloadOptions,
+  PluginArtifactDownloadRequest,
+  PluginArtifactImportSource,
+  PluginArtifactListOptions,
+  PluginArtifactProgress,
+  PluginArtifactSource,
+  PluginArtifactUploadOptions,
+  PluginArtifactUploadRequest,
+  PluginArtifactUploadResult,
+} from "./pluginArtifacts.js";
+
 // ── Agent MCP endpoints (host.mcp) ──────────────────────────────────
 
 export type {
   PluginAgentMcpContribution,
+  PluginAgentMcpServerSource,
+  PluginAgentMcpServerSourceTool,
+  PluginAgentMcpToolGroup,
+  PluginAgentMcpToolGroupAccess,
   PluginMcpApi,
   PluginMcpToolDefinition,
   PluginMcpToolAnnotations,
@@ -150,6 +230,32 @@ export type {
   SettingDefinition,
   SettingFieldType,
 } from "./plugin.js";
+
+// ── Account (host.account) ──────────────────────────────────────────
+
+export type {
+  PluginAccountApi,
+  PluginAccountAccessToken,
+  PluginAccountContribution,
+  PluginAccountIdentity,
+  PluginAccountKind,
+  PluginAccountRef,
+  PluginAccountState,
+  PluginAccountTest,
+  PluginConnectionContribution,
+} from "./plugin.js";
+
+// ── Setup checklist (contributes.setup) ─────────────────────────────
+
+export type {
+  PluginSetupStepAction,
+  PluginSetupStepContribution,
+  PluginSetupStepDone,
+} from "./plugin.js";
+
+// ── Project templates (contributes.projectTemplates) ────────────────
+
+export type { ProjectTemplateContribution } from "./plugin.js";
 
 // ── Storage (host.storage) ──────────────────────────────────────────
 
@@ -200,12 +306,25 @@ export type {
   PluginWorktreeStatus,
   PluginWorktreeStatusFile,
   PluginWorktreeFileState,
+  PluginWorktreeGitOperation,
+  PluginWorktreeSetup,
+  PluginWorktreeSetupState,
+  PluginWorktreeSetupStage,
+  PluginWorktreeSetupStepContext,
+  PluginWorktreeSetupStepHandler,
+  WorktreeSetupStepContribution,
 } from "./plugin.js";
 
 // ── Agent observability ─────────────────────────────────────────────
 
 export type { PluginAgentSnapshot } from "./plugin.js";
 export type { AgentState, WaitingReason } from "./agent.js";
+export type {
+  PluginTerminalKind,
+  PluginTerminalLifecycleEvent,
+  PluginTerminalLifecycleEventBase,
+  PluginTerminalLifecycleEventType,
+} from "./plugin.js";
 
 // ── Reading terminal screens (host.terminals) ───────────────────────
 
@@ -220,6 +339,10 @@ export type {
 // constants and the helper are value exports.
 
 export type {
+  PluginAgentInputResult,
+  PluginAgentInterruptResult,
+  PluginAgentKeysInput,
+  PluginAgentKeysResult,
   PluginAgentPane,
   PluginAgentRun,
   PluginAgentsApi,
@@ -227,9 +350,14 @@ export type {
   PluginSendToAgentOptions,
   PluginSendToAgentResult,
   PluginSendToAgentRefusalReason,
+  PluginRunRecipeOptions,
+  PluginRunRecipeResult,
+  PluginRunRecipeRefusalReason,
 } from "./plugin.js";
 export type {
   AgentContextDragPayload,
+  AgentContextReferenceDragPayload,
+  AgentContextDragData,
   AgentContextDataTransfer,
 } from "../utils/agentContextDrag.js";
 export {
@@ -268,11 +396,65 @@ export type {
   FileDecorationContribution,
 } from "./forge.js";
 
-// ── File editor contract (#12323) ───────────────────────────────────
-// Manifest shape only: the editor itself is a built-in renderer view, so no
-// runtime registration API crosses the SDK boundary.
+// ── Quick switcher search providers (#13792) ────────────────────────
 
-export type { FileEditorContribution } from "./plugin.js";
+export type {
+  PluginSearchProviderContribution,
+  PluginSearchResultTarget,
+  PluginSearchResult,
+  PluginSearchContext,
+  PluginSearchProvider,
+} from "./plugin.js";
+
+// ── Element Picker framework providers (#14073) ─────────────────────
+
+export type {
+  ElementPickerDetectionKind,
+  ElementPickerDetectionRule,
+  ElementPickerProviderContribution,
+} from "../elementPicker/providers.js";
+
+// ── Agent composer context provider contract (#13795) ───────────────
+
+export type {
+  ContextProviderContribution,
+  ContextProviderDescriptor,
+  ContextProviderImpl,
+  ContextProviderItem,
+  ContextProviderContent,
+  ContextProviderCallOptions,
+} from "./pluginContextProvider.js";
+
+// ── Services between plugins (#14105) ───────────────────────────────
+
+export type {
+  PluginServiceCallContext,
+  PluginServiceCallOptions,
+  PluginServiceCaller,
+  PluginServiceContract,
+  PluginServiceFailureReason,
+  PluginServiceHandlers,
+  PluginServiceProvideContribution,
+  PluginServiceProviderInfo,
+  PluginServiceRequireContribution,
+  PluginServiceResult,
+  PluginServiceStatus,
+  PluginServicesApi,
+  PluginServicesContribution,
+} from "./pluginServices.js";
+
+// ── File editor contract (#12323, #13809) ───────────────────────────
+// The manifest shape and the host-owned document a `location: "fileEditor"`
+// view receives as `PanelViewProps.fileDocument`.
+
+export type {
+  FileEditorContribution,
+  FileEditorMode,
+  PluginFileDocument,
+  PluginFileDocumentChange,
+  PluginFileDocumentReadResult,
+  PluginFileDocumentSaveResult,
+} from "./plugin.js";
 
 // ── Forge types appearing in worktree projections ───────────────────
 
@@ -297,10 +479,20 @@ export type {
   CreateIssueInput,
   ForgeUser,
   ForgeLabel,
+  ForgeNumberReference,
   NormalizedIssueState,
   RateLimitInfo,
   FileDecoration,
   ChecksCapability,
+  AutoMergeCapability,
+  EnableAutoMergeInput,
+  EnableAutoMergeResult,
+  DisableAutoMergeResult,
+  PRMergeIntent,
+  PRMergeMethod,
+  PRMergeStatus,
+  PRCommitSummary,
+  RepoMergeSettings,
   CheckRun,
   CheckRunStatus,
   CheckRunConclusion,

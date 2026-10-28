@@ -1,3 +1,4 @@
+// eager-import-allow: reads residency grants via store.get during synchronous eviction and host residency decisions, before a workspace can be unloaded
 /**
  * Workspace residency: the user's "keep this one loaded" grant, the record of
  * views eviction has taken, and the authoritative read a bound MCP session uses
@@ -27,7 +28,7 @@ import { getWebContentsForProject } from "../window/webContentsRegistry.js";
 
 /** Why a workspace's last live view went away, as eviction itself classified it. */
 export type WorkspaceEvictionReason =
-  "lru" | "limit-change" | "pressure" | "memory-eviction" | "crash";
+  "lru" | "limit-change" | "pressure" | "idle" | "memory-eviction" | "crash";
 
 /**
  * What a workspace-bound MCP session can learn about its own binding without

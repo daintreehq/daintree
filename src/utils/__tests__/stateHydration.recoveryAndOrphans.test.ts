@@ -1,5 +1,10 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest";
+import {
+  __testing as terminalServiceAccessorTesting,
+  load as loadTerminalService,
+  register as registerTerminalService,
+} from "@/services/terminal/terminalInstanceServiceAccessor";
 
 const appClientMock = {
   hydrate: vi.fn(),
@@ -114,8 +119,8 @@ const initializeBackendTierMock = vi.fn();
 const setGPUHardwareAvailableMock = vi.fn();
 const setTargetSizeMock = vi.fn();
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     fetchAndRestore: fetchAndRestoreMock,
     restoreFetchedState: restoreFetchedStateMock,
     initializeBackendTier: initializeBackendTierMock,
@@ -125,8 +130,11 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     notifyScrollbackRestoreListeners: vi.fn(),
     addInstanceDestroyedListener: vi.fn(() => () => {}),
     notifyRestoreSettledWaiters: vi.fn(),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 const notifyMock = vi.fn().mockReturnValue("notification-id");
 vi.mock("@/lib/notify", () => ({
@@ -144,6 +152,12 @@ function makeMockManagedTerminal(id: string) {
     listeners: [] as Array<() => void>,
   };
 }
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock so the GPU flag forwards straight to it.
+beforeAll(async () => {
+  await loadTerminalService();
+});
 
 describe("hydrateAppState", () => {
   const project = { id: "project-1", path: "/project" };
@@ -738,6 +752,38 @@ describe("hydrateAppState", () => {
 
     expect(setGPUHardwareAvailableMock).toHaveBeenCalledTimes(1);
     expect(setGPUHardwareAvailableMock).toHaveBeenCalledWith(true);
+  });
+
+  it("replays the GPU flag to a terminal service that loads after hydration", async () => {
+    const terminalInstanceService = (
+      await import("@/services/TerminalInstanceService")
+    ).createTerminalPaintPlane();
+    terminalServiceAccessorTesting.reset();
+    appClientMock.hydrate.mockResolvedValue({
+      appState: {
+        terminals: [],
+        sidebarWidth: 350,
+      },
+      terminalConfig,
+      project,
+      agentSettings,
+      gpuWebGLHardware: false,
+    });
+
+    try {
+      await hydrateAppState({
+        addPanel: vi.fn().mockResolvedValue("terminal-id"),
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockResolvedValue(undefined),
+        openDiagnosticsDock: vi.fn(),
+      });
+      expect(setGPUHardwareAvailableMock).not.toHaveBeenCalled();
+    } finally {
+      registerTerminalService(terminalInstanceService);
+    }
+
+    expect(setGPUHardwareAvailableMock).toHaveBeenCalledTimes(1);
+    expect(setGPUHardwareAvailableMock).toHaveBeenCalledWith(false);
   });
 
   describe("settings recovery notifications", () => {

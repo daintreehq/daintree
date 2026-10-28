@@ -21,6 +21,19 @@ describe("recipeOriginLabel (#11860)", () => {
     expect(label).not.toContain("global");
   });
 
+  it("names a project plugin by its manifest id, never its instance key (#13796)", () => {
+    const label = recipeOriginLabel(
+      recipe({
+        origin: {
+          kind: "plugin",
+          pluginId: "project__0123abcd__acme.local",
+          contributionId: "boot",
+        },
+      })
+    );
+    expect(label).toBe("from the acme.local plugin");
+  });
+
   it("distinguishes the three user tiers", () => {
     expect(recipeOriginLabel(recipe())).toContain("global");
     expect(recipeOriginLabel(recipe({ projectId: "p1" }))).toContain("project");
@@ -144,5 +157,21 @@ describe("formatRecipePreviewLines (#11860)", () => {
     expect(joined).toContain("Defines 4 terminals");
     // The commands are still shown — a delete confirm needs real content, not a count.
     expect(joined).toContain("four");
+  });
+});
+
+describe("plugin panel steps and system prompts in the preview (#13797)", () => {
+  it("says a panel step opens a panel and shows an agent's system prompt", () => {
+    const lines = formatRecipePreviewLines(
+      recipe({
+        terminals: [
+          { type: "plugin-panel", panelKindId: "acme.tools.records" },
+          { type: "claude", systemPrompt: "Use the ledger tools." },
+        ],
+      }),
+      { spawns: true }
+    );
+    expect(lines).toContain("1. opens Plugin panel");
+    expect(lines).toContain("   system prompt: Use the ledger tools.");
   });
 });

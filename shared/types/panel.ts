@@ -316,6 +316,13 @@ interface BasePanelData {
    * record it and a reloaded view can rebuild the restore entry.
    */
   backgroundRestoreLocation?: "grid" | "dock";
+  /**
+   * Set while a plugin panel the user docked sits in the grid only because its
+   * kind wasn't registered when it was restored (#13907). The value is the
+   * worktree it was docked with: `null` for none (a `scope: "project"` panel).
+   * `undefined` means no dock restore is pending.
+   */
+  pendingDockWorktreeId?: string | null;
   /** ID of the worktree this panel is associated with */
   worktreeId?: string;
   /** Whether the panel pane is currently visible in the viewport */
@@ -416,8 +423,9 @@ export type SessionLostReason =
 /**
  * Why restore held a pane instead of launching it (#12434). The first two are
  * the resume election's losers ({@link SessionLostReason}); the next two only
- * occur for an agent that can resume across directories, and the last for any
- * agent, by the user's own setting.
+ * occur for an agent that can resume across directories, the next two for
+ * any agent, by the user's own setting or by the plugin that launched it, and
+ * the last for any agent whose run an unclean end of the app cut short.
  */
 export type RestoreRecoveryReason =
   | "sibling-owns-session-id"
@@ -427,7 +435,62 @@ export type RestoreRecoveryReason =
   /** Filed under a worktree this project no longer has. */
   | "destination-unavailable"
   /** The "Resume agents after restart" setting held it (#13509), not anything restore saw. */
-  | "resume-deferred";
+  | "resume-deferred"
+  /** The plugin that launched the pane asked for it to be held (#14017). */
+  | "held-by-plugin"
+  /** The app was killed with this pane's agent running (#14382); see {@link PanelRestoreRecovery.hostEnd}. */
+  | "host-ended-uncleanly";
+
+/**
+ * What the app recorded about the unclean end that cut a pane's run short
+ * (#14382): the watchdog's own kill flag, or a session that ended without
+ * shutting down and with no other cause recorded. Observations from the crash
+ * record, never a guess at why.
+ */
+export interface PanelHostEnd {
+  /** The crash record's own token; "unknown" is a marker left with no other sign. */
+  cause: "watchdog-deadlock" | "external-kill" | "unknown";
+  /** When the app died, as the crash record dates it (epoch ms). */
+  at: number;
+  /** Heartbeats the watchdog missed before it killed the app. */
+  missedBeats?: number;
+}
+
+/**
+ * What restore did with a pane it rebuilt from its saved snapshot (#14017): ran
+ * the agent's resume command, started it without its conversation (a plain
+ * shell always comes back this way), or held it. The route restore chose, not
+ * a claim that the CLI reopened anything.
+ */
+export type TerminalRestoreDisposition = "resume" | "fresh" | "held";
+
+/**
+ * An agent state Daintree's detector reported for a pane, and when that state
+ * began (#14017). Only what the host observed: never the renderer's
+ * `directing` overlay or an optimistic guess made before the host confirmed.
+ */
+export interface TerminalAgentObservation {
+  agentState: AgentState;
+  /** Epoch ms; absent only on a snapshot saved before observations were kept. */
+  at?: number;
+}
+
+/**
+ * How the pane's current process, or its hold, came from restore (#14017).
+ * Absent on a pane restore never rebuilt, and cleared once the pane is
+ * restarted. Persisted, so a pane held across several restarts keeps the
+ * last state Daintree saw before the first of them.
+ */
+export interface TerminalRestoreProvenance {
+  /** When restore rebuilt the pane from its snapshot (epoch ms). */
+  at: number;
+  disposition: TerminalRestoreDisposition;
+  /**
+   * The last agent state observed for the pane before this restore. What the
+   * screen last showed, never a verdict on whether the run had finished.
+   */
+  lastSeen?: TerminalAgentObservation;
+}
 
 /**
  * A terminal's Scratchpad (#12835): throwaway Markdown notes that belong to the
@@ -444,6 +507,29 @@ export interface TerminalScratchpad {
   width?: number;
 }
 
+/** How a {@link TerminalFirstPrompt} reached the run. */
+export type TerminalFirstPromptVia = "launch" | "send";
+
+/**
+ * The first prompt Daintree itself delivered to a run (#14592): the launch
+ * argument, or for a run launched with none, the first send through Daintree.
+ * Stored as the caller wrote it, before any handback instruction was appended,
+ * and never read back out of the command line, the scrollback or an agent's
+ * session files. Later prompts never replace it. It rides the panel record, so
+ * restarting, resuming or moving the pane keeps it and permanently removing
+ * the terminal discards it. Persisted, and never sent off the machine: not
+ * logged, not in diagnostics, not returned by any MCP tool.
+ */
+export interface TerminalFirstPrompt {
+  /** The prompt text, cut at `FIRST_PROMPT_MAX_CHARS`. */
+  text: string;
+  via: TerminalFirstPromptVia;
+  /** Epoch ms of the delivery. */
+  at: number;
+  /** The text was cut at the cap. */
+  truncated?: true;
+}
+
 export interface PanelRestoreRecovery {
   reason: RestoreRecoveryReason;
   /**
@@ -457,6 +543,8 @@ export interface PanelRestoreRecovery {
    * a worktree or by keeping the original folder — never by a guess.
    */
   awaitingDestination?: true;
+  /** Present for a "host-ended-uncleanly" hold: what the crash record observed. */
+  hostEnd?: PanelHostEnd;
 }
 
 export interface PtyPanelData extends BasePanelData {
@@ -642,6 +730,12 @@ export interface PtyPanelData extends BasePanelData {
    * reconcile the settings-derived part and re-append these untouched.
    */
   callerLaunchFlags?: string[];
+  /**
+   * Plugin instances whose agent tools this agent can't do without, from a
+   * plugin recipe's `requiresAgentTools` (#14096). Carried to every relaunch of
+   * the pane so a retry is held to the same requirement. Runtime only.
+   */
+  requiredPluginTools?: string[];
   /** Model ID selected at launch time for per-panel model selection */
   agentModelId?: string;
   /** Preset ID used at launch time, for live color lookup */
@@ -661,6 +755,13 @@ export interface PtyPanelData extends BasePanelData {
   startedAt?: number;
   /** Exit code from the last process exit */
   exitCode?: number;
+  /**
+   * The last exit came from a session-preserving project teardown (sleep,
+   * hibernation, idle close, quit), so the pane keeps its place and is not
+   * auto-restarted. Live-only, never persisted; cleared by the next exit or a
+   * restart.
+   */
+  sessionPreservingExit?: boolean;
   /**
    * Parsed test/lint/build result from the most recent recognized check
    * summary (issue #10682). Best-effort, not an authoritative exit code — see
@@ -737,8 +838,31 @@ export interface PtyPanelData extends BasePanelData {
    * before that choice holds it again rather than launching fresh.
    */
   restoreRecovery?: PanelRestoreRecovery;
+  /** See {@link TerminalRestoreProvenance}. Persisted. */
+  restoreProvenance?: TerminalRestoreProvenance;
+  /**
+   * The last agent state the host reported for this pane (#14017), kept apart
+   * from `agentState`, which also carries renderer overlays. The next restore
+   * reports it as last seen. Persisted, held panes included: it describes the
+   * pane, not a process the hold would start.
+   */
+  lastAgentObservation?: TerminalAgentObservation;
+  /**
+   * The plugin whose `agent.launch` created this pane (#14017), taken from the
+   * host-stamped dispatch context, never from arguments. Only that plugin may
+   * change {@link holdOnRestart}. Persisted.
+   */
+  launchedByPluginId?: string;
+  /**
+   * The launching plugin asked restore to hold this pane rather than start it,
+   * whatever "Resume agents after restart" says (#14017). Cleared when the user
+   * starts the pane from a hold. Persisted.
+   */
+  holdOnRestart?: true;
   /** Notes column beside the terminal (#12835). Persisted. */
   scratchpad?: TerminalScratchpad;
+  /** See {@link TerminalFirstPrompt}. Persisted. */
+  firstPrompt?: TerminalFirstPrompt;
 }
 
 export interface BrowserPanelData extends BasePanelData {
@@ -823,6 +947,11 @@ export interface ReviewPanelData extends BasePanelData {
    * only; never persisted, so a restored panel never re-stages behind the user.
    */
   autoStageOnOpen?: boolean;
+  /**
+   * Open straight into the hub's "Since review" view (#14586). An open-time
+   * hint only; never persisted.
+   */
+  initialMode?: "since-review";
 }
 
 /**
@@ -870,15 +999,24 @@ export interface FilePanelData extends BasePanelData {
    * `serializeFile`, and dropped when the panel moves to another file.
    */
   fileContainmentRoot?: string;
+  /**
+   * The editor Edit mode opens with, as an "Edit with…" answer
+   * (`{pluginInstanceKey}/{editorId}`), ahead of the answer remembered for the
+   * file's type. Set when a project plugin's default editor opened the panel
+   * (#13811), and by picking another editor in it. Open-time only, like
+   * `fileContainmentRoot` — a restored panel opens in Source anyway.
+   */
+  fileEditorChoice?: string;
 }
 
 /**
  * Which set of changes a diff panel is reviewing. Selects both the change-set
  * derivation (which files appear in the workspace sidebar) and the fetch path:
  * the working-tree sources diff against the index via `git.getFileDiff`, while
- * "base-branch" compares the branch against its merge base.
+ * "base-branch" compares the branch against its merge base and "since-review"
+ * sets the reviewed version of a file against the current one (#14587).
  */
-export type DiffSource = "working-tree" | "staged" | "unstaged" | "base-branch";
+export type DiffSource = "working-tree" | "staged" | "unstaged" | "base-branch" | "since-review";
 
 /**
  * Diff panel — renders one file's diff, plus the multi-file review workspace
@@ -1175,6 +1313,8 @@ export interface TerminalInstance {
   lastCommand?: string;
   location: PanelLocation;
   backgroundRestoreLocation?: "grid" | "dock";
+  /** See `BasePanelData.pendingDockWorktreeId`. */
+  pendingDockWorktreeId?: string | null;
   command?: string;
   isVisible?: boolean;
   restartKey?: number;
@@ -1240,6 +1380,12 @@ export interface TerminalInstance {
    * reconcile the settings-derived part and re-append these untouched.
    */
   callerLaunchFlags?: string[];
+  /**
+   * Plugin instances whose agent tools this agent can't do without, from a
+   * plugin recipe's `requiresAgentTools` (#14096). Carried to every relaunch of
+   * the pane so a retry is held to the same requirement. Runtime only.
+   */
+  requiredPluginTools?: string[];
   /** Model ID selected at launch time for per-panel model selection */
   agentModelId?: string;
   /** Preset ID used at launch time, for live color lookup */
@@ -1261,6 +1407,13 @@ export interface TerminalInstance {
   startedAt?: number;
   /** Exit code from the last process exit */
   exitCode?: number;
+  /**
+   * The last exit came from a session-preserving project teardown (sleep,
+   * hibernation, idle close, quit), so the pane keeps its place and is not
+   * auto-restarted. Live-only, never persisted; cleared by the next exit or a
+   * restart.
+   */
+  sessionPreservingExit?: boolean;
   /**
    * Live-only spawn lifecycle state. "spawning" from the moment the optimistic
    * placeholder lands in `panelsById` until the PTY IPC round-trip resolves;

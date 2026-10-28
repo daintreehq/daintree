@@ -1,16 +1,16 @@
 import { useCallback, useRef, type Dispatch, type SetStateAction } from "react";
 import { EditorSelection } from "@codemirror/state";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 import { buildTerminalSendPayload } from "@/lib/terminalInput";
 import { useCommandHistoryStore } from "@/store/commandHistoryStore";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
+import { useDictationRangeStore } from "@/store/dictationRangeStore";
+import { useTerminalInputStore } from "@/store/terminalInputStore";
+import { useDictionaryLearnPromptStore } from "@/store/dictionaryLearnPromptStore";
+import { mapSpanKeepingEdits, minimalDocChange } from "@/lib/textRangeMapping";
 import {
-  findCorrectionCandidates,
-  type CorrectionCandidate,
-} from "@shared/utils/phoneticSimilarity";
-import type { SuggestedDictionaryEntry } from "@shared/types";
-import {
+  getAllAtContextReferences,
   getAllAtTerminalTokens,
   getAllAtSelectionTokens,
   getAllAtDiffTokens,
@@ -21,44 +21,94 @@ import {
   type TokenExpansion,
 } from "../hybridInputParsing";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { usePluginContextProvidersStore } from "@/store/pluginContextProvidersStore";
+import type {
+  ContextReference,
+  ContextReferenceResolution,
+} from "@shared/types/pluginContextProvider";
+import { expandContextReferences } from "../contextReferenceExpansion";
 
-/** Cap on the pending-suggestions queue — confirmed words live in customDictionary. */
-const MAX_SUGGESTED_WORDS = 50;
+/** The plugin this view believes holds `prefix`, for a placeholder when main can't be asked. */
+function activeProviderName(prefix: string): string | undefined {
+  return usePluginContextProvidersStore
+    .getState()
+    .entries.find((entry) => entry.status === "active" && entry.prefix === prefix)?.pluginName;
+}
+
+/** Ask main for a draft's references; a bridge without the method answers that nothing is held. */
+function resolveContextReferences(
+  references: ContextReference[]
+): Promise<ContextReferenceResolution[]> {
+  const bridge = window.electron?.plugin;
+  if (typeof bridge?.resolveContextReferences !== "function") {
+    return Promise.resolve(references.map(() => ({ status: "unknown" })));
+  }
+  return bridge.resolveContextReferences(references);
+}
+
+/** A dictated passage as it settled, and the same passage as the user is sending it. */
+interface CorrectionSnapshot {
+  baseline: string;
+  edited: string;
+  /** The draft before the passage. */
+  preceding: string;
+  /** The session that wrote the baseline; a newer one owns whatever replaced it. */
+  sessionId: string;
+}
 
 /**
- * Merge freshly-detected correction candidates into the persisted suggestion
- * queue: skip words already in the confirmed dictionary, bump frequency on a
- * repeat, and cap the queue. Returns null when nothing changed.
+ * Where the session's dictated words sit in the text being sent: its record's
+ * learning span, which follows every edit, carried onto `text` when the
+ * composer is a keystroke ahead of the stored draft. Text typed before, after
+ * or around the dictation stays out of it.
  */
-function mergeSuggestions(
-  candidates: CorrectionCandidate[],
-  customDictionary: string[],
-  suggested: SuggestedDictionaryEntry[],
-  now: number
-): SuggestedDictionaryEntry[] | null {
-  const confirmed = new Set(customDictionary.map((w) => w.toLowerCase()));
-  const next = [...suggested];
-  let changed = false;
+function locateDictatedText(
+  panelId: string,
+  projectId: string | undefined,
+  sessionId: string,
+  text: string
+): { from: number; to: number } | null {
+  const span = useDictationRangeStore
+    .getState()
+    .listDictations(panelId, projectId)
+    .find((record) => record.sessionId === sessionId)?.learningSpan;
+  if (!span) return null;
+  const draft = useTerminalInputStore.getState().getDraftInput(panelId, projectId);
+  const change = minimalDocChange(draft, text);
+  return change ? mapSpanKeepingEdits(span, change) : span;
+}
 
-  for (const { word, original } of candidates) {
-    const lower = word.toLowerCase();
-    if (confirmed.has(lower)) continue;
-    const idx = next.findIndex((e) => e.word.toLowerCase() === lower);
-    if (idx >= 0) {
-      const entry = next[idx]!;
-      next[idx] = {
-        ...entry,
-        frequency: entry.frequency + 1,
-        suggestedAt: now,
-        utterance: original,
-      };
-    } else {
-      next.unshift({ word, utterance: original, suggestedAt: now, frequency: 1 });
-    }
-    changed = true;
+/**
+ * Pairs the panel's learning baseline with the dictated words in the draft
+ * being sent. Taken before the send awaits anything: a dictation that finishes
+ * meanwhile writes a newer baseline, and this draft must not be diffed against
+ * it. A draft under another key (an isolated composer on the same terminal)
+ * isn't the one the passage was dictated into, and a session the send doesn't
+ * take (`sessions`) dictated words that aren't in it.
+ */
+function takeCorrectionSnapshot(
+  panelId: string,
+  projectId: string | undefined,
+  text: string,
+  sessions: ReadonlySet<string> | undefined
+): CorrectionSnapshot | null {
+  try {
+    const buffer = useVoiceRecordingStore.getState().panelBuffers[panelId];
+    const baseline = buffer?.sessionCorrectedText;
+    const sessionId = buffer?.dictationSessionId;
+    if (!baseline || !sessionId || buffer.projectId !== projectId) return null;
+    if (sessions && !sessions.has(sessionId)) return null;
+    const span = locateDictatedText(panelId, projectId, sessionId, text);
+    if (!span) return null;
+    return {
+      baseline,
+      edited: text.slice(span.from, span.to),
+      preceding: text.slice(0, span.from),
+      sessionId,
+    };
+  } catch {
+    return null;
   }
-
-  return changed ? next.slice(0, MAX_SUGGESTED_WORDS) : null;
 }
 
 /**
@@ -66,46 +116,67 @@ function mergeSuggestions(
  * text. Compares the settled transcription baseline (captured after dictation
  * stops) against the final text the user is sending; phonetically-similar
  * substitutions are persisted as suggestions in Voice settings, pending
- * explicit accept/dismiss (#9749).
+ * explicit accept/dismiss (#9749). The first new pair is also offered in the
+ * composer the text was sent from (#14646).
  *
  * Synchronous store read at the send site (no React subscription — see [[#9441]]).
  * Fully swallows errors: learning must never block or alter the send.
  */
-function detectDictionaryCorrections(panelId: string, finalText: string): void {
+const latestLearnSend = new Map<string, number>();
+
+function detectDictionaryCorrections(panelId: string, snapshot: CorrectionSnapshot | null): void {
+  // A later send supersedes a reply still in flight, so it can't offer a stale pair.
+  const send = (latestLearnSend.get(panelId) ?? 0) + 1;
+  latestLearnSend.set(panelId, send);
+  if (!snapshot) return;
   try {
     const voiceState = useVoiceRecordingStore.getState();
-    if (!voiceState.learnFromCorrections) return;
+    // The draft is gone, so its baseline goes with it whether or not learning
+    // is on — unless a newer dictation has already replaced it.
     const buffer = voiceState.panelBuffers[panelId];
-    const baseline = buffer?.sessionCorrectedText;
-    const sessionStart = buffer?.sessionDraftStart ?? -1;
-    if (!baseline || sessionStart < 0) return;
+    if (
+      buffer?.sessionCorrectedText === snapshot.baseline &&
+      buffer.dictationSessionId === snapshot.sessionId
+    ) {
+      voiceState.setSessionCorrectedText(panelId, null);
+    }
+    if (!voiceState.learnFromCorrections) return;
 
-    // Consume the baseline so a later send of unrelated text can't re-trigger.
-    voiceState.setSessionCorrectedText(panelId, null);
-
-    const candidates = findCorrectionCandidates(baseline, finalText.slice(sessionStart));
-    if (candidates.length === 0) return;
-
-    // Read-modify-write the suggestion queue via the existing settings channel.
-    // The dictate→correct→send flow is human-paced, so concurrent writes to
-    // suggestedDictionary don't happen in practice.
-    void (async () => {
+    // The matcher and its word list load here, off the send path. Main merges
+    // the candidates into the queue it owns, so an accept or dismiss made
+    // meanwhile in Settings isn't overwritten by this view's copy.
+    const report = async () => {
       try {
-        const settings = await window.electron.voiceInput.getSettings();
-        if (!settings.learnFromCorrections) return;
-        const next = mergeSuggestions(
-          candidates,
-          settings.customDictionary,
-          settings.suggestedDictionary,
-          Date.now()
+        const { findCorrectionCandidates } = await import("@shared/utils/phoneticSimilarity");
+        const candidates = findCorrectionCandidates(
+          snapshot.baseline,
+          snapshot.edited,
+          snapshot.preceding
         );
-        if (next) {
-          await window.electron.voiceInput.setSettings({ suggestedDictionary: next });
+        if (candidates.length === 0) return;
+        const state = await window.electron.voiceDictionary.recordSuggestions({ candidates });
+        if (latestLearnSend.get(panelId) !== send) return;
+        // Only a pair main kept in the queue is offered: one already in the
+        // dictionary or dismissed earlier never reaches it.
+        for (const candidate of candidates) {
+          const original = candidate.original.trim();
+          const queued = state.suggestedDictionary.find(
+            (entry) =>
+              entry.word.toLowerCase() === candidate.word.trim().toLowerCase() &&
+              entry.utterance === original
+          );
+          if (queued) {
+            useDictionaryLearnPromptStore
+              .getState()
+              .offer(panelId, { word: queued.word, utterance: queued.utterance });
+            return;
+          }
         }
       } catch {
         // Best-effort; never surface a learning failure to the user.
       }
-    })();
+    };
+    void report();
   } catch {
     // Never let learning interfere with sending.
   }
@@ -121,7 +192,7 @@ interface LatestRefShape {
     trackerData: string;
     text: string;
     imagePaths?: string[];
-  }) => void;
+  }) => void | Promise<boolean>;
   addToHistory: (terminalId: string, command: string, projectId?: string) => void;
   resetHistoryIndex: (terminalId: string, projectId?: string) => void;
   clearDraftInput: (terminalId: string, projectId?: string) => void;
@@ -157,6 +228,23 @@ export interface SendTextOptions {
    * of the two outcomes.
    */
   isDraftUnchanged?: () => boolean;
+  /**
+   * Leaves the editor and the draft store with what the send held back,
+   * instead of clearing them, once `isDraftUnchanged` agrees.
+   */
+  keepDraft?: () => void;
+  /**
+   * The dictation sessions whose words a dictated send takes; learning only
+   * diffs what one of them dictated.
+   */
+  dictationSessions?: ReadonlySet<string>;
+  /**
+   * Handed what the pane's `onSend` returned — a promise of whether the
+   * terminal accepted the text, from a host that can say — once the composer
+   * has been reset after the send. Not called when `submit` replaces the
+   * handoff.
+   */
+  onHandedOff?: (accepted: Promise<boolean> | void) => void;
 }
 
 /**
@@ -192,17 +280,23 @@ interface UseTokenResolutionParams {
   latestRef: React.RefObject<LatestRefShape | null>;
   applyEditorValue: (
     nextValue: string,
-    options?: { selection?: EditorSelection; focus?: boolean }
+    options?: { selection?: EditorSelection; focus?: boolean; resetHistory?: boolean }
   ) => void;
   setIsExpanded: Dispatch<SetStateAction<boolean>>;
   setActiveCompletionContext: Dispatch<SetStateAction<ActiveCompletionContext | null>>;
   terminalId: string;
+  /**
+   * Where dictation into this composer is kept, when not under the terminal
+   * (Canopy's reply): its target's id and project, which address the same draft.
+   */
+  voice?: { panelId: string; projectId?: string };
   cwd: string;
   agentId?: BuiltInAgentId;
   /**
-   * Expand `@terminal`, `@selection` and `@diff` into what they name here.
-   * Off for a terminal on another host, where this machine's screens and
-   * working tree are not the agent's: the tokens go as typed.
+   * Expand `@terminal`, `@selection`, `@diff` and plugin context references
+   * into what they name here. Off for a terminal on another host, where this
+   * machine's screens, working tree and plugins are not the agent's: the
+   * tokens go as typed.
    */
   expandContext?: boolean;
 }
@@ -213,10 +307,14 @@ export function useTokenResolution({
   setIsExpanded,
   setActiveCompletionContext,
   terminalId,
+  voice,
   cwd,
   agentId,
   expandContext = true,
 }: UseTokenResolutionParams) {
+  const ownVoice = voice !== undefined;
+  const voiceId = voice?.panelId ?? terminalId;
+  const voiceProjectId = voice?.projectId;
   const isSendingRef = useRef(false);
 
   /**
@@ -236,14 +334,31 @@ export function useTokenResolution({
       // could otherwise interleave and double-post.
       isSendingRef.current = true;
       try {
+        const correctionSnapshot = takeCorrectionSnapshot(
+          voiceId,
+          ownVoice ? voiceProjectId : latest.projectId,
+          text,
+          options?.dictationSessions
+        );
         const terminalTokens = expandContext ? getAllAtTerminalTokens(text) : [];
         const selectionTokens = expandContext ? getAllAtSelectionTokens(text) : [];
         const diffTokens = expandContext ? getAllAtDiffTokens(text) : [];
+        const contextReferences = expandContext ? getAllAtContextReferences(text) : [];
+        // Started first so the plugins answer while the diff is fetched; every
+        // reference resolves in parallel under main's deadline.
+        const contextExpansions =
+          contextReferences.length > 0
+            ? expandContextReferences(
+                contextReferences,
+                resolveContextReferences,
+                activeProviderName
+              )
+            : null;
 
         const replacements: TokenExpansion[] = [];
 
         for (const token of terminalTokens) {
-          const managed = terminalInstanceService.get(terminalId);
+          const managed = peekTerminalService()?.get(terminalId);
           let replacement: string;
           if (managed) {
             const buffer = managed.terminal.buffer.active;
@@ -262,7 +377,7 @@ export function useTokenResolution({
         }
 
         for (const token of selectionTokens) {
-          const selection = terminalInstanceService.getCachedSelection(terminalId);
+          const selection = peekTerminalService()?.getCachedSelection(terminalId);
           const replacement = selection
             ? fenceTokenExpansion(selection)
             : "[No terminal selection]";
@@ -290,6 +405,8 @@ export function useTokenResolution({
           replacements.push({ start: token.start, end: token.end, replacement });
         }
 
+        if (contextExpansions) replacements.push(...(await contextExpansions));
+
         const resolvedText = resolveTokenExpansions(text, replacements);
 
         const outgoing = options?.compose ? options.compose(resolvedText) : resolvedText;
@@ -297,13 +414,14 @@ export function useTokenResolution({
         // draft is a perfectly good send once an instruction has been appended.
         if (outgoing.trim().length === 0) return false;
 
+        let accepted: Promise<boolean> | void = undefined;
         if (options?.submit) {
           // Nothing below this line runs on a refused submission — the draft the
           // user can still see is the draft they still have.
           if (!(await options.submit(outgoing))) return false;
         } else {
           const payload = buildTerminalSendPayload(outgoing);
-          latest.onSend({
+          accepted = latest.onSend({
             data: payload.data,
             trackerData: payload.trackerData,
             text: outgoing,
@@ -316,13 +434,25 @@ export function useTokenResolution({
         // Learn dictionary words from manual corrections to dictated text. Uses
         // the original `text` (the human-authored content), not `resolvedText`
         // (which has @-token expansions spliced in).
-        detectDictionaryCorrections(terminalId, text);
+        detectDictionaryCorrections(voiceId, correctionSnapshot);
 
         // History keeps what the human authored, so recalling it re-runs the
         // tokens rather than a frozen expansion — composed the same way, because
         // the instruction was part of what was sent.
         const authored = options?.compose ? options.compose(text) : text;
         latest.addToHistory(latest.terminalId, authored, latest.projectId);
+        // Apart from recall history, which reorders repeats: cleanup reads the
+        // sends to this terminal in the order they went, so this one is noted
+        // as it goes and taken back if the terminal turns it down.
+        const destination = latest.terminalId;
+        const sent = useTerminalInputStore.getState().recordSentPrompt(destination, authored);
+        if (sent && accepted instanceof Promise) {
+          const retract = () =>
+            useTerminalInputStore.getState().retractSentPrompt(destination, sent);
+          void accepted.then((ok) => {
+            if (!ok) retract();
+          }, retract);
+        }
         latest.resetHistoryIndex(latest.terminalId, latest.projectId);
         if (latest.projectId) {
           useCommandHistoryStore
@@ -335,10 +465,18 @@ export function useTokenResolution({
         // since opened would be the same overreach as deleting their text.
         if (options?.isDraftUnchanged?.() ?? true) {
           setIsExpanded(false);
-          applyEditorValue("", { selection: EditorSelection.create([EditorSelection.cursor(0)]) });
-          latest.clearDraftInput(latest.terminalId, latest.projectId);
+          if (options?.keepDraft) {
+            options.keepDraft();
+          } else {
+            applyEditorValue("", {
+              selection: EditorSelection.create([EditorSelection.cursor(0)]),
+              resetHistory: true,
+            });
+            latest.clearDraftInput(latest.terminalId, latest.projectId);
+          }
           setActiveCompletionContext(null);
         }
+        if (!options?.submit) options?.onHandedOff?.(accepted);
         return true;
       } finally {
         isSendingRef.current = false;
@@ -350,6 +488,9 @@ export function useTokenResolution({
       cwd,
       expandContext,
       terminalId,
+      voiceId,
+      voiceProjectId,
+      ownVoice,
       latestRef,
       setActiveCompletionContext,
       setIsExpanded,

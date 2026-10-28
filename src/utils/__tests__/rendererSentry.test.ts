@@ -123,6 +123,20 @@ describe("rendererSentry", () => {
     expect(opts.beforeBreadcrumb!({ message: "click" })).toBeNull();
   });
 
+  it("beforeBreadcrumb keeps the dictation session summary out even with consent", async () => {
+    getConsentState.mockResolvedValueOnce({ level: "full", hasSeenPrompt: true });
+    const mod = await import("../rendererSentry");
+    void mod.initRendererSentry();
+    await flushMicrotasks();
+
+    const opts = sentryInit.mock.calls[0]![0];
+    const other = { category: "console", message: "[INFO] [VoiceRecording] Start step" };
+    expect(
+      opts.beforeBreadcrumb!({ category: "console", message: "[INFO] [VoiceSession] Summary" })
+    ).toBeNull();
+    expect(opts.beforeBreadcrumb!(other)).toBe(other);
+  });
+
   it("defaults to closed gate when IPC is unavailable", async () => {
     delete (window as unknown as { electron?: unknown }).electron;
     const mod = await import("../rendererSentry");

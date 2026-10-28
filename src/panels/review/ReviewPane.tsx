@@ -88,6 +88,16 @@ export function ReviewPane({
     )
   );
 
+  const initialMode = usePanelStore(
+    useCallback(
+      (state) => {
+        const panel = state.panelsById[id];
+        return panel?.kind === "review" ? panel.initialMode : undefined;
+      },
+      [id]
+    )
+  );
+
   if (!worktreePath) {
     return (
       <div
@@ -133,6 +143,7 @@ export function ReviewPane({
         // it on the dialog location keeps a promoted or restored grid panel
         // from replaying the stage when it remounts under a new host.
         autoStageOnOpen={isDialog && autoStageOnOpen}
+        initialMode={initialMode}
       />
     </div>
   );

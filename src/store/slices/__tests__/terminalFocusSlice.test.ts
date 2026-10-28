@@ -3,12 +3,15 @@ import { createTerminalFocusSlice, type TerminalFocusSlice } from "../terminalFo
 import type { GetPanelGroupInfo } from "@/store/panelFocusFallback";
 import type { PanelLocation, PtyPanelData } from "@shared/types/panel";
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     wake: vi.fn(),
     wakeForFocus: vi.fn(),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 const mockGetActiveWorktreeId = vi.fn(() => "worktree-1" as string | null);
 const mockStampLastActive = vi.fn();
@@ -17,7 +20,17 @@ const mockStampLastActive = vi.fn();
 // would never reach an already-built slice.
 let panelGroupInfoImpl: GetPanelGroupInfo = () => undefined;
 const mockGetPanelGroupInfo: GetPanelGroupInfo = (id) => panelGroupInfoImpl(id);
-const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
+const terminalInstanceService = (
+  await import("@/services/TerminalInstanceService")
+).createTerminalPaintPlane();
+const { load: loadTerminalService } =
+  await import("@/services/terminal/terminalInstanceServiceAccessor");
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
+});
 
 describe("TerminalFocusSlice - Layout Snapshot", () => {
   const mockTerminals: PtyPanelData[] = [
@@ -200,43 +213,6 @@ describe("TerminalFocusSlice - Layout Snapshot", () => {
     expect(state.maximizedId).toBe("term-1");
     expect(state.maximizeTarget).toEqual({ type: "panel", id: "term-1" });
     expect(state.preMaximizeLayout).toBeNull();
-  });
-});
-
-describe("TerminalFocusSlice - preferredTerminalFocusTarget", () => {
-  let state: TerminalFocusSlice;
-  let setState: any;
-  let getState: any;
-  const getTerminals = vi.fn(() => [] as PtyPanelData[]);
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    setState = vi.fn((updater) => {
-      const currentState = getState();
-      const updates = typeof updater === "function" ? updater(currentState) : updater;
-      state = { ...currentState, ...updates };
-    });
-    getState = vi.fn(() => state);
-    state = createTerminalFocusSlice(
-      getTerminals,
-      mockGetActiveWorktreeId,
-      mockStampLastActive,
-      mockGetPanelGroupInfo
-    )(setState, getState, {} as never);
-  });
-
-  it("is idempotent — repeat sets to the same value do not call set()", () => {
-    state.setPreferredTerminalFocusTarget("hybridInput"); // already the default
-    expect(setState).not.toHaveBeenCalled();
-
-    state.setPreferredTerminalFocusTarget("xterm");
-    expect(setState).toHaveBeenCalledTimes(1);
-    setState.mockClear();
-
-    // Setting xterm again is a no-op — store stays quiet so DOM focus
-    // listeners don't drive notification storms.
-    state.setPreferredTerminalFocusTarget("xterm");
-    expect(setState).not.toHaveBeenCalled();
   });
 });
 
@@ -2201,5 +2177,85 @@ describe("TerminalFocusSlice - activation leaves fullscreen (#11506)", () => {
 
     expect(state.focusedId).toBe("grid-2");
     expect(state.maximizedId).toBeNull();
+  });
+
+  describe("leaving the project's Home", () => {
+    const exitHome = vi.fn();
+
+    beforeAll(async () => {
+      const { setProjectHomeExitAccessor } = await import("@/store/storeAccessors");
+      setProjectHomeExitAccessor(exitHome);
+    });
+
+    afterAll(async () => {
+      const { resetStoreAccessorsForTesting } = await import("@/store/storeAccessors");
+      resetStoreAccessorsForTesting();
+    });
+
+    beforeEach(() => {
+      exitHome.mockClear();
+    });
+
+    it("leaves Home when a grid panel is activated", () => {
+      state.activateTerminal("grid-2");
+
+      expect(exitHome).toHaveBeenCalledTimes(1);
+      expect(state.focusedId).toBe("grid-2");
+    });
+
+    it("leaves Home for a legacy row with no location, which is a grid panel", () => {
+      state.activateTerminal("legacy-1");
+
+      expect(exitHome).toHaveBeenCalledTimes(1);
+    });
+
+    it("leaves Home when re-activating the panel that already holds focus", () => {
+      // Home hides it, so "show me this panel" still has something to do.
+      state.focusedId = "grid-1";
+
+      state.activateTerminal("grid-1");
+
+      expect(exitHome).toHaveBeenCalledTimes(1);
+    });
+
+    it("leaves Home for a grid panel in another worktree, unlike a maximize", () => {
+      state.activateTerminal("other-wt-1");
+
+      expect(exitHome).toHaveBeenCalledTimes(1);
+    });
+
+    it("stays on Home when a dock panel is activated, since the dock shows beside it", () => {
+      state.activateTerminal("dock-1");
+
+      expect(exitHome).not.toHaveBeenCalled();
+      expect(state.activeDockTerminalId).toBe("dock-1");
+    });
+
+    it("stays on Home when a trashed panel is activated", () => {
+      state.activateTerminal("trash-1");
+
+      expect(exitHome).not.toHaveBeenCalled();
+    });
+
+    it("leaves Home on index navigation, including the press that maximizes", () => {
+      state.focusedId = "grid-1";
+
+      state.focusOrMaximizeByIndex(
+        1,
+        () => "grid-1",
+        () => undefined
+      );
+
+      expect(exitHome).toHaveBeenCalledTimes(1);
+      expect(state.maximizedId).toBe("grid-1");
+    });
+
+    it("stays on Home when focus merely moves through setFocused", () => {
+      // Bookkeeping writers (a neighbour after a close, a worktree restore) use
+      // setFocused; only an explicit reveal leaves Home.
+      state.setFocused("grid-2");
+
+      expect(exitHome).not.toHaveBeenCalled();
+    });
   });
 });

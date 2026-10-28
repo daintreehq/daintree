@@ -729,7 +729,7 @@ describe("FleetPickerPalette", () => {
 
     it("resets to Replace when the palette is closed and reopened", async () => {
       // FleetPickerPalette stays mounted across isOpen toggles (it lives
-      // inside SidebarContent), so commitMode survives a naive close-reopen
+      // in ProjectDialogHost), so commitMode survives a naive close-reopen
       // unless we explicitly reset it. Guard against that regression.
       seedTerminals([
         makeTerminal("t1", { worktreeId: "wt-1" }),

@@ -753,6 +753,23 @@ describe("terminal exit forwarding during restart", () => {
       payload: ["t1", 0],
     });
   });
+
+  it("tells every view an exit came from a session-preserving teardown (#13841)", () => {
+    ptyClient.emit("exit", "t1", 0, 15, true);
+
+    expect(broadcastToRenderer).toHaveBeenCalledExactlyOnceWith(CHANNELS.EVENTS_PUSH, {
+      name: "terminal:exit",
+      payload: ["t1", 0, { preserveSession: true }],
+    });
+  });
+
+  it("still withholds a restart's exit when it carries the teardown mark", () => {
+    ptyClient.consumeRestartExitSuppression.mockReturnValueOnce(true);
+
+    ptyClient.emit("exit", "t1", 0, 15, true);
+
+    expect(broadcastToRenderer).not.toHaveBeenCalled();
+  });
 });
 
 describe("terminal event handlers — spawn confirmation (#12754)", () => {

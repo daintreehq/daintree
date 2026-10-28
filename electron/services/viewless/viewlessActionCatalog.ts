@@ -16,7 +16,12 @@ const write = (danger: ActionDanger = "safe"): ViewlessActionEntry => ({ danger,
  * The set is what an orchestrator drives through a whole loop with no window
  * open (#13495): open a terminal or an agent, read and steer it, close it,
  * make and delete worktrees, discover projects and runners, read the forge
- * the runbooks consult (#13501), and find the host's tools (#13493).
+ * the runbooks consult (#13501), find the host's tools (#13493), list an
+ * agent's slash commands before typing one and the host's workspaces with
+ * whether a frontend is attached to each (#14122), and look up what a launch
+ * or a create takes and wait on a pull request (#14139), and the two reads
+ * behind "what happened overnight": closed agent sessions from the journal
+ * main holds and a worktree's commit pulse (#14549).
  * Everything else is a question for a renderer, and is refused as "no
  * frontend attached" rather than guessed at.
  *
@@ -40,21 +45,31 @@ export const VIEWLESS_ACTIONS: Readonly<Record<string, ViewlessActionEntry>> = {
   "terminal.sendKeys": write(),
   "agent.launch": write(),
   "agent.listAvailable": read(),
+  "slashCommands.list": read(),
+  "agent.listPresets": read(),
+  "agent.listModels": read(),
   "worktree.create": write(),
   "worktree.createWithRecipe": write(),
   "worktree.list": read(),
   "worktree.waitUntilReady": read(),
+  "worktree.waitForPullRequest": read(),
   "worktree.delete": write("confirm"),
   "project.getAll": read(),
   "project.detectRunners": read(),
+  "workspace.list": read(),
+  // Listing reconciles the project's recipe files, as it does in a view.
+  "recipe.list": write(),
   "forge.getPR": read(),
   "forge.listPRs": read(),
   "forge.getIssue": read(),
   "forge.listIssues": read(),
   "forge.getCIStatus": read(),
+  "agentSessionHistory.list": read(),
+  "git.getProjectPulse": read(),
   "actions.list": read(),
   "actions.search": read(),
   "actions.getSchema": read(),
+  "actions.getContext": read(),
 };
 
 /** The declared danger of an action the host can run itself, or undefined. */

@@ -1,16 +1,14 @@
 import { useEffect, useMemo } from "react";
 import type { ContextMenuLocation } from "@shared/types/plugin";
 import type { WhenClauseContext } from "@shared/utils/whenClause";
-import { parse, evaluate } from "@shared/utils/whenClause";
+import { evaluateWhenClause } from "@shared/utils/whenClause";
 import {
   usePluginContextMenuItemsStore,
   type PluginContextMenuItemEntry,
 } from "@/store/pluginContextMenuItemsStore";
-import { usePluginContextKeyStore } from "@/store/pluginContextKeyStore";
+import { useChromeWhenContext } from "@/hooks/useChromeWhenContext";
 
 export type { PluginContextMenuItemEntry };
-
-const EMPTY_CONTEXT: WhenClauseContext = {};
 
 /**
  * Plugin-contributed context-menu items for `location`, filtered to the caller's
@@ -23,9 +21,10 @@ const EMPTY_CONTEXT: WhenClauseContext = {};
  * context keys evaluate correctly. An item that references unset keys evaluates
  * to `false` and is hidden — fail-closed. Parse errors are also fail-closed.
  * Because the context is consumer-specific, the `when`-clause evaluation stays
- * here rather than in the shared store. Keys plugins publish with
- * `host.setContext` are visible too, under their manifest name; the caller's
- * surface keys win any clash.
+ * here rather than in the shared store. Every key of the shared chrome context
+ * is visible too (`useChromeWhenContext`) — plugin `host.setContext` keys under
+ * their manifest name and the host's project facts; the caller's surface keys
+ * win any clash.
  */
 export function usePluginContextMenuItems(
   location: ContextMenuLocation,
@@ -33,25 +32,16 @@ export function usePluginContextMenuItems(
 ): PluginContextMenuItemEntry[] {
   const entries = usePluginContextMenuItemsStore((s) => s.entries);
   const init = usePluginContextMenuItemsStore((s) => s.init);
-  const pluginContext = usePluginContextKeyStore((s) => s.whenContext);
-  const initPluginContext = usePluginContextKeyStore((s) => s.init);
+  const chromeContext = useChromeWhenContext();
 
   useEffect(() => {
     init();
-    initPluginContext();
-  }, [init, initPluginContext]);
+  }, [init]);
 
   return useMemo(() => {
-    const context = { ...pluginContext, ...(ctx ?? EMPTY_CONTEXT) };
-    return entries.filter((entry) => {
-      if (entry.item.location !== location) return false;
-      const whenExpr = entry.item.when;
-      if (!whenExpr) return true;
-      try {
-        return evaluate(parse(whenExpr), context);
-      } catch {
-        return false;
-      }
-    });
-  }, [entries, location, ctx, pluginContext]);
+    const context = ctx ? { ...chromeContext, ...ctx } : chromeContext;
+    return entries.filter(
+      (entry) => entry.item.location === location && evaluateWhenClause(entry.item.when, context)
+    );
+  }, [entries, location, ctx, chromeContext]);
 }

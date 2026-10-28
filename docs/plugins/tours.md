@@ -2,9 +2,9 @@
 
 A plugin can ship a narrated welcome tour that plays in the same dialog as the Daintree Tour: a few short chapters, each a minimal animated mockup of one idea with a voice-over and captions. This guide covers the whole path, from the manifest entry to a voiced, previewed tour, and the house style every tour is held to.
 
-For the manifest field table on its own, see [Contribution points → Tours](./contribution-points.md#tours--shipped-installed-plugins).
+For the manifest field table on its own, see [Contribution points → Tours](./contribution-points.md#tours--shipped).
 
-To have Claude Code author the tour with you, use the bundled `daintree-tour` skill: plugins scaffolded with `daintree-plugin new` already include it in `.claude/skills/daintree-tour/`, and `npx daintree-plugin skill add` copies it into an existing plugin. Start Claude Code in the plugin directory and ask for a tour, or run `/daintree-tour`. The skill and the `daintree-plugin skill` and `tour` commands this guide uses are not in the 0.1.0 release on npm; they ship in the next one.
+To have Claude Code author the tour with you, use the bundled `daintree-tour` skill: plugins scaffolded with `daintree-plugin new` already include it in `.claude/skills/daintree-tour/`, and `npx daintree-plugin skill add` copies it into an existing plugin. Start Claude Code in the plugin directory and ask for a tour, or run `/daintree-tour`. The skill and the `daintree-plugin skill` and `tour` commands this guide uses are not in the 0.1.0 release on npm; they ship in 0.2.0.
 
 Tours need Daintree 0.39.0 or later: `contributes.tours` and the `@daintreehq/tour` import-map specifiers first shipped in v0.39.0.
 
@@ -17,7 +17,7 @@ Tours need Daintree 0.39.0 or later: `contributes.tours` and the `@daintreehq/to
 | Length | As many chapters as the story needs, up to 32 | A couple of chapters |
 | Wiring in your code | None | None — the menu item appears once the tour registers and disappears when it is withdrawn |
 
-Both are the same contribution, validated and played the same way. If two tours name the same panel, the first wins. Tours are available to installed plugins only; a manifest with `"scope": "project"` that declares one is refused.
+Both are the same contribution, validated and played the same way. If two tours name the same panel, the first wins. A project plugin may declare tours too; they are offered only in that project, and never play on their own when the project opens. The one tour a project shows unasked is its application's welcome — the tour a plugin names as [`application.welcomeTour`](./manifest.md#application) — and even that is only offered, as a strip with Start and Skip, never started: once per project and welcome `version`, in the project view on screen, after the plugin is trusted and the project's first-open layout is done with.
 
 ## The standard
 
@@ -176,7 +176,7 @@ export default {
 };
 ```
 
-**`vite.config.ts`** — build it with `@daintreehq/plugin-vite`, which leaves `react` and `@daintreehq/tour` external for the host to supply. `@daintreehq/plugin-vite` 0.1.0 on npm externalizes React alone; with it, add `externals: [/^@daintreehq\/tour($|\/)/]` to `daintreePlugin()` until the next release. A scene never needs `@daintreehq/tour` installed to run: Daintree serves every `@daintreehq/tour` specifier from its import map. Installed as a dev dependency it gives you the types and is what `tour preview` plays your scenes against, alongside `lucide-react`, which the kit's icons come from and the preview needs to draw them. `@daintreehq/tour` has not been published to npm, so outside the Daintree repository type-checking a scene and running `tour preview` both wait until it is.
+**`vite.config.ts`** — build it with `@daintreehq/plugin-vite`, which leaves `react` and `@daintreehq/tour` external for the host to supply. `@daintreehq/plugin-vite` 0.1.0 on npm externalizes React alone; with it, add `externals: [/^@daintreehq\/tour($|\/)/]` to `daintreePlugin()` until 0.2.0. A scene never needs `@daintreehq/tour` installed to run: Daintree serves every `@daintreehq/tour` specifier from its import map. Installed as a dev dependency it gives you the types and is what `tour preview` plays your scenes against, alongside `lucide-react`, which the kit's icons come from and the preview needs to draw them. `@daintreehq/tour` has not been published to npm, so outside the Daintree repository type-checking a scene and running `tour preview` both wait until it is.
 
 ```ts
 import { daintreePlugin } from "@daintreehq/plugin-vite";
@@ -362,3 +362,47 @@ Before shipping, run `daintree-plugin validate`, and check `daintree-plugin pack
 - A plugin reload closes an open tour too; reopening plays the new version.
 - A malformed tour is reported with the offending path, like any other malformed contribution. `daintree-plugin validate` and the installer refuse it; at load, Daintree logs the issues and drops only that tour, so the rest of the plugin still loads. Exceeding the tour cap is a whole-manifest error.
 - Limits: 10 tours per plugin, 32 chapters per tour, 600 seconds per chapter, 128 cues and 128 captions per chapter, 8 `audioHosts`.
+
+## Opening a tour from your plugin
+
+Dispatch `help.tour.show` with your tour's manifest `id`. From a plugin, `tourId` is read as one of your own tours first, so you never spell out your instance key (for a project-owned plugin, that key carries the project). Your own qualified id (`<your plugin id>.<tour id>`) and `daintree` also work. Another plugin's tour can't be opened or read by its qualified id, so you only ever see your own tours' run ids and outcomes.
+
+```ts
+const shown = await host.dispatch("help.tour.show", { tourId: "welcome" });
+const start = shown.ok ? (shown.result as { status: string; runId?: string }) : null;
+if (start?.status === "started") rememberRun(start.runId!);
+```
+
+The result says whether the tour started, not how it ended:
+
+| `status` | Means |
+| --- | --- |
+| `started` | The dialog is on screen playing it, or already was. Carries the `runId` its outcome is saved under. |
+| `unavailable` | `reason: "not-registered"`: nothing registered the tour within 5 seconds, or it was withdrawn while loading. `reason: "no-host"`: the view has no tour host. |
+| `failed` | The tour is registered but its scene module couldn't be loaded. |
+| `superseded` | A later request opened something else first. |
+
+A dispatch that never reaches a view (no project view, a refused `project:dispatch`) fails with `{ ok: false }` as any dispatch does.
+
+How a run ends is saved with the tour's progress. Read it with `help.tour.status`, which takes the same `tourId`:
+
+| Field | Means |
+| --- | --- |
+| `lastOutcome` | `completed` (played to the end of its last chapter), `dismissed` (closed before that), `superseded` (another tour opened over it), `withdrawn` (your plugin was disabled or reloaded, or its view closed, while it was open), `failed`, or `null`. |
+| `lastRunId` | The run `lastOutcome` belongs to. Compare it with the `runId` you were given: an outcome from another run, or `completed: true` left by an earlier one, says nothing about yours. |
+| `completed`, `completedCurrentVersion` | Finished under any version, and under the version registered now. |
+| `lastChapterId`, `progressVersion`, `contentVersion` | Where a reopened run resumes, the version that progress was saved under, and your tour's declared version. |
+
+Progress lives in Daintree's own settings on the user's machine. Nothing in a manifest or a repository can write it.
+
+## Versions and resume
+
+Progress is saved by chapter `id`, so reordering chapters keeps a half-watched run in the right place. Declare `version` on the tour and bump it when the content changes enough that a viewer part-way through should start over: saved progress resumes only while its version matches, and a chapter id the tour no longer has starts it from the beginning. A completion survives a version bump, and `completedCurrentVersion` tells the two apart.
+
+## Finishing into your plugin
+
+`finish` puts a line on the last end card and decides what Finish does after closing the tour: open your settings, optionally at one setting, or run one of your own commands, such as the first step of your workflow. These are the same two targets a setup step offers, held to the same rules: the setting must be one you declare, and the command must be yours (`{name}.<id>`, and one of your `contributes.commands` when you declare any). Finish is the user's click, so the action runs under its own danger and consent rules.
+
+```json
+"finish": { "hint": "Connect your account to start publishing", "action": { "kind": "settings", "key": "token" } }
+```

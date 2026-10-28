@@ -41,6 +41,7 @@ import type {
   FileTreeNode,
 } from "../../shared/types/ipc.js";
 import type { ProjectPulse, PulseRangeDays } from "../../shared/types/pulse.js";
+import type { GitDiffSide } from "../../shared/types/git.js";
 import type { GitFileDiffResult } from "../../shared/types/ipc/git.js";
 import type { WorkspacePollingPolicy } from "../../shared/types/powerPolicy.js";
 import type { HostLoadKind } from "./ProjectSwitchStatusTiming.js";
@@ -195,6 +196,10 @@ export class WorkspaceClient extends EventEmitter {
     return this.pool.getHostForWindow(windowId);
   }
 
+  isWindowAttached(windowId: number, projectPath: string): boolean {
+    return this.pool.isWindowAttached(windowId, projectPath);
+  }
+
   // ── Process lifecycle ──
 
   async loadProject(rootPath: string, windowId: number): Promise<HostLoadKind> {
@@ -207,6 +212,46 @@ export class WorkspaceClient extends EventEmitter {
   prewarmProject(rootPath: string): void {
     if (this.isDisposed) return;
     this.pool.prewarmProject(rootPath);
+  }
+
+  /**
+   * A folder just became a repository. A host that loaded it beforehand probed
+   * no repository, enumerated nothing, and keeps that verdict for as long as it
+   * lives — warm reuse never re-probes. Replace it so the next load sees the
+   * main worktree (#14178). Only an explicit `false` verdict qualifies: a
+   * git-backed host is already right, and an unknown one is left to the failed
+   * load handling it already has.
+   *
+   * Resolves once the replacement is in place, not once it has loaded: a load
+   * or Retry after this waits on the entry's ready promise, which is now the
+   * new host's. Returns whether a host was replaced.
+   */
+  async refreshProjectAfterGitInit(projectPath: string): Promise<boolean> {
+    if (this.isDisposed) return false;
+    const normalized = this.pool.normalizeProjectPath(projectPath);
+    const entry = this.pool.entries.get(normalized);
+    if (!entry) return false;
+    const host = entry.host;
+
+    const { gitBacked } = await this._readStatesWithGitBackedWhenReady(entry);
+    if (gitBacked !== false) return false;
+    // A concurrent refresh, eviction or dispose may have got there first.
+    if (this.isDisposed || this.pool.entries.get(normalized) !== entry || entry.host !== host) {
+      return false;
+    }
+
+    // A coalesced read started against the old host would hand back its empty map.
+    this._statesInflight.clear();
+    this._statesWithGitBackedInflight.clear();
+    this._statesResultInflight.clear();
+
+    this.pool.replaceHost(entry, "git-initialized").catch((error) => {
+      console.error(
+        `[WorkspaceClient] Replacement host failed to load ${normalized} after git init:`,
+        error
+      );
+    });
+    return true;
   }
 
   /**
@@ -1262,7 +1307,8 @@ export class WorkspaceClient extends EventEmitter {
     status: string,
     ignoreWhitespace?: boolean,
     offset?: number,
-    maxBytes?: number
+    maxBytes?: number,
+    side?: GitDiffSide
   ): Promise<GitFileDiffResult> {
     const host = this.pool.resolveHostForPath(cwd);
     if (!host) throw new Error("No workspace host for path");
@@ -1282,6 +1328,7 @@ export class WorkspaceClient extends EventEmitter {
       ignoreWhitespace,
       offset,
       maxBytes,
+      side,
     });
     return {
       content: result.diff,

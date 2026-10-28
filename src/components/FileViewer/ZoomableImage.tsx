@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { buildDaintreeFileUrl } from "./filePreviewKinds";
+import { useImageErrorHandler } from "./previewRefusal";
 import { transparencyCheckerboardUnderScale } from "./transparencyCheckerboard";
+import type { MediaPreviewError } from "./useMediaSourceUrl";
 import { cn } from "@/lib/utils";
 import {
   PANE_STATUS_FOOTER_CLASS,
@@ -25,7 +27,8 @@ export interface ZoomableImageProps {
    * current zoom and pan.
    */
   cacheBust?: string;
-  onError?: () => void;
+  /** Called with the host's refusal when a remote window's host refused it; bare for a failed load. */
+  onError?: (error?: MediaPreviewError) => void;
 }
 
 export const MIN_ZOOM = 0.1;
@@ -85,6 +88,11 @@ export function ZoomableImage({ filePath, rootPath, alt, cacheBust, onError }: Z
   const dragRef = useRef<{ pointerId: number; startX: number; startY: number } | null>(null);
   const [natural, setNatural] = useState<{ width: number; height: number } | null>(null);
   const [stage, setStage] = useState<{ width: number; height: number } | null>(null);
+  const src =
+    cacheBust === undefined
+      ? buildDaintreeFileUrl(filePath, rootPath)
+      : `${buildDaintreeFileUrl(filePath, rootPath)}&v=${encodeURIComponent(cacheBust)}`;
+  const handleError = useImageErrorHandler(src, onError);
 
   useEffect(() => {
     const element = containerRef.current;
@@ -212,14 +220,10 @@ export function ZoomableImage({ filePath, rootPath, alt, cacheBust, onError }: Z
           // Keyed by path so switching files remounts rather than showing the
           // previous image until the new one decodes.
           key={filePath}
-          src={
-            cacheBust === undefined
-              ? buildDaintreeFileUrl(filePath, rootPath)
-              : `${buildDaintreeFileUrl(filePath, rootPath)}&v=${encodeURIComponent(cacheBust)}`
-          }
+          src={src}
           alt={alt}
           draggable={false}
-          onError={onError}
+          onError={handleError}
           onLoad={(event) =>
             setNatural({
               width: event.currentTarget.naturalWidth,

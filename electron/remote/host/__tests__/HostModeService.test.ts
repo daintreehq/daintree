@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { HostModeObservation } from "../../../../shared/types/ipc/remoteHosts.js";
 import type { HostModeStatus } from "../../../../shared/types/ipc/hostMode.js";
 import { LinkClient } from "../../client/LinkClient.js";
 import { createDirectTransport } from "../../client/transport.js";
@@ -236,10 +237,12 @@ describe("HostModeService enable and disable", () => {
     await waitFor(() => client.getState().status === "connected");
     const attached = await service.getStatus();
     expect(attached.attachedClients.map((c) => c.clientName)).toEqual(["greg-mbp"]);
+    expect(service.getAttachedClients().map((c) => c.clientName)).toEqual(["greg-mbp"]);
     expect(row(attached, "drivers")).toMatchObject({ state: "ok", detail: "greg-mbp" });
 
     const off = await service.setEnabled({ enabled: false });
     expect(off).toMatchObject({ enabled: false, listening: false, attachedClients: [] });
+    expect(service.getAttachedClients()).toEqual([]);
     expect(settings()).toEqual({ enabled: false, startAtLogin: false, advertise: true });
     expect(existsSync(location.socketPath)).toBe(false);
     expect(existsSync(location.discoveryPath)).toBe(false);
@@ -555,7 +558,9 @@ describe("HostModeService status rows", () => {
       state: "unavailable",
       detail: NO_KEYRING_DETAIL,
     });
-    expect(row(await service.runKeychainPreflight(), "keychain").detail).toBe(NO_KEYRING_DETAIL);
+    expect(row(await service.runKeychainPreflight(), "keychain").detail).toMatch(
+      new RegExp(`^${NO_KEYRING_DETAIL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} \\(last checked `)
+    );
     expect(encrypt).not.toHaveBeenCalled();
   });
 
@@ -616,6 +621,7 @@ describe("HostModeService enabling from host setup", () => {
         state: "ok",
         detail: "Keyring answered a test encrypt and decrypt",
         checked: true,
+        checkedAt: expect.any(Number),
       },
     });
   });
@@ -712,5 +718,150 @@ describe("HostModeService enabling from host setup", () => {
     await service.getStatus();
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(writeStatus).not.toHaveBeenCalled();
+  });
+});
+
+describe("HostModeService keychain history", () => {
+  const saved = (checkedAt?: number): HostModeObservation => ({
+    pid: 0,
+    stopped: true,
+    enabled: true,
+    startAtLogin: false,
+    startAtLoginInstalled: null,
+    startAtLoginError: null,
+    keychain: {
+      state: "ok",
+      detail: "Keychain answered a test encrypt and decrypt",
+      checked: true,
+      ...(checkedAt && { checkedAt }),
+    },
+  });
+
+  it("keeps showing the result an earlier run recorded, and when it was checked", async () => {
+    const { service } = makeService({
+      platform: "darwin",
+      readStatus: async () => saved(Date.UTC(2026, 9, 22, 10, 30)),
+    });
+    expect(row(await service.getStatus(), "keychain")).toMatchObject({
+      state: "ok",
+      detail: "Keychain answered a test encrypt and decrypt (last checked 2026-10-22 10:30 UTC)",
+    });
+  });
+
+  it("does not write 'not checked' over the earlier result before it is read back", async () => {
+    const writes: Array<Omit<HostModeObservation, "pid">> = [];
+    const { service } = makeService({
+      platform: "darwin",
+      readStatus: async () => saved(1_700_000_000_000),
+      writeStatus: async (observation) => void writes.push(observation),
+    });
+    await service.setEnabled({ enabled: false, startAtLogin: false });
+    await vi.waitFor(() => expect(writes.length).toBeGreaterThan(0));
+    for (const w of writes) {
+      expect(w.keychain).toMatchObject({
+        state: "ok",
+        checked: true,
+        checkedAt: 1_700_000_000_000,
+      });
+    }
+  });
+
+  it("leaves a run that has no earlier record at 'Not checked yet'", async () => {
+    const { service } = makeService({ platform: "darwin", readStatus: async () => null });
+    expect(row(await service.getStatus(), "keychain")).toMatchObject({ detail: "Not checked yet" });
+  });
+
+  it("stamps a finished check", async () => {
+    const { service } = makeService({ platform: "darwin", readStatus: async () => null });
+    const status = await service.runKeychainPreflight();
+    expect(row(status, "keychain").detail).toMatch(
+      /\(last checked \d{4}-\d\d-\d\d \d\d:\d\d UTC\)$/
+    );
+  });
+});
+
+describe("HostModeService recording what the process is doing", () => {
+  type Runtime = ReturnType<NonNullable<HostModeServiceDeps["runtime"]>["read"]>;
+  function fakeRuntime(initial: Runtime) {
+    let state = initial;
+    const listeners = new Set<() => void>();
+    return {
+      listeners,
+      read: () => state,
+      subscribe: (listener: () => void) => {
+        listeners.add(listener);
+        return () => void listeners.delete(listener);
+      },
+      set(next: Runtime) {
+        state = next;
+        for (const listener of listeners) listener();
+      },
+    };
+  }
+  const STAGED = { version: "1.5.0", installsOnQuit: true, ready: true };
+
+  it("records whether a window is open and the staged update, and again when either changes", async () => {
+    const runtime = fakeRuntime({ windows: false, stagedUpdate: null });
+    const recorded: Array<Record<string, unknown>> = [];
+    const { service } = makeService({
+      runtime,
+      writeStatus: async (observation) => void recorded.push(observation),
+    });
+    await service.setEnabled({ enabled: true });
+    await waitFor(() => recorded.length > 0);
+    expect(recorded.at(-1)).toMatchObject({ windows: false, enabled: true });
+    expect(recorded.at(-1)?.stagedUpdate).toBeUndefined();
+    runtime.set({ windows: true, stagedUpdate: STAGED });
+    await waitFor(() => recorded.at(-1)?.windows === true);
+    expect(recorded.at(-1)).toMatchObject({ windows: true, stagedUpdate: STAGED });
+  });
+
+  it("records the next change after a write that failed", async () => {
+    const runtime = fakeRuntime({ windows: false, stagedUpdate: null });
+    const recorded: Array<Record<string, unknown>> = [];
+    let fail = false;
+    const { service } = makeService({
+      runtime,
+      writeStatus: async (observation) => {
+        if (fail) throw new Error("disk full");
+        recorded.push(observation);
+      },
+    });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    await service.setEnabled({ enabled: true });
+    await waitFor(() => recorded.length > 0);
+    fail = true;
+    runtime.set({ windows: true, stagedUpdate: null });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    fail = false;
+    runtime.set({ windows: true, stagedUpdate: STAGED });
+    await waitFor(() => recorded.at(-1)?.stagedUpdate !== undefined);
+    expect(recorded.at(-1)).toMatchObject({ windows: true, stagedUpdate: STAGED });
+  });
+
+  it("records nothing for a change before Host mode kept any record", async () => {
+    const runtime = fakeRuntime({ windows: false, stagedUpdate: null });
+    const writeStatus = vi.fn(async () => {});
+    makeService({ runtime, writeStatus });
+    runtime.set({ windows: true, stagedUpdate: STAGED });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(writeStatus).not.toHaveBeenCalled();
+  });
+
+  it("leaves windows and updates out of a quit process's last record, and stops listening", async () => {
+    const runtime = fakeRuntime({ windows: true, stagedUpdate: STAGED });
+    const recorded: Array<Record<string, unknown>> = [];
+    const { service } = makeService({
+      runtime,
+      writeStatus: async (observation) => void recorded.push(observation),
+    });
+    await service.setEnabled({ enabled: true });
+    await waitFor(() => recorded.length > 0);
+    await service.dispose();
+    const last = recorded.at(-1)!;
+    expect(last.stopped).toBe(true);
+    expect(last.windows).toBeUndefined();
+    expect(last.stagedUpdate).toBeUndefined();
+    expect(runtime.listeners.size).toBe(0);
   });
 });

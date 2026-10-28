@@ -43,6 +43,15 @@ interface ScratchStoreState {
  */
 let scratchLoadInFlight: Promise<void> | null = null;
 
+/** The name of the scratch `workspaceId` names, or null for a project or an unknown id. */
+export function scratchName(
+  scratches: readonly Scratch[],
+  workspaceId: string | null
+): string | null {
+  if (!workspaceId) return null;
+  return scratches.find((scratch) => scratch.id === workspaceId)?.name ?? null;
+}
+
 export const useScratchStore = create<ScratchStoreState>((set, get) => ({
   scratches: [],
   currentScratch: null,

@@ -1,23 +1,21 @@
 import { useCallback, useState, useEffect, useId, useRef } from "react";
 import type { ReactNode } from "react";
-import {
-  Eye,
-  EyeOff,
-  Plus,
-  X,
-  XCircle,
-  ExternalLink,
-  ChevronRight,
-  CheckCircle2,
-} from "lucide-react";
+import { Eye, EyeOff, XCircle, ExternalLink, ChevronRight, CheckCircle2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { pluralize } from "@/lib/pluralize";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { SettingsSection } from "./SettingsSection";
+import { VoiceDictionaryPage } from "./VoiceDictionaryPage";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { SettingsSelect } from "./SettingsSelect";
+import { CodexIcon } from "@/components/icons/brands/CodexIcon";
+import { DeepgramIcon } from "@/components/icons/brands/DeepgramIcon";
+import { GrokIcon } from "@/components/icons/brands/GrokIcon";
+import { MicTestRow } from "./MicTestRow";
 import { SettingsPresetGroup } from "./SettingsPresetGroup";
+import { SettingsChoicebox } from "./SettingsChoicebox";
 import { SettingsTextarea } from "./SettingsTextarea";
 import { SettingsInput } from "./SettingsInput";
 import {
@@ -26,89 +24,129 @@ import {
   SettingsRow,
   SettingsRowActions,
 } from "./SettingsGroup";
+import { LastDictationTermsSection } from "./LastDictationTerms";
 import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
 import { useSettingsTabValidation } from "./SettingsValidationRegistry";
 import { dispatchVoiceInputSettingsChanged } from "@/lib/voiceInputSettingsEvents";
 import { logWarn } from "@/utils/logger";
 import { useAudioDevices, SYSTEM_DEFAULT_VALUE } from "@/hooks/useAudioDevices";
+import { isSpecificMicId } from "@/services/voiceMicDevices";
 import { useTabLoad } from "@/hooks";
-import { useKeybindingDisplay } from "@/hooks/useKeybinding";
-import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { useEffectiveCombo, useKeybindingDisplay } from "@/hooks/useKeybinding";
+import { actionService } from "@/services/ActionService";
+import { KbdChord } from "@/components/ui/Kbd";
+import { voiceErrorLogFields } from "@shared/utils/voiceLogFields";
 import { VOICE_LANGUAGES } from "@shared/config/voiceLanguages";
-import { CORE_CORRECTION_PROMPT, VOICE_DICTATION_AI_MODEL } from "@shared/config/voiceCorrection";
+import {
+  correctionInstructionsFor,
+  VOICE_CLEANUP_AI_MODEL,
+  VOICE_CLEANUP_MODELS,
+} from "@shared/config/voiceCorrection";
+import {
+  VOICE_CLEANUP_KEY_FIELD,
+  hasCleanupKey,
+  hasTranscriptionKey,
+  transcriptionKeyField,
+  transcriptionKeyIssuer,
+  type VoiceApiKeyField,
+} from "@shared/config/voiceProviders";
 import type {
   VoiceInputSettings,
-  SuggestedDictionaryEntry,
+  VoiceInputSettingsPatch,
+  VoiceCorrectionModel,
+  VoiceDictionaryEntry,
+  VoiceDictionaryState,
   MicPermissionStatus,
   VoiceParagraphingStrategy,
   VoiceTranscriptionProvider,
   VoiceRecordingMode,
 } from "@shared/types";
 
-const PROVIDER_NAME: Record<VoiceTranscriptionProvider, string> = {
-  openai: "OpenAI",
-  deepgram: "Deepgram",
-};
-
 const PROVIDER_OPTIONS = [
-  { value: "openai" as const, label: "OpenAI" },
-  { value: "deepgram" as const, label: "Deepgram" },
+  { value: "openai" as const, label: "OpenAI", icon: CodexIcon },
+  { value: "deepgram" as const, label: "Deepgram", icon: DeepgramIcon },
+  { value: "grok" as const, label: "Grok", icon: GrokIcon },
 ];
 
+const RECOGNITION_HINTS_PRIVACY =
+  "Recognition hints go with the audio: your dictionary, project, host and worktree names, the branch, and identifiers from terminal output.";
+
 const PROVIDER_PRIVACY: Record<VoiceTranscriptionProvider, string> = {
-  openai:
-    "Microphone audio is streamed over an encrypted connection to OpenAI for transcription using your API key. Audio is not used for model training. OpenAI may retain audio in abuse-monitoring logs for up to 30 days.",
-  deepgram:
-    "Microphone audio is streamed over an encrypted connection to Deepgram for transcription using your API key. Deepgram does not retain streaming audio or transcripts by default.",
+  openai: `OpenAI receives your audio over an encrypted connection, keeps it for up to 30 days for abuse monitoring, and doesn't train on it. ${RECOGNITION_HINTS_PRIVACY}`,
+  deepgram: `Deepgram receives your audio over an encrypted connection and, by default, may keep audio and transcripts to improve its models. ${RECOGNITION_HINTS_PRIVACY}`,
+  grok: `xAI receives your audio over an encrypted connection, keeps it for up to 30 days for abuse auditing unless your team turns on Zero Data Retention, and doesn't train on it without permission. ${RECOGNITION_HINTS_PRIVACY}`,
 };
 
-const DICTIONARY_LIMIT = 100;
+// What each model is better at, from the cleanup benchmark (#14793).
+const CLEANUP_MODEL_COPY: Record<VoiceCorrectionModel, { label: string; description: string }> = {
+  "gpt-6.1-terra": {
+    label: "GPT-6.1 Terra (default)",
+    description:
+      "Catches more misheard names and words that only make sense in context. Costs about seven times as much, still well under a tenth of a cent a cleanup.",
+  },
+  "gpt-6-luna": {
+    label: "GPT-6 Luna",
+    description:
+      "Cheaper, and better at writing out dictated paths and symbols. Misses more misheard names.",
+  },
+};
+
+const CLEANUP_MODEL_CHOICES = VOICE_CLEANUP_MODELS.map((value) => ({
+  value,
+  ...CLEANUP_MODEL_COPY[value],
+}));
 
 const DEFAULT_SETTINGS: VoiceInputSettings = {
   enabled: false,
   openaiApiKey: "",
   deepgramApiKey: "",
+  xaiApiKey: "",
   language: "en",
-  customDictionary: [],
+  dictionary: [],
   transcriptionProvider: "openai",
   transcriptionModel: "gpt-live-transcribe",
-  correctionEnabled: false,
-  correctionModel: VOICE_DICTATION_AI_MODEL,
+  correctionEnabled: true,
+  correctionModel: VOICE_CLEANUP_AI_MODEL,
   correctionCustomInstructions: "",
   paragraphingStrategy: "spoken-command",
   resolveFileLinks: true,
   deviceId: "",
+  deviceLabel: "",
   organizationId: "",
   projectId: "",
-  recordingMode: "toggle",
+  recordingMode: "tap-or-hold",
   suggestedDictionary: [],
+  dismissedSuggestions: [],
   learnFromCorrections: true,
 };
 
 type SaveGroup = "setup" | "microphone" | "credentials" | "behavior" | "dictionary" | "correction";
 
+type PatchKey = keyof VoiceInputSettingsPatch;
+
 // Keys report their own save outcome in the key row, so they never raise a section banner.
-const SAVE_GROUP_BY_KEY: Partial<Record<keyof VoiceInputSettings, SaveGroup>> = {
+const SAVE_GROUP_BY_KEY: Partial<Record<PatchKey, SaveGroup>> = {
   openaiApiKey: "credentials",
   deepgramApiKey: "credentials",
+  xaiApiKey: "credentials",
   deviceId: "microphone",
+  deviceLabel: "microphone",
   language: "behavior",
   paragraphingStrategy: "behavior",
   recordingMode: "behavior",
-  customDictionary: "dictionary",
-  suggestedDictionary: "dictionary",
   learnFromCorrections: "dictionary",
   correctionEnabled: "correction",
+  correctionModel: "correction",
   correctionCustomInstructions: "correction",
   resolveFileLinks: "correction",
 };
 
-const SETTING_KEYS: readonly (keyof VoiceInputSettings)[] = [
+const SETTING_KEYS: readonly PatchKey[] = [
   "enabled",
   "openaiApiKey",
   "deepgramApiKey",
+  "xaiApiKey",
   "language",
-  "customDictionary",
   "transcriptionProvider",
   "transcriptionModel",
   "correctionEnabled",
@@ -117,18 +155,18 @@ const SETTING_KEYS: readonly (keyof VoiceInputSettings)[] = [
   "paragraphingStrategy",
   "resolveFileLinks",
   "deviceId",
+  "deviceLabel",
   "organizationId",
   "projectId",
   "recordingMode",
-  "suggestedDictionary",
   "learnFromCorrections",
 ];
 
-function patchedKeys(patch: Partial<VoiceInputSettings>): (keyof VoiceInputSettings)[] {
+function patchedKeys(patch: VoiceInputSettingsPatch): PatchKey[] {
   return SETTING_KEYS.filter((key) => key in patch);
 }
 
-function saveGroupOf(patch: Partial<VoiceInputSettings>): SaveGroup {
+function saveGroupOf(patch: VoiceInputSettingsPatch): SaveGroup {
   for (const key of patchedKeys(patch)) {
     const group = SAVE_GROUP_BY_KEY[key];
     if (group) return group;
@@ -136,7 +174,7 @@ function saveGroupOf(patch: Partial<VoiceInputSettings>): SaveGroup {
   return "setup";
 }
 
-function copySetting<K extends keyof VoiceInputSettings>(
+function copySetting<K extends PatchKey>(
   target: VoiceInputSettings,
   source: VoiceInputSettings,
   key: K
@@ -144,7 +182,7 @@ function copySetting<K extends keyof VoiceInputSettings>(
   target[key] = source[key];
 }
 
-const SETTING_LABEL: Partial<Record<keyof VoiceInputSettings, string>> = {
+const SETTING_LABEL: Partial<Record<PatchKey, string>> = {
   enabled: "Dictation",
   transcriptionProvider: "Transcription provider",
   organizationId: "Organization ID",
@@ -153,18 +191,19 @@ const SETTING_LABEL: Partial<Record<keyof VoiceInputSettings, string>> = {
   language: "Language",
   paragraphingStrategy: "Paragraph breaks",
   recordingMode: "Recording mode",
-  customDictionary: "The dictionary",
-  suggestedDictionary: "The suggestions",
   learnFromCorrections: "Learn words from corrections",
   correctionEnabled: "Clean up transcriptions",
+  correctionModel: "Cleanup model",
   correctionCustomInstructions: "Custom instructions",
   resolveFileLinks: "Resolve file references",
 };
 
-interface SaveFailure {
-  group: SaveGroup;
-  patch: Partial<VoiceInputSettings>;
-}
+// A settings save is retried through the current `update`, so the retry rolls back
+// to what the page shows now. A dictionary change reads no page state, so it can
+// carry its own retry.
+type SaveFailure =
+  | { group: SaveGroup; patch: VoiceInputSettingsPatch }
+  | { group: "dictionary"; label: string; retry: () => void };
 
 type ConclusiveMicStatus = "granted" | "denied" | "restricted";
 
@@ -190,13 +229,13 @@ export function maskApiKey(key: string): string {
  * key that is present is not claimed to work.
  */
 export function dictationBlockers(
-  settings: Pick<VoiceInputSettings, "transcriptionProvider" | "openaiApiKey" | "deepgramApiKey">,
+  settings: Pick<VoiceInputSettings, "transcriptionProvider" | VoiceApiKeyField>,
   micPermission: MicPermissionStatus
 ): string[] {
   const blockers: string[] = [];
-  const key =
-    settings.transcriptionProvider === "deepgram" ? settings.deepgramApiKey : settings.openaiApiKey;
-  if (!key) blockers.push(`add your ${PROVIDER_NAME[settings.transcriptionProvider]} API key`);
+  if (!hasTranscriptionKey(settings)) {
+    blockers.push(`add your ${transcriptionKeyIssuer(settings.transcriptionProvider)} API key`);
+  }
   if (micPermission === "denied" || micPermission === "restricted") {
     blockers.push("allow microphone access");
   }
@@ -223,22 +262,54 @@ async function probeMicCapture(): Promise<"granted" | "denied" | "unavailable"> 
   }
 }
 
-export function VoiceInputSettingsTab() {
+interface VoiceInputSettingsTabProps {
+  /** False while the settings dialog shows another page; this one stays mounted. */
+  isActive?: boolean;
+}
+
+export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTabProps = {}) {
   const [settings, setSettings] = useState<VoiceInputSettings>(DEFAULT_SETTINGS);
   const [micPermission, setMicPermission] = useState<MicPermissionStatus>("unknown");
   const [isRequestingMic, setIsRequestingMic] = useState(false);
   // A check that couldn't answer, said once in the row instead of a silent no-op.
   const [micNote, setMicNote] = useState<string | null>(null);
-  const [newDictionaryWord, setNewDictionaryWord] = useState("");
+  const [dictionaryOpen, setDictionaryOpen] = useState(false);
   const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
-  const dictionaryInputRef = useRef<HTMLInputElement>(null);
+  const manageDictionaryRef = useRef<HTMLButtonElement>(null);
+  const returnFocusToManage = useRef<{ visible: boolean } | null>(null);
 
   const {
     devices,
     loading: devicesLoading,
     error: devicesError,
+    complete: devicesComplete,
     refresh: refreshDevices,
   } = useAudioDevices();
+
+  // A saved alias ("default", "communications") follows the system input,
+  // so it reads as System default.
+  const chosenMicId = isSpecificMicId(settings.deviceId) ? settings.deviceId : "";
+  const chosenMicListed = devices.some((device) => device.value === chosenMicId);
+  // Only a complete list says the mic is gone; until then it keeps its name.
+  const chosenMicAway =
+    chosenMicId !== "" && !chosenMicListed && devicesComplete && !devicesLoading && !devicesError;
+  const chosenMicName = settings.deviceLabel || "Selected microphone";
+  const micOptions =
+    chosenMicId !== "" && !chosenMicListed
+      ? [
+          ...devices,
+          {
+            value: chosenMicId,
+            label: chosenMicAway ? `${chosenMicName} (not connected)` : chosenMicName,
+          },
+        ]
+      : devices;
+  let micDescription = "The microphone dictation records from";
+  if (devicesLoading && !devicesError) micDescription = "Detecting devices…";
+  else if (chosenMicAway)
+    micDescription = "Not connected, so dictation uses the system default until it's back";
+  else if (chosenMicId === "")
+    micDescription = "Follows the system input, so a headset that connects takes over";
 
   const loadSettings = useCallback(async () => {
     const s = await window.electron?.voiceInput?.getSettings();
@@ -261,16 +332,14 @@ export function VoiceInputSettingsTab() {
       })
       .catch((err) => {
         // Background probe — UI shows fallback "unknown" state.
-        logWarn("Failed to check microphone permission", {
-          error: formatErrorMessage(err, "Mic permission probe failed"),
-        });
+        logWarn("Failed to check microphone permission", voiceErrorLogFields(err));
       });
   }, []);
 
   // Optimistic apply. A rejected save puts back the keys it touched (unless a later
   // change has already moved them) and parks the failure on the group it belongs to,
   // so the page never silently shows a value that did not persist.
-  const update = async (patch: Partial<VoiceInputSettings>): Promise<boolean> => {
+  const update = async (patch: VoiceInputSettingsPatch): Promise<boolean> => {
     const previous = settings;
     const group = saveGroupOf(patch);
     // A key only counts as saved (or removed) once it has persisted: the row's chip
@@ -288,30 +357,36 @@ export function VoiceInputSettingsTab() {
         setSettings((current) => {
           const reverted: VoiceInputSettings = { ...current };
           for (const key of patchedKeys(patch)) {
-            if (current[key] === patch[key]) copySetting(reverted, previous, key);
+            // A mic's name goes back only with its id, so a failed save can't
+            // pair one mic's id with another's name.
+            const owner = key === "deviceLabel" && "deviceId" in patch ? "deviceId" : key;
+            if (current[owner] === patch[owner]) copySetting(reverted, previous, key);
           }
           return reverted;
         });
       setSaveFailure({ group, patch });
-      logWarn("Failed to save voice input settings", {
-        error: formatErrorMessage(err, "Voice input save failed"),
-      });
+      logWarn("Failed to save voice input settings", voiceErrorLogFields(err));
       return false;
     }
   };
 
-  const saveError = (group: SaveGroup) =>
-    saveFailure?.group === group ? (
+  const saveError = (group: SaveGroup) => {
+    if (saveFailure?.group !== group) return null;
+    const failure = saveFailure;
+    const label =
+      "patch" in failure
+        ? (patchedKeys(failure.patch)
+            .map((key) => SETTING_LABEL[key])
+            .find(Boolean) ?? "The setting")
+        : failure.label;
+    return (
       <SettingsLoadErrorBanner
         title="Couldn't save that change"
-        message={`${
-          patchedKeys(saveFailure.patch)
-            .map((key) => SETTING_LABEL[key])
-            .find(Boolean) ?? "The setting"
-        } is back to its previous value.`}
-        onRetry={() => void update(saveFailure.patch)}
+        message={`${label} is back to its previous value.`}
+        onRetry={"patch" in failure ? () => void update(failure.patch) : failure.retry}
       />
-    ) : null;
+    );
+  };
 
   // Best-effort: a transient IPC failure is inconclusive, not an answer.
   const readMicPermission = async (): Promise<MicPermissionStatus | undefined> => {
@@ -384,42 +459,45 @@ export function VoiceInputSettingsTab() {
     else setMicNote("Couldn't check microphone access. Try again in a moment.");
   };
 
-  const addDictionaryWord = () => {
-    const word = newDictionaryWord.trim();
-    if (!word || settings.customDictionary.includes(word)) return;
-    const next = [...settings.customDictionary, word];
-    void update({ customDictionary: next });
-    setNewDictionaryWord("");
-    dictionaryInputRef.current?.focus();
-  };
-
-  // The removed chip took focus with it; hand it to the field a keyboard user adds from.
-  const removeDictionaryWord = (word: string) => {
-    void update({ customDictionary: settings.customDictionary.filter((w) => w !== word) });
-    dictionaryInputRef.current?.focus();
-  };
-
-  // Suggestions live in voiceInput settings, so accept/dismiss are plain
-  // settings mutations through `update` — accept moves the word into the
-  // confirmed dictionary, dismiss just drops it from the queue.
-  const acceptSuggestion = (word: string) => {
-    void update({
-      suggestedDictionary: settings.suggestedDictionary.filter((e) => e.word !== word),
-      customDictionary: settings.customDictionary.includes(word)
-        ? settings.customDictionary
-        : [...settings.customDictionary, word],
-    });
-    dictionaryInputRef.current?.focus();
-  };
-
-  const dismissSuggestion = (word: string) => {
-    void update({
-      suggestedDictionary: settings.suggestedDictionary.filter((e) => e.word !== word),
-    });
-    dictionaryInputRef.current?.focus();
+  // Main owns the dictionary and its suggestion queue: each change is one
+  // operation there, and the page shows what main holds afterwards, so a word
+  // learned while the page is open survives a change made here. Not optimistic:
+  // a failed change leaves the page as it was, with the banner and a retry.
+  const changeDictionary = async (
+    label: string,
+    run: () => Promise<VoiceDictionaryState>,
+    onSaved?: () => void
+  ): Promise<boolean> => {
+    try {
+      const next = await run();
+      setSettings((current) => ({
+        ...current,
+        dictionary: next.dictionary,
+        suggestedDictionary: next.suggestedDictionary,
+      }));
+      setSaveFailure((current) => (current?.group === "dictionary" ? null : current));
+      onSaved?.();
+      return true;
+    } catch (err) {
+      setSaveFailure({
+        group: "dictionary",
+        label,
+        retry: () => void changeDictionary(label, run, onSaved),
+      });
+      logWarn("Failed to change the voice dictionary", voiceErrorLogFields(err));
+      return false;
+    }
   };
 
   useSettingsTabValidation("voice", Boolean(loadError || saveFailure));
+
+  // The Manage button unmounts while the dictionary page is open; hand focus back to it.
+  useEffect(() => {
+    const target = returnFocusToManage.current;
+    if (dictionaryOpen || !target) return;
+    returnFocusToManage.current = null;
+    manageDictionaryRef.current?.focus({ focusVisible: target.visible } as FocusOptions);
+  }, [dictionaryOpen]);
 
   const provider = settings.transcriptionProvider;
   const blockers = dictationBlockers(settings, micPermission);
@@ -428,43 +506,99 @@ export function VoiceInputSettingsTab() {
       ? `Can't start yet: ${blockers.join(" and ")}`
       : "Dictate into terminals and inputs using your microphone";
   const isLegacyKey = !!settings.openaiApiKey && !settings.openaiApiKey.startsWith("sk-proj-");
-  const hasOpenAiKey = !!settings.openaiApiKey;
+  const hasOpenAiKey = hasCleanupKey(settings);
   const spokenCommandsAvailable = settings.language === "en";
   const paragraphing = settings.paragraphingStrategy ?? "spoken-command";
   const effectiveParagraphing: VoiceParagraphingStrategy = spokenCommandsAvailable
     ? paragraphing
     : "manual";
-  const recordingMode = settings.recordingMode ?? "toggle";
+  const recordingMode = settings.recordingMode ?? "tap-or-hold";
   const dictationShortcut = useKeybindingDisplay("voiceInput.toggle");
+  const dictationCombo = useEffectiveCombo("voiceInput.toggle");
+  const pauseCombo = useEffectiveCombo("voiceInput.togglePause");
 
-  const openAiKeyRow = (
-    <ApiKeyRow
-      key="openai"
-      id="voice-stt-openai-key"
-      label="OpenAI API key"
-      value={settings.openaiApiKey}
-      placeholder="Paste an OpenAI API key"
-      onSave={(key) => update({ openaiApiKey: key })}
-      onValidate={(key) => window.electron?.voiceInput?.validateApiKey(key)}
-      helpUrl="https://platform.openai.com/api-keys"
-      description={
-        isLegacyKey ? (
+  const coversCleanup = provider === "openai" && settings.correctionEnabled;
+
+  // Exhaustive over the key fields, so a new provider's key can't fall into another's row.
+  const keyRows: Record<VoiceApiKeyField, () => ReactNode> = {
+    deepgramApiKey: () => (
+      <ApiKeyRow
+        key="deepgramApiKey"
+        label="Deepgram API key"
+        value={settings.deepgramApiKey}
+        placeholder="Paste a Deepgram API key"
+        onSave={(key) => update({ deepgramApiKey: key })}
+        helpUrl="https://console.deepgram.com/"
+        description={
+          settings.deepgramApiKey
+            ? "Stored locally in plain text. Set usage limits on your Deepgram account to cap exposure."
+            : "Create one in the Deepgram console. Keys are stored locally in plain text."
+        }
+      />
+    ),
+    xaiApiKey: () => (
+      <ApiKeyRow
+        key="xaiApiKey"
+        label="xAI API key"
+        value={settings.xaiApiKey}
+        placeholder="Paste an xAI API key"
+        onSave={(key) => update({ xaiApiKey: key })}
+        helpUrl="https://console.x.ai/"
+        description={
+          settings.xaiApiKey
+            ? "Stored locally in plain text. Set a spending limit on your xAI team to cap exposure."
+            : "Create one in the xAI console. Keys are stored locally in plain text."
+        }
+      />
+    ),
+    openaiApiKey: () => (
+      <ApiKeyRow
+        key="openaiApiKey"
+        id="voice-stt-openai-key"
+        label="OpenAI API key"
+        value={settings.openaiApiKey}
+        placeholder="Paste an OpenAI API key"
+        onSave={(key) => update({ openaiApiKey: key })}
+        onValidate={(key) => window.electron?.voiceInput?.validateApiKey(key)}
+        helpUrl="https://platform.openai.com/api-keys"
+        description={
           <>
-            This is a legacy user key. A Project API key (starts with{" "}
-            <code className="font-mono">sk-proj-</code>) is scoped more tightly. Keys are stored
-            locally in plain text, so set billing limits on your OpenAI account.
+            {coversCleanup && "This one key covers transcription and text cleanup. "}
+            {isLegacyKey ? (
+              <>
+                This is a legacy user key. A Project API key (starts with{" "}
+                <code className="font-mono">sk-proj-</code>) is scoped more tightly. Keys are stored
+                locally in plain text, so set billing limits on your OpenAI account.
+              </>
+            ) : settings.openaiApiKey ? (
+              "Stored locally in plain text. Set billing limits on your OpenAI account to cap exposure."
+            ) : (
+              <>
+                Use a Project API key (starts with <code className="font-mono">sk-proj-</code>) for
+                the best security. Keys are stored locally in plain text.
+              </>
+            )}
           </>
-        ) : settings.openaiApiKey ? (
-          "Stored locally in plain text. Set billing limits on your OpenAI account to cap exposure."
-        ) : (
-          <>
-            Use a Project API key (starts with <code className="font-mono">sk-proj-</code>) for the
-            best security. Keys are stored locally in plain text.
-          </>
-        )
-      }
-    />
-  );
+        }
+      />
+    ),
+  };
+  const keyRow = (field: VoiceApiKeyField) => keyRows[field]();
+
+  if (dictionaryOpen) {
+    return (
+      <VoiceDictionaryPage
+        entries={settings.dictionary}
+        suggestions={settings.suggestedDictionary}
+        onChange={changeDictionary}
+        failure={saveError("dictionary")}
+        onBack={(viaKeyboard) => {
+          returnFocusToManage.current = { visible: viaKeyboard === true };
+          setDictionaryOpen(false);
+        }}
+      />
+    );
+  }
 
   return (
     <div className="space-y-8">
@@ -497,35 +631,22 @@ export function VoiceInputSettingsTab() {
 
           {settings.enabled && (
             <SettingsDependents>
-              <SettingsPresetGroup
+              <SettingsSelect
+                id="voice-provider"
                 label="Transcription provider"
                 description={PROVIDER_PRIVACY[provider]}
                 options={PROVIDER_OPTIONS}
                 value={provider}
-                onChange={(v) => void update({ transcriptionProvider: v })}
+                onValueChange={(v) =>
+                  void update({ transcriptionProvider: v as VoiceTranscriptionProvider })
+                }
                 isModified={provider !== DEFAULT_SETTINGS.transcriptionProvider}
                 onReset={() =>
                   void update({ transcriptionProvider: DEFAULT_SETTINGS.transcriptionProvider })
                 }
               />
 
-              {provider === "deepgram" ? (
-                <ApiKeyRow
-                  key="deepgram"
-                  label="Deepgram API key"
-                  value={settings.deepgramApiKey}
-                  placeholder="Paste a Deepgram API key"
-                  onSave={(key) => update({ deepgramApiKey: key })}
-                  helpUrl="https://console.deepgram.com/"
-                  description={
-                    settings.deepgramApiKey
-                      ? "Stored locally in plain text. Set usage limits on your Deepgram account to cap exposure."
-                      : "Create one in the Deepgram console. Keys are stored locally in plain text."
-                  }
-                />
-              ) : (
-                openAiKeyRow
-              )}
+              {keyRow(transcriptionKeyField(provider))}
 
               {provider === "openai" && isLegacyKey && (
                 <>
@@ -574,12 +695,11 @@ export function VoiceInputSettingsTab() {
             />
 
             <SettingsSelect
+              id="voice-input-device"
               label="Input device"
               description={
                 <>
-                  {devicesLoading && !devicesError
-                    ? "Detecting devices…"
-                    : "The microphone dictation records from"}
+                  {micDescription}
                   {" · "}
                   <Button variant="link" onClick={refreshDevices}>
                     Refresh list
@@ -587,12 +707,33 @@ export function VoiceInputSettingsTab() {
                 </>
               }
               error={devicesError ?? undefined}
-              value={settings.deviceId || SYSTEM_DEFAULT_VALUE}
-              onValueChange={(v) => void update({ deviceId: v === SYSTEM_DEFAULT_VALUE ? "" : v })}
-              options={devices}
+              value={chosenMicId || SYSTEM_DEFAULT_VALUE}
+              onValueChange={(v) =>
+                void update(
+                  v === SYSTEM_DEFAULT_VALUE
+                    ? { deviceId: "", deviceLabel: "" }
+                    : {
+                        deviceId: v,
+                        deviceLabel: devices.find((device) => device.value === v)?.label ?? "",
+                      }
+                )
+              }
+              options={micOptions}
               disabled={devicesLoading && devices.length <= 1}
-              isModified={settings.deviceId !== DEFAULT_SETTINGS.deviceId}
-              onReset={() => void update({ deviceId: DEFAULT_SETTINGS.deviceId })}
+              isModified={chosenMicId !== DEFAULT_SETTINGS.deviceId}
+              onReset={() =>
+                void update({
+                  deviceId: DEFAULT_SETTINGS.deviceId,
+                  deviceLabel: DEFAULT_SETTINGS.deviceLabel,
+                })
+              }
+            />
+
+            <MicTestRow
+              deviceId={settings.deviceId}
+              deviceLabel={settings.deviceLabel}
+              active={isActive}
+              disabled={micPermission === "denied" || micPermission === "restricted"}
             />
           </SettingsGroup>
         )}
@@ -617,7 +758,7 @@ export function VoiceInputSettingsTab() {
               <SettingsRow
                 id="voice-paragraph-breaks"
                 label="Paragraph breaks"
-                description="Enter only. Spoken commands need English, so press Enter to start a new paragraph."
+                description="Spoken commands need English. Press Shift+Enter to add a break yourself; Enter stops dictation and sends the prompt."
               />
             ) : (
               <SettingsPresetGroup
@@ -625,8 +766,8 @@ export function VoiceInputSettingsTab() {
                 label="Paragraph breaks"
                 description={
                   effectiveParagraphing === "spoken-command"
-                    ? 'Say "new paragraph", or press Enter to commit the current one'
-                    : "Press Enter to start a new paragraph. Spoken formatting commands are off."
+                    ? 'Say "new paragraph" or "new line" to add a break, or end with "send it" to stop dictation and send a prompt of three or more words. Enter stops dictation and sends the prompt too.'
+                    : "Spoken break commands are off. Press Shift+Enter to add a break yourself; Enter stops dictation and sends the prompt."
                 }
                 options={[
                   { value: "spoken-command" as const, label: "Spoken commands" },
@@ -640,9 +781,11 @@ export function VoiceInputSettingsTab() {
             )}
 
             <SettingsPresetGroup
+              id="voice-recording-mode"
               label="Recording mode"
               description={recordingModeDescription(recordingMode, dictationShortcut)}
               options={[
+                { value: "tap-or-hold" as const, label: "Tap or hold" },
                 { value: "toggle" as const, label: "Toggle" },
                 { value: "push-to-talk" as const, label: "Push to talk" },
               ]}
@@ -650,6 +793,35 @@ export function VoiceInputSettingsTab() {
               onChange={(v: VoiceRecordingMode) => void update({ recordingMode: v })}
               isModified={recordingMode !== DEFAULT_SETTINGS.recordingMode}
               onReset={() => void update({ recordingMode: DEFAULT_SETTINGS.recordingMode })}
+            />
+
+            <SettingsRow
+              id="voice-shortcuts"
+              label="Shortcuts"
+              layout="stacked"
+              description="Enter and Escape are fixed while you dictate"
+              control={
+                <div className="space-y-2">
+                  <ul className="space-y-1.5 text-xs text-text-secondary">
+                    <ShortcutLine combo={dictationCombo} label="Start or stop dictation" />
+                    <ShortcutLine combo={pauseCombo} label="Pause or resume" />
+                    <ShortcutLine combo="Escape" label="Cancel and discard this dictation" />
+                    <ShortcutLine combo="Enter" label="Stop dictation and send the prompt" />
+                  </ul>
+                  <Button
+                    variant="link"
+                    onClick={() =>
+                      void actionService.dispatch(
+                        "app.settings.openTab",
+                        { tab: "keyboard" },
+                        { source: "user" }
+                      )
+                    }
+                  >
+                    Change in Keyboard settings
+                  </Button>
+                </div>
+              }
             />
           </SettingsGroup>
         </SettingsSection>
@@ -663,25 +835,22 @@ export function VoiceInputSettingsTab() {
         >
           {saveError("dictionary")}
           <DictionaryGroup
-            words={settings.customDictionary}
-            suggestedWords={settings.suggestedDictionary}
+            entries={settings.dictionary}
+            suggestionCount={settings.suggestedDictionary.length}
             learnFromCorrections={settings.learnFromCorrections}
             onLearnFromCorrectionsChange={(v) => void update({ learnFromCorrections: v })}
-            onAcceptSuggestion={acceptSuggestion}
-            onDismissSuggestion={dismissSuggestion}
-            newWord={newDictionaryWord}
-            onNewWordChange={setNewDictionaryWord}
-            onAdd={addDictionaryWord}
-            onRemove={removeDictionaryWord}
-            inputRef={dictionaryInputRef}
+            onManage={() => setDictionaryOpen(true)}
+            manageRef={manageDictionaryRef}
           />
         </SettingsSection>
       )}
 
+      {settings.enabled && <LastDictationTermsSection />}
+
       {settings.enabled && (
         <SettingsSection
           title="AI text correction"
-          description="Post-processes each transcription with GPT-5.6 Luna to fix technical terms, punctuation and filler words. The text is sent to OpenAI."
+          description="When you stop dictating, the whole passage is corrected once by the cleanup model to fix technical terms, punctuation and filler words, resolve self-corrections, and lay out spoken lists. The text, the prompts you recently sent from the same terminal, the terminal's recent output with credential-like lines removed, the repository's package, folder and dependency names, and the worktree's issue or PR title are sent to OpenAI."
           id="voice-ai-correction"
         >
           {saveError("correction")}
@@ -689,15 +858,24 @@ export function VoiceInputSettingsTab() {
             <SettingsSwitchCard
               id="voice-ai-correction-enable"
               title="Clean up transcriptions"
-              subtitle="Correct each transcription automatically after dictation"
+              subtitle="Correct the passage automatically when you stop dictating"
               isEnabled={settings.correctionEnabled}
               onChange={() => void update({ correctionEnabled: !settings.correctionEnabled })}
               isModified={settings.correctionEnabled !== DEFAULT_SETTINGS.correctionEnabled}
               onReset={() => void update({ correctionEnabled: DEFAULT_SETTINGS.correctionEnabled })}
             />
 
-            {settings.correctionEnabled && provider === "deepgram" && (
-              <SettingsDependents>{openAiKeyRow}</SettingsDependents>
+            {settings.correctionEnabled && (
+              <SettingsDependents>
+                {coversCleanup ? (
+                  <SettingsRow
+                    label="OpenAI API key"
+                    description="The key under Speech-to-text covers transcription and cleanup. There's nothing more to add."
+                  />
+                ) : (
+                  keyRow(VOICE_CLEANUP_KEY_FIELD)
+                )}
+              </SettingsDependents>
             )}
 
             {settings.correctionEnabled && (
@@ -705,11 +883,23 @@ export function VoiceInputSettingsTab() {
                 disabled={!hasOpenAiKey}
                 reason={
                   provider === "openai"
-                    ? "Correction runs on OpenAI. Add the OpenAI API key above to use it."
-                    : "Correction runs on OpenAI even while Deepgram transcribes. Add an OpenAI API key to use it."
+                    ? "Cleanup runs on OpenAI. Add the OpenAI API key under Speech-to-text to use it."
+                    : "Cleanup runs on OpenAI. Add an OpenAI API key above to use it."
                 }
               >
+                <SettingsChoicebox
+                  id="voice-cleanup-model"
+                  label="Cleanup model"
+                  description="Spoken rewrites of a selection use it too"
+                  value={settings.correctionModel}
+                  onChange={(model) => void update({ correctionModel: model })}
+                  options={CLEANUP_MODEL_CHOICES}
+                  isModified={settings.correctionModel !== DEFAULT_SETTINGS.correctionModel}
+                  onReset={() => void update({ correctionModel: DEFAULT_SETTINGS.correctionModel })}
+                />
+
                 <SettingsSwitchCard
+                  id="voice-resolve-file-links"
                   title="Resolve file references"
                   subtitle={
                     'Voice commands like "link to the input component" insert @file references'
@@ -727,7 +917,7 @@ export function VoiceInputSettingsTab() {
                   onChange={(v) => void update({ correctionCustomInstructions: v })}
                 />
 
-                <CorePromptRow />
+                <CorePromptRow model={settings.correctionModel} />
               </SettingsDependents>
             )}
           </SettingsGroup>
@@ -741,10 +931,12 @@ export function VoiceInputSettingsTab() {
 export function recordingModeDescription(mode: VoiceRecordingMode, shortcut: string): string {
   const key = shortcut || "the dictation shortcut";
   const how =
-    mode === "toggle"
-      ? `Press ${key} to start, and again to stop.`
-      : `Hold ${key} to record. Releasing it stops without submitting.`;
-  return shortcut ? how : `${how} No shortcut is assigned yet; set one under Keyboard.`;
+    mode === "tap-or-hold"
+      ? `Tap ${key} to start and again to stop, or hold it while you speak and let go to stop.`
+      : mode === "toggle"
+        ? `Press ${key} to start, and again to stop.`
+        : `Hold ${key} to record. Releasing it stops without submitting.`;
+  return shortcut ? how : `${how} No shortcut is assigned yet.`;
 }
 
 // ── API key row ──
@@ -999,6 +1191,21 @@ function ApiKeyRow({
   );
 }
 
+function ShortcutLine({ combo, label }: { combo: string | undefined; label: string }) {
+  return (
+    <li className="flex items-baseline gap-3">
+      <span className="w-28 shrink-0">
+        {combo ? (
+          <KbdChord shortcut={combo} density="bare" foreground="primary" />
+        ) : (
+          <span>Not set</span>
+        )}
+      </span>
+      <span>{label}</span>
+    </li>
+  );
+}
+
 // ── Microphone permission row ──
 
 interface MicPermissionRowProps {
@@ -1029,11 +1236,7 @@ function MicPermissionRow({
         return {
           dot: "bg-status-success",
           text: "Microphone access granted",
-          actions: (
-            <Button size="sm" variant="ghost" onClick={onRefresh}>
-              Re-check
-            </Button>
-          ),
+          actions: null,
         };
       case "denied":
       case "restricted": {
@@ -1091,7 +1294,8 @@ function MicPermissionRow({
   const denied = status === "denied" || status === "restricted";
   return (
     <SettingsRow
-      label="Access"
+      id="voice-mic-access"
+      label="Microphone access"
       layout={denied ? "stacked" : "inline"}
       description={
         <span role="status" className="flex items-start gap-2">
@@ -1119,33 +1323,31 @@ function MicPermissionRow({
 // ── Dictionary group ──
 
 function DictionaryGroup({
-  words,
-  suggestedWords,
+  entries,
+  suggestionCount,
   learnFromCorrections,
   onLearnFromCorrectionsChange,
-  onAcceptSuggestion,
-  onDismissSuggestion,
-  newWord,
-  onNewWordChange,
-  onAdd,
-  onRemove,
-  inputRef,
+  onManage,
+  manageRef,
 }: {
-  words: string[];
-  suggestedWords: SuggestedDictionaryEntry[];
+  entries: VoiceDictionaryEntry[];
+  suggestionCount: number;
   learnFromCorrections: boolean;
   onLearnFromCorrectionsChange: (v: boolean) => void;
-  onAcceptSuggestion: (word: string) => void;
-  onDismissSuggestion: (word: string) => void;
-  newWord: string;
-  onNewWordChange: (v: string) => void;
-  onAdd: () => void;
-  onRemove: (word: string) => void;
-  inputRef: React.RefObject<HTMLInputElement | null>;
+  onManage: () => void;
+  manageRef: React.RefObject<HTMLButtonElement | null>;
 }) {
+  const rules = entries.reduce((total, entry) => total + entry.heardAs.length, 0);
+  const summary = [
+    pluralize(entries.length, "term"),
+    pluralize(rules, "heard-as phrase"),
+    pluralize(suggestionCount, "pending suggestion"),
+  ].join(" · ");
+
   return (
     <SettingsGroup>
       <SettingsSwitchCard
+        id="voice-learn-words"
         title="Learn words from corrections"
         subtitle="Suggest dictionary terms when you fix a mishearing before sending"
         isEnabled={learnFromCorrections}
@@ -1154,101 +1356,15 @@ function DictionaryGroup({
         onReset={() => onLearnFromCorrectionsChange(DEFAULT_SETTINGS.learnFromCorrections)}
       />
 
-      {suggestedWords.length > 0 && (
-        <SettingsRow
-          label="Suggested from corrections"
-          description="Add a term to the dictionary, or dismiss it"
-          layout="stacked"
-          control={
-            <ul className="flex flex-wrap gap-1.5">
-              {suggestedWords.map((entry) => (
-                <li
-                  key={entry.word}
-                  className="inline-flex items-center gap-0.5 rounded-full border border-border-default bg-overlay-subtle py-0.5 pl-2.5 pr-0.5 text-xs text-text-primary"
-                  title={entry.utterance ? `Heard as "${entry.utterance}"` : undefined}
-                >
-                  <span className="mr-1">{entry.word}</span>
-                  <Button
-                    size="icon-xs"
-                    variant="ghost"
-                    className="rounded-full"
-                    onClick={() => onAcceptSuggestion(entry.word)}
-                    aria-label={`Add ${entry.word} to dictionary`}
-                  >
-                    <Plus aria-hidden="true" />
-                  </Button>
-                  <Button
-                    size="icon-xs"
-                    variant="ghost"
-                    className="rounded-full"
-                    onClick={() => onDismissSuggestion(entry.word)}
-                    aria-label={`Dismiss ${entry.word}`}
-                  >
-                    <X aria-hidden="true" />
-                  </Button>
-                </li>
-              ))}
-            </ul>
-          }
-        />
-      )}
-
       <SettingsRow
         label="Terms"
-        description={
-          words.length > 0
-            ? `${words.length} of ${DICTIONARY_LIMIT} terms`
-            : "Add product names, APIs or jargon the transcription keeps getting wrong"
+        description={summary}
+        control={
+          <Button ref={manageRef} size="sm" variant="outline" onClick={onManage}>
+            Manage dictionary
+            <ChevronRight aria-hidden="true" />
+          </Button>
         }
-        layout="stacked"
-        control={({ labelId, descriptionId }) => (
-          <div className="space-y-2">
-            <div className="flex gap-2">
-              <Input
-                ref={inputRef}
-                type="text"
-                value={newWord}
-                aria-labelledby={labelId}
-                aria-describedby={descriptionId}
-                onChange={(e) => onNewWordChange(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    onAdd();
-                  }
-                }}
-                placeholder="Add a term…"
-                className="w-auto min-w-0 flex-1"
-              />
-              <Button onClick={onAdd} disabled={!newWord.trim()} size="sm" variant="outline">
-                <Plus aria-hidden="true" />
-                Add
-              </Button>
-            </div>
-
-            {words.length > 0 && (
-              <ul className="flex flex-wrap gap-1.5">
-                {words.map((word) => (
-                  <li
-                    key={word}
-                    className="inline-flex items-center gap-0.5 rounded-full border border-border-default bg-surface-canvas py-0.5 pl-2.5 pr-0.5 text-xs text-text-primary"
-                  >
-                    {word}
-                    <Button
-                      size="icon-xs"
-                      variant="ghost"
-                      className="rounded-full"
-                      onClick={() => onRemove(word)}
-                      aria-label={`Remove ${word}`}
-                    >
-                      <X aria-hidden="true" />
-                    </Button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        )}
       />
     </SettingsGroup>
   );
@@ -1279,7 +1395,7 @@ function CustomInstructionsRow({
 
 // ── Core prompt row ──
 
-function CorePromptRow() {
+function CorePromptRow({ model }: { model: string }) {
   const [expanded, setExpanded] = useState(false);
 
   return (
@@ -1305,7 +1421,7 @@ function CorePromptRow() {
           </Button>
           {expanded && (
             <pre className="bg-surface-canvas border border-border-default rounded-[var(--radius-md)] px-3 py-2 text-xs font-mono text-text-secondary whitespace-pre-wrap overflow-y-auto max-h-48 select-text">
-              {CORE_CORRECTION_PROMPT}
+              {correctionInstructionsFor(model).core}
             </pre>
           )}
         </div>

@@ -1,7 +1,7 @@
 import type { PanelRegistryStoreApi, PanelRegistrySlice } from "./types";
 import { panelKindHasPty, normalizeDockLocation } from "@shared/config/panelKindRegistry";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { with as withTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 import { TerminalRefreshTier } from "@/types";
 import { saveNormalized, saveTabGroups } from "./persistence";
 import { optimizeForDock } from "./layout";
@@ -150,6 +150,9 @@ export const createOrderingActions = (
       // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- spread preserves the panel's discriminant; overrides are base-field-compatible
       const updatedTerminal = {
         ...terminal,
+        // An explicit placement settles where the panel lives, so a dock
+        // restore left over from a boot-time rescue must not undo it (#13907).
+        pendingDockWorktreeId: undefined,
         ...(adoptedWorktreeId !== null && { worktreeId: adoptedWorktreeId }),
         location: effectiveLocation,
         isVisible,
@@ -203,7 +206,10 @@ export const createOrderingActions = (
       if (effectiveLocation === "dock") {
         optimizeForDock(id);
       } else {
-        terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
+        withTerminalService(
+          (service) => service.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE),
+          id
+        );
       }
     }
   },

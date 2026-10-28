@@ -1,11 +1,26 @@
 import { randomUUID } from "node:crypto";
 import type { ClientRef } from "../../ipc/endpoint.js";
 import {
+  ASSISTANT_VIEWER_VERSION,
   isCanopyHostChannel,
+  type AssistantViewerChannel,
   type CanopyHostEvent,
   type CanopyHostPushChannel,
+  type HostAssistantDirectory,
 } from "../../../shared/types/ipc/canopyHost.js";
-import type { CanopySnapshot, CanopyTerminalData } from "../../../shared/types/ipc/canopy.js";
+import type {
+  AssistantOpenDestination,
+  CanopySnapshot,
+  CanopyTerminalData,
+  CanopyTerminalView,
+} from "../../../shared/types/ipc/canopy.js";
+import {
+  AgentDirectorySubjectSchema,
+  agentDirectoryAs,
+  unreadAgentDirectory,
+  type AgentDirectory,
+  type AgentDirectorySubject,
+} from "../../../shared/types/agentDirectory.js";
 import type { FleetSnapshot } from "../../../shared/types/ipc/fleet.js";
 import { isIpcEnvelope } from "../../../shared/types/ipc/errors.js";
 import { LOCAL_HOST_ID, isLocalHostId, type HostId } from "../../../shared/types/remoteHosts.js";
@@ -15,10 +30,19 @@ import type { EventMessage } from "../link/messages.js";
 import type { LinkSession } from "../link/session.js";
 import {
   CANOPY_VIEWER_ENDPOINT_PREFIX,
+  CanopyAssistantsAnswerSchema,
+  CanopyAssistantWorkAnswerSchema,
   CanopyLinkMethod,
   CanopyViewerLostPayloadSchema,
+  isCanopyViewerId,
 } from "./linkMethods.js";
 import type { CanopyViewers } from "./viewer.js";
+import {
+  ASSISTANT_WORK_VERSION,
+  unreadAssistantWork,
+  type AssistantWorkReading,
+} from "../../../shared/types/assistantWork.js";
+import { resolveAssistantWork } from "../../services/assistants/assistantWork.js";
 
 export interface CanopyHostConnection {
   callHost(method: string, payload: unknown): Promise<unknown>;
@@ -52,6 +76,17 @@ export interface CanopyHostsClientOptions {
   send(webContentsId: number, event: CanopyHostEvent): boolean;
   /** Told once when the view reloads or goes away, which ends every panel it showed. */
   watchView(webContentsId: number, onGone: () => void): () => void;
+  /** This machine's agent directory, for a picker listing This Mac; absent, it reads none. */
+  readLocalAgents?: (options: {
+    projectId?: string;
+    assistantsOnly?: boolean;
+  }) => Promise<AgentDirectory>;
+  /** This machine's assistant work, for Canopy showing This Mac; absent, it reads none. */
+  readLocalAssistantWork?: () => Promise<AssistantWorkReading>;
+  /** The sender this Shell proves to a host, without minting one; null when it never has. */
+  ownSenderFor?: (hostId: HostId) => string | null;
+  /** Finds this Shell's live assistant whose session a host's reading keys, or null. */
+  localAssistants?: () => Promise<(sessionKey: string) => AgentDirectorySubject | null>;
   newViewerId?: () => string;
 }
 
@@ -59,13 +94,61 @@ interface Subscription {
   webContentsId: number;
   hostId: HostId;
   viewerId: string;
+  /** The assistant viewer's consumer in its view; null for the view's Canopy panel. */
+  consumer: string | null;
+  /** The exact run an assistant viewer shows, for as long as it lives. */
+  subjectKey: string | null;
 }
 
 interface ViewRecord {
   hosts: Map<HostId, Subscription>;
+  /** Each assistant consumer's one viewer, on the host of the assistant it shows. */
+  assistants: Map<string, Subscription>;
   unwatch: () => void;
 }
 
+/** The assistant viewer's calls that ride a watch it already has. */
+type AssistantStreamChannel = Exclude<
+  AssistantViewerChannel,
+  "canopy:watch-assistant-terminal" | "canopy:resolve-assistant"
+>;
+
+const ASSISTANT_STREAM_CHANNELS: ReadonlySet<string> = new Set<AssistantStreamChannel>([
+  "canopy:unwatch-terminal",
+  "canopy:terminal-input",
+  "canopy:terminal-submit",
+  "canopy:terminal-send-key",
+]);
+
+function codeOf(error: unknown): unknown {
+  return (error as { code?: unknown } | null)?.code;
+}
+
+/** A host from before the assistant viewer: its workers read on, its assistants don't. */
+function assistantsUnsupported(hostId: HostId): AppError {
+  return new AppError({
+    code: "UNSUPPORTED",
+    message: `Host ${hostId} has no assistant viewer`,
+    userMessage: "This host needs a newer Daintree to show its assistants.",
+    context: { hostId },
+  });
+}
+
+/**
+ * Typing whose answer the link lost: it may have reached the assistant or
+ * not, and only its screen can say. It is never sent again from here.
+ */
+function deliveryUnknown(error: unknown): AppError {
+  return new AppError({
+    code: "OUTCOME_UNKNOWN",
+    message: "The link dropped before the host answered an assistant's input",
+    userMessage:
+      "The connection dropped while sending, so this may not have reached the assistant. Check its screen before sending again.",
+    cause: error instanceof Error ? error : undefined,
+  });
+}
+
+/** The same entries as this Shell names the host: never the id the host gave itself. */
 function invalid(message: string): AppError {
   return new AppError({ code: "VALIDATION", message });
 }
@@ -202,6 +285,176 @@ export class CanopyHostsClient {
     return answer.data;
   }
 
+  /**
+   * The assistants a host holds, for a person's picker: summaries only, no
+   * screen and no stream. A host that predates the assistant viewer reads as
+   * unsupported, never as one with no assistants.
+   */
+  async listAssistants(
+    webContentsId: number,
+    hostId: unknown,
+    projectId?: unknown
+  ): Promise<HostAssistantDirectory> {
+    const target = this.assistantHostOf(webContentsId, hostId, { allowOwnLocal: true });
+    if (projectId !== undefined && (typeof projectId !== "string" || projectId.length === 0)) {
+      throw invalid("projectId must be a non-empty string");
+    }
+    const options = projectId === undefined ? {} : { projectId };
+    if (isLocalHostId(target)) {
+      const read = this.options.readLocalAgents;
+      const directory = read
+        ? await read({ ...options, assistantsOnly: true }).catch(() =>
+            unreadAgentDirectory("unreachable")
+          )
+        : unreadAgentDirectory("unsupported");
+      return {
+        hostId: LOCAL_HOST_ID,
+        version: read ? ASSISTANT_VIEWER_VERSION : null,
+        directory: agentDirectoryAs(LOCAL_HOST_ID, assistantEntries(directory)),
+      };
+    }
+    this.options.manager.touch(target);
+    const connection = this.options.manager.get(target);
+    if (!connection) {
+      this.options.manager.connect(target);
+      return { hostId: target, version: null, directory: unreadAgentDirectory("unreachable") };
+    }
+    let raw: unknown;
+    try {
+      raw = await connection.callHost(CanopyLinkMethod.ASSISTANTS, options);
+    } catch (error) {
+      if (codeOf(error) === "UNSUPPORTED") {
+        return { hostId: target, version: null, directory: unreadAgentDirectory("unsupported") };
+      }
+      return { hostId: target, version: null, directory: unreadAgentDirectory("unreachable") };
+    }
+    const answer = CanopyAssistantsAnswerSchema.safeParse(raw);
+    if (!answer.success) {
+      throw new AppError({ code: "INTERNAL", message: `Host ${target} sent an invalid answer` });
+    }
+    return {
+      hostId: target,
+      version: answer.data.version,
+      directory: agentDirectoryAs(target, assistantEntries(answer.data.directory)),
+    };
+  }
+
+  /**
+   * Which of a host's workers an assistant made or holds (#14166), with every
+   * assistant named as this Shell knows it. A host that predates it reads as
+   * unsupported, and one that can't be reached as unreachable: never as a
+   * host whose workers no assistant made.
+   */
+  async readAssistantWork(webContentsId: number, hostId: unknown): Promise<AssistantWorkReading> {
+    const target = this.assistantHostOf(webContentsId, hostId, { allowOwnLocal: true });
+    if (isLocalHostId(target)) {
+      const read = this.options.readLocalAssistantWork;
+      return read
+        ? read().catch(() => unreadAssistantWork("unreachable"))
+        : unreadAssistantWork("unsupported");
+    }
+    this.options.manager.touch(target);
+    const connection = this.options.manager.get(target);
+    if (!connection) {
+      this.options.manager.connect(target);
+      return unreadAssistantWork("unreachable");
+    }
+    let raw: unknown;
+    try {
+      raw = await connection.callHost(CanopyLinkMethod.ASSISTANT_WORK, {});
+    } catch (error) {
+      return unreadAssistantWork(codeOf(error) === "UNSUPPORTED" ? "unsupported" : "unreachable");
+    }
+    const answer = CanopyAssistantWorkAnswerSchema.safeParse(raw);
+    if (!answer.success) {
+      throw new AppError({ code: "INTERNAL", message: `Host ${target} sent an invalid answer` });
+    }
+    if (answer.data.version !== ASSISTANT_WORK_VERSION) return unreadAssistantWork("unsupported");
+    const bySessionKey = (await this.options.localAssistants?.()) ?? (() => null);
+    return resolveAssistantWork(answer.data.reading, {
+      hostId: target,
+      ownSenderId: this.options.ownSenderFor?.(target) ?? null,
+      assistantBySessionKey: bySessionKey,
+    });
+  }
+
+  /**
+   * Stream one assistant to the view's `consumer`, as the exact run the
+   * subject names. The Shell says which host it is; that host checks the
+   * lane (or global session) and launch generation against its own hold on
+   * the run. Only this assistant's terminal is watched there.
+   */
+  async watchAssistant(
+    webContentsId: number,
+    consumer: unknown,
+    rawSubject: unknown
+  ): Promise<CanopyTerminalView> {
+    const { target, subject } = this.assistantSubjectOf(webContentsId, rawSubject);
+    const sub = this.subscribeAssistant(webContentsId, consumerOf(consumer), target, subject);
+    const view = (await this.callAssistant(sub, "canopy:watch-assistant-terminal", [
+      subject,
+    ])) as CanopyTerminalView;
+    // Released, replaced or resynced while the host answered: that stream is gone.
+    if (this.byViewer.get(sub.viewerId) !== sub) return { watchId: null, snapshot: null };
+    return view;
+  }
+
+  /** Where "Open in Assistant" would land for the subject, as its own host says; null once it ended. */
+  async resolveAssistant(
+    webContentsId: number,
+    consumer: unknown,
+    rawSubject: unknown
+  ): Promise<AssistantOpenDestination | null> {
+    const { target, subject } = this.assistantSubjectOf(webContentsId, rawSubject);
+    const sub = this.subscribeAssistant(webContentsId, consumerOf(consumer), target, subject);
+    const destination = (await this.callAssistant(sub, "canopy:resolve-assistant", [
+      subject,
+    ])) as AssistantOpenDestination | null;
+    return destination ? { ...destination, hostId: target } : null;
+  }
+
+  /**
+   * Typing to, keying or ending the consumer's stream. Never sent again: an
+   * answer the link lost is said as unknown, not retried.
+   */
+  async assistantInvoke(
+    webContentsId: number,
+    consumer: unknown,
+    channel: unknown,
+    args: unknown
+  ): Promise<unknown> {
+    const name = consumerOf(consumer);
+    if (typeof channel !== "string" || !ASSISTANT_STREAM_CHANNELS.has(channel)) {
+      throw invalid(`${String(channel)} isn't an assistant viewer's call`);
+    }
+    if (!Array.isArray(args)) throw invalid("args must be an array");
+    const sub = this.views.get(webContentsId)?.assistants.get(name);
+    if (!sub) {
+      if (channel === "canopy:unwatch-terminal") return undefined;
+      throw new AppError({
+        code: "NOT_FOUND",
+        message: "No assistant is watched by this consumer",
+        userMessage: "That assistant isn't open here any more.",
+      });
+    }
+    try {
+      return await this.callAssistant(sub, channel as AssistantStreamChannel, args);
+    } catch (error) {
+      if (codeOf(error) === "OUTCOME_UNKNOWN") throw deliveryUnknown(error);
+      throw error;
+    }
+  }
+
+  /** The consumer stopped showing its assistant: its viewer and watch there end. */
+  releaseAssistant(webContentsId: number, consumer: unknown): void {
+    if (!isCanopyViewerId(consumer)) return;
+    const record = this.views.get(webContentsId);
+    const sub = record?.assistants.get(consumer);
+    if (!record || !sub) return;
+    this.drop(sub);
+    this.forgetIfEmpty(webContentsId, record);
+  }
+
   /** The view's panel stopped reading the host: its state there goes too. */
   release(webContentsId: number, hostId: unknown): void {
     if (typeof hostId !== "string") return;
@@ -209,10 +462,152 @@ export class CanopyHostsClient {
     const sub = record?.hosts.get(isLocalHostId(hostId) ? LOCAL_HOST_ID : hostId);
     if (!record || !sub) return;
     this.drop(sub);
-    if (record.hosts.size === 0) {
-      this.views.delete(webContentsId);
-      record.unwatch();
+    this.forgetIfEmpty(webContentsId, record);
+  }
+
+  private forgetIfEmpty(webContentsId: number, record: ViewRecord): void {
+    if (record.hosts.size > 0 || record.assistants.size > 0) return;
+    if (this.views.get(webContentsId) !== record) return;
+    this.views.delete(webContentsId);
+    record.unwatch();
+  }
+
+  /**
+   * The host an assistant viewer reads, by the id this Shell knows it by. A
+   * view's own remote host is read this way too: its windows answer for this
+   * machine's assistants, not that host's. This Mac's own views watch its
+   * assistants directly, so naming This Mac from one is refused, except to list.
+   */
+  private assistantHostOf(
+    webContentsId: number,
+    hostId: unknown,
+    { allowOwnLocal = false }: { allowOwnLocal?: boolean } = {}
+  ): HostId {
+    if (typeof hostId !== "string" || hostId.length === 0 || hostId.length > 64) {
+      throw invalid("hostId must be a non-empty string");
     }
+    const target = isLocalHostId(hostId) ? LOCAL_HOST_ID : hostId;
+    if (!isLocalHostId(target) && !this.options.registry.get(target)) {
+      throw new AppError({
+        code: "NOT_FOUND",
+        message: `No host with id "${target}"`,
+        userMessage: "That host isn't in the host list.",
+      });
+    }
+    if (
+      !allowOwnLocal &&
+      isLocalHostId(target) &&
+      this.options.hostForView(webContentsId) === null
+    ) {
+      throw invalid("This machine's own views watch its assistants directly");
+    }
+    return target;
+  }
+
+  /** The subject as its own host names it: the host is this Shell's to say, and says itself as local. */
+  private assistantSubjectOf(
+    webContentsId: number,
+    rawSubject: unknown
+  ): { target: HostId; subject: AgentDirectorySubject } {
+    const parsed = AgentDirectorySubjectSchema.safeParse(rawSubject);
+    if (!parsed.success) throw invalid("Invalid assistant subject");
+    const target = this.assistantHostOf(webContentsId, parsed.data.hostId);
+    return { target, subject: { ...parsed.data, hostId: LOCAL_HOST_ID } };
+  }
+
+  /**
+   * The consumer's viewer, for the one run it shows. A watch id is only its
+   * host's, so a consumer is never moved to another run: input still in flight
+   * for the old one would carry an id the new one could also hold.
+   */
+  private subscribeAssistant(
+    webContentsId: number,
+    consumer: string,
+    hostId: HostId,
+    subject: AgentDirectorySubject
+  ): Subscription {
+    const subjectKey = JSON.stringify([
+      hostId,
+      subject.scope,
+      subject.terminalId,
+      subject.incarnation,
+      subject.lane ?? null,
+    ]);
+    const record = this.recordOf(webContentsId);
+    const existing = record.assistants.get(consumer);
+    if (existing) {
+      if (existing.subjectKey === subjectKey) return existing;
+      throw invalid("A consumer shows one assistant; release it before showing another");
+    }
+    const viewerId = this.options.newViewerId?.() ?? randomUUID();
+    const sub: Subscription = { webContentsId, hostId, viewerId, consumer, subjectKey };
+    record.assistants.set(consumer, sub);
+    this.byViewer.set(viewerId, sub);
+    return sub;
+  }
+
+  private async callAssistant(
+    sub: Subscription,
+    channel: AssistantViewerChannel,
+    args: unknown[]
+  ): Promise<unknown> {
+    const consumer = sub.consumer as string;
+    if (isLocalHostId(sub.hostId)) {
+      const envelope = await this.options.local.invokeAssistant(
+        sub.viewerId,
+        () => ({
+          endpointId: CANOPY_VIEWER_ENDPOINT_PREFIX + sub.viewerId,
+          clientId: this.options.localClient.clientId,
+          onPush: (pushed, payload) => {
+            if (this.byViewer.get(sub.viewerId) !== sub || pushed !== "canopy:terminal-data") {
+              return;
+            }
+            this.options.send(sub.webContentsId, {
+              kind: "assistant-terminal-data",
+              hostId: LOCAL_HOST_ID,
+              consumer,
+              chunk: payload as CanopyTerminalData,
+            });
+          },
+        }),
+        this.options.localClient,
+        channel,
+        args
+      );
+      if (!envelope.ok) throw deserializeError(envelope.error);
+      return envelope.data;
+    }
+    this.options.manager.touch(sub.hostId);
+    const connection = this.options.manager.get(sub.hostId);
+    if (!connection) {
+      this.options.manager.connect(sub.hostId);
+      throw new AppError({
+        code: "HOST_DISCONNECTED",
+        message: `Host ${sub.hostId} is not connected`,
+        userMessage: "Couldn't reach this host. Check that it is on and try again.",
+      });
+    }
+    let answer: unknown;
+    try {
+      answer = await connection.callHost(CanopyLinkMethod.ASSISTANT_INVOKE, {
+        viewerId: sub.viewerId,
+        channel,
+        args,
+        interactive: true,
+      });
+    } catch (error) {
+      // An unknown method: the host predates the assistant viewer.
+      if (codeOf(error) === "UNSUPPORTED") throw assistantsUnsupported(sub.hostId);
+      throw error;
+    }
+    if (!isIpcEnvelope(answer)) {
+      throw new AppError({
+        code: "INTERNAL",
+        message: `Host ${sub.hostId} sent an invalid answer`,
+      });
+    }
+    if (!answer.ok) throw deserializeError(answer.error);
+    return answer.data;
   }
 
   private targetOf(webContentsId: number, hostId: unknown): HostId {
@@ -234,20 +629,25 @@ export class CanopyHostsClient {
     return target;
   }
 
-  private subscribe(webContentsId: number, hostId: HostId): Subscription {
+  private recordOf(webContentsId: number): ViewRecord {
     let record = this.views.get(webContentsId);
     if (!record) {
-      const created: ViewRecord = { hosts: new Map(), unwatch: () => {} };
+      const created: ViewRecord = { hosts: new Map(), assistants: new Map(), unwatch: () => {} };
       this.views.set(webContentsId, created);
       created.unwatch = this.options.watchView(webContentsId, () => {
         if (this.views.get(webContentsId) === created) this.releaseView(webContentsId);
       });
       record = created;
     }
+    return record;
+  }
+
+  private subscribe(webContentsId: number, hostId: HostId): Subscription {
+    const record = this.recordOf(webContentsId);
     let sub = record.hosts.get(hostId);
     if (!sub) {
       const viewerId = this.options.newViewerId?.() ?? randomUUID();
-      sub = { webContentsId, hostId, viewerId };
+      sub = { webContentsId, hostId, viewerId, consumer: null, subjectKey: null };
       record.hosts.set(hostId, sub);
       this.byViewer.set(viewerId, sub);
     }
@@ -257,7 +657,9 @@ export class CanopyHostsClient {
   private drop(sub: Subscription): void {
     if (this.byViewer.get(sub.viewerId) !== sub) return;
     this.byViewer.delete(sub.viewerId);
-    this.views.get(sub.webContentsId)?.hosts.delete(sub.hostId);
+    const record = this.views.get(sub.webContentsId);
+    if (sub.consumer === null) record?.hosts.delete(sub.hostId);
+    else if (record?.assistants.get(sub.consumer) === sub) record.assistants.delete(sub.consumer);
     if (isLocalHostId(sub.hostId)) {
       this.options.local.close(sub.viewerId);
       return;
@@ -295,7 +697,7 @@ export class CanopyHostsClient {
     if (!record) return;
     this.views.delete(webContentsId);
     record.unwatch();
-    for (const sub of [...record.hosts.values()]) this.drop(sub);
+    for (const sub of [...record.hosts.values(), ...record.assistants.values()]) this.drop(sub);
   }
 
   private onViewerEvent(hostId: HostId, event: EventMessage): void {
@@ -304,6 +706,17 @@ export class CanopyHostsClient {
     // Only the host the viewer was opened on speaks for it.
     if (!sub || sub.hostId !== hostId) return;
     const channel = event.channel;
+    if (sub.consumer !== null) {
+      // An assistant viewer hears its own stream and nothing else the host says.
+      if (channel !== "canopy:terminal-data") return;
+      this.options.send(sub.webContentsId, {
+        kind: "assistant-terminal-data",
+        hostId,
+        consumer: sub.consumer,
+        chunk: event.args[0] as CanopyTerminalData,
+      });
+      return;
+    }
     if (
       channel !== "canopy:snapshot-updated" &&
       channel !== "fleet:snapshot-updated" &&
@@ -321,7 +734,11 @@ export class CanopyHostsClient {
   }
 
   private tellToResync(sub: Subscription): void {
-    if (!this.options.send(sub.webContentsId, { kind: "resync", hostId: sub.hostId })) {
+    const event: CanopyHostEvent =
+      sub.consumer === null
+        ? { kind: "resync", hostId: sub.hostId }
+        : { kind: "assistant-resync", hostId: sub.hostId, consumer: sub.consumer };
+    if (!this.options.send(sub.webContentsId, event)) {
       this.releaseView(sub.webContentsId);
     }
   }
@@ -331,10 +748,16 @@ export class CanopyHostsClient {
       if (isLocalHostId(sub.hostId) || this.options.registry.get(sub.hostId)) continue;
       this.drop(sub);
       const record = this.views.get(sub.webContentsId);
-      if (record && record.hosts.size === 0) {
-        this.views.delete(sub.webContentsId);
-        record.unwatch();
-      }
+      if (record) this.forgetIfEmpty(sub.webContentsId, record);
     }
   }
+}
+
+function consumerOf(consumer: unknown): string {
+  if (!isCanopyViewerId(consumer)) throw invalid("consumer must be a short id");
+  return consumer;
+}
+
+function assistantEntries(directory: AgentDirectory): AgentDirectory {
+  return { ...directory, entries: directory.entries.filter((entry) => entry.role === "assistant") };
 }

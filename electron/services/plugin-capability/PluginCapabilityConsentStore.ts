@@ -1,7 +1,9 @@
-import type { BuiltInPluginCapability, PluginScopeKey } from "../../../shared/types/plugin.js";
-import type {
-  PluginCapabilityConsentRecord,
-  PluginCapabilityIdentity,
+import type { PluginScopeKey } from "../../../shared/types/plugin.js";
+import {
+  EXTERNAL_LINK_CONSENT,
+  type PluginCapabilityConsentRecord,
+  type PluginCapabilityIdentity,
+  type PluginGrantKey,
 } from "../../../shared/types/pluginCapabilityConsent.js";
 
 /**
@@ -44,6 +46,7 @@ export class PluginCapabilityConsentStore {
     const record: PluginCapabilityConsentRecord = {
       pluginId: identity.pluginId,
       capability: identity.capability,
+      ...(identity.site !== undefined ? { site: identity.site } : {}),
       scopeKey: identity.scopeKey ?? DEFAULT_SCOPE_KEY,
       approvedAt: Date.now(),
     };
@@ -81,6 +84,7 @@ export class PluginCapabilityConsentStore {
       this.grants.set(key, {
         pluginId: identity.pluginId,
         capability: identity.capability,
+        ...(identity.site !== undefined ? { site: identity.site } : {}),
         scopeKey: identity.scopeKey ?? DEFAULT_SCOPE_KEY,
         approvedAt: previous?.approvedAt ?? Date.now(),
       });
@@ -95,10 +99,44 @@ export class PluginCapabilityConsentStore {
     return false;
   }
 
+  /**
+   * Mint several grants as one write and report whether it reached disk
+   * (#14019). The batch is one decision, so a failed write rolls every grant it
+   * added back out rather than leaving some of them on in memory only.
+   */
+  grantAll(identities: readonly PluginCapabilityIdentity[]): boolean {
+    this.hydrate();
+    const previous = new Map<string, PluginCapabilityConsentRecord | undefined>();
+    const approvedAt = Date.now();
+    for (const identity of identities) {
+      const key = makeKey(identity);
+      if (!previous.has(key)) previous.set(key, this.grants.get(key));
+      this.grants.set(key, {
+        pluginId: identity.pluginId,
+        capability: identity.capability,
+        ...(identity.site !== undefined ? { site: identity.site } : {}),
+        scopeKey: identity.scopeKey ?? DEFAULT_SCOPE_KEY,
+        approvedAt,
+      });
+    }
+    if (previous.size === 0) return true;
+    if (this.flush() || this.flush()) return true;
+    for (const [key, record] of previous) {
+      if (record) this.grants.set(key, record);
+      else this.grants.delete(key);
+    }
+    return false;
+  }
+
   /** Read all live grants. Newest-first. */
   list(): PluginCapabilityConsentRecord[] {
     this.hydrate();
     return [...this.grants.values()].sort((a, b) => b.approvedAt - a.approvedAt);
+  }
+
+  /** Every grant one plugin holds, in every scope. */
+  listForPlugin(pluginId: string): PluginCapabilityConsentRecord[] {
+    return this.list().filter((record) => record.pluginId === pluginId);
   }
 
   /** Drop every grant. Persists immediately. */
@@ -177,11 +215,11 @@ export class PluginCapabilityConsentStore {
  * from inheriting another plugin's, or another scope's, grant.
  */
 function makeKey(identity: PluginCapabilityIdentity): string {
-  return JSON.stringify([
-    identity.scopeKey ?? DEFAULT_SCOPE_KEY,
-    identity.pluginId,
-    identity.capability,
-  ]);
+  const base = [identity.scopeKey ?? DEFAULT_SCOPE_KEY, identity.pluginId, identity.capability];
+  // A site grant carries a fourth element, so it can collide with no capability key.
+  return JSON.stringify(
+    identity.capability === EXTERNAL_LINK_CONSENT ? [...base, identity.site ?? ""] : base
+  );
 }
 
 /**
@@ -205,9 +243,21 @@ function normalizeRecord(raw: unknown): PluginCapabilityConsentRecord | null {
   if (scopeKey !== undefined && (typeof scopeKey !== "string" || scopeKey === "")) {
     return null;
   }
+  // A link grant without a hostname would read as approval for every site, so
+  // it is dropped; a stray `site` on a capability record is ignored.
+  if (r.capability === EXTERNAL_LINK_CONSENT) {
+    if (typeof r.site !== "string" || r.site === "") return null;
+    return {
+      pluginId: r.pluginId,
+      capability: EXTERNAL_LINK_CONSENT,
+      site: r.site,
+      scopeKey: scopeKey ?? DEFAULT_SCOPE_KEY,
+      approvedAt: r.approvedAt,
+    };
+  }
   return {
     pluginId: r.pluginId,
-    capability: r.capability as BuiltInPluginCapability,
+    capability: r.capability as PluginGrantKey,
     scopeKey: scopeKey ?? DEFAULT_SCOPE_KEY,
     approvedAt: r.approvedAt,
   };

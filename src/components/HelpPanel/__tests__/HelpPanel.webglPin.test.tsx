@@ -147,14 +147,17 @@ vi.mock("./HelpIntroBanner", () => ({ HelpIntroBanner: () => null }));
 vi.mock("./HelpPanelHeader", () => ({ HelpPanelHeader: () => null }));
 vi.mock("./HelpPanelBanners", () => ({ HelpPanelBanners: () => null }));
 vi.mock("./HelpPanelVersionGate", () => ({ HelpPanelVersionGate: () => null }));
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     focus: (...args: unknown[]) => focusMock(...args),
     setFocused: (...args: unknown[]) => setFocusedMock(...args),
     notifyUserInput: vi.fn(),
     repaintForReveal: (...args: unknown[]) => repaintForRevealMock(...args),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 vi.mock("@/clients", () => ({ terminalClient: { submit: vi.fn(), sendKey: vi.fn() } }));
 vi.mock("@shared/config/agentIds", () => ({
   BUILT_IN_AGENT_IDS: ["claude", "codex", "claude-code"] as const,
@@ -266,6 +269,11 @@ vi.mock("../FigureRail", () => ({ FigureRail: () => null }));
 
 import { HelpPanel } from "../HelpPanel";
 import { __resetHelpSessionControllersForTests } from "@/controllers/helpSessionControllerRegistry";
+
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
+
+// The service mock never evaluates the real module, so nothing builds it.
+await loadTerminalService();
 
 function getAside(): HTMLElement {
   const aside = document.getElementById("daintree-assistant-panel");

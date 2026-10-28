@@ -1,6 +1,6 @@
 // eager-import-allow: reads project settings via store.get and settings files via sync fs
 import type { ProjectSettings } from "../types/index.js";
-import type { NotificationSettings } from "../../shared/types/ipc/api.js";
+import type { NotificationSettings, VoiceDictionaryEntry } from "../../shared/types/ipc/api.js";
 import type Store from "electron-store";
 import type { StoreSchema } from "../store.js";
 import fs from "fs/promises";
@@ -35,8 +35,17 @@ export class ProjectSettingsManager {
     private store: Store<StoreSchema>
   ) {}
 
-  getEffectiveNotificationSettings(currentProjectId: string | null): NotificationSettings {
-    const global = this.store.get("notificationSettings");
+  /**
+   * The project's overrides over the global settings. `globalChoices` stand
+   * in for this machine's own global values where another machine decides
+   * them (a Shell's alert choices, #14701); the overrides still apply.
+   */
+  getEffectiveNotificationSettings(
+    currentProjectId: string | null,
+    globalChoices?: Partial<NotificationSettings>
+  ): NotificationSettings {
+    const own = this.store.get("notificationSettings");
+    const global = globalChoices ? { ...own, ...globalChoices } : own;
     if (!currentProjectId) return global;
 
     const overrides = this.notificationOverridesCache.get(currentProjectId);
@@ -63,6 +72,21 @@ export class ProjectSettingsManager {
       quietHoursEndMin: global.quietHoursEndMin,
       quietHoursWeekdays: global.quietHoursWeekdays,
     };
+  }
+
+  /**
+   * Whether the user muted `projectId`: both of its own agent switches set off,
+   * the pair `project.muteNotifications` writes and the inbox reports as "This
+   * project is muted". Only the project's overrides count, so global defaults
+   * that happen to be off mute nothing. A cold cache is filled by reading the
+   * project's settings, which is what plugins arriving before the project's
+   * view has loaded them would otherwise slip past (#13818).
+   */
+  async isNotificationsMuted(projectId: string): Promise<boolean> {
+    const overrides = this.notificationOverridesCache.has(projectId)
+      ? this.notificationOverridesCache.get(projectId)
+      : (await this.getProjectSettings(projectId)).notificationOverrides;
+    return overrides?.completedEnabled === false && overrides.waitingEnabled === false;
   }
 
   /**
@@ -289,24 +313,50 @@ export class ProjectSettingsManager {
   }
 
   /**
-   * Replaces the project's settings, except the browser allow-list, which
-   * only grows. Nothing removes an approved host, so a save whose list lacks
-   * one that is on disk was built from a copy read before it was approved.
+   * Replaces the project's settings, except two fields a whole save can only
+   * hold a stale copy of. The browser allow-list only grows: nothing removes
+   * an approved host, so a save whose list lacks one that is on disk was built
+   * from a copy read before it was approved. The dictation vocabulary is kept
+   * as stored: only {@link changeVoiceDictionary} writes it.
    */
   async saveProjectSettings(projectId: string, settings: ProjectSettings): Promise<void> {
     return this.serializeWrite(projectId, async () => {
+      const saved = await this.readSavedSettings(projectId);
       const browserAllowedHosts = mergeBrowserAllowedHosts(
-        await this.readSavedBrowserAllowedHosts(projectId),
+        saved?.browserAllowedHosts,
         settings.browserAllowedHosts
       );
-      await this.writeProjectSettings(
-        projectId,
-        browserAllowedHosts ? { ...settings, browserAllowedHosts } : settings
-      );
+      const next: ProjectSettings = {
+        ...settings,
+        ...(browserAllowedHosts ? { browserAllowedHosts } : {}),
+        voiceDictionary: saved?.voiceDictionary,
+      };
+      if (next.voiceDictionary === undefined) delete next.voiceDictionary;
+      await this.writeProjectSettings(projectId, next);
     });
   }
 
-  private async readSavedBrowserAllowedHosts(projectId: string): Promise<string[] | undefined> {
+  /**
+   * One read-modify-write of the project's locally stored dictation
+   * vocabulary, merged into the settings as they are on disk at the time of
+   * the write. Writes nothing when `apply` returns the list it was given.
+   * Returns the list as saved.
+   */
+  async changeVoiceDictionary(
+    projectId: string,
+    apply: (entries: VoiceDictionaryEntry[]) => VoiceDictionaryEntry[]
+  ): Promise<VoiceDictionaryEntry[]> {
+    return this.serializeWrite(projectId, async () => {
+      const settings = await this.readProjectSettings(projectId);
+      const current = settings.voiceDictionary ?? [];
+      const next = apply(current);
+      if (next === current) return current;
+      await this.writeProjectSettings(projectId, { ...settings, voiceDictionary: next });
+      return next;
+    });
+  }
+
+  private async readSavedSettings(projectId: string): Promise<ProjectSettings | undefined> {
     const filePath = settingsFilePath(this.projectsConfigDir, projectId);
     if (!filePath) return undefined;
     let content: string;
@@ -321,9 +371,9 @@ export class ProjectSettingsManager {
     try {
       const stripped = content.startsWith(UTF8_BOM) ? content.slice(UTF8_BOM.length) : content;
       const decoded = decode(JSON.parse(stripped));
-      return decoded.ok ? decoded.settings.browserAllowedHosts : undefined;
+      return decoded.ok ? decoded.settings : undefined;
     } catch {
-      // Unparseable: there is no saved list for the save to keep.
+      // Unparseable: there is nothing saved for the save to keep.
       return undefined;
     }
   }

@@ -79,7 +79,10 @@ import {
   getDockLaunchRowItem,
   insertExpandedPresetRows,
   rowHasPresets,
+  spliceRecentRows,
+  buildRecentBrowseRows,
   RECENCY_BAND_CAP,
+  MORE_ROW_KEY,
   type DockLaunchAgent,
   type DockLaunchItem,
   type DockLaunchPanelItem,
@@ -260,6 +263,17 @@ describe("buildDockLaunchModel — panel offering", () => {
     }
   });
 
+  it("offers a project-scoped plugin kind under the dock on either surface (#13778)", () => {
+    // `launchPanelKind` always puts one in the dock, so the grid heading would lie.
+    registerPluginKind(PLUGIN_DOCKABLE, { scope: "project" });
+
+    for (const surface of ["grid", "dock"] as const) {
+      const model = build({ surface });
+      expect(model.dockPanels.map((p) => p.kindId)).toContain(PLUGIN_DOCKABLE);
+      expect(model.gridPanels.map((p) => p.kindId)).not.toContain(PLUGIN_DOCKABLE);
+    }
+  });
+
   it("keeps the dock destination for dockable kinds on a dock surface", () => {
     const dock = build({ surface: "dock" });
     // Same kinds, opposite surface — proves the split is surface-driven and not
@@ -391,6 +405,49 @@ describe("buildDockLaunchModel — browse rows", () => {
     expect(claudeRows).toHaveLength(1);
     expect(claudeRows[0]!.band).toBe("recent");
     expect(model.browseRows[0]).toBe(claudeRows[0]);
+  });
+
+  it("moves recent agents into More with the rest of the agents when the project demotes them", () => {
+    const model = build({
+      mruEntries: mru,
+      arrangement: {
+        projectId: "p",
+        demoted: { agents: true, panels: false },
+        groupOrder: [],
+        featuredEntry: null,
+      },
+    });
+    expect(model.browseRows.some((row) => row.band === "recent" || row.band === "agents")).toBe(
+      false
+    );
+    expect(model.moreRows[0]!.band).toBe("recent");
+    expect(model.browseRows.find((row) => row.rowKey === MORE_ROW_KEY)).toMatchObject({
+      contents: "Agents",
+    });
+    // Demoted, never removed: search still has every agent.
+    expect(model.searchItems.filter((item) => item.category === "agent")).toHaveLength(
+      AGENTS.length
+    );
+  });
+
+  it("splices recent rows back at the head of the agents, wherever the agents sit", () => {
+    const stable = build({ recipes: [recipe({ id: "r-1", name: "Deploy" })] });
+    const agentItems = stable.searchItems.filter(
+      (item): item is Extract<DockLaunchItem, { category: "agent" }> => item.category === "agent"
+    );
+    const recentRows = buildRecentBrowseRows(agentItems, ["claude"]);
+    const moved = [
+      ...stable.browseRows.filter((row) => row.band === "recipes"),
+      ...stable.browseRows.filter((row) => row.band !== "recipes"),
+    ];
+    const spliced = spliceRecentRows(moved, recentRows);
+    const firstAgent = spliced.findIndex((row) => row.band === "recent");
+    expect(spliced[firstAgent - 1]!.band).toBe("recipes");
+    expect(spliced.filter((row) => getDockLaunchRowItem(row)?.key === "agent:claude")).toHaveLength(
+      1
+    );
+    const noAgents = stable.browseRows.filter((row) => row.band === "recipes");
+    expect(spliceRecentRows(noAgents, recentRows)).toEqual(noAgents);
   });
 
   it("gives every row a unique key so selection can never light two at once", () => {
@@ -577,6 +634,33 @@ describe("buildDockLaunchModel — agent bands", () => {
     });
     expect(model.recentAgents).toEqual([]);
     expect(model.browseRows.some((row) => row.band === "recent")).toBe(false);
+  });
+});
+
+describe("buildDockLaunchModel — a project hiding the dev preview (#14069)", () => {
+  const hidden = new Set(["dev-preview"]);
+
+  it("leaves it out of the rows and the context menus", () => {
+    const model = build({ hiddenPanelKinds: hidden });
+    const offered = [...model.dockPanels, ...model.gridPanels].map((p) => p.kindId);
+    expect(offered).not.toContain("dev-preview");
+    expect(offered).toContain("browser");
+    const rowKeys = [...model.browseRows, ...model.moreRows].map(
+      (row) => getDockLaunchRowItem(row)?.key
+    );
+    expect(rowKeys).not.toContain("panel:dev-preview");
+    expect(rowKeys).toContain("panel:browser");
+  });
+
+  it("keeps it in search, so it is never more than a typed word away", () => {
+    const model = build({ hiddenPanelKinds: hidden });
+    expect(model.searchItems.map((item) => item.key)).toContain("panel:dev-preview");
+  });
+
+  it("changes nothing while no kind is hidden", () => {
+    const keys = (model: ReturnType<typeof build>) =>
+      [...model.dockPanels, ...model.gridPanels].map((p) => p.kindId);
+    expect(keys(build({ hiddenPanelKinds: new Set() }))).toEqual(keys(build()));
   });
 });
 

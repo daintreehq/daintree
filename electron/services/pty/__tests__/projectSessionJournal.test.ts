@@ -42,20 +42,29 @@ interface FakeTerminal {
   cwd: string;
   agentLaunchFlags?: string[];
   agentModelId?: string;
+  isTrashed?: boolean;
+  trashExpiresAt?: number;
   isAssistantTerminal?: boolean;
   spawnedAt: number;
 }
 
 function makePtyClient(config: {
   terminals?: FakeTerminal[] | (() => Promise<FakeTerminal[]>);
+  /** A host shard didn't answer the completeness-aware read. */
+  degraded?: boolean;
   outcome: { confirmed: boolean; sessions: Array<{ id: string; agentSessionId: string | null }> };
 }): { client: PtyClient; gracefulKillByProjectConfirmed: ReturnType<typeof vi.fn> } {
   const gracefulKillByProjectConfirmed = vi.fn(async () => config.outcome);
   const getAllTerminalsAsync = vi.fn(async () =>
     typeof config.terminals === "function" ? await config.terminals() : (config.terminals ?? [])
   );
+  const getAllTerminalsWithCompletenessAsync = vi.fn(async () => ({
+    terminals: await getAllTerminalsAsync(),
+    degraded: config.degraded ?? false,
+  }));
   const client = {
     getAllTerminalsAsync,
+    getAllTerminalsWithCompletenessAsync,
     gracefulKillByProjectConfirmed,
   } as unknown as PtyClient;
   return { client, gracefulKillByProjectConfirmed };
@@ -104,6 +113,48 @@ describe("gracefulTeardownAndJournalProject", () => {
     const [record, ctx] = journalMock.journalAgentSession.mock.calls[0]!;
     expect(record).toMatchObject({ sessionId: "s1", agentId: "claude", projectId: "proj" });
     expect(ctx).toMatchObject({ terminalId: "t1" });
+  });
+
+  it("journals a project close as sleep, and a pane already in the trash as the user's close", async () => {
+    const { client } = makePtyClient({
+      terminals: [
+        { id: "t1", projectId: "proj", launchAgentId: "claude", cwd: "/a", spawnedAt: 1 },
+        {
+          id: "t2",
+          projectId: "proj",
+          launchAgentId: "codex",
+          cwd: "/b",
+          spawnedAt: 2,
+          isTrashed: true,
+          trashExpiresAt: 90_000,
+        },
+      ],
+      outcome: {
+        confirmed: true,
+        sessions: [
+          { id: "t1", agentSessionId: "s1" },
+          { id: "t2", agentSessionId: "s2" },
+        ],
+      },
+    });
+
+    await gracefulTeardownAndJournalProject("proj", client);
+
+    const records = new Map(
+      journalMock.journalAgentSession.mock.calls.map(([record]) => [
+        (record as { sessionId: string }).sessionId,
+        record as {
+          closedBy?: string;
+          terminal?: { id: string };
+          trash?: { expiresAt: number };
+        },
+      ])
+    );
+    expect(records.get("s1")?.closedBy).toBe("sleep");
+    expect(records.get("s1")?.trash).toBeUndefined();
+    expect(records.get("s2")?.closedBy).toBe("user");
+    expect(records.get("s2")?.terminal).toEqual({ id: "t2", spawnedAt: 2 });
+    expect(records.get("s2")?.trash).toMatchObject({ expiresAt: 90_000 });
   });
 
   it("freezes each terminal's generation before the kill and passes it to the journal", async () => {
@@ -348,6 +399,104 @@ describe("gracefulTeardownAndJournalProject", () => {
 
     expect(result).toMatchObject({ confirmed: true, terminalsKilled: 0 });
     expect(journalMock.journalAgentSession).not.toHaveBeenCalled();
+  });
+
+  describe("a beforeKill guard", () => {
+    const TERMINALS: FakeTerminal[] = [
+      { id: "t1", projectId: "proj", launchAgentId: "claude", cwd: "/a", spawnedAt: 1 },
+      { id: "t2", projectId: "other", cwd: "/b", spawnedAt: 1 },
+    ];
+
+    it("sees the scope's pre-kill snapshot and can refuse the kill outright", async () => {
+      const { client, gracefulKillByProjectConfirmed } = makePtyClient({
+        terminals: TERMINALS,
+        outcome: { confirmed: true, sessions: [{ id: "t1", agentSessionId: "s1" }] },
+      });
+      const beforeKill = vi.fn(() => false);
+
+      const result = await gracefulTeardownAndJournalProject("proj", client, undefined, {
+        preserveSession: true,
+        writeBackSessionIds: true,
+        beforeKill,
+      });
+
+      expect(beforeKill).toHaveBeenCalledWith({
+        terminals: [expect.objectContaining({ id: "t1" })],
+        degraded: false,
+      });
+      expect(result).toEqual({ confirmed: false, aborted: true, terminalsKilled: 0, sessions: [] });
+      expect(gracefulKillByProjectConfirmed).not.toHaveBeenCalled();
+      expect(projectStoreMock.enqueueProjectStateUpdate).not.toHaveBeenCalled();
+      expect(journalMock.journalAgentSession).not.toHaveBeenCalled();
+    });
+
+    it("kills and journals as usual when the guard allows it", async () => {
+      const { client, gracefulKillByProjectConfirmed } = makePtyClient({
+        terminals: TERMINALS,
+        outcome: { confirmed: true, sessions: [{ id: "t1", agentSessionId: "s1" }] },
+      });
+
+      const result = await gracefulTeardownAndJournalProject("proj", client, undefined, {
+        beforeKill: () => true,
+      });
+
+      expect(result).toMatchObject({ confirmed: true, aborted: false, terminalsKilled: 1 });
+      expect(gracefulKillByProjectConfirmed).toHaveBeenCalledTimes(1);
+      expect(journalMock.journalAgentSession).toHaveBeenCalledTimes(1);
+    });
+
+    it("sends the kill in the same turn the guard allowed it", async () => {
+      // Whatever the guard checked must still hold when the kill lands, so no
+      // await may sit between them. Armed by the guard, disarmed by the first
+      // microtask after it.
+      let armed = false;
+      let killSawGuardArmed = false;
+      const { client, gracefulKillByProjectConfirmed } = makePtyClient({
+        terminals: TERMINALS,
+        outcome: { confirmed: true, sessions: [] },
+      });
+      gracefulKillByProjectConfirmed.mockImplementation(async () => {
+        killSawGuardArmed = armed;
+        return { confirmed: true, sessions: [] };
+      });
+
+      await gracefulTeardownAndJournalProject("proj", client, undefined, {
+        beforeKill: () => {
+          armed = true;
+          queueMicrotask(() => {
+            armed = false;
+          });
+          return true;
+        },
+      });
+
+      expect(killSawGuardArmed).toBe(true);
+    });
+
+    it("is told when the snapshot may be missing terminals", async () => {
+      const { client } = makePtyClient({
+        terminals: TERMINALS,
+        degraded: true,
+        outcome: { confirmed: true, sessions: [] },
+      });
+      const beforeKill = vi.fn(() => true);
+
+      await gracefulTeardownAndJournalProject("proj", client, undefined, { beforeKill });
+
+      expect(beforeKill).toHaveBeenCalledWith(expect.objectContaining({ degraded: true }));
+    });
+
+    it("reads a snapshot that failed outright as degraded, not empty", async () => {
+      const { client } = makePtyClient({
+        terminals: () => Promise.reject(new Error("host unreachable")),
+        outcome: { confirmed: true, sessions: [] },
+      });
+      const beforeKill = vi.fn(() => true);
+
+      await gracefulTeardownAndJournalProject("proj", client, undefined, { beforeKill });
+
+      expect(beforeKill).toHaveBeenCalledWith({ terminals: [], degraded: true });
+    });
   });
 
   it("survives a failed terminal snapshot (best-effort) and still reports the kill", async () => {

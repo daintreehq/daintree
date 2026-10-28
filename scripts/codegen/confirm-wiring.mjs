@@ -39,6 +39,7 @@ const EXPECTED_CONFIRM_DANGER = new Set([
   "terminal.killBatch",
   "terminal.killAll",
   "terminal.restart",
+  "terminal.restartOnPreset",
   "terminal.restartAll",
   "terminal.arm",
   "worktree.delete",
@@ -51,10 +52,14 @@ const EXPECTED_CONFIRM_DANGER = new Set([
   "fleet.restart",
   "fleet.deleteNamedFleet",
   "worktree.resource.teardown",
+  "worktree.resource.openOnHost",
   "portal.links.remove",
   "keybinding.resetAll",
   "logs.clear",
   "project.remove",
+  "project.sleep",
+  "project.restart",
+  "project.sleepIdle",
   "recipe.delete",
   "recipe.run",
   "devPreview.restartAndClearCache",
@@ -66,6 +71,8 @@ const EXPECTED_CONFIRM_DANGER = new Set([
   "forge.closePR",
   "forge.reopenPR",
   "forge.mergePR",
+  "forge.enableAutoMerge",
+  "forge.disableAutoMerge",
   "forge.convertPRToDraft",
   "forge.markPRReadyForReview",
   "forge.commentOnPR",
@@ -88,6 +95,7 @@ const CONFIRMED_WIRED = [
   "terminal.kill",
   "terminal.killAll",
   "terminal.restart",
+  "terminal.restartOnPreset",
   "terminal.restartAll",
   "worktree.delete",
   "worktree.sessions.endAll",
@@ -95,11 +103,17 @@ const CONFIRMED_WIRED = [
   "worktree.sessions.restartAll",
   "worktree.sessions.clearHistory",
   "worktree.resource.teardown",
+  "worktree.resource.openOnHost",
   "keybinding.resetAll",
   "logs.clear",
   "recipe.delete",
   "devPreview.restartAndClearCache",
   "devPreview.reinstallAndRestart",
+  // The Review Hub's merge confirm (#13747): PrMergeConfirmDialog previews
+  // what lands and dispatches all three from the same file.
+  "forge.mergePR",
+  "forge.enableAutoMerge",
+  "forge.disableAutoMerge",
 ];
 
 // Actions whose confirmation uses a non-ConfirmDialog-family pattern. These are
@@ -129,6 +143,9 @@ const BYPASS_WIRED = new Set([
   "git.discardFileChanges",
   "file.trash",
   "project.remove", // confirm in ProjectSwitcherPalette.tsx; action ID not co-located
+  "project.sleep", // deferred-promise via projectSleepConfirmStore; ProjectSleepConfirmDialog resolves it
+  "project.sleepIdle", // same store and dialog
+  "project.restart", // same store and dialog
   "terminal.arm", // agent/MCP-only confirm gate (#11346); palette-hidden, user arming goes through the fleet ribbon (not ActionService), so no user-side ConfirmDialog to co-locate
   "recipe.run", // agent-dispatch only; no user-side ConfirmDialog (danger:"confirm" gates MCP only)
   // Agent/MCP-only batch kill (#12123); palette-hidden because it acts only on
@@ -143,7 +160,6 @@ const BYPASS_WIRED = new Set([
   "forge.createPR",
   "forge.closePR",
   "forge.reopenPR",
-  "forge.mergePR",
   "forge.convertPRToDraft",
   "forge.markPRReadyForReview",
   "forge.commentOnPR",

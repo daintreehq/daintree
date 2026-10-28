@@ -64,7 +64,11 @@ import { PLUGIN_PUSH_MAX_PAYLOAD_BYTES } from "../../../../shared/config/pluginB
 import { events } from "../../events.js";
 import { AppError } from "../../../utils/errorTypes.js";
 import { UNBOUND_PLUGIN_HOST_BINDING } from "../../../../shared/types/plugin.js";
-import type { PluginHostBinding } from "../../../../shared/types/plugin.js";
+import type {
+  PluginHostBinding,
+  PluginTerminalLifecycleEvent,
+} from "../../../../shared/types/plugin.js";
+import type { TerminalLifecycleObservation } from "../../../../shared/utils/pluginTerminalLifecycle.js";
 import type { WorktreeSnapshot } from "../../../../shared/types/workspace-host.js";
 import type { LoadedPlugin } from "../PluginServiceTypes.js";
 
@@ -117,12 +121,18 @@ interface Harness {
   sendActionsListToRenderer: ReturnType<typeof vi.fn>;
   sendActionsGetToRenderer: ReturnType<typeof vi.fn>;
   requestPrompt: ReturnType<typeof vi.fn>;
+  sendAgentsListWithProject: ReturnType<typeof vi.fn>;
   handlers: Map<string, WorktreeHandler[]>;
+  /** Project id → worktree id → custom title, as main's store holds them. */
+  titles: Map<string, Record<string, string>>;
+  titleListeners: Set<(projectId: string) => void>;
 }
 
 function makeHarness(): Harness {
   const plugins = new Map<string, LoadedPlugin>([[PLUGIN_ID, fakePlugin()]]);
   const handlers = new Map<string, WorktreeHandler[]>();
+  const titles = new Map<string, Record<string, string>>();
+  const titleListeners = new Set<(projectId: string) => void>();
 
   const ambientFetch = vi.fn(async (): Promise<PluginWorktreeSnapshotFetchResult> => okFetch([]));
   const projectFetch = vi.fn(async (): Promise<PluginWorktreeSnapshotFetchResult> => okFetch([]));
@@ -131,6 +141,10 @@ function makeHarness(): Harness {
   const sendActionsListToRenderer = vi.fn(async () => []);
   const sendActionsGetToRenderer = vi.fn(async () => null);
   const requestPrompt = vi.fn(async () => undefined);
+  const sendAgentsListWithProject = vi.fn(async (projectId?: string | null) => ({
+    projectId: projectId ?? null,
+    agents: [] as Array<{ terminalId: string }>,
+  }));
 
   const deps = {
     plugins,
@@ -142,16 +156,27 @@ function makeHarness(): Harness {
     pluginBadges: new Map(),
     pluginToolbarBadges: new Map(),
     emitToolbarBadges: () => {},
+    pluginToolbarStates: new Map(),
+    emitToolbarStates: () => {},
     pluginWorktreeCardStatuses: new Map(),
     emitWorktreeCardStatuses: () => {},
     worktreeCardStatusGeneration: () => 0,
+    pluginWorktreeReviewChecks: new Map(),
+    emitWorktreeReviewChecks: () => {},
+    worktreeReviewChecksGeneration: () => 0,
     worktreeCardTargetRevision: () => 0,
     isWorktreeCardTargetRetired: () => false,
+    pluginTerminalStatuses: new Map(),
+    emitTerminalStatuses: () => {},
+    terminalStatusGeneration: () => 0,
+    terminalStatusCloseRevision: () => 0,
+    isTerminalStatusProjectClosed: () => false,
     pluginPanelMenus: new Map(),
     pluginFsWatchers: new Map(),
     broadcaster: { schedulePluginActionsBroadcast: vi.fn() },
     panelLifecycleBroker: { subscribe: vi.fn(() => () => {}) },
     dispatcher: {
+      sendAgentsListWithProject,
       sendDispatchToRenderer,
       sendActionsListToRenderer,
       sendActionsGetToRenderer,
@@ -177,10 +202,16 @@ function makeHarness(): Harness {
       handlers.set(event, list);
       return () => {};
     }),
+    getWorktreeCustomTitles: (projectId: string) => titles.get(projectId) ?? {},
+    subscribeWorktreeCustomTitles: (listener: (projectId: string) => void) => {
+      titleListeners.add(listener);
+      return () => titleListeners.delete(listener);
+    },
     registerHandler: vi.fn(),
     validateAndBuildActionDescriptor: vi.fn(),
     safeAppendAudit: vi.fn(),
     safeArgsHash: () => "",
+    pluginNotificationsBlocked: async () => false,
   } as unknown as PluginHostFactoryDeps;
 
   return {
@@ -193,12 +224,23 @@ function makeHarness(): Harness {
     sendActionsListToRenderer,
     sendActionsGetToRenderer,
     requestPrompt,
+    sendAgentsListWithProject,
     handlers,
+    titles,
+    titleListeners,
   };
 }
 
 function emit(h: Harness, event: string, payload?: { projectPath?: string }): void {
   for (const handler of h.handlers.get(event) ?? []) handler(payload);
+}
+
+function renameIn(h: Harness, projectId: string, worktreeId: string, title: string | null): void {
+  const next = { ...(h.titles.get(projectId) ?? {}) };
+  if (title === null) delete next[worktreeId];
+  else next[worktreeId] = title;
+  h.titles.set(projectId, next);
+  for (const listener of [...h.titleListeners]) listener(projectId);
 }
 
 /**
@@ -482,6 +524,84 @@ describe("createHost worktree subscriptions", () => {
     emit(h, "worktree-update", { projectPath: ROOT_B });
     await flush();
     expect(callback).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("createHost custom worktree titles (#14022)", () => {
+  it("projects the bound project's title on every worktree surface", async () => {
+    const h = makeHarness();
+    h.titles.set(PROJECT_A, { "wt-a": "Release prep" });
+    h.titles.set("project-b", { "wt-b": "Not this one" });
+    h.projectFetch.mockResolvedValue(
+      okFetch([worktree({ id: "wt-a", isCurrent: true }), worktree({ id: "wt-b" })])
+    );
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    expect((await host.getWorktrees()).map((w) => [w.id, w.customTitle])).toEqual([
+      ["wt-a", "Release prep"],
+      ["wt-b", null],
+    ]);
+    expect((await host.getActiveWorktree())?.customTitle).toBe("Release prep");
+
+    const active = vi.fn();
+    await host.onDidChangeActiveWorktree(active, { debounceMs: 0 });
+    emit(h, "worktree-activated", { projectPath: ROOT_A });
+    await flush();
+    expect(active.mock.calls[0][0]?.customTitle).toBe("Release prep");
+  });
+
+  it("keys an unbound host's titles by the project its read landed on", async () => {
+    const h = makeHarness();
+    h.titles.set(PROJECT_A, { "wt-focus": "Focused title" });
+    h.titles.set("project-b", { "wt-focus": "Other project's title" });
+    h.ambientFetch.mockResolvedValue(okFetch([worktree({ id: "wt-focus", isCurrent: true })]));
+    const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+
+    expect((await host.getActiveWorktree())?.customTitle).toBe("Focused title");
+  });
+
+  it("reports a rename in its own project as a changed worktree", async () => {
+    const h = makeHarness();
+    h.projectFetch.mockResolvedValue(okFetch([worktree({ id: "wt-a" })]));
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+    const callback = vi.fn();
+    await host.onDidChangeWorktrees(callback, { debounceMs: 0 });
+
+    emit(h, "worktree-update", { projectPath: ROOT_A });
+    await flush();
+    renameIn(h, PROJECT_A, "wt-a", "Release prep");
+    await flush();
+    renameIn(h, PROJECT_A, "wt-a", null);
+    await flush();
+
+    expect(callback).toHaveBeenCalledTimes(3);
+    expect(callback.mock.calls[1][0][0].customTitle).toBe("Release prep");
+    expect(callback.mock.calls[1][1].changed).toEqual(["wt-a"]);
+    expect(callback.mock.calls[2][0][0].customTitle).toBeNull();
+    expect(callback.mock.calls[2][1].changed).toEqual(["wt-a"]);
+  });
+
+  it("does not wake a bound host for another project's rename", async () => {
+    const h = makeHarness();
+    h.projectFetch.mockResolvedValue(okFetch([worktree({ id: "wt-a" })]));
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+    const callback = vi.fn();
+    await host.onDidChangeWorktrees(callback, { debounceMs: 0 });
+
+    renameIn(h, "project-b", "wt-b", "Elsewhere");
+    await flush();
+    expect(callback).not.toHaveBeenCalled();
+    expect(h.projectFetch).not.toHaveBeenCalled();
+  });
+
+  it("drops the title listener when the subscription is disposed", async () => {
+    const h = makeHarness();
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+    const dispose = await host.onDidChangeWorktrees(vi.fn(), { debounceMs: 0 });
+    expect(h.titleListeners.size).toBe(1);
+
+    dispose();
+    expect(h.titleListeners.size).toBe(0);
   });
 });
 
@@ -1424,6 +1544,151 @@ describe("createHost onDidWake (#12175)", () => {
   });
 });
 
+describe("createHost onDidChangeTerminalLifecycle (#13814)", () => {
+  const lifecycle = (
+    overrides: Partial<TerminalLifecycleObservation> = {}
+  ): TerminalLifecycleObservation => ({
+    type: "spawned",
+    terminalId: "term-a",
+    projectId: PROJECT_A,
+    worktreeId: "wt-1",
+    kind: "shell",
+    timestamp: 1,
+    ...overrides,
+  });
+
+  afterEach(() => {
+    events.removeAllListeners();
+    vi.restoreAllMocks();
+  });
+
+  it("delivers every event in order, uncoalesced, as a frozen projection", async () => {
+    const h = makeHarness();
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+    const received: PluginTerminalLifecycleEvent[] = [];
+    await host.onDidChangeTerminalLifecycle((event) => received.push(event));
+
+    events.emit("terminal:lifecycle", lifecycle());
+    events.emit(
+      "terminal:lifecycle",
+      // The pty-host's own exit carries recent output; nothing like it may cross.
+      lifecycle({
+        type: "exited",
+        exitCode: 1,
+        timestamp: 2,
+        ...({ recentOutput: "secret" } as Partial<TerminalLifecycleObservation>),
+      })
+    );
+
+    // A short-lived terminal keeps its spawn: nothing keys a window by terminal.
+    expect(received.map((e) => e.type)).toEqual(["spawned", "exited"]);
+    expect(received[1]).toEqual({
+      type: "exited",
+      terminalId: "term-a",
+      workspaceId: PROJECT_A,
+      worktreeId: "wt-1",
+      kind: "shell",
+      exitCode: 1,
+      timestamp: 2,
+    });
+    expect(received.every((e) => Object.isFrozen(e))).toBe(true);
+  });
+
+  it("delivers only the bound project's terminals, failing closed on unknown ownership", async () => {
+    const h = makeHarness();
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+    const callback = vi.fn();
+    await host.onDidChangeTerminalLifecycle(callback);
+
+    events.emit("terminal:lifecycle", lifecycle({ terminalId: "term-b", projectId: "project-b" }));
+    events.emit("terminal:lifecycle", lifecycle({ terminalId: "term-x", projectId: undefined }));
+    expect(callback).not.toHaveBeenCalled();
+
+    events.emit("terminal:lifecycle", lifecycle());
+    expect(callback).toHaveBeenCalledTimes(1);
+  });
+
+  it("tells an unbound host about every workspace's terminals", async () => {
+    const h = makeHarness();
+    const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+    const received: PluginTerminalLifecycleEvent[] = [];
+    await host.onDidChangeTerminalLifecycle((event) => received.push(event));
+
+    events.emit("terminal:lifecycle", lifecycle({ projectId: "project-b" }));
+    events.emit("terminal:lifecycle", lifecycle({ terminalId: "term-x", projectId: undefined }));
+
+    expect(received.map((e) => [e.terminalId, e.workspaceId])).toEqual([
+      ["term-a", "project-b"],
+      ["term-x", undefined],
+    ]);
+  });
+
+  it("requires agent:read", async () => {
+    const h = makeHarness();
+    h.deps.declaredCapabilities = () => new Set(["agent:input"]);
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    expect(() => host.onDidChangeTerminalLifecycle(vi.fn())).toThrow(
+      /PERMISSION_REQUIRED.*agent:read/
+    );
+  });
+
+  it("drops a malformed observation rather than delivering it", async () => {
+    const h = makeHarness();
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+    const callback = vi.fn();
+    await host.onDidChangeTerminalLifecycle(callback);
+
+    events.emit("terminal:lifecycle", lifecycle({ type: "exited" }));
+
+    expect(callback).not.toHaveBeenCalled();
+  });
+
+  it("stops on dispose, falls silent on unload, and tracks its teardown", async () => {
+    const h = makeHarness();
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+    const disposed = vi.fn();
+    const dispose = await host.onDidChangeTerminalLifecycle(disposed);
+    const unloaded = vi.fn();
+    await host.onDidChangeTerminalLifecycle(unloaded);
+    expect(h.deps.pluginEventCleanups.get(PLUGIN_ID)).toHaveLength(2);
+
+    dispose();
+    dispose();
+    expect(h.deps.pluginEventCleanups.get(PLUGIN_ID)).toHaveLength(1);
+    h.deps.plugins.delete(PLUGIN_ID);
+    events.emit("terminal:lifecycle", lifecycle());
+
+    expect(disposed).not.toHaveBeenCalled();
+    expect(unloaded).not.toHaveBeenCalled();
+  });
+
+  it("quarantines a listener that throws on three consecutive events", async () => {
+    const h = makeHarness();
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const callback = vi.fn(() => {
+      throw new Error("plugin boom");
+    });
+    await host.onDidChangeTerminalLifecycle(callback);
+
+    for (let i = 0; i < 4; i++) events.emit("terminal:lifecycle", lifecycle());
+
+    expect(callback).toHaveBeenCalledTimes(3);
+  });
+
+  it("throws once the host is revoked", async () => {
+    const h = makeHarness();
+    const { host, revoke } = createHost(h.deps, PLUGIN_ID, BOUND);
+    revoke();
+
+    expect(() => host.onDidChangeTerminalLifecycle(vi.fn())).toThrow(
+      /onDidChangeTerminalLifecycle/
+    );
+  });
+});
+
 describe("host identity (#12211)", () => {
   const PROJECT_INSTANCE = `project__${PROJECT_A}__acme.video-manager`;
 
@@ -2041,6 +2306,57 @@ describe("createHost setWorktreeCardStatus", () => {
     expect(h.projectFetch).not.toHaveBeenCalled();
   });
 
+  it("stores a project plugin's command in its instance namespace (#13776)", async () => {
+    const instance = `project__${PROJECT_A}__acme.status`;
+    const h = makeHarness();
+    withEmitter(h);
+    h.deps.plugins.set(instance, fakePlugin());
+    h.projectFetch.mockResolvedValue(okFetch([worktree({ id: "wt-a" })]));
+    const { host } = createHost(h.deps, instance, BOUND);
+
+    await host.setWorktreeCardStatus("wt-a", { label: "Draft", command: "acme.status.open" });
+
+    expect(h.deps.pluginWorktreeCardStatuses.get(instance)?.get(PROJECT_A)?.get("wt-a")).toEqual({
+      label: "Draft",
+      command: `${instance}.open`,
+    });
+  });
+
+  it("rejects another namespace's command before reading anything", async () => {
+    const h = makeHarness();
+    withEmitter(h);
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    await expect(
+      host.setWorktreeCardStatus("wt-a", { label: "x", command: "other.open" })
+    ).rejects.toThrow(/setWorktreeCardStatus: status.command "other.open" must be one of/);
+    expect(h.projectFetch).not.toHaveBeenCalled();
+    expect(h.deps.pluginWorktreeCardStatuses.size).toBe(0);
+  });
+
+  it("republishes when only the command changes", async () => {
+    const h = makeHarness();
+    const emitted = withEmitter(h);
+    h.projectFetch.mockResolvedValue(okFetch([worktree({ id: "wt-a" })]));
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    await host.setWorktreeCardStatus("wt-a", { label: "up" });
+    await host.setWorktreeCardStatus("wt-a", { label: "up", command: "acme.open" });
+    await host.setWorktreeCardStatus("wt-a", { label: "up", command: "acme.open" });
+
+    expect(emitted).toHaveBeenCalledTimes(2);
+    expect(h.deps.pluginWorktreeCardStatuses.get(PLUGIN_ID)?.get(PROJECT_A)?.get("wt-a")).toEqual({
+      label: "up",
+      command: "acme.open",
+    });
+
+    await host.setWorktreeCardStatus("wt-a", { label: "up" });
+    expect(emitted).toHaveBeenCalledTimes(3);
+    expect(h.deps.pluginWorktreeCardStatuses.get(PLUGIN_ID)?.get(PROJECT_A)?.get("wt-a")).toEqual({
+      label: "up",
+    });
+  });
+
   it("replaces, skips an identical republish, and clears down to nothing", async () => {
     const h = makeHarness();
     const emitted = withEmitter(h);
@@ -2210,5 +2526,333 @@ describe("createHost setWorktreeCardStatus", () => {
 
     expect(emitted).toHaveBeenCalledWith(PLUGIN_ID, "project-focus");
     expect(h.deps.pluginWorktreeCardStatuses.get(PLUGIN_ID)?.has("project-focus")).toBe(true);
+  });
+});
+
+describe("createHost setWorktreeReviewChecks", () => {
+  function withEmitter(h: Harness): ReturnType<typeof vi.fn> {
+    const emitted = vi.fn();
+    h.deps.pluginWorktreeReviewChecks = new Map();
+    h.deps.emitWorktreeReviewChecks = emitted;
+    h.deps.worktreeReviewChecksGeneration = () => 0;
+    h.deps.worktreeCardTargetRevision = () => 0;
+    h.deps.isWorktreeCardTargetRetired = () => false;
+    return emitted;
+  }
+  const stored = (h: Harness) =>
+    h.deps.pluginWorktreeReviewChecks.get(PLUGIN_ID)?.get(PROJECT_A)?.get("wt-a");
+
+  it("stores a plugin's checks on a visible worktree and publishes that project", async () => {
+    const h = makeHarness();
+    const emitted = withEmitter(h);
+    h.projectFetch.mockResolvedValue(okFetch([worktree({ id: "wt-a" })]));
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    await host.setWorktreeReviewChecks("wt-a", [{ label: "3 broken links", severity: "warning" }]);
+
+    expect(stored(h)).toEqual([{ label: "3 broken links", severity: "warning" }]);
+    expect(emitted).toHaveBeenCalledWith(PLUGIN_ID, PROJECT_A);
+  });
+
+  it("replaces the whole list on each call, and skips an identical one", async () => {
+    const h = makeHarness();
+    const emitted = withEmitter(h);
+    h.projectFetch.mockResolvedValue(okFetch([worktree({ id: "wt-a" })]));
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    await host.setWorktreeReviewChecks("wt-a", [
+      { label: "one", severity: "info" },
+      { label: "two", severity: "info" },
+    ]);
+    await host.setWorktreeReviewChecks("wt-a", [{ label: "only", severity: "info" }]);
+    expect(stored(h)).toEqual([{ label: "only", severity: "info" }]);
+    expect(emitted).toHaveBeenCalledTimes(2);
+
+    await host.setWorktreeReviewChecks("wt-a", [{ label: "only", severity: "info" }]);
+    expect(emitted).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([null, []])("clears with %j and prunes the empty maps", async (value) => {
+    const h = makeHarness();
+    const emitted = withEmitter(h);
+    h.projectFetch.mockResolvedValue(okFetch([worktree({ id: "wt-a" })]));
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    await host.setWorktreeReviewChecks("wt-a", [{ label: "x", severity: "info" }]);
+    await host.setWorktreeReviewChecks("wt-a", value);
+
+    expect(h.deps.pluginWorktreeReviewChecks.size).toBe(0);
+    expect(emitted).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects (not throws) a malformed list, and a worktree the plugin cannot see", async () => {
+    const h = makeHarness();
+    const emitted = withEmitter(h);
+    h.projectFetch.mockResolvedValue(okFetch([worktree({ id: "wt-a" })]));
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    await expect(
+      host.setWorktreeReviewChecks("wt-a", [{ label: "x", severity: "blocker" } as never])
+    ).rejects.toThrow(/severity/);
+    await expect(
+      host.setWorktreeReviewChecks("wt-nope", [{ label: "x", severity: "info" }])
+    ).rejects.toThrow(/not a worktree this plugin can see/);
+    expect(h.deps.pluginWorktreeReviewChecks.size).toBe(0);
+    expect(emitted).not.toHaveBeenCalled();
+  });
+
+  it("does not store a check for a worktree removed while the call was queued", async () => {
+    const h = makeHarness();
+    const emitted = withEmitter(h);
+    h.deps.isWorktreeCardTargetRetired = () => true;
+    h.projectFetch.mockResolvedValue(okFetch([worktree({ id: "wt-a" })]));
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    await expect(
+      host.setWorktreeReviewChecks("wt-a", [{ label: "x", severity: "info" }])
+    ).rejects.toThrow(/was removed/);
+    expect(h.deps.pluginWorktreeReviewChecks.size).toBe(0);
+    expect(emitted).not.toHaveBeenCalled();
+  });
+
+  it("drops a call its worker generation made once that generation was cleared", async () => {
+    const h = makeHarness();
+    const emitted = withEmitter(h);
+    let generation = 0;
+    h.deps.worktreeReviewChecksGeneration = () => generation;
+    let release: (value: PluginWorktreeSnapshotFetchResult) => void = () => {};
+    h.projectFetch.mockReturnValueOnce(
+      new Promise<PluginWorktreeSnapshotFetchResult>((resolve) => {
+        release = resolve;
+      })
+    );
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    const stale = host.setWorktreeReviewChecks("wt-a", [{ label: "old", severity: "info" }]);
+    await flush();
+    generation = 1;
+    release(okFetch([worktree({ id: "wt-a" })]));
+    await expect(stale).resolves.toBeUndefined();
+    expect(h.deps.pluginWorktreeReviewChecks.size).toBe(0);
+    expect(emitted).not.toHaveBeenCalled();
+  });
+});
+
+describe("createHost setTerminalStatus", () => {
+  function withEmitter(h: Harness): ReturnType<typeof vi.fn> {
+    const emitted = vi.fn();
+    h.deps.emitTerminalStatuses = emitted;
+    return emitted;
+  }
+
+  function sees(h: Harness, projectId: string | null, ...terminalIds: string[]): void {
+    h.sendAgentsListWithProject.mockResolvedValue({
+      projectId,
+      agents: terminalIds.map((terminalId) => ({ terminalId })),
+    });
+  }
+
+  it("marks a terminal the bound project's agents.list names, and publishes that project", async () => {
+    const h = makeHarness();
+    const emitted = withEmitter(h);
+    sees(h, PROJECT_A, "term-1");
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    await host.setTerminalStatus("term-1", { label: "INV-0042", tooltip: "Checkout" });
+
+    expect(h.sendAgentsListWithProject).toHaveBeenCalledWith(PROJECT_A, PLUGIN_ID);
+    expect(h.deps.pluginTerminalStatuses.get(PLUGIN_ID)?.get(PROJECT_A)?.get("term-1")).toEqual({
+      label: "INV-0042",
+      tooltip: "Checkout",
+    });
+    expect(emitted).toHaveBeenCalledWith(PLUGIN_ID, PROJECT_A);
+  });
+
+  it("files an app-global plugin's status under the project the answering view belongs to", async () => {
+    const h = makeHarness();
+    withEmitter(h);
+    sees(h, "project-focused", "term-1");
+    const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+
+    await host.setTerminalStatus("term-1", { label: "x" });
+
+    expect(h.deps.pluginTerminalStatuses.get(PLUGIN_ID)?.has("project-focused")).toBe(true);
+  });
+
+  it("rejects without agent:read, before reading anything", async () => {
+    const h = makeHarness();
+    h.deps.declaredCapabilities = () => new Set();
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    await expect(host.setTerminalStatus("term-1", { label: "x" })).rejects.toThrow(
+      /PERMISSION_REQUIRED/
+    );
+    expect(h.sendAgentsListWithProject).not.toHaveBeenCalled();
+  });
+
+  it("rejects a terminal the list does not name and stores nothing", async () => {
+    const h = makeHarness();
+    const emitted = withEmitter(h);
+    sees(h, PROJECT_A, "term-1");
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    await expect(host.setTerminalStatus("term-elsewhere", { label: "x" })).rejects.toThrow(
+      /not a terminal this plugin can see/
+    );
+    expect(h.deps.pluginTerminalStatuses.size).toBe(0);
+    expect(emitted).not.toHaveBeenCalled();
+  });
+
+  it("rejects when no view answered, and leaves a shown status alone", async () => {
+    const h = makeHarness();
+    const emitted = withEmitter(h);
+    sees(h, PROJECT_A, "term-1");
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+    await host.setTerminalStatus("term-1", { label: "up" });
+    emitted.mockClear();
+
+    sees(h, null);
+    await expect(host.setTerminalStatus("term-1", null)).rejects.toThrow(/unavailable/);
+    expect(h.deps.pluginTerminalStatuses.get(PLUGIN_ID)?.get(PROJECT_A)?.size).toBe(1);
+    expect(emitted).not.toHaveBeenCalled();
+  });
+
+  it("rejects an invalid status before reading anything", async () => {
+    const h = makeHarness();
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    await expect(host.setTerminalStatus("term-1", { label: "" })).rejects.toThrow(
+      /setTerminalStatus: status.label must not be empty/
+    );
+    expect(h.sendAgentsListWithProject).not.toHaveBeenCalled();
+  });
+
+  it("clears, and sends nothing for an unchanged status", async () => {
+    const h = makeHarness();
+    const emitted = withEmitter(h);
+    sees(h, PROJECT_A, "term-1");
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    await host.setTerminalStatus("term-1", { label: "up" });
+    await host.setTerminalStatus("term-1", { label: "up" });
+    expect(emitted).toHaveBeenCalledTimes(1);
+
+    await host.setTerminalStatus("term-1", null);
+    expect(h.deps.pluginTerminalStatuses.size).toBe(0);
+    expect(emitted).toHaveBeenCalledTimes(2);
+  });
+
+  it("drops a call whose plugin generation was cleared while it read", async () => {
+    const h = makeHarness();
+    const emitted = withEmitter(h);
+    let generation = 0;
+    h.deps.terminalStatusGeneration = () => generation;
+    h.sendAgentsListWithProject.mockImplementation(async () => {
+      generation += 1;
+      return { projectId: PROJECT_A, agents: [{ terminalId: "term-1" }] };
+    });
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    await host.setTerminalStatus("term-1", { label: "x" });
+
+    expect(h.deps.pluginTerminalStatuses.size).toBe(0);
+    expect(emitted).not.toHaveBeenCalled();
+  });
+
+  it("refuses a call whose project closed while it read", async () => {
+    const h = makeHarness();
+    withEmitter(h);
+    sees(h, PROJECT_A, "term-1");
+    h.deps.isTerminalStatusProjectClosed = () => true;
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    await expect(host.setTerminalStatus("term-1", { label: "x" })).rejects.toThrow(/closed/);
+    expect(h.deps.pluginTerminalStatuses.size).toBe(0);
+  });
+
+  it("keeps a set then a clear in call order", async () => {
+    const h = makeHarness();
+    withEmitter(h);
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+    let releaseFirst: (() => void) | undefined;
+    h.sendAgentsListWithProject
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            releaseFirst = () =>
+              resolve({ projectId: PROJECT_A, agents: [{ terminalId: "term-1" }] });
+          })
+      )
+      .mockResolvedValue({ projectId: PROJECT_A, agents: [{ terminalId: "term-1" }] });
+
+    const set = host.setTerminalStatus("term-1", { label: "x" });
+    const clear = host.setTerminalStatus("term-1", null);
+    await flush();
+    releaseFirst?.();
+    await Promise.all([set, clear]);
+
+    expect(h.deps.pluginTerminalStatuses.size).toBe(0);
+  });
+
+  it("stores a project plugin's command in its instance namespace", async () => {
+    const instance = `project__${PROJECT_A}__acme.status`;
+    const h = makeHarness();
+    withEmitter(h);
+    h.deps.plugins.set(instance, fakePlugin());
+    sees(h, PROJECT_A, "term-1");
+    const { host } = createHost(h.deps, instance, BOUND);
+
+    await host.setTerminalStatus("term-1", { label: "Draft", command: "acme.status.open" });
+
+    expect(h.deps.pluginTerminalStatuses.get(instance)?.get(PROJECT_A)?.get("term-1")).toEqual({
+      label: "Draft",
+      command: `${instance}.open`,
+    });
+  });
+
+  it("keeps a chip the list omits until the cap needs its slot", async () => {
+    const h = makeHarness();
+    withEmitter(h);
+    const ids = Array.from({ length: 256 }, (_, i) => `t-${i}`);
+    sees(h, PROJECT_A, ...ids, "new");
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+    for (const id of ids) await host.setTerminalStatus(id, { label: "x" });
+
+    sees(h, PROJECT_A, ...ids.slice(1), "new");
+    await host.setTerminalStatus("t-1", { label: "y" });
+    expect(h.deps.pluginTerminalStatuses.get(PLUGIN_ID)!.get(PROJECT_A)!.has("t-0")).toBe(true);
+
+    await host.setTerminalStatus("new", { label: "z" });
+    const held = h.deps.pluginTerminalStatuses.get(PLUGIN_ID)!.get(PROJECT_A)!;
+    expect(held.has("t-0")).toBe(false);
+    expect(held.get("new")).toEqual({ label: "z" });
+  });
+
+  it("rejects, rather than throws, when the status cannot be read", async () => {
+    const h = makeHarness();
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+    const hostile = new Proxy(
+      {},
+      {
+        ownKeys() {
+          throw new Error("boom");
+        },
+      }
+    );
+    await expect(host.setTerminalStatus("term-1", hostile as never)).rejects.toThrow(
+      /could not be read/
+    );
+  });
+
+  it("caps the terminals one plugin may mark in a project", async () => {
+    const h = makeHarness();
+    withEmitter(h);
+    const ids = Array.from({ length: 257 }, (_, i) => `t-${i}`);
+    sees(h, PROJECT_A, ...ids);
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+    for (const id of ids.slice(0, 256)) await host.setTerminalStatus(id, { label: "x" });
+
+    await expect(host.setTerminalStatus("t-256", { label: "x" })).rejects.toThrow(/at most 256/);
+    await expect(host.setTerminalStatus("t-0", { label: "y" })).resolves.toBeUndefined();
   });
 });

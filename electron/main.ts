@@ -16,6 +16,7 @@ import { registerGlobalErrorHandlers } from "./setup/globalErrorHandlers.js";
 import { startDevDiagnostics } from "./setup/devDiagnostics.js";
 import {
   isE2EBackgroundWindows,
+  isE2EFakeMicrophone,
   isE2EFaultMode,
   isE2EMode,
   isIdleHarness,
@@ -59,6 +60,7 @@ import {
 } from "./lifecycle/windowRestore.js";
 import { restoreFleetAfterCrash, setCrashFleetRestorer } from "./lifecycle/crashWindowRestore.js";
 import { registerShutdownHandler } from "./lifecycle/shutdown.js";
+import { setAttachedShellsProvider } from "./lifecycle/attachedShells.js";
 import { getActiveShutdown } from "./lifecycle/shutdownCoordinator.js";
 import {
   setMainWindow,
@@ -132,6 +134,8 @@ import { prefetchHydrateResult } from "./services/prefetchHydrateCache.js";
 import { buildSwitchHydrateResult } from "./services/AppHydrationService.js";
 import { initializeCrashLoopGuard, getCrashLoopGuard } from "./services/CrashLoopGuardService.js";
 import { initializePanelSuspectLedger } from "./services/PanelSuspectLedgerService.js";
+import { recordHostEnd } from "./services/hostEndRestoreHold.js";
+import { captureHostPreviousEnd } from "./services/hostPreviousEnd.js";
 import { initializeGpuCrashMonitor } from "./services/GpuCrashMonitorService.js";
 import { initializeProcessDeathLogger } from "./services/ProcessDeathLogger.js";
 import {
@@ -199,7 +203,7 @@ protocol.registerSchemesAsPrivileged([
     // range requests — electron#51442). It only makes the scheme *eligible*
     // for cross-origin fetch: reads still require the handler to echo
     // Access-Control-Allow-Origin, which it does solely for trusted app
-    // origins (see trustedAppCorsOrigin in setup/protocols.ts), so browser
+    // origins (see trustedAppCorsOrigin in setup/protocols/appCors.ts), so browser
     // panels hosting remote sites gain no access.
     scheme: "daintree-file",
     privileges: {
@@ -234,7 +238,7 @@ protocol.registerSchemesAsPrivileged([
     // `stream` is the documented privilege for serving media bodies.
     // Deliberately no supportFetchAPI/corsEnabled: tag loads are
     // no-cors and never consult CORS, so the fetch surface would be dead weight
-    // (see trustedAppCorsOrigin in setup/protocols.ts). Kept off daintree-file://
+    // (see trustedAppCorsOrigin in setup/protocols/appCors.ts). Kept off daintree-file://
     // on purpose — adding `standard` there would change URL parsing and origin
     // semantics for markdown images, WebAudio and the file viewer all at once.
     scheme: "daintree-media",
@@ -312,6 +316,9 @@ app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
 // (CalculateNativeWinOcclusion was considered and rejected: it's a runtime power
 // lever, not a boot win.)
 const disabledFeatures = ["BackForwardCache", "Translate"];
+// The fake microphone's WAV is read inside the audio service. A launch `--disable-features`
+// can't lift its sandbox: Chromium keeps one value per switch, and this one replaces it.
+if (isE2EMode && isE2EFakeMicrophone) disabledFeatures.push("AudioServiceSandbox");
 app.commandLine.appendSwitch("disable-features", disabledFeatures.join(","));
 
 if (isE2EMode && isE2EBackgroundWindows && process.platform === "darwin") {
@@ -411,6 +418,14 @@ if (!gotTheLock) {
   // reads `getQuarantinedPanelIds()` to filter terminals out of the safe-mode
   // restore set; surfacing per-panel quarantine to the renderer.
   initializePanelSuspectLedger(getCrashRecoveryService().getPendingCrash());
+  // Every WELCOME this process sends tells a Shell how the one before it ended (#14368).
+  captureHostPreviousEnd(getCrashRecoveryService().getPendingCrash());
+  // Before any window hydrates: agents a watchdog or external kill cut short
+  // wait to be resumed rather than all coming back at once (#14382).
+  recordHostEnd(
+    getCrashRecoveryService().getPendingCrash(),
+    getCrashRecoveryService().getCrashedLiveWorkspaceIds()
+  );
 
   // DatabaseMaintenance.initialize() runs the SQLite probe + recovery and MUST
   // complete before getSharedDb() opens the file. Dynamic import removes
@@ -654,6 +669,10 @@ if (!gotTheLock) {
       // machine's agent-state cache; the host says which views have one active.
       remoteAgentActive: (webContentsId) =>
         getRemoteService("windowHosts")?.viewHasActiveAgent?.(webContentsId) === true,
+      remoteKeepResident: (webContentsId) =>
+        getRemoteService("windowHosts")?.viewKeepsResident?.(webContentsId) === true,
+      remoteMcpBindingLive: (webContentsId) =>
+        getRemoteService("windowHosts")?.viewHasLiveMcpBinding?.(webContentsId) === true,
       // Keeps a workspace an MCP session is bound to out of the freeze sweep,
       // and out of eviction entirely while a dispatch is in flight (#11790).
       // A bound session drives a *background* workspace by design, and a frozen
@@ -689,6 +708,10 @@ if (!gotTheLock) {
           .catch((err) => {
             console.warn("[main] revokeByWebContentsId failed during eviction:", err);
           });
+        // The global assistant is no project's: the view only stops showing it.
+        void import("./services/globalAssistant.js").then(({ peekGlobalAssistantService }) =>
+          peekGlobalAssistantService()?.detachWebContents(wcId)
+        );
       },
       onViewCached: (wcId) => {
         // Same producer cleanup as eviction: a cached view is freeze-eligible
@@ -743,6 +766,9 @@ if (!gotTheLock) {
         helpSessionService.revokeByWebContentsId(wc.id).catch((err) => {
           console.warn("[main] revokeByWebContentsId failed during crash:", err);
         });
+        void import("./services/globalAssistant.js").then(({ peekGlobalAssistantService }) =>
+          peekGlobalAssistantService()?.detachWebContents(wc.id)
+        );
       },
       onViewReady: (wc) => {
         // Re-distribute PTY MessagePort on every view load/reload.
@@ -1048,6 +1074,8 @@ if (!gotTheLock) {
       : undefined,
   });
 
+  setAttachedShellsProvider(() => getRemoteService("hostMode")?.getAttachedClients() ?? []);
+
   registerShutdownHandler({
     getPtyClient,
     setPtyClient: setPtyClientRef,
@@ -1337,6 +1365,17 @@ if (!gotTheLock) {
                 // A folder the person is opening there (or its git-init prompt) wins.
                 if (hasPendingOpen(windowId)) return false;
                 return (ctx.services.projectViewManager?.getActiveProjectId() ?? null) === null;
+              },
+              canRestoreInBackground: (windowId) => {
+                const ctx = windowRegistry.getByWindowId(windowId);
+                const pvm = ctx?.services.projectViewManager;
+                return (
+                  ctx !== undefined &&
+                  !ctx.browserWindow.isDestroyed() &&
+                  pvm !== undefined &&
+                  !pvm.disposed &&
+                  getActiveShutdown() === null
+                );
               },
               viewOf: (windowId) => {
                 const ctx = windowRegistry.getByWindowId(windowId);

@@ -1,14 +1,17 @@
+import { randomUUID } from "node:crypto";
 import type { IpcEnvelope } from "../../../shared/types/ipc/errors.js";
 import type {
   HostConnectionState,
   HostDescriptor,
   HostHandshakeInfo,
   HostId,
+  HostPreviousEnd,
 } from "../../../shared/types/remoteHosts.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { createLogger } from "../../utils/logger.js";
+import { createKeyedLogLimiter } from "../../utils/keyedLogLimiter.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
-import { acceptHostPush } from "../hybrid/eventsPush.js";
+import { acceptHostPush, unclassifiedPushName } from "../hybrid/eventsPush.js";
 import { CANOPY_VIEWER_ENDPOINT_PREFIX, isCanopyViewerEndpointId } from "../canopy/linkMethods.js";
 import { appErrorEnvelope, hostDisconnectedEnvelope } from "../link/envelopes.js";
 import { Lane } from "../link/frames.js";
@@ -23,12 +26,15 @@ import {
 import type { LinkSession, LinkSessionOptions } from "../link/session.js";
 import {
   EndpointAgentActivityPayloadSchema,
+  EndpointMcpBindingPayloadSchema,
+  EndpointResidencyPayloadSchema,
   EndpointAssistantPayloadSchema,
   EndpointResyncPayloadSchema,
   HostInfoSchema,
   HostProjectListSchema,
   LinkMethod,
   ProjectDescriptionSchema,
+  type EndpointReconcilePayload,
   type EndpointResyncReason,
   type HostInfo,
   type HostProjectList,
@@ -41,9 +47,13 @@ import {
   type ViewResyncReason,
 } from "./reconnect/ResyncCoordinator.js";
 import { LinkClient, type LinkClientOptions, type LinkClientState } from "./LinkClient.js";
+import { explainMissingChannel } from "./missingChannel.js";
 import type { LinkTransport } from "./transport.js";
 
 const logger = createLogger("main:RemoteHostManager");
+const droppedSendLimiter = createKeyedLogLimiter();
+
+const MAX_UNKNOWN_PUSH_NAMES = 64;
 
 /**
  * Why this Shell closed a view's endpoint on a host. The host only hears that
@@ -72,7 +82,8 @@ export interface ViewSink {
   resync(
     webContentsId: number,
     hostId: HostId,
-    reason: EndpointResyncReason | ViewResyncReason
+    reason: EndpointResyncReason | ViewResyncReason,
+    previousEnd?: HostPreviousEnd
   ): void;
   /**
    * The host the view is authoritatively bound to (its project key, else its
@@ -87,6 +98,8 @@ interface OpenEndpoint {
   projectId: string | null;
   /** The session it was opened on, which a resume keeps and a fresh session replaces. */
   sessionId: string | null;
+  /** Names this open, so the host can tell it from an earlier one under the same id. */
+  openId: string;
 }
 
 /** A local view's endpoint is live on a session: newly opened, or carried over by a resume. */
@@ -190,6 +203,21 @@ export class HostConnection {
    * agents run on regardless, and a resumed session repeats every answer.
    */
   private readonly activeAgentViews = new Set<number>();
+  /** Push names from a host on another build that this build doesn't know, logged once per host build. */
+  private readonly unknownPushNames = new Set<string>();
+  /**
+   * Views whose project the user granted residency on this host (#13933). The
+   * grant is the host's, so the eviction pass reads it here rather than from
+   * this machine's store. Kept through a dropped link like `activeAgentViews`.
+   */
+  private readonly residentViews = new Set<number>();
+  /**
+   * Views whose project an MCP session on the host is bound to, live (#14228).
+   * The session runs there, so this machine's MCP service never sees it. Kept
+   * through a dropped link like `activeAgentViews`: the session lives on the
+   * host regardless, and a resumed session repeats every answer.
+   */
+  private readonly mcpBoundViews = new Set<number>();
   private readonly readyWaiters = new Set<() => void>();
   private info: HostInfo | null = null;
   private started = false;
@@ -202,7 +230,9 @@ export class HostConnection {
   ) {
     this.hostId = options.hostId;
     this.link = new LinkClient(options);
-    this.link.onSession(({ session, resumed }) => this.attach(session, resumed));
+    this.link.onSession(({ session, resumed, hostRestarted, previousEnd }) =>
+      this.attach(session, resumed, hostRestarted, previousEnd)
+    );
     this.link.onStateChange(() => this.checkReady());
   }
 
@@ -226,6 +256,11 @@ export class HostConnection {
   /** The session id the host last gave this connection, kept while the link is down. */
   get lastSessionId(): string | null {
     return this.link.lastSessionId;
+  }
+
+  /** See {@link LinkClient.restarting}. */
+  get restarting(): boolean {
+    return this.link.restarting;
   }
 
   get hostInfo(): HostInfo | null {
@@ -329,8 +364,13 @@ export class HostConnection {
     for (const check of [...this.readyWaiters]) check();
   }
 
-  retryNow(): void {
-    this.link.retryNow();
+  retryNow(options?: { restart?: boolean }): void {
+    this.link.retryNow(options);
+  }
+
+  /** {@link LinkClient.noteSystemResumed}. */
+  noteSystemResumed(): void {
+    this.link.noteSystemResumed();
   }
 
   /**
@@ -401,7 +441,11 @@ export class HostConnection {
       case "disconnected":
         return { status: "disconnected" };
       case "connecting":
-        return { status: "connecting", attempt: state.attempt };
+        return {
+          status: "connecting",
+          attempt: state.attempt,
+          ...(state.restarting ? { restarting: true as const } : {}),
+        };
       case "connected":
         return {
           status: "connected",
@@ -417,6 +461,7 @@ export class HostConnection {
           lastSeenAt: state.lastSeenAt ?? this.descriptor()?.lastSeenAt ?? null,
           detail: state.detail,
           ...(state.hostModeOff && state.retryAt === null ? { hostModeOff: true as const } : {}),
+          ...(state.restarting ? { restarting: true as const } : {}),
           ...(state.retryAt === null ? { stoppedRetrying: true as const } : {}),
         };
       case "version-mismatch":
@@ -458,7 +503,16 @@ export class HostConnection {
     if (!endpointId) {
       return Promise.resolve(hostDisconnectedEnvelope("the endpoint could not be opened"));
     }
-    return session.invoke(endpointId, channel, args);
+    const call = session.invoke(endpointId, channel, args);
+    // The builds of the session the call went out on: a reconnect before the
+    // answer may be to another build.
+    const link = this.link.getState();
+    if (link.status !== "connected" || link.buildMismatch === null) return call;
+    const { buildMismatch, handshake } = link;
+    const hostName = this.descriptor()?.name ?? this.hostId;
+    return call.then((envelope) =>
+      explainMissingChannel(envelope, channel, hostName, buildMismatch, handshake)
+    );
   }
 
   send(webContentsId: number, projectId: string | null, channel: string, args: unknown[]): void {
@@ -467,7 +521,15 @@ export class HostConnection {
     const endpointId = this.ensureEndpoint(session, webContentsId, projectId);
     if (!endpointId) return;
     if (session.send(endpointId, channel, args) === "refused") {
-      console.warn(`[RemoteHosts] Dropped send on ${channel}: link queue is full`);
+      const suppressedCount = droppedSendLimiter.take(`${this.hostId}:${channel}`);
+      if (suppressedCount !== null) {
+        logger.info("Remote host send dropped", {
+          hostId: this.hostId,
+          channel,
+          reason: "queue-full",
+          suppressedCount,
+        });
+      }
     }
   }
 
@@ -577,6 +639,16 @@ export class HostConnection {
     return this.activeAgentViews.has(webContentsId) && this.endpoints.has(webContentsId);
   }
 
+  /** Whether the host last said the user granted this view's project residency there. */
+  hasKeepResident(webContentsId: number): boolean {
+    return this.residentViews.has(webContentsId) && this.endpoints.has(webContentsId);
+  }
+
+  /** Whether the host last said an MCP session there is bound to this view's project, live. */
+  hasLiveMcpBinding(webContentsId: number): boolean {
+    return this.mcpBoundViews.has(webContentsId) && this.endpoints.has(webContentsId);
+  }
+
   /** The view now belongs to another host (or this machine): close its endpoint here. */
   retireView(webContentsId: number): void {
     this.closeEndpoint(webContentsId, "view-moved");
@@ -587,7 +659,12 @@ export class HostConnection {
     return this.views.hostOf ? this.views.hostOf(webContentsId) === this.hostId : true;
   }
 
-  private attach(session: LinkSession, resumed: boolean): void {
+  private attach(
+    session: LinkSession,
+    resumed: boolean,
+    hostRestarted: boolean,
+    previousEnd?: HostPreviousEnd
+  ): void {
     // A fresh session means the host dropped every endpoint of the old one,
     // including any still waiting to be closed.
     const reopen = resumed ? [] : [...this.endpoints];
@@ -652,17 +729,64 @@ export class HostConnection {
         return null;
       }
     );
+    session.registerCallHandler(
+      LinkMethod.ENDPOINT_RESIDENCY,
+      EndpointResidencyPayloadSchema,
+      ({ endpoints }) => {
+        for (const { endpointId, projectId, keepResident } of endpoints) {
+          const webContentsId = this.viewsByEndpoint.get(endpointId);
+          if (webContentsId === undefined) continue;
+          // Said about a binding the view has since left.
+          if (this.endpoints.get(webContentsId)?.projectId !== projectId) continue;
+          if (keepResident) this.residentViews.add(webContentsId);
+          else this.residentViews.delete(webContentsId);
+        }
+        return null;
+      }
+    );
+    session.registerCallHandler(
+      LinkMethod.ENDPOINT_MCP_BINDING,
+      EndpointMcpBindingPayloadSchema,
+      ({ endpoints }) => {
+        for (const { endpointId, projectId, liveBinding } of endpoints) {
+          const webContentsId = this.viewsByEndpoint.get(endpointId);
+          if (webContentsId === undefined) continue;
+          // Said about a binding the view has since left.
+          if (this.endpoints.get(webContentsId)?.projectId !== projectId) continue;
+          if (liveBinding) this.mcpBoundViews.add(webContentsId);
+          else this.mcpBoundViews.delete(webContentsId);
+        }
+        return null;
+      }
+    );
     session.onClose(() => {
       if (this.session === session) this.session = null;
       this.checkReady();
     });
     this.flushPendingCloses(session);
-    // A resume keeps the host's endpoints, so the views' streams move to the new session.
+    // Only a resume still holds endpoints here: a fresh session forgot them above.
     for (const [webContentsId, open] of [...this.endpoints]) {
       if (!this.isBoundHere(webContentsId)) {
         this.closeEndpoint(webContentsId, "view-moved");
         continue;
       }
+      // An open or move still queued when the link dropped never reached the
+      // host. Saying each again costs nothing where it did: the host takes the
+      // same open on the same project as a no-op.
+      if (!this.postOpen(session, open)) this.closeEndpoint(webContentsId, "reopen-refused");
+    }
+    // So is a close, which leaves the host keeping an endpoint (and any lease
+    // it holds) for a view that is gone. Asked before the views' streams move,
+    // so no stream's requests stand ahead of it. A host from before this call
+    // refuses it and keeps such endpoints until the session ends.
+    if (resumed) {
+      const reconcile: EndpointReconcilePayload = {
+        endpointIds: [...this.endpoints.values()].map((open) => open.endpointId),
+      };
+      session.call(LinkMethod.ENDPOINT_RECONCILE, reconcile).catch(() => {});
+    }
+    // A resume keeps the host's endpoints, so the views' streams move to the new session.
+    for (const [webContentsId, open] of [...this.endpoints]) {
       notifyEndpointOpened(this.openedListeners, {
         session,
         webContentsId,
@@ -688,7 +812,14 @@ export class HostConnection {
     }
     const isReconnect = this.hadSession;
     this.hadSession = true;
-    if (isReconnect) this.notifyAttached({ resumed, reopened });
+    if (isReconnect) {
+      this.notifyAttached({
+        resumed,
+        reopened,
+        hostRestarted,
+        ...(hostRestarted && previousEnd && { previousEnd }),
+      });
+    }
     this.checkReady();
     void session.call(LinkMethod.HOST_INFO, null).then(
       (answer) => {
@@ -718,19 +849,17 @@ export class HostConnection {
         this.liveAssistants.delete(webContentsId);
         // The old project's agents say nothing about the new one's.
         this.activeAgentViews.delete(webContentsId);
+        this.residentViews.delete(webContentsId);
+        this.mcpBoundViews.delete(webContentsId);
       }
       return open.endpointId;
     }
     const endpointId = `view-${webContentsId}`;
-    const result = session.post({
-      lane: Lane.CONTROL,
-      kind: ControlKind.ENDPOINT_OPEN,
-      body: { endpointId, projectId },
-    });
-    if (result === "refused") return null;
-    this.pendingCloses.delete(endpointId);
     const sessionId = this.link.lastSessionId;
-    this.endpoints.set(webContentsId, { endpointId, projectId, sessionId });
+    const opened: OpenEndpoint = { endpointId, projectId, sessionId, openId: randomUUID() };
+    if (!this.postOpen(session, opened)) return null;
+    this.pendingCloses.delete(endpointId);
+    this.endpoints.set(webContentsId, opened);
     this.viewsByEndpoint.set(endpointId, webContentsId);
     logger.info("Remote host view endpoint opened", {
       hostId: this.hostId,
@@ -757,6 +886,8 @@ export class HostConnection {
     this.viewsByEndpoint.delete(open.endpointId);
     this.liveAssistants.delete(webContentsId);
     this.activeAgentViews.delete(webContentsId);
+    this.residentViews.delete(webContentsId);
+    this.mcpBoundViews.delete(webContentsId);
     const posted = this.postClose(this.session, open.endpointId);
     if (!posted) this.pendingCloses.add(open.endpointId);
     this.logEndpointClosed(webContentsId, open, cause, { closeQueued: !posted });
@@ -778,6 +909,17 @@ export class HostConnection {
       cause,
       ...extra,
     });
+  }
+
+  private postOpen(session: LinkSession, open: OpenEndpoint): boolean {
+    const { endpointId, projectId, openId } = open;
+    return (
+      session.post({
+        lane: Lane.CONTROL,
+        kind: ControlKind.ENDPOINT_OPEN,
+        body: { endpointId, projectId, openId },
+      }) !== "refused"
+    );
   }
 
   private postClose(session: LinkSession | null, endpointId: string): boolean {
@@ -837,6 +979,8 @@ export class HostConnection {
     this.viewsByEndpoint.clear();
     this.liveAssistants.clear();
     this.activeAgentViews.clear();
+    this.residentViews.clear();
+    this.mcpBoundViews.clear();
   }
 
   /**
@@ -873,7 +1017,10 @@ export class HostConnection {
    * taken from a host.
    */
   private deliver(event: EventMessage): void {
-    if (!acceptHostPush(event.channel, event.args)) return;
+    if (!acceptHostPush(event.channel, event.args)) {
+      this.noteUnknownPush(event);
+      return;
+    }
     // A Canopy panel reading this host from a view bound elsewhere.
     if (event.endpointId?.startsWith(CANOPY_VIEWER_ENDPOINT_PREFIX)) {
       for (const listener of [...this.viewerEventListeners]) {
@@ -898,6 +1045,32 @@ export class HostConnection {
       this.views.send(webContentsId, event.channel, event.args);
     }
   }
+
+  /**
+   * A host on another build pushed something this build never classified, so
+   * it is dropped rather than guessed at. Said once per name, with both
+   * builds, since whatever listens for it here stays as it was.
+   */
+  private noteUnknownPush(event: EventMessage): void {
+    const state = this.link.getState();
+    if (state.status !== "connected" || state.buildMismatch === null) return;
+    const name = unclassifiedPushName(event.channel, event.args);
+    if (name === null) return;
+    // Per host build: one that moves on may send it for a different reason.
+    const key = `${state.handshake.version}\u0000${state.handshake.commit}\u0000${name}`;
+    // A host can name anything: past the budget the rest go unsaid, rather
+    // than forgetting what was said and saying it all again.
+    if (this.unknownPushNames.has(key) || this.unknownPushNames.size >= MAX_UNKNOWN_PUSH_NAMES) {
+      return;
+    }
+    this.unknownPushNames.add(key);
+    logger.warn("Dropped a push from a host on another build that this build doesn't know", {
+      hostId: this.hostId,
+      channel: event.channel,
+      name,
+      buildMismatch: state.buildMismatch,
+    });
+  }
 }
 
 export interface RemoteHostManagerOptions {
@@ -913,6 +1086,8 @@ export interface RemoteHostManagerOptions {
   now?: () => number;
   /** How long a connection nothing uses stays up before it is closed; 0 never closes one. */
   idleReleaseMs?: number;
+  /** How long this machine was awake since a moment `now` gave; time asleep isn't time unused. */
+  awakeSince?: (since: number) => number;
 }
 
 /** Long enough to cover a quick switch away and back, or a pause in the overview. */
@@ -938,6 +1113,7 @@ export class RemoteHostManager {
   private readonly sessionListeners = new Set<(hostId: HostId, session: LinkSession) => void>();
   private readonly viewerEventListeners = new Set<(hostId: HostId, event: EventMessage) => void>();
   private readonly now: () => number;
+  private readonly awakeSince: (since: number) => number;
   /** When each connection was last asked for or found in use. */
   private readonly lastUsed = new Map<HostId, number>();
   private readonly useChecks = new Set<(hostId: HostId) => boolean>();
@@ -947,15 +1123,21 @@ export class RemoteHostManager {
 
   constructor(private readonly options: RemoteHostManagerOptions) {
     this.now = options.now ?? Date.now;
+    this.awakeSince = options.awakeSince ?? ((since) => this.now() - since);
     const coordinator = new ResyncCoordinator({
-      resync: (webContentsId, hostId, reason) =>
-        this.options.views.resync(webContentsId, hostId, reason),
+      resync: (webContentsId, hostId, reason, previousEnd) =>
+        this.options.views.resync(webContentsId, hostId, reason, previousEnd),
     });
     this.attachedListeners.add((hostId, info) => coordinator.onSessionAttached(hostId, info));
   }
 
   get(hostId: HostId): HostConnection | undefined {
     return this.connections.get(hostId);
+  }
+
+  /** Who this Shell launch is to every host it dials. */
+  get localClient(): LinkClientInfo {
+    return this.options.client;
   }
 
   /**
@@ -1014,7 +1196,8 @@ export class RemoteHostManager {
         this.lastUsed.set(hostId, now);
         continue;
       }
-      if (now - (this.lastUsed.get(hostId) ?? now) < releaseMs) continue;
+      const idleMs = this.awakeSince(this.lastUsed.get(hostId) ?? now);
+      if (idleMs < releaseMs) continue;
       // A link that stopped retrying (ssh can't log in, Host mode off, another
       // build) costs nothing, and closing it would forget why it stopped.
       const link = this.connections.get(hostId)?.linkState;
@@ -1023,7 +1206,7 @@ export class RemoteHostManager {
       const idle = {
         hostId,
         sessionId: this.connections.get(hostId)?.lastSessionId ?? null,
-        idleMs: now - (this.lastUsed.get(hostId) ?? now),
+        idleMs,
       };
       logger.info("Closing the unused connection to a remote host", idle);
       void this.disconnect(hostId).catch((error: unknown) => {
@@ -1039,6 +1222,11 @@ export class RemoteHostManager {
     if (this.sweepTimer || (this.options.idleReleaseMs ?? IDLE_RELEASE_MS) <= 0) return;
     this.sweepTimer = setInterval(() => this.sweepIdle(), IDLE_SWEEP_MS);
     this.sweepTimer.unref?.();
+  }
+
+  /** The machine just woke: every link checks itself now rather than at its next timer. */
+  systemResumed(): void {
+    for (const connection of this.connections.values()) connection.noteSystemResumed();
   }
 
   connectionState(hostId: HostId): HostConnectionState {
@@ -1080,8 +1268,12 @@ export class RemoteHostManager {
     return () => this.viewerEventListeners.delete(listener);
   }
 
-  /** Start (or nudge) the host's link. Resolves once the attempt is under way, not connected. */
-  connect(hostId: HostId): HostConnection {
+  /**
+   * Start (or nudge) the host's link. Resolves once the attempt is under way,
+   * not connected. `restart` abandons an attempt already under way: a
+   * person's Retry, never a caller that only needs the link.
+   */
+  connect(hostId: HostId, options?: { restart?: boolean }): HostConnection {
     const descriptor = this.options.registry.require(hostId);
     let connection = this.connections.get(hostId);
     if (!connection) {
@@ -1095,6 +1287,7 @@ export class RemoteHostManager {
           session: this.options.session,
           backoff: this.options.backoff,
           now: this.options.now,
+          lastSeenAt: () => this.options.registry.get(hostId)?.lastSeenAt ?? null,
         },
         this.options.views,
         this.options.reverseRequests ?? null
@@ -1175,7 +1368,7 @@ export class RemoteHostManager {
     }
     this.lastUsed.set(hostId, this.now());
     this.ensureSweep();
-    if (connection.isStarted) connection.retryNow();
+    if (connection.isStarted) connection.retryNow(options);
     else connection.start();
     return connection;
   }

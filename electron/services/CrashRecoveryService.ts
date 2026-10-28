@@ -10,6 +10,7 @@ import type {
   CrashTimestampSource,
   PanelSummary,
   PendingCrash,
+  WatchdogKillReason,
 } from "../../shared/types/ipc/crashRecovery.js";
 import { coerceAgentState } from "../../shared/types/agent.js";
 import { store, windowStatesStore } from "../store.js";
@@ -29,6 +30,7 @@ import { markCrashRecoveryInspectionComplete } from "../utils/crashDumpRetention
 import { stateFilePath } from "./projectStorePaths.js";
 import { PROJECT_STATE_SCHEMA_VERSION } from "./ProjectStateManager.js";
 import { logError, logInfo, logWarn } from "../utils/logger.js";
+import { holdTerminalsEndedByHost, readHostEnd } from "./hostEndHoldPolicy.js";
 
 const MAX_CRASH_LOGS = 10;
 const CRASH_LOG_PREFIX = "crash-";
@@ -120,7 +122,21 @@ interface WatchdogKillAnnotation {
   killedAt: number;
   missedBeats: number;
   mainPid: number;
+  reason?: WatchdogKillReason;
+  beatsSinceProgress?: number;
+  pressureEvidence?: string;
 }
+
+const WATCHDOG_KILL_REASONS: ReadonlySet<WatchdogKillReason> = new Set<WatchdogKillReason>([
+  "unresponsive",
+  "unresponsive-under-pressure",
+  "no-progress-under-external-pressure",
+]);
+
+// The evidence is one of a few fixed ASCII phrases the watchdog writes; the
+// filter and cap keep a corrupted flag from bloating the crash log or leaving a
+// lone surrogate that would make the report's URL encoding throw.
+const MAX_WATCHDOG_EVIDENCE_LENGTH = 200;
 
 export class CrashRecoveryService {
   private userData: string;
@@ -149,6 +165,9 @@ export class CrashRecoveryService {
   // files are deleted, rotated, or overwritten between marker consumption and
   // the user resolving the recovery dialog.
   private cachedBackupSnapshot: SessionSnapshot | null = null;
+  // When the crashed session began, so a backup an older session left behind
+  // is never read as what this one was running.
+  private crashedSessionStartMs: number | null = null;
   // Memoized crash-recovery config — store.get re-reads and re-parses the
   // whole config.json on every call, which is sync main-thread work inside
   // the boot IPC handler. setConfig keeps the memo in sync with writes.
@@ -184,6 +203,19 @@ export class CrashRecoveryService {
 
   getPendingCrash(): PendingCrash | null {
     return this.pendingCrash;
+  }
+
+  /**
+   * The workspaces that were live when the previous session's last backup was
+   * taken, or null when no backup survived the crash to say.
+   */
+  getCrashedLiveWorkspaceIds(): string[] | null {
+    const snapshot = this.cachedBackupSnapshot;
+    if (!snapshot || this.crashedSessionStartMs === null) return null;
+    // The rotated previous generation can be an older session's.
+    if (!(snapshot.capturedAt >= this.crashedSessionStartMs)) return null;
+    const layouts = snapshot.projectLayouts;
+    return isPlainObject(layouts) ? Object.keys(layouts) : null;
   }
 
   // Drop the in-memory pending-crash record once the user has resolved the
@@ -651,6 +683,23 @@ export class CrashRecoveryService {
         return false;
       }
 
+      // The panes go back as they were before the crash, so agents an unclean
+      // end cut short come back held, as the saved per-project ones do.
+      const hostEnd = readHostEnd(this.pendingCrash);
+      if (
+        hostEnd &&
+        isPlainObject(snapshot.appState) &&
+        Array.isArray(snapshot.appState.terminals)
+      ) {
+        snapshot = {
+          ...snapshot,
+          appState: {
+            ...snapshot.appState,
+            terminals: holdTerminalsEndedByHost(snapshot.appState.terminals, hostEnd).terminals,
+          },
+        };
+      }
+
       this.applySessionSnapshot(snapshot);
       this.unlinkCrashedBackup();
       console.log(
@@ -725,6 +774,7 @@ export class CrashRecoveryService {
         this.deleteMarker();
         return null;
       }
+      this.crashedSessionStartMs = marker.sessionStartMs;
 
       // Read the watchdog kill flag BEFORE the dev-mode discard branch — even
       // an orphaned dev marker may have a fresh flag (real watchdog kill in
@@ -832,6 +882,15 @@ export class CrashRecoveryService {
         entry.watchdogKilledAt = watchdogAnnotation.killedAt;
         entry.watchdogMissedBeats = watchdogAnnotation.missedBeats;
         entry.watchdogMainPid = watchdogAnnotation.mainPid;
+        if (watchdogAnnotation.reason !== undefined) {
+          entry.watchdogKillReason = watchdogAnnotation.reason;
+        }
+        if (watchdogAnnotation.beatsSinceProgress !== undefined) {
+          entry.watchdogBeatsSinceProgress = watchdogAnnotation.beatsSinceProgress;
+        }
+        if (watchdogAnnotation.pressureEvidence !== undefined) {
+          entry.watchdogPressureEvidence = watchdogAnnotation.pressureEvidence;
+        }
         // Persist the annotation onto the on-disk crash log too, so a user
         // who opens the JSON file directly (via the dialog's "open log file"
         // affordance, or for support) sees the watchdog attribution. Failure
@@ -1041,6 +1100,28 @@ export class CrashRecoveryService {
             missedBeats: parsed.missedBeats,
             mainPid: parsed.mainPid,
           };
+          // Diagnostics from #14367 are checked one by one: a flag from an
+          // older watchdog, or one with a bad field, still attributes the kill.
+          if (
+            typeof parsed.reason === "string" &&
+            WATCHDOG_KILL_REASONS.has(parsed.reason as WatchdogKillReason)
+          ) {
+            annotation.reason = parsed.reason;
+          }
+          if (
+            typeof parsed.beatsSinceProgress === "number" &&
+            Number.isFinite(parsed.beatsSinceProgress) &&
+            parsed.beatsSinceProgress >= 0
+          ) {
+            annotation.beatsSinceProgress = parsed.beatsSinceProgress;
+          }
+          const evidence =
+            typeof parsed.pressureEvidence === "string"
+              ? parsed.pressureEvidence
+                  .replace(/[^\x20-\x7e]/g, "")
+                  .slice(0, MAX_WATCHDOG_EVIDENCE_LENGTH)
+              : "";
+          if (evidence.length > 0) annotation.pressureEvidence = evidence;
         } else {
           console.warn("[CrashRecovery] Malformed watchdog kill flag, ignoring");
         }
@@ -1289,6 +1370,9 @@ export class CrashRecoveryService {
         crashId: entry.id,
         crashCause: entry.crashCause,
         cause: entry.cause,
+        watchdogKillReason: entry.watchdogKillReason,
+        watchdogBeatsSinceProgress: entry.watchdogBeatsSinceProgress,
+        watchdogPressureEvidence: entry.watchdogPressureEvidence,
         endedAt: new Date(entry.timestamp).toISOString(),
         endedAtSource: entry.timestampSource ?? "recorded",
         sessionStartedAt: new Date(marker.sessionStartMs).toISOString(),

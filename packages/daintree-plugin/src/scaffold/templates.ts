@@ -6,10 +6,27 @@
  */
 
 import { safeRecipeFilename } from "../../../../shared/utils/recipeFilename.js";
+import sdkPackage from "../../../plugin-sdk/package.json" with { type: "json" };
+import tourPackage from "../../../tour/package.json" with { type: "json" };
+import vitePackage from "../../../plugin-vite/package.json" with { type: "json" };
+import { CLI_VERSION } from "../version.js";
 
-export type TemplateKind = "command" | "view" | "mcp" | "full";
+export type TemplateKind = "command" | "view" | "mcp" | "full" | "app";
 
+/** The templates an installed (`new` without `--project`) plugin can use. */
 export const TEMPLATE_KINDS: readonly TemplateKind[] = ["command", "view", "mcp", "full"] as const;
+
+/**
+ * The templates a project plugin (`new --project`) can use, the default first.
+ * `app` exists only here: it is a project application. `mcp` and `full` are
+ * absent because they declare an MCP server Daintree connects to, which a
+ * project plugin may not; `app` serves its tools to agents through
+ * `contributes.agentMcp` instead.
+ */
+export const PROJECT_TEMPLATE_KINDS: readonly TemplateKind[] = ["app", "command", "view"] as const;
+
+/** Every template name `--template` accepts, in either scope. */
+export const ALL_TEMPLATE_KINDS: readonly TemplateKind[] = [...TEMPLATE_KINDS, "app"];
 
 export interface ScaffoldContext {
   /** Full scoped manifest name, e.g. `acme.issue-helper`. */
@@ -37,11 +54,24 @@ export function projectPluginRelDir(scopedName: string): string {
   return `.daintree/plugins/${scopedName}`;
 }
 
-// Open-ended lower bound: `^0.11.0` resolves to `>=0.11.0 <0.12.0` under semver's
-// 0.x caret rule, so a scaffolded plugin would draw the host's `engines.daintree`
-// compatibility warning on every release past 0.11 (e.g. 0.19.x). Match the
-// reference manifests under `plugins/sample/`, which pin the open-ended range.
-const DAINTREE_ENGINE_RANGE = ">=0.11.0";
+// Open-ended lower bound: `^0.41.0` would resolve to `>=0.41.0 <0.42.0` under
+// semver's 0.x caret rule and draw the host's `engines.daintree` compatibility
+// warning on every later release. The floor is the first host that understands
+// everything a scaffold emits, the panel's own `iconId` SVG (v0.41.0) included,
+// so an older host warns instead of silently drawing a broken panel.
+const DAINTREE_ENGINE_RANGE = ">=0.41.0";
+
+// The sibling packages a scaffold installs, ranged from the versions built
+// alongside this CLI. On 0.x a caret spans patches only, so a hand-written
+// `^0.1.0` silently pins every new plugin to the previous minor the moment the
+// SDK moves; the SDK and Vite versions are inlined into the bundle at build time.
+export const SCAFFOLD_TOOLCHAIN_RANGES = {
+  "@daintreehq/plugin-sdk": `^${sdkPackage.version}`,
+  "@daintreehq/plugin-vite": `^${vitePackage.version}`,
+  "daintree-plugin": `^${CLI_VERSION}`,
+  // Only the `app` template depends on it, for typing and previewing its tour.
+  "@daintreehq/tour": `^${tourPackage.version}`,
+} as const;
 
 /**
  * A `contributes.panels` entry paired with a `views` entry of the
@@ -117,11 +147,11 @@ function manifest(ctx: ScaffoldContext, contributes: Record<string, unknown>): s
 function packageJson(ctx: ScaffoldContext, needsReact: boolean, needsServer = false): string {
   const deps: Record<string, string> = {};
   const devDeps: Record<string, string> = {
-    "@daintreehq/plugin-sdk": "^0.1.0",
-    "@daintreehq/plugin-vite": "^0.1.0",
+    "@daintreehq/plugin-sdk": SCAFFOLD_TOOLCHAIN_RANGES["@daintreehq/plugin-sdk"],
+    "@daintreehq/plugin-vite": SCAFFOLD_TOOLCHAIN_RANGES["@daintreehq/plugin-vite"],
     // The generated `validate`/`package` scripts call this CLI, so a fresh
     // clone's `npm install` must bring it in rather than rely on a global.
-    "daintree-plugin": "^0.1.0",
+    "daintree-plugin": SCAFFOLD_TOOLCHAIN_RANGES["daintree-plugin"],
     typescript: "^6.0.0",
     vite: "^8.0.0",
   };
@@ -322,6 +352,7 @@ const PROJECT_GITIGNORE = `node_modules/
 .dev-marker
 test-results/
 playwright-report/
+.tour-preview/
 
 # dist/ is deliberately NOT ignored, and is force-included below.
 #
@@ -444,7 +475,9 @@ const DNTRIGNORE = `# Files to keep OUT of the packaged .dntr, in .gitignore syn
 function commandEntry(ctx: ScaffoldContext): string {
   const title = q(`${ctx.displayName}: Run`);
   const description = q(`Run the ${ctx.displayName} command.`);
-  const category = q(ctx.displayName);
+  // A command's category is a sub-label inside the plugin's own palette group; a display
+  // name can be reserved (e.g. "Terminal") or over the length cap.
+  const category = q("Commands");
   const message = q(`Hello from ${ctx.displayName}`);
   return `import type { PluginHostApi } from "@daintreehq/plugin-sdk";
 
@@ -570,6 +603,10 @@ function mcpEntry(ctx: ScaffoldContext): string {
  * ${c(ctx.displayName)} — MCP plugin entry. The MCP server process is declared in
  * \`contributes.mcpServers\` (see plugin.json) and spawned by
  * Daintree; \`src/server.ts\` is its skeleton implementation.
+ *
+ * Daintree is this server's client: terminal agents and the Assistant don't see
+ * its tools. To serve chosen tools to agents, name them in an
+ * \`contributes.agentMcp[].source\` endpoint (requires the "mcp:expose" capability).
  */
 export async function activate(_host: PluginHostApi): Promise<() => void> {
   return () => {};
@@ -581,7 +618,9 @@ function mcpServer(ctx: ScaffoldContext): string {
   return `#!/usr/bin/env node
 /**
  * Minimal stdio MCP server for ${c(ctx.displayName)}. Daintree spawns it per the
- * \`command\`/\`args\` in plugin.json and speaks MCP over stdio. The SDK answers
+ * \`command\`/\`args\` in plugin.json and speaks MCP over stdio as its client;
+ * agents reach its tools only through an \`agentMcp\` endpoint whose \`source\`
+ * names them. The SDK answers
  * the \`initialize\` handshake and \`tools/list\` automatically once connected —
  * the previous skeleton only listened on stdin and never replied, so the host
  * timed out and marked the server crashed.
@@ -649,7 +688,7 @@ function templateFiles(ctx: ScaffoldContext): Record<string, string> {
               id: "run",
               title: `${ctx.displayName}: Run`,
               description: `Run the ${ctx.displayName} command.`,
-              category: ctx.displayName,
+              category: "Commands",
               kind: "command",
               danger: "safe",
               keywords: [ctx.pluginName, "run"],
@@ -717,7 +756,7 @@ function templateFiles(ctx: ScaffoldContext): Record<string, string> {
               id: "run",
               title: `${ctx.displayName}: Run`,
               description: `Run the ${ctx.displayName} command.`,
-              category: ctx.displayName,
+              category: "Commands",
               kind: "command",
               danger: "safe",
               keywords: [ctx.pluginName, "run"],
@@ -756,6 +795,10 @@ function templateFiles(ctx: ScaffoldContext): Record<string, string> {
         ...previewFiles(ctx),
       };
     }
+    case "app":
+      // A copy of a maintained, built application rather than strings: see
+      // `loadReferenceAppFiles`, which `scaffoldPlugin` uses for this template.
+      throw new Error('The "app" template is copied from the bundled reference application');
   }
 }
 

@@ -99,6 +99,7 @@ Added to `plugin.json`'s `contributes` field, validated by `ForgeProviderContrib
 | `slots` | no | Manifest-declared view slots the host mounts for this provider: `settingsTab`, `icon`, `statsDropdown`, `bulkCreateWorktreeDialog`, `issueSelector`. This is how the host stays forge-neutral while still rendering provider chrome in its own surfaces. |
 | `settingsScopeRef` | no | ID prefix in this plugin's `settings` contributions — used to group provider settings under one heading. |
 | `viewRefs` | no | IDs of `views` contributions that should appear under this provider's panel section. |
+| `referencePrefixes` | no | `{ issue?, pr? }`: the characters the forge writes before an issue or pull request number in text (`#`, or `!` for a GitLab merge request). The composer's `#` menu inserts references in this form and offers no kind without one, so the host never assumes GitHub's syntax. |
 
 The schema is `.strict()`: an unknown field in a `forgeProviders` entry is rejected loudly rather than ignored.
 

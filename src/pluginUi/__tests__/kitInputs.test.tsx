@@ -50,6 +50,9 @@ import {
   stepperRoom,
 } from "@/components/PluginKit/PluginKitInputs";
 import { normalizeSelectOptions } from "@/components/PluginKit/kitOptions";
+import { setPluginKitHost } from "@/components/PluginKit/kitHost";
+import type { PluginArtifact } from "@shared/types/pluginArtifacts";
+import { PluginKitOwnerContext } from "@/components/PluginKit/kitScope";
 
 beforeAll(async () => {
   await kit.whenPluginUiReady();
@@ -1363,6 +1366,78 @@ describe("FileDropzone", () => {
     });
     expect(onFiles).not.toHaveBeenCalled();
     expect((screen.getByRole("button") as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  describe("onArtifacts", () => {
+    let uninstall: (() => void) | null = null;
+    afterEach(() => {
+      uninstall?.();
+      uninstall = null;
+    });
+
+    function inPlugin(child: ReactNode) {
+      return createElement(PluginKitOwnerContext.Provider, { value: "acme.media" }, child);
+    }
+
+    it("imports through the host for the view's plugin and hands over the handles", async () => {
+      const artifact: PluginArtifact = {
+        id: "a".repeat(32),
+        projectId: null,
+        name: "clip.mp4",
+        mimeType: "video/mp4",
+        size: 1,
+        createdAt: 0,
+        expiresAt: 1,
+        origin: "import",
+      };
+      let finish!: (value: PluginArtifact[]) => void;
+      const importArtifacts = vi.fn(
+        (_owner: string, _files: readonly File[]) =>
+          new Promise<PluginArtifact[]>((resolve) => (finish = resolve))
+      );
+      uninstall = setPluginKitHost({ importArtifacts });
+      const onArtifacts = vi.fn();
+      render(
+        inPlugin(
+          createElement(kit.FileDropzone, {
+            onArtifacts,
+            accept: "video/*",
+            "data-testid": "zone",
+          })
+        )
+      );
+      const dropped = file("clip.mp4", "video/mp4");
+      fireEvent.drop(screen.getByTestId("zone"), {
+        dataTransfer: { types: ["Files"], files: [dropped, file("notes.md")] },
+      });
+      expect(importArtifacts).toHaveBeenCalledWith("acme.media", [dropped]);
+      expect(screen.getByTestId("zone").getAttribute("aria-busy")).toBe("true");
+      expect((screen.getByRole("button") as HTMLButtonElement).disabled).toBe(true);
+      await act(async () => finish([artifact]));
+      expect(onArtifacts).toHaveBeenCalledWith([artifact]);
+      expect(screen.getByTestId("zone").getAttribute("aria-busy")).toBeNull();
+    });
+
+    it("shows a failed import in the zone, without its code, and reports it", async () => {
+      uninstall = setPluginKitHost({
+        importArtifacts: () =>
+          Promise.reject(new Error("ARTIFACT_QUOTA_EXCEEDED: the artifact cache is full")),
+      });
+      const onArtifacts = vi.fn();
+      const onImportError = vi.fn();
+      render(
+        inPlugin(
+          createElement(kit.FileDropzone, { onArtifacts, onImportError, "data-testid": "zone" })
+        )
+      );
+      fireEvent.drop(screen.getByTestId("zone"), {
+        dataTransfer: { types: ["Files"], files: [file("a.bin")] },
+      });
+      await act(async () => {});
+      expect(screen.getByRole("alert").textContent).toBe("the artifact cache is full");
+      expect(onImportError).toHaveBeenCalledTimes(1);
+      expect(onArtifacts).not.toHaveBeenCalled();
+    });
   });
 });
 

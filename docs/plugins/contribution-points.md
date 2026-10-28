@@ -19,24 +19,33 @@ A plugin that declares `"scope": "project"` lives in a project's own repository 
 | `views` | Available — served and mounted only in the owning project's renderer; a `location: "settings"` view renders in Project settings → Plugins |
 | `commands` | Available — in that project's palette, dispatched into that project's renderer |
 | `toolbarButtons` | Available — only in the owning project's toolbar |
+| `launchEntries` | Available — only in the owning project's launcher, and a pinned entry's toolbar button is that project's alone |
+| `layouts` | Available — only in the owning project's palette, and only that project's views can apply them |
+| `searchProviders` | Available — only in the owning project's quick switcher; its keyword is checked against the providers that project can see, and its "Show in quick switcher" switch is that project's alone |
 | `contextMenus` | Available — only in the owning project's views |
 | `keybindings` | Available — renderer-level, so they resolve within the focused project |
 | `settings` | Available — every field, whatever its `scope`, lives in Project settings; `project` and `local` values resolve from the bound project root, not the focused one |
 | `surfaces` | **Project scope only** — see [Surfaces](#surfaces--shipped-project-scope-only) |
 | `agentMcp` | Available — every credential for the plugin's server is minted per terminal and bound to one project, and a project plugin's server can only be granted to its own project |
 | `databases` | Available — a `"project"` database is a file in the repository, resolved against the bound project root; `"local"` stays in this machine's plugin data |
+| `assistantKnowledge` | Available — delivered only to the owning project's Daintree Assistant, and only while it has the plugin's tools there |
+| `fileDecorationProviders` | Available — consulted only for the owning project's views, ahead of installed providers in the merge |
+| `worktreeDeleteNotes` | Available — asked only when a worktree of the owning project is deleted |
+| `recipes` | Available — only in the owning project's launcher, empty state and recipe manager, and gone while the plugin is switched off or its folder is untrusted. A terminal may use `terminal`, `dev-preview`, `plugin-panel` for one of the plugin's own panels, or a built-in agent; `agents` is rejected below, so there is no plugin agent of its own to name |
+| `promptTemplates` | Available — offered only in the owning project's composer, and gone while the plugin is switched off or its folder is untrusted |
+| `worktreeSetupSteps` | Available — run only for worktrees created in the owning project |
+| `setup` | Available — the checklist shows on the owning project's panels and in Project settings, and its skips are that project's |
+| `terminalLinks` | Available — matched only in the owning project's terminals, and gone while the plugin is switched off or its folder is untrusted |
+| `skills` | Available — served only to sessions bound to the owning project, through Daintree's `skills.search` / `skills.load` and the plugin's own agent MCP server, and never to another project or to a session with no project |
 | `menuItems` | Rejected — the application menu is one OS-level menu shared by every window, with no per-project projection |
 | `agents` | Rejected — the agent roster is one app-wide registry mirrored into the shared pty-host, and launch identity outlives the project binding |
-| `skills` | Rejected — contributed skills land in one app-wide index behind the MCP server's `skills.search` / `skills.load`, which filter by no project |
-| `recipes` | Rejected — the plugin recipe registry is broadcast to every renderer unfiltered |
-| `fileDecorationProviders` | Rejected — decoration requests carry a resource path with no owning-project routing |
 | `processTools` | Rejected — detections are mirrored into the shared pty-host as one table for every terminal |
 | `mcpServers` | Rejected — the plugin-MCP IPC surface is app-global: servers are addressed by plugin and server id alone, and a tool call carries no project to check the contribution against. To serve tools to the project's agents, declare `agentMcp` instead |
-| `tours` | Rejected — plugin tours are offered from the app-wide Help menu and command palette, and tour playback has no per-project visibility yet |
+| `tours` | Allowed — a project plugin's tours are offered only in its own project |
+| `themes` | Rejected — the app theme is one machine-wide selection painted into every window, with no per-project theme to narrow to |
 | `forgeProviders` | Rejected — forge providers need synchronous host methods that cannot cross the plugin worker's message port |
-| `fileEditors` | Rejected — built-in only; the editor slot resolves through the host-bundled builtin view registry, which a project plugin has no renderer in |
-| `previewTools` | Rejected — built-in only; the tool's components resolve out of the host bundle, which no other origin's renderer reaches |
-| `guestAdapters` | Rejected — built-in only; the bundle is emitted by Daintree's own build and runs with full DOM access inside the previewed site |
+| `projectTemplates` | Rejected — a template is offered while a new project folder is being created, before any project exists for a project plugin to belong to. Ship the template from an installed plugin |
+| `fileEditors` | Allowed, view-backed only — editors apply only in the plugin's own project and may also match project-relative `paths`, and an Edit editor may be the `default` for them. A `slot` is built-in only |
 
 Each rejection is a manifest error naming the obstacle, not a silent drop, and each is deferred rather than closed — the reason says what has to be built before the rule can go.
 
@@ -68,12 +77,17 @@ Commands are callable actions that appear in the command palette and can be boun
 | `id` | yes | Bare command id. Daintree namespaces it as `{pluginId}.{id}` at runtime — matching every other contribution surface. |
 | `title` | yes | Palette entry label. |
 | `description` | yes | One-line summary surfaced in the palette description. |
-| `category` | yes | Grouping label in the palette. Free-form; mirror your plugin's display name. |
+| `category` | yes | Sub-label on the command's row. The palette gives your plugin one group of its own, titled with its display name, so this only tells your commands apart inside it. Up to 40 characters; a built-in category id (`worktree`, `git`, `terminal`, …, compared case-insensitively) is refused. |
 | `kind` | yes | `"command"` or `"query"`. |
 | `danger` | yes | `"safe"` or `"confirm"`. `"restricted"` is rejected — plugins cannot self-register restricted actions. The host raises `"safe"` to `"confirm"` automatically when the plugin holds a high-risk capability. |
 | `keywords` | no | Extra search terms for the palette. |
 | `inputSchema` | no | JSON schema validated against the dispatched `args` payload. |
+| `resultSchema` | no | JSON schema, rooted at `type: "object"`, that every result is checked against in its JSON form, which is then what the caller receives; a mismatch fails the dispatch with `RESULT_VALIDATION_ERROR`. Published as the action's `outputSchema`. Rules are under [`registerAction`](./host-api.md#registeraction). |
+| `when` | no | A `when` clause over your plugin's context keys. While it is false the command is left out of the palette. |
+| `enablement` | no | Same grammar. While it is false the command stays in the palette, greyed out with a reason, and Enter does nothing. |
 | `requires` | no | The capabilities _this command_ actually uses — see below. |
+
+`when` and `enablement` only shape the palette. Keybindings, context menus, MCP and `host.dispatch` never evaluate them, so they decide what is offered, not what can run. A clause that doesn't parse is refused when the command registers.
 
 **`requires` — per-action capability intent:**
 
@@ -141,7 +155,7 @@ If a manifest-declared command has no matching `src/{id}.{ext}` file and no impe
 
 **Collision rule:** a command whose resolved `{pluginId}.{id}` matches a built-in Daintree action id is rejected at load with a provenance `loadError` — the command does not register. Pick a different id.
 
-**Duplicate ids within an array** are rejected at manifest validation (`duplicate_contribution_id`). The bare `id` is the registry key for every contribution array that has one — `panels`, `toolbarButtons`, `commands`, `views`, `mcpServers`, `agentMcp`, `databases`, `skills`, `recipes`, `tours`, `forgeProviders`, `fileDecorationProviders`, `fileEditors`, `previewTools`, `guestAdapters`, `agents`, and `settings` — so two entries with the same id in the same array would silently first-win at load. The check is per-array: ids in different arrays are namespaced independently and never collide.
+**Duplicate ids within an array** are rejected at manifest validation (`duplicate_contribution_id`). The bare `id` is the registry key for every contribution array that has one — `panels`, `toolbarButtons`, `commands`, `views`, `mcpServers`, `agentMcp`, `databases`, `skills`, `recipes`, `tours`, `forgeProviders`, `fileDecorationProviders`, `fileEditors`, `agents`, `worktreeSetupSteps`, and `settings` — so two entries with the same id in the same array would silently first-win at load. The check is per-array: ids in different arrays are namespaced independently and never collide.
 
 ## Panels — _Shipped_
 
@@ -180,6 +194,8 @@ Panels are full-sized workspaces in Daintree's grid (alongside terminal panels, 
 | `showInPalette` | no | Include in the "New Panel…" palette. Default `true`. |
 | `dockable` | no | Dockable by default. Declare `false` to opt the kind out of the dock. Rejected together with `hasPty: true` (`pty_panel_dock_opt_out_unsupported`) — a plugin PTY kind renders as a terminal, which is always dockable, so the opt-out could never be honoured. |
 | `stateVersion` | no | Integer from 1 to 1,000,000 naming the shape your panel writes through `persistState`. Omit it and the host makes no promises about your saved state; declare it and you get the migration contract below. |
+| `scope` | no | `"worktree"` (the default) ties each panel to the worktree it was opened in. `"project"` makes it one panel for the whole project: `panel.openPluginPanel` and the launchers open it in the dock with no worktree, and its dock chip and dialog show in every worktree. A user can still move it into a worktree's grid, which ties it to that worktree. Rejected together with `hasPty: true` (`pty_panel_project_scope_unsupported`) or `dockable: false` (`project_panel_dock_opt_out_unsupported`). See [Open it in the dock](./patterns.md#open-it-in-the-dock). |
+| `reportsActivity` | no | `true` lets your plugin report its own work on panels of this kind with [`host.setPanelActivity`](./host-api.md#setpanelactivity) — working, waiting, finished or failed — drawn like agent activity and attributed to your plugin. The plugin manager lists the kind as reporting activity. Omitted or `false`, the method refuses this kind's panels. |
 | `menu` | no | Up to five of your own actions to offer in the panel's ⋯ and right-click menus. See [Panel menu](#panel-menu) below; to change the entries while the panel runs, see [Runtime menu entries](#runtime-menu-entries). |
 | `toolbar` | no | Up to three of your own actions drawn as buttons in the panel header, with live state your view sets. See [Panel toolbar](#panel-toolbar) below. |
 
@@ -377,7 +393,7 @@ Every panel of a plugin carries some entries you never declare. The ⋯ menu and
 2. Rename panel and **Reload panel** — a fresh view attempt, the same one `requestReload` asks for; see [Views → Reloading a view](./views.md#reloading-a-view).
 3. Your `menu` entries, then the [runtime entries](#runtime-menu-entries) your view and backend publish.
 4. Your plugin's own entries, in this order, each only when it applies:
-   - **<Panel name> Welcome Tour** — once a tour whose `panelKind` names this panel is registered (see [Tours](#tours--shipped-installed-plugins)).
+   - **<Panel name> Welcome Tour** — once a tour whose `panelKind` names this panel is registered (see [Tours](#tours--shipped)).
    - **Back up data…** — when the plugin declares any [database](#databases--shipped).
    - **Plugin settings…** — when the plugin declares any [settings](#settings-schema--shipped) field or a `location: "settings"` view. It opens whichever home those settings live in.
 5. Send to background, Trash panel, Remove panel.
@@ -388,7 +404,7 @@ None of these needs wiring in your view, and none can be removed from a manifest
 
 ## Views — _Shipped_
 
-Views are the React components a plugin renders. A `location: "panel"` view binds to a panel slot declared in `contributes.panels` by matching its bare `id`; at plugin load the matching panel kind gains a `componentPath` resolved to a `plugin://` URL. The renderer host (`PluginViewHost`) lazy-imports the module over Daintree's `plugin://` protocol and mounts it under an `ErrorBoundary` + `Suspense`. A `location: "settings"` view is the plugin's custom settings section instead (below). `"sidebar"` is rejected at manifest validation because the sidebar host does not exist yet. The contribution key is `views` (it was `experimental_views` until #10466 — the old key is still accepted as a deprecated alias that logs a warning). [Views: what you get in the DOM](./views.md) is the authoring guide.
+Views are the React components a plugin renders. A `location: "panel"` view binds to a panel slot declared in `contributes.panels` by matching its bare `id`; at plugin load the matching panel kind gains a `componentPath` resolved to a `plugin://` URL. The renderer host (`PluginViewHost`) lazy-imports the module over Daintree's `plugin://` protocol and mounts it under an `ErrorBoundary` + `Suspense`. A `location: "settings"` view is the plugin's custom settings section instead, and a `location: "sidebar"` view one of the sidebar's views (both below). The contribution key is `views` (it was `experimental_views` until #10466 — the old key is still accepted as a deprecated alias that logs a warning). [Views: what you get in the DOM](./views.md) is the authoring guide.
 
 ```json
 {
@@ -407,7 +423,34 @@ Views are the React components a plugin renders. A `location: "panel"` view bind
 }
 ```
 
-**A settings view** — `location: "settings"` is the one exception to the pairing below. It names no panel: its `id` may not match a panel's (`settings_view_panel_id_collision`), a plugin declares at most one (`settings_view_duplicate`), and a surface can't claim it (`surface_view_ref_settings`). The host mounts it in the plugin's settings home, below the generated [settings](#settings-schema--shipped) fields, with `settingsContext` and without the panel-record props. See [Settings → A custom section](#a-custom-settings-section) and [Views → A settings section](./views.md#a-settings-section).
+**A settings view** — `location: "settings"` is the one exception to the pairing below. It names no panel: its `id` may not match a panel's (`settings_view_panel_id_collision`), a plugin declares at most one (`settings_view_duplicate`), and a surface can't claim it (`surface_view_ref_settings`). It alone may set `title` and `description` (what settings search shows for it) and `pages` (subpages the host lists and opens inside the section). The host mounts it in the plugin's settings home, below the generated [settings](#settings-schema--shipped) fields, with `settingsContext` and without the panel-record props. See [Settings → A custom section](#a-custom-settings-section) and [Views → A settings section](./views.md#a-settings-section).
+
+**A sidebar view** — `location: "sidebar"` puts the view in the sidebar, beside the built-in worktree list (the workspace, in a folder without git). Like a settings view it names no panel: its `id` may not match a panel's (`sidebar_view_panel_id_collision`) and neither a surface nor a toolbar popover can claim it (`surface_view_ref_sidebar`, `toolbar_popover_view_sidebar`). A plugin may declare several.
+
+```json
+{
+  "contributes": {
+    "views": [
+      {
+        "id": "board",
+        "componentPath": "./dist/board.js",
+        "location": "sidebar",
+        "name": "Board",
+        "iconId": "list",
+        "priority": 10,
+        "when": "isGitBacked"
+      }
+    ]
+  }
+}
+```
+
+- **The switcher.** While at least one plugin sidebar view applies to the project, the sidebar's heading becomes a dropdown listing every view, highest `priority` first, each plugin's entry attributed to the plugin. With none, the heading stays a plain title. The worktree list is always in the list, and its entry keeps the count of agents waiting on the user while a plugin view shows.
+- **Priority.** An integer from `-1000` to `1000`, default `0`. The worktree list's priority is fixed at `0` and it wins a tie, so a view lists above it only with a positive priority; views that tie each other sort by id. Priority orders the list and nothing else: the sidebar opens on the worktree list until the user picks a view.
+- **The choice** is remembered per project. If the chosen view stops applying (its plugin stops, is hidden in this project, or its `when` turns false), the sidebar shows the worktree list until the view applies again, then returns to it.
+- **`when`** is evaluated live against the [project keys](#keybindings--shipped) and your plugin's own [`host.setContext`](./host-api.md#setcontext) keys. It may not read `activeSidebarView` (`sidebar_view_when_reads_active_view`): which view shows is decided from which ones apply.
+- **`activeSidebarView`** names the view showing: `<manifest name>.<view id>` for an installed plugin's view, `project:<manifest name>.<view id>` for a project plugin's (an installed and a project copy of one plugin can both load, and each keeps its own entry). The `ui.sidebar.switchView` action takes the same id.
+- **What the view gets.** The standard view props and error boundary, with `hostContext.kind === "sidebar"`, mounted in the region below the header. The header holds only the switcher, so draw your own controls inside the view, and lay it out for the sidebar's minimum width of 200px. When the view fails, its error pane offers **Show worktrees** beside **Try again**. A right-click inside the view reaches the view and never opens the sidebar's own menu. The view unmounts when the user switches away, which fires `disposeSignal`.
 
 **Pairing with `contributes.panels`** — a panel view binds to a panel by matching its bare `id` (pre-namespace) to a panel `id`. A view whose `id` matches no panel is rejected at manifest validation (`view_panel_ref_unknown`) — it would otherwise never render, so it's a hard load error rather than a silent runtime skip. A view targeting a panel with `hasPty: true` is skipped — PTY panels render through `TerminalPane` and cannot host a plugin module.
 
@@ -415,12 +458,15 @@ Views are the React components a plugin renders. A `location: "panel"` view bind
 
 | Field | Required | Notes |
 | --- | --- | --- |
-| `id` | yes | For a panel view, the panel `id` it provides a component for; for a settings view, an id of its own. Letters, digits, `.`, `_` and `-`, at most 64 characters. |
+| `id` | yes | For a panel view, the panel `id` it provides a component for; for a settings or sidebar view, an id of its own. Letters, digits, `.`, `_` and `-`, at most 64 characters. |
 | `componentPath` | yes | POSIX-relative path to an ESM module inside the plugin (`.js` or `.mjs`). The module's default export is a React component. Absolute paths, backslashes, URL schemes, `?`, `#` and `..` segments are rejected at manifest validation. |
-| `location` | yes | `"panel"` (rendered in the panel of the same id, in the grid, the dock or a dialog), or `"settings"` for the plugin's custom settings section. `"sidebar"` is rejected at manifest validation — the sidebar host does not exist yet. |
-| `iconId` | no | Accepted for compatibility but **ignored at runtime** — the matching `contributes.panels` entry owns the rendered icon. Set it there instead. |
+| `location` | yes | `"panel"` (rendered in the panel of the same id, in the grid, the dock or a dialog), `"settings"` for the plugin's custom settings section, `"fileEditor"` for a view that backs a [file editor](#file-editors--shipped), or `"sidebar"` for a sidebar view. |
+| `iconId` | no | A sidebar view's glyph in the switcher: a plugin icon id or a `./…svg` [custom icon](#custom-icons). On a panel or settings view it is accepted for compatibility but **ignored at runtime** — the matching `contributes.panels` entry owns the rendered icon. |
+| `name` | sidebar only | The sidebar view's name in the switcher and the header, at most 40 characters. Required for a sidebar view. |
+| `priority` | sidebar only | Integer from `-1000` to `1000`, default `0`; orders the switcher against the worktree list's `0`. |
+| `when` | sidebar only | Shows the view only while the expression holds. |
 
-The view schema is strict and carries no `name` or `description`: the matching panel is the single source of truth for a view's display metadata, so those fields were removed (#10888) rather than validate values the runtime ignores.
+The view schema is strict and carries no `description`, and a panel or settings view takes no `name`, `priority` or `when`: the matching panel is the single source of truth for a panel view's display metadata, so those fields were removed (#10888) rather than validate values the runtime ignores. A sidebar view has no panel to borrow them from, so it carries its own.
 
 **Bundling** — the host serves the module as-is and compiles nothing, so a view is either hand-written browser ESM (the zero-build path: `createElement`, no JSX, bare imports limited to the host import map) or a bundle `@daintreehq/plugin-vite` produces with the right externals for sharing the host's React 19. See [Views → Getting data in](./views.md#getting-data-in) for what the import map serves and [Architecture → Renderer host](./architecture.md#renderer-host) for the internals.
 
@@ -487,15 +533,17 @@ export default function Dashboard(props) {
 | `disposeSignal` | `AbortSignal` | Lifetime of **this mounted view attempt**. Aborts on unmount, on "Try again", on an accepted `requestReload`, and when the host receives a `plugin:panel-kinds-changed` push that omits this kind. The broadcast fires before main tears down plugin IPC handlers, so signal-driven cleanup runs while host APIs are still live. A **temporary** unmount aborts it too — maximizing a sibling pane or leaving a dock tab. Switching to another project does not: the view stays mounted and the signal stays open. On unmount it aborts just after React has run your effect cleanups, so a cleanup may still see it open. Tie only view-scoped work to it. |
 | `panelRemovedSignal` | `AbortSignal` | Lifetime of **the panel record**. The same object is handed to every mount of a given `panelId`, so it survives remounts, retries, trash-then-restore, and plugin upgrades. Aborts exactly once, when the panel is permanently removed. |
 | `initialArgs` | `Record<string, unknown>` \| `undefined` | The argument bag the panel was spawned with — set when the panel is opened via the `panel.openPluginPanel` action's `initialArgs` (e.g. dispatched from a context menu with a file path) — merged with whatever the view has since persisted through `persistState`. It rides the panel's save/restore-surviving extension state, so a restored panel comes back the way the user left it. A snapshot taken at mount, not a live value: it does not update while the view is mounted, including in response to your own `persistState` calls. `undefined` when the panel was opened without args and has persisted nothing. |
+| `openRequest` | `{ seq: number; args: Record<string, unknown> }` \| `undefined` | The latest `panel.openPluginPanel` call that reused this panel instead of spawning one, with the `initialArgs` it passed. Live: a mounted view re-renders with each new request, and one made while no view is mounted waits for the next mount, latest call wins. `seq` is new on every call. A request a view has committed with is not replayed by a later remount or reload. It is never persisted or merged into `initialArgs`, and one still waiting when the project's window reloads or is evicted is lost. See [Open your own panel from a command](./patterns.md#open-your-own-panel-from-a-command). |
 | `stateVersion` | `number` \| `undefined` | Which version of your declared state shape `initialArgs` holds: the panel's `stateVersion` when the bag was written, `0` for a bag that predates versioning, absent when you declare no `stateVersion`. See [panel state versioning](#panels--shipped). |
-| `persistState` | `(patch: Record<string, unknown>) => boolean` \| `undefined` | Writes view state back onto the panel record, so the next mount sees it in `initialArgs`. The two are one bag: spawn seeds it, this updates it, `initialArgs` reads it back — which is what lets a view survive the teardowns a panel routinely outlives (maximizing a sibling pane, leaving a dock tab, a project view reclaimed under memory pressure, a restart) without forgetting where the user was. The patch is **merged**, so independent parts of a view can each persist their own key; a key set to `undefined` is removed. An unchanged write is free — it neither churns the store nor schedules a save — so calling it from a render-derived effect is fine. Keep it small: the host refuses an update whose serialized form exceeds 64KB, and anything larger, not JSON round-trippable, or that should outlive the panel belongs in `host.storage`. Returns `true` when the stored state now matches what you asked for (applied, or already identical) and `false` when the host rejected the write — the merged bag would exceed 64KB, or it is not JSON-serializable (a cyclic value, a `BigInt`, a throwing `toJSON`). `true` means accepted and scheduled, not flushed: the layout save is debounced. |
+| `persistState` | `(patch: Record<string, unknown>) => boolean` \| `undefined` | Writes view state back onto the panel record, so the next mount sees it in `initialArgs`. The two are one bag: spawn seeds it, this updates it, `initialArgs` reads it back — which is what lets a view survive the teardowns a panel routinely outlives (maximizing a sibling pane, leaving a dock tab, a project view reclaimed under memory pressure, a restart) without forgetting where the user was. The patch is **merged**, so independent parts of a view can each persist their own key; a key set to `undefined` is removed. An unchanged write is free — it neither churns the store nor schedules a save — so calling it from a render-derived effect is fine. Keep it small: the host refuses an update whose serialized form exceeds 64KB, and anything larger, not JSON round-trippable, or that should outlive the panel belongs in `host.storage`. Returns `true` when the stored state now matches what you asked for (applied, or already identical) and `false` when the host rejected the write — the merged bag would exceed 64KB, or it is not JSON-serializable (a cyclic value, a `BigInt`, a throwing `toJSON`). `true` means accepted and scheduled, not flushed: the layout save is debounced. Outside the grid there is no panel record, so the bag goes to the durable view-state store instead, written without a debounce; see [Views → State outside the grid](./views.md#state-outside-the-grid). Absent on a file editor. |
 | `requestReload` | `() => void` \| `undefined` | Ask the host to discard this view attempt and mount a fresh one for the same panel, without restarting the backend. The current `disposeSignal` aborts and React cleanup runs; the next attempt gets a new `disposeSignal` and the latest accepted `persistState` bag as `initialArgs`, while `panelId`, `panelRemovedSignal` and the backend carry over. The module is reused, so module globals, document-wide registrations and anything on `window` survive — a reload frees only what your cleanup releases, and cannot rescue a blocked renderer. A request, not a command: the host may refuse it, reports no completion, and merges calls in the same tick. A callback held past its own attempt does nothing. A fourth reload within 30 seconds of three accepted ones stops the view until the user reloads the panel. Absent on project surfaces and settings views. See [Views → Reloading a view](./views.md#reloading-a-view). |
-| `setHasUnsavedChanges` | `(hasUnsavedChanges: boolean) => void` \| `undefined` | Tell the host whether the view holds work a reload would lose. The user and agents can reload a plugin panel without being asked, since persisted state comes back; while this is `true`, they are asked to confirm first. Your own `requestReload` is never held up by it. The setter belongs to its attempt, so one held past its teardown does nothing, and a new attempt starts with nothing unsaved. Absent where the host offers no reload. See [Views → Reloading a view](./views.md#reloading-a-view). |
+| `setHasUnsavedChanges` | `(hasUnsavedChanges: boolean) => void` \| `undefined` | Tell the host whether the view holds work a reload or a close would lose. The user and agents can reload a plugin panel without being asked, since persisted state comes back; while this is `true`, they are asked to confirm first, and so is the user closing the panel. Your own `requestReload` is never held up by it. The setter belongs to its attempt, so one held past its teardown does nothing, and a new attempt starts with nothing unsaved. While it is `true`, automatic Sleep waits and cache eviction skips the project's renderer until memory runs short, so persist a draft through `persistState` where you can instead of holding the flag. Offered on every host but a file editor; outside the grid there is no close to confirm. See [Views → State outside the grid](./views.md#state-outside-the-grid). |
 | `setMenuItems` | `(items: readonly { actionId: string; label?: string }[] \| null) => void` \| `undefined` | Publishes the contextual actions the panel's ⋯ and right-click menus offer right now, after the manifest's `menu` entries. Each call replaces the list; `null` or `[]` clears it. The list survives the view remounting and is cleared when the panel closes or the view reloads. Belongs to its attempt. Absent on project surfaces, settings views and a panel shown as a dialog. See [Runtime menu entries](#runtime-menu-entries). |
+| `setTitle` | `(title: string \| null) => void` \| `undefined` | Names this panel: its tab, header, dock chip and dialog title. `null` or a blank title goes back to the kind's `name`. The title belongs to the panel: it survives remounts and reloads, a grid or dock panel keeps it across a restart, and a dialog keeps it until it closes. A rename by the user wins. Control and invisible formatting characters become spaces, and the title is cut at 80 characters. Only ever titles this panel. Belongs to its attempt. Absent on project surfaces and settings views. |
 | `setToolbarItemState` | `(actionId: string, state: PluginPanelToolbarItemState \| null) => void` \| `undefined` | Set the live state of one of the panel's manifest `toolbar` buttons: busy, disabled, a status line, an "Updated" age and its tone. Each call replaces that button's state; `null` resets it. State survives the view remounting and is cleared when the panel closes or the view reloads. Belongs to its attempt, like `setHasUnsavedChanges`. Absent on project surfaces, settings views and a panel shown as a dialog. See [Panel toolbar](#panel-toolbar). |
 | `runningActions` | `readonly string[]` \| `undefined` | Your actions whose handlers are running now, by `actionId` as the manifest writes it, however they were dispatched (palette, menu, panel toolbar, keybinding, agent). A new array when the set changes, so the view re-renders as a run starts and ends, and a view mounting mid-run sees it at once. Read one action with `useActionRunning(props, actionId)` from `@daintreehq/plugin-sdk/react`. |
 | `styleRootAttributes` | `Readonly<Record<string, string>>` | Spread onto any container you render through `createPortal`, so the runtime-compiled Tailwind classes inside it still apply. See [Views → Styling](./views.md#styling). |
-| `settingsContext` | `{ scope: "user" \| "project"; projectId: string \| null }` \| `undefined` | Present only on a `location: "settings"` view: which settings home it is mounted in. `projectId` is `null` in the `"user"` home. See [A custom settings section](#a-custom-settings-section). |
+| `settingsContext` | `{ scope: "user" \| "project"; projectId: string \| null; page?: string \| null; focus?: { key; nonce; acknowledge } }` \| `undefined` | Present only on a `location: "settings"` view: which settings home it is mounted in. `projectId` is `null` in the `"user"` home. `page` is the open declared page (`null` on the root) when the view declares `pages`; `focus` is a pending deep link to one of its `editor: "view"` keys, answered with `acknowledge(landed)`. See [A custom settings section](#a-custom-settings-section) and [Views → A settings section](./views.md#a-settings-section). |
 
 The view is wrapped in an error boundary by the host. An unhandled render error shows a diagnostics pane with "Try again" — which mounts a fresh attempt, and after a failed import loads the view from a new URL, since the failed module stays cached under the old one — alongside "Close panel", "Copy diagnostics", and "View logs".
 
@@ -524,7 +572,7 @@ The `__dtv-<n>` segment is virtual — it never exists on disk, and the protocol
 
 ## Toolbar buttons — _Shipped_
 
-Toolbar buttons dispatch an existing action from the main toolbar.
+Toolbar buttons dispatch an existing action from the main toolbar, or open an anchored popover holding one of your own views.
 
 Every contributed button is collected into the **plugin tray** — a single toolbar button, grouped by plugin — rather than claiming its own top-level slot. A user can promote any individual button to its own toolbar slot from the tray (hover the row and click the pin, or press <kbd>P</kbd>) or from Settings → Toolbar; a promoted button keeps its tray row as well. Placement is the user's call, not the manifest's: there is no field that requests a top-level slot.
 
@@ -551,8 +599,247 @@ Every contributed button is collected into the **plugin tray** — a single tool
 | `id` | yes | Namespaced at runtime as `{pluginId}.{id}` — matches the convention used by every other contribution surface. |
 | `label` | yes | Hover tooltip. |
 | `iconId` | yes | One of the shared plugin icon IDs listed in `shared/config/pluginIconIds.ts` — the same set panels use — or a [custom SVG](#custom-icons) inside your plugin (`"./icons/flutter.svg"`). An unrecognized ID falls back to a generic puzzle glyph; `daintree-plugin validate` warns about it. Agent brand IDs (e.g. `claude`) don't resolve here. |
-| `actionId` | yes | Fully-qualified action ID, including plugin namespace. Built-in actions (e.g. `terminal.new`) also work. |
+| `actionId` | one of `actionId`, `popover` or `menu` | Fully-qualified action ID, including plugin namespace. Built-in actions (e.g. `terminal.new`) also work. |
+| `popover` | one of `actionId`, `popover` or `menu` | `{ "viewId": "<view id>" }` — open a popover showing that view instead of dispatching an action. See below. |
+| `menu` | no | Up to five of your own actions, `[{ "actionId": "acme.sync.pull", "label": "Pull" }]` (`label` defaults to the action's title). With an `actionId` the button is a split button: the click runs the action and a chevron opens the menu. On its own it is a menu button. In the tray and the overflow menu it is a submenu. See below. |
 | `priority` | no | `1`–`5`, lower = earlier. Orders your buttons within your plugin's tray group. Default `3`. |
+| `when` | no | Context expression deciding whether the button shows, evaluated live. |
+
+### Showing a button only when it applies
+
+While a button's `when` is false it leaves both the plugin tray and the toolbar, and the overflow menu with them. Nothing about it is forgotten: a button the user promoted comes back in the slot they gave it as soon as the clause is true again. Settings → Toolbar still lists it, so the user can arrange it at any time.
+
+The clause sees the [project keys](#keybindings--shipped) (`isGitBacked`, `workspaceKind`, `activeSidebarView`, `presentation*`) and the keys plugins publish with [`host.setContext`](./host-api.md#setcontext), under each plugin's manifest name, and is re-evaluated whenever one of them changes. An identifier that names no key is false, and an expression that fails to parse hides the button. A `when` only decides whether the button shows: the action stays reachable from the palette and keybindings.
+
+```json
+{
+  "id": "sync",
+  "label": "Sync",
+  "iconId": "refresh-cw",
+  "actionId": "acme.notes.sync",
+  "when": "isGitBacked && acme.notes.signedIn"
+}
+```
+
+To show state on a button rather than hide it — a toggle that is on, a reason it can't run, work in progress — use [`host.setToolbarButtonState`](./host-api.md#settoolbarbuttonstate).
+
+A button declares `actionId` or `popover`, not both (`toolbar_button_behavior_conflict`), or it carries a non-empty `menu` instead; none of the three fails validation (`toolbar_button_behavior_missing`).
+
+A `menu` lists your own actions only — a built-in or another plugin's id fails (`toolbar_button_menu_action_not_own`), as does a repeat (`toolbar_button_menu_duplicate_action`) or a popover button that also declares one (`toolbar_button_menu_popover_conflict`). Each entry shows while its action is registered and dispatches on its own, with nothing from your plugin. Replace the list at runtime with the `menu` field of [`host.setToolbarButtonState`](./host-api.md#settoolbarbuttonstate).
+
+**Popovers.** For an inbox, a recent-items list or a quick-add form, name one of your views instead of an action:
+
+```json
+{
+  "contributes": {
+    "panels": [{ "id": "inbox", "name": "Inbox", "iconId": "list", "color": "#7c3aed" }],
+    "views": [{ "id": "inbox", "componentPath": "dist/inbox.js", "location": "panel" }],
+    "toolbarButtons": [
+      { "id": "inbox-button", "label": "Inbox", "iconId": "list", "popover": { "viewId": "inbox" } }
+    ]
+  }
+}
+```
+
+`viewId` names a `location: "panel"` view whose panel is not `hasPty` (`toolbar_popover_view_unknown`, `toolbar_popover_view_settings`, `toolbar_popover_view_sidebar`, `toolbar_popover_view_file_editor` and `toolbar_popover_view_pty` otherwise). The same view stays spawnable as a panel. The host draws the popover itself — 450 by up to 500 pixels, clamped to the room on screen — anchored under the promoted button, or under the plugin tray or the toolbar's overflow menu when the button is picked from one of their rows. It stays open while a dialog, menu or picker your view opened is up, and closes on Escape or a click outside; closing it from inside hands focus back to the button that opened it. Only one plugin popover is open at a time. Your view mounts fresh on each opening, with `hostContext.kind` set to `"popover"` and `hostContext.close()` to dismiss it, after a quick-add submits for example. Like a project surface, it has no panel record behind it: `persistState` writes to the durable view-state store and `initialArgs` reads it back on the next opening, `setHasUnsavedChanges` is offered, and the other panel-record props are absent (see [Views → State outside the grid](./views.md#state-outside-the-grid)). A popover button takes `when` and [`host.setToolbarButtonState`](./host-api.md#settoolbarbuttonstate) like any other: a disabled or busy one doesn't open, and an open popover closes when its button's `when` turns false. Works the same for installed and project plugins.
+
+## Launch entries — _Shipped_
+
+Launch entries are rows in the launcher: the dock's `+`, its right-click menu, the grid's right-click menu and the toolbar launcher. Each entry opens one of your panels (with arguments, where you choose), runs one of your commands, or starts an agent with a first prompt.
+
+Your entries form one group under your plugin's name, below the panels and above the recipes. They are searchable like every other row, and the user can pin any of them to its own toolbar button. The host draws every row from the manifest; a plugin can't draw its own. A user can hide your group in one project from the group's last row, **Hide in this project**, and bring it back from Project settings → Plugins.
+
+```json
+{
+  "contributes": {
+    "panels": [{ "id": "records", "name": "Records", "iconId": "database", "color": "#0ea5e9" }],
+    "commands": [
+      {
+        "id": "publish",
+        "title": "Publish site",
+        "description": "Publish the records site",
+        "category": "records",
+        "kind": "command",
+        "danger": "confirm"
+      }
+    ],
+    "launchEntries": [
+      {
+        "id": "new-record",
+        "label": "New record…",
+        "iconId": "plus",
+        "description": "Open Records on an empty form",
+        "priority": 1,
+        "panel": { "id": "records", "args": { "mode": "new" }, "placement": "dialog" }
+      },
+      {
+        "id": "publish",
+        "label": "Publish site",
+        "iconId": "upload",
+        "command": { "actionId": "acme.records.publish" }
+      },
+      {
+        "id": "chat",
+        "label": "Chat with the records agent",
+        "iconId": "bot",
+        "agent": { "id": "claude", "prompt": "Read RECORDS.md, then wait for my question." }
+      }
+    ]
+  }
+}
+```
+
+**Fields:**
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `id` | yes | Namespaced at runtime as `{pluginId}.{id}`. It also keys a pinned toolbar button, so renaming it unpins the entry. |
+| `label` | yes | The row's text, up to 80 characters. Write it as the action: "New record…", "Publish site". |
+| `iconId` | yes | A shared plugin icon id, the same set panels use, or a [custom SVG](#custom-icons). |
+| `description` | no | Up to 200 characters, shown as the row's tooltip and searched. |
+| `priority` | no | `1`–`5`, lower = earlier within your group. Default `3`; ties keep manifest order. Groups themselves are ordered by plugin name. |
+| `when` | no | Context expression deciding whether the row shows, evaluated live like a [toolbar button's](#showing-a-button-only-when-it-applies). A pinned entry's button follows it. |
+| `showInEmptyState` | no | `true` also lists the entry as a tile in a "From {your plugin}" band of the stock empty-canvas launcher, below the recipes. Default `false`. Tiles follow `priority` and `when`; hiding your group in a project hides the band too. The band doesn't appear while your own `emptyCanvas` surface replaces the stock launcher. |
+| `panel` | one of `panel`, `command`, `agent` | `{ "id", "args"?, "placement"? }`. `id` names one of your own `contributes.panels`. `args` (at most 8 KB of JSON) reaches the view as `initialArgs`, or as `openRequest` when an open panel of that kind is reused. `placement` is `"dock"`, `"grid"` or `"dialog"`; without it the panel opens where that launcher opens panels, and a `scope: "project"` panel in the dock. |
+| `command` | one of `panel`, `command`, `agent` | `{ "actionId", "args"? }`. `actionId` must be one of your own actions, written `{manifest name}.{id}`; when you declare `contributes.commands` it must name one of them. `args` (at most 8 KB of JSON) is passed to the action. |
+| `agent` | one of `panel`, `command`, `agent` | `{ "id", "prompt" }`. Starts that agent with `prompt` as its first turn, up to 4,000 characters. Nothing else about the launch is yours to choose — no flags, environment or preset — and a prompt starting with `-` is refused. The agent lands where that launcher puts agents and uses the user's own preset. If no agent with that id is registered, the row is shown disabled. |
+
+An entry declares exactly one target (`launch_entry_target_missing`, `launch_entry_target_conflict`). A target outside your own plugin fails validation: a command in another namespace or a built-in action (`launch_entry_command_not_own`), a panel you don't declare (`launch_entry_panel_unknown`). So does a placement the panel can't take — the grid for a `scope: "project"` panel, the dock for `dockable: false`, a dialog for `hasPty: true` (`launch_entry_panel_placement`) — and `args` for a PTY-backed panel, which has no view to receive them (`launch_entry_panel_args_pty`). A plugin may declare at most 20 entries.
+
+Declaring an entry for one of your panels replaces that panel's own row in the launcher, even while the entry's `when` is false or its group is hidden, so the panel is never listed twice. A panel no entry targets keeps its plain row.
+
+Entries are user-only. They run when the user picks the row or presses its pinned button, never from the command palette, an MCP client or an agent; those reach the same panels, commands and `agent.launch` through their own routes and confirmations.
+
+## Layouts — _Shipped_
+
+A layout is a named arrangement of your panels, browser pages and recipes: "Records on the left, an agent beside it, the preview docked". The user applies one from the command palette, where each layout is a row titled **Apply layout: {name}**, and your own commands can apply yours with `host.dispatch("layout.apply", { layoutId: "workspace" })`.
+
+```json
+{
+  "contributes": {
+    "panels": [
+      { "id": "records", "name": "Records", "iconId": "database", "color": "#0ea5e9" },
+      { "id": "notes", "name": "Notes", "iconId": "file-text", "color": "#0ea5e9" }
+    ],
+    "recipes": [
+      {
+        "id": "agent",
+        "name": "Records agent",
+        "terminals": [{ "type": "claude", "initialPrompt": "Read RECORDS.md." }]
+      }
+    ],
+    "layouts": [
+      {
+        "id": "workspace",
+        "name": "Records workspace",
+        "entries": [
+          { "panel": "records", "tabGroup": "main", "maximized": true },
+          { "panel": "notes", "tabGroup": "main" },
+          { "recipe": "agent" },
+          { "browser": "http://localhost:3000", "location": "dock" }
+        ]
+      }
+    ]
+  }
+}
+```
+
+**Fields:**
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `id` | yes | Namespaced at runtime as `{pluginId}.{id}`. Your commands may pass either form to `layout.apply`. |
+| `name` | yes | Up to 80 characters; the palette row and the confirmation dialog show it. |
+| `entries` | yes | 1–12 entries, opened in order. |
+| `entries[].panel` | one of `panel`, `browser`, `recipe` | One of your own `contributes.panels`. A panel of that kind already open in the worktree (or anywhere, for a `scope: "project"` panel) is reused rather than opened again. A `hasPty: true` panel is refused: terminals come from recipes. |
+| `entries[].browser` | one of `panel`, `browser`, `recipe` | An `http:` or `https:` URL, opened in a browser panel. A browser panel already showing that page is reused. The browser still asks before loading a host the user hasn't approved. |
+| `entries[].recipe` | one of `panel`, `browser`, `recipe` | One of your own `contributes.recipes`. Its terminals start in the active worktree, every time the layout is applied. |
+| `entries[].location` | no | `"grid"` or `"dock"`. Default `"grid"`, or `"dock"` for a `scope: "project"` panel. A recipe puts all its terminals there; split a recipe in two to place its terminals apart. |
+| `entries[].tabGroup` | no | Entries sharing a key become the tabs of one group, in entry order. A group needs at least two panels in one place, and `scope: "project"` panels group only with each other. |
+| `entries[].maximized` | no | Maximizes the entry's panel, or its tab group, in the grid. At most one per layout. |
+
+Applying a layout is additive. It opens what's missing and moves, groups and maximizes what it lists; a panel it doesn't list is never closed, killed or moved. **Undo layout change** (`layout.undo`) puts back everything the layout moved in one step and drops the groups it made. Panels and terminals it opened stay open.
+
+A layout that runs a recipe never starts it silently. Before anything opens or moves, the user sees a confirmation listing every terminal the recipes start, as the recipe confirmation lists them, and the layout applies only if they approve. A command that applies such a layout gets `{ "status": "awaiting-confirmation" }` back at once rather than waiting on the dialog. A recipe that changed after the user approved it doesn't start, and neither does one a team recipe of the same name now shadows.
+
+Your commands can apply only your own layouts, and MCP clients and agents can't apply layouts at all. Validation refuses an entry with no target or several (`layout_entry_target_missing`, `layout_entry_target_conflict`), a panel or recipe you don't declare (`layout_panel_unknown`, `layout_recipe_unknown`), a PTY panel (`layout_panel_pty`), a placement the panel can't take (`layout_panel_placement`), the same panel, recipe or page twice (`layout_entry_duplicate`), a second or docked maximize (`layout_maximized_invalid`), and a tab group split between grid and dock, mixing project and worktree panels, or holding one panel (`layout_tab_group_location`, `layout_tab_group_scope`, `layout_tab_group_single`). A plugin may declare at most 20 layouts. An entry naming a recipe Daintree couldn't register, because none of its terminals passed the recipe checks, is dropped from the layout when the plugin loads.
+
+## Search providers — _Shipped_
+
+A search provider makes your plugin's content findable from the quick switcher (`⌘P` / `Ctrl+P`). Typing the provider's `keyword` and pressing Tab scopes the switcher to it: the field shows a chip with your `title`, and every keystroke after that asks your provider. With `blend: true` it also adds a few results below the built-in ones in the unscoped search. Backspace on an empty field, or Escape once the query is clear, steps back out.
+
+The host draws every result from data you return: a label, a description, an icon, and a target that is one of your own panels or commands with small arguments. Picking a result opens a panel through `panel.openPluginPanel` — an open panel of that kind is reused and receives the result's args as `openRequest` — or dispatches the command with them.
+
+```json
+{
+  "contributes": {
+    "panels": [{ "id": "notes", "name": "Notes", "iconId": "notebook", "color": "#0ea5e9" }],
+    "databases": [
+      {
+        "id": "notes",
+        "location": "local",
+        "queries": [
+          {
+            "name": "find_notes",
+            "mode": "read",
+            "description": "Notes whose title matches.",
+            "params": { "q": { "type": "string", "maxLength": 200 } },
+            "sql": "SELECT id, title AS label, folder AS description, json_object('noteId', id) AS args FROM notes WHERE title LIKE '%' || :q || '%' ORDER BY updated_at DESC LIMIT 20"
+          }
+        ]
+      }
+    ],
+    "searchProviders": [
+      {
+        "id": "notes",
+        "kind": "declarative",
+        "title": "Notes",
+        "keyword": "notes",
+        "iconId": "notebook",
+        "blend": true,
+        "query": "find_notes",
+        "target": { "panel": "notes" }
+      },
+      { "id": "people", "kind": "runtime", "title": "People", "keyword": "people" }
+    ]
+  }
+}
+```
+
+**Fields:**
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `id` | yes | Namespaced at runtime as `{pluginId}.{id}`. The user's "Show in quick switcher" choice is stored under it. |
+| `kind` | yes | `"declarative"` or `"runtime"` — see below. |
+| `title` | yes | Up to 80 characters. The scope chip, the scoped placeholder ("Search Notes") and the Settings row. |
+| `keyword` | yes | 1–24 lowercase letters, digits or `-`, starting with a letter. The palettes' prefix characters (`>`, `@`, `#`, `:`, `/`) can never be part of one. |
+| `iconId` | no | A shared plugin icon id or a [custom SVG](#custom-icons) for results that carry none. Default `search`. |
+| `blend` | no | `true` also adds results to the unscoped search. Default `false`. |
+| `query` | declarative only | The `name` of one of your `databases[].queries`. It must be `mode: "read"` and declare exactly one param, of type `"string"`, which receives what the user typed. |
+| `target` | declarative: yes; runtime: no | `{ "panel": "<panel id>" }` or `{ "command": "<manifest name>.<id>" }`. Where results open; for a runtime provider, the default for results without their own. |
+
+**Declarative providers** answer without your plugin running. The host binds what the user typed to the query's one param and runs the statement read-only in the same child process an agent's declared query uses, so an expensive statement costs that process, never Daintree. Rows are read by column name — alias your columns to match:
+
+| Column | Required | Notes |
+| --- | --- | --- |
+| `id` | yes | Stable within the provider. Rows with a repeated id are dropped. |
+| `label` | yes | The row's text, cut at 160 characters. |
+| `description` | no | The second line, cut at 256 characters. |
+| `iconId` | no | A shared plugin icon id; anything else falls back to the provider's icon. |
+| `args` | no | A JSON object as text (SQLite's `json_object()`), at most 4 KB. Handed to the target. |
+
+Text your param's own constraints refuse (its `maxLength`, `pattern`, …), and a database your plugin hasn't created yet, answer with no rows.
+
+**Runtime providers** are a function you bind in `activate()` with [`host.registerSearchProvider`](./host-api.md#registersearchprovider). It returns results of the same shape — `{ id, label, description?, iconId?, target?, args? }` — and gets a `signal` that aborts when the query is superseded.
+
+**Budgets.** The switcher waits 150 ms after the last keystroke, and a new query cancels the one before it. Each provider has one second to answer; one that misses it is left out of that query and a warning lands in your plugin's diagnostics (at most once a minute per provider). A scoped provider shows up to 20 results; a blended one adds up to 3, and the unscoped search shows at most 6 provider results in all, always below the built-in rows, which never wait for a provider. A blended search only asks declarative providers and runtime providers whose plugin is already running — it never starts your plugin. A scoped search may: the first query after the user picks your provider activates the plugin, inside the same one-second deadline.
+
+**Checks.** Every result is checked host-side before the switcher sees it: a target outside your plugin, args that aren't a small JSON object, or a missing id or label drop that row, and the dropped rows are counted in your diagnostics. The manifest gate refuses a declarative provider with no query (`search_provider_query_missing`) or no target (`search_provider_target_missing`), a query you don't declare (`search_provider_query_unknown`), a write query (`search_provider_query_not_read`), a query without exactly one string param (`search_provider_query_params`), a runtime provider naming a query (`search_provider_query_runtime`), a target naming both or neither of panel and command (`search_provider_target_conflict`), a command outside your namespace (`search_provider_command_not_own`), a panel you don't declare (`search_provider_panel_unknown`), a PTY-backed panel, which has no view to hand args to (`search_provider_panel_pty`), and two of your providers sharing a keyword (`search_provider_keyword_duplicate`). A plugin may declare at most 5 providers.
+
+**Keywords are first come, first served.** When two plugins claim the same keyword in a project they can both be seen in, the provider registered first keeps it and the other is refused there: it never appears in that project's switcher, its Settings row says which plugin holds the keyword, and a warning lands in the refused plugin's diagnostics. Two project plugins in different projects never collide.
+
+**Show in quick switcher.** Each provider has a switch in Project settings → Plugins, on your plugin's page. For an installed plugin the choice holds in every project; for a project plugin, only in that project. Hiding an installed plugin in a project hides its providers there too.
 
 ## Menu items — _Shipped_
 
@@ -612,7 +899,21 @@ Keybindings map a key combination to an action.
 | `description` | no | Human-readable description of what the binding does. |
 | `when` | no | Context expression gating when the binding is active. Evaluated live at each keydown against the context keys below; unknown identifiers evaluate falsy — which makes negated expressions permissive (a misspelled `!modalOpne` is always true), so double-check identifier spelling. Supports `&&`, `\|\|`, `!`, `==`, `!=`, and single-quoted string literals. |
 
-**`when` context keys:**
+**`when` context keys.** The project keys describe the project this window shows. Every renderer `when` sees them: keybindings, [context menus](#context-menus--shipped), and each chrome contribution that takes a `when`. They update live, so an entry appears or disappears as soon as a key it reads changes.
+
+| Key | Type | Meaning |
+| --- | --- | --- |
+| `isGitBacked` | boolean | The project is a git repository. `false` in a folder opened without git, in a scratch workspace, and when no workspace is open. |
+| `workspaceKind` | string | `"project"`, `"scratch"`, or `""` when no workspace is open. |
+| `activeSidebarView` | string | The sidebar view the project shows: `"worktrees"` for the built-in worktree list, or a [sidebar view](#views--shipped)'s id. It names the view showing whether or not the sidebar is visible, and falls back to `"worktrees"` while a chosen plugin view doesn't apply. |
+| `presentationForgeStats` | string | How this project presents the toolbar's forge stats pill: `"shown"`, `"demoted"` (in the toolbar's `…` menu) or `"hidden"`. Always `"hidden"` in a folder without a git repository. |
+| `presentationGitDetail` | string | How this project presents git detail on worktree cards: `"shown"` or `"demoted"` (labelled Quiet in settings). Quiet moves the branch, issue and PR detail and the sync line into the card's expanded details, with the headline's tooltip naming what it displaced, drops the resting last-activity chip, and gathers the card menu's git rows under its Git submenu; failing CI, a head that moved under an armed merge, drift and fetch failures stay on the card. Always `"hidden"` in a folder without a git repository. |
+| `presentationLauncherAgents` | string | How this project's launcher presents its agent group: `"shown"` or `"demoted"` (folded into the launcher's collapsed More row, where search still finds every agent). |
+| `presentationLauncherPanels` | string | How this project's launcher presents its built-in panel groups: `"shown"` or `"demoted"`, as for agents. |
+
+A `when` turns one entry on or off. It never gates the action behind it, which still runs from anywhere else that offers it.
+
+Keybindings also see the focus and UI keys:
 
 | Key                | Type    | Meaning                                                        |
 | ------------------ | ------- | -------------------------------------------------------------- |
@@ -626,9 +927,13 @@ Keybindings map a key combination to an action.
 | `sidebarVisible`   | boolean | The worktree sidebar is currently visible.                     |
 | `canopyHidden`     | boolean | The user hid Canopy; its panel cannot open.                    |
 
-A plugin adds keys of its own with [`host.setContext`](./host-api.md#setcontext). They sit under its manifest name — `setContext("needsYou", true)` from `digitalfrontier.beads` reads as `digitalfrontier.beads.needsYou` — so a binding can stay off until the plugin has something to act on. Manifest names with hyphens or leading digits (`acme.linear-planner`, `3m.tools`) parse as paths. Renderer `contextMenus` `when` clauses see these keys too.
+The `presentation*` keys come from the project's presentation profile, which the user sets in Project settings → General → Features, and → Launcher for the two launcher keys. A repository can suggest one by committing `.daintree/presentation.json` — `{ "features": { "forgeStats": "hidden", "gitDetail": "demoted" } }` — and the suggestion applies only once the user accepts it when the project opens. Daintree reads that file and never writes it, unknown features and levels are ignored, and no plugin API changes a level.
 
-Note: this context applies to keybinding `when` clauses, which resolve in the renderer. Native menu-item `when` clauses (the `menuItems` contribution) are evaluated once at menu build time against an empty context — only literal/negation expressions are useful there.
+The profile also arranges the launcher. Once it demotes a launcher group or features an entry, the project's own plugin groups lead the launcher; installed plugins keep their name order. `.daintree/presentation.json` can suggest a featured entry with `"featuredLaunchEntry": "publisher.name.entry-id"`, naming one of the project plugin's own [launch entries](#launch-entries--shipped) by its manifest name and entry id. The featured entry is preselected when the launcher opens, so Enter runs it; featuring never runs anything by itself, and an entry that is hidden, filtered out by its `when` or not loaded leaves the first row selected. The user's group order, set in Project settings → General → Launcher, wins over the profile's.
+
+A plugin adds keys of its own with [`host.setContext`](./host-api.md#setcontext). They sit under its manifest name — `setContext("needsYou", true)` from `digitalfrontier.beads` reads as `digitalfrontier.beads.needsYou` — so a binding can stay off until the plugin has something to act on. Manifest names with hyphens or leading digits (`acme.linear-planner`, `3m.tools`) parse as paths. Every renderer `when` sees these keys too, like the project keys.
+
+Note: none of these keys reach native menu-item `when` clauses (the `menuItems` contribution). Those resolve in the main process, once at menu build time, against an empty context — only literal/negation expressions are useful there.
 
 Bindings register when the plugin loads and unregister on unload. Conflicts with user overrides or other plugins' bindings are resolved by Daintree's existing keybinding service — plugin bindings are low-priority and yield to user overrides. See `registerBinding` in `src/services/KeybindingService.ts` for the registration API.
 
@@ -694,9 +999,9 @@ Declares the values your plugin needs from the user. Daintree stores them, rende
 When fields aren't enough — a sign-in flow, a list editor, a connection test — declare one view with `location: "settings"` (see [Views](#views--shipped)). The host mounts it in the plugin's settings home below the generated fields, inside a settings group it draws, so the section reads as more rows of the same page. Declaring it is also enough to give your panels a **Plugin settings…** entry, with no settings fields at all.
 
 - **Where it mounts.** An installed plugin's section mounts in both homes — `settingsContext: { scope: "user", projectId: null }` in the plugin manager, `{ scope: "project", projectId }` in Project settings — so render the rows for the scope you're given. A project plugin's section always mounts with `scope: "project"`.
-- **What it receives.** `pluginId`, a `panelId` of its own per home, `disposeSignal`, `panelRemovedSignal`, `styleRootAttributes` and `settingsContext`. There is no panel record behind it, so `initialArgs`, `persistState`, `stateVersion`, `worktreeId`, `requestReload` and `setHasUnsavedChanges` are absent.
+- **What it receives.** `pluginId`, a `panelId` of its own per home, `disposeSignal`, `panelRemovedSignal`, `styleRootAttributes` and `settingsContext`. There is no panel record behind it, so `worktreeId`, `requestReload` and `setTitle` are absent; `persistState`, `initialArgs` and `setHasUnsavedChanges` work through the durable view-state store (see [Views → State outside the grid](./views.md#state-outside-the-grid)).
 - **Containment.** The group is isolated and contained (`contain: layout paint`, overflow clipped), so a `position: fixed` descendant stays inside it; portal anything that has to float, with `styleRootAttributes` on the portal container.
-- **Lifecycle.** Loading it activates a loaded plugin that hasn't activated yet, like opening a panel; it never starts a stopped one. While the plugin is disabled or stopped, the section shows as one row saying it's available once the plugin runs. When the plugin stops, is muted or reloads, the section unmounts and its `disposeSignal` and `panelRemovedSignal` abort; after a reload it shows "Reloading…" until the new module is served, then mounts that, so an open settings page never runs the retired module. A render error shows the same diagnostics pane with **Try again** that a panel gets, and the rest of the page keeps working.
+- **Lifecycle.** Loading it activates a loaded plugin that hasn't activated yet, like opening a panel; it never starts a stopped one. While the plugin is disabled or stopped, the section shows as one row saying it's available once the plugin runs. An installed plugin's section is served only to projects that show the plugin; where it is hidden the section is one row saying so. When the plugin stops, is muted, reloads or is hidden, the section unmounts and its `disposeSignal` and `panelRemovedSignal` abort; after a reload an open settings page swaps onto the new module as soon as it is served, so it never runs the retired one. A render error shows the same diagnostics pane with **Try again** that a panel gets, and the rest of the page keeps working.
 
 [Views → A settings section](./views.md#a-settings-section) covers writing one.
 
@@ -737,27 +1042,31 @@ Adds entries to right-click menus on specific UI elements.
 | Field | Required | Notes |
 | --- | --- | --- |
 | `actionId` | yes | Fully-qualified action ID to dispatch. |
-| `location` | yes | `"worktree"`, `"terminal"` or `"file"`. |
+| `location` | yes | `"worktree"`, `"terminal"`, `"file"`, `"browser"` or `"project"`. |
 | `label` | yes | Menu entry label. |
 | `when` | no | Context expression gating whether the item appears, in the same syntax as a [keybinding `when`](#keybindings--shipped). See below. |
 
 **`when` context keys.** A context menu's `when` is evaluated in the renderer against keys describing what was right-clicked, not the keybinding keys:
 
-| Location   | Keys                                                            |
-| ---------- | --------------------------------------------------------------- |
-| `worktree` | `worktreeId` — the clicked worktree's id                        |
-| `terminal` | `panelId` — the clicked pane's id; `panelKind` — its panel kind |
-| `file`     | None                                                            |
+| Location | Keys |
+| --- | --- |
+| `worktree` | `worktreeId` — the clicked worktree's id |
+| `terminal` | `panelId` — the clicked pane's id; `panelKind` — its panel kind; `worktreeId` — the worktree the panel belongs to (unset for a panel with none) |
+| `browser` | `panelId` — the pane's id; `panelKind` — `browser` or `dev-preview` |
+| `file` | None |
+| `project` | `projectId` — the project the pill belongs to |
 
-An identifier that names no key evaluates false, so `"worktree.hasBranch"` hides the item everywhere while `"!worktree.hasBranch"` shows it everywhere; an expression that fails to parse hides the item. Every location also sees the keys plugins publish with [`host.setContext`](./host-api.md#setcontext), under each plugin's manifest name; a location's own key wins a clash. Because `file` supplies no keys of its own, a `when` on a `file` item can only test those plugin keys or a constant.
+An identifier that names no key evaluates false, so `"worktree.hasBranch"` hides the item everywhere while `"!worktree.hasBranch"` shows it everywhere; an expression that fails to parse hides the item. Every location also sees the [project keys](#keybindings--shipped) (`isGitBacked`, `workspaceKind`, `activeSidebarView`, `presentation*`) and the keys plugins publish with [`host.setContext`](./host-api.md#setcontext), under each plugin's manifest name; a location's own key wins a clash. Because `file` supplies no keys of its own, a `when` on a `file` item can only test those shared keys or a constant.
 
-**Dispatch arguments.** A `worktree` or `terminal` item is dispatched with no arguments, so its handler cannot tell which worktree or pane was clicked; use it for actions that act on the user's current context. A `file` item is dispatched with the clicked file, as described next.
+**Dispatch arguments.** Every location dispatches its action with the clicked subject, so your handler receives what was clicked rather than `undefined`: `worktree` with `{ worktreeId }`, `terminal` with `{ panelId, panelKind, worktreeId }` (`worktreeId` is omitted for a panel with no worktree), `browser` with `{ panelId, panelKind, url }`, `project` with `{ projectId }` for the project whose pill was right-clicked, and `file` with the clicked file, as described next. Only ids and the page URL are passed — never terminal output or a selection, which stay behind `terminal:read`.
 
-**Locations:** `worktree`, `terminal`, `file`. More may be added. The `file` location is the one file menu Daintree shares across every surface that shows a file — the Review Hub's changed-file rows, the worktree card's changed-files list, the file browser's tree, folder listing and change summary, the diff viewer's file sidebar, and the right-click menu on a file's own content in the file browser and in a file panel — so a single `file` contribution reaches all of them without any per-surface work. Its action is dispatched with `{ path, worktreePath, status }` for the clicked file (so your handler receives the file, not `undefined`) — `path` is always absolute, while `worktreePath` and `status` are each omitted when the row has no worktree root or no git status, so an unchanged file in the file browser arrives as `{ path }` alone.
+**Locations:** `worktree`, `terminal`, `file`, `browser`, `project`. More may be added. `terminal` is the right-click menu of a terminal-backed panel; `browser` is the "More page actions" menu of a browser or dev preview panel, and its `url` is the address the pane shows with any `user:password@` credentials removed. The `file` location is the one file menu Daintree shares across every surface that shows a file — the Review Hub's changed-file rows, the worktree card's changed-files list, the file browser's tree, folder listing and change summary, the diff viewer's file sidebar, and the right-click menu on a file's own content in the file browser and in a file panel — so a single `file` contribution reaches all of them without any per-surface work. Its action is dispatched with `{ path, isDirectory, relativePath, worktreePath, status }` for the clicked file or folder (so your handler receives the subject, not `undefined`) — `path` is always absolute, `relativePath` is relative to the worktree root with forward slashes, while `relativePath`, `worktreePath` and `status` are each omitted when the row has no worktree root or no git status, so an unchanged file in the file browser arrives as `{ path }` alone.
 
-**Where the items go.** On a file menu and on the worktree card's menu, contributed items sit in an **Extensions** submenu, one group per plugin (labelled when more than one plugin contributes), after Daintree's own entries and before the destructive ones — Discard changes and Delete file on a file, Delete worktree… on a worktree. The submenu appears only when at least one item passes its `when`, and a `worktree` item is not offered on a bare workspace root. On a terminal, contributed items are appended at the end of the right-click menu.
+**Targeting rows.** A `file` item can declare which rows it appears on, and the host evaluates it per row, ANDed with `when`: `kind` (`"file"` or `"folder"`), `extensions` (bare lower-case suffixes without the dot, matched case-insensitively against a file's last suffix; a dotfile or bare name has none; not allowed with `kind: "folder"`) and `paths` (globs relative to the worktree root using `**`, `*` and `?`, the same grammar as `fileEditors[].paths`). Omitted fields match everything, and the three fields are rejected on any other location.
 
-Context menus follow the same `actionId` dispatch pattern as menu items; only a `file`-location item receives the clicked subject as dispatch args. A `terminal`-location item is dispatched with no arguments and appears on every terminal. To put entries on your own panels, including a PTY-backed one, that know which panel was right-clicked, use the panel's `menu` or [runtime menu entries](#runtime-menu-entries) instead: those are dispatched with `{ panelId }`. Two built-in actions pair well here: `file.openDiff` opens the side-by-side diff for the dispatched `{ path, worktreePath, status }`, and `panel.openPluginPanel` spawns (or focuses) one of your plugin panels, passing `initialArgs` straight through to the view's `initialArgs` prop — so a context-menu item can open your panel scoped to the file the user clicked.
+**Where the items go.** On a file menu and on the worktree card's menu, contributed items sit in an **Extensions** submenu, one group per plugin (labelled when more than one plugin contributes), after Daintree's own entries and before the destructive ones — Discard changes and Delete file on a file, Delete worktree… on a worktree. The submenu appears only when at least one item passes its `when`, and a `worktree` item is not offered on a bare workspace root. On the toolbar project pill, `project` items sit in the same **Extensions** submenu, after Project settings and before Stop all agents and Close project. A project plugin's items appear only in its own project, and an installed plugin's only in projects where it is visible. On a terminal, contributed items are appended at the end of the right-click menu.
+
+Context menus follow the same `actionId` dispatch pattern as menu items. A `terminal`-location item appears in the right-click menu of terminal-backed panels, not on browser, dev preview or review panels; gate it with `when` (for example `panelKind == 'terminal'`). To put entries on your own panels, use the panel's `menu` or [runtime menu entries](#runtime-menu-entries) instead: those are dispatched with `{ panelId }`. Two built-in actions pair well here: `file.openDiff` opens the side-by-side diff for the dispatched `{ path, worktreePath, status }`, and `panel.openPluginPanel` spawns (or focuses) one of your plugin panels, passing `initialArgs` straight through to the view's `initialArgs` prop — so a context-menu item can open your panel scoped to the file the user clicked.
 
 ## MCP servers — _Shipped_
 
@@ -834,6 +1143,7 @@ Declares the tools the plugin serves to agents running in Daintree's terminals. 
 | `name` | yes | Label for the endpoint, 1–80 characters. Carried in the host's declared-endpoint metadata; agents never see it — the server's name comes from the plugin's `mcpName`. |
 | `description` | no | 1–400 characters. |
 | `mode` | yes | `"tools"` — host-managed tools, the only mode today. |
+| `groups` | no | Up to 8 tool groups the user allows one at a time, each `{ id, name, description?, access }` with `access` `"read"` or `"write"` and unique ids in the endpoint's id grammar. With groups declared every registered tool names one in its `group`, and no access level reaches the plugin's own tools. See [Agent extensions → Tool groups](./agent-extensions.md#tool-groups). |
 
 The entry is strict: an unknown field (a `url`, a `command`) is rejected rather than read as a transport the host will not honour. At most one endpoint per plugin, and the manifest is rejected unless `capabilities` includes `mcp:expose` (`mcp_expose_capability_required`).
 
@@ -852,7 +1162,7 @@ The cap was 8 tools before Daintree 0.39.0. An older host rejects a larger roste
 
 **Giving it access.** Declaring the endpoint exposes nothing, for an installed plugin or a project one. Each plugin has one agent access setting — **Off** (the default), **Read only** (the database tools and declared read queries) or **Read and write** (those, declared write queries and your own tools) — in **Project settings → Plugins → Agent tools**. It is stored in Daintree's own user store, keyed by the plugin _instance_ so an answer for an installed plugin never reaches a project plugin with the same manifest id, and never in the repository. An installed plugin can also be set once for every project, and a project's own setting overrides that. A project plugin's own repository can set a default in `.daintree/mcp.json`, which never reaches an installed plugin and which the user's answer overrides ([Agent extensions → Project defaults](./agent-extensions.md#project-defaults-daintreemcpjson)). Lowering the setting revokes every live credential it no longer allows. Once the plugin has access, each agent launched in that project afterwards receives a credential for its server — Claude Code, Codex, Gemini CLI, opencode, Copilot CLI, Amp, Qwen Code and Mistral Vibe, each in its own launch mechanism; an agent already running must be relaunched to get it ([Agent extensions → Reaching an agent](./agent-extensions.md#reaching-an-agent)). The Daintree MCP server must be enabled in Settings → MCP server, since the plugin's server is served on its listener.
 
-**Available under `scope: "project"`.** Unlike `mcpServers` and `skills`, this surface has a project axis: every credential is minted for one terminal launch in one project, the route re-checks that project's access setting on every request, and a project plugin's endpoint can only be granted to the project that loaded it. See [Trust model → Agent MCP endpoints](./trust-model.md#agent-mcp-endpoints-mcpexpose) for the credential and consent model.
+**Available under `scope: "project"`.** Unlike `mcpServers`, this surface has a project axis: every credential is minted for one terminal launch in one project, the route re-checks that project's access setting on every request, and a project plugin's endpoint can only be granted to the project that loaded it. See [Trust model → Agent MCP endpoints](./trust-model.md#agent-mcp-endpoints-mcpexpose) for the credential and consent model.
 
 ## Databases — _Shipped_
 
@@ -883,6 +1193,7 @@ Declares a SQLite database the plugin opens with [`host.db`](./host-api.md#db--h
 | `location` | no | `"project"` (default) or `"local"`. |
 | `path` | no | `"project"` only. Relative to the project root (no leading `/`, backslash, `..` segment or URL syntax), at most 512 characters, ending in `.db`, `.sqlite` or `.sqlite3`, never inside `.git`. Defaults to `.daintree/data/<manifestId>/<id>.db`. |
 | `journalMode` | no | `"delete"` (default) or `"wal"`. |
+| `schemaVersion` | no | A whole number, 0 or more: how many migrations this version of the plugin applies. |
 | `queries` | no | Named read or write statements the host serves to agents as tools of their own. See [Declared queries](#declared-queries) below. |
 
 **`"project"`** puts the file in the repository. That is the location for data agents edit: an agent in the project's terminal can open the same file with the `sqlite3` CLI, the file travels with a clone, and the committed data contract (your plugin's `AGENTS.md`) can name it by its project-relative path. It needs `scope: "project"` (`database_project_scope_only`) and the `fs:project-write` capability (`database_project_write_required`), because it writes into the repository. Whether the file itself is committed is the project's decision; gitignore it to keep the data out of history.
@@ -892,6 +1203,8 @@ Declares a SQLite database the plugin opens with [`host.db`](./host-api.md#db--h
 **Where the file lands.** The host resolves the declaration, never your code: `host.db.open` creates the file and its directory on first open, contained to the project root (or data directory) on the real path, so a symlinked directory cannot carry it outside, and it refuses a path that resolves inside `.git` or a database file that is itself a symlink. `host.db.resolve(id)` returns the location without opening it, for handing to an agent. See [Host API → `db`](./host-api.md#db--host-managed-sqlite).
 
 **`journalMode`.** The default, `"delete"`, keeps the database one self-contained file between writes, so git, a backup, or a sync folder never sees committed data stranded in a `-wal` sidecar. The host re-applies the declared mode on every open, so an agent that ran `PRAGMA journal_mode=WAL` cannot silently switch it. Choose `"wal"` only for a local, write-heavy database nothing else copies.
+
+**`schemaVersion`.** The schema this version leaves the file at: the length of the `migrations` array your code passes to `host.db.open`. A writable open that passes a different number fails `VALIDATION`, so the declaration cannot drift from the code. For a project's application, the host also compares it with an existing file before the owner loads, and keeps a payload off a file a newer copy already migrated ([Project-local plugins → Updating an application](./project-local.md#updating-an-application)). Raise it with every migration you ship.
 
 At most 16 databases per plugin; entries are strict, so a `url` or `driver` field is refused rather than read as a backend the host does not have.
 
@@ -992,11 +1305,154 @@ Markdown-defined instruction/knowledge snippets that extend Daintree's built-in 
 
 A skill file larger than 512 KiB is skipped with a warning, as is one that cannot be read; the rest of the plugin's skills still register. Of a leading YAML frontmatter block, only `description` is read, and it is shown in search results; the rest of the file after the block is the body.
 
-The markdown file content is returned to the agent when it calls `skills.load`, so it can be incorporated into the current task. See [Agent extensions → Skills](./agent-extensions.md#skills) for the full file format and invocation mechanics.
+The markdown file content is returned to the agent when it calls `skills.load`, so it can be incorporated into the current task. A plugin with an agent MCP server also serves its own skills there, beside its tools. An installed plugin's skills reach every project; a [project plugin](./project-local.md)'s reach only sessions bound to its own project. See [Agent extensions → Skills](./agent-extensions.md#skills) for the full file format and invocation mechanics.
+
+## Assistant knowledge — _Shipped_
+
+Markdown the Daintree Assistant is given about the plugin's agent tools: short `instructions`, `skills` in the Agent Skills layout, and `references` to read when needed. It reaches the Assistant only while the user has given it everything the plugin declares for agents in that project, framed as the plugin author's notes on those tools rather than as the user speaking. It requires no capability, but the plugin must declare `agentMcp` or `databases`. See [Agent extensions → Knowledge for the Assistant](./agent-extensions.md#knowledge-for-the-assistant) for the fields, limits and framing.
+
+## Prompt templates — _Shipped_
+
+Prompt templates a plugin offers in the composer's ❯ command picker, for the well-worn prompts of its domain. Choosing one asks for its arguments, if it has any, then puts the expanded text in the composer's draft for the user to edit and send. A template **never submits**, and it never appears in the `/` or `$` menus, which belong to the agent CLI's own commands. Each row names the plugin it comes from. Templates are declarative content and require no capability. An installed plugin's templates appear in every project; a [project plugin](./project-local.md)'s appear only in its own project.
+
+```json
+{
+  "contributes": {
+    "promptTemplates": [
+      {
+        "id": "reconcile",
+        "title": "Reconcile this month",
+        "description": "Match the month's ledger against the bank export.",
+        "body": "Reconcile {{month}} for the {{account}} account and list anything that doesn't match.",
+        "args": [
+          { "name": "month", "label": "Month", "required": true },
+          { "name": "account", "label": "Account" }
+        ]
+      }
+    ]
+  }
+}
+```
+
+**Fields:**
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `id` | yes | Unique within the plugin's `promptTemplates`. |
+| `title` | yes | The row's name in the picker. At most 80 characters. |
+| `description` | yes | The row's summary line. At most 300 characters. |
+| `body` | yes | The prompt. `{{name}}` is replaced by the argument of that name. At most 8192 characters. |
+| `args` | no | Up to 20 single-line text fields, each `{ name, label, required? }`. `name` is lowercase letters, digits and underscores, starting with a letter. A template with no `args` fills the draft as soon as it is chosen. |
+
+Every `{{name}}` in the body must name a declared argument; anything else is a manifest error. Values are inserted exactly as typed, once: a value that itself contains `{{other}}` is not expanded again. An optional argument left blank becomes empty text. Choosing a template replaces the current draft, and the replacement can be undone.
+
+## Terminal links — _Shipped_
+
+Terminal text a plugin makes clickable: the identifiers and URLs of its own world that agents print, such as `updated INV-0042` or a link to a record in a hosted service. A match is underlined on hover, its tooltip says "Open with" and the plugin's name, and clicking it dispatches one of the plugin's own commands. Matchers are declarative and require no capability. An installed plugin's matchers apply in every project's terminals; a [project plugin](./project-local.md)'s apply only in its own project's.
+
+```json
+{
+  "contributes": {
+    "commands": [
+      { "id": "openInvoice", "title": "Open invoice" },
+      { "id": "openRecord", "title": "Open record" }
+    ],
+    "terminalLinks": [
+      {
+        "id": "invoice",
+        "pattern": "\\bINV-(\\d{4,8})\\b",
+        "actionId": "acme.invoices.openInvoice"
+      },
+      {
+        "id": "record",
+        "url": { "host": "records.example.com", "pathPrefix": "/records/" },
+        "actionId": "acme.invoices.openRecord"
+      }
+    ]
+  }
+}
+```
+
+**Fields:**
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `id` | yes | Unique within the plugin's `terminalLinks`. |
+| `actionId` | yes | One of the plugin's own commands, written `"<plugin name>.<id>"`. When the plugin declares `commands`, it must name one of them. Built-in and other plugins' actions are refused. |
+| `pattern` | one of `pattern` or `url` | A JavaScript regular expression, matched within one terminal row. See the rules below. |
+| `ignoreCase` | no | Match `pattern` without regard to case. Only with `pattern`. |
+| `url` | one of `pattern` or `url` | `{ scheme?, host, pathPrefix? }`: the URLs the plugin claims. |
+| `url.scheme` | no | `"https"` (the default) or `"http"`. |
+| `url.host` | yes | One exact, lowercase public domain with at least two labels, such as `records.example.com`. No port, path, credentials, wildcard or IP address, and nothing loopback, private or local-only (`localhost`, `*.local`, `*.internal`, `*.test`, `*.lan` and the like): those URLs belong to the browser and dev preview panels. |
+| `url.pathPrefix` | no | The URL's path must start with it, as plain text. End it with `/` to match a folder. No query, fragment or `.`/`..` segments. |
+
+**What the command receives.** A pattern match dispatches `actionId` with `TerminalLinkPatternArgs`: `{ text, groups, panelId, panelKind, worktreeId? }`, where `groups` holds the capture groups by position and `null` for an optional group that matched nothing. A claimed URL dispatches it with `TerminalLinkUrlArgs`: `{ url, panelId, panelKind, worktreeId? }`, instead of opening the browser. `worktreeId` is absent for a terminal outside any worktree. If the command declares an `inputSchema` with `additionalProperties: false`, list every one of these fields in it, or the call is refused. Both types are exported from `@daintreehq/plugin-sdk`.
+
+**Pattern rules.** Patterns run in a worker beside the terminal, never on its own thread, and the manifest gate also refuses any whose backtracking could run away. A pattern compiles with the `u` flag (you can't add flags), is at most 256 characters, and must not match empty text. It may not use backreferences, lookarounds or named groups, and has at most 16 capture groups. A group repeated more than once may not itself repeat or have alternatives: write `[a-z]+` rather than `(a|b|...)+`, and `(?:-\d{1,4})?` rather than `(?:-\d+)*`. The product of every quantifier's maximum, counting an unbounded `*`, `+` or `{n,}` as 512, and of every alternation's branch count, may not exceed 1,000,000. So a pattern can have two unbounded quantifiers at most; bound the rest, as in `\w{1,64}`. A pattern that still runs slowly on a real row, or doesn't finish within a second, is switched off for the session.
+
+**How matching works.**
+
+- Matching runs in the host, only for the row under the pointer, and never on terminal output. The first 512 characters of the row are read. A match must fit on one row, is at most 256 characters long, and each row offers at most 32 plugin links.
+- Built-in links win any overlap: a file path, web URL, figure reference or suggested command is never taken over by a pattern. Between plugins, the first plugin by id keeps an overlapping match.
+- URL matchers don't find URLs themselves. They claim the web links Daintree already detects, including OSC 8 hyperlinks. When two plugins claim a URL, the longer `pathPrefix` wins, then the first plugin by id. The URL is parsed before it is compared, so a credential prefix, a non-default port or a lookalike host never matches. The host check reads the URL alone and never resolves the name, so a public-looking domain that your DNS points at a private address can still be claimed.
+- Only the matched text leaves the terminal, and only when the user clicks. A matcher grants no `terminal:read` access.
+- A URL a plugin claims keeps "Open in external browser" in the terminal's right-click menu, beside "Open with" and the plugin's name.
+
+Each plugin's matchers can be switched off from its page in the Plugin Manager, or from Project settings → Plugins for a project plugin. The choice is stored on this machine and applies in every terminal at once.
+
+## Context providers — _Shipped_
+
+`@` context the agent composer offers from the plugin's own data: a record, a page, a ticket, a row. A provider claims a short prefix such as `rec`; typing `@rec:` in an agent's input bar lists the provider's matches for what follows, and picking one leaves an `@rec:{id}` chip in the draft under the plugin's name. Nothing is read then. When the user sends, the host asks the provider for the item's current content and puts it in the same literal `daintree-context` block a hand-off drafts, so the agent gets the item as it is at that moment and nothing inside it is read as an `@` token. A provider never submits. Context providers require no capability: the host asks only for what the user picked. An installed plugin's providers are offered in every project; a [project plugin](./project-local.md)'s only in its own project.
+
+```json
+{
+  "contributes": {
+    "contextProviders": [{ "id": "records", "prefix": "rec", "label": "Records" }]
+  }
+}
+```
+
+```ts
+export async function activate(host: PluginHostApi) {
+  await host.registerContextProvider(
+    { id: "records" },
+    {
+      async search(query, { signal }) {
+        const rows = await findRecords(query, { signal });
+        return rows.map((r) => ({ id: String(r.id), label: r.title, description: r.status }));
+      },
+      async resolve(id, { signal }) {
+        const record = await loadRecord(id, { signal });
+        return record ? { title: record.title, text: renderRecord(record) } : null;
+      },
+    }
+  );
+}
+```
+
+**Fields:**
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `id` | yes | Unique within the plugin's `contextProviders`; `host.registerContextProvider` binds to it. |
+| `prefix` | yes | One to sixteen lowercase letters. Never `diff`, `terminal` or `selection`, which the composer reserves, and never two of the plugin's own providers' prefix. |
+| `label` | yes | What the provider offers ("Records"). Shown on its chips' card and in Project settings. At most 60 characters. |
+
+**The impl.** `search(query, { signal })` gets only what the user typed after `@{prefix}:` — never the rest of the draft — and returns at most 50 `{ id, label, description? }` rows, best first. `resolve(id, { signal })` returns `{ text, title? }`, or `null` when the item is gone. An item `id` is one draft token: up to 128 letters, digits and `_ - . : / # ~ + =`, not ending in `.` or `:`. Rows with any other id are dropped.
+
+**Deadlines.** A search has 3 seconds and a resolve 5, both counted from the host's request, so a plugin's first activation is inside them. When the host stops waiting it aborts `signal`. All of a draft's chips resolve in parallel, at most 20 distinct items per message. A chip whose provider fails, times out, returns `null` or returns more than 32,768 characters sends as a visible placeholder in its place (`[Couldn't attach @rec:142 from Kanban: timed out]`) rather than holding the send. Content is never cut short to fit.
+
+**Prefix collisions.** The first plugin to claim a prefix holds it wherever both are visible; a later one is refused that prefix, keeps its other contributions, and is listed under Project settings → Plugins → Context providers with the plugin that holds it. Switching the holder's providers off there hands the prefix to the next plugin in line. Project plugins in different projects never collide.
+
+**Switching off.** Each plugin's providers have one switch in Project settings → Plugins. An installed plugin's switch applies to every project; a project plugin's to its own project. A chip whose provider is switched off sends as a placeholder.
+
+**Remote terminals.** A terminal on another host keeps its context rules: chips aren't drawn there and `@{prefix}:{id}` is sent as typed, like `@diff`.
+
+**Drag.** A view can drag an item by reference instead of a snapshot: `ContextDragSource` with `reference={{ prefix, id, label }}`, or `setAgentContextDragData(dataTransfer, { v: 2, reference })` by hand. Dropping it on an agent leaves the same chip the `@` menu would. A drop is refused when no provider in the project holds the prefix.
 
 ## Recipes — _Shipped_
 
-Named multi-terminal launch layouts a plugin ships. A contributed recipe is registered under the qualified id `{pluginId}.{id}`, merged into the recipe list as a plugin-owned tier, and available in **every** project — a plugin that ships an agent can also ship a ready-made layout that runs it, with no per-project setup.
+Named multi-terminal launch layouts a plugin ships. A contributed recipe is registered under the qualified id `{pluginId}.{id}`, merged into the recipe list as a plugin-owned tier, and available in **every** project — a plugin that ships an agent can also ship a ready-made layout that runs it, with no per-project setup. A [project plugin](./project-local.md)'s recipes are the exception: they appear only in the project that owns the plugin, and come and go with its switch and its folder's trust.
 
 ```json
 {
@@ -1029,16 +1485,21 @@ Named multi-terminal launch layouts a plugin ships. A contributed recipe is regi
 | `terminals` | yes | 1–10 terminal definitions. See the table below. |
 | `showInEmptyState` | no | Default for the empty-state pin. A user pin/unpin overrides it. |
 | `autoAssign` | no | `always` \| `never` \| `prompt` — default issue auto-assign behaviour during quick worktree creation. A user choice overrides it. |
+| `variables` | no | Names the prompts may use as `{{plugin.<name>}}`, filled by [`host.runRecipe`](./host-api.md#runrecipe--offer-to-run-one-of-your-recipes). Lowercase letters, digits and underscores, starting with a letter; at most 20. A prompt using an undeclared one is a manifest error (`recipe_variable_undeclared`). |
+| `requiresAgentTools` | no | The recipe's agents need this plugin's [agent tools](./agent-extensions.md). While they're off in the project, or Daintree's MCP server is off, a launch is refused with a message saying so, instead of starting the agents without them. It never turns them on. Needs `contributes.agentMcp` or `contributes.databases` and at least one agent step. |
 
 **Terminal fields:**
 
 | Field | Required | Notes |
 | --- | --- | --- |
-| `type` | yes | `terminal`, `dev-preview`, a built-in agent id, or an agent id **this same plugin** contributes. Any other value drops that terminal at load. At most 64 characters. |
+| `type` | yes | `terminal`, `dev-preview`, `plugin-panel`, a built-in agent id, or an agent id **this same plugin** contributes. Any other value drops that terminal at load. At most 64 characters. |
 | `title` | no | Custom pane title. At most 200 characters. |
 | `command` | no | Shell command, for `type: "terminal"`. At most 4096 characters. |
 | `devCommand` | no | Dev-server command, for `type: "dev-preview"`. At most 4096 characters. |
-| `initialPrompt` | no | Sent to an agent terminal after boot. Supports the same `{{issue_number}}` / `{{branch_name}}` variables user recipes do. At most 8192 characters. |
+| `initialPrompt` | no | Sent to an agent terminal after boot. Supports the same `{{issue_number}}` / `{{branch_name}}` variables user recipes do, plus the recipe's own `{{plugin.<name>}}`. At most 8192 characters. |
+| `systemPrompt` | no | Standing instruction appended to an agent step's system prompt, on agents whose CLI supports one; a launch on one that doesn't fails that step. Takes the same variables as `initialPrompt`. At most 2000 characters. |
+| `panelId` | for `plugin-panel` | One of **this plugin's own** `contributes.panels` ids (`recipe_panel_unknown` otherwise). |
+| `panelArgs` | no | For `plugin-panel`: handed to the view as `initialArgs`, or as `openRequest` to a panel the step reuses. At most 8 KB of JSON; refused for a PTY-backed panel (`recipe_panel_args_pty`). |
 | `args` | no | Extra CLI flags for an agent terminal, as one string. At most 4096 characters. |
 | `env` | no | Environment variables for the spawned terminal. |
 | `exitBehavior` | no | `keep` \| `trash` \| `remove`. |
@@ -1047,17 +1508,182 @@ Named multi-terminal launch layouts a plugin ships. A contributed recipe is regi
 
 **Content is immutable.** The plugin owns what its recipes run; edits and deletes are rejected, and a plugin update replaces them wholesale. To customise one, use **Save to repo** — that duplicates it into a user-owned team recipe you can edit freely, leaving the plugin's original in place.
 
-**Your own metadata survives.** Frecency (`lastUsedAt` / usage history), the empty-state pin, and `autoAssign` are yours, not the plugin's, so they live in a sidecar (`plugin-recipe-metadata.json` in the global config dir) keyed by qualified id. They persist across disable, reload, and plugin updates, and are purged only when you explicitly uninstall the plugin.
+**Your own metadata survives.** Frecency (`lastUsedAt` / usage history), the empty-state pin, and `autoAssign` are yours, not the plugin's, so they live in a sidecar (`plugin-recipe-metadata.json` in the global config dir) keyed by qualified id. They persist across disable, reload, and plugin updates, and are purged only when you explicitly uninstall the plugin. A project plugin's metadata is kept even while its project is closed, since nothing outside the repository can tell a closed project from a removed one.
 
 **Referencing your own agent.** A recipe terminal may name an agent id from the same plugin's `contributes.agents`. Ownership is resolved against the live registry, not the manifest: if another plugin already claimed that agent id, the terminal is dropped rather than silently launching someone else's agent.
 
+**Opening your panel beside an agent.** A `plugin-panel` step opens one of your panels the way `panel.openPluginPanel` does: reusing an open one, in the recipe's worktree, or in the dock for a `scope: "project"` panel. Fields that belong to another kind of step are refused on it rather than ignored (`recipe_panel_step_fields`). Panel steps, plugin variables, system prompts and `requiresAgentTools` only work in your own recipe, so **Save to repo** and **Duplicate** refuse a recipe that uses them rather than copying a recipe that quietly does less.
+
+```json
+{
+  "id": "review-record",
+  "name": "Review record",
+  "variables": ["record_id", "record_title"],
+  "requiresAgentTools": true,
+  "terminals": [
+    { "type": "plugin-panel", "panelId": "records", "panelArgs": { "mode": "review" } },
+    {
+      "type": "claude",
+      "initialPrompt": "Review {{plugin.record_title}} and note anything that looks wrong.",
+      "systemPrompt": "You are reviewing ledger record {{plugin.record_id}}. Use the ledger tools to read it."
+    }
+  ]
+}
+```
+
+**Running your own recipe.** Your plugin can offer to run one of its own recipes with values for its variables through [`host.runRecipe`](./host-api.md#runrecipe--offer-to-run-one-of-your-recipes) — "Open in agent" from your own panel, for example. Nothing starts until the user confirms a dialog showing every step resolved, final prompt and system prompt included. A recipe whose agent steps set `args` or `env` can't be run this way, since a plugin never chooses how an agent runs. A launch the user starts from the recipe list leaves a variable with no value empty, as a host variable with no value is.
+
 **Agent-initiated runs are confirmation-gated.** Any agent or MCP dispatch that carries a `recipeId` — through `recipe.run` or a composite like `worktree.createWithRecipe` — pauses for a single human approval showing the resolved recipe, its origin, and the commands each terminal will run (env keys are listed, values are not). This applies to every recipe tier, not just plugin-contributed ones. An external MCP session bound to one workspace has no one watching that view to answer the dialog, so there the dispatch is refused outright rather than paused (#11789).
 
-## Tours — _Shipped (installed plugins)_
+## Element Picker providers — _Shipped_
+
+`contributes.elementPickerProviders` teaches the dev preview's Element Picker about a framework Daintree doesn't ship an extractor for. A provider declares what to look for on a page and a packaged script that reads it; the host loads the script only when the picker is on and the declared markers match the page.
+
+```json
+{
+  "name": "acme.lit-picker",
+  "capabilities": ["preview:inspect"],
+  "contributes": {
+    "elementPickerProviders": [
+      {
+        "id": "lit",
+        "name": "Lit",
+        "detection": [
+          { "kind": "global", "name": "litElementVersions", "match": "exact" },
+          { "kind": "tag", "name": "acme-", "match": "prefix" }
+        ],
+        "guestEntry": "dist/picker/lit.js"
+      }
+    ]
+  }
+}
+```
+
+- **Detection is data.** Each rule names a `global`, an `expando` key on a node, an `attribute` or a `tag`, compared `exact` or by `prefix`. The host compares names only: it never reads a global's value, never calls into the page and never runs anything from your plugin to decide. Up to 16 rules per provider; any one matching is a detection.
+- **The provider id is `{plugin name}.{id}`** (`acme.lit-picker.lit` above). It is what shows up in an observation's `framework` field, and the reserved core names (`react`, `vue`, `svelte`, `angular`, `astro`, `preact`, `solid`) can't be used as an `id`.
+- **`guestEntry` is a packaged, plugin-relative path** to one standalone browser script, at most 256 KiB. The host reads it from your installed plugin directory; a renderer or a page can't name a path or supply a body. It must stay inside the plugin after symlinks are resolved, and packaging fails when the file is missing, excluded by `.dntrignore` or reached through a link that leaves the plugin.
+- **It needs `preview:inspect`**, which the install-time list discloses, and for a project plugin the project must be trusted. Disabling, uninstalling or reloading the plugin removes the extractor from any page it is installed in, calling its `dispose`.
+- **It never starts your plugin's worker** and never loads a source parser. Detection and extraction use only the packaged script. A missing, oversized or throwing script leaves DOM picking exactly as it was and shows a bounded status line.
+- **`resolverEntry`** (needs `fs:project-read`) is an optional ES module that turns your extractor's source candidates into checked file and line results. See [Writing a source resolver](#writing-a-source-resolver). Without one, your candidates are reported as `unsupported` and no process starts for them.
+
+### Writing the guest entry
+
+The entry runs in the page's own world, so it can read what the page's framework exposes and nothing else: no Node, no host API, no plugin worker. Import the types and the `define` helper from `@daintreehq/plugin-sdk/element-picker` and export a factory as the default:
+
+```ts
+import { defineElementPickerExtractor } from "@daintreehq/plugin-sdk/element-picker";
+
+export default defineElementPickerExtractor((providerId) => ({
+  extract(element, phase, refs) {
+    if (!element.localName.includes("-")) return null;
+    return {
+      frameworkEvidence: [
+        {
+          kind: "generic",
+          framework: providerId,
+          fields: [{ name: "tag", value: element.localName }],
+        },
+      ],
+    };
+  },
+}));
+```
+
+`extract` is synchronous and bounded. On `hover` it runs inside a pointer move, so read only what labels a highlight and save anything costly for `selection`. Return `null` when you looked and found nothing of your framework; throw when you can't look. Optional `pick`, `locate`, `start` and `dispose` follow the same rules. Don't use `eval`, `new Function` or string timers: the page's CSP applies to them and the install then fails. Replies are held to the picker's message ceiling and every observation field is validated by the host, so anything over a limit is dropped.
+
+Build it as its own bundle with the guest target of `@daintreehq/plugin-vite`. The target produces one self-contained IIFE, with no host import map and no externals, and fails the build on a leftover import, a split chunk or an emitted asset:
+
+```ts
+// vite.config.guest.ts
+import { daintreePlugin } from "@daintreehq/plugin-vite";
+import { defineConfig } from "vite";
+
+export default defineConfig({
+  plugins: [daintreePlugin({ target: "guest" })],
+  build: {
+    outDir: "dist/picker",
+    emptyOutDir: false,
+    lib: { entry: "src/lit.ts", fileName: () => "lit.js" },
+  },
+});
+```
+
+### Writing a source resolver
+
+A resolver runs in a process of its own, separate from your plugin's worker, the core resolvers and every other plugin. The host starts it on the first selection that has one of your candidates in it, not on detection or activation, shares it across every preview and worktree, and stops it after 30 seconds with nothing to do. At most four plugin resolver processes run at once; when another is needed, the longest-idle one is stopped first. A resolver that throws, crashes or hangs only costs its own candidates, which are reported as `unsupported`; core results and other plugins' are unaffected. Disabling, uninstalling or reloading the plugin stops its process.
+
+Your resolver is sent only your own provider's candidates. Read through the `access` object: the host answers it under the workspace's containment, the preview's origin, and the selection's file, byte and time budget, and each file comes back with a `revision`. A result can cite only a revision `access` gave you in that request, so an answer that names a file outside the workspace, a revision it was never served, or an element or candidate it wasn't sent is discarded whole. The process is a separate Node runtime, not a sandbox: it isolates crashes and memory, and it does not stop plugin code from opening files itself, but nothing read that way can be cited. Echo the request's `requestId` and `documentEpoch`, and stop when `signal` aborts.
+
+This one checks that the tag a candidate's stamp points at opens at that position in the file:
+
+```ts
+import {
+  defineElementPickerResolver,
+  type ResolutionResult,
+  type UnavailableReason,
+} from "@daintreehq/plugin-sdk/element-picker";
+
+export default defineElementPickerResolver(() => ({
+  async resolve(request, access, signal) {
+    const decoder = new TextDecoder();
+    return {
+      requestId: request.requestId,
+      documentEpoch: request.documentEpoch,
+      outcomes: await Promise.all(
+        request.observations.map(async (observation) => ({
+          elementId: observation.elementId,
+          results: await Promise.all(
+            observation.sourceCandidates.map(async (candidate): Promise<ResolutionResult> => {
+              const unavailable = (reason: UnavailableReason): ResolutionResult => ({
+                state: "unavailable",
+                candidateId: candidate.candidateId,
+                claim: candidate.kind,
+                reason,
+              });
+              if (candidate.kind !== "template-location" || !candidate.location) {
+                return unavailable("unsupported");
+              }
+              const { location } = candidate;
+              const file = await access.locateFile(candidate.file, signal);
+              if (!file.ok) return unavailable(file.reason);
+              const read = await access.readSource(file.value, signal);
+              if (!read.ok) return unavailable(read.reason);
+              // Positions keep the convention they were read in; honour both bases.
+              const text = decoder.decode(read.value.bytes).split(/\r?\n/)[
+                location.line - location.lineBase
+              ];
+              const tag = observation.tagName.toLowerCase();
+              const at = location.column - location.columnBase;
+              if (text === undefined || !new RegExp(`^<${tag}(?:[\\s/>]|$)`).test(text.slice(at))) {
+                // A mismatch names what was read, so it reads differently from a missing file.
+                return {
+                  ...unavailable("mismatch"),
+                  read: { file: read.value.file, fileRevision: read.value.revision },
+                } as ResolutionResult;
+              }
+              return {
+                state: "verified",
+                candidateId: candidate.candidateId,
+                claim: candidate.kind,
+                target: { file: read.value.file, location },
+                fileRevision: read.value.revision,
+              };
+            })
+          ),
+        }))
+      ),
+    };
+  },
+}));
+```
+
+Build it as a single self-contained Node ES module, for example `dist/picker/resolver.mjs` (the `.mjs` extension keeps it ESM in a CommonJS package), with any parser it needs bundled in. The entry must stay inside the plugin after symlinks are resolved, and is capped at 16 MiB.
+
+## Tours — _Shipped_
 
 Welcome tours that play in the same dialog as the Daintree tour. An enabled plugin's tours register when it loads and are withdrawn when it is disabled, uninstalled or hidden in the project; a tour that is open at that moment closes, keeping the viewer's progress. A reload closes it too, and reopening plays the new version.
 
-A tour without `panelKind` is a **plugin tour**, offered from Help and the command palette as "<plugin display name>: <title>" (for example "SvelteKit Site Builder: Welcome Tour"). A tour with `panelKind` is a **panel tour**, opened from that panel's three-dots menu as "<Panel name> Welcome Tour"; it keeps to a couple of chapters but is held to the same standard as any other tour. The panel's Welcome Tour item appears once its tour is registered and disappears when it is withdrawn, so the item never appears with nothing to play.
+A tour without `panelKind` is a **plugin tour**, offered from Help and the command palette as "<plugin display name>: <title>" (for example "Acme Site Builder: Welcome Tour"). A tour with `panelKind` is a **panel tour**, opened from that panel's three-dots menu as "<Panel name> Welcome Tour"; it keeps to a couple of chapters but is held to the same standard as any other tour. The panel's Welcome Tour item appears once its tour is registered and disappears when it is withdrawn, so the item never appears with nothing to play.
 
 ```json
 {
@@ -1113,7 +1739,43 @@ A tour without `panelKind` is a **plugin tour**, offered from Help and the comma
 
 **Shipping one.** [Tours](./tours.md) is the full guide: the file layout, a minimal tour to copy, writing narration with `[[cue]]` markers, building scenes with `@daintreehq/tour/kit` and the mock Daintree window, the anchor-naming contract, voicing with `daintree-plugin tour voice` or your own recordings with `tour align`, previewing with `tour preview`, and the house style every tour is held to. In short: you write the narration and a scene module that default-exports `{ scenes, chapterTitles?, mockKit? }`, and the CLI writes `chapters` for you. The bundled `daintree-tour` Claude Code skill (`npx daintree-plugin skill add`) walks through the whole path.
 
-A malformed tour is reported with the offending path, like any other malformed contribution: `daintree-plugin validate` and the installer refuse it, and at load Daintree logs the issues and drops only that tour, so the rest of the plugin still loads. Exceeding the cap of 10 tours is still a whole-manifest error. Audio that is missing, refused or blocked leaves the chapter playing silently with its captions. Tours are refused under `scope: "project"`.
+A malformed tour is reported with the offending path, like any other malformed contribution: `daintree-plugin validate` and the installer refuse it, and at load Daintree logs the issues and drops only that tour, so the rest of the plugin still loads. Exceeding the cap of 10 tours is still a whole-manifest error. Audio that is missing, refused or blocked leaves the chapter playing silently with its captions. A project plugin's tours are offered only in its own project, and their progress is kept separately from the same plugin's tours in any other project.
+
+## Project templates — _Shipped_
+
+Starting files for a new project, offered in **Create project folder** under **Template**. "Empty folder" stays first and is the default. Choosing a template lists every file it will write, with its size, before anything is written; instruction files (`AGENTS.md`, `CLAUDE.md`, `.claude/` content and the like) and files belonging to a project plugin are marked. Creating copies exactly those files into the new, empty folder. Nothing in the plugin runs, no install or build command runs, and the plugin worker isn't started. A template that needs one ships a recipe in `.daintree/recipes/` that the user runs. When the user then chooses git init, the files land in the initial commit, except any the template's own `.gitignore` ignores.
+
+```json
+{
+  "contributes": {
+    "projectTemplates": [
+      {
+        "id": "static-site",
+        "title": "Static site",
+        "description": "A Vite site with a dev-server recipe and the site-tools project plugin.",
+        "iconId": "globe"
+      }
+    ]
+  }
+}
+```
+
+The files are the plugin folder's `project-templates/<id>/`, written as they are: a template ships `src/main.ts`, `package.json`, `.gitignore` and `.daintree/` like any project does. Both packers keep that folder intact, TypeScript sources, dev files and dotfiles included, and `daintree-plugin package` ignores `.gitignore` inside it while still applying `.dntrignore`. `node_modules`, `.git` and `.DS_Store` are always left out. `daintree-plugin package` refuses a symlink in a template, including a symlinked template folder, and a declared template with no files.
+
+**Fields:**
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `id` | yes | Names the payload folder, `project-templates/<id>/`. Lowercase letters, digits and single hyphens, at most 64 characters, unique within `contributes.projectTemplates`. |
+| `title` | yes | The choice in the Template picker and the install confirmation. At most 80 characters. |
+| `description` | yes | Shown under the picker once the template is chosen. At most 300 characters. |
+| `iconId` | no | One of the shared plugin icon IDs in `shared/config/pluginIconIds.ts`, drawn beside the title in the picker. An unrecognized or custom-SVG ID falls back to the default plugin glyph. |
+
+A template is refused, and can't be chosen, if any file in it is something Daintree never writes into a new project: repository metadata (`.git`, `.gitmodules`), installed dependencies (`node_modules`), or agent configuration and hooks: `.claude/settings*` and `.claude/hooks/`, `.mcp.json` at any depth, `.vscode/mcp.json`, `.github/hooks/` and `.github/copilot/settings*`, `.codex/`, `.gemini/`, `.opencode/` and `opencode.json`, the Aider config files, and the other agents' equivalents. `.cursor/` and `.kiro/` are refused except for their instruction folders, `.cursor/rules/` and `.kiro/steering/`. A Markdown file in a dot-folder (a subagent, skill, command or rule) is refused if its front matter declares `hooks`, MCP servers, `allowed-tools` or permissions, or isn't readable YAML. Names are compared the way a case-insensitive disk would see them, so a lookalike spelling doesn't get past this. A template is also refused for a symlink or special file, a name Windows or macOS can't store (reserved names, `:` and other reserved characters, a trailing dot or space, invisible or direction-changing characters), two names that are one file on a case-insensitive disk, more than 1,000 files, more than 2,000 files and folders together, a file over 5 MB, more than 20 MB in all, or folders nested more than 16 deep. The dialog says which file and why. A file is never written with its executable bit.
+
+The list the user approves is the list that is written: creating refuses a template whose files changed after they were listed, and a failed copy removes what it wrote. A project plugin inside the template (`.daintree/plugins/<dir>/`) goes through the usual [trust prompt](./project-local.md) when the project first opens; creating from a template never trusts anything. The archive install confirmation names each template and any project plugin inside it.
+
+Installed and builtin plugins only; at most 10 per plugin.
 
 ## Surfaces — _Shipped (project scope only)_
 
@@ -1144,22 +1806,24 @@ Available to `"scope": "project"` plugins alone. An installed plugin is bound to
 | Slot | Replaces |
 | --- | --- |
 | `emptyCanvas` | What the content grid draws when the project has no panels open — the region the stock launcher lives in |
+| `projectHome` | Nothing: it adds a Home the main area shows alone or beside the grid, behind a host-drawn Home/Split/Grid switch, remembered per project |
+| `worktreeCreate` | The stock New worktree dialog, when it opens through `worktree.createDialog.open`; the host draws a Standard dialog… link beside your view |
 
-`emptyCanvas` is the only slot the schema accepts today.
+Fleet scope and a maximized panel still draw over Home, and focusing, spawning, moving or restoring a grid panel returns to the grid. On Home the slot's own strip sits below the view, and its "No home" choice removes the Home entry. Home is a route, not a URL.
 
 Rules:
 
 - **Slot-replacing, never removing.** Surrounding chrome is untouched: the project switcher, the sidebar and the worktree dashboard stay where they are. The host draws a thin strip of its own above the region, outside the view's box, carrying a switch between the panel name and the stock launcher and, while the surface shows, an icon button for the launcher's search, so a broken or half-finished surface cannot strand the user. Nothing overlaps the view, so it needs no reserved space.
 - **The user decides whether it stays.** The first time a claimed surface would show in a project, a notice names the plugin and offers to keep it or use the launcher. The answer, whether given there or with the strip's switch, is remembered per project in Daintree's own settings, never in the repository, and is shown with a reset under the project's plugin settings. A slot that passes to a different plugin asks again.
 - **`viewId` must name a declared `contributes.views` entry**, cross-checked at validation like any other dangling reference (`surface_view_ref_unknown`). It must not name a panel with `hasPty: true` (`surface_view_ref_pty`) — a PTY panel is rendered by the terminal host and never loads the view module, so the claim would hold the slot and draw nothing — nor a `location: "settings"` view (`surface_view_ref_settings`), which renders only in the plugin's settings.
-- **At most one plugin per slot per project.** First claim wins; a second is refused and logged with both plugin names, so the author can tell which manifest to change. Never a silent last-wins. The refused plugin still loads and its other contributions work, and its claim is remembered — it inherits the slot if the incumbent later unloads.
+- **At most one plugin per slot per project.** The lower manifest id wins, independent of load order; the other claimant is refused and named alongside the winner in the log, Project settings → Plugins, the Plugin Manager and `daintree-plugin doctor`, so the author can tell which manifest to change. Never a silent last-wins. The refused plugin still loads and its other contributions work, and its claim is remembered — it inherits the slot if the winner later unloads.
 - The surface view receives the standard `PanelViewProps` (`panelId`, `pluginId`, `disposeSignal`) and sits inside the standard plugin error boundary, so a crash falls back with a working "Try again" rather than a blank region.
 
-`projectHome` (a persistent project-owned entry in the primary navigation) and `defaultLayout` (the arrangement opened on a cold first open) appear in this feature's design notes and are **not implemented** — the schema rejects them. There is no per-project routing a persistent home surface could live at yet, and a recipe is launched against a worktree rather than against a project cold open.
+`defaultLayout` names a `contributes.layouts[].id` of the same plugin (`surface_default_layout_unknown` otherwise) as the arrangement the project starts in. On the project's first open on this machine (no saved state, not safe mode, and nothing unreadable), the host opens that layout's panels and browser pages once, provided the grid and dock are still empty when the layout arrives, which is usually after trust is granted. If the user has opened something first, a strip at the top of the grid offers to open it instead. The layout's recipes never start on open: each is listed as a Start button that goes through the layout's confirmation. Whether the seed has run is recorded per project on this machine, so it never runs twice. It is not a slot and has no switch or answer of its own.
 
-## Themes — _Future_
+## Themes — _Shipped_
 
-Ships palette-based themes, following the same `BuiltInThemeSource` shape used by Daintree's built-in themes. See [Theme system](../themes/theme-system.md) for the palette and token model.
+Ships app themes. Each one is offered in Settings → Appearance, grouped under the plugin's name, and in the theme palette, and the user applies it like a built-in theme. Installed and built-in plugins only; a `scope: "project"` plugin is refused until per-project themes exist.
 
 ```json
 {
@@ -1176,7 +1840,30 @@ Ships palette-based themes, following the same `BuiltInThemeSource` shape used b
 }
 ```
 
-Theme contribution requires a theme registry surface that doesn't exist yet. Daintree's themes stay free and open-contribution; there is no planned monetization around color schemes.
+**Fields:**
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `id` | yes | Namespaced as `plugin:{pluginId}:{id}`, so it can never shadow a built-in or imported theme. |
+| `name` | yes | Shown in Appearance, the theme palette, and the notice when the theme stops being offered. |
+| `type` | yes | `"dark"` or `"light"`. The palette's own `type` must match. |
+| `path` | yes | JSON file relative to the plugin directory, at most 128 KiB, at most 20 themes per plugin. |
+
+The file holds a `palette` in the same shape as Daintree's built-in theme sources, plus optional `tokens` and `extensions` overrides. Overrides are limited to the registered token and extension sets. See [Theme system](../themes/theme-system.md) for the palette and token model.
+
+```json
+{
+  "palette": { "type": "dark", "surfaces": { "grid": "#0e0f12", "…": "…" }, "…": "…" },
+  "tokens": { "overlay-highlight": "#2a2d35" },
+  "extensions": {}
+}
+```
+
+Validation is strict. A missing palette field, an unknown key, a token or extension outside the registered sets, or a value that isn't a single CSS value refuses the theme rather than being dropped. A theme can't load anything: the only resource a value may carry is an embedded `url("data:image/…")` texture, like the built-in grain.
+
+**The contrast checks are a gate, not a warning.** A theme is offered only if it passes every check an imported theme is warned about: the text, accent, status, terminal, syntax and overlay contrast pairs that Daintree's built-in themes are held to. A pair the checks can't evaluate fails too. That covers a non-hex value, and a light theme that leaves the engine's `color-mix()` overlay tokens in place. Set those tokens to hex values, as the built-in light themes do. A refused theme never appears in Appearance, and the reason is written to the plugin's log in the Plugin Manager. The plugin's other contributions are unaffected.
+
+A plugin theme is chosen directly. It can't be the theme for a "Match system appearance" slot. The selected theme's palette is saved with the choice, so it paints on the first frame after a restart, before any plugin has loaded. If the plugin is disabled, uninstalled or blocked, or an update stops offering the theme, Daintree switches to the user's preferred built-in theme of the same polarity and says so.
 
 ## Forge providers — _Shipped_
 
@@ -1210,6 +1897,7 @@ Registers a forge backend — issues, pull/merge requests, reviews, CI roll-up, 
 | `slots` | no | Renderer view ids for the provider's own UI, keyed by slot: `settingsTab`, `icon`, `statsDropdown`, `bulkCreateWorktreeDialog`, `issueSelector`. Checked for non-emptiness only; an id the renderer does not know renders a neutral fallback. |
 | `settingsScopeRef` | no | A declared `contributes.settings[].id`, used to group provider settings. Validated at manifest parse time — a dangling ref is rejected (`forge_settings_scope_ref_unknown`). |
 | `viewRefs` | no | IDs of `views` contributions shown under this provider's panel section. Each must resolve to a declared `contributes.views[].id`, else the manifest is rejected (`forge_view_ref_unknown`). |
+| `referencePrefixes` | no | `{ issue?, pr? }`: how the forge writes a reference to an issue or a pull request in text, as the characters before the number (`{ "issue": "#", "pr": "#" }` for GitHub, `{ "issue": "#", "pr": "!" }` for GitLab). The composer's `#` menu inserts references written this way and leaves out a kind with no prefix; the host never assumes `#`. Each prefix is 1-4 characters, with no digits or whitespace. |
 
 The manifest entry is read eagerly so the provider populates Preferences and the remote-routing table before any plugin code runs; the implementation binds lazily in `activate()` via [`registerForgeProvider`](./host-api.md#registerforgeprovider). For the end-to-end walkthrough — implementing `ForgeProviderImpl`, state normalization, capabilities, and tests — see [Implementing a forge provider](./forge-provider.md).
 
@@ -1244,113 +1932,184 @@ Registers a provider that decorates files (or other scoped resources) with statu
 | Scope | Surface | Notes |
 | --- | --- | --- |
 | `worktree-diff:<worktreePath>` | Review Hub changed-file rows (base-branch diff, linked PR) | Used by the first-party GitHub plugin to badge PR-review state. |
-| `worktree-files:<worktreePath>` | Local worktree file-change list (`FileChangeList` in the worktree card) | Local-only — no PR or remote required. Use this to badge a worktree's changed files from a lint/leak/status plugin. |
+| `worktree-files:<worktreePath>` | Local worktree file-change list (`FileChangeList` in the worktree card) | Local-only — no PR or remote required. Use this to badge a worktree's changed files from a lint/leak/status plugin. The file browser tree requests the same scope for its visible rows, with paths relative to the worktree or workspace root. |
 
 Keep these scopes distinct: a provider registered for `worktree-diff:*` is **not** invoked on the local `worktree-files:*` list and vice versa, so PR-review badges don't leak onto the plain change list. The path strings the host passes (and that your provider keys its returned map by) are the worktree's changed-file paths as the surface renders them.
 
 The manifest entry is read eagerly so the host's decoration-routing table (`electron/services/fileDecorationRegistry.ts`) knows which provider owns a scope before any plugin code runs; the implementation binds lazily in `activate()`. See [Host API](./host-api.md) for the runtime registration signature.
 
-When more than one provider matches a scope, their decorations merge per path and per field (`badge`, `tooltip`, `color`, `url`), first writer wins in plugin load order — so the second provider's badge for a shared path is silently dropped. A provider that rejects, or doesn't answer within 3 seconds, is skipped for that pull, and entries for paths the host didn't ask about are discarded. When two plugins declare the **same exact scope string**, the host emits a `console.warn` at registration time naming both plugins and the duplicated scope so the collision is detectable. (Broad/narrow coexistence — a `worktree-files:*` provider alongside a `worktree-files:/some/path` one — is intentional and not warned, though the two still merge the same way.)
+When more than one provider matches a scope, their decorations merge per path and per field (`badge`, `tooltip`, `color`, `url`), first writer wins, with a project-local plugin ahead of installed ones and load order within each group — so the second provider's badge for a shared path is silently dropped. A provider that rejects, or doesn't answer within 3 seconds, is skipped for that pull, and entries for paths the host didn't ask about are discarded. When two plugins declare the **same exact scope string**, the host emits a `console.warn` at registration time naming both plugins and the duplicated scope so the collision is detectable. A request only reaches plugins visible in the requesting project: a project-local plugin decorates its own project's files and no other's, and an installed plugin switched off for a project neither decorates it nor is started by it. (Broad/narrow coexistence — a `worktree-files:*` provider alongside a `worktree-files:/some/path` one — is intentional and not warned, though the two still merge the same way.)
 
 From your `activate()` subscriptions and timers, call `host.invalidateFileDecorations(scope, paths?)` to signal that a scope's decorations changed and any renderer showing them should re-pull.
 
 On the worktree card, a decoration renders as the app's count pill in its own column at the end of the row, with the `tooltip` text added under the file path in the row's own tooltip (on hover and on keyboard focus) and read out as the row's description. Keep `badge` to two characters; a longer badge widens the column for the whole list. A decoration with a `url` is underlined, opens the link when its badge is clicked, and adds **Open in browser** to the row's context menu, which is how keyboard users reach it. If you pass a `color`, you own its contrast: a status wash under primary text (`bg-status-error/20 text-text-primary`) holds 4.5:1 across the built-in themes, while status-coloured text on its own wash does not.
 
-## File editors — _Shipped (built-in only)_
+## Worktree setup steps — _Shipped_
 
-Declares a writable **Edit** mode alongside Source and Rendered in the host’s file browser and standalone file panel for the listed extensions. The manifest names the builtin view slot the plugin's renderer registers for the editor surface; the host resolves it enable-aware, so disabling the plugin removes Edit live and a panel persisted in `edit` mode falls back to Source without rewriting the preference. The first-party Markdown editor (`plugins/builtin/markdown-editor/`) is the one contributor.
+Work a plugin does for each worktree Daintree creates, after the project's own setup: provisioning a preview database, seeding fixtures, registering the branch with an outside service. The step is declared here and its handler bound in `activate()` with `host.registerWorktreeSetupStep` (see [Host API](./host-api.md#worktree-setup-steps)).
 
 ```json
 {
   "contributes": {
-    "fileEditors": [
+    "worktreeSetupSteps": [{ "id": "provision-db", "label": "Provision DB", "timeoutMs": 120000 }]
+  }
+}
+```
+
+**Fields:**
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `id` | yes | Unique within the plugin. The handler registers under it; an undeclared id is rejected. |
+| `label` | yes | Up to 80 characters. Shown on the worktree card while the step runs ("Running setup: Provision DB (Acme)") and when asking the user to allow it. |
+| `timeoutMs` | no | 1 second to 30 minutes, default 5 minutes. When it passes, the handler's `signal` aborts and the step is recorded as timed out. |
+
+At most 10 steps per plugin.
+
+**When steps run.** After config copy, submodules and the project's setup script, and only when that script succeeded: a step may depend on what it installed. Steps run one at a time, ordered by plugin id and then as the manifest lists them. Each one's failure is recorded and the next still runs, so one plugin can't hold another's setup up. The worktree's setup stays `running` until every step settles, so `worktree.waitUntilReady`, a new worktree's first agent, and a recipe that starts an agent all wait for them.
+
+**What the worktree records.** Every step is recorded against the worktree with its own outcome: succeeded, failed, timed out, waiting for approval, or skipped. A step is skipped when its plugin couldn't run it: it would not activate, never bound a handler, or is no longer loaded for the project when setup is retried. A skipped step is never a success. Setup is `ready` only when every step succeeded; otherwise it settles `failed` or `timed-out` with stage `plugin-steps` and an error naming the plugin and step, or `needs-approval` when a step hasn't been allowed. Retry setup from the worktree card (or `worktree.lifecycle.retrySetup`) reruns only the steps that didn't succeed, without rerunning the setup script, so a handler must tolerate running again. A step whose plugin was upgraded since it succeeded runs again, once its new version is allowed.
+
+**Consent.** The user allows each step once per project, from the worktree card: "Acme will run "Provision DB" when worktrees are created". Until then the step doesn't run and setup waits at `needs-approval`; the setup script and other allowed steps still run. A new plugin version, label or timeout asks again. See [Trust model](./trust-model.md#worktree-setup-steps).
+
+**Where the code comes from.** The step runs from the plugin as it is loaded for the project, never from the new worktree's branch. A project plugin's step is the copy in the project root, not whatever the branch being checked out carries, and a worktree whose branch changes the plugin still gets the version that was loaded.
+
+**Not a teardown hook.** Nothing calls a plugin back when the worktree is deleted; a step still running is cancelled through its `signal`. A resource that costs money while it runs belongs in a resource environment (`resources` in `.daintree/config.json`), which pairs provision with teardown and is torn down with the worktree. Use a setup step for work that is cheap to leave behind, or that the plugin cleans up on its own schedule.
+
+## Worktree delete notes — _Shipped_
+
+Adds the plugin's notes to a worktree's delete confirmation: things the plugin knows and Daintree doesn't, such as unsynced edits on the branch or a preview deployment still running. One check per plugin.
+
+```json
+{
+  "contributes": {
+    "worktreeDeleteNotes": [{ "id": "unsynced" }]
+  }
+}
+```
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `id` | yes | Must match the `id` passed to [`host.registerWorktreeDeleteNotesProvider`](./host-api.md#registerworktreedeletenotesprovider) when the check binds in `activate()`. |
+
+Declaring the check is what lets a delete confirmation find the plugin before its code has run. When a delete is confirmed (the delete dialog, bulk remove, an agent's request over MCP, or the confirmation put to someone when no window is open), every plugin with a check that the project shows is asked about the worktree, activating it first if it isn't running. The dialogs open straight away and fill in each plugin's notes as they arrive; the no-window confirmation is sent once every plugin has answered or run out of time. A plugin that hasn't answered within 3 seconds, activation included, or that fails, is shown as "<plugin> didn't answer".
+
+Notes only annotate. They never cancel a delete, change its confirmation tier or alter its typed confirmation. The user can turn a plugin's notes off from its Permissions tab, and the plugin is then not asked. No capability is needed.
+
+## Setup checklist — _Shipped_
+
+A short list of what the plugin needs before it's useful: connect an account, choose a default, run a first sync. Daintree shows it on the plugin's panels as "Acme setup · 1 of 3" while a step is outstanding, opens the steps in a popover from there, and lists them at the top of the plugin's settings (the plugin manager for an installed plugin, Project settings for a project plugin).
+
+```json
+{
+  "contributes": {
+    "account": { "kind": "token", "label": "Acme API token" },
+    "settings": [{ "id": "workspace", "label": "Workspace", "type": "string" }],
+    "commands": [
       {
-        "id": "markdown",
-        "slot": "markdown.editor",
-        "extensions": ["md", "markdown", "mkd"],
-        "maxBytes": 2097152
+        "id": "sync",
+        "title": "Run first sync",
+        "description": "Pull your Acme projects",
+        "category": "Acme",
+        "kind": "command",
+        "danger": "safe"
+      }
+    ],
+    "setup": [
+      { "id": "connect", "title": "Connect your Acme account", "done": { "kind": "account" } },
+      {
+        "id": "workspace",
+        "title": "Choose a workspace",
+        "description": "Issues are read from this workspace",
+        "done": { "kind": "setting", "key": "workspace" }
+      },
+      {
+        "id": "sync",
+        "title": "Run the first sync",
+        "done": { "kind": "context", "when": "acme.tracker.synced" },
+        "action": { "kind": "command", "actionId": "acme.tracker.sync" }
       }
     ]
   }
 }
 ```
+
+**Fields:**
+
+| Field         | Required | Notes                                                   |
+| ------------- | -------- | ------------------------------------------------------- |
+| `id`          | yes      | Unique within the plugin. What a skip is remembered by. |
+| `title`       | yes      | Up to 80 characters.                                    |
+| `description` | no       | Up to 200 characters, under the title.                  |
+| `done`        | yes      | How the host tells the step is done; see below.         |
+| `action`      | no       | What clicking the step does; see below.                 |
+
+At most 10 steps per plugin.
+
+**Done is observed, never stored.** The host works it out each time from state it can see, so a cleared setting, a disconnected account or a context key that turns false makes the step outstanding again. There is no API for a plugin to mark a step done.
+
+| `done` | The step is done when |
+| --- | --- |
+| `{ "kind": "setting", "key": "<id>" }` | the declared setting has a stored value. A declared `default` doesn't count, the same rule as `required`. |
+| `{ "kind": "account", "connection"?: "<id>" }` | the named connection is connected; without `connection`, the one the project uses (`contributes.account`'s, for a single account). |
+| `{ "kind": "context", "when": "<clause>" }` | the `when` clause holds over the context keys plugins publish with [`host.setContext`](./host-api.md#setcontext), written `publisher.name.key`. |
+
+**Actions.** `{ "kind": "settings", "key"?: "<id>" }` opens the plugin's settings, at that setting when `key` is given. `{ "kind": "command", "actionId": "<name>.<id>" }` runs one of the plugin's own commands with no arguments, written in your manifest namespace like a toolbar button's `actionId`; a project plugin's is rewritten to its instance for you. Without an `action`, a `setting` step opens its setting, an `account` step opens the plugin's settings, and a `context` step has no button.
+
+**Validation.** A `setting` step's `key` and a `settings` action's `key` must name a declared setting (`setup_setting_unknown`), an `account` step needs `contributes.account` or `contributes.connections` (`setup_account_undeclared`) and its `connection` must name a declared one (`setup_connection_unknown`), a `when` clause must parse (`setup_when_invalid`), and a command must be your own (`setup_command_not_own`) and match a declared command when you declare any (`action_id_undeclared_command`).
+
+**Skip.** Each outstanding step has a **Skip**, remembered per project in Daintree's own settings, never the repository, and undone from the same row. The strip goes away once every step is done or skipped; if a `required` setting is still unset then, its "needs setup" strip takes over. With no project open, the settings checklist shows what the host can see and offers no skip.
+
+**Never modal, never automatic.** Nothing opens on its own: no dialog on install, nothing from `activate()`. The user reaches the steps from the strip or the settings.
+
+## File editors — _Shipped_
+
+Declares an editor the host's file panel offers for matching files. An entry takes one of two forms.
+
+A **view-backed** editor names one of the plugin's own `location: "fileEditor"` views. `"mode": "edit"` fills the file panel's writable **Edit** mode; `"mode": "view"` fills **Rendered** for a type the host can't render itself (CSV, data exports). Any plugin may declare one. Installed plugins match by extension; a `"scope": "project"` plugin may also match project-relative `paths`, and its editors only ever appear in its own project.
+
+```json
+{
+  "contributes": {
+    "views": [
+      { "id": "records-editor", "componentPath": "dist/editor.js", "location": "fileEditor" }
+    ],
+    "fileEditors": [
+      {
+        "id": "records",
+        "view": "records-editor",
+        "mode": "edit",
+        "extensions": ["json"],
+        "paths": ["content/entries/*.json"],
+        "maxBytes": 1048576
+      }
+    ]
+  }
+}
+```
+
+A **slot-backed** editor names a builtin view the plugin's renderer registers with `registerBuiltinView`. It is built-in only: the builtin view registry is compiled into the host bundle, which no other plugin's renderer reaches, so the manifest is refused (`fileEditors_slot_builtin_only`) from any other origin. The first-party Markdown editor (`plugins/builtin/markdown-editor/`) is the one slot-backed contributor.
 
 **Fields:**
 
 | Field | Required | Notes |
 | --- | --- | --- |
 | `id` | yes | Namespaced at runtime as `{pluginId}.{id}`. |
-| `slot` | yes | The builtin view id the plugin's renderer entry registers with `registerBuiltinView`; the `builtinViewRegistrations` test keeps the two halves in step. Letters, digits, `.`, `_` and `-`, at most 128 characters. |
-| `extensions` | yes | Bare lower-case suffixes without the dot (`[a-z0-9]+`, 1–16 characters each, 1–20 entries), matched case-insensitively against the file name. Extensions the entry omits (`mdx`) are never offered. |
-| `maxBytes` | no | Largest file the editor accepts, a positive integer. Above it the file stays viewable and Edit is not offered. Defaults to 2 MiB; capped at 64 MiB. |
+| `view` | one of `view`/`slot` | Id of one of this plugin's `location: "fileEditor"` views. Such a view needs no panel and may not share an id with one, and neither a surface nor a toolbar popover can claim it (`surface_view_ref_file_editor`, `toolbar_popover_view_file_editor`). |
+| `mode` | with `view` | `"edit"` or `"view"`. A `view` editor's document is read-only. |
+| `slot` | one of `view`/`slot` | Built-in plugins only. The builtin view id the plugin's renderer registers; always an Edit mode matched by extension. |
+| `extensions` | `extensions` and/or `paths` | Bare lower-case suffixes without the dot (`[a-z0-9]+`, 1–16 characters each, 1–20 entries), matched case-insensitively against the file name. |
+| `paths` | `extensions` and/or `paths` | `"scope": "project"` plugins only (`fileEditors_paths_project_only`). Up to 20 globs relative to the project or worktree root, forward slashes only: `**` as a whole segment matches any number of directories, `*` any run within one segment, `?` one character; everything else is literal and case-sensitive. No leading `/`, drive letter, `..`, backslash or `!` negation. |
+| `default` | no | `"scope": "project"` plugins only (`fileEditors_default_project_only`), on a view-backed `"mode": "edit"` editor with `paths` (`fileEditors_default_invalid`). Makes the editor what files matching its `paths` open in; see below. A pattern may be the default for one entry of a plugin (`fileEditors_default_duplicate`). |
+| `maxBytes` | no | Largest file the editor accepts, a positive integer. Above it the file stays viewable and the editor is not offered; the host document also refuses larger reads and saves. Defaults to 2 MiB; capped at 64 MiB. |
 
-**Built-in only.** The slot resolves through the builtin view registry compiled into the host bundle, which an installed plugin's renderer cannot register into, so the host refuses the contribution from any other origin at load with a recorded load error. Opening file editors to installed plugins is a separate decision.
+**Choosing an editor.** The host's own editor or renderer stays the default; an installed or project editor adds a choice rather than displacing it. When more than one editor can fill a mode, the panel's toolbar shows **Edit with…** (or **View with…** for Rendered), and the pick is remembered per project and per file type in Daintree's own settings, never in the repository. A mode a plugin fills is labelled with the plugin's name (`Edit · Acme records`), and Source is always one click away.
 
-The host offers Edit inside the file browser’s existing content area and in standalone file panels (the standalone file viewer dialog stays read-only), only for a file the reader loaded as text, and only inside a project or worktree root. The editor view receives the panel's fixed identity — file, containment root, worktree and project — and publishes its document state (draft, dirty, conflict, and the Save and Discard operations) through the host's file-document store, which drives the dirty mark in the panel chrome, the draft-aware Rendered preview and the Save / Discard / Cancel prompt on close.
+**A project's default editor.** A project plugin can make its editor what its own files open in by adding `"default": true`. Each of the entry's `paths` becomes a file editor slot in the project, one per exact pattern string, and a new file panel opened on a matching file without an explicit mode (a double-click in the file browser, `file.openPanel` from an agent, a plain click on a file link in a terminal) opens in Edit with that editor. The slots behave like [surfaces](#surfaces--shipped-project-scope-only): when two plugins name the same pattern, the lower manifest id holds it and the other is refused, attributed; the first time it applies, the file panel asks **Keep** or **Use Daintree's**; and **Project settings → Plugins** lists it with a reset. When the defaults of several patterns match one file, the most specific pattern wins: fewer `**` segments first, then more literal characters (so `content/about.json` beats both `**/content/about.json` and `content/*.json`), then the ordinally first. Extensions never set a default, an explicit mode or a panel already showing the file is left as it is, and Source stays in the mode toggle.
 
-## Preview tools — _Shipped (built-in only)_
+**The host-owned document.** A view-backed editor's view receives `PanelViewProps.fileDocument` (`PluginFileDocument` in the SDK): `read()` returns the text and an opaque revision; `save(text, { expectedRevision })` writes only if the file is still at that revision, checked in the main process at write time, and otherwise returns `conflict` without writing; `setDraft(text | null)` reports unsaved text, and `setConflict` raises a conflict the editor detected itself; `onDidChange` reports a disk change, a save made by the host, or a discard. The host keeps the draft, so it survives a switch to Source and back, and the dirty mark, the draft-aware Rendered preview and the Save / Discard / Cancel prompt on close apply exactly as for the built-in editor. Text is UTF-8 with lines joined by `\n`; a save keeps the file's BOM, dominant line ending and mode.
 
-Declares a tool the dev-preview panel offers in its toolbar: a toggle, a strip under the toolbar and a drawer beside the page, with the host owning the chrome and the session lifecycle. SvelteKit Tools (`plugins/builtin/sveltekit-builder/`) is the one contributor.
-
-The components stay a renderer-side registration — `registerDevPreviewTool` in the plugin's renderer entry, because they are compiled into the host bundle and nothing else can supply them. This declaration is what makes the tool **admissible**: `src/registry/devPreviewToolRegistry.ts` hides a registered tool whose plugin's manifest does not name its id, so a module side effect alone can no longer put a tool in the preview toolbar. [Views → Dev preview tools](./views.md#dev-preview-tools) is the lifecycle.
-
-```json
-{
-  "contributes": {
-    "previewTools": [
-      {
-        "id": "daintree.sveltekit-builder.builder",
-        "title": "SvelteKit Tools",
-        "iconId": "square-dashed-mouse-pointer",
-        "guestAdapter": "daintree.sveltekit-builder.guest"
-      }
-    ]
-  }
-}
-```
-
-**Fields:**
-
-| Field | Required | Notes |
-| --- | --- | --- |
-| `id` | yes | **Not** namespaced by the host — the renderer entry registers with this same literal, so the manifest declares the qualified form: the plugin's own name plus exactly one more segment (`daintree.sveltekit-builder.builder`), at most 200 characters. |
-| `title` | yes | The tool's name, trimmed, 1–64 characters. The registration supplies the rendered label; this states what the plugin ships. |
-| `iconId` | no | At most 64 characters. Advisory, like `views[].iconId` — the tool's own `Button` owns the rendered glyph. |
-| `guestAdapter` | no | A [guest adapter](#guest-adapters--shipped-built-in-only) id **this same manifest** declares. A tool naming an adapter nothing declares is a manifest error. |
-
-**Built-in only.** The toolbar button, drawer and session all resolve out of the host bundle, which an installed plugin's renderer cannot register into — the same obstacle as [file editors](#file-editors--shipped-built-in-only). Unlike that one the refusal is in the manifest schema rather than at load, because the schema is built per discovery root, so a sample or project manifest fails `npm run check:plugin-manifests` instead of only at runtime. [The preview-extension boundary is deliberate](#the-preview-extension-boundary-is-deliberate) says why it stands.
-
-## Guest adapters — _Shipped (built-in only)_
-
-Declares a browser bundle the host reads back as text and installs into a previewed page through the site-preview bridge. A binding names an adapter id and the host loads that adapter's body itself; there is no way for a caller to put source on the wire (`electron/services/sitePreview/guestAdapters.ts`).
-
-```json
-{
-  "contributes": {
-    "guestAdapters": [
-      {
-        "id": "daintree.sveltekit-builder.guest",
-        "entry": "renderer/guest/entry.ts"
-      }
-    ]
-  }
-}
-```
-
-**Fields:**
-
-| Field | Required | Notes |
-| --- | --- | --- |
-| `id` | yes | The literal the page runtime binds with, so it is not namespaced by the host — the plugin's own name plus exactly one more segment, at most 200 characters. That segment also names the built asset (below). |
-| `entry` | yes | Plugin-relative POSIX path to the bundle's source, at most 256 characters, ending in `.ts`, `.tsx`, `.js` or `.mjs`. No absolute path, backslash, NUL or `:`; no empty, `.` or `..` segment; and it may not start with `guest/` in any case, the directory the build writes the bundle into. |
-
-**The built asset's path is derived, never declared.** `guestAdapterAssetPath` (`electron/services/sitePreview/guestAdapterAssets.ts`) turns the adapter id into `guest/<id suffix>.js` under the plugin's output dir. `scripts/build-main.mjs` bundles `entry` to exactly that path — as a standalone browser IIFE, not a main entry and not part of the renderer bundle — and `registerBuiltinGuestAdapters` reads it back from the same place at startup, so there is no second path for the two to disagree about. A declared adapter whose bundle did not land fails the build.
-
-**Built-in only.** The body is emitted by Daintree's own build and then runs with full DOM access inside whatever site the user is previewing. The registry exists precisely so that only main, from an asset it shipped, chooses that code.
-
-### The preview-extension boundary is deliberate
-
-Preview tools, guest adapters and the workspace-scoped `fsForWorkspace` handle (`BuiltinPluginHostApi` in `shared/types/plugin.ts`, handed out only by the in-process built-in loader) are first-party by design, not a third-party surface left half-built. What makes them safe for a built-in is that its code ships with the app: its renderer half is compiled into the host bundle — which is also why a built-in's renderer may import host store modules directly, rather than only the shared React the import map provides — and its guest body is bundled by Daintree's own build. An installed plugin has neither, and the pieces that would replace them do not exist: no build that produces a browser bundle the host is willing to inject, no API narrow enough to hand a third party a page the user is developing under their own session, and no consent vocabulary that would let the user judge the request. `contributes.previewTools` and `contributes.guestAdapters` are therefore refused by the manifest schema outside a built-in discovery root, and none of these capabilities is advertised to installed plugins until that build, API and trust model exists.
+The host offers editors inside the file browser’s existing content area (built-in editors only) and in standalone file panels (the standalone file viewer dialog stays read-only), only inside a project or worktree root. Plugin editors load only when chosen, so they never weigh on the file panel's first render.
 
 ## Agents — _Shipped (minimal tier)_
 
@@ -1386,8 +2145,9 @@ Teaches Daintree about a launchable agent CLI it doesn't ship in-tree, so the CL
 | `color` | yes | Brand color as a 6-digit hex (`#rrggbb`). |
 | `iconId` | yes | At most 64 characters. **A different namespace from panel/toolbar icon IDs** — agents render bundled brand marks, so this must name one of Daintree's built-in agent IDs (`claude`, `codex`, `gemini`, …). A panel icon ID like `terminal` doesn't resolve here; unrecognized values silently fall back to the Claude mark. Shipping a custom icon asset isn't supported yet. |
 | `supportsContextInjection` | no | Whether copy-tree context injection targets this agent. Defaults to `false`. |
+| `launchMcp` | no | `{ "format": … }`, one of the additive mechanisms in [Agent MCP endpoints](./agent-extensions.md#agent-mcp-endpoints): `claude-mcp-config`, `codex-config-overrides`, `gemini-system-defaults`, `qwen-mcp-config`, `opencode-config-content`, `copilot-additional-mcp-config`, `amp-mcp-config`, `vibe-mcp-servers-env`. Declare the one your CLI actually merges over the user's own servers. It grants nothing: the agent gets the orchestration server and plugin endpoints only as the project's MCP tier and plugin access allow. Daintree owns any environment variable the format uses, so a manifest cannot name one. |
 
-A plugin agent is launchable and selectable as a named entry in the effective registry. It launches as a named terminal. Without a `detection` block it runs as a plain named terminal whose working/waiting state Daintree doesn't track; declare `detection` (below) to wire it into the agent-state UI like a built-in agent. A plugin agent has no launch MCP mechanism, so it is never handed Daintree's own MCP servers or any plugin's agent MCP credentials at launch.
+A plugin agent is launchable and selectable as a named entry in the effective registry. It launches as a named terminal. Without a `detection` block it runs as a plain named terminal whose working/waiting state Daintree doesn't track; declare `detection` (below) to wire it into the agent-state UI like a built-in agent. Without a `launchMcp` block a plugin agent is never handed Daintree's own MCP servers or any plugin's agent MCP credentials at launch; declare one (below) to receive them the way a built-in agent with the same mechanism does.
 
 `command` and `args` support the same `${settings:settingId}` syntax as MCP servers — e.g. `"args": ["--token", "${settings:apiToken}"]`. Templates resolve at spawn time against the plugin's **user-scope** setting with that ID (project scope is never read). If a referenced setting is unset, the launch fails with a clear error rather than spawning the agent with a literal `${settings:…}` (or a silently blanked value) on its command line — so a missing credential surfaces as a spawn error instead of an opaque auth failure inside the agent. Unlike MCP server tokens, `${settings:*}` tokens in agent `command`/`args` are **not** validated at manifest parse time — an undeclared setting id only surfaces as a spawn-time error, not a load error.
 

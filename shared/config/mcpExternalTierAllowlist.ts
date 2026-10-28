@@ -188,6 +188,13 @@ export const MCP_EXTERNAL_TIER_TOOLS = [
   // one-way, so the result says the keystrokes were handed over and stops
   // there.
   "terminal.interruptOwned",
+  // Moving a pane this session launched to another preset of its agent, for a
+  // worker that hit a plan limit (#14369). Close and relaunch was the only other
+  // route, and it loses the pane's place and title and leaves its saved launch
+  // env on the old preset. Owned-only like the close, and refused on a pane the
+  // user handed over. `danger: "confirm"`, so the user approves each restart,
+  // and `isWithheldFromBoundSession` withholds it where nobody would see that.
+  "terminal.restartOnPresetOwned",
   // What a launched agent last said (#12479). The surface could see that an
   // agent was `waiting` and not what it was waiting on: a scrollback tail fits a
   // shell, and cuts an agent's structured hand-off — a review verdict, a
@@ -273,11 +280,14 @@ export const MCP_EXTERNAL_TIER_TOOLS = [
  * they only work for a caller with a pane of its own. `notify` types a line
  * into the caller's own prompt, and an api-key client has none: it is refused
  * if it sends one anyway, and `replyLines` only shapes that notice. `generation`
- * names another assistant's run, which only an assistant may address (#13496).
+ * names another assistant's run, or a worker the global Assistant steers, which
+ * only an assistant may address (#13496, #14551).
  * Left off the listing so every such client does not pay for an argument it can
  * never use on every turn.
  */
 export const MCP_EXTERNAL_OMITTED_ARGS: Readonly<Record<string, readonly string[] | undefined>> = {
   "terminal.sendCommandOwned": ["notify", "replyLines", "generation"],
+  "terminal.sendKeysOwned": ["generation"],
+  "terminal.interruptOwned": ["generation"],
   "agent.launch": ["notify", "replyLines"],
 } satisfies Partial<Record<BuiltInActionId, readonly string[]>>;

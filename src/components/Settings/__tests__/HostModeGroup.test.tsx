@@ -146,6 +146,72 @@ describe("HostModeGroup", () => {
     );
   });
 
+  it("turns hosting off at once when nobody is attached", async () => {
+    clientMock.onEvent.mockReturnValue(() => {});
+    clientMock.getStatus.mockResolvedValue(ON);
+    clientMock.setEnabled.mockResolvedValue(makeStatus());
+    const { container } = await renderGroup();
+
+    await act(async () => {
+      fireEvent.click(switchFor(container, "Allow this machine to be a host"));
+    });
+    expect(clientMock.setEnabled).toHaveBeenCalledWith({ enabled: false });
+  });
+
+  describe("with machines attached", () => {
+    const ATTACHED = {
+      ...ON,
+      attachedClients: [
+        { clientId: "a", clientName: "greg-mbp", connectedAt: 1, drivingProjectIds: ["p1"] },
+        { clientId: "b", clientName: "studio", connectedAt: 2, drivingProjectIds: [] },
+      ],
+    };
+
+    async function openConfirm() {
+      clientMock.onEvent.mockReturnValue(() => {});
+      clientMock.getStatus.mockResolvedValue(ATTACHED);
+      clientMock.setEnabled.mockResolvedValue(makeStatus());
+      const utils = await renderGroup();
+      await act(async () => {
+        fireEvent.click(switchFor(utils.container, "Allow this machine to be a host"));
+      });
+      return utils;
+    }
+
+    it("names them and does not turn hosting off until confirmed", async () => {
+      await openConfirm();
+
+      expect(clientMock.setEnabled).not.toHaveBeenCalled();
+      const text = document.body.textContent ?? "";
+      expect(text).toContain("Turn off hosting?");
+      expect(text).toContain("greg-mbp, studio are attached");
+    });
+
+    it("leaves hosting on when cancelled", async () => {
+      await openConfirm();
+
+      const cancel = Array.from(document.body.querySelectorAll("button")).find(
+        (b) => b.textContent?.trim() === "Cancel"
+      )!;
+      await act(async () => {
+        fireEvent.click(cancel);
+      });
+      expect(clientMock.setEnabled).not.toHaveBeenCalled();
+    });
+
+    it("turns hosting off once confirmed", async () => {
+      await openConfirm();
+
+      const confirm = Array.from(document.body.querySelectorAll("button")).find(
+        (b) => b.textContent?.trim() === "Turn off hosting"
+      )!;
+      await act(async () => {
+        fireEvent.click(confirm);
+      });
+      expect(clientMock.setEnabled).toHaveBeenCalledWith({ enabled: false });
+    });
+  });
+
   it("asks for start at login only through its own switch", async () => {
     clientMock.onEvent.mockReturnValue(() => {});
     clientMock.getStatus.mockResolvedValue(ON);

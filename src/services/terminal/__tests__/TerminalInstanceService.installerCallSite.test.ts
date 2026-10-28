@@ -186,10 +186,9 @@ describe("TerminalInstanceService — installTerminalBoundListeners call-site pa
       system: {},
     };
 
-    ({ terminalInstanceService: service } =
-      (await import("../TerminalInstanceService")) as unknown as {
-        terminalInstanceService: CallSiteTestService;
-      });
+    service = (await (
+      await import("../terminalInstanceServiceAccessor")
+    ).load()) as unknown as CallSiteTestService;
     service.instances.clear();
   });
 

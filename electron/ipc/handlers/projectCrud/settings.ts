@@ -26,6 +26,7 @@ import {
   broadcastToRenderer,
 } from "../../utils.js";
 import { validateFolderName } from "../../../../shared/utils/folderName.js";
+import type { ProjectTemplateSelection } from "../../../../shared/types/plugin.js";
 import { defineIpcNamespace, opValidated } from "../../define.js";
 import { ProjectSettingsSaveSchema } from "../../../services/projectSettingsCodec.js";
 import type { ProjectSettings } from "../../../types/index.js";
@@ -84,7 +85,12 @@ export function registerProjectSettingsHandlers(deps: HandlerDependencies = {}):
     // sync with the resolved provider (#8456). No-ops when no host is loaded.
     const providerOverrideChanged =
       (settings.forgeProviderOverride ?? null) !== (previousSettings.forgeProviderOverride ?? null);
-    if (remoteChanged || providerOverrideChanged) {
+    // The host asks main for the issues provider's branch keys whenever its
+    // forge settings are pushed (#13744), so a changed issues binding is pushed
+    // too even though the host never resolves the issues role itself.
+    const issueProviderOverrideChanged =
+      (settings.issueProviderOverride ?? null) !== (previousSettings.issueProviderOverride ?? null);
+    if (remoteChanged || providerOverrideChanged || issueProviderOverrideChanged) {
       const projectPath = project?.path;
       if (projectPath) {
         void deps.worktreeService?.updateForgeSettings(projectPath).catch((error) => {
@@ -92,11 +98,6 @@ export function registerProjectSettingsHandlers(deps: HandlerDependencies = {}):
         });
       }
     }
-    // The workspace host never resolves the issues role — its issue lookups are
-    // numbers read off branch names, which belong to the code forge — so this
-    // one only needs the renderer told.
-    const issueProviderOverrideChanged =
-      (settings.issueProviderOverride ?? null) !== (previousSettings.issueProviderOverride ?? null);
     if (remoteChanged || providerOverrideChanged || issueProviderOverrideChanged) {
       // The renderer caches provider resolution per project and only drops it
       // on `forge:remote-changed` (#11155). That event is signature-gated on
@@ -154,11 +155,22 @@ export function registerProjectSettingsHandlers(deps: HandlerDependencies = {}):
   const handleProjectCreateFolder = async (payload: {
     parentPath: string;
     folderName: string;
+    template?: ProjectTemplateSelection;
   }): Promise<string> => {
     if (!payload || typeof payload !== "object") {
       throw new Error("Invalid payload");
     }
-    const { parentPath, folderName } = payload;
+    const { parentPath, folderName, template } = payload;
+    if (
+      template !== undefined &&
+      (!template ||
+        typeof template !== "object" ||
+        typeof template.pluginId !== "string" ||
+        typeof template.templateId !== "string" ||
+        typeof template.digest !== "string")
+    ) {
+      throw new Error("Invalid project template");
+    }
     if (typeof parentPath !== "string" || !parentPath.trim()) {
       throw new Error("Invalid parent path");
     }
@@ -198,6 +210,22 @@ export function registerProjectSettingsHandlers(deps: HandlerDependencies = {}):
       throw new Error("Folder name resolves outside of the parent directory");
     }
 
+    // A template (#13825) is read whole and checked against the digest of the
+    // file list the user approved before the folder exists, so a template that
+    // changed or can't be copied leaves nothing behind.
+    let writeTemplate: (() => Promise<void>) | null = null;
+    if (template !== undefined) {
+      const { loadProjectTemplateInventory, writeProjectTemplate } =
+        await import("../../../services/plugin/projectTemplateFiles.js");
+      const inventory = await loadProjectTemplateInventory(template.pluginId, template.templateId);
+      if (inventory.digest !== template.digest) {
+        throw new Error(
+          "The template's files changed after they were listed. Check the list again, then create the folder."
+        );
+      }
+      writeTemplate = () => writeProjectTemplate(fullPath, inventory);
+    }
+
     try {
       await fs.promises.mkdir(fullPath, { recursive: false });
     } catch (err: unknown) {
@@ -212,6 +240,17 @@ export function registerProjectSettingsHandlers(deps: HandlerDependencies = {}):
         throw new Error("Not enough disk space to create the folder");
       }
       throw err;
+    }
+
+    if (writeTemplate !== null) {
+      try {
+        await writeTemplate();
+      } catch (err) {
+        // `writeProjectTemplate` has already removed what it wrote; the folder
+        // itself goes only if it is still empty.
+        await fs.promises.rmdir(fullPath).catch(() => {});
+        throw err;
+      }
     }
     return fullPath;
   };

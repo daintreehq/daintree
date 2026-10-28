@@ -468,6 +468,34 @@ describe("HelpSessionTabs", () => {
     expect(onSelect).toHaveBeenCalledWith(2);
   });
 
+  it("draws a close only on the selected lane once the strip is full", () => {
+    // A background lane's close is invisible until hover but still holds its width, and
+    // at the ceiling that room clipped every label. Delete still closes any lane.
+    const onClose = vi.fn();
+    const { container } = renderStrip({
+      tabs: [
+        { slot: 0, label: "Session 1", agentState: undefined },
+        { slot: 1, label: "Session 2", agentState: "working" },
+        { slot: 2, label: "Session 3", agentState: undefined },
+      ],
+      activeSlot: 1,
+      onClose,
+    });
+    expect(
+      closers(container).map((c) => c.closest('[role="tab"]')!.getAttribute("data-slot"))
+    ).toEqual(["1"]);
+
+    const list = container.querySelector('[role="tablist"]')!;
+    tabs(container)[2]!.focus();
+    fireEvent.keyDown(list, { key: "Delete" });
+    expect(onClose).toHaveBeenCalledWith(2);
+  });
+
+  it("keeps a hover close on every lane below the ceiling", () => {
+    const { container } = renderStrip();
+    expect(closers(container)).toHaveLength(TABS.length);
+  });
+
   it("renders nothing at all when there are no lanes", () => {
     const { container } = renderStrip({ tabs: [], activeSlot: 0 });
     expect(container.querySelector('[role="tablist"]')).toBeNull();

@@ -20,6 +20,7 @@
  */
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import type { VadWorkerInbound, VadWorkerOutbound } from "./openaiVadWorkerProtocol.js";
+import { AUDIO_BUFFER_MAX_BYTES, AUDIO_BUFFER_MAX_CHUNKS } from "./TranscriptionProvider.js";
 
 interface VadParentPort {
   on(event: "message", listener: (event: { data: VadWorkerInbound }) => void): void;
@@ -85,11 +86,31 @@ function pcm16ToFloat32(pcm: ArrayBuffer): Float32Array {
 type RealTimeVADInstance = Awaited<ReturnType<RealTimeVADClass["new"]>>;
 
 let vad: RealTimeVADInstance | null = null;
-// Serializes processAudio() calls — avr-vad mutates an internal buffer per call,
-// so overlapping awaits would corrupt frame boundaries. Audio messages chain
-// onto this promise in arrival order.
-let processChain: Promise<void> = Promise.resolve();
 let destroyed = false;
+
+// A short pause inside speech: avr-vad's own end-of-speech count reaching
+// PAUSE_FRAMES of the 24 it needs. Like avr-vad, it counts frames scored
+// below the silence threshold and starts over only on a speech frame. About
+// 160ms: longer than the closures inside words, short enough to catch the
+// break between sentences. The provider may cut a long segment here instead of
+// mid-word.
+const PAUSE_FRAMES = 5;
+const SILENCE_PROBABILITY = 0.35;
+const SPEECH_PROBABILITY = 0.5;
+let speaking = false;
+let quietFrames = 0;
+
+function endSpeech(): void {
+  speaking = false;
+  post({ type: "speech-end" });
+}
+// Audio that arrived before the model finished loading. The provider starts
+// this process as its socket starts connecting and feeds it from the first
+// chunk, so the opening speech is analysed rather than dropped. The cap matches
+// the provider's own connect buffer; past it the load has hung, and a VAD with
+// a hole in what it heard is worse than none, so it reports an error and the
+// provider falls back to its backstop.
+const heldWhileLoading = { chunks: 0, bytes: 0, overflowed: false };
 
 async function init(): Promise<void> {
   try {
@@ -105,12 +126,23 @@ async function init(): Promise<void> {
       // 0.5/0.35) are tuned for dictation; only the input sample rate differs.
       model: "v5",
       sampleRate: 24000,
-      onSpeechStart: () => post({ type: "speech-start" }),
-      onSpeechEnd: () => post({ type: "speech-end" }),
+      onFrameProcessed: ({ isSpeech }) => {
+        if (isSpeech >= SPEECH_PROBABILITY) {
+          quietFrames = 0;
+        } else if (isSpeech < SILENCE_PROBABILITY && speaking && ++quietFrames === PAUSE_FRAMES) {
+          post({ type: "pause" });
+        }
+      },
+      onSpeechStart: () => {
+        speaking = true;
+        quietFrames = 0;
+        post({ type: "speech-start" });
+      },
+      onSpeechEnd: endSpeech,
       // A misfire is a sub-`minSpeechFrames` blip that avr-vad discards without
       // an end event. Surface it as speech-end so the provider always returns
       // to the not-speaking state (the undersized buffer commit is skipped).
-      onVADMisfire: () => post({ type: "speech-end" }),
+      onVADMisfire: endSpeech,
     });
     if (destroyed) return;
     vad.start();
@@ -119,6 +151,12 @@ async function init(): Promise<void> {
     post({ type: "error", message: formatErrorMessage(err, "VAD initialization failed") });
   }
 }
+
+const initialization = init();
+// Serializes processAudio() calls — avr-vad mutates an internal buffer per call,
+// so overlapping awaits would corrupt frame boundaries. Audio messages chain
+// onto this promise in arrival order, behind the model load.
+let processChain: Promise<void> = initialization;
 
 port.on("message", ({ data: message }) => {
   if (message.type === "destroy") {
@@ -147,14 +185,25 @@ port.on("message", ({ data: message }) => {
   }
 
   if (message.type === "audio") {
-    if (destroyed || !vad) return;
-    const frame = pcm16ToFloat32(message.pcm);
+    if (destroyed) return;
+    const pcm = message.pcm;
+    if (!vad) {
+      if (heldWhileLoading.overflowed) return;
+      if (
+        heldWhileLoading.chunks >= AUDIO_BUFFER_MAX_CHUNKS ||
+        heldWhileLoading.bytes + pcm.byteLength > AUDIO_BUFFER_MAX_BYTES
+      ) {
+        heldWhileLoading.overflowed = true;
+        post({ type: "error", message: "VAD model load fell behind the audio" });
+        return;
+      }
+      heldWhileLoading.chunks++;
+      heldWhileLoading.bytes += pcm.byteLength;
+    }
     processChain = processChain
-      .then(() => (!destroyed && vad ? vad.processAudio(frame) : undefined))
+      .then(() => (!destroyed && vad ? vad.processAudio(pcm16ToFloat32(pcm)) : undefined))
       .catch((err: unknown) => {
         post({ type: "error", message: formatErrorMessage(err, "VAD processing failed") });
       });
   }
 });
-
-const initialization = init();

@@ -4,7 +4,7 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { pluginSdkRuntimeBuildConfig } from "./lib/plugin-sdk-runtime.mjs";
-import { mainBundleStubsPlugin } from "./lib/main-bundle.mjs";
+import { mainBundlePlugins } from "./lib/main-bundle.mjs";
 import { MAIN_EXTERNAL, MAIN_PRELOAD_ENTRY, mainEsmEntryPoints } from "./main-build-entries.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -58,51 +58,54 @@ function writeBuildInfo() {
   fs.writeFileSync(target, formatBuildInfo(version, buildCommit), "utf8");
 }
 
-const common = {
-  bundle: true,
-  minify: isProd,
-  sourcemap: !isProd,
-  platform: "node",
-  target: "node22",
-  external,
-  logLevel: "info",
-  absWorkingDir: root,
-  pure: isProd ? ["console.log", "console.info", "console.warn", "console.debug"] : [],
-  define: {
-    "process.env.SENTRY_DSN": JSON.stringify(process.env.SENTRY_DSN || ""),
-    __DAINTREE_REMOTE_HOSTS__: JSON.stringify(remoteHostsEnabled),
-    __DAINTREE_REMOTE_HOST_ROLE__: JSON.stringify(remoteHostRoleEnabled),
-    __DAINTREE_BUILD_COMMIT__: JSON.stringify(buildCommit),
-    // Strip E2E test backdoors from production builds (#9148). Replacing these
-    // env-var reads with "" lets esbuild constant-fold the `=== "1"` checks to
-    // false and dead-code-eliminate the `contextBridge.exposeInMainWorld` blocks
-    // in preload.cts (plus the matching main-process test guards). Conditional
-    // spread, not a ternary value — esbuild stringifies a bare `undefined` define
-    // as the literal "undefined", so dev/test builds must omit these keys entirely
-    // to keep the branches intact for the E2E harness.
-    ...(isProd
-      ? {
-          "process.env.DAINTREE_E2E_FAULT_MODE": JSON.stringify(""),
-          "process.env.DAINTREE_E2E_MODE": JSON.stringify(""),
-          "process.env.DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS": JSON.stringify(""),
-          // The plugin host-contract harness (#9286) reads this to point
-          // PluginService at the compiled sample plugin during e2e. A
-          // non-empty value in prod would silently redirect the user-plugin
-          // root, so it MUST be stripped alongside the other E2E flags.
-          "process.env.DAINTREE_E2E_SIDELOAD_PLUGIN_DIR": JSON.stringify(""),
-          // Remaining main-process E2E flags (#10026). These were read
-          // ungated in main-process code but never stripped, so the names
-          // survived in dist-electron/electron/*.js. Strip them too — the
-          // check-preload-backdoors gate now scans the main bundles and the
-          // STRIPPED_BY_BUILD list there must match these keys.
-          "process.env.DAINTREE_E2E_DISABLE_CACHED_VIEW_CPU_THROTTLE": JSON.stringify(""),
-          "process.env.DAINTREE_E2E_CRASH_DUMPS_DIR": JSON.stringify(""),
-          "process.env.DAINTREE_E2E_DEFER_RENDERER_LOAD": JSON.stringify(""),
-          "process.env.DAINTREE_E2E_WORKSPACE_LOAD_DELAY_MS": JSON.stringify(""),
-        }
-      : {}),
-  },
-};
+/** Options every Node build of main shares, for a production build or not. */
+function commonOptions({ production }) {
+  return {
+    bundle: true,
+    minify: production,
+    sourcemap: !production,
+    platform: "node",
+    target: "node22",
+    external,
+    logLevel: "info",
+    absWorkingDir: root,
+    pure: production ? ["console.log", "console.info", "console.warn", "console.debug"] : [],
+    define: {
+      "process.env.SENTRY_DSN": JSON.stringify(process.env.SENTRY_DSN || ""),
+      __DAINTREE_REMOTE_HOSTS__: JSON.stringify(remoteHostsEnabled),
+      __DAINTREE_REMOTE_HOST_ROLE__: JSON.stringify(remoteHostRoleEnabled),
+      __DAINTREE_BUILD_COMMIT__: JSON.stringify(buildCommit),
+      // Strip E2E test backdoors from production builds (#9148). Replacing these
+      // env-var reads with "" lets esbuild constant-fold the `=== "1"` checks to
+      // false and dead-code-eliminate the `contextBridge.exposeInMainWorld` blocks
+      // in preload.cts (plus the matching main-process test guards). Conditional
+      // spread, not a ternary value — esbuild stringifies a bare `undefined` define
+      // as the literal "undefined", so dev/test builds must omit these keys entirely
+      // to keep the branches intact for the E2E harness.
+      ...(production
+        ? {
+            "process.env.DAINTREE_E2E_FAULT_MODE": JSON.stringify(""),
+            "process.env.DAINTREE_E2E_MODE": JSON.stringify(""),
+            "process.env.DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS": JSON.stringify(""),
+            // The plugin host-contract harness (#9286) reads this to point
+            // PluginService at the compiled sample plugin during e2e. A
+            // non-empty value in prod would silently redirect the user-plugin
+            // root, so it MUST be stripped alongside the other E2E flags.
+            "process.env.DAINTREE_E2E_SIDELOAD_PLUGIN_DIR": JSON.stringify(""),
+            // Remaining main-process E2E flags (#10026). These were read
+            // ungated in main-process code but never stripped, so the names
+            // survived in dist-electron/electron/*.js. Strip them too — the
+            // check-preload-backdoors gate now scans the main bundles and the
+            // STRIPPED_BY_BUILD list there must match these keys.
+            "process.env.DAINTREE_E2E_DISABLE_CACHED_VIEW_CPU_THROTTLE": JSON.stringify(""),
+            "process.env.DAINTREE_E2E_CRASH_DUMPS_DIR": JSON.stringify(""),
+            "process.env.DAINTREE_E2E_DEFER_RENDERER_LOAD": JSON.stringify(""),
+            "process.env.DAINTREE_E2E_WORKSPACE_LOAD_DELAY_MS": JSON.stringify(""),
+          }
+        : {}),
+    },
+  };
+}
 
 function removeBuildReadyMarker() {
   if (fs.existsSync(buildReadyFile)) {
@@ -127,95 +130,65 @@ function scheduleBuildReadyMarker() {
 }
 
 /**
- * Mirrors `isSafeGuestEntryPath` / `guestAdapterAssetPath` in
- * `electron/services/sitePreview/guestAdapterAssets.ts`, which is the module
- * the running app uses to read these assets back.
- *
- * Restated rather than imported: this script runs under plain `node`, which
- * cannot import the TypeScript module, and that module deliberately avoids the
- * manifest schema so it stays off the eager main graph. Two halves of one rule,
- * so `scripts/__tests__/plugin-build-assets.test.mjs` feeds both the same
- * inputs and fails when they disagree.
+ * The core Element Picker's guest bundles: a fixed list, not discovered from
+ * any manifest, because no plugin owns them. Restates `CORE_GUEST_ASSET_FILES`
+ * in `electron/services/elementPicker/guestAssets.ts`, which reads them back at
+ * runtime; `scripts/__tests__/core-picker-assets.test.mjs` pins the two
+ * together. Each is evaluated by the host inside a prelude, so each is built
+ * as a standalone browser IIFE.
  */
-function isSafeGuestEntryPath(value) {
-  if (value.includes("\\") || value.includes("\0")) return false;
-  // Windows drive/stream separator — `C:/x.ts` is not relative there.
-  if (value.includes(":")) return false;
-  if (value.startsWith("/") || path.isAbsolute(value)) return false;
-  if (!/\.(ts|tsx|js|mjs)$/.test(value)) return false;
-  const segments = value.split("/");
-  // The bundler's own output directory — see PLUGIN_EXTRA_ASSET_SKIP_DIRS.
-  // Case-insensitively, as the copy step below compares.
-  if (segments[0]?.toLowerCase() === "guest") return false;
-  return segments.every((segment) => segment !== "" && segment !== "." && segment !== "..");
-}
-
-function guestAdapterAssetPath(pluginName, adapterId) {
-  if (!adapterId.startsWith(`${pluginName}.`)) return null;
-  const suffix = adapterId.slice(pluginName.length + 1);
-  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(suffix)) return null;
-  return `guest/${suffix}.js`;
-}
-
-/**
- * Guest runtimes a built-in plugin ships as a standalone browser asset: code
- * the host reads back as text and installs into a previewed page through a
- * registered guest adapter (`electron/services/sitePreview/guestAdapters.ts`).
- * Each is neither a main entry (it never runs in the host) nor part of the
- * renderer bundle (nothing imports it), and the asset copy skips `renderer/`,
- * so each one is emitted straight to its derived path under the plugin's dist
- * dir.
- *
- * Discovered from `contributes.guestAdapters` in every built-in `plugin.json`,
- * the way `discoverBuiltInPluginMainEntries` discovers main entries — the array
- * this replaced was hand-maintained, so a second built-in guest runtime meant
- * editing this file. The output path is derived from the adapter id by
- * `guestAdapterAssetPath`, which is the same function the startup registration
- * uses to read the asset back, so the two cannot disagree.
- *
- * Pure and parameterized on the repo root so it is unit testable. A declaration
- * whose `entry` names a file that does not exist is kept, so esbuild reports the
- * missing entry by name; one whose id or entry breaks a structural rule is
- * skipped, because the manifest validation step has already refused it.
- */
-export function discoverGuestRuntimeAssets(rootDir) {
-  const pluginsRoot = path.join(rootDir, "plugins/builtin");
-  if (!fs.existsSync(pluginsRoot)) return [];
-  const assets = [];
-  for (const dirent of fs.readdirSync(pluginsRoot, { withFileTypes: true })) {
-    if (!dirent.isDirectory()) continue;
-    let manifest;
-    try {
-      manifest = JSON.parse(
-        fs.readFileSync(path.join(pluginsRoot, dirent.name, "plugin.json"), "utf8")
-      );
-    } catch {
-      // The dedicated manifest validation step reports unreadable manifests.
-      continue;
-    }
-    const pluginId = manifest?.name;
-    const declared = manifest?.contributes?.guestAdapters;
-    if (typeof pluginId !== "string" || !Array.isArray(declared)) continue;
-    for (const entry of declared) {
-      if (typeof entry?.id !== "string" || typeof entry?.entry !== "string") continue;
-      if (!isSafeGuestEntryPath(entry.entry)) continue;
-      const assetPath = guestAdapterAssetPath(pluginId, entry.id);
-      if (assetPath === null) continue;
-      assets.push({
-        adapterId: entry.id,
-        entry: `plugins/builtin/${dirent.name}/${entry.entry}`,
-        outfile: `dist-electron/plugins/builtin/${dirent.name}/${assetPath}`,
-      });
-    }
-  }
-  return assets;
-}
-
-/**
- * Guest build entries for this repo. Eager so the esbuild configs and the
- * exported surface the plugin's own asset tests build against are one list.
- */
-export const GUEST_RUNTIME_ASSETS = discoverGuestRuntimeAssets(root);
+export const CORE_PICKER_GUEST_ASSETS = [
+  {
+    id: "bootstrap",
+    entry: "electron/services/elementPicker/guest/bootstrap.ts",
+    outfile: "dist-electron/element-picker/guest/bootstrap.js",
+  },
+  {
+    id: "probe",
+    entry: "electron/services/elementPicker/guest/probe.ts",
+    outfile: "dist-electron/element-picker/guest/probe.js",
+  },
+  {
+    id: "plugin-runtime",
+    entry: "electron/services/elementPicker/guest/pluginRuntime.ts",
+    outfile: "dist-electron/element-picker/guest/pluginRuntime.js",
+  },
+  {
+    id: "extractor:svelte",
+    entry: "electron/services/elementPicker/guest/extractors/svelte.ts",
+    outfile: "dist-electron/element-picker/guest/extractors/svelte.js",
+  },
+  {
+    id: "extractor:react",
+    entry: "electron/services/elementPicker/guest/extractors/react.ts",
+    outfile: "dist-electron/element-picker/guest/extractors/react.js",
+  },
+  {
+    id: "extractor:solid",
+    entry: "electron/services/elementPicker/guest/extractors/solid.ts",
+    outfile: "dist-electron/element-picker/guest/extractors/solid.js",
+  },
+  {
+    id: "extractor:vue",
+    entry: "electron/services/elementPicker/guest/extractors/vue.ts",
+    outfile: "dist-electron/element-picker/guest/extractors/vue.js",
+  },
+  {
+    id: "extractor:angular",
+    entry: "electron/services/elementPicker/guest/extractors/angular.ts",
+    outfile: "dist-electron/element-picker/guest/extractors/angular.js",
+  },
+  {
+    id: "extractor:astro",
+    entry: "electron/services/elementPicker/guest/extractors/astro.ts",
+    outfile: "dist-electron/element-picker/guest/extractors/astro.js",
+  },
+  {
+    id: "extractor:preact",
+    entry: "electron/services/elementPicker/guest/extractors/preact.ts",
+    outfile: "dist-electron/element-picker/guest/extractors/preact.js",
+  },
+];
 
 /**
  * Pure so it is unit testable. The wrapping banner is what keeps the emitted
@@ -284,19 +257,11 @@ function copyBuiltInWorkflows() {
  * plugin panel preview's `panel.stories.tsx`) are dev-only. Every other subdirectory a plugin bundles (`bin/`,
  * `mcp/`, `view/`, …) is shipped as-is so `./`-relative `command`/`args` paths
  * resolve at runtime instead of ENOENT-ing (#10579).
- *
- * `guest/` is in the set because it is the OUTPUT directory the guest bundler
- * writes to (`guestAdapterAssetPath`), and the copy runs after that build — a
- * plugin with a `guest/` source dir would overwrite its own compiled bundle
- * with a same-named source file, and the host would read that instead. The
- * manifest schema refuses an `entry` under `guest/` for the same reason, so the
- * directory is host-owned in both trees.
  */
 export const PLUGIN_EXTRA_ASSET_SKIP_DIRS = new Set([
   "main",
   "renderer",
   "shared",
-  "guest",
   "__tests__",
   "__fixtures__",
   "review",
@@ -345,8 +310,7 @@ export function copyPluginExtraAssets(srcPluginDir, destPluginDir) {
   fs.mkdirSync(destPluginDir, { recursive: true });
   for (const entry of fs.readdirSync(srcPluginDir, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
-    // Lower-cased: on a case-insensitive filesystem `Guest/` would be copied
-    // over the bundle the guest build just emitted into `guest/`.
+    // Lower-cased: on a case-insensitive filesystem `Main/` names `main/`.
     if (PLUGIN_EXTRA_ASSET_SKIP_DIRS.has(entry.name.toLowerCase())) continue;
     const src = path.join(srcPluginDir, entry.name);
     const dest = path.join(destPluginDir, entry.name);
@@ -484,27 +448,15 @@ export function findMissingPluginAssets(distPluginsRoot) {
 }
 
 /**
- * Report every declared guest adapter whose built asset is absent from the
- * output. `findMissingPluginAssets` cannot cover these: a guest asset's path is
- * derived from the adapter id rather than named in the manifest, and it is
- * emitted by esbuild rather than copied. Without this check a manifest could
- * declare an adapter whose bundle never built, and the only symptom would be a
- * preview that fails to bind at runtime. Pure and parameterized on both roots so
- * it is unit testable.
+ * Every core picker bundle absent from the output. Parameterized on the output
+ * root so it is unit testable.
  */
-export function findMissingGuestAssets(rootDir, distPluginsRoot) {
+export function findMissingCorePickerAssets(distRoot) {
   const missing = [];
-  for (const asset of discoverGuestRuntimeAssets(rootDir)) {
-    // `outfile` is already repo-relative under dist-electron/plugins; re-root it
-    // so a test can point the check at a temporary output tree.
-    const relToPlugins = asset.outfile.replace("dist-electron/plugins/", "");
-    const resolved = path.resolve(distPluginsRoot, relToPlugins);
-    if (!isInsideDir(resolved, distPluginsRoot)) {
-      missing.push(`${asset.adapterId}: "${asset.outfile}" escapes the plugins output directory`);
-      continue;
-    }
+  for (const asset of CORE_PICKER_GUEST_ASSETS) {
+    const resolved = path.resolve(distRoot, asset.outfile.replace("dist-electron/", ""));
     if (!fs.existsSync(resolved)) {
-      missing.push(`${asset.adapterId}: "${asset.outfile}" not found in built output`);
+      missing.push(`${asset.id}: "${asset.outfile}" not found in built output`);
     }
   }
   return missing;
@@ -516,15 +468,15 @@ export function findMissingGuestAssets(rootDir, distPluginsRoot) {
  * otherwise.
  */
 function validateGuestAssets() {
-  const missing = findMissingGuestAssets(root, path.join(root, "dist-electron/plugins"));
+  const missing = findMissingCorePickerAssets(path.join(root, "dist-electron"));
   if (missing.length === 0) return;
 
   const detail = missing.map((m) => `  - ${m}`).join("\n");
   if (isWatch) {
-    console.warn(`[Build] Declared guest runtimes missing from output:\n${detail}`);
+    console.warn(`[Build] Core picker guest bundles missing from output:\n${detail}`);
     return;
   }
-  console.error(`[Build] Declared guest runtimes missing from output:\n${detail}`);
+  console.error(`[Build] Core picker guest bundles missing from output:\n${detail}`);
   process.exit(1);
 }
 
@@ -644,6 +596,34 @@ function runPluginTypecheck() {
   }
 }
 
+/**
+ * Config for the ESM files: main, its hosts and the built-in plugins.
+ * Built-in plugins are bundled in the same esbuild run so `splitting: true`
+ * dedupes shared modules (e.g. the GitHub service singletons after #8060)
+ * into a single chunk referenced by both the electron main bundle's compat
+ * shims and the plugin entry that `PluginService` loads at runtime.
+ * Exported so `scripts/__tests__/vueProductionCompilerBundle.test.ts` reads
+ * what a production run of this exact config emits.
+ */
+export function mainEsmConfig({ production, watch = false }) {
+  return {
+    ...commonOptions({ production }),
+    entryPoints: mainEsmEntryPoints(root),
+    outdir: "dist-electron",
+    outbase: ".",
+    format: "esm",
+    splitting: true, // Share chunks between main/hosts/plugins
+    chunkNames: "electron/chunks/[name]-[hash]",
+    plugins: [
+      ...mainBundlePlugins({ isProd: production }),
+      ...(watch ? [createReadyMarkerPlugin()] : []),
+    ],
+    banner: {
+      js: `import { createRequire } from 'module'; const require = createRequire(import.meta.url);`,
+    },
+  };
+}
+
 function createReadyMarkerPlugin() {
   return {
     name: "build-ready-marker",
@@ -684,28 +664,11 @@ async function run() {
     }
   }
 
-  // Config for ESM files (Main, Hosts, built-in plugins).
-  // Built-in plugins are bundled in the same esbuild run so `splitting: true`
-  // dedupes shared modules (e.g. the GitHub service singletons after #8060)
-  // into a single chunk referenced by both the electron main bundle's compat
-  // shims and the plugin entry that `PluginService` loads at runtime.
-  const esmConfig = {
-    ...common,
-    entryPoints: mainEsmEntryPoints(root),
-    outdir: "dist-electron",
-    outbase: ".",
-    format: "esm",
-    splitting: true, // Share chunks between main/hosts/plugins
-    chunkNames: "electron/chunks/[name]-[hash]",
-    plugins: [mainBundleStubsPlugin(), ...(isWatch ? [createReadyMarkerPlugin()] : [])],
-    banner: {
-      js: `import { createRequire } from 'module'; const require = createRequire(import.meta.url);`,
-    },
-  };
+  const esmConfig = mainEsmConfig({ production: isProd, watch: isWatch });
 
   // Config for CJS file (Preload)
   const cjsConfig = {
-    ...common,
+    ...commonOptions({ production: isProd }),
     entryPoints: [MAIN_PRELOAD_ENTRY],
     outdir: "dist-electron/electron",
     format: "cjs",
@@ -713,7 +676,7 @@ async function run() {
     plugins: isWatch ? [createReadyMarkerPlugin()] : [],
   };
 
-  const guestConfigs = GUEST_RUNTIME_ASSETS.map((asset) =>
+  const guestConfigs = CORE_PICKER_GUEST_ASSETS.map((asset) =>
     guestRuntimeBuildConfig(asset, { minify: isProd, absWorkingDir: root })
   );
 
@@ -726,13 +689,8 @@ async function run() {
       const ctxSdk = await context(sdkConfig);
       const ctxGuests = await Promise.all(guestConfigs.map((config) => context(config)));
 
-      // Every discovered guest bundle gets its own watch context, so editing a
-      // guest's SOURCE rebuilds its asset in place. What a running watcher does
-      // NOT pick up is a manifest edit: `contributes.guestAdapters` is read once
-      // here, exactly as `discoverBuiltInPluginMainEntries` and the manifest copy
-      // are, so adding or renaming a declaration needs the watcher restarted.
-      // That is the pre-existing model for every manifest-derived build input,
-      // not something guest adapters introduce.
+      // Every guest bundle gets its own watch context, so editing a guest's
+      // source rebuilds its asset in place.
       await Promise.all([
         ctxEsm.watch(),
         ctxCjs.watch(),

@@ -79,7 +79,6 @@ const KNOWN_VIOLATIONS = new Map<string, number>([
   ["electron/workspace-host/__tests__/WorkspaceService.forgeRemote.test.ts", 1],
   ["src/clients/__tests__/filesClient.test.ts", 1],
   ["src/clients/__tests__/projectClient.test.ts", 1],
-  ["src/components/ui/__tests__/reentry-summary.test.tsx", 1],
   ["src/services/terminal/__tests__/TerminalRendererPolicy.test.ts", 2],
 ]);
 

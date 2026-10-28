@@ -12,6 +12,8 @@ import { dispatchEscape, _resetForTests as resetEscapeStack } from "@/lib/escape
 import { primeRadix } from "../radix-loader";
 import { Toaster } from "../toaster";
 import { readIndexCss } from "@/__tests__/support/hostCss";
+import { __resetPowerPolicyStateForTests, isScreenLocked } from "@/lib/powerPolicyState";
+import type { PowerPolicySnapshot } from "@shared/types/powerPolicy";
 
 // The app root supplies the TooltipProvider. The trigger renders its child
 // as-is; the content is dropped so tooltip text can't collide with queries.
@@ -1096,6 +1098,151 @@ describe("Toast window-blur pause (issue #10056)", () => {
       vi.advanceTimersByTime(16);
     });
 
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(screen.getByText("Test message")).toBeTruthy();
+
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(1500);
+    });
+    expect(screen.queryByText("Test message")).toBeNull();
+  });
+});
+
+describe("Toast screen-lock pause (issue #14885)", () => {
+  let pushPolicy: ((snapshot: PowerPolicySnapshot) => void) | null = null;
+
+  function setScreenLocked(locked: boolean): void {
+    isScreenLocked();
+    pushPolicy!({
+      level: locked ? "deep" : "active",
+      canObserve: !locked,
+      onBattery: false,
+      screenLocked: locked,
+      anyWindowFocused: true,
+      anyWindowVisible: true,
+    });
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    useNotificationStore.getState().reset();
+    useAnnouncerStore.setState({ polite: null, assertive: null });
+    pushPolicy = null;
+    Object.defineProperty(window, "electron", {
+      configurable: true,
+      writable: true,
+      value: {
+        events: {
+          on: (name: string, cb: (snapshot: PowerPolicySnapshot) => void) => {
+            if (name === "system:power-policy-changed") pushPolicy = cb;
+            return () => {};
+          },
+        },
+      },
+    });
+  });
+
+  afterEach(() => {
+    vi.runOnlyPendingTimers();
+    vi.useRealTimers();
+    Reflect.deleteProperty(window, "electron");
+    __resetPowerPolicyStateForTests();
+  });
+
+  it("holds a toast on a locked screen that still reports focus, and resumes on unlock", async () => {
+    render(<Toaster />);
+    await act(async () => {
+      addToast({ duration: 1000 });
+      vi.advanceTimersByTime(16);
+    });
+
+    // The deadline passes before React re-renders for the lock, so only the
+    // eager clear on the lock edge holds the toast.
+    act(() => {
+      setScreenLocked(true);
+      vi.advanceTimersByTime(20_000);
+    });
+    expect(screen.getByText("Test message")).toBeTruthy();
+
+    await act(async () => setScreenLocked(false));
+    await act(async () => {
+      vi.advanceTimersByTime(900);
+    });
+    expect(screen.getByText("Test message")).toBeTruthy();
+    await act(async () => {
+      vi.advanceTimersByTime(600);
+    });
+    expect(screen.queryByText("Test message")).toBeNull();
+  });
+
+  it("holds the success dwell through the lock", async () => {
+    render(<Toaster />);
+    await act(async () => {
+      addToast({
+        message: "Settings saved",
+        action: { label: "Undo", onClick: () => {}, successLabel: "Undone" },
+      });
+      vi.advanceTimersByTime(16);
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByText("Undo"));
+    });
+
+    act(() => {
+      setScreenLocked(true);
+      vi.advanceTimersByTime(5000);
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(screen.getByText("Undone")).toBeTruthy();
+
+    await act(async () => setScreenLocked(false));
+    await act(async () => {
+      vi.advanceTimersByTime(2500);
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(200);
+    });
+    expect(screen.queryByText("Undone")).toBeNull();
+  });
+
+  it("starts paused when the toast is raised on a locked screen", async () => {
+    setScreenLocked(true);
+    render(<Toaster />);
+    await act(async () => {
+      addToast({ duration: 1000 });
+      vi.advanceTimersByTime(16);
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(screen.getByText("Test message")).toBeTruthy();
+
+    await act(async () => setScreenLocked(false));
+    await act(async () => {
+      vi.advanceTimersByTime(1500);
+    });
+    expect(screen.queryByText("Test message")).toBeNull();
+  });
+
+  it("stays held until both the lock and a blur have cleared", async () => {
+    render(<Toaster />);
+    await act(async () => {
+      addToast({ duration: 1000 });
+      vi.advanceTimersByTime(16);
+    });
+
+    await act(async () => setScreenLocked(true));
+    await act(async () => {
+      window.dispatchEvent(new Event("blur"));
+    });
+    await act(async () => setScreenLocked(false));
     await act(async () => {
       vi.advanceTimersByTime(5000);
     });

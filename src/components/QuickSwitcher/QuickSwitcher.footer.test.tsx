@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { QuickSwitcherItem as QuickSwitcherItemData } from "@/hooks/useQuickSwitcher";
 
@@ -54,7 +54,20 @@ vi.mock("@/components/ui/tooltip", () => ({
   TooltipContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
+vi.mock("@/components/PanelPalette/PanelKindIcon", () => ({
+  PanelKindIcon: ({ iconId }: { iconId: string }) => <span data-testid={`kind-icon-${iconId}`} />,
+}));
+
 import { QuickSwitcher } from "./QuickSwitcher";
+import type { PluginSearchProviderInfo } from "@shared/types/plugin";
+
+const NO_SCOPE = {
+  scopedProvider: null,
+  keywordProvider: null,
+  scopedStatus: "idle" as const,
+  enterScope: () => {},
+  exitScope: () => {},
+};
 
 const terminalItem: QuickSwitcherItemData = {
   id: "terminal:t1",
@@ -93,6 +106,7 @@ function renderQuickSwitcher({ results, selectedIndex }: RenderArgs) {
       selectNext={() => {}}
       selectItem={() => {}}
       confirmSelection={() => {}}
+      {...NO_SCOPE}
     />
   );
 }
@@ -113,14 +127,15 @@ describe("QuickSwitcher dynamic footer hint", () => {
       selectNext: () => {},
       selectItem: () => {},
       confirmSelection: () => {},
+      ...NO_SCOPE,
     };
 
     const { rerender } = render(<QuickSwitcher {...props} selectedIndex={0} />);
-    expect(screen.getByText("to switch terminal")).toBeTruthy();
+    expect(screen.getByText("to switch panel")).toBeTruthy();
 
     rerender(<QuickSwitcher {...props} selectedIndex={1} />);
     expect(screen.getByText("to switch worktree")).toBeTruthy();
-    expect(screen.queryByText("to switch terminal")).toBeNull();
+    expect(screen.queryByText("to switch panel")).toBeNull();
   });
 
   it("removes the footer when results transition from populated to empty", () => {
@@ -137,15 +152,16 @@ describe("QuickSwitcher dynamic footer hint", () => {
       selectNext: () => {},
       selectItem: () => {},
       confirmSelection: () => {},
+      ...NO_SCOPE,
     };
 
     const { rerender } = render(
       <QuickSwitcher {...baseProps} results={[terminalItem]} selectedIndex={0} />
     );
-    expect(screen.getByText("to switch terminal")).toBeTruthy();
+    expect(screen.getByText("to switch panel")).toBeTruthy();
 
     rerender(<QuickSwitcher {...baseProps} results={[]} selectedIndex={-1} />);
-    expect(screen.queryByText("to switch terminal")).toBeNull();
+    expect(screen.queryByText("to switch panel")).toBeNull();
     expect(screen.queryByText("to select")).toBeNull();
   });
 
@@ -162,7 +178,7 @@ describe("QuickSwitcher dynamic footer hint", () => {
 
     const hintEl = document.getElementById(describedBy!);
     expect(hintEl).not.toBeNull();
-    expect(hintEl?.textContent).toContain("to switch terminal");
+    expect(hintEl?.textContent).toContain("to switch panel");
   });
 
   it("does not render an aria-live region", () => {
@@ -181,5 +197,154 @@ describe("QuickSwitcher dynamic footer hint", () => {
     const footerContainer = document.getElementById(footerHintId!);
     expect(footerContainer).not.toBeNull();
     expect(footerContainer?.querySelector("[aria-live]")).toBeNull();
+  });
+});
+
+const notesProvider: PluginSearchProviderInfo = {
+  key: "acme.notes.notes",
+  pluginId: "acme.notes",
+  pluginName: "Acme Notes",
+  title: "Notes",
+  keyword: "notes",
+  iconId: "notebook",
+  blend: false,
+  kind: "declarative",
+  shown: true,
+};
+
+const pluginItem: QuickSwitcherItemData = {
+  id: "plugin:acme.notes.notes:n1",
+  type: "plugin",
+  title: "Groceries",
+  subtitle: "Shopping list",
+  pluginHit: {
+    id: "plugin:acme.notes.notes:n1",
+    providerKey: "acme.notes.notes",
+    providerTitle: "Notes",
+    pluginId: "acme.notes",
+    pluginName: "Acme Notes",
+    row: {
+      id: "n1",
+      label: "Groceries",
+      description: "Shopping list",
+      iconId: "notebook",
+      target: { type: "panel", panelKindId: "acme.notes.notes", args: { id: "n1" } },
+    },
+  },
+};
+
+function renderScoped(overrides: Partial<React.ComponentProps<typeof QuickSwitcher>>) {
+  return render(
+    <QuickSwitcher
+      isOpen
+      query=""
+      results={[]}
+      totalResults={0}
+      selectedIndex={0}
+      isLoading={false}
+      matchesById={new Map()}
+      close={() => {}}
+      setQuery={() => {}}
+      setSelectedIndex={() => {}}
+      selectPrevious={() => {}}
+      selectNext={() => {}}
+      selectItem={() => {}}
+      confirmSelection={() => {}}
+      {...NO_SCOPE}
+      {...overrides}
+    />
+  );
+}
+
+describe("QuickSwitcher plugin search scope", () => {
+  it("scopes to the provider whose keyword the query spells when Tab is pressed", () => {
+    const enterScope = vi.fn();
+    const selectNext = vi.fn();
+    renderScoped({
+      query: "notes",
+      results: [terminalItem],
+      totalResults: 1,
+      keywordProvider: notesProvider,
+      enterScope,
+      selectNext,
+    });
+    expect(screen.getByText("to search Notes")).toBeTruthy();
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "Tab" });
+    expect(enterScope).toHaveBeenCalledWith("acme.notes.notes");
+    expect(selectNext).not.toHaveBeenCalled();
+  });
+
+  it("keeps Tab moving the selection without a keyword match, and Shift+Tab even with one", () => {
+    const enterScope = vi.fn();
+    const selectNext = vi.fn();
+    const selectPrevious = vi.fn();
+    const { rerender } = renderScoped({
+      query: "zsh",
+      results: [terminalItem, worktreeItem],
+      totalResults: 2,
+      enterScope,
+      selectNext,
+    });
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "Tab" });
+    expect(selectNext).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <QuickSwitcher
+        isOpen
+        query="notes"
+        results={[terminalItem, worktreeItem]}
+        totalResults={2}
+        selectedIndex={0}
+        isLoading={false}
+        matchesById={new Map()}
+        close={() => {}}
+        setQuery={() => {}}
+        setSelectedIndex={() => {}}
+        selectPrevious={selectPrevious}
+        selectNext={selectNext}
+        selectItem={() => {}}
+        confirmSelection={() => {}}
+        {...NO_SCOPE}
+        keywordProvider={notesProvider}
+        enterScope={enterScope}
+      />
+    );
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "Tab", shiftKey: true });
+    expect(selectPrevious).toHaveBeenCalledTimes(1);
+    expect(enterScope).not.toHaveBeenCalled();
+  });
+
+  it("steps out of the scope on Backspace in an empty field and on Escape with no query", () => {
+    const exitScope = vi.fn();
+    const close = vi.fn();
+    renderScoped({ scopedProvider: notesProvider, scopedStatus: "done", exitScope, close });
+    const input = screen.getByRole("combobox") as HTMLInputElement;
+    expect(input.placeholder).toBe("Search Notes");
+
+    fireEvent.keyDown(input, { key: "Backspace" });
+    expect(exitScope).toHaveBeenCalledTimes(1);
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(exitScope).toHaveBeenCalledTimes(2);
+    expect(close).not.toHaveBeenCalled();
+  });
+
+  it("names the provider when it didn't answer in time", () => {
+    renderScoped({ query: "gro", scopedProvider: notesProvider, scopedStatus: "timeout" });
+    expect(screen.getByText("Notes didn't answer in time")).toBeTruthy();
+  });
+
+  it("offers to type when the scoped provider has nothing for an empty query", () => {
+    renderScoped({ scopedProvider: notesProvider, scopedStatus: "done" });
+    expect(screen.getByText("Type to search Notes")).toBeTruthy();
+    expect(screen.queryByText(/create a terminal/i)).toBeNull();
+  });
+
+  it("renders a plugin row with its icon, its provider and an open hint", () => {
+    renderScoped({ query: "gro", results: [pluginItem], totalResults: 1 });
+    const option = within(screen.getByRole("listbox")).getByRole("option");
+    expect(option.textContent).toContain("Groceries");
+    expect(option.textContent).toContain("Notes");
+    expect(option.querySelector('[data-testid="kind-icon-notebook"]')).not.toBeNull();
+    expect(screen.getByText("to open")).toBeTruthy();
   });
 });

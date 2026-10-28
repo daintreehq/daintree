@@ -9,6 +9,9 @@ import {
   type ReactNode,
 } from "react";
 import { flushSync } from "react-dom";
+import { usePanelStore } from "@/store";
+import { usePluginContextMenuItems } from "@/hooks/usePluginContextMenuItems";
+import { PluginContextMenuSection } from "@/components/Plugin/PluginContextMenuSection";
 import {
   ArrowLeft,
   ArrowRight,
@@ -173,6 +176,19 @@ interface BrowserToolbarProps {
   extraActions?: ReactNode;
 }
 
+// Plugins get the page URL but never the credentials embedded in it.
+function stripUrlCredentials(raw: string): string {
+  try {
+    const parsed = new URL(raw);
+    if (!parsed.username && !parsed.password) return raw;
+    parsed.username = "";
+    parsed.password = "";
+    return parsed.toString();
+  } catch {
+    return raw;
+  }
+}
+
 export function BrowserToolbar({
   terminalId,
   projectId,
@@ -215,6 +231,16 @@ export function BrowserToolbar({
   onViewportFitToggle,
 }: BrowserToolbarProps) {
   const address = toAddress ? toAddress(url) : url;
+  const panelKind = usePanelStore((s) => (terminalId ? s.panelsById[terminalId]?.kind : undefined));
+  const pluginMenuContext = useMemo(
+    () => ({ panelId: terminalId, panelKind }),
+    [terminalId, panelKind]
+  );
+  const pluginItems = usePluginContextMenuItems("browser", pluginMenuContext);
+  const pluginDispatchArgs = useMemo(
+    () => ({ panelId: terminalId, panelKind, url: stripUrlCredentials(address) }),
+    [terminalId, panelKind, address]
+  );
   const [inputValue, setInputValue] = useState(getDisplayUrl(address));
   const [isEditing, setIsEditing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -700,7 +726,10 @@ export function BrowserToolbar({
   const isConsoleShown = canToggleConsole && isConsoleOpen;
   const showStop = isLoading && Boolean(onStop);
   const consoleInMenu = isCompact && Boolean(onToggleConsole);
-  const hasMoreMenu = Boolean(onZoomChange || onToggleDevTools || onPromoteToPortal || isCompact);
+  const hasNativeMenuContent = Boolean(
+    onZoomChange || onToggleDevTools || onPromoteToPortal || isCompact
+  );
+  const hasMoreMenu = hasNativeMenuContent || pluginItems.length > 0;
   // The chip stays while its popover is open, so stepping through 100% keeps the
   // controls under the pointer; it goes once the popover closes at the default.
   const showZoomChip = Boolean(onZoomChange) && (isNonDefaultZoom || isZoomPopoverOpen);
@@ -1437,6 +1466,12 @@ export function BrowserToolbar({
                     Open in Portal
                   </DropdownMenuItem>
                 )}
+                <PluginContextMenuSection
+                  items={pluginItems}
+                  leadingSeparator={hasNativeMenuContent}
+                  components={{ Item: DropdownMenuItem, Separator: DropdownMenuSeparator }}
+                  dispatchArgs={pluginDispatchArgs}
+                />
               </DropdownMenuContent>
             </DropdownMenu>
           )}

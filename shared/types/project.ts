@@ -14,14 +14,17 @@ import type {
   FileBrowserTreeSnapshot,
   TerminalSpawnSource,
   PanelRestoreRecovery,
+  TerminalAgentObservation,
+  TerminalRestoreProvenance,
   TerminalScratchpad,
+  TerminalFirstPrompt,
 } from "./panel.js";
 import type { PersistedPanelKindRef } from "../config/panelKindRegistry.js";
 import type { CommandOverride } from "./commands.js";
 import type { GitignoreTemplateId } from "../config/gitignoreTemplates.js";
 import type { GitStatus } from "./git.js";
 import type { EditorConfig } from "./editor.js";
-import type { NotificationSettings } from "./ipc/api.js";
+import type { NotificationSettings, VoiceDictionaryEntry } from "./ipc/api.js";
 
 /**
  * Project lifecycle status:
@@ -118,6 +121,8 @@ export interface Project {
   inRepoSettings?: boolean;
   /** Whether the project is pinned to the top of the project switcher */
   pinned?: boolean;
+  /** Exempts the project from automatic idle sleep; manual Sleep still works. */
+  neverAutoSleep?: boolean;
   /**
    * Epoch ms the user filed this project away. Archived projects leave the
    * switcher's browse bands for a folded "Archived" band, but keep everything
@@ -252,6 +257,13 @@ export interface PanelSnapshot {
   location: PanelLocation;
   /** Restore target of a parked panel; written only with `location: "background"`. */
   backgroundRestoreLocation?: "grid" | "dock";
+  /**
+   * Set while a plugin panel the user docked sits in the grid only because its
+   * kind wasn't registered when it was restored (#13907). The value is the
+   * worktree it was docked with: `null` for none (a `scope: "project"` panel).
+   * `undefined` means no dock restore is pending.
+   */
+  pendingDockWorktreeId?: string | null;
   /** Command to execute after shell starts (e.g., 'claude --model sonnet-4' for AI agents) */
   command?: string;
   /** Current URL for browser/dev-preview panes */
@@ -374,8 +386,18 @@ export interface PanelSnapshot {
    * restore holds it again instead of starting a fresh conversation.
    */
   restoreRecovery?: PanelRestoreRecovery;
+  /** How restore last rebuilt the pane (#14017). Untrusted on read — sanitized at restore. */
+  restoreProvenance?: TerminalRestoreProvenance;
+  /** The last agent state the host reported for the pane (#14017). Untrusted on read. */
+  lastAgentObservation?: TerminalAgentObservation;
+  /** The plugin whose `agent.launch` created the pane (#14017). */
+  launchedByPluginId?: string;
+  /** The launching plugin asked restore to hold the pane (#14017). */
+  holdOnRestart?: true;
   /** The terminal's Scratchpad notes (#12835). Untrusted on read — sanitized at restore. */
   scratchpad?: TerminalScratchpad;
+  /** The first prompt Daintree delivered to the run (#14592). Untrusted on read — sanitized at restore. */
+  firstPrompt?: TerminalFirstPrompt;
   /** Last known agent state for crash recovery display */
   agentState?: AgentState;
   /** Timestamp of last agent state change */
@@ -480,8 +502,17 @@ export interface ProjectState {
   mruList?: string[];
 }
 
-/** Recipe terminal type */
-export type RecipeTerminalType = AgentId | "terminal" | "dev-preview";
+/**
+ * Recipe terminal type. `plugin-panel` opens one of the contributing plugin's
+ * own panels (#13797) and exists only in plugin recipes: every other recipe
+ * tier's sanitizer drops it.
+ */
+export type RecipeTerminalType = AgentId | "terminal" | "dev-preview" | "plugin-panel";
+
+/** Whether a recipe step launches an agent rather than a shell, a dev preview or a panel. */
+export function isAgentRecipeType(type: string): boolean {
+  return type !== "terminal" && type !== "dev-preview" && type !== "plugin-panel";
+}
 
 /** A single terminal definition within a recipe */
 export interface RecipeTerminal {
@@ -493,8 +524,17 @@ export interface RecipeTerminal {
   command?: string;
   /** Environment variables to set (optional) */
   env?: Record<string, string>;
-  /** Initial prompt to send to agent terminals after boot (optional). Supports {{issue_number}}, {{pr_number}}, {{worktree_path}}, {{branch_name}} variables replaced at runtime. */
+  /** Initial prompt to send to agent terminals after boot (optional). Supports {{issue_number}}, {{pr_number}}, {{worktree_path}}, {{branch_name}} variables replaced at runtime, and a plugin recipe's {{plugin.<name>}} variables. */
   initialPrompt?: string;
+  /**
+   * Standing instruction appended to an agent's system prompt (#13797). Plugin
+   * recipes only, and substituted like `initialPrompt`.
+   */
+  systemPrompt?: string;
+  /** The runtime panel kind a `plugin-panel` step opens, always one of its own plugin's. */
+  panelKindId?: string;
+  /** Handed to a `plugin-panel` step's view as `initialArgs`, or as `openRequest` to a panel it reuses. */
+  panelArgs?: Record<string, unknown>;
   /** Additional CLI arguments for agent terminals (e.g., "--model sonnet"). Whitespace-separated; applied at spawn time only. */
   args?: string;
   /** Dev server command for dev-preview terminals (optional). Falls back to project devServerCommand if not set. */
@@ -555,6 +595,17 @@ export interface TerminalRecipe {
    * import/export, so a hand-edited `recipes.json` cannot impersonate a plugin.
    */
   origin?: PluginRecipeOrigin;
+  /**
+   * The `{{plugin.<name>}}` variables a plugin recipe declares (#13797), which
+   * `host.runRecipe` may fill. Plugin recipes only.
+   */
+  pluginVariables?: string[];
+  /**
+   * The recipe's agents need its plugin's agent tools, so a launch while those
+   * are off in the project is refused rather than starting without them.
+   * Plugin recipes only; never grants access.
+   */
+  requiresAgentTools?: true;
 }
 
 /** How a recipe's `autoAssign` behaviour is spelled everywhere it is carried. */
@@ -853,6 +904,12 @@ export interface ProjectSettings {
   /** Hostnames the user approved for the browser panel beyond the implicit local/private allow-list */
   browserAllowedHosts?: string[];
   /**
+   * The project's dictation vocabulary, oldest first. Main owns every write
+   * (the `voiceDictionary` project operations); a settings save keeps what is
+   * stored rather than the copy it carries.
+   */
+  voiceDictionary?: VoiceDictionaryEntry[];
+  /**
    * Daintree MCP tool set exposed to agents launched in this project's worktrees.
    * - `off` (default): no MCP server injected
    * - `core`: orchestration — create worktrees, launch agents, prompt, read, wait on, move and close the terminals the agent's own session opened
@@ -918,6 +975,7 @@ export const PROJECT_SETTINGS_SHAREABILITY = {
   activeResourceEnvironment: "local",
   defaultWorktreeMode: "local",
   browserAllowedHosts: "local",
+  voiceDictionary: "shareable",
   daintreeMcpTier: "local",
   daintreeMcpSkipConfirmations: "local",
   exposeDaintreeMcpToAgents: "local",
@@ -993,6 +1051,7 @@ export const PROJECT_SETTINGS_AGENT_EXPOSURE = {
   activeResourceEnvironment: "exposed",
   defaultWorktreeMode: "exposed",
   browserAllowedHosts: "internal",
+  voiceDictionary: "internal",
   daintreeMcpTier: "internal",
   daintreeMcpSkipConfirmations: "internal",
   exposeDaintreeMcpToAgents: "internal",

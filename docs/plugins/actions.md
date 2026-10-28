@@ -8,7 +8,7 @@ Two sets are absent by construction. Actions on the plugin-dispatch deny list ar
 
 `danger` is the host's own classification, not advice. A `confirm` action cannot run from `host.dispatch`: plugins have no confirmation path, so the dispatch resolves `{ ok: false }` with a `CONFIRMATION_REQUIRED` error and no dialog is shown to the user. Call `host.actions.canDispatch(id)` first: it resolves `"ok"` for a `safe` action, `"confirm"` for one the dispatch would refuse, and `"restricted"` for an unknown or unavailable id.
 
-`canDispatch` sees only the id, and some `safe` actions are refused for particular arguments. `terminal.new` with `command` or `cwd` is raised to `confirm` for a plugin and refused; without either it opens a plain terminal. `worktree.createWithRecipe` and `workflow.startWorkOnIssue` fail when the arguments carry a `recipeId`, so a plugin cannot start a recipe's terminals through them (and `recipe.run` is `confirm`). `file.showItemInFolder` fails when `allowOutsideRoots` is set. `session.bookmark.promote`, `session.bookmark.rename` and `session.bookmark.delete` fail when the dispatch has no project in scope, and when the session does not belong to that project. Each of these resolves `{ ok: false }` with an error rather than running.
+`canDispatch` sees only the id, and some `safe` actions are refused for particular arguments. `terminal.new` with `command` or `cwd` is raised to `confirm` for a plugin and refused; without either it opens a plain terminal. `agent.launch` with non-empty `agentLaunchFlags`, `env` or `systemPrompt`, any `presetId`, or a `prompt` or `model` starting with `-` is raised to `confirm` for a plugin and refused, since those choose how the agent runs rather than give it a task; with a prompt, a `cwd` or a model name it launches as usual. `worktree.createWithRecipe` and `workflow.startWorkOnIssue` fail when the arguments carry a `recipeId`, so a plugin cannot start a recipe's terminals through them (and `recipe.run` is `confirm`). `file.showItemInFolder` fails when `allowOutsideRoots` is set. `session.bookmark.promote`, `session.bookmark.rename` and `session.bookmark.delete` fail when the dispatch has no project in scope, and when the session does not belong to that project. Each of these resolves `{ ok: false }` with an error rather than running.
 
 An argument shown as `name?` is optional. Argument names come from each action's schema; the schema is the authority on their types and bounds.
 
@@ -100,6 +100,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `devPreview.restart` | Restart dev server | safe | `panelId?`, `projectId?` |
 | `devPreview.restartAndClearCache` | Restart and clear cache | confirm | `panelId?`, `projectId?` |
 | `devPreview.stop` | Stop dev server | safe | — |
+| `devPreview.toggleElementPicker` | Toggle Element Picker | safe | `panelId?` |
 | `devPreview.toggleTool` | Toggle dev preview tool | safe | `toolId`, `panelId?` |
 | `devServer.start` | Open dev preview | safe | `activateDockOnCreate?`, `location?` |
 
@@ -155,9 +156,11 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `forge.convertPRToDraft` | Convert pull request to draft | confirm | `prNumber`, `cwd?`, `worktreeId?`, `worktreePath?` |
 | `forge.createIssue` | Create issue | confirm | `title`, `body?`, `cwd?`, `labels?`, `worktreeId?`, `worktreePath?` |
 | `forge.createPR` | Create pull request | confirm | `base`, `head`, `title`, `body?`, `cwd?`, `draft?`, `worktreeId?`, `worktreePath?` |
+| `forge.disableAutoMerge` | Cancel merge when ready | confirm | `prNumber`, `worktreeId?`, `worktreePath?` |
 | `forge.dismissReview` | Dismiss pull request review | confirm | `message`, `prNumber`, `reviewId`, `cwd?`, `worktreeId?`, `worktreePath?` |
 | `forge.editIssue` | Edit issue | confirm | `issueNumber`, `body?`, `cwd?`, `title?`, `worktreeId?`, `worktreePath?` |
 | `forge.editPR` | Edit pull request | confirm | `prNumber`, `body?`, `cwd?`, `title?`, `worktreeId?`, `worktreePath?` |
+| `forge.enableAutoMerge` | Merge pull request when ready | confirm | `expectedHeadSha`, `prNumber`, `expectedBaseRef?`, `mergeMethod?`, `worktreeId?`, `worktreePath?` |
 | `forge.getChecks` | Get CI checks | safe | `prNumber`, `cwd?`, `worktreeId?`, `worktreePath?` |
 | `forge.getCIStatus` | Get CI status | safe | `prNumber`, `cwd?`, `worktreeId?`, `worktreePath?` |
 | `forge.getIssue` | Get issue | safe | `issueNumber`, `cwd?`, `worktreeId?`, `worktreePath?` |
@@ -168,7 +171,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `forge.listIssues` | List issues | safe | `bypassCache?`, `cursor?`, `cwd?`, `direction?`, `perPage?`, `search?`, `sort?`, `state?`, `view?`, `worktreeId?`, `worktreePath?` |
 | `forge.listPRs` | List pull requests | safe | `bypassCache?`, `cursor?`, `cwd?`, `direction?`, `perPage?`, `search?`, `sort?`, `state?`, `view?`, `worktreeId?`, `worktreePath?` |
 | `forge.markPRReadyForReview` | Mark pull request ready for review | confirm | `prNumber`, `cwd?`, `worktreeId?`, `worktreePath?` |
-| `forge.mergePR` | Merge pull request | confirm | `prNumber`, `commitMessage?`, `commitTitle?`, `cwd?`, `mergeMethod?`, `worktreeId?`, `worktreePath?` |
+| `forge.mergePR` | Merge pull request | confirm | `prNumber`, `commitMessage?`, `commitTitle?`, `cwd?`, `expectedBaseRef?`, `expectedHeadSha?`, `mergeMethod?`, `worktreeId?`, `worktreePath?` |
 | `forge.openCommits` | Open commits | safe | `branch?`, `projectId?`, `projectPath?` |
 | `forge.openIssue` | Open issue | safe | `issueNumber`, `cwd?`, `worktreeId?`, `worktreePath?` |
 | `forge.openIssues` | Open issues | safe | `projectId?`, `projectPath?`, `query?`, `state?` |
@@ -193,7 +196,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `git.discardFileChanges` | Discard file changes | confirm | `filePath`, `worktreeId?`, `worktreePath?` |
 | `git.fetch` | Fetch | safe | `cwd?`, `prune?`, `worktreeId?`, `worktreePath?` |
 | `git.forcePushWithLease` | Force push with lease | confirm | `cwd?`, `worktreeId?`, `worktreePath?` |
-| `git.getFileDiff` | Get file diff | safe | `filePath`, `status`, `cwd?`, `ignoreWhitespace?`, `maxBytes?`, `offset?`, `worktreeId?`, `worktreePath?` |
+| `git.getFileDiff` | Get file diff | safe | `filePath`, `status`, `cwd?`, `ignoreWhitespace?`, `maxBytes?`, `offset?`, `side?`, `worktreeId?`, `worktreePath?` |
 | `git.getProjectPulse` | Get project pulse | safe | `forceRefresh?`, `includeDelta?`, `includeRecentCommits?`, `rangeDays?`, `worktreeId?`, `worktreePath?` |
 | `git.getStagingStatus` | Get staging status | safe | `cwd?`, `limit?`, `offset?`, `worktreeId?`, `worktreePath?` |
 | `git.listCommits` | List commits | safe | `branch?`, `cursor?`, `cwd?`, `limit?`, `offset?`, `search?`, `skip?`, `worktreeId?`, `worktreePath?` |
@@ -202,6 +205,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `git.pullRebase` | Pull and rebase | confirm | `cwd?`, `worktreeId?`, `worktreePath?` |
 | `git.push` | Push | confirm | `cwd?`, `setUpstream?`, `worktreeId?`, `worktreePath?` |
 | `git.rebaseOntoBase` | Rebase onto base branch | confirm | `baseBranch`, `cwd?`, `worktreeId?`, `worktreePath?` |
+| `git.retryAuthFetch` | Retry suspended fetches | safe | — |
 | `git.stageAll` | Stage all files | safe | `cwd?`, `worktreeId?`, `worktreePath?` |
 | `git.stageFile` | Stage file | safe | `filePath`, `cwd?`, `worktreeId?`, `worktreePath?` |
 | `git.unstageAll` | Unstage all files | safe | `cwd?`, `worktreeId?`, `worktreePath?` |
@@ -217,6 +221,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `help.openCommandsFolder` | Open assistant commands folder | safe | — |
 | `help.resumePastSession` | Resume past assistant session | safe | `agentId`, `sessionId`, `slot?` |
 | `help.tour.show` | Daintree Tour | safe | `tourId?` |
+| `help.tour.status` | Tour status | safe | `tourId?` |
 
 ## introspection
 
@@ -252,12 +257,18 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `action.palette.open` | Open command palette | safe | — |
 | `find.inFocusedPanel` | Find in focused panel | safe | — |
 | `nav.quickSwitcher` | Quick switcher | safe | — |
+| `nav.showGrid` | Show grid | safe | — |
+| `nav.showProjectHome` | Show project home | safe | — |
+| `nav.showProjectSplit` | Show project home beside grid | safe | — |
 | `nav.toggleFocusMode` | Toggle focus mode | safe | — |
+| `ui.sidebar.showWorktrees` | Show worktrees in sidebar | safe | — |
+| `ui.sidebar.switchView` | Switch sidebar view | safe | `viewId?` |
 
 ## panel
 
 | Action | Title | Danger | Arguments |
 | --- | --- | --- | --- |
+| `layout.apply` | Apply layout | safe | `layoutId` |
 | `notifications.toggle` | Toggle notification inbox | safe | — |
 | `panel.focus` | Focus panel | safe | `panelId` |
 | `panel.focusIndex` | Focus panel by index | safe | `index` |
@@ -270,7 +281,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | Action | Title | Danger | Arguments |
 | --- | --- | --- | --- |
 | `plugin.diagnostics` | Read plugin diagnostics | safe | `pluginId`, `logLimit?` |
-| `plugin.openSettings` | Open plugin settings | safe | `pluginId`, `key?` |
+| `plugin.openSettings` | Open plugin settings | safe | `pluginId`, `key?`, `page?`, `scope?`, `section?` |
 | `plugin.validate` | Validate plugin manifest | safe | `path` |
 
 ## portal
@@ -346,11 +357,15 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `project.openInNewWindow` | Open project in new window | safe | — |
 | `project.openOnHost` | Open project on host… | safe | `hostId`, `projectId`, `navigateOnly?`, `newWindow?`, `worktree?` |
 | `project.remove` | Remove project | confirm | `projectId` |
+| `project.restart` | Restart project… | confirm | `projectId?` |
 | `project.saveSettings` | Save project settings | safe | `projectId`, `settings` |
 | `project.setGroup` | Move project to group | safe | `groupId`, `projectId` |
 | `project.settings.open` | Open project settings | safe | — |
 | `project.silenceNotificationKind` | Silence notification kind | safe | `kind`, `projectId?` |
+| `project.sleep` | Sleep project | confirm | `projectId?` |
+| `project.sleepIdle` | Sleep idle projects | confirm | — |
 | `project.switch` | Switch project | safe | `projectId` |
+| `project.toggleNeverAutoSleep` | Never sleep automatically | safe | `enabled?`, `projectId?` |
 | `project.unarchive` | Unarchive project | safe | `projectId?` |
 | `project.update` | Update project | safe | `projectId`, `updates` |
 
@@ -372,15 +387,12 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | --- | --- | --- | --- |
 | `agentSettings.get` | Get agent settings | safe | — |
 | `agentSettings.reset` | Reset agent settings | confirm | `agentId?` |
-| `agentSettings.set` | Update agent settings | safe | `agentId`, `settings` |
 | `env.global.get` | Get global environment variables | safe | — |
 | `env.global.set` | Set global environment variables | safe | `variables` |
 | `env.project.get` | Get project environment variables | safe | `projectId` |
 | `env.project.set` | Set project environment variables | safe | `projectId`, `variables` |
-| `hibernation.getConfig` | Get hibernation config | safe | — |
-| `hibernation.updateConfig` | Update hibernation config | safe | `enabled?`, `inactiveThresholdHours?` |
 | `idleBackgroundAutoClose.getConfig` | Get idle background auto-close config | safe | — |
-| `idleBackgroundAutoClose.updateConfig` | Update idle background auto-close config | safe | `enabled?`, `thresholdMinutes?` |
+| `idleBackgroundAutoClose.updateConfig` | Update idle background auto-close config | safe | `enabled?`, `idleShellThresholdMinutes?`, `includeIdleShells?`, `thresholdMinutes?` |
 | `idleTerminalNotify.getConfig` | Get idle terminal notification config | safe | — |
 | `idleTerminalNotify.updateConfig` | Update idle terminal notification config | safe | `enabled?`, `thresholdMinutes?` |
 | `keybinding.getOverrides` | Get keybinding overrides | safe | — |
@@ -433,7 +445,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `fleet.scope.enter` | Fleet: enter scope mode | safe | — |
 | `fleet.scope.exit` | Fleet: exit scope mode | safe | — |
 | `fleet.trash` | Fleet: trash | confirm | `confirmed?` |
-| `idleTerminalNotify.closeProject` | Close idle terminals | safe | `projectId` |
+| `idleTerminalNotify.closeProject` | Sleep idle project | safe | `projectId` |
 | `idleTerminalNotify.muteProject` | Mute idle terminal notifications | safe | `projectId` |
 | `panel.gridLayout.setStrategy` | Set grid layout strategy | safe | `strategy` |
 | `panel.gridLayout.setValue` | Set grid layout value | safe | `value` |
@@ -473,10 +485,12 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `terminal.redraw` | Redraw terminal | safe | `terminalId?` |
 | `terminal.rename` | Rename terminal | safe | `name?`, `terminalId?` |
 | `terminal.restart` | Restart terminal | confirm | `confirmed?`, `terminalId?` |
+| `terminal.restartOnPreset` | Restart agent on preset | confirm | `presetId`, `confirmed?`, `terminalId?` |
 | `terminal.restartService` | Restart terminal service | safe | — |
 | `terminal.resumeSessions` | Resume session… | safe | — |
 | `terminal.revealOwned` | Reveal owned terminal | safe | `terminalId` |
 | `terminal.sendToAgent` | Send to agent | safe | `terminalId?` |
+| `terminal.setHoldOnRestart` | Hold agent on restart | safe | `hold`, `terminalId` |
 | `terminal.stashInput` | Stash input | safe | — |
 | `terminal.toggleDock` | Toggle dock | safe | `terminalId?` |
 | `terminal.toggleDockAll` | Toggle all dock | safe | — |
@@ -509,7 +523,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `host.add` | Add host… | safe | — |
 | `host.forwardPort` | Forward port… | safe | `port`, `hostId?`, `label?` |
 | `host.overview.open` | Hosts overview… | safe | — |
-| `host.switch` | Switch host… | confirm | `hostId?`, `newWindow?` |
+| `host.switch` | Switch host… | confirm | `hostId?`, `newWindow?`, `projectId?`, `terminalId?` |
 | `workspace.list` | List workspaces | safe | — |
 
 ## worktree
@@ -521,6 +535,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `workflow.startWorkOnIssue` | Start work on issue | safe | `agentId`, `issueNumber`, `assignToSelf?`, `baseBranch?`, `branchName?`, `focusPolicy?`, `injectContext?`, `recipeId?`, `spawnedBy?` |
 | `worktree.bulk.closeSessions` | Close sessions for selected worktrees | confirm | — |
 | `worktree.bulk.remove` | Delete selected worktrees | confirm | — |
+| `worktree.clearReviewMark` | Clear review mark | safe | `worktreeId?` |
 | `worktree.compareDiff` | Compare worktree diff | safe | `compareToWorktreeId`, `ignoreWhitespace?`, `limit?`, `offset?`, `useMergeBase?`, `worktreeId?` |
 | `worktree.copyContext` | Copy worktree context (alias) | safe | `format?`, `modified?`, `worktreeId?` |
 | `worktree.copyTree` | Copy worktree context | safe | `format?`, `includePaths?`, `modified?`, `scopeIgnoresIgnoreFiles?`, `scopePaths?`, `worktreeId?` |
@@ -536,13 +551,14 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `worktree.lifecycle.retrySetup` | Retry setup | safe | `worktreeId?` |
 | `worktree.list` | List worktrees | safe | — |
 | `worktree.listBranches` | List branches | safe | `limit?`, `offset?`, `rootPath?`, `worktreeId?`, `worktreePath?` |
+| `worktree.markReviewed` | Mark reviewed | safe | `worktreeId?` |
 | `worktree.openChanges` | Open changes | safe | `worktreeId?` |
 | `worktree.openEditor` | Open in editor | safe | `worktreeId?` |
 | `worktree.openFileBrowser` | Browse files | safe | `revealKind?`, `revealPath?`, `worktreeId?` |
-| `worktree.openFileBrowserPanel` | Browse files | safe | `activateDockOnCreate?`, `location?`, `revealKind?`, `revealPath?`, `worktreeId?` |
+| `worktree.openFileBrowserPanel` | Browse files | safe | `activateDockOnCreate?`, `location?`, `revealKind?`, `revealPath?`, `rootPath?`, `worktreeId?` |
 | `worktree.openIssue` | Open worktree issue | safe | `worktreeId?` |
 | `worktree.openPR` | Open worktree pull request | safe | `worktreeId?` |
-| `worktree.openReviewHub` | Open review hub | safe | `worktreeId?` |
+| `worktree.openReviewHub` | Open review hub | safe | `mode?`, `worktreeId?` |
 | `worktree.overview.close` | Close worktree overview | safe | — |
 | `worktree.overview.open` | Open worktree overview | safe | — |
 | `worktree.quickCreate` | Quick create worktree | safe | — |
@@ -552,6 +568,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `worktree.resource.config.get` | Get resource environments config | safe | `projectId` |
 | `worktree.resource.config.set` | Set resource environments config | safe | `projectId`, `resourceEnvironments` |
 | `worktree.resource.connect` | Connect to resource | safe | `focusPolicy?`, `spawnedBy?`, `worktreeId?` |
+| `worktree.resource.openOnHost` | Open on its machine | confirm | `worktreeId?` |
 | `worktree.resource.pause` | Pause resource | safe | `worktreeId?` |
 | `worktree.resource.provision` | Provision resource | safe | `worktreeId?` |
 | `worktree.resource.resume` | Resume resource | safe | `worktreeId?` |

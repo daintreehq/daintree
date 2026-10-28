@@ -244,9 +244,10 @@ vi.mock("../plugin/PluginDevWorkerMainBridge.js", () => ({
 }));
 
 import { PluginService } from "../PluginService.js";
-import { getPluginPushBatcher } from "../plugin/pluginPushBatcher.js";
+import { flushPluginPushes, resetPluginPushBatcherForTests } from "../plugin/pluginPushBatcher.js";
+import { PLUGIN_TOAST_BURST, resetPluginToastBudget } from "../plugin/pluginToastBudget.js";
 
-const flushPushes = (): void => getPluginPushBatcher().flush();
+const flushPushes = (): void => flushPluginPushes();
 import { PluginProcessManager, type ManagedChildProcess } from "../plugin/PluginProcessManager.js";
 import {
   getPluginCapabilityConsentService,
@@ -284,9 +285,12 @@ beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-plugin-test-"));
   vi.clearAllMocks();
   storeMock._state.clear();
+  resetPluginToastBudget();
+  resetPluginPushBatcherForTests();
 });
 
 afterEach(async () => {
+  resetPluginPushBatcherForTests();
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
@@ -302,6 +306,7 @@ type CreateHostShape = (pluginId: string) => {
     postToPanel: (channel: string, payload: unknown, panelId?: string | null) => Promise<void>;
     setPanelBadge: (panelId: string, badge: unknown) => Promise<void>;
     setToolbarButtonBadge: (buttonId: string, badge: unknown) => Promise<void>;
+    setToolbarButtonState: (buttonId: string, state: unknown) => Promise<void>;
     setContext: (key: unknown, value: unknown) => Promise<void>;
     setPanelMenuItems: (panelId: string, items: unknown) => Promise<void>;
     reloadPanel: (panelId: unknown) => Promise<string>;
@@ -569,6 +574,7 @@ describe("createHost (plugin activation API)", () => {
     });
     expect(caught).toBeInstanceOf(Error);
     // A rejected setPanelBadge has no side effect: no badge-changed broadcast.
+    flushPushes();
     expect(broadcastToRendererMock).not.toHaveBeenCalled();
   });
 
@@ -584,6 +590,176 @@ describe("createHost (plugin activation API)", () => {
 
     // Liveness no-op stays a silent resolve even with an otherwise-invalid badge.
     await expect(host.setPanelBadge("", { kind: "bogus" })).resolves.toBeUndefined();
+  });
+
+  it("host.setPanelBadge sends nothing for a badge the panel already carries (#13766)", async () => {
+    await writePlugin("badge-same", { name: "acme.badge-same", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.badge-same"
+    );
+    const badgeEvents = () =>
+      broadcastToRendererMock.mock.calls.filter(
+        (call) =>
+          call[0] === CHANNELS.EVENTS_PUSH &&
+          (call[1] as { name: string }).name === "plugin:panel-badges-changed"
+      );
+
+    broadcastToRendererMock.mockClear();
+    await host.setPanelBadge("panel-a", { kind: "dot", color: "warning", tooltip: "2 failing" });
+    flushPushes();
+    await host.setPanelBadge("panel-a", { kind: "dot", color: "warning", tooltip: "2 failing" });
+    flushPushes();
+    // An omitted colour is the default one, so it is the same badge too.
+    await host.setPanelBadge("panel-b", { kind: "label", text: "3" });
+    flushPushes();
+    await host.setPanelBadge("panel-b", { kind: "label", text: "3", color: "default" });
+    flushPushes();
+    expect(badgeEvents()).toHaveLength(2);
+
+    await host.setPanelBadge("panel-a", { kind: "dot", color: "error", tooltip: "2 failing" });
+    flushPushes();
+    expect(badgeEvents()).toHaveLength(3);
+  });
+
+  describe("host.setPanelBadge coalescing (#14128)", () => {
+    async function badgeHost(id: string) {
+      await writePlugin(id, { name: `acme.${id}`, version: "1.0.0" });
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+      const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
+        `acme.${id}`
+      );
+      return { service, host, pluginId: `acme.${id}` };
+    }
+
+    const sentEvents = (name: string) =>
+      broadcastToRendererMock.mock.calls
+        .filter(
+          (call) => call[0] === CHANNELS.EVENTS_PUSH && (call[1] as { name: string }).name === name
+        )
+        .map((call) => (call[1] as { payload: unknown }).payload);
+
+    it("publishes a synchronous burst over 100 existing badges as one complete map", async () => {
+      const { host } = await badgeHost("badge-burst");
+      for (let i = 0; i < 100; i++) await host.setPanelBadge(`p${i}`, { kind: "dot" });
+      flushPushes();
+      broadcastToRendererMock.mockClear();
+
+      for (let i = 0; i < 100; i++) {
+        await host.setPanelBadge(`p${i}`, { kind: "dot", color: "error" });
+      }
+      expect(sentEvents("plugin:panel-badges-changed")).toEqual([]);
+      flushPushes();
+
+      const payloads = sentEvents("plugin:panel-badges-changed") as Array<{
+        badges: Record<string, { color?: string }>;
+      }>;
+      expect(payloads).toHaveLength(1);
+      const entries = Object.values(payloads[0]!.badges);
+      expect(entries).toHaveLength(100);
+      expect(entries.every((badge) => badge.color === "error")).toBe(true);
+
+      // A burst that ends with nothing left still sends its empty map once.
+      broadcastToRendererMock.mockClear();
+      for (let i = 0; i < 100; i++) await host.setPanelBadge(`p${i}`, null);
+      flushPushes();
+      expect(sentEvents("plugin:panel-badges-changed")).toEqual([
+        { pluginId: "acme.badge-burst", badges: {} },
+      ]);
+    });
+
+    it("splits a burst at a barrier, and the scheduled flush then sends nothing twice", async () => {
+      const { host } = await badgeHost("badge-barrier");
+      broadcastToRendererMock.mockClear();
+      await host.setPanelBadge("p1", { kind: "dot" });
+      flushPushes(); // what a prompt, reload or dispatch does first
+      await host.setPanelBadge("p2", { kind: "dot" });
+      flushPushes();
+      flushPushes();
+      const payloads = sentEvents("plugin:panel-badges-changed") as Array<{
+        badges: Record<string, unknown>;
+      }>;
+      expect(payloads.map((payload) => Object.keys(payload.badges))).toEqual([
+        ["p1"],
+        ["p1", "p2"],
+      ]);
+    });
+
+    it("drops a badge change still pending at unload, so the clear is the last word", async () => {
+      const { service, host, pluginId } = await badgeHost("badge-pending");
+      await host.setPanelBadge("p1", { kind: "dot" });
+      broadcastToRendererMock.mockClear();
+
+      service.unloadPlugin(pluginId);
+      flushPushes();
+
+      expect(sentEvents("plugin:panel-badges-cleared")).toEqual([{ pluginId }]);
+      expect(sentEvents("plugin:panel-badges-changed")).toEqual([]);
+    });
+
+    it("still clears at unload when the last badge's clear was pending, so no stale badge survives", async () => {
+      const { service, host, pluginId } = await badgeHost("badge-last-clear");
+      await host.setPanelBadge("p1", { kind: "dot" });
+      flushPushes();
+      await host.setPanelBadge("p1", null);
+      broadcastToRendererMock.mockClear();
+
+      service.unloadPlugin(pluginId);
+      flushPushes();
+
+      expect(sentEvents("plugin:panel-badges-cleared")).toEqual([{ pluginId }]);
+    });
+  });
+
+  it("host.setPanelBadge caps how many panels one plugin badges, and still updates and clears past it (#13766)", async () => {
+    await writePlugin("badge-cap", { name: "acme.badge-cap", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.badge-cap"
+    );
+
+    let cap = 0;
+    for (;;) {
+      const outcome = await host.setPanelBadge(`panel-${cap}`, { kind: "dot" }).then(
+        () => "ok",
+        (err: Error) => err.message
+      );
+      if (outcome !== "ok") {
+        expect(outcome).toMatch(/setPanelBadge: .* clear a closed panel's with null/);
+        break;
+      }
+      cap += 1;
+      if (cap > 10_000) throw new Error("setPanelBadge has no cap");
+    }
+    expect(cap).toBeGreaterThan(0);
+
+    broadcastToRendererMock.mockClear();
+    // A panel already badged can still change, and a clear frees a slot.
+    await expect(
+      host.setPanelBadge("panel-0", { kind: "dot", color: "warning" })
+    ).resolves.toBeUndefined();
+    await expect(host.setPanelBadge("panel-1", null)).resolves.toBeUndefined();
+    await expect(host.setPanelBadge(`panel-${cap + 1}`, { kind: "dot" })).resolves.toBeUndefined();
+    await expect(host.setPanelBadge(`panel-${cap + 2}`, { kind: "dot" })).rejects.toThrow(
+      /setPanelBadge: /
+    );
+    // The three accepted changes go out as one complete map.
+    flushPushes();
+    expect(broadcastToRendererMock).toHaveBeenCalledTimes(1);
+    const { badges } = (
+      broadcastToRendererMock.mock.calls[0]![1] as {
+        payload: { badges: Record<string, { color?: string }> };
+      }
+    ).payload;
+    expect(Object.keys(badges)).toHaveLength(cap);
+    expect(badges["panel-0"]?.color).toBe("warning");
+    expect(badges["panel-1"]).toBeUndefined();
+    expect(badges[`panel-${cap + 1}`]).toBeDefined();
   });
 
   describe("host.setToolbarButtonBadge (#13503)", () => {
@@ -654,6 +830,142 @@ describe("createHost (plugin activation API)", () => {
       const { service, host } = await toolbarHost("tb-unloaded");
       service.unloadPlugin("acme.tb-unloaded");
       await expect(host.setToolbarButtonBadge("", { kind: "bogus" })).resolves.toBeUndefined();
+    });
+  });
+
+  describe("host.setToolbarButtonState (#13785)", () => {
+    async function toolbarHost(id: string) {
+      await writePlugin(id, {
+        name: `acme.${id}`,
+        version: "1.0.0",
+        contributes: {
+          toolbarButtons: [
+            { id: "sync", label: "Sync", iconId: "puzzle", actionId: `acme.${id}.sync` },
+          ],
+        },
+      });
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+      const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
+        `acme.${id}`
+      );
+      return { service, host };
+    }
+    const toolbarStateEvents = () =>
+      broadcastToRendererMock.mock.calls
+        .filter((call) => call[0] === CHANNELS.EVENTS_PUSH)
+        .map((call) => call[1] as { name: string; payload: unknown })
+        .filter((event) => event.name === "plugin:toolbar-states-changed");
+
+    it("publishes the plugin's whole map on set and clear, deduping repeats, and an empty one on unload", async () => {
+      const { service, host } = await toolbarHost("ts-publish");
+      broadcastToRendererMock.mockClear();
+
+      await host.setToolbarButtonState("sync", { pressed: true, tooltip: "Syncing on save" });
+      // The same state again sends nothing.
+      await host.setToolbarButtonState("sync", { pressed: true, tooltip: "Syncing on save" });
+      await host.setToolbarButtonState("sync", { disabled: true, disabledReason: "Sign in first" });
+      // An empty state is the manifest default, the same as a clear.
+      await host.setToolbarButtonState("sync", {});
+      await host.setToolbarButtonState("sync", null);
+      await host.setToolbarButtonState("sync", { busy: true });
+      service.unloadPlugin("acme.ts-publish");
+
+      expect(toolbarStateEvents().map((event) => event.payload)).toEqual([
+        {
+          pluginId: "acme.ts-publish",
+          states: { sync: { pressed: true, tooltip: "Syncing on save" } },
+        },
+        {
+          pluginId: "acme.ts-publish",
+          states: { sync: { disabled: true, disabledReason: "Sign in first" } },
+        },
+        { pluginId: "acme.ts-publish", states: {} },
+        { pluginId: "acme.ts-publish", states: { sync: { busy: true } } },
+        { pluginId: "acme.ts-publish", states: {} },
+      ]);
+    });
+
+    it("rewrites a ./svg icon reference to the plugin's own custom-icon key", async () => {
+      const { host } = await toolbarHost("ts-icon");
+      broadcastToRendererMock.mockClear();
+
+      await host.setToolbarButtonState("sync", { iconId: "./icons/on.svg" });
+      await host.setToolbarButtonState("sync", { iconId: "check" });
+
+      const icons = toolbarStateEvents().map(
+        (event) =>
+          (event.payload as { states: Record<string, { iconId?: string }> }).states.sync?.iconId
+      );
+      expect(icons[0]).not.toBe("./icons/on.svg");
+      expect(icons[0]).toContain("acme.ts-icon");
+      expect(icons[1]).toBe("check");
+    });
+
+    it("rejects an empty or foreign buttonId and an invalid state, publishing nothing", async () => {
+      const { host } = await toolbarHost("ts-reject");
+      broadcastToRendererMock.mockClear();
+
+      await expect(host.setToolbarButtonState("", { pressed: true })).rejects.toThrow(
+        /setToolbarButtonState: buttonId/
+      );
+      await expect(host.setToolbarButtonState("other", { pressed: true })).rejects.toThrow(
+        /"other" is not one of this plugin's contributes\.toolbarButtons/
+      );
+      await expect(host.setToolbarButtonState("sync", { disabled: true })).rejects.toThrow(
+        /a disabled button needs a disabledReason/
+      );
+      await expect(
+        host.setToolbarButtonState("sync", { disabledReason: "Not without disabled" })
+      ).rejects.toThrow(/only valid with disabled: true/);
+      await expect(host.setToolbarButtonState("sync", { label: "Renamed" })).rejects.toThrow(
+        /setToolbarButtonState: invalid state/
+      );
+      await expect(
+        host.setToolbarButtonState("sync", { tooltip: "x".repeat(201) })
+      ).rejects.toThrow(/setToolbarButtonState: invalid state/);
+      await expect(host.setToolbarButtonState("sync", [])).rejects.toThrow(
+        /setToolbarButtonState: invalid state/
+      );
+      const throwing = {
+        get tooltip(): string {
+          throw new Error("boom");
+        },
+      };
+      let call: Promise<void> | undefined;
+      expect(() => {
+        call = host.setToolbarButtonState("sync", throwing);
+      }).not.toThrow();
+      await expect(call).rejects.toThrow(/setToolbarButtonState: invalid state — boom/);
+      expect(() => host.setToolbarButtonState("", null).catch(() => {})).not.toThrow();
+      expect(toolbarStateEvents()).toEqual([]);
+    });
+
+    it("publishes a menu in the instance's namespace and refuses a foreign one (#13786)", async () => {
+      const { host } = await toolbarHost("ts-menu");
+      broadcastToRendererMock.mockClear();
+
+      await host.setToolbarButtonState("sync", {
+        menu: [{ actionId: "acme.ts-menu.pull", label: "Pull" }],
+      });
+      await host.setToolbarButtonState("sync", { menu: [] });
+      await expect(
+        host.setToolbarButtonState("sync", { menu: [{ actionId: "terminal.new" }] })
+      ).rejects.toThrow(/menu: entry 0 actionId/);
+
+      expect(toolbarStateEvents().map((event) => event.payload)).toEqual([
+        {
+          pluginId: "acme.ts-menu",
+          states: { sync: { menu: [{ actionId: "acme.ts-menu.pull", label: "Pull" }] } },
+        },
+        { pluginId: "acme.ts-menu", states: { sync: { menu: [] } } },
+      ]);
+    });
+
+    it("silently no-ops once the plugin is unloaded", async () => {
+      const { service, host } = await toolbarHost("ts-unloaded");
+      service.unloadPlugin("acme.ts-unloaded");
+      await expect(host.setToolbarButtonState("", { bogus: true })).resolves.toBeUndefined();
     });
   });
 
@@ -1331,7 +1643,9 @@ describe("createHost — showToast", () => {
       type: "success",
       message: "acme.toast-test: Synced 12 issues",
       duration: undefined,
-      rateLimitKey: "plugin:acme.toast-test:success",
+      rateLimitKey: "plugin:acme.toast-test",
+      rateLimitLabel: "acme.toast-test",
+      context: { plugin: { id: "acme.toast-test", name: "acme.toast-test" } },
     });
   });
 
@@ -1358,10 +1672,37 @@ describe("createHost — showToast", () => {
       type: "success",
       message: "Video Manager: Synced 12 videos",
       duration: undefined,
-      // The bucket key stays the raw id: never rendered, and two plugins may
-      // share a display name.
-      rateLimitKey: "plugin:acme.toast-named:success",
+      // The bucket key stays the raw id, since two plugins may share a
+      // display name; an overflow summary prints the label (#13760).
+      rateLimitKey: "plugin:acme.toast-named",
+      rateLimitLabel: "Video Manager",
+      context: { plugin: { id: "acme.toast-named", name: "Video Manager" } },
     });
+  });
+
+  it("names a plugin with a blank displayName by its manifest name (#13760)", async () => {
+    await writePlugin("toast-blank", {
+      name: "acme.toast-blank",
+      version: "1.0.0",
+      displayName: "",
+    });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: ToastHostShape }).createHost(
+      "acme.toast-blank"
+    );
+
+    broadcastToRendererMock.mockClear();
+    await host.showToast({ message: "Synced", type: "success" });
+
+    expect(broadcastToRendererMock).toHaveBeenCalledWith(
+      CHANNELS.NOTIFICATION_SHOW_TOAST,
+      expect.objectContaining({
+        message: "acme.toast-blank: Synced",
+        rateLimitLabel: "acme.toast-blank",
+      })
+    );
   });
 
   it("forwards durationMs as duration", async () => {
@@ -1380,7 +1721,9 @@ describe("createHost — showToast", () => {
       type: "success",
       message: "acme.toast-duration: Saved",
       duration: 3000,
-      rateLimitKey: "plugin:acme.toast-duration:success",
+      rateLimitKey: "plugin:acme.toast-duration",
+      rateLimitLabel: "acme.toast-duration",
+      context: { plugin: { id: "acme.toast-duration", name: "acme.toast-duration" } },
     });
   });
 
@@ -1487,7 +1830,9 @@ describe("createHost — showToast", () => {
       type: "info",
       message: "acme.toast-revoke: Still alive",
       duration: undefined,
-      rateLimitKey: "plugin:acme.toast-revoke:info",
+      rateLimitKey: "plugin:acme.toast-revoke",
+      rateLimitLabel: "acme.toast-revoke",
+      context: { plugin: { id: "acme.toast-revoke", name: "acme.toast-revoke" } },
     });
   });
 
@@ -1510,6 +1855,44 @@ describe("createHost — showToast", () => {
       (call: unknown[]) => call[0] === CHANNELS.NOTIFICATION_SHOW_TOAST
     );
     expect(toastBroadcasts).toHaveLength(0);
+  });
+
+  it("draws every tone from one budget per plugin before the push, leaving others theirs (#13766)", async () => {
+    await writePlugin("toast-budget", { name: "acme.toast-budget", version: "1.0.0" });
+    await writePlugin("toast-bystander", { name: "acme.toast-bystander", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const hosts = service as unknown as { createHost: ToastHostShape };
+    const { host } = hosts.createHost("acme.toast-budget");
+    const { host: bystander } = hosts.createHost("acme.toast-bystander");
+    const toasts = () =>
+      broadcastToRendererMock.mock.calls
+        .filter((call: unknown[]) => call[0] === CHANNELS.NOTIFICATION_SHOW_TOAST)
+        .map((call: unknown[]) => call[1] as { message: string; rateLimitKey: string });
+
+    const now = vi.spyOn(performance, "now").mockReturnValue(1_000_000);
+    try {
+      broadcastToRendererMock.mockClear();
+      const tones = ["info", "success", "warning", "error"] as const;
+      for (let n = 0; n < PLUGIN_TOAST_BURST * 3; n++) {
+        await expect(
+          host.showToast({ message: `burst ${n}`, type: tones[n % tones.length] })
+        ).resolves.toBeUndefined();
+      }
+      await bystander.showToast({ message: "still mine" });
+
+      const delivered = toasts();
+      expect(delivered.filter((t) => t.rateLimitKey === "plugin:acme.toast-budget")).toHaveLength(
+        PLUGIN_TOAST_BURST
+      );
+      expect(delivered.at(-1)).toMatchObject({
+        message: "acme.toast-bystander: still mine",
+        rateLimitKey: "plugin:acme.toast-bystander",
+      });
+    } finally {
+      now.mockRestore();
+    }
   });
 });
 
@@ -1626,6 +2009,7 @@ describe("createHost — invoke deadline and payload caps", () => {
     broadcastToRendererMock.mockClear();
     await host.postToPanel("tick", { n: 1 }, "panel-a");
     await host.setPanelBadge("panel-a", { kind: "dot" });
+    flushPushes();
     const channels = broadcastToRendererMock.mock.calls.map((call) => call[0]);
     expect(channels).toEqual(["plugin:acme.push-order:tick", CHANNELS.EVENTS_PUSH]);
   });

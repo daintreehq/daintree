@@ -34,6 +34,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useRecipeStore } from "@/store/recipeStore";
+import { pluginOnlyCopyRefusal, recipeUsesPluginOnlyFeatures } from "@/utils/pluginRecipeCopy";
+import { notify } from "@/lib/notify";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useWorktreeStoreOptional } from "@/hooks/useWorktreeStore";
@@ -47,6 +49,7 @@ import { getRecipeScope, worktreeDisplayName } from "@/utils/recipeScope";
 import type { TerminalRecipe } from "@/types";
 import { isInRepoRecipeId } from "@shared/utils/recipeFilename";
 import { isPluginRecipe } from "@shared/types/project";
+import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { WorktreeSnapshot } from "@shared/types/workspace-host";
 import { pluralize } from "@/lib/pluralize";
@@ -200,6 +203,18 @@ export function RecipeManager({
   // place never collides with an existing recipe's name or on-disk filename.
   // A plugin recipe's copy has no projectId and lands as a global the user owns.
   const handleDuplicateRecipe = async (recipe: TerminalRecipe) => {
+    // A plugin's panel steps and variables only work in its own recipe (#13797).
+    if (recipeUsesPluginOnlyFeatures(recipe)) {
+      notify({
+        type: "warning",
+        title: "Can't duplicate recipe",
+        message: pluginOnlyCopyRefusal(recipe),
+        // The click did nothing else, so it stays a toast rather than inbox-only.
+        priority: "high",
+        context: { eventKind: "uiFeedback" },
+      });
+      return;
+    }
     const existingNames = new Set(useRecipeStore.getState().recipes.map((r) => r.name));
     try {
       await createRecipe(
@@ -303,6 +318,8 @@ export function RecipeManager({
     // "Save as team recipe" stays available: duplicating into a user-owned
     // tier is the sanctioned way to customise one.
     const fromPlugin = isPluginRecipe(recipe);
+    // Never the instance key: a project plugin's carries a machine-local project id (#12211).
+    const pluginLabel = fromPlugin ? pluginManifestIdFromInstanceKey(recipe.origin.pluginId) : null;
     // Only a project-local recipe can be overridden: `mergeRecipes` shadows
     // that tier alone, and a global recipe of the same name still launches as
     // itself.
@@ -343,8 +360,8 @@ export function RecipeManager({
           <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-text-secondary">
             {fromPlugin && (
               <>
-                <TruncatedTooltip content={recipe.origin.pluginId}>
-                  <span className="max-w-[40%] truncate">From {recipe.origin.pluginId}</span>
+                <TruncatedTooltip content={pluginLabel}>
+                  <span className="max-w-[40%] truncate">From {pluginLabel}</span>
                 </TruncatedTooltip>
                 <span aria-hidden>·</span>
               </>

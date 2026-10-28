@@ -11,7 +11,8 @@ import type { WaitingReason } from "@shared/types/agent";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useFleetRunStore } from "@/store/fleetRunStore";
 import { usePanelStore } from "@/store/panelStore";
-import { isPtyPanel } from "@shared/types/panel";
+import { exitProjectHome } from "@/store/storeAccessors";
+import { isGridPanelLocation, isPtyPanel } from "@shared/types/panel";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
@@ -176,7 +177,10 @@ export function FleetCountChip({
   // mirror direction reversal automatically.
   const focusArmedPane = useCallback(
     (id: string) => {
-      if (!usePanelStore.getState().panelsById[id]) return;
+      const panel = usePanelStore.getState().panelsById[id];
+      if (!panel) return;
+      // A grid pane is hidden while the project's Home shows.
+      if (isGridPanelLocation(panel.location)) exitProjectHome();
       usePanelStore.getState().setFocused(id);
       onOpenChange(false);
     },

@@ -129,6 +129,9 @@ export function createView(host: ProjectViewManager, projectId: string): WebCont
     registerProtocolsForSession(ses, distPath);
   }
 
+  // The project's own theme, when it has one, seeds the view instead of the
+  // global one (#13833). A remote view's renderer knows the bare project id.
+  const themeProjectId = parseHostScopedKey(projectId).projectId;
   const view = new WebContentsView({
     webPreferences: {
       preload: path.join(host.dirname, "preload.cjs"),
@@ -151,7 +154,7 @@ export function createView(host: ProjectViewManager, projectId: string): WebCont
       // views keep suppressing background GitHub polling in worker
       // instances (#10123).
       additionalArguments: [
-        `${INITIAL_COLOR_SCHEME_ARG}=${resolveInitialColorSchemeId()}`,
+        `${INITIAL_COLOR_SCHEME_ARG}=${resolveInitialColorSchemeId(undefined, themeProjectId)}`,
         ...viewIdentityArgs(projectId),
         `${INSTANCE_ROLE_ARG}=${resolveInstanceRole()}`,
         ...resolveE2EPreloadArgs(),
@@ -166,7 +169,7 @@ export function createView(host: ProjectViewManager, projectId: string): WebCont
   });
   // Set the compositor background color before loadURL so the view never
   // shows the default white background during the cold-start paint gap (#9573).
-  view.setBackgroundColor(resolveInitialCanvasBackgroundColor());
+  view.setBackgroundColor(resolveInitialCanvasBackgroundColor(themeProjectId));
   return view;
 }
 
@@ -368,7 +371,10 @@ export function loadView(
       // its skeleton, and any fade still running then shows a blank canvas
       // instead (#12394). The entrance stays for the initial app launch
       // (createWindow.ts), where it belongs.
-      skeletonCssApplied = injectSkeletonCss(wc, project, { instantReveal: true });
+      skeletonCssApplied = injectSkeletonCss(wc, project, {
+        instantReveal: true,
+        projectId: parseHostScopedKey(projectId).projectId,
+      });
       injectSkeletonProjectIdentity(wc, project);
     };
 

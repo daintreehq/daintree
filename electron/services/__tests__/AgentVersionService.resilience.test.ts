@@ -2,6 +2,7 @@ vi.mock("../../utils/windowsCliSpawn.js", () => ({
   cliSpawnTarget: (command: string, args: string[]) => ({ command, args, shell: false }),
 }));
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { stubProcessKillForFile } from "../../__tests__/helpers/processKillGuard.js";
 import { EventEmitter } from "events";
 import type { AgentId } from "../../../shared/types/agent.js";
 
@@ -87,6 +88,10 @@ function setSpawnError(error: NodeJS.ErrnoException): void {
     return child;
   }) as never);
 }
+
+// The fake child's process group 4242 is made up, and a probe that outlives
+// its child SIGKILLs it (#14418).
+const killSpy = stubProcessKillForFile();
 
 describe("AgentVersionService resilience", () => {
   beforeEach(() => {
@@ -190,6 +195,9 @@ describe("AgentVersionService resilience", () => {
         await vi.advanceTimersByTimeAsync(300);
         const result = await pending;
         expect(result.installedVersion).toBe("1.2.3");
+        if (process.platform !== "win32") {
+          expect(killSpy()).toHaveBeenCalledWith(-4242, "SIGKILL");
+        }
       } finally {
         vi.useRealTimers();
       }

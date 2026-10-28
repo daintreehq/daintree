@@ -40,11 +40,11 @@ function readDefaultProviderId(): string | null {
 
 // PluginService is loaded lazily (mirrors forgeRpcServer) so this eagerly
 // registered handler module never constructs the singleton at import time.
-type PluginInitGate = { waitForInit(): Promise<void> };
+type PluginInitGate = { waitForCatalog(): Promise<void> };
 let pluginServicePromise: Promise<PluginInitGate> | null = null;
 
 /**
- * Block registry reads until startup plugin load + activation has settled.
+ * Block registry reads until the startup plugin scan has settled.
  * Forge provider descriptors register during the DEFERRED `PluginService.
  * initialize()` (which only runs after the renderer reports first-interactive),
  * so a mount-time `forge:resolve-provider` / `forge:get-providers` call always
@@ -57,7 +57,7 @@ let pluginServicePromise: Promise<PluginInitGate> | null = null;
  */
 function awaitPluginInit(): Promise<void> {
   pluginServicePromise ??= import("../../services/PluginService.js").then((m) => m.pluginService);
-  return pluginServicePromise.then((svc) => svc.waitForInit());
+  return pluginServicePromise.then((svc) => svc.waitForCatalog());
 }
 
 /** True when a stored record has at least one non-empty value. */

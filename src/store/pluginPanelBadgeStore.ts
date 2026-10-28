@@ -34,35 +34,44 @@ let initialized = false;
 let unsubscribeChanged: (() => void) | null = null;
 let unsubscribeCleared: (() => void) | null = null;
 
+/** Main's equality: an omitted colour is the default one. */
+function sameBadge(a: PluginPanelBadge, b: PluginPanelBadge): boolean {
+  return (
+    a.kind === b.kind &&
+    (a.color ?? "default") === (b.color ?? "default") &&
+    a.tooltip === b.tooltip &&
+    (a.kind !== "label" || (b.kind === "label" && a.text === b.text))
+  );
+}
+
 /**
  * Recompute `badgesByPanelId` after replacing one plugin's entire badge set.
  * `badges` is the plugin's COMPLETE current map (`panelId → badge`); an empty
- * map clears the plugin. Unaffected panels keep their object reference so their
- * subscribers don't re-render.
+ * map clears the plugin. Only panels whose badge from this plugin actually
+ * changed get a new object, and an equal replay returns `current` itself, so a
+ * fleet-wide snapshot re-renders just the panel that moved (#14128).
  */
 function applyPluginBadges(
   current: BadgesByPanelId,
   pluginId: string,
   badges: Record<string, PluginPanelBadge>
 ): BadgesByPanelId {
-  const affected = new Set<string>(Object.keys(badges));
+  let next: BadgesByPanelId | null = null;
   for (const [panelId, byPlugin] of Object.entries(current)) {
-    if (pluginId in byPlugin) affected.add(panelId);
+    if (!Object.hasOwn(byPlugin, pluginId) || Object.hasOwn(badges, panelId)) continue;
+    const { [pluginId]: _removed, ...rest } = byPlugin;
+    next ??= { ...current };
+    if (Object.keys(rest).length > 0) next[panelId] = rest;
+    else delete next[panelId];
   }
-  if (affected.size === 0) return current;
-
-  const next: BadgesByPanelId = {};
-  for (const [panelId, byPlugin] of Object.entries(current)) {
-    if (!affected.has(panelId)) next[panelId] = byPlugin;
+  for (const [panelId, badge] of Object.entries(badges)) {
+    const byPlugin = current[panelId];
+    const previous = byPlugin?.[pluginId];
+    if (previous !== undefined && sameBadge(previous, badge)) continue;
+    next ??= { ...current };
+    next[panelId] = { ...byPlugin, [pluginId]: badge };
   }
-  for (const panelId of affected) {
-    const inner = { ...current[panelId] };
-    delete inner[pluginId];
-    const badge = badges[panelId];
-    if (badge) inner[pluginId] = badge;
-    if (Object.keys(inner).length > 0) next[panelId] = inner;
-  }
-  return next;
+  return next ?? current;
 }
 
 export const usePluginPanelBadgeStore = create<PluginPanelBadgeState>((set, get) => ({
@@ -84,12 +93,15 @@ export const usePluginPanelBadgeStore = create<PluginPanelBadgeState>((set, get)
     }
     initialized = true;
 
-    unsubscribeChanged = plugin.onPanelBadgesChanged(({ pluginId, badges }) => {
-      set({ badgesByPanelId: applyPluginBadges(get().badgesByPanelId, pluginId, badges) });
-    });
-    unsubscribeCleared = plugin.onPanelBadgesCleared(({ pluginId }) => {
-      set({ badgesByPanelId: applyPluginBadges(get().badgesByPanelId, pluginId, {}) });
-    });
+    const apply = (pluginId: string, badges: Record<string, PluginPanelBadge>): void => {
+      const current = get().badgesByPanelId;
+      const badgesByPanelId = applyPluginBadges(current, pluginId, badges);
+      if (badgesByPanelId !== current) set({ badgesByPanelId });
+    };
+    unsubscribeChanged = plugin.onPanelBadgesChanged(({ pluginId, badges }) =>
+      apply(pluginId, badges)
+    );
+    unsubscribeCleared = plugin.onPanelBadgesCleared(({ pluginId }) => apply(pluginId, {}));
   },
   removePanel: (panelId) =>
     set((state) => {

@@ -285,6 +285,10 @@ async function clickPanelTrayItem(
     .catch(() => false);
   if (!trayReady) return false;
   if (!(await clickFirstVisible(tray, 1000, Math.min(timeout, 3000)))) return false;
+  // Non-web projects omit Dev preview from browsing, but always offer it in search.
+  await page
+    .getByRole("combobox", { name: "Search agents, panels, and recipes" })
+    .fill(itemName, { timeout });
 
   // The caller's timeout, not a fixed second: the popover primitives are
   // lazy-loaded, so the first launcher open on a cold release runner can be
@@ -309,17 +313,30 @@ async function clickPanelTrayItem(
   return true;
 }
 
-async function hasPanelTrayItem(page: Page, toolbar: Locator, label: string): Promise<boolean> {
+async function hasPanelTrayItem(
+  page: Page,
+  toolbar: Locator,
+  label: string,
+  timeout: number
+): Promise<boolean> {
   const itemName = toolbarPanelTrayItemNames[label];
   if (!itemName) return false;
 
   const tray = toolbar.locator('[data-toolbar-button-id="launcher"] button');
   if (!(await clickFirstVisible(tray, 1000, 250))) return false;
+  await page
+    .getByRole("combobox", { name: "Search agents, panels, and recipes" })
+    .fill(itemName, { timeout });
 
   const visible = await launcherRow(page, itemName)
-    .isVisible({ timeout: 500 })
+    .first()
+    .waitFor({ state: "visible", timeout })
+    .then(() => true)
     .catch(() => false);
+  // Escape first clears the search, then closes the launcher.
   await page.keyboard.press("Escape").catch(() => undefined);
+  await page.keyboard.press("Escape").catch(() => undefined);
+  await expect(page.getByRole("dialog", { name: "Launch", exact: true })).toBeHidden({ timeout });
   return visible;
 }
 
@@ -457,7 +474,10 @@ export async function expectToolbarButtonReachable(
       return;
     }
 
-    if (label && (await hasPanelTrayItem(page, toolbar, label))) {
+    if (
+      label &&
+      (await hasPanelTrayItem(page, toolbar, label, Math.max(1, deadline - Date.now())))
+    ) {
       return;
     }
 

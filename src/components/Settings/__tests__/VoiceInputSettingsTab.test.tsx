@@ -14,6 +14,11 @@ vi.mock("@/lib/voiceInputSettingsEvents", () => ({
 
 vi.mock("@/utils/logger", () => ({ logWarn: vi.fn() }));
 
+const mockStartMicTest = vi.fn();
+vi.mock("@/services/voiceMicTest", () => ({
+  startMicTest: (...args: unknown[]) => mockStartMicTest(...args),
+}));
+
 vi.mock("@/components/ui/button", () => ({
   Button: (props: React.ButtonHTMLAttributes<HTMLButtonElement>) => <button {...props} />,
 }));
@@ -105,10 +110,10 @@ function createVoiceInputApi(overrides: Partial<typeof window.electron.voiceInpu
       enabled: false,
       openaiApiKey: "",
       language: "en",
-      customDictionary: [],
+      dictionary: [],
       transcriptionModel: "gpt-live-transcribe",
       correctionEnabled: false,
-      correctionModel: "gpt-5.6-luna",
+      correctionModel: "gpt-6.1-terra",
       correctionCustomInstructions: "",
       paragraphingStrategy: "spoken-command",
       resolveFileLinks: true,
@@ -119,6 +124,9 @@ function createVoiceInputApi(overrides: Partial<typeof window.electron.voiceInpu
     requestMicPermission: vi.fn().mockResolvedValue(undefined),
     openMicSettings: vi.fn(),
     validateApiKey: vi.fn().mockResolvedValue({ valid: true }),
+    getLastTerms: vi.fn().mockResolvedValue(null),
+    onStatus: vi.fn(() => () => {}),
+    onSessionEnded: vi.fn(() => () => {}),
     ...overrides,
   };
 }
@@ -138,10 +146,10 @@ describe("VoiceInputSettingsTab", () => {
           enabled: false,
           openaiApiKey: "",
           language: "en",
-          customDictionary: [],
+          dictionary: [],
           transcriptionModel: "gpt-live-transcribe",
           correctionEnabled: false,
-          correctionModel: "gpt-5.6-luna",
+          correctionModel: "gpt-6.1-terra",
           correctionCustomInstructions: "",
           paragraphingStrategy: "spoken-command",
           resolveFileLinks: true,
@@ -153,8 +161,8 @@ describe("VoiceInputSettingsTab", () => {
     render(<VoiceInputSettingsTab />);
 
     await waitFor(() => {
-      expect(screen.queryByText(/encrypted connection/)).toBeNull();
-      expect(screen.queryByText(/model training/)).toBeNull();
+      expect(screen.queryByText(/receives your audio/)).toBeNull();
+      expect(screen.queryByText(/train on it/)).toBeNull();
     });
   });
 
@@ -165,10 +173,10 @@ describe("VoiceInputSettingsTab", () => {
           enabled: true,
           openaiApiKey: "sk-test",
           language: "en",
-          customDictionary: [],
+          dictionary: [],
           transcriptionModel: "gpt-live-transcribe",
           correctionEnabled: false,
-          correctionModel: "gpt-5.6-luna",
+          correctionModel: "gpt-6.1-terra",
           correctionCustomInstructions: "",
           paragraphingStrategy: "spoken-command",
           resolveFileLinks: true,
@@ -187,6 +195,37 @@ describe("VoiceInputSettingsTab", () => {
     });
   });
 
+  it("stops a running microphone test when the page is hidden", async () => {
+    Object.assign(window.electron.voiceInput, {
+      getSettings: vi.fn().mockResolvedValue({
+        enabled: true,
+        openaiApiKey: "sk-test",
+        language: "en",
+        dictionary: [],
+        transcriptionModel: "gpt-live-transcribe",
+        correctionEnabled: false,
+        correctionModel: "gpt-6.1-terra",
+        correctionCustomInstructions: "",
+        paragraphingStrategy: "spoken-command",
+        resolveFileLinks: true,
+        deviceId: "",
+      }),
+    });
+    const stop = vi.fn();
+    mockStartMicTest.mockResolvedValue({
+      opened: { label: "Headset", substituted: false, bluetooth: false },
+      stop,
+    });
+
+    const { rerender } = render(<VoiceInputSettingsTab isActive />);
+    fireEvent.click(await screen.findByRole("button", { name: "Test microphone" }));
+    await screen.findByRole("button", { name: "Stop test" });
+    expect(stop).not.toHaveBeenCalled();
+
+    rerender(<VoiceInputSettingsTab isActive={false} />);
+    expect(stop).toHaveBeenCalledTimes(1);
+  });
+
   it("saves the new recording mode when the user picks 'Push to talk'", async () => {
     const setSettings = vi.fn().mockResolvedValue(undefined);
     window.electron = {
@@ -195,10 +234,10 @@ describe("VoiceInputSettingsTab", () => {
           enabled: true,
           openaiApiKey: "sk-test",
           language: "en",
-          customDictionary: [],
+          dictionary: [],
           transcriptionModel: "gpt-live-transcribe",
           correctionEnabled: false,
-          correctionModel: "gpt-5.6-luna",
+          correctionModel: "gpt-6.1-terra",
           correctionCustomInstructions: "",
           paragraphingStrategy: "spoken-command",
           resolveFileLinks: true,
@@ -229,10 +268,10 @@ describe("VoiceInputSettingsTab", () => {
           enabled: true,
           openaiApiKey: "",
           language: "en",
-          customDictionary: [],
+          dictionary: [],
           transcriptionModel: "gpt-live-transcribe",
           correctionEnabled: false,
-          correctionModel: "gpt-5.6-luna",
+          correctionModel: "gpt-6.1-terra",
           correctionCustomInstructions: "",
           paragraphingStrategy: "spoken-command",
           resolveFileLinks: true,
@@ -244,42 +283,84 @@ describe("VoiceInputSettingsTab", () => {
     render(<VoiceInputSettingsTab />);
 
     await waitFor(() => {
-      expect(screen.getByText(/encrypted connection to OpenAI/)).toBeTruthy();
-      expect(screen.getByText(/not used for model training/)).toBeTruthy();
-      expect(screen.getByText(/abuse-monitoring logs for up to 30 days/)).toBeTruthy();
+      expect(screen.getByText(/OpenAI receives your audio/)).toBeTruthy();
+      expect(screen.getByText(/doesn't train on it/)).toBeTruthy();
+      expect(screen.getByText(/abuse monitoring/)).toBeTruthy();
+      // Keyterms leave the machine too, so the disclosure names every source.
+      const disclosure = screen.getByText(/OpenAI receives your audio/).textContent ?? "";
+      expect(disclosure).toMatch(/up to 30 days/);
+      expect(disclosure).toMatch(/dictionary/);
+      expect(disclosure).toMatch(/project, host and worktree names/);
+      expect(disclosure).toMatch(/branch/);
+      expect(disclosure).toMatch(/terminal output/);
+      expect(disclosure).toMatch(/go with the audio/);
       // Where the key will live is said before it's saved, not only after.
       expect(screen.getByText(/stored locally in plain text/)).toBeTruthy();
     });
   });
 
-  it("does not render a correction-model selector when AI correction is enabled", async () => {
-    // gpt-5.6-luna replaced both the gpt-5-mini and gpt-5-nano tiers, so there
-    // is no longer a model choice to offer (issue #11365).
+  it("names the recognition hints in the Deepgram disclosure too", async () => {
+    window.electron.voiceInput.getSettings = vi.fn().mockResolvedValue({
+      enabled: true,
+      openaiApiKey: "",
+      deepgramApiKey: "",
+      transcriptionProvider: "deepgram",
+      language: "en",
+      dictionary: [],
+      transcriptionModel: "gpt-live-transcribe",
+      correctionEnabled: false,
+      correctionModel: "gpt-5.6-luna",
+      correctionCustomInstructions: "",
+      paragraphingStrategy: "spoken-command",
+      resolveFileLinks: true,
+      deviceId: "",
+    });
+
+    render(<VoiceInputSettingsTab />);
+
+    await waitFor(() => {
+      const disclosure = screen.getByText(/Deepgram receives your audio/).textContent ?? "";
+      expect(disclosure).toMatch(/may keep audio and transcripts to improve its models/);
+      expect(disclosure).toMatch(/dictionary/);
+      expect(disclosure).toMatch(/project, host and worktree names/);
+      expect(disclosure).toMatch(/branch/);
+      expect(disclosure).toMatch(/terminal output/);
+      expect(disclosure).toMatch(/go with the audio/);
+    });
+  });
+
+  it("saves the cleanup model the user picks", async () => {
+    const setSettings = vi.fn().mockResolvedValue(undefined);
     window.electron = {
       voiceInput: createVoiceInputApi({
         getSettings: vi.fn().mockResolvedValue({
           enabled: true,
           openaiApiKey: "sk-test",
           language: "en",
-          customDictionary: [],
+          dictionary: [],
           transcriptionModel: "gpt-live-transcribe",
           correctionEnabled: true,
-          correctionModel: "gpt-5.6-luna",
+          correctionModel: "gpt-6.1-terra",
           correctionCustomInstructions: "",
           paragraphingStrategy: "spoken-command",
           resolveFileLinks: true,
           deviceId: "",
         }),
+        setSettings,
       }),
     } as unknown as typeof window.electron;
 
     render(<VoiceInputSettingsTab />);
 
-    // Anchor on the AI-correction subtree itself (gated on correctionEnabled &&
-    // openaiApiKey) so the negative assertion can't pass vacuously — not before
-    // the async load resolves, and not if that whole subtree stopped rendering.
-    await screen.findByText(/Prompt caching keeps costs minimal/i);
-    expect(screen.queryByTestId("settings-select-Correction Model")).toBeNull();
+    const group = await screen.findByRole("radiogroup", { name: "Cleanup model" });
+    const luna = Array.from(group.querySelectorAll<HTMLElement>('[role="radio"]')).find((el) =>
+      el.textContent?.includes("GPT-6 Luna")
+    );
+    luna?.click();
+
+    await waitFor(() => {
+      expect(setSettings).toHaveBeenCalledWith({ correctionModel: "gpt-6-luna" });
+    });
   });
 
   describe("microphone permission request on Windows", () => {
@@ -303,10 +384,10 @@ describe("VoiceInputSettingsTab", () => {
             enabled: true,
             openaiApiKey: "sk-test",
             language: "en",
-            customDictionary: [],
+            dictionary: [],
             transcriptionModel: "gpt-live-transcribe",
             correctionEnabled: false,
-            correctionModel: "gpt-5.6-luna",
+            correctionModel: "gpt-6.1-terra",
             correctionCustomInstructions: "",
             paragraphingStrategy: "spoken-command",
             resolveFileLinks: true,

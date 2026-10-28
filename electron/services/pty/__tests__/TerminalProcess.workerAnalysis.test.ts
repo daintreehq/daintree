@@ -1,9 +1,16 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
+import { stubProcessKillForFile } from "../../../__tests__/helpers/processKillGuard.js";
 import type { IPty } from "node-pty";
 import { TerminalProcess } from "../TerminalProcess.js";
 import { AnalysisWorkerPool, type WorkerLike } from "../analysis/AnalysisWorkerPool.js";
 import type { SpawnContext } from "../terminalSpawn.js";
 import type { HostToWorkerMessage, WorkerToHostMessage } from "../analysisWorkerProtocol.js";
+
+vi.mock("../../../utils/windowsTreeKill.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../utils/windowsTreeKill.js")>()),
+  killWindowsProcessTrees: vi.fn(async () => []),
+  killWindowsProcessTreesSync: vi.fn(() => []),
+}));
 
 vi.mock("node-pty", () => {
   return { spawn: vi.fn() };
@@ -77,7 +84,24 @@ function createWorkerModeTerminal() {
   return { terminal, worker: workers[0], agentStateService, pool };
 }
 
+// Mock ptys carry made-up PIDs that belong to real processes on the machine
+// running the suite; every kill path below must land on a stub (#14418). The
+// stub outlives ProcessTreeKiller's 500ms SIGKILL escalation.
+stubProcessKillForFile(600);
+
 describe("TerminalProcess worker-mode analysis events", () => {
+  it("allocates no local mirror and reads the visible screen as empty", () => {
+    const { terminal } = createWorkerModeTerminal();
+    const internals = terminal as unknown as { analysis: { kind: string } };
+
+    expect(internals.analysis.kind).toBe("worker");
+    expect(terminal.getInfo().headlessTerminal).toBeUndefined();
+    expect(terminal.getInfo().serializeAddon).toBeUndefined();
+    expect(terminal.getVisibleActivityLines(10)).toEqual([]);
+    expect(terminal.getVisibleActivitySnapshot(10)).toMatchObject({ length: 0 });
+    terminal.dispose();
+  });
+
   it("rejects a stale waiting-timeout from an old monitor generation", () => {
     const { terminal, worker, agentStateService } = createWorkerModeTerminal();
     const spawnedAt = terminal.getInfo().spawnedAt;

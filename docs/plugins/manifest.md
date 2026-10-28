@@ -96,6 +96,10 @@ Daintree reads the manifest eagerly at startup. Contribution points declared her
   // boot. Contributions are registered eagerly either way.
   "activationEvents": ["onStartupFinished"],
 
+  // Events that wake the plugin and run one of its own commands. Optional.
+  // Each event at most once; "agentWaiting" needs the "agent:read" capability.
+  "eventRoutes": [{ "event": "worktreeAdded", "command": "onWorktreeAdded" }],
+
   // The plugin's UI and functional contributions. Every key is optional.
   "contributes": {
     "commands": [/* palette actions */],
@@ -105,19 +109,27 @@ Daintree reads the manifest eagerly at startup. Contribution points declared her
     "databases": [/* SQLite files opened with host.db */],
     "toolbarButtons": [/* ... */],
     "keybindings": [/* ... */],
-    "contextMenus": [/* worktree, terminal and file right-click entries */],
+    "contextMenus": [/* worktree, terminal, file, browser and project menu entries */],
     "menuItems": [/* application menu entries; not under scope: "project" */],
     "agentMcp": [/* tools Daintree serves to terminal agents; requires mcp:expose */],
     "mcpServers": [/* stdio servers Daintree connects to as a client */],
     "skills": [/* markdown knowledge served through Daintree's own MCP server */],
     "recipes": [/* named multi-terminal launch layouts */],
+    "promptTemplates": [/* prompts offered in the composer's command picker */],
+    "worktreeSetupSteps": [/* work done for each new worktree after its setup script */],
+    "setup": [/* a short checklist shown until the plugin is set up */],
+    "terminalLinks": [/* terminal text and URLs that open with one of the plugin's commands */],
+    "contextProviders": [/* @prefix: context the composer resolves at send */],
     "tours": [/* welcome tours for the plugin or one of its panels */],
+    "projectTemplates": [
+      /* starting files offered in Create project; not under scope: "project" */
+    ],
     "agents": [/* requires the agent:register capability */],
     "processTools": [/* command → terminal-tab icon detections */],
     "forgeProviders": [/* ... */],
     "fileDecorationProviders": [/* ... */],
     "surfaces": {/* project-scope only; see "contributes.surfaces" below */},
-    // Built-in plugins only: "fileEditors", "previewTools", "guestAdapters".
+    "fileEditors": [/* view-backed; a "slot" is built-in only */],
   },
 }
 ```
@@ -164,7 +176,7 @@ The human-readable name shown in UI listings (plugin palette, installed-plugins 
 
 ### `mcpName`
 
-The short name agents see your plugin's MCP server under, as `daintree-<mcpName>` — for example `"ledger"` gives `daintree-ledger`, and Claude names its tools `mcp__daintree-ledger__<tool>`. Lowercase letters, digits and hyphens, 1–16 characters, starting with a letter or digit. Optional: without it Daintree uses the last segment of `name`. It only matters if the plugin declares [databases](./contribution-points.md#databases--shipped) or an [`agentMcp`](./agent-extensions.md#agent-mcp-endpoints) endpoint, and the resulting key is the same in every project; see [Reaching an agent](./agent-extensions.md#reaching-an-agent) for how a clash with another plugin's name is settled.
+The short name agents see your plugin's MCP server under, as `daintree-<mcpName>` — for example `"ledger"` gives `daintree-ledger`, and Claude names its tools `mcp__daintree-ledger__<tool>`. Lowercase letters, digits and hyphens, 1–16 characters, starting with a letter or digit; `docs` and `runbooks` are taken by the Daintree Assistant's own servers. Optional: without it Daintree uses the last segment of `name`. It only matters if the plugin declares [databases](./contribution-points.md#databases--shipped) or an [`agentMcp`](./agent-extensions.md#agent-mcp-endpoints) endpoint, and the resulting key is the same in every project; see [Reaching an agent](./agent-extensions.md#reaching-an-agent) for how a clash with another plugin's name is settled.
 
 ### `description`
 
@@ -183,6 +195,14 @@ Optional attribution credits, surfaced as a "Contributors" block in the plugin d
   { "name": "Ada Lovelace", "url": "https://ada.example.com", "role": "Maintainer" },
   { "name": "Grace Hopper", "email": "grace@example.com" },
 ]
+```
+
+### `worksWith`
+
+Other plugins this one works with, by manifest id (`publisher.name`), built-ins included. Optional, at most 16 entries, none repeated, and never the plugin's own name. The plugin manager lists them in the detail pane with whether each is installed, installed but turned off, or not installed. It is disclosure and an install hint only: nothing is installed, activated or loaded in any order because of it, and a listed plugin that is missing changes nothing about how this one runs. To work with another plugin at runtime, discover its actions with `host.actions.list()`, which names each one's provider, and call them with `host.dispatch`.
+
+```jsonc
+"worksWith": ["acme.linear", "daintree.github"]
 ```
 
 ### `category`
@@ -213,9 +233,10 @@ Plugins with only static contributions (a skills-only or recipes-only plugin, sa
 
 ### `engines.daintree`
 
-Semver range expressing which Daintree versions the plugin supports. The scaffolder (`npx daintree-plugin new`) generates `">=0.11.0"` — an open-ended lower bound, deliberately not a caret:
+Semver range expressing which Daintree versions the plugin supports. The scaffolder (`npx daintree-plugin new`) generates `">=0.41.0"`, the first release that understands everything a scaffold emits (the 0.1.0 scaffold on npm generates `">=0.11.0"`) — an open-ended lower bound, deliberately not a caret:
 
-- `">=0.11.0"` — 0.11 and every later release (scaffolder default)
+- `">=0.41.0"` — 0.41 and every later release (scaffolder default)
+- `">=0.11.0"` — 0.11 and every later release
 - `">=0.11.0 <0.13.0"` — explicit range
 - `"0.11.x"` — any 0.11 release
 
@@ -238,7 +259,90 @@ The manifest gate enforces it in both directions, against the root the manifest 
 
 This is a guardrail against accidental promotion, not a security control — the trust decision is the project folder, not this field. What it prevents is a plugin loading under assumptions its author never made: a project plugin copied into the user directory would go app-wide with project-shaped expectations about its settings tier and its bound project, and a user plugin dropped into `.daintree/plugins/` would load with none of the project-local guarantees. Neither failure is visible at runtime, so both are refused at the gate.
 
-Declaring `"scope": "project"` also changes what the manifest may contribute. `contributes.surfaces` and `"project"` [databases](./contribution-points.md#databases--shipped) become available, and ten contribution groups become unavailable — `menuItems`, `agents`, `skills`, `recipes`, `fileDecorationProviders`, `fileEditors`, `processTools`, `mcpServers`, `tours` and `forgeProviders`, each rejected with an error naming the structural reason it cannot yet be narrowed to one project. `previewTools` and `guestAdapters` are refused too, as they are for every plugin that is not built in. `agentMcp` stays available, because its credentials are bound to one project. See [Project-local plugins](./project-local.md) and the per-point status in [Contribution points](./contribution-points.md).
+Declaring `"scope": "project"` also changes what the manifest may contribute. `contributes.surfaces` and `"project"` [databases](./contribution-points.md#databases--shipped) become available, and seven contribution groups become unavailable — `menuItems`, `agents`, `processTools`, `mcpServers`, `themes`, `forgeProviders` and `projectTemplates`, each rejected with an error naming the reason (for the first six, the structural reason it cannot yet be narrowed to one project; a template is offered before any project exists). A slot-backed `fileEditors` entry is refused too, as it is for every plugin that is not built in; a view-backed file editor is available, and may also match project-relative `paths`. `agentMcp` stays available, because its credentials are bound to one project. See [Project-local plugins](./project-local.md) and the per-point status in [Contribution points](./contribution-points.md).
+
+### `instanceMode`
+
+`"instanceMode": "project"` opts an **installed** package into running as one independently bound instance per project instead of one app-wide singleton. Absent means singleton, and every existing manifest keeps behaving exactly as before. The package is installed once and admitted to a catalog that runs nothing; each project then enables it separately, and each enabled project gets its own instance keyed `project__{projectId}__installed__{name}` with its own settings, storage, databases, connections and contributions, pinned to that project rather than to whichever project is focused. Closing, disabling or reloading one project leaves the others loaded. An update replaces the package once, purges the instances' capability grants and reloads the still-enabled open projects; an uninstall unloads every instance and forgets where it was enabled.
+
+It is accepted only from the user plugins root, is mutually exclusive with `scope`, and takes the same contribution restrictions as `"scope": "project"` (no forge providers, project templates or other structurally global groups). In exchange an instanced package may declare `"location": "project"` databases.
+
+### `application`
+
+Names a project plugin as its project's application and points at the parts of it the manifest already contributes. Available to `"scope": "project"` plugins only (`application_project_scope_only`), and it requires `engines.daintree` (`application_engine_required`) so the host can check the running version before putting the application in force. It implements nothing: every field is either the application's identity or the bare id of a contribution the same manifest declares.
+
+```json
+"application": {
+  "name": "Budget",
+  "iconId": "wallet",
+  "destination": "home",
+  "sidebarViewId": "accounts",
+  "settingsViewId": "preferences",
+  "welcomeTour": { "id": "welcome", "version": 1 },
+  "firstWorkflow": "record-transaction",
+  "requiredTools": ["ledger"],
+  "presentation": { "forgeStats": "hidden", "copyTree": "demoted" }
+}
+```
+
+| Field | Required | Must name |
+| --- | --- | --- |
+| `name` | yes | The application's name, 1-64 characters. |
+| `iconId` | no | The same vocabulary as a sidebar view's `iconId`. |
+| `destination` | yes | `"home"` or `"grid"`. `"home"` needs `contributes.surfaces.projectHome` (`application_home_unclaimed`). |
+| `arrangement` | no | `"full"` (the default) or `"beside-grid"`, for a `"home"` destination only (`application_arrangement_needs_home`). `"beside-grid"` opens the project in Split: your Home beside the host's grid, so agents launched and focused there never hide it. The destination and arrangement are a default; the user's own Home, Split or Grid choice always wins. |
+| `sidebarViewId` | no | A `contributes.views` entry with `location: "sidebar"` (`application_sidebar_view_unknown`). |
+| `settingsViewId` | no | A `contributes.views` entry with `location: "settings"`, the application's settings home (`application_settings_view_unknown`). |
+| `welcomeTour` | no | `id`: a `contributes.tours` entry with no `panelKind` (`application_tour_unknown`, `application_tour_panel_scoped`). `version`: a positive integer, raised when the tour is worth offering again. |
+| `firstWorkflow` | no | The bare id of a `contributes.commands` entry of kind `"command"` (`application_command_unknown`, `application_command_query`). |
+| `requiredTools` | no | `contributes.agentMcp` endpoint ids (`application_tool_unknown`), at most as many as a plugin may declare. Declaring one grants no access. |
+| `presentation` | no | Presentation features and levels the host offers (`application_presentation_unknown`, `application_presentation_level`). |
+| `navigation` | no | The application's sections, below. Self-contained: it names no view, command or URL. |
+
+The object is strict, so nothing undeclared rides along, and it holds no credentials, settings values or customer data.
+
+At most one plugin in a project declares an application. Cooperating plugins contribute their own parts and are listed in [`worksWith`](#workswith); a second declaration makes the application unavailable rather than picking a winner. An owner whose `engines.daintree` range excludes the running Daintree is not loaded at all, unlike a plugin without an application, for which the range only warns. The host resolves the application each time the project's plugins change and sends it to the project's views with their plugin inventory, as one of:
+
+- `loading` — the owner is trusted and has not finished loading.
+- `active` — the owner is loaded and the application is in force.
+- `disabled` — the project's plugins are not trusted, or the owner is muted or waiting to be turned on.
+- `unavailable` — the owner failed to load, its `engines.daintree` range excludes the running Daintree, or a second plugin also declares an application.
+- `replaced` — the owner is loaded, but another plugin holds the project Home it opens on.
+
+Anything but `active` means the standard workspace. The descriptor and its state are a contract for the host's own application features to build on, and resolving the application writes nothing. Its defaults will never outrank the user: an answer the user gave about Home, a surface or the project's presentation profile stands.
+
+While the application is `active`, its `welcomeTour` is offered once per project on each machine: a strip on the project's Home or grid with Start and Skip, shown in the view on screen once the project's first-open layout is done with and no dialog is open. It never plays on its own. Skipping or finishing it is remembered against the declaring plugin, the tour and its `version`, so raising `version` offers it again; the tour stays in Help to replay any time. Once it is answered, `firstWorkflow` is offered as a button on the same strip, and runs only when the user presses it. Nothing in this flow starts an agent, a recipe, an install or any external work.
+
+#### `application.navigation`
+
+The sections the application's views navigate between. The host keeps one location and history per project for them and hands it to every view of the application as [`PanelViewProps.navigation`](./views.md#application-navigation), so the sidebar view, the Home and the panels select the same thing.
+
+```json
+"navigation": {
+  "version": 1,
+  "defaultSectionId": "accounts",
+  "sections": [
+    { "id": "accounts", "title": "Accounts" },
+    {
+      "id": "account",
+      "title": "Account",
+      "params": {
+        "accountId": { "type": "string", "required": true, "persist": true, "maxLength": 64 },
+        "page": { "type": "integer" }
+      }
+    }
+  ]
+}
+```
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `version` | yes | A positive integer. Raising it drops every saved location and history, so a renamed parameter never restores with its old meaning. |
+| `defaultSectionId` | yes | A declared section that requires no parameters (`application_navigation_default_unknown`, `application_navigation_default_requires_params`): where navigation starts, and where a location that no longer resolves lands. |
+| `sections` | yes | 1-24 sections with unique ids (`application_navigation_section_duplicate`). `title` is 1-64 characters. |
+| `sections[].params` | no | At most 8 parameters. `type` is `"string"`, `"integer"` (a safe integer) or `"boolean"`; `maxLength` (strings only, default 64, at most 128); `required` and `persist` default to `false`. |
+
+Parameters are identifiers, not content. A string holds only `A-Z a-z 0-9 . _ -`, so free text, URLs and tokens can't be expressed, and a location carrying anything undeclared is refused. Only parameters marked `persist` are written to disk; the rest last as long as the project's renderer (a remount keeps them, an evicted renderer or a restart doesn't), and an entry whose required parameter isn't persisted restores as the default section. Navigation is local to the project's window: there is no `daintree://` route to a section and it runs no action.
 
 ### `remote`
 
@@ -264,7 +368,7 @@ Array of capability tokens the plugin wants. The model is **disclosure-first wit
 | `fs:user-data-write` | Write user-data-class paths, including the plugin's own data directory |
 | `network:fetch` | Make outbound HTTP requests. Disclosure and danger input only — no host API is gated on it |
 | `agent:invoke` | Drive AI agents from plugin code. Disclosure and confirm elevation only — no host API is gated on it |
-| `agent:read` | Observe agent state (`host.getAgentState`, `host.onDidChangeAgentState`: lifecycle phase, session cost/tokens on completion) and list the project's agent panes (`host.agents.list`); installed and built-in plugins can also list every agent in every open project (`host.agents.listAll`, `host.onDidChangeAllAgents`) |
+| `agent:read` | Observe agent state (`host.getAgentState`, `host.onDidChangeAgentState`: lifecycle phase, session cost/tokens on completion), observe terminals starting, exiting, being trashed and restored (`host.onDidChangeTerminalLifecycle`: metadata only) and list the project's agent panes (`host.agents.list`); installed and built-in plugins can also list every agent in every open project (`host.agents.listAll`, `host.onDidChangeAllAgents`) |
 | `agent:register` | Register a launchable agent CLI as a selectable agent |
 | `terminal:read` | Read a terminal's current screen as plain text (`host.terminals.readScreen`). Terminals show secrets, so this is separate from `agent:read` and asks for JIT consent on first use |
 | `agent:input` | Send text to the active agent terminal (`host.sendToActiveAgent`) or append it to a chosen agent's draft (`host.sendToAgent`); JIT consent on first use |
@@ -318,7 +422,7 @@ Plugins are lazy by default. Omitting `activationEvents` (or passing an empty ar
 
 - a contributed command is dispatched;
 - a forge provider or file decoration is queried;
-- a contributed panel view is opened, or the plugin's `location: "settings"` view is mounted;
+- a contributed panel view is opened, or the plugin's `location: "settings"` or `location: "sidebar"` view is mounted;
 - a view calls into one of the plugin's channels with `window.electron.plugin.invoke`;
 - an agent's MCP session reaches the plugin's server.
 
@@ -326,9 +430,45 @@ Some user actions activate a plugin at once whatever it declares: installing or 
 
 List `"onStartupFinished"` to opt a plugin into eager activation when it genuinely needs to run at boot. Either way, contributions (commands, panels, keybindings, …) are registered eagerly from the manifest at startup — only the `main` import and `activate()` call are governed by activation, so a lazy plugin's commands and panels still appear in the palette before any of its code runs.
 
+A plugin that only needs to react to something happening should use [`eventRoutes`](#eventroutes) instead of activating at startup to subscribe.
+
+### `eventRoutes`
+
+Events that wake the plugin and run one of its own commands. The host listens on the plugin's behalf: when an event happens it activates the plugin if it is not running and runs the command with the event's payload. A route is not a live subscription, so a plugin that reacts only through routes stays eligible for [idle disposal](./architecture.md#worker-crashes-and-idle-disposal) and is woken again by its next event.
+
+```json
+"eventRoutes": [
+  { "event": "agentWaiting", "command": "onAgentWaiting" },
+  { "event": "worktreeAdded", "command": "onWorktreeChange" },
+  { "event": "worktreeRemoved", "command": "onWorktreeChange" }
+]
+```
+
+`command` is the bare `id` of a `contributes.commands` entry in the same manifest; a route cannot name an imperative `host.registerAction` action, which would not exist once the worker is disposed, or a command declared `danger: "confirm"`, since nobody is there to confirm it. Each event may be routed once, and several events may share a command.
+
+The events are a closed list. Each fires on the transition only, and its payload is what the matching live subscription delivers, under the same capability and project rules:
+
+| `event` | Fires when | The command's argument | Needs |
+| --- | --- | --- | --- |
+| `agentWaiting` | an agent moves into `waiting` | `{ event, agent }`, `agent` as `onDidChangeAgentState` delivers it | `agent:read` |
+| `worktreeAdded` | the worktree set gains a worktree | `{ event, worktrees, change }`, as `onDidChangeWorktrees` delivers them | — |
+| `worktreeRemoved` | the worktree set loses a worktree | `{ event, worktrees, change }` | — |
+| `projectForeground` | a project comes to the foreground | `{ event, presence }`, as `onDidChangeProjectPresence` delivers it | — |
+
+The argument's type is `PluginEventRouteWake` in `@daintreehq/plugin-sdk`; narrow it on `event`. A worktree route's `change` is what changed since the read before, or the net of every read while the wake waited its turn. A project plugin hears about its own project only, as its subscriptions do.
+
+Wakes are best effort, not a log:
+
+- Nothing is replayed when the plugin loads: an agent already waiting or a project already in front does not wake it.
+- A burst coalesces to the latest value per terminal, per project or per worktree route, and a plugin is woken at most about once a second. Wakes waiting their turn are held, not queued without bound.
+- A transition that reverses before its wake runs cancels it: an agent that stopped waiting, a project sent back, a worktree removed again.
+- Nothing is delivered while the plugin's worker has failed, including its crash loop, and events missed meanwhile are not replayed. Routes resume once the plugin is restarted or used again.
+- The command runs with no view behind it: `when` and `enablement` clauses are not consulted, and a declared `inputSchema` must accept the wake object.
+- A failed wake is not retried, whether the command threw or the wake was too large to send (the 4 MiB argument cap of any invoke). The failure is logged and audited.
+
 ### `contributes`
 
-Object containing an array per contribution type (`panels`, `toolbarButtons`, `menuItems`, `keybindings`, `contextMenus`, `commands`, `views`, `mcpServers`, `agentMcp`, `databases`, `tours`, `skills`, `forgeProviders`, `fileDecorationProviders`, `agents`, `processTools`, `settings`, `recipes`, and the built-in-only `fileEditors`, `previewTools`, `guestAdapters`) — plus the non-array `surfaces` object. All are optional; unlisted types default to empty. Each array has an upper bound (`MANIFEST_CONTRIBUTION_CAPS` in `electron/schemas/plugin.ts`) generous for any real plugin and there to reject pathological manifests:
+Object containing an array per contribution type (`panels`, `toolbarButtons`, `menuItems`, `keybindings`, `contextMenus`, `commands`, `views`, `mcpServers`, `agentMcp`, `databases`, `tours`, `skills`, `forgeProviders`, `fileDecorationProviders`, `worktreeDeleteNotes`, `agents`, `processTools`, `settings`, `recipes`, `promptTemplates`, `worktreeSetupSteps`, `setup`, `terminalLinks`, `contextProviders`, and `fileEditors`, whose slot-backed entries are built-in only) — plus the non-array `surfaces`, `services`, `account` and `assistantKnowledge` objects and the optional `connections` array. All are optional; unlisted types default to empty. Each array has an upper bound (`MANIFEST_CONTRIBUTION_CAPS` in `electron/schemas/plugin.ts`) generous for any real plugin and there to reject pathological manifests:
 
 | Contribution              | Max entries                               |
 | ------------------------- | ----------------------------------------- |
@@ -344,31 +484,45 @@ Object containing an array per contribution type (`panels`, `toolbarButtons`, `m
 | `databases`               | 16                                        |
 | `skills`                  | 50                                        |
 | `recipes`                 | 50                                        |
+| `promptTemplates`         | 50                                        |
+| `worktreeSetupSteps`      | 10                                        |
+| `setup`                   | 10                                        |
+| `terminalLinks`           | 20                                        |
+| `contextProviders`        | 10                                        |
 | `tours`                   | 10                                        |
 | `forgeProviders`          | 20                                        |
 | `fileDecorationProviders` | 50                                        |
+| `worktreeDeleteNotes`     | 1                                         |
 | `agents`                  | 50                                        |
 | `processTools`            | 100                                       |
 | `settings`                | 200                                       |
 | `fileEditors`             | 10                                        |
-| `previewTools`            | 10                                        |
-| `guestAdapters`           | 10                                        |
 
 Validation is structural as well as per-field: duplicate ids within one array are rejected (`duplicate_contribution_id`), and cross-references have to resolve — a panel view's `id` must name a declared panel (a settings view must not), a panel `menu` or `toolbar` entry, toolbar button, menu item, keybinding or context menu naming an action in your own namespace must match a declared command when you declare any, a tour's `panelKind` must name a declared panel, a forge provider's `settingsScopeRef` / `viewRefs` must name declared settings / views, a `surfaces` slot's `viewId` must name a declared panel view, and a `${settings:…}` token in an MCP server's `command` / `args` / `env` must name a declared setting. Capability rules are checked too: `agents` needs `agent:register`, `agentMcp` needs `mcp:expose`, and a `"project"` database needs `scope: "project"` and `fs:project-write`.
 
-A few notes on individual points; the [Contribution points reference](./contribution-points.md) has the full shape and per-point status for every one, and marks the three only a built-in plugin may declare.
+A few notes on individual points; the [Contribution points reference](./contribution-points.md) has the full shape and per-point status for every one, and marks what only a built-in plugin may declare.
 
-- `views` — a `location: "panel"` view is the component for the panel with the same `id`, wherever that panel sits. A `location: "settings"` view is the plugin's one custom settings section, mounted below its generated settings fields; it names no panel. `location: "sidebar"` is rejected at manifest validation — the sidebar host does not exist yet, so accepting it would validate a view the runtime cannot render. See [Views](./contribution-points.md#views--shipped).
+- `views` — a `location: "panel"` view is the component for the panel with the same `id`, wherever that panel sits. A `location: "settings"` view is the plugin's one custom settings section, mounted below its generated settings fields; it names no panel. A `location: "sidebar"` view is a sidebar view, chosen from the sidebar header's switcher beside the worktree list; it names no panel either, and carries its own `name`, `iconId`, `priority` and `when`. See [Views](./contribution-points.md#views--shipped).
 - `mcpServers` — the declared `command` is lazily spawned as a real subprocess the first time its tools are listed or called, and is supervised (killed on Daintree exit; on crash it transitions to `crashed`, the calls in flight reject, and the next listing or call spawns it again — there is no automatic retry or backoff). Treat a contributed MCP server as trust-gated, not inert. Daintree is the server's client: the plugin manager lists and restarts it, nothing in Daintree calls its tools today, and agents running in terminals never see them.
-- `panels` — a panel's optional `menu` offers up to five of the plugin's own actions in that panel's ⋯ and right-click menus (on a `hasPty: true` panel, the right-click menu only), each `{ actionId, label? }` and dispatched with `{ panelId }`; a built-in or another plugin's action is refused. The host adds its own entries for the plugin below them. An optional `toolbar` draws up to three of the plugin's own actions as buttons in the panel header, each `{ actionId, label?, iconId?, status? }`, under the same namespace rule; a `toolbar` on a `hasPty: true` panel is refused. See [Panel menu](./contribution-points.md#panel-menu) and [Panel toolbar](./contribution-points.md#panel-toolbar).
+- `panels` — a panel's optional `menu` offers up to five of the plugin's own actions in that panel's ⋯ and right-click menus (on a `hasPty: true` panel, the right-click menu only), each `{ actionId, label? }` and dispatched with `{ panelId }`; a built-in or another plugin's action is refused. The host adds its own entries for the plugin below them. An optional `toolbar` draws up to three of the plugin's own actions as buttons in the panel header, each `{ actionId, label?, iconId?, status? }`, under the same namespace rule; a `toolbar` on a `hasPty: true` panel is refused. See [Panel menu](./contribution-points.md#panel-menu) and [Panel toolbar](./contribution-points.md#panel-toolbar). A panel declaring `reportsActivity: true` lets the plugin report its own work on that kind's panels with [`host.setPanelActivity`](./host-api.md#setpanelactivity), and the plugin manager says so.
 - `databases` — SQLite files the plugin opens with `host.db`. A `"project"` database (the default) lives in the repository, at `path` relative to the project root or `.daintree/data/<manifestId>/<id>.db`, and needs `scope: "project"` plus `fs:project-write`; a `"local"` one lives in the plugin's own data directory and needs no capability. Declaring one also puts the host's read-only `database_schema` and `database_query` on the plugin's MCP server for agents, plus a tool for each of its declared `queries`, and gives every panel of the plugin a **Back up data…** menu entry. See [Databases](./contribution-points.md#databases--shipped).
-- `tours` — welcome tours that play in Daintree's tour dialog, offered from Help and the palette, or from one panel's menus when `panelKind` names it. Installed plugins only. See [Tours](./contribution-points.md#tours--shipped-installed-plugins).
+- `tours` — welcome tours that play in Daintree's tour dialog, offered from Help and the palette, or from one panel's menus when `panelKind` names it. See [Tours](./contribution-points.md#tours--shipped).
 - `agentMcp` — the inbound direction: an MCP tools endpoint Daintree hosts for agents in its terminals, with the tools registered from `activate()` through `host.mcp.registerTools`. Requires the `mcp:expose` capability; one endpoint per plugin, served on the plugin's one MCP server beside the host's database tools; allowed under `scope: "project"`. See [Agent MCP endpoints](./contribution-points.md#agent-mcp-endpoints--shipped).
 - `settings` — each entry is a value Daintree stores and renders a form field for. `type` is `string` (default), `number`, `boolean`, `enum`, `json`, `secret`, `path`, `directory` or `file`; `scope` is `user` (default, app-wide), `project` (committed under the project's `.daintree/plugin-settings/`) or `local` (per project, this machine only). `required: true` puts a "needs setup" strip on the plugin's panels until the value is stored; `editor: "view"` hands the field to the plugin's settings view instead of the generated form. A `secret` is encrypted at rest through the OS keychain, never written into the repository even in `project` scope, and may not declare a `default`. Declaring any setting, or a settings view, gives every panel of the plugin a **Plugin settings…** menu entry. Full field reference in [Contribution points → Settings schema](./contribution-points.md#settings-schema--shipped).
+- `account` — one online account the host signs in to for the plugin. `kind: "oauth2"` declares `authorizeUrl`, `tokenUrl`, `clientId` and optional `scopes`, and the host runs an authorization-code flow with PKCE (S256) as a public client through a `127.0.0.1` loopback redirect, so the service must accept `http://127.0.0.1:<any port>/oauth/callback`. `kind: "token"` asks the user to paste an API token. Both take a `label`, an optional `description`, and an optional `identity: { url, field }`: a GET with the access token as a bearer whose JSON response names the account at the dotted `field` ("Connected as …"); for a pasted token, a 401 or 403 there refuses the token. Every URL must be public `https:` with no credentials or fragment, and requests to them refuse redirects. Requires the `network:fetch` capability. The host draws the Connect / Disconnect row in the plugin's settings (the plugin manager for an installed plugin, Project settings for a project plugin, whose account is per project), keeps the tokens in the OS keychain, and gives the plugin only a current access token through [`host.account`](./host-api.md#account--host-managed-sign-in). From a window attached to another machine the browser opens on that machine and its own loopback catches the redirect, while the host exchanges the code and keeps the tokens; see [Host API → `account`](./host-api.md#account--host-managed-sign-in).
+- `connections` — named accounts (#14102), for a plugin that talks to several services or lets the user keep several accounts of one ("work", "personal"). Up to 8 entries, each an `account` declaration plus an `id` of 1–32 lowercase letters, digits or dashes starting with a letter; ids are unique. Declare `account` or `connections`, never both: `account` is shorthand for one connection named `"default"`, and an account already stored under it keeps working if you later write the same declaration as `connections: [{ "id": "default", … }]`. Either form also takes an optional `test: { url }`, a bearer GET the settings row's **Test** runs (2xx accepted, 401/403 refused); without it Test asks `identity.url`. Each connection gets its own row with Connect, Test, Reconnect and Disconnect, and Project settings offers a picker for which connection the project uses. See [`host.account`](./host-api.md#account--host-managed-sign-in) for selection, bindings, and machine-shared versus project-private connections.
+- `services` — an object of two lists for cooperating plugins (#14105). `provides` (up to 16) declares services other plugins may call, each `{ name, version, methods }`: `name` is `{this plugin's id}.{name}`, `version` a strict semver version, and `methods` 1–32 identifier-shaped method names bound with `host.registerService`. `requires` (up to 16) declares the services this plugin calls, each `{ name, range, optional? }` with a semver `range`; a plugin can't import its own. Nothing is installed or ordered from either list: imports resolve when called. See [Services between plugins](./host-api.md#registerservice-and-services--services-between-plugins).
+- `promptTemplates` — declarative prompts for the composer's command picker, requiring no capability. See [Prompt templates](./contribution-points.md#prompt-templates--shipped).
+- `worktreeSetupSteps` — steps the plugin runs for each worktree Daintree creates, after the project's setup script, once the user allows them for the project. The handler is bound in `activate()` with `host.registerWorktreeSetupStep`. See [Worktree setup steps](./contribution-points.md#worktree-setup-steps--shipped).
+- `setup` — a short checklist of what the plugin needs before it's useful. Each step says how the host tells it's done (a setting is stored, the account is connected, a `when` clause over your context keys holds) and what clicking it does (open a setting, run one of your own commands). The host works the progress out itself and shows it on the plugin's panels ("Acme setup · 1 of 3") and at the top of its settings; only the user's **Skip** is remembered, per project. See [Setup checklist](./contribution-points.md#setup-checklist--shipped).
+- `terminalLinks` — bounded patterns and URL hosts the host makes clickable in terminals, each dispatching one of the plugin's own commands, requiring no capability. See [Terminal links](./contribution-points.md#terminal-links--shipped).
+- `contextProviders` — an `@{prefix}:` the agent composer offers, answered by `host.registerContextProvider` from `activate()` and read when the user sends. No capability. See [Context providers](./contribution-points.md#context-providers--shipped).
 - `skills` and `recipes` — declarative content, requiring no capability. Skills are markdown served to agents through Daintree's own MCP server; recipes are named multi-terminal launch layouts, registered app-wide and immutable to the user. See [Skills](./contribution-points.md#skills--shipped) and [Recipes](./contribution-points.md#recipes--shipped).
+- `assistantKnowledge` — Markdown for the Daintree Assistant about the plugin's agent tools: `instructions`, `skills` and `references`, delivered only while the user has given the Assistant those tools. No capability, but the plugin must declare `agentMcp` or `databases`. See [Agent extensions → Knowledge for the Assistant](./agent-extensions.md#knowledge-for-the-assistant).
 - `agents` — registers a launchable agent CLI as a selectable agent. Requires the `agent:register` capability; the schema rejects the contribution without it. An optional `detection` block wires it into the same agent-state UI built-in agents use.
+- `worktreeDeleteNotes` — one check that adds the plugin's notes to a worktree's delete confirmation, bound in `activate()` through [`host.registerWorktreeDeleteNotesProvider`](./host-api.md#registerworktreedeletenotesprovider). Declaring it is what lets a confirmation find, and activate, the plugin. Notes only annotate; they never change the delete. Requires no capability; allowed under `scope: "project"`. See [Worktree delete notes](./contribution-points.md#worktree-delete-notes--shipped).
 - `forgeProviders` and `fileDecorationProviders` — the manifest entry is read eagerly so the host's routing tables are populated before any plugin code runs; the implementation binds lazily in `activate()`. Forge providers are **built-in plugins only** — their host methods are synchronous and cannot cross the plugin worker's message port.
-- `surfaces` — **project-scope only.** An object, not an array: fixed slots a project-local plugin claims to replace one of the host's own surfaces for its own project. `emptyCanvas` (`{ "viewId": "..." }`) is the only slot accepted today; `viewId` must name a declared `contributes.views` entry, and at most one plugin may claim a slot per project. A manifest without `"scope": "project"` that declares any surface is rejected. See [Project-local plugins → Surfaces](./project-local.md#surfaces).
+- `surfaces` — **project-scope only.** An object, not an array: fixed slots a project-local plugin claims to replace one of the host's own surfaces for its own project. `emptyCanvas`, `projectHome` and `worktreeCreate` (each `{ "viewId": "..." }`) are the slots accepted today; `viewId` must name a declared `contributes.views` entry, and at most one plugin holds a slot per project: project plugins first, then the lower manifest id, whatever order they load in. A manifest without `"scope": "project"` that declares any surface is rejected. See [Project-local plugins → Surfaces](./project-local.md#surfaces).
 
 > `views` and `mcpServers` were named `experimental_views` and `experimental_mcpServers` until #10466. The old keys are still accepted as deprecated aliases — a manifest using them parses and runs identically, but logs a one-time deprecation warning naming the stable replacement. Rename to `views` / `mcpServers`; the aliases may be removed in a future major.
 
@@ -495,7 +649,6 @@ Run `npx daintree-plugin validate` in your plugin directory to check the manifes
 
 A few rules are only known when the plugin loads, so a manifest that passes the schema and `daintree-plugin validate` can still fail there:
 
-- **`fileEditors` outside a built-in.** The schema accepts the group for an installed plugin; the load refuses the whole plugin and records a load error.
 - **A command id that collides with a built-in action.** The colliding command is not registered and the plugin records a load error, as described under [Commands](./contribution-points.md#commands--shipped).
 
 ## Unknown fields

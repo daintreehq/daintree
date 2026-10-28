@@ -8,14 +8,6 @@ export const DAINTREE_RUNBOOKS_MCP_URL = "https://assistant.daintree.org/v1/dain
 export const RUNBOOKS_MCP_URL_ENV_VAR = "DAINTREE_RUNBOOKS_MCP_URL";
 
 /**
- * What this machine's Remote Hosts look like when an assistant launches (#13411):
- * none configured, some configured but none connected with control on, or at
- * least one connected with control on.
- */
-export type RunbooksHostsState = "none" | "configured" | "connected";
-
-export const RUNBOOKS_HOSTS_HEADER = "Daintree-Hosts";
-/**
  * Names the model this build drives its hosts with (#13496): direct control
  * through `host.call`, delegation as agent messaging, no inbox. The runbook
  * server picks its catalog by it (daintreehq/assistant-backend#159); absent,
@@ -26,15 +18,16 @@ export const RUNBOOKS_HOST_CONTROL_VERSION = "1";
 
 /**
  * The request headers runbook search reads, sent on every POST by the agent
- * CLI: always the host-control model, which is this build's whatever its
- * hosts, and the caller's host state when it is known. Unknown state leaves
- * its header out: the caller is unreported and searches the whole catalog.
+ * CLI: the host-control model, which is this build's whatever its hosts.
+ * The `Daintree-Hosts` state the server can also filter by is never sent
+ * (#14458). Each native CLI holds its headers from launch for the life of
+ * the process, so a reported state would go stale the moment a host is added,
+ * connected or let go, and hide the procedures for it until the assistant
+ * relaunched. Unreported, search keeps the whole catalog eligible; `host.list`
+ * and `host.call` report and check the live hosts.
  */
-export function buildRunbooksHostHeaders(hosts: RunbooksHostsState | null): Record<string, string> {
-  return {
-    [RUNBOOKS_HOST_CONTROL_HEADER]: RUNBOOKS_HOST_CONTROL_VERSION,
-    ...(hosts !== null ? { [RUNBOOKS_HOSTS_HEADER]: hosts } : {}),
-  };
+export function buildRunbooksHeaders(): Record<string, string> {
+  return { [RUNBOOKS_HOST_CONTROL_HEADER]: RUNBOOKS_HOST_CONTROL_VERSION };
 }
 
 export const RUNBOOKS_BLOCK_START = "<!-- DAINTREE_RUNBOOKS_START -->";
@@ -79,8 +72,16 @@ export function resolveRunbooksMcpUrl(env: NodeJS.ProcessEnv = process.env): str
  * "ask …" phrasings were misread as the agent-question runbooks. `max_results`
  * matches the selector's own cap of three admitted runbooks; every result
  * carries its full procedure, so asking for more only buys unselected text.
+ *
+ * The tool-name line follows the caller's real surface (#14161). A project's
+ * assistant holds the unscoped terminal tools in its own project, and only
+ * there; every project `host.call` reaches admits the owned tools alone. The
+ * global assistant has no project of its own, so it is never told to swap.
  */
-export function buildRunbooksAddendum(): string {
+export function buildRunbooksAddendum(caller: { global?: boolean } = {}): string {
+  const toolNames = caller.global
+    ? "**Tool names:** you have no project of your own: `host.list` finds projects, a page per host (follow `projectInventory.nextCursor`, or narrow by `projectQuery`, before calling one missing), and every step a runbook gives runs through `host.call` with that project's `hostId` and `projectId` (`local` for this machine). Call the tools it names as written, `terminal.sendCommandOwned`, `terminal.sendKeysOwned` and `terminal.closeOwned` included. Prompting, keys and `terminal.interruptOwned` also reach an agent you didn't launch, given its `incarnation` from `host.list` as `generation`; you can close only what you launched. Their `notify` steps apply to you too. A host's own settings, turning Canopy on included, are read and changed with `host.settings`, never through `host.call`. Holding work for a host that is down or busy, arm one notice for when its link or a fresh sample changes with `host.watch`, and list hosts again before acting on it."
+    : "**Tool names:** runbooks are written for every caller. In your own project, where one says `terminal.sendCommandOwned`, `terminal.sendKeysOwned` or `terminal.closeOwned`, yours is `terminal.sendCommand`, `terminal.sendKeys` or `terminal.close`, with the same arguments; don't look the owned names up. Through `host.call` use the owned names as written. Their `notify` steps apply to you too.";
   return [
     "## Runbooks First",
     "",
@@ -90,9 +91,9 @@ export function buildRunbooksAddendum(): string {
     "",
     '`query`: one sentence, 8–15 words, saying what the user wants done as they would type it. Keep every part of the task and any condition on how ("…and start an agent on it", "…without fixing anything"). Leave out specifics: numbers, branch, file, repo and people\'s names, pasted output, prompt text. Don\'t narrate ("User wants…", "ask whether…"). Pass `max_results: 3`.',
     "",
-    "**Tool names:** runbooks are written for every caller. Where one says `terminal.sendCommandOwned`, `terminal.sendKeysOwned` or `terminal.closeOwned`, yours is `terminal.sendCommand`, `terminal.sendKeys` or `terminal.close`, with the same arguments; don't look the owned names up. Their `notify` steps apply to you too.",
+    toolNames,
     "",
-    "Follow the runbooks with `selected: true` and the `supporting_runbooks` that come with them (the foundation they build on), and ignore the unselected ones. None selected: carry on and don't mention it. Another step naming a tool you lack: find the equivalent with `actions.search`, or tell the user. If the search fails, retry once, then proceed and say the runbook couldn't be loaded.",
+    `Follow the runbooks with \`selected: true\` and the \`supporting_runbooks\` that come with them (the foundation they build on), and ignore the unselected ones. None selected: carry on and don't mention it. Another step naming a tool you lack: find the equivalent with \`actions.search\`${caller.global ? " through `host.call`" : ""}, or tell the user. If the search fails, retry once, then proceed and say the runbook couldn't be loaded.`,
     "",
   ].join("\n");
 }

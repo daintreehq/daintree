@@ -32,11 +32,12 @@ const CONNECT_SETTLE_MS = 30_000;
  * Dial a host and resolve with the first state the link reports that isn't
  * still connecting: connected, unreachable (with Host mode off or ssh's own
  * detail), a mismatched build, or driven from elsewhere. `connect` itself only
- * starts the dial and answers at once, so its failures never reject.
+ * starts the dial and answers at once, so its failures never reject. `restart`
+ * is a person's Retry: it abandons an attempt already under way.
  */
 function connectAndSettle(
   hostId: string,
-  timeoutMs = CONNECT_SETTLE_MS
+  { restart = false, timeoutMs = CONNECT_SETTLE_MS }: { restart?: boolean; timeoutMs?: number } = {}
 ): Promise<HostConnectionState> {
   const api = window.electron.remoteHosts;
   return new Promise<HostConnectionState>((resolve, reject) => {
@@ -56,7 +57,7 @@ function connectAndSettle(
     off = api.onEvent((event) => {
       if (event.type === "connection-changed" && event.hostId === hostId) observe(event.connection);
     });
-    api.connect({ hostId }).then(
+    api.connect(restart ? { hostId, restart } : { hostId }).then(
       (state) => {
         if (latest.status === "connecting") observe(state);
       },

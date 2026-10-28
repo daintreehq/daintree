@@ -1,0 +1,202 @@
+import {
+  ResolveResponseSchema,
+  type ResolveRequest,
+  type ResolveResponse,
+} from "../../../shared/elementPicker/resolver.js";
+import type {
+  FileRevision,
+  HeldTarget,
+  ResolutionResult,
+  SourceFileRef,
+  SourceMapProvenance,
+} from "../../../shared/elementPicker/resolution.js";
+import type { SourceClaimKind } from "../../../shared/elementPicker/source.js";
+import { mergeAnswers, observationCandidates, requestFor, unavailableResult } from "./outcomes.js";
+import { lexicalSourcePath, type SourceRoots } from "./sourceAccess.js";
+
+/** What main knows about the job the response answers. */
+export interface ResponseAuthority {
+  roots: SourceRoots;
+  /** The revision main served for a path in this job, if it served one. */
+  servedRevision: (path: string) => FileRevision | undefined;
+  /** Whether main served this map in this job. */
+  servedMap: (mapUrl: string | null, revision: FileRevision) => boolean;
+}
+
+/** A file named with a revision: the revision must be one main served for it. */
+interface NamedFile {
+  file: SourceFileRef;
+  revision: FileRevision | null;
+}
+
+function heldFile(target: HeldTarget): NamedFile {
+  return { file: target.target.file, revision: target.fileRevision };
+}
+
+function namedFiles(result: ResolutionResult): NamedFile[] {
+  switch (result.state) {
+    case "observed":
+    case "mapped":
+      return [heldFile(result)];
+    case "verified":
+      return result.definition
+        ? [
+            heldFile(result),
+            { file: result.definition.file, revision: result.definition.fileRevision },
+          ]
+        : [heldFile(result)];
+    case "ambiguous":
+      return result.alternatives.map(heldFile);
+    case "stale":
+      // The held revision is what an earlier result read, so only the current one is this job's.
+      return [{ file: result.held.target.file, revision: result.currentFileRevision }];
+    case "unavailable":
+      return result.read ? [{ file: result.read.file, revision: result.read.fileRevision }] : [];
+  }
+}
+
+/**
+ * The maps a result says it was mapped through in this job. What a stale
+ * result held is history, like its held revision, so it names none.
+ */
+function citedMaps(result: ResolutionResult): SourceMapProvenance[] {
+  const cited = (target: HeldTarget) =>
+    "sourceMap" in target && target.sourceMap ? [target.sourceMap] : [];
+  switch (result.state) {
+    case "mapped":
+    case "verified":
+      return cited(result);
+    case "ambiguous":
+      return result.alternatives.flatMap(cited);
+    case "observed":
+    case "stale":
+    case "unavailable":
+      return [];
+  }
+}
+
+/**
+ * The host's answer, if it answers this request. Well formed is not enough: it
+ * must be for this request and epoch, speak only of the elements and
+ * candidates the request carried, keep each candidate's claim, name files only
+ * inside the request's own workspace and app, and claim only revisions and
+ * maps main actually served in this job. Anything else is a resolver bug, and
+ * none of it is passed on.
+ */
+export function checkResolveResponse(
+  request: ResolveRequest,
+  raw: unknown,
+  authority: ResponseAuthority
+): ResolveResponse | null {
+  const parsed = ResolveResponseSchema.safeParse(raw);
+  if (!parsed.success) return null;
+  const response = parsed.data;
+  if (response.requestId !== request.requestId) return null;
+  if (response.documentEpoch !== request.documentEpoch) return null;
+
+  const claims = new Map<string, Map<string, SourceClaimKind>>(
+    request.observations.map((observation) => [
+      observation.elementId,
+      new Map(
+        observationCandidates(observation).map((candidate) => [
+          candidate.candidateId,
+          candidate.kind,
+        ])
+      ),
+    ])
+  );
+  const owned = ({ file, revision }: NamedFile) =>
+    file.workspaceId === request.workspaceId &&
+    lexicalSourcePath(authority.roots, file.path) !== null &&
+    (revision === null || authority.servedRevision(file.path) === revision);
+
+  const answered = new Set<string>();
+  for (const outcome of response.outcomes) {
+    const candidates = claims.get(outcome.elementId);
+    if (!candidates || answered.has(outcome.elementId)) return null;
+    answered.add(outcome.elementId);
+    const results = new Set<string>();
+    for (const result of outcome.results) {
+      if (candidates.get(result.candidateId) !== result.claim) return null;
+      if (results.has(result.candidateId)) return null;
+      results.add(result.candidateId);
+      if (!namedFiles(result).every(owned)) return null;
+      const maps = citedMaps(result);
+      if (!maps.every((map) => authority.servedMap(map.mapUrl, map.mapRevision))) return null;
+    }
+  }
+  return response;
+}
+
+/**
+ * A plugin host's answer, checked one provider at a time: a provider whose
+ * part fails the checks above answers its candidates `unsupported` and leaves
+ * its siblings' answers standing. A plugin's providers share a process, not a
+ * verdict. The answer as a whole must still be for this request and epoch.
+ */
+export function checkResolveResponseByProvider(
+  request: ResolveRequest,
+  raw: unknown,
+  authority: ResponseAuthority
+): ResolveResponse | null {
+  const parsed = ResolveResponseSchema.safeParse(raw);
+  if (!parsed.success) return null;
+  const response = parsed.data;
+  if (response.requestId !== request.requestId) return null;
+  if (response.documentEpoch !== request.documentEpoch) return null;
+
+  const providers = new Set(
+    request.observations.flatMap((observation) =>
+      observationCandidates(observation).map((candidate) => candidate.framework)
+    )
+  );
+  const checked = new Map<string, ResolveResponse>();
+  for (const provider of providers) {
+    const own = requestFor(request, (candidate) => candidate.framework === provider);
+    const owned = new Map(
+      own.observations.map((observation) => [
+        observation.elementId,
+        new Set(observationCandidates(observation).map((candidate) => candidate.candidateId)),
+      ])
+    );
+    const part = checkResolveResponse(
+      own,
+      {
+        ...response,
+        outcomes: response.outcomes
+          .filter((outcome) => owned.has(outcome.elementId))
+          .map((outcome) => ({
+            ...outcome,
+            results: outcome.results.filter((result) =>
+              owned.get(outcome.elementId)!.has(result.candidateId)
+            ),
+          })),
+      },
+      authority
+    );
+    if (part) checked.set(provider, part);
+  }
+  return mergeAnswers(
+    request,
+    (candidate) => checked.get(candidate.framework) ?? null,
+    (candidate) => unavailableResult(candidate, "unsupported")
+  );
+}
+
+/**
+ * A job stopped by its deadline: whatever the host could not finish ran out of
+ * budget, whichever word the resolver used for being stopped.
+ */
+export function relabelCancelled(response: ResolveResponse): ResolveResponse {
+  return {
+    ...response,
+    outcomes: response.outcomes.map((outcome) => ({
+      ...outcome,
+      results: outcome.results.map((result) =>
+        result.state === "unavailable" && result.reason === "cancelled"
+          ? { ...result, reason: "budget-exhausted" }
+          : result
+      ),
+    })),
+  };
+}

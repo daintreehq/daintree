@@ -4,108 +4,104 @@
 
 import { ComponentType } from 'react';
 
-/**
- * A fixture-driven stand-in for the two bridges a plugin view talks to:
- * `window.electron.plugin` (`invoke`, `on`, `onPanel`) and the view-lifecycle
- * half of `window.electron.app`. Every SDK view hook reaches the host through
- * those two (`react/hostBridge.ts`), so installing this is enough to run a real
- * panel view outside Daintree — in a plain browser page or in vitest/jsdom.
- *
- * Browser-safe by construction: no Node import anywhere on this path.
- */
-/** What a channel answers with, or a function computing it from the call's args. */
-type ChannelFixture = unknown | ((...args: unknown[]) => unknown);
-declare const PENDING: unique symbol;
-interface PendingMarker {
-    readonly [PENDING]: true;
+/** Which file panel mode a view-backed file editor fills. */
+type FileEditorMode = "edit" | "view";
+/** What {@link PluginFileDocument.read} found on disk. */
+type PluginFileDocumentReadResult = {
+    status: "ok";
+    /** The file's text: a UTF-8 BOM stripped, line endings as `\n`. */
+    text: string;
+    /** Opaque token for these exact bytes; pass it back to `save`. */
+    revision: string;
 }
-/**
- * The failure shapes the real host produces, in the form they arrive over the
- * bridge — so the SDK's own hooks turn them into what a view sees in Daintree
- * (`HostDisconnectedError`, `OutcomeUnknownError`, a prefixed `Error`).
- *
- * Use one as a fixture value, or throw one from a fixture function.
- */
-declare const hostResponses: {
-    /** The call's arguments failed the channel's schema. */
-    readonly schemaError: (detail?: string) => Error;
-    /** The plugin lacks a capability the call needs. */
-    readonly permissionRequired: (detail?: string) => Error;
-    /** The view's host is not connected; the call never reached it. */
-    readonly disconnected: (message?: string) => Error;
-    /** The link dropped mid-call; the host may or may not have run it. */
-    readonly outcomeUnknown: (message?: string) => Error;
-    /** Never settles — the view's loading state, held for as long as the preview lives. */
-    readonly pending: () => PendingMarker;
+/** Gone, unreadable, or outside the project. */
+ | {
+    status: "unavailable";
+}
+/** Larger than the editor's `maxBytes`. */
+ | {
+    status: "too-large";
+}
+/** Not UTF-8 text. */
+ | {
+    status: "not-text";
 };
-/** One call the view made into the bridge, in order. */
-type MockViewHostCall = {
-    kind: "invoke";
-    pluginId: string;
-    channel: string;
-    args: unknown[];
+/** The outcome of {@link PluginFileDocument.save}. */
+type PluginFileDocumentSaveResult = {
+    status: "saved";
+    revision: string;
+}
+/**
+ * The file changed on disk since `expectedRevision`. Nothing was written,
+ * and the document is marked as in conflict until a later save lands or the
+ * draft is discarded. `revision` is what is on disk now, null when the file
+ * is gone.
+ */
+ | {
+    status: "conflict";
+    revision: string | null;
 } | {
-    kind: "on";
-    pluginId: string;
-    channel: string;
+    status: "refused";
+    reason: "read-only" | "too-large" | "unavailable";
 } | {
-    kind: "onPanel";
-    pluginId: string;
-    channel: string;
-    panelId: string;
+    status: "error";
+    message: string;
 };
-interface MockViewHostOptions {
+/** Why a {@link PluginFileDocument} changed under the view. */
+interface PluginFileDocumentChange {
     /**
-     * The plugin this host serves. Set, a call or subscription from any other
-     * plugin id is refused, as it would address nothing in Daintree.
+     * `"disk"`: the file changed on disk — re-read it, or keep your draft and
+     * let the conflict stand. `"saved"`: the host saved the draft (the close
+     * prompt's Save). `"discarded"`: the host dropped the draft — re-read.
      */
-    pluginId?: string;
-    /** Answers per channel. A channel with no fixture rejects, as an unhandled one does in Daintree. */
-    channels?: Record<string, ChannelFixture>;
-    /** Start as a cached (hidden, background) project view. */
-    viewCached?: boolean;
-}
-/** The bridge objects, in the shape `react/hostBridge.ts` reads them. */
-interface MockViewHostBridges {
-    plugin: {
-        invoke(pluginId: string, channel: string, ...args: unknown[]): Promise<unknown>;
-        on(pluginId: string, channel: string, callback: (payload: unknown) => void): () => void;
-        onPanel(pluginId: string, channel: string, panelId: string, callback: (payload: unknown) => void): () => void;
-    };
-    app: {
-        isViewCached(): boolean;
-        onViewCached(callback: () => void): () => void;
-        onViewWarmActivated(callback: () => void): () => void;
-    };
-}
-interface MockViewHost {
-    readonly bridges: MockViewHostBridges;
-    /** Every call the view has made, oldest first. */
-    readonly calls: readonly MockViewHostCall[];
-    /** The argument lists of every `invoke` on `channel`. */
-    invocations(channel: string): unknown[][];
-    /** Replace (or, with `undefined`, remove) one channel's fixture. */
-    setChannel(channel: string, fixture: ChannelFixture | undefined): void;
-    /** Deliver a broadcast to every `on` subscriber of `channel`. Returns how many received it. */
-    push(channel: string, payload: unknown): number;
-    /** Deliver a per-panel event to `onPanel` subscribers of `channel` for `panelId`. */
-    pushPanel(channel: string, panelId: string, payload: unknown): number;
-    /** Live subscribers on `channel`, `on` and `onPanel` together. */
-    subscriberCount(channel: string): number;
-    /** Whether the project view currently reads as cached. */
-    readonly viewCached: boolean;
+    readonly reason: "disk" | "saved" | "discarded";
     /**
-     * Cache the view (fires the cached edge) or warm-activate it (fires the
-     * warm-activated edge). A no-op when the state already matches.
+     * The revision now on disk; null when the file is gone, grew past the
+     * editor's `maxBytes`, or no longer reads as UTF-8 text.
      */
-    setViewCached(cached: boolean): void;
-    /**
-     * Put the bridges on `globalThis.electron`, where the SDK looks for them.
-     * Returns the restore function, which puts back whatever was there before.
-     */
-    install(target?: object): () => void;
+    readonly revision: string | null;
 }
-declare function createMockViewHost(options?: MockViewHostOptions): MockViewHost;
+/**
+ * The host-owned document a `location: "fileEditor"` view edits (#13809),
+ * handed to it as {@link PanelViewProps.fileDocument}.
+ *
+ * The host reads and writes the file; the view never touches the filesystem
+ * for it. A save names the revision it was based on and is refused, not
+ * merged, when the file moved underneath — the same compare-and-replace the
+ * built-in Markdown editor relies on, checked in the main process at write
+ * time. A `mode: "view"` editor gets a read-only document.
+ */
+interface PluginFileDocument {
+    /** Absolute path of the file. */
+    readonly filePath: string;
+    /** Path relative to the project or worktree root, with forward slashes. */
+    readonly relativePath: string;
+    readonly fileName: string;
+    /** The mode this editor was opened in. */
+    readonly mode: FileEditorMode;
+    /** True for a `mode: "view"` editor: `save` and `setDraft` are refused. */
+    readonly readOnly: boolean;
+    /** Read the file as it is on disk now. */
+    read(): Promise<PluginFileDocumentReadResult>;
+    /** Write `text` if the file is still at `expectedRevision`. Clears the draft on success. */
+    save(text: string, options: {
+        expectedRevision: string;
+    }): Promise<PluginFileDocumentSaveResult>;
+    /**
+     * The unsaved text the host holds for this panel, or null when clean — read
+     * it on mount to restore a draft from before the user switched modes.
+     */
+    getDraft(): string | null;
+    /** Report the unsaved text (null when clean). The host derives "dirty" from it. */
+    setDraft(text: string | null): void;
+    /**
+     * Report a conflict your editor detected itself. It can raise the host's
+     * conflict flag but never clear one the host observed on disk.
+     */
+    setConflict(conflict: boolean): void;
+    /** Subscribe to changes made outside the view. Returns the unsubscribe. */
+    onDidChange(listener: (change: PluginFileDocumentChange) => void): () => void;
+}
 
 /**
  * The live state of one panel `toolbar` button, set by the view with
@@ -154,6 +150,64 @@ interface PluginSettingsViewContext {
     readonly scope: "user" | "project";
     /** The project the section is shown for; `null` in the `"user"` home. */
     readonly projectId: string | null;
+    /**
+     * The declared settings page (`pages[].id` on the settings view) the user
+     * has open, or `null` on the section's own root. Absent on a host that
+     * predates pages, and for a view that declares none.
+     */
+    readonly page?: string | null;
+    /**
+     * A deep link to one of the settings this view edits (`editor: "view"`),
+     * present until it is answered. Focus that setting's control and call
+     * `acknowledge(true)`; call `acknowledge(false)` when you can't show it. A
+     * view that doesn't answer in time, or answers `false`, gets the host's
+     * landing on the whole section instead, so ignoring this is always safe.
+     */
+    readonly focus?: PluginSettingsViewFocus;
+}
+/**
+ * A request to land on one setting a custom settings view edits, handed to it
+ * as {@link PluginSettingsViewContext.focus}. `key` is always a declared
+ * `contributes.settings` id with `editor: "view"` that lives in this home; the
+ * host checks it before passing it on. `nonce` changes for every request, so a
+ * second link to the same key lands again.
+ */
+interface PluginSettingsViewFocus {
+    readonly key: string;
+    readonly nonce: number;
+    /**
+     * Report whether the view landed on `key`. Only the first answer for a
+     * request counts; one after the host has fallen back does nothing.
+     */
+    readonly acknowledge: (landed: boolean) => void;
+}
+/**
+ * Where a plugin view is mounted, handed to it as
+ * {@link PanelViewProps.hostContext}.
+ *
+ * `"panel"` is a panel in the grid, the dock or a dialog. `"surface"` is a
+ * project surface slot (`contributes.surfaces`), which mounts one of the
+ * plugin's panel views in place of the host's own content — so the same view
+ * can see both and lay itself out for each. `"settings"` is the plugin's custom
+ * settings section. `"sidebar"` is a sidebar view, below the sidebar header and
+ * as narrow as the sidebar's minimum width. `"fileEditor"` is a view-backed
+ * file editor inside the file panel. `"popover"` is the anchored popover
+ * a toolbar button opens (`contributes.toolbarButtons[].popover`), again one of
+ * the plugin's panel views.
+ *
+ * Open-ended: hosts added later arrive as new members, so a view that switches
+ * on this must give unknown kinds a sensible default rather than treat the list
+ * as exhaustive.
+ */
+type PluginViewHostKind = "panel" | "surface" | "settings" | "sidebar" | "fileEditor" | "popover";
+interface PluginViewHostContext {
+    readonly kind: PluginViewHostKind;
+    /**
+     * Dismiss the host the view is in. Present only where the view may end its
+     * own mount — today the toolbar popover, after a "quick add" submits, say.
+     * Focus goes back to the button that opened it.
+     */
+    readonly close?: () => void;
 }
 /**
  * Props every plugin-contributed panel view receives from the renderer host.
@@ -166,7 +220,8 @@ interface PluginSettingsViewContext {
  * - `pluginId` is the plugin's RUNTIME id, sourced from
  *   `PanelKindConfig.extensionId` — the bare manifest `name` for an installed
  *   or builtin plugin, but the instance key `project__{projectId}__{manifestId}`
- *   for a project plugin. Pass it back verbatim to `window.electron.plugin.*`;
+ *   for a project plugin and `project__{projectId}__installed__{manifestId}`
+ *   for an installed package's per-project instance. Pass it back verbatim to `window.electron.plugin.*`;
  *   a view that writes its own manifest name down instead addresses nothing.
  * - `disposeSignal` aborts on unmount AND when the host receives a
  *   `plugin:panel-kinds-changed` push that no longer contains this kind. The
@@ -175,6 +230,67 @@ interface PluginSettingsViewContext {
  *   while the plugin host APIs are still live.
  * - `panelRemovedSignal` aborts ONLY when the panel is permanently gone.
  */
+/** A value a navigation parameter holds: an identifier, a safe integer or a flag. */
+type PluginNavigationParamValue = string | number | boolean;
+/** Where an application is: one of its declared sections, with its parameters. */
+interface PluginNavigationLocation {
+    readonly sectionId: string;
+    readonly params: Readonly<Record<string, PluginNavigationParamValue>>;
+}
+/** A request to go to a declared section (#14108). */
+interface PluginNavigationIntent {
+    sectionId: string;
+    /** Only parameters the section declares, each of its declared type. */
+    params?: Record<string, PluginNavigationParamValue>;
+    /** Replace the current history entry instead of adding one. */
+    replace?: boolean;
+    /**
+     * Bring the application's destination forward (its Home, or the grid) as
+     * well as moving the location. Defaults to `true`; `false` changes only the
+     * shared selection.
+     */
+    reveal?: boolean;
+}
+/**
+ * Why a navigation was refused. Nothing moved: not the location, the history,
+ * the main area nor focus.
+ *
+ * - `invalid-intent` — not an intent object.
+ * - `unknown-section` — the application declares no such section.
+ * - `invalid-params` — a parameter is undeclared, missing, or not its declared type or bounds.
+ * - `too-large` — the location is over the size cap.
+ * - `unsaved` — a view of the application reports unsaved work; save or drop it, then retry.
+ * - `no-history` — nothing to go back or forward to.
+ * - `stale` — the call came from a view attempt that is gone, or an application no longer in force.
+ */
+type PluginNavigationRefusal = "invalid-intent" | "unknown-section" | "invalid-params" | "too-large" | "unsaved" | "no-history" | "stale";
+type PluginNavigationResult = {
+    readonly ok: true;
+    readonly location: PluginNavigationLocation;
+} | {
+    readonly ok: false;
+    readonly reason: PluginNavigationRefusal;
+};
+/**
+ * The project application's shared navigation, as one of its views sees it
+ * (#14108). Every view of the application in the project — its sidebar view,
+ * its Home, its panels — holds the same location and re-renders when it moves,
+ * so selection in one is selection in all.
+ */
+interface PluginApplicationNavigationApi {
+    /** The current location. A new object only when the location changes. */
+    readonly location: PluginNavigationLocation;
+    /** The declared sections, in manifest order. */
+    readonly sections: readonly {
+        readonly id: string;
+        readonly title: string;
+    }[];
+    readonly canGoBack: boolean;
+    readonly canGoForward: boolean;
+    navigate(intent: PluginNavigationIntent): PluginNavigationResult;
+    back(): PluginNavigationResult;
+    forward(): PluginNavigationResult;
+}
 interface PanelViewProps {
     readonly panelId: string;
     readonly pluginId: string;
@@ -217,9 +333,46 @@ interface PanelViewProps {
      * This is a snapshot taken at mount, not a live value: it does not update
      * while the view is mounted, including in response to your own
      * {@link persistState} calls. Treat the contents as read-only and hold your
-     * working copy in React state seeded from here.
+     * working copy in React state seeded from here. Arguments from a later open
+     * that reuses this panel arrive as {@link openRequest} instead.
      */
     readonly initialArgs?: Record<string, unknown>;
+    /**
+     * The latest `panel.openPluginPanel` call that reused this panel rather than
+     * spawning a new one, carrying the `initialArgs` it was called with (#13779).
+     * A fresh panel gets its arguments as {@link initialArgs}; every later "open
+     * this in the panel" — a second context-menu click, a notification button, a
+     * search result — lands here.
+     *
+     * Live: a mounted view re-renders with the new request, keeping its state,
+     * its {@link disposeSignal} and its {@link initialArgs}. A request made while
+     * no view is mounted (a hidden dock tab, a pane behind a maximized sibling, a
+     * view still loading) waits and is handed to the next one. Only the latest
+     * waits: a second call before the view sees the first replaces it.
+     *
+     * `seq` is new for every call, including one with the same `args`, so key
+     * the effect that acts on it by the request itself:
+     *
+     * ```tsx
+     * useEffect(() => {
+     *   if (openRequest) showFile(String(openRequest.args.path));
+     * }, [openRequest]);
+     * ```
+     *
+     * Once a view has committed with a request it is delivered: it stays on
+     * this attempt's props, but a later remount or reload does not see it again,
+     * so persist whatever the request changed if it should survive one. Not
+     * persisted itself, and not merged into {@link initialArgs}: it is held by
+     * the project's window, so one still waiting when that window reloads,
+     * closes or is evicted to save memory is lost.
+     *
+     * Absent until a reusing open supplies `initialArgs`, and always absent on a
+     * host with no panel record (a project surface, a settings view).
+     */
+    readonly openRequest?: {
+        readonly seq: number;
+        readonly args: Record<string, unknown>;
+    };
     /**
      * Which version of your `stateVersion` schema {@link initialArgs} was written
      * against — the other half of declaring one in `contributes.panels` (#12280).
@@ -274,6 +427,16 @@ interface PanelViewProps {
      * `true` means "accepted and scheduled" — the layout save is debounced, so it
      * is not a promise that bytes have reached disk.
      *
+     * Outside the grid (a Home surface, a sidebar view, a settings section, a
+     * toolbar popover) there is no panel record, so the bag is kept in the host's
+     * durable view-state store instead, under the project, your plugin and the
+     * view. The same cap, merge and version rules apply, the write is committed
+     * without a debounce, so it survives the renderer going away the moment this
+     * returns, and `false` also means storage refused it. A
+     * user-scope settings section's bag follows the user across projects. The
+     * least recently written of these bags are dropped beyond 200, so treat them
+     * as state you can rebuild.
+     *
      * Absent when the host does not support persistence for this panel; call it
      * optionally.
      */
@@ -304,20 +467,29 @@ interface PanelViewProps {
      */
     readonly requestReload?: () => void;
     /**
-     * Tell the host whether this view holds work that a reload would lose
-     * (#12611).
+     * Tell the host whether this view holds work that a reload or a close would
+     * lose (#12611, #13815).
      *
      * The user can reload a plugin panel from its menus, and an agent can do the
      * same through the host's tools. Neither asks first by default, because what
      * you accepted through {@link persistState} comes back. While this is set to
-     * `true`, both ask the user to confirm before discarding the view. Set it
-     * back to `false` once the work is saved or dropped.
+     * `true`, both ask the user to confirm before discarding the view, and so
+     * does closing the panel with its close button or menu. Set it back to
+     * `false` once the work is saved or dropped.
      *
      * Your own {@link requestReload} is never held up by it. The setter belongs to
      * the attempt that received it: one held past this attempt's teardown does
      * nothing, and a new attempt starts with no unsaved work until it says so.
      *
-     * Absent where the host offers no reload, so call it optionally.
+     * While it is `true`, the host also keeps the project's renderer: automatic
+     * Sleep waits, and cache eviction skips it until memory runs short. Work you
+     * keep in {@link persistState} comes back after either, so prefer persisting
+     * a draft over holding the flag, and keep the flag for work that cannot be
+     * persisted. Offered outside the grid too (a Home surface, a sidebar view, a
+     * settings section, a toolbar popover), where there is no close to confirm.
+     *
+     * Absent where the host offers neither (a file editor, whose document owns
+     * its draft), so call it optionally.
      */
     readonly setHasUnsavedChanges?: (hasUnsavedChanges: boolean) => void;
     /**
@@ -357,6 +529,28 @@ interface PanelViewProps {
      */
     readonly setMenuItems?: (items: readonly PanelMenuItemContribution[] | null) => void;
     /**
+     * Names this panel: the title shown on its tab, its header, its dock chip and
+     * its dialog. Use it when one kind shows different things, so three record
+     * panels read "Record #42", "Record #43" and "Record #44" rather than three
+     * copies of the kind's `name`. `null` (or a blank string) goes back to the
+     * kind's name.
+     *
+     * The title belongs to the panel, not the view: it survives the view
+     * unmounting and reloading, and a grid or dock panel keeps it across a
+     * restart. A dialog keeps it until the dialog closes, since closing one
+     * removes its panel. A name the user typed wins: once they rename the panel,
+     * this does nothing until they clear their rename. The title is held to one
+     * line: control and invisible formatting characters become spaces, and it is
+     * cut at 80 characters.
+     *
+     * Only ever titles this panel. The setter belongs to the attempt that
+     * received it: a call held past this attempt's teardown does nothing.
+     *
+     * Absent where the host has no panel to name (a project surface, a settings
+     * view), so call it optionally.
+     */
+    readonly setTitle?: (title: string | null) => void;
+    /**
      * Your actions whose handlers are running right now, by `actionId` as the
      * manifest writes it — however they were dispatched: the palette, a menu,
      * the panel toolbar, a keybinding or an agent. A new array when the set
@@ -395,7 +589,194 @@ interface PanelViewProps {
      * mounted in, so it renders the rows for that scope. Absent for a panel view.
      */
     readonly settingsContext?: PluginSettingsViewContext;
+    /**
+     * Present only for a `location: "fileEditor"` view (#13809): the file it was
+     * opened for, owned by the host. Read it with a revision, save against the
+     * revision you read, and report your unsaved text with `setDraft` so the
+     * host's dirty indicator, Rendered preview and Save / Discard / Cancel prompt
+     * on close all apply. The draft is the host's, not the view's: it survives
+     * the user switching to Source and back, and the close prompt can save it
+     * after your view has unmounted.
+     */
+    readonly fileDocument?: PluginFileDocument;
+    /**
+     * Where the host mounted this view — a panel, a project surface, the plugin's
+     * settings section, the sidebar — so one view can lay itself out for each
+     * place it appears. Always set by Daintree; absent only from a host that predates it,
+     * which you can treat as `"panel"`.
+     *
+     * This is the whole of what a view learns about its surroundings. Your view
+     * owns its own box and nothing outside it: reading or styling the host's DOM,
+     * relying on an ancestor's layout or class names, or reaching past your box
+     * with global CSS is unsupported and can break on any update. The host
+     * contains your layout (`position: fixed` stays inside your box, and your
+     * z-indexes stay in your own stacking context), but a modal `<dialog>`, a
+     * `popover` element or a `createPortal` into `document.body` leaves that
+     * containment. For overlays use `@daintreehq/plugin-ui`'s `Dialog`, `Popover`
+     * and menus, which the host draws and positions.
+     *
+     * New host kinds are added over time, so give an unrecognised `kind` a
+     * sensible default rather than switching on it exhaustively.
+     */
+    readonly hostContext?: PluginViewHostContext;
+    /**
+     * The project application's navigation (#14108): the location its declared
+     * sections share across the application's sidebar view, Home and panels,
+     * with back and forward.
+     *
+     * Handed only to views of the plugin whose `application` is in force in
+     * this project and declares `navigation`; absent otherwise, and absent in a
+     * user-scope settings section, which belongs to no project. Live: the view
+     * re-renders with a new `location` when any view of the application moves
+     * it, without remounting, so it keeps its own state, its `initialArgs` and
+     * its {@link disposeSignal}.
+     *
+     * The location is restored per project after a remount, an evicted renderer
+     * or a restart, but only parameters declared `persist` are written to disk;
+     * the others last as long as the project's renderer, so they survive a
+     * remount but not an evicted or reloaded renderer. A location that no longer
+     * resolves — its section removed, a parameter that no longer validates, a
+     * raised `navigation.version` — restores as the default section.
+     *
+     * Navigation is refused with `unsaved` while any view of the application
+     * reports {@link setHasUnsavedChanges}, so a pending form is never replaced:
+     * persist the draft or drop it, clear the flag, and navigate again. A
+     * callback held past this view attempt refuses with `stale`.
+     */
+    readonly navigation?: PluginApplicationNavigationApi;
 }
+/**
+ * Where a project is, as {@link PluginActivationApi.onDidChangeProjectPresence}
+ * reports it: `"foreground"` while it is the project some window shows (or a
+ * remote Shell shows from this machine), `"background"` while it is open but
+ * no window shows it, and `"closed"` once it is closed, removed or put to
+ * sleep. A project whose renderer was reclaimed under memory pressure is still
+ * open, and reads as `"background"`.
+ */
+type PluginProjectPresenceState = "foreground" | "background" | "closed";
+/** One project's presence. Carries the project id and the state only. */
+interface PluginProjectPresence {
+    readonly projectId: string;
+    readonly state: PluginProjectPresenceState;
+}
+
+/**
+ * A fixture-driven stand-in for the two bridges a plugin view talks to:
+ * `window.electron.plugin` (`invoke`, `on`, `onPanel`, project presence) and
+ * the view-lifecycle half of `window.electron.app`. Every SDK view hook reaches
+ * the host through those two (`react/hostBridge.ts`), so installing this is
+ * enough to run a real panel view outside Daintree — in a plain browser page or
+ * in vitest/jsdom.
+ *
+ * Browser-safe by construction: no Node import anywhere on this path.
+ */
+/** What a channel answers with, or a function computing it from the call's args. */
+type ChannelFixture = unknown | ((...args: unknown[]) => unknown);
+declare const PENDING: unique symbol;
+interface PendingMarker {
+    readonly [PENDING]: true;
+}
+/**
+ * The failure shapes the real host produces, in the form they arrive over the
+ * bridge — so the SDK's own hooks turn them into what a view sees in Daintree
+ * (`HostDisconnectedError`, `OutcomeUnknownError`, a prefixed `Error`).
+ *
+ * Use one as a fixture value, or throw one from a fixture function.
+ */
+declare const hostResponses: {
+    /** The call's arguments failed the channel's schema. */
+    readonly schemaError: (detail?: string) => Error;
+    /** The plugin lacks a capability the call needs. */
+    readonly permissionRequired: (detail?: string) => Error;
+    /** The view's host is not connected; the call never reached it. */
+    readonly disconnected: (message?: string) => Error;
+    /** The link dropped mid-call; the host may or may not have run it. */
+    readonly outcomeUnknown: (message?: string) => Error;
+    /** Never settles — the view's loading state, held for as long as the preview lives. */
+    readonly pending: () => PendingMarker;
+};
+/** One call the view made into the bridge, in order. */
+type MockViewHostCall = {
+    kind: "invoke";
+    pluginId: string;
+    channel: string;
+    args: unknown[];
+} | {
+    kind: "on";
+    pluginId: string;
+    channel: string;
+} | {
+    kind: "onPanel";
+    pluginId: string;
+    channel: string;
+    panelId: string;
+};
+interface MockViewHostOptions {
+    /**
+     * The plugin this host serves. Set, a call or subscription from any other
+     * plugin id is refused, as it would address nothing in Daintree.
+     */
+    pluginId?: string;
+    /** Answers per channel. A channel with no fixture rejects, as an unhandled one does in Daintree. */
+    channels?: Record<string, ChannelFixture>;
+    /** Start as a cached (hidden, background) project view. */
+    viewCached?: boolean;
+    /**
+     * Where the view's project starts, as `useProjectPresence()` reads it.
+     * Defaults to `"foreground"`; `null` is a view with no project.
+     */
+    projectPresence?: PluginProjectPresenceState | null;
+}
+/** The bridge objects, in the shape `react/hostBridge.ts` reads them. */
+interface MockViewHostBridges {
+    plugin: {
+        invoke(pluginId: string, channel: string, ...args: unknown[]): Promise<unknown>;
+        on(pluginId: string, channel: string, callback: (payload: unknown) => void): () => void;
+        onPanel(pluginId: string, channel: string, panelId: string, callback: (payload: unknown) => void): () => void;
+        getProjectPresence(): Promise<PluginProjectPresence | null>;
+        onProjectPresenceChanged(callback: (presence: PluginProjectPresence) => void): () => void;
+    };
+    app: {
+        isViewCached(): boolean;
+        onViewCached(callback: () => void): () => void;
+        onViewWarmActivated(callback: () => void): () => void;
+    };
+}
+interface MockViewHost {
+    readonly bridges: MockViewHostBridges;
+    /** Every call the view has made, oldest first. */
+    readonly calls: readonly MockViewHostCall[];
+    /** The argument lists of every `invoke` on `channel`. */
+    invocations(channel: string): unknown[][];
+    /** Replace (or, with `undefined`, remove) one channel's fixture. */
+    setChannel(channel: string, fixture: ChannelFixture | undefined): void;
+    /** Deliver a broadcast to every `on` subscriber of `channel`. Returns how many received it. */
+    push(channel: string, payload: unknown): number;
+    /** Deliver a per-panel event to `onPanel` subscribers of `channel` for `panelId`. */
+    pushPanel(channel: string, panelId: string, payload: unknown): number;
+    /** Live subscribers on `channel`, `on` and `onPanel` together. */
+    subscriberCount(channel: string): number;
+    /** Whether the project view currently reads as cached. */
+    readonly viewCached: boolean;
+    /**
+     * Cache the view (fires the cached edge) or warm-activate it (fires the
+     * warm-activated edge). A no-op when the state already matches.
+     */
+    setViewCached(cached: boolean): void;
+    /** Where the view's project currently is; `null` for a view with no project. */
+    readonly projectPresence: PluginProjectPresenceState | null;
+    /**
+     * Move the view's project and push the change, as main does. A no-op when it
+     * already matches, or for a view with no project.
+     */
+    setProjectPresence(state: PluginProjectPresenceState): void;
+    /**
+     * Put the bridges on `globalThis.electron`, where the SDK looks for them.
+     * Returns the restore function, which puts back whatever was there before.
+     */
+    install(target?: object): () => void;
+}
+declare function createMockViewHost(options?: MockViewHostOptions): MockViewHost;
 
 /**
  * The rules a plugin panel's `persistState` write is held to, in one place.
@@ -455,9 +836,15 @@ interface PreviewPanelPropsOptions {
     runningActions?: readonly string[];
     settingsContext?: PluginSettingsViewContext;
     /**
+     * Where the view is mounted, as `hostContext`. Defaults to `"settings"` when
+     * {@link settingsContext} is given and `"panel"` otherwise. A `close` passed
+     * here is handed through, so a popover view's dismissal can be asserted.
+     */
+    hostContext?: PluginViewHostContext;
+    /**
      * Leave out the optional host callbacks (`persistState`, `requestReload`,
-     * `setHasUnsavedChanges`, `setToolbarItemState`, `setMenuItems`), as on a
-     * host surface that offers none of them.
+     * `setHasUnsavedChanges`, `setToolbarItemState`, `setMenuItems`, `setTitle`),
+     * as on a host surface that offers none of them.
      */
     withoutHostCallbacks?: boolean;
 }
@@ -497,6 +884,8 @@ interface PreviewPanelController {
     readonly rejectedMenuItems: readonly string[];
     /** Toolbar button state by `actionId`, as last set. */
     readonly toolbarItems: ReadonlyMap<string, PluginPanelToolbarItemState>;
+    /** The title the view gave its panel, as the host vetted it, or `null` for the kind's name. */
+    readonly title: string | null;
     readonly hasUnsavedChanges: boolean;
     /** How many times a live attempt asked to be reloaded. */
     readonly reloadRequests: number;

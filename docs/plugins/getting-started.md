@@ -38,7 +38,7 @@ my-first-plugin/
 └── .gitignore
 ```
 
-The `view` and `full` templates add `src/panel.tsx`, the panel's own icon at `icons/panel.svg`, and a [panel preview](./dev-loop.md#preview-a-panel-outside-daintree) — `review/panel.stories.tsx`, `review/panel.spec.ts`, `playwright.config.ts` and a `test:preview` script; `mcp` and `full` add `src/server.ts` and `vite.config.server.ts`, the Node-target build for the MCP server. The scaffold also writes `.claude/skills/daintree-tour/`, the tour-authoring skill ([Tours](./tours.md)). The icon, the preview and the skill are not in the 0.1.0 release on npm; they ship in the next one.
+The `view` and `full` templates add `src/panel.tsx`, the panel's own icon at `icons/panel.svg`, and a [panel preview](./dev-loop.md#preview-a-panel-outside-daintree) — `review/panel.stories.tsx`, `review/panel.spec.ts`, `playwright.config.ts` and a `test:preview` script; `mcp` and `full` add `src/server.ts` and `vite.config.server.ts`, the Node-target build for the MCP server. The scaffold also writes `.claude/skills/daintree-tour/`, the tour-authoring skill ([Tours](./tours.md)). The icon, the preview and the skill are not in the 0.1.0 release on npm; they ship in 0.2.0.
 
 `plugins/sample/hello-daintree/` in the Daintree repository is the host's own reference plugin. Read it for the host API, but don't copy it as a starting point: it is in the reserved `daintree.*` namespace, which `validate` and the installer refuse for a third-party plugin, and it is unbuilt — its `main` names `main/index.js`, and the directory holds only `main/index.ts`. Start from the scaffold.
 
@@ -52,7 +52,7 @@ The scaffolded `command` template already contains a working command: `run`, tit
   "displayName": "My First Plugin",
   "description": "My First Plugin — a Daintree plugin.",
   "main": "dist/index.js",
-  "engines": { "daintree": ">=0.11.0" },
+  "engines": { "daintree": ">=0.41.0" },
   "capabilities": [],
   "contributes": {
     "commands": [
@@ -116,13 +116,13 @@ In Daintree, open the command palette and run **Say Hello** (listed under **My F
 
 `daintree-plugin install` needs Daintree running; otherwise it fails with `Daintree isn't running. Start Daintree and try again.` and names the socket it tried. You can also install the `.dntr` from the plugin manager (Settings → Plugins → Plugin manager → Install plugin → Install from file).
 
-To iterate, edit your source, then re-run `npm run package` and `daintree-plugin install` (which replaces the installed copy). For a faster loop, `npx daintree-plugin dev` hot-reloads the plugin on every save — see [Development loop](./dev-loop.md#daintree-plugin-dev). It also prints the plugin's performance measurements against their budgets as it runs; that table is not in the 0.1.0 release on npm; it ships in the next one.
+To iterate, edit your source, then re-run `npm run package` and `daintree-plugin install` (which replaces the installed copy). For a faster loop, `npx daintree-plugin dev` hot-reloads the plugin on every save — see [Development loop](./dev-loop.md#daintree-plugin-dev). It also prints the plugin's performance measurements against their budgets as it runs; that table is not in the 0.1.0 release on npm; it ships in 0.2.0.
 
 ## Add a view
 
 The `view` and `full` templates add `src/panel.tsx`, a React component Daintree mounts in a panel. Build it from `@daintreehq/plugin-ui`, Daintree's own components served to your view by the host — `Button`, `Input`, `Select`, `DataTable` and `VirtualList` for lists, `Dialog` and `ConfirmDialog`, `EmptyState` and `PaneState`, `Icon` — and get data with the hooks in `@daintreehq/plugin-sdk/react`. Style what the kit doesn't draw with Tailwind classes on Daintree's tokens. The scaffolded `tsconfig.json` declares both the kit and `window.electron.plugin` through the SDK's `view-globals` and `plugin-ui` type entries, so the view typechecks. [Views](./views.md) is the reference, and its [Performance](./views.md#performance) section is worth reading before your first list.
 
-The Vite preset keeps the kit external so the host serves it, and the SDK supplies those type declarations. Not in the 0.1.0 release on npm; it ships in the next one. With the 0.1.0 packages, the scaffolded view builds and loads as generated, but importing `@daintreehq/plugin-ui` needs two stopgaps. `@daintreehq/plugin-vite` 0.1.0 externalizes only React, so the kit import fails the build (`Rolldown failed to resolve import "@daintreehq/plugin-ui"`) until you pass it as an extra external in `vite.config.ts`:
+The Vite preset keeps the kit external so the host serves it, and the SDK supplies those type declarations. Not in the 0.1.0 release on npm; it ships in 0.2.0. With the 0.1.0 packages, the scaffolded view builds and loads as generated, but importing `@daintreehq/plugin-ui` needs two stopgaps. `@daintreehq/plugin-vite` 0.1.0 externalizes only React, so the kit import fails the build (`Rolldown failed to resolve import "@daintreehq/plugin-ui"`) until you pass it as an extra external in `vite.config.ts`:
 
 ```ts
 plugins: [daintreePlugin({ externals: [/^@daintreehq\/plugin-ui($|\/)/] })],
@@ -140,7 +140,7 @@ interface Window {
 
 The stopgaps cover the kit import and the bridge types only. The newer SDK hooks (`useCachedHostChannel` and the other performance hooks), synced collections and the database types are not in SDK 0.1.0; they ship in the next release.
 
-Run `npx daintree-plugin lint` before you package: it flags the patterns that make a view slow or look foreign, and names the fix. Not in the 0.1.0 release on npm; it ships in the next one — skip this step until then.
+Run `npx daintree-plugin lint` before you package: it flags the patterns that make a view slow or look foreign, and names the fix. Not in the 0.1.0 release on npm; it ships in 0.2.0 — skip this step until then.
 
 ## Package for distribution
 

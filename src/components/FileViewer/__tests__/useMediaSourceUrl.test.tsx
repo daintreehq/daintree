@@ -139,6 +139,19 @@ describe("useMediaSourceUrl", () => {
     expect(getByTestId("probe").dataset.probing).toBe("false");
   });
 
+  it("names a host's refusal instead of reporting a generic failure", async () => {
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 403,
+      headers: new Headers({ "x-daintree-refusal": "driven-elsewhere" }),
+    });
+    const onError = vi.fn();
+    render(<Probe onError={onError} label="watching" />);
+
+    await waitFor(() => expect(onError).toHaveBeenCalledTimes(1));
+    expect(onError.mock.calls[0]?.[0]).toMatchObject({ refusal: "driven-elsewhere" });
+  });
+
   it("drops a superseded probe that settles after its request was abandoned", async () => {
     // The stale-response race the guard exists for: a probe that had already
     // settled runs its reaction AFTER cleanup aborted it. Deliberately no abort

@@ -23,31 +23,37 @@ describe("VoiceTranscriptionService integration", () => {
       const events: VoiceTranscriptionEvent[] = [];
       service.onEvent((event) => events.push(event));
 
-      const result = await service.start({
-        enabled: true,
-        openaiApiKey: OPENAI_API_KEY,
-        deepgramApiKey: "",
-        language: "en",
-        customDictionary: [],
-        transcriptionProvider: "openai",
-        transcriptionModel: "gpt-live-transcribe",
-        // Non-empty so an opt-in run actually exercises the new `keywords` +
-        // `prompt` fields — with an empty list both are omitted and the live
-        // server never sees them. A rejected keyword fails the whole
-        // session.update, so this is the only place that failure surfaces.
-        keyterms: ["Daintree", "PtyClient", "AC-42"],
-        correctionEnabled: false,
-        correctionModel: "gpt-5.6-luna",
-        correctionCustomInstructions: "",
-        paragraphingStrategy: "spoken-command",
-        resolveFileLinks: true,
-        deviceId: "",
-        organizationId: "",
-        projectId: "",
-        recordingMode: "toggle",
-        suggestedDictionary: [],
-        learnFromCorrections: true,
-      });
+      const result = await service.start(
+        {
+          enabled: true,
+          openaiApiKey: OPENAI_API_KEY,
+          deepgramApiKey: "",
+          xaiApiKey: "",
+          language: "en",
+          dictionary: [],
+          transcriptionProvider: "openai",
+          transcriptionModel: "gpt-live-transcribe",
+          // Non-empty so an opt-in run actually exercises the new `keywords` +
+          // `prompt` fields — with an empty list both are omitted and the live
+          // server never sees them. A rejected keyword fails the whole
+          // session.update, so this is the only place that failure surfaces.
+          keyterms: ["Daintree", "PtyClient", "AC-42"],
+          correctionEnabled: false,
+          correctionModel: "gpt-6.1-terra",
+          correctionCustomInstructions: "",
+          paragraphingStrategy: "spoken-command",
+          resolveFileLinks: true,
+          deviceId: "",
+          deviceLabel: "",
+          organizationId: "",
+          projectId: "",
+          recordingMode: "toggle",
+          suggestedDictionary: [],
+          dismissedSuggestions: [],
+          learnFromCorrections: true,
+        },
+        "integration-session"
+      );
 
       expect(result).toEqual({ ok: true });
       expect(events.some((e) => e.type === "status" && e.status === "recording")).toBe(true);

@@ -116,6 +116,9 @@ export const config: AgentConfig = {
     imageInput: "bracketed-path",
     softNewlineSequence: "\x1b\r",
     ignoredInputSequences: ["\x1b\r"],
+    // Switch model, toggle extended thinking, toggle fast mode
+    // (code.claude.com/docs/en/interactive-mode).
+    altChords: ["p", "t", "o"],
     quitSubmitMode: "single-write",
     // Prints "esc to interrupt" in its own working footer — the same hint the
     // primary patterns below match on.

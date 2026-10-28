@@ -262,6 +262,8 @@ vi.mock("../../../../services/HelpSessionService.js", () => ({
     getClaudeLaunchArgs: (token: string) => mockGetClaudeLaunchArgs(token),
     getAssistantScratchEnv: (token: string) => mockGetAssistantScratchEnv(token),
     getBypassPermissions: (token: string) => mockGetBypassPermissions(token),
+    // No Assistant here has plugin tools; lifecycle.pluginAgentMcp.test.ts covers them.
+    getPluginLaunchContext: () => null,
     markTerminalForToken: (token: string, terminalId: string, expectedAgentId?: string) =>
       mockMarkTerminalForToken(token, terminalId, expectedAgentId),
     unbindTerminal: (terminalId: string) => mockUnbindTerminal(terminalId),
@@ -327,6 +329,7 @@ import {
 } from "../../../../../shared/config/pluginAgentRegistry.js";
 import { setUserRegistry } from "../../../../../shared/config/agentRegistry.js";
 import { CHANNELS } from "../../../channels.js";
+import { TRASH_TTL_MS } from "../../../../../shared/config/trash.js";
 import { registerTerminalLifecycleHandlers } from "../lifecycle.js";
 import type { HandlerDependencies } from "../../../types.js";
 
@@ -3031,6 +3034,52 @@ describe("terminal close handlers - resume journaling", () => {
 
     expect(persistAgentSessionMock.mock.calls[0][0].branch).toBeUndefined();
   });
+
+  it("journals a kill of a pane in the trash as the user's close, naming that trash", async () => {
+    ptyClient.getTerminalAsync.mockResolvedValue({
+      ...agentInfo,
+      spawnedAt: 1_000,
+      isTrashed: true,
+      trashExpiresAt: 50_000,
+    });
+    ptyClient.gracefulKill.mockResolvedValue("sess-abc");
+    register();
+
+    await getKillHandler()({}, "term-1");
+
+    const [record] = persistAgentSessionMock.mock.calls[0];
+    expect(record.closedBy).toBe("user");
+    expect(record.terminal).toEqual({ id: "term-1", spawnedAt: 1_000 });
+    expect(record.trash).toEqual({ expiresAt: 50_000, closedAt: 50_000 - TRASH_TTL_MS });
+  });
+
+  it("journals a kill of a pane the user had not closed as a kill, with no trash", async () => {
+    ptyClient.getTerminalAsync.mockResolvedValue({ ...agentInfo, spawnedAt: 1_000 });
+    ptyClient.gracefulKill.mockResolvedValue("sess-abc");
+    register();
+
+    await getKillHandler()({}, "term-1");
+
+    const [record] = persistAgentSessionMock.mock.calls[0];
+    expect(record.closedBy).toBe("kill");
+    expect(record.trash).toBeUndefined();
+  });
+
+  it.each(["kill", "gracefulKill"] as const)(
+    "journals a %s for a restart as a restart, never a user close",
+    async (operation) => {
+      ptyClient.getTerminalAsync.mockResolvedValue({ ...agentInfo, spawnedAt: 1_000 });
+      ptyClient.gracefulKill.mockResolvedValue("sess-abc");
+      register();
+      const handler = operation === "kill" ? getKillHandler() : getGracefulKillHandler();
+
+      await handler({}, "term-1", { forRestart: true });
+
+      const [record] = persistAgentSessionMock.mock.calls[0];
+      expect(record.closedBy).toBe("restart");
+      expect(record.trash).toBeUndefined();
+    }
+  );
 });
 
 describe("terminal spawn handler - Windows PATH refresh", () => {
@@ -3305,6 +3354,99 @@ describe("terminal spawn handler - Windows PATH refresh", () => {
     await expect(
       handler({} as Electron.IpcMainInvokeEvent, { cols: 80, rows: 24 })
     ).resolves.toBeTruthy();
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("terminal spawn handler - no host agent ceiling (#14810)", () => {
+  const GiB = 1024 * 1024 * 1024;
+  type FakeSpawnOptions = { launchAgentId?: string };
+  let live: Map<string, FakeSpawnOptions>;
+  let ptyClient: {
+    spawn: ReturnType<typeof vi.fn>;
+    hasTerminal: ReturnType<typeof vi.fn>;
+    write: ReturnType<typeof vi.fn>;
+    countLiveAgentTerminals: ReturnType<typeof vi.fn<(excludeId?: string) => number>>;
+  };
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    mockGetCurrentProject.mockReturnValue(null);
+    mockGetProjectById.mockReturnValue(null);
+    mockGetProjectSettings.mockResolvedValue({});
+    mockRevokePaneConfig.mockResolvedValue(undefined);
+    live = new Map();
+    // Registers synchronously and counts the way PtyClient did when it capped a
+    // host, so a ceiling restored here refuses for the right reason.
+    ptyClient = {
+      spawn: vi.fn((id: string, options: FakeSpawnOptions) => live.set(id, options)),
+      hasTerminal: vi.fn(() => false),
+      write: vi.fn(),
+      countLiveAgentTerminals: vi.fn<(excludeId?: string) => number>((excludeId) => {
+        let count = 0;
+        for (const [id, options] of live) if (id !== excludeId && options.launchAgentId) count++;
+        return count;
+      }),
+    };
+    // A small host serving Shells: the RAM that once capped it at two agents.
+    const { default: os } = await import("os");
+    vi.spyOn(os, "totalmem").mockReturnValue(8 * GiB);
+    const { _resetRemoteServicesForTest, registerRemoteService } =
+      await import("../../../../remote/runtime.js");
+    _resetRemoteServicesForTest();
+    registerRemoteService("hostServer", {} as never);
+    registerTerminalLifecycleHandlers({ ptyClient } as unknown as HandlerDependencies);
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    const { _resetRemoteServicesForTest } = await import("../../../../remote/runtime.js");
+    _resetRemoteServicesForTest();
+  });
+
+  function fillWithAgents(count: number): void {
+    for (let i = 0; i < count; i++) live.set(`agent-${i}`, { launchAgentId: "claude" });
+  }
+
+  async function agentSpawn(id: string, extra: Record<string, unknown> = {}) {
+    const os = await import("os");
+    return getSpawnHandler()(
+      {} as Electron.IpcMainInvokeEvent,
+      {
+        id,
+        cwd: os.homedir(),
+        cols: 80,
+        rows: 24,
+        launchAgentId: "claude",
+        command: "claude",
+        ...extra,
+      } as unknown as Parameters<ReturnType<typeof getSpawnHandler>>[1]
+    );
+  }
+
+  it("starts every agent launch on a host with Host mode on, however many are live", async () => {
+    fillWithAgents(10);
+
+    for (let i = 0; i < 20; i++) {
+      await expect(agentSpawn(`new-${i}`)).resolves.toBe(`new-${i}`);
+    }
+
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(20);
+    expect(ptyClient.countLiveAgentTerminals()).toBe(30);
+  });
+
+  it("starts launches that arrive at once from several Shells", async () => {
+    fillWithAgents(10);
+    const ids = Array.from({ length: 12 }, (_, i) => `concurrent-${i}`);
+
+    await expect(Promise.all(ids.map((id) => agentSpawn(id)))).resolves.toEqual(ids);
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(ids.length);
+  });
+
+  it("starts a restored agent past the old ceiling too", async () => {
+    fillWithAgents(10);
+
+    await expect(agentSpawn("restored", { restore: true })).resolves.toBe("restored");
     expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
   });
 });

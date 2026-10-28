@@ -1,13 +1,35 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { StorageValue } from "zustand/middleware";
-import type { VoiceInputError, VoiceInputStatus, VoiceTranscriptPhase } from "@shared/types";
+import {
+  isActiveVoiceSession,
+  type VoiceInputError,
+  type VoiceInputStatus,
+  type VoiceLiveSessionUpdate,
+  type VoiceSessionElsewhere,
+  type VoiceTranscriptPhase,
+} from "@shared/types";
 import { createDebouncedSafeJSONStorage } from "./persistence/safeStorage";
 import {
   mergeRecordByWriterDelta,
   type PersistWriteMergeContext,
 } from "./persistence/persistWriteMerge";
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
+import type { VoiceMicDevice } from "@/services/voiceMicDevices";
+import { VOICE_PARAGRAPH_BREAK } from "@/lib/voiceTranscriptSegments";
+import type { RewriteSelection } from "@/services/voiceRewriteSelection";
+
+/**
+ * A session recording a spoken instruction for selected composer text
+ * (#14635) rather than dictating into the draft.
+ */
+export interface VoiceRewriteRequest {
+  selection: RewriteSelection;
+  /** The instruction's finished segments, in order. */
+  instruction: string[];
+  /** Escape landed while it was finishing: drain, but don't send it. */
+  cancelled: boolean;
+}
 
 export interface VoiceRecordingTarget {
   panelId: string;
@@ -16,6 +38,32 @@ export interface VoiceRecordingTarget {
   projectName?: string;
   worktreeId?: string;
   worktreeLabel?: string;
+  /** Set when this session records a rewrite instruction instead of dictation. */
+  rewrite?: VoiceRewriteRequest;
+  /**
+   * Canopy's reply box, rather than a pane: `panelId` is the reply's own
+   * dictation id (`canopyReplyVoiceId`), with no project, and names no panel.
+   */
+  surface?: "canopy-reply";
+  /**
+   * The reply's terminal, for main to read context from: only one this view's
+   * own project owns, never another project's or another host's.
+   */
+  terminalId?: string;
+  /** The reply types to a terminal on this host, not the window's. */
+  otherHostId?: string;
+  /** The Canopy row the reply belongs to, for the indicator to go back to. */
+  canopyRow?: CanopyReplyRow;
+}
+
+/**
+ * A Canopy row as the panel listed it: the run's id in that list (All hosts
+ * names it with its host) and the host the panel showed, null for the window's
+ * own. Shown under that host again, the row's reply is the same draft.
+ */
+export interface CanopyReplyRow {
+  runId: string;
+  hostScope: string | null;
 }
 
 /**
@@ -154,29 +202,60 @@ function joinLiveItems(items: VoiceLiveItem[]): string {
   return joined;
 }
 
+export interface VoiceCorrectionRange {
+  from: number;
+  to: number;
+  /** The dictation session the passage came from; none for a selection rewrite. */
+  session?: string;
+  /** The cleanup streamed so far: the draft from `from` to `rewrite.to` shows as `rewrite.text`. */
+  rewrite?: { to: number; text: string };
+}
+
+// Shared empty value, so an idle buffer's ranges keep one identity.
+const NO_CORRECTION_RANGES: VoiceCorrectionRange[] = [];
+
+function sameCorrectionRanges(a: VoiceCorrectionRange[], b: VoiceCorrectionRange[]): boolean {
+  return (
+    a.length === b.length &&
+    a.every((r, i) => {
+      const other = b[i]!;
+      return (
+        r.from === other.from &&
+        r.to === other.to &&
+        r.rewrite?.to === other.rewrite?.to &&
+        r.rewrite?.text === other.rewrite?.text
+      );
+    })
+  );
+}
+
 interface VoiceTranscriptBuffer {
   liveText: string;
   /**
    * Interim text per identified item (OpenAI `item_id`), in first-delta order.
    * When non-empty, `liveText` is derived from it so one item's completion
-   * retires only its own preview. Unidentified deltas (Deepgram) bypass it.
+   * retires only its own preview. Unidentified deltas bypass it.
    */
   liveItems: VoiceLiveItem[];
+  /**
+   * The session's committed text so far, in order, with a
+   * {@link VOICE_PARAGRAPH_BREAK} entry where each paragraph ended. Reset when
+   * a session begins and read once by `consumeCompletedSegments` when it stops.
+   */
   completedSegments: string[];
   projectId?: string;
-  /** Draft length snapshot taken before the first delta of the session. */
+  /** Where the session's first dictated words start in the draft (-1 = none yet). */
   sessionDraftStart: number;
-  /** Draft length snapshot taken before the first delta of a segment. */
-  draftLengthAtSegmentStart: number;
   /** Draft length at the start of the current paragraph (-1 = not set). */
   activeParagraphStart: number;
   /** Explicit transcript lifecycle phase — derived from and updated alongside buffer state. */
   transcriptPhase: VoiceTranscriptPhase;
   /**
-   * Draft range currently undergoing the post-stop whole-passage AI cleanup
-   * pass (null = none). Drives the `cm-voice-pending-ai` editor decoration.
+   * Draft ranges currently undergoing the post-stop AI cleanup pass, one per
+   * dictated passage (empty = none). Drives the `cm-voice-pending-ai` editor
+   * decoration.
    */
-  correctionRange: { from: number; to: number } | null;
+  correctionRanges: VoiceCorrectionRange[];
   /**
    * The dictated text as it settled after the post-stop processing pass (AI
    * correction if enabled, else the raw transcription). Diffed against the
@@ -185,6 +264,13 @@ interface VoiceTranscriptBuffer {
    * in-session state.
    */
   sessionCorrectedText: string | null;
+  /**
+   * Identity of the session that last opened this buffer: the id main knows
+   * it by, when it has one. Ties the text the session writes to its dictation
+   * range (`dictationRangeStore`), so results main sends after the session
+   * moves on still find that text.
+   */
+  dictationSessionId: string | null;
 }
 
 /**
@@ -199,6 +285,24 @@ interface VoiceTranscriptBuffer {
  */
 export type VoiceMicSignal = "pending" | "live" | "silent";
 
+/**
+ * A microphone event the pane that was dictating has to explain (#14606),
+ * scoped to that target. Device labels are shown here and never logged.
+ *
+ * - lost: the input device went away; the session was ended and its text kept.
+ * - silent: the mic is still delivering silence after the grace window.
+ *   `builtIn` is the mic to switch to, when one other than this one is found.
+ */
+export type VoiceMicNotice =
+  | { kind: "lost"; target: VoiceRecordingTarget; deviceLabel: string | null }
+  | {
+      kind: "silent";
+      target: VoiceRecordingTarget;
+      deviceLabel: string | null;
+      bluetooth: boolean;
+      builtIn: VoiceMicDevice | null;
+    };
+
 interface VoiceAnnouncement {
   id: number;
   text: string;
@@ -207,6 +311,16 @@ interface VoiceAnnouncement {
 interface FinishSessionOptions {
   nextStatus?: VoiceInputStatus;
   preserveLiveText?: boolean;
+  /** The preview as the caller committed it, when that isn't the words the buffer holds. */
+  committedLiveText?: string;
+}
+
+/** A first Escape that would take dictated words back out of the draft, waiting on the second. */
+export interface DictationCancelConfirm {
+  panelId: string;
+  sessionId: string;
+  /** `performance.now()` time the window closes. */
+  expiresAt: number;
 }
 
 interface VoiceRecordingState {
@@ -217,7 +331,21 @@ interface VoiceRecordingState {
   learnFromCorrections: boolean;
   status: VoiceInputStatus;
   lastError: VoiceInputError | null;
+  /** Panel the last error ended a session in; the error mark belongs to that panel only. */
+  errorPanelId: string | null;
+  /** True in the last seconds of a pause, before it auto-stops the session. */
+  pauseStopWarning: boolean;
+  /** True in the last seconds before a listening session with no new words auto-stops. */
+  idleStopWarning: boolean;
+  dictationCancelConfirm: DictationCancelConfirm | null;
   activeTarget: VoiceRecordingTarget | null;
+  /**
+   * Where the next session will record, from the press until it begins. A
+   * start can wait behind a session that is still finishing, and that
+   * session's late transcripts keep routing by `activeTarget`, so the arming
+   * cue reads this field instead.
+   */
+  pendingTarget: VoiceRecordingTarget | null;
   /**
    * Pinned dictation target. When set, `toggleFocusedPanel` routes here
    * regardless of which panel owns focus. Runtime-only: panelId is ephemeral,
@@ -230,9 +358,19 @@ interface VoiceRecordingState {
    * stale id can't silently route dictation to a non-existent panel.
    */
   recentTargets: RecentDictationTarget[];
+  /**
+   * A session live in another view, as main last reported it. The dictation
+   * key stops it instead of starting one here, and the toolbar says where it
+   * runs. Runtime-only.
+   */
+  sessionElsewhere: VoiceSessionElsewhere | null;
+  sessionElsewhereRevision: number;
   elapsedSeconds: number;
   audioLevel: number;
   micSignal: VoiceMicSignal;
+  /** Label of the mic the current session captures from; null when unknown or idle. */
+  micDeviceLabel: string | null;
+  micNotice: VoiceMicNotice | null;
   panelBuffers: Record<string, VoiceTranscriptBuffer>;
   announcement: VoiceAnnouncement | null;
   setConfigured: (isConfigured: boolean) => void;
@@ -241,16 +379,40 @@ interface VoiceRecordingState {
   setSessionCorrectedText: (panelId: string, text: string | null) => void;
   setAudioLevel: (level: number) => void;
   setMicSignal: (signal: VoiceMicSignal) => void;
+  setMicDeviceLabel: (label: string | null) => void;
+  setMicNotice: (notice: VoiceMicNotice | null) => void;
+  /** Clears the notice only if it is still `notice`, so a newer one survives a stale dismiss. */
+  dismissMicNotice: (notice: VoiceMicNotice) => void;
   setArming: (target: VoiceRecordingTarget) => void;
-  beginSession: (target: VoiceRecordingTarget) => void;
+  clearPendingTarget: () => void;
+  beginSession: (target: VoiceRecordingTarget, sessionId?: string) => void;
   setStatus: (status: VoiceInputStatus) => void;
   setLastError: (error: VoiceInputError | null) => void;
+  setPauseStopWarning: (warning: boolean) => void;
+  setIdleStopWarning: (warning: boolean) => void;
+  setDictationCancelConfirm: (confirm: DictationCancelConfirm | null) => void;
+  setErrorPanelId: (panelId: string | null) => void;
   setElapsedSeconds: (seconds: number) => void;
-  appendDelta: (delta: string, itemId?: string) => void;
+  /** `replace` sets the preview to `delta` instead of appending (a revised hypothesis). */
+  appendDelta: (delta: string, itemId?: string, replace?: boolean) => void;
   setSessionDraftStart: (panelId: string, length: number) => void;
-  setDraftLengthAtSegmentStart: (panelId: string, length: number) => void;
-  completeSegment: (text: string, itemId?: string) => void;
-  setCorrectionRange: (panelId: string, range: { from: number; to: number } | null) => void;
+  /**
+   * `discard` retires the utterance without keeping its words: a spoken
+   * command that acts on the draft rather than adding to it.
+   */
+  completeSegment: (text: string, itemId?: string, options?: { discard?: boolean }) => void;
+  /**
+   * Drops the latest committed utterance, and the paragraph breaks after it,
+   * once "scratch that" has taken those words back out of the draft.
+   */
+  dropLastCompletedSegment: (panelId: string) => void;
+  setCorrectionRanges: (panelId: string, ranges: VoiceCorrectionRange[]) => void;
+  /**
+   * Moves the panel's draft offsets at or after `at` by `delta`, for an edit
+   * the voice service made earlier in the draft (a correction landing while a
+   * new session dictates after it).
+   */
+  shiftDraftOffsets: (panelId: string, at: number, delta: number) => void;
   setActiveParagraphStart: (panelId: string, length: number) => void;
   resetParagraphState: (panelId: string) => void;
   finishSession: (options?: FinishSessionOptions) => void;
@@ -264,6 +426,8 @@ interface VoiceRecordingState {
   clearLockedTarget: (panelId: string) => void;
   /** Records or refreshes a recent-targets entry (MRU-ordered, capped at 3). */
   recordRecentTarget: (target: VoiceRecordingTarget) => void;
+  /** Applies main's report of the live session unless a newer one already landed. */
+  applyLiveSessionUpdate: (update: VoiceLiveSessionUpdate) => void;
 }
 
 function getBuffer(
@@ -276,11 +440,11 @@ function getBuffer(
       liveItems: [],
       completedSegments: [],
       sessionDraftStart: -1,
-      draftLengthAtSegmentStart: -1,
       activeParagraphStart: -1,
       transcriptPhase: "idle" as VoiceTranscriptPhase,
-      correctionRange: null,
+      correctionRanges: NO_CORRECTION_RANGES,
       sessionCorrectedText: null,
+      dictationSessionId: null,
     }
   );
 }
@@ -293,12 +457,21 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
       learnFromCorrections: true,
       status: "idle",
       lastError: null,
+      errorPanelId: null,
+      pauseStopWarning: false,
+      idleStopWarning: false,
+      dictationCancelConfirm: null,
       activeTarget: null,
+      pendingTarget: null,
       lockedTarget: null,
       recentTargets: [],
+      sessionElsewhere: null,
+      sessionElsewhereRevision: -1,
       elapsedSeconds: 0,
       audioLevel: 0,
       micSignal: "pending",
+      micDeviceLabel: null,
+      micNotice: null,
       panelBuffers: {},
       announcement: null,
 
@@ -322,28 +495,59 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
 
       setLastError: (error) => set({ lastError: error }),
 
+      setPauseStopWarning: (pauseStopWarning) => set({ pauseStopWarning }),
+      setIdleStopWarning: (idleStopWarning) => set({ idleStopWarning }),
+      setDictationCancelConfirm: (dictationCancelConfirm) => set({ dictationCancelConfirm }),
+
+      setErrorPanelId: (errorPanelId) => set({ errorPanelId }),
+
       setAudioLevel: (audioLevel) => set({ audioLevel }),
 
       setMicSignal: (micSignal) => set({ micSignal }),
 
+      setMicDeviceLabel: (micDeviceLabel) => set({ micDeviceLabel }),
+
+      setMicNotice: (micNotice) => set({ micNotice }),
+
+      dismissMicNotice: (notice) =>
+        set((state) => (state.micNotice === notice ? { micNotice: null } : state)),
+
       // Atomic single-set transition into the pre-audio confirmation phase.
       // Fires synchronously before any await in start() so the target panel
       // and toolbar can paint the arming cue before microphone init begins.
+      // A session still running or finishing keeps its target and status: its
+      // remaining transcripts belong to its own panel (#14604).
       setArming: (target) =>
-        set({
-          activeTarget: target,
-          status: "arming",
-          lastError: null,
-          micSignal: "pending",
-        }),
+        set((state) =>
+          isActiveVoiceSession(state.status)
+            ? { pendingTarget: target, lastError: null, errorPanelId: null }
+            : {
+                activeTarget: target,
+                pendingTarget: target,
+                status: "arming",
+                lastError: null,
+                errorPanelId: null,
+                micSignal: "pending",
+                micDeviceLabel: null,
+                micNotice: null,
+              }
+        ),
 
-      beginSession: (target) =>
+      clearPendingTarget: () =>
+        set((state) => (state.pendingTarget === null ? state : { pendingTarget: null })),
+
+      beginSession: (target, sessionId) =>
         set((state) => ({
           activeTarget: target,
+          pendingTarget: null,
           status: "connecting",
           lastError: null,
+          errorPanelId: null,
+          dictationCancelConfirm: null,
           elapsedSeconds: 0,
           micSignal: "pending",
+          micDeviceLabel: null,
+          micNotice: null,
           panelBuffers: {
             ...state.panelBuffers,
             [target.panelId]: {
@@ -353,11 +557,11 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
               completedSegments: [],
               projectId: target.projectId,
               sessionDraftStart: -1,
-              draftLengthAtSegmentStart: -1,
               activeParagraphStart: -1,
               transcriptPhase: "idle" as VoiceTranscriptPhase,
-              correctionRange: null,
+              correctionRanges: NO_CORRECTION_RANGES,
               sessionCorrectedText: null,
+              dictationSessionId: sessionId ?? crypto.randomUUID(),
             },
           },
         })),
@@ -366,17 +570,18 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
 
       setElapsedSeconds: (elapsedSeconds) => set({ elapsedSeconds }),
 
-      appendDelta: (delta, itemId) =>
+      appendDelta: (delta, itemId, replace) =>
         set((state) => {
           const panelId = state.activeTarget?.panelId;
-          if (!panelId || !delta) return state;
+          // An empty replacement is a retraction, so it still lands.
+          if (!panelId || (!delta && !replace)) return state;
           const buffer = getBuffer(state.panelBuffers, panelId);
           if (itemId) {
             const index = buffer.liveItems.findIndex((item) => item.itemId === itemId);
             const liveItems =
               index >= 0
                 ? buffer.liveItems.map((item, i) =>
-                    i === index ? { itemId, text: item.text + delta } : item
+                    i === index ? { itemId, text: replace ? delta : item.text + delta } : item
                   )
                 : [...buffer.liveItems, { itemId, text: delta }];
             return {
@@ -396,7 +601,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
               ...state.panelBuffers,
               [panelId]: {
                 ...buffer,
-                liveText: buffer.liveText + delta,
+                liveText: replace ? delta : buffer.liveText + delta,
                 transcriptPhase: "interim" as VoiceTranscriptPhase,
               },
             },
@@ -415,19 +620,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
           };
         }),
 
-      setDraftLengthAtSegmentStart: (panelId, length) =>
-        set((state) => {
-          const buffer = getBuffer(state.panelBuffers, panelId);
-          if (buffer.draftLengthAtSegmentStart >= 0) return state;
-          return {
-            panelBuffers: {
-              ...state.panelBuffers,
-              [panelId]: { ...buffer, draftLengthAtSegmentStart: length },
-            },
-          };
-        }),
-
-      completeSegment: (text, itemId) =>
+      completeSegment: (text, itemId, options) =>
         set((state) => {
           const panelId = state.activeTarget?.panelId;
           if (!panelId) return state;
@@ -449,7 +642,6 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
                   liveText,
                   // Any legacy anchor from an unidentified delta is consumed here;
                   // leaving it would let a later stop flush slice at a stale offset.
-                  draftLengthAtSegmentStart: -1,
                   completedSegments: finalText
                     ? [...buffer.completedSegments, finalText]
                     : buffer.completedSegments,
@@ -462,7 +654,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
               },
             };
           }
-          const normalized = text.trim() || buffer.liveText.trim();
+          const normalized = options?.discard ? "" : text.trim() || buffer.liveText.trim();
           if (!normalized) {
             return {
               panelBuffers: {
@@ -471,7 +663,6 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
                   ...buffer,
                   liveText: "",
                   liveItems: [],
-                  draftLengthAtSegmentStart: -1,
                   transcriptPhase: "idle" as VoiceTranscriptPhase,
                 },
               },
@@ -485,7 +676,6 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
                 ...buffer,
                 liveText: "",
                 liveItems: [],
-                draftLengthAtSegmentStart: -1,
                 completedSegments: [...buffer.completedSegments, normalized],
                 transcriptPhase: "utterance_final" as VoiceTranscriptPhase,
               },
@@ -493,14 +683,50 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
           };
         }),
 
-      setCorrectionRange: (panelId, range) =>
+      dropLastCompletedSegment: (panelId) =>
         set((state) => {
-          const buffer = getBuffer(state.panelBuffers, panelId);
-          if (buffer.correctionRange === range) return state;
+          const buffer = state.panelBuffers[panelId];
+          if (!buffer) return state;
+          const segments = buffer.completedSegments;
+          let end = segments.length;
+          while (end > 0 && segments[end - 1] === VOICE_PARAGRAPH_BREAK) end--;
+          if (end === 0) return state;
           return {
             panelBuffers: {
               ...state.panelBuffers,
-              [panelId]: { ...buffer, correctionRange: range },
+              [panelId]: { ...buffer, completedSegments: segments.slice(0, end - 1) },
+            },
+          };
+        }),
+
+      setCorrectionRanges: (panelId, ranges) =>
+        set((state) => {
+          const buffer = getBuffer(state.panelBuffers, panelId);
+          if (sameCorrectionRanges(buffer.correctionRanges, ranges)) return state;
+          return {
+            panelBuffers: {
+              ...state.panelBuffers,
+              [panelId]: {
+                ...buffer,
+                correctionRanges: ranges.length > 0 ? ranges : NO_CORRECTION_RANGES,
+              },
+            },
+          };
+        }),
+
+      shiftDraftOffsets: (panelId, at, delta) =>
+        set((state) => {
+          const buffer = state.panelBuffers[panelId];
+          if (!buffer || delta === 0) return state;
+          const shift = (offset: number) => (offset >= 0 && offset >= at ? offset + delta : offset);
+          return {
+            panelBuffers: {
+              ...state.panelBuffers,
+              [panelId]: {
+                ...buffer,
+                sessionDraftStart: shift(buffer.sessionDraftStart),
+                activeParagraphStart: shift(buffer.activeParagraphStart),
+              },
             },
           };
         }),
@@ -528,8 +754,12 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
                 // Identified items still streaming belong to later segments —
                 // a paragraph break inside an earlier item must not erase them.
                 liveText: joinLiveItems(buffer.liveItems),
-                completedSegments: [],
-                draftLengthAtSegmentStart: -1,
+                // The session keeps its earlier paragraphs for the history
+                // (#14637); "new paragraph" arrives as two breaks in a row.
+                completedSegments:
+                  buffer.completedSegments.length > 0
+                    ? [...buffer.completedSegments, VOICE_PARAGRAPH_BREAK]
+                    : buffer.completedSegments,
                 activeParagraphStart: -1,
                 transcriptPhase: (buffer.liveItems.some((item) => item.text)
                   ? "interim"
@@ -539,21 +769,29 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
           };
         }),
 
-      finishSession: ({ nextStatus = "idle", preserveLiveText = false } = {}) =>
+      finishSession: ({ nextStatus = "idle", preserveLiveText = false, committedLiveText } = {}) =>
         set((state) => {
           const panelId = state.activeTarget?.panelId;
+          // A silent warning belongs to the session that was silent; the other
+          // notices outlive it until dismissed or the next session starts.
+          const micNotice = state.micNotice?.kind === "silent" ? null : state.micNotice;
+          const errorPanelId = nextStatus === "error" ? (panelId ?? null) : null;
           if (!panelId) {
             return {
               activeTarget: null,
+              dictationCancelConfirm: null,
+              errorPanelId,
               status: nextStatus,
               elapsedSeconds: 0,
               audioLevel: 0,
               micSignal: "pending" as VoiceMicSignal,
+              micDeviceLabel: null,
+              micNotice,
             };
           }
 
           const buffer = getBuffer(state.panelBuffers, panelId);
-          const normalizedLiveText = buffer.liveText.trim();
+          const normalizedLiveText = (committedLiveText ?? buffer.liveText).trim();
           const completedSegments =
             preserveLiveText && normalizedLiveText
               ? [...buffer.completedSegments, normalizedLiveText]
@@ -561,10 +799,14 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
 
           return {
             activeTarget: null,
+            dictationCancelConfirm: null,
+            errorPanelId,
             status: nextStatus,
             elapsedSeconds: 0,
             audioLevel: 0,
             micSignal: "pending" as VoiceMicSignal,
+            micDeviceLabel: null,
+            micNotice,
             panelBuffers: {
               ...state.panelBuffers,
               [panelId]: {
@@ -627,6 +869,8 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
 
       recordRecentTarget: (target) =>
         set((state) => {
+          // The list recalls panes; a Canopy reply is one only while its row is selected.
+          if (target.surface === "canopy-reply") return state;
           const entry: RecentDictationTarget = {
             panelId: target.panelId,
             panelTitle: target.panelTitle,
@@ -656,6 +900,12 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
             recentTargets: [entry, ...filtered].slice(0, MAX_RECENT_TARGETS),
           };
         }),
+
+      applyLiveSessionUpdate: ({ revision, session }) =>
+        set((state) => {
+          if (revision < state.sessionElsewhereRevision) return state;
+          return { sessionElsewhere: session, sessionElsewhereRevision: revision };
+        }),
     }),
     {
       name: "daintree-voice-recording",
@@ -680,6 +930,14 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
     }
   )
 );
+
+/** The mic notice for one pane: a notice is only ever shown where it happened. */
+export function selectMicNoticeForPanel(
+  state: { micNotice: VoiceMicNotice | null },
+  panelId: string | null | undefined
+): VoiceMicNotice | null {
+  return panelId && state.micNotice?.target.panelId === panelId ? state.micNotice : null;
+}
 
 /**
  * True while a session is open but the mic hasn't delivered real audio yet —

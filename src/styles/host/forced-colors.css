@@ -205,7 +205,9 @@
     outline-offset: 0;
   }
 
-  [data-composer-state]:has(.cm-content:focus-visible) {
+  /* Held back while a voice send's progress or receipt owns the top border,
+     as the normal ring is (`data-voice-receipt`). */
+  [data-composer-state]:not([data-voice-receipt]):has(.cm-content:focus-visible) {
     outline: 2px solid Highlight;
     outline-offset: 2px;
   }
@@ -219,6 +221,30 @@
      native field's placeholder takes here. */
   [data-composer-state] .cm-placeholder {
     color: GrayText;
+  }
+
+  /* A voice send's wait: its 2px bar is a border, so it keeps a system ink.
+     The caption's border mask is a gradient, which the UA drops, so it takes
+     a solid Canvas backing or the edge strikes through it. */
+  [data-voice-submit-progress] {
+    border-bottom-color: CanvasText;
+  }
+
+  [data-voice-submit-caption],
+  [data-voice-session-caption] {
+    background: Canvas;
+    color: CanvasText;
+  }
+
+  /* The Escape confirm's wash is translucent, which the UA makes opaque: it
+     covers the draft with Canvas and keeps its countdown bar a system ink. */
+  [data-dictation-cancel-confirm] {
+    background: Canvas;
+    color: CanvasText;
+  }
+
+  [data-dictation-cancel-progress] {
+    border-bottom-color: CanvasText;
   }
 
   /* Highlight follows the keyboard. A selected pane wears it because its
@@ -631,6 +657,12 @@
      pair. */
   button .status-mark,
   [role="button"] .status-mark {
+    background-color: ButtonText !important;
+  }
+
+  /* The toolbar dictation waveform's bars are backgrounds inside a button, so
+     they take the same pair. */
+  [data-voice-wave] > span {
     background-color: ButtonText !important;
   }
 

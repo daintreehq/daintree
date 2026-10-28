@@ -13,6 +13,7 @@ import {
   extractIssueNumber,
   deriveIssueTitleFromBranch,
 } from "../services/issueExtractor.js";
+import { claimIssueFromBranch, type ClaimedIssue } from "../services/issueBranchClaim.js";
 import { timeoutSignal, withTimeout } from "../utils/withTimeout.js";
 import type { WorktreeChanges, RepoState } from "../../shared/types/git.js";
 import type { WorktreeMood } from "../../shared/types/worktree.js";
@@ -78,7 +79,10 @@ export interface GitStatusPassHost {
   lastGitStatusCompletedAt: number;
   isUpdating: boolean;
   branch: string | undefined;
+  /** Setting a number here drops any branch claim the old number had. */
   issueNumber: number | undefined;
+  /** Record an issues provider's branch-claimed issue (#13744). */
+  setClaimedIssue?(claim: ClaimedIssue): void;
   branchDerivedTitle: string | undefined;
   issueTitle: string | undefined;
   isDetached: boolean;
@@ -281,6 +285,7 @@ export class GitStatusPass {
         !forceRefresh &&
         gitDir &&
         this.host.hasInitialStatus &&
+        this.host.worktreeChanges !== null &&
         (await this.statPrecheck.shouldSkip(
           gitDir,
           this.watcherController.currentMode === "recursive"
@@ -348,8 +353,13 @@ export class GitStatusPass {
         if (hadPendingRefresh) {
           this.watcherController.markPending();
         }
-        const syncIssueNumber = extractIssueNumberSync(currentBranch, this.host.name);
-        if (syncIssueNumber) {
+        const claimed = claimIssueFromBranch(currentBranch, this.host.name);
+        const syncIssueNumber = claimed
+          ? null
+          : extractIssueNumberSync(currentBranch, this.host.name);
+        if (claimed) {
+          this.host.setClaimedIssue?.(claimed);
+        } else if (syncIssueNumber) {
           this.host.issueNumber = syncIssueNumber;
         } else {
           this.host.issueNumber = undefined;
@@ -468,7 +478,9 @@ export class GitStatusPass {
         this.pollingStrategy.recordNoChange();
       }
 
-      if (!anythingChanged && !forceRefresh) {
+      // A placeholder snapshot (startWithoutGitStatus) seeds every comparison
+      // above, so "unchanged" can't be trusted until a status has published.
+      if (!anythingChanged && !forceRefresh && this.host.worktreeChanges !== null) {
         checkSucceeded = true;
         return;
       }
@@ -635,6 +647,11 @@ export class GitStatusPass {
     }
     if (changes.lastCommitMessage !== undefined) {
       fileState.push(`last-commit-message:${changes.lastCommitMessage}`);
+    }
+    // Message and time alone miss a HEAD move between two commits that share
+    // both, and plugins read a changed oid as "a commit landed".
+    if (changes.headOid !== undefined) {
+      fileState.push(`head-oid:${changes.headOid}`);
     }
     const hashInput = fileState.join("|");
     let hash = FNV_OFFSET_BASIS;

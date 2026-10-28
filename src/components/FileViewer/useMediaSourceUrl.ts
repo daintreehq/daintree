@@ -1,6 +1,7 @@
 import { useEffect, useEffectEvent, useMemo, useState } from "react";
-import type { FileReadErrorCode } from "@shared/types/ipc/files";
+import type { FileReadErrorCode, PreviewRefusal } from "@shared/types/ipc/files";
 import { buildDaintreeFileUrl, buildDaintreeMediaUrl } from "./filePreviewKinds";
+import { previewRefusalOf, refusedPreviewError } from "./previewRefusal";
 
 /** Why a preview couldn't play, split so callers can render a headline and a way forward. */
 export interface MediaPreviewError {
@@ -10,6 +11,8 @@ export interface MediaPreviewError {
   description?: string;
   /** Read-error code for panes that gate their error surface on one. */
   code?: FileReadErrorCode;
+  /** A remote window's host refused it for control or location, not for anything in the file. */
+  refusal?: PreviewRefusal;
 }
 
 interface UseMediaSourceUrlOptions {
@@ -88,6 +91,9 @@ export function useMediaSourceUrl({
   // render would restart playback each time anything else in the pane changes.
   const reportError = useEffectEvent(() => onError?.());
   const reportTooLarge = useEffectEvent(() => onError?.(tooLargeError));
+  const reportRefused = useEffectEvent((refusal: PreviewRefusal) =>
+    onError?.(refusedPreviewError(refusal))
+  );
 
   useEffect(() => {
     const controller = new AbortController();
@@ -100,6 +106,12 @@ export function useMediaSourceUrl({
         // run this reaction after cleanup aborted it, and reporting then would
         // clear the skeleton / flag an error on the file shown NEXT.
         if (controller.signal.aborted) return;
+        const refusal = response.ok ? null : previewRefusalOf(response);
+        if (refusal) {
+          setProbing(false);
+          reportRefused(refusal);
+          return;
+        }
         if (!response.ok) throw new Error(`daintree-file responded ${response.status}`);
         const declared = response.headers.get("content-length");
         // An absent or unparseable length can't be measured against the cap.

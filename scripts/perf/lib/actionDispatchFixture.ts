@@ -462,18 +462,28 @@ function probeDefinitions(): unknown[] {
 // --- Catalog ----------------------------------------------------------------
 
 /**
- * Built-in actions listed only once this machine has added a remote host: their
- * `isVisible` reads the renderer's host list, which is filled over IPC this
- * bundle has no `window.electron` for. So the fully-loaded window here is one
- * with no hosts, which is also every user who never sets one up, and these must
- * be absent from its listing. Named rather than derived from `isVisible`, so a
- * predicate that starts hiding anything else still scores as a miss.
+ * Built-in actions a fully loaded window here must leave out of its listing,
+ * because their `isVisible` reads context this bundle has no way to supply.
+ * Named rather than derived from `isVisible`, so a predicate that starts hiding
+ * anything else still scores as a miss.
+ *
+ * - The host actions show only once this machine has added a remote host: their
+ *   predicate reads the renderer's host list, which is filled over IPC this
+ *   bundle has no `window.electron` for. The window here has no hosts, which is
+ *   also every user who never sets one up.
+ * - The project Home actions show only while a project plugin's `projectHome`
+ *   surface can draw, which needs a claim from main and a registered panel
+ *   kind. The window here has neither, which is also every project without a
+ *   Home plugin.
  */
-export const HOST_GATED_ACTION_IDS: ReadonlySet<string> = new Set([
+export const CONTEXT_GATED_ACTION_IDS: ReadonlySet<string> = new Set([
   "host.switch",
   "host.overview.open",
   "project.openOnHost",
   "host.forwardPort",
+  "nav.showProjectHome",
+  "nav.showProjectSplit",
+  "nav.showGrid",
 ]);
 
 const CLONE_ID_MARKER = "#perfclone";
@@ -484,9 +494,9 @@ function sourceActionId(id: string): string {
   return marker === -1 ? id : id.slice(0, marker);
 }
 
-/** Registered ids a no-host `FULL_CONTEXT` listing must not contain. */
-export function isHostGatedActionId(id: string): boolean {
-  return HOST_GATED_ACTION_IDS.has(sourceActionId(id));
+/** Registered ids a `FULL_CONTEXT` listing must not contain. */
+export function isContextGatedActionId(id: string): boolean {
+  return CONTEXT_GATED_ACTION_IDS.has(sourceActionId(id));
 }
 
 /**
@@ -581,8 +591,8 @@ export interface CatalogService {
   registeredIds: readonly string[];
   /**
    * The subset of `registeredIds` a `list(FULL_CONTEXT)` owes back: every one
-   * except the {@link HOST_GATED_ACTION_IDS} (and their clones), which a
-   * window with no remote host must not list at all.
+   * except the {@link CONTEXT_GATED_ACTION_IDS} (and their clones), which a
+   * window without their context must not list at all.
    */
   listedIds: readonly string[];
   /** Per-id declaration, read off the definitions rather than the manifest. */
@@ -661,7 +671,7 @@ export function buildCatalogService(
     service,
     actionCount: definitions.length,
     registeredIds,
-    listedIds: registeredIds.filter((id) => !isHostGatedActionId(id)),
+    listedIds: registeredIds.filter((id) => !isContextGatedActionId(id)),
     expectations,
     factoryMs,
     registerMs,

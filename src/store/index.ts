@@ -71,11 +71,8 @@ export { useUIStore } from "./uiStore";
 export { usePaletteStore } from "./paletteStore";
 export type { PaletteId } from "./paletteStore";
 
-export {
-  useAgentSettingsStore,
-  cleanupAgentSettingsStore,
-  getPinnedAgents,
-} from "./agentSettingsStore";
+export { useAgentSettingsStore, cleanupAgentSettingsStore } from "./agentSettingsStore";
+export { useAgentToolbarPinsStore, getPinnedAgents } from "./agentToolbarPinsStore";
 
 export { useCliAvailabilityStore, cleanupCliAvailabilityStore } from "./cliAvailabilityStore";
 

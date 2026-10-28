@@ -4,11 +4,13 @@ import type {
   HostProbeResult,
   LinuxPackagePreference,
 } from "../../../shared/types/ipc/remoteHosts.js";
+import { hostBuildOrder } from "../../../shared/utils/hostBuildOrder.js";
 
 /**
- * Which build a host gets and how it gets there. A host always runs exactly
- * this client's version and commit (the handshake refuses anything else), so
- * the choice is only about delivery:
+ * Which build a host gets and how it gets there. A host gets exactly this
+ * client's version and commit. A host already on a later release is left
+ * alone unless the user asks for the downgrade: its newer settings and data
+ * may not open in an older build. Otherwise the choice is about delivery:
  *
  * - same platform and arch, and this client has a bundle it can copy: push it;
  * - otherwise the host fetches its artifact for the exact version from the
@@ -16,8 +18,9 @@ import type {
  *   client fetches it and copies it over. A host that has them but can't
  *   reach the feed falls back to the same copy at install time.
  *
- * Linux prefers the deb (declared dependencies, no FUSE; needs sudo, so the
- * user runs one shown command); the AppImage is the no-root fallback.
+ * Linux defaults to the AppImage (no root); a host already on the deb keeps
+ * it (declared dependencies, no FUSE; needs sudo, so the user runs one shown
+ * command).
  */
 
 export const STABLE_FEED_URL = "https://updates.daintree.org/releases/";
@@ -73,18 +76,40 @@ function linuxPackaging(
   return probe.install?.packaging === "deb" ? "deb" : "appimage";
 }
 
+/**
+ * The release a host is ahead on, if it is: what it runs, or what is installed
+ * there (an update put in place but not yet restarted into). Null when this
+ * client's build is no older than either, or the installed build is only a
+ * guess among AppImages, which refuses on its own.
+ */
+function newerOnHost(
+  probe: HostProbeResult,
+  client: ClientBuild,
+  appImageConflict: string | null | undefined
+): string | null {
+  if (probe.hostBuild?.order === "newer") return probe.hostBuild.version;
+  const installed = appImageConflict ? null : probe.install?.version;
+  if (installed && hostBuildOrder({ version: installed, commit: null }, client) === "newer") {
+    return installed;
+  }
+  return null;
+}
+
 export function planInstall(params: {
   client: ClientBuild;
   probe: HostProbeResult;
   linuxPackage?: LinuxPackagePreference;
   /** Why the AppImage in use can't be told apart (see ParsedProbe.appImageConflict). */
   appImageConflict?: string | null;
+  /** The user asked for this client's build even over a newer one there. */
+  allowDowngrade?: boolean;
 }): HostInstallPlan {
   const { client, probe } = params;
   const base = {
     version: client.version,
     commit: client.commit,
     channel: client.channel,
+    downgrade: false,
   };
   const unsupported = (reason: string): HostInstallPlan => ({
     ...base,
@@ -114,6 +139,20 @@ export function planInstall(params: {
       reason: null,
     };
   }
+  const newer = newerOnHost(probe, client, params.appImageConflict);
+  if (newer !== null && !params.allowDowngrade) {
+    return {
+      ...base,
+      kind: "host-newer",
+      delivery: null,
+      packaging: null,
+      artifactName: null,
+      artifactUrl: null,
+      restartsHost: false,
+      userCommandNeeded: false,
+      reason: `The host has Daintree ${newer}, which is newer than ${client.version} here. Installing this machine's build there would downgrade it.`,
+    };
+  }
 
   const packaging =
     probe.platform === "darwin" ? "app-bundle" : linuxPackaging(probe, params.linuxPackage);
@@ -125,6 +164,14 @@ export function planInstall(params: {
   if (packaging === "appimage" && probe.install?.packaging === "deb") {
     return unsupported(
       "This host runs Daintree from the .deb, which can't be switched to the AppImage from here. Update the .deb on the host yourself."
+    );
+  }
+  const restartsHost = packaging !== "deb" && probe.appRunning;
+  // Stopping Daintree there installs the update it downloaded, on top of
+  // whatever this would put in place.
+  if (restartsHost && probe.stagedUpdate?.installsOnQuit) {
+    return unsupported(
+      `The host has downloaded Daintree ${probe.stagedUpdate.version}, which installs when Daintree there restarts. Install that update first.`
     );
   }
   const sameTarget = probe.platform === client.platform && probe.arch === client.arch;
@@ -144,10 +191,11 @@ export function planInstall(params: {
     kind: "install",
     delivery,
     packaging,
+    downgrade: newer !== null,
     artifactName: delivery === "push-bundle" ? null : artifactName,
     artifactUrl: delivery === "push-bundle" ? null : `${feedUrlFor(client.version)}${artifactName}`,
     // The deb is installed by the user; Daintree restarts nothing for it.
-    restartsHost: packaging !== "deb" && probe.appRunning,
+    restartsHost,
     userCommandNeeded: packaging === "deb",
     reason: null,
   };

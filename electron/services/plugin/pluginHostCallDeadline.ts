@@ -7,9 +7,15 @@ import {
   PLUGIN_HOST_CALL_SLOW_TIMEOUT_MS,
   PLUGIN_HOST_CALL_TIMEOUT_MS,
 } from "../../../shared/types/plugin.js";
+import {
+  PLUGIN_SERVICE_DEFAULT_TIMEOUT_MS,
+  PLUGIN_SERVICE_MAX_TIMEOUT_MS,
+  PLUGIN_SERVICE_RPC_GRACE_MS,
+} from "../../../shared/config/pluginBudgets.js";
 import type {
   PluginHostCallMethod,
   SendToAgentParams,
+  ServicesCallParams,
 } from "../../../shared/types/pluginDevWorker.js";
 
 /** No deadline: the call waits on a person, for as long as they take. */
@@ -32,6 +38,10 @@ const HOST_CALL_DEADLINES = {
   sendToActiveAgent: INTERACTIVE,
   "agents.list": DEFAULT,
   "agents.listAll": DEFAULT,
+  // A consent prompt can stand in front of the first, like sendToActiveAgent.
+  "agents.interrupt": INTERACTIVE,
+  "agents.sendKeys": INTERACTIVE,
+  "agents.submit": INTERACTIVE,
   "terminals.readScreen": INTERACTIVE,
   // Without a target the host opens a picker and waits on the person; with one
   // it is a consent check followed by an immediate draft.
@@ -39,23 +49,34 @@ const HOST_CALL_DEADLINES = {
     (params as SendToAgentParams | undefined)?.options?.terminalId !== undefined
       ? INTERACTIVE
       : NONE,
+  // A confirmation dialog the person reads before anything starts (#13797).
+  runRecipe: NONE,
   showToast: DEFAULT,
   notify: DEFAULT,
   dispatch: DEFAULT,
   reloadPanel: DEFAULT,
   restartWorker: DEFAULT,
   setContext: DEFAULT,
+  setToolbarButtonState: DEFAULT,
   setWorktreeCardStatus: DEFAULT,
+  setWorktreeReviewChecks: DEFAULT,
+  setTerminalStatus: DEFAULT,
+  setPanelActivity: DEFAULT,
   "actions.list": DEFAULT,
   "actions.get": DEFAULT,
   "settings.get": INTERACTIVE,
   "settings.set": INTERACTIVE,
+  "settings.unset": INTERACTIVE,
   "settings.open": DEFAULT,
   "settings.missingRequired": DEFAULT,
+  "account.getState": DEFAULT,
+  // A refresh can wait on the keychain and then on the service.
+  "account.getAccessToken": INTERACTIVE,
   "storage.get": DEFAULT,
   "storage.set": DEFAULT,
   "storage.delete": DEFAULT,
   "db.resolve": INTERACTIVE,
+  "db.authorizeWrite": DEFAULT,
   "db.prepareBackup": INTERACTIVE,
   "fs.readFile": DEFAULT,
   "fs.readFileBytes": DEFAULT,
@@ -77,12 +98,36 @@ const HOST_CALL_DEADLINES = {
   "clipboard.readText": INTERACTIVE,
   "system.openPath": DEFAULT,
   "system.showItemInFolder": DEFAULT,
+  // Waits on the user's answer to a first-use prompt.
+  "system.openExternal": INTERACTIVE,
   "documents.renderPdf": INTERACTIVE,
+  // A transfer is bounded by the host's own idle timeout and attempt cap, not
+  // a wall clock: a multi-gigabyte download that keeps moving is not stuck.
+  "artifacts.import": NONE,
+  "artifacts.download": NONE,
+  "artifacts.upload": NONE,
+  "artifacts.stat": DEFAULT,
+  "artifacts.list": DEFAULT,
+  "artifacts.release": DEFAULT,
   showQuickPick: NONE,
   showInputBox: NONE,
   showConfirm: NONE,
   "process.spawn": INTERACTIVE,
   "process.restart": DEFAULT,
+  "tasks.start": DEFAULT,
+  // Raises the failure's notification, which waits on the same lookups notify does.
+  "tasks.finish": DEFAULT,
+  // Main runs the call's own deadline and answers `timeout` itself, so the
+  // worker waits a little past it. An invalid value is refused at once.
+  "services.call": (params) => {
+    const requested = (params as ServicesCallParams | undefined)?.timeoutMs;
+    const timeoutMs =
+      typeof requested === "number" && requested > 0
+        ? Math.min(requested, PLUGIN_SERVICE_MAX_TIMEOUT_MS)
+        : PLUGIN_SERVICE_DEFAULT_TIMEOUT_MS;
+    return timeoutMs + PLUGIN_SERVICE_RPC_GRACE_MS;
+  },
+  "services.status": DEFAULT,
 } as const satisfies Record<PluginHostCallMethod, DeadlinePolicy>;
 
 /** Milliseconds the worker waits for `method`'s answer; `0` means no deadline. */

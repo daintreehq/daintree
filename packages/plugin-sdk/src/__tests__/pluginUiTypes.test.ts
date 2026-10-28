@@ -35,6 +35,7 @@ import {
   type DropdownMenuEntry,
   type DaintreeTheme,
   VirtualList,
+  VirtualGrid,
   DataTable,
   LogView,
   PaneHeader,
@@ -53,6 +54,7 @@ import {
   ListRow,
   SeverityIcon,
   useListNavigation,
+  useSelection,
   formatTimeAgo,
   formatRelativeTime,
   formatBytes,
@@ -67,6 +69,9 @@ import {
   type VirtualListProps,
   type VirtualListItemsProps,
   type VirtualListCountProps,
+  type VirtualGridProps,
+  type VirtualGridCountProps,
+  type VirtualGridItemState,
   type LogEntry,
   type Severity,
 } from "@daintreehq/plugin-ui";
@@ -162,6 +167,64 @@ export const countProps: VirtualListCountProps = {
 // A wrapper forwarding the general props still compiles.
 export const forwarded = (props: VirtualListProps<Issue>) => createElement(VirtualList, props);
 export const narrowed = (props: VirtualListItemsProps<Issue>) => createElement(VirtualList<Issue>, props);
+
+interface Photo { id: string; src: string; }
+const photoItems: Photo[] = [{ id: "a", src: "a.png" }];
+// With \`items\` a card is handed its item and its cursor and selection state.
+export const photoGrid = createElement(VirtualGrid<Photo>, {
+  items: photoItems,
+  "aria-label": "Photos",
+  minColumnWidth: 120,
+  maxColumns: 6,
+  gap: "sm",
+  itemKey: (_index, photo) => photo.id,
+  renderItem: (_index, photo, state: VirtualGridItemState) => (state.selected ? photo.src : photo.id),
+  onItemActivate: (_index, photo) => void photo.src,
+  onEndReached: (lastIndex: number) => void lastIndex,
+});
+// @ts-expect-error a grid needs an accessible name
+export const unnamedGrid = createElement(VirtualGrid, { count: 3, renderItem: () => null });
+// @ts-expect-error cards are typed through the generic
+export const badCard = createElement(VirtualGrid<Photo>, { items: photoItems, "aria-label": "x", renderItem: (_i, photo) => photo.missing });
+// @ts-expect-error the gap is a step of the layout scale
+export const badGap = createElement(VirtualGrid, { count: 3, "aria-label": "Cards", gap: 7, renderItem: () => null });
+export const countGrid = createElement(VirtualGrid, {
+  count: 3,
+  "aria-label": "Cards",
+  renderItem: (index) => index,
+});
+export const countGridProps: VirtualGridCountProps = {
+  count: 3,
+  "aria-label": "Cards",
+  renderItem: (_index, item) => {
+    const none: undefined = item;
+    return none;
+  },
+};
+// A useSelection result over the cards' keys drives the grid as it is.
+export function SelectableGrid() {
+  const selection = useSelection({ ids: photoItems.map((photo) => photo.id) });
+  return createElement(VirtualGrid<Photo>, {
+    items: photoItems,
+    "aria-label": "Photos",
+    "aria-multiselectable": true,
+    selection,
+    itemKey: (_index, photo) => photo.id,
+    renderItem: (_index, photo) => photo.src,
+  });
+}
+export const forwardedGrid = (props: VirtualGridProps<Photo>) => createElement(VirtualGrid, props);
+// A selection over number ids fits as one over strings does.
+export function NumberedGrid() {
+  const selection = useSelection<number>({ ids: [1, 2, 3] });
+  return createElement(VirtualGrid, {
+    count: 3,
+    "aria-label": "Cards",
+    selection,
+    itemKey: (index) => index + 1,
+    renderItem: (index) => index,
+  });
+}
 
 const columns: DataTableColumn<Issue>[] = [
   { id: "title", header: "Title", sortable: true, render: (issue) => issue.title },
@@ -529,8 +592,26 @@ export const multi = createElement(ui.MultiSelect, { options: [], value: ["a"], 
 export const singleMulti = createElement(ui.MultiSelect, { options: [], value: "a" });
 export const tags = createElement(ui.TagInput, { defaultValue: ["a"], validate: (tag: string) => tag.length > 1, "aria-label": "Tags" });
 export const drop = createElement(ui.FileDropzone, { onFiles: (files: File[]) => void files, accept: ".md", multiple: true, icon: "upload" });
-// @ts-expect-error a FileDropzone needs onFiles
+// @ts-expect-error a FileDropzone needs onFiles or onArtifacts
 export const deafDrop = createElement(ui.FileDropzone, { accept: ".md" });
+export const artifactDrop = createElement(ui.FileDropzone, {
+  onArtifacts: (artifacts: { id: string; size: number }[]) => void artifacts,
+  onImportError: (error: Error) => void error,
+  accept: "video/*",
+});
+export const doubleDrop = createElement(ui.FileDropzone, {
+  onFiles: () => {},
+  // @ts-expect-error a FileDropzone hands over Files or artifacts, not both
+  onArtifacts: () => {},
+});
+export const player = createElement(ui.MediaPlayer, {
+  source: { id: "a", mimeType: "video/mp4", name: "Clip" },
+  poster: "b",
+  whenAway: "keep-playing",
+});
+// @ts-expect-error a MediaPlayer needs a source
+export const silentPlayer = createElement(ui.MediaPlayer, {});
+export const thumb = createElement(ui.MediaThumbnail, { source: "a", size: "lg", alt: "Clip" });
 export const emoji = createElement(ui.EmojiPicker, { trigger: createElement(ui.Button, {}, "Icon"), onSelect: (e: string) => void e, value: "🙂" });
 // @ts-expect-error an EmojiPicker needs a trigger
 export const noTrigger = createElement(ui.EmojiPicker, { onSelect: () => {} });
@@ -648,6 +729,34 @@ export function useLayoutHooks(el: HTMLElement | null) {
   const custom: "narrow" | "wide" | null = ui.useBreakpoint(el, { narrow: 0, wide: 640 });
   return [size.width, step, custom];
 }
+const issueFields: ui.FilterField[] = [
+  { id: "status", label: "Status", type: "select", options: [{ value: "open", label: "Open" }] },
+  { id: "owner", label: "Owner", type: "select", options: [{ value: "me", label: "Me" }], operators: ["eq", "neq"] },
+  { id: "points", label: "Points", type: "number", placeholder: "0" },
+];
+const openAndMine: ui.Filter = {
+  match: "all",
+  conditions: [
+    { field: "status", op: "eq", value: "open" },
+    { field: "owner", op: "eq", value: "me" },
+    { field: "points", op: "empty" },
+  ],
+};
+export const builder = createElement(ui.FilterBuilder, { fields: issueFields, value: openAndMine, onChange: (next: ui.Filter) => void next, "aria-label": "Issue filters", addLabel: "Add filter" });
+// @ts-expect-error a builder must be named
+export const unnamedBuilder = createElement(ui.FilterBuilder, { fields: issueFields, value: openAndMine, onChange: () => {} });
+// @ts-expect-error comparisons are a closed set
+export const badCondition: ui.FilterCondition = { field: "status", op: "like", value: "o" };
+// @ts-expect-error values are scalars
+export const listValue: ui.FilterCondition = { field: "status", op: "eq", value: ["open"] };
+export const checked: ui.Filter | null = ui.readFilter(JSON.parse("{}"), issueFields);
+export const passes: boolean = ui.matchesFilter(openAndMine, { status: "open", owner: "me" }, issueFields);
+const viewState: ui.SavedViewState = { filter: openAndMine, sort: { columnId: "points", direction: "desc" }, hiddenColumns: ["owner"] };
+const savedView: ui.SavedView = { id: "mine", name: "My open issues", ...viewState };
+export const views = createElement(ui.SavedViews, { current: viewState, onApply: (next: ui.SavedViewState) => void next, viewStateKey: "issues", defaultViews: [savedView], defaultActiveViewId: "mine" });
+export const controlledViews = createElement(ui.SavedViews, { current: viewState, onApply: () => {}, views: [savedView], onViewsChange: (next: ui.SavedView[]) => void next, activeViewId: null, onActiveViewChange: (id: string | null) => void id, placeholder: "All issues" });
+// @ts-expect-error a saved view holds all three choices
+export const partialView: ui.SavedViewState = { filter: openAndMine, sort: null };
 `;
 
 let consumerDir: string;

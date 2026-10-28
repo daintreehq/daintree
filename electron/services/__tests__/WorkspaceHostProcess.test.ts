@@ -600,7 +600,12 @@ describe("WorkspaceHostProcess", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     const child = mockChildren[0] as MockUtilityChild;
-    child.emit("message", { type: "fetch-auth-failure-confirmed", reason: "fetch" });
+    child.emit("message", {
+      type: "fetch-auth-failure-confirmed",
+      reason: "auth-failed",
+      repoName: "project",
+      remote: "origin",
+    });
 
     // Renderer-only event (delivered via DIRECT_RENDERER_EVENTS): it must not be
     // relayed as host-event, and must not trip the default "Unknown event" warn.

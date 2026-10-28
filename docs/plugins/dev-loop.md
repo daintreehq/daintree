@@ -4,7 +4,7 @@ The `daintree-plugin` CLI provides the plugin author's tooling. Install it as a 
 
 > Working inside the Daintree repo itself? The CLI is the workspace package at `packages/daintree-plugin`; after `npm run packages:build` you can run that local build directly with `node packages/daintree-plugin/dist/cli.js <command>` instead of the published one.
 
-> **Maintainers.** Five packages release from this repository: `@daintreehq/plugin-sdk`, `@daintreehq/plugin-vite`, `daintree-plugin` and `create-daintree-plugin` are on npm at 0.1.0, and `@daintreehq/tour` is in the release workflow but has not had its first publish yet. Every release follows the same procedure: the version bump rides a normal PR to `develop`, reaches `main` with the next app release, and the per-package tag (`sdk-v*`, `plugin-vite-v*`, `daintree-plugin-v*`, `create-daintree-plugin-v*`, `tour-v*`) is cut from `main`. `.github/workflows/release-packages.yml` fires on those tags and publishes every package whose version is not yet on the registry, authenticating with npm Trusted Publishing (OIDC, no stored token). The `release-packages` skill in `.claude/skills/release-packages/` drives it end to end — which packages changed, the pre-1.0 version cascade through dependents and the scaffold's pinned ranges, the bump PR and the tags. The one case the workflow cannot cover is a package that has never been published, since npm registers a trusted publisher only against an existing package: a new package's first version goes up by hand, then the workflow takes over. That is where `@daintreehq/tour` stands: publish its 0.1.0 by hand (`npm publish --workspace=packages/tour --access public` from a logged-in machine after `npm run packages:build`), register this repository and workflow as its trusted publisher on npmjs.com, then remove the "not published" notes from this note, the status block in [README.md](./README.md) and [tours.md](./tours.md). Until then a package tag still publishes the other four, which go first, but the run fails at the tour's publish step.
+> **Maintainers.** Five packages release from this repository: `@daintreehq/plugin-sdk`, `@daintreehq/plugin-vite`, `daintree-plugin` and `create-daintree-plugin` are on npm at 0.1.0, and `@daintreehq/tour` is in the release workflow but has not had its first publish yet. Every release follows the same procedure: the version bump rides a normal PR to `develop`, reaches `main` with the next app release, and the per-package tag (`sdk-v*`, `plugin-vite-v*`, `daintree-plugin-v*`, `create-daintree-plugin-v*`, `tour-v*`) is cut from `main`. `.github/workflows/release-packages.yml` fires on those tags and publishes every package whose version is not yet on the registry, authenticating with npm Trusted Publishing (OIDC, no stored token). Before publishing, the workflow runs `scripts/ci/packages-consumer-smoke.mjs`, which every PR also runs as CI's `packages` job: it packs the tarballs, imports every export, and scaffolds, typechecks, builds, validates and packages a plugin against them, failing when a scaffold's version range would not accept the versions being released. It needs the registry for third-party dependencies but no credentials, so run it locally after `npm run packages:build` to check a release before tagging. The `release-packages` skill in `.claude/skills/release-packages/` drives it end to end — which packages changed, the pre-1.0 version cascade through dependents and the scaffold's pinned ranges, the bump PR and the tags. The one case the workflow cannot cover is a package that has never been published, since npm registers a trusted publisher only against an existing package: a new package's first version goes up by hand, then the workflow takes over. That is where `@daintreehq/tour` stands: publish its 0.2.0 by hand (`npm publish --workspace=packages/tour --access public` from a logged-in machine after `npm run packages:build`), register this repository and workflow as its trusted publisher on npmjs.com, then remove the "not published" notes from this note, the status block in [README.md](./README.md) and [tours.md](./tours.md). Until then a package tag still publishes the other four, which go first, but the run fails at the tour's publish step.
 
 ```bash
 npm install --save-dev daintree-plugin
@@ -33,22 +33,22 @@ Interactively, an invalid name, publisher or `--template` value (or an `mcp`/`fu
 Creates `./my-plugin/` with:
 
 - `plugin.json` — starter manifest, with a `$schema` pointing at the generated JSON Schema so an editor flags a misspelled field (see [`schema`](#daintree-plugin-schema))
-- `package.json` — `build`, `validate` and `package` scripts, and dev dependencies on `@daintreehq/plugin-sdk`, `@daintreehq/plugin-vite` and `daintree-plugin` (each the hard-coded range `^0.1.0`), `typescript` `^6.0.0` and `vite` `^8.0.0`. The `view` and `full` templates add `react` and `react-dom` (`^19.2.0`), `@types/react` and `@types/react-dom` (`^19.0.0`), the [panel preview](#preview-a-panel-outside-daintree)'s `@playwright/test`, `esbuild` and `tailwindcss`, and a `test:preview` script (the 0.1.0 scaffold on npm pins `react` and `react-dom` at `^19.0.0` and adds no preview dependencies or script); `mcp` and `full` add the runtime dependency `@modelcontextprotocol/sdk` `^1.12.0`, because the spawned server imports it
+- `package.json` — `build`, `validate` and `package` scripts, and dev dependencies on `@daintreehq/plugin-sdk`, `@daintreehq/plugin-vite` and `daintree-plugin` (each a caret range on the version released alongside the CLI, `^0.2.0` today; the 0.1.0 scaffold on npm pins `^0.1.0`), `typescript` `^6.0.0` and `vite` `^8.0.0`. The `view` and `full` templates add `react` and `react-dom` (`^19.2.0`), `@types/react` and `@types/react-dom` (`^19.0.0`), the [panel preview](#preview-a-panel-outside-daintree)'s `@playwright/test`, `esbuild` and `tailwindcss`, and a `test:preview` script (the 0.1.0 scaffold on npm pins `react` and `react-dom` at `^19.0.0` and adds no preview dependencies or script); `mcp` and `full` add the runtime dependency `@modelcontextprotocol/sdk` `^1.12.0`, because the spawned server imports it
 - `vite.config.ts` — pre-configured for plugin builds; `mcp` and `full` also get `vite.config.server.ts`, a second, Node-target config for the MCP server entry
-- `tsconfig.json` — for a template with a view, `compilerOptions.types` lists `@daintreehq/plugin-sdk/view-globals` and `@daintreehq/plugin-sdk/plugin-ui`, so `window.electron.plugin` and the [UI kit](./ui-kit.md) typecheck. Not in the 0.1.0 release on npm; it ships in the next one — the 0.1.0 scaffold writes no `types`, and SDK 0.1.0 has neither entry
+- `tsconfig.json` — for a template with a view, `compilerOptions.types` lists `@daintreehq/plugin-sdk/view-globals` and `@daintreehq/plugin-sdk/plugin-ui`, so `window.electron.plugin` and the [UI kit](./ui-kit.md) typecheck. Not in the 0.1.0 release on npm; it ships in 0.2.0 — the 0.1.0 scaffold writes no `types`, and SDK 0.1.0 has neither entry
 - `src/` — starter code based on template choice
 - `icons/panel.svg` — for a template with a view, a monochrome 24×24 starter glyph the panel's `iconId` points at (`"./icons/panel.svg"`); the host draws a custom icon as a mask in the current text colour, so only its shape matters. Not in the 0.1.0 release on npm, whose scaffold gives the panel the built-in `puzzle` icon
-- `review/panel.stories.tsx`, `review/panel.spec.ts` and `playwright.config.ts` — for a template with a view, one story of the starter panel and a spec that captures every story, the [panel preview](#preview-a-panel-outside-daintree). `review/` is never built or packaged into `dist/`. Not in the 0.1.0 release on npm; it ships in the next one
+- `review/panel.stories.tsx`, `review/panel.spec.ts` and `playwright.config.ts` — for a template with a view, one story of the starter panel and a spec that captures every story, the [panel preview](#preview-a-panel-outside-daintree). `review/` is never built or packaged into `dist/`. Not in the 0.1.0 release on npm; it ships in 0.2.0
 - `.gitignore` — excludes `node_modules/`, `dist/`, `*.dntr`, `.dev-marker`, `.tour-preview/`, and the preview's `test-results/` and `playwright-report/`
 - `.dntrignore` — commented-out examples of files to keep out of the packaged archive (see [Distribution → Packaging](./distribution.md#packaging))
-- `.claude/skills/daintree-tour/` — the tour-authoring Claude Code skill (`SKILL.md` plus its reference files), so a Claude Code session in the plugin can build a [tour](./tours.md) without a Daintree checkout. Not written under `--project`, since project plugins cannot contribute tours. Not in the 0.1.0 release on npm; it ships in the next one — [`skill add`](#daintree-plugin-skill-add-name) adds it to an existing plugin
+- `.claude/skills/daintree-tour/` — the tour-authoring Claude Code skill (`SKILL.md` plus its reference files), so a Claude Code session in the plugin can build a [tour](./tours.md) without a Daintree checkout. Not in the 0.1.0 release on npm; it ships in 0.2.0 — [`skill add`](#daintree-plugin-skill-add-name) adds it to an existing plugin
 
 Templates:
 
 - **`command`** — single command plugin. `src/index.ts` exports `activate(host)` and registers the command imperatively via `host.registerAction(...)`: id `run`, titled `<Display name>: Run`, showing a toast. (The filesystem-convention handler — compiled `src/{id}.js` auto-bound on first dispatch — is also supported by the host; the scaffold just shows the imperative path.)
 - **`view`** — panel view + React component (`src/index.ts` + `src/panel.tsx`)
-- **`mcp`** — skeleton MCP server plus manifest wiring (`src/index.ts` + `src/server.ts`, built by `vite.config.server.ts`)
-- **`full`** — command + view + MCP example (largest, for experimenting)
+- **`mcp`** — skeleton MCP server that Daintree calls as its client (agents don't see its tools until an `agentMcp` endpoint's `source` names them) plus manifest wiring (`src/index.ts` + `src/server.ts`, built by `vite.config.server.ts`)
+- **`full`** — command + view + host-client MCP server (largest, for experimenting)
 
 #### `--project` — scaffold into a project
 
@@ -64,7 +64,7 @@ Alongside the usual template files it emits:
 - a watcher recipe in `<projectRoot>/.daintree/recipes/`, so Daintree can bring the build up with the rest of the project environment
 - a `.gitignore` that force-includes `dist/`, and a `README.md` explaining why — and, for the `view` template, pointing at the [panel preview](#preview-a-panel-outside-daintree) rather than the running app
 - no `.dntrignore` and no `package` script — a project plugin is distributed by being committed, not as a `.dntr`
-- no `.claude/skills/daintree-tour/`, and an `@types/node` dev dependency, because the project `vite.config.ts` imports `node:path`
+- an `@types/node` dev dependency, because the project `vite.config.ts` imports `node:path`
 
 **`dist/` is the load contract.** Daintree reads `plugin.json` and `dist/`. It never compiles a project plugin, never reads `src/`, and never runs its `package.json` — a project opening must not run a build. So `dist/` is committed, and the generated `.gitignore` force-includes it with `!dist/` and `!dist/**`: most repositories ignore `dist/` at the root, and that pattern would otherwise swallow the plugin's build output, leaving a plugin that silently fails to load on every other checkout. Both negations are needed — `!dist/` re-includes the directory so git descends into it at all, `!dist/**` re-includes the files against a parent rule that matches contents (`dist/*`, `**/dist/**`). Rebuild and commit `dist/` in the same commit as the source change.
 
@@ -129,7 +129,7 @@ What it does, in order:
 4. Asks the running Daintree to load and activate the plugin (the `plugin.dev.start` CLI method). This fails for a plugin you have disabled in the plugin manager — the dev loop does not override that — and the link and marker are removed again.
 5. Starts `vite build --watch`. Daintree watches the plugin **root** — `plugin.json`, `dist/` and the `.dev-marker` count as the artifact; `src/` is ignored, because a source write says nothing about whether a loadable build exists yet. Once a rebuild settles (a ~200 ms trailing debounce, then a short quiet period the bytes must survive unchanged, so a half-written `dist/` is never imported), the whole plugin is reconciled against what is on disk: the manifest is re-read, contributions are re-registered, views are republished under a fresh generation, and the backend worker is replaced. A save therefore reloads manifest, views and backend together as one artifact generation — not just the worker. A `plugin.json` you are midway through editing is reported rather than acted on, and leaves the running version up until the next save. Dev plugins carry a **Dev** badge in the plugin manager (Settings → Plugins → Plugin manager) so you can tell at a glance which installed plugins are pinned to a local dev folder.
 
-6. Polls the running Daintree every 2 seconds for the plugin's performance measurements (the `plugin.dev.metrics` CLI method) and prints them beside their budgets only when what the table would show changes. `--no-metrics` turns it off. Not in the 0.1.0 release on npm; it ships in the next one — the 0.1.0 `dev` prints no table and rejects `--no-metrics`. A Daintree too old to report metrics says so once and polling stops; a failed poll while Daintree restarts or a rebuild swaps in just waits for the next one.
+6. Polls the running Daintree every 2 seconds for the plugin's performance measurements (the `plugin.dev.metrics` CLI method) and prints them beside their budgets only when what the table would show changes. `--no-metrics` turns it off. Not in the 0.1.0 release on npm; it ships in 0.2.0 — the 0.1.0 `dev` prints no table and rejects `--no-metrics`. A Daintree too old to report metrics says so once and polling stops; a failed poll while Daintree restarts or a rebuild swaps in just waits for the next one.
 
 ```
 Performance — acme.builds (worker)
@@ -151,7 +151,7 @@ One host method is a no-op for `dev`-loaded plugins: `registerForgeProvider`. Fo
 
 ### `daintree-plugin lint [dir]`
 
-> Not in the 0.1.0 release on npm; it ships in the next one. Until then, skip this step.
+> Not in the 0.1.0 release on npm; it ships in 0.2.0. Until then, skip this step.
 
 Checks the plugin's source for performance traps and for drift from the host's design contract, then compiles the view's classes against that contract the way the running host does and lists the ones that generate no CSS. `validate` stays manifest-only; `lint` is the command that reads your code.
 
@@ -219,7 +219,7 @@ Runs the manifest through Daintree's Zod schema and reports any errors. It valid
 npx daintree-plugin validate [dir] [--env]
 ```
 
-`dir` defaults to the current directory. Not in the 0.1.0 release on npm; it ships in the next one — the 0.1.0 `validate` takes no argument, so run it from the plugin directory. It exits 1 when the manifest fails.
+`dir` defaults to the current directory. Not in the 0.1.0 release on npm; it ships in 0.2.0 — the 0.1.0 `validate` takes no argument, so run it from the plugin directory. It exits 1 when the manifest fails.
 
 Beyond the schema it also fails on a custom `./….svg` icon the manifest names that is missing or unusable (the host would draw the fallback glyph), and prints advisory warnings that never change the exit code: an omitted `engines.daintree`, an empty command `keywords`, an `iconId` the host doesn't recognise, a view `iconId` (ignored at runtime), a deprecated contribution alias, and a `main` or `componentPath` naming a missing file in an existing folder.
 
@@ -317,7 +317,7 @@ npx daintree-plugin doctor . [--offline] [--no-lint]
 - an error for an entry that is CommonJS (assigns `module.exports` and exports nothing), since both the worker and the renderer import it as ESM, and a warning for one that exports nothing at all
 - when `<projectRoot>` is not a git repository, a warning that the ignore and tracked checks were skipped, rather than a failure
 
-These are working-tree and index checks, not a check of committed contents: a staged-but-uncommitted build passes, and a tracked file whose committed copy is stale is not caught, so a clean run catches the common ways a plugin stays local (an ignored or untracked `dist/`) without proving that a fresh clone loads it. It also runs [`lint`](#daintree-plugin-lint-dir) over each plugin and folds its findings into the warnings, as `lint <severity> <file>:<line> [<rule>] <message> — <fix>`. They are advisory there — a heuristic over source cannot prove a plugin won't load, which is the question doctor's exit status answers — so run `lint` itself to gate on them; `--no-lint` skips it. Not in the 0.1.0 release on npm; it ships in the next one — the 0.1.0 `doctor` has no lint pass and rejects `--no-lint`, but runs every other check here. Finally it asks the running Daintree what it has decided about the project (trust state, and each plugin's load state) and prints that as information — host status never affects the result or the exit code. `--offline` skips that query for CI. It exits 1 when any plugin has an error.
+These are working-tree and index checks, not a check of committed contents: a staged-but-uncommitted build passes, and a tracked file whose committed copy is stale is not caught, so a clean run catches the common ways a plugin stays local (an ignored or untracked `dist/`) without proving that a fresh clone loads it. It also runs [`lint`](#daintree-plugin-lint-dir) over each plugin and folds its findings into the warnings, as `lint <severity> <file>:<line> [<rule>] <message> — <fix>`. They are advisory there — a heuristic over source cannot prove a plugin won't load, which is the question doctor's exit status answers — so run `lint` itself to gate on them; `--no-lint` skips it. Not in the 0.1.0 release on npm; it ships in 0.2.0 — the 0.1.0 `doctor` has no lint pass and rejects `--no-lint`, but runs every other check here. Finally it asks the running Daintree what it has decided about the project (trust state, and each plugin's load state) and prints that as information — host status never affects the result or the exit code. `--offline` skips that query for CI. It exits 1 when any plugin has an error.
 
 ### `daintree-plugin schema`
 
@@ -329,19 +329,19 @@ Prints the JSON Schema for `plugin.json`, generated from the same Zod schema the
 
 ### `daintree-plugin skill add [name]`
 
-> Not in the 0.1.0 release on npm; it ships in the next one.
+> Not in the 0.1.0 release on npm; it ships in 0.2.0.
 
 ```bash
 npx daintree-plugin skill add [name] [--force]
 ```
 
-Copies a Claude Code skill bundled with the CLI into the plugin in the current directory, at `.claude/skills/<name>/`. `name` defaults to `daintree-tour`, the only bundled skill today: the tour-authoring skill `new` writes into every installed-plugin scaffold, so this is how an older plugin gets it, or a newer copy. It must run from a directory holding a `plugin.json`, and it refuses a project plugin (`"scope": "project"`), since Daintree refuses tours from project plugins.
+Copies a Claude Code skill bundled with the CLI into the plugin in the current directory, at `.claude/skills/<name>/`. `name` defaults to `daintree-tour`, the only bundled skill today: the tour-authoring skill `new` writes into every scaffold, so this is how an older plugin gets it, or a newer copy. It must run from a directory holding a `plugin.json`.
 
 Every destination is checked before anything is written. An identical file is left alone; one that differs — your own edit, or an older copy — stops the command with the list of differing files and nothing written, unless `--force` replaces them with this version's copy. Files in that folder the bundle doesn't ship are kept, and it refuses to write through a symlink.
 
 ### `daintree-plugin tour`
 
-> Not in the 0.1.0 release on npm; it ships in the next one. `@daintreehq/tour`, the scene kit tours are built with, is not on npm yet either.
+> Not in the 0.1.0 release on npm; it ships in 0.2.0. `@daintreehq/tour`, the scene kit tours are built with, is not on npm yet either.
 
 `tour voice`, `tour align` and `tour preview` voice a tour's narration with Inworld text-to-speech, time your own recordings with speech-to-text, and play or capture the tour in a browser. [Tours](./tours.md) documents them: [Voicing](./tours.md#voicing) for `voice` and `align`, [Previewing and testing](./tours.md#previewing-and-testing) for `preview`.
 
@@ -353,7 +353,7 @@ Each request times out after 30 seconds. When nothing is listening the error nam
 
 ## Preview a panel outside Daintree
 
-> Not in the 0.1.0 release on npm; it ships in the next one.
+> Not in the 0.1.0 release on npm; it ships in 0.2.0.
 
 `@daintreehq/plugin-sdk/testing/playwright` renders a panel view in a plain browser page and captures it, with no Daintree running and no CLI in between. An author, an agent or CI drives it from an ordinary Playwright spec. It builds the plugin's stories with esbuild and compiles the classes they use with Tailwind against Daintree's design contract, serves the page on loopback, and mounts each story against the SDK's mock view host, under the built-in theme you name.
 

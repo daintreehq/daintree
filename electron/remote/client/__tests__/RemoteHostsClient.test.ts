@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { AppError } from "../../../utils/errorTypes.js";
 import {
   toHostScopedKey,
   type HostDescriptor,
@@ -22,6 +23,7 @@ import { RemoteRouterImpl } from "../RemoteRouter.js";
 import { WindowHostBinding } from "../WindowHostBinding.js";
 import { _resetRemoteServicesForTest, registerRemoteService } from "../../runtime.js";
 import type { HostMetricsClient } from "../../metrics/client.js";
+import type { HostSwitchService } from "../../projects/HostSwitchService.js";
 
 function memoryStore(): RemoteHostsStore {
   let value: { hosts: HostDescriptor[] } | undefined;
@@ -40,9 +42,13 @@ function fakeManager() {
       lastActiveProject: ReturnType<typeof vi.fn>;
       noteActiveProject: ReturnType<typeof vi.fn>;
       whenReady: ReturnType<typeof vi.fn>;
+      retryNow: ReturnType<typeof vi.fn>;
+      restarting: boolean;
       boundViews: () => number[];
       hasLiveAssistant: (webContentsId: number) => boolean;
       hasActiveAgent: (webContentsId: number) => boolean;
+      hasKeepResident: (webContentsId: number) => boolean;
+      hasLiveMcpBinding: (webContentsId: number) => boolean;
     }
   >();
   const listeners = new Set<(hostId: string, state: HostConnectionState) => void>();
@@ -54,6 +60,9 @@ function fakeManager() {
     liveAssistants: new Map<string, Set<number>>(),
     /** Views a host says have an active agent in their project, by host. */
     activeAgents: new Map<string, Set<number>>(),
+    residentViews: new Map<string, Set<number>>(),
+    /** Views a host says an MCP session there is bound to, live, by host. */
+    mcpBoundViews: new Map<string, Set<number>>(),
     /** What the host remembers this Shell last showed there. */
     last: null as { projectId: string; path: string; name: string } | null,
     touch: vi.fn(),
@@ -78,11 +87,17 @@ function fakeManager() {
           lastActiveProject: vi.fn(async () => manager.last),
           noteActiveProject: vi.fn(),
           whenReady: vi.fn(async () => manager.readiness),
+          retryNow: vi.fn(),
+          restarting: false,
           boundViews: () => [...manager.bound],
           hasLiveAssistant: (webContentsId: number) =>
             manager.liveAssistants.get(hostId)?.has(webContentsId) === true,
           hasActiveAgent: (webContentsId: number) =>
             manager.activeAgents.get(hostId)?.has(webContentsId) === true,
+          hasKeepResident: (webContentsId: number) =>
+            manager.residentViews.get(hostId)?.has(webContentsId) === true,
+          hasLiveMcpBinding: (webContentsId: number) =>
+            manager.mcpBoundViews.get(hostId)?.has(webContentsId) === true,
         };
         connections.set(hostId, connection);
       }
@@ -196,6 +211,102 @@ describe("RemoteHostsClient", () => {
     expect(installRouter).not.toHaveBeenCalled();
   });
 
+  describe("restoreHostProjectInBackground (#13932)", () => {
+    let restore: Mock<NonNullable<WindowControl["restoreRemoteProjectInBackground"]>>;
+
+    beforeEach(() => {
+      restore = vi.fn<NonNullable<WindowControl["restoreRemoteProjectInBackground"]>>(
+        async () => "restored"
+      );
+      windows.restoreRemoteProjectInBackground = restore;
+    });
+
+    it("loads the project at the host's path, and nothing the window shows changes", async () => {
+      await expect(
+        client.restoreHostProjectInBackground(1, "studio-01", "proj-1", { lastUsed: 42 })
+      ).resolves.toBe("restored");
+      expect(manager.connect).toHaveBeenCalledWith("studio-01");
+      expect(installRouter).toHaveBeenCalledWith(router);
+      expect(restore).toHaveBeenCalledWith(1, "studio-01", "proj-1", "/srv/proj-1", {
+        lastUsed: 42,
+        stillWanted: expect.any(Function),
+      });
+      expect(bindings.get(1)).toBe("local");
+      expect(windows.openRemoteProject).not.toHaveBeenCalled();
+      expect(manager.connect("studio-01").noteActiveProject).not.toHaveBeenCalled();
+      expect(client.listRecent()).toEqual([]);
+    });
+
+    it("leaves a project another window has to it, without dialling the host", async () => {
+      windows.projectOwner = vi.fn(() => ({ windowId: 2, showing: false }));
+      await expect(
+        client.restoreHostProjectInBackground(1, "studio-01", "proj-1", { lastUsed: 1 })
+      ).resolves.toBe("owned-elsewhere");
+      expect(manager.connect).not.toHaveBeenCalled();
+      expect(restore).not.toHaveBeenCalled();
+    });
+
+    it("says so when the host no longer has the project", async () => {
+      manager.connect("studio-01").describeProject.mockResolvedValueOnce(null);
+      await expect(
+        client.restoreHostProjectInBackground(1, "studio-01", "proj-1", { lastUsed: 1 })
+      ).resolves.toBe("project-gone");
+      expect(restore).not.toHaveBeenCalled();
+    });
+
+    it("says so for a host removed from this device, without dialling anything", async () => {
+      await expect(
+        client.restoreHostProjectInBackground(1, "nowhere", "proj-1", { lastUsed: 1 })
+      ).resolves.toBe("host-removed");
+      expect(manager.connect).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["timeout", "HOST_DISCONNECTED"],
+      ["version-mismatch", "HOST_VERSION_MISMATCH"],
+    ])("throws as a switch does when the host comes back %s", async (readiness, code) => {
+      manager.readiness = readiness;
+      await expect(
+        client.restoreHostProjectInBackground(1, "studio-01", "proj-1", { lastUsed: 1 })
+      ).rejects.toMatchObject({ code });
+      expect(restore).not.toHaveBeenCalled();
+    });
+
+    it("treats a lookup the host couldn't answer as the host being unreachable", async () => {
+      manager.connect("studio-01").describeProject.mockRejectedValueOnce(new Error("link dropped"));
+      await expect(
+        client.restoreHostProjectInBackground(1, "studio-01", "proj-1", { lastUsed: 1 })
+      ).rejects.toMatchObject({ code: "HOST_DISCONNECTED" });
+    });
+
+    it("hands the window a check that still holds the caller's wish", async () => {
+      let wanted = true;
+      await client.restoreHostProjectInBackground(1, "studio-01", "proj-1", {
+        lastUsed: 1,
+        stillWanted: () => wanted,
+      });
+      const [, , , , { stillWanted }] = restore.mock.calls[0]!;
+      expect(stillWanted()).toBe(true);
+      wanted = false;
+      expect(stillWanted()).toBe(false);
+    });
+
+    it("gives up once it is no longer wanted", async () => {
+      let wanted = true;
+      manager.connect("studio-01").whenReady.mockImplementationOnce(async () => {
+        wanted = false;
+        return "ready";
+      });
+      await expect(
+        client.restoreHostProjectInBackground(1, "studio-01", "proj-1", {
+          lastUsed: 1,
+          stillWanted: () => wanted,
+        })
+      ).resolves.toBe("cancelled");
+      expect(restore).not.toHaveBeenCalled();
+    });
+  });
+
   it("leaves the router installed when it is disposed, so host views fail closed at quit", async () => {
     await client.switchWindowHost(ctxFor(5, 1), {
       hostId: "studio-01",
@@ -287,6 +398,49 @@ describe("RemoteHostsClient", () => {
     );
   });
 
+  it("carries Open in Assistant only to the host and project its lane is in (#14163)", async () => {
+    const subject = {
+      hostId: "studio-01",
+      scope: { kind: "project" as const, projectId: "proj-1" },
+      terminalId: "t1",
+      incarnation: 2,
+      lane: 1,
+    };
+    const focusIntent = { intent: "open-assistant", subject } as const;
+    await client.switchWindowHost(ctxFor(5, 1), {
+      hostId: "studio-01",
+      newWindow: false,
+      projectId: "proj-1",
+      focusIntent,
+    });
+    expect(windows.openRemoteProject).toHaveBeenCalledWith(
+      1,
+      "studio-01",
+      "proj-1",
+      "/srv/proj-1",
+      focusIntent,
+      { requesterWebContentsId: 5 }
+    );
+    vi.mocked(windows.openRemoteProject).mockClear();
+    for (const wrong of [
+      { ...subject, hostId: "local" },
+      { ...subject, scope: { kind: "project" as const, projectId: "proj-2" } },
+      { ...subject, lane: undefined },
+      { ...subject, incarnation: -1 },
+      { hostId: "studio-01", scope: { kind: "global" as const }, terminalId: "g", incarnation: 1 },
+    ]) {
+      await expect(
+        client.switchWindowHost(ctxFor(5, 1), {
+          hostId: "studio-01",
+          newWindow: false,
+          projectId: "proj-1",
+          focusIntent: { intent: "open-assistant", subject: wrong } as never,
+        })
+      ).rejects.toMatchObject({ code: "VALIDATION" });
+    }
+    expect(windows.openRemoteProject).not.toHaveBeenCalled();
+  });
+
   it("names the asking renderer as the switch's requester, in its own window only", async () => {
     await client.switchWindowHost(ctxFor(5, 1), {
       hostId: "studio-01",
@@ -368,6 +522,93 @@ describe("RemoteHostsClient", () => {
     expect(windows.focusInWindow).toHaveBeenCalledWith(3, "local", "proj-local", focusIntent);
   });
 
+  it("carries a worktree to land on, and refuses one that names no worktree (#14569)", async () => {
+    // A worktree's id is its path, which can run well past a project id's length.
+    const focusIntent = {
+      intent: "focus-worktree",
+      worktreeId: `/srv/${"deep/".repeat(100)}proj-1-feature`,
+    } as const;
+    await client.switchWindowHost(ctxFor(5, 1), {
+      hostId: "studio-01",
+      newWindow: false,
+      projectId: "proj-1",
+      // Only the intent itself is carried on.
+      focusIntent: { ...focusIntent, panelId: "term-1" } as never,
+    });
+    expect(windows.openRemoteProject).toHaveBeenCalledWith(
+      1,
+      "studio-01",
+      "proj-1",
+      "/srv/proj-1",
+      focusIntent,
+      { requesterWebContentsId: 5 }
+    );
+    await client.switchWindowHost(ctxFor(5, 1), {
+      hostId: "local",
+      newWindow: false,
+      projectId: "proj-local",
+      focusIntent,
+    });
+    expect(windows.openLocalProject).toHaveBeenCalledWith(1, "proj-local", focusIntent, {
+      requesterWebContentsId: 5,
+    });
+
+    vi.mocked(windows.openRemoteProject).mockClear();
+    for (const worktreeId of ["", "w".repeat(10_000), 42, undefined, ["/srv/a"], { length: 1 }]) {
+      await expect(
+        client.switchWindowHost(ctxFor(5, 1), {
+          hostId: "studio-01",
+          newWindow: false,
+          projectId: "proj-1",
+          focusIntent: { intent: "focus-worktree", worktreeId } as never,
+        })
+      ).rejects.toMatchObject({ code: "VALIDATION" });
+    }
+    expect(windows.openRemoteProject).not.toHaveBeenCalled();
+  });
+
+  it("carries a restore from Canopy's Trash, and refuses one that names no trash", async () => {
+    const focusIntent = {
+      intent: "restore-trashed",
+      runId: "term-1",
+      spawnedAt: 100,
+      expiresAt: 120,
+    } as const;
+    await client.switchWindowHost(ctxFor(5, 1), {
+      hostId: "studio-01",
+      newWindow: false,
+      projectId: "proj-1",
+      focusIntent: { ...focusIntent, panelId: "term-9" } as never,
+    });
+    expect(windows.openRemoteProject).toHaveBeenCalledWith(
+      1,
+      "studio-01",
+      "proj-1",
+      "/srv/proj-1",
+      focusIntent,
+      { requesterWebContentsId: 5 }
+    );
+
+    vi.mocked(windows.openRemoteProject).mockClear();
+    for (const bad of [
+      { runId: "" },
+      { runId: 42 },
+      { spawnedAt: "100" },
+      { expiresAt: 1.5 },
+      { expiresAt: undefined },
+    ]) {
+      await expect(
+        client.switchWindowHost(ctxFor(5, 1), {
+          hostId: "studio-01",
+          newWindow: false,
+          projectId: "proj-1",
+          focusIntent: { ...focusIntent, ...bad } as never,
+        })
+      ).rejects.toMatchObject({ code: "VALIDATION" });
+    }
+    expect(windows.openRemoteProject).not.toHaveBeenCalled();
+  });
+
   it("focuses nothing in a window that came forward without being asked to", async () => {
     windows.projectOwner = vi.fn(() => ({ windowId: 2, showing: true }));
     windows.revealWindow = vi.fn();
@@ -428,6 +669,34 @@ describe("RemoteHostsClient", () => {
     expect(client.viewHasActiveAgent(7)).toBe(false);
     expect(client.viewHasActiveAgent(8)).toBe(false);
     expect(client.viewHasActiveAgent(9)).toBe(false);
+  });
+
+  it("asks a view's own host whether its project is granted residency, and no host for a local view (#13933)", () => {
+    manager.connect("studio-01");
+    manager.residentViews.set("studio-01", new Set([6, 8]));
+    keys.set(6, "studio-01:proj-1");
+    keys.set(7, "studio-01:proj-2");
+    keys.set(8, "proj-1");
+    keys.set(9, "studio-02:proj-1");
+
+    expect(client.viewKeepsResident(6)).toBe(true);
+    expect(client.viewKeepsResident(7)).toBe(false);
+    expect(client.viewKeepsResident(8)).toBe(false);
+    expect(client.viewKeepsResident(9)).toBe(false);
+  });
+
+  it("asks a view's own host whether an MCP session is bound to its project, and no host for a local view (#14228)", () => {
+    manager.connect("studio-01");
+    manager.mcpBoundViews.set("studio-01", new Set([6, 8]));
+    keys.set(6, "studio-01:proj-1");
+    keys.set(7, "studio-01:proj-2");
+    keys.set(8, "proj-1");
+    keys.set(9, "studio-02:proj-1");
+
+    expect(client.viewHasLiveMcpBinding(6)).toBe(true);
+    expect(client.viewHasLiveMcpBinding(7)).toBe(false);
+    expect(client.viewHasLiveMcpBinding(8)).toBe(false);
+    expect(client.viewHasLiveMcpBinding(9)).toBe(false);
   });
 
   it("puts the binding back when the view can't be moved, so the two never name different hosts", async () => {
@@ -505,19 +774,175 @@ describe("RemoteHostsClient", () => {
         projectId: "proj-1",
       });
 
+      // The host was up already: nothing was waited on, so nothing said "connecting".
       const seen = pendingEvents();
       expect(seen.map((pending) => pending?.phase ?? null)).toEqual([
-        "connecting",
         "opening",
         "opening",
         "opening",
         null,
       ]);
-      expect(seen[2]).toMatchObject({ hostName: "studio-01", projectName: "proj-1" });
+      expect(seen[1]).toMatchObject({ hostName: "studio-01", projectName: "proj-1" });
       // Committed, and still pending until the new view shows.
-      expect(seen[3]).toMatchObject({ switchId: seen[2]!.switchId, committed: true });
-      expect(seen[2]!.committed).toBeUndefined();
+      expect(seen[2]).toMatchObject({ switchId: seen[1]!.switchId, committed: true });
+      expect(seen[1]!.committed).toBeUndefined();
       expect(client.getPendingSwitch(ctxFor(5, 1))).toBeNull();
+    });
+
+    it("answers only the views the window is showing, not one loading in its cache", async () => {
+      let release!: (value: string) => void;
+      manager
+        .connect("studio-01")
+        .whenReady.mockImplementationOnce(() => new Promise<string>((r) => (release = r)));
+      windows.showsView = vi.fn((_windowId: number, webContentsId: number) => webContentsId === 5);
+      const switching = client.switchWindowHost(ctxFor(5, 1), {
+        hostId: "studio-01",
+        newWindow: false,
+        projectId: "proj-1",
+      });
+      await vi.waitFor(() => expect(pendingEvents()).toHaveLength(1));
+
+      expect(client.getPendingSwitch(ctxFor(5, 1))).toMatchObject({ phase: "connecting" });
+      // Never shown, so never told the switch is over: it asks again once revealed.
+      expect(client.getPendingSwitch(ctxFor(9, 1))).toBeNull();
+      expect(windows.showsView).toHaveBeenCalledWith(1, 9);
+
+      release("ready");
+      await expect(switching).resolves.toMatchObject({ outcome: "switched" });
+    });
+
+    it("says it is connecting from the start when the host isn't up yet", async () => {
+      let release!: (value: string) => void;
+      manager
+        .connect("studio-01")
+        .whenReady.mockImplementationOnce(() => new Promise<string>((r) => (release = r)));
+      const switching = client.switchWindowHost(ctxFor(5, 1), {
+        hostId: "studio-01",
+        newWindow: false,
+        projectId: "proj-1",
+      });
+      await vi.waitFor(() => expect(pendingEvents()).toHaveLength(1));
+      expect(pendingEvents()[0]).toMatchObject({
+        phase: "connecting",
+        request: { projectId: "proj-1" },
+      });
+      release("ready");
+      await expect(switching).resolves.toMatchObject({ outcome: "switched" });
+      expect(pendingEvents().at(-1)).toBeNull();
+    });
+
+    describe("a switch that fails", () => {
+      async function failedSwitch(
+        options?: Parameters<RemoteHostsClient["switchWindowHost"]>[2]
+      ): Promise<unknown> {
+        manager.connect("studio-01").whenReady.mockResolvedValueOnce("timeout");
+        return client
+          .switchWindowHost(
+            ctxFor(5, 1),
+            { hostId: "studio-01", newWindow: false, projectId: "proj-1" },
+            options
+          )
+          .then(
+            () => null,
+            (error: unknown) => error
+          );
+      }
+
+      it("stays on the window's screen, saying why, and tells the caller it is shown there", async () => {
+        const error = await failedSwitch();
+
+        const pending = client.getPendingSwitch(ctxFor(5, 1));
+        expect(pending).toMatchObject({
+          hostId: "studio-01",
+          phase: "failed",
+          request: { projectId: "proj-1" },
+          failure: { code: "HOST_DISCONNECTED" },
+        });
+        expect(pending!.failure!.message).toMatch(/Couldn't reach this host/);
+        expect(pendingEvents().at(-1)).toEqual(pending);
+        expect(error).toBeInstanceOf(AppError);
+        expect((error as AppError).details).toEqual({
+          code: "HOST_SWITCH_ON_SCREEN",
+          switchId: pending!.switchId,
+        });
+        // Nothing moves the window later: the host coming back changes nothing.
+        client.refreshPendingSwitches("studio-01");
+        expect(client.getPendingSwitch(ctxFor(5, 1))).toEqual(pending);
+        expect(windows.openRemoteProject).not.toHaveBeenCalled();
+      });
+
+      it("goes when the person cancels it", async () => {
+        await failedSwitch();
+        const { switchId } = client.getPendingSwitch(ctxFor(5, 1))!;
+
+        expect(client.cancelPendingSwitch(ctxFor(5, 1), { switchId })).toBe(true);
+        expect(client.getPendingSwitch(ctxFor(5, 1))).toBeNull();
+        expect(pendingEvents().at(-1)).toBeNull();
+        expect(bindings.get(1)).toBe("local");
+      });
+
+      it("goes when the window navigates anywhere else", async () => {
+        await failedSwitch();
+        client.supersedePendingSwitch(1);
+        expect(client.getPendingSwitch(ctxFor(5, 1))).toBeNull();
+
+        await failedSwitch();
+        await client.switchWindowHost(ctxFor(5, 1), {
+          hostId: "local",
+          newWindow: false,
+          projectId: "proj-local",
+        });
+        expect(client.getPendingSwitch(ctxFor(5, 1))).toBeNull();
+      });
+
+      it("is replaced by a Retry that lands", async () => {
+        await failedSwitch();
+        await expect(
+          client.switchWindowHost(ctxFor(5, 1), {
+            hostId: "studio-01",
+            newWindow: false,
+            projectId: "proj-1",
+          })
+        ).resolves.toMatchObject({ outcome: "switched" });
+        expect(client.getPendingSwitch(ctxFor(5, 1))).toBeNull();
+      });
+
+      it("goes when its host is removed, so a Retry never asks a host that is gone", async () => {
+        await failedSwitch();
+        await client.forget({ hostId: "studio-01" });
+        expect(client.getPendingSwitch(ctxFor(5, 1))).toBeNull();
+      });
+
+      it("keeps typing held for an earlier switch still opening when its screen is left", async () => {
+        registry.add({ name: "studio-02", connection: { kind: "ssh", target: "studio2.example" } });
+        let releaseOpen!: () => void;
+        vi.mocked(windows.openRemoteProject).mockImplementationOnce(
+          () => new Promise<void>((resolve) => (releaseOpen = resolve))
+        );
+        const first = client.switchWindowHost(ctxFor(5, 1), {
+          hostId: "studio-02",
+          newWindow: false,
+          projectId: "proj-2",
+        });
+        await vi.waitFor(() => expect(windows.openRemoteProject).toHaveBeenCalled());
+        const committed = client.getPendingSwitch(ctxFor(5, 1))!;
+        expect(committed.committed).toBe(true);
+
+        await failedSwitch();
+        const { switchId } = client.getPendingSwitch(ctxFor(5, 1))!;
+        expect(client.cancelPendingSwitch(ctxFor(5, 1), { switchId })).toBe(true);
+        expect(client.getPendingSwitch(ctxFor(5, 1))).toEqual(committed);
+
+        releaseOpen();
+        await first;
+        expect(client.getPendingSwitch(ctxFor(5, 1))).toBeNull();
+      });
+
+      it("is left to the caller for a view's own switch to another of its host's projects", async () => {
+        const error = await failedSwitch({ failureOnScreen: false });
+        expect(client.getPendingSwitch(ctxFor(5, 1))).toBeNull();
+        expect((error as AppError).details).toBeUndefined();
+      });
     });
 
     it("says Daintree is being started on the host while it is", async () => {
@@ -547,6 +972,20 @@ describe("RemoteHostsClient", () => {
       starting = true;
       client.refreshPendingSwitches("studio-01");
       expect(client.getPendingSwitch(ctxFor(5, 1))?.phase).toBe("starting");
+
+      // Each start attempt that ends and begins again leaves the phase as it
+      // is: the screen never reads connecting, starting, connecting…
+      const heard = pendingEvents().length;
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        starting = false;
+        client.refreshPendingSwitches("studio-01");
+        starting = true;
+        client.refreshPendingSwitches("studio-01");
+      }
+      starting = false;
+      client.refreshPendingSwitches("studio-01");
+      expect(client.getPendingSwitch(ctxFor(5, 1))?.phase).toBe("starting");
+      expect(pendingEvents()).toHaveLength(heard);
 
       release("ready");
       await switching;
@@ -723,6 +1162,119 @@ describe("RemoteHostsClient", () => {
     expect(bindings.get(1)).toBe("studio-02");
   });
 
+  describe("a click on a banner about a host's agent", () => {
+    const notice = { hostId: "studio-01", projectId: "proj-1", terminalId: "term-1" };
+
+    beforeEach(() => {
+      // Each window's view on screen: a project's, or a new window's welcome view.
+      windows.appViewId = vi.fn((windowId: number) => ({ 1: 5, 7: 70 })[windowId] ?? null);
+    });
+
+    it("brings the window forward and opens the notice's project there with the agent's pane focused", async () => {
+      const revealWindow = vi.fn();
+      windows.revealWindow = revealWindow;
+      await expect(client.openHostForNotice(1, notice)).resolves.toEqual({
+        outcome: "switched",
+        hostId: "studio-01",
+        projectId: "proj-1",
+      });
+      // The view on screen reports a rollback on its switch screen, so main doesn't too.
+      expect(windows.openRemoteProject).toHaveBeenCalledWith(
+        1,
+        "studio-01",
+        "proj-1",
+        "/srv/proj-1",
+        { intent: "focus-panel", panelId: "term-1" },
+        { requesterWebContentsId: 5 }
+      );
+      expect(revealWindow).toHaveBeenCalledWith(1);
+      expect(revealWindow.mock.invocationCallOrder[0]).toBeLessThan(
+        vi.mocked(windows.openRemoteProject).mock.invocationCallOrder[0]
+      );
+      expect(bindings.get(1)).toBe("studio-01");
+    });
+
+    it("opens it in a new window when none is open, its welcome view standing in to report", async () => {
+      windows.revealWindow = vi.fn();
+      await client.openHostForNotice(null, notice);
+      expect(windows.openWindow).toHaveBeenCalledTimes(1);
+      expect(windows.revealWindow).toHaveBeenCalledWith(7);
+      expect(windows.openRemoteProject).toHaveBeenCalledWith(
+        7,
+        "studio-01",
+        "proj-1",
+        "/srv/proj-1",
+        expect.objectContaining({ panelId: "term-1" }),
+        { requesterWebContentsId: 70 }
+      );
+      expect(bindings.get(7)).toBe("studio-01");
+    });
+
+    it("yields a window it opened to a click that took it over while it was opening", async () => {
+      let opened!: (windowId: number) => void;
+      windows.openWindow = vi.fn(() => new Promise<number>((resolve) => (opened = resolve)));
+      const first = client.openHostForNotice(null, notice);
+      const second = client.openHostForNotice(7, { ...notice, projectId: "proj-2" });
+      opened(7);
+      await expect(first).resolves.toEqual({ outcome: "superseded", hostId: "studio-01" });
+      await expect(second).resolves.toMatchObject({ outcome: "switched", projectId: "proj-2" });
+      expect(windows.openRemoteProject).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps a failure on the window's switch screen, as a switch the person asked for does", async () => {
+      manager.connect("studio-01").whenReady.mockResolvedValueOnce("timeout");
+      const error = await client.openHostForNotice(1, notice).then(
+        () => null,
+        (failure: unknown) => failure
+      );
+      expect((error as AppError).details).toMatchObject({ code: "HOST_SWITCH_ON_SCREEN" });
+      expect(client.getPendingSwitch(ctxFor(5, 1))).toMatchObject({
+        hostId: "studio-01",
+        phase: "failed",
+        request: { projectId: "proj-1" },
+      });
+      expect(bindings.get(1)).toBe("local");
+    });
+
+    it("returns to the project this machine last had open there for a notice that named none", async () => {
+      manager.last = { projectId: "proj-2", path: "/srv/proj-2", name: "proj-2" };
+      await expect(client.openHostForNotice(1, { ...notice, projectId: null })).resolves.toEqual({
+        outcome: "switched",
+        hostId: "studio-01",
+        projectId: "proj-2",
+      });
+      expect(windows.openRemoteProject).toHaveBeenCalledWith(
+        1,
+        "studio-01",
+        "proj-2",
+        "/srv/proj-2",
+        undefined,
+        { requesterWebContentsId: 5 }
+      );
+    });
+
+    it("offers the host's project list in the window when there is nothing to return to", async () => {
+      windows.notifyWindow = vi.fn();
+      const projectless = { ...notice, projectId: null };
+      await expect(client.openHostForNotice(1, projectless)).resolves.toEqual({
+        outcome: "choose-project",
+        hostId: "studio-01",
+      });
+      expect(windows.openRemoteProject).not.toHaveBeenCalled();
+      expect(bindings.get(1)).toBe("local");
+      expect(windows.notifyWindow).toHaveBeenCalledWith(1, { type: "project-offer" });
+      expect(client.takeProjectOffer(ctxFor(5, 1))).toBe("studio-01");
+      expect(client.takeProjectOffer(ctxFor(5, 1))).toBeNull();
+
+      // A second click watches the window for its close once, not again.
+      await client.openHostForNotice(1, projectless);
+      const watches = vi.mocked(windows.watchWindow).mock.calls.filter(([id]) => id === 1);
+      expect(watches).toHaveLength(1);
+      watches[0][1]();
+      expect(client.takeProjectOffer(ctxFor(5, 1))).toBeNull();
+    });
+  });
+
   describe("a switch that names no project", () => {
     it("returns the window to the project the host remembers for this machine", async () => {
       manager.last = { projectId: "proj-2", path: "/srv/proj-2", name: "proj-2" };
@@ -796,7 +1348,39 @@ describe("RemoteHostsClient", () => {
       manager.readiness = "host-mode-off";
       await expect(
         client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false })
-      ).rejects.toMatchObject({ code: "HOST_MODE_OFF" });
+      ).rejects.toMatchObject({
+        code: "HOST_MODE_OFF",
+        userMessage: "Daintree isn't running in Host mode on studio-01. Set it up to work there.",
+      });
+      expect(bindings.get(1)).toBe("local");
+    });
+
+    it("doesn't ask to set up a host this machine has worked with: its Daintree isn't listening", async () => {
+      manager.readiness = "host-mode-off";
+      registry.recordObservation("studio-01", { lastSeenAt: 1_000 });
+      const failure = await client
+        .switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false })
+        .catch((error: unknown) => error);
+      expect(failure).toMatchObject({
+        code: "HOST_MODE_OFF",
+        userMessage: "Daintree isn't listening on studio-01. Try again once it's running there.",
+      });
+    });
+
+    it("says the host may be restarting when its Daintree stopped listening moments ago", async () => {
+      manager.readiness = "timeout";
+      manager.connect("studio-01").restarting = true;
+      await expect(
+        client.switchWindowHost(ctxFor(5, 1), {
+          hostId: "studio-01",
+          newWindow: false,
+          projectId: "proj-1",
+        })
+      ).rejects.toMatchObject({
+        code: "HOST_DISCONNECTED",
+        userMessage:
+          "Daintree on studio-01 stopped listening moments ago and hasn't come back yet. If it's restarting, try again in a moment.",
+      });
       expect(bindings.get(1)).toBe("local");
     });
 
@@ -1001,6 +1585,355 @@ describe("RemoteHostsClient", () => {
       await expect(
         client.switchWindowHost(ctxFor(5, 1), { hostId: "local", newWindow: false })
       ).resolves.toEqual({ outcome: "choose-project", hostId: "local" });
+    });
+
+    describe("from a window showing a project (#14564)", () => {
+      const copy = (projectId: string, path = `/srv/${projectId}`) => ({
+        projectId,
+        name: "App",
+        path,
+      });
+      /** Whether `work` settles well inside the lookup's 3 s deadline. */
+      const promptly = <T>(work: Promise<T>) =>
+        Promise.race([
+          work,
+          new Promise<"still waiting">((resolve) =>
+            setTimeout(() => resolve("still waiting"), 500)
+          ),
+        ]);
+      let copiesOnHost: Mock<HostSwitchService["copiesOn"]>;
+
+      beforeEach(() => {
+        copiesOnHost = vi.fn<HostSwitchService["copiesOn"]>(async () => []);
+        registerRemoteService("hostSwitchService", {
+          copiesOn: copiesOnHost,
+        } as unknown as HostSwitchService);
+        keys.set(5, "proj-local");
+        manager.last = { projectId: "proj-2", path: "/srv/proj-2", name: "proj-2" };
+        windows.recentProjectsOnHost = vi.fn((windowId: number | null) =>
+          windowId === 1 ? ["proj-9"] : []
+        );
+      });
+
+      afterEach(() => _resetRemoteServicesForTest());
+
+      it("lands on that project's copy on the host, ahead of anything to return to", async () => {
+        copiesOnHost.mockResolvedValueOnce([copy("proj-copy")]);
+        await expect(
+          client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false })
+        ).resolves.toEqual({ outcome: "switched", hostId: "studio-01", projectId: "proj-copy" });
+        expect(copiesOnHost).toHaveBeenCalledWith(
+          { hostId: "local", projectId: "proj-local" },
+          "studio-01"
+        );
+        expect(windows.openRemoteProject).toHaveBeenCalledWith(
+          1,
+          "studio-01",
+          "proj-copy",
+          "/srv/proj-copy",
+          undefined,
+          { requesterWebContentsId: 5 }
+        );
+        expect(manager.get("studio-01")!.describeProject).not.toHaveBeenCalled();
+        expect(manager.get("studio-01")!.lastActiveProject).not.toHaveBeenCalled();
+      });
+
+      it("lands on a host's copy the first time, with nothing there to return to", async () => {
+        manager.last = null;
+        windows.recentProjectsOnHost = vi.fn(() => []);
+        copiesOnHost.mockResolvedValueOnce([copy("proj-copy")]);
+        await expect(
+          client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false })
+        ).resolves.toEqual({ outcome: "switched", hostId: "studio-01", projectId: "proj-copy" });
+      });
+
+      it("takes the copy this window was in most recently when the host has several", async () => {
+        copiesOnHost.mockResolvedValueOnce([
+          copy("proj-b", "/srv/b"),
+          copy("proj-c", "/srv/c"),
+          copy("proj-a", "/srv/a"),
+        ]);
+        windows.recentProjectsOnHost = vi.fn(() => ["proj-9", "proj-c", "proj-b"]);
+        await expect(
+          client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false })
+        ).resolves.toEqual({ outcome: "switched", hostId: "studio-01", projectId: "proj-c" });
+
+        // None of them in this window's history: the first by path, as the sidebar's row opens.
+        copiesOnHost.mockResolvedValueOnce([copy("proj-a", "/srv/z"), copy("proj-z", "/srv/a")]);
+        windows.recentProjectsOnHost = vi.fn(() => ["proj-9"]);
+        await expect(
+          client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false })
+        ).resolves.toEqual({ outcome: "switched", hostId: "studio-01", projectId: "proj-z" });
+      });
+
+      it("never lands on a copy with no path", async () => {
+        copiesOnHost.mockResolvedValueOnce([copy("proj-blank", ""), copy("proj-copy", "/srv/z")]);
+        await expect(
+          client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false })
+        ).resolves.toEqual({ outcome: "switched", hostId: "studio-01", projectId: "proj-copy" });
+
+        keys.set(5, toHostScopedKey("studio-01", "proj-copy"));
+        vi.mocked(windows.lastLocalProjectId).mockReturnValue("local-a");
+        copiesOnHost.mockResolvedValueOnce([copy("local-blank", "")]);
+        await expect(
+          client.switchWindowHost(ctxFor(5, 1), { hostId: "local", newWindow: false })
+        ).resolves.toEqual({ outcome: "switched", hostId: "local", projectId: "local-a" });
+      });
+
+      it("returns where it would have when the host has no copy, or can't say", async () => {
+        copiesOnHost.mockResolvedValueOnce([]);
+        await expect(
+          client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false })
+        ).resolves.toEqual({ outcome: "switched", hostId: "studio-01", projectId: "proj-9" });
+
+        copiesOnHost.mockResolvedValueOnce(null);
+        windows.recentProjectsOnHost = vi.fn(() => []);
+        await expect(
+          client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false })
+        ).resolves.toEqual({ outcome: "switched", hostId: "studio-01", projectId: "proj-2" });
+
+        copiesOnHost.mockRejectedValueOnce(new Error("link dropped"));
+        manager.last = null;
+        await expect(
+          client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false })
+        ).resolves.toEqual({ outcome: "choose-project", hostId: "studio-01" });
+      });
+
+      it("passes over a copy another window is showing, and never brings that window forward", async () => {
+        copiesOnHost.mockResolvedValue([copy("proj-copy")]);
+        windows.projectOwner = vi.fn((_host: string, projectId: string) =>
+          projectId === "proj-copy" ? { windowId: 2, showing: true } : null
+        );
+        windows.revealWindow = vi.fn();
+        await expect(
+          client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false })
+        ).resolves.toEqual({ outcome: "switched", hostId: "studio-01", projectId: "proj-9" });
+
+        // Nothing else to land on: the host's project list, still not the other window.
+        windows.recentProjectsOnHost = vi.fn(() => []);
+        manager.last = null;
+        await expect(
+          client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false })
+        ).resolves.toEqual({ outcome: "choose-project", hostId: "studio-01" });
+        expect(windows.revealWindow).not.toHaveBeenCalled();
+        expect(windows.openRemoteProject).not.toHaveBeenCalledWith(
+          expect.anything(),
+          "studio-01",
+          "proj-copy",
+          expect.anything(),
+          undefined,
+          expect.anything()
+        );
+      });
+
+      it("takes a free copy past one another window is showing", async () => {
+        copiesOnHost.mockResolvedValueOnce([
+          copy("proj-taken", "/srv/a"),
+          copy("proj-free", "/srv/b"),
+        ]);
+        windows.recentProjectsOnHost = vi.fn(() => ["proj-taken", "proj-9"]);
+        windows.projectOwner = vi.fn((_host: string, projectId: string) =>
+          projectId === "proj-taken" ? { windowId: 2, showing: true } : null
+        );
+        windows.revealWindow = vi.fn();
+        await expect(
+          client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false })
+        ).resolves.toEqual({ outcome: "switched", hostId: "studio-01", projectId: "proj-free" });
+        expect(windows.revealWindow).not.toHaveBeenCalled();
+      });
+
+      it("passes over a copy another window started showing while the host was answering", async () => {
+        let shownIn2 = false;
+        windows.projectOwner = vi.fn((_host: string, projectId: string) =>
+          projectId === "proj-copy" && shownIn2 ? { windowId: 2, showing: true } : null
+        );
+        copiesOnHost.mockImplementationOnce(async () => {
+          shownIn2 = true;
+          return [copy("proj-copy")];
+        });
+        await expect(
+          client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false })
+        ).resolves.toEqual({ outcome: "switched", hostId: "studio-01", projectId: "proj-9" });
+      });
+
+      it("looks for no copy for a new window, a named project, a scratch, or the host it is on", async () => {
+        copiesOnHost.mockResolvedValue([copy("proj-copy")]);
+        // A new window has no history of its own there: the host's memory, in window 7.
+        await expect(
+          client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: true })
+        ).resolves.toEqual({ outcome: "switched", hostId: "studio-01", projectId: "proj-2" });
+        expect(windows.openRemoteProject).toHaveBeenLastCalledWith(
+          7,
+          "studio-01",
+          "proj-2",
+          "/srv/proj-2"
+        );
+        expect(bindings.get(1)).toBe("local");
+
+        await expect(
+          client.switchWindowHost(ctxFor(5, 1), {
+            hostId: "studio-01",
+            newWindow: false,
+            projectId: "proj-1",
+          })
+        ).resolves.toEqual({ outcome: "switched", hostId: "studio-01", projectId: "proj-1" });
+
+        keys.set(5, "6f1c2b9e-3a4d-4c5e-8f60-1a2b3c4d5e6f");
+        await expect(
+          client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false })
+        ).resolves.toEqual({ outcome: "switched", hostId: "studio-01", projectId: "proj-9" });
+
+        keys.set(5, toHostScopedKey("studio-01", "proj-1"));
+        await expect(
+          client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false })
+        ).resolves.toEqual({ outcome: "switched", hostId: "studio-01", projectId: "proj-9" });
+        expect(copiesOnHost).not.toHaveBeenCalled();
+      });
+
+      it("looks for no copy when the asking view is parked in the window's cache", async () => {
+        windows.showsView = vi.fn(() => false);
+        copiesOnHost.mockResolvedValue([copy("proj-copy")]);
+        await expect(
+          client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false })
+        ).resolves.toEqual({ outcome: "switched", hostId: "studio-01", projectId: "proj-9" });
+        expect(windows.showsView).toHaveBeenCalledWith(1, 5);
+        expect(copiesOnHost).not.toHaveBeenCalled();
+      });
+
+      it("returns where it would have when the host doesn't say in time", async () => {
+        const slowClient = new RemoteHostsClient({
+          registry,
+          manager: manager as unknown as RemoteHostManager,
+          bindings,
+          router,
+          senders: {
+            projectKeyFor: () => "proj-local",
+            windowIdFor: (id) => (id === 5 ? 1 : null),
+          },
+          windows,
+          installRouter,
+          emit: () => {},
+          copyLookupTimeoutMs: 10,
+        });
+        try {
+          let answer: (copies: ReturnType<typeof copy>[]) => void = () => {};
+          copiesOnHost.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
+          await expect(
+            slowClient.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false })
+          ).resolves.toEqual({ outcome: "switched", hostId: "studio-01", projectId: "proj-9" });
+          // Its answer, late, moves nothing.
+          answer([copy("proj-copy")]);
+          await new Promise((resolve) => setTimeout(resolve, 0));
+          expect(windows.openRemoteProject).toHaveBeenCalledTimes(1);
+        } finally {
+          await slowClient.dispose();
+        }
+      });
+
+      it("lands a host's project on this machine's copy of it", async () => {
+        keys.set(5, toHostScopedKey("studio-01", "proj-1"));
+        vi.mocked(windows.lastLocalProjectId).mockReturnValue("local-a");
+        copiesOnHost.mockResolvedValueOnce([copy("local-copy")]);
+        await expect(
+          client.switchWindowHost(ctxFor(5, 1), { hostId: "local", newWindow: false })
+        ).resolves.toEqual({ outcome: "switched", hostId: "local", projectId: "local-copy" });
+        expect(copiesOnHost).toHaveBeenCalledWith(
+          { hostId: "studio-01", projectId: "proj-1" },
+          "local"
+        );
+        expect(windows.openLocalProject).toHaveBeenCalledWith(1, "local-copy", undefined, {
+          requesterWebContentsId: 5,
+        });
+
+        // No copy here: this machine's last project, as before.
+        copiesOnHost.mockResolvedValueOnce([]);
+        await expect(
+          client.switchWindowHost(ctxFor(5, 1), { hostId: "local", newWindow: false })
+        ).resolves.toEqual({ outcome: "switched", hostId: "local", projectId: "local-a" });
+      });
+
+      it("passes over this machine's copy while another window is showing it", async () => {
+        keys.set(5, toHostScopedKey("studio-01", "proj-1"));
+        vi.mocked(windows.lastLocalProjectId).mockReturnValue("local-a");
+        windows.projectOwner = vi.fn((_host: string, projectId: string) =>
+          projectId === "local-copy" ? { windowId: 2, showing: true } : null
+        );
+        windows.redirectToLocalOwner = vi.fn((projectId: string) =>
+          projectId === "local-copy" ? 2 : null
+        );
+        windows.revealWindow = vi.fn();
+        copiesOnHost.mockResolvedValueOnce([copy("local-copy")]);
+        await expect(
+          client.switchWindowHost(ctxFor(5, 1), { hostId: "local", newWindow: false })
+        ).resolves.toEqual({ outcome: "switched", hostId: "local", projectId: "local-a" });
+        expect(windows.redirectToLocalOwner).not.toHaveBeenCalledWith(
+          "local-copy",
+          expect.anything()
+        );
+        expect(windows.revealWindow).not.toHaveBeenCalled();
+      });
+
+      it("gives way to a newer switch made while the host was looking for its copy", async () => {
+        let answer: (copies: ReturnType<typeof copy>[]) => void = () => {};
+        copiesOnHost.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
+        const first = client.switchWindowHost(ctxFor(5, 1), {
+          hostId: "studio-01",
+          newWindow: false,
+        });
+        await vi.waitFor(() => expect(copiesOnHost).toHaveBeenCalledTimes(1));
+        vi.mocked(windows.lastLocalProjectId).mockReturnValueOnce("local-a");
+        const second = client.switchWindowHost(ctxFor(5, 1), { hostId: "local", newWindow: false });
+        await expect(promptly(first)).resolves.toEqual({
+          outcome: "superseded",
+          hostId: "studio-01",
+        });
+        answer([copy("proj-copy")]);
+        await expect(second).resolves.toEqual({
+          outcome: "switched",
+          hostId: "local",
+          projectId: "local-a",
+        });
+        expect(windows.openRemoteProject).not.toHaveBeenCalled();
+      });
+
+      it("gives way at once to a Cancel while the host is looking for its copy", async () => {
+        let answer: (copies: ReturnType<typeof copy>[]) => void = () => {};
+        copiesOnHost.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
+        const switching = client.switchWindowHost(ctxFor(5, 1), {
+          hostId: "studio-01",
+          newWindow: false,
+        });
+        await vi.waitFor(() => expect(copiesOnHost).toHaveBeenCalledTimes(1));
+        const { switchId } = client.getPendingSwitch(ctxFor(5, 1))!;
+        expect(client.cancelPendingSwitch(ctxFor(5, 1), { switchId })).toBe(true);
+        await expect(promptly(switching)).resolves.toEqual({
+          outcome: "superseded",
+          hostId: "studio-01",
+        });
+        answer([copy("proj-copy")]);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(windows.openRemoteProject).not.toHaveBeenCalled();
+        expect(bindings.get(1)).toBe("local");
+        expect(client.getPendingSwitch(ctxFor(5, 1))).toBeNull();
+      });
+
+      it("lands nowhere when the host is removed while it looks for its copy", async () => {
+        let answer: (copies: ReturnType<typeof copy>[]) => void = () => {};
+        copiesOnHost.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
+        const switching = client.switchWindowHost(ctxFor(5, 1), {
+          hostId: "studio-01",
+          newWindow: false,
+        });
+        await vi.waitFor(() => expect(copiesOnHost).toHaveBeenCalledTimes(1));
+        const link = manager.get("studio-01")!;
+        await client.forget({ hostId: "studio-01" });
+        answer([]);
+        await expect(switching).resolves.toEqual({ outcome: "superseded", hostId: "studio-01" });
+        expect(link.describeProject).not.toHaveBeenCalled();
+        expect(link.lastActiveProject).not.toHaveBeenCalled();
+        expect(windows.openRemoteProject).not.toHaveBeenCalled();
+        expect(bindings.get(1)).toBe("local");
+      });
     });
   });
 
@@ -1989,6 +2922,17 @@ describe("RemoteHostsClient", () => {
     });
   });
 
+  // A restart abandons an attempt under way: from a caller that only needs the
+  // link, it would keep cutting a slow host off before it could answer.
+  it("starts a link over only when a person asks to, never for a caller waiting on it", async () => {
+    client.connect({ hostId: "studio-01", restart: true });
+    expect(manager.connect).toHaveBeenLastCalledWith("studio-01", { restart: true });
+    client.connect({ hostId: "studio-01" });
+    expect(manager.connect).toHaveBeenLastCalledWith("studio-01", { restart: false });
+    await client.connectAndWait("studio-01", 1_000);
+    expect(manager.connect).toHaveBeenLastCalledWith("studio-01");
+  });
+
   it("fills each host's summary from the last frame host metrics holds", () => {
     const summary = { agentsObserved: { working: 2 } };
     registerRemoteService("hostMetrics", {
@@ -2176,6 +3120,144 @@ describe("RemoteHostsClient", () => {
       manager.emit("studio-01", connected);
       await new Promise((resolve) => setTimeout(resolve, 0));
       expect(resyncs()).toHaveLength(0);
+    });
+  });
+  describe("a window on a host whose Daintree isn't listening", () => {
+    const parked: HostConnectionState = {
+      status: "unreachable",
+      lastSeenAt: 1_000,
+      detail: "Daintree isn't running in Host mode there (no host.json).",
+      hostModeOff: true,
+      stoppedRetrying: true,
+    };
+    const connected: HostConnectionState = {
+      status: "connected",
+      rttMs: 1,
+      handshake: {} as never,
+    };
+    /** The check the window's link made, failing the same way. */
+    function checkedAgain() {
+      manager.emit("studio-01", { status: "connecting", attempt: 2 });
+      manager.emit("studio-01", parked);
+    }
+
+    it("checks back on the host now and then, backing off while it stays away", async () => {
+      vi.useFakeTimers();
+      try {
+        const link = manager.connect("studio-01");
+        bindings.set(1, "studio-01");
+        manager.emit("studio-01", parked);
+        vi.advanceTimersByTime(29_999);
+        expect(link.retryNow).not.toHaveBeenCalled();
+        vi.advanceTimersByTime(1);
+        expect(link.retryNow).toHaveBeenCalledTimes(1);
+
+        checkedAgain();
+        vi.advanceTimersByTime(59_999);
+        expect(link.retryNow).toHaveBeenCalledTimes(1);
+        vi.advanceTimersByTime(1);
+        expect(link.retryNow).toHaveBeenCalledTimes(2);
+
+        // However long it stays away, it is checked at least every five minutes.
+        for (let i = 0; i < 6; i++) {
+          checkedAgain();
+          vi.advanceTimersByTime(5 * 60_000);
+        }
+        expect(link.retryNow).toHaveBeenCalledTimes(8);
+
+        // Back, and away again later: the wait starts over.
+        manager.emit("studio-01", connected);
+        manager.emit("studio-01", parked);
+        vi.advanceTimersByTime(30_000);
+        expect(link.retryNow).toHaveBeenCalledTimes(9);
+      } finally {
+        await client.dispose();
+        vi.useRealTimers();
+      }
+    });
+
+    it("never dials a host no window shows, and stops once the last one leaves", async () => {
+      vi.useFakeTimers();
+      try {
+        const link = manager.connect("studio-01");
+        manager.emit("studio-01", parked);
+        vi.advanceTimersByTime(60 * 60_000);
+        expect(link.retryNow).not.toHaveBeenCalled();
+
+        bindings.set(1, "studio-01");
+        bindings.set(2, "studio-01");
+        vi.advanceTimersByTime(30_000);
+        expect(link.retryNow).toHaveBeenCalledTimes(1);
+
+        // One of two windows closing leaves the other still waiting on it.
+        checkedAgain();
+        bindings.release(1);
+        vi.advanceTimersByTime(60_000);
+        expect(link.retryNow).toHaveBeenCalledTimes(2);
+
+        checkedAgain();
+        bindings.set(2, "local");
+        vi.advanceTimersByTime(60 * 60_000);
+        expect(link.retryNow).toHaveBeenCalledTimes(2);
+      } finally {
+        await client.dispose();
+        vi.useRealTimers();
+      }
+    });
+
+    it("keeps the wait already under way when another window comes to the host", async () => {
+      vi.useFakeTimers();
+      try {
+        const link = manager.connect("studio-01");
+        bindings.set(1, "studio-01");
+        manager.emit("studio-01", parked);
+        vi.advanceTimersByTime(20_000);
+        bindings.set(2, "studio-01");
+        vi.advanceTimersByTime(10_000);
+        expect(link.retryNow).toHaveBeenCalledTimes(1);
+      } finally {
+        await client.dispose();
+        vi.useRealTimers();
+      }
+    });
+
+    it("dials nothing once the client is disposed with a check pending", async () => {
+      vi.useFakeTimers();
+      try {
+        const link = manager.connect("studio-01");
+        bindings.set(1, "studio-01");
+        manager.emit("studio-01", parked);
+        vi.advanceTimersByTime(10_000);
+        await client.dispose();
+        vi.advanceTimersByTime(60 * 60_000);
+        expect(link.retryNow).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("leaves a link alone that stopped for any other reason", async () => {
+      vi.useFakeTimers();
+      try {
+        const link = manager.connect("studio-01");
+        bindings.set(1, "studio-01");
+        // ssh refused the login: a check would knock on sshd for nothing.
+        manager.emit("studio-01", {
+          status: "unreachable",
+          lastSeenAt: 1_000,
+          detail: "Permission denied (publickey).",
+          stoppedRetrying: true,
+        });
+        vi.advanceTimersByTime(60 * 60_000);
+        // Parked, then let go (removed, disconnected): nothing left to check.
+        manager.emit("studio-01", parked);
+        manager.emit("studio-01", { status: "disconnected" });
+        vi.advanceTimersByTime(60 * 60_000);
+        expect(link.retryNow).not.toHaveBeenCalled();
+      } finally {
+        await client.dispose();
+        vi.useRealTimers();
+      }
     });
   });
 });

@@ -7,6 +7,8 @@ import type { LintFinding } from "../lib/lint/index.js";
 import { caretEngineAdvisory } from "../../../../electron/schemas/pluginManifestAdvisories.js";
 import { sendCliRequest, DaintreeUnavailableError } from "../ipc/client.js";
 import { parseJsonText } from "../lib/parseJsonText.js";
+import { collectPluginManifestAssets } from "../../../../shared/config/pluginManifestAssets.js";
+import { findPluginAssetProblem } from "../../../../electron/services/plugin/pluginManifestAssetFiles.js";
 
 /**
  * `doctor` is `validate` and `lint` plus the checks that only make sense
@@ -119,7 +121,7 @@ async function checkNotIgnored(
   );
   const rule = detail.stdout.trim().split("\n")[0]?.split("\t")[0] ?? "an ignore rule";
   errors.push(
-    `${label} "${relativePath}" is git-ignored by ${rule} — add "!dist/" and "!dist/**" to the plugin's .gitignore, and relax any ancestor rule that excludes the plugin directory itself, since git never reaches a .gitignore inside an excluded directory`
+    `${label} "${relativePath}" is git-ignored by ${rule} — un-ignore it in the plugin's .gitignore (for build output, "!dist/" and "!dist/**"), and relax any ancestor rule that excludes the plugin directory itself, since git never reaches a .gitignore inside an excluded directory`
   );
 }
 
@@ -197,28 +199,59 @@ async function readManifest(dir: string): Promise<Record<string, unknown> | null
   }
 }
 
-/** Every relative build target the manifest names: `main` plus each view's component. */
-function buildTargets(manifest: Record<string, unknown> | null): Array<[string, string]> {
-  if (!manifest) return [];
-  const targets: Array<[string, string]> = [];
-  if (typeof manifest.main === "string" && manifest.main.length > 0) {
-    targets.push(["main", manifest.main]);
-  }
-  const contributes = manifest.contributes as { views?: unknown } | undefined;
-  const views = Array.isArray(contributes?.views) ? contributes.views : [];
-  views.forEach((view, index) => {
-    const componentPath = (view as { componentPath?: unknown } | null)?.componentPath;
-    if (typeof componentPath === "string" && componentPath.length > 0) {
-      targets.push([`views[${index}].componentPath`, componentPath]);
-    }
-  });
-  return targets;
-}
-
 interface HostQuery {
   host: DoctorHostReport;
   /** Directory name → the state Daintree computed for it. Empty when unreachable. */
   states: Map<string, string>;
+  /** Directory name → slot claims Daintree refused for it, worded. Empty when unreachable. */
+  surfaceNotes: Map<string, string[]>;
+}
+
+interface HostSurfaceRefusal {
+  slot?: string;
+  pluginId?: string;
+  reason?: string;
+  heldBy?: string;
+}
+
+/**
+ * Why each refused slot claim isn't showing, keyed by the directory of the
+ * plugin that made it. The host names plugins by instance key; the plugin rows
+ * it sends alongside map those back to directories and names.
+ */
+export function describeHostSurfaceRefusals(
+  plugins: Array<{ instanceId?: string; dirName?: string; displayName?: string; id?: string }>,
+  refusals: HostSurfaceRefusal[]
+): Map<string, string[]> {
+  const byInstance = new Map(
+    plugins
+      .filter((plugin) => typeof plugin.instanceId === "string")
+      .map((plugin) => [plugin.instanceId as string, plugin])
+  );
+  const notes = new Map<string, string[]>();
+  for (const refusal of refusals) {
+    const dirName = byInstance.get(refusal.pluginId ?? "")?.dirName;
+    if (typeof dirName !== "string" || typeof refusal.slot !== "string") continue;
+    const holder = byInstance.get(refusal.heldBy ?? "");
+    const holderName = holder?.displayName ?? holder?.id ?? refusal.heldBy ?? "another plugin";
+    // A file editor slot is a `fileEditors[].default` pattern, not a
+    // `surfaces` key — name the field the author would go and change.
+    const what = refusal.slot.startsWith("fileEditor:")
+      ? `the default editor for "${refusal.slot.slice("fileEditor:".length)}" (fileEditors[].default) is not in force`
+      : `surfaces.${refusal.slot} is not showing`;
+    const note =
+      refusal.reason === "outranked"
+        ? `${what}: ${holderName} also claims it in this project, and only one plugin can — ${holderName} keeps it because its plugin id sorts first`
+        : refusal.reason === "unresolved-view"
+          ? `${what}: the view it names registered nothing Daintree can show`
+          : refusal.reason === "claim-kind"
+            ? `${what}: the claim carries the wrong kind of value for that slot`
+            : refusal.reason === "installed-exclusive"
+              ? `${what}: only a project's own plugins can replace it`
+              : `${what} (${refusal.reason ?? "unknown reason"})`;
+    notes.set(dirName, [...(notes.get(dirName) ?? []), note]);
+  }
+  return notes;
 }
 
 async function queryHost(projectRoot: string, offline: boolean): Promise<HostQuery> {
@@ -233,13 +266,21 @@ async function queryHost(projectRoot: string, offline: boolean): Promise<HostQue
         note: "Skipped — running offline.",
       },
       states: empty,
+      surfaceNotes: new Map(),
     };
   }
   try {
     const status = (await sendCliRequest("plugin.project.status", { projectRoot })) as {
       known?: boolean;
       trust?: { decision?: string | null; enabled?: boolean } | null;
-      plugins?: Array<{ id?: string; dirName?: string; state?: string }>;
+      plugins?: Array<{
+        id?: string;
+        instanceId?: string;
+        dirName?: string;
+        displayName?: string;
+        state?: string;
+      }>;
+      surfaceRefusals?: HostSurfaceRefusal[];
     };
     if (!status.known) {
       return {
@@ -251,6 +292,7 @@ async function queryHost(projectRoot: string, offline: boolean): Promise<HostQue
           note: "Daintree is running but has never opened this project, so it has computed no trust or staging state for it yet.",
         },
         states: empty,
+        surfaceNotes: new Map(),
       };
     }
     const decision = status.trust?.decision ?? null;
@@ -273,6 +315,8 @@ async function queryHost(projectRoot: string, offline: boolean): Promise<HostQue
           )
           .map((plugin) => [plugin.dirName, plugin.state])
       ),
+      // An older host sends no `surfaceRefusals`, which reads as none.
+      surfaceNotes: describeHostSurfaceRefusals(status.plugins ?? [], status.surfaceRefusals ?? []),
     };
   } catch (err) {
     const note =
@@ -282,6 +326,7 @@ async function queryHost(projectRoot: string, offline: boolean): Promise<HostQue
     return {
       host: { reachable: false, known: false, trustDecision: null, trustEnabled: null, note },
       states: empty,
+      surfaceNotes: new Map(),
     };
   }
 }
@@ -300,7 +345,7 @@ export async function runDoctor(
   const root = path.resolve(projectRoot);
   const pluginsDir = path.join(root, ...PROJECT_PLUGINS_SEGMENTS);
 
-  const { host, states: hostStates } = await queryHost(root, opts.offline === true);
+  const { host, states: hostStates, surfaceNotes } = await queryHost(root, opts.offline === true);
 
   if (!(await pathExists(pluginsDir))) {
     return { projectRoot: root, pluginsDir, plugins: [], host, ok: true };
@@ -332,31 +377,42 @@ export async function runDoctor(
     if (caret) warnings.push(caret);
 
     const realDir = await fs.realpath(dir).catch(() => path.resolve(dir));
-    for (const [label, target] of buildTargets(manifest)) {
+    for (const asset of collectPluginManifestAssets(manifest)) {
+      const { field: label, path: target } = asset;
       if (path.isAbsolute(target) || target.includes("\\")) {
-        errors.push(`${label} "${target}" must be a relative path using forward slashes`);
+        errors.push(`${label} "${asset.ref}" must be a relative path using forward slashes`);
         continue;
       }
       const absolute = path.join(dir, target);
-      // The host resolves entry paths against the plugin directory and refuses
+      // The host resolves asset paths against the plugin directory and refuses
       // anything that climbs out of it, so a `../` target is dead on arrival
-      // even though it exists and is committed. Checked after realpath, since a
-      // symlink inside the directory escapes just as effectively as `../`.
-      const realTarget = await fs.realpath(absolute).catch(() => path.resolve(absolute));
-      const relative = path.relative(realDir, realTarget);
-      if (relative.startsWith("..") || path.isAbsolute(relative)) {
+      // even though it exists and is committed — and a symlink inside the
+      // directory escapes just as effectively. Same check the installer runs.
+      const problem = await findPluginAssetProblem(realDir, dir, asset);
+      if (problem && !asset.required && problem.kind === "missing") {
+        warnings.push(`${problem.message} — that chapter will play silently`);
+        continue;
+      }
+      if (problem) {
         errors.push(
-          `${label} "${target}" resolves outside the plugin directory — the host refuses an entry path that climbs out of it, so this cannot load however it is committed`
+          problem.kind === "missing"
+            ? `${problem.message} — build the plugin or fix the path`
+            : problem.kind === "outside"
+              ? `${problem.message} — the host refuses a path that climbs out of it, so this cannot load however it is committed`
+              : problem.message
         );
         continue;
       }
-      await checkEsmModule(absolute, label, errors, warnings);
+      if (asset.module) await checkEsmModule(absolute, label, errors, warnings);
       if (repoRoot) {
+        // An optional file a clone lacks degrades the same way a missing one
+        // does, so its git findings are warnings too.
+        const findings = asset.required ? errors : warnings;
         // git speaks forward slashes on every platform; `path.relative` hands
         // back backslashes on Windows, which git reads as part of the filename.
         const relativeToRepo = path.relative(repoRoot, absolute).split(path.sep).join("/");
-        await checkNotIgnored(repoRoot, relativeToRepo, label, errors);
-        await checkTracked(repoRoot, relativeToRepo, label, errors);
+        await checkNotIgnored(repoRoot, relativeToRepo, label, findings);
+        await checkTracked(repoRoot, relativeToRepo, label, findings);
       }
     }
 
@@ -376,6 +432,10 @@ export async function runDoctor(
         "Not a git repository, so the two checks that decide whether this plugin exists for anyone who clones it were skipped."
       );
     }
+
+    // Warnings, not errors: the plugin loads and runs, it just doesn't draw the
+    // slot it declared, so this doesn't decide doctor's exit status.
+    warnings.push(...(surfaceNotes.get(dirName) ?? []));
 
     plugins.push({
       dirName,

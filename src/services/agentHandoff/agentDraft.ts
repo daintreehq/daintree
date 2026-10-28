@@ -3,7 +3,16 @@ import type {
   PluginSendToAgentRefusalReason,
   PluginSendToAgentResult,
 } from "@shared/types/plugin";
-import { appendAgentContextToDraft, formatAgentContextBlock } from "@shared/utils/agentContextDrag";
+import {
+  AGENT_CONTEXT_FENCE_INFO,
+  agentContextBlockRanges,
+  appendAgentContextToDraft,
+  formatAgentContextBlock,
+  type AgentContextReferenceDragPayload,
+} from "@shared/utils/agentContextDrag";
+import { formatContextReference } from "@shared/utils/pluginContextReference";
+import { rememberContextReferenceLabel } from "@/lib/contextReferenceLabels";
+import { usePluginContextProvidersStore } from "@/store/pluginContextProvidersStore";
 import { usePanelStore } from "@/store/panelStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { useProjectStore } from "@/store/projectStore";
@@ -140,6 +149,80 @@ export function draftAgentContext(
   inputStore.setDraftInput(
     terminalId,
     appendAgentContextToDraft(inputStore.getDraftInput(terminalId, projectId), block),
+    projectId
+  );
+  inputStore.bumpExternalDraftRevision();
+
+  const panelState = usePanelStore.getState();
+  panelState.pingTerminal(terminalId);
+  const panel = panelState.panelsById[terminalId];
+  report({
+    kind: "draft-added",
+    lead: "Added to draft in",
+    ...(panel ? { target: getTerminalDisplayTitle(panel, "full") } : {}),
+  });
+  return { status: "drafted", terminalId };
+}
+
+/**
+ * What goes between a draft and a reference appended to it. The reference has
+ * to land outside any handoff block — one left without its closing fence is
+ * closed first — and never on a fence line, where it would stop the line from
+ * closing its block. Otherwise a space, unless the draft already ends in one.
+ */
+function referenceSeparator(draft: string): string {
+  if (draft.length === 0) return "";
+  if (draft.includes(AGENT_CONTEXT_FENCE_INFO)) {
+    // Judged by the rule `agentContextBlockRanges` keeps the block literal by:
+    // only a line that is exactly the opening fence closes it.
+    const last = agentContextBlockRanges(draft).at(-1);
+    if (last !== undefined && last[1] === draft.length) {
+      const lines = draft.slice(last[0]).split("\n");
+      const fence = /^(`{3,})/.exec(lines[0] ?? "")?.[1];
+      if (fence !== undefined && !lines.slice(1).includes(fence)) {
+        return `${draft.endsWith("\n") ? "" : "\n"}${fence}\n`;
+      }
+    }
+  }
+  const lastLine = draft.slice(draft.lastIndexOf("\n") + 1);
+  if (/^ {0,3}(`{3,}|~{3,})/.test(lastLine)) return "\n";
+  return /\s$/.test(draft) ? "" : " ";
+}
+
+/**
+ * Append a plugin context reference (#13795) to an agent's draft as the same
+ * `@{prefix}:{id}` chip the `@` menu leaves, or refuse with the reason. The
+ * item is read when the user sends, not now. Refused when no provider holds the
+ * prefix in this project — the chip would go as typed — and otherwise gated
+ * exactly like {@link draftAgentContext}.
+ */
+export function draftAgentContextReference(
+  terminalId: string,
+  reference: AgentContextReferenceDragPayload["reference"]
+): PluginSendToAgentResult | { status: "unavailable" } {
+  const holder = usePluginContextProvidersStore
+    .getState()
+    .entries.find((entry) => entry.status === "active" && entry.prefix === reference.prefix);
+  if (!holder) {
+    reportDraftNotAdded(`nothing in this project offers @${reference.prefix}:`);
+    return { status: "unavailable" };
+  }
+  const refusal = getDraftRefusal(terminalId);
+  if (refusal !== null) {
+    reportDraftRefused(refusal);
+    return { status: "refused", reason: refusal };
+  }
+
+  if (reference.label !== undefined) {
+    rememberContextReferenceLabel(holder.pluginId, reference, reference.label);
+  }
+  const inputStore = useTerminalInputStore.getState();
+  const projectId = useProjectStore.getState().currentProject?.id;
+  const draft = inputStore.getDraftInput(terminalId, projectId);
+  const separator = referenceSeparator(draft);
+  inputStore.setDraftInput(
+    terminalId,
+    `${draft}${separator}${formatContextReference(reference)} `,
     projectId
   );
   inputStore.bumpExternalDraftRevision();

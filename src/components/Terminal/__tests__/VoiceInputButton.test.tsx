@@ -39,6 +39,7 @@ describe("VoiceInputButton", () => {
       status: "idle",
       lastError: null,
       activeTarget: null,
+      pendingTarget: null,
       elapsedSeconds: 0,
       micSignal: "pending",
       panelBuffers: {},
@@ -59,12 +60,12 @@ describe("VoiceInputButton", () => {
     expect(container.innerHTML).toContain("lucide-mic");
   });
 
-  it("renders nothing when voice input is not configured", () => {
-    const { container } = render(
+  it("renders a setup affordance when voice input is not configured", () => {
+    const { getByLabelText } = render(
       <VoiceInputButton panelId="panel-1" projectId="project-1" projectName="Daintree" />
     );
 
-    expect(container.innerHTML).toBe("");
+    expect(getByLabelText("Set up voice input")).toBeTruthy();
   });
 
   it("still renders when not configured but actively recording on this panel", () => {
@@ -116,19 +117,106 @@ describe("VoiceInputButton", () => {
     expect(toggleSpy).not.toHaveBeenCalled();
   });
 
+  // #14604: the finishing session drains on its own; a click starts the next.
+  it.each([
+    { disabled: false, starts: true },
+    { disabled: true, starts: false },
+  ])(
+    "a click while this panel's session finishes starts the next one (disabled: $disabled)",
+    ({ disabled, starts }) => {
+      useVoiceRecordingStore.setState({
+        isConfigured: true,
+        status: "finishing",
+        activeTarget: { panelId: "panel-1" } as never,
+      });
+      const toggleSpy = vi.spyOn(voiceRecordingService, "toggle").mockResolvedValue();
+
+      const { getByRole } = render(
+        <VoiceInputButton
+          panelId="panel-1"
+          projectId="project-1"
+          projectName="Daintree"
+          disabled={disabled}
+        />
+      );
+      const button = getByRole("button");
+      fireEvent.click(button);
+
+      expect((button as HTMLButtonElement).disabled).toBe(!starts);
+      expect(toggleSpy).toHaveBeenCalledTimes(starts ? 1 : 0);
+    }
+  );
+
+  it.each([
+    { status: "idle" as const, activePanel: null, pending: false, clickable: false },
+    { status: "recording" as const, activePanel: "panel-2", pending: false, clickable: false },
+    { status: "recording" as const, activePanel: "panel-1", pending: false, clickable: true },
+    { status: "finishing" as const, activePanel: "panel-2", pending: true, clickable: false },
+  ])(
+    "a disabled input only allows stopping its own session ($status on $activePanel, pending $pending)",
+    ({ status, activePanel, pending, clickable }) => {
+      useVoiceRecordingStore.setState({
+        isConfigured: true,
+        status,
+        micSignal: "live",
+        activeTarget: activePanel ? ({ panelId: activePanel } as never) : null,
+        pendingTarget: pending ? ({ panelId: "panel-1" } as never) : null,
+      });
+      const toggleSpy = vi.spyOn(voiceRecordingService, "toggle").mockResolvedValue();
+
+      const { getByRole } = render(
+        <VoiceInputButton panelId="panel-1" projectId="project-1" projectName="Daintree" disabled />
+      );
+      const button = getByRole("button");
+      fireEvent.click(button);
+
+      expect((button as HTMLButtonElement).disabled).toBe(!clickable);
+      expect(toggleSpy).toHaveBeenCalledTimes(clickable ? 1 : 0);
+    }
+  );
+
+  // #14604: a start queued here behind a finishing session ends on the next click.
+  it.each([
+    { label: "same panel", activePanel: "panel-1" },
+    { label: "another panel", activePanel: "panel-2" },
+  ])("names a queued start's click as a stop ($label)", async ({ activePanel }) => {
+    useVoiceRecordingStore.setState({
+      isConfigured: true,
+      status: "finishing",
+      micSignal: "live",
+      activeTarget: { panelId: activePanel } as never,
+      pendingTarget: { panelId: "panel-1" } as never,
+    });
+
+    render(<VoiceInputButton panelId="panel-1" projectId="project-1" projectName="Daintree" />);
+    const button = screen.getByRole("button");
+
+    expect(button.getAttribute("aria-label")).toBe("Stop voice recording");
+    expect(button.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.focus(button);
+    expect((await screen.findByRole("tooltip")).textContent).toContain("Click to stop");
+  });
+
   it.each([
     { status: "connecting" as const, micSignal: "pending" as const, tip: "Starting microphone…" },
     { status: "recording" as const, micSignal: "pending" as const, tip: "Starting microphone…" },
     { status: "recording" as const, micSignal: "silent" as const, tip: "No audio from microphone" },
+    {
+      status: "recording" as const,
+      micSignal: "silent" as const,
+      micDeviceLabel: "AirPods Pro",
+      tip: "No audio from AirPods Pro",
+    },
     { status: "connecting" as const, micSignal: "live" as const, tip: "Stop recording" },
     { status: "recording" as const, micSignal: "live" as const, tip: "Stop recording" },
   ])(
     "only claims listening once the mic delivers audio ($status, mic $micSignal) — #13105",
-    async ({ status, micSignal, tip }) => {
+    async ({ status, micSignal, micDeviceLabel = null, tip }) => {
       useVoiceRecordingStore.setState({
         isConfigured: true,
         status,
         micSignal,
+        micDeviceLabel,
         activeTarget: { panelId: "panel-1" },
       });
       const { getByRole } = render(
@@ -142,4 +230,41 @@ describe("VoiceInputButton", () => {
       expect((await screen.findByRole("tooltip")).textContent).toContain(tip);
     }
   );
+  it("marks an error only on the panel it happened in", () => {
+    useVoiceRecordingStore.setState({
+      isConfigured: true,
+      status: "error",
+      errorPanelId: "panel-1",
+    });
+    const { getByRole, rerender } = render(<VoiceInputButton panelId="panel-1" />);
+    expect(getByRole("button").className).toContain("text-activity-waiting");
+    rerender(<VoiceInputButton panelId="panel-2" />);
+    expect(getByRole("button").className).not.toContain("text-activity-waiting");
+  });
+
+  it("holds the stop glyph and spins the wait ring, not the orbit, while reconnecting", () => {
+    useVoiceRecordingStore.setState({
+      isConfigured: true,
+      status: "reconnecting",
+      micSignal: "live",
+      activeTarget: { panelId: "panel-1" } as never,
+    });
+    const { container, getByRole } = render(<VoiceInputButton panelId="panel-1" />);
+    // A click still stops a reconnecting session, so the glyph stays Stop.
+    expect(getByRole("button").querySelector(".status-mark")).not.toBeNull();
+    expect(container.querySelector('[data-voice-ring="wait"]')).not.toBeNull();
+    expect(container.querySelector('[data-voice-ring="orbit"]')).toBeNull();
+  });
+
+  it("warns in the tooltip when the paused session is about to auto-stop", async () => {
+    useVoiceRecordingStore.setState({
+      isConfigured: true,
+      status: "paused",
+      pauseStopWarning: true,
+      activeTarget: { panelId: "panel-1" } as never,
+    });
+    const { getByRole } = render(<VoiceInputButton panelId="panel-1" />);
+    fireEvent.focus(getByRole("button"));
+    expect((await screen.findByRole("tooltip")).textContent).toContain("stops in 10s");
+  });
 });

@@ -1,7 +1,7 @@
 import type { CrashType } from "@shared/types/pty-host";
 import { isPtyPanel } from "@shared/types/panel";
 import { terminalRegistryController } from "@/controllers";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 import { logInfo, logError, logWarn } from "@/utils/logger";
 import { DisposableStore, toDisposable } from "@/utils/disposable";
 import { usePanelStore } from "@/store/panelStore";
@@ -95,7 +95,7 @@ export function setupBackendHealthListeners(): DisposableStore {
         // The PTYs died with the host, so the geometry each pane last echoed
         // describes a process that no longer exists. Panes keep resizing for the
         // whole outage and no echo can arrive to correct the record (#11641).
-        terminalInstanceService.handleBackendCrash();
+        peekTerminalService()?.handleBackendCrash();
 
         usePanelStore.setState({
           backendStatus: "disconnected",
@@ -141,7 +141,7 @@ export function setupBackendHealthListeners(): DisposableStore {
         clearFlowStateOnRecovery();
 
         // Reset all xterm instances to fix white text
-        terminalInstanceService.handleBackendRecovery();
+        peekTerminalService()?.handleBackendRecovery();
 
         // Mark as connected after a short delay to show recovery state
         recoveryTimer = setTimeout(() => {

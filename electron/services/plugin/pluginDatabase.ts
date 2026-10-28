@@ -11,6 +11,7 @@ import { databaseError } from "../../../shared/utils/pluginDatabaseHandle.js";
 export {
   checkedSchemaOptions,
   openPluginDatabase,
+  readPluginDatabaseSchemaVersion,
 } from "../../../shared/utils/pluginDatabaseHandle.js";
 
 export interface PluginDatabaseDeclaration {
@@ -18,6 +19,7 @@ export interface PluginDatabaseDeclaration {
   location: "project" | "local";
   path?: string;
   journalMode: "delete" | "wal";
+  schemaVersion?: number;
 }
 
 function isInside(root: string, candidate: string): boolean {
@@ -171,5 +173,6 @@ export async function resolvePluginDatabaseLocation(options: {
         ? path.relative(realRoot, target).split(path.sep).join("/")
         : null,
     journalMode: declaration.journalMode,
+    ...(declaration.schemaVersion !== undefined && { schemaVersion: declaration.schemaVersion }),
   };
 }

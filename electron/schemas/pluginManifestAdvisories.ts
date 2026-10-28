@@ -5,6 +5,7 @@ import { DEPRECATED_CONTRIBUTION_ALIASES, getPluginManifestSchema } from "./plug
 import { PLUGIN_ICON_IDS, isPluginIconId } from "../../shared/config/pluginIconIds.js";
 import { isBuiltInAgentId } from "../../shared/config/agentIds.js";
 import { isPluginCustomIconRef } from "../../shared/config/pluginCustomIcon.js";
+import { collectPluginManifestAssets } from "../../shared/config/pluginManifestAssets.js";
 
 /**
  * Advisory checks that run *after* a manifest has parsed. Everything here is
@@ -64,7 +65,8 @@ async function warnIfTargetMissing(
 
 /**
  * Every advisory a parsed manifest earns, in a stable order: deprecated
- * aliases, engine range, command discoverability, icon ids, then build targets.
+ * aliases, engine range, command discoverability, unbridged MCP servers, icon
+ * ids, then build targets.
  * Order is part of the contract — the CLI prints them in sequence and the
  * fixtures assert on the first one.
  */
@@ -104,6 +106,21 @@ export async function collectManifestAdvisories({
     }
   }
 
+  // `mcpServers` reads like "give agents these tools", but Daintree is the
+  // server's client: only an agentMcp endpoint whose source names its tools
+  // serves them to terminal agents and the Assistant.
+  const bridgedServers = new Set(
+    manifest.contributes.agentMcp.flatMap((endpoint) =>
+      endpoint.source ? [endpoint.source.mcpServer] : []
+    )
+  );
+  for (const server of manifest.contributes.mcpServers) {
+    if (bridgedServers.has(server.id)) continue;
+    warnings.push(
+      `mcpServers "${server.id}" is called by Daintree itself; terminal agents and the Assistant don't see its tools — to serve chosen tools to agents, name them in a contributes.agentMcp[].source`
+    );
+  }
+
   // Advisory icon check: an `iconId` outside the shared registry renders as a
   // generic fallback glyph (the renderers do no dynamic Lucide-by-name lookup).
   // Non-fatal: the schema accepts any string and the renderer is the runtime
@@ -123,11 +140,20 @@ export async function collectManifestAdvisories({
       );
     }
   }
-  // A view's `iconId` is ignored at runtime whatever its value — the matching
-  // panels entry owns the rendered icon — so warn on its presence rather than
-  // only when it's unrecognized. A recognized-but-ignored id is the more
-  // misleading case: it looks like it works.
+  // A panel or settings view's `iconId` is ignored at runtime whatever its
+  // value — the matching panels entry owns the rendered icon — so warn on its
+  // presence rather than only when it's unrecognized. A recognized-but-ignored
+  // id is the more misleading case: it looks like it works. A sidebar view's is
+  // its switcher glyph, checked like a toolbar button's.
   for (const [index, view] of manifest.contributes.views.entries()) {
+    if (view.location === "sidebar") {
+      if (view.iconId && !isPluginIconId(view.iconId) && !isPluginCustomIconRef(view.iconId)) {
+        warnings.push(
+          `views[${index}].iconId "${view.iconId}" isn't a recognized plugin icon — it will render as the default puzzle icon. Known ids: ${knownIds}`
+        );
+      }
+      continue;
+    }
     if (view.iconId) {
       warnings.push(
         `views[${index}].iconId "${view.iconId}" is ignored at runtime — the matching panels entry owns the rendered icon. Set iconId there instead.`
@@ -138,6 +164,24 @@ export async function collectManifestAdvisories({
     if (button.iconId && !isPluginIconId(button.iconId) && !isPluginCustomIconRef(button.iconId)) {
       warnings.push(
         `toolbarButtons[${index}].iconId "${button.iconId}" isn't a recognized plugin icon — it will render as the default puzzle icon. Known ids: ${knownIds}`
+      );
+    }
+  }
+  for (const [index, entry] of (manifest.contributes.launchEntries ?? []).entries()) {
+    if (entry.iconId && !isPluginIconId(entry.iconId) && !isPluginCustomIconRef(entry.iconId)) {
+      warnings.push(
+        `launchEntries[${index}].iconId "${entry.iconId}" isn't a recognized plugin icon — it will render as the default panel icon. Known ids: ${knownIds}`
+      );
+    }
+  }
+  for (const [index, provider] of (manifest.contributes.searchProviders ?? []).entries()) {
+    if (
+      provider.iconId &&
+      !isPluginIconId(provider.iconId) &&
+      !isPluginCustomIconRef(provider.iconId)
+    ) {
+      warnings.push(
+        `searchProviders[${index}].iconId "${provider.iconId}" isn't a recognized plugin icon — its results will render with the default panel icon. Known ids: ${knownIds}`
       );
     }
   }
@@ -155,13 +199,14 @@ export async function collectManifestAdvisories({
     }
   }
 
-  // Advisory build-target check: warn when `main` or a view's `componentPath`
-  // points at a missing file whose parent dir exists (a typo or stale path). A
-  // missing top-level dir — typically an unbuilt `dist/` — is skipped so
-  // pre-build validation stays quiet.
-  await warnIfTargetMissing(dir, manifest.main, "main", warnings);
-  for (const [index, view] of manifest.contributes.views.entries()) {
-    await warnIfTargetMissing(dir, view.componentPath, `views[${index}].componentPath`, warnings);
+  // Advisory build-target check: warn when a module the manifest names (`main`,
+  // a view, a tour scene) points at a missing file whose parent dir exists (a
+  // typo or stale path). A missing top-level dir — typically an unbuilt
+  // `dist/` — is skipped so pre-build validation stays quiet. Packaging and
+  // doctor enforce the full asset inventory; this only catches typos early.
+  for (const asset of collectPluginManifestAssets(manifest)) {
+    if (asset.module || asset.built)
+      await warnIfTargetMissing(dir, asset.ref, asset.field, warnings);
   }
 
   return warnings;

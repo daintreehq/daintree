@@ -12,6 +12,9 @@ vi.mock("@/hooks/useHostConnection", () => ({ runHostOperation: m.runHostOperati
 import type { ActionContext } from "@shared/types/actions";
 import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
 import { registerGitActions } from "../gitActions";
+// The run bodies load on first dispatch (#14239). Evaluate them here, as they
+// always were, rather than under the window stub each test installs.
+import "../gitActions.impl";
 
 // git.push uses no callbacks.
 const noCallbacks: ActionCallbacks = Object.create(null);

@@ -595,6 +595,8 @@ function installFailureReason(
   switch (code) {
     case "archive_mismatch":
       return `${hostLabel}'s copy of ${displayName} changed since the comparison. Refresh the list and try again.`;
+    case "instance_mode_changed":
+      return `This version of ${displayName} runs differently from ${hostLabel}'s copy. Uninstall it on ${hostLabel} first, then install it again.`;
     case "lock_failed":
       return `${hostLabel} is busy installing another plugin. Try again in a moment.`;
     case "name_collision":

@@ -7,13 +7,17 @@ import type { WorktreeListResult, WorktreeState } from "../../../shared/types/wo
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { PartialSuccessError } from "../../../shared/utils/partialSuccess.js";
 import {
+  MAX_WAIT_FOR_PR_TIMEOUT_MS,
   MAX_WAIT_UNTIL_READY_TIMEOUT_MS,
+  toPullRequestWaitRow,
+  UNKNOWN_WORKTREE_MESSAGE,
   toWorktreeSummary,
   waitForWorktreeSetup,
   WORKTREE_BRANCH_KEPT_MARKER,
 } from "../../../shared/utils/worktreeSummary.js";
 import {
   formatTeardownPreviewLines,
+  formatWorktreeDeleteNoteLines,
   formatWorktreeDeletePreviewLines,
   summarizeWorktreeChanges,
   type WorktreeSubmoduleRiskState,
@@ -24,6 +28,7 @@ import type {
   ViewlessDeps,
   ViewlessWorkspaceHosts,
 } from "./ViewlessActionExecutor.js";
+import { WorktreeWaitForPullRequestArgsSchema } from "./viewlessArgsSchemas.js";
 import {
   viewlessFailure as failure,
   viewlessSuccess as success,
@@ -64,18 +69,22 @@ export async function ensureWorkspaceHost(
   return hosts;
 }
 
+/** The workspace host's whole worktree listing for the project, or null with no host. */
+export async function readProjectWorktreeListing(
+  project: Project,
+  deps: ViewlessDeps
+): Promise<WorktreeListResult | null> {
+  if (!(await ensureWorkspaceHost(project, deps))) return null;
+  return deps.invoke<WorktreeListResult>(project.id, CHANNELS.WORKTREE_GET_ALL_WITH_STATUS, []);
+}
+
 /** The project's worktrees as the workspace host reports them, or null with no host. */
 export async function readProjectWorktrees(
   project: Project,
   deps: ViewlessDeps
 ): Promise<WorktreeState[] | null> {
-  if (!(await ensureWorkspaceHost(project, deps))) return null;
-  const listed = await deps.invoke<WorktreeListResult>(
-    project.id,
-    CHANNELS.WORKTREE_GET_ALL_WITH_STATUS,
-    []
-  );
-  return listed?.worktrees ?? [];
+  const listed = await readProjectWorktreeListing(project, deps);
+  return listed === null ? null : (listed?.worktrees ?? []);
 }
 
 /**
@@ -226,9 +235,13 @@ export async function previewWorktreeDelete(
   const checked = await checkWorktreeDelete(request, project, deps);
   if (!checked.ok) return checked;
   const { worktreeId, hosts } = checked;
-  const [read, worktrees] = await Promise.all([
+  // Plugin notes (#13805) are asked only once the worktree is known to be this
+  // project's, and in parallel with the host's own reads: this confirmation is
+  // put to the person complete, so they cost at most the notes deadline.
+  const [read, worktrees, notes] = await Promise.all([
     hosts.getDeletePreview(project.path, project.id, worktreeId).catch(() => null),
     readProjectWorktrees(project, deps).catch(() => null),
+    deps.collectWorktreeDeleteNotes(project.id, worktreeId).catch(() => []),
   ]);
   // A part that is null means the worktree is gone; only a failed read is unreadable.
   const changes = read === null ? "unreadable" : read.changes;
@@ -254,6 +267,7 @@ export async function previewWorktreeDelete(
                 }
           ),
           ...formatTeardownPreviewLines(teardown),
+          ...formatWorktreeDeleteNoteLines(notes),
         ];
   const worktree = worktrees?.find((candidate) => candidate.id === worktreeId);
   const subject = worktree?.branch || worktree?.name;
@@ -296,4 +310,62 @@ export async function runWorktreeDelete(
     return failure("EXECUTION_ERROR", message);
   }
   return success(undefined);
+}
+
+/**
+ * Each host read is a round trip rather than a view's store lookup, and
+ * detection itself polls in tens of seconds, so this is slower than a view's
+ * poll at no cost.
+ */
+const WAIT_FOR_PR_POLL_INTERVAL_MS = 1_000;
+
+/**
+ * `worktree.waitForPullRequest` with no view (#14139): the view's wait, over
+ * the workspace host's listing rather than a view's store. Detection is the
+ * host's own cached poll, which runs paused or slowed for a project no window
+ * shows, so the answer is what the host has seen, and a timeout says so.
+ */
+export async function runWorktreeWaitForPullRequest(
+  request: ViewlessActionRequest,
+  project: Project,
+  deps: ViewlessDeps
+): Promise<ActionDispatchResult> {
+  const parsed = WorktreeWaitForPullRequestArgsSchema.safeParse(request.args);
+  if (!parsed.success) return validationFailure(request.actionId, parsed.error);
+  const { worktreeIds, timeoutMs } = parsed.data;
+  const budgetMs = Math.min(timeoutMs ?? MAX_WAIT_FOR_PR_TIMEOUT_MS, MAX_WAIT_FOR_PR_TIMEOUT_MS);
+  const deadline = Date.now() + budgetMs;
+  // Ids the host listed at any point in the wait: one deleted mid-wait is no
+  // unknown id, it just has no PR to report.
+  const seen = new Set<string>();
+
+  try {
+    for (;;) {
+      const listed = await readProjectWorktreeListing(project, deps);
+      const byId = new Map((listed?.worktrees ?? []).map((worktree) => [worktree.id, worktree]));
+      const rows = worktreeIds.map((worktreeId) => {
+        const worktree = byId.get(worktreeId);
+        if (worktree) seen.add(worktreeId);
+        return toPullRequestWaitRow(worktreeId, worktree);
+      });
+      const detected = rows.some((row) => row.prNumber !== null);
+      const remaining = deadline - Date.now();
+      if (detected || remaining <= 0) {
+        // Only the host's authoritative word refuses an id: `gitBacked: null`
+        // is a host unavailable or not yet classified, which proves nothing.
+        if (
+          !detected &&
+          listed !== null &&
+          listed.gitBacked !== null &&
+          worktreeIds.some((id) => !seen.has(id))
+        ) {
+          return failure("EXECUTION_ERROR", UNKNOWN_WORKTREE_MESSAGE);
+        }
+        return success({ worktrees: rows, timedOut: !detected });
+      }
+      await deps.sleep(Math.min(WAIT_FOR_PR_POLL_INTERVAL_MS, remaining));
+    }
+  } catch (err) {
+    return failure("EXECUTION_ERROR", formatErrorMessage(err, "Failed to read worktrees"));
+  }
 }

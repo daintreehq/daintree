@@ -39,6 +39,7 @@ import { useTabOverflow } from "@/hooks";
 import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
 import { isTabCloseKey, useKeyboardTabClose } from "@/hooks/useKeyboardTabClose";
 import { useTerminalInputStore, usePanelStore, useFocusStore } from "@/store";
+import { selectHomeFocusTarget } from "@/store/terminalInputStore";
 import type { PtyPanelData } from "@shared/types/panel";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
@@ -47,6 +48,10 @@ import { getMergedPresets } from "@/config/agents";
 import { TerminalContextMenu } from "@/components/Terminal/TerminalContextMenu";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { getTerminalFocusTarget } from "@/components/Terminal/terminalFocus";
+import {
+  paneSurfaceHoldingFocus,
+  requestedPaneSurface,
+} from "@/components/Terminal/paneFocusRequest";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
 import {
@@ -56,8 +61,18 @@ import {
   SESSION_LABELS,
 } from "@/components/Worktree/terminalStateConfig";
 import { TerminalRefreshTier } from "@/types";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import {
+  peek as peekTerminalService,
+  with as withTerminalService,
+} from "@/services/terminal/terminalInstanceServiceAccessor";
 import { DockActivityCue } from "./DockActivityCue";
+import {
+  PluginPanelActivityDockCue,
+  pluginPanelActivityLabelSuffix,
+  usePluginPanelActivity,
+} from "@/components/Panel/PluginPanelActivity";
+import { DockChipBadge, useDockChipBadge } from "./DockChipBadge";
+import { dockChipBadgeLabelSuffix } from "./dockChipBadgeModel";
 import { useDockPanelPortal } from "./dockPanelPortalContext";
 import {
   DOCK_CHIP_CLASS,
@@ -150,7 +165,6 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   const trashPanel = usePanelStore((s) => s.trashPanel);
   const updateTitle = usePanelStore((s) => s.updateTitle);
   const hybridInputEnabled = useTerminalInputStore((s) => s.hybridInputEnabled);
-  const preferredTerminalFocusTarget = usePanelStore((s) => s.preferredTerminalFocusTarget);
   const reorderPanelsInGroup = usePanelStore((s) => s.reorderPanelsInGroup);
   const addPanel = usePanelStore((s) => s.addPanel);
   const addPanelToGroup = usePanelStore((s) => s.addPanelToGroup);
@@ -174,6 +188,9 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   }, [panels, activeTabId]);
   const activePanelId = activePanel?.id;
   const activeHandBack = useRunHandBackState(activePanelId ?? "");
+  const badge = useDockChipBadge(activePanelId ?? "");
+  // The active tab's plugin report, like its agent glyph (#13820).
+  const reportedActivity = usePluginPanelActivity(activePanelId ?? "");
 
   // The pane this group actually has open in the dock — the id every close must
   // name. Reading it from the store (rather than assuming the active tab) keeps
@@ -231,7 +248,10 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
 
     if (!isOpen) {
       try {
-        terminalInstanceService.applyRendererPolicy(activePanelId, TerminalRefreshTier.BACKGROUND);
+        withTerminalService(
+          (service) => service.applyRendererPolicy(activePanelId, TerminalRefreshTier.BACKGROUND),
+          activePanelId
+        );
       } catch (error) {
         console.warn(`Failed to apply dock state for panel ${activePanelId}:`, error);
       }
@@ -243,7 +263,10 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
     // The policy's downgrade hysteresis absorbs rapid tab-flips (t1→t2→t1).
     if (prevId && prevId !== activePanelId) {
       try {
-        terminalInstanceService.applyRendererPolicy(prevId, TerminalRefreshTier.BACKGROUND);
+        withTerminalService(
+          (service) => service.applyRendererPolicy(prevId, TerminalRefreshTier.BACKGROUND),
+          prevId
+        );
       } catch (error) {
         console.warn(`Failed to background previous dock panel ${prevId}:`, error);
       }
@@ -253,9 +276,9 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
 
     const rafId = requestAnimationFrame(() => {
       try {
-        const dims = terminalInstanceService.fit(activePanelId);
+        const dims = peekTerminalService()?.fit(activePanelId);
         if (!dims) return;
-        terminalInstanceService.applyRendererPolicy(activePanelId, TerminalRefreshTier.VISIBLE);
+        peekTerminalService()?.applyRendererPolicy(activePanelId, TerminalRefreshTier.VISIBLE);
       } catch (error) {
         console.warn(`Failed to apply dock state for panel ${activePanelId}:`, error);
       }
@@ -307,23 +330,30 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
     // Re-runs on agent chrome changes while open; never while the user is
     // writing in the pane's Scratchpad (#12835).
     if (isScratchpadElement(document.activeElement, activePanelId)) return;
+    // Nor while its input bar holds the keyboard: what the user does inside
+    // the pane stays inside it.
+    if (paneSurfaceHoldingFocus(activePanelId) === "hybridInput") return;
 
+    // Opening the popover is an arrival, so it lands on home; a drop or
+    // type-anywhere that asked this pane for its hybrid input gets it. Home is
+    // read rather than subscribed to: changing the setting isn't an arrival.
     const focusTarget = getTerminalFocusTarget({
-      preferredTarget: preferredTerminalFocusTarget,
+      preferredTarget:
+        requestedPaneSurface(activePanelId) ??
+        selectHomeFocusTarget(useTerminalInputStore.getState()),
       hasHybridInputSurface: activeIsAgent,
       isInputDisabled: backendStatus === "disconnected" || backendStatus === "recovering",
       hybridInputEnabled,
     });
     if (focusTarget === "hybridInput") return;
 
-    terminalInstanceService.focus(activePanelId);
+    peekTerminalService()?.focus(activePanelId);
   }, [
     isOpen,
     portalContainer,
     activePanelId,
     activeFocusPolicy,
     activeIsAgent,
-    preferredTerminalFocusTarget,
     backendStatus,
     hybridInputEnabled,
   ]);
@@ -649,7 +679,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
     if (!activePanelId) return;
     requestAnimationFrame(() => {
       try {
-        terminalInstanceService.fit(activePanelId);
+        peekTerminalService()?.fit(activePanelId);
       } catch {
         // fit() guards zero-dimension cases internally; ignore transient throws.
       }
@@ -700,6 +730,11 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   const stateLabel =
     isHandBack && shownAgentState ? SESSION_LABELS[shownAgentState] : observedStateLabel;
   const StateIcon = shownAgentState ? SESSION_ICONS[shownAgentState] : null;
+  // Only where no agent glyph is drawn, and never folded into the agent state.
+  const pluginActivity = displayAgentState ? null : reportedActivity;
+  // An active plugin report on the active tab is not a resting chip.
+  const chipDeprioritized =
+    isDeprioritized && pluginActivity?.shown !== "working" && pluginActivity?.shown !== "waiting";
 
   return (
     <DockPopoverChildProvider>
@@ -714,9 +749,9 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                 isOpen && DOCK_CHIP_OPEN_CLASS,
                 !isOpen &&
                   showDockAgentHighlights &&
-                  blockedState === "waiting" &&
+                  (blockedState === "waiting" || pluginActivity?.shown === "waiting") &&
                   DOCK_CHIP_WAITING_CLASS,
-                isDeprioritized && "border-transparent"
+                chipDeprioritized && "border-transparent"
               )}
               onClick={(e) => {
                 e.preventDefault();
@@ -738,7 +773,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                   return moved;
                 });
               }}
-              aria-label={`${activePanel.title}${displayAgentState ? (stateLabel ? ` — agent ${stateLabel}` : "") : groupPlainWorking ? " — command running" : ""} (${panels.length} tabs) - Click to preview, double-click to move to grid, drag to reorder`}
+              aria-label={`${activePanel.title}${displayAgentState ? (stateLabel ? ` — agent ${stateLabel}` : "") : pluginActivity ? pluginPanelActivityLabelSuffix(pluginActivity) : groupPlainWorking ? " — command running" : ""}${dockChipBadgeLabelSuffix(badge)} (${panels.length} tabs) - Click to preview, double-click to move to grid, drag to reorder`}
             >
               <div className="flex items-center justify-center shrink-0">
                 <TerminalIcon
@@ -750,6 +785,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
               <span className="truncate min-w-[48px] max-w-[140px] font-sans font-medium">
                 {displayTitle}
               </span>
+              <DockChipBadge model={badge} />
 
               {/* Tab count indicator */}
               <span className="text-3xs text-text-secondary tabular-nums shrink-0">
@@ -770,8 +806,13 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                 </>
               )}
 
-              {!displayAgentState && (groupPlainWorking || showFinishedCue) && (
-                <DockActivityCue state={groupPlainWorking ? "working" : "finished"} />
+              {pluginActivity ? (
+                <PluginPanelActivityDockCue activity={pluginActivity} />
+              ) : (
+                !displayAgentState &&
+                (groupPlainWorking || showFinishedCue) && (
+                  <DockActivityCue state={groupPlainWorking ? "working" : "finished"} />
+                )
               )}
 
               {shownAgentState && StateIcon && (

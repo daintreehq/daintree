@@ -20,6 +20,13 @@ const MiB = 1024 * KiB;
  */
 export const PLUGIN_INVOKE_DEFAULT_TIMEOUT_MS = 5 * 60_000;
 
+/**
+ * How long a plugin has to answer a worktree delete confirmation's note check
+ * (#13805), activating the plugin included. Short on purpose: the confirmation
+ * is already open, and a check that misses it is shown as "didn't answer".
+ */
+export const PLUGIN_WORKTREE_DELETE_NOTES_TIMEOUT_MS = 3000;
+
 /** Serialized size ceiling for the arguments of one invoke. */
 export const PLUGIN_INVOKE_MAX_ARGS_BYTES = 4 * MiB;
 
@@ -28,6 +35,41 @@ export const PLUGIN_INVOKE_MAX_RESULT_BYTES = 16 * MiB;
 
 /** Serialized size ceiling for one `postToPanel` / `broadcastToRenderer` payload. */
 export const PLUGIN_PUSH_MAX_PAYLOAD_BYTES = 1 * MiB;
+
+/**
+ * Deadline for one `host.services.call` (#14105) when the caller set none,
+ * starting the provider included. Services are backend calls between plugins,
+ * not long-running work, so this is far shorter than an invoke's default.
+ */
+export const PLUGIN_SERVICE_DEFAULT_TIMEOUT_MS = 30_000;
+
+/** Longest deadline a service call may ask for. */
+export const PLUGIN_SERVICE_MAX_TIMEOUT_MS = 120_000;
+
+/**
+ * Extra time a worker's own wait on `services.call` allows past the call's
+ * deadline, so the host's verdict (a typed `timeout`) arrives before the
+ * worker gives up on the round trip.
+ */
+export const PLUGIN_SERVICE_RPC_GRACE_MS = 5_000;
+
+/** Serialized size ceiling for the arguments of one service call. */
+export const PLUGIN_SERVICE_MAX_ARGS_BYTES = 256 * KiB;
+
+/** Serialized size ceiling for the result of one service call. */
+export const PLUGIN_SERVICE_MAX_RESULT_BYTES = 1 * MiB;
+
+/** Service calls one provider instance runs at once; a call past it is `unavailable`. */
+export const PLUGIN_SERVICE_MAX_CONCURRENT_CALLS = 32;
+
+/** Methods one service may declare; also bounds what a worker may propose to bind. */
+export const PLUGIN_SERVICE_MAX_METHODS = 32;
+
+/** Longest failure message a service call carries back to its caller. */
+export const PLUGIN_SERVICE_MAX_MESSAGE_LENGTH = 2_000;
+
+/** Service calls that may be nested inside one another before the next is refused as a `cycle`. */
+export const PLUGIN_SERVICE_MAX_CALL_DEPTH = 8;
 
 /**
  * Pushes queued within one macrotask are delivered to a renderer as a single
@@ -49,6 +91,31 @@ export const PLUGIN_SUBSCRIPTION_DEFAULT_DEBOUNCE_MS = 100;
  * tab cycle, and only where it settles says where attention went.
  */
 export const PLUGIN_FOCUSED_PANEL_DEFAULT_DEBOUNCE_MS = 250;
+
+/**
+ * How long a manifest event route (#13816) collects a burst before its first
+ * wake, measured from the first event: a stream of events cannot postpone it.
+ */
+export const PLUGIN_EVENT_ROUTE_COALESCE_MS = 100;
+
+/**
+ * Least time between two routed command runs for one plugin instance. Wakes
+ * that arrive faster wait, coalesced, rather than queue.
+ */
+export const PLUGIN_EVENT_ROUTE_MIN_INTERVAL_MS = 1_000;
+
+/**
+ * Distinct wakes (terminals, projects, worktree routes) one instance may have
+ * waiting. Past it the oldest is dropped: routes are best effort, never a log.
+ */
+export const PLUGIN_EVENT_ROUTE_MAX_PENDING = 32;
+
+/**
+ * Projects whose worktree set a worktree route remembers. An installed
+ * plugin's worktrees follow the focused project, so each project keeps its own
+ * baseline; the least recently seen is forgotten past the cap.
+ */
+export const PLUGIN_EVENT_ROUTE_MAX_WORKTREE_PROJECTS = 8;
 
 /** Lines `host.terminals.readScreen` returns when the caller names none. */
 export const PLUGIN_TERMINAL_SCREEN_DEFAULT_LINES = 20;

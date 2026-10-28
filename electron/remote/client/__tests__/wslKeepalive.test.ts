@@ -3,6 +3,9 @@ import { Writable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WslKeepalive, type KeeperChild } from "../wslKeepalive.js";
 
+const logger = vi.hoisted(() => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }));
+vi.mock("../../../utils/logger.js", () => ({ createLogger: () => logger }));
+
 class FakeKeeper extends EventEmitter implements KeeperChild {
   ended = false;
   killed: NodeJS.Signals[] = [];
@@ -110,12 +113,14 @@ describe("WslKeepalive", () => {
   });
 
   it("forgets a keeper wsl.exe couldn't start, without throwing", () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    logger.warn.mockClear();
     keepalive.want("Ubuntu");
     spawned[0]!.child.emit("error", new Error("spawn wsl.exe ENOENT"));
     expect(keepalive.isHeld("Ubuntu")).toBe(false);
-    expect(warn).toHaveBeenCalled();
-    warn.mockRestore();
+    expect(logger.warn).toHaveBeenCalledWith(
+      "Couldn't keep a WSL distribution running",
+      expect.objectContaining({ distro: "Ubuntu" })
+    );
   });
 
   it("releases everything on dispose and holds nothing after", async () => {

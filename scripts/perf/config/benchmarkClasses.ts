@@ -515,6 +515,19 @@ const FAMILIES: readonly Family[] = [
       "The real ProcessTreeCache making real CIM enumerations at the pty-host's own cadence, with the shipped persistent-helper transport and the pre-#12243 process-per-poll transport measured in the same window over the same exported query. The START COUNT is the finding and is exact. The CPU and latency figures are a COMPARISON between two arms sharing a machine under each other's load, never an absolute cost, and neither includes the work the CIM call causes inside WmiPrvSE; the one-shot arm's CPU is sampled before its own teardown, so it is undercounted in the direction that works against the finding. It is the census transport, not the poller's idle cadence — the cache is driven explicitly here, and PERF-092 is what measures the schedule. Windows only; there is no equivalent transport to compare elsewhere.",
   },
   {
+    label: "element picker resolution",
+    ids: ["PERF-410", "PERF-411", "PERF-412", "PERF-413"],
+    kind: "mechanism",
+    fidelity: withFidelity({
+      entryPoint: "public-api",
+      electronTransport: "node-channel",
+      processTopology: "partial",
+      externalDependencies: "controlled-network",
+    }),
+    claim:
+      "The real ElementPickerHost and the real host process it forks, loading the registry's own resolvers to verify a fixed .svelte element and to map a fixed React frame through a map main fetched from a local origin. Node's fork stands in for utilityProcess, and tsx transpiles the host's own TypeScript as it loads, so a cold start reads somewhat slower than a packaged build's; the compiler, parser and decoder it loads are the shipped JavaScript. No renderer, page, extractor or click: it is not a click-to-inspector latency, and the heap reading is main's alone. PERF-413's plugin hosts are forked the same way, so their resident memory is a Node-plus-tsx reading, not a utility process's.",
+  },
+  {
     label: "terminal submit lane",
     ids: ["PERF-036"],
     kind: "mechanism",

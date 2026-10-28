@@ -215,3 +215,38 @@ describe("describeRecipeForwardIncompat", () => {
     expect(described).not.toContain("s3cret");
   });
 });
+
+describe("plugin-only recipe content in a user-owned file (#13797)", () => {
+  it("counts it as content this build would drop, so a save can't delete it silently", () => {
+    const loss = detectRecipeForwardIncompat({
+      ...cleanRecipe(),
+      pluginVariables: ["record_id"],
+      terminals: [
+        { type: "claude", systemPrompt: "Use the tools." },
+        { type: "plugin-panel", panelKindId: "acme.records" },
+      ],
+    });
+    expect(loss?.unknownRecipeKeys).toEqual(["pluginVariables"]);
+    expect(loss?.unknownTerminalKeys).toEqual([
+      { index: 0, keys: ["systemPrompt"] },
+      { index: 1, keys: ["panelKindId"] },
+    ]);
+    expect(loss?.unsupportedTerminals).toEqual([{ index: 1, type: "plugin-panel" }]);
+  });
+
+  it("knows those fields at the plugin-recipe boundary", () => {
+    expect(
+      detectRecipeForwardIncompat(
+        {
+          ...cleanRecipe(),
+          pluginVariables: ["record_id"],
+          terminals: [
+            { type: "claude", systemPrompt: "Use the tools." },
+            { type: "plugin-panel", panelKindId: "acme.records" },
+          ],
+        },
+        { allowSystemPrompt: true, pluginPanelKinds: new Set(["acme.records"]) }
+      )
+    ).toBeNull();
+  });
+});

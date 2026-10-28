@@ -175,8 +175,13 @@ async function runScenario(): Promise<Metrics> {
     pluginBadges: new Map(),
     pluginToolbarBadges: new Map(),
     emitToolbarBadges: () => {},
+    pluginToolbarStates: new Map(),
+    emitToolbarStates: () => {},
     pluginWorktreeCardStatuses: new Map(),
     emitWorktreeCardStatuses: () => {},
+    pluginWorktreeReviewChecks: new Map(),
+    emitWorktreeReviewChecks: () => {},
+    worktreeReviewChecksGeneration: () => 0,
     worktreeCardStatusGeneration: () => 0,
     worktreeCardTargetRevision: () => 0,
     isWorktreeCardTargetRetired: () => false,
@@ -204,6 +209,8 @@ async function runScenario(): Promise<Metrics> {
       if (event === "worktree-update") handlers.push(handler);
       return () => {};
     },
+    getWorktreeCustomTitles: () => ({}),
+    subscribeWorktreeCustomTitles: () => () => {},
   } as unknown as PluginHostFactoryDeps;
 
   const { host } = createHost(deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);

@@ -828,16 +828,17 @@ export const SELF_GATED_TOOLS: ReadonlySet<string> = new Set([
   "terminal.sendCommandOwned",
   "terminal.injectOwned",
   "terminal.sendKeysOwned",
+  "terminal.restartOnPresetOwned",
   "terminal.readLastMessageOwned",
   "worktree.deleteOwned",
   "help.displayImage",
   // Terminal notices answer only a caller with a pane of its own, which no
   // perf session has. Their admit/refuse grading lives in
-  // `sessionServer.test.ts` rather than PERF-283.
+  // `sessionServer.notices.test.ts` rather than PERF-283.
   "terminal.notifyWhenIdle",
   // Batch tools validate and expand their arguments in main and run each item
   // as its single call, so a battery of argument-free probes only reads their
-  // refusal. The items are the calls above; `sessionServer.test.ts` grades the
+  // refusal. The items are the calls above; `sessionServer.notices.test.ts` grades the
   // expansion.
   "agent.launchMany",
   "terminal.sendCommandMany",

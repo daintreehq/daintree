@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const ipcUtilsMock = vi.hoisted(() => ({
   broadcastToRenderer: vi.fn(),
@@ -14,12 +14,15 @@ const registryMock = vi.hoisted(() => ({
 const contributionsMock = vi.hoisted(() => ({
   panelKinds: [] as Array<{ id: string; extensionId?: string }>,
   toolbarButtons: [] as Array<{ id: string; pluginId: string }>,
+  launchEntries: [] as Array<{ id: string; pluginId: string }>,
+  layouts: [] as Array<{ id: string; pluginId: string }>,
   keybindings: [] as Array<{ pluginId: string; item: { key: string } }>,
   contextMenuItems: [] as Array<{ pluginId: string; item: { label: string } }>,
   agents: {} as Record<string, unknown>,
   recipes: [] as unknown[],
   tours: [] as Array<{ id: string; pluginId: string }>,
   icons: [] as Array<{ key: string; pluginId: string }>,
+  hostedViews: [] as Array<{ id: string; pluginId: string }>,
 }));
 
 vi.mock("../../../ipc/utils.js", () => ({
@@ -38,6 +41,12 @@ vi.mock("../../../../shared/config/panelKindRegistry.js", () => ({
 vi.mock("../../../../shared/config/toolbarButtonRegistry.js", () => ({
   getAllPluginToolbarButtonConfigs: () => contributionsMock.toolbarButtons,
 }));
+vi.mock("../../../../shared/config/pluginLaunchEntryRegistry.js", () => ({
+  getAllPluginLaunchEntries: () => contributionsMock.launchEntries,
+}));
+vi.mock("../../../../shared/config/pluginLayoutRegistry.js", () => ({
+  getAllPluginLayouts: () => contributionsMock.layouts,
+}));
 vi.mock("../../pluginKeybindingRegistry.js", () => ({
   getPluginKeybindings: () => contributionsMock.keybindings,
 }));
@@ -52,6 +61,9 @@ vi.mock("../PluginRecipeRegistry.js", () => ({
 }));
 vi.mock("../../../../shared/config/pluginCustomIconRegistry.js", () => ({
   getPluginCustomIcons: () => contributionsMock.icons,
+}));
+vi.mock("../PluginHostedViewRegistry.js", () => ({
+  getPluginHostedViews: () => contributionsMock.hostedViews,
 }));
 vi.mock("../PluginTourRegistry.js", () => ({
   getPluginTours: () => contributionsMock.tours,
@@ -87,6 +99,10 @@ import {
   setProjectPluginVisibility,
 } from "../projectPluginVisibility.js";
 import { CHANNELS } from "../../../ipc/channels.js";
+import {
+  clearFileDecorationRegistry,
+  registerFileDecorationProviders,
+} from "../../fileDecorationRegistry.js";
 import type {
   PluginActionDescriptor,
   PluginRuntimeStatus,
@@ -105,9 +121,9 @@ function makeBroadcaster(): PluginContributionBroadcaster {
   return new PluginContributionBroadcaster({
     isDisposed: () => false,
     listPluginActions: () => actions,
-    initPromise: Promise.resolve(),
+    catalogReady: Promise.resolve(),
     listPluginRuntimeStatuses: () => runtimeStatuses,
-    isReplacingPlugin: () => false,
+    isRegistryUnsettled: () => false,
   });
 }
 
@@ -147,6 +163,8 @@ beforeEach(() => {
   runtimeStatuses = [];
   contributionsMock.panelKinds = [{ id: "acme.global.panel", extensionId: GLOBAL_PLUGIN }];
   contributionsMock.toolbarButtons = [{ id: "acme.global.btn", pluginId: GLOBAL_PLUGIN }];
+  contributionsMock.launchEntries = [];
+  contributionsMock.layouts = [];
   contributionsMock.keybindings = [{ pluginId: GLOBAL_PLUGIN, item: { key: "Ctrl+G" } }];
   contributionsMock.contextMenuItems = [{ pluginId: GLOBAL_PLUGIN, item: { label: "Global" } }];
   contributionsMock.agents = { "acme.agent": { id: "acme.agent" } };
@@ -154,6 +172,9 @@ beforeEach(() => {
   contributionsMock.tours = [{ id: "acme.global.welcome", pluginId: GLOBAL_PLUGIN }];
   contributionsMock.icons = [
     { key: "plugin-icon:acme.global:./icons/a.svg", pluginId: GLOBAL_PLUGIN },
+  ];
+  contributionsMock.hostedViews = [
+    { id: `plugin-view:${GLOBAL_PLUGIN}/prefs`, pluginId: GLOBAL_PLUGIN },
   ];
 });
 
@@ -299,14 +320,17 @@ describe("mutation broadcasts with nothing project-scoped", () => {
     ).toBe(contributionsMock.contextMenuItems);
   });
 
-  it("does not consult the view registry for the always-global agents and recipes channels", async () => {
+  it("does not consult the view registry for the always-global agents channel", async () => {
     setPluginContributionScope(PROJECT_PLUGIN_A, PROJECT_A);
+    registryMock.getRegisteredProjectViews.mockReturnValue([
+      { webContents: fakeWebContents(11), projectId: PROJECT_A },
+    ]);
     const b = makeBroadcaster();
     b.scheduleAgentsBroadcast(false);
-    b.scheduleRecipesBroadcast(false);
     await flush();
-    expect(ipcUtilsMock.broadcastToRenderer).toHaveBeenCalledTimes(2);
+    expect(ipcUtilsMock.broadcastToRenderer).toHaveBeenCalledTimes(1);
     expect(ipcUtilsMock.broadcastToProjectRenderers).not.toHaveBeenCalled();
+    expect(registryMock.getRegisteredProjectViews).not.toHaveBeenCalled();
   });
 });
 
@@ -327,6 +351,7 @@ describe("holdBroadcasts", () => {
       b.scheduleRecipesBroadcast(false);
       b.scheduleToursBroadcast();
       b.schedulePluginIconsBroadcast();
+      b.scheduleHostedViewsBroadcast();
     }
     b.scheduleToolbarButtonsBroadcast(true);
     b.scheduleRecipesBroadcast(true);
@@ -347,6 +372,7 @@ describe("holdBroadcasts", () => {
       "plugin:recipes-changed",
       "plugin:tours-changed",
       "plugin:icons-changed",
+      "plugin:hosted-views-changed",
     ]);
     const payloads = new Map(
       ipcUtilsMock.broadcastToRenderer.mock.calls.map((call) => [
@@ -386,9 +412,9 @@ describe("holdBroadcasts", () => {
     const b = new PluginContributionBroadcaster({
       isDisposed: () => disposed,
       listPluginActions: () => actions,
-      initPromise: Promise.resolve(),
+      catalogReady: Promise.resolve(),
       listPluginRuntimeStatuses: () => runtimeStatuses,
-      isReplacingPlugin: () => false,
+      isRegistryUnsettled: () => false,
     });
     const release = b.holdBroadcasts();
     b.schedulePluginActionsBroadcast();
@@ -514,33 +540,39 @@ describe("project-scoped mutation broadcasts", () => {
 });
 
 describe("pushSnapshotTo", () => {
-  it("replays the nine channels in order with unfiltered payloads when nothing is scoped", async () => {
+  it("replays the twelve channels in order with unfiltered payloads when nothing is scoped", async () => {
     const wc = fakeWebContents(11);
     const b = makeBroadcaster();
     await b.pushSnapshotTo(wc as unknown as Electron.WebContents);
 
-    expect(wc.send).toHaveBeenCalledTimes(9);
+    expect(wc.send).toHaveBeenCalledTimes(12);
     expect(wc.send.mock.calls.map((c) => (c[1] as { name: string }).name)).toEqual([
       "plugin:actions-changed",
       "plugin:panel-kinds-changed",
       "plugin:toolbar-buttons-changed",
+      "plugin:launch-entries-changed",
+      "plugin:layouts-changed",
       "plugin:keybindings-changed",
       "plugin:context-menu-items-changed",
       "plugin:agents-changed",
       "plugin:recipes-changed",
       "plugin:tours-changed",
       "plugin:icons-changed",
+      "plugin:hosted-views-changed",
     ]);
     expect(wc.send.mock.calls.map((c) => (c[1] as { payload: unknown }).payload)).toEqual([
       { actions },
       { kinds: contributionsMock.panelKinds },
       { buttons: contributionsMock.toolbarButtons, complete: false },
+      { entries: contributionsMock.launchEntries },
+      { layouts: contributionsMock.layouts },
       { keybindings: contributionsMock.keybindings, complete: true },
       { items: contributionsMock.contextMenuItems, complete: false },
       { agents: contributionsMock.agents, complete: false },
       { recipes: contributionsMock.recipes, complete: false },
       { tours: contributionsMock.tours },
       { icons: contributionsMock.icons },
+      { views: contributionsMock.hostedViews },
     ]);
   });
 
@@ -670,7 +702,7 @@ describe("pushSnapshotTo", () => {
     });
     const b = makeBroadcaster();
     await b.pushSnapshotTo(wc as unknown as Electron.WebContents);
-    expect(wc.send).toHaveBeenCalledTimes(9);
+    expect(wc.send).toHaveBeenCalledTimes(12);
   });
 
   it("skips a destroyed webContents and a disposed service", async () => {
@@ -683,9 +715,9 @@ describe("pushSnapshotTo", () => {
     const disposed = new PluginContributionBroadcaster({
       isDisposed: () => true,
       listPluginActions: () => actions,
-      initPromise: Promise.resolve(),
+      catalogReady: Promise.resolve(),
       listPluginRuntimeStatuses: () => [],
-      isReplacingPlugin: () => false,
+      isRegistryUnsettled: () => false,
     });
     await disposed.pushSnapshotTo(wc as unknown as Electron.WebContents);
     expect(wc.send).not.toHaveBeenCalled();
@@ -795,6 +827,39 @@ describe("per-project visibility of installed plugins", () => {
     expect(byName.get("plugin:tours-changed")).toEqual({ tours: [] });
     // …and its custom icons stop resolving there (#13143).
     expect(byName.get("plugin:icons-changed")).toEqual({ icons: [] });
+    // …and its views hosted outside the grid are withdrawn there (#13770).
+    expect(byName.get("plugin:hosted-views-changed")).toEqual({ views: [] });
+  });
+
+  it("scopes views hosted outside the grid like every other plugin-owned contribution (#13770)", async () => {
+    setProjectPluginVisibility(VIS_PROJECT_A, GLOBAL_PLUGIN, false);
+    const viewA = fakeWebContents(31);
+    const viewB = fakeWebContents(32);
+    registryMock.getRegisteredProjectViews.mockReturnValue([
+      { webContents: viewA, projectId: VIS_PROJECT_A },
+      { webContents: viewB, projectId: VIS_PROJECT_B },
+    ]);
+
+    const b = makeBroadcaster();
+    b.scheduleHostedViewsBroadcast();
+    b.scheduleHostedViewsBroadcast();
+    await flush();
+
+    const sent = ipcUtilsMock.broadcastToProjectRenderers.mock.calls.map((call) => [
+      call[0],
+      call[2] as { name: string; payload: unknown },
+    ]);
+    // Coalesced: one snapshot per project for the two calls in the tick.
+    expect(sent).toEqual([
+      [VIS_PROJECT_A, { name: "plugin:hosted-views-changed", payload: { views: [] } }],
+      [
+        VIS_PROJECT_B,
+        {
+          name: "plugin:hosted-views-changed",
+          payload: { views: contributionsMock.hostedViews },
+        },
+      ],
+    ]);
   });
 
   it("scopes custom icons like every other plugin-owned contribution (#13143)", async () => {
@@ -850,5 +915,274 @@ describe("per-project visibility of installed plugins", () => {
         { name: "plugin:tours-changed", payload: { tours: contributionsMock.tours } },
       ],
     ]);
+  });
+
+  it("keeps a project plugin's launch entries inside its own project (#13788)", async () => {
+    setPluginContributionScope(PROJECT_PLUGIN_A, VIS_PROJECT_A);
+    const globalEntry = { id: `${GLOBAL_PLUGIN}.new`, pluginId: GLOBAL_PLUGIN };
+    const localEntry = { id: `${PROJECT_PLUGIN_A}.board`, pluginId: PROJECT_PLUGIN_A };
+    contributionsMock.launchEntries = [globalEntry, localEntry];
+    const owner = fakeWebContents(61);
+    const other = fakeWebContents(62);
+    registryMock.getRegisteredProjectViews.mockReturnValue([
+      { webContents: owner, projectId: VIS_PROJECT_A },
+      { webContents: other, projectId: VIS_PROJECT_B },
+    ]);
+
+    const b = makeBroadcaster();
+    b.scheduleLaunchEntriesBroadcast();
+    b.scheduleLaunchEntriesBroadcast();
+    await flush();
+
+    expect(
+      ipcUtilsMock.broadcastToProjectRenderers.mock.calls.map((call) => [call[0], call[2]])
+    ).toEqual([
+      [
+        VIS_PROJECT_A,
+        { name: "plugin:launch-entries-changed", payload: { entries: [globalEntry, localEntry] } },
+      ],
+      [
+        VIS_PROJECT_B,
+        { name: "plugin:launch-entries-changed", payload: { entries: [globalEntry] } },
+      ],
+    ]);
+
+    await b.pushSnapshotTo(other as unknown as Electron.WebContents, VIS_PROJECT_B);
+    const replayed = other.send.mock.calls
+      .map((call) => call[1] as { name: string; payload: unknown })
+      .find((event) => event.name === "plugin:launch-entries-changed");
+    expect(replayed?.payload).toEqual({ entries: [globalEntry] });
+  });
+
+  it("keeps a project plugin's layouts inside its own project (#13780)", async () => {
+    setPluginContributionScope(PROJECT_PLUGIN_A, VIS_PROJECT_A);
+    const globalLayout = { id: `${GLOBAL_PLUGIN}.workspace`, pluginId: GLOBAL_PLUGIN };
+    const localLayout = { id: `${PROJECT_PLUGIN_A}.records`, pluginId: PROJECT_PLUGIN_A };
+    contributionsMock.layouts = [globalLayout, localLayout];
+    const owner = fakeWebContents(63);
+    const other = fakeWebContents(64);
+    registryMock.getRegisteredProjectViews.mockReturnValue([
+      { webContents: owner, projectId: VIS_PROJECT_A },
+      { webContents: other, projectId: VIS_PROJECT_B },
+    ]);
+
+    const b = makeBroadcaster();
+    b.scheduleLayoutsBroadcast();
+    b.scheduleLayoutsBroadcast();
+    await flush();
+
+    expect(
+      ipcUtilsMock.broadcastToProjectRenderers.mock.calls.map((call) => [call[0], call[2]])
+    ).toEqual([
+      [
+        VIS_PROJECT_A,
+        { name: "plugin:layouts-changed", payload: { layouts: [globalLayout, localLayout] } },
+      ],
+      [VIS_PROJECT_B, { name: "plugin:layouts-changed", payload: { layouts: [globalLayout] } }],
+    ]);
+
+    await b.pushSnapshotTo(other as unknown as Electron.WebContents, VIS_PROJECT_B);
+    const replayed = other.send.mock.calls
+      .map((call) => call[1] as { name: string; payload: unknown })
+      .find((event) => event.name === "plugin:layouts-changed");
+    expect(replayed?.payload).toEqual({ layouts: [globalLayout] });
+  });
+
+  describe("recipes (#13765)", () => {
+    const globalRecipe = {
+      id: "acme.global.deploy",
+      origin: { kind: "plugin", pluginId: GLOBAL_PLUGIN, contributionId: "deploy" },
+    };
+
+    beforeEach(() => {
+      contributionsMock.recipes = [globalRecipe];
+    });
+
+    it("scopes the live recipes broadcast by the recipe's owning plugin", async () => {
+      setProjectPluginVisibility(VIS_PROJECT_A, GLOBAL_PLUGIN, false);
+      registryMock.getRegisteredProjectViews.mockReturnValue([
+        { webContents: fakeWebContents(31), projectId: VIS_PROJECT_A },
+        { webContents: fakeWebContents(32), projectId: VIS_PROJECT_B },
+      ]);
+
+      const b = makeBroadcaster();
+      b.scheduleRecipesBroadcast(true);
+      await flush();
+
+      expect(ipcUtilsMock.broadcastToRenderer).not.toHaveBeenCalled();
+      expect(
+        ipcUtilsMock.broadcastToProjectRenderers.mock.calls.map((call) => [call[0], call[2]])
+      ).toEqual([
+        [
+          VIS_PROJECT_A,
+          { name: "plugin:recipes-changed", payload: { recipes: [], complete: true } },
+        ],
+        [
+          VIS_PROJECT_B,
+          { name: "plugin:recipes-changed", payload: { recipes: [globalRecipe], complete: true } },
+        ],
+      ]);
+    });
+
+    it("drops a hidden plugin's recipes from the cold-restore snapshot", async () => {
+      setProjectPluginVisibility(VIS_PROJECT_A, GLOBAL_PLUGIN, false);
+      const wc = fakeWebContents(21);
+      registryMock.getProjectForWebContents.mockReturnValue(VIS_PROJECT_A);
+
+      await makeBroadcaster().pushSnapshotTo(wc as unknown as Electron.WebContents);
+
+      expect(sentPayloads(wc, "plugin:recipes-changed")).toEqual([
+        { recipes: [], complete: false },
+      ]);
+    });
+
+    it("re-sends recipes authoritatively when visibility changes", async () => {
+      setProjectPluginVisibility(VIS_PROJECT_A, GLOBAL_PLUGIN, false);
+      registryMock.getRegisteredProjectViews.mockReturnValue([
+        { webContents: fakeWebContents(23), projectId: VIS_PROJECT_A },
+      ]);
+
+      const b = makeBroadcaster();
+      b.broadcastVisibilityChanged();
+      await flush();
+
+      const sent = ipcUtilsMock.broadcastToProjectRenderers.mock.calls.map(
+        (call) => call[2] as { name: string; payload: unknown }
+      );
+      expect(sent.filter((e) => e.name === "plugin:recipes-changed")).toEqual([
+        { name: "plugin:recipes-changed", payload: { recipes: [], complete: true } },
+      ]);
+    });
+
+    it("shows a default-hidden plugin's recipes only where a project opted in, and to an unbound view", async () => {
+      setPluginVisibilityDefault(GLOBAL_PLUGIN, true);
+      setProjectPluginVisibility(VIS_PROJECT_A, GLOBAL_PLUGIN, true);
+      registryMock.getProjectForWebContents.mockReturnValue(VIS_PROJECT_B);
+      const b = makeBroadcaster();
+
+      const optedIn = fakeWebContents(41);
+      await b.pushSnapshotTo(optedIn as unknown as Electron.WebContents, VIS_PROJECT_A);
+      expect(sentPayloads(optedIn, "plugin:recipes-changed")).toEqual([
+        { recipes: [globalRecipe], complete: false },
+      ]);
+
+      const undecided = fakeWebContents(42);
+      await b.pushSnapshotTo(undecided as unknown as Electron.WebContents);
+      expect(sentPayloads(undecided, "plugin:recipes-changed")).toEqual([
+        { recipes: [], complete: false },
+      ]);
+
+      // An explicit null wins over the registry lookup: the project picker is
+      // not a project, so "hidden in undecided projects" does not reach it.
+      const picker = fakeWebContents(43);
+      await b.pushSnapshotTo(picker as unknown as Electron.WebContents, null);
+      expect(sentPayloads(picker, "plugin:recipes-changed")).toEqual([
+        { recipes: [globalRecipe], complete: false },
+      ]);
+    });
+
+    it("keeps a project-local plugin's recipes inside its own project", async () => {
+      setPluginContributionScope(PROJECT_PLUGIN_A, VIS_PROJECT_A);
+      const localRecipe = {
+        id: "acme.local-a.build",
+        origin: { kind: "plugin", pluginId: PROJECT_PLUGIN_A, contributionId: "build" },
+      };
+      contributionsMock.recipes = [globalRecipe, localRecipe];
+      const wc = fakeWebContents(24);
+      registryMock.getProjectForWebContents.mockReturnValue(VIS_PROJECT_B);
+
+      await makeBroadcaster().pushSnapshotTo(wc as unknown as Electron.WebContents);
+
+      expect(sentPayloads(wc, "plugin:recipes-changed")).toEqual([
+        { recipes: [globalRecipe], complete: false },
+      ]);
+    });
+
+    it("live-broadcasts a project plugin's recipes to its own project only, and withdraws them (#13796)", async () => {
+      // No visibility override anywhere: ownership alone has to do the narrowing.
+      setPluginContributionScope(PROJECT_PLUGIN_A, VIS_PROJECT_A);
+      const localRecipe = {
+        id: "acme.local-a.build",
+        origin: { kind: "plugin", pluginId: PROJECT_PLUGIN_A, contributionId: "build" },
+      };
+      contributionsMock.recipes = [globalRecipe, localRecipe];
+      const owner = fakeWebContents(51);
+      const other = fakeWebContents(52);
+      const unbound = fakeWebContents(53);
+      registryMock.getRegisteredProjectViews.mockReturnValue([
+        { webContents: owner, projectId: VIS_PROJECT_A },
+        { webContents: other, projectId: VIS_PROJECT_B },
+      ]);
+      registryMock.getAllAppWebContents.mockReturnValue([owner, other, unbound]);
+      const b = makeBroadcaster();
+      const projectPushes = () =>
+        ipcUtilsMock.broadcastToProjectRenderers.mock.calls.map((call) => [call[0], call[2]]);
+
+      b.scheduleRecipesBroadcast(true);
+      await flush();
+
+      expect(projectPushes()).toEqual([
+        [
+          VIS_PROJECT_A,
+          {
+            name: "plugin:recipes-changed",
+            payload: { recipes: [globalRecipe, localRecipe], complete: true },
+          },
+        ],
+        [
+          VIS_PROJECT_B,
+          { name: "plugin:recipes-changed", payload: { recipes: [globalRecipe], complete: true } },
+        ],
+      ]);
+      expect(sentPayloads(unbound, "plugin:recipes-changed")).toEqual([
+        { recipes: [globalRecipe], complete: true },
+      ]);
+
+      // The plugin is switched off: its recipes leave the registry and the
+      // owner's next snapshot is authoritative without them.
+      ipcUtilsMock.broadcastToProjectRenderers.mockClear();
+      contributionsMock.recipes = [globalRecipe];
+      b.scheduleRecipesBroadcast(true);
+      await flush();
+
+      expect(projectPushes()[0]).toEqual([
+        VIS_PROJECT_A,
+        { name: "plugin:recipes-changed", payload: { recipes: [globalRecipe], complete: true } },
+      ]);
+    });
+  });
+
+  describe("file decorations (#13765)", () => {
+    afterEach(() => {
+      clearFileDecorationRegistry();
+    });
+
+    it("invalidates every declared decoration scope once, so each view re-pulls", () => {
+      registerFileDecorationProviders(GLOBAL_PLUGIN, [
+        { id: "badges", scopes: ["worktree-diff:*", "file-tree:*"] },
+      ]);
+      registerFileDecorationProviders(PROJECT_PLUGIN_A, [
+        { id: "status", scopes: ["file-tree:*"] },
+      ]);
+
+      makeBroadcaster().broadcastVisibilityChanged();
+
+      const invalidated = ipcUtilsMock.broadcastToRenderer.mock.calls
+        .map((call) => call[1] as { name: string; payload: unknown })
+        .filter((e) => e.name === "plugin:decorations-changed")
+        .map((e) => e.payload);
+      // Path-less: the hook re-pulls every visible path, and the pull — not
+      // this broadcast — decides what the sender's project may see.
+      expect(invalidated).toEqual([{ scope: "worktree-diff:*" }, { scope: "file-tree:*" }]);
+    });
+
+    it("sends no invalidation when no plugin declares a decoration provider", () => {
+      makeBroadcaster().broadcastVisibilityChanged();
+      expect(
+        ipcUtilsMock.broadcastToRenderer.mock.calls.some(
+          (call) => (call[1] as { name: string }).name === "plugin:decorations-changed"
+        )
+      ).toBe(false);
+    });
   });
 });

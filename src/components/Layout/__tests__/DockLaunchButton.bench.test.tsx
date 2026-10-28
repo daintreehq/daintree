@@ -102,7 +102,6 @@ vi.mock("@/services/ActionService", () => ({ actionService: { dispatch: vi.fn() 
 vi.mock("@/store/agentSettingsStore", () => {
   const state = {
     settings: { agents: {} },
-    setAgentPinned: () => {},
     updateWorktreePreset: () => Promise.resolve(),
     updateAgent: () => Promise.resolve(),
   };

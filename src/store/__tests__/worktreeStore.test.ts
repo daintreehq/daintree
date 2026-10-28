@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TerminalRefreshTier } from "@shared/types/panel";
 import type { FleetScopeToken } from "@shared/types/worktree";
 import type { Issue, PR } from "@shared/types/forge";
@@ -128,12 +128,15 @@ vi.mock("@/clients", () => ({
   },
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     applyRendererPolicy: applyRendererPolicyMock,
     wake: wakeMock,
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("@/services/terminal/worktreeRevealCoordinator", () => ({
   replaceWorktreeRevealObligations: replaceWorktreeRevealObligationsMock,
@@ -178,11 +181,18 @@ import {
 } from "@/services/terminal/inputGate";
 import { setFleetArmedIdsAccessor, setFleetLastArmedIdAccessor } from "../storeAccessors";
 import { _resetHostPlatformForTests, setHostPlatformInfo } from "@/hooks/useHostPlatform";
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 
 let armedIdsForFleet = new Set<string>();
 setFleetArmedIdsAccessor(() => armedIdsForFleet);
 let lastArmedIdForFleet: string | null = null;
 setFleetLastArmedIdAccessor(() => lastArmedIdForFleet);
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
+});
 
 describe("worktreeStore", () => {
   beforeEach(() => {

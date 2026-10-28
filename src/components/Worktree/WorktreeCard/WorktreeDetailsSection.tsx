@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/Spinner";
 import { Callout } from "@/components/ui/Callout";
 import { useForgeAuthorAvatar } from "@/hooks/useForgeAuthorAvatar";
+import { useReviewChangeHint } from "@/hooks/useReviewChangeHint";
 import {
   Activity,
   AlertTriangle,
@@ -86,6 +87,15 @@ export interface WorktreeDetailsSectionProps {
   onDismissError: (id: string) => void;
   onRetryError: (id: string, action: RetryAction, args?: Record<string, unknown>) => Promise<void>;
   onOpenReviewHub?: () => void;
+  /**
+   * Set when the presentation profile quiets git detail (#13777): the branch,
+   * issue, PR and sync detail the header stopped drawing, shown at the top of
+   * the expanded panel. The resting row drops its last-activity chip, whose
+   * time and commit the panel's own last-active line already carries, and the
+   * Review Hub shortcut leaves the resting row for the menu's Git submenu
+   * unless the worktree is conflicted, where it is the way out.
+   */
+  quietGitDetail?: React.ReactNode;
   isLifecycleRunning?: boolean;
   lifecycleLabel?: string;
 
@@ -120,6 +130,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
     onDismissError,
     onRetryError,
     onOpenReviewHub,
+    quietGitDetail,
     reviewState,
     isLifecycleRunning,
     lifecycleLabel,
@@ -145,6 +156,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
     cwd: worktree.path,
   });
 
+  const reviewChangeLine = useReviewChangeHint(worktree);
   const changedFileCount = worktree.worktreeChanges?.changedFileCount ?? 0;
   const countRef = useRef<HTMLSpanElement>(null);
   const prefersReducedMotion = useShouldSkipMotion();
@@ -188,13 +200,29 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
   // A clean tree with unpushed commits still has a Review Hub next step —
   // push — so the opener stays visible; only the label shifts to match.
   const isUnpushedClean = reviewState === "unpushed-clean" && !hasChanges;
-  const showReviewHubButton = !!onOpenReviewHub && (hasChanges || isUnpushedClean);
+  const showReviewHubButton =
+    !!onOpenReviewHub &&
+    (hasChanges || isUnpushedClean) &&
+    (quietGitDetail === undefined || isConflicted);
   const reviewHubButtonLabel = isUnpushedClean ? "Review & push" : "Review & commit";
 
   const lifecycleState = worktree.lifecycleStatus?.state;
-  const lifecycleFailed = lifecycleState === "failed" || lifecycleState === "timed-out";
-  const lifecycleError = worktree.lifecycleStatus?.error;
-  const lifecycleOutput = worktree.lifecycleStatus?.output;
+  const lifecycleSlotFailed = lifecycleState === "failed" || lifecycleState === "timed-out";
+  // Plugin steps that did not succeed stay retryable after a later resource
+  // action overwrites the lifecycle slot, so their failure is read from
+  // `setupStatus`, which no later phase repurposes.
+  const pluginStepsFailed =
+    !lifecycleSlotFailed &&
+    lifecycleState !== "running" &&
+    worktree.setupStatus?.stage === "plugin-steps" &&
+    (worktree.setupStatus.state === "failed" || worktree.setupStatus.state === "timed-out");
+  // Setup still running refuses a retry, whatever an overwritten slot says.
+  const lifecycleFailed =
+    worktree.setupStatus?.state !== "running" && (lifecycleSlotFailed || pluginStepsFailed);
+  const lifecycleError = pluginStepsFailed
+    ? worktree.setupStatus?.error
+    : worktree.lifecycleStatus?.error;
+  const lifecycleOutput = pluginStepsFailed ? undefined : worktree.lifecycleStatus?.output;
   const hasLifecycleDetails = lifecycleFailed && Boolean(lifecycleError || lifecycleOutput);
   // Two separate observations: the host found unapproved repository commands
   // this worktree would run, and/or its setup was skipped for want of approval.
@@ -207,6 +235,10 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
   const setupNeedsApproval =
     worktree.setupStatus?.state === "needs-approval" ||
     (worktree.lifecycleStatus?.phase === "setup" && lifecycleState === "needs-approval");
+  // The setup script ran; what waits is a plugin's step, not repository commands.
+  const pluginStepsNeedApproval =
+    worktree.setupStatus?.state === "needs-approval" &&
+    worktree.setupStatus.stage === "plugin-steps";
   const [isApprovalDialogOpen, setIsApprovalDialogOpen] = useState(false);
   const approvalDialogMounted = useKeepMounted(isApprovalDialogOpen);
   const handleReviewCommands = (e: React.MouseEvent) => {
@@ -331,6 +363,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                     "max-h-52 overflow-y-auto px-3 pb-2.5"
               )}
             >
+              {quietGitDetail}
               <WorktreeDetails
                 variant={variant}
                 worktree={worktree}
@@ -437,16 +470,25 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                         insertions={worktree.worktreeChanges.insertions}
                         deletions={worktree.worktreeChanges.deletions}
                       />
+                      {reviewChangeLine && (
+                        <span className="truncate text-text-secondary">· {reviewChangeLine}</span>
+                      )}
                     </span>
                   ) : (
-                    <span
-                      className={cn(
-                        computedSubtitle.tone === "warning" && "text-status-warning",
-                        computedSubtitle.tone === "info" && "text-status-info",
-                        computedSubtitle.tone === "muted" && "text-text-muted"
+                    <span className={cn(reviewChangeLine && "flex items-center gap-1.5")}>
+                      <span
+                        className={cn(
+                          reviewChangeLine && "truncate",
+                          computedSubtitle.tone === "warning" && "text-status-warning",
+                          computedSubtitle.tone === "info" && "text-status-info",
+                          computedSubtitle.tone === "muted" && "text-text-muted"
+                        )}
+                      >
+                        {computedSubtitle.text}
+                      </span>
+                      {reviewChangeLine && (
+                        <span className="truncate text-text-secondary">· {reviewChangeLine}</span>
                       )}
-                    >
-                      {computedSubtitle.text}
                     </span>
                   )}
                 </span>
@@ -559,15 +601,17 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                     </span>
                   )}
 
-                <WorktreeActivityChip
-                  lastCommitTimestampMs={worktree.worktreeChanges?.lastCommitTimestampMs}
-                  author={worktree.worktreeChanges?.lastCommitAuthor}
-                  commitMessage={worktree.worktreeChanges?.lastCommitMessage}
-                  commitBody={worktree.worktreeChanges?.lastCommitBody}
-                  commitSha={worktree.worktreeChanges?.headOid}
-                  forgeAvatarUrl={forgeAuthorAvatarUrl}
-                  lastActivityTimestamp={worktree.lastActivityTimestamp}
-                />
+                {quietGitDetail === undefined && (
+                  <WorktreeActivityChip
+                    lastCommitTimestampMs={worktree.worktreeChanges?.lastCommitTimestampMs}
+                    author={worktree.worktreeChanges?.lastCommitAuthor}
+                    commitMessage={worktree.worktreeChanges?.lastCommitMessage}
+                    commitBody={worktree.worktreeChanges?.lastCommitBody}
+                    commitSha={worktree.worktreeChanges?.headOid}
+                    forgeAvatarUrl={forgeAuthorAvatarUrl}
+                    lastActivityTimestamp={worktree.lastActivityTimestamp}
+                  />
+                )}
               </div>
 
               {showReviewHubButton && (
@@ -661,9 +705,11 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
           >
             <span className="text-xs text-text-secondary truncate">
               {commandsNeedApproval
-                ? setupNeedsApproval
-                  ? "Setup is waiting for you to approve its commands"
-                  : "Repository commands need your approval to run"
+                ? pluginStepsNeedApproval
+                  ? "Setup is waiting for you to allow plugin steps"
+                  : setupNeedsApproval
+                    ? "Setup is waiting for you to approve its commands"
+                    : "Repository commands need your approval to run"
                 : "Setup was skipped, and its commands are approved now"}
             </span>
             <Button
@@ -680,7 +726,11 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
               ) : (
                 <RefreshCw aria-hidden="true" />
               )}
-              {commandsNeedApproval ? "Review commands" : "Run setup"}
+              {commandsNeedApproval
+                ? pluginStepsNeedApproval
+                  ? "Review steps"
+                  : "Review commands"
+                : "Run setup"}
             </Button>
           </div>
         )}

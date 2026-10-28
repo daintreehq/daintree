@@ -34,6 +34,17 @@ const { appMock, handlers, onListeners, ipcMainMock, getWindowMock, getProjectMo
   }
 );
 
+const loggerMock = vi.hoisted(() => ({
+  debug: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+}));
+
+vi.mock("../../utils/logger.js", () => ({
+  createLogger: () => loggerMock,
+}));
+
 vi.mock("electron", () => ({
   app: appMock,
   ipcMain: ipcMainMock,
@@ -359,7 +370,6 @@ describe("invokeForEndpoint", () => {
     const listener = vi.fn();
     cleanups.push(getIpcDispatcher().registerSend("terminal:input", listener));
     const { endpoint } = makeRemoteEndpoint();
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
     getIpcDispatcher().sendForEndpoint({ endpoint, client: REMOTE_CLIENT }, "terminal:input", [
       "id",
@@ -373,8 +383,10 @@ describe("invokeForEndpoint", () => {
         "id",
         "ls"
       );
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining("terminal:resize"));
-      warn.mockRestore();
+      expect(loggerMock.info).toHaveBeenCalledWith(
+        "Channel refused for remote routing",
+        expect.objectContaining({ code: "CHANNEL_NOT_REMOTABLE", channel: "terminal:resize" })
+      );
     });
   });
 });
@@ -509,7 +521,6 @@ describe("remote router", () => {
     ipcMainMock.on("terminal:input", hostB);
     ipcMainMock.on(SHELL_CHANNEL, shell);
     ipcMainMock.on(UNCLASSIFIED_CHANNEL, unknown);
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
     const event = makeEvent();
     for (const listener of onListeners.get("terminal:input")!) listener(event, "id", "ls");
@@ -522,8 +533,10 @@ describe("remote router", () => {
     expect(hostB).not.toHaveBeenCalled();
     expect(shell).toHaveBeenCalledTimes(1);
     expect(unknown).not.toHaveBeenCalled();
-    expect(warn).toHaveBeenCalled();
-    warn.mockRestore();
+    expect(loggerMock.info).toHaveBeenCalledWith(
+      "Send dropped",
+      expect.objectContaining({ channel: UNCLASSIFIED_CHANNEL, code: "CHANNEL_NOT_REMOTABLE" })
+    );
   });
 
   it("changes nothing once the router is removed", async () => {
@@ -577,7 +590,14 @@ describe("drive-lease gate", () => {
       },
       {
         projectsForPath: (p) => (p === P1 ? ["proj-1"] : p === P2 ? ["proj-2"] : []),
-        projectForTerminal: (id) => (id === "t1" ? "proj-1" : id === "t2" ? "proj-2" : null),
+        describeTerminal: (id) =>
+          id === "t1"
+            ? { projectId: "proj-1" }
+            : id === "t2"
+              ? { projectId: "proj-2" }
+              : id === "host-shell"
+                ? { projectId: null }
+                : "missing",
         projectsForOperation: () => [],
         projectsForDevPreviewPanel: () => [],
         projectsForHelpSession: () => [],
@@ -680,14 +700,12 @@ describe("drive-lease gate", () => {
     cleanups.push(onWithContext("terminal:update-title", listener));
     const { endpoint } = makeRemoteEndpoint(-4, "proj-1");
     installGate(new Map([["proj-1", { endpointId: "remote:-9", clientId: "client-c" }]]));
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     getIpcDispatcher().sendForEndpoint(
       { endpoint, client: REMOTE_CLIENT },
       "terminal:update-title",
       [{ id: "t1", title: "x", titleMode: "user" }]
     );
     expect(listener).not.toHaveBeenCalled();
-    warn.mockRestore();
   });
 
   it("checks the project a call targets, not the one its caller is showing", async () => {
@@ -757,7 +775,7 @@ describe("drive-lease gate", () => {
     const handler = handle("terminal:kill");
     getProjectMock.mockReturnValue("proj-1");
     installGate(new Map([["proj-2", { endpointId: "remote:-9", clientId: "client-c" }]]), {
-      projectForTerminal: async (id) => (id === "t1" ? "proj-1" : "proj-2"),
+      describeTerminal: async (id) => ({ projectId: id === "t1" ? "proj-1" : "proj-2" }),
     });
     await expect(invokeLocal("terminal:kill", makeEvent(), "t1")).resolves.toEqual(
       wrapSuccess("ran")
@@ -769,7 +787,6 @@ describe("drive-lease gate", () => {
     const listener = vi.fn();
     cleanups.push(onWithContext("terminal:update-title", listener));
     const { endpoint } = makeRemoteEndpoint(-4, "proj-1");
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     for (const id of ["t1", "t2"]) {
       getIpcDispatcher().sendForEndpoint(
         { endpoint, client: REMOTE_CLIENT },
@@ -779,7 +796,37 @@ describe("drive-lease gate", () => {
     }
     await vi.waitFor(() => expect(listener).toHaveBeenCalledTimes(1));
     expect(listener.mock.calls[0]![1]).toMatchObject({ id: "t1" });
-    warn.mockRestore();
+  });
+
+  it("lets a view end a terminal the host no longer has while another drives a project here", async () => {
+    const kill = handle("terminal:kill");
+    const trash = handle("terminal:trash");
+    const restore = handle("terminal:restore");
+    const { endpoint } = makeRemoteEndpoint(-4, "proj-1");
+    installGate(new Map([["proj-2", { endpointId: "remote:-9", clientId: "client-c" }]]), {
+      describeTerminal: async (id) =>
+        id === "t2"
+          ? { projectId: "proj-2" }
+          : id === "host-shell"
+            ? { projectId: null }
+            : "missing",
+    });
+    const ask = (channel: string, id: string) =>
+      getIpcDispatcher().invokeForEndpoint({ endpoint, client: REMOTE_CLIENT }, channel, [id]);
+
+    await expect(ask("terminal:kill", "gone")).resolves.toEqual(wrapSuccess("ran"));
+    await expect(ask("terminal:trash", "gone")).resolves.toEqual(wrapSuccess("ran"));
+    for (const [channel, id] of [
+      ["terminal:restore", "gone"],
+      ["terminal:kill", "host-shell"],
+      ["terminal:kill", "t2"],
+    ] as const) {
+      const refused = await ask(channel, id);
+      expect(refused.ok ? null : refused.error.code, `${channel} ${id}`).toBe("DRIVEN_ELSEWHERE");
+    }
+    expect(kill).toHaveBeenCalledTimes(1);
+    expect(trash).toHaveBeenCalledTimes(1);
+    expect(restore).not.toHaveBeenCalled();
   });
 
   it("judges a lookup that answered later against the leases as they stand then", async () => {
@@ -811,6 +858,54 @@ describe("drive-lease gate", () => {
     expect(handler).not.toHaveBeenCalled();
   });
 
+  it("refuses clearing every project's session history from a window that watches", async () => {
+    const handler = handle("agent-session:clear");
+    const { endpoint } = makeRemoteEndpoint(-4, "proj-1");
+    installGate(new Map([["proj-1", { endpointId: "remote:-9", clientId: "client-c" }]]));
+    const refused = await getIpcDispatcher().invokeForEndpoint(
+      { endpoint, client: REMOTE_CLIENT },
+      "agent-session:clear",
+      [{}]
+    );
+    expect(refused.ok ? null : refused.error.code).toBe("DRIVEN_ELSEWHERE");
+    expect(refused.ok ? null : refused.error.userMessage).toMatch(/Take control first/);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("refuses a clear of every project while another screen drives any of them", async () => {
+    const handler = handle("agent-session:clear");
+    getProjectMock.mockReturnValue("proj-1");
+    installGate(new Map([["proj-2", { endpointId: "remote:-9", clientId: "client-c" }]]));
+    const refused = await invokeLocal("agent-session:clear", makeEvent(), {});
+    expect(refused.ok ? null : refused.error.code).toBe("DRIVEN_ELSEWHERE");
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("clears one worktree's history unless that worktree's project is driven elsewhere", async () => {
+    const handler = handle("agent-session:clear");
+    getProjectMock.mockReturnValue("proj-1");
+    installGate(new Map([["proj-2", { endpointId: "remote:-9", clientId: "client-c" }]]));
+    await expect(
+      invokeLocal("agent-session:clear", makeEvent(), { worktreeId: P1 })
+    ).resolves.toEqual(wrapSuccess("ran"));
+    const refused = await invokeLocal("agent-session:clear", makeEvent(), { worktreeId: P2 });
+    expect(refused.ok ? null : refused.error.code).toBe("DRIVEN_ELSEWHERE");
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses changing the session history window while any project is driven elsewhere", async () => {
+    const handler = handle("agent-session:set-retention");
+    const { endpoint } = makeRemoteEndpoint(-4, "proj-1");
+    installGate(new Map([["proj-2", { endpointId: "remote:-9", clientId: "client-c" }]]));
+    const refused = await getIpcDispatcher().invokeForEndpoint(
+      { endpoint, client: REMOTE_CLIENT },
+      "agent-session:set-retention",
+      [7]
+    );
+    expect(refused.ok ? null : refused.error.code).toBe("DRIVEN_ELSEWHERE");
+    expect(handler).not.toHaveBeenCalled();
+  });
+
   it("checks nothing with no gate installed, as for anyone who never used Remote Hosts", async () => {
     const handler = handle(DRIVER_CHANNEL);
     getProjectMock.mockReturnValue("proj-1");
@@ -828,31 +923,28 @@ describe("remote scope gate", () => {
   function installScope() {
     cleanups.push(
       getIpcDispatcher().setScopeGate(
-        createRemoteScopeGate(
-          {
-            projectsForPath: (p) =>
-              p.startsWith(`${P1}/nested-wt-of-2`)
-                ? ["proj-1", "proj-2"]
-                : p.startsWith(P1)
-                  ? ["proj-1"]
-                  : p.startsWith(P2)
-                    ? ["proj-2"]
-                    : [],
-            projectForTerminal: (id) => (id === "t1" ? "proj-1" : id === "t2" ? "proj-2" : null),
-            projectsForOperation: () => [],
-            projectsForDevPreviewPanel: () => [],
-            projectsForHelpSession: () => [],
-            currentProjectId: () => null,
-          },
-          (id) =>
+        createRemoteScopeGate({
+          projectsForPath: (p) =>
+            p.startsWith(`${P1}/nested-wt-of-2`)
+              ? ["proj-1", "proj-2"]
+              : p.startsWith(P1)
+                ? ["proj-1"]
+                : p.startsWith(P2)
+                  ? ["proj-2"]
+                  : [],
+          describeTerminal: (id) =>
             id === "t1"
               ? { projectId: "proj-1" }
               : id === "t2"
                 ? { projectId: "proj-2" }
                 : id === "host-shell"
                   ? { projectId: null }
-                  : "missing"
-        )
+                  : "missing",
+          projectsForOperation: () => [],
+          projectsForDevPreviewPanel: () => [],
+          projectsForHelpSession: () => [],
+          currentProjectId: () => null,
+        })
       )
     );
   }
@@ -881,6 +973,49 @@ describe("remote scope gate", () => {
     expect((await ask(endpoint, "git:get-staging-status", [P2])).ok).toBe(false);
     expect((await ask(endpoint, "git:get-staging-status", ["/etc"])).ok).toBe(false);
     expect(status).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a remote view's review marks to its own project's worktrees", async () => {
+    installScope();
+    const mark = handle("review-marks:mark");
+    const clear = handle("review-marks:clear");
+    const { endpoint } = makeRemoteEndpoint(-3, "proj-1");
+
+    expect((await ask(endpoint, "review-marks:mark", [`${P1}/wt`, {}, 0])).ok).toBe(true);
+    const other = await ask(endpoint, "review-marks:mark", [`${P2}/wt`, {}, 0]);
+    expect(other.ok ? null : other.error.code).toBe("PERMISSION");
+    expect((await ask(endpoint, "review-marks:clear", [`${P1}/wt`, 0])).ok).toBe(true);
+    expect((await ask(endpoint, "review-marks:clear", [`${P2}/wt`, 0])).ok).toBe(false);
+    expect((await ask(endpoint, "review-marks:clear", ["/elsewhere", 0])).ok).toBe(false);
+    expect(mark).toHaveBeenCalledTimes(1);
+    expect(clear).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a remote view's review reads and captured marks to its own project's worktrees", async () => {
+    installScope();
+    const reads = [
+      "review-marks:capture",
+      "review-marks:compare",
+      "review-marks:file-since",
+    ] as const;
+    const handlers = reads.map((channel) => handle(channel));
+    const markCaptured = handle("review-marks:mark-captured");
+    const { endpoint } = makeRemoteEndpoint(-3, "proj-1");
+
+    for (const channel of reads) {
+      expect((await ask(endpoint, channel, [`${P1}/wt`])).ok, channel).toBe(true);
+      const other = await ask(endpoint, channel, [`${P2}/wt`]);
+      expect(other.ok ? null : other.error.code, channel).toBe("PERMISSION");
+      expect((await ask(endpoint, channel, ["/elsewhere"])).ok, channel).toBe(false);
+    }
+    expect((await ask(endpoint, "review-marks:mark-captured", [`${P1}/wt`, "id", 0])).ok).toBe(
+      true
+    );
+    expect((await ask(endpoint, "review-marks:mark-captured", [`${P2}/wt`, "id", 0])).ok).toBe(
+      false
+    );
+    for (const handler of handlers) expect(handler).toHaveBeenCalledTimes(1);
+    expect(markCaptured).toHaveBeenCalledTimes(1);
   });
 
   it("checks every terminal of a batch, letting gone ones through for the handler to answer", async () => {

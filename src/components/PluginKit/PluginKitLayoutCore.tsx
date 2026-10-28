@@ -78,7 +78,14 @@ const GAP_CLASS: Record<PluginLayoutGap, string> = {
 };
 
 // The same steps in px, for grid track arithmetic that has to know the gap.
-const GAP_PX: Record<PluginLayoutGap, number> = { none: 0, xs: 4, sm: 8, md: 12, lg: 16, xl: 24 };
+export const GAP_PX: Record<PluginLayoutGap, number> = {
+  none: 0,
+  xs: 4,
+  sm: 8,
+  md: 12,
+  lg: 16,
+  xl: 24,
+};
 
 const PADDING_CLASS: Record<PluginLayoutGap, string> = {
   none: "",
@@ -125,7 +132,7 @@ const ELEMENTS = [
   "span",
 ] as const;
 
-function gapOf(value: unknown, fallback: PluginLayoutGap): PluginLayoutGap {
+export function gapOf(value: unknown, fallback: PluginLayoutGap): PluginLayoutGap {
   return oneOf(value, GAPS) ?? fallback;
 }
 
@@ -251,8 +258,8 @@ function KitGrid({ children, gap, columns, align, as, className, ...rest }: Plug
   );
 }
 
-const AUTO_GRID_DEFAULT_MIN_PX = 180;
-const AUTO_GRID_LIMIT_PX = 4096;
+export const AUTO_GRID_DEFAULT_MIN_PX = 180;
+export const AUTO_GRID_LIMIT_PX = 4096;
 
 /**
  * The track list of an `AutoGrid`. `auto-fill`/`auto-fit` size against the

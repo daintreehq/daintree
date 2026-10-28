@@ -1,7 +1,11 @@
-import { app } from "electron";
+import path from "node:path";
+import { randomUUID } from "node:crypto";
+import { stat } from "node:fs/promises";
+import { app, webContents } from "electron";
 import type {
   CanopyLookPlace,
   CanopyMode,
+  CanopyModelInfo,
   CanopyPlan,
   CanopyReadMark,
   CanopyReadRestore,
@@ -9,11 +13,17 @@ import type {
   CanopyScreenSearchTarget,
   CanopySnapshot,
   CanopyTarget,
-  CanopyTier,
   CanopyTerminalView,
+  AssistantOpenDestination,
   CanopyRenameRequest,
+  CanopyRemoveRequest,
+  CanopyRestoreOutcome,
   CanopyRestoreRequest,
+  CanopyResumeAnswer,
+  CanopyResumeRequest,
+  CanopyTrashEntry,
   CanopyTrashRequest,
+  CanopyTrashTarget,
 } from "../../../shared/types/ipc/canopy.js";
 import { getAgentNotificationServiceRef, getPtyClient } from "../../window/serviceRefs.js";
 import type { TerminalInputNotice } from "../../services/PtyClient.js";
@@ -25,18 +35,32 @@ import {
 import { getFleetSnapshotService, getRunHandBackService } from "./projectCrud/index.js";
 import { readPluginTerminalScreen } from "../../services/plugin/pluginTerminalScreenRead.js";
 import { CANOPY_HISTORY_ROWS, CanopyService } from "../../services/canopy/CanopyService.js";
+import { CanopyTrashLedger } from "../../services/canopy/canopyTrashLedger.js";
+import { CanopyClosedTrash, mergeCanopyTrash } from "../../services/canopy/canopyClosedTrash.js";
+import {
+  adoptCanopyTrashClose,
+  listAgentSessions,
+  onSessionHistoryWritten,
+  removeFromCanopyTrash,
+} from "../../services/pty/agentSessionHistory.js";
+import { getAgentSessionRetentionDays } from "../../services/pty/agentSessionRetention.js";
+import {
+  hasCanopyTrashRemoval,
+  noteCanopyTrashRemoval,
+} from "../../services/pty/canopyTrashRemovals.js";
+import { thawThenSend } from "../../utils/thawThenSend.js";
+import { getLifecycleLedger } from "../../services/pty/lifecycleLedger.js";
+import { attributeClose } from "../../services/pty/closeAttribution.js";
+import { getAgentAvailabilityStore } from "../../services/AgentAvailabilityStore.js";
 import { searchScreens } from "../../services/canopy/canopyScreenSearch.js";
 import { isCanopyMode, readCanopyMode } from "../../services/canopy/canopyMode.js";
-import {
-  canopyServiceUrl,
-  canopyWaking,
-  classifyWithCanopy,
-  describeWithCanopy,
-  wakeCanopy,
-} from "../../services/canopy/canopyBackend.js";
+import { CanopyLocalReader } from "../../services/canopy/canopyLocalReader.js";
+import { CANOPY_MODEL, CanopyModels, canopyModelName } from "../../services/canopy/canopyModels.js";
 import { store } from "../../store.js";
+import { hostInstanceId } from "../../services/hostInstance.js";
 import { traced } from "../../services/canopy/canopyTrace.js";
 import {
+  broadcastToRenderer,
   checkRateLimit,
   endpointPushTarget,
   getProjectPushTargets,
@@ -48,18 +72,35 @@ import { peekDriveLeaseService } from "../../services/DriveLeaseService.js";
 import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
 import { CHANNELS } from "../channels.js";
 import { defineIpcNamespace, op } from "../define.js";
+import { getIpcDispatcher } from "../dispatcher.js";
 import { CANOPY_METHOD_CHANNELS } from "./canopy.preload.js";
 import {
   beginWatchRequest,
   isCurrentWatchRequest,
+  followDriveLeaseChange,
+  onSizeHoldsChange,
+  remoteSizeHolds,
   stopAllTerminalWatches,
+  stopWorkerTerminalWatches,
   resizeWatchedTerminal,
   stopTerminalWatch,
+  stopTerminalWatchById,
   watchTerminal,
   watchedTerminal,
 } from "./canopyTerminalWatch.js";
 import { isImageAttachmentPath } from "../../../shared/utils/imageAttachmentInput.js";
 import { AppError } from "../../utils/errorTypes.js";
+import type {
+  AgentDirectory,
+  AgentDirectorySubject,
+} from "../../../shared/types/agentDirectory.js";
+import type { AssistantWorkReading } from "../../../shared/types/assistantWork.js";
+import {
+  parseGlobalAssistantInputStamp,
+  resolveLiveAssistant,
+} from "../../services/assistants/liveAssistantSubject.js";
+import type { GlobalAssistantInputStamp } from "../../../shared/types/ipc/help.js";
+import { LOCAL_HOST_ID } from "../../../shared/types/remoteHosts.js";
 import { answerRunByLabel, isAnswerLabel } from "../../services/terminalAnswer.js";
 import { isCanopyViewerEndpointId } from "../endpoint.js";
 import { terminalAnswerOf } from "../../../shared/utils/terminalSubmission.js";
@@ -78,8 +119,10 @@ const MAX_KEY_LENGTH = 32;
 const MAX_LABEL_LENGTH = 200;
 const BACKDROP_JPEG_QUALITY = 85;
 /**
- * Canopy acts on nothing until the user has turned it on. Checked here as well
- * as in the panel, so no other caller can reach a terminal through it.
+ * Reading runs only once the user has turned it on, and so does acting on what
+ * was read. Checked here as well as in the panel, so no other caller can reach
+ * the reader through it. The list, the terminal pane and the user's own marks
+ * work without it: they use only what Daintree observes.
  */
 function requireActivated(): void {
   if (currentPlan().activated) return;
@@ -91,14 +134,6 @@ function requireActivated(): void {
 }
 
 /**
- * Free while Canopy is in beta: a development build can ask for the priority
- * tier to compare the two.
- */
-function currentTier(): CanopyTier {
-  return !app.isPackaged && process.env.DAINTREE_CANOPY_TIER === "priority" ? "priority" : "free";
-}
-
-/**
  * The background watch's pace in ms, when `DAINTREE_CANOPY_BACKGROUND_POLL_MS`
  * sets one; 0 turns the watch off. Read once, when the service is made.
  */
@@ -107,17 +142,71 @@ function backgroundPollOverride(): number | undefined {
   if (!raw) return undefined;
   const ms = Number(raw);
   if (!Number.isFinite(ms) || ms < 0) return undefined;
-  // A watch faster than once a second only spends the address's rate limit,
-  // and past a timer's 32-bit range Node fires it at once.
+  // A watch faster than once a second only keeps the reader busy, and past a
+  // timer's 32-bit range Node fires it at once.
   return ms === 0 ? 0 : Math.min(2_147_483_647, Math.max(1_000, ms));
 }
 
 /** Changes of mode since launch; see `CanopyPlan.modeRevision`. */
 let modeRevision = 0;
+/** Names this launch, which `modeRevision` counts in; see `CanopyPlan.hostEpoch`. */
+const hostEpoch = hostInstanceId;
 
 function currentPlan(): CanopyPlan {
   const mode = readCanopyMode();
-  return { mode, modeRevision, activated: mode === "on", tier: currentTier() };
+  return { mode, modeRevision, hostEpoch, activated: mode === "on" };
+}
+
+let models: CanopyModels | null = null;
+let reader: CanopyLocalReader | null = null;
+/** Whether the model was ready when last told, so only a change wakes the service. */
+let modelWasReady = false;
+
+/** Made on first use: a user who never turns Canopy on never looks for a model. */
+function getModels(): CanopyModels {
+  models ??= new CanopyModels(
+    path.join(app.getPath("userData"), "canopy", "models"),
+    onModelsChanged,
+    // An update replaces the files the reader has open, and what the last
+    // revision read is read again by the new one.
+    () => reader?.release(),
+    () => service?.readerChanged()
+  );
+  return models;
+}
+
+function getReader(): CanopyLocalReader {
+  reader ??= new CanopyLocalReader(() => getModels().installedDir());
+  return reader;
+}
+
+function modelReady(): boolean {
+  return models?.state().status === "ready";
+}
+
+function onModelsChanged(): void {
+  const ready = modelReady();
+  if (ready !== modelWasReady) {
+    modelWasReady = ready;
+    service?.readerChanged();
+  } else {
+    service?.modelChanged();
+  }
+}
+
+/**
+ * With Canopy on, gets the model here if it isn't, or its newest revision if
+ * an older one is, and once it is ready deletes any other: a model an earlier
+ * Daintree chose included.
+ */
+function ensureModel(): void {
+  if (readCanopyMode() !== "on") return;
+  void getModels()
+    .ensure()
+    .then(async () => {
+      if (models?.state().status === "ready") await models.remove(true);
+    })
+    .catch((error: unknown) => console.error("[Canopy] Model download failed:", error));
 }
 
 /**
@@ -139,7 +228,17 @@ function hiddenOrIdleSnapshot(): CanopySnapshot {
     glances: [],
     lastError: null,
     failedRuns: [],
+    trash: trashList(),
   };
+}
+
+/** Every agent run in this host's trash, any project's: made at registration, read by every snapshot. */
+let trashLedger: CanopyTrashLedger | null = null;
+/** The closes the journal holds past the trash's window: made at registration, read on writes. */
+let closedTrash: CanopyClosedTrash | null = null;
+
+function trashList(): CanopyTrashEntry[] {
+  return mergeCanopyTrash(trashLedger?.list() ?? [], closedTrash?.list() ?? []);
 }
 
 let service: CanopyService | null = null;
@@ -165,6 +264,64 @@ function publishSnapshot(snapshot: CanopySnapshot): void {
       console.error("[Canopy] Snapshot observer failed:", error);
     }
   }
+}
+
+/** Canopy's mode and the revision it is at in this launch, without making a service. */
+export function canopyModeState(): { mode: CanopyMode; modeRevision: number; hostEpoch: string } {
+  return { mode: readCanopyMode(), modeRevision, hostEpoch };
+}
+
+/** One budget for mode changes, however they arrive: this machine's views or another's Settings. */
+export function checkCanopyModeRate(): void {
+  checkRateLimit(CANOPY_METHOD_CHANNELS.setMode, 10, 10_000);
+}
+
+/**
+ * The guarded mode change behind `canopy:set-mode`, for callers that already
+ * checked their arguments: Settings on another machine editing this one
+ * (#14167) goes through exactly the same steps. A change made against a
+ * revision or launch that isn't current changes nothing and answers how
+ * Canopy stands now.
+ */
+export function changeCanopyMode(
+  mode: CanopyMode,
+  expectRevision?: number,
+  expectHostEpoch?: string
+): CanopySnapshot {
+  if (
+    (expectRevision !== undefined && expectRevision !== modeRevision) ||
+    (expectHostEpoch !== undefined && expectHostEpoch !== hostEpoch)
+  ) {
+    return service ? service.getSnapshot() : hiddenOrIdleSnapshot();
+  }
+  const was = readCanopyMode();
+  if (mode === "on" && was === "hidden") {
+    throw new AppError({
+      code: "PERMISSION",
+      message: "Canopy is hidden",
+      userMessage: "Show Canopy before turning it on.",
+    });
+  }
+  if (mode !== was) modeRevision++;
+  store.set("canopyMode", mode);
+  if (mode !== "on") stopWorkerTerminalWatches();
+  // Nothing was started, and nothing is wanted: no service to tell, but
+  // every view still hears the change, as a service would have told them.
+  if (!service && mode !== "on") {
+    const idle = hiddenOrIdleSnapshot();
+    publishSnapshot(idle);
+    return idle;
+  }
+  const canopy = getService();
+  canopy.setPlan(currentPlan());
+  if (mode === "on") {
+    ensureModel();
+  } else {
+    // Off lets the model go; a download under way stops, keeping what it fetched.
+    reader?.release();
+    models?.cancel();
+  }
+  return canopy.getSnapshot();
 }
 
 /**
@@ -260,6 +417,7 @@ function getService(): CanopyService {
   service = new CanopyService({
     plan: currentPlan(),
     ...(backgroundPollMs !== undefined ? { backgroundPollMs } : {}),
+    getTrash: trashList,
     getRuns: () => {
       subscribeFleet();
       const snapshot = getFleetSnapshotService()?.getLastBroadcast();
@@ -299,23 +457,10 @@ function getService(): CanopyService {
       );
       return result.status === "ok" ? result.text : null;
     },
-    classify: (input, signal) =>
-      traced("classifier", input, () => classifyWithCanopy(input, signal)),
-    describe: (input, classifierSays, signal, onPartial) =>
-      traced("describer", { ...input, classifierSays }, () =>
-        describeWithCanopy(input, classifierSays, signal, onPartial)
-      ),
-    serviceWaking: () => canopyWaking(),
-    serviceHost: () => {
-      // A mistyped DAINTREE_CANOPY_URL is a failed read for the reads, and
-      // shown as given here: never a throw out of a snapshot.
-      const url = canopyServiceUrl();
-      try {
-        return new URL(url).host;
-      } catch {
-        return url;
-      }
-    },
+    read: (input, signal) => traced("reader", input, () => getReader().read(input, signal)),
+    readerReady: modelReady,
+    readerName: () => canopyModelName(CANOPY_MODEL),
+    modelState: () => getModels().state(),
     broadcast: (snapshot) => publishSnapshot(snapshot),
     // The fleet and the project counts re-read their refinements: that is how
     // the sidebar hears of them with no panel open.
@@ -323,12 +468,8 @@ function getService(): CanopyService {
   });
   const made = service;
   setCanopyRefinementSource((runId, spawnedAt) => made.getRefinement(runId, spawnedAt));
+  ensureModel();
   return service;
-}
-
-/** Starts a worker waking as soon as reads are about to begin; see `wakeCanopy`. */
-function wakeService(): void {
-  if (currentPlan().activated) wakeCanopy();
 }
 
 function assertRunId(value: unknown): asserts value is string {
@@ -449,7 +590,10 @@ async function assertSameIncarnation(runId: string, target: CanopyTarget): Promi
 }
 
 /** The terminal a view's current stream is for, or a refusal naming nothing on screen. */
-function requireWatched(viewId: number, watchId: unknown): { runId: string; spawnedAt: number } {
+function requireWatched(
+  viewId: number,
+  watchId: unknown
+): { runId: string; spawnedAt: number; assistant: boolean; mayType: boolean } {
   if (typeof watchId !== "number" || !Number.isInteger(watchId)) throw new Error("Invalid stream");
   const watched = watchedTerminal(viewId, watchId);
   if (!watched) throw new Error("That agent isn't running any more.");
@@ -715,6 +859,406 @@ async function restoreThroughOwningViews(
   }
 }
 
+/** Canopy's own receipt for this trash of the run, when Canopy made it: it knows what an Undo needs. */
+function receiptFor(trashed: CanopyTrashEntry): number | undefined {
+  let found: number | undefined;
+  for (const [receipt, held] of recentlyTrashed) {
+    if (held.runId === trashed.run.runId && held.spawnedAt === trashed.run.spawnedAt) {
+      found = receipt;
+    }
+  }
+  return found;
+}
+
+function assertTrashTarget(target: unknown): asserts target is CanopyTrashTarget {
+  assertTarget(target);
+  const expiresAt = (target as { expiresAt?: unknown }).expiresAt;
+  if (typeof expiresAt !== "number" || !Number.isSafeInteger(expiresAt) || expiresAt <= 0) {
+    throw new Error("Invalid trash target");
+  }
+}
+
+/** The trash Canopy's Trash showed, while the trash still holds it: that trash of that incarnation. */
+function heldTrash(runId: string, target: CanopyTrashTarget): CanopyTrashEntry {
+  const held = trashLedger?.get(runId);
+  if (
+    !held ||
+    held.ended ||
+    held.run.spawnedAt !== target.spawnedAt ||
+    held.expiresAt !== target.expiresAt ||
+    Date.now() >= held.expiresAt
+  ) {
+    throw leftTheTrash();
+  }
+  return held;
+}
+
+/** The trash Canopy's Trash showed, when it is that trash and the process lives on in it. */
+function isLiveTrash(runId: string, target: CanopyTrashTarget): boolean {
+  const held = trashLedger?.get(runId);
+  return (
+    !!held &&
+    !held.ended &&
+    held.run.spawnedAt === target.spawnedAt &&
+    held.expiresAt === target.expiresAt
+  );
+}
+
+/** The project of an ended run the Trash showed: still closing, or a close the journal holds. */
+function closedWorkspaceOf(runId: string, target: CanopyTrashTarget): string | undefined {
+  if (isEndingTrash(runId, target)) return trashLedger?.get(runId)?.run.workspaceId;
+  return closedTrash?.find(runId, target)?.entry.run.workspaceId;
+}
+
+/** The trash let the run go a moment ago, and its close is still on its way to the journal. */
+function isEndingTrash(runId: string, target: CanopyTrashTarget): boolean {
+  const held = trashLedger?.get(runId);
+  return (
+    !!held?.ended && held.run.spawnedAt === target.spawnedAt && held.expiresAt === target.expiresAt
+  );
+}
+
+/** The host's own word that the terminal is still in that trash, read just before acting on it. */
+async function assertHostHolds(
+  runId: string,
+  target: CanopyTrashTarget
+): Promise<HostTerminalRecord> {
+  const record = await requirePtyClient()
+    .getTerminalAsync(runId)
+    .catch(() => null);
+  if (
+    !record ||
+    record.spawnedAt !== target.spawnedAt ||
+    record.isTrashed !== true ||
+    record.trashExpiresAt !== target.expiresAt
+  ) {
+    throw leftTheTrash();
+  }
+  // Restored, removed or expired elsewhere while the host answered.
+  heldTrash(runId, target);
+  return record;
+}
+
+type HostTerminalRecord = NonNullable<
+  Awaited<ReturnType<ReturnType<typeof requirePtyClient>["getTerminalAsync"]>>
+>;
+
+/**
+ * Puts back a run from Canopy's Trash, whoever trashed it. A trash Canopy
+ * made goes back as its Undo would; any other was a view's own close, so the
+ * view holding the pane puts it back from its trash, as its own Restore would.
+ * With no view of the project open, nothing holds the pane: the terminal
+ * would come back with nowhere to show, so nothing is restored.
+ */
+async function restoreTrashedRun(
+  runId: string,
+  target: CanopyTrashTarget,
+  mayRestore: (workspaceId: string) => boolean
+): Promise<void> {
+  const held = heldTrash(runId, target);
+  const receipt = receiptFor(held);
+  if (receipt !== undefined) {
+    await restoreThroughOwningViews(receipt, (trashed) => mayRestore(trashed.workspaceId));
+    return;
+  }
+  await assertHostHolds(runId, target);
+  const workspaceId = held.run.workspaceId;
+  const views = getProjectPushTargets(workspaceId, CHANNELS.CANOPY_RESTORE_REQUESTED);
+  if (views.length === 0) {
+    throw new AppError({
+      code: "NOT_FOUND",
+      message: "Trashed terminal's project has no open view",
+      userMessage: "That terminal's project has closed since. Nothing was restored.",
+    });
+  }
+  if (!mayRestore(workspaceId)) throw drivenElsewhere(workspaceId);
+  requirePtyClient().restore(runId);
+  for (const view of views) {
+    try {
+      view.send(CHANNELS.CANOPY_RESTORE_REQUESTED, { runId } satisfies CanopyRestoreRequest);
+    } catch {
+      // A view torn down mid-send has no pane left to restore.
+    }
+  }
+}
+
+/**
+ * Ends a trashed run on the host, for a pane no view holds: closed as the
+ * trash's own expiry closes it, its session captured for resuming and handed
+ * to the same journal. Not waited on: an agent may take seconds to quit.
+ */
+function endOnHost(runId: string, info: HostTerminalRecord): void {
+  const ptyClient = requirePtyClient();
+  // The generation before the kill: a respawn under the same id must not take the record.
+  const launchGeneration = getLifecycleLedger().currentGeneration(runId);
+  // Sent at once, with the record just checked: nothing may move between the check and the kill.
+  const closing = ptyClient.gracefulKill(runId);
+  void (async () => {
+    const sessionId = await closing;
+    // An agent that had exited is not killed by a graceful close: its record goes too.
+    if (info.isExited === true) ptyClient.kill(runId, "canopy-trash-removed");
+    if (!sessionId || !info.launchAgentId || info.isAssistantTerminal === true) return;
+    events.emit("agent-session:captured", {
+      terminalId: runId,
+      launchGeneration,
+      boundary: "trash-expiry",
+      record: {
+        sessionId,
+        agentId: info.launchAgentId,
+        worktreeId: info.worktreeId ?? null,
+        title:
+          (info.titleMode === "user" ? info.title : (info.lastObservedTitle ?? info.title)) ?? null,
+        projectId: info.projectId ?? null,
+        agentLaunchFlags: info.agentLaunchFlags,
+        agentModelId: info.agentModelId,
+        cwd: info.cwd,
+        ...attributeClose(info, "kill"),
+      },
+    });
+  })().catch((error: unknown) => {
+    console.warn("[Canopy] Ending a trashed terminal failed:", error);
+  });
+}
+
+/** How long a view is given to take a removal before the host ends the run itself. */
+const REMOVE_FALLBACK_MS = 3_000;
+const removeFallbacks = new Set<ReturnType<typeof setTimeout>>();
+
+/**
+ * Removes a run in Canopy's Trash for good, ending its process. The view
+ * holding the pane removes it as its own Remove would, so its session is
+ * kept for resuming as any close keeps it. A pane no view holds — trashed
+ * from Canopy with its project closed, or a view reloaded since — is ended
+ * on the host.
+ */
+async function removeTrashedRun(
+  runId: string,
+  target: CanopyTrashTarget,
+  mayRemove: (workspaceId: string) => boolean
+): Promise<void> {
+  const held = heldTrash(runId, target);
+  const record = await assertHostHolds(runId, target);
+  // Control can move while the host is asked.
+  if (!mayRemove(held.run.workspaceId)) throw drivenElsewhere(held.run.workspaceId);
+  const receipt = receiptFor(held);
+  // Trashed into the saved layout, so no open view holds the pane, even one
+  // of the project opened since.
+  const savedOnly = receipt !== undefined && recentlyTrashed.get(receipt)?.layoutSaved === true;
+  // The trash is over: an Undo of it must find nothing to put back. Its close
+  // lands already out of Canopy's Trash, whichever path ends the process.
+  forgetReceiptsFor(runId, target.spawnedAt);
+  noteCanopyTrashRemoval({ id: runId, spawnedAt: target.spawnedAt });
+  const views = getProjectPushTargets(held.run.workspaceId, CHANNELS.CANOPY_REMOVE_REQUESTED);
+  if (views.length === 0 || savedOnly) {
+    endOnHost(runId, record);
+    return;
+  }
+  for (const view of views) {
+    try {
+      view.send(CHANNELS.CANOPY_REMOVE_REQUESTED, { runId } satisfies CanopyRemoveRequest);
+    } catch {
+      // A view torn down mid-send has no pane left to remove.
+    }
+  }
+  // The view's close takes it out of the trash at once; still there, no view
+  // held it. Checked again as at the request: that trash, and still this
+  // window's to change.
+  const fallback = setTimeout(() => {
+    removeFallbacks.delete(fallback);
+    if (trashLedger?.get(runId) === undefined) return;
+    void assertHostHolds(runId, target).then(
+      (still) => {
+        if (mayRemove(held.run.workspaceId)) endOnHost(runId, still);
+      },
+      () => {}
+    );
+  }, REMOVE_FALLBACK_MS);
+  fallback.unref?.();
+  removeFallbacks.add(fallback);
+}
+
+/**
+ * Takes an ended run out of Canopy's Trash. Nothing is ended or deleted: its
+ * session stays in the journal for the Resume Sessions palette.
+ */
+async function dismissClosedRun(runId: string, target: CanopyTrashTarget): Promise<void> {
+  const terminal = { id: runId, spawnedAt: target.spawnedAt };
+  // A close still on its way lands removed; one already journaled is marked so.
+  noteCanopyTrashRemoval(terminal);
+  trashLedger?.remove(runId);
+  await removeFromCanopyTrash([terminal], app.getPath("userData"));
+}
+
+function stillClosing(): AppError {
+  return new AppError({
+    code: "NOT_FOUND",
+    message: "Terminal's close is still being saved",
+    userMessage: "That agent is still closing. Try again in a moment.",
+  });
+}
+
+/** How long the project's view is given to take up a resume before Canopy stops waiting. */
+const RESUME_START_MS = 30_000;
+/** How long a resume the view took up is given to land its pane. */
+const RESUME_LAUNCH_MS = 30_000;
+const MAX_PENDING_RESUMES = 20;
+
+interface PendingResume {
+  /** The view asked: only its word counts. */
+  viewId: number;
+  /** The view took it up: it is launching, and is waited for. */
+  started: boolean;
+  resolve: (answer: CanopyResumeAnswer) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+const pendingResumes = new Map<string, PendingResume>();
+/** One resume at a time per close: a second Restore joins the first. */
+const resumingCloses = new Map<string, Promise<CanopyRestoreOutcome>>();
+
+/**
+ * The view asked is about to launch: while Canopy still waits, the launch gets
+ * its own while to land, and the view is told how long, so a reply it hears
+ * late starts nothing either. Null once Canopy stopped waiting, so a view slow
+ * to hear never launches a resume nobody is told of.
+ */
+function startResume(requestId: string, viewId: number): number | null {
+  const pending = pendingResumes.get(requestId);
+  if (!pending || pending.viewId !== viewId || pending.started) return null;
+  pending.started = true;
+  clearTimeout(pending.timer);
+  pending.timer = setTimeout(
+    () => settleResume(requestId, { error: "The project didn't finish resuming it in time." }),
+    RESUME_LAUNCH_MS
+  );
+  pending.timer.unref?.();
+  return RESUME_LAUNCH_MS;
+}
+
+function settleResume(requestId: string, answer: CanopyResumeAnswer): void {
+  const pending = pendingResumes.get(requestId);
+  if (!pending) return;
+  pendingResumes.delete(requestId);
+  clearTimeout(pending.timer);
+  pending.resolve(answer);
+}
+
+/**
+ * Asks one view of the run's project to resume its session, the way the
+ * Resume Sessions palette does, and waits for the pane it lands in. The
+ * caller's own view when it shows that project; otherwise the project's first.
+ */
+function askViewToResume(
+  ctx: IpcContext,
+  workspaceId: string,
+  request: Omit<CanopyResumeRequest, "requestId">
+): Promise<CanopyResumeAnswer> | null {
+  const views = getProjectPushTargets(workspaceId, CHANNELS.CANOPY_RESUME_REQUESTED).filter(
+    (view) => !view.isDestroyed()
+  );
+  // A view that doesn't drive the project would hold the launch for control
+  // while reporting a pane: only the driver's, or with a window of this
+  // machine driving, any of this machine's windows.
+  const driver = peekDriveLeaseService()?.getHolderEndpoint(workspaceId)?.handle;
+  const permitted =
+    driver === undefined
+      ? views
+      : views.filter((view) => view.id === driver || (driver > 0 && view.id > 0));
+  const view = permitted.find((candidate) => candidate.id === ctx.webContentsId) ?? permitted[0];
+  if (!view) return null;
+  if (pendingResumes.size >= MAX_PENDING_RESUMES) {
+    throw new AppError({
+      code: "RATE_LIMITED",
+      message: "Too many resumes waiting on their views",
+      userMessage: "Too many agents are being restored at once. Try again in a moment.",
+    });
+  }
+  const requestId = randomUUID();
+  return new Promise<CanopyResumeAnswer>((resolve) => {
+    const timer = setTimeout(
+      () => settleResume(requestId, { error: "The project didn't answer in time." }),
+      RESUME_START_MS
+    );
+    timer.unref?.();
+    pendingResumes.set(requestId, { viewId: view.id, started: false, resolve, timer });
+    const send = () => {
+      try {
+        view.send(CHANNELS.CANOPY_RESUME_REQUESTED, {
+          requestId,
+          ...request,
+        } satisfies CanopyResumeRequest);
+      } catch {
+        settleResume(requestId, { error: "The project's window closed." });
+      }
+    };
+    // A cached view may be frozen, and a frozen renderer runs nothing until thawed.
+    const local = view.id > 0 ? webContents.fromId(view.id) : undefined;
+    if (local) thawThenSend(local, () => pendingResumes.has(requestId), send);
+    else send();
+  });
+}
+
+/**
+ * Puts back a run whose process the trash let go: its project's view resumes
+ * the session it was running, as the Resume Sessions palette would, or shows
+ * the pane already running it. Taken out of the Trash once a pane has it.
+ * With no view of the project open, says so, and the caller opens it there.
+ */
+async function resumeClosedRun(
+  ctx: IpcContext,
+  runId: string,
+  target: CanopyTrashTarget
+): Promise<CanopyRestoreOutcome> {
+  const closed = closedTrash?.find(runId, target);
+  if (!closed) throw leftTheTrash();
+  if (closed.entry.ended?.worktreeRemoved) {
+    throw new AppError({
+      code: "NOT_FOUND",
+      message: "Closed terminal's worktree was removed",
+      userMessage: "That agent's worktree has been removed. There's nowhere to resume it.",
+    });
+  }
+  const workspaceId = closed.entry.run.workspaceId;
+  const key = `${runId}#${target.spawnedAt}`;
+  const joined = resumingCloses.get(key);
+  if (joined) return joined;
+  const asked = askViewToResume(ctx, workspaceId, { session: closed.record });
+  if (!asked) return { open: { workspaceId } };
+  const resuming = asked.then(async (answer): Promise<CanopyRestoreOutcome> => {
+    if ("error" in answer) {
+      throw new AppError({
+        code: "PROJECT_VIEW_UNAVAILABLE",
+        message: "Resuming a closed terminal failed",
+        userMessage: answer.error,
+      });
+    }
+    await dismissClosedRun(runId, target).catch((error: unknown) => {
+      // The pane is back; only the Trash still lists it, until a later write.
+      console.warn("[Canopy] Taking a resumed run out of the Trash failed:", error);
+    });
+    return { runId: answer.runId };
+  });
+  resumingCloses.set(key, resuming);
+  try {
+    return await resuming;
+  } finally {
+    if (resumingCloses.get(key) === resuming) resumingCloses.delete(key);
+  }
+}
+
+/** Whether a worktree's directory is gone. Only a missing directory says so: unreadable is not gone. */
+async function isWorktreeGone(worktreePath: string): Promise<boolean> {
+  try {
+    await stat(worktreePath);
+    return false;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | null)?.code;
+    return code === "ENOENT" || code === "ENOTDIR";
+  }
+}
+
+const MAX_EMPTY_TRASH = 200;
+
 function requirePtyClient() {
   const ptyClient = getPtyClient();
   if (!ptyClient) throw new Error("The terminal host isn't available.");
@@ -734,6 +1278,12 @@ function reconciledScope(): string | null {
 
 function syncActive(): void {
   const canopy = getService();
+  // History pruned, or a worktree deleted, while no panel looked: an opening
+  // panel sees the closes as they stand now.
+  if (activeViews.size > 0) {
+    closedTrash?.refresh();
+    closedTrash?.recheckWorktrees();
+  }
   // Opening, scope first, so the scan the opening starts reads the right runs;
   // closing, the close first, so a wider scope starts nothing while it settles.
   if (activeViews.size > 0) {
@@ -828,12 +1378,95 @@ function drivenElsewhere(projectId: string | null): AppError {
 }
 
 /**
- * A panel reading this host from a view bound elsewhere. It types as its own
- * machine's windows do, but never sizes a terminal (the window showing it here
- * owns that) and has no files on this machine to attach.
+ * A panel reading this host from a view bound elsewhere. It types and sizes a
+ * worker's terminal as its own machine's windows do, but has no files on this
+ * machine to attach.
  */
 function isViewer(ctx: IpcContext): boolean {
   return isCanopyViewerEndpointId(ctx.endpoint.endpointId);
+}
+
+/**
+ * An assistant is watched from a window of the machine it runs on, or by a
+ * viewer this machine serves for a person reading it from elsewhere (#14163).
+ * A window bound to another host forwards its terminal input there, so a
+ * stream opened here would take keystrokes meant for that host's terminal of
+ * the same id; and a remote view's own endpoint is a project's window, not a
+ * viewer of this machine's assistants.
+ */
+function assertViewsThisMachine(ctx: IpcContext): void {
+  if (isViewer(ctx)) return;
+  if (!ctx.event || getIpcDispatcher().hostForSender(ctx.webContentsId) !== null) {
+    throw new AppError({
+      code: "UNSUPPORTED",
+      message: "Assistants are viewed from the machine they run on.",
+      userMessage: "Open this assistant from a window on its own machine.",
+    });
+  }
+}
+
+/** Where main holds the assistants a person can view; read at the moment of use. */
+async function liveAssistantSources() {
+  const [{ helpSessionService }, { peekGlobalAssistantService }] = await Promise.all([
+    import("../../services/HelpSessionService.js"),
+    import("../../services/globalAssistant.js"),
+  ]);
+  const global = peekGlobalAssistantService();
+  return {
+    hostId: LOCAL_HOST_ID,
+    ptyClient: requirePtyClient(),
+    getRunningLaneSession: (projectId: string, slot: number) =>
+      helpSessionService.getRunningLaneSession(projectId, slot),
+    onSessionEnded: (
+      listener: (event: { projectId: string; slot: number; sessionId: string }) => void
+    ) => helpSessionService.addSessionEndedListener(listener),
+    global: global
+      ? {
+          getState: () => global.getState(),
+          onChange: (listener: () => void) => global.onChange(() => listener()),
+          inputOwnerWebContentsId: () => global.inputOwnerWebContentsId(),
+          canWrite: (attachmentId: string, epoch: number) => global.canWrite(attachmentId, epoch),
+        }
+      : null,
+  };
+}
+
+/**
+ * A card answer presses keys with no input ownership behind it, so it never
+ * reaches the global assistant, whose input one window holds at a time (#14454).
+ */
+async function assertNotGlobalAssistant(runId: string): Promise<void> {
+  const { peekGlobalAssistantService } = await import("../../services/globalAssistant.js");
+  const state = peekGlobalAssistantService()?.getState();
+  if (state?.terminalId === runId) {
+    throw new AppError({
+      code: "PERMISSION",
+      message: "card answers don't reach the global assistant",
+      userMessage: "Answer the global assistant from the window that has its input.",
+    });
+  }
+}
+
+/** An assistant a person watches takes their keystrokes only while they may type to it. */
+function assertMayType(watched: { assistant: boolean; mayType: boolean }): void {
+  if (watched.assistant && !watched.mayType) {
+    throw new AppError({
+      code: "PERMISSION",
+      message: "another view holds the assistant's input",
+      userMessage: "Another window has this assistant's input.",
+    });
+  }
+}
+
+let offDriveLease: (() => void) | null = null;
+
+/**
+ * A viewer that stops driving stops holding at once, so the new driver's panes
+ * fit again without waiting for the stream to end; one that drives again asks
+ * for its size again.
+ */
+function followDriveLease(): void {
+  offDriveLease ??= peekDriveLeaseService()?.onChange(() => followDriveLeaseChange()) ?? null;
 }
 
 function assertDrivesRun(ctx: IpcContext, runId: string): void {
@@ -863,7 +1496,6 @@ export const canopyNamespace = defineIpcNamespace({
         if (active) {
           activeViews.add(id);
           watchView(ctx);
-          wakeService();
         } else {
           activeViews.delete(id);
           // A closed panel shows nothing: the next open says afresh what it lists.
@@ -891,7 +1523,6 @@ export const canopyNamespace = defineIpcNamespace({
     watchTerminal: op(
       CANOPY_METHOD_CHANNELS.watchTerminal,
       async (ctx, runId: string, target: CanopyTarget): Promise<CanopyTerminalView> => {
-        requireActivated();
         // One stream per view, and a newer request overtakes an older one, so
         // this only bounds a runaway view: arrowing down the list opens one per row.
         checkRateLimit(CANOPY_METHOD_CHANNELS.watchTerminal, 120, 10_000);
@@ -913,23 +1544,166 @@ export const canopyNamespace = defineIpcNamespace({
         if (generation !== null && !ptyClient.isLiveGeneration(runId, generation)) {
           throw new Error("That agent isn't running any more.");
         }
-        return watchTerminal(
+        const remote = isViewer(ctx);
+        if (remote) followDriveLease();
+        const view = await watchTerminal(
           ptyClient,
           viewOf(ctx),
           runId,
           target.spawnedAt,
           ticket,
           generation,
-          isViewer(ctx) ? () => false : () => drivesRun(ctx, runId)
+          // Sizing follows typing: only while the view drives the run's project.
+          () => drivesRun(ctx, runId),
+          null,
+          remote
         );
+        // Says to a panel on another machine that this host takes its size;
+        // one that predates it says nothing, and is never asked.
+        return view.watchId === null ? view : { ...view, holdsSize: true };
+      },
+      { withContext: true }
+    ),
+
+    /**
+     * Stream a Daintree Assistant's terminal to this view, for the person who
+     * chose it. Admission is main's own hold on the lane (or the global
+     * session) and the exact launch generation the subject names, never the
+     * fleet, and Canopy need not be on: nothing here reads the screen, lists
+     * the run or marks it handled.
+     */
+    watchAssistantTerminal: op(
+      CANOPY_METHOD_CHANNELS.watchAssistantTerminal,
+      async (
+        ctx,
+        subject: AgentDirectorySubject,
+        inputStamp?: GlobalAssistantInputStamp
+      ): Promise<CanopyTerminalView> => {
+        checkRateLimit(CANOPY_METHOD_CHANNELS.watchAssistantTerminal, 120, 10_000);
+        assertViewsThisMachine(ctx);
+        // A viewer serves another machine's reader, which never holds this one's input.
+        const stamp = isViewer(ctx) ? null : parseGlobalAssistantInputStamp(inputStamp);
+        const viewId = ctx.webContentsId;
+        const ticket = beginWatchRequest(viewId);
+        watchView(ctx);
+        const binding = await resolveLiveAssistant(subject, await liveAssistantSources(), stamp);
+        if (!isCurrentWatchRequest(viewId, ticket)) return { watchId: null, snapshot: null };
+        const ptyClient = requirePtyClient();
+        const { terminalId } = binding.subject;
+        return watchTerminal(
+          ptyClient,
+          viewOf(ctx),
+          terminalId,
+          binding.spawnedAt,
+          ticket,
+          binding.launchGeneration,
+          // Resize authority follows input: a global session's other windows only read it,
+          // and a viewer follows the size this machine's own window gave the terminal.
+          isViewer(ctx) ? () => false : () => drivesRun(ctx, terminalId) && binding.mayType(viewId),
+          binding
+        );
+      },
+      { withContext: true }
+    ),
+
+    /**
+     * Where "Open in Assistant" goes for this subject, if main still runs it.
+     * Passive: nothing is attached, switched, started or resumed to answer;
+     * null when the session has ended or been replaced.
+     */
+    resolveAssistant: op(
+      CANOPY_METHOD_CHANNELS.resolveAssistant,
+      async (ctx, subject: AgentDirectorySubject): Promise<AssistantOpenDestination | null> => {
+        checkRateLimit(CANOPY_METHOD_CHANNELS.resolveAssistant, 60, 10_000);
+        assertViewsThisMachine(ctx);
+        const binding = await resolveLiveAssistant(subject, await liveAssistantSources()).catch(
+          (error: unknown) => {
+            // Only a session that has ended or been replaced answers "nothing to open";
+            // a bad subject, another host or a failure is said as itself.
+            if (
+              error instanceof AppError &&
+              (error.code === "NOT_FOUND" || error.code === "STALE_GENERATION")
+            ) {
+              return null;
+            }
+            throw error;
+          }
+        );
+        if (!binding) return null;
+        const { hostId, scope, terminalId, incarnation, lane } = binding.subject;
+        return scope.kind === "project" && lane !== undefined
+          ? { scope: "project", hostId, projectId: scope.projectId, lane, terminalId, incarnation }
+          : { scope: "global", hostId, terminalId, incarnation };
+      },
+      { withContext: true }
+    ),
+
+    /**
+     * This machine's workers and assistants, for Canopy's role filter and the
+     * assistant picker. Passive like the directory itself, and outside Canopy's
+     * gate: listing an assistant reads no screen and sends nothing anywhere.
+     */
+    readAgentDirectory: op(
+      CANOPY_METHOD_CHANNELS.readAgentDirectory,
+      async (ctx, options?: { projectId?: string }): Promise<AgentDirectory> => {
+        // Per view: every open Canopy and picker reads every few seconds, and
+        // one window's surfaces must not spend another's allowance.
+        checkRateLimit(
+          `${CANOPY_METHOD_CHANNELS.readAgentDirectory}#${ctx.webContentsId}`,
+          20,
+          10_000
+        );
+        assertViewsThisMachine(ctx);
+        if (
+          options !== undefined &&
+          (typeof options !== "object" || options === null || Array.isArray(options))
+        ) {
+          throw new AppError({ code: "VALIDATION", message: "Invalid directory options" });
+        }
+        const projectId = options?.projectId;
+        if (
+          projectId !== undefined &&
+          (typeof projectId !== "string" || projectId.length === 0 || projectId.length > 256)
+        ) {
+          throw new AppError({ code: "VALIDATION", message: "Invalid project id" });
+        }
+        const { getLocalAgentDirectory } =
+          await import("../../services/assistants/localAgentDirectory.js");
+        return getLocalAgentDirectory().read(projectId === undefined ? {} : { projectId });
+      },
+      { withContext: true }
+    ),
+
+    /**
+     * Which of this machine's workers an assistant made or holds (#14166), for
+     * Canopy's "Show its work". Read from main's own records, passive like the
+     * directory, and outside Canopy's gate for the same reason.
+     */
+    readAssistantWork: op(
+      CANOPY_METHOD_CHANNELS.readAssistantWork,
+      async (ctx): Promise<AssistantWorkReading> => {
+        checkRateLimit(
+          `${CANOPY_METHOD_CHANNELS.readAssistantWork}#${ctx.webContentsId}`,
+          20,
+          10_000
+        );
+        assertViewsThisMachine(ctx);
+        const { readLocalAssistantWork } =
+          await import("../../services/assistants/localAssistantWork.js");
+        return readLocalAssistantWork();
       },
       { withContext: true }
     ),
 
     unwatchTerminal: op(
       CANOPY_METHOD_CHANNELS.unwatchTerminal,
-      async (ctx): Promise<void> => {
-        stopTerminalWatch(ctx.webContentsId);
+      async (ctx, watchId?: number): Promise<void> => {
+        if (watchId === undefined) {
+          stopTerminalWatch(ctx.webContentsId);
+          return;
+        }
+        if (!Number.isSafeInteger(watchId)) throw new Error("Invalid watch");
+        stopTerminalWatchById(ctx.webContentsId, watchId);
       },
       { withContext: true }
     ),
@@ -943,43 +1717,65 @@ export const canopyNamespace = defineIpcNamespace({
      *
      * `expectRevision` is the mode revision the change was made against — an
      * Undo's — so one made after Canopy moved on since, in any view, changes
-     * nothing and answers how Canopy stands now.
+     * nothing and answers how Canopy stands now. `expectHostEpoch` is the same
+     * guard for the host process: a revision counted before a restart is not
+     * this one's.
      */
     setMode: op(
       CANOPY_METHOD_CHANNELS.setMode,
-      async (mode: CanopyMode, expectRevision?: number): Promise<CanopySnapshot> => {
+      async (
+        mode: CanopyMode,
+        expectRevision?: number,
+        expectHostEpoch?: string
+      ): Promise<CanopySnapshot> => {
         if (!isCanopyMode(mode)) throw new Error("Invalid Canopy mode");
         if (expectRevision !== undefined && !Number.isSafeInteger(expectRevision)) {
           throw new Error("Invalid Canopy mode revision");
         }
-        checkRateLimit(CANOPY_METHOD_CHANNELS.setMode, 10, 10_000);
-        if (expectRevision !== undefined && expectRevision !== modeRevision) {
-          return service ? service.getSnapshot() : hiddenOrIdleSnapshot();
+        if (expectHostEpoch !== undefined) {
+          if (typeof expectHostEpoch !== "string" || expectHostEpoch.length > 64) {
+            throw new Error("Invalid Canopy host epoch");
+          }
+          if (expectRevision === undefined) throw new Error("A host epoch needs a revision");
         }
-        const was = readCanopyMode();
-        if (mode === "on" && was === "hidden") {
-          throw new AppError({
-            code: "PERMISSION",
-            message: "Canopy is hidden",
-            userMessage: "Show Canopy before turning it on.",
-          });
-        }
-        if (mode !== was) modeRevision++;
-        store.set("canopyMode", mode);
-        if (mode !== "on") stopAllTerminalWatches();
-        // Nothing was started, and nothing is wanted: no service to tell, but
-        // every view still hears the change, as a service would have told them.
-        if (!service && mode !== "on") {
-          const idle = hiddenOrIdleSnapshot();
-          publishSnapshot(idle);
-          return idle;
-        }
-        const canopy = getService();
-        canopy.setPlan(currentPlan());
-        wakeService();
-        return canopy.getSnapshot();
+        checkCanopyModeRate();
+        return changeCanopyMode(mode, expectRevision, expectHostEpoch);
       }
     ),
+
+    /** The model, and whether it is on this machine. */
+    /**
+     * The terminals a panel on another machine holds at its own size, for a
+     * window here to freeze their panes. Not gated on Canopy: any window with
+     * the terminal open needs it, and with Canopy off the list is empty.
+     */
+    getSizeHolds: op(CANOPY_METHOD_CHANNELS.getSizeHolds, async (): Promise<string[]> =>
+      remoteSizeHolds()
+    ),
+
+    getModel: op(CANOPY_METHOD_CHANNELS.getModel, async (): Promise<CanopyModelInfo> =>
+      getModels().info()
+    ),
+
+    /** Tries a failed or stopped download again. */
+    retryModel: op(CANOPY_METHOD_CHANNELS.retryModel, async (): Promise<CanopySnapshot> => {
+      ensureModel();
+      return service ? service.getSnapshot() : hiddenOrIdleSnapshot();
+    }),
+
+    /**
+     * Deletes the downloaded model, at any time. With Canopy on that turns it
+     * off first, by the same guarded change as any other turn-off, so every view
+     * hears it and nothing downloads the model again on the next launch.
+     */
+    removeModels: op(CANOPY_METHOD_CHANNELS.removeModels, async (): Promise<CanopySnapshot> => {
+      checkRateLimit(CANOPY_METHOD_CHANNELS.removeModels, 10, 10_000);
+      if (readCanopyMode() === "on") changeCanopyMode("unset");
+      reader?.release();
+      models?.cancel();
+      await getModels().remove(false);
+      return service ? service.getSnapshot() : hiddenOrIdleSnapshot();
+    }),
 
     /**
      * A still of the view as it stands, for the panel to hold behind itself so
@@ -1004,15 +1800,15 @@ export const canopyNamespace = defineIpcNamespace({
     terminalInput: op(
       CANOPY_METHOD_CHANNELS.terminalInput,
       async (ctx, watchId: number, data: string): Promise<void> => {
-        requireActivated();
         if (typeof data !== "string" || data.length === 0 || data.length > MAX_INPUT_LENGTH) {
           throw new Error("Invalid input");
         }
         const watched = requireWatched(ctx.webContentsId, watchId);
+        assertMayType(watched);
         assertDrivesRun(ctx, watched.runId);
         requirePtyClient().write(watched.runId, data);
         // Return submits a line: the user has answered what the screen showed.
-        if (terminalAnswerOf(data) === "submit") {
+        if (!watched.assistant && terminalAnswerOf(data) === "submit") {
           service?.noteUserSent(watched.runId, watched.spawnedAt);
           service?.markHandled(watched.runId, watched.spawnedAt);
         }
@@ -1027,13 +1823,15 @@ export const canopyNamespace = defineIpcNamespace({
     terminalResize: op(
       CANOPY_METHOD_CHANNELS.terminalResize,
       async (ctx, watchId: number, cols: number, rows: number): Promise<void> => {
-        requireActivated();
         checkRateLimit(CANOPY_METHOD_CHANNELS.terminalResize, 60, 10_000);
-        if (isViewer(ctx)) return;
         // Ignored rather than refused, as `terminal:resize` ignores one: the
         // panel keeps reading at whatever size the driver's pane gave it.
         const watched = watchedTerminal(ctx.webContentsId, watchId);
+        // A viewer's assistant follows the size this machine's own window gave it.
+        if (isViewer(ctx) && watched?.assistant !== false) return;
         if (watched && !drivesRun(ctx, watched.runId)) return;
+        // Another window's session to size: this one only reads it.
+        if (watched && !watched.mayType) return;
         resizeWatchedTerminal(requirePtyClient(), ctx.webContentsId, watchId, cols, rows);
       },
       { withContext: true }
@@ -1043,14 +1841,14 @@ export const canopyNamespace = defineIpcNamespace({
     terminalSendKey: op(
       CANOPY_METHOD_CHANNELS.terminalSendKey,
       async (ctx, watchId: number, key: string): Promise<void> => {
-        requireActivated();
         if (typeof key !== "string" || key.length === 0 || key.length > MAX_KEY_LENGTH) {
           throw new Error("Invalid key");
         }
         const watched = requireWatched(ctx.webContentsId, watchId);
+        assertMayType(watched);
         assertDrivesRun(ctx, watched.runId);
         requirePtyClient().sendKey(watched.runId, key);
-        if (key === "enter") {
+        if (!watched.assistant && key === "enter") {
           service?.noteUserSent(watched.runId, watched.spawnedAt);
           service?.markHandled(watched.runId, watched.spawnedAt);
         }
@@ -1062,7 +1860,6 @@ export const canopyNamespace = defineIpcNamespace({
     terminalSubmit: op(
       CANOPY_METHOD_CHANNELS.terminalSubmit,
       async (ctx, watchId: number, text: string, imagePaths?: string[]): Promise<void> => {
-        requireActivated();
         if (typeof text !== "string" || text.length > MAX_SUBMIT_LENGTH) {
           throw new Error("Invalid message");
         }
@@ -1083,19 +1880,23 @@ export const canopyNamespace = defineIpcNamespace({
           });
         }
         const watched = requireWatched(ctx.webContentsId, watchId);
+        assertMayType(watched);
         // The stream ends on exit, but a submit is worth one more look at the
         // host's own record: the message must reach this incarnation or none.
         const record = await requirePtyClient()
           .getTerminalAsync(watched.runId)
           .catch(() => null);
+        const current = watchedTerminal(ctx.webContentsId, watchId);
         if (
           !record ||
           record.spawnedAt !== watched.spawnedAt ||
           record.isExited === true ||
-          watchedTerminal(ctx.webContentsId, watchId) === null
+          current === null
         ) {
           throw new Error("That agent isn't running any more.");
         }
+        // Input may have moved to another window while the host answered.
+        assertMayType(current);
         assertDrivesRun(ctx, watched.runId);
         if (imagePaths !== undefined && imagePaths.length > 0) {
           requirePtyClient().submit(
@@ -1109,8 +1910,10 @@ export const canopyNamespace = defineIpcNamespace({
         } else {
           requirePtyClient().submit(watched.runId, text);
         }
-        service?.noteUserSent(watched.runId, watched.spawnedAt);
-        service?.markHandled(watched.runId, watched.spawnedAt);
+        if (!watched.assistant) {
+          service?.noteUserSent(watched.runId, watched.spawnedAt);
+          service?.markHandled(watched.runId, watched.spawnedAt);
+        }
       },
       { withContext: true }
     ),
@@ -1123,7 +1926,6 @@ export const canopyNamespace = defineIpcNamespace({
     trash: op(
       CANOPY_METHOD_CHANNELS.trash,
       async (runId: string, target: CanopyTarget): Promise<number | null> => {
-        requireActivated();
         checkRateLimit(CANOPY_METHOD_CHANNELS.trash, 20, 10_000);
         assertRunId(runId);
         assertTarget(target);
@@ -1180,13 +1982,172 @@ export const canopyNamespace = defineIpcNamespace({
     ),
 
     /**
+     * Put back a run from Canopy's Trash, whoever trashed it, while the trash
+     * still holds that trash of it. Not gated on Canopy being on, as Undo isn't.
+     */
+    restoreTrashed: op(
+      CANOPY_METHOD_CHANNELS.restoreTrashed,
+      async (ctx, runId: string, target: CanopyTrashTarget): Promise<CanopyRestoreOutcome> => {
+        checkRateLimit(CANOPY_METHOD_CHANNELS.restoreTrashed, 20, 10_000);
+        assertRunId(runId);
+        assertTrashTarget(target);
+        if (isLiveTrash(runId, target)) {
+          const workspaceId = heldTrash(runId, target).run.workspaceId;
+          if (!drivesProject(ctx, workspaceId)) throw drivenElsewhere(workspaceId);
+          await restoreTrashedRun(runId, target, (project) => drivesProject(ctx, project));
+          return { runId };
+        }
+        if (isEndingTrash(runId, target)) throw stillClosing();
+        // Read the journal again: a close aged out of history since is not resumed.
+        closedTrash?.refresh();
+        const workspaceId = closedTrash?.find(runId, target)?.entry.run.workspaceId;
+        if (workspaceId === undefined) throw leftTheTrash();
+        if (!drivesProject(ctx, workspaceId)) throw drivenElsewhere(workspaceId);
+        return resumeClosedRun(ctx, runId, target);
+      },
+      { withContext: true }
+    ),
+
+    /**
+     * A project's view is about to launch a resume Canopy asked of it: how
+     * long it has to land the pane, or null once Canopy stopped waiting. Only
+     * the view asked is heard, and only once.
+     */
+    resumeStarted: op(
+      CANOPY_METHOD_CHANNELS.resumeStarted,
+      async (ctx, requestId: string): Promise<number | null> => {
+        if (typeof requestId !== "string" || requestId.length === 0 || requestId.length > 64) {
+          throw new Error("Invalid resume request id");
+        }
+        return startResume(requestId, ctx.webContentsId);
+      },
+      { withContext: true }
+    ),
+
+    /**
+     * A project's view answers a resume Canopy asked of it: the pane now
+     * running the session, or why there is none. Only the view asked is heard.
+     */
+    resumeSettled: op(
+      CANOPY_METHOD_CHANNELS.resumeSettled,
+      async (ctx, requestId: string, answer: CanopyResumeAnswer): Promise<void> => {
+        if (typeof requestId !== "string" || requestId.length === 0 || requestId.length > 64) {
+          throw new Error("Invalid resume request id");
+        }
+        const pending = pendingResumes.get(requestId);
+        if (!pending || pending.viewId !== ctx.webContentsId) return;
+        const resumed =
+          answer !== null &&
+          typeof answer === "object" &&
+          "runId" in answer &&
+          typeof answer.runId === "string" &&
+          answer.runId.length > 0 &&
+          answer.runId.length <= 200;
+        const failed =
+          answer !== null &&
+          typeof answer === "object" &&
+          "error" in answer &&
+          typeof answer.error === "string";
+        settleResume(
+          requestId,
+          resumed
+            ? { runId: answer.runId }
+            : { error: failed ? answer.error.slice(0, 500) : "The project couldn't resume it." }
+        );
+      },
+      { withContext: true }
+    ),
+
+    /**
+     * Remove a run in Canopy's Trash for good, ending its process: D1, so the
+     * panel confirms before it asks.
+     */
+    removeTrashed: op(
+      CANOPY_METHOD_CHANNELS.removeTrashed,
+      async (ctx, runId: string, target: CanopyTrashTarget): Promise<void> => {
+        checkRateLimit(CANOPY_METHOD_CHANNELS.removeTrashed, 20, 10_000);
+        assertRunId(runId);
+        assertTrashTarget(target);
+        if (isLiveTrash(runId, target)) {
+          const workspaceId = heldTrash(runId, target).run.workspaceId;
+          if (!drivesProject(ctx, workspaceId)) throw drivenElsewhere(workspaceId);
+          await removeTrashedRun(runId, target, (project) => drivesProject(ctx, project));
+          return;
+        }
+        const workspaceId = closedWorkspaceOf(runId, target);
+        if (workspaceId === undefined) throw leftTheTrash();
+        if (!drivesProject(ctx, workspaceId)) throw drivenElsewhere(workspaceId);
+        await dismissClosedRun(runId, target);
+      },
+      { withContext: true }
+    ),
+
+    /**
+     * Empty Canopy's Trash: exactly the runs the panel confirmed, never
+     * whatever the trash holds by the time this lands. A run that has left
+     * since is skipped; one whose project is driven elsewhere refuses the
+     * whole batch before anything is removed. Answers how many it removed.
+     */
+    emptyTrash: op(
+      CANOPY_METHOD_CHANNELS.emptyTrash,
+      async (ctx, targets: Array<CanopyTrashTarget & { runId: string }>): Promise<number> => {
+        checkRateLimit(CANOPY_METHOD_CHANNELS.emptyTrash, 10, 10_000);
+        if (!Array.isArray(targets) || targets.length > MAX_EMPTY_TRASH) {
+          throw new Error("Invalid trash targets");
+        }
+        for (const target of targets) {
+          assertRunId(target?.runId);
+          assertTrashTarget(target);
+        }
+        // Each run as the panel confirmed it: live in the trash, or ended.
+        const held = targets.flatMap((target) => {
+          if (isLiveTrash(target.runId, target)) {
+            try {
+              return [
+                {
+                  target,
+                  live: true,
+                  workspaceId: heldTrash(target.runId, target).run.workspaceId,
+                },
+              ];
+            } catch {
+              return [];
+            }
+          }
+          const workspaceId = closedWorkspaceOf(target.runId, target);
+          return workspaceId === undefined ? [] : [{ target, live: false, workspaceId }];
+        });
+        for (const { workspaceId } of held) {
+          if (!drivesProject(ctx, workspaceId)) throw drivenElsewhere(workspaceId);
+        }
+        let removed = 0;
+        for (const { target, live } of held) {
+          try {
+            if (live) {
+              await removeTrashedRun(target.runId, target, (project) =>
+                drivesProject(ctx, project)
+              );
+            } else {
+              await dismissClosedRun(target.runId, target);
+            }
+            removed += 1;
+          } catch (error) {
+            // Left the trash while the others were removed: nothing to do for it.
+            if (!(error instanceof AppError) || error.code !== "NOT_FOUND") throw error;
+          }
+        }
+        return removed;
+      },
+      { withContext: true }
+    ),
+
+    /**
      * The user renamed a run from Canopy: any project's, as a rename of its
      * pane would. An empty title puts back the one Daintree gives it.
      */
     rename: op(
       CANOPY_METHOD_CHANNELS.rename,
       async (runId: string, target: CanopyTarget, title: string): Promise<void> => {
-        requireActivated();
         checkRateLimit(CANOPY_METHOD_CHANNELS.rename, 20, 10_000);
         assertRunId(runId);
         assertTarget(target);
@@ -1210,7 +2171,6 @@ export const canopyNamespace = defineIpcNamespace({
         target: CanopyTarget,
         expectTurn?: number
       ): Promise<CanopyReadMark | null> => {
-        requireActivated();
         checkRateLimit(CANOPY_METHOD_CHANNELS.archive, 30, 10_000);
         assertRunId(runId);
         assertTarget(target);
@@ -1237,6 +2197,7 @@ export const canopyNamespace = defineIpcNamespace({
         assertTarget(target);
         assertDrivesRun(ctx, runId);
         if (!isAnswerLabel(label)) throw new Error("Invalid option");
+        await assertNotGlobalAssistant(runId);
         await answerRunByLabel({
           pty: requirePtyClient(),
           runId,
@@ -1266,7 +2227,6 @@ export const canopyNamespace = defineIpcNamespace({
     unarchive: op(
       CANOPY_METHOD_CHANNELS.unarchive,
       async (runId: string, target: CanopyTarget): Promise<void> => {
-        requireActivated();
         checkRateLimit(CANOPY_METHOD_CHANNELS.unarchive, 30, 10_000);
         assertRunId(runId);
         assertTarget(target);
@@ -1281,7 +2241,6 @@ export const canopyNamespace = defineIpcNamespace({
     markSeen: op(
       CANOPY_METHOD_CHANNELS.markSeen,
       async (ctx, runId: string, looking?: boolean, place?: CanopyLookPlace): Promise<void> => {
-        requireActivated();
         // A look ending is never refused: one dropped would keep reading the
         // run for the look's whole lease, a row the user only passed over.
         if (looking !== false) checkRateLimit(CANOPY_METHOD_CHANNELS.markSeen, 120, 10_000);
@@ -1326,7 +2285,6 @@ export const canopyNamespace = defineIpcNamespace({
         read: boolean,
         turn?: number
       ): Promise<CanopyReadMark | null> => {
-        requireActivated();
         checkRateLimit(CANOPY_METHOD_CHANNELS.setRead, 60, 10_000);
         assertRunId(runId);
         assertTarget(target);
@@ -1342,7 +2300,6 @@ export const canopyNamespace = defineIpcNamespace({
     markAllRead: op(
       CANOPY_METHOD_CHANNELS.markAllRead,
       async (targets: CanopyReadTarget[]): Promise<CanopyReadMark[]> => {
-        requireActivated();
         checkRateLimit(CANOPY_METHOD_CHANNELS.markAllRead, 10, 10_000);
         if (!Array.isArray(targets) || targets.length > MAX_READ_BATCH) {
           throw new Error("Invalid runs");
@@ -1358,7 +2315,6 @@ export const canopyNamespace = defineIpcNamespace({
     restoreReads: op(
       CANOPY_METHOD_CHANNELS.restoreReads,
       async (restores: CanopyReadRestore[]): Promise<void> => {
-        requireActivated();
         checkRateLimit(CANOPY_METHOD_CHANNELS.restoreReads, 20, 10_000);
         if (!Array.isArray(restores) || restores.length > MAX_READ_BATCH) {
           throw new Error("Invalid runs");
@@ -1377,7 +2333,6 @@ export const canopyNamespace = defineIpcNamespace({
     runBranch: op(
       CANOPY_METHOD_CHANNELS.runBranch,
       async (runId: string, target: CanopyTarget): Promise<string | null> => {
-        requireActivated();
         checkRateLimit(CANOPY_METHOD_CHANNELS.runBranch, 60, 10_000);
         assertRunId(runId);
         assertTarget(target);
@@ -1398,7 +2353,6 @@ export const canopyNamespace = defineIpcNamespace({
     searchScreens: op(
       CANOPY_METHOD_CHANNELS.searchScreens,
       async (targets: CanopyScreenSearchTarget[]): Promise<string[]> => {
-        requireActivated();
         checkRateLimit(CANOPY_METHOD_CHANNELS.searchScreens, 60, 10_000);
         if (!Array.isArray(targets) || targets.length > MAX_READ_BATCH) {
           throw new Error("Invalid runs");
@@ -1464,14 +2418,82 @@ export const canopyNamespace = defineIpcNamespace({
 
 export function registerCanopyHandlers(): () => void {
   const unregister = canopyNamespace.register();
+  const ledger = new CanopyTrashLedger({
+    readTerminal: (id) => getPtyClient()?.getTerminalAsync(id) ?? Promise.resolve(null),
+    isHelpTerminal: (id) => getAgentAvailabilityStore().isHelpTerminal(id),
+    // Only a service tells views: with none made, no panel is open, and the
+    // next one to open reads the trash with the rest of the snapshot.
+    onChange: () => service?.trashChanged(),
+    isRemoved: (entry) =>
+      hasCanopyTrashRemoval({ id: entry.run.runId, spawnedAt: entry.run.spawnedAt }),
+    // The incarnation's own record becomes the close when none of the close
+    // lands: its agent had quit before the pane was closed, or that quit's own
+    // capture took the record first.
+    onSettle: (entry) =>
+      adoptCanopyTrashClose(
+        { id: entry.run.runId, spawnedAt: entry.run.spawnedAt },
+        {
+          expiresAt: entry.expiresAt,
+          closedAt: entry.trashedAt,
+          ...(entry.run.titleMode !== undefined ? { titleMode: entry.run.titleMode } : {}),
+          ...(entry.run.agentPresetColor !== undefined
+            ? { agentPresetColor: entry.run.agentPresetColor }
+            : {}),
+        },
+        app.getPath("userData")
+      ),
+  });
+  trashLedger = ledger;
+  const closed = new CanopyClosedTrash({
+    readRecords: () =>
+      listAgentSessions(undefined, app.getPath("userData"), getAgentSessionRetentionDays()),
+    isWorktreeGone,
+    onChange: () => service?.trashChanged(),
+  });
+  closedTrash = closed;
+  // Every journal write, whoever made it: a close landing, a removal, a clear
+  // or prune of history. A close the journal now holds stands for its run.
+  const offHistory = onSessionHistoryWritten(() => {
+    closed.refresh();
+    for (const entry of closed.list()) ledger.onJournaled(entry.run.runId, entry.run.spawnedAt);
+  });
+  const offTrashed = events.on("terminal:trashed", ({ id, expiresAt }) =>
+    ledger.onTrashed(id, expiresAt)
+  );
+  const offTrashCleared = events.on("terminal:trash-cleared", ({ id, expiresAt }) =>
+    ledger.onCleared(id, expiresAt)
+  );
   // Restored anywhere — the grid's Undo, the trash, another toast — a trash
   // Canopy made is over, and its receipt must not restore a later one.
-  const offRestored = events.on("terminal:restored", ({ id }) => onHostRestored(id));
+  const offRestored = events.on("terminal:restored", ({ id }) => {
+    onHostRestored(id);
+    ledger.onRestored(id);
+  });
   const offHandBack = events.on("terminal:hand-back-changed", onHandBackChanged);
+  const offSizeHolds = onSizeHoldsChange((terminalIds) =>
+    broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
+      name: "terminal:canopy-size-holds-changed",
+      payload: terminalIds,
+    })
+  );
   return () => {
     unregister();
+    offTrashed();
+    offTrashCleared();
     offRestored();
+    offHistory();
+    ledger.dispose();
+    if (trashLedger === ledger) trashLedger = null;
+    closed.dispose();
+    if (closedTrash === closed) closedTrash = null;
+    for (const requestId of [...pendingResumes.keys()]) {
+      settleResume(requestId, { error: "Canopy stopped." });
+    }
+    for (const fallback of removeFallbacks) clearTimeout(fallback);
+    removeFallbacks.clear();
     offHandBack();
+    offDriveLease?.();
+    offDriveLease = null;
     unsubscribeFleet?.();
     unsubscribeFleet = null;
     unsubscribeInput?.();
@@ -1484,8 +2506,13 @@ export function registerCanopyHandlers(): () => void {
     recentlyTrashed.clear();
     ownRestores.clear();
     stopAllTerminalWatches();
+    offSizeHolds();
     setCanopyRefinementSource(null);
     service?.dispose();
     service = null;
+    reader?.release();
+    reader = null;
+    models?.cancel();
+    models = null;
   };
 }

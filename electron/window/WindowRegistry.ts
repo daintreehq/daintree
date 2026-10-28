@@ -200,6 +200,14 @@ export class WindowRegistry {
       .catch((err) => {
         console.warn("[WindowRegistry] revokeByWindowId failed during unregister:", err);
       });
+    // Only its readers go; the global assistant belongs to the installation.
+    import("../services/globalAssistant.js")
+      .then(({ peekGlobalAssistantService }) =>
+        peekGlobalAssistantService()?.detachWindow(windowId)
+      )
+      .catch((err) => {
+        console.warn("[WindowRegistry] Detaching the global assistant failed:", err);
+      });
 
     this.webContentsIndex.delete(ctx.webContentsId);
     const appViewWcIds = this.appViewWebContentsIds.get(windowId);

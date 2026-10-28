@@ -13,7 +13,10 @@ export function newCommand(): Command {
     .argument("[name]", "plugin name (also the directory)")
     .description("Scaffold a new plugin project")
     .option("--publisher <publisher>", "publisher segment (e.g. acme)")
-    .option("--template <template>", "command | view | mcp | full")
+    .option(
+      "--template <template>",
+      "command | view | mcp | full; with --project: app (the default) | command | view"
+    )
     .option(
       "--project",
       "scaffold into the enclosing project's .daintree/plugins/ (committed, loads with that project)"

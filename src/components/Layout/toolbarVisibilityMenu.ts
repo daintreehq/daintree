@@ -1,6 +1,7 @@
 import type { ComponentType } from "react";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
-import type { AgentSettings, CliAvailability } from "@shared/types";
+import type { AgentToolbarPins, CliAvailability } from "@shared/types";
+import { agentToolbarPin } from "@shared/types/ipc/agentToolbarPins";
 import type { AnyToolbarButtonId } from "@/../../shared/types/toolbar";
 import { isAgentInstalled } from "../../../shared/utils/agentAvailability";
 import type { ToolbarButtonIconProps, ToolbarButtonMetadata } from "./toolbarButtonMetadata";
@@ -13,6 +14,8 @@ export interface ToolbarVisibilityMenuRow {
   label: string;
   icon: ComponentType<ToolbarButtonIconProps>;
   checked: boolean;
+  /** Listed but not changeable from this menu right now (#13783). */
+  disabled?: boolean;
 }
 
 export interface ToolbarVisibilityMenuRows {
@@ -86,13 +89,13 @@ export function canListToolbarButton(
   id: AnyToolbarButtonId,
   registry: Readonly<Record<string, { isAvailable: boolean }>>,
   projectScopedIds: ReadonlySet<AnyToolbarButtonId>,
-  agentSettings: AgentSettings | null | undefined,
+  agentPins: Readonly<AgentToolbarPins> | null | undefined,
   agentAvailability: CliAvailability | null | undefined
 ): boolean {
   if (!Object.hasOwn(registry, id)) return false;
   if (isBuiltInAgentId(id)) {
     return (
-      agentSettings?.agents?.[id]?.pinned !== undefined || isAgentInstalled(agentAvailability?.[id])
+      agentToolbarPin(agentPins, id) !== undefined || isAgentInstalled(agentAvailability?.[id])
     );
   }
   return registry[id]?.isAvailable === true || projectScopedIds.has(id);

@@ -62,9 +62,10 @@ export class FileDiffCache {
     cwd: string,
     gitPath: string,
     status: string,
-    ignoreWhitespace: boolean
+    ignoreWhitespace: boolean,
+    side?: string
   ): string {
-    return [source, cwd, gitPath, status, String(ignoreWhitespace)].join("\u0000");
+    return [source, cwd, gitPath, status, String(ignoreWhitespace), side ?? ""].join("\u0000");
   }
 
   /**

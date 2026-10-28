@@ -1,9 +1,12 @@
 import { useEffect, useRef, type Dispatch, type SetStateAction } from "react";
 import { type ViewUpdate } from "@codemirror/view";
-import type { CompletionTrigger } from "@shared/types";
-import { getActiveCompletionContext, type ActiveCompletionContext } from "../hybridInputParsing";
+import {
+  getActiveCompletionContext,
+  type ActiveCompletionContext,
+  type ComposerTrigger,
+} from "../hybridInputParsing";
 import { chipPendingDeleteField, isOwnedByAttachmentChip } from "../inputEditorExtensions";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { with as withTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 
 interface LatestRefShape {
   isInHistoryMode: boolean;
@@ -15,7 +18,7 @@ interface LatestRefShape {
 interface UseContextDetectionParams {
   latestRef: React.RefObject<LatestRefShape | null>;
   /** Trigger chars that open a menu — derived from the agent's completionSources. */
-  activeTriggers: ReadonlySet<CompletionTrigger>;
+  activeTriggers: ReadonlySet<ComposerTrigger>;
   // Owner stores the next document value (typically into a ref + setState pair).
   // Returning true signals the value actually changed (i.e. differed from the last emit).
   applyDocChange: (next: string) => boolean;
@@ -74,7 +77,8 @@ export function useContextDetection({
   useEffect(() => {
     const held = heldTerminalIdRef;
     return () => {
-      if (held.current) terminalInstanceService.releaseComposerDraft(held.current);
+      const heldId = held.current;
+      if (heldId) withTerminalService((service) => service.releaseComposerDraft(heldId), heldId);
     };
   }, []);
 
@@ -101,7 +105,11 @@ export function useContextDetection({
           }
 
           isUserChange = update.transactions.some(
-            (tr) => tr.isUserEvent("input") || tr.isUserEvent("delete")
+            (tr) =>
+              tr.isUserEvent("input") ||
+              tr.isUserEvent("delete") ||
+              tr.isUserEvent("undo") ||
+              tr.isUserEvent("redo")
           );
         }
 
@@ -112,18 +120,21 @@ export function useContextDetection({
             // empty (the reset after a send, a stash, an unannotated chip
             // removal) only ends the draft hold.
             if (isUserChange) {
-              terminalInstanceService.clearDirectingState(terminalId);
+              withTerminalService((service) => service.clearDirectingState(terminalId), terminalId);
             } else {
-              terminalInstanceService.releaseComposerDraft(terminalId);
+              withTerminalService(
+                (service) => service.releaseComposerDraft(terminalId),
+                terminalId
+              );
             }
             heldTerminalIdRef.current = null;
           } else if (isUserChange) {
             const previous = heldTerminalIdRef.current;
             if (previous && previous !== terminalId) {
-              terminalInstanceService.releaseComposerDraft(previous);
+              withTerminalService((service) => service.releaseComposerDraft(previous), previous);
             }
             heldTerminalIdRef.current = terminalId;
-            terminalInstanceService.notifyComposerDraft(terminalId);
+            withTerminalService((service) => service.notifyComposerDraft(terminalId), terminalId);
           }
         }
       }

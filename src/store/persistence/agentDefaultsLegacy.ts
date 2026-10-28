@@ -37,8 +37,10 @@ function stateOf(blob: Blob | null): Record<string, unknown> | null {
 
 /** The live blob, or its last-good backup when the live one is corrupt. */
 function readBlob(name: string): { present: boolean; blob: Blob | null } {
+  // storage-key: help-panel-storage daintree-agent-preferences daintree-toolbar-preferences
   const raw = readLocalStorageItemSafely(name);
   if (raw === null) return { present: false, blob: null };
+  // storage-key: help-panel-storage daintree-agent-preferences daintree-toolbar-preferences
   return {
     present: true,
     blob: parseBlob(raw) ?? parseBlob(readLocalStorageItemSafely(backupKeyFor(name))),
@@ -100,6 +102,7 @@ function storage(): Storage | null {
 function stripField(name: string, strip: (state: Record<string, unknown>) => boolean): void {
   const ls = storage();
   if (!ls) return;
+  // storage-key: help-panel-storage daintree-toolbar-preferences
   for (const key of [name, backupKeyFor(name)]) {
     try {
       const blob = parseBlob(ls.getItem(key));
@@ -124,6 +127,7 @@ export function clearLegacyAgentDefaults(settled: AgentDefaultsSnapshot): void {
   if (Object.hasOwn(settled, "defaultAgent")) {
     const ls = storage();
     if (ls) {
+      // storage-key: daintree-agent-preferences
       for (const key of [
         LEGACY_AGENT_PREFERENCES_KEY,
         backupKeyFor(LEGACY_AGENT_PREFERENCES_KEY),

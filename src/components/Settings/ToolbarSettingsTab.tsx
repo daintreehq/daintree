@@ -41,7 +41,7 @@ import {
   GripVertical,
 } from "lucide-react";
 import { useToolbarPreferencesStore } from "@/store";
-import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { useAgentToolbarPinsStore } from "@/store/agentToolbarPinsStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { useCanopyStore } from "@/store/canopyStore";
 import type { AnyToolbarButtonId, LauncherItemToolbarButtonId } from "@/../../shared/types/toolbar";
@@ -61,6 +61,7 @@ import {
   getPluginAgentRegistrySnapshot,
 } from "@shared/config/pluginAgentRegistry";
 import { useRecipeStore } from "@/store/recipeStore";
+import { usePluginLaunchEntriesStore } from "@/store/pluginLaunchEntriesStore";
 import { useUserAgentRegistryStore } from "@/store/userAgentRegistryStore";
 import { resolveLauncherItemMetadata } from "@/components/Layout/launcherToolbarCatalog";
 import { BUILT_IN_AGENT_IDS, isBuiltInAgentId } from "@shared/config/agentIds";
@@ -78,6 +79,7 @@ import { getAgentConfig } from "@/config/agents";
 import { usePluginToolbarButtons } from "@/hooks/usePluginToolbarButtons";
 
 import { buildPluginToolbarMeta } from "@/components/Layout/pluginToolbarMeta";
+import { ProjectToolbarProfileNotice } from "@/components/Settings/ProjectToolbarProfileNotice";
 import { cn } from "@/lib/utils";
 import { DROP_TARGET_FRAME } from "@/components/DragDrop/dropIndicator";
 import { useArmedDropTarget } from "@/components/DragDrop/useArmedDropTarget";
@@ -99,8 +101,9 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "./SettingsGroup";
+import { useSettingsRowOwnerNote } from "@/hooks/useSettingsOwner";
 import { SettingsSection } from "./SettingsSection";
-import { useSettingsOwnerMarker } from "@/hooks/useSettingsOwner";
+import { SECTION_SETTINGS } from "@/components/Settings/settingsSectionOwners";
 import { SettingsSelect } from "./SettingsSelect";
 import { SettingsSwitch } from "./SettingsSwitch";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
@@ -468,9 +471,7 @@ function restoreUntouched<T extends object>(before: T, afterReset: T, now: T): T
 }
 
 export function ToolbarSettingsTab() {
-  // Button layout is this screen's; which agents are pinned is the host's agent settings,
-  // so the section listing both stays unmarked.
-  const ownerMarker = useSettingsOwnerMarker();
+  const rowOwnerNote = useSettingsRowOwnerNote();
   const layout = useToolbarPreferencesStore((s) => s.layout);
   const canopyHidden = useCanopyStore((s) => s.mode === "hidden");
   const launcher = useToolbarPreferencesStore((s) => s.launcher);
@@ -525,8 +526,8 @@ export function ToolbarSettingsTab() {
     });
   };
 
-  const agentSettings = useAgentSettingsStore((s) => s.settings);
-  const setAgentPinned = useAgentSettingsStore((s) => s.setAgentPinned);
+  const agentPins = useAgentToolbarPinsStore((s) => s.pins);
+  const setAgentPinned = useAgentToolbarPinsStore((s) => s.setAgentPinned);
   const agentAvailability = useCliAvailabilityStore((s) => s.availability);
 
   // In-flight side lists while a drag is active. `null` between drags so we
@@ -601,6 +602,13 @@ export function ToolbarSettingsTab() {
   // a user-defined agent lives here, so without this its row keeps a stale name
   // and icon after an edit.
   const userAgentRegistry = useUserAgentRegistryStore((s) => s.registry);
+  // Plugin launch entries are held in their own store rather than a registry,
+  // so they are passed in rather than read from inside the resolver.
+  const launchEntries = usePluginLaunchEntriesStore((s) => s.entries);
+  const initLaunchEntries = usePluginLaunchEntriesStore((s) => s.init);
+  useEffect(() => {
+    initLaunchEntries();
+  }, [initLaunchEntries]);
   const launcherItemMetadata = useMemo(() => {
     // Referenced, not merely listed as dependencies. `resolveLauncherItemMetadata`
     // reads both registries itself, so these snapshots exist only to invalidate
@@ -618,7 +626,7 @@ export function ToolbarSettingsTab() {
     for (const [id, isPinned] of Object.entries(layout.pinnedButtons)) {
       if (isPinned !== true) continue;
       if (!isLauncherItemToolbarButtonId(id)) continue;
-      const metadata = resolveLauncherItemMetadata(id, recipes, currentProjectId);
+      const metadata = resolveLauncherItemMetadata(id, recipes, currentProjectId, launchEntries);
       if (metadata) entries.push([id, metadata]);
     }
     return Object.fromEntries(entries);
@@ -626,6 +634,7 @@ export function ToolbarSettingsTab() {
     layout.pinnedButtons,
     recipes,
     currentProjectId,
+    launchEntries,
     panelKindRegistry,
     pluginAgentRegistry,
     userAgentRegistry,
@@ -693,7 +702,7 @@ export function ToolbarSettingsTab() {
       pinnedButtons: layout.pinnedButtons,
       leftButtons: layout.leftButtons,
       rightButtons: layout.rightButtons,
-      agentSettings,
+      agentPins,
       agentAvailability,
       isPluginContribution: (id) => pluginConfigs.has(id),
     }),
@@ -701,7 +710,7 @@ export function ToolbarSettingsTab() {
       layout.pinnedButtons,
       layout.leftButtons,
       layout.rightButtons,
-      agentSettings,
+      agentPins,
       agentAvailability,
       pluginConfigs,
     ]
@@ -1053,9 +1062,10 @@ export function ToolbarSettingsTab() {
 
   return (
     <div className="space-y-8">
+      <ProjectToolbarProfileNotice />
       <SettingsSection
         title="Toolbar buttons"
-        badge={ownerMarker("device")}
+        settings={SECTION_SETTINGS.toolbarLayout}
         description="Drag a button, or use its menu, to reorder it or move it to the other side. Each side keeps its groups in order: launcher, agents, panels, then the rest."
       >
         <DndContext
@@ -1135,6 +1145,7 @@ export function ToolbarSettingsTab() {
           <SettingsSection
             id="toolbar-hidden-buttons"
             title="Not on the toolbar"
+            settings={SECTION_SETTINGS.toolbarLayout}
             description="Switch one on to give it a toolbar button. Agents and panels stay in the launcher either way, and plugin buttons in the plugin tray."
           >
             {poolAgents.length > 0 && (
@@ -1222,11 +1233,15 @@ export function ToolbarSettingsTab() {
         </div>
       )}
 
-      <SettingsSection id="toolbar-launcher" title="Launcher palette" badge={ownerMarker("device")}>
+      <SettingsSection
+        id="toolbar-launcher"
+        title="Launcher palette"
+        settings={SECTION_SETTINGS.toolbarLayout}
+      >
         <SettingsGroup>
           <SettingsSwitchCard
-            title="Always show dev server in launcher"
-            subtitle="Show dev server option even if no command is configured in project settings"
+            title="Always show dev preview"
+            subtitle="Offer the dev preview in every project, even ones that don't look like web apps, unless a project hides it itself"
             isEnabled={launcher.alwaysShowDevServer}
             onChange={() => setAlwaysShowDevServer(!launcher.alwaysShowDevServer)}
             isModified={launcher.alwaysShowDevServer}
@@ -1253,7 +1268,10 @@ export function ToolbarSettingsTab() {
       <SettingsGroup id="toolbar-reset" className="scroll-mt-6">
         <SettingsRow
           label="Reset toolbar"
-          description="Restores the default buttons, order and launcher palette options"
+          description={rowOwnerNote(
+            "Restores the default buttons, order and launcher palette options",
+            ...SECTION_SETTINGS.toolbarLayout
+          )}
           control={({ labelId, descriptionId, disabled }) => (
             <Button
               type="button"

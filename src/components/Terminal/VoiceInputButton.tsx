@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useRef } from "react";
-import { Mic } from "lucide-react";
-import { Spinner } from "@/components/ui/Spinner";
+import { useCallback, useEffect, useRef, type CSSProperties } from "react";
+import { Mic, Play } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
-import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
+import { VOICE_ORBIT_MIN_OPACITY } from "@/utils/terminalTheme";
+import { useVoiceRecordingStore, type CanopyReplyRow } from "@/store/voiceRecordingStore";
 import { voiceRecordingService } from "@/services/VoiceRecordingService";
 import type { VoiceInputError } from "@shared/types";
 import {
@@ -47,6 +47,22 @@ const BASE_THICKNESS = 2; // px — fixed padding, animated via scale
 const SCALE_MIN = 0.88;
 const SCALE_MAX = 1.0;
 
+// The orbit is the shell's contrast-fitted voice signal (`--ib-voice`), so it
+// and the listening shell are one hue on every terminal palette.
+const ORBIT_INK = "var(--ib-voice, var(--theme-accent-primary))";
+// Every other ring is the composer's neutral control ink: only listening
+// spends the accent.
+const RING_INK = "color-mix(in oklab, var(--ib-fg) 72%, var(--ib-bg))";
+
+/** A 2px band on the control's outer edge: the orbit's, the wait arc's, the held ring's. */
+const RING_BAND: CSSProperties = {
+  padding: `${BASE_THICKNESS}px`,
+  mask: `linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)`,
+  WebkitMask: `linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)`,
+  maskComposite: "exclude",
+  WebkitMaskComposite: "xor",
+};
+
 interface VoiceInputButtonProps {
   panelId: string;
   panelTitle?: string;
@@ -54,6 +70,11 @@ interface VoiceInputButtonProps {
   projectName?: string;
   worktreeId?: string;
   worktreeLabel?: string;
+  /** A Canopy reply's: see `VoiceRecordingTarget`. */
+  surface?: "canopy-reply";
+  terminalId?: string;
+  otherHostId?: string;
+  canopyRow?: CanopyReplyRow;
   disabled?: boolean;
 }
 
@@ -64,30 +85,46 @@ export function VoiceInputButton({
   projectName,
   worktreeId,
   worktreeLabel,
+  surface,
+  terminalId,
+  otherHostId,
+  canopyRow,
   disabled = false,
 }: VoiceInputButtonProps) {
   const status = useVoiceRecordingStore((state) => state.status);
   const isConfigured = useVoiceRecordingStore((state) => state.isConfigured);
   const lastError = useVoiceRecordingStore((state) => state.lastError);
+  const pauseStopWarning = useVoiceRecordingStore((state) => state.pauseStopWarning);
+  const idleStopWarning = useVoiceRecordingStore((state) => state.idleStopWarning);
+  const errorPanelId = useVoiceRecordingStore((state) => state.errorPanelId);
   const micSignal = useVoiceRecordingStore((state) => state.micSignal);
+  const micDeviceLabel = useVoiceRecordingStore((state) => state.micDeviceLabel);
   const activePanelId = useVoiceRecordingStore((state) => state.activeTarget?.panelId ?? null);
+  // A start aimed here that hasn't begun its session yet; a click ends it.
+  const isPending = useVoiceRecordingStore((state) => state.pendingTarget?.panelId === panelId);
 
   const isRecording = activePanelId === panelId && status === "recording";
   const isConnecting = activePanelId === panelId && status === "connecting";
   const isReconnecting = activePanelId === panelId && status === "reconnecting";
   const isFinishing = activePanelId === panelId && status === "finishing";
   const isPaused = activePanelId === panelId && status === "paused";
+  const hasError = status === "error" && errorPanelId === panelId;
   // Mic state and backend state are separate: the session is open (and a press
   // stops it) as soon as capture starts, but it only counts as listening once
   // the mic delivers real audio. Until then the orbit holds still (#13105).
   const isSessionOpen = isRecording || isConnecting || isReconnecting;
   const isListening = isSessionOpen && micSignal === "live";
   const isMicStarting = isSessionOpen && !isListening;
-  // Keep orbit visible through finishing and paused for continuity
-  const showOrbit = isSessionOpen || isFinishing || isPaused;
   const isActive = isSessionOpen || isFinishing || isPaused;
-  // A stop before the mic ever went live drains without claiming it listened.
-  const isOrbitStill = isPaused || isMicStarting || (isFinishing && micSignal !== "live");
+  // A click while the session finishes starts the next one (#14604), so a
+  // disabled input blocks it like any other start.
+  const blockedWhenDisabled = !isActive || isFinishing;
+  // Only a session still feeding from the mic gets the orbit. Reconnecting is
+  // not listening: speech past the provider's short reconnect buffer is lost.
+  const isOrbiting = isListening && !isReconnecting;
+  // Waiting on the machine (a start not yet open, the mic, the link, the last
+  // words) spins a neutral arc; a pause the user chose holds a still ring.
+  const isWaiting = isPending || isMicStarting || isReconnecting || isFinishing;
 
   // Animation refs
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -99,40 +136,10 @@ export function VoiceInputButton({
   const rafRef = useRef<number>(0);
 
   useEffect(() => {
-    if (!showOrbit) return;
-
-    // Paused or mic still starting: freeze the orbit at a dim static state and
-    // skip the RAF loop entirely. A spinning orbit reads as "listening", which
-    // is false in both cases.
-    if (isOrbitStill) {
-      const wrapper = wrapperRef.current;
-      if (wrapper) {
-        wrapper.style.transform = `rotate(0deg) scale(${SCALE_MIN}) translateZ(0)`;
-      }
-      const ring = ringRef.current;
-      if (ring) {
-        ring.style.background = [
-          `conic-gradient(from 0deg,`,
-          `transparent 200deg,`,
-          `rgb(from var(--theme-accent-primary) r g b / 0.04) 280deg,`,
-          `rgb(from var(--theme-accent-primary) r g b / 0.12) 340deg,`,
-          `rgb(from var(--theme-accent-primary) r g b / 0.2) 360deg,`,
-          `transparent 360deg)`,
-        ].join(" ");
-      }
-      const core = dotCoreRef.current;
-      if (core) core.style.opacity = "0.35";
-      const halo = dotHaloRef.current;
-      if (halo) {
-        halo.style.boxShadow = "none";
-        halo.style.opacity = "0.2";
-      }
-      const track = trackRef.current;
-      if (track) track.style.opacity = "0.06";
-      const icon = iconRef.current;
-      if (icon) icon.style.transform = "scale(1)";
-      return;
-    }
+    if (!isOrbiting) return;
+    // The stop square outlives the orbit (reconnecting keeps it), so it gets
+    // its resting size back when the orbit stops.
+    const iconEl = iconRef.current;
 
     let lastTime = performance.now();
     let angle = 0;
@@ -144,10 +151,9 @@ export function VoiceInputButton({
       const dt = Math.min((now - lastTime) / 1000, 0.1);
       lastTime = now;
 
-      // During finishing, force level to 0 so it winds down gracefully.
       // Imperative store read: audioLevel updates ~60Hz during recording, so a
       // React subscription would re-render every mounted voice button per frame.
-      const rawLevel = isFinishing ? 0 : useVoiceRecordingStore.getState().audioLevel;
+      const rawLevel = useVoiceRecordingStore.getState().audioLevel;
 
       // Low-pass + perceptual curve
       smoothLevel += (rawLevel - smoothLevel) * AUDIO_SMOOTH;
@@ -185,11 +191,11 @@ export function VoiceInputButton({
         ring.style.background = [
           `conic-gradient(from 0deg,`,
           `transparent 200deg,`,
-          `rgb(from var(--theme-accent-primary) r g b / ${(opacityNum * 0.05).toFixed(3)}) 248deg,`,
-          `rgb(from var(--theme-accent-primary) r g b / ${(opacityNum * 0.18).toFixed(3)}) 292deg,`,
-          `rgb(from var(--theme-accent-primary) r g b / ${(opacityNum * 0.42).toFixed(3)}) 326deg,`,
-          `rgb(from var(--theme-accent-primary) r g b / ${(opacityNum * 0.82).toFixed(3)}) 348deg,`,
-          `rgb(from var(--theme-accent-primary) r g b / ${opacity}) 355deg,`,
+          `rgb(from ${ORBIT_INK} r g b / ${(opacityNum * 0.05).toFixed(3)}) 248deg,`,
+          `rgb(from ${ORBIT_INK} r g b / ${(opacityNum * 0.18).toFixed(3)}) 292deg,`,
+          `rgb(from ${ORBIT_INK} r g b / ${(opacityNum * 0.42).toFixed(3)}) 326deg,`,
+          `rgb(from ${ORBIT_INK} r g b / ${(opacityNum * 0.82).toFixed(3)}) 348deg,`,
+          `rgb(from ${ORBIT_INK} r g b / ${opacity}) 355deg,`,
           `transparent 360deg)`,
         ].join(" ");
       }
@@ -197,7 +203,9 @@ export function VoiceInputButton({
       // Dot core — crisp, no blur
       const core = dotCoreRef.current;
       if (core) {
-        core.style.opacity = String(0.82 + level * 0.18);
+        core.style.opacity = String(
+          VOICE_ORBIT_MIN_OPACITY + level * (1 - VOICE_ORBIT_MIN_OPACITY)
+        );
       }
 
       // Dot halo — soft glow
@@ -205,7 +213,7 @@ export function VoiceInputButton({
       if (halo) {
         const haloAlpha = (0.18 + level * 0.22).toFixed(3);
         const haloBlur = 6 + level * 6;
-        halo.style.boxShadow = `0 0 ${haloBlur}px rgb(from var(--theme-accent-primary) r g b / ${haloAlpha})`;
+        halo.style.boxShadow = `0 0 ${haloBlur}px rgb(from ${ORBIT_INK} r g b / ${haloAlpha})`;
         halo.style.opacity = String(0.5 + level * 0.5);
       }
 
@@ -226,14 +234,18 @@ export function VoiceInputButton({
     };
 
     rafRef.current = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(rafRef.current);
-  }, [showOrbit, isFinishing, isOrbitStill]);
+    return () => {
+      cancelAnimationFrame(rafRef.current);
+      if (iconEl) iconEl.style.transform = "";
+    };
+  }, [isOrbiting]);
 
   const handleClick = useCallback(() => {
-    if (disabled && !isActive) return;
+    if (disabled && blockedWhenDisabled) return;
 
     // Paused → resume on click; the affordance reads as a pause/resume toggle
-    // rather than a stop. Escape (handled by the service) is the cancel path.
+    // rather than a stop. The dictation key stops and keeps the text; Escape
+    // (handled by the service) cancels and discards it.
     if (isPaused) {
       voiceRecordingService.togglePause();
       return;
@@ -246,10 +258,14 @@ export function VoiceInputButton({
       projectName,
       worktreeId,
       worktreeLabel,
+      ...(surface !== undefined ? { surface } : {}),
+      ...(terminalId !== undefined ? { terminalId } : {}),
+      ...(otherHostId !== undefined ? { otherHostId } : {}),
+      ...(canopyRow !== undefined ? { canopyRow } : {}),
     });
   }, [
     disabled,
-    isActive,
+    blockedWhenDisabled,
     isPaused,
     panelId,
     panelTitle,
@@ -257,50 +273,59 @@ export function VoiceInputButton({
     projectName,
     worktreeId,
     worktreeLabel,
+    surface,
+    terminalId,
+    otherHostId,
+    canopyRow,
   ]);
-
-  if (!isConfigured && !isActive) return null;
 
   const tooltipText = !isConfigured
     ? "Configure voice input"
-    : status === "error"
+    : hasError
       ? formatVoiceErrorTooltip(lastError)
-      : isFinishing
-        ? "Finishing transcription…"
-        : isPaused
-          ? "Paused — click to resume"
-          : isMicStarting
-            ? micSignal === "silent"
-              ? "No audio from microphone · Click to stop"
-              : "Starting microphone… Click to stop"
-            : isReconnecting
-              ? "Reconnecting… Click to stop"
-              : isListening
-                ? "Stop recording"
-                : "Start voice input";
+      : isPending
+        ? "Starting microphone… Click to stop"
+        : isFinishing
+          ? disabled
+            ? "Finishing transcription…"
+            : "Finishing transcription… Click to start again"
+          : isPaused
+            ? pauseStopWarning
+              ? "Paused — stops in 10s · Click to resume"
+              : "Paused — click to resume"
+            : isMicStarting
+              ? micSignal === "silent"
+                ? `No audio from ${micDeviceLabel ?? "microphone"} · Click to stop`
+                : "Starting microphone… Click to stop"
+              : isReconnecting
+                ? "Reconnecting… Click to stop"
+                : isListening
+                  ? idleStopWarning
+                    ? "Stopping in 10s unless you speak · Click to stop"
+                    : "Stop recording"
+                  : "Start voice input";
 
   return (
     <div
       className="relative flex items-center"
-      style={{ contain: "strict", width: 24, height: 24 }}
+      // No paint containment: the orbit's halo reaches past the 24px box, and
+      // clipping it there cut the glow square at every quarter turn.
+      style={{ contain: "size layout style", width: 24, height: 24 }}
     >
-      {showOrbit && (
+      {/* The rings sit above the button: their band is the same outer 2px the
+          inset keyboard ring uses, and the moving arc has to stay readable
+          while the mic holds focus. */}
+      {isOrbiting && (
         <>
-          {/* The orbit sits above the button: its band is the same outer 2px the
-              inset keyboard ring uses, and the moving arc has to stay readable
-              while the mic holds focus. */}
           {/* Static track — same mask technique as arc for consistent antialiasing */}
           <span
             ref={trackRef}
             className="absolute inset-0 z-10 rounded-full pointer-events-none"
+            data-voice-ring="orbit"
             style={{
+              ...RING_BAND,
               opacity: 0.08,
-              background: `var(--theme-accent-primary)`,
-              mask: `linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)`,
-              WebkitMask: `linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)`,
-              maskComposite: "exclude",
-              WebkitMaskComposite: "xor",
-              padding: `${BASE_THICKNESS}px`,
+              background: ORBIT_INK,
               transition: "opacity var(--duration-75) ease-out",
             }}
           />
@@ -311,60 +336,74 @@ export function VoiceInputButton({
             style={{ willChange: "transform" }}
           >
             {/* Arc ring */}
-            <span
-              ref={ringRef}
-              className="absolute inset-0 rounded-full"
-              style={{
-                padding: `${BASE_THICKNESS}px`,
-                mask: `linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)`,
-                WebkitMask: `linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)`,
-                maskComposite: "exclude",
-                WebkitMaskComposite: "xor",
-              }}
-            />
+            <span ref={ringRef} className="absolute inset-0 rounded-full" style={RING_BAND} />
             {/* Dot: core (crisp) + halo (soft glow) */}
             <span
               ref={dotHaloRef}
-              className="absolute rounded-full bg-daintree-accent/30"
+              className="absolute rounded-full"
               style={{
                 width: "6px",
                 height: "6px",
-                top: 0,
+                top: BASE_THICKNESS / 2,
                 left: "50%",
-                transform: "translate(-50%, -35%)",
+                transform: "translate(-50%, -50%)",
+                background: `rgb(from ${ORBIT_INK} r g b / 0.3)`,
               }}
             />
             <span
               ref={dotCoreRef}
-              className="absolute rounded-full bg-accent-primary"
+              className="absolute rounded-full"
               style={{
                 width: "3.5px",
                 height: "3.5px",
-                top: 0,
+                top: BASE_THICKNESS / 2,
                 left: "50%",
-                transform: "translate(-50%, -15%)",
+                transform: "translate(-50%, -50%)",
+                background: ORBIT_INK,
               }}
             />
           </div>
         </>
+      )}
+      {isWaiting && (
+        <>
+          <span
+            aria-hidden="true"
+            className="absolute inset-0 z-10 rounded-full pointer-events-none"
+            style={{ ...RING_BAND, background: RING_INK, opacity: 0.16 }}
+          />
+          <span
+            aria-hidden="true"
+            className="absolute inset-0 z-10 rounded-full pointer-events-none animate-spin motion-reduce:animate-none"
+            data-voice-ring="wait"
+            style={{
+              ...RING_BAND,
+              background: `conic-gradient(${RING_INK} 0deg 100deg, transparent 100deg)`,
+            }}
+          />
+        </>
+      )}
+      {isPaused && (
+        <span
+          aria-hidden="true"
+          className="absolute inset-0 z-10 rounded-full pointer-events-none"
+          data-voice-ring="held"
+          style={{ ...RING_BAND, background: `var(--ib-voice-held, ${RING_INK})` }}
+        />
       )}
       <Tooltip>
         <TooltipTrigger asChild>
           <button
             type="button"
             onClick={handleClick}
-            disabled={(disabled && !isActive) || isFinishing}
+            disabled={disabled && blockedWhenDisabled}
             className={cn(
-              "relative flex items-center justify-center rounded-full transition duration-150",
+              "relative flex items-center justify-center rounded-full transition-colors duration-150",
               "h-6 w-6",
-              // The focus outline is inset because the wrapper above is
-              // `contain: strict`, which includes paint containment and clips
-              // descendants at its 24x24 box — and this button fills that box
-              // exactly, so an outward indicator is painted straight into the clip.
               COMPOSER_CONTROL_FOCUS_CLASS,
-              showOrbit
+              isActive || isPending
                 ? "bg-[color-mix(in_oklab,var(--ib-fg)_12%,transparent)] text-[var(--ib-fg)] hover:bg-[color-mix(in_oklab,var(--ib-fg)_18%,transparent)]"
-                : status === "error"
+                : hasError
                   ? cn("text-activity-waiting", COMPOSER_CONTROL_HOVER_BG_CLASS)
                   : cn(COMPOSER_CONTROL_TEXT_CLASS, COMPOSER_CONTROL_HOVER_BG_CLASS)
             )}
@@ -373,24 +412,18 @@ export function VoiceInputButton({
                 ? "Set up voice input"
                 : isPaused
                   ? "Resume voice recording"
-                  : isSessionOpen
+                  : isSessionOpen || isPending
                     ? "Stop voice recording"
                     : "Start voice recording"
             }
-            aria-pressed={isConfigured ? isSessionOpen || isPaused : undefined}
+            aria-pressed={isConfigured ? isSessionOpen || isPaused || isPending : undefined}
           >
-            {isFinishing && !showOrbit ? (
-              <Spinner size="sm" />
-            ) : isPaused ? (
-              <span
-                ref={iconRef}
-                className="flex h-2.5 w-2.5 items-stretch justify-between"
-                aria-hidden="true"
-              >
-                <span className="status-mark block w-[2px] rounded-full bg-current opacity-70" />
-                <span className="status-mark block w-[2px] rounded-full bg-current opacity-70" />
-              </span>
-            ) : showOrbit ? (
+            {/* The glyph is what a click does: stop an open session or a start
+                still on its way, resume a paused one, start again once the
+                last one is only finishing. */}
+            {isPaused ? (
+              <Play className="h-2.5 w-2.5 translate-x-[0.5px] fill-current" aria-hidden="true" />
+            ) : isSessionOpen || isPending ? (
               <span
                 ref={iconRef}
                 className="status-mark block h-2 w-2 rounded-[1.5px] bg-current transition-transform duration-100"

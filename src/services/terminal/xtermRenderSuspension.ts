@@ -19,7 +19,7 @@ import type { Terminal } from "@xterm/xterm";
  * but answered with "not intersecting", and resume replays the last real one
  * — a pane that genuinely scrolled out of view while cached stays paused.
  *
- * Pinned to @xterm/xterm 6.1.0-beta.300, where `_handleIntersectionChange` is
+ * Pinned to @xterm/xterm 6.1.0-beta.315, where `_handleIntersectionChange` is
  * the only writer of `_isPaused` and the observer invokes it through `this` at
  * call time (RenderService `_registerIntersectionObserver`), so an instance
  * property shadows it. Every access fails closed: on API drift the terminal
@@ -35,7 +35,9 @@ type RenderServiceLike = {
 };
 
 interface SuspensionGuard {
-  suspended: boolean;
+  // Who is holding the pause: the cached view, and separately a history
+  // refill (#14220), so one lifting its hold never lifts the other's.
+  owners: Set<string>;
   lastObserved: ObservedIntersection;
   original: (entry: ObservedIntersection) => void;
 }
@@ -61,7 +63,7 @@ function installGuard(renderService: RenderServiceLike): SuspensionGuard | undef
 
   const paused = renderService._isPaused === true;
   const guard: SuspensionGuard = {
-    suspended: false,
+    owners: new Set(),
     lastObserved: { isIntersecting: !paused, intersectionRatio: paused ? 0 : 1 },
     original,
   };
@@ -70,24 +72,25 @@ function installGuard(renderService: RenderServiceLike): SuspensionGuard | undef
       isIntersecting: entry.isIntersecting,
       intersectionRatio: entry.intersectionRatio,
     };
-    original.call(renderService, guard.suspended ? NOT_INTERSECTING : entry);
+    original.call(renderService, guard.owners.size > 0 ? NOT_INTERSECTING : entry);
   };
   guards.set(renderService, guard);
   return guard;
 }
 
 /**
- * Stop the terminal from painting until {@link resumeXtermRender}. Idempotent.
+ * Stop the terminal from painting until {@link resumeXtermRender}. Idempotent per owner.
  * Returns whether the terminal is now suspended.
  */
-export function suspendXtermRender(terminal: Terminal): boolean {
+export function suspendXtermRender(terminal: Terminal, owner = "view"): boolean {
   try {
     const renderService = getRenderService(terminal);
     if (!renderService) return false;
     const guard = installGuard(renderService);
     if (!guard) return false;
-    if (guard.suspended) return true;
-    guard.suspended = true;
+    const wasSuspended = guard.owners.size > 0;
+    guard.owners.add(owner);
+    if (wasSuspended) return true;
     guard.original.call(renderService, NOT_INTERSECTING);
     return true;
   } catch {
@@ -101,13 +104,12 @@ export function suspendXtermRender(terminal: Terminal): boolean {
  * updating while suspended. A no-op for a terminal that was never suspended,
  * so it never unpauses a pane xterm's own observer paused.
  */
-export function resumeXtermRender(terminal: Terminal): void {
+export function resumeXtermRender(terminal: Terminal, owner = "view"): void {
   try {
     const renderService = getRenderService(terminal);
     if (!renderService) return;
     const guard = guards.get(renderService);
-    if (!guard?.suspended) return;
-    guard.suspended = false;
+    if (!guard?.owners.delete(owner) || guard.owners.size > 0) return;
     guard.original.call(renderService, guard.lastObserved);
     // The handler repaints only when a refresh was skipped while paused; the
     // explicit range covers the rest and coalesces with it in the debouncer.
@@ -121,5 +123,5 @@ export function resumeXtermRender(terminal: Terminal): void {
 
 export function isXtermRenderSuspended(terminal: Terminal): boolean {
   const renderService = getRenderService(terminal);
-  return renderService ? guards.get(renderService)?.suspended === true : false;
+  return renderService ? (guards.get(renderService)?.owners.size ?? 0) > 0 : false;
 }

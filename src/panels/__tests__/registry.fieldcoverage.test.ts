@@ -49,6 +49,8 @@ const PTY_FIELD_CLASSIFICATION = {
   titleMode: false,
   location: false,
   backgroundRestoreLocation: false,
+  // Boot-time dock stopgap (#13907) — written by the base serialization layer.
+  pendingDockWorktreeId: false,
   worktreeId: false,
   isVisible: false,
   extensionState: false,
@@ -63,6 +65,8 @@ const PTY_FIELD_CLASSIFICATION = {
   agentSessionId: true,
   agentLaunchFlags: true,
   callerLaunchFlags: true,
+  // Runtime only (#14096): a restored pane relaunches as an ordinary agent.
+  requiredPluginTools: false,
   agentModelId: true,
   agentPresetId: true,
   agentPresetColor: true,
@@ -78,8 +82,17 @@ const PTY_FIELD_CLASSIFICATION = {
   // held across a restart instead of launching fresh.
   conversationCwd: true,
   restoreRecovery: true,
+  // How restore last rebuilt the pane and the plugin hold (#14017) — a pane
+  // held across restarts keeps the state last seen before the first of them.
+  restoreProvenance: true,
+  lastAgentObservation: true,
+  launchedByPluginId: true,
+  holdOnRestart: true,
   // The terminal's own notes (#12835) — persisted so they outlive a restart.
   scratchpad: true,
+  // What the run was first asked (#14592) — persisted so Review Hub still
+  // shows it after a restart.
+  firstPrompt: true,
   // PtyPanelData runtime-only fields
   pid: false,
   hasPty: false,
@@ -143,6 +156,9 @@ const PTY_FIELD_CLASSIFICATION = {
   removeOnExit: false,
   startedAt: false,
   exitCode: false,
+  // Session-preserving teardown mark (#13841) — describes the exit that just
+  // happened; the restored pane gets a new process, so nothing to persist.
+  sessionPreservingExit: false,
   // Parsed check result (#10682) — live signal from agent:state-changed,
   // cleared on restart; intentionally not persisted by the PTY serializer.
   lastCheckResult: false,
@@ -172,6 +188,8 @@ const BROWSER_FIELD_CLASSIFICATION = {
   titleMode: false,
   location: false,
   backgroundRestoreLocation: false,
+  // Boot-time dock stopgap (#13907) — written by the base serialization layer.
+  pendingDockWorktreeId: false,
   worktreeId: false,
   isVisible: false,
   extensionState: false,
@@ -202,6 +220,8 @@ const DEV_PREVIEW_FIELD_CLASSIFICATION = {
   titleMode: false,
   location: false,
   backgroundRestoreLocation: false,
+  // Boot-time dock stopgap (#13907) — written by the base serialization layer.
+  pendingDockWorktreeId: false,
   worktreeId: false,
   isVisible: false,
   extensionState: false,
@@ -248,6 +268,8 @@ const FILE_FIELD_CLASSIFICATION = {
   titleMode: false,
   location: false,
   backgroundRestoreLocation: false,
+  // Boot-time dock stopgap (#13907) — written by the base serialization layer.
+  pendingDockWorktreeId: false,
   worktreeId: false,
   isVisible: false,
   extensionState: false,
@@ -270,6 +292,9 @@ const FILE_FIELD_CLASSIFICATION = {
   // Open-time containment root pinned by a link from untrusted Markdown; a
   // restored panel infers its root again rather than reviving a stale pin.
   fileContainmentRoot: false,
+  // Open-time editor pick (#13811); a restored panel opens in Source, where
+  // the pick has nothing to choose.
+  fileEditorChoice: false,
 } as const satisfies Record<keyof FilePanelData, boolean>;
 
 // ── Diff field classification ────────────────────────────────────────
@@ -282,6 +307,8 @@ const DIFF_FIELD_CLASSIFICATION = {
   titleMode: false,
   location: false,
   backgroundRestoreLocation: false,
+  // Boot-time dock stopgap (#13907) — written by the base serialization layer.
+  pendingDockWorktreeId: false,
   worktreeId: false,
   isVisible: false,
   extensionState: false,
@@ -317,6 +344,8 @@ const FILE_BROWSER_FIELD_CLASSIFICATION = {
   titleMode: false,
   location: false,
   backgroundRestoreLocation: false,
+  // Boot-time dock stopgap (#13907) — written by the base serialization layer.
+  pendingDockWorktreeId: false,
   worktreeId: false,
   isVisible: false,
   extensionState: false,
@@ -431,7 +460,16 @@ const terminalFixture: PtySerializeInput = {
   agentState: "idle",
   lastStateChange: 1_700_000_000_000,
   conversationCwd: "/home/origin",
+  restoreProvenance: {
+    at: 1_700_000_000_002,
+    disposition: "resume",
+    lastSeen: { agentState: "idle", at: 1_699_999_999_000 },
+  },
+  lastAgentObservation: { agentState: "idle", at: 1_700_000_000_003 },
+  launchedByPluginId: "acme.orchestrator",
+  holdOnRestart: true,
   scratchpad: { content: "- check CI", collapsed: true, width: 320 },
+  firstPrompt: { text: "Fix the flaky test", via: "launch", at: 1_700_000_000_004 },
   worktreeMoveNotice: { destinationWorktreeId: "wt-feature" },
   createdAt: 1_700_000_000_000,
   lastActiveAt: 1_700_000_000_001,
@@ -621,6 +659,11 @@ describe("panel serializer field coverage", () => {
     >;
     expect(output.restoreRecovery).toEqual({ reason: "sibling-owns-resume-latest-slot" });
     expect(output.conversationCwd).toBe("/home/origin");
+    // What was last observed for the pane outlives its process (#14017).
+    expect(output.restoreProvenance).toEqual(terminalFixture.restoreProvenance);
+    expect(output.lastAgentObservation).toEqual(terminalFixture.lastAgentObservation);
+    // So is what the run it holds was first asked (#14592).
+    expect(output.firstPrompt).toEqual(terminalFixture.firstPrompt);
     expect(output).not.toHaveProperty("agentSessionId");
     expect(output).not.toHaveProperty("agentState");
     expect(output).not.toHaveProperty("lastStateChange");

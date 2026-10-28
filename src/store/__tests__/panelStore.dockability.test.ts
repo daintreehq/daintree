@@ -35,8 +35,8 @@ vi.mock("@/clients", () => ({
   },
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     get: vi.fn(() => null),
     cleanup: vi.fn(),
     destroy: vi.fn(),
@@ -48,8 +48,11 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     sendPtyResize: vi.fn(),
     setInputLocked: vi.fn(),
     wake: vi.fn(),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("@/lib/notify", () => ({
   notify: vi.fn(() => "mock-notification-id"),
@@ -80,6 +83,8 @@ Object.defineProperty(window, "electron", {
 });
 
 import { usePanelStore } from "../panelStore";
+import { restorePendingDockPanels } from "../reconcileDockMembership";
+import { buildArgsForNonPtyRecreation } from "@/utils/stateHydration/statePatcher";
 import { setWorktreeSelectionAccessor } from "@/store/storeAccessors";
 import {
   clearPanelKindRegistry,
@@ -279,5 +284,142 @@ describe("panelStore.addPanel worktree adoption on dock→grid rescue (#11375 po
     const panel = usePanelStore.getState().panelsById[id!];
     expect(panel?.location).toBe("dock");
     expect(panel?.worktreeId).toBeUndefined();
+  });
+});
+
+describe("docked plugin panels across a cold restart (#13907)", () => {
+  const pluginConfig = (dockable?: boolean): PanelKindConfig => ({
+    id: "ext-a.viewer",
+    name: "Viewer",
+    iconId: "puzzle",
+    color: "#123456",
+    hasPty: false,
+    canRestart: false,
+    canConvert: false,
+    extensionId: "ext-a",
+    ...(dockable !== undefined ? { dockable } : {}),
+  });
+
+  // Same path boot takes: the saved entry goes through the builder, then addPanel.
+  const restore = (worktreeId?: string) => {
+    const args = buildArgsForNonPtyRecreation(
+      {
+        id: "plugin-1",
+        kind: "ext-a.viewer",
+        title: "Viewer",
+        location: "dock",
+        pluginId: "ext-a",
+        worktreeId,
+      } as Parameters<typeof buildArgsForNonPtyRecreation>[0],
+      "ext-a.viewer" as Parameters<typeof buildArgsForNonPtyRecreation>[1],
+      "/project",
+      "wt-active"
+    );
+    return usePanelStore.getState().addPanel(
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- builder args are AddTerminalArgs; addPanel takes the narrower options union
+      args as Parameters<ReturnType<typeof usePanelStore.getState>["addPanel"]>[0]
+    );
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetState();
+    setWorktreeSelectionAccessor(() => ({
+      activeWorktreeId: "wt-active",
+      restoreWorktreeId: null,
+    }));
+  });
+
+  afterEach(() => {
+    resetState();
+    clearPanelKindRegistry();
+    setWorktreeSelectionAccessor(() => ({ activeWorktreeId: null, restoreWorktreeId: null }));
+  });
+
+  it("returns a restored dock panel to the dock with its saved worktree once the kind registers", async () => {
+    await restore("wt-saved");
+    expect(usePanelStore.getState().panelsById["plugin-1"]).toMatchObject({
+      location: "grid",
+      pendingDockWorktreeId: "wt-saved",
+    });
+
+    registerPanelKind(pluginConfig());
+    restorePendingDockPanels();
+
+    const panel = usePanelStore.getState().panelsById["plugin-1"];
+    expect(panel?.location).toBe("dock");
+    expect(panel?.worktreeId).toBe("wt-saved");
+    expect(panel?.pendingDockWorktreeId).toBeUndefined();
+    expect(usePanelStore.getState().panelIdsByWorktreeId["wt-saved"]).toContain("plugin-1");
+    expect(usePanelStore.getState().panelIdsByWorktreeId["wt-active"] ?? []).not.toContain(
+      "plugin-1"
+    );
+  });
+
+  it("restores a project-scoped panel with no worktree instead of the active one", async () => {
+    await restore(undefined);
+    expect(usePanelStore.getState().panelsById["plugin-1"]?.worktreeId).toBe("wt-active");
+
+    registerPanelKind(pluginConfig());
+    restorePendingDockPanels();
+
+    const panel = usePanelStore.getState().panelsById["plugin-1"];
+    expect(panel?.location).toBe("dock");
+    expect(panel?.worktreeId).toBeUndefined();
+  });
+
+  it("keeps waiting while the kind is still unregistered", async () => {
+    await restore("wt-saved");
+
+    restorePendingDockPanels();
+
+    expect(usePanelStore.getState().panelsById["plugin-1"]).toMatchObject({
+      location: "grid",
+      pendingDockWorktreeId: "wt-saved",
+    });
+  });
+
+  it("leaves a panel in the grid when its kind registers as non-dockable", async () => {
+    await restore("wt-saved");
+
+    registerPanelKind(pluginConfig(false));
+    restorePendingDockPanels();
+
+    const panel = usePanelStore.getState().panelsById["plugin-1"];
+    expect(panel?.location).toBe("grid");
+    expect(panel?.pendingDockWorktreeId).toBeUndefined();
+  });
+
+  it("does not leave a maximized placeholder pointing at a panel that left the grid", async () => {
+    await restore("wt-saved");
+    usePanelStore.setState({ maximizedId: "plugin-1", focusedId: "plugin-1" });
+
+    registerPanelKind(pluginConfig());
+    restorePendingDockPanels();
+
+    const state = usePanelStore.getState();
+    expect(state.panelsById["plugin-1"]?.location).toBe("dock");
+    expect(state.maximizedId).toBeNull();
+  });
+
+  it("does not pull a panel back after it is filed under another worktree", async () => {
+    await restore("wt-saved");
+    usePanelStore.getState().moveTerminalToWorktree("plugin-1", "wt-other");
+
+    registerPanelKind(pluginConfig());
+    restorePendingDockPanels();
+
+    expect(usePanelStore.getState().panelsById["plugin-1"]?.location).toBe("grid");
+    expect(usePanelStore.getState().panelsById["plugin-1"]?.worktreeId).toBe("wt-other");
+  });
+
+  it("does not move a panel the user placed after restore", async () => {
+    await restore("wt-saved");
+    usePanelStore.getState().moveTerminalToPosition("plugin-1", 0, "grid", "wt-active");
+
+    registerPanelKind(pluginConfig());
+    restorePendingDockPanels();
+
+    expect(usePanelStore.getState().panelsById["plugin-1"]?.location).toBe("grid");
   });
 });

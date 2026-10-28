@@ -29,7 +29,8 @@ const restoredHandlers = vi.hoisted(() => [] as Array<(data: { id: string }) => 
 const trashedHandlers = vi.hoisted(
   () => [] as Array<(data: { id: string; expiresAt: number }) => void>
 );
-const exitHandlers = vi.hoisted(() => [] as Array<(id: string, exitCode: number) => void>);
+type ExitHandler = (id: string, exitCode: number, context?: { preserveSession?: boolean }) => void;
+const exitHandlers = vi.hoisted(() => [] as Array<ExitHandler>);
 const reliabilityMetricHandlers = vi.hoisted(
   () =>
     [] as Array<
@@ -39,6 +40,9 @@ const reliabilityMetricHandlers = vi.hoisted(
         perTerminalHeld?: Array<{ terminalId: string; heldDurationMs: number }>;
       }) => void
     >
+);
+const reduceScrollbackHandlers = vi.hoisted(
+  () => [] as Array<(data: { targetLines: number }) => void>
 );
 vi.mock("@/controllers", () => {
   const noopSub = () => () => {};
@@ -53,7 +57,7 @@ vi.mock("@/controllers", () => {
         restoredHandlers.push(handler);
         return () => {};
       }),
-      onExit: vi.fn((handler: (id: string, exitCode: number) => void) => {
+      onExit: vi.fn((handler: ExitHandler) => {
         exitHandlers.push(handler);
         return () => {};
       }),
@@ -71,7 +75,10 @@ vi.mock("@/controllers", () => {
         }
       ),
       onSpawnResult: vi.fn(noopSub),
-      onReduceScrollback: vi.fn(noopSub),
+      onReduceScrollback: vi.fn((handler: (data: { targetLines: number }) => void) => {
+        reduceScrollbackHandlers.push(handler);
+        return () => {};
+      }),
       onRestoreScrollback: vi.fn(noopSub),
     },
   };
@@ -81,6 +88,9 @@ import { handleFallbackTriggered, setupLifecycleListeners } from "../lifecycle";
 import { notify } from "@/lib/notify";
 import { flushPanelStatusBuffer, enqueueFlowStatusUpdate } from "@/store/panelStatusBuffer";
 import { isPtyPanel } from "@shared/types/panel";
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
+
+const terminalInstanceService = await loadTerminalService();
 
 function getPtyHeldDuration(id: string): number | undefined {
   const panel = usePanelStore.getState().panelsById[id];
@@ -328,6 +338,156 @@ describe("handleFallbackTriggered — activation failure", () => {
   });
 });
 
+describe("handleFallbackTriggered — rate limits (#14370)", () => {
+  const original = usePanelStore.getState().activateFallbackPreset;
+  afterEach(() => {
+    usePanelStore.setState({ activateFallbackPreset: original });
+  });
+
+  function setupChain(
+    primary: Record<string, unknown>,
+    panel: Record<string, unknown> = {}
+  ): ReturnType<typeof vi.fn> {
+    useAgentSettingsStore.setState({
+      settings: {
+        agents: {
+          testAgent: {
+            customPresets: [
+              { id: "preset-1", name: "Primary", fallbacks: ["preset-2", "preset-3"], ...primary },
+              { id: "preset-2", name: "Second account" },
+              { id: "preset-3", name: "Third account" },
+            ],
+          },
+        },
+      },
+    });
+    setupPanel({ agentPresetId: "preset-1", fallbackChainIndex: 0, ...panel });
+    const activate = vi.fn().mockResolvedValue({ success: true });
+    usePanelStore.setState({ activateFallbackPreset: activate });
+    return activate;
+  }
+
+  function trigger(fromPresetId = "preset-1") {
+    return handleFallbackTriggered({
+      terminalId: "term-1",
+      agentId: "testAgent",
+      fromPresetId,
+      reason: "rate-limit",
+    });
+  }
+
+  it("hops without asking when the original preset opted in", async () => {
+    const activate = setupChain({ fallbackOnRateLimit: true });
+
+    await trigger();
+
+    expect(activate).toHaveBeenCalledWith("term-1", "preset-2", "preset-1");
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Switched to fallback preset",
+        message: expect.stringContaining("usage limit"),
+        supersedeKey: "terminal.term-1.fallback",
+      })
+    );
+  });
+
+  it("leaves a pane whose preset did not opt in alone, and says nothing", async () => {
+    const activate = setupChain({});
+
+    await trigger();
+
+    expect(activate).not.toHaveBeenCalled();
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("says nothing for an opted-in preset with no chain to walk", async () => {
+    const activate = setupChain({ fallbackOnRateLimit: true, fallbacks: undefined });
+
+    await trigger();
+
+    expect(activate).not.toHaveBeenCalled();
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("walks on from where the pane is, reading the opt-in from the original preset", async () => {
+    const activate = setupChain(
+      { fallbackOnRateLimit: true },
+      { agentPresetId: "preset-2", fallbackChainIndex: 1 }
+    );
+
+    await trigger("preset-2");
+
+    expect(activate).toHaveBeenCalledWith("term-1", "preset-3", "preset-1");
+  });
+
+  it("stays quiet when the last fallback hits its limit too", async () => {
+    const activate = setupChain(
+      { fallbackOnRateLimit: true },
+      { agentPresetId: "preset-3", fallbackChainIndex: 2 }
+    );
+
+    await trigger("preset-3");
+
+    expect(activate).not.toHaveBeenCalled();
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("ignores an opt-in that came from a team-shared project preset", async () => {
+    const activate = setupChain({});
+    useProjectPresetsStore.setState({
+      presetsByAgent: {
+        testAgent: [
+          { id: "preset-1", name: "Shared", fallbacks: ["preset-2"], fallbackOnRateLimit: true },
+        ],
+      },
+    });
+    useAgentSettingsStore.setState({
+      settings: {
+        agents: { testAgent: { customPresets: [{ id: "preset-2", name: "Second account" }] } },
+      },
+    });
+
+    await trigger();
+
+    expect(activate).not.toHaveBeenCalled();
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("ignores an opt-in on a custom entry the preset merge rejected", async () => {
+    const activate = setupChain({});
+    useProjectPresetsStore.setState({
+      presetsByAgent: {
+        testAgent: [{ id: "preset-1", name: "Shared", fallbacks: ["preset-2"] }],
+      },
+    });
+    useAgentSettingsStore.setState({
+      settings: {
+        agents: {
+          testAgent: {
+            customPresets: [
+              { id: "preset-1", name: "  ", fallbackOnRateLimit: true },
+              { id: "preset-2", name: "Second account" },
+            ],
+          },
+        },
+      },
+    });
+
+    await trigger();
+
+    expect(activate).not.toHaveBeenCalled();
+  });
+
+  it("does not hold the in-flight guard after declining", async () => {
+    setupChain({});
+    await trigger();
+
+    const activate = setupChain({ fallbackOnRateLimit: true });
+    await trigger();
+    expect(activate).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("handleFallbackTriggered — guard clauses", () => {
   it("returns early when panel is not found", async () => {
     await handleFallbackTriggered({
@@ -342,6 +502,26 @@ describe("handleFallbackTriggered — guard clauses", () => {
 
   it("returns early when panel is restarting", async () => {
     setupPanel({ isRestarting: true });
+
+    await handleFallbackTriggered({
+      terminalId: "term-1",
+      agentId: "testAgent",
+      fromPresetId: "preset-1",
+      reason: "connection",
+    });
+
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("returns early when the panel is held for recovery", async () => {
+    useAgentSettingsStore.setState({
+      settings: {
+        agents: {
+          testAgent: { customPresets: [{ id: "preset-1", name: "Primary", fallbacks: ["gone"] }] },
+        },
+      },
+    });
+    setupPanel({ restoreRecovery: { reason: "sibling-owns-session-id" } });
 
     await handleFallbackTriggered({
       terminalId: "term-1",
@@ -680,6 +860,51 @@ describe("onRestoreRequested — Canopy trash undone", () => {
   });
 });
 
+describe("onRemoveRequested — removed from Canopy's Trash", () => {
+  afterEach(() => {
+    delete (window as { electron?: unknown }).electron;
+  });
+
+  function getHandlers() {
+    const removeHandlers: Array<(request: { runId: string }) => void> = [];
+    const kill = vi.fn(async () => {});
+    Object.defineProperty(window, "electron", {
+      value: {
+        canopy: {
+          onRemoveRequested: (handler: (request: { runId: string }) => void) => {
+            removeHandlers.push(handler);
+            return () => {};
+          },
+        },
+        terminal: { trash: vi.fn(async () => {}), restore: vi.fn(async () => {}), kill },
+      },
+      configurable: true,
+      writable: true,
+    });
+    setupLifecycleListeners();
+    return { removeRequest: removeHandlers.at(-1)!, kill };
+  }
+
+  it("removes the trashed pane for good, ending it as the dock's own Remove does", () => {
+    setupPanel();
+    const { removeRequest, kill } = getHandlers();
+    usePanelStore.getState().trashPanel("term-1");
+    removeRequest({ runId: "term-1" });
+    expect(usePanelStore.getState().panelsById["term-1"]).toBeUndefined();
+    expect(usePanelStore.getState().trashedTerminals.has("term-1")).toBe(false);
+    expect(kill).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves a pane that is out of the trash, and one it does not hold", () => {
+    setupPanel();
+    const { removeRequest, kill } = getHandlers();
+    removeRequest({ runId: "term-1" });
+    removeRequest({ runId: "elsewhere" });
+    expect(usePanelStore.getState().panelsById["term-1"]).toBeDefined();
+    expect(kill).not.toHaveBeenCalled();
+  });
+});
+
 // Canopy renames a terminal from main, which writes the host and the saved
 // state; the view holding the pane renames it as the user's own rename would.
 describe("onRenameRequested — Canopy rename", () => {
@@ -858,7 +1083,7 @@ describe("onReliabilityMetric — pause-duration-gauge routing", () => {
 });
 
 describe("onExit — stale flow state cleared (#9899)", () => {
-  function getExitHandler(): (id: string, exitCode: number) => void {
+  function getExitHandler(): ExitHandler {
     exitHandlers.length = 0;
     setupLifecycleListeners();
     const handler = exitHandlers.at(-1);
@@ -954,5 +1179,163 @@ describe("onExit — stale flow state cleared (#9899)", () => {
     // term-1's patch was evicted; term-2's still applies.
     expect(getPanel("term-1")?.flowStatus).toBeUndefined();
     expect(getPanel("term-2")?.flowStatus).toBe("paused-backpressure");
+  });
+});
+
+// Sleep, hibernation, idle close and quit signal-kill plain shells, which
+// node-pty reports as exit code 0. Main tags those exits so the pane keeps its
+// place in the layout it will be restored into, instead of auto-trashing like a
+// shell the user typed `exit` in (#13841).
+describe("onExit — session-preserving teardown (#13841)", () => {
+  beforeEach(() => {
+    Object.defineProperty(window, "electron", {
+      value: {
+        terminal: {
+          trash: vi.fn(async () => {}),
+          kill: vi.fn(async () => {}),
+        },
+      },
+      configurable: true,
+      writable: true,
+    });
+  });
+
+  afterEach(() => {
+    delete (window as { electron?: unknown }).electron;
+  });
+
+  function getExitHandler(): ExitHandler {
+    exitHandlers.length = 0;
+    setupLifecycleListeners();
+    const handler = exitHandlers.at(-1);
+    if (!handler) throw new Error("onExit handler was not registered");
+    return handler;
+  }
+
+  function setupShell(overrides: Record<string, unknown> = {}) {
+    usePanelStore.setState({
+      panelsById: {
+        shell: {
+          id: "shell",
+          kind: "terminal",
+          title: "Shell",
+          cwd: "/tmp",
+          cols: 80,
+          rows: 24,
+          location: "grid" as const,
+          ...overrides,
+        },
+      },
+      panelIds: ["shell"],
+    });
+  }
+
+  function getShell() {
+    const panel = usePanelStore.getState().panelsById.shell;
+    if (!panel || !isPtyPanel(panel)) return undefined;
+    return panel;
+  }
+
+  it("keeps a plain shell in place, marked exited, when its exit came from a session-preserving teardown", () => {
+    setupShell();
+
+    getExitHandler()("shell", 0, { preserveSession: true });
+
+    const shell = getShell();
+    expect(shell?.location).toBe("grid");
+    expect(usePanelStore.getState().trashedTerminals.has("shell")).toBe(false);
+    expect(shell?.runtimeStatus).toBe("exited");
+    expect(shell?.exitCode).toBe(0);
+    expect(shell?.sessionPreservingExit).toBe(true);
+  });
+
+  it("still trashes a plain shell whose exit carried no teardown context", () => {
+    setupShell();
+
+    getExitHandler()("shell", 0);
+
+    expect(getShell()?.location).toBe("trash");
+    expect(getShell()?.sessionPreservingExit).toBeUndefined();
+  });
+
+  it.each(["trash", "remove", "restart"] as const)(
+    "overrides exitBehavior %s so the pane survives into the restored layout",
+    (exitBehavior) => {
+      setupShell({ location: "dock", exitBehavior });
+
+      getExitHandler()("shell", 0, { preserveSession: true });
+
+      expect(getShell()?.location).toBe("dock");
+      expect(getShell()?.sessionPreservingExit).toBe(true);
+    }
+  );
+
+  it.each([
+    ["an agent", { launchAgentId: "claude" }, 0],
+    ["a failed shell", {}, 1],
+  ])("keeps %s in place and marks it", (_label, overrides, exitCode) => {
+    setupShell(overrides);
+
+    getExitHandler()("shell", exitCode, { preserveSession: true });
+
+    expect(getShell()?.location).toBe("grid");
+    expect(getShell()?.sessionPreservingExit).toBe(true);
+  });
+
+  it("ignores a teardown exit for a pane this view does not hold", () => {
+    setupShell();
+    const before = usePanelStore.getState().panelsById;
+
+    getExitHandler()("elsewhere", 0, { preserveSession: true });
+
+    expect(usePanelStore.getState().panelsById).toBe(before);
+  });
+
+  it("still removes a pane that was already in the trash", () => {
+    setupShell({ location: "trash" });
+
+    getExitHandler()("shell", 0, { preserveSession: true });
+
+    expect(usePanelStore.getState().panelsById.shell).toBeUndefined();
+  });
+
+  it("still removes a remove-on-exit pane", () => {
+    setupShell({ removeOnExit: true });
+
+    getExitHandler()("shell", 0, { preserveSession: true });
+
+    expect(usePanelStore.getState().panelsById.shell).toBeUndefined();
+  });
+
+  it("clears the mark when a later exit is not a teardown", () => {
+    setupShell({ exitBehavior: "keep" });
+    const onExit = getExitHandler();
+
+    onExit("shell", 0, { preserveSession: true });
+    expect(getShell()?.sessionPreservingExit).toBe(true);
+
+    onExit("shell", 0);
+    expect(getShell()?.sessionPreservingExit).toBeUndefined();
+  });
+});
+
+describe("memory-pressure scrollback reduce (#14215)", () => {
+  it("hands the target to the view-wide hidden-terminal reduce", () => {
+    const reduceHidden = vi
+      .spyOn(terminalInstanceService, "reduceScrollbackHidden")
+      .mockImplementation(() => {});
+    try {
+      reduceScrollbackHandlers.length = 0;
+      setupLifecycleListeners();
+      const handler = reduceScrollbackHandlers.at(-1);
+      if (!handler) throw new Error("onReduceScrollback handler was not registered");
+
+      handler({ targetLines: 500 });
+
+      expect(reduceHidden).toHaveBeenCalledTimes(1);
+      expect(reduceHidden).toHaveBeenCalledWith(500);
+    } finally {
+      reduceHidden.mockRestore();
+    }
   });
 });

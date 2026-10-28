@@ -25,12 +25,14 @@ import { AppError, isAppError } from "../../utils/errorTypes.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import {
   getAllAppWebContents,
+  getAppWebContents,
   getProjectForWebContents,
   getWindowForWebContents,
   resolveLiveWebContents,
 } from "../../window/webContentsRegistry.js";
 import { getWindowRegistry } from "../../window/windowRef.js";
 import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
+import { thawThenSend } from "../../utils/thawThenSend.js";
 import { completeLocalProjectActivation } from "../../window/localProjectActivation.js";
 import {
   claimProjectActivation,
@@ -43,6 +45,7 @@ import {
 } from "../../window/projectOwnership.js";
 import { hasPendingActivation } from "../../window/projectActivationClaims.js";
 import { confirmColdOpenAtMemoryPressure } from "../../services/projectOpenMemoryPressure.js";
+import { checkKernelPressureCritical } from "../../services/SystemMemoryPressureMonitor.js";
 import { activateScratchInWindow } from "../../ipc/handlers/scratch/activation.js";
 import {
   getPtyClient,
@@ -60,6 +63,7 @@ import {
 import { clearPendingRemoteRestoresForHost } from "../../window/openWindowsTracker.js";
 import { forgetRemoteRestoresForHost } from "../../window/remoteWindowRestore.js";
 import { clearHostPartitions } from "../../services/sessionCacheCleaner.js";
+import { getSystemSleepService } from "../../services/SystemSleepService.js";
 import { forgetHostState, type HostStateCleanup } from "./forgetHostState.js";
 import { HostRegistry, type RemoteHostsStore } from "./HostRegistry.js";
 import {
@@ -70,6 +74,7 @@ import {
   type ViewSink,
 } from "./RemoteHostManager.js";
 import { RemoteHostsClient, type WindowControl } from "./RemoteHostsClient.js";
+import { watchOwnedHostCleanup } from "./ownedHostCleanup.js";
 import { RemoteRouterImpl, type SenderLookup } from "./RemoteRouter.js";
 import { answerReverseRequest } from "./reverseRequests.js";
 import { requireSupportedConnection } from "./connection.js";
@@ -143,12 +148,21 @@ function createViewSink(hostOf: (webContentsId: number) => HostId | null): ViewS
     send(webContentsId, channel, args) {
       const wc = resolveLiveWebContents(webContentsId);
       if (!wc) return false;
-      try {
-        wc.send(channel, ...args);
+      const deliver = () => {
+        try {
+          wc.send(channel, ...args);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      // The host waits on this view's answer to a resume, and a cached view
+      // may be frozen: thawed first, as the host thaws its own.
+      if (channel === CHANNELS.CANOPY_RESUME_REQUESTED) {
+        thawThenSend(wc, () => !wc.isDestroyed(), deliver);
         return true;
-      } catch {
-        return false;
       }
+      return deliver();
     },
     watch(webContentsId, onGone) {
       const wc = resolveLiveWebContents(webContentsId);
@@ -158,8 +172,13 @@ function createViewSink(hostOf: (webContentsId: number) => HostId | null): ViewS
       }
       return onWebContentsDestroyed(wc, onGone);
     },
-    resync(webContentsId, hostId, reason) {
-      const event: RemoteHostsEvent = { type: "resync-required", hostId, reason };
+    resync(webContentsId, hostId, reason, previousEnd) {
+      const event: RemoteHostsEvent = {
+        type: "resync-required",
+        hostId,
+        reason,
+        ...(reason === "host-restarted" && previousEnd && { previousEnd }),
+      };
       sink.send(webContentsId, CHANNELS.REMOTE_HOSTS_EVENT, [event]);
     },
     hostOf,
@@ -404,6 +423,27 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
         if (wc && !wc.isDestroyed()) hooks.onLocalViewActivated?.(windowId, wc);
       });
     },
+    async restoreRemoteProjectInBackground(
+      windowId,
+      hostId,
+      projectId,
+      projectPath,
+      { lastUsed, stillWanted }
+    ) {
+      // First, as the local restore queue does: the kernel pressure reading
+      // its admission works from may hold nothing yet at startup (#13530).
+      await checkKernelPressureCritical();
+      const pvm = getWindowRegistry()?.getByWindowId(windowId)?.services.projectViewManager;
+      // A quit, or the host removed or re-pointed, while the reading was taken.
+      if (!pvm || pvm.disposed || !stillWanted()) return "cancelled";
+      const key = toHostScopedKey(hostId, projectId);
+      // Asked again after the reading, in the same tick the view is registered.
+      if (otherOwnerOf(key, windowId)) return "owned-elsewhere";
+      // Never on this window's switch turn: a background boot runs for tens of
+      // seconds, and the view manager reconciles a switch to it that lands meanwhile.
+      const result = await pvm.restoreInBackground(key, projectPath, { lastUsed });
+      return result.status === "skipped" ? result.reason : result.status;
+    },
     lastLocalProjectId,
     recentProjectsOnHost,
     projectOwner(hostId, projectId, exceptWindowId) {
@@ -486,6 +526,14 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
         (key) => key !== null && parseHostScopedKey(key).hostId === hostId
       );
     },
+    showsView(windowId, webContentsId) {
+      const win = getWindowRegistry()?.getByWindowId(windowId)?.browserWindow;
+      if (!win || win.isDestroyed()) return false;
+      return (win.contentView?.children ?? []).some(
+        (child) =>
+          (child as { webContents?: Electron.WebContents }).webContents?.id === webContentsId
+      );
+    },
     async replaceWithLocalWindow(windowId) {
       const old = getWindowRegistry()?.getByWindowId(windowId)?.browserWindow;
       if (!old || old.isDestroyed()) return;
@@ -516,6 +564,12 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
         },
       });
       if (!replaced && !old.isDestroyed()) throw new Error("The replacement window didn't open");
+    },
+    appViewId(windowId) {
+      const win = getWindowRegistry()?.getByWindowId(windowId)?.browserWindow;
+      if (!win || win.isDestroyed()) return null;
+      const wc = getAppWebContents(win);
+      return wc.isDestroyed() ? null : wc.id;
     },
     offerHostProjects(windowId) {
       const win = getWindowRegistry()?.getByWindowId(windowId)?.browserWindow;
@@ -698,6 +752,8 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
   // Bound below: the sink needs the router's answer, the router needs the manager.
   let router: RemoteRouterImpl | null = null;
   const hostForView = (webContentsId: number) => router?.hostForSender(webContentsId) ?? null;
+  const sleep = getSystemSleepService();
+  const awakeSince = (since: number) => sleep.getAwakeTimeSince(since);
   const manager = new RemoteHostManager({
     registry,
     createTransport:
@@ -722,7 +778,10 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     },
     views: createViewSink(hostForView),
     reverseRequests: answerReverseRequest,
+    session: { awakeSince },
+    awakeSince,
   });
+  const stopWakeWatch = sleep.onWake(() => manager.systemResumed());
   const bindings = new WindowHostBinding();
   const remoteRouter = new RemoteRouterImpl(manager, bindings, senders);
   router = remoteRouter;
@@ -857,6 +916,10 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     isRetiring: (connection) => client.isRetiring(connection),
     wslKeepalive,
   });
+  const stopOwnedHostCleanup = watchOwnedHostCleanup({
+    list: () => registry.list(),
+    forget: (hostId) => client.forget({ hostId }),
+  });
   const unregister = registerRemoteService("remoteHostsClient", client);
   const unregisterWindowHosts = registerRemoteService("windowHosts", client);
   const unregisterSetup = registerRemoteService("hostSetup", setup);
@@ -871,6 +934,8 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     emitLocal: broadcastLocal,
     registry,
     async dispose() {
+      stopWakeWatch();
+      stopOwnedHostCleanup();
       unregister();
       unregisterWindowHosts();
       unregisterSetup();

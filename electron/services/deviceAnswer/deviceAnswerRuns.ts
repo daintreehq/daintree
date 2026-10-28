@@ -31,6 +31,31 @@ export interface WaitingRunView {
   choices: string[];
 }
 
+/** A waiting run with the machine it waits on, as the page lists it. */
+export interface DeviceWaitingRun extends WaitingRunView {
+  /** `LOCAL_HOST_ID` for this machine's own runs. */
+  hostId: string;
+  /** The machine's name, as the person knows it. */
+  host: string;
+}
+
+/** How reading one host's runs went; a host with no link is `not-connected`, never dialled to find out. */
+export type DeviceWaitingHostStatus = "ok" | "not-connected" | "unreachable" | "needs-update";
+
+/** How reading one host in the host list went. */
+export interface DeviceWaitingHost {
+  hostId: string;
+  host: string;
+  status: DeviceWaitingHostStatus;
+}
+
+export interface DeviceWaitingList {
+  runs: DeviceWaitingRun[];
+  hosts: DeviceWaitingHost[];
+  /** The host list itself couldn't be read, so hosts may be missing from `hosts`. */
+  hostsUnlisted?: boolean;
+}
+
 export interface DeviceAnswerRunsDeps {
   fleet: () => FleetSnapshot | null;
   pty: () => AnswerPtyClient | null;

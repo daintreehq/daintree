@@ -14,6 +14,7 @@ import {
   type FileReadPayload,
 } from "../../schemas/ipc.js";
 import type { FileReadResult } from "../../../shared/types/ipc/files.js";
+import type { UploadIdentity } from "../../remote/files/HostFileService.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { readBoundedFromHandle } from "../../utils/boundedRead.js";
 import { FILE_PREVIEW_MAX_BYTES } from "../../utils/fileLimits.js";
@@ -37,6 +38,54 @@ export async function remoteCallerHoldsRoot(ctx: IpcContext, root: string): Prom
   const files = getRemoteService("hostFileService");
   if (!projectId || !files) return false;
   return files.holdsRoot(projectId, root);
+}
+
+/**
+ * A remote Shell's view reading a file it uploaded into this host's inbox
+ * itself, from that file's own folder: the identity it was placed as, or null.
+ * The inbox holds every Shell's uploads, so this is that one file, never the
+ * folder: the read below still has to resolve to a file inside the folder, and
+ * the descriptor it opens has to be the file the view placed.
+ */
+export async function remoteCallerUpload(
+  ctx: IpcContext,
+  filePath: string,
+  root: string
+): Promise<UploadIdentity | null> {
+  if (ctx.endpoint?.kind !== "remote-view" || !ctx.endpoint.projectId) return null;
+  const files = getRemoteService("hostFileService");
+  if (!files || path.dirname(path.resolve(filePath)) !== path.resolve(root)) return null;
+  return files.uploadIdentity(ctx.endpoint, filePath);
+}
+
+/**
+ * A remote Shell's view reading a file the person clicked a link to in one of
+ * its terminals, from that file's own folder. Both are named plainly, with no
+ * `.` or `..`, and the root exactly as the file's folder is spelled: the grant
+ * is matched by spelling, and realpath would otherwise walk a `..` after a
+ * symlinked folder somewhere else. The read below still has to land on that
+ * file itself, not a link in its place.
+ */
+export function remoteCallerClicked(ctx: IpcContext, filePath: string, root: string): boolean {
+  if (ctx.endpoint?.kind !== "remote-view" || !ctx.endpoint.projectId) return false;
+  const files = getRemoteService("hostFileService");
+  if (!files || path.normalize(filePath) !== filePath) return false;
+  const folder = root.length > 1 ? root.replace(/\/+$/, "") : root;
+  if (folder !== path.dirname(filePath)) return false;
+  return files.isClicked(ctx.endpoint, filePath);
+}
+
+/** The opened descriptor is the upload as it was placed: compared as bigints, so no inode loses precision. */
+async function isPlacedUpload(
+  handle: Awaited<ReturnType<typeof fs.open>>,
+  placed: UploadIdentity
+): Promise<boolean> {
+  const now = await handle.stat({ bigint: true });
+  return (
+    BigInt(now.dev) === placed.dev &&
+    BigInt(now.ino) === placed.ino &&
+    BigInt(now.size) === placed.size
+  );
 }
 
 export function registerFilesHandlers(): () => void {
@@ -79,12 +128,18 @@ export function registerFilesHandlers(): () => void {
         context: { filePath, rootPath },
       });
     }
+    let ownUpload: UploadIdentity | null = null;
+    let clicked = false;
     if (!(await remoteCallerHoldsRoot(ctx, rootPath))) {
-      throw new AppError({
-        code: "OUTSIDE_ROOT",
-        message: "Root is outside the calling view's project",
-        context: { rootPath },
-      });
+      ownUpload = await remoteCallerUpload(ctx, filePath, rootPath);
+      clicked = ownUpload === null && remoteCallerClicked(ctx, filePath, rootPath);
+      if (!ownUpload && !clicked) {
+        throw new AppError({
+          code: "OUTSIDE_ROOT",
+          message: "Root is outside the calling view's project",
+          context: { rootPath },
+        });
+      }
     }
 
     // Map fs errors uniformly across realpath/stat/open — the file can
@@ -175,7 +230,9 @@ export function registerFilesHandlers(): () => void {
       realRoot === path.sep
         ? realFile.startsWith(path.sep)
         : realFile === realRoot || realFile.startsWith(realRoot + path.sep);
-    if (!contained) {
+    // A clicked file's root is its own folder, so a link in its place to a
+    // file beside it would still be contained.
+    if (!contained || (clicked && realFile !== path.join(realRoot, path.basename(filePath)))) {
       throw new AppError({
         code: "OUTSIDE_ROOT",
         message: "File is outside the project root",
@@ -246,6 +303,13 @@ export function registerFilesHandlers(): () => void {
           context: { filePath, rootPath },
         });
       }
+      if (ownUpload && !(await isPlacedUpload(fileHandle, ownUpload))) {
+        throw new AppError({
+          code: "OUTSIDE_ROOT",
+          message: "The upload is no longer the file this view placed",
+          context: { filePath, rootPath },
+        });
+      }
       // The stat above is only a hint: a writer can grow the file after it, so
       // the read itself holds the budget and never returns oversized text.
       const read = await readBoundedFromHandle(fileHandle, opened.size, FILE_PREVIEW_MAX_BYTES);
@@ -255,6 +319,14 @@ export function registerFilesHandlers(): () => void {
           message: `File exceeds ${FILE_PREVIEW_MAX_BYTES} byte limit`,
           userMessage: "This file is too large to preview.",
           context: { filePath, limit: FILE_PREVIEW_MAX_BYTES },
+        });
+      }
+      // A grant rests on the lease, which may have moved while this read ran.
+      if (clicked && !remoteCallerClicked(ctx, filePath, rootPath)) {
+        throw new AppError({
+          code: "OUTSIDE_ROOT",
+          message: "The view lost control of the project while reading",
+          context: { filePath, rootPath },
         });
       }
       buffer = read;
@@ -289,9 +361,11 @@ export function registerFilesHandlers(): () => void {
     // #11191: on opt-in, mint a sandboxed-iframe preview URL for HTML files. The
     // token maps to the canonical root; the daintree-html:// handler re-applies
     // full containment, so this never widens access. realRoot/realFile are
-    // already realpath-resolved and contained above.
+    // already realpath-resolved and contained above. Never for an upload or a
+    // clicked file: the root is the file's own folder, which a token would open
+    // in whole.
     const htmlPreviewUrl =
-      htmlPreview && /\.html?$/i.test(realFile)
+      htmlPreview && ownUpload === null && !clicked && /\.html?$/i.test(realFile)
         ? (buildHtmlPreviewUrl(realRoot, realFile) ?? undefined)
         : undefined;
 

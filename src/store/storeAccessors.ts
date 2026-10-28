@@ -1,4 +1,4 @@
-import type { AgentSettingsEntry, TabGroup } from "@shared/types";
+import type { AgentSettingsEntry, StagingStatus, TabGroup, WorktreeSnapshot } from "@shared/types";
 import { getNarrowPanel } from "./slices/panelRegistry/selectors";
 
 // Carrier element from the legacy `panelsById` shape, sourced through
@@ -29,19 +29,32 @@ export interface WorktreeSelectionSnapshot {
   deletedWorktreeIds?: ReadonlySet<string>;
 }
 
+/** What Daintree has observed of a worktree's files, for Viewed marks to compare against. */
+export interface ViewedMarkSources {
+  /** The current project view's worktrees, or `null` when no view store is mounted. */
+  worktrees: ReadonlyMap<string, WorktreeSnapshot> | null;
+  /** The last accepted staging read for the worktree, or `null` when there is none. */
+  stagingStatus: StagingStatus | null;
+}
+
 let _getPanelStoreState: (() => PanelStoreSnapshot) | null = null;
 let _getWorktreeSelectionState: (() => WorktreeSelectionSnapshot) | null = null;
 let _getWorktreeIdSet: (() => Set<string> | null) | null = null;
 let _getWorktreeGitDirById: ((worktreeId: string) => string | undefined) | null = null;
 let _getWorktreePathIndex: (() => ReadonlyMap<string, string> | null) | null = null;
 let _getProjectPathIndex: (() => ReadonlyMap<string, string> | null) | null = null;
+let _getViewedMarkSources: ((worktreePath: string) => ViewedMarkSources) | null = null;
 let _setPanelExtensionState: ((panelId: string, patch: Record<string, unknown>) => boolean) | null =
   null;
-let _clearPanelStoreForSwitch: (() => void) | null = null;
+let _setPanelTitle: ((panelId: string, title: string) => void) | null = null;
+let _clearPanelStoreForSwitch: ((options?: { destroyInstances?: boolean }) => void) | null = null;
 let _clearFleetArming: (() => void) | null = null;
 let _getFleetArmedIds: (() => Set<string>) | null = null;
 let _getFleetLastArmedId: (() => string | null) | null = null;
 let _getAgentSettingsEntry: ((agentId: string) => AgentSettingsEntry | undefined) | null = null;
+let _getGlobalUseAltScreen: (() => boolean | undefined) | null = null;
+let _exitProjectHome: (() => void) | null = null;
+let _panelMaximize: { isMaximized: () => boolean; exit: () => void } | null = null;
 
 export function setAgentSettingsEntryAccessor(
   getter: (agentId: string) => AgentSettingsEntry | undefined
@@ -57,6 +70,15 @@ export function setAgentSettingsEntryAccessor(
  */
 export function getAgentSettingsEntrySnapshot(agentId: string): AgentSettingsEntry | null {
   return _getAgentSettingsEntry?.(agentId) ?? null;
+}
+
+export function setGlobalUseAltScreenAccessor(getter: () => boolean | undefined): void {
+  _getGlobalUseAltScreen = getter;
+}
+
+/** The global "use the alternate screen" switch, `undefined` until settings load. */
+export function getGlobalUseAltScreenSnapshot(): boolean | undefined {
+  return _getGlobalUseAltScreen?.();
 }
 
 export function setPanelStoreAccessor(getter: () => PanelStoreSnapshot): void {
@@ -119,6 +141,17 @@ export function getWorktreePathIndex(): ReadonlyMap<string, string> | null {
   return _getWorktreePathIndex?.() ?? null;
 }
 
+export function setViewedMarkSourcesAccessor(
+  getter: (worktreePath: string) => ViewedMarkSources
+): void {
+  _getViewedMarkSources = getter;
+}
+
+/** `null` until registered; Viewed marks then keep no baseline and never lapse. */
+export function getViewedMarkSources(worktreePath: string): ViewedMarkSources | null {
+  return _getViewedMarkSources?.(worktreePath) ?? null;
+}
+
 export function setProjectPathIndexAccessor(
   getter: () => ReadonlyMap<string, string> | null
 ): void {
@@ -163,12 +196,32 @@ export function persistPanelExtensionStateThroughAccessor(
   return _setPanelExtensionState?.(panelId, patch) ?? false;
 }
 
-export function setPanelStoreClearForSwitchAccessor(callback: () => void): void {
+/**
+ * Lets a plugin view name its own panel (`PanelViewProps.setTitle`) without the
+ * plugin view host importing the panel store, for the reason
+ * {@link setPanelExtensionStateAccessor} gives. The registered setter writes as
+ * automation, so a name the user typed is never overwritten.
+ */
+export function setPanelTitleAccessor(setter: (panelId: string, title: string) => void): void {
+  _setPanelTitle = setter;
+}
+
+/** A blank `title` goes back to the kind's default. Does nothing before registration. */
+export function setPanelTitleThroughAccessor(panelId: string, title: string): void {
+  _setPanelTitle?.(panelId, title);
+}
+
+export function setPanelStoreClearForSwitchAccessor(
+  callback: (options?: { destroyInstances?: boolean }) => void
+): void {
   _clearPanelStoreForSwitch = callback;
 }
 
-export function clearPanelStoreForSwitchThroughAccessor(): void {
-  _clearPanelStoreForSwitch?.();
+/** `destroyInstances` also disposes the panels' xterm instances (their PTYs are gone). */
+export function clearPanelStoreForSwitchThroughAccessor(options?: {
+  destroyInstances?: boolean;
+}): void {
+  _clearPanelStoreForSwitch?.(options);
 }
 
 export function setFleetArmingClearAccessor(callback: () => void): void {
@@ -195,6 +248,41 @@ export function getFleetLastArmedId(): string | null {
   return _getFleetLastArmedId?.() ?? null;
 }
 
+export function setProjectHomeExitAccessor(callback: () => void): void {
+  _exitProjectHome = callback;
+}
+
+/**
+ * Put this project's main area back on the grid when Home alone is hiding it;
+ * a split already shows the grid and is left as it is. Called wherever a grid panel
+ * is revealed on purpose — focused, spawned, moved or restored into the grid —
+ * the same places that leave a maximize (#11060), because a panel landing
+ * behind Home is just as invisible as one behind a maximized cell. Never from
+ * bookkeeping that merely moves focus (a neighbour after a close, a restore
+ * pass): that is not the user asking for the grid. A no-op until the store
+ * orchestrator has registered it.
+ */
+export function exitProjectHome(): void {
+  _exitProjectHome?.();
+}
+
+export function setPanelMaximizeAccessor(accessor: {
+  isMaximized: () => boolean;
+  exit: () => void;
+}): void {
+  _panelMaximize = accessor;
+}
+
+/** Whether a maximized panel or group is drawing over the main area. `false` until registered. */
+export function isPanelMaximized(): boolean {
+  return _panelMaximize?.isMaximized() ?? false;
+}
+
+/** Leave a maximize, so the main area underneath shows. A no-op until registered. */
+export function exitPanelMaximize(): void {
+  _panelMaximize?.exit();
+}
+
 export function resetStoreAccessorsForTesting(): void {
   _getPanelStoreState = null;
   _getWorktreeSelectionState = null;
@@ -202,9 +290,13 @@ export function resetStoreAccessorsForTesting(): void {
   _getWorktreeGitDirById = null;
   _getWorktreePathIndex = null;
   _getProjectPathIndex = null;
+  _getViewedMarkSources = null;
   _setPanelExtensionState = null;
+  _setPanelTitle = null;
   _clearPanelStoreForSwitch = null;
   _clearFleetArming = null;
   _getFleetArmedIds = null;
   _getFleetLastArmedId = null;
+  _exitProjectHome = null;
+  _panelMaximize = null;
 }

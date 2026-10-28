@@ -23,6 +23,7 @@ import { addProjectByPath } from "../projectCrud/crud.js";
 import { gracefulTeardownAndJournalProject } from "../../../services/pty/projectSessionJournal.js";
 import { createHardenedGit } from "../../../utils/hardenedGit.js";
 import { logError } from "../../../utils/logger.js";
+import { getProjectPresenceTracker } from "../../../services/ProjectPresenceTracker.js";
 import type { HandlerDependencies } from "../../types.js";
 import type { ProjectFocusOnActivateIntent } from "../../../../shared/types/ipc/project.js";
 import type { Scratch } from "../../../../shared/types/scratch.js";
@@ -92,6 +93,9 @@ export function registerScratchHandlers(deps: HandlerDependencies): () => void {
         }
 
         await scratchStore.removeScratch(scratchId);
+        // A scratch's own plugins and views hear it closed, and the tracker
+        // stops holding it open.
+        getProjectPresenceTracker().markClosed(scratchId);
         broadcastToRenderer(CHANNELS.SCRATCH_REMOVED, scratchId);
       }),
       switch: op(

@@ -30,6 +30,10 @@ export const getPortalBounds = () => getPortalPlaceholderBounds();
  * Assistant after opening it closed the Portal mid-creation. When suppressed,
  * PortalVisibilityController shows the active tab once the overlay clears or
  * the Portal reopens — no pending-show bookkeeping needed here.
+ *
+ * When main no longer holds the tab (released while this project view was
+ * cached, #14537), the tab is marked uncreated so PortalVisibilityController
+ * recreates it rather than leaving the pane blank.
  */
 export const showPortalTabIfNoOverlay = async (
   tabId: string,
@@ -37,7 +41,8 @@ export const showPortalTabIfNoOverlay = async (
 ): Promise<void> => {
   if (useUIStore.getState().overlayStack.length > 0) return;
   if (!usePortalStore.getState().isOpen) return;
-  await window.electron.portal.show({ tabId, bounds });
+  const shown = await window.electron.portal.show({ tabId, bounds });
+  if (shown === false) usePortalStore.getState().unmarkTabCreated(tabId);
 };
 
 export const getPortalBoundsWithRetry = async (
@@ -72,7 +77,8 @@ export const activatePortalTab = async (tabId: string): Promise<void> => {
   if (!bounds) return;
 
   try {
-    if (!state.createdTabs.has(tabId)) {
+    // Read after the bounds wait: an eviction notice may have landed during it.
+    if (!usePortalStore.getState().createdTabs.has(tabId)) {
       await window.electron.portal.create({ tabId, url: tab.url, partition: tab.partition });
       state.markTabCreated(tabId);
     }

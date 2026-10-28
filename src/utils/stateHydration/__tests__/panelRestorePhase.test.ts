@@ -18,12 +18,15 @@ vi.mock("@/utils/logger", () => ({
 const initializeBackendTierMock = vi.fn();
 const setTargetSizeMock = vi.fn();
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     initializeBackendTier: (...args: unknown[]) => initializeBackendTierMock(...args),
     setTargetSize: (...args: unknown[]) => setTargetSizeMock(...args),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 const reconnectWithTimeoutMock = vi.hoisted(() => vi.fn());
 
@@ -289,9 +292,16 @@ function wtList(...ids: string[]): WorktreeState[] {
   }));
 }
 
-const { restorePanelsPhase } = await import("../panelRestorePhase");
+const { resolveVisiblePanelId, restorePanelsPhase } = await import("../panelRestorePhase");
+const terminalServiceMock = (
+  await import("@/services/TerminalInstanceService")
+).createTerminalPaintPlane();
+const terminalServiceAccessor = await import("@/services/terminal/terminalInstanceServiceAccessor");
 
 beforeEach(() => {
+  // The service mock never evaluates the real module, so nothing registers it.
+  terminalServiceAccessor.__testing.reset();
+  terminalServiceAccessor.register(terminalServiceMock);
   initializeBackendTierMock.mockReset();
   setTargetSizeMock.mockReset();
   reconnectWithTimeoutMock.mockReset();
@@ -360,6 +370,30 @@ describe("restorePanelsPhase — saved panels", () => {
     expect(ctx.addPanel).toHaveBeenCalledTimes(1);
     expect(restoreTasks).toHaveLength(1);
     expect(initializeBackendTierMock).toHaveBeenCalledWith("p1", "background");
+  });
+
+  it("queues backend tiers set before the terminal service loads and applies them in order", async () => {
+    terminalServiceAccessor.__testing.reset();
+    reconnectWithTimeoutMock.mockResolvedValue({
+      status: "found",
+      terminal: { id: "p1", cwd: "/proj", activityTier: "background" },
+    });
+    const ctx = makeContext();
+    ctx.backendTerminalMap.set("t1", backend("t1", { activityTier: "active" }));
+    ctx.backendTerminalMap.set("t2", backend("t2", { activityTier: "background" }));
+    ctx.backendTerminalMap.set("orphan1", backend("orphan1", { activityTier: "active" }));
+
+    await restorePanelsPhase([panel("t1"), panel("t2"), panel("p1")], ctx);
+    expect(ctx.addPanel).toHaveBeenCalledTimes(4);
+    expect(initializeBackendTierMock).not.toHaveBeenCalled();
+
+    terminalServiceAccessor.register(terminalServiceMock);
+    expect(initializeBackendTierMock.mock.calls).toEqual([
+      ["t1", "active"],
+      ["t2", "background"],
+      ["p1", "background"],
+      ["orphan1", "active"],
+    ]);
   });
 
   it("recreates non-PTY panels (browser, dev-preview) without reconnect", async () => {
@@ -1744,6 +1778,31 @@ describe("restorePanelsPhase — one resume-latest per agent+cwd (issue #11461)"
     }
   });
 
+  it("elects one pane per directory for a rolling-history agent and for Cursor (#13847)", async () => {
+    // Neither captures an id, so each pane would otherwise reopen the same
+    // latest conversation in that directory.
+    const ctx = makeContext();
+    const agentPanel = (id: string, agentId: string, lastActiveAt: number) =>
+      panel(id, { kind: "agent", launchAgentId: agentId, lastActiveAt });
+
+    await restorePanelsPhase(
+      [
+        agentPanel("kimi-old", "kimi", 1),
+        agentPanel("kimi-new", "kimi", 2),
+        agentPanel("cursor-new", "cursor", 2),
+        agentPanel("cursor-old", "cursor", 1),
+      ],
+      ctx
+    );
+
+    expect(Object.fromEntries(allowanceById(ctx))).toEqual({
+      "kimi-old": false,
+      "kimi-new": true,
+      "cursor-new": true,
+      "cursor-old": false,
+    });
+  });
+
   it("scopes the slot per agent — different agents don't contend", async () => {
     const ctx = makeContext();
 
@@ -2780,5 +2839,31 @@ describe("restorePanelsPhase — parked panels (#13661)", () => {
 
     expect(ctx.addPanel.mock.calls[0]![0]).toMatchObject({ location: "grid" });
     expect(ctx.addPanel.mock.calls[0]![0]).not.toHaveProperty("backgroundRestoreLocation");
+  });
+});
+
+describe("resolveVisiblePanelId (#10527, #13763)", () => {
+  const nonPty = new Set(["br1", "plugin1"]);
+  const isNonPty = (id: string) => nonPty.has(id);
+
+  it("reads the saved id off a terminal head", () => {
+    expect(resolveVisiblePanelId(["terminal:a1", "terminal:b1"], isNonPty)).toBe("a1");
+  });
+
+  it("skips non-PTY panels ahead of the last-focused terminal", () => {
+    expect(
+      resolveVisiblePanelId(["terminal:br1", "terminal:plugin1", "terminal:a1"], isNonPty)
+    ).toBe("a1");
+  });
+
+  it("yields undefined when a worktree entry comes before any terminal", () => {
+    expect(
+      resolveVisiblePanelId(["terminal:br1", "worktree:/repo/wt", "terminal:a1"], isNonPty)
+    ).toBeUndefined();
+  });
+
+  it("yields undefined for a missing or all-non-PTY list", () => {
+    expect(resolveVisiblePanelId(undefined, isNonPty)).toBeUndefined();
+    expect(resolveVisiblePanelId(["terminal:br1"], isNonPty)).toBeUndefined();
   });
 });

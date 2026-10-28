@@ -3,7 +3,11 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { lazy, useContext, useEffect } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PanelViewProps } from "@shared/types/plugin";
-import { makePluginViewContent, type PluginViewContentConfig } from "../PluginViewContent";
+import {
+  makePluginViewContent,
+  pluginViewHostContext,
+  type PluginViewContentConfig,
+} from "../PluginViewContent";
 import {
   __resetBuiltinRendererRegistryForTests,
   registerBuiltinView,
@@ -174,12 +178,34 @@ describe("built-in panel views", () => {
     expect(props.disposeSignal).toBeInstanceOf(AbortSignal);
     expect(props.disposeSignal.aborted).toBe(false);
     expect(props.styleRootAttributes).toBeTruthy();
+    // A panel host names none, so the view hears it is in a panel.
+    expect(props.hostContext).toEqual({ kind: "panel" });
 
     // Activation still runs, so the plugin's handlers are live at first render;
     // the plugin:// loader's own steps never do.
     expect(activateForView).toHaveBeenCalledWith(BUILTIN_KIND);
     expect(stylePrep.calls).toEqual([]);
     expect(documentViews.calls).toEqual([]);
+  });
+
+  it("tells a view mounted outside the grid where it is, with one object per render", async () => {
+    const seen: PanelViewProps[] = [];
+    function Inspector(props: PanelViewProps) {
+      seen.push(props);
+      return <div data-testid="builtin-view" />;
+    }
+    registerBuiltinView(BUILTIN_KIND, Inspector, { pluginId: BUILTIN_ID, label: "Site Inspector" });
+
+    const Content = makePluginViewContent(builtinConfig());
+    const { rerender } = render(
+      <Content panelId="surface:b" hostContext={pluginViewHostContext("surface")} />
+    );
+    await screen.findByTestId("builtin-view");
+    rerender(<Content panelId="surface:b" hostContext={pluginViewHostContext("surface")} />);
+
+    expect(seen.at(-1)?.hostContext).toEqual({ kind: "surface" });
+    // Stable identity, so a view memoising on it doesn't churn.
+    expect(new Set(seen.map((p) => p.hostContext)).size).toBe(1);
   });
 
   it("shows a reopened builtin view as soon as its activation answers", async () => {

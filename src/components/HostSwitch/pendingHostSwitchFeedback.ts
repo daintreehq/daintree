@@ -1,33 +1,36 @@
 import type { PendingHostSwitch, RemoteHostsEvent } from "@shared/types/ipc/remoteHosts";
-import { notify } from "@/lib/notify";
-import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
-import { useNotificationStore } from "@/store/notificationStore";
 import { usePendingHostSwitchStore } from "@/store/pendingHostSwitchStore";
 
-/** Past this, a wait that is still going says so (the loading-gate family's "Still working…"). */
-export const STILL_WORKING_MS = 5_000;
+/**
+ * What the switch screen's heading says. It holds across the waiting phases,
+ * so the only change is the one from waiting to given up.
+ */
+export function pendingHostSwitchHeading(pending: PendingHostSwitch): string {
+  return pending.phase === "failed"
+    ? `Couldn't switch to ${pending.hostName}`
+    : `Switching to ${pending.hostName}`;
+}
 
-const WAITING_MESSAGE = "This window stays as it is until then.";
-const STILL_WORKING_MESSAGE = "Still working…";
-
-/** What a switch that is taking a while says it is doing. */
-export function pendingHostSwitchTitle(pending: PendingHostSwitch): string {
-  switch (pending.phase) {
+/**
+ * What a waiting switch is doing, in words that change only with the phase:
+ * learning the project's name mid-phase does not reword it.
+ */
+export function pendingHostSwitchStatus(
+  phase: Exclude<PendingHostSwitch["phase"], "failed">
+): string {
+  switch (phase) {
     case "connecting":
-      return `Connecting to ${pending.hostName}…`;
+      return "Connecting…";
     case "starting":
-      return `Starting Daintree on ${pending.hostName}…`;
+      return "Starting Daintree on the host…";
     case "opening":
-      return pending.projectName
-        ? `Opening ${pending.projectName} on ${pending.hostName}…`
-        : `Opening ${pending.hostName}…`;
+      return "Opening the project…";
   }
 }
 
 interface RemoteHostsSwitchApi {
   onEvent?: (callback: (event: RemoteHostsEvent) => void) => () => void;
   getPendingSwitch?: () => Promise<PendingHostSwitch | null>;
-  cancelPendingSwitch?: (payload: { switchId: string }) => Promise<boolean>;
 }
 
 interface WatchOptions {
@@ -37,14 +40,18 @@ interface WatchOptions {
    * mid-switch asks afresh rather than keep a switch that has since ended.
    */
   onViewRevealed?: (callback: () => void) => () => void;
+  /**
+   * Told when this view goes into the cache behind another. Main stops telling
+   * it about the window's switch from then on, so it lets go of the one it
+   * knew: the view a switch left behind would otherwise hold every send to its
+   * terminals, a host's MCP dispatches among them, after the switch landed.
+   */
+  onViewCached?: (callback: () => void) => () => void;
 }
 
 /**
- * Keep this view told where its window's switch to a host is, and show it
- * once it has taken long enough to notice. A fast switch shows nothing; a slow
- * one gets one progress notice that follows its phase, carries Cancel, and
- * goes away however the switch ends. No success notice: the window moving is
- * the news.
+ * Keep this view told where its window's switch to a host is. The window's
+ * switch screen reads it from the store; this only keeps the store right.
  */
 export function watchPendingHostSwitch(
   api: RemoteHostsSwitchApi,
@@ -72,117 +79,18 @@ export function watchPendingHostSwitch(
   };
   ask();
   const stopRevealed = options.onViewRevealed?.(ask);
-
-  let shownFor: string | null = null;
-  let notificationId: string | null = null;
-  let stillWorking = false;
-  let onsetTimer: ReturnType<typeof setTimeout> | null = null;
-  let stillWorkingTimer: ReturnType<typeof setTimeout> | null = null;
-
-  // A notice held back while the window was in the background (it goes to
-  // no inbox: it is only worth seeing while the switch is on its way) shows
-  // when the window is looked at again.
-  const showWhenFocused = () => {
-    // Not before the gate: a switch that hasn't been slow yet shows nothing.
-    if (onsetTimer || notificationId) return;
-    const current = store.getState().pending;
-    if (current && current.switchId === shownFor) show(current);
-  };
-  const focusSource = typeof window === "undefined" ? null : window;
-  focusSource?.addEventListener("focus", showWhenFocused);
-
-  const withdraw = () => {
-    if (onsetTimer) clearTimeout(onsetTimer);
-    if (stillWorkingTimer) clearTimeout(stillWorkingTimer);
-    onsetTimer = null;
-    stillWorkingTimer = null;
-    if (notificationId) useNotificationStore.getState().dismissNotification(notificationId);
-    notificationId = null;
-    shownFor = null;
-    stillWorking = false;
-  };
-
-  // Offered only until the switch commits: past that the window is moving.
-  const cancelActions = (pending: PendingHostSwitch) =>
-    pending.committed
-      ? []
-      : [
-          {
-            label: "Cancel",
-            variant: "secondary" as const,
-            onClick: () => {
-              void api.cancelPendingSwitch?.({ switchId: pending.switchId }).catch(() => {});
-            },
-          },
-        ];
-
-  const show = (pending: PendingHostSwitch) => {
-    if (notificationId) return;
-    if (stillWorkingTimer) clearTimeout(stillWorkingTimer);
-    notificationId =
-      notify({
-        type: "info",
-        priority: "high",
-        transient: true,
-        context: { eventKind: "connectivity" },
-        title: pendingHostSwitchTitle(pending),
-        message: WAITING_MESSAGE,
-        duration: 0,
-        actions: cancelActions(pending),
-      }) || null;
-    if (stillWorking) {
-      if (notificationId) {
-        useNotificationStore.getState().updateNotification(notificationId, {
-          message: STILL_WORKING_MESSAGE,
-        });
-      }
-      return;
-    }
-    stillWorkingTimer = setTimeout(() => {
-      stillWorkingTimer = null;
-      stillWorking = true;
-      if (notificationId) {
-        useNotificationStore.getState().updateNotification(notificationId, {
-          message: STILL_WORKING_MESSAGE,
-        });
-      }
-    }, STILL_WORKING_MS - UI_DOHERTY_THRESHOLD);
-  };
-
-  const apply = (pending: PendingHostSwitch | null) => {
-    if (!pending || pending.switchId !== shownFor) withdraw();
-    if (!pending) return;
-    if (shownFor === pending.switchId) {
-      // The same switch moved on to its next phase.
-      if (notificationId) {
-        useNotificationStore.getState().updateNotification(notificationId, {
-          title: pendingHostSwitchTitle(pending),
-          message: stillWorking ? STILL_WORKING_MESSAGE : WAITING_MESSAGE,
-          actions: cancelActions(pending),
-        });
-      }
-      return;
-    }
-    shownFor = pending.switchId;
-    onsetTimer = setTimeout(() => {
-      onsetTimer = null;
-      const current = store.getState().pending;
-      if (current?.switchId === shownFor) show(current);
-    }, UI_DOHERTY_THRESHOLD);
-  };
-
-  apply(store.getState().pending);
-  const stopStore = store.subscribe((state, previous) => {
-    if (state.pending !== previous.pending) apply(state.pending);
+  const stopCached = options.onViewCached?.(() => {
+    if (disposed) return;
+    // Also outdates any answer still on its way.
+    heard += 1;
+    store.getState().setPending(null);
   });
 
   return () => {
     disposed = true;
-    focusSource?.removeEventListener("focus", showWhenFocused);
     stopEvents?.();
     stopRevealed?.();
-    stopStore();
-    withdraw();
+    stopCached?.();
     store.getState().setPending(null);
   };
 }

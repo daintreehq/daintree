@@ -11,6 +11,7 @@
  * decides what to do with a recipe left with zero valid terminals.
  */
 import { BUILT_IN_AGENT_IDS } from "../config/agentIds.js";
+import { isAgentRecipeType } from "../types/project.js";
 import type { RecipeTerminal, RecipeTerminalType } from "../types/project.js";
 
 /**
@@ -59,7 +60,19 @@ const ALLOWED_RECIPE_TYPES: ReadonlySet<string> = new Set<string>([
  */
 export interface RecipeSanitizeOptions {
   additionalAllowedTypes?: ReadonlySet<string>;
+  /**
+   * Runtime panel kinds a `plugin-panel` step may open (#13797). Only the
+   * plugin-recipe boundary passes it, with the SAME plugin's own kinds; every
+   * other boundary drops `plugin-panel` steps, so a user-owned file can never
+   * open a plugin's panel.
+   */
+  pluginPanelKinds?: ReadonlySet<string>;
+  /** Keep an agent step's `systemPrompt`. Plugin-recipe boundary only (#13797). */
+  allowSystemPrompt?: boolean;
 }
+
+/** Largest `panelArgs` a `plugin-panel` step may carry, as JSON — a launch entry's own cap. */
+export const RECIPE_PANEL_ARGS_MAX_BYTES = 8192;
 
 /**
  * Whether `type` is admissible at this trust boundary. Exported so the
@@ -68,7 +81,22 @@ export interface RecipeSanitizeOptions {
  * about which terminals this build can represent (#12261).
  */
 export function isAllowedRecipeType(type: string, options?: RecipeSanitizeOptions): boolean {
+  if (type === "plugin-panel") return (options?.pluginPanelKinds?.size ?? 0) > 0;
   return ALLOWED_RECIPE_TYPES.has(type) || options?.additionalAllowedTypes?.has(type) === true;
+}
+
+/** A fresh JSON-only copy of a `plugin-panel` step's arguments, or null when they aren't plain JSON within the cap. */
+function copyPanelArgs(raw: unknown): Record<string, unknown> | null {
+  if (!isPlainObject(raw)) return null;
+  let json: string;
+  try {
+    json = JSON.stringify(raw);
+  } catch {
+    return null;
+  }
+  if (new TextEncoder().encode(json).length > RECIPE_PANEL_ARGS_MAX_BYTES) return null;
+  const copy: unknown = JSON.parse(json);
+  return isPlainObject(copy) ? copy : null;
 }
 
 // "restart" is QuickRun-only and never a valid recipe exit behavior (the recipe
@@ -92,6 +120,23 @@ function sanitizeRecipeTerminal(
   const type = raw.type;
   if (typeof type !== "string" || !isAllowedRecipeType(type, options)) return null;
 
+  if (type === "plugin-panel") {
+    const kind = raw.panelKindId;
+    if (typeof kind !== "string" || options?.pluginPanelKinds?.has(kind) !== true) return null;
+    let panelArgs: Record<string, unknown> | undefined;
+    if (raw.panelArgs !== undefined) {
+      const copied = copyPanelArgs(raw.panelArgs);
+      if (copied === null) return null;
+      panelArgs = copied;
+    }
+    return {
+      type: "plugin-panel",
+      title: typeof raw.title === "string" ? raw.title : undefined,
+      panelKindId: kind,
+      ...(panelArgs !== undefined ? { panelArgs } : {}),
+    };
+  }
+
   if (raw.command !== undefined) {
     if (typeof raw.command !== "string") return null;
     if (RECIPE_CONTROL_CHARS.test(raw.command)) return null;
@@ -99,6 +144,10 @@ function sanitizeRecipeTerminal(
   if (raw.initialPrompt !== undefined) {
     if (typeof raw.initialPrompt !== "string") return null;
     if (RECIPE_PROMPT_CONTROL_CHARS.test(raw.initialPrompt)) return null;
+  }
+  if (raw.systemPrompt !== undefined && options?.allowSystemPrompt === true) {
+    if (typeof raw.systemPrompt !== "string") return null;
+    if (RECIPE_PROMPT_CONTROL_CHARS.test(raw.systemPrompt)) return null;
   }
   if (raw.args !== undefined) {
     if (typeof raw.args !== "string") return null;
@@ -131,7 +180,11 @@ function sanitizeRecipeTerminal(
   }
 
   const recipeType = type as RecipeTerminalType;
-  const isAgent = recipeType !== "terminal" && recipeType !== "dev-preview";
+  const isAgent = isAgentRecipeType(recipeType);
+  const systemPrompt =
+    isAgent && options?.allowSystemPrompt === true && typeof raw.systemPrompt === "string"
+      ? raw.systemPrompt.trim() || undefined
+      : undefined;
 
   return {
     type: recipeType,
@@ -145,6 +198,7 @@ function sanitizeRecipeTerminal(
       isAgent && typeof raw.initialPrompt === "string"
         ? raw.initialPrompt.replace(/\r\n/g, "\n").trimEnd()
         : undefined,
+    ...(systemPrompt !== undefined ? { systemPrompt } : {}),
     devCommand:
       recipeType === "dev-preview" && typeof raw.devCommand === "string"
         ? raw.devCommand.trim() || undefined

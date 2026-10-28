@@ -5,16 +5,26 @@ import { cloneElement } from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { ConsoleDrawer } from "../ConsoleDrawer";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { createTerminalPaintPlane } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
 import { useConsoleCaptureStore, flushConsoleCaptureBuffer } from "@/store/consoleCaptureStore";
 import type { SerializedConsoleRow } from "@shared/types/ipc/webviewConsole";
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
+
+// The service mock never evaluates the real module, so nothing builds it.
+await loadTerminalService();
+
+const terminalInstanceService = createTerminalPaintPlane();
+
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     setVisible: vi.fn(),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("../../Terminal/XtermAdapter", () => ({
   XtermAdapter: vi.fn(({ terminalId, getRefreshTier, restoreOnAttach }) => (

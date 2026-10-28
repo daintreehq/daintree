@@ -106,10 +106,12 @@ export function createSubscriptionCoalescer(
  */
 export function worktreeSnapshotFingerprint(snapshot: PluginWorktreeSnapshot): string {
   const status = snapshot.status;
+  const setup = snapshot.setup;
   return JSON.stringify([
     snapshot.worktreeId,
     snapshot.path,
     snapshot.name,
+    snapshot.customTitle ?? null,
     snapshot.isCurrent,
     snapshot.branch ?? null,
     snapshot.isMainWorktree ?? null,
@@ -126,6 +128,9 @@ export function worktreeSnapshotFingerprint(snapshot: PluginWorktreeSnapshot): s
           status.counts,
           status.files.map((file) => `${file.state}\u0000${file.path}`),
         ],
+    snapshot.headOid ?? null,
+    snapshot.gitOperation ?? null,
+    setup == null ? null : [setup.state, setup.stage ?? null],
   ]);
 }
 
@@ -138,6 +143,20 @@ export class WorktreeChangeTracker {
   private previous = new Map<string, string>();
 
   next(snapshots: readonly PluginWorktreeSnapshot[]): PluginWorktreesChange {
+    const { change, current } = this.diff(snapshots);
+    this.previous = current;
+    return change;
+  }
+
+  /** What {@link next} would report for `snapshots`, without making it the new base. */
+  peek(snapshots: readonly PluginWorktreeSnapshot[]): PluginWorktreesChange {
+    return this.diff(snapshots).change;
+  }
+
+  private diff(snapshots: readonly PluginWorktreeSnapshot[]): {
+    change: PluginWorktreesChange;
+    current: Map<string, string>;
+  } {
     const current = new Map<string, string>();
     const added: string[] = [];
     const changed: string[] = [];
@@ -155,11 +174,13 @@ export class WorktreeChangeTracker {
     for (const id of this.previous.keys()) {
       if (!current.has(id)) removed.push(id);
     }
-    this.previous = current;
-    return Object.freeze({
-      added: Object.freeze(added),
-      removed: Object.freeze(removed),
-      changed: Object.freeze(changed),
-    });
+    return {
+      change: Object.freeze({
+        added: Object.freeze(added),
+        removed: Object.freeze(removed),
+        changed: Object.freeze(changed),
+      }),
+      current,
+    };
   }
 }

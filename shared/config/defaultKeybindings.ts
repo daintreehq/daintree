@@ -222,6 +222,16 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     description: "Toggle focus between current and previously focused panel",
     category: "Terminal",
   },
+  // Cmd+Alt+E: free of macOS system chords (H hides others) and of anything an
+  // agent TUI reads, since Cmd never reaches the PTY.
+  {
+    actionId: "terminal.toggleInputSurface",
+    combo: "Cmd+Alt+E",
+    scope: "global",
+    priority: 0,
+    description: "Switch between hybrid input and terminal",
+    category: "Terminal",
+  },
   {
     actionId: "tab.next",
     combo: "Cmd+Shift+]",
@@ -950,6 +960,32 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     category: "Project",
   },
   {
+    // Unbound by default; here so it can be bound (#13846).
+    actionId: "project.sleep",
+    combo: "",
+    scope: "global",
+    priority: 0,
+    description: "Sleep project",
+    category: "Project",
+  },
+  {
+    // Unbound by default; here so it can be bound (#14179).
+    actionId: "project.restart",
+    combo: "",
+    scope: "global",
+    priority: 0,
+    description: "Restart project",
+    category: "Project",
+  },
+  {
+    actionId: "project.sleepIdle",
+    combo: "",
+    scope: "global",
+    priority: 0,
+    description: "Sleep idle projects",
+    category: "Project",
+  },
+  {
     actionId: "app.theme.pick",
     combo: "Cmd+K Cmd+T",
     scope: "global",
@@ -1005,12 +1041,22 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     description: "Open settings",
     category: "System",
   },
+  // Under the thumb and middle finger on the Mac. Off the Mac it would fold to
+  // Ctrl+D, a shell's EOF, so the replacement tables keep their own keys.
   {
     actionId: "voiceInput.toggle",
-    combo: "Cmd+.",
+    combo: "Cmd+D",
     scope: "global",
     priority: 0,
     description: "Toggle voice dictation",
+    category: "Voice",
+  },
+  {
+    actionId: "voiceInput.rewriteSelection",
+    combo: "Cmd+Shift+Alt+.",
+    scope: "global",
+    priority: 0,
+    description: "Rewrite the selected prompt text by voice",
     category: "Voice",
   },
   {
@@ -1027,6 +1073,16 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     scope: "global",
     priority: 0,
     description: "Pause or resume voice dictation",
+    category: "Voice",
+  },
+  // Stop and send, staying where you are. Not Cmd+Alt+D: macOS takes that to
+  // hide the Dock before the app sees it, and Cmd+Shift+D opens changes.
+  {
+    actionId: "voiceInput.stopAndSend",
+    combo: "Cmd+Shift+Enter",
+    scope: "global",
+    priority: 0,
+    description: "Stop voice dictation and send the prompt",
     category: "Voice",
   },
   {
@@ -1091,6 +1147,24 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     scope: "global",
     priority: 0,
     description: "Open changes for focused worktree",
+    category: "Worktrees",
+  },
+  {
+    // Unbound by default; here so it can be bound (#14585).
+    actionId: "worktree.markReviewed",
+    combo: "",
+    scope: "global",
+    priority: 0,
+    description: "Mark worktree reviewed in Review Hub",
+    category: "Worktrees",
+  },
+  {
+    // Unbound by default; here so it can be bound (#14585).
+    actionId: "worktree.clearReviewMark",
+    combo: "",
+    scope: "global",
+    priority: 0,
+    description: "Clear worktree review mark",
     category: "Worktrees",
   },
   // Cmd+Alt, not a Cmd+K chord, and not Cmd+Shift: the file browser is a panel
@@ -1216,6 +1290,23 @@ const WINDOWS_ONLY_KEYBINDINGS: KeybindingConfig[] = [
 // over from the overview family, and Ctrl+Shift+O is none of the keys Daintree
 // reserves for the PTY.
 const NON_MAC_REPLACEMENT_KEYBINDINGS: KeybindingConfig[] = [
+  {
+    actionId: "voiceInput.toggle",
+    combo: "Ctrl+.",
+    scope: "global",
+    priority: 0,
+    description: "Toggle voice dictation",
+    category: "Voice",
+  },
+  // Windows keeps Ctrl+Alt+D; only the Mac gives Cmd+Alt+D to the Dock.
+  {
+    actionId: "voiceInput.stopAndSend",
+    combo: "Cmd+Alt+D",
+    scope: "global",
+    priority: 0,
+    description: "Stop voice dictation and send the prompt",
+    category: "Voice",
+  },
   // Ctrl+Y is Redo in text fields and editors off the Mac; it accepts the fleet
   // only from outside them.
   {
@@ -1261,6 +1352,24 @@ const LINUX_REPLACEMENT_KEYBINDINGS: KeybindingConfig[] = [
     scope: "global",
     priority: 0,
     description: "Toggle voice dictation",
+    category: "Voice",
+  },
+  {
+    actionId: "voiceInput.rewriteSelection",
+    combo: "Ctrl+Shift+Alt+,",
+    scope: "global",
+    priority: 0,
+    description: "Rewrite the selected prompt text by voice",
+    category: "Voice",
+  },
+  // Ctrl+Alt+D shows the desktop on Xfce and older GNOME, and its Shift form is
+  // terminal.moveToDock; the dictation keys' other neighbour is free.
+  {
+    actionId: "voiceInput.stopAndSend",
+    combo: "Ctrl+Shift+Alt+.",
+    scope: "global",
+    priority: 0,
+    description: "Stop voice dictation and send the prompt",
     category: "Voice",
   },
   {
@@ -1337,7 +1446,8 @@ export function buildDefaultKeybindings(isWindows: boolean, isLinux = false): Ke
     : [...CORE_KEYBINDINGS, ...REMOTE_HOSTS_KEYBINDINGS];
   if (!isWindows && !isLinux) return bindings;
   const replacements = isLinux
-    ? [...NON_MAC_REPLACEMENT_KEYBINDINGS, ...LINUX_REPLACEMENT_KEYBINDINGS]
+    ? // Linux first: the first match wins, and Linux overrides the shared dictation key.
+      [...LINUX_REPLACEMENT_KEYBINDINGS, ...NON_MAC_REPLACEMENT_KEYBINDINGS]
     : NON_MAC_REPLACEMENT_KEYBINDINGS;
   const replaced = bindings.map(
     (binding) =>

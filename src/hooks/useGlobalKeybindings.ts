@@ -11,11 +11,21 @@ import { dispatchEscape, hasHandlers } from "@/lib/escapeStack";
 import { ESCAPE_BACKSTOP_DIALOG_ATTR } from "@/lib/dialogEscapeBackstop";
 import { isTerminalReservedKey } from "@/services/terminalReservedKeys";
 import { CLOSE_OWNER_ATTR, requestOwnedClose } from "@/lib/closeRequest";
+import { DICTATION_OWNER_ATTR } from "@/services/canopyReplyDictation";
 import { buildKeybindingWhenContext } from "@/services/keybindingWhenContext";
 import { usePluginContextKeyStore } from "@/store/pluginContextKeyStore";
 import { usePaletteStore, usePanelStore } from "../store";
 import { isStagedConfirmation } from "@/services/actions/confirmationStaged";
+import { routeVoiceWaitKey } from "@/lib/voiceWaitKeys";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+
+// The keys a surface that owns its own dictation (Canopy's reply) still lets
+// through: stopping it, and stopping it with a send.
+const DICTATION_KEYS = ["voiceInput.toggle", "voiceInput.stopAndSend"] as const;
+
+function isDictationKey(actionId: string | undefined): boolean {
+  return DICTATION_KEYS.some((key) => key === actionId);
+}
 
 /**
  * Canonical first-step combo of every chord (they all begin `Cmd+K`). Opening
@@ -68,6 +78,9 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
       // where isComposing may not yet be set on the first keydown.
       if (e.isComposing || e.keyCode === 229) return;
 
+      // Enter and Escape for a dictated send still waiting are its own.
+      if (routeVoiceWaitKey(e)) return;
+
       // Skip if user is typing in an input/textarea or editable content
       // Exception: allow shortcuts with modifiers (Cmd, Ctrl)
       const target = e.target as HTMLElement;
@@ -76,22 +89,32 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
       // panel's live view and its composer) keeps every shortcut but its own
       // toggle away from it: the rest act on the focused pane or the armed
       // fleet, neither of which is the terminal the user is typing to.
-      // Close is the exception inside a surface that owns it (below).
+      // Close is the exception inside a surface that owns it (below), and so is
+      // the dictation key inside one that routes it (Canopy's, to its reply).
       const isolated =
         typeof target.closest === "function" &&
         target.closest("[data-keybindings-isolated]") !== null;
       const ownsClose = isolated && target.closest(`[${CLOSE_OWNER_ATTR}]`) !== null;
+      const ownsDictation = isolated && target.closest(`[${DICTATION_OWNER_ATTR}]`) !== null;
       if (isolated) {
         // A chord begun outside is abandoned once the user types in here: the
         // keys are the terminal's, and the surface's own shortcuts are single.
         if (keybindingService.getPendingChord() !== null) keybindingService.clearPendingChord();
         // One keystroke only: a chord's first key would have to reach the
         // resolver, and with it every other binding the surface keeps out.
-        const matches = (actionId: "canopy.toggle" | "terminal.close") =>
+        const matches = (
+          actionId: "canopy.toggle" | "terminal.close" | (typeof DICTATION_KEYS)[number]
+        ) =>
           keybindingService
             .getTriggerCombos(actionId)
             .some((combo) => !combo.includes(" ") && keybindingService.matchesEvent(e, combo));
-        if (!matches("canopy.toggle") && !(ownsClose && matches("terminal.close"))) return;
+        if (
+          !matches("canopy.toggle") &&
+          !(ownsDictation && DICTATION_KEYS.some(matches)) &&
+          !(ownsClose && matches("terminal.close"))
+        ) {
+          return;
+        }
       }
       const isEditable =
         target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable;
@@ -335,6 +358,7 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
       if (
         isolated &&
         result.match?.actionId !== "canopy.toggle" &&
+        !(ownsDictation && isDictationKey(result.match?.actionId)) &&
         !(ownsClose && result.match?.actionId === "terminal.close")
       ) {
         if (result.chordPrefix) keybindingService.clearPendingChord();
@@ -354,9 +378,9 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
             // Element (not HTMLElement) — only closest() is needed below, and
             // an unchecked HTMLElement cast trips no-unsafe-type-assertion.
             const active = document.activeElement;
-            // A surface inside an overlay that owns its own close — the canopy
-            // panel's agent pane, which closes the canopy panel rather than
-            // the agent's terminal — takes it before the branches below.
+            // A surface inside an overlay that holds a terminal of its own —
+            // the canopy panel's agent pane — closes that terminal, as a grid
+            // pane's Cmd+W would, rather than the overlay around it.
             if (requestOwnedClose(active)) return;
             // Cmd+W inside the Daintree Assistant closes the assistant itself.
             // Its escape handler intentionally bails when the embedded xterm /

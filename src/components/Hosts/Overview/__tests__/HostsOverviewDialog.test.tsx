@@ -44,6 +44,14 @@ vi.mock("../HostAddProjectDialog", () => ({
 }));
 vi.mock("@/hooks/useHostConnection", () => ({ getViewHostId: () => null }));
 vi.mock("../../hostSwitching", () => ({ switchToHost: h.switchToHost }));
+vi.mock("@/components/Project/ProcessesDialog", () => ({
+  ProcessesDialog: (props: { isOpen: boolean; hostName?: string; canKill?: boolean }) =>
+    props.isOpen ? (
+      <div data-testid="processes-dialog" data-can-kill={String(props.canKill)}>
+        {props.hostName}
+      </div>
+    ) : null,
+}));
 vi.mock("../../PortsView", () => ({ PortsView: () => null }));
 vi.mock("../HostFleetTargets", () => ({ HostFleetTargets: () => null }));
 vi.mock("../HostCard", () => ({
@@ -161,5 +169,34 @@ describe("HostsOverviewDialog projects", () => {
     expect(dialog.getAttribute("data-host-id")).toBe("studio-01");
     fireEvent.click(screen.getByText("finish clone"));
     expect(h.switchToHost).toHaveBeenCalledWith("studio-01", false, "cloned-1");
+  });
+});
+
+describe("HostsOverviewDialog processes", () => {
+  beforeEach(() => {
+    h.hosts = [
+      entry("studio-01", { status: "connected", rttMs: 12, handshake: HANDSHAKE }),
+      entry("studio-02", { status: "unreachable", lastSeenAt: null, detail: null }),
+    ];
+    h.switchToHost.mockClear();
+  });
+
+  it("opens a reachable host's processes without leaving the overview, killing nothing for hosts this window isn't on", () => {
+    const onClose = vi.fn();
+    render(<HostsOverviewDialog onClose={onClose} />);
+    expect(screen.queryByRole("button", { name: "Processes on studio-02" })).toBeNull();
+    expect(screen.queryByTestId("processes-dialog")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Processes on studio-01" }));
+    const dialog = screen.getByTestId("processes-dialog");
+    expect(dialog.textContent).toBe("studio-01");
+    expect(dialog.getAttribute("data-can-kill")).toBe("false");
+    expect(onClose).not.toHaveBeenCalled();
+    expect(h.switchToHost).not.toHaveBeenCalled();
+  });
+
+  it("allows kills on this window's own host", () => {
+    render(<HostsOverviewDialog onClose={() => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: /^Processes on This / }));
+    expect(screen.getByTestId("processes-dialog").getAttribute("data-can-kill")).toBe("true");
   });
 });

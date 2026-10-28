@@ -40,7 +40,10 @@ import {
   panelDragOrigin,
   useArmedDropTarget,
 } from "@/components/DragDrop/useArmedDropTarget";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import {
+  peek as peekTerminalService,
+  with as withTerminalService,
+} from "@/services/terminal/terminalInstanceServiceAccessor";
 import {
   subscribeOptimisticClose,
   getClosingIdsSnapshot,
@@ -88,8 +91,9 @@ import {
   type DockLaunchAgent,
   type DockLaunchMenuComponents,
 } from "@/components/Layout/DockLaunchMenuItems";
+import type { DockLaunchAgentOptions } from "@/components/Layout/dockLaunchItems";
 import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
-import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { useAgentToolbarPinsStore } from "@/store/agentToolbarPinsStore";
 import { sortAgentsByToolbarPin } from "@/lib/agentMenuOrder";
 import { getMaximizedGroupFocusTarget, enterFocusedPanel } from "./contentGridFocus";
 import { setGridLayoutSnapshot } from "./gridLayoutSnapshot";
@@ -343,7 +347,7 @@ export function useContentGridContext({
   const leftButtons = useToolbarPreferencesStore(useShallow((s) => s.layout.leftButtons));
   const rightButtons = useToolbarPreferencesStore(useShallow((s) => s.layout.rightButtons));
   const pinnedButtons = useToolbarPreferencesStore(useShallow((s) => s.layout.pinnedButtons));
-  const agentSettings = useAgentSettingsStore((s) => s.settings);
+  const agentPins = useAgentToolbarPinsStore((s) => s.pins);
   // Re-derive grid agents when a plugin loads/unloads mid-session so its agents
   // appear / disappear with current icon/name/color (#9879).
   const pluginAgentRegistry = useSyncExternalStore(
@@ -519,6 +523,10 @@ export function useContentGridContext({
   });
 
   const gridContainerRef = useRef<HTMLDivElement>(null);
+  // The same node as state, so the measurement effect below re-attaches when
+  // the grid unmounts and comes back with nothing else in its deps moving — a
+  // round trip to the project's Home replaces the node and nothing more.
+  const [gridContainerNode, setGridContainerNode] = useState<HTMLDivElement | null>(null);
   const preMaximizeLayoutRef = useRef(preMaximizeLayout);
   useEffect(() => {
     preMaximizeLayoutRef.current = preMaximizeLayout;
@@ -589,6 +597,7 @@ export function useContentGridContext({
     (node: HTMLDivElement | null) => {
       setNodeRef(node);
       gridContainerRef.current = node;
+      setGridContainerNode(node);
     },
     [setNodeRef]
   );
@@ -596,7 +605,7 @@ export function useContentGridContext({
   // Observe container resizes with rAF deferral to avoid RO depth-cap warnings.
   // Recreated when the container element or layout-affecting deps change.
   useEffect(() => {
-    const container = gridContainerRef.current;
+    const container = gridContainerNode;
     if (!container) return;
 
     let rafId: number | null = null;
@@ -698,7 +707,14 @@ export function useContentGridContext({
       unsubscribeDock();
       setGridDimensions(null);
     };
-  }, [setGridDimensions, gridTerminals.length, maximizedId, twoPaneSplitEnabled, showPlaceholder]);
+  }, [
+    setGridDimensions,
+    gridContainerNode,
+    gridTerminals.length,
+    maximizedId,
+    twoPaneSplitEnabled,
+    showPlaceholder,
+  ]);
 
   useEffect(() => {
     if (
@@ -821,22 +837,28 @@ export function useContentGridContext({
           availability: agentAvailability?.[id],
         };
       });
-    return sortAgentsByToolbarPin(agents, leftButtons, agentSettings, rightButtons, pinnedButtons);
+    return sortAgentsByToolbarPin(agents, leftButtons, agentPins, rightButtons, pinnedButtons);
   }, [
     agentAvailability,
     gridSelectedAgentIds,
     leftButtons,
     rightButtons,
     pinnedButtons,
-    agentSettings,
+    agentPins,
     pluginAgentRegistry,
   ]);
 
   const handleGridLaunch = useCallback(
-    (agentId: string) => {
+    (agentId: string, _presetId?: string | null, options?: DockLaunchAgentOptions) => {
       void actionService.dispatch(
         "agent.launch",
-        { agentId, location: "grid", cwd: defaultCwd || undefined },
+        {
+          agentId,
+          location: "grid",
+          cwd: defaultCwd || undefined,
+          // A plugin launch entry's first turn, and nothing else of its own.
+          ...(options?.prompt !== undefined ? { prompt: options.prompt } : {}),
+        },
         { source: "user" }
       );
     },
@@ -945,7 +967,10 @@ export function useContentGridContext({
     }
     const ids = fleetPanels.map((t) => t.id);
     for (const id of ids) {
-      terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
+      withTerminalService(
+        (service) => service.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE),
+        id
+      );
     }
     const fleetColsChanged = prevFleetGridColsRef.current !== fleetGridCols;
     prevFleetGridColsRef.current = fleetGridCols;
@@ -959,7 +984,9 @@ export function useContentGridContext({
     // Resize the fleet panes: at once when a pane joined or left (the boxes
     // are final — see the grid effect below), otherwise as one coalesced pass
     // once the burst settles (see scheduleBatchResize).
-    terminalInstanceService.scheduleBatchResize(ids, { leading: fleetMembershipChanged });
+    withTerminalService((service) =>
+      service.scheduleBatchResize(ids, { leading: fleetMembershipChanged })
+    );
 
     // A column-count change no membership change caused shifts cell widths
     // while the window is still moving, so the per-host ResizeObserver would
@@ -967,9 +994,8 @@ export function useContentGridContext({
     // Lock those panes for the transition window; the lock's unlock pass
     // doubles as the corrective backstop.
     if (fleetColsChanged && !fleetMembershipChanged) {
-      terminalInstanceService.suppressResizesDuringLayoutTransition(
-        ids,
-        GRID_TRANSITION_DURATION_MS
+      withTerminalService((service) =>
+        service.suppressResizesDuringLayoutTransition(ids, GRID_TRANSITION_DURATION_MS)
       );
     }
   }, [isFleetScopeRender, fleetPanels, fleetGridCols, layoutConfig.strategy]);
@@ -980,7 +1006,7 @@ export function useContentGridContext({
     if (isDraggingRef.current) return;
     const ids = gridTerminals.map((t) => t.id);
     if (ids.length > 0) {
-      terminalInstanceService.scheduleBatchResize(ids, { leading });
+      withTerminalService((service) => service.scheduleBatchResize(ids, { leading }));
     }
   });
   const prevGridColsRef = useRef(gridCols);
@@ -1059,9 +1085,8 @@ export function useContentGridContext({
     if (!membershipChanged && (colsChanged || scrollGeoChanged)) {
       const realPanelIds = panelIds.filter((id) => id !== GRID_PLACEHOLDER_ID);
       if (realPanelIds.length > 0) {
-        terminalInstanceService.suppressResizesDuringLayoutTransition(
-          realPanelIds,
-          GRID_TRANSITION_DURATION_MS
+        withTerminalService((service) =>
+          service.suppressResizesDuringLayoutTransition(realPanelIds, GRID_TRANSITION_DURATION_MS)
         );
       }
     }
@@ -1123,9 +1148,9 @@ export function useContentGridContext({
 
         const ids = gridTerminalsRef.current.map((t) => t.id);
         for (const id of ids) {
-          const managed = terminalInstanceService.get(id);
+          const managed = peekTerminalService()?.get(id) ?? null;
           if (managed?.hostElement.isConnected) {
-            terminalInstanceService.fit(id);
+            peekTerminalService()?.fit(id);
           }
         }
       }, MODE_SWITCH_FIT_DELAY_MS);

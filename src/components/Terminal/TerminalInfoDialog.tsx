@@ -3,10 +3,14 @@ import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
 import { ChevronRight, Info } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { pluralize } from "@/lib/pluralize";
 import { SkeletonBone } from "@/components/ui/Skeleton";
-import type { TerminalInfoPayload } from "@/types/electron";
+import {
+  readTerminalPaneInfo,
+  type TerminalPaneInfo,
+} from "@/services/terminal/readTerminalPaneInfo";
 import { actionService } from "@/services/ActionService";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { getAgentConfig } from "@shared/config/agentRegistry";
 import { usePanelStore } from "@/store/panelStore";
@@ -85,6 +89,29 @@ function formatSyncMode(value: boolean | null): string {
 function formatYesNo(value: boolean | undefined, absent: string): string {
   if (value === undefined) return absent;
   return value ? "Yes" : "No";
+}
+
+/**
+ * A copied report leaves out the launch command, which can hold the prompt the
+ * run launched with, and a pane's argv once it has a command, since the startup
+ * wrapper carries the command there (#14592). Both stay on screen; only the
+ * text that gets pasted into an issue drops them.
+ */
+const LEFT_OUT_FOR_PROMPT = "(left out: can hold the launch prompt)";
+
+function formatCommandForClipboard(command: string | undefined): string {
+  return command ? LEFT_OUT_FOR_PROMPT : NONE;
+}
+
+function formatSpawnArgsForClipboard(
+  args: string[] | undefined,
+  command: string | undefined,
+  absent: string
+): string {
+  if (!command || args === undefined || args.length === 0) {
+    return formatArgsForClipboard(args, absent);
+  }
+  return `${pluralize(args.length, "argument")} ${LEFT_OUT_FOR_PROMPT}`;
 }
 
 function formatArgsForClipboard(args: string[] | undefined, absent: string): string {
@@ -299,11 +326,9 @@ export function TerminalInfoDialog({ isOpen, onClose, terminalId }: TerminalInfo
   // Keyed to the terminal it was read for. Retargeting the open dialog at another
   // terminal otherwise rendered the new panel's title beside the old one's host data
   // until the next read landed — or indefinitely, if that read failed.
-  const [read, setRead] = useState<{ terminalId: string; payload: TerminalInfoPayload } | null>(
-    null
-  );
+  const [read, setRead] = useState<{ terminalId: string; payload: TerminalPaneInfo } | null>(null);
   const info = read?.terminalId === terminalId ? read.payload : null;
-  const setInfo = (payload: TerminalInfoPayload | null, forTerminal: string) =>
+  const setInfo = (payload: TerminalPaneInfo | null, forTerminal: string) =>
     setRead(payload ? { terminalId: forTerminal, payload } : null);
   // One background read at a time, so a slow reply can never land after a newer one.
   const refreshInFlightRef = useRef(false);
@@ -361,7 +386,7 @@ export function TerminalInfoDialog({ isOpen, onClose, terminalId }: TerminalInfo
           throw new Error(result.error.message);
         }
         if (isMounted) {
-          setInfo(result.result as TerminalInfoPayload, terminalId);
+          setInfo(result.result as TerminalPaneInfo, terminalId);
           setError(null);
         }
       } catch (err) {
@@ -391,16 +416,16 @@ export function TerminalInfoDialog({ isOpen, onClose, terminalId }: TerminalInfo
     setPerformanceOpen(false);
   }, [isOpen, terminalId]);
 
-  // Straight to the IPC, not through `actionService`: a dispatch records itself as
+  // Straight to the read, not through `actionService`: a dispatch records itself as
   // the last action and emits `action:dispatched`, which is right for the read the
-  // user asked for and noise every two seconds after it.
+  // user asked for and noise every two seconds after it. The same read the action
+  // makes, so a pane restore held (#14017) refreshes instead of failing.
   const refreshInfo = () => {
-    const getInfo = window.electron?.terminal?.getInfo;
-    if (!getInfo || refreshInFlightRef.current) return;
+    if (!window.electron?.terminal?.getInfo || refreshInFlightRef.current) return;
     const generation = readGenerationRef.current;
     const forTerminal = terminalId;
     refreshInFlightRef.current = true;
-    getInfo(forTerminal)
+    readTerminalPaneInfo(forTerminal)
       .then((next) => {
         if (generation !== readGenerationRef.current) return;
         // An empty answer is the host no longer knowing the terminal. Ignoring it
@@ -409,7 +434,7 @@ export function TerminalInfoDialog({ isOpen, onClose, terminalId }: TerminalInfo
           setError("The terminal host no longer has a record of this terminal");
           return;
         }
-        setInfo(next as TerminalInfoPayload, forTerminal);
+        setInfo(next as TerminalPaneInfo, forTerminal);
         setError(null);
       })
       .catch((err: unknown) => {
@@ -427,7 +452,7 @@ export function TerminalInfoDialog({ isOpen, onClose, terminalId }: TerminalInfo
     // Immediate read on open so the dialog reflects the current sync-mode
     // before the first poll lands. Also fires when the group is expanded, so the
     // first frame after opening it is current rather than up to 250ms stale.
-    setSyncMode(terminalInstanceService.getSynchronizedOutputMode(terminalId));
+    setSyncMode(peekTerminalService()?.getSynchronizedOutputMode(terminalId) ?? null);
   }, [isOpen, performanceOpen, terminalId]);
 
   // xterm 6 mutates terminal.modes asynchronously as the parser consumes
@@ -436,7 +461,7 @@ export function TerminalInfoDialog({ isOpen, onClose, terminalId }: TerminalInfo
   // while the dialog is open. Visibility-gated so the poll pauses while the
   // window is hidden and snaps back on restore.
   useVisibilityAwareInterval(
-    () => setSyncMode(terminalInstanceService.getSynchronizedOutputMode(terminalId)),
+    () => setSyncMode(peekTerminalService()?.getSynchronizedOutputMode(terminalId) ?? null),
     SYNC_MODE_POLL_MS,
     isOpen && performanceOpen
   );
@@ -578,7 +603,7 @@ export function TerminalInfoDialog({ isOpen, onClose, terminalId }: TerminalInfo
 
 Agent launch:
   Launch agent: ${launchAgentId ?? NONE}
-  Command: ${command ?? NONE}
+  Command: ${formatCommandForClipboard(command)}
   Launch flags: ${formatArgsForClipboard(agentLaunchFlags, NONE)}
   Model: ${agentModelId ?? NONE}
   Preset: ${agentPresetId ?? NONE}
@@ -621,8 +646,8 @@ ${startedByAssistant ? "  Started by: Daintree Assistant\n" : ""}  Started via M
 
 How it launched:
   Shell: ${info?.shell || UNAVAILABLE}
-  Command: ${command ?? NONE}
-  Args: ${formatArgsForClipboard(info?.spawnArgs, info ? NONE : UNAVAILABLE)}${agentSection}
+  Command: ${formatCommandForClipboard(command)}
+  Args: ${formatSpawnArgsForClipboard(info?.spawnArgs, command, info ? NONE : UNAVAILABLE)}${agentSection}
 
 Terminal internals:
   Agent launch hint: ${launchAgentId ? "Yes" : "No"}
@@ -635,12 +660,12 @@ Terminal internals:
 
 Runtime:
   ${hasExited ? "Started" : "Runtime"}: ${startedAt == null ? UNAVAILABLE : hasExited ? formatLastActivity(startedAt) : formatElapsedDuration(Date.now() - startedAt)}
-  Spawned at: ${info ? formatTimestamp(info.spawnedAt) : UNAVAILABLE}
+  Spawned at: ${info?.spawnedAt !== undefined ? formatTimestamp(info.spawnedAt) : UNAVAILABLE}
   Restarts: ${info?.restartCount ?? UNAVAILABLE}
 
 Activity:
-  Last input: ${info ? `${formatLastActivity(info.lastInputTime)} (${formatTimestamp(info.lastInputTime)})` : UNAVAILABLE}
-  Last output: ${info ? `${formatLastActivity(info.lastOutputTime)} (${formatTimestamp(info.lastOutputTime)})` : UNAVAILABLE}
+  Last input: ${info?.lastInputTime !== undefined ? `${formatLastActivity(info.lastInputTime)} (${formatTimestamp(info.lastInputTime)})` : UNAVAILABLE}
+  Last output: ${info?.lastOutputTime !== undefined ? `${formatLastActivity(info.lastOutputTime)} (${formatTimestamp(info.lastOutputTime)})` : UNAVAILABLE}
   Agent state: ${agentState || NONE}
   Last state change: ${info?.lastStateChange != null ? formatLastActivity(info.lastStateChange) : NONE}
   Activity tier: ${info?.activityTier ?? UNAVAILABLE}
@@ -648,7 +673,7 @@ Activity:
 Performance:
   Output buffer: ${info?.outputBufferSize != null ? `${info.outputBufferSize} lines` : UNAVAILABLE}
   Semantic buffer: ${info?.semanticBufferLines != null ? `${info.semanticBufferLines} lines` : UNAVAILABLE}
-  Synchronized output (DEC 2026): ${formatSyncMode(terminalInstanceService.getSynchronizedOutputMode(terminalId))}
+  Synchronized output (DEC 2026): ${formatSyncMode(peekTerminalService()?.getSynchronizedOutputMode(terminalId) ?? null)}
 `;
   }, [
     agentLaunchFlags,
@@ -801,7 +826,11 @@ Performance:
               />
               <Row
                 label="Last output"
-                value={info ? formatLastActivity(info.lastOutputTime) : undefined}
+                value={
+                  info?.lastOutputTime !== undefined
+                    ? formatLastActivity(info.lastOutputTime)
+                    : undefined
+                }
                 pending={pending}
                 fallback={UNAVAILABLE}
               />
@@ -932,7 +961,7 @@ Performance:
             />
             <Row
               label="Spawned"
-              value={info ? formatTimestamp(info.spawnedAt) : undefined}
+              value={info?.spawnedAt !== undefined ? formatTimestamp(info.spawnedAt) : undefined}
               pending={pending}
               fallback={UNAVAILABLE}
             />
@@ -976,13 +1005,21 @@ Performance:
           <Group title="Activity">
             <Row
               label="Last input"
-              value={info ? formatLastActivity(info.lastInputTime) : undefined}
+              value={
+                info?.lastInputTime !== undefined
+                  ? formatLastActivity(info.lastInputTime)
+                  : undefined
+              }
               pending={pending}
               fallback={UNAVAILABLE}
             />
             <Row
               label="Last output"
-              value={info ? formatLastActivity(info.lastOutputTime) : undefined}
+              value={
+                info?.lastOutputTime !== undefined
+                  ? formatLastActivity(info.lastOutputTime)
+                  : undefined
+              }
               pending={pending}
               fallback={UNAVAILABLE}
             />

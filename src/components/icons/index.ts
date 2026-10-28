@@ -10,6 +10,7 @@ export * from "./brands";
 // Each was chosen to fit the metaphor.
 export {
   Activity, // project pulse / live activity heartbeat
+  AlarmClockOff, // a project exempt from automatic sleep — the idle timer never runs out on it
   AppWindow, // where an opened folder or host lands — a window of its own or the current one
   Archive, // file a project away — out of the switcher's main list, everything about it kept
   ArchiveRestore, // bring an archived project back to where it was filed
@@ -22,6 +23,7 @@ export {
   BellDot, // watch alert / notify on completion
   Blocks, // a dependency branch (deps/) — building blocks, kept apart from the packaged plugin's Package
   BookDashed, // a Scratchpad's notes are temporary — kept only while its terminal is open; the dashed outline reads as a mode, not a warning
+  BookmarkCheck, // a review mark — the point a worktree was marked reviewed at, kept to say what's new since
   Bot, // a commit author that is a bot account (a `[bot]` name) with no picture — shape says machine where initials would say person
   Cable, // a project attachment — a resource the whole project shares (a tunnel, a test device) that one worktree holds at a time
   ChartNoAxesColumn, // frecency sort order ("Most used" — decayed access score)
@@ -51,6 +53,7 @@ export {
   Gauge, // git that could run faster on this worktree — the suggestion to route a WSL checkout's git through WSL
   GitBranch, // the branch a folder has checked out — where an agent's work is going, and what continues on another host
   GitBranchPlus, // per-project worktree setup — creating branches, not browsing them
+  GitMerge, // a merge the forge will carry out later — auto-merge armed, or the PR waiting in the merge queue
   GitMergeConflict, // a PR whose branch the forge reports as conflicting with its base — takes the CI glyph's place, since the conflict has to be resolved first
   GitPullRequest, // forge provider / code-host plugin category
   HardDriveDownload, // a backup branch (backup/) — a stored snapshot, kept apart from archiving a project
@@ -80,6 +83,7 @@ export {
   Settings2, // managing a list of things in Settings — hosts, presets — kept apart from Settings, which is project settings
   Shuffle, // a refactor branch (refactor/) — paths rearranged, kept apart from the worktree overview's Layers
   Sprout, // origin / first step (main worktree, first agent launch)
+  SquareDashedMousePointer, // the dev preview's Element Picker — pick an element on the page to hand to an agent, on its toolbar button and its plugin tile alike
   Star, // the default recipe a new worktree launches — kept apart from Pin, which means pinned to the canvas
   Tag, // a worktree's colour label — the identity a user pins to a card, kept apart from Pin, which is its position
   Telescope, // Canopy: the long view out over every agent, read off its screen and laid out by what it needs from you — binoculars read clumsy at 16px, and both trees read as the notifications bell beside it

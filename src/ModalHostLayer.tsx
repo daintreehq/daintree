@@ -23,6 +23,7 @@ import { isPanelLimitError } from "@/services/actions/definitions/panelLimitErro
 import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";
 import { StopProjectConfirmDialog } from "./components/Project/StopProjectConfirmDialog";
+import { useProjectSleepConfirmStore } from "@/store/projectSleepConfirmStore";
 import { usePilotStore } from "@/store/pilotStore";
 import { useCanopyStore } from "@/store/canopyStore";
 import { useScratchStore } from "@/store/scratchStore";
@@ -47,6 +48,7 @@ import {
   LazyProjectSwitcherPalette,
   LazyThemePalette,
   LazyResumeSessionsPalette,
+  LazyRecentDictationsPalette,
   LazyLogLevelPalette,
   LazyActionPalette,
   LazyWorktreeOverviewModal,
@@ -58,12 +60,14 @@ import {
   LazyPluginManagerView,
   LazyMcpConfirmDialog,
   LazyPluginConfirmDialog,
+  LazyLayoutApplyConfirmDialog,
   LazyPluginArchiveInstallConfirmDialog,
   LazyPluginMcpConfirmDialog,
   LazyPluginQuickPickDialog,
   LazyPluginSendToAgentDialog,
   LazyPluginInputBoxDialog,
   LazyPluginConfirmPromptDialog,
+  LazyPluginRunRecipeDialog,
   LazyPluginCapabilityConfirmDialog,
   LazyPanelDialogHost,
   LazyGitInitDialog,
@@ -76,6 +80,7 @@ import {
   LazyFileMutationConfirmDialog,
   LazyGitWorktreeOperationConfirmDialog,
   LazyGitForcePushConfirmDialog,
+  LazyProjectSleepConfirmDialog,
   LazyRecipeConflictDialog,
   LazyOnboardingFlow,
   LazyGettingStartedChecklist,
@@ -107,6 +112,8 @@ interface ModalHostLayerProps {
   closeThemePalette: () => void;
   isResumeSessionsPaletteOpen: boolean;
   shouldMountResumeSessionsPalette: boolean;
+  isRecentDictationsPaletteOpen: boolean;
+  shouldMountRecentDictationsPalette: boolean;
   isLogLevelPaletteOpen: boolean;
   shouldMountLogLevelPalette: boolean;
   closeLogLevelPalette: () => void;
@@ -151,6 +158,7 @@ interface ModalHostLayerProps {
   fileMutationResetKey: number;
   gitWorktreeOperationResetKey: number;
   gitForcePushResetKey: number;
+  projectSleepResetKey: number;
   recipeConflictResetKey: number;
   gitInitDialogOpen: boolean;
   shouldMountGitInitDialog: boolean;
@@ -205,6 +213,8 @@ export function ModalHostLayer({
   closeThemePalette,
   isResumeSessionsPaletteOpen,
   shouldMountResumeSessionsPalette,
+  isRecentDictationsPaletteOpen,
+  shouldMountRecentDictationsPalette,
   isLogLevelPaletteOpen,
   shouldMountLogLevelPalette,
   closeLogLevelPalette,
@@ -248,6 +258,7 @@ export function ModalHostLayer({
   fileMutationResetKey,
   gitWorktreeOperationResetKey,
   gitForcePushResetKey,
+  projectSleepResetKey,
   recipeConflictResetKey,
   gitInitDialogOpen,
   shouldMountGitInitDialog,
@@ -334,6 +345,11 @@ export function ModalHostLayer({
               selectNext={quickSwitcher.selectNext}
               selectItem={quickSwitcher.selectItem}
               confirmSelection={quickSwitcher.confirmSelection}
+              scopedProvider={quickSwitcher.scopedProvider}
+              keywordProvider={quickSwitcher.keywordProvider}
+              scopedStatus={quickSwitcher.scopedStatus}
+              enterScope={quickSwitcher.enterScope}
+              exitScope={quickSwitcher.exitScope}
             />
           </Suspense>
         )}
@@ -499,6 +515,7 @@ export function ModalHostLayer({
               onStopProject={(projectId) => void projectSwitcherPalette.stopProject(projectId)}
               onCloseProject={(projectId) => void projectSwitcherPalette.removeProject(projectId)}
               onSleepProject={(projectId) => void projectSwitcherPalette.sleepProject(projectId)}
+              onRestartProject={(projectId) => projectSwitcherPalette.restartProject(projectId)}
               onLocateProject={(projectId) => {
                 projectSwitcherPalette.locateProject(projectId);
               }}
@@ -600,6 +617,18 @@ export function ModalHostLayer({
 
       <ErrorBoundary
         variant="component"
+        componentName="RecentDictationsPalette"
+        resetKeys={[Number(isRecentDictationsPaletteOpen)]}
+      >
+        {shouldMountRecentDictationsPalette && (
+          <Suspense fallback={null}>
+            <LazyRecentDictationsPalette />
+          </Suspense>
+        )}
+      </ErrorBoundary>
+
+      <ErrorBoundary
+        variant="component"
         componentName="LogLevelPalette"
         resetKeys={[Number(isLogLevelPaletteOpen)]}
       >
@@ -635,6 +664,8 @@ export function ModalHostLayer({
               pinAction={actionPalette.pinAction}
               unpinAction={actionPalette.unpinAction}
               hideAction={actionPalette.hideAction}
+              argPrompt={actionPalette.argPrompt}
+              argBack={actionPalette.argBack}
             />
           </Suspense>
         )}
@@ -800,9 +831,23 @@ export function ModalHostLayer({
         </ErrorBoundary>
       )}
       {isStateLoaded && (
+        <ErrorBoundary variant="component" componentName="LayoutApplyConfirmDialog">
+          <Suspense fallback={null}>
+            <LazyLayoutApplyConfirmDialog />
+          </Suspense>
+        </ErrorBoundary>
+      )}
+      {isStateLoaded && (
         <ErrorBoundary variant="component" componentName="PluginConfirmPromptDialog">
           <Suspense fallback={null}>
             <LazyPluginConfirmPromptDialog />
+          </Suspense>
+        </ErrorBoundary>
+      )}
+      {isStateLoaded && (
+        <ErrorBoundary variant="component" componentName="PluginRunRecipeDialog">
+          <Suspense fallback={null}>
+            <LazyPluginRunRecipeDialog />
           </Suspense>
         </ErrorBoundary>
       )}
@@ -961,6 +1006,21 @@ export function ModalHostLayer({
         >
           <Suspense fallback={null}>
             <LazyGitForcePushConfirmDialog />
+          </Suspense>
+        </ErrorBoundary>
+      )}
+
+      {isStateLoaded && (
+        <ErrorBoundary
+          variant="component"
+          componentName="ProjectSleepConfirmDialog"
+          resetKeys={[projectSleepResetKey]}
+          // A failed lazy import never reaches the dialog's own boundary; settle
+          // the request the action is awaiting rather than leave it to hang.
+          onError={() => useProjectSleepConfirmStore.getState().resolveConfirmation(false)}
+        >
+          <Suspense fallback={null}>
+            <LazyProjectSleepConfirmDialog />
           </Suspense>
         </ErrorBoundary>
       )}

@@ -4,9 +4,16 @@ import { promises as fs } from "node:fs";
 import { CHANNELS } from "../channels.js";
 import { store } from "../../store.js";
 import { parseAppThemeFile } from "../../utils/appThemeImporter.js";
-import { resolveAppTheme, normalizeAccentHex } from "../../../shared/theme/index.js";
+import { normalizeAccentHex } from "../../../shared/theme/index.js";
+import { isPluginThemeId } from "../../../shared/theme/pluginThemes.js";
+import { persistColorSchemeSelection } from "../../services/appThemePluginSelection.js";
 import { typedHandle, typedHandleWithContext, typedSend } from "../utils.js";
-import { setTitleBarOverlayTheme } from "../../window/titleBarOverlay.js";
+import {
+  repaintAllWindowThemes,
+  repaintWindowTheme,
+  visibleProjectIdOf,
+} from "../../window/projectThemeChrome.js";
+import { getWindowRegistry } from "../../window/windowRef.js";
 import {
   appCustomSchemesReadSchema,
   appCustomSchemesWriteSchema,
@@ -84,11 +91,17 @@ function getAppThemeConfig(): AppThemeConfig {
  */
 export function refreshTitleBarOverlayTheme(): void {
   if (process.platform !== "win32") return;
-  const config = getAppThemeConfig();
-  const scheme = resolveAppTheme(config.colorSchemeId, config.customSchemes ?? []);
-  for (const win of BrowserWindow.getAllWindows()) {
-    if (!win.isDestroyed()) setTitleBarOverlayTheme(win, scheme.tokens);
-  }
+  // Per window: a window showing a project with its own theme keeps it (#13833).
+  repaintAllWindowThemes();
+}
+
+/**
+ * Plugin themes are chosen directly, never as a follow-system slot: a slot is
+ * applied by an OS appearance change at any moment, including before the
+ * plugin that owns the theme has loaded, and nothing persists its palette.
+ */
+function isPreferredSlotId(schemeId: unknown): schemeId is string {
+  return typeof schemeId === "string" && !!schemeId.trim() && !isPluginThemeId(schemeId.trim());
 }
 
 export function registerAppThemeHandlers(mainWindow?: BrowserWindow): () => void {
@@ -102,7 +115,9 @@ export function registerAppThemeHandlers(mainWindow?: BrowserWindow): () => void
         console.warn("Invalid app theme colorSchemeId:", schemeId);
         return;
       }
-      store.set("appTheme.colorSchemeId", schemeId.trim());
+      // Throws for a plugin theme no loaded plugin offers, so the picker
+      // restores the theme that is actually saved.
+      persistColorSchemeSelection(schemeId.trim());
       refreshTitleBarOverlayTheme();
     })
   );
@@ -201,14 +216,14 @@ export function registerAppThemeHandlers(mainWindow?: BrowserWindow): () => void
 
   handlers.push(
     typedHandle(CHANNELS.APP_THEME_SET_PREFERRED_DARK_SCHEME, async (schemeId: string) => {
-      if (typeof schemeId !== "string" || !schemeId.trim()) return;
+      if (!isPreferredSlotId(schemeId)) return;
       store.set("appTheme.preferredDarkSchemeId", schemeId.trim());
     })
   );
 
   handlers.push(
     typedHandle(CHANNELS.APP_THEME_SET_PREFERRED_LIGHT_SCHEME, async (schemeId: string) => {
-      if (typeof schemeId !== "string" || !schemeId.trim()) return;
+      if (!isPreferredSlotId(schemeId)) return;
       store.set("appTheme.preferredLightSchemeId", schemeId.trim());
     })
   );
@@ -264,14 +279,13 @@ export function registerAppThemeHandlers(mainWindow?: BrowserWindow): () => void
 
       typedSend(win, "app-theme:system-appearance-changed", { isDark, schemeId });
 
-      const customSchemes = config.customSchemes ?? [];
-      const scheme = resolveAppTheme(schemeId, customSchemes);
-      win.setBackgroundColor(scheme.tokens["surface-canvas"]);
-
-      // Hand the new tokens to the overlay owner rather than writing the native
-      // strip here: it re-tints in place when a global banner currently holds
-      // the caption band, instead of reverting it to bare canvas (#11766).
-      setTitleBarOverlayTheme(win, scheme.tokens);
+      // The overlay owner re-tints in place when a global banner currently
+      // holds the caption band, instead of reverting it to bare canvas
+      // (#11766). A project with its own theme keeps it (#13833).
+      repaintWindowTheme(
+        win,
+        visibleProjectIdOf(getWindowRegistry()?.getByWindowId(win.id)?.services.projectViewManager)
+      );
     }, 300);
   };
 

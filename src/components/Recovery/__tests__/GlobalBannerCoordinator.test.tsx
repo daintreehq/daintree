@@ -147,7 +147,14 @@ describe("GlobalBannerCoordinator", () => {
       everConnected: true,
       connection: { status: "unreachable", lastSeenAt: null, detail: null },
     });
+    vi.useFakeTimers();
     render(<GlobalBannerCoordinator />);
+    // Inside the settle window it holds the slot and shows nothing.
+    expect(screen.queryByText("studio-01 is unreachable")).toBeNull();
+    expect(screen.queryByText("Terminal service crashed")).toBeNull();
+    act(() => {
+      vi.advanceTimersByTime(30_000);
+    });
     expect(screen.getByText("studio-01 is unreachable")).toBeTruthy();
     expect(screen.queryByText("Terminal service crashed")).toBeNull();
     useHostConnectionStore.getState().reset();

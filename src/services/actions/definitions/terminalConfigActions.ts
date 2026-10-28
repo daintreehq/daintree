@@ -182,7 +182,7 @@ export function registerTerminalConfigActions(
     id: "terminalConfig.setHybridInputAutoFocus",
     title: "Set default focus target",
     description:
-      "Choose whether agent panes start with the hybrid input or the terminal focused — runtime clicks still win",
+      "Choose whether switching to an agent pane focuses its hybrid input or its terminal",
     category: "settings",
     kind: "command",
     danger: "safe",

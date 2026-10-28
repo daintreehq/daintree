@@ -140,7 +140,6 @@ vi.mock("../../services/HelpSessionService.js", () => ({
     addSessionEndedListener: () => () => {},
 
     addSessionReattachedListener: () => () => {},
-    setRunbooksHostState: () => {},
     getRunningLaneSession: () => null,
     getAssistantBackends: () => [],
   },
@@ -261,6 +260,9 @@ function gatedWorkspace(r: RemoteHarness) {
     },
     resumeProject: () => undefined,
     unregisterWindow: () => undefined,
+    isWindowAttached: (_residentId: number, projectPath: string) => loaded.has(projectPath),
+    on: () => undefined,
+    off: () => undefined,
     prewarmProject: () => undefined,
     waitForReady: async () => undefined,
     isWorktreeOwnedByProject: async () => null,
@@ -529,6 +531,9 @@ describe("host handlers with no window here, over the real link", () => {
         { requestId: string; actionId: string; args: unknown },
       ];
       expect(request).toMatchObject({ actionId: "worktree.refresh", args: { worktreeId: "wt-1" } });
+      // A host's plugin id carries no host provenance here, so the Shell's own
+      // audit log never files a record under it (#13759).
+      expect(request).not.toHaveProperty("pluginId");
       r.send(CHANNELS.PLUGIN_DISPATCH_ACTION_RESPONSE, view, {
         requestId: request.requestId,
         result: { ok: true, result: "refreshed" },

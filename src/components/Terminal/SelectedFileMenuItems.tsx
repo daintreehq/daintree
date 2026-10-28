@@ -4,6 +4,7 @@ import { ContextMenuItem } from "@/components/ui/context-menu";
 import { useMenuActionSource } from "@/components/ui/menu-source";
 import { actionService } from "@/services/ActionService";
 import { reportFileLinkFailure } from "@/services/terminal/FileLinksAddon";
+import { grantClickedHostFile } from "@/services/terminal/clickedHostFile";
 
 const ICON_CLASS = "w-3.5 h-3.5 mr-2 shrink-0";
 
@@ -29,8 +30,10 @@ export function SelectedFileMenuItems({ absolutePath, reveal = true }: SelectedF
     <>
       <ContextMenuItem
         onSelect={() => {
-          void actionService
-            .dispatch("file.openPanel", { path: absolutePath }, { source })
+          void grantClickedHostFile(absolutePath)
+            .then(() =>
+              actionService.dispatch("file.openPanel", { path: absolutePath }, { source })
+            )
             .then((result) => {
               if (!result.ok) {
                 reportFileLinkFailure(

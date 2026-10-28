@@ -38,6 +38,8 @@ const TOOLTIP_NAMES = [
   "diffChip",
   "terminalChip",
   "selectionChip",
+  "contextChip",
+  "forgeReference",
 ];
 
 describe("useCompartmentDriver", () => {
@@ -83,6 +85,8 @@ describe("useCompartmentDriver", () => {
           diffChipTooltipCompartmentRef: c.diffChip!.ref as any,
           terminalChipTooltipCompartmentRef: c.terminalChip!.ref as any,
           selectionChipTooltipCompartmentRef: c.selectionChip!.ref as any,
+          contextChipTooltipCompartmentRef: c.contextChip!.ref,
+          forgeReferenceTooltipCompartmentRef: c.forgeReference!.ref,
           ...props,
         }),
       { initialProps: props }
@@ -254,8 +258,11 @@ function mount(initial: Partial<LiveProps> = {}) {
       viewRef = editorViewRef;
       const contextUpdateRef = useRef<(u: ViewUpdate) => void>(() => {});
       const keymapHandlersRef = useRef(null);
+      const draftKeyRef = useRef(terminalId);
       useEditorFactory({
         terminalId,
+        voiceId: terminalId,
+        draftKeyRef,
         editorHostRef,
         editorViewRef,
         value: "",

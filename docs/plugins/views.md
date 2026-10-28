@@ -1,6 +1,6 @@
 # Views: what you get in the DOM
 
-A plugin view is a React component the renderer mounts inside a panel, or in the plugin's settings. This page is what that component can rely on, what it can't, and how to make it look like it belongs. It applies equally to a project plugin's hand-written `dist/panel.js` and to a bundled `@daintreehq/plugin-vite` view; the differences are called out where they exist. The short version: draw with [the kit](#host-ui-components), style the rest with [Daintree's tokens](#styling), get data with [the SDK's hooks](#the-sdks-react-hooks), and read [Performance](#performance) before you render a list. The manifest side is [Contribution points → Views](./contribution-points.md#views--shipped).
+A plugin view is a React component the renderer mounts inside a panel, on a project surface, or in the plugin's settings. This page is what that component can rely on, what it can't, and how to make it look like it belongs. It applies equally to a project plugin's hand-written `dist/panel.js` and to a bundled `@daintreehq/plugin-vite` view; the differences are called out where they exist. The short version: draw with [the kit](#host-ui-components), style the rest with [Daintree's tokens](#styling), get data with [the SDK's hooks](#the-sdks-react-hooks), and read [Performance](#performance) before you render a list. The manifest side is [Contribution points → Views](./contribution-points.md#views--shipped).
 
 ## Where you render
 
@@ -8,7 +8,9 @@ Views render **inline** in Daintree's React tree, not in an iframe. Same documen
 
 The host mounts your default export under an error boundary and a `Suspense` boundary, inside a container that is `flex flex-col flex-1 min-h-0 w-full`. Make your root element fill it: `height: 100%` with `display: flex; flex-direction: column; min-height: 0` is the shape that scrolls correctly, because `min-height: 0` is what lets a flex child shrink below its content and hand the overflow to an inner scroller. A root that is only `height: 100%` will push the panel's own scrollbar around instead of owning it. The kit's [`PaneLayout`](./ui-kit.md#page-structure) is that shape already, with the header, toolbar and status strip at the host panes' own heights and the body as the one scroller.
 
-You receive [`PanelViewProps`](./contribution-points.md#views--shipped): `panelId`, `pluginId`, `worktreeId`, `disposeSignal`, `panelRemovedSignal`, `initialArgs`, `stateVersion`, `persistState`, `requestReload`, `setHasUnsavedChanges`, `setToolbarItemState`, `setMenuItems`, `runningActions`, `styleRootAttributes`, and on a settings view `settingsContext`. Two of these are misread in every first plugin. `pluginId` is your host-side id, which for a project plugin is the instance key, not your manifest name; pass it through to the bridge as given. `disposeSignal` aborts on every unmount, including the temporary ones (a sibling pane maximised, a dock tab left), so it is for cancelling fetches, never for deciding something is finished. `stateVersion` says which shape `initialArgs` holds, and is only meaningful once you declare `stateVersion` on the panel contribution — see [panel state versioning](./contribution-points.md#panels--shipped).
+You receive [`PanelViewProps`](./contribution-points.md#views--shipped): `panelId`, `pluginId`, `worktreeId`, `disposeSignal`, `panelRemovedSignal`, `initialArgs`, `openRequest`, `stateVersion`, `persistState`, `requestReload`, `setHasUnsavedChanges`, `setToolbarItemState`, `setMenuItems`, `setTitle`, `runningActions`, `styleRootAttributes`, `hostContext`, and on a settings view `settingsContext`. Two of these are misread in every first plugin. `pluginId` is your host-side id, which for a project plugin is the instance key, not your manifest name; pass it through to the bridge as given. `disposeSignal` aborts on every unmount, including the temporary ones (a sibling pane maximised, a dock tab left), so it is for cancelling fetches, never for deciding something is finished. `stateVersion` says which shape `initialArgs` holds, and is only meaningful once you declare `stateVersion` on the panel contribution — see [panel state versioning](./contribution-points.md#panels--shipped).
+
+**Where you are, and where you stop.** `hostContext.kind` says where the host mounted you: `"panel"` (the grid, the dock or a dialog), `"surface"` (a project surface showing one of your panels in place of the host's own content), `"settings"` (your settings section), `"sidebar"` (a [sidebar view](#a-sidebar-view)) or `"popover"` (the popover a [toolbar button](./contribution-points.md#toolbar-buttons--shipped) opens, where `hostContext.close()` dismisses it). One view can be mounted in more than one of these, so lay out for each; more hosts are coming, so give a kind you don't recognise your panel layout rather than switching on the list exhaustively. Every host gives the same contract: these props, the error boundary with Try again, lazy loading and your style root. Your view owns its own box and nothing outside it. Reading or styling the host's DOM, depending on an ancestor's layout or class names, or reaching past your box with global CSS is unsupported and can break on any update. Outside a panel the host contains your layout (`contain: layout paint`, overflow clipped, its own stacking context), so a `position: fixed` descendant stays inside your box, but a modal `<dialog>`, a `popover` element or a portal into `document.body` leaves that containment: use the kit's `Dialog`, `Popover` and menus, which the host draws.
 
 A render error shows the host's diagnostics pane with Try again, Close panel, Copy diagnostics and View logs. Try again mounts a new attempt with the module already loaded; it imports the module afresh only when loading it is what failed. An error from a [registration only a window reload can replace](#global-registration-survives-reload) offers Reload window in place of Try again. The rest of Daintree keeps working.
 
@@ -16,7 +18,7 @@ A render error shows the host's diagnostics pane with Try again, Close panel, Co
 
 `requestReload()` asks the host to throw away the view you are running and mount a new one for the same panel. Use it when a view has built up more than it can shed — a long session of rendering, caches that only grow — and starting over is simpler than cleaning up in place. Your plugin's backend keeps running throughout.
 
-What a reload is, plainly: a new React attempt using the module that is already loaded. The current attempt's `disposeSignal` aborts and its React cleanup runs; the new attempt gets a fresh `disposeSignal` and fresh DOM, and `initialArgs` holds the latest state the host accepted through `persistState`, with its `stateVersion`. `panelId`, `panelRemovedSignal` (the same object, still open), the panel's place in the layout and the backend all carry over. The module is reused, not evaluated again.
+What a reload is, plainly: a new React attempt using the module that is already loaded. The current attempt's `disposeSignal` aborts and its React cleanup runs; the new attempt gets a fresh `disposeSignal` and fresh DOM, and `initialArgs` holds the latest state the host accepted through `persistState`, with its `stateVersion`. An `openRequest` the outgoing attempt committed with is not handed over again; one it never committed with is. `panelId`, `panelRemovedSignal` (the same object, still open), the panel's place in the layout and the backend all carry over. The module is reused, not evaluated again.
 
 A backend restart — a crash respawn, Restart plugin or [`host.restartWorker`](./host-api.md#restartworker) — replaces the view the same way once the new backend is ready, and is not charged to the reload budget below.
 
@@ -24,7 +26,48 @@ What a reload is not: module-scope variables, anything registered document-wide 
 
 It is a request. The host may refuse it, nothing tells you whether or when the new attempt mounted, and calls in the same tick coalesce into one reload. The callback belongs to the attempt that received it, so one you held on to after your view was torn down does nothing. The host polices loops: a fourth reload within 30 seconds of three accepted ones stops the view and shows the user an error with a Reload panel action, and automatic reloads stay off until the user uses it. Plugin panels get `requestReload` whether they sit in the grid, the dock or a dialog; a project surface does not, so call it optionally. Your backend can ask for the same thing with [`host.reloadPanel(panelId)`](./host-api.md#reloadpanel), which draws on the same budget.
 
-The user can reload the panel too, from Reload panel in its menus and dialog header, and an agent can through the host's tools. That reload is the same new attempt, it is never rationed, and it is what lifts a stopped view. It does not ask first, because what you persisted comes back. If your view holds work it has not persisted — an unsaved draft, a half-filled form — call `setHasUnsavedChanges(true)` while it does and `setHasUnsavedChanges(false)` once it is saved or dropped; while it is set, the user is asked to confirm before their reload or an agent's discards the view (the agent's call fails and leaves the confirmation with the user). Your own `requestReload` and your backend's `host.reloadPanel` are never held up by it. Like `requestReload`, the setter belongs to its attempt, a new attempt starts with nothing unsaved, and it is absent where there is no reload to guard.
+The user can reload the panel too, from Reload panel in its menus and dialog header, and an agent can through the host's tools. That reload is the same new attempt, it is never rationed, and it is what lifts a stopped view. It does not ask first, because what you persisted comes back. If your view holds work it has not persisted — an unsaved draft, a half-filled form — call `setHasUnsavedChanges(true)` while it does and `setHasUnsavedChanges(false)` once it is saved or dropped; while it is set, the user is asked to confirm before their reload or an agent's discards the view (the agent's call fails and leaves the confirmation with the user), and before closing the panel from its close button or menu discards your work. The host asks and the user answers, so your view cannot veto a close; bulk closes and shutdown skip the question. Your own `requestReload` and your backend's `host.reloadPanel` are never held up by it. Like `requestReload`, the setter belongs to its attempt and a new attempt starts with nothing unsaved. It is offered on every host but a file editor; outside the grid there is no close or reload to guard, and it holds Sleep and eviction instead (see [State outside the grid](#state-outside-the-grid)).
+
+## State outside the grid
+
+A panel keeps its `persistState` bag on its panel record. A view mounted anywhere else — a project surface on Home, a sidebar view, a settings section, a toolbar popover — has no record, so the host keeps its bag in a durable view-state store instead (#14095). The contract is the same one a panel gets, so a view written for one works in the other.
+
+|  | Panel | Home surface, sidebar view, settings section, toolbar popover |
+| --- | --- | --- |
+| Identity | The panel id | This window's host and project, your plugin instance, the host kind and the host's own name for the mount. A user-scope settings section follows the user instead of the project; a project-scope one belongs to its project. |
+| Lifetime | Until the panel closes | Until the user clears app data, or the bag is one of the least recently written beyond 200 across every project and plugin |
+| Survives | Unmount, reload, restart, an evicted or slept renderer | The same: leaving Home for the grid, switching sidebar views, closing Settings or the popover, a plugin reload, an evicted, slept or crashed renderer, a restart |
+| Limit | 64KB per bag, JSON | 64KB per bag, JSON |
+| Written | Accepted, then saved with the layout (debounced) | Committed when `persistState` returns, with no debounce, so it survives the renderer going away; `false` if storage refused it after making room |
+| Versioning | `stateVersion` on the panel contribution | A surface or popover showing a panel kind uses that kind's `stateVersion`, and a bag a newer build wrote is refused with the same error a panel shows. A sidebar or settings view has none to declare and gets no `stateVersion`, so migrate inside the bag if its shape changes |
+
+Two windows showing the same project share a bag; the last write to a key wins. The bag is plaintext and only ever holds what you hand `persistState`. The host never captures a form, a settings value or anything your worker sends, and a secret the user types belongs in your plugin's secret settings, never here.
+
+**Unsaved work.** `setHasUnsavedChanges(true)` says the view holds work its `persistState` bag would not bring back. While any view in a project's renderer says so, automatic Sleep leaves the project alone and cache eviction skips its renderer. Under memory pressure eviction takes it anyway, last of all, and the unsaved work is lost; so is it in a crash. Whatever you persisted comes back either way. So the dependable form keeps its draft in `persistState` (or `usePersistentViewState`) as the user types and clears the flag, keeping the flag for work that genuinely can't be persisted. The flag belongs to the attempt that set it: a setter held past a reload or an unmount can't clear the flag a newer attempt raised.
+
+## Application navigation
+
+A project application that declares [`application.navigation`](./manifest.md#applicationnavigation) gets one shared location for it (#14108). Every view of the application in the project — its sidebar view, its Home, its panels, a project-scope settings section or popover — receives the same `navigation` prop, so selection made in one is selection in all. Views of any other plugin, and a user-scope settings section, get none.
+
+```tsx
+export default function Accounts({ navigation }: PanelViewProps) {
+  if (!navigation) return <AccountList />;
+  const selected =
+    navigation.location.sectionId === "account" ? navigation.location.params.accountId : undefined;
+  return (
+    <AccountList
+      selected={selected}
+      onSelect={(accountId) => navigation.navigate({ sectionId: "account", params: { accountId } })}
+    />
+  );
+}
+```
+
+`location` is live: when any view of the application moves it, every view re-renders with the new object, without remounting, so it keeps its own state, `initialArgs` and `disposeSignal`. Key effects on `location`; it is a new object only when the location changes. `back()`, `forward()`, `canGoBack` and `canGoForward` walk one history per project, capped at 30 entries.
+
+`navigate` returns a result and never throws. It refuses, and moves nothing, for a section or parameter the manifest doesn't declare, a value outside its declared type or bounds, a call held past the view attempt that received it (`stale`), and while any view of the application reports `setHasUnsavedChanges(true)` (`unsaved`) — a pending form is never replaced under the user. Persist the draft or drop it, clear the flag, and navigate again. By default a move also brings the application's destination forward (its own Home, or the grid), and that switch waits for unsaved work too; fleet scope keeps drawing over both until the user leaves it. Pass `reveal: false` to change only the selection, and `replace: true` to swap the current history entry instead of adding one.
+
+The location is restored per project after a Home/Grid switch, a remount, an evicted renderer or a restart. Only parameters declared `persist` are written to disk; the rest last as long as the project's renderer, so they survive a remount but not an evicted or reloaded renderer, and an entry that loses a required one restores as the default section. A saved location that no longer resolves — a removed section, a parameter that no longer validates, a raised `navigation.version`, another plugin owning the application — restores as the default section, and while the application isn't in force the views get no `navigation` and the saved location is left as it was.
 
 ## A settings section
 
@@ -34,19 +77,36 @@ A view with `location: "settings"` is your plugin's custom settings section, for
 { "id": "connection", "componentPath": "dist/settings.js", "location": "settings" }
 ```
 
-The 0.1.0 CLI on npm accepts only `location: "panel"` views, so its `validate` and `package` refuse this entry: Not in the 0.1.0 release on npm; it ships in the next one.
+The 0.1.0 CLI on npm accepts only `location: "panel"` views, so its `validate` and `package` refuse this entry: Not in the 0.1.0 release on npm; it ships in 0.2.0.
 
 The host mounts it in your settings home, below the generated fields. The section heading is the home's own, and the host draws one `SettingsGroup` around your view, so the view renders **rows** and nothing else: kit `SettingsRow`s under one root, with no heading, no card, and no `SettingsSection` or `SettingsGroup` of its own. There is no Save either — apply each change as it is made, like every other settings row — so a `SettingsActions` Save row does not belong in a `location: "settings"` view.
 
 **Which home, which scope.** It receives `settingsContext: { scope, projectId }`. An installed plugin's section mounts twice — `{ scope: "user", projectId: null }` in the plugin manager, `{ scope: "project", projectId }` in Project settings — so render the rows for the scope you're given; each mount has its own `panelId`. A project plugin's section mounts only in Project settings, with `scope: "project"`.
 
-**What it doesn't get.** There is no panel record behind it, so `initialArgs`, `persistState`, `stateVersion`, `worktreeId`, `requestReload`, `setHasUnsavedChanges`, `setToolbarItemState` and `setMenuItems` are absent. `pluginId`, `panelId`, `disposeSignal`, `runningActions` and `styleRootAttributes` behave as they do in a panel. `panelRemovedSignal` is one signal shared by both homes: it aborts when the plugin stops, is muted or reloads, never when Settings closes.
+**What it doesn't get.** There is no panel record behind it, so `openRequest`, `stateVersion`, `worktreeId`, `requestReload`, `setToolbarItemState`, `setMenuItems` and `setTitle` are absent. `persistState`, `initialArgs` and `setHasUnsavedChanges` work through the durable view-state store, one bag per home (see [State outside the grid](#state-outside-the-grid)). `pluginId`, `panelId`, `disposeSignal`, `runningActions` and `styleRootAttributes` behave as they do in a panel. `panelRemovedSignal` is one signal shared by both homes: it aborts when the plugin stops, is muted, reloads or is hidden in the project, never when Settings closes. `hostContext` is `{ kind: "settings" }`.
 
 **Containment.** The surface is contained like a project surface (`contain: layout paint`, overflow clipped, its own stacking context), so a `position: fixed` descendant stays inside it; portal anything that has to float with the kit's `Portal`, which marks its container as your style root.
 
-**Lifecycle.** Mounting the section activates a loaded plugin that hasn't activated yet, as opening a panel does; it never starts a stopped one. While the plugin is disabled or stopped, the section shows as a single row saying it's available once the plugin runs. When the plugin stops, is muted or reloads, the section is unmounted and its `disposeSignal` and `panelRemovedSignal` abort. After a reload an open settings page shows "Reloading…" until the new module is being served, then mounts it — it never runs the retired one. A render error shows the same diagnostics pane with Try again that a panel gets.
+**Lifecycle.** Mounting the section activates a loaded plugin that hasn't activated yet, as opening a panel does; it never starts a stopped one. While the plugin is disabled or stopped, the section shows as a single row saying it's available once the plugin runs. An installed plugin's section is served only to projects that show the plugin, like its panels; in a project that hides it, the section is a row saying so, and the generated fields above it still work. When the plugin stops, is muted, reloads or is hidden, the section is unmounted and its `disposeSignal` and `panelRemovedSignal` abort. After a reload an open settings page swaps onto the new module as soon as it is served — it never runs the retired one. A render error shows the same diagnostics pane with Try again that a panel gets.
 
 **Fields it owns.** Mark a declared setting `editor: "view"` when this section is where it is edited — a credential behind a sign-in button, a table stored as `json`. The generated form then leaves it out, and a deep link to that key (`host.settings.open(key)`, the setup strip's **Open plugin settings**) lands on your section instead of a field. The setting keeps everything else a declaration gives it: `required` still drives the setup strip, and `host.settings.get` still reads it. A plugin that declares no settings view gets the field in the generated form anyway, so the value is never left uneditable.
+
+**Landing on a key you own.** A deep link to one of those keys is handed to your view as `settingsContext.focus: { key, nonce, acknowledge }` while the host brings the section into view. Focus that setting's control and call `acknowledge(true)`; call `acknowledge(false)` when you can't show it right now. If you answer `false`, or don't answer within about a second, the host lands on the whole section instead, so a view that ignores `focus` still works. Only the first answer for a `nonce` counts, and `focus` is withdrawn once the request is settled. The `key` is always one of your declared `editor: "view"` settings that lives in this home.
+
+**Search and pages.** Settings search finds your section by the plugin's name and by the view's optional `title` and `description`; without a `title` it is listed as "More settings". A section that has grown past one screen can declare `pages`, each `{ id, title, description? }` (up to 20, ids unique):
+
+```json
+{
+  "id": "connection",
+  "componentPath": "dist/settings.js",
+  "location": "settings",
+  "title": "Board sync",
+  "description": "Which board each project syncs to",
+  "pages": [{ "id": "columns", "title": "Column mapping", "description": "Statuses to columns" }]
+}
+```
+
+The host lists the pages under your section's root as rows with an **Open** button, and each page is a search result of its own. An open page keeps the same mount: the host draws the page's title and a **Back** button, and your view reads which page is open from `settingsContext.page` (`null` on the root) and renders that page's rows. Back returns focus to the page's Open button. Pages are navigation only — the values on them are still your declared settings, stored and scoped as declared. `title`, `description` and `pages` are accepted only on a `location: "settings"` view (`view_settings_field_misplaced`).
 
 ```jsx
 import { Button, SettingsRow } from "@daintreehq/plugin-ui";
@@ -91,6 +151,22 @@ const { connected } = await window.electron.plugin.invoke(pluginId, "connection"
 ```
 
 Store what the section edits with your worker: credentials as a declared `type: "secret"` setting (`host.settings.set`), everything else in `host.storage` or a `host.db` database (declare it `location: "local"` to keep it on this machine and out of the repository). Never put a credential in `host.storage` or a database. In the section, a kit `SecretInput` with `stored` shows that one is saved, with Replace (and Clear, when you pass `onClear`), without the view ever holding it.
+
+## A sidebar view
+
+A view with `location: "sidebar"` sits in the sidebar, chosen from the switcher in its header beside the worktree list. Give it a `name` for the switcher, and optionally an `iconId`, a `priority` and a `when` (see [Views → A sidebar view](./contribution-points.md#views--shipped)):
+
+```json
+{
+  "id": "board",
+  "componentPath": "dist/board.js",
+  "location": "sidebar",
+  "name": "Board",
+  "iconId": "list"
+}
+```
+
+The host mounts it in the whole region below the sidebar's header, with `hostContext` `{ kind: "sidebar" }`. The header holds only the switcher, so put your controls in your own view. The sidebar can be as narrow as 200px: lay out for that width, and let long text truncate rather than push the box wider. Like a settings view there is no panel record, so `openRequest`, `stateVersion`, `worktreeId`, `requestReload`, `setToolbarItemState` and `setMenuItems` are absent, and `persistState`, `initialArgs` and `setHasUnsavedChanges` work through the durable view-state store (see [State outside the grid](#state-outside-the-grid)). The view unmounts when the user switches to another sidebar view, so `disposeSignal` aborts then; `panelRemovedSignal` aborts only when the plugin stops, is muted, reloads or is hidden in the project. A right-click inside your view is yours: the sidebar's own background menu never opens over it. If your view throws, its error pane offers **Show worktrees** beside **Try again**.
 
 ## Styling
 
@@ -297,13 +373,13 @@ The module has to run in both places: relative imports with their file extension
 | `loadDocumentPackage` | Loads a library the host document keeps across reloads. See [Document packages](./document-packages.md). |
 | `HostDisconnectedError`, `OutcomeUnknownError` | What a host call fails with when a remote window's link drops, before or after the call was sent. See [Host API → `useHostChannel`](./host-api.md#usehostchannel--requestresponse-the-pull-half). |
 
-A zero-build view gets every hook here from the host. A bundled view gets them from the SDK it installs, and 0.1.0 on npm has only the first row and `loadDocumentPackage`; for everything else in this table: Not in the 0.1.0 release on npm; it ships in the next one.
+A zero-build view gets every hook here from the host. A bundled view gets them from the SDK it installs, and 0.1.0 on npm has only the first row and `loadDocumentPackage`; for everything else in this table: Not in the 0.1.0 release on npm; it ships in 0.2.0.
 
-A bundled view can also import `setAgentContextDragData` from the root `@daintreehq/plugin-sdk` entry ([Handing work to an agent by drag](#handing-work-to-an-agent-by-drag)); a zero-build view writes the same JSON by hand. The helper is not in the 0.1.0 release on npm; it ships in the next one. `@daintreehq/plugin-ui` is never bundled: the preset leaves it external and the host serves it. The 0.1.0 preset on npm externalizes React alone, so with it a view names `@daintreehq/plugin-ui` in `daintreePlugin({ externals: [...] })`.
+A bundled view can also import `setAgentContextDragData` from the root `@daintreehq/plugin-sdk` entry ([Handing work to an agent by drag](#handing-work-to-an-agent-by-drag)); a zero-build view writes the same JSON by hand. The helper is not in the 0.1.0 release on npm; it ships in 0.2.0. `@daintreehq/plugin-ui` is never bundled: the preset leaves it external and the host serves it. The 0.1.0 preset on npm externalizes React alone, so with it a view names `@daintreehq/plugin-ui` in `daintreePlugin({ externals: [...] })`.
 
 There are no hooks for worktrees, settings or commands. A view reads its own worktree from the `worktreeId` prop and gets everything else from the worker.
 
-**Types.** A scaffolded plugin's `tsconfig.json` already lists `"types": ["@daintreehq/plugin-sdk/view-globals", "@daintreehq/plugin-sdk/plugin-ui"]`. The first declares `window.electron.plugin` (`invoke`, `on`, `onPanel` — and nothing else on `window.electron`, on purpose); the second declares the kit. Without them a view that calls the bridge fails `tsc` with `Property 'electron' does not exist on type 'Window'` even though Vite builds it. Add both to a hand-made tsconfig. The two type entries: Not in the 0.1.0 release on npm; it ships in the next one.
+**Types.** A scaffolded plugin's `tsconfig.json` already lists `"types": ["@daintreehq/plugin-sdk/view-globals", "@daintreehq/plugin-sdk/plugin-ui"]`. The first declares `window.electron.plugin` (`invoke`, `on`, `onPanel` — and nothing else on `window.electron`, on purpose); the second declares the kit. Without them a view that calls the bridge fails `tsc` with `Property 'electron' does not exist on type 'Window'` even though Vite builds it. Add both to a hand-made tsconfig. The two type entries: Not in the 0.1.0 release on npm; it ships in 0.2.0.
 
 ## Host UI components
 
@@ -385,6 +461,7 @@ export default function Notes({ pluginId, disposeSignal }) {
 | Editors | `CodeEditor` (Daintree's CodeMirror editor, with the file viewer's theme and find bar), `DiffView` (two texts or a patch, unified or split, with your own hunk actions; `revertHunk` undoes one), `MarkdownEditor` (a comment or notes field with a toolbar and Write and Preview) |
 | Panes | `MasterDetail` (a list and its record, one pane when narrow), `SplitGroup` (three or more resizable, collapsible panes), `Inspector` with `InspectorSection` and `PropertyRow` (a compact property panel), `Drawer` and `DrawerToggle` (a panel that slides in within the pane), `GroupedVirtualList` (sticky group headers with counts), `BulkActionBar`, `LoadMoreFooter`, `TaskList` (a queue of jobs), `RefreshOverlay` and `StaleIndicator` (refreshing and old data) |
 | Workflows and agent work | `AttachmentChip` and `AttachmentList`, `EntityChip` (a reference to one of your records, deleted and no-access included), `RepeaterField` (structured items edited in place, keyed), `FormErrorSummary` and `UnsavedChangesBar`, `ConnectionCard` (an outside service and its state), `OperationStatus` (queued through partial and unknown), `ToolCallCard`, `StructuredDiff` and `SuggestedValue` (proposed changes, reviewed before they apply), `SourceCitation` and `SourceList`, `DecisionRequest` (a question a run is waiting on) |
+| Filters and saved views | `FilterBuilder` (field, comparison and value rows over a schema you declare, producing a plain JSON filter), `SavedViews` (named filter, sort and column choices in a compact menu); helpers `readFilter` (refuses an incomplete or out-of-schema filter) and `matchesFilter` (runs one over a record) |
 | Git and forge | `WorktreePicker`, `WorktreeBadge` and `BranchBadge` (take `host.getWorktrees()` snapshots as they come), `FileIcon`, `FileLink` (opens in the file viewer at a line), `GitStatusBadge` (the change list's M/A/D/R/?/! letters), `CommitRow` and `CommitList`, `IssueRow`, `PullRequestRow` and `ForgeStateBadge` (one forge-neutral look for any provider), `ChecksList` (CI checks by workflow), `DevServerStatus` and `PortLink` |
 | Drag and drop | `SortableList` (a list reordered by pointer or keyboard), `Kanban` (columns of cards moved between and within columns, with counts and WIP limits), and `DragDropProvider` with `useDraggable` and `useDroppable` for anything else |
 | States and status | `PaneState` (a whole pane's `loading`, `empty` or `error`), `EmptyState`, `Callout` (an inline message; `severity="error"` with a Retry `action` is the error banner, `variant="strip"` the pane-wide band), `Badge`, `Spinner`, `SpinningIcon`, `ProgressBar`, `Skeleton`, `SkeletonBone`, `SkeletonText`, `SkeletonHint`, `SeverityIcon` |
@@ -441,7 +518,7 @@ DOM styled with token classes follows a theme switch on its own. Code that paint
 
 ### Types
 
-For TypeScript, `@daintreehq/plugin-sdk` ships the kit's declaration: `"types": ["@daintreehq/plugin-sdk/plugin-ui"]` in `compilerOptions` (a scaffolded plugin already has it), and every component's props type comes with it (`ButtonProps`, `DataTableProps`, …). The `plugin-ui` type entry: Not in the 0.1.0 release on npm; it ships in the next one.
+For TypeScript, `@daintreehq/plugin-sdk` ships the kit's declaration: `"types": ["@daintreehq/plugin-sdk/plugin-ui"]` in `compilerOptions` (a scaffolded plugin already has it), and every component's props type comes with it (`ButtonProps`, `DataTableProps`, …). The `plugin-ui` type entry: Not in the 0.1.0 release on npm; it ships in 0.2.0.
 
 ### `Markdown`
 
@@ -525,6 +602,14 @@ import { setAgentContextDragData } from "@daintreehq/plugin-sdk";
 
 onDragStart={(event) => setAgentContextDragData(event.dataTransfer, { v: 1, title, text })}
 ```
+
+When the item lives in one of the plugin's [context providers](./contribution-points.md#context-providers--shipped), drag a reference instead of a copy. The drop leaves the same `@{prefix}:{id}` chip the composer's `@` menu would, and the agent gets the item as it reads when the user sends, not as it was when it was dragged:
+
+```js
+createElement(ContextDragSource, { reference: { prefix: "rec", id: card.id, label: card.title } });
+```
+
+By hand, the payload is `{ v: 2, reference: { prefix, id, label? } }` under the same type, with the label (or `@{prefix}:{id}`) as `text/plain`. The drop is refused when no provider in that project holds the prefix.
 
 Kit drags (`SortableList`, `Kanban`, `DragDropProvider`) never carry this payload: they move with pointer events and stay inside the view, so a card on a kit board is reordered, not handed off. To offer both, keep the handoff on a separate element inside the card — a `ContextDragSource` chip, or your own element that sets `draggable` and the payload — and offer **Send to agent…** beside it for the keyboard.
 
@@ -638,7 +723,7 @@ Daintree measures every plugin as it runs and shows it in two places:
 
 The budgets: activation 500 ms, view load 300 ms, first paint 500 ms, commit p95 16 ms, invoke p95 250 ms, 60 pushes and 1 MiB per second sustained, worker memory 256 MiB. They are observations for this session, not a verdict: a plugin that was active during a slow frame didn't necessarily cause it, invokes that waited on a consent prompt are left out of the latency, and Daintree never slows or stops a plugin for going over a budget. Use them to find what to look at, then profile it in DevTools.
 
-Before shipping, run **`npx daintree-plugin lint`** in the plugin folder (the command is not in the 0.1.0 release on npm; it ships in the next one). It reads your view and worker source and flags the patterns above — interval polling in a view, whole-state pushes, a render per event, a subscription never disposed, a bundled copy of React (an error) — and the consistency ones: stock palette colours (an error), `dark:`, raw shadows, radii and text sizes, a hand-rolled button, form control, spinner, badge or icon, a native dialog, a container query on its own container, and classes that compile to nothing. `--strict` fails on warnings too; `daintree-plugin doctor` runs it as part of its checks.
+Before shipping, run **`npx daintree-plugin lint`** in the plugin folder (the command is not in the 0.1.0 release on npm; it ships in 0.2.0). It reads your view and worker source and flags the patterns above — interval polling in a view, whole-state pushes, a render per event, a subscription never disposed, a bundled copy of React (an error) — and the consistency ones: stock palette colours (an error), `dark:`, raw shadows, radii and text sizes, a hand-rolled button, form control, spinner, badge or icon, a native dialog, a container query on its own container, and classes that compile to nothing. `--strict` fails on warnings too; `daintree-plugin doctor` runs it as part of its checks.
 
 ## When an agent captures your panel
 
@@ -649,7 +734,9 @@ An agent can call the `plugin.capturePanel` MCP tool (`full` tier) with a panel'
 
 ## Media and binary files
 
-`host.fs.readFile` returns UTF-8 text and nothing else. For an image, an audio file or anything binary, don't route the bytes through the worker at all: the renderer reads the file itself over Daintree's file protocols, as the file viewer does. Both take the same query — an absolute `path` and an absolute `root` — and realpath-contain `path` under `root`, answering 404 for anything outside it; the project root is the natural `root` for a project plugin.
+`host.fs.readFile` returns UTF-8 text and nothing else. For audio, video or a large file, use [artifacts](./host-api.md#artifacts--large-files-the-host-holds-and-streams), the supported route: the worker calls `host.artifacts.import({ path })` (`artifact:store`, plus the fs read capability for the path's root), returns the metadata-only `PluginArtifact` to the view over a channel, and the view plays it with the kit's [`MediaPlayer`](./ui-kit.md#media) or previews it with `MediaThumbnail`, which mint their own leased sources and seek by byte range. Nothing is buffered into the view, and `plugins/sample-project/acme.tour` does exactly this.
+
+For a small image or a quick in-document preview, the renderer can also read the file itself over Daintree's file protocols, as the file viewer does. Both take the same query — an absolute `path` and an absolute `root` — and realpath-contain `path` under `root`, answering 404 for anything outside it; the project root is the natural `root` for a project plugin.
 
 **Audio and video: point the element at `daintree-media://`.** It is the scheme Daintree's own audio and video previews play from: media only (a file that isn't audio or video is a 404), served in byte ranges, so the element streams and seeks rather than downloading the whole file first.
 
@@ -661,7 +748,7 @@ createElement("video", { src, controls: true });
 
 The scheme has no `fetch()` surface, only element loads, so a failure shows up as the element's `error` event. To check the file first — that it exists, or its size — send a `HEAD` to the same `path` and `root` on `daintree-file://load?…`, which answers with its `Content-Length` without reading it; the file viewer does exactly that before it mounts a player. A file rewritten in place needs a new URL to play its new bytes, since the element keeps what it has buffered; add a query parameter of your own (`&v=2`), which both schemes ignore.
 
-**Any other binary: fetch from `daintree-file://` into a blob.**
+**A small binary you need as bytes: fetch from `daintree-file://` into a blob.** This buffers the whole file in the view, so keep it to small files; anything large belongs in an artifact.
 
 ```js
 const url = `daintree-file://load?path=${encodeURIComponent(absPath)}&root=${encodeURIComponent(projectRoot)}`;
@@ -677,28 +764,31 @@ An `<img>` can take the `daintree-file://` URL as its `src` directly. Both schem
 
 Switching projects does not unmount anything: the outgoing project's `WebContentsView` is detached and marked `setVisible(false)`, its renderer keeps running, and your view stays mounted with its React state intact. Neither of those operations changes page visibility, because Chromium tracks that at the `BrowserWindow` level — so a backgrounded project view goes on reporting whatever its window reports, `document.visibilityState === "visible"` while that window is on screen, and its `requestAnimationFrame` callbacks can keep firing at the full rate. Every gate written as `document.visibilityState !== "visible"` is dead code in a project the user has switched away from, which is how one backgrounded project ended up at 4.5% CPU and 3300 idle wakeups a second (#11212). `document` tells you whether the window is on screen, never whether your project is the one being shown.
 
-The signal that does answer it is main's explicit lifecycle broadcast, which exists precisely because no DOM event covers this. Views are inline, so it is on `window.electron.app`:
+The answer is main's, because main is what switched the views. `useProjectPresence()` from `@daintreehq/plugin-sdk/react` returns where this view's project is: `"foreground"` while some window shows it, `"background"` while it is open behind another project, `"closed"` as it closes, and `null` until main has answered or in a view with no project. It is the same answer the worker gets from [`host.onDidChangeProjectPresence`](./host-api.md#ondidchangeprojectpresence), read once and then pushed on every change, so a view mounted into a project that is already in the background starts out right. A view that does not use React has the same pair on the documented bridge, declared by `@daintreehq/plugin-sdk/view-globals`: `window.electron.plugin.getProjectPresence()` for the current state and `onProjectPresenceChanged(cb)` for changes, each naming its project. Both are optional members, absent on a Daintree that predates them.
 
-| Call | What it means |
-| --- | --- |
-| `isViewCached()` | Not an event — the current state, latched in preload before any page script ran. This is what you seed from. |
-| `onViewCached(cb)` | Main has detached and hidden this project view. Nothing can observe it until it returns: stop periodic work here. |
-| `onViewWarmActivated(cb)` | Main has re-attached the view. It may still sit behind the anti-flash bridge where Chromium culls paints, so this means "running again", not "on screen". Fires on **every** reactivation. |
-| `onViewRevealed(cb)` | The view is the presenting foreground surface. Sent only when it is still the active project by the time the swap completes, so a switch superseded mid-flight never produces one. |
+```js
+import { useProjectPresence } from "@daintreehq/plugin-sdk/react";
 
-Four things follow, and the first is the one that bites.
+const presence = useProjectPresence();
+useEffect(() => {
+  if (presence === "background") poller.slow();
+  else poller.resume(); // `null` too: never hold the first load back waiting on it
+}, [presence]);
+```
 
-**They are edges, and nothing replays.** A cold switch can be released as early as the pre-React skeleton, so a switch storm can cache the view before your module has evaluated. Seed from `isViewCached()` and subscribe; a subscription alone answers "not cached" forever for a view that was already cached. Clear your own cached flag on `onViewWarmActivated`, not on `onViewRevealed`: warm activation is the cached-to-active edge and precedes presentation, while a reveal is only sent if this project is still the active one when the swap completes — a cold switch that rolls back reactivates the view and sends warm activation alone, so a flag cleared only on reveal can stay demoted with the view running.
+Three things follow.
 
-**This bridge is the host's own, not part of the plugin API.** It works because views are inline, exactly like `daintree-file://` above, and an isolated view host would replace it. The host's internal wrapper (`src/lib/viewCacheState.ts`, with `usePollingLifecycle` and `useProjectViewRevealed` on top) is what Daintree's own panes use; read it before you build anything elaborate.
+**Presence follows the switch, not the paint.** It moves as a window commits to a project, before the incoming view has finished painting, and a project in an unfocused or minimised window is still `"foreground"`. It answers "is my project the one being shown", never "is the user looking".
 
-**Combine it with document visibility rather than replacing it.** Minimising the window is a real `visibilitychange` — as is being fully covered by another window, on the platforms that report occlusion — and both are independent of caching, so a view can be uncached and unseen. The host's own consumers AND the two together. Whether a backgrounded renderer's timers actually stop varies: main deliberately applies no CPU throttling, and an explicit `Page.setWebLifecycleState` freeze is conditional and is skipped while the cached project has a live agent or an MCP binding — the cases that cost the most. So treat "my timers stopped" and "my timers kept running" as both possible, and demote your own periodic work on `onViewCached` instead of hoping the platform does it for you. A poll that must not miss a beat belongs in the worker, which for a non-builtin plugin is a separate utility process that does not freeze with the view (builtins run in main).
+**Combine it with document visibility rather than replacing it.** Minimising the window is a real `visibilitychange` — as is being fully covered by another window, on the platforms that report occlusion — and both are independent of presence, so a view can be in the foreground and unseen. The host's own consumers AND the two together. Whether a backgrounded renderer's timers actually stop varies: main deliberately applies no CPU throttling, and an explicit `Page.setWebLifecycleState` freeze is conditional and is skipped while the cached project has a live agent or an MCP binding — the cases that cost the most. So treat "my timers stopped" and "my timers kept running" as both possible, and demote your own periodic work on `"background"` instead of hoping the platform does it for you. A poll that must not miss a beat belongs in the worker, which for a non-builtin plugin is a separate utility process that does not freeze with the view (builtins run in main).
 
-**Memory pressure turns the flip into a fresh mount.** The host can reclaim a backgrounded project view and destroy its renderer. That is not a close — the project stays open and your worker keeps running — but the recreated view mounts from scratch, so the work you do on reveal must be the same work you do on mount or the user gets one of two states depending on whether their renderer survived. The worker is told nothing about the destruction itself: the host drops what that renderer reported rather than synthesizing a `removed` phase, since a reclaimed renderer says nothing about whether the user closed a panel. It does see the recreated view's `mounted`.
+**Memory pressure turns the flip into a fresh mount.** The host can reclaim a backgrounded project view and destroy its renderer. That is not a close — the project stays open and your worker keeps running — but the recreated view mounts from scratch, so the work you do when the project returns to the foreground must be the same work you do on mount or the user gets one of two states depending on whether their renderer survived. The worker is told nothing about the destruction itself: the host drops what that renderer reported rather than synthesizing a `removed` phase, since a reclaimed renderer says nothing about whether the user closed a panel. It does see the recreated view's `mounted`.
+
+The finer-grained cache edges on `window.electron.app` (`isViewCached`, `onViewCached`, `onViewWarmActivated`, `onViewRevealed`) are the host's own, not part of the plugin API: they describe one view's paint lifecycle, which only the host's own panes need, `view-globals` deliberately leaves them out, and an isolated view host would replace them. The SDK's `useNow` and `useAnimationFrame` already pause on them for you.
 
 [Patterns → Refresh when the user comes back](./patterns.md#refresh-when-the-user-comes-back) is the whole recipe, worker half included.
 
-Worker-side there is no equivalent, and the three subscriptions that look close are not it. `onDidChangePanelLifecycle` reports mount and unmount, which a switch does not cause. `onDidChangeActiveWorktree` fires on worktree activation and, for an unbound plugin, resolves against whichever project is focused — mid-switch that can still be the outgoing one, and the snapshot it hands you carries no `projectId` to check, so confirming which project you are looking at means a `getWorktreesResult()` with `status === "ok"` and a comparison against its `projectId`. `onDidWake` is machine sleep, explicitly machine-scoped. Keep the "is this stale?" decision in the view.
+Worker-side, `host.onDidChangeProjectPresence` reports the same states — for a project plugin its own project, for an installed plugin every open project — so a poll that must not miss a beat can slow down in the worker rather than the view. The subscriptions that look close are not it: `onDidChangePanelLifecycle` reports mount and unmount, which a switch does not cause; `onDidChangeActiveWorktree` fires on worktree activation, not project switches; and `onDidWake` is machine sleep.
 
 ## Global registration survives reload
 
@@ -723,31 +813,6 @@ Closing and reopening the project replaces the document; switching back to a cac
 
 Custom elements are the strict case because registration is irreversible. Other globals are name-keyed but not permanent — `window.*` singletons can be reassigned, stylesheets removed, service workers unregistered — so give each an explicit lifetime. A per-view stylesheet or listener belongs to the mount disposer; a shared loader such as Monaco’s belongs to its document package. Shared package initialization must not capture one plugin’s host bridge, credentials, or panel state.
 
-## Working with a live dev preview
-
-`window.electron.sitePreview` lets a view attach to one of the project's running dev-preview panels and receive structured observations from the page inside it — which element was hovered or clicked, and what the page reported about it. SvelteKit Tools is built on it; nothing about it is Svelte-specific.
-
-| Call | What it does |
-| --- | --- |
-| `listCandidates()` | The dev-preview panels this project could bind to, with any existing binding |
-| `bind({ panelId, adapterId, mode })` | Installs the named host-registered guest runtime into the page and returns a binding with a host-issued session id |
-| `setMode({ sessionId, mode })` | Switches between `browse` (the page behaves normally) and `select` |
-| `getState({ sessionId })`, `detach({ sessionId })` | Read or release the binding |
-| `reselect({ sessionId, loc, … })`, `clearSelection({ sessionId })`, `clearHover({ sessionId })` | Fixed host-authored calls into the runtime: select the element compiled from a source location as a click would (`false` when nothing matched), drop the page's selection, or tell it the pointer has left |
-| `onEvent(cb)` | Guest events with a host-validated envelope, epoch advances, origin-policy suspensions, and detaches |
-
-Things that shape how you use it:
-
-- **It is renderer IPC.** A plugin's main side cannot reach it. The view owns the binding and forwards what it learns to main over its own channels.
-- **You name a runtime; you do not supply one.** `adapterId` selects a guest adapter main registered at startup, and main loads that adapter's asset itself. Nothing a view sends becomes script in the page. Adapters are host-owned today: a plugin that wants its own runtime needs one registered in main, not a body on the wire.
-- **There is no "evaluate in the page" call, on purpose.** The runtime is installed by the host on every document the preview shows, and the host wraps it in a prelude that addresses and numbers each message. A general evaluate method would hand every renderer-side caller a standing arbitrary-execution channel into whatever site the user is previewing.
-- **The host validates the envelope; you validate the payload.** Core checks protocol version, session, epoch, sequence and size, and that the event carries a `type` — plus the shape of the one lifecycle event it acts on, `documentReady`. Everything else in an event is forwarded uninterpreted, so parse `payload.event` against your adapter's own schema before you read a field of it, and drop what fails. That is also why a new adapter needs no change in core: the event union belongs to the adapter, not to `shared/types/ipc/sitePreview.ts`.
-- **An adapter runs only where it was declared to.** Every registered adapter carries an origin policy, `local-preview` unless it says otherwise: loopback, `*.localhost`, `*.local` and private-network addresses. The host checks the guest's URL on every install — at bind and after each navigation — and when the preview shows a page outside the policy it withholds the runtime, removes what the previous document left behind, and pushes `{ kind: "origin-policy", suspended: true }`; the binding survives, and the next document back inside the policy installs on its own and pushes `suspended: false`. Show that as an observation, not a fault.
-- **Everything from the page is an observation, never an instruction.** The page is an application under development, and it shares the main world with your runtime, so it can forge messages for its own binding. That reaches nothing beyond that binding's observations — the host validates session, epoch, sequence and size — but never act on a file path, range or revision a page supplied without resolving it yourself.
-- **Key state on each event's `documentEpoch`, not on arrival order.** The new runtime's own ready event for a document can arrive before the host's epoch-advance notice for it. A hot-module update that does not navigate does not advance the epoch at all, so "the page reloaded" and "the page shows your latest source" are different claims.
-
-The mechanism — CDP binding, prelude, validation — is described in [`docs/architecture/sveltekit-site-builder.md`](../architecture/sveltekit-site-builder.md).
-
 ## Built-in plugin views
 
 A built-in plugin's view is compiled into the host bundle, so some of this page reads differently for it. [Architecture → Built-in plugin views](./architecture.md#built-in-plugin-views) covers registration; these are the practical differences once it renders:
@@ -757,26 +822,8 @@ A built-in plugin's view is compiled into the host bundle, so some of this page 
 - **Styling is the host's Tailwind.** The per-plugin runtime stylesheet described above does not run for a built-in; you get the host's full design system and must follow its rules — `.claude/rules/design-system.md` in the repo.
 - **Registering a `lazy()` view is fine.** The host wraps every built-in view in its own `lazy()` for activation; it renders yours from a plain component so React never sees a lazy resolving to a lazy (error #306).
 - **Never alias a lowercase component binding to a capitalised name for JSX.** The React Compiler folds `const View = component; return <View />` back into `jsx("component")`, which renders an unknown `<component>` DOM element — no error, just an empty panel. Use `createElement(component, props)`.
-- **Extending the dev preview.** A built-in can add a toolbar toggle, a strip and a drawer to every dev preview with `registerDevPreviewTool` (`src/registry/devPreviewToolRegistry.ts`) instead of contributing a panel. The host mounts them with the preview's panel, project, worktree, URL and readiness; the tool decides whether its button applies to that preview. [Dev preview tools](#dev-preview-tools) below is the lifecycle.
+- **The dev preview takes no plugin tools.** Its toolbar tools are the host's own — the Element Picker is the one there is — and no plugin, built-in or not, can add one. The one way a plugin reaches the previewed page is an Element Picker provider, which supplies a packaged extractor the host loads on detection (see [Element Picker providers](contribution-points.md#element-picker-providers--shipped)). [Element Picker](../architecture/element-picker.md) covers how it reaches the page.
 - **React Compiler applies to you.** A bailout is silent at runtime and reddens the compiler budget. Two traps specific to controller-style views: never call a method that reads mutable controller state during render — pass a `useSyncExternalStore` snapshot to a pure function instead — and do not write a `try`/`finally` without a `catch` in a component.
-
-## Dev preview tools
-
-A dev preview tool is one registration — `registerDevPreviewTool({ id, pluginId, label, Button, isAvailable?, unavailableReason?, createSession?, Toolbar?, Drawer? })` — and one entry in `useDevPreviewToolStore.activeByPanel`, which holds the tool a preview has switched on, one at a time per panel.
-
-**The manifest admits it.** The registration supplies the components (they are host-bundled, so nothing else can), but the tool only reaches the toolbar when its plugin's manifest declares the same id under [`contributes.previewTools`](./contribution-points.md#preview-tools--shipped-built-in-only). A registered tool no manifest names stays hidden and logs once, so a renamed id is diagnosable rather than a button that silently disappeared. Built-in plugins only, for now.
-
-**One availability answer.** `isAvailable(context)` decides whether the tool applies to a preview at all, and it may be async. The host hides the toolbar toggle where it says no and refuses `devPreview.toggleTool` there with your `unavailableReason`, so a palette entry or an agent can never switch on what the toolbar is hiding. It is asked again whenever the preview's worktree, page or readiness changes — a project that grows an app while the preview is open starts offering the tool — and cache your own lookups if they are expensive. Two things the host guarantees: a tool already switched on keeps its toggle while the predicate is unanswered, so the one control that turns it off never vanishes; and switching a tool **off** is never refused. A command runs away from the pane, so the context it evaluates carries the panel's last recorded URL and `isWebviewReady: false` — answer on the worktree, not the live page.
-
-**The host owns the session.** Declare `createSession(context)` and the host calls it when the tool is switched on for a preview — before any surface mounts — and hands the result to the surfaces as `props.session`. It may return a promise, which is how a tool keeps its real implementation in a lazy chunk; the surfaces are not mounted until the session exists. Check `context.signal.aborted` before building anything expensive: a promise that resolves after the preview let go is disposed immediately, and a factory that throws switches the tool back off. The session is what holds the tool's state for that preview: a binding, a workspace, a selection, a draft.
-
-**What the session is told.** The context is live: `panelId`, `projectId`, `worktreeId`, `worktreePath`, `url`, `isWebviewReady`, `visible` (whether any of the tool's surfaces are mounted), and an `AbortSignal` aborted on disposal. Changes arrive through `update(context)` for as long as the session lives. The page and worktree half comes from the preview's pane, so a fully unmounted preview holds the last of it rather than fresh news; what a session sees while nothing is mounted is that snapshot plus `visible: false`.
-
-**What ends it.** `dispose()` runs when the tool is switched off, the preview is trashed or removed, or the owning plugin is disabled — the last two also clear the active entry, so a restored preview comes back plain. Nothing else does: a surface unmounting is not one of them, because a hidden dock tab, a maximised sibling and a grid remount all unmount surfaces without ending anything the user started. Put every teardown in `dispose()` and treat it as the only teardown.
-
-**The drawer's chrome is the host's.** Your `Drawer` fills a host-owned frame (`src/components/DevPreview/DevPreviewToolDrawerChrome.tsx`) and declares nothing about its own width: no width classes, no `@container` — the chrome declares `@container/drawer`, so your rows still answer to the drawer's real width. The frame is 360px by default and drag-resizable between 280px and 560px from its page-facing edge (the width is shared by every preview for the session); in a preview too narrow to share it floats over the page instead, capped so a strip of the page always stays clear, which can render it below the nominal minimum. It hides itself entirely while your drawer renders nothing, which is how a tool stays shut until it has something to say. The policy for a cramped preview is the host's too: while docking the drawer would leave the page under 480px, the drawer floats over the page instead of squeezing it — a page pushed through its own responsive breakpoints stops being the thing the user is building. Closing a tool from inside one of its surfaces returns focus to the toolbar toggle that opened it.
-
-**What the surfaces are for.** Rendering the session and calling it. They may not own its lifetime, and they should not reconstruct host events from the panel store or the tool store — the session hears those from the host. `src/services/devPreviewTools/sessionManager.ts` is the implementation, and SvelteKit Tools is the worked example.
 
 ## What doesn't work inline
 

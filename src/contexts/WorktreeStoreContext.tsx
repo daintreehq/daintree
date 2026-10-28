@@ -34,7 +34,11 @@ import { scheduleRevealTextReraster } from "@/utils/revealTextReraster";
 import { notify } from "@/lib/notify";
 import { actionService } from "@/services/ActionService";
 import { attachSwitchStatusTimingStore } from "@/services/projectSwitchStatusTiming";
-import { logDebug } from "@/utils/logger";
+import { logDebug, logWarn } from "@/utils/logger";
+import { startWorktreeReconnectRecovery } from "@/store/worktreeReconnectRecovery";
+import { isHostLinkUp, useHostConnectionStore } from "@/store/hostConnectionStore";
+import { isProjectViewObservable, subscribeProjectViewObservability } from "@/lib/viewCacheState";
+import { LOCAL_HOST_ID } from "@shared/types/remoteHosts";
 import {
   RENDERER_ACTIVATION_ORIGIN,
   latestActivationRequest,
@@ -78,6 +82,23 @@ interface WorktreeTickEvent {
   seq: number;
 }
 
+/** Whether this view runs on another machine, reached over a host link. */
+function isRemoteView(): boolean {
+  const id = typeof window === "undefined" ? undefined : window.__DAINTREE_HOST_ID__?.id;
+  return typeof id === "string" && id !== LOCAL_HOST_ID;
+}
+
+function readFetchAuthFailureTarget(data: unknown): { repoName: string; remote: string } {
+  const record = typeof data === "object" && data !== null ? data : {};
+  return {
+    repoName:
+      "repoName" in record && typeof record.repoName === "string"
+        ? record.repoName
+        : "this repository",
+    remote: "remote" in record && typeof record.remote === "string" ? record.remote : "its remote",
+  };
+}
+
 interface WorktreeRemovedEvent {
   type: "worktree-removed";
   worktreeId: string;
@@ -118,6 +139,8 @@ interface IssueDetectedEvent {
   branchName?: string;
   providerId?: string;
   linked?: PluginWorktreeLinked | null;
+  /** Set for an issues provider's branch-claimed issue (#13744). */
+  issueProvenance?: { issueProviderId: string; issueKey: string; issueId?: string };
 }
 
 interface IssueNotFoundEvent {
@@ -398,6 +421,12 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
           if (!isWake) {
             store.getState().setError(err.message);
             store.getState().setLoading(false);
+          } else if (isRemoteView()) {
+            // A port the view confirmed that can't answer is a lost connection,
+            // not a quiet one: the far end has no workspace host behind it.
+            // Reconnecting puts it in front of the user and of recovery (#14313).
+            logWarn("Worktree snapshot failed on a delivered port", { error: err.message });
+            store.getState().setReconnecting(true);
           }
         });
       trackWorktreeSnapshot(snapshot);
@@ -700,6 +729,16 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
       })
     );
 
+    // Viewed marks lapse on the first poll that shows their file changed
+    // (#14581). Quiet polls keep the map's identity, and with no marks the
+    // reconcile returns at once, so this costs nothing until a file is marked.
+    cleanups.push(
+      store.subscribe((state, prevState) => {
+        if (state.worktrees === prevState.worktrees) return;
+        useDiffViewedStore.getState().reconcileViewed();
+      })
+    );
+
     // Activations are stamped from the same `(epoch, seq)` counter as the
     // topology events but never advance the store's version — they carry no
     // topology. They get their own high-water mark so a replayed or reordered
@@ -921,6 +960,11 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
             ...existing,
             issueNumber: event.issueNumber,
             issueTitle: event.issueTitle,
+            // The provenance belongs to this detection's number: a code-forge
+            // detection carries none (#13744).
+            issueProviderId: event.issueProvenance?.issueProviderId,
+            issueId: event.issueProvenance?.issueId,
+            issueKey: event.issueProvenance?.issueKey,
             issueLastUpdatedAt: event.issueLastUpdatedAt ?? existing.issueLastUpdatedAt,
             linked: event.linked ?? existing.linked,
           },
@@ -960,28 +1004,26 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
       })
     );
 
-    // Confirmed forge-auth failure — a background fetch's credential is
-    // genuinely broken (it survived several auto-retries). The host emits this
+    // Confirmed fetch-auth failure — a repo's background fetch kept failing on
+    // an auth-class error through several auto-retries. The host emits this
     // once per repo instead of flagging every worktree card, so we raise a
-    // single escalation toast pointing at the forge settings. Transient blips
-    // during the retry window never reach here (they show the softer
-    // per-card "couldn't reach origin" tooltip instead).
+    // single escalation toast. `git fetch` authenticates with the SSH key or
+    // Git's credential helper, never the forge API token in Daintree settings,
+    // so the recovery is a retry after fixing Git access, not a token rotation
+    // (#14208). Transient blips during the retry window never reach here (they
+    // show the softer per-card "couldn't reach origin" tooltip instead).
     cleanups.push(
-      worktreePort.onEvent("fetch-auth-failure-confirmed", () => {
+      worktreePort.onEvent("fetch-auth-failure-confirmed", (data) => {
+        const { repoName, remote } = readFetchAuthFailureTarget(data);
         notify({
           type: "error",
-          title: "Forge authentication failed",
-          message:
-            "Background fetches are paused because your code forge credentials were rejected. Sign in again to resume.",
+          title: "Couldn't fetch repository",
+          message: `Git keeps rejecting fetches of ${repoName} from ${remote} — check your SSH key or Git credential helper, then retry. This is Git's own sign-in, separate from Daintree's forge token.`,
           action: {
-            label: "Open settings",
-            actionId: "app.settings.openTab",
+            label: "Retry fetch",
+            actionId: "git.retryAuthFetch",
             onClick: () => {
-              void actionService.dispatch(
-                "app.settings.openTab",
-                { tab: "code-forge" },
-                { source: "user" }
-              );
+              void actionService.dispatch("git.retryAuthFetch", undefined, { source: "user" });
             },
           },
           supersedeKey: "forge-auth-failure-confirmed",
@@ -1100,6 +1142,24 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
         store.getState().setReconnecting(true);
       })
     );
+
+    // A remote view's port can stay lost past any restart (its view was cached
+    // while the host let the project go), and Retry has always brought it back,
+    // so the view runs it on its own before offering it (#14313).
+    if (isRemoteView()) {
+      cleanups.push(
+        startWorktreeReconnectRecovery({
+          store,
+          retry: () => worktreeClient.retryProjectLoad(),
+          hasProject: () => useProjectStore.getState().currentProject !== null,
+          subscribeProject: (listener) => useProjectStore.subscribe(listener),
+          isObserved: isProjectViewObservable,
+          subscribeObserved: subscribeProjectViewObservability,
+          isLinkUp: () => isHostLinkUp(useHostConnectionStore.getState()),
+          subscribeLink: (listener) => useHostConnectionStore.subscribe(listener),
+        })
+      );
+    }
 
     // If the host exhausts its restart budget, no replacement port will
     // arrive — transition to a terminal error state instead of leaving the

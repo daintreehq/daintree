@@ -1,60 +1,25 @@
 // @vitest-environment jsdom
-import { describe, expect, it, vi, beforeEach } from "vitest";
-import { renderHook, act } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+import { renderHook } from "@testing-library/react";
 
-let capturedListener: (() => void) | null = null;
-let currentHibernated = false;
+const loadMock = vi.hoisted(() => vi.fn());
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
-    subscribeHibernation: vi.fn((_id: string, listener: () => void) => {
-      capturedListener = listener;
-      return () => {
-        capturedListener = null;
-      };
-    }),
-    isHibernated: vi.fn(() => currentHibernated),
-  },
-}));
+vi.mock("@/services/TerminalInstanceService", () => {
+  loadMock();
+  return { createTerminalPaintPlane: () => ({}) };
+});
 
 import { useIsHibernated } from "../useIsHibernated";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
 
 describe("useIsHibernated", () => {
-  beforeEach(() => {
-    capturedListener = null;
-    currentHibernated = false;
-    vi.clearAllMocks();
-  });
-
-  it("re-renders when subscriber notification fires", () => {
-    currentHibernated = false;
-    const { result } = renderHook(() => useIsHibernated("t1"));
-    expect(result.current).toBe(false);
-
-    currentHibernated = true;
-    act(() => capturedListener?.());
-    expect(result.current).toBe(true);
-
-    currentHibernated = false;
-    act(() => capturedListener?.());
-    expect(result.current).toBe(false);
-  });
-
-  it("re-subscribes when id changes", () => {
-    const { rerender } = renderHook(({ id }) => useIsHibernated(id), {
+  it("is false for every id without loading the terminal service", () => {
+    const { result, rerender } = renderHook(({ id }) => useIsHibernated(id), {
       initialProps: { id: "t1" },
     });
-
-    expect(terminalInstanceService.subscribeHibernation).toHaveBeenCalledWith(
-      "t1",
-      expect.any(Function)
-    );
+    expect(result.current).toBe(false);
 
     rerender({ id: "t2" });
-    expect(terminalInstanceService.subscribeHibernation).toHaveBeenCalledWith(
-      "t2",
-      expect.any(Function)
-    );
+    expect(result.current).toBe(false);
+    expect(loadMock).not.toHaveBeenCalled();
   });
 });

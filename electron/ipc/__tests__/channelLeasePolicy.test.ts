@@ -27,6 +27,10 @@ describe("channel lease policy", () => {
       "terminal:get-for-project",
       "terminal:reconnect-bulk",
       "app:hydrate",
+      "review-marks:hydrate",
+      "review-marks:capture",
+      "review-marks:compare",
+      "review-marks:file-since",
     ]) {
       expect(getChannelLeasePolicy(channel), channel).toBe("free");
     }
@@ -45,6 +49,9 @@ describe("channel lease policy", () => {
       "project:set-draft-inputs",
       "app:set-state",
       "plugin-agent-mcp:set-plugin-access",
+      "review-marks:mark",
+      "review-marks:mark-captured",
+      "review-marks:clear",
     ]) {
       expect(getChannelLeasePolicy(channel), channel).toBe("driver");
     }
@@ -89,10 +96,30 @@ describe("channel lease policy", () => {
       { from: "path", at: [0, "rootPath"] },
     ]);
     expect(getChannelLeaseTarget("git:commit")).toEqual([{ from: "path", at: [0, "cwd"] }]);
-    expect(getChannelLeaseTarget("terminal:kill")).toEqual([{ from: "terminal", at: [0] }]);
+    expect(getChannelLeaseTarget("terminal:restore")).toEqual([{ from: "terminal", at: [0] }]);
     expect(getChannelLeaseTarget("worktree:delete")).toEqual([
       { from: "worktree", at: [0, "worktreeId"] },
     ]);
+  });
+
+  it("lets only a call that ends a terminal pass for one this Host no longer has", () => {
+    for (const channel of ["terminal:kill", "terminal:graceful-kill", "terminal:trash"]) {
+      expect(getChannelLeaseTarget(channel), channel).toEqual([
+        { from: "terminal", at: [0], missing: "allow" },
+      ]);
+    }
+    for (const channel of [
+      "terminal:restore",
+      "terminal:update-title",
+      "terminal:update-worktree-id",
+      "agent-session:prepare-bookmark",
+    ]) {
+      const target = getChannelLeaseTarget(channel)!;
+      expect(
+        target.some((source) => "missing" in source),
+        channel
+      ).toBe(false);
+    }
   });
 
   it("gates bookmarking a live agent, which kills it to capture its session", () => {
@@ -100,6 +127,18 @@ describe("channel lease policy", () => {
     expect(getChannelLeaseTarget("agent-session:prepare-bookmark")).toEqual([
       { from: "terminal", at: [0, "terminalId"] },
     ]);
+  });
+
+  it("gates clearing and pruning session history, which every project resumes from, but not reading it", () => {
+    expect(requiresDriveLease("agent-session:clear", "local")).toBe(true);
+    expect(requiresDriveLease("agent-session:set-retention", "local")).toBe(true);
+    expect(requiresDriveLease("agent-session:list", "link")).toBe(false);
+    expect(requiresDriveLease("agent-session:get-retention", "link")).toBe(false);
+  });
+
+  it("leaves a plugin call's writes to the host APIs it reaches, since the same call carries its reads", () => {
+    expect(getChannelLeasePolicy("plugin:invoke")).toBe("handler");
+    expect(requiresDriveLease("plugin:invoke", "link")).toBe(false);
   });
 
   it("keeps navigation free: switching and reopening hold their outgoing save to the lease themselves", () => {

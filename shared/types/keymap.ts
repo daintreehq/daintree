@@ -61,6 +61,8 @@ export type BuiltInKeyAction =
   | "worktree.selectSpace"
   | "worktree.copyTree"
   | "worktree.openChanges"
+  | "worktree.markReviewed"
+  | "worktree.clearReviewMark"
   | "worktree.openEditor"
   | "worktree.openFileBrowser"
   | "worktree.openFileBrowserPanel"
@@ -94,6 +96,7 @@ export type BuiltInKeyAction =
   | "terminal.focusNext"
   | "terminal.focusPrevious"
   | "terminal.focusAlternate"
+  | "terminal.toggleInputSurface"
   | "terminal.focusUp"
   | "terminal.focusDown"
   | "terminal.focusLeft"
@@ -193,6 +196,9 @@ export type BuiltInKeyAction =
   | "project.switcherPalette"
   | "project.mruCycleOlder"
   | "project.openInNewWindow"
+  | "project.sleep"
+  | "project.restart"
+  | "project.sleepIdle"
 
   // Remote Hosts (bound only where Remote Hosts is supported)
   | "host.switch"
@@ -209,10 +215,13 @@ export type BuiltInKeyAction =
   // Voice input
   | "voiceInput.toggle"
   | "voiceInput.toggleAssistant"
+  | "voiceInput.rewriteSelection"
   | "voiceInput.togglePause"
+  | "voiceInput.stopAndSend"
   | "voiceInput.lockTarget"
   | "voiceInput.unlockTarget"
   | "voiceInput.recallRecentTarget"
+  | "voiceInput.openRecentDictations"
 
   // Layout undo/redo
   | "layout.undo"
@@ -278,6 +287,8 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "worktree.selectSpace",
   "worktree.copyTree",
   "worktree.openChanges",
+  "worktree.markReviewed",
+  "worktree.clearReviewMark",
   "worktree.openEditor",
   "worktree.openFileBrowser",
   "worktree.openFileBrowserPanel",
@@ -307,6 +318,7 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "terminal.focusNext",
   "terminal.focusPrevious",
   "terminal.focusAlternate",
+  "terminal.toggleInputSurface",
   "terminal.focusUp",
   "terminal.focusDown",
   "terminal.focusLeft",
@@ -387,6 +399,9 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "project.switcherPalette",
   "project.mruCycleOlder",
   "project.openInNewWindow",
+  "project.sleep",
+  "project.restart",
+  "project.sleepIdle",
   "host.switch",
   "help.shortcuts",
   "help.shortcutsAlt",
@@ -397,10 +412,13 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "app.theme.pick",
   "voiceInput.toggle",
   "voiceInput.toggleAssistant",
+  "voiceInput.rewriteSelection",
   "voiceInput.togglePause",
+  "voiceInput.stopAndSend",
   "voiceInput.lockTarget",
   "voiceInput.unlockTarget",
   "voiceInput.recallRecentTarget",
+  "voiceInput.openRecentDictations",
   "layout.undo",
   "layout.redo",
   "app.newWindow",

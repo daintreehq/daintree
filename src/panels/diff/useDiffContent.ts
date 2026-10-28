@@ -5,9 +5,10 @@ import {
   diffCacheKey,
   purgeWhitespaceEntriesExcept,
   requestDiff,
-  selectDiffFreshnessKey,
   type DiffSubject,
 } from "./diffContentCache";
+import { selectDiffFreshnessKey } from "@/lib/diffFreshness";
+import type { ReviewMarkFileSinceOutcome } from "@shared/types/ipc/reviewMarks";
 
 const PREFETCH_DWELL_MS = 500;
 
@@ -26,6 +27,8 @@ export interface UseDiffContentOptions {
 export interface UseDiffContentResult {
   /** Diff text, `"NO_CHANGES"`, `"ERROR"`, or undefined while loading. */
   content: string | undefined;
+  /** The host's answer behind a since-review diff; undefined for every other source. */
+  sinceReview: ReviewMarkFileSinceOutcome | undefined;
   /** The store saw the file change after the shown diff was fetched. */
   stale: boolean;
   retry: () => void;
@@ -53,6 +56,7 @@ export function useDiffContent(
   const [contentEntry, setContentEntry] = useState<{
     subject: string;
     value: string;
+    sinceReview?: ReviewMarkFileSinceOutcome;
   } | null>(null);
   // Freshness key the shown diff was fetched under, tagged with its cache key
   // so a navigation in progress never compares one file's baseline against
@@ -118,7 +122,11 @@ export function useDiffContent(
         // Baseline from the entry, not the local key: a joined in-flight
         // request's content corresponds to its initiator's capture time.
         if (entry) setFreshnessBaseline({ subject: cacheKey, key: entry.freshnessKey });
-        setContentEntry({ subject: cacheKey, value: entry?.content ?? "ERROR" });
+        setContentEntry({
+          subject: cacheKey,
+          value: entry?.content ?? "ERROR",
+          ...(entry?.sinceReview && { sinceReview: entry.sinceReview }),
+        });
       } catch {
         if (requestRef.current !== requestId) return;
         setContentEntry({ subject: cacheKey, value: "ERROR" });
@@ -182,5 +190,10 @@ export function useDiffContent(
     liveFreshnessKey !== undefined &&
     liveFreshnessKey !== freshnessBaseline.key;
 
-  return { content, stale, retry };
+  const sinceReview =
+    contentEntry !== null && contentEntry.subject === subjectKey
+      ? contentEntry.sinceReview
+      : undefined;
+
+  return { content, sinceReview, stale, retry };
 }

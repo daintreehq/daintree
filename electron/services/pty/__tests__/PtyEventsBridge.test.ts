@@ -33,6 +33,50 @@ describe("bridgePtyEvent", () => {
     });
   });
 
+  it("keeps a host throwaway run's agent observations off the bus (#14445)", () => {
+    const heard: unknown[] = [];
+    events.on("agent:state-changed", (payload) => heard.push(payload));
+    events.on("agent:detected", (payload) => heard.push(payload));
+    events.on("agent:spawned", (payload) => heard.push(payload));
+
+    const throwaway = "daintree-throwaway-1";
+    expect(
+      bridgePtyEvent({
+        type: "agent-state",
+        id: throwaway,
+        agentId: "claude",
+        state: "waiting",
+        previousState: "working",
+        timestamp: 1,
+        trigger: "activity",
+        confidence: 1,
+      } as never)
+    ).toBe(true);
+    expect(
+      bridgePtyEvent({
+        type: "agent-detected",
+        terminalId: throwaway,
+        agentType: "claude",
+        timestamp: 1,
+      } as never)
+    ).toBe(true);
+    expect(
+      bridgePtyEvent({
+        type: "agent-spawned",
+        payload: { agentId: "claude", terminalId: throwaway, type: "claude", timestamp: 1 },
+      } as never)
+    ).toBe(true);
+    expect(heard).toEqual([]);
+
+    bridgePtyEvent({
+      type: "agent-detected",
+      terminalId: "term-1",
+      agentType: "claude",
+      timestamp: 1,
+    } as never);
+    expect(heard).toHaveLength(1);
+  });
+
   it("forwards a rate-limit observation (#12797)", () => {
     const payloads: unknown[] = [];
     events.on("agent:rate-limit-observed", (payload) => payloads.push(payload));
@@ -46,6 +90,43 @@ describe("bridgePtyEvent", () => {
 
     expect(handled).toBe(true);
     expect(payloads).toEqual([{ terminalId: "term-1", observedAt: 1_000, timestamp: 1_000 }]);
+  });
+
+  it("forwards a fallback offer from the host, and drops one with an unknown reason (#14370)", () => {
+    const payloads: unknown[] = [];
+    events.on("agent:fallback-triggered", (payload) => payloads.push(payload));
+    const base = {
+      terminalId: "term-1",
+      agentId: "claude",
+      fromPresetId: "work",
+      originalPresetId: "home",
+      timestamp: 1_000,
+    };
+
+    expect(
+      bridgePtyEvent({
+        type: "agent-fallback-triggered",
+        payload: { ...base, reason: "rate-limit" },
+      })
+    ).toBe(true);
+    bridgePtyEvent({
+      type: "agent-fallback-triggered",
+      payload: { ...base, reason: "auth", exitCode: 1 },
+    });
+    bridgePtyEvent({
+      type: "agent-fallback-triggered",
+      payload: { ...base, reason: "user-error" as never, exitCode: 1 },
+    });
+    bridgePtyEvent({
+      type: "agent-fallback-triggered",
+      payload: { ...base, reason: "auth", timestamp: Number.NaN },
+    });
+    bridgePtyEvent({ type: "agent-fallback-triggered", payload: null as never });
+
+    expect(payloads).toEqual([
+      { ...base, reason: "rate-limit" },
+      { ...base, reason: "auth", exitCode: 1 },
+    ]);
   });
 
   it("forwards a handback with its code, and drops a code of the wrong shape", () => {
@@ -277,6 +358,18 @@ describe("bridgePtyEvent", () => {
         boundary: "exit",
       },
     ]);
+  });
+
+  it("forwards the trash letting a terminal go, with which trash it was", () => {
+    const heard: Array<{ id: string; expiresAt: number }> = [];
+    events.on("terminal:trash-cleared", (payload) => heard.push(payload));
+    const handled = bridgePtyEvent({
+      type: "terminal-trash-cleared",
+      id: "term-3",
+      expiresAt: 1_800_000_020_000,
+    });
+    expect(handled).toBe(true);
+    expect(heard).toEqual([{ id: "term-3", expiresAt: 1_800_000_020_000 }]);
   });
 
   it("returns false for unhandled event types", () => {

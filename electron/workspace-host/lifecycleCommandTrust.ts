@@ -24,6 +24,7 @@ import type {
 
 const APPROVALS_VERSION = 1;
 const FINGERPRINT_VERSION = "daintree-lifecycle-commands/v1";
+const PLUGIN_STEP_FINGERPRINT_VERSION = "daintree-plugin-worktree-setup/v1";
 const MAX_APPROVED_FINGERPRINTS = 200;
 const FINGERPRINT_RE = /^[0-9a-f]{64}$/;
 
@@ -151,9 +152,42 @@ export function fingerprintCommandGroups(
   return createHash("sha256").update(payload).digest("hex");
 }
 
-export function fingerprintReview(sources: readonly LifecycleCommandSource[]): string {
+/**
+ * Hash of what allowing a plugin's worktree setup step covers (#13807): which
+ * plugin, at which version, runs which step, as shown and for how long. A new
+ * version asks again — the code that runs is the plugin's, and an upgrade is
+ * new code under the same name. Its own domain, so these never collide with,
+ * or disturb, a command fingerprint in the same approvals file.
+ */
+export function fingerprintPluginSetupStep(step: {
+  pluginId: string;
+  pluginVersion: string;
+  stepId: string;
+  label: string;
+  timeoutMs: number;
+}): string {
+  const payload = JSON.stringify([
+    PLUGIN_STEP_FINGERPRINT_VERSION,
+    step.pluginId,
+    step.pluginVersion,
+    step.stepId,
+    step.label,
+    step.timeoutMs,
+  ]);
+  return createHash("sha256").update(payload).digest("hex");
+}
+
+/**
+ * The fingerprint a review is approved against. Plugin steps are appended
+ * after the command sources, so a review with none keeps the fingerprint it
+ * has always had.
+ */
+export function fingerprintReview(
+  sources: readonly LifecycleCommandSource[],
+  pluginStepFingerprints: readonly string[] = []
+): string {
   return createHash("sha256")
-    .update(sources.map((source) => source.fingerprint).join("\n"))
+    .update([...sources.map((source) => source.fingerprint), ...pluginStepFingerprints].join("\n"))
     .digest("hex");
 }
 

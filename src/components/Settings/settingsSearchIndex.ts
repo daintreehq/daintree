@@ -1,4 +1,5 @@
 import type { SettingsTab, SettingsScope } from "./SettingsDialog";
+import { sharedSettingOwner, type SettingRef } from "@/hooks/useSettingsOwner";
 import {
   PROJECT_SETTINGS_SECTIONS,
   PROJECT_TAB_IDS,
@@ -35,6 +36,17 @@ export interface SettingsSearchEntry {
   title: string;
   description: string;
   keywords?: string[];
+  /**
+   * What the match writes, when one machine owns it. The result names that owner
+   * the way the page does, from the same declarations.
+   */
+  settings?: readonly SettingRef[];
+  /**
+   * Set on a plugin's settings: a declared setting, a section of its settings
+   * home, or the home itself. Opening it goes through `plugin.openSettings`, the
+   * same landing as `host.settings.open(key)`, instead of tab navigation.
+   */
+  plugin?: PluginSettingsSearchTarget;
   /** When set, indicates this setting is only visible when a parent setting is enabled. */
   requiresEnabled?: {
     /** id of the gate entry in the search index (e.g. "mcp-server-enable") */
@@ -44,12 +56,26 @@ export interface SettingsSearchEntry {
   };
 }
 
+/** What a plugin search result asks `plugin.openSettings` to land on. */
+export interface PluginSettingsSearchTarget {
+  instanceId: string;
+  /** A declared setting id. */
+  settingId?: string;
+  /** A section of the home, when the result is not one setting. */
+  section?: "account" | "setup" | "custom";
+  /** A declared page of the custom section. */
+  page?: string;
+  /** Which home, for what an installed plugin shows in both. */
+  scope?: "user" | "project";
+}
+
 function sectionToEntry(
   section: SettingsSectionMeta,
   tab: SettingsTab,
   tabLabel: string,
   scope: SettingsScope,
-  effectScope: SettingsScope | undefined
+  effectScope: SettingsScope | undefined,
+  settings: readonly SettingRef[] | undefined
 ): SettingsSearchEntry {
   return {
     id: section.id,
@@ -62,6 +88,7 @@ function sectionToEntry(
     title: section.title,
     description: section.description,
     ...(section.keywords ? { keywords: [...section.keywords] } : {}),
+    ...(settings ? { settings } : {}),
     ...(section.subtab !== undefined ? { subtab: section.subtab } : {}),
     ...(section.subtabLabel !== undefined ? { subtabLabel: section.subtabLabel } : {}),
     ...(section.requiresEnabled
@@ -82,8 +109,12 @@ function buildEntriesForTab(
   navDescription: string,
   navKeywords: readonly string[] | undefined,
   sections: readonly SettingsSectionMeta[] | undefined,
-  effectScope?: SettingsScope
+  effectScope: SettingsScope | undefined,
+  tabSettings: readonly SettingRef[],
+  sectionSettings: Readonly<Record<string, readonly SettingRef[]>> | undefined
 ): SettingsSearchEntry[] {
+  // A page that holds both owners names none of its own; its sections say which.
+  const pageSettings = sharedSettingOwner(tabSettings) === null ? undefined : tabSettings;
   const navEntry: SettingsSearchEntry = {
     id: `tab-nav-${tab}`,
     tab,
@@ -95,9 +126,27 @@ function buildEntriesForTab(
     title: tabLabel,
     description: navDescription,
     ...(navKeywords ? { keywords: [...navKeywords] } : {}),
+    ...(pageSettings ? { settings: pageSettings } : {}),
   };
   if (!sections || sections.length === 0) return [navEntry];
-  return [navEntry, ...sections.map((s) => sectionToEntry(s, tab, tabLabel, scope, effectScope))];
+  return [
+    navEntry,
+    ...sections.map((s) =>
+      sectionToEntry(
+        s,
+        tab,
+        tabLabel,
+        scope,
+        effectScope,
+        s.settings ?? sectionSettings?.[s.section] ?? pageSettings
+      )
+    ),
+  ];
+}
+
+function projectTabSettings(tab: SettingsTab): readonly SettingRef[] {
+  const entry: AnySettingsTabEntry | undefined = SETTINGS_REGISTRY.find((e) => e.id === tab);
+  return entry?.settings ?? [];
 }
 
 function deriveSettingsSearchIndex(): SettingsSearchEntry[] {
@@ -120,7 +169,9 @@ function deriveSettingsSearchIndex(): SettingsSearchEntry[] {
         tab.searchNavDescription ?? "",
         tab.searchNavKeywords,
         tab.sections,
-        tab.contentScope
+        tab.contentScope,
+        tab.settings,
+        tab.sectionSettings
       )
     );
   }
@@ -135,7 +186,10 @@ function deriveSettingsSearchIndex(): SettingsSearchEntry[] {
         "project",
         meta.searchNavDescription,
         meta.searchNavKeywords,
-        meta.sections
+        meta.sections,
+        undefined,
+        projectTabSettings(projectTabId),
+        undefined
       )
     );
   }

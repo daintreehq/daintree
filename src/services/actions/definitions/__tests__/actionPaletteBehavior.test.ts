@@ -91,7 +91,6 @@ const AUDITED_LEAKY_IDS: readonly string[] = [
   "browser.copyUrl",
   "worktree.bulk.remove",
   "worktree.bulk.closeSessions",
-  "hibernation.updateConfig",
   "idleTerminalNotify.updateConfig",
   "agentSettings.reset",
   "fleet.reject",

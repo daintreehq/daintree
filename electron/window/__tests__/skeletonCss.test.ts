@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveAppTheme } from "../../../shared/theme/index.js";
+import { BUILT_IN_THEME_SOURCES } from "../../../shared/theme/builtInThemes/index.js";
 
 const storeMock = vi.hoisted(() => ({
   get: vi.fn((key: string): unknown => {
@@ -49,6 +50,15 @@ describe("resolveInitialCanvasBackgroundColor (#9573)", () => {
     storeMock.get.mockClear();
   });
 
+  // These cases swap the store read; later groups expect the default one.
+  afterEach(() => {
+    storeMock.get.mockImplementation((key: string) => {
+      if (key === "appState") return { sidebarWidth: 350, focusMode: false };
+      if (key === "appTheme") return { colorSchemeId: "daintree" };
+      return undefined;
+    });
+  });
+
   it("returns the surface-canvas token for the default dark scheme", () => {
     storeMock.get.mockImplementation((key: string) => {
       if (key === "appTheme") return { colorSchemeId: "daintree" };
@@ -72,6 +82,123 @@ describe("resolveInitialCanvasBackgroundColor (#9573)", () => {
     const color = resolveInitialCanvasBackgroundColor();
     // shouldUseDarkColors is true in this test environment → defaults to "daintree"
     expect(color).toBe(resolveAppTheme("daintree", []).tokens["surface-canvas"]);
+  });
+
+  it("falls back to a light canvas for a missing scheme held in the light slot", () => {
+    storeMock.get.mockImplementation((key: string) => {
+      if (key === "appTheme") {
+        return { colorSchemeId: "custom-deleted", preferredLightSchemeId: "custom-deleted" };
+      }
+      return undefined;
+    });
+    const color = resolveInitialCanvasBackgroundColor();
+    expect(color).toBe(resolveAppTheme("bondi", []).tokens["surface-canvas"]);
+  });
+
+  it("falls back to the OS appearance for a missing scheme in no slot", () => {
+    storeMock.get.mockImplementation((key: string) => {
+      if (key === "appTheme") return { colorSchemeId: "custom-deleted" };
+      return undefined;
+    });
+    nativeThemeMock.shouldUseDarkColors = false;
+    try {
+      const color = resolveInitialCanvasBackgroundColor();
+      expect(color).toBe(resolveAppTheme("bondi", []).tokens["surface-canvas"]);
+    } finally {
+      nativeThemeMock.shouldUseDarkColors = true;
+    }
+  });
+
+  it("paints a stored custom theme's canvas, not a built-in's", () => {
+    const custom = {
+      id: "custom-light",
+      name: "Custom light",
+      type: "light",
+      builtin: false,
+      tokens: { ...resolveAppTheme("bondi", []).tokens, "surface-canvas": "#fafafa" },
+    };
+    storeMock.get.mockImplementation((key: string) => {
+      if (key === "appTheme") return { colorSchemeId: "custom-light", customSchemes: [custom] };
+      return undefined;
+    });
+    expect(resolveInitialCanvasBackgroundColor()).toBe("#fafafa");
+  });
+
+  it("paints a selected plugin theme from its snapshot before any plugin loads (#13832)", () => {
+    const bondi = BUILT_IN_THEME_SOURCES.find((source) => source.id === "bondi")!;
+    const palette = {
+      ...bondi.palette,
+      surfaces: { ...bondi.palette.surfaces, canvas: "#fdfcf8" },
+    };
+    const snapshot = {
+      version: 1,
+      id: "plugin:acme.themes:dawn",
+      name: "Dawn",
+      type: "light",
+      pluginId: "acme.themes",
+      pluginName: "Acme Themes",
+      palette,
+    };
+    storeMock.get.mockImplementation((key: string) => {
+      if (key === "appTheme") {
+        return { colorSchemeId: snapshot.id, pluginThemeSnapshot: snapshot };
+      }
+      return undefined;
+    });
+    expect(resolveInitialCanvasBackgroundColor()).toBe("#fdfcf8");
+    expect(buildSkeletonCss()).toContain("--theme-surface-canvas: #fdfcf8;");
+
+    // A snapshot that no longer names the selection paints nothing of its own.
+    storeMock.get.mockImplementation((key: string) => {
+      if (key === "appTheme") return { colorSchemeId: "daintree", pluginThemeSnapshot: snapshot };
+      return undefined;
+    });
+    expect(resolveInitialCanvasBackgroundColor()).toBe(
+      resolveAppTheme("daintree", []).tokens["surface-canvas"]
+    );
+  });
+});
+
+describe("buildSkeletonCss extension keys (#13761)", () => {
+  it("never seeds a stored extension that names a theme token", () => {
+    const custom = {
+      id: "custom-shadowing",
+      name: "Custom shadowing",
+      type: "dark" as const,
+      builtin: false,
+      tokens: resolveAppTheme("daintree", []).tokens,
+      extensions: { "theme-text-primary": "#202020", "panel-grid-bg": "#101010" },
+    };
+    const css = buildSkeletonCss(undefined, {
+      colorSchemeId: "custom-shadowing",
+      customSchemes: [custom as never],
+    });
+
+    expect(css).toContain(
+      `--theme-text-primary: ${resolveAppTheme("daintree", []).tokens["text-primary"]};`
+    );
+    expect(css).not.toContain("#202020");
+    expect(css).toContain("--panel-grid-bg: #101010;");
+  });
+
+  it("never writes a stored value that would close the skeleton rule", () => {
+    const breakout = "none; } :root { --theme-text-primary: #202020 !important; } #x { --y: 0";
+    const custom = {
+      id: "custom-breakout",
+      name: "Custom breakout",
+      type: "dark" as const,
+      builtin: false,
+      tokens: { ...resolveAppTheme("daintree", []).tokens, "shadow-floating": breakout },
+      extensions: { "panel-grid-bg": breakout },
+    };
+    const css = buildSkeletonCss(undefined, {
+      colorSchemeId: "custom-breakout",
+      customSchemes: [custom as never],
+    });
+
+    expect(css).not.toContain("#202020");
+    expect(css).not.toContain("--panel-grid-bg");
+    expect(css).not.toContain("--theme-shadow-floating");
   });
 });
 
@@ -174,6 +301,56 @@ describe("buildSkeletonCss pre-read theme config (#10393)", () => {
       `--theme-surface-canvas: ${resolveAppTheme("daintree", []).tokens["surface-canvas"]};`
     );
     expect(storeMock.get).toHaveBeenCalledWith("appTheme");
+  });
+});
+
+describe("a project's own theme (#13833)", () => {
+  const PROJECT_THEME_CONFIG = {
+    colorSchemeId: "daintree",
+    projectThemes: {
+      "project-a": { colorSchemeId: "bondi" },
+      "project-gone": { colorSchemeId: "custom-deleted" },
+    },
+  };
+  const canvasOf = (id: string) => resolveAppTheme(id, []).tokens["surface-canvas"];
+
+  beforeEach(() => {
+    storeMock.get.mockReset();
+    storeMock.get.mockImplementation((key: string) => {
+      if (key === "appState") return { sidebarWidth: 350, focusMode: false };
+      if (key === "appTheme") return PROJECT_THEME_CONFIG;
+      return undefined;
+    });
+  });
+
+  afterEach(() => {
+    storeMock.get.mockImplementation((key: string) => {
+      if (key === "appState") return { sidebarWidth: 350, focusMode: false };
+      if (key === "appTheme") return { colorSchemeId: "daintree" };
+      return undefined;
+    });
+  });
+
+  it("seeds a view of that project with its theme, and every other view with the global one", () => {
+    expect(resolveInitialColorSchemeId(undefined, "project-a")).toBe("bondi");
+    expect(resolveInitialColorSchemeId(undefined, "project-b")).toBe("daintree");
+    expect(resolveInitialColorSchemeId()).toBe("daintree");
+  });
+
+  it("paints the view background in the project's theme", () => {
+    expect(resolveInitialCanvasBackgroundColor("project-a")).toBe(canvasOf("bondi"));
+    expect(resolveInitialCanvasBackgroundColor("project-b")).toBe(canvasOf("daintree"));
+  });
+
+  it("paints the skeleton in the project's theme", () => {
+    const css = buildSkeletonCss(null, undefined, { projectId: "project-a" });
+    expect(css).toContain(`--theme-surface-canvas: ${canvasOf("bondi")};`);
+    expect(buildSkeletonCss(null)).toContain(`--theme-surface-canvas: ${canvasOf("daintree")};`);
+  });
+
+  it("falls back to the global theme when the project's theme no longer exists", () => {
+    expect(resolveInitialColorSchemeId(undefined, "project-gone")).toBe("daintree");
+    expect(resolveInitialCanvasBackgroundColor("project-gone")).toBe(canvasOf("daintree"));
   });
 });
 

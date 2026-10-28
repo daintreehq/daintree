@@ -1,3 +1,5 @@
+import type { CrashCause, WatchdogKillReason } from "./ipc/crashRecovery.js";
+
 /**
  * Remote Hosts: shared vocabulary for the Shell (the machine you sit at) and
  * the Host runtime (where projects, terminals, agents and plugins run).
@@ -58,6 +60,27 @@ export function parseHostScopedKey(key: HostScopedKey): { hostId: HostId; projec
 
 /** Wire protocol version. Bump on any incompatible change to link messages. */
 export const REMOTE_PROTOCOL_VERSION = 1;
+
+/**
+ * How a host's previous process ended, as the crash record the host consumed
+ * at launch observed it (#14368). Every WELCOME of the process that followed
+ * carries it. Absent when that process shut down, which a planned restart
+ * does, or when nothing was recorded: absence is not proof of a clean end.
+ * The record's own tokens, never a guess at why.
+ */
+export interface HostPreviousEnd {
+  crashCause: CrashCause;
+  /** The watchdog's own kill flag: it stopped the app after missed heartbeats. */
+  cause?: "watchdog-deadlock";
+  /** Which watchdog deadline ran out, when the watchdog said. */
+  watchdogKillReason?: WatchdogKillReason;
+  /** Heartbeats the watchdog missed before it killed the app. */
+  missedBeats?: number;
+  /** What earned the kill a longer deadline, in the watchdog's own words, when something did. */
+  pressureEvidence?: string;
+  /** When it ended, as the record dates it (epoch ms). */
+  at: number;
+}
 
 /** Exchanged by both ends before anything else crosses the link. */
 export interface HostHandshakeInfo {
@@ -283,12 +306,27 @@ export interface HostDescriptor {
    * across a change of target; the person can turn it off.
    */
   assistantControlEnabled: boolean;
+  /**
+   * The worktree (by path) whose resource environment named this host, when
+   * it was added for that worktree's box: removed with the worktree, or when
+   * its resource is torn down. Absent for every host the user added.
+   */
+  ownerWorktreeId?: string;
 }
 
 export type HostConnectionState =
   | { status: "local" }
   | { status: "disconnected" }
-  | { status: "connecting"; attempt: number }
+  | {
+      status: "connecting";
+      attempt: number;
+      /**
+       * The host said it was shutting down when the link closed, and was
+       * heard from recently enough that it is plausibly coming back. Its own
+       * word, never inferred from silence.
+       */
+      restarting?: true;
+    }
   | {
       status: "connected";
       rttMs: number | null;
@@ -303,8 +341,9 @@ export type HostConnectionState =
       buildMismatch?: HandshakeMismatch;
       /**
        * When the host was last heard from, present only once nothing has
-       * arrived for several seconds. Observed silence, never a cause: the link
-       * stays connected until its idle timeout gives up on it.
+       * arrived for several seconds. Observed silence, never a cause: a slow
+       * host stays connected until its transport closes or the idle ceiling
+       * gives up on it.
        */
       quietSince?: number;
     }
@@ -315,9 +354,13 @@ export type HostConnectionState =
       detail: string | null;
       /** ssh reached the host and found no Daintree listening there in Host mode (no discovery file). */
       hostModeOff?: true;
+      /** As on `connecting`: the host said it was shutting down, and is still retried. */
+      restarting?: true;
       /**
        * Not retrying on its own: what was seen (ssh couldn't log in, Host mode
-       * is off) doesn't change by trying again, so it waits for a Connect.
+       * is off) doesn't change by trying again soon, so it waits for a
+       * Connect. A host a window shows whose Daintree isn't listening is
+       * still checked now and then, so the window comes back with it.
        */
       stoppedRetrying?: true;
     }
@@ -347,6 +390,14 @@ export interface HostRecentUse {
 export interface DriveLeaseHolder {
   /** Increases on every grant; work stamped with an older lease is stale after a takeover. */
   leaseId: number;
+  /**
+   * The same while one client holds the project, across its windows, its
+   * reconnects and a restart of the Host; new whenever another client gets it
+   * or nobody held it. A view back from a lost link compares it to tell a
+   * blip from a project someone else may have driven meanwhile. Absent from
+   * Hosts that predate it.
+   */
+  tenureId?: string;
   /** The one renderer that drives: MCP dispatch, plugin prompts and terminal resize target it. */
   endpointId: string;
   clientId: string;
@@ -362,6 +413,27 @@ export interface DriveLeaseState {
   holder: DriveLeaseHolder | null;
 }
 
+/**
+ * One project's lease as its host sees it: who holds it, and whether that
+ * holder is there (`live`) or away inside the reservation that keeps the
+ * project for it until `awayUntil`, by the host's clock.
+ */
+export interface DriveLeaseObservation {
+  projectId: string;
+  holder: DriveLeaseHolder;
+  state: "live" | "away";
+  /** When the lease passes on unless its holder comes back; null while it is there. */
+  awayUntil: number | null;
+}
+
+export interface HostDriverObservation extends DriveLeaseObservation {
+  /** Null when the host has no project by that id, such as a reservation for one since removed. */
+  projectName: string | null;
+}
+
+/** Projects a summary names drivers for: the overview's line, not an inventory. */
+export const MAX_HOST_SUMMARY_DRIVERS = 32;
+
 /** Summary frame each host streams every few seconds to every connected client. */
 export interface HostMetricsSummary {
   hostId: HostId;
@@ -369,12 +441,56 @@ export interface HostMetricsSummary {
   platform: HostPlatform;
   /** Busy CPU as a percentage of all cores over the last interval; null when unmeasured. */
   cpuPercent: number | null;
-  /** macOS memorystatus level or Linux PSI mapped to three bands; null when unavailable. */
+  /**
+   * Logical cores the CPU reading covers: the scale `cpuPercent` is a share of.
+   * Absent from a host that doesn't report it; null when unmeasured.
+   */
+  cpuLogicalCoreCount?: number | null;
+  /** The 1 minute load average, as the OS reports it. Absent from older hosts; null when unmeasured. */
+  cpuLoadAverage1m?: number | null;
+  /** Apple Silicon performance cluster size. Absent from older hosts; null elsewhere or unknown. */
+  cpuPerformanceCoreCount?: number | null;
+  /** Apple Silicon efficiency cluster size. Absent from older hosts; null elsewhere or unknown. */
+  cpuEfficiencyCoreCount?: number | null;
+  /**
+   * Busy share of the performance cluster's own cores over the last interval.
+   * Absent from older hosts; null elsewhere, on the first reading, or when the
+   * cores can't be matched to their cluster.
+   */
+  cpuPerformancePercent?: number | null;
+  /** Busy share of the efficiency cluster's own cores; null under the same rules. */
+  cpuEfficiencyPercent?: number | null;
+  /**
+   * What the figures below describe: the whole machine, or the cgroup the Host
+   * runs in when that carries a limit. Absent from a host that doesn't report it.
+   */
+  metricsScope?: "host" | "cgroup" | null;
+  /**
+   * Cores the CPU reading is a share of, fractional under a CPU quota: the
+   * scale `cpuPercent` is a share of. Absent from a host that doesn't report it.
+   */
+  cpuCapacityCores?: number | null;
+  /** Linux PSI memory `some avg10`, as the kernel reports it. Absent from older hosts; null off Linux. */
+  memoryPressureSomeAvg10?: number | null;
+  /** Hottest CPU-like sensor in °C, as read. Machine-wide even when the rest is a cgroup's. */
+  temperatureCelsius?: number | null;
+  /** The sensor `temperatureCelsius` came from, such as "x86_pkg_temp (thermal_zone0)". */
+  temperatureZone?: string | null;
+  /** macOS memorystatus level; null elsewhere, where Linux reports `memoryPressureSomeAvg10`. */
   memoryPressure: "normal" | "warn" | "critical" | null;
   memoryUsedBytes: number | null;
   memoryTotalBytes: number | null;
   swapUsedBytes: number | null;
   swapTotalBytes: number | null;
+  /**
+   * Bytes swapped in per second over the last interval, in the same scope as
+   * the swap figures. Absent from older hosts; null on the first reading, after
+   * a counter reset or gap, or where the counter isn't exposed.
+   */
+  swapInBytesPerSec?: number | null;
+  /** Bytes swapped out per second; null under the same rules. */
+  swapOutBytesPerSec?: number | null;
+  /** macOS thermal state; null elsewhere, where Linux reports `temperatureCelsius`. */
   thermal: "nominal" | "fair" | "serious" | "critical" | null;
   /** Linux PSI cpu `some avg10`; null elsewhere. */
   cpuPressure: number | null;
@@ -388,7 +504,14 @@ export interface HostMetricsSummary {
   projectCount: number | null;
   /** Worktrees across open projects; null when the read failed. */
   worktreeCount: number | null;
+  /** The newest holder across the host's projects: what a Shell from before `drivers` reads. */
   driver: DriveLeaseHolder | null;
+  /**
+   * Every project someone drives, newest control first, up to
+   * {@link MAX_HOST_SUMMARY_DRIVERS}. Absent from a host that doesn't report
+   * it; null when the read failed.
+   */
+  drivers?: HostDriverObservation[] | null;
   /** Installed agent CLIs and their versions, as the Host's detection reports them. */
   agentClis: Array<{ agentId: string; version: string | null }>;
   /**

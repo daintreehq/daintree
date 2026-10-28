@@ -18,7 +18,11 @@ import { isWorktreeLabelToken, type WorktreeLabelToken } from "@shared/theme/wor
 import {
   isWorktreeCustomTitleTooLong,
   normalizeWorktreeCustomTitle,
-} from "@/lib/worktreeCustomTitle";
+} from "@shared/utils/worktreeCustomTitle";
+import type { WorktreeTitlesSnapshot } from "@shared/types/ipc/worktreeTitles";
+import { logWarn } from "@/utils/logger";
+import { hostScopedKey } from "@/hooks/useHostPlatform";
+import { onHostResync } from "./hostResyncSignal";
 
 export type OrderBy = "recent" | "created" | "alpha" | "manual";
 
@@ -102,8 +106,12 @@ interface WorktreeFilterActions {
   toggleWorktreeCollapsed: (id: string) => void;
   isWorktreeCollapsed: (id: string) => boolean;
   setWorktreeLabelColor: (id: string, token: WorktreeLabelToken | null) => void;
-  /** Normalises the title; an empty or over-length result is the caller's to reject, null or blank clears. */
-  setWorktreeCustomTitle: (id: string, title: string | null) => void;
+  /**
+   * Normalises the title; an empty or over-length result is the caller's to
+   * reject, null or blank clears. Resolves once main has recorded it (#14022),
+   * and rejects when it could not.
+   */
+  setWorktreeCustomTitle: (id: string, title: string | null) => Promise<void>;
   setManualOrder: (order: string[]) => void;
   pruneStaleWorktreeIds: (validIds: ReadonlySet<string>) => void;
   setQuickStateFilter: (filter: QuickStateFilter) => void;
@@ -231,7 +239,13 @@ function resolveProjectIdFromUrl(): string {
 }
 
 const _projectId = resolveProjectIdFromUrl();
-const PROJECT_KEY = `${GLOBAL_KEY}:${_projectId}`;
+// Host-scoped, because a remote host's project can carry the same id as a local
+// one and every view shares this storage; bare locally. Custom titles make it
+// load-bearing: a remote view's copy of its host's titles must never become the
+// hand-over a local view of the same id gives this machine's main (#14022).
+const PROJECT_KEY = `${GLOBAL_KEY}:${hostScopedKey(_projectId)}`;
+/** Where a remote view's state lived before the key was host-scoped. */
+const BARE_PROJECT_KEY = `${GLOBAL_KEY}:${_projectId}`;
 
 const GLOBAL_FIELD_KEYS = new Set<keyof WorktreeFilterStore>([
   "orderBy",
@@ -306,6 +320,25 @@ function loadLegacySeedForProject(): Partial<ProjectPersistedShape> {
       return {};
     }
     // Fall through — scoped blob was corrupt, try legacy seed instead.
+  }
+
+  // A remote view kept its state under the bare key until it was host-scoped
+  // (#14022). Its pins, filters and labels carry over; its titles don't, since
+  // they come from the host's main and the bare copy may be this machine's.
+  if (PROJECT_KEY !== BARE_PROJECT_KEY) {
+    const bareRaw = readLocalStorageItemSafely(BARE_PROJECT_KEY);
+    const bare =
+      bareRaw === null
+        ? null
+        : safeJSONParse<{ state?: Partial<ProjectPersistedShape> } | null>(
+            bareRaw,
+            { store: "worktreeFilterStore", key: BARE_PROJECT_KEY },
+            null
+          );
+    if (bare?.state && typeof bare.state === "object") {
+      const { worktreeCustomTitles: _titles, ...carried } = toProjectFiltersPersisted(bare.state);
+      return carried;
+    }
   }
 
   const raw = readLocalStorageItemSafely(GLOBAL_KEY);
@@ -587,11 +620,11 @@ const _projectStore = create<ProjectScopedState>()(
       typeFilters: new Set<TypeFilter>(_legacySeed.typeFilters ?? []),
       prIssueFilters: new Set<PrIssueFilter>(_legacySeed.prIssueFilters ?? []),
       sessionFilters: new Set<SessionFilter>(_legacySeed.sessionFilters ?? []),
-      hasAgentFilter: false,
+      hasAgentFilter: _legacySeed.hasAgentFilter ?? false,
       activityFilters: new Set<ActivityFilter>(_legacySeed.activityFilters ?? []),
       pinnedWorktrees: _legacySeed.pinnedWorktrees ?? [],
       collapsedWorktrees: _legacySeed.collapsedWorktrees ?? [],
-      worktreeLabelColors: {},
+      worktreeLabelColors: _legacySeed.worktreeLabelColors ?? {},
       worktreeCustomTitles: {},
       manualOrder: _legacySeed.manualOrder ?? [],
       quickStateFilter: "all",
@@ -674,6 +707,154 @@ const _projectStore = create<ProjectScopedState>()(
     }
   )
 );
+
+/**
+ * Custom titles live in main (#14022), so the worktree snapshots plugins read
+ * carry them; `worktreeCustomTitles` above is this view's copy of main's. The
+ * localStorage blob stays as that copy's cache and as the hand-over: this
+ * view's first pull gives main the titles kept here before it held any.
+ */
+let titlesRevision = 0;
+let titlesHandedOver = false;
+let titlesPull: Promise<void> | null = null;
+// Snapshots adopted so far. A pull that saw none land while it was in flight
+// is the newest word there is, so it may move the revision down — the way back
+// for a view whose main store was reset under it.
+let titlesAdoptions = 0;
+// A push that arrived before the hand-over landed, held until it does:
+// adopting it first would replace the copy the hand-over is made from.
+let titlesHeldPush: WorktreeTitlesSnapshot | null = null;
+// A relaunch restores the last project before main has registered its view,
+// and a slow start can register it well after the renderer loaded.
+const TITLES_PULL_RETRY_MS = [250, 1000, 3000, 10_000, 30_000] as const;
+
+/** Main has no project for this view yet, or never will (a view with no project open). */
+class WorktreeTitlesUnboundError extends Error {
+  constructor() {
+    super("Worktree titles aren't available until the project finishes opening");
+  }
+}
+
+function worktreeTitlesBridge() {
+  return typeof window === "undefined" ? undefined : window.electron?.worktreeTitles;
+}
+
+function sameTitles(a: Record<string, string>, b: Record<string, string>): boolean {
+  const keys = Object.keys(a);
+  if (keys.length !== Object.keys(b).length) return false;
+  return keys.every((id) => Object.hasOwn(b, id) && a[id] === b[id]);
+}
+
+function adoptWorktreeTitles(snapshot: WorktreeTitlesSnapshot, authoritative = false): void {
+  if (!authoritative && snapshot.revision < titlesRevision) return;
+  ++titlesAdoptions;
+  titlesRevision = snapshot.revision;
+  const next = customTitlesOrUndefined(snapshot.titles) ?? {};
+  if (sameTitles(_projectStore.getState().worktreeCustomTitles, next)) return;
+  _projectStore.setState({ worktreeCustomTitles: next });
+}
+
+function receiveWorktreeTitlesPush(snapshot: WorktreeTitlesSnapshot): void {
+  if (titlesHandedOver) {
+    adoptWorktreeTitles(snapshot);
+    return;
+  }
+  if (titlesHeldPush === null || snapshot.revision >= titlesHeldPush.revision) {
+    titlesHeldPush = snapshot;
+  }
+}
+
+/**
+ * Read main's titles and adopt them; the first pull that lands also hands over
+ * this view's copy. Shared while in flight; rejects on an unbound or failed
+ * read so the caller can retry. The persisted copy has hydrated by now: the
+ * storage reads synchronously.
+ */
+function pullWorktreeTitles(): Promise<void> {
+  if (titlesPull) return titlesPull;
+  const api = worktreeTitlesBridge();
+  if (typeof api?.hydrate !== "function") return Promise.resolve();
+  const adoptionsAtStart = titlesAdoptions;
+  const legacyTitles = titlesHandedOver ? {} : { ..._projectStore.getState().worktreeCustomTitles };
+  const attempt = api.hydrate(legacyTitles).then(
+    (snapshot) => {
+      if (titlesPull === attempt) titlesPull = null;
+      // `== null`: a stubbed bridge answers `undefined`.
+      if (snapshot == null) throw new WorktreeTitlesUnboundError();
+      adoptWorktreeTitles(snapshot, titlesAdoptions === adoptionsAtStart);
+      titlesHandedOver = true;
+      const held = titlesHeldPush;
+      titlesHeldPush = null;
+      if (held) adoptWorktreeTitles(held);
+    },
+    (error: unknown) => {
+      if (titlesPull === attempt) titlesPull = null;
+      throw error;
+    }
+  );
+  titlesPull = attempt;
+  return attempt;
+}
+
+async function pruneWorktreeTitlesInMain(staleTitleIds: string[]): Promise<void> {
+  const api = worktreeTitlesBridge();
+  if (typeof api?.prune !== "function") return;
+  if (!titlesHandedOver) await pullWorktreeTitles();
+  adoptWorktreeTitles(await api.prune(staleTitleIds));
+}
+
+/**
+ * Follow main's titles for this view: pull once (retrying an unbound read),
+ * adopt every push, and pull again when a remote view's link comes back, since
+ * pushes sent while it was down are gone. Returns the disposer.
+ */
+export function startWorktreeCustomTitlesSync(): () => void {
+  const api = worktreeTitlesBridge();
+  if (typeof api?.onChanged !== "function") return () => {};
+  let disposed = false;
+  let retries = 0;
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
+  // Main sends to every view of the project and only to them.
+  const unsubscribe = api.onChanged(receiveWorktreeTitlesPush);
+  const pull = (): void => {
+    pullWorktreeTitles().catch((error: unknown) => {
+      if (disposed || titlesHandedOver) return;
+      const delay = TITLES_PULL_RETRY_MS[retries++];
+      if (delay === undefined) {
+        // Still unbound after the retries is a view with no project, not a fault.
+        if (!(error instanceof WorktreeTitlesUnboundError)) {
+          logWarn("[worktreeFilterStore] Failed to read worktree titles", { error });
+        }
+        return;
+      }
+      retryTimer = setTimeout(() => {
+        retryTimer = null;
+        if (!disposed) pull();
+      }, delay);
+    });
+  };
+  const offResync = onHostResync(() => {
+    if (disposed) return;
+    // A pull already in flight may have been answered before the lost pushes,
+    // so read once more after it settles rather than joining it.
+    const inFlight = titlesPull;
+    const pullAfter = inFlight
+      ? inFlight.catch(() => undefined).then(() => pullWorktreeTitles())
+      : pullWorktreeTitles();
+    pullAfter.catch((error: unknown) => {
+      logWarn("[worktreeFilterStore] Failed to read worktree titles after reconnecting", {
+        error,
+      });
+    });
+  });
+  pull();
+  return () => {
+    disposed = true;
+    if (retryTimer !== null) clearTimeout(retryTimer);
+    unsubscribe();
+    offResync();
+  };
+}
 
 /**
  * Module-scope, stable action references. Consumers in `useCallback`/`useEffect`
@@ -799,9 +980,17 @@ const _actions: WorktreeFilterActions = {
       return { worktreeLabelColors: { ...state.worktreeLabelColors, [id]: token } };
     });
   },
-  setWorktreeCustomTitle: (id, title) => {
+  setWorktreeCustomTitle: async (id, title) => {
     const next = title === null ? "" : normalizeWorktreeCustomTitle(title);
     if (isWorktreeCustomTitleTooLong(next)) return;
+    const api = worktreeTitlesBridge();
+    if (typeof api?.set === "function") {
+      // Not applied ahead of the round trip: main pushes each write to every
+      // view of the project before replying, so they all stay in step with it.
+      if (!titlesHandedOver) await pullWorktreeTitles();
+      adoptWorktreeTitles(await api.set(id, next || null));
+      return;
+    }
     _projectStore.setState((state) => {
       const current = state.worktreeCustomTitles[id];
       if (!next) {
@@ -817,6 +1006,20 @@ const _actions: WorktreeFilterActions = {
     _projectStore.setState({ manualOrder: order });
   },
   pruneStaleWorktreeIds: (validIds) => {
+    // Main holds the titles, so a stale one is cleared there, once the
+    // workspace host confirms the worktree is gone, and comes back to this view
+    // (and every other view of the project) in main's push.
+    const titlesInMain = typeof worktreeTitlesBridge()?.prune === "function";
+    if (titlesInMain) {
+      const staleTitleIds = Object.keys(_projectStore.getState().worktreeCustomTitles).filter(
+        (id) => !validIds.has(id)
+      );
+      if (staleTitleIds.length > 0) {
+        pruneWorktreeTitlesInMain(staleTitleIds).catch((error: unknown) => {
+          logWarn("[worktreeFilterStore] Failed to clear stale worktree titles", { error });
+        });
+      }
+    }
     _projectStore.setState((state) => {
       const pinned = state.pinnedWorktrees.filter((id) => validIds.has(id));
       const collapsed = state.collapsedWorktrees.filter((id) => validIds.has(id));
@@ -825,7 +1028,7 @@ const _actions: WorktreeFilterActions = {
       const labelIds = Object.keys(state.worktreeLabelColors);
       const keptLabelIds = labelIds.filter((id) => validIds.has(id));
       const labelsChanged = keptLabelIds.length !== labelIds.length;
-      const titleIds = Object.keys(state.worktreeCustomTitles);
+      const titleIds = titlesInMain ? [] : Object.keys(state.worktreeCustomTitles);
       const keptTitleIds = titleIds.filter((id) => validIds.has(id));
       const titlesChanged = keptTitleIds.length !== titleIds.length;
       if (!pinnedChanged && !collapsedChanged && !labelsChanged && !titlesChanged) return state;

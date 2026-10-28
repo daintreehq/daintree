@@ -145,6 +145,7 @@ function makeManaged(fixture: ManagedFixture): ManagedTerminal {
     fileLinksDisposable: null,
     imageLinksDisposable: null,
     commandLinksDisposable: null,
+    pluginLinksDisposable: null,
     webLinksAddon: null,
     hoveredLink: null,
   } as ManagedTerminal;
@@ -156,10 +157,9 @@ describe("TerminalInstanceService batchResize", () => {
   beforeEach(async () => {
     vi.resetModules();
     vi.useFakeTimers();
-    ({ terminalInstanceService: service } =
-      (await import("../TerminalInstanceService")) as unknown as {
-        terminalInstanceService: BatchTestService;
-      });
+    service = (await (
+      await import("../terminalInstanceServiceAccessor")
+    ).load()) as unknown as BatchTestService;
     service.instances.clear();
   });
 
@@ -300,10 +300,9 @@ describe("TerminalInstanceService suppressResizesDuringLayoutTransition", () => 
   beforeEach(async () => {
     vi.resetModules();
     vi.useFakeTimers();
-    ({ terminalInstanceService: service } =
-      (await import("../TerminalInstanceService")) as unknown as {
-        terminalInstanceService: BatchTestService;
-      });
+    service = (await (
+      await import("../terminalInstanceServiceAccessor")
+    ).load()) as unknown as BatchTestService;
     service.instances.clear();
   });
 

@@ -1,13 +1,15 @@
 /**
  * What the canopy panel says about each agent run, built in main from the run's
- * screen by a classifier pass (every run whose screen changed) and, while the
- * panel is open, a describer pass (the runs that need the user, and the ones
- * still working at the progress pace).
+ * screen by the local reader: every run whose screen changed is read, and the
+ * reading's words are set for the runs that need the user and, at the progress
+ * pace, the ones still working. Every word is a line copied off the screen.
  *
  * Everything here is derived from screen text and is a reading, not a fact:
  * the panel shows it beside the agent state Daintree observed, never instead of
  * it.
  */
+
+import type { FleetRunRow } from "./fleet.js";
 
 /** The screen's current state, as the classifier read it. */
 export type CanopyCategory =
@@ -86,27 +88,27 @@ export interface CanopyCard {
   /**
    * Bumped each time the run's screen really changes. Stable while a prompt
    * sits unanswered, so it identifies "this prompt" across re-reads and
-   * describer refinements.
+   * readings.
    */
   revision: number;
   category: CanopyCategory;
-  /** Classifier confidence in `category`, 0–1. */
+  /** The reader's confidence in `category`, 0–1. */
   confidence: number;
-  /** The classifier's probability that the terminal needs the user now, 0–1. */
+  /** The reader's probability that the terminal needs the user now, 0–1. */
   attentionProbability: number;
-  /** The describer's 0–100 attention score; null until described. */
+  /** The reading's 0–100 attention score on Canopy's anchors; null until its words are set. */
   attentionScore: number | null;
   /**
-   * 0–100, and the order the panel lists runs in: the describer's score once it
-   * has written the card, the classifier's probability before.
+   * 0–100, and the order the panel lists runs in: the reading's score once its
+   * words are set, its attention probability before.
    */
   priority: number;
-  /** `described` once the describer has written the card's text. */
+  /** `described` once the reading's words are set on the card. */
   stage: "classified" | "described";
   /**
    * The words (headline, summary, task, risk) were written about an earlier
-   * screen of this run and are kept only until the describer re-reads it — or
-   * for good, if that read fails. The priority meanwhile is the classifier's alone.
+   * screen of this run and are kept only until it is read again — or for good,
+   * if that read fails. The priority meanwhile is the attention probability's alone.
    */
   wordsFromEarlierRead: boolean;
   /**
@@ -115,13 +117,13 @@ export interface CanopyCard {
    */
   priorityFromEarlierRead: boolean;
   /**
-   * The state the describer wrote the words (headline, summary, task) for;
-   * null before it has written any. A run that has since moved to another state
-   * keeps words written for this one only until it is described again, and a
+   * The state the words (headline, summary, task) were set for; null before
+   * any were. A run that has since moved to another state keeps words set for
+   * this one only until it is read again, and a
    * busy run never shows words written about a prompt it has left behind.
    */
   wordsCategory: CanopyCategory | null;
-  /** True while a describer pass for this run is in flight. */
+  /** True while this run's words are being set from its reading. */
   describing: boolean;
   /**
    * What the agent is working on overall, at most ~8 words; the row's subject.
@@ -130,7 +132,7 @@ export interface CanopyCard {
   task: string | null;
   /**
    * How much of the user's task is done, 0–100: the agent's checklist when it
-   * draws one, else the describer's estimate. Null until described, or when
+   * draws one, else the reading's estimate. Null until described, or when
    * nothing on screen shows it.
    */
   progress: number | null;
@@ -138,9 +140,12 @@ export interface CanopyCard {
   steps: CanopySteps | null;
   tests: CanopyTests;
   changes: CanopyChanges;
-  /** What the user needs to do, at most ~10 words and naming the decision; null until described. */
+  /**
+   * The card's first line under the terminal's own title: the line on screen
+   * that says most, verbatim; null until described, or when no line does.
+   */
   headline: string | null;
-  /** At most ~25 words; null until described. */
+  /** The card's second line, verbatim, when one is worth reading; null until described. */
   summary: string | null;
   /** The prompt the program is asking, verbatim from the screen. */
   question: string | null;
@@ -149,12 +154,12 @@ export interface CanopyCard {
   /** The prompt asks for a secret; the panel must not offer an inline reply. */
   secretPrompt: boolean;
   /**
-   * The describer's caution about what an approval would do — irreversible, or
+   * The reading's caution about what an approval would do — irreversible, or
    * reaching outside the project. `unknown` when it could not tell or never read
    * the screen; `none` claims nothing beyond "no caution seen".
    */
   risk: "none" | "caution" | "unknown";
-  /** Why the describer flagged caution, at most ~8 words; null otherwise. */
+  /** Why caution was flagged, at most ~8 words; null otherwise (the local reader writes none). */
   riskReason: string | null;
   /**
    * What an approval would let the agent do — the command, file or folder —
@@ -173,9 +178,9 @@ export interface CanopyCard {
   /** The screen's own words at a glance, read with no model; see `CanopyGlance`. */
   glance: CanopyGlance;
   /**
-   * The line the classifier picked as saying most about the run at a glance,
+   * The line the reader picked as saying most about the run at a glance,
    * verbatim; null when it picked none or has not read this screen. Shown until
-   * the describer has written words, where Daintree's own glance has none.
+   * the words are set, where Daintree's own glance has none.
    */
   statusLine: string | null;
   /**
@@ -217,7 +222,29 @@ export interface CanopyTerminalView {
     /** What the snapshot covers up to; chunks at or before it are already in it. */
     continuation?: import("../terminal.js").SnapshotContinuation;
   } | null;
+  /**
+   * The host holds the PTY at the size the view asks for while it may drive
+   * the run (#14497). Absent from a host that predates it, which a view on
+   * another machine then never asks to size.
+   */
+  holdsSize?: boolean;
 }
+
+/**
+ * Where "Open in Assistant" lands: the exact lane of a project, or the global
+ * session, with the run it was resolved against. A lane is never defaulted and
+ * the global session never names a project.
+ */
+export type AssistantOpenDestination =
+  | {
+      scope: "project";
+      hostId: string;
+      projectId: string;
+      lane: number;
+      terminalId: string;
+      incarnation: number;
+    }
+  | { scope: "global"; hostId: string; terminalId: string; incarnation: number };
 
 /** What a watched terminal's stream carries, in order. */
 export type CanopyTerminalData =
@@ -251,6 +278,27 @@ export interface CanopyTrashRequest {
 export interface CanopyRestoreRequest {
   runId: string;
 }
+
+/**
+ * The user removed a trashed run for good from Canopy's Trash. The view holding
+ * its pane in the trash drops it as its own Remove would, ending the process.
+ */
+export interface CanopyRemoveRequest {
+  runId: string;
+}
+
+/**
+ * Canopy asks one view of a closed run's project to resume its session, the
+ * way the Resume Sessions palette does. The view claims it with
+ * `resumeStarted` before launching anything, and answers with `resumeSettled`.
+ */
+export interface CanopyResumeRequest {
+  requestId: string;
+  session: import("./agentSessionHistory.js").AgentSessionRecord;
+}
+
+/** A view's answer to a {@link CanopyResumeRequest}: the pane running the session, or why none is. */
+export type CanopyResumeAnswer = { runId: string } | { error: string };
 
 /**
  * The user renamed a run from Canopy. The view that holds its pane renames the
@@ -333,12 +381,6 @@ export function isCanopyUnread(mark: CanopyReadMark | null | undefined): boolean
 }
 
 /**
- * Whether the user pays for Canopy. Screens are read alike on both: the tier
- * changes only what the panel tells them.
- */
-export type CanopyTier = "free" | "priority";
-
-/**
  * Where the user stands on Canopy. `unset`: never turned on, or turned off —
  * its ways in offer it, and nothing is read. `on`: screens are read. `hidden`:
  * the user doesn't want it — no way in but Settings, and nothing is read.
@@ -355,10 +397,59 @@ export interface CanopyPlan {
    * one hide can tell a later hide from its own.
    */
   modeRevision?: number;
-  /** The user turned Canopy on, agreeing to send screens off the machine to be read: `mode` is `on`. */
+  /**
+   * Names the host process `modeRevision` counts in: the counter starts over
+   * when the host restarts, so a revision means nothing without it.
+   */
+  hostEpoch?: string;
+  /** The user turned Canopy on: `mode` is `on`. */
   activated: boolean;
-  tier: CanopyTier;
 }
+
+/** Who publishes Canopy's models on Hugging Face, and what they are called there. */
+export const CANOPY_MODEL_AUTHOR = "daintreehq";
+export const CANOPY_MODEL_PREFIX = "canopy-reader-";
+/** The model Canopy reads with. */
+export const CANOPY_MODEL = `${CANOPY_MODEL_AUTHOR}/${CANOPY_MODEL_PREFIX}17m`;
+
+const CANOPY_MODEL_ID = new RegExp(
+  `^${CANOPY_MODEL_AUTHOR}/${CANOPY_MODEL_PREFIX}[a-z0-9][a-z0-9-]*$`
+);
+
+/**
+ * One of the publisher's reader repos. Only `CANOPY_MODEL` is fetched; an
+ * earlier Daintree could choose among them, and a host on one still names its pick.
+ */
+export function isCanopyModelId(value: unknown): value is string {
+  return typeof value === "string" && value.length <= 120 && CANOPY_MODEL_ID.test(value);
+}
+
+/** What the status bar and Settings call a model. */
+export function canopyModelName(id: string): string {
+  if (id === CANOPY_MODEL) return "Light";
+  return id
+    .slice(id.lastIndexOf("/") + 1)
+    .replace(CANOPY_MODEL_PREFIX, "")
+    .toUpperCase();
+}
+
+/** The model on this machine, as Settings shows it. */
+export interface CanopyModelInfo {
+  /** Its Hugging Face repo. */
+  id: string;
+  name: string;
+  /** What it takes on this machine once installed, else what a download fetches. */
+  bytes: number;
+  /** On this machine and checked. */
+  installed: boolean;
+}
+
+/** Where the model stands on this machine. */
+export type CanopyModelState =
+  | { id: string; status: "missing" }
+  | { id: string; status: "downloading"; received: number; total: number }
+  | { id: string; status: "ready" }
+  | { id: string; status: "failed"; error: string };
 
 /** What a run's screen says at a glance, for a run the readers have not carded yet. */
 export interface CanopyRunGlance {
@@ -368,17 +459,45 @@ export interface CanopyRunGlance {
   glance: CanopyGlance;
 }
 
-/** Canopy's requests to its service, as the status bar shows them. */
-export interface CanopyLink {
-  /** The service's host, as the requests address it. */
-  host: string;
-  /** Requests to it under way now. */
+/** Canopy's local reader, as the status bar shows it. */
+export interface CanopyReaderLink {
+  /** The model's name, as Settings shows it. */
+  model: string;
+  /** Screens being read now. */
   inFlight: number;
-  /** The mean time of the latest classifier reads, in ms; null before the first. */
-  classifyMs: number | null;
-  /** The mean time of the latest summary reads, in ms; null before the first. */
+  /** The mean time of the latest reads, in ms; null before the first. */
   readMs: number | null;
 }
+
+/**
+ * One agent run the user closed on this host, whichever project it is in:
+ * Canopy's Trash. A closed run has left the fleet, so it carries the run as
+ * the host had it when it was closed: its name, agent and place, never its
+ * state. Inside the trash's window its process lives on and Restore takes it
+ * back; after it, the entry is `ended` and Restore resumes its session.
+ */
+export interface CanopyTrashEntry {
+  run: FleetRunRow;
+  trashedAt: number;
+  /** When the trash lets it go; it also names which trash of the run this is. */
+  expiresAt: number;
+  /** The trash let its process go. Absent while the process lives on. */
+  ended?: CanopyEndedTrash;
+}
+
+export interface CanopyEndedTrash {
+  /** The worktree it ran in is gone, so there is nowhere to resume it. */
+  worktreeRemoved?: boolean;
+}
+
+/**
+ * What a restore from Canopy's Trash did. `runId` is the run to show now: the
+ * same terminal put back, a pane already running the session, or a new one
+ * resuming it. `open` means no view of the run's project is open on its host
+ * to resume it in: the caller opens the project, as Go to terminal would, and
+ * asks there.
+ */
+export type CanopyRestoreOutcome = { runId: string } | { open: { workspaceId: string } };
 
 export interface CanopySnapshot {
   /**
@@ -389,9 +508,12 @@ export interface CanopySnapshot {
   mode: CanopyMode;
   /** The plan's mode revision: see `CanopyPlan.modeRevision`. */
   modeRevision?: number;
+  /** The plan's host epoch: see `CanopyPlan.hostEpoch`. */
+  hostEpoch?: string;
   /** The user turned Canopy on; nothing is read until they do. */
   activated: boolean;
-  tier: CanopyTier;
+  /** The model and whether it is here; absent while Canopy is off. */
+  model?: CanopyModelState;
   /** Runs the user archived or replied to and that have said nothing new since. */
   dispositions: CanopyDisposition[];
   /** When the user last looked at each run, for the runs looked at since Daintree started. */
@@ -402,7 +524,7 @@ export interface CanopySnapshot {
   scope: string | null;
   /** A panel is open and main is watching screens. */
   active: boolean;
-  /** A scan or a classifier/describer pass is in flight. */
+  /** A scan or a reading is in flight. */
   busy: boolean;
   /** When the last full scan finished (epoch ms). */
   refreshedAt: number | null;
@@ -419,17 +541,13 @@ export interface CanopySnapshot {
   failedRuns: string[];
   /**
    * Reads are held up for a reason that passes, not yet reported as a
-   * failure: the service is starting, or a read is waiting to be tried again.
-   * Absent while nothing is held up.
+   * failure: a read is waiting to be tried again. Absent while nothing is held up.
    */
-  waiting?: "waking" | "retrying";
-  /**
-   * Runs read with no panel open whose words the next open writes: their
-   * cards, and so their place in the list, are about to change.
-   */
-  wordsDue?: string[];
-  /** The requests to Canopy's service; absent while Canopy is off. */
-  link?: CanopyLink;
+  waiting?: "retrying";
+  /** The local reader; absent while Canopy is off. */
+  reader?: CanopyReaderLink;
+  /** Agent runs in this host's trash, any project's, newest first. Absent from older hosts. */
+  trash?: CanopyTrashEntry[];
 }
 
 /**
@@ -441,6 +559,11 @@ export interface CanopyTarget {
   spawnedAt: number;
 }
 
+/** A trashed run an action is meant for: the incarnation, and which trash of it. */
+export interface CanopyTrashTarget extends CanopyTarget {
+  expiresAt: number;
+}
+
 /**
  * A run the panel's search asks about, with the words of the query nothing
  * else on the run held: main looks for them on its terminal, which never
@@ -449,4 +572,13 @@ export interface CanopyTarget {
 export interface CanopyScreenSearchTarget extends CanopyTarget {
   runId: string;
   terms: string[];
+}
+
+/**
+ * A snapshot from a host on a Daintree from before Canopy read locally (#14448):
+ * those always say a tier, and still send screens to the former hosted
+ * service. A Shell shows none of their readings and offers to turn none on.
+ */
+export function readsWithHostedService(snapshot: CanopySnapshot): boolean {
+  return "tier" in snapshot;
 }

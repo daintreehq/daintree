@@ -5,6 +5,9 @@ vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
 
 import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
 import { registerGitActions } from "../gitActions";
+// The run bodies load on first dispatch (#14239). Evaluate them here, as they
+// always were, rather than under the window stub a test swaps in before run().
+import "../gitActions.impl";
 import { useGitPushConfirmStore } from "@/store/gitPushConfirmStore";
 import { useGitPullRebaseConfirmStore } from "@/store/gitPullRebaseConfirmStore";
 import { useGitForcePushStore } from "@/store/gitForcePushStore";
@@ -681,6 +684,21 @@ describe("gitActions adversarial", () => {
     expect(git.getFileDiff).toHaveBeenLastCalledWith("/repo/one", "a.ts", "modified", undefined, {
       offset: 0,
       maxBytes: GIT_FILE_DIFF_DEFAULT_MAX_BYTES,
+    });
+  });
+
+  it("git.getFileDiff forwards a named side to the preload bridge", async () => {
+    const { runParsed, git } = setupActions();
+
+    await runParsed(
+      "git.getFileDiff",
+      { worktreeId: "wt-1", filePath: "a.ts", status: "modified", side: "staged" },
+      {}
+    );
+    expect(git.getFileDiff).toHaveBeenLastCalledWith("/repo/one", "a.ts", "modified", undefined, {
+      offset: 0,
+      maxBytes: GIT_FILE_DIFF_DEFAULT_MAX_BYTES,
+      side: "staged",
     });
   });
 

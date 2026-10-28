@@ -9,3 +9,11 @@ export const NEW_TERMINAL_CHORD =
     : process.platform === "linux"
       ? "Control+Shift+Alt+t"
       : "Control+Alt+t";
+
+/** The default `voiceInput.toggle` chord; Linux swaps it for the same reason as the terminal one. */
+export const VOICE_TOGGLE_CHORD =
+  process.platform === "darwin"
+    ? "Meta+d"
+    : process.platform === "linux"
+      ? "Control+Alt+,"
+      : "Control+.";

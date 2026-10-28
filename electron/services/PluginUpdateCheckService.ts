@@ -292,7 +292,7 @@ export class PluginUpdateCheckService {
   } | null> {
     const { pluginService } = await import("./PluginService.js");
     try {
-      await pluginService.waitForInit();
+      await pluginService.waitForCatalog();
     } catch {
       // If init never settled the list read below simply returns what's loaded.
     }

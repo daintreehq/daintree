@@ -2,6 +2,7 @@ import type { Duplex } from "node:stream";
 import type { z } from "zod";
 import type { IpcEnvelope } from "../../../shared/types/ipc/errors.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { stampNow, type ElapsedStamp } from "./elapsed.js";
 import type { EncodingLimits } from "./encoding.js";
 import {
   DEFAULT_MAX_FRAME_BYTES,
@@ -56,8 +57,19 @@ export interface LinkSessionOptions {
   encodingLimits?: EncodingLimits;
   /** Interval between pings once open; 0 disables. */
   pingIntervalMs?: number;
-  /** Close when nothing has been received for this long once open; 0 disables. */
+  /**
+   * Close when nothing has been received for this long once open; 0 disables.
+   * Silence only says the peer's loop hasn't answered, not that it is gone: a
+   * dead process or transport closes the stream itself. So this is a ceiling
+   * for a peer stuck for good, well past any stall it can recover from.
+   */
   idleTimeoutMs?: number;
+  /**
+   * How long this machine was awake since a moment `now` gave; all of it by
+   * default. Time asleep is not silence from the peer, so the idle timeout
+   * counts only this.
+   */
+  awakeSince?: (since: number) => number;
   /** Close when the handshake has not completed within this long; 0 disables. */
   handshakeTimeoutMs?: number;
   /** Default timeout for CALL and REVERSE_REQUEST; 0 disables. */
@@ -76,6 +88,8 @@ export interface LinkSessionOptions {
   maxInboundRequests?: number;
   transfers?: LinkTransfersOptions;
   now?: () => number;
+  /** This machine's clocks, for how long ago a ping went; real ones by default. */
+  clock?: () => ElapsedStamp;
 }
 
 export interface LinkCloseInfo {
@@ -127,7 +141,11 @@ export const HANDSHAKE_MAX_FRAME_BYTES = 64 * 1024;
 
 const MAX_REQUEST_ID = 0xffffffff;
 const END_GRACE_MS = 2_000;
+/** A host paging under memory pressure can miss pings for a minute and still catch up. */
+const DEFAULT_IDLE_TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_PENDING_REQUESTS = 4096;
+/** Over a minute of pings at the default cadence: a summary dated by an older one is too old anyway. */
+const MAX_REMEMBERED_PINGS = 16;
 // Messages that follow WELCOME before the client has attached its handlers
 // are only the rest of the read that carried it; a peer filling this is broken.
 const MAX_HELD_MESSAGES = 4096;
@@ -200,11 +218,18 @@ export class LinkSession {
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private idleTimer: ReturnType<typeof setInterval> | null = null;
   private handshakeTimer: ReturnType<typeof setTimeout> | null = null;
+  private probeTimer: ReturnType<typeof setTimeout> | null = null;
   private closeInfo: LinkCloseInfo | null = null;
 
   private _rttMs: number | null = null;
+  private nextPingNonce = 0;
+  /** When each recent ping of ours went, by nonce: what a peer's answer can be dated by. */
+  private readonly sentPings = new Map<number, ElapsedStamp>();
+  private _peerPingNonce: number | null = null;
   private _lastReceivedAt: number;
   private _framesSinceOpen = 0;
+  /** Reads that brought bytes, so a probe can tell whether anything arrived after it. */
+  private reads = 0;
 
   constructor(
     private readonly socket: Duplex,
@@ -268,6 +293,16 @@ export class LinkSession {
     return this._lastReceivedAt;
   }
 
+  /** The newest ping nonce the peer sent: anything posted now went after it was sent. */
+  get peerPingNonce(): number | null {
+    return this._peerPingNonce;
+  }
+
+  /** When one of this session's recent pings went; null for one it never sent or has forgotten. */
+  pingSentAt(nonce: number): ElapsedStamp | null {
+    return this.sentPings.get(nonce) ?? null;
+  }
+
   /** Frames the peer has sent since the handshake succeeded. */
   get framesSinceOpen(): number {
     return this._framesSinceOpen;
@@ -306,12 +341,19 @@ export class LinkSession {
       this.pingTimer = setInterval(() => this.ping(), pingMs);
       this.pingTimer.unref?.();
     }
-    const idleMs = this.opts.idleTimeoutMs ?? 20_000;
+    const idleMs = this.opts.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
     if (idleMs > 0) {
+      const awakeSince = this.opts.awakeSince ?? ((since: number) => this.now() - since);
       this.idleTimer = setInterval(
-        () => {
-          if (this.now() - this._lastReceivedAt > idleMs) this.close("idle timeout");
-        },
+        // Judged after the loop's next poll for input: when our own loop was
+        // the one stalled, what the peer sent meanwhile is still unread, and
+        // its silence is only ours.
+        () =>
+          setImmediate(() => {
+            if (this.state === "open" && awakeSince(this._lastReceivedAt) > idleMs) {
+              this.drop("idle timeout");
+            }
+          }),
         Math.max(10, Math.floor(idleMs / 4))
       );
       this.idleTimer.unref?.();
@@ -331,7 +373,29 @@ export class LinkSession {
 
   ping(): void {
     if (this.state !== "open") return;
-    this.post({ lane: Lane.CONTROL, kind: ControlKind.PING, body: { sentAt: this.now() } });
+    const nonce = this.nextPingNonce++;
+    this.sentPings.set(nonce, (this.opts.clock ?? stampNow)());
+    if (this.sentPings.size > MAX_REMEMBERED_PINGS) {
+      this.sentPings.delete(this.sentPings.keys().next().value!);
+    }
+    this.post({ lane: Lane.CONTROL, kind: ControlKind.PING, body: { sentAt: this.now(), nonce } });
+  }
+
+  /**
+   * Ping now, and drop the session if nothing at all arrives within
+   * `withinMs`: after a wake, a link that died while the machine slept is
+   * given up at once instead of at the idle timeout.
+   */
+  probe(withinMs: number, reason: string): void {
+    if (this.state !== "open") return;
+    const reads = this.reads;
+    this.ping();
+    if (this.probeTimer) clearTimeout(this.probeTimer);
+    this.probeTimer = setTimeout(() => {
+      this.probeTimer = null;
+      if (this.state === "open" && this.reads === reads) this.drop(reason);
+    }, withinMs);
+    this.probeTimer.unref?.();
   }
 
   onRtt(listener: (rttMs: number) => void): () => void {
@@ -491,6 +555,15 @@ export class LinkSession {
     this.shutdown({ reason, by: "local" }, true);
   }
 
+  /**
+   * End a link presumed dead without a GOODBYE: it would most likely go
+   * nowhere, and a peer it did reach would take it as leaving for good and
+   * give up a session that could still be resumed.
+   */
+  private drop(reason: string): void {
+    this.shutdown({ reason, by: "local" }, false);
+  }
+
   /** Send a REJECT and end the stream (host side of a failed handshake). */
   reject(message: Body<typeof Lane.CONTROL, typeof ControlKind.REJECT>): void {
     if (this.state === "closed") return;
@@ -620,6 +693,7 @@ export class LinkSession {
     // takes that long to arrive on a slow link, and it must not be cut off
     // (nor the link called quiet) halfway through.
     this._lastReceivedAt = this.now();
+    this.reads++;
     let frames: LinkFrame[];
     try {
       frames = this.decoder.push(chunk);
@@ -682,6 +756,7 @@ export class LinkSession {
       case Lane.CONTROL:
         switch (message.kind) {
           case ControlKind.PING:
+            if (message.body.nonce !== undefined) this._peerPingNonce = message.body.nonce;
             this.post({ lane: Lane.CONTROL, kind: ControlKind.PONG, body: message.body });
             return;
           case ControlKind.PONG: {
@@ -862,9 +937,12 @@ export class LinkSession {
     }
     this.closeInfo = info;
     this.clearHandshakeTimer();
+    if (this.probeTimer) clearTimeout(this.probeTimer);
+    this.probeTimer = null;
     if (this.pingTimer) clearInterval(this.pingTimer);
     if (this.idleTimer) clearInterval(this.idleTimer);
     this.pingTimer = this.idleTimer = null;
+    this.sentPings.clear();
     this.scheduler.clear();
     this.tickListeners.clear();
     this.held = null;

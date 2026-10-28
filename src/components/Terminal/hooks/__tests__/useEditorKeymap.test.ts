@@ -1,8 +1,11 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook } from "@testing-library/react";
-import { Compartment } from "@codemirror/state";
-import type { EditorState } from "@codemirror/state";
+import { Compartment, EditorState } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
+import { undo, undoDepth } from "@codemirror/commands";
+import { createComposerHistory } from "../../inputEditorExtensions/composerHistory";
+import { requestVoiceCaret, voiceCaret } from "../../inputEditorExtensions/voiceCaret";
 import type { Dispatch, SetStateAction } from "react";
 import type { ActiveCompletionContext } from "../../hybridInputParsing";
 import type { AutocompleteItem } from "../../AutocompleteMenu";
@@ -40,9 +43,14 @@ function makeLatest(overrides: Partial<LatestShape> = {}): LatestShape {
 }
 
 describe("useEditorKeymap", () => {
-  let applyAutocompleteSelection: ReturnType<typeof vi.fn<(mode: "enter" | "complete") => boolean>>;
+  let applyAutocompleteSelection: ReturnType<
+    typeof vi.fn<(mode: "enter" | "complete", index?: number) => boolean>
+  >;
   let sendFromEditor: ReturnType<typeof vi.fn<() => void>>;
   let cancelVoiceWaitSubmit: ReturnType<typeof vi.fn<() => boolean>>;
+  let handleDictationEscape: ReturnType<typeof vi.fn<() => boolean>>;
+  let startVoiceWaitSubmit: ReturnType<typeof vi.fn<() => void>>;
+  let hasPendingVoiceCorrection: ReturnType<typeof vi.fn<() => boolean>>;
   let setActiveCompletionContext: ReturnType<
     typeof vi.fn<Dispatch<SetStateAction<ActiveCompletionContext | null>>>
   >;
@@ -50,15 +58,20 @@ describe("useEditorKeymap", () => {
   let setSelectedIndex: ReturnType<typeof vi.fn<Dispatch<SetStateAction<number>>>>;
 
   beforeEach(() => {
-    applyAutocompleteSelection = vi.fn<(mode: "enter" | "complete") => boolean>(() => true);
+    applyAutocompleteSelection = vi.fn<(mode: "enter" | "complete", index?: number) => boolean>(
+      () => true
+    );
     sendFromEditor = vi.fn<() => void>();
     cancelVoiceWaitSubmit = vi.fn<() => boolean>(() => false);
+    handleDictationEscape = vi.fn<() => boolean>(() => false);
+    startVoiceWaitSubmit = vi.fn<() => void>();
+    hasPendingVoiceCorrection = vi.fn<() => boolean>(() => false);
     setActiveCompletionContext = vi.fn<Dispatch<SetStateAction<ActiveCompletionContext | null>>>();
     handleHistoryNavigation = vi.fn<(direction: "up" | "down") => boolean>(() => false);
     setSelectedIndex = vi.fn<Dispatch<SetStateAction<number>>>();
   });
 
-  function renderKeymap(latest: LatestShape) {
+  function renderKeymap(latest: LatestShape, overrides: Partial<KeymapParams> = {}) {
     const params: KeymapParams = {
       latestRef: { current: latest },
       editorViewRef: { current: null },
@@ -69,8 +82,10 @@ describe("useEditorKeymap", () => {
       applyAutocompleteSelection,
       handleHistoryNavigation,
       sendFromEditor,
-      startVoiceWaitSubmit: vi.fn<() => void>(),
+      startVoiceWaitSubmit,
       cancelVoiceWaitSubmit,
+      handleDictationEscape,
+      hasPendingVoiceCorrection,
       stashEditorState:
         vi.fn<(terminalId: string, state: EditorState, projectId?: string) => void>(),
       popStashedEditorState: vi.fn<
@@ -79,12 +94,32 @@ describe("useEditorKeymap", () => {
       setActiveCompletionContext,
       setIsExpanded: vi.fn<Dispatch<SetStateAction<boolean>>>(),
       setSelectedIndex,
+      ...overrides,
     };
     const { result } = renderHook(() => useEditorKeymap(params));
     return { handlers: result.current.handlersRef.current! };
   }
 
   describe("Enter", () => {
+    it("waits for a finished passage's pending correction instead of sending raw text", () => {
+      hasPendingVoiceCorrection.mockReturnValue(true);
+      const { handlers } = renderKeymap(
+        makeLatest({ isAutocompleteOpen: false, autocompleteItems: [], value: "hello wrld" })
+      );
+      expect(handlers.onEnter()).toBe(true);
+      expect(startVoiceWaitSubmit).toHaveBeenCalledTimes(1);
+      expect(sendFromEditor).not.toHaveBeenCalled();
+    });
+
+    it("sends straight away when no dictation is finishing or being corrected", () => {
+      const { handlers } = renderKeymap(
+        makeLatest({ isAutocompleteOpen: false, autocompleteItems: [], value: "hello" })
+      );
+      expect(handlers.onEnter()).toBe(true);
+      expect(startVoiceWaitSubmit).not.toHaveBeenCalled();
+      expect(sendFromEditor).toHaveBeenCalledTimes(1);
+    });
+
     it("applies the selected item on Enter (item owns insert vs execute)", () => {
       const { handlers } = renderKeymap(makeLatest());
       expect(handlers.onEnter()).toBe(true);
@@ -105,6 +140,13 @@ describe("useEditorKeymap", () => {
       expect(applyAutocompleteSelection).toHaveBeenCalledWith("enter");
     });
 
+    it("sends what was typed when the menu shows rows but none is selected", () => {
+      const { handlers } = renderKeymap(makeLatest({ selectedIndex: -1, value: "color: #333" }));
+      expect(handlers.onEnter()).toBe(true);
+      expect(applyAutocompleteSelection).not.toHaveBeenCalled();
+      expect(sendFromEditor).toHaveBeenCalledTimes(1);
+    });
+
     it("falls through to the normal send when the selected item is stale", () => {
       const { handlers } = renderKeymap(makeLatest({ staleItemKeys: new Set(["src/a.ts"]) }));
       expect(handlers.onEnter()).toBe(true);
@@ -123,11 +165,106 @@ describe("useEditorKeymap", () => {
     });
   });
 
+  describe("Mod+Enter", () => {
+    const route = () => ({ submitText: vi.fn(async () => true), sendEnter: vi.fn() });
+
+    it("is left alone by a composer that gives no route", () => {
+      const { handlers } = renderKeymap(
+        makeLatest({ isAutocompleteOpen: false, autocompleteItems: [], value: "hello" })
+      );
+      expect(handlers.onModEnter()).toBe(false);
+      expect(sendFromEditor).not.toHaveBeenCalled();
+    });
+
+    it("sends as Enter does, by the route taken at the press, dictation wait included", () => {
+      const onSendKey = vi.fn<(key: string) => void>();
+      const routes: ReturnType<typeof route>[] = [];
+      const latest = makeLatest({
+        isAutocompleteOpen: false,
+        autocompleteItems: [],
+        value: "hello",
+        onSendKey,
+        modEnterSend: () => {
+          routes.push(route());
+          return routes.at(-1)!;
+        },
+      });
+      const { handlers } = renderKeymap(latest);
+
+      expect(handlers.onModEnter()).toBe(true);
+      expect(sendFromEditor).toHaveBeenCalledWith(routes[0]);
+
+      latest.value = "";
+      expect(handlers.onModEnter()).toBe(true);
+      expect(routes[1]!.sendEnter).toHaveBeenCalledTimes(1);
+      expect(onSendKey).not.toHaveBeenCalled();
+
+      latest.value = "still talking";
+      latest.isVoiceActiveForPanel = true;
+      expect(handlers.onModEnter()).toBe(true);
+      expect(startVoiceWaitSubmit).toHaveBeenCalledWith({ route: routes[2] });
+
+      // Plain Enter goes the composer's own way, with no route.
+      latest.isVoiceActiveForPanel = false;
+      latest.value = "";
+      expect(handlers.onEnter()).toBe(true);
+      expect(onSendKey).toHaveBeenCalledWith("enter");
+    });
+
+    it("sends nothing by the route mid-composition or while disabled", () => {
+      const routed = route();
+      const latest = makeLatest({
+        isAutocompleteOpen: false,
+        autocompleteItems: [],
+        value: "hello",
+        modEnterSend: () => routed,
+      });
+      const isComposingRef = { current: true };
+      const { handlers } = renderKeymap(latest, { isComposingRef });
+      // The input method's own key: left for it.
+      expect(handlers.onModEnter()).toBe(false);
+
+      isComposingRef.current = false;
+      latest.disabled = true;
+      expect(handlers.onModEnter()).toBe(true);
+      expect(sendFromEditor).not.toHaveBeenCalled();
+      expect(startVoiceWaitSubmit).not.toHaveBeenCalled();
+      expect(routed.submitText).not.toHaveBeenCalled();
+      expect(routed.sendEnter).not.toHaveBeenCalled();
+    });
+
+    it("lets a completion row take it as its own, with nothing sent by the route", () => {
+      const routed = route();
+      const { handlers } = renderKeymap(makeLatest({ modEnterSend: () => routed }));
+      expect(handlers.onModEnter()).toBe(true);
+      expect(applyAutocompleteSelection).toHaveBeenCalledWith("enter");
+      expect(sendFromEditor).not.toHaveBeenCalled();
+      expect(routed.submitText).not.toHaveBeenCalled();
+    });
+  });
+
   describe("Tab", () => {
     it("completes the selected item when fresh", () => {
-      const { handlers } = renderKeymap(makeLatest());
+      const second: AutocompleteItem = { ...fileItem, key: "src/b.ts", insertText: "src/b.ts" };
+      const { handlers } = renderKeymap(
+        makeLatest({ autocompleteItems: [fileItem, second], selectedIndex: 1 })
+      );
       expect(handlers.onTab()).toBe(true);
-      expect(applyAutocompleteSelection).toHaveBeenCalledWith("complete");
+      expect(applyAutocompleteSelection).toHaveBeenCalledWith("complete", 1);
+    });
+
+    it("completes the first row when nothing is selected", () => {
+      const { handlers } = renderKeymap(makeLatest({ selectedIndex: -1 }));
+      expect(handlers.onTab()).toBe(true);
+      expect(applyAutocompleteSelection).toHaveBeenCalledWith("complete", 0);
+    });
+
+    it("swallows Tab when nothing is selected and the first row is stale", () => {
+      const { handlers } = renderKeymap(
+        makeLatest({ selectedIndex: -1, staleItemKeys: new Set(["src/a.ts"]) })
+      );
+      expect(handlers.onTab()).toBe(true);
+      expect(applyAutocompleteSelection).not.toHaveBeenCalled();
     });
 
     it("swallows Tab without completing when the selected item is stale", () => {
@@ -144,11 +281,68 @@ describe("useEditorKeymap", () => {
       expect(setActiveCompletionContext).toHaveBeenCalledWith(null);
     });
 
+    it("dismisses a menu still waiting on its rows and carries on to the agent", () => {
+      const onSendKey = vi.fn<(key: string) => void>();
+      const { handlers } = renderKeymap(
+        makeLatest({
+          isAutocompleteOpen: false,
+          autocompleteItems: [],
+          activeCompletionContext: { triggerChar: "#", start: 0, tokenEnd: 1, query: "" },
+          value: "#",
+          onSendKey,
+        })
+      );
+      expect(handlers.onEscape()).toBe(true);
+      expect(setActiveCompletionContext).toHaveBeenCalledWith(null);
+      expect(onSendKey).toHaveBeenCalledWith("escape");
+    });
+
     it("cancels a pending voice wait-submit before touching autocomplete", () => {
       cancelVoiceWaitSubmit.mockReturnValue(true);
       const { handlers } = renderKeymap(makeLatest());
       expect(handlers.onEscape()).toBe(true);
       expect(setActiveCompletionContext).not.toHaveBeenCalled();
+    });
+
+    it("closes an open autocomplete without ending the dictation", () => {
+      handleDictationEscape.mockReturnValue(true);
+      const { handlers } = renderKeymap(makeLatest());
+      expect(handlers.onEscape()).toBe(true);
+      expect(setActiveCompletionContext).toHaveBeenCalledWith(null);
+      expect(handleDictationEscape).not.toHaveBeenCalled();
+    });
+
+    it("hands Escape to the dictation instead of the agent at rest", () => {
+      handleDictationEscape.mockReturnValue(true);
+      const onSendKey = vi.fn<(key: string) => void>();
+      const { handlers } = renderKeymap(makeLatest({ isAutocompleteOpen: false, onSendKey }));
+      expect(handlers.onEscape()).toBe(true);
+      expect(handleDictationEscape).toHaveBeenCalledOnce();
+      expect(onSendKey).not.toHaveBeenCalled();
+    });
+
+    it("collapses an expanded editor without ending the dictation", () => {
+      handleDictationEscape.mockReturnValue(true);
+      const { handlers } = renderKeymap(
+        makeLatest({ isAutocompleteOpen: false, isExpanded: true })
+      );
+      expect(handlers.onEscape()).toBe(true);
+      expect(handleDictationEscape).not.toHaveBeenCalled();
+    });
+
+    it("hands Escape to the dictation even when the composer is disabled", () => {
+      handleDictationEscape.mockReturnValue(true);
+      const { handlers } = renderKeymap(makeLatest({ isAutocompleteOpen: false, disabled: true }));
+      expect(handlers.onEscape()).toBe(true);
+      expect(handleDictationEscape).toHaveBeenCalledOnce();
+    });
+
+    it("sends Escape to the agent when no dictation takes it", () => {
+      const onSendKey = vi.fn<(key: string) => void>();
+      const { handlers } = renderKeymap(makeLatest({ isAutocompleteOpen: false, onSendKey }));
+      expect(handlers.onEscape()).toBe(true);
+      expect(handleDictationEscape).toHaveBeenCalledOnce();
+      expect(onSendKey).toHaveBeenCalledWith("escape");
     });
   });
 
@@ -268,6 +462,20 @@ describe("useEditorKeymap", () => {
       expect(handleHistoryNavigation).not.toHaveBeenCalled();
     });
 
+    it("moves from no selection to the first row going down and the last going up", () => {
+      const rows = ["a", "b", "c"].map((key) => ({ ...fileItem, key }));
+      const { handlers } = renderKeymap(
+        makeLatest({ autocompleteItems: rows, selectedIndex: -1, value: "#" })
+      );
+      handlers.onArrowDown();
+      handlers.onArrowUp();
+      const [down, up] = setSelectedIndex.mock.calls.map(([update]) =>
+        typeof update === "function" ? update(-1) : update
+      );
+      expect(down).toBe(0);
+      expect(up).toBe(2);
+    });
+
     it("agent terminal: non-empty input outside history mode is left to CodeMirror", () => {
       const onSendKey = vi.fn<(key: string) => void>();
       const { handlers } = renderKeymap(
@@ -314,6 +522,65 @@ describe("useEditorKeymap", () => {
       expect(handlers.onArrowUp()).toBe(true);
       expect(handleHistoryNavigation).toHaveBeenCalledWith("up");
       expect(onSendKey).toHaveBeenCalledWith("up");
+    });
+  });
+  describe("Stash", () => {
+    it("stashes the draft with its own undo steps and leaves none in the empty composer", () => {
+      const view = new EditorView({
+        parent: document.createElement("div"),
+        state: EditorState.create({ doc: "", extensions: [createComposerHistory()] }),
+      });
+      view.dispatch({ changes: { from: 0, insert: "half a prompt" }, userEvent: "input.type" });
+      let stashed: EditorState | undefined;
+      const { handlers } = renderKeymap(makeLatest({ isAutocompleteOpen: false }), {
+        editorViewRef: { current: view },
+        stashEditorState: vi.fn((_id: string, state: EditorState) => {
+          stashed = state;
+        }),
+        popStashedEditorState: vi.fn(() => stashed),
+      });
+
+      expect(handlers.onStash()).toBe(true);
+      expect(view.state.doc.toString()).toBe("");
+      expect(undoDepth(view.state)).toBe(0);
+
+      expect(handlers.onPopStash()).toBe(true);
+      expect(view.state.doc.toString()).toBe("half a prompt");
+      expect(undo(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe("");
+      view.destroy();
+    });
+
+    it.each([
+      ["brings the caret of a session still open back with the draft", true, "live"],
+      ["leaves the caret of a session ended since behind", false, null],
+    ])("%s", (_name, stillOpen, expected) => {
+      const view = new EditorView({
+        parent: document.createElement("div"),
+        state: EditorState.create({ doc: "half a prompt", extensions: [voiceCaret] }),
+      });
+      try {
+        view.dispatch({ effects: requestVoiceCaret(view, { phase: "live", at: "end" }) });
+        let stashed: EditorState | undefined;
+        const { handlers } = renderKeymap(makeLatest({ isAutocompleteOpen: false }), {
+          editorViewRef: { current: view },
+          stashEditorState: vi.fn((_id: string, state: EditorState) => {
+            stashed = state;
+          }),
+          popStashedEditorState: vi.fn(() => stashed),
+        });
+
+        expect(handlers.onStash()).toBe(true);
+        if (!stillOpen) view.dispatch({ effects: requestVoiceCaret(view, { phase: null }) });
+        expect(handlers.onPopStash()).toBe(true);
+
+        expect(view.state.doc.toString()).toBe("half a prompt");
+        expect(
+          view.contentDOM.querySelector<HTMLElement>(".cm-voice-caret")?.dataset.phase ?? null
+        ).toBe(expected);
+      } finally {
+        view.destroy();
+      }
     });
   });
 });

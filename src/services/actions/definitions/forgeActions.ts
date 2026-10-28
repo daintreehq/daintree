@@ -1,19 +1,7 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import type { ActionContext } from "@shared/types/actions";
-import type { ForgeUser } from "@shared/types/forge";
 import { defineAction } from "../defineAction";
 import { z } from "zod";
-import { forgeClient } from "@/clients";
-import {
-  worktreeLocationShape,
-  withProjectLocation,
-  requireWorktreePath,
-  resolveProjectLocation,
-  type WorktreeLocationArgs,
-} from "./locationArgs";
-import { useProjectStore } from "@/store/projectStore";
-import { patchIssueAssigneeCache } from "@/lib/forgeResourceCache";
-import { logError } from "@/utils/logger";
 import {
   ForgeCIStatusActionResultSchema,
   ForgeIssueResultSchema,
@@ -24,154 +12,62 @@ import {
 } from "@shared/types/forgeActionResults";
 import {
   ForgeIssuePageResultSchema,
-  ForgeListViewSchema,
   ForgePRPageResultSchema,
-  projectForgePage,
-  projectIssueSummary,
-  projectPRSummary,
 } from "@shared/utils/forgeListProjection";
-
-/**
- * The cache keys on the PROJECT ROOT, but these actions resolve their forge
- * target from the caller's location argument — and a linked worktree path
- * matches no cache slot.
- *
- * So only an explicit PATH is honored as given, because only a path can name a
- * repo outside this project. Everything else — no location at all, or a
- * `worktreeId`, which necessarily resolves inside the current project and yields
- * a linked-worktree path — patches the current project root instead; otherwise
- * the optimistic assign/unassign update is silently dropped. If an explicit path
- * isn't a project root the patch simply finds nothing.
- */
-function assigneeCachePath(location: WorktreeLocationArgs, resolvedCwd: string): string | null {
-  if (location.worktreePath || location.cwd) return resolvedCwd;
-  return useProjectStore.getState().currentProject?.path ?? null;
-}
-
-/**
- * Reflect an assign/unassign in the cached issue lists so the toolbar dropdown
- * updates immediately (#11087). Driven by the forge's own resulting assignee
- * list rather than the requested username: a forge silently drops an assignee
- * the account can't take, so trusting the request would show a membership that
- * never landed. The list also carries the account's avatar, which the request
- * alone never had.
- *
- * Best-effort by design: the forge mutation has already succeeded by the time
- * this runs, so a cache-layer throw must never surface as a failed action.
- */
-function syncAssigneeCache(
-  projectPath: string | null,
-  issueNumber: number,
-  username: string,
-  assignees: readonly Pick<ForgeUser, "login" | "avatarUrl">[]
-): void {
-  if (!projectPath) return;
-  const match = username.trim().toLowerCase();
-  const landed = assignees.find((a) => a.login.trim().toLowerCase() === match);
-  try {
-    patchIssueAssigneeCache(
-      projectPath,
-      issueNumber,
-      { login: landed?.login ?? username, avatarUrl: landed?.avatarUrl },
-      landed !== undefined
-    );
-  } catch (err) {
-    logError("Failed to patch issue cache after assignment change", err);
-  }
-}
-
-/**
- * Paging and ordering shared by both list actions. `.strict()` is deliberate
- * and, as of #11527, the only strict action schema in the codebase: these are
- * `danger: "safe"` queries whose worst failure is silent — Zod's default strip
- * meant `labels: [...]` or `limit: 10` returned a confidently UNFILTERED page,
- * and an agent then acted on the wrong set. A validation error naming the bad
- * key is strictly more useful than a wrong answer.
- */
-const ForgeListPagingSchema = z.object({
-  ...worktreeLocationShape({ legacy: ["cwd"] }),
-  cursor: z
-    .string()
-    // An empty cursor is not "page one": the provider keys its cache on
-    // `cursor ?? ""` but queries on `cursor ?? null`, so `""` would share the
-    // first page's cache entry while asking GitHub for an invalid Relay
-    // cursor — a cold call errors, the same call after a cache warm quietly
-    // returns page one. Reject it here rather than let it alias.
-    .min(1, "cursor must be a non-empty value from a previous response's nextCursor")
-    .optional()
-    .describe("The previous response's `nextCursor`, for the next page."),
-  // 100 is the tightest page ceiling across the provider roster, so it is the
-  // largest request every provider can serve in one round trip.
-  perPage: z
-    .number()
-    .int()
-    .min(1)
-    .max(100)
-    .optional()
-    .describe("Rows per page, 1-100 (default: 20)."),
-  sort: z.enum(["created", "updated"]).optional().describe("Sort field (default: created)."),
-  direction: z.enum(["asc", "desc"]).optional().describe("Sort direction (default: desc)."),
-  // The only escape hatch from a warm list cache. Without it an out-of-band
-  // change — the user running a forge CLI in a terminal, another agent closing
-  // an issue — stays invisible until the cached page ages out, and the agent
-  // has no way to ask for the truth. Mirrors `forge.getRepoStats`.
-  bypassCache: z
-    .boolean()
-    .optional()
-    .describe(
-      "Skip the provider's list cache (default false). Costs a round trip; use only when the list changed outside Daintree."
-    ),
-  view: ForgeListViewSchema,
-});
-
-const ForgeListOptionsSchema = ForgeListPagingSchema.extend({
-  state: z.enum(["open", "closed", "all"]).optional().describe("State filter (default: open)"),
-  search: z
-    .string()
-    .optional()
-    .describe(
-      "Provider-native issue search fragment, not plain text; appended to the generated qualifiers and cut to the provider's cap. The search API caps result depth."
-    ),
-}).strict();
-
-// PR listing adds `merged` to the state filter — pull requests have a merged
-// state that issues don't. `search` was absent here until a provider could
-// honor it (#11897); the GitHub provider now routes PR listing through the
-// same search API the issue path uses, so the key is admitted rather than
-// rejected. The dialect differs from the issue one — PR state is expressed
-// with `is:` qualifiers, since GitHub's `state:` only accepts open/closed for
-// pull requests — but the fragment is passed through unparsed either way.
-const ForgePRListOptionsSchema = ForgeListPagingSchema.extend({
-  state: z
-    .enum(["open", "closed", "merged", "all"])
-    .optional()
-    .describe("State filter (default: open)"),
-  search: z
-    .string()
-    .optional()
-    .describe(
-      "Provider-native PR search fragment, not plain text; appended to the generated qualifiers and cut to the provider's cap. The search API caps result depth."
-    ),
-}).strict();
-
-/**
- * Smallest and largest batch `forge.getPRs` accepts.
- *
- * The floor is 2 because one number is the singular lookup's job and a plural
- * call for it only adds a shape to unwrap. The ceiling is 20 because that is
- * the GitHub provider's GraphQL chunk size, so a batch at or under it is one
- * request there — but that is a property of the provider, NOT a promise of the
- * tool: a provider without `batchLookups` falls back to a singular read per
- * number. That fallback is the other reason the ceiling is not larger — twenty
- * sequential provider round trips already sit uncomfortably inside the 30s
- * dispatch budget.
- *
- * Both bounds are repeated in the field description on purpose: `toWireSchema`
- * strips `minItems`/`maxItems` from the advertised schema, so prose is the only
- * place a model ever sees them.
- */
-const FORGE_GET_PRS_MIN = 2;
-const FORGE_GET_PRS_MAX = 20;
+import {
+  FORGE_GET_PRS_MAX,
+  FORGE_GET_PRS_MIN,
+  ForgeListOptionsSchema,
+  ForgePRListOptionsSchema,
+  addIssueCommentArgsSchema,
+  addIssueLabelArgsSchema,
+  approvePRArgsSchema,
+  assignIssueArgsSchema,
+  closeIssueArgsSchema,
+  closePRArgsSchema,
+  commentOnPRArgsSchema,
+  convertPRToDraftArgsSchema,
+  createIssueArgsSchema,
+  createPRArgsSchema,
+  disableAutoMergeArgsSchema,
+  dismissReviewArgsSchema,
+  editIssueArgsSchema,
+  editPRArgsSchema,
+  enableAutoMergeArgsSchema,
+  getCIStatusArgsSchema,
+  getChecksArgsSchema,
+  getIssueArgsSchema,
+  getPRArgsSchema,
+  getPRsArgsSchema,
+  getRepoStatsArgsSchema,
+  listIssueCommentsArgsSchema,
+  markPRReadyForReviewArgsSchema,
+  mergePRArgsSchema,
+  openCommitsArgsSchema,
+  openIssueArgsSchema,
+  openIssuesArgsSchema,
+  openPRArgsSchema,
+  openPRsArgsSchema,
+  openRepoArgsSchema,
+  removeIssueLabelArgsSchema,
+  reopenIssueArgsSchema,
+  reopenPRArgsSchema,
+  requestChangesArgsSchema,
+  requestReviewersArgsSchema,
+  unassignIssueArgsSchema,
+  validateTokenArgsSchema,
+} from "./forgeActionArgs";
+import {
+  ForgeAssigneesResultSchema,
+  ForgeCommentResultSchema,
+  ForgeDisableAutoMergeResultSchema,
+  ForgeEnableAutoMergeResultSchema,
+  ForgeMergePRResultSchema,
+  ForgePRDraftStateResultSchema,
+  ForgeRequestedReviewersResultSchema,
+  ForgeReviewResultSchema,
+} from "./forgeActionResultSchemas";
+import type { ForgeActionRunId } from "./forgeActions.impl";
 
 /**
  * One requested number's outcome, discriminated by `status`.
@@ -247,56 +143,6 @@ const ForgeChecksActionResultSchema = z.object({
 // Label set returned by the add/remove-label write actions.
 const ForgeLabelArrayResultSchema = z.array(ForgeLabelResultSchema);
 
-// Comment returned by the add-comment write action.
-const ForgeCommentResultSchema = z.object({
-  id: z.string(),
-  body: z.string(),
-  url: z.string(),
-  createdAt: z.number(),
-});
-
-// Resulting assignee list after an assign/unassign. The list is authoritative:
-// forges silently drop assignees the account can't take, so it can omit the
-// username that was just requested.
-const ForgeAssigneesResultSchema = z.object({
-  issueNumber: z.number(),
-  assignees: z.array(ForgeUserResultSchema),
-});
-
-// Review created (or dismissed) by the review-write actions.
-const ForgeReviewResultSchema = z.object({
-  id: z.string(),
-  state: z.string().describe("Normalized verdict: approved, changes_requested, dismissed, …"),
-  rawState: z.string().describe("The forge's own spelling of the verdict"),
-  body: z.string(),
-  url: z.string(),
-  author: ForgeUserResultSchema.optional(),
-  submittedAt: z.number().nullable(),
-  commitId: z.string().nullable(),
-});
-
-// Reviewer requests a PR carries after a request-reviewers call.
-const ForgeRequestedReviewersResultSchema = z.object({
-  prNumber: z.number(),
-  requestedUsers: z.array(z.string()),
-  requestedTeams: z.array(z.string()),
-});
-
-// Merge acknowledgement. Deliberately narrow — a merge endpoint reports whether
-// the merge landed and under which commit, not the resulting pull request.
-const ForgeMergePRResultSchema = z.object({
-  prNumber: z.number(),
-  sha: z.string().nullable().describe("Merge commit SHA, or null when the forge reports none"),
-  merged: z.boolean(),
-  message: z.string(),
-});
-
-// Draft state a PR ended in after a draft-toggle action.
-const ForgePRDraftStateResultSchema = z.object({
-  prNumber: z.number(),
-  isDraft: z.boolean(),
-});
-
 // One page of an issue's comment thread, from the read action. Reuses the
 // single-comment shape so the read and write halves describe a comment
 // identically, plus the author the write action doesn't echo back.
@@ -307,10 +153,21 @@ const ForgeCommentPageResultSchema = z.object({
   totalCount: z.number().optional(),
 });
 
-// Provider-agnostic forge action surface. Each action calls forgeClient (the
-// provider-agnostic IPC wrapper); provider routing is resolved at the IPC
-// layer in electron/ipc/handlers/forge.ts, so these run() bodies stay
-// provider-agnostic.
+/**
+ * Run bodies load on first dispatch (#14270). Every view registers the forge
+ * actions at boot for menus, keybindings and the MCP manifest, but an empty
+ * view runs none of them. A failed chunk load rejects inside `run`, which
+ * ActionService turns into an error result like any other failure.
+ */
+async function runForgeAction(
+  id: ForgeActionRunId,
+  args: unknown,
+  ctx: ActionContext
+): Promise<unknown> {
+  const { forgeActionRuns } = await import("./forgeActions.impl");
+  return forgeActionRuns[id](args, ctx);
+}
+
 export function registerForgeActions(actions: ActionRegistry, _callbacks: ActionCallbacks): void {
   actions.set("forge.openIssues", () =>
     defineAction({
@@ -322,21 +179,8 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       kind: "command",
       danger: "safe",
       scope: "renderer",
-      argsSchema: withProjectLocation({
-        query: z.string().optional(),
-        state: z.string().optional(),
-      }).optional(),
-      run: async (args, ctx) => {
-        // An explicit selector is resolved (or rejected) by the resolver, so this
-        // fallback only applies when the caller named no project at all.
-        const path =
-          resolveProjectLocation(args, ctx).projectPath ??
-          useProjectStore.getState().currentProject?.path;
-        if (!path) {
-          throw new Error("No project path available to open issues");
-        }
-        await forgeClient.openIssues(path, args?.query, args?.state);
-      },
+      argsSchema: openIssuesArgsSchema,
+      run: (args, ctx) => runForgeAction("forge.openIssues", args, ctx),
     })
   );
 
@@ -350,21 +194,8 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       kind: "command",
       danger: "safe",
       scope: "renderer",
-      argsSchema: withProjectLocation({
-        query: z.string().optional(),
-        state: z.string().optional(),
-      }).optional(),
-      run: async (args, ctx) => {
-        // An explicit selector is resolved (or rejected) by the resolver, so this
-        // fallback only applies when the caller named no project at all.
-        const path =
-          resolveProjectLocation(args, ctx).projectPath ??
-          useProjectStore.getState().currentProject?.path;
-        if (!path) {
-          throw new Error("No project path available to open pull requests");
-        }
-        await forgeClient.openPRs(path, args?.query, args?.state);
-      },
+      argsSchema: openPRsArgsSchema,
+      run: (args, ctx) => runForgeAction("forge.openPRs", args, ctx),
     })
   );
 
@@ -378,18 +209,8 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       kind: "command",
       danger: "safe",
       scope: "renderer",
-      argsSchema: withProjectLocation({ branch: z.string().optional() }).optional(),
-      run: async (args, ctx) => {
-        // An explicit selector is resolved (or rejected) by the resolver, so this
-        // fallback only applies when the caller named no project at all.
-        const path =
-          resolveProjectLocation(args, ctx).projectPath ??
-          useProjectStore.getState().currentProject?.path;
-        if (!path) {
-          throw new Error("No project path available to open commits");
-        }
-        await forgeClient.openCommits(path, args?.branch);
-      },
+      argsSchema: openCommitsArgsSchema,
+      run: (args, ctx) => runForgeAction("forge.openCommits", args, ctx),
     })
   );
 
@@ -403,18 +224,8 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       kind: "command",
       danger: "safe",
       scope: "renderer",
-      argsSchema: withProjectLocation({}).optional(),
-      run: async (args, ctx) => {
-        // An explicit selector is resolved (or rejected) by the resolver, so this
-        // fallback only applies when the caller named no project at all.
-        const path =
-          resolveProjectLocation(args, ctx).projectPath ??
-          useProjectStore.getState().currentProject?.path;
-        if (!path) {
-          throw new Error("No project path available to open the repository");
-        }
-        await forgeClient.openRepo(path);
-      },
+      argsSchema: openRepoArgsSchema,
+      run: (args, ctx) => runForgeAction("forge.openRepo", args, ctx),
     })
   );
 
@@ -428,14 +239,8 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       kind: "command",
       danger: "safe",
       scope: "renderer",
-      argsSchema: z.object({
-        ...worktreeLocationShape({ legacy: ["cwd"] }),
-        issueNumber: z.number().int().positive(),
-      }),
-      run: async ({ issueNumber, ...location }, ctx: ActionContext) => {
-        const resolvedCwd = requireWorktreePath(location, ctx);
-        await forgeClient.openIssue(resolvedCwd, issueNumber);
-      },
+      argsSchema: openIssueArgsSchema,
+      run: (args, ctx) => runForgeAction("forge.openIssue", args, ctx),
     })
   );
 
@@ -449,14 +254,8 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       kind: "command",
       danger: "safe",
       scope: "renderer",
-      argsSchema: z.object({
-        ...worktreeLocationShape({ legacy: ["cwd"] }),
-        prNumber: z.number().int().positive(),
-      }),
-      run: async ({ prNumber, ...location }, ctx: ActionContext) => {
-        const resolvedCwd = requireWorktreePath(location, ctx);
-        await forgeClient.openPR(resolvedCwd, prNumber);
-      },
+      argsSchema: openPRArgsSchema,
+      run: (args, ctx) => runForgeAction("forge.openPR", args, ctx),
     })
   );
 
@@ -474,25 +273,10 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       // dropped from MCP_DEDUP_ALLOWLIST (#11534) — a repeat call is a no-op.
       danger: "safe",
       scope: "renderer",
-      argsSchema: z.object({
-        ...worktreeLocationShape({ legacy: ["cwd"] }),
-        issueNumber: z.number().int().positive(),
-        username: z.string().min(1).describe("Account to assign the issue to"),
-      }),
+      argsSchema: assignIssueArgsSchema,
       resultSchema: ForgeAssigneesResultSchema,
       mcpOutputSchema: true,
-      run: async ({ issueNumber, username, ...location }, ctx: ActionContext) => {
-        const resolvedCwd = requireWorktreePath(location, ctx);
-        const assignees = await forgeClient.assignIssue(resolvedCwd, issueNumber, username);
-        const result = ForgeAssigneesResultSchema.parse({ issueNumber, assignees });
-        syncAssigneeCache(
-          assigneeCachePath(location, resolvedCwd),
-          issueNumber,
-          username,
-          result.assignees
-        );
-        return result;
-      },
+      run: (args, ctx) => runForgeAction("forge.assignIssue", args, ctx),
     })
   );
 
@@ -508,25 +292,10 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       // as `forge.assignIssue`: idempotent, exactly reversible, authors nothing.
       danger: "safe",
       scope: "renderer",
-      argsSchema: z.object({
-        ...worktreeLocationShape({ legacy: ["cwd"] }),
-        issueNumber: z.number().int().positive(),
-        username: z.string().min(1).describe("Account whose assignment should be removed"),
-      }),
+      argsSchema: unassignIssueArgsSchema,
       resultSchema: ForgeAssigneesResultSchema,
       mcpOutputSchema: true,
-      run: async ({ issueNumber, username, ...location }, ctx: ActionContext) => {
-        const resolvedCwd = requireWorktreePath(location, ctx);
-        const assignees = await forgeClient.unassignIssue(resolvedCwd, issueNumber, username);
-        const result = ForgeAssigneesResultSchema.parse({ issueNumber, assignees });
-        syncAssigneeCache(
-          assigneeCachePath(location, resolvedCwd),
-          issueNumber,
-          username,
-          result.assignees
-        );
-        return result;
-      },
+      run: (args, ctx) => runForgeAction("forge.unassignIssue", args, ctx),
     })
   );
 
@@ -542,19 +311,10 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       dangerRationale:
         "Submits an approving review to the remote forge. Retracting it requires dismissing the review.",
       scope: "renderer",
-      argsSchema: z.object({
-        ...worktreeLocationShape({ legacy: ["cwd"] }),
-        prNumber: z.number().int().positive().describe("Pull request number to approve"),
-        body: z.string().optional().describe("Optional approval comment"),
-      }),
+      argsSchema: approvePRArgsSchema,
       resultSchema: ForgeReviewResultSchema,
       mcpOutputSchema: true,
-      run: async ({ prNumber, body, ...location }, ctx: ActionContext) => {
-        const resolvedCwd = requireWorktreePath(location, ctx);
-        return ForgeReviewResultSchema.parse(
-          await forgeClient.approvePR(resolvedCwd, prNumber, body)
-        );
-      },
+      run: (args, ctx) => runForgeAction("forge.approvePR", args, ctx),
     })
   );
 
@@ -570,19 +330,10 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       dangerRationale:
         "Submits a request-changes review to the remote forge. Blocks the PR until addressed or dismissed.",
       scope: "renderer",
-      argsSchema: z.object({
-        ...worktreeLocationShape({ legacy: ["cwd"] }),
-        prNumber: z.number().int().positive().describe("Pull request number to review"),
-        body: z.string().trim().min(1).describe("Explanation of the changes being requested"),
-      }),
+      argsSchema: requestChangesArgsSchema,
       resultSchema: ForgeReviewResultSchema,
       mcpOutputSchema: true,
-      run: async ({ prNumber, body, ...location }, ctx: ActionContext) => {
-        const resolvedCwd = requireWorktreePath(location, ctx);
-        return ForgeReviewResultSchema.parse(
-          await forgeClient.requestChanges(resolvedCwd, prNumber, body)
-        );
-      },
+      run: (args, ctx) => runForgeAction("forge.requestChanges", args, ctx),
     })
   );
 
@@ -597,26 +348,10 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       danger: "confirm",
       dangerRationale: "Dismisses a submitted review on the remote forge. Cannot be undone.",
       scope: "renderer",
-      argsSchema: z.object({
-        ...worktreeLocationShape({ legacy: ["cwd"] }),
-        prNumber: z.number().int().positive().describe("Pull request number"),
-        reviewId: z
-          .number()
-          .int()
-          .positive()
-          .describe(
-            "Review id to dismiss, as assigned by the forge. Nothing on this surface lists reviews, so read it from the forge itself."
-          ),
-        message: z.string().trim().min(1).describe("Reason for dismissing the review"),
-      }),
+      argsSchema: dismissReviewArgsSchema,
       resultSchema: ForgeReviewResultSchema,
       mcpOutputSchema: true,
-      run: async ({ prNumber, reviewId, message, ...location }, ctx: ActionContext) => {
-        const resolvedCwd = requireWorktreePath(location, ctx);
-        return ForgeReviewResultSchema.parse(
-          await forgeClient.dismissReview(resolvedCwd, prNumber, reviewId, message)
-        );
-      },
+      run: (args, ctx) => runForgeAction("forge.dismissReview", args, ctx),
     })
   );
 
@@ -632,30 +367,10 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       dangerRationale:
         "Requests reviewers on the remote forge and notifies them. Undone by removing the request.",
       scope: "renderer",
-      argsSchema: z
-        .object({
-          ...worktreeLocationShape({ legacy: ["cwd"] }),
-          prNumber: z.number().int().positive().describe("Pull request number"),
-          users: z
-            .array(z.string().min(1))
-            .optional()
-            .describe("Account logins to request a review from"),
-          teams: z
-            .array(z.string().min(1))
-            .optional()
-            .describe("Team identifiers (e.g. GitHub team slugs) to request a review from"),
-        })
-        .refine((args) => (args.users?.length ?? 0) + (args.teams?.length ?? 0) > 0, {
-          message: "Provide at least one user or team to request a review from",
-        }),
+      argsSchema: requestReviewersArgsSchema,
       resultSchema: ForgeRequestedReviewersResultSchema,
       mcpOutputSchema: true,
-      run: async ({ prNumber, users, teams, ...location }, ctx: ActionContext) => {
-        const resolvedCwd = requireWorktreePath(location, ctx);
-        return ForgeRequestedReviewersResultSchema.parse(
-          await forgeClient.requestReviewers(resolvedCwd, prNumber, { users, teams })
-        );
-      },
+      run: (args, ctx) => runForgeAction("forge.requestReviewers", args, ctx),
     })
   );
 
@@ -676,23 +391,14 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       // `source: "user"`. See the note in `helpAssistantTierAllowlists.ts`.
       mcpVisibility: "hidden",
       scope: "renderer",
-      argsSchema: z.object({
-        // `providerId` carries the canonical `{pluginId}.{contributionId}`
-        // id of the forge to validate against, so the Test button in a
-        // provider-specific settings tab can never silently route to the
-        // wrong forge (#9985).
-        providerId: z.string().min(1).describe("Canonical forge provider id"),
-        token: z.string(),
-      }),
+      argsSchema: validateTokenArgsSchema,
       resultSchema: z.object({
         valid: z.boolean(),
         scopes: z.array(z.string()).optional(),
         expiresAt: z.number().nullable().optional(),
         error: z.string().optional(),
       }),
-      run: async ({ providerId, token }) => {
-        return await forgeClient.validateToken(providerId, token);
-      },
+      run: (args, ctx) => runForgeAction("forge.validateToken", args, ctx),
     })
   );
 
@@ -706,10 +412,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       kind: "query",
       danger: "safe",
       scope: "renderer",
-      argsSchema: z.object({
-        ...worktreeLocationShape({ legacy: ["cwd"] }),
-        bypassCache: z.boolean().optional(),
-      }),
+      argsSchema: getRepoStatsArgsSchema,
       resultSchema: z.object({
         commitCount: z.number(),
         issueCount: z.number().nullable(),
@@ -721,10 +424,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
         rateLimitResetAt: z.number().optional(),
         rateLimitKind: z.string().optional(),
       }),
-      run: async ({ bypassCache, ...location }, ctx: ActionContext) => {
-        const resolvedCwd = requireWorktreePath(location, ctx);
-        return await forgeClient.getRepoStats(resolvedCwd, bypassCache);
-      },
+      run: (args, ctx) => runForgeAction("forge.getRepoStats", args, ctx),
     })
   );
 
@@ -740,24 +440,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       scope: "renderer",
       argsSchema: ForgeListOptionsSchema,
       resultSchema: ForgeIssuePageResultSchema,
-      run: async (
-        { search, state, cursor, perPage, sort, direction, bypassCache, view, ...location },
-        ctx: ActionContext
-      ) => {
-        const resolvedCwd = requireWorktreePath(location, ctx);
-        const page = await forgeClient.listIssues(resolvedCwd, {
-          search,
-          state,
-          cursor,
-          perPage,
-          sort,
-          direction,
-          bypassCache,
-        });
-        // `view` is action-local presentation: it never reaches the provider,
-        // so it must not participate in provider cache identity either.
-        return projectForgePage(page, view ?? "summary", projectIssueSummary);
-      },
+      run: (args, ctx) => runForgeAction("forge.listIssues", args, ctx),
     })
   );
 
@@ -773,22 +456,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       scope: "renderer",
       argsSchema: ForgePRListOptionsSchema,
       resultSchema: ForgePRPageResultSchema,
-      run: async (
-        { search, state, cursor, perPage, sort, direction, bypassCache, view, ...location },
-        ctx: ActionContext
-      ) => {
-        const resolvedCwd = requireWorktreePath(location, ctx);
-        const page = await forgeClient.listPRs(resolvedCwd, {
-          search,
-          state,
-          cursor,
-          perPage,
-          sort,
-          direction,
-          bypassCache,
-        });
-        return projectForgePage(page, view ?? "summary", projectPRSummary);
-      },
+      run: (args, ctx) => runForgeAction("forge.listPRs", args, ctx),
     })
   );
 
@@ -802,10 +470,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       kind: "query",
       danger: "safe",
       scope: "renderer",
-      argsSchema: z.object({
-        ...worktreeLocationShape({ legacy: ["cwd"] }),
-        issueNumber: z.number().int().positive().describe("Issue number to fetch"),
-      }),
+      argsSchema: getIssueArgsSchema,
       examples: [
         {
           args: { issueNumber: 42 },
@@ -819,10 +484,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       // The same normalized issue the write actions return — one shape for one
       // provider object, so the read and write halves cannot drift.
       resultSchema: ForgeIssueResultSchema.nullable(),
-      run: async ({ issueNumber, ...location }, ctx: ActionContext) => {
-        const resolvedCwd = requireWorktreePath(location, ctx);
-        return await forgeClient.getIssue(resolvedCwd, issueNumber);
-      },
+      run: (args, ctx) => runForgeAction("forge.getIssue", args, ctx),
     })
   );
 
@@ -836,21 +498,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       kind: "query",
       danger: "safe",
       scope: "renderer",
-      argsSchema: z.object({
-        ...worktreeLocationShape({ legacy: ["cwd"] }),
-        issueNumber: z.number().int().positive().describe("Issue number whose comments to read"),
-        cursor: z
-          .string()
-          .optional()
-          .describe("The previous response's `nextCursor`, for the next page."),
-        perPage: z
-          .number()
-          .int()
-          .min(1)
-          .max(100)
-          .optional()
-          .describe("Comments per page (1-100, default 20)"),
-      }),
+      argsSchema: listIssueCommentsArgsSchema,
       examples: [
         {
           args: { issueNumber: 42 },
@@ -862,10 +510,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
         },
       ],
       resultSchema: ForgeCommentPageResultSchema,
-      run: async ({ issueNumber, cursor, perPage, ...location }, ctx: ActionContext) => {
-        const resolvedCwd = requireWorktreePath(location, ctx);
-        return await forgeClient.listIssueComments(resolvedCwd, issueNumber, { cursor, perPage });
-      },
+      run: (args, ctx) => runForgeAction("forge.listIssueComments", args, ctx),
     })
   );
 
@@ -879,22 +524,10 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       kind: "query",
       danger: "safe",
       scope: "renderer",
-      argsSchema: z.object({
-        ...worktreeLocationShape({ legacy: ["cwd"] }),
-        prNumber: z.number().int().positive().describe("Pull request number"),
-      }),
-      // Wrapped rather than a bare `.nullable()` for the reason spelled out on
-      // `ForgeCIStatusActionResultSchema`: `buildToolOutputSchema` forwards only
-      // object-typed schemas, and Zod emits `anyOf` for a nullable object, so a
-      // top-level nullable advertises nothing at all. Safe to advertise because
-      // dispatch parses results (#11539) — `rawData` is stripped before the
-      // payload leaves, so the delivered object is exactly this schema.
+      argsSchema: getPRArgsSchema,
       resultSchema: ForgePRActionResultSchema,
       mcpOutputSchema: true,
-      run: async ({ prNumber, ...location }, ctx: ActionContext) => {
-        const resolvedCwd = requireWorktreePath(location, ctx);
-        return { pr: await forgeClient.getPR(resolvedCwd, prNumber) };
-      },
+      run: (args, ctx) => runForgeAction("forge.getPR", args, ctx),
     })
   );
 
@@ -907,28 +540,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       kind: "query",
       danger: "safe",
       scope: "renderer",
-      argsSchema: z.object({
-        ...worktreeLocationShape({ legacy: ["cwd"] }),
-        prNumbers: z
-          .array(z.number().int().positive())
-          .min(FORGE_GET_PRS_MIN)
-          .max(FORGE_GET_PRS_MAX)
-          // Uniqueness is enforced rather than tolerated, and it is enforced on
-          // BOTH surfaces. Without it the floor was not really a floor:
-          // `[9, 9, 9]` satisfied a minimum of 2 and then collapsed to a single
-          // lookup, so a caller could reach the plural tool with less work than
-          // the singular one does and get a one-entry answer back. `.refine`
-          // rejects it at dispatch; `.meta` puts `uniqueItems` in the generated
-          // JSON Schema, which `toWireSchema` does not strip, so a strict
-          // client refuses it before the call is ever made.
-          .refine((numbers) => new Set(numbers).size === numbers.length, {
-            message: "prNumbers must not contain duplicates",
-          })
-          .meta({ uniqueItems: true })
-          .describe(
-            `The pull request numbers to fetch: at least ${FORGE_GET_PRS_MIN} DISTINCT numbers, at most ${FORGE_GET_PRS_MAX}. Use the singular lookup for one number.`
-          ),
-      }),
+      argsSchema: getPRsArgsSchema,
       examples: [
         {
           args: { prNumbers: [12142, 12137, 12147] },
@@ -937,10 +549,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       ],
       resultSchema: ForgePRsActionResultSchema,
       mcpOutputSchema: true,
-      run: async ({ prNumbers, ...location }, ctx: ActionContext) => {
-        const resolvedCwd = requireWorktreePath(location, ctx);
-        return { results: await forgeClient.getPRsByNumbersDetailed(resolvedCwd, prNumbers) };
-      },
+      run: (args, ctx) => runForgeAction("forge.getPRs", args, ctx),
     })
   );
 
@@ -954,10 +563,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       kind: "query",
       danger: "safe",
       scope: "renderer",
-      argsSchema: z.object({
-        ...worktreeLocationShape({ legacy: ["cwd"] }),
-        prNumber: z.number().int().positive().describe("Pull request number"),
-      }),
+      argsSchema: getCIStatusArgsSchema,
       examples: [
         {
           args: { prNumber: 42 },
@@ -966,10 +572,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       ],
       resultSchema: ForgeCIStatusActionResultSchema,
       mcpOutputSchema: true,
-      run: async ({ prNumber, ...location }, ctx: ActionContext) => {
-        const resolvedCwd = requireWorktreePath(location, ctx);
-        return { ciStatus: await forgeClient.getCIStatus(resolvedCwd, prNumber) };
-      },
+      run: (args, ctx) => runForgeAction("forge.getCIStatus", args, ctx),
     })
   );
 
@@ -983,10 +586,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       kind: "query",
       danger: "safe",
       scope: "renderer",
-      argsSchema: z.object({
-        ...worktreeLocationShape({ legacy: ["cwd"] }),
-        prNumber: z.number().int().positive().describe("Pull request number whose checks to list"),
-      }),
+      argsSchema: getChecksArgsSchema,
       examples: [
         {
           args: { prNumber: 42 },
@@ -995,11 +595,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       ],
       resultSchema: ForgeChecksActionResultSchema,
       mcpOutputSchema: true,
-      run: async ({ prNumber, ...location }, ctx: ActionContext) => {
-        const resolvedCwd = requireWorktreePath(location, ctx);
-        const result = await forgeClient.getChecks(resolvedCwd, prNumber);
-        return { checks: result === null ? null : result.checks };
-      },
+      run: (args, ctx) => runForgeAction("forge.getChecks", args, ctx),
     })
   );
 
@@ -1015,19 +611,9 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       dangerRationale:
         "Opens a pull request on the remote forge — a shared-state mutation reviewers and automation react to.",
       scope: "renderer",
-      argsSchema: z.object({
-        ...worktreeLocationShape({ legacy: ["cwd"] }),
-        head: z.string().min(1).describe("Source branch the changes come from"),
-        base: z.string().min(1).describe("Target branch the PR merges into"),
-        title: z.string().min(1).describe("Pull request title"),
-        body: z.string().optional().describe("Pull request body (Markdown)"),
-        draft: z.boolean().optional().describe("Open as a draft pull request"),
-      }),
+      argsSchema: createPRArgsSchema,
       resultSchema: ForgePRResultSchema,
-      run: async ({ head, base, title, body, draft, ...location }, ctx: ActionContext) => {
-        const resolvedCwd = requireWorktreePath(location, ctx);
-        return await forgeClient.createPR(resolvedCwd, { head, base, title, body, draft });
-      },
+      run: (args, ctx) => runForgeAction("forge.createPR", args, ctx),
     })
   );
 
@@ -1043,16 +629,10 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       dangerRationale:
         "Closes a pull request on the remote forge — a shared-state change reviewers and automation react to.",
       scope: "renderer",
-      argsSchema: z.object({
-        ...worktreeLocationShape({ legacy: ["cwd"] }),
-        prNumber: z.number().int().positive().describe("Pull request number to close"),
-      }),
+      argsSchema: closePRArgsSchema,
       resultSchema: ForgePRResultSchema,
       mcpOutputSchema: true,
-      run: async ({ prNumber, ...location }, ctx: ActionContext) => {
-        const resolvedCwd = requireWorktreePath(location, ctx);
-        return ForgePRResultSchema.parse(await forgeClient.closePR(resolvedCwd, prNumber));
-      },
+      run: (args, ctx) => runForgeAction("forge.closePR", args, ctx),
     })
   );
 
@@ -1068,16 +648,10 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       dangerRationale:
         "Reopens a pull request on the remote forge — a shared-state change reviewers and automation react to.",
       scope: "renderer",
-      argsSchema: z.object({
-        ...worktreeLocationShape({ legacy: ["cwd"] }),
-        prNumber: z.number().int().positive().describe("Pull request number to reopen"),
-      }),
+      argsSchema: reopenPRArgsSchema,
       resultSchema: ForgePRResultSchema,
       mcpOutputSchema: true,
-      run: async ({ prNumber, ...location }, ctx: ActionContext) => {
-        const resolvedCwd = requireWorktreePath(location, ctx);
-        return ForgePRResultSchema.parse(await forgeClient.reopenPR(resolvedCwd, prNumber));
-      },
+      run: (args, ctx) => runForgeAction("forge.reopenPR", args, ctx),
     })
   );
 
@@ -1093,31 +667,51 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       dangerRationale:
         "Merging a pull request is irreversible and writes the change into the shared base branch.",
       scope: "renderer",
-      argsSchema: z.object({
-        ...worktreeLocationShape({ legacy: ["cwd"] }),
-        prNumber: z.number().int().positive().describe("Pull request number to merge"),
-        mergeMethod: z
-          .enum(["merge", "squash", "rebase"])
-          .optional()
-          .describe("Merge strategy (provider default when omitted)"),
-        commitTitle: z.string().optional().describe("Override the merge commit title"),
-        commitMessage: z.string().optional().describe("Override the merge commit message"),
-      }),
+      argsSchema: mergePRArgsSchema,
       resultSchema: ForgeMergePRResultSchema,
       mcpOutputSchema: true,
-      run: async (
-        { prNumber, mergeMethod, commitTitle, commitMessage, ...location },
-        ctx: ActionContext
-      ) => {
-        const resolvedCwd = requireWorktreePath(location, ctx);
-        return ForgeMergePRResultSchema.parse(
-          await forgeClient.mergePR(resolvedCwd, prNumber, {
-            mergeMethod,
-            commitTitle,
-            commitMessage,
-          })
-        );
-      },
+      run: (args, ctx) => runForgeAction("forge.mergePR", args, ctx),
+    })
+  );
+
+  // The two "merge when ready" writes are on no MCP tier and hidden from
+  // discovery: their caller is the Review Hub's confirm, and an agent that
+  // wants this already has `gh pr merge --auto` in its own shell (#13747).
+  actions.set("forge.enableAutoMerge", () =>
+    defineAction({
+      id: "forge.enableAutoMerge",
+      title: "Merge pull request when ready",
+      description:
+        "Ask the forge to merge a pull request once its required checks and reviews pass, pinned to the head commit you reviewed. The forge decides if and when it merges; on a merge-queue branch this adds the pull request to the queue. Never merges immediately: a pull request that can already merge comes back already-mergeable, and nothing is armed.",
+      category: "forge",
+      kind: "command",
+      danger: "confirm",
+      dangerRationale:
+        "Arming auto-merge lets the forge write this pull request into the shared base branch later, without another prompt.",
+      mcpVisibility: "hidden",
+      scope: "renderer",
+      argsSchema: enableAutoMergeArgsSchema,
+      resultSchema: ForgeEnableAutoMergeResultSchema,
+      run: (args, ctx) => runForgeAction("forge.enableAutoMerge", args, ctx),
+    })
+  );
+
+  actions.set("forge.disableAutoMerge", () =>
+    defineAction({
+      id: "forge.disableAutoMerge",
+      title: "Cancel merge when ready",
+      description:
+        "Cancel a pull request's pending auto-merge, or take it out of the merge queue if it is already queued. Reads the pull request when it runs, so it cancels whichever form the request is in by then.",
+      category: "forge",
+      kind: "command",
+      danger: "confirm",
+      dangerRationale:
+        "Cancelling stops a merge someone else may have armed, and a queued pull request loses its place in the queue.",
+      mcpVisibility: "hidden",
+      scope: "renderer",
+      argsSchema: disableAutoMergeArgsSchema,
+      resultSchema: ForgeDisableAutoMergeResultSchema,
+      run: (args, ctx) => runForgeAction("forge.disableAutoMerge", args, ctx),
     })
   );
 
@@ -1133,12 +727,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       dangerRationale:
         "Files a publicly visible issue and notifies every watcher of the repository. Closing it afterwards removes neither the record nor the notifications it already sent.",
       scope: "renderer",
-      argsSchema: z.object({
-        ...worktreeLocationShape({ legacy: ["cwd"] }),
-        title: z.string().min(1).describe("Issue title"),
-        body: z.string().optional().describe("Issue body (markdown)"),
-        labels: z.array(z.string()).optional().describe("Label names to apply on creation"),
-      }),
+      argsSchema: createIssueArgsSchema,
       examples: [
         {
           args: { title: "Crash on startup", body: "Steps to reproduce: ..." },
@@ -1146,10 +735,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
         },
       ],
       resultSchema: ForgeIssueResultSchema,
-      run: async ({ title, body, labels, ...location }, ctx: ActionContext) => {
-        const resolvedCwd = requireWorktreePath(location, ctx);
-        return await forgeClient.createIssue(resolvedCwd, { title, body, labels });
-      },
+      run: (args, ctx) => runForgeAction("forge.createIssue", args, ctx),
     })
   );
 
@@ -1165,18 +751,10 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       dangerRationale:
         "Changes a pull request's review state on the remote forge — reviewers and automation react to it.",
       scope: "renderer",
-      argsSchema: z.object({
-        ...worktreeLocationShape({ legacy: ["cwd"] }),
-        prNumber: z.number().int().positive().describe("Pull request number to convert to draft"),
-      }),
+      argsSchema: convertPRToDraftArgsSchema,
       resultSchema: ForgePRDraftStateResultSchema,
       mcpOutputSchema: true,
-      run: async ({ prNumber, ...location }, ctx: ActionContext) => {
-        const resolvedCwd = requireWorktreePath(location, ctx);
-        return ForgePRDraftStateResultSchema.parse(
-          await forgeClient.convertPRToDraft(resolvedCwd, prNumber)
-        );
-      },
+      run: (args, ctx) => runForgeAction("forge.convertPRToDraft", args, ctx),
     })
   );
 
@@ -1192,19 +770,9 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       dangerRationale:
         "Closes an issue on the shared forge — a state change other collaborators see; undoing it requires a deliberate reopen.",
       scope: "renderer",
-      argsSchema: z.object({
-        ...worktreeLocationShape({ legacy: ["cwd"] }),
-        issueNumber: z.number().int().positive().describe("Issue number to close"),
-        stateReason: z
-          .enum(["completed", "not_planned", "duplicate"])
-          .optional()
-          .describe("Why the issue is being closed (default: completed)"),
-      }),
+      argsSchema: closeIssueArgsSchema,
       resultSchema: ForgeIssueResultSchema,
-      run: async ({ issueNumber, stateReason, ...location }, ctx: ActionContext) => {
-        const resolvedCwd = requireWorktreePath(location, ctx);
-        return await forgeClient.closeIssue(resolvedCwd, issueNumber, stateReason);
-      },
+      run: (args, ctx) => runForgeAction("forge.closeIssue", args, ctx),
     })
   );
 
@@ -1220,18 +788,10 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       dangerRationale:
         "Changes a pull request's review state on the remote forge, notifying reviewers.",
       scope: "renderer",
-      argsSchema: z.object({
-        ...worktreeLocationShape({ legacy: ["cwd"] }),
-        prNumber: z.number().int().positive().describe("Pull request number to mark ready"),
-      }),
+      argsSchema: markPRReadyForReviewArgsSchema,
       resultSchema: ForgePRDraftStateResultSchema,
       mcpOutputSchema: true,
-      run: async ({ prNumber, ...location }, ctx: ActionContext) => {
-        const resolvedCwd = requireWorktreePath(location, ctx);
-        return ForgePRDraftStateResultSchema.parse(
-          await forgeClient.markPRReadyForReview(resolvedCwd, prNumber)
-        );
-      },
+      run: (args, ctx) => runForgeAction("forge.markPRReadyForReview", args, ctx),
     })
   );
 
@@ -1247,15 +807,9 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       dangerRationale:
         "Reopens an issue on the shared forge and notifies its watchers. Closing it again does not restore the reason it was closed for, and the notification cannot be withdrawn.",
       scope: "renderer",
-      argsSchema: z.object({
-        ...worktreeLocationShape({ legacy: ["cwd"] }),
-        issueNumber: z.number().int().positive().describe("Issue number to reopen"),
-      }),
+      argsSchema: reopenIssueArgsSchema,
       resultSchema: ForgeIssueResultSchema,
-      run: async ({ issueNumber, ...location }, ctx: ActionContext) => {
-        const resolvedCwd = requireWorktreePath(location, ctx);
-        return await forgeClient.reopenIssue(resolvedCwd, issueNumber);
-      },
+      run: (args, ctx) => runForgeAction("forge.reopenIssue", args, ctx),
     })
   );
 
@@ -1271,19 +825,10 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       dangerRationale:
         "Posts a public comment on a pull request that participants are notified about.",
       scope: "renderer",
-      argsSchema: z.object({
-        ...worktreeLocationShape({ legacy: ["cwd"] }),
-        prNumber: z.number().int().positive().describe("Pull request number to comment on"),
-        body: z.string().min(1).describe("Comment body (Markdown)"),
-      }),
+      argsSchema: commentOnPRArgsSchema,
       resultSchema: ForgeCommentResultSchema,
       mcpOutputSchema: true,
-      run: async ({ prNumber, body, ...location }, ctx: ActionContext) => {
-        const resolvedCwd = requireWorktreePath(location, ctx);
-        return ForgeCommentResultSchema.parse(
-          await forgeClient.commentOnPR(resolvedCwd, prNumber, body)
-        );
-      },
+      run: (args, ctx) => runForgeAction("forge.commentOnPR", args, ctx),
     })
   );
 
@@ -1299,21 +844,9 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       dangerRationale:
         "Edits a pull request's title/body on the remote forge — a shared-state mutation others see.",
       scope: "renderer",
-      argsSchema: z
-        .object({
-          ...worktreeLocationShape({ legacy: ["cwd"] }),
-          prNumber: z.number().int().positive().describe("Pull request number to edit"),
-          title: z.string().min(1).optional().describe("New pull request title"),
-          body: z.string().optional().describe("New pull request body (Markdown)"),
-        })
-        .refine((v) => v.title !== undefined || v.body !== undefined, {
-          message: "Provide a title or body to edit",
-        }),
+      argsSchema: editPRArgsSchema,
       resultSchema: ForgePRResultSchema,
-      run: async ({ prNumber, title, body, ...location }, ctx: ActionContext) => {
-        const resolvedCwd = requireWorktreePath(location, ctx);
-        return await forgeClient.editPR(resolvedCwd, prNumber, { title, body });
-      },
+      run: (args, ctx) => runForgeAction("forge.editPR", args, ctx),
     })
   );
 
@@ -1329,21 +862,9 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       dangerRationale:
         "Overwrites an issue's title/body on the shared forge — the previous text is not recoverable from git or reflog, so it needs a deliberate confirm.",
       scope: "renderer",
-      argsSchema: z
-        .object({
-          ...worktreeLocationShape({ legacy: ["cwd"] }),
-          issueNumber: z.number().int().positive().describe("Issue number to edit"),
-          title: z.string().optional().describe("New issue title"),
-          body: z.string().optional().describe("New issue body (markdown)"),
-        })
-        .refine((v) => v.title !== undefined || v.body !== undefined, {
-          message: "Provide at least one of title or body to edit",
-        }),
+      argsSchema: editIssueArgsSchema,
       resultSchema: ForgeIssueResultSchema,
-      run: async ({ issueNumber, title, body, ...location }, ctx: ActionContext) => {
-        const resolvedCwd = requireWorktreePath(location, ctx);
-        return await forgeClient.editIssue(resolvedCwd, issueNumber, { title, body });
-      },
+      run: (args, ctx) => runForgeAction("forge.editIssue", args, ctx),
     })
   );
 
@@ -1359,16 +880,9 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       dangerRationale:
         "Posts a public comment that participants are notified about. This capability cannot edit or withdraw it afterwards, so posting is final.",
       scope: "renderer",
-      argsSchema: z.object({
-        ...worktreeLocationShape({ legacy: ["cwd"] }),
-        issueNumber: z.number().int().positive().describe("Issue number to comment on"),
-        body: z.string().min(1).describe("Comment body (markdown)"),
-      }),
+      argsSchema: addIssueCommentArgsSchema,
       resultSchema: ForgeCommentResultSchema,
-      run: async ({ issueNumber, body, ...location }, ctx: ActionContext) => {
-        const resolvedCwd = requireWorktreePath(location, ctx);
-        return await forgeClient.addIssueComment(resolvedCwd, issueNumber, body);
-      },
+      run: (args, ctx) => runForgeAction("forge.addIssueComment", args, ctx),
     })
   );
 
@@ -1385,16 +899,9 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       // `forge.removeIssueLabel` is the exact inverse.
       danger: "safe",
       scope: "renderer",
-      argsSchema: z.object({
-        ...worktreeLocationShape({ legacy: ["cwd"] }),
-        issueNumber: z.number().int().positive().describe("Issue number to label"),
-        label: z.string().min(1).describe("Label name to add"),
-      }),
+      argsSchema: addIssueLabelArgsSchema,
       resultSchema: ForgeLabelArrayResultSchema,
-      run: async ({ issueNumber, label, ...location }, ctx: ActionContext) => {
-        const resolvedCwd = requireWorktreePath(location, ctx);
-        return await forgeClient.addIssueLabel(resolvedCwd, issueNumber, label);
-      },
+      run: (args, ctx) => runForgeAction("forge.addIssueLabel", args, ctx),
     })
   );
 
@@ -1411,16 +918,9 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       // on the repository.
       danger: "safe",
       scope: "renderer",
-      argsSchema: z.object({
-        ...worktreeLocationShape({ legacy: ["cwd"] }),
-        issueNumber: z.number().int().positive().describe("Issue number to unlabel"),
-        label: z.string().min(1).describe("Label name to remove"),
-      }),
+      argsSchema: removeIssueLabelArgsSchema,
       resultSchema: ForgeLabelArrayResultSchema,
-      run: async ({ issueNumber, label, ...location }, ctx: ActionContext) => {
-        const resolvedCwd = requireWorktreePath(location, ctx);
-        return await forgeClient.removeIssueLabel(resolvedCwd, issueNumber, label);
-      },
+      run: (args, ctx) => runForgeAction("forge.removeIssueLabel", args, ctx),
     })
   );
 }

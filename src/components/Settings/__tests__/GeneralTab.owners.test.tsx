@@ -10,21 +10,32 @@ vi.mock("@/lib/platform", async (importOriginal) => ({
 
 vi.mock("@/lib/utils", () => ({ cn: (...args: unknown[]) => args.filter(Boolean).join(" ") }));
 
-vi.mock("../SettingsSection", () => ({
-  SettingsSection: ({
-    children,
-    title,
-    badge,
-  }: {
-    children: React.ReactNode;
-    title: string;
-    badge?: string;
-  }) => (
-    <section data-section={title} data-badge={badge ?? ""}>
-      {children}
-    </section>
-  ),
-}));
+vi.mock("../SettingsSection", async () => {
+  const { joinBadges, useSettingsOwnerMarker } = await import("@/hooks/useSettingsOwner");
+  return {
+    SettingsSection: ({
+      children,
+      title,
+      badge,
+      settings,
+    }: {
+      children: React.ReactNode;
+      title: string;
+      badge?: string;
+      settings?: readonly import("@/hooks/useSettingsOwner").SettingRef[];
+    }) => {
+      const ownerMarker = useSettingsOwnerMarker();
+      return (
+        <section
+          data-section={title}
+          data-badge={joinBadges(badge, settings ? ownerMarker(...settings) : undefined) ?? ""}
+        >
+          {children}
+        </section>
+      );
+    },
+  };
+});
 
 vi.mock("../SettingsSubtabBar", () => ({
   SettingsSubtabBar: () => null,
@@ -127,7 +138,7 @@ describe("General in a window attached to another host", () => {
   });
 
   it("files background-project housekeeping under the host", async () => {
-    expect(await badgesOn("hibernation")).toMatchObject({ "Background projects": "On studio-01" });
+    expect(await badgesOn("background")).toMatchObject({ "Background projects": "On studio-01" });
   });
 
   it("files interface preferences under this machine", async () => {
@@ -137,7 +148,7 @@ describe("General in a window attached to another host", () => {
 
 describe("General in a local window", () => {
   it("marks no section, so the page renders as it always has", async () => {
-    for (const subtab of ["overview", "hibernation", "display"]) {
+    for (const subtab of ["overview", "background", "display"]) {
       const badges = await badgesOn(subtab);
       expect(Object.keys(badges).length, subtab).toBeGreaterThan(0);
       for (const [section, badge] of Object.entries(badges)) {

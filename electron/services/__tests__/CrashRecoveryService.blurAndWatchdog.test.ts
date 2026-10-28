@@ -292,6 +292,59 @@ describe("CrashRecoveryService", () => {
       expect(pending!.entry.watchdogMainPid).toBe(4242);
     });
 
+    it("records which watchdog deadline ran out, with its evidence (#14367)", () => {
+      const sessionStartMs = Date.now() - 900_000;
+      writeMarker(sessionStartMs);
+      const killedAt = sessionStartMs + 800_000;
+      writeWatchdogFlag(
+        {
+          killedAt,
+          missedBeats: 140,
+          mainPid: 4242,
+          reason: "no-progress-under-external-pressure",
+          beatsSinceProgress: 120,
+          pressureEvidence: "main reported memory pressure",
+        },
+        killedAt
+      );
+
+      const svc = makeService();
+      svc.initialize();
+
+      const entry = svc.getPendingCrash()!.entry;
+      expect(entry.cause).toBe("watchdog-deadlock");
+      expect(entry.watchdogKillReason).toBe("no-progress-under-external-pressure");
+      expect(entry.watchdogBeatsSinceProgress).toBe(120);
+      expect(entry.watchdogPressureEvidence).toBe("main reported memory pressure");
+    });
+
+    it("keeps the attribution when a diagnostic field is bad, dropping only that field", () => {
+      const sessionStartMs = Date.now() - 20_000;
+      writeMarker(sessionStartMs);
+      const killedAt = sessionStartMs + 16_000;
+      writeWatchdogFlag(
+        {
+          killedAt,
+          missedBeats: 3,
+          mainPid: 4242,
+          reason: "gremlins",
+          beatsSinceProgress: -1,
+          pressureEvidence: `${"x".repeat(199)}\u{1F600}${"y".repeat(5000)}`,
+        },
+        killedAt
+      );
+
+      const svc = makeService();
+      svc.initialize();
+
+      const entry = svc.getPendingCrash()!.entry;
+      expect(entry.cause).toBe("watchdog-deadlock");
+      expect(entry.watchdogMissedBeats).toBe(3);
+      expect(entry.watchdogKillReason).toBeUndefined();
+      expect(entry.watchdogBeatsSinceProgress).toBeUndefined();
+      expect(entry.watchdogPressureEvidence).toBe(`${"x".repeat(199)}y`);
+    });
+
     it("consumes (unlinks) the flag regardless of attribution outcome", () => {
       const sessionStartMs = Date.now() - 20_000;
       writeMarker(sessionStartMs);
@@ -1337,6 +1390,89 @@ describe("CrashRecoveryService renderer deaths and per-project layouts (#12884)"
 
       expect(svc.restoreBackup(["stale"])).toBe(false);
       expect(svc.getBackupPanelCount()).toBe(3);
+    });
+
+    it("names the workspaces that were live when the backup was taken (#14382)", () => {
+      const svc = crashWithProjects();
+
+      expect(svc.getCrashedLiveWorkspaceIds()?.sort()).toEqual([PROJECT_A, PROJECT_B].sort());
+    });
+
+    it("names nothing from a backup an older session left behind (#14382)", () => {
+      const svc = crashWithProjects();
+      const internals = svc as unknown as { cachedBackupSnapshot: { capturedAt: number } };
+      internals.cachedBackupSnapshot.capturedAt = 0;
+
+      expect(svc.getCrashedLiveWorkspaceIds()).toBeNull();
+    });
+  });
+
+  describe("restoring after a watchdog kill (#14382)", () => {
+    const agentPane = {
+      id: "g1",
+      kind: "terminal",
+      launchAgentId: "claude",
+      agentSessionId: "sess-g1",
+      cwd: "/repo",
+      location: "grid",
+    };
+
+    function crashWithAgent(watchdog: boolean): CrashRecoveryService {
+      storeMock.get.mockImplementation((key: string) =>
+        key === "appState" ? { terminals: [agentPane] } : undefined
+      );
+      appMock.isPackaged = true;
+      const crashed = makeService();
+      crashed.initialize();
+      crashed.takeBackup();
+      if (watchdog) {
+        const killedAt = Date.now();
+        const flagPath = path.join(userData, "watchdog-kill.flag");
+        fs.writeFileSync(flagPath, JSON.stringify({ killedAt, missedBeats: 3, mainPid: 1 }));
+        fs.utimesSync(flagPath, new Date(killedAt), new Date(killedAt));
+      }
+      const next = makeService();
+      next.initialize();
+      return next;
+    }
+
+    function restoredTerminals(): Array<Record<string, unknown>> {
+      const call = [...storeMock.set.mock.calls]
+        .reverse()
+        .find((args: unknown[]) => args[0] === "appState");
+      return (call?.[1] as { terminals: Array<Record<string, unknown>> }).terminals;
+    }
+
+    it("puts agents back held, quoting the watchdog", () => {
+      const svc = crashWithAgent(true);
+      expect(svc.getPendingCrash()?.entry.cause).toBe("watchdog-deadlock");
+
+      expect(svc.restoreBackup()).toBe(true);
+      expect(restoredTerminals()[0].restoreRecovery).toMatchObject({
+        reason: "host-ended-uncleanly",
+        sessionId: "sess-g1",
+        hostEnd: { cause: "watchdog-deadlock", missedBeats: 3 },
+      });
+    });
+
+    it("puts agents back held after a kill that left no other sign", () => {
+      const svc = crashWithAgent(false);
+      expect(svc.getPendingCrash()?.entry.crashCause).toBe("unknown");
+
+      expect(svc.restoreBackup()).toBe(true);
+      expect(restoredTerminals()[0].restoreRecovery).toMatchObject({
+        reason: "host-ended-uncleanly",
+        hostEnd: { cause: "unknown" },
+      });
+    });
+
+    it("leaves agents as they were after a crash that names another cause", () => {
+      const svc = crashWithAgent(false);
+      // Recorded by the app itself: the crash log names its own cause.
+      svc.getPendingCrash()!.entry.crashCause = "uncaught-exception";
+
+      expect(svc.restoreBackup()).toBe(true);
+      expect(restoredTerminals()[0].restoreRecovery).toBeUndefined();
     });
   });
 });

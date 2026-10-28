@@ -41,12 +41,14 @@ const {
   pluginInitialize,
   pluginGetPluginRoot,
   pluginActivateStartup,
+  pluginGetProjectWork,
   setPluginDirResolver,
   activateOpenFileInstaller,
 } = vi.hoisted(() => ({
   pluginInitialize: vi.fn(async () => {}),
   pluginGetPluginRoot: vi.fn((authority: string) => `/plugins/${authority}`),
   pluginActivateStartup: vi.fn(),
+  pluginGetProjectWork: vi.fn<(projectId: string) => unknown[]>(() => []),
   setPluginDirResolver: vi.fn(),
   activateOpenFileInstaller: vi.fn(async (_svc?: unknown) => {}),
 }));
@@ -133,6 +135,7 @@ vi.mock("../../services/PluginService.js", () => ({
     initialize: pluginInitialize,
     getPluginRootByAuthority: pluginGetPluginRoot,
     activateStartupFinishedPlugins: pluginActivateStartup,
+    getProjectPluginWork: pluginGetProjectWork,
   },
 }));
 
@@ -147,12 +150,10 @@ vi.mock("../../setup/openFileInstall.js", () => ({
 
 const hibernationServiceMock = vi.hoisted(() => ({
   setProjectViewManagersProvider: vi.fn(),
-  setHasLiveAssistantBackend: vi.fn(),
 }));
 
 vi.mock("../../services/HibernationService.js", () => ({
-  initializeHibernationService: vi.fn(() => hibernationServiceMock),
-  getHibernationService: () => ({ stop: vi.fn(), hibernateUnderMemoryPressure: vi.fn() }),
+  getHibernationService: () => hibernationServiceMock,
 }));
 
 const initIdleTerminalNotificationMock = vi.hoisted(() => vi.fn());
@@ -209,6 +210,10 @@ vi.mock("../../services/AssistantScratchService.js", () => ({
   runAssistantScratchCleanup: vi.fn(async () => {}),
 }));
 
+vi.mock("../../services/AssistantRunCheckpointService.js", () => ({
+  requestAssistantRunCheckpointRetention: vi.fn(async () => ({})),
+}));
+
 vi.mock("../../services/AgentCompileCacheCleanupService.js", () => ({
   initializeAgentCompileCacheCleanup: vi.fn(),
   requestAgentCompileCacheCleanup: vi.fn(async () => {}),
@@ -233,6 +238,19 @@ vi.mock("../../services/CrashRecoveryService.js", () => ({
 
 vi.mock("../../services/ProcessMemoryMonitor.js", () => ({
   startAppMetricsMonitor: vi.fn(() => () => {}),
+}));
+
+const idleAutoCloseServiceMock = vi.hoisted(() => ({
+  setPtyClient: vi.fn(),
+  setProjectViewManagersProvider: vi.fn(),
+  setCoordinationHoldProvider: vi.fn(),
+  setPluginWorkProvider: vi.fn(),
+  start: vi.fn(),
+  sleepUnderMemoryPressure: vi.fn(async () => 0),
+}));
+
+vi.mock("../../services/IdleBackgroundAutoCloseService.js", () => ({
+  getIdleBackgroundAutoCloseService: () => idleAutoCloseServiceMock,
 }));
 
 vi.mock("../../services/ResourceProfileService.js", () => ({
@@ -268,6 +286,7 @@ vi.mock("../../ipc/handlers/projectCrud/index.js", () => ({
 }));
 
 const projectStoreMock = vi.hoisted(() => ({
+  getCurrentProjectId: vi.fn<() => string | null>(() => null),
   getAllProjects: vi.fn<() => { id: string; resumableAgentCount?: number }[]>(() => []),
   getProjectState: vi.fn<(id: string) => Promise<{ terminals?: Record<string, unknown>[] } | null>>(
     async () => null
@@ -355,17 +374,20 @@ import {
 import {
   getGlobalServicesInitialized,
   setGlobalServicesInitialized,
-  setPtyClientRef,
   getStopEventLoopLagMonitor,
   setStopEventLoopLagMonitor,
+  getStopAppMetricsMonitor,
+  setStopAppMetricsMonitor,
 } from "../serviceRefs.js";
 import type { WindowRegistry } from "../WindowRegistry.js";
 import { app, ipcMain, powerMonitor } from "electron";
 import { startEventLoopLagMonitor } from "../../utils/performance.js";
+import { startAppMetricsMonitor } from "../../services/ProcessMemoryMonitor.js";
 import type { Mock } from "vitest";
 import { CHANNELS } from "../../ipc/channels.js";
 import { store } from "../../store.js";
-import { helpSessionService } from "../../services/HelpSessionService.js";
+import { projectVisibilityClock } from "../../services/projectVisibilityClock.js";
+import { notifyProjectPresenceChanged } from "../projectPresenceChanges.js";
 
 describe("evictStaleSessionFiles orphan-pass safety (#11349)", () => {
   function resetSweepMocks() {
@@ -828,6 +850,7 @@ describe("initGlobalServices task ordering", () => {
       "trashed-pid-cleanup",
       "scratch-cleanup",
       "assistant-scratch-cleanup",
+      "assistant-run-checkpoint-retention",
     ];
 
     const telemetryIdx = registeredTaskNames.indexOf("telemetry");
@@ -889,6 +912,66 @@ describe("initGlobalServices task ordering", () => {
     }
   });
 
+  it("hands the pressure ladder's sleep lever to idle auto-close once it is wired (#13852)", async () => {
+    const previousStop = getStopAppMetricsMonitor();
+    setStopAppMetricsMonitor(null);
+    vi.mocked(startAppMetricsMonitor).mockClear();
+    idleAutoCloseServiceMock.sleepUnderMemoryPressure.mockClear();
+
+    try {
+      const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+      await initGlobalServices(fakeRegistry);
+      registeredTaskRuns.get("app-metrics-monitor")!();
+
+      expect(startAppMetricsMonitor).toHaveBeenCalledTimes(1);
+      const actions = vi.mocked(startAppMetricsMonitor).mock.calls[0]![0]!;
+
+      // Before the scheduler is wired there is nothing to sleep, and the lever
+      // says so rather than building the scheduler itself.
+      await expect(actions.hibernateIdleProjects()).resolves.toBe(0);
+      expect(idleAutoCloseServiceMock.sleepUnderMemoryPressure).not.toHaveBeenCalled();
+
+      await registeredTaskRuns.get("idle-background-auto-close-service")!();
+      idleAutoCloseServiceMock.sleepUnderMemoryPressure.mockResolvedValueOnce(3);
+      await expect(actions.hibernateIdleProjects()).resolves.toBe(3);
+      expect(idleAutoCloseServiceMock.sleepUnderMemoryPressure).toHaveBeenCalledTimes(1);
+    } finally {
+      getStopAppMetricsMonitor()?.();
+      setStopAppMetricsMonitor(previousStop);
+    }
+  });
+
+  it("wires the plugin work hold into automatic sleep before it starts (#14093)", async () => {
+    idleAutoCloseServiceMock.setPluginWorkProvider.mockClear();
+    idleAutoCloseServiceMock.start.mockClear();
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    await initGlobalServices(fakeRegistry);
+    await registeredTaskRuns.get("idle-background-auto-close-service")!();
+
+    expect(idleAutoCloseServiceMock.setPluginWorkProvider).toHaveBeenCalledTimes(1);
+    expect(
+      idleAutoCloseServiceMock.setPluginWorkProvider.mock.invocationCallOrder[0]!
+    ).toBeLessThan(idleAutoCloseServiceMock.start.mock.invocationCallOrder[0]!);
+
+    const provider = idleAutoCloseServiceMock.setPluginWorkProvider.mock.calls[0]![0] as (
+      projectId: string
+    ) => string | null;
+    pluginGetProjectWork.mockReturnValueOnce([
+      { pluginId: "project__p1__acme.sync", liveTasks: [], pendingCalls: 0, runningProcesses: 2 },
+    ]);
+    expect(provider("p1")).toBeNull();
+    pluginGetProjectWork.mockReturnValueOnce([
+      {
+        pluginId: "project__p1__acme.sync",
+        liveTasks: [{ id: "t1", title: "Syncing" }],
+        pendingCalls: 0,
+        runningProcesses: 0,
+      },
+    ]);
+    expect(provider("p1")).toBe("plugin-task:project__p1__acme.sync");
+    expect(pluginGetProjectWork).toHaveBeenLastCalledWith("p1");
+  });
+
   it("wires a lazy ProjectViewManager provider into HibernationService (#10668)", async () => {
     hibernationServiceMock.setProjectViewManagersProvider.mockClear();
     const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
@@ -905,52 +988,6 @@ describe("initGlobalServices task ordering", () => {
     expect(typeof provider).toBe("function");
     // Lazy: re-reads the registry on each call rather than capturing a snapshot.
     expect(provider()).toEqual([]);
-  });
-
-  it("wires the live-assistant predicate into HibernationService (#11477)", async () => {
-    // Background hibernation reaches the same projects the cached-view reclaim
-    // does, so it needs the same binding + PTY-liveness pair — an unwired
-    // predicate leaves a fourth path that can kill a running assistant.
-    hibernationServiceMock.setHasLiveAssistantBackend.mockClear();
-    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
-    await initGlobalServices(fakeRegistry);
-
-    registeredTaskRuns.get("hibernation-service")!();
-
-    expect(hibernationServiceMock.setHasLiveAssistantBackend).toHaveBeenCalledTimes(1);
-    const predicate = hibernationServiceMock.setHasLiveAssistantBackend.mock.calls[0][0] as (
-      projectId: string
-    ) => boolean;
-    expect(typeof predicate).toBe("function");
-
-    const getAssistantBackends = helpSessionService.getAssistantBackends as unknown as Mock;
-    const hasTerminal = vi.fn<(terminalId: string) => boolean>(() => true);
-
-    // No backend bound: nothing to protect, and resolving it must not throw
-    // before the PtyClient exists (the predicate is wired lazily).
-    getAssistantBackends.mockReturnValue([]);
-    expect(predicate("proj-1")).toBe(false);
-
-    // Bound but the PtyClient isn't up yet — still false. Binding alone is NOT
-    // liveness: it outlives an assistant that exited under its own steam
-    // (#11162), so a stale binding must not pin the project forever.
-    getAssistantBackends.mockReturnValue([{ terminalId: "t-help", webContentsId: 5, slot: 0 }]);
-    expect(predicate("proj-1")).toBe(false);
-
-    // Both halves satisfied.
-    setPtyClientRef({ hasTerminal } as unknown as Parameters<typeof setPtyClientRef>[0]);
-    try {
-      expect(predicate("proj-1")).toBe(true);
-      expect(hasTerminal).toHaveBeenCalledWith("t-help");
-
-      // Bound, PtyClient up, but the terminal is gone — the liveness half is
-      // what decides, not the binding.
-      hasTerminal.mockReturnValue(false);
-      expect(predicate("proj-1")).toBe(false);
-    } finally {
-      setPtyClientRef(null);
-      getAssistantBackends.mockReturnValue([]);
-    }
   });
 
   it("wires a lazy ProjectViewManager provider into IdleTerminalNotificationService (#11102)", async () => {
@@ -985,6 +1022,46 @@ describe("initGlobalServices task ordering", () => {
     // Windows without a ProjectViewManager are filtered out.
     contexts.push({ services: {} });
     expect(provider()).toEqual([pvm]);
+  });
+
+  it("stamps a project into the idle visibility clock as it leaves every window (#13844)", async () => {
+    const contexts: Array<{ services: { projectViewManager?: unknown } }> = [];
+    const fakeRegistry = {
+      all: () => contexts,
+      get size() {
+        return contexts.length;
+      },
+    } as unknown as WindowRegistry;
+
+    await initGlobalServices(fakeRegistry);
+    const run = registeredTaskRuns.get("project-visibility-clock");
+    expect(run).toBeDefined();
+
+    const nowSpy = vi.spyOn(Date, "now");
+    try {
+      nowSpy.mockReturnValue(1_000);
+      await run!();
+
+      // A window that opens after wiring is still seen.
+      nowSpy.mockReturnValue(2_000);
+      contexts.push({
+        services: {
+          projectViewManager: {
+            getActiveProjectId: () => "p-clock",
+            getOutgoingBridgeProjectId: () => null,
+          },
+        },
+      });
+      notifyProjectPresenceChanged();
+      nowSpy.mockReturnValue(5_000);
+      contexts.length = 0;
+      notifyProjectPresenceChanged();
+
+      nowSpy.mockReturnValue(60_000);
+      expect(projectVisibilityClock.lastVisibleAt("p-clock")).toBe(5_000);
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   it("calls helpSessionService.setMcpRegistry before pushing the mcp-server task", async () => {
@@ -1147,8 +1224,8 @@ describe("initGlobalServices task ordering", () => {
     expect(setPluginDirResolver).toHaveBeenCalledTimes(1);
     expect(activateOpenFileInstaller).toHaveBeenCalledTimes(1);
     // activateStartupFinishedPlugins() must also still run: its `finally` is
-    // what settles waitForInit(), which the renderer-facing plugin/forge IPC
-    // gates await — dropping it would hang those handlers forever.
+    // what settles waitForInit(), the fully-started gate that plugin
+    // diagnostics awaits — dropping it would hang that handler forever.
     expect(pluginActivateStartup).toHaveBeenCalledTimes(1);
   });
 
@@ -1186,6 +1263,7 @@ describe("initGlobalServices task ordering", () => {
     expect(registeredTaskNames).toContain("trashed-pid-cleanup");
     expect(registeredTaskNames).toContain("scratch-cleanup");
     expect(registeredTaskNames).toContain("assistant-scratch-cleanup");
+    expect(registeredTaskNames).toContain("assistant-run-checkpoint-retention");
     expect(registeredTaskNames).toContain("agent-compile-cache-cleanup");
     // GpuCrashMonitor is intentionally NOT a deferred task — it must stay
     // eager in main.ts so the child-process-gone listener installs before
@@ -1245,6 +1323,22 @@ describe("initGlobalServices task ordering", () => {
     expect(trashedSpy).toHaveBeenCalled();
     expect(scratchSpy).toHaveBeenCalled();
     expect(assistantSpy).toHaveBeenCalled();
+  });
+
+  it("runs checkpoint retention when its deferred task executes", async () => {
+    const { requestAssistantRunCheckpointRetention } =
+      await import("../../services/AssistantRunCheckpointService.js");
+    const spy = requestAssistantRunCheckpointRetention as ReturnType<typeof vi.fn>;
+    spy.mockClear();
+
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    await initGlobalServices(fakeRegistry);
+    expect(spy).not.toHaveBeenCalled();
+
+    const run = registeredTaskRuns.get("assistant-run-checkpoint-retention");
+    expect(run).toBeDefined();
+    await run!();
+    expect(spy).toHaveBeenCalledTimes(1);
   });
 
   it("defers the agent compile cache sweep rather than running it during init (#11699)", async () => {

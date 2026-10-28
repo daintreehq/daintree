@@ -1,5 +1,5 @@
 import { useCallback, useMemo } from "react";
-import type { WorktreeSnapshot, RecipeTerminal } from "@/types";
+import type { WorktreeSnapshot } from "@/types";
 import { useErrorStore, type ErrorRecord } from "@/store";
 import { useRecipeStore } from "@/store/recipeStore";
 import { logError } from "@/utils/logger";
@@ -161,10 +161,6 @@ export async function copyContextWithFeedback(
   }
 }
 
-export interface UseWorktreeActionsOptions {
-  onOpenRecipeEditor?: (worktreeId: string, initialTerminals?: RecipeTerminal[]) => void;
-}
-
 export interface WorktreeActions {
   /** A null worktree copies the workspace root — a non-git project or scratch (#13210). */
   handleCopyTree: (
@@ -183,9 +179,7 @@ export interface WorktreeActions {
   handleLaunchAgent: (worktreeId: string, agentId: string) => void;
 }
 
-export function useWorktreeActions({
-  onOpenRecipeEditor,
-}: UseWorktreeActionsOptions = {}): WorktreeActions {
+export function useWorktreeActions(): WorktreeActions {
   const addError = useErrorStore((state) => state.addError);
 
   // Shared failure path for both copy routes below. Classifying and recording
@@ -341,9 +335,16 @@ export function useWorktreeActions({
         return;
       }
 
-      onOpenRecipeEditor?.(worktree.id, terminals);
+      // The editor lives in the project dialog host, not under whichever
+      // surface offered Save Layout, so the handoff is the same event the
+      // recipe actions fire.
+      window.dispatchEvent(
+        new CustomEvent("daintree:open-recipe-editor", {
+          detail: { worktreeId: worktree.id, initialTerminals: terminals },
+        })
+      );
     },
-    [addError, onOpenRecipeEditor]
+    [addError]
   );
 
   const handleLaunchAgent = useCallback((worktreeId: string, agentId: string) => {

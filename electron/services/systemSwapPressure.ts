@@ -6,10 +6,13 @@
  * a reference to the monitor.
  *
  * A confirmation ages out on its own. The monitor rides the app-metrics poll,
- * which stretches to 150s while focus-throttled and stops entirely on suspend,
- * so a verdict nobody has refreshed for longer than that is no evidence.
+ * which stretches to 150s while focus-throttled, to 300s in the deep power
+ * level (screen locked or no window visible) and stops entirely on suspend, so
+ * a verdict nobody has refreshed for longer than that is no evidence. It has to
+ * outlast the deep cadence: that is when an unattended agent batch runs, and a
+ * shorter window would break every confirmation run in two (#14367).
  */
-export const SWAP_PRESSURE_STALE_MS = 180_000;
+export const SWAP_PRESSURE_STALE_MS = 330_000;
 
 let confirmedAt: number | null = null;
 

@@ -4,9 +4,12 @@ import { hasFileDrag } from "@/lib/fileDragPayload";
 import { resolveTransferSources } from "@/lib/transferSources";
 import { isRemoteWindow } from "@/hooks/useHostPlatform";
 import { fileAttachmentEntryFromSource, insertFileAttachments } from "../fileAttachments";
-import { usePanelStore } from "@/store/panelStore";
 import { hasAgentContextDrag, readAgentContextDrag } from "@/lib/agentContextDragPayload";
-import { draftAgentContext, getDraftRefusal } from "@/services/agentHandoff/agentDraft";
+import {
+  draftAgentContext,
+  draftAgentContextReference,
+  getDraftRefusal,
+} from "@/services/agentHandoff/agentDraft";
 import {
   clearPaneDragOver,
   notePaneDragOver,
@@ -15,6 +18,7 @@ import {
   usePaneDropHighlight,
 } from "../uploads/paneDropRouting";
 import type { TerminalFocusTarget } from "../terminalFocus";
+import { requestPaneFocus } from "../paneFocusRequest";
 
 export interface DragDropUploadOptions {
   /** Where uploads to a remote host show their progress chips. */
@@ -28,8 +32,8 @@ export interface DragDropUploadOptions {
   cwdProvider?: () => string;
   /**
    * This is the pane's own input bar, so it shares file drops with the pane's
-   * terminal: whichever of the two holds the keyboard takes a drop let go over
-   * either. False for a composer that only borrows the terminal id (Canopy's
+   * terminal: a drop let go over the bar lands here, or on the terminal when
+   * the bar can't take it. False for a composer that only borrows the terminal id (Canopy's
    * reply box), which keeps every drop let go over it.
    */
   sharesPaneDrops?: boolean;
@@ -82,9 +86,10 @@ export function useDragDrop(
     [addToProjectDirectory]
   );
 
-  // Where files let go over this bar land: the terminal while it holds the
-  // keyboard, and nowhere while neither surface can take them. Add to project
-  // is this bar's own gesture, so it stays here whatever holds the keyboard.
+  // Where files let go over this bar land: here, as a click would put the
+  // keyboard here; the terminal when this bar can't take them; nowhere while
+  // neither surface can. Add to project is this bar's own gesture, so it never
+  // passes to the terminal.
   const fileDropTarget = useCallback(
     (e: React.DragEvent): TerminalFocusTarget | null => {
       const here = canInsert?.() ?? true;
@@ -184,17 +189,21 @@ export function useDragDrop(
         if (!view || terminalId === undefined) return;
         const payload = readAgentContextDrag(e.dataTransfer);
         if (payload === null) return;
-        const result = draftAgentContext(terminalId, {
-          text: payload.text,
-          title: payload.title,
-          sourceLabel: payload.source?.label,
-        });
+        // A reference (#13795) lands as the chip the `@` menu would leave.
+        const result =
+          payload.v === 2
+            ? draftAgentContextReference(terminalId, payload.reference)
+            : draftAgentContext(terminalId, {
+                text: payload.text,
+                title: payload.title,
+                sourceLabel: payload.source?.label,
+              });
         if (result.status !== "drafted") return;
         // Same landing as a file drop (#11809): pane selected, keyboard in the
         // bar. The draft sync parks the caret after the block.
-        usePanelStore.getState().setPreferredTerminalFocusTarget("hybridInput");
         onDropSelect?.();
         view.focus();
+        if (paneId !== undefined) requestPaneFocus(paneId, "hybridInput");
         return;
       }
 
@@ -207,7 +216,7 @@ export function useDragDrop(
       if (dropped.length === 0) return;
 
       // Decided at the drop rather than trusted from the drag. Asked before
-      // the editor is: a bar still loading can't keep the drop, but a focused
+      // the editor is: a bar still loading can't keep the drop, but the
       // terminal can take it. A terminal that declines leaves the drop here,
       // where it was let go, unless the bar can't take it either.
       const target = fileDropTarget(e);
@@ -235,19 +244,18 @@ export function useDragDrop(
       // exactly the drops with the longest gap. It would also let a slow
       // thumbnail pull the selection back long after the user moved on.
       //
-      // Order matters. The preference is what `TerminalPane`'s focus effect
-      // reads to decide which sub-surface the newly selected pane hands the
-      // keyboard to, so a stale "xterm" would yank focus straight back out.
-      //
       // `view.focus()` rather than the panel focus registry: the registry
       // routes to `focusWithCursorAtEnd`, which drags the caret to the end of
       // the draft whenever the editor doesn't already hold focus — undoing the
       // caret the insertion below parks after the chip. Focusing directly keeps
-      // it, and makes the pane effect's own later call a no-op, since it
-      // preserves an editor that already owns DOM focus.
-      usePanelStore.getState().setPreferredTerminalFocusTarget("hybridInput");
+      // it. The request after it is what tells the newly selected pane's focus
+      // pass where the keyboard went, so it doesn't send it to the terminal;
+      // finding the editor already focused, it moves nothing. Only the pane's
+      // own bar asks: Canopy's reply box borrows the terminal id, and a request
+      // for it would focus the pane's bar instead.
       onDropSelect?.();
       view.focus();
+      if (paneId !== undefined) requestPaneFocus(paneId, "hybridInput");
 
       await insertFileAttachments(editorViewRef, view, dropped, cwd, {
         uploadSurface,

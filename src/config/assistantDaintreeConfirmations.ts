@@ -6,7 +6,7 @@ export const DAINTREE_CONFIRMATION_OPTIONS: {
   value: HelpAssistantDaintreeConfirmations;
   label: string;
 }[] = [
-  { value: "inherit", label: "Follow global setting" },
+  { value: "inherit", label: "Follow agent setting" },
   { value: "always-ask", label: "Always ask" },
   { value: "never-ask", label: "Never ask" },
 ];

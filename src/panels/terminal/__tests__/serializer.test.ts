@@ -288,3 +288,14 @@ describe("serializePtyPanel — scratchpad (#12835)", () => {
     expect(snapshot.scratchpad?.content).toBe("resume later");
   });
 });
+
+describe("serializePtyPanel — first prompt (#14592)", () => {
+  it("writes the record as the panel holds it", () => {
+    const firstPrompt = { text: "Fix it\nand test it", via: "launch" as const, at: 7 };
+    expect(serializePtyPanel(makePanel({ firstPrompt })).firstPrompt).toEqual(firstPrompt);
+  });
+
+  it("omits the field for a run launched with no prompt", () => {
+    expect("firstPrompt" in serializePtyPanel(makePanel())).toBe(false);
+  });
+});

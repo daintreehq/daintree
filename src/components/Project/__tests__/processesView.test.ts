@@ -10,7 +10,14 @@ import {
   describeMembers,
   describeTerminalKind,
   formatApproxMemory,
+  describeTerminalBuffer,
+  formatBufferEstimate,
+  indexTerminalBuffers,
+  formatCpu,
+  groupProcessesByProject,
   groupTerminalsByProject,
+  sortPluginProcesses,
+  unaccountedCores,
   pluginProcessTitle,
   terminalTitle,
   trashSecondsLeft,
@@ -187,5 +194,180 @@ describe("closed-terminal processes (#13174)", () => {
       describeCleanupReport({ found: 2, ended: 0, stillRunning: 2, unchecked: 0, lastAt: 1 })
         ?.severity
     ).toBe("warning");
+  });
+});
+
+describe("formatCpu", () => {
+  it("reads a process tree's ps percentage in cores, 100% being one core", () => {
+    expect(formatCpu(0)).toBe("0 cores");
+    expect(formatCpu(100)).toBe("1 core");
+    expect(formatCpu(140)).toBe("1.4 cores");
+  });
+});
+
+function closedProc(
+  pid: number,
+  extra: Partial<ProcessInventoryClosedProcess> = {}
+): ProcessInventoryClosedProcess {
+  return {
+    pid,
+    startTime: `s${pid}`,
+    comm: "node",
+    memoryKb: 100,
+    cpuPercent: 0,
+    origin: { kind: "terminal", id: "t", title: "x", spawnedAt: 1 },
+    closedAt: 1,
+    projectName: "Cedar",
+    ...extra,
+  };
+}
+
+function sampled(id: string, cpuPercent: number, memoryKb: number): ProcessInventoryTerminal {
+  return terminal(id, {
+    sample: { cpuPercent, memoryKb, processCount: 1, members: [] },
+  });
+}
+
+describe("sorting by CPU", () => {
+  it("ranks terminals and closed leftovers together by the chosen reading, unsampled last", () => {
+    const light = sampled("light", 5, 900);
+    const busy = sampled("busy", 150, 100);
+    const unsampled = terminal("none", { sample: null });
+    const leftover = groupClosedProcesses([closedProc(9, { cpuPercent: 80, memoryKb: 50 })])[0]!;
+    const rowIds = (sort: "cpu" | "memory") =>
+      groupProcessesByProject([light, busy, unsampled], [leftover], sort)[0]!.rows.map((row) =>
+        row.kind === "live" ? row.terminal.id : "closed"
+      );
+    expect(rowIds("memory")).toEqual(["light", "busy", "closed", "none"]);
+    expect(rowIds("cpu")).toEqual(["busy", "closed", "light", "none"]);
+  });
+
+  it("sorts plugin processes without touching the input", () => {
+    const plugin = (id: string, cpuPercent: number, memoryKb: number) => ({
+      source: "plugin-process" as const,
+      id,
+      pluginId: "acme",
+      label: id,
+      pid: 1,
+      spawnedAt: 1,
+      sample: { cpuPercent, memoryKb, processCount: 1, members: [] },
+    });
+    const input = [plugin("a", 1, 500), plugin("b", 90, 10)];
+    expect(sortPluginProcesses(input, "cpu").map((p) => p.id)).toEqual(["b", "a"]);
+    expect(sortPluginProcesses(input).map((p) => p.id)).toEqual(["a", "b"]);
+    expect(input.map((p) => p.id)).toEqual(["a", "b"]);
+  });
+});
+
+describe("unaccountedCores", () => {
+  const whole = {
+    terminals: [sampled("a", 150, 1)],
+    closedTerminalProcesses: [closedProc(1, { cpuPercent: 50 })],
+    plugins: [],
+    complete: true,
+    samplesAvailable: true,
+    truncated: false,
+  };
+
+  it("is the host's busy cores less every listed reading, in cores", () => {
+    expect(unaccountedCores(whole, 6.5)).toBeCloseTo(4.5);
+  });
+
+  it("never goes below zero", () => {
+    expect(unaccountedCores(whole, 1)).toBe(0);
+  });
+
+  it("says nothing from a partial, truncated or unsampled inventory, or without a host reading", () => {
+    expect(unaccountedCores({ ...whole, complete: false }, 6)).toBeNull();
+    expect(unaccountedCores({ ...whole, truncated: true }, 6)).toBeNull();
+    expect(unaccountedCores({ ...whole, samplesAvailable: false }, 6)).toBeNull();
+    expect(unaccountedCores(whole, null)).toBeNull();
+    // A row with no reading is unknown, not idle.
+    expect(
+      unaccountedCores(
+        { ...whole, terminals: [...whole.terminals, terminal("new", { sample: null })] },
+        6
+      )
+    ).toBeNull();
+    expect(
+      unaccountedCores(
+        { ...whole, closedTerminalProcesses: [closedProc(2, { cpuPercent: null })] },
+        6
+      )
+    ).toBeNull();
+  });
+});
+
+describe("renderer terminal buffer readings (#14213)", () => {
+  it("keeps a real zero and says when a buffer is under a megabyte", () => {
+    expect(formatBufferEstimate(0)).toBe("0 MB");
+    expect(formatBufferEstimate(48 * 80 * 12)).toBe("<1 MB");
+    expect(formatBufferEstimate(10_000 * 182 * 12)).toBe("~21 MB");
+    expect(formatBufferEstimate(3 * 1024 ** 3)).toBe("~3.0 GB");
+  });
+
+  function view(
+    webContentsId: number,
+    status: "fresh" | "last-known" | "unavailable",
+    sampledAt: number,
+    normalLines: number
+  ) {
+    return {
+      webContentsId,
+      windowId: 1,
+      projectId: "p1",
+      state: status === "fresh" ? ("active" as const) : ("cached" as const),
+      status,
+      sampledAt: status === "unavailable" ? null : sampledAt,
+      ageMs: status === "unavailable" ? null : 0,
+      estimatedBytes: status === "unavailable" ? null : normalLines * 80 * 12,
+      terminals:
+        status === "unavailable"
+          ? null
+          : [
+              {
+                terminalId: "t1",
+                normalLines,
+                alternateLines: 0,
+                cols: 80,
+                estimatedBytes: normalLines * 80 * 12,
+              },
+            ],
+    };
+  }
+
+  it("sums a terminal's copies across views and describes it by the fresh one", () => {
+    const index = indexTerminalBuffers({
+      complete: true,
+      estimatedBytes: 0,
+      views: [view(2, "last-known", 2_000, 500), view(1, "fresh", 1_000, 100)],
+    });
+    expect(index.get("t1")).toMatchObject({
+      status: "fresh",
+      normalLines: 100,
+      copies: 2,
+      estimatedBytes: (500 + 100) * 80 * 12,
+    });
+    expect(describeTerminalBuffer(index.get("t1")!)).toBe(
+      "Buffer <1 MB est. · 2 windows · 100 lines × 80 cols"
+    );
+  });
+
+  it("describes two cached copies by the newer and skips unavailable views", () => {
+    const index = indexTerminalBuffers({
+      complete: false,
+      estimatedBytes: 0,
+      views: [
+        view(1, "last-known", 1_000, 100),
+        view(2, "last-known", 2_000, 500),
+        view(3, "unavailable", 0, 0),
+      ],
+    });
+    expect(index.get("t1")).toMatchObject({ normalLines: 500, copies: 2 });
+    expect(index.size).toBe(1);
+  });
+
+  it("is empty when the snapshot didn't sample renderers", () => {
+    expect(indexTerminalBuffers(undefined).size).toBe(0);
   });
 });

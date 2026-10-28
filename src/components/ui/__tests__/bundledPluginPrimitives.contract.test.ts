@@ -104,7 +104,9 @@ function classViolations(pattern: RegExp): string[] {
 describe("bundled plugin renderers", () => {
   it("scans every builtin plugin's renderer", () => {
     const plugins = new Set(sources.map((s) => rel(s).split("/")[2]));
-    for (const id of ["github", "markdown-editor", "sveltekit-builder"]) {
+    // Plugins that ship React UI; the Element Picker's plugin is down to its
+    // guest adapter, which is no `.tsx`, since the picker moved into the core.
+    for (const id of ["github", "markdown-editor"]) {
       expect(plugins).toContain(id);
     }
   });

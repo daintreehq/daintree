@@ -2,6 +2,7 @@ import type {
   PanelViewProps,
   PluginPanelToolbarItemState,
   PluginSettingsViewContext,
+  PluginViewHostContext,
 } from "../../../../../shared/types/plugin.js";
 import { PLUGIN_STYLE_ROOT_ATTRIBUTE } from "../../../../../shared/types/plugin.js";
 import {
@@ -13,6 +14,7 @@ import {
   normalizePanelMenuItems,
   type PublishedPanelMenuItem,
 } from "../../../../../shared/utils/pluginPanelMenuItems.js";
+import { normalizePluginPanelTitle } from "../../../../../shared/utils/pluginPanelTitle.js";
 
 /**
  * Names the plugin a style root belongs to. Mirrors the host's own stamp
@@ -42,9 +44,15 @@ export interface PreviewPanelPropsOptions {
   runningActions?: readonly string[];
   settingsContext?: PluginSettingsViewContext;
   /**
+   * Where the view is mounted, as `hostContext`. Defaults to `"settings"` when
+   * {@link settingsContext} is given and `"panel"` otherwise. A `close` passed
+   * here is handed through, so a popover view's dismissal can be asserted.
+   */
+  hostContext?: PluginViewHostContext;
+  /**
    * Leave out the optional host callbacks (`persistState`, `requestReload`,
-   * `setHasUnsavedChanges`, `setToolbarItemState`, `setMenuItems`), as on a
-   * host surface that offers none of them.
+   * `setHasUnsavedChanges`, `setToolbarItemState`, `setMenuItems`, `setTitle`),
+   * as on a host surface that offers none of them.
    */
   withoutHostCallbacks?: boolean;
 }
@@ -82,6 +90,8 @@ export interface PreviewPanelController {
   readonly rejectedMenuItems: readonly string[];
   /** Toolbar button state by `actionId`, as last set. */
   readonly toolbarItems: ReadonlyMap<string, PluginPanelToolbarItemState>;
+  /** The title the view gave its panel, as the host vetted it, or `null` for the kind's name. */
+  readonly title: string | null;
   readonly hasUnsavedChanges: boolean;
   /** How many times a live attempt asked to be reloaded. */
   readonly reloadRequests: number;
@@ -115,6 +125,12 @@ export function createPreviewPanelController(
     [PLUGIN_STYLE_ROOT_ATTRIBUTE]: "",
     [PLUGIN_STYLE_OWNER_ATTRIBUTE]: pluginId,
   });
+  // One object for every attempt, as the host hands it.
+  const hostContext: PluginViewHostContext = Object.freeze({
+    kind:
+      options.hostContext?.kind ?? (options.settingsContext !== undefined ? "settings" : "panel"),
+    ...(options.hostContext?.close !== undefined ? { close: options.hostContext.close } : {}),
+  });
 
   let persistedState = options.initialArgs;
   // A record with no bag carries no version, as a freshly spawned panel does.
@@ -126,6 +142,7 @@ export function createPreviewPanelController(
   let menuItems: readonly PublishedPanelMenuItem[] | null = null;
   const rejectedMenuItems: string[] = [];
   const toolbarItems = new Map<string, PluginPanelToolbarItemState>();
+  let title: string | null = null;
   let hasUnsavedChanges = false;
   let reloadRequests = 0;
   let attempt: AbortController | null = null;
@@ -199,6 +216,12 @@ export function createPreviewPanelController(
               }
               menuItems = result.items.length > 0 ? result.items : null;
             },
+            setTitle: (value: string | null) => {
+              if (!live()) return;
+              // The host's own vetting; a value that is no title is ignored.
+              const vetted = normalizePluginPanelTitle(value);
+              if (vetted !== null) title = vetted === "" ? null : vetted;
+            },
           };
       return {
         panelId,
@@ -214,6 +237,7 @@ export function createPreviewPanelController(
         ...(options.settingsContext !== undefined
           ? { settingsContext: options.settingsContext }
           : {}),
+        hostContext,
         styleRootAttributes,
         ...callbacks,
       };
@@ -230,6 +254,9 @@ export function createPreviewPanelController(
     },
     rejectedMenuItems,
     toolbarItems,
+    get title() {
+      return title;
+    },
     get hasUnsavedChanges() {
       return hasUnsavedChanges;
     },

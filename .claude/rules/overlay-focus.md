@@ -49,9 +49,7 @@ Element-scoped, in `src/lib/tooltipFocusSuppression.ts`: the close arms a one-sh
 
 A consumer that preventDefaults `onCloseAutoFocus` itself keeps ownership of the outcome (`AppPalettePopover`).
 
-Sanctioned survivors, because launching or switching moves focus away from the control entirely: `AgentButton.tsx`, `PluginTrayButton.tsx`, `DockLaunchButton.tsx` (controlled tooltip + `isRestoringFocusRef`), and `Toolbar.tsx`'s overflow menu (`isRestoringFocusPillRef`).
-
-`ProjectSwitcher.tsx` also carries `isRestoringFocusRef` and is **not** on the sanctioned list — treat it as unreviewed rather than as precedent.
+Sanctioned survivors, because launching or switching moves focus away from the control entirely: `AgentButton.tsx`, `PluginTrayButton.tsx`, `DockLaunchButton.tsx` (controlled tooltip + `isRestoringFocusRef`), and the toolbar's project pill (`useToolbarProjectPill.tsx`, `isRestoringFocusPillRef`).
 
 Anything else hand-rolling the pattern is a violation, not a survivor.
 

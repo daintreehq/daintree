@@ -4,6 +4,7 @@ import {
   useState,
   useCallback,
   useRef,
+  useSyncExternalStore,
   type CSSProperties,
 } from "react";
 import { createPortal } from "react-dom";
@@ -49,6 +50,7 @@ import {
 import { actionService } from "@/services/ActionService";
 import { EVENT_KIND_LABEL, isNotificationEventKind } from "@/lib/notify";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
+import { isScreenLocked, subscribeScreenLock } from "@/lib/powerPolicyState";
 import { COUNT_BADGE_CLASS } from "./badge";
 
 const ACCENT_CLASS: Record<string, string> = {
@@ -155,6 +157,9 @@ function Toast({ notification, isTopmost }: { notification: Notification; isTopm
   const [isWindowBlurred, setIsWindowBlurred] = useState(
     () => typeof document !== "undefined" && !document.hasFocus()
   );
+  // A locked screen holds the toast the same way, though it fires no blur
+  // (#14885): a watch toast raised during the lock waits for the return.
+  const isLocked = useSyncExternalStore(subscribeScreenLock, isScreenLocked);
   // Paused time doesn't count against the visible-duration cap. The cap bounds
   // unattended time (see MAX_VISIBLE_DURATION_MS): a toast in a blurred window
   // isn't visible, and one under the pointer or focus is being read. Without
@@ -163,7 +168,9 @@ function Toast({ notification, isTopmost }: { notification: Notification; isTopm
   // toast born blurred, or one read with the pointer resting on it).
   const pausedAccumRef = useRef(0);
   const pausedSinceRef = useRef<number | null>(
-    typeof document !== "undefined" && !document.hasFocus() ? Date.now() : null
+    (typeof document !== "undefined" && !document.hasFocus()) || isScreenLocked()
+      ? Date.now()
+      : null
   );
   const toastRef = useRef<HTMLDivElement>(null);
   const prevFocusRef = useRef<Element | null>(null);
@@ -179,7 +186,7 @@ function Toast({ notification, isTopmost }: { notification: Notification; isTopm
   // mid-flight would drop the result (and its confirmation) on the floor.
   const isActionPending = activeActionIndex !== null && actionStatus !== "success";
   const isPaused =
-    isHovered || isFocusInside || isDropdownOpen || isWindowBlurred || isActionPending;
+    isHovered || isFocusInside || isDropdownOpen || isWindowBlurred || isLocked || isActionPending;
   // Layout phase, so the credit is settled before the dismiss effect below
   // reads it in the same commit.
   useLayoutEffect(() => {
@@ -260,23 +267,35 @@ function Toast({ notification, isTopmost }: { notification: Notification; isTopm
   useEffect(() => {
     // Pure state flips — `document.hasFocus()` is stale inside blur handlers
     // in Chromium 148, so the event arrival itself is the signal.
-    const handleBlur = (): void => {
-      // Eagerly clear the in-flight dismiss timer — waiting for the React
-      // re-render to run the effect cleanup leaves a window where a timer
-      // expiring right at blur dismisses the toast unseen.
+    const holdWhileAway = (): void => {
+      // Eagerly clear the in-flight timers — waiting for the React re-render
+      // to run the effect cleanup leaves a window where a timer expiring
+      // right as the user leaves dismisses the toast unseen.
       if (dismissTimerRef.current) {
         clearTimeout(dismissTimerRef.current);
         dismissTimerRef.current = null;
       }
+      if (dwellTimerRef.current) {
+        clearTimeout(dwellTimerRef.current);
+        dwellTimerRef.current = null;
+      }
       if (pausedSinceRef.current === null) pausedSinceRef.current = Date.now();
+    };
+    const handleBlur = (): void => {
+      holdWhileAway();
       setIsWindowBlurred(true);
     };
     const handleFocus = (): void => setIsWindowBlurred(false);
     window.addEventListener("blur", handleBlur);
     window.addEventListener("focus", handleFocus);
+    // `isLocked` re-renders on its own; this only closes the same gap on lock.
+    const offScreenLock = subscribeScreenLock((locked) => {
+      if (locked) holdWhileAway();
+    });
     return () => {
       window.removeEventListener("blur", handleBlur);
       window.removeEventListener("focus", handleFocus);
+      offScreenLock();
     };
   }, []);
 
@@ -383,16 +402,18 @@ function Toast({ notification, isTopmost }: { notification: Notification; isTopm
   ]);
 
   // The success confirmation dwells, then dismisses. It holds while the pointer
-  // rests on the card, the window is blurred, the options menu is open, or
-  // focus stays inside while the user is on the keyboard. Focus alone doesn't
-  // count: Chromium focuses a clicked button, so for a pointer activation
-  // focus-inside would pin the toast open until the user clicked away.
+  // rests on the card, the window is blurred or the screen locked, the options
+  // menu is open, or focus stays inside while the user is on the keyboard.
+  // Focus alone doesn't count: Chromium focuses a clicked button, so for a
+  // pointer activation focus-inside would pin the toast open until the user
+  // clicked away.
   const holdsDwellOnFocus = isFocusInside && (actionActivatedByKeyboard || isKeyboardEngaged);
   useEffect(() => {
     if (
       actionStatus !== "success" ||
       isHovered ||
       isWindowBlurred ||
+      isLocked ||
       isDropdownOpen ||
       holdsDwellOnFocus
     )
@@ -406,7 +427,7 @@ function Toast({ notification, isTopmost }: { notification: Notification; isTopm
         dwellTimerRef.current = null;
       }
     };
-  }, [actionStatus, isHovered, isWindowBlurred, isDropdownOpen, holdsDwellOnFocus]);
+  }, [actionStatus, isHovered, isWindowBlurred, isLocked, isDropdownOpen, holdsDwellOnFocus]);
 
   const accentClass = ACCENT_CLASS[notification.type] ?? "border-l-status-info";
   const countBadge =

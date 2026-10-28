@@ -6,6 +6,7 @@ import type {
   DownloadPayload,
   DownloadResult,
   FileTransferEvent,
+  GrantClickedFilePayload,
 } from "../../../shared/types/ipc/fileTransfer.js";
 import type { HostPickRequest } from "../../../shared/types/ipc/hostFiles.js";
 import { isValidRemoteHostId, type HostId } from "../../../shared/types/remoteHosts.js";
@@ -31,6 +32,8 @@ export interface HostFileClient {
   download(webContentsId: number, payload: DownloadPayload): Promise<DownloadResult>;
   /** Save a host file into a private temp folder here (for the clipboard, not the user). */
   downloadToTemp(hostId: HostId, hostPath: string, webContentsId: number): Promise<DownloadOutcome>;
+  /** The person clicked a link to a host file in this view's terminal: the host lets the view open it. */
+  grantClickedFile(webContentsId: number, payload: GrantClickedFilePayload): Promise<void>;
   /** Cancel the view's own download by its operation id; false when it has none running. */
   cancel(opId: string, webContentsId: number): boolean;
   pickHostPaths(webContentsId: number, request: HostPickRequest): Promise<string[] | null>;
@@ -75,16 +78,24 @@ export interface HostFileClientDeps {
 const PROGRESS_INTERVAL_MS = 100;
 const TEMP_RETENTION_MS = 24 * 60 * 60 * 1000;
 
+function isHostFileRef(
+  payload: { hostId: unknown; hostPath: unknown } | null | undefined
+): boolean {
+  return (
+    !!payload &&
+    typeof payload.hostId === "string" &&
+    isValidRemoteHostId(payload.hostId) &&
+    typeof payload.hostPath === "string" &&
+    payload.hostPath.length > 0 &&
+    payload.hostPath.length <= 4096 &&
+    !payload.hostPath.includes("\0") &&
+    path.posix.isAbsolute(payload.hostPath)
+  );
+}
+
 function validateDownload(payload: DownloadPayload): DownloadPayload {
   if (
-    !payload ||
-    typeof payload.hostId !== "string" ||
-    !isValidRemoteHostId(payload.hostId) ||
-    typeof payload.hostPath !== "string" ||
-    payload.hostPath.length === 0 ||
-    payload.hostPath.length > 4096 ||
-    payload.hostPath.includes("\0") ||
-    !path.posix.isAbsolute(payload.hostPath) ||
+    !isHostFileRef(payload) ||
     typeof payload.opId !== "string" ||
     payload.opId.length === 0 ||
     payload.opId.length > 128
@@ -187,6 +198,14 @@ export function createHostFileClient(deps: HostFileClientDeps): HostFileClient {
         webContentsId,
         destinationDir: dir,
       });
+    },
+
+    async grantClickedFile(webContentsId, payload) {
+      if (!isHostFileRef(payload)) {
+        throw new AppError({ code: "VALIDATION", message: "Invalid file" });
+      }
+      requireBoundHost(webContentsId, payload.hostId);
+      await deps.transport.grantClicked(payload.hostId, payload.hostPath, webContentsId);
     },
 
     cancel(opId, webContentsId) {

@@ -182,7 +182,7 @@ createElement(DataTable, {
 
 ## Write the data contract down
 
-An agent edits your data knowing only what it reads. Put the contract in the plugin's own `AGENTS.md` and point to it from the project's root `AGENTS.md` / `CLAUDE.md`:
+An agent edits your data knowing only what it reads. Put the contract in the plugin's own `AGENTS.md`, beside `plugin.json`. Whether the project's root `AGENTS.md` / `CLAUDE.md` points to it is the user's choice, never something a plugin or generator writes:
 
 ```markdown
 ## Budget data (acme.budget)
@@ -355,63 +355,57 @@ Tell agents in your data contract to leave the host's `_daintree_meta` table alo
 
 ## Refresh when the user comes back
 
-Switching projects leaves your view mounted, its React state intact, and its page visibility unchanged — nothing in the DOM marks the switch. The signal is main's, on `window.electron.app`, and the pull it drives is the one you already wrote for mount. That bridge is the host's own, not part of the plugin API ([Views → Project switches and staleness](./views.md#project-switches-and-staleness)): `@daintreehq/plugin-sdk/view-globals` deliberately leaves it out, a TypeScript view reads it through its own narrow cast, and every call below is optional-chained so a host without it reads as a view that is never cached or revealed. Where the SDK already covers the case — `useNow`, `useAnimationFrame` — use the hook rather than the bridge.
+Switching projects leaves your view mounted, its React state intact, and its page visibility unchanged — nothing in the DOM marks the switch. `useProjectPresence()` from `@daintreehq/plugin-sdk/react` does: `"foreground"` while a window shows your project, `"background"` while it is open behind another, from main, the same answer the worker gets from `host.onDidChangeProjectPresence` ([Views → Project switches and staleness](./views.md#project-switches-and-staleness)). The pull it drives is the one you already wrote for mount.
 
 ```js
-// view: subscribe and pull on mount, re-pull when this project is shown again —
-// reveal is an extra trigger for the same load, not a replacement for it.
+import { useProjectPresence } from "@daintreehq/plugin-sdk/react";
+
+const presence = useProjectPresence();
+// `null` (not answered yet) loads too: the mount pull must never wait on it.
+const inFront = presence !== "background";
+const accept = (next) => setSlate((prev) => (prev && prev.revision >= next.revision ? prev : next));
+
+// Pushes, subscribed once and before the first pull.
+useEffect(() => window.electron.plugin.on(pluginId, "slate", accept), [pluginId]);
+
+// Pull on mount, and again each time the project comes back to the front —
+// the return is an extra trigger for the same load, not a replacement for it.
 useEffect(() => {
+  if (!inFront) return;
   let live = true;
-  const accept = (next) =>
-    live && setSlate((prev) => (prev && prev.revision >= next.revision ? prev : next));
-  const load = async () => {
-    // `invoke` rejects when the handler throws or the plugin has unloaded.
-    const next = await window.electron.plugin.invoke(pluginId, "slate").catch(() => null);
-    if (next) accept(next);
-  };
-  const off = window.electron.plugin.on(pluginId, "slate", accept); // subscribe first
-  void load(); // first mount, and the remount after a reclaimed renderer
-  const offRevealed = window.electron?.app?.onViewRevealed?.(() => void load());
+  // `invoke` rejects when the handler throws or the plugin has unloaded.
+  window.electron.plugin.invoke(pluginId, "slate").then(
+    (next) => live && next && accept(next),
+    () => {}
+  );
   return () => {
     live = false;
-    off();
-    offRevealed?.();
   };
-}, [pluginId]);
+}, [pluginId, inFront]);
 ```
 
-The mount pull is not redundant with the reveal pull: under memory pressure the host destroys a backgrounded project view outright, and the user's next switch back is a cold mount with no reveal to catch. Route both through one function and the two cannot drift.
+The mount pull is not redundant with the return: under memory pressure the host destroys a backgrounded project view outright, and the user's next switch back is a cold mount whose presence goes from `null` straight to `"foreground"`, never through `"background"`, so there is no return to catch. Route both through one function and the two cannot drift.
 
-Periodic work in the view is the other half. For the two common cases the SDK already does it: `useNow` (a clock) and `useAnimationFrame` (a canvas loop) both pause while the project view is cached or the document hidden — see [Clocks](#clocks-and-relative-times) and [Canvas](#draw-on-a-canvas). Anything else needs the cache edges rather than the reveal: `onViewRevealed` arrives only for a switch that completes with your project in front. Seed from `isViewCached()` — these are edges, nothing replays, and a mount can land in an already-cached view — and AND it with document visibility, which covers the window being minimised while this project is the active one.
+Periodic work in the view is the other half. For the two common cases the SDK already does it: `useNow` (a clock) and `useAnimationFrame` (a canvas loop) both pause while the project view is cached or the document hidden — see [Clocks](#clocks-and-relative-times) and [Canvas](#draw-on-a-canvas). Anything else keys off presence, ANDed with document visibility, which covers the window being minimised while your project is the one it shows: presence is where the project is, not whether anyone is looking.
 
 ```js
 // view: demote while nobody can see this project.
+const presence = useProjectPresence();
 useEffect(() => {
-  const app = window.electron?.app;
-  // Reconcile rather than start/stop on the edge: the mount itself can land
-  // already cached, and the latch is the only thing that can say so.
   const sync = () => {
-    const idle = (app?.isViewCached?.() ?? false) || document.hidden;
-    if (idle) stopTicking();
+    if (presence === "background" || document.hidden) stopTicking();
     else startTicking();
   };
   sync();
-  const offCached = app?.onViewCached?.(sync);
-  // Warm activation, not reveal: warm activation is the cached-to-active edge
-  // and can arrive without a reveal ever following it — a cold switch that
-  // rolls back sends it alone.
-  const offActive = app?.onViewWarmActivated?.(sync);
   document.addEventListener("visibilitychange", sync);
   return () => {
-    offCached?.();
-    offActive?.();
     document.removeEventListener("visibilitychange", sync);
     stopTicking();
   };
-}, []);
+}, [presence]);
 ```
 
-[Views → Project switches and staleness](./views.md#project-switches-and-staleness) has why the DOM cannot do this, what each signal means, and the caveat that this bridge is the host's own rather than part of the plugin API.
+A poll that must not miss a beat belongs in the worker, which hears the same thing from `host.onDidChangeProjectPresence` and can slow down there instead. [Views → Project switches and staleness](./views.md#project-switches-and-staleness) has why the DOM cannot do this and what the states mean.
 
 ## Clocks and relative times
 
@@ -627,7 +621,9 @@ A project plugin can replace what the grid shows when no panels are open, so the
 "surfaces": { "emptyCanvas": { "viewId": "main" } }
 ```
 
-That surface is visible only while the grid is empty. The moment a terminal opens it gives way. Above it the host draws a thin strip of its own, outside your view's box: a switch between your panel and the stock launcher and, while your surface shows, an icon button for the launcher's search. You never need to reserve space for it, so a top-right toolbar is fine. The first time the surface shows in a project, the user is asked whether to keep it, and the answer is remembered for that project. For a navigation that stays put, the same panel kind is dockable by default; a docked instance survives everything the grid does. Give the user both: the canvas for the cold open, the dock for the working session. Details under [Surfaces](./project-local.md#surfaces).
+That surface is visible only while the grid is empty. The moment a terminal opens it gives way. Above it the host draws a thin strip of its own, outside your view's box: a switch between your panel and the stock launcher and, while your surface shows, an icon button for the launcher's search. You never need to reserve space for it, so a top-right toolbar is fine. The first time the surface shows in a project, the user is asked whether to keep it, and the answer is remembered for that project. For a navigation that stays put, the same panel kind is dockable by default; a docked instance survives everything the grid does. Give the user both: the canvas for the cold open, the dock for the working session.
+
+For a main screen that outlasts the cold open, claim `projectHome` too. The main area gains a Home/Split/Grid switch, and your view stays one click away however many panels are open. On Home alone, focusing or spawning a grid panel returns to the grid; in Split your view stays beside the panels while agents are launched and focused, and `application.arrangement: "beside-grid"` makes Split the project's default. Details under [Surfaces](./project-local.md#surfaces).
 
 ## Open your own panel from a command
 
@@ -658,7 +654,35 @@ await host.registerAction(
 
 `dispatch` resolves `{ ok: false }` instead of throwing, so a command that ignores the result opens nothing and says nothing. `kind` is the registered kind id.
 
-`reuseExisting` defaults to `true`: if a panel of this kind is already open in the target worktree (`worktreeId`, or the active worktree when you pass none) and not in the trash, the action focuses that panel where it is, grid or dock, and resolves with its `panelId`. It does **not** hand it the new `initialArgs` — the open panel keeps the state it has — so "Show in Video Manager" on a second file only brings the manager forward. To act on the new argument, keep it where the view pulls from — worker state the view reads with an `invoke` on mount — and then push a "changed" notice (`host.postToPanel(channel, payload, panelId)`) so an open view pulls again; a push alone can be lost, because the action returns before a view has necessarily subscribed and pushes are not buffered. Or pass `reuseExisting: false`, which always adds a new panel to the grid with these `initialArgs`. A panel in another worktree is never reused. `host.panelKindId` qualifies your bare panel id for whichever origin you load under (`project:{projectId}/{manifestId}/{kindId}` for a project plugin). A `contextMenus` entry at `location: "file"` dispatches your command with `{ path, worktreePath, status }`, which is how "Show in Video Manager" appears on every file row.
+`reuseExisting` defaults to `true`: if a panel of this kind is already open in the target worktree (`worktreeId`, or the active worktree when you pass none) and not in the trash, the action focuses that panel where it is, grid or dock, and resolves with its `panelId`. Its `initialArgs` reach the open view as the `openRequest` prop, `{ seq, args }`, rather than as `initialArgs`, which stays the bag the view mounted with. A mounted view re-renders with the request and keeps its state; one that isn't mounted (a hidden dock tab, a pane behind a maximized sibling) gets it on its next mount, and only the latest call waits. `seq` is new on every call, so key the effect that acts on it by the request itself, and persist what it changes if it should survive a remount: a remount or reload never replays a request a view already committed with. The request lives in the project's window, so one still waiting when that window reloads or is evicted is lost.
+
+```tsx
+export default function VideoManager({ initialArgs, openRequest }: PanelViewProps) {
+  const [path, setPath] = useState(() => initialArgs?.path);
+  useEffect(() => {
+    if (openRequest) setPath(openRequest.args.path);
+  }, [openRequest]);
+  // …
+}
+```
+
+Or pass `reuseExisting: false`, which always adds a new panel with these `initialArgs`. A panel in another worktree is never reused, except for a [project-scoped kind](#open-it-in-the-dock). `host.panelKindId` qualifies your bare panel id for whichever origin you load under (`project:{projectId}/{manifestId}/{kindId}` for a project plugin). A `contextMenus` entry at `location: "file"` dispatches your command with `{ path, isDirectory, relativePath, worktreePath, status }`, which is how "Show in Video Manager" appears on every file row.
+
+### Open it in the dock
+
+Pass `presentation: "dock"` to open the panel as a dock chip instead of a grid pane, and show it. A kind that declares `dockable: false` is refused rather than put in the grid. Reuse works as it does for the grid: a panel of the kind already open in the worktree is focused where it is.
+
+For a panel that should be the same in every worktree, such as a records list or a navigator, declare `"scope": "project"` on the panel contribution. A project panel opens with no worktree, in the dock by default, and its dock chip shows in every worktree; a reusing open finds it from any of them. Don't pass `worktreeId` for one, and don't ask for `presentation: "panel"`: the grid shows only the active worktree's panels, so both are refused. `presentation: "dialog"` works and is not tied to a worktree either. The launchers put a project panel in the dock too.
+
+Name each instance from its view with `setTitle`, so three record panels read "Record #42", "Record #43" and "Record #44" rather than three copies of the kind's name:
+
+```tsx
+export default function RecordView({ initialArgs, openRequest, setTitle }: PanelViewProps) {
+  const id = openRequest?.args.id ?? initialArgs?.id;
+  useEffect(() => setTitle?.(id === undefined ? null : `Record #${String(id)}`), [id, setTitle]);
+  // …
+}
+```
 
 ### Open it as a dialog
 
@@ -673,7 +697,7 @@ await host.dispatch("panel.openPluginPanel", {
 });
 ```
 
-If a dialog of the kind is already open for the target worktree, a plain open resolves with its `panelId` and leaves it alone. Add `toggle: true` to close it instead when it is the topmost dialog, so one keybinding opens and closes it. A keybinding fires inside the dialog only if its `when` does not exclude `modalOpen`. A second click on a toolbar button already closes the dialog, because the click lands on its backdrop. `reuseExisting` does not apply to dialogs, and a grid or dock panel of the kind is never reused as one.
+If a dialog of the kind is already open for the target worktree, a plain open resolves with its `panelId` and leaves it in place, handing any `initialArgs` to its view as `openRequest` the same way a reused panel gets them. Add `toggle: true` to close it instead when it is the topmost dialog, so one keybinding opens and closes it. A keybinding fires inside the dialog only if its `when` does not exclude `modalOpen`. A second click on a toolbar button already closes the dialog, because the click lands on its backdrop. `reuseExisting` does not apply to dialogs, and a grid or dock panel of the kind is never reused as one.
 
 A dialog panel is ephemeral. Closing it removes the panel, so `panelRemovedSignal` aborts and whatever the view wrote through `persistState` goes with it. Keep anything that should outlive a close in `host.storage` or your worker.
 

@@ -3,13 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ActionContext } from "@shared/types/actions";
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { registerDevServerActions } from "../definitions/devServerActions";
-import {
-  __resetDevPreviewToolsForTests,
-  registerDevPreviewTool,
-} from "@/registry/devPreviewToolRegistry";
+import type { DevPreviewToolDefinition } from "@/services/devPreviewTools/types";
 import { useDevPreviewToolStore } from "@/store/devPreviewToolStore";
 import { usePanelStore } from "@/store/panelStore";
-import { _resetPluginRuntimeStoreForTest, usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 
 // The action focuses the panel it acted on through the service singleton; the
 // refusal these tests are about happens before that, and a real dispatch here
@@ -18,8 +14,15 @@ vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: vi.fn(async () => ({ ok: true, result: { panelId: PANEL } })) },
 }));
 
-const PLUGIN = "acme.tools";
-const TOOL = "acme.tools.picker";
+// The preview's own tools, swapped for the one fake each case sets up.
+const builtIn = vi.hoisted(() => ({ tool: undefined as DevPreviewToolDefinition | undefined }));
+vi.mock("@/services/devPreviewTools/builtInTools", () => ({
+  BUILT_IN_DEV_PREVIEW_TOOLS: [],
+  resolveDevPreviewTool: (toolId: string) =>
+    builtIn.tool?.id === toolId ? builtIn.tool : undefined,
+}));
+
+const TOOL = "picker";
 const PANEL = "preview-1";
 const REASON = "The Picker needs something to pick";
 
@@ -37,14 +40,13 @@ function runToggleTool(args: { toolId: string; panelId?: string }): Promise<unkn
 }
 
 function register(isAvailable: (() => boolean | Promise<boolean>) | undefined): void {
-  registerDevPreviewTool({
+  builtIn.tool = {
     id: TOOL,
-    pluginId: PLUGIN,
     label: "Picker",
     Button: () => null,
     isAvailable,
     unavailableReason: REASON,
-  });
+  };
 }
 
 beforeEach(() => {
@@ -52,17 +54,11 @@ beforeEach(() => {
     panelIds: [PANEL],
     panelsById: { [PANEL]: { id: PANEL, kind: "dev-preview", location: "grid" } },
   } as never);
-  usePluginRuntimeStore.setState({
-    pluginMetaById: new Map([
-      [PLUGIN, { devMode: false, displayName: "Acme", previewToolIds: new Set([TOOL]) }],
-    ]),
-    disabledPluginIds: new Set<string>(),
-  });
 });
 
 afterEach(() => {
-  __resetDevPreviewToolsForTests();
-  _resetPluginRuntimeStoreForTest();
+  builtIn.tool = undefined;
+  useDevPreviewToolStore.setState({ activeByPanel: {} });
   usePanelStore.setState({ panelIds: [], panelsById: {} } as never);
 });
 

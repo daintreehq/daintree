@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render } from "@testing-library/react";
 import type { TerminalScratchpad as ScratchpadState } from "@shared/types/panel";
 
@@ -28,9 +28,12 @@ const terminalService = vi.hoisted(() => ({
   lockResize: vi.fn(),
   runResizePass: vi.fn(),
 }));
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: terminalService,
-}));
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = terminalService;
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { TerminalScratchpad } from "../TerminalScratchpad";
@@ -39,6 +42,7 @@ import {
   SCRATCHPAD_MAX_CHARS,
   isScratchpadElement,
 } from "@/lib/terminalScratchpad";
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 
 function seed(scratchpad: ScratchpadState | undefined): void {
   panelState.panelsById = {
@@ -61,6 +65,12 @@ beforeEach(() => {
 afterEach(() => {
   document.body.style.cursor = "";
   document.body.style.userSelect = "";
+});
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
 });
 
 describe("TerminalScratchpad", () => {

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/controllers", () => ({
   terminalRegistryController: {
@@ -7,15 +7,18 @@ vi.mock("@/controllers", () => ({
   },
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     destroy: vi.fn(),
     detachForProjectSwitch: vi.fn(),
     suppressResizesDuringProjectSwitch: vi.fn(),
     applyRendererPolicy: vi.fn(),
     onPanelBackgrounded: vi.fn(),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("@/services/terminal/panelDuplicationService", () => ({
   buildPanelSnapshotOptions: vi.fn((p: { id: string }) => ({ id: p.id })),
@@ -46,7 +49,10 @@ const baseWatched = () => new Set<string>();
 
 import { usePanelStore } from "../panelStore";
 import { terminalRegistryController } from "@/controllers";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { createTerminalPaintPlane } from "@/services/TerminalInstanceService";
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
+
+const terminalInstanceService = createTerminalPaintPlane();
 
 function resetStore() {
   usePanelStore.setState((s) => ({
@@ -71,6 +77,12 @@ function resetStore() {
     lastClosedConfig: null,
   }));
 }
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
+});
 
 describe("panelStore adversarial", () => {
   beforeEach(() => {
@@ -624,6 +636,145 @@ describe("panelStore adversarial", () => {
         const s = usePanelStore.getState();
         expect(s.maximizedId).toBeNull();
         expect(s.maximizeTarget).toBeNull();
+      });
+    });
+
+    describe("revealing a grid panel leaves the project's Home", () => {
+      const exitHome = vi.fn();
+
+      beforeEach(async () => {
+        exitHome.mockClear();
+        const { setProjectHomeExitAccessor } = await import("../storeAccessors");
+        setProjectHomeExitAccessor(exitHome);
+      });
+
+      afterEach(async () => {
+        const { resetStoreAccessorsForTesting } = await import("../storeAccessors");
+        resetStoreAccessorsForTesting();
+      });
+
+      it("leaves Home for a new grid panel that takes focus", async () => {
+        seedMaximizedPanel();
+
+        await usePanelStore.getState().addPanel({ kind: "review", worktreeId: "wt-1" });
+
+        expect(exitHome).toHaveBeenCalledTimes(1);
+      });
+
+      it("leaves Home even when the tab-strip add keeps its maximize", async () => {
+        seedMaximizedGroup();
+
+        await usePanelStore
+          .getState()
+          .addPanel({ kind: "review", worktreeId: "wt-1", preserveMaximize: true });
+
+        expect(exitHome).toHaveBeenCalledTimes(1);
+      });
+
+      it("stays on Home for a preserve-policy spawn, which takes no focus", async () => {
+        seedMaximizedPanel();
+
+        await usePanelStore
+          .getState()
+          .addPanel({ kind: "review", worktreeId: "wt-1", focusPolicy: "preserve" });
+
+        expect(exitHome).not.toHaveBeenCalled();
+      });
+
+      it("stays on Home for a panel committed to the dock", async () => {
+        seedMaximizedPanel();
+
+        await usePanelStore
+          .getState()
+          .addPanel({ kind: "browser", worktreeId: "wt-1", location: "dock" });
+
+        expect(exitHome).not.toHaveBeenCalled();
+      });
+
+      it("leaves Home when a trashed panel is restored to the grid, not to the dock", () => {
+        usePanelStore.setState({
+          panelsById: {
+            p1: makePanel("p1"),
+            d1: makePanel("d1", { location: "dock", kind: "terminal" }),
+          },
+          panelIds: ["p1", "d1"],
+          panelIdsByWorktreeId: { "wt-1": ["p1", "d1"] },
+        });
+        usePanelStore.getState().trashPanel("d1");
+        usePanelStore.getState().restoreTerminal("d1");
+        expect(exitHome).not.toHaveBeenCalled();
+
+        usePanelStore.getState().trashPanel("p1");
+        usePanelStore.getState().restoreTerminal("p1");
+        expect(exitHome).toHaveBeenCalledTimes(1);
+      });
+
+      it("leaves Home when a backgrounded panel returns to the grid", () => {
+        seedMaximizedPanel();
+        usePanelStore.getState().backgroundTerminal("p2");
+
+        usePanelStore.getState().restoreBackgroundTerminal("p2");
+
+        expect(exitHome).toHaveBeenCalledTimes(1);
+      });
+
+      it("leaves Home when a panel is placed into the grid at a position, not the dock", () => {
+        usePanelStore.setState({
+          panelsById: {
+            p1: makePanel("p1"),
+            d1: makePanel("d1", { location: "dock", kind: "terminal" }),
+          },
+          panelIds: ["p1", "d1"],
+          panelIdsByWorktreeId: { "wt-1": ["p1", "d1"] },
+        });
+
+        usePanelStore.getState().moveTerminalToPosition("p1", 0, "dock", "wt-1");
+        expect(exitHome).not.toHaveBeenCalled();
+
+        usePanelStore.getState().moveTerminalToPosition("d1", 0, "grid", "wt-1");
+        expect(usePanelStore.getState().focusedId).toBe("d1");
+        expect(exitHome).toHaveBeenCalledTimes(1);
+      });
+
+      it("leaves Home for a backgrounded group restored to the grid, not to the dock", () => {
+        usePanelStore.setState({
+          panelsById: {
+            p1: makePanel("p1"),
+            d1: makePanel("d1", { location: "dock", kind: "terminal" }),
+            d2: makePanel("d2", { location: "dock", kind: "terminal" }),
+            g1: makePanel("g1"),
+            g2: makePanel("g2"),
+          },
+          panelIds: ["p1", "d1", "d2", "g1", "g2"],
+          panelIdsByWorktreeId: { "wt-1": ["p1", "d1", "d2", "g1", "g2"] },
+        });
+        usePanelStore.getState().createTabGroup("dock", "wt-1", ["d1", "d2"], "d1");
+        usePanelStore.getState().createTabGroup("grid", "wt-1", ["g1", "g2"], "g1");
+        const restoreIdOf = (memberId: string) =>
+          usePanelStore.getState().backgroundedTerminals.get(memberId)?.groupRestoreId;
+
+        usePanelStore.getState().backgroundPanelGroup("d1");
+        usePanelStore.getState().restoreBackgroundGroup(restoreIdOf("d1")!);
+        expect(exitHome).not.toHaveBeenCalled();
+
+        usePanelStore.getState().backgroundPanelGroup("g1");
+        usePanelStore.getState().restoreBackgroundGroup(restoreIdOf("g1")!);
+        expect(exitHome).toHaveBeenCalledTimes(1);
+      });
+
+      it("leaves Home when a docked panel moves to the grid", () => {
+        usePanelStore.setState({
+          panelsById: {
+            p1: makePanel("p1"),
+            d1: makePanel("d1", { location: "dock", kind: "terminal" }),
+          },
+          panelIds: ["p1", "d1"],
+          panelIdsByWorktreeId: { "wt-1": ["p1", "d1"] },
+        });
+
+        expect(usePanelStore.getState().moveTerminalToGrid("d1")).toBe(true);
+
+        expect(exitHome).toHaveBeenCalledTimes(1);
       });
     });
   });

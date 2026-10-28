@@ -21,7 +21,7 @@ export function registerPortalActions(actions: ActionRegistry, _callbacks: Actio
     id: "portal.toggle",
     title: "Toggle portal",
     description:
-      "Show or hide the portal browser panel, whichever it currently is not. This changes what the user sees without closing any tab or discarding page state. Because it toggles rather than sets, calling it without knowing the current state can hide a panel the user is using. Opening is suppressed while a dialog or overlay owns the viewport, so the call can do nothing at all.",
+      "Show or hide the portal browser panel, whichever it currently is not. Hiding closes no tab, though one left hidden for an hour may be released, reloading at its address with login kept when next shown. Because it toggles rather than sets, calling it blind can hide a panel the user is using. Opening is suppressed while a dialog or overlay owns the viewport, so the call can do nothing at all.",
     category: "portal",
     kind: "command",
     danger: "safe",

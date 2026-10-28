@@ -214,6 +214,10 @@ vi.mock("../plugin/PluginDevWorkerMainBridge.js", () => ({
 
 import { PluginService } from "../PluginService.js";
 import { CHANNELS } from "../../ipc/channels.js";
+import {
+  clearPluginHostedViewRegistry,
+  getPluginHostedViews,
+} from "../plugin/PluginHostedViewRegistry.js";
 
 let tmpDir: string;
 
@@ -371,6 +375,48 @@ describe("PluginService built-in plugin loading", () => {
 
     expect(service.listPlugins()).toHaveLength(1);
     expect(service.listPlugins()[0].disabled).toBe(false);
+  });
+
+  // The deleted SvelteKit builder's id stays in whichever list the user last
+  // toggled it into; with no manifest on disk it must stay invisible and untouched.
+  it.each([
+    { label: "plugins.enabled", enabled: ["daintree.sveltekit-builder"], disabled: [] },
+    { label: "plugins.disabled", enabled: [], disabled: ["daintree.sveltekit-builder"] },
+    {
+      label: "both lists",
+      enabled: ["daintree.sveltekit-builder"],
+      disabled: ["daintree.sveltekit-builder"],
+    },
+  ])("starts cleanly past a removed built-in still named in $label", async (lists) => {
+    const removed = "daintree.sveltekit-builder";
+    storeMock._state.set("plugins", {
+      enabled: [...lists.enabled],
+      disabled: [...lists.disabled],
+      installed: {},
+    });
+    await writeBuiltinPlugin("helper", { name: "daintree.helper", version: "1.0.0" });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
+      await service.initialize();
+
+      expect(service.listPlugins().map((p) => [p.manifest.name, p.disabled])).toEqual([
+        ["daintree.helper", false],
+      ]);
+      expect(errorSpy).not.toHaveBeenCalled();
+      const toasts = broadcastToRendererMock.mock.calls.filter(
+        ([channel]) => channel === CHANNELS.NOTIFICATION_SHOW_TOAST
+      );
+      expect(toasts.filter((call) => JSON.stringify(call).includes(removed))).toEqual([]);
+      expect(storeMock.set.mock.calls.filter(([key]) => key === "plugins")).toEqual([]);
+      expect(storeMock._state.get("plugins")).toEqual({
+        enabled: lists.enabled,
+        disabled: lists.disabled,
+        installed: {},
+      });
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 
   it("a disabled name collision keeps the built-in entry (loaded first) for the toggle", async () => {
@@ -866,6 +912,27 @@ describe("contributes.fileEditors is built-in only (#12323)", () => {
     // The plugin never entered the registry; the provenance record carries the
     // reason so the plugin manager can show it.
     expect(record).toBeUndefined();
+  });
+
+  it("loads an installed plugin's view-backed file editor and serves it with its view (#13809)", async () => {
+    const userRoot = path.join(tmpDir, "user");
+    await writePluginAt(userRoot, "acme-csv", {
+      name: "acme.csv",
+      version: "1.0.0",
+      contributes: {
+        views: [{ id: "grid", componentPath: "dist/grid.js", location: "fileEditor" }],
+        fileEditors: [{ id: "csv", view: "grid", mode: "view", extensions: ["csv"] }],
+      },
+    });
+    clearPluginHostedViewRegistry();
+    const service = new PluginService(userRoot, "0.0.0", { builtinPluginsRoot: builtinDir });
+    await service.initialize();
+    expect(service.hasPlugin("acme.csv")).toBe(true);
+    const view = getPluginHostedViews().find((entry) => entry.pluginId === "acme.csv");
+    expect(view).toMatchObject({ viewId: "grid", location: "fileEditor" });
+    expect(view?.fileEditors).toEqual([
+      { id: "csv", mode: "view", extensions: ["csv"], paths: [], maxBytes: 2 * 1024 * 1024 },
+    ]);
   });
 
   it("still loads an installed plugin whose fileEditors is empty", async () => {

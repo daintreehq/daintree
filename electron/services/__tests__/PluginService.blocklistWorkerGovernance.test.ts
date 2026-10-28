@@ -163,6 +163,8 @@ const devWorkerMock = vi.hoisted(() => {
     // main→worker invokes and worker→main host calls (e.g. an open prompt).
     pendingInvokeCount = 0;
     pendingHostCallCount = 0;
+    // A manifest command relayed into the worker; resolves as a handler would.
+    invokeCommand = vi.fn(async (_id: string, _path: string, _args: unknown) => undefined);
     waitForActivation = vi.fn(async () => {
       const bundlePath = this.deps.workerHost?.opts?.bundlePath;
       const onResult = this.deps.onActivationResult;
@@ -213,6 +215,10 @@ vi.mock("../plugin/PluginDevWorkerMainBridge.js", () => ({
 }));
 
 import { PluginService } from "../PluginService.js";
+import {
+  ProjectPresenceTracker,
+  _setProjectPresenceTrackerForTests,
+} from "../ProjectPresenceTracker.js";
 import { registerPanelKind } from "../../../shared/config/panelKindRegistry.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { PLUGIN_BLOCKLIST_TTL_MS } from "../../../shared/config/pluginBlocklist.js";
@@ -250,9 +256,11 @@ describe("PluginService blocklist / kill-switch (#10891)", () => {
     }))
   ) {
     // Route disk cache into the test tmpDir so a real userData path is never touched.
+    // No seed, so startup takes the fetched list as its first enforced one.
     const svc = new PluginBlocklistService({
       fetchImpl,
       cachePath: path.join(tmpDir, "blocklist-cache.json"),
+      seed: null,
     });
     return { svc, fetchImpl };
   }
@@ -372,6 +380,158 @@ describe("PluginService blocklist / kill-switch (#10891)", () => {
 
     // A single fetch backs the whole multi-plugin scan.
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  describe("fresh profile with the release-shipped seed (#14127)", () => {
+    function pendingFetch(entries: ParsedPluginBlocklist["entries"], seed?: unknown) {
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let entered!: () => void;
+      const fetchEntered = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const fetchImpl = vi.fn(async () => {
+        entered();
+        await gate;
+        return { ok: true, status: 200, json: async () => ({ entries }) };
+      });
+      const svc = new PluginBlocklistService({
+        fetchImpl,
+        cachePath: path.join(tmpDir, "blocklist-cache.json"),
+        ...(seed === undefined ? {} : { seed }),
+      });
+      return { svc, release, fetchEntered };
+    }
+
+    const isBlocked = (service: PluginService, name: string) =>
+      service.listPlugins().some((p) => p.manifest.name === name && p.blocklisted);
+
+    // The fetched list persists fire-and-forget; let it land before the fixture
+    // dir is removed so a late write can't recreate it.
+    const persisted = () => vi.waitFor(() => fs.access(path.join(tmpDir, "blocklist-cache.json")));
+
+    it("publishes the built-in catalog while the remote fetch is still pending", async () => {
+      const builtinRoot = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-builtin-test-"));
+      try {
+        const dir = path.join(builtinRoot, "viewer");
+        await fs.mkdir(dir, { recursive: true });
+        await fs.writeFile(
+          path.join(dir, "plugin.json"),
+          JSON.stringify({
+            name: "daintree.viewer",
+            version: "1.0.0",
+            contributes: {
+              panels: [{ id: "viewer", name: "Viewer", iconId: "eye", color: "#ff0000" }],
+            },
+          })
+        );
+        const { svc, release, fetchEntered } = pendingFetch([]);
+        const service = new PluginService(tmpDir, undefined, {
+          blocklistService: svc,
+          builtinPluginsRoot: builtinRoot,
+        });
+
+        await service.initialize();
+        await service.waitForCatalog();
+        await fetchEntered;
+        expect(service.hasPlugin("daintree.viewer")).toBe(true);
+        expect(registerPanelKind).toHaveBeenCalledTimes(1);
+        release();
+        await persisted();
+        service.dispose();
+      } finally {
+        await fs.rm(builtinRoot, { recursive: true, force: true });
+      }
+    });
+
+    it("enforces the seed's denials before the fetch answers", async () => {
+      await writePlugin("bad", { name: "acme.bad", version: "1.0.0" });
+      await writePlugin("ok", { name: "acme.ok", version: "1.0.0" });
+      const { svc, release, fetchEntered } = pendingFetch([], {
+        entries: [{ name: "acme.bad", ranges: ["*"], reason: "malware" }],
+      });
+
+      const service = new PluginService(tmpDir, undefined, { blocklistService: svc });
+      await service.initialize();
+      await fetchEntered;
+      expect(isBlocked(service, "acme.bad")).toBe(true);
+      expect(service.hasPlugin("acme.ok")).toBe(true);
+      release();
+      await persisted();
+      service.dispose();
+    });
+
+    it("unloads a plugin loaded against the seed once the fetched list denies it", async () => {
+      await writePlugin("bad", { name: "acme.bad", version: "1.0.0" });
+      await writePlugin("ok", { name: "acme.ok", version: "1.0.0" });
+      const { svc, release } = pendingFetch([
+        { name: "acme.bad", ranges: ["*"], reason: "malware" },
+      ]);
+
+      const service = new PluginService(tmpDir, undefined, { blocklistService: svc });
+      await service.initialize();
+      expect(service.hasPlugin("acme.bad")).toBe(true);
+
+      release();
+      await vi.waitFor(() => expect(isBlocked(service, "acme.bad")).toBe(true));
+      expect(service.hasPlugin("acme.bad")).toBe(false);
+      expect(service.hasPlugin("acme.ok")).toBe(true);
+      await persisted();
+      service.dispose();
+    });
+
+    it("refuses a plugin discovered after the fetched list denied it", async () => {
+      const { svc, release } = pendingFetch([
+        { name: "acme.late", ranges: ["*"], reason: "malware" },
+      ]);
+      const service = new PluginService(tmpDir, undefined, { blocklistService: svc });
+      await service.initialize();
+      release();
+      await vi.waitFor(() =>
+        expect(
+          (service as unknown as { startupBlocklist: ParsedPluginBlocklist | null })
+            .startupBlocklist?.entries
+        ).toHaveLength(1)
+      );
+
+      await writePlugin("late", { name: "acme.late", version: "1.0.0" });
+      await (
+        service as unknown as {
+          loadFromDir: (root: string, opts: { isBuiltin: boolean }) => Promise<number>;
+        }
+      ).loadFromDir(tmpDir, { isBuiltin: false });
+      expect(service.hasPlugin("acme.late")).toBe(false);
+      expect(isBlocked(service, "acme.late")).toBe(true);
+      await persisted();
+      service.dispose();
+    });
+
+    it("waits for the fetch when the shipped seed is malformed", async () => {
+      await writePlugin("bad", { name: "acme.bad", version: "1.0.0" });
+      const { svc, release, fetchEntered } = pendingFetch(
+        [{ name: "acme.bad", ranges: ["*"], reason: "malware" }],
+        { entries: "not-a-list" }
+      );
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const service = new PluginService(tmpDir, undefined, { blocklistService: svc });
+        let initialized = false;
+        const init = service.initialize().then(() => (initialized = true));
+        await fetchEntered;
+        await Promise.resolve();
+        expect(initialized).toBe(false);
+
+        release();
+        await init;
+        expect(isBlocked(service, "acme.bad")).toBe(true);
+        await persisted();
+        service.dispose();
+      } finally {
+        warn.mockRestore();
+      }
+    });
   });
 
   describe("stale cached list at startup", () => {
@@ -718,5 +878,143 @@ describe("Worker governance (idle dispose + snapshots)", () => {
       eligibility: { trim: false, dispose: false, restart: false },
     });
     expect(snapshot?.detail?.reason).toBe("malware");
+  });
+});
+
+describe("Manifest event routes (#13816)", () => {
+  const FUTURE = () => Date.now() + 31 * 60_000;
+  const ALPHA = "a".repeat(64);
+  const BETA = "b".repeat(64);
+  let shown: string[];
+  let tracker: ProjectPresenceTracker;
+  // Disposed after every test, pass or fail, so no service keeps its routes on
+  // the shared buses into the next test.
+  const services: PluginService[] = [];
+  const startService = (): PluginService => {
+    const service = new PluginService(tmpDir);
+    services.push(service);
+    return service;
+  };
+
+  beforeEach(() => {
+    shown = [];
+    tracker = new ProjectPresenceTracker(() => shown);
+    _setProjectPresenceTrackerForTests(tracker);
+    tracker.markOpened(ALPHA);
+    tracker.markOpened(BETA);
+  });
+
+  afterEach(() => {
+    for (const service of services.splice(0)) service.dispose();
+    _setProjectPresenceTrackerForTests(null);
+  });
+
+  function show(projectId: string): void {
+    shown = [projectId];
+    tracker.refresh();
+  }
+
+  async function writeRoutedPlugin(dirName: string, name: string): Promise<void> {
+    const dir = path.join(tmpDir, dirName);
+    await fs.mkdir(path.join(dir, "src"), { recursive: true });
+    await fs.writeFile(
+      path.join(dir, "plugin.json"),
+      JSON.stringify({
+        name,
+        version: "1.0.0",
+        main: "main.mjs",
+        eventRoutes: [{ event: "projectForeground", command: "onShown" }],
+        contributes: {
+          commands: [
+            {
+              id: "onShown",
+              title: "On shown",
+              description: "Runs when a project comes to the front",
+              category: "Test",
+              kind: "command",
+              danger: "safe",
+            },
+          ],
+        },
+      })
+    );
+    await fs.writeFile(path.join(dir, "main.mjs"), "export function activate() {}\n");
+    await fs.writeFile(path.join(dir, "src", "onShown.mjs"), "export default () => {};\n");
+  }
+
+  function baseline() {
+    return { hosts: devWorkerMock.instances.length, bridges: devWorkerMock.bridges.length };
+  }
+
+  it("activates a cold plugin on its event, runs the command, and leaves it disposable", async () => {
+    const base = baseline();
+    await writeRoutedPlugin("routed", "acme.routed");
+    const service = startService();
+    await service.initialize();
+    // Nothing runs at load: the route is held by the host, not the plugin.
+    expect(devWorkerMock.instances).toHaveLength(base.hosts);
+
+    show(BETA);
+    await vi.waitFor(() => {
+      expect(devWorkerMock.bridges[base.bridges]?.invokeCommand).toHaveBeenCalledTimes(1);
+    });
+    expect(devWorkerMock.bridges[base.bridges].invokeCommand).toHaveBeenCalledWith(
+      "acme.routed.onShown",
+      expect.stringContaining("onShown.mjs"),
+      { event: "projectForeground", presence: { projectId: BETA, state: "foreground" } }
+    );
+
+    // The route is not a live subscription: the worker is still idle-disposable.
+    const result = service.disposeIdlePluginWorkers({ now: FUTURE() });
+    expect(result.disposed).toEqual(["acme.routed"]);
+
+    // And the route outlives the worker, waking a fresh one on the next event.
+    show(ALPHA);
+    await vi.waitFor(
+      () => {
+        expect(devWorkerMock.bridges[base.bridges + 1]?.invokeCommand).toHaveBeenCalledTimes(1);
+      },
+      { timeout: 3_000 }
+    );
+    expect(devWorkerMock.instances).toHaveLength(base.hosts + 2);
+  });
+
+  it("wakes nothing while the worker is in its crash loop", async () => {
+    const base = baseline();
+    await writeRoutedPlugin("looping", "acme.looping");
+    const service = startService();
+    await service.initialize();
+    await service.activatePlugin("acme.looping");
+    const host = devWorkerMock.instances[base.hosts];
+    const onCrashLoop = host.on.mock.calls.find(([event]) => event === "crash-loop")?.[1] as
+      ((code: number) => void) | undefined;
+    expect(onCrashLoop).toBeTypeOf("function");
+    onCrashLoop?.(1);
+
+    show(BETA);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(devWorkerMock.bridges[base.bridges].invokeCommand).not.toHaveBeenCalled();
+    expect(devWorkerMock.instances).toHaveLength(base.hosts + 1);
+  });
+
+  it("stops listening once the plugin is disabled", async () => {
+    let listening = 0;
+    const subscribe = tracker.subscribe.bind(tracker);
+    vi.spyOn(tracker, "subscribe").mockImplementation((listener) => {
+      listening++;
+      const off = subscribe(listener);
+      return () => {
+        listening--;
+        off();
+      };
+    });
+    await writeRoutedPlugin("off", "acme.off");
+    const service = startService();
+    await service.initialize();
+    const whileEnabled = listening;
+    expect(whileEnabled).toBeGreaterThan(0);
+
+    await service.setEnabled("acme.off", false);
+    expect(listening).toBe(whileEnabled - 1);
   });
 });

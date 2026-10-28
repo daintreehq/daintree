@@ -4,24 +4,15 @@ import {
   RUNBOOKS_MCP_URL_ENV_VAR,
   buildConfirmationsAddendum,
   buildRunbooksAddendum,
-  buildRunbooksHostHeaders,
+  buildRunbooksHeaders,
   resolveRunbooksMcpUrl,
 } from "../helpSessionRunbooks.js";
+import { GLOBAL_ASSISTANT_TOOL_IDS } from "../../../shared/config/globalAssistant.js";
 
-describe("buildRunbooksHostHeaders (#13411, #13496)", () => {
-  it("names the host-control model even when the host state is unreported", () => {
-    expect(buildRunbooksHostHeaders(null)).toEqual({ "Daintree-Host-Control": "1" });
+describe("buildRunbooksHeaders (#13496, #14458)", () => {
+  it("names the host-control model and never a host state or lane", () => {
+    expect(buildRunbooksHeaders()).toEqual({ "Daintree-Host-Control": "1" });
   });
-
-  it.each(["none", "configured", "connected"] as const)(
-    "reports the hosts state %s beside the model, and never a lane",
-    (hosts) => {
-      expect(buildRunbooksHostHeaders(hosts)).toEqual({
-        "Daintree-Host-Control": "1",
-        "Daintree-Hosts": hosts,
-      });
-    }
-  );
 });
 
 describe("resolveRunbooksMcpUrl", () => {
@@ -88,6 +79,36 @@ describe("buildRunbooksAddendum", () => {
   it("follows only selected runbooks", () => {
     expect(text).toContain("`selected: true`");
     expect(text).toContain("None selected");
+  });
+
+  // #14161 — the swap to unscoped names held only in the caller's own project.
+  describe("tool names, by the caller's real surface", () => {
+    const toolNamesIn = (addendum: string) =>
+      [...addendum.matchAll(/`([a-z]+\.[A-Za-z]+)`/g)].map((match) => match[1]!);
+
+    it("tells the global assistant only of its root tools and the owned ones host.call admits", () => {
+      const global = buildRunbooksAddendum({ global: true });
+      const named = toolNamesIn(global);
+      expect(named).toEqual(expect.arrayContaining([...GLOBAL_ASSISTANT_TOOL_IDS]));
+      for (const name of named) {
+        if (GLOBAL_ASSISTANT_TOOL_IDS.has(name)) continue;
+        // Every other tool it is told of runs on a host: the owned ones, and the search for them.
+        if (name === "actions.search") continue;
+        expect(name).toMatch(/Owned$/);
+      }
+      expect(global).toContain("`actions.search` through `host.call`");
+      expect(global).not.toContain("yours is");
+      expect(buildRunbooksAddendum()).not.toContain("through `host.call`,");
+    });
+
+    it("keeps a project's assistant on the unscoped names in its own project alone", () => {
+      const named = toolNamesIn(text);
+      expect(named).toEqual(
+        expect.arrayContaining(["terminal.sendCommand", "terminal.sendCommandOwned", "host.call"])
+      );
+      // The swap is scoped before it is given, never blanket.
+      expect(text.indexOf("own project")).toBeLessThan(text.indexOf("yours is"));
+    });
   });
 });
 

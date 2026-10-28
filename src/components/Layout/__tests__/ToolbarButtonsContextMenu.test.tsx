@@ -12,7 +12,10 @@ import {
 import { primeRadix } from "@/components/ui/radix-loader";
 import { actionService } from "@/services/ActionService";
 import type { AnyToolbarButtonId } from "@/../../shared/types/toolbar";
-import { ToolbarButtonsContextMenu } from "../ToolbarButtonsContextMenu";
+import {
+  ToolbarButtonsContextMenu,
+  type ProjectToolbarMenuState,
+} from "../ToolbarButtonsContextMenu";
 import { TOOLBAR_CUSTOMIZE_LABEL } from "../toolbarMenuStrings";
 import type { ToolbarSide, ToolbarVisibilityMenuRows } from "../toolbarVisibilityMenu";
 
@@ -33,6 +36,7 @@ interface HarnessOptions {
   rootRef?: Ref<HTMLDivElement>;
   onKeyDown?: () => void;
   onFocusCapture?: () => void;
+  projectToolbar?: ProjectToolbarMenuState | null;
 }
 
 function renderToolbar({
@@ -41,11 +45,12 @@ function renderToolbar({
   rootRef,
   onKeyDown,
   onFocusCapture,
+  projectToolbar = null,
 }: HarnessOptions = {}) {
   const onToggle =
     vi.fn<(buttonId: AnyToolbarButtonId, side: ToolbarSide, onToolbar: boolean) => void>();
   const { container } = render(
-    <ToolbarButtonsContextMenu rows={rows} onToggle={onToggle}>
+    <ToolbarButtonsContextMenu rows={rows} onToggle={onToggle} projectToolbar={projectToolbar}>
       <div
         ref={rootRef}
         role="toolbar"
@@ -85,6 +90,71 @@ afterEach(() => {
   cleanup();
   vi.useRealTimers();
   vi.restoreAllMocks();
+});
+
+describe("ToolbarButtonsContextMenu with a project's toolbar (#13783)", () => {
+  it("opens with the project toggle, then lists every row, with the off-limits ones disabled", async () => {
+    const onProjectToggle = vi.fn();
+    const { onToggle } = renderToolbar({
+      rows: {
+        left: [{ id: "terminal", side: "left", label: "Terminal", icon: Glyph, checked: false }],
+        right: [
+          {
+            id: "settings",
+            side: "right",
+            label: "Settings",
+            icon: Glyph,
+            checked: true,
+            disabled: true,
+          },
+        ],
+      },
+      projectToolbar: { active: true, onToggle: onProjectToggle, branchChip: null },
+    });
+
+    fireEvent.contextMenu(screen.getByRole("toolbar"));
+    const menu = await screen.findByRole("menu", { name: "Toolbar buttons" });
+    const rows = within(menu).getAllByRole("menuitemcheckbox");
+    expect(rows.map((row) => [row.textContent, row.getAttribute("aria-checked")])).toEqual([
+      ["Use this project's toolbar", "true"],
+      ["Terminal", "false"],
+      ["Settings", "true"],
+    ]);
+    expect(rows[2]!.getAttribute("data-disabled")).not.toBeNull();
+
+    fireEvent.click(within(menu).getByRole("menuitemcheckbox", { name: "Terminal" }));
+    expect(onToggle).toHaveBeenCalledExactlyOnceWith("terminal", "left", true);
+  });
+
+  it("turns the project's toolbar off from its toggle", async () => {
+    const onProjectToggle = vi.fn();
+    renderToolbar({
+      projectToolbar: { active: true, onToggle: onProjectToggle, branchChip: null },
+    });
+
+    fireEvent.contextMenu(screen.getByRole("toolbar"));
+    const menu = await screen.findByRole("menu");
+    fireEvent.click(
+      within(menu).getByRole("menuitemcheckbox", { name: "Use this project's toolbar" })
+    );
+    expect(onProjectToggle).toHaveBeenCalledExactlyOnceWith(false);
+  });
+
+  it("brings a demoted branch chip back", async () => {
+    const onBranchToggle = vi.fn();
+    renderToolbar({
+      projectToolbar: {
+        active: true,
+        onToggle: vi.fn(),
+        branchChip: { checked: false, onToggle: onBranchToggle },
+      },
+    });
+
+    fireEvent.contextMenu(screen.getByRole("toolbar"));
+    const menu = await screen.findByRole("menu");
+    fireEvent.click(within(menu).getByRole("menuitemcheckbox", { name: "Branch chip" }));
+    expect(onBranchToggle).toHaveBeenCalledExactlyOnceWith(true);
+  });
 });
 
 describe("ToolbarButtonsContextMenu", () => {

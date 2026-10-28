@@ -2,13 +2,14 @@ import { useEffect, useRef, useState, type MouseEvent } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Terminal } from "@xterm/xterm";
+import "@xterm/xterm/css/xterm.css";
 import type { WebglAddon } from "@xterm/addon-webgl";
 import type { CanopyTerminalData, CanopyTerminalView } from "@shared/types/ipc/canopy";
 import { isSecretPrompt } from "@shared/utils/secretPrompt";
 import { isTerminalSubmission } from "@shared/utils/terminalSubmission";
 import { getEffectiveScrollbarWidth, getXtermOptions } from "@/config/xtermConfig";
 import { getXtermCellDimensions } from "@/services/terminal/TerminalResizeController";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { subscribeWhenReady as subscribeTerminalServiceWhenReady } from "@/services/terminal/terminalInstanceServiceAccessor";
 import { useTerminalFontStore } from "@/store/terminalFontStore";
 import { useScreenReaderStore } from "@/store/screenReaderStore";
 import {
@@ -202,6 +203,11 @@ export function CanopyTerminal({
       (error: unknown) => logWarn("[Canopy] couldn't load the WebGL renderer", { error })
     );
 
+    // The local terminal's own id: a routed run is keyed by host, the terminal service is not.
+    const localId = api.holdsSize ? runId : (api.ownSizedId?.(runId) ?? null);
+    // Another host's terminal is sized only once its watch answer says the host takes it.
+    let holdsSize = localId !== null;
+
     let inset = FRAME_PADDING_PX;
     const bufferChange = terminal.buffer.onBufferChange((buffer) => {
       const alternate = buffer.type === "alternate";
@@ -223,8 +229,8 @@ export function CanopyTerminal({
         sizeTimer = null;
         const watchId = stream.watchId;
         const cell = getXtermCellDimensions(terminal);
-        // Another host's terminal keeps the size its own window gave it.
-        if (disposed || watchId === null || cell === null || !api.holdsSize) return;
+        // A host that doesn't take the size keeps the one its own window gave it.
+        if (disposed || watchId === null || cell === null || !holdsSize) return;
         // Fractional bounds, truncated, as the grid pane measures them: a
         // rounded-up clientWidth can promise a column the pane hasn't got.
         const box = frame.getBoundingClientRect();
@@ -236,7 +242,9 @@ export function CanopyTerminal({
         // terminal's own pane has since overridden is asked for again.
         if (ptySize !== null && cols === ptySize.cols && rows === ptySize.rows) return;
         // Ahead of the PTY's echo, so output drawn for the new size lands on it.
-        terminal.resize(cols, rows);
+        // Another host's echo is awaited instead: it may let the hold go
+        // unanswered (the view lost the drive), and the pane stays on the PTY's grid.
+        if (localId !== null) terminal.resize(cols, rows);
         api.terminalResize(watchId, cols, rows).catch((error: unknown) => {
           logWarn("[Canopy] couldn't size the terminal", { error });
           // Refused, so no echo is coming: back to the grid the PTY really has.
@@ -425,19 +433,31 @@ export function CanopyTerminal({
         heldWatchId = null;
         publish({ watchId });
         setStatus("live");
+        // A measure that ran while the stream was held had no stream to size.
+        requestPanelSize();
       }
     };
     const offResync = api.onResync(() => reopen("reconnecting"));
     const onOpened = (opened: CanopyTerminalView) => {
-      if (disposed) return;
+      if (disposed) {
+        // Opened for a pane already gone: let that one stream go, and only it.
+        if (opened.watchId !== null) {
+          safeFireAndForget(api.unwatchTerminal(opened.watchId), {
+            context: "Ending a canopy terminal stream that opened too late",
+          });
+        }
+        return;
+      }
       if (opened.watchId === null || opened.snapshot === null) {
         setStatus("failed");
         return;
       }
       view = opened;
-      // The pane in this view is frozen only for a terminal this view sizes.
-      if (api.holdsSize && releasePane === null) {
-        releasePane = terminalInstanceService.holdGeometry(runId);
+      holdsSize = localId !== null || opened.holdsSize === true;
+      // The pane in this view is frozen only for a terminal this view sizes;
+      // another host freezes its own.
+      if (localId !== null && releasePane === null) {
+        releasePane = subscribeTerminalServiceWhenReady((service) => service.holdGeometry(localId));
       }
       const snapshot = opened.snapshot;
       ptySize = { cols: snapshot.cols, rows: snapshot.rows };
@@ -507,10 +527,18 @@ export function CanopyTerminal({
       // The pane re-measures only once main has handed the PTY back, so a size
       // it took meanwhile lands after the one main restores, not before it.
       const release = releasePane;
-      safeFireAndForget(
-        api.unwatchTerminal().finally(() => release?.()),
-        { context: "Ending the canopy terminal stream" }
-      );
+      // Only its own stream, by id: another pane in this view may have opened
+      // one since, which this cleanup must leave alone. A stream still opening
+      // is let go when its answer arrives, below.
+      const ownWatchId = view?.watchId ?? null;
+      if (ownWatchId !== null) {
+        safeFireAndForget(
+          api.unwatchTerminal(ownWatchId).finally(() => release?.()),
+          { context: "Ending the canopy terminal stream" }
+        );
+      } else {
+        release?.();
+      }
     };
   }, [runId, spawnedAt, api, generation]);
 

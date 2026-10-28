@@ -5,6 +5,7 @@ import {
   buildBatchRequiredChecksQuery,
   buildBatchIssuesQuery,
   buildBatchPRsQuery,
+  buildBatchReferencesQuery,
   buildGitHubSearchQuery,
   LIST_ISSUE_COMMENTS_QUERY,
   LIST_PRS_QUERY,
@@ -625,6 +626,30 @@ describe("buildBatchIssuesQuery", () => {
   it("does not declare $query variable", () => {
     const query = buildBatchIssuesQuery("owner", "repo", [1, 2]);
     expect(query).not.toContain("$query");
+  });
+});
+
+describe("buildBatchReferencesQuery", () => {
+  it("returns empty string when no number is a positive integer", () => {
+    expect(buildBatchReferencesQuery("owner", "repo", [-1, 0, 1.5])).toBe("");
+  });
+
+  it("asks each number for the issue or pull request it names, in one repository block", () => {
+    const query = buildBatchReferencesQuery("owner", "repo", [7, 14843]);
+    expect(query.match(/repository\(owner:/g)?.length).toBe(1);
+    expect(query).toContain("r7: issueOrPullRequest(number: 7)");
+    expect(query).toContain("r14843: issueOrPullRequest(number: 14843)");
+    expect(query).toContain("__typename");
+    expect(query).toContain("... on Issue { number title state }");
+    expect(query).toContain("... on PullRequest { number title state isDraft }");
+  });
+
+  it("selects no connections, so a chunk stays at one point", () => {
+    expect(buildBatchReferencesQuery("owner", "repo", [1])).not.toMatch(/\((first|last):/);
+  });
+
+  it("escapes the repository's name", () => {
+    expect(buildBatchReferencesQuery('ow"ner', "repo", [1])).toContain('owner: "ow\\"ner"');
   });
 });
 

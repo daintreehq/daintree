@@ -1,4 +1,7 @@
 import { ProjectPluginTrustBanner } from "@/components/Plugin/ProjectPluginTrustBanner";
+import { ProjectPresentationNotice } from "@/components/Project/ProjectPresentationNotice";
+import { ProjectThemeNotice } from "@/components/Project/ProjectThemeNotice";
+import { ProjectLayoutSeedNotice } from "@/components/Plugin/ProjectLayoutSeedNotice";
 import React, { useCallback, useRef, useState } from "react";
 import {
   SortableContext,
@@ -26,6 +29,7 @@ import { ContentGridEmptyState } from "./ContentGridEmptyState";
 import { TwoPaneSplitLayout } from "./TwoPaneSplitLayout";
 import { DIVIDER_WIDTH_PX } from "./TwoPaneSplitDivider";
 import { ProjectSurfaceFrame } from "@/components/Plugin/ProjectSurfaceFrame";
+import { SurfacePaletteAction } from "@/components/Plugin/SurfacePaletteAction";
 import type { ContentGridContext } from "./useContentGridContext";
 
 // Non-scroll row floor: the small minimum a row shrinks to before the grid has
@@ -189,6 +193,9 @@ export function ContentGridDefault({
       >
         <GridNotificationBar className="mx-1 mt-1 shrink-0" />
         <ProjectPluginTrustBanner />
+        <ProjectPresentationNotice />
+        <ProjectThemeNotice />
+        <ProjectLayoutSeedNotice />
         <TerminalCountWarning className="mx-1 mt-1 shrink-0" />
         <BatchScrollbackRestoreBar className="mx-1 mt-1 shrink-0" />
         <div className="relative flex-1 min-h-0">
@@ -278,9 +285,13 @@ export function ContentGridDefault({
                       (§7.8), in which case it adds a host-owned strip above the
                       region that names the plugin's panel and swaps between it
                       and the host's launcher — so a claimed surface reads as the
-                      empty canvas and can never strand the user.
+                      empty canvas and can never strand the user. The launcher's
+                      palette entry rides along while the surface stands in.
                     */}
-                    <ProjectSurfaceFrame>
+                    <ProjectSurfaceFrame
+                      slot="emptyCanvas"
+                      surfaceActions={<SurfacePaletteAction />}
+                    >
                       {ctx.emptyContent ?? (
                         <ContentGridEmptyState
                           hasLaunchTarget={ctx.hasActiveWorktree}

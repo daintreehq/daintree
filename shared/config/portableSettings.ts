@@ -5,7 +5,7 @@ import type { ConfigBundleSectionId } from "../types/configBundle.js";
  * Configuration (#11889) and Copy settings to a host (#13346) so the two can't
  * drift apart.
  *
- * Ownership (`electron/storeOwnership.ts`) says where a value lives, never
+ * Ownership (`settingOwnership.ts`) says where a value lives, never
  * whether copying it makes sense, so this is a separate, positive list down to
  * fields: a setting that isn't named here stays on its machine, including every
  * one added after this was written. Never listed, on purpose:
@@ -29,7 +29,6 @@ export type PortableSettingsCategoryId =
   | "notifications"
   | "worktreePath"
   | "globalRecipes"
-  | "hibernation"
   | "sessionRestore"
   | "idleTerminals"
   | "updateChecks"
@@ -96,10 +95,10 @@ export const PORTABLE_SETTINGS_CATEGORIES: readonly PortableSettingsCategory[] =
   {
     id: "notifications",
     label: "Notifications",
-    description: "Alerts, sounds and quiet hours",
+    description: "Alerts, sounds and quiet hours. Windows here keep this machine's",
     sections: ["notificationSettings"],
-    selectedByDefault: true,
-    device: false,
+    selectedByDefault: false,
+    device: true,
     inFile: true,
   },
   {
@@ -116,15 +115,6 @@ export const PORTABLE_SETTINGS_CATEGORIES: readonly PortableSettingsCategory[] =
     label: "Global recipes",
     description: "Recipes offered in every project. Copying one never runs it",
     sections: ["globalRecipes"],
-    selectedByDefault: true,
-    device: false,
-    inFile: true,
-  },
-  {
-    id: "hibernation",
-    label: "Project hibernation",
-    description: "Closing projects left unused for a while",
-    sections: ["hibernation"],
     selectedByDefault: true,
     device: false,
     inFile: true,
@@ -204,11 +194,11 @@ export function categoryOfSection(
 /**
  * Per-agent preferences that travel. `dangerous*` is permission posture and
  * travels only in its own opt-in section; `worktreePresets` is bookkeeping
- * keyed by worktree ids that mean nothing on another machine; the retired
- * `selected`/`enabled` keys and anything unnamed stay behind.
+ * keyed by worktree ids that mean nothing on another machine; a toolbar pin is
+ * the screen's, not the agent's (#14702); the retired `selected`/`enabled`
+ * keys and anything unnamed stay behind.
  */
 export const AGENT_SETTINGS_PORTABLE_FIELDS = [
-  "pinned",
   "customFlags",
   "inlineMode",
   "shareClipboardDirectory",
@@ -229,6 +219,7 @@ export const AGENT_PRESET_PORTABLE_FIELDS = [
   "inlineMode",
   "color",
   "fallbacks",
+  "fallbackOnRateLimit",
 ] as const;
 
 /** An agent's own permission-bypass fields. */

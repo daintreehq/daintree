@@ -10,13 +10,9 @@ import {
 import type React from "react";
 import { Button } from "@/components/ui/button";
 import {
-  GitCommit,
-  GitPullRequest,
-  CircleDot,
   PanelLeftOpen,
   PanelLeftClose,
   MonitorPlay,
-  Ellipsis,
   Pencil,
   Pin,
   PinOff,
@@ -29,44 +25,19 @@ import {
 import { Spinner } from "@/components/ui/Spinner";
 import { BrandSurface, FolderTree, Folders } from "@/components/icons";
 import { buildPluginToolbarMeta } from "./pluginToolbarMeta";
-import {
-  TOOLBAR_BUTTON_METADATA,
-  getToolbarButtonGroup,
-  isToolbarButtonVisible,
-} from "./toolbarButtonMetadata";
-import { getToolbarDividerAfterIds, orderToolbarButtonsByGroup } from "./toolbarButtonGrouping";
+import { getToolbarDividerAfterIds } from "./toolbarButtonGrouping";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 import { ToolbarButtonsContextMenu } from "./ToolbarButtonsContextMenu";
-import {
-  buildToolbarVisibilityMenuRows,
-  canListToolbarButton,
-  resolveToolbarButtonMetadata,
-  type ToolbarSide,
-} from "./toolbarVisibilityMenu";
-import {
-  isToolbarButtonOnToolbar,
-  setToolbarButtonOnToolbar,
-  type ToolbarButtonPlacementState,
-} from "@/lib/toolbarVisibilityDispatch";
 import { cn } from "@/lib/utils";
-import { formatCountExact } from "@/lib/formatCount";
 import { isMac, isLinux, isWindows } from "@/lib/platform";
 import { WINDOWS_CAPTION_WIDTH_PX } from "@shared/config/windowChrome";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { AgentButton } from "./AgentButton";
 import {
-  PluginOverflowItem,
   PluginToolbarButton,
   PluginTrayButton,
   groupPluginToolbarButtons,
-  type PluginTrayGroup,
 } from "./PluginTrayButton";
-import {
-  maxOverflowSeverity,
-  overflowedPluginBadges,
-  pluginBadgeOverflowSeverity,
-} from "./pluginToolbarBadge";
-import { usePluginToolbarBadgeStore } from "@/store/pluginToolbarBadgeStore";
 import { LAUNCHER_PANEL_ITEMS } from "./launcherPanelItems";
 import { deriveAgentAttentionStates } from "@/lib/agentAttentionStates";
 import { useHandBackRunIds } from "@/hooks/useRunHandBackState";
@@ -77,23 +48,16 @@ import {
   activateDockLaunchItem,
   useDockLaunchModel,
   type ActivateDockLaunchItemContext,
+  type DockLaunchAgentOptions,
 } from "./dockLaunchItems";
 import { buildLauncherToolbarMeta, useLauncherToolbarCatalog } from "./launcherToolbarCatalog";
 import { LauncherToolbarButton } from "./LauncherToolbarButton";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
-import type { ToolbarButtonConfig } from "@shared/config/toolbarButtonRegistry";
+import { useProjectPresentationStore } from "@/store/projectPresentationStore";
+import { ProjectPluginMenuItems } from "@/components/Plugin/ProjectPluginMenuItems";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuGroup,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuMeta,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -101,58 +65,45 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { useToolbarOverflow } from "@/hooks/useToolbarOverflow";
+import { useToolbarOverflow, withDemotedOverflow } from "@/hooks/useToolbarOverflow";
+import { useProjectToolbarOverlay, useResolvedPresentation } from "@/hooks/useResolvedPresentation";
 import { useWorktreeActions } from "@/hooks/useWorktreeActions";
 import {
   useAriaKeyshortcuts,
   useDohertyGate,
   useEffectiveCombo,
-  useKeepMounted,
   useShortcutHintHover,
 } from "@/hooks";
 import type { UseProjectSwitcherPaletteReturn } from "@/hooks";
-import type { SearchableProject } from "@/hooks/useProjectSwitcherPalette";
 import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
-import { activeWorkspaceIdentity, branchChipState } from "@/lib/workspaceIdentity";
+import { activeWorkspaceIdentity } from "@/lib/workspaceIdentity";
 import { usePreferencesStore, useToolbarPreferencesStore, useVoiceRecordingStore } from "@/store";
 import { useProjectStatsStore } from "@/store/projectStatsStore";
-import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { useAgentToolbarPinsStore } from "@/store/agentToolbarPinsStore";
 import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
 import { useCanopyStore } from "@/store/canopyStore";
 import type { AnyToolbarButtonId } from "@/../../shared/types/toolbar";
-import { usePluginToolbarButtons } from "@/hooks/usePluginToolbarButtons";
+import { useVisiblePluginToolbarButtons } from "@/hooks/usePluginToolbarButtons";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useShallow } from "zustand/react/shallow";
 import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
-import {
-  agentStateDotColor,
-  STATE_LABELS,
-  type AttentionAgentState,
-} from "@/components/Worktree/terminalStateConfig";
 import { notify } from "@/lib/notify";
-import type { CliAvailability, AgentSettings } from "@shared/types";
-import { isGitBackedProject } from "@shared/types";
-import type { ForgeRepositoryStats } from "@shared/types/ipc/forge";
-import { isAgentPinned, isAgentToolbarVisible } from "../../../shared/utils/agentPinned";
+import type { CliAvailability } from "@shared/types";
+import { agentToolbarPin } from "@shared/types/ipc/agentToolbarPins";
+import { isAgentToolbarVisible } from "../../../shared/utils/agentPinned";
 import { isAgentLaunchable } from "../../../shared/utils/agentAvailability";
 import { projectClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
 import { isPanelLimitError } from "@/services/actions/definitions/panelLimitError";
-import {
-  LazyProjectIdentityEditor,
-  LazyProjectSwitcherPalette,
-  preloadProjectIdentityEditor,
-} from "@/lazyPanels";
+import { LazyProjectIdentityEditor, LazyProjectSwitcherPalette } from "@/lazyPanels";
 import { VoiceRecordingToolbarButton } from "./VoiceRecordingToolbarButton";
-import { ToolbarProjectPill, ToolbarProjectPillTooltipBody } from "./ToolbarProjectPill";
+import { ToolbarProjectPillTooltipBody } from "./ToolbarProjectPill";
 import { HostChip } from "@/components/Hosts/HostChip";
 import { AttachedMachinesIndicator } from "@/components/Hosts/AttachedMachinesIndicator";
 import { getViewHostId } from "@/hooks/useHostConnection";
-import { shortSha } from "@/utils/textParsing";
-import { useUIStore } from "@/store/uiStore";
 import { ForgeStatsToolbarButton, type ForgeStatsHandle } from "./ForgeStatsToolbarButton";
 import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
 import { NotificationCenterToolbarButton } from "./NotificationCenterToolbarButton";
@@ -167,35 +118,27 @@ import { HostMemoryPauseIndicator } from "./HostMemoryPauseIndicator";
 import { useHostMemoryPauseStore } from "@/store/hostMemoryPauseStore";
 import { ToolbarPortalButton } from "./ToolbarPortalButton";
 import { ToolbarAssistantButton } from "./ToolbarAssistantButton";
-import {
-  useOverflowAgentObservations,
-  useOverflowBadgeSeverity,
-  type OverflowBadgeSeverity,
-} from "./useOverflowBadgeSeverity";
+import { type OverflowBadgeSeverity } from "./useOverflowBadgeSeverity";
 import { CopyTreeMenuContent } from "@/components/CopyTree/CopyTreeRecentsPanel";
 import { useCopyTreeCompletionNotice } from "@/hooks/useCopyTreeCompletionNotice";
 import { useCopyTreeRunStore } from "@/store/copyTreeRunStore";
 import type { CopyTreeHistoryRecord } from "@shared/types";
 
-import { BUILT_IN_AGENT_IDS, isBuiltInAgentId, type BuiltInAgentId } from "@shared/config/agentIds";
-import { pluralize } from "@/lib/pluralize";
+import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
+import { toolbarIconButtonClass } from "./toolbarItemClasses";
+import {
+  OVERFLOW_KEYBINDING_BY_ID,
+  OverflowMenu,
+  type OverflowMenuProps,
+} from "./ToolbarOverflowMenu";
 
-type OverflowMenuMeta = { label: string; icon: React.ComponentType<{ className?: string }> };
+import { PROJECT_SCOPED_TOOLBAR_IDS, useToolbarItemPlacement } from "./useToolbarItemPlacement";
+import { useToolbarOverflowStatus } from "./useToolbarOverflowStatus";
+import { useToolbarOverflowEviction } from "./useToolbarOverflowEviction";
+import { useToolbarCustomization } from "./useToolbarCustomization";
+import { useToolbarProjectPill } from "./useToolbarProjectPill";
 
-const toolbarIconButtonClass = "toolbar-icon-button text-text-primary relative";
-
-// These controls are project-only visually, but their no-drag rectangles must
-// exist on first paint so secondary windows don't cache them as titlebar drag.
-const PROJECT_SCOPED_TOOLBAR_IDS = new Set<AnyToolbarButtonId>(["dev-server", "forge-stats"]);
-
-// Hardware-privacy indicators stay out of the overflow dropdown while their
-// signal is active — collapsing them under `…` would hide the only visual
-// cue that the host is recording. Voice recording joins this set only when
-// the user is actively recording (see `pinnedRightIds` derivation below);
-// future mic/camera/screen-share indicators that follow the same principle
-// should be added here.
-const VOICE_RECORDING_PINNED: ReadonlySet<AnyToolbarButtonId> = new Set(["voice-recording"]);
-const NO_PINNED_IDS: ReadonlySet<AnyToolbarButtonId> = new Set();
+export { OVERFLOW_MENU_META } from "./ToolbarOverflowMenu";
 
 function ForgeStatsPlaceholder() {
   return (
@@ -218,495 +161,6 @@ function DevServerPlaceholder() {
   );
 }
 
-// Adapter view over the unified `TOOLBAR_BUTTON_METADATA` registry.
-const overflowMenuMetaInit: Record<string, OverflowMenuMeta> = {};
-for (const [id, meta] of Object.entries(TOOLBAR_BUTTON_METADATA)) {
-  if (!meta) continue;
-  overflowMenuMetaInit[id] = { label: meta.label, icon: meta.icon };
-}
-// The action behind each overflow item's shortcut: the same binding its
-// visible button shows.
-const OVERFLOW_KEYBINDING_BY_ID: Partial<Record<string, string>> = {
-  "copy-tree": "worktree.copyTree",
-  "notification-center": "notifications.toggle",
-  canopy: "canopy.toggle",
-  "command-palette": "action.palette.open",
-  "resume-sessions": "terminal.resumeSessions",
-  "dev-server": "devServer.start",
-  settings: "app.settings",
-  problems: "panel.toggleDiagnostics",
-  terminal: "agent.terminal",
-  browser: "agent.browser",
-  "file-browser": "worktree.openFileBrowserPanel",
-};
-
-export const OVERFLOW_MENU_META: Partial<Record<AnyToolbarButtonId, OverflowMenuMeta>> =
-  overflowMenuMetaInit;
-
-interface OverflowMenuProps {
-  overflowIds: AnyToolbarButtonId[];
-  side: "left" | "right";
-  severity: OverflowBadgeSeverity;
-  errorCount: number;
-  notificationUnreadCount: number;
-  /** Asks Canopy reads as urgent, said when its button is folded in here. */
-  canopyUrgentCount: number;
-  // Per-session agent states behind the badge, already worded — derived by
-  // the same rule as `severity`, so the name never says less than the dot.
-  agentObservations: readonly string[];
-  agentAttentionStates: Map<string, AttentionAgentState | null>;
-  canCopyTree: boolean;
-  forgeStatsRef: React.RefObject<ForgeStatsHandle | null>;
-  // Display name of the resolved forge provider, or null when none resolves
-  // (no matching plugin / owning plugin disabled) — the stats group is
-  // skipped entirely in that case.
-  forgeProviderName: string | null;
-  overflowActions: Partial<Record<AnyToolbarButtonId, () => void>>;
-  // Display metadata for every dynamically-registered button — plugin
-  // contributions and pinned launcher items (#12217) alike. The overflow menu
-  // only ever reads a label and a glyph off it, so one map covers both.
-  dynamicOverflowMeta: Record<string, OverflowMenuMeta>;
-  // Plugin contributions grouped by owning plugin. When `plugin-tray` itself
-  // overflows, its dropdown is unreachable, so the overflow menu inlines these
-  // groups instead — an un-promoted contribution has no other toolbar route.
-  pluginTrayGroups: PluginTrayGroup[];
-  // Every plugin contribution by id, so a promoted one that overflowed renders
-  // with its live badge rather than as a bare label.
-  pluginConfigs: ReadonlyMap<string, ToolbarButtonConfig>;
-  // Launchable agent ids, in the launcher's own order. When `launcher` itself
-  // overflows its dropdown is unreachable, so the overflow menu inlines these
-  // alongside the panels — since #11680 an unpinned agent has no other toolbar
-  // route.
-  launcherAgentIds: BuiltInAgentId[];
-  // Per-item availability for the inlined launcher panel rows, mirroring the
-  // gates the launcher applies to its own rows.
-  panelTrayDisabled: Partial<Record<string, boolean>>;
-  // Action ids keyed by toolbar button id, so each overflow item shows the
-  // same live binding its visible button does (issue #9821).
-  keybindingById: Partial<Record<string, string>>;
-}
-
-// Overflow `…` menu. A component (not just a render helper) so the trigger can
-// stay mounted across the empty↔non-empty transition and animate its entry /
-// exit via CSS (issue #9821) while `open` stays controlled — avoiding React's
-// controlled/uncontrolled warning. Each menu item restores the contextual
-// state its source toolbar button carries: error/unread counts, agent-state
-// dots, and keyboard shortcut hints.
-function OverflowMenu({
-  overflowIds,
-  side,
-  severity,
-  errorCount,
-  notificationUnreadCount,
-  canopyUrgentCount,
-  agentObservations,
-  agentAttentionStates,
-  canCopyTree,
-  forgeStatsRef,
-  forgeProviderName,
-  overflowActions,
-  dynamicOverflowMeta,
-  pluginTrayGroups,
-  pluginConfigs,
-  launcherAgentIds,
-  panelTrayDisabled,
-  keybindingById,
-}: OverflowMenuProps) {
-  const [open, setOpen] = useState(false);
-  // Read here rather than threaded through props: the overflow copy-tree item
-  // mirrors the visible button's disabled states, and in-flight copies can
-  // start from routes that never touch this menu (MCP, Cmd+Shift+C).
-  const isCopyingTree = useCopyTreeRunStore((s) => s.activeRunCount > 0);
-  const showCopyingSpinner = useDohertyGate(isCopyingTree);
-  // Snapshot of the repo stats taken when the menu opens. The stats live in
-  // ForgeStatsToolbarButton's hook and are exposed through its imperative
-  // handle, so they can't be read during render (refs aren't reactive — the
-  // menu wouldn't re-render on updates anyway). Reading in the open handler
-  // captures them at the only moment they're about to become visible.
-  const [repoStats, setRepoStats] = useState<ForgeRepositoryStats | null>(null);
-  const handleOpenChange = (nextOpen: boolean) => {
-    if (nextOpen) {
-      setRepoStats(forgeStatsRef.current?.stats ?? null);
-      // Same reason PluginTrayButton refreshes on open: a dev-attached plugin
-      // registers its buttons without broadcasting provenance, so its display
-      // name can be missing and the inlined groups would fall back to raw
-      // plugin ids.
-      if (pluginTrayGroups.length > 0) usePluginRuntimeStore.getState().refresh();
-    }
-    setOpen(nextOpen);
-  };
-  const isEmpty = overflowIds.length === 0;
-
-  // Keep the controlled `open` state in sync when the menu empties: Radix
-  // closes the popover when `open` is forced false, but `open` state would
-  // stay `true`, so the next non-empty transition would reopen the menu with
-  // no user action. Resetting here makes re-appearing overflow start closed.
-  useEffect(() => {
-    if (isEmpty) setOpen(false);
-  }, [isEmpty]);
-  // Set in onPointerDownOutside, read in onCloseAutoFocus. Suppresses focus
-  // restoration for pointer dismissals so the ellipsis button doesn't keep its
-  // accent focus-visible ring; keyboard close (Escape/Enter) still gets default
-  // focus return for WAI-ARIA. Local to this component so react-compiler doesn't
-  // flag mutating a ref passed in as a prop.
-  const overflowMenuPointerCloseRef = useRef(false);
-
-  // Keep the accessible name stable and terse: a comma-enumerated list of
-  // the hidden buttons re-announces the full set on every focus pass and goes
-  // stale as resize-driven overflow changes. The count is always a count of
-  // hidden items — it was once re-nouned to "problems" whenever the badge lit,
-  // which read five hidden commands as five problems. What the badge is
-  // actually reporting rides behind the count instead, as the observations
-  // themselves: the error count, the unread count, the agent states seen.
-  const n = overflowIds.length;
-  const observations: string[] = [];
-  if (overflowIds.includes("problems") && errorCount > 0) {
-    observations.push(`${pluralize(errorCount, "error")}`);
-  }
-  if (overflowIds.includes("notification-center") && notificationUnreadCount > 0) {
-    observations.push(`${notificationUnreadCount} unread`);
-  }
-  if (overflowIds.includes("canopy") && canopyUrgentCount > 0) {
-    observations.push(`${canopyUrgentCount} urgent`);
-  }
-  observations.push(...agentObservations);
-  const tooltipText = `More — ${n} hidden${observations.length > 0 ? ` · ${observations.join(" · ")}` : ""}`;
-  const ariaLabel = `More toolbar items — ${n} hidden${observations.length > 0 ? `, ${observations.join(", ")}` : ""}`;
-
-  const overflowCount = (id: AnyToolbarButtonId) => {
-    if (id === "problems" && errorCount > 0) return errorCount;
-    if (id === "notification-center" && notificationUnreadCount > 0) return notificationUnreadCount;
-    if (id === "canopy" && canopyUrgentCount > 0) return canopyUrgentCount;
-    return null;
-  };
-
-  return (
-    <DropdownMenu open={isEmpty ? false : open} onOpenChange={handleOpenChange}>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <DropdownMenuTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon"
-              data-toolbar-item=""
-              data-toolbar-overflow-trigger=""
-              data-toolbar-overflow-side={side}
-              data-visible={isEmpty ? "false" : "true"}
-              aria-hidden={isEmpty || undefined}
-              tabIndex={isEmpty ? -1 : undefined}
-              // The no-drag rectangle lives on the button itself, not on a
-              // wrapper: an empty trigger is display:none, and a wrapper
-              // around it would stay a zero-width flex item that still owns a
-              // gap — which is what gave the fixed divider 12px of clearance
-              // on one side while there was nothing to overflow.
-              className={cn(toolbarIconButtonClass, "app-no-drag")}
-              aria-label={ariaLabel}
-            >
-              <Ellipsis />
-              <span
-                aria-hidden="true"
-                data-testid="toolbar-overflow-badge"
-                data-severity={severity}
-                data-visible={severity !== null}
-                className="toolbar-overflow-badge toolbar-badge absolute top-1.5 right-1.5 h-1.5 w-1.5 pointer-events-none"
-              />
-            </Button>
-          </DropdownMenuTrigger>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">{tooltipText}</TooltipContent>
-      </Tooltip>
-      <DropdownMenuContent
-        align={side === "left" ? "start" : "end"}
-        sideOffset={4}
-        onPointerDownOutside={() => {
-          overflowMenuPointerCloseRef.current = true;
-        }}
-        onCloseAutoFocus={(e) => {
-          if (overflowMenuPointerCloseRef.current) {
-            e.preventDefault();
-            overflowMenuPointerCloseRef.current = false;
-          }
-        }}
-      >
-        {overflowIds.flatMap((id, idx) => {
-          if (id === "forge-stats") {
-            const isLast = idx === overflowIds.length - 1;
-            // Without a resolved forge provider the visible slot is the
-            // commits-only pill — mirror that here: a local-git group with
-            // just the commit count (issues/PRs are forge data). The commits
-            // dropdown view is provider-supplied, so the no-forge item shows
-            // the count without an open action.
-            if (!forgeProviderName) {
-              return [
-                <DropdownMenuGroup key="forge-group">
-                  <DropdownMenuLabel>Git</DropdownMenuLabel>
-                  <DropdownMenuItem
-                    key="forge-commits"
-                    disabled
-                    aria-label={
-                      repoStats?.commitCount != null
-                        ? `Commits, ${formatCountExact(repoStats.commitCount)}`
-                        : undefined
-                    }
-                  >
-                    <GitCommit className="mr-2 h-3.5 w-3.5" />
-                    Commits
-                    {repoStats?.commitCount != null && (
-                      <DropdownMenuMeta>{formatCountExact(repoStats.commitCount)}</DropdownMenuMeta>
-                    )}
-                  </DropdownMenuItem>
-                </DropdownMenuGroup>,
-                ...(isLast ? [] : [<DropdownMenuSeparator key="forge-sep" />]),
-              ];
-            }
-            return [
-              <DropdownMenuGroup key="forge-group">
-                <DropdownMenuLabel>{forgeProviderName}</DropdownMenuLabel>
-                <DropdownMenuItem
-                  key="forge-issues"
-                  onClick={() => forgeStatsRef.current?.openIssues()}
-                  aria-label={
-                    repoStats?.issueCount != null
-                      ? `Issues, ${formatCountExact(repoStats.issueCount)}`
-                      : undefined
-                  }
-                >
-                  <CircleDot className="mr-2 h-3.5 w-3.5 text-pr-open" />
-                  Issues
-                  {repoStats?.issueCount != null && (
-                    <DropdownMenuMeta>{formatCountExact(repoStats.issueCount)}</DropdownMenuMeta>
-                  )}
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  key="forge-prs"
-                  onClick={() => forgeStatsRef.current?.openPrs()}
-                  aria-label={
-                    repoStats?.prCount != null
-                      ? `Pull requests, ${formatCountExact(repoStats.prCount)}`
-                      : undefined
-                  }
-                >
-                  <GitPullRequest className="mr-2 h-3.5 w-3.5 text-pr-merged" />
-                  Pull requests
-                  {repoStats?.prCount != null && (
-                    <DropdownMenuMeta>{formatCountExact(repoStats.prCount)}</DropdownMenuMeta>
-                  )}
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  key="forge-commits"
-                  onClick={() => forgeStatsRef.current?.openCommits()}
-                  aria-label={
-                    repoStats?.commitCount != null
-                      ? `Commits, ${formatCountExact(repoStats.commitCount)}`
-                      : undefined
-                  }
-                >
-                  <GitCommit className="mr-2 h-3.5 w-3.5" />
-                  Commits
-                  {repoStats?.commitCount != null && (
-                    <DropdownMenuMeta>{formatCountExact(repoStats.commitCount)}</DropdownMenuMeta>
-                  )}
-                </DropdownMenuItem>
-              </DropdownMenuGroup>,
-              ...(isLast ? [] : [<DropdownMenuSeparator key="forge-sep" />]),
-            ];
-          }
-          if (id === "plugin-tray") {
-            // The tray's own dropdown can't be opened from here, and an
-            // un-promoted contribution has no other toolbar route — so inline
-            // the grouped contributions rather than leaving a row that
-            // dismisses the menu and opens nothing.
-            if (pluginTrayGroups.length === 0) return [];
-            const isLast = idx === overflowIds.length - 1;
-            return [
-              ...pluginTrayGroups.map((group) => (
-                <DropdownMenuGroup key={`plugin-tray-${group.pluginId}`}>
-                  <DropdownMenuLabel>{group.displayName}</DropdownMenuLabel>
-                  {group.buttons.map((config) => (
-                    <PluginOverflowItem
-                      key={config.id}
-                      config={config}
-                      onSelect={() => overflowActions[config.id]?.()}
-                    />
-                  ))}
-                </DropdownMenuGroup>
-              )),
-              ...(isLast ? [] : [<DropdownMenuSeparator key="plugin-tray-sep" />]),
-            ];
-          }
-          if (id === "launcher") {
-            // Same reason as `plugin-tray` above: the launcher's dropdown can't
-            // be opened from inside this menu, and since #11680 neither the
-            // agents nor `browser`/`dev-server` have a top-level button of their
-            // own on a fresh profile — so a bare row here would dismiss the menu
-            // and open nothing. That is what `agent-tray` did before the merge:
-            // it had no case at all and no `overflowActions` entry, leaving a
-            // silently dead row. Pins and shortcut editing are omitted:
-            // promoting a button while the toolbar is too narrow to show it has
-            // nothing to reveal.
-            //
-            // Items that already carry their own overflow row are skipped: a
-            // grandfathered profile keeps its agent and `browser`/`dev-server`
-            // buttons, and when those overflow alongside the launcher the
-            // generic rows below already offer them. Inlining anyway would put
-            // two identically labelled rows in one menu.
-            const inlinedAgents = launcherAgentIds.filter(
-              (agentId) => !overflowIds.includes(agentId) && OVERFLOW_MENU_META[agentId]
-            );
-            const inlinedPanels = LAUNCHER_PANEL_ITEMS.filter(
-              (item) => !overflowIds.includes(item.id)
-            );
-            if (inlinedAgents.length === 0 && inlinedPanels.length === 0) return [];
-            const isLast = idx === overflowIds.length - 1;
-            return [
-              ...inlinedAgents.map((agentId) => {
-                const agentMeta = OVERFLOW_MENU_META[agentId]!;
-                return (
-                  <AgentOverflowItem
-                    key={`launcher-${agentId}`}
-                    id={agentId}
-                    label={agentMeta.label}
-                    Icon={agentMeta.icon}
-                    attentionState={agentAttentionStates.get(agentId) ?? null}
-                    onSelect={() => overflowActions[agentId]?.()}
-                  />
-                );
-              }),
-              ...inlinedPanels.map((item) => {
-                const Icon = item.icon;
-                return (
-                  <DropdownMenuItem
-                    key={`launcher-${item.id}`}
-                    disabled={panelTrayDisabled[item.id]}
-                    onClick={() => overflowActions[item.id]?.()}
-                    keybinding={keybindingById[item.id]}
-                  >
-                    <Icon className="mr-2 h-3.5 w-3.5" />
-                    <span className="flex-1">{item.label}</span>
-                  </DropdownMenuItem>
-                );
-              }),
-              ...(isLast ? [] : [<DropdownMenuSeparator key="launcher-sep" />]),
-            ];
-          }
-          const pluginConfig = pluginConfigs.get(id);
-          if (pluginConfig) {
-            return [
-              <PluginOverflowItem
-                key={id}
-                config={pluginConfig}
-                onSelect={() => overflowActions[id]?.()}
-                keybinding={keybindingById[id]}
-              />,
-            ];
-          }
-          const meta = OVERFLOW_MENU_META[id] ?? dynamicOverflowMeta[id];
-          if (!meta) return [];
-          if (isBuiltInAgentId(id)) {
-            return [
-              <AgentOverflowItem
-                key={id}
-                id={id}
-                label={meta.label}
-                Icon={meta.icon}
-                attentionState={agentAttentionStates.get(id) ?? null}
-                onSelect={() => overflowActions[id]?.()}
-              />,
-            ];
-          }
-          const Icon = meta.icon;
-          // Mirror the visible copy-tree button, which declines both when there
-          // is nothing to copy yet (no workspace, or a project's worktrees still
-          // loading) and while a copy is in flight — without this the overflow item would
-          // look live yet silently close with no feedback, since its handler
-          // guards on the same two conditions.
-          const disabled = id === "copy-tree" && (!canCopyTree || isCopyingTree);
-          // The in-flight reason is spelled out, as the visible button's
-          // spinner and "Copying…" name do — a greyed row alone reads as
-          // unavailable rather than busy. The label carries it rather than a
-          // trailing meta, which would widen the open menu and snap it back
-          // narrower the moment the copy lands.
-          const copying = id === "copy-tree" && isCopyingTree;
-          const count = overflowCount(id);
-          return [
-            <DropdownMenuItem
-              key={id}
-              disabled={disabled}
-              onClick={() => overflowActions[id]?.()}
-              keybinding={keybindingById[id]}
-            >
-              {copying && showCopyingSpinner ? (
-                <Spinner size="sm" className="mr-2" />
-              ) : (
-                <Icon className="mr-2 h-3.5 w-3.5" />
-              )}
-              {id === "copy-tree" ? (
-                // Both labels share one grid cell so the row is always as wide
-                // as the longer one: the open menu keeps its width when a copy
-                // starts or lands under the pointer.
-                <span className="grid flex-1">
-                  <span className="[grid-area:1/1]">
-                    {copying ? "Copying context…" : meta.label}
-                  </span>
-                  <span aria-hidden="true" className="invisible [grid-area:1/1]">
-                    Copying context…
-                  </span>
-                </span>
-              ) : (
-                <span className="flex-1">{meta.label}</span>
-              )}
-              {/* Audible: the count belongs in the row's accessible name. */}
-              {count !== null && <DropdownMenuMeta aria-hidden={false}>{count}</DropdownMenuMeta>}
-            </DropdownMenuItem>,
-          ];
-        })}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
-
-// Overflow menu item for a built-in agent. Restores the two signals the bare
-// overflow item dropped: the colored agent-state dot and the keyboard shortcut.
-function AgentOverflowItem({
-  id,
-  label,
-  Icon,
-  attentionState,
-  onSelect,
-}: {
-  id: string;
-  label: string;
-  Icon: React.ComponentType<{ className?: string }>;
-  attentionState: AttentionAgentState | null;
-  onSelect: () => void;
-}) {
-  const dotColor = attentionState ? agentStateDotColor(attentionState) : null;
-  return (
-    <DropdownMenuItem onClick={onSelect} keybinding={`agent.${id}`}>
-      <span className="relative mr-2 inline-flex h-3.5 w-3.5 items-center justify-center">
-        <Icon className="h-3.5 w-3.5" />
-        {dotColor && (
-          <span
-            aria-hidden="true"
-            className={cn(
-              "toolbar-menu-pip status-mark absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full ring-1 ring-surface-canvas",
-              dotColor
-            )}
-          />
-        )}
-      </span>
-      <span className="flex-1">
-        {label}
-        {/* The pip is aria-hidden; the row's name carries what it draws, in
-            the agent button's own "— waiting" form. */}
-        {attentionState && dotColor && (
-          <span className="sr-only">{` — ${STATE_LABELS[attentionState]}`}</span>
-        )}
-      </span>
-    </DropdownMenuItem>
-  );
-}
-
 interface ToolbarProps {
   onLaunchAgent: (type: string) => void;
   onSettings: () => void;
@@ -721,7 +175,6 @@ interface ToolbarProps {
    */
   hasWorkspace: boolean;
   agentAvailability?: CliAvailability;
-  agentSettings?: AgentSettings | null;
   projectSwitcherPalette: UseProjectSwitcherPaletteReturn;
 }
 
@@ -735,11 +188,32 @@ export function Toolbar({
   onToggleFocusMode,
   hasWorkspace,
   agentAvailability,
-  agentSettings,
   projectSwitcherPalette,
 }: ToolbarProps) {
   const currentProject = useProjectStore((state) => state.currentProject);
   const currentScratch = useScratchStore((state) => state.currentScratch);
+  // This project's presentation profile (#13771). Demoted folds the pill into
+  // the `…` menu; hidden drops its slot. A folder without a repository
+  // resolves to hidden at any level: it has nothing to count.
+  const presentation = useResolvedPresentation();
+  const forgeStatsLevel = presentation.forgeStats;
+  const forgeStatsHidden = currentProject !== null && forgeStatsLevel === "hidden";
+  // "Use this project's toolbar" (#13783): demoted buttons fold into `…`,
+  // explicitly shown ones and promoted plugin buttons claim a slot. All of it
+  // is applied at the render boundary; the app-wide layout is never written.
+  const toolbarOverlay = useProjectToolbarOverlay();
+  const projectToolbarMode = currentProject !== null && toolbarOverlay.active;
+  const profileLevels = useProjectPresentationStore((s) => s.levels);
+  const branchChipDemoted = currentProject !== null && presentation.branchChip === "demoted";
+  // The dev preview is the project's to show or hide on every surface (#14069),
+  // whatever "Use this project's toolbar" says. Hidden drops the button and its
+  // overflow row; an explicit shown or demoted puts the button on this
+  // project's toolbar even where the app-wide layout has no slot for it. A
+  // detected default never adds one: it can only take a leftover away.
+  const devPreviewHidden = currentProject !== null && presentation.devServer === "hidden";
+  const explicitDevPreviewLevel = toolbarOverlay.available ? profileLevels.devServer : undefined;
+  const devPreviewPlaced =
+    explicitDevPreviewLevel === "shown" || explicitDevPreviewLevel === "demoted";
   const workspaceIdentity = activeWorkspaceIdentity(currentProject, currentScratch);
   const loadProjects = useProjectStore((state) => state.loadProjects);
   const getCurrentProject = useProjectStore((state) => state.getCurrentProject);
@@ -825,25 +299,9 @@ export function Toolbar({
   const canopyHidden = useCanopyStore((s) => s.mode === "hidden");
   const toolbarLayout = useToolbarPreferencesStore((state) => state.layout);
   const positionAgentButton = useToolbarPreferencesStore((state) => state.positionAgentButton);
-  const toggleButtonVisibility = useToolbarPreferencesStore(
-    (state) => state.toggleButtonVisibility
-  );
-  const setPluginButtonPromoted = useToolbarPreferencesStore(
-    (state) => state.setPluginButtonPromoted
-  );
-  const setPanelButtonOnToolbar = useToolbarPreferencesStore(
-    (state) => state.setPanelButtonOnToolbar
-  );
-  const setLauncherItemOnToolbar = useToolbarPreferencesStore(
-    (state) => state.setLauncherItemOnToolbar
-  );
-  // Live subscription so pin/unpin toggles from the launcher immediately
-  // update per-agent toolbar button visibility. The `agentSettings` prop is
-  // sourced from `useAgentLauncher()`'s local useState which does not react to
-  // store mutations, so we prefer the store value when available.
-  const liveAgentSettings = useAgentSettingsStore((s) => s.settings);
-  const effectiveAgentSettings = liveAgentSettings ?? agentSettings;
-  const setAgentPinned = useAgentSettingsStore((s) => s.setAgentPinned);
+  // This machine's pins (#14702), live, so a pin from the launcher or another
+  // view shows here at once.
+  const agentPins = useAgentToolbarPinsStore((s) => s.pins);
 
   const [isFullscreen, setIsFullscreen] = useState(false);
   // Store-derived rather than local click state so every clipboard copy spins
@@ -887,12 +345,15 @@ export function Toolbar({
 
   const hasActiveVoiceRecording = useVoiceRecordingStore(
     (state) =>
-      state.activeTarget !== null &&
-      (state.status === "arming" ||
-        state.status === "connecting" ||
-        state.status === "recording" ||
-        state.status === "paused" ||
-        state.status === "finishing")
+      state.lockedTarget !== null ||
+      state.pendingTarget !== null ||
+      (state.activeTarget !== null &&
+        (state.status === "arming" ||
+          state.status === "connecting" ||
+          state.status === "recording" ||
+          state.status === "reconnecting" ||
+          state.status === "paused" ||
+          state.status === "finishing"))
   );
 
   const toolbarRef = useRef<HTMLDivElement>(null);
@@ -963,73 +424,61 @@ export function Toolbar({
   // location override, so they land where they always have. The dock's copy of
   // the launcher passes its own callback and keeps landing in the dock — the
   // shared component decides how a row looks, never where it opens.
-  const launchAgentFromToolbar = useCallback((agentId: string, presetId?: string | null) => {
-    void actionService.dispatch(
-      "agent.launch",
-      // `null` is the explicit-default sentinel and must survive into the
-      // payload; `undefined` must leave the key off so the saved preset still
-      // resolves. A `!= null` test here would collapse the two.
-      { agentId, ...(presetId !== undefined ? { presetId } : {}) },
-      { source: "user" }
-    );
-  }, []);
-
-  const handleOpenProjectSettings = useCallback(() => {
-    projectSwitcher.close();
-    void actionService.dispatch("project.settings.open", undefined, { source: "user" });
-  }, [projectSwitcher]);
-
-  const handleStopProject = useCallback(
-    (projectId: string) => {
-      void projectSwitcher.stopProject(projectId);
-    },
-    [projectSwitcher]
-  );
-
-  const handleCloseProject = useCallback(
-    (projectId: string) => {
-      void projectSwitcher.removeProject(projectId);
-    },
-    [projectSwitcher]
-  );
-
-  const handleSleepProject = useCallback(
-    (projectId: string) => {
-      void projectSwitcher.sleepProject(projectId);
-    },
-    [projectSwitcher]
-  );
-
-  const handleLocateProject = useCallback(
-    (projectId: string) => {
-      projectSwitcher.locateProject(projectId);
-    },
-    [projectSwitcher]
-  );
-
-  const handleMoveOrRenameProject = useCallback(
-    (projectId: string) => {
-      projectSwitcher.moveOrRenameProject(projectId);
-    },
-    [projectSwitcher]
-  );
-
-  const handleRemoveConfirmClose = useCallback(() => {
-    projectSwitcher.setRemoveConfirmProject(null);
-  }, [projectSwitcher]);
-
-  const handleSelectNewWindow = useCallback(
-    (project: SearchableProject) => {
-      if (project.isMissing) return;
-      projectSwitcher.close();
+  const launchAgentFromToolbar = useCallback(
+    (agentId: string, presetId?: string | null, options?: DockLaunchAgentOptions) => {
       void actionService.dispatch(
-        "app.newWindow",
-        { projectPath: project.path },
+        "agent.launch",
+        // `null` is the explicit-default sentinel and must survive into the
+        // payload; `undefined` must leave the key off so the saved preset still
+        // resolves. A `!= null` test here would collapse the two. A plugin
+        // launch entry adds its first turn and nothing else.
+        {
+          agentId,
+          ...(presetId !== undefined ? { presetId } : {}),
+          ...(options?.prompt !== undefined ? { prompt: options.prompt } : {}),
+        },
         { source: "user" }
       );
     },
-    [projectSwitcher]
+    []
   );
+
+  const {
+    handleOpenProjectSettings,
+    handleStopProject,
+    handleCloseProject,
+    handleSleepProject,
+    handleRestartProject,
+    handleLocateProject,
+    handleMoveOrRenameProject,
+    handleRemoveConfirmClose,
+    handleSelectNewWindow,
+    isDropdownOpen,
+    shouldMountProjectSwitcherDropdown,
+    pillTooltipOpen,
+    handlePillTooltipOpenChange,
+    suppressPillTooltipForFocusRestore,
+    handlePillDropdownClose,
+    activeSearchableProject,
+    pillBranchLabel,
+    branchOverflowRow,
+    handleCopyProjectPath,
+    handlePillTogglePin,
+    isIdentityEditorOpen,
+    shouldMountIdentityEditor,
+    handleEditProjectIdentity,
+    handlePillContextMenuOpenChange,
+    handlePillContextMenuCloseAutoFocus,
+    handleIdentityEditorOpenChange,
+    projectSwitcherTrigger,
+  } = useToolbarProjectPill({
+    projectSwitcher,
+    currentProject,
+    workspaceIdentity,
+    activeWorktree,
+    branchName,
+    branchChipDemoted,
+  });
 
   useEffect(() => {
     return window.electron.window.onFullscreenChange(setIsFullscreen);
@@ -1085,6 +534,9 @@ export function Toolbar({
     // focus placed earlier would drag the overflow trigger's tooltip open.
     event.preventDefault();
     requestAnimationFrame(() => target.focus({ preventScroll: true }));
+  }, []);
+  const recordCopyTreeEvictionFocus = useCallback((target: HTMLElement | null) => {
+    copyTreeEvictionFocusRef.current = target;
   }, []);
 
   // The menu's pinned entry: the old one-click behavior, now one row deeper.
@@ -1255,7 +707,7 @@ export function Toolbar({
   // an `mx-1` on top gave the launcher 10px on one side and 6px on the other.
   const toolbarFixedDividerClass = "toolbar-divider w-px h-5 shrink-0";
 
-  const { buttonIds: pluginButtonIds, configs: pluginConfigs } = usePluginToolbarButtons();
+  const { buttonIds: pluginButtonIds, configs: pluginConfigs } = useVisiblePluginToolbarButtons();
 
   // Scopes a project-owned recipe's pin id — see `recipeToolbarSourceId`.
   const currentRecipeProjectId = useRecipeStore((s) => s.currentProjectId);
@@ -1374,7 +826,7 @@ export function Toolbar({
               />
             ),
             isAvailable: isAgentToolbarVisible(
-              effectiveAgentSettings?.agents?.[id],
+              agentToolbarPin(agentPins, id),
               agentAvailability?.[id]
             ),
           },
@@ -1498,11 +950,12 @@ export function Toolbar({
         // local git data). Placeholder (not removal) when no project: the
         // slot's no-drag rectangle must exist on first paint regardless
         // (PROJECT_SCOPED_TOOLBAR_IDS).
-        // A workspace with no repository has no commits, issues or PRs to
-        // report, so it takes the placeholder too — which also keeps the
-        // button's stats polling from ever starting for it (#11405).
+        // A profile that hides the pill drops its slot from the row instead
+        // (see `isButtonShownOnToolbar`), so the button — and its stats
+        // polling — never mounts. A workspace with no repository always
+        // resolves to hidden, so polling never starts for it (#11405).
         render: () =>
-          currentProject && isGitBackedProject(currentProject) ? (
+          currentProject && forgeStatsLevel !== "hidden" ? (
             <ForgeStatsToolbarButton
               key="forge-stats"
               ref={forgeStatsRef}
@@ -1739,7 +1192,7 @@ export function Toolbar({
       hasWorkspace,
       canCopyTree,
       agentAvailability,
-      effectiveAgentSettings,
+      agentPins,
       onLaunchAgent,
       launcherData,
       launchAgentFromToolbar,
@@ -1751,6 +1204,7 @@ export function Toolbar({
       copyTreeCombo,
       copyTreeAriaShortcut,
       currentProject,
+      forgeStatsLevel,
       handleCopyTreeOpenChange,
       handleCopyTreeFullContext,
       handleCopyTreeRunRecent,
@@ -1783,335 +1237,96 @@ export function Toolbar({
     ]
   );
 
-  const pinnedButtons = toolbarLayout.pinnedButtons;
-
-  // An agent the user explicitly pinned but that sits in neither side array
-  // still has to render (#11680). Two ways to get here, and neither can be
-  // repaired in the store's `merge()` — the pin lives in `agentSettingsStore`,
-  // which loads asynchronously over IPC and isn't readable at toolbar-store
-  // hydration:
-  //   - a genuinely fresh profile, where `buildInitialAgentPinUpdates` stamps
-  //     `pinned: true` for the first few installed agents before the user has
-  //     ever touched the toolbar;
-  //   - a stale sibling project view overwriting the orderings, which reconcile
-  //     last-writer-wins and so drop a position another view just wrote (the
-  //     same window `restorePromotedPanelButtons` covers for panels).
-  // `isAgentPinned`, not `isAgentToolbarVisible`: only an explicit `true` earns
-  // a slot here. Reading the tri-state's installed-means-visible fall-through
-  // would put every installed CLI back on the toolbar, which is the crowding
-  // this issue removed.
-  const unpositionedAgentPins = useMemo(() => {
-    const onEitherSide = new Set([...toolbarLayout.leftButtons, ...toolbarLayout.rightButtons]);
-    return BUILT_IN_AGENT_IDS.filter(
-      (id) => !onEitherSide.has(id) && isAgentPinned(effectiveAgentSettings?.agents?.[id])
-    );
-  }, [toolbarLayout.leftButtons, toolbarLayout.rightButtons, effectiveAgentSettings]);
-
-  // Materialize those positions once they're knowable, so the repair is a
-  // one-frame bridge rather than a permanent ghost. A rendered-but-unpositioned
-  // button is absent from Settings → Toolbar's sortable columns and inert to
-  // `moveButton`, which reads the arrays — the first-run seeding above would
-  // otherwise leave up to five agents that can never be reordered. The action
-  // no-ops when the id already holds a position, writes nothing to
-  // `pinnedButtons`, and converges under a concurrent sibling view. One batched
-  // call, not a call per id: every insert lands at the same index, so repairing
-  // the first-run seeding one agent at a time would persist them reversed
-  // against the order they just rendered in.
-  useEffect(() => {
-    if (unpositionedAgentPins.length > 0) positionAgentButton(unpositionedAgentPins);
-  }, [unpositionedAgentPins, positionAgentButton]);
-
-  // Whichever side the launcher is on — that is where the things pinned out of
-  // it belong. Splicing unconditionally into the left would strand them away
-  // from a launcher the user moved right.
-  const launcherOnRight =
-    toolbarLayout.rightButtons.includes("launcher") &&
-    !toolbarLayout.leftButtons.includes("launcher");
-
-  // The same repair as `unpositionedAgentPins`, for the same window, over the
-  // ids a launcher item pins under (#12217). Only entries in the live catalog:
-  // a pin whose recipe belongs to another project has nothing to position, and
-  // giving it a slot here would put a dead id in the arrays every project
-  // switch.
-  const unpositionedLauncherItemPins = useMemo(() => {
-    const onEitherSide = new Set([...toolbarLayout.leftButtons, ...toolbarLayout.rightButtons]);
-    return [...launcherCatalog.keys()].filter(
-      (id) => !onEitherSide.has(id) && pinnedButtons[id] === true
-    );
-  }, [toolbarLayout.leftButtons, toolbarLayout.rightButtons, launcherCatalog, pinnedButtons]);
-
-  // Materialized for the same reason the agent repair above is: a
-  // rendered-but-unpositioned button is inert to `moveButton`, which reads the
-  // arrays, so leaving it as a render-time ghost would make a pinned recipe
-  // permanently un-reorderable. `positionAgentButton` is generic over button
-  // ids despite its name — it no-ops on an id that already holds a position and
-  // writes nothing to `pinnedButtons`.
-  useEffect(() => {
-    if (unpositionedLauncherItemPins.length > 0) {
-      positionAgentButton(unpositionedLauncherItemPins);
-    }
-  }, [unpositionedLauncherItemPins, positionAgentButton]);
-
-  // Declared group per button, resolved against the live plugin registry so a
-  // contribution is classified by membership rather than by parsing its id.
-  const resolveToolbarGroup = useCallback(
-    (id: AnyToolbarButtonId) => getToolbarButtonGroup(id, pluginConfigs.has(id)),
-    [pluginConfigs]
-  );
-
-  // Every button holding a slot on each side, hidden or not. The toolbar draws
-  // the visible subset; its empty-space menu (#12355) lists the whole set, since
-  // hiding never takes a button's position away.
-  const positionedLeftButtons = useMemo(() => {
-    // Dedupe defensively so a persisted list holding a repeated id never
-    // renders duplicate pills (#10937) — the store also heals this, this is
-    // belt-and-suspenders at the render boundary.
-    const positioned = Array.from(new Set(toolbarLayout.leftButtons));
-
-    const unpositionedLeftPins = launcherOnRight
-      ? []
-      : [...unpositionedAgentPins, ...unpositionedLauncherItemPins];
-    if (unpositionedLeftPins.length > 0) {
-      // Right after the launcher they were pinned out of, so they lead the
-      // agent run in registry order rather than trailing the positioned ones.
-      // Grouping below is what keeps the brand marks contiguous; this only
-      // decides their order within that group.
-      const launcherIndex = positioned.indexOf("launcher");
-      positioned.splice(
-        launcherIndex === -1 ? positioned.length : launcherIndex + 1,
-        0,
-        ...unpositionedLeftPins
-      );
-    }
-
-    // Grouped, not persisted order (#11681): the divider marks a group
-    // boundary, so the groups have to actually be contiguous. Ordering here
-    // rather than at the render loop means overflow, keyboard roving, and the
-    // DOM all see the same canonical sequence.
-    return orderToolbarButtonsByGroup(positioned, resolveToolbarGroup);
-  }, [
-    toolbarLayout.leftButtons,
-    launcherOnRight,
-    unpositionedAgentPins,
-    unpositionedLauncherItemPins,
-    resolveToolbarGroup,
-  ]);
-
-  const isButtonShownOnToolbar = useCallback(
-    (id: AnyToolbarButtonId) =>
-      isToolbarButtonVisible(
-        id,
-        pinnedButtons,
-        effectiveAgentSettings,
-        agentAvailability,
-        pluginConfigs.has(id)
-      ),
-    [pinnedButtons, effectiveAgentSettings, agentAvailability, pluginConfigs]
-  );
-
-  // Filtering the grouped list yields the same sequence as grouping the filtered
-  // one — grouping is a stable partition.
-  const effectiveLeftButtons = useMemo(
-    () => positionedLeftButtons.filter(isButtonShownOnToolbar),
-    [positionedLeftButtons, isButtonShownOnToolbar]
-  );
-
-  const positionedRightButtons = useMemo(() => {
-    // Dedupe the persisted base before appending plugin extras, so duplicate
-    // ids (e.g. repeated `forge-stats`, #10937) can't render twice.
-    const base = Array.from(new Set(toolbarLayout.rightButtons));
-    if (
-      launcherOnRight &&
-      (unpositionedAgentPins.length > 0 || unpositionedLauncherItemPins.length > 0)
-    ) {
-      const launcherIndex = base.indexOf("launcher");
-      base.splice(
-        launcherIndex === -1 ? base.length : launcherIndex + 1,
-        0,
-        ...unpositionedAgentPins,
-        ...unpositionedLauncherItemPins
-      );
-    }
-    const positioned = new Set([...base, ...toolbarLayout.leftButtons]);
-    // Only *promoted* contributions append — plugin buttons reach the user
-    // through the tray by default now (#11304), so the pre-tray behavior of
-    // appending every registered id would resurrect the crowding this
-    // replaced. Buttons the user already dragged into a side list keep that
-    // position and are filtered on promotion below like any other id.
-    const extra = pluginButtonIds.filter((id) => !positioned.has(id) && pinnedButtons[id] === true);
-    // Grouped like the left (#11681): the default right set is all utilities,
-    // so this changes nothing until a user moves a panel or agent across the
-    // centre — at which point the divider rules have to mean the same thing
-    // on both sides.
-    return orderToolbarButtonsByGroup([...base, ...extra], resolveToolbarGroup);
-  }, [
-    toolbarLayout.rightButtons,
-    toolbarLayout.leftButtons,
-    launcherOnRight,
-    unpositionedAgentPins,
-    unpositionedLauncherItemPins,
-    pluginButtonIds,
+  const {
+    appPinnedButtons,
     pinnedButtons,
     resolveToolbarGroup,
-  ]);
-
-  const effectiveRightButtons = useMemo(
-    () => positionedRightButtons.filter(isButtonShownOnToolbar),
-    [positionedRightButtons, isButtonShownOnToolbar]
-  );
-
-  const availableLeftIds = useMemo(
-    () =>
-      effectiveLeftButtons.filter(
-        (id) => buttonRegistry[id]?.isAvailable || PROJECT_SCOPED_TOOLBAR_IDS.has(id)
-      ),
-    [effectiveLeftButtons, buttonRegistry]
-  );
-
-  const availableRightIds = useMemo(
-    () =>
-      effectiveRightButtons.filter(
-        (id) => buttonRegistry[id]?.isAvailable || PROJECT_SCOPED_TOOLBAR_IDS.has(id)
-      ),
-    [effectiveRightButtons, buttonRegistry]
-  );
-
-  // Pin the voice-recording indicator out of overflow while a recording is
-  // active so the user never loses sight of the live mic signal. Applies to
-  // whichever side the user has placed the button — overflow honors the
-  // pin regardless of left/right placement. The set reference is stabilized
-  // so the overflow hook's recalculate callback doesn't re-fire on every
-  // render.
-  const pinnedIds = hasActiveVoiceRecording ? VOICE_RECORDING_PINNED : NO_PINNED_IDS;
-
-  const { leftVisible, leftOverflow, rightVisible, rightOverflow } = useToolbarOverflow(
-    leftGroupRef,
-    rightGroupRef,
+    positionedLeftButtons,
+    positionedRightButtons,
+    effectiveLeftButtons,
+    effectiveRightButtons,
     availableLeftIds,
     availableRightIds,
     pinnedIds,
+    demotedIds,
+    measuredLeftIds,
+    measuredRightIds,
+  } = useToolbarItemPlacement({
+    toolbarLayout,
+    positionAgentButton,
+    projectToolbarMode,
+    profileLevels,
+    promotedPluginButtons: toolbarOverlay.promotedPluginButtons,
+    presentation,
+    hasProject: currentProject !== null,
+    devPreviewPlaced,
+    devPreviewHidden,
+    forgeStatsHidden,
+    agentPins,
+    agentAvailability,
+    launcherCatalog,
+    pluginButtonIds,
+    pluginConfigs,
+    buttonRegistry,
+    hasActiveVoiceRecording,
+  });
+
+  const {
+    leftVisible,
+    leftOverflow: measuredLeftOverflow,
+    rightVisible,
+    rightOverflow: measuredRightOverflow,
+  } = useToolbarOverflow(
+    leftGroupRef,
+    rightGroupRef,
+    measuredLeftIds,
+    measuredRightIds,
+    pinnedIds,
     resolveToolbarGroup
   );
-
-  // Voice recording reserves layout via an always-available slot but should
-  // not pollute the overflow badge or dropdown when no session is active —
-  // an inactive placeholder pushed into overflow would otherwise count as a
-  // hidden item and trigger the warning severity in useOverflowBadgeSeverity.
-  const visibleLeftOverflow = useMemo(
-    () =>
-      hasActiveVoiceRecording
-        ? leftOverflow
-        : leftOverflow.filter((id) => id !== "voice-recording"),
-    [leftOverflow, hasActiveVoiceRecording]
+  const leftOverflow = useMemo(
+    () => withDemotedOverflow(availableLeftIds, measuredLeftOverflow, demotedIds),
+    [availableLeftIds, measuredLeftOverflow, demotedIds]
   );
-  const visibleRightOverflow = useMemo(
-    () =>
-      hasActiveVoiceRecording
-        ? rightOverflow
-        : rightOverflow.filter((id) => id !== "voice-recording"),
-    [rightOverflow, hasActiveVoiceRecording]
+  const rightOverflow = useMemo(
+    () => withDemotedOverflow(availableRightIds, measuredRightOverflow, demotedIds),
+    [availableRightIds, measuredRightOverflow, demotedIds]
   );
 
-  const leftOverflowSeverity = useOverflowBadgeSeverity(
+  const {
     visibleLeftOverflow,
-    errorCount,
-    canopyUrgentCount
-  );
-  const rightOverflowSeverity = useOverflowBadgeSeverity(
     visibleRightOverflow,
+    leftMenuSeverity,
+    rightMenuSeverity,
+    leftObservations,
+    rightObservations,
+  } = useToolbarOverflowStatus({
+    leftOverflow,
+    rightOverflow,
+    hasActiveVoiceRecording,
     errorCount,
-    canopyUrgentCount
-  );
-  const leftAgentObservations = useOverflowAgentObservations(visibleLeftOverflow);
-  const rightAgentObservations = useOverflowAgentObservations(visibleRightOverflow);
+    canopyUrgentCount,
+    pluginConfigs,
+    pinnedButtons,
+  });
 
-  // Plugin badges folded into each `…` menu light its dot and join its name,
-  // as the built-in buttons' signals do (#9821, #13503).
-  // Derived inside the selector so a badge change that moves neither menu (a
-  // visible button's count, a tooltip) doesn't re-render the whole toolbar.
-  const [leftPluginBadgeCount, leftPluginSeverity, rightPluginBadgeCount, rightPluginSeverity] =
-    usePluginToolbarBadgeStore(
-      useShallow((s) => {
-        const left = overflowedPluginBadges(
-          visibleLeftOverflow,
-          pluginConfigs,
-          pinnedButtons,
-          s.badgesByPlugin
-        );
-        const right = overflowedPluginBadges(
-          visibleRightOverflow,
-          pluginConfigs,
-          pinnedButtons,
-          s.badgesByPlugin
-        );
-        return [
-          left.length,
-          pluginBadgeOverflowSeverity(left),
-          right.length,
-          pluginBadgeOverflowSeverity(right),
-        ] as const;
-      })
-    );
-  const leftMenuSeverity = maxOverflowSeverity(leftOverflowSeverity, leftPluginSeverity);
-  const rightMenuSeverity = maxOverflowSeverity(rightOverflowSeverity, rightPluginSeverity);
-  const leftObservations = useMemo(
-    () =>
-      leftPluginBadgeCount > 0
-        ? [...leftAgentObservations, pluralize(leftPluginBadgeCount, "plugin badge")]
-        : leftAgentObservations,
-    [leftAgentObservations, leftPluginBadgeCount]
-  );
-  const rightObservations = useMemo(
-    () =>
-      rightPluginBadgeCount > 0
-        ? [...rightAgentObservations, pluralize(rightPluginBadgeCount, "plugin badge")]
-        : rightAgentObservations,
-    [rightAgentObservations, rightPluginBadgeCount]
-  );
+  // Read from the side lists, not measured overflow: a demoted button never
+  // reaches the overflow hook.
+  const copyTreeOnRight = rightOverflow.includes("copy-tree");
 
   const leftVisibleSet = useMemo(() => new Set<AnyToolbarButtonId>(leftVisible), [leftVisible]);
   const rightVisibleSet = useMemo(() => new Set<AnyToolbarButtonId>(rightVisible), [rightVisible]);
 
-  // Close open dropdowns when their buttons move into overflow
-  useEffect(() => {
-    const overflowSet = new Set<AnyToolbarButtonId>([...leftOverflow, ...rightOverflow]);
-    if (overflowSet.has("forge-stats")) {
-      forgeStatsRef.current?.closeAll();
-    }
-    if (overflowSet.has("notification-center")) {
-      useUIStore.getState().closeNotificationCenter();
-    }
-    // The panel is portaled to document.body, so the wrapper's `invisible
-    // absolute` eviction styles never reach it — an open panel would strand on
-    // screen and then re-anchor to the hidden button's rect on the next resize.
-    if (overflowSet.has("copy-tree")) {
-      // The menu portals out of the toolbar, so "is focus inside it?" is a
-      // closest() against the content's marker, not a DOM-ancestor check
-      // from the trigger.
-      const focusWasInPanel =
-        document.activeElement instanceof HTMLElement &&
-        document.activeElement.closest("[data-copy-tree-panel]") !== null;
-      // The anchor is on its way to being hidden, so it can't take focus back.
-      // The overflow trigger is where the command now lives, which makes it the
-      // honest destination — otherwise a keyboard user is dropped onto <body>.
-      // It has to be the trigger on the side that swallowed the button: the
-      // other one renders display:none and untabbable when its own side has no
-      // overflow, so focusing it would be the silent no-op this prevents.
-      //
-      // Recorded, not focused here: the menu is a modal Radix menu and its
-      // FocusScope is still trapping while it is open, so a synchronous
-      // `.focus()` at this point is bounced straight back inside. The move
-      // happens in the menu's own onCloseAutoFocus, once the trap has let go.
-      if (focusWasInPanel) {
-        const side = rightOverflow.includes("copy-tree") ? "right" : "left";
-        copyTreeEvictionFocusRef.current =
-          toolbarRef.current?.querySelector<HTMLElement>(
-            `[data-toolbar-overflow-trigger][data-toolbar-overflow-side="${side}"][data-visible="true"]`
-          ) ?? null;
-      }
-      setCopyTreeOpen(false);
-    }
-  }, [leftOverflow, rightOverflow]);
+  useToolbarOverflowEviction({
+    measuredLeftOverflow,
+    measuredRightOverflow,
+    demotedIds,
+    copyTreeOnRight,
+    toolbarRef,
+    forgeStatsRef,
+    recordCopyTreeEvictionFocus,
+    setCopyTreeOpen,
+  });
 
   const renderGroupedButtons = (
     buttonIds: AnyToolbarButtonId[],
@@ -2174,76 +1389,25 @@ export function Toolbar({
     [pluginButtonIds, pluginConfigs, launcherCatalog]
   );
 
-  // The same bundle Settings → Toolbar hands the placement resolvers, so the
-  // empty-space menu's checkmarks and toggles route exactly as that page does.
-  const toolbarPlacementState = useMemo<ToolbarButtonPlacementState>(
-    () => ({
-      pinnedButtons,
-      leftButtons: toolbarLayout.leftButtons,
-      rightButtons: toolbarLayout.rightButtons,
-      agentSettings: effectiveAgentSettings,
-      agentAvailability,
-      isPluginContribution: (id) => pluginConfigs.has(id),
-    }),
-    [
-      pinnedButtons,
-      toolbarLayout.leftButtons,
-      toolbarLayout.rightButtons,
-      effectiveAgentSettings,
-      agentAvailability,
-      pluginConfigs,
-    ]
-  );
-
-  // Rows for the empty-space menu (#12355), built from the side lists before
-  // the visibility filter so a hidden button still has one.
-  const toolbarMenuRows = useMemo(
-    () =>
-      buildToolbarVisibilityMenuRows(positionedLeftButtons, positionedRightButtons, {
-        resolveMetadata: (id) =>
-          resolveToolbarButtonMetadata(id, TOOLBAR_BUTTON_METADATA, dynamicOverflowMeta),
-        canList: (id) =>
-          canListToolbarButton(
-            id,
-            buttonRegistry,
-            PROJECT_SCOPED_TOOLBAR_IDS,
-            effectiveAgentSettings,
-            agentAvailability
-          ),
-        isOnToolbar: (id) => isToolbarButtonOnToolbar(id, toolbarPlacementState),
-      }),
-    [
-      positionedLeftButtons,
-      positionedRightButtons,
-      dynamicOverflowMeta,
-      buttonRegistry,
-      effectiveAgentSettings,
-      agentAvailability,
-      toolbarPlacementState,
-    ]
-  );
-
-  const handleToolbarMenuToggle = useCallback(
-    (buttonId: AnyToolbarButtonId, side: ToolbarSide, onToolbar: boolean) => {
-      setToolbarButtonOnToolbar(buttonId, side, onToolbar, toolbarPlacementState, {
-        setAgentPinned,
-        toggleButtonVisibility,
-        positionAgentButton,
-        setPluginButtonPromoted,
-        setPanelButtonOnToolbar,
-        setLauncherItemOnToolbar,
-      });
-    },
-    [
-      toolbarPlacementState,
-      setAgentPinned,
-      toggleButtonVisibility,
-      positionAgentButton,
-      setPluginButtonPromoted,
-      setPanelButtonOnToolbar,
-      setLauncherItemOnToolbar,
-    ]
-  );
+  const { toolbarMenuRows, handleToolbarMenuToggle, projectToolbarMenu } = useToolbarCustomization({
+    hasProject: currentProject !== null,
+    projectToolbarMode,
+    toolbarOverlay,
+    presentation,
+    explicitDevPreviewLevel,
+    appPinnedButtons,
+    pinnedButtons,
+    toolbarLayout,
+    positionAgentButton,
+    agentPins,
+    agentAvailability,
+    pluginButtonIds,
+    pluginConfigs,
+    positionedLeftButtons,
+    positionedRightButtons,
+    dynamicOverflowMeta,
+    buttonRegistry,
+  });
 
   const overflowActions = useMemo<Partial<Record<AnyToolbarButtonId, () => void>>>(
     () => ({
@@ -2277,7 +1441,9 @@ export function Toolbar({
           return [
             id,
             () => {
-              if (config) {
+              // A popover button opens off the overflow menu itself, which
+              // routes it there before reaching this map.
+              if (config?.actionId !== undefined) {
                 void actionService.dispatch(
                   config.actionId as Parameters<typeof actionService.dispatch>[0],
                   undefined,
@@ -2317,6 +1483,14 @@ export function Toolbar({
     "dev-server": !currentProject,
   };
 
+  const launcherPanelItems = useMemo(
+    () =>
+      devPreviewHidden
+        ? LAUNCHER_PANEL_ITEMS.filter((item) => item.id !== "dev-server")
+        : LAUNCHER_PANEL_ITEMS,
+    [devPreviewHidden]
+  );
+
   // Same filter the launcher's own Launch section applies, so the rows the
   // overflow menu inlines are exactly the rows the dropdown would have shown.
   const launcherAgentIds = useMemo(
@@ -2328,7 +1502,8 @@ export function Toolbar({
     overflowIds: AnyToolbarButtonId[],
     side: "left" | "right",
     severity: OverflowBadgeSeverity,
-    agentObservations: readonly string[]
+    agentObservations: readonly string[],
+    branchRow: OverflowMenuProps["branchRow"] = null
   ) => (
     <OverflowMenu
       overflowIds={overflowIds}
@@ -2347,157 +1522,11 @@ export function Toolbar({
       pluginTrayGroups={pluginTrayGroups}
       pluginConfigs={pluginConfigs}
       launcherAgentIds={launcherAgentIds}
+      launcherPanelItems={launcherPanelItems}
       panelTrayDisabled={panelTrayDisabled}
       keybindingById={OVERFLOW_KEYBINDING_BY_ID}
+      branchRow={branchRow}
     />
-  );
-
-  const isDropdownOpen = projectSwitcher.isOpen && projectSwitcher.mode === "dropdown";
-  const shouldMountProjectSwitcherDropdown = useKeepMounted(isDropdownOpen);
-  const handleDropdownClose = useCallback(() => {
-    if (projectSwitcher.mode !== "dropdown") return;
-    projectSwitcher.close();
-  }, [projectSwitcher]);
-
-  // Project pill: Radix Tooltip reopens on focus restoration after the popover
-  // or context menu closes. Controlled state + a suppression ref (set in the
-  // popover/context-menu close handlers, cleared on the next pointer enter)
-  // mirrors the AgentButton pattern so the tooltip doesn't pop on top of a
-  // freshly-opened destination surface.
-  const [pillTooltipOpen, setPillTooltipOpen] = useState(false);
-  const isRestoringFocusPillRef = useRef(false);
-  const handlePillTooltipOpenChange = useCallback((open: boolean) => {
-    if (open && isRestoringFocusPillRef.current) return;
-    setPillTooltipOpen(open);
-  }, []);
-  const suppressPillTooltipForFocusRestore = useCallback(() => {
-    setPillTooltipOpen(false);
-    isRestoringFocusPillRef.current = true;
-  }, []);
-  const handlePillPointerEnter = useCallback(() => {
-    isRestoringFocusPillRef.current = false;
-    void preloadProjectIdentityEditor().catch(() => {});
-  }, []);
-  const handlePillDropdownClose = useCallback(() => {
-    suppressPillTooltipForFocusRestore();
-    handleDropdownClose();
-  }, [handleDropdownClose, suppressPillTooltipForFocusRestore]);
-
-  const activeSearchableProject = projectSwitcher.activeProject;
-  const headSha = activeWorktree?.isDetached ? activeWorktree.head : undefined;
-  const chipState = branchChipState(
-    workspaceIdentity.kind,
-    branchName,
-    isGitBackedProject(currentProject),
-    activeWorktree?.isDetached ?? false
-  );
-  const pillBranchLabel =
-    chipState === "visible"
-      ? branchName
-      : chipState === "detached"
-        ? `detached at ${shortSha(headSha) ?? "unknown commit"}`
-        : undefined;
-  // Routed through the switcher row's copy so the two "Copy path" rows confirm
-  // the same way; the menu closes on select, leaving nothing else to show it.
-  const handleCopyProjectPath = useCallback(() => {
-    if (!currentProject) return;
-    projectSwitcher.copyPath(currentProject.path);
-  }, [currentProject, projectSwitcher]);
-  const handlePillTogglePin = useCallback(() => {
-    if (!currentProject) return;
-    void projectSwitcher.togglePinProject(currentProject.id);
-  }, [currentProject, projectSwitcher]);
-
-  // Which project's identity editor is open, rather than a bare boolean: a flag
-  // would outlive the project it belongs to and reopen the popover over
-  // whichever project came next.
-  const [identityEditorProjectId, setIdentityEditorProjectId] = useState<string | null>(null);
-  // Dropped rather than merely ignored when the project underneath it goes:
-  // a controlled Radix popover is not told its `open` prop fell to false, so a
-  // stale id would sit here and raise the editor again the next time that
-  // project came back. Adjusted during render for the same reason the editor's
-  // own draft re-seed is — an effect would opt this component out of the
-  // React Compiler.
-  if (identityEditorProjectId !== null && identityEditorProjectId !== currentProject?.id) {
-    setIdentityEditorProjectId(null);
-  }
-  const isIdentityEditorOpen = identityEditorProjectId !== null;
-  const shouldMountIdentityEditor = useKeepMounted(isIdentityEditorOpen);
-  // Selecting the item records the intent; the menu's own close hook spends it.
-  // Opening straight from `onSelect` would raise the popover inside the menu's
-  // teardown, where Radix still holds the focus trap and the outside-pointer
-  // lock — so the release that closed the menu can dismiss the popover it just
-  // opened. `onCloseAutoFocus` fires once the menu is actually gone.
-  // Carries WHICH project was right-clicked, not just that something was: the
-  // intent outlives the menu by an exit animation, and the project can change
-  // underneath it in that time.
-  const pendingIdentityEditRef = useRef<string | null>(null);
-  const handleEditProjectIdentity = useCallback(() => {
-    pendingIdentityEditRef.current = currentProject?.id ?? null;
-  }, [currentProject?.id]);
-  // Radix keeps the content mounted through its 120ms exit, so a menu reopened
-  // inside that window never unmounts and never reaches the close hook below.
-  // Dropping the intent on every open means the worst case is one edit request
-  // the user has visibly superseded, rather than a popover that springs open on
-  // some later, unrelated close.
-  const handlePillContextMenuOpenChange = useCallback((open: boolean) => {
-    if (!open) return;
-    pendingIdentityEditRef.current = null;
-    // Keyboard-opened menus never see the pill's hover preload.
-    void preloadProjectIdentityEditor().catch(() => {});
-  }, []);
-  const handlePillContextMenuCloseAutoFocus = useCallback(
-    (event: Event) => {
-      suppressPillTooltipForFocusRestore();
-      const pendingProjectId = pendingIdentityEditRef.current;
-      pendingIdentityEditRef.current = null;
-      // A project swapped in during the exit animation is a different project
-      // than the one the user right-clicked; drop the request rather than
-      // opening the editor over it. Every other close keeps the shared
-      // restore policy, so a keyboard dismissal lands back on the pill.
-      if (pendingProjectId === null || pendingProjectId !== currentProject?.id) return;
-      if (LazyProjectIdentityEditor.isLoaded()) {
-        event.preventDefault();
-        setIdentityEditorProjectId(pendingProjectId);
-        return;
-      }
-      // Chunk still in flight: nothing would take focus in the meantime, so let
-      // the menu restore it to the pill, and open only if the user hasn't moved
-      // on by the time it lands — a late popover must not steal focus.
-      void preloadProjectIdentityEditor().then(
-        () => {
-          const active = document.activeElement;
-          const pill = document.querySelector('[data-testid="project-switcher-trigger"]');
-          if (active !== pill && active !== document.body) return;
-          setIdentityEditorProjectId(pendingProjectId);
-        },
-        () => {}
-      );
-    },
-    [currentProject?.id, suppressPillTooltipForFocusRestore]
-  );
-  const handleIdentityEditorOpenChange = useCallback(
-    (next: boolean) => {
-      setIdentityEditorProjectId(next ? (currentProject?.id ?? null) : null);
-    },
-    [currentProject?.id]
-  );
-
-  const projectSwitcherTrigger = (
-    <ContextMenuTrigger asChild>
-      <TooltipTrigger asChild>
-        <ToolbarProjectPill
-          workspaceIdentity={workspaceIdentity}
-          emoji={currentProject?.emoji}
-          chipState={chipState}
-          branchName={branchName}
-          headSha={headSha}
-          isDropdownOpen={isDropdownOpen}
-          onClick={() => projectSwitcher.open("dropdown")}
-          onPointerEnter={handlePillPointerEnter}
-        />
-      </TooltipTrigger>
-    </ContextMenuTrigger>
   );
 
   // Static per view: a project view is bound to one host for its life.
@@ -2508,7 +1537,11 @@ export function Toolbar({
       {/* Brand marks in the toolbar are painted on the toolbar surface, not on
           whichever surface the theme happens to make hardest. */}
       <BrandSurface surface="surface-toolbar">
-        <ToolbarButtonsContextMenu rows={toolbarMenuRows} onToggle={handleToolbarMenuToggle}>
+        <ToolbarButtonsContextMenu
+          rows={toolbarMenuRows}
+          onToggle={handleToolbarMenuToggle}
+          projectToolbar={projectToolbarMenu}
+        >
           <div
             ref={toolbarRef}
             role="toolbar"
@@ -2568,7 +1601,13 @@ export function Toolbar({
               >
                 {renderGroupedButtons(effectiveLeftButtons, leftVisibleSet)}
               </div>
-              {renderOverflowMenu(visibleLeftOverflow, "left", leftMenuSeverity, leftObservations)}
+              {renderOverflowMenu(
+                visibleLeftOverflow,
+                "left",
+                leftMenuSeverity,
+                leftObservations,
+                branchOverflowRow
+              )}
             </div>
 
             {/* CENTER GROUP - Grid-centered, shrinks gracefully on narrow windows */}
@@ -2622,6 +1661,7 @@ export function Toolbar({
                         onStopProject={handleStopProject}
                         onCloseProject={handleCloseProject}
                         onSleepProject={handleSleepProject}
+                        onRestartProject={handleRestartProject}
                         onLocateProject={handleLocateProject}
                         onMoveOrRenameProject={handleMoveOrRenameProject}
                         onTogglePinProject={projectSwitcher.togglePinProject}
@@ -2710,6 +1750,7 @@ export function Toolbar({
                         <Settings data-menu-icon className="mr-2 h-3.5 w-3.5" />
                         Project settings…
                       </ContextMenuItem>
+                      <ProjectPluginMenuItems projectId={currentProject.id} />
                       {activeSearchableProject && activeProjectHasProcesses && (
                         <ContextMenuItem
                           destructive

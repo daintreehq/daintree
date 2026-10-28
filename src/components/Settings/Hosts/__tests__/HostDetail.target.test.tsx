@@ -19,6 +19,8 @@ const client = vi.hoisted(() => ({
 vi.mock("@/clients/remoteHostsClient", () => ({ remoteHostsClient: client }));
 vi.mock("../HostPluginsSection", () => ({ HostPluginsSection: () => null }));
 vi.mock("../HostCopySettingsSection", () => ({ HostCopySettingsSection: () => null }));
+vi.mock("../HostSettingsSection", () => ({ HostSettingsSection: () => null }));
+vi.mock("../HostSessionsSection", () => ({ HostSessionsSection: () => null }));
 
 import { HostDetail } from "../HostDetail";
 
@@ -55,6 +57,8 @@ function probe(overrides: Partial<HostProbeResult> = {}): HostProbeResult {
     appImages: [],
     canDownload: true,
     matchesClient: null,
+    hostBuild: null,
+    stagedUpdate: null,
     advice: {
       sleepObserved: null,
       sleepDisabled: null,

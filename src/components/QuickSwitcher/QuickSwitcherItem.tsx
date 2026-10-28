@@ -2,6 +2,7 @@ import { cn } from "@/lib/utils";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { FolderGit2 } from "@/components/icons";
+import { PanelKindIcon } from "@/components/PanelPalette/PanelKindIcon";
 import type { QuickSwitcherItem as QuickSwitcherItemData } from "@/hooks/useQuickSwitcher";
 import type { FuseResultMatch } from "@/hooks/useSearchablePalette";
 import { HighlightedText, findMatchIndices } from "@/components/ui/HighlightedText";
@@ -22,8 +23,11 @@ export interface QuickSwitcherItemProps {
  * doesn't. A plain shell titled "Terminal" labelled "terminal" said the same
  * word twice; an agent pane the user renamed still benefits from "Claude".
  * Worktree rows carry no label — the branch glyph already says what they are.
+ * A plugin result names the provider it came from, so a row the host drew
+ * from plugin data is always attributed.
  */
 function runtimeLabel(item: QuickSwitcherItemData): string | null {
+  if (item.type === "plugin") return item.pluginHit?.providerTitle ?? null;
   if (item.type !== "terminal") return null;
   const label = item.chrome?.label?.trim();
   if (!label) return null;
@@ -120,6 +124,8 @@ export function QuickSwitcherItem({
       <span className="shrink-0 text-text-secondary" aria-hidden="true">
         {item.type === "terminal" ? (
           <TerminalIcon kind={item.terminalKind} chrome={item.chrome} />
+        ) : item.type === "plugin" ? (
+          <PanelKindIcon iconId={item.pluginHit?.row.iconId ?? ""} size={16} />
         ) : (
           <FolderGit2 className="w-4 h-4" />
         )}

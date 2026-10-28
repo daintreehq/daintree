@@ -24,10 +24,22 @@ import { keyBelongsToField, stepListboxCursor } from "@/hooks/useListboxCursor";
 interface IssuePickerDialogProps {
   isOpen: boolean;
   onClose: () => void;
-  worktree: WorktreeState;
+  /**
+   * What the picker lists issues for and compares the current link against.
+   * A worktree card passes its worktree; the New Worktree form, which has no
+   * worktree yet, passes the project path and the issue it has picked so far.
+   */
+  worktree: Pick<WorktreeState, "path" | "issueProviderId" | "issueKey">;
   currentIssueNumber?: number;
   onAttach: (issue: Issue) => void;
   onDetach: () => void;
+  /** `"nested"` when opened from inside another dialog, so it layers above it. */
+  zIndex?: "modal" | "nested";
+  /**
+   * Picking for a form that hasn't been submitted yet, so nothing is linked
+   * until the form is: the copy talks about a selection, not a link.
+   */
+  draft?: boolean;
 }
 
 type StateFilter = "open" | "closed" | "all";
@@ -113,7 +125,7 @@ function IssueOptionRow({
             )}
           </span>
           <span className="block text-xs text-text-secondary tabular-nums">
-            #{issue.number}
+            {issue.key ?? `#${issue.number}`}
             <span className="sr-only">{isOpenIssue ? ", open" : ", closed"}</span>
           </span>
         </span>
@@ -129,6 +141,8 @@ export function IssuePickerDialog({
   currentIssueNumber,
   onAttach,
   onDetach,
+  zIndex,
+  draft = false,
 }: IssuePickerDialogProps) {
   const [search, setSearch] = useState("");
   const [stateFilter, setStateFilter] = useState<StateFilter>("open");
@@ -389,11 +403,17 @@ export function IssuePickerDialog({
       >
         {issues.map((issue, index) => (
           <IssueOptionRow
-            key={issue.number}
+            key={issue.id ?? issue.key ?? issue.number}
             id={optionId(index)}
             issue={issue}
             isActive={index === selectedIndex}
-            isCurrentlyAttached={issue.number === currentIssueNumber}
+            // Same number and same owner (#13744): a tracker's ENG-42 isn't the
+            // code forge's #42 the worktree is linked to.
+            isCurrentlyAttached={
+              issue.number === currentIssueNumber &&
+              (issue.providerId ?? undefined) === (worktree.issueProviderId ?? undefined) &&
+              (worktree.issueKey === undefined || issue.key === worktree.issueKey)
+            }
             onPoint={() => {
               if (index !== selectedIndex) setSelectedIndex(index);
             }}
@@ -408,6 +428,7 @@ export function IssuePickerDialog({
     <AppDialog
       isOpen={isOpen}
       onClose={onClose}
+      zIndex={zIndex}
       size="md"
       maxHeight="max-h-[70vh]"
       // A fixed height keeps the search field still while the body swaps
@@ -416,7 +437,13 @@ export function IssuePickerDialog({
     >
       <AppDialog.Header>
         <AppDialog.Title icon={<Link className="w-4 h-4 text-text-secondary" />}>
-          {isLinked ? "Change linked issue" : "Attach issue"}
+          {draft
+            ? isLinked
+              ? "Change selected issue"
+              : "Select issue"
+            : isLinked
+              ? "Change linked issue"
+              : "Attach issue"}
         </AppDialog.Title>
         <AppDialog.CloseButton />
       </AppDialog.Header>
@@ -466,7 +493,7 @@ export function IssuePickerDialog({
           isLinked || !hasResults ? undefined : (
             <>
               <Kbd>↵</Kbd>
-              <span>to link</span>
+              <span>{draft ? "to select" : "to link"}</span>
             </>
           )
         }
@@ -474,7 +501,9 @@ export function IssuePickerDialog({
         {isLinked && (
           <Button variant="ghost" onClick={handleDetach} className="text-text-secondary mr-auto">
             <Link2Off aria-hidden="true" />
-            Unlink issue #{currentIssueNumber}
+            {draft
+              ? "Clear selection"
+              : `Unlink issue ${worktree.issueKey ?? `#${currentIssueNumber}`}`}
           </Button>
         )}
         <Button variant="ghost" onClick={onClose} className="text-text-secondary">

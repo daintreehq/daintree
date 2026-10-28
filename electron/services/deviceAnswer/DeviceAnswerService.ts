@@ -21,7 +21,8 @@ import {
 import { redactSecrets } from "../redactSecrets.js";
 import { DEVICE_PAGE_CSP, DEVICE_PAGE_HTML } from "./deviceAnswerPage.js";
 import { MAX_AUDIT_ENTRIES, MAX_PAIRED_DEVICES, isValidPort } from "./deviceAnswerSettings.js";
-import type { WaitingRunView } from "./deviceAnswerRuns.js";
+import { LOCAL_HOST_ID, isLocalHostId } from "../../../shared/types/remoteHosts.js";
+import type { DeviceWaitingList } from "./deviceAnswerRuns.js";
 
 const MAX_BODY_BYTES = 8 * 1024;
 /** How much of an oversized body is read off the socket before it is cut. */
@@ -43,20 +44,28 @@ export interface DevicePrincipal {
 export interface DeviceAnswerServiceDeps {
   readSettings: () => DeviceAnswerSettings;
   writeSettings: (settings: DeviceAnswerSettings) => void;
-  listWaiting: () => Promise<WaitingRunView[]>;
   /**
-   * Press the option labelled `label` in the run, for `device`. Resolves when
-   * every key went in; rejects with the reason, in words the page shows, when
-   * anything stopped it. `stillAllowed` is the service's own say before every
-   * key: the device still paired and the listener still on.
+   * This machine's waiting runs, with every connected host's when `hosts` is
+   * set, each tagged with its machine.
+   */
+  listWaiting: (options: { hosts: boolean }) => Promise<DeviceWaitingList>;
+  /**
+   * Press the option labelled `label` in the run on `hostId` (`LOCAL_HOST_ID`
+   * for this machine), for `device`. Resolves when every key went in; rejects
+   * with the reason, in words the page shows, when anything stopped it.
+   * `stillAllowed` is the service's own say before every key: the device
+   * still paired and the listener still on.
    */
   answer: (request: {
     device: DevicePrincipal;
+    hostId: string;
     runId: string;
     spawnedAt: number;
     label: string;
     stillAllowed: () => string | null;
   }) => Promise<void>;
+  /** A connected host's name for the audit, or null when it isn't in the host list. */
+  hostName?: (hostId: string) => string | null;
   onStatusChanged: (status: DeviceAnswerStatus) => void;
   now?: () => number;
 }
@@ -328,10 +337,14 @@ export class DeviceAnswerService {
 
       const device = this.authenticate(req.headers.authorization);
       if (req.method === "GET" && url.pathname === "/api/waiting") {
-        const runs = await this.deps.listWaiting();
+        // A page from before hosts were listed answers every run as this
+        // machine's, so it is shown this machine's alone.
+        const { runs, hosts, hostsUnlisted } = await this.deps.listWaiting({
+          hosts: url.searchParams.get("hosts") === "1",
+        });
         // Only a device still paired once the screens are read is shown them.
         this.requireStillPaired(device);
-        this.sendJson(res, 200, { runs });
+        this.sendJson(res, 200, { runs, hosts, hostsUnlisted: hostsUnlisted === true });
         return;
       }
       if (req.method === "POST" && url.pathname === "/api/answer") {
@@ -451,8 +464,13 @@ export class DeviceAnswerService {
     times.push(now);
     this.answerTimes.set(device.id, times);
 
-    const { runId, spawnedAt, label } = (body ?? {}) as Record<string, unknown>;
+    const { hostId: rawHostId, runId, spawnedAt, label } = (body ?? {}) as Record<string, unknown>;
+    // A page from before hosts were listed names none: it was shown this machine's runs only.
+    const hostId = rawHostId === undefined ? LOCAL_HOST_ID : rawHostId;
     if (
+      typeof hostId !== "string" ||
+      hostId === "" ||
+      hostId.length > 64 ||
       typeof runId !== "string" ||
       runId === "" ||
       runId.length > 256 ||
@@ -467,10 +485,16 @@ export class DeviceAnswerService {
     // A page from before redaction, or a hand-made request, can still send a
     // label with a secret in it; the audit is kept on disk and shown in Settings.
     const audited = redactSecrets(label);
+    const local = isLocalHostId(hostId);
+    const auditedHost = redactSecrets(hostId);
+    const onHost = local
+      ? {}
+      : { hostId: auditedHost, hostName: this.deps.hostName?.(hostId) ?? auditedHost };
     const generation = this.listenerGeneration;
     try {
       await this.deps.answer({
         device,
+        hostId: local ? LOCAL_HOST_ID : hostId,
         runId,
         spawnedAt,
         label,
@@ -491,6 +515,7 @@ export class DeviceAnswerService {
         deviceId: device.id,
         deviceName: device.name,
         runId,
+        ...onHost,
         label: audited,
         outcome: "refused",
         reason,
@@ -502,6 +527,7 @@ export class DeviceAnswerService {
       deviceId: device.id,
       deviceName: device.name,
       runId,
+      ...onHost,
       label: audited,
       outcome: "answered",
     });
@@ -552,7 +578,8 @@ function headerValue(value: string | string[] | undefined): string | undefined {
 function refusalText(error: unknown): string {
   const userMessage = (error as { userMessage?: unknown } | null)?.userMessage;
   if (typeof userMessage === "string" && userMessage !== "") return userMessage;
-  return "Nothing was pressed.";
+  // Nothing says how far it got.
+  return "Something went wrong while answering. Check the screen before answering again.";
 }
 
 function readJson(req: http.IncomingMessage): Promise<unknown> {

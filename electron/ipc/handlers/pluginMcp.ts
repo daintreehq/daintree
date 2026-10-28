@@ -18,6 +18,7 @@ import type {
   PluginMcpConsentRequest,
 } from "../../services/plugin-mcp/PluginMcpConsentService.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { projectIdFromPluginInstanceKey } from "../../../shared/types/plugin.js";
 import { PLUGIN_MCP_RATE_LIMITED_CODE } from "../../../shared/types/ipc/pluginMcpAudit.js";
 import {
   PLUGIN_MCP_CONSENT_TIMEOUT_MS,
@@ -69,11 +70,29 @@ async function getPluginMcpInstances(): Promise<PluginMcpInstancesModule> {
   return (cachedPluginMcpInstances ??= await import("../../services/plugin-mcp/instances.js"));
 }
 
+/**
+ * A project plugin's server exists only to serve its own agentMcp endpoint,
+ * under grants bound to its project. This host-client surface has no project
+ * binding to check, so it never sees or reaches one.
+ */
+function isProjectInstanceServer(pluginId: string): boolean {
+  return projectIdFromPluginInstanceKey(pluginId) !== null;
+}
+
+function assertHostClientServer(key: PluginMcpServerKey): void {
+  if (isProjectInstanceServer(key.pluginId)) {
+    throw new Error(
+      `"${key.pluginId}/${key.serverId}" belongs to a project plugin and serves only that project's agents`
+    );
+  }
+}
+
 async function handleList(): Promise<PluginMcpServerInfo[]> {
-  return (await getSupervisor()).list();
+  return (await getSupervisor()).list().filter((info) => !isProjectInstanceServer(info.pluginId));
 }
 
 async function handleGetStderr(key: PluginMcpServerKey): Promise<PluginMcpStderrResult> {
+  assertHostClientServer(key);
   return (await getSupervisor()).getStderr(key.pluginId, key.serverId);
 }
 
@@ -106,6 +125,7 @@ async function handleGetFullSchema(key: PluginMcpToolKey): Promise<PluginMcpGetF
  * and never holds a stale `resolveSettings` closure across a plugin reload.
  */
 async function ensureServerStarted(key: PluginMcpServerKey): Promise<void> {
+  assertHostClientServer(key);
   const pluginService = await getPluginService();
   const lookup = pluginService.findMcpServerContribution(key.pluginId, key.serverId);
   if (!lookup) {
@@ -130,6 +150,7 @@ async function ensureServerStarted(key: PluginMcpServerKey): Promise<void> {
  * decoupled from `PluginService`.
  */
 async function handleRestart(key: PluginMcpServerKey): Promise<void> {
+  assertHostClientServer(key);
   const pluginService = await getPluginService();
   const lookup = pluginService.findMcpServerContribution(key.pluginId, key.serverId);
   if (!lookup) {

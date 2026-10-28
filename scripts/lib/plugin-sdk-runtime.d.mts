@@ -4,7 +4,9 @@
 import type { BuildOptions } from "esbuild";
 
 /** Output file name (without `.js`) → SDK source entry, repo-relative. */
-export const PLUGIN_SDK_RUNTIME_ENTRIES: Readonly<Record<"index" | "files" | "data", string>>;
+export const PLUGIN_SDK_RUNTIME_ENTRIES: Readonly<
+  Record<"index" | "files" | "data" | "operations", string>
+>;
 
 /** Repo-relative directory the app build writes the SDK copy to. */
 export const PLUGIN_SDK_RUNTIME_OUTDIR: string;

@@ -144,7 +144,7 @@ describe("TerminalViewportAnchorController (real xterm)", () => {
     expect(topLine(terminal)).not.toBe(anchorLine);
   });
 
-  it("pins the beta.304 premise: ESC[3J reaches no public onScroll and drops isUserScrolling", async () => {
+  it("pins the beta.315 premise: ESC[3J reaches no public onScroll and drops isUserScrolling", async () => {
     const { terminal } = await scrolledBackTerminal();
     track(terminal);
     const onScroll = vi.fn();

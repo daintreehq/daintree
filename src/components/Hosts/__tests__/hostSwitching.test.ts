@@ -26,6 +26,8 @@ import {
 import { takePendingHostUpdate } from "@/components/Settings/Hosts/hostUpdateRequests";
 import { takePendingHostSettings } from "@/components/Settings/Hosts/hostSettingsRequests";
 import { notifyHostSwitchFailure, switchToHost } from "../hostSwitching";
+import { usePendingHostSwitchStore } from "@/store/pendingHostSwitchStore";
+import type { PendingHostSwitch } from "@shared/types/ipc/remoteHosts";
 
 const HANDSHAKE = {
   version: "1.3.0",
@@ -69,7 +71,21 @@ beforeEach(() => {
   };
 });
 
-afterEach(() => _resetHostProjectPickerForTesting());
+afterEach(() => {
+  _resetHostProjectPickerForTesting();
+  usePendingHostSwitchStore.setState({ pending: null });
+});
+
+function failedPending(switchId: string): PendingHostSwitch {
+  return {
+    switchId,
+    hostId: "h1",
+    hostName: "studio-01",
+    projectName: null,
+    phase: "failed",
+    failure: { code: "HOST_DISCONNECTED", message: "down" },
+  };
+}
 
 describe("switchToHost", () => {
   it("shows the host's project list when the host had nothing to return to", async () => {
@@ -134,6 +150,49 @@ describe("switchToHost", () => {
     expect(toast.actions.map((action) => action.label)).toEqual(["Set up…"]);
     toast.actions[0]!.onClick();
     expect(takePendingHostUpdate()).toBe("h1");
+  });
+
+  it("offers a retry, not setting up, when Host mode is off on a host this machine has reached", async () => {
+    const entry = studio({
+      status: "unreachable",
+      lastSeenAt: 1_000,
+      detail: null,
+      hostModeOff: true,
+    });
+    entry.descriptor.lastSeenAt = 1_000;
+    m.hosts = [entry];
+    m.switchWindowHost.mockRejectedValue(
+      new ClientAppError(
+        "HOST_MODE_OFF",
+        "Daintree isn't running in Host mode on studio-01",
+        "Daintree isn't listening on studio-01. Try again once it's running there."
+      )
+    );
+    await switchToHost("h1", false, "p1");
+    const toast: { message: string; actions: Array<{ label: string; onClick: () => void }> } =
+      m.notify.mock.calls[0]![0];
+    expect(toast.message).toBe(
+      "Daintree isn't listening on studio-01. Try again once it's running there."
+    );
+    expect(toast.actions.map((action) => action.label)).toEqual(["Retry"]);
+    m.switchWindowHost.mockClear();
+    toast.actions[0]!.onClick();
+    await vi.waitFor(() => expect(m.switchWindowHost).toHaveBeenCalledTimes(1));
+  });
+
+  it("offers a retry when the host list hasn't said whether it was ever reached", async () => {
+    // A restore's toast can come before the host list has loaded.
+    m.hosts = [];
+    m.switchWindowHost.mockRejectedValue(
+      new ClientAppError(
+        "HOST_MODE_OFF",
+        "Daintree isn't running in Host mode on studio-01",
+        "Daintree isn't listening on studio-01. Try again once it's running there."
+      )
+    );
+    await switchToHost("h1", false, "p1");
+    const toast: { actions: Array<{ label: string }> } = m.notify.mock.calls[0]![0];
+    expect(toast.actions.map((action) => action.label)).toEqual(["Retry"]);
   });
 
   it("says what ssh said and offers the host's settings when ssh couldn't log in", async () => {
@@ -223,6 +282,51 @@ describe("switchToHost", () => {
     m.switchWindowHost.mockRejectedValueOnce(new ClientAppError("HOST_DISCONNECTED", "gone"));
     await switchToHost("h1", false, undefined, { onStayed });
     expect(onStayed).toHaveBeenCalledTimes(2);
+  });
+
+  it("adds nothing for a failure the window's switch screen is already showing", async () => {
+    const onStayed = vi.fn();
+    const onScreen = new ClientAppError(
+      "HOST_DISCONNECTED",
+      "Host h1 did not connect (timeout)",
+      "Couldn't reach this host. Check that it is on and try again.",
+      { code: "HOST_SWITCH_ON_SCREEN", switchId: "1:1:x" }
+    );
+    m.switchWindowHost.mockRejectedValueOnce(onScreen);
+    await switchToHost("h1", false, "p", { onStayed });
+
+    // The window is on the switch's screen, not where it was.
+    expect(m.notify).not.toHaveBeenCalled();
+    expect(onStayed).not.toHaveBeenCalled();
+    notifyHostSwitchFailure("h1", onScreen, () => {});
+    expect(m.notify).not.toHaveBeenCalled();
+
+    // Cancel on that screen takes the window back: now it stayed.
+    usePendingHostSwitchStore.setState({ pending: failedPending("1:1:x") });
+    expect(onStayed).not.toHaveBeenCalled();
+    usePendingHostSwitchStore.setState({ pending: null });
+    // Heard once the screen has gone, so the focus it puts back sticks.
+    expect(onStayed).not.toHaveBeenCalled();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(onStayed).toHaveBeenCalledTimes(1);
+  });
+
+  it("doesn't say the window stayed when a Retry takes the failed screen over", async () => {
+    const onStayed = vi.fn();
+    m.switchWindowHost.mockRejectedValueOnce(
+      new ClientAppError("HOST_DISCONNECTED", "down", "down", {
+        code: "HOST_SWITCH_ON_SCREEN",
+        switchId: "1:1:x",
+      })
+    );
+    await switchToHost("h1", false, "p", { onStayed });
+    usePendingHostSwitchStore.setState({ pending: failedPending("1:1:x") });
+    usePendingHostSwitchStore.setState({
+      pending: { ...failedPending("1:2:y"), phase: "connecting", failure: undefined },
+    });
+    usePendingHostSwitchStore.setState({ pending: null });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(onStayed).not.toHaveBeenCalled();
   });
 
   it("offers a retry, not the project list, for a host that is no longer listed", async () => {

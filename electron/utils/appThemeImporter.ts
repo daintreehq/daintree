@@ -7,6 +7,9 @@ import {
   getAppThemeWarnings,
   getBuiltInAppSchemeForType,
   inferAppThemeTypeFromTokens,
+  isCssDeclarationValue,
+  isExtensionKey,
+  isPluginThemeId,
   normalizeAppColorScheme,
   validateImportedThemeData,
   type AppThemeImportResult,
@@ -134,9 +137,12 @@ export function parseAppThemeContent(content: string, filename: string): AppThem
   const resolvedType =
     rawTheme.type ?? paletteType ?? inferAppThemeTypeFromTokens(rawTokens) ?? "dark";
   const name = rawTheme.name?.trim() || getFileDisplayName(filename);
+  // The plugin namespace is reserved, so a file claiming an id in it gets a
+  // generated one rather than sitting beside the plugin theme it names.
+  const fileId = rawTheme.id?.trim();
   const scheme = normalizeAppColorScheme(
     {
-      id: rawTheme.id?.trim() || generateThemeId(name),
+      id: fileId && !isPluginThemeId(fileId) ? fileId : generateThemeId(name),
       name,
       type: resolvedType,
       tokens: rawTokens,
@@ -167,6 +173,36 @@ export function parseAppThemeContent(content: string, filename: string): AppThem
         message: `Ignored unknown tokens: ${unknownTokens.join(", ")}`,
       });
     }
+  }
+
+  // Read the names off the raw JSON: zod skips a `__proto__` record key, so
+  // the parsed object would hide it from the report.
+  const rawExtensions =
+    "extensions" in rawData && rawData.extensions && typeof rawData.extensions === "object"
+      ? Object.entries(rawData.extensions)
+      : [];
+  const unknownExtensions = rawExtensions
+    .filter(([key]) => !isExtensionKey(key))
+    .map(([key]) => key)
+    .sort();
+  if (unknownExtensions.length > 0) {
+    warnings.push({
+      kind: "unknown-tokens",
+      message: `Ignored unknown extensions: ${unknownExtensions.join(", ")}`,
+    });
+  }
+  const unsafeExtensions = rawExtensions
+    .filter(
+      ([key, value]) =>
+        isExtensionKey(key) && typeof value === "string" && !isCssDeclarationValue(value)
+    )
+    .map(([key]) => key)
+    .sort();
+  if (unsafeExtensions.length > 0) {
+    warnings.push({
+      kind: "unknown-tokens",
+      message: `Ignored extensions whose value is not a single CSS value: ${unsafeExtensions.join(", ")}`,
+    });
   }
 
   warnings.push(...getAppThemeWarnings(scheme));

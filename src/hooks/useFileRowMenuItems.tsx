@@ -1,5 +1,6 @@
 import { Fragment, useCallback, useMemo } from "react";
 import type React from "react";
+import { useShallow } from "zustand/react/shallow";
 import { Copy, ExternalLink, FileDiff, RotateCcw, Trash2 } from "lucide-react";
 import { AtSign, FileText, FolderOpen, Folders, Package } from "@/components/icons";
 import {
@@ -32,8 +33,11 @@ import { notify } from "@/lib/notify";
 import { copyWithToast } from "@/lib/copyWithToast";
 import { captureCopyFlash } from "@/lib/copyFlash";
 import { actionService } from "@/services/ActionService";
+import { isWorktreeRelativePath, matchesFileMenuTarget } from "@/registry/fileMenuMatch";
+import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import type { BuiltInRuntimeActionId } from "@shared/config/actionIds";
 import type { CopyTreeRunSource, GitStatus } from "@shared/types";
+import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
 
 const ICON_CLASS = "w-3.5 h-3.5 mr-2";
 
@@ -303,6 +307,19 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
     }
     return [...byPluginId.entries()];
   }, [filePluginItems]);
+  // A group's `pluginId` is the instance key, which for a project plugin prints
+  // a machine-local project id (#12211), so the heading is the display name with
+  // the manifest id as fallback. Names rather than meta records: the store
+  // rebuilds every record on each provenance pull, and this hook's surface
+  // re-renders every row it lists.
+  const pluginGroupNames = usePluginRuntimeStore(
+    useShallow((s) =>
+      pluginGroups.map(
+        ([pluginId]) =>
+          s.pluginMetaById.get(pluginId)?.displayName ?? pluginManifestIdFromInstanceKey(pluginId)
+      )
+    )
+  );
 
   const reveal = useMemo(() => revealCopy(), []);
   const insertAriaKeyshortcuts = comboToAriaKeyshortcuts(INSERT_FILE_REFERENCE_COMBO, isMac());
@@ -417,6 +434,16 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
       // file gets this alone: with nothing to restore to, discarding it and
       // deleting it are one operation, so it is offered once.
       const showDelete = canMutate && status !== "deleted" && status !== "conflicted";
+      // The host decides which rows an item applies to (kind, extensions,
+      // paths), so a plugin never has to no-op on a row it wasn't meant for. A
+      // group left empty drops out, and with it the submenu and its label.
+      const rowGroups = pluginGroups
+        .map(([pluginId, entries], index) => ({
+          pluginId,
+          name: pluginGroupNames[index],
+          entries: entries.filter((entry) => matchesFileMenuTarget(entry.item, target)),
+        }))
+        .filter((group) => group.entries.length > 0);
 
       return (
         <>
@@ -539,7 +566,7 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
               similarly named items stay tellable apart — the same shape the
               worktree card's Extensions uses. Rendered only when something
               contributes: an empty submenu is a dead end. */}
-          {pluginGroups.length > 0 && (
+          {rowGroups.length > 0 && (
             <>
               <ContextMenuSeparator />
               <ContextMenuSub>
@@ -548,10 +575,10 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
                   Extensions
                 </ContextMenuSubTrigger>
                 <ContextMenuSubContent>
-                  {pluginGroups.map(([pluginId, entries], groupIndex) => (
+                  {rowGroups.map(({ pluginId, name: groupName, entries }, groupIndex) => (
                     <Fragment key={pluginId}>
-                      {pluginGroups.length > 1 && groupIndex > 0 && <ContextMenuSeparator />}
-                      {pluginGroups.length > 1 && <ContextMenuLabel>{pluginId}</ContextMenuLabel>}
+                      {rowGroups.length > 1 && groupIndex > 0 && <ContextMenuSeparator />}
+                      {rowGroups.length > 1 && <ContextMenuLabel>{groupName}</ContextMenuLabel>}
                       {/* Still the shared section, one call per group: it owns
                           the action source, the namespaced keys and the
                           dispatch, and a second copy of that here is how the
@@ -564,6 +591,8 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
                         leadingSeparator={false}
                         dispatchArgs={{
                           path: absolutePath,
+                          isDirectory,
+                          ...(isWorktreeRelativePath(relativePath) && { relativePath }),
                           ...(worktreePath && { worktreePath }),
                           ...(status && { status }),
                         }}
@@ -599,6 +628,7 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
       worktreePath,
       worktreeId,
       pluginGroups,
+      pluginGroupNames,
       canInsert,
       insertRefusalMeta,
       insertRefusalLabel,

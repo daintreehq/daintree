@@ -36,6 +36,12 @@ function seed(connection: HostConnectionState | null, extra: Record<string, unkn
   });
 }
 
+/** The severity the banner's glyph (or the spinner in its place) is coloured with. */
+function glyphSeverity(container: HTMLElement): string | null {
+  const style = container.querySelector('[style*="--color-status-"]')?.getAttribute("style") ?? "";
+  return /--color-status-(\w+)/.exec(style)?.[1] ?? null;
+}
+
 beforeAll(() => {
   Object.defineProperty(window, "matchMedia", {
     writable: true,
@@ -83,59 +89,195 @@ describe("HostConnectionBanner", () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it("holds the reconnecting banner behind the 400ms gate", () => {
+  it("holds a lost link's banner until the drop outlasts the settle window", () => {
     vi.useFakeTimers();
     seed({ status: "connecting", attempt: 1 });
+    const { container } = render(<HostConnectionBanner />);
+    act(() => {
+      vi.advanceTimersByTime(29_000);
+    });
+    expect(container.firstChild).toBeNull();
+    act(() => {
+      vi.advanceTimersByTime(1_000);
+    });
+    expect(screen.getByText("Connection to studio-01 lost. Reconnecting…")).toBeTruthy();
+    expect(screen.getByText("Terminals are read-only until it reconnects.")).toBeTruthy();
+    expect(screen.getByRole("status")).toBeTruthy();
+    // Stalled past the window: a way to try now rather than wait for the next dial.
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(connect).toHaveBeenCalledWith({ hostId: "studio-01", restart: true });
+  });
+
+  it("shows a stalled drop at the settle deadline from when it went down, however often it backs off", () => {
+    vi.useFakeTimers();
+    seed({ status: "connecting", attempt: 1 });
+    const { container } = render(<HostConnectionBanner />);
+    for (let attempt = 2; attempt < 9; attempt++) {
+      act(() => {
+        seed({ status: "unreachable", lastSeenAt: null, detail: "Connection refused" });
+      });
+      act(() => {
+        vi.advanceTimersByTime(2_000);
+      });
+      act(() => {
+        seed({ status: "connecting", attempt });
+      });
+      act(() => {
+        vi.advanceTimersByTime(2_000);
+      });
+    }
+    // 28 s down, through seven back-off swaps.
+    expect(container.firstChild).toBeNull();
+    act(() => {
+      vi.advanceTimersByTime(2_000);
+    });
+    expect(screen.getByText("Connection to studio-01 lost. Reconnecting…")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    // Stalled past the settle window: an error with its recovery, like unreachable.
+    expect(glyphSeverity(container)).toBe("error");
+  });
+
+  it("never shows a drop that recovers inside the settle window, however often it backs off", () => {
+    vi.useFakeTimers();
+    seed({ status: "connecting", attempt: 1 });
+    const { container } = render(<HostConnectionBanner />);
+    for (let attempt = 2; attempt < 6; attempt++) {
+      act(() => {
+        seed({ status: "unreachable", lastSeenAt: null, detail: "Connection refused" });
+      });
+      act(() => {
+        vi.advanceTimersByTime(5_000);
+      });
+      act(() => {
+        seed({ status: "connecting", attempt });
+      });
+      expect(container.firstChild).toBeNull();
+    }
+    act(() => {
+      seed({ status: "connected", rttMs: 5, handshake: HANDSHAKE });
+    });
+    act(() => {
+      vi.advanceTimersByTime(60_000);
+    });
+    expect(container.firstChild).toBeNull();
+  });
+
+  it("shows a first connect behind only the 400ms gate", () => {
+    vi.useFakeTimers();
+    seed({ status: "connecting", attempt: 1 }, { everConnected: false });
     const { container } = render(<HostConnectionBanner />);
     expect(container.firstChild).toBeNull();
     act(() => {
       vi.advanceTimersByTime(400);
     });
-    expect(screen.getByText("Connection to studio-01 lost. Reconnecting…")).toBeTruthy();
-    expect(screen.getByText("Terminals are read-only until it reconnects.")).toBeTruthy();
-    expect(screen.getByRole("status")).toBeTruthy();
+    expect(screen.getByText("Connecting to studio-01…")).toBeTruthy();
+    expect(screen.queryByRole("button")).toBeNull();
   });
 
-  it("never shows a blip that recovers inside the gate", () => {
+  it("holds one calm restarting banner through a host's announced restart", () => {
     vi.useFakeTimers();
-    seed({ status: "connecting", attempt: 1 });
+    seed({ status: "connecting", attempt: 1, restarting: true });
+    const { container } = render(<HostConnectionBanner />);
+    const titles = new Set<string>();
+    for (let attempt = 2; attempt < 40; attempt++) {
+      act(() => {
+        seed({
+          status: "unreachable",
+          lastSeenAt: null,
+          detail: "Daintree isn't running in Host mode there (no host.json).",
+          restarting: true,
+        });
+      });
+      act(() => {
+        vi.advanceTimersByTime(1_000);
+      });
+      if (container.textContent) titles.add(container.textContent);
+      act(() => {
+        seed({ status: "connecting", attempt, restarting: true });
+      });
+      if (container.textContent) titles.add(container.textContent);
+    }
+    expect([...titles].every((text) => text.includes("studio-01 is restarting…"))).toBe(true);
+    expect(titles.size).toBeGreaterThan(0);
+    expect(container.textContent).not.toMatch(/lost|unreachable/);
+    // Calm: the host's own word that it is coming back.
+    expect(glyphSeverity(container)).toBe("warning");
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(connect).toHaveBeenCalledWith({ hostId: "studio-01", restart: true });
+  });
+
+  it("holds a restart behind the settle window like any other drop", () => {
+    vi.useFakeTimers();
+    seed({ status: "connecting", attempt: 1, restarting: true });
     const { container } = render(<HostConnectionBanner />);
     act(() => {
-      seed({ status: "connected", rttMs: 5, handshake: HANDSHAKE });
-    });
-    act(() => {
-      vi.advanceTimersByTime(1000);
+      vi.advanceTimersByTime(29_000);
     });
     expect(container.firstChild).toBeNull();
+    act(() => {
+      vi.advanceTimersByTime(1_000);
+    });
+    expect(screen.getByText("studio-01 is restarting…")).toBeTruthy();
   });
 
   it("says unreachable with when it was last seen, and retries on request", () => {
     const now = Date.now();
     seed(
       { status: "unreachable", lastSeenAt: now - 120_000, detail: "Connection refused" },
-      { lastSeenAt: now - 120_000 }
+      { lastSeenAt: now - 120_000, everConnected: false }
     );
     render(<HostConnectionBanner />);
     expect(screen.getByRole("status").textContent).toContain(
       "studio-01 is unreachable · last seen 2 minutes ago"
     );
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-    expect(connect).toHaveBeenCalledWith({ hostId: "studio-01" });
+    // Starts over even when an attempt is stuck, rather than waiting it out.
+    expect(connect).toHaveBeenCalledWith({ hostId: "studio-01", restart: true });
   });
 
   it("is never a live region: back-off swaps would be read out on every cycle", () => {
-    seed({ status: "unreachable", lastSeenAt: null, detail: null });
+    seed({ status: "unreachable", lastSeenAt: null, detail: null }, { everConnected: false });
     render(<HostConnectionBanner />);
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.getByRole("status").getAttribute("aria-live")).toBe("off");
   });
 
-  it("says Host mode is off and offers to set it up instead of Retry", () => {
+  it("says Daintree isn't listening on the host, offering Retry beside setting it up", () => {
     seed({ status: "unreachable", lastSeenAt: null, detail: null, hostModeOff: true });
     render(<HostConnectionBanner />);
-    expect(screen.getByText("Daintree isn't running in Host mode on studio-01")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(screen.getByText("Daintree isn't listening on studio-01")).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toContain(
+      "This window reconnects once Daintree is running there again."
+    );
+    // Not a prompt to install: the host may well be set up and on its way back.
+    expect(screen.getByRole("status").textContent).not.toContain("set up there");
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(connect).toHaveBeenCalledWith({ hostId: "studio-01", restart: true });
     expect(screen.getByRole("button", { name: "Set up…" })).toBeTruthy();
+  });
+
+  it("keeps counting how long ago a host whose Daintree isn't listening was last seen", () => {
+    vi.useFakeTimers();
+    try {
+      const start = Date.UTC(2026, 9, 22, 12);
+      vi.setSystemTime(start);
+      seed(
+        { status: "unreachable", lastSeenAt: start - 60_000, detail: null, hostModeOff: true },
+        { lastSeenAt: start - 60_000 }
+      );
+      render(<HostConnectionBanner />);
+      expect(
+        screen.getByText("Daintree isn't listening on studio-01 · last seen 1 minute ago")
+      ).toBeTruthy();
+      act(() => {
+        vi.advanceTimersByTime(4 * 60_000);
+      });
+      expect(
+        screen.getByText("Daintree isn't listening on studio-01 · last seen 5 minutes ago")
+      ).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("says ssh couldn't log in, in ssh's words, with Retry and the host's settings", () => {
@@ -179,6 +321,7 @@ describe("HostConnectionBanner", () => {
 describe("getHostConnectionBannerCopy", () => {
   const variants: HostBannerVariant[] = [
     "reconnecting",
+    "restarting",
     "connecting",
     "unreachable",
     "host-mode-off",

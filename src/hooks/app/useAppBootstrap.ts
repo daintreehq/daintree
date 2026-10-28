@@ -7,7 +7,9 @@ import { useGettingStartedChecklist } from "./useGettingStartedChecklist";
 import { useAgentWaitingNudge } from "./useAgentWaitingNudge";
 import { useForgeEnableRecommendation } from "./useForgeEnableRecommendation";
 import { useFocusOnActivateIntent } from "./useFocusOnActivateIntent";
+import { useCanopyResumeRequests } from "./useCanopyResumeRequests";
 import { useSleptProjectTransition } from "./useSleptProjectTransition";
+import { useDroppedViewRestore } from "./useDroppedViewRestore";
 import { useBackgroundWindowResize } from "./useBackgroundWindowResize";
 import { useClearSwitchBusyStateOnReveal } from "./useClearSwitchBusyStateOnReveal";
 import { usePluginDeepLink } from "./usePluginDeepLink";
@@ -15,9 +17,11 @@ import { usePluginArchiveInstallIntent } from "./usePluginArchiveInstallIntent";
 import { useNotificationHistoryPruning } from "./useNotificationHistoryPruning";
 import { useMissingPrerequisiteWarning } from "./useMissingPrerequisiteWarning";
 import { useUpdateListener } from "@/hooks/useUpdateListener";
+import { useProjectLayoutSeed } from "@/hooks/useProjectLayoutSeed";
+import { useProjectApplicationWelcome } from "@/hooks/useProjectApplicationWelcome";
 import { removeStartupSkeleton } from "@/utils/removeStartupSkeleton";
 import { useNotificationSettingsStore, usePluginManagerStore } from "@/store";
-import { preloadNewWorktreeDialog } from "@/components/Sidebar";
+import { preloadNewWorktreeDialog } from "@/components/Layout/ProjectDialogHost";
 import { primeRadix } from "@/components/ui/radix-loader";
 import {
   preloadActionPalette,
@@ -81,7 +85,10 @@ export function useAppBootstrap() {
   // paint signal arrives before panel state is loaded — a direct dispatch
   // would silently no-op against an empty panelStore).
   useFocusOnActivateIntent(isStateLoaded);
+  // Canopy's Trash resumes a closed agent in this project's grid.
+  useCanopyResumeRequests(isStateLoaded);
   useSleptProjectTransition();
+  useDroppedViewRestore();
   // Background window-resize receiver — keeps PTY geometry tracking the
   // window while this project view is detached (#10415).
   useBackgroundWindowResize();
@@ -132,6 +139,11 @@ export function useAppBootstrap() {
   const gettingStarted = useGettingStartedChecklist(isStateLoaded);
   useUpdateListener(gettingStarted.visible);
   useAgentWaitingNudge(isStateLoaded);
+  // After hydration, so restored panels count before a project's first-open
+  // layout is applied or offered (#13782).
+  useProjectLayoutSeed(isStateLoaded);
+  // Behind the layout seed, which it waits on, and gated the same way (#14106).
+  useProjectApplicationWelcome(isStateLoaded);
   useForgeEnableRecommendation(isStateLoaded && idleHousekeepingReady);
   useNotificationHistoryPruning();
   // Gated on the idle flag so the prerequisite probe — which spawns

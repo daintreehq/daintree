@@ -7,9 +7,9 @@ Daintree is an orchestration layer for AI coding agents. Plugins touch MCP in tw
 | `mcpServers` | **Daintree.** It spawns your stdio server and talks to it. | Only a caller of the renderer's `window.electron.pluginMcp` IPC surface (`listTools`, `getFullSchema`, `callTool`), and nothing in Daintree calls those today; the plugin manager lists servers, restarts them and shows their stderr | **No.** These tools never appear in the `tools/list` a terminal agent sees. |
 | `agentMcp` (and `databases`) | **The agent.** Daintree hosts one MCP server per plugin on its own loopback listener and serves the tools you register, beside the host's database tools when the plugin declares a database. | Agents running in Daintree's terminals, in projects where the plugin has agent access: **Read only** for the database reads, **Read and write** for declared writes and your tools as well | **Yes** — Claude Code, Codex, Gemini CLI, opencode, Copilot CLI, Amp, Qwen Code and Mistral Vibe launches. See [Reaching an agent](#reaching-an-agent). |
 
-If you want an agent in a Daintree terminal to call your tools, you want `agentMcp`; if you only want it to read your plugin's SQLite data, declaring the database is enough. An `mcpServers` contribution cannot do either, however it is configured.
+If you want an agent in a Daintree terminal to call your tools, you want `agentMcp`; if you only want it to read your plugin's SQLite data, declaring the database is enough. An `mcpServers` contribution cannot do either on its own, however it is configured. To reuse an existing stdio server's tools for agents, keep it in `mcpServers` and name the tools agents get in an `agentMcp` endpoint's `source` — see [Serving a contributed server's tools](#serving-a-contributed-servers-tools). `daintree-plugin validate` and `doctor` warn about any server no endpoint bridges.
 
-Skills are a third route: the plugin ships markdown skill files that Daintree's own MCP server serves through its `skills.search` / `skills.load` tools. Skills are pure declarative knowledge — prompt snippets, workflow instructions, rubrics — injected into the agent's context on demand. Those two tools are in the Full tool set of Daintree's server, not the Core one, so far fewer sessions reach them than reach a plugin's agent MCP server; see [Who reaches skills](#who-reaches-skills).
+Skills are a third route: the plugin ships markdown skill files that Daintree serves through `skills.search` / `skills.load` tools — on the plugin's own agent MCP server, beside its tools, and on Daintree's own MCP server. Skills are pure declarative knowledge — prompt snippets, workflow instructions, rubrics — injected into the agent's context on demand. See [Who reaches skills](#who-reaches-skills).
 
 None of the three changes which agent CLI runs. A separate contribution point, `contributes.agents` (requires the `agent:register` capability), goes the other direction: it teaches Daintree about a launchable agent CLI it doesn't ship in-tree, so the CLI appears as a named, selectable agent rather than a generic shell. See [Contribution points → Agents](./contribution-points.md#agents--shipped-minimal-tier) for that manifest shape.
 
@@ -139,9 +139,9 @@ Build the tools first and the fallback second: an agent with the tools reads thr
 
 The server is named `daintree-<name>`, from the short name the plugin declares as [`mcpName`](./manifest.md#mcpname) in its manifest (`"ledger"` → `daintree-ledger`). A plugin that declares none is named after the last segment of its manifest id. The name is the same in every project, so a permission allowlist written against `mcp__daintree-ledger__database_query` keeps working in the next project and the next clone — unless a collision (below) gives the plugin a suffix there.
 
-The database tools and your own tools are listed together on that one server, so an agent sees them as one plugin's tools. A plugin with a database and no `agentMcp` endpoint gets a server with just the database tools; a plugin with an endpoint and no database gets just its own. `database_schema` and `database_query` are reserved, and so is the name of every query the manifest declares: a roster that registers one is rejected.
+The database tools and your own tools are listed together on that one server, so an agent sees them as one plugin's tools. A plugin with a database and no `agentMcp` endpoint gets a server with just the database tools; a plugin with an endpoint and no database gets just its own. A plugin that contributes [skills](#skills) also gets `skills.search` and `skills.load` there, on any access level that serves the plugin at all. `database_schema` and `database_query` are reserved, and so is the name of every query the manifest declares: a roster that registers one is rejected.
 
-Names only collide in two ways: an installed plugin and a project copy of the same plugin in one launch, or two plugins that chose the same short name. The installed copy, or the plugin whose manifest id sorts first, keeps the plain name, and the other gets a short hash suffix (`daintree-ledger-3f9a2c1e`). The suffix is stable — it comes from the plugin's identity, not from the project or the order plugins loaded in — and it is the only place a hash appears. Choose a short name specific enough not to collide: `ledger` in a household-finance plugin is fine; `data` is not. The whole key is kept within 25 characters, because Claude names a tool `mcp__<server>__<tool>` under a 64-character limit, so the short name has 16 characters to work with.
+Names only collide in three ways: an installed plugin and a project copy of the same plugin in one launch, two plugins that chose the same short name, or a name taken from the manifest id (`acme.docs`) that lands on `daintree-docs` or `daintree-runbooks`, which belong to the [Daintree Assistant](#the-daintree-assistant). The installed copy, or the plugin whose manifest id sorts first, keeps the plain name, and the other gets a short hash suffix (`daintree-ledger-3f9a2c1e`); a name that lands on one of the Assistant's always gets the suffix. The suffix is stable — it comes from the plugin's identity, not from the project or the order plugins loaded in — and it is the only place a hash appears. Choose a short name specific enough not to collide: `ledger` in a household-finance plugin is fine; `data` is not. The whole key is kept within 25 characters, because Claude names a tool `mcp__<server>__<tool>` under a 64-character limit, so the short name has 16 characters to work with.
 
 ### Manifest
 
@@ -207,6 +207,42 @@ What the host does with the roster:
 - **Results are serialized JSON.** Whatever `execute` returns is `JSON.stringify`-ed (`undefined` becomes `null`) and sent as the tool's text content. With an `outputSchema` the result must also be a JSON object matching it, which is sent as `structuredContent`. A thrown error becomes a tool error carrying its message.
 - **Calls are cancellable.** The `signal` aborts on the 60-second timeout, when the agent cancels, when the session closes or the credential is revoked, and when the roster changes under a running call. Pass it on to anything long-running.
 
+### Serving a contributed server's tools
+
+An endpoint can take its tools from one of the plugin's own `mcpServers` instead of `registerTools`. This is the explicit adapter between the two directions: the server stays a host-client server that Daintree supervises, and the endpoint names, one by one, which of its tools agents get and under what name.
+
+```json
+{
+  "capabilities": ["mcp:expose"],
+  "contributes": {
+    "mcpServers": [
+      { "id": "catalog", "name": "Catalog", "command": "node", "args": ["dist/server.js"] }
+    ],
+    "agentMcp": [
+      {
+        "id": "catalog-tools",
+        "name": "Catalog",
+        "mode": "tools",
+        "groups": [{ "id": "search", "name": "Search the catalog", "access": "read" }],
+        "source": {
+          "mcpServer": "catalog",
+          "tools": [{ "name": "search_catalog", "serverTool": "catalog.search", "group": "search" }]
+        }
+      }
+    ]
+  }
+}
+```
+
+- **Explicit allowlist.** `source.tools` lists every tool served; `name` is the agent-facing name in the same grammar as a registered tool, `serverTool` the exact name on the server, and `description` optionally replaces the server's own (otherwise cut to 400 bytes). A tool the server lists but the manifest doesn't name never reaches an agent, including one the server adds later. The allowlist counts toward the 16-tool budget with declared queries, and `group` follows the same rules as a registered tool's.
+- **Same access model.** The endpoint is an ordinary `agentMcp` endpoint: per-project access, groups, Assistant opt-in, launch injection, revocation and the grant fingerprint all apply unchanged. The fingerprint also covers the bridged server's `command`, `args` and `env`, so changing them invalidates held credentials.
+- **Lazy, on the owning backend.** Nothing starts when the plugin loads or an agent launches. The first `tools/list` or `tools/call` from an agent with access starts the server through the supervisor, with `${settings:*}` resolved on the backend that holds the plugin; its schemas are then read and checked like a registered roster, and a missing tool or a schema the host cannot enforce leaves the endpoint with no tools. `host.mcp.registerTools` is refused for a bridged endpoint.
+- **Restarts and failures.** When the server exits, crashes, is restarted (for example after a secret rotates) or sends `notifications/tools/list_changed`, the roster is dropped and sessions get `tools/list_changed`; the next request starts the server again and reads its tools afresh. A call in flight when the server goes fails as a tool error.
+- **Calls and results.** Arguments are checked against the server's `inputSchema` before it is called. Calls keep the 60-second budget and are cancelled on the wire with `notifications/cancelled`; a late answer is dropped, and a cancelled call may already have taken effect. The server's text content and its `isError` are forwarded as they are, within the 256 KiB result limit.
+- **Unsupported.** Only stdio tools are bridged. Not forwarded: non-text content (images, audio, resource links, embedded resources — the call fails as a tool error), `structuredContent` and `outputSchema`, the server's tool annotations and `_meta`, its `instructions`, resources, prompts, completions, logging, progress notifications and tasks. Daintree declares no client capabilities, so a server's `sampling/createMessage`, `roots/list` and `elicitation/create` requests are refused; `ping` is answered.
+- **Project plugins.** A `scope: "project"` plugin may declare `mcpServers` only when every one of them is bridged this way, and Daintree's own host-client surface (`window.electron.pluginMcp`) neither lists nor calls a project plugin's servers. Each project's copy runs its own server.
+- **Installed plugins.** An installed plugin's server is one process shared by every project it has access in. Project grants decide which agents may call it; they do not partition what the server itself stores or reaches.
+
 ### Database tools
 
 The host serves two tools on a plugin's server when the plugin declares any database, both annotated `readOnlyHint: true` (`electron/services/pluginAgentMcp/databaseTools.ts`):
@@ -250,6 +286,63 @@ The setting belongs to the plugin _instance_: an installed plugin and a project 
 
 Lowering the setting revokes every live credential it no longer allows in that project, and running agents lose those tools on their next request. Unloading the plugin — disable, uninstall, project close, trust revoke, or a reload that changes what it declares for agents — does the same for its whole server. A reload here includes an upgrade and a `daintree-plugin dev` rebuild: one that keeps the agent declarations leaves running agents connected. Raising it reaches only agents launched afterwards; see [Reaching an agent](#reaching-an-agent).
 
+### Tool groups
+
+Read and write is one switch for all of a plugin's own tools, which is too coarse for a service plugin whose search tools a user would happily hand to every agent and whose commit tools they would not. Declare `groups` on the endpoint and the user allows each group on its own:
+
+```json
+"agentMcp": [
+  {
+    "id": "crm",
+    "name": "Acme CRM",
+    "mode": "tools",
+    "groups": [
+      { "id": "search", "name": "Search contacts", "access": "read" },
+      { "id": "changes", "name": "Change contacts", "access": "write" }
+    ]
+  }
+]
+```
+
+Every tool then names its group, and `registerTools` rejects the whole roster if one names none, names a group the manifest doesn't declare, or names one on an endpoint that declares no groups:
+
+```ts
+await host.mcp.registerTools("crm", {
+  search_contacts: { group: "search", description: "…", inputSchema, execute: search },
+  preview_contact_update: { group: "search", description: "…", inputSchema, execute: preview },
+  commit_contact_update: { group: "changes", description: "…", inputSchema, execute: commit },
+});
+```
+
+What changes for a grouped endpoint:
+
+- **Groups are allowed by name, never by a level.** Project settings → **Agent tools** shows a switch per group under the plugin. The access level then covers only the plugin's databases, and a plugin without databases has no level at all. An answer recorded before the plugin declared groups — **Read and write** included — allows none of them, so a plugin that adopts groups starts with its own tools off until the user picks some.
+- **`access` is your description, not a permission.** It is shown to the user as what the plugin says the group does. The host never turns it into a `readOnlyHint`, so a `read` group never changes whether an agent client asks before calling one of its tools — that stays the client's own setting — and no setting allows a group because it says `read`.
+- **The roster is what the grant allows.** `tools/list` lists only the tools of the groups allowed when the agent launched, each with `_meta["dev.daintree/toolGroup"]` naming its group and class; a call to any other tool is answered as an unknown tool and never reaches your code. A cancelled or timed-out call to a `write` group's tool says the change may have been applied, as a declared write does.
+- **Changes revoke.** Turning a group off revokes every credential that reached it. A user's choice records the group's class, so recasting a group from `read` to `write` (or back) turns it off until it is allowed again. A reload that changes the `groups` declaration revokes as any change to the agent declarations does, and registering a roster that changes which tools a group holds — adding, removing or moving one, in the same activation or after a reload — revokes every credential reaching the plugin's groups, because those were issued against the groups as they were.
+- **The Assistant gets a group only by name too.** Under the Assistant switch each group has its own **Assistant can use …** switch, offered only for groups the project's agents have. Neither the Assistant's level nor a group's `read` class gives it one, and its [knowledge](#knowledge-for-the-assistant) is delivered only once it has every group.
+- **Repository defaults name groups.** A project plugin's `.daintree/mcp.json` entry uses the object form, `{ "access": "read-only", "groups": ["search"] }`, where `access` is for its databases. A plain level, an endpoint list or `"*"` allows no group.
+- **Shared data stays shared.** Allowing a group gives agents nothing of the plugin's databases: an installed plugin's [shared database warning](#installed-plugins-and-shared-data) is about the database level alone. Your tools still scope their own data by `caller.projectId`.
+
+A recipe's `requiresAgentTools` is satisfied by a launch handed any of the plugin's tools, a single group included; it does not promise every group.
+
+#### Preview and commit
+
+A consequential operation — sending, deleting, charging, merging — is safest as two tools in two groups: one that works out exactly what would happen, and one that does it.
+
+1. **`preview_*` in a `read` group** checks the request, resolves its targets and returns the exact change it would make, with a short-lived token bound to that change. It changes nothing.
+2. **`commit_*` in a `write` group** takes the token, and refuses one that is unknown, expired, already used, issued for another `caller.projectId` or for a change the service has since moved past.
+
+A user who allows only the read group gets agents that can investigate and propose; one who allows both still gets a change that matches a preview the agent saw. Who enforces what:
+
+| Party | Enforces |
+| --- | --- |
+| **Daintree** | Which groups a credential reaches, per project and per launch; that a call names a listed tool and matches its `inputSchema`; revoking credentials when access, declarations or a tool's group change; binding `caller` to the launch's project and terminal. It cannot tell from a schema or a group's class what a tool really does. |
+| **The agent client** | When to call a tool, and whether to ask the user first. Plugin tools never carry `readOnlyHint`, so clients apply their default caution to every one of them. |
+| **The plugin** | That `preview` really changes nothing and `commit` does only what the token names; token expiry, single use and binding to `caller.projectId`; the service's own authorization and per-project data scoping; idempotency or a precondition check, so a retried commit doesn't apply twice. |
+
+Allowing a write group is consent to the kind of change, not to any one of them.
+
 ### Reaching an agent
 
 Declaring a database or an endpoint exposes nothing. A plugin's server reaches an agent only when all of these hold:
@@ -270,7 +363,13 @@ Declaring a database or an endpoint exposes nothing. A plugin's server reaches a
 | Qwen Code | `--mcp-config <file>` |
 | Mistral Vibe | `VIBE_MCP_SERVERS`, each bearer read from its own environment variable |
 
-These eight are the only registry entries that declare `launchMcp`. Cursor, Grok, Kimi Code, Antigravity, Crush, Kiro, Goose, Aider and Open Interpreter have no launch-time mechanism that adds to the user's servers without replacing them, so they are not handed plugin servers; nor are the in-app Daintree Assistant and help sessions, or an agent CLI a plugin contributes through `contributes.agents`, which has no way to declare one. Gemini CLI starts no MCP server at all in a folder the user has not trusted.
+These eight formats are the only ones, and the built-in entries above are the ones that declare them. Cursor, Grok, Kimi Code, Antigravity, Crush, Kiro, Goose, Aider and Open Interpreter have no launch-time mechanism that adds to the user's servers without replacing them, so they are not handed plugin servers; nor is an agent CLI a plugin contributes through `contributes.agents` unless it declares a `launchMcp` format (see [Agents](./contribution-points.md#agents--shipped-minimal-tier)). Gemini CLI starts no MCP server at all in a folder the user has not trusted.
+
+### The Daintree Assistant
+
+The in-app Daintree Assistant gets a plugin's server only when the user turns on **Daintree Assistant can use this plugin's tools** under that plugin in Project settings → **Agent tools**. It is off by default, set per plugin and per project, and only the user can set it: neither the repository's `.daintree/mcp.json` nor an installed plugin's every-project setting reaches it. It never goes past the plugin's access for the project's agents. The switch alone gives the Assistant the database tools that read; declared writes and the plugin's own tools need **Allow tools that change things** as well, which is offered only while the project's agents have **Read and write**. The Assistant can act across the whole project, so what a plugin's tools return reaches a powerful agent; read only is the default for that reason.
+
+The Assistant's Claude Code, Codex and GitHub Copilot CLI sessions are handed the server beside their own servers at launch, by the same mechanism as the table above, under the plugin's usual key. No plugin is ever keyed `daintree-docs` or `daintree-runbooks`, the Assistant's own servers: `docs` and `runbooks` are refused as an `mcpName`, and a name taken from the manifest id that would land on one gets a hash suffix like any other clash. A plugin whose key matches a server in the user's assistant folder is skipped, and that server stays as it is. Calls through the plugin's server show in the Assistant's activity and recent calls as `<key>.<tool>`, with the argument names but never their values. Switching it off, lowering the project's access below what the Assistant had, or the session ending revokes the Assistant's credential at once.
 
 Even a CLI from the table is handed no plugin servers when:
 
@@ -279,6 +378,36 @@ Even a CLI from the table is handed no plugin servers when:
 - **Plugins are still loading.** A launch waits up to 5 seconds for the plugin service to finish starting, and launches with no plugin servers if it has not; it then waits up to 5 seconds more for the project's own plugins, and launches with whichever have loaded. This mostly affects panes restored when Daintree starts.
 
 **An agent's servers are fixed when it launches.** None of these CLIs reads a new MCP server after it has started, and Claude Code's `/mcp` only reconnects servers the session already has. Giving a plugin access, or a plugin loading for the first time, reaches agents launched afterwards: relaunch the agent — not Daintree — to pick it up. Plugin code is different: edits to a project plugin hot-reload with no Daintree restart, and running agents keep its tools across the reload as long as it leaves what the plugin declares for agents — its capabilities, scopes, `agentMcp` endpoint, databases (their declared queries included) and `mcpName` — unchanged; they see the re-registered roster through `notifications/tools/list_changed`. A reload that changes any of those, and any other unload, revokes what running agents were given, and they have to be relaunched.
+
+### Knowledge for the Assistant
+
+A plugin can also tell the Assistant how its tools should be used, so that knowledge arrives with the plugin instead of being copied into every repository's `.daintree/assistant/` folder. Declare it in `contributes.assistantKnowledge`, beside `agentMcp` or `databases`:
+
+```json
+{
+  "contributes": {
+    "assistantKnowledge": {
+      "instructions": "./assistant/notes.md",
+      "skills": [{ "id": "reconcile", "path": "./assistant/skills/reconcile" }],
+      "references": [{ "id": "schema", "path": "./assistant/schema.md" }]
+    }
+  }
+}
+```
+
+| Field | Notes |
+| --- | --- |
+| `instructions` | A `.md` file of short notes, added to the Assistant's prompt. |
+| `skills` | Up to 16 skill directories in the Agent Skills layout, each with a `SKILL.md`. `id` is lowercase letters, digits and single hyphens, at most 32 characters. |
+| `references` | Up to 32 `.md` files for the Assistant to read when a question needs them. `instructions` is reserved as an `id`. |
+
+**When it is delivered.** Only to an Assistant that was given everything the plugin declares in the project: its databases, their declared writes and its own `agentMcp` endpoint. At read only that is a plugin whose only tools are its databases and that declares no writes; anything more needs **Allow tools that change things**. It is also left out while Daintree's MCP server is off, and when the plugin's server is skipped for a name clash with the user's assistant folder. It is read when an Assistant session starts, like the rest of the Assistant's folder: switching access off takes the plugin's tools away at once, and the knowledge leaves with the next new session.
+
+**How the Assistant sees it.** The instructions go into the Assistant's prompt under their own heading, attributed to the plugin by name, id and version, inside a tag naming the plugin's MCP server. The Assistant is told they are the plugin author's notes on that plugin's tools: not the user speaking and not Daintree, unable to change its instructions, tools or permissions, and outranked by the user's own instructions. Nothing goes into the plugin's MCP server `instructions`, and nothing replaces Daintree's own prompt. Skills are mirrored as `<server key>-<id>` (`daintree-ledger-reconcile`) with `name` rewritten to match, and references to `reference/plugins/<server key>/<id>.md`. Every mirrored file opens with a line naming the plugin it came from.
+
+**Markdown only, and bounded.** Every path is realpath-contained to the plugin directory. A skill is mirrored without its `scripts/` folder or any file that isn't `.md`, and a link inside it that leaves the plugin is skipped. Its `SKILL.md` keeps only frontmatter that describes it (`description`, `when_to_use`, `argument-hint`, `arguments`, `disable-model-invocation`, `user-invocable`, `license`, `compatibility` and `metadata`), so nothing can grant tools, add hooks or run it in another model, context or agent, and Claude Code's inline `` !`command` `` and fenced ` ```! ` forms are broken in every mirrored skill file so nothing in the text runs. Instructions over 4 KiB are never cut: they are handed over whole as `reference/plugins/<server key>/instructions.md`, and the prompt tells the Assistant to read that file before it uses the plugin's tools. A plugin's knowledge may total 512 KiB as handed over, attribution lines included. Past that, or when any part of it can't be read, resolves outside the plugin or would land on a file from the user's assistant folder, all of that plugin's knowledge is left out and the reason is logged.
+
+Keep the instructions to what tool descriptions can't say. Codex's prompt file is held under 31 KiB in all, and when the user's instructions and every plugin's notes together would pass that, they move to one file the prompt points at.
 
 ### Project defaults: `.daintree/mcp.json`
 
@@ -330,7 +459,7 @@ Because only CLIs with a launch-time mechanism are handed servers, and only once
 
 ## Skills
 
-Skills are markdown files a plugin contributes. Daintree's built-in MCP server exposes them through two of its tools, so a session that has those tools can find and read them through the standard MCP protocol. Not every session does: see [Who reaches skills](#who-reaches-skills). (The `.claude/skills` paths in `SlashCommandService` are an unrelated Claude-native slash-command feature.)
+Skills are markdown files a plugin contributes. Daintree exposes them through two tools, `skills.search` and `skills.load`, so a session that has those tools can find and read them through the standard MCP protocol. Not every session does: see [Who reaches skills](#who-reaches-skills). (The `.claude/skills` paths in `SlashCommandService` are an unrelated Claude-native slash-command feature.)
 
 This is the right contribution point when the extension is about **knowledge or instructions** rather than **capabilities**. A TDD workflow skill doesn't need to call APIs — it just tells the agent how to think. A Linear integration, by contrast, needs network access and belongs in an agent MCP endpoint.
 
@@ -401,7 +530,7 @@ Everything after the frontmatter is the skill body — the text that gets inject
 
 ### How agents invoke skills
 
-Daintree's built-in MCP server exposes two tools for skills:
+Two tools serve skills, with the same names on Daintree's built-in MCP server and on a plugin's own server:
 
 - `skills.search({ query?, limit? })` — searches ids, names, triggers, and descriptions, returning matching skill IDs and summaries. Omit or pass an empty `query` to list skills unfiltered. `limit` defaults to 20 and cannot exceed 50, and the result does not say when more exist.
 - `skills.load({ id })` — returns the full markdown body of a specific skill. An unknown id fails.
@@ -418,7 +547,9 @@ This keeps Daintree's skill system compatible with any agent that speaks MCP and
 
 ### Who reaches skills
 
-`skills.search` and `skills.load` belong to Daintree's own MCP server — the orchestration server, not a plugin's [agent MCP server](#one-server-per-plugin) — and sit in its Full tool set, not its Core one (`shared/config/helpAssistantTierAllowlists.ts`). Daintree's MCP server must be enabled (Settings → MCP server) for any of these:
+A plugin with an [agent MCP server](#one-server-per-plugin) — one that declares a database or an `agentMcp` endpoint — serves its own skills there, as host tools that read only that plugin's skill files and never start its code. Every agent handed the plugin's server gets its skills with it — at **Read only** for a plugin with a database, and at **Read and write** for one with only an `agentMcp` endpoint, which **Read only** does not serve — so this is the route to rely on for teaching agents your tools.
+
+`skills.search` and `skills.load` on Daintree's own MCP server — the orchestration server — search every plugin's skills at once, and sit in its Full tool set, not its Core one (`shared/config/helpAssistantTierAllowlists.ts`). A skills-only plugin reaches agents through these alone. Daintree's MCP server must be enabled (Settings → MCP server) for any of these:
 
 | Session | Has the skill tools |
 | --- | --- |
@@ -428,7 +559,11 @@ This keeps Daintree's skill system compatible with any agent that speaks MCP and
 | The in-app Daintree Assistant with its tool set at **Full** | Yes; at **Core**, its default, it does not see them |
 | An external MCP client connected with an API key | Yes |
 
-So in a project left at its defaults, no terminal agent has a plugin's skills. Write a skill for the sessions that do, and put anything every agent working on the project must know in its `AGENTS.md` as well.
+So in a project left at its defaults, no terminal agent reaches a skill through Daintree's server, and a plugin's own server reaches only the agents of projects that gave it access. Write a skill for the sessions that do, and put anything every agent working on the project must know in its `AGENTS.md` as well.
+
+A [project plugin](./project-local.md)'s skills are served only to sessions bound to its own project, on either server: a terminal agent launched there, an external client connected with that project's workspace selector, or the Daintree Assistant open in that project. Another project's sessions never see them, and neither does a session bound to no project. Their ids carry the plugin's instance key (`project__<project id>__acme.ledger.reconcile`); pass back the id a search returned. An installed plugin's skills reach every project, under `acme.ledger.reconcile`.
+
+A skill load on a plugin's own server is held to the same 256 KiB result limit as its tools, so keep a skill well under that if agents should read it there.
 
 ## When to use which
 
@@ -444,7 +579,7 @@ So in a project left at its defaults, no terminal agent has a plugin's skills. W
 | Let terminal agents reach an external API (Linear, Jira, Sentry) | Agent MCP endpoint, calling the API from your plugin's `main` |
 | Provide a checklist or step-by-step | Skill |
 | Share knowledge that travels cleanly across projects | Skill |
-| Ship a tool with a project, committed to its repository | Agent MCP endpoint — the only one of the three a `scope: "project"` plugin may declare |
+| Ship a tool with a project, committed to its repository | Agent MCP endpoint, with skills beside it to teach agents how to use it — `scope: "project"` plugins may declare both, but not `mcpServers` |
 | Hand one record — a card, a message — to an agent for the user to instruct | `host.sendToAgent` or a drag, not MCP — see [Patterns → Hand work to an agent](./patterns.md#hand-work-to-an-agent) |
 
 Plugins often combine them — for example, a Linear plugin might serve terminal agents its issue tools through an agent MCP endpoint and ship a skill that teaches the agent the team's preferred ticket planning format.

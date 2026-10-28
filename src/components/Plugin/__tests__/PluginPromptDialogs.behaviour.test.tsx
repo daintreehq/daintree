@@ -70,6 +70,13 @@ const CHECKS = [
   { id: "unit", label: "Unit tests", detail: "vitest, 4 shards" },
 ];
 
+function pipelineFiles(count: number) {
+  return Array.from({ length: count }, (_, i) => ({
+    id: `pipeline-${i + 1}`,
+    label: `pipeline-${String(i + 1).padStart(2, "0")}.yml`,
+  }));
+}
+
 function seed(params: PluginUiPromptParams): ReturnType<typeof vi.fn> {
   usePluginRuntimeStore.setState({
     pluginMetaById: new Map([[PLUGIN_ID, { devMode: false, displayName: "Release Helper" }]]),
@@ -174,8 +181,8 @@ describe("plugin prompts — attribution", () => {
 
 describe("PluginInputBoxDialog", () => {
   // Only half of this is observable here: jsdom never lets the dialog's own
-  // initial-focus pass win, so a regression to `initialFocus="first"` is caught
-  // by plugin-prompt-review.spec.ts in a real browser instead.
+  // initial-focus pass win, so a regression to `initialFocus="first"` only shows
+  // in a real browser.
   it("puts focus in the field on open", () => {
     seed({ kind: "inputBox", options: { title: "Name it" } });
     render(<PluginInputBoxDialog />);
@@ -281,6 +288,25 @@ describe("PluginQuickPickDialog — multi-select", () => {
 
     expect(resolve).toHaveBeenCalledWith([]);
   });
+
+  // A multi-select with a hidden tail cannot be answered by browsing: a row
+  // that never renders can only be checked by a query that happens to surface it.
+  it("lets every item the plugin sent be checked without a query", () => {
+    const files = pipelineFiles(25);
+    const resolve = seed({ kind: "quickPick", items: files, options: { canSelectMany: true } });
+    render(<PluginQuickPickDialog />);
+
+    expect(options()).toHaveLength(25);
+
+    for (let i = 0; i < 20; i++) fireEvent.keyDown(combobox(), { key: "ArrowDown" });
+    fireEvent.keyDown(combobox(), { key: "Enter" });
+    fireEvent.click(options()[24]!);
+    act(() => {
+      buttonNamed(/confirm 2 selected/i).click();
+    });
+
+    expect(resolve).toHaveBeenCalledWith([files[20], files[24]]);
+  });
 });
 
 describe("PluginQuickPickDialog — single-select", () => {
@@ -304,6 +330,28 @@ describe("PluginQuickPickDialog — single-select", () => {
 
     expect(resolve).not.toHaveBeenCalled();
     expect(usePluginPromptStore.getState().current).not.toBeNull();
+  });
+
+  it("reaches the last item of a long list from the keyboard", () => {
+    const files = pipelineFiles(40);
+    const resolve = seed({ kind: "quickPick", items: files, options: {} });
+    render(<PluginQuickPickDialog />);
+
+    fireEvent.keyDown(combobox(), { key: "End" });
+    const active = combobox().getAttribute("aria-activedescendant") ?? "";
+    expect(document.getElementById(active)?.textContent).toContain(files[39]!.label);
+
+    fireEvent.keyDown(combobox(), { key: "Enter" });
+    expect(resolve).toHaveBeenCalledWith(files[39]);
+  });
+
+  it("keeps every match of a query that matches more than a screenful", () => {
+    seed({ kind: "quickPick", items: pipelineFiles(25), options: {} });
+    render(<PluginQuickPickDialog />);
+
+    fireEvent.change(combobox(), { target: { value: "pipeline" } });
+
+    expect(options()).toHaveLength(25);
   });
 });
 

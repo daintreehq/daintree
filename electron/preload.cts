@@ -16,7 +16,7 @@ import { deserializeError } from "../shared/utils/ipcErrorSerialization.js";
 import type { AppErrorCode } from "../shared/types/appError.js";
 import type { PanelTitleMode } from "../shared/types/panel.js";
 import type { HostMemoryPauseSnapshot } from "../shared/types/pty-host.js";
-import type { TerminalKillOptions } from "../shared/types/terminal.js";
+import type { TerminalExitContext, TerminalKillOptions } from "../shared/types/terminal.js";
 import type { RendererInputBlockingSnapshot } from "../shared/types/ipc/system.js";
 import type {
   McpRuntimeSnapshot,
@@ -36,14 +36,12 @@ import type { PushProgressEvent } from "../shared/types/ipc/gitPush.js";
 import type { PluginPerfSnapshot } from "../shared/types/pluginMetrics.js";
 import type { PluginRendererMetricsEnvelope } from "../shared/types/ipc/pluginMetrics.js";
 import { CHANNELS } from "./ipc/channels.js";
-import { PLUGIN_PUSH_BATCH_CHANNEL } from "./services/plugin/pluginPushProtocol.js";
 import { PERF_MARKS } from "../shared/perf/marks.js";
 import { parseE2ETimerOverrideMs } from "../shared/config/e2eTimerOverrides.js";
-import {
-  BrokerError,
-  RequestResponseBroker,
-  encodeBrokerError,
-} from "./services/rpc/RequestResponseBroker.js";
+import { connectWorktreePortClient } from "./preload/worktreePortClient.js";
+import { createEventBus } from "./preload/eventBus.js";
+import { createTerminalDataMultiplexer } from "./preload/terminalData.js";
+import { createPluginPushTransport } from "./preload/pluginPush.js";
 import { buildClipboardPreloadBindings } from "./ipc/handlers/clipboard.preload.js";
 import { buildDroppedFilePathsBinding } from "./utils/droppedFilePaths.js";
 import { captureInputBlockingSnapshot } from "./utils/inputBlockingSnapshot.js";
@@ -66,9 +64,11 @@ import { buildPluginMcpPreloadBindings } from "./ipc/handlers/pluginMcp.preload.
 import { buildPluginCapabilityPreloadBindings } from "./ipc/handlers/pluginCapability.preload.js";
 import { buildPluginProcessPreloadBindings } from "./ipc/handlers/pluginProcess.preload.js";
 import { buildPluginPanelCapturePreloadBindings } from "./ipc/handlers/pluginPanelCapture.preload.js";
+import { buildPluginProjectPresencePreloadBindings } from "./ipc/handlers/pluginProjectPresence.preload.js";
 import { buildPluginMetricsPreloadBindings } from "./ipc/handlers/pluginMetrics.preload.js";
 import { buildScratchPreloadBindings } from "./ipc/handlers/scratch/preload.js";
 import { buildMcpServerPreloadBindings } from "./ipc/handlers/mcpServer.preload.js";
+import { buildVoiceInputPreloadBindings } from "./ipc/handlers/voiceInput.preload.js";
 import { buildForgeAuditPreloadBindings } from "./ipc/handlers/forgeAudit.preload.js";
 import { buildProjectGroupsPreloadBindings } from "./ipc/handlers/projectGroups.preload.js";
 import { buildRunHistoryPreloadBindings } from "./ipc/handlers/runHistory.preload.js";
@@ -76,6 +76,8 @@ import { buildCopyTreeHistoryPreloadBindings } from "./ipc/handlers/copyTreeHist
 import { buildGeminiPreloadBindings } from "./ipc/handlers/gemini.preload.js";
 import { buildCodexPreloadBindings } from "./ipc/handlers/codex.preload.js";
 import { buildClaudePreloadBindings } from "./ipc/handlers/claude.preload.js";
+import { buildVoiceDictionaryPreloadBindings } from "./ipc/handlers/voiceDictionary.preload.js";
+import { buildRecentDictationsPreloadBindings } from "./ipc/handlers/recentDictations.preload.js";
 import { buildOnboardingPreloadBindings } from "./ipc/handlers/onboarding.preload.js";
 import { buildShortcutHintsPreloadBindings } from "./ipc/handlers/shortcutHints.preload.js";
 import { buildForgeRecommendationPreloadBindings } from "./ipc/handlers/forgeRecommendation.preload.js";
@@ -96,13 +98,18 @@ import { buildCanopyHostPreloadBindings } from "./ipc/handlers/canopyHost.preloa
 import { buildPortForwardsPreloadBindings } from "./ipc/handlers/portForwards.preload.js";
 import { buildPluginParityPreloadBindings } from "./ipc/handlers/pluginParity.preload.js";
 import { buildSettingsCopyPreloadBindings } from "./ipc/handlers/settingsCopy.preload.js";
+import { buildHostSettingsPreloadBindings } from "./ipc/handlers/hostSettings.preload.js";
 import { buildTelemetryPreloadBindings } from "./ipc/handlers/telemetry.preload.js";
 import { buildConnectivityPreloadBindings } from "./ipc/handlers/connectivity.preload.js";
 import { buildProjectPresencePreloadBindings } from "./ipc/handlers/projectPresence.preload.js";
+import { buildProjectPresentationPreloadBindings } from "./ipc/handlers/projectPresentation.preload.js";
+import { buildProjectThemePreloadBindings } from "./ipc/handlers/projectTheme.preload.js";
+import { buildWorktreeTitlesPreloadBindings } from "./ipc/handlers/worktreeTitles.preload.js";
+import { buildReviewMarksPreloadBindings } from "./ipc/handlers/reviewMarks.preload.js";
 import { buildDiffMediaPreloadBindings } from "./ipc/handlers/diffMedia.preload.js";
+import { buildFileDocumentPreloadBindings } from "./ipc/handlers/fileDocument.preload.js";
 import { buildFileBrowserPreloadBindings } from "./ipc/handlers/fileBrowser.preload.js";
 import { buildFileWatchPreloadBindings } from "./ipc/handlers/fileWatch.preload.js";
-import { buildHibernationPreloadBindings } from "./ipc/handlers/hibernation.preload.js";
 import { buildSessionRestorePreloadBindings } from "./ipc/handlers/sessionRestore.preload.js";
 import { buildWindowOpeningPreloadBindings } from "./ipc/handlers/windowOpening.preload.js";
 import { buildKeepAwakePreloadBindings } from "./ipc/handlers/keepAwake.preload.js";
@@ -123,6 +130,7 @@ import { buildProcessesPreloadBindings } from "./ipc/handlers/processes.preload.
 import { buildPluginAgentMcpPreloadBindings } from "./ipc/handlers/pluginAgentMcp.preload.js";
 import { buildGlobalRecipesPreloadBindings } from "./ipc/handlers/globalRecipes.preload.js";
 import { buildAgentDefaultsPreloadBindings } from "./ipc/handlers/agentDefaults.preload.js";
+import { buildAgentToolbarPinsPreloadBindings } from "./ipc/handlers/agentToolbarPins.preload.js";
 import { buildEditorConfigPreloadBindings } from "./ipc/handlers/editorConfig.preload.js";
 import { buildWindowChromePreloadBindings } from "./ipc/handlers/windowChrome.preload.js";
 import { buildFleetPreloadBindings } from "./ipc/handlers/fleet.preload.js";
@@ -134,6 +142,7 @@ import { buildPaintFabricSurfacePreloadBindings } from "./ipc/handlers/paintFabr
 import { buildWebviewNavigationPreloadBindings } from "./ipc/handlers/webviewNavigation.preload.js";
 import { buildWebviewCapturePreloadBindings } from "./ipc/handlers/webviewCapture.preload.js";
 import { buildSitePreviewPreloadBindings } from "./ipc/handlers/sitePreview.preload.js";
+import { buildElementPickerPreloadBindings } from "./ipc/handlers/elementPicker.preload.js";
 import { buildWebviewEmulationPreloadBindings } from "./ipc/handlers/webviewEmulation.preload.js";
 import { buildWorktreeConfigPreloadBindings } from "./ipc/handlers/worktreeConfig.preload.js";
 import { buildTerminalLayoutPreloadBindings } from "./ipc/handlers/terminalLayout.preload.js";
@@ -161,8 +170,9 @@ import type {
   IpcInvokeMap,
   IpcEventMap,
   IpcEventBusMap,
-  EventBusEnvelope,
+  AgentSettings,
   AgentSettingsEntry,
+  PanelGridConfig,
   ResumeOnRestart,
   PRDetectedPayload,
   PRClearedPayload,
@@ -170,6 +180,8 @@ import type {
   IssueNotFoundPayload,
   ServiceConnectivityPayload,
   AgentDefaultsSnapshot,
+  TerminalConfigChange,
+  AgentToolbarPinsSnapshot,
   GitStatus,
   KeyAction,
   TerminalRecipe,
@@ -178,15 +190,21 @@ import type {
   IssueAssociation,
   VoiceInputError,
   VoiceInputStatus,
+  VoiceLiveSessionUpdate,
+  VoiceLiveLevel,
+  VoicePauseRequest,
+  VoiceRevealRequest,
+  VoiceSessionEndReason,
+  VoiceStopRequest,
 } from "../shared/types/index.js";
 import type { ColorVisionMode, AppColorScheme } from "../shared/types/appTheme.js";
+import type { VoiceSessionReport } from "../shared/types/voiceSessionSummary.js";
 import type {
   WorktreePortAction,
   WorktreePortPayload,
   WorktreePortRequestArgs,
   WorktreePortResult,
 } from "../shared/types/worktree-port.js";
-import { resolveWorktreePortTimeout } from "./utils/worktreePortTimeouts.js";
 import type {
   AgentStateChangePayload,
   AgentDetectedPayload,
@@ -198,7 +216,10 @@ import type {
   DevPreviewStateChangedPayload,
   DevPreviewAllSessionsPayload,
 } from "../shared/types/ipc.js";
-import type { SitePreviewPushPayload } from "../shared/types/ipc/sitePreview.js";
+import type {
+  ElementPickerPushPayload,
+  ElementPickerSourceChangedPush,
+} from "../shared/types/ipc/elementPicker.js";
 import type { TerminalActivityPayload } from "../shared/types/terminal.js";
 import type { PaneNotifyState } from "../shared/types/terminalNotify.js";
 import type {
@@ -220,9 +241,15 @@ import type {
   PluginArchiveInstallIntent,
   PluginDeepLinkIntent,
   PluginPanelBadge,
+  PluginPanelActivityReport,
+  PluginTaskSnapshot,
+  PluginToolbarButtonRuntimeState,
   PluginContextValue,
   PluginWorktreeCardStatus,
+  PluginWorktreeReviewCheck,
+  PluginTerminalStatus,
   PluginFocusedPanel,
+  PluginProjectPresence,
 } from "../shared/types/plugin.js";
 import type { PanelKindConfig } from "../shared/config/panelKindRegistry.js";
 import type { PublishedPanelMenuItem } from "../shared/utils/pluginPanelMenuItems.js";
@@ -481,280 +508,7 @@ ipcRenderer.on("terminal-worker-port", (event, payload: { token: string; termina
   );
 });
 
-// ── Worktree Port Client (Phase 1) ──────────────────────────────────────────
-// New dedicated port for worktree data with request/response correlation.
-
-type WorktreePortEventCallback = (data: unknown) => void;
-
-class WorktreePortClient {
-  private port: MessagePort | null = null;
-  private broker = new RequestResponseBroker({
-    idPrefix: "worktree",
-    defaultTimeoutMs: 10000,
-  });
-  private eventListeners = new Map<string, Set<WorktreePortEventCallback>>();
-  private readyCallbacks: Array<() => void> = [];
-  private disconnectedCallbacks: Array<() => void> = [];
-  private fatalCallbacks: Array<() => void> = [];
-  private _isReady = false;
-  // Monotonic counter so stale close signals (e.g. a delayed IPC
-  // WORKTREE_HOST_DISCONNECTED that arrives AFTER a replacement port has
-  // already been attached) are ignored and do not clobber the new port.
-  private portGeneration = 0;
-
-  attach(newPort: MessagePort): void {
-    // Bump generation FIRST so any synchronous close event fired by the old
-    // port during detach() will be recognised as stale by _handlePortClose
-    // and ignored — the disconnect callbacks must only fire on unexpected
-    // host crashes, never on normal port replacement.
-    const attachedGeneration = ++this.portGeneration;
-
-    if (this.port) {
-      this.detach();
-    }
-
-    this.port = newPort;
-    this._isReady = true;
-
-    // Fires when the peer (workspace host UtilityProcess) dies — Electron's
-    // MessagePort delivers a `close` event even on SIGKILL via the Mojo
-    // channel.  The generation guard ensures stale close events from old
-    // ports cannot reject requests on a newer port.
-    newPort.addEventListener("close", () => this._handlePortClose(attachedGeneration));
-
-    this.port.onmessage = (msg: MessageEvent) => {
-      const data = msg.data;
-      if (!data) return;
-
-      // Response to a request
-      if (data.id && this.broker.has(data.id)) {
-        if (data.error != null) {
-          this.broker.reject(data.id, new Error(String(data.error)));
-        } else {
-          this.broker.resolve(data.id, data.result);
-        }
-        return;
-      }
-
-      // Spontaneous event from host
-      if (data.type === "event" && data.event?.type) {
-        const listeners = this.eventListeners.get(data.event.type);
-        if (listeners) {
-          for (const cb of listeners) {
-            try {
-              cb(data.event);
-            } catch {
-              // Don't let listener errors crash the port
-            }
-          }
-        }
-      }
-    };
-
-    // Fire ready callbacks (kept for re-attach — not cleared)
-    for (const cb of this.readyCallbacks) {
-      try {
-        cb();
-      } catch {
-        // ignore
-      }
-    }
-
-    console.log("[Preload] Worktree port connected");
-  }
-
-  private detach(): void {
-    if (!this.port) return;
-
-    try {
-      this.port.close();
-    } catch {
-      // ignore
-    }
-
-    // Clear pending BEFORE nulling state — preserves the invariant that no
-    // request can be registered after clearance but before the null check.
-    // Port replacement is a transient/recoverable condition (host restart,
-    // project switch within window), not app shutdown — surface HOST_EXITED
-    // so callers can retry rather than treating it as terminal.
-    this.broker.clear(encodeBrokerError(new BrokerError("HOST_EXITED", "Worktree port replaced")));
-
-    this.port = null;
-    this._isReady = false;
-  }
-
-  /**
-   * Handle unexpected port closure (workspace host crashed or was killed).
-   * Idempotent — safe to call multiple times.  Rejects pending requests
-   * immediately so the UI does not wait for per-request timeouts.
-   *
-   * @param generation The port generation the caller was registered against.
-   *   If it no longer matches the current generation, this is a stale signal
-   *   from a previous port lifetime and is ignored.
-   */
-  _handlePortClose(generation: number): void {
-    if (generation !== this.portGeneration) return;
-    if (!this.port) return;
-
-    try {
-      this.port.close();
-    } catch {
-      // ignore
-    }
-
-    this.broker.clear(
-      encodeBrokerError(new BrokerError("HOST_EXITED", "Worktree port disconnected"))
-    );
-
-    this.port = null;
-    this._isReady = false;
-
-    for (const cb of this.disconnectedCallbacks) {
-      try {
-        cb();
-      } catch {
-        // Don't let listener errors block other listeners
-      }
-    }
-  }
-
-  request<K extends WorktreePortAction>(
-    action: K,
-    payload?: WorktreePortPayload<K>,
-    timeoutMs?: number
-  ): Promise<WorktreePortResult<K>> {
-    if (!this.port) {
-      // Main can't see this rejection — it never reaches the broker — so without
-      // this line a failed request leaves no trace beside the brokering log.
-      // For app and project views, console capture tags it with the view's
-      // webContentsId, the same key WorktreePortBroker logs under (#12759).
-      console.warn(`[Preload] Worktree port request "${String(action)}" rejected: port not ready`);
-      return Promise.reject(
-        encodeBrokerError(new BrokerError("HOST_EXITED", "Worktree port not ready"))
-      );
-    }
-
-    const id = this.broker.generateId();
-    // Resolve the per-action timeout (#8551): create/delete-worktree,
-    // resource-action, and run-lifecycle-setup legitimately run longer than
-    // the 10s default. The broker's own getEffectiveTimeout only validates a
-    // single defaultTimeoutMs, so the per-action table must be applied here.
-    const effectiveTimeout = resolveWorktreePortTimeout(action, timeoutMs);
-    const promise = this.broker.register<WorktreePortResult<K>>(id, {
-      method: String(action),
-      timeoutMs: effectiveTimeout,
-    });
-
-    try {
-      this.port.postMessage({ id, action, payload: payload ?? {} });
-    } catch (error) {
-      this.broker.reject(id, error instanceof Error ? error : new Error(String(error)));
-    }
-
-    // Encode BrokerError rejections (TIMEOUT, HOST_EXITED, APP_SHUTDOWN) so
-    // the renderer can decode the discriminant via `isClientBrokerError`.
-    // contextBridge strips own Error properties, so the prefix is the only
-    // reliable carrier across the realm boundary.
-    return promise.catch((err: unknown) => {
-      if (err instanceof BrokerError) {
-        throw encodeBrokerError(err);
-      }
-      throw err;
-    });
-  }
-
-  onEvent(type: string, callback: WorktreePortEventCallback): () => void {
-    let listeners = this.eventListeners.get(type);
-    if (!listeners) {
-      listeners = new Set();
-      this.eventListeners.set(type, listeners);
-    }
-    listeners.add(callback);
-
-    return () => {
-      listeners!.delete(callback);
-      if (listeners!.size === 0) {
-        this.eventListeners.delete(type);
-      }
-    };
-  }
-
-  isReady(): boolean {
-    return this._isReady;
-  }
-
-  onReady(callback: () => void): () => void {
-    if (this._isReady) {
-      callback();
-    }
-    // Always register for future re-attaches (port replacement on host restart)
-    this.readyCallbacks.push(callback);
-    return () => {
-      const idx = this.readyCallbacks.indexOf(callback);
-      if (idx >= 0) this.readyCallbacks.splice(idx, 1);
-    };
-  }
-
-  onDisconnected(callback: () => void): () => void {
-    this.disconnectedCallbacks.push(callback);
-    return () => {
-      const idx = this.disconnectedCallbacks.indexOf(callback);
-      if (idx >= 0) this.disconnectedCallbacks.splice(idx, 1);
-    };
-  }
-
-  onFatalDisconnect(callback: () => void): () => void {
-    this.fatalCallbacks.push(callback);
-    return () => {
-      const idx = this.fatalCallbacks.indexOf(callback);
-      if (idx >= 0) this.fatalCallbacks.splice(idx, 1);
-    };
-  }
-
-  /**
-   * Fire fatal callbacks when the workspace host exhausts its restart budget.
-   * Callers should surface a terminal error state (e.g. "Workspace host
-   * crashed — please restart") since no further port will arrive.
-   */
-  _handleFatal(): void {
-    for (const cb of this.fatalCallbacks) {
-      try {
-        cb();
-      } catch {
-        // Don't let listener errors block other listeners
-      }
-    }
-  }
-}
-
-const worktreePortClient = new WorktreePortClient();
-
-ipcRenderer.on("worktree-port", (event: Electron.IpcRendererEvent, payload: unknown) => {
-  if (!event.ports || event.ports.length === 0) return;
-  worktreePortClient.attach(event.ports[0]);
-  // Main can't observe delivery — a port posted before this listener existed
-  // is dropped silently — so it only reuses a channel this receipt confirms
-  // (#12576). Sent after attach so the ready callbacks have already run.
-  const token = (payload as { token?: unknown } | null | undefined)?.token;
-  if (typeof token === "number") {
-    ipcRenderer.send(CHANNELS.WORKTREE_PORT_ACK, { token });
-  }
-});
-
-// Main broadcasts this on every host exit.  Only the fatal payload is acted
-// on in the renderer — it marks max-restart-budget exhaustion and means no
-// replacement port will arrive, so the UI must transition to a terminal
-// error state instead of staying in the reconnecting spinner forever.
-// Non-fatal broadcasts are ignored here; the MessagePort `close` event is
-// the authoritative disconnect signal for the transient case.
-ipcRenderer.on(
-  "worktree:host-disconnected",
-  (_event: Electron.IpcRendererEvent, payload: { fatal?: boolean } | undefined) => {
-    if (payload?.fatal) {
-      worktreePortClient._handleFatal();
-    }
-  }
-);
+const worktreePortClient = connectWorktreePortClient(ipcRenderer);
 
 /**
  * Reconstruct `AppError` thrown in the main process. Electron's contextBridge
@@ -921,8 +675,28 @@ function _typedOn<K extends Extract<keyof IpcEventMap, string>>(
  * terminal work this issue exists to stop.
  */
 let _viewCached = false;
+// Blink's memory cache keeps every script the view has loaded, about 25 MB of
+// source per view, and nothing re-reads it: loaded modules live in the module
+// map. Dropping it saves ~30 MB per cached view, and the view stays smaller
+// after it returns (#14219). Live images and fonts are held by their elements.
+// clearCache() also raises critical memory pressure in this renderer, so it
+// waits out a quick switch back and never runs once the view is active again,
+// including when a freeze held the cached signal until the next activation.
+// A view the efficiency profile freezes inside the delay keeps its cache.
+const CACHED_VIEW_CACHE_CLEAR_DELAY_MS = 2_000;
+let _cacheClearTimer: ReturnType<typeof setTimeout> | null = null;
 ipcRenderer.on(CHANNELS.APP_VIEW_CACHED, () => {
   _viewCached = true;
+  if (_cacheClearTimer !== null) clearTimeout(_cacheClearTimer);
+  _cacheClearTimer = setTimeout(() => {
+    _cacheClearTimer = null;
+    if (!_viewCached) return;
+    try {
+      webFrame.clearCache();
+    } catch {
+      // Best-effort reclaim; a renderer mid-teardown has nothing to free.
+    }
+  }, CACHED_VIEW_CACHE_CLEAR_DELAY_MS);
 });
 // Warm activation — not reveal — owns the clear: main only sends
 // APP_VIEW_REVEALED while the view is still the active project, so a superseded
@@ -934,351 +708,14 @@ ipcRenderer.on(CHANNELS.APP_VIEW_REVEALED, () => {
   _viewCached = false;
 });
 
-// Shared multiplexer for the typed event bus. All `window.electron.events.on`
-// subscribers — plus the migrated per-domain helpers below (terminal.onExit,
-// window.onFullscreenChange, etc.) — dispatch through a single ipcRenderer
-// listener on CHANNELS.EVENTS_PUSH. Ref-counted per event name so Node's
-// MaxListenersExceededWarning (fires at 10 listeners per channel) can't trip
-// as more events migrate; the ipcRenderer listener stays at exactly 1.
-type EventBusSubscriber = (payload: unknown) => void;
-const _eventBusSubscribers = new Map<keyof IpcEventBusMap, Set<EventBusSubscriber>>();
-let _eventBusWired = false;
-
-// Events safe to replay to a late first subscriber. A `daintree://` deep link
-// (#9559) is delivered by main on the primary view's first paint — which fires
-// from the Suspense *parent* before `AppInner` (the component that owns the
-// subscription) has mounted past its `app:boot` gate. Without a replay buffer
-// the intent would land with no subscriber and be dropped on a slow cold
-// launch. `window:disk-space-status` is replayed for the same reason (#9769):
-// main pushes the current non-normal status once at `did-finish-load`, and the
-// `useDiskSpaceWarnings` subscriber now mounts behind the `isStateLoaded` gate
-// (after the full hydration round-trip), so without buffering the one-shot
-// warning would be dropped on a slow startup and only resurface on the next
-// status *change*. Only latest-wins, single-shot, low-frequency signals belong
-// here — replaying a high-frequency or stale state event to a late subscriber
-// would be wrong. Disk status qualifies: latest-wins and emitted on change
-// (~5-min poll), so the buffered payload always reflects the current state.
-const _eventBusReplayable: ReadonlySet<keyof IpcEventBusMap> = new Set([
-  "plugin:deep-link",
-  "window:disk-space-status",
-  // Pushed once per episode edge (#12462), so a view whose listener has not
-  // mounted yet must still see the latest edge rather than lose the notice.
-  "system:memory-pressure",
-  // Latest-wins policy level, delivered at did-finish-load before the motion
-  // hook has mounted; losing it would animate at the foreground rate until
-  // the next transition.
-  "system:power-policy-changed",
-  "plugin:archive-install-intent",
-  // Project-local plugin trust: both are pushed during `onProjectOpened`, which
-  // on a cold project view runs before the React tree that subscribes has
-  // mounted. The trust prompt is the one and only signal permitted to raise the
-  // consent gate and main never re-emits it once a decision is stored, so a
-  // dropped push means the folder stays silently blocked with no way back but
-  // the indicator. Both are latest-wins single-shot signals, which is exactly
-  // what this buffer is for.
-  "plugin:project-trust-prompt",
-  "plugin:project-plugins-changed",
-  // Staged plugins are announced exactly once per new manifest id — main records
-  // the id as it stages it and never announces it again — so a push that lands
-  // before the subscriber mounts is a notification the user never gets.
-  "plugin:project-plugin-staged",
-  // A restored view's runtime panel menus arrive in the did-finish-load
-  // replay, before the store behind the boot gate subscribes (#13213).
-  "plugin:panel-menus-changed",
-  // Same replay, landing before the toolbar has mounted its badge store (#13503).
-  "plugin:toolbar-badges-changed",
-  // Same replay, landing before the keybinding hook subscribes its store (#13506).
-  "plugin:context-keys-changed",
-  // Same replay, landing before the worktree cards mount their store (#13704).
-  "plugin:worktree-card-statuses-changed",
-]);
-// Replayable events that accumulate instead of superseding. A double-clicked
-// `.dntr` archive (#11280) is one decision per file, so collapsing two
-// pre-subscriber intents to the latest would silently drop an archive the user
-// asked to install — unlike the latest-wins signals above, where only the
-// current value matters. Buffered payloads replay in arrival order.
-const _eventBusFifoReplay: ReadonlySet<keyof IpcEventBusMap> = new Set([
-  "plugin:archive-install-intent",
-  // Same reasoning: two plugin ids staged before the subscriber mounts are two
-  // separate "something new wants to run here" signals, and collapsing them to
-  // the latest would silently drop one.
-  "plugin:project-plugin-staged",
-  // Each event is one plugin's whole map, so only the latest per plugin
-  // matters — but the latest of all would drop every other plugin's.
-  "plugin:panel-menus-changed",
-  "plugin:toolbar-badges-changed",
-  "plugin:context-keys-changed",
-  "plugin:worktree-card-statuses-changed",
-]);
-// FIFO events whose every payload is one plugin's whole map: a newer one for the
-// same plugin supersedes the buffered one. A payload that also names a project
-// is one plugin's map for that project, so it supersedes only that project's.
-const _eventBusPerPluginLatest: ReadonlySet<keyof IpcEventBusMap> = new Set([
-  "plugin:panel-menus-changed",
-  "plugin:toolbar-badges-changed",
-  "plugin:context-keys-changed",
-  "plugin:worktree-card-statuses-changed",
-]);
-const _eventBusBuffered = new Map<keyof IpcEventBusMap, unknown[]>();
-
-function _ensureEventBusWired(): void {
-  if (_eventBusWired) return;
-  _eventBusWired = true;
-  ipcRenderer.on(CHANNELS.EVENTS_PUSH, (_event, envelope: EventBusEnvelope) => {
-    if (!envelope || typeof envelope !== "object") return;
-    if (typeof envelope.name !== "string") return;
-    const subs = _eventBusSubscribers.get(envelope.name);
-    if (!subs || subs.size === 0) {
-      // No subscriber yet: buffer replayable events so a late-mounting
-      // subscriber (e.g. one behind a Suspense boundary) still receives them.
-      if (_eventBusReplayable.has(envelope.name)) {
-        let prior = _eventBusFifoReplay.has(envelope.name)
-          ? (_eventBusBuffered.get(envelope.name) ?? [])
-          : [];
-        // Each such event is one plugin's whole map, so only its latest
-        // is worth keeping: a busy plugin during a slow boot replaces rather
-        // than piles up.
-        if (_eventBusPerPluginLatest.has(envelope.name)) {
-          type Keyed = { pluginId?: unknown; projectId?: unknown } | null;
-          const latest = envelope.payload as Keyed;
-          prior = prior.filter(
-            (payload) =>
-              (payload as Keyed)?.pluginId !== latest?.pluginId ||
-              (payload as Keyed)?.projectId !== latest?.projectId
-          );
-        }
-        prior.push(envelope.payload);
-        _eventBusBuffered.set(envelope.name, prior);
-      }
-      return;
-    }
-    // Snapshot before iterating: a subscriber may unsubscribe itself or
-    // another subscriber during dispatch; iterating the live Set would make
-    // delivery to surviving subscribers depend on insertion order.
-    for (const cb of [...subs]) {
-      try {
-        cb(envelope.payload);
-      } catch (err) {
-        console.error("[Preload] events:push subscriber threw for", envelope.name, err);
-      }
-    }
-  });
-}
-
-// Wired eagerly, not lazily on first subscribe: the replay buffer above only
-// catches a pre-subscriber event if the underlying `EVENTS_PUSH` listener is
-// already attached. Deferring it to the first `_eventBusOn` call made the
-// buffer depend on some unrelated hook having subscribed first — exactly the
-// slow-cold-launch case it exists to cover (#11280).
-_ensureEventBusWired();
-
-function _eventBusOn<K extends keyof IpcEventBusMap>(
-  name: K,
-  callback: (payload: IpcEventBusMap[K]) => void
-): () => void {
-  _ensureEventBusWired();
-  let set = _eventBusSubscribers.get(name);
-  if (!set) {
-    set = new Set();
-    _eventBusSubscribers.set(name, set);
-  }
-  const wrapped = callback as EventBusSubscriber;
-  set.add(wrapped);
-  // Replay a buffered event to the first subscriber (see _eventBusReplayable) so
-  // a signal delivered before this subscriber mounted isn't lost.
-  if (_eventBusBuffered.has(name)) {
-    const buffered = _eventBusBuffered.get(name) ?? [];
-    _eventBusBuffered.delete(name);
-    for (const payload of buffered) {
-      try {
-        wrapped(payload);
-      } catch (err) {
-        console.error("[Preload] events:push replay threw for", name, err);
-      }
-    }
-  }
-  return () => {
-    const current = _eventBusSubscribers.get(name);
-    if (!current) return;
-    current.delete(wrapped);
-    if (current.size === 0) _eventBusSubscribers.delete(name);
-  };
-}
-
-// Multiplexer for the shared terminal:data channel, mirroring _eventBusOn:
-// one ipcRenderer listener dispatching by terminal id, instead of one
-// filtering listener per terminal (O(N) handler invocations per chunk and a
-// MaxListenersExceededWarning at 10+ terminals).
-type TerminalDataSubscriber = (data: string | Uint8Array, streamEnd?: number) => void;
-const _terminalDataSubscribers = new Map<string, Set<TerminalDataSubscriber>>();
-let _terminalDataWired = false;
-
-function _ensureTerminalDataWired(): void {
-  if (_terminalDataWired) return;
-  _terminalDataWired = true;
-  ipcRenderer.on(
-    CHANNELS.TERMINAL_DATA,
-    (_event, terminalId: unknown, data: unknown, streamEnd: unknown) => {
-      if (typeof terminalId !== "string") return;
-      const subs = _terminalDataSubscribers.get(terminalId);
-      if (!subs || subs.size === 0) return;
-      // Accept string, Uint8Array, or Buffer (Node.js extends Uint8Array)
-      if (typeof data === "string" || data instanceof Uint8Array || Buffer.isBuffer(data)) {
-        const end = typeof streamEnd === "number" ? streamEnd : undefined;
-        // Iterate the live Set directly — unlike the events:push dispatcher
-        // above, terminal data subscribers don't unsubscribe during dispatch,
-        // and this path runs per chunk, so the snapshot allocation matters.
-        for (const cb of subs) {
-          cb(data, end);
-        }
-      }
-    }
-  );
-}
-
-function _terminalDataOn(id: string, callback: TerminalDataSubscriber): () => void {
-  _ensureTerminalDataWired();
-  let subs = _terminalDataSubscribers.get(id);
-  if (!subs) {
-    subs = new Set();
-    _terminalDataSubscribers.set(id, subs);
-  }
-  // Fresh wrapper per subscription so the same callback can subscribe twice
-  // and each cleanup removes only its own subscription.
-  const wrapped: TerminalDataSubscriber = (data) => callback(data);
-  subs.add(wrapped);
-  return () => {
-    const current = _terminalDataSubscribers.get(id);
-    if (!current) return;
-    current.delete(wrapped);
-    if (current.size === 0) _terminalDataSubscribers.delete(id);
-  };
-}
-
-// Multiplexer for the plugin push transport `plugin:{pluginId}:{channel}`,
-// mirroring _terminalDataOn. host.broadcastToRenderer, host.postToPanel, and the
-// managed-process stream all push a PluginPanelEventEnvelope `{ panelId, payload }`
-// over this channel, and multiple panel instances of one kind each subscribe to
-// the same channel. Before #10618 every `plugin.on` call added its own raw
-// ipcRenderer.on with no per-instance filter, so every push reached every
-// instance. Now one physical listener per full channel fans out by panelId: a
-// broadcast envelope (`panelId: null`) reaches only broadcast subscribers (those
-// registered via `plugin.on`), and a targeted envelope reaches only the
-// subscribers registered for that exact panelId via `plugin.onPanel` — so
-// `postToPanel(channel, payload, "panel-a")` no longer leaks to sibling
-// instances.
-type PluginPushSubscriber = (payload: unknown) => void;
-interface PluginPushChannelEntry {
-  handler: (event: Electron.IpcRendererEvent, raw: unknown) => void;
-  // Keyed by panelId; the `null` key holds broadcast subscribers.
-  subscribers: Map<string | null, Set<PluginPushSubscriber>>;
-}
-const _pluginPushChannels = new Map<string, PluginPushChannelEntry>();
-
-// Recent push deliveries, for the renderer's long-frame attribution: plugin
-// code runs through the host's React, so a frame spent reacting to a push
-// never names the plugin, and the page cannot wrap the contextBridge objects
-// the push arrives through. One slot per delivery interval; deliveries to the
-// same plugin within a few milliseconds of each other extend the newest slot,
-// so a flood costs two clock reads per push and no allocation.
-const PUSH_DELIVERY_RING = 128;
-const PUSH_DELIVERY_COALESCE_MS = 4;
-const _pushDeliveryStarts = new Float64Array(PUSH_DELIVERY_RING);
-const _pushDeliveryEnds = new Float64Array(PUSH_DELIVERY_RING);
-const _pushDeliveryPlugins: (string | undefined)[] = new Array(PUSH_DELIVERY_RING);
-let _pushDeliveryCursor = 0;
-let _pushDeliveryCount = 0;
-
-function _recordPushDelivery(pluginId: string, start: number, end: number): void {
-  if (_pushDeliveryCount > 0) {
-    const newest = (_pushDeliveryCursor - 1 + PUSH_DELIVERY_RING) % PUSH_DELIVERY_RING;
-    if (
-      _pushDeliveryPlugins[newest] === pluginId &&
-      start - _pushDeliveryEnds[newest]! <= PUSH_DELIVERY_COALESCE_MS
-    ) {
-      if (end > _pushDeliveryEnds[newest]!) _pushDeliveryEnds[newest] = end;
-      return;
-    }
-  }
-  _pushDeliveryStarts[_pushDeliveryCursor] = start;
-  _pushDeliveryEnds[_pushDeliveryCursor] = end;
-  _pushDeliveryPlugins[_pushDeliveryCursor] = pluginId;
-  _pushDeliveryCursor = (_pushDeliveryCursor + 1) % PUSH_DELIVERY_RING;
-  if (_pushDeliveryCount < PUSH_DELIVERY_RING) _pushDeliveryCount++;
-}
-
-function _pluginsWithPushDeliveriesDuring(start: unknown, end: unknown): string[] {
-  if (typeof start !== "number" || typeof end !== "number") return [];
-  const found: string[] = [];
-  for (let i = 0; i < _pushDeliveryCount; i++) {
-    const pluginId = _pushDeliveryPlugins[i];
-    if (pluginId === undefined || found.includes(pluginId)) continue;
-    if (_pushDeliveryEnds[i]! >= start && _pushDeliveryStarts[i]! <= end) found.push(pluginId);
-  }
-  return found;
-}
-
-// Main batches every push on this transport into one message per renderer per
-// macrotask (an ordered `[fullChannel, envelope]` array). Each entry is replayed
-// through the per-channel dispatcher below, in order, so panel filtering and
-// subscriber isolation are exactly those of an individually sent push.
-let _pluginPushBatchAttached = false;
-function _attachPluginPushBatchListener(): void {
-  if (_pluginPushBatchAttached) return;
-  _pluginPushBatchAttached = true;
-  ipcRenderer.on(PLUGIN_PUSH_BATCH_CHANNEL, (event, batch: unknown) => {
-    if (!Array.isArray(batch)) return;
-    for (const entry of batch) {
-      if (!Array.isArray(entry) || typeof entry[0] !== "string") continue;
-      _pluginPushChannels.get(entry[0])?.handler(event, entry[1]);
-    }
-  });
-}
-
-// Main tells plugins whether any renderer listens on a push channel
-// (`host.hasListeners`), so a producer can stop computing pushes nobody wants.
-// What it needs is which `(fullChannel, panelId)` buckets have a subscriber,
-// so that set is reported whole whenever a bucket appears or empties —
-// coalesced to one message per microtask, and never for a second listener
-// joining a bucket that already has one. A whole-set report is idempotent: a
-// lost or reordered one cannot leave main's view drifting.
-//
-// Delivery never depends on it: a report always trails the subscriber that
-// caused it, so main sends every push to this renderer regardless. The first
-// report goes out at preload load, empty; until it lands main counts this
-// renderer as listening everywhere.
-let _pluginListenersDirty = false;
-let _pluginListenersQueued = false;
-function _markPluginListenersChanged(): void {
-  _pluginListenersDirty = true;
-  if (_pluginListenersQueued) return;
-  _pluginListenersQueued = true;
-  queueMicrotask(_flushPluginListenerReport);
-}
-function _flushPluginListenerReport(): void {
-  _pluginListenersQueued = false;
-  if (!_pluginListenersDirty) return;
-  _pluginListenersDirty = false;
-  const listeners: Array<[string, string | null]> = [];
-  for (const [fullChannel, entry] of _pluginPushChannels) {
-    for (const panelId of entry.subscribers.keys()) listeners.push([fullChannel, panelId]);
-  }
-  try {
-    ipcRenderer.send(CHANNELS.PLUGIN_REPORT_PUSH_LISTENERS, listeners);
-  } catch {
-    // A page tearing down; its successor reports afresh.
-  }
-}
-_markPluginListenersChanged();
-
-// A plugin invoke from this renderer — a view pulling its snapshot right after
-// subscribing — must not reach main ahead of the subscription it follows, or
-// the worker could serve it while still told nobody listens, and pause the
-// stream the view is about to rely on.
-function _pluginInvoke(channel: string, ...args: unknown[]): Promise<unknown> {
-  _flushPluginListenerReport();
-  return _unwrappingInvoke(channel, ...args);
-}
+// Wired eagerly at creation: see createEventBus.
+const { on: _eventBusOn } = createEventBus(ipcRenderer);
+const { on: _terminalDataOn } = createTerminalDataMultiplexer(ipcRenderer);
+const {
+  on: _pluginPushOn,
+  invoke: _pluginInvoke,
+  pluginsWithPushDeliveriesDuring: _pluginsWithPushDeliveriesDuring,
+} = createPluginPushTransport(ipcRenderer, _unwrappingInvoke);
 
 // One main-side subscription per preload, however many listeners the page adds.
 const _perfSnapshotListeners = new Set<(snapshots: PluginPerfSnapshot[]) => void>();
@@ -1301,76 +738,6 @@ function _onPerfSnapshotsChanged(callback: (snapshots: PluginPerfSnapshot[]) => 
     _perfSnapshotDetach();
     _perfSnapshotDetach = null;
     ipcRenderer.send(CHANNELS.PLUGIN_PERF_SNAPSHOTS_UNSUBSCRIBE);
-  };
-}
-
-function _pluginPushOn(
-  pluginId: string,
-  channel: string,
-  panelId: string | null,
-  callback: PluginPushSubscriber
-): () => void {
-  const fullChannel = `plugin:${pluginId}:${channel}`;
-  _attachPluginPushBatchListener();
-  let entry = _pluginPushChannels.get(fullChannel);
-  if (!entry) {
-    const subscribers = new Map<string | null, Set<PluginPushSubscriber>>();
-    const handler = (_event: Electron.IpcRendererEvent, raw: unknown): void => {
-      // Unwrap the envelope. Every push site enveloples, but normalize
-      // defensively: an unexpected shape degrades to a broadcast of the raw
-      // value rather than crashing the dispatcher or dropping the push.
-      let targetPanelId: string | null = null;
-      let payload: unknown = raw;
-      if (raw !== null && typeof raw === "object" && "panelId" in raw && "payload" in raw) {
-        const env = raw as { panelId: unknown; payload: unknown };
-        targetPanelId = typeof env.panelId === "string" ? env.panelId : null;
-        payload = env.payload;
-      }
-      const set = subscribers.get(targetPanelId);
-      if (!set || set.size === 0) return;
-      const deliveredAt = performance.now();
-      // Snapshot before dispatch: a subscriber may unsubscribe (or its panel may
-      // unmount) inside its own callback, mutating the Set mid-iteration.
-      for (const cb of [...set]) {
-        try {
-          cb(payload);
-        } catch (err) {
-          console.error("[Preload] plugin push subscriber threw for", fullChannel, err);
-        }
-      }
-      _recordPushDelivery(pluginId, deliveredAt, performance.now());
-    };
-    ipcRenderer.on(fullChannel, handler);
-    entry = { handler, subscribers };
-    _pluginPushChannels.set(fullChannel, entry);
-  }
-  let set = entry.subscribers.get(panelId);
-  if (!set) {
-    set = new Set();
-    entry.subscribers.set(panelId, set);
-    _markPluginListenersChanged();
-  }
-  // Fresh wrapper per subscription so the same callback can subscribe twice and
-  // each cleanup removes only its own registration.
-  const wrapped: PluginPushSubscriber = (payload) => callback(payload);
-  set.add(wrapped);
-  return () => {
-    const current = _pluginPushChannels.get(fullChannel);
-    if (!current) return;
-    const currentSet = current.subscribers.get(panelId);
-    if (currentSet) {
-      currentSet.delete(wrapped);
-      if (currentSet.size === 0) {
-        current.subscribers.delete(panelId);
-        _markPluginListenersChanged();
-      }
-    }
-    // Tear down the physical listener once every panelId bucket is empty, so an
-    // unmounted view doesn't leak its channel listener.
-    if (current.subscribers.size === 0) {
-      ipcRenderer.removeListener(fullChannel, current.handler);
-      _pluginPushChannels.delete(fullChannel);
-    }
   };
 }
 
@@ -1529,11 +896,14 @@ function buildElectronApi(): ElectronAPI {
       onData: (id: string, callback: (data: string | Uint8Array, streamEnd?: number) => void) =>
         _terminalDataOn(id, callback),
 
-      onExit: (callback: (id: string, exitCode: number) => void) =>
+      onExit: (callback: (id: string, exitCode: number, context?: TerminalExitContext) => void) =>
         _eventBusOn("terminal:exit", (payload) => {
           if (!Array.isArray(payload)) return;
-          const [id, exitCode] = payload;
-          if (typeof id === "string" && typeof exitCode === "number") {
+          const [id, exitCode, context] = payload;
+          if (typeof id !== "string" || typeof exitCode !== "number") return;
+          if (context?.preserveSession === true) {
+            callback(id, exitCode, { preserveSession: true });
+          } else {
             callback(id, exitCode);
           }
         }),
@@ -1699,9 +1069,8 @@ function buildElectronApi(): ElectronAPI {
           }
         }),
 
-      onReduceScrollback: (
-        callback: (data: { terminalIds: string[]; targetLines: number }) => void
-      ) => _typedOn(CHANNELS.TERMINAL_REDUCE_SCROLLBACK, callback),
+      onReduceScrollback: (callback: (data: { targetLines: number }) => void) =>
+        _typedOn(CHANNELS.TERMINAL_REDUCE_SCROLLBACK, callback),
 
       onRestoreScrollback: (callback: (data: { terminalIds: string[] }) => void) =>
         _typedOn(CHANNELS.TERMINAL_RESTORE_SCROLLBACK, callback),
@@ -1727,18 +1096,20 @@ function buildElectronApi(): ElectronAPI {
       // isolation. Plugin views render inline in this same document, so any
       // code in the page can still call it — separating them would need a
       // context of their own. `""` for a File with nothing on disk behind it.
-      // In a view attached to a remote host, the paths are also recorded in
-      // main as files the person chose here: an upload reads only those.
+      // The paths are also recorded in main as files the person chose here:
+      // a remote-bound view's upload reads only those, and a local plugin view
+      // imports only those as artifacts.
       getDroppedFilePaths: buildDroppedFilePathsBinding<File>(
         (file) => webUtils.getPathForFile(file),
-        viewHostId
-          ? (paths) => ipcRenderer.send(CHANNELS.FILE_TRANSFER_GRANT_LOCAL_SOURCES, paths)
-          : undefined
+        (paths) => ipcRenderer.send(CHANNELS.FILE_TRANSFER_GRANT_LOCAL_SOURCES, paths)
       ),
     },
 
     // Diff media API — HEAD vs working-tree image versions for image compare
     diffMedia: buildDiffMediaPreloadBindings(_unwrappingInvoke),
+
+    // Host-owned document for view-backed file editors (#13809).
+    fileDocument: buildFileDocumentPreloadBindings(_unwrappingInvoke),
 
     // File browser API — lazy directory listings for the read-only browser panel
     fileBrowser: buildFileBrowserPreloadBindings(_unwrappingInvoke),
@@ -2022,6 +1393,9 @@ function buildElectronApi(): ElectronAPI {
 
       onConfigReloaded: (callback: () => void) => _typedOn(CHANNELS.APP_CONFIG_RELOADED, callback),
 
+      onPanelGridConfigChanged: (callback: (config: PanelGridConfig) => void) =>
+        _typedOn(CHANNELS.APP_PANEL_GRID_CONFIG_CHANGED, callback),
+
       onViewRevealed: (callback: (payload?: { switchId?: string }) => void) =>
         _typedOn(CHANNELS.APP_VIEW_REVEALED, callback),
       onViewWarmActivated: (callback: (payload?: { switchId?: string }) => void) =>
@@ -2183,6 +1557,17 @@ function buildElectronApi(): ElectronAPI {
         ) => void
       ) => _typedOn(CHANNELS.PROJECT_FOCUS_ON_ACTIVATE, callback),
 
+      onPanelRecoveryQuery: (callback: (requestId: string) => void) =>
+        _typedOn(CHANNELS.PROJECT_PANEL_RECOVERY_QUERY, callback),
+
+      replyPanelRecovery: (requestId: string, holding: boolean) => {
+        ipcRenderer.send(CHANNELS.PROJECT_PANEL_RECOVERY_REPLY, { requestId, holding });
+      },
+
+      reportPanelRecoveryState: (holding: boolean) => {
+        ipcRenderer.send(CHANNELS.PROJECT_PANEL_RECOVERY_STATE, holding);
+      },
+
       onBackgroundResize: (callback: (payload: { width: number; height: number }) => void) =>
         _typedOn(CHANNELS.PROJECT_BACKGROUND_RESIZE, callback),
 
@@ -2235,8 +1620,16 @@ function buildElectronApi(): ElectronAPI {
         callback: (stats: import("../shared/types/ipc/project.js").ProjectStatusMap) => void
       ) => _typedOn(CHANNELS.PROJECT_STATS_UPDATED, callback),
 
-      createFolder: (parentPath: string, folderName: string): Promise<string> =>
-        _unwrappingInvoke(CHANNELS.PROJECT_CREATE_FOLDER, { parentPath, folderName }),
+      createFolder: (
+        parentPath: string,
+        folderName: string,
+        template?: import("../shared/types/plugin.js").ProjectTemplateSelection
+      ): Promise<string> =>
+        _unwrappingInvoke(CHANNELS.PROJECT_CREATE_FOLDER, {
+          parentPath,
+          folderName,
+          ...(template !== undefined ? { template } : {}),
+        }),
 
       initGit: (directoryPath: string) =>
         _unwrappingInvoke(CHANNELS.PROJECT_INIT_GIT, directoryPath),
@@ -2370,6 +1763,14 @@ function buildElectronApi(): ElectronAPI {
         callback: (request: import("../shared/types/ipc/canopy.js").CanopyRestoreRequest) => void
       ) => _typedOn(CHANNELS.CANOPY_RESTORE_REQUESTED, callback),
 
+      onRemoveRequested: (
+        callback: (request: import("../shared/types/ipc/canopy.js").CanopyRemoveRequest) => void
+      ) => _typedOn(CHANNELS.CANOPY_REMOVE_REQUESTED, callback),
+
+      onResumeRequested: (
+        callback: (request: import("../shared/types/ipc/canopy.js").CanopyResumeRequest) => void
+      ) => _typedOn(CHANNELS.CANOPY_RESUME_REQUESTED, callback),
+
       onRenameRequested: (
         callback: (request: import("../shared/types/ipc/canopy.js").CanopyRenameRequest) => void
       ) => _typedOn(CHANNELS.CANOPY_RENAME_REQUESTED, callback),
@@ -2415,6 +1816,9 @@ function buildElectronApi(): ElectronAPI {
 
       stampVersion: (version: number) =>
         _unwrappingInvoke(CHANNELS.AGENT_SETTINGS_STAMP_VERSION, version),
+
+      onChanged: (callback: (settings: AgentSettings) => void) =>
+        _typedOn(CHANNELS.AGENT_SETTINGS_CHANGED, callback),
     },
 
     userAgentRegistry: {
@@ -2442,6 +1846,14 @@ function buildElectronApi(): ElectronAPI {
         _typedOn(CHANNELS.AGENT_DEFAULTS_CHANGED, callback),
     },
 
+    // This machine's toolbar agent pins (#14702)
+    agentToolbarPins: {
+      ...buildAgentToolbarPinsPreloadBindings(_unwrappingInvoke),
+
+      onChanged: (callback: (snapshot: AgentToolbarPinsSnapshot) => void) =>
+        _typedOn(CHANNELS.AGENT_TOOLBAR_PINS_CHANGED, callback),
+    },
+
     // Per-service connectivity API
     connectivity: {
       ...buildConnectivityPreloadBindings(_unwrappingInvoke),
@@ -2457,6 +1869,38 @@ function buildElectronApi(): ElectronAPI {
       onChanged: (callback: () => void) => _typedOn(CHANNELS.PROJECT_PRESENCE_CHANGED, callback),
     },
 
+    // The sender project's presentation profile (#13771)
+    projectPresentation: {
+      ...buildProjectPresentationPreloadBindings(_unwrappingInvoke),
+
+      onChanged: (callback: (snapshot: IpcEventMap["project-presentation:changed"]) => void) =>
+        _typedOn(CHANNELS.PROJECT_PRESENTATION_CHANGED, callback),
+    },
+
+    // The sender project's own theme (#13833)
+    projectTheme: {
+      ...buildProjectThemePreloadBindings(_unwrappingInvoke),
+
+      onChanged: (callback: (change: IpcEventMap["project-theme:changed"]) => void) =>
+        _typedOn(CHANNELS.PROJECT_THEME_CHANGED, callback),
+    },
+
+    // The sender project's custom worktree titles (#14022)
+    worktreeTitles: {
+      ...buildWorktreeTitlesPreloadBindings(_unwrappingInvoke),
+
+      onChanged: (callback: (snapshot: IpcEventMap["worktree-titles:changed"]) => void) =>
+        _typedOn(CHANNELS.WORKTREE_TITLES_CHANGED, callback),
+    },
+
+    // The sender project's review marks (#14584)
+    reviewMarks: {
+      ...buildReviewMarksPreloadBindings(_unwrappingInvoke),
+
+      onChanged: (callback: (snapshot: IpcEventMap["review-marks:changed"]) => void) =>
+        _typedOn(CHANNELS.REVIEW_MARKS_CHANGED, callback),
+    },
+
     // Dev Preview API
     devPreview: {
       ...buildDevPreviewPreloadBindings(_unwrappingInvoke),
@@ -2468,13 +1912,20 @@ function buildElectronApi(): ElectronAPI {
         _typedOn(CHANNELS.DEV_PREVIEW_ALL_SESSIONS_CHANGED, callback),
     },
 
-    // Site Preview bridge API. No `evaluate` method by design — the guest
-    // runtime is supplied once at bind time and nothing else runs in the page.
-    sitePreview: {
-      ...buildSitePreviewPreloadBindings(_unwrappingInvoke),
+    // Site Preview bridge API: the lifecycle commands for an Element Picker
+    // binding. No `evaluate` method by design.
+    sitePreview: buildSitePreviewPreloadBindings(_unwrappingInvoke),
 
-      onEvent: (callback: (payload: SitePreviewPushPayload) => void) =>
-        _typedOn(CHANNELS.SITE_PREVIEW_EVENT, callback),
+    // Core Element Picker. Like the bridge, no way to choose what runs in the
+    // page; a workspace names a worktree of the sender's project, never a path.
+    elementPicker: {
+      ...buildElementPickerPreloadBindings(_unwrappingInvoke),
+
+      onEvent: (callback: (payload: ElementPickerPushPayload) => void) =>
+        _typedOn(CHANNELS.ELEMENT_PICKER_EVENT, callback),
+
+      onSourceChanged: (callback: (payload: ElementPickerSourceChangedPush) => void) =>
+        _typedOn(CHANNELS.ELEMENT_PICKER_SOURCE_CHANGED, callback),
     },
 
     // Git API
@@ -2484,13 +1935,14 @@ function buildElectronApi(): ElectronAPI {
         filePath: string,
         status: GitStatus,
         ignoreWhitespace?: boolean,
-        window?: { offset?: number; maxBytes?: number }
+        window?: { offset?: number; maxBytes?: number; side?: "staged" | "unstaged" }
       ) =>
         _unwrappingInvoke(CHANNELS.GIT_GET_FILE_DIFF, {
           cwd,
           filePath,
           status,
           ignoreWhitespace,
+          side: window?.side,
           offset: window?.offset,
           maxBytes: window?.maxBytes,
         }),
@@ -2634,6 +2086,19 @@ function buildElectronApi(): ElectronAPI {
       ...buildTerminalConfigPreloadBindings(_unwrappingInvoke),
 
       importColorScheme: () => _unwrappingInvoke(CHANNELS.TERMINAL_CONFIG_IMPORT_COLOR_SCHEME),
+
+      onChanged: (callback: (change: TerminalConfigChange) => void) => {
+        const offDevice = _typedOn(CHANNELS.TERMINAL_CONFIG_DEVICE_CHANGED, (config) =>
+          callback({ owner: "device", config })
+        );
+        const offHost = _typedOn(CHANNELS.TERMINAL_CONFIG_HOST_CHANGED, (config) =>
+          callback({ owner: "host", config })
+        );
+        return () => {
+          offDevice();
+          offHost();
+        };
+      },
     },
 
     // Configuration export/import API (#11889)
@@ -2790,20 +2255,6 @@ function buildElectronApi(): ElectronAPI {
       onStateChanged: (
         callback: (state: import("../shared/types/ipc/keepAwake.js").KeepAwakeState) => void
       ): (() => void) => _typedOn(CHANNELS.KEEP_AWAKE_STATE_CHANGED, callback),
-    },
-
-    hibernation: {
-      ...buildHibernationPreloadBindings(_unwrappingInvoke),
-
-      onProjectHibernated: (
-        callback: (payload: {
-          projectId: string;
-          projectName: string;
-          reason: "scheduled" | "memory-pressure" | "user-initiated";
-          terminalsKilled: number;
-          timestamp: number;
-        }) => void
-      ): (() => void) => _typedOn(CHANNELS.HIBERNATION_PROJECT_HIBERNATED, callback),
     },
 
     // Idle Terminal Notification API
@@ -2978,6 +2429,7 @@ function buildElectronApi(): ElectronAPI {
           message: string;
           duration?: number;
           rateLimitKey?: string;
+          rateLimitLabel?: string;
           priority?: "high" | "low" | "watch";
           action?: { label: string; ipcChannel: string; data?: string };
           pluginActions?: Array<{
@@ -2986,6 +2438,12 @@ function buildElectronApi(): ElectronAPI {
             args?: Record<string, unknown>;
           }>;
           replaceKey?: string;
+          context?: {
+            projectId?: string;
+            worktreeId?: string;
+            panelId?: string;
+            plugin?: { id: string; name: string };
+          };
         }) => void
       ) => _typedOn(CHANNELS.NOTIFICATION_SHOW_TOAST, callback),
     },
@@ -3289,6 +2747,7 @@ function buildElectronApi(): ElectronAPI {
     },
     pluginParity: buildPluginParityPreloadBindings(_unwrappingInvoke),
     settingsCopy: buildSettingsCopyPreloadBindings(_unwrappingInvoke),
+    hostSettings: buildHostSettingsPreloadBindings(_unwrappingInvoke),
 
     onboarding: {
       ...buildOnboardingPreloadBindings(_unwrappingInvoke),
@@ -3316,10 +2775,18 @@ function buildElectronApi(): ElectronAPI {
         _unwrappingInvoke(CHANNELS.FORGE_OPEN_PRS, cwd, query, state),
       openCommits: (cwd: string, branch?: string) =>
         _unwrappingInvoke(CHANNELS.FORGE_OPEN_COMMITS, cwd, branch),
-      openIssue: (payload: { cwd: string; issueNumber: number }) =>
-        _unwrappingInvoke(CHANNELS.FORGE_OPEN_ISSUE, payload),
-      getIssueUrl: (payload: { cwd: string; issueNumber: number }) =>
-        _unwrappingInvoke(CHANNELS.FORGE_GET_ISSUE_URL, payload),
+      openIssue: (
+        payload: {
+          cwd: string;
+          issueNumber: number;
+        } & import("../shared/types/ipc/forge.js").IssueLinkTarget
+      ) => _unwrappingInvoke(CHANNELS.FORGE_OPEN_ISSUE, payload),
+      getIssueUrl: (
+        payload: {
+          cwd: string;
+          issueNumber: number;
+        } & import("../shared/types/ipc/forge.js").IssueLinkTarget
+      ) => _unwrappingInvoke(CHANNELS.FORGE_GET_ISSUE_URL, payload),
       openRepo: (payload: { cwd: string }) => _unwrappingInvoke(CHANNELS.FORGE_OPEN_REPO, payload),
       getRepoUrl: (payload: { cwd: string }) =>
         _unwrappingInvoke(CHANNELS.FORGE_GET_REPO_URL, payload),
@@ -3379,7 +2846,7 @@ function buildElectronApi(): ElectronAPI {
         _unwrappingInvoke(CHANNELS.FORGE_LIST_PRS, payload),
       getIssue: (payload: { cwd: string; issueNumber: number }) =>
         _unwrappingInvoke(CHANNELS.FORGE_GET_ISSUE, payload),
-      getPR: (payload: { cwd: string; prNumber: number }) =>
+      getPR: (payload: { cwd: string; prNumber: number; fresh?: boolean }) =>
         _unwrappingInvoke(CHANNELS.FORGE_GET_PR, payload),
       getCIStatus: (payload: { cwd: string; prNumber: number }) =>
         _unwrappingInvoke(CHANNELS.FORGE_GET_CI_STATUS, payload),
@@ -3407,14 +2874,20 @@ function buildElectronApi(): ElectronAPI {
         _unwrappingInvoke(CHANNELS.FORGE_GET_FIRST_PAGE_CACHE, payload),
       getProjectHealth: (payload: { cwd: string; bypassCache?: boolean }) =>
         _unwrappingInvoke(CHANNELS.FORGE_GET_PROJECT_HEALTH, payload),
-      getIssueTooltip: (payload: { cwd: string; issueNumber: number }) =>
-        _unwrappingInvoke(CHANNELS.FORGE_GET_ISSUE_TOOLTIP, payload),
+      getIssueTooltip: (
+        payload: {
+          cwd: string;
+          issueNumber: number;
+        } & import("../shared/types/ipc/forge.js").IssueLinkTarget
+      ) => _unwrappingInvoke(CHANNELS.FORGE_GET_ISSUE_TOOLTIP, payload),
       getPRTooltip: (payload: { cwd: string; prNumber: number }) =>
         _unwrappingInvoke(CHANNELS.FORGE_GET_PR_TOOLTIP, payload),
       getIssuesByNumbers: (payload: { cwd: string; numbers: number[] }) =>
         _unwrappingInvoke(CHANNELS.FORGE_GET_ISSUES_BY_NUMBERS, payload),
       getPRsByNumbers: (payload: { cwd: string; numbers: number[] }) =>
         _unwrappingInvoke(CHANNELS.FORGE_GET_PRS_BY_NUMBERS, payload),
+      getReferencesByNumbers: (payload: { cwd: string; numbers: number[] }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_GET_REFERENCES_BY_NUMBERS, payload),
       getPRReviewThreads: (payload: { cwd: string; prNumber: number }) =>
         _unwrappingInvoke(CHANNELS.FORGE_GET_PR_REVIEW_THREADS, payload),
       listIssueComments: (payload: { cwd: string; issueNumber: number; opts?: unknown }) =>
@@ -3447,7 +2920,18 @@ function buildElectronApi(): ElectronAPI {
         mergeMethod?: "merge" | "squash" | "rebase";
         commitTitle?: string;
         commitMessage?: string;
+        expectedHeadSha?: string;
+        expectedBaseRef?: string;
       }) => _unwrappingInvoke(CHANNELS.FORGE_MERGE_PR, payload),
+      enableAutoMerge: (payload: {
+        cwd: string;
+        prNumber: number;
+        mergeMethod?: "merge" | "squash" | "rebase";
+        expectedHeadSha: string;
+        expectedBaseRef?: string;
+      }) => _unwrappingInvoke(CHANNELS.FORGE_ENABLE_AUTO_MERGE, payload),
+      disableAutoMerge: (payload: { cwd: string; prNumber: number }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_DISABLE_AUTO_MERGE, payload),
       convertPRToDraft: (payload: { cwd: string; prNumber: number }) =>
         _unwrappingInvoke(CHANNELS.FORGE_CONVERT_PR_TO_DRAFT, payload),
       markPRReadyForReview: (payload: { cwd: string; prNumber: number }) =>
@@ -3484,51 +2968,119 @@ function buildElectronApi(): ElectronAPI {
 
     // Voice Input API
     voiceInput: {
+      ...buildVoiceInputPreloadBindings(_unwrappingInvoke),
       getSettings: () => _unwrappingInvoke(CHANNELS.VOICE_INPUT_GET_SETTINGS),
       setSettings: (
         patch: Partial<{
           enabled: boolean;
           openaiApiKey: string;
           deepgramApiKey: string;
+          xaiApiKey: string;
           language: string;
-          customDictionary: string[];
-          transcriptionProvider: "openai" | "deepgram";
+          transcriptionProvider: "openai" | "deepgram" | "grok";
           transcriptionModel: "gpt-live-transcribe";
           correctionEnabled: boolean;
-          correctionModel: "gpt-5.6-luna";
+          correctionModel: "gpt-6.1-terra" | "gpt-6-luna";
           correctionCustomInstructions: string;
           paragraphingStrategy: "spoken-command" | "manual";
           resolveFileLinks: boolean;
           deviceId: string;
-          recordingMode: "toggle" | "push-to-talk";
+          recordingMode: "toggle" | "push-to-talk" | "tap-or-hold";
         }>
       ) => _unwrappingInvoke(CHANNELS.VOICE_INPUT_SET_SETTINGS, patch),
-      start: () => _unwrappingInvoke(CHANNELS.VOICE_INPUT_START),
-      stop: () => _unwrappingInvoke(CHANNELS.VOICE_INPUT_STOP),
-      flushParagraph: () => _unwrappingInvoke(CHANNELS.VOICE_INPUT_FLUSH_PARAGRAPH),
-      sendAudioChunk: (chunk: ArrayBuffer) =>
-        ipcRenderer.send(CHANNELS.VOICE_INPUT_AUDIO_CHUNK, chunk),
-      onTranscriptionDelta: (callback: (payload: { text: string; itemId?: string }) => void) =>
-        _typedOn(CHANNELS.VOICE_INPUT_TRANSCRIPTION_DELTA, callback),
+      sendAudioChunk: (sessionId: string, chunk: ArrayBuffer) =>
+        ipcRenderer.send(CHANNELS.VOICE_INPUT_AUDIO_CHUNK, sessionId, chunk),
+      onTranscriptionDelta: (
+        callback: (payload: {
+          sessionId: string;
+          text: string;
+          itemId?: string;
+          replace?: boolean;
+        }) => void
+      ) => _typedOn(CHANNELS.VOICE_INPUT_TRANSCRIPTION_DELTA, callback),
       onTranscriptionComplete: (
-        callback: (payload: { text: string; willCorrect: boolean; itemId?: string }) => void
+        callback: (payload: {
+          sessionId: string;
+          text: string;
+          willCorrect: boolean;
+          /** The words as transcribed, when heard-as rules rewrote them into `text`. */
+          heard?: string;
+          itemId?: string;
+          transcriptId?: string;
+          send?: boolean;
+          commandText?: string;
+          /** Spans of `text` the recogniser was unsure of. */
+          uncertain?: Array<{ from: number; to: number }>;
+          /** Spans of `heard` the recogniser was unsure of. */
+          heardUncertain?: Array<{ from: number; to: number }>;
+          /** Spans of `commandText` the recogniser was unsure of. */
+          commandUncertain?: Array<{ from: number; to: number }>;
+          /**
+           * Where the speaker paused in `text`, each straight after a word. With no
+           * words, `[0]` marks a pause after the words that landed before it.
+           */
+          pauses?: number[];
+          /** Where the speaker paused in `heard`. */
+          heardPauses?: number[];
+          /** Where the speaker paused in `commandText`. */
+          commandPauses?: number[];
+        }) => void
       ) => _typedOn(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, callback),
-      onParagraphBoundary: (callback: (payload: { rawText: string | null }) => void) =>
-        _typedOn(CHANNELS.VOICE_INPUT_PARAGRAPH_BOUNDARY, callback),
-      onError: (callback: (error: VoiceInputError) => void) =>
+      onParagraphBoundary: (
+        callback: (payload: { sessionId: string; rawText: string | null }) => void
+      ) => _typedOn(CHANNELS.VOICE_INPUT_PARAGRAPH_BOUNDARY, callback),
+      onError: (callback: (payload: { sessionId: string; error: VoiceInputError }) => void) =>
         _typedOn(CHANNELS.VOICE_INPUT_ERROR, callback),
-      onStatus: (callback: (status: VoiceInputStatus) => void) =>
+      onStatus: (callback: (payload: { sessionId: string; status: VoiceInputStatus }) => void) =>
         _typedOn(CHANNELS.VOICE_INPUT_STATUS, callback),
+      onSessionEnded: (
+        callback: (payload: {
+          sessionId: string;
+          reason: VoiceSessionEndReason;
+          report: VoiceSessionReport;
+        }) => void
+      ) => _typedOn(CHANNELS.VOICE_INPUT_SESSION_ENDED, callback),
+      onLiveSession: (callback: (update: VoiceLiveSessionUpdate) => void) =>
+        _typedOn(CHANNELS.VOICE_INPUT_LIVE_SESSION, callback),
+      onStopRequested: (callback: (payload: VoiceStopRequest) => void) =>
+        _typedOn(CHANNELS.VOICE_INPUT_STOP_REQUESTED, callback),
+      onRevealRequested: (callback: (payload: VoiceRevealRequest) => void) =>
+        _typedOn(CHANNELS.VOICE_INPUT_REVEAL_REQUESTED, callback),
+      onLiveLevel: (callback: (payload: VoiceLiveLevel) => void) =>
+        _typedOn(CHANNELS.VOICE_INPUT_LIVE_LEVEL, callback),
+      onPauseRequested: (callback: (payload: VoicePauseRequest) => void) =>
+        _typedOn(CHANNELS.VOICE_INPUT_PAUSE_REQUESTED, callback),
       checkMicPermission: () => _unwrappingInvoke(CHANNELS.VOICE_INPUT_CHECK_MIC_PERMISSION),
       requestMicPermission: () => _unwrappingInvoke(CHANNELS.VOICE_INPUT_REQUEST_MIC_PERMISSION),
       openMicSettings: () => _unwrappingInvoke(CHANNELS.VOICE_INPUT_OPEN_MIC_SETTINGS),
       validateApiKey: (apiKey: string) =>
         _unwrappingInvoke(CHANNELS.VOICE_INPUT_VALIDATE_API_KEY, apiKey),
-      correct: (request: { rawText: string; recentContext?: string[] }) =>
-        _unwrappingInvoke(CHANNELS.VOICE_INPUT_CORRECT, request),
+      correct: (request: {
+        rawText: string;
+        recentContext?: string[];
+        followingText?: string;
+        terminalId?: string;
+        startsPrompt?: boolean;
+        sessionId?: string;
+        streamId?: string;
+      }) => _unwrappingInvoke(CHANNELS.VOICE_INPUT_CORRECT, request),
+      onCorrectionProgress: (callback: (payload: { streamId: string; text: string }) => void) =>
+        _typedOn(CHANNELS.VOICE_INPUT_CORRECTION_PROGRESS, callback),
       onFileTokenResolved: (
-        callback: (payload: { description: string; replacement: string; resolved: boolean }) => void
+        callback: (payload: {
+          sessionId: string;
+          transcriptId: string;
+          references: Array<{ description: string; path: string | null }>;
+        }) => void
       ) => _typedOn(CHANNELS.VOICE_INPUT_FILE_TOKEN_RESOLVED, callback),
+    },
+
+    voiceDictionary: buildVoiceDictionaryPreloadBindings(_unwrappingInvoke),
+
+    recentDictations: {
+      ...buildRecentDictationsPreloadBindings(_unwrappingInvoke),
+
+      onChanged: (callback: () => void) => _typedOn(CHANNELS.RECENT_DICTATIONS_CHANGED, callback),
     },
 
     mcpServer: {
@@ -3599,7 +3151,12 @@ function buildElectronApi(): ElectronAPI {
 
     pluginBridge: {
       onDispatchActionRequest: (
-        callback: (payload: { requestId: string; actionId: string; args?: unknown }) => void
+        callback: (payload: {
+          requestId: string;
+          actionId: string;
+          args?: unknown;
+          pluginId?: string;
+        }) => void
       ) => _typedOn(CHANNELS.PLUGIN_DISPATCH_ACTION_REQUEST, callback),
 
       sendDispatchActionResponse: (payload: {
@@ -3674,6 +3231,12 @@ function buildElectronApi(): ElectronAPI {
       ...buildPluginPreloadBindings(_pluginInvoke),
       ...buildPluginMetricsPreloadBindings(_unwrappingInvoke),
       ...buildPluginPanelCapturePreloadBindings(_unwrappingInvoke),
+      ...buildPluginProjectPresencePreloadBindings(_unwrappingInvoke),
+
+      // This view's project presence changed (#13813). Pushed per project, so
+      // the payload names it; `getProjectPresence()` answers for this view.
+      onProjectPresenceChanged: (callback: (presence: PluginProjectPresence) => void) =>
+        _typedOn(CHANNELS.PLUGIN_PROJECT_PRESENCE_CHANGED, callback),
 
       // Fire-and-forget: renderer-side view cost observations, drained in batches.
       reportViewMetrics: (reports: PluginRendererMetricsEnvelope[]) => {
@@ -3761,6 +3324,17 @@ function buildElectronApi(): ElectronAPI {
           tours: import("../shared/types/plugin.js").PluginTourDescriptor[];
         }) => void
       ) => _eventBusOn("plugin:tours-changed", callback),
+      onHostedViewsChanged: (
+        callback: (payload: {
+          views: import("../shared/types/plugin.js").PluginHostedViewDescriptor[];
+        }) => void
+      ) => _eventBusOn("plugin:hosted-views-changed", callback),
+      onThemesChanged: (
+        callback: (payload: {
+          themes: import("../shared/types/appTheme.js").AppColorScheme[];
+          fallbackSchemeId?: string;
+        }) => void
+      ) => _eventBusOn("plugin:themes-changed", callback),
       onIconsChanged: (
         callback: (payload: {
           icons: import("../shared/config/pluginCustomIcon.js").PluginCustomIconAsset[];
@@ -3769,6 +3343,16 @@ function buildElectronApi(): ElectronAPI {
       onToolbarButtonsChanged: (
         callback: (payload: { buttons: ToolbarButtonConfig[]; complete: boolean }) => void
       ) => _eventBusOn("plugin:toolbar-buttons-changed", callback),
+      onLaunchEntriesChanged: (
+        callback: (payload: {
+          entries: import("../shared/types/plugin.js").PluginLaunchEntryConfig[];
+        }) => void
+      ) => _eventBusOn("plugin:launch-entries-changed", callback),
+      onLayoutsChanged: (
+        callback: (payload: {
+          layouts: import("../shared/types/plugin.js").PluginLayoutConfig[];
+        }) => void
+      ) => _eventBusOn("plugin:layouts-changed", callback),
       onKeybindingsChanged: (
         callback: (payload: {
           keybindings: PluginKeybindingDescriptor[];
@@ -3788,9 +3372,24 @@ function buildElectronApi(): ElectronAPI {
       ) => _eventBusOn("plugin:panel-badges-changed", callback),
       onPanelBadgesCleared: (callback: (payload: { pluginId: string }) => void) =>
         _eventBusOn("plugin:panel-badges-cleared", callback),
+      onPanelActivityChanged: (
+        callback: (payload: {
+          pluginId: string;
+          activity: Record<string, PluginPanelActivityReport>;
+        }) => void
+      ) => _eventBusOn("plugin:panel-activity-changed", callback),
+      onTasksChanged: (
+        callback: (payload: { pluginId: string; tasks: PluginTaskSnapshot[] }) => void
+      ) => _eventBusOn("plugin:tasks-changed", callback),
       onToolbarBadgesChanged: (
         callback: (payload: { pluginId: string; badges: Record<string, PluginPanelBadge> }) => void
       ) => _eventBusOn("plugin:toolbar-badges-changed", callback),
+      onToolbarStatesChanged: (
+        callback: (payload: {
+          pluginId: string;
+          states: Record<string, PluginToolbarButtonRuntimeState>;
+        }) => void
+      ) => _eventBusOn("plugin:toolbar-states-changed", callback),
       onContextKeysChanged: (
         callback: (payload: {
           pluginId: string;
@@ -3804,6 +3403,20 @@ function buildElectronApi(): ElectronAPI {
           statuses: Record<string, PluginWorktreeCardStatus>;
         }) => void
       ) => _eventBusOn("plugin:worktree-card-statuses-changed", callback),
+      onWorktreeReviewChecksChanged: (
+        callback: (payload: {
+          pluginId: string;
+          projectId: string;
+          checks: Record<string, PluginWorktreeReviewCheck[]>;
+        }) => void
+      ) => _eventBusOn("plugin:worktree-review-checks-changed", callback),
+      onTerminalStatusesChanged: (
+        callback: (payload: {
+          pluginId: string;
+          projectId: string;
+          statuses: Record<string, PluginTerminalStatus>;
+        }) => void
+      ) => _eventBusOn("plugin:terminal-statuses-changed", callback),
       onPanelMenusChanged: (
         callback: (payload: {
           pluginId: string;
@@ -3835,7 +3448,13 @@ function buildElectronApi(): ElectronAPI {
     },
 
     // Help workspace API
-    help: buildHelpPreloadBindings(_unwrappingInvoke),
+    help: {
+      ...buildHelpPreloadBindings(_unwrappingInvoke),
+
+      onGlobalAssistantChanged: (
+        callback: (state: import("../shared/types/ipc/help.js").GlobalAssistantView) => void
+      ) => _typedOn(CHANNELS.HELP_GLOBAL_ASSISTANT_CHANGED, callback),
+    },
 
     perf: {
       flushMarks: (payload: {

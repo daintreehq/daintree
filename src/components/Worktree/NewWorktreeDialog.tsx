@@ -56,6 +56,7 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { recipeTerminalsStartAgent, spawnPanelsFromRecipe } from "./panelSpawning";
 import {
   notifyAgentNotStarted,
+  runAgentLayoutWhenReady,
   startFirstAgentWhenReady,
   type FirstAgentLaunch,
 } from "./worktreeAgentLaunch";
@@ -210,6 +211,12 @@ export function NewWorktreeDialog({
   const [firstAgentId, setFirstAgentId] = useState<string | null>(null);
   const [firstPrompt, setFirstPrompt] = useState("");
   const [agentPickerOpen, setAgentPickerOpen] = useState(false);
+  const [issuePickerOpen, setIssuePickerOpen] = useState(false);
+  // The picker reports its own closes; one that goes away with the dialog
+  // can't, so its flag must not outlive the dialog either.
+  useEffect(() => {
+    if (!isOpen) setIssuePickerOpen(false);
+  }, [isOpen]);
   // A remembered or restored agent that is no longer launchable reads as "No
   // agent" rather than launching something the picker can't show.
   const firstAgent = agentOptions.find((a) => a.id === firstAgentId);
@@ -218,6 +225,9 @@ export function NewWorktreeDialog({
   const { issues: issueForge } = useResolvedForgeProvider(currentProject?.id ?? null);
   const forgeEntry = issueForge.entry;
   const forgeName = forgeEntry?.contribution.name ?? "the forge";
+  // Any issues provider gets the row: one without an `issueSelector` slot is
+  // served by the host's own picker over `listIssues`.
+  const showIssueRow = !initialPR && !!forgeEntry;
 
   // Forge-agnostic viewer identity, resolved per-cwd via the active forge
   // provider's `identity` capability so every project mirrors through the
@@ -938,18 +948,7 @@ export function NewWorktreeDialog({
         let layoutAgentConflict: "recipe-has-agent" | "layout-has-agent" | null = null;
 
         if (snapRecipeId === CLONE_LAYOUT_ID && snapSourceWorktreeId) {
-          try {
-            const terminals =
-              snapCloneTerminals ??
-              useRecipeStore.getState().generateRecipeFromActiveTerminals(snapSourceWorktreeId);
-            if (recipeTerminalsStartAgent(terminals)) layoutAgentConflict = "layout-has-agent";
-            await spawnPanelsFromRecipe({
-              terminals,
-              worktreeId,
-              cwd: snapWorktreePath,
-              source: { kind: "clone-layout" },
-            });
-          } catch (cloneErr) {
+          const notifyCloneFailed = (cloneErr: unknown) => {
             const message = formatErrorMessage(cloneErr, "Couldn't clone layout");
             notify({
               type: "warning",
@@ -957,65 +956,99 @@ export function NewWorktreeDialog({
               message: `${message} — the worktree itself was created`,
               context: { worktreeId },
             });
+          };
+          try {
+            const terminals =
+              snapCloneTerminals ??
+              useRecipeStore.getState().generateRecipeFromActiveTerminals(snapSourceWorktreeId);
+            const cloneLayout = () =>
+              spawnPanelsFromRecipe({
+                terminals,
+                worktreeId,
+                cwd: snapWorktreePath,
+                source: { kind: "clone-layout" },
+              }).catch(notifyCloneFailed);
+            if (recipeTerminalsStartAgent(terminals)) {
+              layoutAgentConflict = "layout-has-agent";
+              // Its agent waits for setup, like the dialog's own would.
+              void runAgentLayoutWhenReady({ worktreeId, name: "Cloned layout", run: cloneLayout });
+            } else {
+              await cloneLayout();
+            }
+          } catch (cloneErr) {
+            notifyCloneFailed(cloneErr);
           }
         } else if (snapSelectedRecipe) {
           // Shadowing can swap in a different recipe at run time, so judge
           // the one that will actually execute.
           const executedRecipe =
             useRecipeStore.getState().getRecipeById(snapSelectedRecipe.id) ?? snapSelectedRecipe;
-          if (recipeTerminalsStartAgent(executedRecipe.terminals)) {
+          const recipeStartsAgent = recipeTerminalsStartAgent(executedRecipe.terminals);
+          if (recipeStartsAgent) {
             layoutAgentConflict = "recipe-has-agent";
           }
-          try {
-            const results = await runRecipeWithResults(
-              snapSelectedRecipe.id,
-              snapWorktreePath,
-              worktreeId,
-              {
+          const runRecipe = async () => {
+            try {
+              const results = await runRecipeWithResults(
+                snapSelectedRecipe.id,
+                snapWorktreePath,
+                worktreeId,
+                {
+                  issueNumber: snapIssue?.number,
+                  prNumber: snapInitialPR?.number,
+                  worktreePath: snapWorktreePath,
+                  branchName: fullBranchName,
+                }
+              );
+              notifyRecipeSpawnFailures(results, {
+                recipeName: snapSelectedRecipe.name,
+                projectId,
+                worktreeId,
+              });
+            } catch (recipeErr) {
+              const message = formatErrorMessage(recipeErr, "Couldn't run recipe");
+              const recipeId = snapSelectedRecipe.id;
+              const recipePath = snapWorktreePath;
+              const recipeWorktreeId = worktreeId;
+              const recipeContext = {
                 issueNumber: snapIssue?.number,
                 prNumber: snapInitialPR?.number,
-                worktreePath: snapWorktreePath,
+                worktreePath: recipePath,
                 branchName: fullBranchName,
-              }
-            );
-            notifyRecipeSpawnFailures(results, {
-              recipeName: snapSelectedRecipe.name,
-              projectId,
-              worktreeId,
-            });
-          } catch (recipeErr) {
-            const message = formatErrorMessage(recipeErr, "Couldn't run recipe");
-            const recipeId = snapSelectedRecipe.id;
-            const recipePath = snapWorktreePath;
-            const recipeWorktreeId = worktreeId;
-            const recipeContext = {
-              issueNumber: snapIssue?.number,
-              prNumber: snapInitialPR?.number,
-              worktreePath: recipePath,
-              branchName: fullBranchName,
-            };
-            notify({
-              type: "warning",
-              title: "Couldn't run recipe",
-              message: `${message} — the worktree itself was created`,
-              context: { worktreeId: recipeWorktreeId },
-              actions: [
-                {
-                  label: "Retry recipe",
-                  onClick: () => {
-                    runRecipeWithResults(recipeId, recipePath, recipeWorktreeId, recipeContext)
-                      .then((results) =>
-                        notifyRecipeSpawnFailures(results, {
-                          recipeName: snapSelectedRecipe.name,
-                          projectId,
-                          worktreeId: recipeWorktreeId,
-                        })
-                      )
-                      .catch((err) => logError("Failed to run recipe", err));
+              };
+              notify({
+                type: "warning",
+                title: "Couldn't run recipe",
+                message: `${message} — the worktree itself was created`,
+                context: { worktreeId: recipeWorktreeId },
+                actions: [
+                  {
+                    label: "Retry recipe",
+                    onClick: () => {
+                      runRecipeWithResults(recipeId, recipePath, recipeWorktreeId, recipeContext)
+                        .then((results) =>
+                          notifyRecipeSpawnFailures(results, {
+                            recipeName: snapSelectedRecipe.name,
+                            projectId,
+                            worktreeId: recipeWorktreeId,
+                          })
+                        )
+                        .catch((err) => logError("Failed to run recipe", err));
+                    },
                   },
-                },
-              ],
+                ],
+              });
+            }
+          };
+          if (recipeStartsAgent) {
+            // Its agent waits for setup, like the dialog's own would.
+            void runAgentLayoutWhenReady({
+              worktreeId,
+              name: snapSelectedRecipe.name,
+              run: runRecipe,
             });
+          } else {
+            await runRecipe();
           }
         }
 
@@ -1209,7 +1242,10 @@ export function NewWorktreeDialog({
   });
 
   useEffect(() => {
-    if (!isOpen || isDiscardConfirmOpen) return;
+    // A picker layered over the form owns the keyboard: Cmd/Ctrl+Enter there
+    // must not create the worktree mid-selection. Only while its row is shown:
+    // a row hidden mid-pick takes the picker with it, unreported.
+    if (!isOpen || isDiscardConfirmOpen || (issuePickerOpen && showIssueRow)) return;
     const handler = (e: KeyboardEvent) => {
       if (e.key !== "Enter" || !(e.metaKey || e.ctrlKey) || e.isComposing) return;
       const { handleCreate: create, submitDisabled: blocked } = submitRef.current;
@@ -1219,7 +1255,7 @@ export function NewWorktreeDialog({
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [isOpen, isDiscardConfirmOpen]);
+  }, [isOpen, isDiscardConfirmOpen, issuePickerOpen, showIssueRow]);
 
   // What the form is actually about to do, said once. Replaces the mono echo
   // line that used to sit under the branch input restating its own value.
@@ -1255,7 +1291,6 @@ export function NewWorktreeDialog({
     </span>
   );
 
-  const showIssueRow = !initialPR && !!forgeEntry?.contribution.slots?.issueSelector;
   // Without saved recipes the layout silently defaults to a clone of the
   // current one, which can itself start an agent — so once an agent is picked
   // the layout choice is shown too.
@@ -1519,6 +1554,7 @@ export function NewWorktreeDialog({
                         projectPath={rootPath}
                         selectedIssue={selectedIssue}
                         onSelectIssue={handleIssueSelectWrapper}
+                        onPickerOpenChange={setIssuePickerOpen}
                       />
                     </FormRow>
                   )}

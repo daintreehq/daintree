@@ -3,7 +3,9 @@ import { render, screen, waitFor, fireEvent, within } from "@testing-library/rea
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { TerminalInfoDialog } from "../TerminalInfoDialog";
 import type { TerminalInfoPayload } from "@/types/electron";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
+
+const terminalInstanceService = await loadTerminalService();
 
 vi.stubGlobal(
   "ResizeObserver",
@@ -24,8 +26,11 @@ vi.mock("@/services/ActionService", () => ({
 }));
 
 vi.mock("@/store/panelStore", () => ({
-  usePanelStore: (selector: (s: { panelsById: Record<string, unknown> }) => unknown) =>
-    selector({ panelsById: mockPanelsById }),
+  usePanelStore: Object.assign(
+    (selector: (s: { panelsById: Record<string, unknown> }) => unknown) =>
+      selector({ panelsById: mockPanelsById }),
+    { getState: () => ({ panelsById: mockPanelsById }) }
+  ),
 }));
 
 vi.mock("@/lib/utils", () => ({
@@ -343,6 +348,27 @@ describe("TerminalInfoDialog", () => {
       expect(text).toContain("could not be read");
     });
 
+    // The command and the argv carrying it can hold the launch prompt (#14592).
+    it("leaves the launch command and the argv carrying it out of the copy", async () => {
+      const command = "claude 'Fix the canary-7f3 login bug'";
+      mockPanelsById = {
+        "test-id": { id: "test-id", kind: "terminal", launchAgentId: "claude", command },
+      };
+      dispatchMock.mockResolvedValue({
+        ok: true,
+        result: makePayload({ spawnArgs: ["-l", "-c", command] }),
+      });
+      renderDialog();
+      await screen.findByTestId("terminal-info-body");
+
+      // Still on screen for the person looking at it.
+      expect(screen.getAllByText(command).length).toBeGreaterThan(0);
+      const text = await copyPayload();
+      expect(text).not.toContain("canary-7f3");
+      expect(text).toMatch(/Command: \(left out: can hold the launch prompt\)/);
+      expect(text).toContain("Args: 3 arguments (left out: can hold the launch prompt)");
+    });
+
     it("names the assistant and the transport separately (#11808)", async () => {
       mockPanelsById = { "test-id": { id: "test-id", kind: "terminal", spawnedBy: "assistant" } };
       dispatchMock.mockResolvedValue({ ok: true, result: makePayload() });
@@ -589,6 +615,52 @@ describe("TerminalInfoDialog", () => {
         expect(getInfo).toHaveBeenCalled();
         expect(banner.textContent).toMatch(/last successful read/);
         expect(await copyPayload()).toMatch(/NOTE: the terminal host stopped answering/);
+      } finally {
+        vi.unstubAllGlobals();
+        vi.stubGlobal(
+          "ResizeObserver",
+          class {
+            observe() {}
+            unobserve() {}
+            disconnect() {}
+          }
+        );
+      }
+    });
+
+    // A pane restore held has no host record, so the background read answers from
+    // the pane rather than reporting a lost host (#14017).
+    it("keeps refreshing a held pane without asking the host", async () => {
+      const getInfo = vi.fn().mockResolvedValue(null);
+      vi.stubGlobal("electron", { terminal: { getInfo } });
+      mockPanelsById = {
+        "test-id": {
+          id: "test-id",
+          kind: "terminal",
+          cwd: "/home/user",
+          launchAgentId: "claude",
+          hasPty: false,
+          restoreRecovery: { reason: "resume-deferred" },
+        },
+      };
+      try {
+        dispatchMock.mockResolvedValue({
+          ok: true,
+          result: { id: "test-id", kind: "terminal", cwd: "/home/user", hasPty: false },
+        });
+        renderDialog();
+        expect(await screen.findByText("/home/user")).toBeTruthy();
+
+        // The pane moves while the dialog is open; only a refresh can show it.
+        mockPanelsById = {
+          "test-id": { ...(mockPanelsById["test-id"] as object), cwd: "/worktrees/moved" },
+        };
+        expect(await screen.findByText("/worktrees/moved", {}, { timeout: 4000 })).toBeTruthy();
+
+        expect(getInfo).not.toHaveBeenCalled();
+        expect(screen.queryByTestId("terminal-info-error")).toBeNull();
+        const payload = await copyPayload();
+        expect(payload).not.toMatch(/Invalid Date|NaN/);
       } finally {
         vi.unstubAllGlobals();
         vi.stubGlobal(

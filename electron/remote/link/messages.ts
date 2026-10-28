@@ -5,6 +5,7 @@ import type {
   HostHandshakeInfo,
   HostMetricsSummary,
   HostPlatform,
+  HostPreviousEnd,
 } from "../../../shared/types/remoteHosts.js";
 import { decodeValue, encodeValue, type EncodingLimits } from "./encoding.js";
 import { Lane, type LinkFrame } from "./frames.js";
@@ -100,6 +101,19 @@ export interface WelcomeMessage {
   resumed: boolean;
   /** What a later HELLO must present to resume this session; new on every WELCOME. */
   resumeSecret?: string;
+  /**
+   * Names the host's process, the same on every session it serves: a Shell
+   * that sees it change knows the host restarted and took its terminals with
+   * it, which a session that merely expired never does. Absent from hosts
+   * before it.
+   */
+  hostLaunchId?: string;
+  /**
+   * How the process before this one ended, when it ended uncleanly (#14368):
+   * what lets a Shell tell a crash from a planned restart. Absent from hosts
+   * before it.
+   */
+  previousEnd?: HostPreviousEnd;
 }
 
 export type RejectReason =
@@ -124,11 +138,31 @@ export interface RejectObservation {
 
 export interface PingMessage {
   sentAt: number;
+  /** Counts this session's pings, so a summary can name the last one it followed. Absent from older peers. */
+  nonce?: number;
 }
+
+/**
+ * What a host adds to a summary frame so a Shell can bound its age without
+ * comparing clocks (#14462): how old the sample was by the host's own clocks
+ * when it posted the frame, and the newest ping it had from that Shell then.
+ */
+export interface SummaryFrameTiming {
+  sampleAgeMs: number | null;
+  afterPing: number | null;
+}
+
+export type HostSummaryFrame = HostMetricsSummary & { timing?: SummaryFrameTiming };
 
 export interface EndpointOpenMessage {
   endpointId: string;
   projectId: string | null;
+  /**
+   * Names this open of `endpointId`, so a view closed and opened again under
+   * the same id can be told from one that never closed. A Shell from before
+   * it sends none, and a host from before it drops it.
+   */
+  openId?: string;
 }
 
 export interface EndpointRebindMessage {
@@ -296,7 +330,7 @@ export type LinkMessage =
       kind: typeof ControlKind.ENDPOINT_CLOSE;
       body: EndpointCloseMessage;
     }
-  | { lane: typeof Lane.CONTROL; kind: typeof ControlKind.HOST_SUMMARY; body: HostMetricsSummary }
+  | { lane: typeof Lane.CONTROL; kind: typeof ControlKind.HOST_SUMMARY; body: HostSummaryFrame }
   | { lane: typeof Lane.CONTROL; kind: typeof ControlKind.LEASE_CHANGED; body: DriveLeaseState }
   | { lane: typeof Lane.CONTROL; kind: typeof ControlKind.GOODBYE; body: GoodbyeMessage }
   | { lane: typeof Lane.RPC; kind: typeof RpcKind.INVOKE; body: InvokeMessage }

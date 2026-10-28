@@ -186,7 +186,7 @@ export function scanSyncViolations(files, root, readFile) {
  * the module count says.
  *
  * This is an invariant, not a ratchet: there is no baseline to refresh and no
- * `--update` that clears it. The Svelte compiler is roughly 862 KiB minified
+ * `--update` that clears it. The Svelte parser is roughly 485 KiB minified
  * and the source model exists to keep it behind an `await import()`; a barrel
  * re-export, a moved type-only import that stops being type-only, or a
  * convenience helper added to the wrong file would pull both onto the startup
@@ -211,6 +211,50 @@ export const FORBIDDEN_EAGER_PATTERNS = [
     test: (file) =>
       file.includes("packages/svelte-source-model/") ||
       /node_modules\/@daintreehq\/svelte-source-model/.test(file),
+  },
+];
+
+/**
+ * What the Element Picker added that only a picker session may load: its guest
+ * scripts, its resolver host, and every compiler, parser and map decoder a
+ * resolver reads source with. None of it belongs to main, which forks the host
+ * for it, or to the renderer, which gets observations as data.
+ *
+ * Lezer is deliberately absent: Preact's resolver parses JSX with it, but the
+ * renderer's CodeMirror editors ship the same grammar for their own use, so a
+ * renderer hit says nothing about the picker. Main checks it on its own.
+ */
+export const ELEMENT_PICKER_FRAMEWORK_PATTERNS = [
+  {
+    label: "Element Picker guest code",
+    test: (file) => file.includes("electron/services/elementPicker/guest/"),
+  },
+  {
+    label: "Element Picker host process",
+    test: (file) =>
+      file.includes("electron/services/elementPicker/worker/") ||
+      /electron\/services\/elementPicker\/(host|host-bootstrap|plugin-resolver-host|plugin-resolver-bootstrap)\.ts$/.test(
+        file
+      ),
+  },
+  ...FORBIDDEN_EAGER_PATTERNS,
+  {
+    label: "Vue template compiler",
+    test: (file) => /(^|\/)node_modules\/@vue\/compiler-[^/]+\//.test(file),
+  },
+  {
+    // React's resolver parses with Babel; the Svelte compiler with Acorn.
+    label: "JS parser",
+    test: (file) =>
+      /(^|\/)node_modules\/(@babel\/parser|acorn|@sveltejs\/acorn-typescript)\//.test(file),
+  },
+  {
+    // Vue's compiler maps through source-map-js; the host decodes with trace-mapping.
+    label: "source-map decoder",
+    test: (file) =>
+      /(^|\/)node_modules\/(@jridgewell\/(trace-mapping|sourcemap-codec)|source-map-js)\//.test(
+        file
+      ),
   },
 ];
 

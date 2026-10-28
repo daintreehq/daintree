@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { PtyPanelData, PanelInstance } from "@shared/types/panel";
+import type { StagingStatus } from "@shared/types";
 
 vi.mock("@/clients", () => ({
   terminalClient: {
@@ -35,16 +36,42 @@ vi.mock("@/clients", () => ({
   },
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+const agentToolbarPinsSync = vi.hoisted(() => {
+  const dispose = vi.fn();
+  return { dispose, init: vi.fn(() => dispose) };
+});
+vi.mock("@/services/agentToolbarPinsSync", () => ({
+  initAgentToolbarPinsSync: agentToolbarPinsSync.init,
+}));
+
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     cleanup: vi.fn(),
     applyRendererPolicy: vi.fn(),
     onPanelBackgrounded: vi.fn(),
     destroy: vi.fn(),
     setInputLocked: vi.fn(),
     wake: vi.fn(),
-  },
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
+
+const notifyContext = vi.hoisted(() => ({
+  accessors: null as null | import("@/lib/notify").ActiveContextAccessors,
 }));
+
+vi.mock("@/lib/notify", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/notify")>();
+  return {
+    ...actual,
+    setActiveContextAccessors: (accessors: import("@/lib/notify").ActiveContextAccessors) => {
+      notifyContext.accessors = accessors;
+      actual.setActiveContextAccessors(accessors);
+    },
+  };
+});
 
 vi.mock("../../persistence/panelPersistence", () => ({
   panelPersistence: {
@@ -90,17 +117,25 @@ const { useConsoleCaptureStore } = await import("../consoleCaptureStore");
 const { useResourceMonitoringStore } = await import("../resourceMonitoringStore");
 const { useVoiceRecordingStore } = await import("../voiceRecordingStore");
 const { usePluginPanelBadgeStore } = await import("../pluginPanelBadgeStore");
+const { usePluginPanelActivityStore } = await import("../pluginPanelActivityStore");
+const { usePluginPanelAttentionStore } = await import("../pluginPanelAttentionStore");
 const { usePluginPanelToolbarStore } = await import("../pluginPanelToolbarStore");
+const { usePluginPanelOpenRequestStore } = await import("../pluginPanelOpenRequestStore");
 const { unregisterInputController } = await import("../terminalInputStore");
 const { useCliAvailabilityStore, cleanupCliAvailabilityStore } =
   await import("../cliAvailabilityStore");
 const { useAgentSettingsStore, cleanupAgentSettingsStore } = await import("../agentSettingsStore");
 const { agentSettingsClient } = await import("@/clients");
-const { DEFAULT_AGENT_SETTINGS } = await import("@shared/types");
 const { useHelpPanelStore } = await import("../helpPanelStore");
 const { usePortalStore } = await import("../portalStore");
+const { useProjectHomeStore, selectProjectMainAreaRoute } = await import("../projectHomeStore");
+const { useProjectPluginStore } = await import("../projectPluginStore");
+const { useDictationRangeStore } = await import("../dictationRangeStore");
 const { initStoreOrchestrator, destroyStoreOrchestrator } =
   await import("../rendererStoreOrchestrator");
+const { useReviewMarksStore, _resetReviewMarksStoreForTesting } =
+  await import("../reviewMarksStore");
+const { useDiffViewedStore } = await import("../diffViewedStore");
 
 describe("rendererStoreOrchestrator", () => {
   beforeEach(async () => {
@@ -123,11 +158,150 @@ describe("rendererStoreOrchestrator", () => {
     useResourceMonitoringStore.setState({ metrics: new Map() });
     useVoiceRecordingStore.setState({ panelBuffers: {} });
     usePluginPanelBadgeStore.setState({ badgesByPanelId: {} });
+    usePluginPanelActivityStore.setState({ activityByPanelId: {}, seenRevisionByPanelId: {} });
+    usePluginPanelAttentionStore.setState({ shelfByPanelId: {} });
     usePluginPanelToolbarStore.setState({ statesByPanelId: {} });
+    usePluginPanelOpenRequestStore.setState({ entriesByPanelId: {} });
   });
 
   afterEach(() => {
     destroyStoreOrchestrator();
+  });
+
+  describe("leaving Home for a revealed panel", () => {
+    // This file runs without a DOM; the route is keyed by the view's workspace,
+    // which the renderer reads off `window`.
+    beforeEach(() => {
+      vi.stubGlobal("window", { __DAINTREE_INITIAL_PROJECT__: { id: "p1" } });
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      useProjectHomeStore.setState({ routeByProject: {} });
+      useProjectPluginStore.setState({ application: null });
+    });
+
+    it("lets the focus and spawn paths leave Home, including after a restart", async () => {
+      // beforeEach already tore the orchestrator down, clearing every accessor,
+      // and brought it back up.
+      const { exitProjectHome } = await import("../storeAccessors");
+      useProjectHomeStore.getState().showHome();
+
+      exitProjectHome();
+
+      expect(selectProjectMainAreaRoute(useProjectHomeStore.getState())).toBe("grid");
+    });
+
+    it("leaves a Home the application opened on by default", async () => {
+      const { exitProjectHome } = await import("../storeAccessors");
+      useProjectPluginStore.setState({
+        application: {
+          status: "active",
+          ownerId: "acme.dash",
+          version: "1.0.0",
+          application: { name: "Dash", destination: "home" },
+          fallback: null,
+        },
+      });
+
+      exitProjectHome();
+
+      expect(selectProjectMainAreaRoute(useProjectHomeStore.getState(), "home")).toBe("grid");
+    });
+
+    it("keeps a split the application opened on by default, without writing a choice", async () => {
+      const { exitProjectHome } = await import("../storeAccessors");
+      useProjectPluginStore.setState({
+        application: {
+          status: "active",
+          ownerId: "acme.dash",
+          version: "1.0.0",
+          application: { name: "Dash", destination: "home", arrangement: "beside-grid" },
+          fallback: null,
+        },
+      });
+
+      exitProjectHome();
+
+      expect(selectProjectMainAreaRoute(useProjectHomeStore.getState(), "split")).toBe("split");
+      expect(useProjectHomeStore.getState().routeByProject).toEqual({});
+    });
+
+    it("keeps the split, where the revealed panel is already on screen (#14107)", async () => {
+      const { exitProjectHome } = await import("../storeAccessors");
+      useProjectHomeStore.getState().showSplit();
+
+      exitProjectHome();
+
+      expect(selectProjectMainAreaRoute(useProjectHomeStore.getState())).toBe("split");
+    });
+  });
+
+  describe("notification origin while the project's Home shows", () => {
+    afterEach(() => {
+      useProjectHomeStore.setState({ presented: false });
+    });
+
+    it("reports no focused panel while Home hides the grid", () => {
+      usePanelStore.setState({ focusedId: "term-1" });
+      const accessors = notifyContext.accessors!;
+      expect(accessors.getFocusedPanelId()).toBe("term-1");
+
+      useProjectHomeStore.setState({ presented: true });
+      expect(accessors.getFocusedPanelId()).toBeNull();
+
+      useProjectHomeStore.setState({ presented: false });
+      expect(accessors.getFocusedPanelId()).toBe("term-1");
+    });
+
+    it("tells a waiting suppression when the user moves onto or off Home", () => {
+      const changed = vi.fn();
+      const unsubscribe = notifyContext.accessors!.subscribeActiveContext(changed);
+
+      useProjectHomeStore.setState({ presented: true });
+      expect(changed).toHaveBeenCalledTimes(1);
+      // A write that leaves Home's presence alone is not a move.
+      useProjectHomeStore.setState({ routeByProject: { other: "home" } });
+      expect(changed).toHaveBeenCalledTimes(1);
+
+      unsubscribe();
+      useProjectHomeStore.setState({ presented: false });
+      expect(changed).toHaveBeenCalledTimes(1);
+      useProjectHomeStore.setState({ routeByProject: {} });
+    });
+  });
+
+  it("clears a worktree's Viewed marks when a review mark for it lands, from any view", () => {
+    _resetReviewMarksStoreForTesting();
+    const mark = (revision: number) => ({
+      markedAt: 1,
+      capturedAt: 1,
+      head: { kind: "branch" as const, branch: "feature", commit: "1".repeat(40) },
+      base: { ref: null, tip: null },
+      complete: true,
+      pathCount: 1,
+      revision,
+    });
+    useDiffViewedStore.getState().setViewed("/repo/wt-a", "unstaged:a.ts", true);
+    useDiffViewedStore.getState().setViewed("/repo/wt-b", "unstaged:b.ts", true);
+
+    // The first snapshot a view adopts holds marks made before it: no clearing.
+    useReviewMarksStore.setState({ marks: { "/repo/wt-a": mark(1) }, revision: 1, loaded: true });
+    expect(useDiffViewedStore.getState().viewedByWorktree["/repo/wt-a"]?.size).toBe(1);
+
+    useReviewMarksStore.setState({ marks: { "/repo/wt-a": mark(2) }, revision: 2 });
+
+    expect(useDiffViewedStore.getState().viewedByWorktree["/repo/wt-a"]).toBeUndefined();
+    expect(useDiffViewedStore.getState().viewedByWorktree["/repo/wt-b"]?.size).toBe(1);
+
+    // A first mark clears too; clearing a mark leaves Viewed marks alone.
+    useReviewMarksStore.setState({ marks: { "/repo/wt-b": mark(3) }, revision: 3 });
+    expect(useDiffViewedStore.getState().viewedByWorktree["/repo/wt-b"]).toBeUndefined();
+    useDiffViewedStore.getState().setViewed("/repo/wt-b", "unstaged:b.ts", true);
+    useReviewMarksStore.setState({ marks: {}, revision: 4 });
+    expect(useDiffViewedStore.getState().viewedByWorktree["/repo/wt-b"]?.size).toBe(1);
+    _resetReviewMarksStoreForTesting();
+    useDiffViewedStore.setState({ viewedByWorktree: {}, baselinesByWorktree: {} });
   });
 
   it("tracks terminal focus in worktree store when focusedId changes", () => {
@@ -238,6 +412,19 @@ describe("rendererStoreOrchestrator", () => {
         keep: { "plugin-1": { kind: "dot" } },
       },
     });
+    usePluginPanelActivityStore.setState({
+      activityByPanelId: {
+        [panelId]: { "plugin-1": { state: "finished", revision: 1 } },
+        keep: { "plugin-1": { state: "working", revision: 2 } },
+      },
+      seenRevisionByPanelId: { [panelId]: 1 },
+    });
+    usePluginPanelAttentionStore.setState({
+      shelfByPanelId: {
+        [panelId]: { kind: "parked", pluginId: "plugin-1", revision: 1, at: 1 },
+        keep: { kind: "parked", pluginId: "plugin-1", revision: 2, at: 1 },
+      },
+    });
 
     usePanelStore.getState().removePanel(panelId);
 
@@ -245,9 +432,20 @@ describe("rendererStoreOrchestrator", () => {
     expect(badges[panelId]).toBeUndefined();
     // Unrelated panels' badges survive the prune.
     expect(badges.keep).toEqual({ "plugin-1": { kind: "dot" } });
+    // Activity reports and their seen marks go the same way (#13820).
+    const activity = usePluginPanelActivityStore.getState();
+    expect(activity.activityByPanelId[panelId]).toBeUndefined();
+    expect(activity.seenRevisionByPanelId[panelId]).toBeUndefined();
+    expect(activity.activityByPanelId.keep).toEqual({
+      "plugin-1": { state: "working", revision: 2 },
+    });
+    // So does a park on its attention row (#13821).
+    const shelves = usePluginPanelAttentionStore.getState().shelfByPanelId;
+    expect(shelves[panelId]).toBeUndefined();
+    expect(shelves.keep).toBeDefined();
   });
 
-  it("prunes plugin panel toolbar state for the removed panel only", () => {
+  it("prunes plugin panel toolbar and open-request state for the removed panel only", () => {
     usePanelStore.setState({
       panelsById: {
         gone: {
@@ -268,15 +466,20 @@ describe("rendererStoreOrchestrator", () => {
     usePluginPanelToolbarStore.getState().setItemState("keep", "acme.ledger.refresh", {
       text: "Fresh",
     });
+    usePluginPanelOpenRequestStore.getState().publish("gone", { path: "/a" });
+    usePluginPanelOpenRequestStore.getState().publish("keep", { path: "/b" });
 
     usePanelStore.getState().removePanel("gone");
 
     const states = usePluginPanelToolbarStore.getState().statesByPanelId;
     expect(states.gone).toBeUndefined();
     expect(states.keep).toEqual({ "acme.ledger.refresh": { text: "Fresh" } });
+    const requests = usePluginPanelOpenRequestStore.getState().entriesByPanelId;
+    expect(requests.gone).toBeUndefined();
+    expect(requests.keep?.request.args).toEqual({ path: "/b" });
   });
 
-  it("clears plugin panel toolbar state when the panel is closed to the trash", () => {
+  it("clears plugin panel toolbar and open-request state when the panel is closed to the trash", () => {
     usePanelStore.setState({
       panelsById: {
         closed: {
@@ -294,11 +497,13 @@ describe("rendererStoreOrchestrator", () => {
     usePluginPanelToolbarStore.getState().setItemState("closed", "acme.ledger.refresh", {
       busy: true,
     });
+    usePluginPanelOpenRequestStore.getState().publish("closed", { path: "/a" });
 
     usePanelStore.getState().trashPanel("closed");
 
     expect(usePanelStore.getState().panelIds).toContain("closed");
     expect(usePluginPanelToolbarStore.getState().statesByPanelId.closed).toBeUndefined();
+    expect(usePluginPanelOpenRequestStore.getState().entriesByPanelId.closed).toBeUndefined();
   });
 
   it("cleans up input store when terminal is removed", () => {
@@ -744,6 +949,7 @@ describe("rendererStoreOrchestrator", () => {
 
   it("cleans up voice recording store buffer when terminal is removed", () => {
     const panelId = "term-voice-1";
+    useVoiceRecordingStore.setState({ activeTarget: null });
 
     usePanelStore.setState({
       panelsById: {
@@ -762,11 +968,40 @@ describe("rendererStoreOrchestrator", () => {
 
     useVoiceRecordingStore.getState().beginSession({ panelId });
     useVoiceRecordingStore.getState().appendDelta("test transcript");
+    useVoiceRecordingStore.getState().finishSession({ preserveLiveText: true });
     expect(useVoiceRecordingStore.getState().panelBuffers[panelId]).toBeDefined();
 
     usePanelStore.getState().removePanel(panelId);
 
     expect(useVoiceRecordingStore.getState().panelBuffers[panelId]).toBeUndefined();
+  });
+
+  it("leaves the buffer of a panel still being dictated into for the voice service (#14637)", () => {
+    const panelId = "term-voice-2";
+    usePanelStore.setState({
+      panelsById: {
+        [panelId]: {
+          id: panelId,
+          title: "T2",
+          kind: "terminal" as const,
+          cwd: "/test",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+        },
+      },
+      panelIds: [panelId],
+    });
+
+    useVoiceRecordingStore.getState().beginSession({ panelId });
+    useVoiceRecordingStore.getState().completeSegment("words to keep");
+    usePanelStore.getState().removePanel(panelId);
+
+    // Its stop reads these words for the history, then clears the buffer.
+    expect(useVoiceRecordingStore.getState().panelBuffers[panelId]?.completedSegments).toEqual([
+      "words to keep",
+    ]);
+    useVoiceRecordingStore.setState({ activeTarget: null, panelBuffers: {} });
   });
 
   it("prunes resource-monitoring metrics for the removed panel only", () => {
@@ -968,7 +1203,9 @@ describe("rendererStoreOrchestrator", () => {
     }
   });
 
-  it("does not record or persist MRU when a non-PTY panel is focused (#9922)", async () => {
+  it("records and persists MRU when a non-PTY panel is focused (#13763)", async () => {
+    // The quick switcher lists browser and plugin panels, so their focus must
+    // rank them the same way a terminal's does.
     vi.useFakeTimers();
     try {
       usePanelStore.setState({
@@ -986,7 +1223,43 @@ describe("rendererStoreOrchestrator", () => {
 
       usePanelStore.setState({ focusedId: "br-1" });
 
-      vi.advanceTimersByTime(150);
+      vi.advanceTimersByTime(1000);
+      await Promise.resolve();
+
+      expect(usePanelStore.getState().mruList).toEqual(["terminal:br-1"]);
+      expect(persistMruList).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not record MRU for trashed or dialog-hosted non-PTY panels", async () => {
+    vi.useFakeTimers();
+    try {
+      usePanelStore.setState({
+        panelsById: {
+          "br-trash": {
+            id: "br-trash",
+            title: "Browser",
+            kind: "browser" as const,
+            location: "trash",
+          } as PanelInstance,
+          "file-dialog": {
+            id: "file-dialog",
+            title: "README.md",
+            kind: "file" as const,
+            location: "dialog",
+            excludeFromPersistence: true,
+          } as PanelInstance,
+        },
+        panelIds: ["br-trash", "file-dialog"],
+        mruList: [],
+      });
+
+      usePanelStore.setState({ focusedId: "br-trash" });
+      usePanelStore.setState({ focusedId: "file-dialog" });
+
+      vi.advanceTimersByTime(1000);
       await Promise.resolve();
 
       expect(persistMruList).not.toHaveBeenCalled();
@@ -1411,41 +1684,6 @@ describe("rendererStoreOrchestrator", () => {
       expect(agentSettingsClient.get).not.toHaveBeenCalled();
     });
 
-    it("refreshes after agent settings finishes loading if availability landed during the load", async () => {
-      useAgentSettingsStore.setState({
-        settings: null,
-        isInitialized: false,
-        isLoading: true,
-        error: null,
-      });
-      (agentSettingsClient.get as ReturnType<typeof vi.fn>).mockResolvedValue(
-        DEFAULT_AGENT_SETTINGS
-      );
-      (agentSettingsClient.get as ReturnType<typeof vi.fn>).mockClear();
-
-      useCliAvailabilityStore.setState({
-        availability: { claude: "ready", codex: "installed" } as never,
-        hasRealData: true,
-      });
-      await Promise.resolve();
-      expect(agentSettingsClient.get).not.toHaveBeenCalled();
-
-      useAgentSettingsStore.setState({
-        settings: { agents: {} },
-        isInitialized: true,
-        isLoading: false,
-        error: null,
-      });
-      await Promise.resolve();
-      await Promise.resolve();
-
-      expect(agentSettingsClient.get).toHaveBeenCalledTimes(1);
-      const settings = useAgentSettingsStore.getState().settings;
-      expect(settings?.settingsVersion).toBe(2);
-      expect(settings?.agents.claude?.pinned).toBe(true);
-      expect(settings?.agents.codex?.pinned).toBe(true);
-    });
-
     it("stops firing after the orchestrator is destroyed", () => {
       useAgentSettingsStore.setState({
         settings: { agents: {} },
@@ -1488,6 +1726,51 @@ describe("rendererStoreOrchestrator", () => {
       expect(worktreeSnapshot?.activeWorktreeId).toBe("wt-real");
     });
 
+    it("names a plugin panel from its view as automation, so a user rename wins (#13778)", async () => {
+      const { setPanelTitleThroughAccessor } = await import("../storeAccessors");
+      const { registerPanelKind, unregisterPanelKind } =
+        await import("@shared/config/panelKindRegistry");
+      registerPanelKind({
+        id: "acme.records",
+        name: "Records",
+        iconId: "database",
+        color: "#123456",
+        hasPty: false,
+        canRestart: false,
+        canConvert: false,
+        extensionId: "acme",
+      });
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- plugin kinds sit outside the built-in kind union by design
+        const rec = {
+          id: "rec",
+          kind: "acme.records",
+          title: "Records",
+          location: "dock",
+        } as unknown as PanelInstance;
+        usePanelStore.setState({ panelsById: { rec }, panelIds: ["rec"] });
+        const read = () => {
+          const panel = usePanelStore.getState().panelsById.rec;
+          return { title: panel?.title, titleMode: panel?.titleMode };
+        };
+
+        setPanelTitleThroughAccessor("rec", "Record #42");
+        expect(read()).toEqual({ title: "Record #42", titleMode: "custom" });
+
+        usePanelStore.getState().updateTitle("rec", "My records", "user");
+        setPanelTitleThroughAccessor("rec", "Record #43");
+        setPanelTitleThroughAccessor("rec", "");
+        expect(read()).toEqual({ title: "My records", titleMode: "user" });
+
+        usePanelStore.getState().updateTitle("rec", "", "user");
+        expect(read()).toEqual({ title: "Records", titleMode: "default" });
+        setPanelTitleThroughAccessor("rec", "Record #44");
+        expect(read()).toEqual({ title: "Record #44", titleMode: "custom" });
+      } finally {
+        unregisterPanelKind("acme.records");
+      }
+    });
+
     it("clears accessor slots on destroy so consumers see the null fallback before re-init", async () => {
       const { getPanelStoreSnapshot, getWorktreeSelectionSnapshot, getFleetArmedIds } =
         await import("../storeAccessors");
@@ -1504,6 +1787,26 @@ describe("rendererStoreOrchestrator", () => {
       initStoreOrchestrator();
 
       expect(getPanelStoreSnapshot()).not.toBeNull();
+    });
+
+    it("hands Viewed marks the latest staging read for the worktree asked about (#14581)", async () => {
+      const { getViewedMarkSources } = await import("../storeAccessors");
+      const { beginStagingStatusRead, rememberStagingStatus, resetStagingStatusCacheForTests } =
+        await import("@/components/Worktree/ReviewHub/stagingStatusCache");
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- only identity is compared
+      const status = { staged: [], unstaged: [] } as unknown as StagingStatus;
+
+      try {
+        rememberStagingStatus("/wt", status, beginStagingStatusRead());
+        expect(getViewedMarkSources("/wt")?.stagingStatus).toBe(status);
+        expect(getViewedMarkSources("/other")?.stagingStatus).toBeNull();
+
+        destroyStoreOrchestrator();
+        expect(getViewedMarkSources("/wt")).toBeNull();
+      } finally {
+        initStoreOrchestrator();
+        resetStagingStatusCacheForTests();
+      }
     });
   });
 
@@ -1755,6 +2058,70 @@ describe("rendererStoreOrchestrator", () => {
 
       expect(useHelpPanelStore.getState().isOpen).toBe(true);
       expect(usePortalStore.getState().isOpen).toBe(true);
+    });
+  });
+
+  describe("dictation range tracking (#14597)", () => {
+    const setDraft = (value: string) =>
+      useTerminalInputStore.getState().setDraftInput("dictated", value, "p1");
+    const ranges = () => useDictationRangeStore.getState().listDictations("dictated", "p1");
+    const dictateHello = () => {
+      setDraft("hello");
+      useDictationRangeStore
+        .getState()
+        .recordUtterance(
+          { sessionId: "s1", panelId: "dictated", projectId: "p1" },
+          { insertion: { from: 0, to: 5 }, words: { from: 0, to: 5 } }
+        );
+    };
+
+    afterEach(() => {
+      useTerminalInputStore.getState().clearDraftInput("dictated", "p1");
+      useDictationRangeStore.getState().clear();
+    });
+
+    it("maps a dictation through draft edits and releases it when the draft clears", () => {
+      dictateHello();
+      setDraft("Note: hello");
+      expect(ranges()[0]!.range).toEqual({ from: 6, to: 11, edited: false });
+
+      useTerminalInputStore.getState().clearDraftInput("dictated", "p1");
+      expect(ranges()).toEqual([]);
+    });
+
+    it("drops the ranges on destroy and maps them exactly once after re-init", () => {
+      dictateHello();
+      destroyStoreOrchestrator();
+      expect(ranges()).toEqual([]);
+
+      // Torn down, nothing carries a new record through edits.
+      dictateHello();
+      setDraft("Note: hello");
+      expect(ranges()[0]!.range).toEqual({ from: 0, to: 5, edited: false });
+
+      useDictationRangeStore.getState().clear();
+      setDraft("hello");
+      initStoreOrchestrator();
+      initStoreOrchestrator();
+      dictateHello();
+      setDraft("Note: hello");
+      expect(ranges()[0]!.range).toEqual({ from: 6, to: 11, edited: false });
+    });
+  });
+
+  describe("this machine's toolbar agent pins (#14702)", () => {
+    it("keeps the pins in sync for the orchestrator's life, once per init", () => {
+      destroyStoreOrchestrator();
+      agentToolbarPinsSync.init.mockClear();
+      agentToolbarPinsSync.dispose.mockClear();
+
+      initStoreOrchestrator();
+      initStoreOrchestrator();
+      expect(agentToolbarPinsSync.init).toHaveBeenCalledTimes(1);
+      expect(agentToolbarPinsSync.dispose).not.toHaveBeenCalled();
+
+      destroyStoreOrchestrator();
+      expect(agentToolbarPinsSync.dispose).toHaveBeenCalledTimes(1);
     });
   });
 });

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { stubProcessKillForFile } from "../../../__tests__/helpers/processKillGuard.js";
 import type { IPty } from "node-pty";
 import { TerminalProcess } from "../TerminalProcess.js";
 import { IdentityWatcher } from "../IdentityWatcher.js";
@@ -113,6 +114,11 @@ function createTerminal(
     createMockPty(ptyOverrides)
   );
 }
+
+// Mock ptys carry made-up PIDs that belong to real processes on the machine
+// running the suite; every kill path below must land on a stub (#14418). The
+// stub outlives ProcessTreeKiller's 500ms SIGKILL escalation.
+const killSpy = stubProcessKillForFile(600);
 
 describe("TerminalProcess.kill — agent state event", () => {
   it("emits kill event (not error) for agent terminals", () => {
@@ -250,17 +256,13 @@ describe("TerminalProcess.kill — session persistence", () => {
 });
 
 describe.skipIf(process.platform === "win32")("TerminalProcess.kill — process tree cleanup", () => {
-  let processKillSpy: ReturnType<typeof vi.spyOn>;
-
   beforeEach(() => {
     vi.useFakeTimers();
     persistSyncMock.mockReset();
-    processKillSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
   });
 
   afterEach(() => {
     vi.useRealTimers();
-    processKillSpy.mockRestore();
   });
 
   it("sends SIGTERM to descendants bottom-up before killing shell", () => {
@@ -273,7 +275,7 @@ describe.skipIf(process.platform === "win32")("TerminalProcess.kill — process 
     expect(mockCache.getDescendantPids).toHaveBeenCalledWith(123);
 
     // SIGTERM calls should be in bottom-up order: 456 first, then 789
-    const sigTermCalls = processKillSpy.mock.calls.filter((c: unknown[]) => c[1] === "SIGTERM");
+    const sigTermCalls = killSpy().mock.calls.filter((c: unknown[]) => c[1] === "SIGTERM");
     expect(sigTermCalls).toHaveLength(2);
     expect(sigTermCalls[0]).toEqual([456, "SIGTERM"]);
     expect(sigTermCalls[1]).toEqual([789, "SIGTERM"]);
@@ -286,14 +288,14 @@ describe.skipIf(process.platform === "win32")("TerminalProcess.kill — process 
     terminal.kill("test");
 
     // No SIGKILL yet
-    const sigkillBefore = processKillSpy.mock.calls.filter((c: unknown[]) => c[1] === "SIGKILL");
+    const sigkillBefore = killSpy().mock.calls.filter((c: unknown[]) => c[1] === "SIGKILL");
     expect(sigkillBefore).toHaveLength(0);
 
     // Advance timer
     vi.advanceTimersByTime(500);
 
     // Now SIGKILL should have been sent to descendant + shell
-    const sigkillAfter = processKillSpy.mock.calls.filter((c: unknown[]) => c[1] === "SIGKILL");
+    const sigkillAfter = killSpy().mock.calls.filter((c: unknown[]) => c[1] === "SIGKILL");
     expect(sigkillAfter.map((c: unknown[]) => c[0])).toEqual([456, 123]);
   });
 
@@ -304,7 +306,7 @@ describe.skipIf(process.platform === "win32")("TerminalProcess.kill — process 
     terminal.dispose();
 
     // SIGKILL should be sent synchronously without waiting for timer
-    const sigkillCalls = processKillSpy.mock.calls.filter((c: unknown[]) => c[1] === "SIGKILL");
+    const sigkillCalls = killSpy().mock.calls.filter((c: unknown[]) => c[1] === "SIGKILL");
     expect(sigkillCalls).toHaveLength(2); // pid 456 + pid 123
   });
 
@@ -313,7 +315,7 @@ describe.skipIf(process.platform === "win32")("TerminalProcess.kill — process 
     expect(() => terminal.kill("test")).not.toThrow();
 
     // Should not call process.kill (no PID to target)
-    expect(processKillSpy).not.toHaveBeenCalled();
+    expect(killSpy()).not.toHaveBeenCalled();
   });
 
   it("handles null processTreeCache gracefully", () => {
@@ -321,12 +323,12 @@ describe.skipIf(process.platform === "win32")("TerminalProcess.kill — process 
     terminal.kill("test");
 
     // No SIGTERM calls to descendants (no cache to query)
-    const sigTermCalls = processKillSpy.mock.calls.filter((c: unknown[]) => c[1] === "SIGTERM");
+    const sigTermCalls = killSpy().mock.calls.filter((c: unknown[]) => c[1] === "SIGTERM");
     expect(sigTermCalls).toHaveLength(0);
 
     // SIGKILL sweep should still fire for shell pid after 500ms
     vi.advanceTimersByTime(500);
-    const sigkillCalls = processKillSpy.mock.calls.filter((c: unknown[]) => c[1] === "SIGKILL");
+    const sigkillCalls = killSpy().mock.calls.filter((c: unknown[]) => c[1] === "SIGKILL");
     expect(sigkillCalls).toHaveLength(1); // Just the shell pid 123
   });
 
@@ -337,24 +339,24 @@ describe.skipIf(process.platform === "win32")("TerminalProcess.kill — process 
 
     // kill() schedules a 500ms timer
     terminal.kill("test");
-    processKillSpy.mockClear();
+    killSpy().mockClear();
 
     // dispose() should clear that timer and do immediate SIGKILL
     terminal.dispose();
 
-    const sigkillCalls = processKillSpy.mock.calls.filter((c: unknown[]) => c[1] === "SIGKILL");
+    const sigkillCalls = killSpy().mock.calls.filter((c: unknown[]) => c[1] === "SIGKILL");
     expect(sigkillCalls.length).toBeGreaterThan(0);
 
     // Advancing timer should NOT cause a second SIGKILL sweep
-    processKillSpy.mockClear();
+    killSpy().mockClear();
     vi.advanceTimersByTime(500);
-    const lateSigkills = processKillSpy.mock.calls.filter((c: unknown[]) => c[1] === "SIGKILL");
+    const lateSigkills = killSpy().mock.calls.filter((c: unknown[]) => c[1] === "SIGKILL");
     expect(lateSigkills).toHaveLength(0);
   });
 
   it("handles process.kill throwing ESRCH gracefully", () => {
     const mockCache = createMockProcessTreeCache([456]);
-    processKillSpy.mockImplementation(() => {
+    killSpy().mockImplementation(() => {
       const err = new Error("kill ESRCH") as NodeJS.ErrnoException;
       err.code = "ESRCH";
       throw err;
@@ -381,13 +383,13 @@ describe.skipIf(process.platform === "win32")("TerminalProcess.kill — process 
     terminal.kill("test");
 
     // SIGTERM pass used the initial snapshot [456]
-    const sigTermCalls = processKillSpy.mock.calls.filter((c: unknown[]) => c[1] === "SIGTERM");
+    const sigTermCalls = killSpy().mock.calls.filter((c: unknown[]) => c[1] === "SIGTERM");
     expect(sigTermCalls).toEqual([[456, "SIGTERM"]]);
 
     // Advance to fire the SIGKILL sweep
     vi.advanceTimersByTime(500);
 
-    const sigkillCalls = processKillSpy.mock.calls.filter((c: unknown[]) => c[1] === "SIGKILL");
+    const sigkillCalls = killSpy().mock.calls.filter((c: unknown[]) => c[1] === "SIGKILL");
     const sigkillPids = sigkillCalls.map((c: unknown[]) => c[0]);
     // The late-forked 789 must be SIGKILL'd alongside 456 and the shell pid 123.
     expect(sigkillPids).toEqual([456, 789, 123]);

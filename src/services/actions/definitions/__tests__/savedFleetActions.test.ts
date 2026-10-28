@@ -33,14 +33,17 @@ vi.mock("@/clients", () => ({
   },
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     destroy: vi.fn(),
     applyRendererPolicy: vi.fn(),
     onPanelBackgrounded: vi.fn(),
     resize: vi.fn().mockReturnValue({ cols: 80, rows: 24 }),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("@/store/persistence/panelPersistence", () => ({
   panelPersistence: {
@@ -60,6 +63,8 @@ const { useProjectStore } = await import("@/store/projectStore");
 const { useProjectSettingsStore } = await import("@/store/projectSettingsStore");
 const { useWorktreeSelectionStore } = await import("@/store/worktreeStore");
 const { registerFleetActions } = await import("../fleetActions");
+// The run bodies load on first dispatch; load them here, under the mocks above.
+await import("../fleetActions.impl");
 
 type ActionRegistry = Awaited<
   ReturnType<typeof import("@/services/actions/actionDefinitions").createActionDefinitions>
@@ -258,6 +263,8 @@ describe("fleet.saveNamedFleet", () => {
     const stored = useProjectSettingsStore.getState().settings?.fleetSavedScopes;
     expect(stored).toHaveLength(1);
     expect(stored?.[0]).toMatchObject({ kind: "snapshot", name: "My Fleet" });
+    // The new row in the saved list is the confirmation.
+    expect(notifyMock).not.toHaveBeenCalled();
   });
 
   it("captures the snapshot armOrder before the IPC round-trip", async () => {
@@ -627,7 +634,7 @@ describe("fleet.deleteNamedFleet", () => {
 
     const registry = await buildRegistry();
     const deleting = run(registry, "fleet.deleteNamedFleet", { id: "s1" });
-    await Promise.resolve();
+    await vi.waitFor(() => expect(saveSettingsMock).toHaveBeenCalled());
     // Another fleet is saved while the delete's write is still in flight.
     useProjectSettingsStore.setState((s) => ({
       settings: {

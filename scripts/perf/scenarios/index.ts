@@ -37,6 +37,7 @@ import { sidebarFilterScenarios } from "./sidebarFilters";
 import { switcherSearchScenarios } from "./switcherSearch";
 import { imagePathProbeScenarios } from "./imagePathProbe";
 import { windowsCensusScenarios } from "./windowsCensus";
+import { elementPickerScenarios } from "./elementPicker";
 
 export const allScenarios: PerfScenario[] = [
   ...startupScenarios,
@@ -77,6 +78,7 @@ export const allScenarios: PerfScenario[] = [
   ...switcherSearchScenarios,
   ...imagePathProbeScenarios,
   ...windowsCensusScenarios,
+  ...elementPickerScenarios,
 ];
 
 export function getScenariosForMode(mode: PerfMode): PerfScenario[] {
@@ -260,6 +262,10 @@ export const EXPECTED_SCENARIO_IDS: ReadonlySet<string> = new Set([
   "PERF-407",
   "PERF-408",
   "PERF-409",
+  "PERF-410",
+  "PERF-411",
+  "PERF-412",
+  "PERF-413",
 ]);
 
 /**

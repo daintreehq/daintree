@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { terminalInstanceService } from "../TerminalInstanceService";
+import { load as loadTerminalService } from "../terminalInstanceServiceAccessor";
 import { INCREMENTAL_RESTORE_CONFIG } from "../types";
+
+const terminalInstanceService = await loadTerminalService();
 
 vi.mock("@xterm/addon-webgl", () => ({
   WebglAddon: vi.fn().mockImplementation(() => ({

@@ -17,6 +17,11 @@ export interface RingFrame {
   data: Uint8Array;
   /** The pty-host's byte count for the chunk (what acks settle). */
   bytes: number;
+  /**
+   * Where the chunk ends in the terminal's output stream, as the pty-host
+   * stamped it; kept so a replay fences against a restore the same way.
+   */
+  streamEnd?: number;
 }
 
 function frameCost(frame: RingFrame): number {

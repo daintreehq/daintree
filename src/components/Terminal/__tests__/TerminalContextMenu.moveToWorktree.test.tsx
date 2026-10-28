@@ -10,7 +10,7 @@
  * picker itself is stubbed down to its props; the handoff through the real
  * overlays lives in `TerminalContextMenu.moveToWorktree.overlays.test.tsx`.
  */
-import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, renderHook, screen, cleanup, fireEvent, act } from "@testing-library/react";
 import type React from "react";
 import type { WorktreeState } from "@/types";
@@ -154,13 +154,16 @@ vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch, get: () => undefined, list: () => [] },
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     get: () => undefined,
     getTerminal: () => undefined,
     getSelection: () => "",
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("@/hooks/useWorktrees", () => ({
   useWorktrees: () => ({ worktrees: worktreesRef.current }),
@@ -208,6 +211,7 @@ import { TerminalContextMenu } from "../TerminalContextMenu";
 import { PanelContextMenuTrigger } from "../PanelContextMenuTrigger";
 import { getWorktreeHeadline } from "@/lib/worktreeHeadline";
 import { useSidebarWorktreeOrder } from "@/hooks/useSidebarWorktreeOrder";
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 
 const T = 1_700_000_000_000;
 
@@ -293,6 +297,12 @@ function moveRows(): HTMLButtonElement[] {
 }
 
 const labels = (rows: HTMLButtonElement[]) => rows.map((row) => row.textContent);
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
+});
 
 describe("TerminalContextMenu — Move to worktree (#12445)", () => {
   beforeEach(() => {
@@ -678,6 +688,29 @@ describe("TerminalContextMenu — Move to worktree cap and picker handoff (#1244
 
     expect(screen.getByTestId("move-picker").getAttribute("data-panel-id")).toBe("panel-2");
     expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  // A dock tab group can mix these kinds, and its active tab can switch while
+  // the menu is open. The submenu staying mounted is what keeps it open.
+  it.each([
+    ["browser", "dev-preview"],
+    ["dev-preview", "browser"],
+    ["browser", "review"],
+    ["review", "dev-preview"],
+  ])("keeps the submenu mounted when a %s menu starts speaking for a %s", (from, to) => {
+    const fieldsFor = (kind: string) => MENU_BRANCHES.find(([label]) => label === kind)![1];
+    worktreesRef.current = manyWorktrees(3);
+    panelsById.current = {
+      "panel-1": { id: "panel-1", title: "One", worktreeId: "wt-main", ...fieldsFor(from) },
+      "panel-2": { id: "panel-2", title: "Two", worktreeId: "wt-main", ...fieldsFor(to) },
+    };
+    const { rerender } = render(renderPanel("panel-1"));
+    rightClickPane();
+    const submenu = subContent();
+
+    rerender(renderPanel("panel-2"));
+
+    expect(subContent()).toBe(submenu);
   });
 
   it.each(MENU_BRANCHES)("hands off to the picker from the %s menu", (_label, fields) => {

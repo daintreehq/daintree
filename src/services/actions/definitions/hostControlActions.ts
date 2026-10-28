@@ -2,8 +2,14 @@ import type { ActionRegistry } from "../actionTypes";
 import {
   HostCallArgsSchema,
   HostCallResultSchema,
+  HostEnsureProjectArgsSchema,
+  HostEnsureProjectResultSchema,
   HostListArgsSchema,
   HostListResultSchema,
+  HostSettingsArgsSchema,
+  HostSettingsResultSchema,
+  HostWatchArgsSchema,
+  HostWatchResultSchema,
 } from "@shared/types/hostControl";
 
 function mainProcessOnly(id: string): () => Promise<never> {
@@ -20,8 +26,11 @@ function mainProcessOnly(id: string): () => Promise<never> {
  * lives in the MCP CallTool handler
  * (electron/services/mcp-server/sessionServer.ts): any assistant running in
  * one of this machine's own views may call them (#13468), and they reach
- * hosts over the link from main. Delegating to a host's assistant is agent
- * messaging run through `host.call` (#13496).
+ * hosts over the link from main, and this machine's other projects in
+ * process under its own id, `local` (#14024). Delegating to a host's assistant is agent
+ * messaging run through `host.call` (#13496), and a host's own named settings
+ * are read and changed through `host.settings` (#14167), and `host.watch`
+ * wakes an assistant once a host's link or capacity is seen to change (#14463).
  * `run()` throws if the renderer ever invokes it directly.
  */
 export function registerHostControlActions(actions: ActionRegistry): void {
@@ -29,7 +38,7 @@ export function registerHostControlActions(actions: ActionRegistry): void {
     id: "host.list",
     title: "List hosts",
     description:
-      "List the hosts this machine's assistant may reach, as observed: connection, last load sample, agent counts, and each connected host's projects, which a call there names. Null means not measured.",
+      "List the hosts this assistant reaches, this machine first as local, as observed: link flags, build, installed CLIs, load sample, agent counts and a page of each connected host's projects, which calls name. Null means unmeasured.",
     category: "help",
     kind: "query",
     danger: "safe",
@@ -53,7 +62,7 @@ export function registerHostControlActions(actions: ActionRegistry): void {
     id: "host.call",
     title: "Run a tool on a host",
     description:
-      "Run one of a host's own Daintree tools in one of its projects and get its result, such as starting the host's assistant or sending it a prompt. Changes are refused while another machine drives that project. ambiguous: resend under its callId, which never runs twice.",
+      "Run a host's own Daintree tool in one of its projects (local reaches another project here) and get its result, such as starting its assistant. Changes are refused while another machine drives that project. ambiguous: resend under its callId, which never runs twice.",
     category: "help",
     kind: "command",
     danger: "safe",
@@ -72,5 +81,80 @@ export function registerHostControlActions(actions: ActionRegistry): void {
       openWorldHint: true,
     },
     run: mainProcessOnly("host.call"),
+  }));
+
+  actions.set("host.ensureProject", () => ({
+    id: "host.ensureProject",
+    title: "Bring this project to a host",
+    description:
+      "Make sure this project is on a host: its copy found, else cloned there, plus the branch's worktree when asked. Returns the host's projectId to run its tools in. Never pushes, opens a window or runs setup; choices for the person come back as questions. working: call again the same way.",
+    category: "help",
+    kind: "command",
+    danger: "safe",
+    denyPluginDispatch: true,
+    scope: "renderer",
+    keywords: ["host", "remote", "clone", "project", "worktree", "bring"],
+    palette: { mode: "hidden" },
+    argsSchema: HostEnsureProjectArgsSchema,
+    resultSchema: HostEnsureProjectResultSchema,
+    mcpOutputSchema: true,
+    mcpAnnotations: {
+      readOnlyHint: false,
+      // A repeat finds what the first made.
+      idempotentHint: true,
+      destructiveHint: false,
+      openWorldHint: true,
+    },
+    run: mainProcessOnly("host.ensureProject"),
+  }));
+
+  actions.set("host.settings", () => ({
+    id: "host.settings",
+    title: "Change a host's settings",
+    description:
+      "Read or change named settings on hosts, such as turning Canopy on across several. preview returns a ticket and changes nothing; apply asks the person to approve exactly that preview, then writes it. Never this machine's own settings.",
+    category: "help",
+    kind: "command",
+    danger: "safe",
+    denyPluginDispatch: true,
+    scope: "renderer",
+    keywords: ["host", "remote", "settings", "canopy", "enable", "configure"],
+    palette: { mode: "hidden" },
+    argsSchema: HostSettingsArgsSchema,
+    resultSchema: HostSettingsResultSchema,
+    mcpOutputSchema: true,
+    mcpAnnotations: {
+      readOnlyHint: false,
+      // A repeated preview makes a new ticket and can retire an older one.
+      idempotentHint: false,
+      destructiveHint: false,
+      openWorldHint: true,
+    },
+    run: mainProcessOnly("host.settings"),
+  }));
+
+  actions.set("host.watch", () => ({
+    id: "host.watch",
+    title: "Watch a host",
+    description:
+      "One notice when a host's link, or a fresh load sample, is first seen meeting your condition, so you can end your turn. It only observes: never dials or holds the host, never acts. Watches expire; cancel or list yours.",
+    category: "help",
+    kind: "command",
+    danger: "safe",
+    denyPluginDispatch: true,
+    scope: "renderer",
+    keywords: ["host", "remote", "watch", "notify", "reconnect", "capacity", "wake"],
+    palette: { mode: "hidden" },
+    argsSchema: HostWatchArgsSchema,
+    resultSchema: HostWatchResultSchema,
+    mcpOutputSchema: true,
+    mcpAnnotations: {
+      readOnlyHint: false,
+      // A repeat finds a watch still armed, but arms anew once that one has ended.
+      idempotentHint: false,
+      destructiveHint: false,
+      openWorldHint: true,
+    },
+    run: mainProcessOnly("host.watch"),
   }));
 }

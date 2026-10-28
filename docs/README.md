@@ -42,14 +42,14 @@ From there, follow the architecture doc nearest the surface you're changing. Eac
 | [notification-system.md](./architecture/notification-system.md) | How a runtime signal reaches the user — the five-surface taxonomy and routing machinery. |
 | [destructive-action-safeguards.md](./architecture/destructive-action-safeguards.md) | Living per-action audit and rubric for destructive UI surfaces. |
 | [dev-preview-event-routing.md](./architecture/dev-preview-event-routing.md) | Per-event routing audit for dev-preview lifecycle signals. |
-| [sveltekit-site-builder.md](./architecture/sveltekit-site-builder.md) | SvelteKit Tools: how a click in a dev preview resolves to a source node, and the four operations allowed to write it. |
+| [element-picker.md](./architecture/element-picker.md) | The dev preview's Element Picker: framework detection, lazy loading, the resolver host, the provenance model, and what each framework can't give us. |
 | [terminal-identity.md](./architecture/terminal-identity.md) | The single PTY-backed panel shape — plain vs agent terminal as runtime states. |
 | [terminal-lifecycle.md](./architecture/terminal-lifecycle.md) | Runtime lifecycle status for terminals across renderer, main, and PTY host. |
 | [pty-host-fabric.md](./architecture/pty-host-fabric.md) | Per-project PTY host shards behind `DAINTREE_PTY_FABRIC` — placement, port routing, crash isolation, idle retirement. |
 | [terminal-paint-fabric.md](./architecture/terminal-paint-fabric.md) | The paint-plane fabric: sharding terminal parse/paint across render surfaces behind the compositor seam. |
 | [agent-activity-monitoring.md](./architecture/agent-activity-monitoring.md) | How a live agent terminal is judged working / waiting / completed / exited. |
 | [agent-state-tracking-strategy.md](./architecture/agent-state-tracking-strategy.md) | Why activity is tracked via passive PTY observation, and the rubric for new proposals. |
-| [resource-governance.md](./architecture/resource-governance.md) | Adaptive profiles, memory pressure, view eviction, and PTY hibernation. |
+| [resource-governance.md](./architecture/resource-governance.md) | Adaptive profiles, memory pressure, view eviction, and memory-pressure sleep. |
 | [fatal-error-spine.md](./architecture/fatal-error-spine.md) | The on-exit marker contract (`running.lock`) and the synchronous fatal-error path. |
 | [crash-recovery-and-safe-mode.md](./architecture/crash-recovery-and-safe-mode.md) | Detecting a dead/wedged session, safe mode, crash-loop backoff, host-failure handling. |
 | [persistence-and-migrations.md](./architecture/persistence-and-migrations.md) | Where local state lives across the two store engines, and how each migrates. |
@@ -80,7 +80,7 @@ The plugin sub-index links onward to getting-started, the manifest reference, co
 
 | Doc | Purpose |
 | --- | --- |
-| [release.md](./release.md) | Release and code-signing — the three per-OS workflows and release-notes format. |
+| [release.md](./release.md) | Release and code-signing — the three per-OS workflows, dry runs, signing and publishing. |
 | [distribution/asar-integrity.md](./distribution/asar-integrity.md) | Embedded ASAR integrity validation (macOS / Windows) via the electron-builder fuse. |
 | [distribution/microsoft-store.md](./distribution/microsoft-store.md) | Microsoft Store `.appx` build, certification, and the parallel NSIS path. |
 
@@ -106,6 +106,7 @@ The plugin sub-index links onward to getting-started, the manifest reference, co
 | [sound-design.md](./sound-design.md) | How notification earcons are procedurally synthesized, and how to add new ones. |
 | [voice-input.md](./voice-input.md) | The voice dictation / streaming transcription pipeline across both processes. |
 | [assistant-custom-commands.md](./assistant-custom-commands.md) | User-authored commands/skills for assistant sessions — source folders, per-agent mapping, sync mechanics. |
+| [architecture/assistant-run-checkpoints.md](./architecture/assistant-run-checkpoints.md) | Durable Assistant run checkpoints — layout, launch context, discard and retention rules. |
 
 ## Companion pairs
 

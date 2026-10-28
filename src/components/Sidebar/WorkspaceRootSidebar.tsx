@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { WorkspaceRootRow } from "./WorkspaceRootRow";
 import { SIDEBAR_HEADER_ROW } from "./sidebarHeader";
+import { SidebarViewHeading } from "./SidebarViewSwitcher";
 
 /**
  * The sidebar for a workspace that has no git worktrees — a scratch, or a
@@ -35,9 +36,9 @@ export function WorkspaceRootSidebar({
         {/* Not "Worktrees": this workspace has none, and naming the slot after
             a concept it can't hold is what made the header wrong for two of the
             three workspace kinds. */}
-        <h2 className="truncate text-text-primary font-semibold text-sm tracking-wide">
+        <SidebarViewHeading className="truncate text-text-primary font-semibold text-sm tracking-wide">
           Workspace
-        </h2>
+        </SidebarViewHeading>
       </div>
 
       {/* Plain container, not a `role="grid"`: the worktree list is a grid

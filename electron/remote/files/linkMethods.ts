@@ -18,6 +18,8 @@ export const FileLinkMethod = {
   CANCEL: "files.cancel",
   /** Shell → Host: send a whole file for saving on the Shell. */
   DOWNLOAD: "files.download",
+  /** Shell → Host: the person clicked a link to this file in a terminal; let the view open it. */
+  GRANT_CLICKED: "files.grant-clicked",
 } as const;
 
 /** Transfer destinations the Shell accepts, each followed by the token it minted. */
@@ -84,6 +86,13 @@ export const FileDownloadPayloadSchema = z.object({
   token: hexId,
 });
 export type FileDownloadPayload = z.infer<typeof FileDownloadPayloadSchema>;
+
+export const FileGrantClickedPayloadSchema = z.object({
+  /** As for a preview: the asking view's own endpoint. */
+  endpointId,
+  hostPath,
+});
+export type FileGrantClickedPayload = z.infer<typeof FileGrantClickedPayloadSchema>;
 
 export const FileDownloadStartSchema = z.object({
   name: z.string().min(1).max(1024),

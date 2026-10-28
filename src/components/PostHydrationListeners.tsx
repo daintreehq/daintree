@@ -1,7 +1,6 @@
 import { useEffect } from "react";
 import { PERF_MARKS } from "@shared/perf/marks";
 import { markRendererPerformance } from "../utils/performance";
-import { useHibernationNotifications } from "../hooks/useHibernationNotifications";
 import { useIdleTerminalNotifications } from "../hooks/useIdleTerminalNotifications";
 import { useIdleBackgroundCloseNotifications } from "../hooks/useIdleBackgroundCloseNotifications";
 import { useParkReleaseNotifications } from "../hooks/useParkReleaseNotifications";
@@ -14,7 +13,11 @@ import { useForgeRateLimit } from "../hooks/useForgeRateLimit";
 import { useStoreUpdateListener } from "../hooks/useStoreUpdateListener";
 import { usePluginUpdateCheckListener } from "../hooks/usePluginUpdateCheckListener";
 import { useSoundPlaybackListener } from "../hooks/useSoundPlaybackListener";
-import { useRecipeFocusReload, useWorktreeDevServerStateSync } from "../hooks/app";
+import {
+  useDevPreviewOfferSync,
+  useRecipeFocusReload,
+  useWorktreeDevServerStateSync,
+} from "../hooks/app";
 
 /**
  * Hosts the listener hooks that only do meaningful work after app state has
@@ -31,7 +34,6 @@ import { useRecipeFocusReload, useWorktreeDevServerStateSync } from "../hooks/ap
  * stay in `AppInner`.
  */
 export function PostHydrationListeners() {
-  useHibernationNotifications();
   useIdleTerminalNotifications();
   useIdleBackgroundCloseNotifications();
   useParkReleaseNotifications();
@@ -43,6 +45,7 @@ export function PostHydrationListeners() {
   useForgeRateLimit();
   useRecipeFocusReload();
   useWorktreeDevServerStateSync();
+  useDevPreviewOfferSync();
   useSoundPlaybackListener();
   useStoreUpdateListener();
   usePluginUpdateCheckListener();

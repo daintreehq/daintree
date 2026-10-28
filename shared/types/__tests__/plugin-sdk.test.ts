@@ -12,6 +12,7 @@ import type {
   PluginActivate,
   PanelContribution,
   ToolbarButtonContribution,
+  ToolbarButtonPopover,
   PluginPanelBadge,
   PluginPanelBadgeColor,
   MenuItemContribution,
@@ -19,11 +20,19 @@ import type {
   ViewContribution,
   ViewLocation,
   PanelViewProps,
+  PluginViewHostContext,
+  PluginViewHostKind,
+  PluginFileDocument,
   PluginPanelLifecycleEvent,
   PluginPanelLifecyclePhase,
   PanelReloadResult,
   WorkerRestartResult,
   PluginSystemWakeEvent,
+  PluginTerminalKind,
+  PluginTerminalLifecycleEvent,
+  PluginTerminalLifecycleEventType,
+  PluginProjectPresence,
+  PluginProjectPresenceState,
   McpServerContribution,
   PluginCapability,
   BuiltInPluginCapability,
@@ -35,9 +44,14 @@ import type {
   PluginWorktreeStatus,
   PluginWorktreeStatusFile,
   PluginWorktreeFileState,
+  PluginWorktreeGitOperation,
+  PluginWorktreeSetup,
+  PluginWorktreeSetupState,
+  PluginWorktreeSetupStage,
   PluginIpcContext,
   PluginIpcHandler,
   PluginProcessApi,
+  PluginServiceFailureReason,
   PluginProcessHandle,
   PluginDuplexProcessHandle,
   PluginDuplexProcessSpawnOptions,
@@ -155,6 +169,15 @@ describe("plugin-sdk boundary", () => {
       expectTypeOf<PluginWorktreeStatus>().toMatchTypeOf<object>();
       expectTypeOf<PluginWorktreeStatusFile>().toMatchTypeOf<object>();
       expectTypeOf<PluginWorktreeFileState>().toMatchTypeOf<string>();
+      expectTypeOf<PluginWorktreeGitOperation>().toMatchTypeOf<string>();
+      expectTypeOf<PluginWorktreeSetup>().toMatchTypeOf<object>();
+      expectTypeOf<PluginWorktreeSetupState>().toMatchTypeOf<string>();
+      expectTypeOf<PluginWorktreeSetupStage>().toMatchTypeOf<string>();
+      expectTypeOf<PluginWorktreeSnapshot["headOid"]>().toEqualTypeOf<string | null>();
+      expectTypeOf<
+        PluginWorktreeSnapshot["gitOperation"]
+      >().toEqualTypeOf<PluginWorktreeGitOperation | null>();
+      expectTypeOf<PluginWorktreeSnapshot["setup"]>().toEqualTypeOf<PluginWorktreeSetup | null>();
     });
 
     it("exports forge provider contract", () => {
@@ -503,6 +526,29 @@ describe("plugin-sdk boundary", () => {
       ]).toHaveLength(11);
     });
 
+    it("binds services on the activation slice and calls them from the full host (#14105)", () => {
+      const activation = {} as PluginActivationApi;
+      expectTypeOf(activation.registerService).returns.toEqualTypeOf<Promise<() => void>>();
+      // @ts-expect-error — calling services is post-activation-safe, not on the slice
+      const _services = activation.services;
+      void _services;
+      // One shared contract types both ends. Never invoked: compile-time only.
+      type Issues = { lookup: { args: { key: string }; result: { title: string } } };
+      const assertTypes = async (host: PluginHostApi): Promise<void> => {
+        await host.registerService<Issues>("acme.jira.issues", {
+          lookup: async ({ key }) => ({ title: key }),
+        });
+        const result = await host.services.call<Issues, "lookup">("acme.jira.issues", "lookup", {
+          key: "A-1",
+        });
+        if (result.ok) expectTypeOf(result.value).toEqualTypeOf<{ title: string }>();
+        else expectTypeOf(result.reason).toEqualTypeOf<PluginServiceFailureReason>();
+        // @ts-expect-error — arguments must match the contract
+        await host.services.call<Issues, "lookup">("acme.jira.issues", "lookup", { id: 1 });
+      };
+      void assertTypes;
+    });
+
     it("PluginProcessHandle carries the lifecycle controls", () => {
       const handle = {} as PluginProcessHandle;
       expectTypeOf(handle.id).toEqualTypeOf<string>();
@@ -587,6 +633,35 @@ describe("plugin-sdk boundary", () => {
       expectTypeOf(props.styleRootAttributes).toEqualTypeOf<Readonly<Record<string, string>>>();
       // Optional: a host that cannot police reload loops offers none (#12609).
       expectTypeOf(props.requestReload).toEqualTypeOf<(() => void) | undefined>();
+      // Where the view is mounted (#13770), as a named SDK type. Optional so a
+      // view built against it still runs on a host that predates it.
+      expectTypeOf(props.hostContext).toEqualTypeOf<PluginViewHostContext | undefined>();
+      expectTypeOf<PluginViewHostKind>().toEqualTypeOf<
+        "panel" | "surface" | "settings" | "sidebar" | "fileEditor" | "popover"
+      >();
+      // A file editor view's host-owned document (#13809), a named SDK type.
+      expectTypeOf(props.fileDocument).toEqualTypeOf<PluginFileDocument | undefined>();
+      // A toolbar popover's view closes its own host (#13784); every other
+      // host leaves it out.
+      const context = {} as PluginViewHostContext;
+      expectTypeOf(context.close).toEqualTypeOf<(() => void) | undefined>();
+    });
+
+    it("lets a toolbar button dispatch an action or open a popover (#13784)", () => {
+      // Each is optional on the type; the manifest schema requires exactly one.
+      expectTypeOf<{
+        id: "inbox";
+        label: "Inbox";
+        iconId: "package";
+        popover: { viewId: "inbox" };
+      }>().toMatchTypeOf<ToolbarButtonContribution>();
+      expectTypeOf<{
+        id: "run";
+        label: "Run";
+        iconId: "package";
+        actionId: "acme.run";
+      }>().toMatchTypeOf<ToolbarButtonContribution>();
+      expectTypeOf<ToolbarButtonPopover>().toEqualTypeOf<{ viewId: string }>();
     });
 
     it("exposes the panel lifecycle contract as named SDK types", () => {
@@ -644,6 +719,50 @@ describe("plugin-sdk boundary", () => {
       const activation = {} as PluginActivationApi;
       expectTypeOf(activation.onDidWake).toBeFunction();
       expectTypeOf(activation.onDidWake).returns.toEqualTypeOf<Promise<() => void>>();
+    });
+
+    it("exposes terminal lifecycle as a named, narrowable SDK union (#13814)", () => {
+      const event = {} as PluginTerminalLifecycleEvent;
+      expectTypeOf(event.terminalId).toEqualTypeOf<string>();
+      expectTypeOf(event.kind).toEqualTypeOf<PluginTerminalKind>();
+      expectTypeOf(event.workspaceId).toEqualTypeOf<string | undefined>();
+      expectTypeOf<PluginTerminalLifecycleEventType>().toEqualTypeOf<
+        "spawned" | "exited" | "trashed" | "restored" | "rate-limit-observed"
+      >();
+      if (event.type === "exited") {
+        expectTypeOf(event.exitCode).toEqualTypeOf<number>();
+        expectTypeOf(event.signal).toEqualTypeOf<number | undefined>();
+      }
+      if (event.type === "rate-limit-observed") {
+        expectTypeOf(event.observedAt).toEqualTypeOf<number>();
+      }
+      // Metadata only: nothing a terminal's screen or launch line could leak through.
+      expectTypeOf<PluginTerminalLifecycleEvent>().not.toHaveProperty("cwd");
+      expectTypeOf<PluginTerminalLifecycleEvent>().not.toHaveProperty("title");
+    });
+
+    it("PluginActivationApi revoke-guards the terminal lifecycle subscription", () => {
+      const activation = {} as PluginActivationApi;
+      expectTypeOf(activation.onDidChangeTerminalLifecycle).toBeFunction();
+      expectTypeOf(activation.onDidChangeTerminalLifecycle).parameters.toEqualTypeOf<
+        [(event: PluginTerminalLifecycleEvent) => void]
+      >();
+      expectTypeOf(activation.onDidChangeTerminalLifecycle).returns.toEqualTypeOf<
+        Promise<() => void>
+      >();
+    });
+
+    it("exposes project presence as named SDK types (#13813)", () => {
+      const presence = {} as PluginProjectPresence;
+      expectTypeOf(presence.projectId).toEqualTypeOf<string>();
+      expectTypeOf(presence.state).toEqualTypeOf<PluginProjectPresenceState>();
+      expectTypeOf<PluginProjectPresenceState>().toEqualTypeOf<
+        "foreground" | "background" | "closed"
+      >();
+      const activation = {} as PluginActivationApi;
+      expectTypeOf(activation.onDidChangeProjectPresence).returns.toEqualTypeOf<
+        Promise<() => void>
+      >();
     });
 
     it("PluginIpcContext has required fields", () => {

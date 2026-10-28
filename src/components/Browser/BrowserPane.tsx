@@ -53,13 +53,12 @@ import { pluginViewHostId } from "@/components/Plugin/remotePluginView";
 import { notify } from "@/lib/notify";
 import { panelNotificationAddress } from "@/lib/notificationAddress";
 import {
-  HostPortInUseError,
+  hostForwardFailure,
   needsHostForward,
   parseLoopbackLink,
+  releaseBrowserPanelForwards,
   resolveBrowserUrlForView,
 } from "@/services/terminal/remoteLoopbackLinks";
-import { isClientAppError } from "@/utils/clientAppError";
-import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 export interface BrowserPaneProps extends BasePanelProps {
   initialUrl: string;
@@ -76,19 +75,6 @@ export interface BrowserPaneProps extends BasePanelProps {
 // ERR_ABORTED (-3) fires when a pending load is superseded by a new navigation —
 // benign. Any other rejection is unexpected and worth a log; did-fail-load
 // surfaces user-visible failures, so this only catches non-event paths.
-/** Why a host's localhost page couldn't be forwarded here, in the host's own words where it gave some. */
-function hostForwardFailure(url: string, error: unknown): string {
-  if (error instanceof HostPortInUseError) return error.message;
-  const port = parseLoopbackLink(url)?.port;
-  const reason =
-    isClientAppError(error) && error.userMessage
-      ? error.userMessage
-      : formatErrorMessage(error, "The host didn't answer.");
-  return port === undefined
-    ? reason
-    : `Port ${port} on the host couldn't be forwarded to this machine. ${reason}`;
-}
-
 function loadWebviewUrl(webview: Electron.WebviewTag, url: string): void {
   const result = (webview.loadURL as (url: string) => unknown)(url);
   if (
@@ -276,6 +262,17 @@ export function BrowserPane({
     hostForwardRef.current = next;
     setHostForwardState(next);
   }, []);
+  // The host ports this panel holds a forward of, by port.
+  const heldPortsRef = useRef(new Set<number>());
+  const holdHostPage = useCallback(
+    (url: string) =>
+      resolveBrowserUrlForView(url, id).then((resolved) => {
+        const port = parseLoopbackLink(url)?.port;
+        if (port !== undefined) heldPortsRef.current.add(port);
+        return resolved;
+      }),
+    [id]
+  );
   // Every navigation takes a number; a forward that settles after a newer
   // navigation began decides nothing.
   const navigationGenRef = useRef(0);
@@ -482,7 +479,7 @@ export function BrowserPane({
     let cancelled = false;
     const generation = navigationGenRef.current;
     const url = initialUrlRef.current;
-    resolveBrowserUrlForView(url).then(
+    holdHostPage(url).then(
       () => {
         if (cancelled || generation !== navigationGenRef.current) return;
         failedHostUrlRef.current = null;
@@ -499,7 +496,23 @@ export function BrowserPane({
     return () => {
       cancelled = true;
     };
-  }, [hostForward, setHostForward]);
+  }, [hostForward, setHostForward, holdHostPage]);
+
+  // Every host port this panel forwarded stays held while it is open (its
+  // back and forward can return to any of them), and goes when it closes.
+  useEffect(() => () => releaseBrowserPanelForwards(id), [id]);
+
+  // A page can reach another of the host's ports on its own (a link, a
+  // redirect) through a forward another panel asked for: this panel holds it
+  // too, so it isn't let go under the page when that panel closes.
+  useEffect(() => {
+    if (hostForward !== "ready" || !needsHostForward(currentUrl)) return;
+    const port = parseLoopbackLink(currentUrl)?.port;
+    if (port === undefined || heldPortsRef.current.has(port)) return;
+    holdHostPage(currentUrl).catch(() => {
+      // Not forwarded here (its port is taken here, or the host is gone): nothing to hold.
+    });
+  }, [currentUrl, hostForward, holdHostPage]);
 
   useEffect(() => {
     if (!isWebviewReady || !webviewElement || !pendingNavigationRef.current) return;
@@ -550,7 +563,7 @@ export function BrowserPane({
       setPendingApproval(null);
       setIsLoading(true);
       setLoadError(null);
-      resolveBrowserUrlForView(url).then(
+      holdHostPage(url).then(
         (resolved) => {
           if (generation === navigationGenRef.current) commitResolvedNavigation(resolved);
         },
@@ -562,7 +575,7 @@ export function BrowserPane({
         }
       );
     },
-    [commitResolvedNavigation]
+    [commitResolvedNavigation, holdHostPage]
   );
 
   /**

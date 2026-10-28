@@ -5,7 +5,6 @@ import type {
   CanopyPlan,
   CanopySnapshot,
 } from "../../../../shared/types/ipc/canopy.js";
-import { CANOPY_URGENT_PRIORITY } from "../../../../shared/types/ipc/canopy.js";
 import {
   CANOPY_CLASSIFIER_ANCHORS,
   CANOPY_POLL_MS,
@@ -14,7 +13,6 @@ import {
   CANOPY_SETTLE_MS,
   CANOPY_STALL_MS,
   CANOPY_TRANSIENT_GRACE_MS,
-  CANOPY_COLD_START_GRACE_MS,
   CANOPY_FAILURE_BACKOFF_MAX_MS,
   CanopyService,
   failureMessage,
@@ -22,7 +20,6 @@ import {
 } from "../CanopyService.js";
 import {
   CanopyProviderError,
-  type CanopyPartialDescription,
   type ClassifierResult,
   type DescriberResult,
   type CanopyScreenInput,
@@ -60,11 +57,8 @@ interface Harness {
   snapshots: CanopySnapshot[];
 }
 
-type DescribeFn = (
-  input: CanopyScreenInput,
-  says: CanopyCategory,
-  onPartial?: (partial: CanopyPartialDescription) => void
-) => Promise<DescriberResult>;
+/** The words half of a reading, as each test wants it. */
+type DescribeFn = (input: CanopyScreenInput, says: CanopyCategory) => Promise<DescriberResult>;
 
 let harness: Harness | null = null;
 
@@ -85,8 +79,8 @@ async function makeHarness(options: {
   /** Off unless given, so a closed panel reads nothing. */
   backgroundPollMs?: number;
   onAsk?: CanopyServiceDeps["onAsk"];
-  serviceWaking?: () => boolean;
-  serviceHost?: () => string;
+  readerName?: () => string;
+  readerReady?: () => boolean;
   /** Leave the panel closed after construction. */
   closed?: boolean;
   /** False while the fleet should read as unknown (degraded). */
@@ -94,6 +88,7 @@ async function makeHarness(options: {
   /** Awaited before every screen read, to hold a scan part way. */
   screenGate?: () => Promise<void>;
   onRefinementsChanged?: () => void;
+  getTrash?: CanopyServiceDeps["getTrash"];
 }): Promise<Harness> {
   const screens = new Map<string, string>();
   const runs: FleetRunRow[] = [];
@@ -141,13 +136,12 @@ async function makeHarness(options: {
             `${options.history!.get(runId) ?? ""}\n${screens.get(runId) ?? ""}`,
         }
       : {}),
-    classify: async (input, signal) => {
+    // One reading gives the verdict and the words together: the two mocks
+    // stand for its two halves.
+    read: async (input, signal) => {
       signals.push(signal);
-      return withBlocked(await classify(input));
-    },
-    describe: (input, says, signal, onPartial) => {
-      signals.push(signal);
-      return describe(input, says, onPartial);
+      const classifier = withBlocked(await classify(input));
+      return { classifier, words: () => describe(input, classifier.category) };
     },
     broadcast: (snapshot) => snapshots.push(snapshot),
     ...(options.now ? { now: options.now } : {}),
@@ -155,9 +149,10 @@ async function makeHarness(options: {
     ...(options.plan ? { plan: options.plan } : {}),
     backgroundPollMs: options.backgroundPollMs ?? 0,
     ...(options.onAsk ? { onAsk: options.onAsk } : {}),
-    ...(options.serviceWaking ? { serviceWaking: options.serviceWaking } : {}),
-    ...(options.serviceHost ? { serviceHost: options.serviceHost } : {}),
+    ...(options.readerName ? { readerName: options.readerName } : {}),
+    ...(options.readerReady ? { readerReady: options.readerReady } : {}),
     ...(options.onRefinementsChanged ? { onRefinementsChanged: options.onRefinementsChanged } : {}),
+    ...(options.getTrash ? { getTrash: options.getTrash } : {}),
     ...(options.stateChangeScanMs !== undefined
       ? { stateChangeScanMs: options.stateChangeScanMs }
       : {}),
@@ -181,191 +176,41 @@ afterEach(() => {
   harness = null;
 });
 
+describe("CanopyService trash", () => {
+  it("carries the host's trash on its snapshot, and tells every view when it changes", async () => {
+    let trash: NonNullable<CanopySnapshot["trash"]> = [];
+    const { service, snapshots } = await makeHarness({ getTrash: () => trash });
+    expect(service.getSnapshot().trash).toEqual([]);
+    // The opening's own broadcast goes out first, so the next one is the trash's.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const before = snapshots.length;
+    trash = [
+      {
+        run: { runId: "t1", workspaceId: "p2", spawnedAt: 1, cwd: "/repo" },
+        trashedAt: 10,
+        expiresAt: 20_010,
+      },
+    ];
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    // Nothing tells a view of the change but the call that says it.
+    expect(snapshots.length).toBe(before);
+    service.trashChanged();
+    await vi.waitFor(() => expect(snapshots.length).toBeGreaterThan(before));
+    expect(snapshots.at(-1)?.trash?.map((entry) => entry.run.runId)).toEqual(["t1"]);
+    // Nothing new in it: no view is woken for the same list.
+    const after = snapshots.length;
+    service.trashChanged();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(snapshots.length).toBe(after);
+  });
+});
+
 const APPROVAL_SCREEN = [
   "⏺ Bash(npm test)",
   "Do you want to proceed?",
   "❯ 1. Yes",
   "  2. No, and tell Claude what to do differently (esc)",
 ].join("\n");
-
-describe("CanopyService streaming a card", () => {
-  const FINAL: DescriberResult = {
-    category: "approval",
-    headline: "Approve running npm test",
-    summary: "Runs the unit suite once.",
-    attentionScore: 94,
-    task: null,
-    risk: "none",
-    riskReason: null,
-    action: null,
-    progress: null,
-    tests: "unknown",
-    changes: "unknown",
-    question: "Do you want to proceed?",
-    options: ["Yes", "No, and tell Claude what to do differently (esc)"],
-  };
-
-  async function streaming() {
-    let partial: ((p: CanopyPartialDescription) => void) | undefined;
-    let finish!: (result: DescriberResult) => void;
-    const h = await makeHarness({
-      classify: async () => ({
-        category: "approval",
-        confidence: 0.95,
-        attention: 0.95,
-        question: "Do you want to proceed?",
-      }),
-      describe: (_input, _says, onPartial) => {
-        partial = onPartial;
-        return new Promise((resolve) => {
-          finish = resolve;
-        });
-      },
-    });
-    h.runs.push(run("a", { agentState: "waiting", waitingReason: "approval" }));
-    h.screens.set("a", APPROVAL_SCREEN);
-    void h.service.scan();
-    await vi.waitFor(() => expect(partial).toBeDefined());
-    return { h, partial: partial!, finish: (r: DescriberResult) => finish(r) };
-  }
-
-  it("shows the words once headline and summary have both landed, and the card replaces them", async () => {
-    const { h, partial, finish } = await streaming();
-    partial({ category: "approval", headline: "Approve running npm test" });
-    await settle();
-    // A headline alone is half the row's words: they land together.
-    expect(h.service.getSnapshot().cards[0]!.headline).toBeNull();
-    partial({
-      category: "approval",
-      headline: "Approve running npm test",
-      summary: "Runs the suite.",
-    });
-    await vi.waitFor(() =>
-      expect(h.service.getSnapshot().cards[0]).toMatchObject({
-        headline: "Approve running npm test",
-        summary: "Runs the suite.",
-        describing: true,
-      })
-    );
-    expect(
-      h.snapshots.some((snap) => snap.cards[0]?.headline != null && snap.cards[0].summary == null)
-    ).toBe(false);
-
-    finish(FINAL);
-    await vi.waitFor(() => expect(h.service.getSnapshot().cards[0]!.describing).toBe(false));
-    const card = h.service.getSnapshot().cards[0]!;
-    expect(card).toMatchObject({
-      stage: "described",
-      headline: "Approve running npm test",
-      summary: "Runs the unit suite once.",
-      options: FINAL.options,
-    });
-  });
-
-  it("holds the run's state and rank until its card is finished", async () => {
-    const { h, partial, finish } = await streaming();
-    const before = h.service.getSnapshot().cards[0]!;
-    partial({ category: "working", headline: "Approve running npm test", summary: "Runs it." });
-    await vi.waitFor(() =>
-      expect(h.service.getSnapshot().cards[0]!.headline).toBe("Approve running npm test")
-    );
-    expect(h.service.getSnapshot().cards[0]).toMatchObject({
-      category: before.category,
-      priority: before.priority,
-      attentionScore: before.attentionScore,
-    });
-    expect(before.priority).toBeGreaterThanOrEqual(CANOPY_URGENT_PRIORITY);
-    finish(FINAL);
-    await vi.waitFor(() => expect(h.service.getSnapshot().cards[0]!.describing).toBe(false));
-  });
-
-  it("keeps a row's words until the whole new card replaces them", async () => {
-    let calls = 0;
-    let partial: ((p: CanopyPartialDescription) => void) | undefined;
-    let finish!: (result: DescriberResult) => void;
-    const h = await makeHarness({
-      classify: async () => ({
-        category: "approval",
-        confidence: 0.95,
-        attention: 0.95,
-        question: "Do you want to proceed?",
-      }),
-      describe: (_input, _says, onPartial) => {
-        calls++;
-        if (calls === 1) return Promise.resolve({ ...FINAL, headline: "Old words" });
-        partial = onPartial;
-        return new Promise((resolve) => (finish = resolve));
-      },
-    });
-    h.runs.push(run("a", { agentState: "waiting", waitingReason: "approval" }));
-    h.screens.set("a", APPROVAL_SCREEN);
-    await h.service.refresh();
-    expect(h.service.getSnapshot().cards[0]!.headline).toBe("Old words");
-
-    h.screens.set("a", `${APPROVAL_SCREEN}\n\nAnother line`);
-    void h.service.scan();
-    await vi.waitFor(() => expect(partial).toBeDefined());
-    partial!({ category: "approval", headline: "New words" });
-    partial!({ category: "approval", headline: "New words", summary: "New summary." });
-    await settle();
-    expect(h.service.getSnapshot().cards[0]).toMatchObject({
-      headline: "Old words",
-      summary: FINAL.summary,
-    });
-    finish({ ...FINAL, headline: "New words", summary: "New summary." });
-    await vi.waitFor(() =>
-      expect(h.service.getSnapshot().cards[0]).toMatchObject({
-        headline: "New words",
-        summary: "New summary.",
-      })
-    );
-  });
-
-  it("drops the prompt of a screen that moved on at once, and keeps its words for the new card", async () => {
-    const { h, partial } = await streaming();
-    partial({ category: "approval", headline: "Approve running npm test", summary: "Runs it." });
-    await vi.waitFor(() =>
-      expect(h.service.getSnapshot().cards[0]!.headline).toBe("Approve running npm test")
-    );
-    h.screens.set("a", `${APPROVAL_SCREEN}\n\nA different dialog`);
-    void h.service.scan();
-    await vi.waitFor(() => expect(h.classify).toHaveBeenCalledTimes(2));
-    const card = h.service.getSnapshot().cards[0]!;
-    // Never the last dialog's answers beside a new one.
-    expect(card.options).toEqual([]);
-    // The words stand until the new card replaces them: no blink between.
-    expect(card).toMatchObject({
-      headline: "Approve running npm test",
-      wordsFromEarlierRead: false,
-    });
-  });
-
-  it("offers nothing to act on from a card still being written", async () => {
-    const { h, partial, finish } = await streaming();
-    partial({
-      category: "approval",
-      headline: "Approve running npm test",
-      summary: "Runs it.",
-    });
-    await vi.waitFor(() =>
-      expect(h.service.getSnapshot().cards[0]!.headline).toBe("Approve running npm test")
-    );
-    const card = h.service.getSnapshot().cards[0]!;
-    expect(card.stage).not.toBe("described");
-    expect(card.options).toEqual([]);
-    expect(card.action).toBeNull();
-    finish(FINAL);
-  });
-
-  it("ignores words that arrive after the card is finished", async () => {
-    const { h, partial, finish } = await streaming();
-    finish(FINAL);
-    await vi.waitFor(() => expect(h.service.getSnapshot().cards[0]!.describing).toBe(false));
-    partial({ category: "working", headline: "Stale words", summary: "Stale summary." });
-    await settle();
-    expect(h.service.getSnapshot().cards[0]!.headline).toBe("Approve running npm test");
-  });
-});
 
 describe("CanopyService", () => {
   it("describes the runs that need the user, and a working one for its progress", async () => {
@@ -465,8 +310,6 @@ describe("CanopyService", () => {
     h.screens.set("a", "✻ Editing src/app.ts… (esc to interrupt)");
     await h.service.scan();
     expect(h.describe).toHaveBeenCalledTimes(1);
-    // A first describe has nothing earlier to compare against.
-    expect(h.describe.mock.calls[0]![0].previousReading ?? null).toBeNull();
 
     const early = CANOPY_PROGRESS_DESCRIBE_MS / 2;
     now += early;
@@ -486,13 +329,6 @@ describe("CanopyService", () => {
     h.screens.set("a", "✻ Fixing the failing test… (esc to interrupt)");
     await h.service.refresh();
     expect(h.describe).toHaveBeenCalledTimes(2);
-    // The next words are written against the last ones, so they can say what moved.
-    expect(h.describe.mock.calls[1]![0].previousReading).toMatchObject({
-      category: "working",
-      headline: "Headline",
-      summary: "Summary",
-      secondsAgo: Math.round((early + CANOPY_PROGRESS_DESCRIBE_MS) / 1000),
-    });
   });
 
   it("describes a run at once when it moves from a prompt to work, without the prompt's words", async () => {
@@ -519,7 +355,6 @@ describe("CanopyService", () => {
     await h.service.refresh();
     // Words about the approval are no reading of the work, however recent.
     expect(h.describe).toHaveBeenCalledTimes(2);
-    expect(h.describe.mock.calls[1]![0].previousReading).toMatchObject({ category: "approval" });
     expect(h.service.getSnapshot().cards[0]!.wordsCategory).toBe("working");
   });
 
@@ -631,96 +466,106 @@ describe("CanopyService", () => {
     expect(h.service.getSnapshot().seen).toEqual([]);
   });
 
-  it("counts requests to the service while they are out, and times the ones that answer", async () => {
+  it("counts readings while they are under way, and times the ones that answer", async () => {
     let clock = 1_000;
     const gates: Array<() => void> = [];
     const gate = () => new Promise<void>((resolve) => gates.push(resolve));
     const h = await makeHarness({
       now: () => clock,
-      serviceHost: () => "canopy.daintree.org",
+      readerName: () => "Light",
       classify: async () => {
         await gate();
         return { category: "working", confidence: 0.99, attention: 0.1, question: null };
       },
-      describe: async (_input, says) => {
-        await gate();
-        return {
-          category: says,
-          headline: "Headline",
-          summary: "Summary",
-          attentionScore: 10,
-          task: null,
-          risk: "unknown",
-          riskReason: null,
-          action: null,
-          progress: null,
-          tests: "unknown",
-          changes: "unknown",
-          question: null,
-          options: [],
-        };
-      },
     });
-    const link = () => h.service.getSnapshot().link;
-    expect(link()).toEqual({
-      host: "canopy.daintree.org",
-      inFlight: 0,
-      classifyMs: null,
-      readMs: null,
-    });
+    const reader = () => h.service.getSnapshot().reader;
+    expect(reader()).toEqual({ model: "Light", inFlight: 0, readMs: null });
     h.runs.push(run("a"), run("b"));
     h.screens.set("a", "Building the parser");
     h.screens.set("b", "Writing the tests");
     const scan = h.service.scan();
-    await vi.waitFor(() => expect(link()?.inFlight).toBe(2));
-    clock += 300;
+    await vi.waitFor(() => expect(reader()?.inFlight).toBe(2));
+    clock += 30;
     gates.shift()!();
-    await vi.waitFor(() => expect(link()?.classifyMs).toBe(300));
-    clock += 200;
+    await vi.waitFor(() => expect(reader()).toMatchObject({ inFlight: 1, readMs: 30 }));
+    clock += 20;
     gates.shift()!();
-    // Both classified, the first at 300 ms and the second at 500: the bar
-    // says their mean, then the summaries they set going are out.
-    await vi.waitFor(() => expect(link()?.classifyMs).toBe(400));
-    await vi.waitFor(() => expect(link()?.inFlight).toBe(2));
-    // They went out as each classification came back, 200 ms apart, and both
-    // answer now: 2.2 s and 2.0 s.
-    clock += 2_000;
-    while (gates.length > 0) gates.shift()!();
     await scan;
-    await vi.waitFor(() => expect(link()).toMatchObject({ inFlight: 0, readMs: 2_100 }));
+    // Read at 30 ms and 50 ms: the bar says their mean.
+    await vi.waitFor(() => expect(reader()).toMatchObject({ inFlight: 0, readMs: 40 }));
   });
 
-  it("lets a failed request go without counting it out or timing it", async () => {
+  it("lets a failed reading go without counting it out or timing it", async () => {
     let clock = 1_000;
     let fail = true;
     const h = await makeHarness({
       now: () => clock,
-      serviceHost: () => "canopy.daintree.org",
+      readerName: () => "Light",
       classify: async () => {
         clock += 5_000;
-        if (fail) throw new Error("HTTP 503");
+        if (fail) throw new Error("the model stopped");
         return { category: "idle", confidence: 0.99, attention: 0.1, question: null };
       },
     });
     h.runs.push(run("a", { agentState: "idle" }));
     h.screens.set("a", "dev@studio app % ");
     await h.service.scan();
-    expect(h.service.getSnapshot().link).toMatchObject({ inFlight: 0, classifyMs: null });
+    expect(h.service.getSnapshot().reader).toMatchObject({ inFlight: 0, readMs: null });
     // Tried again past its backoff, the answer is the first time there is.
     fail = false;
     clock += 10 * 60_000;
     await h.service.scan();
     await vi.waitFor(() =>
-      expect(h.service.getSnapshot().link).toMatchObject({ inFlight: 0, classifyMs: 5_000 })
+      expect(h.service.getSnapshot().reader).toMatchObject({ inFlight: 0, readMs: 5_000 })
     );
   });
 
-  it("says nothing of requests until Canopy is turned on", async () => {
+  it("says nothing of the reader until Canopy is turned on", async () => {
     const h = await makeHarness({
-      serviceHost: () => "canopy.daintree.org",
-      plan: { mode: "unset", activated: false, tier: "priority" },
+      readerName: () => "Light",
+      plan: { mode: "unset", activated: false },
     });
-    expect(h.service.getSnapshot().link).toBeUndefined();
+    expect(h.service.getSnapshot().reader).toBeUndefined();
+  });
+
+  it("forgets every reading the last model made once the model changes, and reads afresh", async () => {
+    let category: CanopyCategory = "approval";
+    const h = await makeHarness({
+      classify: async () => ({
+        category,
+        confidence: 0.95,
+        attention: category === "approval" ? 0.95 : 0.1,
+        question: category === "approval" ? "Do you want to proceed?" : null,
+      }),
+    });
+    h.runs.push(run("a", { agentState: "waiting" }));
+    h.screens.set("a", APPROVAL_SCREEN);
+    await h.service.scan();
+    await vi.waitFor(() => expect(h.service.getSnapshot().cards[0]?.category).toBe("approval"));
+    // The next model reads the very same screen otherwise.
+    category = "idle";
+    h.service.readerChanged();
+    // Nothing of the last model's reading stands meanwhile, the screen's own words aside.
+    expect(h.service.getSnapshot().cards).toEqual([]);
+    await vi.waitFor(() => expect(h.service.getSnapshot().cards[0]?.category).toBe("idle"));
+    expect(h.classify).toHaveBeenCalledTimes(2);
+  });
+
+  it("reads nothing while the model isn't here, and every screen once it arrives", async () => {
+    let ready = false;
+    const h = await makeHarness({ readerReady: () => ready });
+    h.runs.push(run("a"));
+    h.screens.set("a", "Building the parser");
+    await h.service.scan();
+    expect(h.classify).not.toHaveBeenCalled();
+    // The row still shows the screen's own words meanwhile.
+    expect(h.service.getSnapshot().glances.map((g) => g.runId)).toEqual(["a"]);
+    ready = true;
+    h.service.readerChanged();
+    await vi.waitFor(() => expect(h.classify).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() =>
+      expect(h.service.getSnapshot().cards.map((card) => card.runId)).toEqual(["a"])
+    );
   });
 
   it("broadcasts a look only to an open panel", async () => {
@@ -798,20 +643,20 @@ describe("CanopyService", () => {
   });
 
   it("reads nothing until the user turns it on, and forgets every reading when they turn it off", async () => {
-    const h = await makeHarness({ plan: { mode: "unset", activated: false, tier: "priority" } });
+    const h = await makeHarness({ plan: { mode: "unset", activated: false } });
     h.runs.push(run("a"));
     h.screens.set("a", APPROVAL_SCREEN);
     await h.service.refresh();
     expect(h.classify).not.toHaveBeenCalled();
     expect(h.service.getSnapshot()).toMatchObject({ activated: false, cards: [] });
 
-    h.service.setPlan({ mode: "on", activated: true, tier: "priority" });
+    h.service.setPlan({ mode: "on", activated: true });
     await settle();
     await settle();
     expect(h.classify).toHaveBeenCalledTimes(1);
     expect(h.service.getSnapshot().cards).toHaveLength(1);
 
-    h.service.setPlan({ mode: "unset", activated: false, tier: "priority" });
+    h.service.setPlan({ mode: "unset", activated: false });
     // Every reading of the screen goes, the at-a-glance words included.
     expect(h.service.getSnapshot()).toMatchObject({
       activated: false,
@@ -822,7 +667,7 @@ describe("CanopyService", () => {
   });
 
   it("reads the free tier as soon and as often as the priority one", async () => {
-    const h = await makeHarness({ plan: { mode: "on", activated: true, tier: "free" } });
+    const h = await makeHarness({ plan: { mode: "on", activated: true } });
     h.service.setActive(false);
     vi.useFakeTimers();
     try {
@@ -1192,7 +1037,7 @@ describe("CanopyService", () => {
     expect(h.describe).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps reading a run that leaves the panel's scope, and writes its words once it is back", async () => {
+  it("keeps reading a run that leaves the panel's scope, words and all", async () => {
     const finished: Reading = {
       category: "finished",
       confidence: 0.9,
@@ -1220,16 +1065,13 @@ describe("CanopyService", () => {
     release();
     await scan;
     await settle();
-    // B's reading lands — its asks would still page — but its words wait for a
-    // panel that shows it.
-    const describedFor = () => h.describe.mock.calls.map(([input]) => input.screen).sort();
-    expect(describedFor()).toEqual(["A"]);
-    expect(h.service.getSnapshot().wordsDue).toEqual(["b"]);
+    // B's reading lands with its words: they come with every reading, so a
+    // run out of the panel's sight is as full as one in it.
     h.service.setScope(null);
     await settle();
-    // Written from the read the watch made, not read again.
-    expect(describedFor()).toEqual(["A", "B"]);
+    // Not read again for coming back into scope.
     expect(h.classify).toHaveBeenCalledTimes(2);
+    expect(h.service.getSnapshot().cards.every((card) => card.headline === "Headline")).toBe(true);
     expect(
       h.service
         .getSnapshot()
@@ -1238,7 +1080,7 @@ describe("CanopyService", () => {
     ).toEqual(["a", "b"]);
   });
 
-  it("reads the panel's project at its pace, and the rest at the watch's, for the classifier alone", async () => {
+  it("reads the panel's project at its pace, and the rest at the watch's", async () => {
     let clock = 1_000_000;
     const onAsk = vi.fn();
     const h = await makeHarness({
@@ -1260,10 +1102,8 @@ describe("CanopyService", () => {
     await settle();
     const classified = () => h.classify.mock.calls.map(([input]) => input.screen).sort();
     expect(classified()).toEqual(["A", "B"]);
-    // The ask in the project the panel doesn't show still pages; no words are
-    // written for it.
+    // The ask in the project the panel doesn't show still pages.
     expect(onAsk).toHaveBeenCalledTimes(1);
-    expect(h.describe.mock.calls.map(([input]) => input.screen)).not.toContain("B");
 
     // A change there waits for the watch's next read, not the panel's.
     h.screens.set("b", "B, moved");
@@ -1540,8 +1380,8 @@ describe("CanopyService", () => {
     const scan = h.service.scan();
     await vi.waitFor(() => expect(calls).toBe(1));
 
-    h.service.setPlan({ mode: "unset", activated: false, tier: "priority" });
-    h.service.setPlan({ mode: "on", activated: true, tier: "priority" });
+    h.service.setPlan({ mode: "unset", activated: false });
+    h.service.setPlan({ mode: "on", activated: true });
     release();
     await scan;
     await settle();
@@ -2142,7 +1982,7 @@ describe("CanopyService", () => {
       }),
       describe: async (_input, says) => {
         describes++;
-        if (describes === 1) throw new CanopyProviderError("describer", "HTTP 503", true);
+        if (describes === 1) throw new CanopyProviderError("classifier", "the model stopped", true);
         return {
           category: says,
           headline: "Approve it",
@@ -2186,7 +2026,7 @@ describe("CanopyService", () => {
     let fail = false;
     const h = await makeHarness({
       classify: async () => {
-        if (fail) throw new CanopyProviderError("classifier", "HTTP 503", true);
+        if (fail) throw new CanopyProviderError("classifier", "the model stopped", true);
         return {
           category: "approval",
           confidence: 0.95,
@@ -2295,8 +2135,8 @@ describe("CanopyService", () => {
     expect(h.service.getSnapshot().lastError).not.toBeNull();
 
     fail = false;
-    h.service.setPlan({ mode: "unset", activated: false, tier: "priority" });
-    h.service.setPlan({ mode: "on", activated: true, tier: "priority" });
+    h.service.setPlan({ mode: "unset", activated: false });
+    h.service.setPlan({ mode: "on", activated: true });
     await settle();
     await h.service.scan();
     expect(h.classify).toHaveBeenCalledTimes(2);
@@ -2323,7 +2163,9 @@ describe("CanopyService", () => {
     expect(h.service.getSnapshot().lastError).toBeNull();
     clock += CANOPY_TRANSIENT_GRACE_MS;
     await h.service.scan();
-    expect(h.service.getSnapshot().lastError).toBe("Canopy's service took too long to answer.");
+    expect(h.service.getSnapshot().lastError).toBe(
+      "Canopy's model took too long to read a screen."
+    );
   });
 
   it("keeps a notable busy agent in the notable band after its card is written", async () => {
@@ -2394,14 +2236,14 @@ describe("CanopyService", () => {
     const h = await makeHarness({
       now: () => clock,
       classify: async () => {
-        if (fail) throw new CanopyProviderError("classifier", "HTTP 429", true);
+        if (fail) throw new CanopyProviderError("classifier", "the model stopped", true);
         return { category: "working", confidence: 0.9, attention: 0.9, question: null };
       },
     });
     h.runs.push(run("a"));
     h.screens.set("a", "screen");
     await h.service.scan();
-    // A rate limit or a worker waking: not a failure yet, and the screen is tried again.
+    // A reader restarting: not a failure yet, and the screen is tried again.
     expect(h.service.getSnapshot().lastError).toBeNull();
     expect(h.service.getSnapshot().failedRuns).toEqual([]);
     clock += CANOPY_FAILURE_BACKOFF_MAX_MS;
@@ -2410,7 +2252,9 @@ describe("CanopyService", () => {
 
     clock += CANOPY_TRANSIENT_GRACE_MS;
     await h.service.scan();
-    expect(h.service.getSnapshot().lastError).toBe("Canopy's service is busy right now.");
+    expect(h.service.getSnapshot().lastError).toBe(
+      "Canopy's model stopped running. Turn Canopy off and on to try again."
+    );
 
     // A reading that lands ends the spell, and the next one gets the whole grace again.
     fail = false;
@@ -2421,59 +2265,6 @@ describe("CanopyService", () => {
     h.screens.set("a", "screen moved on");
     await h.service.scan();
     expect(h.service.getSnapshot().lastError).toBeNull();
-  });
-
-  it("waits out a cold start before the grace begins", async () => {
-    let clock = 1_000_000;
-    let waking = true;
-    const h = await makeHarness({
-      now: () => clock,
-      serviceWaking: () => waking,
-      classify: async () => {
-        throw new CanopyProviderError("classifier", "service waking", true);
-      },
-    });
-    h.runs.push(run("a"));
-    h.screens.set("a", "screen");
-    await h.service.scan();
-    clock += CANOPY_TRANSIENT_GRACE_MS * 2;
-    await h.service.scan();
-    expect(h.service.getSnapshot().lastError).toBeNull();
-
-    // Started, but still failing: now the grace runs.
-    waking = false;
-    clock += CANOPY_FAILURE_BACKOFF_MAX_MS;
-    await h.service.scan();
-    expect(h.classify).toHaveBeenCalledTimes(3);
-    expect(h.service.getSnapshot().lastError).toBeNull();
-    clock += CANOPY_TRANSIENT_GRACE_MS;
-    await h.service.scan();
-    expect(h.service.getSnapshot().lastError).toBe("Canopy's service is still starting.");
-  });
-
-  it("reports a service that never comes up, however often it is woken", async () => {
-    let clock = 1_000_000;
-    const h = await makeHarness({
-      now: () => clock,
-      serviceWaking: () => true,
-      classify: async () => {
-        throw new CanopyProviderError("classifier", "request timed out", true);
-      },
-    });
-    h.runs.push(run("a"));
-    h.screens.set("a", "screen");
-    const start = clock;
-    await h.service.scan();
-    // Tried again as each backoff runs out, for as long as a cold start may take.
-    while (clock - start < CANOPY_COLD_START_GRACE_MS - CANOPY_FAILURE_BACKOFF_MAX_MS) {
-      clock += CANOPY_FAILURE_BACKOFF_MAX_MS;
-      await h.service.scan();
-    }
-    expect(h.service.getSnapshot().lastError).toBeNull();
-    // Past any backoff's jitter, and past the cold start's grace.
-    clock += CANOPY_FAILURE_BACKOFF_MAX_MS * 1.5;
-    await h.service.scan();
-    expect(h.service.getSnapshot().lastError).toBe("Canopy's service took too long to answer.");
   });
 
   it("keeps an outage one spell when the background watch only reads every few minutes", async () => {
@@ -2491,7 +2282,9 @@ describe("CanopyService", () => {
     await h.service.scan();
     clock += 120_000;
     await h.service.scan();
-    expect(h.service.getSnapshot().lastError).toBe("Canopy's service took too long to answer.");
+    expect(h.service.getSnapshot().lastError).toBe(
+      "Canopy's model took too long to read a screen."
+    );
   });
 
   it("drops what a retired spell reported once a new one begins", async () => {
@@ -2535,38 +2328,29 @@ describe("CanopyService", () => {
     expect(h.service.getSnapshot().lastError).toBeNull();
   });
 
-  it("says a failed read in the user's words, never a stage or status code", () => {
+  it("says a failed read in the user's words, never a stage or an internal message", () => {
     const said = (message: string, transient = false) =>
-      failureMessage(new CanopyProviderError("describer", message, transient));
-    expect(said("HTTP 429", true)).toBe("Canopy's service is busy right now.");
-    expect(said("request failed", true)).toBe(
-      "Couldn't reach Canopy's service. Check your connection."
+      failureMessage(new CanopyProviderError("classifier", message, transient));
+    expect(said("model not downloaded", true)).toBe("Canopy's model isn't downloaded yet.");
+    expect(said("the model stopped", true)).toBe(
+      "Canopy's model stopped running. Turn Canopy off and on to try again."
     );
-    expect(said("HTTP 503", true)).toBe("Canopy's service ran into a problem.");
-    expect(said("card cut off")).toBe("Canopy's service sent back an answer it couldn't use.");
-    expect(said("stream failed: rate_limited")).toBe("Canopy's service is busy right now.");
-    expect(said("stream failed: inference_failed")).toBe("Canopy's service ran into a problem.");
-    expect(said("stream failed: bad_request")).toBe("Canopy's service turned the request down.");
-    expect(said("stream ended early", true)).toBe(
-      "Canopy's service stopped partway through a reading."
+    expect(said("the model keeps failing to run")).toBe(
+      "Canopy's model stopped running. Turn Canopy off and on to try again."
     );
-    expect(said("stream failed", true)).toBe("Canopy's service stopped partway through a reading.");
-    expect(said("service waking", true)).toBe("Canopy's service is still starting.");
-    for (const message of ["HTTP 429", "HTTP 503", "stream failed: inference_failed"]) {
-      expect(said(message)).not.toMatch(/describer|classifier|HTTP|\d{3}|_/i);
+    expect(said("Read timed out", true)).toBe("Canopy's model took too long to read a screen.");
+    expect(said("unexpected category")).toBe("Canopy's model couldn't read some screens.");
+    for (const message of ["the model stopped", "unexpected category", "Read timed out"]) {
+      expect(said(message)).not.toMatch(/describer|classifier|_/i);
     }
   });
 
-  it("says reads are held up while the service starts or a failed read waits to be tried again", async () => {
-    let waking = true;
+  it("says reads are held up while a failed read waits to be tried again", async () => {
     const h = await makeHarness({
-      serviceWaking: () => waking,
       classify: async () => {
-        throw new CanopyProviderError("classifier", "HTTP 429", true);
+        throw new CanopyProviderError("classifier", "the model stopped", true);
       },
     });
-    expect(h.service.getSnapshot().waiting).toBe("waking");
-    waking = false;
     expect(h.service.getSnapshot().waiting).toBeUndefined();
     h.runs.push(run("a"));
     h.screens.set("a", "screen");
@@ -2884,7 +2668,7 @@ describe("CanopyService", () => {
     const h = await makeHarness({
       now: () => clock,
       classify: async () => {
-        if (fail) throw new CanopyProviderError("classifier", "HTTP 429", true);
+        if (fail) throw new CanopyProviderError("classifier", "the model stopped", true);
         return { category: "idle", confidence: 0.9, attention: 0.1, question: null };
       },
     });
@@ -2896,145 +2680,6 @@ describe("CanopyService", () => {
     clock += CANOPY_FAILURE_BACKOFF_MAX_MS;
     await h.service.scan();
     expect(h.service.getSnapshot().waiting).toBeUndefined();
-  });
-
-  describe("the describer's note", () => {
-    const noting =
-      (notes: Array<string | null>) =>
-      async (_input: CanopyScreenInput, says: CanopyCategory): Promise<DescriberResult> => ({
-        category: says,
-        headline: "Headline",
-        summary: "Summary",
-        attentionScore: 55,
-        task: null,
-        risk: "unknown",
-        riskReason: null,
-        action: null,
-        progress: null,
-        tests: "unknown",
-        changes: "unknown",
-        question: null,
-        options: [],
-        note: notes.shift() ?? null,
-      });
-
-    it("strips a credential the describer wrote into its note before handing it back", async () => {
-      let now = 1_000_000;
-      const h = await makeHarness({
-        now: () => now,
-        describe: noting(["Goal: deploy. Used token=abcdef123456 from .env."]),
-      });
-      h.runs.push(run("a"));
-      h.screens.set("a", APPROVAL_SCREEN);
-      await h.service.scan();
-
-      now += 30_000;
-      h.screens.set("a", "⏺ Deployed.\n✻ Baked for 12s · done 6:22");
-      await h.service.refresh();
-      const note = h.describe.mock.calls[1]![0].note;
-      expect(note?.text).toContain("Goal: deploy.");
-      expect(note?.text).not.toContain("abcdef123456");
-    });
-
-    it("hands each reading the note the last one wrote, with its age", async () => {
-      let now = 1_000_000;
-      const h = await makeHarness({
-        now: () => now,
-        describe: noting([
-          "Goal: fix rounding; don't commit.",
-          "Goal: fix rounding; don't commit. Done: tests pass.",
-        ]),
-      });
-      h.runs.push(run("a"));
-      h.screens.set("a", APPROVAL_SCREEN);
-      await h.service.scan();
-      expect(h.describe.mock.calls[0]![0].note ?? null).toBeNull();
-
-      now += 30_000;
-      h.screens.set("a", "⏺ All tests pass.\n✻ Baked for 12s · done 6:22");
-      await h.service.refresh();
-      expect(h.describe.mock.calls[1]![0].note).toEqual({
-        text: "Goal: fix rounding; don't commit.",
-        secondsAgo: 30,
-      });
-      // The note stays in main: no card carries it to the renderer.
-      expect(JSON.stringify(h.service.getSnapshot())).not.toContain("rounding");
-    });
-
-    it("hands the next reading what scrolled away and caps the count on an unchanged screen", async () => {
-      let now = 1_000_000;
-      const history = new Map<string, string>();
-      const h = await makeHarness({
-        now: () => now,
-        history,
-        describe: async (_input, says) => ({
-          category: says,
-          headline: "Headline",
-          summary: "Summary",
-          attentionScore: 55,
-          task: null,
-          risk: "unknown",
-          riskReason: null,
-          action: null,
-          progress: null,
-          tests: "unknown",
-          changes: "unknown",
-          question: null,
-          options: [],
-          note: null,
-          failureRepeats: 2,
-        }),
-      });
-      h.runs.push(run("a"));
-      h.screens.set("a", "• Ran pnpm build\n└ error TS2742\n• Edited tsconfig.json");
-      await h.service.scan();
-      expect(h.describe.mock.calls[0]![0].sinceLastReading ?? null).toBeNull();
-
-      now += 30_000;
-      history.set(
-        "a",
-        "• Ran pnpm build\n└ error TS2742\n• Edited tsconfig.json\n• Ran pnpm build\n└ error TS2742\n• Edited src/env.ts"
-      );
-      h.screens.set("a", "• Ran pnpm install --force\n• Ran pnpm build\n└ error TS2742 again");
-      await h.service.refresh();
-      expect(h.describe.mock.calls[1]![0].sinceLastReading).toBe(
-        "• Ran pnpm build\n└ error TS2742\n• Edited src/env.ts"
-      );
-      expect(h.describe.mock.calls[1]![0].failureRepeatsCap ?? null).toBeNull();
-    });
-
-    it("keeps the last note when a reading writes none", async () => {
-      let now = 1_000_000;
-      const h = await makeHarness({
-        now: () => now,
-        describe: noting(["Goal: add CSV export.", null]),
-      });
-      h.runs.push(run("a"));
-      h.screens.set("a", APPROVAL_SCREEN);
-      await h.service.scan();
-      now += 10_000;
-      h.screens.set("a", "screen two");
-      await h.service.refresh();
-      now += 10_000;
-      h.screens.set("a", "screen three");
-      await h.service.refresh();
-      expect(h.describe.mock.calls[2]![0].note).toEqual({
-        text: "Goal: add CSV export.",
-        secondsAgo: 20,
-      });
-    });
-
-    it("starts a respawned terminal with no note", async () => {
-      const h = await makeHarness({ describe: noting(["Goal: old terminal's work."]) });
-      h.runs.push(run("a", { spawnedAt: 1 }));
-      h.screens.set("a", APPROVAL_SCREEN);
-      await h.service.scan();
-      h.runs[0] = run("a", { spawnedAt: 2 });
-      h.service.onFleetChanged();
-      h.screens.set("a", "fresh screen");
-      await h.service.refresh();
-      expect(h.describe.mock.calls[1]![0].note ?? null).toBeNull();
-    });
   });
 
   it("forgets a card as soon as its terminal is respawned under the same id", async () => {
@@ -3091,7 +2736,6 @@ describe("CanopyService", () => {
       h.screens.set("a", "✻ Crunched for 9s · done");
       await h.service.refresh();
       expect(h.service.getSnapshot().cards[0]!.task).toBe("Fix the rounding bug");
-      expect(h.describe.mock.calls.at(-1)![0].currentTask).toBe("Fix the rounding bug");
 
       // A follow-up is not new work…
       history.set("a", `${history.get("a")}\n\n⏺ Done.\n❯ yes go ahead`);
@@ -3270,8 +2914,10 @@ describe("CanopyService", () => {
         // The user sent a new request between the screen read and the history read.
         readHistory: async () =>
           "❯ A brand new request for other work\n✢ Thinking… (1s · esc to interrupt)",
-        classify: async () => withBlocked(await stopped()),
-        describe,
+        read: async (input) => ({
+          classifier: withBlocked(await stopped()),
+          words: () => describe(input, "finished"),
+        }),
         broadcast: () => {},
         closeGraceMs: 0,
         stateChangeScanMs: 60_000,
@@ -3360,7 +3006,7 @@ describe("CanopyService", () => {
                 question: null,
               };
 
-    it("reads changed screens for the classifier alone while the panel is closed", async () => {
+    it("reads changed screens, words and all, while the panel is closed", async () => {
       const h = await makeHarness({
         backgroundPollMs: BG,
         classify: asking(0.97),
@@ -3375,7 +3021,9 @@ describe("CanopyService", () => {
         h.screens.set("b", "· Editing store.ts… (12s · ↓ 1.2k tokens)");
         await vi.advanceTimersByTimeAsync(BG);
         expect(h.classify).toHaveBeenCalledTimes(2);
-        expect(h.describe).not.toHaveBeenCalled();
+        // Words come with each reading — the ask's, and the busy run's
+        // progress: the panel opens on them.
+        expect(h.describe).toHaveBeenCalledTimes(2);
 
         // Nothing moved: the next tick reads both screens and sends neither.
         await vi.advanceTimersByTimeAsync(BG);
@@ -3390,10 +3038,9 @@ describe("CanopyService", () => {
         h.screens.set("b", "⏺ Ran the tests\n  ⎿  12 passed");
         await vi.advanceTimersByTimeAsync(BG);
         expect(h.classify).toHaveBeenCalledTimes(3);
-        expect(h.describe).not.toHaveBeenCalled();
         const card = h.service.getSnapshot().cards.find((c) => c.runId === "a")!;
-        expect(card.stage).toBe("classified");
-        expect(card.priority).toBe(92);
+        expect(card.stage).toBe("described");
+        expect(card.priority).toBe(95);
       } finally {
         harness?.service.dispose();
         vi.useRealTimers();
@@ -3448,65 +3095,6 @@ describe("CanopyService", () => {
       // and its words stand until the new ones replace them.
       expect(card.wordsFromEarlierRead).toBe(false);
       expect(card.priority).toBe(55);
-    });
-
-    it("writes on opening the words the watch left due, without classifying the screen again", async () => {
-      const h = await makeHarness({
-        closed: true,
-        backgroundPollMs: BG,
-        stateChangeScanMs: 0,
-        classify: async () => ({
-          category: "approval",
-          confidence: 0.97,
-          attention: 0.97,
-          question: "Allow?",
-        }),
-      });
-      h.runs.push(run("a", { agentState: "waiting" }));
-      h.screens.set("a", APPROVAL_SCREEN);
-      h.service.onFleetChanged();
-      await vi.waitFor(() => expect(h.classify).toHaveBeenCalledTimes(1));
-      await settle();
-      expect(h.describe).not.toHaveBeenCalled();
-
-      h.service.setActive(true);
-      await vi.waitFor(() => expect(h.describe).toHaveBeenCalledTimes(1));
-      await h.service.refresh();
-      expect(h.classify).toHaveBeenCalledTimes(1);
-      expect(h.service.getSnapshot().cards[0]!.stage).toBe("described");
-    });
-
-    it("leaves another project's waiting words alone when one project's panel opens", async () => {
-      const h = await makeHarness({
-        closed: true,
-        backgroundPollMs: BG,
-        stateChangeScanMs: 0,
-        classify: async () => ({
-          category: "approval",
-          confidence: 0.97,
-          attention: 0.97,
-          question: "Allow?",
-        }),
-      });
-      h.runs.push(
-        run("a", { agentState: "waiting", workspaceId: "p1" }),
-        run("b", { agentState: "waiting", workspaceId: "p2" })
-      );
-      h.screens.set("a", APPROVAL_SCREEN);
-      h.screens.set("b", APPROVAL_SCREEN);
-      h.service.onFleetChanged();
-      await vi.waitFor(() => expect(h.classify).toHaveBeenCalledTimes(2));
-      await settle();
-
-      h.service.setScope("p1");
-      h.service.setActive(true);
-      await h.service.refresh();
-      expect(h.describe).toHaveBeenCalledTimes(1);
-      // Back to every project: the other one's unchanged screen is not read again.
-      h.service.setActive(false);
-      h.service.setScope(null);
-      await h.service.refresh();
-      expect(h.classify).toHaveBeenCalledTimes(2);
     });
 
     it("offers a screen's words before the classifier has read it", async () => {
@@ -3573,11 +3161,10 @@ describe("CanopyService", () => {
       await vi.waitFor(() => expect(h.classify).toHaveBeenCalledTimes(1));
       await settle();
       const card = h.service.getSnapshot().cards[0]!;
-      expect(card.stage).toBe("classified");
       expect(card.glance.said).toBe("Committed as 43d0e48: cups now keep two decimal places.");
     });
 
-    it("keeps a described run's words when it is read again with the panel closed", async () => {
+    it("writes a run's words afresh when it is read again with the panel closed", async () => {
       const h = await makeHarness({ backgroundPollMs: BG, classify: asking(0.97) });
       h.runs.push(run("a", { agentState: "waiting" }));
       h.screens.set("a", APPROVAL_SCREEN);
@@ -3588,9 +3175,9 @@ describe("CanopyService", () => {
       h.screens.set("a", `${APPROVAL_SCREEN}\n(redrawn)`);
       await h.service.refresh();
       const card = h.service.getSnapshot().cards[0]!;
-      expect(h.describe).toHaveBeenCalledTimes(1);
+      expect(h.describe).toHaveBeenCalledTimes(2);
       expect(card.headline).toBe("Headline");
-      expect(card.wordsFromEarlierRead).toBe(true);
+      expect(card.wordsFromEarlierRead).toBe(false);
     });
   });
 
@@ -4116,35 +3703,6 @@ describe("CanopyService across a resize", () => {
     await h.service.scan();
     expect(h.classify).toHaveBeenCalledTimes(1);
   });
-
-  it("writes words owed on open from the redrawn screen, without reading it again", async () => {
-    let clock = 1_000_000;
-    const h = await makeHarness({
-      now: () => clock,
-      classify: asking,
-      closed: true,
-      backgroundPollMs: 60_000,
-      history: new Map([["a", "⏺ Earlier work."]]),
-    });
-    h.runs.push(run("a", { agentState: "waiting", waitingReason: "question" }));
-    h.screens.set("a", drawn(120));
-    await h.service.scan();
-    await settle();
-    expect(h.classify).toHaveBeenCalledTimes(1);
-    expect(h.describe).not.toHaveBeenCalled();
-
-    h.service.noteResize("a");
-    h.screens.set("a", drawn(64));
-    clock += 500;
-    await h.service.scan();
-    clock += CANOPY_REFLOW_MS;
-    await h.service.scan();
-    h.service.setActive(true);
-    await vi.waitFor(() => expect(h.describe).toHaveBeenCalledTimes(1));
-    await settle();
-    expect(h.classify).toHaveBeenCalledTimes(1);
-    expect(h.describe.mock.calls[0]![0].screen).toContain("…)");
-  });
 });
 
 describe("CanopyService reads", () => {
@@ -4259,8 +3817,8 @@ describe("CanopyService reads", () => {
     h.service.markSeen("a", { viewId: 1, place: "pane", looking: true });
     now += 5_000;
     // Hidden while looked at: the view's word that the look ended never lands.
-    h.service.setPlan({ mode: "hidden", activated: false, tier: "priority" });
-    h.service.setPlan({ mode: "on", activated: true, tier: "priority" });
+    h.service.setPlan({ mode: "hidden", activated: false });
+    h.service.setPlan({ mode: "on", activated: true });
     await settle();
     now += 5_000;
     h.runs[0] = run("a", { agentState: "completed" });
@@ -4544,8 +4102,7 @@ describe("CanopyService stopping what is in flight", () => {
     question: "Do you want to proceed?",
   });
   const never = <T>(): Promise<T> => new Promise<T>(() => {});
-  const OFF: CanopyPlan = { mode: "unset", activated: false, tier: "free" };
-  const ON: CanopyPlan = { mode: "on", activated: true, tier: "free" };
+  const OFF: CanopyPlan = { mode: "unset", activated: false };
 
   it("aborts a read under way when Canopy is turned off", async () => {
     const h = await makeHarness({ classify: never });
@@ -4557,7 +4114,7 @@ describe("CanopyService stopping what is in flight", () => {
     expect(h.signals[0]!.aborted).toBe(true);
   });
 
-  it("aborts the words being written when the last panel closes, and when it is disposed", async () => {
+  it("aborts the reading under way when the last panel closes, and when it is disposed", async () => {
     const h = await makeHarness({ classify: asking, describe: never });
     h.runs.push(run("a", { agentState: "waiting", waitingReason: "approval" }));
     h.screens.set("a", APPROVAL_SCREEN);
@@ -4574,24 +4131,22 @@ describe("CanopyService stopping what is in flight", () => {
     expect(again.aborted).toBe(true);
   });
 
-  it("aborts the words being written for a screen that moved on to another prompt", async () => {
-    const h = await makeHarness({ classify: asking, describe: never });
+  it("never lands words written for a screen that moved on to another prompt", async () => {
+    const pending: Array<(words: DescriberResult) => void> = [];
+    const h = await makeHarness({
+      classify: asking,
+      describe: () => new Promise<DescriberResult>((resolve) => pending.push(resolve)),
+    });
     h.runs.push(run("a", { agentState: "waiting", waitingReason: "approval" }));
     h.screens.set("a", APPROVAL_SCREEN);
     void h.service.scan();
-    await vi.waitFor(() => expect(h.describe).toHaveBeenCalledTimes(1));
-    const words = h.signals.at(-1)!;
+    await vi.waitFor(() => expect(pending).toHaveLength(1));
     h.screens.set("a", APPROVAL_SCREEN.replace("npm test", "npm run deploy"));
     await h.service.scan();
-    expect(words.aborted).toBe(true);
-  });
-
-  it("sends no note it kept before Canopy was turned off once it is back on", async () => {
-    const h = await makeHarness({ classify: asking });
-    h.describe.mockImplementation(async (_input, says) => ({
-      category: says,
-      headline: "Approve npm test",
-      summary: "Runs the tests.",
+    pending[0]!({
+      category: "approval",
+      headline: "Words for the old prompt",
+      summary: "",
       attentionScore: 92,
       task: null,
       risk: "none",
@@ -4602,23 +4157,9 @@ describe("CanopyService stopping what is in flight", () => {
       changes: "unknown",
       question: null,
       options: [],
-      note: "Goal: fix the rounding bug",
-    }));
-    h.runs.push(run("a", { agentState: "waiting", waitingReason: "approval" }));
-    h.screens.set("a", APPROVAL_SCREEN);
-    await h.service.scan();
+    });
     await settle();
-    h.screens.set("a", APPROVAL_SCREEN.replace("npm test", "npm run lint"));
-    await h.service.scan();
-    await settle();
-    expect(h.classify.mock.calls.at(-1)![0].note?.text).toBe("Goal: fix the rounding bug");
-
-    h.service.setPlan(OFF);
-    h.service.setPlan(ON);
-    h.screens.set("a", APPROVAL_SCREEN.replace("npm test", "npm run build"));
-    await h.service.scan();
-    await settle();
-    expect(h.classify.mock.calls.at(-1)![0].note ?? null).toBeNull();
+    expect(h.service.getSnapshot().cards[0]!.headline).not.toBe("Words for the old prompt");
   });
 });
 
@@ -4764,7 +4305,7 @@ describe("CanopyService refining attention", () => {
     await h.service.refresh();
     // An unchanged plan sends nothing new but still settles every run; the
     // wait is for a settle that, rightly, has nothing to announce.
-    h.service.setPlan({ mode: "on", activated: true, tier: "priority" });
+    h.service.setPlan({ mode: "on", activated: true });
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(h.service.getRefinement("a", 1)).toBeUndefined();
   });
@@ -4819,21 +4360,27 @@ describe("CanopyService refining attention", () => {
     await vi.waitFor(() => expect(h.service.getRefinement("a", 1)).toBeDefined());
     changed.mockClear();
 
-    h.service.setPlan({ mode: "unset", activated: false, tier: "priority" });
+    h.service.setPlan({ mode: "unset", activated: false });
     expect(h.service.getRefinement("a", 1)).toBeUndefined();
     await vi.waitFor(() => expect(changed).toHaveBeenCalledTimes(1));
   });
 
-  it("drops a live refinement when the tier lapses, with reading still on", async () => {
+  it("drops a live refinement when its model goes, with reading still on", async () => {
     const changed = vi.fn();
-    const h = await makeHarness({ classify: readScreen, onRefinementsChanged: changed });
+    let ready = true;
+    const h = await makeHarness({
+      classify: readScreen,
+      onRefinementsChanged: changed,
+      readerReady: () => ready,
+    });
     h.runs.push(run("a", { agentState: "completed" }));
     h.screens.set("a", ASK_SCREEN);
     await h.service.refresh();
     await vi.waitFor(() => expect(h.service.getRefinement("a", 1)).toBeDefined());
     changed.mockClear();
 
-    h.service.setPlan({ mode: "on", activated: true, tier: "free" });
+    ready = false;
+    h.service.readerChanged();
     expect(h.service.getRefinement("a", 1)).toBeUndefined();
     await vi.waitFor(() => expect(changed).toHaveBeenCalledTimes(1));
   });
@@ -4862,7 +4409,6 @@ describe("CanopyService refining attention", () => {
       h.runs.push(run("a", { agentState: "completed" }));
       h.screens.set("a", ASK_SCREEN);
       await vi.advanceTimersByTimeAsync(BG + 100);
-      expect(h.describe).not.toHaveBeenCalled();
       expect(h.service.getRefinement("a", 1)?.kind).toBe("asked");
     } finally {
       harness?.service.dispose();
@@ -5101,28 +4647,6 @@ describe("CanopyService requests it leaves unsent", () => {
     await h.service.scan();
     expect(h.classify).toHaveBeenCalledTimes(1);
     expect(h.service.getSnapshot().cards[0]!.options).toEqual(["Yes"]);
-  });
-
-  it("writes owed words from the screen the panel opens on, not one a held read moved past", async () => {
-    let clock = 1_000_000;
-    const h = await makeHarness({
-      now: () => clock,
-      backgroundPollMs: BG,
-      closed: true,
-      classify: readsScreen,
-    });
-    h.runs.push(run("a", { agentState: "waiting", waitingReason: "approval" }));
-    h.screens.set("a", APPROVAL_SCREEN);
-    await h.service.scan();
-    clock += 1_000;
-    h.screens.set("a", APPROVAL_SCREEN.replace("npm test", "rm -rf build"));
-    await h.service.scan();
-    expect(h.classify).toHaveBeenCalledTimes(1);
-
-    h.service.setActive(true);
-    await h.service.refresh();
-    expect(h.describe).toHaveBeenCalledTimes(1);
-    expect(h.describe.mock.calls[0]![0].screen).toContain("rm -rf build");
   });
 
   it("writes owed words from the read they were owed for across a redraw", async () => {

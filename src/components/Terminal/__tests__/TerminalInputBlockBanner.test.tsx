@@ -79,6 +79,24 @@ describe("TerminalInputBlockBanner", () => {
     expect(screen.getByRole("status").textContent).toContain("greg-mbp");
   });
 
+  it("says an away controller is away, still offering control here, and stays quiet", () => {
+    render(
+      <TerminalInputBlockBanner
+        block={{
+          kind: "driven-elsewhere",
+          driverName: "greg-mbp",
+          projectId: "proj-1",
+          driverAway: true,
+        }}
+      />
+    );
+    const status = screen.getByRole("status");
+    expect(status.textContent).toContain("greg-mbp is away");
+    expect(status.textContent).not.toContain("has control");
+    expect(status.getAttribute("aria-live")).toBe("off");
+    expect(screen.getByRole("button", { name: "Take control" })).toBeTruthy();
+  });
+
   it("offers no take-over while ownership is still unknown", () => {
     render(<TerminalInputBlockBanner block={{ kind: "lease-unknown", hostName: "studio-01" }} />);
     expect(screen.getByRole("status").querySelectorAll("button")).toHaveLength(0);

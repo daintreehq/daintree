@@ -94,4 +94,31 @@ describe("usePluginBridge action catalog (#13456)", () => {
     const { entry } = sendActionsGetResponse.mock.calls[0]![0];
     expect(entry?.id ?? null).toBe(expected);
   });
+
+  it("names a plugin action's provider by manifest id and name, and carries its output schema", () => {
+    const outputSchema = { type: "object", properties: { total: { type: "integer" } } };
+    const instanceKey = "project__p1a2b3__acme.report";
+    catalog.set(`${instanceKey}.summary`, {
+      ...manifest(`${instanceKey}.summary` as ActionId, "safe"),
+      pluginId: instanceKey,
+      pluginName: "Report",
+      outputSchema,
+    });
+    catalog.set("worktree.list", { ...manifest("worktree.list", "safe"), outputSchema });
+
+    renderHook(() => usePluginBridge());
+    requestList?.({ requestId: "r1" });
+    const entries: Array<Record<string, unknown>> =
+      sendActionsListResponse.mock.calls[0]![0].entries;
+    const byId = new Map(entries.map((entry) => [entry.id, entry]));
+
+    expect(byId.get(`${instanceKey}.summary`)).toMatchObject({
+      pluginId: "acme.report",
+      pluginName: "Report",
+      outputSchema,
+    });
+    const builtIn = byId.get("worktree.list");
+    expect(builtIn?.outputSchema).toEqual(outputSchema);
+    expect("pluginId" in builtIn! || "pluginName" in builtIn!).toBe(false);
+  });
 });

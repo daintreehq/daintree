@@ -16,7 +16,10 @@ import {
   _resetHostOwnedWritesForTesting,
   dropDeferredHostOwnedWrites,
   flushDeferredHostOwnedWrites,
+  getHostOwnedStateEpoch,
   hasDeferredHostOwnedWrite,
+  holdHostOwnedWrites,
+  releaseHostOwnedWrites,
   sendHostOwnedWrite,
   setHostOwnedWriteFlushBarrier,
 } from "../hostOwnedWrites";
@@ -227,5 +230,67 @@ describe("sendHostOwnedWrite", () => {
     setHostInputBlock(null);
     await settle();
     expect(replay).not.toHaveBeenCalled();
+  });
+});
+
+describe("holding writes until the host says this view kept the project (#13921)", () => {
+  it("holds every write while the gate is open, and replays them once released", async () => {
+    holdHostOwnedWrites();
+    const send = vi.fn().mockResolvedValue(undefined);
+    const replay = vi.fn();
+    await expect(sendHostOwnedWrite("k", send, replay)).resolves.toBe("deferred");
+    expect(send).not.toHaveBeenCalled();
+    flushDeferredHostOwnedWrites();
+    expect(replay).not.toHaveBeenCalled();
+
+    releaseHostOwnedWrites();
+    await settle();
+    expect(replay).toHaveBeenCalledTimes(1);
+    await expect(sendHostOwnedWrite("k", send, vi.fn())).resolves.toBe("sent");
+  });
+
+  it("keeps holding through a gate that opens, until it is released", async () => {
+    disconnected();
+    holdHostOwnedWrites();
+    const replay = vi.fn();
+    await sendHostOwnedWrite("k", vi.fn(), replay);
+    setHostInputBlock(null);
+    await settle();
+    expect(replay).not.toHaveBeenCalled();
+    expect(hasDeferredHostOwnedWrite("k")).toBe(true);
+  });
+
+  it("drops what it held on a release that gives a reason, and no write in flight is held after", async () => {
+    let lose!: (error: Error) => void;
+    const pending = sendHostOwnedWrite(
+      "in-flight",
+      () => new Promise((_, reject) => (lose = reject)),
+      vi.fn()
+    );
+    await settle();
+    holdHostOwnedWrites();
+    const replay = vi.fn();
+    await sendHostOwnedWrite("k", vi.fn(), replay);
+    const epoch = getHostOwnedStateEpoch();
+
+    releaseHostOwnedWrites("the host's state was read back");
+    expect(getHostOwnedStateEpoch()).not.toBe(epoch);
+    expect(hasDeferredHostOwnedWrite("k")).toBe(false);
+    lose(appError("HOST_DISCONNECTED"));
+    await expect(pending).resolves.toBe("deferred");
+    expect(hasDeferredHostOwnedWrite("in-flight")).toBe(false);
+    await settle();
+    expect(replay).not.toHaveBeenCalled();
+  });
+
+  it("lets the gate skip what it held when the release finds someone else driving", async () => {
+    holdHostOwnedWrites();
+    const replay = vi.fn();
+    await sendHostOwnedWrite("k", vi.fn(), replay);
+    drivenElsewhere();
+    releaseHostOwnedWrites();
+    await settle();
+    expect(replay).not.toHaveBeenCalled();
+    expect(hasDeferredHostOwnedWrite("k")).toBe(false);
   });
 });

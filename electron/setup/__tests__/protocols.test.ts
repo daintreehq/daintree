@@ -48,6 +48,14 @@ vi.mock("node:dns/promises", () => ({
   default: { lookup: vi.fn(async () => [{ address: "93.184.216.34", family: 4 }]) },
 }));
 
+const mockClaimDictationKey = vi.hoisted(() =>
+  vi.fn<(input: Electron.Input) => boolean>(() => false)
+);
+
+vi.mock("../../services/voice/pageDictationKey.js", () => ({
+  claimPageDictationKey: mockClaimDictationKey,
+}));
+
 vi.mock("../../utils/logger.js", () => ({
   logInfo: vi.fn(),
   logWarn: vi.fn(),
@@ -709,6 +717,61 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
 
       expect(mockEvent.preventDefault).not.toHaveBeenCalled();
       expect(mockSend).not.toHaveBeenCalledWith("webview:close-shortcut", expect.anything());
+    });
+
+    describe("the dictation key (#14601)", () => {
+      const dictationKey = {
+        type: "keyDown",
+        key: ".",
+        meta: true,
+        control: false,
+        alt: false,
+        shift: false,
+        isAutoRepeat: false,
+      };
+
+      function guestKeyHandler(send = vi.fn()) {
+        mockFromWebContents.mockReturnValue({ isDestroyed: () => false, webContents: { send } });
+        // Not registered with a panel: the key mustn't depend on it.
+        mockedGetWebviewDialogService.mockReturnValue({
+          registerDialog: vi.fn(),
+          getPanelId: vi.fn(() => undefined),
+        } as unknown as ReturnType<typeof getWebviewDialogService>);
+        const contents = createMockWebContents("webview");
+        (contents as unknown as { hostWebContents: unknown }).hostWebContents = { id: 99 };
+        simulateWebContentsCreated(contents);
+        return getEventHandlers(contents, "before-input-event")[0];
+      }
+
+      afterEach(() => {
+        mockClaimDictationKey.mockReset();
+        mockClaimDictationKey.mockReturnValue(false);
+      });
+
+      it("takes the key from the page when it stops dictation running elsewhere", () => {
+        mockClaimDictationKey.mockReturnValue(true);
+        const send = vi.fn();
+        const handler = guestKeyHandler(send);
+        const event = { preventDefault: vi.fn() };
+
+        handler(event, dictationKey);
+
+        expect(mockClaimDictationKey).toHaveBeenCalledWith(dictationKey);
+        expect(event.preventDefault).toHaveBeenCalledTimes(1);
+        // Main asks the owner directly; the host view isn't involved.
+        expect(send).not.toHaveBeenCalled();
+      });
+
+      it("leaves the key to the page when nothing is running", () => {
+        const send = vi.fn();
+        const handler = guestKeyHandler(send);
+        const event = { preventDefault: vi.fn() };
+
+        handler(event, dictationKey);
+
+        expect(event.preventDefault).not.toHaveBeenCalled();
+        expect(send).not.toHaveBeenCalled();
+      });
     });
   });
 

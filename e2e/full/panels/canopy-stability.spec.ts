@@ -1,6 +1,6 @@
 /**
  * Canopy holds still: the real app, real PTYs and Daintree's own agent-state
- * tracking, with screens read by the live Canopy service. Four fake Claude
+ * tracking, with screens read by the local reader model. Four fake Claude
  * agents draw realistic screens; the inbox is sampled every 100 ms for its row
  * order, the priority each row shows and its words. The user types a reply
  * into one agent's terminal and clears it; another agent stops on an approval.
@@ -12,9 +12,9 @@
  * Nor may any row turn unread without an agent doing something: a row going
  * read is the user reading it, but going unread takes a stop, a start or an ask.
  *
- * Opt-in only, since it reads screens with the live service:
+ * Opt-in only, since it downloads the reader model (about 90 MB):
  *
- *   DAINTREE_E2E_CANOPY_LIVE=1 npx playwright test --project=full-panels canopy-stability
+ *   DAINTREE_E2E_CANOPY_LOCAL=1 npx playwright test --project=full-panels canopy-stability
  */
 
 import { test, expect, type Page } from "@playwright/test";
@@ -38,7 +38,7 @@ import {
   type FakeCanopyScene,
 } from "../../helpers/fakeCanopyAgent";
 
-const ENABLED = !!process.env.DAINTREE_E2E_CANOPY_LIVE;
+const ENABLED = !!process.env.DAINTREE_E2E_CANOPY_LOCAL;
 
 const HEADER = [
   "▐▛███▜▌   Claude Code v9.9.9",
@@ -83,18 +83,6 @@ const APPROVAL = (command: string, why: string): FakeCanopyScene => ({
     "╰──────────────────────────────────────────────────────────╯",
   ],
 });
-
-/** A question asked while the panel is closed, long enough to wrap at every width. */
-const QUESTION_WHILE_CLOSED: FakeCanopyScene = {
-  lines: [
-    ...HEADER,
-    "> Add a CHANGELOG entry for the units work, and ask me which date format to use first",
-    "",
-    "⏺ The release notes need a line for this. Should the changelog entry go under Fixed, since it corrects rounding, or under Changed, since amounts now differ slightly?",
-    "",
-    "✻ Worked for 3s · done",
-  ],
-};
 
 const QUESTION: FakeCanopyScene = {
   lines: [
@@ -380,6 +368,8 @@ function words(text: string): string {
       .replace(/\bunread,\s?/g, "")
       // The row's text runs its parts together ("urgentnow98"), so no word edges.
       .replace(/just now|now|\d+\s?(?:s|m|h|d)(?![a-z])/g, "#")
+      // "just now" turning into "1m ago" is the clock, not a change in the row.
+      .replace(/\s+ago\b/g, "")
       // A wait read aloud past a minute: "waiting for 40s", then "waiting a while".
       .replace(/(?:for #|a while)/g, "#")
       .replace(/\s+/g, " ")
@@ -510,7 +500,7 @@ function rawIn(samples: Sample[]): Change[] {
   return out;
 }
 
-test.describe("Canopy stability against the live service", () => {
+test.describe("Canopy stability on the local model", () => {
   // Each test carries on from the one before it, agents and all.
   test.describe.configure({ mode: "serial" });
   test.beforeAll(async () => {
@@ -533,10 +523,9 @@ test.describe("Canopy stability against the live service", () => {
   test("holds still while the user types into an agent, and moves only for a new approval", async () => {
     test.info().annotations.push({
       type: "conditional-skip",
-      description:
-        "DAINTREE_E2E_CANOPY_LIVE is required: the spec reads screens with the live service",
+      description: "DAINTREE_E2E_CANOPY_LOCAL is required: the spec downloads the reader model",
     });
-    test.skip(!ENABLED, "set DAINTREE_E2E_CANOPY_LIVE=1 to read screens with the live service");
+    test.skip(!ENABLED, "set DAINTREE_E2E_CANOPY_LOCAL=1 to download the reader model");
     // Four agents launch and settle before anything is measured.
     test.setTimeout(480_000);
     const page = ctx.window;
@@ -565,16 +554,16 @@ test.describe("Canopy stability against the live service", () => {
     // Turn Canopy on from its offer, the way a user does.
     await toggleCanopy(page);
     await dialog(page).getByRole("button", { name: "Turn on Canopy" }).click();
-    // From the first open on: rows show at once, summaries as bones until
-    // their words land, and no row changes height for it.
+    // From the first open on: rows show at once, and no row changes height
+    // as the model downloads and its readings land.
     await sampleInbox(page);
     const turnedOn = Date.now();
     await expect(dialog(page).locator("[data-canopy-list] [data-canopy-card]")).toHaveCount(4, {
       timeout: 60_000,
     });
-    // Every row read and worded before measuring starts: the rows show at
-    // once and fill in as the open's readings land, which is not what this
-    // test measures.
+    // Every row read and worded before measuring starts: the model downloads
+    // on the first open and the readings land after it, which is not what
+    // this test measures.
     await expect
       .poll(
         async () =>
@@ -593,7 +582,6 @@ test.describe("Canopy stability against the live service", () => {
       timeout: 30_000,
     });
     const firstOpen = (await takeSamples(page)).filter((sample) => sample.at >= turnedOn);
-    expect(firstOpen.some((sample) => sample.rows.some((row) => row.due))).toBe(true);
     const heights = new Map<string, Set<number>>();
     for (const sample of firstOpen) {
       for (const row of sample.rows) {
@@ -666,10 +654,9 @@ test.describe("Canopy stability against the live service", () => {
   test("holds still through a quiet spell and a close and reopen, and moves only the agents that start work", async () => {
     test.info().annotations.push({
       type: "conditional-skip",
-      description:
-        "DAINTREE_E2E_CANOPY_LIVE is required: the spec reads screens with the live service",
+      description: "DAINTREE_E2E_CANOPY_LOCAL is required: the spec downloads the reader model",
     });
-    test.skip(!ENABLED, "set DAINTREE_E2E_CANOPY_LIVE=1 to read screens with the live service");
+    test.skip(!ENABLED, "set DAINTREE_E2E_CANOPY_LOCAL=1 to download the reader model");
     test.setTimeout(300_000);
     const page = ctx.window;
     await sampleInbox(page);
@@ -718,10 +705,9 @@ test.describe("Canopy stability against the live service", () => {
   test("moves only the approval the user answers, and then that agent's own work", async () => {
     test.info().annotations.push({
       type: "conditional-skip",
-      description:
-        "DAINTREE_E2E_CANOPY_LIVE is required: the spec reads screens with the live service",
+      description: "DAINTREE_E2E_CANOPY_LOCAL is required: the spec downloads the reader model",
     });
-    test.skip(!ENABLED, "set DAINTREE_E2E_CANOPY_LIVE=1 to read screens with the live service");
+    test.skip(!ENABLED, "set DAINTREE_E2E_CANOPY_LOCAL=1 to download the reader model");
     test.setTimeout(240_000);
     const page = ctx.window;
     await sampleInbox(page);
@@ -778,10 +764,9 @@ test.describe("Canopy stability against the live service", () => {
   test("holds still while the user moves between agents and resizes the window, which redraws every one", async () => {
     test.info().annotations.push({
       type: "conditional-skip",
-      description:
-        "DAINTREE_E2E_CANOPY_LIVE is required: the spec reads screens with the live service",
+      description: "DAINTREE_E2E_CANOPY_LOCAL is required: the spec downloads the reader model",
     });
-    test.skip(!ENABLED, "set DAINTREE_E2E_CANOPY_LIVE=1 to read screens with the live service");
+    test.skip(!ENABLED, "set DAINTREE_E2E_CANOPY_LOCAL=1 to download the reader model");
     test.setTimeout(300_000);
     const page = ctx.window;
     const { finished, approval, working, question } = agents;
@@ -869,89 +854,5 @@ test.describe("Canopy stability against the live service", () => {
     expect(unexplained).toEqual([]);
     // Nor did any agent's redraw cost a read.
     expect(readsSince(started)).toEqual([]);
-  });
-
-  test("writes words owed on open from the read made while closed, untouched by a resize meanwhile", async () => {
-    test.info().annotations.push({
-      type: "conditional-skip",
-      description:
-        "DAINTREE_E2E_CANOPY_LIVE is required: the spec reads screens with the live service",
-    });
-    test.skip(!ENABLED, "set DAINTREE_E2E_CANOPY_LIVE=1 to read screens with the live service");
-    test.setTimeout(240_000);
-    const page = ctx.window;
-    const { finished, approval, working, question } = agents;
-    // Sampled from before the close, so the reopened list is compared with
-    // the last one shown.
-    await sampleInbox(page);
-    await page.waitForTimeout(500); // timer: a sample of the open list before it closes
-    const wordsBefore = await dialog(page)
-      .locator(`#${card(question)}`)
-      .textContent();
-    const closing = Date.now();
-    await toggleCanopy(page);
-    await expect(dialog(page)).toHaveCount(0);
-    await page.waitForTimeout(3_000); // timer: the pane hands its terminal's size back
-
-    // Closed: one agent asks something new, and the background watch reads it.
-    const asked = Date.now();
-    setFakeCanopyScene(binDir, question, QUESTION_WHILE_CLOSED);
-    await expect
-      .poll(
-        () =>
-          readsSince(asked, { answered: true }).filter(
-            (call) => call.run === question && call.stage === "classifier"
-          ).length,
-        { timeout: 60_000, intervals: [1_000] }
-      )
-      .toBeGreaterThan(0);
-    await page.waitForTimeout(3_000); // timer: Daintree's own state settles on the new screen
-
-    // Still closed: the window shrinks and grows back, and every agent redraws.
-    const resized = Date.now();
-    const ids = [finished, approval, working, question];
-    const sizesBefore = Object.fromEntries(
-      ids.map((id) => [id, readFakeCanopySizes(binDir, id).length])
-    );
-    const resize = (dw: number, dh: number) =>
-      ctx.app.evaluate(
-        ({ BrowserWindow }, delta) => {
-          const win = BrowserWindow.getAllWindows().find((w) => w.isVisible());
-          if (!win) return;
-          const [w, h] = win.getSize();
-          win.setSize(w! + delta.dw, h! + delta.dh);
-        },
-        { dw, dh }
-      );
-    await resize(-220, -140);
-    await page.waitForTimeout(9_000); // timer: every agent redraws and is scanned
-    await resize(220, 140);
-    await page.waitForTimeout(20_000); // timer: and again, past the background poll
-    for (const id of ids) {
-      expect(readFakeCanopySizes(binDir, id).length).toBeGreaterThan(sizesBefore[id]!);
-    }
-    expect(readsSince(resized)).toEqual([]);
-
-    // Reopened: the owed words are written from the read already made, once,
-    // and nothing else moves.
-    const reopened = Date.now();
-    await toggleCanopy(page);
-    await expect(dialog(page).locator("[data-canopy-list] [data-canopy-card]")).toHaveCount(4);
-    await page.waitForTimeout(30_000); // timer: the owed words land and the list holds
-    expect(readsSince(reopened)).toEqual([{ stage: "describer", run: question }]);
-    // The words did land: the row says something new, and nothing is still due.
-    const askingRow = dialog(page).locator(`#${card(question)}`);
-    expect(await askingRow.textContent()).not.toBe(wordsBefore);
-    await expect(askingRow.locator("[data-canopy-detail-due]")).toHaveCount(0);
-    const { unexplained } = await measure(
-      page,
-      closing,
-      [
-        { at: reopened, run: null, what: "reopens the panel", within: 0, opens: true },
-        { at: reopened, run: card(question), what: "its owed words land", within: 15_000 },
-      ],
-      []
-    );
-    expect(unexplained).toEqual([]);
   });
 });

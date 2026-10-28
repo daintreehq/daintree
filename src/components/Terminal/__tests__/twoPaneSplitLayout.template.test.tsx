@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, cleanup, fireEvent } from "@testing-library/react";
 import type { PanelInstance } from "@shared/types/panel";
 import { TwoPaneSplitLayout } from "../TwoPaneSplitLayout";
 import { DIVIDER_WIDTH_PX } from "../TwoPaneSplitDivider";
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 
 // The split controller no longer owns the grid element (#12476): it lays the
 // panes out by publishing a column template to ContentGridDefault, which keeps
@@ -61,13 +62,16 @@ vi.mock("@/store/twoPaneSplitStore", () => ({
   resolveEffectiveRatio: (entry: { ratio: number } | undefined) => entry?.ratio,
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     lockResize: services.lockResize,
     runResizePass: () => {},
     scheduleBatchResize: () => {},
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("@/lib/layoutTransitionLock", () => ({
   isSidebarMeasurementLocked: () => true,
@@ -127,6 +131,12 @@ function dragShield(): HTMLElement | undefined {
     (node) => node.style.cursor === "col-resize"
   );
 }
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
+});
 
 describe("TwoPaneSplitLayout grid template", () => {
   beforeEach(() => {

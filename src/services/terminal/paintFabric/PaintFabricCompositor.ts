@@ -11,6 +11,7 @@ import { GRID_RESIZE_COALESCE_MS } from "../types";
 import type { UnseenOutputSnapshot } from "../TerminalUnseenOutputTracker";
 import type { TerminalGeometry } from "@shared/types/terminal";
 import type { TerminalPaintPlane } from "../TerminalInstanceService";
+import type { OpenLinkOptions } from "../TerminalLinkHandler";
 import type { BatchResizeOptions, ResizePassOptions } from "../TerminalResizePassScheduler";
 import type { TerminalPaddingPaint } from "../terminalPaddingPaint";
 import { logWarn } from "@/utils/logger";
@@ -625,8 +626,17 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
     return this.plane(id).getHoveredFileKind(id);
   }
 
+  getHoveredLinkPluginName(id: string): string | null {
+    if (this.isViewOwned(id)) return null;
+    return this.plane(id).getHoveredLinkPluginName(id);
+  }
+
   openHoveredLink(id: string, event?: MouseEvent): Promise<void> {
     return this.plane(id).openHoveredLink(id, event);
+  }
+
+  openLink(id: string, url: string, options?: OpenLinkOptions): void {
+    this.plane(id).openLink(id, url, options);
   }
 
   clearDirectingState(id: string, trigger?: string): void {
@@ -765,6 +775,11 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
   ensureSearchAddon(id: string): Promise<ManagedTerminal["searchAddon"]> {
     if (this.isViewOwned(id)) return Promise.resolve(null);
     return this.plane(id).ensureSearchAddon(id);
+  }
+
+  pinHistory(id: string): () => void {
+    if (this.isViewOwned(id)) return () => {};
+    return this.plane(id).pinHistory(id);
   }
 
   getInstanceForE2E(id: string): ManagedTerminal | undefined {
@@ -1163,8 +1178,12 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
     this.plane(id).clearAgentPromotion(id);
   }
 
-  restoreScrollbackAllForeground(): void {
-    this.planes().forEach((plane) => plane.restoreScrollbackAllForeground());
+  restoreScrollbackAll(): void {
+    this.planes().forEach((plane) => plane.restoreScrollbackAll());
+  }
+
+  reduceScrollbackHidden(targetLines: number): void {
+    this.planes().forEach((plane) => plane.reduceScrollbackHidden(targetLines));
   }
 
   reportLost(id: string, note: string): void {

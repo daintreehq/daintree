@@ -1,4 +1,7 @@
 import { powerMonitor } from "electron";
+import { createLogger } from "../utils/logger.js";
+
+const logger = createLogger("main:SystemSleepService");
 
 export interface SleepPeriod {
   start: number;
@@ -51,7 +54,7 @@ class SystemSleepService {
 
   initialize(): void {
     if (this.initialized) {
-      console.log("[SystemSleepService] Already initialized");
+      logger.debug("Already initialized");
       return;
     }
 
@@ -66,23 +69,23 @@ class SystemSleepService {
     powerMonitor.on("resume", this.handleResume);
     this.initialized = true;
     this.serviceStartTime = Date.now();
-    console.log("[SystemSleepService] Initialized and listening for power events");
+    logger.info("Listening for power events");
   }
 
   private handleSuspend = (): void => {
     // Guard against duplicate suspend events
     if (this.sleepStart !== null) {
-      console.log("[SystemSleepService] Already suspended, ignoring duplicate suspend event");
+      logger.debug("Ignoring duplicate suspend event", { sleepStart: this.sleepStart });
       return;
     }
     this.sleepStart = Date.now();
-    console.log("[SystemSleepService] System suspending");
+    logger.info("System suspending", { sleepStart: this.sleepStart });
 
     for (const callback of this.suspendListeners) {
       try {
         callback();
       } catch (error) {
-        console.error("[SystemSleepService] Suspend callback error:", error);
+        logger.error("Suspend callback failed", error);
       }
     }
   };
@@ -105,9 +108,11 @@ class SystemSleepService {
         this.sleepPeriods.shift();
       }
 
-      console.log(
-        `[SystemSleepService] System resumed after ${Math.round(sleepDuration / 1000)}s sleep`
-      );
+      logger.info("System resumed", {
+        sleepStart: period.start,
+        sleepDurationMs: sleepDuration,
+        totalSleepMs: this.totalSleepMs,
+      });
 
       this.sleepStart = null;
 
@@ -116,9 +121,11 @@ class SystemSleepService {
         try {
           callback(sleepDuration);
         } catch (error) {
-          console.error("[SystemSleepService] Wake callback error:", error);
+          logger.error("Wake callback failed", error);
         }
       }
+    } else {
+      logger.info("System resumed with no suspend recorded");
     }
   };
 
@@ -199,7 +206,7 @@ class SystemSleepService {
     this.totalSleepMs = 0;
     this.sleepPeriods = [];
     this.sleepStart = null;
-    console.log("[SystemSleepService] Reset sleep tracking");
+    logger.debug("Reset sleep tracking");
   }
 
   /**
@@ -227,7 +234,7 @@ class SystemSleepService {
     this.listeners.clear();
     this.suspendListeners.clear();
     this.initialized = false;
-    console.log("[SystemSleepService] Disposed");
+    logger.debug("Disposed");
   }
 }
 

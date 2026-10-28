@@ -1,12 +1,12 @@
 import { useMemo } from "react";
-import { isGitBackedProject } from "@shared/types";
+import { isGitBackedProject, type Project, type Scratch } from "@shared/types";
 import { useProjectStore } from "@/store/projectStore";
 // Leaf imports, never the `@/store` barrel: many suites mock the barrel
 // wholesale without listing these stores, and a barrel import would crash them
 // on an undefined destructure.
 import { useScratchStore } from "@/store/scratchStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
-import { resolveViewWorkspace } from "@/store/viewWorkspace";
+import { selectViewProject, selectViewScratch } from "@/store/viewWorkspace";
 
 /**
  * The workspace *this view* owns, flattened to the identity chrome needs.
@@ -29,8 +29,35 @@ export interface WorkspaceRoot {
   isGitBacked: boolean;
 }
 
+function toWorkspaceRoot(
+  project: Project | undefined,
+  scratch: Scratch | undefined
+): WorkspaceRoot | null {
+  if (project !== undefined) {
+    return {
+      kind: "project",
+      id: project.id,
+      path: project.path,
+      name: project.name,
+      isGitBacked: isGitBackedProject(project),
+    };
+  }
+  if (scratch !== undefined) {
+    // Hardcoded, never `isGitBackedProject(null)`: that answers `true` for the
+    // legacy no-discriminator case, and a scratch is not a project at all.
+    return {
+      kind: "scratch",
+      id: scratch.id,
+      path: scratch.path,
+      name: scratch.name,
+      isGitBacked: false,
+    };
+  }
+  return null;
+}
+
 /**
- * Resolution rules live in {@link resolveViewWorkspace}, shared with the action
+ * Resolution rules live in `resolveViewWorkspace`, shared with the action
  * context and the file browser's root so every surface names the same folder.
  * Keyed on the view's own seeded id rather than the globally broadcast
  * `currentProject`/`currentScratch`, which a second window switching workspaces
@@ -44,60 +71,24 @@ export interface WorkspaceRoot {
 export function useWorkspaceRoot(): WorkspaceRoot | null {
   const viewWorkspaceId = getViewWorkspaceId();
 
-  const project = useProjectStore((state) => {
-    const resolved = resolveViewWorkspace({
-      viewWorkspaceId,
-      projects: state.projects,
-      currentProject: state.currentProject,
-      scratches: [],
-      currentScratch: null,
-    });
-    if (resolved?.kind !== "project") return undefined;
-    // A closed project stays in `projects` — reopening it from the switcher
-    // depends on the row surviving — while this view keeps its seeded id, so
-    // `resolveViewWorkspace` still finds it after `closeActiveProject`. Mirrors
-    // `getProjectForCurrentLocation`, which drops closed rows for the same
-    // reason: the welcome screen that replaces a closed project must keep its
-    // no-sidebar state (#5023). Literal `=== "closed"` because `status` is
-    // optional and an absent one is not closed.
-    return resolved.project.status === "closed" ? undefined : resolved.project;
-  });
+  const project = useProjectStore((state) => selectViewProject(viewWorkspaceId, state));
 
   // Only consulted when the project side didn't answer, so a project-owned view
   // never pays attention to scratch churn.
-  const scratch = useScratchStore((state) => {
-    if (project !== undefined) return undefined;
-    const resolved = resolveViewWorkspace({
-      viewWorkspaceId,
-      projects: [],
-      currentProject: null,
-      scratches: state.scratches,
-      currentScratch: state.currentScratch,
-    });
-    return resolved?.kind === "scratch" ? resolved.scratch : undefined;
-  });
+  const scratch = useScratchStore((state) =>
+    project !== undefined ? undefined : selectViewScratch(viewWorkspaceId, state)
+  );
 
-  return useMemo<WorkspaceRoot | null>(() => {
-    if (project !== undefined) {
-      return {
-        kind: "project",
-        id: project.id,
-        path: project.path,
-        name: project.name,
-        isGitBacked: isGitBackedProject(project),
-      };
-    }
-    if (scratch !== undefined) {
-      // Hardcoded, never `isGitBackedProject(null)`: that answers `true` for the
-      // legacy no-discriminator case, and a scratch is not a project at all.
-      return {
-        kind: "scratch",
-        id: scratch.id,
-        path: scratch.path,
-        name: scratch.name,
-        isGitBacked: false,
-      };
-    }
-    return null;
-  }, [project, scratch]);
+  return useMemo(() => toWorkspaceRoot(project, scratch), [project, scratch]);
+}
+
+/** Non-reactive read, for paths that resolve once per event (keybinding `when` clauses). */
+export function getWorkspaceRoot(): WorkspaceRoot | null {
+  const viewWorkspaceId = getViewWorkspaceId();
+  const project = selectViewProject(viewWorkspaceId, useProjectStore.getState());
+  const scratch =
+    project !== undefined
+      ? undefined
+      : selectViewScratch(viewWorkspaceId, useScratchStore.getState());
+  return toWorkspaceRoot(project, scratch);
 }

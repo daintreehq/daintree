@@ -29,6 +29,28 @@ const switchArgsSchema = z
       .boolean()
       .optional()
       .describe("Open the host in a new window instead of switching this one."),
+    projectId: z
+      .string()
+      .min(1)
+      .max(256)
+      .optional()
+      .describe("Project to open, by the host's own id. Needs hostId."),
+    terminalId: z
+      .string()
+      .min(1)
+      .max(256)
+      .optional()
+      .describe("Terminal to focus once shown. Needs projectId."),
+  })
+  // Refused before any confirmation, never dropped: a caller naming a project
+  // or a terminal means to land on it.
+  .superRefine((args, ctx) => {
+    if (args.projectId !== undefined && !args.hostId) {
+      ctx.addIssue({ code: "custom", path: ["projectId"], message: "projectId needs hostId" });
+    }
+    if (args.terminalId !== undefined && args.projectId === undefined) {
+      ctx.addIssue({ code: "custom", path: ["terminalId"], message: "terminalId needs projectId" });
+    }
   })
   .optional();
 
@@ -98,7 +120,7 @@ export function registerHostActions(actions: ActionRegistry, callbacks: ActionCa
     id: "host.switch",
     title: "Switch host…",
     description:
-      'Move this window to another Daintree host. No args opens the host palette; hostId ("local" or from the list) opens its last project here, else its project list.',
+      'Move this window to another Daintree host. No args opens the host palette; hostId ("local" or listed) opens this project there, else its last project, else its project list.',
     category: "workspace",
     kind: "command",
     // Moves the window the person is looking at to another machine: an agent
@@ -121,11 +143,20 @@ export function registerHostActions(actions: ActionRegistry, callbacks: ActionCa
         else openHostsSettings(callbacks);
         return;
       }
-      const { hostId } = parsed;
+      const { hostId, projectId, terminalId } = parsed;
       const newWindow = parsed.newWindow ?? false;
+      const focusIntent =
+        terminalId === undefined
+          ? undefined
+          : { intent: "focus-panel" as const, panelId: terminalId };
       try {
         await assertKnownHost(hostId);
-        const result = await window.electron.remoteHosts.switchWindowHost({ hostId, newWindow });
+        const result = await window.electron.remoteHosts.switchWindowHost({
+          hostId,
+          newWindow,
+          ...(projectId === undefined ? {} : { projectId }),
+          ...(focusIntent === undefined ? {} : { focusIntent }),
+        });
         // With nothing to return to on that host, its project list opens for
         // the person at this screen to pick from.
         followSwitchResult(result);
@@ -133,7 +164,11 @@ export function registerHostActions(actions: ActionRegistry, callbacks: ActionCa
       } catch (error) {
         // Read the way every other way of switching reads it, then still
         // failed, so whoever dispatched the action hears that it didn't happen.
-        notifyHostSwitchFailure(hostId, error, () => void switchToHost(hostId, newWindow));
+        notifyHostSwitchFailure(
+          hostId,
+          error,
+          () => void switchToHost(hostId, newWindow, projectId, { focusIntent })
+        );
         throw error;
       }
     },

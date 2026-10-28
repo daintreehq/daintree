@@ -166,6 +166,7 @@ export function registerIntrospectionActions(
         const storageKey = typeof options.name === "string" ? options.name : "";
         const declaredVersion = typeof options.version === "number" ? options.version : null;
 
+        // storage-key: declared-elsewhere
         const raw = storageKey ? readLocalStorageItemSafely(storageKey) : null;
         const hasPersistedValue = raw !== null;
         const sizeBytes = raw !== null ? raw.length * 2 : 0;

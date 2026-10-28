@@ -9,6 +9,8 @@ import {
   restartConfirmLabel,
   restartImpactLines,
   restartTerminalCount,
+  shellWord,
+  sshRefusalAdvice,
 } from "../hostLabels";
 
 const unresolved = (name: string) =>
@@ -45,6 +47,15 @@ describe("defaultHostName", () => {
 });
 
 describe("connectionLabel", () => {
+  it("says restarting, not unreachable, for a host that announced its shutdown", () => {
+    for (const state of [
+      { status: "connecting", attempt: 4, restarting: true },
+      { status: "unreachable", lastSeenAt: 1, detail: "no host.json", restarting: true },
+    ] as const) {
+      expect(connectionLabel(state)).toBe("Restarting");
+    }
+  });
+
   it("says when an unreachable host was last seen relative to now, as the rest of the app does", () => {
     const now = Date.UTC(2026, 0, 10, 12);
     expect(
@@ -70,7 +81,20 @@ describe("connectionLabel", () => {
         detail: "Daintree isn't running in Host mode there (no host.json).",
         hostModeOff: true,
       })
-    ).toBe("Daintree isn't running in Host mode there");
+    ).toBe("Daintree isn't listening there · never seen");
+    const now = Date.UTC(2026, 9, 22, 12);
+    expect(
+      connectionLabel(
+        {
+          status: "unreachable",
+          lastSeenAt: now - 7 * 60_000,
+          detail: "Daintree isn't running in Host mode there (no host.json).",
+          hostModeOff: true,
+          stoppedRetrying: true,
+        },
+        now
+      )
+    ).toBe("Daintree isn't listening there · last seen 7 minutes ago");
   });
 
   it("says when a link has stopped retrying until the user connects", () => {
@@ -172,5 +196,50 @@ describe("removeHostOutcome", () => {
     expect(outcome.label).toBe("Terminals and agents in Ubuntu end once WSL stops it");
     expect(outcome.sentence).toContain("Daintree stops keeping Ubuntu running");
     expect(outcome.sentence).not.toContain("keep running.");
+  });
+});
+
+describe("sshRefusalAdvice", () => {
+  it("names an unknown host key", () => {
+    expect(
+      sshRefusalAdvice(
+        "No ED25519 host key is known for studio and you have requested strict checking.\nHost key verification failed."
+      )
+    ).toBe("untrusted-host-key");
+    expect(sshRefusalAdvice("Host key verification failed.")).toBe("untrusted-host-key");
+  });
+
+  it("names a changed host key from the last lines alone, before the generic verification failure", () => {
+    expect(
+      sshRefusalAdvice(
+        "Offending ED25519 key in /Users/g/.ssh/known_hosts:3\nHost key for studio has changed and you have requested strict checking.\nHost key verification failed."
+      )
+    ).toBe("changed-host-key");
+  });
+
+  it("doesn't read a stray 'has changed' as a changed host key", () => {
+    expect(
+      sshRefusalAdvice(
+        "Your password has changed.\ngreg@studio: Permission denied (publickey,password)."
+      )
+    ).toBe("login-refused");
+  });
+
+  it("names a refused login", () => {
+    expect(sshRefusalAdvice("greg@studio: Permission denied (publickey,password).")).toBe(
+      "login-refused"
+    );
+  });
+
+  it("stays quiet for other failures", () => {
+    expect(sshRefusalAdvice(null)).toBeNull();
+    expect(sshRefusalAdvice("ssh: connect to host studio port 22: Connection refused")).toBeNull();
+  });
+});
+
+describe("shellWord", () => {
+  it("leaves plain targets alone and quotes the ones a shell would glob", () => {
+    expect(shellWord("greg@studio.local")).toBe("greg@studio.local");
+    expect(shellWord("greg@[studio]")).toBe("'greg@[studio]'");
   });
 });

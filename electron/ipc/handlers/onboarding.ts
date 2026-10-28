@@ -15,6 +15,8 @@ import { isE2ESkipFirstRunDialogs } from "../../setup/runtimeFlags.js";
 import {
   DAINTREE_TOUR_ID,
   DEFAULT_TOUR_PROGRESS,
+  isTourOutcome,
+  isTourToken,
   tourProgressFor,
 } from "../../../shared/utils/tourIds.js";
 
@@ -44,6 +46,11 @@ function normalizeTour(raw: unknown): TourOnboardingState {
     completed: tour.completed === true,
     dismissed: tour.dismissed === true,
     lastChapter: normalizeCount(tour.lastChapter),
+    ...(isTourToken(tour.lastChapterId) ? { lastChapterId: tour.lastChapterId } : {}),
+    ...(isTourToken(tour.contentVersion) ? { contentVersion: tour.contentVersion } : {}),
+    ...(isTourToken(tour.completedVersion) ? { completedVersion: tour.completedVersion } : {}),
+    ...(isTourOutcome(tour.lastOutcome) ? { lastOutcome: tour.lastOutcome } : {}),
+    ...(isTourToken(tour.lastRunId) ? { lastRunId: tour.lastRunId } : {}),
   };
 }
 
@@ -293,10 +300,25 @@ export const onboardingNamespace = defineIpcNamespace({
         const tour = tourProgressFor(getOnboardingState().tours, tourId);
         if (SKIP_E2E || !update || typeof update !== "object") return tour;
         const next = { ...tour };
+        if (isTourToken(update.contentVersion)) next.contentVersion = update.contentVersion;
+        else if (update.contentVersion === null) delete next.contentVersion;
         // Completion is sticky: replaying the tour later never un-completes it.
-        if (update.completed === true) next.completed = true;
+        if (update.completed === true) {
+          next.completed = true;
+          if (isTourToken(update.contentVersion)) next.completedVersion = update.contentVersion;
+          else if (update.contentVersion === null) delete next.completedVersion;
+        }
         if (typeof update.lastChapter === "number" && Number.isFinite(update.lastChapter)) {
           next.lastChapter = normalizeCount(update.lastChapter);
+          // An index without an id is a record the old way; a stale id must not outlive it.
+          if (!isTourToken(update.lastChapterId)) delete next.lastChapterId;
+        }
+        if (isTourToken(update.lastChapterId)) next.lastChapterId = update.lastChapterId;
+        if (isTourOutcome(update.lastOutcome)) {
+          next.lastOutcome = update.lastOutcome;
+          // An outcome always replaces the run it belongs to, even with none.
+          if (isTourToken(update.lastRunId)) next.lastRunId = update.lastRunId;
+          else delete next.lastRunId;
         }
         return writeTourProgress(tourId, next);
       }

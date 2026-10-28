@@ -3,7 +3,7 @@ import type {
   SearchableProject,
   SearchableScratch,
   WorkspaceRowStatusFields,
-} from "@/hooks/useProjectSwitcherPalette";
+} from "@/hooks/projectSwitcher/types";
 import { classifyAssistantActivity, type AssistantActivity } from "@/lib/projectAssistantActivity";
 import { formatTimeAgo } from "@/utils/timeAgo";
 import { pluralize } from "@/lib/pluralize";

@@ -410,3 +410,68 @@ const TIMER_TAIL = /^\((?:\d[^)]*)?(?:esc to \w+|thinking|thought for|ctrl\+\w t
 const TIMER_TAIL_CHARS = 160;
 
 export { isSecretPrompt } from "../../../shared/utils/secretPrompt.js";
+
+/**
+ * A prompt as kept past its screen — to tell the same ask from a new one — by
+ * fingerprint only, so no prompt text outlives the reading it came from.
+ */
+export function promptKey(text: string): string {
+  return createHash("sha1").update(normalizeScreenText(text)).digest("hex");
+}
+
+export function normalizeScreenText(text: string): string {
+  return text
+    .replace(/[❯›>▶●⏺•✦]\s*/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+/**
+ * `text` when it is on the screen, else null — the reader may only quote.
+ * A trailing key hint like "(esc)" or "(y)" is allowed to differ.
+ */
+export function onScreen(text: string | null | undefined, screen: string): string | null {
+  if (text == null) return null;
+  const wanted = normalizeScreenText(text.replace(/\s*\((?:esc|[a-z])\)\s*$/i, ""));
+  if (wanted.length === 0) return null;
+  return normalizeScreenText(screen).includes(wanted) ? text : null;
+}
+
+/**
+ * The options that are really on screen, in the order the CLI draws them — the
+ * panel numbers its buttons, and a "1" that isn't the CLI's own 1 misleads.
+ */
+export function optionsInScreenOrder(options: readonly string[], screen: string): string[] {
+  // Each option is placed by the row that draws it, found from the bottom —
+  // where a dialog's choices are — so "No" is placed by its own row, not by
+  // "No files changed" in the output above it. A row that is the option itself
+  // wins over one that only starts with it ("Yes" over "Yes, and don't ask
+  // again"), an option wrapped over rows is placed by the row it starts on,
+  // and choices drawn inline on one row keep their order within it.
+  const rows = screen.split("\n").map((row) =>
+    normalizeScreenText(row)
+      .replace(/^\d+[.)]\s*/, "")
+      .replace(/\s*\((?:esc|[a-z])\)$/, "")
+  );
+  const lastRow = (test: (row: string) => boolean) => {
+    for (let i = rows.length - 1; i >= 0; i--) if (test(rows[i]!)) return i;
+    return -1;
+  };
+  return options
+    .map((option) => {
+      if (onScreen(option, screen) === null) return { option, row: -1, at: -1 };
+      const wanted = normalizeScreenText(option.replace(/\s*\((?:esc|[a-z])\)\s*$/i, ""));
+      let row = lastRow((candidate) => candidate === wanted);
+      if (row < 0) row = lastRow((candidate) => candidate.startsWith(wanted));
+      if (row < 0) row = lastRow((candidate) => candidate.includes(wanted));
+      if (row < 0) {
+        row = lastRow((candidate) => candidate.length >= 3 && wanted.startsWith(candidate));
+      }
+      const at = row < 0 ? -1 : Math.max(0, rows[row]!.indexOf(wanted));
+      return { option, row, at };
+    })
+    .filter((entry) => entry.row >= 0)
+    .sort((a, b) => a.row - b.row || a.at - b.at)
+    .map((entry) => entry.option);
+}

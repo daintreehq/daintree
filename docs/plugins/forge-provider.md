@@ -6,7 +6,7 @@ The first-party GitHub plugin (`plugins/builtin/github/`) is the canonical worke
 
 ## Before you start
 
-- **A forge provider must be a built-in (in-process) plugin.** Installed plugins run in a worker process where every host call crosses an async `MessagePort`, but `ForgeProviderImpl`'s routing gate (`parseRemote`), URL builders, and `classifyPushError` are **synchronous** — the host calls them and uses the return value immediately. A worker can't satisfy that contract, so `host.registerForgeProvider` from a worker plugin logs a warning and returns a no-op disposer (`electron/services/plugin/pluginDevWorkerHostProxy.ts`). The manifest rejects `contributes.forgeProviders` only for a `"scope": "project"` plugin. An installed plugin's providers are still registered from its manifest and show in Settings → Code forge, but they stay unbacked: a project that resolves to one gets a "not activated" error instead of forge data. This is a permanent architectural gap, identical in dev and prod; a fix would require the forge API's synchronous surface to change. Everything below assumes a built-in under `plugins/builtin/`.
+- **A forge provider must currently be a built-in (in-process) plugin.** Installed plugins run in a worker process where every host call crosses an async `MessagePort`, so `host.registerForgeProvider` from a worker plugin logs a warning and returns a no-op disposer (`electron/services/plugin/pluginDevWorkerHostProxy.ts`), in dev and prod alike. The manifest rejects `contributes.forgeProviders` only for a `"scope": "project"` plugin. An installed plugin's providers are still registered from its manifest and show in Settings → Code forge, but they stay unbacked: a project that resolves to one gets a "not activated" error instead of forge data. For a provider serving code this follows from the contract: its routing gate (`parseRemote`), URL builders and `classifyPushError` are **synchronous**, and a worker can't answer synchronously. An issues-only provider is different — of its members only `buildIssueUrl` and `buildIssuesUrl` are synchronous, and their callers are async — so for issue trackers the gap is a missing bridge (proxying `ForgeIssueProviderImpl`, delivering `setCredentials` over the port, mirroring or dropping `healthEvents`), not a limit of the API. Until that bridge exists, trackers ship as built-ins too; `daintree.linear` (`plugins/builtin/linear/`) is the issues-only example. Everything below assumes a built-in under `plugins/builtin/`.
 - Read the [architecture reference](../architecture/forge-provider-abstraction.md). It explains the thin-interface-plus-capabilities model, the `rawData` escape hatch, and the state-normalization rule. The rest of this page assumes that context.
 - Skim `shared/types/forge.ts`. It is the source of truth for every signature — `ForgeProviderImpl`, the domain objects (`Issue`, `PR`, `RepoRef`, …), the capability sub-interfaces, and the manifest types. When the prose here and `forge.ts` disagree, `forge.ts` wins.
 
@@ -87,15 +87,17 @@ With no `credentialFields`, the page shows no form: it says the provider needs n
 
 `slots` names builtin views your renderer entry registers with `registerBuiltinView`, so the host can render the active provider's UI at fixed seams without knowing any plugin's view ids. All are optional:
 
-| Slot                       | Seam                                                          |
-| -------------------------- | ------------------------------------------------------------- |
-| `settingsTab`              | The provider's panel in Settings → Code forge                 |
-| `icon`                     | Brand icon beside the provider's name                         |
-| `statsDropdown`            | Content of the toolbar stats dropdown (issues, PRs, commits)  |
-| `bulkCreateWorktreeDialog` | The bulk create-worktrees-from-issues dialog                  |
-| `issueSelector`            | The issue picker used by the worktree attach and create flows |
+| Slot                       | Seam                                                         |
+| -------------------------- | ------------------------------------------------------------ |
+| `settingsTab`              | The provider's panel in Settings → Code forge                |
+| `icon`                     | Brand icon beside the provider's name                        |
+| `statsDropdown`            | Content of the toolbar stats dropdown (issues, PRs, commits) |
+| `bulkCreateWorktreeDialog` | The bulk create-worktrees-from-issues dialog                 |
+| `issueSelector`            | The issue field in the New Worktree dialog                   |
 
 Refs are checked for shape only (a non-empty string) when the manifest is parsed; a ref that resolves to nothing renders a neutral fallback. `plugins/builtin/github/plugin.json` fills all five, and `plugins/builtin/github/renderer/index.tsx` registers them.
+
+None of them is needed to serve issues. Without `settingsTab`, Settings → Code forge renders your `credentialFields`. Without `issueSelector`, the New Worktree dialog uses the host's own issue picker over `listIssues` — the one "Attach issue…" on a worktree card always uses. Without `statsDropdown`, the toolbar's issue and PR counts open your `buildIssuesUrl` and `buildPRsUrl` pages instead of a popover, each segment following the provider that serves it. `plugins/builtin/linear/` declares only `icon`.
 
 ### Roles
 

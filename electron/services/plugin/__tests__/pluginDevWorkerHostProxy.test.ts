@@ -29,6 +29,8 @@ const GLOBAL_IDENTITY = {
   projectRoot: null,
 };
 
+type Proxy = PluginDevWorkerHostProxy;
+
 function makeProxy() {
   const sent: any[] = [];
   const post = vi.fn((msg: any) => {
@@ -37,6 +39,209 @@ function makeProxy() {
   const proxy = new PluginDevWorkerHostProxy("acme.demo", post, GLOBAL_IDENTITY);
   return { proxy, post, sent };
 }
+
+describe("PluginDevWorkerHostProxy context providers (#13795)", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("notifies main of the descriptor and answers search and resolve in the worker", async () => {
+    const { proxy, sent } = makeProxy();
+    const impl = {
+      search: vi.fn(async (query: string) => [{ id: "1", label: query }]),
+      resolve: vi.fn(async (id: string) => ({ text: `card ${id}` })),
+    };
+    await proxy.host.registerContextProvider({ id: "cards" }, impl);
+    expect(sent.find((m) => m.type === "host-notify")).toMatchObject({
+      method: "registerContextProvider",
+      registrationKey: "contextProvider:cards",
+      params: { descriptor: { id: "cards" } },
+    });
+
+    proxy.handleMessage({
+      type: "invoke",
+      requestId: "s1",
+      kind: "context-provider-method",
+      providerId: "cards",
+      method: "search",
+      args: ["fix"],
+    } as any);
+    proxy.handleMessage({
+      type: "invoke",
+      requestId: "r1",
+      kind: "context-provider-method",
+      providerId: "cards",
+      method: "resolve",
+      args: ["7"],
+    } as any);
+    await flush();
+
+    expect(impl.search).toHaveBeenCalledWith("fix", { signal: expect.any(AbortSignal) });
+    expect(sent.find((m) => m.requestId === "s1")).toMatchObject({
+      ok: true,
+      result: [{ id: "1", label: "fix" }],
+    });
+    expect(sent.find((m) => m.requestId === "r1")).toMatchObject({
+      ok: true,
+      result: { text: "card 7" },
+    });
+  });
+
+  it("aborts the provider's signal on invoke-cancel and posts nothing after", async () => {
+    const { proxy, sent } = makeProxy();
+    let seen: AbortSignal | undefined;
+    let finish: (value: unknown) => void = () => {};
+    await proxy.host.registerContextProvider(
+      { id: "cards" },
+      {
+        search: vi.fn(),
+        resolve: vi.fn((_id: string, { signal }: { signal: AbortSignal }) => {
+          seen = signal;
+          return new Promise<any>((resolve) => (finish = resolve));
+        }),
+      }
+    );
+    proxy.handleMessage({
+      type: "invoke",
+      requestId: "r2",
+      kind: "context-provider-method",
+      providerId: "cards",
+      method: "resolve",
+      args: ["7"],
+    } as any);
+    await flush();
+    proxy.handleMessage({ type: "invoke-cancel", requestId: "r2" } as any);
+    expect(seen?.aborted).toBe(true);
+    finish({ text: "late" });
+    await flush();
+    expect(sent.some((m) => m.type === "invoke-result" && m.requestId === "r2")).toBe(false);
+  });
+
+  it("rejects an impl without both methods, and a stale disposer unbinds nothing", async () => {
+    const { proxy, sent } = makeProxy();
+    await expect(
+      proxy.host.registerContextProvider({ id: "cards" }, { search: vi.fn() } as any)
+    ).rejects.toThrow(/search\(\) and resolve\(\)/);
+
+    const first = { search: vi.fn(async () => []), resolve: vi.fn(async () => null) };
+    const second = { search: vi.fn(async () => []), resolve: vi.fn(async () => null) };
+    const disposeFirst = await proxy.host.registerContextProvider({ id: "cards" }, first);
+    await proxy.host.registerContextProvider({ id: "cards" }, second);
+    disposeFirst();
+    expect(
+      sent.some((m) => m.type === "host-notify" && m.method === "unregisterContextProvider")
+    ).toBe(false);
+  });
+});
+
+describe("PluginDevWorkerHostProxy worktree delete notes providers (#13805)", () => {
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.restoreAllMocks());
+
+  it("registers with main and answers an invoke from the impl kept in the worker", async () => {
+    const { proxy, sent } = makeProxy();
+    const impl = { provideNotes: vi.fn(async () => [{ severity: "info" as const, text: "hi" }]) };
+    await proxy.host.registerWorktreeDeleteNotesProvider({ id: "notes" }, impl);
+    expect(sent.find((m) => m.type === "host-notify")).toMatchObject({
+      method: "registerWorktreeDeleteNotesProvider",
+      registrationKey: "worktreeDeleteNotesProvider:notes",
+      params: { descriptor: { id: "notes" } },
+    });
+
+    proxy.handleMessage({
+      type: "invoke",
+      requestId: "n1",
+      kind: "worktree-delete-notes",
+      providerId: "notes",
+      worktree: { id: "/repo/wt" },
+    } as any);
+    await flush();
+    expect(impl.provideNotes).toHaveBeenCalledWith({ id: "/repo/wt" });
+    expect(sent.find((m) => m.type === "invoke-result" && m.requestId === "n1")).toMatchObject({
+      ok: true,
+      result: [{ severity: "info", text: "hi" }],
+    });
+  });
+
+  it("a replaced binding's disposer neither drops its successor nor tells main to", async () => {
+    const { proxy, sent } = makeProxy();
+    const first = { provideNotes: vi.fn(async () => []) };
+    const second = { provideNotes: vi.fn(async () => []) };
+    const disposeFirst = await proxy.host.registerWorktreeDeleteNotesProvider(
+      { id: "notes" },
+      first
+    );
+    const disposeSecond = await proxy.host.registerWorktreeDeleteNotesProvider(
+      { id: "notes" },
+      second
+    );
+    disposeFirst();
+    expect(
+      sent.some(
+        (m) => m.type === "host-notify" && m.method === "unregisterWorktreeDeleteNotesProvider"
+      )
+    ).toBe(false);
+
+    proxy.handleMessage({
+      type: "invoke",
+      requestId: "n2",
+      kind: "worktree-delete-notes",
+      providerId: "notes",
+      worktree: { id: "/repo/wt" },
+    } as any);
+    await flush();
+    expect(second.provideNotes).toHaveBeenCalled();
+
+    disposeSecond();
+    expect(
+      sent.find(
+        (m) => m.type === "host-notify" && m.method === "unregisterWorktreeDeleteNotesProvider"
+      )
+    ).toMatchObject({ params: { providerId: "notes" } });
+  });
+
+  it("refuses an answer that breaks the note rules before it crosses the port", async () => {
+    const { proxy, sent } = makeProxy();
+    await proxy.host.registerWorktreeDeleteNotesProvider(
+      { id: "notes" },
+      { provideNotes: async () => [{ severity: "info" as const, text: "x".repeat(100_000) }] }
+    );
+    proxy.handleMessage({
+      type: "invoke",
+      requestId: "n3",
+      kind: "worktree-delete-notes",
+      providerId: "notes",
+      worktree: { id: "/repo/wt" },
+    } as any);
+    await flush();
+    const result = sent.find((m) => m.type === "invoke-result" && m.requestId === "n3");
+    expect(result).toMatchObject({ ok: false });
+    expect(result.error).toMatch(/at most 200 characters/);
+  });
+
+  it("keeps a second registration of the same impl when the first's disposer runs", async () => {
+    const { proxy, sent } = makeProxy();
+    const impl = { provideNotes: vi.fn(async () => []) };
+    const disposeFirst = await proxy.host.registerWorktreeDeleteNotesProvider(
+      { id: "notes" },
+      impl
+    );
+    await proxy.host.registerWorktreeDeleteNotesProvider({ id: "notes" }, impl);
+    disposeFirst();
+    expect(
+      sent.some(
+        (m) => m.type === "host-notify" && m.method === "unregisterWorktreeDeleteNotesProvider"
+      )
+    ).toBe(false);
+  });
+
+  it("accepts the register and unregister notifications on the worker port", () => {
+    for (const method of [
+      "registerWorktreeDeleteNotesProvider",
+      "unregisterWorktreeDeleteNotesProvider",
+    ]) {
+      expect(parseWorkerToHostMessage({ type: "host-notify", method, params: {} }).ok).toBe(true);
+    }
+  });
+});
 
 describe("PluginDevWorkerHostProxy file decoration providers", () => {
   beforeEach(() => vi.clearAllMocks());
@@ -290,6 +495,43 @@ describe("PluginDevWorkerHostProxy agent handoff", () => {
     expect(Object.isFrozen(result.agents[0])).toBe(true);
   });
 
+  it.each([
+    ["agents.interrupt", (p: Proxy) => p.host.agents.interrupt("t-1"), { terminalId: "t-1" }],
+    [
+      "agents.sendKeys",
+      (p: Proxy) => p.host.agents.sendKeys("t-1", { keys: ["Enter"] }),
+      { terminalId: "t-1", input: { keys: ["Enter"] } },
+    ],
+    [
+      "agents.submit",
+      (p: Proxy) => p.host.agents.submit("t-1", "continue"),
+      { terminalId: "t-1", text: "continue" },
+    ],
+  ] as const)("relays %s to main and resolves its answer", async (method, invoke, params) => {
+    const { proxy, sent } = makeProxy();
+    const promise = invoke(proxy);
+    expect(sent.find((m) => m.type === "host-call" && m.method === method)).toMatchObject({
+      params,
+    });
+    resolveCall(proxy, sent, method, { status: "sent" });
+    await expect(promise).resolves.toEqual({ status: "sent" });
+  });
+
+  it("never reports an input call cut off by disposal as unavailable (#14018)", async () => {
+    const { proxy } = makeProxy();
+    const submit = proxy.host.agents.submit("t-1", "continue");
+    proxy.dispose();
+    // Main may already have written, so the call fails rather than claiming nothing was.
+    await expect(submit).rejects.toThrow();
+  });
+
+  it("answers an input call made after disposal as unavailable, sending nothing", async () => {
+    const { proxy, sent } = makeProxy();
+    proxy.dispose();
+    await expect(proxy.host.agents.interrupt("t-1")).resolves.toEqual({ status: "unavailable" });
+    expect(sent.some((m) => m.type === "host-call" && m.method === "agents.interrupt")).toBe(false);
+  });
+
   it("answers an unavailable app-wide list when disposed mid-call", async () => {
     const { proxy } = makeProxy();
     const listAll = proxy.host.agents.listAll();
@@ -340,6 +582,53 @@ describe("PluginDevWorkerHostProxy agent handoff", () => {
     const focus = callback.mock.calls[0][0];
     expect(focus).toStrictEqual({ kind: "terminal", agent: true, worktreeId: "wt-1" });
     expect(Object.isFrozen(focus)).toBe(true);
+  });
+
+  it("subscribes project-presence, rebuilds each change frozen and drops a malformed one", async () => {
+    const { proxy, sent } = makeProxy();
+    const callback = vi.fn();
+    await proxy.host.onDidChangeProjectPresence(callback);
+    const sub = sent.find((m) => m.type === "subscribe" && m.kind === "project-presence");
+    expect(sub).toBeDefined();
+    expect(sub.debounceMs).toBeUndefined();
+
+    proxy.handleMessage({
+      type: "subscription-event",
+      subscriptionId: sub.subscriptionId,
+      payload: { projectId: "p1", state: "foreground", extra: "x" },
+    });
+    proxy.handleMessage({
+      type: "subscription-event",
+      subscriptionId: sub.subscriptionId,
+      payload: { projectId: "p1", state: "minimised" },
+    });
+
+    expect(callback).toHaveBeenCalledTimes(1);
+    const presence = callback.mock.calls[0][0];
+    expect(presence).toStrictEqual({ projectId: "p1", state: "foreground" });
+    expect(Object.isFrozen(presence)).toBe(true);
+  });
+
+  it("catches an async presence callback's rejection rather than leaving it unhandled", async () => {
+    const { proxy, sent } = makeProxy();
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    await proxy.host.onDidChangeProjectPresence(async () => {
+      throw new Error("async boom");
+    });
+    const sub = sent.find((m) => m.type === "subscribe" && m.kind === "project-presence");
+    proxy.handleMessage({
+      type: "subscription-event",
+      subscriptionId: sub.subscriptionId,
+      payload: { projectId: "p1", state: "background" },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(error).toHaveBeenCalledWith(
+      expect.stringContaining("subscription callback threw"),
+      expect.any(Error)
+    );
+    error.mockRestore();
   });
 
   it("relays terminals.readScreen and resolves with the screen", async () => {
@@ -474,6 +763,61 @@ describe("PluginDevWorkerHostProxy host.db", () => {
       proxy.dispose();
       await new Promise((resolve) => setTimeout(resolve, 0));
       await expect(db.query("SELECT 1")).rejects.toMatchObject({ code: "DB_CLOSED" });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("PluginDevWorkerHostProxy host.db write authority", () => {
+  it("asks main before each write a call makes to a project database, never for background work", async () => {
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = mkdtempSync(join(tmpdir(), "proxy-db-lease-"));
+    try {
+      const { proxy, sent } = makeProxy();
+      const opening = proxy.host.db.open("ledger", { migrations: ["CREATE TABLE t (x)"] });
+      resolveCall(proxy, sent, "db.resolve", {
+        id: "ledger",
+        location: "project",
+        path: join(dir, "ledger.db"),
+        projectRelativePath: ".daintree/data/acme.demo/ledger.db",
+        journalMode: "delete",
+      });
+      const db = await opening;
+      await db.run("INSERT INTO t VALUES (1)");
+      expect(sent.some((m) => m.method === "db.authorizeWrite")).toBe(false);
+
+      let settled: Promise<unknown> | undefined;
+      proxy.host.registerHandler("save", async () => {
+        settled = db.run("INSERT INTO t VALUES (2)");
+        return null;
+      });
+      proxy.handleMessage({
+        type: "invoke",
+        requestId: "i-save",
+        kind: "handler",
+        channel: "save",
+        ctx: { projectId: null, worktreeId: null, webContentsId: 1, pluginId: "acme.demo" },
+        args: [],
+      });
+      await flush();
+      const ask = sent.find((m) => m.type === "host-call" && m.method === "db.authorizeWrite");
+      expect(ask).toMatchObject({
+        params: { id: "ledger", path: join(dir, "ledger.db") },
+        invocationId: "i-save",
+      });
+      proxy.handleMessage({
+        type: "host-result",
+        requestId: ask.requestId,
+        ok: false,
+        error: "DRIVEN_ELSEWHERE: greg-mbp has control of this project. Take control first.",
+        errorFields: { code: "DRIVEN_ELSEWHERE" },
+      });
+      await expect(settled).rejects.toMatchObject({ code: "DRIVEN_ELSEWHERE" });
+      expect(await db.query("SELECT x FROM t")).toEqual([{ x: 1 }]);
+      await db.close();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -804,6 +1148,97 @@ describe("PluginDevWorkerHostProxy system wake (#12175)", () => {
   });
 });
 
+describe("PluginDevWorkerHostProxy terminal lifecycle (#13814)", () => {
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.restoreAllMocks());
+
+  const subscribeLifecycle = async (onEvent: (e: unknown) => void) => {
+    const { proxy, sent } = makeProxy();
+    const dispose = await proxy.host.onDidChangeTerminalLifecycle(onEvent);
+    const sub = sent.find((m) => m.type === "subscribe" && m.kind === "terminal-lifecycle");
+    const deliver = (payload: unknown) =>
+      proxy.handleMessage({
+        type: "subscription-event",
+        subscriptionId: sub.subscriptionId,
+        payload,
+      } as any);
+    return { proxy, sent, sub, dispose, deliver };
+  };
+
+  it("opens a terminal-lifecycle subscription with no window and unsubscribes on dispose", async () => {
+    const { sent, sub, dispose } = await subscribeLifecycle(vi.fn());
+
+    expect(sub).toBeDefined();
+    expect(sub.debounceMs).toBeUndefined();
+    dispose();
+    expect(
+      sent.find((m) => m.type === "unsubscribe" && m.subscriptionId === sub.subscriptionId)
+    ).toBeDefined();
+  });
+
+  it("re-applies the allowlist and the freeze the port hop strips", async () => {
+    const received: any[] = [];
+    const { deliver } = await subscribeLifecycle((e) => received.push(e));
+
+    deliver({
+      type: "exited",
+      terminalId: "t1",
+      workspaceId: "project-1",
+      kind: "agent",
+      agentId: "claude",
+      exitCode: 1,
+      timestamp: 7,
+      recentOutput: "secret",
+      cwd: "/secret",
+    });
+
+    expect(received).toHaveLength(1);
+    expect(received[0]).toEqual({
+      type: "exited",
+      terminalId: "t1",
+      workspaceId: "project-1",
+      kind: "agent",
+      agentId: "claude",
+      exitCode: 1,
+      timestamp: 7,
+    });
+    expect(Object.isFrozen(received[0])).toBe(true);
+  });
+
+  it("hands an async listener's rejection to the dispatcher instead of escaping it", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const rejection = new Error("listener failed");
+    const { deliver } = await subscribeLifecycle(() => Promise.reject(rejection));
+
+    deliver({ type: "spawned", terminalId: "t1", kind: "shell", timestamp: 1 });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(errors).toHaveBeenCalledWith(
+      expect.stringContaining("subscription callback"),
+      rejection
+    );
+  });
+
+  it("drops a payload that is not a well-formed event", async () => {
+    const onEvent = vi.fn();
+    const { deliver } = await subscribeLifecycle(onEvent);
+
+    deliver({ type: "exited", terminalId: "t1", kind: "agent", timestamp: 7 });
+    deliver(null);
+
+    expect(onEvent).not.toHaveBeenCalled();
+  });
+
+  it("rejects a subscription opened after the activation window closes", async () => {
+    const { proxy } = makeProxy();
+    proxy.revoke();
+    expect(() => proxy.host.onDidChangeTerminalLifecycle(vi.fn())).toThrow(
+      /onDidChangeTerminalLifecycle/
+    );
+  });
+});
+
 describe("PluginDevWorkerHostProxy host.fs.watch (#10526)", () => {
   beforeEach(() => vi.clearAllMocks());
   afterEach(() => vi.restoreAllMocks());
@@ -1126,6 +1561,26 @@ describe("PluginDevWorkerHostProxy host.system / clipboard.writeImage (#11299)",
     await expect(promise).resolves.toBeUndefined();
   });
 
+  it("relays host.system.openExternal with the url intact", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.system.openExternal("https://example.com/a");
+
+    const call = sent.find((m) => m.type === "host-call" && m.method === "system.openExternal");
+    expect(call.params).toEqual({ url: "https://example.com/a" });
+    resolveCall(proxy, sent, "system.openExternal", undefined);
+    await expect(promise).resolves.toBeUndefined();
+  });
+
+  it("relays host.settings.unset with the key and an omitted scope", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.settings.unset("token");
+
+    const call = sent.find((m) => m.type === "host-call" && m.method === "settings.unset");
+    expect(call.params).toEqual({ key: "token", scope: undefined });
+    resolveCall(proxy, sent, "settings.unset", undefined);
+    await expect(promise).resolves.toBeUndefined();
+  });
+
   it("relays host.documents.renderPdf with the options intact and resolves the host's result", async () => {
     const { proxy, sent } = makeProxy();
     const options = {
@@ -1141,6 +1596,59 @@ describe("PluginDevWorkerHostProxy host.system / clipboard.writeImage (#11299)",
     const result = { path: "/tmp/data/invoice.pdf", bytes: 2048, revision: "b".repeat(64) };
     resolveCall(proxy, sent, "documents.renderPdf", result);
     await expect(promise).resolves.toEqual(result);
+  });
+
+  it("relays an artifact download as a handle, its progress as a subscription, its cancel as host-cancel", async () => {
+    const { proxy, sent } = makeProxy();
+    const controller = new AbortController();
+    const onProgress = vi.fn();
+    const promise = proxy.host.artifacts.download(
+      { url: "https://api.example.com/a.mp4", headers: { authorization: "t" } },
+      { attempts: 2, signal: controller.signal, onProgress }
+    );
+    const call = sent.find((m) => m.type === "host-call" && m.method === "artifacts.download");
+    // Neither the signal nor the callback can be cloned, so neither travels.
+    expect(call.params).toEqual({
+      target: { url: "https://api.example.com/a.mp4", headers: { authorization: "t" } },
+      options: { attempts: 2 },
+      progressSubscriptionId: expect.any(String),
+    });
+    const progress = { transferredBytes: 10, totalBytes: 20, attempt: 1 };
+    proxy.handleMessage({
+      type: "subscription-event",
+      subscriptionId: call.params.progressSubscriptionId,
+      payload: progress,
+    });
+    expect(onProgress).toHaveBeenCalledWith(progress);
+    controller.abort();
+    expect(sent).toContainEqual({ type: "host-cancel", requestId: call.requestId });
+    await expect(promise).rejects.toMatchObject({ name: "AbortError" });
+    // The subscription goes with the call: a late report reaches nobody.
+    proxy.handleMessage({
+      type: "subscription-event",
+      subscriptionId: call.params.progressSubscriptionId,
+      payload: progress,
+    });
+    expect(onProgress).toHaveBeenCalledTimes(1);
+  });
+
+  it("codes a worker-side cancel ABORT_ERR whatever reason it was aborted with", async () => {
+    const { proxy } = makeProxy();
+    const controller = new AbortController();
+    const promise = proxy.host.artifacts.import(
+      { path: "/data/a.mp4" },
+      { signal: controller.signal }
+    );
+    controller.abort(new Error("changed my mind"));
+    await expect(promise).rejects.toMatchObject({ code: "ABORT_ERR", name: "AbortError" });
+  });
+
+  it("rejects a malformed artifact call before it crosses the port", async () => {
+    const { proxy, sent } = makeProxy();
+    await expect(
+      proxy.host.artifacts.upload("a".repeat(32), { url: "https://x" }, { onProgress: 3 as never })
+    ).rejects.toThrow(/VALIDATION/);
+    expect(sent.some((m) => m.type === "host-call" && m.method === "artifacts.upload")).toBe(false);
   });
 
   it("relays clipboard.writeImage with the typed array's own bytes", async () => {
@@ -1199,6 +1707,28 @@ describe("PluginDevWorkerHostProxy host.system / clipboard.writeImage (#11299)",
 
     const notify = sent.find((m) => m.type === "host-notify" && m.method === "registerAction");
     expect(notify.params.descriptor.requires).toBeUndefined();
+  });
+
+  it("carries an action's resultSchema across the port for main to enforce", async () => {
+    // Dropped here, a worker plugin's results would go unchecked and its
+    // catalog entry would publish no contract, with nothing failing to say so.
+    const resultSchema = { type: "object", properties: { total: { type: "integer" } } };
+    const { proxy, sent } = makeProxy();
+    proxy.host.registerAction(
+      {
+        id: "summary",
+        title: "Summary",
+        description: "Summarises",
+        category: "Test",
+        kind: "query",
+        danger: "safe",
+        resultSchema,
+      } as any,
+      async () => ({ total: 1 })
+    );
+
+    const notify = sent.find((m) => m.type === "host-notify" && m.method === "registerAction");
+    expect(notify.params.descriptor.resultSchema).toEqual(resultSchema);
   });
 });
 
@@ -1459,6 +1989,243 @@ describe("PluginDevWorkerHostProxy setContext (#13506)", () => {
   });
 });
 
+describe("PluginDevWorkerHostProxy setToolbarButtonState (#13785)", () => {
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.restoreAllMocks());
+
+  it("relays a plain copy of the state as a call, normalizing a clear to null", async () => {
+    const { proxy, sent } = makeProxy();
+    const set = proxy.host.setToolbarButtonState("sync", { pressed: true, busy: undefined });
+    const call = sent.find((m) => m.type === "host-call" && m.method === "setToolbarButtonState");
+    expect(call?.params).toEqual({ buttonId: "sync", state: { pressed: true } });
+    resolveCall(proxy, sent, "setToolbarButtonState", undefined);
+    await expect(set).resolves.toBeUndefined();
+
+    const clear = proxy.host.setToolbarButtonState("sync", undefined as never);
+    const clears = sent.filter(
+      (m) => m.type === "host-call" && m.method === "setToolbarButtonState"
+    );
+    expect(clears.at(-1)?.params).toEqual({ buttonId: "sync", state: null });
+    resolveCall(proxy, sent, "setToolbarButtonState", undefined);
+    await expect(clear).resolves.toBeUndefined();
+  });
+
+  it("relays a menu as plain entries, and rejects one it can't read (#13786)", async () => {
+    const { proxy, sent } = makeProxy();
+    const set = proxy.host.setToolbarButtonState("sync", {
+      menu: [{ actionId: "acme.pull", label: "Pull" }],
+    });
+    const call = sent.find((m) => m.type === "host-call" && m.method === "setToolbarButtonState");
+    expect(call?.params).toEqual({
+      buttonId: "sync",
+      state: { menu: [{ actionId: "acme.pull", label: "Pull" }] },
+    });
+    resolveCall(proxy, sent, "setToolbarButtonState", undefined);
+    await expect(set).resolves.toBeUndefined();
+
+    const throwing = {
+      get actionId(): string {
+        throw new Error("boom");
+      },
+    };
+    let rejected: Promise<void> | undefined;
+    expect(() => {
+      rejected = proxy.host.setToolbarButtonState("sync", { menu: [throwing] });
+    }).not.toThrow();
+    await expect(rejected).rejects.toThrow(/invalid state — boom/);
+  });
+
+  it("passes main's ownership rejection back to the caller", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.setToolbarButtonState("other", { pressed: true });
+    const call = sent.find((m) => m.type === "host-call" && m.method === "setToolbarButtonState");
+    proxy.handleMessage({
+      type: "host-result",
+      requestId: call.requestId,
+      ok: false,
+      error: `Plugin "acme" setToolbarButtonState: "other" is not one of this plugin's contributes.toolbarButtons`,
+    });
+    await expect(promise).rejects.toThrow(/is not one of this plugin's/);
+  });
+
+  it("rejects an empty id or an uncloneable field without crossing the port", async () => {
+    const { proxy, sent } = makeProxy();
+    await expect(proxy.host.setToolbarButtonState("", { pressed: true })).rejects.toThrow(
+      /setToolbarButtonState: buttonId/
+    );
+    await expect(
+      proxy.host.setToolbarButtonState("sync", { tooltip: (() => "x") as never })
+    ).rejects.toThrow(/setToolbarButtonState: invalid state — tooltip/);
+    await expect(proxy.host.setToolbarButtonState("sync", [] as never)).rejects.toThrow(
+      /state must be an object/
+    );
+    const throwing = {
+      get tooltip(): string {
+        throw new Error("boom");
+      },
+    };
+    let call: Promise<void> | undefined;
+    expect(() => {
+      call = proxy.host.setToolbarButtonState("sync", throwing);
+    }).not.toThrow();
+    await expect(call).rejects.toThrow(/invalid state — boom/);
+    expect(sent.find((m) => m.type === "host-call")).toBeUndefined();
+  });
+
+  it("reads an inherited getter and keeps a __proto__ key, as the in-process schema does", () => {
+    const { proxy, sent } = makeProxy();
+    class Busy {
+      get busy(): boolean {
+        return true;
+      }
+    }
+    void proxy.host.setToolbarButtonState("sync", new Busy()).catch(() => {});
+    void proxy.host
+      .setToolbarButtonState("sync", JSON.parse('{"__proto__":false}') as never)
+      .catch(() => {});
+    const calls = sent.filter(
+      (m) => m.type === "host-call" && m.method === "setToolbarButtonState"
+    );
+    expect(calls[0]?.params.state).toEqual({ busy: true });
+    expect(Object.keys(calls[1]?.params.state ?? {})).toEqual(["__proto__"]);
+  });
+
+  it("carries an unknown key to main even when it is undefined, so the strict schema refuses it", () => {
+    const { proxy, sent } = makeProxy();
+    void proxy.host.setToolbarButtonState("sync", { label: undefined } as never).catch(() => {});
+    const call = sent.find((m) => m.type === "host-call" && m.method === "setToolbarButtonState");
+    expect(Object.keys(call?.params.state ?? {})).toEqual(["label"]);
+  });
+
+  it("resolves once the proxy is disposed, like the in-process no-op after unload", async () => {
+    const { proxy } = makeProxy();
+    const promise = proxy.host.setToolbarButtonState("sync", { busy: true });
+    proxy.dispose();
+    await expect(promise).resolves.toBeUndefined();
+    await expect(proxy.host.setToolbarButtonState("", null)).resolves.toBeUndefined();
+  });
+});
+
+describe("PluginDevWorkerHostProxy setWorktreeReviewChecks (#13806)", () => {
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.restoreAllMocks());
+
+  it("relays the vetted list as a call, normalizing a clear to null", async () => {
+    const { proxy, sent } = makeProxy();
+    const set = proxy.host.setWorktreeReviewChecks("/repo/wt", [
+      { label: " broken ", severity: "warning", detail: "" },
+    ]);
+    const call = sent.find((m) => m.type === "host-call" && m.method === "setWorktreeReviewChecks");
+    expect(call?.params).toEqual({
+      worktreeId: "/repo/wt",
+      checks: [{ label: "broken", severity: "warning" }],
+    });
+    resolveCall(proxy, sent, "setWorktreeReviewChecks", undefined);
+    await expect(set).resolves.toBeUndefined();
+
+    const clear = proxy.host.setWorktreeReviewChecks("/repo/wt", []);
+    const calls = sent.filter(
+      (m) => m.type === "host-call" && m.method === "setWorktreeReviewChecks"
+    );
+    expect(calls.at(-1)?.params).toEqual({ worktreeId: "/repo/wt", checks: null });
+    resolveCall(proxy, sent, "setWorktreeReviewChecks", undefined);
+    await expect(clear).resolves.toBeUndefined();
+  });
+
+  it("passes main's foreign-worktree rejection back to the caller", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.setWorktreeReviewChecks("/other/wt", [
+      { label: "x", severity: "info" },
+    ]);
+    const call = sent.find((m) => m.type === "host-call" && m.method === "setWorktreeReviewChecks");
+    proxy.handleMessage({
+      type: "host-result",
+      requestId: call.requestId,
+      ok: false,
+      error:
+        'Plugin "acme" setWorktreeReviewChecks: "/other/wt" is not a worktree this plugin can see',
+    });
+    await expect(promise).rejects.toThrow(/is not a worktree this plugin can see/);
+  });
+
+  it("rejects a bad list without crossing the port", async () => {
+    const { proxy, sent } = makeProxy();
+    await expect(
+      proxy.host.setWorktreeReviewChecks("/wt", [{ label: "x", severity: "blocker" } as never])
+    ).rejects.toThrow(/setWorktreeReviewChecks: checks\[0\]\.severity/);
+    await expect(
+      proxy.host.setWorktreeReviewChecks("/wt", [
+        { label: "x", severity: "info", command: "other.open" },
+      ])
+    ).rejects.toThrow(/setWorktreeReviewChecks: checks\[0\]\.command "other.open" must be one of/);
+    expect(sent.find((m) => m.type === "host-call")).toBeUndefined();
+  });
+});
+
+describe("PluginDevWorkerHostProxy setTerminalStatus (#13802)", () => {
+  it("relays the vetted status as a call and passes main's refusal back", async () => {
+    const { proxy, sent } = makeProxy();
+    const set = proxy.host.setTerminalStatus("term-1", { label: " up ", tooltip: "" });
+    const call = sent.find((m) => m.type === "host-call" && m.method === "setTerminalStatus");
+    expect(call?.params).toEqual({ terminalId: "term-1", status: { label: "up" } });
+    proxy.handleMessage({
+      type: "host-result",
+      requestId: call.requestId,
+      ok: false,
+      error: 'Plugin "acme" setTerminalStatus: "term-1" is not a terminal this plugin can see',
+    });
+    await expect(set).rejects.toThrow(/is not a terminal this plugin can see/);
+  });
+
+  it("rejects a bad id or status without crossing the port", async () => {
+    const { proxy, sent } = makeProxy();
+    await expect(proxy.host.setTerminalStatus("", { label: "x" })).rejects.toThrow(
+      /setTerminalStatus: terminalId/
+    );
+    await expect(
+      proxy.host.setTerminalStatus("t", { label: "x", command: "other.open" })
+    ).rejects.toThrow(/setTerminalStatus: status.command "other.open" must be one of/);
+    expect(sent.find((m) => m.type === "host-call")).toBeUndefined();
+  });
+});
+
+describe("PluginDevWorkerHostProxy setPanelActivity (#13820)", () => {
+  it("relays the vetted report as a call and passes main's refusal back", async () => {
+    const { proxy, sent } = makeProxy();
+    const set = proxy.host.setPanelActivity("panel-1", { state: "waiting", reason: " Pick one " });
+    const call = sent.find((m) => m.type === "host-call" && m.method === "setPanelActivity");
+    expect(call?.params).toEqual({
+      panelId: "panel-1",
+      activity: { state: "waiting", reason: "Pick one" },
+    });
+    proxy.handleMessage({
+      type: "host-result",
+      requestId: call.requestId,
+      ok: false,
+      error: 'Plugin "acme" setPanelActivity: panel "panel-1" belongs to another plugin',
+    });
+    await expect(set).rejects.toThrow(/belongs to another plugin/);
+  });
+
+  it("relays a clear as a null report", () => {
+    const { proxy, sent } = makeProxy();
+    void proxy.host.setPanelActivity("panel-1", null);
+    const call = sent.find((m) => m.type === "host-call" && m.method === "setPanelActivity");
+    expect(call?.params).toEqual({ panelId: "panel-1", activity: null });
+  });
+
+  it("rejects a bad id or report without crossing the port", async () => {
+    const { proxy, sent } = makeProxy();
+    await expect(proxy.host.setPanelActivity("", { state: "working" })).rejects.toThrow(
+      /setPanelActivity: panelId/
+    );
+    await expect(
+      proxy.host.setPanelActivity("p", { state: "working", reason: "a\nb" })
+    ).rejects.toThrow(/setPanelActivity: activity\.reason must be a single line/);
+    expect(sent.find((m) => m.type === "host-call")).toBeUndefined();
+  });
+});
+
 describe("PluginDevWorkerHostProxy setWorktreeCardStatus (#13704)", () => {
   beforeEach(() => vi.clearAllMocks());
   afterEach(() => vi.restoreAllMocks());
@@ -1502,7 +2269,29 @@ describe("PluginDevWorkerHostProxy setWorktreeCardStatus (#13704)", () => {
     await expect(
       proxy.host.setWorktreeCardStatus("/wt", { label: "x", color: "red" } as never)
     ).rejects.toThrow(/setWorktreeCardStatus: status has an unsupported field/);
+    await expect(
+      proxy.host.setWorktreeCardStatus("/wt", { label: "x", command: "other.open" })
+    ).rejects.toThrow(/setWorktreeCardStatus: status.command "other.open" must be one of/);
     expect(sent.find((m) => m.type === "host-call")).toBeUndefined();
+  });
+
+  it("sends a project plugin's command in its authored form, for main to qualify (#13776)", () => {
+    const sent: any[] = [];
+    const instanceId = "project__proj-a__acme.demo";
+    const proxy = new PluginDevWorkerHostProxy(instanceId, (msg: any) => sent.push(msg), {
+      instanceId,
+      manifestId: "acme.demo",
+      origin: "project",
+      projectId: "proj-a",
+      projectRoot: "/repo",
+    });
+    void proxy.host.setWorktreeCardStatus("/repo/wt", { label: "up", command: "acme.demo.open" });
+    const call = sent.find((m) => m.type === "host-call" && m.method === "setWorktreeCardStatus");
+    expect(call?.params).toEqual({
+      worktreeId: "/repo/wt",
+      status: { label: "up", command: "acme.demo.open" },
+    });
+    proxy.dispose();
   });
 
   it("resolves once the proxy is disposed, like the in-process no-op after unload", async () => {
@@ -2174,5 +2963,318 @@ describe("PluginDevWorkerHostProxy restartWorker (#13410)", () => {
     const promise = proxy.host.restartWorker();
     proxy.dispose();
     await expect(promise).resolves.toBe("unavailable");
+  });
+});
+
+describe("PluginDevWorkerHostProxy worktree setup steps (#13807)", () => {
+  const context = {
+    projectId: "project-1",
+    worktreeId: "/repo/wt",
+    worktreePath: "/repo/wt",
+    branch: "feature/x",
+  };
+
+  it("notifies main on register, keeps the handler in the worker, and unregisters on dispose", async () => {
+    const { proxy, sent } = makeProxy();
+    const dispose = await proxy.host.registerWorktreeSetupStep("db", vi.fn());
+
+    expect(sent.find((m) => m.type === "host-notify")).toMatchObject({
+      method: "registerWorktreeSetupStep",
+      registrationKey: "worktreeSetupStep:db",
+      params: { stepId: "db" },
+    });
+    dispose();
+    expect(sent.at(-1)).toMatchObject({
+      method: "unregisterWorktreeSetupStep",
+      params: { stepId: "db" },
+    });
+  });
+
+  it("runs the handler with the context and a signal of its own, and reports success", async () => {
+    const { proxy, sent } = makeProxy();
+    const handler = vi.fn(async () => undefined);
+    await proxy.host.registerWorktreeSetupStep("db", handler);
+
+    proxy.handleMessage({
+      type: "invoke",
+      requestId: "s1",
+      kind: "worktree-setup-step",
+      stepId: "db",
+      context,
+    } as any);
+    await flush();
+
+    expect(handler).toHaveBeenCalledWith({ ...context, signal: expect.any(AbortSignal) });
+    expect(sent.find((m) => m.type === "invoke-result")).toMatchObject({
+      requestId: "s1",
+      ok: true,
+    });
+  });
+
+  it("reports a throwing handler as a failure with its message", async () => {
+    const { proxy, sent } = makeProxy();
+    await proxy.host.registerWorktreeSetupStep("db", async () => {
+      throw new Error("quota exceeded");
+    });
+
+    proxy.handleMessage({
+      type: "invoke",
+      requestId: "s2",
+      kind: "worktree-setup-step",
+      stepId: "db",
+      context,
+    } as any);
+    await flush();
+
+    expect(sent.find((m) => m.type === "invoke-result")).toMatchObject({
+      requestId: "s2",
+      ok: false,
+      error: "quota exceeded",
+    });
+  });
+
+  it("aborts the handler's signal on invoke-cancel and posts nothing after", async () => {
+    const { proxy, sent } = makeProxy();
+    let signal: AbortSignal | undefined;
+    let finish!: () => void;
+    await proxy.host.registerWorktreeSetupStep("db", (ctx) => {
+      signal = ctx.signal;
+      return new Promise<void>((resolve) => (finish = resolve));
+    });
+
+    proxy.handleMessage({
+      type: "invoke",
+      requestId: "s3",
+      kind: "worktree-setup-step",
+      stepId: "db",
+      context,
+    } as any);
+    await flush();
+    proxy.handleMessage({ type: "invoke-cancel", requestId: "s3" } as any);
+    finish();
+    await flush();
+
+    expect(signal?.aborted).toBe(true);
+    expect(sent.some((m) => m.type === "invoke-result" && m.requestId === "s3")).toBe(false);
+  });
+
+  it("leaves the replacement bound in main when an overwritten binding's disposer runs", async () => {
+    const { proxy, sent } = makeProxy();
+    const disposeFirst = await proxy.host.registerWorktreeSetupStep("db", vi.fn());
+    await proxy.host.registerWorktreeSetupStep("db", vi.fn());
+
+    disposeFirst();
+
+    expect(
+      sent.some((m) => m.type === "host-notify" && m.method === "unregisterWorktreeSetupStep")
+    ).toBe(false);
+  });
+
+  it("keeps a replacement that reuses the same callback when the first disposer runs", async () => {
+    const { proxy, sent } = makeProxy();
+    const handler = vi.fn(async () => undefined);
+    const disposeFirst = await proxy.host.registerWorktreeSetupStep("db", handler);
+    await proxy.host.registerWorktreeSetupStep("db", handler);
+
+    disposeFirst();
+
+    expect(
+      sent.some((m) => m.type === "host-notify" && m.method === "unregisterWorktreeSetupStep")
+    ).toBe(false);
+    proxy.handleMessage({
+      type: "invoke",
+      requestId: "s9",
+      kind: "worktree-setup-step",
+      stepId: "db",
+      context,
+    } as any);
+    await flush();
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses registration once activation has closed", () => {
+    const { proxy } = makeProxy();
+    proxy.revoke();
+    expect(() => proxy.host.registerWorktreeSetupStep("db", vi.fn())).toThrow(/revoked/);
+  });
+});
+
+describe("PluginDevWorkerHostProxy tasks (#13819)", () => {
+  afterEach(() => vi.useRealTimers());
+
+  const RETRY = { actionId: "acme.demo.import" };
+
+  async function startTask(proxy: PluginDevWorkerHostProxy, sent: any[], cancellable = true) {
+    const started = proxy.host.tasks.start({ title: " Importing ", cancellable, retry: RETRY });
+    const call = sent.find((m) => m.type === "host-call" && m.method === "tasks.start");
+    proxy.handleMessage({
+      type: "host-result",
+      requestId: call.requestId,
+      ok: true,
+      result: { id: "t-1" },
+    });
+    return { task: await started, call };
+  }
+
+  it("relays the vetted options with a cancel subscription that aborts the plugin's signal", async () => {
+    const { proxy, sent } = makeProxy();
+    const { task, call } = await startTask(proxy, sent);
+
+    expect(call.params).toEqual({
+      subscriptionId: expect.any(String),
+      options: { title: "Importing", cancellable: true, fraction: null, retry: RETRY },
+    });
+    expect(task.id).toBe("t-1");
+    expect(task.signal.aborted).toBe(false);
+    proxy.handleMessage({
+      type: "subscription-event",
+      subscriptionId: call.params.subscriptionId,
+      payload: { cause: "cancelled" },
+    });
+    expect(task.signal.aborted).toBe(true);
+    expect(task.signal.reason).toMatchObject({ name: "AbortError", cause: "cancelled" });
+  });
+
+  it("reads an abort without a cause as an interruption, never a cancel", async () => {
+    const { proxy, sent } = makeProxy();
+    const { task, call } = await startTask(proxy, sent);
+    proxy.handleMessage({
+      type: "subscription-event",
+      subscriptionId: call.params.subscriptionId,
+      payload: null,
+    });
+    expect(task.signal.reason).toMatchObject({ name: "AbortError", cause: "interrupted" });
+  });
+
+  it("sends one report per window per task, the latest fields winning", async () => {
+    vi.useFakeTimers();
+    const { proxy, sent } = makeProxy();
+    const { task } = await startTask(proxy, sent);
+
+    task.report({ fraction: 0.1, detail: "1 of 10" });
+    task.report({ fraction: 0.2 });
+    task.report({ fraction: 0.3 });
+    expect(sent.filter((m) => m.method === "tasks.report")).toEqual([]);
+    vi.advanceTimersByTime(150);
+
+    expect(sent.filter((m) => m.method === "tasks.report")).toEqual([
+      {
+        type: "host-notify",
+        method: "tasks.report",
+        params: { reports: [{ taskId: "t-1", progress: { fraction: 0.3, detail: "1 of 10" } }] },
+      },
+    ]);
+  });
+
+  it("finishes without the progress still waiting, and ignores everything after", async () => {
+    vi.useFakeTimers();
+    const { proxy, sent } = makeProxy();
+    const { task, call } = await startTask(proxy, sent);
+
+    task.report({ fraction: 0.5 });
+    const finished = task.finish({ outcome: "failed", message: "Offline" });
+    const finishCall = sent.find((m) => m.type === "host-call" && m.method === "tasks.finish");
+    expect(finishCall.params).toEqual({
+      taskId: "t-1",
+      result: { outcome: "failed", message: "Offline" },
+    });
+    proxy.handleMessage({
+      type: "host-result",
+      requestId: finishCall.requestId,
+      ok: true,
+      result: undefined,
+    });
+    await finished;
+
+    task.report({ fraction: 0.9 });
+    await task.finish({ outcome: "succeeded" });
+    vi.advanceTimersByTime(300);
+    expect(sent.filter((m) => m.method === "tasks.report")).toEqual([]);
+    expect(sent.filter((m) => m.method === "tasks.finish")).toHaveLength(1);
+    // The cancel subscription went with the task.
+    proxy.handleMessage({
+      type: "subscription-event",
+      subscriptionId: call.params.subscriptionId,
+      payload: null,
+    });
+    expect(task.signal.aborted).toBe(false);
+  });
+
+  it("rejects bad options and throws on bad progress without crossing the port", async () => {
+    const { proxy, sent } = makeProxy();
+    await expect(proxy.host.tasks.start({ title: "", retry: RETRY })).rejects.toThrow(
+      /tasks\.start: title must not be empty/
+    );
+    expect(sent.find((m) => m.type === "host-call")).toBeUndefined();
+
+    const { task } = await startTask(proxy, sent);
+    expect(() => task.report({ fraction: -1 })).toThrow(/task\.report: progress\.fraction/);
+    await expect(task.finish({ outcome: "nope" } as never)).rejects.toThrow(/task\.finish/);
+  });
+
+  it("hands back an inert handle when main says the plugin unloaded, or after dispose", async () => {
+    const { proxy, sent } = makeProxy();
+    const started = proxy.host.tasks.start({ title: "T", retry: RETRY });
+    const call = sent.find((m) => m.type === "host-call" && m.method === "tasks.start");
+    proxy.handleMessage({
+      type: "host-result",
+      requestId: call.requestId,
+      ok: true,
+      result: { id: "t-x", inert: true },
+    });
+    expect((await started).signal.aborted).toBe(true);
+
+    proxy.dispose();
+    const late = await proxy.host.tasks.start({ title: "T", retry: RETRY });
+    expect(late.signal.aborted).toBe(true);
+  });
+
+  it("drops the cancel subscription when the start is refused", async () => {
+    const { proxy, sent } = makeProxy();
+    const started = proxy.host.tasks.start({ title: "T", retry: RETRY });
+    const call = sent.find((m) => m.type === "host-call" && m.method === "tasks.start");
+    proxy.handleMessage({
+      type: "host-result",
+      requestId: call.requestId,
+      ok: false,
+      error: 'Plugin "acme.demo" tasks.start: already has 16 unfinished tasks',
+    });
+    await expect(started).rejects.toThrow(/unfinished tasks/);
+    const subscriptions = Reflect.get(Reflect.get(proxy, "rpc"), "subscriptions") as Map<
+      string,
+      unknown
+    >;
+    expect(subscriptions.has(call.params.subscriptionId)).toBe(false);
+  });
+
+  it("ends a task whose start answered only after the worker gave up on it", async () => {
+    vi.useFakeTimers();
+    const { proxy, sent } = makeProxy();
+    const started = proxy.host.tasks.start({ title: "T", retry: RETRY });
+    const rejected = expect(started).rejects.toMatchObject({ code: "TIMEOUT" });
+    const call = sent.find((m) => m.type === "host-call" && m.method === "tasks.start");
+
+    await vi.advanceTimersByTimeAsync(PLUGIN_HOST_CALL_TIMEOUT_MS);
+    await rejected;
+    proxy.handleMessage({
+      type: "host-result",
+      requestId: call.requestId,
+      ok: true,
+      result: { id: "orphan" },
+    });
+
+    expect(
+      sent.filter((m) => m.type === "host-call" && m.method === "tasks.finish").map((m) => m.params)
+    ).toEqual([{ taskId: "orphan", result: { outcome: "cancelled" } }]);
+  });
+
+  it("posts messages the main-side schema accepts", async () => {
+    vi.useFakeTimers();
+    const { proxy, sent } = makeProxy();
+    const { task } = await startTask(proxy, sent);
+    task.report({ detail: "halfway" });
+    vi.advanceTimersByTime(150);
+    void task.finish({ outcome: "cancelled" });
+    for (const message of sent) expect(parseWorkerToHostMessage(message).ok).toBe(true);
   });
 });

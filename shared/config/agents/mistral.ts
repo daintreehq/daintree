@@ -114,6 +114,9 @@ export const config: AgentConfig = {
     args: (sessionId: string) => ["--resume", sessionId],
     quitCommand: "/exit",
     sessionIdPattern: "vibe --resume ([\\w-]+)",
+    // Only looks at sessions started in the launch directory (since Vibe 2.9;
+    // earlier releases took the latest anywhere). Bare `--resume` opens a picker.
+    resumeLatestArgs: ["--continue"],
   },
   help: {
     args: [],

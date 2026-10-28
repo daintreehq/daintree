@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
-import type net from "node:net";
+import net from "node:net";
 import path from "node:path";
 import type { Readable } from "node:stream";
 import { ATTACH_STDIO_FLAG } from "../host/attachStdio.js";
@@ -14,6 +14,7 @@ import {
 import type { CommandRunner } from "./commandRunner.js";
 import { createCommandStreamTransport, type StreamCommandChild } from "./commandStreamTransport.js";
 import { sshExecutable } from "./sshExecutable.js";
+import { isValidSshTarget } from "../../../shared/utils/sshTarget.js";
 import {
   HostModeOffError,
   SshAccessError,
@@ -23,6 +24,9 @@ import {
   type LinkTransport,
   type LinkTransportConnection,
 } from "./transport.js";
+import { createLogger } from "../../utils/logger.js";
+
+const logger = createLogger("main:sshTransport");
 
 /**
  * Reach a host through the system `ssh`, never an SSH library, so the user's
@@ -156,9 +160,7 @@ export function controlPathOption(controlPath: string): string {
   return `ControlPath="${controlPath.replace(/[\\"]/g, "\\$&")}"`;
 }
 
-export function isValidSshTarget(target: string): boolean {
-  return /^[A-Za-z0-9_.@%+[\]-]{1,255}$/.test(target) && !target.startsWith("-");
-}
+export { isValidSshTarget };
 
 export function defaultSshSpawner(sshPath = sshExecutable()): SshSpawner {
   return (args) =>
@@ -181,12 +183,13 @@ function targetHash(target: string): string {
  * Changes whenever the options a master starts with change, so a master an
  * older build left running (one that may still forward the agent, say) is
  * never picked up as this build's. 1: no agent, X11 or config forwards.
- * 2: keepalives, so a master whose connection died is noticed.
+ * 2: keepalives, so a master whose connection died is noticed. 3: faster
+ * keepalives, now that they are what tells a link its host is gone.
  */
-const CONTROL_PATH_PREFIX = "cm2-";
+const CONTROL_PATH_PREFIX = "cm3-";
 
 /**
- * `cm1-%C` when it fits the platform's socket path limit; otherwise a short
+ * `cm3-%C` when it fits the platform's socket path limit; otherwise a short
  * per-target hash (%C alone is 40 characters, and ssh adds a temporary
  * suffix while binding).
  */
@@ -230,14 +233,50 @@ const NO_FORWARDING = [
  * one is reused (ControlMaster=auto) and every command through it hangs until
  * the kernel gives up on the TCP connection. They only act on the process
  * that owns the connection, which is whichever of these calls becomes the
- * master, so every call carries them.
+ * master, so every call carries them. They are also how a link learns its
+ * host is gone: the link itself waits out a host whose main loop is stalled,
+ * and sshd answers these while it is, so a dead connection still ends the
+ * link in about 20 s.
  */
-const KEEPALIVE = ["-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3"];
+const KEEPALIVE = ["-o", "ServerAliveInterval=5", "-o", "ServerAliveCountMax=4"];
+
+/**
+ * Every call here names its own command, so a `RemoteCommand` in the user's
+ * config for the host would make ssh refuse it ("Cannot execute command-line
+ * and remote command"), and a `RequestTTY force` would put a pty under stdin
+ * fed scripts and the binary attach link. `IgnoreUnknown` comes first so an
+ * ssh older than 7.6, which has no `RemoteCommand`, skips it instead of
+ * failing. The first `IgnoreUnknown` wins rather than adding to the user's,
+ * so it is `*`: a narrower list would make options their config already
+ * tolerates fatal.
+ */
+export const OWN_COMMAND_ARGS = [
+  "-o",
+  "IgnoreUnknown=*",
+  "-o",
+  "RemoteCommand=none",
+  "-o",
+  "RequestTTY=no",
+];
+
+/**
+ * Left to the kernel, a host that's off or behind a route that drops packets
+ * takes 75 s to refuse on macOS, past the command deadline, which then cuts
+ * ssh off before it says why. It applies per address, so two that both drop
+ * packets still end inside {@link SSH_COMMAND_TIMEOUT_MS}; a reused master
+ * doesn't connect, so it never applies there.
+ */
+const CONNECT_TIMEOUT = ["-o", "ConnectTimeout=10"];
+
+/** How long one ssh command may run before it is stopped. */
+export const SSH_COMMAND_TIMEOUT_MS = 30_000;
 
 export function sshCommonArgs(controlPath: string, controlPersist = "10m"): string[] {
   return [
+    ...OWN_COMMAND_ARGS,
     "-o",
     "BatchMode=yes",
+    ...CONNECT_TIMEOUT,
     ...KEEPALIVE,
     ...NO_FORWARDING,
     "-o",
@@ -335,6 +374,7 @@ export function buildForwardArgs(
     "ForwardAgent=no",
     "-o",
     "ForwardX11=no",
+    ...CONNECT_TIMEOUT,
     ...KEEPALIVE,
     "-o",
     "ControlPath=none",
@@ -493,6 +533,70 @@ export async function closeSshMaster(
   usedMasters.delete(masterKey(target, controlPath));
   await run(sshExecutable(), buildExitArgs(target, controlPath), { timeoutMs }).catch(() => {});
   if (!controlPath.includes("%")) await fs.rm(controlPath, { force: true }).catch(() => {});
+}
+
+/** Every name a build gives a master's control socket: `cm1-…`, `cm2-…`, and the temporary one ssh binds first. */
+const CONTROL_SOCKET_NAME = /^cm\d*-/;
+
+/**
+ * Masters a previous launch left running because it crashed or was killed,
+ * so its quit never told them to exit. This launch would reuse one (the
+ * control path is the same every launch) with that launch's port forwards
+ * still bound on it, unlisted and unstoppable here; an older build's keeps its
+ * forwards bound until it times out. Each is told to exit and its socket
+ * removed, as a normal quit would have, before anything here dials a host.
+ */
+export async function exitStaleSshMasters(
+  run: CommandRunner,
+  clientDir: string,
+  timeoutMs: number
+): Promise<void> {
+  let names: string[];
+  try {
+    names = await fs.readdir(clientDir);
+  } catch {
+    return;
+  }
+  await Promise.all(
+    names
+      .filter((name) => CONTROL_SOCKET_NAME.test(name))
+      .map(async (name) => {
+        const socketPath = path.join(clientDir, name);
+        try {
+          if (!(await fs.lstat(socketPath)).isSocket()) return;
+        } catch {
+          return;
+        }
+        // The socket names the master; the destination is only there because ssh requires one.
+        const args = ["-F", "/dev/null", "-o", controlPathOption(socketPath), "-O", "exit", "--"];
+        const result = await run(sshExecutable(), [...args, "localhost"], { timeoutMs }).catch(
+          () => null
+        );
+        // A master that wouldn't go keeps its socket: without it, nothing could reach it again.
+        if (result?.code === 0 || (await isDeadSocket(socketPath, timeoutMs))) {
+          await fs.rm(socketPath, { force: true }).catch(() => {});
+        } else {
+          logger.warn("A master left by an earlier launch didn't exit");
+        }
+      })
+  );
+}
+
+/** Whether nothing answers on a unix socket any more: its process is gone. */
+function isDeadSocket(socketPath: string, timeoutMs: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = net.connect({ path: socketPath });
+    const finish = (dead: boolean) => {
+      clearTimeout(timer);
+      socket.destroy();
+      resolve(dead);
+    };
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    socket.once("connect", () => finish(false));
+    socket.once("error", (error: NodeJS.ErrnoException) =>
+      finish(error.code === "ECONNREFUSED" || error.code === "ENOENT")
+    );
+  });
 }
 
 /**
@@ -721,7 +825,7 @@ export class SshTransport implements LinkTransport {
     }
     const transport = createCommandStreamTransport(
       () => this.spawnStream(buildAttachArgs(target, controlPath, command, controlPersist)),
-      { preambleTimeoutMs: this.options.commandTimeoutMs ?? 30_000 }
+      { preambleTimeoutMs: this.options.commandTimeoutMs ?? SSH_COMMAND_TIMEOUT_MS }
     );
     return transport.open(signal);
   }
@@ -755,6 +859,13 @@ export class SshTransport implements LinkTransport {
 
     let dispose: () => Promise<void>;
     const resolved = await this.resolveControlPath(controlPath, signal);
+    const cancelViaMaster = async () => {
+      await this.run(
+        buildCancelArgs(target, controlPath, localSocket, remoteSocket, resolved),
+        new AbortController().signal
+      ).catch(() => {});
+      await fs.rm(localSocket, { force: true }).catch(() => {});
+    };
     const viaMaster = await this.run(
       buildMuxForwardArgs(target, controlPath, localSocket, remoteSocket, resolved),
       signal
@@ -763,13 +874,7 @@ export class SshTransport implements LinkTransport {
       () => false
     );
     if (viaMaster) {
-      dispose = async () => {
-        await this.run(
-          buildCancelArgs(target, controlPath, localSocket, remoteSocket, resolved),
-          new AbortController().signal
-        ).catch(() => {});
-        await fs.rm(localSocket, { force: true }).catch(() => {});
-      };
+      dispose = cancelViaMaster;
       try {
         await waitForSocket(localSocket, this.options.forwardTimeoutMs ?? 15_000, signal);
       } catch (err) {
@@ -777,7 +882,11 @@ export class SshTransport implements LinkTransport {
         throw err;
       }
     } else {
-      if (signal.aborted) throw new TransportError("Connection cancelled", null);
+      if (signal.aborted) {
+        // Cancelled mid-request (a Retry, a stop): the master may hold the forward all the same.
+        await cancelViaMaster();
+        throw new TransportError("Connection cancelled", null);
+      }
       const forward = await this.startForward(
         buildForwardArgs(target, localSocket, remoteSocket),
         localSocket,
@@ -815,7 +924,7 @@ export class SshTransport implements LinkTransport {
   }
 
   private run(args: string[], signal: AbortSignal, timeoutOverrideMs?: number): Promise<RunResult> {
-    const timeoutMs = timeoutOverrideMs ?? this.options.commandTimeoutMs ?? 30_000;
+    const timeoutMs = timeoutOverrideMs ?? this.options.commandTimeoutMs ?? SSH_COMMAND_TIMEOUT_MS;
     return new Promise((resolve, reject) => {
       if (signal.aborted) {
         reject(new TransportError("Connection cancelled", null));
@@ -885,7 +994,8 @@ export class SshTransport implements LinkTransport {
     localSocket: string,
     signal: AbortSignal
   ): Promise<SshChild> {
-    const timeoutMs = this.options.forwardTimeoutMs ?? 15_000;
+    // It dials afresh, so it gets the deadline any other dialling command has.
+    const timeoutMs = this.options.forwardTimeoutMs ?? SSH_COMMAND_TIMEOUT_MS;
     return new Promise((resolve, reject) => {
       let child: SshChild;
       try {

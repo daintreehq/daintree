@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import path from "node:path";
-import type { ClientEndpoint } from "../../ipc/endpoint.js";
+import { isSessionEndpoint, type ClientEndpoint } from "../../ipc/endpoint.js";
 import { getEndpointRegistry } from "../../ipc/endpointRegistry.js";
 import { getDriveLeaseService } from "../../services/DriveLeaseService.js";
 import type { LinkSession } from "../link/session.js";
@@ -34,6 +34,7 @@ import {
   StartCloneSchema,
   StartPlaceWorktreeSchema,
   SuggestDestinationSchema,
+  type AssistantStepMark,
   type LinkDestinationCheck,
 } from "./linkMethods.js";
 
@@ -50,15 +51,6 @@ export interface ProjectsHostAuthority {
   isDriving(projectId: string, endpoint: BoundEndpoint): boolean;
   /** The endpoint holding the project's drive lease, or null while nobody does. */
   holderEndpointId(projectId: string): string | null;
-}
-
-/**
- * Whether `endpointId` is one of this session's views. SessionHost names a
- * remote endpoint `remote:<sessionId>:<clientEndpointId>`; the session id is
- * the host's own, unlike the client id a HELLO merely claims.
- */
-export function isSessionEndpoint(sessionId: string, endpointId: string): boolean {
-  return endpointId.startsWith(`remote:${sessionId}:`);
 }
 
 export const defaultProjectsHostAuthority: ProjectsHostAuthority = {
@@ -279,6 +271,14 @@ function notAttached(): AppError {
   });
 }
 
+function assistantsRefused(): AppError {
+  return new AppError({
+    code: "PERMISSION",
+    message: "This host doesn't let other machines' assistants work here",
+    userMessage: "This host's \"Let other machines' assistants work here\" is off.",
+  });
+}
+
 function drivenElsewhere(): AppError {
   return new AppError({
     code: "DRIVEN_ELSEWHERE",
@@ -340,6 +340,12 @@ export interface AttachProjectsHostOptions {
   pushRecords?: HostPushRecords;
   /** Shared by every session, so no session can claim another's operation id. */
   operationOwners?: HostOperationOwners;
+  /**
+   * This host's "Let other machines' assistants work here", read at each call
+   * (#14140): a step a Shell's assistant asked for is refused while it is off.
+   * Absent, no assistant's step is taken.
+   */
+  acceptsAssistants?: () => boolean;
 }
 
 export interface ProjectsHostServer {
@@ -366,6 +372,10 @@ export function attachProjectsHost(
   const grants = options.grants ?? new ProjectHostGrants();
   const pushRecords = options.pushRecords ?? new HostPushRecords();
   const operationOwners = options.operationOwners ?? new HostOperationOwners();
+  const acceptsAssistants = (): boolean => options.acceptsAssistants?.() === true;
+  const requireAssistantsAccepted = (step: AssistantStepMark): void => {
+    if (step.assistant === true && !acceptsAssistants()) throw assistantsRefused();
+  };
   // Every push this link started, so the link closing can stop them all.
   const running = new Set<AbortController>();
   // Stands for this link when a push is cancelled by opId: only the link that
@@ -471,7 +481,9 @@ export function attachProjectsHost(
   on(ProjectLinkMethod.SUGGEST_DESTINATION, SuggestDestinationSchema, (p) =>
     service.suggestDestination(p)
   );
+  on(ProjectLinkMethod.ASSISTANT_ACCESS, EmptySchema, () => ({ accepts: acceptsAssistants() }));
   on(ProjectLinkMethod.START_CLONE, StartCloneSchema, (p) => {
+    requireAssistantsAccepted(p);
     if (!grants.useDestination(p.destinationGrant, p.destination, p.opId)) {
       throw new AppError({
         code: "PERMISSION",
@@ -500,6 +512,7 @@ export function attachProjectsHost(
     return service.cancelOperation(opId);
   });
   on(ProjectLinkMethod.OPEN, OpenSchema, async (p) => {
+    requireAssistantsAccepted(p);
     // Opening may make the branch's worktree only while no other session's
     // window holds the project; otherwise it is offered as a checkout.
     const openAuthority = {
@@ -510,7 +523,13 @@ export function attachProjectsHost(
         }
       },
     };
-    const opened = await service.open(p, openAuthority);
+    // An assistant's branch is never put into a project a window here holds,
+    // not even by naming a worktree it already has: checked once the project
+    // is resolved, however its folder was named, so that window's person decides.
+    const opened = await service.open(
+      p,
+      p.assistant === true ? { ...openAuthority, beforeAnyChange: true } : openAuthority
+    );
     if (opened.canCheckOutBranch && p.branch) {
       grants.offerCheckout(opened.projectId, p.branch);
     }
@@ -603,7 +622,8 @@ export function attachProjectsHost(
 /** Host mode: serve project calls on every session the server accepts. */
 export function installProjectsHost(
   server: ProjectsHostServer,
-  service: ProjectAcrossHostsService = getProjectAcrossHostsService()
+  service: ProjectAcrossHostsService = getProjectAcrossHostsService(),
+  acceptsAssistants?: () => boolean
 ): () => void {
   const grantsBySession = new Map<string, ProjectHostGrants>();
   const pushRecords = new HostPushRecords();
@@ -628,6 +648,7 @@ export function installProjectsHost(
       grants,
       pushRecords,
       operationOwners,
+      ...(acceptsAssistants ? { acceptsAssistants } : {}),
     });
   });
   const offExpired = server.onSessionExpired?.(({ sessionId }) => {

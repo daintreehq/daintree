@@ -5,6 +5,8 @@ export const HOST_METRICS_METHOD_CHANNELS = {
   listFleetTargets: "host-metrics:list-fleet-targets",
   submitFleet: "host-metrics:submit-fleet",
   listWorktrees: "host-metrics:list-worktrees",
+  linkActivity: "host-metrics:link-activity",
+  processInventory: "host-metrics:process-inventory",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof HOST_METRICS_METHOD_CHANNELS;

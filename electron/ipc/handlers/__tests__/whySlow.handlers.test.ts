@@ -109,4 +109,66 @@ describe("registerWhySlowHandlers — reportTerminalRendererDiagnostics", () => 
     expect(() => handler(eventFrom(77), { ...VALID_REPORT, countsByTier })).toThrow();
     expect(cacheMock.recordRendererTerminalDiagnostics).not.toHaveBeenCalled();
   });
+
+  it("accepts buffer line counts and strips anything else a renderer adds (#14213)", async () => {
+    registerWhySlowHandlers({} as never);
+
+    await getRegistered("system:report-terminal-renderer-diagnostics")(eventFrom(77), {
+      ...VALID_REPORT,
+      bufferMemory: {
+        sampledAt: 1_000,
+        terminals: [
+          { terminalId: "t1", normalLines: 10_000, alternateLines: 40, cols: 182, text: "secret" },
+        ],
+      },
+    });
+
+    const [, payload] = cacheMock.recordRendererTerminalDiagnostics.mock.calls[0];
+    expect(payload.bufferMemory).toEqual({
+      sampledAt: 1_000,
+      terminals: [{ terminalId: "t1", normalLines: 10_000, alternateLines: 40, cols: 182 }],
+    });
+  });
+
+  it("rejects malformed buffer counts", () => {
+    registerWhySlowHandlers({} as never);
+    const handler = getRegistered("system:report-terminal-renderer-diagnostics");
+    const terminal = { terminalId: "t1", normalLines: 1, alternateLines: 0, cols: 80 };
+
+    expect(() =>
+      handler(eventFrom(77), {
+        ...VALID_REPORT,
+        bufferMemory: { sampledAt: 1, terminals: [{ ...terminal, normalLines: -1 }] },
+      })
+    ).toThrow();
+    expect(() =>
+      handler(eventFrom(77), {
+        ...VALID_REPORT,
+        bufferMemory: { sampledAt: 1, terminals: [{ ...terminal, cols: 1.5 }] },
+      })
+    ).toThrow();
+    expect(() =>
+      handler(eventFrom(77), {
+        ...VALID_REPORT,
+        bufferMemory: { sampledAt: 1, terminals: Array.from({ length: 1_001 }, () => terminal) },
+      })
+    ).toThrow();
+    expect(cacheMock.recordRendererTerminalDiagnostics).not.toHaveBeenCalled();
+  });
+});
+
+describe("registerWhySlowHandlers — getMemorySnapshot", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("asks for renderer terminal buffers on the user-pulled read", async () => {
+    const deps = { ptyClient: null } as never;
+    memoryAccountingMock.getCompositeMemorySnapshot.mockResolvedValue({ timestamp: 1 });
+    registerWhySlowHandlers(deps);
+
+    await getRegistered("system:get-memory-snapshot")({});
+
+    expect(memoryAccountingMock.getCompositeMemorySnapshot).toHaveBeenCalledWith(null, {
+      rendererTerminalBuffers: deps,
+    });
+  });
 });

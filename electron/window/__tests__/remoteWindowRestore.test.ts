@@ -11,6 +11,8 @@ import { CHANNELS } from "../../ipc/channels.js";
 import { _resetRemoteServicesForTest, registerRemoteService } from "../../remote/runtime.js";
 import {
   clearPendingRemoteRestore,
+  clearPendingRemoteRestoresForHost,
+  getPendingRemoteBackgroundRestores,
   getPendingRemoteRestore,
   resetOpenWindowsTrackerForTests,
 } from "../openWindowsTracker.js";
@@ -24,6 +26,7 @@ import {
   remoteWindowReady,
   resetRemoteWindowRestoreForTests,
   restoreRemoteWindows,
+  takeHostBackgroundRestores,
   type RemoteWindowRestoreDeps,
 } from "../remoteWindowRestore.js";
 
@@ -36,7 +39,15 @@ function fakeClient(switchImpl: (...args: unknown[]) => Promise<unknown>) {
   const client = {
     list: vi.fn(() => [{ descriptor: { id: "studio-01", name: "Studio" } }]),
     switchWindowToHostProject: vi.fn(switchImpl),
-    connect: vi.fn(() => ({ status: "connecting" })),
+    restoreHostProjectInBackground: vi.fn(
+      async (
+        _windowId: number,
+        _hostId: string,
+        _projectId: string,
+        _options: { lastUsed: number; stillWanted?: () => boolean }
+      ): Promise<string> => "restored"
+    ),
+    connect: vi.fn((_payload: { hostId: string }) => ({ status: "connecting" })),
     hasPendingSwitch: vi.fn((_windowId: number) => false),
     onConnectionChange: vi.fn((listener: (hostId: string, state: State) => void) => {
       listeners.add(listener);
@@ -52,7 +63,7 @@ function fakeClient(switchImpl: (...args: unknown[]) => Promise<unknown>) {
   return client;
 }
 
-function deps(waitingWindows: Set<number>) {
+function deps(waitingWindows: Set<number>, openWindows?: Set<number>) {
   const sent: Array<{ channel: string; payload: unknown }> = [];
   const view = {
     isDestroyed: () => false,
@@ -61,6 +72,7 @@ function deps(waitingWindows: Set<number>) {
   const onRestored = vi.fn();
   const d: RemoteWindowRestoreDeps = {
     isWindowWaiting: (windowId) => waitingWindows.has(windowId),
+    canRestoreInBackground: (windowId) => openWindows?.has(windowId) ?? true,
     viewOf: () => view as never,
     onRestored,
   };
@@ -554,5 +566,215 @@ describe("restoreRemoteWindows", () => {
     remoteWindowReady(3);
     await expect(restoreRemoteWindows(deps(new Set([3])).d)).resolves.toBeUndefined();
     expect(getPendingRemoteRestore(3)).toBe(KEY);
+  });
+});
+
+describe("a window's background projects on hosts (#13932)", () => {
+  const LOCAL = "c".repeat(64);
+  const bg = (hostId: string, ch: string) => `${hostId}:${ch.repeat(64)}`;
+  const BG_1 = bg("studio-01", "b");
+  const BG_2 = bg("studio-01", "d");
+  const hosts = (...ids: string[]) => ids.map((id) => ({ descriptor: { id, name: id } }));
+  const unreachable = () =>
+    new AppError({
+      code: "HOST_DISCONNECTED",
+      message: "Host studio-01 did not connect (timeout)",
+      userMessage: "Couldn't reach this host.",
+    });
+  const restoredKeys = (client: ReturnType<typeof fakeClient>) =>
+    client.restoreHostProjectInBackground.mock.calls.map(
+      ([windowId, hostId, projectId]) => `${windowId}/${hostId}:${projectId}`
+    );
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("hands the local queue only this machine's projects", () => {
+    expect(takeHostBackgroundRestores(3, [BG_1, LOCAL, "bad host:abc"])).toEqual([
+      LOCAL,
+      "bad host:abc",
+    ]);
+    expect(getPendingRemoteBackgroundRestores(3)).toEqual([BG_1]);
+  });
+
+  it("brings them back as cached views once the window's own project has had its turn", async () => {
+    const client = fakeClient(async () => ({ outcome: "switched" }));
+    noteRemoteWindowRestore(3, KEY);
+    takeHostBackgroundRestores(3, [BG_1, LOCAL, BG_2]);
+    remoteWindowReady(3);
+    const { d, onRestored } = deps(new Set([3]));
+    await restoreRemoteWindows(d);
+    await vi.waitFor(() => expect(getPendingRemoteBackgroundRestores(3)).toEqual([]));
+    expect(restoredKeys(client)).toEqual([`3/${BG_1}`, `3/${BG_2}`]);
+    const [switched] = client.switchWindowToHostProject.mock.invocationCallOrder;
+    const [firstBackground] = client.restoreHostProjectInBackground.mock.invocationCallOrder;
+    expect(switched).toBeLessThan(firstBackground!);
+    // Ranked in the manifest's order, below every live view.
+    const [first, second] = client.restoreHostProjectInBackground.mock.calls.map(
+      ([, , , options]) => options.lastUsed
+    );
+    expect(first).toBeGreaterThan(second!);
+    expect(first).toBeLessThan(Date.now());
+    expect(onRestored).toHaveBeenCalledTimes(3);
+  });
+
+  it("never holds a window's own restore behind its background", async () => {
+    const client = fakeClient(async () => ({ outcome: "switched" }));
+    client.restoreHostProjectInBackground.mockImplementation(() => new Promise<string>(() => {}));
+    takeHostBackgroundRestores(3, [BG_1]);
+    remoteWindowReady(3);
+    noteRemoteWindowRestore(4, KEY);
+    remoteWindowReady(4);
+    await restoreRemoteWindows(deps(new Set([4])).d);
+    expect(client.switchWindowToHostProject).toHaveBeenCalledWith(
+      4,
+      "studio-01",
+      PROJECT,
+      expect.any(Function)
+    );
+    await vi.waitFor(() => expect(restoredKeys(client)).toEqual([`3/${BG_1}`]));
+  });
+
+  it("brings a host's projects back one at a time", async () => {
+    const client = fakeClient(async () => ({ outcome: "switched" }));
+    let finish: (outcome: string) => void = () => {};
+    client.restoreHostProjectInBackground.mockImplementationOnce(
+      () => new Promise<string>((resolve) => (finish = resolve))
+    );
+    takeHostBackgroundRestores(3, [BG_1]);
+    takeHostBackgroundRestores(4, [BG_2]);
+    remoteWindowReady(3);
+    remoteWindowReady(4);
+    await restoreRemoteWindows(deps(new Set()).d);
+    await vi.waitFor(() => expect(restoredKeys(client)).toEqual([`3/${BG_1}`]));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(restoredKeys(client)).toEqual([`3/${BG_1}`]);
+    finish("restored");
+    await vi.waitFor(() => expect(restoredKeys(client)).toEqual([`3/${BG_1}`, `4/${BG_2}`]));
+  });
+
+  it("keeps a host's projects waiting while it can't be reached, and brings them back once it connects", async () => {
+    const client = fakeClient(async () => ({ outcome: "switched" }));
+    client.restoreHostProjectInBackground.mockRejectedValueOnce(unreachable());
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    takeHostBackgroundRestores(3, [BG_1, BG_2]);
+    remoteWindowReady(3);
+    await restoreRemoteWindows(deps(new Set()).d);
+    await vi.waitFor(() => expect(warn).toHaveBeenCalledTimes(1));
+    // One failed reach holds the rest of that host's projects with it.
+    expect(restoredKeys(client)).toEqual([`3/${BG_1}`]);
+    expect(getPendingRemoteBackgroundRestores(3)).toEqual([BG_1, BG_2]);
+
+    client.changed("studio-01", "connected");
+    await vi.waitFor(() => expect(getPendingRemoteBackgroundRestores(3)).toEqual([]));
+    expect(restoredKeys(client)).toEqual([`3/${BG_1}`, `3/${BG_1}`, `3/${BG_2}`]);
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+
+  it("dials only the hosts the window had projects on, while it waits", async () => {
+    vi.useFakeTimers();
+    const client = fakeClient(async () => ({ outcome: "switched" }));
+    client.list.mockReturnValue(hosts("studio-01", "studio-02", "studio-03") as never);
+    client.restoreHostProjectInBackground.mockRejectedValue(unreachable());
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    takeHostBackgroundRestores(3, [bg("studio-02", "e")]);
+    remoteWindowReady(3);
+    await restoreRemoteWindows(deps(new Set()).d);
+    await vi.advanceTimersByTimeAsync(REMOTE_RESTORE_REDIAL_MS);
+    expect(client.connect.mock.calls).toEqual([[{ hostId: "studio-02" }]]);
+    warn.mockRestore();
+  });
+
+  it("lets go of a project the host no longer has, or another window has, and keeps the rest", async () => {
+    const client = fakeClient(async () => ({ outcome: "switched" }));
+    const BG_3 = bg("studio-01", "e");
+    client.restoreHostProjectInBackground
+      .mockResolvedValueOnce("project-gone")
+      .mockResolvedValueOnce("owned-elsewhere")
+      .mockResolvedValueOnce("failed");
+    takeHostBackgroundRestores(3, [BG_1, BG_2, BG_3]);
+    remoteWindowReady(3);
+    await restoreRemoteWindows(deps(new Set()).d);
+    await vi.waitFor(() => expect(client.restoreHostProjectInBackground).toHaveBeenCalledTimes(3));
+    await vi.waitFor(() => expect(getPendingRemoteBackgroundRestores(3)).toEqual([BG_3]));
+  });
+
+  it("stops at the window's warm-view ceiling, keeping the rest for the next launch", async () => {
+    const client = fakeClient(async () => ({ outcome: "switched" }));
+    const BG_OTHER = bg("studio-02", "e");
+    client.list.mockReturnValue(hosts("studio-01", "studio-02") as never);
+    let reachOther: (outcome: string) => void = () => {};
+    client.restoreHostProjectInBackground.mockImplementation(async (_w, hostId) =>
+      hostId === "studio-01" ? "deferred" : new Promise<string>((resolve) => (reachOther = resolve))
+    );
+    takeHostBackgroundRestores(3, [BG_1, BG_OTHER, BG_2]);
+    remoteWindowReady(3);
+    await restoreRemoteWindows(deps(new Set()).d);
+    await vi.waitFor(() => expect(client.restoreHostProjectInBackground).toHaveBeenCalledTimes(2));
+    // The rest of that host's wait, and a window full now takes nothing more.
+    reachOther("restored");
+    takeHostBackgroundRestores(3, [bg("studio-01", "f")]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(restoredKeys(client)).toEqual([`3/${BG_1}`, `3/${BG_OTHER}`]);
+    expect(getPendingRemoteBackgroundRestores(3)).toEqual([BG_1, BG_2, bg("studio-01", "f")]);
+  });
+
+  it("forgets a removed host's waiting projects and stops dialling it", async () => {
+    vi.useFakeTimers();
+    const client = fakeClient(async () => ({ outcome: "switched" }));
+    client.list.mockReturnValue(hosts("studio-01", "studio-02") as never);
+    client.restoreHostProjectInBackground.mockRejectedValue(unreachable());
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    takeHostBackgroundRestores(3, [BG_1, bg("studio-02", "e")]);
+    remoteWindowReady(3);
+    await restoreRemoteWindows(deps(new Set()).d);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(client.restoreHostProjectInBackground).toHaveBeenCalledTimes(2);
+    // As removing a host runs both, through its state cleanups.
+    clearPendingRemoteRestoresForHost("studio-01");
+    forgetRemoteRestoresForHost("studio-01");
+    expect(getPendingRemoteBackgroundRestores(3)).toEqual([bg("studio-02", "e")]);
+    await vi.advanceTimersByTimeAsync(REMOTE_RESTORE_REDIAL_MAX_MS * 2);
+    expect(client.connect).toHaveBeenCalled();
+    expect(client.connect.mock.calls.every(([arg]) => arg.hostId === "studio-02")).toBe(true);
+    warn.mockRestore();
+  });
+
+  it("starts at once for a window handed them after it is set up (a crash recovery's adoption)", async () => {
+    const client = fakeClient(async () => ({ outcome: "switched" }));
+    await restoreRemoteWindows(deps(new Set()).d);
+    remoteWindowReady(3);
+    takeHostBackgroundRestores(3, [BG_1]);
+    await vi.waitFor(() => expect(restoredKeys(client)).toEqual([`3/${BG_1}`]));
+  });
+
+  it("lets go of a closed window's waiting projects, and its host", async () => {
+    vi.useFakeTimers();
+    const client = fakeClient(async () => ({ outcome: "switched" }));
+    client.restoreHostProjectInBackground.mockRejectedValue(unreachable());
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    takeHostBackgroundRestores(3, [BG_1]);
+    remoteWindowReady(3);
+    await restoreRemoteWindows(deps(new Set()).d);
+    await vi.advanceTimersByTimeAsync(0);
+    forgetRemoteWindowRestore(3);
+    expect(getPendingRemoteBackgroundRestores(3)).toEqual([]);
+    await vi.advanceTimersByTimeAsync(REMOTE_RESTORE_REDIAL_MAX_MS * 2);
+    client.changed("studio-01", "connected");
+    expect(client.connect).not.toHaveBeenCalled();
+    expect(client.restoreHostProjectInBackground).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+
+  it("keeps a quitting window's projects waiting rather than starting them", async () => {
+    const client = fakeClient(async () => ({ outcome: "switched" }));
+    takeHostBackgroundRestores(3, [BG_1]);
+    remoteWindowReady(3);
+    await restoreRemoteWindows(deps(new Set(), new Set()).d);
+    await Promise.resolve();
+    expect(client.restoreHostProjectInBackground).not.toHaveBeenCalled();
+    expect(getPendingRemoteBackgroundRestores(3)).toEqual([BG_1]);
   });
 });

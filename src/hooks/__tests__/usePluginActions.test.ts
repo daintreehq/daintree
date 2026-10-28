@@ -211,6 +211,86 @@ describe("usePluginActions", () => {
     expect(actionService.get("acme.my-plugin.doThing")?.title).toBe("Updated");
   });
 
+  it("publishes a declared resultSchema as the output schema, and the provider's name", async () => {
+    const { actionService } = await import("@/services/ActionService");
+    const { usePluginActions } = await import("../usePluginActions");
+
+    const resultSchema = {
+      type: "object" as const,
+      properties: { total: { type: "integer" } },
+      required: ["total"],
+    };
+    getActionsMock.mockResolvedValue([
+      descriptor({ resultSchema, pluginName: "My Plugin" }),
+      descriptor({ id: "acme.my-plugin.plain" }),
+    ]);
+
+    renderHook(() => usePluginActions());
+    await waitFor(() => expect(actionService.has("acme.my-plugin.plain")).toBe(true));
+
+    const typed = actionService.get("acme.my-plugin.doThing");
+    expect(typed?.outputSchema).toEqual(resultSchema);
+    expect(typed?.pluginName).toBe("My Plugin");
+    expect(actionService.get("acme.my-plugin.plain")?.outputSchema).toBeUndefined();
+  });
+
+  it("re-registers when only the result schema or provider name changes", async () => {
+    const { actionService } = await import("@/services/ActionService");
+    const { usePluginActions } = await import("../usePluginActions");
+
+    let emit: ((payload: { actions: PluginActionDescriptor[] }) => void) | null = null;
+    onActionsChangedMock.mockImplementation(
+      (cb: (payload: { actions: PluginActionDescriptor[] }) => void) => {
+        emit = cb;
+        return () => {};
+      }
+    );
+    renderHook(() => usePluginActions());
+    await waitFor(() => expect(onActionsChangedMock).toHaveBeenCalled());
+
+    const first = { type: "object" as const };
+    const second = { type: "object" as const, required: ["total"] };
+    const entry = () => actionService.get("acme.my-plugin.doThing");
+    act(() => emit!({ actions: [descriptor({ pluginName: "Tool", resultSchema: first })] }));
+
+    act(() => emit!({ actions: [descriptor({ pluginName: "Tool", resultSchema: second })] }));
+    expect(entry()?.outputSchema).toEqual(second);
+
+    act(() => emit!({ actions: [descriptor({ pluginName: "Renamed", resultSchema: second })] }));
+    expect(entry()?.pluginName).toBe("Renamed");
+  });
+
+  it("reports a result main refused as RESULT_VALIDATION_ERROR, and says so in the toast", async () => {
+    const { actionService } = await import("@/services/ActionService");
+    const { usePluginActions } = await import("../usePluginActions");
+
+    const action = descriptor({ resultSchema: { type: "object" } });
+    getActionsMock.mockResolvedValue([action]);
+    invokeMock.mockRejectedValue(
+      new Error(
+        `[AppError|RESULT_VALIDATION_ERROR] Plugin action "${action.id}" returned a result that does not match its declared resultSchema`
+      )
+    );
+
+    renderHook(() => usePluginActions());
+    await waitFor(() => expect(actionService.has(action.id)).toBe(true));
+
+    const result = await actionService.dispatch(action.id, {});
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "RESULT_VALIDATION_ERROR",
+        message: `Plugin action "${action.id}" returned a result that does not match its declared resultSchema`,
+      },
+    });
+    expect(notifyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("doesn't match its declared schema"),
+      })
+    );
+  });
+
   it("classifies the synthetic definition from effectiveDanger, not the advisory danger", async () => {
     const { actionService } = await import("@/services/ActionService");
     const { usePluginActions } = await import("../usePluginActions");

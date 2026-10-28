@@ -11,10 +11,16 @@ import { PluginMcpServersSection } from "./PluginMcpServersSection";
 import { PluginLogsSection, usePluginLogs } from "./PluginLogsSection";
 import { PluginPerformanceSection, PluginStylesSection } from "./PluginPerformanceTab";
 import { usePluginPerfSnapshot } from "@/hooks/usePluginPerfSnapshot";
-import { PluginSettingsForm } from "@/components/Settings/PluginSettingsForm";
+import {
+  PluginSettingsForm,
+  settingsFocusRequestOf,
+} from "@/components/Settings/PluginSettingsForm";
+import type { PluginSettingsRequest } from "@/store/pluginManagerStore";
 import { pluginHasSettings } from "@/services/plugin/pluginSettingsHome";
 import { Button } from "@/components/ui/button";
 import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
+import { PluginTerminalLinksSection } from "./PluginTerminalLinksSection";
+import { PluginGrantSwitch } from "./PluginGrantSwitch";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import {
   SettingsSubtabBar,
@@ -40,6 +46,7 @@ import {
   type PluginInstallSource,
 } from "@shared/types/plugin";
 import { PluginDatabasesSection } from "./PluginDatabasesSection";
+import { PluginWorksWith, type WorksWithPeer } from "./PluginWorksWith";
 import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { Badge } from "@/components/ui/badge";
 
@@ -72,8 +79,9 @@ function grantedCapabilities(plugin: LoadedPluginInfo) {
  * `LoadedPluginInfo`; this only presents it so users can audit what an installed
  * plugin is allowed to do without re-opening the install dialog.
  *
- * Only rendered when `granted` is non-empty (#11302) — a plugin that declares no
- * capabilities has no Permissions tab at all, so there's no empty branch here.
+ * Only rendered when `granted` is non-empty (#11302). A plugin that declares no
+ * capabilities has no Permissions tab unless it adds worktree delete notes,
+ * and then the tab holds that switch alone, so there's no empty branch here.
  */
 function PluginCapabilityList({
   plugin,
@@ -116,147 +124,11 @@ function PluginCapabilityList({
         ))}
       </ul>
       {plugin.origin === "global" && granted.includes("project:dispatch") && (
-        <GrantSwitch pluginId={plugin.instanceId} grant="project-targeting" />
+        <PluginGrantSwitch pluginId={plugin.instanceId} grant="project-targeting" />
       )}
       {granted.includes("notification:os") && (
-        <GrantSwitch pluginId={plugin.instanceId} grant="os-notifications" />
+        <PluginGrantSwitch pluginId={plugin.instanceId} grant="os-notifications" />
       )}
-    </div>
-  );
-}
-
-const GRANT_SWITCHES = {
-  "project-targeting": {
-    label: "Allow project targeting",
-    description:
-      "Lets this plugin run actions in any open project, not just the one in front. Each targeted action is recorded in the plugin audit log.",
-    read: (pluginId: string) => window.electron.pluginCapability.getProjectTargeting({ pluginId }),
-    write: (pluginId: string, enabled: boolean) =>
-      window.electron.pluginCapability.setProjectTargeting({ pluginId, enabled }),
-  },
-  "os-notifications": {
-    label: "Allow OS notifications",
-    description:
-      "Lets this plugin's notifications also appear outside Daintree when you're away. Quiet hours and mute still apply.",
-    read: (pluginId: string) => window.electron.pluginCapability.getOsNotifications({ pluginId }),
-    write: (pluginId: string, enabled: boolean) =>
-      window.electron.pluginCapability.setOsNotifications({ pluginId, enabled }),
-  },
-} as const;
-
-/**
- * A per-plugin grant the user turns on from the Plugin Manager: "Allow project
- * targeting" (#13119) and "Allow OS notifications" (#13505). Declaring the
- * capability only lets a plugin ask; this is the grant, off until the user
- * turns it on. Deliberately not a first-use prompt: the plugins that want them
- * orchestrate agents unattended, and a dialog at 3am would stall every launch
- * behind it.
- */
-function GrantSwitch({
-  pluginId,
-  grant,
-}: {
-  pluginId: string;
-  grant: keyof typeof GRANT_SWITCHES;
-}) {
-  const { label, description, read, write } = GRANT_SWITCHES[grant];
-  const [enabled, setEnabled] = useState<boolean | null>(null);
-  const [busy, setBusy] = useState(true);
-  const [readFailed, setReadFailed] = useState(false);
-  // The value a write failed to persist. Kept until a write succeeds: a failed
-  // "off" is still revoked in memory but comes back after a restart, so a later
-  // successful read must not quietly clear the warning.
-  const [unsaved, setUnsaved] = useState<boolean | null>(null);
-  // Only the latest request may settle the row, so a slow read can't overwrite
-  // the result of a save that started after it.
-  const requestSeq = useRef(0);
-  const [readNonce, setReadNonce] = useState(0);
-
-  useEffect(() => {
-    let cancelled = false;
-    const seq = ++requestSeq.current;
-    const current = () => !cancelled && seq === requestSeq.current;
-    setBusy(true);
-    read(pluginId)
-      .then((value) => {
-        if (!current()) return;
-        setEnabled(value);
-        setReadFailed(false);
-      })
-      .catch(() => {
-        if (current()) setReadFailed(true);
-      })
-      .finally(() => {
-        if (current()) setBusy(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [pluginId, read, readNonce]);
-
-  const save = (next: boolean) => {
-    const seq = ++requestSeq.current;
-    setBusy(true);
-    write(pluginId, next)
-      .then((persisted) => {
-        if (seq !== requestSeq.current) return;
-        setEnabled(persisted);
-        setUnsaved(null);
-        setBusy(false);
-      })
-      .catch(() => {
-        if (seq !== requestSeq.current) return;
-        setUnsaved(next);
-        // Show what main has in force now rather than guessing.
-        setReadNonce((n) => n + 1);
-      });
-  };
-
-  const switchId = `plugin-${grant}-${pluginId}`;
-  const descriptionId = `${switchId}-description`;
-  const errorId = `${switchId}-error`;
-  const errorText =
-    unsaved === false
-      ? "Couldn't save turning this off, so it will be back on after a restart."
-      : unsaved === true
-        ? "Couldn't turn this on."
-        : readFailed
-          ? "Couldn't read this setting."
-          : null;
-
-  return (
-    <div className="flex items-start justify-between gap-3 pt-2 border-t border-border-default">
-      <div className="min-w-0">
-        <label htmlFor={switchId} className="block text-xs text-text-primary">
-          {label}
-        </label>
-        <div id={descriptionId} className="text-2xs text-text-secondary">
-          {description}
-        </div>
-        {errorText && (
-          <div id={errorId} className="flex items-center gap-2 mt-0.5">
-            <XCircle className="w-3 h-3 shrink-0 text-status-error" aria-hidden="true" />
-            <span className="text-2xs text-text-secondary">{errorText}</span>
-            <Button
-              variant="ghost"
-              size="xs"
-              disabled={busy}
-              onClick={() => (unsaved !== null ? save(unsaved) : setReadNonce((n) => n + 1))}
-            >
-              Retry
-            </Button>
-          </div>
-        )}
-      </div>
-      <SettingsSwitch
-        id={switchId}
-        checked={enabled === true}
-        onCheckedChange={save}
-        disabled={enabled === null || busy}
-        aria-describedby={errorText ? `${descriptionId} ${errorId}` : descriptionId}
-        aria-invalid={unsaved !== null}
-        data-testid={`plugin-${grant}-switch`}
-      />
     </div>
   );
 }
@@ -304,8 +176,16 @@ function PluginContributedCommands({ commands }: { commands: PluginActionContrib
  * names the panel you can open instead of leaving you to discover it. Panels
  * hidden from the palette (`showInPalette: false`) are still listed — the plugin
  * opens those itself — but labelled accurately so the row isn't a dead end.
+ * A kind that reports its own activity (#13820) says so, since its marks will
+ * show on the grid and the dock in the plugin's name.
  */
-function PluginContributedPanels({ panels }: { panels: PanelContribution[] }) {
+function PluginContributedPanels({
+  panels,
+  pluginId,
+}: {
+  panels: PanelContribution[];
+  pluginId: string;
+}) {
   return (
     <div className="space-y-2">
       <h4 className={SECTION_LABEL_CLASS}>Panels</h4>
@@ -318,9 +198,18 @@ function PluginContributedPanels({ panels }: { panels: PanelContribution[] }) {
                 ? "Opened by the plugin"
                 : "Open it from the new-panel menu"}
             </div>
+            {panel.reportsActivity === true && (
+              <div className="text-2xs text-text-secondary mt-0.5">Reports activity</div>
+            )}
           </li>
         ))}
       </ul>
+      {/* Declaring `reportsActivity` only lets the plugin's reports be shown on
+          its own panels; this is the switch that lets them into the attention
+          views (#13821), off until the user turns it on. */}
+      {panels.some((panel) => panel.reportsActivity === true) && (
+        <PluginGrantSwitch pluginId={pluginId} grant="panel-attention" />
+      )}
     </div>
   );
 }
@@ -419,12 +308,16 @@ interface PluginDetailPaneProps {
   onCheckForUpdate: () => void;
   /**
    * A pending `plugin.openSettings` for this plugin: switches to the Settings
-   * tab and, with a `key`, lands on that setting. `nonce` distinguishes repeats.
+   * tab and, with a `key` or a `section`, lands there. `nonce` distinguishes repeats.
    */
-  settingsRequest?: { key?: string; nonce: number } | null;
+  settingsRequest?: Omit<PluginSettingsRequest, "pluginId" | "home"> | null;
   /** Told once `settingsRequest` has been applied, so its source can drop it. */
   onSettingsRequestHandled?: (nonce: number) => void;
+  /** What is installed here, for the manifest's `worksWith`; see `buildWorksWithPeers`. */
+  worksWithPeers?: ReadonlyMap<string, WorksWithPeer>;
 }
+
+const NO_PEERS: ReadonlyMap<string, WorksWithPeer> = new Map();
 
 /**
  * Detail pane for the selected plugin (#9555, #9558). Owns the full provenance
@@ -456,6 +349,7 @@ export function PluginDetailPane({
   onCheckForUpdate,
   settingsRequest = null,
   onSettingsRequestHandled,
+  worksWithPeers = NO_PEERS,
 }: PluginDetailPaneProps) {
   const label = pluginLabel(plugin);
   const restartRequired = plugin.pendingRestart === true;
@@ -471,14 +365,18 @@ export function PluginDetailPane({
   const blocklisted = plugin.blocklisted === true;
   // From the manifest, not the running instance: a stopped plugin's settings
   // stay reachable, and its custom section says it needs the plugin enabled.
-  const hasSettings = pluginHasSettings(plugin);
+  // A per-project package's settings belong to each project's instance; the
+  // package id itself has nowhere to keep them.
+  const hasSettings = plugin.instanceMode !== "project" && pluginHasSettings(plugin);
   const mcpServers = plugin.manifest.contributes.mcpServers ?? [];
   const hasMcpServers = mcpServers.length > 0;
   const granted = grantedCapabilities(plugin);
+  const hasWorktreeDeleteNotes = (plugin.manifest.contributes.worktreeDeleteNotes?.length ?? 0) > 0;
   const commands = plugin.manifest.contributes.commands ?? [];
   const panels = plugin.manifest.contributes.panels ?? [];
   const agents = plugin.manifest.contributes.agents ?? [];
   const databases = plugin.manifest.contributes.databases ?? [];
+  const terminalLinks = plugin.manifest.contributes.terminalLinks ?? [];
   const [activeTab, setActiveTab] = useState<PluginDetailTab>("overview");
   // Read here rather than inside the tab body: the Logs tab is earned by
   // content like every other tab past Overview (#11302), and the pane cannot
@@ -530,7 +428,9 @@ export function PluginDetailPane({
   const tabs: SettingsSubtabItem[] = [
     { id: "overview", label: "Overview" },
     ...(hasSettings ? [{ id: "settings", label: "Settings" }] : []),
-    ...(granted.length > 0 ? [{ id: "capabilities", label: "Permissions" }] : []),
+    ...(granted.length > 0 || hasWorktreeDeleteNotes
+      ? [{ id: "capabilities", label: "Permissions" }]
+      : []),
     // Only plugins that actually contribute MCP servers get the runtime tab —
     // it surfaces subprocess health and restart, which is meaningless otherwise.
     ...(hasMcpServers ? [{ id: "mcp-servers", label: "MCP servers" }] : []),
@@ -569,14 +469,15 @@ export function PluginDetailPane({
   // for — leaving it in the manager's search box would put the keyboard user
   // back at the top of a list they never asked to browse.
   const requestNonce = settingsRequest?.nonce;
-  const requestKey = settingsRequest?.key;
+  const focusRequest = settingsFocusRequestOf(settingsRequest);
+  const targeted = focusRequest !== null;
   const paneRef = useRef<HTMLDivElement>(null);
   const [keylessFocusNonce, setKeylessFocusNonce] = useState<number | null>(null);
   useEffect(() => {
     if (requestNonce === undefined || !hasSettings) return;
     setActiveTab("settings");
-    if (requestKey === undefined) setKeylessFocusNonce(requestNonce);
-  }, [requestNonce, requestKey, hasSettings]);
+    if (!targeted) setKeylessFocusNonce(requestNonce);
+  }, [requestNonce, targeted, hasSettings]);
   useEffect(() => {
     if (keylessFocusNonce === null || currentTab !== "settings") return;
     paneRef.current
@@ -835,12 +736,22 @@ export function PluginDetailPane({
 
             {commands.length > 0 && <PluginContributedCommands commands={commands} />}
 
-            {panels.length > 0 && <PluginContributedPanels panels={panels} />}
+            {panels.length > 0 && (
+              <PluginContributedPanels panels={panels} pluginId={plugin.instanceId} />
+            )}
 
             {agents.length > 0 && <PluginContributedAgents agents={agents} />}
 
+            {terminalLinks.length > 0 && (
+              <PluginTerminalLinksSection pluginId={plugin.instanceId} />
+            )}
+
             {databases.length > 0 && (
               <PluginDatabasesSection databases={databases} origin={plugin.origin} />
+            )}
+
+            {plugin.manifest.worksWith && plugin.manifest.worksWith.length > 0 && (
+              <PluginWorksWith ids={plugin.manifest.worksWith} peers={worksWithPeers} />
             )}
 
             {plugin.manifest.authors && plugin.manifest.authors.length > 0 && (
@@ -858,17 +769,18 @@ export function PluginDetailPane({
           <PluginSettingsForm
             plugin={plugin}
             viewScope="user"
-            focusRequest={
-              requestNonce !== undefined && requestKey !== undefined
-                ? { key: requestKey, nonce: requestNonce }
-                : null
-            }
+            focusRequest={focusRequest}
             onFocusHandled={onSettingsRequestHandled}
           />
         )}
 
         {currentTab === "capabilities" && (
-          <PluginCapabilityList plugin={plugin} granted={granted} />
+          <div className="space-y-2">
+            {granted.length > 0 && <PluginCapabilityList plugin={plugin} granted={granted} />}
+            {hasWorktreeDeleteNotes && (
+              <PluginGrantSwitch pluginId={plugin.instanceId} grant="worktree-delete-notes" />
+            )}
+          </div>
         )}
 
         {currentTab === "mcp-servers" && hasMcpServers && (

@@ -5,10 +5,6 @@ import { EditorState } from "@codemirror/state";
 import type { Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 
-vi.mock("@/store/panelStore", () => ({
-  usePanelStore: { getState: () => ({ setPreferredTerminalFocusTarget: vi.fn() }) },
-}));
-
 vi.mock("@/store/terminalInputStore", () => ({
   useTerminalInputStore: { getState: () => ({ isVoiceSubmitting: () => false }) },
 }));
@@ -51,9 +47,42 @@ function params(): Params {
   };
 }
 
-function hookExtension(): Extension {
-  const { result } = renderHook(() => useEditorDomHandlers(params()));
+function hookExtension(overrides: Partial<Params> = {}): Extension {
+  const { result } = renderHook(() => useEditorDomHandlers({ ...params(), ...overrides }));
   return result.current;
+}
+
+type Latest = NonNullable<Params["latestRef"]["current"]>;
+
+function agentLatest(overrides: Partial<Latest> = {}): Latest {
+  return {
+    disabled: false,
+    isAutocompleteOpen: false,
+    autocompleteItems: [],
+    staleItemKeys: new Set(),
+    selectedIndex: 0,
+    value: "",
+    terminalId: "t1",
+    voiceId: "t1",
+    onSendKey: vi.fn(),
+    isVoiceActiveForPanel: false,
+    isExpanded: false,
+    altChords: ["p", "t", "o"],
+    ...overrides,
+  };
+}
+
+/** Option+P as macOS delivers it with Option as a third-level shift: the key is
+ * the glyph, the key code is still the letter's. */
+function optionKeydown(key: string, keyCode: number, code: string) {
+  return new KeyboardEvent("keydown", {
+    key,
+    code,
+    keyCode,
+    altKey: true,
+    bubbles: true,
+    cancelable: true,
+  });
 }
 
 /** Stubbed rather than spied: jsdom finishes a real read across later tasks, so
@@ -142,5 +171,83 @@ describe("useEditorDomHandlers installed in a live editor", () => {
     view.contentDOM.dispatchEvent(fileDrop());
 
     expect(ancestor).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("an agent's documented Option chords in a live editor", () => {
+  it("sends Option+P to the agent and leaves the draft as it was", () => {
+    const latest = agentLatest();
+    const { view } = mountEditor([hookExtension({ latestRef: { current: latest } })]);
+    view.dispatch({ changes: { from: 0, insert: "refactor the parser" } });
+    const event = optionKeydown("π", 80, "KeyP");
+
+    view.contentDOM.dispatchEvent(event);
+
+    expect(latest.onSendKey).toHaveBeenCalledWith("alt+p");
+    expect(event.defaultPrevented).toBe(true);
+    expect(view.state.doc.toString()).toBe("refactor the parser");
+  });
+
+  it("leaves a chord the agent doesn't document to type", () => {
+    const latest = agentLatest();
+    const { view } = mountEditor([hookExtension({ latestRef: { current: latest } })]);
+    const event = optionKeydown("@", 76, "KeyL");
+
+    view.contentDOM.dispatchEvent(event);
+
+    expect(latest.onSendKey).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("leaves Option+P alone while the composer is disabled", () => {
+    const latest = agentLatest({ disabled: true });
+    const { view } = mountEditor([hookExtension({ latestRef: { current: latest } })]);
+    const event = optionKeydown("π", 80, "KeyP");
+
+    view.contentDOM.dispatchEvent(event);
+
+    expect(latest.onSendKey).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("leaves Option+P to type when the host gives the composer no way to send keys", () => {
+    const latest = agentLatest({ onSendKey: undefined });
+    const exceptions = vi.fn();
+    const { view } = mountEditor([
+      hookExtension({ latestRef: { current: latest } }),
+      EditorView.exceptionSink.of(exceptions),
+    ]);
+    const event = optionKeydown("π", 80, "KeyP");
+
+    view.contentDOM.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(exceptions).not.toHaveBeenCalled();
+  });
+
+  it("leaves Option+P to a composition the composer is tracking", () => {
+    // The ref alone: a real composition would stop CodeMirror short of the
+    // handler, and the test would pass without reaching it.
+    const latest = agentLatest();
+    const { view } = mountEditor([
+      hookExtension({ latestRef: { current: latest }, isComposingRef: { current: true } }),
+    ]);
+    const event = optionKeydown("π", 80, "KeyP");
+
+    view.contentDOM.dispatchEvent(event);
+
+    expect(latest.onSendKey).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("leaves Option+P to type when the composer's terminal declares no chords", () => {
+    const latest = agentLatest({ altChords: undefined });
+    const { view } = mountEditor([hookExtension({ latestRef: { current: latest } })]);
+    const event = optionKeydown("π", 80, "KeyP");
+
+    view.contentDOM.dispatchEvent(event);
+
+    expect(latest.onSendKey).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
   });
 });

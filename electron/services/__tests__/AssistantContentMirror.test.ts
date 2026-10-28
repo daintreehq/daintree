@@ -7,8 +7,10 @@ import {
   agentSupportsAssistantContent,
   ensureAssistantContentDir,
   getProjectAssistantContentDir,
+  namePluginSkillManifest,
   stripExecutableFrontmatter,
   syncAssistantContent,
+  type AssistantPluginContent,
 } from "../AssistantContentMirror.js";
 
 let tmpDir: string;
@@ -850,6 +852,163 @@ describe("bundled help template invariant", () => {
     for (const root of [".claude/commands", ".claude/skills", ".agents", "reference"]) {
       await expect(fs.stat(path.join(repoHelpDir, ...root.split("/")))).rejects.toThrow();
     }
+  });
+});
+
+describe("plugin knowledge (#13828)", () => {
+  function ledger(overrides: Partial<AssistantPluginContent> = {}): AssistantPluginContent {
+    return {
+      key: "daintree-ledger",
+      skills: new Map([
+        [
+          "daintree-ledger-reconcile",
+          new Map([
+            ["SKILL.md", "---\nname: daintree-ledger-reconcile\n---\nReconcile."],
+            ["steps/detail.md", "Detail."],
+          ]),
+        ],
+      ]),
+      references: new Map([["schema.md", "Tables."]]),
+      ...overrides,
+    };
+  }
+
+  function syncWith(agentId: string, pluginContent: AssistantPluginContent[]) {
+    return syncAssistantContent({
+      sessionPath,
+      projectPath,
+      agentId,
+      globalContentDir: globalDir,
+      pluginContent,
+    });
+  }
+
+  it("writes each backend's copy of a plugin's skills and its reference folder", async () => {
+    const claude = await syncWith("claude", [ledger()]);
+    expect(claude).toMatchObject({ pluginContent: ["daintree-ledger"], referenceFiles: 0 });
+    expect(await readSession(".claude/skills/daintree-ledger-reconcile/SKILL.md")).toContain(
+      "Reconcile."
+    );
+    expect(await readSession(".claude/skills/daintree-ledger-reconcile/steps/detail.md")).toBe(
+      "Detail."
+    );
+    expect(await readSession("reference/plugins/daintree-ledger/schema.md")).toBe("Tables.");
+
+    // Copilot reads both trees, so it gets the shared one only.
+    await syncWith("copilot", [ledger()]);
+    expect(await readSession(".agents/skills/daintree-ledger-reconcile/SKILL.md")).toContain(
+      "Reconcile."
+    );
+    expect(await readSession(".claude/skills/daintree-ledger-reconcile/SKILL.md")).toBeNull();
+  });
+
+  it("retires a plugin's files once it is no longer handed over", async () => {
+    await syncWith("codex", [ledger()]);
+    expect(await readSession(".agents/skills/daintree-ledger-reconcile/SKILL.md")).not.toBeNull();
+
+    const result = await syncWith("codex", []);
+
+    expect(result).toMatchObject({ pluginContent: [], staleFailures: [] });
+    expect(await readSession(".agents/skills/daintree-ledger-reconcile/SKILL.md")).toBeNull();
+    expect(await readSession("reference/plugins/daintree-ledger/schema.md")).toBeNull();
+    await expect(fs.stat(path.join(sessionPath, "reference", "plugins"))).rejects.toThrow();
+  });
+
+  it("leaves a plugin out whole rather than write over the user's content", async () => {
+    await writeSource(
+      getProjectAssistantContentDir(projectPath),
+      ".claude/skills/Daintree-Ledger-Reconcile/SKILL.md",
+      "The user's own."
+    );
+
+    const result = await syncWith("claude", [ledger()]);
+
+    expect(result).toMatchObject({ pluginContent: [] });
+    expect(await readSession(".claude/skills/Daintree-Ledger-Reconcile/SKILL.md")).toBe(
+      "The user's own."
+    );
+    expect(await readSession("reference/plugins/daintree-ledger/schema.md")).toBeNull();
+  });
+
+  it("counts only the user's reference files as theirs", async () => {
+    await writeSource(globalDir, "reference/notes.md", "Mine.");
+
+    const result = await syncWith("claude", [ledger()]);
+
+    expect(result).toMatchObject({ referenceFiles: 1, pluginContent: ["daintree-ledger"] });
+  });
+
+  it("leaves a plugin out whole when a user file sits where its folder would go", async () => {
+    await writeSource(globalDir, "reference/plugins", "The user's own.");
+
+    const result = await syncWith("claude", [ledger()]);
+
+    expect(result).toMatchObject({ pluginContent: [], referenceFiles: 1, staleFailures: [] });
+    expect(await readSession("reference/plugins")).toBe("The user's own.");
+    expect(await readSession(".claude/skills/daintree-ledger-reconcile/SKILL.md")).toBeNull();
+  });
+
+  it("leaves a plugin out whole when two of its files differ only by case", async () => {
+    const result = await syncWith("claude", [
+      ledger({
+        references: new Map([
+          ["Guide.md", "One."],
+          ["guide.md", "Two."],
+        ]),
+      }),
+    ]);
+
+    expect(result).toMatchObject({ pluginContent: [] });
+    expect(await readSession(".claude/skills/daintree-ledger-reconcile/SKILL.md")).toBeNull();
+  });
+
+  it("retires the files it did write when a plugin can't be mirrored whole", async () => {
+    // A file where the plugin's reference folder belongs stops that copy.
+    await fs.mkdir(path.join(sessionPath, "reference", "plugins"), { recursive: true });
+    await fs.writeFile(path.join(sessionPath, "reference", "plugins", "daintree-ledger"), "x");
+
+    const result = await syncWith("claude", [ledger()]);
+
+    expect(result).toMatchObject({ pluginContent: [], staleFailures: [] });
+    expect(await readSession(".claude/skills/daintree-ledger-reconcile/SKILL.md")).toBeNull();
+    expect(
+      await readSession(".claude/skills/daintree-ledger-reconcile/steps/detail.md")
+    ).toBeNull();
+    const manifest = JSON.parse((await readSession(".daintree-user-content.json")) ?? "{}");
+    expect(manifest.files).toEqual([]);
+  });
+
+  it("refuses a plugin file name the cleanup could never own", async () => {
+    const result = await syncWith("claude", [
+      ledger({ references: new Map([["a:b.md", "Odd."]]) }),
+    ]);
+
+    expect(result).toMatchObject({ pluginContent: [] });
+    expect(await readSession(".claude/skills/daintree-ledger-reconcile/SKILL.md")).toBeNull();
+  });
+});
+
+describe("namePluginSkillManifest", () => {
+  it("names the skill after its directory and keeps only descriptive frontmatter", () => {
+    const out = namePluginSkillManifest(
+      "---\nname: reconcile\ndescription: Reconcile a month.\nhooks:\n  PreToolUse: []\nallowed-tools: Bash\ncontext: fork\nagent: Explore\nmodel: opus\nshell: bash\n---\nBody.",
+      "daintree-ledger-reconcile",
+      "> From the Ledger plugin.\n\n"
+    );
+
+    expect(out).toBe(
+      "---\nname: daintree-ledger-reconcile\ndescription: Reconcile a month.\n---\n\n> From the Ledger plugin.\n\nBody."
+    );
+  });
+
+  it("adds frontmatter to a skill that has none", () => {
+    expect(namePluginSkillManifest("\uFEFFBody.", "daintree-x-y", "")).toBe(
+      "---\nname: daintree-x-y\n---\n\nBody."
+    );
+  });
+
+  it("throws on frontmatter that isn't a mapping", () => {
+    expect(() => namePluginSkillManifest("---\n- a\n---\nBody.", "n", "")).toThrow("not a mapping");
   });
 });
 

@@ -9,10 +9,11 @@ import {
   buildHostMenuRows,
   describeHostAgentClis,
   describeHostMenuState,
-  describeHostRowMetrics,
   describeHostRowStatus,
   hostChipStatus,
   hostChipStatusText,
+  hostMenuNoteAge,
+  hostMenuRowHasTrouble,
   updateActionLabel,
   updateTargetFor,
 } from "../hostModel";
@@ -145,7 +146,27 @@ describe("describeHostRowStatus", () => {
     expect(text).not.toMatch(/asleep|timeout/i);
   });
 
-  it("says Host mode is off on a host that answered, rather than unreachable", () => {
+  it("says a host that announced its shutdown is restarting, through every dial", () => {
+    const restartDial: HostConnectionState = {
+      status: "unreachable",
+      lastSeenAt: 1,
+      detail: "Daintree isn't running in Host mode there (no host.json).",
+      restarting: true,
+    };
+    const [, failed] = rowsFor([entry("h1", "studio-03", restartDial, null, { lastSeenAt: 1 })]);
+    const [, dialling] = rowsFor([
+      entry("h1", "studio-03", { status: "connecting", attempt: 3, restarting: true }),
+    ]);
+    for (const row of [failed!, dialling!]) {
+      expect(describeHostRowStatus(row, now)).toBe("Restarting…");
+      expect(describeHostMenuState(row, now)).toEqual({ state: "Restarting…", note: null });
+      expect(hostMenuNoteAge(row)).toBeNull();
+      expect(hostMenuRowHasTrouble(row)).toBe(false);
+    }
+    expect(hostChipStatus(false, restartDial, null)).toBe("connecting");
+  });
+
+  it("says no Daintree is listening on a host that answered, rather than unreachable", () => {
     const [, row] = rowsFor([
       entry("h1", "studio-03", {
         status: "unreachable",
@@ -154,8 +175,33 @@ describe("describeHostRowStatus", () => {
         hostModeOff: true,
       }),
     ]);
-    expect(describeHostRowStatus(row!, now)).toBe("Host mode off");
-    expect(describeHostMenuState(row!, now)).toEqual({ state: "Host mode off", note: null });
+    expect(describeHostRowStatus(row!, now)).toBe("Not listening");
+    expect(describeHostMenuState(row!, now)).toEqual({ state: "Not listening", note: null });
+
+    // A host it has reached before (rebooted, Daintree quit there) says when.
+    const lastSeen = now - 20 * 60 * 1000;
+    const [, seen] = rowsFor([
+      entry(
+        "h1",
+        "studio-03",
+        {
+          status: "unreachable",
+          lastSeenAt: lastSeen,
+          detail: "Daintree isn't running in Host mode there (no host.json).",
+          hostModeOff: true,
+        },
+        null,
+        { lastSeenAt: lastSeen }
+      ),
+    ]);
+    expect(describeHostRowStatus(seen!, now)).toBe("Not listening · last seen 20 minutes ago");
+    expect(describeHostMenuState(seen!, now)).toEqual({
+      state: "Not listening",
+      note: "Last seen 20 minutes ago",
+    });
+    // Drawn as a live time like an unreachable host's, never as frozen text.
+    expect(hostMenuNoteAge(seen!)).toEqual({ prefix: "Last seen ", at: lastSeen });
+    expect(hostMenuNoteAge(row!)).toBeNull();
   });
 
   it("says a host connected best effort runs a different build, with or without numbers", () => {
@@ -172,26 +218,12 @@ describe("describeHostRowStatus", () => {
       entry("h1", "studio-01", { status: "disconnected" }, summary("h1"), { lastSeenAt: null }),
     ]);
     expect(describeHostRowStatus(row!, now)).toBe("Not connected");
-    expect(describeHostRowMetrics(row!)).toBeNull();
   });
 });
 
-describe("describeHostRowMetrics", () => {
-  it("shows CPU and memory pressure when measured", () => {
-    const [, row] = rowsFor([entry("h1", "studio-01", CONNECTED, summary("h1"))]);
-    expect(describeHostRowMetrics(row!)).toBe("CPU 71%  Memory warn");
-  });
-
-  it("shows nothing rather than zeros when the host measured nothing", () => {
-    const blank = summary("h1", { cpuPercent: null, memoryPressure: null });
-    const [, row] = rowsFor([entry("h1", "studio-01", CONNECTED, blank)]);
-    expect(describeHostRowMetrics(row!)).toBeNull();
-  });
-
-  it("shows nothing when no summary has arrived", () => {
-    const [local, remote] = rowsFor([entry("h1", "studio-01")]);
-    expect(describeHostRowMetrics(local!)).toBeNull();
-    expect(describeHostRowMetrics(remote!)).toBeNull();
+describe("describeHostRowStatus without a summary", () => {
+  it("says nothing for this machine before its first report", () => {
+    const [local] = rowsFor([entry("h1", "studio-01")]);
     expect(describeHostRowStatus(local!)).toBeNull();
   });
 });
@@ -256,7 +288,7 @@ describe("hostChipStatus", () => {
       stoppedRetrying: true,
     };
     expect(hostChipStatus(false, hostModeOff, null)).toBe("host-mode-off");
-    expect(hostChipStatusText(hostChipStatus(false, hostModeOff, null))).toBe("host mode off");
+    expect(hostChipStatusText(hostChipStatus(false, hostModeOff, null))).toBe("not listening");
     expect(hostChipStatus(false, refused, null)).toBe("access-denied");
     expect(hostChipStatusText(hostChipStatus(false, refused, null))).toBe("can't log in");
   });

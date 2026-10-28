@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook } from "@testing-library/react";
-import type { AgentSettings, CliAvailability } from "@shared/types";
+import type { AgentToolbarPins, CliAvailability } from "@shared/types";
 
 // The discovery cue's whole job is to be truthful about what is new. Its rules
 // interlock with `WelcomeScreen` (the two must never fire for the same agents)
@@ -11,7 +11,7 @@ let mockLoaded = true;
 let mockSeenAgentIds: string[] = [];
 let mockFirstSeen: Record<string, number> = {};
 let mockWelcomeDismissed = true;
-let mockAgentSettings: AgentSettings | null = { agents: {} } as AgentSettings;
+let mockAgentPins: AgentToolbarPins | null = {};
 let mockHasRealData = true;
 
 // The factory is hoisted, so the window is spelled inline here and read back
@@ -29,10 +29,11 @@ vi.mock("@/hooks/app/useAgentDiscoveryOnboarding", () => ({
   }),
 }));
 
-vi.mock("@/store/agentSettingsStore", () => ({
-  useAgentSettingsStore: (selector: (s: { settings: AgentSettings | null }) => unknown) =>
-    selector({ settings: mockAgentSettings }),
-}));
+// The real pins store, so "not loaded yet" is its own revision check rather
+// than a restatement of it here.
+function setPins(pins: AgentToolbarPins | null) {
+  useAgentToolbarPinsStore.setState({ pins: pins ?? {}, revision: pins ? 0 : -1 });
+}
 
 vi.mock("@/store/cliAvailabilityStore", () => ({
   useCliAvailabilityStore: (selector: (s: { hasRealData: boolean }) => unknown) =>
@@ -40,11 +41,13 @@ vi.mock("@/store/cliAvailabilityStore", () => ({
 }));
 
 import { useLauncherDiscovery } from "../useLauncherDiscovery";
+import { useAgentToolbarPinsStore } from "@/store/agentToolbarPinsStore";
 import { NEW_AGENT_TTL_MS as TTL } from "@/hooks/app/useAgentDiscoveryOnboarding";
 
 const READY = { claude: "ready", gemini: "ready" } as unknown as CliAvailability;
 
 function discover(availability: CliAvailability = READY) {
+  setPins(mockAgentPins);
   return renderHook(() => useLauncherDiscovery(availability)).result.current;
 }
 
@@ -53,7 +56,7 @@ beforeEach(() => {
   mockSeenAgentIds = [];
   mockFirstSeen = {};
   mockWelcomeDismissed = true;
-  mockAgentSettings = { agents: { claude: { pinned: true } } } as AgentSettings;
+  mockAgentPins = { claude: true };
   mockHasRealData = true;
 });
 
@@ -98,7 +101,7 @@ describe("useLauncherDiscovery", () => {
     // Card is renderable: not dismissed, real data, ready agents, no pins. The
     // two must never fire for the same agents.
     mockWelcomeDismissed = false;
-    mockAgentSettings = { agents: {} } as AgentSettings;
+    mockAgentPins = {};
     expect(discover().showDiscoveryBadge).toBe(false);
   });
 
@@ -107,20 +110,20 @@ describe("useLauncherDiscovery", () => {
     // Gating on the flag rather than on renderability would suppress Day-N
     // discovery for agents installed later.
     mockWelcomeDismissed = false;
-    mockAgentSettings = { agents: { claude: { pinned: true } } } as AgentSettings;
+    mockAgentPins = { claude: true };
     expect(discover().showDiscoveryBadge).toBe(true);
   });
 
-  it("declares the card ineligible before settings load, rather than claiming no pins", () => {
+  it("declares the card ineligible before the pins load, rather than claiming no pins", () => {
     mockWelcomeDismissed = false;
-    mockAgentSettings = null;
-    // Mirrors WelcomeScreen's own `if (!agentSettings) return false`.
+    mockAgentPins = null;
+    // Mirrors WelcomeScreen's own `if (!agentPins) return false`.
     expect(discover().showDiscoveryBadge).toBe(true);
   });
 
   it("yields nothing before real availability data lands", () => {
     mockWelcomeDismissed = false;
-    mockAgentSettings = { agents: {} } as AgentSettings;
+    mockAgentPins = {};
     mockHasRealData = false;
     // The card is not renderable yet, so the badge is free to fire.
     expect(discover().showDiscoveryBadge).toBe(true);

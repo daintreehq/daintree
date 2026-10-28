@@ -1,5 +1,5 @@
 // The runtime of `@daintreehq/plugin-ui`, served to plugin views through the
-// host import map. Every export here is public contract: vite.config.ts pins
+// host import map. Every export here is public contract: the host build pins
 // the names in HOST_FACADE_REQUIRED_EXPORTS and the SDK declares their types in
 // packages/plugin-sdk/plugin-ui.d.ts. Nothing here may import app code
 // statically; the host components load through `fromKit`.
@@ -42,6 +42,8 @@ import type {
   PluginEmojiPickerProps,
   PluginEmptyStateProps,
   PluginFileDropzoneProps,
+  PluginMediaPlayerProps,
+  PluginMediaThumbnailProps,
   PluginFileTreeProps,
   PluginFilterChipProps,
   PluginFormFieldGroupProps,
@@ -107,6 +109,7 @@ import type {
   PluginToolbarProps,
   PluginTooltipProps,
   PluginTruncatedTooltipProps,
+  PluginVirtualGridComponent,
   PluginVirtualListComponent,
 } from "@shared/types/plugin-sdk-react";
 import type {
@@ -220,6 +223,10 @@ import type {
   PluginSuggestedValueProps,
   PluginToolCallCardProps,
   PluginUnsavedChangesBarProps,
+} from "@shared/types/plugin-sdk-react";
+import type {
+  PluginFilterBuilderProps,
+  PluginSavedViewsProps,
 } from "@shared/types/plugin-sdk-react";
 import { fromKit } from "./kit";
 
@@ -338,6 +345,10 @@ export const Icon: ComponentType<PluginIconProps> = fromKit("Icon", (kit) => kit
 export const VirtualList: PluginVirtualListComponent = fromKit(
   "VirtualList",
   (kit) => kit.VirtualList
+);
+export const VirtualGrid: PluginVirtualGridComponent = fromKit(
+  "VirtualGrid",
+  (kit) => kit.VirtualGrid
 );
 export const DataTable: <T>(props: PluginDataTableProps<T>) => ReactNode = fromKit(
   "DataTable",
@@ -542,6 +553,15 @@ export const TagInput: ComponentType<PluginTagInputProps> = fromKit(
 export const FileDropzone: ComponentType<PluginFileDropzoneProps> = fromKit(
   "FileDropzone",
   (kit) => kit.FileDropzone
+);
+// Media: artifacts from the host's cache, played and previewed by byte range.
+export const MediaPlayer: ComponentType<PluginMediaPlayerProps> = fromKit(
+  "MediaPlayer",
+  (kit) => kit.MediaPlayer
+);
+export const MediaThumbnail: ComponentType<PluginMediaThumbnailProps> = fromKit(
+  "MediaThumbnail",
+  (kit) => kit.MediaThumbnail
 );
 export const EmojiPicker: ComponentType<PluginEmojiPickerProps> = fromKit(
   "EmojiPicker",
@@ -868,6 +888,11 @@ export type {
   PluginVirtualListProps as VirtualListProps,
   PluginVirtualListItemsProps as VirtualListItemsProps,
   PluginVirtualListCountProps as VirtualListCountProps,
+  PluginVirtualGridProps as VirtualGridProps,
+  PluginVirtualGridItemsProps as VirtualGridItemsProps,
+  PluginVirtualGridCountProps as VirtualGridCountProps,
+  PluginVirtualGridItemState as VirtualGridItemState,
+  PluginVirtualGridSelection as VirtualGridSelection,
   PluginDataTableProps as DataTableProps,
   PluginDataTableColumn as DataTableColumn,
   PluginDataTableSort as DataTableSort,
@@ -968,6 +993,10 @@ export type {
   PluginMultiSelectProps as MultiSelectProps,
   PluginTagInputProps as TagInputProps,
   PluginFileDropzoneProps as FileDropzoneProps,
+  PluginFileDropzoneBaseProps as FileDropzoneBaseProps,
+  PluginMediaSource as MediaArtifactSource,
+  PluginMediaPlayerProps as MediaPlayerProps,
+  PluginMediaThumbnailProps as MediaThumbnailProps,
   PluginEmojiPickerProps as EmojiPickerProps,
   PluginChartColor as ChartColor,
   PluginChartSeries as ChartSeries,
@@ -1466,4 +1495,30 @@ export type {
   PluginDecisionChoice as DecisionChoice,
   PluginDecisionStatus as DecisionStatus,
   PluginDecisionRequestProps as DecisionRequestProps,
+} from "@shared/types/plugin-sdk-react";
+
+// Filters and saved views: a structured filter over a declared field schema,
+// and named sets of filter, sort and column choices.
+
+export const FilterBuilder: ComponentType<PluginFilterBuilderProps> = fromKit(
+  "FilterBuilder",
+  (kit) => kit.FilterBuilder
+);
+export const SavedViews: ComponentType<PluginSavedViewsProps> = fromKit(
+  "SavedViews",
+  (kit) => kit.SavedViews
+);
+export { matchesFilter, readFilter } from "./filters";
+
+export type {
+  PluginFilter as Filter,
+  PluginFilterCondition as FilterCondition,
+  PluginFilterOperator as FilterOperator,
+  PluginFilterValue as FilterValue,
+  PluginFilterField as FilterField,
+  PluginFilterFieldType as FilterFieldType,
+  PluginFilterBuilderProps as FilterBuilderProps,
+  PluginSavedViewState as SavedViewState,
+  PluginSavedView as SavedView,
+  PluginSavedViewsProps as SavedViewsProps,
 } from "@shared/types/plugin-sdk-react";

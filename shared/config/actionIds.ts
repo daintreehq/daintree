@@ -66,6 +66,8 @@ export const BUILT_IN_ACTION_IDS = [
   "worktree.copyTree",
   "worktree.openEditor",
   "worktree.openReviewHub",
+  "worktree.markReviewed",
+  "worktree.clearReviewMark",
   "worktree.openFileBrowser",
   "worktree.openFileBrowserPanel",
   "worktree.openChanges",
@@ -81,6 +83,7 @@ export const BUILT_IN_ACTION_IDS = [
   "worktree.resource.pause",
   "worktree.resource.status",
   "worktree.resource.connect",
+  "worktree.resource.openOnHost",
   "worktree.resource.config.get",
   "worktree.resource.config.set",
 
@@ -125,10 +128,6 @@ export const BUILT_IN_ACTION_IDS = [
   // -- windowOpeningActions --
   "windowOpening.getConfig",
   "windowOpening.updateConfig",
-
-  // -- hibernationActions --
-  "hibernation.getConfig",
-  "hibernation.updateConfig",
 
   // -- idleTerminalNotifyActions --
   "idleTerminalNotify.getConfig",
@@ -216,6 +215,7 @@ export const BUILT_IN_ACTION_IDS = [
   "git.continueRepositoryOperation",
   "git.forcePushWithLease",
   "git.markSafeDirectory",
+  "git.retryAuthFetch",
   "git.getStagingStatus",
 
   // -- preferencesActions --
@@ -270,6 +270,8 @@ export const BUILT_IN_ACTION_IDS = [
   "forge.closePR",
   "forge.reopenPR",
   "forge.mergePR",
+  "forge.enableAutoMerge",
+  "forge.disableAutoMerge",
   "forge.convertPRToDraft",
   "forge.markPRReadyForReview",
   "forge.commentOnPR",
@@ -289,6 +291,10 @@ export const BUILT_IN_ACTION_IDS = [
   "project.openInNewWindow",
   "project.switch",
   "project.update",
+  "project.toggleNeverAutoSleep",
+  "project.sleep",
+  "project.restart",
+  "project.sleepIdle",
   "project.remove",
   "project.archive",
   "project.unarchive",
@@ -318,6 +324,7 @@ export const BUILT_IN_ACTION_IDS = [
   "plugin.reloadWindow",
   "plugin.openSettings",
   "plugin.backupDatabases",
+  "plugin.setNotificationsSilenced",
   "project.getStats",
   "project.settings.open",
   "project.cloneRepo",
@@ -385,6 +392,9 @@ export const BUILT_IN_ACTION_IDS = [
   "recipe.saveToRepo",
   "recipe.delete",
 
+  // -- layoutActions --
+  "layout.apply",
+
   // -- agentActions --
   "agent.launch",
   "agent.launchMany",
@@ -422,6 +432,8 @@ export const BUILT_IN_ACTION_IDS = [
 
   // -- terminalLifecycleActions --
   "terminal.restart",
+  "terminal.restartOnPreset",
+  "terminal.restartOnPresetOwned",
   "terminal.redraw",
   "terminal.forceResume",
   "terminal.toggleInputLock",
@@ -487,6 +499,7 @@ export const BUILT_IN_ACTION_IDS = [
   // -- terminalInfoActions --
   "terminal.info.open",
   "terminal.info.get",
+  "terminal.setHoldOnRestart",
 
   // -- browserActions --
   "browser.reload",
@@ -507,6 +520,9 @@ export const BUILT_IN_ACTION_IDS = [
   // -- navActions --
   "nav.toggleFocusMode",
   "nav.quickSwitcher",
+  "nav.showProjectHome",
+  "nav.showProjectSplit",
+  "nav.showGrid",
 
   // -- findActions --
   "find.inFocusedPanel",
@@ -547,6 +563,7 @@ export const BUILT_IN_ACTION_IDS = [
   // -- helpActions --
   "help.gettingStarted.show",
   "help.tour.show",
+  "help.tour.status",
   "help.displayImage",
   "help.openCommandsFolder",
   "help.newSessionWithAgent",
@@ -560,14 +577,22 @@ export const BUILT_IN_ACTION_IDS = [
   // -- hostControlActions (registered only where Remote Hosts is supported) --
   "host.list",
   "host.call",
+  "host.ensureProject",
+  "host.settings",
+  "host.watch",
 
   // -- uiActions --
   "ui.sidebar.resetWidth",
+
+  // -- sidebarActions --
+  "ui.sidebar.switchView",
+  "ui.sidebar.showWorktrees",
 
   // -- devServerActions --
   "devServer.start",
   "devPreview.stop",
   "devPreview.toggleTool",
+  "devPreview.toggleElementPicker",
 
   // -- devPreviewActions --
   "devPreview.reloadPreview",
@@ -638,6 +663,9 @@ export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
   "plugin.reloadProject",
   // Raises a native save dialog for any plugin's data; only a person asks for that.
   "plugin.backupDatabases",
+  // Turns off what a plugin can tell the user, so a plugin could lift its own
+  // silence or silence a rival's (#13818).
+  "plugin.setNotificationsSilenced",
   "fleet.accept",
   "fleet.reject",
   "fleet.interrupt",
@@ -650,6 +678,8 @@ export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
   "terminal.closeMany",
   "agent.launchMany",
   "terminal.readLastMessageOwned",
+  // Main checks ownership before dispatching it; nothing in its `run()` does.
+  "terminal.restartOnPresetOwned",
   // Main-process only, keyed on the caller's MCP credential: a plugin dispatch
   // has no pane to notify.
   "terminal.notifyWhenIdle",
@@ -660,7 +690,13 @@ export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
   // Main-process only, for one of this machine's own assistants (#13493).
   "host.list",
   "host.call",
+  "host.ensureProject",
+  "host.settings",
+  "host.watch",
   // Replays the user's last action as a keybinding, which would carry a plugin
   // past every other entry in this list (#13494).
   "action.repeatLast",
+  // Persists custom flags, bypass mode and presets into every later launch of
+  // that agent: the configuration a plugin's own agent.launch is refused (#13762).
+  "agentSettings.set",
 ] as const satisfies readonly BuiltInRuntimeActionId[];

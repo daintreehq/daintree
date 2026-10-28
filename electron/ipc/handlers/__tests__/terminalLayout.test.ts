@@ -366,6 +366,35 @@ describe("setTerminals session-id preservation (#11461)", () => {
     expect(saved()?.terminals?.find((t) => t.id === "1")?.agentState).toBe("exited");
   });
 
+  it("keeps a plugin's hold that a sibling window's save carries no copy of (#14017)", async () => {
+    const saved = onDisk(baseState([withSession("1", undefined, { holdOnRestart: true })]));
+
+    await setTerminals({
+      projectId: "p1",
+      terminals: [withSession("1", undefined, { agentState: "idle" })],
+      changedIds: ["1"],
+      removedIds: [],
+    });
+
+    const entry = saved()?.terminals?.find((t) => t.id === "1");
+    expect(entry?.holdOnRestart).toBe(true);
+    expect(entry?.agentState).toBe("idle");
+  });
+
+  it("releases a plugin's hold when the writer claims it (#14017)", async () => {
+    const saved = onDisk(baseState([withSession("1", undefined, { holdOnRestart: true })]));
+
+    await setTerminals({
+      projectId: "p1",
+      terminals: [withSession("1")],
+      changedIds: ["1"],
+      removedIds: [],
+      fieldEdits: [{ id: "1", fields: ["holdOnRestart"] }],
+    });
+
+    expect(saved()?.terminals?.find((t) => t.id === "1")).not.toHaveProperty("holdOnRestart");
+  });
+
   it("ignores field names outside the allowlist", async () => {
     const saved = onDisk(baseState([withSession("1", "captured")]));
 

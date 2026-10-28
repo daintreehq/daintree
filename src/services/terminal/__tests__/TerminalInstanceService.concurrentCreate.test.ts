@@ -79,6 +79,14 @@ vi.mock("../TerminalAddonManager", () => ({
   createWebLinksAddon: vi.fn(() => ({ dispose: vi.fn() })),
 }));
 
+// Real loader, wrapped so a test can hold or fail xterm's first fetch (#14239).
+vi.mock("../xtermCore", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../xtermCore")>();
+  return { ...actual, loadXtermCore: vi.fn(actual.loadXtermCore) };
+});
+
+import { loadXtermCore } from "../xtermCore";
+
 type CreateTestService = {
   instances: Map<string, unknown>;
   creating: Map<string, unknown>;
@@ -102,10 +110,9 @@ describe("TerminalInstanceService.getOrCreate concurrent-create guard (assistant
       (HTMLElement.prototype as unknown as { checkVisibility: () => boolean }).checkVisibility =
         () => true;
     }
-    ({ terminalInstanceService: service } =
-      (await import("../TerminalInstanceService")) as unknown as {
-        terminalInstanceService: CreateTestService;
-      });
+    service = (await (
+      await import("../terminalInstanceServiceAccessor")
+    ).load()) as unknown as CreateTestService;
     service.instances.clear();
   });
 
@@ -177,6 +184,27 @@ describe("TerminalInstanceService.getOrCreate concurrent-create guard (assistant
     expect(service.creating.has(id)).toBe(false); // slot freed
 
     // The id is reusable afterward (no stranded cancel/creating state).
+    const fresh = await service.getOrCreate(id, "claude", { fontSize: 13 });
+    expect(service.instances.get(id)).toBe(fresh);
+    expect(onDataCountFor(id)).toBe(1);
+  });
+
+  it("drops a destroy() that lands during a failed xterm load, so the id's next create succeeds", async () => {
+    const id = "asst-6";
+    let fail!: (err: Error) => void;
+    const pending = new Promise<never>((_, reject) => {
+      fail = reject;
+    });
+    vi.mocked(loadXtermCore).mockImplementationOnce(() => pending);
+
+    const createP = service.getOrCreate(id, "claude", { fontSize: 13 });
+    await vi.waitFor(() => expect(loadXtermCore).toHaveBeenCalled());
+    service.destroy(id);
+    fail(new Error("chunk load failed"));
+
+    await expect(createP).rejects.toThrow("chunk load failed");
+    expect(service.creating.has(id)).toBe(false);
+
     const fresh = await service.getOrCreate(id, "claude", { fontSize: 13 });
     expect(service.instances.get(id)).toBe(fresh);
     expect(onDataCountFor(id)).toBe(1);

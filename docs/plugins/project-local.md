@@ -45,11 +45,11 @@ What `--project` changes relative to an installed scaffold:
 - `plugin.json` gains `"scope": "project"`
 - `package.json` gains a `dev` script running `vite build --watch`, and drops the `package` script — a project plugin is distributed by being committed, not as a `.dntr`
 - `vite.config.ts` emits **inline** source maps with absolute `sources`, so DevTools breakpoints land in the real `.tsx` without a sidecar `.map` having to be served over `plugin://`
-- `.gitignore` force-includes `dist/`, and a generated `README.md` explains why — and, for the `view` template, points at the [panel preview](./dev-loop.md#preview-a-panel-outside-daintree) rather than the running app (the preview is not in the 0.1.0 release on npm; it ships in the next one)
+- `.gitignore` force-includes `dist/`, and a generated `README.md` explains why — and, for the `view` template, points at the [panel preview](./dev-loop.md#preview-a-panel-outside-daintree) rather than the running app (the preview is not in the 0.1.0 release on npm; it ships in 0.2.0)
 - no `.dntrignore` — that file only shapes a `.dntr` archive
 - a watcher recipe lands in `<projectRoot>/.daintree/recipes/`, so Daintree can start the build alongside the rest of the project environment
 
-Use the `command` or `view` template with `--project`. The `mcp` and `full` templates scaffold `contributes.mcpServers`, which a project-scoped manifest may not declare (see [What a project plugin may contribute](#what-a-project-plugin-may-contribute)), so the scaffold refuses those two combinations rather than writing a manifest the host would decline to load.
+Use the `command` or `view` template with `--project`. The `mcp` and `full` templates scaffold a `contributes.mcpServers` entry no endpoint bridges, which a project-scoped manifest may not declare (see [What a project plugin may contribute](#what-a-project-plugin-may-contribute)), so the scaffold refuses those two combinations rather than writing a manifest the host would decline to load. To serve a stdio server's tools to the project's agents, add it by hand together with an `agentMcp` endpoint whose `source` names its tools.
 
 Run `npx daintree-plugin validate` in the plugin directory to check the manifest before committing. It reads your declared `scope` and validates under the matching origin, so a `"scope": "project"` manifest is checked against the project rules.
 
@@ -154,6 +154,14 @@ Scoped to the owning project, and visible only in its views:
 | `surfaces` | Project-scope only — see [Surfaces](#surfaces) |
 | `databases` | SQLite files opened with `host.db`. A `"project"` database resolves against the bound project root, so it is the same file an agent in the project's terminal opens with `sqlite3`; `"local"` stays in this machine's plugin data, per project, where agents read it through the plugin's database tools. Each entry in a database's `queries` is served to agents as a tool of its own, with no code. See [Databases](./contribution-points.md#databases--shipped) |
 | `agentMcp` | Tools served to agents in this project's terminals only, on the plugin's one server beside its database tools. Every credential is minted for one terminal launch in one project, and a project plugin's server can only be granted to the project that loaded it. Off until the user, or the project's `.daintree/mcp.json`, turns the plugin's agent access on — trusting the folder does not do it. See [Agent MCP endpoints](./agent-extensions.md#agent-mcp-endpoints) |
+| `fileDecorationProviders` | Consulted only for requests from the owning project's views, and ahead of installed providers in the merge. Gone while the plugin is switched off or the folder is untrusted. See [File decorations](./contribution-points.md#file-decoration-providers--shipped) |
+| `recipes` | In the owning project's launcher, empty state and recipe manager only, pinnable like any plugin recipe, and gone while the plugin is switched off or the folder is untrusted. Unlike a file in `.daintree/recipes/`, they come and go with the plugin. A terminal may use `terminal`, `dev-preview` or a built-in agent; one naming any other agent is dropped, since `agents` is forbidden here. See [Recipes](./contribution-points.md#recipes--shipped) |
+| `promptTemplates` | In the owning project's composer command picker only, and gone while the plugin is switched off or the folder is untrusted. They fill the draft and never submit. See [Prompt templates](./contribution-points.md#prompt-templates--shipped) |
+| `worktreeSetupSteps` | Run only for worktrees created in the owning project, from the copy of the plugin in the project root, never the new worktree's branch. The user allows each step once for the project. See [Worktree setup steps](./contribution-points.md#worktree-setup-steps--shipped) |
+| `terminalLinks` | In the owning project's terminals only, and gone while the plugin is switched off or the folder is untrusted. See [Terminal links](./contribution-points.md#terminal-links--shipped) |
+| `setup` | On the owning project's panels and in Project settings → Plugins. A skip is the project's alone, kept in Daintree's settings, never the repository, so a plugin can't ship its steps pre-skipped. See [Setup checklist](./contribution-points.md#setup-checklist--shipped) |
+| `contextProviders` | In the owning project's agent composer only. A prefix an installed plugin already holds is refused for the project plugin. The provider's switch in Project settings → Plugins applies to this project. See [Context providers](./contribution-points.md#context-providers--shipped) |
+| `skills` | Served only to sessions bound to the owning project: through `skills.search` / `skills.load` on Daintree's own MCP server, and on the plugin's agent MCP server beside its tools when it has one. Another project's sessions, and sessions bound to no project, never see them. See [Agent extensions → Who reaches skills](./agent-extensions.md#who-reaches-skills) |
 
 Forbidden under `scope: "project"`, each rejected at manifest validation with an error naming the real obstacle:
 
@@ -161,15 +169,12 @@ Forbidden under `scope: "project"`, each rejected at manifest validation with an
 | --- | --- |
 | `menuItems` | The application menu is one OS-level menu shared by every window, with no per-project projection — the item would stay on the menu bar while another project is focused, and dispatch into it |
 | `agents` | The plugin agent roster is one app-wide registry mirrored into the shared pty-host, and an agent's launch identity is persisted into terminals and sessions that outlive the project binding |
-| `skills` | Contributed skills land in one app-wide index behind the built-in MCP server's `skills.search` / `skills.load`, which answer every MCP session — terminal agents, external clients, the in-app assistant — without filtering by project |
-| `recipes` | The plugin recipe registry is broadcast to every renderer unfiltered, so the recipe would appear in every project's launcher and empty state |
-| `fileDecorationProviders` | Decoration requests carry a resource path with no owning-project routing, so the provider would be consulted for files in every open project |
 | `processTools` | Process-tool detections are mirrored into the shared pty-host as one detection table for every terminal in the app |
-| `mcpServers` | Daintree is the client of a contributed server, and the plugin-MCP IPC surface that reaches it is app-global: servers are addressed by plugin and server id alone, so a call through it carries no project to check the contribution against. (These tools never reach terminal agents at all — for that, use `agentMcp`.) |
-| `tours` | Plugin tours are offered from the app-wide Help menu and command palette with no project axis, and tour playback has no per-project visibility to narrow a panel tour to the owning project's views |
+| `mcpServers` (unless bridged) | Daintree is the client of a contributed server, and the plugin-MCP IPC surface that reaches it is app-global: servers are addressed by plugin and server id alone, so a call through it carries no project to check the contribution against. A server that an `agentMcp` endpoint's `source` bridges is allowed: it is reached only through that endpoint's project-bound grants, and the host-client IPC never lists or calls a project plugin's servers. See [Agent extensions → Serving a contributed server's tools](./agent-extensions.md#serving-a-contributed-servers-tools). |
+| `themes` | The app theme is one machine-wide selection painted into every window and every project's view, so there is no per-project theme for the contribution to narrow to |
 | `forgeProviders` | Forge providers need synchronous host methods (`parseRemote`, the URL builders) that cannot cross the plugin worker's async message port, so the descriptor could never be given an implementation |
 
-`fileEditors`, `previewTools` and `guestAdapters` are refused too, as they are for every plugin but a built-in one.
+A slot-backed `fileEditors` entry is refused too, as it is for every plugin but a built-in one. A view-backed file editor is allowed: it appears only in this project, and may match project-relative `paths` as well as extensions. An Edit editor marked `"default": true` becomes what files matching its `paths` open in, asked about once and reset from project settings (see [File editors](./contribution-points.md#file-editors--shipped)).
 
 These are deferred, not closed. Each error names the structural obstacle so that when the obstacle goes, the rule can go with it. An installed or builtin plugin is unaffected — being app-wide is what the absent `scope` means.
 
@@ -177,30 +182,49 @@ These are deferred, not closed. Each error names the structural obstacle so that
 
 `contributes.surfaces` lets a project plugin replace one of the host's own surfaces for its own project, so the project can present as a purpose-built application rather than as Daintree with one extra panel. It is available to `scope: "project"` plugins only: an installed plugin is bound to no project, so there is nothing to scope a claim to and nothing to arbitrate a second claimant against.
 
-One slot exists today.
+Two slots exist today.
 
 ```jsonc
 "contributes": {
   "panels": [{ "id": "overview", "name": "Overview", "iconId": "gauge", "color": "var(--theme-category-orange)" }],
   "views":  [{ "id": "overview", "componentPath": "dist/panel.js", "location": "panel" }],
   "surfaces": {
-    "emptyCanvas": { "viewId": "overview" }
+    "emptyCanvas": { "viewId": "overview" },
+    "projectHome": { "viewId": "overview" }
   }
 }
 ```
 
-`emptyCanvas` replaces what the content grid draws when the project has no panels open — the region the stock launcher lives in.
+`emptyCanvas` replaces what the content grid draws when the project has no panels open — the region the stock launcher lives in. It gives way the moment a panel opens, which is right for a cold open.
+
+`projectHome` gives the project a Home the main area can show alone or beside the grid, for a project whose main screen is the plugin. While it can show, the host draws a Home/Split/Grid switch above the main area: Home shows your view alone, with the project's banners above it; Split shows your view and the project's grid side by side; Grid is the standard workspace, one click back. Which of the three a project was left on is remembered for it on this machine, and a palette action goes to each (`nav.showProjectHome`, `nav.showProjectSplit`, `nav.showGrid`). Until the user picks one, an active [application](./manifest.md#application) opens on its `destination`, and a Home destination with `arrangement: "beside-grid"` opens in Split. Fleet scope draws over Home and Split alike, and a maximized panel draws over Home alone; in Split a maximize fills only the grid's side. On Home alone, focusing, spawning, moving or restoring a grid panel returns to the grid, because that panel would otherwise land out of sight; in Split the panel is already on screen, so launching, choosing and focusing agents leaves your view where it is. The sidebar, the dock and the toolbar stay on screen, so agent attention signals never hide behind it, and a notice from the panel that held focus still reaches the user. Home is a route, not a URL: nothing outside the app can open it.
+
+Split composes two host regions; it never puts an agent inside your view. The grid side is the host's own grid, so its terminals, sessions, focus, keyboard navigation and panel actions are exactly the standard workspace's. Your view is project-wide: it stays mounted while the user switches worktrees, maximizes or docks panels, and changes agents, all of which are worktree-scoped and happen on the grid side. Moving between Home and Split keeps your view mounted too; going to Grid unmounts it, as switching projects can when a cached project view is evicted, so keep anything worth restoring in the view-state store (`persistState`, see [views](./views.md)). Below 800px of main-area width Split stacks your view above the grid rather than squeezing either below a usable terminal width, so lay your view out for a short, wide box as well as a tall, narrow one. To ask for an agent from your view, dispatch a host action through your worker: `panel.palette` opens the host's launcher, which lists the agents this project supports, and `agent.palette` switches between panels already open. Both stay host UI; your view never sees a terminal.
+
+`worktreeCreate` lets the plugin own the New worktree flow. The sidebar's New worktree button, the menu, the keybinding and the palette entry all open `worktree.createDialog.open`; with the slot claimed, that opens your view as a dialog instead of the stock one. The host draws the shared slot strip above your view with a **Standard dialog…** link that moves that one opening to the stock dialog, so the stock flow is never more than a click away; the strip's switch saves the choice for the project. Your view cancels or finishes by calling `hostContext.close()`, and creates the worktree through the ordinary actions (`worktree.create` or `worktree.createWithRecipe`, then `worktree.setCustomTitle`), so branch-collision handling stays where it is for the stock dialog. Quick create, bulk create, programmatic `worktree.create` and the GitHub issue and PR rows keep the stock dialog.
 
 Rules:
 
 - **Slot-replacing, never removing.** The surrounding chrome is untouched: the project switcher, the sidebar and the worktree dashboard stay exactly where they were. Above the surface the host draws a thin strip of its own, laid out outside your view's box rather than over it: a switch between your panel name and the stock launcher in both directions and, while your surface shows, an icon button for the launcher's search. The launcher is always one click away, a half-finished surface can never strand the user, and your view never needs to leave room for host controls.
 - **The user decides whether it stays.** The first time a claimed surface would show in a project, a notice names your plugin and offers to keep it or use the launcher. That answer, or any later flip of the strip's switch, is remembered for the project in Daintree's own settings, never in the repository, and the project's plugin settings show which plugin owns the canvas with a reset. The answer belongs to your plugin: if the slot later passes to another plugin, the user is asked again. Unloading, reloading or distrusting your plugin still releases the slot straight away.
 - **`viewId` must name a declared `contributes.views` entry**, cross-checked at manifest validation like any other dangling reference. It must not name a `location: "settings"` view, which has no panel to draw, or a panel with `hasPty: true` — a PTY panel is rendered by the terminal host and never loads the view module, so the claim would hold the slot and draw nothing.
-- **At most one plugin per slot per project.** The first claim stands and a second is refused, with both plugin names logged — fixing it means editing one of the two manifests, and you cannot do that without knowing the other. It is never a silent last-wins. The refused plugin still loads and everything else it contributes works, and its claim is remembered: if the incumbent later unloads, the slot passes to it rather than reverting to stock.
+- **At most one plugin per slot per project.** The plugin with the lower manifest id keeps it, whichever loaded first, so a reload never hands the slot to the other one. The other is refused, with both plugin names logged and shown beside your plugin in Project settings → Plugins, in the Plugin Manager and in `daintree-plugin doctor` — fixing it means editing one of the two manifests, and you cannot do that without knowing the other. The refused plugin still loads and everything else it contributes works, and its claim is remembered: if the winner later unloads, the slot passes to it rather than reverting to stock.
 - The surface view receives the standard `PanelViewProps` (`panelId`, `pluginId`, `disposeSignal`) and sits inside the standard plugin error boundary, so a crash falls back with a working "Try again" rather than a blank region.
+- **On Home, the slot's strip sits below your view instead**, clear of the Home/Split/Grid switch above it. Its switch names your panel and "No home": choosing No home removes the Home entry altogether until the user turns it back on in Project settings → Plugins. Going to the grid with the Home/Split/Grid switch never answers that question, so Home stays on offer.
 - **The box is the region below the strip, at its full height.** A surface gets the same container a panel view does — `flex flex-col flex-1 min-h-0 w-full` — so the root shape in [Views](./views.md#where-you-render) applies here unchanged, and a view with its own bottom bar can rely on that bar sitting on the region's bottom edge.
 
-`projectHome` and `defaultLayout` appear in the design notes for this feature and are **not implemented** — the manifest schema rejects them. There is no per-project routing a persistent home surface could live at yet, and a recipe is launched against a worktree rather than against a project cold open. They land with the routing they need, not before it.
+`defaultLayout` names one of your own `contributes.layouts` (by its bare `id`) as the arrangement the project starts in. It isn't a slot, since it replaces nothing the host draws, and it is used at most once per project on each machine:
+
+- **First open only.** Daintree decides it on the project's first open on this machine: no saved project state, not safe mode, and no saved state that existed but couldn't be read. A project opened here before, even with nothing in it, never counts again, and neither does one whose state file was later cleared or quarantined.
+- **Applied while the grid and dock are empty.** Your layout usually arrives later than that first open, once the user trusts the project's plugins, possibly in a later session. If nothing has been opened by then, the host opens your layout's panels and browser pages and arranges them. The apply is undoable like any other layout apply.
+- **Offered otherwise.** If the user opened anything first, a strip at the top of the grid offers **Open _plugin_'s layout**, and × turns the offer down for good. The layout stays in the command palette either way.
+- **Terminals never start on open.** A recipe in the layout is listed in the same strip as a **Start** button, and each one goes through the layout's usual confirmation, which lists its terminals.
+- **Recorded on this machine, never in the repository.** Changing `defaultLayout` later doesn't seed the project again. If two project plugins each declare one, the lower plugin id's is used.
+- The id must name a declared layout (`surface_default_layout_unknown`).
+
+## Application
+
+A project plugin can declare itself the project's application with the top-level [`application`](./manifest.md#application) block: a name and icon, whether it opens on its Home or the grid, and the ids of the sidebar view, settings view, welcome tour, first workflow command and agent endpoints it already contributes. Every reference is checked against the same manifest before the plugin loads. Only one plugin per project may declare one, and while it is loading, switched off, failing or out-ranked for Home, its state says so and names the standard workspace as the fallback. Its state also carries the owner's manifest `version`; how a new version is checked and switched in, and what it keeps, is [Updating an application](#updating-an-application).
 
 ## Binding — which project a host call reaches
 
@@ -259,6 +283,56 @@ Three behaviours are worth knowing while you iterate:
 What survives a reload: your `settings` values and everything in `host.storage`, because both are files keyed by identity rather than by process — and any panel state written with `PanelViewProps.persistState`, which is stored on the panel record alongside the layout rather than in the plugin process, so it outlives the worker entirely. What does not: module-scope state in your worker, and React state in your views. Design for a remount, exactly as for an installed plugin. [patterns.md](./patterns.md#what-survives-what) has the full matrix.
 
 Each reload mints a fresh view-module generation so the renderer actually re-imports your bundle rather than returning the module already in its cache. Each generation is a permanent module record in that renderer (Chromium has no eviction API), so a very long authoring session in one project accumulates them; closing and reopening the project view clears it. Re-running your module body against browser globals that outlive it has consequences of its own — see [Views → Global registration survives reload](./views.md#global-registration-survives-reload).
+
+## Updating an application
+
+An [application](#application) project updates by its files changing: a pull, a branch switch, a rebuilt `dist/`. There is no installer for it, and the host keeps no copy of a previous version. What it guarantees is the order — the new payload is checked before any of its code runs — and that switching payloads writes nothing of its own over data the project or the user owns. What the application's code writes once it runs is the application's to get right.
+
+### What an update replaces and what it keeps
+
+| What | Where | Belongs to | Across an update |
+| --- | --- | --- | --- |
+| The payload: `plugin.json`, `dist/` and every file the manifest names | `.daintree/plugins/<dir>/` | The application | Replaced, as whatever changed the folder left it |
+| Project settings | `<projectRoot>/.daintree/plugin-settings/<manifestId>.json` | The project | Kept; never rewritten by a load |
+| `host.storage`, `project` scope | `<projectRoot>/.daintree/plugin-storage/<manifestId>.json` | The project | Kept |
+| `host.storage`, `worktree` scope | `<worktreePath>/.daintree/plugin-storage/<manifestId>.json` | The worktree | Kept |
+| Project databases | `<projectRoot>/.daintree/data/<manifestId>/<id>.db`, or the declared `path` | The project | Kept; changed by your code — migrations when it opens the file, then its writes — and by agents through your declared writes, never by a load |
+| Local and user settings, `user` storage, local databases | under `~/.daintree/`, by instance key | The user, on this machine | Kept |
+| Secrets | encrypted through the OS keychain in the settings file of their scope; a `project` secret goes to the `local` file | The user, on this machine | Kept; never under the project root |
+| Panel state and drafts | `persistState` on the panel record; the [view-state store](./views.md#state-outside-the-grid) for Home, sidebar, settings and popover views | The user | Kept; state newer than the view's `stateVersion` is refused, not deleted |
+| Operations | the [journal](./operations.md) in its own `host.db` database | The application's data | Kept with that database; a job left `submitting` is reconciled as `uncertain` on the next start |
+| Agent configuration | `~/.claude/`, `~/.codex/` and the like | The user | Never modified |
+
+Keep everything the application writes outside its plugin folder: a file under `.daintree/plugins/<dir>/` is payload, and the next checkout can replace it. The host keeps these through its own reloads, but it cannot keep a tracked file the pull or checkout itself rewrote — a committed project database comes back as the branch holds it. Decide deliberately whether a project database is committed ([Settings and storage](#settings-and-storage)).
+
+What a switch does not keep is memory: module state in your worker and React state in your views. An unload aborts your tasks with `cause: "interrupted"`, which the [operations manager](./operations.md) records as nothing rather than as a cancellation, so a job in flight resumes on the next start.
+
+### The preflight
+
+Every time an application's owner is about to load — a project open, a hot reload, a project switch or **Reload from folder** that finds it not running — the host checks the payload on disk. It only reads, and creates no file:
+
+- **The engine range.** `engines.daintree` must admit this Daintree (`engine-incompatible`).
+- **Every file the manifest needs.** The same inventory packaging, installation and `daintree-plugin doctor` use: `main`, view components, tour scenes, skills, knowledge files and custom icons (`assets-missing`).
+- **Every database that declares a `schemaVersion`.** An existing file whose `user_version` is past it was written by a newer copy of the application (`schema-too-new`). A file that does not exist yet passes: the first open creates it. A file the host cannot read as a database, or one with a `-wal` or `-journal` beside it that a writer may still be using, is logged and passed over rather than refused; `db.open` still refuses a newer file when your code opens it.
+
+A payload that fails is not loaded. The project's application state reads `unavailable` with the reason and, in `problems`, what was found; the project shows the standard workspace, and the plugin manager's row shows the same lines. Nothing is created, migrated or deleted, and no command runs.
+
+The previous version does not keep running meanwhile. Its files are the ones that changed, and old code running against a folder of new files is the mixed state the check exists to prevent. A `plugin.json` rewritten while the check ran, in anything the check depends on, is not loaded either: it is not what was checked.
+
+The retry is the next reconcile: the watcher's next settle once `plugin.json` or `dist/` changes, a project switch, or **Reload from folder** — the one to use when the file you fixed is outside `dist/`, which the watcher does not watch. A running application is checked again only when it next loads: a hot reload, or reopening the project. Deleting a file outside `dist/` from under one that is running is not noticed until then.
+
+### Migrations
+
+Declare [`schemaVersion`](./contribution-points.md#databases--shipped) on each database your code migrates: how many migrations this version applies. A writable `db.open` that passes a different number fails `VALIDATION`, so the comparison the preflight makes is the one your code will. Leave it off the database the [operations manager](./operations.md) owns: it applies migrations of its own, and their number is the SDK's, not yours.
+
+Migrations run when your code opens the database, not when the payload loads. Each runs in its own transaction and advances `user_version` with it, so a run that stops part way — a crash, a quit, a step that throws — leaves the file at the last step that committed, and the next writable open carries on from there without repeating one. That is what makes a run safe to retry: the version counter, not the SQL. A failed step is rolled back whole and rejects `DB_MIGRATION_FAILED` naming it. A step that does anything besides SQL against its own file, such as writing another file or calling a service, is outside that guarantee.
+
+### Rollback, backup and restore
+
+- **Code rolls back; a schema does not.** Rolling back the code is a checkout of the previous commit. A database a newer version already migrated stays migrated, and older code refuses it — at the preflight, and again at `db.open` (`DB_SCHEMA_TOO_NEW`) — rather than guessing at a schema it has never seen. There are no down-migrations, and nothing undoes a step that dropped or rewrote data.
+- **Design for a way back.** Keep a release's migrations additive (add the new column and keep reading the old one), and remove what is no longer used in a later release, once no older version needs it.
+- **Back up before a destructive release.** Nothing is snapshotted automatically. **Back up data…** on the application's panel menus, or `db.backup(destPath)` from your code, writes a consistent copy; take one before a release whose migrations drop or rewrite data.
+- **Restoring is manual.** Stop everything that has the file open — close the project, and end any agent's `sqlite3` session on it. Move the current file aside together with any `-journal`, `-wal` and `-shm` beside it, since SQLite would replay a leftover one into whatever file takes its place. Put the backup in, and reopen with a version whose `schemaVersion` is at or past the backup's. Restoring local data does not undo anything the application already sent elsewhere.
 
 ## Layouts and missing plugins
 

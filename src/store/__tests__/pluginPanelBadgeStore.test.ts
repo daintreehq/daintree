@@ -141,4 +141,85 @@ describe("pluginPanelBadgeStore", () => {
     expect(onChangedMock).toHaveBeenCalledTimes(1);
     expect(onClearedMock).toHaveBeenCalledTimes(1);
   });
+
+  describe("structural sharing (#14128)", () => {
+    const fleet = (n: number, changed?: number): Record<string, PluginPanelBadge> =>
+      Object.fromEntries(
+        Array.from({ length: n }, (_, i) => [`panel-${i}`, i === changed ? label("2") : dot()])
+      );
+
+    it("one changed badge in a 100-panel snapshot invalidates only that panel's selector", async () => {
+      const mod = await load();
+      changedCb!({ pluginId: "p1", badges: fleet(100) });
+      const before = { ...mod.usePluginPanelBadgeStore.getState().badgesByPanelId };
+
+      changedCb!({ pluginId: "p1", badges: fleet(100, 42) });
+
+      const after = mod.usePluginPanelBadgeStore.getState().badgesByPanelId;
+      const invalidated = Object.keys(before).filter((id) => after[id] !== before[id]);
+      expect(invalidated).toEqual(["panel-42"]);
+      expect(after["panel-42"]).toEqual({ p1: { kind: "label", text: "2" } });
+    });
+
+    it("an equal replay is a store no-op, root notification included", async () => {
+      const mod = await load();
+      changedCb!({ pluginId: "p1", badges: fleet(100) });
+      const root = mod.usePluginPanelBadgeStore.getState().badgesByPanelId;
+      const listener = vi.fn();
+      const unsubscribe = mod.usePluginPanelBadgeStore.subscribe(listener);
+
+      changedCb!({ pluginId: "p1", badges: fleet(100) });
+      clearedCb!({ pluginId: "never-badged" });
+
+      unsubscribe();
+      expect(listener).not.toHaveBeenCalled();
+      expect(mod.usePluginPanelBadgeStore.getState().badgesByPanelId).toBe(root);
+    });
+
+    it("clearing one panel leaves every other panel's object, and another plugin's badge, in place", async () => {
+      const mod = await load();
+      changedCb!({ pluginId: "p1", badges: fleet(3) });
+      changedCb!({ pluginId: "p2", badges: { "panel-0": label("CI") } });
+      const before = mod.usePluginPanelBadgeStore.getState().badgesByPanelId;
+
+      const { "panel-0": _cleared, ...rest } = fleet(3);
+      changedCb!({ pluginId: "p1", badges: { ...rest, "panel-1": dot() } });
+
+      const after = mod.usePluginPanelBadgeStore.getState().badgesByPanelId;
+      expect(after["panel-0"]).toEqual({ p2: { kind: "label", text: "CI" } });
+      expect(after["panel-1"]).toBe(before["panel-1"]);
+      expect(after["panel-2"]).toBe(before["panel-2"]);
+    });
+
+    it("a colour, tooltip or label text change alone is a change", async () => {
+      const mod = await load();
+      const state = () => mod.usePluginPanelBadgeStore.getState().badgesByPanelId;
+      changedCb!({ pluginId: "p1", badges: { panelA: { kind: "label", text: "1" } } });
+      for (const badge of [
+        { kind: "label", text: "1", color: "error" },
+        { kind: "label", text: "1", color: "error", tooltip: "failing" },
+        { kind: "label", text: "2", color: "error", tooltip: "failing" },
+      ] as PluginPanelBadge[]) {
+        const before = state().panelA;
+        changedCb!({ pluginId: "p1", badges: { panelA: badge } });
+        expect(state().panelA).not.toBe(before);
+        expect(state().panelA?.p1).toEqual(badge);
+      }
+    });
+
+    it("treats an omitted colour as the default one, as main does", async () => {
+      const mod = await load();
+      changedCb!({ pluginId: "p1", badges: { panelA: dot("default") } });
+      const root = mod.usePluginPanelBadgeStore.getState().badgesByPanelId;
+      changedCb!({ pluginId: "p1", badges: { panelA: dot() } });
+      expect(mod.usePluginPanelBadgeStore.getState().badgesByPanelId).toBe(root);
+    });
+
+    it("an unload clear drops the plugin from every panel it badged", async () => {
+      const mod = await load();
+      changedCb!({ pluginId: "p1", badges: fleet(3) });
+      clearedCb!({ pluginId: "p1" });
+      expect(mod.usePluginPanelBadgeStore.getState().badgesByPanelId).toEqual({});
+    });
+  });
 });

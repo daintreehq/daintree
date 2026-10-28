@@ -123,7 +123,7 @@ describe("ActionButton", () => {
     expect(dispatch).toHaveBeenCalledWith(
       "worktree.refresh",
       { force: true },
-      { source: "plugin" }
+      { source: "plugin", callerPluginId: "acme.board" }
     );
     expect(onDispatched).toHaveBeenCalledWith({ ok: true });
   });
@@ -173,6 +173,46 @@ describe("ActionButton", () => {
     // host.actions.get answers null for a restricted action; so does the kit.
     expect(screen.queryByRole("button", { name: "Quit" })).toBeNull();
     expect(document.body.textContent).not.toContain("Quit");
+  });
+
+  it("refuses an agent launch its arguments configure, and runs one with only a prompt (#13762)", async () => {
+    addAction({ id: "agent.launch", title: "Launch agent" });
+    render(
+      inView(
+        createElement(
+          "div",
+          null,
+          createElement(kit.ActionButton, {
+            actionId: "agent.launch",
+            args: { agentId: "claude", agentLaunchFlags: ["--dangerously-skip-permissions"] },
+            "aria-label": "Launch configured",
+          }),
+          createElement(kit.ActionButton, {
+            actionId: "agent.launch",
+            args: { agentId: "claude", prompt: "Write the script" },
+            "aria-label": "Launch plain",
+          })
+        )
+      )
+    );
+    const configured = screen.getByRole("button", { name: "Launch configured" });
+    expect(configured.getAttribute("aria-disabled")).toBe("true");
+    const reason = document.getElementById(
+      configured.getAttribute("aria-describedby") ?? ""
+    )?.textContent;
+    expect(reason).toMatch(/a task/);
+    expect(reason).not.toMatch(/confirmation/);
+    fireEvent.click(configured);
+    await flush();
+    expect(dispatch).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Launch plain" }));
+    await flush();
+    expect(dispatch).toHaveBeenCalledWith(
+      "agent.launch",
+      { agentId: "claude", prompt: "Write the script" },
+      { source: "plugin", callerPluginId: "acme.board" }
+    );
   });
 
   it("keeps the author's own name and description beside the refusal reason", () => {
@@ -343,7 +383,23 @@ describe("action menu entries", () => {
     expect(item.querySelector("[data-menu-icon]")).not.toBeNull();
     fireEvent.click(item);
     await flush();
-    expect(dispatch).toHaveBeenCalledWith("worktree.refresh", undefined, { source: "plugin" });
+    expect(dispatch).toHaveBeenCalledWith("worktree.refresh", undefined, {
+      source: "plugin",
+      callerPluginId: "acme.board",
+    });
+  });
+
+  it("leaves a remote host's view unattributed, since its id has no provenance here", async () => {
+    addAction({ id: "worktree.refresh" });
+    window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
+    try {
+      render(inView(createElement(kit.ActionButton, { actionId: "worktree.refresh" })));
+      fireEvent.click(screen.getByRole("button", { name: "Refresh worktrees" }));
+      await flush();
+      expect(dispatch).toHaveBeenCalledWith("worktree.refresh", undefined, { source: "plugin" });
+    } finally {
+      delete window.__DAINTREE_HOST_ID__;
+    }
   });
 
   it("draws a refused row as the host draws its unavailable rows", async () => {

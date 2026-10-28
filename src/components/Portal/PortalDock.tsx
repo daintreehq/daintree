@@ -18,7 +18,6 @@ import {
   PORTAL_DEFAULT_WIDTH,
   PORTAL_MIN_EDITOR_WIDTH,
 } from "@shared/types";
-import { getAIAgentInfo } from "@/lib/aiAgentDetection";
 import { useKeybindingScope } from "@/hooks/useKeybinding";
 import { useSplitterKeys } from "@/hooks/useSplitterKeys";
 import { ResizeHandle } from "@/components/ui/ResizeHandle";
@@ -117,19 +116,6 @@ export function PortalDock() {
       debouncedSync.cancel();
     };
   }, [activeTabId, syncBounds]);
-
-  useEffect(() => {
-    const cleanup = window.electron.portal.onNavEvent((data) => {
-      const agentInfo = getAIAgentInfo(data.url);
-      const finalTitle = agentInfo?.title ?? data.title;
-      usePortalStore.getState().updateTabTitle(data.tabId, finalTitle);
-      usePortalStore.getState().updateTabUrl(data.tabId, data.url);
-      if (agentInfo?.icon) {
-        usePortalStore.getState().updateTabIcon(data.tabId, agentInfo.icon);
-      }
-    });
-    return cleanup;
-  }, []);
 
   const handleTabClick = useCallback(
     async (tabId: string) => {

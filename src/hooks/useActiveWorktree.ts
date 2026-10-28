@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import type { PluginWorktreeSnapshot } from "@shared/types/plugin";
 import { toPluginWorktreeSnapshot } from "@shared/utils/pluginWorktreeSnapshot";
 
@@ -18,5 +19,12 @@ export function useActiveWorktree(): PluginWorktreeSnapshot | null {
   const snapshot = useWorktreeStore((state) =>
     activeWorktreeId ? (state.worktrees.get(activeWorktreeId) ?? null) : null
   );
-  return useMemo(() => (snapshot ? toPluginWorktreeSnapshot(snapshot) : null), [snapshot]);
+  // Selected on its own so a rename re-projects even though the snapshot didn't change.
+  const customTitle = useWorktreeFilterStore((state) =>
+    activeWorktreeId ? (state.worktreeCustomTitles[activeWorktreeId] ?? null) : null
+  );
+  return useMemo(
+    () => (snapshot ? toPluginWorktreeSnapshot(snapshot, customTitle) : null),
+    [snapshot, customTitle]
+  );
 }

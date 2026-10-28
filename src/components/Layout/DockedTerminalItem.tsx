@@ -5,6 +5,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { useDragHandle } from "@/components/DragDrop/DragHandleContext";
 import { cn } from "@/lib/utils";
 import { useTerminalInputStore, usePanelStore, useFocusStore } from "@/store";
+import { selectHomeFocusTarget } from "@/store/terminalInputStore";
 import type { PtyPanelData } from "@shared/types/panel";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
@@ -13,6 +14,10 @@ import { getMergedPresets } from "@/config/agents";
 import { TerminalContextMenu } from "@/components/Terminal/TerminalContextMenu";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { getTerminalFocusTarget } from "@/components/Terminal/terminalFocus";
+import {
+  paneSurfaceHoldingFocus,
+  requestedPaneSurface,
+} from "@/components/Terminal/paneFocusRequest";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
 import {
@@ -23,8 +28,18 @@ import {
 } from "@/components/Worktree/terminalStateConfig";
 import { useSessionPresentation } from "@/hooks/useRunHandBackState";
 import { TerminalRefreshTier } from "@/types";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import {
+  peek as peekTerminalService,
+  with as withTerminalService,
+} from "@/services/terminal/terminalInstanceServiceAccessor";
 import { DockActivityCue } from "./DockActivityCue";
+import {
+  PluginPanelActivityDockCue,
+  pluginPanelActivityLabelSuffix,
+  usePluginPanelActivity,
+} from "@/components/Panel/PluginPanelActivity";
+import { DockChipBadge, useDockChipBadge } from "./DockChipBadge";
+import { dockChipBadgeLabelSuffix } from "./dockChipBadgeModel";
 import { useDockPanelPortal } from "./dockPanelPortalContext";
 import {
   DOCK_CHIP_CLASS,
@@ -90,7 +105,6 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
   const moveTerminalToGrid = usePanelStore((s) => s.moveTerminalToGrid);
   const backendStatus = usePanelStore((s) => s.backendStatus);
   const hybridInputEnabled = useTerminalInputStore((s) => s.hybridInputEnabled);
-  const preferredTerminalFocusTarget = usePanelStore((s) => s.preferredTerminalFocusTarget);
 
   // A boolean, not the raw id: opening or closing another chip's popover must
   // not re-render this one.
@@ -131,7 +145,10 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
   useEffect(() => {
     if (!isOpen) {
       try {
-        terminalInstanceService.applyRendererPolicy(terminal.id, TerminalRefreshTier.BACKGROUND);
+        withTerminalService(
+          (service) => service.applyRendererPolicy(terminal.id, TerminalRefreshTier.BACKGROUND),
+          terminal.id
+        );
       } catch (error) {
         console.warn(`Failed to apply dock state for terminal ${terminal.id}:`, error);
       }
@@ -142,9 +159,9 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
 
     const rafId = requestAnimationFrame(() => {
       try {
-        const dims = terminalInstanceService.fit(terminal.id);
+        const dims = peekTerminalService()?.fit(terminal.id);
         if (!dims) return;
-        terminalInstanceService.applyRendererPolicy(terminal.id, TerminalRefreshTier.VISIBLE);
+        peekTerminalService()?.applyRendererPolicy(terminal.id, TerminalRefreshTier.VISIBLE);
       } catch (error) {
         console.warn(`Failed to apply dock state for terminal ${terminal.id}:`, error);
       }
@@ -291,22 +308,29 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
     // Re-runs on agent chrome changes while open; never while the user is
     // writing in the pane's Scratchpad (#12835).
     if (isScratchpadElement(document.activeElement, terminal.id)) return;
+    // Nor while its input bar holds the keyboard: what the user does inside
+    // the pane stays inside it.
+    if (paneSurfaceHoldingFocus(terminal.id) === "hybridInput") return;
 
+    // Opening the popover is an arrival, so it lands on home; a drop or
+    // type-anywhere that asked this pane for its hybrid input gets it. Home is
+    // read rather than subscribed to: changing the setting isn't an arrival.
     const focusTarget = getTerminalFocusTarget({
-      preferredTarget: preferredTerminalFocusTarget,
+      preferredTarget:
+        requestedPaneSurface(terminal.id) ??
+        selectHomeFocusTarget(useTerminalInputStore.getState()),
       hasHybridInputSurface: chrome.isAgent,
       isInputDisabled: backendStatus === "disconnected" || backendStatus === "recovering",
       hybridInputEnabled,
     });
     if (focusTarget === "hybridInput") return;
 
-    terminalInstanceService.focus(terminal.id);
+    peekTerminalService()?.focus(terminal.id);
   }, [
     isOpen,
     portalContainer,
     terminal.id,
     terminal.focusPolicy,
-    preferredTerminalFocusTarget,
     chrome.isAgent,
     backendStatus,
     hybridInputEnabled,
@@ -330,6 +354,11 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
   const plainActivityState = getDockDisplayActivityState(terminal);
   const showFinishedCue = useTransientDockFinishedCue(plainActivityState, terminal.id);
   const plainWorking = plainActivityState === "working";
+  // A PTY-backed plugin panel's own report, in the plain cue's slot: only where
+  // no agent glyph is drawn, and never folded into the agent state (#13820).
+  const reportedActivity = usePluginPanelActivity(terminal.id);
+  const pluginActivity = displayAgentState ? null : reportedActivity;
+  const badge = useDockChipBadge(terminal.id);
   const showDockAgentHighlights = usePreferencesStore((s) => s.showDockAgentHighlights);
   // Use shortened title without command summary for dock items
   const displayTitle = terminal.title;
@@ -340,7 +369,8 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
   const stateLabel =
     isHandBack && shownAgentState ? SESSION_LABELS[shownAgentState] : observedStateLabel;
   const StateIcon = shownAgentState ? SESSION_ICONS[shownAgentState] : null;
-  const isDeprioritized = !isOpen && isDockAgentStateDeprioritized(agentState);
+  const pluginActive = pluginActivity?.shown === "working" || pluginActivity?.shown === "waiting";
+  const isDeprioritized = !isOpen && !pluginActive && isDockAgentStateDeprioritized(agentState);
 
   // Re-fit the terminal once a resize gesture settles on a new popover height.
   const {
@@ -350,7 +380,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
   } = useDockPopoverResize(() => {
     requestAnimationFrame(() => {
       try {
-        terminalInstanceService.fit(terminal.id);
+        peekTerminalService()?.fit(terminal.id);
       } catch {
         // fit() guards zero-dimension cases internally; ignore transient throws.
       }
@@ -371,7 +401,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
                   isOpen && DOCK_CHIP_OPEN_CLASS,
                   !isOpen &&
                     showDockAgentHighlights &&
-                    blockedState === "waiting" &&
+                    (blockedState === "waiting" || pluginActivity?.shown === "waiting") &&
                     DOCK_CHIP_WAITING_CLASS,
                   isDeprioritized && "border-transparent"
                 )}
@@ -391,7 +421,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
                   e.stopPropagation();
                   handleMoveToGrid();
                 }}
-                aria-label={`${terminal.title}${displayAgentState ? (stateLabel ? ` — agent ${stateLabel}` : "") : plainWorking ? " — command running" : ""} - Click to preview, double-click to move to grid, drag to reorder`}
+                aria-label={`${terminal.title}${displayAgentState ? (stateLabel ? ` — agent ${stateLabel}` : "") : pluginActivity ? pluginPanelActivityLabelSuffix(pluginActivity) : plainWorking ? " — command running" : ""}${dockChipBadgeLabelSuffix(badge)} - Click to preview, double-click to move to grid, drag to reorder`}
               >
                 <div className="flex items-center justify-center shrink-0">
                   <TerminalIcon kind={terminal.kind} chrome={chrome} className="w-3.5 h-3.5" />
@@ -399,6 +429,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
                 <span className="truncate min-w-[48px] max-w-[140px] font-sans font-medium">
                   {displayTitle}
                 </span>
+                <DockChipBadge model={badge} />
 
                 {(isActive || plainWorking) && commandText && (
                   <>
@@ -414,8 +445,13 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
                   </>
                 )}
 
-                {!displayAgentState && (plainWorking || showFinishedCue) && (
-                  <DockActivityCue state={plainWorking ? "working" : "finished"} />
+                {pluginActivity ? (
+                  <PluginPanelActivityDockCue activity={pluginActivity} />
+                ) : (
+                  !displayAgentState &&
+                  (plainWorking || showFinishedCue) && (
+                    <DockActivityCue state={plainWorking ? "working" : "finished"} />
+                  )
                 )}
 
                 {/* State icon (compact spacing from title) */}

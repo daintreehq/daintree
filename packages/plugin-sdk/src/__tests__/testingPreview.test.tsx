@@ -207,12 +207,38 @@ describe("createPreviewPanelController", () => {
       props.setHasUnsavedChanges,
       props.setToolbarItemState,
       props.setMenuItems,
+      props.setTitle,
     ]) {
       expect(typeof callback).toBe("function");
     }
     expect(createPreviewPanelController({ withoutHostCallbacks: true }).props().persistState).toBe(
       undefined
     );
+  });
+
+  it("says where the view is mounted, as the host does", () => {
+    const panel = createPreviewPanelController();
+    expect(panel.props().hostContext).toEqual({ kind: "panel" });
+    // The same object for every attempt, as the host hands it.
+    expect(panel.props().hostContext).toBe(panel.props().hostContext);
+
+    const settings = createPreviewPanelController({
+      settingsContext: { scope: "user", projectId: null },
+    });
+    expect(settings.props().hostContext).toEqual({ kind: "settings" });
+
+    const surface = createPreviewPanelController({ hostContext: { kind: "surface" } });
+    expect(surface.props().hostContext).toEqual({ kind: "surface" });
+  });
+
+  it("hands a popover view its close, as the toolbar popover does", () => {
+    const close = vi.fn();
+    const popover = createPreviewPanelController({ hostContext: { kind: "popover", close } });
+    const context = popover.props().hostContext;
+    expect(context?.kind).toBe("popover");
+    context?.close?.();
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(createPreviewPanelController().props().hostContext).not.toHaveProperty("close");
   });
 
   it("persists with the host's rules and hands the next attempt what was accepted", () => {
@@ -271,6 +297,25 @@ describe("createPreviewPanelController", () => {
     expect(panel.rejectedMenuItems).toHaveLength(1);
     props.setMenuItems?.([{ actionId: "acme.p.run", label: "Run" }]);
     expect(panel.menuItems).toEqual([{ actionId: "acme.p.run", label: "Run" }]);
+  });
+
+  it("vets a title the way the host does, keeping it through a remount", () => {
+    const panel = createPreviewPanelController();
+    expect(panel.title).toBe(null);
+
+    const first = panel.props();
+    first.setTitle?.(" Record\n#42 ");
+    expect(panel.title).toBe("Record #42");
+    Reflect.apply(first.setTitle!, undefined, [42]);
+    expect(panel.title).toBe("Record #42");
+
+    // The title belongs to the panel, so a new attempt neither clears nor
+    // answers to the old one's setter.
+    const second = panel.props();
+    first.setTitle?.("Record #1");
+    expect(panel.title).toBe("Record #42");
+    second.setTitle?.(null);
+    expect(panel.title).toBe(null);
   });
 
   it("reads versions through the host's decoder", () => {

@@ -1,18 +1,15 @@
-import { useCallback, useEffect, type ComponentType } from "react";
+import { useCallback, type ComponentType } from "react";
 import type { PanelKindConfig } from "@shared/config/panelKindRegistry";
 import { ContentPanel, type BasePanelProps } from "@/components/Panel";
 import type { TabInfo } from "@/components/Panel/TabButton";
 import { makePluginViewContent } from "@/components/Plugin/PluginViewContent";
 import { PluginSetupStrip } from "@/components/Plugin/PluginSetupStrip";
 import { PluginPanelToolbar } from "@/components/Panel/PluginPanelToolbar";
-import { XCircle } from "lucide-react";
-import { PaneState } from "@/components/ui/PaneState";
-import { Button } from "@/components/ui/button";
-import { actionService } from "@/services/ActionService";
-import { logWarn } from "@/utils/logger";
+import { PluginViewLoadError } from "@/components/Plugin/PluginViewLoadError";
 import {
   getPanelStoreSnapshot,
   persistPanelExtensionStateThroughAccessor,
+  setPanelTitleThroughAccessor,
 } from "@/store/storeAccessors";
 import {
   decodePanelExtensionState,
@@ -58,7 +55,7 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Plugi
   const kindId = config.id;
   const displayName = config.name;
   const stateVersion = config.stateVersion;
-  const hasRequiredSettings = config.hasRequiredSettings === true;
+  const hasSetupStrip = config.hasRequiredSettings === true || config.hasSetupSteps === true;
 
   if (!componentPath || !pluginId) {
     // The else-branch of usePluginPanelKinds guards this, but a defensive
@@ -126,6 +123,13 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Plugi
         persistPanelExtensionStateThroughAccessor(panelId, patch),
       [panelId]
     );
+    // The view's name for this panel (`PanelViewProps.setTitle`), bound to this
+    // panel id so a view can only ever title its own. Through the accessor for
+    // the same reason as `persistState`.
+    const setPanelTitle = useCallback(
+      (title: string) => setPanelTitleThroughAccessor(panelId, title),
+      [panelId]
+    );
     // What recovery restores, read at the moment it starts rather than at mount
     // (#12278). The props above are a snapshot of the record as of THIS render,
     // and a view that persisted state after mounting has moved on from them —
@@ -180,7 +184,7 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Plugi
       >
         {/* Above the view and outside its box, so no plugin layout can cover
             the way to finish setting the plugin up. */}
-        {hasRequiredSettings && <PluginSetupStrip pluginId={ownerPluginId} />}
+        {hasSetupStrip && <PluginSetupStrip pluginId={ownerPluginId} />}
         {/* `extensionState` is how the panel store persists a view's spawn
             arguments; the content layer speaks the SDK's presentation-neutral
             `initialArgs` instead, so the mapping happens here at the seam. */}
@@ -204,6 +208,7 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Plugi
             // toolbar, so a view there is not handed a setter for buttons the
             // user cannot see.
             offerToolbar={panelProps.location !== "dialog"}
+            setPanelTitle={setPanelTitle}
           />
         ) : (
           <PluginViewLoadError
@@ -222,39 +227,4 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Plugi
 
   PluginViewHost.displayName = `PluginViewHost(${kindId})`;
   return PluginViewHost;
-}
-
-interface PluginViewLoadErrorProps {
-  pluginId: string;
-  displayName: string;
-  message: string;
-}
-
-export function PluginViewLoadError({ pluginId, displayName, message }: PluginViewLoadErrorProps) {
-  useEffect(() => {
-    logWarn("[PluginViewHost] view configuration error", { pluginId, displayName, message });
-  }, [pluginId, displayName, message]);
-
-  return (
-    <div role="region" aria-label="Plugin view unavailable" className="flex flex-1 flex-col">
-      <PaneState
-        inFlow
-        className="flex-1"
-        live="alert"
-        icon={<XCircle className="text-status-error" />}
-        title={`${displayName} unavailable`}
-        description={message}
-      >
-        <Button
-          variant="subtle"
-          size="sm"
-          onClick={() =>
-            void actionService.dispatch("app.pluginManager", undefined, { source: "user" })
-          }
-        >
-          Open plugin manager
-        </Button>
-      </PaneState>
-    </div>
-  );
 }

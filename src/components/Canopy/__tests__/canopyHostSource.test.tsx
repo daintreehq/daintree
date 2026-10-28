@@ -27,7 +27,6 @@ function canopy(refreshedAt: number, sequence?: number): CanopySnapshot {
   return {
     mode: "on",
     activated: true,
-    tier: "priority",
     dispositions: [],
     seen: [],
     reads: [],
@@ -118,6 +117,18 @@ describe("useRemoteCanopy", () => {
     expect(result.current.error).toBeNull();
     expect(result.current.canopy?.refreshedAt).toBe(2);
     expect(result.current.epoch).toBe(1);
+  });
+
+  it("never lets a refused read stand in front of the other read's own failure", async () => {
+    // As main's refusal arrives across the bridge: the code rides in the message.
+    const refused = new Error("[AppError|HOST_DISCONNECTED] Host studio is not connected");
+    const failed = new Error("fleet read failed");
+    bridge.invoke.mockImplementation(async (_hostId: string, channel: string) => {
+      throw channel === "fleet:get-snapshot" ? failed : refused;
+    });
+    const { result } = renderHook(() => useRemoteCanopy("studio", true));
+    await settle();
+    expect(result.current.error).toBe(failed);
   });
 
   it("keeps a fleet push over the answer to a pull that began before it", async () => {

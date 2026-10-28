@@ -33,10 +33,13 @@ import type {
   PluginShortcutHintProps,
   PluginTerminalSnapshotProps,
 } from "@shared/types/plugin-sdk-react";
+import { AGENT_LAUNCH_ACTION_ID } from "@shared/utils/dispatchAgentLaunch";
 import { resolveEffectiveActionDanger } from "@shared/utils/effectiveActionDanger";
 import {
   setAgentContextDragData,
   validateAgentContextPayload,
+  validateAgentContextReferencePayload,
+  type AgentContextDragData,
 } from "@shared/utils/agentContextDrag";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { getAgentConfig } from "@/config/agents";
@@ -48,6 +51,7 @@ import {
   buildSendToAgentRows,
   filterSendToAgentRows,
 } from "@/components/Plugin/sendToAgentRows";
+import { pluginViewHostId } from "@/components/Plugin/remotePluginView";
 import {
   STATE_COLORS,
   STATE_ICONS,
@@ -111,6 +115,8 @@ const AGENT_STATES = ["idle", "working", "waiting", "directing", "completed", "e
 const UNKNOWN_ACTION_REASON = "Not available in this version of Daintree";
 const PLUGIN_BLOCKED_REASON = "Plugins can't run this action";
 const CONFIRM_REASON = "Asks for confirmation, so run it from Daintree itself";
+const AGENT_LAUNCH_CONFIG_REASON =
+  "Plugins can give an agent a task, not choose its flags, environment, system prompt or preset, or start the task or model with -";
 const DISABLED_FALLBACK_REASON = "Not available right now";
 const PLUGIN_BLOCKED_META = "Not for plugins";
 const CONFIRM_META = "Needs confirmation";
@@ -179,6 +185,10 @@ export function readActionState(actionId: string, args: unknown, revision = 0): 
   } catch {
     // The declared danger stands; dispatch re-checks with validated arguments.
   }
+  // Raised by its arguments, not its tier: "run it from Daintree" would be
+  // wrong advice for a launch the same control could make with a prompt alone.
+  if (danger === "confirm" && entry.danger === "safe" && actionId === AGENT_LAUNCH_ACTION_ID)
+    return blocked(AGENT_LAUNCH_CONFIG_REASON, PLUGIN_BLOCKED_META);
   if (danger !== "safe")
     return danger === "confirm"
       ? blocked(CONFIRM_REASON, CONFIRM_META)
@@ -200,14 +210,21 @@ export function readActionState(actionId: string, args: unknown, revision = 0): 
   };
 }
 
-/** Runs an action as `host.dispatch` would, never throwing. */
+/**
+ * Runs an action as `host.dispatch` would, never throwing. `owner` is the
+ * plugin whose view rendered the control, so the dispatch is audited under it,
+ * unless the view belongs to another machine's plugin: this machine's audit
+ * log would hold that bare id with no host provenance.
+ */
 export async function dispatchActionFromView(
   actionId: string,
-  args: unknown
+  args: unknown,
+  owner: string | null
 ): Promise<PluginActionDispatchOutcome> {
   try {
     const result = await getPluginKitHost().dispatchAction(actionId as ActionId, args, {
       source: "plugin",
+      callerPluginId: pluginViewHostId() === null ? (owner ?? undefined) : undefined,
     });
     if (result.ok) return { ok: true };
     return { ok: false, error: { code: result.error.code, message: result.error.message } };
@@ -354,7 +371,7 @@ function KitActionButton(props: PluginActionButtonProps) {
   const onClick = () => {
     if (blocked || pending) return;
     setPending(true);
-    void dispatchActionFromView(id, args).then((outcome) => {
+    void dispatchActionFromView(id, args, owner).then((outcome) => {
       if (!mounted.current) return;
       setPending(false);
       refresh();
@@ -495,7 +512,7 @@ export function useActionMenuRow(entry: PluginActionMenuItem): KitActionMenuRowM
     icon: field(entry, "icon"),
     shortcut: combo,
     onSelect: () => {
-      void dispatchActionFromView(id, args).then((outcome) =>
+      void dispatchActionFromView(id, args, owner).then((outcome) =>
         reportOutcome(owner, id, state.title, outcome, onDispatched)
       );
     },
@@ -1304,6 +1321,7 @@ function KitContextDragSource({
   text,
   title,
   sourceLabel,
+  reference,
   children,
   label,
   disabled,
@@ -1311,12 +1329,17 @@ function KitContextDragSource({
   className,
   ...rest
 }: PluginContextDragSourceProps) {
-  const payload = validateAgentContextPayload({
-    v: 1,
-    text,
-    ...(title !== undefined ? { title } : {}),
-    ...(sourceLabel !== undefined ? { source: { label: sourceLabel } } : {}),
-  });
+  // A reference (#13795) is carried instead of the text whenever one is given:
+  // the agent then gets the item as it reads when the user sends.
+  const payload: AgentContextDragData | null =
+    reference !== undefined
+      ? validateAgentContextReferencePayload({ v: 2, reference })
+      : validateAgentContextPayload({
+          v: 1,
+          text,
+          ...(title !== undefined ? { title } : {}),
+          ...(sourceLabel !== undefined ? { source: { label: sourceLabel } } : {}),
+        });
   const live = payload !== null && disabled !== true;
   const started = fn(onDragStart);
   const handleDragStart = (event: DragEvent<HTMLElement>) => {

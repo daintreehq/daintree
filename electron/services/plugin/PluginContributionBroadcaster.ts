@@ -11,11 +11,16 @@ import {
 import { CHANNELS } from "../../ipc/channels.js";
 import { getPluginPanelKinds } from "../../../shared/config/panelKindRegistry.js";
 import { getAllPluginToolbarButtonConfigs } from "../../../shared/config/toolbarButtonRegistry.js";
+import { getAllPluginLaunchEntries } from "../../../shared/config/pluginLaunchEntryRegistry.js";
+import { getAllPluginLayouts } from "../../../shared/config/pluginLayoutRegistry.js";
 import { getPluginKeybindings } from "../pluginKeybindingRegistry.js";
 import { getPluginContextMenuItems } from "../pluginContextMenuRegistry.js";
 import { getPluginAgentRegistry } from "../../../shared/config/pluginAgentRegistry.js";
 import { getPluginRecipes } from "./PluginRecipeRegistry.js";
+import { getRegisteredFileDecorationProviders } from "../fileDecorationRegistry.js";
 import { getPluginTours, notifyPluginToursVisibilityChanged } from "./PluginTourRegistry.js";
+import { getPluginHostedViews } from "./PluginHostedViewRegistry.js";
+import { getPluginThemeSchemes } from "./PluginThemeRegistry.js";
 import { getPluginCustomIcons } from "../../../shared/config/pluginCustomIconRegistry.js";
 import {
   hasProjectPluginVisibilityOverrides,
@@ -23,6 +28,7 @@ import {
 } from "./projectPluginVisibility.js";
 import { projectIdFromPluginInstanceKey } from "../../../shared/types/plugin.js";
 import type { PluginActionDescriptor, PluginScopeKey } from "../../../shared/types/plugin.js";
+import type { TerminalRecipe } from "../../../shared/types/project.js";
 
 /**
  * Scope of a plugin's contributions: `"global"` for installed and builtin
@@ -191,6 +197,24 @@ export function getPluginToolbarButtonsForProject(projectId: string | null | und
   );
 }
 
+/** Plugin launch entries visible in a view of `projectId` (#13788). */
+export function getPluginLaunchEntriesForProject(projectId: string | null | undefined) {
+  return selectContributionsForProject(
+    getAllPluginLaunchEntries(),
+    (entry) => entry.pluginId,
+    projectId
+  );
+}
+
+/** Plugin layouts visible in a view of `projectId` (#13780). */
+export function getPluginLayoutsForProject(projectId: string | null | undefined) {
+  return selectContributionsForProject(
+    getAllPluginLayouts(),
+    (layout) => layout.pluginId,
+    projectId
+  );
+}
+
 /** Plugin keybindings visible in a view of `projectId`. */
 export function getPluginKeybindingsForProject(projectId: string | null | undefined) {
   return selectContributionsForProject(
@@ -205,9 +229,22 @@ export function getPluginToursForProject(projectId: string | null | undefined) {
   return selectContributionsForProject(getPluginTours(), (tour) => tour.pluginId, projectId);
 }
 
+/** Plugin views that mount outside the panel grid, visible in a view of `projectId` (#13770). */
+export function getPluginHostedViewsForProject(projectId: string | null | undefined) {
+  return selectContributionsForProject(getPluginHostedViews(), (view) => view.pluginId, projectId);
+}
+
 /** Plugin-shipped custom icons visible in a view of `projectId` (#13143). */
 export function getPluginCustomIconsForProject(projectId: string | null | undefined) {
   return selectContributionsForProject(getPluginCustomIcons(), (icon) => icon.pluginId, projectId);
+}
+
+/**
+ * A plugin recipe's owner. Read from `origin`, never split out of the id: a
+ * plugin id is itself dotted, so the qualified recipe id is ambiguous.
+ */
+export function recipeOwner(recipe: TerminalRecipe): string | undefined {
+  return recipe.origin?.pluginId;
 }
 
 /** Plugin context-menu items visible in a view of `projectId`. */
@@ -224,31 +261,35 @@ interface PluginContributionBroadcasterDeps {
   isDisposed: () => boolean;
   /** Flattened plugin action snapshot — the pluginActions map stays on the facade. */
   listPluginActions: () => PluginActionDescriptor[];
-  /** Resolves once startup load + activation has settled (or dispose ran). */
-  initPromise: Promise<void>;
+  /**
+   * Resolves once the startup scan has settled (or dispose ran) — not startup
+   * activation, which one slow plugin can hold (#14127).
+   */
+  catalogReady: Promise<void>;
   /** Live per-instance runtime health, for the cold-start replay (#12277, #12278). */
   listPluginRuntimeStatuses: () => import("../../../shared/types/plugin.js").PluginRuntimeStatus[];
   /**
-   * True while a plugin is being replaced in place (a dev rebuild reconcile).
-   * The unload half of a replacement empties the registries for one turn, and a
-   * `complete` snapshot taken there is a lie the renderer acts on destructively
-   * — it sweeps persisted preferences for contributions that are about to come
-   * straight back (#12277).
+   * True while the registries hold a partial catalog: a plugin is being
+   * replaced in place (a dev rebuild reconcile), or the startup scan is still
+   * enumerating (#14127). The unload half of a replacement empties the
+   * registries for one turn, and a `complete` snapshot taken there is a lie the
+   * renderer acts on destructively — it sweeps persisted preferences for
+   * contributions that are about to come straight back (#12277).
    */
-  isReplacingPlugin: () => boolean;
+  isRegistryUnsettled: () => boolean;
 }
 
 /**
  * Owns the coalesced per-tick microtask broadcasts for actions, panel kinds,
- * toolbar buttons, keybindings, and context-menu items, plus the cold-start
- * {@link PluginContributionBroadcaster.pushSnapshotTo} replay. Reads the global
- * registry getters, narrows each snapshot to the receiving view's project (see
- * {@link setPluginContributionScope}), and emits via {@link broadcastToRenderer}
- * or {@link broadcastToProjectRenderers}.
+ * toolbar buttons, keybindings, context-menu items and recipes, plus the
+ * cold-start {@link PluginContributionBroadcaster.pushSnapshotTo} replay. Reads
+ * the global registry getters, narrows each snapshot to the receiving view's
+ * project (see {@link setPluginContributionScope}), and emits via
+ * {@link broadcastToRenderer} or {@link broadcastToProjectRenderers}.
  *
- * Agents and recipes are deliberately NOT scoped: both are deferred to a later
- * phase, neither snapshot item carries an owning plugin id, and scoping them
- * would mean per-contribution-point code for a point nothing can reach yet.
+ * Agents are deliberately NOT scoped: the agent snapshot carries no owning
+ * plugin id, and a launched agent is a running process rather than something a
+ * project's views merely show.
  */
 export class PluginContributionBroadcaster {
   private readonly deps: PluginContributionBroadcasterDeps;
@@ -307,8 +348,22 @@ export class PluginContributionBroadcaster {
    * and keeps no preference to sweep, so every snapshot replaces wholesale.
    */
   private toursBroadcastPending = false;
+  /**
+   * Same as {@link toursBroadcastPending}: launch-entry snapshots replace
+   * wholesale. Pins of an entry that is gone are left alone by the launcher's
+   * catalog gate rather than swept, so no snapshot needs to be authoritative.
+   */
+  private launchEntriesBroadcastPending = false;
+  /** Same as {@link toursBroadcastPending}: layout snapshots replace wholesale. */
+  private layoutsBroadcastPending = false;
   /** Same as {@link toursBroadcastPending}: icon snapshots replace wholesale. */
   private iconsBroadcastPending = false;
+  /** Same as {@link toursBroadcastPending}: hosted-view snapshots replace wholesale. */
+  private hostedViewsBroadcastPending = false;
+  /** Same as {@link toursBroadcastPending}: theme catalogs replace wholesale. */
+  private themesBroadcastPending = false;
+  /** The selection the next theme snapshot reports main fell back to, if any. */
+  private pendingThemeFallback: string | null = null;
   /**
    * Same coalescing rationale as {@link panelKindsBroadcastPending}. A plugin's
    * `activate()` typically calls `host.registerAction` many times in one
@@ -401,21 +456,37 @@ export class PluginContributionBroadcaster {
     this.broadcastPluginActions();
     this.schedulePanelKindsBroadcast();
     this.scheduleToolbarButtonsBroadcast(true);
+    this.scheduleLaunchEntriesBroadcast();
+    this.scheduleLayoutsBroadcast();
     this.scheduleKeybindingsBroadcast(true);
     this.scheduleContextMenuItemsBroadcast(true);
     this.scheduleToursBroadcast();
     this.schedulePluginIconsBroadcast();
-    // The native Help menu lists tours per project too; rebuild it.
+    this.scheduleHostedViewsBroadcast();
+    this.scheduleRecipesBroadcast(true);
+    // The native menus list plugin items and tours per project too; rebuild them.
     notifyPluginToursVisibilityChanged();
+    // Decorations are pulled, not pushed, so each view re-pulls with its own
+    // sender context. Every declared scope rather than only bound ones: a
+    // plugin shown again may not have activated in this session yet.
+    const scopes = new Set(
+      getRegisteredFileDecorationProviders().flatMap(({ contribution }) => contribution.scopes)
+    );
+    for (const scope of scopes) {
+      broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
+        name: "plugin:decorations-changed",
+        payload: { scope },
+      });
+    }
   }
 
   /**
-   * Re-publish any authoritative snapshot that was held back while a plugin was
-   * being replaced. Called once the replacement completes; a no-op when nothing
-   * was suppressed.
+   * Re-publish any authoritative snapshot that was held back while the
+   * registries were unsettled. Called once a replacement or the startup scan
+   * completes; a no-op when nothing was suppressed.
    */
   flushDeferredCompleteSnapshots(): void {
-    if (this.deps.isDisposed() || this.deps.isReplacingPlugin()) return;
+    if (this.deps.isDisposed() || this.deps.isRegistryUnsettled()) return;
     if (this.toolbarButtonsBroadcastComplete) this.scheduleToolbarButtonsBroadcast(true);
     if (this.keybindingsBroadcastComplete) this.scheduleKeybindingsBroadcast(true);
     if (this.contextMenuItemsBroadcastComplete) this.scheduleContextMenuItemsBroadcast(true);
@@ -531,7 +602,7 @@ export class PluginContributionBroadcaster {
     this.toolbarButtonsBroadcastPending = true;
     this.defer(() => {
       this.toolbarButtonsBroadcastPending = false;
-      const complete = this.toolbarButtonsBroadcastComplete && !this.deps.isReplacingPlugin();
+      const complete = this.toolbarButtonsBroadcastComplete && !this.deps.isRegistryUnsettled();
       // Cleared only when it was actually published: a `complete` suppressed
       // mid-replacement is still owed, and dropping it here would leave the
       // renderer's stale entries un-swept until some later authoritative event.
@@ -554,7 +625,7 @@ export class PluginContributionBroadcaster {
     if (this.keybindingsBroadcastPending) return;
     this.keybindingsBroadcastPending = true;
     this.defer(() => {
-      const isComplete = this.keybindingsBroadcastComplete && !this.deps.isReplacingPlugin();
+      const isComplete = this.keybindingsBroadcastComplete && !this.deps.isRegistryUnsettled();
       this.keybindingsBroadcastPending = false;
       if (isComplete) this.keybindingsBroadcastComplete = false;
       if (this.deps.isDisposed()) return;
@@ -576,7 +647,7 @@ export class PluginContributionBroadcaster {
     this.contextMenuItemsBroadcastPending = true;
     this.defer(() => {
       this.contextMenuItemsBroadcastPending = false;
-      const drained = this.contextMenuItemsBroadcastComplete && !this.deps.isReplacingPlugin();
+      const drained = this.contextMenuItemsBroadcastComplete && !this.deps.isRegistryUnsettled();
       if (drained) this.contextMenuItemsBroadcastComplete = false;
       if (this.deps.isDisposed()) return;
       this.broadcastPluginContextMenuItems(drained);
@@ -602,7 +673,7 @@ export class PluginContributionBroadcaster {
     this.agentsBroadcastPending = true;
     this.defer(() => {
       this.agentsBroadcastPending = false;
-      const drained = this.agentsBroadcastComplete && !this.deps.isReplacingPlugin();
+      const drained = this.agentsBroadcastComplete && !this.deps.isRegistryUnsettled();
       if (drained) this.agentsBroadcastComplete = false;
       if (this.deps.isDisposed()) return;
       this.broadcastPluginAgents(drained);
@@ -628,7 +699,7 @@ export class PluginContributionBroadcaster {
     this.recipesBroadcastPending = true;
     this.defer(() => {
       this.recipesBroadcastPending = false;
-      const drained = this.recipesBroadcastComplete && !this.deps.isReplacingPlugin();
+      const drained = this.recipesBroadcastComplete && !this.deps.isRegistryUnsettled();
       if (drained) this.recipesBroadcastComplete = false;
       if (this.deps.isDisposed()) return;
       this.broadcastPluginRecipes(drained);
@@ -636,10 +707,10 @@ export class PluginContributionBroadcaster {
   }
 
   private broadcastPluginRecipes(complete: boolean): void {
-    broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
-      name: "plugin:recipes-changed",
-      payload: { recipes: getPluginRecipes(), complete },
-    });
+    this.emitScoped("plugin:recipes-changed", (projectId) => ({
+      recipes: forProject(getPluginRecipes(), recipeOwner, projectId),
+      complete,
+    }));
   }
 
   /** Coalesce tour registry mutations into one scoped snapshot per tick. */
@@ -656,6 +727,34 @@ export class PluginContributionBroadcaster {
     });
   }
 
+  /** Coalesce launch-entry registry mutations into one scoped snapshot per tick (#13788). */
+  scheduleLaunchEntriesBroadcast(): void {
+    if (this.deps.isDisposed()) return;
+    if (this.launchEntriesBroadcastPending) return;
+    this.launchEntriesBroadcastPending = true;
+    this.defer(() => {
+      this.launchEntriesBroadcastPending = false;
+      if (this.deps.isDisposed()) return;
+      this.emitScoped("plugin:launch-entries-changed", (projectId) => ({
+        entries: forProject(getAllPluginLaunchEntries(), (entry) => entry.pluginId, projectId),
+      }));
+    });
+  }
+
+  /** Coalesce layout registry mutations into one scoped snapshot per tick (#13780). */
+  scheduleLayoutsBroadcast(): void {
+    if (this.deps.isDisposed()) return;
+    if (this.layoutsBroadcastPending) return;
+    this.layoutsBroadcastPending = true;
+    this.defer(() => {
+      this.layoutsBroadcastPending = false;
+      if (this.deps.isDisposed()) return;
+      this.emitScoped("plugin:layouts-changed", (projectId) => ({
+        layouts: forProject(getAllPluginLayouts(), (layout) => layout.pluginId, projectId),
+      }));
+    });
+  }
+
   /** Coalesce custom-icon registry mutations into one scoped snapshot per tick. */
   schedulePluginIconsBroadcast(): void {
     if (this.deps.isDisposed()) return;
@@ -666,6 +765,46 @@ export class PluginContributionBroadcaster {
       if (this.deps.isDisposed()) return;
       this.emitScoped("plugin:icons-changed", (projectId) => ({
         icons: forProject(getPluginCustomIcons(), (icon) => icon.pluginId, projectId),
+      }));
+    });
+  }
+
+  /**
+   * Coalesce theme catalog changes into one snapshot per tick (#13832). Not
+   * project-scoped: the app theme is one machine-wide selection, so every view
+   * sees every installed plugin's themes. A fallback main persisted rides along
+   * so each view moves off the vanished theme without re-reading the store.
+   */
+  scheduleThemesBroadcast(fallbackSchemeId: string | null = null): void {
+    if (this.deps.isDisposed()) return;
+    if (fallbackSchemeId !== null) this.pendingThemeFallback = fallbackSchemeId;
+    if (this.themesBroadcastPending) return;
+    this.themesBroadcastPending = true;
+    this.defer(() => {
+      this.themesBroadcastPending = false;
+      const fallback = this.pendingThemeFallback;
+      this.pendingThemeFallback = null;
+      if (this.deps.isDisposed()) return;
+      broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
+        name: "plugin:themes-changed",
+        payload: {
+          themes: getPluginThemeSchemes(),
+          ...(fallback !== null ? { fallbackSchemeId: fallback } : {}),
+        },
+      });
+    });
+  }
+
+  /** Coalesce hosted-view registry mutations into one scoped snapshot per tick (#13770). */
+  scheduleHostedViewsBroadcast(): void {
+    if (this.deps.isDisposed()) return;
+    if (this.hostedViewsBroadcastPending) return;
+    this.hostedViewsBroadcastPending = true;
+    this.defer(() => {
+      this.hostedViewsBroadcastPending = false;
+      if (this.deps.isDisposed()) return;
+      this.emitScoped("plugin:hosted-views-changed", (projectId) => ({
+        views: forProject(getPluginHostedViews(), (view) => view.pluginId, projectId),
       }));
     });
   }
@@ -696,7 +835,7 @@ export class PluginContributionBroadcaster {
     webContents: Pick<Electron.WebContents, "id" | "isDestroyed" | "send">,
     projectId?: string | null
   ): Promise<void> {
-    await this.deps.initPromise;
+    await this.deps.catalogReady;
     if (this.deps.isDisposed()) return;
     if (webContents.isDestroyed()) return;
     // `undefined` means "the caller did not resolve one" — look it up from the
@@ -728,13 +867,25 @@ export class PluginContributionBroadcaster {
         },
       },
       {
+        name: "plugin:launch-entries-changed",
+        payload: {
+          entries: forProject(getAllPluginLaunchEntries(), (entry) => entry.pluginId, target),
+        },
+      },
+      {
+        name: "plugin:layouts-changed",
+        payload: {
+          layouts: forProject(getAllPluginLayouts(), (layout) => layout.pluginId, target),
+        },
+      },
+      {
         name: "plugin:keybindings-changed",
         payload: {
           keybindings: forProject(getPluginKeybindings(), (e) => e.pluginId, target),
           // Authoritative only when the registries are whole. A view attaching
           // mid-replacement would otherwise be handed a snapshot missing the
           // plugin being rebuilt and sweep its preferences against it.
-          complete: !this.deps.isReplacingPlugin(),
+          complete: !this.deps.isRegistryUnsettled(),
         },
       },
       {
@@ -750,7 +901,7 @@ export class PluginContributionBroadcaster {
       },
       {
         name: "plugin:recipes-changed",
-        payload: { recipes: getPluginRecipes(), complete: false },
+        payload: { recipes: forProject(getPluginRecipes(), recipeOwner, target), complete: false },
       },
       {
         name: "plugin:tours-changed",
@@ -759,6 +910,10 @@ export class PluginContributionBroadcaster {
       {
         name: "plugin:icons-changed",
         payload: { icons: forProject(getPluginCustomIcons(), (icon) => icon.pluginId, target) },
+      },
+      {
+        name: "plugin:hosted-views-changed",
+        payload: { views: forProject(getPluginHostedViews(), (view) => view.pluginId, target) },
       },
       // Narrowed by instance ownership, not by `forProject`: a runtime status is
       // health metadata about a backend, so what governs it is which project the

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
 import { BRACKETED_PASTE_END, BRACKETED_PASTE_START } from "@shared/utils/terminalInputProtocol";
 
@@ -31,9 +31,12 @@ vi.mock("@/store/panelStore", () => ({
   usePanelStore: { getState: panelStoreMock.getState },
 }));
 vi.mock("@/lib/panelContextMenu", () => contextMenuMock);
-vi.mock("@/services/terminal/TerminalInstanceService", () => ({
-  terminalInstanceService: terminalInstanceMock,
-}));
+vi.mock("@/services/terminal/TerminalInstanceService", () => {
+  const terminalInstanceService = terminalInstanceMock;
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 vi.mock("@/clients", () => ({ terminalClient: terminalClientMock }));
 vi.mock("@/hooks/useSendToAgentPalette", () => sendToAgentMock);
 vi.mock("@/store/terminalInputStore", () => terminalInputStoreMock);
@@ -43,6 +46,13 @@ vi.mock("@shared/config/panelKindRegistry", () => ({
 }));
 
 import { registerTerminalInputActions } from "../terminalInputActions";
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
+});
 
 type ManagedStub = {
   terminal?: {

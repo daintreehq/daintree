@@ -17,6 +17,12 @@ const createMockWebContents = () => ({
   inspectElement: vi.fn(),
   paste: vi.fn(),
   isDestroyed: vi.fn().mockReturnValue(false),
+  isCurrentlyAudible: vi.fn().mockReturnValue(false),
+  isDevToolsOpened: vi.fn().mockReturnValue(false),
+  isLoading: vi.fn().mockReturnValue(false),
+  getOSProcessId: vi.fn().mockReturnValue(0),
+  mainFrame: { framesInSubtree: [] as Array<{ osProcessId: number }> },
+  removeListener: vi.fn().mockReturnThis(),
   session: {
     flushStorageData: vi.fn().mockResolvedValue(undefined),
   },
@@ -76,6 +82,16 @@ const lifecycleMocks = vi.hoisted(() => ({
 
 vi.mock("../../utils/webContentsLifecycle.js", () => lifecycleMocks);
 
+const keyMocks = vi.hoisted(() => ({
+  findPortalPageAction: vi.fn((): string | undefined => undefined),
+  claimDictationKey: vi.fn(() => false),
+}));
+
+vi.mock("../menuAccelerators.js", () => ({ findPortalPageAction: keyMocks.findPortalPageAction }));
+vi.mock("../voice/pageDictationKey.js", () => ({
+  claimPageDictationKey: keyMocks.claimDictationKey,
+}));
+
 describe("PortalManager", () => {
   let PortalManagerClass: typeof import("../PortalManager.js").PortalManager;
   let mockWindow: InstanceType<typeof import("electron").BrowserWindow>;
@@ -126,6 +142,63 @@ describe("PortalManager", () => {
       manager.createTab("tab-6", "not-a-valid-url");
 
       expect(manager.hasTab("tab-6")).toBe(false);
+    });
+  });
+
+  describe("the dictation key on a portal page (#14601)", () => {
+    type InputHandler = (event: { preventDefault: () => void }, input: unknown) => void;
+
+    function pageKeyHandler(): InputHandler {
+      const manager = new PortalManagerClass(mockWindow);
+      manager.createTab("tab-dictate", "http://localhost:3000");
+      const call = createdWebContents[0]!.on.mock.calls.find(
+        ([event]) => event === "before-input-event"
+      );
+      return call![1] as InputHandler;
+    }
+
+    const menuActions = () =>
+      vi
+        .mocked(mockWindow.webContents.send)
+        .mock.calls.filter(([channel]) => channel === "menu:action");
+
+    afterEach(() => {
+      keyMocks.claimDictationKey.mockReturnValue(false);
+      keyMocks.findPortalPageAction.mockReturnValue(undefined);
+    });
+
+    it("takes the key from the page when it stops dictation running elsewhere", () => {
+      keyMocks.claimDictationKey.mockReturnValue(true);
+      const handler = pageKeyHandler();
+      const event = { preventDefault: vi.fn() };
+      const input = { type: "keyDown", key: ".", meta: true, isAutoRepeat: false };
+
+      handler(event, input);
+
+      expect(keyMocks.claimDictationKey).toHaveBeenCalledWith(input);
+      expect(event.preventDefault).toHaveBeenCalledTimes(1);
+      expect(keyMocks.findPortalPageAction).not.toHaveBeenCalled();
+      expect(menuActions()).toEqual([]);
+    });
+
+    it("leaves the portal's own keys working when nothing is running", () => {
+      keyMocks.findPortalPageAction.mockReturnValue("portal.closeTab");
+      const handler = pageKeyHandler();
+      const event = { preventDefault: vi.fn() };
+
+      handler(event, { type: "keyDown", key: "w", meta: true, isAutoRepeat: false });
+
+      expect(event.preventDefault).toHaveBeenCalledTimes(1);
+      expect(menuActions()).toEqual([["menu:action", { actionId: "portal.closeTab" }]]);
+    });
+
+    it("leaves other keys to the page", () => {
+      const handler = pageKeyHandler();
+      const event = { preventDefault: vi.fn() };
+
+      handler(event, { type: "keyDown", key: "k", meta: true, isAutoRepeat: false });
+
+      expect(event.preventDefault).not.toHaveBeenCalled();
     });
   });
 
@@ -1060,5 +1133,571 @@ describe("PortalManager destroyHiddenTabs()", () => {
 
     expect(result).toEqual([]);
     expect(manager.hasTab("tab-only")).toBe(true);
+  });
+});
+
+describe("PortalManager across project views (#14537)", () => {
+  let PortalManagerClass: typeof import("../PortalManager.js").PortalManager;
+  let PORTAL_MAX_LIVE_TABS: number;
+  let mockWindow: InstanceType<typeof import("electron").BrowserWindow>;
+  const frontView = { id: 1, send: vi.fn(), isDestroyed: () => false };
+  const cachedView = { id: 2, send: vi.fn(), isDestroyed: () => false };
+
+  const sentOn = (wc: { send: ReturnType<typeof vi.fn> }, channel: string) =>
+    wc.send.mock.calls.filter(([ch]) => ch === channel).map(([, payload]) => payload);
+
+  const handlerFor = (wc: ReturnType<typeof createMockWebContents>, event: string) => {
+    const calls = [...wc.on.mock.calls, ...wc.once.mock.calls] as Array<
+      [string, (...args: unknown[]) => void]
+    >;
+    return calls.find(([name]) => name === event)![1];
+  };
+
+  beforeEach(async () => {
+    createdWebContents.length = 0;
+    vi.resetModules();
+    vi.doMock("../../window/webContentsRegistry.js", () => ({
+      getAppWebContents: () => frontView,
+      getWindowAppWebContents: () => [frontView, cachedView],
+    }));
+
+    const electron = await import("electron");
+    mockWindow = new electron.BrowserWindow() as InstanceType<typeof electron.BrowserWindow>;
+
+    const module = await import("../PortalManager.js");
+    PortalManagerClass = module.PortalManager;
+    PORTAL_MAX_LIVE_TABS = module.PORTAL_MAX_LIVE_TABS;
+  });
+
+  afterEach(() => {
+    vi.doUnmock("../../window/webContentsRegistry.js");
+    vi.clearAllMocks();
+  });
+
+  it("tells a cached project view when LRU eviction takes one of its tabs", () => {
+    const manager = new PortalManagerClass(mockWindow);
+    for (let i = 1; i <= PORTAL_MAX_LIVE_TABS + 1; i++) {
+      manager.createTab(`tab-${i}`, `http://localhost:${1000 + i}`);
+    }
+
+    expect(sentOn(cachedView, "portal:tab-evicted")).toEqual([{ tabId: "tab-1" }]);
+    expect(sentOn(frontView, "portal:tab-evicted")).toEqual([{ tabId: "tab-1" }]);
+  });
+
+  it("tells a cached project view when memory pressure takes its tabs, before the flush ends", async () => {
+    const manager = new PortalManagerClass(mockWindow);
+    manager.createTab("tab-1", "http://localhost:3000");
+    manager.createTab("tab-2", "http://localhost:3001");
+    manager.showTab("tab-2", { x: 0, y: 0, width: 800, height: 600 });
+    let finishFlush!: () => void;
+    createdWebContents[0].session.flushStorageData.mockReturnValue(
+      new Promise<void>((resolve) => {
+        finishFlush = resolve;
+      })
+    );
+
+    const sweep = manager.destroyHiddenTabs();
+
+    expect(sentOn(cachedView, "portal:tabs-evicted")).toEqual([{ tabIds: ["tab-1"] }]);
+    expect(sentOn(frontView, "portal:tabs-evicted")).toEqual([{ tabIds: ["tab-1"] }]);
+    finishFlush();
+    await sweep;
+  });
+
+  it("announces nothing when memory pressure takes no tabs", async () => {
+    const manager = new PortalManagerClass(mockWindow);
+    manager.createTab("tab-1", "http://localhost:3000");
+    manager.showTab("tab-1", { x: 0, y: 0, width: 800, height: 600 });
+
+    await manager.destroyHiddenTabs();
+
+    expect(sentOn(cachedView, "portal:tabs-evicted")).toEqual([]);
+  });
+
+  it("keeps a cached project view's tab URL current", () => {
+    const manager = new PortalManagerClass(mockWindow);
+    manager.createTab("tab-1", "http://localhost:3000");
+
+    handlerFor(createdWebContents[0], "did-navigate")({}, "http://localhost:3000/next");
+
+    expect(sentOn(cachedView, "portal:nav-event")).toEqual([
+      { tabId: "tab-1", title: "Test Page", url: "http://localhost:3000/next" },
+    ]);
+  });
+
+  it("drops navigation from a released view once its tab is recreated", async () => {
+    const manager = new PortalManagerClass(mockWindow);
+    manager.createTab("tab-1", "http://localhost:3000");
+    const oldView = createdWebContents[0];
+    await manager.closeTab("tab-1");
+    manager.createTab("tab-1", "http://localhost:3000/new");
+
+    handlerFor(oldView, "did-navigate")({}, "http://localhost:3000/stale");
+    handlerFor(createdWebContents[1], "did-navigate")({}, "http://localhost:3000/new");
+
+    expect(sentOn(cachedView, "portal:nav-event")).toEqual([
+      { tabId: "tab-1", title: "Test Page", url: "http://localhost:3000/new" },
+    ]);
+  });
+
+  it("spares a tab between its create and its show from memory pressure", async () => {
+    const manager = new PortalManagerClass(mockWindow);
+    manager.createTab("tab-1", "http://localhost:3000");
+    manager.showTab("tab-1", { x: 0, y: 0, width: 800, height: 600 });
+    manager.markRestoring("tab-2");
+    manager.createTab("tab-2", "http://localhost:3001");
+
+    const destroyed = await manager.destroyHiddenTabs();
+
+    expect(destroyed).toEqual([]);
+    expect(manager.hasTab("tab-2")).toBe(true);
+  });
+
+  it("reports whether it had a view to show", async () => {
+    const manager = new PortalManagerClass(mockWindow);
+    const bounds = { x: 0, y: 0, width: 800, height: 600 };
+    manager.createTab("tab-1", "http://localhost:3000");
+
+    await expect(manager.showTab("tab-1", bounds)).resolves.toBe(true);
+    await expect(manager.showTab("tab-gone", bounds)).resolves.toBe(false);
+  });
+
+  it("keeps a tab recreated while its old view is still shutting down", async () => {
+    const manager = new PortalManagerClass(mockWindow);
+    const bounds = { x: 0, y: 0, width: 800, height: 600 };
+    manager.createTab("tab-1", "http://localhost:3000");
+    manager.showTab("tab-1", bounds);
+    const oldView = createdWebContents[0];
+
+    await manager.closeTab("tab-1");
+    manager.createTab("tab-1", "http://localhost:3000");
+    manager.showTab("tab-1", bounds);
+    handlerFor(oldView, "destroyed")();
+
+    expect(manager.hasTab("tab-1")).toBe(true);
+    expect(manager.getActiveTabId()).toBe("tab-1");
+    await expect(manager.showTab("tab-1", bounds)).resolves.toBe(true);
+  });
+});
+
+describe("PortalManager idle release (#14538)", () => {
+  let mod: typeof import("../PortalManager.js");
+  let mockWindow: InstanceType<typeof import("electron").BrowserWindow>;
+  const frontView = { id: 1, send: vi.fn(), isDestroyed: () => false };
+  const cachedView = { id: 2, send: vi.fn(), isDestroyed: () => false };
+  const logMocks = vi.hoisted(() => ({ logInfo: vi.fn(), logWarn: vi.fn() }));
+  const metricsMocks = vi.hoisted(() => ({
+    getAppMetricsSnapshot: vi.fn(
+      (): Array<{ pid: number; memory: { workingSetSize: number } }> => []
+    ),
+  }));
+  const bounds = { x: 0, y: 0, width: 800, height: 600 };
+  const HOUR = 60 * 60 * 1000;
+
+  type MockWc = ReturnType<typeof createMockWebContents>;
+
+  const sentOn = (wc: { send: ReturnType<typeof vi.fn> }, channel: string) =>
+    wc.send.mock.calls.filter(([ch]) => ch === channel).map(([, payload]) => payload);
+
+  const emit = (wc: MockWc, event: string, ...args: unknown[]) => {
+    const removed = new Set(wc.removeListener.mock.calls.map(([, handler]) => handler));
+    const calls = [...wc.on.mock.calls, ...wc.once.mock.calls] as Array<
+      [string, (...a: unknown[]) => void]
+    >;
+    for (const [name, handler] of calls) {
+      if (name === event && !removed.has(handler)) handler(...args);
+    }
+  };
+
+  const closeDestroys = (wc: MockWc) =>
+    wc.close.mockImplementation(() => queueMicrotask(() => emit(wc, "destroyed")));
+
+  beforeEach(async () => {
+    createdWebContents.length = 0;
+    vi.resetModules();
+    vi.doMock("../../window/webContentsRegistry.js", () => ({
+      getAppWebContents: () => frontView,
+      getWindowAppWebContents: () => [frontView, cachedView],
+    }));
+    vi.doMock("../../utils/logger.js", () => logMocks);
+    vi.doMock("../../utils/appMetricsSnapshot.js", () => metricsMocks);
+    vi.doMock("../../utils/processMemory.js", () => ({
+      getProcessMemoryKb: (m: { memory: { workingSetSize: number } }) => m.memory.workingSetSize,
+    }));
+
+    const electron = await import("electron");
+    mockWindow = new electron.BrowserWindow() as InstanceType<typeof electron.BrowserWindow>;
+    mod = await import("../PortalManager.js");
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-26T09:00:00Z"));
+  });
+
+  afterEach(() => {
+    vi.doUnmock("../../window/webContentsRegistry.js");
+    vi.doUnmock("../../utils/logger.js");
+    vi.doUnmock("../../utils/appMetricsSnapshot.js");
+    vi.doUnmock("../../utils/processMemory.js");
+    vi.clearAllMocks();
+    vi.useRealTimers();
+  });
+
+  /** tab-1 parked behind tab-2, which is on screen. */
+  const parkedBehindAnother = async () => {
+    const manager = new mod.PortalManager(mockWindow);
+    manager.createTab("tab-1", "http://localhost:3001");
+    await manager.showTab("tab-1", bounds);
+    manager.createTab("tab-2", "http://localhost:3002");
+    await manager.showTab("tab-2", bounds);
+    return { manager, parked: createdWebContents[0]!, shown: createdWebContents[1]! };
+  };
+
+  it("releases a tab after an hour off screen, counting time the machine slept", async () => {
+    const { manager, parked, shown } = await parkedBehindAnother();
+    closeDestroys(parked);
+
+    // One check interval of timer time, but an hour of wall clock: asleep.
+    vi.setSystemTime(Date.now() + HOUR);
+    await vi.advanceTimersByTimeAsync(mod.PORTAL_IDLE_CHECK_INTERVAL_MS);
+
+    expect(parked.close).toHaveBeenCalledWith({ waitForBeforeUnload: true });
+    expect(shown.close).not.toHaveBeenCalled();
+    expect(manager.hasTab("tab-1")).toBe(false);
+    expect(manager.hasTab("tab-2")).toBe(true);
+    expect(sentOn(frontView, "portal:tab-evicted")).toEqual([{ tabId: "tab-1" }]);
+    expect(sentOn(cachedView, "portal:tab-evicted")).toEqual([{ tabId: "tab-1" }]);
+    manager.destroy();
+  });
+
+  it("logs each release with how long the tab was hidden and its footprint", async () => {
+    const { manager, parked } = await parkedBehindAnother();
+    closeDestroys(parked);
+    parked.getOSProcessId.mockReturnValue(101);
+    parked.mainFrame.framesInSubtree = [{ osProcessId: 202 }, { osProcessId: 202 }];
+    metricsMocks.getAppMetricsSnapshot.mockReturnValue([
+      { pid: 101, memory: { workingSetSize: 150_000 } },
+      { pid: 202, memory: { workingSetSize: 50_000 } },
+      { pid: 303, memory: { workingSetSize: 999_999 } },
+    ]);
+
+    vi.setSystemTime(Date.now() + HOUR + 1000);
+    await manager.releaseIdleTabs();
+
+    expect(logMocks.logInfo).toHaveBeenCalledWith("portal.idle-release", {
+      tabId: "tab-1",
+      hiddenMs: HOUR + 1000,
+      memoryKb: 200_000,
+      processCount: 2,
+    });
+    manager.destroy();
+  });
+
+  it("never releases the tab on screen", async () => {
+    const { manager, parked, shown } = await parkedBehindAnother();
+    closeDestroys(parked);
+    vi.setSystemTime(Date.now() + 5 * HOUR);
+
+    await manager.releaseIdleTabs();
+
+    expect(shown.close).not.toHaveBeenCalled();
+    expect(manager.getActiveTabId()).toBe("tab-2");
+    manager.destroy();
+  });
+
+  it("counts a hidden dock's tab from when it was hidden, not from activeTabId", async () => {
+    const manager = new mod.PortalManager(mockWindow);
+    manager.createTab("tab-1", "http://localhost:3001");
+    await manager.showTab("tab-1", bounds);
+    const wc = createdWebContents[0]!;
+    closeDestroys(wc);
+
+    vi.setSystemTime(Date.now() + 50 * 60_000);
+    manager.hideAll();
+    vi.setSystemTime(Date.now() + 10 * 60_000);
+    manager.hideAll();
+    vi.setSystemTime(Date.now() + 20 * 60_000);
+    await manager.releaseIdleTabs();
+    expect(wc.close).not.toHaveBeenCalled();
+
+    vi.setSystemTime(Date.now() + 30 * 60_000);
+    await manager.releaseIdleTabs();
+    expect(manager.hasTab("tab-1")).toBe(false);
+    expect(manager.getActiveTabId()).toBeNull();
+    manager.destroy();
+  });
+
+  it.each([
+    ["playing audio", (wc: MockWc) => wc.isCurrentlyAudible.mockReturnValue(true)],
+    ["with devtools open", (wc: MockWc) => wc.isDevToolsOpened.mockReturnValue(true)],
+    ["still loading", (wc: MockWc) => wc.isLoading.mockReturnValue(true)],
+  ])("keeps a tab %s", async (_label, exempt) => {
+    const { manager, parked } = await parkedBehindAnother();
+    exempt(parked);
+    vi.setSystemTime(Date.now() + 2 * HOUR);
+
+    await manager.releaseIdleTabs();
+
+    expect(parked.close).not.toHaveBeenCalled();
+    expect(manager.hasTab("tab-1")).toBe(true);
+    manager.destroy();
+  });
+
+  it("keeps a tab mid-restore, but not one whose restore was abandoned", async () => {
+    const manager = new mod.PortalManager(mockWindow);
+    manager.createTab("tab-1", "http://localhost:3001");
+    await manager.showTab("tab-1", bounds);
+    manager.markRestoring("tab-2");
+    manager.createTab("tab-2", "http://localhost:3002");
+    const restoring = createdWebContents[1]!;
+    closeDestroys(restoring);
+
+    vi.setSystemTime(Date.now() + HOUR);
+    manager.markRestoring("tab-2");
+    await manager.releaseIdleTabs();
+    expect(restoring.close).not.toHaveBeenCalled();
+
+    vi.setSystemTime(Date.now() + mod.PORTAL_RESTORE_LEASE_MS);
+    await manager.releaseIdleTabs();
+    expect(manager.hasTab("tab-2")).toBe(false);
+    manager.destroy();
+  });
+
+  it("leaves a tab whose page refuses exactly as it was, and asks again an hour later", async () => {
+    const { manager, parked } = await parkedBehindAnother();
+    parked.close.mockImplementation(() =>
+      queueMicrotask(() => emit(parked, "will-prevent-unload"))
+    );
+
+    vi.setSystemTime(Date.now() + HOUR);
+    await expect(manager.releaseIdleTabs()).resolves.toEqual([]);
+
+    expect(manager.hasTab("tab-1")).toBe(true);
+    expect(mockWindow.contentView.removeChildView).not.toHaveBeenCalled();
+    expect(sentOn(frontView, "portal:tab-evicted")).toEqual([]);
+    expect(sentOn(cachedView, "portal:tab-evicted")).toEqual([]);
+
+    vi.setSystemTime(Date.now() + HOUR - 1000);
+    await manager.releaseIdleTabs();
+    expect(parked.close).toHaveBeenCalledTimes(1);
+
+    closeDestroys(parked);
+    vi.setSystemTime(Date.now() + 1000);
+    await manager.releaseIdleTabs();
+    expect(parked.close).toHaveBeenCalledTimes(2);
+    expect(manager.hasTab("tab-1")).toBe(false);
+    manager.destroy();
+  });
+
+  it("calls the release off when the tab is shown during its storage flush", async () => {
+    const { manager, parked } = await parkedBehindAnother();
+    let finishFlush!: () => void;
+    parked.session.flushStorageData.mockReturnValue(
+      new Promise<void>((resolve) => (finishFlush = resolve))
+    );
+    vi.setSystemTime(Date.now() + HOUR);
+
+    const release = manager.releaseIdleTabs();
+    await expect(manager.showTab("tab-1", bounds)).resolves.toBe(true);
+    manager.hideAll();
+    vi.setSystemTime(Date.now() + HOUR);
+    finishFlush();
+
+    await expect(release).resolves.toEqual([]);
+    expect(parked.close).not.toHaveBeenCalled();
+    expect(manager.hasTab("tab-1")).toBe(true);
+    manager.destroy();
+  });
+
+  it("holds a show that lands after the close was sent until the page answers", async () => {
+    const { manager, parked } = await parkedBehindAnother();
+    vi.setSystemTime(Date.now() + HOUR);
+    const release = manager.releaseIdleTabs();
+    await vi.waitFor(() => expect(parked.close).toHaveBeenCalled());
+
+    const show = manager.showTab("tab-1", bounds);
+    await Promise.resolve();
+    expect(manager.getActiveTabId()).toBe("tab-2");
+
+    emit(parked, "will-prevent-unload");
+    await expect(show).resolves.toBe(true);
+    expect(manager.getActiveTabId()).toBe("tab-1");
+    await release;
+    manager.destroy();
+  });
+
+  it("answers false to a waiting show when the page let the release through", async () => {
+    const { manager, parked } = await parkedBehindAnother();
+    vi.setSystemTime(Date.now() + HOUR);
+    const release = manager.releaseIdleTabs();
+    await vi.waitFor(() => expect(parked.close).toHaveBeenCalled());
+
+    const show = manager.showTab("tab-1", bounds);
+    emit(parked, "destroyed");
+
+    await expect(show).resolves.toBe(false);
+    await expect(release).resolves.toEqual(["tab-1"]);
+    expect(manager.getActiveTabId()).toBe("tab-2");
+    manager.destroy();
+  });
+
+  it("doesn't show a waiting tab over an overlay opened while it waited", async () => {
+    const { manager, parked } = await parkedBehindAnother();
+    vi.setSystemTime(Date.now() + HOUR);
+    const release = manager.releaseIdleTabs();
+    await vi.waitFor(() => expect(parked.close).toHaveBeenCalled());
+
+    const show = manager.showTab("tab-1", bounds);
+    manager.hideAll();
+    emit(parked, "will-prevent-unload");
+
+    await expect(show).resolves.toBe(true);
+    expect(manager.getActiveTabId()).toBe("tab-2");
+    await release;
+    manager.destroy();
+  });
+
+  it("keeps holding a show after the sweep stops waiting, and logs a late release once", async () => {
+    const { manager, parked } = await parkedBehindAnother();
+    vi.setSystemTime(Date.now() + HOUR);
+
+    const release = manager.releaseIdleTabs();
+    await vi.advanceTimersByTimeAsync(15_000);
+    await expect(release).resolves.toEqual([]);
+    expect(manager.hasTab("tab-1")).toBe(true);
+
+    const show = manager.showTab("tab-1", bounds);
+    await Promise.resolve();
+    emit(parked, "destroyed");
+
+    await expect(show).resolves.toBe(false);
+    expect(manager.getActiveTabId()).toBe("tab-2");
+    expect(sentOn(cachedView, "portal:tab-evicted")).toEqual([{ tabId: "tab-1" }]);
+    expect(
+      logMocks.logInfo.mock.calls.filter(([event]) => event === "portal.idle-release")
+    ).toHaveLength(1);
+    manager.destroy();
+  });
+
+  it("lets a held show through once a close has gone a minute unanswered", async () => {
+    const { manager, parked } = await parkedBehindAnother();
+    vi.setSystemTime(Date.now() + HOUR);
+    void manager.releaseIdleTabs();
+    await vi.waitFor(() => expect(parked.close).toHaveBeenCalled());
+
+    const show = manager.showTab("tab-1", bounds);
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    await expect(show).resolves.toBe(true);
+    expect(manager.getActiveTabId()).toBe("tab-1");
+    expect(logMocks.logWarn).toHaveBeenCalledWith(
+      "portal.idle-release-no-verdict",
+      expect.objectContaining({ tabId: "tab-1" })
+    );
+    manager.destroy();
+  });
+
+  it("logs a release that lands after its deadline once, however often it was asked", async () => {
+    const { manager, parked } = await parkedBehindAnother();
+    vi.setSystemTime(Date.now() + HOUR);
+    void manager.releaseIdleTabs();
+    await vi.advanceTimersByTimeAsync(60_000);
+    vi.setSystemTime(Date.now() + HOUR);
+    void manager.releaseIdleTabs();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(parked.close).toHaveBeenCalledTimes(2);
+
+    emit(parked, "destroyed");
+
+    const releases = logMocks.logInfo.mock.calls.filter(([e]) => e === "portal.idle-release");
+    expect(releases).toEqual([
+      ["portal.idle-release", expect.objectContaining({ tabId: "tab-1" })],
+    ]);
+    expect(sentOn(cachedView, "portal:tab-evicted")).toEqual([{ tabId: "tab-1" }]);
+    manager.destroy();
+  });
+
+  it("doesn't log a user's close as an idle release after an unanswered one", async () => {
+    const { manager, parked } = await parkedBehindAnother();
+    vi.setSystemTime(Date.now() + HOUR);
+    void manager.releaseIdleTabs();
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    await manager.closeTab("tab-1");
+    emit(parked, "destroyed");
+
+    expect(logMocks.logInfo.mock.calls.some(([e]) => e === "portal.idle-release")).toBe(false);
+    manager.destroy();
+  });
+
+  it("doesn't let a newer show be overtaken by one that waited out a release", async () => {
+    const { manager, parked } = await parkedBehindAnother();
+    vi.setSystemTime(Date.now() + HOUR);
+    const release = manager.releaseIdleTabs();
+    await vi.waitFor(() => expect(parked.close).toHaveBeenCalled());
+
+    const waiting = manager.showTab("tab-1", bounds);
+    await expect(manager.showTab("tab-2", bounds)).resolves.toBe(true);
+    emit(parked, "will-prevent-unload");
+
+    await expect(waiting).resolves.toBe(true);
+    expect(manager.getActiveTabId()).toBe("tab-2");
+    await release;
+    manager.destroy();
+  });
+
+  it("brings the tab count back under the cap when refused releases held it over", async () => {
+    const manager = new mod.PortalManager(mockWindow);
+    for (let i = 1; i <= mod.PORTAL_MAX_LIVE_TABS; i++) {
+      manager.createTab(`tab-${i}`, `http://localhost:${3000 + i}`);
+    }
+    vi.setSystemTime(Date.now() + HOUR);
+    const release = manager.releaseIdleTabs();
+    await vi.waitFor(() =>
+      expect(createdWebContents.every((wc) => wc.close.mock.calls.length === 1)).toBe(true)
+    );
+
+    manager.createTab("tab-new", "http://localhost:4000");
+    await manager.showTab("tab-new", bounds);
+    expect(manager.hasTab("tab-1")).toBe(true);
+
+    for (const wc of createdWebContents.slice(0, mod.PORTAL_MAX_LIVE_TABS)) {
+      emit(wc, "will-prevent-unload");
+    }
+    await release;
+
+    const live = ["tab-1", "tab-2", "tab-3", "tab-new"].filter((id) => manager.hasTab(id));
+    expect(live).toHaveLength(mod.PORTAL_MAX_LIVE_TABS);
+    expect(live).toContain("tab-new");
+    manager.destroy();
+  });
+
+  it("checks the exemptions again after the storage flush", async () => {
+    const { manager, parked } = await parkedBehindAnother();
+    let finishFlush!: () => void;
+    parked.session.flushStorageData.mockReturnValue(
+      new Promise<void>((resolve) => (finishFlush = resolve))
+    );
+    vi.setSystemTime(Date.now() + HOUR);
+
+    const release = manager.releaseIdleTabs();
+    parked.isCurrentlyAudible.mockReturnValue(true);
+    finishFlush();
+
+    await expect(release).resolves.toEqual([]);
+    expect(parked.close).not.toHaveBeenCalled();
+    manager.destroy();
+  });
+
+  it("runs no check timer unless a tab is hidden", async () => {
+    const manager = new mod.PortalManager(mockWindow);
+    manager.createTab("tab-1", "http://localhost:3001");
+    expect(vi.getTimerCount()).toBe(1);
+
+    await manager.showTab("tab-1", bounds);
+    expect(vi.getTimerCount()).toBe(0);
+
+    manager.hideAll();
+    expect(vi.getTimerCount()).toBe(1);
+    manager.destroy();
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

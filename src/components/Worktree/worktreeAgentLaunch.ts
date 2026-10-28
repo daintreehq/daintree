@@ -201,3 +201,53 @@ export async function startFirstAgentWhenReady(launch: FirstAgentLaunch): Promis
   }
   await launchOrNotify(launch);
 }
+
+/** A new worktree's recipe or cloned layout that starts an agent. */
+export interface AgentLayoutLaunch {
+  worktreeId: string;
+  /** What the handback names: the recipe's name, or "Cloned layout". */
+  name: string;
+  /** Spawns the layout. Reports its own failures; never rejects. */
+  run: () => Promise<void>;
+}
+
+/**
+ * The same rule as the first agent's, for a recipe or cloned layout that
+ * starts one: it runs once setup reports ready — plugin setup steps included
+ * (#13807) — and is handed back with a way to run it when setup ends any other
+ * way, instead of starting an agent into an unprepared tree.
+ */
+export async function runAgentLayoutWhenReady(launch: AgentLayoutLaunch): Promise<void> {
+  let outcome: SetupWaitOutcome;
+  try {
+    outcome = await waitForWorktreeSetup(launch.worktreeId);
+  } catch {
+    outcome = "error";
+  }
+  if (outcome === "ready") {
+    await launch.run();
+    return;
+  }
+  const reason = outcome === "pending" || outcome === "running" ? "still-running" : outcome;
+  let fired = false;
+  const bar = { id: "" };
+  bar.id = notify({
+    type: "warning",
+    title: "Recipe not started",
+    message: `${describeReason(reason, launch.name)} ${launch.name} starts an agent, so it waits for setup.`,
+    correlationId: launch.worktreeId,
+    context: { eventKind: "agent", worktreeId: launch.worktreeId },
+    placement: "grid-bar",
+    urgent: true,
+    duration: 0,
+    action: {
+      label: `Run ${launch.name}`,
+      onClick: () => {
+        if (fired) return;
+        fired = true;
+        if (bar.id) useNotificationStore.getState().dismissNotification(bar.id);
+        void (REWAIT_REASONS.has(reason) ? runAgentLayoutWhenReady(launch) : launch.run());
+      },
+    },
+  });
+}

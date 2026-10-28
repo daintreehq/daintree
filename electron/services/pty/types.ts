@@ -8,6 +8,7 @@ import type { PanelKind, PanelTitleMode } from "../../../shared/types/panel.js";
 import type { BuiltInAgentId } from "../../../shared/config/agentIds.js";
 import type { PtyHostSpawnOptions, TerminalResizeResult } from "../../../shared/types/pty-host.js";
 import type { SerializedTerminalSnapshot } from "../../../shared/types/terminal.js";
+import { PTY_MIRROR_SCROLLBACK } from "../../../shared/config/scrollback.js";
 import type { ProcessDetector } from "../ProcessDetector.js";
 import type { HandbackTracker } from "./HandbackTracker.js";
 
@@ -69,9 +70,10 @@ export interface TerminalPublicState {
   lastInputTime: number;
   /**
    * Last raw input that could have put text in the composer (#12491): typing,
-   * pasting, staging. Unlike `lastInputTime` it ignores the submit lane's own
-   * writes and the focus, mouse and query reports xterm sends by itself, so a
-   * click on the pane does not read as a draft.
+   * pasting, staging, or a submitted body left there when its send was
+   * withdrawn before the Enter. Unlike `lastInputTime` it ignores the submit
+   * lane's own completed writes and the focus, mouse and query reports xterm
+   * sends by itself, so a click on the pane does not read as a draft.
    */
   lastTypedInputAt?: number;
   lastOutputTime: number;
@@ -292,7 +294,18 @@ export interface PtyManagerEvents {
   ) => void;
   /** A window's renderer MessagePort connection was torn down in the host (#12557). */
   "port-disconnected": (windowId: number, reason: string, holderWebContentsId?: number) => void;
-  exit: (id: string, exitCode: number, signal?: number, launchGeneration?: number) => void;
+  /**
+   * `preserveSession` marks an exit caused by a session-preserving project
+   * teardown (sleep, hibernation, idle close, quit, relocation): the pane is
+   * coming back on reopen, so the renderer keeps it in the layout.
+   */
+  exit: (
+    id: string,
+    exitCode: number,
+    signal?: number,
+    launchGeneration?: number,
+    preserveSession?: boolean
+  ) => void;
   error: (id: string, error: string) => void;
   "resize-result": (id: string, result: TerminalResizeResult) => void;
 }
@@ -370,18 +383,16 @@ export const SEMANTIC_BUFFER_TRUNCATION_MARKER = "... [truncated]";
 export const SEMANTIC_FLUSH_INTERVAL_MS = 100;
 
 // Scrollback configuration
-// All PTY panels get the same headless-mirror scrollback; there is no "agent
-// tier" scrollback decision any more. This is the pty-host analysis mirror, NOT
-// the renderer's display buffer — the two are sized independently on purpose.
-// The renderer agent ceiling is AGENT_POLICY maxLines (10000, in
-// src/utils/scrollbackConfig.ts); this mirror is deliberately kept lower to bound
-// pty-host heap (at ~12 bytes/cell, 5000 vs 10000 halves the worst-case mirror
-// cost per terminal). The mirror only feeds analysis (terminal.getOutput caps at
-// 1000) and serialize/restore, so the trade is: a live renderer scrolls back the
-// full 10000 lines, but a session restored after project-view eviction recovers
-// only the most recent ~5000. Raise this to match the renderer ceiling only with
-// a pty-host memory review (and a re-check of the persisted-snapshot size limit).
-export const DEFAULT_SCROLLBACK = 5000;
+// Agent headless-mirror scrollback (launch hint or runtime promotion). This is
+// the pty-host analysis mirror, and every renderer restore (project-view
+// eviction, cold switch, app restart, poisoned-terminal rebuild) replays from
+// it, so the renderer agent ceiling (AGENT_POLICY in src/utils/scrollbackConfig.ts)
+// is pinned to the same shared constant: a warm terminal and a restored one show
+// the same history. Plain shells start at PLAIN_SHELL_SCROLLBACK_MAX, the most
+// their renderer can keep, and grow to this on promotion (#14216). Raising it
+// needs a pty-host memory review (~12 bytes/cell per agent terminal) and a
+// re-check of the persisted-snapshot size limit.
+export const DEFAULT_SCROLLBACK = PTY_MIRROR_SCROLLBACK;
 
 // Preserved-snapshot eviction (issue #10839)
 // Agent terminals that exit cleanly retain their full serialized scrollback

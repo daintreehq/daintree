@@ -219,6 +219,12 @@ import {
   _resetPluginCapabilityServicesForTest,
 } from "../plugin-capability/instances.js";
 import { setPtyClientRef } from "../../window/serviceRefs.js";
+import {
+  _resetPluginLaunchesForTests,
+  launchedAgentProject,
+  recordPluginLaunch,
+} from "../plugin/pluginLaunchedAgents.js";
+import type { ActionDispatchResult } from "../../../shared/types/actions.js";
 
 let tmpDir: string;
 
@@ -737,5 +743,64 @@ describe("Plugin agent-input host API (#10558)", () => {
     (service as unknown as { unloadPlugin: (id: string) => void }).unloadPlugin("acme.agent-input");
     await expect(host.sendToActiveAgent("x")).resolves.toBeUndefined();
     expect(fake.stage).not.toHaveBeenCalled();
+  });
+});
+
+describe("Agents a plugin launched, across unload and reload (#14018)", () => {
+  const PLUGIN = "acme.launcher";
+  const LAUNCH: ActionDispatchResult = {
+    ok: true,
+    result: { launched: true, terminalId: "t-launched" },
+  };
+  const pty = {
+    getTerminalProjectId: (id: string) => (id === "t-launched" ? "p1" : null),
+  };
+  type ReloadingService = {
+    unloadPlugin: (id: string, options?: { reload: true }) => void;
+    settlePluginReload: (id: string) => void;
+    plugins: Map<string, unknown>;
+  };
+
+  beforeEach(() => {
+    _resetPluginLaunchesForTests();
+  });
+  afterEach(() => {
+    _resetPluginLaunchesForTests();
+  });
+
+  async function loadLauncher(): Promise<ReloadingService> {
+    await writePlugin("launcher", {
+      name: PLUGIN,
+      version: "1.0.0",
+      capabilities: ["agent:input"],
+    });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+    recordPluginLaunch(PLUGIN, "agent.launch", { agentId: "claude" }, LAUNCH, null);
+    expect(launchedAgentProject(pty, PLUGIN, "t-launched", null)).toBe("p1");
+    return service as unknown as ReloadingService;
+  }
+
+  it("ends the plugin's reach when it unloads", async () => {
+    const service = await loadLauncher();
+    service.unloadPlugin(PLUGIN);
+    expect(launchedAgentProject(pty, PLUGIN, "t-launched", null)).toBeNull();
+  });
+
+  it("keeps it across a reload that brings the plugin back", async () => {
+    const service = await loadLauncher();
+    const loaded = service.plugins.get(PLUGIN);
+    service.unloadPlugin(PLUGIN, { reload: true });
+    expect(launchedAgentProject(pty, PLUGIN, "t-launched", null)).toBe("p1");
+    service.plugins.set(PLUGIN, loaded);
+    service.settlePluginReload(PLUGIN);
+    expect(launchedAgentProject(pty, PLUGIN, "t-launched", null)).toBe("p1");
+  });
+
+  it("ends it when a reload brings nothing back", async () => {
+    const service = await loadLauncher();
+    service.unloadPlugin(PLUGIN, { reload: true });
+    service.settlePluginReload(PLUGIN);
+    expect(launchedAgentProject(pty, PLUGIN, "t-launched", null)).toBeNull();
   });
 });

@@ -22,10 +22,6 @@ vi.mock("@codemirror/view", () => ({
   },
 }));
 
-vi.mock("@/store/panelStore", () => ({
-  usePanelStore: { getState: () => ({ setPreferredTerminalFocusTarget: vi.fn() }) },
-}));
-
 vi.mock("@/store/terminalInputStore", () => ({
   useTerminalInputStore: { getState: () => ({ isVoiceSubmitting: () => false }) },
 }));
@@ -139,5 +135,55 @@ describe("useEditorDomHandlers", () => {
 
     expect(result.current).toBe(first);
     expect(factory.calls).toBe(1);
+  });
+});
+
+type InputHandler = (event: Event, view: unknown) => boolean;
+
+function registersBeforeInput(value: unknown): value is { beforeinput: InputHandler } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "beforeinput" in value &&
+    typeof value.beforeinput === "function"
+  );
+}
+
+describe("useEditorDomHandlers Enter from beforeinput", () => {
+  function enterOnEmptyDoc(isVoiceActiveForPanel: boolean) {
+    const onSendKey = vi.fn<(key: string) => void>();
+    const p = params();
+    p.latestRef = {
+      current: {
+        terminalId: "t1",
+        voiceId: "t1",
+        disabled: false,
+        isAutocompleteOpen: false,
+        autocompleteItems: [],
+        staleItemKeys: new Set<string>(),
+        selectedIndex: 0,
+        value: "",
+        onSendKey,
+        isVoiceActiveForPanel,
+        isExpanded: false,
+      },
+    };
+    const { result } = renderHook(() => useEditorDomHandlers(p));
+    if (!registersBeforeInput(result.current)) throw new Error("no beforeinput handler");
+    const event = new InputEvent("beforeinput", { inputType: "insertLineBreak", cancelable: true });
+    result.current.beforeinput(event, {});
+    return { onSendKey, sendFromEditor: p.sendFromEditor };
+  }
+
+  it("finishes an active dictation even while its words haven't reached the doc", () => {
+    const { onSendKey, sendFromEditor } = enterOnEmptyDoc(true);
+    expect(sendFromEditor).toHaveBeenCalledTimes(1);
+    expect(onSendKey).not.toHaveBeenCalled();
+  });
+
+  it("passes a bare Enter through for an empty doc when nothing is being dictated", () => {
+    const { onSendKey, sendFromEditor } = enterOnEmptyDoc(false);
+    expect(onSendKey).toHaveBeenCalledWith("enter");
+    expect(sendFromEditor).not.toHaveBeenCalled();
   });
 });

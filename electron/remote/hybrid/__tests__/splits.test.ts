@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
     gpuWebGLHardware: true,
     systemTmpDir: "/client/tmp",
     keybindingOverrides: { "panel.close": ["Cmd+W"] },
+    agentToolbarPins: { pins: { claude: true }, revision: 2 },
     settingsRecovery: null,
   })),
   composeBootResult: vi.fn((hydrate: Record<string, unknown>) => ({
@@ -59,6 +60,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("electron", () => ({
+  app: undefined,
   shell: {
     openExternal: mocks.openExternal,
     showItemInFolder: mocks.showItemInFolder,
@@ -114,6 +116,11 @@ import { CHANNELS } from "../../../ipc/channels.js";
 import { IpcDispatcherImpl } from "../../../ipc/dispatcher.js";
 import type { HybridSplit, RemoteRouter } from "../../../ipc/endpoint.js";
 import { buildRemoteEditorUrl, HYBRID_HOST_LEGS, HYBRID_SPLITS } from "../splits.js";
+import { installAccountSignInRequests } from "../../plugins/accountSignIn.js";
+import {
+  _resetReverseRequestMethodsForTesting,
+  answerReverseRequest,
+} from "../../client/reverseRequests.js";
 import { STORE_KEY_OWNERSHIP } from "../../../storeOwnership.js";
 
 type MergedHydrate = Record<string, unknown> & { appState: Record<string, unknown> };
@@ -244,7 +251,7 @@ describe("app:hydrate and app:boot", () => {
       activeWorktreeId: "host-wt",
       focusMode: true,
     },
-    terminalConfig: { fontSize: 11, scrollbackLines: 5000 },
+    terminalConfig: { fontSize: 11, scrollbackLines: 5000, resourceMonitoringEnabled: true },
     project: { id: "p1", path: "/home/greg/repo" },
     workspaceId: "p1",
     safeMode: true,
@@ -255,6 +262,7 @@ describe("app:hydrate and app:boot", () => {
     hostTmpDir: "/tmp",
     projects: [{ id: "p1" }],
     agentDefaults: { assistantAgentId: "codex", defaultAgent: null },
+    agentToolbarPins: { pins: { claude: false, gemini: true }, revision: 9 },
   };
 
   it("takes host fields from the host and Shell fields from here", async () => {
@@ -279,9 +287,16 @@ describe("app:hydrate and app:boot", () => {
       activeWorktreeId: "host-wt",
       focusMode: true,
     });
-    expect(result.terminalConfig).toEqual({ fontSize: 15, scrollbackLines: 5000 });
+    // Scrollback is how much this screen shows, so it is this machine's (#14697).
+    expect(result.terminalConfig).toEqual({
+      fontSize: 15,
+      scrollbackLines: 111,
+      resourceMonitoringEnabled: true,
+    });
     // The assistant agent and default agent are the host's (#13345).
     expect(result.agentDefaults).toEqual({ assistantAgentId: "codex", defaultAgent: null });
+    // The toolbar is this screen's, so its agent pins are this machine's (#14702).
+    expect(result.agentToolbarPins).toEqual({ pins: { claude: true }, revision: 2 });
   });
 
   it("boots from the host hydrate with this machine's crash gate", async () => {
@@ -308,13 +323,27 @@ describe("app:hydrate and app:boot", () => {
 describe("settings splits", () => {
   it("merges terminal-config:get by field owner", async () => {
     const { invoke } = setup(
-      () => ({ fontSize: 9, scrollbackLines: 7000, performanceMode: true }),
-      () => ({ fontSize: 14, scrollbackLines: 1000, performanceMode: false })
+      () => ({
+        fontSize: 9,
+        scrollbackLines: 7000,
+        performanceMode: true,
+        hybridInputEnabled: false,
+        memoryLeakDetectionEnabled: true,
+      }),
+      () => ({
+        fontSize: 14,
+        scrollbackLines: 1000,
+        performanceMode: false,
+        hybridInputEnabled: true,
+        memoryLeakDetectionEnabled: false,
+      })
     );
     await expect(invoke(CHANNELS.TERMINAL_CONFIG_GET, [])).resolves.toEqual({
       fontSize: 14,
-      scrollbackLines: 7000,
-      performanceMode: true,
+      scrollbackLines: 1000,
+      performanceMode: false,
+      hybridInputEnabled: true,
+      memoryLeakDetectionEnabled: true,
     });
   });
 
@@ -369,52 +398,23 @@ describe("settings splits", () => {
     expect(listener).toHaveBeenCalledWith(expect.anything(), undefined);
   });
 
-  it("merges notification settings: policy from the host, sound and presentation from here", async () => {
-    const { invoke } = setup(
-      () => ({
-        enabled: false,
-        waitingEnabled: false,
-        quietHoursEnabled: true,
-        soundEnabled: false,
-        completedSoundFile: "host.mp3",
-      }),
-      () => ({
-        enabled: true,
-        waitingEnabled: true,
-        quietHoursEnabled: false,
-        soundEnabled: true,
-        completedSoundFile: "local.mp3",
-        flashEnabled: true,
-      })
-    );
-    await expect(invoke(CHANNELS.NOTIFICATION_SETTINGS_GET, [])).resolves.toEqual({
-      enabled: false,
-      waitingEnabled: false,
-      quietHoursEnabled: true,
-      soundEnabled: true,
-      completedSoundFile: "local.mp3",
-      flashEnabled: true,
-    });
-  });
-
-  it("divides a notification settings update between the two machines", async () => {
-    const forward = vi.fn(() => undefined);
-    const { invoke, listener } = setup(forward, () => undefined);
+  it("keeps notification settings on this machine, alert choices included", async () => {
+    const forward = vi.fn();
+    const local = { enabled: true, waitingEnabled: false, quietHoursEnabled: true };
+    const { invoke, listener } = setup(forward, () => local);
+    await expect(invoke(CHANNELS.NOTIFICATION_SETTINGS_GET, [])).resolves.toEqual(local);
     await invoke(CHANNELS.NOTIFICATION_SETTINGS_SET, [
       { soundEnabled: false, waitingEnabled: true, quietHoursStartMin: 60 },
     ]);
-    expect(listener).toHaveBeenCalledWith(expect.anything(), { soundEnabled: false });
-    expect(forward).toHaveBeenCalledWith(CHANNELS.NOTIFICATION_SETTINGS_SET, [
-      { waitingEnabled: true, quietHoursStartMin: 60 },
-    ]);
-  });
-
-  it("keeps a sound-only notification settings update on this machine", async () => {
-    const forward = vi.fn(() => undefined);
-    const { invoke, listener } = setup(forward, () => undefined);
-    await invoke(CHANNELS.NOTIFICATION_SETTINGS_SET, [{ flashEnabled: false }]);
-    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenLastCalledWith(expect.anything(), {
+      soundEnabled: false,
+      waitingEnabled: true,
+      quietHoursStartMin: 60,
+    });
     expect(forward).not.toHaveBeenCalled();
+    // The machine at the keyboard decides which of a host's events alert it (#14701).
+    expect(STORE_KEY_OWNERSHIP.notificationSettings).toBe("device");
+    expect(HYBRID_HOST_LEGS).not.toContain(CHANNELS.NOTIFICATION_SETTINGS_SET);
   });
 
   it("keeps keep-awake on each machine", async () => {
@@ -488,7 +488,8 @@ describe("project activation", () => {
     expect(listener).not.toHaveBeenCalled();
     expect(mocks.client.switchWindowHost).toHaveBeenCalledWith(
       expect.objectContaining({ webContentsId: REMOTE_SENDER }),
-      { hostId: "studio", projectId: "p2", newWindow: false }
+      { hostId: "studio", projectId: "p2", newWindow: false },
+      { failureOnScreen: false }
     );
   });
 
@@ -616,7 +617,7 @@ describe("scratch switch", () => {
       expect.objectContaining({ webContentsId: REMOTE_SENDER }),
       { hostId: "studio", projectId: "s1", newWindow: false },
       // Its callers word a failure themselves, so main keeps the report.
-      { requesterReports: false }
+      { requesterReports: false, failureOnScreen: false }
     );
     expect(mocks.viewSend).toHaveBeenCalledWith(CHANNELS.SCRATCH_ON_SWITCH, {
       scratch,
@@ -934,5 +935,100 @@ describe("opening host files", () => {
     for (const sshTarget of ["-oProxyCommand=x", "host:22", "a b", ""]) {
       expect(buildRemoteEditorUrl({ editorId: "vscode", sshTarget, path: "/a" })).toBeNull();
     }
+  });
+});
+
+describe("plugin account sign-in from a remote window (#14111)", () => {
+  const AUTH_URL =
+    "https://auth.example.com/oauth/authorize?response_type=code&client_id=daintree" +
+    "&state=synthetic-state&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM" +
+    "&code_challenge_method=S256";
+  let loopback: { start: ReturnType<typeof vi.fn>; cancel: ReturnType<typeof vi.fn> };
+  let dispose: () => void;
+
+  beforeEach(() => {
+    _resetReverseRequestMethodsForTesting();
+    loopback = { start: vi.fn(() => new Promise(() => {})), cancel: vi.fn() };
+    dispose = installAccountSignInRequests({ loopback: loopback as never });
+  });
+
+  afterEach(() => {
+    dispose();
+    _resetReverseRequestMethodsForTesting();
+  });
+
+  const hostAsks = (signInId: unknown) =>
+    answerReverseRequest({
+      hostId: "studio",
+      webContentsId: REMOTE_SENDER,
+      method: "plugin.account-sign-in",
+      payload: { signInId, pluginId: "acme.tracker", connectionId: "work", authUrl: AUTH_URL },
+    });
+
+  /** Connect through the split; `forwarded` holds the args it sent the host. */
+  function connect(hostLeg: Promise<unknown>) {
+    const forwarded: unknown[][] = [];
+    const call = (HYBRID_SPLITS[CHANNELS.PLUGIN_ACCOUNT_CONNECT] as HybridSplit)({
+      hostId: "studio",
+      webContentsId: REMOTE_SENDER,
+      args: ["acme.tracker", "work"],
+      local: vi.fn(),
+      remote: (_channel, args) => {
+        forwarded.push(args ?? []);
+        return hostLeg;
+      },
+    });
+    return { call, forwarded };
+  }
+
+  it("runs Connect on the host with the click's id, never this machine's own handler", async () => {
+    const forward = vi.fn(() => ({ status: "cancelled" }));
+    const { invoke, listener } = setup(forward, () => undefined);
+    await expect(
+      invoke(CHANNELS.PLUGIN_ACCOUNT_CONNECT, ["acme.tracker", "work"])
+    ).resolves.toEqual({ status: "cancelled" });
+    expect(forward).toHaveBeenCalledWith(CHANNELS.PLUGIN_ACCOUNT_CONNECT, [
+      "acme.tracker",
+      "work",
+      expect.any(String),
+    ]);
+    expect(listener).not.toHaveBeenCalled();
+    expect(HYBRID_HOST_LEGS).toContain(CHANNELS.PLUGIN_ACCOUNT_CONNECT);
+  });
+
+  it("opens the browser here only while the window's Connect is in flight", async () => {
+    let finish!: (value: unknown) => void;
+    const { call, forwarded } = connect(new Promise((resolve) => (finish = resolve)));
+    const signInId = forwarded[0]![2];
+    void hostAsks(signInId);
+    expect(loopback.start).toHaveBeenCalledTimes(1);
+    const sessionKey = loopback.start.mock.calls[0]![0];
+
+    finish({ status: "connected" });
+    await expect(call).resolves.toEqual({ status: "connected" });
+    expect(loopback.cancel).toHaveBeenCalledWith(sessionKey);
+    await expect(hostAsks(signInId)).rejects.toMatchObject({ code: "PERMISSION" });
+  });
+
+  it("takes the loopback down when the link drops under the call", async () => {
+    let fail!: (error: Error) => void;
+    const { call, forwarded } = connect(new Promise((_resolve, reject) => (fail = reject)));
+    const signInId = forwarded[0]![2];
+    void hostAsks(signInId);
+    const sessionKey = loopback.start.mock.calls[0]![0];
+
+    fail(Object.assign(new Error("link closed"), { code: "OUTCOME_UNKNOWN" }));
+    await expect(call).rejects.toThrow("link closed");
+    expect(loopback.cancel).toHaveBeenCalledWith(sessionKey);
+    await expect(hostAsks(signInId)).rejects.toMatchObject({ code: "PERMISSION" });
+  });
+
+  it("names each click afresh, so a host can't replay an earlier one", async () => {
+    const first = connect(Promise.resolve({ status: "cancelled" }));
+    await first.call;
+    const second = connect(new Promise(() => {}));
+    expect(second.forwarded[0]![2]).not.toBe(first.forwarded[0]![2]);
+    await expect(hostAsks(first.forwarded[0]![2])).rejects.toMatchObject({ code: "PERMISSION" });
+    expect(loopback.start).not.toHaveBeenCalled();
   });
 });

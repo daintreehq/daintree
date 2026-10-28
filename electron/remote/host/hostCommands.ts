@@ -56,6 +56,8 @@ export const runCommand: CommandRunner = (file, args, options = {}) =>
 
 /** A long-running child Host mode owns for as long as it advertises. */
 export interface OwnedProcess {
+  /** Undefined when the spawn failed before a process existed. */
+  readonly pid?: number;
   kill(): void;
   onExit(listener: (info: { code: number | null; notFound: boolean }) => void): void;
 }
@@ -76,6 +78,7 @@ export const spawnOwnedProcess: ProcessSpawner = (file, args) => {
   });
   child.once("exit", (code) => finish({ code, notFound: false }));
   return {
+    pid: child.pid,
     kill() {
       if (exited) return;
       try {

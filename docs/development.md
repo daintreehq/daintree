@@ -56,7 +56,7 @@ Main Process (electron/)     Renderer (src/)
 | `CopyTreeService` | Context generation for agents |
 | `PortalManager` | Localhost browser, log viewer |
 | `ProjectStore` | Multi-project persistence |
-| `HibernationService` | Terminal state save/restore |
+| `HibernationService` | Evicts a sleeping project's cached renderer for `sleepProject` |
 
 ### Renderer (`src/`)
 

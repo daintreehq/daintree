@@ -14,13 +14,17 @@ vi.mock("@/store/accessibilityAnnouncerStore", () => ({
   useAnnouncerStore: { getState: () => ({ announce: () => {} }) },
 }));
 vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+  createTerminalPaintPlane: () => ({
     isHibernated: () => false,
     subscribeHibernation: () => () => {},
-  },
+  }),
 }));
 
 import { useAccessibilityAnnouncements } from "../useAccessibilityAnnouncements";
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
+
+// The service mock never evaluates the real module, so nothing registers it.
+await loadTerminalService();
 
 seedPanels(true);
 renderHook(() => useAccessibilityAnnouncements());

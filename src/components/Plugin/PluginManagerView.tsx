@@ -57,6 +57,7 @@ import { PluginCatalog } from "./PluginCatalog";
 import { PluginIconTile } from "./pluginIcons";
 import { pluginSignalFor } from "./pluginStatus";
 import { ProjectPluginSection, ProjectPluginDetailPane } from "./ProjectPluginSection";
+import { buildWorksWithPeers } from "./PluginWorksWith";
 import { groupPluginsByCategory } from "./pluginGrouping";
 import { filterPlugins, isQueryActive, parsePluginQuery } from "@/lib/pluginSearch";
 import { PLUGIN_CATEGORIES } from "@shared/config/pluginCategoryRegistry";
@@ -111,6 +112,13 @@ interface PluginRowProps {
   innerRef?: (el: HTMLLIElement | null) => void;
 }
 
+/** Where a per-project package runs, for its row's second line. */
+function perProjectLabel(projectCount: number): string {
+  return projectCount === 0
+    ? "Runs per project · not on in any project"
+    : `Runs per project · on in ${pluralize(projectCount, "project")}`;
+}
+
 /**
  * One installed-plugin row in the master list (#9555): icon tile, name, one
  * line of detail, and the enable toggle. Selecting it populates the detail pane
@@ -156,7 +164,12 @@ function PluginRow({ plugin, selected, toggling, onSelect, onToggle, innerRef }:
   // Only the two forge built-ins actually set a tagline, so a row keyed solely
   // on it renders a bare name for almost every third-party plugin. `PluginCard`
   // already falls back to the description; the list agrees with it.
-  const blurb = plugin.manifest.tagline ?? plugin.manifest.description;
+  // A per-project package never runs as itself, so where it runs is what the
+  // row says in place of its blurb; its switch still turns the whole package off.
+  const blurb =
+    plugin.instanceMode === "project"
+      ? perProjectLabel(plugin.enabledInProjects?.length ?? 0)
+      : (plugin.manifest.tagline ?? plugin.manifest.description);
   const signal = pluginSignalFor(plugin);
 
   return (
@@ -342,6 +355,10 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
     selectedProjectPluginId === null
       ? null
       : (projectPlugins.find((p) => p.id === selectedProjectPluginId) ?? null);
+  const worksWithPeers = useMemo(
+    () => buildWorksWithPeers(pm.plugins, projectPlugins),
+    [pm.plugins, projectPlugins]
+  );
 
   // Row elements keyed by plugin name, so a `daintree://plugin/open` (#9559) can
   // scroll its target into view.
@@ -1054,7 +1071,10 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
           )}
         >
           {selectedProjectPlugin ? (
-            <ProjectPluginDetailPane plugin={selectedProjectPlugin} />
+            <ProjectPluginDetailPane
+              plugin={selectedProjectPlugin}
+              worksWithPeers={worksWithPeers}
+            />
           ) : selectedPlugin ? (
             <PluginDetailPane
               plugin={selectedPlugin}
@@ -1071,6 +1091,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
                   : null
               }
               onSettingsRequestHandled={consumeSettingsRequest}
+              worksWithPeers={worksWithPeers}
             />
           ) : hasPlugins ? (
             // Catalog home — the marketplace face of the manager. Clicking a

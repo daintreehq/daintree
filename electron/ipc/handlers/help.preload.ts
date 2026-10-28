@@ -14,8 +14,17 @@ export const HELP_METHOD_CHANNELS = {
   adoptDetachedSession: "help:adopt-detached-session",
   discardConversation: "help:discard-conversation",
   listPastSessions: "help:list-past-sessions",
+  getStarterPrompts: "help:get-starter-prompts",
   reportPanelOpen: "help:report-panel-open",
   getPinnedActionContext: "help:get-pinned-action-context",
+  ensureGlobalAssistant: "help:global-assistant-ensure",
+  getGlobalAssistantState: "help:global-assistant-state",
+  attachGlobalAssistant: "help:global-assistant-attach",
+  detachGlobalAssistant: "help:global-assistant-detach",
+  claimGlobalAssistantInput: "help:global-assistant-claim-input",
+  releaseGlobalAssistantInput: "help:global-assistant-release-input",
+  restartGlobalAssistant: "help:global-assistant-restart",
+  discardGlobalAssistant: "help:global-assistant-discard",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof HELP_METHOD_CHANNELS;

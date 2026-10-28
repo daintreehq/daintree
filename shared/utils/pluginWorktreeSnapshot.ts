@@ -1,15 +1,18 @@
 import type {
   PluginWorktreeFileState,
+  PluginWorktreeGitOperation,
   PluginWorktreeLinked,
   PluginWorktreeLinkedIssue,
   PluginWorktreeLinkedPR,
+  PluginWorktreeSetup,
   PluginWorktreeSnapshot,
   PluginWorktreeStatus,
   PluginWorktreeStatusFile,
 } from "../types/plugin.js";
-import type { GitStatus, WorktreeChanges } from "../types/git.js";
+import type { GitStatus, RepoState, WorktreeChanges } from "../types/git.js";
 import type { NormalizedPRState, ResourceRef } from "../types/forge.js";
 import type { WorktreeSnapshot } from "../types/workspace-host.js";
+import type { WorktreeSetupStatus } from "../types/worktree.js";
 import { BUILTIN_GITHUB_PROVIDER_ID } from "./forgeProviderIds.js";
 
 /**
@@ -78,13 +81,22 @@ export function toPluginWorktreeStatus(
  *
  * Explicit field assignment — do NOT spread. Internal shape changes must not
  * implicitly leak to third-party plugins.
+ *
+ * `customTitle` is the user's title for the worktree, which the workspace host
+ * never sees: main and the renderer each pass the one they hold (#14022). Map
+ * with a closure, never `.map(toPluginWorktreeSnapshot)`, or the index lands
+ * here.
  */
-export function toPluginWorktreeSnapshot(snapshot: WorktreeSnapshot): PluginWorktreeSnapshot {
+export function toPluginWorktreeSnapshot(
+  snapshot: WorktreeSnapshot,
+  customTitle: string | null = null
+): PluginWorktreeSnapshot {
   const projection: PluginWorktreeSnapshot = {
     id: snapshot.id,
     worktreeId: snapshot.worktreeId,
     path: snapshot.path,
     name: snapshot.name,
+    customTitle,
     isCurrent: snapshot.isCurrent,
     branch: snapshot.branch,
     isMainWorktree: snapshot.isMainWorktree,
@@ -95,8 +107,43 @@ export function toPluginWorktreeSnapshot(snapshot: WorktreeSnapshot): PluginWork
     lastActivityTimestamp: snapshot.lastActivityTimestamp ?? null,
     createdAt: snapshot.createdAt,
     status: toPluginWorktreeStatus(snapshot.worktreeChanges),
+    // The general HEAD oid lives on the polled changes; `snapshot.head` is
+    // only populated when detached, so it is not a substitute.
+    headOid: snapshot.worktreeChanges?.headOid ?? null,
+    gitOperation: projectGitOperation(snapshot.repoState),
+    setup: projectSetup(snapshot.setupStatus),
   };
   return Object.freeze(projection);
+}
+
+/**
+ * `CLEAN` and `DIRTY` are not operations (`DIRTY` is unmerged entries with no
+ * marker file), so they read as `null` along with an absent state.
+ */
+function projectGitOperation(state: RepoState | undefined): PluginWorktreeGitOperation | null {
+  switch (state) {
+    case "MERGING":
+      return "merge";
+    case "REBASING":
+      return "rebase";
+    case "CHERRY_PICKING":
+      return "cherry-pick";
+    case "REVERTING":
+      return "revert";
+    case "CLEAN":
+    case "DIRTY":
+    case undefined:
+      return null;
+  }
+}
+
+/**
+ * State and stage only. `error` is free text and the timestamps change on
+ * every transition without telling a plugin anything it can act on.
+ */
+function projectSetup(status: WorktreeSetupStatus | undefined): PluginWorktreeSetup | null {
+  if (status === undefined) return null;
+  return Object.freeze({ state: status.state, stage: status.stage ?? null });
 }
 
 /**
@@ -189,6 +236,10 @@ function freezeLinked(linked: PluginWorktreeLinked): PluginWorktreeLinked {
       state: linked.pr.state,
       ...(linked.pr.ciStatus ? { ciStatus: linked.pr.ciStatus } : {}),
       ...(linked.pr.baseRef ? { baseRef: linked.pr.baseRef } : {}),
+      ...(linked.pr.mergeIntent !== undefined
+        ? { mergeIntent: linked.pr.mergeIntent && Object.freeze({ ...linked.pr.mergeIntent }) }
+        : {}),
+      ...(linked.pr.headMovedWhileArmed ? { headMovedWhileArmed: true } : {}),
     });
   }
 

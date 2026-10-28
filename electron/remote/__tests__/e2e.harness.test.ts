@@ -219,7 +219,11 @@ describe("Remote Hosts end to end over a real socket, started by the real boot",
             hostCalls.push(ctx);
             return {
               appState: { sidebarWidth: 999, activeWorktreeId: "wt-host", terminals: [] },
-              terminalConfig: { fontSize: 30, scrollbackLines: 5000 },
+              terminalConfig: {
+                fontSize: 30,
+                scrollbackLines: 5000,
+                resourceMonitoringEnabled: true,
+              },
               hostPlatform: "linux",
               hostHomeDir: "/home/greg",
               hostTmpDir: "/tmp",
@@ -245,7 +249,7 @@ describe("Remote Hosts end to end over a real socket, started by the real boot",
         project: { id: "proj-1" },
         shellOnly: "from-the-shell",
         appState: { sidebarWidth: 320, activeWorktreeId: "wt-host" },
-        terminalConfig: { fontSize: 14, scrollbackLines: 5000 },
+        terminalConfig: { fontSize: 14, scrollbackLines: 1000, resourceMonitoringEnabled: true },
       });
     },
     TEST_TIMEOUT_MS
@@ -319,6 +323,29 @@ describe("Remote Hosts end to end over a real socket, started by the real boot",
       // scoped event would have reached B before the global one.
       expect(eventsOn(a, channel)).toEqual([[{ type: "scoped" }], [{ type: "global" }]]);
       expect(eventsOn(b, channel)).toEqual([[{ type: "global" }]]);
+    },
+    TEST_TIMEOUT_MS
+  );
+
+  it(
+    "terminal settings: a view takes the host half of a change from its host, never the device half (#14699)",
+    async () => {
+      const r = await harness();
+      const view = r.addView(VIEW_A, "proj-1");
+      await r.openStreams(view);
+
+      broadcastToRenderer(CHANNELS.TERMINAL_CONFIG_DEVICE_CHANGED, { fontSize: 30 });
+      broadcastToRenderer(CHANNELS.TERMINAL_CONFIG_HOST_CHANGED, {
+        resourceMonitoringEnabled: true,
+      });
+      // Same lane, so once this arrives anything sent before it has too.
+      broadcastToRenderer(CHANNELS.OPERATIONS_EVENT, { type: "fence" });
+      await waitUntil(() => eventsOn(view, CHANNELS.OPERATIONS_EVENT).length === 1, "the fence");
+
+      expect(eventsOn(view, CHANNELS.TERMINAL_CONFIG_HOST_CHANGED)).toEqual([
+        [{ resourceMonitoringEnabled: true }],
+      ]);
+      expect(eventsOn(view, CHANNELS.TERMINAL_CONFIG_DEVICE_CHANGED)).toEqual([]);
     },
     TEST_TIMEOUT_MS
   );
@@ -667,7 +694,7 @@ describe("Remote Hosts end to end over a real socket, started by the real boot",
   );
 
   it(
-    "viewless: with every renderer detached, MCP terminal.new runs on the host through the real handler path; a UI-only action says no frontend is attached",
+    "viewless: with every renderer detached, MCP terminal.new and slashCommands.list run on the host through the real handler path; a UI-only action says no frontend is attached",
     async () => {
       const r = await harness();
       const spawns: Array<{
@@ -708,6 +735,30 @@ describe("Remote Hosts end to end over a real socket, started by the real boot",
       expect(harnessState.projectStates.get("proj-2")).toMatchObject({
         terminals: [{ id: terminalId, kind: "terminal" }],
       });
+
+      // The command a usage check confirms before typing it lists with no view too (#14122).
+      const listed: Array<{ ctx: IpcContext; request: { agentId: string; projectPath?: string } }> =
+        [];
+      cleanups.push(
+        typedHandleWithContext(
+          CHANNELS.SLASH_COMMANDS_LIST as never,
+          ((ctx: IpcContext, request: { agentId: string; projectPath?: string }) => {
+            listed.push({ ctx, request });
+            return [{ id: "/usage", label: "/usage", description: "", scope: "built-in" }];
+          }) as never
+        )
+      );
+      const commands = await bridge.dispatchActionForWorkspace("proj-2", "slashCommands.list", {});
+      expect(commands.result).toMatchObject({
+        ok: true,
+        result: { commands: [{ id: "/usage" }] },
+      });
+      expect(listed).toEqual([
+        {
+          ctx: expect.objectContaining({ endpoint: expect.objectContaining({ handle: 0 }) }),
+          request: { agentId: "claude", projectPath: r.projects.get("proj-2")!.path },
+        },
+      ]);
 
       await expect(
         bridge.dispatchActionForWorkspace("proj-2", "worktree.openInEditor", {})

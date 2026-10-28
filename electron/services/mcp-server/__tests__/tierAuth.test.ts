@@ -528,6 +528,32 @@ describe("shouldExposeTool", () => {
 // dispatch (isTierPermitted) — a divergence there would advertise a tool the
 // dispatcher then rejects (#7155). They deliberately differ on the metadata
 // filters, which withhold from tools/list without blocking dispatch.
+// A project's own assistant is one of the terminals a restart stops, so it
+// would end its own session mid-call; like Sleep (#14057) it stays off every
+// tier, the assistant's included (#14179).
+describe("project.restart stays off every tier (#14179)", () => {
+  it.each(["core", "full", "external"] as const)("is not on the %s tier", (tier) => {
+    expect(BUILT_IN_ACTION_IDS as readonly string[]).toContain("project.restart");
+    expect(TIER_ALLOWLISTS[tier].has("project.restart")).toBe(false);
+    expect(isTierPermitted(tier, "project.restart")).toBe(false);
+    expect(isTierPermitted(tier, "project.restart", true)).toBe(false);
+  });
+});
+
+// Review marks are the user's acknowledgement of what they saw, and "reviewed"
+// is never something an agent gets to say (#14580, #14585).
+describe("review mark actions stay off every tier (#14585)", () => {
+  const ids = ["worktree.markReviewed", "worktree.clearReviewMark"] as const;
+  it.each(
+    (["core", "full", "external"] as const).flatMap((tier) => ids.map((id) => [tier, id] as const))
+  )("keeps %s from %s", (tier, id) => {
+    expect(BUILT_IN_ACTION_IDS as readonly string[]).toContain(id);
+    expect(TIER_ALLOWLISTS[tier].has(id)).toBe(false);
+    expect(isTierPermitted(tier, id)).toBe(false);
+    expect(isTierPermitted(tier, id, true)).toBe(false);
+  });
+});
+
 describe("external tool surface invariants (#10701, #11537)", () => {
   const builtInIds = new Set<string>(BUILT_IN_ACTION_IDS);
 
@@ -682,7 +708,12 @@ describe("external tool surface budget (#11585)", () => {
   // panel sat, and that takes the user there each time. The generic placements
   // take any id, so a session could hide panes it never opened; one owned tool
   // covers the background, dock and grid, and never moves focus.
-  const EXTERNAL_BUDGET_MAX = 35;
+  //
+  // 35 → 36 for #14369's `terminal.restartOnPresetOwned`. An orchestrator whose
+  // worker hit a plan limit could only close it and launch another, losing the
+  // pane's place and leaving its saved launch env on the old preset. Bounded
+  // like the close: a pane this session launched, and the user confirms it.
+  const EXTERNAL_BUDGET_MAX = 36;
 
   it(`advertises at most ${EXTERNAL_BUDGET_MAX} tools`, () => {
     expect(TIER_ALLOWLISTS.external.size).toBeLessThanOrEqual(EXTERNAL_BUDGET_MAX);
@@ -865,6 +896,20 @@ describe("external tool surface budget (#11585)", () => {
     expect(annotations.destructiveHint).toBe(false);
   });
 
+  // Owned-only on every surface (#14369): the raw restart reaches any agent pane
+  // a listing returns, the user's own included, so it stays off every tier.
+  it("admits only the session-scoped preset restart", () => {
+    for (const id of ["terminal.restartOnPresetOwned", "terminal.restartOnPreset"]) {
+      expect(BUILT_IN_ACTION_IDS as readonly string[]).toContain(id);
+    }
+    expect(isTierPermitted("external", "terminal.restartOnPresetOwned")).toBe(true);
+    expect(isTierPermitted("core", "terminal.restartOnPresetOwned")).toBe(true);
+    for (const tier of ["external", "core", "full"] as const) {
+      expect(isTierPermitted(tier, "terminal.restartOnPreset", true)).toBe(false);
+      expect(isTierPermitted(tier, "terminal.restartOnPreset", false)).toBe(false);
+    }
+  });
+
   // A cut PR that quietly widens is the failure #10710 documents, so assert the
   // direction outright rather than trusting the id list to be read carefully.
   // The comparison is against `full` as an agent pane sees it — the same
@@ -936,8 +981,16 @@ describe("forge tool exposure (#11585)", () => {
    * credential has to be composed in the model channel to be sent at all. Token
    * entry stays a UI-owned flow — the provider settings tab dispatches it as
    * `source: "user"`, which no tier gates.
+   *
+   * `forge.enableAutoMerge` / `forge.disableAutoMerge` arm or cancel a merge the
+   * forge carries out later, with no prompt when it lands. Their caller is the
+   * Review Hub's D2 confirm; an agent already has `gh pr merge --auto` (#13747).
    */
-  const FORGE_ACTIONS_OFF_EVERY_TIER = new Set(["forge.validateToken"]);
+  const FORGE_ACTIONS_OFF_EVERY_TIER = new Set([
+    "forge.validateToken",
+    "forge.enableAutoMerge",
+    "forge.disableAutoMerge",
+  ]);
 
   it("keeps the exempted forge actions off every tier and out of every listing", () => {
     // Membership alone would be a weak exemption: a tool can be off a tier and

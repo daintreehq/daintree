@@ -3,6 +3,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { ProjectAgentToolsSection } from "../ProjectAgentToolsSection";
 import { __resetProjectPluginStoreForTesting } from "@/store/projectPluginStore";
+import { setPanelStoreAccessor } from "@/store/storeAccessors";
+import type { PtyPanelData } from "@shared/types/panel";
+
+const { dispatch } = vi.hoisted(() => ({
+  dispatch: vi.fn<(...args: unknown[]) => Promise<{ ok: true }>>(() =>
+    Promise.resolve({ ok: true })
+  ),
+}));
+vi.mock("@/services/ActionService", () => ({
+  actionService: { dispatch: (...args: unknown[]) => dispatch(...args) },
+}));
 import type {
   ProjectAgentToolPlugin,
   ProjectAgentToolsSnapshot,
@@ -18,6 +29,7 @@ function plugin(over: Partial<ProjectAgentToolPlugin> = {}): ProjectAgentToolPlu
     pluginTools: { name: "Household ledger" },
     access: "off",
     source: "default",
+    assistantAccess: "off",
     allProjectsAccess: "off",
     available: true,
     ...over,
@@ -36,9 +48,10 @@ function notes(over: Partial<ProjectAgentToolPlugin> = {}): ProjectAgentToolPlug
 
 function snapshot(
   plugins: ProjectAgentToolPlugin[],
-  mcpServerEnabled = true
+  mcpServerEnabled = true,
+  relaunchNeeded: ProjectAgentToolsSnapshot["relaunchNeeded"] = []
 ): ProjectAgentToolsSnapshot {
-  return { plugins, mcpServerEnabled };
+  return { plugins, mcpServerEnabled, relaunchNeeded };
 }
 
 const agentMcpApi = {
@@ -143,6 +156,55 @@ function describedText(control: HTMLElement): string {
 }
 
 describe("ProjectAgentToolsSection", () => {
+  it("lists running agents whose tools changed, each with a restart, and only those this window shows", async () => {
+    const running: PtyPanelData = {
+      id: "term-1",
+      kind: "terminal",
+      title: "Fix the ledger",
+      location: "grid",
+      cwd: "/repo",
+      cols: 80,
+      rows: 24,
+    };
+    setPanelStoreAccessor(() => ({
+      panelsById: { "term-1": running },
+      panelIds: ["term-1"],
+      tabGroups: new Map(),
+    }));
+    try {
+      agentMcpApi.listProjectPlugins.mockResolvedValue(
+        snapshot([plugin({ access: "read-write" })], true, [
+          { terminalId: "term-1", pluginDisplayNames: ["Ledger"] },
+          { terminalId: "term-elsewhere", pluginDisplayNames: ["Ledger"] },
+        ])
+      );
+      render(<ProjectAgentToolsSection />);
+
+      const group = await screen.findByTestId("project-agent-tools-relaunch");
+      expect(group.textContent).toContain("Fix the ledger");
+      expect(group.textContent).toContain("Ledger");
+      const restarts = within(group).getAllByRole("button", { name: "Restart" });
+      expect(restarts).toHaveLength(1);
+
+      fireEvent.click(restarts[0]!);
+      expect(dispatch).toHaveBeenCalledWith(
+        "terminal.restart",
+        { terminalId: "term-1" },
+        { source: "user" }
+      );
+    } finally {
+      setPanelStoreAccessor(() => ({ panelsById: {}, panelIds: [], tabGroups: new Map() }));
+    }
+  });
+
+  it("shows no restart group when no running agent needs one", async () => {
+    agentMcpApi.listProjectPlugins.mockResolvedValue(snapshot([plugin({ access: "read-write" })]));
+    render(<ProjectAgentToolsSection />);
+
+    await screen.findByTestId("project-agent-tools");
+    expect(screen.queryByTestId("project-agent-tools-relaunch")).toBeNull();
+  });
+
   it("renders one row per plugin with its current level", async () => {
     agentMcpApi.listProjectPlugins.mockResolvedValue(
       snapshot([
@@ -882,5 +944,306 @@ describe("ProjectAgentToolsSection", () => {
 
     await screen.findByTestId("project-agent-tool-row");
     expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  describe("the Daintree Assistant (#13827)", () => {
+    function assistantSwitch(name: string): HTMLElement {
+      return within(rowFor(name)).getByTestId("project-agent-tool-assistant");
+    }
+
+    function changesSwitch(name: string): HTMLElement {
+      return within(rowFor(name)).getByTestId("project-agent-tool-assistant-changes");
+    }
+
+    const isOn = (el: HTMLElement) => el.getAttribute("aria-checked") === "true";
+    const isDisabled = (el: HTMLElement) => el.hasAttribute("disabled");
+
+    async function renderWith(plugins: ProjectAgentToolPlugin[]) {
+      agentMcpApi.listProjectPlugins.mockResolvedValue(snapshot(plugins));
+      render(<ProjectAgentToolsSection />);
+      await screen.findByTestId("project-agent-tools");
+    }
+
+    it("is off by default and can't be turned on while the project's agents have no access", async () => {
+      await renderWith([plugin()]);
+
+      const toggle = assistantSwitch("Ledger");
+      expect(isOn(toggle)).toBe(false);
+      expect(isDisabled(toggle)).toBe(true);
+      expect(describedText(toggle)).toContain("Agents in this project have no access");
+    });
+
+    it("starts at read only and says plainly what its plugin data can do", async () => {
+      await renderWith([plugin({ access: "read-write", source: "project" })]);
+      agentMcpApi.setPluginAccess.mockResolvedValue(
+        snapshot([
+          plugin({ access: "read-write", source: "project", assistantAccess: "read-only" }),
+        ])
+      );
+
+      const toggle = assistantSwitch("Ledger");
+      expect(describedText(toggle)).toContain("could steer");
+      fireEvent.click(toggle);
+
+      expect(agentMcpApi.setPluginAccess).toHaveBeenCalledWith({
+        pluginInstanceId: "acme.ledger",
+        access: "read-only",
+        scope: "assistant",
+      });
+      await waitFor(() => expect(isOn(assistantSwitch("Ledger"))).toBe(true));
+    });
+
+    it("needs a second choice for tools that change things", async () => {
+      await renderWith([
+        plugin({ access: "read-write", source: "project", assistantAccess: "read-only" }),
+      ]);
+      agentMcpApi.setPluginAccess.mockResolvedValue(
+        snapshot([
+          plugin({ access: "read-write", source: "project", assistantAccess: "read-write" }),
+        ])
+      );
+
+      const changes = changesSwitch("Ledger");
+      expect(isOn(changes)).toBe(false);
+      expect(isDisabled(changes)).toBe(false);
+      fireEvent.click(changes);
+
+      expect(agentMcpApi.setPluginAccess).toHaveBeenCalledWith({
+        pluginInstanceId: "acme.ledger",
+        access: "read-write",
+        scope: "assistant",
+      });
+      await waitFor(() => expect(isOn(changesSwitch("Ledger"))).toBe(true));
+    });
+
+    it("offers no changes until the Assistant has access, and none past the agents' own", async () => {
+      await renderWith([
+        plugin({ access: "read-write", source: "project" }),
+        notes({ access: "read-write", source: "project" }),
+        plugin({
+          pluginInstanceId: "acme.crm",
+          pluginDisplayName: "Crm",
+          access: "read-only",
+          source: "project",
+          assistantAccess: "read-only",
+        }),
+      ]);
+
+      expect(isDisabled(changesSwitch("Ledger"))).toBe(true);
+      expect(describedText(changesSwitch("Ledger"))).toContain(
+        "Let the Assistant use its tools first"
+      );
+      expect(isDisabled(changesSwitch("Crm"))).toBe(true);
+      expect(describedText(changesSwitch("Crm"))).toContain("can only read it");
+    });
+
+    it("turning it off sends off, and stays possible after the agents lose access", async () => {
+      await renderWith([plugin({ access: "off", assistantAccess: "read-write" })]);
+      agentMcpApi.setPluginAccess.mockResolvedValue(snapshot([plugin()]));
+
+      const toggle = assistantSwitch("Ledger");
+      expect(isOn(toggle)).toBe(true);
+      expect(isDisabled(toggle)).toBe(false);
+      expect(describedText(toggle)).toContain("the Assistant has none either");
+      expect(isDisabled(changesSwitch("Ledger"))).toBe(false);
+      fireEvent.click(toggle);
+
+      expect(agentMcpApi.setPluginAccess).toHaveBeenCalledWith({
+        pluginInstanceId: "acme.ledger",
+        access: "off",
+        scope: "assistant",
+      });
+    });
+
+    it("lets changes be taken back after the agents lost access", async () => {
+      await renderWith([plugin({ access: "off", assistantAccess: "read-write" })]);
+      agentMcpApi.setPluginAccess.mockResolvedValue(
+        snapshot([plugin({ access: "off", assistantAccess: "read-only" })])
+      );
+
+      fireEvent.click(changesSwitch("Ledger"));
+
+      expect(agentMcpApi.setPluginAccess).toHaveBeenCalledWith({
+        pluginInstanceId: "acme.ledger",
+        access: "read-only",
+        scope: "assistant",
+      });
+      await waitFor(() => expect(isOn(changesSwitch("Ledger"))).toBe(false));
+    });
+
+    it("says a plugin with no read-only tools gives the Assistant nothing until changes are allowed", async () => {
+      await renderWith([notes({ access: "read-write", source: "project" })]);
+
+      expect(describedText(assistantSwitch("Notes"))).toContain(
+        "reaches nothing here until changes are allowed"
+      );
+    });
+
+    it("has no changes switch for a plugin with nothing that changes things", async () => {
+      await renderWith([
+        plugin({ pluginTools: undefined, access: "read-only", source: "project" }),
+      ]);
+
+      expect(
+        within(rowFor("Ledger")).queryByTestId("project-agent-tool-assistant-changes")
+      ).toBeNull();
+    });
+
+    it("keeps an answer for a plugin that went away visible and switchable off", async () => {
+      await renderWith([
+        plugin({ available: false, access: "off", assistantAccess: "read-only" }),
+        notes({ available: false, access: "read-write", source: "project" }),
+      ]);
+
+      expect(isDisabled(assistantSwitch("Ledger"))).toBe(false);
+      expect(within(rowFor("Notes")).queryByTestId("project-agent-tool-assistant")).toBeNull();
+    });
+  });
+
+  describe("tool groups (#14104)", () => {
+    function crm(over: Partial<ProjectAgentToolPlugin> = {}): ProjectAgentToolPlugin {
+      return plugin({
+        pluginInstanceId: "acme.crm",
+        pluginDisplayName: "CRM",
+        hasDatabases: false,
+        allProjectsAccess: undefined,
+        origin: "project",
+        pluginTools: { name: "Acme CRM" },
+        toolGroups: [
+          {
+            id: "search",
+            name: "Search contacts",
+            access: "read",
+            allowed: false,
+            assistantAllowed: false,
+          },
+          {
+            id: "changes",
+            name: "Change contacts",
+            access: "write",
+            allowed: false,
+            assistantAllowed: false,
+          },
+        ],
+        ...over,
+      });
+    }
+
+    const isOn = (el: HTMLElement) => el.getAttribute("aria-checked") === "true";
+    const isDisabled = (el: HTMLElement) => el.hasAttribute("disabled");
+    const groupSwitch = (id: string) =>
+      within(rowFor("CRM")).getByTestId(`project-agent-tool-group-${id}`);
+
+    async function renderWith(plugins: ProjectAgentToolPlugin[]) {
+      agentMcpApi.listProjectPlugins.mockResolvedValue(snapshot(plugins));
+      render(<ProjectAgentToolsSection />);
+      await screen.findByTestId("project-agent-tools");
+    }
+
+    it("gives each group its own switch, and no level for a plugin without databases", async () => {
+      await renderWith([crm()]);
+
+      expect(screen.queryByRole("radiogroup", { name: /access to CRM/ })).toBeNull();
+      expect(isOn(groupSwitch("search"))).toBe(false);
+      expect(describedText(groupSwitch("search"))).toContain(
+        "The plugin says these tools read and search"
+      );
+      expect(describedText(groupSwitch("changes"))).toContain(
+        "The plugin says these tools make changes"
+      );
+    });
+
+    it("allows a read group on its own, keeping the write group off", async () => {
+      await renderWith([crm()]);
+      agentMcpApi.setPluginAccess.mockResolvedValue(snapshot([crm()]));
+
+      fireEvent.click(groupSwitch("search"));
+
+      expect(agentMcpApi.setPluginAccess).toHaveBeenCalledWith({
+        pluginInstanceId: "acme.crm",
+        access: "off",
+        scope: "project",
+        groups: ["search"],
+      });
+      await waitFor(() => expect(isDisabled(groupSwitch("search"))).toBe(false));
+    });
+
+    it("turns one group off and keeps the others", async () => {
+      const both = crm({
+        source: "project",
+        toolGroups: crm().toolGroups!.map((group) => ({ ...group, allowed: true })),
+      });
+      await renderWith([both]);
+      agentMcpApi.setPluginAccess.mockResolvedValue(snapshot([both]));
+
+      fireEvent.click(groupSwitch("changes"));
+
+      expect(agentMcpApi.setPluginAccess).toHaveBeenCalledWith(
+        expect.objectContaining({ scope: "project", groups: ["search"] })
+      );
+      await waitFor(() => expect(isDisabled(groupSwitch("changes"))).toBe(false));
+    });
+
+    it("says when a group was recast since it was allowed", async () => {
+      await renderWith([
+        crm({
+          toolGroups: [
+            {
+              id: "search",
+              name: "Search contacts",
+              access: "write",
+              allowed: false,
+              assistantAllowed: false,
+              reclassified: true,
+            },
+          ],
+        }),
+      ]);
+
+      expect(describedText(groupSwitch("search"))).toContain("stay off until allowed again");
+    });
+
+    it("offers the Assistant only the groups the project's agents have", async () => {
+      const searchOnly = crm({
+        source: "project",
+        assistantAccess: "read-only",
+        toolGroups: [
+          {
+            id: "search",
+            name: "Search contacts",
+            access: "read",
+            allowed: true,
+            assistantAllowed: false,
+          },
+          {
+            id: "changes",
+            name: "Change contacts",
+            access: "write",
+            allowed: false,
+            assistantAllowed: false,
+          },
+        ],
+      });
+      await renderWith([searchOnly]);
+      agentMcpApi.setPluginAccess.mockResolvedValue(snapshot([searchOnly]));
+      const assistantGroup = (id: string) =>
+        within(rowFor("CRM")).getByTestId(`project-agent-tool-assistant-group-${id}`);
+
+      expect(isDisabled(assistantGroup("changes"))).toBe(true);
+      expect(isDisabled(assistantGroup("search"))).toBe(false);
+      expect(
+        within(rowFor("CRM")).queryByTestId("project-agent-tool-assistant-changes")
+      ).toBeNull();
+
+      fireEvent.click(assistantGroup("search"));
+
+      expect(agentMcpApi.setPluginAccess).toHaveBeenCalledWith({
+        pluginInstanceId: "acme.crm",
+        access: "read-only",
+        scope: "assistant",
+        groups: ["search"],
+      });
+      await waitFor(() => expect(isDisabled(assistantGroup("search"))).toBe(false));
+    });
   });
 });

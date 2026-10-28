@@ -779,6 +779,84 @@ describe("per-source rate-limit", () => {
     expect(entries[0]!.message).toBe("noisy-source reported 3 more events — open inbox");
   });
 
+  it("names the source by its label, never by an internal bucket key (#13760)", () => {
+    const source = {
+      rateLimitKey: "plugin:project__0f3a9c__acme.records",
+      rateLimitLabel: "Acme Records",
+    };
+    for (let i = 0; i < 4; i++) {
+      notify({ type: "info", message: `Synced ${i}`, ...source });
+    }
+    const summary = useNotificationHistoryStore.getState().entries[0]!;
+    expect(summary.message).toBe("Acme Records reported 1 more event — open inbox");
+
+    for (let i = 4; i < 7; i++) {
+      notify({ type: "info", message: `Synced ${i}`, ...source });
+    }
+    const updated = useNotificationHistoryStore.getState().entries[0]!;
+    expect(updated.id).toBe(summary.id);
+    expect(updated.message).toBe("Acme Records reported 4 more events — open inbox");
+    expect(updated.message).not.toContain("project__");
+    expect(updated.message).not.toContain("plugin:");
+  });
+
+  it("keeps the plugin on its own bucket's summary row, and no project (#13818)", () => {
+    const plugin = { id: "project__0f3a9c__acme.records", name: "Acme Records" };
+    for (let i = 0; i < 4; i++) {
+      notify({
+        type: "info",
+        message: `Synced ${i}`,
+        rateLimitKey: `plugin:${plugin.id}`,
+        rateLimitLabel: "Acme Records",
+        context: { projectId: "p1", eventKind: "agent", plugin },
+      });
+    }
+    expect(useNotificationHistoryStore.getState().entries[0]!.context).toEqual({ plugin });
+
+    // Another host's plugin buckets as `plugin:<host>:<id>`, and is still that one plugin.
+    for (let i = 0; i < 4; i++) {
+      notify({
+        type: "info",
+        message: `Remote ${i}`,
+        rateLimitKey: `plugin:studio-01:${plugin.id}`,
+        context: { eventKind: "agent", plugin },
+      });
+    }
+    expect(useNotificationHistoryStore.getState().entries[0]!.context).toEqual({ plugin });
+
+    // A bucket that isn't that plugin's alone says nothing about which plugin.
+    for (let i = 0; i < 4; i++) {
+      notify({
+        type: "info",
+        message: `m${i}`,
+        rateLimitKey: "shared-source",
+        context: { eventKind: "agent", plugin },
+      });
+    }
+    expect(useNotificationHistoryStore.getState().entries[0]!.context).toBeUndefined();
+  });
+
+  it("keeps two sources that share a label in separate buckets", () => {
+    for (const rateLimitKey of ["plugin:project__aaa__acme.records", "plugin:acme.records"]) {
+      for (let i = 0; i < 4; i++) {
+        notify({ type: "info", message: `Synced ${i}`, rateLimitKey, rateLimitLabel: "Acme" });
+      }
+    }
+    const summaries = useNotificationHistoryStore
+      .getState()
+      .entries.filter((e) => e.message === "Acme reported 1 more event — open inbox");
+    expect(summaries).toHaveLength(2);
+  });
+
+  it("falls back to the key when the label is empty", () => {
+    for (let i = 0; i < 4; i++) {
+      notify({ type: "info", message: `m${i}`, rateLimitKey: "noisy-source", rateLimitLabel: "" });
+    }
+    expect(useNotificationHistoryStore.getState().entries[0]!.message).toBe(
+      "noisy-source reported 1 more event — open inbox"
+    );
+  });
+
   it("does not bump timestamp when refreshing the summary row", () => {
     notify({ type: "error", message: "1", rateLimitKey: "noisy" });
     notify({ type: "error", message: "2", rateLimitKey: "noisy" });

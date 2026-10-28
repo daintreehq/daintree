@@ -1,0 +1,668 @@
+{
+  "issue": 14238,
+  "date": "2026-10-23",
+  "referenceSource": "f83a95bd1b",
+  "machine": {
+    "cpu": "Apple M4 Max",
+    "memoryGB": 36,
+    "macOS": "15.7.5",
+    "electron": "42.11.18"
+  },
+  "decision": "keep the full hinted set",
+  "units": {
+    "latency": "ms",
+    "memory": "KiB"
+  },
+  "method": {
+    "launch": "npm run perf launch-ab, interleaved, 20 launches per arm, unpackaged build:e2e arms (v8CacheOptions \"code\"); cold = fresh profile per launch, warm = --warm persisted profile per arm after one warmup launch. Metric boot -> renderer_first_interactive. Deltas are candidate minus all; ci95 is a bootstrap interval of the median difference (4000 resamples).",
+    "projectSwitch": "e2e/perf/project-switch-perf.spec.ts, PERF_SWITCH_COLD_ROUNDS=5, 28 LRU-evicted switches per run; summary medians are the median of per-run p50s.",
+    "idleViewMemory": "one empty project view, 15 s settle, two HeapProfiler.collectGarbage, Runtime.getHeapUsage + heap snapshot; compiled code = summed self_size of code nodes; 3 samples per run."
+  },
+  "launch": {
+    "aa-cold": {
+      "warmProfile": false,
+      "runsPerArm": 20,
+      "rendererReadyMs": {
+        "baselineP50": 545.8,
+        "candidateP50": 580.9,
+        "deltaP50": 35.1,
+        "ci95": [-80.1, 97.5],
+        "ok": [20, 20]
+      },
+      "firstInteractiveMs": {
+        "baselineP50": 641.3,
+        "candidateP50": 642.1,
+        "deltaP50": 0.9,
+        "ci95": [-54.6, 30.1],
+        "ok": [20, 20]
+      },
+      "perceivedTotalMs": {
+        "baselineP50": 889.6,
+        "candidateP50": 900.0,
+        "deltaP50": 10.4,
+        "ci95": [-107.9, 71.3],
+        "ok": [20, 20]
+      },
+      "arms": ["all", "all"]
+    },
+    "none-cold": {
+      "warmProfile": false,
+      "runsPerArm": 20,
+      "rendererReadyMs": {
+        "baselineP50": 524.3,
+        "candidateP50": 510.4,
+        "deltaP50": -13.9,
+        "ci95": [-52.2, 47.1],
+        "ok": [20, 20]
+      },
+      "firstInteractiveMs": {
+        "baselineP50": 628.4,
+        "candidateP50": 656.1,
+        "deltaP50": 27.8,
+        "ci95": [-0.6, 55.0],
+        "ok": [20, 20]
+      },
+      "perceivedTotalMs": {
+        "baselineP50": 873.0,
+        "candidateP50": 903.4,
+        "deltaP50": 30.4,
+        "ci95": [-12.4, 56.6],
+        "ok": [20, 20]
+      },
+      "arms": ["all", "none"]
+    },
+    "none-warm": {
+      "warmProfile": true,
+      "runsPerArm": 20,
+      "rendererReadyMs": {
+        "baselineP50": 392.8,
+        "candidateP50": 393.9,
+        "deltaP50": 1.1,
+        "ci95": [-19.1, 15.0],
+        "ok": [20, 20]
+      },
+      "firstInteractiveMs": {
+        "baselineP50": 505.4,
+        "candidateP50": 544.5,
+        "deltaP50": 39.1,
+        "ci95": [16.8, 61.0],
+        "ok": [20, 20]
+      },
+      "perceivedTotalMs": {
+        "baselineP50": 699.0,
+        "candidateP50": 747.2,
+        "deltaP50": 48.2,
+        "ci95": [18.0, 69.6],
+        "ok": [20, 20]
+      },
+      "arms": ["all", "none"]
+    },
+    "no-vendor-cold": {
+      "warmProfile": false,
+      "runsPerArm": 20,
+      "rendererReadyMs": {
+        "baselineP50": 490.5,
+        "candidateP50": 505.4,
+        "deltaP50": 14.9,
+        "ci95": [-33.6, 48.0],
+        "ok": [20, 20]
+      },
+      "firstInteractiveMs": {
+        "baselineP50": 604.8,
+        "candidateP50": 629.9,
+        "deltaP50": 25.1,
+        "ci95": [1.1, 46.3],
+        "ok": [20, 20]
+      },
+      "perceivedTotalMs": {
+        "baselineP50": 841.8,
+        "candidateP50": 868.2,
+        "deltaP50": 26.5,
+        "ci95": [-6.1, 64.8],
+        "ok": [20, 20]
+      },
+      "arms": ["all", "no-vendor"]
+    },
+    "no-vendor-warm": {
+      "warmProfile": true,
+      "runsPerArm": 20,
+      "rendererReadyMs": {
+        "baselineP50": 405.1,
+        "candidateP50": 394.4,
+        "deltaP50": -10.8,
+        "ci95": [-20.1, 7.4],
+        "ok": [20, 20]
+      },
+      "firstInteractiveMs": {
+        "baselineP50": 523.3,
+        "candidateP50": 510.2,
+        "deltaP50": -13.0,
+        "ci95": [-23.2, 17.0],
+        "ok": [20, 20]
+      },
+      "perceivedTotalMs": {
+        "baselineP50": 715.2,
+        "candidateP50": 715.2,
+        "deltaP50": 0.0,
+        "ci95": [-26.2, 25.2],
+        "ok": [20, 20]
+      },
+      "arms": ["all", "no-vendor"]
+    },
+    "no-app-cold": {
+      "warmProfile": false,
+      "runsPerArm": 20,
+      "rendererReadyMs": {
+        "baselineP50": 460.3,
+        "candidateP50": 461.6,
+        "deltaP50": 1.3,
+        "ci95": [-17.1, 18.5],
+        "ok": [20, 20]
+      },
+      "firstInteractiveMs": {
+        "baselineP50": 589.6,
+        "candidateP50": 606.8,
+        "deltaP50": 17.2,
+        "ci95": [7.8, 25.2],
+        "ok": [20, 20]
+      },
+      "perceivedTotalMs": {
+        "baselineP50": 825.1,
+        "candidateP50": 841.6,
+        "deltaP50": 16.5,
+        "ci95": [4.3, 31.4],
+        "ok": [20, 20]
+      },
+      "arms": ["all", "no-app"]
+    },
+    "no-app-warm": {
+      "warmProfile": true,
+      "runsPerArm": 20,
+      "rendererReadyMs": {
+        "baselineP50": 396.5,
+        "candidateP50": 390.1,
+        "deltaP50": -6.4,
+        "ci95": [-22.2, 7.7],
+        "ok": [20, 20]
+      },
+      "firstInteractiveMs": {
+        "baselineP50": 501.9,
+        "candidateP50": 529.1,
+        "deltaP50": 27.1,
+        "ci95": [-0.4, 54.9],
+        "ok": [20, 20]
+      },
+      "perceivedTotalMs": {
+        "baselineP50": 704.8,
+        "candidateP50": 728.0,
+        "deltaP50": 23.2,
+        "ci95": [0.8, 44.1],
+        "ok": [20, 20]
+      },
+      "arms": ["all", "no-app"]
+    }
+  },
+  "projectSwitch": {
+    "summary": {
+      "all": {
+        "runs": 5,
+        "coldVisibleMedianOfP50": 189,
+        "coldInteractiveMedianOfP50": 340,
+        "warmVisibleMedianOfP50": 51
+      },
+      "no-app": {
+        "runs": 2,
+        "coldVisibleMedianOfP50": 251.0,
+        "coldInteractiveMedianOfP50": 387.0,
+        "warmVisibleMedianOfP50": 51.0
+      },
+      "none": {
+        "runs": 3,
+        "coldVisibleMedianOfP50": 261,
+        "coldInteractiveMedianOfP50": 383,
+        "warmVisibleMedianOfP50": 52
+      },
+      "no-vendor": {
+        "runs": 2,
+        "coldVisibleMedianOfP50": 209.5,
+        "coldInteractiveMedianOfP50": 384.0,
+        "warmVisibleMedianOfP50": 49.5
+      }
+    },
+    "runs": {
+      "all": [
+        {
+          "run": "all-1",
+          "coldVisibleP50": 189,
+          "coldVisibleP95": 232,
+          "coldInteractiveP50": 335,
+          "coldInteractiveP95": 416,
+          "coldRoundTripP50": 196,
+          "warmVisibleP50": 50,
+          "coldSamples": 28,
+          "reliability": {
+            "rendererGone": 0,
+            "hardTimeouts": 0
+          }
+        },
+        {
+          "run": "all-11",
+          "coldVisibleP50": 196,
+          "coldVisibleP95": 241,
+          "coldInteractiveP50": 368,
+          "coldInteractiveP95": 457,
+          "coldRoundTripP50": 203,
+          "warmVisibleP50": 51,
+          "coldSamples": 28,
+          "reliability": {
+            "rendererGone": 0,
+            "hardTimeouts": 0
+          }
+        },
+        {
+          "run": "all-14",
+          "coldVisibleP50": 186,
+          "coldVisibleP95": 237,
+          "coldInteractiveP50": 339,
+          "coldInteractiveP95": 423,
+          "coldRoundTripP50": 196,
+          "warmVisibleP50": 55,
+          "coldSamples": 28,
+          "reliability": {
+            "rendererGone": 0,
+            "hardTimeouts": 0
+          }
+        },
+        {
+          "run": "all-4",
+          "coldVisibleP50": 184,
+          "coldVisibleP95": 227,
+          "coldInteractiveP50": 340,
+          "coldInteractiveP95": 413,
+          "coldRoundTripP50": 195,
+          "warmVisibleP50": 58,
+          "coldSamples": 28,
+          "reliability": {
+            "rendererGone": 0,
+            "hardTimeouts": 0
+          }
+        },
+        {
+          "run": "all-6",
+          "coldVisibleP50": 202,
+          "coldVisibleP95": 240,
+          "coldInteractiveP50": 374,
+          "coldInteractiveP95": 449,
+          "coldRoundTripP50": 214,
+          "warmVisibleP50": 47,
+          "coldSamples": 28,
+          "reliability": {
+            "rendererGone": 0,
+            "hardTimeouts": 0
+          }
+        }
+      ],
+      "no-app": [
+        {
+          "run": "no-app-12",
+          "coldVisibleP50": 250,
+          "coldVisibleP95": 264,
+          "coldInteractiveP50": 378,
+          "coldInteractiveP95": 465,
+          "coldRoundTripP50": 259,
+          "warmVisibleP50": 49,
+          "coldSamples": 28,
+          "reliability": {
+            "rendererGone": 0,
+            "hardTimeouts": 0
+          }
+        },
+        {
+          "run": "no-app-13",
+          "coldVisibleP50": 252,
+          "coldVisibleP95": 268,
+          "coldInteractiveP50": 396,
+          "coldInteractiveP95": 463,
+          "coldRoundTripP50": 262,
+          "warmVisibleP50": 53,
+          "coldSamples": 28,
+          "reliability": {
+            "rendererGone": 0,
+            "hardTimeouts": 0
+          }
+        }
+      ],
+      "none": [
+        {
+          "run": "none-2",
+          "coldVisibleP50": 246,
+          "coldVisibleP95": 264,
+          "coldInteractiveP50": 378,
+          "coldInteractiveP95": 477,
+          "coldRoundTripP50": 197,
+          "warmVisibleP50": 55,
+          "coldSamples": 28,
+          "reliability": {
+            "rendererGone": 0,
+            "hardTimeouts": 0
+          }
+        },
+        {
+          "run": "none-3",
+          "coldVisibleP50": 261,
+          "coldVisibleP95": 272,
+          "coldInteractiveP50": 383,
+          "coldInteractiveP95": 484,
+          "coldRoundTripP50": 274,
+          "warmVisibleP50": 44,
+          "coldSamples": 28,
+          "reliability": {
+            "rendererGone": 0,
+            "hardTimeouts": 0
+          }
+        },
+        {
+          "run": "none-8",
+          "coldVisibleP50": 324,
+          "coldVisibleP95": 399,
+          "coldInteractiveP50": 519,
+          "coldInteractiveP95": 643,
+          "coldRoundTripP50": 331,
+          "warmVisibleP50": 52,
+          "coldSamples": 28,
+          "reliability": {
+            "rendererGone": 0,
+            "hardTimeouts": 0
+          }
+        }
+      ],
+      "no-vendor": [
+        {
+          "run": "no-vendor-5",
+          "coldVisibleP50": 211,
+          "coldVisibleP95": 255,
+          "coldInteractiveP50": 391,
+          "coldInteractiveP95": 479,
+          "coldRoundTripP50": 223,
+          "warmVisibleP50": 49,
+          "coldSamples": 28,
+          "reliability": {
+            "rendererGone": 0,
+            "hardTimeouts": 0
+          }
+        },
+        {
+          "run": "no-vendor-7",
+          "coldVisibleP50": 208,
+          "coldVisibleP95": 247,
+          "coldInteractiveP50": 377,
+          "coldInteractiveP95": 457,
+          "coldRoundTripP50": 218,
+          "warmVisibleP50": 50,
+          "coldSamples": 28,
+          "reliability": {
+            "rendererGone": 0,
+            "hardTimeouts": 0
+          }
+        }
+      ]
+    }
+  },
+  "idleViewMemory": {
+    "all": {
+      "samples": 12,
+      "compiledCodeMedianKb": 21964.5,
+      "jsHeapUsedMedianKb": 44832.0
+    },
+    "no-app": {
+      "samples": 6,
+      "compiledCodeMedianKb": 20135.0,
+      "jsHeapUsedMedianKb": 43014.0
+    },
+    "no-vendor": {
+      "samples": 6,
+      "compiledCodeMedianKb": 21393.5,
+      "jsHeapUsedMedianKb": 44251.0
+    },
+    "none": {
+      "samples": 6,
+      "compiledCodeMedianKb": 16067.0,
+      "jsHeapUsedMedianKb": 38699.0
+    }
+  },
+  "raw": {
+    "launch": {
+      "aa-cold": {
+        "all": [
+          635.1, 632.1, 598.6, 615.1, 617.5, 639.8, 644.3, 642.8, 608.9, 643.3, 719.3, 702.2, 815.6,
+          713.8, 611.8, 634.1, 684.1, 749.1, 719.6, 598.5
+        ],
+        "all#b": [
+          583.9, 730.1, 540.3, 585, 634.1, 587.4, 643.5, 647.2, 683, 607.2, 601.3, 682, 703, 652.2,
+          741.2, 640.8, 636.3, 649.3, 686.4, 602.2
+        ]
+      },
+      "none-cold": {
+        "all": [
+          722.2, 626.3, 617.9, 682.8, 632.2, 634.2, 636, 617.8, 576.3, 630.5, 623.7, 617.5, 656.7,
+          653.9, 600, 643.9, 603.2, 584.5, 579.1, 678.6
+        ],
+        "none": [
+          719.8, 605, 684.2, 653.3, 659, 633.7, 647, 624.9, 689.1, 705, 595.9, 685.6, 618.9, 675.8,
+          659.9, 625.4, 661.3, 644.2, 697.5, 618.8
+        ]
+      },
+      "none-warm": {
+        "all": [
+          590.8, 536.9, 526.2, 516, 517.6, 505.1, 505.6, 484.9, 497.1, 499.4, 491.7, 493, 504.9,
+          493.5, 495.6, 574.2, 497, 532.6, 506, 544.8
+        ],
+        "none": [
+          607.6, 588.8, 557.4, 599.1, 547.9, 538.6, 541, 560.5, 532.5, 524.7, 531.8, 523.6, 689.1,
+          533.1, 522.1, 559.9, 526.9, 527.2, 559.8, 584.1
+        ]
+      },
+      "no-vendor-cold": {
+        "all": [
+          640.1, 598.6, 596.9, 606.8, 600.2, 604.5, 605.1, 616.8, 587.1, 574, 604, 584.8, 591.4,
+          659.4, 618.8, 654.1, 636.2, 586.5, 606.8, 619.4
+        ],
+        "no-vendor": [
+          672, 673.9, 686, 651.1, 659.8, 608.9, 614.1, 585.3, 589.7, 688.6, 637, 640.3, 550.4,
+          643.5, 622.8, 621.7, 646.4, 598.4, 592.1, 610.2
+        ]
+      },
+      "no-vendor-warm": {
+        "all": [
+          555.4, 528.6, 508.6, 498.8, 490.6, 509.4, 491.9, 495.9, 503.7, 546.4, 528.4, 538.4, 531.9,
+          581.5, 519, 531, 519.8, 528.7, 493.2, 526.8
+        ],
+        "no-vendor": [
+          575.9, 510.4, 494.4, 510.1, 484.1, 505.8, 487.7, 505.3, 490.5, 516.2, 500.7, 502.7, 537.6,
+          508, 536.9, 535.9, 528.9, 550.4, 527.3, 607.7
+        ]
+      },
+      "no-app-cold": {
+        "all": [
+          593.8, 627.9, 588.5, 590.8, 589.6, 575.5, 615.1, 598.1, 584.8, 552.9, 573, 583.6, 598,
+          596.5, 573.5, 582.4, 597.9, 589.6, 589, 597
+        ],
+        "no-app": [
+          589.1, 621.4, 599.4, 604.6, 615, 597, 606.8, 607.4, 609.8, 576.6, 615.7, 639.3, 629.7,
+          606.8, 606.2, 579.2, 598.9, 583.8, 620.9, 613.4
+        ]
+      },
+      "no-app-warm": {
+        "all": [
+          554, 500.8, 586.3, 503, 492.8, 494.7, 500.9, 500.2, 495, 498.1, 498.6, 498.1, 495.5,
+          507.1, 569.2, 530.6, 530.5, 528.2, 524, 526.3
+        ],
+        "no-app": [
+          572.8, 522, 537.7, 525.1, 523.2, 524.1, 531.7, 525.9, 520, 527.8, 519.5, 522.8, 518.6,
+          530.4, 580.1, 565.6, 573.7, 563.5, 555.7, 559.3
+        ]
+      }
+    },
+    "idleViewMemory": {
+      "mem-1-all": [
+        {
+          "codeKb": 21953,
+          "heapUsedKb": 44804
+        },
+        {
+          "codeKb": 22043,
+          "heapUsedKb": 44905
+        },
+        {
+          "codeKb": 22056,
+          "heapUsedKb": 44919
+        }
+      ],
+      "mem-11-all": [
+        {
+          "codeKb": 21890,
+          "heapUsedKb": 44718
+        },
+        {
+          "codeKb": 21897,
+          "heapUsedKb": 44744
+        },
+        {
+          "codeKb": 21935,
+          "heapUsedKb": 46362
+        }
+      ],
+      "mem-12-no-app": [
+        {
+          "codeKb": 20138,
+          "heapUsedKb": 43020
+        },
+        {
+          "codeKb": 20144,
+          "heapUsedKb": 43033
+        },
+        {
+          "codeKb": 20157,
+          "heapUsedKb": 43050
+        }
+      ],
+      "mem-13-no-app": [
+        {
+          "codeKb": 20114,
+          "heapUsedKb": 42986
+        },
+        {
+          "codeKb": 20121,
+          "heapUsedKb": 43000
+        },
+        {
+          "codeKb": 20132,
+          "heapUsedKb": 43008
+        }
+      ],
+      "mem-14-all": [
+        {
+          "codeKb": 21955,
+          "heapUsedKb": 44792
+        },
+        {
+          "codeKb": 21959,
+          "heapUsedKb": 44806
+        },
+        {
+          "codeKb": 21970,
+          "heapUsedKb": 44810
+        }
+      ],
+      "mem-2-no-vendor": [
+        {
+          "codeKb": 21331,
+          "heapUsedKb": 44130
+        },
+        {
+          "codeKb": 21335,
+          "heapUsedKb": 44144
+        },
+        {
+          "codeKb": 21394,
+          "heapUsedKb": 45700
+        }
+      ],
+      "mem-3-none": [
+        {
+          "codeKb": 16093,
+          "heapUsedKb": 38710
+        },
+        {
+          "codeKb": 16185,
+          "heapUsedKb": 38826
+        },
+        {
+          "codeKb": 16199,
+          "heapUsedKb": 38835
+        }
+      ],
+      "mem-4-none": [
+        {
+          "codeKb": 16021,
+          "heapUsedKb": 38665
+        },
+        {
+          "codeKb": 16028,
+          "heapUsedKb": 38679
+        },
+        {
+          "codeKb": 16041,
+          "heapUsedKb": 38688
+        }
+      ],
+      "mem-5-no-vendor": [
+        {
+          "codeKb": 21393,
+          "heapUsedKb": 44201
+        },
+        {
+          "codeKb": 21481,
+          "heapUsedKb": 44301
+        },
+        {
+          "codeKb": 21495,
+          "heapUsedKb": 44314
+        }
+      ],
+      "mem-6-all": [
+        {
+          "codeKb": 22015,
+          "heapUsedKb": 44854
+        },
+        {
+          "codeKb": 22103,
+          "heapUsedKb": 44953
+        },
+        {
+          "codeKb": 22118,
+          "heapUsedKb": 45005
+        }
+      ]
+    }
+  },
+  "chunks": {
+    "all": {
+      "hintedFiles": 38,
+      "hintedBytes": 5003685
+    },
+    "no-vendor": {
+      "hintedFiles": 36,
+      "hintedBytes": 4421365
+    },
+    "no-app": {
+      "hintedFiles": 37,
+      "hintedBytes": 3150441
+    },
+    "none": {
+      "hintedFiles": 0,
+      "hintedBytes": 0
+    },
+    "appChunkBytes": 1853276
+  }
+}

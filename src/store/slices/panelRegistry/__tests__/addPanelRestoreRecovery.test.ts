@@ -3,7 +3,7 @@
  * launch replaces it in place — once, and never after it was closed.
  */
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { beforeAll, describe, it, expect, beforeEach, vi } from "vitest";
 import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
 
 vi.mock("@/clients", () => ({
@@ -40,8 +40,8 @@ vi.mock("@/clients", () => ({
   },
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     cleanup: vi.fn(),
     applyRendererPolicy: vi.fn(),
     onPanelBackgrounded: vi.fn(),
@@ -52,8 +52,11 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     invalidatePtyGrid: vi.fn(),
     waitForAttachSettled: vi.fn().mockResolvedValue(undefined),
     get: vi.fn(() => null),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("@/store/helpPanelStore", () => ({
   useHelpPanelStore: {
@@ -83,11 +86,21 @@ beforeEach(() => {
 });
 
 const { usePanelStore } = await import("../../../panelStore");
+const { load: loadTerminalService } =
+  await import("@/services/terminal/terminalInstanceServiceAccessor");
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
+});
 const { usePanelLimitStore } = await import("@/store/panelLimitStore");
 const { agentLifecycleLedger } = await import("@/services/terminal/lifecycleLedger");
 const { terminalClient } = await import("@/clients");
 const spawn = vi.mocked(terminalClient.spawn);
-const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
+const terminalInstanceService = (
+  await import("@/services/TerminalInstanceService")
+).createTerminalPaintPlane();
 const { saveNormalized } = await import("../persistence");
 const { beginBatch, consumeBatch } = await import("../hydrationBatch");
 
@@ -377,6 +390,172 @@ describe("addPanel — scratchpad carry onto an existing record (#12835)", () =>
   });
 });
 
+describe("addPanel — a launch's prompt is recorded once its process starts (#14592)", () => {
+  const launchPrompt = { text: "Port the parser", via: "launch" as const, at: 1_000 };
+
+  beforeEach(async () => {
+    await usePanelStore.getState().reset();
+    spawn.mockReset();
+    spawn.mockImplementation(async ({ id }) => id ?? "spawn-id");
+    usePanelLimitStore.setState({ softWarningLimit: 100, confirmationLimit: 200, hardLimit: 300 });
+  });
+
+  function launch(id: string) {
+    return usePanelStore.getState().addPanel({
+      kind: "terminal",
+      requestedId: id,
+      launchAgentId: "claude",
+      command: "claude 'Port the parser'",
+      cwd: "/repo",
+      launchPrompt,
+      bypassLimits: true,
+    });
+  }
+
+  it("records it when the spawn starts the agent", async () => {
+    let release: () => void = () => {};
+    spawn.mockImplementation(
+      ({ id }) =>
+        new Promise((resolve) => {
+          release = () => resolve(id ?? "spawn-id");
+        })
+    );
+    await launch("p1");
+    await drainMicrotasks();
+    // Committed and spawning, but nothing has been handed the prompt yet.
+    expect(ptyPanel("p1")?.spawnStatus).toBe("spawning");
+    expect(ptyPanel("p1")?.firstPrompt).toBeUndefined();
+
+    release();
+    await drainMicrotasks();
+
+    expect(ptyPanel("p1")?.spawnStatus).toBe("ready");
+    expect(ptyPanel("p1")?.firstPrompt).toEqual(launchPrompt);
+  });
+
+  it("records nothing when a restart has taken the pane over before the spawn resolves", async () => {
+    let release: () => void = () => {};
+    spawn.mockImplementation(
+      ({ id }) =>
+        new Promise((resolve) => {
+          release = () => resolve(id ?? "spawn-id");
+        })
+    );
+    await launch("p1");
+    await drainMicrotasks();
+    usePanelStore.setState((state) => {
+      const panel = state.panelsById.p1;
+      if (!panel || !isPtyPanel(panel)) return state;
+      return { panelsById: { ...state.panelsById, p1: { ...panel, isRestarting: true } } };
+    });
+
+    release();
+    await drainMicrotasks();
+
+    expect(ptyPanel("p1")?.firstPrompt).toBeUndefined();
+  });
+
+  it("records nothing when the spawn fails", async () => {
+    spawn.mockRejectedValue(new Error("spawn failed"));
+    await launch("p1");
+    await drainMicrotasks();
+
+    expect(ptyPanel("p1")?.spawnStatus).toBe("failed");
+    expect(ptyPanel("p1")?.firstPrompt).toBeUndefined();
+  });
+});
+
+describe("addPanel — the run's first prompt on an existing record (#14592)", () => {
+  const firstPrompt = { text: "Port the parser", via: "launch" as const, at: 1_000 };
+
+  beforeEach(async () => {
+    await usePanelStore.getState().reset();
+    spawn.mockReset();
+    spawn.mockImplementation(async ({ id }) => id ?? "spawn-id");
+    usePanelLimitStore.setState({ softWarningLimit: 100, confirmationLimit: 200, hardLimit: 300 });
+  });
+
+  async function holdWithPrompt(id: string): Promise<void> {
+    await usePanelStore.getState().addPanel({
+      kind: "terminal",
+      requestedId: id,
+      launchAgentId: "codex",
+      command: "codex",
+      cwd: "/worktrees/task-a",
+      worktreeId: "/worktrees/task-a",
+      restoreRecovery: { reason: "sibling-owns-resume-latest-slot" },
+      firstPrompt,
+      title: "Task A",
+      bypassLimits: true,
+    });
+    await drainMicrotasks();
+  }
+
+  function startHeld(id: string, record?: typeof firstPrompt) {
+    return usePanelStore.getState().addPanel({
+      kind: "terminal",
+      requestedId: id,
+      replacesRestoreRecovery: true,
+      launchAgentId: "codex",
+      command: "codex",
+      cwd: "/worktrees/task-a",
+      worktreeId: "/worktrees/task-a",
+      ...(record && { firstPrompt: record }),
+      title: "Task A",
+    });
+  }
+
+  it("lets a held pane's launch decide it: a fresh start carries none", async () => {
+    await holdWithPrompt("held-1");
+    expect(ptyPanel("held-1")?.firstPrompt).toEqual(firstPrompt);
+
+    await expect(startHeld("held-1")).resolves.toBe("held-1");
+    await drainMicrotasks();
+
+    expect(ptyPanel("held-1")?.restoreRecovery).toBeUndefined();
+    expect(ptyPanel("held-1")?.firstPrompt).toBeUndefined();
+  });
+
+  it("takes the record the held pane's launch carries over the one it held", async () => {
+    await holdWithPrompt("held-1");
+    const carried = { text: "Port the parser, carried", via: "launch" as const, at: 2_000 };
+
+    await expect(startHeld("held-1", carried)).resolves.toBe("held-1");
+    await drainMicrotasks();
+
+    expect(ptyPanel("held-1")?.firstPrompt).toEqual(carried);
+  });
+
+  it.each([
+    ["has none", undefined],
+    ["has an older one", { text: "stale snapshot", via: "launch" as const, at: 500 }],
+  ])(
+    "keeps the live record when a reconnect lands with a snapshot that %s",
+    async (_label, incoming) => {
+      await usePanelStore.getState().addPanel({
+        kind: "terminal",
+        existingId: "p1",
+        cwd: "/repo",
+        firstPrompt,
+        bypassLimits: true,
+      });
+      await drainMicrotasks();
+
+      await usePanelStore.getState().addPanel({
+        kind: "terminal",
+        requestedId: "p1",
+        existingId: "p1",
+        cwd: "/repo",
+        ...(incoming && { firstPrompt: incoming }),
+        bypassLimits: true,
+      });
+      await drainMicrotasks();
+
+      expect(ptyPanel("p1")?.firstPrompt).toEqual(firstPrompt);
+    }
+  );
+});
+
 /**
  * Tests for spawn-time PTY geometry (#10863).
  *
@@ -402,7 +581,9 @@ describe("spawn-time PTY geometry (#10863)", () => {
     terminalClient.spawn.mockImplementation(async ({ id }: { id?: string }) => id ?? "spawn-id");
     terminalClient.resize.mockReset();
 
-    const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
+    const terminalInstanceService = (
+      await import("@/services/TerminalInstanceService")
+    ).createTerminalPaintPlane();
     vi.mocked(terminalInstanceService.get).mockReset();
     vi.mocked(terminalInstanceService.get).mockReturnValue(null as never);
     vi.mocked(terminalInstanceService.sendPtyResize).mockReset();
@@ -412,7 +593,9 @@ describe("spawn-time PTY geometry (#10863)", () => {
     const { terminalClient } = (await import("@/clients")) as unknown as {
       terminalClient: { spawn: ReturnType<typeof vi.fn> };
     };
-    const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
+    const terminalInstanceService = (
+      await import("@/services/TerminalInstanceService")
+    ).createTerminalPaintPlane();
     vi.mocked(terminalInstanceService.get).mockReturnValue(makeAttachedManaged(54, 40) as never);
 
     const { addPanel } = usePanelStore.getState();
@@ -444,7 +627,9 @@ describe("spawn-time PTY geometry (#10863)", () => {
     const { terminalClient } = (await import("@/clients")) as unknown as {
       terminalClient: { spawn: ReturnType<typeof vi.fn>; resize: ReturnType<typeof vi.fn> };
     };
-    const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
+    const terminalInstanceService = (
+      await import("@/services/TerminalInstanceService")
+    ).createTerminalPaintPlane();
 
     // Not attached when the spawn dims are read; attached (and fitted to
     // 54×40) by the time the spawn IPC resolves. The fit's own PTY resize was
@@ -527,7 +712,9 @@ describe("construction geometry for restored panes (#11718)", () => {
     terminalClient.spawn.mockImplementation(async ({ id }: { id?: string }) => id ?? "spawn-id");
     terminalClient.resize.mockReset();
 
-    const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
+    const terminalInstanceService = (
+      await import("@/services/TerminalInstanceService")
+    ).createTerminalPaintPlane();
     vi.mocked(terminalInstanceService.get).mockReset();
     vi.mocked(terminalInstanceService.get).mockReturnValue(null as never);
     vi.mocked(terminalInstanceService.sendPtyResize).mockReset();
@@ -541,7 +728,9 @@ describe("construction geometry for restored panes (#11718)", () => {
    * is covered against a live xterm in TerminalRestoreController.replay.test.ts.)
    */
   async function prewarmDims(id: string): Promise<{ cols?: number; rows?: number } | undefined> {
-    const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
+    const terminalInstanceService = (
+      await import("@/services/TerminalInstanceService")
+    ).createTerminalPaintPlane();
     const call = vi
       .mocked(terminalInstanceService.prewarmTerminal)
       .mock.calls.find((c) => c[0] === id);
@@ -552,7 +741,9 @@ describe("construction geometry for restored panes (#11718)", () => {
     const { terminalClient } = (await import("@/clients")) as unknown as {
       terminalClient: { spawn: ReturnType<typeof vi.fn>; resize: ReturnType<typeof vi.fn> };
     };
-    const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
+    const terminalInstanceService = (
+      await import("@/services/TerminalInstanceService")
+    ).createTerminalPaintPlane();
 
     const { addPanel } = usePanelStore.getState();
     await addPanel({

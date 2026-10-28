@@ -4,9 +4,13 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import {
+  AssistantKnowledgeContributionSchema,
+  AssistantKnowledgeReferenceSchema,
+  AssistantKnowledgeSkillSchema,
   AgentContributionSchema,
   AgentDetectionConfigSchema,
   AgentMcpContributionSchema,
+  AgentMcpToolGroupSchema,
   CommandContributionSchema,
   ContextMenuContributionSchema,
   CredentialFieldSchema,
@@ -14,29 +18,60 @@ import {
   DatabaseQueryContributionSchema,
   DatabaseQueryParamSchema,
   FileDecorationContributionSchema,
+  ContextProviderContributionSchema,
+  WorktreeDeleteNotesContributionSchema,
   FileEditorContributionSchema,
+  ElementPickerDetectionRuleSchema,
+  ElementPickerProviderContributionSchema,
   ForgeProviderContributionSchema,
   getPluginManifestSchema,
   KeybindingContributionSchema,
+  LaunchEntryAgentTargetSchema,
+  LaunchEntryCommandTargetSchema,
+  LaunchEntryContributionSchema,
+  LaunchEntryPanelTargetSchema,
+  LayoutContributionSchema,
+  LayoutEntryContributionSchema,
+  SearchProviderContributionSchema,
+  SearchProviderTargetSchema,
   McpServerContributionSchema,
   MenuItemContributionSchema,
   PanelContributionObjectSchema,
   PanelMenuItemSchema,
   PanelToolbarItemSchema,
-  PreviewToolContributionSchema,
-  GuestAdapterContributionSchema,
+  PluginApplicationNavigationSchema,
+  PluginApplicationSchema,
+  PluginApplicationSectionSchema,
+  PluginApplicationTourRefSchema,
+  PluginServiceProvideContributionSchema,
+  PluginServiceRequireContributionSchema,
+  PluginServicesContributionSchema,
+  ProjectTemplateContributionSchema,
   ProcessToolContributionSchema,
   RecipeContributionSchema,
   RecipeContributionTerminalSchema,
   SettingDefinitionObjectSchema,
+  PromptTemplateContributionSchema,
+  TerminalLinkContributionSchema,
+  TerminalLinkUrlSchema,
   SkillContributionSchema,
   SurfaceContributionsSchema,
+  ThemeContributionSchema,
   SurfaceViewSlotSchema,
   ToolbarButtonContributionSchema,
+  ToolbarButtonPopoverSchema,
   TourCaptionSchema,
+  TourFinishSchema,
   TourChapterSchema,
   TourContributionSchema,
   ViewContributionSchema,
+  WorktreeSetupStepContributionSchema,
+  SetupStepContributionSchema,
+  SetupStepSettingDoneSchema,
+  SetupStepAccountDoneSchema,
+  SetupStepContextDoneSchema,
+  SetupStepSettingsActionSchema,
+  SetupStepCommandActionSchema,
 } from "../plugin.js";
 
 /**
@@ -88,34 +123,79 @@ interface ConsumerDescriptor {
 }
 
 const PLUGIN_SERVICE = "electron/services/PluginService.ts";
+const PLUGIN_CONTRIBUTION_REGISTRAR = "electron/services/plugin/PluginContributionRegistrar.ts";
 const TERMINAL_ACTIVITY_PATTERNS = "electron/services/pty/terminalActivityPatterns.ts";
 const PLUGIN_SETTINGS_FORM = "src/components/Settings/PluginSettingsForm.tsx";
 const CODE_FORGE_TAB = "src/components/Settings/CodeForgeSettingsTab.tsx";
 const FORGE_REGISTRY = "electron/services/forgeProviderRegistry.ts";
+const ELEMENT_PICKER_REGISTRY = "electron/services/elementPickerProviderRegistry.ts";
 const AGENT_REGISTRY = "shared/config/pluginAgentRegistry.ts";
 const MCP_SUPERVISOR = "electron/services/PluginMcpSupervisor.ts";
 const PLUGIN_SCHEMA = "electron/schemas/plugin.ts";
+const PLUGIN_TOOLBAR_POPOVER = "src/components/Layout/PluginToolbarPopover.tsx";
 const SKILL_REGISTRY = "electron/services/plugin/PluginSkillRegistry.ts";
+const ASSISTANT_PLUGIN_KNOWLEDGE = "electron/services/AssistantPluginKnowledge.ts";
+const PROMPT_TEMPLATE_UTIL = "shared/utils/pluginPromptTemplates.ts";
+const PLUGIN_RUNTIME_STORE = "src/store/pluginRuntimeStore.ts";
+const PLUGIN_TERMINAL_LINKS = "src/services/terminal/pluginTerminalLinks.ts";
+const PLUGIN_TERMINAL_LINK_UTIL = "shared/utils/pluginTerminalLinks.ts";
+const COMMAND_PICKER = "src/components/Commands/CommandPicker.tsx";
+const PROMPT_TEMPLATE_FORM = "src/components/Commands/PromptTemplateForm.tsx";
+const THEME_REGISTRY = "electron/services/plugin/PluginThemeRegistry.ts";
 const RECIPE_REGISTRY = "electron/services/plugin/PluginRecipeRegistry.ts";
 const TOUR_REGISTRY = "electron/services/plugin/PluginTourRegistry.ts";
 const PLUGIN_TOURS = "src/components/Tour/pluginTours.tsx";
+const PROJECT_TEMPLATE_REGISTRY = "electron/services/plugin/PluginProjectTemplateRegistry.ts";
+const PROJECT_TEMPLATE_FILES = "electron/services/plugin/projectTemplateFiles.ts";
+const CREATE_PROJECT_DIALOG = "src/components/Project/CreateProjectFolderDialog.tsx";
 const RECIPE_SANITIZER = "shared/utils/recipeSanitizer.ts";
+const RECIPE_AGENT_STEP = "src/utils/recipeAgentStep.ts";
+const PLUGIN_RECIPE_AGENT_TOOLS = "src/utils/pluginRecipeAgentTools.ts";
 const ARCHIVE_INSTALL_INTENT = "electron/setup/archiveInstallIntent.ts";
 const PROCESS_TOOL_REGISTRY = "shared/config/pluginProcessToolRegistry.ts";
 const PLUGIN_ICON_ASSETS = "electron/services/plugin/pluginIconAssets.ts";
 const PROCESS_DETECTOR_REGISTRIES = "electron/services/ProcessDetector/registries.ts";
 const AGENT_MCP_DECLARED = "electron/services/pluginAgentMcp/declaredEndpoints.ts";
-const DEV_PREVIEW_TOOL_REGISTRY = "src/registry/devPreviewToolRegistry.ts";
-const BUILTIN_GUEST_ADAPTERS = "electron/services/sitePreview/builtinGuestAdapters.ts";
-const GUEST_ADAPTER_ASSETS = "electron/services/sitePreview/guestAdapterAssets.ts";
+const AGENT_MCP_PROJECT_ENABLEMENT = "electron/services/pluginAgentMcp/projectEnablement.ts";
+const AGENT_MCP_CONTRIBUTED_SERVER =
+  "electron/services/pluginAgentMcp/contributedServerEndpoint.ts";
+const WORKTREE_SETUP_STEP_REGISTRY = "electron/services/worktreeSetupStepRegistry.ts";
+const WORKTREE_SETUP_RPC = "electron/services/worktreeSetupRpcServer.ts";
+const LIFECYCLE_COMMAND_TRUST = "electron/workspace-host/lifecycleCommandTrust.ts";
 const PLUGIN_DATABASE = "electron/services/plugin/pluginDatabase.ts";
 const PLUGIN_DATABASE_HANDLE = "shared/utils/pluginDatabaseHandle.ts";
-const PLUGIN_HOST_FACTORY = "electron/services/plugin/PluginHostFactory.ts";
+const PROJECT_APPLICATION_PREFLIGHT = "electron/services/plugin/projectApplicationPreflight.ts";
+const PLUGIN_HOST_CONTRIBUTIONS = "electron/services/plugin/pluginHostContributionsApi.ts";
+const PLUGIN_HOST_NOTIFICATIONS = "electron/services/plugin/pluginHostNotificationsApi.ts";
+const PLUGIN_HOST_SETTINGS = "electron/services/plugin/pluginHostSettingsApi.ts";
 const PLUGIN_DATABASES_SECTION = "src/components/Plugin/PluginDatabasesSection.tsx";
 const DATABASE_ENDPOINT = "electron/services/pluginAgentMcp/databaseEndpoint.ts";
 const DECLARED_QUERIES = "electron/services/pluginAgentMcp/declaredQueries.ts";
 const GENERIC_PANEL_MENU = "src/components/Panel/genericPanelMenu.ts";
 const PLUGIN_PANEL_TOOLBAR = "src/components/Panel/PluginPanelToolbar.tsx";
+const SIDEBAR_VIEWS = "src/lib/sidebarViews.ts";
+const SIDEBAR_VIEW_HOST = "src/components/Sidebar/SidebarViewHost.tsx";
+const PLUGIN_SETUP_CHECKLIST = "src/components/Plugin/PluginSetupChecklist.tsx";
+const PLUGIN_SETUP_PROGRESS = "src/services/plugin/pluginSetupProgress.ts";
+const PLUGIN_SETUP_SKIPS = "electron/services/plugin/projectPluginSetupSkips.ts";
+const SIDEBAR_VIEW_SWITCHER = "src/components/Sidebar/SidebarViewSwitcher.tsx";
+const LAUNCH_ENTRY_REGISTRY = "shared/config/pluginLaunchEntryRegistry.ts";
+const DOCK_LAUNCH_ITEMS = "src/components/Layout/dockLaunchItems.ts";
+const APPLY_PLUGIN_LAYOUT = "src/services/layout/applyPluginLayout.ts";
+const SEARCH_PROVIDER_REGISTRY = "electron/services/plugin/pluginSearchProviderRegistry.ts";
+const PLUGIN_SEARCH_SERVICE = "electron/services/plugin/PluginSearchService.ts";
+const QUICK_SWITCHER = "src/components/QuickSwitcher/QuickSwitcher.tsx";
+const OPEN_PLUGIN_SEARCH_HIT = "src/components/QuickSwitcher/openPluginSearchHit.ts";
+const PROJECT_APPLICATION = "shared/utils/projectApplication.ts";
+const APPLICATION_NAVIGATION = "shared/utils/applicationNavigation.ts";
+const APPLICATION_NAVIGATION_SERVICE = "src/services/plugin/applicationNavigation.ts";
+const APPLICATION_NAVIGATION_STORE = "src/store/applicationNavigationStore.ts";
+const USE_APPLICATION_NAVIGATION = "src/hooks/useApplicationNavigation.ts";
+const PROJECT_PLUGIN_CONTROLLER = "electron/services/plugin/ProjectPluginController.ts";
+const PROJECT_PLUGIN_STORE = "src/store/projectPluginStore.ts";
+const PROJECT_HOME_STORE = "src/store/projectHomeStore.ts";
+const PROJECT_APPLICATION_WELCOME = "src/hooks/useProjectApplicationWelcome.ts";
+const SERVICE_BROKER = "electron/services/plugin/PluginServiceBroker.ts";
 
 /**
  * The schemas swept for field coverage. The first block matches the fourteen
@@ -126,6 +206,9 @@ const PLUGIN_PANEL_TOOLBAR = "src/components/Panel/PluginPanelToolbar.tsx";
 const SWEPT_SCHEMAS = {
   panels: PanelContributionObjectSchema,
   toolbarButtons: ToolbarButtonContributionSchema,
+  launchEntries: LaunchEntryContributionSchema,
+  layouts: LayoutContributionSchema,
+  searchProviders: SearchProviderContributionSchema,
   menuItems: MenuItemContributionSchema,
   keybindings: KeybindingContributionSchema,
   contextMenus: ContextMenuContributionSchema,
@@ -133,30 +216,68 @@ const SWEPT_SCHEMAS = {
   views: ViewContributionSchema,
   mcpServers: McpServerContributionSchema,
   skills: SkillContributionSchema,
+  themes: ThemeContributionSchema,
+  promptTemplates: PromptTemplateContributionSchema,
+  terminalLinks: TerminalLinkContributionSchema,
+  contextProviders: ContextProviderContributionSchema,
   forgeProviders: ForgeProviderContributionSchema,
+  elementPickerProviders: ElementPickerProviderContributionSchema,
   fileDecorationProviders: FileDecorationContributionSchema,
+  worktreeDeleteNotes: WorktreeDeleteNotesContributionSchema,
   fileEditors: FileEditorContributionSchema,
-  previewTools: PreviewToolContributionSchema,
-  guestAdapters: GuestAdapterContributionSchema,
   agents: AgentContributionSchema,
   processTools: ProcessToolContributionSchema,
   settings: SettingDefinitionObjectSchema,
   recipes: RecipeContributionSchema,
   agentMcp: AgentMcpContributionSchema,
   tours: TourContributionSchema,
+  projectTemplates: ProjectTemplateContributionSchema,
   databases: DatabaseContributionSchema,
+  worktreeSetupSteps: WorktreeSetupStepContributionSchema,
+  setup: SetupStepContributionSchema,
   surfaces: SurfaceContributionsSchema,
+  services: PluginServicesContributionSchema,
+  "services.provides": PluginServiceProvideContributionSchema,
+  "services.requires": PluginServiceRequireContributionSchema,
   "databases.queries": DatabaseQueryContributionSchema,
   "databases.queries.params": DatabaseQueryParamSchema,
+  "agentMcp.groups": AgentMcpToolGroupSchema,
   "panels.menu": PanelMenuItemSchema,
   "panels.toolbar": PanelToolbarItemSchema,
   "agents.detection": AgentDetectionConfigSchema,
   "surfaces.emptyCanvas": SurfaceViewSlotSchema,
+  "surfaces.projectHome": SurfaceViewSlotSchema,
+  "surfaces.worktreeCreate": SurfaceViewSlotSchema,
+  "toolbarButtons.popover": ToolbarButtonPopoverSchema,
+  "launchEntries.panel": LaunchEntryPanelTargetSchema,
+  "launchEntries.command": LaunchEntryCommandTargetSchema,
+  "launchEntries.agent": LaunchEntryAgentTargetSchema,
+  "layouts.entries": LayoutEntryContributionSchema,
+  "searchProviders.target": SearchProviderTargetSchema,
+  "terminalLinks.url": TerminalLinkUrlSchema,
   "recipes.terminals": RecipeContributionTerminalSchema,
   "forgeProviders.credentialFields": CredentialFieldSchema,
   "forgeProviders.slots": ForgeProviderContributionSchema.shape.slots,
+  "elementPickerProviders.detection": ElementPickerDetectionRuleSchema,
   "tours.chapters": TourChapterSchema,
   "tours.chapters.captions": TourCaptionSchema,
+  "tours.finish": TourFinishSchema,
+  "setup.done.setting": SetupStepSettingDoneSchema,
+  "setup.done.account": SetupStepAccountDoneSchema,
+  "setup.done.context": SetupStepContextDoneSchema,
+  "setup.action.settings": SetupStepSettingsActionSchema,
+  "setup.action.command": SetupStepCommandActionSchema,
+  // Optional and not defaulted, like `account`, so it is swept here rather
+  // than as one of the kinds an empty manifest materializes.
+  assistantKnowledge: AssistantKnowledgeContributionSchema,
+  "assistantKnowledge.skills": AssistantKnowledgeSkillSchema,
+  "assistantKnowledge.references": AssistantKnowledgeReferenceSchema,
+  // Top-level and optional, outside `contributes`, so it never shows up on the
+  // empty-manifest parse and is swept here by name.
+  application: PluginApplicationSchema,
+  "application.welcomeTour": PluginApplicationTourRefSchema,
+  "application.navigation": PluginApplicationNavigationSchema,
+  "application.navigation.sections": PluginApplicationSectionSchema,
 } as const;
 
 type SweptGroup = keyof typeof SWEPT_SCHEMAS;
@@ -169,6 +290,9 @@ type SweptGroup = keyof typeof SWEPT_SCHEMAS;
 const TOP_LEVEL_GROUPS = [
   "panels",
   "toolbarButtons",
+  "launchEntries",
+  "layouts",
+  "searchProviders",
   "menuItems",
   "keybindings",
   "contextMenus",
@@ -176,19 +300,27 @@ const TOP_LEVEL_GROUPS = [
   "views",
   "mcpServers",
   "skills",
+  "themes",
+  "promptTemplates",
+  "terminalLinks",
+  "contextProviders",
   "forgeProviders",
+  "elementPickerProviders",
   "fileDecorationProviders",
+  "worktreeDeleteNotes",
   "fileEditors",
-  "previewTools",
-  "guestAdapters",
   "agents",
   "processTools",
   "settings",
   "recipes",
   "agentMcp",
   "tours",
+  "projectTemplates",
   "databases",
+  "worktreeSetupSteps",
+  "setup",
   "surfaces",
+  "services",
 ] as const;
 
 /** Reduce a swept schema entry to its ZodObject and read the field keys. */
@@ -214,6 +346,32 @@ type ForgeSlots = NonNullable<z.infer<typeof ForgeProviderContributionSchema>["s
 type FieldConsumerCoverage = {
   panels: Record<keyof z.infer<typeof PanelContributionObjectSchema>, ConsumerDescriptor>;
   toolbarButtons: Record<keyof z.infer<typeof ToolbarButtonContributionSchema>, ConsumerDescriptor>;
+  launchEntries: Record<keyof z.infer<typeof LaunchEntryContributionSchema>, ConsumerDescriptor>;
+  "launchEntries.panel": Record<
+    keyof z.infer<typeof LaunchEntryPanelTargetSchema>,
+    ConsumerDescriptor
+  >;
+  "launchEntries.command": Record<
+    keyof z.infer<typeof LaunchEntryCommandTargetSchema>,
+    ConsumerDescriptor
+  >;
+  "launchEntries.agent": Record<
+    keyof z.infer<typeof LaunchEntryAgentTargetSchema>,
+    ConsumerDescriptor
+  >;
+  layouts: Record<keyof z.infer<typeof LayoutContributionSchema>, ConsumerDescriptor>;
+  "layouts.entries": Record<
+    keyof z.infer<typeof LayoutEntryContributionSchema>,
+    ConsumerDescriptor
+  >;
+  searchProviders: Record<
+    keyof z.infer<typeof SearchProviderContributionSchema>,
+    ConsumerDescriptor
+  >;
+  "searchProviders.target": Record<
+    keyof z.infer<typeof SearchProviderTargetSchema>,
+    ConsumerDescriptor
+  >;
   menuItems: Record<keyof z.infer<typeof MenuItemContributionSchema>, ConsumerDescriptor>;
   keybindings: Record<keyof z.infer<typeof KeybindingContributionSchema>, ConsumerDescriptor>;
   contextMenus: Record<keyof z.infer<typeof ContextMenuContributionSchema>, ConsumerDescriptor>;
@@ -221,20 +379,41 @@ type FieldConsumerCoverage = {
   views: Record<keyof z.infer<typeof ViewContributionSchema>, ConsumerDescriptor>;
   mcpServers: Record<keyof z.infer<typeof McpServerContributionSchema>, ConsumerDescriptor>;
   skills: Record<keyof z.infer<typeof SkillContributionSchema>, ConsumerDescriptor>;
+  themes: Record<keyof z.infer<typeof ThemeContributionSchema>, ConsumerDescriptor>;
+  promptTemplates: Record<
+    keyof z.infer<typeof PromptTemplateContributionSchema>,
+    ConsumerDescriptor
+  >;
+  terminalLinks: Record<keyof z.infer<typeof TerminalLinkContributionSchema>, ConsumerDescriptor>;
+  "terminalLinks.url": Record<keyof z.infer<typeof TerminalLinkUrlSchema>, ConsumerDescriptor>;
+  contextProviders: Record<
+    keyof z.infer<typeof ContextProviderContributionSchema>,
+    ConsumerDescriptor
+  >;
   forgeProviders: Record<keyof z.infer<typeof ForgeProviderContributionSchema>, ConsumerDescriptor>;
+  elementPickerProviders: Record<
+    keyof z.infer<typeof ElementPickerProviderContributionSchema>,
+    ConsumerDescriptor
+  >;
   fileDecorationProviders: Record<
     keyof z.infer<typeof FileDecorationContributionSchema>,
     ConsumerDescriptor
   >;
+  worktreeDeleteNotes: Record<
+    keyof z.infer<typeof WorktreeDeleteNotesContributionSchema>,
+    ConsumerDescriptor
+  >;
   fileEditors: Record<keyof z.infer<typeof FileEditorContributionSchema>, ConsumerDescriptor>;
-  previewTools: Record<keyof z.infer<typeof PreviewToolContributionSchema>, ConsumerDescriptor>;
-  guestAdapters: Record<keyof z.infer<typeof GuestAdapterContributionSchema>, ConsumerDescriptor>;
   agents: Record<keyof z.infer<typeof AgentContributionSchema>, ConsumerDescriptor>;
   processTools: Record<keyof z.infer<typeof ProcessToolContributionSchema>, ConsumerDescriptor>;
   settings: Record<keyof z.infer<typeof SettingDefinitionObjectSchema>, ConsumerDescriptor>;
   recipes: Record<keyof z.infer<typeof RecipeContributionSchema>, ConsumerDescriptor>;
   agentMcp: Record<keyof z.infer<typeof AgentMcpContributionSchema>, ConsumerDescriptor>;
   databases: Record<keyof z.infer<typeof DatabaseContributionSchema>, ConsumerDescriptor>;
+  worktreeSetupSteps: Record<
+    keyof z.infer<typeof WorktreeSetupStepContributionSchema>,
+    ConsumerDescriptor
+  >;
   "databases.queries": Record<
     keyof z.infer<typeof DatabaseQueryContributionSchema>,
     ConsumerDescriptor
@@ -243,11 +422,55 @@ type FieldConsumerCoverage = {
     keyof z.infer<typeof DatabaseQueryParamSchema>,
     ConsumerDescriptor
   >;
+  "agentMcp.groups": Record<keyof z.infer<typeof AgentMcpToolGroupSchema>, ConsumerDescriptor>;
   surfaces: Record<keyof z.infer<typeof SurfaceContributionsSchema>, ConsumerDescriptor>;
+  services: Record<keyof z.infer<typeof PluginServicesContributionSchema>, ConsumerDescriptor>;
+  "services.provides": Record<
+    keyof z.infer<typeof PluginServiceProvideContributionSchema>,
+    ConsumerDescriptor
+  >;
+  "services.requires": Record<
+    keyof z.infer<typeof PluginServiceRequireContributionSchema>,
+    ConsumerDescriptor
+  >;
   "panels.menu": Record<keyof z.infer<typeof PanelMenuItemSchema>, ConsumerDescriptor>;
   "panels.toolbar": Record<keyof z.infer<typeof PanelToolbarItemSchema>, ConsumerDescriptor>;
   "agents.detection": Record<keyof z.infer<typeof AgentDetectionConfigSchema>, ConsumerDescriptor>;
   "surfaces.emptyCanvas": Record<keyof z.infer<typeof SurfaceViewSlotSchema>, ConsumerDescriptor>;
+  "surfaces.projectHome": Record<keyof z.infer<typeof SurfaceViewSlotSchema>, ConsumerDescriptor>;
+  "surfaces.worktreeCreate": Record<
+    keyof z.infer<typeof SurfaceViewSlotSchema>,
+    ConsumerDescriptor
+  >;
+  assistantKnowledge: Record<
+    keyof z.infer<typeof AssistantKnowledgeContributionSchema>,
+    ConsumerDescriptor
+  >;
+  "assistantKnowledge.skills": Record<
+    keyof z.infer<typeof AssistantKnowledgeSkillSchema>,
+    ConsumerDescriptor
+  >;
+  "assistantKnowledge.references": Record<
+    keyof z.infer<typeof AssistantKnowledgeReferenceSchema>,
+    ConsumerDescriptor
+  >;
+  application: Record<keyof z.infer<typeof PluginApplicationSchema>, ConsumerDescriptor>;
+  "application.welcomeTour": Record<
+    keyof z.infer<typeof PluginApplicationTourRefSchema>,
+    ConsumerDescriptor
+  >;
+  "application.navigation": Record<
+    keyof z.infer<typeof PluginApplicationNavigationSchema>,
+    ConsumerDescriptor
+  >;
+  "application.navigation.sections": Record<
+    keyof z.infer<typeof PluginApplicationSectionSchema>,
+    ConsumerDescriptor
+  >;
+  "toolbarButtons.popover": Record<
+    keyof z.infer<typeof ToolbarButtonPopoverSchema>,
+    ConsumerDescriptor
+  >;
   "recipes.terminals": Record<
     keyof z.infer<typeof RecipeContributionTerminalSchema>,
     ConsumerDescriptor
@@ -257,16 +480,51 @@ type FieldConsumerCoverage = {
     ConsumerDescriptor
   >;
   "forgeProviders.slots": Record<keyof ForgeSlots, ConsumerDescriptor>;
+  "elementPickerProviders.detection": Record<
+    keyof z.infer<typeof ElementPickerDetectionRuleSchema>,
+    ConsumerDescriptor
+  >;
   tours: Record<keyof z.infer<typeof TourContributionSchema>, ConsumerDescriptor>;
+  projectTemplates: Record<
+    keyof z.infer<typeof ProjectTemplateContributionSchema>,
+    ConsumerDescriptor
+  >;
   "tours.chapters": Record<keyof z.infer<typeof TourChapterSchema>, ConsumerDescriptor>;
   "tours.chapters.captions": Record<keyof z.infer<typeof TourCaptionSchema>, ConsumerDescriptor>;
+  "tours.finish": Record<keyof z.infer<typeof TourFinishSchema>, ConsumerDescriptor>;
+  setup: Record<keyof z.infer<typeof SetupStepContributionSchema>, ConsumerDescriptor>;
+  "setup.done.setting": Record<
+    keyof z.infer<typeof SetupStepSettingDoneSchema>,
+    ConsumerDescriptor
+  >;
+  "setup.done.account": Record<
+    keyof z.infer<typeof SetupStepAccountDoneSchema>,
+    ConsumerDescriptor
+  >;
+  "setup.done.context": Record<
+    keyof z.infer<typeof SetupStepContextDoneSchema>,
+    ConsumerDescriptor
+  >;
+  "setup.action.settings": Record<
+    keyof z.infer<typeof SetupStepSettingsActionSchema>,
+    ConsumerDescriptor
+  >;
+  "setup.action.command": Record<
+    keyof z.infer<typeof SetupStepCommandActionSchema>,
+    ConsumerDescriptor
+  >;
 };
 
 const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
   panels: {
     id: {
       mode: "verbatim",
-      consumers: [{ file: PLUGIN_SERVICE, symbol: "loadPlugin (panelId `${name}.${id}`)" }],
+      consumers: [
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar (panelId `${name}.${id}`)",
+        },
+      ],
       note: "Namespaced into the registered panel-kind id.",
     },
     name: {
@@ -289,7 +547,12 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
     },
     hasPty: {
       mode: "verbatim",
-      consumers: [{ file: PLUGIN_SERVICE, symbol: "loadPlugin (panels loop)" }],
+      consumers: [
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar (panels loop)",
+        },
+      ],
       note: "Selects PTY vs view rendering and gates the view componentPath attach.",
     },
     canRestart: {
@@ -309,18 +572,67 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
     },
     dockable: {
       mode: "verbatim",
-      consumers: [{ file: PLUGIN_SERVICE, symbol: "loadPlugin (panels loop) → registerPanelKind" }],
+      consumers: [
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar (panels loop) → registerPanelKind",
+        },
+      ],
       note: "Registered as the panel kind dock eligibility; undefined defaults to dockable, false opts out (panelKindIsDockable).",
     },
     stateVersion: {
       mode: "verbatim",
-      consumers: [{ file: PLUGIN_SERVICE, symbol: "loadPlugin (panels loop) → registerPanelKind" }],
+      consumers: [
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar (panels loop) → registerPanelKind",
+        },
+      ],
       note: "Registered as the panel kind's extensionState schema version; stamped onto the panel record at the write gate (setPanelExtensionState) and enforced on restore by decodePanelExtensionState, which refuses a bag written above it (#12280).",
+    },
+    scope: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar (panels loop) → registerPanelKind",
+        },
+        {
+          file: "src/services/actions/definitions/panelCoreActions.ts",
+          symbol: "panel.openPluginPanel (panelKindIsProjectScoped)",
+        },
+      ],
+      note: "Registered as the panel kind's scope; panel.openPluginPanel opens a project-scoped kind with no worktree (dock by default), which the dock and dialogs show in every worktree (#13778).",
+    },
+    reportsActivity: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar (panels loop) → registerPanelKind",
+        },
+        {
+          file: "electron/services/plugin/pluginHostPresentationApi.ts",
+          symbol: "setPanelActivity (declaration and panel-kind gate)",
+        },
+        {
+          file: "src/lib/pluginPanelActivityPresentation.ts",
+          symbol: "resolveActivityReporter",
+        },
+        {
+          file: "src/components/Plugin/PluginDetailPane.tsx",
+          symbol: "PluginContributedPanels (Reports activity)",
+        },
+      ],
+      note: "Registered as the panel kind's activity opt-in; host.setPanelActivity refuses a plugin with no declaring kind and a known panel of an undeclared kind, the renderer draws a report only on a declaring kind, and the plugin manager lists the kind as reporting activity (#13820).",
     },
     menu: {
       mode: "verbatim",
       consumers: [
-        { file: PLUGIN_SERVICE, symbol: "loadPlugin (panels loop → PanelKindConfig.pluginMenu)" },
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar (panels loop → PanelKindConfig.pluginMenu)",
+        },
         { file: GENERIC_PANEL_MENU, symbol: "readPanelKindMenuCapabilities (pluginMenuItems)" },
       ],
       note: "Registered on the panel kind and drawn by both panel menus, above the plugin's own entries, once each action is registered.",
@@ -329,8 +641,8 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       mode: "verbatim",
       consumers: [
         {
-          file: PLUGIN_SERVICE,
-          symbol: "loadPlugin (panels loop → PanelKindConfig.pluginToolbar)",
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar (panels loop → PanelKindConfig.pluginToolbar)",
         },
         { file: PLUGIN_PANEL_TOOLBAR, symbol: "resolvePluginToolbarButtons" },
       ],
@@ -342,7 +654,10 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       mode: "verbatim",
       consumers: [
         { file: PLUGIN_SCHEMA, symbol: "manifest superRefine (panel_toolbar_action_not_own)" },
-        { file: PLUGIN_SERVICE, symbol: "loadPlugin (qualifyActionId → pluginToolbar)" },
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar (qualifyActionId → pluginToolbar)",
+        },
         { file: PLUGIN_PANEL_TOOLBAR, symbol: "PluginPanelToolbarItem (dispatch)" },
       ],
       note: "Checked to be the plugin's own action, qualified to the instance namespace and dispatched with { panelId }; the authored id is kept as the stateKey the view's setToolbarItemState names.",
@@ -360,7 +675,10 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
     iconId: {
       mode: "derived-input",
       consumers: [
-        { file: PLUGIN_SERVICE, symbol: "loadPlugin (resolveIconId → pluginToolbar)" },
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar (resolveIconId → pluginToolbar)",
+        },
         { file: PLUGIN_PANEL_TOOLBAR, symbol: "PluginPanelToolbarItem (resolvePluginIcon)" },
       ],
       note: "Drawn as the button's glyph, resolved like a panel's own iconId; absent, the label is drawn as text.",
@@ -376,7 +694,10 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       mode: "verbatim",
       consumers: [
         { file: PLUGIN_SCHEMA, symbol: "manifest superRefine (panel_menu_action_not_own)" },
-        { file: PLUGIN_SERVICE, symbol: "loadPlugin (qualifyActionId → pluginMenu)" },
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar (qualifyActionId → pluginMenu)",
+        },
         { file: GENERIC_PANEL_MENU, symbol: "pluginMenuCommandActionId" },
       ],
       note: "Checked to be the plugin's own action, qualified to the instance namespace, then dispatched with { panelId } from the panel menus.",
@@ -395,7 +716,12 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
   toolbarButtons: {
     id: {
       mode: "verbatim",
-      consumers: [{ file: PLUGIN_SERVICE, symbol: "loadPlugin → registerToolbarButton" }],
+      consumers: [
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar → registerToolbarButton",
+        },
+      ],
       note: "Namespaced into the registered toolbar button id.",
     },
     label: {
@@ -420,16 +746,405 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       ],
       note: "Registered as the action the button dispatches.",
     },
+    popover: {
+      mode: "derived-input",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "manifest superRefine (toolbar_button_behavior_*)",
+        },
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar → registerToolbarButton (popover)",
+        },
+        { file: PLUGIN_TOOLBAR_POPOVER, symbol: "PluginToolbarPopover" },
+      ],
+      note: "Exclusive with actionId. Registered as the popover the button opens instead of dispatching, drawn by the host around the named view (#13784).",
+    },
+    menu: {
+      mode: "derived-input",
+      consumers: [
+        { file: PLUGIN_SCHEMA, symbol: "manifest superRefine (toolbar_button_menu_*)" },
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar → registerToolbarButton",
+        },
+        {
+          file: "src/components/Layout/pluginToolbarMenu.ts",
+          symbol: "resolvePluginToolbarMenu",
+        },
+      ],
+      note: "Qualified into the plugin instance's namespace and registered on the button; the toolbar draws it as a split button's chevron menu or a menu button, and the tray as a submenu, each item shown while its action is registered (#13786).",
+    },
     priority: {
       mode: "verbatim",
       consumers: [
-        { file: PLUGIN_SERVICE, symbol: "loadPlugin (priority ?? 3)" },
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar (priority ?? 3)",
+        },
         {
           file: "src/components/Layout/PluginTrayButton.tsx",
           symbol: "groupPluginToolbarButtons",
         },
       ],
       note: "Registered as the toolbar button ordering priority (defaulted to 3), consumed by the plugin tray's within-group sort (#11304).",
+    },
+    when: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar → trackPluginExpression",
+        },
+        { file: "src/hooks/usePluginToolbarButtons.ts", symbol: "useVisiblePluginToolbarButtons" },
+      ],
+      note: "Registered on the toolbar button config and evaluated live in the renderer; a false clause drops the button from the toolbar and the tray without touching its saved position.",
+    },
+  },
+  launchEntries: {
+    id: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar → registerPluginLaunchEntry",
+        },
+      ],
+      note: "Namespaced into the runtime entry id `{pluginId}.{id}`, which also keys the entry's toolbar pin.",
+    },
+    label: {
+      mode: "verbatim",
+      consumers: [
+        { file: LAUNCH_ENTRY_REGISTRY, symbol: "registerPluginLaunchEntry" },
+        { file: DOCK_LAUNCH_ITEMS, symbol: "toPluginEntryItem" },
+      ],
+      note: "The launcher row's text and its pinned button's label.",
+    },
+    iconId: {
+      mode: "derived-input",
+      consumers: [
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar (resolveIconId)",
+        },
+        { file: PLUGIN_ICON_ASSETS, symbol: "collectPluginCustomIconRefs" },
+      ],
+      note: "The row's glyph; a `./…svg` reference is loaded and rewritten to its custom-icon runtime key first.",
+    },
+    description: {
+      mode: "verbatim",
+      consumers: [
+        { file: DOCK_LAUNCH_ITEMS, symbol: "toPluginEntryItem" },
+        { file: "src/components/Layout/DockLaunchButton.tsx", symbol: "DockLaunchOption (title)" },
+      ],
+      note: "Searched, and shown as the row's tooltip and accessible description.",
+    },
+    priority: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar (priority ?? 3)",
+        },
+        { file: DOCK_LAUNCH_ITEMS, symbol: "buildPluginGroups" },
+      ],
+      note: "Orders entries within their plugin's group (defaulted to 3).",
+    },
+    when: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar → trackPluginExpression",
+        },
+        { file: DOCK_LAUNCH_ITEMS, symbol: "buildPluginGroups (evaluateWhenClause)" },
+      ],
+      note: "Evaluated live against the chrome context; a false clause drops the row without unpinning it.",
+    },
+    showInEmptyState: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar → registerPluginLaunchEntry",
+        },
+        { file: DOCK_LAUNCH_ITEMS, symbol: "buildEmptyCanvasPluginGroups" },
+      ],
+      note: 'Opts the entry into the stock empty-canvas launcher\'s "From <plugin>" band; only an explicit true does.',
+    },
+    panel: {
+      mode: "derived-input",
+      consumers: [
+        { file: PLUGIN_SCHEMA, symbol: "manifest superRefine (launch_entry_target_*)" },
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar (launch entry panel target)",
+        },
+      ],
+      note: "One of three exclusive targets: open one of the plugin's own panels.",
+    },
+    command: {
+      mode: "derived-input",
+      consumers: [
+        { file: PLUGIN_SCHEMA, symbol: "manifest superRefine (launch_entry_command_not_own)" },
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar (qualifyActionId)",
+        },
+      ],
+      note: "One of three exclusive targets: dispatch one of the plugin's own commands.",
+    },
+    agent: {
+      mode: "derived-input",
+      consumers: [
+        { file: PLUGIN_SCHEMA, symbol: "LaunchEntryAgentTargetSchema" },
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar (launch entry agent target)",
+        },
+      ],
+      note: "One of three exclusive targets: start an agent with a first prompt.",
+    },
+  },
+  "launchEntries.panel": {
+    id: {
+      mode: "derived-input",
+      consumers: [
+        { file: PLUGIN_SCHEMA, symbol: "manifest superRefine (launch_entry_panel_unknown)" },
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar (toRuntimePanelKindId)",
+        },
+      ],
+      note: "Resolved to the runtime panel kind id, project-qualified for a project plugin.",
+    },
+    args: {
+      mode: "verbatim",
+      consumers: [{ file: DOCK_LAUNCH_ITEMS, symbol: "activatePluginLaunchEntry (initialArgs)" }],
+      note: "Handed to `panel.openPluginPanel` as `initialArgs`.",
+    },
+    placement: {
+      mode: "derived-input",
+      consumers: [
+        { file: PLUGIN_SCHEMA, symbol: "manifest superRefine (launch_entry_panel_placement)" },
+        { file: DOCK_LAUNCH_ITEMS, symbol: "entryPresentation" },
+      ],
+      note: "Mapped to `panel.openPluginPanel`'s presentation, `grid` as `panel`.",
+    },
+  },
+  "launchEntries.command": {
+    actionId: {
+      mode: "derived-input",
+      consumers: [
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar (qualifyActionId)",
+        },
+        { file: DOCK_LAUNCH_ITEMS, symbol: "activatePluginLaunchEntry" },
+      ],
+      note: "Rewritten into the instance namespace and dispatched, after an own-namespace check.",
+    },
+    args: {
+      mode: "verbatim",
+      consumers: [{ file: DOCK_LAUNCH_ITEMS, symbol: "activatePluginLaunchEntry" }],
+      note: "Passed to the dispatched action as its arguments.",
+    },
+  },
+  "launchEntries.agent": {
+    id: {
+      mode: "verbatim",
+      consumers: [{ file: DOCK_LAUNCH_ITEMS, symbol: "activatePluginLaunchEntry (onLaunchAgent)" }],
+      note: "The agent the surface's own launch starts.",
+    },
+    prompt: {
+      mode: "verbatim",
+      consumers: [{ file: DOCK_LAUNCH_ITEMS, symbol: "activatePluginLaunchEntry (onLaunchAgent)" }],
+      note: "The launch's first turn, and the only thing about it the plugin chooses.",
+    },
+  },
+  layouts: {
+    id: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar → registerPluginLayout",
+        },
+        { file: APPLY_PLUGIN_LAYOUT, symbol: "resolveLayout" },
+      ],
+      note: "Namespaced into the runtime layout id `{pluginId}.{id}`, which a plugin's own `layout.apply` names and the palette row is keyed by.",
+    },
+    name: {
+      mode: "verbatim",
+      consumers: [
+        { file: "src/hooks/usePluginLayouts.ts", symbol: "toAction" },
+        {
+          file: "src/components/Layout/LayoutApplyConfirmDialog.tsx",
+          symbol: "LayoutApplyConfirmDialog",
+        },
+      ],
+      note: "The palette row's title and the confirmation dialog's question.",
+    },
+    entries: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar (layout entries)",
+        },
+        { file: APPLY_PLUGIN_LAYOUT, symbol: "applyResolved" },
+      ],
+      note: "Opened in order, then placed, grouped and maximized.",
+    },
+  },
+  "layouts.entries": {
+    panel: {
+      mode: "derived-input",
+      consumers: [
+        { file: PLUGIN_SCHEMA, symbol: "manifest superRefine (layout_panel_*)" },
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar (toRuntimePanelKindId)",
+        },
+        { file: APPLY_PLUGIN_LAYOUT, symbol: "openEntry" },
+      ],
+      note: "One of three exclusive targets: one of the plugin's own non-PTY panels, reused when already open.",
+    },
+    browser: {
+      mode: "verbatim",
+      consumers: [{ file: APPLY_PLUGIN_LAYOUT, symbol: "openEntry (browser)" }],
+      note: "One of three exclusive targets: a browser panel at this URL, reused when one already shows it.",
+    },
+    recipe: {
+      mode: "derived-input",
+      consumers: [
+        { file: PLUGIN_SCHEMA, symbol: "manifest superRefine (layout_recipe_unknown)" },
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar (qualified recipe id)",
+        },
+        { file: APPLY_PLUGIN_LAYOUT, symbol: "resolveLayoutRecipes" },
+      ],
+      note: "One of three exclusive targets: one of the plugin's own recipes, started through `recipe.run` after the user confirms.",
+    },
+    location: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar (layout entry location)",
+        },
+        { file: APPLY_PLUGIN_LAYOUT, symbol: "arrange (placeTerminal)" },
+      ],
+      note: "Grid or dock; a project panel defaults to the dock.",
+    },
+    tabGroup: {
+      mode: "verbatim",
+      consumers: [{ file: APPLY_PLUGIN_LAYOUT, symbol: "arrange (createTabGroup)" }],
+      note: "Entries sharing a key become the tabs of one group, in entry order.",
+    },
+    maximized: {
+      mode: "verbatim",
+      consumers: [{ file: APPLY_PLUGIN_LAYOUT, symbol: "arrange (toggleMaximize)" }],
+      note: "Maximizes the entry's panel, or its group, in the grid.",
+    },
+  },
+  searchProviders: {
+    id: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar → registerSearchProviders",
+        },
+        { file: PLUGIN_HOST_CONTRIBUTIONS, symbol: "registerSearchProvider" },
+      ],
+      note: "Namespaced into the provider key `{pluginId}.{id}`, which a runtime binding must name and the user's switch is stored under.",
+    },
+    kind: {
+      mode: "verbatim",
+      consumers: [
+        { file: PLUGIN_SEARCH_SERVICE, symbol: "PluginSearchCoordinator.ask" },
+        { file: SEARCH_PROVIDER_REGISTRY, symbol: "bindSearchProviderImpl" },
+      ],
+      note: "Declarative answers from its query without the plugin running; runtime asks the function bound in activate().",
+    },
+    title: {
+      mode: "verbatim",
+      consumers: [{ file: QUICK_SWITCHER, symbol: "QuickSwitcher (scope chip, placeholder)" }],
+      note: "The scope chip, the scoped placeholder and the Settings row.",
+    },
+    keyword: {
+      mode: "verbatim",
+      consumers: [
+        { file: SEARCH_PROVIDER_REGISTRY, symbol: "searchKeywordRefusals" },
+        { file: "src/hooks/useQuickSwitcher.ts", symbol: "keywordProvider" },
+      ],
+      note: "Typed then Tab to scope the switcher; the first provider to claim it in a project keeps it.",
+    },
+    iconId: {
+      mode: "derived-input",
+      consumers: [
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar (resolveIconId)",
+        },
+        { file: PLUGIN_ICON_ASSETS, symbol: "collectPluginCustomIconRefs" },
+      ],
+      note: "The glyph of results that carry none; a `./…svg` reference is loaded and rewritten to its custom-icon key first.",
+    },
+    blend: {
+      mode: "verbatim",
+      consumers: [
+        { file: PLUGIN_SEARCH_SERVICE, symbol: "PluginSearchCoordinator.eligibleProvider" },
+      ],
+      note: "Opts the provider into the unscoped search; only an explicit true does.",
+    },
+    query: {
+      mode: "derived-input",
+      consumers: [
+        { file: PLUGIN_SCHEMA, symbol: "manifest superRefine (search_provider_query_*)" },
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar → createDeclarativeSearchRunner",
+        },
+      ],
+      note: "Names the declared read query, with one string param, that a declarative provider runs.",
+    },
+    target: {
+      mode: "derived-input",
+      consumers: [
+        { file: PLUGIN_SCHEMA, symbol: "manifest superRefine (search_provider_target_*)" },
+        { file: PLUGIN_SEARCH_SERVICE, symbol: "validateSearchResults (defaultTarget)" },
+      ],
+      note: "Where results open: required for a declarative provider, the default for a runtime one's results.",
+    },
+  },
+  "searchProviders.target": {
+    panel: {
+      mode: "derived-input",
+      consumers: [
+        { file: PLUGIN_SCHEMA, symbol: "manifest superRefine (search_provider_panel_unknown)" },
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar (search provider resolveTarget)",
+        },
+        { file: OPEN_PLUGIN_SEARCH_HIT, symbol: "openPluginSearchHit (panel.openPluginPanel)" },
+      ],
+      note: "Resolved to the runtime panel kind id and opened with the result's args, reusing an open panel.",
+    },
+    command: {
+      mode: "derived-input",
+      consumers: [
+        { file: PLUGIN_SCHEMA, symbol: "manifest superRefine (search_provider_command_not_own)" },
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar (search provider resolveTarget)",
+        },
+        { file: OPEN_PLUGIN_SEARCH_HIT, symbol: "openPluginSearchHit" },
+      ],
+      note: "Rewritten into the instance namespace and dispatched with the result's args, after an own-namespace check.",
     },
   },
   menuItems: {
@@ -463,7 +1178,12 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
     },
     when: {
       mode: "verbatim",
-      consumers: [{ file: PLUGIN_SERVICE, symbol: "loadPlugin → trackPluginExpression" }],
+      consumers: [
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar → trackPluginExpression",
+        },
+      ],
       note: "Tracked and evaluated as the item's visibility expression.",
     },
   },
@@ -500,7 +1220,12 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
     },
     when: {
       mode: "verbatim",
-      consumers: [{ file: PLUGIN_SERVICE, symbol: "loadPlugin → trackPluginExpression" }],
+      consumers: [
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar → trackPluginExpression",
+        },
+      ],
       note: "Tracked and evaluated as the binding's enablement expression.",
     },
   },
@@ -537,8 +1262,43 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
     },
     when: {
       mode: "verbatim",
-      consumers: [{ file: PLUGIN_SERVICE, symbol: "loadPlugin → trackPluginExpression" }],
+      consumers: [
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar → trackPluginExpression",
+        },
+      ],
       note: "Tracked and evaluated as the item's visibility expression.",
+    },
+    kind: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: "electron/services/pluginContextMenuRegistry.ts",
+          symbol: "registerPluginContextMenuItem",
+        },
+      ],
+      note: "Registered whole and matched per row by the file menu: files or folders only.",
+    },
+    extensions: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: "electron/services/pluginContextMenuRegistry.ts",
+          symbol: "registerPluginContextMenuItem",
+        },
+      ],
+      note: "Registered whole and matched per row by the file menu against the file extension.",
+    },
+    paths: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: "electron/services/pluginContextMenuRegistry.ts",
+          symbol: "registerPluginContextMenuItem",
+        },
+      ],
+      note: "Registered whole and matched per row by the file menu against the worktree-relative path.",
     },
   },
   commands: {
@@ -579,10 +1339,31 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       consumers: [{ file: PLUGIN_SERVICE, symbol: "validateAndBuildActionDescriptor" }],
       note: "Copied into the action descriptor keywords for palette search.",
     },
+    when: {
+      mode: "verbatim",
+      consumers: [{ file: PLUGIN_SERVICE, symbol: "validateAndBuildActionDescriptor" }],
+      note: "Parse-checked, then copied onto the descriptor; the command palette alone evaluates it to hide the command.",
+    },
+    enablement: {
+      mode: "verbatim",
+      consumers: [{ file: PLUGIN_SERVICE, symbol: "validateAndBuildActionDescriptor" }],
+      note: "Parse-checked, then copied onto the descriptor; the command palette alone evaluates it to grey the command out.",
+    },
     inputSchema: {
       mode: "verbatim",
       consumers: [{ file: PLUGIN_SERVICE, symbol: "validateAndBuildActionDescriptor" }],
       note: "Copied into the action descriptor inputSchema for arg validation.",
+    },
+    resultSchema: {
+      mode: "derived-input",
+      consumers: [
+        {
+          file: "electron/services/plugin/pluginActionResultSchema.ts",
+          symbol: "compilePluginActionResultSchema",
+        },
+        { file: PLUGIN_SERVICE, symbol: "dispatchHandlerUnmetered (enforcePluginActionResult)" },
+      ],
+      note: "Compiled at registration; every result is checked against it, and the host's copy is published as the catalog and MCP outputSchema.",
     },
     requires: {
       mode: "derived-input",
@@ -595,28 +1376,117 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
   views: {
     id: {
       mode: "cross-reference",
-      consumers: [{ file: PLUGIN_SERVICE, symbol: "loadPlugin (view → panel id match)" }],
+      consumers: [
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar (view → panel id match)",
+        },
+      ],
       note: "Matched against a contributes.panels entry id to attach the view.",
     },
     componentPath: {
       mode: "verbatim",
-      consumers: [{ file: PLUGIN_SERVICE, symbol: "loadPlugin → buildPluginViewUrl" }],
-      note: "Resolved to a plugin:// URL and attached to the panel kind.",
+      consumers: [
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar → buildPluginViewUrl",
+        },
+      ],
+      note: "Resolved to a plugin:// URL and attached to the panel kind, or registered as the hosted view.",
     },
     location: {
       mode: "cross-reference",
       consumers: [
-        { file: PLUGIN_SCHEMA, symbol: "ViewContributionSchema (enum 'panel' | 'settings')" },
-        { file: PLUGIN_SERVICE, symbol: "settingsViewPath (location 'settings')" },
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "ViewContributionSchema (enum 'panel' | 'settings' | 'fileEditor' | 'sidebar')",
+        },
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar → registerPluginHostedViews (non-panel)",
+        },
       ],
-      note: "'panel' ties the view to the panel host; 'settings' is the plugin's one custom settings section, mounted in its settings home and never matched to a panel. A sidebar host is rejected at parse.",
+      note: "'panel' ties the view to the panel host; any other location is registered as a hosted view that mounts outside the panel grid — 'settings' is the plugin's one custom settings section, mounted in its settings home; 'fileEditor' backs a view-backed file editor and mounts only in the file panel; and 'sidebar' a sidebar view chosen from the header switcher. None is ever matched to a panel.",
     },
     iconId: {
       mode: "verbatim",
       consumers: [
         { file: "packages/daintree-plugin/src/commands/validate.ts", symbol: "validateManifest" },
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar → sidebar hosted view (resolveIconId)",
+        },
+        { file: SIDEBAR_VIEW_SWITCHER, symbol: "SidebarViewSwitcher (resolvePluginIcon)" },
       ],
-      note: "Advisory: the SDK validate command flags an unrenderable view icon id.",
+      note: "A sidebar view's switcher glyph, custom SVG references resolved at load. Advisory on a panel, settings or file editor view: the SDK validate command flags it as ignored there.",
+    },
+    name: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar → sidebar hosted view title",
+        },
+        { file: SIDEBAR_VIEW_HOST, symbol: "SidebarViewHost (header title)" },
+      ],
+      note: "Sidebar views only: the switcher entry and the header title while the view shows.",
+    },
+    priority: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar → sidebar hosted view priority",
+        },
+        { file: SIDEBAR_VIEWS, symbol: "resolveSidebarViewOptions (ordering)" },
+      ],
+      note: "Sidebar views only: orders the switcher against the worktree list's fixed priority.",
+    },
+    when: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "getPluginManifestSchema (sidebar when reads no activeSidebarView)",
+        },
+        { file: SIDEBAR_VIEWS, symbol: "resolveSidebarViewOptions (evaluateWhenClause)" },
+      ],
+      note: "Sidebar views only: evaluated live against the chrome when context to decide whether the view is on offer.",
+    },
+    title: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: "src/components/Settings/pluginSettingsSearch.ts",
+          symbol: "buildPluginSettingsSearchEntries",
+        },
+      ],
+      note: "Settings views only: the custom section's title in settings search.",
+    },
+    description: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: "src/components/Settings/pluginSettingsSearch.ts",
+          symbol: "buildPluginSettingsSearchEntries",
+        },
+      ],
+      note: "Settings views only: the custom section's description in settings search.",
+    },
+    pages: {
+      mode: "cross-reference",
+      consumers: [
+        { file: "src/components/Plugin/PluginSettingsView.tsx", symbol: "PluginSettingsView" },
+        {
+          file: "src/services/plugin/pluginSettingsHome.ts",
+          symbol: "resolvePluginSettingsTarget",
+        },
+        {
+          file: "src/components/Settings/pluginSettingsSearch.ts",
+          symbol: "buildPluginSettingsSearchEntries",
+        },
+      ],
+      note: "Settings views only: listed under the custom section and opened in place, the open page's id handed to the view as settingsContext.page; deep links and search results name a page by id, and an undeclared one is dropped.",
     },
   },
   mcpServers: {
@@ -670,6 +1540,174 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       mode: "verbatim",
       consumers: [{ file: SKILL_REGISTRY, symbol: "searchPluginSkills (trigger tokens)" }],
       note: "Tokenized into the skills.search keyword haystack.",
+    },
+  },
+  themes: {
+    id: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: THEME_REGISTRY,
+          symbol: "loadPluginThemes (makePluginThemeId → `plugin:${pluginId}:${id}`)",
+        },
+      ],
+      note: "Namespaced into the offered theme's id, which the selection persists.",
+    },
+    name: {
+      mode: "verbatim",
+      consumers: [{ file: THEME_REGISTRY, symbol: "loadPluginThemes → compilePluginTheme" }],
+      note: "The theme's name in Appearance, the theme palette and the fallback notice.",
+    },
+    type: {
+      mode: "verbatim",
+      consumers: [{ file: THEME_REGISTRY, symbol: "loadPluginThemes → parsePluginThemeFile" }],
+      note: "The polarity the palette must declare; sorts the theme into Dark or Light.",
+    },
+    path: {
+      mode: "verbatim",
+      consumers: [
+        { file: THEME_REGISTRY, symbol: "readThemeFile (resolveContainedPath → readFile)" },
+      ],
+      note: "Resolved against the plugin dir, realpath-contained, and read as the theme JSON.",
+    },
+  },
+  promptTemplates: {
+    id: {
+      mode: "verbatim",
+      consumers: [{ file: PLUGIN_RUNTIME_STORE, symbol: "pullPluginRuntimeSnapshot (key)" }],
+      note: "Namespaced under the plugin's instance id into the picker row's key.",
+    },
+    title: {
+      mode: "verbatim",
+      consumers: [{ file: COMMAND_PICKER, symbol: "CommandPicker (template row) / scoreTemplate" }],
+      note: "The row's name in the command picker and the form's title; searched.",
+    },
+    description: {
+      mode: "verbatim",
+      consumers: [{ file: COMMAND_PICKER, symbol: "CommandPicker (template row) / scoreTemplate" }],
+      note: "The row's summary line in the command picker; searched.",
+    },
+    body: {
+      mode: "verbatim",
+      consumers: [{ file: PROMPT_TEMPLATE_UTIL, symbol: "renderPromptTemplate" }],
+      note: "Expanded with the form's values and put in the composer draft.",
+    },
+    args: {
+      mode: "verbatim",
+      consumers: [
+        { file: PROMPT_TEMPLATE_FORM, symbol: "PromptTemplateForm" },
+        { file: PROMPT_TEMPLATE_UTIL, symbol: "renderPromptTemplate" },
+      ],
+      note: "Each argument is a form field whose value replaces {{name}} in the body; required ones must be filled.",
+    },
+  },
+  terminalLinks: {
+    id: {
+      mode: "verbatim",
+      consumers: [{ file: PLUGIN_RUNTIME_STORE, symbol: "pullPluginRuntimeSnapshot (key)" }],
+      note: "Namespaced under the plugin's instance id into the matcher's key, which the slow-matcher switch-off records.",
+    },
+    actionId: {
+      mode: "derived-input",
+      consumers: [
+        { file: PLUGIN_RUNTIME_STORE, symbol: "pullPluginRuntimeSnapshot (actionId)" },
+        {
+          file: PLUGIN_TERMINAL_LINKS,
+          symbol: "activatePluginPatternLink / activatePluginUrlLink",
+        },
+      ],
+      note: "Rewritten into the instance namespace after an own-namespace check, then dispatched with the clicked text.",
+    },
+    pattern: {
+      mode: "verbatim",
+      consumers: [
+        { file: PLUGIN_TERMINAL_LINKS, symbol: "findPluginPatternLinks" },
+        {
+          file: "src/services/terminal/terminalLinkMatchWork.ts",
+          symbol: "createTerminalLinkMatchHandler",
+        },
+        { file: PLUGIN_TERMINAL_LINK_UTIL, symbol: "compileTerminalLinkPattern" },
+      ],
+      note: "Compiled once per worker and run over the hovered row's text, off the renderer thread.",
+    },
+    ignoreCase: {
+      mode: "verbatim",
+      consumers: [{ file: PLUGIN_TERMINAL_LINK_UTIL, symbol: "compileTerminalLinkPattern" }],
+      note: "Adds the `i` flag to the compiled pattern.",
+    },
+    url: {
+      mode: "verbatim",
+      consumers: [{ file: PLUGIN_TERMINAL_LINKS, symbol: "findPluginUrlClaim" }],
+      note: "Claims a hovered or clicked web link; see terminalLinks.url for its fields.",
+    },
+  },
+  "terminalLinks.url": {
+    scheme: {
+      mode: "verbatim",
+      consumers: [{ file: PLUGIN_TERMINAL_LINK_UTIL, symbol: "urlMatchesTerminalLinkTarget" }],
+      note: "The URL's parsed protocol must equal it.",
+    },
+    host: {
+      mode: "verbatim",
+      consumers: [{ file: PLUGIN_TERMINAL_LINK_UTIL, symbol: "urlMatchesTerminalLinkTarget" }],
+      note: "The URL's parsed hostname must equal it exactly, and pass the same loopback/private check again.",
+    },
+    pathPrefix: {
+      mode: "verbatim",
+      consumers: [
+        { file: PLUGIN_TERMINAL_LINK_UTIL, symbol: "urlMatchesTerminalLinkTarget" },
+        { file: PLUGIN_TERMINAL_LINKS, symbol: "findPluginUrlClaim (longest prefix wins)" },
+      ],
+      note: "The URL's parsed path must start with it; the longest prefix wins between plugins.",
+    },
+  },
+  elementPickerProviders: {
+    id: {
+      mode: "verbatim",
+      consumers: [{ file: ELEMENT_PICKER_REGISTRY, symbol: "registerElementPickerProviders" }],
+      note: "Namespaced with the plugin name; the id a page or request must name.",
+    },
+    name: {
+      mode: "verbatim",
+      consumers: [{ file: ELEMENT_PICKER_REGISTRY, symbol: "registerElementPickerProviders" }],
+      note: "Kept on the registered descriptor for surfaces that label the provider.",
+    },
+    detection: {
+      mode: "verbatim",
+      consumers: [{ file: ELEMENT_PICKER_REGISTRY, symbol: "matchElementPickerProviders" }],
+      note: "Compared as data against observed page markers; nothing the plugin shipped runs.",
+    },
+    guestEntry: {
+      mode: "verbatim",
+      consumers: [{ file: ELEMENT_PICKER_REGISTRY, symbol: "registerElementPickerProviders" }],
+      note: "Recorded for installed guest execution, which is a follow-up; not loaded here.",
+    },
+    resolverEntry: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: "electron/services/elementPicker/pluginResolverAssets.ts",
+          symbol: "locatePluginResolverEntry",
+        },
+      ],
+      note: "Contained in the plugin directory, then imported by that plugin's own resolver host; its presence is what requires fs:project-read.",
+    },
+  },
+  "elementPickerProviders.detection": {
+    kind: {
+      mode: "verbatim",
+      consumers: [{ file: ELEMENT_PICKER_REGISTRY, symbol: "ruleMatches" }],
+      note: "Must equal the observed marker's kind.",
+    },
+    name: {
+      mode: "verbatim",
+      consumers: [{ file: ELEMENT_PICKER_REGISTRY, symbol: "ruleMatches" }],
+      note: "Compared with the observed marker name.",
+    },
+    match: {
+      mode: "verbatim",
+      consumers: [{ file: ELEMENT_PICKER_REGISTRY, symbol: "ruleMatches" }],
+      note: "Selects exact or prefix comparison.",
     },
   },
   forgeProviders: {
@@ -733,6 +1771,61 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       consumers: [{ file: CODE_FORGE_TAB, symbol: "CodeForgeSettingsTab (slot resolution)" }],
       note: "Resolved to renderer view ids for the provider's UI slots.",
     },
+    referencePrefixes: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: "src/components/Terminal/hooks/useForgeReferences.ts",
+          symbol: "useForgeReferences",
+        },
+      ],
+      note: "Written before an issue or PR number in the references the composer's `#` menu inserts; a kind with no prefix isn't offered.",
+    },
+  },
+  contextProviders: {
+    id: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: "electron/services/contextProviderRegistry.ts",
+          symbol: "registerContextProviders",
+        },
+        {
+          file: "electron/services/plugin/pluginHostContributionsApi.ts",
+          symbol: "registerContextProvider (declared-id check)",
+        },
+      ],
+      note: "Keys the provider's descriptor and the impl host.registerContextProvider binds to it.",
+    },
+    prefix: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: "electron/services/contextProviderRegistry.ts",
+          symbol: "arbitrateContextProviders",
+        },
+        {
+          file: "electron/services/plugin/contextProviderCalls.ts",
+          symbol: "searchContextProvider / resolveContextReferences",
+        },
+        { file: "src/components/Terminal/HybridInputBar.tsx", symbol: "contextClaim" },
+      ],
+      note: "The @{prefix}: the composer routes to the provider; first claimant in a project holds it.",
+    },
+    label: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: "src/components/Terminal/inputEditorExtensions/contextReferenceChip.ts",
+          symbol: "createContextReferenceChipTooltip",
+        },
+        {
+          file: "src/components/Settings/ContextProvidersSection.tsx",
+          symbol: "ContextProvidersSection",
+        },
+      ],
+      note: "What the provider offers, on its chips' card and in Project settings.",
+    },
   },
   fileDecorationProviders: {
     id: {
@@ -751,66 +1844,80 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       note: "Matched to route renderer decoration pulls to the provider.",
     },
   },
+  worktreeDeleteNotes: {
+    id: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: "electron/services/plugin/pluginHostContributionsApi.ts",
+          symbol: "registerWorktreeDeleteNotesProvider (declared-id check)",
+        },
+      ],
+      note: "Names the check a plugin binds; declaring it is what lets a delete confirmation ask the plugin.",
+    },
+  },
   fileEditors: {
     id: {
       mode: "verbatim",
-      consumers: [{ file: "src/registry/fileEditorRegistry.ts", symbol: "registerFileEditor" }],
-      note: "Keys the renderer-side editor registration the plugin's renderer entry mirrors from its manifest.",
+      consumers: [
+        { file: "src/registry/fileEditorRegistry.ts", symbol: "registerFileEditor" },
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar → hosted view fileEditors",
+        },
+      ],
+      note: "Keys the renderer-side editor registration, and a view-backed editor's 'Edit with…' answer.",
     },
     slot: {
       mode: "verbatim",
       consumers: [{ file: "src/registry/fileEditorRegistry.ts", symbol: "useFileEditor" }],
-      note: "Resolved enable-aware through the builtin view registry to the component the file panel mounts for Edit mode.",
+      note: "Resolved enable-aware through the builtin view registry to the component the file panel mounts for Edit mode. Built-in plugins only.",
+    },
+    view: {
+      mode: "cross-reference",
+      consumers: [
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar → hosted view fileEditors",
+        },
+      ],
+      note: "Names the plugin's location: 'fileEditor' view the editor mounts; attached to that view's hosted descriptor.",
+    },
+    mode: {
+      mode: "verbatim",
+      consumers: [
+        { file: "src/registry/fileEditorRegistry.ts", symbol: "pluginFileEditorCandidates" },
+      ],
+      note: "Whether the editor fills the file panel's Edit mode or its Rendered mode.",
     },
     extensions: {
       mode: "verbatim",
-      consumers: [{ file: "src/registry/fileEditorRegistry.ts", symbol: "resolveFileEditor" }],
-      note: "Matched case-insensitively against the panel file's extension to decide whether Edit is offered.",
+      consumers: [
+        { file: "src/registry/fileEditorRegistry.ts", symbol: "resolveFileEditor" },
+        { file: "src/registry/fileEditorRegistry.ts", symbol: "pluginFileEditorCandidates" },
+      ],
+      note: "Matched case-insensitively against the panel file's extension to decide whether the editor is offered.",
+    },
+    paths: {
+      mode: "verbatim",
+      consumers: [{ file: "src/registry/fileEditorGlob.ts", symbol: "matchesFileEditorGlob" }],
+      note: "Project plugins only: globs matched against the file's path relative to the project or worktree root.",
+    },
+    default: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar (fileEditors default → claimProjectSurface)",
+        },
+        { file: "src/registry/fileEditorDefaults.ts", symbol: "resolveFileEditorDefault" },
+      ],
+      note: "Project plugins only: each of the entry's paths claims a file editor slot, which decides what a matching file opens in.",
     },
     maxBytes: {
       mode: "verbatim",
       consumers: [{ file: "src/panels/file/FilePane.tsx", symbol: "availableModes (edit gate)" }],
-      note: "Upper bound on the loaded file's byte size before the panel offers Edit.",
-    },
-  },
-  previewTools: {
-    id: {
-      mode: "verbatim",
-      consumers: [
-        { file: "src/store/pluginRuntimeStore.ts", symbol: "pullPluginRuntimeSnapshot" },
-        { file: DEV_PREVIEW_TOOL_REGISTRY, symbol: "isDeclared" },
-      ],
-      note: "Admits the renderer-registered tool of the same id; an undeclared tool stays hidden.",
-    },
-    title: {
-      mode: "intentional-metadata",
-      consumers: [{ file: PLUGIN_SCHEMA, symbol: "PreviewToolContributionSchema" }],
-      note: "The tool's own registration supplies the rendered label; the manifest states the name for the catalog and for review of what a built-in ships.",
-    },
-    iconId: {
-      mode: "intentional-metadata",
-      consumers: [{ file: PLUGIN_SCHEMA, symbol: "PreviewToolContributionSchema" }],
-      note: "Advisory, like contributes.views[].iconId — the tool's Button component owns the rendered glyph.",
-    },
-    guestAdapter: {
-      mode: "cross-reference",
-      consumers: [{ file: PLUGIN_SCHEMA, symbol: "preview_tool_guest_adapter_undeclared" }],
-      note: "Validated against contributes.guestAdapters in the same manifest, so a tool cannot name a runtime nothing registers.",
-    },
-  },
-  guestAdapters: {
-    id: {
-      mode: "verbatim",
-      consumers: [
-        { file: BUILTIN_GUEST_ADAPTERS, symbol: "registerBuiltinGuestAdapters" },
-        { file: GUEST_ADAPTER_ASSETS, symbol: "guestAdapterAssetPath" },
-      ],
-      note: "Registered as the site-preview adapter id the renderer binds by, and the asset path is derived from it.",
-    },
-    entry: {
-      mode: "verbatim",
-      consumers: [{ file: GUEST_ADAPTER_ASSETS, symbol: "listBuiltinGuestAdapters" }],
-      note: "The bundle's source entry; `scripts/build-main.mjs` mirrors this same read to hand it to esbuild, which emits the derived asset the startup registration reads back.",
+      note: "Upper bound on the loaded file's byte size before the panel offers the editor; the host document refuses larger reads and saves.",
     },
   },
   agents: {
@@ -853,6 +1960,14 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       mode: "verbatim",
       consumers: [{ file: AGENT_REGISTRY, symbol: "toPluginAgentConfig" }],
       note: "Copied into the runtime agent config detection block (see agents.detection).",
+    },
+    launchMcp: {
+      mode: "derived-input",
+      consumers: [
+        { file: AGENT_REGISTRY, symbol: "contributionToAgentConfig" },
+        { file: "shared/config/launchMcp.ts", symbol: "buildLaunchMcpInjection" },
+      ],
+      note: "Only the format is declared; the registry builds capabilities.launchMcp, pinning any env var name, and lifecycle hands the agent the endpoints its project allows.",
     },
     resume: {
       mode: "derived-input",
@@ -957,7 +2072,10 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
           file: "electron/services/plugin/PluginSettingsManager.ts",
           symbol: "missingRequired (host.settings.missingRequired, setup strip)",
         },
-        { file: PLUGIN_SERVICE, symbol: "loadPlugin (hasRequiredSettings kind flag)" },
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar (hasRequiredSettings kind flag)",
+        },
       ],
       note: "An unset required setting shows the panel's needs-setup strip and is listed by host.settings.missingRequired.",
     },
@@ -988,11 +2106,220 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       consumers: [{ file: PLUGIN_SCHEMA, symbol: "AgentMcpContributionSchema (literal 'tools')" }],
       note: "Only 'tools' is accepted; kept explicit so a later endpoint mode is additive.",
     },
+    groups: {
+      mode: "verbatim",
+      consumers: [
+        { file: AGENT_MCP_DECLARED, symbol: "declaredPluginEndpointOf" },
+        {
+          file: PLUGIN_HOST_CONTRIBUTIONS,
+          symbol: "mcp.registerTools (validateAgentMcpTools groups)",
+        },
+      ],
+      note: "The groups the user allows one at a time, and what each registered tool must name.",
+    },
+    source: {
+      mode: "verbatim",
+      consumers: [
+        { file: PLUGIN_SERVICE, symbol: "findAgentMcpServerSource" },
+        { file: AGENT_MCP_CONTRIBUTED_SERVER, symbol: "ContributedServerEndpoints" },
+      ],
+      note: "Serves the named tools of one of the plugin's own mcpServers on this endpoint, registered by the host on the first agent demand.",
+    },
+  },
+  "agentMcp.groups": {
+    id: {
+      mode: "cross-reference",
+      consumers: [
+        {
+          file: PLUGIN_HOST_CONTRIBUTIONS,
+          symbol: "mcp.registerTools (validateAgentMcpTools groups)",
+        },
+        { file: AGENT_MCP_PROJECT_ENABLEMENT, symbol: "agentMcpScopeFor" },
+      ],
+      note: "What a tool's `group` names, and what the user's choice and a grant's scope are kept under.",
+    },
+    name: {
+      mode: "verbatim",
+      consumers: [{ file: AGENT_MCP_DECLARED, symbol: "declaredPluginEndpointOf" }],
+      note: "Shown on the group's switch in the plugin's agent access row.",
+    },
+    description: {
+      mode: "verbatim",
+      consumers: [{ file: AGENT_MCP_DECLARED, symbol: "declaredPluginEndpointOf" }],
+      note: "Shown beneath the group's name.",
+    },
+    access: {
+      mode: "verbatim",
+      consumers: [
+        { file: AGENT_MCP_DECLARED, symbol: "declaredPluginEndpointOf" },
+        { file: AGENT_MCP_PROJECT_ENABLEMENT, symbol: "choicesAllowGroup" },
+      ],
+      note: "Shown as the plugin's own description; a choice made under one class never allows the other.",
+    },
+  },
+  worktreeSetupSteps: {
+    id: {
+      mode: "verbatim",
+      consumers: [
+        { file: WORKTREE_SETUP_STEP_REGISTRY, symbol: "isWorktreeSetupStepDeclared" },
+        { file: WORKTREE_SETUP_RPC, symbol: "WorktreeSetupRpcServer.runStep" },
+      ],
+      note: "The id a handler registers under, and the step the host asks main to run.",
+    },
+    label: {
+      mode: "verbatim",
+      consumers: [
+        { file: WORKTREE_SETUP_STEP_REGISTRY, symbol: "getWorktreeSetupSteps" },
+        { file: LIFECYCLE_COMMAND_TRUST, symbol: "fingerprintPluginSetupStep" },
+      ],
+      note: "Shown on the worktree card while the step runs and in the approval dialog; part of what is approved.",
+    },
+    timeoutMs: {
+      mode: "verbatim",
+      consumers: [{ file: WORKTREE_SETUP_RPC, symbol: "WorktreeSetupRpcServer.runStep" }],
+      note: "The step's deadline: its signal aborts and it is recorded as timed out. Part of what is approved.",
+    },
+  },
+  setup: {
+    id: {
+      mode: "verbatim",
+      consumers: [
+        { file: PLUGIN_SERVICE, symbol: "getSetupStatusForUi / setSetupStepSkippedFromUi" },
+        { file: PLUGIN_SETUP_SKIPS, symbol: "setProjectPluginSetupStepSkipped" },
+      ],
+      note: "What a skip is remembered by, per project; a skip for an undeclared step is refused.",
+    },
+    title: {
+      mode: "verbatim",
+      consumers: [{ file: PLUGIN_SETUP_CHECKLIST, symbol: "PluginSetupChecklist (row label)" }],
+      note: "The step's row label on the setup strip's popover and the settings checklist.",
+    },
+    description: {
+      mode: "verbatim",
+      consumers: [
+        { file: PLUGIN_SETUP_CHECKLIST, symbol: "PluginSetupChecklist (row description)" },
+      ],
+      note: "The step's row description.",
+    },
+    done: {
+      mode: "derived-input",
+      consumers: [
+        { file: PLUGIN_SERVICE, symbol: "getSetupStatusForUi (check)" },
+        { file: PLUGIN_SETUP_PROGRESS, symbol: "resolvePluginSetupProgress" },
+      ],
+      note: "Which host-observable state decides the step is done; never stored.",
+    },
+    action: {
+      mode: "derived-input",
+      consumers: [
+        { file: PLUGIN_SERVICE, symbol: "getSetupStatusForUi (action, with defaults)" },
+        { file: PLUGIN_SETUP_CHECKLIST, symbol: "runSetupAction" },
+      ],
+      note: "What clicking the step does; absent defaults to the step's setting or the plugin's settings.",
+    },
+  },
+  "setup.done.setting": {
+    kind: {
+      mode: "verbatim",
+      consumers: [{ file: PLUGIN_SERVICE, symbol: "getSetupStatusForUi (check)" }],
+      note: "Selects the setting-presence check.",
+    },
+    key: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "getPluginManifestSchema superRefine (setup_setting_unknown)",
+        },
+        {
+          file: "electron/services/plugin/PluginSettingsManager.ts",
+          symbol: "settingPresenceForUi",
+        },
+      ],
+      note: "Cross-checked against contributes.settings, then read for presence only — a default never counts.",
+    },
+  },
+  "setup.done.account": {
+    kind: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "getPluginManifestSchema superRefine (setup_account_undeclared)",
+        },
+        { file: PLUGIN_SERVICE, symbol: "getSetupStatusForUi (accounts.getStateFor)" },
+      ],
+      note: "Done while the declared contributes.account is connected.",
+    },
+    connection: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "getPluginManifestSchema superRefine (setup_connection_unknown)",
+        },
+        { file: PLUGIN_SERVICE, symbol: "getSetupStatusForUi (accounts.getStateFor)" },
+      ],
+      note: "Done while that named connection is connected; without it, the one the project uses.",
+    },
+  },
+  "setup.done.context": {
+    kind: {
+      mode: "verbatim",
+      consumers: [{ file: PLUGIN_SERVICE, symbol: "getSetupStatusForUi (check)" }],
+      note: "Hands the clause to the renderer instead of an answer.",
+    },
+    when: {
+      mode: "verbatim",
+      consumers: [
+        { file: PLUGIN_SCHEMA, symbol: "getPluginManifestSchema superRefine (setup_when_invalid)" },
+        { file: PLUGIN_SETUP_PROGRESS, symbol: "resolvePluginSetupProgress (evaluateWhenClause)" },
+      ],
+      note: "Parsed at the gate, then evaluated against the context keys the view mirrors.",
+    },
+  },
+  "setup.action.settings": {
+    kind: {
+      mode: "verbatim",
+      consumers: [{ file: PLUGIN_SETUP_CHECKLIST, symbol: "runSetupAction (plugin.openSettings)" }],
+      note: "Opens the plugin's settings.",
+    },
+    key: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "getPluginManifestSchema superRefine (setup_setting_unknown)",
+        },
+        { file: PLUGIN_SETUP_CHECKLIST, symbol: "runSetupAction (plugin.openSettings key)" },
+      ],
+      note: "Cross-checked against contributes.settings; the settings open at that row.",
+    },
+  },
+  "setup.action.command": {
+    kind: {
+      mode: "verbatim",
+      consumers: [
+        { file: PLUGIN_SETUP_CHECKLIST, symbol: "runSetupAction (actionService.dispatch)" },
+      ],
+      note: "Runs one of the plugin's own commands.",
+    },
+    actionId: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "getPluginManifestSchema superRefine (setup_command_not_own)",
+        },
+        { file: PLUGIN_SERVICE, symbol: "getSetupStatusForUi (qualify)" },
+      ],
+      note: "Own-namespace only, cross-checked against contributes.commands, then rewritten into the instance's namespace.",
+    },
   },
   databases: {
     id: {
       mode: "verbatim",
-      consumers: [{ file: PLUGIN_HOST_FACTORY, symbol: "createHost resolveDatabase" }],
+      consumers: [{ file: PLUGIN_HOST_SETTINGS, symbol: "createHost resolveDatabase" }],
       note: "What host.db.open names; also the default file name under .daintree/data/<manifestId>/.",
     },
     description: {
@@ -1014,6 +2341,14 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       mode: "verbatim",
       consumers: [{ file: PLUGIN_DATABASE_HANDLE, symbol: "openPluginDatabase connect" }],
       note: "Re-applied as PRAGMA journal_mode on every open.",
+    },
+    schemaVersion: {
+      mode: "verbatim",
+      consumers: [
+        { file: PROJECT_APPLICATION_PREFLIGHT, symbol: "preflightProjectApplication" },
+        { file: PLUGIN_DATABASE_HANDLE, symbol: "openPluginDatabase" },
+      ],
+      note: "Compared against an existing file before an application loads, and held against the migrations a writable open passes.",
     },
     queries: {
       mode: "derived-input",
@@ -1146,6 +2481,22 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       consumers: [{ file: RECIPE_REGISTRY, symbol: "toTerminalRecipe (metadata overlay)" }],
       note: "Default issue auto-assign mode; a user override in the sidecar wins.",
     },
+    variables: {
+      mode: "verbatim",
+      consumers: [
+        { file: RECIPE_REGISTRY, symbol: "toTerminalRecipe (TerminalRecipe.pluginVariables)" },
+        { file: PLUGIN_HOST_NOTIFICATIONS, symbol: "validateRunRecipeCall" },
+      ],
+      note: "The {{plugin.<name>}} names host.runRecipe may fill; any other name is refused.",
+    },
+    requiresAgentTools: {
+      mode: "derived-input",
+      consumers: [
+        { file: RECIPE_REGISTRY, symbol: "toTerminalRecipe (TerminalRecipe.requiresAgentTools)" },
+        { file: PLUGIN_RECIPE_AGENT_TOOLS, symbol: "recipeRunNeedsAgentTools" },
+      ],
+      note: "Refuses a launch with agent steps while the plugin's agent tools are off in the project.",
+    },
   },
   "recipes.terminals": {
     type: {
@@ -1187,6 +2538,24 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       mode: "verbatim",
       consumers: [{ file: RECIPE_SANITIZER, symbol: "sanitizeRecipeTerminal" }],
       note: "What happens to the panel when its process exits.",
+    },
+    systemPrompt: {
+      mode: "verbatim",
+      consumers: [
+        { file: RECIPE_SANITIZER, symbol: "sanitizeRecipeTerminal (allowSystemPrompt)" },
+        { file: RECIPE_AGENT_STEP, symbol: "resolveRecipeAgentStep" },
+      ],
+      note: "Standing instruction for an agent step, substituted like the prompt.",
+    },
+    panelId: {
+      mode: "cross-reference",
+      consumers: [{ file: RECIPE_REGISTRY, symbol: "toRuntimeStep (panelKindId)" }],
+      note: "Must name one of this plugin's own panels; becomes the runtime kind the step opens.",
+    },
+    panelArgs: {
+      mode: "verbatim",
+      consumers: [{ file: RECIPE_SANITIZER, symbol: "copyPanelArgs" }],
+      note: "Handed to the opened panel as initialArgs, or as openRequest to a panel it reuses.",
     },
   },
   "agents.detection": {
@@ -1344,13 +2713,161 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
     emptyCanvas: {
       mode: "verbatim",
       consumers: [
-        { file: PLUGIN_SERVICE, symbol: "loadPlugin (surfaces loop → claimProjectSurface)" },
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar (surfaces loop → claimProjectSurface)",
+        },
         {
           file: "src/hooks/app/useEmptyCanvasContent.tsx",
           symbol: "useEmptyCanvasContent (useProjectSurface)",
         },
       ],
       note: "Claims the project's empty-canvas slot at load; the renderer draws the claimed view in place of the stock launcher.",
+    },
+    projectHome: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar (surfaces loop → claimProjectSurface)",
+        },
+        {
+          file: "src/components/Terminal/ContentGrid.tsx",
+          symbol: "ContentGrid (useProjectSurface → ContentGridProjectHome)",
+        },
+      ],
+      note: "Claims the project's Home slot at load; the main area offers a Home/Grid switch and draws the claimed view as the project's Home.",
+    },
+    worktreeCreate: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar (surfaces loop → claimProjectSurface)",
+        },
+        {
+          file: "src/services/actions/definitions/worktreeCreateActions.ts",
+          symbol: "worktree.createDialog.open (currentProjectSurface)",
+        },
+        {
+          file: "src/components/Layout/ProjectWorktreeCreateDialog.tsx",
+          symbol: "ProjectWorktreeCreateDialog (ProjectSurfaceFrame → ProjectSurfaceView)",
+        },
+      ],
+      note: "Claims the project's New worktree slot at load; the action opens the claimed view as the dialog in place of the stock one.",
+    },
+    defaultLayout: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "getPluginManifestSchema superRefine (surface_default_layout_unknown)",
+        },
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar (registerPluginLayout projectDefault)",
+        },
+        {
+          file: "src/hooks/useProjectLayoutSeed.ts",
+          symbol: "useProjectLayoutSeed (selectProjectDefaultLayout)",
+        },
+      ],
+      note: "Cross-checked against declared contributes.layouts, then marks that layout as the project's default; the renderer opens it once on the project's first open on this machine.",
+    },
+  },
+  services: {
+    provides: {
+      mode: "verbatim",
+      consumers: [
+        { file: SERVICE_BROKER, symbol: "PluginServiceBroker.resolve (provides lookup)" },
+        {
+          file: PLUGIN_HOST_CONTRIBUTIONS,
+          symbol: "createHost registerService (declared provides)",
+        },
+      ],
+      note: "The services an import can resolve to, and the only names host.registerService may bind.",
+    },
+    requires: {
+      mode: "verbatim",
+      consumers: [
+        { file: SERVICE_BROKER, symbol: "PluginServiceBroker.resolve (declared import)" },
+      ],
+      note: "A host.services call or status for a name not listed answers not-declared.",
+    },
+  },
+  "services.provides": {
+    name: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "getPluginManifestSchema superRefine (service_name_foreign)",
+        },
+        { file: SERVICE_BROKER, symbol: "PluginServiceBroker.resolve (provides.find by name)" },
+        { file: PLUGIN_HOST_CONTRIBUTIONS, symbol: "createHost registerService (provides.find)" },
+      ],
+      note: "Must sit under the provider's own id; matched against imports and registrations.",
+    },
+    version: {
+      mode: "verbatim",
+      consumers: [
+        { file: SERVICE_BROKER, symbol: "PluginServiceBroker.resolve (semver.satisfies)" },
+        { file: SERVICE_BROKER, symbol: "providerInfo (status provider.version)" },
+      ],
+      note: "Checked against each importer's range; disclosed by host.services.status.",
+    },
+    methods: {
+      mode: "verbatim",
+      consumers: [
+        { file: SERVICE_BROKER, symbol: "PluginServiceBroker.call (method allowlist)" },
+        { file: PLUGIN_HOST_CONTRIBUTIONS, symbol: "serviceMethodTable (exact method set)" },
+      ],
+      note: "The only methods a call may name, and exactly the functions registerService binds.",
+    },
+  },
+  "services.requires": {
+    name: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "getPluginManifestSchema superRefine (service_requires_self)",
+        },
+        { file: SERVICE_BROKER, symbol: "PluginServiceBroker.resolve (provider manifest id)" },
+      ],
+      note: "Names the provider by its id prefix; the broker resolves it to that plugin's instance.",
+    },
+    range: {
+      mode: "verbatim",
+      consumers: [
+        { file: SERVICE_BROKER, symbol: "PluginServiceBroker.resolve (semver.satisfies)" },
+      ],
+      note: "A provider outside the range answers incompatible.",
+    },
+    optional: {
+      mode: "verbatim",
+      consumers: [
+        { file: SERVICE_BROKER, symbol: "PluginServiceBroker.reportIfRequired" },
+        { file: SERVICE_BROKER, symbol: "PluginServiceBroker.status (required)" },
+      ],
+      note: "A required import that can't be reached is written to the plugin's log once; optional ones aren't.",
+    },
+  },
+  "toolbarButtons.popover": {
+    viewId: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "getPluginManifestSchema superRefine (toolbar_popover_view_unknown)",
+        },
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar (toRuntimePanelKindId → registerToolbarButton)",
+        },
+        { file: PLUGIN_TOOLBAR_POPOVER, symbol: "PluginToolbarPopoverView (usePanelKindRegistry)" },
+      ],
+      note: "Cross-checked against declared contributes.views, then resolved to the runtime panel-kind id the popover mounts.",
     },
   },
   "surfaces.emptyCanvas": {
@@ -1361,9 +2878,44 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
           file: PLUGIN_SCHEMA,
           symbol: "getPluginManifestSchema superRefine (surface_view_ref_unknown)",
         },
-        { file: PLUGIN_SERVICE, symbol: "loadPlugin (toRuntimePanelKindId → claimProjectSurface)" },
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar (toRuntimePanelKindId → claimProjectSurface)",
+        },
       ],
       note: "Cross-checked against declared contributes.views, then resolved to the runtime panel-kind id the surface mounts.",
+    },
+  },
+  "surfaces.projectHome": {
+    viewId: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "getPluginManifestSchema superRefine (surface_view_ref_unknown)",
+        },
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar (toRuntimePanelKindId → claimProjectSurface)",
+        },
+      ],
+      note: "Cross-checked against declared contributes.views, then resolved to the runtime panel-kind id the Home view mounts.",
+    },
+  },
+  "surfaces.worktreeCreate": {
+    viewId: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "getPluginManifestSchema superRefine (surface_view_ref_unknown)",
+        },
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar (toRuntimePanelKindId → claimProjectSurface)",
+        },
+      ],
+      note: "Cross-checked against declared contributes.views, then resolved to the runtime panel-kind id the dialog mounts.",
     },
   },
   tours: {
@@ -1374,7 +2926,10 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
           file: PLUGIN_SCHEMA,
           symbol: "getPluginManifestSchema superRefine (reportDuplicateIds tours)",
         },
-        { file: PLUGIN_SERVICE, symbol: "loadPlugin (makePluginTourId → PanelKindConfig.tourId)" },
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar (makePluginTourId → PanelKindConfig.tourId)",
+        },
         { file: TOUR_REGISTRY, symbol: "registerPluginTours (makePluginTourId)" },
       ],
       note: "Unique within contributes.tours. Qualified as `{pluginId}.{id}`, the id progress, Help, the palette and a panel kind's menus (#12774) key on; also names the remote-audio route.",
@@ -1391,7 +2946,10 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       mode: "derived-input",
       consumers: [
         { file: PLUGIN_SCHEMA, symbol: "TourContributionSchema (isSafePluginAssetPath)" },
-        { file: PLUGIN_SERVICE, symbol: "loadPlugin (registerPluginTours, buildPluginViewUrl)" },
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar (registerPluginTours, buildPluginViewUrl)",
+        },
         { file: PLUGIN_TOURS, symbol: "createPluginTourRegistration (load)" },
       ],
       note: "Resolved to a generation-stamped plugin:// URL and imported only when the tour opens.",
@@ -1403,7 +2961,10 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
           file: PLUGIN_SCHEMA,
           symbol: "getPluginManifestSchema superRefine (tour_panel_kind_unknown)",
         },
-        { file: PLUGIN_SERVICE, symbol: "loadPlugin (tourIdByPanelId → PanelKindConfig.tourId)" },
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar (tourIdByPanelId → PanelKindConfig.tourId)",
+        },
         {
           file: "src/hooks/usePluginTours.ts",
           symbol: "mirror (panel tours stay off the palette)",
@@ -1418,7 +2979,10 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
           file: PLUGIN_SCHEMA,
           symbol: "TourContributionSchema superRefine (tour_audio_host_undeclared)",
         },
-        { file: "electron/setup/protocols.ts", symbol: "proxyPluginTourAudio (isAllowedHost)" },
+        {
+          file: "electron/setup/protocols/plugin.ts",
+          symbol: "proxyPluginTourAudio (isAllowedHost)",
+        },
       ],
       note: "Every remote chapter audioUrl hostname must appear here, and every fetch hop must stay on it.",
     },
@@ -1432,6 +2996,86 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
         { file: TOUR_REGISTRY, symbol: "registerPluginTours" },
       ],
       note: "Played in manifest order; each needs a scene in the module.",
+    },
+    version: {
+      mode: "verbatim",
+      consumers: [
+        { file: TOUR_REGISTRY, symbol: "registerPluginTours (descriptor.version)" },
+        { file: PLUGIN_TOURS, symbol: "buildPluginTourDefinition, pluginTourSummary (version)" },
+        { file: "src/components/Tour/TourHost.tsx", symbol: "resumeChapter, Run.version" },
+        { file: "src/components/Tour/tourStatus.ts", symbol: "readTourStatus" },
+      ],
+      note: "Stamped on every progress write; saved progress resumes by chapter id only while it matches (#14098).",
+    },
+    finish: {
+      mode: "derived-input",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "getPluginManifestSchema superRefine (tour_finish_command_not_own)",
+        },
+        { file: TOUR_REGISTRY, symbol: "registerPluginTours (descriptor.finish, qualifyActionId)" },
+        { file: PLUGIN_TOURS, symbol: "buildPluginTourDefinition (runFinish)" },
+      ],
+      note: "Becomes the tour's Finish: the hint on the last end card, then plugin.openSettings or the plugin's own command, dispatched as the user's click.",
+    },
+  },
+  "tours.finish": {
+    hint: {
+      mode: "verbatim",
+      consumers: [{ file: PLUGIN_TOURS, symbol: "buildPluginTourDefinition (finish.hint)" }],
+      note: "The line on the last end card that says what Finish does.",
+    },
+    action: {
+      mode: "derived-input",
+      consumers: [
+        { file: TOUR_REGISTRY, symbol: "registerPluginTours (qualifyActionId)" },
+        { file: PLUGIN_TOURS, symbol: "runFinish (actionService.dispatch)" },
+      ],
+      note: "The same settings/command targets as a setup step, held to the same rules; the command is rewritten into the instance's namespace.",
+    },
+  },
+  projectTemplates: {
+    id: {
+      mode: "derived-input",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "ProjectTemplateContributionSchema (PROJECT_TEMPLATE_ID_PATTERN)",
+        },
+        { file: PROJECT_TEMPLATE_FILES, symbol: "resolveProjectTemplateDir" },
+        { file: PROJECT_TEMPLATE_REGISTRY, symbol: "getPluginProjectTemplatePluginDir" },
+        {
+          file: ARCHIVE_INSTALL_INTENT,
+          symbol: "runPreviewWorker (readArchiveTemplateProjectPlugins)",
+        },
+      ],
+      note: "Names the payload folder, project-templates/<id>/, the host lists and copies from; with the plugin id, it is what a create request names.",
+    },
+    title: {
+      mode: "verbatim",
+      consumers: [
+        { file: PROJECT_TEMPLATE_REGISTRY, symbol: "registerPluginProjectTemplates" },
+        { file: CREATE_PROJECT_DIALOG, symbol: "CreateProjectFolderDialog (template Select)" },
+        { file: ARCHIVE_INSTALL_INTENT, symbol: "runPreviewWorker (projectTemplates)" },
+      ],
+      note: "The choice in the Create project dialog's template picker, and the name the archive install confirmation lists.",
+    },
+    description: {
+      mode: "verbatim",
+      consumers: [
+        { file: PROJECT_TEMPLATE_REGISTRY, symbol: "registerPluginProjectTemplates" },
+        { file: CREATE_PROJECT_DIALOG, symbol: "CreateProjectFolderDialog (template hint)" },
+      ],
+      note: "Shown under the template picker once the template is chosen.",
+    },
+    iconId: {
+      mode: "verbatim",
+      consumers: [
+        { file: PROJECT_TEMPLATE_REGISTRY, symbol: "registerPluginProjectTemplates" },
+        { file: CREATE_PROJECT_DIALOG, symbol: "CreateProjectFolderDialog (resolvePluginIcon)" },
+      ],
+      note: "Advisory plugin icon id drawn beside the title in the picker; an unknown id falls back to the default plugin glyph.",
     },
   },
   "tours.chapters": {
@@ -1507,6 +3151,242 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       mode: "verbatim",
       consumers: [{ file: PLUGIN_TOURS, symbol: "buildPluginTourDefinition (resolveTimings)" }],
       note: "The caption line shown under the stage.",
+    },
+  },
+  assistantKnowledge: {
+    instructions: {
+      mode: "verbatim",
+      consumers: [
+        { file: ASSISTANT_PLUGIN_KNOWLEDGE, symbol: "readPluginKnowledge (instructions)" },
+      ],
+      note: "Read from the plugin dir and inlined in the Assistant's prompt, or handed over as reference/plugins/<key>/instructions.md past 4 KiB.",
+    },
+    skills: {
+      mode: "verbatim",
+      consumers: [{ file: ASSISTANT_PLUGIN_KNOWLEDGE, symbol: "readPluginKnowledge (skills)" }],
+      note: "Each skill directory's Markdown is mirrored into the Assistant session's skills tree.",
+    },
+    references: {
+      mode: "verbatim",
+      consumers: [{ file: ASSISTANT_PLUGIN_KNOWLEDGE, symbol: "readPluginKnowledge (references)" }],
+      note: "Mirrored into reference/plugins/<key>/ and listed under the plugin in the prompt.",
+    },
+  },
+  "assistantKnowledge.skills": {
+    id: {
+      mode: "derived-input",
+      consumers: [{ file: ASSISTANT_PLUGIN_KNOWLEDGE, symbol: "pluginSkillName" }],
+      note: "Joined to the plugin's MCP server key to name the mirrored skill directory.",
+    },
+    path: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: ASSISTANT_PLUGIN_KNOWLEDGE,
+          symbol: "readPluginKnowledge (resolveContainedPath → collectSourceFiles)",
+        },
+      ],
+      note: "Resolved against the plugin dir, realpath-contained, and walked for Markdown.",
+    },
+  },
+  "assistantKnowledge.references": {
+    id: {
+      mode: "derived-input",
+      consumers: [{ file: ASSISTANT_PLUGIN_KNOWLEDGE, symbol: "readPluginKnowledge (<id>.md)" }],
+      note: "Names the mirrored file under reference/plugins/<key>/.",
+    },
+    path: {
+      mode: "verbatim",
+      consumers: [
+        { file: ASSISTANT_PLUGIN_KNOWLEDGE, symbol: "readPluginKnowledge (KnowledgeReader.read)" },
+      ],
+      note: "Resolved against the plugin dir, realpath-contained, and read as Markdown.",
+    },
+  },
+  application: {
+    name: {
+      mode: "intentional-metadata",
+      consumers: [
+        { file: PROJECT_PLUGIN_CONTROLLER, symbol: "getProjectApplication" },
+        { file: PROJECT_APPLICATION, symbol: "resolveProjectApplication (application)" },
+        { file: PROJECT_PLUGIN_STORE, symbol: "applySnapshot (application)" },
+        { file: PROJECT_APPLICATION_WELCOME, symbol: "declaredWelcome (appName)" },
+      ],
+      note: "Carried in the resolved state the project's views receive; names the application on its welcome strip, with no runtime authority of its own.",
+    },
+    iconId: {
+      mode: "intentional-metadata",
+      consumers: [{ file: PLUGIN_SCHEMA, symbol: "PluginApplicationSchema" }],
+      note: "Carried in the resolved state, in the same vocabulary as a sidebar view's iconId; nothing draws it yet.",
+    },
+    destination: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "getPluginManifestSchema superRefine (application_home_unclaimed)",
+        },
+        { file: PROJECT_APPLICATION, symbol: "resolveProjectApplication (replaced)" },
+        { file: PROJECT_HOME_STORE, symbol: "applicationDefaultRoute" },
+      ],
+      note: "Home or Grid only. Home needs the plugin's own projectHome claim, and another plugin holding that Home makes the application replaced. An active application's destination is the main area's route until the user picks one.",
+    },
+    arrangement: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "PluginApplicationSchema superRefine (application_arrangement_needs_home)",
+        },
+        { file: PROJECT_HOME_STORE, symbol: "applicationDefaultRoute" },
+      ],
+      note: "Full or beside-grid, for a Home destination only. An active application's arrangement picks Home alone or the split until the user picks a route.",
+    },
+    sidebarViewId: {
+      mode: "cross-reference",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "getPluginManifestSchema superRefine (application_sidebar_view_unknown)",
+        },
+      ],
+      note: "Must name one of the plugin's own sidebar views, which the sidebar switcher already offers.",
+    },
+    settingsViewId: {
+      mode: "cross-reference",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "getPluginManifestSchema superRefine (application_settings_view_unknown)",
+        },
+      ],
+      note: "Must name the plugin's own settings view, which its settings home already mounts.",
+    },
+    welcomeTour: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "getPluginManifestSchema superRefine (application_tour_unknown)",
+        },
+        { file: PROJECT_APPLICATION_WELCOME, symbol: "useProjectApplicationWelcome" },
+      ],
+      note: "Must name one of the plugin's own tours that is not scoped to a panel; offered once per project and revision on the active application's first run, never played unasked (#14106).",
+    },
+    firstWorkflow: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "getPluginManifestSchema superRefine (application_command_unknown)",
+        },
+        { file: PROJECT_APPLICATION_WELCOME, symbol: "syncHandoff" },
+      ],
+      note: "Must name one of the plugin's own commands of kind command; offered as a button once the welcome is answered, and run only on the user's click.",
+    },
+    requiredTools: {
+      mode: "cross-reference",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "getPluginManifestSchema superRefine (application_tool_unknown)",
+        },
+      ],
+      note: "Each must name one of the plugin's own agentMcp endpoints; declaring one grants no access.",
+    },
+    presentation: {
+      mode: "intentional-metadata",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "PluginApplicationSchema (isPresentationFeatureId, isLevelAllowed)",
+        },
+      ],
+      note: "Checked against the host's closed presentation vocabulary and carried in the resolved state; a suggestion with no authority, never written over the user's profile.",
+    },
+    navigation: {
+      mode: "verbatim",
+      consumers: [
+        { file: APPLICATION_NAVIGATION_SERVICE, symbol: "applicationNavigationContext" },
+        { file: USE_APPLICATION_NAVIGATION, symbol: "useApplicationNavigation" },
+      ],
+      note: "Puts the shared location in force for the application's views while the application is active; absent, no view is handed navigation.",
+    },
+  },
+  "application.welcomeTour": {
+    id: {
+      mode: "cross-reference",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "getPluginManifestSchema superRefine (application_tour_panel_scoped)",
+        },
+      ],
+      note: "A contributes.tours[].id of this plugin, not scoped to a panel kind.",
+    },
+    version: {
+      mode: "verbatim",
+      consumers: [
+        { file: PLUGIN_SCHEMA, symbol: "PluginApplicationTourRefSchema" },
+        {
+          file: PROJECT_APPLICATION_WELCOME,
+          symbol: "useProjectApplicationWelcome (record.version)",
+        },
+      ],
+      note: "The welcome revision: an answer recorded under a lower one offers the welcome again. The tour's own playback and progress are unchanged.",
+    },
+  },
+  "application.navigation": {
+    version: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: APPLICATION_NAVIGATION_STORE,
+          symbol: "selectApplicationNavigationRecord (version)",
+        },
+      ],
+      note: "Stamps the saved location; a raised version reads the old record as absent, so it restores as the default section.",
+    },
+    defaultSectionId: {
+      mode: "verbatim",
+      consumers: [
+        { file: APPLICATION_NAVIGATION, symbol: "defaultNavigationLocation" },
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "PluginApplicationNavigationSchema (application_navigation_default_unknown)",
+        },
+      ],
+      note: "Where navigation starts and where a location that no longer resolves lands; must name a section that requires no parameters.",
+    },
+    sections: {
+      mode: "verbatim",
+      consumers: [{ file: APPLICATION_NAVIGATION, symbol: "decodeNavigationLocation" }],
+      note: "The only destinations a location may name; an intent or a restored entry naming any other is refused or dropped.",
+    },
+  },
+  "application.navigation.sections": {
+    id: {
+      mode: "verbatim",
+      consumers: [{ file: APPLICATION_NAVIGATION, symbol: "decodeNavigationLocation (sectionId)" }],
+      note: "The name a location and an intent use for the section; unique within the application.",
+    },
+    title: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: APPLICATION_NAVIGATION_SERVICE,
+          symbol: "applicationNavigationSnapshot (sections)",
+        },
+      ],
+      note: "Handed to the application's views with the section ids, for the navigation they draw.",
+    },
+    params: {
+      mode: "verbatim",
+      consumers: [
+        { file: APPLICATION_NAVIGATION, symbol: "decodeNavigationLocation (admitsValue)" },
+        { file: APPLICATION_NAVIGATION, symbol: "persistableNavigationHistory (persist)" },
+      ],
+      note: "The only parameters a location may carry, each held to its type and bounds; only those marked persist are written to disk.",
     },
   },
 } satisfies FieldConsumerCoverage;

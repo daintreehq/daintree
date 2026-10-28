@@ -18,6 +18,7 @@ import { useSettingsSubpage } from "../SettingsSubpage";
 import { AddHostDialog } from "./AddHostDialog";
 import { ChangeHostTargetDialog } from "./ChangeHostTargetDialog";
 import { HostPluginsSection } from "./HostPluginsSection";
+import { HostSessionsSection } from "./HostSessionsSection";
 import { HostCopySettingsSection } from "./HostCopySettingsSection";
 import { takeFirstConnect } from "./hostCopySettingsRequests";
 import { HostClipboardGrants } from "./HostClipboardGrants";
@@ -32,6 +33,8 @@ import {
 import { describeHostForge } from "@/components/Hosts/hostForges";
 import { clientErrorText } from "@/utils/clientAppError";
 import { isWindows } from "@/lib/platform";
+import { currentHostId } from "@/hooks/useHostPlatform";
+import { useSettingsTargetStore } from "@/store/settingsTargetStore";
 
 interface HostDetailProps {
   entry: HostListEntry;
@@ -101,8 +104,9 @@ const nameCollator = new Intl.Collator(undefined, { sensitivity: "base" });
 
 /**
  * One host, under Settings → Hosts: its name and address, what its link and
- * build report, what it reports having installed, and removing it from this
- * device. The settings header names it and carries the way back.
+ * build report, who drives it and what happened to its links, what it reports
+ * having installed, and removing it from this device. The settings header
+ * names it and carries the way back.
  */
 export function HostDetail({
   entry,
@@ -216,7 +220,7 @@ export function HostDetail({
     setConnectError(null);
     // Settled on what the link reports: dialling alone answers at once, so a
     // failure never rejected and "Couldn't connect" never showed.
-    remoteHostsClient.connectAndSettle(descriptor.id).then(
+    remoteHostsClient.connectAndSettle(descriptor.id, { restart: true }).then(
       (state) => {
         setConnecting(false);
         // Host mode off and a mismatched build have their own words and actions above.
@@ -363,6 +367,13 @@ export function HostDetail({
         </SettingsGroup>
       </SettingsSection>
 
+      <HostSessionsSection
+        hostId={descriptor.id}
+        hostName={hostName}
+        connected={connected}
+        sampledAt={liveSummary?.sampledAt ?? null}
+      />
+
       <SettingsSection title="Communication">
         <SettingsGroup>
           <SettingsRow
@@ -453,6 +464,30 @@ export function HostDetail({
         </SettingsGroup>
       </SettingsSection>
 
+      <SettingsSection title="Work settings">
+        <SettingsGroup>
+          {descriptor.id === currentHostId() ? (
+            <SettingsRow
+              label={`Settings on ${hostName}`}
+              description={`This window works on ${hostName}, so its Settings pages already change it`}
+            />
+          ) : (
+            <SettingsRow
+              label={`Settings on ${hostName}`}
+              description={`Agents, environment, terminals and Canopy, changed on ${hostName} itself`}
+              control={
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => useSettingsTargetStore.getState().setHostId(descriptor.id)}
+                >
+                  Edit work settings
+                </Button>
+              }
+            />
+          )}
+        </SettingsGroup>
+      </SettingsSection>
       <HostCopySettingsSection
         hostId={descriptor.id}
         hostName={hostName}

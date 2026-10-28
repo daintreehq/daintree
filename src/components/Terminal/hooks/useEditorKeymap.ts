@@ -4,6 +4,20 @@ import { EditorSelection } from "@codemirror/state";
 import type { Compartment } from "@codemirror/state";
 import type { AutocompleteItem } from "../AutocompleteMenu";
 import type { ActiveCompletionContext } from "../hybridInputParsing";
+import { currentContextReferenceProvidersEffects } from "../inputEditorExtensions/contextReferenceChip";
+import { clearComposerHistory } from "../inputEditorExtensions/composerHistory";
+import { rescanForgeReferences } from "../inputEditorExtensions/forgeReference";
+import { currentVoiceCaretEffects, setVoiceCaret } from "../inputEditorExtensions/voiceCaret";
+
+/**
+ * Where one send goes in place of the composer's own `submitText` and
+ * `onSendKey("enter")`: taken at the key press and carried with that send
+ * alone, through a dictation's wait if it has one.
+ */
+export interface ComposerSendRoute {
+  submitText: (text: string, imagePaths: readonly string[]) => Promise<boolean>;
+  sendEnter: () => void;
+}
 
 interface LatestRefShape {
   terminalId: string;
@@ -13,6 +27,8 @@ interface LatestRefShape {
   isAgentTerminal: boolean;
   isInHistoryMode: boolean;
   isAutocompleteOpen: boolean;
+  /** A token being completed, whether or not its menu shows yet. */
+  activeCompletionContext?: ActiveCompletionContext | null;
   autocompleteItems: AutocompleteItem[];
   staleItemKeys: ReadonlySet<string>;
   selectedIndex: number;
@@ -20,6 +36,8 @@ interface LatestRefShape {
   onSendKey?: (key: string) => void;
   isVoiceActiveForPanel: boolean;
   isExpanded: boolean;
+  /** ⌘↩ sends as Enter does, by this route (`HybridInputBarProps.modEnterSend`). */
+  modEnterSend?: () => ComposerSendRoute;
 }
 
 interface UseEditorKeymapParams {
@@ -29,11 +47,13 @@ interface UseEditorKeymapParams {
   handledEnterRef: React.MutableRefObject<boolean>;
   editableCompartmentRef: React.RefObject<Compartment>;
   historyPaletteOpenRef: React.RefObject<(() => void) | null>;
-  applyAutocompleteSelection: (mode: "enter" | "complete") => boolean;
+  applyAutocompleteSelection: (mode: "enter" | "complete", index?: number) => boolean;
   handleHistoryNavigation: (direction: "up" | "down") => boolean;
-  sendFromEditor: () => void;
-  startVoiceWaitSubmit: () => void;
+  sendFromEditor: (route?: ComposerSendRoute) => void;
+  startVoiceWaitSubmit: (options?: { route?: ComposerSendRoute }) => void;
   cancelVoiceWaitSubmit: () => boolean;
+  handleDictationEscape: () => boolean;
+  hasPendingVoiceCorrection: () => boolean;
   stashEditorState: (terminalId: string, state: EditorView["state"], projectId?: string) => void;
   popStashedEditorState: (
     terminalId: string,
@@ -45,7 +65,8 @@ interface UseEditorKeymapParams {
 }
 
 interface KeymapHandlers {
-  onEnter: () => boolean;
+  onEnter: (route?: ComposerSendRoute) => boolean;
+  onModEnter: () => boolean;
   onEscape: () => boolean;
   onArrowUp: () => boolean;
   onArrowDown: () => boolean;
@@ -71,6 +92,8 @@ export function useEditorKeymap({
   sendFromEditor,
   startVoiceWaitSubmit,
   cancelVoiceWaitSubmit,
+  handleDictationEscape,
+  hasPendingVoiceCorrection,
   stashEditorState,
   popStashedEditorState,
   setActiveCompletionContext,
@@ -85,7 +108,9 @@ export function useEditorKeymap({
   const handlersRef = useRef<KeymapHandlers | null>(null);
 
   const buildHandlers = (): KeymapHandlers => ({
-    onEnter: () => {
+    // `route`: the way ⌘↩ sends. A completion row takes the key as its own and
+    // sends nothing by it.
+    onEnter: (route) => {
       const latest = latestRef.current;
       if (!latest) return false;
       if (isComposingRef.current) return false;
@@ -109,13 +134,15 @@ export function useEditorKeymap({
 
       if (latest.disabled) return true;
 
-      if (latest.isVoiceActiveForPanel) {
+      // A finished passage whose correction is still on its way waits for it
+      // too, so the send doesn't go out with the raw text (#14611).
+      if (latest.isVoiceActiveForPanel || hasPendingVoiceCorrection()) {
         handledEnterRef.current = true;
         setTimeout(() => {
           handledEnterRef.current = false;
         }, 0);
 
-        startVoiceWaitSubmit();
+        startVoiceWaitSubmit(route && { route });
         return true;
       }
 
@@ -126,7 +153,8 @@ export function useEditorKeymap({
           handledEnterRef.current = false;
         }, 0);
 
-        if (latest.onSendKey) latest.onSendKey("enter");
+        if (route) route.sendEnter();
+        else if (latest.onSendKey) latest.onSendKey("enter");
         return true;
       }
 
@@ -135,8 +163,15 @@ export function useEditorKeymap({
         handledEnterRef.current = false;
       }, 0);
 
-      sendFromEditor();
+      sendFromEditor(route);
       return true;
+    },
+    // Enter's send, by the route the host gives for the press; with none, the
+    // chord is left alone.
+    onModEnter: () => {
+      const route = latestRef.current?.modEnterSend?.();
+      if (!route) return false;
+      return handlersRef.current?.onEnter(route) ?? false;
     },
     onEscape: () => {
       const latest = latestRef.current;
@@ -149,11 +184,19 @@ export function useEditorKeymap({
         setActiveCompletionContext(null);
         return true;
       }
+      // A `#` menu still waiting on its rows is dismissed before it can show,
+      // and Escape carries on to wherever it would have gone.
+      if (latest.activeCompletionContext) setActiveCompletionContext(null);
 
       if (latest.isExpanded) {
         setIsExpanded(false);
         return true;
       }
+
+      // Dictating into this composer, Escape ends the dictation rather than
+      // interrupting the agent (a cancel that discards words takes two); the
+      // next one reaches the agent.
+      if (handleDictationEscape()) return true;
 
       if (latest.disabled) return false;
       if (!latest.onSendKey) return false;
@@ -171,6 +214,8 @@ export function useEditorKeymap({
       if (latest.isAutocompleteOpen && resultsCount > 0) {
         setSelectedIndex((prev) => {
           if (resultsCount === 0) return 0;
+          // From no selection, up wraps to the last row as it does from the first.
+          if (prev < 0) return resultsCount - 1;
           return (prev - 1 + resultsCount) % resultsCount;
         });
         return true;
@@ -265,14 +310,15 @@ export function useEditorKeymap({
       if (!latest) return false;
       if (isComposingRef.current) return false;
 
-      const tabItem = latest.isAutocompleteOpen
-        ? latest.autocompleteItems[latest.selectedIndex]
-        : undefined;
+      // With nothing selected (the `#` menu until a row is chosen), Tab takes
+      // the first row: Enter there sends what was typed instead.
+      const tabIndex = latest.selectedIndex < 0 ? 0 : latest.selectedIndex;
+      const tabItem = latest.isAutocompleteOpen ? latest.autocompleteItems[tabIndex] : undefined;
       if (tabItem) {
         // Swallow Tab while the selected item is stale — inserting an outdated
         // match is worse than a no-op, and letting Tab through would move focus.
         if (latest.staleItemKeys.has(tabItem.key)) return true;
-        applyAutocompleteSelection("complete");
+        applyAutocompleteSelection("complete", tabIndex);
         return true;
       }
 
@@ -296,11 +342,16 @@ export function useEditorKeymap({
       if (doc.length === 0) return true;
       const latest = latestRef.current;
       if (!latest) return false;
-      stashEditorState(latest.terminalId, view.state, latest.projectId);
+      // A dictation's caret is the session's, not the draft's: a stash popped
+      // after the session ends must not bring it back.
+      const stashed = view.state.update({ effects: setVoiceCaret.of({ phase: null }) }).state;
+      stashEditorState(latest.terminalId, stashed, latest.projectId);
       view.dispatch({
         changes: { from: 0, to: view.state.doc.length, insert: "" },
         selection: EditorSelection.cursor(0),
       });
+      // The stashed state keeps its own history for when it is popped.
+      clearComposerHistory(view);
       return true;
     },
     onPopStash: () => {
@@ -311,11 +362,17 @@ export function useEditorKeymap({
       const stashed = popStashedEditorState(latest.terminalId, latest.projectId);
       if (!stashed) return false;
       view.setState(stashed);
+      // The stashed state carries the editable flag, the chip providers and
+      // the references of when it was stashed, and none of a dictation's
+      // caret; all are brought back to now.
       view.dispatch({
-        effects: editableCompartmentRef.current.reconfigure(
-          EditorView.editable.of(!latest.disabled)
-        ),
+        effects: [
+          editableCompartmentRef.current.reconfigure(EditorView.editable.of(!latest.disabled)),
+          ...currentContextReferenceProvidersEffects(view),
+          ...currentVoiceCaretEffects(view),
+        ],
       });
+      rescanForgeReferences(view);
       return true;
     },
     onExpand: () => {

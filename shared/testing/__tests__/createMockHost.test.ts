@@ -18,9 +18,13 @@ const sampleSnapshot: PluginWorktreeSnapshot = {
   worktreeId: "wt-1",
   path: "/tmp/repo",
   name: "main",
+  customTitle: null,
   isCurrent: true,
   linked: null,
   status: null,
+  headOid: null,
+  gitOperation: null,
+  setup: null,
 };
 
 const otherSnapshot: PluginWorktreeSnapshot = {
@@ -28,9 +32,13 @@ const otherSnapshot: PluginWorktreeSnapshot = {
   worktreeId: "wt-2",
   path: "/tmp/repo-feature",
   name: "feature",
+  customTitle: null,
   isCurrent: false,
   linked: null,
   status: null,
+  headOid: null,
+  gitOperation: null,
+  setup: null,
 };
 
 const safeCatalogEntry: PluginActionManifestEntry = {
@@ -362,6 +370,55 @@ describe("createMockHost", () => {
     });
   });
 
+  it("holds severity, delivery and target to the host's rules (#13818)", async () => {
+    const host = createMockHost({ pluginId: "acme.demo", capabilities: ["notification:os"] });
+    const retry = { id: "retry", label: "Retry", actionId: "acme.demo.retry" };
+
+    await expect(host.notify({ title: "t", body: "b", severity: "error" })).rejects.toThrow(
+      /exactly one action/
+    );
+    await expect(
+      host.notify({
+        title: "t",
+        body: "b",
+        severity: "error",
+        actions: [retry, { ...retry, id: "again" }],
+      })
+    ).rejects.toThrow(/exactly one action/);
+    await expect(
+      host.notify({
+        title: "t",
+        body: "b",
+        severity: "error",
+        delivery: "passive",
+        actions: [retry],
+      })
+    ).rejects.toThrow(/can't be passive/);
+    await expect(
+      host.notify({ title: "t", body: "b", delivery: "passive", os: true })
+    ).rejects.toThrow(/can't page the OS/);
+    await expect(
+      host.notify({ title: "t", body: "b", severity: "fatal" as never })
+    ).rejects.toThrow(/severity/);
+    await expect(
+      host.notify({ title: "t", body: "b", target: { panelId: "p", worktreeId: "w" } as never })
+    ).rejects.toThrow(/target/);
+    await expect(host.notify({ title: "t", body: "b", target: { panelId: "" } })).rejects.toThrow(
+      /target/
+    );
+    expect(host.notifications).toEqual([]);
+
+    await host.notify({ title: "t", body: "b", severity: "error", actions: [retry] });
+    await host.notify({
+      title: "t",
+      body: "b",
+      severity: "warning",
+      delivery: "passive",
+      target: { worktreeId: "/repo/feature" },
+    });
+    expect(host.notifications.map((n) => n.options.severity)).toEqual(["error", "warning"]);
+  });
+
   it("rejects toast options the production schema would reject (#10617)", async () => {
     const host = createMockHost();
     // Message past the 2000-char cap.
@@ -439,6 +496,134 @@ describe("createMockHost", () => {
     ]);
   });
 
+  it("records setWorktreeReviewChecks calls against the seeded worktrees (#13806)", async () => {
+    const host = createMockHost({ worktrees: [sampleSnapshot, otherSnapshot] });
+    await host.setWorktreeReviewChecks("wt-1", [
+      { label: " 2 broken links ", severity: "warning", detail: "in docs" },
+    ]);
+    await host.setWorktreeReviewChecks("wt-2", [{ label: "ok", severity: "info" }]);
+    await host.setWorktreeReviewChecks("wt-2", null);
+    expect(host.setWorktreeReviewChecksCalls).toEqual([
+      {
+        worktreeId: "wt-1",
+        checks: [{ label: "2 broken links", severity: "warning", detail: "in docs" }],
+      },
+      { worktreeId: "wt-2", checks: [{ label: "ok", severity: "info" }] },
+      { worktreeId: "wt-2", checks: null },
+    ]);
+    expect([...host.worktreeReviewChecks.keys()]).toEqual(["wt-1"]);
+  });
+
+  it("setWorktreeReviewChecks rejects what the real host rejects, recording nothing (#13806)", async () => {
+    const host = createMockHost({ worktrees: [sampleSnapshot] });
+    await expect(
+      host.setWorktreeReviewChecks("wt-9", [{ label: "x", severity: "info" }])
+    ).rejects.toThrow(/"wt-9" is not a worktree this plugin can see/);
+    await expect(
+      host.setWorktreeReviewChecks("wt-1", [{ label: "x", severity: "blocker" } as never])
+    ).rejects.toThrow(/setWorktreeReviewChecks: checks\[0\]\.severity/);
+    expect(host.setWorktreeReviewChecksCalls).toEqual([]);
+  });
+
+  it("setTerminalStatus records calls for terminals agents.list names, with production's gates (#13802)", async () => {
+    const pane = {
+      terminalId: "term-1",
+      title: "Claude",
+      agentId: "claude",
+      worktree: null,
+      isFocused: true,
+      canDraft: true,
+    };
+    const host = createMockHost({ agents: [pane] });
+    await host.setTerminalStatus("term-1", { label: " INV-1 ", tooltip: "detail" });
+    await host.setTerminalStatus("term-1", { label: "INV-2" });
+    expect(host.setTerminalStatusCalls).toEqual([
+      { terminalId: "term-1", status: { label: "INV-1", tooltip: "detail" } },
+      { terminalId: "term-1", status: { label: "INV-2" } },
+    ]);
+    expect([...host.terminalStatuses]).toEqual([["term-1", { label: "INV-2" }]]);
+
+    await host.setTerminalStatus("term-1", null);
+    expect(host.terminalStatuses.size).toBe(0);
+    await expect(host.setTerminalStatus("term-9", { label: "x" })).rejects.toThrow(
+      /not a terminal this plugin can see/
+    );
+    await expect(host.setTerminalStatus("term-1", { label: "" })).rejects.toThrow(
+      /setTerminalStatus: status.label/
+    );
+    const many = createMockHost({
+      agents: Array.from({ length: 257 }, (_, i) => ({ ...pane, terminalId: `t-${i}` })),
+    });
+    for (let i = 0; i < 256; i++) await many.setTerminalStatus(`t-${i}`, { label: "x" });
+    await expect(many.setTerminalStatus("t-256", { label: "x" })).rejects.toThrow(/at most 256/);
+    await expect(many.setTerminalStatus("t-0", { label: "y" })).resolves.toBeUndefined();
+    await expect(
+      createMockHost({ agents: [pane], capabilities: ["agent:input"] }).setTerminalStatus(
+        "term-1",
+        {
+          label: "x",
+        }
+      )
+    ).rejects.toThrow(/PERMISSION_REQUIRED/);
+  });
+
+  it("setPanelActivity records reports with production's gates (#13820)", async () => {
+    const host = createMockHost({ reportsActivityPanelIds: ["chat"] });
+    await host.setPanelActivity("p1", { state: "working", reason: " Importing " });
+    await host.setPanelActivity("p1", { state: "finished" });
+    expect(host.setPanelActivityCalls).toEqual([
+      { panelId: "p1", activity: { state: "working", reason: "Importing" } },
+      { panelId: "p1", activity: { state: "finished" } },
+    ]);
+    expect([...host.panelActivity]).toEqual([["p1", { state: "finished" }]]);
+    await host.setPanelActivity("p1", null);
+    expect(host.panelActivity.size).toBe(0);
+
+    await expect(host.setPanelActivity("p1", { state: "idle" } as never)).rejects.toThrow(
+      /setPanelActivity: activity\.state/
+    );
+    host.simulatePanelLifecycleChange({
+      panelId: "theirs",
+      panelKindId: "other.chat",
+      pluginId: "other",
+      phase: "mounted",
+    });
+    await expect(host.setPanelActivity("theirs", { state: "working" })).rejects.toThrow(
+      /belongs to another plugin/
+    );
+    host.simulatePanelLifecycleChange({
+      panelId: "notes",
+      panelKindId: "test.mock.notes",
+      pluginId: "test.mock",
+      phase: "mounted",
+    });
+    await expect(host.setPanelActivity("notes", { state: "working" })).rejects.toThrow(
+      /does not declare reportsActivity/
+    );
+    await expect(
+      createMockHost({ reportsActivityPanelIds: [] }).setPanelActivity("p", { state: "working" })
+    ).rejects.toThrow(/none of this plugin's contributes\.panels/);
+
+    const project = createMockHost({
+      pluginId: "project__b6700c7a__acme.chat",
+      reportsActivityPanelIds: ["chat"],
+    });
+    project.simulatePanelLifecycleChange({
+      panelId: "mine",
+      panelKindId: project.panelKindId("chat"),
+      pluginId: "project__b6700c7a__acme.chat",
+      phase: "mounted",
+    });
+    await expect(project.setPanelActivity("mine", { state: "waiting" })).resolves.toBeUndefined();
+
+    const many = createMockHost();
+    for (let i = 0; i < 256; i++) await many.setPanelActivity(`p${i}`, { state: "working" });
+    await expect(many.setPanelActivity("p256", { state: "working" })).rejects.toThrow(
+      /already reported on 256 panels/
+    );
+    await expect(many.setPanelActivity("p0", { state: "failed" })).resolves.toBeUndefined();
+  });
+
   it("setWorktreeCardStatus keys a status by the snapshot id, whichever id is passed (#13704)", async () => {
     const host = createMockHost({
       worktrees: [{ ...sampleSnapshot, id: "/tmp/repo", worktreeId: "wt-stable" }],
@@ -465,6 +650,21 @@ describe("createMockHost", () => {
     expect(host.setWorktreeCardStatusCalls).toEqual([]);
   });
 
+  it("setWorktreeCardStatus qualifies a command and refuses another namespace's (#13776)", async () => {
+    const host = createMockHost({
+      pluginId: "project__proj-a__acme.status",
+      worktrees: [sampleSnapshot],
+    });
+    await host.setWorktreeCardStatus("wt-1", { label: "Draft", command: "acme.status.open" });
+    expect([...host.worktreeCardStatuses]).toEqual([
+      ["wt-1", { label: "Draft", command: "project__proj-a__acme.status.open" }],
+    ]);
+    await expect(
+      host.setWorktreeCardStatus("wt-1", { label: "x", command: "acme.other.open" })
+    ).rejects.toThrow(/setWorktreeCardStatus: status.command "acme.other.open" must be one of/);
+    expect(host.setWorktreeCardStatusCalls).toHaveLength(1);
+  });
+
   it("records setToolbarButtonBadge calls, normalizing a cleared badge to null (#13503)", async () => {
     const host = createMockHost();
     await host.setToolbarButtonBadge("needs", { kind: "label", text: "12", color: "warning" });
@@ -487,6 +687,66 @@ describe("createMockHost", () => {
       host.setToolbarButtonBadge("needs", { kind: "label", text: "TOOLONG" })
     ).rejects.toThrow(/^setToolbarButtonBadge: invalid badge — text:/);
     expect(host.setToolbarButtonBadgeCalls).toEqual([]);
+  });
+
+  it("records setToolbarButtonState calls, normalizing a cleared state to null (#13785)", async () => {
+    const host = createMockHost();
+    await host.setToolbarButtonState("sync", { pressed: true, tooltip: "Syncing on save" });
+    await host.setToolbarButtonState("sync", null);
+    expect(host.setToolbarButtonStateCalls).toEqual([
+      { buttonId: "sync", state: { pressed: true, tooltip: "Syncing on save" } },
+      { buttonId: "sync", state: null },
+    ]);
+  });
+
+  it("setToolbarButtonState rejects what the real host rejects, recording nothing (#13785)", async () => {
+    const host = createMockHost({ toolbarButtonIds: ["sync"] });
+    await expect(host.setToolbarButtonState("", { pressed: true })).rejects.toThrow(
+      /setToolbarButtonState: buttonId/
+    );
+    await expect(host.setToolbarButtonState("other", { pressed: true })).rejects.toThrow(
+      /"other" is not one of this plugin's contributes\.toolbarButtons/
+    );
+    await expect(host.setToolbarButtonState("sync", { disabled: true })).rejects.toThrow(
+      /needs a disabledReason/
+    );
+    await expect(
+      host.setToolbarButtonState("sync", { disabledReason: "Sign in first" })
+    ).rejects.toThrow(/only valid with disabled: true/);
+    await expect(host.setToolbarButtonState("sync", { label: "Renamed" } as never)).rejects.toThrow(
+      /label: unrecognized key/
+    );
+    await expect(host.setToolbarButtonState("sync", [] as never)).rejects.toThrow(
+      /state must be an object/
+    );
+    await expect(host.setToolbarButtonState("sync", { tooltip: "x".repeat(201) })).rejects.toThrow(
+      /tooltip: must be a non-empty string/
+    );
+    expect(host.setToolbarButtonStateCalls).toEqual([]);
+  });
+
+  it("setToolbarButtonState vets a menu as the real host does (#13786)", async () => {
+    const host = createMockHost({ pluginId: "acme", toolbarButtonIds: ["sync"] });
+    await host.setToolbarButtonState("sync", { menu: [{ actionId: "acme.pull" }] });
+    await host.setToolbarButtonState("sync", { menu: [] });
+    await expect(
+      host.setToolbarButtonState("sync", { menu: [{ actionId: "other.run" }] })
+    ).rejects.toThrow(/menu: .*own actions/);
+    await expect(
+      host.setToolbarButtonState("sync", {
+        menu: Array.from({ length: 6 }, (_, i) => ({ actionId: `acme.cmd${i}` })),
+      })
+    ).rejects.toThrow(/menu: at most 5/);
+    await expect(host.setToolbarButtonState("sync", { menu: null } as never)).rejects.toThrow(
+      /menu: must be an array/
+    );
+    await expect(
+      host.setToolbarButtonState("sync", { menu: [{ actionId: "acme.pull", args: 1 }] } as never)
+    ).rejects.toThrow(/args: unrecognized key/);
+    await expect(
+      host.setToolbarButtonState("sync", { menu: [{ actionId: "acme.pull", label: " " }] })
+    ).rejects.toThrow(/label: must be a non-empty string/);
+    expect(host.setToolbarButtonStateCalls).toHaveLength(2);
   });
 
   it("records reloadPanel calls and answers from simulated lifecycle phases (#12610)", async () => {
@@ -615,6 +875,20 @@ describe("createMockHost", () => {
     });
   });
 
+  it("reports a custom title rename and clear as a changed worktree", async () => {
+    const host = createMockHost();
+    const cb = vi.fn();
+    await host.onDidChangeWorktrees(cb);
+    host.simulateWorktreesChange([sampleSnapshot]);
+    host.simulateWorktreesChange([{ ...sampleSnapshot, customTitle: "Release prep" }]);
+    host.simulateWorktreesChange([sampleSnapshot]);
+    expect(cb.mock.calls.map(([, change]) => change.changed)).toEqual([
+      [],
+      [sampleSnapshot.id],
+      [sampleSnapshot.id],
+    ]);
+  });
+
   it("delivers agent-state updates and reflects the last one in getAgentState", async () => {
     const host = createMockHost();
     const cb = vi.fn();
@@ -651,6 +925,64 @@ describe("createMockHost", () => {
     dispose(); // no-op
     host.simulateSystemWake({ sleepDuration: 1, timestamp: 2 });
     expect(cb).toHaveBeenCalledTimes(1);
+  });
+
+  describe("onDidChangeTerminalLifecycle (#13814)", () => {
+    const spawned = {
+      type: "spawned" as const,
+      terminalId: "term-1",
+      workspaceId: "proj-a",
+      kind: "shell" as const,
+      timestamp: 3,
+    };
+
+    it("delivers frozen events through the production allowlist and stops on dispose", async () => {
+      const host = createMockHost();
+      const cb = vi.fn();
+      const dispose = await host.onDidChangeTerminalLifecycle(cb);
+
+      host.simulateTerminalLifecycleChange({
+        ...spawned,
+        ...({ cwd: "/secret" } as object),
+      });
+      expect(cb).toHaveBeenCalledTimes(1);
+      expect(cb.mock.calls[0]?.[0]).toEqual(spawned);
+      expect(Object.isFrozen(cb.mock.calls[0]?.[0])).toBe(true);
+
+      dispose();
+      dispose(); // no-op
+      host.simulateTerminalLifecycleChange(spawned);
+      expect(cb).toHaveBeenCalledTimes(1);
+    });
+
+    it("rejects PERMISSION_REQUIRED without agent:read", () => {
+      const host = createMockHost({ capabilities: [] });
+      expect(() => host.onDidChangeTerminalLifecycle(vi.fn())).toThrow(/PERMISSION_REQUIRED/);
+    });
+
+    it("scopes a project plugin to its own project, failing closed", async () => {
+      const host = createMockHost({ pluginId: "project__proj-a__acme.status" });
+      const cb = vi.fn();
+      await host.onDidChangeTerminalLifecycle(cb);
+
+      host.simulateTerminalLifecycleChange({ ...spawned, workspaceId: "proj-b" });
+      host.simulateTerminalLifecycleChange({
+        type: "spawned",
+        terminalId: "term-2",
+        kind: "shell",
+        timestamp: 4,
+      });
+      host.simulateTerminalLifecycleChange(spawned);
+
+      expect(cb.mock.calls.map(([event]) => event.workspaceId)).toEqual(["proj-a"]);
+    });
+
+    it("throws on a malformed event instead of delivering it", async () => {
+      const host = createMockHost();
+      expect(() =>
+        host.simulateTerminalLifecycleChange({ ...spawned, type: "exited" } as never)
+      ).toThrow(/well-formed/);
+    });
   });
 
   it("does not replay an earlier wake to a later onDidWake subscriber", async () => {
@@ -824,6 +1156,72 @@ describe("createMockHost", () => {
         })
       ).toThrow(/execute/);
       expect(host.registeredMcpTools).toHaveLength(0);
+    });
+  });
+
+  describe("registerWorktreeSetupStep (#13807)", () => {
+    it("records the handler so a test can run the step as the host would", async () => {
+      const host = createMockHost();
+      const handler = vi.fn(async () => undefined);
+      await host.registerWorktreeSetupStep("provision-db", handler);
+
+      const record = host.registeredWorktreeSetupSteps[0];
+      expect(record?.stepId).toBe("provision-db");
+      const context = {
+        projectId: "p",
+        worktreeId: "/wt",
+        worktreePath: "/wt",
+        branch: null,
+        signal: new AbortController().signal,
+      };
+      await record?.handler(context);
+      expect(handler).toHaveBeenCalledWith(context);
+    });
+
+    it("replaces by id, and a stale disposer leaves the replacement bound", async () => {
+      const host = createMockHost();
+      const first = vi.fn();
+      const second = vi.fn();
+      const disposeFirst = await host.registerWorktreeSetupStep("db", first);
+      const disposeSecond = await host.registerWorktreeSetupStep("db", second);
+
+      disposeFirst();
+      expect(host.registeredWorktreeSetupSteps.map((r) => r.handler)).toEqual([second]);
+      disposeSecond();
+      expect(host.registeredWorktreeSetupSteps).toHaveLength(0);
+    });
+
+    it("rejects a missing id or a non-function handler", () => {
+      const host = createMockHost();
+      expect(() => host.registerWorktreeSetupStep("", vi.fn())).toThrow(/stepId/);
+      expect(() => host.registerWorktreeSetupStep("db", {} as never)).toThrow(/handler/);
+    });
+  });
+
+  describe("registerWorktreeDeleteNotesProvider (#13805)", () => {
+    it("records the binding so a test can ask it, replacing by id with an inert prior disposer", async () => {
+      const host = createMockHost();
+      const first = { provideNotes: vi.fn(async () => []) };
+      const second = {
+        provideNotes: vi.fn(async () => [{ severity: "info" as const, text: "hi" }]),
+      };
+      const disposeFirst = await host.registerWorktreeDeleteNotesProvider({ id: "notes" }, first);
+      const disposeSecond = await host.registerWorktreeDeleteNotesProvider({ id: "notes" }, second);
+      expect(host.registeredWorktreeDeleteNotesProviders).toHaveLength(1);
+      disposeFirst();
+      expect(host.registeredWorktreeDeleteNotesProviders[0]?.impl).toBe(second);
+      disposeSecond();
+      expect(host.registeredWorktreeDeleteNotesProviders).toHaveLength(0);
+    });
+
+    it("refuses what the real host refuses structurally", () => {
+      const host = createMockHost();
+      expect(() =>
+        host.registerWorktreeDeleteNotesProvider({ id: "" }, { provideNotes: async () => [] })
+      ).toThrow(/descriptor.id/);
+      expect(() => host.registerWorktreeDeleteNotesProvider({ id: "n" }, {} as never)).toThrow(
+        /provideNotes/
+      );
     });
   });
 
@@ -1005,6 +1403,64 @@ describe("createMockHost", () => {
       // "loose" isn't declared, so it keeps the supplied (or default) scope.
       expect(await host.settings.get("loose")).toBe("u");
       expect(await host.settings.get("loose", "project")).toBe("p");
+    });
+  });
+
+  describe("settings.unset", () => {
+    it("clears a declared key, notifies with the default, and lists a required key as missing", async () => {
+      const host = createMockHost({
+        settings: { user: { token: "t", region: "us" } },
+        manifestSettings: [
+          { id: "token", type: "secret", required: true },
+          { id: "region", type: "string", default: "eu" },
+        ],
+      });
+      const heard: unknown[] = [];
+      await host.settings.onDidChange("token", (v) => heard.push(["token", v]));
+      await host.settings.onDidChange("region", (v) => heard.push(["region", v]));
+
+      await host.settings.unset("token");
+      await host.settings.unset("region");
+      await host.settings.unset("region");
+
+      expect(heard).toEqual([
+        ["token", undefined],
+        ["region", "eu"],
+      ]);
+      expect(await host.settings.get("region")).toBe("eu");
+      expect(await host.settings.missingRequired()).toEqual(["token"]);
+    });
+
+    it("lets a throwing subscriber fail neither the clear nor the others", async () => {
+      const host = createMockHost({
+        settings: { user: { token: "t" } },
+        manifestSettings: [{ id: "token", type: "secret" }],
+      });
+      const heard: unknown[] = [];
+      await host.settings.onDidChange("token", () => {
+        throw new Error("boom");
+      });
+      await host.settings.onDidChange("token", (v) => heard.push(v));
+      await expect(host.settings.unset("token")).resolves.toBeUndefined();
+      expect(heard).toEqual([undefined]);
+    });
+
+    it("rejects an undeclared key and a conflicting scope", async () => {
+      const host = createMockHost({
+        manifestSettings: [{ id: "ref", type: "string", scope: "project" }],
+      });
+      await expect(host.settings.unset("nope")).rejects.toThrow(/not declared/);
+      await expect(host.settings.unset("ref", "user")).rejects.toThrow(/declared in "project"/);
+    });
+  });
+
+  describe("system.openExternal", () => {
+    it("records the normalised https url and refuses everything else", async () => {
+      const host = createMockHost();
+      await host.system.openExternal("https://Example.com/a b");
+      expect(host.systemOpenExternalCalls).toEqual(["https://example.com/a%20b"]);
+      await expect(host.system.openExternal("http://example.com")).rejects.toThrow(/INVALID_URL/);
+      expect(host.systemOpenExternalCalls).toHaveLength(1);
     });
   });
 
@@ -1420,6 +1876,79 @@ describe("createMockHost production-parity validation (#10617)", () => {
     expect(host.sentToActiveAgentCalls).toEqual([{ text: "run it", submit: true }]);
   });
 
+  describe("input to launched agents (#14018)", () => {
+    it("reaches an agent the plugin's own agent.launch started, and nothing else", async () => {
+      const host = createMockHost({
+        dispatch: async () => ({ ok: true, result: { launched: true, terminalId: "t-mine" } }),
+      });
+      await host.dispatch("agent.launch", { agentId: "claude" });
+
+      await expect(host.agents.submit("t-mine", "/compact")).resolves.toEqual({
+        status: "sent",
+      });
+      await expect(host.agents.sendKeys("t-mine", { keys: ["Down", "Enter"] })).resolves.toEqual({
+        status: "sent",
+        keys: ["Down", "Enter"],
+      });
+      await expect(host.agents.interrupt("t-users")).resolves.toEqual({ status: "not-found" });
+      expect(host.agentInputCalls.map((c) => [c.method, c.terminalId, c.result.status])).toEqual([
+        ["submit", "t-mine", "sent"],
+        ["sendKeys", "t-mine", "sent"],
+        ["interrupt", "t-users", "not-found"],
+      ]);
+    });
+
+    it("counts no launch that started no agent", async () => {
+      const host = createMockHost({
+        dispatch: async () => ({ ok: true, result: { launched: false, terminalId: "gate" } }),
+      });
+      await host.dispatch("agent.launch", { agentId: "claude" });
+      await expect(host.agents.interrupt("gate")).resolves.toEqual({ status: "not-found" });
+    });
+
+    it("counts no launch that named its own panel id, as production", async () => {
+      const host = createMockHost({
+        dispatch: async () => ({ ok: true, result: { launched: true, terminalId: "chosen" } }),
+      });
+      await host.dispatch("agent.launch", { agentId: "claude", requestedId: "chosen" });
+      await expect(host.agents.interrupt("chosen")).resolves.toEqual({ status: "not-found" });
+    });
+
+    it("rejects a sparse key list, as production", async () => {
+      const host = createMockHost();
+      host.simulateAgentLaunched("t-1");
+      await expect(host.agents.sendKeys("t-1", { keys: new Array<string>(1) })).rejects.toThrow(
+        /agents\.sendKeys/
+      );
+    });
+
+    it("lets a test mark an agent as launched", async () => {
+      const host = createMockHost();
+      host.simulateAgentLaunched("t-1");
+      await expect(host.agents.interrupt("t-1")).resolves.toEqual({
+        status: "sent",
+        cancelKey: "advertised",
+      });
+    });
+
+    it("gates on agent:input and validates like production", async () => {
+      const denied = createMockHost({ capabilities: ["agent:read"] });
+      await expect(denied.agents.interrupt("t-1")).rejects.toThrow(/PERMISSION_REQUIRED/);
+
+      const host = createMockHost();
+      host.simulateAgentLaunched("t-1");
+      await expect(host.agents.submit("t-1", "  ")).rejects.toThrow(/non-empty/);
+      await expect(host.agents.sendKeys("t-1", { keys: ["Ctrl+C"] })).rejects.toThrow(
+        /agents\.sendKeys/
+      );
+      await expect(
+        host.agents.sendKeys("t-1", { keys: ["Enter"], choose: "Yes" } as never)
+      ).rejects.toThrow(/exactly one/);
+      await expect(host.agents.interrupt("")).rejects.toThrow(/terminalId/);
+      expect(host.agentInputCalls).toEqual([]);
+    });
+  });
+
   describe("agent handoff", () => {
     const panes = [
       {
@@ -1568,6 +2097,89 @@ describe("createMockHost production-parity validation (#10617)", () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
       expect(errors).toHaveBeenCalledTimes(1);
       errors.mockRestore();
+    });
+
+    it("onDidChangeProjectPresence replays every open project to an installed plugin", async () => {
+      const alpha = "a".repeat(64);
+      const beta = "b".repeat(64);
+      const host = createMockHost({
+        capabilities: [],
+        projectPresence: [
+          { projectId: alpha, state: "foreground" },
+          { projectId: beta, state: "background" },
+        ],
+      });
+      const received: unknown[] = [];
+      const dispose = await host.onDidChangeProjectPresence((p) => received.push(p));
+      expect(host.subscriptionOptions.at(-1)).toEqual({
+        kind: "project-presence",
+        debounceMs: 100,
+      });
+      await Promise.resolve();
+      expect(received).toEqual([
+        { projectId: alpha, state: "foreground" },
+        { projectId: beta, state: "background" },
+      ]);
+
+      host.simulateProjectPresenceChange({ projectId: alpha, state: "foreground" });
+      host.simulateProjectPresenceChange({ projectId: beta, state: "closed" });
+      // Never seen open, so never told it closed.
+      host.simulateProjectPresenceChange({ projectId: "c".repeat(64), state: "closed" });
+      expect(received.slice(2)).toEqual([{ projectId: beta, state: "closed" }]);
+      expect(Object.isFrozen(received[2])).toBe(true);
+
+      dispose();
+      host.simulateProjectPresenceChange({ projectId: alpha, state: "background" });
+      expect(received).toHaveLength(3);
+
+      // A close drops the project from a later subscription's replay.
+      const later: unknown[] = [];
+      await host.onDidChangeProjectPresence((p) => later.push(p));
+      await Promise.resolve();
+      expect(later).toEqual([{ projectId: alpha, state: "background" }]);
+      expect(() =>
+        host.simulateProjectPresenceChange({ projectId: alpha, state: "minimised" } as never)
+      ).toThrow(/simulateProjectPresenceChange/);
+    });
+
+    it("onDidChangeProjectPresence never shows an installed plugin a scratch", async () => {
+      const scratch = "11111111-2222-4333-8444-555555555555";
+      const host = createMockHost({
+        projectPresence: [{ projectId: scratch, state: "foreground" }],
+      });
+      const received: unknown[] = [];
+      await host.onDidChangeProjectPresence((p) => received.push(p));
+      await Promise.resolve();
+      host.simulateProjectPresenceChange({ projectId: scratch, state: "background" });
+
+      expect(received).toEqual([]);
+    });
+
+    it("onDidChangeProjectPresence shows a project plugin its own project only", async () => {
+      const own = "a".repeat(64);
+      const host = createMockHost({ pluginId: `project__${own}__acme.board` });
+      const received: unknown[] = [];
+      await host.onDidChangeProjectPresence((p) => received.push(p));
+      await Promise.resolve();
+
+      host.simulateProjectPresenceChange({ projectId: "b".repeat(64), state: "foreground" });
+      host.simulateProjectPresenceChange({ projectId: own, state: "background" });
+      host.simulateProjectPresenceChange({ projectId: own, state: "closed" });
+
+      expect(received).toEqual([
+        { projectId: own, state: "foreground" },
+        { projectId: own, state: "background" },
+        { projectId: own, state: "closed" },
+      ]);
+
+      const unlisted = createMockHost({
+        pluginId: `project__${own}__acme.board`,
+        projectPresence: [],
+      });
+      const replay: unknown[] = [];
+      await unlisted.onDidChangeProjectPresence((p) => replay.push(p));
+      await Promise.resolve();
+      expect(replay).toEqual([{ projectId: own, state: "closed" }]);
     });
 
     it("sendToAgent gates on agent:input and validates like production", async () => {
@@ -1917,6 +2529,22 @@ describe("createMockHost host.db", () => {
     await db.close();
     await expect(host.db.open("other")).rejects.toThrow(/DB_NOT_DECLARED/);
   });
+
+  it("holds a writable open to a declared schemaVersion, as the real host does", async () => {
+    const host = createMockHost({ databases: { schemaVersions: { ledger: 2 } } });
+    await expect(
+      host.db.open("ledger", { migrations: ["CREATE TABLE a (x)"] })
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+    expect((await host.db.resolve("ledger")).schemaVersion).toBe(2);
+
+    const db = await host.db.open("ledger", {
+      migrations: ["CREATE TABLE a (x)", "CREATE TABLE b (x)"],
+    });
+    expect(await db.get("PRAGMA user_version")).toEqual({ user_version: 2 });
+    await db.close();
+    // An id with no declared version, or one only the prototype has, makes no claim.
+    expect((await host.db.resolve("constructor")).schemaVersion).toBeUndefined();
+  });
 });
 
 describe("createMockHost host.db readonly", () => {
@@ -2204,5 +2832,255 @@ describe("createMockHost terminals.readScreen", () => {
     });
     host.simulateTerminalScreen("t-1", null);
     await expect(host.terminals.readScreen("t-1")).resolves.toEqual({ status: "not-found" });
+  });
+});
+
+describe("createMockHost tasks (#13819)", () => {
+  const retry = { actionId: "acme.demo.import", args: { source: "csv" } };
+
+  it("records a task as the plugin reports and finishes it, raising the host's failure", async () => {
+    const host = createMockHost({ pluginId: "acme.demo" });
+    const task = await host.tasks.start({ title: "Importing records", retry });
+
+    task.report({ fraction: 0.5, detail: "5 of 10" });
+    task.report({ detail: "" });
+    await task.finish({ outcome: "failed", message: "Offline" });
+    task.report({ fraction: 1 });
+
+    expect(host.startedTasks).toEqual([
+      {
+        id: task.id,
+        options: { title: "Importing records", cancellable: false, fraction: null, retry },
+        state: "failed",
+        fraction: 0.5,
+        detail: undefined,
+        reports: [{ fraction: 0.5, detail: "5 of 10" }, { detail: "" }],
+        result: { outcome: "failed", message: "Offline" },
+      },
+    ]);
+    expect(host.notifications.map((n) => n.options)).toEqual([
+      {
+        title: "Importing records failed",
+        body: "Offline",
+        severity: "error",
+        actions: [{ id: "retry", label: "Retry", ...retry }],
+        dedupeKey: `task:${task.id}`,
+      },
+    ]);
+  });
+
+  it("files a passive entry only for a success with a message", async () => {
+    const host = createMockHost({ pluginId: "acme.demo" });
+    await (await host.tasks.start({ title: "Quiet", retry })).finish({ outcome: "succeeded" });
+    const told = await host.tasks.start({ title: "Import", retry });
+    await told.finish({ outcome: "succeeded", message: "Imported 10" });
+
+    expect(host.notifications.map((n) => n.options)).toEqual([
+      { title: "Import", body: "Imported 10", delivery: "passive", dedupeKey: `task:${told.id}` },
+    ]);
+  });
+
+  it("simulates the user's Cancel, after which the task shows nothing", async () => {
+    const host = createMockHost({ pluginId: "acme.demo" });
+    const task = await host.tasks.start({ title: "Sync", cancellable: true, retry });
+
+    host.simulateTaskCancel(task.id);
+    expect(task.signal.aborted).toBe(true);
+    expect(task.signal.reason).toMatchObject({ cause: "cancelled" });
+    expect(host.startedTasks[0]?.state).toBe("cancelling");
+    await task.finish({ outcome: "failed", message: "Stopped" });
+    expect(host.notifications).toEqual([]);
+    expect(() => host.simulateTaskCancel(task.id)).toThrow(/not a running cancellable task/);
+  });
+
+  it("simulates an interruption, after which nothing the plugin does lands", async () => {
+    const host = createMockHost({ pluginId: "acme.demo" });
+    const task = await host.tasks.start({ title: "Sync", retry });
+
+    host.simulateTaskInterrupt(task.id);
+    expect(task.signal.reason).toMatchObject({ cause: "interrupted" });
+    task.report({ fraction: 0.5 });
+    await task.finish({ outcome: "failed", message: "Stopped" });
+    expect(host.startedTasks[0]).toMatchObject({ state: "interrupted", reports: [] });
+    expect(host.notifications).toEqual([]);
+    expect(() => host.simulateTaskInterrupt(task.id)).toThrow(/not a running task/);
+  });
+
+  it("refuses what the real host refuses", async () => {
+    const host = createMockHost({ pluginId: "acme.demo" });
+    await expect(host.tasks.start({ title: "", retry })).rejects.toThrow(/title/);
+    await expect(
+      host.tasks.start({ title: "T", retry: { actionId: "other.import" } })
+    ).rejects.toThrow(/own actions/);
+    const task = await host.tasks.start({ title: "T", retry });
+    expect(() => task.report({ fraction: 3 })).toThrow(/fraction/);
+    await expect(task.finish({ outcome: "failed" } as never)).rejects.toThrow(/message/);
+    const uncancellable = await host.tasks.start({ title: "U", retry });
+    expect(() => host.simulateTaskCancel(uncancellable.id)).toThrow(/cancellable/);
+  });
+});
+
+describe("createMockHost artifacts (#14100)", () => {
+  it("imports from the mock fs, downloads from the seeded bodies, and expires on demand", async () => {
+    const host = createMockHost({
+      artifactDownloads: { "https://api.example.com/v1/clip.mp4": new Uint8Array(12) },
+    });
+    await host.fs.writeFile("/data/song.mp3", "abc");
+    const imported = await host.artifacts.import({ path: "/data/song.mp3" });
+    expect(imported).toMatchObject({ name: "song.mp3", mimeType: "audio/mpeg", size: 3 });
+
+    const onProgress = vi.fn();
+    const downloaded = await host.artifacts.download(
+      { url: "https://api.example.com/v1/clip.mp4" },
+      { onProgress }
+    );
+    expect(downloaded).toMatchObject({ name: "clip.mp4", mimeType: "video/mp4", size: 12 });
+    expect(onProgress).toHaveBeenLastCalledWith({
+      transferredBytes: 12,
+      totalBytes: 12,
+      attempt: 1,
+    });
+    await expect(host.artifacts.download({ url: "https://api.example.com/v1/x" })).rejects.toThrow(
+      /ARTIFACT_TRANSFER_FAILED/
+    );
+
+    expect((await host.artifacts.list()).map((a) => a.id)).toEqual([imported.id, downloaded.id]);
+    await host.artifacts.upload(downloaded.id, { url: "https://api.example.com/v1/up" });
+    expect(host.artifactUploadCalls).toEqual([
+      { artifactId: downloaded.id, url: "https://api.example.com/v1/up", method: "PUT" },
+    ]);
+
+    host.simulateArtifactExpiry(downloaded.id);
+    expect(await host.artifacts.stat(downloaded.id)).toBeNull();
+    await expect(
+      host.artifacts.upload(downloaded.id, { url: "https://api.example.com/v1/up" })
+    ).rejects.toThrow(/ARTIFACT_NOT_FOUND/);
+    expect(await host.artifacts.release(imported.id)).toBe(true);
+    expect(host.artifactRecords.size).toBe(0);
+  });
+});
+
+describe("createMockHost account connections (#14102)", () => {
+  it('keeps each named connection apart and defaults to "default"', async () => {
+    const host = createMockHost({ account: { accessToken: "synthetic-default" } });
+    const heardWork: unknown[] = [];
+    const heardDefault: unknown[] = [];
+    host.account.onDidChange((state) => void heardWork.push(state), { connection: "work" });
+    host.account.onDidChange((state) => void heardDefault.push(state));
+
+    host.simulateAccountChange({
+      connected: true,
+      identity: "octo",
+      accessToken: "synthetic-work",
+      connection: "work",
+    });
+
+    expect((await host.account.getAccessToken())?.accessToken).toBe("synthetic-default");
+    expect((await host.account.getAccessToken({ connection: "work" }))?.accessToken).toBe(
+      "synthetic-work"
+    );
+    expect(await host.account.getState({ connection: "work" })).toEqual({
+      connected: true,
+      identity: "octo",
+    });
+    expect(heardWork).toEqual([{ connected: true, identity: "octo" }]);
+    expect(heardDefault).toEqual([]);
+
+    host.simulateAccountChange({ connected: false, connection: "work" });
+    expect(await host.account.getAccessToken({ connection: "work" })).toBeNull();
+    expect((await host.account.getState()).connected).toBe(true);
+  });
+});
+
+describe("services (#14105)", () => {
+  it("records a registered service, replaces it by name, and ignores a stale disposer", async () => {
+    const host = createMockHost();
+    const first = { lookup: () => "first" };
+    const disposeFirst = await host.registerService("acme.jira.issues", first);
+    const second = { lookup: () => "second" };
+    await host.registerService("acme.jira.issues", second);
+    disposeFirst();
+    expect(host.registeredServices).toEqual([{ name: "acme.jira.issues", handlers: second }]);
+    await expect(host.registerService("acme.jira.issues", { lookup: 1 } as never)).rejects.toThrow(
+      '"lookup" must be a function'
+    );
+  });
+
+  it("calls a stood-in provider as this plugin, on copies, and records the call", async () => {
+    const host = createMockHost({
+      pluginId: "acme.app",
+      services: {
+        "acme.jira.issues": {
+          version: "1.4.0",
+          methods: {
+            lookup: (args, ctx) => ({ args, caller: ctx.caller }),
+            fail: () => {
+              throw new Error("Jira said no");
+            },
+          },
+        },
+      },
+    });
+    const args = { key: "A-1" };
+    const result = await host.services.call("acme.jira.issues", "lookup", args);
+    expect(result).toEqual({
+      ok: true,
+      value: { args, caller: { pluginId: "acme.app", projectId: null } },
+    });
+    expect(result.ok && (result.value as { args: unknown }).args).not.toBe(args);
+    expect(host.serviceCalls).toEqual([{ name: "acme.jira.issues", method: "lookup", args }]);
+
+    await expect(host.services.call("acme.jira.issues", "fail", {})).resolves.toMatchObject({
+      ok: false,
+      reason: "provider-error",
+      message: "Jira said no",
+    });
+    await expect(host.services.status("acme.jira.issues")).resolves.toMatchObject({
+      available: true,
+      provider: { pluginId: "acme.jira", version: "1.4.0", methods: ["lookup", "fail"] },
+    });
+  });
+
+  it("settles a cancelled call at once and aborts the provider's signal", async () => {
+    let providerSignal: AbortSignal | undefined;
+    const host = createMockHost({
+      services: {
+        "acme.jira.issues": {
+          methods: {
+            lookup: (_args, ctx) => {
+              providerSignal = ctx.signal;
+              return new Promise(() => {});
+            },
+          },
+        },
+      },
+    });
+    const controller = new AbortController();
+    const result = host.services.call(
+      "acme.jira.issues",
+      "lookup",
+      {},
+      {
+        signal: controller.signal,
+      }
+    );
+    controller.abort();
+    await expect(result).resolves.toMatchObject({ ok: false, reason: "cancelled" });
+    expect(providerSignal?.aborted).toBe(true);
+    await expect(
+      host.services.call("acme.jira.issues", "lookup", { fn: () => 1 })
+    ).resolves.toMatchObject({ ok: false, reason: "invalid" });
+  });
+
+  it("answers unavailable for a service nobody stands in for", async () => {
+    const host = createMockHost();
+    await expect(host.services.call("acme.jira.issues", "lookup", {})).resolves.toMatchObject({
+      ok: false,
+      reason: "unavailable",
+    });
+    await expect(host.services.status("acme.jira.issues")).resolves.toMatchObject({
+      available: false,
+      reason: "unavailable",
+    });
   });
 });

@@ -92,6 +92,8 @@ async function setup(
     maxBufferedBytes?: number;
     maxDownloadsPerSession?: number;
     bundleTtlMs?: number;
+    uploadTtlMs?: number;
+    clickedTtlMs?: number;
     /** Project p1's roots as configured; the real project folder by default. */
     roots?: string[];
   } = {}
@@ -109,6 +111,8 @@ async function setup(
     maxBufferedBytes: options.maxBufferedBytes,
     maxDownloadsPerSession: options.maxDownloadsPerSession,
     bundleTtlMs: options.bundleTtlMs,
+    uploadTtlMs: options.uploadTtlMs,
+    clickedTtlMs: options.clickedTtlMs,
   });
   services.push(service);
   service.attach(host, endpoint);
@@ -276,6 +280,37 @@ describe("previews over the link", () => {
       new Request(url("daintree-file", path.join(project, "a.txt"), project))
     );
     expect(response.status).toBe(403);
+  });
+
+  it("names why it refused: another window's control, or a file outside the project", async () => {
+    let driving = false;
+    const { proxy } = await setup({ driving: () => driving });
+    await fs.writeFile(path.join(project, "a.png"), "x");
+    await fs.writeFile(path.join(outside, "b.png"), "y");
+
+    const watched = await proxy(
+      "daintree-file",
+      new Request(url("daintree-file", path.join(project, "a.png"), project), { method: "HEAD" })
+    );
+    expect(watched.status).toBe(403);
+    expect(watched.headers.get("x-daintree-refusal")).toBe("driven-elsewhere");
+
+    driving = true;
+    const elsewhere = await proxy(
+      "daintree-file",
+      new Request(url("daintree-file", path.join(outside, "b.png"), outside), { method: "HEAD" })
+    );
+    expect(elsewhere.status).toBe(404);
+    expect(elsewhere.headers.get("x-daintree-refusal")).toBe("outside-project");
+
+    const missing = await proxy(
+      "daintree-file",
+      new Request(url("daintree-file", path.join(project, "gone.png"), project), {
+        method: "HEAD",
+      })
+    );
+    expect(missing.status).toBe(404);
+    expect(missing.headers.get("x-daintree-refusal")).toBeNull();
   });
 
   it("bounds concurrent reads on the host and queues them on the Shell", async () => {
@@ -874,6 +909,278 @@ describe("CopyTree bundles", () => {
     await expect(
       transport.download(HOST, bundle, { webContentsId: 7, destinationDir: downloads })
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+});
+
+describe("a view's own inbox uploads", () => {
+  async function uploadSetup(options: { uploadTtlMs?: number } = {}) {
+    const ctx = await setup(options);
+    // The inbox: one folder per dropped file, beside everyone else's.
+    const folder = path.join(outside, "files", "20261022-101500-abc123");
+    await fs.mkdir(folder, { recursive: true });
+    const upload = path.join(folder, "shot.png");
+    await fs.writeFile(upload, "my upload");
+    const theirs = path.join(outside, "files", "20261022-101501-def456", "theirs.png");
+    await fs.mkdir(path.dirname(theirs), { recursive: true });
+    await fs.writeFile(theirs, "someone else's upload");
+    const preview = (filePath: string, cap = ctx.cap) =>
+      ctx.rawProxy(
+        "daintree-file",
+        { hostId: HOST, viewCapability: cap },
+        new Request(url("daintree-file", filePath, path.dirname(filePath)))
+      );
+    return { ...ctx, folder, upload, theirs, preview };
+  }
+
+  it("previews, reads and downloads exactly the file the view uploaded", async () => {
+    const { service, endpoint, upload, theirs, preview, transport } = await uploadSetup();
+    service.recordUpload(endpoint, "p1", upload);
+
+    const own = await preview(upload);
+    expect(own.status).toBe(200);
+    expect(await own.text()).toBe("my upload");
+    await expect(service.uploadIdentity(endpoint, upload)).resolves.not.toBeNull();
+    const saved = await transport.download(HOST, upload, {
+      webContentsId: 7,
+      destinationDir: downloads,
+    });
+    expect(await fs.readFile(saved.localPath, "utf8")).toBe("my upload");
+
+    const other = await preview(theirs);
+    expect(other.status).toBe(404);
+    expect(other.headers.get("x-daintree-refusal")).toBe("outside-project");
+    expect(await other.text()).not.toContain("someone else");
+    await expect(service.uploadIdentity(endpoint, theirs)).resolves.toBeNull();
+  });
+
+  it("is not a grant for another view, another project, or after it expires", async () => {
+    const { service, endpoint, upload, preview, secondView } = await uploadSetup({
+      uploadTtlMs: 50,
+    });
+    const second = secondView();
+    service.recordUpload(endpoint, "p1", upload);
+
+    expect((await preview(upload, second.cap)).status).toBe(404);
+    await expect(service.uploadIdentity(second.endpoint, upload)).resolves.toBeNull();
+
+    endpoint.projectId = "p2";
+    await expect(service.uploadIdentity(endpoint, upload)).resolves.toBeNull();
+    endpoint.projectId = "p1";
+
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect((await preview(upload)).status).toBe(404);
+  });
+
+  it("refuses an upload another file or a symlink has taken the place of", async () => {
+    const { service, endpoint, upload, preview } = await uploadSetup();
+    service.recordUpload(endpoint, "p1", upload);
+    await vi.waitFor(async () => expect((await preview(upload)).status).toBe(200));
+
+    await fs.rm(upload);
+    await fs.writeFile(upload, "injected");
+    expect((await preview(upload)).status).toBe(404);
+    await expect(service.uploadIdentity(endpoint, upload)).resolves.toBeNull();
+
+    await fs.rm(upload);
+    await fs.writeFile(path.join(project, "secret.txt"), "secret");
+    await fs.symlink(path.join(project, "secret.txt"), upload);
+    const linked = await preview(upload);
+    expect(linked.status).toBe(404);
+    expect(await linked.text()).not.toContain("secret");
+    await expect(service.uploadIdentity(endpoint, upload)).resolves.toBeNull();
+  });
+
+  it("keeps an upload readable when the inbox touches its times for a duplicate", async () => {
+    const { service, endpoint, upload, preview } = await uploadSetup();
+    service.recordUpload(endpoint, "p1", upload);
+    await vi.waitFor(async () => expect((await preview(upload)).status).toBe(200));
+    const later = new Date(Date.now() + 60_000);
+    await fs.utimes(upload, later, later);
+    expect((await preview(upload)).status).toBe(200);
+  });
+
+  it("forgets a view's uploads when its endpoint closes, and records none after", async () => {
+    const { service, endpoint, upload } = await uploadSetup();
+    service.recordUpload(endpoint, "p1", upload);
+    await expect(service.uploadIdentity(endpoint, upload)).resolves.not.toBeNull();
+    endpoint.close();
+    await expect(service.uploadIdentity(endpoint, upload)).resolves.toBeNull();
+    // A placement that finished after the close must not bring the grant back.
+    service.recordUpload(endpoint, "p1", upload);
+    await expect(service.uploadIdentity(endpoint, upload)).resolves.toBeNull();
+  });
+
+  it("records nothing for an endpoint that moved to another project meanwhile", async () => {
+    const { service, endpoint, upload } = await uploadSetup();
+    endpoint.projectId = "p2";
+    service.recordUpload(endpoint, "p1", upload);
+    endpoint.projectId = "p1";
+    await expect(service.uploadIdentity(endpoint, upload)).resolves.toBeNull();
+  });
+});
+
+describe("a file the person clicked in a terminal", () => {
+  async function clickSetup(options: { clickedTtlMs?: number; driving?: () => boolean } = {}) {
+    const ctx = await setup(options);
+    const clicked = path.join(outside, "shot.png");
+    await fs.writeFile(clicked, "clicked bytes");
+    const sibling = path.join(outside, "notes.txt");
+    await fs.writeFile(sibling, "not clicked");
+    const preview = (filePath: string, cap = ctx.cap) =>
+      ctx.rawProxy(
+        "daintree-file",
+        { hostId: HOST, viewCapability: cap },
+        new Request(url("daintree-file", filePath, path.dirname(filePath)))
+      );
+    const click = (filePath: string, webContentsId = 7) =>
+      ctx.transport.grantClicked(HOST, filePath, webContentsId);
+    return { ...ctx, clicked, sibling, preview, click };
+  }
+
+  it("previews, reads and downloads exactly the clicked file, and nothing beside it", async () => {
+    const { service, endpoint, clicked, sibling, preview, click, transport } = await clickSetup();
+    const before = await preview(clicked);
+    expect(before.status).toBe(404);
+    expect(before.headers.get("x-daintree-refusal")).toBe("outside-project");
+    expect(service.isClicked(endpoint, clicked)).toBe(false);
+
+    await click(clicked);
+
+    const own = await preview(clicked);
+    expect(own.status).toBe(200);
+    expect(await own.text()).toBe("clicked bytes");
+    expect(service.isClicked(endpoint, clicked)).toBe(true);
+    const saved = await transport.download(HOST, clicked, {
+      webContentsId: 7,
+      destinationDir: downloads,
+    });
+    expect(await fs.readFile(saved.localPath, "utf8")).toBe("clicked bytes");
+
+    const beside = await preview(sibling);
+    expect(beside.status).toBe(404);
+    expect(await beside.text()).not.toContain("not clicked");
+    expect(service.isClicked(endpoint, sibling)).toBe(false);
+  });
+
+  it("is a grant for the view that clicked, not another view of the same project", async () => {
+    const { service, endpoint, clicked, sibling, preview, click, secondView } = await clickSetup();
+    const second = secondView();
+    second.endpoint.projectId = "p1";
+
+    await click(clicked);
+    expect((await preview(clicked)).status).toBe(200);
+    expect((await preview(clicked, second.cap)).status).toBe(404);
+    expect(service.isClicked(second.endpoint, clicked)).toBe(false);
+
+    await click(sibling, 8);
+    expect((await preview(sibling, second.cap)).status).toBe(200);
+    expect((await preview(sibling)).status).toBe(404);
+    expect(service.isClicked(endpoint, sibling)).toBe(false);
+  });
+
+  it("is not a grant once the view moves to another project", async () => {
+    const { service, endpoint, clicked, click } = await clickSetup();
+    await click(clicked);
+    expect(service.isClicked(endpoint, clicked)).toBe(true);
+    endpoint.projectId = "p2";
+    expect(service.isClicked(endpoint, clicked)).toBe(false);
+  });
+
+  it("expires", async () => {
+    const { service, endpoint, clicked, preview, click } = await clickSetup({ clickedTtlMs: 50 });
+    await click(clicked);
+    expect((await preview(clicked)).status).toBe(200);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect((await preview(clicked)).status).toBe(404);
+    expect(service.isClicked(endpoint, clicked)).toBe(false);
+  });
+
+  it("isn't refused by an upload grant whose file was replaced since", async () => {
+    const { service, endpoint, clicked, preview, click } = await clickSetup();
+    service.recordUpload(endpoint, "p1", clicked);
+    await vi.waitFor(async () => expect((await preview(clicked)).status).toBe(200));
+    await fs.rm(clicked);
+    await fs.writeFile(clicked, "replaced");
+    expect((await preview(clicked)).status).toBe(404);
+
+    await click(clicked);
+    const after = await preview(clicked);
+    expect(after.status).toBe(200);
+    expect(await after.text()).toBe("replaced");
+  });
+
+  it("grants only a regular file, never a folder, a missing file or a symlink", async () => {
+    const { service, endpoint, click } = await clickSetup();
+    await fs.writeFile(path.join(project, "secret.txt"), "secret");
+    const link = path.join(outside, "link.txt");
+    await fs.symlink(path.join(project, "secret.txt"), link);
+
+    await expect(click(outside)).rejects.toMatchObject({ code: "NOT_A_FILE" });
+    await expect(click(path.join(outside, "gone.txt"))).rejects.toMatchObject({
+      code: "NOT_A_FILE",
+    });
+    await expect(click(link)).rejects.toMatchObject({ code: "NOT_A_FILE" });
+    expect(service.isClicked(endpoint, link)).toBe(false);
+  });
+
+  it("never reads through a symlink put in the clicked file's place", async () => {
+    const { clicked, preview, click } = await clickSetup();
+    await click(clicked);
+    await fs.rm(clicked);
+    await fs.writeFile(path.join(other, "secret.txt"), "secret");
+    await fs.symlink(path.join(other, "secret.txt"), clicked);
+
+    const linked = await preview(clicked);
+    expect(linked.status).toBe(404);
+    expect(await linked.text()).not.toContain("secret");
+  });
+
+  it("never reads a file beside it through a link put in the clicked file's place", async () => {
+    const { clicked, sibling, preview, click, transport } = await clickSetup();
+    await click(clicked);
+    await fs.rm(clicked);
+    await fs.symlink(sibling, clicked);
+
+    const linked = await preview(clicked);
+    expect(linked.status).toBe(404);
+    expect(await linked.text()).not.toContain("not clicked");
+    await expect(
+      transport.download(HOST, clicked, { webContentsId: 7, destinationDir: downloads })
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(await fs.readdir(downloads)).toEqual([]);
+  });
+
+  it("stops letting a text read through once the view loses control", async () => {
+    let driving = true;
+    const { service, endpoint, clicked, click } = await clickSetup({ driving: () => driving });
+    await click(clicked);
+    expect(service.isClicked(endpoint, clicked)).toBe(true);
+    driving = false;
+    expect(service.isClicked(endpoint, clicked)).toBe(false);
+  });
+
+  it("keeps showing whatever file is at the clicked path when it is written again", async () => {
+    const { clicked, preview, click } = await clickSetup();
+    await click(clicked);
+    await fs.rm(clicked);
+    await fs.writeFile(clicked, "saved over");
+    const again = await preview(clicked);
+    expect(again.status).toBe(200);
+    expect(await again.text()).toBe("saved over");
+  });
+
+  it("refuses a view that doesn't drive the project", async () => {
+    const { service, endpoint, clicked, click } = await clickSetup({ driving: () => false });
+    await expect(click(clicked)).rejects.toMatchObject({ code: "DRIVEN_ELSEWHERE" });
+    expect(service.isClicked(endpoint, clicked)).toBe(false);
+  });
+
+  it("forgets a view's clicked files when its endpoint closes", async () => {
+    const { service, endpoint, clicked, click } = await clickSetup();
+    await click(clicked);
+    expect(service.isClicked(endpoint, clicked)).toBe(true);
+    endpoint.close();
+    expect(service.isClicked(endpoint, clicked)).toBe(false);
   });
 });
 

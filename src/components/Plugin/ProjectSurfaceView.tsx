@@ -1,14 +1,7 @@
-import { useEffect, type ComponentType } from "react";
-import {
-  getPanelKindRegistrySnapshot,
-  subscribeToPanelKindRegistry,
-  type PanelKindConfig,
-} from "@shared/config/panelKindRegistry";
+import { useEffect } from "react";
+import type { PanelKindConfig } from "@shared/config/panelKindRegistry";
 import type { ProjectSurfaceSlot } from "@shared/types/plugin";
-import {
-  makePluginViewContent,
-  type PluginViewContentProps,
-} from "@/components/Plugin/PluginViewContent";
+import { PluginHostedView } from "@/components/Plugin/PluginHostedView";
 import {
   useRenderableSurfaceClaim,
   type RenderableSurfaceClaim,
@@ -54,116 +47,39 @@ export function useProjectSurface(slot: ProjectSurfaceSlot): ResolvedProjectSurf
 }
 
 /**
- * A surface's per-kind runtime: the content factory and the removal signal that
- * stands in for a panel record's.
+ * Mount a project surface's view through the shared hosted-view path
+ * (`PluginHostedView`), as `hostContext: "surface"`.
  *
- * `makePluginViewContent` must run outside render, as it does for panel hosts in
- * `usePluginPanelKinds` — a factory minted during render would be a new
- * component type each time, remounting the plugin's view and restarting its
- * `plugin://` import. Keyed by kind, with the component path recorded so an
- * upgraded plugin (which gets a fresh generation segment in its path) mints a
- * new one rather than reusing a factory bound to the old module URL.
- */
-interface SurfaceRuntime {
-  componentPath: string;
-  content: ComponentType<PluginViewContentProps>;
-  /** Aborted when this kind leaves the registry — the surface's "removed". */
-  removal: AbortController;
-}
-
-const surfaceRuntimes = new Map<string, SurfaceRuntime>();
-let pruneSubscribed = false;
-
-/**
- * Retire every runtime whose kind is gone from the registry or has moved to a
- * new module URL.
+ * The claimed view is one of the plugin's panel views, so its source is the
+ * panel kind itself — the same loader, activation, error boundary and working
+ * "Try again" the panel gets, with the kind's own teardown — and the kind stays
+ * spawnable as a panel on purpose. Retired when the kind leaves the registry or
+ * moves to a new module, which for a surface is permanent removal; the surface
+ * unmounting whenever the user opens a panel is not.
  *
- * Two jobs in one sweep, because they have the same trigger. It aborts the
- * removal signal, which for a surface means what a panel record's means — the
- * thing is permanently gone, not merely unmounted (a surface unmounts whenever
- * the user opens a panel, and that must not read as removal). And it drops the
- * factory, so the map cannot grow one closure per plugin reload for the life of
- * the renderer.
- */
-function pruneSurfaceRuntimes(): void {
-  const registry = getPanelKindRegistrySnapshot();
-  for (const [kindId, runtime] of surfaceRuntimes) {
-    const config = registry[kindId];
-    if (config !== undefined && config.componentPath === runtime.componentPath) continue;
-    runtime.removal.abort();
-    surfaceRuntimes.delete(kindId);
-  }
-}
-
-function getSurfaceRuntime(config: PanelKindConfig): SurfaceRuntime {
-  if (!pruneSubscribed) {
-    // Subscribed on first use rather than at module scope so importing this
-    // module has no side effect. Never unsubscribed: the map it sweeps is
-    // module-level, and a torn-down subscription would strand every entry.
-    subscribeToPanelKindRegistry(pruneSurfaceRuntimes);
-    pruneSubscribed = true;
-  }
-  const componentPath = config.componentPath ?? "";
-  const existing = surfaceRuntimes.get(config.id);
-  if (existing !== undefined && existing.componentPath === componentPath) return existing;
-  existing?.removal.abort();
-  const runtime: SurfaceRuntime = {
-    componentPath,
-    content: makePluginViewContent({
-      id: config.id,
-      name: config.name,
-      componentPath,
-      extensionId: config.extensionId ?? "",
-    }),
-    removal: new AbortController(),
-  };
-  surfaceRuntimes.set(config.id, runtime);
-  return runtime;
-}
-
-/** Test-only: drop every cached factory and its removal signal. */
-export function _resetProjectSurfaceRuntimesForTest(): void {
-  for (const runtime of surfaceRuntimes.values()) runtime.removal.abort();
-  surfaceRuntimes.clear();
-}
-
-/**
- * Mount a project surface's view.
- *
- * Deliberately reuses `PluginViewContent` — the same loader, the same standard
- * plugin error boundary, and the same working "Try again" a contributed panel
- * gets — so a surface that throws lands on the house diagnostics pane rather
- * than a blank region, and its teardown ordering (`disposeSignal`) matches a
- * normal plugin view exactly.
- *
- * `panelId` is synthesized from the kind: a surface is not a panel instance, but
- * the view contract takes an opaque panel id, and one stable per kind keeps the
- * value meaningful for plugin-local storage keys across re-renders. Because it
- * names no panel record, the removal signal is supplied rather than looked up —
- * see {@link pruneSurfaceRuntimes}.
+ * `mountId` is synthesized from the kind: a surface is not a panel instance,
+ * but the view contract takes an opaque panel id, and one stable per kind keeps
+ * it meaningful for plugin-local storage keys across re-renders.
  *
  * No `onRequestClose`: a surface has no panel to trash. The way out of a broken
  * surface is the switch in `ProjectSurfaceFrame`'s strip, laid out above this
- * box, which is why this wrapper isolates and contains the plugin's layout:
- * `isolation` caps the plugin's z-indexes inside its own stacking context, and
- * `contain: layout paint` (with `overflow-hidden`) keeps a `position: fixed`
- * descendant inside this box. A surface can then style its own region freely
- * and still never paint over the strip that leads out of it.
- *
- * A flex COLUMN, not a plain block (#12361). `PluginViewContent` fills its host
- * with `flex-1 min-h-0` on the content it wraps, which does nothing unless the
- * host is a flex container — the panel path gets one from `ContentPanel`'s body.
- * Without it here the plugin drew at its intrinsic height with dead canvas under
- * it, so any surface with a bottom bar floated it mid-region.
+ * box, which the shared host's containment keeps the plugin from painting over.
  */
-export function ProjectSurfaceView({ config }: { config: PanelKindConfig }) {
-  const { content: Content, removal } = getSurfaceRuntime(config);
+export function ProjectSurfaceView({
+  config,
+  onClose,
+}: {
+  config: PanelKindConfig;
+  /** Handed to the view as `hostContext.close`, for a slot the view can finish, like a dialog. */
+  onClose?: () => void;
+}) {
   return (
-    <div
-      className="relative isolate flex h-full w-full min-h-0 min-w-0 flex-col overflow-hidden"
-      style={{ contain: "layout paint" }}
-    >
-      <Content panelId={`surface:${config.id}`} panelRemovedSignal={removal.signal} />
-    </div>
+    <PluginHostedView
+      source={{ from: "panel-kind", config }}
+      host="surface"
+      mountId={`surface:${config.id}`}
+      onClose={onClose}
+      className="h-full w-full"
+    />
   );
 }

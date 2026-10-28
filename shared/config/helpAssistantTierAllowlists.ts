@@ -121,6 +121,10 @@ export const CORE_TIER_TOOLS = [
   "terminal.close",
   // Several closes in one call, each run as the close above (owned for a pane).
   "terminal.closeMany",
+  // Moves a pane this session launched to another preset of its agent, after
+  // the user confirms (#14369). Owned for every origin: the unscoped
+  // `terminal.restartOnPreset` is on no tier.
+  "terminal.restartOnPresetOwned",
   "terminal.moveToWorktree",
   // Brings a panel this session created into view (#12315).
   "terminal.revealOwned",
@@ -152,6 +156,13 @@ export const CORE_TIER_TOOLS = [
   // per-host switch decides what it reaches.
   "host.list",
   "host.call",
+  // Bringing this machine's project to one of those hosts, with no window (#14140).
+  "host.ensureProject",
+  // A host's own named settings, each change approved by the person here (#14167).
+  "host.settings",
+  // One notice when a host's link or capacity is first seen meeting a
+  // condition (#14463): passive, and it acts on nothing when it fires.
+  "host.watch",
   // Logs meant for someone else go through the review the user trims and saves
   // themselves, not an archive the assistant builds from the raw log folder
   // (#12882). Reserved to the assistant below; off the external list.
@@ -297,6 +308,9 @@ export const RENDERER_OWNED_ORIGIN_ONLY_TOOLS = [
   // So is the Shell's reach into its hosts (#13493).
   "host.list",
   "host.call",
+  "host.ensureProject",
+  "host.settings",
+  "host.watch",
   // A shell command is the assistant's to run, never a worker pane's (#13495).
   "project.runCommand",
 ] as const satisfies readonly BuiltInActionId[];

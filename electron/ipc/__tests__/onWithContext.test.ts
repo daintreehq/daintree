@@ -28,6 +28,17 @@ const { appMock, onListeners, ipcMainMock, getWindowMock, getProjectMock } = vi.
   };
 });
 
+const loggerMock = vi.hoisted(() => ({
+  debug: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+}));
+
+vi.mock("../../utils/logger.js", () => ({
+  createLogger: () => loggerMock,
+}));
+
 vi.mock("electron", () => ({
   app: appMock,
   ipcMain: ipcMainMock,
@@ -196,7 +207,6 @@ describe("onWithContext", () => {
   it("unregisters from both transports", async () => {
     const listener = vi.fn();
     onWithContext(HOST_SEND_CHANNEL, listener)();
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
     sendLocal(HOST_SEND_CHANNEL, makeEvent(), "term-1", "x");
     getIpcDispatcher().sendForEndpoint(
@@ -206,9 +216,11 @@ describe("onWithContext", () => {
     );
 
     await vi.waitFor(() => {
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining(HOST_SEND_CHANNEL));
+      expect(loggerMock.info).toHaveBeenCalledWith(
+        "Channel refused for remote routing",
+        expect.objectContaining({ channel: HOST_SEND_CHANNEL })
+      );
     });
     expect(listener).not.toHaveBeenCalled();
-    warn.mockRestore();
   });
 });

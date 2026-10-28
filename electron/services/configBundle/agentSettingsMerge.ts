@@ -100,15 +100,26 @@ export function mergePresets(current: unknown, incoming: unknown): Entry[] {
 }
 
 /**
+ * An agent entry without the toolbar pin it may still carry from before pins
+ * became this machine's (#14702). Anything else comes back as it was.
+ */
+export function withoutLegacyPin(entry: unknown): unknown {
+  if (!isRecord(entry) || !Object.hasOwn(entry, "pinned")) return entry;
+  const { pinned: _pinned, ...rest } = entry;
+  return rest;
+}
+
+/**
  * One agent's settings with the incoming portable fields laid over the
- * target's, minus the retired `selected`/`enabled` keys (dropped here as the
- * `agentSettings:set` handler drops them, so a merge also clears a persisted
- * one). `keepPresetId` false leaves the target's default preset alone.
+ * target's, minus the retired `selected`/`enabled`/`pinned` keys (dropped here
+ * as the `agentSettings:set` handler drops them, so a merge also clears a
+ * persisted one). `keepPresetId` false leaves the target's default preset alone.
  */
 export function mergeAgentEntry(current: unknown, incoming: unknown, keepPresetId = true): Entry {
   const base: Entry = isRecord(current) ? { ...current } : {};
   delete base.selected;
   delete base.enabled;
+  delete base.pinned;
   if (!isRecord(incoming)) return base;
   for (const field of AGENT_SETTINGS_PORTABLE_FIELDS) {
     const value = incoming[field];

@@ -15,7 +15,7 @@ vi.mock("@/lib/trustedTypesPolicy", () => ({
 
 import { EditorState } from "@codemirror/state";
 import type { Extension } from "@codemirror/state";
-import { EditorView, runScopeHandlers } from "@codemirror/view";
+import { EditorView, WidgetType, runScopeHandlers } from "@codemirror/view";
 import type { ITheme } from "@xterm/xterm";
 import {
   buildInputBarTheme,
@@ -46,7 +46,7 @@ import {
   minimalDocChange,
   createComboboxAttributes,
 } from "../inputEditorExtensions";
-import { formatChipLabel } from "../inputEditorExtensions/base";
+import { formatChipLabel, VOICE_CARET_LEVEL_PROPERTY } from "../inputEditorExtensions/base";
 import { appendAgentContextToDraft, formatAgentContextBlock } from "@shared/utils/agentContextDrag";
 import type { SlashCommand } from "@shared/types";
 
@@ -499,7 +499,7 @@ describe("createAutoSize integration", () => {
 });
 
 describe("createCustomKeymap", () => {
-  function makeView(onEnter: () => boolean) {
+  function makeView(onEnter: () => boolean, onModEnter: () => boolean = () => false) {
     const parent = document.createElement("div");
     document.body.appendChild(parent);
     return new EditorView({
@@ -509,6 +509,7 @@ describe("createCustomKeymap", () => {
         extensions: [
           createCustomKeymap({
             onEnter,
+            onModEnter,
             onEscape: () => false,
             onArrowUp: () => false,
             onArrowDown: () => false,
@@ -562,6 +563,29 @@ describe("createCustomKeymap", () => {
     expect(view.state.doc.toString()).toContain("\n");
     view.destroy();
   });
+
+  it.each([true, false])(
+    "hands Mod+Enter to onModEnter, apart from Enter, handled as it says (%s)",
+    (sends) => {
+      const onEnter = vi.fn(() => true);
+      const onModEnter = vi.fn(() => sends);
+      const view = makeView(onEnter, onModEnter);
+      // CodeMirror's Mod is Cmd on a Mac and Ctrl elsewhere, read from the platform.
+      const mod = /Mac/.test(navigator.platform) ? { metaKey: true } : { ctrlKey: true };
+
+      const handled = runScopeHandlers(
+        view,
+        new KeyboardEvent("keydown", { key: "Enter", ...mod }),
+        "editor"
+      );
+
+      expect(onModEnter).toHaveBeenCalledOnce();
+      expect(onEnter).not.toHaveBeenCalled();
+      expect(handled).toBe(sends);
+      expect(view.state.doc.toString()).toBe("hello");
+      view.destroy();
+    }
+  );
 });
 
 describe("formatChipLabel", () => {
@@ -999,6 +1023,23 @@ describe("interimWidgetField", () => {
     view.destroy();
   });
 
+  it("renders the ghost at its position and keeps it there through edits around it", () => {
+    const view = makeView("hello world");
+    view.dispatch({ effects: setInterimText.of({ text: " big", pos: 5 }) });
+    expect(view.state.field(interimWidgetField)).toEqual({ text: " big", pos: 5 });
+    expect(view.contentDOM.querySelector(".cm-line")?.textContent).toBe("hello big world");
+
+    const line = () => view.contentDOM.querySelector(".cm-line")?.textContent;
+    view.dispatch({ changes: { from: 0, insert: "Say " } });
+    expect(view.state.field(interimWidgetField).pos).toBe(9);
+    expect(line()).toBe("Say hello big world");
+    view.dispatch({ changes: { from: 9, insert: "!" } });
+    // Typed at the preview's own spot: the preview stays after it, as the words will.
+    expect(view.state.field(interimWidgetField).pos).toBe(10);
+    expect(line()).toBe("Say hello! big world");
+    view.destroy();
+  });
+
   it("clears the ghost widget when an empty string is dispatched", () => {
     const view = makeView("hello world");
     view.dispatch({ effects: setInterimText.of("draft") });
@@ -1148,6 +1189,242 @@ describe("pendingAIField", () => {
     view.destroy();
   });
 
+  function spans(view: EditorView) {
+    const out: { from: number; to: number; widget: boolean }[] = [];
+    const iter = view.state.field(pendingAIField).iter();
+    while (iter.value) {
+      out.push({ from: iter.from, to: iter.to, widget: iter.value.spec.widget !== undefined });
+      iter.next();
+    }
+    return out;
+  }
+
+  it("draws a streamed rewrite over the words it replaced, leaving the doc as dictated", () => {
+    const doc = "um so fix the bug";
+    const view = makeView(doc);
+    view.dispatch({
+      effects: setPendingAIRanges.of([{ from: 0, to: 17, rewrite: { to: 9, text: "So fix" } }]),
+    });
+
+    expect(spans(view)).toEqual([
+      { from: 0, to: 9, widget: true },
+      { from: 9, to: 17, widget: false },
+    ]);
+    expect(view.state.doc.toString()).toBe(doc);
+    expect(view.contentDOM.querySelector(".cm-voice-rewrite")?.textContent).toBe("So fix");
+    expect(view.contentDOM.textContent).toBe("So fix the bug");
+    view.destroy();
+  });
+
+  it("draws a rewrite of the whole passage with no underline left after it", () => {
+    const view = makeView("fix the bug");
+    view.dispatch({
+      effects: setPendingAIRanges.of([
+        { from: 0, to: 11, rewrite: { to: 11, text: "Fix the bug." } },
+      ]),
+    });
+
+    expect(spans(view)).toEqual([{ from: 0, to: 11, widget: true }]);
+    expect(view.contentDOM.textContent).toBe("Fix the bug.");
+    view.destroy();
+  });
+
+  function underlined(view: EditorView): string[] {
+    return Array.from(view.contentDOM.querySelectorAll(".cm-voice-pending-ai")).map(
+      (el) => el.textContent ?? ""
+    );
+  }
+
+  it("recedes the underline as the rewrite advances, never back under rewritten words", () => {
+    const view = makeView("um so fix the bug");
+    view.dispatch({ effects: setPendingAIRanges.of([{ from: 0, to: 17, rewrite: undefined }]) });
+    expect(underlined(view)).toEqual(["um so fix the bug"]);
+
+    view.dispatch({
+      effects: setPendingAIRanges.of([{ from: 0, to: 17, rewrite: { to: 9, text: "So fix" } }]),
+    });
+    expect(underlined(view)).toEqual([" the bug"]);
+    expect(
+      view.contentDOM.querySelector(".cm-voice-rewrite")?.classList.contains("cm-voice-pending-ai")
+    ).toBe(false);
+
+    view.dispatch({
+      effects: setPendingAIRanges.of([
+        { from: 0, to: 17, rewrite: { to: 13, text: "So fix the" } },
+      ]),
+    });
+    expect(underlined(view)).toEqual([" bug"]);
+
+    view.dispatch({
+      effects: setPendingAIRanges.of([
+        { from: 0, to: 17, rewrite: { to: 17, text: "So fix the bug." } },
+      ]),
+    });
+    expect(underlined(view)).toEqual([]);
+    view.destroy();
+  });
+
+  it("leaves no underline under a finished passage beside one still streaming", () => {
+    const view = makeView("fix bug. add test now");
+    view.dispatch({
+      effects: setPendingAIRanges.of([
+        { from: 0, to: 8, rewrite: { to: 8, text: "Fix bug." } },
+        { from: 9, to: 21, rewrite: { to: 12, text: "Add" } },
+      ]),
+    });
+    expect(underlined(view)).toEqual([" test now"]);
+    view.destroy();
+  });
+
+  // #14901: a reply is judged only once it's whole, and lands only with every
+  // other passage of its pass, so until it is written into the draft the
+  // rewrite never reads as text that landed.
+  it("draws a streamed rewrite as words not yet written, until it lands", () => {
+    const parent = document.createElement("div");
+    // As the shell sets them: the draft's ink, and the ink for words not yet in it.
+    parent.style.color = "rgb(205, 214, 244)";
+    parent.style.setProperty("--ib-interim", "rgb(150, 155, 170)");
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      parent,
+      state: EditorState.create({
+        doc: "um so fix the bug. Then ship",
+        extensions: [
+          buildInputBarTheme({ background: "#1e1e2e", foreground: "#cdd6f4" }),
+          interimWidgetField,
+          pendingAIField,
+        ],
+      }),
+    });
+    const look = (selector: string) => {
+      const style = getComputedStyle(view.contentDOM.querySelector(selector)!);
+      return { color: style.color, fontStyle: style.fontStyle };
+    };
+    view.dispatch({
+      effects: [
+        setInterimText.of(" today"),
+        setPendingAIRanges.of([{ from: 0, to: 18, rewrite: { to: 18, text: "So fix the bug." } }]),
+      ],
+    });
+    const rewrite = look(".cm-voice-rewrite");
+    const draftText = look(".cm-line");
+    expect(rewrite).toEqual(look(".cm-voice-interim"));
+    // Neither its ink nor its slant is the draft's.
+    expect(rewrite.color).not.toBe(draftText.color);
+    expect(rewrite.fontStyle).not.toBe(draftText.fontStyle);
+
+    // Landing writes the cleanup into the draft and takes the rewrite away.
+    view.dispatch({
+      changes: { from: 0, to: 18, insert: "So fix the bug." },
+      effects: [setInterimText.of(""), setPendingAIRanges.of([])],
+    });
+    expect(view.contentDOM.querySelector(".cm-voice-rewrite")).toBeNull();
+    expect(view.contentDOM.textContent).toBe("So fix the bug. Then ship");
+    view.destroy();
+    parent.remove();
+  });
+
+  it("drops the rewrite in the same transaction as typing inside the words it hides", () => {
+    const view = makeView("um so fix the bug");
+    view.dispatch({
+      effects: setPendingAIRanges.of([{ from: 0, to: 17, rewrite: { to: 9, text: "So fix" } }]),
+    });
+    view.dispatch({ changes: { from: 6, insert: "x" } });
+
+    expect(spans(view).filter((span) => span.widget)).toEqual([]);
+    expect(view.contentDOM.textContent).toBe("um so xfix the bug");
+    view.destroy();
+  });
+
+  it("keeps the rewrite over typing at its edges", () => {
+    const view = makeView("um so fix the bug");
+    view.dispatch({
+      effects: setPendingAIRanges.of([{ from: 0, to: 17, rewrite: { to: 9, text: "So fix" } }]),
+    });
+    view.dispatch({ changes: { from: 0, insert: "Hey " } });
+
+    expect(spans(view)).toEqual([
+      { from: 4, to: 13, widget: true },
+      { from: 13, to: 21, widget: false },
+    ]);
+    view.destroy();
+  });
+
+  it("lays a rewritten list out on its own lines", () => {
+    const view = makeView("first fix the parser second ship it");
+    view.dispatch({
+      effects: setPendingAIRanges.of([
+        { from: 0, to: 35, rewrite: { to: 27, text: "1. Fix the parser\n2." } },
+      ]),
+    });
+
+    expect(view.contentDOM.textContent).toBe("1. Fix the parser\n2. ship it");
+    const widget: unknown = view.state.field(pendingAIField).iter().value?.spec.widget;
+    expect(widget instanceof WidgetType ? widget.lineBreaks : null).toBe(1);
+    view.destroy();
+  });
+
+  it("shows the dictated words while the caret sits among the words a rewrite hides", () => {
+    const doc = "um so fix the bug";
+    const rewrite = { from: 0, to: 17, rewrite: { to: 9, text: "So fix" } };
+    const view = makeView(doc);
+    view.dispatch({ effects: setPendingAIRanges.of([rewrite]) });
+
+    view.dispatch({ selection: { anchor: 7 } });
+    expect(view.contentDOM.textContent).toBe(doc);
+    expect(spans(view)).toEqual([
+      { from: 0, to: 9, widget: false },
+      { from: 9, to: 17, widget: false },
+    ]);
+
+    // A rewrite that streams on meanwhile doesn't cover the caret again.
+    view.dispatch({ effects: setPendingAIRanges.of([rewrite]) });
+    expect(view.contentDOM.textContent).toBe(doc);
+
+    view.dispatch({ selection: { anchor: 17 } });
+    view.dispatch({ effects: setPendingAIRanges.of([rewrite]) });
+    expect(view.contentDOM.textContent).toBe("So fix the bug");
+    view.destroy();
+  });
+
+  it("covers a file chip inside the words it rewrote, and gives it back after", () => {
+    const parent = document.createElement("div");
+    const view = new EditorView({
+      parent,
+      state: EditorState.create({
+        doc: "open @src/a.ts now please",
+        extensions: [pendingAIField, createFileChipField()],
+      }),
+    });
+    view.dispatch({
+      effects: setPendingAIRanges.of([
+        { from: 0, to: 25, rewrite: { to: 18, text: "Open @src/a.ts now" } },
+      ]),
+    });
+
+    expect(view.contentDOM.querySelector(".cm-file-chip")).toBeNull();
+    expect(view.contentDOM.textContent).toBe("Open @src/a.ts now please");
+
+    view.dispatch({ effects: setPendingAIRanges.of([]) });
+    expect(view.contentDOM.querySelector(".cm-file-chip")?.textContent).toBe("@src/a.ts");
+    view.destroy();
+  });
+
+  it("drops the rewrite when the correction lands over it", () => {
+    const view = makeView("um so fix the bug");
+    view.dispatch({
+      effects: setPendingAIRanges.of([{ from: 0, to: 17, rewrite: { to: 9, text: "So fix" } }]),
+    });
+    view.dispatch({
+      changes: { from: 0, to: 17, insert: "So fix the bug." },
+      effects: setPendingAIRanges.of([]),
+    });
+
+    expect(spans(view)).toEqual([]);
+    expect(view.contentDOM.textContent).toBe("So fix the bug.");
+    view.destroy();
+  });
+
   it("filters ranges where clamped from >= clamped to", () => {
     const view = makeView("hi");
     view.dispatch({ effects: setPendingAIRanges.of([{ from: 50, to: 100 }]) });
@@ -1177,14 +1454,14 @@ describe("voice decoration phase integration", () => {
       effects: [setInterimText.of("draft"), setPendingAIRanges.of([{ from: 6, to: 11 }])],
     });
 
-    expect(view.state.field(interimWidgetField)).toBe("draft");
+    expect(view.state.field(interimWidgetField).text).toBe("draft");
     expect(view.state.field(pendingAIField).iter().value).not.toBeNull();
 
     view.dispatch({
       effects: [setInterimText.of(""), setPendingAIRanges.of([])],
     });
 
-    expect(view.state.field(interimWidgetField)).toBe("");
+    expect(view.state.field(interimWidgetField).text).toBe("");
     expect(view.state.field(pendingAIField).iter().value).toBeNull();
     expect(view.contentDOM.querySelector(".cm-voice-interim")).toBeNull();
     view.destroy();
@@ -1355,21 +1632,6 @@ describe("resolveInputBarColors", () => {
     expect(colors.successColor).toBe("#89d185");
   });
 
-  it("resolves voiceCursor from theme.yellow", () => {
-    const colors = resolveInputBarColors({ ...fullTheme, yellow: "#e5c07b" });
-    expect(colors.voiceCursor).toBe("#e5c07b");
-  });
-
-  it("falls back voiceCursor to brightYellow when yellow is missing", () => {
-    const colors = resolveInputBarColors({ ...fullTheme, brightYellow: "#f9e2af" });
-    expect(colors.voiceCursor).toBe("#f9e2af");
-  });
-
-  it("falls back voiceCursor to #e5c07b when both yellow and brightYellow are missing", () => {
-    const colors = resolveInputBarColors(fullTheme);
-    expect(colors.voiceCursor).toBe("#e5c07b");
-  });
-
   it("fits an rgb() palette exactly as it fits the same colours in hex", () => {
     const hex = resolveInputBarColors({ background: "#1e1e2e", foreground: "#cdd6f4" });
     const rgb = resolveInputBarColors({
@@ -1421,19 +1683,63 @@ describe("buildInputBarTheme", () => {
     expect(invalidRule).toContain(`color: ${colors.errorColor}`);
   });
 
-  it("includes voice-active cursor CSS rules scoped to [data-voice-active]", () => {
+  it("draws the dictation caret as a level meter clear of the text", () => {
     const css = readGeneratedCss([buildInputBarTheme(theme)]);
     const colors = resolveInputBarColors(theme);
+    // Every base rule whose selector list names the selector, merged in order;
+    // media blocks aside.
+    const base = withoutMediaBlocks(css);
+    const rule = (selector: string) => {
+      const bodies = [...base.matchAll(/([^{}]+)\{([^}]*)\}/g)].filter((m) =>
+        (m[1] ?? "").split(",").some((s) => s.trim().replace(/^\.ͼ\w+ /, "") === selector)
+      );
+      if (bodies.length === 0) throw new Error(`selector ${selector} not found in CSS`);
+      return Object.assign({}, ...bodies.map((m) => parseDeclarations(m[2] ?? "")));
+    };
+    // The meter takes its own width, and starts a gap past the word before it.
+    expect(rule(".cm-voice-caret")["padding-left"]).toBe("11px");
+    const track = rule(".cm-voice-caret::before");
+    const fill = rule(".cm-voice-caret::after");
+    for (const part of [track, fill]) {
+      expect(part.position).toBe("absolute");
+      expect([part.left, part.width]).toEqual(["6px", "3px"]);
+    }
+    expect(track["background-color"]).toContain("color-mix");
+    expect(fill["background-color"]).toBe(colors.voiceSignal.toLowerCase());
+    expect(fill["transform-origin"]).toBe("bottom");
+    expect(fill.transform).toBe("scaley(0)");
+
+    const live = rule('.cm-voice-caret[data-phase="live"]::after');
+    expect(live.transform).toContain(`var(${VOICE_CARET_LEVEL_PROPERTY}, 1)`);
+    expect(live.transition).toContain("transform");
+
+    const held = rule('.cm-voice-caret[data-phase="held"]::after');
+    expect(held["background-color"]).toBe(colors.voiceHeld.toLowerCase());
+    expect(held.transform).toBe("scaley(0.25)");
+
+    // Reduced motion holds the fill full, over the live rule, and lets its
+    // opacity carry the voice.
     expect(css).toMatch(
-      new RegExp(
-        `\\[data-voice-active="true"\\]\\s+\\.\\S+\\s+\\.cm-content\\s*\\{[^}]*caret-color:\\s*${colors.voiceCursor.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`
-      )
+      /@media \(prefers-reduced-motion: reduce\)\s*\{[^@]*\.cm-content \.cm-voice-caret\[data-phase="live"\]::after\s*\{\s*transform:\s*none[^}]*opacity:\s*calc\(0\.55 \+/
     );
     expect(css).toMatch(
-      new RegExp(
-        `\\[data-voice-active="true"\\]\\s+\\.\\S+\\.cm-focused\\s+\\.cm-cursor\\s*\\{[^}]*border-left:\\s*2px solid ${colors.voiceCursor.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`
-      )
+      /@media \(forced-colors: active\)\s*\{[^@]*\.cm-voice-caret::after\s*\{[^}]*border-left:\s*3px solid Highlight/
     );
+    expect(css).toMatch(
+      /@media \(forced-colors: active\)\s*\{[^@]*\.cm-voice-caret\[data-phase="held"\]::after\s*\{[^}]*border-left-color:\s*GrayText/
+    );
+  });
+
+  it("fits the live caret's quietest opacity to read at 3:1", () => {
+    // A cursor that reads at 55% keeps the floor; a dim one raises it.
+    expect(resolveInputBarColors(theme).voiceCaretFloor).toBe(0.55);
+    const dim = resolveInputBarColors({
+      background: "#110f0e",
+      foreground: "#c5beb2",
+      cursor: "#918a7f",
+    });
+    expect(dim.voiceCaretFloor).toBeGreaterThan(0.55);
+    expect(dim.voiceCaretFloor).toBeLessThanOrEqual(1);
   });
 
   it("keeps file paths and chip labels fully visible instead of cropping them", () => {
@@ -1560,6 +1866,24 @@ function extractRuleBody(css: string, selector: string): string {
     throw new Error(`selector ${selector} not found in CSS`);
   }
   return match[1];
+}
+
+function withoutMediaBlocks(css: string): string {
+  let out = "";
+  let i = 0;
+  while (i < css.length) {
+    const at = css.indexOf("@media", i);
+    if (at === -1) return out + css.slice(i);
+    out += css.slice(i, at);
+    let depth = 0;
+    let j = css.indexOf("{", at);
+    for (; j < css.length; j++) {
+      if (css[j] === "{") depth++;
+      else if (css[j] === "}" && --depth === 0) break;
+    }
+    i = j + 1;
+  }
+  return out;
 }
 
 function parseDeclarations(body: string): Record<string, string> {

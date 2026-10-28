@@ -185,6 +185,28 @@ describe("webContentsRegistry", () => {
     expect(getAppView(winB)).toBe(viewB);
   });
 
+  it("getShownAppWebContents lists the view each window shows, never a cached one", async () => {
+    const { getShownAppWebContents, getAllAppWebContents, registerAppView, registerProjectView } =
+      await loadRegistry();
+    const winA = createWindow(1);
+    const winB = createWindow(2);
+    const shownA = createWebContents(201);
+    const shownB = createWebContents(202);
+    const cached = createWebContents(203);
+    electronMock.fromId.mockImplementation((id) =>
+      id === cached.id ? (cached as unknown as WebContents) : null
+    );
+    registerAppView(winA, createView(shownA));
+    registerAppView(winB, createView(shownB));
+    registerProjectView("project-c", cached as unknown as WebContents);
+
+    expect(getAllAppWebContents()).toContain(cached);
+    expect(getShownAppWebContents()).toEqual([shownA, shownB]);
+
+    shownB.setDestroyed(true);
+    expect(getShownAppWebContents()).toEqual([shownA]);
+  });
+
   it("getAllAppWebContents prunes app views whose webContents became undefined", async () => {
     const { getAllAppWebContents, getAppView, registerAppView } = await loadRegistry();
     const win = createWindow(1);
@@ -383,6 +405,49 @@ describe("webContentsRegistry", () => {
 
     unregisterProjectView(wc.id);
     expect(isCachedViewWebContents(wc.id)).toBe(false);
+  });
+
+  it("lists every project view a window holds, current first, and no other window's", async () => {
+    const {
+      getWindowAppWebContents,
+      getProjectForWebContents,
+      isCachedViewWebContents,
+      registerAppView,
+      registerCachedViewWebContents,
+      registerProjectView,
+      registerWebContents,
+    } = await loadRegistry();
+    const win = createWindow(1);
+    const otherWin = createWindow(2);
+    const front = createWebContents(201);
+    const cached = createWebContents(202);
+    const elsewhere = createWebContents(203);
+    const byId = new Map([front, cached, elsewhere].map((wc) => [wc.id, wc]));
+    electronMock.fromId.mockImplementation(
+      (id) => (byId.get(id) as unknown as WebContents) ?? null
+    );
+
+    registerProjectView("project-b", cached as unknown as WebContents);
+    registerWebContents(cached as unknown as WebContents, win);
+    registerCachedViewWebContents(cached as unknown as WebContents);
+    registerProjectView("project-a", front as unknown as WebContents);
+    registerAppView(win, createView(front));
+    registerProjectView("project-c", elsewhere as unknown as WebContents);
+    registerWebContents(elsewhere as unknown as WebContents, otherWin);
+
+    expect(getWindowAppWebContents(win).map((wc) => wc.id)).toEqual([201, 202]);
+
+    cached.setDestroyed(true);
+    expect(getWindowAppWebContents(win).map((wc) => wc.id)).toEqual([201]);
+    expect(getProjectForWebContents(202)).toBeNull();
+    expect(isCachedViewWebContents(202)).toBe(false);
+  });
+
+  it("falls back to the window's own webContents when it holds no project views", async () => {
+    const { getWindowAppWebContents } = await loadRegistry();
+    const win = createWindow(3);
+
+    expect(getWindowAppWebContents(win)).toEqual([win.webContents]);
   });
 
   describe("fallback-eligible project set (#12557)", () => {

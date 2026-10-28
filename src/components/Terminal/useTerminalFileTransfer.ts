@@ -1,7 +1,10 @@
 import { useEffect, useLayoutEffect, useRef } from "react";
 import type { AgentState } from "@shared/types/agent";
 import { terminalClient } from "@/clients";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import {
+  peek as peekTerminalService,
+  with as withTerminalService,
+} from "@/services/terminal/terminalInstanceServiceAccessor";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { quoteLaunchArgOptional } from "@shared/utils/shellEscape.js";
 import { hostShellDialect } from "@/hooks/useHostPlatform";
@@ -26,8 +29,12 @@ import { notify } from "@/lib/notify";
 import { copyWithToast } from "@/lib/copyWithToast";
 import { pluralize } from "@/lib/pluralize";
 import { hasAgentContextDrag, readAgentContextDrag } from "@/lib/agentContextDragPayload";
-import { draftAgentContext, getDraftRefusal } from "@/services/agentHandoff/agentDraft";
-import { focusPanelInput } from "@/components/Panel/panelFocusRegistry";
+import {
+  draftAgentContext,
+  draftAgentContextReference,
+  getDraftRefusal,
+} from "@/services/agentHandoff/agentDraft";
+import { requestPaneFocus } from "./paneFocusRequest";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import {
   IMAGE_EXTENSIONS,
@@ -247,11 +254,9 @@ interface UseTerminalFileTransferOptions extends TerminalFileTransferIdentity {
    */
   cwdProvider?: () => string;
   /**
-   * Where a click on the terminal would put the keyboard right now — the
-   * input bar for an activation click on a pane that remembers it. A file
-   * drop that finds neither the terminal nor its input bar holding the
-   * keyboard lands there. Omitted means xterm, which is where a click goes
-   * wherever there is no pane to activate.
+   * Where a click on the terminal would put the keyboard right now, which is
+   * where a file dropped on an agent pane's terminal lands. Omitted means
+   * xterm, wherever there is no pane.
    */
   dropClickTarget?: () => TerminalFocusTarget;
 }
@@ -264,9 +269,9 @@ interface UseTerminalFileTransferOptions extends TerminalFileTransferIdentity {
  * - **Text paste:** Passes through to xterm's native handler (bracketed paste, etc.).
  * - **File drop:** Resolves the dropped paths, runs each through `materialize`, and
  *   writes the results into the terminal as text. Works for image and non-image files.
- *   An agent pane's drop goes to whichever of the terminal and its input bar holds
- *   the keyboard (`paneDropRouting`), so this also takes drops let go over the bar
- *   while xterm holds it, and hands the bar the ones it should get.
+ *   An agent pane's drop lands where a click at the drop point would put the
+ *   keyboard (`paneDropRouting`), so this hands the bar the drops a click on the
+ *   terminal would send there, and takes the ones the bar can't.
  * - **Images to an agent that attaches them** (#12792): when the agent declares
  *   `imageInput: "bracketed-path"` and xterm reports bracketed-paste mode, each
  *   image is pasted on its own as its raw absolute path — the only form the
@@ -378,7 +383,7 @@ export function useTerminalFileTransfer(
       return {
         isAgent,
         agentId,
-        inputEpoch: terminalInstanceService.getUserInputEpoch(terminalId),
+        inputEpoch: peekTerminalService()?.getUserInputEpoch(terminalId) ?? 0,
         hasPanel: panel !== undefined,
         worktreeId: panel?.worktreeId ?? undefined,
         restartKey: panel && isPtyPanel(panel) ? (panel.restartKey ?? 0) : 0,
@@ -401,19 +406,14 @@ export function useTerminalFileTransfer(
     // paths that just landed (#11809). Once per accepted batch, and never for
     // a drop the guards discarded.
     //
-    // Order matters. The preference is what `TerminalPane`'s focus effect
-    // reads to decide which sub-surface the newly selected pane hands the
-    // keyboard to, so leaving it on "hybridInput" would route the keyboard to
-    // the input bar even though the paths went to the PTY.
-    //
-    // xterm is focused directly rather than through the panel focus registry:
-    // the drop proves this wrapper is mounted, the target is unambiguously
-    // xterm, and the Assistant and Dev Preview consoles have no registry
-    // entry under their PTY id to route through in the first place.
+    // The request is what keeps the newly selected pane's focus pass on the
+    // terminal rather than the input bar, since the paths went to the PTY. The
+    // Assistant and Dev Preview consoles have no pane under their PTY id to
+    // take it, so a request nothing took falls back to focusing xterm here:
+    // the drop proves this wrapper is mounted.
     const handOffFocus = () => {
-      usePanelStore.getState().setPreferredTerminalFocusTarget("xterm");
       onDropSelectRef.current?.();
-      terminalInstanceService.focus(terminalId);
+      if (!requestPaneFocus(terminalId, "xterm")) peekTerminalService()?.focus(terminalId);
     };
 
     // The OS hands drop and clipboard-save an absolute path, so the agent
@@ -436,7 +436,7 @@ export function useTerminalFileTransfer(
      * that never enabled it would render the delimiters as literal input.
      */
     const writeToTerminal = (text: string, isAgent: boolean, automatic: boolean) => {
-      const managed = terminalInstanceService.get(terminalId);
+      const managed = peekTerminalService()?.get(terminalId) ?? null;
       const useBracketedPaste = managed ? managed.terminal.modes.bracketedPasteMode : isAgent;
       // The unwrapped branch writes at the parser directly, so it needs the
       // neutralisation the wrapper performs for the other one. Paths carrying
@@ -448,7 +448,10 @@ export function useTerminalFileTransfer(
         : neutralizeControlCharacters(text);
 
       terminalClient.write(terminalId, payload);
-      terminalInstanceService.notifyUserInput(terminalId, "", { automatic });
+      withTerminalService(
+        (service) => service.notifyUserInput(terminalId, "", { automatic }),
+        terminalId
+      );
       // The unwrapped text — bracket markers must not reach input tracking.
       onInput?.(text);
     };
@@ -471,7 +474,7 @@ export function useTerminalFileTransfer(
       if (getEffectiveAgentConfig(agentId)?.capabilities?.imageInput !== "bracketed-path") {
         return false;
       }
-      return terminalInstanceService.get(terminalId)?.terminal.modes.bracketedPasteMode === true;
+      return peekTerminalService()?.get(terminalId)?.terminal.modes.bracketedPasteMode === true;
     };
 
     const joinText = (segments: readonly ImageInputSegment[]): string =>
@@ -574,7 +577,10 @@ export function useTerminalFileTransfer(
             const segment = segments[index]!;
             const text = segment.kind === "image" ? segment.path : segment.text;
             terminalClient.write(terminalId, formatWithBracketedPaste(text));
-            terminalInstanceService.notifyUserInput(terminalId, "", { automatic });
+            withTerminalService(
+              (service) => service.notifyUserInput(terminalId, "", { automatic }),
+              terminalId
+            );
             onInput?.(text);
           }
         })
@@ -681,10 +687,9 @@ export function useTerminalFileTransfer(
     const acceptsAgentContext = (): boolean => getDraftRefusal(terminalId) === null;
 
     // Where a drag let go over this terminal lands. An agent pane's files go
-    // to whichever of the terminal and its input bar holds the keyboard, as a
-    // paste would; with neither holding it, to wherever a click here would
-    // have put it. A shell's drop and an agent-context handoff keep their own
-    // routes: a shell takes no `@` tokens, and the handoff drafts on its own.
+    // where a click on the terminal would put the keyboard. A shell's drop and
+    // an agent-context handoff keep their own routes: a shell takes no `@`
+    // tokens, and the handoff drafts on its own.
     const dropTarget = (types: readonly string[]): TerminalFocusTarget => {
       if (hasAgentContextDrag(types) || !isAgentTerminal()) return "xterm";
       return resolvePaneDropTarget(terminalId, "xterm", dropClickTargetRef.current?.() ?? "xterm");
@@ -751,17 +756,19 @@ export function useTerminalFileTransfer(
       if (hasAgentContextDrag(transfer.types)) {
         const payload = readAgentContextDrag(transfer);
         if (payload === null) return;
-        const result = draftAgentContext(terminalId, {
-          text: payload.text,
-          title: payload.title,
-          sourceLabel: payload.source?.label,
-        });
+        const result =
+          payload.v === 2
+            ? draftAgentContextReference(terminalId, payload.reference)
+            : draftAgentContext(terminalId, {
+                text: payload.text,
+                title: payload.title,
+                sourceLabel: payload.source?.label,
+              });
         if (result.status !== "drafted") return;
         // Lands like a drop on the bar itself: pane selected, keyboard in the
         // bar rather than xterm, since that is where the text went.
-        usePanelStore.getState().setPreferredTerminalFocusTarget("hybridInput");
         onDropSelectRef.current?.();
-        focusPanelInput(terminalId);
+        requestPaneFocus(terminalId, "hybridInput");
         return;
       }
 
@@ -861,13 +868,8 @@ export function useTerminalFileTransfer(
     };
 
     // The terminal's half of the pane's drop routing: the input bar hands it a
-    // drop let go over the bar while xterm holds the keyboard. Measured against
-    // xterm's host rather than this wrapper, which also holds the upload chips:
-    // a focused Cancel button there is not the terminal taking the keyboard.
+    // drop let go over the bar when the bar can't take it.
     const unregisterPaneDropTarget = registerPaneDropTarget(terminalId, "xterm", {
-      ownsFocus: () =>
-        terminalInstanceService.get(terminalId)?.hostElement.contains(document.activeElement) ??
-        false,
       canTake: canInsert,
       take: (sources) => {
         if (sources.length === 0 || !canInsert()) return false;

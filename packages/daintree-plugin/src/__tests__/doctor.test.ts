@@ -1,9 +1,16 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { execa } from "execa";
-import { runDoctor } from "../commands/doctor.js";
+const sendCliRequest = vi.hoisted(() => vi.fn());
+
+vi.mock("../ipc/client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../ipc/client.js")>()),
+  sendCliRequest,
+}));
+
+import { describeHostSurfaceRefusals, runDoctor } from "../commands/doctor.js";
 
 let projectRoot: string;
 
@@ -200,6 +207,83 @@ describe("runDoctor", () => {
     expect(result.ok).toBe(false);
   });
 
+  const TOUR_MANIFEST = {
+    ...VALID_MANIFEST,
+    contributes: {
+      ...VALID_MANIFEST.contributes,
+      tours: [
+        {
+          id: "welcome",
+          title: "Welcome Tour",
+          componentPath: "dist/tour.js",
+          chapters: [
+            { id: "intro", duration: 6, audioUrl: "tours/intro.ogg", narrationHash: "3fa9c21e" },
+          ],
+        },
+      ],
+    },
+  };
+
+  it("fails a tour whose scene module is missing and only warns about missing narration", async () => {
+    await initRepo();
+    await writePlugin("acme.demo", TOUR_MANIFEST);
+    await commitAll();
+
+    const result = await runDoctor(projectRoot, { offline: true });
+    const { errors, warnings } = result.plugins[0];
+    expect(errors.find((e) => e.includes('"dist/tour.js"'))).toContain("tours[0].componentPath");
+    expect(errors.some((e) => e.includes("intro.ogg"))).toBe(false);
+    expect(warnings.find((w) => w.includes('"tours/intro.ogg"'))).toContain("silent");
+    expect(result.ok).toBe(false);
+  });
+
+  it("passes a tour whose scene module and narration are committed", async () => {
+    await initRepo();
+    await writePlugin("acme.demo", TOUR_MANIFEST, {
+      "dist/index.mjs": WORKER_ENTRY,
+      "dist/panel.js": VIEW_ENTRY,
+      "dist/tour.js": "export const scenes = {};\n",
+      "tours/intro.ogg": "OggS",
+    });
+    await commitAll();
+
+    const result = await runDoctor(projectRoot, { offline: true });
+    expect(result.plugins[0].errors).toEqual([]);
+    expect(result.plugins[0].warnings.some((w) => w.includes("intro.ogg"))).toBe(false);
+  });
+
+  it("checks nested Assistant knowledge files and refuses a symlink that leaves the plugin", async () => {
+    await initRepo();
+    await fs.writeFile(path.join(projectRoot, "outside.md"), "# outside", "utf8");
+    const dir = await writePlugin("acme.demo", {
+      ...VALID_MANIFEST,
+      contributes: {
+        ...VALID_MANIFEST.contributes,
+        databases: [{ id: "ledger", location: "local" }],
+        assistantKnowledge: {
+          instructions: "knowledge/instructions.md",
+          skills: [{ id: "deploy", path: "knowledge/deploy" }],
+        },
+      },
+    });
+    await fs.mkdir(path.join(dir, "knowledge", "deploy"), { recursive: true });
+    await fs.symlink(
+      path.join(projectRoot, "outside.md"),
+      path.join(dir, "knowledge", "instructions.md")
+    );
+    await commitAll();
+
+    const result = await runDoctor(projectRoot, { offline: true });
+    const { errors } = result.plugins[0];
+    expect(errors.find((e) => e.includes("assistantKnowledge.instructions"))).toContain(
+      "outside the plugin directory"
+    );
+    expect(errors.find((e) => e.includes("knowledge/deploy/SKILL.md"))).toContain(
+      "assistantKnowledge.skills[0].path"
+    );
+    expect(result.ok).toBe(false);
+  });
+
   it("keeps several plugin directories independent and reports them all", async () => {
     await initRepo();
     await writePlugin("acme.good", VALID_MANIFEST);
@@ -271,5 +355,122 @@ describe("runDoctor", () => {
     const result = await runDoctor(projectRoot, { offline: true });
     expect(result.host.reachable).toBe(false);
     expect(result.host.note).toContain("offline");
+  });
+});
+
+describe("describeHostSurfaceRefusals", () => {
+  const plugins = [
+    {
+      id: "acme.board",
+      instanceId: "project__p__acme.board",
+      dirName: "board",
+      displayName: "Acme Board",
+    },
+    { id: "zeta.board", instanceId: "project__p__zeta.board", dirName: "zeta" },
+  ];
+
+  it("files each refusal under the refused plugin's directory, naming the holder", () => {
+    const notes = describeHostSurfaceRefusals(plugins, [
+      {
+        slot: "emptyCanvas",
+        pluginId: "project__p__zeta.board",
+        reason: "outranked",
+        heldBy: "project__p__acme.board",
+      },
+    ]);
+
+    expect([...notes.keys()]).toEqual(["zeta"]);
+    expect(notes.get("zeta")?.[0]).toContain("surfaces.emptyCanvas is not showing");
+    expect(notes.get("zeta")?.[0]).toContain("Acme Board also claims it");
+  });
+
+  it("names a default editor's pattern and its field rather than a surfaces key (#13811)", () => {
+    const notes = describeHostSurfaceRefusals(plugins, [
+      {
+        slot: "fileEditor:content/*.json",
+        pluginId: "project__p__zeta.board",
+        reason: "outranked",
+        heldBy: "project__p__acme.board",
+      },
+    ]);
+
+    expect(notes.get("zeta")?.[0]).toBe(
+      'the default editor for "content/*.json" (fileEditors[].default) is not in force: Acme Board also claims it in this project, and only one plugin can — Acme Board keeps it because its plugin id sorts first'
+    );
+  });
+
+  it("explains a view that registered nothing and skips refusals it can't place", () => {
+    const notes = describeHostSurfaceRefusals(plugins, [
+      { slot: "emptyCanvas", pluginId: "project__p__acme.board", reason: "unresolved-view" },
+      { slot: "emptyCanvas", pluginId: "project__elsewhere__x.y", reason: "outranked" },
+    ]);
+
+    expect(notes.get("board")).toEqual([
+      "surfaces.emptyCanvas is not showing: the view it names registered nothing Daintree can show",
+    ]);
+    expect(notes.size).toBe(1);
+  });
+});
+
+describe("runDoctor with a running host", () => {
+  const hostPlugins = [
+    {
+      id: "acme.board",
+      instanceId: "project__p__acme.board",
+      dirName: "board",
+      displayName: "Acme Board",
+      state: "active",
+    },
+    { id: "zeta.board", instanceId: "project__p__zeta.board", dirName: "zeta", state: "active" },
+  ];
+
+  beforeEach(async () => {
+    sendCliRequest.mockReset();
+    await writePlugin("board", { ...VALID_MANIFEST, name: "acme.board" });
+    await writePlugin("zeta", { ...VALID_MANIFEST, name: "zeta.board" });
+  });
+
+  const byDir = (result: Awaited<ReturnType<typeof runDoctor>>, dirName: string) =>
+    result.plugins.find((plugin) => plugin.dirName === dirName);
+
+  it("warns the refused plugin about the slot the host gave to another", async () => {
+    sendCliRequest.mockResolvedValue({
+      known: true,
+      trust: { decision: "enabled", enabled: true },
+      plugins: hostPlugins,
+      surfaceRefusals: [
+        {
+          slot: "emptyCanvas",
+          pluginId: "project__p__zeta.board",
+          reason: "outranked",
+          heldBy: "project__p__acme.board",
+        },
+      ],
+    });
+
+    const result = await runDoctor(projectRoot, { lint: false });
+
+    expect(byDir(result, "zeta")?.warnings).toContain(
+      "surfaces.emptyCanvas is not showing: Acme Board also claims it in this project, and only one plugin can — Acme Board keeps it because its plugin id sorts first"
+    );
+    expect(byDir(result, "board")?.warnings.some((w) => w.startsWith("surfaces."))).toBe(false);
+    // A lost slot is a warning: the plugin still loads, so it doesn't fail doctor.
+    expect(byDir(result, "zeta")?.errors.some((e) => e.startsWith("surfaces."))).toBe(false);
+  });
+
+  it("reads an older host that sends no refusals as having none", async () => {
+    sendCliRequest.mockResolvedValue({
+      known: true,
+      trust: { decision: "enabled", enabled: true },
+      plugins: hostPlugins,
+    });
+
+    const result = await runDoctor(projectRoot, { lint: false });
+
+    expect(result.host.reachable).toBe(true);
+    expect(byDir(result, "zeta")?.hostState).toBe("active");
+    for (const plugin of result.plugins) {
+      expect(plugin.warnings.some((w) => w.startsWith("surfaces."))).toBe(false);
+    }
   });
 });

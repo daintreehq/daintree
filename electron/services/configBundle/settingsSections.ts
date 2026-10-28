@@ -8,6 +8,7 @@ import { isAgentInstalled } from "../../../shared/utils/agentAvailability.js";
 import { isSensitiveEnvKey } from "../../../shared/utils/envVars.js";
 import { findSecretInValue } from "../../../shared/utils/secretScrubber.js";
 import type { ConfigImportLeafResult } from "../../../shared/types/configBundle.js";
+import { isIdleShellThresholdMinutes } from "../../../shared/types/ipc/idleBackgroundAutoClose.js";
 import { sanitizeModelId, sanitizeModelIdMap } from "../../utils/helpAssistantModels.js";
 import {
   asBoolean,
@@ -39,9 +40,8 @@ import {
 
 /**
  * The sections added for Copy settings (#13346). Each writes through the
- * setter its Settings page uses, so a running service (the hibernation timer,
- * the idle checks, the plugin update checker) changes with it rather than on
- * the next launch.
+ * setter its Settings page uses, so a running service (the idle checks, the
+ * plugin update checker) changes with it rather than on the next launch.
  */
 
 const hours = (value: unknown) =>
@@ -50,25 +50,6 @@ const minutes = (value: unknown) => (typeof value === "number" ? `${value} min` 
 
 function agentName(agentId: string): string {
   return getEffectiveAgentConfig(agentId)?.name ?? agentId;
-}
-
-export function hibernationSection(): SectionHandler {
-  return scalarSection({
-    id: "hibernation",
-    fields: {
-      enabled: { label: "Hibernate unused projects", normalize: asBoolean },
-      inactiveThresholdHours: {
-        label: "Hibernate after",
-        normalize: boundedInteger(1, 168),
-        display: hours,
-      },
-    },
-    read: () => store.get("hibernation"),
-    write: async (patch) => {
-      const { getHibernationService } = await import("../HibernationService.js");
-      getHibernationService().updateConfig(patch);
-    },
-  });
 }
 
 export function sessionRestoreSection(): SectionHandler {
@@ -104,6 +85,8 @@ export function idleTerminalNotifySection(): SectionHandler {
   });
 }
 
+const readIdleBackgroundAutoClose = () => store.get("idleBackgroundAutoClose");
+
 export function idleBackgroundAutoCloseSection(): SectionHandler {
   return scalarSection({
     id: "idleBackgroundAutoClose",
@@ -114,8 +97,26 @@ export function idleBackgroundAutoCloseSection(): SectionHandler {
         normalize: boundedInteger(15, 1440),
         display: minutes,
       },
+      includeIdleShells: { label: "Include projects with idle terminals", normalize: asBoolean },
+      idleShellThresholdMinutes: {
+        label: "Sleep terminal projects after",
+        normalize: (value) => (isIdleShellThresholdMinutes(value) ? value : undefined),
+        invalidReason: "Not 60, 120, 240 or 480 minutes",
+        display: minutes,
+      },
     },
-    read: () => store.get("idleBackgroundAutoClose"),
+    // Defaults filled in, so a snapshot of a pre-#13849 object still restores
+    // the shell opt-in to off rather than leaving an imported value in place.
+    read: () => {
+      const stored: Partial<ReturnType<typeof readIdleBackgroundAutoClose>> | undefined =
+        readIdleBackgroundAutoClose();
+      if (!stored) return stored;
+      return {
+        ...stored,
+        includeIdleShells: stored.includeIdleShells ?? false,
+        idleShellThresholdMinutes: stored.idleShellThresholdMinutes ?? 60,
+      };
+    },
     write: async (patch) => {
       const { getIdleBackgroundAutoCloseService } =
         await import("../IdleBackgroundAutoCloseService.js");

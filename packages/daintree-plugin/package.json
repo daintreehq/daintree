@@ -1,6 +1,6 @@
 {
   "name": "daintree-plugin",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "CLI for building, validating, packaging, and installing Daintree plugins.",
   "license": "Apache-2.0",
   "repository": {
@@ -58,7 +58,7 @@
     "zod": "^4.6.5"
   },
   "optionalDependencies": {
-    "playwright-core": "~1.63.0"
+    "playwright-core": "~1.64.1"
   },
   "devDependencies": {
     "tsup": "^8.5.1"

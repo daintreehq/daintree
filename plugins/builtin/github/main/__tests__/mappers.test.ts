@@ -6,6 +6,7 @@ import {
   mapMergeStateStatus,
   restToForgePR,
   toForgeIssue,
+  toForgeNumberReference,
   toForgePR,
 } from "../mappers.js";
 import {
@@ -315,5 +316,176 @@ describe("queries feeding the PR mappers project mergeStateStatus", () => {
     ["buildBatchPRsQuery", buildBatchPRsQuery("o", "r", [1])],
   ])("%s selects it on the PR node", (_name, query) => {
     expect(query).toContain("mergeStateStatus");
+  });
+});
+
+describe("pending forge-side merges (#13747)", () => {
+  const node = (extra: Record<string, unknown> = {}) => ({
+    number: 13747,
+    title: "t",
+    bodyText: "",
+    url: "https://github.com/o/r/pull/13747",
+    state: "OPEN",
+    updatedAt: "2026-10-22T00:00:00Z",
+    ...extra,
+  });
+
+  it("maps an armed auto-merge with method, time and who armed it", () => {
+    const pr = toForgePR(
+      node({
+        isInMergeQueue: false,
+        autoMergeRequest: {
+          enabledAt: "2026-10-22T01:00:00Z",
+          mergeMethod: "SQUASH",
+          enabledBy: { login: "octocat" },
+        },
+      })
+    );
+    expect(pr.mergeIntent).toEqual({
+      kind: "auto-merge",
+      method: "squash",
+      enabledAt: Date.parse("2026-10-22T01:00:00Z"),
+      enabledBy: "octocat",
+    });
+  });
+
+  it("reads a queued PR as queued whether or not auto-merge put it there", () => {
+    expect(
+      toForgePR(
+        node({ isInMergeQueue: true, autoMergeRequest: null, mergeQueueEntry: { position: 3 } })
+      ).mergeIntent
+    ).toEqual({ kind: "queued", position: 3 });
+    expect(toForgePR(node({ isInMergeQueue: true })).mergeIntent).toEqual({
+      kind: "queued",
+      position: null,
+    });
+  });
+
+  it("separates nothing pending (null) from not read (absent)", () => {
+    expect(
+      toForgePR(node({ isInMergeQueue: false, autoMergeRequest: null })).mergeIntent
+    ).toBeNull();
+    expect("mergeIntent" in toForgePR(node())).toBe(false);
+  });
+
+  it("keeps unknown actors and times unknown rather than inventing them", () => {
+    const pr = toForgePR(
+      node({ autoMergeRequest: { enabledAt: null, mergeMethod: null, enabledBy: null } })
+    );
+    expect(pr.mergeIntent).toEqual({ kind: "auto-merge", method: null, enabledAt: null });
+  });
+
+  it.each([
+    ["CLEAN", "clean"],
+    ["HAS_HOOKS", "has_hooks"],
+    ["UNSTABLE", "unstable"],
+    ["BLOCKED", "blocked"],
+    ["BEHIND", "behind"],
+    ["DIRTY", "dirty"],
+    ["DRAFT", "unknown"],
+    ["SOMETHING_NEW", "unknown"],
+  ])("maps mergeStateStatus %s to %s", (raw, expected) => {
+    expect(toForgePR(node({ mergeStateStatus: raw })).mergeStatus).toBe(expected);
+  });
+
+  it("maps the single-PR read's commit preview, and nothing from a roll-up selection", () => {
+    const pr = toForgePR(
+      node({
+        headRefOid: "f".repeat(40),
+        isMergeQueueEnabled: true,
+        viewerCanDisableAutoMerge: false,
+        commits: {
+          totalCount: 120,
+          nodes: [
+            {
+              commit: {
+                oid: "1".repeat(40),
+                messageHeadline: "First",
+                author: { name: "A", user: null },
+              },
+            },
+            {
+              commit: {
+                oid: "2".repeat(40),
+                messageHeadline: "Second",
+                author: { user: { login: "b" } },
+              },
+            },
+          ],
+        },
+      })
+    );
+    expect(pr.headSha).toBe("f".repeat(40));
+    expect(pr.mergeQueueRequired).toBe(true);
+    expect(pr.viewerCanDisableAutoMerge).toBe(false);
+    expect(pr.commits).toEqual({
+      totalCount: 120,
+      items: [
+        { sha: "1".repeat(40), subject: "First", author: "A" },
+        { sha: "2".repeat(40), subject: "Second", author: "b" },
+      ],
+    });
+    const rollupOnly = toForgePR(
+      node({ commits: { nodes: [{ commit: { statusCheckRollup: { state: "SUCCESS" } } }] } })
+    );
+    expect("commits" in rollupOnly).toBe(false);
+  });
+
+  it.each([
+    ["SEARCH_QUERY", SEARCH_QUERY],
+    ["GET_PR_QUERY", GET_PR_QUERY],
+    ["buildBatchBranchPRQuery", buildBatchBranchPRQuery("o", "r", ["b"])],
+    ["buildBatchPRsQuery", buildBatchPRsQuery("o", "r", [1])],
+  ])("%s carries the pending-merge fields every detection path reads", (_name, query) => {
+    expect(query).toContain("autoMergeRequest");
+    expect(query).toContain("isInMergeQueue");
+    expect(query).toContain("headRefOid");
+  });
+});
+
+describe("toForgeNumberReference", () => {
+  it("reads an issue and a pull request in each of their states", () => {
+    expect(
+      toForgeNumberReference({ __typename: "Issue", number: 6, title: "New", state: "OPEN" })
+    ).toEqual({ kind: "issue", number: 6, title: "New", state: "open" });
+    expect(
+      toForgeNumberReference({
+        __typename: "PullRequest",
+        number: 10,
+        title: "Dropped",
+        state: "CLOSED",
+        isDraft: false,
+      })
+    ).toMatchObject({ kind: "pr", state: "closed" });
+    expect(
+      toForgeNumberReference({ __typename: "Issue", number: 7, title: "Crash", state: "CLOSED" })
+    ).toEqual({ kind: "issue", number: 7, title: "Crash", state: "closed" });
+    expect(
+      toForgeNumberReference({
+        __typename: "PullRequest",
+        number: 8,
+        title: "Fix",
+        state: "OPEN",
+        isDraft: true,
+      })
+    ).toEqual({ kind: "pr", number: 8, title: "Fix", state: "open", isDraft: true });
+    expect(
+      toForgeNumberReference({
+        __typename: "PullRequest",
+        number: 9,
+        title: "Old",
+        state: "MERGED",
+      })
+    ).toMatchObject({ state: "merged", isDraft: false });
+  });
+
+  it("can't read a node missing what a reference shows, or of another type", () => {
+    expect(
+      toForgeNumberReference({ __typename: "Issue", number: 7, state: "OPEN" })
+    ).toBeUndefined();
+    expect(
+      toForgeNumberReference({ __typename: "Discussion", number: 7, title: "Q", state: "OPEN" })
+    ).toBeUndefined();
+    expect(toForgeNumberReference(null)).toBeUndefined();
   });
 });

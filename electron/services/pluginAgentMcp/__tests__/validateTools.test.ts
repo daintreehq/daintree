@@ -334,3 +334,52 @@ describe("validateAgentMcpTools", () => {
     );
   });
 });
+
+describe("validateAgentMcpTools groups", () => {
+  const groups = [
+    { id: "search", access: "read" as const },
+    { id: "changes", access: "write" as const },
+  ];
+
+  it("snapshots each tool's declared group with what the manifest says it does", () => {
+    const [search, commit] = validateAgentMcpTools(
+      { search: tool({ group: "search" }), commit: tool({ group: "changes" }) },
+      { groups }
+    );
+
+    expect(search.group).toEqual({ id: "search", access: "read" });
+    expect(commit.group).toEqual({ id: "changes", access: "write" });
+    expect(Object.isFrozen(search.group)).toBe(true);
+  });
+
+  it("rejects a roster with a tool in no group, or in an undeclared one, when groups are declared", () => {
+    expect(() =>
+      validateAgentMcpTools({ search: tool({ group: "search" }), loose: tool() }, { groups })
+    ).toThrow(/tool "loose" must name one of its endpoint's groups/);
+    expect(() => validateAgentMcpTools({ search: tool({ group: "admin" }) }, { groups })).toThrow(
+      /names group "admin", which its endpoint does not declare/
+    );
+  });
+
+  it("rejects a group on an endpoint that declares none", () => {
+    expect(() =>
+      validateAgentMcpTools({ search: tool({ group: "search" }) }, { groups: [] })
+    ).toThrow(/declares no groups/);
+  });
+
+  it("checks only a group's shape where the manifest is out of reach", () => {
+    expect(validateAgentMcpTools({ search: tool({ group: "search" }) })[0].group).toBeUndefined();
+    expect(() => validateAgentMcpTools({ search: tool({ group: 7 }) })).toThrow(
+      /group must be a declared group id/
+    );
+  });
+
+  it("still refuses a read-only claim on a tool in a read group", () => {
+    expect(() =>
+      validateAgentMcpTools(
+        { search: tool({ group: "search", annotations: { readOnlyHint: true } }) },
+        { groups }
+      )
+    ).toThrow(/only the host may mark a tool read-only/);
+  });
+});

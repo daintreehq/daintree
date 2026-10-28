@@ -56,7 +56,8 @@ function once(run: () => unknown): () => void {
 /**
  * Shows a toast for the view `owner` renders. Returns its id, or null when
  * the options are unusable (they are ignored rather than thrown on, like any
- * kit prop).
+ * kit prop). Rate-limited by plugin alone, whatever the tone, in the bucket
+ * its backend's toasts share (#13766).
  */
 export function showPluginViewToast(owner: string | null, options: unknown): string | null {
   if (typeof options !== "object" || options === null) return null;
@@ -75,11 +76,13 @@ export function showPluginViewToast(owner: string | null, options: unknown): str
       };
     }
   }
+  const name = owner ? pluginDisplayName(owner) : undefined;
   return getPluginKitHost().showToast({
     type: tone,
-    message: owner ? `${pluginDisplayName(owner)}: ${message}` : message,
+    message: name ? `${name}: ${message}` : message,
     duration: readDuration(field(options, "durationMs")),
-    rateLimitKey: owner ? `plugin:${owner}:${tone}` : undefined,
+    rateLimitKey: owner ? `plugin:${owner}` : undefined,
+    rateLimitLabel: name,
     action,
   });
 }

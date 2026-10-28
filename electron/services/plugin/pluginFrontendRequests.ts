@@ -10,6 +10,11 @@ import {
   AGENT_CONTEXT_MAX_TITLE_LENGTH,
 } from "../../../shared/utils/agentContextDrag.js";
 import { SEND_TO_AGENT_MAX_ID_LENGTH, SEND_TO_AGENT_REFUSAL_REASONS } from "./sendToAgentLimits.js";
+import { RUN_RECIPE_MAX_ID_LENGTH, toRunRecipeResult } from "./runRecipeLimits.js";
+import {
+  MAX_PLUGIN_RECIPE_VARIABLES,
+  PLUGIN_RECIPE_VARIABLE_MAX_LENGTH,
+} from "../../../shared/utils/pluginRecipeVariables.js";
 import type {
   PluginUiPromptParams,
   PluginUiPromptResultValue,
@@ -40,6 +45,14 @@ export const PluginFrontendMethod = {
   ACTIONS_GET: "plugin.actions-get",
   /** `host.agents.list()`: the driving view's agent panes; answers `{ agents }`. */
   AGENTS_LIST: "plugin.agents-list",
+  /** `host.reloadPanel()`: reload one plugin panel in the driving view; answers a result or a rejection. */
+  PANEL_RELOAD: "plugin.panel-reload",
+  /**
+   * An account sign-in a remote window started: open the authorization URL in
+   * that machine's browser and catch the redirect on its loopback. Asked of
+   * the view that clicked Connect, never the project's driver.
+   */
+  ACCOUNT_SIGN_IN: "plugin.account-sign-in",
 } as const;
 
 /** A remote clipboard image must fit one link frame with room to spare. */
@@ -120,6 +133,17 @@ const PromptParamsSchema = z.discriminatedUnion("kind", [
       worktreeId: z.string().min(1).max(SEND_TO_AGENT_MAX_ID_LENGTH).optional(),
     }),
   }),
+  z.object({
+    kind: z.literal("runRecipe"),
+    request: z.object({
+      recipeId: z.string().min(1).max(RUN_RECIPE_MAX_ID_LENGTH),
+      variables: z
+        .record(z.string().max(64), z.string().max(PLUGIN_RECIPE_VARIABLE_MAX_LENGTH))
+        .refine((values) => Object.keys(values).length <= MAX_PLUGIN_RECIPE_VARIABLES),
+      worktreeId: z.string().min(1).max(RUN_RECIPE_MAX_ID_LENGTH).optional(),
+      sourceLabel: z.string().min(1).max(256),
+    }),
+  }),
 ]);
 
 const SendToAgentAnswerSchema = z.union([
@@ -174,6 +198,17 @@ export const PluginToastPayloadSchema = z.object({
   /** Already prefixed with the plugin's name by the host. */
   message: z.string().min(1).max(2400),
   durationMs: z.number().int().positive().max(60_000).optional(),
+  /**
+   * Names the plugin in an overflow summary. Absent from an older host, and
+   * one that is unusable (a manifest's display name is unbounded) is dropped
+   * rather than costing the toast.
+   */
+  pluginDisplayName: z.string().min(1).max(256).optional().catch(undefined),
+  /**
+   * A passive `host.notify` (#13818): the inbox only, no toast. Absent from an
+   * older host, and an older Shell drops it and shows the toast.
+   */
+  passive: z.boolean().optional().catch(undefined),
 });
 export type PluginToastPayload = z.infer<typeof PluginToastPayloadSchema>;
 
@@ -190,6 +225,17 @@ export const PluginActionsListPayloadSchema = z.object({ pluginId });
 export const PluginActionsGetPayloadSchema = z.object({ pluginId, actionId });
 
 export const PluginAgentsListPayloadSchema = z.object({ pluginId });
+
+export const PluginPanelReloadPayloadSchema = z.object({
+  pluginId,
+  panelId: z.string().min(1).max(512),
+});
+
+/** The view's answer to a panel reload: its acknowledgment, or why the panel isn't the plugin's to reload. */
+export const RemotePanelReloadAnswerSchema = z.union([
+  z.object({ result: z.enum(["scheduled", "not-mounted", "rate-limited", "unavailable"]) }),
+  z.object({ rejected: z.enum(["foreign", "non-plugin"]) }),
+]);
 
 /**
  * A driving view's answer to a plugin dispatch, checked before the plugin
@@ -218,6 +264,35 @@ export const PluginClipboardPayloadSchema = z.discriminatedUnion("op", [
   z.object({ op: z.literal("readText"), pluginId }),
 ]);
 export type PluginClipboardPayload = z.infer<typeof PluginClipboardPayloadSchema>;
+
+/**
+ * A sign-in the host runs for a remote window. `signInId` is the id the
+ * window's Shell gave this click, and `connectionId` the connection it asked
+ * for (null when it named none), so the Shell can match the request to the
+ * click it is answering. The URL carries no `redirect_uri`: the Shell adds its
+ * own loopback.
+ */
+export const PluginAccountSignInPayloadSchema = z.object({
+  signInId: z.string().min(1).max(128),
+  pluginId,
+  connectionId: z.string().min(1).max(256).nullable(),
+  authUrl: z.string().min(1).max(8192),
+});
+export type PluginAccountSignInPayload = z.infer<typeof PluginAccountSignInPayloadSchema>;
+
+/** How the Shell's loopback ended. The code is the provider's one-use authorization code. */
+export const PluginAccountSignInAnswerSchema = z.discriminatedUnion("success", [
+  z.object({
+    success: z.literal(true),
+    code: z.string().min(1).max(4096),
+    redirectUri: z.string().min(1).max(256),
+  }),
+  z.object({
+    success: z.literal(false),
+    cause: z.enum(["cancelled", "timed-out", "server-error", "open-external-failed", "denied"]),
+    error: z.string().max(256).optional(),
+  }),
+]);
 
 /**
  * The value a Shell answered a prompt with, re-derived from what the host
@@ -260,5 +335,7 @@ export function coercePromptAnswer(
       const parsed = SendToAgentAnswerSchema.safeParse(answer);
       return parsed.success ? parsed.data : { status: "cancelled" };
     }
+    case "runRecipe":
+      return toRunRecipeResult(answer);
   }
 }

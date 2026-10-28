@@ -1053,7 +1053,7 @@ export async function gradeFlushCadence(
 }
 
 /**
- * The collaborators `electron/pty-host.ts`'s IPC-fallback block touches.
+ * The collaborators the IPC-fallback block in `electron/pty-host/visualOutputRouter.ts` touches.
  *
  * Narrow on purpose: the four `ipcQueueManager` members the block calls and
  * nothing else. The real `IpcQueueManager` satisfies it structurally, and so
@@ -1125,19 +1125,19 @@ function ipcFallbackWrite(
 /**
  * The IPC fallback's own drive shape.
  *
- * **This is a MIRROR of `electron/pty-host.ts`'s fallback block, not a call
- * into it.** `pty-host.ts` is a UtilityProcess entry point: it has zero
- * exports, and its module body throws at line 89 when `process.parentPort` is
- * absent, which it is in every plain Node process. There is no seam to import,
- * so the ordered call sequence in {@link ipcFallbackWrite} is reproduced here —
- * the manager methods are the real ones, but the ORDER they are called in is
- * this fixture's copy of the host's.
+ * **This is a MIRROR of the fallback block in `routeOutput`
+ * (`electron/pty-host/visualOutputRouter.ts`), not a call into it.** The block sits mid-way
+ * through the whole per-chunk fanout, behind the dependency surface the
+ * UtilityProcess entry wires up, so the ordered call sequence in
+ * {@link ipcFallbackWrite} is reproduced here — the manager methods are the
+ * real ones, but the ORDER they are called in is this fixture's copy of the
+ * host's.
  *
  * What can therefore drift without any queue-manager change: the capacity gate
  * moving after `addBytes`, the utilization read being hoisted or dropped, an
  * `applyBackpressure` call being added or removed, or the drop branch growing a
  * step. {@link ipcFallbackMirrorMisses} grades that in the direction that
- * matters — what this fixture EXECUTES against what `pty-host.ts` contains —
+ * matters — what this fixture EXECUTES against what the router contains —
  * and {@link ipcFallbackSequenceMisses} pins the host source against the
  * declared constant beside it. See PERF-371.
  *
@@ -1242,8 +1242,8 @@ export function observeIpcFallbackSequences(): IpcFallbackSequences {
 }
 
 /**
- * The ordered `ipcQueueManager` calls `electron/pty-host.ts`'s IPC-fallback
- * block makes, as {@link runIpcFlood} mirrors them.
+ * The ordered `ipcQueueManager` calls the IPC-fallback block in
+ * `electron/pty-host/visualOutputRouter.ts` makes, as {@link runIpcFlood} mirrors them.
  *
  * Source order, including the drop branch's utilization read, which the arms
  * here never reach because nothing in them is at capacity:
@@ -1258,10 +1258,13 @@ export const IPC_FALLBACK_HOST_SEQUENCE: readonly string[] = [
   "applyBackpressure",
 ];
 
-const PTY_HOST_SOURCE_URL = new URL("../../../electron/pty-host.ts", import.meta.url);
+const IPC_FALLBACK_SOURCE_URL = new URL(
+  "../../../electron/pty-host/visualOutputRouter.ts",
+  import.meta.url
+);
 
 /**
- * The `if` that opens the IPC fallback block in `pty-host.ts`.
+ * The `if` that opens the IPC fallback block in `visualOutputRouter.ts`.
  *
  * A locator, not a copy of the gate: the condition itself moved into the
  * `sendIpcFallback` const above the block in #12557, so a change to WHEN the
@@ -1272,11 +1275,10 @@ const IPC_FALLBACK_BLOCK_MARKER = "if (sendIpcFallback) {";
 
 /**
  * Whether the host sequence {@link runIpcFlood} mirrors is still the sequence
- * `pty-host.ts` performs. 0 = no drift.
+ * `visualOutputRouter.ts` performs. 0 = no drift.
  *
- * `pty-host.ts` exports nothing and refuses to evaluate outside a
- * UtilityProcess, so its fallback path cannot be imported and driven — the
- * mirror in {@link runIpcFlood} is unavoidable. What IS avoidable is trusting
+ * The fallback path is not driven directly (see {@link runIpcFlood}), so the
+ * mirror there stands in for it. What IS avoidable is trusting
  * it: this reads the ordered `ipcQueueManager.<method>` calls straight out of
  * the host's own source and compares them positionally against
  * {@link IPC_FALLBACK_HOST_SEQUENCE}. A gate that moves, a utilization read
@@ -1292,7 +1294,7 @@ const IPC_FALLBACK_BLOCK_MARKER = "if (sendIpcFallback) {";
 export function ipcFallbackSequenceMisses(): number {
   let source: string;
   try {
-    source = readFileSync(PTY_HOST_SOURCE_URL, "utf8");
+    source = readFileSync(IPC_FALLBACK_SOURCE_URL, "utf8");
   } catch {
     return IPC_FALLBACK_HOST_SEQUENCE.length;
   }
@@ -1318,7 +1320,7 @@ export function ipcFallbackSequenceMissesIn(source: string): number {
  * comments, string literals, template literals or regexes. A stray brace inside
  * a comment or a string in the fallback block would move the block boundary and
  * a literal `ipcQueueManager.foo(` in a comment would be counted as a call.
- * Neither is true of `pty-host.ts` today, and the unit test drives the real
+ * Neither is true of `visualOutputRouter.ts` today, and the unit test drives the real
  * file, but a full parse is the only thing that would make it impossible. What
  * IS guaranteed is the failure direction: unbalanced input returns -1 and every
  * caller turns that into the maximum miss count, never into a clean pass.
@@ -1420,7 +1422,7 @@ function sequenceMisses(observed: readonly string[], expected: readonly string[]
 
 /**
  * Whether the sequence this fixture EXECUTES is still the sequence
- * `pty-host.ts` contains. 0 = no drift.
+ * `visualOutputRouter.ts` contains. 0 = no drift.
  *
  * The term {@link ipcFallbackSequenceMisses} could not provide. That one grades
  * the host's source against {@link IPC_FALLBACK_HOST_SEQUENCE}, a constant
@@ -1435,7 +1437,7 @@ function sequenceMisses(observed: readonly string[], expected: readonly string[]
 export function ipcFallbackMirrorMisses(): number {
   let source: string;
   try {
-    source = readFileSync(PTY_HOST_SOURCE_URL, "utf8");
+    source = readFileSync(IPC_FALLBACK_SOURCE_URL, "utf8");
   } catch {
     return IPC_FALLBACK_HOST_SEQUENCE.length;
   }
