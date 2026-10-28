@@ -17,6 +17,7 @@ import {
 } from "../lib/voicePipelineAudio";
 import {
   brokenWords,
+  checkIntent,
   formWords,
   literalTerm,
   parsePipelineArm,
@@ -412,5 +413,57 @@ describe("summarisePipeline", () => {
     );
     expect(a!.sessions).toBe(1);
     expect(b!.sessions).toBe(1);
+  });
+});
+
+describe("checkIntent", () => {
+  const question = ["question"];
+  const quote = ["quote"];
+
+  it("holds a question to a question and a statement to a statement", () => {
+    const asked = "Is it cached? Find out.";
+    expect(checkIntent(asked, "Is it cached? Find out.", question).question).toBe(true);
+    expect(checkIntent(asked, "Is it cached. Find out.", question).question).toBe(false);
+    // The instruction after the question doesn't become one.
+    expect(checkIntent(asked, "Is it cached, find out?", question).question).toBe(false);
+    const told = "I'm wondering whether it's cached.";
+    expect(checkIntent(told, told, question).question).toBe(true);
+    expect(checkIntent(told, "I'm wondering whether it's cached?", question).question).toBe(false);
+    // A question mark that moved, or a first question turned into a statement, is caught.
+    const two = "Why does it fail? Find out. Fix it.";
+    expect(checkIntent(two, "Why does it fail. Find out? Fix it.", question).question).toBe(false);
+    const pair = "How many a day? And what a month?";
+    expect(checkIntent(pair, "How many a day. And what a month?", question).question).toBe(false);
+    // Two questions joined into one is still asking both.
+    expect(checkIntent(pair, "How many a day, and what a month?", question).question).toBe(true);
+  });
+
+  it("holds quoted words to the reference's quotes, straight or curly", () => {
+    const reference = 'Make it say "Save and close" instead of "Done".';
+    expect(
+      checkIntent(
+        reference,
+        "Make it say \u201cSave and close\u201d instead of \u201cDone\u201d.",
+        quote
+      ).quotes
+    ).toBe(true);
+    expect(
+      checkIntent(reference, "Make it say save and close instead of done.", quote).quotes
+    ).toBe(false);
+    expect(
+      checkIntent(reference, 'Make it say "Save and close" instead of done.', quote).quotes
+    ).toBe(false);
+    // Swapped, or one span standing in for two, doesn't pass.
+    expect(
+      checkIntent(reference, 'Make it say "Done" instead of "Save and close".', quote).quotes
+    ).toBe(false);
+    // Reported speech stays unquoted.
+    const reported = "It told me the tests pass.";
+    expect(checkIntent(reported, reported, quote).quotes).toBe(true);
+    expect(checkIntent(reported, 'It told me "the tests pass".', quote).quotes).toBe(false);
+  });
+
+  it("checks nothing a clip doesn't test", () => {
+    expect(checkIntent("Commit it.", "Commit it?", [])).toEqual({ question: null, quotes: null });
   });
 });

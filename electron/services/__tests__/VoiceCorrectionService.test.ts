@@ -396,6 +396,48 @@ describe("VoiceCorrectionService", () => {
     ).not.toBe(base);
   });
 
+  it("tells only rules that name them the transcriber's habits, and keys the cache on it", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(makeFetchResponse({ corrected_text: "Ok." }));
+    vi.stubGlobal("fetch", fetchMock);
+    const requestFor = async (overrides: Record<string, unknown>) => {
+      fetchMock.mockClear();
+      await new VoiceCorrectionService().correct(
+        { rawText: "check that 1st" },
+        { ...BASE_SETTINGS, ...overrides }
+      );
+      return JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string) as {
+        prompt_cache_key: string;
+        input: Array<{ content: string }>;
+      };
+    };
+
+    const none = await requestFor({});
+    const grok = await requestFor({ transcriber: "grok" });
+    expect(none.input[0].content).not.toContain("TRANSCRIBER:");
+    expect(grok.input[0].content).toContain(
+      "TRANSCRIBER: The target was transcribed by xAI's Grok"
+    );
+    expect(grok.prompt_cache_key).not.toBe(none.prompt_cache_key);
+
+    // Luna's rules never learned of the notes.
+    const luna = await requestFor({ model: "gpt-6-luna", transcriber: "grok" });
+    expect(luna.input[0].content).not.toContain("TRANSCRIBER:");
+
+    // The rules decide, not the model: Terra with rules that never name the
+    // notes gets none, and Luna with rules that do gets them.
+    const terraLiteral = await requestFor({
+      transcriber: "grok",
+      instructions: LITERAL_CORRECTION_INSTRUCTIONS,
+    });
+    expect(terraLiteral.input[0].content).not.toContain("TRANSCRIBER:");
+    const lunaNamed = await requestFor({
+      model: "gpt-6-luna",
+      transcriber: "grok",
+      instructions: { core: CORE_CORRECTION_PROMPT, suffix: "Return JSON." },
+    });
+    expect(lunaNamed.input[0].content).toContain("TRANSCRIBER: The target was transcribed");
+  });
+
   it("folds workspace names into prompt_cache_key, and keeps the old key without them", async () => {
     const fetchMock = vi.fn().mockResolvedValue(makeFetchResponse({ corrected_text: "Ok." }));
     vi.stubGlobal("fetch", fetchMock);

@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { contentHash } from "../../e2e/helpers/voiceReplayScore";
 import {
   buildCorrectionSystemPrompt,
+  TRANSCRIBER_NOTES,
   type CorrectionInstructions,
   type VoiceReasoningEffort,
 } from "../../shared/config/voiceCorrection";
@@ -91,6 +92,8 @@ model and effort, against the live OpenAI API (needs OPENAI_API_KEY; costs money
   --seed <n>            request order seed (default 14793)
   --label <name>        result file prefix (default run)
   --no-stream           ask for the whole reply at once, as cleanup did before it streamed
+  --no-transcriber      leave out the notes on the transcriber a passage imitates, which
+                        production sends rules that name them
   --probe-prediction    also ask each model for Predicted Outputs and record the answer
   --rescore <run.json>  score a saved run again with today's corpus and scoring, sending
                         nothing, landing its replies as production lands them now`;
@@ -113,6 +116,7 @@ interface Options {
   label: string;
   probePrediction: boolean;
   stream: boolean;
+  transcriber: boolean;
   rescore: string | null;
 }
 
@@ -151,6 +155,7 @@ function parseArgs(argv: readonly string[]): Options | null {
     label: "run",
     probePrediction: false,
     stream: true,
+    transcriber: true,
     rescore: null,
   };
   for (let i = 0; i < argv.length; i++) {
@@ -204,6 +209,9 @@ function parseArgs(argv: readonly string[]): Options | null {
         break;
       case "--no-stream":
         options.stream = false;
+        break;
+      case "--no-transcriber":
+        options.transcriber = false;
         break;
       case "--probe-prediction":
         options.probePrediction = true;
@@ -307,12 +315,15 @@ function settingsFor(
   variant: Variant,
   profile: Profile,
   apiKey: string,
-  session: CleanupSession | undefined
+  session: CleanupSession | undefined,
+  // The provider whose error style the passage imitates, told as production tells the one in use.
+  style?: TranscriptStyle
 ): VoiceCorrectionSettings {
   const { commandTarget, ...names } = session ?? {};
   return {
     ...profile,
     ...names,
+    ...(style && style !== "generic" ? { transcriber: style } : {}),
     ...(commandTarget ? { commandTarget: agentCommandTarget(commandTarget) } : {}),
     model: variant.model,
     reasoningEffort: variant.effort,
@@ -574,6 +585,10 @@ export interface RunRecord {
   seed: number;
   repeats: number;
   stream: boolean;
+  /** Absent in runs saved before cleanup was told the transcriber; those sent no notes. */
+  transcriber?: boolean;
+  /** The notes sent to rules that name them, by the style a passage imitates. */
+  transcriberNotes?: typeof TRANSCRIBER_NOTES;
   variants: Variant[];
   /** The rules each variant sent, whole, so a later reader knows exactly what was asked. */
   prompts: Record<
@@ -1030,6 +1045,8 @@ async function main(): Promise<number> {
     platform: `${process.platform}-${process.arch}`,
     seed: options.seed,
     stream: options.stream,
+    transcriber: options.transcriber,
+    ...(options.transcriber ? { transcriberNotes: TRANSCRIBER_NOTES } : {}),
     repeats: options.repeats,
     variants: options.variants,
     prompts: Object.fromEntries(
@@ -1040,7 +1057,13 @@ async function main(): Promise<number> {
           {
             description: PROMPT_VARIANTS[variant.prompt]!.description,
             instructions,
-            hash: contentHash(buildCorrectionSystemPrompt(profile, instructions)),
+            // The notes ride with the rules that name them, so they are part of what was asked.
+            hash: contentHash(
+              buildCorrectionSystemPrompt(profile, instructions) +
+                (options.transcriber && instructions.core.includes("TRANSCRIBER")
+                  ? JSON.stringify(TRANSCRIBER_NOTES)
+                  : "")
+            ),
           },
         ];
       })
@@ -1098,9 +1121,14 @@ async function main(): Promise<number> {
   );
   // Production warms the prompt while the user dictates; so does this, once
   // for each session the passages are dictated in.
+  const warmStyles = options.transcriber
+    ? [...new Set(corpus.map((entry) => entry.style))]
+    : [undefined];
   for (const variant of options.variants) {
     for (const session of cleanupSessions(corpus)) {
-      await services.get(variant.id)!.warm(settingsFor(variant, profile, apiKey, session));
+      for (const style of warmStyles) {
+        await services.get(variant.id)!.warm(settingsFor(variant, profile, apiKey, session, style));
+      }
     }
   }
 
@@ -1127,7 +1155,13 @@ async function main(): Promise<number> {
           : undefined;
         const result = await service.correct(
           requestFor(entry),
-          settingsFor(variant, profile, apiKey, entry.session),
+          settingsFor(
+            variant,
+            profile,
+            apiKey,
+            entry.session,
+            options.transcriber ? entry.style : undefined
+          ),
           undefined,
           onText
         );

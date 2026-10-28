@@ -988,6 +988,8 @@ interface SessionContextRecord {
   readonly sessionId: string;
   readonly webContentsId: number;
   readonly context: Promise<CorrectionSessionContext>;
+  /** The provider the session transcribed with, whatever the setting says by the time it is cleaned up. */
+  readonly transcriber: VoiceTranscriptionProvider;
 }
 
 let recentSessionContexts: SessionContextRecord[] = [];
@@ -1024,6 +1026,8 @@ interface CorrectionPrep {
   // A host's pane as the stop landed: the host answers with its terminal's
   // output, its agent's reply and the commands it takes by then in one read.
   hostStop: Promise<PaneCorrectionContext | null> | null;
+  // The provider the session transcribed with, kept as long as its passages may be cleaned up.
+  readonly transcriber: VoiceTranscriptionProvider | undefined;
 }
 
 function terminalContextOf(read: PaneCorrectionContext | null): TerminalCorrectionContext {
@@ -1061,7 +1065,8 @@ function correctionSettingsFor(
   projectInfo: { name?: string; path?: string },
   vocabulary: VoiceDictionaryEntry[],
   commandTarget: VoiceCommandTarget | null,
-  { names, repositoryNames, worktree }: CorrectionSessionContext
+  { names, repositoryNames, worktree }: CorrectionSessionContext,
+  transcriber: VoiceTranscriptionProvider | undefined
 ): VoiceCorrectionSettings {
   return {
     model: settings.correctionModel,
@@ -1075,6 +1080,7 @@ function correctionSettingsFor(
     heardAs: collectHeardAsRules(settings.dictionary),
     customInstructions: settings.correctionCustomInstructions,
     language: normalizeVoiceLanguage(settings.language),
+    ...(transcriber ? { transcriber } : {}),
     projectName: projectInfo.name,
     projectPath: projectInfo.path,
     organizationId: settings.organizationId,
@@ -1490,6 +1496,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
           ),
       terminalContext: null,
       hostStop: null,
+      transcriber: session.stats.provider ?? undefined,
     };
     session.correctionPrep = prep;
     correctionPreps = [prep, ...correctionPreps].slice(0, CORRECTION_PREP_MEMORY);
@@ -1511,7 +1518,8 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
           projectInfo,
           entries,
           commandTarget,
-          prep.outsideView ? NO_SESSION_CONTEXT : context
+          prep.outsideView ? NO_SESSION_CONTEXT : context,
+          session.stats.provider ?? undefined
         )
       );
     };
@@ -1633,7 +1641,12 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     );
     if (session.intent === "dictation") {
       recentSessionContexts = [
-        { sessionId: session.id, webContentsId: session.webContentsId, context: sessionContext },
+        {
+          sessionId: session.id,
+          webContentsId: session.webContentsId,
+          context: sessionContext,
+          transcriber: settings.transcriptionProvider,
+        },
         ...recentSessionContexts,
       ].slice(0, CORRECTION_PREP_MEMORY);
     }
@@ -2647,7 +2660,8 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     const prep = findCorrectionPrep(ctx, request);
     // Found before any wait, so a session that starts meanwhile can't push
     // this one's context out. Outside the view it gets none of it.
-    const sessionContext = outsideView ? undefined : findSessionContext(ctx, request)?.context;
+    const sessionRecord = findSessionContext(ctx, request);
+    const sessionContext = outsideView ? undefined : sessionRecord?.context;
     let projectInfo: { name?: string; path?: string };
     let vocabulary: VoiceDictionaryEntry[];
     let commandTarget: VoiceCommandTarget | null;
@@ -2704,7 +2718,14 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         ...(request.uncertain ? { uncertain: request.uncertain } : {}),
         ...(request.pauses ? { pauses: request.pauses } : {}),
       },
-      settings: correctionSettingsFor(settings, projectInfo, vocabulary, commandTarget, context),
+      settings: correctionSettingsFor(
+        settings,
+        projectInfo,
+        vocabulary,
+        commandTarget,
+        context,
+        prep?.transcriber ?? sessionRecord?.transcriber
+      ),
     };
   };
 

@@ -362,6 +362,7 @@ Every quality score is reported for what landed, and for what the model proposed
 | `--seed` | `14793` | Request order |
 | `--label` | `run` | Prefix of the result file |
 | `--no-stream` | streamed | Asks for the whole reply at once, as cleanup did before it streamed |
+| `--no-transcriber` | notes sent | Leaves out the notes on the transcriber a passage imitates (`TRANSCRIBER_NOTES`), which production sends Terra's rules for the provider in use; a `generic` passage never gets any |
 | `--probe-prediction` | off | Asks each model for Predicted Outputs on both endpoints and records the answer |
 | `--dictionary` | none | Custom dictionary terms, the same for every variant |
 | `--rescore <run.json>` |  | Scores a saved run again with today's references and checks, sending nothing, each saved reply landed as production lands it now; a passage whose input changed or went away since is left out and named. A run saved under an older scoring version is scored again from its saved replies, the misread and form split included, and a schema 3 run (#14786), which landed each reply several ways, has each landed once, as a new run's are. One saved before #14786 can't be rescored |
@@ -460,6 +461,7 @@ A session is scored against whichever accepted reference its text is closest to:
 | `--stop-tails` | `0,700` | Milliseconds of silence before the stop |
 | `--repeats` | `1` | Passes |
 | `--clips` | all | Only these clip ids |
+| `--intent` | off | The `INTENT_CLIPS` instead of the replay and long-speech clips: questions said as statements, words the speaker quotes, restarts and filler, and the lookalikes that must stay as they are (an indirect question, reported speech). The word scores forgive punctuation, so the report adds a questions-and-quotes table, raw against final, and lists any session that lost a question or a quote |
 | `--terms` | off | Each clip's terms as Grok keyterms |
 | `--repo` | off | This repository's names, as production reads them |
 | `--seed` | `14900` | Order |
