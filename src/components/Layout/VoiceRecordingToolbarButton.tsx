@@ -1,7 +1,8 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { Clock, Lock, Mic, Pause } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -12,9 +13,11 @@ import {
 import { cn } from "@/lib/utils";
 import { useEffectiveCombo, useShortcutHintHover } from "@/hooks";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
+import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
 import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 import { RecentDictationMenuItems } from "./RecentDictationMenuItems";
+import { OwnVoiceSessionPanel } from "./OwnVoiceSessionPanel";
 import { focusRecoveredComposer } from "@/services/recentDictationRecovery";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { voiceRecordingService } from "@/services/VoiceRecordingService";
@@ -55,12 +58,6 @@ const STILL_SHAPE = [0.45, 0.8, 0.65, 0.4] as const;
 // and the mic with its waveform — so starting or ending a session never moves
 // the right-aligned items.
 const VOICE_SLOT_CLASS = "h-8 w-11";
-
-function formatDuration(seconds: number): string {
-  const minutes = Math.floor(seconds / 60);
-  const remainder = seconds % 60;
-  return `${minutes}:${remainder.toString().padStart(2, "0")}`;
-}
 
 function VoiceLockedButton({
   label,
@@ -176,9 +173,11 @@ function VoiceElsewhereIndicator({
 function VoiceToolbarMenu({
   children,
   leadingItems,
+  onOpen,
 }: {
   children: ReactNode;
   leadingItems?: ReactNode;
+  onOpen?: () => void;
 }) {
   // The composer an item just added text to. The menu's close would hand the
   // keyboard back to this button; the composer gets it instead.
@@ -189,6 +188,7 @@ function VoiceToolbarMenu({
         // A close the menu never finished (reopened mid-exit) must not carry
         // an earlier add's destination into this opening.
         if (open) insertedPanelRef.current = null;
+        if (open) onOpen?.();
       }}
     >
       <ContextMenuTrigger asChild>
@@ -348,7 +348,6 @@ export function VoiceRecordingToolbarButton({
   const pendingTarget = useVoiceRecordingStore((state) => state.pendingTarget);
   const sessionElsewhere = useVoiceRecordingStore((state) => state.sessionElsewhere);
   const status = useVoiceRecordingStore((state) => state.status);
-  const elapsedSeconds = useVoiceRecordingStore((state) => state.elapsedSeconds);
   const micSignal = useVoiceRecordingStore((state) => state.micSignal);
   const micDeviceLabel = useVoiceRecordingStore((state) => state.micDeviceLabel);
   const pauseStopWarning = useVoiceRecordingStore((state) => state.pauseStopWarning);
@@ -423,99 +422,291 @@ export function VoiceRecordingToolbarButton({
     return <VoiceRecordingPlaceholder />;
   }
 
-  const labelTarget = isQueued ? pendingTarget : activeTarget;
-  const contextLabel = [labelTarget?.projectName, labelTarget?.worktreeLabel]
-    .filter(Boolean)
-    .join(" / ");
-  const panelLabel = labelTarget?.panelTitle?.trim();
-  const targetLabel = panelLabel || contextLabel;
-  const tooltipTitle =
-    isArming || isQueued
-      ? targetLabel
-        ? `Arming dictation: ${targetLabel}`
-        : "Arming dictation…"
-      : isMicStarting
-        ? micSignal === "silent"
-          ? `No audio from ${micDeviceLabel ?? "microphone"}`
-          : "Starting microphone…"
-        : isConnecting
-          ? targetLabel
-            ? `Recording: ${targetLabel} · Connecting…`
-            : "Recording · Connecting…"
-          : isReconnecting
-            ? "Reconnecting…"
-            : isFinishing
-              ? "Finishing transcription…"
-              : isPaused
-                ? pauseStopWarning
-                  ? "Paused · Stopping in 10s unless resumed"
-                  : targetLabel
-                    ? `Paused: ${targetLabel}`
-                    : "Dictation paused"
-                : idleStopWarning
-                  ? "Recording · Stopping in 10s unless you speak"
-                  : targetLabel
-                    ? `Recording: ${targetLabel}`
-                    : "Recording in another panel";
-  const elapsedLabel =
-    !isQueued && (isRecording || isPaused) ? formatDuration(elapsedSeconds) : null;
+  // Arming and a queued start keep their jump: there is no session yet for a
+  // panel to show.
+  if (isQueued || isArming) {
+    const labelTarget = isQueued ? pendingTarget : activeTarget;
+    const contextLabel = [labelTarget?.projectName, labelTarget?.worktreeLabel]
+      .filter(Boolean)
+      .join(" / ");
+    const panelLabel = labelTarget?.panelTitle?.trim();
+    const targetLabel = panelLabel || contextLabel;
+    const armingTitle = targetLabel ? `Arming dictation: ${targetLabel}` : "Arming dictation…";
+    return (
+      <VoiceToolbarMenu>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              {...hover}
+              variant="ghost"
+              size="icon"
+              data-toolbar-item={dataToolbarItem}
+              onClick={() => {
+                void voiceRecordingService.focusActiveTarget();
+              }}
+              className={cn(
+                "toolbar-icon-button relative mr-0.5 gap-1",
+                VOICE_SLOT_CLASS,
+                "text-text-primary",
+                "hover:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))]"
+              )}
+              aria-label={armingTitle}
+            >
+              <Mic className="h-4 w-4" />
+              <VoiceWave mode={waveMode} />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            <div className="flex flex-col gap-0.5">
+              <span className="font-medium">{armingTitle}</span>
+              {panelLabel && contextLabel && (
+                <span className="text-text-secondary">{contextLabel}</span>
+              )}
+              <span className="text-text-secondary">
+                {isCanopyReplyTarget(labelTarget)
+                  ? "Click to go to reply"
+                  : "Click to jump to panel"}
+              </span>
+              {shortcut && (
+                <span className="text-text-secondary">
+                  {createTooltipContent("Stop", shortcut)}
+                </span>
+              )}
+            </div>
+          </TooltipContent>
+        </Tooltip>
+      </VoiceToolbarMenu>
+    );
+  }
+
+  // The tooltip is one line of state; everything else is in the panel.
+  const tooltipTitle = isMicStarting
+    ? micSignal === "silent"
+      ? `No audio from ${micDeviceLabel ?? "microphone"}`
+      : "Starting microphone…"
+    : isConnecting
+      ? "Recording · Connecting…"
+      : isReconnecting
+        ? "Reconnecting…"
+        : isFinishing
+          ? "Finishing transcription…"
+          : isPaused
+            ? pauseStopWarning
+              ? "Paused · Stopping in 10s unless resumed"
+              : "Dictation paused"
+            : idleStopWarning
+              ? "Recording · Stopping in 10s unless you speak"
+              : "Recording dictation";
+
+  return (
+    <VoiceSessionButton
+      title={tooltipTitle}
+      waveMode={waveMode}
+      isPaused={isPaused}
+      canPause={isRecording || isPaused}
+      shortcut={shortcut}
+      pauseShortcut={pauseShortcut}
+      hover={hover}
+      data-toolbar-item={dataToolbarItem}
+    />
+  );
+}
+
+interface VoiceSessionButtonProps {
+  title: string;
+  waveMode: VoiceWaveMode;
+  isPaused: boolean;
+  canPause: boolean;
+  shortcut: string | undefined;
+  pauseShortcut: string | undefined;
+  hover: ReturnType<typeof useShortcutHintHover>;
+  "data-toolbar-item"?: string;
+}
+
+/**
+ * The mic while a session runs: a click opens the session panel (#14920).
+ * Mounted only while there is a session, so a closed session's open state
+ * never carries into the next one.
+ */
+// A toolbar item the keyboard can land on now: still there, enabled, and
+// shown (an item folded into the overflow menu has no layout).
+function canTakeFocus(item: HTMLElement): boolean {
+  return item.isConnected && !item.matches(":disabled") && item.offsetParent !== null;
+}
+
+// What can take the slot when a session ends: the lock's button or another
+// view's session.
+const VOICE_SLOT_SUCCESSOR_SELECTOR =
+  '[data-testid="voice-locked-button"], [data-testid="voice-elsewhere-button"]';
+
+function VoiceSessionButton({
+  title,
+  waveMode,
+  isPaused,
+  canPause,
+  shortcut,
+  pauseShortcut,
+  hover,
+  "data-toolbar-item": dataToolbarItem,
+}: VoiceSessionButtonProps) {
+  const [open, setOpen] = useState(false);
+  const sendShortcut = useEffectiveCombo("voiceInput.stopAndSend");
+  // Going to the target moves the keyboard there, so the close must not
+  // hand it back to the mic. Each opening starts without it: a close the
+  // exit never finished doesn't decide the next one.
+  const leavingRef = useRef(false);
+  // The keyboard is on the mic or in its panel. A session that ends under it
+  // takes both away, so the keyboard goes to whatever takes the slot.
+  const holdsFocusRef = useRef(false);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
   // The toggle shortcut would start a new session when focused elsewhere; the
   // pause shortcut is the resume affordance the user actually wants.
   const actionCombo = isPaused ? pauseShortcut : shortcut;
 
+  // A layout cleanup, so the focused element is still in the document: whether
+  // it shows its ring now decides whether the successor shows one.
+  useLayoutEffect(() => {
+    const trigger = triggerRef.current;
+    const toolbar = trigger?.closest('[role="toolbar"]') ?? null;
+    return () => {
+      if (!holdsFocusRef.current || !toolbar || !trigger) return;
+      const visible = document.activeElement?.matches(":focus-visible") ?? false;
+      // The placeholder takes no focus, so a slot nothing takes hands it to
+      // the nearest toolbar item, ordered while the mic is still among them.
+      const items = Array.from(toolbar.querySelectorAll<HTMLElement>("[data-toolbar-item]"));
+      const at = items.indexOf(trigger);
+      const neighbours =
+        at < 0
+          ? []
+          : items
+              .map((item, i) => ({ item, distance: Math.abs(i - at) }))
+              .filter(({ distance }) => distance > 0)
+              .sort((a, b) => a.distance - b.distance)
+              .map(({ item }) => item);
+      requestAnimationFrame(() => {
+        const active = document.activeElement;
+        if (active && active !== document.body) return;
+        const successor =
+          toolbar.querySelector<HTMLElement>(VOICE_SLOT_SUCCESSOR_SELECTOR) ??
+          neighbours.find(canTakeFocus) ??
+          null;
+        if (!successor) return;
+        // A pointer user didn't ask for the successor's tooltip either.
+        if (!visible) armTooltipFocusSuppression();
+        successor.focus({ preventScroll: true, focusVisible: visible });
+      });
+    };
+  }, []);
+
+  const focusHandlers = {
+    onFocus: () => {
+      holdsFocusRef.current = true;
+    },
+    onBlur: () => {
+      holdsFocusRef.current = false;
+    },
+  };
+
   return (
-    <VoiceToolbarMenu
-      leadingItems={
-        (isRecording || isPaused) && (
-          <>
-            <ContextMenuItem onSelect={() => voiceRecordingService.togglePause()}>
-              {isPaused ? "Resume dictation" : "Pause dictation"}
-            </ContextMenuItem>
-            <ContextMenuSeparator />
-          </>
-        )
-      }
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        if (next) leavingRef.current = false;
+        setOpen(next);
+      }}
+      modal={false}
     >
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            {...hover}
-            variant="ghost"
-            size="icon"
-            data-toolbar-item={dataToolbarItem}
-            onClick={() => {
-              void voiceRecordingService.focusActiveTarget();
-            }}
-            className={cn(
-              "toolbar-icon-button relative mr-0.5 gap-1",
-              VOICE_SLOT_CLASS,
-              isPaused ? "text-text-secondary" : "text-text-primary",
-              "hover:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))]"
-            )}
-            aria-label={tooltipTitle}
-          >
-            <Mic className="h-4 w-4" />
-            <VoiceWave mode={waveMode} />
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">
-          <div className="flex flex-col gap-0.5">
-            <span className="font-medium">{tooltipTitle}</span>
-            {panelLabel && contextLabel && (
-              <span className="text-text-secondary">{contextLabel}</span>
-            )}
-            {elapsedLabel && <span className="text-text-secondary">{elapsedLabel}</span>}
-            <span className="text-text-secondary">
-              {isCanopyReplyTarget(labelTarget) ? "Click to go to reply" : "Click to jump to panel"}
-            </span>
-            {actionCombo && (
-              <span className="text-text-secondary">
-                {createTooltipContent(isPaused ? "Resume" : "Stop", actionCombo)}
-              </span>
-            )}
-          </div>
-        </TooltipContent>
-      </Tooltip>
-    </VoiceToolbarMenu>
+      <VoiceToolbarMenu
+        onOpen={() => setOpen(false)}
+        leadingItems={
+          canPause && (
+            <>
+              <ContextMenuItem onSelect={() => voiceRecordingService.togglePause()}>
+                {isPaused ? "Resume dictation" : "Pause dictation"}
+              </ContextMenuItem>
+              <ContextMenuSeparator />
+            </>
+          )
+        }
+      >
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <PopoverTrigger asChild>
+              <Button
+                {...hover}
+                onFocus={(event) => {
+                  focusHandlers.onFocus();
+                  hover.onFocus(event);
+                }}
+                onBlur={() => {
+                  focusHandlers.onBlur();
+                  hover.onBlur();
+                }}
+                ref={triggerRef}
+                variant="ghost"
+                size="icon"
+                data-toolbar-item={dataToolbarItem}
+                className={cn(
+                  "toolbar-icon-button relative mr-0.5 gap-1",
+                  VOICE_SLOT_CLASS,
+                  isPaused ? "text-text-secondary" : "text-text-primary",
+                  "hover:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))]"
+                )}
+                aria-label={title}
+                data-testid="voice-session-button"
+              >
+                <Mic className="h-4 w-4" />
+                <VoiceWave mode={waveMode} />
+              </Button>
+            </PopoverTrigger>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            <div className="flex flex-col gap-0.5">
+              <span className="font-medium">{title}</span>
+              {actionCombo && (
+                <span className="text-text-secondary">
+                  {createTooltipContent(isPaused ? "Resume" : "Stop", actionCombo)}
+                </span>
+              )}
+            </div>
+          </TooltipContent>
+        </Tooltip>
+      </VoiceToolbarMenu>
+      <PopoverContent
+        side="bottom"
+        align="end"
+        // A short window scrolls the panel rather than cutting its actions off.
+        className="max-h-[var(--radix-popover-content-available-height)] w-auto overflow-y-auto p-0"
+        aria-label="Dictation session"
+        {...focusHandlers}
+        onCloseAutoFocus={(event) => {
+          if (!leavingRef.current) return;
+          leavingRef.current = false;
+          event.preventDefault();
+        }}
+      >
+        <OwnVoiceSessionPanel
+          pauseShortcut={pauseShortcut}
+          stopShortcut={shortcut}
+          onGoToTarget={() => {
+            leavingRef.current = true;
+            setOpen(false);
+            void voiceRecordingService.goToActiveTarget();
+          }}
+          onTogglePause={() => voiceRecordingService.togglePause()}
+          sendShortcut={sendShortcut}
+          onStop={() => {
+            // The stop takes the keyboard back to the dictation, as its key does.
+            leavingRef.current = true;
+            setOpen(false);
+            void voiceRecordingService.stopActiveSession();
+          }}
+          onSend={() => {
+            setOpen(false);
+            void voiceRecordingService.stopAndSend();
+          }}
+        />
+      </PopoverContent>
+    </Popover>
   );
 }

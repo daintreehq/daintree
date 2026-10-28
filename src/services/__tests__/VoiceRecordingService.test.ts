@@ -2013,6 +2013,38 @@ describe("VoiceRecordingService — shortcut stops from anywhere (#12832)", () =
     });
   }
 
+  // #14920: the session panel's Stop is the user's stop, and never a start.
+  for (const status of ["connecting", "recording", "paused", "reconnecting"]) {
+    it(`the session panel's Stop ends a ${status} session as the key does`, async () => {
+      const { voiceRecordingService, stopSpy, startSpy, toggleSpy } = await arrange({ status });
+
+      await voiceRecordingService.stopActiveSession();
+
+      expect(stopSpy).toHaveBeenCalledWith("Dictation stopped.", {
+        preserveLiveText: true,
+        reason: "user",
+      });
+      expect(startSpy).not.toHaveBeenCalled();
+      expect(toggleSpy).not.toHaveBeenCalled();
+    });
+  }
+
+  it.each(["idle", "finishing"])(
+    "the session panel's Stop starts nothing once the session is %s",
+    async (status) => {
+      const { voiceRecordingService, stopSpy, startSpy, toggleSpy } = await arrange({
+        status,
+        activeTarget: status === "idle" ? null : undefined,
+      });
+
+      await voiceRecordingService.stopActiveSession();
+
+      expect(stopSpy).not.toHaveBeenCalled();
+      expect(startSpy).not.toHaveBeenCalled();
+      expect(toggleSpy).not.toHaveBeenCalled();
+    }
+  );
+
   // #14604: the finishing session is already ending, so the press is the next
   // session's start rather than a stop that joins the drain.
   it("starts the next session in the focused panel while another is finishing", async () => {
@@ -2336,6 +2368,65 @@ describe("VoiceRecordingService — pause/resume (#9191)", () => {
     node.port.postMessage.mockClear();
     voiceRecordingService.togglePause();
     expect(node.port.postMessage).toHaveBeenCalledWith({ type: "setPaused", value: false });
+  });
+
+  it("reads the session's clock for its panel: wall time, paused time, the next auto-stop (#14920)", async () => {
+    setupGlobals();
+    await resetVoiceStoreFns();
+    const voiceState = await getVoiceMockState();
+    voiceState.activeTarget = { panelId: "panel-1" };
+    voiceState.status = "recording";
+    let now = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    expect(voiceRecordingService.getSessionClock()).toBeNull();
+    await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Test" });
+
+    now += 5_000;
+    expect(voiceRecordingService.getSessionClock()).toMatchObject({
+      elapsedMs: 5_000,
+      pausedMs: 0,
+      autoStop: { reason: "idle", remainingMs: 175_000 },
+    });
+
+    voiceRecordingService.pause();
+    now += 20_000;
+    // The wall clock runs on through a pause, which counts its own time.
+    expect(voiceRecordingService.getSessionClock()).toMatchObject({
+      elapsedMs: 25_000,
+      pausedMs: 20_000,
+      autoStop: { reason: "pause", remainingMs: 40_000 },
+    });
+
+    voiceState.status = "paused";
+    voiceRecordingService.resume();
+    now += 1_000;
+    expect(voiceRecordingService.getSessionClock()).toMatchObject({
+      elapsedMs: 26_000,
+      pausedMs: 20_000,
+      autoStop: { reason: "idle", remainingMs: 179_000 },
+    });
+
+    await voiceRecordingService.stop("Dictation stopped.", { preserveLiveText: true });
+    expect(voiceRecordingService.getSessionClock()).toBeNull();
+    voiceRecordingService.destroy();
+  });
+
+  it("forgets the session's clock when torn down mid-session (#14920)", async () => {
+    setupGlobals();
+    await resetVoiceStoreFns();
+    const voiceState = await getVoiceMockState();
+    voiceState.activeTarget = { panelId: "panel-1" };
+    voiceState.status = "recording";
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Test" });
+    voiceRecordingService.pause();
+    expect(voiceRecordingService.getSessionClock()).not.toBeNull();
+
+    voiceRecordingService.destroy();
+    expect(voiceRecordingService.getSessionClock()).toBeNull();
   });
 
   it("togglePause() is a no-op when status is idle", async () => {

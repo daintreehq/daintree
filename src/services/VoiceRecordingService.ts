@@ -145,6 +145,7 @@ import {
   focusDictationComposer,
   revealDictationComposer,
 } from "@/services/voiceComposerFocus";
+import { captureFocusEpoch, isFocusEpochCurrent } from "@/components/Terminal/paneFocusRequest";
 import {
   isSameHost,
   namesSessionHost,
@@ -187,6 +188,23 @@ const spokenSendKey = (panelId: string, projectId: string | undefined) =>
   `${projectId ?? ""}\0${panelId}`;
 
 type StartStepLogger = (step: string, details?: Record<string, unknown>) => void;
+
+/** How a composer's send was asked for: a spoken "send it" holds back a too-short draft. */
+export interface VoiceSendOptions {
+  spoken?: boolean;
+}
+
+/** The running session's clock, as {@link VoiceRecordingService.getSessionClock} reads it. */
+export interface VoiceSessionClock {
+  /** The provider the session started on. */
+  provider: VoiceTranscriptionProvider | null;
+  /** Wall time since the session began, pauses included. */
+  elapsedMs: number;
+  /** How much of that was paused, the pause under way included. */
+  pausedMs: number;
+  /** The auto-stop that ends the session next, and how far off it is. */
+  autoStop: { reason: "pause" | "idle"; remainingMs: number } | null;
+}
 
 interface OpeningAudio {
   startRequestId: number;
@@ -820,7 +838,7 @@ class VoiceRecordingService {
   // The composer showing each panel's draft, which owns its send, keyed by
   // panel and draft scope: an isolated composer on the same terminal keeps a
   // draft of its own and must not take the pane's send.
-  private spokenSendHandlers = new Map<string, () => void>();
+  private spokenSendHandlers = new Map<string, (options?: VoiceSendOptions) => void>();
   private pendingRewrites = new Set<PendingRewrite>();
   // Null until the settings have been read: a rewrite then goes ahead and main
   // reports a missing key.
@@ -832,6 +850,13 @@ class VoiceRecordingService {
   // When the dictation shortcut was pressed, for a start in the same dispatch.
   private pendingPressAt: number | null = null;
   private transcriptionProvider: VoiceTranscriptionProvider | null = null;
+  // What the session panel reads about the running session (#14920): the
+  // provider it started on, whether its clock runs, and when each auto-stop
+  // would land.
+  private sessionProvider: VoiceTranscriptionProvider | null = null;
+  private sessionClockRunning = false;
+  private pauseStopsAt: number | null = null;
+  private idleStopsAt: number | null = null;
 
   initialize(): void {
     if (this.initialized) return;
@@ -2663,6 +2688,8 @@ class VoiceRecordingService {
     }
 
     this.sessionStartedAt = Date.now();
+    this.sessionProvider = this.transcriptionProvider;
+    this.sessionClockRunning = true;
     this.startElapsedTimer();
     this.startIdleTimer();
     this.micCaptureAttachedAt = captureAttachedAt;
@@ -5020,6 +5047,7 @@ class VoiceRecordingService {
   }
 
   private clearPauseTimeout(): void {
+    this.pauseStopsAt = null;
     if (this.pauseWarnTimeoutId !== null) {
       clearTimeout(this.pauseWarnTimeoutId);
       this.pauseWarnTimeoutId = null;
@@ -5033,6 +5061,7 @@ class VoiceRecordingService {
   }
 
   private clearIdleTimeout(): void {
+    this.idleStopsAt = null;
     if (this.idleWarnTimeoutId !== null) {
       clearTimeout(this.idleWarnTimeoutId);
       this.idleWarnTimeoutId = null;
@@ -5048,6 +5077,7 @@ class VoiceRecordingService {
 
   private startIdleTimer(): void {
     this.clearIdleTimeout();
+    this.idleStopsAt = Date.now() + VoiceRecordingService.IDLE_AUTO_STOP_MS;
     this.idleWarnTimeoutId = setTimeout(() => {
       this.idleWarnTimeoutId = null;
       const current = useVoiceRecordingStore.getState();
@@ -5248,6 +5278,7 @@ class VoiceRecordingService {
   }
 
   private clearTimers(): void {
+    this.sessionClockRunning = false;
     this.clearElapsedTimer();
     this.clearPauseTimeout();
     this.clearIdleTimeout();
@@ -5280,6 +5311,7 @@ class VoiceRecordingService {
     state.setStatus("paused");
     state.announce("Dictation paused.");
     this.clearPauseTimeout();
+    this.pauseStopsAt = this.pauseStartedAt + VoiceRecordingService.PAUSE_AUTO_STOP_MS;
     this.pauseWarnTimeoutId = setTimeout(() => {
       this.pauseWarnTimeoutId = null;
       const current = useVoiceRecordingStore.getState();
@@ -5342,6 +5374,84 @@ class VoiceRecordingService {
   }
 
   /**
+   * The running session's clock for the session panel (#14920): wall time
+   * since it began, pauses included, how much of that was paused, and the
+   * auto-stop that would end it next. Null once the session is stopping.
+   */
+  getSessionClock(now = Date.now()): VoiceSessionClock | null {
+    if (!this.sessionClockRunning) return null;
+    const pausedMs = this.totalPausedMs + (this.pauseStartedAt > 0 ? now - this.pauseStartedAt : 0);
+    const autoStop =
+      this.pauseStopsAt !== null
+        ? { reason: "pause" as const, remainingMs: Math.max(0, this.pauseStopsAt - now) }
+        : this.idleStopsAt !== null
+          ? { reason: "idle" as const, remainingMs: Math.max(0, this.idleStopsAt - now) }
+          : null;
+    return {
+      provider: this.sessionProvider,
+      elapsedMs: Math.max(0, now - this.sessionStartedAt),
+      pausedMs: Math.max(0, pausedMs),
+      autoStop,
+    };
+  }
+
+  /**
+   * The session panel's Stop: the dictation key's stop for whatever this view
+   * is recording, taking the person back to it as the key does (#14791), and
+   * nothing when there is nothing left to stop, so a late click can't start
+   * another session.
+   */
+  stopActiveSession(): Promise<void> {
+    this.initialize();
+    return this.stopAnySession({ pressedHere: true }) ?? Promise.resolve();
+  }
+
+  /**
+   * Stop and send, staying where the person is: the session panel's Send and
+   * its key. Its composer sends as Enter would. Without one mounted to send
+   * from, the dictation still stops and its words stay in the draft; another
+   * view's session stops there.
+   */
+  async stopAndSend(): Promise<void> {
+    this.initialize();
+    if (this.sendActiveSession()) return;
+    // A start still arming had nothing to send, so its cancel says nothing.
+    const hadWords = isActiveVoiceSession(useVoiceRecordingStore.getState().status);
+    const stopping = this.stopAnySession();
+    if (stopping) {
+      await stopping;
+      if (!hadWords) return;
+      notify({
+        type: "info",
+        title: "Dictation stopped",
+        message:
+          "Its prompt wasn't sent: the composer isn't open here. The words are in its draft.",
+        context: { eventKind: "uiFeedback" },
+      });
+      return;
+    }
+    const elsewhere = useVoiceRecordingStore.getState().sessionElsewhere;
+    if (elsewhere) await this.stopSessionElsewhere(elsewhere, false);
+  }
+
+  /**
+   * The session panel's way to the dictation: its pane comes forward with the
+   * keyboard in its composer, or Canopy's reply takes it.
+   */
+  async goToActiveTarget(): Promise<void> {
+    const target = useVoiceRecordingStore.getState().activeTarget;
+    if (!target) return;
+    // A project switch can take a while; a pane the person picks meanwhile
+    // keeps the keyboard.
+    const epoch = captureFocusEpoch();
+    const isCurrent = () => isFocusEpochCurrent(epoch);
+    const found = await this.focusActiveTarget(target, isCurrent);
+    if (found && isCurrent() && !isCanopyReplyTarget(target)) {
+      revealDictationComposer(target.panelId);
+    }
+  }
+
+  /**
    * Toggle between recording and paused. No-op when no session is active or
    * the session is in a transitional phase (connecting, reconnecting, finishing).
    */
@@ -5361,7 +5471,11 @@ class VoiceRecordingService {
    * "send it". The handler runs Enter's dictation path: stop, wait for the
    * correction, send.
    */
-  onSpokenSend(panelId: string, projectId: string | undefined, handler: () => void): () => void {
+  onSpokenSend(
+    panelId: string,
+    projectId: string | undefined,
+    handler: (options?: VoiceSendOptions) => void
+  ): () => void {
     const key = spokenSendKey(panelId, projectId);
     this.spokenSendHandlers.set(key, handler);
     return () => {
@@ -5369,6 +5483,33 @@ class VoiceRecordingService {
         this.spokenSendHandlers.delete(key);
       }
     };
+  }
+
+  /** Whether the session panel's Send has a composer to send from. */
+  canSendActiveSession(): boolean {
+    return this.activeSessionSend() !== null;
+  }
+
+  /**
+   * The session panel's Send: the dictation stops and its composer sends the
+   * draft as Enter would, without the person going there. Nothing happens
+   * when no composer for it is mounted to send from.
+   */
+  sendActiveSession(): boolean {
+    this.initialize();
+    const send = this.activeSessionSend();
+    if (!send) return false;
+    send({ spoken: false });
+    return true;
+  }
+
+  private activeSessionSend(): ((options?: VoiceSendOptions) => void) | null {
+    const { activeTarget, status } = useVoiceRecordingStore.getState();
+    if (!activeTarget || status === "finishing" || !isActiveVoiceSession(status)) return null;
+    return (
+      this.spokenSendHandlers.get(spokenSendKey(activeTarget.panelId, activeTarget.projectId)) ??
+      null
+    );
   }
 
   // A stop is the surest end of speech there is, so a send its drain lands goes
@@ -5415,7 +5556,9 @@ class VoiceRecordingService {
     // Vite HMR disposes and re-evaluates this module; the old singleton's
     // timers must be cleared or they fire against the new singleton's state.
     this.clearPauseTimeout();
+    this.clearIdleTimeout();
     this.clearElapsedTimer();
+    this.sessionClockRunning = false;
     this.clearMicSilenceTimer();
     this.cancelScheduledPrefetch();
     // Release anyone waiting on a correction; none of them may land now, so

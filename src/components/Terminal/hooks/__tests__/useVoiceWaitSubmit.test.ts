@@ -108,7 +108,7 @@ describe("useVoiceWaitSubmit", () => {
     );
   }
 
-  function spokenSendHandler(): () => void {
+  function spokenSendHandler(): (options?: { spoken?: boolean }) => void {
     const call = onSpokenSendMock.mock.calls.at(-1);
     expect(call?.[0]).toBe(PANEL_ID);
     return call![2];
@@ -149,6 +149,40 @@ describe("useVoiceWaitSubmit", () => {
         landCorrection(true);
       });
       expect(sendFromEditor).toHaveBeenCalledTimes(1);
+    });
+
+    // #14920: the session panel's Send is a press, not an utterance.
+    it("sends a short draft when the session panel asks, as Enter would", async () => {
+      useTerminalInputStore.getState().setDraftInput(PANEL_ID, "fix it");
+      renderWaitSubmit();
+
+      await act(async () => {
+        spokenSendHandler()({ spoken: false });
+      });
+
+      expect(stopMock).toHaveBeenCalledTimes(1);
+      expect(sendFromEditor).toHaveBeenCalledTimes(1);
+    });
+
+    it("leaves the keyboard where it is for the session panel's send", async () => {
+      useTerminalInputStore.getState().setDraftInput(PANEL_ID, "fix the login bug");
+      const handBack = vi.fn();
+      const claimSendHandBack = vi.fn(() => handBack);
+      renderWaitSubmit(undefined, claimSendHandBack);
+
+      await act(async () => {
+        spokenSendHandler()({ spoken: false });
+      });
+
+      // No claim, and a hand-back of its own that hands nothing back, so the
+      // send can't claim one either.
+      expect(claimSendHandBack).not.toHaveBeenCalled();
+      expect(sendFromEditor).toHaveBeenCalledWith(
+        expect.any(Function),
+        expect.anything(),
+        undefined
+      );
+      expect(sendFromEditor).not.toHaveBeenCalledWith(handBack, expect.anything(), undefined);
     });
 
     it.each(["", "fix it", "  ok , ! "])("stops but leaves %j unsent", async (draft) => {

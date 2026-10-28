@@ -98,9 +98,17 @@ interface UseVoiceWaitSubmitParams {
 interface VoiceWaitSubmitOptions {
   /** Sent by a spoken "send it": a draft too short to be a prompt stays unsent. */
   spoken?: boolean;
+  /**
+   * Sent from somewhere else (the session panel's Send): the keyboard stays
+   * where the person is, with no hand-back to the terminal after it.
+   */
+  stayPut?: boolean;
   /** Taken at the key press that started the wait, and gone with it if the wait is called off. */
   route?: ComposerSendRoute;
 }
+
+// A hand-back that hands nothing back, which also stops the send claiming its own.
+const STAY_PUT: SendHandBack = () => {};
 
 const isCopyOrSelectAll = (event: KeyboardEvent) =>
   (event.metaKey || event.ctrlKey) && !event.altKey && (event.key === "c" || event.key === "a");
@@ -257,7 +265,7 @@ export function useVoiceWaitSubmit({
         useTerminalInputStore.getState().isVoiceSubmitting(voiceId);
 
       // Before the lock below, so a press during the wait counts against it.
-      const handBack = claimSendHandBackRef.current?.();
+      const handBack = options?.stayPut ? STAY_PUT : claimSendHandBackRef.current?.();
       // Read before the stop: a dictation started on this panel while the
       // send waits is the next prompt's, and none of its words go with this
       // one (#14804).
@@ -437,12 +445,15 @@ export function useVoiceWaitSubmit({
         ownVoice
           ? voiceProjectId
           : (voiceProjectId ?? useProjectStore.getState().currentProject?.id),
-        () => {
+        (options) => {
           if (isDisabledRef.current?.()) {
             void voiceRecordingService.stop("Dictation stopped.", { reason: "send" });
             return;
           }
-          startVoiceWaitSubmit({ spoken: true });
+          // A spoken "send it" unless the session panel's Send asked, which
+          // sends whatever Enter would and leaves the keyboard where it is.
+          const spoken = options?.spoken ?? true;
+          startVoiceWaitSubmit({ spoken, stayPut: !spoken });
         }
       ),
     [voiceId, voiceProjectId, ownVoice, startVoiceWaitSubmit]

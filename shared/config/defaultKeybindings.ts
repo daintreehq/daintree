@@ -1075,6 +1075,15 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     description: "Pause or resume voice dictation",
     category: "Voice",
   },
+  // The dictation key with Option: stop and send, staying where you are.
+  {
+    actionId: "voiceInput.stopAndSend",
+    combo: "Cmd+Alt+D",
+    scope: "global",
+    priority: 0,
+    description: "Stop voice dictation and send the prompt",
+    category: "Voice",
+  },
   {
     actionId: "find.inFocusedPanel",
     combo: "Cmd+F",
@@ -1341,6 +1350,16 @@ const LINUX_REPLACEMENT_KEYBINDINGS: KeybindingConfig[] = [
     scope: "global",
     priority: 0,
     description: "Rewrite the selected prompt text by voice",
+    category: "Voice",
+  },
+  // Ctrl+Alt+D shows the desktop on Xfce and older GNOME, and its Shift form is
+  // terminal.moveToDock; the dictation keys' other neighbour is free.
+  {
+    actionId: "voiceInput.stopAndSend",
+    combo: "Ctrl+Shift+Alt+.",
+    scope: "global",
+    priority: 0,
+    description: "Stop voice dictation and send the prompt",
     category: "Voice",
   },
   {

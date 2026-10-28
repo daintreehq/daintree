@@ -36,6 +36,19 @@ describe("buildDefaultKeybindings", () => {
     expect(globalCombo(mac, "terminal.redraw")).toEqual(["Cmd+K Cmd+D"]);
   });
 
+  it("gives stop-and-send its own key on every platform, clear of every other default", () => {
+    expect(globalCombo(mac, "voiceInput.stopAndSend")).toEqual(["Cmd+Alt+D"]);
+    expect(globalCombo(windows, "voiceInput.stopAndSend")).toEqual(["Cmd+Alt+D"]);
+    expect(globalCombo(linux, "voiceInput.stopAndSend")).toEqual(["Ctrl+Shift+Alt+."]);
+    for (const table of [mac, windows, linux]) {
+      const [own] = table.filter((b) => b.actionId === "voiceInput.stopAndSend");
+      const collisions = table.filter(
+        (b) => b !== own && b.scope === "global" && foldCmd(b.combo) === foldCmd(own!.combo)
+      );
+      expect(collisions).toEqual([]);
+    }
+  });
+
   it("replaces the Linux dictation default instead of adding a second one", () => {
     const linuxCombos = globalCombo(linux, "voiceInput.toggle");
     expect(linuxCombos).toHaveLength(1);
@@ -71,6 +84,7 @@ describe("buildDefaultKeybindings", () => {
       "terminal.new",
       "terminal.scrollToLastActivity",
       "voiceInput.rewriteSelection",
+      "voiceInput.stopAndSend",
       "voiceInput.toggle",
       "worktree.openFileBrowserPanel",
     ]);
