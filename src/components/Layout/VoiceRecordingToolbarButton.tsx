@@ -201,35 +201,39 @@ function VoiceElsewhereIndicator({
   if (!snapshot) {
     const title = `Dictating${place || " elsewhere"}`;
     return (
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            variant="ghost"
-            size="icon"
-            data-toolbar-item={dataToolbarItem}
-            onClick={() => {
-              void voiceRecordingService.revealSessionElsewhere(session.sessionId);
-            }}
-            className={cn(
-              "toolbar-icon-button relative mr-0.5 text-text-secondary",
-              VOICE_SLOT_CLASS
-            )}
-            aria-label={`${title}. Click to go there.`}
-            data-testid="voice-elsewhere-button"
-          >
-            <Mic className="h-4 w-4" />
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">
-          <div className="flex flex-col gap-0.5">
-            <span className="font-medium">{title}</span>
-            <span className="text-text-secondary">Click to go there</span>
-            {shortcut && (
-              <span className="text-text-secondary">{createTooltipContent("Stop", shortcut)}</span>
-            )}
-          </div>
-        </TooltipContent>
-      </Tooltip>
+      <VoiceToolbarMenu>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              data-toolbar-item={dataToolbarItem}
+              onClick={() => {
+                void voiceRecordingService.revealSessionElsewhere(session.sessionId);
+              }}
+              className={cn(
+                "toolbar-icon-button relative mr-0.5 text-text-secondary",
+                VOICE_SLOT_CLASS
+              )}
+              aria-label={`${title}. Click to go there.`}
+              data-testid="voice-elsewhere-button"
+            >
+              <Mic className="h-4 w-4" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            <div className="flex flex-col gap-0.5">
+              <span className="font-medium">{title}</span>
+              <span className="text-text-secondary">Click to go there</span>
+              {shortcut && (
+                <span className="text-text-secondary">
+                  {createTooltipContent("Stop", shortcut)}
+                </span>
+              )}
+            </div>
+          </TooltipContent>
+        </Tooltip>
+      </VoiceToolbarMenu>
     );
   }
 

@@ -373,4 +373,13 @@ describe("VoiceRecordingToolbarButton — the session panel in a view that doesn
     expect(panel()).toBeNull();
     expect(service.revealSessionElsewhere).toHaveBeenCalledWith("s1");
   });
+
+  it("keeps the right-click menu before the owner's first report lands", () => {
+    showElsewhere(pairings[1]!, null);
+    render(<VoiceRecordingToolbarButton />);
+
+    fireEvent.contextMenu(mic());
+
+    expect(document.querySelector('[role="menu"]')).not.toBeNull();
+  });
 });
