@@ -1724,10 +1724,13 @@ class VoiceRecordingService {
       );
       return true;
     }
-    // Only a cancel that changes the draft loses anything, read afresh on
-    // every press: what landed while the first waited goes too.
-    const sessionId = state.panelBuffers[target.panelId]?.dictationSessionId ?? null;
-    if (sessionId && draftAfterCancel(spans, draft) !== draft) {
+    // Only a cancel that changes the draft or drops words still being heard
+    // loses anything, read afresh on every press: what landed while the first
+    // waited goes too.
+    const buffer = state.panelBuffers[target.panelId];
+    const sessionId = buffer?.dictationSessionId ?? null;
+    const hearing = (buffer?.liveText.trim() ?? "") !== "";
+    if (sessionId && (hearing || draftAfterCancel(spans, draft) !== draft)) {
       const confirm = state.dictationCancelConfirm;
       const confirmed =
         confirm?.panelId === target.panelId &&
