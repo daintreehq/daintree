@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import {
+  INTENT_CLIPS,
   LONG_SPEECH_CLIPS,
   readPcm16Wav,
   REPLAY_CLIPS,
@@ -41,7 +42,10 @@ import {
 } from "./lib/voicePipelineAudio";
 import {
   ACCEPTED_REFERENCES,
+  checkIntent,
   parsePipelineArm,
+  sessionKey,
+  sharedSessions,
   renderPipelineTable,
   renderVoiceTable,
   scorePipelineSession,
@@ -60,7 +64,8 @@ import { REPO_ROOT } from "./registry";
 const RESULTS_DIR = path.join(REPO_ROOT, ".tmp", "perf-results", "voice-pipeline");
 const SAY_CACHE_DIR = path.join(REPO_ROOT, ".tmp", "voice-replay", "clips");
 const VOICE_CACHE_DIR = path.join(REPO_ROOT, ".tmp", "voice-pipeline", "clips");
-const CLIPS: readonly ReplayClip[] = [...REPLAY_CLIPS, ...LONG_SPEECH_CLIPS];
+const DEFAULT_CLIPS: readonly ReplayClip[] = [...REPLAY_CLIPS, ...LONG_SPEECH_CLIPS];
+const CLIPS: readonly ReplayClip[] = [...DEFAULT_CLIPS, ...INTENT_CLIPS];
 const DEFAULT_ARMS = ["prod"];
 const DEFAULT_VOICES = [
   "say",
@@ -90,6 +95,7 @@ is skipped for it. Costs cents.
   --stop-tails <list>   ms of silence between the speech ending and the stop (default 0,700)
   --repeats <n>         passes (default 1)
   --clips <list>        only these clip ids (default every replay and long-speech clip)
+  --intent              the intent clips instead: questions, quotes, restarts and filler
   --terms               send each clip's terms as Grok keyterms (default none)
   --repo                dictate as into a pane on this repository: its names read as production
                         reads them, sent to Grok as keyterms and to cleanup as repository names,
@@ -104,6 +110,7 @@ interface Options {
   stopTails: number[];
   repeats: number;
   clips: string[];
+  intent: boolean;
   terms: boolean;
   repo: boolean;
   seed: number;
@@ -125,6 +132,7 @@ function parseArgs(argv: readonly string[]): Options | null {
     stopTails: [0, 700],
     repeats: 1,
     clips: [],
+    intent: false,
     terms: false,
     repo: false,
     seed: 14900,
@@ -144,6 +152,7 @@ function parseArgs(argv: readonly string[]): Options | null {
     else if (flag === "--stop-tails") options.stopTails = list(value()).map(Number);
     else if (flag === "--repeats") options.repeats = Number(value());
     else if (flag === "--clips") options.clips = list(value());
+    else if (flag === "--intent") options.intent = true;
     else if (flag === "--terms") options.terms = true;
     else if (flag === "--repo") options.repo = true;
     else if (flag === "--seed") options.seed = Number(value());
@@ -241,6 +250,7 @@ function cleanupSettings(apiKey: string, repo: RepoContext): VoiceCorrectionSett
     projectName: "daintree",
     projectPath: "/Users/dev/Projects/daintree",
     language: "en",
+    transcriber: "grok",
     commandTarget: claudeCodeTarget(),
     ...(process.env.OPENAI_ORG_ID ? { organizationId: process.env.OPENAI_ORG_ID } : {}),
     ...(process.env.OPENAI_PROJECT_ID ? { projectId: process.env.OPENAI_PROJECT_ID } : {}),
@@ -544,6 +554,50 @@ function scoreRun(run: RunRecord): ScoredPipelineSession[] {
   });
 }
 
+function finalText(scored: ScoredPipelineSession): string {
+  return scored.session.cleanup?.text ?? scored.session.raw;
+}
+
+function intentOf(clip: ReplayClip, text: string) {
+  return checkIntent(clip.reference, text, clip.tags);
+}
+
+// Raw against final, so a question Grok never wrote down reads apart from one cleanup lost.
+function renderIntentTable(scored: readonly ScoredPipelineSession[], arms: readonly string[]) {
+  // Over the sessions every arm has, as the other tables are, so an arm missing a hard clip can't look better.
+  const shared = sharedSessions(scored, arms);
+  const rows = arms.flatMap((arm) => {
+    const tally = { question: [0, 0, 0], quotes: [0, 0, 0] };
+    for (const s of scored) {
+      if (s.session.arm !== arm || !shared.has(sessionKey(s.session))) continue;
+      const clip = CLIPS.find((candidate) => candidate.id === s.session.clip);
+      if (!clip) continue;
+      const raw = intentOf(clip, s.session.raw);
+      const final = intentOf(clip, finalText(s));
+      for (const key of ["question", "quotes"] as const) {
+        if (final[key] === null) continue;
+        tally[key][0]! += raw[key] ? 1 : 0;
+        tally[key][1]! += final[key] ? 1 : 0;
+        tally[key][2]!++;
+      }
+    }
+    if (tally.question[2] === 0 && tally.quotes[2] === 0) return [];
+    const cell = ([raw, final, n]: number[]) => (n ? `${raw} → ${final} / ${n}` : "–");
+    return [`| ${arm} | ${cell(tally.question)} | ${cell(tally.quotes)} |`];
+  });
+  if (rows.length === 0) return [];
+  return [
+    "## Questions and quotes",
+    "",
+    "Sessions right, raw transcript → final text, over the clips that test each.",
+    "",
+    "| Arm | Questions | Quotes |",
+    "| --- | --- | --- |",
+    ...rows,
+    "",
+  ];
+}
+
 function renderReport(run: RunRecord, scored: readonly ScoredPipelineSession[]): string {
   const summary = summarisePipeline(scored, run.arms);
   const tails = [...new Set(run.sessions.map((session) => session.stopTailMs))];
@@ -573,9 +627,15 @@ function renderReport(run: RunRecord, scored: readonly ScoredPipelineSession[]):
   }
   lines.push("", "## Per voice", "");
   for (const arm of run.arms) lines.push(renderVoiceTable(scored, arm, run.arms), "");
+  lines.push(...renderIntentTable(scored, run.arms));
   lines.push("## Sessions whose final text differs from the reference", "");
   for (const clip of CLIPS) {
-    const rows = scored.filter((s) => s.session.clip === clip.id && !s.finalForm.exact);
+    // The word scores forgive punctuation, so a lost question or quote is listed on its own check.
+    const rows = scored.filter(
+      (s) =>
+        s.session.clip === clip.id &&
+        (!s.finalForm.exact || Object.values(intentOf(clip, finalText(s))).includes(false))
+    );
     if (rows.length === 0) continue;
     lines.push(`### ${clip.id}`, "", `Reference: ${clip.reference}`, "");
     for (const row of rows) {
@@ -659,7 +719,7 @@ async function main(): Promise<number> {
 
   const clips = options.clips.length
     ? CLIPS.filter((clip) => options.clips.includes(clip.id))
-    : [...CLIPS];
+    : [...(options.intent ? INTENT_CLIPS : DEFAULT_CLIPS)];
   const prepared = new Map<string, { clip: PreparedClip; samples: Int16Array }>();
   const unrecorded: string[] = [];
   for (const voice of options.voices) {

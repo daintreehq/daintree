@@ -462,7 +462,7 @@ export function summarisePipeline(
 }
 
 /** The dictations every arm completed, by `sessionKey`. */
-function sharedSessions(
+export function sharedSessions(
   scored: readonly ScoredPipelineSession[],
   arms: readonly string[]
 ): Set<string> {
@@ -531,4 +531,66 @@ export function renderVoiceTable(
     );
   }
   return lines.join("\n");
+}
+
+/**
+ * What the word scores can't see, for the `--intent` clips: whether a
+ * question came back a question and a statement a statement, and whether the
+ * words the speaker gave to be used exactly came back quoted. Null where the
+ * clip doesn't test it.
+ */
+export interface IntentCheck {
+  question: boolean | null;
+  quotes: boolean | null;
+}
+
+// A quoted span counts as the reference's when this share of its words line up.
+const QUOTE_MATCH = 0.8;
+
+function straightQuotes(text: string): string {
+  return text.replace(/[“”]/g, '"');
+}
+
+export function quotedSpans(text: string): string[] {
+  return [...straightQuotes(text).matchAll(/"([^"]+)"/g)].map((match) => match[1]!);
+}
+
+function quoteMatches(reference: string, hypothesis: string): boolean {
+  const ref = normaliseWords(reference);
+  const alignment = alignWords(ref, normaliseWords(hypothesis));
+  const errors = alignment.substitutions + alignment.deletions + alignment.insertions;
+  return ref.length > 0 && 1 - errors / ref.length >= QUOTE_MATCH;
+}
+
+// Each reference sentence, by its last word, against the sentence of the text
+// that word lands in, read forward so a repeated word finds its own place.
+function questionsKept(reference: string, text: string): boolean {
+  const sentences = (value: string) =>
+    value
+      .split(/(?<=[.?!])\s+/)
+      .map((sentence) => ({
+        words: normaliseWords(sentence),
+        asks: sentence.trimEnd().endsWith("?"),
+      }))
+      .filter((sentence) => sentence.words.length > 0);
+  const said = sentences(text);
+  let at = 0;
+  for (const sentence of sentences(reference)) {
+    const last = sentence.words[sentence.words.length - 1]!;
+    while (at < said.length && !said[at]!.words.includes(last)) at++;
+    if (at === said.length || said[at]!.asks !== sentence.asks) return false;
+  }
+  return true;
+}
+
+export function checkIntent(reference: string, text: string, tags: readonly string[]): IntentCheck {
+  const question = tags.includes("question") ? questionsKept(reference, text) : null;
+  let quotes: boolean | null = null;
+  if (tags.includes("quote")) {
+    const want = quotedSpans(reference);
+    const got = quotedSpans(text);
+    // In order and one for one, so a label quoted twice or swapped doesn't pass.
+    quotes = want.length === got.length && want.every((span, i) => quoteMatches(span, got[i]!));
+  }
+  return { question, quotes };
 }

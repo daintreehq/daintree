@@ -7,6 +7,7 @@ import {
   correctionInstructionsFor,
   LITERAL_CORRECTION_INSTRUCTIONS,
   LITERAL_CORRECTION_PROMPT,
+  TRANSCRIBER_NOTES,
   type CorrectionPromptContext,
 } from "../voiceCorrection.js";
 
@@ -22,6 +23,24 @@ describe("CORE_CORRECTION_PROMPT", () => {
     );
     expect(CORE_CORRECTION_PROMPT).toContain(
       "never paraphrase, summarize, merge instructions, or add anything"
+    );
+  });
+
+  it("keeps the agent's reading of the message as clear as the speaker's words", () => {
+    expect(CORE_CORRECTION_PROMPT).toContain("a question stays a question");
+    expect(CORE_CORRECTION_PROMPT).toContain(
+      "words given to be used exactly stay exact and in quotes"
+    );
+    expect(CORE_CORRECTION_PROMPT).toContain(
+      "A question mark the transcript wrote is the speaker's"
+    );
+    expect(CORE_CORRECTION_PROMPT).toMatch(/An indirect question .* is a statement/);
+    expect(CORE_CORRECTION_PROMPT).toMatch(/Reported speech .* gets no quotes/);
+    expect(CORE_CORRECTION_PROMPT).toContain('"gonna" is "going to"');
+    expect(CORE_CORRECTION_PROMPT).toMatch(/Ordinary contractions .* stay as spoken/);
+    expect(CORE_CORRECTION_PROMPT).toContain('"PR 149 20" is "PR #14920"');
+    expect(CORE_CORRECTION_PROMPT).toMatch(
+      /A number that isn't an issue or pull request number stays as it was transcribed/
     );
   });
 
@@ -282,6 +301,19 @@ describe("buildCorrectionSystemPrompt", () => {
     );
     expect(prompt.indexOf("</terms>")).toBeLessThan(prompt.indexOf("<user_terms>"));
     expect(prompt.indexOf("</user_terms>")).toBeLessThan(prompt.indexOf("CURRENT PROJECT"));
+  });
+
+  it("tells cleanup the transcriber's habits after the user terms, before the target", () => {
+    const prompt = buildCorrectionSystemPrompt({
+      transcriber: "grok",
+      heardAs: [{ heard: "dane tree", term: "Daintree" }],
+      target: { agentName: "Claude Code", isAssistant: false, commands: [] },
+    });
+    expect(prompt).toContain(TRANSCRIBER_NOTES.grok);
+    expect(prompt).not.toContain(TRANSCRIBER_NOTES.openai);
+    expect(prompt.indexOf("</user_terms>")).toBeLessThan(prompt.indexOf("TRANSCRIBER:"));
+    expect(prompt.indexOf("TRANSCRIBER:")).toBeLessThan(prompt.indexOf("TARGET:"));
+    expect(buildCorrectionSystemPrompt({})).not.toContain("TRANSCRIBER:");
   });
 
   it("omits the user terms section without heard-as rules", () => {

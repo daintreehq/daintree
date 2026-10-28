@@ -15,6 +15,7 @@ import {
   type CorrectionWorktreeContext,
   type VoiceReasoningEffort,
 } from "../../shared/config/voiceCorrection.js";
+import type { VoiceTranscriptionProvider } from "../../shared/types/ipc/api.js";
 import type { VoiceRewriteOutcome } from "../../shared/types/voice.js";
 import type { VoiceCorrectionVerdict } from "../../shared/types/voiceSessionSummary.js";
 import { voiceErrorLogFields } from "../../shared/utils/voiceLogFields.js";
@@ -56,7 +57,7 @@ const MIN_OUTPUT_TOKENS = 1024;
 const OUTPUT_TOKENS_PER_CHAR = 1.5;
 const OUTPUT_TOKENS_OVERHEAD = 256;
 const FILE_LINK_MAX_OUTPUT_TOKENS = 256;
-const PROMPT_CACHE_PREFIX = "voice-correction-v18";
+const PROMPT_CACHE_PREFIX = "voice-correction-v19";
 // OpenAI rejects a prompt_cache_key longer than 64 characters.
 const PROMPT_CACHE_KEY_MAX_LENGTH = 64;
 const FILE_LINK_DETECTION_TIMEOUT_MS = 4000;
@@ -200,6 +201,8 @@ export interface VoiceCorrectionSettings {
   heardAs?: readonly HeardAsRule[];
   customInstructions?: string;
   language?: string;
+  /** The provider that transcribed the passage, whose habits cleanup is told. */
+  transcriber?: VoiceTranscriptionProvider;
   projectName?: string;
   projectPath?: string;
   organizationId?: string;
@@ -638,6 +641,7 @@ export class VoiceCorrectionService {
     }
     if (settings.worktree) parts.push({ worktree: settings.worktree });
     if (settings.instructions) parts.push({ instructions: settings.instructions });
+    if (settings.transcriber) parts.push({ transcriber: settings.transcriber });
     const fingerprint = createHash("sha256")
       .update(JSON.stringify(parts))
       .digest("hex")
@@ -1091,6 +1095,7 @@ export class VoiceCorrectionService {
     } = settings;
 
     const target = settings.commandTarget;
+    const rules = settings.instructions ?? correctionInstructionsFor(settings.model);
     const context: CorrectionPromptContext = {
       ...(target
         ? {
@@ -1110,11 +1115,12 @@ export class VoiceCorrectionService {
       heardAs,
       customInstructions,
       language,
+      // Only to rules that say what the notes are for: Luna's never learned of them.
+      ...(settings.transcriber && rules.core.includes("TRANSCRIBER")
+        ? { transcriber: settings.transcriber }
+        : {}),
     };
-    return buildCorrectionSystemPrompt(
-      context,
-      settings.instructions ?? correctionInstructionsFor(settings.model)
-    );
+    return buildCorrectionSystemPrompt(context, rules);
   }
 
   // The warm-up shares everything but the user turn and the output cap, so

@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-export type ClipTag = "short" | "pause" | "long" | "vocab";
+export type ClipTag = "short" | "pause" | "long" | "vocab" | "question" | "quote" | "intent";
 
 /**
  * One dictated agent prompt. `speech` is what the synthesiser says, written the
@@ -206,6 +206,203 @@ export const LONG_SPEECH_CLIPS: readonly ReplayClip[] = [
       "Open the useVoiceRecording hook and look at how it handles the stop key while a send is waiting on cleanup. Pressing Escape during that wait drops the passage that was still being cleaned up. Keep the passage, cancel only the send, and add a test in its test file that presses Escape after the stop and checks the draft still holds every word.",
     terms: [],
     tags: ["long"],
+  },
+];
+
+/**
+ * Dictations in the way people actually talk to an agent, for the pipeline
+ * benchmark's `--intent` set: filler, restarts, a "So" opening every sentence,
+ * questions said as statements with only the voice rising, words the speaker
+ * quotes ("I said exactly…", a button label, an error message), and the
+ * lookalikes that must stay as they are (an indirect question, reported
+ * speech). A reference is the prompt the speaker would have typed. Kept out of
+ * `REPLAY_CLIPS` for the same reason as `LONG_SPEECH_CLIPS`.
+ */
+export const INTENT_CLIPS: readonly ReplayClip[] = [
+  {
+    id: "q-statement-form",
+    speech:
+      "So the main cost saving that I could get would be by switching to GPT 6 Luna? [[slnc 500]] I'll switch when GPT 6.1 Luna comes out.",
+    reference:
+      "The main cost saving that I could get would be by switching to GPT-6 Luna? I'll switch when GPT-6.1 Luna comes out.",
+    terms: [],
+    tags: ["question"],
+  },
+  {
+    id: "q-is-it-or",
+    speech:
+      "Is the prefetch still running when the stop lands, or does it get cancelled? Because I'm seeing, I'm seeing two requests in the logs for one dictation.",
+    reference:
+      "Is the prefetch still running when the stop lands, or does it get cancelled? Because I'm seeing two requests in the logs for one dictation.",
+    terms: [],
+    tags: ["question"],
+  },
+  {
+    id: "q-tag",
+    speech:
+      "The cache key includes the worktree name, doesn't it? So switching worktrees would miss the cache every time.",
+    reference:
+      "The cache key includes the worktree name, doesn't it? So switching worktrees would miss the cache every time.",
+    terms: [],
+    tags: ["question"],
+  },
+  {
+    id: "q-then-instruction",
+    speech:
+      "Um, why does the cleanup drop the question mark at the end? [[slnc 600]] Find out where that happens and fix it.",
+    reference:
+      "Why does the cleanup drop the question mark at the end? Find out where that happens and fix it.",
+    terms: [],
+    tags: ["question"],
+  },
+  {
+    id: "q-two-in-a-row",
+    speech:
+      "OK so how many cleanups am I actually sending a day? And what does that come to per month, roughly?",
+    reference:
+      "How many cleanups am I actually sending a day? And what does that come to per month, roughly?",
+    terms: [],
+    tags: ["question"],
+  },
+  {
+    id: "q-what-do-you-think",
+    speech:
+      "We could move the terminal output above the target so it caches. [[slnc 500]] What do you think, is that worth the benchmark run?",
+    reference:
+      "We could move the terminal output above the target so it caches. What do you think, is that worth the benchmark run?",
+    terms: [],
+    tags: ["question"],
+  },
+  {
+    id: "q-indirect-stays-statement",
+    speech:
+      "I'm wondering whether we should cache the terminal output at all. Have a look and tell me what you find.",
+    reference:
+      "I'm wondering whether we should cache the terminal output at all. Have a look and tell me what you find.",
+    terms: [],
+    tags: ["question"],
+  },
+  {
+    id: "quote-said-exactly",
+    speech:
+      "So in that first sentence, I said exactly, oh, [[slnc 400]] the main cost saving that I could, [[slnc 300]] I could get would be by switching to GPT 6 Luna. [[slnc 500]] And then it changed that. It, it made it not a question.",
+    reference:
+      'In that first sentence, I said exactly, "The main cost saving that I could get would be by switching to GPT-6 Luna?" And then it changed that. It made it not a question.',
+    terms: [],
+    tags: ["quote", "question"],
+  },
+  {
+    id: "quote-button-label",
+    speech:
+      "Change the button label so it says save and close, instead of just done. And the tooltip should say saves your changes and closes the panel.",
+    reference:
+      'Change the button label so it says "Save and close" instead of just "Done". And the tooltip should say "Saves your changes and closes the panel".',
+    terms: [],
+    tags: ["quote"],
+  },
+  {
+    id: "quote-error-message",
+    speech:
+      "When I open the settings, the console says, cannot read properties of undefined, reading length. [[slnc 400]] Can you track that down?",
+    reference:
+      'When I open the settings, the console says "Cannot read properties of undefined (reading length)". Can you track that down?',
+    terms: [],
+    tags: ["quote", "question"],
+  },
+  {
+    id: "quote-commit-message",
+    speech:
+      "Commit it with the message, fix voice cleanup turning questions into statements, and then push.",
+    reference:
+      'Commit it with the message "Fix voice cleanup turning questions into statements", and then push.',
+    terms: [],
+    tags: ["quote"],
+  },
+  {
+    id: "quote-agent-said",
+    speech:
+      "You said, and I'm quoting you here, the tests all pass on develop. [[slnc 400]] They don't. Three of them fail in the voice suite.",
+    reference:
+      "You said, and I'm quoting you here, \"The tests all pass on develop.\" They don't. Three of them fail in the voice suite.",
+    terms: [],
+    tags: ["quote"],
+  },
+  {
+    id: "quote-reported-stays-plain",
+    speech: "It told me the tests pass, but when I ran them myself, two of them failed.",
+    reference: "It told me the tests pass, but when I ran them myself, two of them failed.",
+    terms: [],
+    tags: ["quote"],
+  },
+  {
+    id: "intent-restarts",
+    speech:
+      "So I want you to, [[slnc 300]] I want you to create a new worktree and branch, and, and check that out specifically. [[slnc 500]] Don't, don't commit anything until I've tested it.",
+    reference:
+      "I want you to create a new worktree and branch, and check that out specifically. Don't commit anything until I've tested it.",
+    terms: [],
+    tags: ["intent"],
+  },
+  {
+    id: "intent-hesitations",
+    speech:
+      "Something else is, [[slnc 700]] we should make the prompt, [[slnc 600]] for the cleanup, aware of any quirks, or any sort of, the way that the Grok transcriber writes things.",
+    reference:
+      "Something else is we should make the prompt for the cleanup aware of any quirks, or the way that the Grok transcriber writes things.",
+    terms: [],
+    tags: ["intent"],
+  },
+  {
+    id: "intent-conditional",
+    speech:
+      "And if there are any of those audio files committed, then we need to rewrite the git history, remove those, and force push back to origin.",
+    reference:
+      "If there are any of those audio files committed, then we need to rewrite the git history, remove those, and force push back to origin.",
+    terms: [],
+    tags: ["intent"],
+  },
+  {
+    id: "intent-hedge-kept",
+    speech:
+      "I think the prefetch is probably the problem, but maybe check the stop path first, just in case.",
+    reference:
+      "I think the prefetch is probably the problem, but maybe check the stop path first, just in case.",
+    terms: [],
+    tags: ["intent"],
+  },
+  {
+    id: "intent-spoken-forms",
+    speech:
+      "I'm gonna be at the gym for an hour, so I wanna get the summary as a voice note. And you gotta keep it short.",
+    reference:
+      "I'm going to be at the gym for an hour, so I want to get the summary as a voice note. And you have to keep it short.",
+    terms: [],
+    tags: ["intent"],
+  },
+  {
+    id: "intent-issue-numbers",
+    speech:
+      "Can you rebase PR 149 20 onto develop? [[slnc 400]] And then close issue one four eight nine nine, because that one's done.",
+    reference:
+      "Can you rebase PR #14920 onto develop? And then close issue #14899, because that one's done.",
+    terms: [],
+    tags: ["intent", "question"],
+  },
+  {
+    id: "intent-number-stays",
+    speech: "Set the retry budget to 149 20 milliseconds, and check it against PR 149 20.",
+    reference: "Set the retry budget to 14920 milliseconds, and check it against PR #14920.",
+    terms: [],
+    tags: ["intent"],
+  },
+  {
+    id: "intent-ramble",
+    speech:
+      "So the one thing that I noticed is, [[slnc 600]] it's not picking up questions properly. And the other thing is, [[slnc 600]] figuring out what parts are quotes. So what parts, [[slnc 400]] where the user wants what they said exactly in there, maybe just cleaned up a tiny bit. So yeah.",
+    reference:
+      "The one thing that I noticed is it's not picking up questions properly. The other thing is figuring out what parts are quotes, where the user wants what they said exactly in there, maybe just cleaned up a tiny bit.",
+    terms: [],
+    tags: ["intent", "long"],
   },
 ];
 
