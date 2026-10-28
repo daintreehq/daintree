@@ -9,7 +9,7 @@ import {
   type VoiceSessionSummary,
   type VoiceStopReason,
 } from "@shared/types/voiceSessionSummary";
-import { countPassageFates } from "@/services/voiceCorrectionPassages";
+import { addPassageCounts, countPassageFates } from "@/services/voiceCorrectionPassages";
 import type { VoiceSessionEndReason } from "@shared/types/voice";
 import type { VoiceTranscriptionProvider } from "@shared/types";
 
@@ -64,6 +64,8 @@ export class VoiceSessionTimeline {
   private correction: "none" | VoiceCorrectionOutcome = "none";
   private correctionPassages: VoiceCorrectionPassages = countPassageFates([]);
   private correctionChunks = 0;
+  private correctionChunkPassages: VoiceCorrectionPassages = countPassageFates([]);
+  private chunkPassesOut = 0;
   private droppedQueued = 0;
   private charsCommitted = 0;
   private heardSignal = false;
@@ -159,6 +161,21 @@ export class VoiceSessionTimeline {
     if (!this.done) this.correctionChunks++;
   }
 
+  /**
+   * A pass over a chunk's words went out: the chunk itself, or a pass after
+   * the stop over what it couldn't land. The summary waits for each to end.
+   */
+  beginChunkPass(): void {
+    if (!this.done) this.chunkPassesOut++;
+  }
+
+  endChunkPass(passages: VoiceCorrectionPassages): void {
+    if (this.done || this.chunkPassesOut === 0) return;
+    this.chunkPassesOut--;
+    this.correctionChunkPassages = addPassageCounts(this.correctionChunkPassages, passages);
+    this.tryLog();
+  }
+
   beginCorrection(): void {
     if (this.done || this.correctionStartedAt !== null) return;
     this.correctionStartedAt = this.deps.now();
@@ -226,6 +243,7 @@ export class VoiceSessionTimeline {
   private tryLog(): void {
     if (this.done || this.stopReason === null) return;
     if (this.correctionStartedAt !== null && this.correctionMs === null) return;
+    if (this.chunkPassesOut > 0) return;
     if (this.backend.state === "pending") return;
     // Text that arrived during the stop is painted on a frame still to come.
     if (this.pendingFrames.size > 0) {
@@ -288,6 +306,7 @@ export class VoiceSessionTimeline {
       correction: this.correction,
       correctionPassages: this.correctionPassages,
       correctionChunks: this.correctionChunks,
+      correctionChunkPassages: this.correctionChunkPassages,
       droppedQueued: this.droppedQueued,
       charsCommitted: this.charsCommitted,
       audioNoText: this.heardSignal && this.charsCommitted === 0,

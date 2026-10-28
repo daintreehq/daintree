@@ -228,6 +228,16 @@ export function countPassageFates(fates: readonly PassageFate[]): VoiceCorrectio
   return counts;
 }
 
+/** Two passes' counts as one. */
+export function addPassageCounts(
+  a: VoiceCorrectionPassages,
+  b: VoiceCorrectionPassages
+): VoiceCorrectionPassages {
+  const sum = { ...a };
+  for (const key of Object.keys(sum) as Array<keyof VoiceCorrectionPassages>) sum[key] += b[key];
+  return sum;
+}
+
 /** One learning baseline for the session, from each passage's settled text. */
 export function joinPassageTexts(texts: string[]): string | null {
   const joined = texts.join(" ");

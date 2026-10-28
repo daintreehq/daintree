@@ -698,6 +698,60 @@ describe("VoiceRecordingService — cleaning up a long dictation in chunks (#147
     });
   });
 
+  it("cleans a turned-down chunk once more after the stop, and no more than that", async () => {
+    const { service, say, pause, draft, flush } = await setup();
+    const chunk = deferred<CorrectResult>();
+    correct
+      .mockReturnValueOnce(chunk.promise)
+      .mockImplementation(async ({ rawText }) =>
+        rawText === NEXT
+          ? { action: "no_change", correctedText: NEXT }
+          : { action: "no_change", correctedText: rawText, failed: true }
+      );
+    for (const sentence of OPENING) say(sentence);
+    pause();
+    say(NEXT);
+    await service.stop();
+    chunk.resolve({
+      action: "no_change",
+      correctedText: OPENING_TEXT,
+      verdict: "rejected_command",
+    });
+    await flush();
+    await flush();
+
+    expect(correct.mock.calls.map(([request]) => request.rawText)).toEqual([
+      OPENING_TEXT,
+      NEXT,
+      OPENING_TEXT,
+    ]);
+    expect(service.hasPendingCorrection(PANEL)).toBe(false);
+    expect(draft()).toBe(`${OPENING_TEXT} ${NEXT}`);
+    expect(setHistoryCorrection).not.toHaveBeenCalled();
+  });
+
+  it("doesn't clean again a chunk a send took the draft from", async () => {
+    const { service, say, pause, flush } = await setup();
+    const chunk = deferred<CorrectResult>();
+    correct
+      .mockReturnValueOnce(chunk.promise)
+      .mockResolvedValue({ action: "no_change", correctedText: NEXT });
+    for (const sentence of OPENING) say(sentence);
+    pause();
+    say(NEXT);
+    await service.stop();
+    service.discardPendingCorrections(PANEL);
+    chunk.resolve({
+      action: "no_change",
+      correctedText: OPENING_TEXT,
+      verdict: "rejected_command",
+    });
+    await flush();
+
+    expect(correct).toHaveBeenCalledTimes(2);
+    expect(service.hasPendingCorrection(PANEL)).toBe(false);
+  });
+
   it("keeps a chunk cleanup's paragraph breaks through more dictation, the stop and the send", async () => {
     const { service, sessionId, say, pause, draft, record, flush, baseline } = await setup();
     const { planVoiceDraftSend } = await import("../voiceDraftSend");

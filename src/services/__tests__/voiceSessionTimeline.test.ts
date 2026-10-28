@@ -213,11 +213,38 @@ describe("VoiceSessionTimeline", () => {
     expect(logged()).toMatchObject({ correctionChunks: 2, correctionMs: 600 });
   });
 
+  it("waits for every chunk pass still out, and adds up their passages apart from the stop-time pass", () => {
+    const t = timeline();
+    t.noteCorrectionChunk();
+    t.beginChunkPass();
+    t.mark("stopRequested");
+    t.beginCorrection();
+    t.finish("user");
+    t.endCorrection("unchanged", countPassageFates(["unchanged"]));
+    expect(log).not.toHaveBeenCalled();
+
+    // The chunk's turned-down passage goes out again before the chunk ends.
+    t.beginChunkPass();
+    t.endChunkPass(countPassageFates(["rejected_low_confidence", "applied"]));
+    expect(log).not.toHaveBeenCalled();
+    t.endChunkPass(countPassageFates(["applied"]));
+    expect(logged()).toMatchObject({
+      correctionChunks: 1,
+      correctionPassages: { sent: 1, unchanged: 1 },
+      correctionChunkPassages: { sent: 3, applied: 2, rejectedLowConfidence: 1 },
+    });
+  });
+
   it("reports no chunks for a session that never sent one", () => {
     const t = timeline();
     t.mark("stopRequested");
     t.finish("user");
-    expect(logged()).toMatchObject({ correctionChunks: 0, correction: "none", correctionMs: null });
+    expect(logged()).toMatchObject({
+      correctionChunks: 0,
+      correctionChunkPassages: countPassageFates([]),
+      correction: "none",
+      correctionMs: null,
+    });
   });
 
   it("splits the correction into main's preparation, the round trip and applying it", () => {
