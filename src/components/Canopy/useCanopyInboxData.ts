@@ -12,12 +12,14 @@ import {
   ownCanopyTerminalApi,
   remoteCanopyApi,
   remoteCanopyTerminalApi,
+  unlessHostDisconnected,
   useRemoteCanopies,
   useRemoteCanopy,
 } from "./canopyHostSource";
 import {
   allHostsKey,
   createAllHostsRoute,
+  hostAway,
   mergeHostReadings,
   type HostReading,
 } from "./canopyAllHosts";
@@ -96,21 +98,35 @@ export function useCanopyInboxData({
   );
   const ownCanopy = useCanopyStore((s) => s.snapshot);
   const ownFleet = useFleetSnapshotStore((s) => s.snapshot);
+  // A host that can't be reached is read as if it weren't listed, its viewer
+  // still open: the link coming back brings its agents with it.
+  const awayKey = everyHost
+    ? remoteIds
+        .filter((id) =>
+          hostAway(
+            (hostRows ?? []).find((row) => row.hostId === id)?.connection ?? null,
+            (remotes.states.get(id)?.fleet ?? null) !== null
+          )
+        )
+        .join("\u0000")
+    : "";
   const readings = useMemo<HostReading[]>(
     () =>
       everyHost
-        ? participants.map((id) =>
-            id === ownHostId
-              ? { hostId: id, canopy: ownCanopy, fleet: ownFleet, error: null }
-              : {
-                  hostId: id,
-                  canopy: remotes.states.get(id)?.canopy ?? null,
-                  fleet: remotes.states.get(id)?.fleet ?? null,
-                  error: remotes.states.get(id)?.error ?? null,
-                }
-          )
+        ? participants
+            .filter((id) => !awayKey.split("\u0000").includes(id))
+            .map((id) =>
+              id === ownHostId
+                ? { hostId: id, canopy: ownCanopy, fleet: ownFleet, error: null }
+                : {
+                    hostId: id,
+                    canopy: remotes.states.get(id)?.canopy ?? null,
+                    fleet: remotes.states.get(id)?.fleet ?? null,
+                    error: remotes.states.get(id)?.error ?? null,
+                  }
+            )
         : [],
-    [everyHost, participants, ownHostId, ownCanopy, ownFleet, remotes.states]
+    [everyHost, participants, awayKey, ownHostId, ownCanopy, ownFleet, remotes.states]
   );
   const merged = useMemo(
     () => (everyHost ? mergeHostReadings(readings) : null),
@@ -161,7 +177,9 @@ export function useCanopyInboxData({
   // cost nothing. Said again whenever another host's link comes back.
   useEffect(() => {
     if (!isOpen) return;
-    safeFireAndForget(api.setScope(scope === "project" ? getViewWorkspaceId() : null));
+    safeFireAndForget(
+      unlessHostDisconnected(api.setScope(scope === "project" ? getViewWorkspaceId() : null))
+    );
   }, [isOpen, scope, api, recoveries]);
 
   const [nowMs, setNowMs] = useState(() => Date.now());

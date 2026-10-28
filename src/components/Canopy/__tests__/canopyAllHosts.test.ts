@@ -32,6 +32,7 @@ vi.mock("@/clients/canopyHostClient", () => ({
 import {
   allHostsKey,
   createAllHostsRoute,
+  hostAway,
   hostsWithCanopyOff,
   mergeHostReadings,
   parseAllHostsKey,
@@ -592,5 +593,35 @@ describe("createAllHostsRoute", () => {
     await terminalApi.watchTerminal(allHostsKey("remote", "t1"), { spawnedAt: 1 });
     await terminalApi.unwatchTerminal();
     expect(invoke).toHaveBeenCalledWith("remote", "canopy:unwatch-terminal");
+  });
+});
+
+describe("hostAway", () => {
+  it.each([
+    ["the window's own host", null, true, false],
+    ["a first dial", { status: "connecting", attempt: 1 }, false, false],
+    ["a link down before anything was read", { status: "disconnected" }, false, false],
+    ["a link up", { status: "connected", rttMs: 1, handshake: null as never }, true, false],
+    ["a link that failed", { status: "unreachable", lastSeenAt: null, detail: null }, false, true],
+    ["a dial retried after one failed", { status: "connecting", attempt: 2 }, false, true],
+    [
+      "a link redialled after its agents were read",
+      { status: "connecting", attempt: 1 },
+      true,
+      true,
+    ],
+    ["a link down after its agents were read", { status: "disconnected" }, true, true],
+    [
+      "a link refused for another build",
+      {
+        status: "version-mismatch",
+        mismatch: { kind: "protocol", local: 2, remote: 1 },
+        remote: null as never,
+      },
+      true,
+      false,
+    ],
+  ] as const)("reads %s", (_case, connection, read, away) => {
+    expect(hostAway(connection, read)).toBe(away);
   });
 });
