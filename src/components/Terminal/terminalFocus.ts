@@ -127,6 +127,32 @@ export function resolveTerminalPaneFocus(options: {
 }
 
 /**
+ * Where a click on an agent pane's terminal puts the keyboard, which is where
+ * a file let go over it lands. A selected pane passes the click to xterm. An
+ * unselected one swallows it to select the pane, whose own focus pass keeps a
+ * keyboard already on one of its surfaces and otherwise lands on home.
+ *
+ * Ownership is the caller's read of `document.activeElement`, never
+ * `document.hasFocus()`: a drag out of Finder blurs the window, but the
+ * element that held the keyboard still holds it.
+ */
+export function getTerminalClickTarget(
+  options: Omit<
+    Parameters<typeof resolveTerminalPaneFocus>[0],
+    "requested" | "keepOwnedSurface"
+  > & {
+    /** The pane is the selected one, so a click reaches its xterm. */
+    isFocused: boolean;
+  }
+): TerminalFocusTarget {
+  const { isFocused, ...pane } = options;
+  if (isFocused) return "xterm";
+  const action = resolveTerminalPaneFocus({ ...pane, requested: null, keepOwnedSurface: true });
+  if (action !== "preserve") return action;
+  return pane.xtermOwnsDomFocus ? "xterm" : "hybridInput";
+}
+
+/**
  * Whether a pointerdown on the xterm area of an *unfocused* pane, in the grid
  * or the dock, should be swallowed before xterm sees it. Prevents stray clicks
  * from poking at cursor positions, mouse-mode handlers, or kicking off

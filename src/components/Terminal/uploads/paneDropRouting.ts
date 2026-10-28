@@ -4,19 +4,13 @@ import type { TerminalFocusTarget } from "../terminalFocus";
 
 /**
  * An agent pane has two surfaces that take dropped files, its terminal and its
- * input bar, and a drop lands on whichever of them holds the keyboard — the
- * way a paste would — whichever of the two it was let go over. With neither
- * holding it, the drop lands where a click at the drop point would have put
- * the keyboard.
- *
- * Ownership is read from `document.activeElement`, never `document.hasFocus()`:
- * a drag out of Finder blurs the window, but the element that held the
- * keyboard still holds it, and gets it back when the window does.
+ * input bar, and a drop lands where a click at the drop point would have put
+ * the keyboard: a drop on the bar goes to the bar, and one on the terminal
+ * goes wherever a click on the terminal would send the keyboard, which the
+ * pane works out (`getTerminalClickTarget`). The keyboard's current owner only
+ * matters as far as it changes what that click would do.
  */
-
 export interface PaneDropTarget {
-  /** Holds the window's keyboard focus. */
-  ownsFocus: () => boolean;
   /** Could take a file drop right now. */
   canTake: () => boolean;
   /** Takes the drop and returns true, or declines it so the surface it landed on does. */
@@ -50,23 +44,17 @@ export function canPaneSurfaceTakeDrop(terminalId: string, surface: TerminalFocu
 
 /**
  * Which surface of the pane takes a drop let go over `droppedOn`. `onClick` is
- * where a click there would put the keyboard, for when neither surface holds
- * it. A surface that can't take the drop passes it to the other one; with
- * neither able to, it stays with the one dropped on, which refuses it.
+ * where a click there would put the keyboard. A surface that can't take the
+ * drop passes it to the other one; with neither able to, it stays with the one
+ * dropped on, which refuses it.
  */
 export function resolvePaneDropTarget(
   terminalId: string,
   droppedOn: TerminalFocusTarget,
   onClick: TerminalFocusTarget = droppedOn
 ): TerminalFocusTarget {
-  const other = otherSurface(droppedOn);
-  const chosen = targets[other].get(terminalId)?.ownsFocus()
-    ? other
-    : targets[droppedOn].get(terminalId)?.ownsFocus()
-      ? droppedOn
-      : onClick;
-  if (canPaneSurfaceTakeDrop(terminalId, chosen)) return chosen;
-  const fallback = otherSurface(chosen);
+  if (canPaneSurfaceTakeDrop(terminalId, onClick)) return onClick;
+  const fallback = otherSurface(onClick);
   return canPaneSurfaceTakeDrop(terminalId, fallback) ? fallback : droppedOn;
 }
 

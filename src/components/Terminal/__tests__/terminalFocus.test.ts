@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  getTerminalClickTarget,
   getTerminalFocusTarget,
   isLikelyAtSynthesizedPointer,
   resolvePaneFocusAction,
@@ -290,6 +291,82 @@ describe("shouldShowHybridInputBar", () => {
         fleetSize: 2,
       })
     ).toBe(false);
+  });
+});
+
+/**
+ * Where a file dropped on an agent pane's terminal lands, which is wherever a
+ * click on that terminal would put the keyboard.
+ */
+describe("getTerminalClickTarget", () => {
+  const pane = {
+    home: "hybridInput" as const,
+    hasHybridInputSurface: true,
+    isInputDisabled: false,
+    hybridInputEnabled: true,
+    hasSelection: false,
+    xtermOwnsDomFocus: false,
+    hybridInputOwnsDomFocus: false,
+  };
+
+  it.each([
+    ["hybridInput", false, false],
+    ["xterm", false, false],
+    ["hybridInput", false, true],
+    ["hybridInput", true, false],
+  ] as const)(
+    "sends a selected pane's click to xterm (home %s, xterm owns %s, input owns %s)",
+    (home, xtermOwnsDomFocus, hybridInputOwnsDomFocus) => {
+      expect(
+        getTerminalClickTarget({
+          ...pane,
+          home,
+          xtermOwnsDomFocus,
+          hybridInputOwnsDomFocus,
+          isFocused: true,
+        })
+      ).toBe("xterm");
+    }
+  );
+
+  it.each(["hybridInput", "xterm"] as const)(
+    "lands an unselected pane's click on home %s",
+    (home) => {
+      expect(getTerminalClickTarget({ ...pane, home, isFocused: false })).toBe(home);
+    }
+  );
+
+  it("keeps an unselected pane's keyboard on the surface already holding it", () => {
+    expect(
+      getTerminalClickTarget({
+        ...pane,
+        home: "hybridInput",
+        xtermOwnsDomFocus: true,
+        isFocused: false,
+      })
+    ).toBe("xterm");
+    expect(
+      getTerminalClickTarget({
+        ...pane,
+        home: "xterm",
+        hybridInputOwnsDomFocus: true,
+        isFocused: false,
+      })
+    ).toBe("hybridInput");
+  });
+
+  it("sends an unselected pane's click to xterm when its input bar can't take the keyboard", () => {
+    expect(getTerminalClickTarget({ ...pane, isInputDisabled: true, isFocused: false })).toBe(
+      "xterm"
+    );
+    expect(
+      getTerminalClickTarget({
+        ...pane,
+        hasHybridInputSurface: false,
+        hybridInputOwnsDomFocus: true,
+        isFocused: false,
+      })
+    ).toBe("xterm");
   });
 });
 

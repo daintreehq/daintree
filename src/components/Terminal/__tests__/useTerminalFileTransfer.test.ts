@@ -104,7 +104,6 @@ import { setRemoteMaterializer } from "@/services/materialize";
 import {
   _resetPaneDropRoutingForTests,
   registerPaneDropTarget,
-  resolvePaneDropTarget,
   routePaneDrop,
   usePaneDropHighlight,
   type PaneDropTarget,
@@ -117,7 +116,6 @@ import {
 import { _resetCtrlVImagePasteForTests, getClipboardImagePaster } from "../uploads/ctrlVImagePaste";
 import type { MaterializeResult, MaterializeSource } from "@shared/types/remoteHosts";
 import type { TransferSource } from "@/lib/transferSources";
-import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 
 const terminalInstanceService = createTerminalPaintPlane();
@@ -1903,7 +1901,6 @@ describe("useTerminalFileTransfer hook", () => {
     function registerInputBar(overrides: Partial<PaneDropTarget> = {}) {
       const take = vi.fn<PaneDropTarget["take"]>(() => true);
       registerPaneDropTarget("term-1", "hybridInput", {
-        ownsFocus: () => false,
         canTake: () => true,
         take,
         ...overrides,
@@ -1911,71 +1908,98 @@ describe("useTerminalFileTransfer hook", () => {
       return overrides.take ? vi.mocked(overrides.take) : take;
     }
 
-    /** Gives xterm the keyboard the way the real helper textarea holds it. */
-    function focusXterm() {
-      const textarea = document.createElement("textarea");
-      instanceState.hostElement!.appendChild(textarea);
-      textarea.focus();
-    }
-
     it.each([
       ["a local", false],
       ["a remote", true],
-    ])("goes to the input bar in %s window while the bar holds the keyboard", async (_, remote) => {
-      if (remote) window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
-      try {
-        const materializer = vi.fn();
-        setRemoteMaterializer(materializer);
-        const take = registerInputBar({ ownsFocus: () => true });
-        const onDropSelect = vi.fn();
-        renderFileTransferHook({ detectedAgentId: "claude", onDropSelect });
-        await dropFiles([fileAt("a.png", "/Users/me/a.png")]);
+    ])(
+      "goes to the input bar in %s window when a click on the terminal would focus it",
+      async (_, remote) => {
+        if (remote) window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
+        try {
+          const materializer = vi.fn();
+          setRemoteMaterializer(materializer);
+          const take = registerInputBar();
+          const onDropSelect = vi.fn();
+          renderFileTransferHook({
+            detectedAgentId: "claude",
+            onDropSelect,
+            dropClickTarget: () => "hybridInput",
+          });
+          await dropFiles([fileAt("a.png", "/Users/me/a.png")]);
 
-        expect(take).toHaveBeenCalledWith([sourceFor("/Users/me/a.png")]);
-        expect(onDropSelect).toHaveBeenCalled();
-        expect(materializer).not.toHaveBeenCalled();
-        expect(terminalClient.write).not.toHaveBeenCalled();
-      } finally {
-        delete window.__DAINTREE_HOST_ID__;
+          expect(take).toHaveBeenCalledWith([sourceFor("/Users/me/a.png")]);
+          expect(onDropSelect).toHaveBeenCalled();
+          expect(materializer).not.toHaveBeenCalled();
+          expect(terminalClient.write).not.toHaveBeenCalled();
+        } finally {
+          delete window.__DAINTREE_HOST_ID__;
+        }
       }
-    });
+    );
 
-    it("lands on the terminal while xterm holds the keyboard, whatever home is", async () => {
+    it("lands on the terminal when a click there would focus it, whatever holds the keyboard", async () => {
       const take = registerInputBar();
-      focusXterm();
-      renderFileTransferHook({
-        detectedAgentId: "claude",
-        cwdProvider: () => CWD,
-        dropHomeTarget: () => "hybridInput",
-      });
-      await dropFiles([fileAt("App.tsx", `${CWD}/src/App.tsx`)]);
+      const barEditor = document.createElement("div");
+      barEditor.tabIndex = 0;
+      document.body.appendChild(barEditor);
+      barEditor.focus();
+      try {
+        renderFileTransferHook({
+          detectedAgentId: "claude",
+          cwdProvider: () => CWD,
+          dropClickTarget: () => "xterm",
+        });
+        await dropFiles([fileAt("App.tsx", `${CWD}/src/App.tsx`)]);
+      } finally {
+        barEditor.remove();
+      }
 
       expect(take).not.toHaveBeenCalled();
       expect(lastWrittenPayload().trimEnd()).toBe("@src/App.tsx");
     });
 
-    it("goes to the pane's home when nothing in the pane holds the keyboard", async () => {
+    it("asks where a click would go at each drop", async () => {
       const take = registerInputBar();
-      const { rerender } = renderFileTransferHook({
+      let onClick: "hybridInput" | "xterm" = "hybridInput";
+      renderFileTransferHook({
         detectedAgentId: "claude",
         cwdProvider: () => CWD,
-        dropHomeTarget: () => "hybridInput",
+        dropClickTarget: () => onClick,
       });
       await dropFiles([fileAt("a.ts", `${CWD}/a.ts`)]);
       expect(take).toHaveBeenCalledTimes(1);
       expect(terminalClient.write).not.toHaveBeenCalled();
 
-      rerender({
-        detectedAgentId: "claude",
-        cwdProvider: () => CWD,
-        dropHomeTarget: () => "xterm",
-      });
+      onClick = "xterm";
       await dropFiles([fileAt("b.ts", `${CWD}/b.ts`)]);
       expect(take).toHaveBeenCalledTimes(1);
       expect(lastWrittenPayload().trimEnd()).toBe("@b.ts");
     });
 
-    it("lands on the terminal when nothing holds the keyboard and there is no pane", async () => {
+    it("asks the pane's latest callback, and xterm once it has none", async () => {
+      const take = registerInputBar();
+      const { rerender } = renderFileTransferHook({
+        detectedAgentId: "claude",
+        cwdProvider: () => CWD,
+        dropClickTarget: () => "xterm",
+      });
+
+      rerender({
+        detectedAgentId: "claude",
+        cwdProvider: () => CWD,
+        dropClickTarget: () => "hybridInput",
+      });
+      await dropFiles([fileAt("a.ts", `${CWD}/a.ts`)]);
+      expect(take).toHaveBeenCalledTimes(1);
+      expect(terminalClient.write).not.toHaveBeenCalled();
+
+      rerender({ detectedAgentId: "claude", cwdProvider: () => CWD });
+      await dropFiles([fileAt("b.ts", `${CWD}/b.ts`)]);
+      expect(take).toHaveBeenCalledTimes(1);
+      expect(lastWrittenPayload().trimEnd()).toBe("@b.ts");
+    });
+
+    it("lands on the terminal when there is no pane to ask", async () => {
       const take = registerInputBar();
       renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD });
       await dropFiles([fileAt("App.tsx", `${CWD}/src/App.tsx`)]);
@@ -1988,7 +2012,7 @@ describe("useTerminalFileTransfer hook", () => {
       renderFileTransferHook({
         detectedAgentId: "claude",
         cwdProvider: () => CWD,
-        dropHomeTarget: () => "hybridInput",
+        dropClickTarget: () => "hybridInput",
       });
       await dropFiles([fileAt("App.tsx", `${CWD}/src/App.tsx`)]);
 
@@ -1996,9 +2020,14 @@ describe("useTerminalFileTransfer hook", () => {
     });
 
     it("lands on the terminal when the input bar declines it", async () => {
-      const take = registerInputBar({ ownsFocus: () => true, take: vi.fn(() => false) });
+      const take = registerInputBar({ take: vi.fn(() => false) });
       const onDropSelect = vi.fn();
-      renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD, onDropSelect });
+      renderFileTransferHook({
+        detectedAgentId: "claude",
+        cwdProvider: () => CWD,
+        onDropSelect,
+        dropClickTarget: () => "hybridInput",
+      });
       await dropFiles([fileAt("App.tsx", `${CWD}/src/App.tsx`)]);
 
       expect(take).toHaveBeenCalledTimes(1);
@@ -2006,18 +2035,22 @@ describe("useTerminalFileTransfer hook", () => {
       expect(onDropSelect).toHaveBeenCalledTimes(1);
     });
 
-    it("lands on the terminal when the bar holding the keyboard can't take a drop", async () => {
-      const take = registerInputBar({ ownsFocus: () => true, canTake: () => false });
-      renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD });
+    it("lands on the terminal when the bar a click would focus can't take a drop", async () => {
+      const take = registerInputBar({ canTake: () => false });
+      renderFileTransferHook({
+        detectedAgentId: "claude",
+        cwdProvider: () => CWD,
+        dropClickTarget: () => "hybridInput",
+      });
       await dropFiles([fileAt("App.tsx", `${CWD}/src/App.tsx`)]);
 
       expect(take).not.toHaveBeenCalled();
       expect(lastWrittenPayload().trimEnd()).toBe("@src/App.tsx");
     });
 
-    it("keeps a plain shell's drop on the terminal whatever holds the keyboard", async () => {
-      const take = registerInputBar({ ownsFocus: () => true });
-      renderFileTransferHook({});
+    it("keeps a plain shell's drop on the terminal wherever a click would go", async () => {
+      const take = registerInputBar();
+      renderFileTransferHook({ dropClickTarget: () => "hybridInput" });
       await dropFiles([fileAt("a.ts", "/Users/test/a.ts")]);
 
       expect(take).not.toHaveBeenCalled();
@@ -2025,9 +2058,12 @@ describe("useTerminalFileTransfer hook", () => {
     });
 
     it("lights the input bar rather than the terminal for a drag the bar would take", async () => {
-      let barOwnsFocus = true;
-      registerInputBar({ ownsFocus: () => barOwnsFocus });
-      const { result } = renderFileTransferHook({ detectedAgentId: "claude" });
+      registerInputBar();
+      let onClick: "hybridInput" | "xterm" = "hybridInput";
+      const { result } = renderFileTransferHook({
+        detectedAgentId: "claude",
+        dropClickTarget: () => onClick,
+      });
       const bar = renderHook(() => usePaneDropHighlight("term-1", "hybridInput"));
 
       act(() => {
@@ -2036,8 +2072,7 @@ describe("useTerminalFileTransfer hook", () => {
       expect(result.current).toBe(false);
       expect(bar.result.current).toBe(true);
 
-      barOwnsFocus = false;
-      focusXterm();
+      onClick = "xterm";
       act(() => {
         container.dispatchEvent(makeDragEvent("dragover", true));
       });
@@ -2051,47 +2086,9 @@ describe("useTerminalFileTransfer hook", () => {
       expect(bar.result.current).toBe(false);
     });
 
-    it.each([true, false])(
-      "follows the keyboard whatever Focus first says (hybrid input: %s)",
-      async (autoFocus) => {
-        const before = useTerminalInputStore.getState().hybridInputAutoFocus;
-        useTerminalInputStore.setState({ hybridInputAutoFocus: autoFocus });
-        try {
-          let barOwnsFocus = true;
-          const take = registerInputBar({ ownsFocus: () => barOwnsFocus });
-          renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD });
-
-          await dropFiles([fileAt("a.ts", `${CWD}/a.ts`)]);
-          expect(take).toHaveBeenCalledTimes(1);
-          expect(terminalClient.write).not.toHaveBeenCalled();
-
-          barOwnsFocus = false;
-          focusXterm();
-          await dropFiles([fileAt("b.ts", `${CWD}/b.ts`)]);
-          expect(take).toHaveBeenCalledTimes(1);
-          expect(lastWrittenPayload().trimEnd()).toBe("@b.ts");
-        } finally {
-          useTerminalInputStore.setState({ hybridInputAutoFocus: before });
-        }
-      }
-    );
-
-    it("counts only xterm, not an upload chip's button beside it, as the terminal holding the keyboard", () => {
-      registerInputBar();
-      renderFileTransferHook({ detectedAgentId: "claude" });
-      const cancel = document.createElement("button");
-      container.appendChild(cancel);
-      cancel.focus();
-      expect(resolvePaneDropTarget("term-1", "hybridInput")).toBe("hybridInput");
-
-      focusXterm();
-      expect(resolvePaneDropTarget("term-1", "hybridInput")).toBe("xterm");
-    });
-
     it("hands the input bar a drop the terminal can't take", async () => {
       panelState.panelsById = { "term-1": { runtimeStatus: "exited" } };
       const take = registerInputBar();
-      focusXterm();
       renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD });
       await dropFiles([fileAt("a.ts", `${CWD}/a.ts`)]);
 
@@ -2157,13 +2154,18 @@ describe("useTerminalFileTransfer hook", () => {
 
     it("uploads under the terminal's chip when the input bar declines", async () => {
       const finish = holdUploads(() => "/tmp/daintree-inbox/files/x/a.md");
-      registerPaneDropTarget("term-1", "hybridInput", {
-        ownsFocus: () => true,
-        canTake: () => true,
-        take: () => false,
+      const take = vi.fn(() => false);
+      registerPaneDropTarget("term-1", "hybridInput", { canTake: () => true, take });
+      renderFileTransferHook({
+        detectedAgentId: "claude",
+        cwdProvider: () => "/tmp",
+        dropClickTarget: () => "hybridInput",
       });
-      renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => "/tmp" });
       await dropFiles([fileAt("a.md", "/Users/me/a.md")]);
+
+      expect(take).toHaveBeenCalledWith([
+        { kind: "local", path: "/Users/me/a.md", name: "a.md", size: 0 },
+      ]);
 
       expect(hasPendingUploads(terminalUploadSurface("term-1"))).toBe(true);
       expect(terminalClient.write).not.toHaveBeenCalled();
@@ -2175,11 +2177,10 @@ describe("useTerminalFileTransfer hook", () => {
     it("writes a plain shell's path only once its upload completes, tracked meanwhile", async () => {
       const finish = holdUploads(() => "/tmp/daintree-inbox/files/x/a.txt");
       registerPaneDropTarget("term-1", "hybridInput", {
-        ownsFocus: () => true,
         canTake: () => true,
         take: vi.fn(() => true),
       });
-      renderFileTransferHook({});
+      renderFileTransferHook({ dropClickTarget: () => "hybridInput" });
       await dropFiles([fileAt("a.txt", "/Users/me/a.txt")]);
 
       expect(terminalClient.write).not.toHaveBeenCalled();

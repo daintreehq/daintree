@@ -76,11 +76,11 @@ export interface XtermAdapterProps {
    */
   onDropSelect?: () => void;
   /**
-   * The pane's home, resolved against what it can take, which is where a file
-   * drop lands when neither the terminal nor its pane's input bar holds the
-   * keyboard. Omitted where there is no pane, so the drop goes to xterm.
+   * Where a click on this terminal would put the keyboard right now, which is
+   * where a file dropped on it lands. Omitted where there is no pane, so the
+   * drop goes to xterm.
    */
-  dropHomeTarget?: () => TerminalFocusTarget;
+  dropClickTarget?: () => TerminalFocusTarget;
   /**
    * Fired once per live `attach()`, after the service has been told the
    * terminal is visible. Lets the owning pane re-arm anything that captured an
@@ -108,7 +108,7 @@ export function XtermAdapter({
   onExit,
   onInput,
   onDropSelect,
-  dropHomeTarget,
+  dropClickTarget,
   onAttached,
   className,
   getRefreshTier,
@@ -227,7 +227,7 @@ export function XtermAdapter({
     isInputLocked,
     onInput: stableOnInput,
     onDropSelect,
-    dropHomeTarget,
+    dropClickTarget,
     // The same stable reader the instance service gets, so a drop relativizes
     // its `@file` token against the cwd the terminal is in when it lands.
     cwdProvider: stableCwdProvider,

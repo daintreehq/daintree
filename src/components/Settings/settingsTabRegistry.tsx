@@ -1392,7 +1392,7 @@ export const SETTINGS_REGISTRY = [
         section: "Input",
         title: "Focus first",
         description:
-          "Switching to an agent pane focuses its hybrid input or its terminal, and a file dropped on the terminal of a pane you aren't typing in goes there too",
+          "Switching to an agent pane focuses its hybrid input or its terminal, and a file dropped on another pane's terminal goes there too",
         keywords: [
           "focus",
           "autofocus",

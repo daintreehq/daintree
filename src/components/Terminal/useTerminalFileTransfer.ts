@@ -254,11 +254,11 @@ interface UseTerminalFileTransferOptions extends TerminalFileTransferIdentity {
    */
   cwdProvider?: () => string;
   /**
-   * The pane's home right now, resolved against what it can take. A file drop
-   * that finds neither the terminal nor its input bar holding the keyboard
-   * lands there. Omitted means xterm, wherever there is no pane.
+   * Where a click on the terminal would put the keyboard right now, which is
+   * where a file dropped on an agent pane's terminal lands. Omitted means
+   * xterm, wherever there is no pane.
    */
-  dropHomeTarget?: () => TerminalFocusTarget;
+  dropClickTarget?: () => TerminalFocusTarget;
 }
 
 /**
@@ -269,9 +269,9 @@ interface UseTerminalFileTransferOptions extends TerminalFileTransferIdentity {
  * - **Text paste:** Passes through to xterm's native handler (bracketed paste, etc.).
  * - **File drop:** Resolves the dropped paths, runs each through `materialize`, and
  *   writes the results into the terminal as text. Works for image and non-image files.
- *   An agent pane's drop goes to whichever of the terminal and its input bar holds
- *   the keyboard (`paneDropRouting`), so this also takes drops let go over the bar
- *   while xterm holds it, and hands the bar the ones it should get.
+ *   An agent pane's drop lands where a click at the drop point would put the
+ *   keyboard (`paneDropRouting`), so this hands the bar the drops a click on the
+ *   terminal would send there, and takes the ones the bar can't.
  * - **Images to an agent that attaches them** (#12792): when the agent declares
  *   `imageInput: "bracketed-path"` and xterm reports bracketed-paste mode, each
  *   image is pasted on its own as its raw absolute path — the only form the
@@ -315,7 +315,7 @@ export function useTerminalFileTransfer(
     launchAgentId,
     detectedAgentId,
     agentState,
-    dropHomeTarget,
+    dropClickTarget,
   }: UseTerminalFileTransferOptions
 ): boolean {
   const dragDepthRef = useRef(0);
@@ -344,7 +344,7 @@ export function useTerminalFileTransfer(
   // every render, and putting it in the listener effect's deps would tear down
   // and re-register all five DOM listeners that often.
   const onDropSelectRef = useRef(onDropSelect);
-  const dropHomeTargetRef = useRef(dropHomeTarget);
+  const dropClickTargetRef = useRef(dropClickTarget);
 
   // Bumped each time input locks, so paced writes queued before a lock stay
   // cancelled even if the lock lifts again before their next timer fires.
@@ -356,7 +356,7 @@ export function useTerminalFileTransfer(
     isInputLockedRef.current = isInputLocked;
     cwdProviderRef.current = cwdProvider;
     onDropSelectRef.current = onDropSelect;
-    dropHomeTargetRef.current = dropHomeTarget;
+    dropClickTargetRef.current = dropClickTarget;
   });
 
   useLayoutEffect(() => {
@@ -687,12 +687,12 @@ export function useTerminalFileTransfer(
     const acceptsAgentContext = (): boolean => getDraftRefusal(terminalId) === null;
 
     // Where a drag let go over this terminal lands. An agent pane's files go
-    // to whichever of the terminal and its input bar holds the keyboard, as a
-    // paste would; with neither holding it, to the pane's home. A shell's drop and an agent-context handoff keep their own
-    // routes: a shell takes no `@` tokens, and the handoff drafts on its own.
+    // where a click on the terminal would put the keyboard. A shell's drop and
+    // an agent-context handoff keep their own routes: a shell takes no `@`
+    // tokens, and the handoff drafts on its own.
     const dropTarget = (types: readonly string[]): TerminalFocusTarget => {
       if (hasAgentContextDrag(types) || !isAgentTerminal()) return "xterm";
-      return resolvePaneDropTarget(terminalId, "xterm", dropHomeTargetRef.current?.() ?? "xterm");
+      return resolvePaneDropTarget(terminalId, "xterm", dropClickTargetRef.current?.() ?? "xterm");
     };
 
     const handleDragEnter = (e: DragEvent) => {
@@ -868,13 +868,8 @@ export function useTerminalFileTransfer(
     };
 
     // The terminal's half of the pane's drop routing: the input bar hands it a
-    // drop let go over the bar while xterm holds the keyboard. Measured against
-    // xterm's host rather than this wrapper, which also holds the upload chips:
-    // a focused Cancel button there is not the terminal taking the keyboard.
+    // drop let go over the bar when the bar can't take it.
     const unregisterPaneDropTarget = registerPaneDropTarget(terminalId, "xterm", {
-      ownsFocus: () =>
-        peekTerminalService()?.get(terminalId)?.hostElement.contains(document.activeElement) ??
-        false,
       canTake: canInsert,
       take: (sources) => {
         if (sources.length === 0 || !canInsert()) return false;

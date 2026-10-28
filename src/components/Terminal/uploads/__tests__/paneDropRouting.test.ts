@@ -13,7 +13,7 @@ import {
 } from "../paneDropRouting";
 
 function target(overrides: Partial<PaneDropTarget> = {}): PaneDropTarget {
-  return { ownsFocus: () => false, canTake: () => true, take: () => true, ...overrides };
+  return { canTake: () => true, take: () => true, ...overrides };
 }
 
 afterEach(() => {
@@ -21,38 +21,7 @@ afterEach(() => {
 });
 
 describe("resolvePaneDropTarget", () => {
-  it.each([
-    ["xterm", "hybridInput"],
-    ["hybridInput", "xterm"],
-  ] as const)(
-    "gives a drop let go over %s to %s while it holds the keyboard",
-    (droppedOn, holder) => {
-      registerPaneDropTarget("t", droppedOn, target());
-      registerPaneDropTarget("t", holder, target({ ownsFocus: () => true }));
-
-      expect(resolvePaneDropTarget("t", droppedOn, droppedOn)).toBe(holder);
-    }
-  );
-
-  it("keeps a drop on the surface it was let go over while that one holds the keyboard", () => {
-    registerPaneDropTarget("t", "xterm", target({ ownsFocus: () => true }));
-    registerPaneDropTarget("t", "hybridInput", target());
-
-    expect(resolvePaneDropTarget("t", "xterm", "hybridInput")).toBe("xterm");
-  });
-
-  it("leaves the drop where it was let go when the surface holding the keyboard can't take it", () => {
-    registerPaneDropTarget("t", "xterm", target());
-    registerPaneDropTarget(
-      "t",
-      "hybridInput",
-      target({ ownsFocus: () => true, canTake: () => false })
-    );
-
-    expect(resolvePaneDropTarget("t", "xterm", "hybridInput")).toBe("xterm");
-  });
-
-  it("goes where a click would put the keyboard while nothing in the pane holds it", () => {
+  it("goes where a click at the drop point would put the keyboard", () => {
     registerPaneDropTarget("t", "xterm", target());
     registerPaneDropTarget("t", "hybridInput", target());
 
@@ -70,29 +39,30 @@ describe("resolvePaneDropTarget", () => {
   });
 
   it("passes a drop the surface it was let go over can't take to the other one", () => {
-    registerPaneDropTarget("t", "xterm", target({ ownsFocus: () => true, canTake: () => false }));
+    registerPaneDropTarget("t", "xterm", target({ canTake: () => false }));
     registerPaneDropTarget("t", "hybridInput", target());
 
     expect(resolvePaneDropTarget("t", "xterm", "xterm")).toBe("hybridInput");
+
+    registerPaneDropTarget("t", "xterm", target());
+    registerPaneDropTarget("t", "hybridInput", target({ canTake: () => false }));
+
+    expect(resolvePaneDropTarget("t", "hybridInput")).toBe("xterm");
   });
 
   it("keeps a drop neither surface can take on the one it was let go over", () => {
     registerPaneDropTarget("t", "xterm", target({ canTake: () => false }));
-    registerPaneDropTarget(
-      "t",
-      "hybridInput",
-      target({ ownsFocus: () => true, canTake: () => false })
-    );
+    registerPaneDropTarget("t", "hybridInput", target({ canTake: () => false }));
 
     expect(resolvePaneDropTarget("t", "hybridInput", "hybridInput")).toBe("hybridInput");
-    expect(resolvePaneDropTarget("t", "xterm", "xterm")).toBe("xterm");
+    expect(resolvePaneDropTarget("t", "xterm", "hybridInput")).toBe("xterm");
   });
 
   it("keeps panes apart", () => {
-    registerPaneDropTarget("other", "hybridInput", target({ ownsFocus: () => true }));
+    registerPaneDropTarget("other", "hybridInput", target());
     registerPaneDropTarget("t", "xterm", target());
 
-    expect(resolvePaneDropTarget("t", "xterm", "xterm")).toBe("xterm");
+    expect(resolvePaneDropTarget("t", "xterm", "hybridInput")).toBe("xterm");
   });
 });
 
