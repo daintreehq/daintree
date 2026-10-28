@@ -59,6 +59,7 @@ const baseConfig: KnipConfig = {
     "scripts/perf/project-switch-rotation-compare.ts",
     "scripts/perf/foreground-terminal.ts",
     "scripts/perf/voice-preview-final.ts",
+    "scripts/perf/voice-pipeline.ts",
     "scripts/perf/voice-replay-compare.ts",
     "scripts/perf/voice-tuning.ts",
     "scripts/perf/voice-live-vad.ts",
