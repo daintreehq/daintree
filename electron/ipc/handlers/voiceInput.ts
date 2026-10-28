@@ -25,7 +25,7 @@ import {
   type VoiceLiveSessionUpdate,
   type VoicePauseRequest,
   type VoicePublishDetailsRequest,
-  type VoiceSessionDetails,
+  type VoiceSessionSnapshot,
   type VoiceRewriteOutcome,
   type LastDictationTerms,
   type VoiceKeytermSource,
@@ -255,7 +255,7 @@ interface VoiceSession {
   // Keeps its view out of eviction while it runs (#14773).
   releaseView: (() => void) | null;
   // What the owner last reported of it, for every other view (#14921).
-  details: VoiceSessionDetails | null;
+  details: VoiceSessionSnapshot | null;
   // When its level last went to the views on screen (performance.now()).
   levelSentAt: number;
   // The renderer streams audio from the moment it sends the start request,

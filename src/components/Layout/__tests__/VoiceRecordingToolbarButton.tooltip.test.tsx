@@ -7,7 +7,7 @@ import { render, fireEvent, act } from "@testing-library/react";
 import { VoiceRecordingToolbarButton } from "../VoiceRecordingToolbarButton";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { useScratchStore } from "@/store/scratchStore";
-import type { Scratch, VoiceSessionDetails } from "@shared/types";
+import type { Scratch, VoiceSessionSnapshot } from "@shared/types";
 import { setElsewhereLevel } from "@/services/voiceElsewhereLevel";
 import { readToolbarSource } from "./toolbarSource";
 
@@ -475,21 +475,22 @@ describe("VoiceRecordingToolbarButton — dictation another view owns looks like
   let nextFrameId = 0;
   let now = 0;
 
-  const details = (overrides: Partial<VoiceSessionDetails> = {}): VoiceSessionDetails => ({
-    status: "recording",
+  const details = (overrides: Partial<VoiceSessionSnapshot> = {}): VoiceSessionSnapshot => ({
+    phase: "recording",
     kind: "dictation",
-    panelTitle: "Claude",
+    targetTitle: "Claude",
+    targetChrome: null,
+    targetHostId: null,
+    projectName: "Alpha",
     worktreeLabel: "main",
-    agentId: "claude",
-    locked: false,
-    correctionEnabled: false,
-    micDeviceLabel: "MacBook Pro Microphone",
+    micLabel: "MacBook Pro Microphone",
     micSignal: "live",
     micNotice: null,
-    pauseStopWarning: false,
-    idleStopWarning: false,
+    correctionEnabled: false,
+    locked: false,
     wordCount: 3,
-    elapsed: { seconds: 5, at: 0, ticking: true },
+    transcript: "fix the build",
+    clock: { at: 0, elapsedMs: 5_000, pausedMs: 0, paused: false, autoStop: null },
     ...overrides,
   });
 
@@ -521,7 +522,7 @@ describe("VoiceRecordingToolbarButton — dictation another view owns looks like
     },
   ];
 
-  function show(pairing: (typeof pairings)[number], value: VoiceSessionDetails | null) {
+  function show(pairing: (typeof pairings)[number], value: VoiceSessionSnapshot | null) {
     if (pairing.viewHost) Reflect.set(window, "__DAINTREE_HOST_ID__", { id: pairing.viewHost });
     useVoiceRecordingStore.setState({
       sessionElsewhere: {
@@ -591,31 +592,31 @@ describe("VoiceRecordingToolbarButton — dictation another view owns looks like
 
   describe.each(pairings)("a session $name", (pairing) => {
     it.each([
-      { status: "recording", micSignal: "live", wave: "level", state: "Dictating" },
-      { status: "connecting", micSignal: "pending", wave: "waiting", state: "Starting microphone" },
+      { phase: "recording", micSignal: "live", wave: "level", state: "Dictating" },
+      { phase: "connecting", micSignal: "pending", wave: "waiting", state: "Starting microphone" },
       {
-        status: "recording",
+        phase: "recording",
         micSignal: "silent",
         wave: "waiting",
         state: "No audio from microphone",
       },
-      { status: "paused", micSignal: "live", wave: "held", state: "Dictation paused" },
+      { phase: "paused", micSignal: "live", wave: "held", state: "Dictation paused" },
       {
-        status: "reconnecting",
+        phase: "reconnecting",
         micSignal: "live",
         wave: "waiting",
         state: "Reconnecting dictation",
       },
-      { status: "finishing", micSignal: "live", wave: "waiting", state: "Finishing dictation" },
-    ] as const)("shows $status with the mic $micSignal as the owner does", (c) => {
+      { phase: "finishing", micSignal: "live", wave: "waiting", state: "Finishing dictation" },
+    ] as const)("shows $phase with the mic $micSignal as the owner does", (c) => {
       const { getByTestId, container } = show(
         pairing,
-        details({ status: c.status, micSignal: c.micSignal })
+        details({ phase: c.phase, micSignal: c.micSignal })
       );
 
       expect(waveOf(container)).toBe(c.wave);
       expect(getByTestId("voice-elsewhere-button").getAttribute("aria-label")).toBe(
-        `${c.state} ${pairing.place}. Click to go there.`
+        `${c.state} ${pairing.place}`
       );
     });
 

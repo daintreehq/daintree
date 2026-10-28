@@ -109,7 +109,7 @@ export interface VoiceSessionElsewhere {
   /** The transcription provider, once main has started one for the session. */
   provider: "openai" | "deepgram" | "grok" | null;
   /** What the owner last reported, or null until its first report lands. */
-  details: VoiceSessionDetails | null;
+  details: VoiceSessionSnapshot | null;
 }
 
 /**
@@ -122,36 +122,69 @@ export type VoiceMicSignal = "pending" | "live" | "silent";
 /** What the session records: prompt text, a rewrite instruction, or a Canopy reply. */
 export type VoiceSessionKind = "dictation" | "rewrite" | "canopy-reply";
 
-/**
- * The live session as its owner shows it, reported to main and passed on to
- * every other view, so their indicator and control panel match the owner's
- * (#14921). The input level travels separately, on `voice-input:live-level`.
- * Elapsed time is an anchor rather than a count: a view adds the time since
- * `at` while `ticking`, so nothing is sent each second.
- */
-export interface VoiceSessionDetails {
-  status: VoiceInputStatus;
-  kind: VoiceSessionKind;
-  panelTitle: string | null;
-  worktreeLabel: string | null;
-  /** The agent the target pane runs, for its icon. */
+/** The states a live session shows its control panel in (#14920). */
+export type VoiceSessionPhase =
+  "arming" | "connecting" | "recording" | "paused" | "reconnecting" | "finishing";
+
+/** The target pane's icon, as the owner derived it from the pane's identity. */
+export interface VoiceTargetChrome {
+  iconId: string | null;
+  color?: string;
+  label: string;
+  isAgent: boolean;
   agentId: string | null;
-  locked: boolean;
-  correctionEnabled: boolean;
-  micDeviceLabel: string | null;
+  processId: string | null;
+  runtimeKind: "agent" | "process" | "panel" | "none";
+  hasExited: boolean;
+}
+
+/**
+ * The session's clock at `at` (epoch ms): a view adds the time since, so
+ * nothing is sent as it ticks. Elapsed is wall time, pauses included; paused
+ * time grows while `paused`; an auto-stop counts down.
+ */
+export interface VoiceSessionClockAnchor {
+  at: number;
+  elapsedMs: number;
+  pausedMs: number;
+  paused: boolean;
+  autoStop: { reason: "pause" | "idle"; remainingMs: number } | null;
+}
+
+/** The most of the words so far a snapshot carries: the panel shows their tail. */
+export const VOICE_SNAPSHOT_TRANSCRIPT_MAX_LENGTH = 400;
+
+/**
+ * The live session as its owner's control panel shows it, reported to main
+ * and passed on to every other view, so their indicator and panel match the
+ * owner's (#14921). The input level travels apart, on `voice-input:live-level`,
+ * and the provider and the owning workspace come from main.
+ */
+export interface VoiceSessionSnapshot {
+  phase: VoiceSessionPhase;
+  kind: VoiceSessionKind;
+  targetTitle: string;
+  targetChrome: VoiceTargetChrome | null;
+  /** The host the words go to: the owner's own, or a Canopy reply's terminal's. */
+  targetHostId: HostId | null;
+  projectName: string | null;
+  worktreeLabel: string | null;
+  micLabel: string | null;
   micSignal: VoiceMicSignal;
-  /** A mic the owner is warning about; a lost mic ends the session instead. */
-  micNotice: { kind: "silent" | "fallback"; bluetooth: boolean } | null;
-  pauseStopWarning: boolean;
-  idleStopWarning: boolean;
+  micNotice: { kind: "lost" | "fallback" | "silent"; bluetooth: boolean } | null;
+  correctionEnabled: boolean;
+  locked: boolean;
   wordCount: number;
-  elapsed: { seconds: number; at: number; ticking: boolean };
+  /** The end of the words so far, at most VOICE_SNAPSHOT_TRANSCRIPT_MAX_LENGTH. */
+  transcript: string;
+  /** Null once the session is stopping. */
+  clock: VoiceSessionClockAnchor | null;
 }
 
 /** The owner's report of its live session, `voice-input:publish-details`. */
 export interface VoicePublishDetailsRequest {
   sessionId: string;
-  details: VoiceSessionDetails;
+  details: VoiceSessionSnapshot;
 }
 
 /** Another view's panel pausing or resuming the live session. */

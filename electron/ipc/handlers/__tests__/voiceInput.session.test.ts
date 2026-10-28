@@ -1970,20 +1970,29 @@ describe("voiceInput — one dictation across hosts (#14773)", () => {
 
   describe("what other views show of it (#14921)", () => {
     const details = (overrides: Record<string, unknown> = {}) => ({
-      status: "recording",
+      phase: "recording",
       kind: "dictation",
-      panelTitle: "Claude",
+      targetTitle: "Claude",
+      targetChrome: {
+        iconId: "claude",
+        label: "Claude",
+        isAgent: true,
+        agentId: "claude",
+        processId: null,
+        runtimeKind: "agent",
+        hasExited: false,
+      },
+      targetHostId: "local",
+      projectName: "Alpha",
       worktreeLabel: "main",
-      agentId: "claude",
-      locked: false,
-      correctionEnabled: true,
-      micDeviceLabel: "MacBook Pro Microphone",
+      micLabel: "MacBook Pro Microphone",
       micSignal: "live",
       micNotice: null,
-      pauseStopWarning: false,
-      idleStopWarning: false,
-      wordCount: 12,
-      elapsed: { seconds: 7, at: 1_000, ticking: true },
+      correctionEnabled: true,
+      locked: false,
+      wordCount: 3,
+      transcript: "fix the build",
+      clock: { at: 1_000, elapsedMs: 7_000, pausedMs: 0, paused: false, autoStop: null },
       ...overrides,
     });
     const publish = (owner: FakeSender, sessionId: string, value = details()) =>
@@ -2057,9 +2066,9 @@ describe("voiceInput — one dictation across hosts (#14773)", () => {
         });
         if (cached) expect(lastLive(cached)?.session).toMatchObject({ details: details() });
         expect(lastLive(owner)?.session).toBeNull();
-        expect(
-          await invoke(CHANNELS.VOICE_INPUT_GET_LIVE_SESSION, shown)
-        ).toMatchObject({ session: { details: details() } });
+        expect(await invoke(CHANNELS.VOICE_INPUT_GET_LIVE_SESSION, shown)).toMatchObject({
+          session: { details: details() },
+        });
       });
 
       it("sends the input level to the view on screen, never the owner or a cached view", async () => {
@@ -2080,7 +2089,10 @@ describe("voiceInput — one dictation across hosts (#14773)", () => {
         await startIn(owner, "a", "Workspace");
 
         expect(
-          await invoke(CHANNELS.VOICE_INPUT_SET_PAUSED_LIVE, shown, { sessionId: "a", paused: true })
+          await invoke(CHANNELS.VOICE_INPUT_SET_PAUSED_LIVE, shown, {
+            sessionId: "a",
+            paused: true,
+          })
         ).toBe(true);
         expect(
           await invoke(CHANNELS.VOICE_INPUT_SET_PAUSED_LIVE, shown, {
@@ -2129,9 +2141,12 @@ describe("voiceInput — one dictation across hosts (#14773)", () => {
       await startIn(local, "a", "Alpha");
 
       await expect(
-        publish(local, "a", details({ panelTitle: "x".repeat(10_000) }))
+        publish(local, "a", details({ targetTitle: "x".repeat(10_000) }))
       ).rejects.toThrow();
-      await expect(publish(local, "a", details({ status: "dancing" }))).rejects.toThrow();
+      await expect(publish(local, "a", details({ phase: "idle" }))).rejects.toThrow();
+      await expect(
+        publish(local, "a", details({ transcript: "x".repeat(5_000) }))
+      ).rejects.toThrow();
     });
 
     it("sends about ten level readings a second however fast chunks arrive", async () => {
@@ -2158,11 +2173,17 @@ describe("voiceInput — one dictation across hosts (#14773)", () => {
       await startIn(local, "a", "Alpha");
 
       expect(
-        await invoke(CHANNELS.VOICE_INPUT_SET_PAUSED_LIVE, studio1, { sessionId: "old", paused: true })
+        await invoke(CHANNELS.VOICE_INPUT_SET_PAUSED_LIVE, studio1, {
+          sessionId: "old",
+          paused: true,
+        })
       ).toBe(false);
       await stop(local, "a");
       expect(
-        await invoke(CHANNELS.VOICE_INPUT_SET_PAUSED_LIVE, studio1, { sessionId: "a", paused: true })
+        await invoke(CHANNELS.VOICE_INPUT_SET_PAUSED_LIVE, studio1, {
+          sessionId: "a",
+          paused: true,
+        })
       ).toBe(false);
 
       expect(sentOn(local, CHANNELS.VOICE_INPUT_PAUSE_REQUESTED)).toEqual([]);

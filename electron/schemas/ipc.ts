@@ -17,7 +17,10 @@ import {
   VOICE_REWRITE_MAX_INSTRUCTION_CHARS,
   VOICE_REWRITE_MAX_SELECTION_CHARS,
 } from "../../shared/config/voiceCorrection.js";
-import { VOICE_WORKSPACE_NAME_MAX_LENGTH } from "../../shared/types/voice.js";
+import {
+  VOICE_SNAPSHOT_TRANSCRIPT_MAX_LENGTH,
+  VOICE_WORKSPACE_NAME_MAX_LENGTH,
+} from "../../shared/types/voice.js";
 
 /** Schema for a launch hint — built-in agent id or plugin-provided string. */
 const LaunchAgentIdSchema = z.union([z.enum(BUILT_IN_AGENT_IDS), z.string().min(1)]);
@@ -781,39 +784,55 @@ export const VoiceStopLiveRequestSchema = z.object({
   returnToTarget: z.boolean().optional(),
 });
 
-const VoiceDetailLabelSchema = z.string().max(VOICE_WORKSPACE_NAME_MAX_LENGTH).nullable();
+const VoiceDetailLabelSchema = z.string().max(VOICE_WORKSPACE_NAME_MAX_LENGTH);
+const VoiceDurationMsSchema = z
+  .number()
+  .finite()
+  .min(0)
+  .max(7 * 24 * 60 * 60 * 1000);
 
 // The owner's report of its live session, passed on to every other view (#14921).
 export const VoicePublishDetailsRequestSchema = z.object({
   sessionId: VoiceSessionIdSchema,
   details: z.object({
-    status: z.enum([
-      "idle",
-      "arming",
-      "connecting",
-      "recording",
-      "paused",
-      "reconnecting",
-      "finishing",
-      "error",
-    ]),
+    phase: z.enum(["arming", "connecting", "recording", "paused", "reconnecting", "finishing"]),
     kind: z.enum(["dictation", "rewrite", "canopy-reply"]),
-    panelTitle: VoiceDetailLabelSchema,
-    worktreeLabel: VoiceDetailLabelSchema,
-    agentId: z.string().max(128).nullable(),
-    locked: z.boolean(),
-    correctionEnabled: z.boolean(),
-    micDeviceLabel: VoiceDetailLabelSchema,
+    targetTitle: VoiceDetailLabelSchema,
+    targetChrome: z
+      .object({
+        iconId: z.string().max(128).nullable(),
+        color: z.string().max(64).optional(),
+        label: VoiceDetailLabelSchema,
+        isAgent: z.boolean(),
+        agentId: z.string().max(128).nullable(),
+        processId: z.string().max(128).nullable(),
+        runtimeKind: z.enum(["agent", "process", "panel", "none"]),
+        hasExited: z.boolean(),
+      })
+      .nullable(),
+    targetHostId: z.string().min(1).max(256).nullable(),
+    projectName: VoiceDetailLabelSchema.nullable(),
+    worktreeLabel: VoiceDetailLabelSchema.nullable(),
+    micLabel: VoiceDetailLabelSchema.nullable(),
     micSignal: z.enum(["pending", "live", "silent"]),
-    micNotice: z.object({ kind: z.enum(["silent", "fallback"]), bluetooth: z.boolean() }).nullable(),
-    pauseStopWarning: z.boolean(),
-    idleStopWarning: z.boolean(),
+    micNotice: z
+      .object({ kind: z.enum(["lost", "fallback", "silent"]), bluetooth: z.boolean() })
+      .nullable(),
+    correctionEnabled: z.boolean(),
+    locked: z.boolean(),
     wordCount: z.number().int().min(0).max(1_000_000),
-    elapsed: z.object({
-      seconds: z.number().int().min(0).max(86_400 * 7),
-      at: z.number().finite().min(0),
-      ticking: z.boolean(),
-    }),
+    transcript: z.string().max(VOICE_SNAPSHOT_TRANSCRIPT_MAX_LENGTH),
+    clock: z
+      .object({
+        at: z.number().finite().min(0),
+        elapsedMs: VoiceDurationMsSchema,
+        pausedMs: VoiceDurationMsSchema,
+        paused: z.boolean(),
+        autoStop: z
+          .object({ reason: z.enum(["pause", "idle"]), remainingMs: VoiceDurationMsSchema })
+          .nullable(),
+      })
+      .nullable(),
   }),
 });
 

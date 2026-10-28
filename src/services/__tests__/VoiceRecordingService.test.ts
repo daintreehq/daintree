@@ -3138,7 +3138,7 @@ describe("VoiceRecordingService — a session another view owns (#14601)", () =>
     projectId: "project-a",
     projectName: "Alpha",
     provider: null,
-    details: null as { status: string } | null,
+    details: null as { phase: string } | null,
   };
 
   function hasMockState<T>(mod: object): mod is { __state: T } {
@@ -3361,7 +3361,7 @@ describe("VoiceRecordingService — a session another view owns (#14601)", () =>
       { status: "paused", paused: false },
     ])("has the pause key act on the other view's $status session", async ({ status, paused }) => {
       const { voiceRecordingService, electron } = await arrange({
-        sessionElsewhere: { ...elsewhere, details: { status } },
+        sessionElsewhere: { ...elsewhere, details: { phase: status } },
       });
 
       voiceRecordingService.togglePause();
@@ -3376,7 +3376,7 @@ describe("VoiceRecordingService — a session another view owns (#14601)", () =>
 
     it("leaves the pause key alone while the other view's session can't pause", async () => {
       const { voiceRecordingService, electron } = await arrange({
-        sessionElsewhere: { ...elsewhere, details: { status: "finishing" } },
+        sessionElsewhere: { ...elsewhere, details: { phase: "finishing" } },
       });
 
       voiceRecordingService.togglePause();

@@ -1337,7 +1337,11 @@ class VoiceRecordingService {
     // indicator and control panel (#14921).
     this.unsubscribers.push(
       startVoiceDetailsPublisher(
-        { sessionId: () => this.sessionId, elapsed: () => this.elapsedAnchor() },
+        {
+          sessionId: () => this.sessionId,
+          clock: (now) => this.getSessionClock(now),
+          hostId: () => currentHostId(),
+        },
         (request) =>
           voiceInput.publishDetails(request).catch((error: unknown) => {
             logDebug(`${LOG_PREFIX} Couldn't report the session`, voiceErrorLogFields(error));
@@ -4642,10 +4646,13 @@ class VoiceRecordingService {
     if (session?.sessionId === sessionId) await this.stopSessionElsewhere(session, false);
   }
 
-  /** Takes the person to the session another view owns: its window, project and panel. */
-  async revealSessionElsewhere(): Promise<boolean> {
+  /**
+   * Takes the person to the session another view owns: its window, project and
+   * panel. With `sessionId`, only while that is still the session.
+   */
+  async revealSessionElsewhere(sessionId?: string): Promise<boolean> {
     const session = useVoiceRecordingStore.getState().sessionElsewhere;
-    if (!session) return false;
+    if (!session || (sessionId !== undefined && session.sessionId !== sessionId)) return false;
     try {
       return await window.electron.voiceInput.revealLive(session.sessionId);
     } catch (error) {
@@ -5082,16 +5089,6 @@ class VoiceRecordingService {
     }, 1000);
   }
 
-  // The clock as other views tick it: the count, and when it last went up.
-  private elapsedAnchor(): { seconds: number; at: number; ticking: boolean } {
-    const now = Date.now();
-    if (!this.elapsedTimer) {
-      return { seconds: useVoiceRecordingStore.getState().elapsedSeconds, at: now, ticking: false };
-    }
-    const elapsedMs = Math.max(0, now - this.sessionStartedAt - this.totalPausedMs);
-    return { seconds: Math.floor(elapsedMs / 1000), at: now - (elapsedMs % 1000), ticking: true };
-  }
-
   private computeElapsedSeconds(): number {
     const wallMs = Date.now() - this.sessionStartedAt;
     return Math.max(0, Math.floor((wallMs - this.totalPausedMs) / 1000));
@@ -5520,13 +5517,13 @@ class VoiceRecordingService {
       this.resume();
     } else if (
       status === "idle" &&
-      (sessionElsewhere?.details?.status === "recording" ||
-        sessionElsewhere?.details?.status === "paused")
+      (sessionElsewhere?.details?.phase === "recording" ||
+        sessionElsewhere?.details?.phase === "paused")
     ) {
       // The pause key works on dictation another view owns, as its stop key does.
       void this.setSessionElsewherePaused(
         sessionElsewhere.sessionId,
-        sessionElsewhere.details.status === "recording"
+        sessionElsewhere.details.phase === "recording"
       );
     } else {
       logDebug(`${LOG_PREFIX} togglePause() ignored`, { status });

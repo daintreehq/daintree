@@ -571,7 +571,10 @@ export type {
   VoicePauseRequest,
   VoicePublishDetailsRequest,
   VoiceRevealRequest,
-  VoiceSessionDetails,
+  VoiceSessionClockAnchor,
+  VoiceSessionPhase,
+  VoiceSessionSnapshot,
+  VoiceTargetChrome,
   VoiceSessionElsewhere,
   VoiceSessionKind,
   VoiceStopRequest,
@@ -587,6 +590,7 @@ export {
   MAX_RECENT_DICTATIONS,
   VOICE_REPLAY_AUDIO_LOST_CODE,
   VOICE_STOP_AUDIO_LOST_CODE,
+  VOICE_SNAPSHOT_TRANSCRIPT_MAX_LENGTH,
   voiceLevelFromRms,
 } from "./voice.js";
 

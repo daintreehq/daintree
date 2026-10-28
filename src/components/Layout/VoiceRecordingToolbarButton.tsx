@@ -32,7 +32,8 @@ import {
   sessionWorkspaceName,
 } from "@/services/voiceSessionPlace";
 import { isLocalHostId } from "@shared/types/remoteHosts";
-import type { VoiceSessionDetails, VoiceSessionElsewhere } from "@shared/types";
+import type { VoiceSessionElsewhere, VoiceSessionSnapshot } from "@shared/types";
+import { ElsewhereVoiceSessionPanel } from "./ElsewhereVoiceSessionPanel";
 import { getElsewhereLevel } from "@/services/voiceElsewhereLevel";
 
 // The level meter's envelope: a rise fast enough that a syllable registers at
@@ -101,8 +102,8 @@ function VoiceLockedButton({
 
 // The owner's indicator, read from what it reported: bars while its mic
 // delivers, the pause glyph when held, the clock while it waits.
-function elsewhereWaveMode(details: VoiceSessionDetails): VoiceWaveMode | null {
-  switch (details.status) {
+function elsewhereWaveMode(details: VoiceSessionSnapshot): VoiceWaveMode {
+  switch (details.phase) {
     case "recording":
     case "connecting":
       return details.micSignal === "live" ? "level" : "waiting";
@@ -112,13 +113,11 @@ function elsewhereWaveMode(details: VoiceSessionDetails): VoiceWaveMode | null {
     case "reconnecting":
     case "finishing":
       return "waiting";
-    default:
-      return null;
   }
 }
 
-function elsewhereStateLabel(details: VoiceSessionDetails): string | null {
-  switch (details.status) {
+function elsewhereStateLabel(details: VoiceSessionSnapshot): string {
+  switch (details.phase) {
     case "arming":
       return "Arming dictation";
     case "connecting":
@@ -131,8 +130,6 @@ function elsewhereStateLabel(details: VoiceSessionDetails): string | null {
       return "Reconnecting dictation";
     case "finishing":
       return "Finishing dictation";
-    default:
-      return null;
   }
 }
 
@@ -142,9 +139,10 @@ interface VoiceElsewhereButtonProps {
   "data-toolbar-item"?: string;
 }
 
-// Dictation another view owns: this view can't show its audio, only where it
-// runs. The dictation key stops it from here. A session on another machine,
-// or on this one while this view is on a host, names its host too (#14773).
+// Dictation another view owns, shown as the owner shows it from what the owner
+// reports through main (#14921). The dictation key stops it from here. A
+// session on another machine, or on this one while this view is on a host,
+// names its host too (#14773).
 function VoiceElsewhereButton(props: VoiceElsewhereButtonProps) {
   if (!isLocalHostId(props.session.hostId)) return <VoiceElsewhereOnHostButton {...props} />;
   const hostName = namesSessionHost(props.session)
@@ -168,44 +166,84 @@ function VoiceElsewhereIndicator({
   "data-toolbar-item": dataToolbarItem,
 }: VoiceElsewhereButtonProps & { hostName: string | null }) {
   const scratches = useScratchStore((state) => state.scratches);
+  const pauseShortcut = useEffectiveCombo("voiceInput.togglePause");
   const place = sessionPlacePhrase(sessionWorkspaceName(session, scratches), hostName);
-  const details = session.details;
-  const waveMode = details ? elsewhereWaveMode(details) : null;
-  const state = details ? elsewhereStateLabel(details) : null;
-  const title = `${state ?? "Dictating"}${place || " elsewhere"}`;
+  const snapshot = session.details;
+  // Until the owner's first report lands there is nothing to show but where
+  // it runs, and a click goes there.
+  if (!snapshot) {
+    const title = `Dictating${place || " elsewhere"}`;
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon"
+            data-toolbar-item={dataToolbarItem}
+            onClick={() => {
+              void voiceRecordingService.revealSessionElsewhere(session.sessionId);
+            }}
+            className={cn(
+              "toolbar-icon-button relative mr-0.5 text-text-secondary",
+              VOICE_SLOT_CLASS
+            )}
+            aria-label={`${title}. Click to go there.`}
+            data-testid="voice-elsewhere-button"
+          >
+            <Mic className="h-4 w-4" />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">
+          <div className="flex flex-col gap-0.5">
+            <span className="font-medium">{title}</span>
+            <span className="text-text-secondary">Click to go there</span>
+            {shortcut && (
+              <span className="text-text-secondary">{createTooltipContent("Stop", shortcut)}</span>
+            )}
+          </div>
+        </TooltipContent>
+      </Tooltip>
+    );
+  }
+
+  const { sessionId } = session;
+  const isPaused = snapshot.phase === "paused";
+  const canPause = isPaused || snapshot.phase === "recording";
+  const togglePause = () => {
+    if (canPause) void voiceRecordingService.setSessionElsewherePaused(sessionId, !isPaused);
+  };
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Button
-          variant="ghost"
-          size="icon"
-          data-toolbar-item={dataToolbarItem}
-          onClick={() => {
-            void voiceRecordingService.revealSessionElsewhere();
+    // Keyed by session, so a panel left open never carries into the next one.
+    <VoiceSessionButton
+      key={sessionId}
+      title={`${elsewhereStateLabel(snapshot)}${place}`}
+      waveMode={elsewhereWaveMode(snapshot)}
+      elsewhereSessionId={sessionId}
+      isPaused={isPaused}
+      canPause={canPause}
+      onTogglePause={togglePause}
+      shortcut={shortcut}
+      pauseShortcut={pauseShortcut}
+      testId="voice-elsewhere-button"
+      data-toolbar-item={dataToolbarItem}
+      renderPanel={({ leave, close }) => (
+        <ElsewhereVoiceSessionPanel
+          session={session}
+          snapshot={snapshot}
+          pauseShortcut={pauseShortcut}
+          stopShortcut={shortcut}
+          onGoToTarget={() => {
+            leave();
+            void voiceRecordingService.revealSessionElsewhere(sessionId);
           }}
-          className={cn(
-            "toolbar-icon-button relative mr-0.5",
-            VOICE_SLOT_CLASS,
-            waveMode && "gap-1",
-            waveMode && waveMode !== "held" ? "text-text-primary" : "text-text-secondary"
-          )}
-          aria-label={`${title}. Click to go there.`}
-          data-testid="voice-elsewhere-button"
-        >
-          <Mic className="h-4 w-4" />
-          {waveMode && <VoiceWave mode={waveMode} elsewhereSessionId={session.sessionId} />}
-        </Button>
-      </TooltipTrigger>
-      <TooltipContent side="bottom">
-        <div className="flex flex-col gap-0.5">
-          <span className="font-medium">{title}</span>
-          <span className="text-text-secondary">Click to go there</span>
-          {shortcut && (
-            <span className="text-text-secondary">{createTooltipContent("Stop", shortcut)}</span>
-          )}
-        </div>
-      </TooltipContent>
-    </Tooltip>
+          onTogglePause={togglePause}
+          onStop={() => {
+            close();
+            void voiceRecordingService.stopSessionElsewhereById(sessionId);
+          }}
+        />
+      )}
+    />
   );
 }
 
@@ -407,6 +445,7 @@ export function VoiceRecordingToolbarButton({
   const idleStopWarning = useVoiceRecordingStore((state) => state.idleStopWarning);
   const shortcut = useEffectiveCombo("voiceInput.toggle");
   const pauseShortcut = useEffectiveCombo("voiceInput.togglePause");
+  const sendShortcut = useEffectiveCombo("voiceInput.stopAndSend");
   const hover = useShortcutHintHover("voiceInput.toggle");
 
   const isArming = status === "arming";
@@ -452,13 +491,11 @@ export function VoiceRecordingToolbarButton({
   if (!isActive || !waveMode) {
     if (!isActive && sessionElsewhere) {
       return (
-        <VoiceToolbarMenu>
-          <VoiceElsewhereButton
-            session={sessionElsewhere}
-            shortcut={shortcut}
-            data-toolbar-item={dataToolbarItem}
-          />
-        </VoiceToolbarMenu>
+        <VoiceElsewhereButton
+          session={sessionElsewhere}
+          shortcut={shortcut}
+          data-toolbar-item={dataToolbarItem}
+        />
       );
     }
     if (!isActive && lockedTarget) {
@@ -557,10 +594,33 @@ export function VoiceRecordingToolbarButton({
       waveMode={waveMode}
       isPaused={isPaused}
       canPause={isRecording || isPaused}
+      onTogglePause={() => voiceRecordingService.togglePause()}
       shortcut={shortcut}
       pauseShortcut={pauseShortcut}
       hover={hover}
+      testId="voice-session-button"
       data-toolbar-item={dataToolbarItem}
+      renderPanel={({ leave, close }) => (
+        <OwnVoiceSessionPanel
+          pauseShortcut={pauseShortcut}
+          stopShortcut={shortcut}
+          onGoToTarget={() => {
+            leave();
+            void voiceRecordingService.goToActiveTarget();
+          }}
+          onTogglePause={() => voiceRecordingService.togglePause()}
+          sendShortcut={sendShortcut}
+          onStop={() => {
+            // The stop takes the keyboard back to the dictation, as its key does.
+            leave();
+            void voiceRecordingService.stopActiveSession();
+          }}
+          onSend={() => {
+            close();
+            void voiceRecordingService.stopAndSend();
+          }}
+        />
+      )}
     />
   );
 }
@@ -568,18 +628,27 @@ export function VoiceRecordingToolbarButton({
 interface VoiceSessionButtonProps {
   title: string;
   waveMode: VoiceWaveMode;
+  /** Meters a session another view owns, from the level main relays (#14921). */
+  elsewhereSessionId?: string;
   isPaused: boolean;
   canPause: boolean;
+  onTogglePause: () => void;
   shortcut: string | undefined;
   pauseShortcut: string | undefined;
-  hover: ReturnType<typeof useShortcutHintHover>;
+  hover?: ReturnType<typeof useShortcutHintHover>;
+  testId: string;
   "data-toolbar-item"?: string;
+  /**
+   * The panel, given how to close it: `leave` when the action takes the
+   * keyboard somewhere else, so the close doesn't hand it back to the mic.
+   */
+  renderPanel: (actions: { leave: () => void; close: () => void }) => ReactNode;
 }
 
 /**
- * The mic while a session runs: a click opens the session panel (#14920).
- * Mounted only while there is a session, so a closed session's open state
- * never carries into the next one.
+ * The mic while a session runs, here or in another view: a click opens the
+ * session panel (#14920, #14921). Mounted only while there is a session, so a
+ * closed session's open state never carries into the next one.
  */
 // A toolbar item the keyboard can land on now: still there, enabled, and
 // shown (an item folded into the overflow menu has no layout).
@@ -595,15 +664,18 @@ const VOICE_SLOT_SUCCESSOR_SELECTOR =
 function VoiceSessionButton({
   title,
   waveMode,
+  elsewhereSessionId,
   isPaused,
   canPause,
+  onTogglePause,
   shortcut,
   pauseShortcut,
   hover,
+  testId,
   "data-toolbar-item": dataToolbarItem,
+  renderPanel,
 }: VoiceSessionButtonProps) {
   const [open, setOpen] = useState(false);
-  const sendShortcut = useEffectiveCombo("voiceInput.stopAndSend");
   // Going to the target moves the keyboard there, so the close must not
   // hand it back to the mic. Each opening starts without it: a close the
   // exit never finished doesn't decide the next one.
@@ -674,7 +746,7 @@ function VoiceSessionButton({
         leadingItems={
           canPause && (
             <>
-              <ContextMenuItem onSelect={() => voiceRecordingService.togglePause()}>
+              <ContextMenuItem onSelect={onTogglePause}>
                 {isPaused ? "Resume dictation" : "Pause dictation"}
               </ContextMenuItem>
               <ContextMenuSeparator />
@@ -706,10 +778,10 @@ function VoiceSessionButton({
                   "hover:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))]"
                 )}
                 aria-label={title}
-                data-testid="voice-session-button"
+                data-testid={testId}
               >
                 <Mic className="h-4 w-4" />
-                <VoiceWave mode={waveMode} />
+                <VoiceWave mode={waveMode} elsewhereSessionId={elsewhereSessionId} />
               </Button>
             </PopoverTrigger>
           </TooltipTrigger>
@@ -738,27 +810,13 @@ function VoiceSessionButton({
           event.preventDefault();
         }}
       >
-        <OwnVoiceSessionPanel
-          pauseShortcut={pauseShortcut}
-          stopShortcut={shortcut}
-          onGoToTarget={() => {
+        {renderPanel({
+          leave: () => {
             leavingRef.current = true;
             setOpen(false);
-            void voiceRecordingService.goToActiveTarget();
-          }}
-          onTogglePause={() => voiceRecordingService.togglePause()}
-          sendShortcut={sendShortcut}
-          onStop={() => {
-            // The stop takes the keyboard back to the dictation, as its key does.
-            leavingRef.current = true;
-            setOpen(false);
-            void voiceRecordingService.stopActiveSession();
-          }}
-          onSend={() => {
-            setOpen(false);
-            void voiceRecordingService.stopAndSend();
-          }}
-        />
+          },
+          close: () => setOpen(false),
+        })}
       </PopoverContent>
     </Popover>
   );

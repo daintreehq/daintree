@@ -1,15 +1,28 @@
 import {
-  isActiveVoiceSession,
+  VOICE_SNAPSHOT_TRANSCRIPT_MAX_LENGTH,
   type VoicePublishDetailsRequest,
-  type VoiceSessionDetails,
+  type VoiceSessionClockAnchor,
   type VoiceSessionKind,
+  type VoiceSessionPhase,
+  type VoiceSessionSnapshot,
 } from "@shared/types";
+import type { HostId } from "@shared/types/remoteHosts";
 import { VOICE_WORKSPACE_NAME_MAX_LENGTH } from "@shared/types/voice";
-import { VOICE_PARAGRAPH_BREAK } from "@/lib/voiceTranscriptSegments";
+import { joinCompletedSegments } from "@/lib/voiceTranscriptSegments";
+import { deriveTerminalChrome } from "@/utils/terminalChrome";
+import { isCanopyReplyTarget } from "@/services/canopyReplyDictation";
 import { usePanelStore } from "@/store/panelStore";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 
 type VoiceRecordingSnapshot = ReturnType<typeof useVoiceRecordingStore.getState>;
+type PanelSnapshot = ReturnType<typeof usePanelStore.getState>["panelsById"][string];
+
+/** The owner's clock as the service reads it (`getSessionClock`). */
+export interface VoiceOwnerClock {
+  elapsedMs: number;
+  pausedMs: number;
+  autoStop: VoiceSessionClockAnchor["autoStop"];
+}
 
 /**
  * Coalesces the owner's reports: a burst of transcript words or a status change
@@ -18,12 +31,19 @@ type VoiceRecordingSnapshot = ReturnType<typeof useVoiceRecordingStore.getState>
  */
 export const VOICE_DETAILS_PUBLISH_MS = 200;
 
+const PANEL_PHASES: ReadonlySet<string> = new Set<VoiceSessionPhase>([
+  "arming",
+  "connecting",
+  "recording",
+  "paused",
+  "reconnecting",
+  "finishing",
+]);
+
 function clip(label: string | null | undefined): string | null {
   const trimmed = label?.trim();
   if (!trimmed) return null;
-  return trimmed.length > VOICE_WORKSPACE_NAME_MAX_LENGTH
-    ? trimmed.slice(0, VOICE_WORKSPACE_NAME_MAX_LENGTH)
-    : trimmed;
+  return trimmed.slice(0, VOICE_WORKSPACE_NAME_MAX_LENGTH);
 }
 
 function countWords(text: string): number {
@@ -32,67 +52,109 @@ function countWords(text: string): number {
 }
 
 /**
- * What the owner shows of its live session, for main to pass on to every other
- * view (#14921). Null when this view has no session the others should see.
+ * What the owner's control panel shows of its live session, for main to pass
+ * on to every other view (#14921). Null when this view has no session a panel
+ * would show.
  */
-export function buildVoiceSessionDetails(
+export function buildVoiceSessionSnapshot(
   state: VoiceRecordingSnapshot,
-  options: { elapsed: VoiceSessionDetails["elapsed"]; agentId: string | null }
-): VoiceSessionDetails | null {
+  options: {
+    panel: PanelSnapshot | undefined;
+    clock: VoiceOwnerClock | null;
+    hostId: HostId;
+    now: number;
+  }
+): VoiceSessionSnapshot | null {
   const target = state.activeTarget;
-  if (!target || !isActiveVoiceSession(state.status)) return null;
-  const buffer = state.panelBuffers[target.panelId];
-  const segments = buffer?.completedSegments ?? [];
-  const wordCount =
-    segments.reduce(
-      (sum, segment) => (segment === VOICE_PARAGRAPH_BREAK ? sum : sum + countWords(segment)),
-      0
-    ) + countWords(buffer?.liveText ?? "");
-  const kind: VoiceSessionKind = target.rewrite
-    ? "rewrite"
-    : target.surface === "canopy-reply"
-      ? "canopy-reply"
+  if (!target || !PANEL_PHASES.has(state.status)) return null;
+  const phase = state.status as VoiceSessionPhase;
+  const isCanopyReply = isCanopyReplyTarget(target);
+  const panel = isCanopyReply ? undefined : options.panel;
+  const kind: VoiceSessionKind = isCanopyReply
+    ? "canopy-reply"
+    : target.rewrite
+      ? "rewrite"
       : "dictation";
+  const buffer = state.panelBuffers[target.panelId];
+  const transcript = [joinCompletedSegments(buffer?.completedSegments ?? []), buffer?.liveText]
+    .filter(Boolean)
+    .join(" ");
   const notice = state.micNotice;
-  const micNotice =
-    notice && notice.kind !== "lost" && notice.target.panelId === target.panelId
-      ? { kind: notice.kind, bluetooth: notice.kind === "silent" && notice.bluetooth }
-      : null;
+  const { clock } = options;
   return {
-    status: state.status,
+    phase,
     kind,
-    panelTitle: clip(target.panelTitle),
+    targetTitle:
+      clip(panel?.title) ??
+      clip(target.panelTitle) ??
+      (isCanopyReply ? "Canopy reply" : "Terminal"),
+    targetChrome: panel
+      ? deriveTerminalChrome({
+          kind: panel.kind,
+          launchAgentId: panel.launchAgentId,
+          runtimeIdentity: panel.runtimeIdentity,
+          detectedAgentId: panel.detectedAgentId,
+          detectedProcessId: panel.detectedProcessId,
+          agentState: panel.agentState,
+          runtimeStatus: panel.runtimeStatus,
+          exitCode: panel.exitCode,
+        })
+      : null,
+    targetHostId: target.otherHostId ?? options.hostId,
+    projectName: clip(target.projectName),
     worktreeLabel: clip(target.worktreeLabel),
-    agentId: options.agentId,
-    locked: state.lockedTarget?.panelId === target.panelId,
-    correctionEnabled: state.correctionEnabled,
-    micDeviceLabel: clip(state.micDeviceLabel),
+    micLabel: clip(state.micDeviceLabel),
     micSignal: state.micSignal,
-    micNotice,
-    pauseStopWarning: state.pauseStopWarning,
-    idleStopWarning: state.idleStopWarning,
-    wordCount,
-    elapsed: options.elapsed,
+    micNotice:
+      notice && notice.target.panelId === target.panelId
+        ? { kind: notice.kind, bluetooth: notice.kind === "silent" && notice.bluetooth }
+        : null,
+    correctionEnabled: state.correctionEnabled,
+    locked: state.lockedTarget?.panelId === target.panelId,
+    wordCount: countWords(transcript),
+    transcript: transcript.slice(-VOICE_SNAPSHOT_TRANSCRIPT_MAX_LENGTH),
+    clock: clock
+      ? {
+          at: options.now,
+          elapsedMs: clock.elapsedMs,
+          pausedMs: clock.pausedMs,
+          paused: phase === "paused",
+          autoStop: clock.autoStop,
+        }
+      : null,
   };
 }
 
-// What makes a report worth sending: a running clock moves on its own, so
-// neither its count nor its anchor is a change; a stopped one's count is.
-function changeKey(details: VoiceSessionDetails): string {
-  const { elapsed, ...rest } = details;
-  return JSON.stringify([rest, elapsed.ticking, elapsed.ticking ? null : elapsed.seconds]);
-}
+// Granularity of the clock's fixed points in a change key: finer than the
+// panel shows, coarse enough that reading the same clock twice agrees.
+const CLOCK_KEY_MS = 250;
 
-function targetAgentId(panelId: string): string | null {
-  const panel = usePanelStore.getState().panelsById[panelId];
-  return panel?.detectedAgentId ?? panel?.launchAgentId ?? null;
+// What makes a report worth sending. A running clock moves on its own, so its
+// readings aren't a change; the points it runs from (when the session began,
+// when the pause began, when it auto-stops) are.
+function changeKey(snapshot: VoiceSessionSnapshot): string {
+  const { clock, ...rest } = snapshot;
+  const point = (ms: number) => Math.round(ms / CLOCK_KEY_MS);
+  const fixed = clock
+    ? [
+        point(clock.at - clock.elapsedMs),
+        clock.paused,
+        point(clock.paused ? clock.at - clock.pausedMs : clock.pausedMs),
+        clock.autoStop
+          ? [clock.autoStop.reason, point(clock.at + clock.autoStop.remainingMs)]
+          : null,
+      ]
+    : null;
+  return JSON.stringify([rest, fixed]);
 }
 
 export interface VoiceDetailsSource {
   /** The session this view owns now, or null. */
   sessionId(): string | null;
-  /** The owner's elapsed clock, anchored to the moment its count last went up. */
-  elapsed(): VoiceSessionDetails["elapsed"];
+  /** The owner's session clock at `now`, or null once it is stopping. */
+  clock(now: number): VoiceOwnerClock | null;
+  /** The host this view is on. */
+  hostId(): HostId;
 }
 
 /**
@@ -114,11 +176,15 @@ export function startVoiceDetailsPublisher(
     timer = null;
     const sessionId = source.sessionId();
     const state = useVoiceRecordingStore.getState();
+    const target = state.activeTarget;
+    const now = Date.now();
     const details =
-      sessionId && state.activeTarget
-        ? buildVoiceSessionDetails(state, {
-            elapsed: source.elapsed(),
-            agentId: targetAgentId(state.activeTarget.panelId),
+      sessionId && target
+        ? buildVoiceSessionSnapshot(state, {
+            panel: usePanelStore.getState().panelsById[target.panelId],
+            clock: source.clock(now),
+            hostId: source.hostId(),
+            now,
           })
         : null;
     // Main forgets a session's report when the session ends.
