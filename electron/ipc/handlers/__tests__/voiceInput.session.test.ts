@@ -180,6 +180,7 @@ vi.mock("../../../window/webContentsRegistry.js", async (importOriginal) => {
     getAllAppWebContents: vi.fn(() => shared.appViews),
     getWindowForWebContents: vi.fn((wc: { id: number }) => shared.windowOf.get(wc.id) ?? null),
     getAppWebContents: vi.fn((win: Record<string, unknown>) => shared.shownIn.get(win)),
+    getShownAppWebContents: vi.fn(() => [...shared.shownIn.values()]),
   };
 });
 
@@ -1510,6 +1511,7 @@ describe("voiceInput — a session live in another view (#14601)", () => {
     shared.startResult = { ok: true };
     shared.drain = null;
     shared.assembleKeyterms = null;
+    shared.transcriptionProvider = "openai";
     shared.projects.clear();
     ownerA = makeSender();
     viewB = makeSender();
@@ -1558,6 +1560,8 @@ describe("voiceInput — a session live in another view (#14601)", () => {
       hostId: "local",
       projectId: "project-a",
       projectName: "Alpha",
+      provider: "openai",
+      details: null,
     };
     expect(lastLive(viewB)?.session).toEqual(elsewhere);
     expect(lastLive(viewC)?.session).toEqual(elsewhere);
@@ -1591,7 +1595,14 @@ describe("voiceInput — a session live in another view (#14601)", () => {
     expect(liveUpdates(latecomer)).toEqual([]);
     expect(pulled).toEqual({
       revision: lastLive(viewB)!.revision,
-      session: { sessionId: "a", hostId: "local", projectId: "project-a", projectName: "Alpha" },
+      session: {
+        sessionId: "a",
+        hostId: "local",
+        projectId: "project-a",
+        projectName: "Alpha",
+        provider: "openai",
+        details: null,
+      },
     });
     expect(await invoke(CHANNELS.VOICE_INPUT_GET_LIVE_SESSION, ownerA)).toMatchObject({
       session: null,
@@ -1870,6 +1881,8 @@ describe("voiceInput — one dictation across hosts (#14773)", () => {
         hostId: "local",
         projectId: "project-a",
         projectName: "Alpha",
+        provider: "openai",
+        details: null,
       };
       expect(lastLive(studio1)?.session).toEqual(elsewhere);
       expect(lastLive(studio2)?.session).toEqual(elsewhere);
@@ -1921,6 +1934,8 @@ describe("voiceInput — one dictation across hosts (#14773)", () => {
         hostId: "studio-01",
         projectId: "proj-r",
         projectName: "Remote R",
+        provider: "openai",
+        details: null,
       });
       expect(lastLive(studio1)?.session).toBeNull();
     });
@@ -1950,6 +1965,207 @@ describe("voiceInput — one dictation across hosts (#14773)", () => {
       expect(sentOn(studio1, CHANNELS.VOICE_INPUT_REVEAL_REQUESTED)).toEqual([
         { sessionId: "a", hostId: "studio-01", workspaceId: "proj-r" },
       ]);
+    });
+  });
+
+  describe("what other views show of it (#14921)", () => {
+    const details = (overrides: Record<string, unknown> = {}) => ({
+      status: "recording",
+      kind: "dictation",
+      panelTitle: "Claude",
+      worktreeLabel: "main",
+      agentId: "claude",
+      locked: false,
+      correctionEnabled: true,
+      micDeviceLabel: "MacBook Pro Microphone",
+      micSignal: "live",
+      micNotice: null,
+      pauseStopWarning: false,
+      idleStopWarning: false,
+      wordCount: 12,
+      elapsed: { seconds: 7, at: 1_000, ticking: true },
+      ...overrides,
+    });
+    const publish = (owner: FakeSender, sessionId: string, value = details()) =>
+      invoke(CHANNELS.VOICE_INPUT_PUBLISH_DETAILS, owner, { sessionId, details: value });
+    // A chunk of steady tone at a tenth of full scale: RMS 0.1, a level of 0.6
+    // on the owner's meter.
+    const sendTone = (sessionId: string, from: FakeSender) => {
+      const call = ipcMainMock.on.mock.calls.find(([c]) => c === CHANNELS.VOICE_INPUT_AUDIO_CHUNK);
+      const samples = new Int16Array(2400).fill(3277);
+      (call![1] as (e: unknown, s: unknown, c: ArrayBuffer) => void)(
+        { sender: from },
+        sessionId,
+        samples.buffer
+      );
+    };
+    const levels = (view: FakeSender) =>
+      sentOn(view, CHANNELS.VOICE_INPUT_LIVE_LEVEL) as Array<{ sessionId: string; level: number }>;
+    let clock = 0;
+    beforeEach(() => {
+      clock = 10_000;
+      vi.spyOn(performance, "now").mockImplementation(() => clock);
+    });
+    afterEach(() => {
+      vi.mocked(performance.now).mockRestore();
+    });
+
+    // Each pairing the issue names: the owner, the view on screen elsewhere,
+    // and a view cached behind it.
+    const pairings = [
+      {
+        name: "a session on this Mac, seen from a host's view",
+        setup: () => ({ owner: local, shown: studio1, cached: null as FakeSender | null }),
+      },
+      {
+        name: "a session on a host, seen from this Mac's view",
+        setup: () => {
+          shared.shownIn.set(winA, local);
+          return { owner: studio1, shown: local, cached: null as FakeSender | null };
+        },
+      },
+      {
+        name: "a session on one host, seen from another host's view",
+        setup: () => ({ owner: studio1, shown: studio2, cached: local as FakeSender | null }),
+      },
+      {
+        name: "a session in one project, seen from another project on the same host",
+        setup: () => {
+          const other = makeSender();
+          shared.projects.set(other.id, "studio-01:proj-s");
+          shared.appViews = [...shared.appViews, other];
+          shared.windowOf.set(other.id, winB);
+          shared.shownIn.set(winB, other);
+          return { owner: studio1, shown: other, cached: studio2 as FakeSender | null };
+        },
+      },
+    ];
+
+    describe.each(pairings)("$name", ({ setup }) => {
+      it("passes the owner's details on, and keeps them from the owner", async () => {
+        const { owner, shown, cached } = setup();
+        await startIn(owner, "a", "Workspace");
+        const before = lastLive(shown)!.revision;
+
+        expect(await publish(owner, "a")).toBe(true);
+
+        expect(lastLive(shown)!.revision).toBeGreaterThan(before);
+        expect(lastLive(shown)?.session).toMatchObject({
+          sessionId: "a",
+          provider: "openai",
+          details: details(),
+        });
+        if (cached) expect(lastLive(cached)?.session).toMatchObject({ details: details() });
+        expect(lastLive(owner)?.session).toBeNull();
+        expect(
+          await invoke(CHANNELS.VOICE_INPUT_GET_LIVE_SESSION, shown)
+        ).toMatchObject({ session: { details: details() } });
+      });
+
+      it("sends the input level to the view on screen, never the owner or a cached view", async () => {
+        const { owner, shown, cached } = setup();
+        await startIn(owner, "a", "Workspace");
+
+        sendTone("a", owner);
+
+        expect(levels(shown)).toHaveLength(1);
+        expect(levels(shown)[0]!.sessionId).toBe("a");
+        expect(levels(shown)[0]!.level).toBeCloseTo(0.6, 2);
+        expect(levels(owner)).toEqual([]);
+        if (cached) expect(levels(cached)).toEqual([]);
+      });
+
+      it("pauses and resumes the owner's session from the other view", async () => {
+        const { owner, shown } = setup();
+        await startIn(owner, "a", "Workspace");
+
+        expect(
+          await invoke(CHANNELS.VOICE_INPUT_SET_PAUSED_LIVE, shown, { sessionId: "a", paused: true })
+        ).toBe(true);
+        expect(
+          await invoke(CHANNELS.VOICE_INPUT_SET_PAUSED_LIVE, shown, {
+            sessionId: "a",
+            paused: false,
+          })
+        ).toBe(true);
+
+        expect(sentOn(owner, CHANNELS.VOICE_INPUT_PAUSE_REQUESTED)).toEqual([
+          { sessionId: "a", paused: true },
+          { sessionId: "a", paused: false },
+        ]);
+      });
+    });
+
+    it("takes no report from a view that doesn't own the session", async () => {
+      await startIn(local, "a", "Alpha");
+      const before = lastLive(studio1)!.revision;
+
+      expect(await publish(studio2, "a")).toBe(false);
+      expect(await publish(local, "other")).toBe(false);
+
+      expect(lastLive(studio1)!.revision).toBe(before);
+      expect(lastLive(studio1)?.session).toMatchObject({ details: null });
+    });
+
+    it("takes no report once the session is over, so nothing revives it", async () => {
+      await startIn(local, "a", "Alpha");
+      await stop(local, "a");
+
+      expect(await publish(local, "a")).toBe(false);
+
+      expect(lastLive(studio1)?.session).toBeNull();
+    });
+
+    it("starts the next session with no details of the last", async () => {
+      await startIn(local, "a", "Alpha");
+      await publish(local, "a");
+
+      await startIn(studio1, "b", "Remote R");
+
+      expect(lastLive(local)?.session).toMatchObject({ sessionId: "b", details: null });
+    });
+
+    it("refuses a malformed report", async () => {
+      await startIn(local, "a", "Alpha");
+
+      await expect(
+        publish(local, "a", details({ panelTitle: "x".repeat(10_000) }))
+      ).rejects.toThrow();
+      await expect(publish(local, "a", details({ status: "dancing" }))).rejects.toThrow();
+    });
+
+    it("sends about ten level readings a second however fast chunks arrive", async () => {
+      await startIn(local, "a", "Alpha");
+
+      for (let i = 0; i < 10; i++) {
+        sendTone("a", local);
+        clock += 20;
+      }
+
+      // 200ms of chunks every 20ms: one reading per 80ms.
+      expect(levels(studio1)).toHaveLength(3);
+    });
+
+    it("sends no level for audio from a view that doesn't own the session", async () => {
+      await startIn(local, "a", "Alpha");
+
+      sendTone("a", studio2);
+
+      expect(levels(studio1)).toEqual([]);
+    });
+
+    it("asks nobody to pause a session that isn't the live one", async () => {
+      await startIn(local, "a", "Alpha");
+
+      expect(
+        await invoke(CHANNELS.VOICE_INPUT_SET_PAUSED_LIVE, studio1, { sessionId: "old", paused: true })
+      ).toBe(false);
+      await stop(local, "a");
+      expect(
+        await invoke(CHANNELS.VOICE_INPUT_SET_PAUSED_LIVE, studio1, { sessionId: "a", paused: true })
+      ).toBe(false);
+
+      expect(sentOn(local, CHANNELS.VOICE_INPUT_PAUSE_REQUESTED)).toEqual([]);
     });
   });
 
