@@ -10,6 +10,14 @@ import HostsSettingsTab from "../Hosts/HostsSettingsTab";
 import { requestHostUpdate, takePendingHostUpdate } from "../Hosts/hostUpdateRequests";
 import { requestHostPlugins } from "../Hosts/hostPluginRequests";
 
+const { connectionKindMock } = vi.hoisted(() => ({
+  connectionKindMock: vi.fn<() => "ssh" | "wsl">(() => "ssh"),
+}));
+vi.mock("@/lib/remoteHosts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/remoteHosts")>()),
+  remoteConnectionKind: connectionKindMock,
+}));
+
 function entry(id: string, name: string): HostListEntry {
   return {
     descriptor: {
@@ -108,6 +116,23 @@ describe("HostsSettingsTab", () => {
       )
     ).toBeTruthy();
     expect(screen.getByRole("button", { name: "Add host" })).toBeTruthy();
+  });
+
+  it("offers a WSL distribution, not a Mac or Linux machine, on Windows", async () => {
+    connectionKindMock.mockReturnValue("wsl");
+    try {
+      render(
+        <TooltipProvider>
+          <HostsSettingsTab />
+        </TooltipProvider>
+      );
+      expect(
+        await screen.findByText("Add a WSL distribution to run projects and agents in it from here")
+      ).toBeTruthy();
+      expect(screen.queryByText(/Add a Mac or Linux machine/)).toBeNull();
+    } finally {
+      connectionKindMock.mockReturnValue("ssh");
+    }
   });
 
   it("gives the hosts list, Host mode and answering from another device their own sections", async () => {

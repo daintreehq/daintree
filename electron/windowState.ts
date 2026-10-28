@@ -225,12 +225,19 @@ function findFreeCascadeSpot(
   return null;
 }
 
-/** Move a window off any open window it would land on, when a cascade step has room. */
-function cascadeOffOccupied(win: BrowserWindow, occupied: readonly Electron.Rectangle[]): void {
+/**
+ * Move a window off any open window it would land on, when a cascade step has
+ * room. Returns the spot it moved to, or null when it stayed put.
+ */
+function cascadeOffOccupied(
+  win: BrowserWindow,
+  occupied: readonly Electron.Rectangle[]
+): Electron.Rectangle | null {
   const bounds = win.getBounds();
-  if (!coversOccupied(bounds, occupied)) return;
+  if (!coversOccupied(bounds, occupied)) return null;
   const spot = findFreeCascadeSpot(bounds, occupied);
   if (spot) win.setBounds(spot);
+  return spot;
 }
 
 // Mirror the store's own entry type (isFullScreen optional) so the map read back
@@ -385,6 +392,9 @@ export function createWindowWithState(
   // borrowed bounds, saved bounds the displays no longer fit, a centred
   // fallback — can land squarely on another open window.
   let atOwnSavedSpot = false;
+  // Where this code put the window, in its own numbers rather than the ones the
+  // window reports back (see the Windows rounding note at saveState).
+  let placedBounds: Electron.Rectangle | null = null;
   // When the saved state has no x/y (cold-start / first-run / defaults), getBounds() on a
   // show:false window returns placeholder coordinates, so getDisplayMatching would route to
   // the primary display anyway — call it directly to make the intent explicit (#10076).
@@ -415,6 +425,12 @@ export function createWindowWithState(
       win.setSize(clampedWidth, clampedHeight);
       bounds = win.getBounds();
     }
+    const placedWidth = Math.min(windowState.width, clampedWidth);
+    const placedHeight = Math.min(windowState.height, clampedHeight);
+    const placedSize =
+      Number.isFinite(placedWidth) && Number.isFinite(placedHeight)
+        ? { width: placedWidth, height: placedHeight }
+        : null;
 
     if (hasSavedPosition) {
       // Route through clampToDisplay so windows that are partially off-screen (e.g.
@@ -427,15 +443,24 @@ export function createWindowWithState(
         height: bounds.height,
       });
       win.setBounds(clamped);
-      atOwnSavedSpot =
-        windowState.ownSaved && !sizeClamped && clamped.x === bounds.x && clamped.y === bounds.y;
+      const unmoved = clamped.x === bounds.x && clamped.y === bounds.y;
+      // Unmoved, it sits at the position it was created with, not the one read back.
+      if (placedSize) {
+        placedBounds = unmoved
+          ? { x: windowState.x ?? clamped.x, y: windowState.y ?? clamped.y, ...placedSize }
+          : { x: clamped.x, y: clamped.y, ...placedSize };
+      }
+      atOwnSavedSpot = windowState.ownSaved && !sizeClamped && unmoved;
     } else {
       win.center();
+      const centred = win.getBounds();
+      if (placedSize) placedBounds = { x: centred.x, y: centred.y, ...placedSize };
     }
   }
 
   if (!atOwnSavedSpot && tracking?.getOccupiedBounds) {
-    cascadeOffOccupied(win, tracking.getOccupiedBounds());
+    const spot = cascadeOffOccupied(win, tracking.getOccupiedBounds());
+    if (spot && placedBounds) placedBounds = { ...placedBounds, x: spot.x, y: spot.y };
   }
 
   // Electron's maximize() on a hidden window shows it, maximized, and on Linux
@@ -484,15 +509,11 @@ export function createWindowWithState(
   // reports bounds a few pixels larger than it was created or set with (1000x700
   // comes back 1006x705 at 125%), so saving what getNormalBounds() reports grew
   // the window on every launch. Until the user moves or resizes it past that
-  // rounding, keep saving the bounds it was restored from — only when it opened
-  // at its own saved spot, not one clamped or cascaded from it.
-  const restoredBounds =
-    process.platform === "win32" &&
-    atOwnSavedSpot &&
-    windowState.x !== undefined &&
-    windowState.y !== undefined
-      ? { x: windowState.x, y: windowState.y, width: windowState.width, height: windowState.height }
-      : null;
+  // rounding, keep saving the bounds it was placed at. That holds for every
+  // placement — a no-project cold start, the centred default, one the work area
+  // clamped or a cascade moved — or the growth comes back through it: a window
+  // grown past the taskbar is clamped up, and from then on saved what it reported.
+  const restoredBounds = process.platform === "win32" ? placedBounds : null;
 
   const saveState = (saveKey: string | null = resolveSaveKey()) => {
     if (win.isDestroyed()) return;

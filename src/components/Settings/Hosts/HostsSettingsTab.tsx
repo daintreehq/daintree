@@ -208,9 +208,11 @@ export default function HostsSettingsTab() {
             </SettingsEmptyRow>
           ) : hosts.length === 0 ? (
             <SettingsEmptyRow action={addButton}>
-              {loaded
-                ? "Add a Mac or Linux machine to run projects and agents on it from here"
-                : "Loading hosts"}
+              {!loaded
+                ? "Loading hosts"
+                : remoteConnectionKind() === "wsl"
+                  ? "Add a WSL distribution to run projects and agents in it from here"
+                  : "Add a Mac or Linux machine to run projects and agents on it from here"}
             </SettingsEmptyRow>
           ) : (
             [...hosts]
