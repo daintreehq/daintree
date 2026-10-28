@@ -50,6 +50,9 @@ vi.mock("@/store/helpPanelStore", () => {
 
 vi.mock("@/store/macroFocusStore", () => ({ isAssistantFocused: vi.fn(() => false) }));
 
+const notify = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/notify", () => ({ notify }));
+
 vi.mock("@/utils/logger", () => ({
   logDebug: vi.fn(),
   logInfo: vi.fn(),
@@ -482,5 +485,62 @@ describe("VoiceRecordingService — spoken send to a Canopy reply off screen (#1
 
     expect(handler).not.toHaveBeenCalled();
     expect(stop).not.toHaveBeenCalled();
+  });
+});
+
+describe("VoiceRecordingService — the session panel's Send (#14920)", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    draftState.draft = "";
+    notify.mockClear();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("sends from the composer as Enter would, with no stop of its own", async () => {
+    const { voiceRecordingService, stop } = await setup();
+    const handler = vi.fn();
+    voiceRecordingService.onSpokenSend(PANEL_ID, undefined, handler);
+
+    expect(voiceRecordingService.canSendActiveSession()).toBe(true);
+    await voiceRecordingService.stopAndSend();
+
+    // Not a spoken "send it": a short draft goes, as it would on Enter.
+    expect(handler).toHaveBeenCalledWith({ spoken: false });
+    expect(stop).not.toHaveBeenCalled();
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("still stops, and says the prompt wasn't sent, with no composer to send from", async () => {
+    const { voiceRecordingService, stop } = await setup();
+
+    expect(voiceRecordingService.canSendActiveSession()).toBe(false);
+    await voiceRecordingService.stopAndSend();
+
+    expect(stop).toHaveBeenCalledWith("Dictation stopped.", {
+      preserveLiveText: true,
+      reason: "user",
+    });
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({ title: "Dictation stopped" }));
+  });
+
+  it("has nothing to send once the session is finishing", async () => {
+    const { voiceRecordingService, useVoiceRecordingStore } = await setup();
+    const handler = vi.fn();
+    voiceRecordingService.onSpokenSend(PANEL_ID, undefined, handler);
+    useVoiceRecordingStore.getState().setStatus("finishing");
+
+    expect(voiceRecordingService.canSendActiveSession()).toBe(false);
+    expect(voiceRecordingService.sendActiveSession()).toBe(false);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("ignores another project's composer for the same pane id", async () => {
+    const { voiceRecordingService } = await setup();
+    voiceRecordingService.onSpokenSend(PANEL_ID, "other-project", vi.fn());
+
+    expect(voiceRecordingService.canSendActiveSession()).toBe(false);
   });
 });

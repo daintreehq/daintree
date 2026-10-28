@@ -27,6 +27,8 @@ const service = vi.hoisted(() => ({
   goToActiveTarget: vi.fn(),
   togglePause: vi.fn(),
   stopActiveSession: vi.fn(),
+  stopAndSend: vi.fn(),
+  canSendActiveSession: vi.fn(),
   getSessionClock: vi.fn(),
 }));
 
@@ -34,7 +36,11 @@ vi.mock("@/services/VoiceRecordingService", () => ({ voiceRecordingService: serv
 vi.mock("@/services/ActionService", () => ({ actionService: { dispatch: vi.fn() } }));
 vi.mock("@/hooks", () => ({
   useEffectiveCombo: (actionId: string) =>
-    actionId === "voiceInput.togglePause" ? "Cmd+Shift+P" : "Cmd+.",
+    actionId === "voiceInput.togglePause"
+      ? "Cmd+Shift+P"
+      : actionId === "voiceInput.stopAndSend"
+        ? "Cmd+Alt+D"
+        : "Cmd+.",
   useShortcutHintHover: () => ({
     onPointerEnter: () => {},
     onPointerLeave: () => {},
@@ -63,6 +69,7 @@ beforeAll(async () => {
 beforeEach(() => {
   vi.stubGlobal("ResizeObserver", NoopResizeObserver);
   for (const fn of Object.values(service)) fn.mockReset();
+  service.canSendActiveSession.mockReturnValue(true);
   service.getSessionClock.mockReturnValue({
     provider: "deepgram",
     elapsedMs: 65_000,
@@ -173,14 +180,47 @@ describe("VoiceRecordingToolbarButton — the session panel (#14920)", () => {
     );
   });
 
-  it("stops from the panel and closes it", () => {
+  it("stops and returns from the panel, leaving the keyboard to the return", async () => {
     startSession();
     render(<VoiceRecordingToolbarButton />);
     openPanel();
 
-    fireEvent.click(document.querySelector('[data-testid="voice-session-stop"]')!);
+    fireEvent.click(byTestId("voice-session-stop"));
     expect(service.stopActiveSession).toHaveBeenCalledTimes(1);
+    expect(service.stopAndSend).not.toHaveBeenCalled();
     expect(panel()).toBeNull();
+    await act(() => new Promise((resolve) => setTimeout(resolve, AFTER_FOCUS_RESTORE_MS)));
+    expect(document.activeElement).not.toBe(mic());
+  });
+
+  it("stops and sends from the panel without going to the terminal", async () => {
+    startSession();
+    render(<VoiceRecordingToolbarButton />);
+    openPanel();
+
+    const send = byTestId("voice-session-send");
+    expect(send.textContent).toContain("Stop and send");
+    fireEvent.click(send);
+    expect(service.stopAndSend).toHaveBeenCalledTimes(1);
+    expect(service.goToActiveTarget).not.toHaveBeenCalled();
+    expect(service.stopActiveSession).not.toHaveBeenCalled();
+    expect(panel()).toBeNull();
+    // Nothing moved the keyboard elsewhere, so it comes back to the mic.
+    await vi.waitFor(() => expect(document.activeElement).toBe(mic()));
+  });
+
+  it("says why it can't send when the composer isn't open, and makes stopping the primary", () => {
+    service.canSendActiveSession.mockReturnValue(false);
+    startSession();
+    render(<VoiceRecordingToolbarButton />);
+    openPanel();
+
+    const send = byTestId("voice-session-send");
+    expect(send.disabled).toBe(true);
+    const note = document.querySelector('[data-testid="voice-session-send-note"]');
+    expect(note?.id).toBeTruthy();
+    expect(send.getAttribute("aria-describedby")).toBe(note?.id);
+    expect(byTestId("voice-session-stop").getAttribute("data-variant")).toBe("contrast");
   });
 
   it("opens with the keyboard on its top row, and Escape hands it back to the mic", async () => {

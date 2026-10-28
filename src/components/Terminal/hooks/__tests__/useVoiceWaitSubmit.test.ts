@@ -108,7 +108,7 @@ describe("useVoiceWaitSubmit", () => {
     );
   }
 
-  function spokenSendHandler(): () => void {
+  function spokenSendHandler(): (options?: { spoken?: boolean }) => void {
     const call = onSpokenSendMock.mock.calls.at(-1);
     expect(call?.[0]).toBe(PANEL_ID);
     return call![2];
@@ -148,6 +148,19 @@ describe("useVoiceWaitSubmit", () => {
       await act(async () => {
         landCorrection(true);
       });
+      expect(sendFromEditor).toHaveBeenCalledTimes(1);
+    });
+
+    // #14920: the session panel's Send is a press, not an utterance.
+    it("sends a short draft when the session panel asks, as Enter would", async () => {
+      useTerminalInputStore.getState().setDraftInput(PANEL_ID, "fix it");
+      renderWaitSubmit();
+
+      await act(async () => {
+        spokenSendHandler()({ spoken: false });
+      });
+
+      expect(stopMock).toHaveBeenCalledTimes(1);
       expect(sendFromEditor).toHaveBeenCalledTimes(1);
     });
 
