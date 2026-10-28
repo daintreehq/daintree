@@ -138,16 +138,19 @@ const CARET_WIDGETS: Record<VoiceCaretPhase, VoiceCaretWidget> = {
 
 /**
  * Draws where dictation will write, focused or not, without blinking: a level
- * meter in a few pixels of its own, so it stands clear of the word before it,
- * and past the grey preview while one shows (the preview's side is 1). When
- * the editor's own caret sits at the same spot it steps aside, so there is one
- * caret, not two.
+ * meter that takes no width, so nothing around it moves, past the grey
+ * preview's words while one shows (the words' side is 1, a separator after
+ * them 3). Where the editor's own caret follows the dictation, at the meter or
+ * where the preview begins, it steps aside, so there is one caret, not two; a
+ * caret the user put elsewhere stays, in a neutral ink (`apart`). An empty
+ * draft whose placeholder is saying what the mic is doing shows no meter.
  */
 class VoiceCaretView {
   decorations: DecorationSet = Decoration.none;
   // Matches `caretTracker`: a composer never focused has a caret at 0 nobody chose.
   private everFocused: boolean;
   covers = false;
+  apart = false;
 
   constructor(view: EditorView) {
     this.everFocused = view.hasFocus;
@@ -179,15 +182,19 @@ class VoiceCaretView {
 
   private compute(view: EditorView): void {
     const at = view.composing ? null : voiceCaretPosition(view.state, this.everFocused);
-    if (!at) {
+    // Starting, no audio or held, an empty draft's placeholder says so, and
+    // the words can only go in where it starts.
+    if (!at || (at.phase !== "live" && !at.afterPreview && view.state.doc.length === 0)) {
       this.decorations = Decoration.none;
       this.covers = false;
+      this.apart = false;
       return;
     }
     const main = view.state.selection.main;
-    // Past a preview the two carets share a position but not a spot: the
-    // keyboard's stays before the grey words, where typing goes.
-    this.covers = view.hasFocus && main.empty && main.head === at.pos && !at.afterPreview;
+    // A caret where a preview begins is the dictation's own, carried along by
+    // the words it writes: the meter past the preview stands for it.
+    this.covers = view.hasFocus && main.empty && main.head === at.pos;
+    this.apart = view.hasFocus && !this.covers;
     this.decorations = Decoration.set(
       Decoration.widget({
         widget: CARET_WIDGETS[at.phase],
@@ -206,8 +213,11 @@ const voiceCaretPlugin = ViewPlugin.fromClass(VoiceCaretView, {
   },
 });
 
-const voiceCaretAttributes = EditorView.editorAttributes.of((view) =>
-  view.plugin(voiceCaretPlugin)?.covers ? { "data-voice-caret-covers": "" } : null
-);
+const voiceCaretAttributes = EditorView.editorAttributes.of((view) => {
+  const plugin = view.plugin(voiceCaretPlugin);
+  if (plugin?.covers) return { "data-voice-caret-covers": "" };
+  if (plugin?.apart) return { "data-voice-caret-apart": "" };
+  return null;
+});
 
 export const voiceCaret: Extension = [voiceCaretField, voiceCaretPlugin, voiceCaretAttributes];

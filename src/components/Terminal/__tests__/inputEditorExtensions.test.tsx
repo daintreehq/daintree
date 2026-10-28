@@ -1696,13 +1696,13 @@ describe("buildInputBarTheme", () => {
       if (bodies.length === 0) throw new Error(`selector ${selector} not found in CSS`);
       return Object.assign({}, ...bodies.map((m) => parseDeclarations(m[2] ?? "")));
     };
-    // The meter takes its own width, and starts a gap past the word before it.
-    expect(rule(".cm-voice-caret")["padding-left"]).toBe("11px");
+    // The meter takes no width of its own, so the text after it never moves.
+    expect(rule(".cm-voice-caret")["padding-left"]).toBeUndefined();
     const track = rule(".cm-voice-caret::before");
     const fill = rule(".cm-voice-caret::after");
     for (const part of [track, fill]) {
       expect(part.position).toBe("absolute");
-      expect([part.left, part.width]).toEqual(["6px", "3px"]);
+      expect(part.width).toBe("3px");
     }
     expect(track["background-color"]).toContain("color-mix");
     expect(fill["background-color"]).toBe(colors.voiceSignal.toLowerCase());

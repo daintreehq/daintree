@@ -308,15 +308,15 @@ export function buildInputBarTheme(theme: ITheme): Extension {
           borderColor: c.successColor,
         },
       },
-      // Where dictation writes (`voiceCaret`): a thin level meter set a gap
-      // past the text, so it reads as the mic and never as the keyboard's
-      // caret. A quiet track holds the place in every phase; the fill is the
-      // voice, rising with it while live, empty while the mic comes up, and a
-      // still neutral stub while the session holds. Reduced motion keeps the
-      // fill full and lets only its opacity follow the voice.
+      // Where dictation writes (`voiceCaret`): a thin level meter just past
+      // the text. It takes no width, so the words after it never shift and a
+      // line never wraps for it. A quiet track holds the place while live; the
+      // fill is the voice, rising with it. While the mic comes up the track is
+      // an outline, and while the session holds the fill is a still neutral
+      // stub. Reduced motion keeps the fill full and lets only its opacity
+      // follow the voice.
       ".cm-voice-caret": {
         position: "relative",
-        paddingLeft: "11px",
         pointerEvents: "none",
       },
       ".cm-voice-caret::before, .cm-voice-caret::after": {
@@ -324,13 +324,20 @@ export function buildInputBarTheme(theme: ITheme): Extension {
         position: "absolute",
         top: "1px",
         bottom: "1px",
-        left: "6px",
+        // Clear of an italic word's overhang, and still inside the space
+        // before the word after it.
+        left: "3px",
         width: "3px",
         borderRadius: "var(--radius-xs)",
       },
       ".cm-voice-caret::before": {
         // The expanded editor portals outside the shell that sets `--ib-fg`.
         backgroundColor: "color-mix(in oklab, var(--ib-fg, currentColor) 16%, transparent)",
+      },
+      '.cm-voice-caret[data-phase="starting"]::before': {
+        backgroundColor: "transparent",
+        border: `1px solid ${c.voiceHeld}`,
+        boxSizing: "border-box",
       },
       ".cm-voice-caret::after": {
         backgroundColor: c.voiceSignal,
@@ -355,6 +362,12 @@ export function buildInputBarTheme(theme: ITheme): Extension {
         },
       "&[data-voice-caret-covers] .cm-cursorLayer": {
         visibility: "hidden",
+      },
+      // A caret the user put somewhere else while dictation writes: where
+      // typing goes, in the text's own ink, so it never passes for a second
+      // place the voice is going.
+      "&[data-voice-caret-apart].cm-focused .cm-cursor": {
+        borderLeftColor: c.foreground,
       },
       // System inks replace author backgrounds, so the meter is borders: a
       // CanvasText outline, filled in Highlight live and GrayText held.
@@ -411,15 +424,18 @@ export const chipEntranceTheme: Extension = EditorView.baseTheme({
 });
 
 class InterimGhostWidget extends WidgetType {
-  constructor(readonly text: string) {
+  constructor(
+    readonly text: string,
+    readonly className = "cm-voice-interim"
+  ) {
     super();
   }
   eq(other: InterimGhostWidget): boolean {
-    return other.text === this.text;
+    return other.text === this.text && other.className === this.className;
   }
   toDOM(): HTMLElement {
     const span = document.createElement("span");
-    span.className = "cm-voice-interim";
+    span.className = this.className;
     span.textContent = this.text;
     span.style.userSelect = "none";
     span.style.pointerEvents = "none";
@@ -433,11 +449,14 @@ class InterimGhostWidget extends WidgetType {
 /**
  * The dictation preview: its text, and where it shows. A null position puts
  * it at the end of the draft; any other follows edits around it until the next
- * preview replaces it.
+ * preview replaces it. `trail` is the space the words will be written with
+ * before the text after them, drawn past the dictation caret, which stops at
+ * the words as it will once they're written.
  */
 export interface InterimPreview {
   text: string;
   pos: number | null;
+  trail?: string;
 }
 
 const NO_PREVIEW: InterimPreview = { text: "", pos: null };
@@ -459,7 +478,7 @@ export const interimWidgetField = StateField.define<InterimPreview>({
         const preview =
           typeof effect.value === "string" ? { text: effect.value, pos: null } : effect.value;
         next =
-          preview.text === next.text && preview.pos === next.pos
+          preview.text === next.text && preview.pos === next.pos && preview.trail === next.trail
             ? next
             : preview.text
               ? preview
@@ -469,13 +488,17 @@ export const interimWidgetField = StateField.define<InterimPreview>({
     return next;
   },
   provide: (f) => [
-    EditorView.decorations.from(f, ({ text, pos }) => (view) => {
+    EditorView.decorations.from(f, ({ text, pos, trail }) => (view) => {
       // Suppress the ghost during IME composition so it can't displace the
       // composition overlay (mirrors the xterm guard added for #4379).
       if (!text || view.composing) return Decoration.none;
       const at = pos === null ? view.state.doc.length : Math.min(pos, view.state.doc.length);
+      const words = Decoration.widget({ widget: new InterimGhostWidget(text), side: 1 });
+      if (!trail) return Decoration.set([words.range(at)]);
+      const gap = new InterimGhostWidget(trail, "cm-voice-interim-trail");
       return Decoration.set([
-        Decoration.widget({ widget: new InterimGhostWidget(text), side: 1 }).range(at),
+        words.range(at),
+        Decoration.widget({ widget: gap, side: 3 }).range(at),
       ]);
     }),
     // The doc stays empty while dictation is interim, so CodeMirror's own

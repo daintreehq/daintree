@@ -284,13 +284,15 @@ describe("HybridInputBar dictation caret", () => {
     await act(async () => useVoiceRecordingStore.getState().finishSession());
     record();
 
+    // An empty draft's status speaks for itself: the meter waits for a live
+    // mic, and then needs no words beside it.
     expect(seen).toEqual([
       ["Ask Claude", null],
-      ["Starting microphone…", "starting"],
-      ["No audio from microphone", "starting"],
-      ["Listening…", "live"],
-      ["Paused · Resume to continue", "held"],
-      ["Finishing transcription…", "held"],
+      ["Starting microphone…", null],
+      ["No audio from microphone", null],
+      [undefined, "live"],
+      ["Paused · Resume to continue", null],
+      ["Finishing transcription…", null],
       ["Ask Claude", null],
     ]);
   });
