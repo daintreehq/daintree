@@ -108,21 +108,26 @@ export function voiceCaretPosition(
 }
 
 class VoiceCaretWidget extends WidgetType {
-  constructor(readonly phase: VoiceCaretPhase) {
+  /** `lineEnd`: nothing follows on its line, so it can stand clear of the words. */
+  constructor(
+    readonly phase: VoiceCaretPhase,
+    readonly lineEnd: boolean
+  ) {
     super();
   }
   eq(other: VoiceCaretWidget): boolean {
-    return other.phase === this.phase;
+    return other.phase === this.phase && other.lineEnd === this.lineEnd;
   }
   toDOM(): HTMLElement {
     const span = document.createElement("span");
     span.className = "cm-voice-caret";
-    span.dataset.phase = this.phase;
     span.setAttribute("aria-hidden", "true");
+    this.updateDOM(span);
     return span;
   }
   updateDOM(dom: HTMLElement): boolean {
     dom.dataset.phase = this.phase;
+    dom.toggleAttribute("data-line-end", this.lineEnd);
     return true;
   }
   ignoreEvent(): boolean {
@@ -130,10 +135,13 @@ class VoiceCaretWidget extends WidgetType {
   }
 }
 
-const CARET_WIDGETS: Record<VoiceCaretPhase, VoiceCaretWidget> = {
-  starting: new VoiceCaretWidget("starting"),
-  live: new VoiceCaretWidget("live"),
-  held: new VoiceCaretWidget("held"),
+const CARET_WIDGETS: Record<
+  VoiceCaretPhase,
+  [inLine: VoiceCaretWidget, lineEnd: VoiceCaretWidget]
+> = {
+  starting: [new VoiceCaretWidget("starting", false), new VoiceCaretWidget("starting", true)],
+  live: [new VoiceCaretWidget("live", false), new VoiceCaretWidget("live", true)],
+  held: [new VoiceCaretWidget("held", false), new VoiceCaretWidget("held", true)],
 };
 
 /**
@@ -195,9 +203,11 @@ class VoiceCaretView {
     // the words it writes: the meter past the preview stands for it.
     this.covers = view.hasFocus && main.empty && main.head === at.pos;
     this.apart = view.hasFocus && !this.covers;
+    const trail = at.afterPreview && !!view.state.field(interimWidgetField, false)?.trail;
+    const lineEnd = !trail && at.pos === view.state.doc.lineAt(at.pos).to;
     this.decorations = Decoration.set(
       Decoration.widget({
-        widget: CARET_WIDGETS[at.phase],
+        widget: CARET_WIDGETS[at.phase][lineEnd ? 1 : 0],
         side: at.afterPreview ? 2 : -1,
       }).range(at.pos)
     );
@@ -213,11 +223,13 @@ const voiceCaretPlugin = ViewPlugin.fromClass(VoiceCaretView, {
   },
 });
 
-const voiceCaretAttributes = EditorView.editorAttributes.of((view) => {
-  const plugin = view.plugin(voiceCaretPlugin);
-  if (plugin?.covers) return { "data-voice-caret-covers": "" };
-  if (plugin?.apart) return { "data-voice-caret-apart": "" };
-  return null;
-});
+const voiceCaretAttributes = EditorView.editorAttributes.of(
+  (view): Record<string, string> | null => {
+    const plugin = view.plugin(voiceCaretPlugin);
+    if (plugin?.covers) return { "data-voice-caret-covers": "" };
+    if (plugin?.apart) return { "data-voice-caret-apart": "" };
+    return null;
+  }
+);
 
 export const voiceCaret: Extension = [voiceCaretField, voiceCaretPlugin, voiceCaretAttributes];

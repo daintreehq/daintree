@@ -330,6 +330,10 @@ export function buildInputBarTheme(theme: ITheme): Extension {
         width: "3px",
         borderRadius: "var(--radius-xs)",
       },
+      // Nothing after it on its line to crowd, so it stands clear of the words.
+      ".cm-voice-caret[data-line-end]::before, .cm-voice-caret[data-line-end]::after": {
+        left: "6px",
+      },
       ".cm-voice-caret::before": {
         // The expanded editor portals outside the shell that sets `--ib-fg`.
         backgroundColor: "color-mix(in oklab, var(--ib-fg, currentColor) 16%, transparent)",
