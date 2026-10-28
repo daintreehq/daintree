@@ -1710,9 +1710,9 @@ class VoiceRecordingService {
         performance.now() < confirm.expiresAt;
       if (!confirmed) {
         this.armCancelConfirm(target.panelId, sessionId);
-        // A reply box's own composer says it: the app's announcer goes unheard
-        // inside Canopy's dialog.
-        if (!isCanopyReplyTarget(target)) {
+        // A reply box's own composer says it while Canopy is open: the app's
+        // announcer goes unheard inside its dialog.
+        if (!isCanopyReplyTarget(target) || !useCanopyStore.getState().isOpen) {
           useVoiceRecordingStore.getState().announce(DICTATION_CANCEL_CONFIRM_PROMPT);
         }
         return true;

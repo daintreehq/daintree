@@ -1129,6 +1129,32 @@ describe("VoiceRecordingService — Escape cancels a dictation at the caret or o
       expect(ipc.stop).not.toHaveBeenCalled();
     });
 
+    it.each([
+      [false, "Press Escape again to cancel dictation"],
+      [true, null],
+    ])(
+      "announces a Canopy reply's prompt itself only while Canopy is closed (open: %s)",
+      async (open, expected) => {
+        const { service, voiceStore, announcement } = await setup();
+        const { useCanopyStore } = await import("@/store/canopyStore");
+        useCanopyStore.setState({ isOpen: open });
+        voiceStore
+          .getState()
+          .beginSession(
+            { panelId: PANEL, projectId: PROJECT, surface: "canopy-reply" },
+            SESSION_ID
+          );
+        voiceStore.getState().setStatus("recording");
+
+        complete("Hello.", "item-a");
+        voiceStore.getState().clearAnnouncement();
+        expect(service.handleEscape(PANEL)).toBe(true);
+
+        expect(voiceStore.getState().dictationCancelConfirm).not.toBeNull();
+        expect(announcement()).toBe(expected);
+      }
+    );
+
     it("takes out the words that landed while it waited too", async () => {
       const { service, draft, settled } = await setup("Existing.");
 
