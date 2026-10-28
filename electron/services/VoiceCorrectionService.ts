@@ -575,6 +575,12 @@ export class VoiceCorrectionService {
           correctedLen: outcome.rejected.candidate.length,
         });
       } else {
+        if (outcome.commandsAsSaid) {
+          logInfo(`${P} Correction kept, unasked commands written as said`, {
+            rawLen: request.rawText.length,
+            correctedLen: outcome.confirmedText.length,
+          });
+        }
         logDebug(`${P} Correction success`, {
           rawLen: request.rawText.length,
           correctedLen: outcome.confirmedText.length,
