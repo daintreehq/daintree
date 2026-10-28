@@ -218,6 +218,15 @@ async function setup(initialDraft = "") {
   };
 }
 
+// Escape twice, as a cancel that takes words out needs (#14927): the first
+// asks again and must be seen to, the second cancels.
+async function escapeToCancel(service: { handleEscape(panelId?: string): boolean }) {
+  const { useVoiceRecordingStore } = await import("@/store/voiceRecordingStore");
+  expect(service.handleEscape(PANEL)).toBe(true);
+  expect(useVoiceRecordingStore.getState().dictationCancelConfirm).not.toBeNull();
+  return service.handleEscape(PANEL);
+}
+
 const delta = (text: string, itemId?: string, sessionId = SESSION_ID) =>
   callbacks.delta!({ sessionId, text, itemId });
 const complete = (text: string, itemId?: string, sessionId = SESSION_ID, transcriptId?: string) =>
@@ -256,7 +265,7 @@ describe("VoiceRecordingService — Escape cancels a dictation (#14631)", () => 
     complete("Again.", "item-b");
     expect(draft()).toBe("Existing. Hello. Again.");
 
-    expect(service.handleEscape(PANEL)).toBe(true);
+    expect(await escapeToCancel(service)).toBe(true);
     await settled();
 
     expect(draft()).toBe("Existing.");
@@ -275,7 +284,7 @@ describe("VoiceRecordingService — Escape cancels a dictation (#14631)", () => 
     complete("Scratch that.", "item-c");
     expect(draft()).toBe("Keep First.\n");
 
-    expect(service.handleEscape(PANEL)).toBe(true);
+    expect(await escapeToCancel(service)).toBe(true);
     await settled();
 
     expect(draft()).toBe("Keep");
@@ -295,7 +304,7 @@ describe("VoiceRecordingService — Escape cancels a dictation (#14631)", () => 
     complete("And the tests.", "item-b");
     expect(draft()).toBe("/review the last commit And the tests.");
 
-    expect(service.handleEscape(PANEL)).toBe(true);
+    expect(await escapeToCancel(service)).toBe(true);
     await settled();
 
     expect(draft()).toBe("");
@@ -307,7 +316,7 @@ describe("VoiceRecordingService — Escape cancels a dictation (#14631)", () => 
     const { takeScratchLanded } = await import("@/services/voiceScratchCommand");
 
     complete("Hello.", "item-a");
-    service.handleEscape(PANEL);
+    await escapeToCancel(service);
     await settled();
 
     expect(draft()).toBe("");
@@ -318,7 +327,7 @@ describe("VoiceRecordingService — Escape cancels a dictation (#14631)", () => 
     const { service, settled } = await setup();
 
     complete("Hello.", "item-a");
-    service.handleEscape(PANEL);
+    await escapeToCancel(service);
     await settled();
 
     expect(ipc.cancel).toHaveBeenCalledWith(SESSION_ID);
@@ -333,7 +342,7 @@ describe("VoiceRecordingService — Escape cancels a dictation (#14631)", () => 
     complete("Two.", "item-a");
     expect(draft()).toBe("Keep One.\nTwo.");
 
-    service.handleEscape(PANEL);
+    await escapeToCancel(service);
     await settled();
 
     expect(draft()).toBe("Keep");
@@ -349,7 +358,7 @@ describe("VoiceRecordingService — Escape cancels a dictation (#14631)", () => 
     complete("Two.", "item-b");
     expect(draft()).toBe("  \nOne.\n\nTwo.");
 
-    service.handleEscape(PANEL);
+    await escapeToCancel(service);
     await settled();
 
     expect(draft()).toBe("  ");
@@ -364,7 +373,7 @@ describe("VoiceRecordingService — Escape cancels a dictation (#14631)", () => 
     complete("More.", "item-b");
     expect(draft()).toBe("Typed More.");
 
-    service.handleEscape(PANEL);
+    await escapeToCancel(service);
     await settled();
 
     expect(draft()).toBe("Typed");
@@ -377,7 +386,7 @@ describe("VoiceRecordingService — Escape cancels a dictation (#14631)", () => 
     setDraft("Typed first. " + draft());
     setDraft(draft() + " typed after");
 
-    service.handleEscape(PANEL);
+    await escapeToCancel(service);
     await settled();
 
     expect(draft()).toBe("Typed first. Start typed after");
@@ -391,7 +400,7 @@ describe("VoiceRecordingService — Escape cancels a dictation (#14631)", () => 
     complete("Two.", "item-b");
     expect(draft()).toBe("Start One. typed Two.");
 
-    service.handleEscape(PANEL);
+    await escapeToCancel(service);
     await settled();
 
     expect(draft()).toBe("Start typed");
@@ -404,7 +413,7 @@ describe("VoiceRecordingService — Escape cancels a dictation (#14631)", () => 
     delta("half a thou", "item-b");
     expect(voiceStore.getState().panelBuffers[PANEL]?.liveText).toBe("half a thou");
 
-    service.handleEscape(PANEL);
+    await escapeToCancel(service);
     await settled();
 
     expect(draft()).toBe("Keep");
@@ -445,7 +454,7 @@ describe("VoiceRecordingService — Escape cancels a dictation (#14631)", () => 
       resolve();
       expect(draft()).toBe("Keep Fix the padding. @src/router.ts.");
 
-      expect(service.handleEscape(PANEL)).toBe(true);
+      expect(await escapeToCancel(service)).toBe(true);
       await settled();
 
       expect(draft()).toBe("Keep");
@@ -477,7 +486,7 @@ describe("VoiceRecordingService — Escape cancels a dictation (#14631)", () => 
     complete("Hello there.", "item-a");
     // Left where the dictation began, so a correction pass would have text to take.
     setDraft(draft() + " and some typed words");
-    service.handleEscape(PANEL);
+    await escapeToCancel(service);
     await settled();
 
     expect(draft()).toBe("Intro. and some typed words");
@@ -489,7 +498,7 @@ describe("VoiceRecordingService — Escape cancels a dictation (#14631)", () => 
     const { service, voiceStore, begin, draft, settled } = await setup("Keep");
 
     complete("Link to the router.", "item-a", SESSION_ID, "t1");
-    service.handleEscape(PANEL);
+    await escapeToCancel(service);
     await settled();
     begin("session-2");
 
@@ -523,7 +532,7 @@ describe("VoiceRecordingService — Escape cancels a dictation (#14631)", () => 
     service.onSpokenSend(PANEL, PROJECT, spokenSend);
 
     complete("Fix the login bug.", "item-a");
-    service.handleEscape(PANEL);
+    await escapeToCancel(service);
     await settled();
     // A new dictation into the same composer, which a stray send would submit.
     begin("session-2");
@@ -594,7 +603,7 @@ describe("VoiceRecordingService — Escape cancels a dictation (#14631)", () => 
       voiceStore.getState().setMicSignal(signal);
 
       complete("Hello.", "item-a");
-      service.handleEscape(PANEL);
+      await escapeToCancel(service);
       await settled();
 
       expect(ipc.playUiEvent.mock.calls.map(([id]) => id)).toEqual(cues);
@@ -605,7 +614,7 @@ describe("VoiceRecordingService — Escape cancels a dictation (#14631)", () => 
     const { service, settled } = await setup();
 
     complete("Hello.", "item-a");
-    expect(service.handleEscape(PANEL)).toBe(true);
+    expect(await escapeToCancel(service)).toBe(true);
     await settled();
 
     expect(service.handleEscape(PANEL)).toBe(false);
@@ -645,7 +654,7 @@ describe("VoiceRecordingService — Escape cancels a dictation (#14631)", () => 
       service["noteHeldPressAudio"](speech);
       service["heldPress"]!.pressedAt -= 1_000;
 
-      expect(service.handleEscape(PANEL)).toBe(true);
+      expect(await escapeToCancel(service)).toBe(true);
       await settled();
       expect(draft()).toBe("Existing.");
 
@@ -675,7 +684,7 @@ describe("VoiceRecordingService — Escape cancels a dictation (#14631)", () => 
 
     begin("session-2");
     complete("Second.", "item-b", "session-2");
-    service.handleEscape(PANEL);
+    await escapeToCancel(service);
     await settled();
     expect(draft()).toBe("First passage.");
 
@@ -730,7 +739,7 @@ describe("VoiceRecordingService — Escape cancels a dictation at the caret or o
     complete("Again.", "item-b");
     expect(draft()).toBe("Fix the bug. Hello.\nAgain. Then test.");
 
-    expect(service.handleEscape(PANEL)).toBe(true);
+    expect(await escapeToCancel(service)).toBe(true);
     await settled();
 
     expect(draft()).toBe("Fix the bug. Then test.");
@@ -751,7 +760,7 @@ describe("VoiceRecordingService — Escape cancels a dictation at the caret or o
     complete("Two.", "item-b");
     expect(draft()).toBe("Intro. One. Two. Outro.");
 
-    service.handleEscape(PANEL);
+    await escapeToCancel(service);
     await settled();
 
     expect(draft()).toBe("Intro. Outro.");
@@ -768,7 +777,7 @@ describe("VoiceRecordingService — Escape cancels a dictation at the caret or o
     await showComposer(draft(), 15);
     const caretMoving = useTerminalInputStore.getState().caretMovingDraftRevision;
 
-    service.handleEscape(PANEL);
+    await escapeToCancel(service);
     await settled();
 
     expect(draft()).toBe("Intro. Outro.");
@@ -785,7 +794,7 @@ describe("VoiceRecordingService — Escape cancels a dictation at the caret or o
     setDraft("Say: Intro. One.X Outro.");
     setDraft("Say: Intro. One.X Outro. Done");
 
-    service.handleEscape(PANEL);
+    await escapeToCancel(service);
     await settled();
 
     expect(draft()).toBe("Say: Intro. X Outro. Done");
@@ -818,7 +827,7 @@ describe("VoiceRecordingService — Escape cancels a dictation at the caret or o
     await showComposer("Intro. Outro.", 6);
     complete("One.", "item-b", "session-2");
     expect(draft()).toBe("Intro. One. Outro.");
-    service.handleEscape(PANEL);
+    await escapeToCancel(service);
     await settled();
 
     expect(draft()).toBe("Intro. Outro.");
@@ -835,7 +844,7 @@ describe("VoiceRecordingService — Escape cancels a dictation at the caret or o
     complete("new", "item-a");
     expect(draft()).toBe("Keep new text.");
 
-    expect(service.handleEscape(PANEL)).toBe(true);
+    expect(await escapeToCancel(service)).toBe(true);
     await settled();
 
     expect(draft()).toBe("Keep old text.");
@@ -851,7 +860,7 @@ describe("VoiceRecordingService — Escape cancels a dictation at the caret or o
     complete("hi", "item-a");
     expect(draft()).toBe("Say hi, friend.");
 
-    service.handleEscape(PANEL);
+    await escapeToCancel(service);
     await settled();
 
     expect(draft()).toBe("Say hello there, friend.");
@@ -869,6 +878,7 @@ describe("VoiceRecordingService — Escape cancels a dictation at the caret or o
     expect(draft()).toBe("Keep old text.");
     const revision = useTerminalInputStore.getState().externalDraftRevision;
 
+    // Cancelling loses no words, so one press does it.
     service.handleEscape(PANEL);
     await settled();
 
@@ -894,7 +904,7 @@ describe("VoiceRecordingService — Escape cancels a dictation at the caret or o
     complete("new", "item-b", "session-2");
     expect(draft()).toBe("Keep new text. Done.");
 
-    service.handleEscape(PANEL);
+    await escapeToCancel(service);
     await settled();
 
     expect(draft()).toBe("Keep old text. Done.");
@@ -911,7 +921,7 @@ describe("VoiceRecordingService — Escape cancels a dictation at the caret or o
     complete("two", "item-b");
     expect(draft()).toBe("Keep \none two text.");
 
-    service.handleEscape(PANEL);
+    await escapeToCancel(service);
     await settled();
 
     expect(draft()).toBe("Keep old text.");
@@ -927,7 +937,7 @@ describe("VoiceRecordingService — Escape cancels a dictation at the caret or o
     complete("old", "item-a");
     expect(draft()).toBe("Keep \nold text.");
 
-    service.handleEscape(PANEL);
+    await escapeToCancel(service);
     await settled();
 
     expect(draft()).toBe("Keep old text.");
@@ -941,7 +951,7 @@ describe("VoiceRecordingService — Escape cancels a dictation at the caret or o
     complete("new", "item-a");
     expect(draft()).toBe("Keep new text.");
 
-    service.handleEscape(PANEL);
+    await escapeToCancel(service);
     await settled();
 
     expect(draft()).toBe("Keep oldtext.");
@@ -957,7 +967,7 @@ describe("VoiceRecordingService — Escape cancels a dictation at the caret or o
     await takeCaret(draft());
     await showComposer(draft(), 18);
 
-    service.handleEscape(PANEL);
+    await escapeToCancel(service);
     await settled();
 
     expect(draft()).toBe("Keep old text.");
@@ -989,7 +999,7 @@ describe("VoiceRecordingService — Escape cancels a dictation at the caret or o
     setDraft("Keep typed new text.");
     await showComposer(draft(), 11);
 
-    service.handleEscape(PANEL);
+    await escapeToCancel(service);
     await settled();
 
     expect(draft()).toBe("Keep typed old text.");
@@ -1004,7 +1014,7 @@ describe("VoiceRecordingService — Escape cancels a dictation at the caret or o
     await takeCaret(draft());
     await showComposer(draft(), 9);
 
-    service.handleEscape(PANEL);
+    await escapeToCancel(service);
     await settled();
 
     expect(draft()).toBe("Keep old text.");
@@ -1019,7 +1029,7 @@ describe("VoiceRecordingService — Escape cancels a dictation at the caret or o
     await takeCaret(draft());
     await showComposer(draft(), 7, 18);
 
-    service.handleEscape(PANEL);
+    await escapeToCancel(service);
     await settled();
 
     expect(draft()).toBe("Keep old text.");
@@ -1036,7 +1046,7 @@ describe("VoiceRecordingService — Escape cancels a dictation at the caret or o
     await takeCaret(draft());
     await showComposer(draft(), 6, 20);
 
-    service.handleEscape(PANEL);
+    await escapeToCancel(service);
     await settled();
 
     expect(draft()).toBe("Keep old text.");
@@ -1066,11 +1076,138 @@ describe("VoiceRecordingService — Escape cancels a dictation at the caret or o
     complete("fresh", "item-b", "session-2");
     expect(draft()).toBe("Keep fresh text.");
 
-    service.handleEscape(PANEL);
+    await escapeToCancel(service);
     await settled();
 
     expect(draft()).toBe("Keep new text.");
     expect(await takeCaret(draft())).toEqual({ from: 5, to: 8 });
     expect(records().map((record) => record.sessionId)).toEqual([SESSION_ID]);
+  });
+
+  describe("asks for a second Escape first (#14927)", () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    const confirmMs = async () => (await import("@/lib/pressAgain")).PRESS_AGAIN_CONFIRM_MS;
+
+    it("keeps the session and its words on the first press", async () => {
+      const { service, voiceStore, draft } = await setup("Existing.");
+
+      complete("Hello.", "item-a");
+      expect(service.handleEscape(PANEL)).toBe(true);
+
+      expect(draft()).toBe("Existing. Hello.");
+      expect(voiceStore.getState().status).toBe("recording");
+      expect(voiceStore.getState().dictationCancelConfirm).toMatchObject({ panelId: PANEL });
+      expect(ipc.cancel).not.toHaveBeenCalled();
+      expect(ipc.stop).not.toHaveBeenCalled();
+    });
+
+    it("takes out the words that landed while it waited too", async () => {
+      const { service, draft, settled } = await setup("Existing.");
+
+      complete("Hello.", "item-a");
+      service.handleEscape(PANEL);
+      complete("Again.", "item-b");
+      expect(draft()).toBe("Existing. Hello. Again.");
+
+      expect(service.handleEscape(PANEL)).toBe(true);
+      await settled();
+
+      expect(draft()).toBe("Existing.");
+      expect(ipc.cancel).toHaveBeenCalledWith(SESSION_ID);
+    });
+
+    it("stands down when the window ends, and the next press starts over", async () => {
+      const { service, voiceStore, draft } = await setup();
+
+      complete("Hello.", "item-a");
+      service.handleEscape(PANEL);
+      vi.advanceTimersByTime(await confirmMs());
+
+      expect(voiceStore.getState().dictationCancelConfirm).toBeNull();
+      expect(voiceStore.getState().status).toBe("recording");
+      expect(service.handleEscape(PANEL)).toBe(true);
+      expect(voiceStore.getState().dictationCancelConfirm).not.toBeNull();
+      expect(draft()).toBe("Hello.");
+      expect(ipc.cancel).not.toHaveBeenCalled();
+    });
+
+    it("confirms across routes: the composer's press, then the global fallback's", async () => {
+      const { service, draft, settled } = await setup();
+
+      complete("Hello.", "item-a");
+      service.handleEscape(PANEL);
+      expect(service.handleEscape()).toBe(true);
+      await settled();
+
+      expect(draft()).toBe("");
+    });
+
+    it("leaves the waiting press alone for another pane's Escape", async () => {
+      const { service, voiceStore, draft } = await setup();
+
+      complete("Hello.", "item-a");
+      service.handleEscape(PANEL);
+
+      expect(service.handleEscape("panel-2")).toBe(false);
+      expect(voiceStore.getState().dictationCancelConfirm).not.toBeNull();
+      expect(draft()).toBe("Hello.");
+    });
+
+    it("never takes a held Escape's repeat as the second press", async () => {
+      const { service, voiceStore, draft } = await setup();
+      const keydown = (repeat: boolean) => {
+        const event = Object.assign(new Event("keydown"), {
+          key: "Escape",
+          code: "Escape",
+          repeat,
+        });
+        for (const [type, listener] of vi.mocked(window.addEventListener).mock.calls) {
+          if (type !== "keydown") continue;
+          if (typeof listener === "function") listener(event);
+          else listener.handleEvent(event);
+        }
+      };
+
+      complete("Hello.", "item-a");
+      keydown(false);
+      service.handleEscape(PANEL);
+      keydown(true);
+      expect(service.handleEscape(PANEL)).toBe(true);
+
+      expect(draft()).toBe("Hello.");
+      expect(voiceStore.getState().dictationCancelConfirm).not.toBeNull();
+      expect(ipc.cancel).not.toHaveBeenCalled();
+    });
+
+    it("stands down when the dictation key stops the session, which keeps its words", async () => {
+      const { service, voiceStore, draft, settled } = await setup();
+
+      complete("Hello.", "item-a");
+      service.handleEscape(PANEL);
+      const stopping = service.stop("Dictation stopped.", { preserveLiveText: true });
+
+      expect(voiceStore.getState().dictationCancelConfirm).toBeNull();
+      await stopping;
+      await settled();
+      expect(draft()).toBe("Hello.");
+      expect(ipc.cancel).not.toHaveBeenCalled();
+    });
+
+    it("cancels on one press when nothing has been written yet", async () => {
+      const { service, voiceStore, settled } = await setup("Existing.");
+
+      expect(service.handleEscape(PANEL)).toBe(true);
+      expect(voiceStore.getState().dictationCancelConfirm).toBeNull();
+      await settled();
+
+      expect(ipc.cancel).toHaveBeenCalledWith(SESSION_ID);
+    });
   });
 });

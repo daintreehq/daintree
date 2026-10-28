@@ -317,6 +317,14 @@ interface FinishSessionOptions {
   committedLiveText?: string;
 }
 
+/** A first Escape that would take dictated words back out of the draft, waiting on the second. */
+export interface DictationCancelConfirm {
+  panelId: string;
+  sessionId: string;
+  /** `performance.now()` time the window closes. */
+  expiresAt: number;
+}
+
 interface VoiceRecordingState {
   isConfigured: boolean;
   /** Whether AI correction is enabled for the current session. */
@@ -331,6 +339,7 @@ interface VoiceRecordingState {
   pauseStopWarning: boolean;
   /** True in the last seconds before a listening session with no new words auto-stops. */
   idleStopWarning: boolean;
+  dictationCancelConfirm: DictationCancelConfirm | null;
   activeTarget: VoiceRecordingTarget | null;
   /**
    * Where the next session will record, from the press until it begins. A
@@ -383,6 +392,7 @@ interface VoiceRecordingState {
   setLastError: (error: VoiceInputError | null) => void;
   setPauseStopWarning: (warning: boolean) => void;
   setIdleStopWarning: (warning: boolean) => void;
+  setDictationCancelConfirm: (confirm: DictationCancelConfirm | null) => void;
   setErrorPanelId: (panelId: string | null) => void;
   setElapsedSeconds: (seconds: number) => void;
   /** `replace` sets the preview to `delta` instead of appending (a revised hypothesis). */
@@ -452,6 +462,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
       errorPanelId: null,
       pauseStopWarning: false,
       idleStopWarning: false,
+      dictationCancelConfirm: null,
       activeTarget: null,
       pendingTarget: null,
       lockedTarget: null,
@@ -488,6 +499,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
 
       setPauseStopWarning: (pauseStopWarning) => set({ pauseStopWarning }),
       setIdleStopWarning: (idleStopWarning) => set({ idleStopWarning }),
+      setDictationCancelConfirm: (dictationCancelConfirm) => set({ dictationCancelConfirm }),
 
       setErrorPanelId: (errorPanelId) => set({ errorPanelId }),
 
@@ -533,6 +545,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
           status: "connecting",
           lastError: null,
           errorPanelId: null,
+          dictationCancelConfirm: null,
           elapsedSeconds: 0,
           micSignal: "pending",
           micDeviceLabel: null,
@@ -768,6 +781,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
           if (!panelId) {
             return {
               activeTarget: null,
+              dictationCancelConfirm: null,
               errorPanelId,
               status: nextStatus,
               elapsedSeconds: 0,
@@ -787,6 +801,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
 
           return {
             activeTarget: null,
+            dictationCancelConfirm: null,
             errorPanelId,
             status: nextStatus,
             elapsedSeconds: 0,
