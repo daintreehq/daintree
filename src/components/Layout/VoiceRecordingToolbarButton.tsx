@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type FocusEvent, type ReactNode } from "react";
 import { Clock, Lock, Mic, Pause } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -13,6 +13,7 @@ import {
 import { cn } from "@/lib/utils";
 import { useEffectiveCombo, useShortcutHintHover } from "@/hooks";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
+import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
 import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 import { RecentDictationMenuItems } from "./RecentDictationMenuItems";
@@ -549,7 +550,10 @@ function VoiceSessionButton({
   const leavingRef = useRef(false);
   // The keyboard is on the mic or in its panel. A session that ends under it
   // takes both away, so the keyboard goes to whatever takes the slot.
+  // Whether it showed its ring there, so the successor shows one only for a
+  // keyboard that had one.
   const holdsFocusRef = useRef(false);
+  const focusVisibleRef = useRef(false);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   // The toggle shortcut would start a new session when focused elsewhere; the
   // pause shortcut is the resume affordance the user actually wants.
@@ -562,16 +566,20 @@ function VoiceSessionButton({
       requestAnimationFrame(() => {
         const active = document.activeElement;
         if (active && active !== document.body) return;
-        toolbar
-          .querySelector<HTMLElement>(VOICE_SLOT_SUCCESSOR_SELECTOR)
-          ?.focus({ preventScroll: true, focusVisible: false });
+        const successor = toolbar.querySelector<HTMLElement>(VOICE_SLOT_SUCCESSOR_SELECTOR);
+        if (!successor) return;
+        const visible = focusVisibleRef.current;
+        // A pointer user didn't ask for the successor's tooltip either.
+        if (!visible) armTooltipFocusSuppression();
+        successor.focus({ preventScroll: true, focusVisible: visible });
       });
     };
   }, []);
 
   const focusHandlers = {
-    onFocus: () => {
+    onFocus: (event: FocusEvent<HTMLElement>) => {
       holdsFocusRef.current = true;
+      focusVisibleRef.current = event.target.matches(":focus-visible");
     },
     onBlur: () => {
       holdsFocusRef.current = false;
@@ -606,7 +614,7 @@ function VoiceSessionButton({
               <Button
                 {...hover}
                 onFocus={(event) => {
-                  focusHandlers.onFocus();
+                  focusHandlers.onFocus(event);
                   hover.onFocus(event);
                 }}
                 onBlur={() => {

@@ -5,6 +5,7 @@ import { VoiceRecordingToolbarButton } from "../VoiceRecordingToolbarButton";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { usePanelStore } from "@/store/panelStore";
 import { primeRadix } from "@/components/ui/radix-loader";
+import { isTooltipSuppressedForElement } from "@/lib/tooltipFocusSuppression";
 import type { PtyPanelData } from "@shared/types/panel";
 
 // Past the tick Radix hands focus back in after a close.
@@ -264,6 +265,8 @@ describe("VoiceRecordingToolbarButton — the session panel (#14920)", () => {
     const locked = document.querySelector('[data-testid="voice-locked-button"]');
     expect(locked).not.toBeNull();
     await vi.waitFor(() => expect(document.activeElement).toBe(locked));
+    // Focus that wasn't the keyboard's to see doesn't pull the lock's tooltip up.
+    expect(isTooltipSuppressedForElement(locked)).toBe(true);
   });
 
   it("leaves the keyboard alone when the session ends somewhere it isn't", async () => {
