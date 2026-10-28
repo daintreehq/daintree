@@ -188,6 +188,18 @@ const spokenSendKey = (panelId: string, projectId: string | undefined) =>
 
 type StartStepLogger = (step: string, details?: Record<string, unknown>) => void;
 
+/** The running session's clock, as {@link VoiceRecordingService.getSessionClock} reads it. */
+export interface VoiceSessionClock {
+  /** The provider the session started on. */
+  provider: VoiceTranscriptionProvider | null;
+  /** Wall time since the session began, pauses included. */
+  elapsedMs: number;
+  /** How much of that was paused, the pause under way included. */
+  pausedMs: number;
+  /** The auto-stop that ends the session next, and how far off it is. */
+  autoStop: { reason: "pause" | "idle"; remainingMs: number } | null;
+}
+
 interface OpeningAudio {
   startRequestId: number;
   chunks: PcmChunkStats[];
@@ -832,6 +844,13 @@ class VoiceRecordingService {
   // When the dictation shortcut was pressed, for a start in the same dispatch.
   private pendingPressAt: number | null = null;
   private transcriptionProvider: VoiceTranscriptionProvider | null = null;
+  // What the session panel reads about the running session (#14920): the
+  // provider it started on, whether its clock runs, and when each auto-stop
+  // would land.
+  private sessionProvider: VoiceTranscriptionProvider | null = null;
+  private sessionClockRunning = false;
+  private pauseStopsAt: number | null = null;
+  private idleStopsAt: number | null = null;
 
   initialize(): void {
     if (this.initialized) return;
@@ -2663,6 +2682,8 @@ class VoiceRecordingService {
     }
 
     this.sessionStartedAt = Date.now();
+    this.sessionProvider = this.transcriptionProvider;
+    this.sessionClockRunning = true;
     this.startElapsedTimer();
     this.startIdleTimer();
     this.micCaptureAttachedAt = captureAttachedAt;
@@ -5020,6 +5041,7 @@ class VoiceRecordingService {
   }
 
   private clearPauseTimeout(): void {
+    this.pauseStopsAt = null;
     if (this.pauseWarnTimeoutId !== null) {
       clearTimeout(this.pauseWarnTimeoutId);
       this.pauseWarnTimeoutId = null;
@@ -5033,6 +5055,7 @@ class VoiceRecordingService {
   }
 
   private clearIdleTimeout(): void {
+    this.idleStopsAt = null;
     if (this.idleWarnTimeoutId !== null) {
       clearTimeout(this.idleWarnTimeoutId);
       this.idleWarnTimeoutId = null;
@@ -5048,6 +5071,7 @@ class VoiceRecordingService {
 
   private startIdleTimer(): void {
     this.clearIdleTimeout();
+    this.idleStopsAt = Date.now() + VoiceRecordingService.IDLE_AUTO_STOP_MS;
     this.idleWarnTimeoutId = setTimeout(() => {
       this.idleWarnTimeoutId = null;
       const current = useVoiceRecordingStore.getState();
@@ -5248,6 +5272,7 @@ class VoiceRecordingService {
   }
 
   private clearTimers(): void {
+    this.sessionClockRunning = false;
     this.clearElapsedTimer();
     this.clearPauseTimeout();
     this.clearIdleTimeout();
@@ -5280,6 +5305,7 @@ class VoiceRecordingService {
     state.setStatus("paused");
     state.announce("Dictation paused.");
     this.clearPauseTimeout();
+    this.pauseStopsAt = this.pauseStartedAt + VoiceRecordingService.PAUSE_AUTO_STOP_MS;
     this.pauseWarnTimeoutId = setTimeout(() => {
       this.pauseWarnTimeoutId = null;
       const current = useVoiceRecordingStore.getState();
@@ -5339,6 +5365,49 @@ class VoiceRecordingService {
         this.startMicSilenceTimer(silenceSession.generation, silenceSession.startRequestId);
       }
     }
+  }
+
+  /**
+   * The running session's clock for the session panel (#14920): wall time
+   * since it began, pauses included, how much of that was paused, and the
+   * auto-stop that would end it next. Null once the session is stopping.
+   */
+  getSessionClock(now = Date.now()): VoiceSessionClock | null {
+    if (!this.sessionClockRunning) return null;
+    const pausedMs = this.totalPausedMs + (this.pauseStartedAt > 0 ? now - this.pauseStartedAt : 0);
+    const autoStop =
+      this.pauseStopsAt !== null
+        ? { reason: "pause" as const, remainingMs: Math.max(0, this.pauseStopsAt - now) }
+        : this.idleStopsAt !== null
+          ? { reason: "idle" as const, remainingMs: Math.max(0, this.idleStopsAt - now) }
+          : null;
+    return {
+      provider: this.sessionProvider,
+      elapsedMs: Math.max(0, now - this.sessionStartedAt),
+      pausedMs: Math.max(0, pausedMs),
+      autoStop,
+    };
+  }
+
+  /**
+   * The session panel's Stop: the user's stop for whatever this view is
+   * recording, the same one the dictation key makes, and nothing when there
+   * is nothing left to stop, so a late click can't start another session.
+   */
+  stopActiveSession(): Promise<void> {
+    this.initialize();
+    return this.stopAnySession() ?? Promise.resolve();
+  }
+
+  /**
+   * The session panel's way to the dictation: its pane comes forward with the
+   * keyboard in its composer, or Canopy's reply takes it.
+   */
+  async goToActiveTarget(): Promise<void> {
+    const target = useVoiceRecordingStore.getState().activeTarget;
+    if (!target) return;
+    const found = await this.focusActiveTarget(target);
+    if (found && !isCanopyReplyTarget(target)) revealDictationComposer(target.panelId);
   }
 
   /**

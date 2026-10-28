@@ -63,6 +63,14 @@ vi.mock("@/components/ui/context-menu", () => ({
   ContextMenuSeparator: () => null,
 }));
 
+// The session panel's own behaviour is covered with the real primitives in
+// VoiceRecordingToolbarButton.panel.test.tsx.
+vi.mock("@/components/ui/popover", () => ({
+  Popover: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  PopoverTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  PopoverContent: () => null,
+}));
+
 vi.mock("@/components/ui/tooltip", () => ({
   Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   TooltipTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -79,7 +87,7 @@ vi.mock("@/lib/tooltipShortcut", () => ({
   ),
 }));
 
-describe("VoiceRecordingToolbarButton — tooltip names what a click does", () => {
+describe("VoiceRecordingToolbarButton — a short tooltip over the session panel (#14920)", () => {
   beforeEach(() => {
     focusActiveTarget.mockClear();
     mockCombo = undefined;
@@ -111,20 +119,24 @@ describe("VoiceRecordingToolbarButton — tooltip names what a click does", () =
     { status: "recording" as const, combo: "Cmd+." },
     { status: "paused" as const, combo: undefined },
     { status: "paused" as const, combo: "Ctrl+Shift+Space" },
-  ])("states the click action ($status, combo $combo)", ({ status, combo }) => {
+  ])("opens the panel rather than jumping ($status, combo $combo)", ({ status, combo }) => {
     mockCombo = combo;
     const { getByTestId, container } = renderWith(status);
 
     const button = container.querySelector("button")!;
     fireEvent.click(button);
-    expect(focusActiveTarget).toHaveBeenCalledTimes(1);
-    // Clicking jumps to the panel; the dictation shortcuts stop or resume
+    expect(focusActiveTarget).not.toHaveBeenCalled();
+    // Clicking opens the panel; the dictation shortcuts stop or resume
     // recording instead, so neither may be advertised as this button's own.
     expect(button.hasAttribute("aria-keyshortcuts")).toBe(false);
 
-    // Whatever else it says, the tooltip must describe the click the user is
-    // about to make, and a bound shortcut stays a separate keyed row.
-    expect(getByTestId("tooltip-content").textContent).toMatch(/click to jump to panel/i);
+    // One line of state and the shortcut: the target, its place and the
+    // clock live in the panel.
+    const tooltip = getByTestId("tooltip-content").textContent ?? "";
+    expect(tooltip).not.toMatch(/click to jump/i);
+    expect(tooltip).not.toContain("claude · notes");
+    expect(tooltip).not.toContain("Daintree");
+    expect(tooltip).not.toContain("0:42");
     const shortcutRow = container.querySelector('[data-testid="tooltip-shortcut-row"]');
     if (combo) {
       expect(shortcutRow?.getAttribute("data-shortcut")).toBe(combo);
@@ -151,7 +163,7 @@ describe("VoiceRecordingToolbarButton — tooltip names what a click does", () =
     {
       status: "connecting" as const,
       micSignal: "live" as const,
-      title: "Recording: claude · notes · Connecting…",
+      title: "Recording · Connecting…",
     },
     {
       status: "finishing" as const,
@@ -295,9 +307,9 @@ describe("VoiceRecordingToolbarButton — dictation in another view (#14601)", (
 
     expect(queryByTestId("voice-elsewhere-button")).toBeNull();
     const button = container.querySelector("button")!;
-    expect(button.getAttribute("aria-label")).toBe("Recording: claude · notes");
+    expect(button.getAttribute("aria-label")).toBe("Recording dictation");
     fireEvent.click(button);
-    expect(focusActiveTarget).toHaveBeenCalledTimes(1);
+    expect(focusActiveTarget).not.toHaveBeenCalled();
     expect(revealSessionElsewhere).not.toHaveBeenCalled();
   });
 
