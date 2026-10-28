@@ -209,7 +209,9 @@ class DictationFollower {
     // of the dictation it cleans up aren't followed past it.
     this.following = false;
     this.settled(this.revealKeys, (view) => {
-      if (from > view.state.doc.length) return null;
+      // A dictation started since owns the scroller.
+      if (from > view.state.doc.length || view.state.field(dictationFollowField).session !== null)
+        return null;
       const rect = positionRect(view, from, 1);
       if (!rect) return null;
       const box = visibleBox(view.scrollDOM);

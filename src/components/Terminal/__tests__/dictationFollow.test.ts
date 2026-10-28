@@ -321,6 +321,19 @@ describe("dictationFollow", () => {
     view.destroy();
   });
 
+  it("drops a passage start a new dictation has overtaken", () => {
+    const view = mount();
+    userScroll(view, 300);
+
+    view.dispatch({ effects: revealDictationStart.of(20) });
+    view.dispatch({ effects: setDictationFollow.of({ session: "s2", end: DRAFT.length }) });
+    flush(view);
+
+    // Only the new dictation's own following moves it.
+    expect(writes).toEqual([lineBottom(DRAFT.length - 1) + 5 - VIEW_PX]);
+    view.destroy();
+  });
+
   it("doesn't move to a passage start already in view", () => {
     const view = mount();
     userScroll(view, 100);
