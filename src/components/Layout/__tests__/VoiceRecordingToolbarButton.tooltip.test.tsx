@@ -295,8 +295,6 @@ describe("VoiceRecordingToolbarButton — dictation in another view (#14601)", (
         provider: null,
         details: null,
       },
-      provider: null,
-      details: null,
     });
     const { getByTestId } = render(<VoiceRecordingToolbarButton />);
 
@@ -486,6 +484,7 @@ describe("VoiceRecordingToolbarButton — dictation another view owns looks like
     micLabel: "MacBook Pro Microphone",
     micSignal: "live",
     micNotice: null,
+    stopWarning: false,
     correctionEnabled: false,
     locked: false,
     wordCount: 3,
@@ -591,27 +590,69 @@ describe("VoiceRecordingToolbarButton — dictation another view owns looks like
   });
 
   describe.each(pairings)("a session $name", (pairing) => {
+    // The owner's own tooltip line for each state, and its wave.
     it.each([
-      { phase: "recording", micSignal: "live", wave: "level", state: "Dictating" },
-      { phase: "connecting", micSignal: "pending", wave: "waiting", state: "Starting microphone" },
+      {
+        phase: "recording",
+        micSignal: "live",
+        warn: false,
+        wave: "level",
+        state: "Recording dictation",
+      },
+      {
+        phase: "connecting",
+        micSignal: "live",
+        warn: false,
+        wave: "level",
+        state: "Recording · Connecting",
+      },
+      {
+        phase: "connecting",
+        micSignal: "pending",
+        warn: false,
+        wave: "waiting",
+        state: "Starting microphone",
+      },
       {
         phase: "recording",
         micSignal: "silent",
+        warn: false,
         wave: "waiting",
-        state: "No audio from microphone",
+        state: "No audio from MacBook Pro Microphone",
       },
-      { phase: "paused", micSignal: "live", wave: "held", state: "Dictation paused" },
+      { phase: "paused", micSignal: "live", warn: false, wave: "held", state: "Dictation paused" },
+      {
+        phase: "paused",
+        micSignal: "live",
+        warn: true,
+        wave: "held",
+        state: "Paused · Stopping in 10s unless resumed",
+      },
+      {
+        phase: "recording",
+        micSignal: "live",
+        warn: true,
+        wave: "level",
+        state: "Recording · Stopping in 10s unless you speak",
+      },
       {
         phase: "reconnecting",
         micSignal: "live",
+        warn: false,
         wave: "waiting",
-        state: "Reconnecting dictation",
+        state: "Reconnecting",
       },
-      { phase: "finishing", micSignal: "live", wave: "waiting", state: "Finishing dictation" },
-    ] as const)("shows $phase with the mic $micSignal as the owner does", (c) => {
+      {
+        phase: "finishing",
+        micSignal: "live",
+        warn: false,
+        wave: "waiting",
+        state: "Finishing transcription",
+      },
+    ] as const)("shows $phase with the mic $micSignal (warning $warn) as the owner does", (c) => {
       const { getByTestId, container } = show(
         pairing,
-        details({ phase: c.phase, micSignal: c.micSignal })
+        details({ phase: c.phase, micSignal: c.micSignal, stopWarning: c.warn })
       );
 
       expect(waveOf(container)).toBe(c.wave);
@@ -707,9 +748,14 @@ describe("VoiceRecordingToolbarButton polish — issue #8176", () => {
           status: "idle",
           activeTarget: null,
           lockedTarget: null,
-          sessionElsewhere: { sessionId: "s1", hostId: "local", projectId: "p", projectName: "A" },
-          provider: null,
-          details: null,
+          sessionElsewhere: {
+            sessionId: "s1",
+            hostId: "local",
+            projectId: "p",
+            projectName: "A",
+            provider: null,
+            details: null,
+          },
         },
         {
           status: "recording",

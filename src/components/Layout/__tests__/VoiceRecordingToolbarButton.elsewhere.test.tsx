@@ -22,7 +22,7 @@ vi.mock("@/services/ActionService", () => ({ actionService: { dispatch: vi.fn() 
 vi.mock("@/hooks", () => ({
   useEffectiveCombo: (actionId: string) =>
     actionId === "voiceInput.togglePause" ? "Cmd+Shift+P" : "Cmd+.",
-  useShortcutHintHover: () => ({}),
+  useShortcutHintHover: () => ({ onFocus: () => {}, onBlur: () => {} }),
 }));
 vi.mock("@/components/Hosts/hostList", () => ({
   useHostList: () => ({
@@ -66,6 +66,7 @@ function snapshot(overrides: Partial<VoiceSessionSnapshot> = {}): VoiceSessionSn
     micLabel: "Studio Display Microphone",
     micSignal: "live",
     micNotice: null,
+    stopWarning: false,
     correctionEnabled: true,
     locked: false,
     wordCount: 4,
@@ -118,11 +119,18 @@ function showElsewhere(
     provider: "deepgram",
     details,
   };
-  act(() => useVoiceRecordingStore.setState({ sessionElsewhere: session }));
+  act(() => {
+    useVoiceRecordingStore.setState({ sessionElsewhere: session });
+  });
 }
 
-const mic = () =>
-  document.querySelector('[data-testid="voice-elsewhere-button"]') as HTMLButtonElement;
+function mic(): HTMLButtonElement {
+  const button = document.querySelector<HTMLButtonElement>(
+    '[data-testid="voice-elsewhere-button"]'
+  );
+  if (!button) throw new Error("no elsewhere mic");
+  return button;
+}
 const panel = () => document.querySelector<HTMLElement>('[data-testid="voice-session-panel"]');
 const byTestId = (id: string) => document.querySelector<HTMLElement>(`[data-testid="${id}"]`);
 
@@ -223,8 +231,49 @@ describe("VoiceRecordingToolbarButton — the session panel in a view that doesn
     openPanel();
     expect(byTestId("voice-session-elapsed")!.textContent).toContain("1:05");
 
-    act(() => vi.advanceTimersByTime(10_000));
+    act(() => {
+      vi.advanceTimersByTime(10_000);
+    });
     expect(byTestId("voice-session-elapsed")!.textContent).toContain("1:15");
+    expect(byTestId("voice-session-elapsed")!.textContent).not.toContain("paused");
+  });
+
+  it("holds paused time while recording, and grows it while paused", () => {
+    const paused = (isPaused: boolean) =>
+      snapshot({
+        phase: isPaused ? "paused" : "recording",
+        clock: { at: NOW, elapsedMs: 30_000, pausedMs: 5_000, paused: isPaused, autoStop: null },
+      });
+    showElsewhere(pairings[1]!, paused(false));
+    const view = render(<VoiceRecordingToolbarButton />);
+    openPanel();
+    act(() => {
+      vi.advanceTimersByTime(10_000);
+    });
+    expect(byTestId("voice-session-elapsed")!.textContent).toContain("0:40 · 0:05 paused");
+
+    showElsewhere(pairings[1]!, paused(true));
+    view.rerender(<VoiceRecordingToolbarButton />);
+    act(() => {
+      vi.advanceTimersByTime(10_000);
+    });
+    // Ten seconds on from the reading, since it was made at NOW.
+    expect(byTestId("voice-session-elapsed")!.textContent).toContain("0:50 · 0:25 paused");
+  });
+
+  it("names the host a reply's words go to, and the session's project when the owner has none", () => {
+    showElsewhere(
+      pairings[1]!,
+      snapshot({ kind: "canopy-reply", targetHostId: "studio-02", projectName: null })
+    );
+    render(<VoiceRecordingToolbarButton />);
+    openPanel();
+
+    const text = panel()!.textContent ?? "";
+    const host = /Host(.*?)Project/.exec(text)?.[1];
+    expect(host).toBe("Annex");
+    // The owning workspace's name, as main reported it.
+    expect(text).toContain("Alpha");
   });
 
   it("counts an auto-stop down from the owner's reading", () => {
@@ -245,8 +294,16 @@ describe("VoiceRecordingToolbarButton — the session panel in a view that doesn
     openPanel();
     expect(byTestId("voice-session-auto-stop")!.textContent).toContain("0:50");
 
-    act(() => vi.advanceTimersByTime(20_000));
+    act(() => {
+      vi.advanceTimersByTime(20_000);
+    });
     expect(byTestId("voice-session-auto-stop")!.textContent).toContain("0:30");
+
+    // A countdown that has run out reads zero, never below it.
+    act(() => {
+      vi.advanceTimersByTime(60_000);
+    });
+    expect(byTestId("voice-session-auto-stop")!.textContent).toContain("0:00");
   });
 
   it("offers no pause while the owner's session is finishing", () => {
@@ -254,8 +311,10 @@ describe("VoiceRecordingToolbarButton — the session panel in a view that doesn
     render(<VoiceRecordingToolbarButton />);
     openPanel();
 
-    const pause = byTestId("voice-session-pause") as HTMLButtonElement | null;
-    if (pause && !pause.disabled) fireEvent.click(pause);
+    const pause = document.querySelector<HTMLButtonElement>('[data-testid="voice-session-pause"]');
+    expect(pause).not.toBeNull();
+    expect(pause!.disabled).toBe(true);
+    fireEvent.click(pause!);
     expect(service.setSessionElsewherePaused).not.toHaveBeenCalled();
   });
 

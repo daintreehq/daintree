@@ -785,6 +785,7 @@ export const VoiceStopLiveRequestSchema = z.object({
 });
 
 const VoiceDetailLabelSchema = z.string().max(VOICE_WORKSPACE_NAME_MAX_LENGTH);
+const VOICE_IDENTITY_MAX_LENGTH = 1024;
 const VoiceDurationMsSchema = z
   .number()
   .finite()
@@ -800,12 +801,13 @@ export const VoicePublishDetailsRequestSchema = z.object({
     targetTitle: VoiceDetailLabelSchema,
     targetChrome: z
       .object({
-        iconId: z.string().max(128).nullable(),
+        // Plugin icon keys carry a project plugin instance id, so these run long.
+        iconId: z.string().max(VOICE_IDENTITY_MAX_LENGTH).nullable(),
         color: z.string().max(64).optional(),
         label: VoiceDetailLabelSchema,
         isAgent: z.boolean(),
-        agentId: z.string().max(128).nullable(),
-        processId: z.string().max(128).nullable(),
+        agentId: z.string().max(VOICE_IDENTITY_MAX_LENGTH).nullable(),
+        processId: z.string().max(VOICE_IDENTITY_MAX_LENGTH).nullable(),
         runtimeKind: z.enum(["agent", "process", "panel", "none"]),
         hasExited: z.boolean(),
       })
@@ -818,6 +820,7 @@ export const VoicePublishDetailsRequestSchema = z.object({
     micNotice: z
       .object({ kind: z.enum(["lost", "fallback", "silent"]), bluetooth: z.boolean() })
       .nullable(),
+    stopWarning: z.boolean(),
     correctionEnabled: z.boolean(),
     locked: z.boolean(),
     wordCount: z.number().int().min(0).max(1_000_000),

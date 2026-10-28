@@ -5513,7 +5513,8 @@ class VoiceRecordingService {
     } else if (status === "paused") {
       this.resume();
     } else if (
-      status === "idle" &&
+      // No session of its own, even after one here ended in an error.
+      !isActiveVoiceSession(status) &&
       (sessionElsewhere?.details?.phase === "recording" ||
         sessionElsewhere?.details?.phase === "paused")
     ) {

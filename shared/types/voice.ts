@@ -172,6 +172,8 @@ export interface VoiceSessionSnapshot {
   micLabel: string | null;
   micSignal: VoiceMicSignal;
   micNotice: { kind: "lost" | "fallback" | "silent"; bluetooth: boolean } | null;
+  /** The owner is warning that its auto-stop is close: of the pause, or of no new words. */
+  stopWarning: boolean;
   correctionEnabled: boolean;
   locked: boolean;
   wordCount: number;

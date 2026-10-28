@@ -1,5 +1,6 @@
 import {
   VOICE_SNAPSHOT_TRANSCRIPT_MAX_LENGTH,
+  type VoiceInputStatus,
   type VoicePublishDetailsRequest,
   type VoiceSessionClockAnchor,
   type VoiceSessionKind,
@@ -7,6 +8,7 @@ import {
   type VoiceSessionSnapshot,
 } from "@shared/types";
 import type { HostId } from "@shared/types/remoteHosts";
+import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import { VOICE_WORKSPACE_NAME_MAX_LENGTH } from "@shared/types/voice";
 import { joinCompletedSegments } from "@/lib/voiceTranscriptSegments";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
@@ -15,7 +17,6 @@ import { usePanelStore } from "@/store/panelStore";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 
 type VoiceRecordingSnapshot = ReturnType<typeof useVoiceRecordingStore.getState>;
-type PanelSnapshot = ReturnType<typeof usePanelStore.getState>["panelsById"][string];
 
 /** The owner's clock as the service reads it (`getSessionClock`). */
 export interface VoiceOwnerClock {
@@ -31,7 +32,7 @@ export interface VoiceOwnerClock {
  */
 export const VOICE_DETAILS_PUBLISH_MS = 200;
 
-const PANEL_PHASES: ReadonlySet<string> = new Set<VoiceSessionPhase>([
+const PANEL_PHASES: ReadonlySet<VoiceInputStatus> = new Set<VoiceSessionPhase>([
   "arming",
   "connecting",
   "recording",
@@ -39,6 +40,10 @@ const PANEL_PHASES: ReadonlySet<string> = new Set<VoiceSessionPhase>([
   "reconnecting",
   "finishing",
 ]);
+
+function isPanelPhase(status: VoiceInputStatus): status is VoiceSessionPhase {
+  return PANEL_PHASES.has(status);
+}
 
 function clip(label: string | null | undefined): string | null {
   const trimmed = label?.trim();
@@ -59,17 +64,17 @@ function countWords(text: string): number {
 export function buildVoiceSessionSnapshot(
   state: VoiceRecordingSnapshot,
   options: {
-    panel: PanelSnapshot | undefined;
+    panel: PanelInstance | undefined;
     clock: VoiceOwnerClock | null;
     hostId: HostId;
     now: number;
   }
 ): VoiceSessionSnapshot | null {
   const target = state.activeTarget;
-  if (!target || !PANEL_PHASES.has(state.status)) return null;
-  const phase = state.status as VoiceSessionPhase;
+  const phase = state.status;
+  if (!target || !isPanelPhase(phase)) return null;
   const isCanopyReply = isCanopyReplyTarget(target);
-  const panel = isCanopyReply ? undefined : options.panel;
+  const panel = options.panel && !isCanopyReply && isPtyPanel(options.panel) ? options.panel : null;
   const kind: VoiceSessionKind = isCanopyReply
     ? "canopy-reply"
     : target.rewrite
@@ -109,6 +114,7 @@ export function buildVoiceSessionSnapshot(
       notice && notice.target.panelId === target.panelId
         ? { kind: notice.kind, bluetooth: notice.kind === "silent" && notice.bluetooth }
         : null,
+    stopWarning: phase === "paused" ? state.pauseStopWarning : state.idleStopWarning,
     correctionEnabled: state.correctionEnabled,
     locked: state.lockedTarget?.panelId === target.panelId,
     wordCount: countWords(transcript),
@@ -206,9 +212,20 @@ export function startVoiceDetailsPublisher(
     if (timer === null) timer = setTimeout(flush, VOICE_DETAILS_PUBLISH_MS);
   };
 
-  const unsubscribe = useVoiceRecordingStore.subscribe(schedule);
+  const unsubscribeVoice = useVoiceRecordingStore.subscribe(schedule);
+  // The target pane's title and identity can change while nothing else does
+  // (a quiet pause), so only its own changes count.
+  let seenPanel: PanelInstance | undefined;
+  const unsubscribePanels = usePanelStore.subscribe((state) => {
+    const panelId = useVoiceRecordingStore.getState().activeTarget?.panelId;
+    const panel = panelId ? state.panelsById[panelId] : undefined;
+    if (panel === seenPanel) return;
+    seenPanel = panel;
+    schedule();
+  });
   return () => {
-    unsubscribe();
+    unsubscribeVoice();
+    unsubscribePanels();
     if (timer !== null) clearTimeout(timer);
     timer = null;
   };

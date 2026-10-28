@@ -7,6 +7,9 @@ import type { VoiceSessionElsewhere, VoiceSessionSnapshot } from "@shared/types"
 import type { HostListEntry } from "@shared/types/remoteHosts";
 import { VoiceSessionPanel, type VoiceSessionDetails } from "./VoiceSessionPanel";
 
+// The panel shows whole seconds.
+const CLOCK_TICK_MS = 1000;
+
 /**
  * The owner's snapshot as the panel shows it at `now`: the clock runs on from
  * the moment the owner read it, so a view needs no report per second.
@@ -75,7 +78,7 @@ export function ElsewhereVoiceSessionPanel({
   useEffect(() => {
     if (!ticking) return;
     setNow(Date.now());
-    const interval = setInterval(() => setNow(Date.now()), 1000);
+    const interval = setInterval(() => setNow(Date.now()), CLOCK_TICK_MS);
     return () => clearInterval(interval);
   }, [ticking, snapshot]);
 

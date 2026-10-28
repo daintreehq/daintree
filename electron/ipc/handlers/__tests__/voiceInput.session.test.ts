@@ -1988,6 +1988,7 @@ describe("voiceInput — one dictation across hosts (#14773)", () => {
       micLabel: "MacBook Pro Microphone",
       micSignal: "live",
       micNotice: null,
+      stopWarning: false,
       correctionEnabled: true,
       locked: false,
       wordCount: 3,
@@ -1997,11 +1998,11 @@ describe("voiceInput — one dictation across hosts (#14773)", () => {
     });
     const publish = (owner: FakeSender, sessionId: string, value = details()) =>
       invoke(CHANNELS.VOICE_INPUT_PUBLISH_DETAILS, owner, { sessionId, details: value });
-    // A chunk of steady tone at a tenth of full scale: RMS 0.1, a level of 0.6
-    // on the owner's meter.
-    const sendTone = (sessionId: string, from: FakeSender) => {
+    // A chunk of steady tone; at a tenth of full scale its RMS is 0.1, a level
+    // of 0.6 on the owner's meter.
+    const sendTone = (sessionId: string, from: FakeSender, amplitude = 3277) => {
       const call = ipcMainMock.on.mock.calls.find(([c]) => c === CHANNELS.VOICE_INPUT_AUDIO_CHUNK);
-      const samples = new Int16Array(2400).fill(3277);
+      const samples = new Int16Array(2400).fill(amplitude);
       (call![1] as (e: unknown, s: unknown, c: ArrayBuffer) => void)(
         { sender: from },
         sessionId,
@@ -2159,6 +2160,22 @@ describe("voiceInput — one dictation across hosts (#14773)", () => {
 
       // 200ms of chunks every 20ms: one reading per 80ms.
       expect(levels(studio1)).toHaveLength(3);
+    });
+
+    it("meters each chunk on the owner's scale: silence at rest, loud speech capped", async () => {
+      await startIn(local, "a", "Alpha");
+
+      for (const amplitude of [0, 1638, 3277, 16384]) {
+        sendTone("a", local, amplitude);
+        clock += 100;
+      }
+
+      const readings = levels(studio1).map((reading) => reading.level);
+      expect(readings).toHaveLength(4);
+      expect(readings[0]).toBe(0);
+      expect(readings[1]).toBeCloseTo(0.3, 2);
+      expect(readings[2]).toBeCloseTo(0.6, 2);
+      expect(readings[3]).toBe(1);
     });
 
     it("sends no level for audio from a view that doesn't own the session", async () => {

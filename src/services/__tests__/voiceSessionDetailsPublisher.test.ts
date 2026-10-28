@@ -3,6 +3,8 @@ import type { VoicePublishDetailsRequest } from "@shared/types";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { usePanelStore } from "@/store/panelStore";
 import { VOICE_PARAGRAPH_BREAK } from "@/lib/voiceTranscriptSegments";
+import type { VoiceRewriteRequest } from "@/store/voiceRecordingStore";
+import type { PanelInstance } from "@shared/types/panel";
 import {
   buildVoiceSessionSnapshot,
   startVoiceDetailsPublisher,
@@ -33,8 +35,33 @@ function recordInto(panelId = "p-1", overrides: Record<string, unknown> = {}) {
 
 function withWords(panelId: string, completedSegments: string[], liveText: string) {
   useVoiceRecordingStore.setState({
-    panelBuffers: { [panelId]: { completedSegments, liveText } as never },
+    panelBuffers: {
+      [panelId]: {
+        liveText,
+        liveItems: [],
+        completedSegments,
+        sessionDraftStart: -1,
+        activeParagraphStart: -1,
+        transcriptPhase: "idle",
+        correctionRanges: [],
+        sessionCorrectedText: null,
+        dictationSessionId: null,
+      },
+    },
   });
+}
+
+function claudePane(title = "claude · notes"): PanelInstance {
+  return {
+    id: "p-1",
+    kind: "terminal",
+    title,
+    cwd: "/alpha",
+    cols: 80,
+    rows: 24,
+    location: "grid",
+    launchAgentId: "claude",
+  };
 }
 
 const build = (options: Partial<Parameters<typeof buildVoiceSessionSnapshot>[1]> = {}) =>
@@ -54,9 +81,7 @@ describe("buildVoiceSessionSnapshot", () => {
   it("describes the owner's session as its own panel shows it", () => {
     recordInto("p-1", { lockedTarget: { panelId: "p-1" } });
 
-    expect(
-      build({ panel: { id: "p-1", title: "claude · notes", launchAgentId: "claude" } as never })
-    ).toMatchObject({
+    expect(build({ panel: claudePane() })).toMatchObject({
       phase: "recording",
       kind: "dictation",
       targetTitle: "claude · notes",
@@ -99,13 +124,24 @@ describe("buildVoiceSessionSnapshot", () => {
     expect(snapshot?.wordCount).toBe(301);
   });
 
+  const rewrite: VoiceRewriteRequest = {
+    selection: {
+      text: "word",
+      range: () => ({ from: 0, to: 4 }),
+      onLost: () => {},
+      apply: () => true,
+      release: () => {},
+    },
+    instruction: [],
+    cancelled: false,
+  };
   it.each([
-    { target: { panelId: "p-1", rewrite: {} }, kind: "rewrite" },
-    { target: { panelId: "canopy:1", surface: "canopy-reply" }, kind: "canopy-reply" },
+    { target: { panelId: "p-1", rewrite }, kind: "rewrite" },
+    { target: { panelId: "canopy:1", surface: "canopy-reply" as const }, kind: "canopy-reply" },
     { target: { panelId: "p-1" }, kind: "dictation" },
   ])("names a $kind session", ({ target, kind }) => {
     recordInto();
-    useVoiceRecordingStore.setState({ activeTarget: target as never });
+    useVoiceRecordingStore.setState({ activeTarget: target });
 
     expect(build()?.kind).toBe(kind);
   });
@@ -148,6 +184,16 @@ describe("buildVoiceSessionSnapshot", () => {
     expect(build({ clock: null })).toMatchObject({ phase: "finishing", clock: null });
   });
 
+  it("passes on the owner's auto-stop warning for the state it is in", () => {
+    recordInto("p-1", { idleStopWarning: true, pauseStopWarning: false });
+    expect(build()?.stopWarning).toBe(true);
+
+    useVoiceRecordingStore.setState({ status: "paused" });
+    expect(build()?.stopWarning).toBe(false);
+    useVoiceRecordingStore.setState({ pauseStopWarning: true, idleStopWarning: false });
+    expect(build()?.stopWarning).toBe(true);
+  });
+
   it("clips a label to what main takes", () => {
     recordInto("p-1", { micDeviceLabel: "m".repeat(500) });
     expect(build()?.micLabel?.length).toBe(200);
@@ -176,9 +222,7 @@ describe("startVoiceDetailsPublisher", () => {
     autoStopAt = null;
     accepted = true;
     published = [];
-    usePanelStore.setState({
-      panelsById: { "p-1": { id: "p-1", title: "Claude", launchAgentId: "claude" } as never },
-    });
+    usePanelStore.setState({ panelsById: { "p-1": claudePane("Claude") } });
     recordInto();
     stopPublishing = startVoiceDetailsPublisher(
       {
@@ -259,6 +303,26 @@ describe("startVoiceDetailsPublisher", () => {
     expect(published).toHaveLength(3);
   });
 
+  it("reports the target pane being renamed while nothing else changes", async () => {
+    nudge();
+    await vi.advanceTimersByTimeAsync(VOICE_DETAILS_PUBLISH_MS);
+
+    // Another pane changing is nothing to report.
+    usePanelStore.setState({
+      panelsById: { ...usePanelStore.getState().panelsById, "p-2": { ...claudePane(), id: "p-2" } },
+    });
+    await vi.advanceTimersByTimeAsync(VOICE_DETAILS_PUBLISH_MS);
+    expect(published).toHaveLength(1);
+
+    usePanelStore.setState({
+      panelsById: { ...usePanelStore.getState().panelsById, "p-1": claudePane("renamed") },
+    });
+    await vi.advanceTimersByTimeAsync(VOICE_DETAILS_PUBLISH_MS);
+
+    expect(published).toHaveLength(2);
+    expect(published[1]!.details.targetTitle).toBe("renamed");
+  });
+
   it("keeps reporting through a session that never goes quiet", async () => {
     // A transcript word lands every 50ms for two seconds.
     for (let i = 0; i < 40; i++) {
@@ -302,11 +366,12 @@ describe("startVoiceDetailsPublisher", () => {
     expect(published).toEqual([]);
   });
 
-  it("drops a report still waiting when it stops", async () => {
+  it("drops a report still waiting when it stops, and hears neither store after", async () => {
     nudge();
     stopPublishing();
     await vi.advanceTimersByTimeAsync(VOICE_DETAILS_PUBLISH_MS * 2);
     nudge();
+    usePanelStore.setState({ panelsById: { "p-1": claudePane("renamed") } });
     await vi.advanceTimersByTimeAsync(VOICE_DETAILS_PUBLISH_MS);
 
     expect(published).toEqual([]);

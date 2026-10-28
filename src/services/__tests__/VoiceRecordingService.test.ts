@@ -5,6 +5,7 @@ import {
   type VoiceLiveLevel,
   type VoicePauseRequest,
   type VoiceRevealRequest,
+  type VoiceSessionSnapshot,
 } from "@shared/types";
 
 // Capture suspend/wake callbacks registered by the service.
@@ -3138,8 +3139,27 @@ describe("VoiceRecordingService — a session another view owns (#14601)", () =>
     projectId: "project-a",
     projectName: "Alpha",
     provider: null,
-    details: null as { phase: string } | null,
+    details: null as VoiceSessionSnapshot | null,
   };
+  // The owner's report, with only its phase mattering here.
+  const reported = (phase: VoiceSessionSnapshot["phase"]): VoiceSessionSnapshot => ({
+    phase,
+    kind: "dictation",
+    targetTitle: "Claude",
+    targetChrome: null,
+    targetHostId: "local",
+    projectName: "Alpha",
+    worktreeLabel: null,
+    micLabel: null,
+    micSignal: "live",
+    micNotice: null,
+    stopWarning: false,
+    correctionEnabled: false,
+    locked: false,
+    wordCount: 0,
+    transcript: "",
+    clock: null,
+  });
 
   function hasMockState<T>(mod: object): mod is { __state: T } {
     return "__state" in mod;
@@ -3357,11 +3377,11 @@ describe("VoiceRecordingService — a session another view owns (#14601)", () =>
     });
 
     it.each([
-      { status: "recording", paused: true },
-      { status: "paused", paused: false },
+      { status: "recording" as const, paused: true },
+      { status: "paused" as const, paused: false },
     ])("has the pause key act on the other view's $status session", async ({ status, paused }) => {
       const { voiceRecordingService, electron } = await arrange({
-        sessionElsewhere: { ...elsewhere, details: { phase: status } },
+        sessionElsewhere: { ...elsewhere, details: reported(status) },
       });
 
       voiceRecordingService.togglePause();
@@ -3374,9 +3394,25 @@ describe("VoiceRecordingService — a session another view owns (#14601)", () =>
       });
     });
 
+    it("has the pause key act on the other view's session after one here failed", async () => {
+      const { voiceRecordingService, electron } = await arrange({
+        status: "error",
+        sessionElsewhere: { ...elsewhere, details: reported("recording") },
+      });
+
+      voiceRecordingService.togglePause();
+
+      await vi.waitFor(() => {
+        expect(electron.voiceInput.setPausedLive).toHaveBeenCalledWith({
+          sessionId: "remote",
+          paused: true,
+        });
+      });
+    });
+
     it("leaves the pause key alone while the other view's session can't pause", async () => {
       const { voiceRecordingService, electron } = await arrange({
-        sessionElsewhere: { ...elsewhere, details: { phase: "finishing" } },
+        sessionElsewhere: { ...elsewhere, details: reported("finishing") },
       });
 
       voiceRecordingService.togglePause();

@@ -32,7 +32,12 @@ import {
   sessionWorkspaceName,
 } from "@/services/voiceSessionPlace";
 import { isLocalHostId } from "@shared/types/remoteHosts";
-import type { VoiceSessionElsewhere, VoiceSessionSnapshot } from "@shared/types";
+import type {
+  VoiceInputStatus,
+  VoiceMicSignal,
+  VoiceSessionElsewhere,
+  VoiceSessionSnapshot,
+} from "@shared/types";
 import { ElsewhereVoiceSessionPanel } from "./ElsewhereVoiceSessionPanel";
 import { getElsewhereLevel } from "@/services/voiceElsewhereLevel";
 
@@ -116,20 +121,41 @@ function elsewhereWaveMode(details: VoiceSessionSnapshot): VoiceWaveMode {
   }
 }
 
-function elsewhereStateLabel(details: VoiceSessionSnapshot): string {
-  switch (details.phase) {
-    case "arming":
-      return "Arming dictation";
+/**
+ * A running session's state in one line, the same for its owner's tooltip and
+ * for every other view's (#14921).
+ */
+function voiceSessionTitle({
+  phase,
+  micSignal,
+  micLabel,
+  stopWarning,
+}: {
+  phase: VoiceInputStatus;
+  micSignal: VoiceMicSignal;
+  micLabel: string | null;
+  stopWarning: boolean;
+}): string {
+  const isMicStarting =
+    (phase === "connecting" || phase === "recording" || phase === "reconnecting") &&
+    micSignal !== "live";
+  if (phase === "arming") return "Arming dictation…";
+  if (isMicStarting) {
+    return micSignal === "silent"
+      ? `No audio from ${micLabel ?? "microphone"}`
+      : "Starting microphone…";
+  }
+  switch (phase) {
     case "connecting":
-    case "recording":
-      if (details.micSignal === "silent") return "No audio from microphone";
-      return details.micSignal === "live" ? "Dictating" : "Starting microphone";
-    case "paused":
-      return "Dictation paused";
+      return "Recording · Connecting…";
     case "reconnecting":
-      return "Reconnecting dictation";
+      return "Reconnecting…";
     case "finishing":
-      return "Finishing dictation";
+      return "Finishing transcription…";
+    case "paused":
+      return stopWarning ? "Paused · Stopping in 10s unless resumed" : "Dictation paused";
+    default:
+      return stopWarning ? "Recording · Stopping in 10s unless you speak" : "Recording dictation";
   }
 }
 
@@ -167,6 +193,7 @@ function VoiceElsewhereIndicator({
 }: VoiceElsewhereButtonProps & { hostName: string | null }) {
   const scratches = useScratchStore((state) => state.scratches);
   const pauseShortcut = useEffectiveCombo("voiceInput.togglePause");
+  const hover = useShortcutHintHover("voiceInput.toggle");
   const place = sessionPlacePhrase(sessionWorkspaceName(session, scratches), hostName);
   const snapshot = session.details;
   // Until the owner's first report lands there is nothing to show but where
@@ -216,7 +243,12 @@ function VoiceElsewhereIndicator({
     // Keyed by session, so a panel left open never carries into the next one.
     <VoiceSessionButton
       key={sessionId}
-      title={`${elsewhereStateLabel(snapshot)}${place}`}
+      // A state still under way reads on into where it runs.
+      title={
+        place
+          ? `${voiceSessionTitle(snapshot).replace(/…$/, "")}${place}`
+          : voiceSessionTitle(snapshot)
+      }
       waveMode={elsewhereWaveMode(snapshot)}
       elsewhereSessionId={sessionId}
       isPaused={isPaused}
@@ -224,6 +256,7 @@ function VoiceElsewhereIndicator({
       onTogglePause={togglePause}
       shortcut={shortcut}
       pauseShortcut={pauseShortcut}
+      hover={hover}
       testId="voice-elsewhere-button"
       data-toolbar-item={dataToolbarItem}
       renderPanel={({ leave, close }) => (
@@ -570,23 +603,12 @@ export function VoiceRecordingToolbarButton({
   }
 
   // The tooltip is one line of state; everything else is in the panel.
-  const tooltipTitle = isMicStarting
-    ? micSignal === "silent"
-      ? `No audio from ${micDeviceLabel ?? "microphone"}`
-      : "Starting microphone…"
-    : isConnecting
-      ? "Recording · Connecting…"
-      : isReconnecting
-        ? "Reconnecting…"
-        : isFinishing
-          ? "Finishing transcription…"
-          : isPaused
-            ? pauseStopWarning
-              ? "Paused · Stopping in 10s unless resumed"
-              : "Dictation paused"
-            : idleStopWarning
-              ? "Recording · Stopping in 10s unless you speak"
-              : "Recording dictation";
+  const tooltipTitle = voiceSessionTitle({
+    phase: status,
+    micSignal,
+    micLabel: micDeviceLabel,
+    stopWarning: isPaused ? pauseStopWarning : idleStopWarning,
+  });
 
   return (
     <VoiceSessionButton
@@ -635,7 +657,7 @@ interface VoiceSessionButtonProps {
   onTogglePause: () => void;
   shortcut: string | undefined;
   pauseShortcut: string | undefined;
-  hover?: ReturnType<typeof useShortcutHintHover>;
+  hover: ReturnType<typeof useShortcutHintHover>;
   testId: string;
   "data-toolbar-item"?: string;
   /**
