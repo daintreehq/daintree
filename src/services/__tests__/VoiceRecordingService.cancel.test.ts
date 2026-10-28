@@ -1278,5 +1278,34 @@ describe("VoiceRecordingService — Escape cancels a dictation at the caret or o
 
       expect(ipc.cancel).toHaveBeenCalledWith(SESSION_ID);
     });
+
+    it("asks first while the only words are still being heard", async () => {
+      const { service, voiceStore, draft, settled } = await setup("Existing.");
+
+      delta("half a thou", "item-a");
+      expect(service.handleEscape(PANEL)).toBe(true);
+
+      expect(voiceStore.getState().dictationCancelConfirm).toMatchObject({ panelId: PANEL });
+      expect(voiceStore.getState().panelBuffers[PANEL]?.liveText).toBe("half a thou");
+      expect(ipc.cancel).not.toHaveBeenCalled();
+
+      expect(service.handleEscape(PANEL)).toBe(true);
+      await settled();
+
+      expect(draft()).toBe("Existing.");
+      expect(voiceStore.getState().panelBuffers[PANEL]?.liveText).toBe("");
+      expect(ipc.cancel).toHaveBeenCalledWith(SESSION_ID);
+    });
+
+    it("cancels on one press when what's being heard is only space", async () => {
+      const { service, voiceStore, settled } = await setup("Existing.");
+
+      delta(" ", "item-a");
+      expect(service.handleEscape(PANEL)).toBe(true);
+      expect(voiceStore.getState().dictationCancelConfirm).toBeNull();
+      await settled();
+
+      expect(ipc.cancel).toHaveBeenCalledWith(SESSION_ID);
+    });
   });
 });
