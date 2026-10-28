@@ -80,7 +80,7 @@ The plugin sub-index links onward to getting-started, the manifest reference, co
 
 | Doc | Purpose |
 | --- | --- |
-| [release.md](./release.md) | Release and code-signing — the three per-OS workflows and release-notes format. |
+| [release.md](./release.md) | Release and code-signing — the three per-OS workflows, dry runs, signing and publishing. |
 | [distribution/asar-integrity.md](./distribution/asar-integrity.md) | Embedded ASAR integrity validation (macOS / Windows) via the electron-builder fuse. |
 | [distribution/microsoft-store.md](./distribution/microsoft-store.md) | Microsoft Store `.appx` build, certification, and the parallel NSIS path. |
 

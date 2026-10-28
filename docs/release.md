@@ -4,65 +4,18 @@
 
 Releases are built by **three per-OS workflows** — `.github/workflows/release-macos.yml`, `release-linux.yml`, and `release-windows.yml` (#8052) — each triggered independently by the same `v*` tag (or manual `workflow_dispatch`). Each workflow runs a full vertical slice for its OS (checks → unit tests → e2e → build → R2 upload → website notify) and publishes to Cloudflare R2 the moment its own pipeline is green. A failure or hang in one OS only delays that OS; the other two ship unaffected, and re-running a failed OS is a single-workflow re-trigger. macOS builds universal, Windows x64+arm64, Linux x64+arm64 (native runners, separate `latest-linux.yml` / `latest-linux-arm64.yml` feeds).
 
-Use the `/release` command to execute a full gitflow release.
+Use the `release` skill (`.claude/skills/release/`) to ship a release. After one question, the version, it runs unattended: the dry-run decision, the changelog, the gitflow merges, the tag, watching all three workflows to green, and recovering from failures.
 
 ## Release Notes Format
 
-Two surfaces, slightly different conventions. The `/release` command treats this section as the source of truth.
-
-### `CHANGELOG.md`
-
-`CHANGELOG.md` is the chronological record. Every release prepends a new section anchored by version and date:
-
-```markdown
-## [X.Y.Z] - YYYY-MM-DD
-
-[1-2 sentence summary of the release theme.]
-
-### Features
-
-- Entry (#issue)
-
-### Bug Fixes
-
-- Entry (#issue)
-```
-
-- The `## [X.Y.Z] - YYYY-MM-DD` heading is required — it's the chronological anchor.
-- Section headings (`### Features`, `### Bug Fixes`, `### Performance`, `### Breaking Changes`, `### Other Changes`) are all `###`.
-- For releases with many entries, group within a section using a bold paragraph: `**Daintree Assistant**`, `**MCP Server**`, etc.
-- Issue references as `#NNN` — they auto-link on GitHub.
-- Omit `### Other Changes` entirely if there's nothing user-relevant.
-
-### GitHub Release notes
-
-GitHub's release UI already renders the version and date as the page header, so the release body skips both:
-
-```markdown
-[1-2 sentence summary of the release theme.]
-
-### Features
-
-- Entry (#issue)
-
-### Bug Fixes
-
-- Entry (#issue)
-```
-
-- **No version or date heading** at the top — GitHub shows that already.
-- **A 1-2 sentence intro paragraph is required on every release.** State the theme: what landed, what the focus was, or — for patch releases — what was wrong with the previous version. Match the existing 0.9.1 / 0.9.0 / 0.8.0 entries: fragment-style, technical, no marketing tone.
-- Section headings (`###`), bold-paragraph grouping, and issue references match the changelog.
-- No trailing `---` or manual "Full Changelog" link — GitHub provides the compare link in the release header automatically.
-
-The `/release` command produces the GitHub release body from the `CHANGELOG.md` section by stripping the `## [X.Y.Z] - YYYY-MM-DD` line. Everything else (summary, sections, entries) is identical between the two surfaces.
+`CHANGELOG.md` is the chronological record; each release prepends a `## [X.Y.Z] - YYYY-MM-DD` section with an intro paragraph and `###` Breaking Changes / Features / Bug Fixes / Performance sections, grouped by `**Area**` when long. The GitHub Release body is that section without its heading line. The full rules for shape, voice, what is left out and how long a section should be live in [`.claude/skills/release/references/release-notes.md`](../.claude/skills/release/references/release-notes.md).
 
 ## Dry Runs
 
-Before tagging a real release, run the workflow in dry-run mode to validate the full pipeline against the current `develop` head. The `/release` command prompts for this between preflight and the changelog work — it's the recommended way to avoid the "tag → CI fails → re-tag" loop.
+A dry run validates the whole release pipeline against a branch without publishing anything. The release skill runs it on `release/vX.Y.Z`, so what it validates is what ships; by hand, `develop` works too:
 
 ```bash
-# Each OS is its own workflow now — dry-run the one(s) you want, or all three.
+# Each OS is its own workflow — dry-run the one(s) you want, or all three.
 gh workflow run release-macos.yml   --ref develop -f dry_run=true
 gh workflow run release-linux.yml   --ref develop -f dry_run=true
 gh workflow run release-windows.yml --ref develop -f dry_run=true
@@ -77,7 +30,7 @@ Each dry run executes every gate and build job for its OS — checks, unit tests
 
 macOS signing and notarization still execute — that's intentional, because Apple notarization is one of the most common reasons a tag-triggered release fails late. The stapler validation step runs against the resulting `.app` bundles.
 
-A dry run typically takes **30–40 minutes** end-to-end. Watch it with `gh run watch <RUN_ID> --exit-status`. If it goes green, you can tag with high confidence the real release will succeed; if it fails, fix on `develop` and re-run before doing any of the changelog / version-bump work.
+A dry run takes about **two hours**, the same as a tag run minus publishing (Linux about 1h10, macOS and Windows near 2h). It is not the default: the `stabilize` workflow already runs check, unit, build, smoke and every E2E bucket on Linux and Windows (plus a local Mac pass), and `nightly-publish.yml` packages, signs and notarizes macOS and Linux every night. The release skill's `scripts/dry-run-check.mjs` dry-runs only when stabilize hasn't gone green recently, a lot has landed since it did, dependencies changed since it did, or packaging and release-workflow files changed without a green nightly or dry run exercising them.
 
 ## macOS Code Signing
 

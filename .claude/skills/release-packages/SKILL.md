@@ -2,7 +2,7 @@
 name: release-packages
 disable-model-invocation: true
 argument-hint: "[package or 'all'] [patch|minor] — e.g. `sdk minor`, `all patch`, or nothing to be asked"
-description: "Release the plugin author npm packages (@daintreehq/plugin-sdk, @daintreehq/plugin-vite, daintree-plugin, create-daintree-plugin, @daintreehq/tour): work out which ones changed since they were last published, bump their versions with the correct cascade through dependents and the scaffold's version ranges, open the bump PR to develop, and, once main carries the bump, cut the per-package tags that make release-packages.yml publish through npm Trusted Publishing. Use this whenever the user wants to publish, release, bump, version, or ship any of the plugin packages or the plugin SDK, CLI, Vite preset or tour engine, even if they only say 'push a new SDK' or 'get the CLI fix out'. Do not use it for the Electron app release; that is the `release` command."
+description: "Release the plugin author npm packages (@daintreehq/plugin-sdk, @daintreehq/plugin-vite, daintree-plugin, create-daintree-plugin, @daintreehq/tour): work out which ones changed since they were last published, bump their versions with the correct cascade through dependents and the scaffold's version ranges, open the bump PR to develop, and, once main carries the bump, cut the per-package tags that make release-packages.yml publish through npm Trusted Publishing. Use this whenever the user wants to publish, release, bump, version, or ship any of the plugin packages or the plugin SDK, CLI, Vite preset or tour engine, even if they only say 'push a new SDK' or 'get the CLI fix out'. Do not use it for the Electron app release; that is the `release` skill."
 ---
 
 # Release Packages
