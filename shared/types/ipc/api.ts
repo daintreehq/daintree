@@ -23,6 +23,8 @@ import type {
   VoiceInputError,
   VoiceInputStatus,
   VoiceLiveSessionUpdate,
+  VoiceLiveLevel,
+  VoicePauseRequest,
   VoiceRevealRequest,
   VoiceSessionEndReason,
   VoiceStopRequest,
@@ -2202,9 +2204,10 @@ export interface ElectronAPI extends GeneratedElectronAPI {
   // main ignores audio, stop and flush carrying an id that isn't the live
   // session's, and every event carries the id of the session it belongs to.
   // start's optional `terminalId` names the terminal being dictated into;
-  // keyterms come from it alone. getLiveSession, stopLive and revealLive come
-  // from there too: they let a view that doesn't own the live session see it,
-  // stop it, and go to it.
+  // keyterms come from it alone. getLiveSession, stopLive, revealLive and
+  // setPausedLive come from there too: they let a view that doesn't own the
+  // live session see it, stop it, pause it, and go to it. publishDetails is the
+  // owner reporting what those views show of it.
   voiceInput: GeneratedElectronAPI["voiceInput"] & {
     getSettings(): Promise<VoiceInputSettings>;
     setSettings(settings: VoiceInputSettingsPatch): Promise<void>;
@@ -2277,6 +2280,13 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * goes to `workspaceId` on `hostId`.
      */
     onRevealRequested(callback: (payload: VoiceRevealRequest) => void): () => void;
+    /**
+     * The live session's input level, while this view is on screen and another
+     * owns the session: one per audio chunk main hears, never to a cached view.
+     */
+    onLiveLevel(callback: (payload: VoiceLiveLevel) => void): () => void;
+    /** To the owner, when another view's control panel paused or resumed it. */
+    onPauseRequested(callback: (payload: VoicePauseRequest) => void): () => void;
     checkMicPermission(): Promise<MicPermissionStatus>;
     /**
      * Native permission preflight. Resolves to whether the renderer may proceed

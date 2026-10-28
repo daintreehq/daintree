@@ -191,6 +191,8 @@ import type {
   VoiceInputError,
   VoiceInputStatus,
   VoiceLiveSessionUpdate,
+  VoiceLiveLevel,
+  VoicePauseRequest,
   VoiceRevealRequest,
   VoiceSessionEndReason,
   VoiceStopRequest,
@@ -3044,6 +3046,10 @@ function buildElectronApi(): ElectronAPI {
         _typedOn(CHANNELS.VOICE_INPUT_STOP_REQUESTED, callback),
       onRevealRequested: (callback: (payload: VoiceRevealRequest) => void) =>
         _typedOn(CHANNELS.VOICE_INPUT_REVEAL_REQUESTED, callback),
+      onLiveLevel: (callback: (payload: VoiceLiveLevel) => void) =>
+        _typedOn(CHANNELS.VOICE_INPUT_LIVE_LEVEL, callback),
+      onPauseRequested: (callback: (payload: VoicePauseRequest) => void) =>
+        _typedOn(CHANNELS.VOICE_INPUT_PAUSE_REQUESTED, callback),
       checkMicPermission: () => _unwrappingInvoke(CHANNELS.VOICE_INPUT_CHECK_MIC_PERMISSION),
       requestMicPermission: () => _unwrappingInvoke(CHANNELS.VOICE_INPUT_REQUEST_MIC_PERMISSION),
       openMicSettings: () => _unwrappingInvoke(CHANNELS.VOICE_INPUT_OPEN_MIC_SETTINGS),

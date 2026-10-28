@@ -4076,6 +4076,10 @@ export interface GeneratedIpcInvokeMap {
     ];
     result: void;
   };
+  "voice-input:publish-details": {
+    args: [request: import("../voice.js").VoicePublishDetailsRequest];
+    result: boolean;
+  };
   "voice-input:reveal-live": {
     args: [sessionId: string];
     result: boolean;
@@ -4083,6 +4087,10 @@ export interface GeneratedIpcInvokeMap {
   "voice-input:rewrite": {
     args: [request: { selectedText: string; instruction: string }];
     result: import("../voice.js").VoiceRewriteOutcome;
+  };
+  "voice-input:set-paused-live": {
+    args: [request: import("../voice.js").VoicePauseRequest];
+    result: boolean;
   };
   "voice-input:start": {
     args: [

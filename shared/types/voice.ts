@@ -106,6 +106,72 @@ export interface VoiceSessionElsewhere {
   /** That workspace, a project or a scratch, as its own host knows it. */
   projectId: string | null;
   projectName: string | null;
+  /** The transcription provider, once main has started one for the session. */
+  provider: "openai" | "deepgram" | "grok" | null;
+  /** What the owner last reported, or null until its first report lands. */
+  details: VoiceSessionDetails | null;
+}
+
+/**
+ * Proof of capture (#13105). pending: no real samples yet; live: a chunk above
+ * the noise floor arrived, latched for the session; silent: still none after
+ * the grace window.
+ */
+export type VoiceMicSignal = "pending" | "live" | "silent";
+
+/** What the session records: prompt text, a rewrite instruction, or a Canopy reply. */
+export type VoiceSessionKind = "dictation" | "rewrite" | "canopy-reply";
+
+/**
+ * The live session as its owner shows it, reported to main and passed on to
+ * every other view, so their indicator and control panel match the owner's
+ * (#14921). The input level travels separately, on `voice-input:live-level`.
+ * Elapsed time is an anchor rather than a count: a view adds the time since
+ * `at` while `ticking`, so nothing is sent each second.
+ */
+export interface VoiceSessionDetails {
+  status: VoiceInputStatus;
+  kind: VoiceSessionKind;
+  panelTitle: string | null;
+  worktreeLabel: string | null;
+  /** The agent the target pane runs, for its icon. */
+  agentId: string | null;
+  locked: boolean;
+  correctionEnabled: boolean;
+  micDeviceLabel: string | null;
+  micSignal: VoiceMicSignal;
+  /** A mic the owner is warning about; a lost mic ends the session instead. */
+  micNotice: { kind: "silent" | "fallback"; bluetooth: boolean } | null;
+  pauseStopWarning: boolean;
+  idleStopWarning: boolean;
+  wordCount: number;
+  elapsed: { seconds: number; at: number; ticking: boolean };
+}
+
+/** The owner's report of its live session, `voice-input:publish-details`. */
+export interface VoicePublishDetailsRequest {
+  sessionId: string;
+  details: VoiceSessionDetails;
+}
+
+/** Another view's panel pausing or resuming the live session. */
+export interface VoicePauseRequest {
+  sessionId: string;
+  paused: boolean;
+}
+
+/**
+ * The live session's input level, on the same 0-1 scale as the owner's meter.
+ * Sent only to the views on screen that don't own it, as main hears each chunk.
+ */
+export interface VoiceLiveLevel {
+  sessionId: string;
+  level: number;
+}
+
+/** The owner's meter scale: a PCM chunk's RMS (0-1) as a 0-1 level. */
+export function voiceLevelFromRms(rms: number): number {
+  return Math.min(1, rms * 6);
 }
 
 /** The longest name a view gives its workspace when it starts a dictation. */

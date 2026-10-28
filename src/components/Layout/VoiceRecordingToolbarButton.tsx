@@ -32,7 +32,8 @@ import {
   sessionWorkspaceName,
 } from "@/services/voiceSessionPlace";
 import { isLocalHostId } from "@shared/types/remoteHosts";
-import type { VoiceSessionElsewhere } from "@shared/types";
+import type { VoiceSessionDetails, VoiceSessionElsewhere } from "@shared/types";
+import { getElsewhereLevel } from "@/services/voiceElsewhereLevel";
 
 // The level meter's envelope: a rise fast enough that a syllable registers at
 // once, a fall that settles back to rest within a few hundred milliseconds of
@@ -98,6 +99,43 @@ function VoiceLockedButton({
   );
 }
 
+// The owner's indicator, read from what it reported: bars while its mic
+// delivers, the pause glyph when held, the clock while it waits.
+function elsewhereWaveMode(details: VoiceSessionDetails): VoiceWaveMode | null {
+  switch (details.status) {
+    case "recording":
+    case "connecting":
+      return details.micSignal === "live" ? "level" : "waiting";
+    case "paused":
+      return "held";
+    case "arming":
+    case "reconnecting":
+    case "finishing":
+      return "waiting";
+    default:
+      return null;
+  }
+}
+
+function elsewhereStateLabel(details: VoiceSessionDetails): string | null {
+  switch (details.status) {
+    case "arming":
+      return "Arming dictation";
+    case "connecting":
+    case "recording":
+      if (details.micSignal === "silent") return "No audio from microphone";
+      return details.micSignal === "live" ? "Dictating" : "Starting microphone";
+    case "paused":
+      return "Dictation paused";
+    case "reconnecting":
+      return "Reconnecting dictation";
+    case "finishing":
+      return "Finishing dictation";
+    default:
+      return null;
+  }
+}
+
 interface VoiceElsewhereButtonProps {
   session: VoiceSessionElsewhere;
   shortcut: string | undefined;
@@ -131,7 +169,10 @@ function VoiceElsewhereIndicator({
 }: VoiceElsewhereButtonProps & { hostName: string | null }) {
   const scratches = useScratchStore((state) => state.scratches);
   const place = sessionPlacePhrase(sessionWorkspaceName(session, scratches), hostName);
-  const title = place ? `Dictating${place}` : "Dictating elsewhere";
+  const details = session.details;
+  const waveMode = details ? elsewhereWaveMode(details) : null;
+  const state = details ? elsewhereStateLabel(details) : null;
+  const title = `${state ?? "Dictating"}${place || " elsewhere"}`;
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -143,13 +184,16 @@ function VoiceElsewhereIndicator({
             void voiceRecordingService.revealSessionElsewhere();
           }}
           className={cn(
-            "toolbar-icon-button relative mr-0.5 text-text-secondary",
-            VOICE_SLOT_CLASS
+            "toolbar-icon-button relative mr-0.5",
+            VOICE_SLOT_CLASS,
+            waveMode && "gap-1",
+            waveMode && waveMode !== "held" ? "text-text-primary" : "text-text-secondary"
           )}
           aria-label={`${title}. Click to go there.`}
           data-testid="voice-elsewhere-button"
         >
           <Mic className="h-4 w-4" />
+          {waveMode && <VoiceWave mode={waveMode} elsewhereSessionId={session.sessionId} />}
         </Button>
       </TooltipTrigger>
       <TooltipContent side="bottom">
@@ -231,7 +275,14 @@ const METER_GLYPH_SIZE = { width: 14, height: 14 } as const;
  * user chose, is the pause glyph. Each state keeps its own shape where colour
  * is gone (forced colours), and nothing in the toolbar spins or pulses.
  */
-function VoiceWave({ mode }: { mode: VoiceWaveMode }) {
+function VoiceWave({
+  mode,
+  elsewhereSessionId,
+}: {
+  mode: VoiceWaveMode;
+  /** Meter a session another view owns, from the level main relays (#14921). */
+  elsewhereSessionId?: string;
+}) {
   const barRefs = useRef<Array<HTMLSpanElement | null>>([]);
 
   useEffect(() => {
@@ -247,7 +298,9 @@ function VoiceWave({ mode }: { mode: VoiceWaveMode }) {
       const gap = Math.max(0, (now - lastTime) / 1000);
       lastTime = now;
 
-      const rawLevel = useVoiceRecordingStore.getState().audioLevel;
+      const rawLevel = elsewhereSessionId
+        ? getElsewhereLevel(elsewhereSessionId)
+        : useVoiceRecordingStore.getState().audioLevel;
       const gated = Math.max(0, (rawLevel - NOISE_FLOOR) / (1 - NOISE_FLOOR));
       // Lift the quiet end before smoothing, so the envelope's timing is the
       // timing the eye sees.
@@ -291,7 +344,7 @@ function VoiceWave({ mode }: { mode: VoiceWaveMode }) {
 
     rafId = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(rafId);
-  }, [mode]);
+  }, [mode, elsewhereSessionId]);
 
   return (
     <span

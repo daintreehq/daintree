@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vite
 import {
   isActiveVoiceSession,
   type VoiceLiveSessionUpdate,
+  type VoiceLiveLevel,
+  type VoicePauseRequest,
   type VoiceRevealRequest,
 } from "@shared/types";
 
@@ -223,6 +225,10 @@ function buildElectronStub() {
         (_callback: (payload: { sessionId: string; returnToTarget?: boolean }) => void) => () => {}
       ),
       onRevealRequested: vi.fn((_callback: (payload: VoiceRevealRequest) => void) => () => {}),
+      onLiveLevel: vi.fn((_callback: (payload: VoiceLiveLevel) => void) => () => {}),
+      onPauseRequested: vi.fn((_callback: (payload: VoicePauseRequest) => void) => () => {}),
+      publishDetails: vi.fn().mockResolvedValue(undefined),
+      setPausedLive: vi.fn().mockResolvedValue(true),
       getLiveSession: vi.fn().mockResolvedValue({ revision: 0, session: null }),
       getSettings: vi.fn().mockResolvedValue({
         enabled: true,

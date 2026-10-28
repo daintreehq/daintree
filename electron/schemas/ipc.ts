@@ -781,6 +781,48 @@ export const VoiceStopLiveRequestSchema = z.object({
   returnToTarget: z.boolean().optional(),
 });
 
+const VoiceDetailLabelSchema = z.string().max(VOICE_WORKSPACE_NAME_MAX_LENGTH).nullable();
+
+// The owner's report of its live session, passed on to every other view (#14921).
+export const VoicePublishDetailsRequestSchema = z.object({
+  sessionId: VoiceSessionIdSchema,
+  details: z.object({
+    status: z.enum([
+      "idle",
+      "arming",
+      "connecting",
+      "recording",
+      "paused",
+      "reconnecting",
+      "finishing",
+      "error",
+    ]),
+    kind: z.enum(["dictation", "rewrite", "canopy-reply"]),
+    panelTitle: VoiceDetailLabelSchema,
+    worktreeLabel: VoiceDetailLabelSchema,
+    agentId: z.string().max(128).nullable(),
+    locked: z.boolean(),
+    correctionEnabled: z.boolean(),
+    micDeviceLabel: VoiceDetailLabelSchema,
+    micSignal: z.enum(["pending", "live", "silent"]),
+    micNotice: z.object({ kind: z.enum(["silent", "fallback"]), bluetooth: z.boolean() }).nullable(),
+    pauseStopWarning: z.boolean(),
+    idleStopWarning: z.boolean(),
+    wordCount: z.number().int().min(0).max(1_000_000),
+    elapsed: z.object({
+      seconds: z.number().int().min(0).max(86_400 * 7),
+      at: z.number().finite().min(0),
+      ticking: z.boolean(),
+    }),
+  }),
+});
+
+// Another view's panel pausing or resuming the live session (#14921).
+export const VoicePauseRequestSchema = z.object({
+  sessionId: VoiceSessionIdSchema,
+  paused: z.boolean(),
+});
+
 // The terminal being dictated into: keyterms are read from it alone.
 export const VoiceInputStartOptionsSchema = z
   .object({
