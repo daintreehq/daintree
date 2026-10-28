@@ -3,3 +3,5 @@
  * stands down: Canopy's Trash and risky answers, and Escape on a dictation.
  */
 export const PRESS_AGAIN_CONFIRM_MS = 4_000;
+
+export const DICTATION_CANCEL_CONFIRM_PROMPT = "Press Escape again to cancel dictation";

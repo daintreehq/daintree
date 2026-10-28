@@ -867,6 +867,25 @@ describe("VoiceRecordingService — Escape cancels a dictation at the caret or o
     expect(await takeCaret(draft())).toEqual({ from: 4, to: 15 });
   });
 
+  it("cancels on one press when the utterances together were the text selected", async () => {
+    const { service, voiceStore, draft, records, settled } = await setup("Keep old text.");
+    await showComposer("Keep old text.", 5, 13);
+
+    // The second utterance changes the text on its own; with the first put
+    // back over it, the draft ends as it is, so nothing is lost.
+    complete("old", "item-a");
+    complete("text", "item-b");
+    expect(draft()).toBe("Keep old text.");
+
+    expect(service.handleEscape(PANEL)).toBe(true);
+    expect(voiceStore.getState().dictationCancelConfirm).toBeNull();
+    await settled();
+
+    expect(draft()).toBe("Keep old text.");
+    expect(records()).toEqual([]);
+    expect(ipc.cancel).toHaveBeenCalledWith(SESSION_ID);
+  });
+
   it("selects the text again when the dictated word was the one selected", async () => {
     const { useTerminalInputStore } = await import("@/store/terminalInputStore");
     const { takeScratchLanded } = await import("@/services/voiceScratchCommand");
@@ -1095,11 +1114,13 @@ describe("VoiceRecordingService — Escape cancels a dictation at the caret or o
 
     const confirmMs = async () => (await import("@/lib/pressAgain")).PRESS_AGAIN_CONFIRM_MS;
 
-    it("keeps the session and its words on the first press", async () => {
-      const { service, voiceStore, draft } = await setup("Existing.");
+    it("keeps the session and its words on the first press, and says so", async () => {
+      const { service, voiceStore, draft, announcement } = await setup("Existing.");
 
       complete("Hello.", "item-a");
       expect(service.handleEscape(PANEL)).toBe(true);
+
+      expect(announcement()).toBe("Press Escape again to cancel dictation");
 
       expect(draft()).toBe("Existing. Hello.");
       expect(voiceStore.getState().status).toBe("recording");
@@ -1128,7 +1149,10 @@ describe("VoiceRecordingService — Escape cancels a dictation at the caret or o
 
       complete("Hello.", "item-a");
       service.handleEscape(PANEL);
-      vi.advanceTimersByTime(await confirmMs());
+      const ms = await confirmMs();
+      vi.advanceTimersByTime(ms - 1);
+      expect(voiceStore.getState().dictationCancelConfirm).not.toBeNull();
+      vi.advanceTimersByTime(1);
 
       expect(voiceStore.getState().dictationCancelConfirm).toBeNull();
       expect(voiceStore.getState().status).toBe("recording");
@@ -1136,6 +1160,18 @@ describe("VoiceRecordingService — Escape cancels a dictation at the caret or o
       expect(voiceStore.getState().dictationCancelConfirm).not.toBeNull();
       expect(draft()).toBe("Hello.");
       expect(ipc.cancel).not.toHaveBeenCalled();
+    });
+
+    it("cancels on a second press late in the window", async () => {
+      const { service, draft, settled } = await setup();
+
+      complete("Hello.", "item-a");
+      service.handleEscape(PANEL);
+      vi.advanceTimersByTime((await confirmMs()) - 1);
+      expect(service.handleEscape(PANEL)).toBe(true);
+      await settled();
+
+      expect(draft()).toBe("");
     });
 
     it("confirms across routes: the composer's press, then the global fallback's", async () => {
@@ -1161,7 +1197,7 @@ describe("VoiceRecordingService — Escape cancels a dictation at the caret or o
     });
 
     it("never takes a held Escape's repeat as the second press", async () => {
-      const { service, voiceStore, draft } = await setup();
+      const { service, voiceStore, draft, settled } = await setup();
       const keydown = (repeat: boolean) => {
         const event = Object.assign(new Event("keydown"), {
           key: "Escape",
@@ -1184,6 +1220,13 @@ describe("VoiceRecordingService — Escape cancels a dictation at the caret or o
       expect(draft()).toBe("Hello.");
       expect(voiceStore.getState().dictationCancelConfirm).not.toBeNull();
       expect(ipc.cancel).not.toHaveBeenCalled();
+
+      // Let go and press again: that one is the second press.
+      keydown(false);
+      expect(service.handleEscape(PANEL)).toBe(true);
+      await settled();
+      expect(draft()).toBe("");
+      expect(voiceStore.getState().dictationCancelConfirm).toBeNull();
     });
 
     it("stands down when the dictation key stops the session, which keeps its words", async () => {

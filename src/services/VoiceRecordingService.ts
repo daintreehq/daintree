@@ -76,7 +76,7 @@ import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { VOICE_INPUT_SETTINGS_CHANGED_EVENT } from "@/lib/voiceInputSettingsEvents";
 import { registerEscapeFallback } from "@/lib/escapeStack";
-import { PRESS_AGAIN_CONFIRM_MS } from "@/lib/pressAgain";
+import { DICTATION_CANCEL_CONFIRM_PROMPT, PRESS_AGAIN_CONFIRM_MS } from "@/lib/pressAgain";
 import { useCanopyStore } from "@/store/canopyStore";
 import {
   isCanopyReplyTarget,
@@ -543,6 +543,15 @@ function afterDictatedWords(target: VoiceRecordingTarget, sessionId: string | nu
 /** Whether cancelling takes something out: words that were the selection leave the text as it is. */
 function changesDraft({ from, to, restore = "" }: DictatedSpan, draft: string): boolean {
   return draft.slice(from, to) !== restore;
+}
+
+/** The draft a cancel leaves, the spans undone last first as `cancelDictation` writes them. */
+function draftAfterCancel(spans: DictatedSpan[], draft: string): string {
+  let next = draft;
+  for (const { from, to, restore = "" } of spans) {
+    if (draft.slice(from, to) !== restore) next = next.slice(0, from) + restore + next.slice(to);
+  }
+  return next;
 }
 
 /**
@@ -1690,10 +1699,10 @@ class VoiceRecordingService {
       );
       return true;
     }
-    // Only the words still to remove count, read afresh on every press: what
-    // landed while the first waited goes too.
+    // Only a cancel that changes the draft loses anything, read afresh on
+    // every press: what landed while the first waited goes too.
     const sessionId = state.panelBuffers[target.panelId]?.dictationSessionId ?? null;
-    if (sessionId && spans.some((span) => changesDraft(span, draft))) {
+    if (sessionId && draftAfterCancel(spans, draft) !== draft) {
       const confirm = state.dictationCancelConfirm;
       const confirmed =
         confirm?.panelId === target.panelId &&
@@ -1701,6 +1710,11 @@ class VoiceRecordingService {
         performance.now() < confirm.expiresAt;
       if (!confirmed) {
         this.armCancelConfirm(target.panelId, sessionId);
+        // A reply box's own composer says it: the app's announcer goes unheard
+        // inside Canopy's dialog.
+        if (!isCanopyReplyTarget(target)) {
+          useVoiceRecordingStore.getState().announce(DICTATION_CANCEL_CONFIRM_PROMPT);
+        }
         return true;
       }
       if (this.escapeRepeat) return true;

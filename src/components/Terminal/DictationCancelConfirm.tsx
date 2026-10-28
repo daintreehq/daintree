@@ -1,10 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
-import { PRESS_AGAIN_CONFIRM_MS } from "@/lib/pressAgain";
+import { DICTATION_CANCEL_CONFIRM_PROMPT, PRESS_AGAIN_CONFIRM_MS } from "@/lib/pressAgain";
 import { useVoiceRecordingStore } from "@/store";
 import type { DictationCancelConfirm } from "@/store/voiceRecordingStore";
-
-export const DICTATION_CANCEL_CONFIRM_PROMPT = "Press Escape again to cancel dictation";
 
 /** The first Escape waiting on a second for the dictation into `voiceId`, if any. */
 export function useDictationCancelConfirm(voiceId: string): DictationCancelConfirm | null {
