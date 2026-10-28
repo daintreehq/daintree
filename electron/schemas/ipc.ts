@@ -817,9 +817,7 @@ export const VoicePublishDetailsRequestSchema = z.object({
     worktreeLabel: VoiceDetailLabelSchema.nullable(),
     micLabel: VoiceDetailLabelSchema.nullable(),
     micSignal: z.enum(["pending", "live", "silent"]),
-    micNotice: z
-      .object({ kind: z.enum(["lost", "fallback", "silent"]), bluetooth: z.boolean() })
-      .nullable(),
+    micNotice: z.object({ kind: z.enum(["lost", "silent"]), bluetooth: z.boolean() }).nullable(),
     stopWarning: z.boolean(),
     correctionEnabled: z.boolean(),
     locked: z.boolean(),

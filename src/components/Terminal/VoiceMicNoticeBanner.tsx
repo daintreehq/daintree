@@ -20,8 +20,9 @@ async function switchToMicFromNotice(notice: VoiceMicNotice): Promise<void> {
 
 /**
  * What the microphone did to this pane's dictation (#14606): it went away
- * mid-session, a different one opened than the one chosen, or it is
- * delivering silence. The device is named because "the microphone" is
+ * mid-session, or it is delivering silence. Only a mic that isn't working
+ * raises one; a working stand-in for the chosen mic is named in the
+ * announcement and the session's details, not here. The device is named because "the microphone" is
  * ambiguous with AirPods, a dock and a laptop all connected.
  *
  * The service already speaks each of these through the dictation live region,
@@ -46,17 +47,6 @@ export function VoiceMicNoticeBanner({ notice }: VoiceMicNoticeBannerProps) {
         severity="warning"
         title="Microphone lost"
         description={`${notice.deviceLabel ?? "The microphone"} disconnected, so dictation stopped`}
-      />
-    );
-  }
-
-  if (notice.kind === "fallback") {
-    return (
-      <InlineStatusBanner
-        {...shared}
-        severity="info"
-        title={`Using ${notice.deviceLabel ?? "another microphone"}`}
-        description="Your chosen microphone isn't available"
       />
     );
   }

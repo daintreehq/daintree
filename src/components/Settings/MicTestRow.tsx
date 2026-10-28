@@ -18,6 +18,8 @@ type TestState =
 interface MicTestRowProps {
   /** The saved input device; empty for the system default. */
   deviceId: string;
+  /** The name saved with it. */
+  deviceLabel?: string;
   /**
    * False while the page is hidden. Settings keeps visited pages mounted, so
    * this, not unmounting, is what lets go of the mic on a page switch.
@@ -55,7 +57,7 @@ function describe(state: TestState): string {
   }
 }
 
-export function MicTestRow({ deviceId, active = true, disabled }: MicTestRowProps) {
+export function MicTestRow({ deviceId, deviceLabel, active = true, disabled }: MicTestRowProps) {
   const [state, setState] = useState<TestState>({ phase: "idle" });
   const handleRef = useRef<MicTestHandle | null>(null);
   // Bumped on every start and stop, so a start that resolves after the user
@@ -77,6 +79,7 @@ export function MicTestRow({ deviceId, active = true, disabled }: MicTestRowProp
     try {
       const handle = await startMicTest({
         deviceId,
+        deviceLabel,
         isCurrent: () => run === runRef.current,
         onSample: (sample) => {
           if (run !== runRef.current) return;
@@ -102,7 +105,7 @@ export function MicTestRow({ deviceId, active = true, disabled }: MicTestRowProp
       if (run !== runRef.current) return;
       setState({ phase: "failed", reason: reason === "denied" ? "denied" : "unavailable" });
     }
-  }, [deviceId]);
+  }, [deviceId, deviceLabel]);
 
   // A test belongs to the device it was started on, and never outlives the page:
   // unmounting or hiding it (another settings page, a search) stops the test.

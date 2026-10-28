@@ -33,6 +33,8 @@ export interface MicTestHandle {
 export interface MicTestOptions {
   /** Empty for the system default. */
   deviceId: string;
+  /** The name saved with `deviceId`, to find the mic again if its id changed. */
+  deviceLabel?: string;
   onSample: (sample: MicTestSample) => void;
   /** Called once if the stream ends or the test hits its time limit, after release. */
   onEnded: () => void;
@@ -63,10 +65,10 @@ export function levelFromPeak(peak: number): number {
  * `stop`, the time limit, or the track ending. Rejects with a `MicTestFailure`.
  */
 export async function startMicTest(options: MicTestOptions): Promise<MicTestHandle> {
-  const { deviceId, onSample, onEnded, isCurrent } = options;
+  const { deviceId, deviceLabel, onSample, onEnded, isCurrent } = options;
   let mic: OpenedMic;
   try {
-    mic = await openChosenMic(deviceId, { canFallBack: isCurrent });
+    mic = await openChosenMic(deviceId, { canFallBack: isCurrent, chosenLabel: deviceLabel });
   } catch (err) {
     throw (isMicPermissionDenial(err) ? "denied" : "unavailable") satisfies MicTestFailure;
   }

@@ -153,12 +153,13 @@ interface Harness {
   status: { emit: (status: string) => void };
   delta: { emit: (text: string) => void };
   windowListeners: Record<string, Array<(event: unknown) => void>>;
-  settings: { deviceId: string };
+  settings: { deviceId: string; deviceLabel: string };
   playUiEvent: ReturnType<typeof vi.fn>;
 }
 
 function setupGlobals(options: {
   deviceId?: string;
+  deviceLabel?: string;
   tracks: Array<{ label: string; deviceId: string }>;
   devices?: Array<{ deviceId: string; label: string }>;
 }): Harness {
@@ -174,6 +175,7 @@ function setupGlobals(options: {
     openaiApiKey: "sk-key",
     correctionEnabled: false,
     deviceId: options.deviceId ?? "",
+    deviceLabel: options.deviceLabel ?? "",
   };
 
   const voiceInput = {
@@ -523,11 +525,8 @@ describe("VoiceRecordingService — chosen mic not available (#14606)", () => {
       audio: { deviceId: { ideal: "usb-mic" } },
       video: false,
     });
-    expect(store.getState().micNotice).toEqual({
-      kind: "fallback",
-      target: expect.objectContaining({ panelId: PANEL_ID }),
-      deviceLabel: "MacBook Pro Microphone",
-    });
+    // A working stand-in is named, never raised as a notice.
+    expect(store.getState().micNotice).toBeNull();
     expect(store.getState().micDeviceLabel).toBe("MacBook Pro Microphone");
 
     sendChunk(harness.workletNodes[0]!, 3000);
@@ -618,14 +617,54 @@ describe("VoiceRecordingService — chosen mic that won't open (#14850)", () => 
     expect(harness.getUserMedia).toHaveBeenNthCalledWith(2, { audio: true, video: false });
     expect(harness.voiceInput.start).toHaveBeenCalledTimes(1);
     expect(store.getState().lastError).toBeNull();
-    expect(store.getState().micNotice).toEqual({
-      kind: "fallback",
-      target: expect.objectContaining({ panelId: PANEL_ID }),
-      deviceLabel: "MacBook Pro Microphone",
-    });
+    // A working stand-in is named, never raised as a notice.
+    expect(store.getState().micNotice).toBeNull();
     // A fallback never rewrites the choice.
     expect(harness.voiceInput.setSettings).not.toHaveBeenCalled();
     expect(harness.settings.deviceId).toBe("usb-mic");
+  });
+
+  it("finds a chosen mic whose saved id went stale by its name, and saves the id it has now", async () => {
+    const harness = setupGlobals({
+      deviceId: "usb-old",
+      deviceLabel: "USB Mic",
+      tracks: [{ label: "USB Mic", deviceId: "usb-new" }],
+      devices: [{ deviceId: "usb-new", label: "USB Mic" }],
+    });
+    const { store, service } = await load();
+
+    await service.start(TARGET);
+
+    expect(harness.getUserMedia).toHaveBeenCalledWith({
+      audio: { deviceId: { ideal: "usb-new" } },
+      video: false,
+    });
+    expect(store.getState().micNotice).toBeNull();
+    await vi.waitFor(() =>
+      expect(harness.voiceInput.setSettings).toHaveBeenCalledWith({ deviceId: "usb-new" })
+    );
+    expect(harness.settings).toMatchObject({ deviceId: "usb-new", deviceLabel: "USB Mic" });
+  });
+
+  it("never saves a relocated id over a choice made while the mic opened", async () => {
+    const harness = setupGlobals({
+      deviceId: "usb-old",
+      deviceLabel: "USB Mic",
+      tracks: [{ label: "USB Mic", deviceId: "usb-new" }],
+      devices: [{ deviceId: "usb-new", label: "USB Mic" }],
+    });
+    const { service } = await load();
+    harness.getUserMedia.mockImplementationOnce(async () => {
+      Object.assign(harness.settings, { deviceId: "yeti", deviceLabel: "Blue Yeti" });
+      const track = createTrack("USB Mic", "usb-new");
+      harness.tracks.push(track);
+      return createStream(track);
+    });
+
+    await service.start(TARGET);
+
+    expect(harness.voiceInput.setSettings).not.toHaveBeenCalled();
+    expect(harness.settings).toMatchObject({ deviceId: "yeti", deviceLabel: "Blue Yeti" });
   });
 
   it("tries the chosen mic first again on the next dictation", async () => {

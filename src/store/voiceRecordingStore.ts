@@ -290,13 +290,11 @@ export type VoiceMicSignal = "pending" | "live" | "silent";
  * scoped to that target. Device labels are shown here and never logged.
  *
  * - lost: the input device went away; the session was ended and its text kept.
- * - fallback: the chosen device wasn't there at start, so another mic is in use.
  * - silent: the mic is still delivering silence after the grace window.
  *   `builtIn` is the mic to switch to, when one other than this one is found.
  */
 export type VoiceMicNotice =
   | { kind: "lost"; target: VoiceRecordingTarget; deviceLabel: string | null }
-  | { kind: "fallback"; target: VoiceRecordingTarget; deviceLabel: string | null }
   | {
       kind: "silent";
       target: VoiceRecordingTarget;

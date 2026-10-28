@@ -210,7 +210,10 @@ describe("openChosenMic (#14850)", () => {
     const failure = error("NotReadableError");
     const getUserMedia = stubGetUserMedia(failure, DEFAULT_MIC);
 
-    await expect(openChosenMic("usb-mic", { canFallBack: () => false })).rejects.toBe(failure);
+    // Current while the mics are listed, gone by the time the first open fails.
+    const canFallBack = vi.fn().mockReturnValueOnce(true).mockReturnValue(false);
+
+    await expect(openChosenMic("usb-mic", { canFallBack })).rejects.toBe(failure);
     expect(getUserMedia).toHaveBeenCalledTimes(1);
   });
 
@@ -228,6 +231,153 @@ describe("openChosenMic (#14850)", () => {
     stubGetUserMedia(micStream("MacBook Pro Microphone", "builtin"));
 
     expect((await openChosenMic("default")).substituted).toBe(false);
+  });
+
+  describe("finding the chosen mic again", () => {
+    const RODE = "RØDE NT-USB Mini (19f7:0015)";
+
+    function aliasStream(label: string, groupId: string | undefined) {
+      const track = {
+        label: `Default - ${label}`,
+        stop: vi.fn(),
+        getSettings: () => ({ deviceId: "default", groupId }),
+      };
+      return { getAudioTracks: () => [track], getTracks: () => [track] };
+    }
+
+    function stubDevices(
+      outcomes: Array<{ getAudioTracks: () => unknown[] } | Error>,
+      inputs: Array<{ deviceId: string; groupId?: string; label: string }>
+    ) {
+      const getUserMedia = vi.fn();
+      for (const outcome of outcomes) {
+        if (outcome instanceof Error) getUserMedia.mockRejectedValueOnce(outcome);
+        else getUserMedia.mockResolvedValueOnce(outcome);
+      }
+      const enumerateDevices = vi
+        .fn()
+        .mockResolvedValue([
+          ...inputs.map((input) => ({ kind: "audioinput", groupId: "", ...input })),
+          { kind: "audiooutput", deviceId: "speakers", groupId: "g-out", label: "Speakers" },
+        ]);
+      vi.stubGlobal("navigator", { mediaDevices: { getUserMedia, enumerateDevices } });
+      return { getUserMedia, enumerateDevices };
+    }
+
+    it("isn't a substitution when the chosen mic opens as the default alias, by group", async () => {
+      stubDevices(
+        [aliasStream(RODE, "g-rode")],
+        [
+          { deviceId: "default", groupId: "g-rode", label: `Default - ${RODE}` },
+          { deviceId: "rode", groupId: "g-rode", label: RODE },
+        ]
+      );
+
+      const mic = await openChosenMic("rode", { chosenLabel: RODE });
+
+      expect(mic).toMatchObject({ label: RODE, substituted: false, relocatedId: null });
+    });
+
+    it("is a substitution when the default alias is another device of the same name", async () => {
+      stubDevices(
+        [aliasStream("USB Mic", "g-b")],
+        [
+          { deviceId: "usb-a", groupId: "g-a", label: "USB Mic" },
+          { deviceId: "usb-b", groupId: "g-b", label: "USB Mic" },
+        ]
+      );
+
+      expect((await openChosenMic("usb-a", { chosenLabel: "USB Mic" })).substituted).toBe(true);
+    });
+
+    it("falls back to the name when the alias doesn't say its group", async () => {
+      stubDevices([aliasStream(RODE, undefined)], [{ deviceId: "rode", label: RODE }]);
+
+      expect((await openChosenMic("rode", { chosenLabel: RODE })).substituted).toBe(false);
+    });
+
+    it("finds a mic whose id went stale by the name saved with it", async () => {
+      const { getUserMedia } = stubDevices(
+        [micStream(RODE, "rode-new")],
+        [
+          { deviceId: "default", label: `Default - ${RODE}` },
+          { deviceId: "rode-new", label: RODE },
+        ]
+      );
+
+      const mic = await openChosenMic("rode-old", { chosenLabel: RODE });
+
+      expect(getUserMedia.mock.calls).toEqual([
+        [{ audio: { deviceId: { ideal: "rode-new" } }, video: false }],
+      ]);
+      expect(mic).toMatchObject({ substituted: false, relocatedId: "rode-new" });
+    });
+
+    it("finds nothing by a name two mics share", async () => {
+      const { getUserMedia } = stubDevices(
+        [micStream("USB Mic", "usb-b")],
+        [
+          { deviceId: "usb-a", label: "USB Mic" },
+          { deviceId: "usb-b", label: "USB Mic" },
+        ]
+      );
+
+      const mic = await openChosenMic("usb-old", { chosenLabel: "USB Mic" });
+
+      expect(getUserMedia.mock.calls).toEqual([
+        [{ audio: { deviceId: { ideal: "usb-old" } }, video: false }],
+      ]);
+      expect(mic).toMatchObject({ substituted: true, relocatedId: null });
+    });
+
+    it("keeps a listed id even when another mic shares its name", async () => {
+      const { getUserMedia } = stubDevices(
+        [micStream("USB Mic", "usb-mic")],
+        [
+          { deviceId: "usb-mic-2", label: "USB Mic" },
+          { deviceId: "usb-mic", label: "USB Mic" },
+        ]
+      );
+
+      await openChosenMic("usb-mic", { chosenLabel: "USB Mic" });
+
+      expect(getUserMedia.mock.calls).toEqual([[CHOSEN]]);
+    });
+
+    it("still calls a same-named default a substitution after the chosen mic failed", async () => {
+      stubDevices(
+        [error("NotReadableError"), aliasStream("USB Mic", undefined)],
+        [{ deviceId: "usb-mic", label: "USB Mic" }]
+      );
+
+      expect((await openChosenMic("usb-mic", { chosenLabel: "USB Mic" })).substituted).toBe(true);
+    });
+
+    it("opens nothing when the caller moved on while the mics were listed", async () => {
+      const { getUserMedia, enumerateDevices } = stubDevices([micStream("USB Mic", "usb-mic")], []);
+      let list!: (devices: unknown[]) => void;
+      enumerateDevices.mockReturnValueOnce(new Promise((resolve) => (list = resolve)));
+      let current = true;
+
+      const opening = openChosenMic("usb-mic", {
+        chosenLabel: "USB Mic",
+        canFallBack: () => current,
+      });
+      current = false;
+      list([{ kind: "audioinput", deviceId: "usb-mic", groupId: "", label: "USB Mic" }]);
+
+      await expect(opening).rejects.toMatchObject({ name: "AbortError" });
+      expect(getUserMedia).not.toHaveBeenCalled();
+    });
+
+    it("knows the chosen mic by its group even after its first open failed", async () => {
+      stubDevices(
+        [error("NotReadableError"), aliasStream("USB Mic", "g-usb")],
+        [{ deviceId: "usb-mic", groupId: "g-usb", label: "USB Mic" }]
+      );
+
+      expect((await openChosenMic("usb-mic", { chosenLabel: "USB Mic" })).substituted).toBe(false);
+    });
   });
 
   it("still hands over a stream whose track can't describe itself", async () => {
