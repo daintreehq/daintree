@@ -528,6 +528,12 @@ interface VoiceSessionButtonProps {
  * Mounted only while there is a session, so a closed session's open state
  * never carries into the next one.
  */
+// A toolbar item the keyboard can land on now: still there, enabled, and
+// shown (an item folded into the overflow menu has no layout).
+function canTakeFocus(item: HTMLElement): boolean {
+  return item.isConnected && !item.matches(":disabled") && item.offsetParent !== null;
+}
+
 // What can take the slot when a session ends: the lock's button or another
 // view's session.
 const VOICE_SLOT_SUCCESSOR_SELECTOR =
@@ -566,16 +572,24 @@ function VoiceSessionButton({
       if (!holdsFocusRef.current || !toolbar || !trigger) return;
       const visible = document.activeElement?.matches(":focus-visible") ?? false;
       // The placeholder takes no focus, so a slot nothing takes hands it to
-      // the toolbar item beside it, read while the mic is still among them.
+      // the nearest toolbar item, ordered while the mic is still among them.
       const items = Array.from(toolbar.querySelectorAll<HTMLElement>("[data-toolbar-item]"));
       const at = items.indexOf(trigger);
-      const neighbour = at < 0 ? null : (items[at - 1] ?? items[at + 1] ?? null);
+      const neighbours =
+        at < 0
+          ? []
+          : items
+              .map((item, i) => ({ item, distance: Math.abs(i - at) }))
+              .filter(({ distance }) => distance > 0)
+              .sort((a, b) => a.distance - b.distance)
+              .map(({ item }) => item);
       requestAnimationFrame(() => {
         const active = document.activeElement;
         if (active && active !== document.body) return;
         const successor =
           toolbar.querySelector<HTMLElement>(VOICE_SLOT_SUCCESSOR_SELECTOR) ??
-          (neighbour?.isConnected ? neighbour : null);
+          neighbours.find(canTakeFocus) ??
+          null;
         if (!successor) return;
         // A pointer user didn't ask for the successor's tooltip either.
         if (!visible) armTooltipFocusSuppression();

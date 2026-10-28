@@ -94,6 +94,7 @@ afterEach(() => {
     panelBuffers: {},
   });
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 function startSession(status: "recording" | "paused" | "finishing" = "recording") {
@@ -325,6 +326,33 @@ describe("VoiceRecordingToolbarButton — the session panel (#14920)", () => {
       if (!ringed) expect(isTooltipSuppressedForElement(locked)).toBe(true);
     }
   );
+
+  it("hands the keyboard to the nearest toolbar item that can take it when nothing takes the slot", async () => {
+    // jsdom has no layout; every item here is shown.
+    vi.spyOn(HTMLElement.prototype, "offsetParent", "get").mockReturnValue(document.body);
+    startSession();
+    const view = render(
+      <div role="toolbar">
+        <button type="button" data-toolbar-item="" data-testid="farther">
+          Farther
+        </button>
+        <button type="button" data-toolbar-item="" disabled data-testid="disabled">
+          Disabled
+        </button>
+        <VoiceRecordingToolbarButton data-toolbar-item="" />
+        <button type="button" data-toolbar-item="" data-testid="after">
+          After
+        </button>
+      </div>
+    );
+    openPanel();
+
+    act(() => {
+      useVoiceRecordingStore.setState({ status: "idle", activeTarget: null });
+    });
+    // The disabled item beside it is passed over for the next nearest.
+    await vi.waitFor(() => expect(document.activeElement).toBe(view.getByTestId("after")));
+  });
 
   it("leaves the keyboard alone when the session ends somewhere it isn't", async () => {
     startSession();

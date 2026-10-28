@@ -210,12 +210,20 @@ describe("useGlobalKeybindings — isolated surfaces", () => {
     }
   });
 
-  function pressDictationIn(ownsDictation: boolean, html: string) {
+  function pressDictationIn(
+    ownsDictation: boolean,
+    html: string,
+    key: { actionId: string; combo: string; event: KeyboardEventInit } = {
+      actionId: "voiceInput.toggle",
+      combo: "Cmd+D",
+      event: { key: "d", code: "KeyD", metaKey: true },
+    }
+  ) {
     mocks.keybindingService.getEffectiveCombo.mockImplementation((id: string) =>
-      id === "voiceInput.toggle" ? "Cmd+D" : undefined
+      id === key.actionId ? key.combo : undefined
     );
     mocks.keybindingService.resolveKeybinding.mockReturnValue({
-      match: { actionId: "voiceInput.toggle" },
+      match: { actionId: key.actionId },
       chordPrefix: false,
       shouldConsume: true,
     });
@@ -228,7 +236,7 @@ describe("useGlobalKeybindings — isolated surfaces", () => {
     owner.appendChild(surface);
     document.body.appendChild(owner);
     try {
-      pressIn(surface.querySelector("textarea")!, { key: "d", code: "KeyD", metaKey: true });
+      pressIn(surface.querySelector("textarea")!, key.event);
     } finally {
       owner.remove();
     }
@@ -241,6 +249,20 @@ describe("useGlobalKeybindings — isolated surfaces", () => {
     pressDictationIn(true, html);
     expect(mocks.actionService.dispatch).toHaveBeenCalledWith(
       "voiceInput.toggle",
+      undefined,
+      expect.anything()
+    );
+  });
+
+  // #14920: stopping with a send is a dictation key too.
+  it("lets stop-and-send through from a reply that owns its dictation", () => {
+    pressDictationIn(true, '<div class="cm-editor"><textarea></textarea></div>', {
+      actionId: "voiceInput.stopAndSend",
+      combo: "Cmd+Alt+D",
+      event: { key: "d", code: "KeyD", metaKey: true, altKey: true },
+    });
+    expect(mocks.actionService.dispatch).toHaveBeenCalledWith(
+      "voiceInput.stopAndSend",
       undefined,
       expect.anything()
     );

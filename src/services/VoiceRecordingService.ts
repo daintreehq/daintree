@@ -5415,9 +5415,12 @@ class VoiceRecordingService {
   async stopAndSend(): Promise<void> {
     this.initialize();
     if (this.sendActiveSession()) return;
+    // A start still arming had nothing to send, so its cancel says nothing.
+    const hadWords = isActiveVoiceSession(useVoiceRecordingStore.getState().status);
     const stopping = this.stopAnySession();
     if (stopping) {
       await stopping;
+      if (!hadWords) return;
       notify({
         type: "info",
         title: "Dictation stopped",

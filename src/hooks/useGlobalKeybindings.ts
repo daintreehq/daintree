@@ -19,6 +19,14 @@ import { isStagedConfirmation } from "@/services/actions/confirmationStaged";
 import { routeVoiceWaitKey } from "@/lib/voiceWaitKeys";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 
+// The keys a surface that owns its own dictation (Canopy's reply) still lets
+// through: stopping it, and stopping it with a send.
+const DICTATION_KEYS = ["voiceInput.toggle", "voiceInput.stopAndSend"] as const;
+
+function isDictationKey(actionId: string | undefined): boolean {
+  return DICTATION_KEYS.some((key) => key === actionId);
+}
+
 /**
  * Canonical first-step combo of every chord (they all begin `Cmd+K`). Opening
  * this chord shows the command HUD; the service stores it in `eventToCombo`
@@ -94,13 +102,15 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
         if (keybindingService.getPendingChord() !== null) keybindingService.clearPendingChord();
         // One keystroke only: a chord's first key would have to reach the
         // resolver, and with it every other binding the surface keeps out.
-        const matches = (actionId: "canopy.toggle" | "terminal.close" | "voiceInput.toggle") =>
+        const matches = (
+          actionId: "canopy.toggle" | "terminal.close" | (typeof DICTATION_KEYS)[number]
+        ) =>
           keybindingService
             .getTriggerCombos(actionId)
             .some((combo) => !combo.includes(" ") && keybindingService.matchesEvent(e, combo));
         if (
           !matches("canopy.toggle") &&
-          !(ownsDictation && matches("voiceInput.toggle")) &&
+          !(ownsDictation && DICTATION_KEYS.some(matches)) &&
           !(ownsClose && matches("terminal.close"))
         ) {
           return;
@@ -348,7 +358,7 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
       if (
         isolated &&
         result.match?.actionId !== "canopy.toggle" &&
-        !(ownsDictation && result.match?.actionId === "voiceInput.toggle") &&
+        !(ownsDictation && isDictationKey(result.match?.actionId)) &&
         !(ownsClose && result.match?.actionId === "terminal.close")
       ) {
         if (result.chordPrefix) keybindingService.clearPendingChord();

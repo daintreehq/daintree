@@ -164,6 +164,27 @@ describe("useVoiceWaitSubmit", () => {
       expect(sendFromEditor).toHaveBeenCalledTimes(1);
     });
 
+    it("leaves the keyboard where it is for the session panel's send", async () => {
+      useTerminalInputStore.getState().setDraftInput(PANEL_ID, "fix the login bug");
+      const handBack = vi.fn();
+      const claimSendHandBack = vi.fn(() => handBack);
+      renderWaitSubmit(undefined, claimSendHandBack);
+
+      await act(async () => {
+        spokenSendHandler()({ spoken: false });
+      });
+
+      // No claim, and a hand-back of its own that hands nothing back, so the
+      // send can't claim one either.
+      expect(claimSendHandBack).not.toHaveBeenCalled();
+      expect(sendFromEditor).toHaveBeenCalledWith(
+        expect.any(Function),
+        expect.anything(),
+        undefined
+      );
+      expect(sendFromEditor).not.toHaveBeenCalledWith(handBack, expect.anything(), undefined);
+    });
+
     it.each(["", "fix it", "  ok , ! "])("stops but leaves %j unsent", async (draft) => {
       useTerminalInputStore.getState().setDraftInput(PANEL_ID, draft);
       renderWaitSubmit();

@@ -13,7 +13,8 @@ const readLevel = () => useVoiceRecordingStore.getState().audioLevel;
 /**
  * The session panel for the dictation this view owns, fed from its store and
  * service while it is open, so nothing here re-renders the toolbar. The clock
- * is re-read once a second and on every change of state.
+ * and whether it can send are re-read once a second and on every change of
+ * state.
  */
 export function OwnVoiceSessionPanel({
   pauseShortcut,
@@ -45,9 +46,15 @@ export function OwnVoiceSessionPanel({
   const panel = usePanelStore((state) => (target ? state.panelsById[target.panelId] : undefined));
   const { hosts } = useHostList();
   const [clock, setClock] = useState(() => voiceRecordingService.getSessionClock());
+  // Whether a composer is mounted to send from, which nothing announces: read
+  // with the clock.
+  const [canSend, setCanSend] = useState(() => voiceRecordingService.canSendActiveSession());
 
   useEffect(() => {
-    const read = () => setClock(voiceRecordingService.getSessionClock());
+    const read = () => {
+      setClock(voiceRecordingService.getSessionClock());
+      setCanSend(voiceRecordingService.canSendActiveSession());
+    };
     const interval = setInterval(read, CLOCK_READ_INTERVAL_MS);
     const unsubscribe = useVoiceRecordingStore.subscribe((state, prev) => {
       if (state.status !== prev.status) read();
@@ -84,8 +91,7 @@ export function OwnVoiceSessionPanel({
       onStop={onStop}
       sendShortcut={sendShortcut}
       onSend={onSend}
-      // Read with the rest each render, which the clock drives once a second.
-      canSend={voiceRecordingService.canSendActiveSession()}
+      canSend={canSend}
     />
   );
 }
