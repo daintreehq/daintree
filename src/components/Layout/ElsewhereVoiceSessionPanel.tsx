@@ -92,6 +92,8 @@ export function ElsewhereVoiceSessionPanel({
       onGoToTarget={onGoToTarget}
       onTogglePause={onTogglePause}
       onStop={onStop}
+      // The stop happens in the owner's view; this one stays where it is.
+      stopLabel="Stop"
     />
   );
 }

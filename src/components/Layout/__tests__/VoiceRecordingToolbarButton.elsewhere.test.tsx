@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import { VoiceRecordingToolbarButton } from "../VoiceRecordingToolbarButton";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { primeRadix } from "@/components/ui/radix-loader";
+import { elsewherePanelDetails } from "../ElsewhereVoiceSessionPanel";
 import type { VoiceSessionElsewhere, VoiceSessionSnapshot } from "@shared/types";
 
 const service = vi.hoisted(() => ({
@@ -206,6 +207,9 @@ describe("VoiceRecordingToolbarButton — the session panel in a view that doesn
       fireEvent.click(byTestId("voice-session-pause")!);
       expect(service.setSessionElsewherePaused).toHaveBeenLastCalledWith("s1", false);
 
+      // It stops the session where it runs, and takes the person nowhere.
+      expect(byTestId("voice-session-stop")!.textContent).toContain("Stop");
+      expect(byTestId("voice-session-stop")!.textContent).not.toContain("return");
       fireEvent.click(byTestId("voice-session-stop")!);
       expect(service.stopSessionElsewhereById).toHaveBeenCalledWith("s1");
       expect(service.stopActiveSession).not.toHaveBeenCalled();
@@ -261,6 +265,29 @@ describe("VoiceRecordingToolbarButton — the session panel in a view that doesn
     // Ten seconds on from the reading, since it was made at NOW.
     expect(byTestId("voice-session-elapsed")!.textContent).toBe("0:50");
     expect(byTestId("voice-session-detail")!.textContent).toContain("Paused 0:25");
+  });
+
+  it("holds paused time still while the owner records", () => {
+    const session: VoiceSessionElsewhere = {
+      sessionId: "s1",
+      hostId: "studio-01",
+      projectId: "p-a",
+      projectName: "Alpha",
+      details: null,
+    };
+    const at = (isPaused: boolean) =>
+      elsewherePanelDetails(
+        session,
+        snapshot({
+          phase: isPaused ? "paused" : "recording",
+          clock: { at: NOW, elapsedMs: 30_000, pausedMs: 5_000, paused: isPaused, autoStop: null },
+        }),
+        [],
+        NOW + 10_000
+      );
+
+    expect(at(false)).toMatchObject({ elapsedMs: 40_000, pausedMs: 5_000 });
+    expect(at(true)).toMatchObject({ elapsedMs: 40_000, pausedMs: 15_000 });
   });
 
   it("names the host a reply's words go to, and no project where the owner shows none", () => {
