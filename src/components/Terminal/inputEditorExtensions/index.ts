@@ -24,7 +24,14 @@ export {
   revealDictationStart,
   setDictationFollow,
 } from "./dictationFollow";
-export { setVoiceCaret, voiceCaret, voiceCaretField, voiceCaretPosition } from "./voiceCaret";
+export {
+  currentVoiceCaretEffects,
+  requestVoiceCaret,
+  setVoiceCaret,
+  voiceCaret,
+  voiceCaretField,
+  voiceCaretPosition,
+} from "./voiceCaret";
 export type { VoiceCaretAt, VoiceCaretPhase } from "./voiceCaret";
 export type { AutoSizeConfig, ComboboxAttributes, InterimPreview } from "./base";
 

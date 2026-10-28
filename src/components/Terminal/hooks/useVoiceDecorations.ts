@@ -13,7 +13,7 @@ import {
   setDictationFollow,
   setInterimText,
   setPendingAIRanges,
-  setVoiceCaret,
+  requestVoiceCaret,
   VOICE_CARET_LEVEL_PROPERTY,
   type InterimPreview,
   type VoiceCaretAt,
@@ -132,7 +132,8 @@ export function useVoiceDecorations({ terminalId, editorViewRef }: UseVoiceDecor
     view.dispatch({
       effects: [
         setInterimText.of(preview),
-        setVoiceCaret.of(
+        requestVoiceCaret(
+          view,
           caretPhase
             ? { phase: caretPhase, ...(caretAt !== undefined ? { at: caretAt } : {}) }
             : { phase: null }

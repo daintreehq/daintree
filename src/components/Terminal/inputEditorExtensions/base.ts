@@ -304,9 +304,8 @@ export function buildInputBarTheme(theme: ITheme): Extension {
           borderColor: c.successColor,
         },
       },
-      // Where dictation writes (`voiceCaret`). An empty inline, which unlike
-      // an inline-block adds no wrap opportunity, with the line drawn out of
-      // flow, so no text moves. Dotted while the mic comes up or the session
+      // Where dictation writes (`voiceCaret`). An empty inline with the line
+      // drawn out of flow, so no text moves. Dotted while the mic comes up or the session
       // holds, solid once it hears, and only the live caret follows the
       // voice, by opacity alone; reduced motion holds it at full.
       ".cm-voice-caret": {

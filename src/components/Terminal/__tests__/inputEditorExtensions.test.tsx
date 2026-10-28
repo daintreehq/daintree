@@ -1692,8 +1692,7 @@ describe("buildInputBarTheme", () => {
       if (body === undefined) throw new Error(`selector ${selector} not found in CSS`);
       return parseDeclarations(body);
     };
-    // The caret is an empty inline (no inline-block, which would add a wrap
-    // opportunity) with its line drawn out of flow.
+    // The caret takes no width of its own: its line is drawn out of flow.
     expect(rule(".cm-voice-caret").display).toBeUndefined();
     const line = rule(".cm-voice-caret::after");
     expect(line.position).toBe("absolute");

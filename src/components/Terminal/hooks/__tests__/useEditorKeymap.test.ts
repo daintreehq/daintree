@@ -5,7 +5,7 @@ import { Compartment, EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { undo, undoDepth } from "@codemirror/commands";
 import { createComposerHistory } from "../../inputEditorExtensions/composerHistory";
-import { setVoiceCaret, voiceCaret, voiceCaretField } from "../../inputEditorExtensions/voiceCaret";
+import { requestVoiceCaret, voiceCaret } from "../../inputEditorExtensions/voiceCaret";
 import type { Dispatch, SetStateAction } from "react";
 import type { ActiveCompletionContext } from "../../hybridInputParsing";
 import type { AutocompleteItem } from "../../AutocompleteMenu";
@@ -551,28 +551,36 @@ describe("useEditorKeymap", () => {
       view.destroy();
     });
 
-    it("leaves a dictation's caret behind, so a later pop can't bring it back", () => {
+    it.each([
+      ["brings the caret of a session still open back with the draft", true, "live"],
+      ["leaves the caret of a session ended since behind", false, null],
+    ])("%s", (_name, stillOpen, expected) => {
       const view = new EditorView({
         parent: document.createElement("div"),
         state: EditorState.create({ doc: "half a prompt", extensions: [voiceCaret] }),
       });
-      view.dispatch({ effects: setVoiceCaret.of({ phase: "live", at: "end" }) });
-      let stashed: EditorState | undefined;
-      const { handlers } = renderKeymap(makeLatest({ isAutocompleteOpen: false }), {
-        editorViewRef: { current: view },
-        stashEditorState: vi.fn((_id: string, state: EditorState) => {
-          stashed = state;
-        }),
-        popStashedEditorState: vi.fn(() => stashed),
-      });
+      try {
+        view.dispatch({ effects: requestVoiceCaret(view, { phase: "live", at: "end" }) });
+        let stashed: EditorState | undefined;
+        const { handlers } = renderKeymap(makeLatest({ isAutocompleteOpen: false }), {
+          editorViewRef: { current: view },
+          stashEditorState: vi.fn((_id: string, state: EditorState) => {
+            stashed = state;
+          }),
+          popStashedEditorState: vi.fn(() => stashed),
+        });
 
-      expect(handlers.onStash()).toBe(true);
-      expect(handlers.onPopStash()).toBe(true);
+        expect(handlers.onStash()).toBe(true);
+        if (!stillOpen) view.dispatch({ effects: requestVoiceCaret(view, { phase: null }) });
+        expect(handlers.onPopStash()).toBe(true);
 
-      expect(view.state.doc.toString()).toBe("half a prompt");
-      expect(view.state.field(voiceCaretField).phase).toBeNull();
-      expect(view.contentDOM.querySelector(".cm-voice-caret")).toBeNull();
-      view.destroy();
+        expect(view.state.doc.toString()).toBe("half a prompt");
+        expect(
+          view.contentDOM.querySelector<HTMLElement>(".cm-voice-caret")?.dataset.phase ?? null
+        ).toBe(expected);
+      } finally {
+        view.destroy();
+      }
     });
   });
 });

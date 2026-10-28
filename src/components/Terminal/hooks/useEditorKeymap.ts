@@ -7,7 +7,7 @@ import type { ActiveCompletionContext } from "../hybridInputParsing";
 import { currentContextReferenceProvidersEffects } from "../inputEditorExtensions/contextReferenceChip";
 import { clearComposerHistory } from "../inputEditorExtensions/composerHistory";
 import { rescanForgeReferences } from "../inputEditorExtensions/forgeReference";
-import { setVoiceCaret } from "../inputEditorExtensions/voiceCaret";
+import { currentVoiceCaretEffects, setVoiceCaret } from "../inputEditorExtensions/voiceCaret";
 
 /**
  * Where one send goes in place of the composer's own `submitText` and
@@ -363,11 +363,13 @@ export function useEditorKeymap({
       if (!stashed) return false;
       view.setState(stashed);
       // The stashed state carries the editable flag, the chip providers and
-      // the references of when it was stashed; all are brought back to now.
+      // the references of when it was stashed, and none of a dictation's
+      // caret; all are brought back to now.
       view.dispatch({
         effects: [
           editableCompartmentRef.current.reconfigure(EditorView.editable.of(!latest.disabled)),
           ...currentContextReferenceProvidersEffects(view),
+          ...currentVoiceCaretEffects(view),
         ],
       });
       rescanForgeReferences(view);

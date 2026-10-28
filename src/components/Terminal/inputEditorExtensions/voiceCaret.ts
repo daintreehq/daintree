@@ -30,11 +30,38 @@ export interface VoiceCaret {
 
 const HIDDEN: VoiceCaret = { phase: null, at: "end" };
 
-/** `at` left out keeps the last one, mapped through edits since. */
-export const setVoiceCaret = StateEffect.define<{
+interface VoiceCaretRequest {
   phase: VoiceCaretPhase | null;
+  /** Left out, keeps the last one, mapped through edits since. */
   at?: VoiceCaretAt;
-}>();
+}
+
+export const setVoiceCaret = StateEffect.define<VoiceCaretRequest>();
+
+// What the session last asked each composer to show, for a state swapped in
+// from elsewhere (a popped stash), which carries none of it.
+const requested = new WeakMap<EditorView, VoiceCaretRequest>();
+
+/** The effect showing `request`, remembered for `currentVoiceCaretEffects`. */
+export function requestVoiceCaret(
+  view: EditorView,
+  request: VoiceCaretRequest
+): StateEffect<VoiceCaretRequest> {
+  requested.set(view, request);
+  return setVoiceCaret.of(request);
+}
+
+/**
+ * The session's caret for a state just swapped in. A position belongs to the
+ * text it was taken in, so one at an anchor shows at the end until the next
+ * pass over the draft places it.
+ */
+export function currentVoiceCaretEffects(view: EditorView): StateEffect<VoiceCaretRequest>[] {
+  const request = requested.get(view);
+  if (!request?.phase) return [];
+  const at = typeof request.at === "number" ? undefined : request.at;
+  return [setVoiceCaret.of({ phase: request.phase, ...(at !== undefined ? { at } : {}) })];
+}
 
 export const voiceCaretField = StateField.define<VoiceCaret>({
   create() {
