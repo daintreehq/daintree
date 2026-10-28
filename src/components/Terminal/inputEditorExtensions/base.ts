@@ -326,7 +326,7 @@ export function buildInputBarTheme(theme: ITheme): Extension {
         bottom: "1px",
         left: "6px",
         width: "3px",
-        borderRadius: "1px",
+        borderRadius: "var(--radius-xs)",
       },
       ".cm-voice-caret::before": {
         // The expanded editor portals outside the shell that sets `--ib-fg`.
