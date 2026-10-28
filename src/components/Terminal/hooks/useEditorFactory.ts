@@ -29,6 +29,7 @@ import {
   forgeReferenceField,
   createForgeReferenceTooltip,
   interimWidgetField,
+  dictationFollow,
   createCaretTracker,
   pendingAIField,
   voiceRewriteTracker,
@@ -192,6 +193,7 @@ export function useEditorFactory({
           !disabled ? createForgeReferenceTooltip() : []
         ),
         interimWidgetField,
+        dictationFollow,
         createCaretTracker(() => draftKeyRef.current),
         pendingAIField,
         voiceRewriteTracker,

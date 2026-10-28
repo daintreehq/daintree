@@ -20,6 +20,7 @@ import {
   createComposerHistory,
   fileDropChipField,
   imageChipField,
+  outsideDraftWrite,
   readImageChipPaths,
 } from "../inputEditorExtensions";
 
@@ -255,5 +256,16 @@ describe("chips through undo", () => {
     expect(view.state.field(fileDropChipField).map((e) => [e.from, e.to, e.filePath])).toEqual([
       [0, token.length, "/repo/src/app.ts"],
     ]);
+  });
+});
+
+describe("outsideDraftWrite", () => {
+  it("scrolls to the caret it places, unless the write leaves the caret to the user", () => {
+    const change = { from: 0, insert: "dictated " };
+    expect(outsideDraftWrite(change, "dictated draft", null).scrollIntoView).toBe(true);
+    // Dictation is followed on its own, and a cleanup lands where it shows.
+    expect(
+      outsideDraftWrite(change, "dictated draft", null, { keepsCaret: true }).scrollIntoView
+    ).toBe(false);
   });
 });

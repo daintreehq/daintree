@@ -69,18 +69,28 @@ export function createComposerHistory(): Extension {
  * one already under review stays there while the write leaves it alone. The
  * caret goes to the end of the draft unless `selection` places it. A landed
  * correction a newer dictation has put behind the user comes in unreviewed.
+ * A write that leaves the caret to the user (`keepsCaret`) doesn't scroll to
+ * it either: dictation is followed by `dictationFollow`, and a cleanup lands
+ * where the composer already shows it.
  */
 export function outsideDraftWrite(
   change: ChangeSpec,
   draft: string,
   landed: CorrectionReview | null,
-  selection: { anchor: number; head?: number } = { anchor: draft.length },
-  reviewed = true
+  {
+    selection = { anchor: draft.length },
+    reviewed = true,
+    keepsCaret = false,
+  }: {
+    selection?: { anchor: number; head?: number };
+    reviewed?: boolean;
+    keepsCaret?: boolean;
+  } = {}
 ): TransactionSpec {
   return {
     changes: change,
     selection,
-    scrollIntoView: true,
+    scrollIntoView: !keepsCaret,
     effects: landed ? correctionLandingEffects(landed, reviewed) : [],
     annotations: [isolateHistory.of("full"), outsideWrite.of(true)],
   };

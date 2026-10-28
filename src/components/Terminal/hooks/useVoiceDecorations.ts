@@ -1,18 +1,22 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import type { EditorView } from "@codemirror/view";
 import { useVoiceRecordingStore } from "@/store";
 import type { VoiceCorrectionRange } from "@/store/voiceRecordingStore";
 import { useDictationRangeStore } from "@/store/dictationRangeStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { planVoiceWords } from "@/services/voiceInsertion";
+import { isActiveVoiceSession } from "@shared/types";
 import {
   interimWidgetField,
+  revealDictationStart,
+  setDictationFollow,
   setInterimText,
   setPendingAIRanges,
   type InterimPreview,
 } from "../inputEditorExtensions";
 
 const NO_RANGES: VoiceCorrectionRange[] = [];
+const NOT_DICTATING = { session: null };
 
 interface UseVoiceDecorationsParams {
   terminalId: string;
@@ -28,6 +32,13 @@ export function useVoiceDecorations({ terminalId, editorViewRef }: UseVoiceDecor
   const recordingRewrite = useVoiceRecordingStore(
     (s) => s.activeTarget?.panelId === terminalId && s.activeTarget.rewrite !== undefined
   );
+  // A session taking words into this draft, until it has drained.
+  const dictating = useVoiceRecordingStore(
+    (s) =>
+      s.activeTarget?.panelId === terminalId &&
+      s.activeTarget.rewrite === undefined &&
+      isActiveVoiceSession(s.status)
+  );
   const correctionRanges = useVoiceRecordingStore(
     (s) => s.panelBuffers[terminalId]?.correctionRanges ?? NO_RANGES
   );
@@ -38,18 +49,22 @@ export function useVoiceDecorations({ terminalId, editorViewRef }: UseVoiceDecor
   const anchor = useDictationRangeStore((s) =>
     sessionId ? s.getAnchor({ sessionId, panelId: terminalId, projectId }) : null
   );
+  // Sessions whose cleanup has been shown from the start of its passage.
+  const revealedRef = useRef(new Set<string>());
 
   useEffect(() => {
     const view = editorViewRef.current;
     if (!view) return;
 
+    const draft = useTerminalInputStore.getState().getDraftInput(terminalId, projectId);
+    // Store positions only mean something in the text they were taken in.
+    const inStep = view.state.doc.toString() === draft;
+
     let preview: InterimPreview = { text: "", pos: null };
     if (transcriptPhase === "interim" && liveText.length > 0 && !recordingRewrite) {
-      const draft = useTerminalInputStore.getState().getDraftInput(terminalId, projectId);
-      // Store positions only mean something in the text they were taken in.
       // While the editor and the store disagree (a keystroke on its way to the
       // store), the preview stays where it was, mapped through the typing.
-      if (anchor && view.state.doc.toString() === draft) {
+      if (anchor && inStep) {
         // Shown as it will be written, spacing included, where it will go.
         const { change } = planVoiceWords(draft, anchor, liveText);
         preview = { text: change.insert, pos: change.from };
@@ -66,10 +81,7 @@ export function useVoiceDecorations({ terminalId, editorViewRef }: UseVoiceDecor
     // A rewrite hides the words under it, so it is only drawn over the text
     // its positions were taken in; until the editor and the store agree, the
     // passage shows as dictated.
-    const rewritesHold =
-      pendingRanges.some((range) => range.rewrite) &&
-      view.state.doc.toString() ===
-        useTerminalInputStore.getState().getDraftInput(terminalId, projectId);
+    const rewritesHold = pendingRanges.some((range) => range.rewrite) && inStep;
     const shownRanges = pendingRanges.map((range) =>
       range.rewrite &&
       (!rewritesHold || range.rewrite.to <= range.from || range.rewrite.to > range.to)
@@ -77,15 +89,39 @@ export function useVoiceDecorations({ terminalId, editorViewRef }: UseVoiceDecor
         : range
     );
 
+    // A cleanup beginning shows its passage from the start, once per session,
+    // after the dictation it cleans up has stopped.
+    const revealed = revealedRef.current;
+    if (correctionRanges.length === 0) revealed.clear();
+    let revealAt: number | null = null;
+    if (!dictating && inStep) {
+      for (const range of pendingRanges) {
+        if (!range.session || revealed.has(range.session)) continue;
+        if (revealAt === null || range.from < revealAt) revealAt = range.from;
+      }
+      for (const range of pendingRanges) if (range.session) revealed.add(range.session);
+    }
+
     view.dispatch({
-      effects: [setInterimText.of(preview), setPendingAIRanges.of(shownRanges)],
+      effects: [
+        setInterimText.of(preview),
+        setPendingAIRanges.of(shownRanges),
+        setDictationFollow.of(
+          dictating && sessionId
+            ? { session: sessionId, ...(anchor && inStep ? { end: anchor.from } : {}) }
+            : NOT_DICTATING
+        ),
+        ...(revealAt !== null ? [revealDictationStart.of(revealAt)] : []),
+      ],
     });
   }, [
     transcriptPhase,
     liveText,
     recordingRewrite,
+    dictating,
     correctionRanges,
     anchor,
+    sessionId,
     terminalId,
     projectId,
     editorViewRef,
