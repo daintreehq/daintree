@@ -7,7 +7,8 @@ import { render, fireEvent, act } from "@testing-library/react";
 import { VoiceRecordingToolbarButton } from "../VoiceRecordingToolbarButton";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { useScratchStore } from "@/store/scratchStore";
-import type { Scratch } from "@shared/types";
+import type { Scratch, VoiceSessionDetails } from "@shared/types";
+import { setElsewhereLevel } from "@/services/voiceElsewhereLevel";
 import { readToolbarSource } from "./toolbarSource";
 
 const BUTTON_PATH = path.resolve(__dirname, "../VoiceRecordingToolbarButton.tsx");
@@ -237,6 +238,8 @@ describe("VoiceRecordingToolbarButton — dictation in another view (#14601)", (
         hostId: "local",
         projectId: "p-a",
         projectName: "Alpha",
+        provider: null,
+        details: null,
       },
     });
     const { getByTestId } = render(<VoiceRecordingToolbarButton />);
@@ -270,6 +273,8 @@ describe("VoiceRecordingToolbarButton — dictation in another view (#14601)", (
         hostId: "local",
         projectId: scratchId,
         projectName: null,
+        provider: null,
+        details: null,
       },
     });
     const { getByTestId } = render(<VoiceRecordingToolbarButton />);
@@ -282,7 +287,16 @@ describe("VoiceRecordingToolbarButton — dictation in another view (#14601)", (
 
   it("says only that it runs elsewhere when the workspace has no known name", () => {
     useVoiceRecordingStore.setState({
-      sessionElsewhere: { sessionId: "s1", hostId: "local", projectId: null, projectName: null },
+      sessionElsewhere: {
+        sessionId: "s1",
+        hostId: "local",
+        projectId: null,
+        projectName: null,
+        provider: null,
+        details: null,
+      },
+      provider: null,
+      details: null,
     });
     const { getByTestId } = render(<VoiceRecordingToolbarButton />);
 
@@ -301,6 +315,8 @@ describe("VoiceRecordingToolbarButton — dictation in another view (#14601)", (
         hostId: "local",
         projectId: "p-a",
         projectName: "Alpha",
+        provider: null,
+        details: null,
       },
     });
     const { queryByTestId, container } = render(<VoiceRecordingToolbarButton />);
@@ -321,6 +337,8 @@ describe("VoiceRecordingToolbarButton — dictation in another view (#14601)", (
         hostId: "local",
         projectId: "p-a",
         projectName: "Alpha",
+        provider: null,
+        details: null,
       },
     });
     const { getByTestId, queryByTestId } = render(<VoiceRecordingToolbarButton />);
@@ -376,6 +394,8 @@ describe("VoiceRecordingToolbarButton — dictation on another host (#14773)", (
         hostId: "studio-01",
         projectId: "proj-r",
         projectName: "Remote R",
+        provider: null,
+        details: null,
       },
     });
 
@@ -390,6 +410,8 @@ describe("VoiceRecordingToolbarButton — dictation on another host (#14773)", (
         hostId: "studio-01",
         projectId: "proj-r",
         projectName: "Remote R",
+        provider: null,
+        details: null,
       },
     });
 
@@ -404,6 +426,8 @@ describe("VoiceRecordingToolbarButton — dictation on another host (#14773)", (
         hostId: "local",
         projectId: "p-a",
         projectName: "Alpha",
+        provider: null,
+        details: null,
       },
     });
 
@@ -418,6 +442,8 @@ describe("VoiceRecordingToolbarButton — dictation on another host (#14773)", (
         hostId: "studio-09",
         projectId: null,
         projectName: null,
+        provider: null,
+        details: null,
       },
     });
 
@@ -434,10 +460,210 @@ describe("VoiceRecordingToolbarButton — dictation on another host (#14773)", (
         hostId: "studio-01",
         projectId: scratchId,
         projectName: null,
+        provider: null,
+        details: null,
       },
     });
 
     expect(label()).toBe("Dictating on Studio. Click to go there.");
+  });
+});
+
+describe("VoiceRecordingToolbarButton — dictation another view owns looks like the owner's (#14921)", () => {
+  const originalPlatform = navigator.platform;
+  const frames = new Map<number, FrameRequestCallback>();
+  let nextFrameId = 0;
+  let now = 0;
+
+  const details = (overrides: Partial<VoiceSessionDetails> = {}): VoiceSessionDetails => ({
+    status: "recording",
+    kind: "dictation",
+    panelTitle: "Claude",
+    worktreeLabel: "main",
+    agentId: "claude",
+    locked: false,
+    correctionEnabled: false,
+    micDeviceLabel: "MacBook Pro Microphone",
+    micSignal: "live",
+    micNotice: null,
+    pauseStopWarning: false,
+    idleStopWarning: false,
+    wordCount: 3,
+    elapsed: { seconds: 5, at: 0, ticking: true },
+    ...overrides,
+  });
+
+  // The session's host, and the host of the view looking at it.
+  const pairings = [
+    {
+      name: "on this Mac, seen from a host",
+      hostId: "local",
+      viewHost: "studio-01",
+      place: "in Alpha on This Mac",
+    },
+    {
+      name: "on a host, seen from this Mac",
+      hostId: "studio-01",
+      viewHost: null,
+      place: "in Alpha on Studio",
+    },
+    {
+      name: "on one host, seen from another",
+      hostId: "studio-01",
+      viewHost: "studio-02",
+      place: "in Alpha on Studio",
+    },
+    {
+      name: "in another project on the same host",
+      hostId: "studio-01",
+      viewHost: "studio-01",
+      place: "in Alpha on Studio",
+    },
+  ];
+
+  function show(pairing: (typeof pairings)[number], value: VoiceSessionDetails | null) {
+    if (pairing.viewHost) Reflect.set(window, "__DAINTREE_HOST_ID__", { id: pairing.viewHost });
+    useVoiceRecordingStore.setState({
+      sessionElsewhere: {
+        sessionId: "s1",
+        hostId: pairing.hostId,
+        projectId: "p-a",
+        projectName: "Alpha",
+        provider: "openai",
+        details: value,
+      },
+    });
+    return render(<VoiceRecordingToolbarButton />);
+  }
+
+  const waveOf = (container: HTMLElement) =>
+    container.querySelector("[data-voice-wave]")?.getAttribute("data-voice-wave") ?? null;
+  const barScales = (container: HTMLElement) =>
+    Array.from(container.querySelectorAll<HTMLElement>("[data-voice-wave] > span")).map((bar) =>
+      Number(bar.style.transform.match(/scaleY\(([\d.]+)\)/)?.[1])
+    );
+  function runFrames(count: number) {
+    for (let i = 0; i < count; i++) {
+      now += 16;
+      const pending = [...frames.values()];
+      frames.clear();
+      act(() => {
+        pending.forEach((cb) => cb(now));
+      });
+    }
+  }
+
+  beforeEach(() => {
+    frames.clear();
+    nextFrameId = 0;
+    now = 0;
+    motion.reduced = false;
+    mockCombo = "Cmd+.";
+    hostList.hosts = [{ descriptor: { id: "studio-01", name: "Studio" } }];
+    Object.defineProperty(navigator, "platform", { configurable: true, value: "MacIntel" });
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((cb) => {
+      frames.set(++nextFrameId, cb);
+      return nextFrameId;
+    });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => {
+      frames.delete(id);
+    });
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    useVoiceRecordingStore.setState({
+      isConfigured: true,
+      status: "idle",
+      activeTarget: null,
+      pendingTarget: null,
+      lockedTarget: null,
+      audioLevel: 0,
+    });
+  });
+
+  afterEach(() => {
+    motion.reduced = true;
+    vi.restoreAllMocks();
+    setElsewhereLevel(null);
+    hostList.hosts = [];
+    useVoiceRecordingStore.setState({ sessionElsewhere: null });
+    Reflect.deleteProperty(window, "__DAINTREE_HOST_ID__");
+    Object.defineProperty(navigator, "platform", { configurable: true, value: originalPlatform });
+  });
+
+  describe.each(pairings)("a session $name", (pairing) => {
+    it.each([
+      { status: "recording", micSignal: "live", wave: "level", state: "Dictating" },
+      { status: "connecting", micSignal: "pending", wave: "waiting", state: "Starting microphone" },
+      {
+        status: "recording",
+        micSignal: "silent",
+        wave: "waiting",
+        state: "No audio from microphone",
+      },
+      { status: "paused", micSignal: "live", wave: "held", state: "Dictation paused" },
+      {
+        status: "reconnecting",
+        micSignal: "live",
+        wave: "waiting",
+        state: "Reconnecting dictation",
+      },
+      { status: "finishing", micSignal: "live", wave: "waiting", state: "Finishing dictation" },
+    ] as const)("shows $status with the mic $micSignal as the owner does", (c) => {
+      const { getByTestId, container } = show(
+        pairing,
+        details({ status: c.status, micSignal: c.micSignal })
+      );
+
+      expect(waveOf(container)).toBe(c.wave);
+      expect(getByTestId("voice-elsewhere-button").getAttribute("aria-label")).toBe(
+        `${c.state} ${pairing.place}. Click to go there.`
+      );
+    });
+
+    it("moves its bars with the level main relays, not this view's own", () => {
+      const { container } = show(pairing, details());
+      runFrames(20);
+      expect(Math.max(...barScales(container))).toBeLessThanOrEqual(0.31);
+
+      // This view's own meter reading says nothing about another view's mic.
+      useVoiceRecordingStore.setState({ audioLevel: 0.9 });
+      runFrames(20);
+      expect(Math.max(...barScales(container))).toBeLessThanOrEqual(0.31);
+
+      for (let i = 0; i < 5; i++) {
+        setElsewhereLevel({ sessionId: "s1", level: 0.8 }, now);
+        runFrames(6);
+      }
+      expect(Math.max(...barScales(container))).toBeGreaterThan(0.8);
+    });
+  });
+
+  it("ignores a level reading for another session", () => {
+    const { container } = show(pairings[0]!, details());
+    for (let i = 0; i < 5; i++) {
+      setElsewhereLevel({ sessionId: "old", level: 0.9 }, now);
+      runFrames(6);
+    }
+    expect(Math.max(...barScales(container))).toBeLessThanOrEqual(0.31);
+  });
+
+  it("falls to rest once readings stop coming", () => {
+    const { container } = show(pairings[0]!, details());
+    setElsewhereLevel({ sessionId: "s1", level: 0.9 }, now);
+    runFrames(10);
+    expect(Math.max(...barScales(container))).toBeGreaterThan(0.6);
+
+    runFrames(60);
+    expect(Math.max(...barScales(container))).toBeLessThanOrEqual(0.31);
+  });
+
+  it("stays the bare mic until the owner's first report lands", () => {
+    const { getByTestId, container } = show(pairings[1]!, null);
+
+    expect(waveOf(container)).toBeNull();
+    expect(getByTestId("voice-elsewhere-button").getAttribute("aria-label")).toBe(
+      "Dictating in Alpha on Studio. Click to go there."
+    );
+    expect(frames.size).toBe(0);
   });
 });
 
@@ -481,6 +707,8 @@ describe("VoiceRecordingToolbarButton polish — issue #8176", () => {
           activeTarget: null,
           lockedTarget: null,
           sessionElsewhere: { sessionId: "s1", hostId: "local", projectId: "p", projectName: "A" },
+          provider: null,
+          details: null,
         },
         {
           status: "recording",
@@ -556,8 +784,8 @@ describe("VoiceRecordingToolbarButton polish — issue #8176", () => {
       expect(source).toMatch(/useVoiceRecordingStore\.getState\(\)\.audioLevel/);
     });
 
-    it("RAF effect deps are the wave's mode only — an object dep would restart the loop on every render", () => {
-      expect(source).toMatch(/},\s*\[mode\]\);/);
+    it("RAF effect deps are the wave's mode and session id only — an object dep would restart the loop on every render", () => {
+      expect(source).toMatch(/},\s*\[mode, elsewhereSessionId\]\);/);
     });
 
     it("gates showLevel on isActive so a status race with a cleared activeTarget cannot run a ghost loop", () => {
