@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FocusEvent, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { Clock, Lock, Mic, Pause } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -550,25 +550,24 @@ function VoiceSessionButton({
   const leavingRef = useRef(false);
   // The keyboard is on the mic or in its panel. A session that ends under it
   // takes both away, so the keyboard goes to whatever takes the slot.
-  // Whether it showed its ring there, so the successor shows one only for a
-  // keyboard that had one.
   const holdsFocusRef = useRef(false);
-  const focusVisibleRef = useRef(false);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   // The toggle shortcut would start a new session when focused elsewhere; the
   // pause shortcut is the resume affordance the user actually wants.
   const actionCombo = isPaused ? pauseShortcut : shortcut;
 
-  useEffect(() => {
+  // A layout cleanup, so the focused element is still in the document: whether
+  // it shows its ring now decides whether the successor shows one.
+  useLayoutEffect(() => {
     const toolbar = triggerRef.current?.closest('[role="toolbar"]') ?? null;
     return () => {
       if (!holdsFocusRef.current || !toolbar) return;
+      const visible = document.activeElement?.matches(":focus-visible") ?? false;
       requestAnimationFrame(() => {
         const active = document.activeElement;
         if (active && active !== document.body) return;
         const successor = toolbar.querySelector<HTMLElement>(VOICE_SLOT_SUCCESSOR_SELECTOR);
         if (!successor) return;
-        const visible = focusVisibleRef.current;
         // A pointer user didn't ask for the successor's tooltip either.
         if (!visible) armTooltipFocusSuppression();
         successor.focus({ preventScroll: true, focusVisible: visible });
@@ -577,9 +576,8 @@ function VoiceSessionButton({
   }, []);
 
   const focusHandlers = {
-    onFocus: (event: FocusEvent<HTMLElement>) => {
+    onFocus: () => {
       holdsFocusRef.current = true;
-      focusVisibleRef.current = event.target.matches(":focus-visible");
     },
     onBlur: () => {
       holdsFocusRef.current = false;
@@ -614,7 +612,7 @@ function VoiceSessionButton({
               <Button
                 {...hover}
                 onFocus={(event) => {
-                  focusHandlers.onFocus(event);
+                  focusHandlers.onFocus();
                   hover.onFocus(event);
                 }}
                 onBlur={() => {

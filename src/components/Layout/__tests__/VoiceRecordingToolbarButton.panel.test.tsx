@@ -246,28 +246,45 @@ describe("VoiceRecordingToolbarButton — the session panel (#14920)", () => {
     }
   });
 
-  it("hands the keyboard to the lock's button when the session ends under it", async () => {
-    startSession();
-    useVoiceRecordingStore.setState({
-      lockedTarget: { panelId: "p-1", panelTitle: "claude · notes" },
-    });
-    render(
-      <div role="toolbar">
-        <VoiceRecordingToolbarButton />
-      </div>
-    );
-    openPanel();
-    expect(panel()!.contains(document.activeElement)).toBe(true);
+  it.each([
+    { modality: "pointer", ringed: false },
+    { modality: "keyboard", ringed: true },
+  ])(
+    "hands the keyboard to the lock's button when the session ends under it ($modality)",
+    async ({ ringed }) => {
+      // What the browser's heuristic says of the focused row as the session
+      // ends; jsdom has no heuristic of its own.
+      const matches = Element.prototype.matches;
+      vi.spyOn(Element.prototype, "matches").mockImplementation(function (
+        this: Element,
+        selector: string
+      ) {
+        return selector === ":focus-visible" ? ringed : matches.call(this, selector);
+      });
+      startSession();
+      useVoiceRecordingStore.setState({
+        lockedTarget: { panelId: "p-1", panelTitle: "claude · notes" },
+      });
+      render(
+        <div role="toolbar">
+          <VoiceRecordingToolbarButton />
+        </div>
+      );
+      openPanel();
+      expect(panel()!.contains(document.activeElement)).toBe(true);
 
-    act(() => {
-      useVoiceRecordingStore.setState({ status: "idle", activeTarget: null });
-    });
-    const locked = document.querySelector('[data-testid="voice-locked-button"]');
-    expect(locked).not.toBeNull();
-    await vi.waitFor(() => expect(document.activeElement).toBe(locked));
-    // Focus that wasn't the keyboard's to see doesn't pull the lock's tooltip up.
-    expect(isTooltipSuppressedForElement(locked)).toBe(true);
-  });
+      act(() => {
+        useVoiceRecordingStore.setState({ status: "idle", activeTarget: null });
+      });
+      const locked = document.querySelector('[data-testid="voice-locked-button"]');
+      if (!(locked instanceof HTMLButtonElement)) throw new Error("No lock button");
+      const focus = vi.spyOn(locked, "focus");
+      await vi.waitFor(() => expect(document.activeElement).toBe(locked));
+      // A ring only for a keyboard that had one, and no tooltip a pointer didn't ask for.
+      expect(focus).toHaveBeenCalledWith({ preventScroll: true, focusVisible: ringed });
+      if (!ringed) expect(isTooltipSuppressedForElement(locked)).toBe(true);
+    }
+  );
 
   it("leaves the keyboard alone when the session ends somewhere it isn't", async () => {
     startSession();
