@@ -273,9 +273,13 @@ describe("HybridInputBar dictation caret", () => {
       useVoiceRecordingStore.getState().setStatus("recording");
     });
     record();
+    await act(async () => useVoiceRecordingStore.getState().setMicSignal("silent"));
+    record();
     await act(async () => useVoiceRecordingStore.getState().setMicSignal("live"));
     record();
     await act(async () => useVoiceRecordingStore.getState().setStatus("paused"));
+    record();
+    await act(async () => useVoiceRecordingStore.getState().setStatus("finishing"));
     record();
     await act(async () => useVoiceRecordingStore.getState().finishSession());
     record();
@@ -283,8 +287,10 @@ describe("HybridInputBar dictation caret", () => {
     expect(seen).toEqual([
       ["Ask Claude", null],
       ["Starting microphone…", "starting"],
+      ["No audio from microphone", "starting"],
       ["Listening…", "live"],
       ["Paused · Resume to continue", "held"],
+      ["Finishing transcription…", "held"],
       ["Ask Claude", null],
     ]);
   });

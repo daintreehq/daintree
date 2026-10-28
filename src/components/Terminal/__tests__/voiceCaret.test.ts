@@ -92,18 +92,23 @@ describe("voiceCaret", () => {
     show(view, "starting", "caret");
     expect(textBefore(view)).toBe("fix ");
 
-    (document.activeElement as HTMLElement | null)?.blur();
+    view.contentDOM.blur();
     view.dispatch({ effects: [] });
     expect(view.hasFocus).toBe(false);
     expect(textBefore(view)).toBe("fix ");
   });
 
-  it("starts a selection's replacement where the selection begins", () => {
+  it.each([
+    [8, 4],
+    [4, 8],
+  ])("starts a selection's replacement where it begins (anchor %i, head %i)", (anchor, head) => {
     const view = mount("fix the bug", 0);
     view.focus();
-    view.dispatch({ selection: EditorSelection.range(8, 4) });
+    view.dispatch({ selection: EditorSelection.range(anchor, head) });
     show(view, "live", "caret");
     expect(textBefore(view)).toBe("fix ");
+    // A selection shows as a selection: the editor's caret isn't hidden for it.
+    expect(covers(view)).toBe(false);
   });
 
   it("stays at the session's anchor, mapped through edits before it", () => {
@@ -117,13 +122,20 @@ describe("voiceCaret", () => {
     expect(textBefore(view)).toBe("please fix the");
   });
 
-  it("sits past the dictation's preview while one shows", () => {
+  it("sits past the dictation's preview while one shows, wherever the preview is", () => {
     const view = mount("fix the bug");
-    show(view, "live", 7);
+    show(view, "live", 3);
     view.dispatch({ effects: setInterimText.of({ text: " login", pos: 7 }) });
     expect(textBefore(view)).toBe("fix the login");
     view.dispatch({ effects: setInterimText.of({ text: "", pos: null }) });
-    expect(textBefore(view)).toBe("fix the");
+    expect(textBefore(view)).toBe("fix");
+  });
+
+  it("follows a preview with no position of its own to the end of the draft", () => {
+    const view = mount("fix the bug");
+    show(view, "live", 3);
+    view.dispatch({ effects: setInterimText.of({ text: " now", pos: null }) });
+    expect(textBefore(view)).toBe("fix the bug now");
   });
 
   it("shows ahead of an empty draft's placeholder", () => {

@@ -126,9 +126,27 @@ class VoiceCaretView {
     this.compute(view);
   }
 
+  private refresh: ReturnType<typeof setTimeout> | null = null;
+
   update(update: ViewUpdate): void {
     if (update.view.hasFocus) this.everFocused = true;
     this.compute(update.view);
+  }
+
+  /**
+   * Composing hides the caret, and a composition can end without a
+   * transaction after it: redraw once CodeMirror has let go of it.
+   */
+  compositionEnded(view: EditorView): void {
+    if (this.refresh !== null) clearTimeout(this.refresh);
+    this.refresh = setTimeout(() => {
+      this.refresh = null;
+      if (!view.composing && view.state.field(voiceCaretField).phase !== null) view.dispatch({});
+    });
+  }
+
+  destroy(): void {
+    if (this.refresh !== null) clearTimeout(this.refresh);
   }
 
   private compute(view: EditorView): void {
@@ -151,6 +169,11 @@ class VoiceCaretView {
 
 const voiceCaretPlugin = ViewPlugin.fromClass(VoiceCaretView, {
   decorations: (v) => v.decorations,
+  eventHandlers: {
+    compositionend(_event, view) {
+      this.compositionEnded(view);
+    },
+  },
 });
 
 const voiceCaretAttributes = EditorView.editorAttributes.of((view) =>

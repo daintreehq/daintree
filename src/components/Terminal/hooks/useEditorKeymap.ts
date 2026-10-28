@@ -7,6 +7,7 @@ import type { ActiveCompletionContext } from "../hybridInputParsing";
 import { currentContextReferenceProvidersEffects } from "../inputEditorExtensions/contextReferenceChip";
 import { clearComposerHistory } from "../inputEditorExtensions/composerHistory";
 import { rescanForgeReferences } from "../inputEditorExtensions/forgeReference";
+import { setVoiceCaret } from "../inputEditorExtensions/voiceCaret";
 
 /**
  * Where one send goes in place of the composer's own `submitText` and
@@ -341,7 +342,10 @@ export function useEditorKeymap({
       if (doc.length === 0) return true;
       const latest = latestRef.current;
       if (!latest) return false;
-      stashEditorState(latest.terminalId, view.state, latest.projectId);
+      // A dictation's caret is the session's, not the draft's: a stash popped
+      // after the session ends must not bring it back.
+      const stashed = view.state.update({ effects: setVoiceCaret.of({ phase: null }) }).state;
+      stashEditorState(latest.terminalId, stashed, latest.projectId);
       view.dispatch({
         changes: { from: 0, to: view.state.doc.length, insert: "" },
         selection: EditorSelection.cursor(0),

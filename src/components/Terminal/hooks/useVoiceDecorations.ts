@@ -7,7 +7,6 @@ import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { insertionSpan, planVoiceWords } from "@/services/voiceInsertion";
 import { isHeldBackSession } from "@/services/voiceDraftSend";
 import { isActiveVoiceSession } from "@shared/types";
-import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
 import {
   interimWidgetField,
   revealDictationStart,
@@ -163,14 +162,13 @@ export function useVoiceDecorations({ terminalId, editorViewRef }: UseVoiceDecor
 
   // The live caret's opacity follows the voice. Level arrives at frame rate,
   // so it is written straight to the editor, never through React or a
-  // transaction. Reduced motion holds it at full, read per update so flipping
-  // the preference mid-dictation takes effect at once.
+  // transaction.
   useEffect(() => {
     const view = editorViewRef.current;
     if (!view || caretPhase !== "live") return;
     const dom = view.dom;
     const write = (level: number) => {
-      const shown = prefersReducedMotion() ? 1 : Math.min(1, Math.max(0, level));
+      const shown = Math.min(1, Math.max(0, level));
       dom.style.setProperty(VOICE_CARET_LEVEL_PROPERTY, shown.toFixed(3));
     };
     write(useVoiceRecordingStore.getState().audioLevel);

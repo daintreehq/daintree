@@ -5,6 +5,7 @@ import { Compartment, EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { undo, undoDepth } from "@codemirror/commands";
 import { createComposerHistory } from "../../inputEditorExtensions/composerHistory";
+import { setVoiceCaret, voiceCaret, voiceCaretField } from "../../inputEditorExtensions/voiceCaret";
 import type { Dispatch, SetStateAction } from "react";
 import type { ActiveCompletionContext } from "../../hybridInputParsing";
 import type { AutocompleteItem } from "../../AutocompleteMenu";
@@ -547,6 +548,30 @@ describe("useEditorKeymap", () => {
       expect(view.state.doc.toString()).toBe("half a prompt");
       expect(undo(view)).toBe(true);
       expect(view.state.doc.toString()).toBe("");
+      view.destroy();
+    });
+
+    it("leaves a dictation's caret behind, so a later pop can't bring it back", () => {
+      const view = new EditorView({
+        parent: document.createElement("div"),
+        state: EditorState.create({ doc: "half a prompt", extensions: [voiceCaret] }),
+      });
+      view.dispatch({ effects: setVoiceCaret.of({ phase: "live", at: "end" }) });
+      let stashed: EditorState | undefined;
+      const { handlers } = renderKeymap(makeLatest({ isAutocompleteOpen: false }), {
+        editorViewRef: { current: view },
+        stashEditorState: vi.fn((_id: string, state: EditorState) => {
+          stashed = state;
+        }),
+        popStashedEditorState: vi.fn(() => stashed),
+      });
+
+      expect(handlers.onStash()).toBe(true);
+      expect(handlers.onPopStash()).toBe(true);
+
+      expect(view.state.doc.toString()).toBe("half a prompt");
+      expect(view.state.field(voiceCaretField).phase).toBeNull();
+      expect(view.contentDOM.querySelector(".cm-voice-caret")).toBeNull();
       view.destroy();
     });
   });

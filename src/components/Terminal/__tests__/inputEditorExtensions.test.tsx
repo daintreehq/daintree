@@ -1686,22 +1686,30 @@ describe("buildInputBarTheme", () => {
   it("draws the dictation caret dotted until the mic hears, then solid and level-driven", () => {
     const css = readGeneratedCss([buildInputBarTheme(theme)]);
     const colors = resolveInputBarColors(theme);
-    const base = parseDeclarations(extractRuleBody(css, ".cm-voice-caret"));
-    expect(base["border-left"]).toBe(`2px dotted ${colors.voiceSignal}`);
-    // Zero advance: the margins take back the border, so no text moves.
-    expect(
-      parseFloat(base.width!) +
-        2 +
-        parseFloat(base["margin-left"]!) +
-        parseFloat(base["margin-right"]!)
-    ).toBe(0);
-    const phase = (name: string) =>
-      parseDeclarations(extractRuleBody(css, `.cm-voice-caret[data-phase="${name}"]`));
-    expect(phase("live")["border-left-style"]).toBe("solid");
-    expect(phase("live").opacity).toContain(`var(${VOICE_CARET_LEVEL_PROPERTY}, 1)`);
-    expect(phase("held")["border-left-color"]).toBe(colors.voiceHeld.toLowerCase());
+    const rule = (selector: string) => {
+      const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const body = css.match(new RegExp(`\\.ͼ\\w+ ${escaped}\\s*\\{([^}]*)\\}`))?.[1];
+      if (body === undefined) throw new Error(`selector ${selector} not found in CSS`);
+      return parseDeclarations(body);
+    };
+    // The caret is an empty inline (no inline-block, which would add a wrap
+    // opportunity) with its line drawn out of flow.
+    expect(rule(".cm-voice-caret").display).toBeUndefined();
+    const line = rule(".cm-voice-caret::after");
+    expect(line.position).toBe("absolute");
+    expect(line["border-left"]).toContain(`dotted ${colors.voiceSignal.toLowerCase()}`);
+    const live = rule('.cm-voice-caret[data-phase="live"]::after');
+    expect(live["border-left-style"]).toBe("solid");
+    expect(live.opacity).toContain(`var(${VOICE_CARET_LEVEL_PROPERTY}, 1)`);
+    expect(rule('.cm-voice-caret[data-phase="held"]::after')["border-left-color"]).toBe(
+      colors.voiceHeld.toLowerCase()
+    );
+    // Reduced motion holds the live caret at full, over the live rule.
     expect(css).toMatch(
-      /@media \(forced-colors: active\)\s*\{[^@]*\.cm-voice-caret\[data-phase="live"\]\s*\{[^}]*border-left-color:\s*Highlight/
+      /@media \(prefers-reduced-motion: reduce\)\s*\{[^@]*\.cm-content \.cm-voice-caret\[data-phase="live"\]::after\s*\{\s*opacity:\s*1/
+    );
+    expect(css).toMatch(
+      /@media \(forced-colors: active\)\s*\{[^@]*\.cm-voice-caret\[data-phase="live"\]::after\s*\{[^}]*border-left-color:\s*Highlight/
     );
   });
 
