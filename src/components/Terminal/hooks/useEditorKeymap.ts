@@ -192,8 +192,9 @@ export function useEditorKeymap({
         return true;
       }
 
-      // Dictating into this composer, the first Escape ends the dictation
-      // rather than interrupting the agent; the next one reaches the agent.
+      // Dictating into this composer, Escape ends the dictation rather than
+      // interrupting the agent (a cancel that discards words takes two); the
+      // next one reaches the agent.
       if (handleDictationEscape()) return true;
 
       if (latest.disabled) return false;

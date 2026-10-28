@@ -8,6 +8,7 @@ import { createWorktreeStore, setCurrentViewStore } from "@/store/createWorktree
 import { usePanelStore } from "@/store/panelStore";
 import { initBuiltInPanelKinds } from "@/panels/registry";
 import { voiceRecordingService } from "@/services/VoiceRecordingService";
+import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { HybridInputBar } from "../HybridInputBar";
 
 describe("HybridInputBar dictation Escape", () => {
@@ -42,6 +43,7 @@ describe("HybridInputBar dictation Escape", () => {
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
+    useVoiceRecordingStore.setState({ dictationCancelConfirm: null });
   });
 
   async function pressEscapeInComposer(dictationTakesIt: boolean) {
@@ -85,5 +87,68 @@ describe("HybridInputBar dictation Escape", () => {
 
     expect(handleEscape).toHaveBeenCalledWith("term-1");
     expect(onSendKey).toHaveBeenCalledWith("escape");
+  });
+
+  describe("while a first Escape waits for the second (#14927)", () => {
+    async function renderComposer() {
+      const { container } = render(
+        <TooltipProvider>
+          <WorktreeStoreContext.Provider value={createWorktreeStore()}>
+            <HybridInputBar terminalId="term-1" cwd={WT_ID} agentId="claude" onSend={() => {}} />
+          </WorktreeStoreContext.Provider>
+        </TooltipProvider>
+      );
+      await act(async () => {});
+      const overlay = () => container.querySelector("[data-dictation-cancel-confirm]");
+      const status = () =>
+        Array.from(container.querySelectorAll('[role="status"]'))
+          .map((node) => node.textContent)
+          .join("|");
+      return { container, overlay, status };
+    }
+
+    const arm = (panelId: string, msLeft: number) =>
+      act(() => {
+        useVoiceRecordingStore.setState({
+          dictationCancelConfirm: {
+            panelId,
+            sessionId: "session-1",
+            expiresAt: performance.now() + msLeft,
+          },
+        });
+      });
+
+    it("covers the composer with the prompt and the seconds left, and announces it", async () => {
+      const { container, overlay, status } = await renderComposer();
+
+      arm("term-1", 2_500);
+
+      expect(overlay()?.textContent).toContain("Press Escape again to cancel dictation");
+      expect(container.querySelector("[data-dictation-cancel-countdown]")?.textContent).toBe("3s");
+      expect(status()).toContain("Press Escape again to cancel dictation");
+      // The composer under it stays live.
+      expect(container.querySelector(".cm-content")?.getAttribute("contenteditable")).toBe("true");
+    });
+
+    it("clears the overlay and the announcement when it stands down", async () => {
+      const { overlay, status } = await renderComposer();
+
+      arm("term-1", 4_000);
+      act(() => {
+        useVoiceRecordingStore.setState({ dictationCancelConfirm: null });
+      });
+
+      expect(overlay()).toBeNull();
+      expect(status()).not.toContain("Press Escape again");
+    });
+
+    it("shows nothing for a dictation into another pane", async () => {
+      const { overlay, status } = await renderComposer();
+
+      arm("term-2", 4_000);
+
+      expect(overlay()).toBeNull();
+      expect(status()).not.toContain("Press Escape again");
+    });
   });
 });

@@ -236,6 +236,17 @@
     color: CanvasText;
   }
 
+  /* The Escape confirm's wash is translucent, which the UA makes opaque: it
+     covers the draft with Canvas and keeps its countdown bar a system ink. */
+  [data-dictation-cancel-confirm] {
+    background: Canvas;
+    color: CanvasText;
+  }
+
+  [data-dictation-cancel-progress] {
+    border-bottom-color: CanvasText;
+  }
+
   /* Highlight follows the keyboard. A selected pane wears it because its
      terminal holds the keys; once its own composer takes them, the composer's
      ring says so and the pane edge steps down to the system ink, rather than

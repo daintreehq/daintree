@@ -29,6 +29,7 @@ function reset() {
     announcement: null,
     sessionElsewhere: null,
     sessionElsewhereRevision: -1,
+    dictationCancelConfirm: null,
   });
 }
 
@@ -824,5 +825,35 @@ describe("voiceRecordingStore cross-view write merge (#11351)", () => {
     // Disk mirrors memory: one entry per panel, and the older distinct target was
     // not evicted by stale duplicates of the retitled one.
     expect(readTargets(backing).map((t) => t.panelTitle)).toEqual(["Ship the parser fix", "Alpha"]);
+  });
+});
+
+describe("voiceRecordingStore — a first Escape waiting on the second (#14927)", () => {
+  beforeEach(reset);
+
+  const confirm = { panelId: PANEL_ID, sessionId: "s1", expiresAt: 1_000 };
+
+  it.each([
+    ["the session ends", () => useVoiceRecordingStore.getState().finishSession()],
+    [
+      "the session ends in an error",
+      () => useVoiceRecordingStore.getState().finishSession({ nextStatus: "error" }),
+    ],
+    ["the next session begins", () => useVoiceRecordingStore.getState().beginSession(TARGET, "s2")],
+  ])("stands down when %s", (_label, act) => {
+    useVoiceRecordingStore.getState().beginSession(TARGET, "s1");
+    useVoiceRecordingStore.getState().setDictationCancelConfirm(confirm);
+
+    act();
+
+    expect(useVoiceRecordingStore.getState().dictationCancelConfirm).toBeNull();
+  });
+
+  it("stands down when a session with no target ends", () => {
+    useVoiceRecordingStore.getState().setDictationCancelConfirm(confirm);
+
+    useVoiceRecordingStore.getState().finishSession();
+
+    expect(useVoiceRecordingStore.getState().dictationCancelConfirm).toBeNull();
   });
 });

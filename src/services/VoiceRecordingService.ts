@@ -1696,8 +1696,7 @@ class VoiceRecordingService {
     if (sessionId && spans.some((span) => changesDraft(span, draft))) {
       const confirm = state.dictationCancelConfirm;
       const confirmed =
-        confirm !== null &&
-        confirm.panelId === target.panelId &&
+        confirm?.panelId === target.panelId &&
         confirm.sessionId === sessionId &&
         performance.now() < confirm.expiresAt;
       if (!confirmed) {
@@ -1728,7 +1727,7 @@ class VoiceRecordingService {
       this.cancelConfirmTimeoutId = null;
     }
     const store = useVoiceRecordingStore.getState();
-    if (store.dictationCancelConfirm !== null) store.setDictationCancelConfirm(null);
+    if (store.dictationCancelConfirm) store.setDictationCancelConfirm(null);
   }
 
   /**

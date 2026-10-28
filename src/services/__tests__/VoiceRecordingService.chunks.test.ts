@@ -373,6 +373,8 @@ describe("VoiceRecordingService — cleaning up a long dictation in chunks (#147
     say(NEXT);
     await flush();
 
+    // The first press asks for a second (#14927).
+    expect(service.handleEscape(PANEL)).toBe(true);
     expect(service.handleEscape(PANEL)).toBe(true);
     expect(draft()).toBe("");
   });

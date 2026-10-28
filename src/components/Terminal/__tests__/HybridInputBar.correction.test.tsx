@@ -427,6 +427,8 @@ describe("HybridInputBar after Escape cancels a dictation", () => {
       );
 
     await act(async () => {
+      // The first press asks for a second (#14927).
+      expect(voiceRecordingService.handleEscape("term-1")).toBe(true);
       expect(voiceRecordingService.handleEscape("term-1")).toBe(true);
     });
     expect(draft()).toBe("");
@@ -484,6 +486,8 @@ describe("HybridInputBar after Escape cancels a dictation over a selection (#148
     expect(selection(view)).toEqual({ from: 8, to: 8 });
 
     await act(async () => {
+      // The first press asks for a second (#14927).
+      expect(voiceRecordingService.handleEscape("term-1")).toBe(true);
       expect(voiceRecordingService.handleEscape("term-1")).toBe(true);
     });
     expect(view.state.doc.toString()).toBe("Keep old text.");
@@ -502,6 +506,8 @@ describe("HybridInputBar after Escape cancels a dictation over a selection (#148
     recordWordsOverOld("new");
 
     await act(async () => {
+      // The first press asks for a second (#14927).
+      expect(voiceRecordingService.handleEscape("term-1")).toBe(true);
       expect(voiceRecordingService.handleEscape("term-1")).toBe(true);
     });
 

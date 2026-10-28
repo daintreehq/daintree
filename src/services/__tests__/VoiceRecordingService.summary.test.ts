@@ -569,6 +569,8 @@ describe("VoiceRecordingService — session summary (#14617)", () => {
     harness.paintFrames();
     expect(draftState.draft).toBe(DICTATED);
 
+    // The first press asks for a second (#14927).
+    expect(service.handleEscape(TARGET.panelId)).toBe(true);
     expect(service.handleEscape(TARGET.panelId)).toBe(true);
     await vi.waitFor(() => expect(harness.voiceInput.cancel).toHaveBeenCalledWith(sessionId));
     await flushPromises();

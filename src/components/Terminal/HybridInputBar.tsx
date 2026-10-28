@@ -52,6 +52,11 @@ import { useFleetArmingStore } from "@/store/fleetArmingStore";
 
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { VoiceInputButton } from "./VoiceInputButton";
+import {
+  DICTATION_CANCEL_CONFIRM_PROMPT,
+  DictationCancelConfirmOverlay,
+  useDictationCancelConfirm,
+} from "./DictationCancelConfirm";
 import { DictionaryLearnPrompt } from "./DictionaryLearnPrompt";
 import { Archive, X } from "lucide-react";
 import { Paperclip } from "@/components/icons";
@@ -1339,6 +1344,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       ) : null;
 
     const handleDictationEscape = () => voiceRecordingService.handleEscape(voiceId);
+    const dictationCancelConfirm = useDictationCancelConfirm(voiceId);
 
     const collapseEditor = () => setIsExpanded(false);
 
@@ -1849,6 +1855,11 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         {/* Outside the shell, which is busy for the whole wait: a live region
             inside it would hold its announcements until the send. */}
         {!isExpanded && voiceSubmitAnnouncer}
+        {/* In the composer rather than the app's announcer, so a reply box
+            inside Canopy's dialog is heard too. */}
+        <div role="status" aria-live="polite" className="sr-only">
+          {dictationCancelConfirm ? DICTATION_CANCEL_CONFIRM_PROMPT : ""}
+        </div>
         <div className="flex items-end gap-2">
           <div
             ref={inputShellRef}
@@ -1906,6 +1917,12 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               streamed={voiceCorrectionStreamed}
               onPresentChange={setIsVoiceSubmitPresenting}
             />
+            {dictationCancelConfirm && (
+              <DictationCancelConfirmOverlay
+                key={dictationCancelConfirm.expiresAt}
+                confirm={dictationCancelConfirm}
+              />
+            )}
             {showVoiceSessionCaption && (
               <div
                 aria-hidden="true"

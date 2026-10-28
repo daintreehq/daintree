@@ -628,6 +628,8 @@ describe("useVoiceWaitSubmit with a real correction pass (#14611, #14780)", () =
     // The space it was written with went with the sent prompt, and none of
     // its words count as edited for it.
     await act(async () => {
+      // The first press asks for a second (#14927).
+      expect(voiceRecordingService.handleEscape(PANEL_ID)).toBe(true);
       expect(voiceRecordingService.handleEscape(PANEL_ID)).toBe(true);
     });
     expect(draft(PANEL_ID)).toBe("");
