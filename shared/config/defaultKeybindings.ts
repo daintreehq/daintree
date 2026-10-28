@@ -1075,10 +1075,11 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     description: "Pause or resume voice dictation",
     category: "Voice",
   },
-  // The dictation key with Option: stop and send, staying where you are.
+  // Stop and send, staying where you are. Not Cmd+Alt+D: macOS takes that to
+  // hide the Dock before the app sees it, and Cmd+Shift+D opens changes.
   {
     actionId: "voiceInput.stopAndSend",
-    combo: "Cmd+Alt+D",
+    combo: "Cmd+Shift+Enter",
     scope: "global",
     priority: 0,
     description: "Stop voice dictation and send the prompt",
@@ -1295,6 +1296,15 @@ const NON_MAC_REPLACEMENT_KEYBINDINGS: KeybindingConfig[] = [
     scope: "global",
     priority: 0,
     description: "Toggle voice dictation",
+    category: "Voice",
+  },
+  // Windows keeps Ctrl+Alt+D; only the Mac gives Cmd+Alt+D to the Dock.
+  {
+    actionId: "voiceInput.stopAndSend",
+    combo: "Cmd+Alt+D",
+    scope: "global",
+    priority: 0,
+    description: "Stop voice dictation and send the prompt",
     category: "Voice",
   },
   // Ctrl+Y is Redo in text fields and editors off the Mac; it accepts the fleet

@@ -37,7 +37,7 @@ describe("buildDefaultKeybindings", () => {
   });
 
   it("gives stop-and-send its own key on every platform, clear of every other default", () => {
-    expect(globalCombo(mac, "voiceInput.stopAndSend")).toEqual(["Cmd+Alt+D"]);
+    expect(globalCombo(mac, "voiceInput.stopAndSend")).toEqual(["Cmd+Shift+Enter"]);
     expect(globalCombo(windows, "voiceInput.stopAndSend")).toEqual(["Cmd+Alt+D"]);
     expect(globalCombo(linux, "voiceInput.stopAndSend")).toEqual(["Ctrl+Shift+Alt+."]);
     for (const table of [mac, windows, linux]) {
@@ -109,7 +109,12 @@ describe("buildDefaultKeybindings", () => {
       .slice(0, core.length)
       .filter((b, i) => b !== core[i])
       .map((b) => b.actionId);
-    expect(changed).toEqual(["fleet.accept", "canopy.toggle", "voiceInput.toggle"]);
+    expect(changed).toEqual([
+      "fleet.accept",
+      "canopy.toggle",
+      "voiceInput.toggle",
+      "voiceInput.stopAndSend",
+    ]);
     expect(windows.length).toBeGreaterThan(core.length);
   });
 
