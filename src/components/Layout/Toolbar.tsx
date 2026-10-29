@@ -1757,7 +1757,7 @@ export function Toolbar({
                           onSelect={() => handleStopProject(currentProject.id)}
                         >
                           <CircleStop data-menu-icon className="mr-2 h-3.5 w-3.5" />
-                          Stop all agents
+                          Stop project
                         </ContextMenuItem>
                       )}
                       <ContextMenuItem

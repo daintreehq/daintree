@@ -863,7 +863,7 @@ export function ProjectListItem({
         {showStop && onStopProject && (
           <ContextMenuItem destructive onSelect={() => onStopProject(project.id)}>
             <CircleStop className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-            Stop all agents
+            Stop project
           </ContextMenuItem>
         )}
         {showSleep && onSleepProject && (
