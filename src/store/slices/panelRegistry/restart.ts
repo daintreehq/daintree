@@ -24,6 +24,7 @@ import {
   resolveEffectiveInlineMode,
 } from "@shared/types";
 import { agentClipboardDirectory, supportsCrossDirectoryResume } from "@shared/types/agentSettings";
+import { resolveInheritedPanelCwd } from "@/services/terminal/panelDuplicationService";
 import type { AgentSettingsEntry } from "@shared/types/agentSettings";
 import type { AgentState } from "@/types";
 import {
@@ -118,6 +119,22 @@ function titleAtSpawn(
   const panel = get().panelsById[id];
   const source = panel && isPtyPanel(panel) ? panel : captured;
   return { title: source.title, titleMode: source.titleMode };
+}
+
+/**
+ * Where a respawn of the pane starts (#14954). A live move refiles a pane
+ * without touching its process, so `cwd` can still name the worktree it left;
+ * a new process belongs in the one it is filed under, by Duplicate's rule
+ * (#11854). The filing is read now rather than from the capture, for the same
+ * reason the spawn's worktree is: the respawn awaits, and a move landing
+ * meanwhile names where it should start.
+ */
+function filedLaunchCwd(get: Get, id: string, captured: PtyPanelData): string {
+  const live = get().panelsById[id];
+  return resolveInheritedPanelCwd({
+    cwd: captured.cwd,
+    worktreeId: live ? live.worktreeId : captured.worktreeId,
+  });
 }
 
 interface LoadedAgentRuntimeSettings {
@@ -440,10 +457,24 @@ export const createRestartActions = (
       })
     );
 
-    // Validate configuration before attempting restart
+    // The folder stays put when the caller just chose it, and for an explicit
+    // resume of an agent that can only reopen a conversation where it began
+    // (#13509). Anything else starts where the pane is filed (#14954).
+    const keepsCwd =
+      options?.keepCwd === true ||
+      (!!forcedResumeSessionId &&
+        !!terminal.launchAgentId &&
+        !supportsCrossDirectoryResume(terminal.launchAgentId));
+    const plannedCwd = keepsCwd ? terminal.cwd : resolveInheritedPanelCwd(terminal);
+
+    // Validate configuration before attempting restart, against the folder it
+    // will start in: a pane whose old worktree has gone can still start in the
+    // one it is filed under.
     let validation;
     try {
-      validation = await validateTerminalConfig(terminal);
+      validation = await validateTerminalConfig(
+        plannedCwd === terminal.cwd ? terminal : { ...terminal, cwd: plannedCwd }
+      );
     } catch (error) {
       // Validation itself failed (e.g., IPC error)
       const restartError = {
@@ -451,7 +482,7 @@ export const createRestartActions = (
         timestamp: Date.now(),
         recoverable: false,
         context: {
-          failedCwd: terminal.cwd,
+          failedCwd: plannedCwd,
           validationError: formatErrorMessage(error, "Failed to validate terminal configuration"),
         },
       };
@@ -474,7 +505,7 @@ export const createRestartActions = (
         timestamp: Date.now(),
         recoverable: validation.errors.every((e) => e.recoverable),
         context: {
-          failedCwd: terminal.cwd,
+          failedCwd: plannedCwd,
           errors: validation.errors,
         },
       };
@@ -776,6 +807,7 @@ export const createRestartActions = (
       }
     }
 
+    let launchCwd = currentTerminal.cwd;
     try {
       // CAPTURE LIVE DIMENSIONS before destroying the frontend
       const managedInstance = peekTerminalService()?.get(id);
@@ -840,6 +872,11 @@ export const createRestartActions = (
         buildRestartEnv(capturedProjectId, runtimeForEnv?.settings.env, "restart"),
       ]);
 
+      // Settled here, with no await before the command choice and the state
+      // write that follow, so the command is chosen for the folder it runs in.
+      launchCwd = keepsCwd ? currentTerminal.cwd : filedLaunchCwd(get, id, currentTerminal);
+      const relocated = launchCwd !== currentTerminal.cwd;
+
       // Choose the spawn command now that the live session id (if any) is in
       // hand: an exact resume of THIS pane's session wins; the agent's
       // resume-latest fallback covers a missed capture (#8787); otherwise the
@@ -865,10 +902,16 @@ export const createRestartActions = (
           allowResumeLatest &&
           (currentTerminal.detectedAgentId === undefined ||
             currentTerminal.detectedAgentId === effectiveAgentId);
-        const sessionId =
-          forcedResumeSessionId ??
-          (captureTrusted ? capturedSessionId : null) ??
-          currentTerminal.agentSessionId;
+        // A conversation reopens in another folder only for an agent that
+        // resumes across directories. The rest start over where the pane now
+        // runs; the restart journaled the conversation they leave, so it still
+        // reopens where it began (#14954).
+        const resumesHere = !relocated || supportsCrossDirectoryResume(effectiveAgentId);
+        const sessionId = resumesHere
+          ? (forcedResumeSessionId ??
+            (captureTrusted ? capturedSessionId : null) ??
+            currentTerminal.agentSessionId)
+          : undefined;
         if (sessionId) {
           // An exact candidate never degrades to resume-latest: if its
           // command can't be built, the safe outcome is a fresh launch, not
@@ -880,10 +923,11 @@ export const createRestartActions = (
             commandToRun = resumeCmd;
             consumedSessionId = sessionId;
           }
-        } else if (allowResumeLatest && !currentTerminal.conversationCwd) {
+        } else if (allowResumeLatest && !currentTerminal.conversationCwd && !relocated) {
           // Resume-latest reads the launch directory, and a pane whose
           // conversation began somewhere else would reopen nothing — or another
-          // pane's conversation — from here (#12434).
+          // pane's conversation — from here (#12434), as would one about to
+          // start somewhere else (#14954).
           const resumeLatestCmd = resolvedAgentBaseCommand
             ? buildResumeLatestCommand(effectiveAgentId, resumeFlags, resolvedAgentBaseCommand)
             : buildResumeLatestCommand(effectiveAgentId, resumeFlags);
@@ -952,6 +996,12 @@ export const createRestartActions = (
           ? consumedSessionId
           : undefined;
 
+      // A resumed conversation stays filed where it began, which a relaunch in
+      // the pane's worktree can leave behind.
+      const conversationHome = currentTerminal.conversationCwd || currentTerminal.cwd;
+      const resumedConversationCwd =
+        conversationHome && conversationHome !== launchCwd ? conversationHome : undefined;
+
       // Update terminal in store: increment restartKey, reset agent state, update location
       set((state) => {
         const t = state.panelsById[id];
@@ -959,6 +1009,7 @@ export const createRestartActions = (
         const updated = {
           ...t,
           location: targetLocation,
+          cwd: launchCwd,
           restartKey: (t.restartKey ?? 0) + 1,
           // Demoted panels keep `agentState: "exited"` so the guard above
           // stays true across repeated restarts (issue #5764).
@@ -986,7 +1037,7 @@ export const createRestartActions = (
           originalPresetId: nextOriginalPresetId,
           agentSessionId: nextSessionId,
           // A fresh conversation begins where this pane runs.
-          conversationCwd: consumedSessionId ? t.conversationCwd : undefined,
+          conversationCwd: consumedSessionId ? resumedConversationCwd : undefined,
           firstPrompt: keepsFirstPrompt ? t.firstPrompt : undefined,
           isRestarting: true,
           restartError: undefined,
@@ -1038,7 +1089,7 @@ export const createRestartActions = (
       // against the respawned generation, not the killed one.
       agentLifecycleLedger.recordLaunch(id, {
         launchAgentId: isAgent ? currentTerminal.launchAgentId : undefined,
-        cwd: currentTerminal.cwd,
+        cwd: launchCwd,
         projectId: capturedWorkspaceId,
         worktreeId: spawnWorktreeId,
         worktreeSource: spawnWorktreeId !== undefined ? "explicit" : undefined,
@@ -1055,7 +1106,7 @@ export const createRestartActions = (
       await terminalClient.spawn({
         id,
         projectId: capturedWorkspaceId,
-        cwd: currentTerminal.cwd,
+        cwd: launchCwd,
         cols: spawnCols,
         rows: spawnRows,
         // Demoted panels spawn as plain terminals — launchAgentId cleared so the
@@ -1173,7 +1224,7 @@ export const createRestartActions = (
         recoverable: errorCode === "ENOENT" || phase === "frontend-readiness",
         // Never the command: an agent's carries its launch prompt (#14592).
         context: {
-          failedCwd: currentTerminal.cwd,
+          failedCwd: launchCwd,
           phase,
           isAgent,
           agentId: effectiveAgentId,
@@ -1199,7 +1250,7 @@ export const createRestartActions = (
       logError("[TerminalStore] Failed to restart terminal", error, {
         id,
         phase,
-        cwd: currentTerminal.cwd,
+        cwd: launchCwd,
         isAgent,
         agentId: effectiveAgentId,
       });
@@ -1621,6 +1672,7 @@ async function respawnAgentOnPreset(
   // Set only when a switch retitled the pane, so a failure can put back the
   // stamp it replaced — unless the user renamed it in the meantime.
   let switchedTitle: { title: string; titleMode?: PanelTitleMode } | undefined;
+  let launchCwd = terminal.cwd;
 
   try {
     const [agentSettings, tmpDir] = await Promise.all([
@@ -1716,12 +1768,15 @@ async function respawnAgentOnPreset(
     }
 
     const nextChainIndex = (terminal.fallbackChainIndex ?? 0) + 1;
+    // Always a new conversation, so nothing ties it to the folder it left.
+    launchCwd = filedLaunchCwd(get, id, terminal);
 
     set((state) => {
       const t = state.panelsById[id];
       if (!t || !isPtyPanel(t)) return state;
       const updated = {
         ...t,
+        cwd: launchCwd,
         restartKey: (t.restartKey ?? 0) + 1,
         agentState: "working" as AgentState,
         lastStateChange: Date.now(),
@@ -1787,7 +1842,7 @@ async function respawnAgentOnPreset(
     // the hopped preset recorded as the active one.
     agentLifecycleLedger.recordLaunch(id, {
       launchAgentId: terminal.launchAgentId,
-      cwd: terminal.cwd,
+      cwd: launchCwd,
       projectId: capturedWorkspaceId,
       worktreeId: fallbackWorktreeId,
       worktreeSource: fallbackWorktreeId !== undefined ? "explicit" : undefined,
@@ -1831,7 +1886,7 @@ async function respawnAgentOnPreset(
     await terminalClient.spawn({
       id,
       projectId: capturedWorkspaceId,
-      cwd: terminal.cwd,
+      cwd: launchCwd,
       cols: spawnCols,
       rows: spawnRows,
       kind: "terminal",
@@ -1913,7 +1968,7 @@ async function respawnAgentOnPreset(
           timestamp: Date.now(),
           recoverable: false,
           context: {
-            failedCwd: terminal.cwd,
+            failedCwd: launchCwd,
             phase: mode.kind === "fallback" ? "fallback-activation" : "preset-switch",
             nextPresetId,
           },

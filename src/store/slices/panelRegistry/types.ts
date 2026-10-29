@@ -48,6 +48,13 @@ export interface RestartTerminalOptions {
    * (#14096). The user's explicit choice from the refusal banner; never stored.
    */
   allowMissingPluginTools?: boolean;
+  /**
+   * Start in the pane's `cwd` as it stands, even when it lies in a worktree
+   * other than the one the pane is filed under (#14954). For `UpdateCwdDialog`,
+   * where the user has just picked that folder; an ordinary restart moves the
+   * pane into its own worktree.
+   */
+  keepCwd?: boolean;
 }
 
 export interface TrashedTerminalGroupMetadata {

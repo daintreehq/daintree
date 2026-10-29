@@ -101,6 +101,21 @@ describe("UpdateCwdDialog", () => {
     await act(async () => restart.resolve());
   });
 
+  it("restarts in the chosen folder rather than the worktree the pane is filed under", async () => {
+    // The pick can sit in another worktree; an ordinary restart would move the
+    // pane back into its own (#14954) and throw the choice away.
+    renderDialog();
+
+    submit("/repos/other");
+
+    await waitFor(() =>
+      expect(restartTerminal).toHaveBeenCalledWith("t1", {
+        allowResumeLatest: false,
+        keepCwd: true,
+      })
+    );
+  });
+
   it("locks the dialog while the restart runs, keeping the X in place", async () => {
     const restart = deferred<void>();
     restartTerminal.mockReturnValue(restart.promise);
