@@ -38,6 +38,7 @@ import {
 import type {
   VoiceCorrectionTiming,
   VoiceCorrectionVerdict,
+  VoicePrefetchMatch,
   VoiceSessionReport,
 } from "../../../shared/types/voiceSessionSummary.js";
 import { logDebug, logInfo, logWarn } from "../../utils/logger.js";
@@ -291,15 +292,18 @@ interface VoiceSession {
   flushUtterance: ((mode: "stop" | "literal") => void) | null;
   // Rechecks that the cleanup prompt is cached while the session runs.
   warmTimer: ReturnType<typeof setInterval> | null;
-  // Cleanup runs its pauses started ahead of the stop, against a budget.
-  prefetchesStarted: number;
   // Its cleanup context, when cleanup was on at its start.
   correctionPrep: CorrectionPrep | null;
   // Main's share of the session summary, sent with its ended notice. Kept
   // apart from the buffers above, which are released as the session goes.
   readonly stats: Pick<
     VoiceSessionReport,
-    "provider" | "biasTermCount" | "droppedPreStart" | "completedSegments" | "emptyCompletions"
+    | "provider"
+    | "biasTermCount"
+    | "droppedPreStart"
+    | "completedSegments"
+    | "emptyCompletions"
+    | "prefetchesStarted"
   >;
 }
 
@@ -542,6 +546,7 @@ interface CorrectReply {
   failed?: true;
   verdict?: VoiceCorrectionVerdict;
   timing?: VoiceCorrectionTiming;
+  prefetch?: VoicePrefetchMatch;
   cleanupFailure?: VoiceCleanupFailure;
 }
 
@@ -1509,7 +1514,6 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       utterance: new UtteranceCommands(),
       flushUtterance: null,
       warmTimer: null,
-      prefetchesStarted: 0,
       correctionPrep: null,
       stats: {
         provider: null,
@@ -1517,6 +1521,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         droppedPreStart: 0,
         completedSegments: 0,
         emptyCompletions: 0,
+        prefetchesStarted: 0,
       },
     };
     const previous = liveSession;
@@ -2612,18 +2617,12 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     const answered = holdForCleanup(ctx.webContentsId);
     const asker = askerStillThere(ctx);
     try {
-      const prefetched = request.sessionId
-        ? prefetcher.take(
-            prefetchOwner(ctx.webContentsId, request.sessionId),
-            correctionKey(request, settings)
-          )
-        : null;
+      const owner = request.sessionId ? prefetchOwner(ctx.webContentsId, request.sessionId) : null;
+      const prefetched = owner ? prefetcher.take(owner, correctionKey(request, settings)) : null;
       if (!prefetched) {
-        return settleReply(
-          asker,
-          settings,
-          await correctPassage(ctx, request, settings, startedAt)
-        );
+        const reply = await correctPassage(ctx, request, settings, startedAt);
+        // A passage without a session never had a prefetch to find.
+        return settleReply(asker, settings, owner ? { ...reply, prefetch: "not_matched" } : reply);
       }
       // The stop reads its own context, as it always would, and takes the run
       // only if the pause sent OpenAI exactly what it would: a terminal that
@@ -2643,19 +2642,20 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
           verdict: "failed",
         };
       }
+      // A pause whose context couldn't be read sent nothing the stop could take.
+      let prefetch: VoicePrefetchMatch = theirs === null ? "prefetch_failed" : "inputs_changed";
       if (mine !== null && mine === theirs) {
         const reply = await adoptPrefetch(ctx, request, prefetched);
+        if (!reply.failed) return settleReply(asker, settings, { ...reply, prefetch: "adopted" });
+        prefetch = "prefetch_failed";
         // One that failed gets the stop's own try, as if it had never started,
         // unless the account refused it: the same account would again.
-        if (!reply.failed || reply.cleanupFailure) return settleReply(asker, settings, reply);
+        if (reply.cleanupFailure) return settleReply(asker, settings, { ...reply, prefetch });
       } else {
         prefetched.cancel();
       }
-      return settleReply(
-        asker,
-        settings,
-        await correctPassage(ctx, request, settings, startedAt, { prepared })
-      );
+      const reply = await correctPassage(ctx, request, settings, startedAt, { prepared });
+      return settleReply(asker, settings, { ...reply, prefetch });
     } finally {
       answered();
     }
@@ -2750,9 +2750,9 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
             return { inputs, reply };
           },
         })),
-      Math.max(0, PREFETCHES_PER_SESSION - session.prefetchesStarted)
+      Math.max(0, PREFETCHES_PER_SESSION - session.stats.prefetchesStarted)
     );
-    session.prefetchesStarted += started;
+    session.stats.prefetchesStarted += started;
   };
 
   // Each listing's code names, held only as long as FileSearchService holds the

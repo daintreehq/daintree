@@ -495,7 +495,10 @@ describe("voiceInput — dictating into a host's pane", () => {
       await vi.waitFor(() => expect(shared.correctCalls).toHaveLength(1));
       await stop(view, "paused");
 
-      await expect(askAtStop()).resolves.toMatchObject({ correctedText: "run the tests" });
+      await expect(askAtStop()).resolves.toMatchObject({
+        correctedText: "run the tests",
+        prefetch: "adopted",
+      });
       expect(shared.correctCalls).toHaveLength(1);
       expect(shared.correctCalls[0]?.request.agentReply).toEqual(reply);
     });
@@ -517,7 +520,7 @@ describe("voiceInput — dictating into a host's pane", () => {
       await prefetch();
       await vi.waitFor(() => expect(shared.correctCalls).toHaveLength(1));
       await stop(view, "paused");
-      await askAtStop();
+      await expect(askAtStop()).resolves.toMatchObject({ prefetch: "inputs_changed" });
 
       expect(shared.correctCalls.map(({ request }) => request.agentReply)).toEqual([
         reply,
@@ -533,7 +536,7 @@ describe("voiceInput — dictating into a host's pane", () => {
       await prefetch();
       await vi.waitFor(() => expect(shared.correctCalls).toHaveLength(1));
       await stop(view, "paused");
-      await askAtStop();
+      await expect(askAtStop()).resolves.toMatchObject({ prefetch: "inputs_changed" });
 
       expect(shared.correctCalls.map(({ request }) => request.terminalOutput)).toEqual([
         "while dictating",

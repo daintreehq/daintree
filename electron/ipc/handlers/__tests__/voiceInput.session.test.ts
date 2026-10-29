@@ -1004,6 +1004,7 @@ describe("voiceInput — session identity", () => {
         correctedText: "fix the bug",
         failed: true,
         verdict: "failed",
+        prefetch: "not_matched",
       });
       expect(shared.cleanups).toEqual([]);
     });
@@ -1320,6 +1321,7 @@ describe("voiceInput — session identity", () => {
       await expect(reply).resolves.toMatchObject({
         action: "replace",
         correctedText: "Run the tests.",
+        prefetch: "adopted",
       });
       expect(progress(ownerA)).toEqual([
         { streamId: "s1", text: "Run the" },
@@ -1337,7 +1339,11 @@ describe("voiceInput — session identity", () => {
       const own = await requestFor("run the tests");
       expect(shared.cleanups).toHaveLength(2);
       own.finish("Run the tests.");
-      await expect(reply).resolves.toMatchObject({ correctedText: "Run the tests." });
+      await expect(reply).resolves.toMatchObject({
+        correctedText: "Run the tests.",
+        prefetch: "not_matched",
+      });
+      expect(endedPayloads(ownerA)[0]?.report).toMatchObject({ prefetchesStarted: 1 });
     });
 
     it("gives a stop whose prefetch failed a try of its own", async () => {
@@ -1350,7 +1356,10 @@ describe("voiceInput — session identity", () => {
       prefetched.fail();
       await vi.waitFor(() => expect(shared.cleanups).toHaveLength(2));
       shared.cleanups[1]!.finish("Run the tests.");
-      await expect(reply).resolves.toMatchObject({ correctedText: "Run the tests." });
+      await expect(reply).resolves.toMatchObject({
+        correctedText: "Run the tests.",
+        prefetch: "prefetch_failed",
+      });
     });
 
     it("lets a passage be taken once, so a second stop asking for it sends its own", async () => {
@@ -1364,8 +1373,14 @@ describe("voiceInput — session identity", () => {
       await vi.waitFor(() => expect(shared.cleanups).toHaveLength(2));
       prefetched.finish("Run the tests.");
       shared.cleanups[1]!.finish("Run the tests!");
-      await expect(first).resolves.toMatchObject({ correctedText: "Run the tests." });
-      await expect(second).resolves.toMatchObject({ correctedText: "Run the tests!" });
+      await expect(first).resolves.toMatchObject({
+        correctedText: "Run the tests.",
+        prefetch: "adopted",
+      });
+      await expect(second).resolves.toMatchObject({
+        correctedText: "Run the tests!",
+        prefetch: "not_matched",
+      });
     });
 
     it("cancels a prefetch the dictation talked on past", async () => {
@@ -1388,12 +1403,16 @@ describe("voiceInput — session identity", () => {
       expect(shared.cleanups.map((c) => c.rawText)).toEqual(
         Array.from({ length: 8 }, (_, i) => `pause ${i}`)
       );
+      // The newer session's start ends this one, and with it its count.
 
       await start(ownerB, "b");
       await prefetch(ownerB, "b", "x".repeat(2_001));
       await prefetch(ownerB, "b", "x".repeat(2_000));
       await vi.waitFor(() => expect(shared.cleanups).toHaveLength(9));
       expect(shared.cleanups[8]!.rawText).toHaveLength(2_000);
+      await stop(ownerB, "b");
+      expect(endedPayloads(ownerA)[0]?.report).toMatchObject({ prefetchesStarted: 8 });
+      expect(endedPayloads(ownerB)[0]?.report).toMatchObject({ prefetchesStarted: 1 });
     });
 
     it("cancels a cancelled dictation's prefetch", async () => {
@@ -1609,7 +1628,10 @@ describe("voiceInput — session identity", () => {
       (await nextRequest("run the tests")).refuse("key_rejected");
 
       await stop(ownerA, "a");
-      await expect(correct(ownerA, "a", "run the tests")).resolves.toMatchObject(TOLD);
+      await expect(correct(ownerA, "a", "run the tests")).resolves.toMatchObject({
+        ...TOLD,
+        prefetch: "prefetch_failed",
+      });
       await settle();
       expect(shared.cleanups).toEqual([]);
     });
@@ -1653,6 +1675,7 @@ describe("voiceInput — session identity", () => {
           reconnects: 2,
           completedSegments: 1,
           emptyCompletions: 2,
+          prefetchesStarted: 0,
         },
       });
       expect(JSON.stringify(payload)).not.toMatch(/daintree|canopy|login/);

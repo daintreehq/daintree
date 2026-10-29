@@ -18,6 +18,7 @@ const report = {
   reconnects: 1,
   completedSegments: 4,
   emptyCompletions: 1,
+  prefetchesStarted: 2,
 };
 
 let clock = 0;
@@ -253,7 +254,7 @@ describe("VoiceSessionTimeline", () => {
     t.beginCorrection();
     t.finish("user");
     clock = 2_450;
-    t.noteCorrectionReplies({ prepMs: 12.4, requestMs: 1_380.6 });
+    t.noteCorrectionReplies({ prepMs: 12.4, requestMs: 1_380.6 }, null);
     clock = 2_470;
     t.endCorrection("applied", countPassageFates(["applied"]));
     expect(logged()).toMatchObject({
@@ -269,7 +270,7 @@ describe("VoiceSessionTimeline", () => {
     t.beginCorrection();
     t.finish("user");
     clock = 1_900;
-    t.noteCorrectionReplies({ prepMs: 3, requestMs: 800, prompt: "fix the login bug" });
+    t.noteCorrectionReplies({ prepMs: 3, requestMs: 800, prompt: "fix the login bug" }, null);
     clock = 1_910;
     t.endCorrection("applied", countPassageFates(["applied"]));
     const line = logged();
@@ -288,13 +289,14 @@ describe("VoiceSessionTimeline", () => {
     t.finish("user");
     clock = 1_300;
     t.endCorrection("discarded", countPassageFates(["dropped"]));
-    t.noteCorrectionReplies({ prepMs: 4, requestMs: 900 });
+    t.noteCorrectionReplies({ prepMs: 4, requestMs: 900 }, "adopted");
     t.reportEnded("stopped", report);
     expect(logged()).toMatchObject({
       correctionMs: 300,
       correctionPrepMs: null,
       correctionRequestMs: null,
       correctionApplyMs: null,
+      correctionPrefetch: null,
     });
   });
 
@@ -310,6 +312,81 @@ describe("VoiceSessionTimeline", () => {
       correctionRequestMs: null,
       correctionApplyMs: null,
     });
+  });
+
+  it.each([
+    ["adopted", 2, "adopted"],
+    ["inputs_changed", 1, "inputs_changed"],
+    ["prefetch_failed", null, "prefetch_failed"],
+    ["not_matched", 2, "request_changed"],
+    ["not_matched", 0, "none_started"],
+    ["not_matched", null, null],
+    [null, 3, null],
+    ["fix the login bug", 3, null],
+  ])("logs a stop whose reply found %s, of %s prefetches, as %s", (match, started, outcome) => {
+    const t = timeline();
+    t.expectReport();
+    t.beginCorrection();
+    t.finish("user");
+    t.noteCorrectionReplies({ prepMs: 4, requestMs: 900 }, match);
+    t.endCorrection("applied", countPassageFates(["applied"]));
+    if (started === null) vi.advanceTimersByTime(VOICE_REPORT_WAIT_MS);
+    else t.reportEnded("stopped", { ...report, prefetchesStarted: started });
+
+    const line = logged();
+    expect(line).toMatchObject({ correctionPrefetch: outcome, prefetchesStarted: started });
+    expect(JSON.stringify(line)).not.toMatch(/login/);
+  });
+
+  it("measures the stop from the last speech-level chunk before it", () => {
+    const t = timeline();
+    clock = 1_200;
+    t.noteSpeech();
+    clock = 2_300;
+    t.noteSpeech();
+    clock = 3_050;
+    t.mark("stopRequested");
+    t.finish("user");
+    expect(logged()).toMatchObject({ stopTailMs: 750 });
+  });
+
+  it("reads a chunk the stop flushed as speech up to the stop", () => {
+    const t = timeline();
+    clock = 2_000;
+    t.mark("stopRequested");
+    clock = 2_040;
+    t.noteSpeech();
+    t.finish("user");
+    expect(logged()).toMatchObject({ stopTailMs: 0 });
+  });
+
+  it("measures from a later stop once the first was taken back", () => {
+    const t = timeline();
+    clock = 1_500;
+    t.noteSpeech();
+    clock = 1_700;
+    t.mark("stopRequested");
+    t.unmark("stopRequested");
+    clock = 2_400;
+    t.noteSpeech();
+    clock = 4_000;
+    t.mark("stopRequested");
+    t.finish("key_release");
+    expect(logged()).toMatchObject({ stopTailMs: 1_600 });
+  });
+
+  it("has no stop tail without speech, or without a stop request", () => {
+    const silent = timeline();
+    silent.noteSignal();
+    silent.mark("stopRequested");
+    silent.finish("user");
+    expect(logged()).toMatchObject({ stopTailMs: null, audioNoText: true });
+
+    log.mockReset();
+    const unstopped = timeline();
+    unstopped.noteSpeech();
+    unstopped.finish("provider_ended");
+    expect(logged()).toMatchObject({ stopTailMs: null });
   });
 
   it.each([

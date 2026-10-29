@@ -3,6 +3,7 @@ import type { z } from "zod";
 import {
   VoiceCorrectionPassagesSchema,
   VoiceCorrectionTimingSchema,
+  VoicePrefetchMatchSchema,
   VoiceSessionReportSchema,
   VoiceSessionSummarySchema,
   type VoiceSessionReport,
@@ -43,6 +44,7 @@ const report: VoiceSessionReport = {
   reconnects: 1,
   completedSegments: 3,
   emptyCompletions: 1,
+  prefetchesStarted: 2,
 };
 
 const summary: VoiceSessionSummary = {
@@ -55,12 +57,14 @@ const summary: VoiceSessionSummary = {
   socketReadyMs: 1_600,
   firstTextMs: 2_100,
   stopRequestedMs: 6_000,
+  stopTailMs: 1_200,
   stopSettledMs: 700,
   correctionMs: 2_000,
   correctionPrepMs: 30,
   correctionRequestMs: 1_400,
   correctionApplyMs: 6,
   correction: "applied",
+  correctionPrefetch: "adopted",
   correctionPassages: {
     sent: 1,
     applied: 1,
@@ -129,6 +133,19 @@ describe("voice session summary schema", () => {
     expect(VoiceSessionReportSchema.safeParse({ ...report, provider: "Claude" }).success).toBe(
       false
     );
+    expect(
+      VoiceSessionSummarySchema.safeParse({ ...summary, correctionPrefetch: "fix the bug" }).success
+    ).toBe(false);
+    expect(VoiceSessionReportSchema.safeParse({ ...report, prefetchesStarted: 1.5 }).success).toBe(
+      false
+    );
+  });
+
+  it("takes main's prefetch finding as a code alone", () => {
+    expect(VoicePrefetchMatchSchema.safeParse("not_matched").success).toBe(true);
+    // A summary outcome main can't know is not one it may send.
+    expect(VoicePrefetchMatchSchema.safeParse("none_started").success).toBe(false);
+    expect(VoicePrefetchMatchSchema.safeParse("fix the bug").success).toBe(false);
   });
 
   it("takes main's correction timing as durations alone", () => {

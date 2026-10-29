@@ -2790,6 +2790,7 @@ class VoiceRecordingService {
           firstLiveChunk = arrivedChunks;
           timeline.mark("micLive");
         }
+        if (isSpeechLevel(stats)) timeline.noteSpeech();
         if (!this.isStartRequestStale(startRequestId)) this.noteHeldPressAudio(stats);
         if (!openingAudio.logged) {
           openingAudio.chunks.push(stats);
@@ -3985,11 +3986,13 @@ class VoiceRecordingService {
 
   private async requestCorrection(correction: PendingCorrection): Promise<void> {
     const { cleanup } = correction;
-    const { results, lastTiming } = await settlePassageReplies(
+    const { results, last } = await settlePassageReplies(
       correction.passages.map((passage) => this.requestPassageCorrection(passage, correction))
     );
     correction.replied = true;
-    if (correction.kind === "stop") correction.timeline?.noteCorrectionReplies(lastTiming);
+    if (correction.kind === "stop") {
+      correction.timeline?.noteCorrectionReplies(last?.timing ?? null, last?.prefetch ?? null);
+    }
     // Timed whether or not its draft is still there to take it: the call cost
     // the same either way.
     if (results.every((result) => !result.failed)) {
@@ -4162,6 +4165,7 @@ class VoiceRecordingService {
     failed: boolean;
     verdict: VoiceCorrectionVerdict | undefined;
     timing: unknown;
+    prefetch: unknown;
   }> {
     // Unique past an HMR swap, which leaves the old singleton's requests out.
     const streamId = crypto.randomUUID();
@@ -4186,13 +4190,14 @@ class VoiceRecordingService {
         failed: result.failed === true,
         verdict: result.verdict,
         timing: result.timing ?? null,
+        prefetch: result.prefetch ?? null,
       };
     } catch (error) {
       logWarn(
         `${LOG_PREFIX} Correction request failed, keeping raw text`,
         voiceErrorLogFields(error)
       );
-      return { text: null, failed: true, verdict: "failed", timing: null };
+      return { text: null, failed: true, verdict: "failed", timing: null, prefetch: null };
     } finally {
       this.correctionStreams.delete(streamId);
       // A passage whose cleanup came back shows all of it until every passage

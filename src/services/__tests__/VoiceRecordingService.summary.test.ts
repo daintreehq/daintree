@@ -122,6 +122,7 @@ const REPORT = {
   reconnects: 1,
   completedSegments: 1,
   emptyCompletions: 0,
+  prefetchesStarted: 1,
 };
 
 function deferred<T = void>() {
@@ -380,7 +381,14 @@ describe("VoiceRecordingService — session summary (#14617)", () => {
       correction: "none",
       ...REPORT,
     });
-    for (const field of ["cueMs", "micLiveMs", "socketReadyMs", "firstTextMs", "stopSettledMs"]) {
+    for (const field of [
+      "cueMs",
+      "micLiveMs",
+      "socketReadyMs",
+      "firstTextMs",
+      "stopTailMs",
+      "stopSettledMs",
+    ]) {
       expect([field, typeof line![field]]).toEqual([field, "number"]);
     }
     expect(Object.keys(line!).sort()).toEqual(["sessionId", ...SUMMARY_FIELDS].sort());
@@ -466,6 +474,36 @@ describe("VoiceRecordingService — session summary (#14617)", () => {
 
     expect(draftState.draft).toBe("use Zustand now");
     expect(summaries()).toMatchObject([{ charsCommitted: "use zoo".length + "stand now".length }]);
+  });
+
+  it("measures the stop from the last speech-level chunk, past the quieter ones after it", async () => {
+    const harness = setupGlobals();
+    const { service, summaries } = await load();
+    let clock = performance.now();
+    vi.spyOn(performance, "now").mockImplementation(() => clock);
+    await startLive(harness, service);
+    clock += 400;
+    sendChunk(harness.workletNodes.at(-1)!, 2_000);
+    clock += 100;
+    // Room noise: over the signal floor, under speech level.
+    sendChunk(harness.workletNodes.at(-1)!, 100);
+    clock += 900;
+    await service.stop("Dictation stopped.", { reason: "user" });
+
+    expect(summaries()).toMatchObject([{ stopTailMs: 1_000, audioNoText: true }]);
+  });
+
+  it("has no stop tail for a session that heard nothing at speech level", async () => {
+    const harness = setupGlobals();
+    const { service, summaries } = await load();
+    await service.toggle(TARGET);
+    const sessionId = harness.voiceInput.start.mock.calls.at(-1)![0] as string;
+    harness.paintFrames();
+    sendChunk(harness.workletNodes.at(-1)!, 100);
+    harness.emit("status", { sessionId, status: "recording" });
+    await service.stop("Dictation stopped.", { reason: "user" });
+
+    expect(summaries()).toMatchObject([{ stopTailMs: null, audioNoText: true }]);
   });
 
   it("flags a session that heard speech-level audio and committed nothing", async () => {
@@ -804,6 +842,7 @@ describe("VoiceRecordingService — session summary (#14617)", () => {
       action: string;
       correctedText: string;
       timing: { prepMs: number; requestMs: number };
+      prefetch: string;
     }>();
     harness.voiceInput.correct.mockReturnValue(correction.promise);
     const { service, summaries } = await load();
@@ -828,6 +867,8 @@ describe("VoiceRecordingService — session summary (#14617)", () => {
       action: "replace",
       correctedText: "Deploy the canopy branch to staging.",
       timing: { prepMs: 14.2, requestMs: 1380.7 },
+      // Main found no prefetch of it, of the one the session started.
+      prefetch: "not_matched",
     });
     await flushPromises();
     harness.paintFrames();
@@ -839,6 +880,8 @@ describe("VoiceRecordingService — session summary (#14617)", () => {
       correctionPrepMs: 14,
       correctionRequestMs: 1381,
       correctionApplyMs: 40,
+      correctionPrefetch: "request_changed",
+      prefetchesStarted: 1,
     });
     expect(typeof summaries()[0]!.correctionMs).toBe("number");
     expect(JSON.stringify(summaries()[0])).not.toContain("canopy");
