@@ -9,7 +9,7 @@ import {
   useSyncExternalStore,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { ExternalLink, History, MessageCircle, Settings2, Sparkles } from "lucide-react";
+import { ExternalLink, History, MessageCircle, RotateCw, Settings2, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { reportCanopySent } from "@/lib/canopySeen";
 import { Button } from "@/components/ui/button";
@@ -56,7 +56,7 @@ import { HelpPanelFooter } from "./HelpPanelFooter";
 import { HelpPanelResizeHandle } from "./HelpPanelResizeHandle";
 import { useHelpPanelResize } from "./useHelpPanelResize";
 import { useHelpPanelRevealFocus } from "./useHelpPanelRevealFocus";
-import { useHelpSessionLanes } from "./useHelpSessionLanes";
+import { useHelpSessionLanes, type PausedLane } from "./useHelpSessionLanes";
 import { FigureRail } from "./FigureRail";
 import { useHelpPanelStore, selectSlot } from "@/store/helpPanelStore";
 import {
@@ -444,10 +444,7 @@ export function HelpPanel({
   // (#13205). The peek is non-consuming, like the launch flow's claim via
   // takePendingHibernation. We stamp the entry with its workspace id so
   // a mid-flight A→B switch can't show workspace A's Resume CTA over workspace B.
-  const [resumablePending, setResumablePending] = useState<{
-    workspaceId: string;
-    agentId: string;
-  } | null>(null);
+  const [resumablePending, setResumablePending] = useState<PausedLane | null>(null);
   useEffect(() => {
     if (!isOpen || terminalId || !activeWorkspaceId) {
       setResumablePending(null);
@@ -478,7 +475,14 @@ export function HelpPanel({
               !!pending?.agentSessionId &&
               buildResumeCommand(pendingAgentId, pending.agentSessionId) !== undefined));
         setResumablePending(
-          canResume ? { workspaceId: activeWorkspaceId, agentId: pendingAgentId } : null
+          canResume
+            ? {
+                workspaceId: activeWorkspaceId,
+                slot: activeSlot,
+                agentId: pendingAgentId,
+                live: pending?.live === true,
+              }
+            : null
         );
       })
       .catch((err) => {
@@ -497,12 +501,22 @@ export function HelpPanel({
     supportedInstalledAgentIds,
   ]);
 
-  // Cross-workspace bleed guard: an A→B switch re-runs the peek effect, but B's
-  // peek resolves asynchronously, so only trust a pending entry whose workspace
-  // id matches the workspace currently in view.
-  const resumableAgentId =
-    resumablePending && resumablePending.workspaceId === activeWorkspaceId
-      ? resumablePending.agentId
+  // Cross-workspace and cross-lane bleed guard: an A→B switch (of workspace or
+  // of tab) re-runs the peek effect, but B's peek resolves asynchronously, so
+  // only trust a pending entry stamped with the workspace and lane in view.
+  const pendingInView =
+    resumablePending &&
+    resumablePending.workspaceId === activeWorkspaceId &&
+    resumablePending.slot === activeSlot
+      ? resumablePending
+      : null;
+  const resumableAgentId = pendingInView?.agentId ?? null;
+  // The same pause, offered as a fresh start too (#14981). A fresh start launches
+  // the captured agent anew, so it needs that agent installed, which a Resume of
+  // one still running on the host does not.
+  const pausedLane =
+    pendingInView && supportedInstalledAgentIds.includes(pendingInView.agentId)
+      ? pendingInView
       : null;
 
   // #10815: report this workspace's panel open-state to main on every change so
@@ -801,6 +815,7 @@ export function HelpPanel({
     handleRestartSlot,
     handleRestartActiveSlot,
     pendingRestartSlot,
+    pendingRestartPaused,
     handleConfirmRestartSlot,
     handleCancelRestartSlot,
     resolveRestartFocusTarget,
@@ -813,16 +828,19 @@ export function HelpPanel({
     closedNotice,
     reopenClosedSession,
     dismissClosedNotice,
-  } = useHelpSessionLanes({ panelRef, activeSlot, activeWorkspaceId, terminalId });
+  } = useHelpSessionLanes({ panelRef, activeSlot, activeWorkspaceId, terminalId, pausedLane });
   // A restart can target a background lane, whose agent may not be the one on
-  // screen: read from the same lane record the confirm gate reads.
-  const pendingRestartAgentId = useHelpPanelStore((s) =>
+  // screen: read from the same lane record the confirm gate reads. A paused lane
+  // has no agent bound, so its captured one names the conversation instead.
+  const pendingRestartLaneAgentId = useHelpPanelStore((s) =>
     pendingRestartSlot === null ? null : selectSlot(s, pendingRestartSlot).agentId
   );
   const restartDescription = usePastSessionsNote(
     pendingRestartSlot !== null,
-    "The agent stops and this tab starts a new conversation",
-    pendingRestartAgentId
+    pendingRestartPaused && !pendingRestartPaused.live
+      ? "This tab starts a new conversation"
+      : "The agent stops and this tab starts a new conversation",
+    pendingRestartPaused?.agentId ?? pendingRestartLaneAgentId
   );
   const endSessionDescription = usePastSessionsNote(
     showEndSessionConfirm,
@@ -1161,7 +1179,9 @@ export function HelpPanel({
         onScopeChange={handleScopeChange}
         globalControlsRef={setGlobalControlsHost}
         projectActivity={projectActivity}
-        canRestartConversation={!globalSelected && Boolean(terminalId && agentId)}
+        canRestartConversation={
+          !globalSelected && (Boolean(terminalId && agentId) || pausedLane !== null)
+        }
         canEndSession={!globalSelected && Boolean(terminalId && agentId)}
         onRestartConversation={handleRestartActiveSlot}
         onEndSession={handleEndSession}
@@ -1420,8 +1440,7 @@ export function HelpPanel({
                   {/* Recovery resume — the eviction/crash path killed the PTY on
                       switch-away, but the conversation can be picked back up.
                       Does not record auto-launch consent (#10699). This is the
-                      single load-bearing accent here.
-                      Starting fresh is the overflow menu's "Restart conversation". */}
+                      single load-bearing accent here. */}
                   <Button
                     type="button"
                     onClick={handleResumeAssistant}
@@ -1430,6 +1449,21 @@ export function HelpPanel({
                     <ResumeAssistantIcon />
                     Resume assistant
                   </Button>
+                  {/* Coming back to a stale conversation is when a clean one is most
+                      likely wanted (#14981): the same confirmed restart the overflow
+                      menu offers, kept neutral so Resume stays the primary. */}
+                  {pausedLane && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={handleRestartActiveSlot}
+                      data-testid="help-restart-paused-conversation"
+                    >
+                      <RotateCw aria-hidden="true" />
+                      Restart conversation
+                    </Button>
+                  )}
                 </div>
               ) : launchableAgentId ? (
                 <div className="flex flex-col items-center gap-4 w-full max-w-[34ch]">

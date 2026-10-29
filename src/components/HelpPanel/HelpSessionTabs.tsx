@@ -143,7 +143,10 @@ export interface HelpSessionTab {
   agentState: AgentState | null | undefined;
   /** The agent the lane runs or will resume with; absent while nothing says. */
   agentId?: string | null;
-  /** The lane has a live terminal and agent — the header's own gate for "Restart conversation". */
+  /**
+   * The lane has a live terminal and agent, or is the paused lane on screen — the
+   * header's own gate for "Restart conversation".
+   */
   canRestart?: boolean;
 }
 
