@@ -253,12 +253,14 @@ vi.mock("@/components/ui/context-menu", () => ({
   ContextMenuItem: ({
     children,
     onSelect,
+    onKeyDown,
     disabled,
     className,
     "data-testid": dataTestId,
   }: {
     children: React.ReactNode;
     onSelect?: (e: Event) => void;
+    onKeyDown?: (e: React.KeyboardEvent<HTMLDivElement>) => void;
     disabled?: boolean;
     className?: string;
     "data-testid"?: string;
@@ -268,6 +270,7 @@ vi.mock("@/components/ui/context-menu", () => ({
       data-testid={dataTestId ?? "context-menu-item"}
       data-disabled={disabled ? "true" : undefined}
       className={className}
+      onKeyDown={onKeyDown}
       onClick={(e) => {
         if (disabled) return;
         onSelect?.(e as unknown as Event);
@@ -1828,8 +1831,8 @@ describe("AgentButton preset UX", () => {
       );
       fireEvent.click(getByTestId("agent-context-worktree-dock-wt-1"));
 
-      // The inline button must stop propagation so the row's onSelect
-      // (which would launch grid) does not also fire.
+      // The Dock click reaches the row's onSelect, which launches where the
+      // click said: once, in the dock, with no grid launch alongside it.
       const dockCalls = dispatchMock.mock.calls.filter(
         (c) => c[0] === "agent.launch" && (c[1] as { location?: string }).location === "dock"
       );
@@ -1843,6 +1846,93 @@ describe("AgentButton preset UX", () => {
         { agentId: "claude", worktreeId: "wt-1", location: "dock" },
         { source: "context-menu" },
       ]);
+    });
+
+    describe("keyboard route to a worktree's dock", () => {
+      const launchCalls = (location: string) =>
+        dispatchMock.mock.calls.filter(
+          (c) => c[0] === "agent.launch" && (c[1] as { location?: string }).location === location
+        );
+
+      const renderRows = () => {
+        mockSettings = settingsWith({ claude: {} });
+        mockMergedPresetsFn = () => [];
+        mockWorktrees = [
+          { id: "wt-1", name: "Main", isMainWorktree: true },
+          { id: "wt-2", name: "feat/x", branch: "feat/x" },
+        ];
+        return render(
+          <WithMenuSource>
+            <AgentButton
+              type="claude"
+              availability={"ready" as unknown as CliAvailability[string]}
+            />
+          </WithMenuSource>
+        );
+      };
+
+      it("D on a worktree row launches that worktree's dock without a grid launch", () => {
+        const { getByTestId } = renderRows();
+
+        // fireEvent returns false when the handler preventDefaults, which keeps
+        // Radix's typeahead from also acting on the key.
+        expect(fireEvent.keyDown(getByTestId("agent-context-worktree-wt-2"), { key: "D" })).toBe(
+          false
+        );
+
+        expect(launchCalls("grid")).toHaveLength(0);
+        expect(launchCalls("dock")).toEqual([
+          [
+            "agent.launch",
+            { agentId: "claude", worktreeId: "wt-2", location: "dock" },
+            { source: "context-menu" },
+          ],
+        ]);
+      });
+
+      it("the dock destination resets after the selection it launched", () => {
+        const { getByTestId } = renderRows();
+        const row = getByTestId("agent-context-worktree-wt-2");
+
+        fireEvent.keyDown(row, { key: "d" });
+        fireEvent.click(row);
+
+        expect(launchCalls("dock")).toHaveLength(1);
+        expect(launchCalls("grid")).toEqual([
+          [
+            "agent.launch",
+            { agentId: "claude", worktreeId: "wt-2", location: "grid" },
+            { source: "context-menu" },
+          ],
+        ]);
+      });
+
+      it("leaves other keys and modified D presses to their own handlers", () => {
+        const { getByTestId } = renderRows();
+        const row = getByTestId("agent-context-worktree-wt-1");
+        for (const init of [
+          { key: "Enter" },
+          { key: " " },
+          { key: "f" },
+          { key: "d", metaKey: true },
+          { key: "d", ctrlKey: true },
+          { key: "d", altKey: true },
+        ]) {
+          expect(fireEvent.keyDown(row, init), JSON.stringify(init)).toBe(true);
+        }
+        expect(dispatchMock).not.toHaveBeenCalled();
+      });
+
+      it("names the D route in every row's accessible text, since the dock icon is aria-hidden", () => {
+        const { getByTestId } = renderRows();
+        for (const id of ["wt-1", "wt-2"]) {
+          const row = getByTestId(`agent-context-worktree-${id}`);
+          expect(row.textContent).toContain("press D to launch in dock");
+          expect(getByTestId(`agent-context-worktree-dock-${id}`).getAttribute("aria-hidden")).toBe(
+            "true"
+          );
+        }
+      });
     });
 
     it("hides the Launch in worktree submenu when no worktrees exist", () => {
