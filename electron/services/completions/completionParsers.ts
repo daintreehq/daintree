@@ -1,6 +1,7 @@
 import type { FileHandle } from "fs/promises";
 import { promises as fs } from "fs";
 import * as path from "path";
+import { load as parseYaml } from "js-yaml";
 import type { CompletionParserName } from "../../../shared/types/completionSources.js";
 
 const FRONTMATTER_MAX_BYTES = 8 * 1024;
@@ -40,28 +41,27 @@ function stripWrappingQuotes(value: string): string {
   return trimmed;
 }
 
+/** The raw YAML between a file's leading `---` fences, or null when absent. */
+async function readFrontmatterBlock(filePath: string): Promise<string | null> {
+  const text = await readBoundedText(filePath, FRONTMATTER_MAX_BYTES);
+  if (text === null || !text.startsWith("---")) return null;
+
+  const endIndex = text.indexOf("\n---", 3);
+  if (endIndex === -1) {
+    console.warn(
+      `[SlashCommandService] frontmatter truncated: closing --- not found within ${FRONTMATTER_MAX_BYTES} bytes in ${filePath}`
+    );
+    return null;
+  }
+  return text.slice(3, endIndex);
+}
+
 async function readYamlFrontmatter(
   filePath: string
 ): Promise<{ description: string | null; userInvocable: boolean }> {
-  let handle: FileHandle | null = null;
   try {
-    handle = await fs.open(filePath, "r");
-    const buffer = Buffer.alloc(FRONTMATTER_MAX_BYTES);
-    const { bytesRead } = await handle.read(buffer, 0, FRONTMATTER_MAX_BYTES, 0);
-    const text = buffer.subarray(0, bytesRead).toString("utf8");
-
-    const normalized = text.startsWith("\uFEFF") ? text.slice(1) : text;
-    if (!normalized.startsWith("---")) return { description: null, userInvocable: true };
-
-    const endIndex = normalized.indexOf("\n---", 3);
-    if (endIndex === -1) {
-      console.warn(
-        `[SlashCommandService] frontmatter truncated: closing --- not found within ${FRONTMATTER_MAX_BYTES} bytes in ${filePath}`
-      );
-      return { description: null, userInvocable: true };
-    }
-
-    const frontmatter = normalized.slice(3, endIndex);
+    const frontmatter = await readFrontmatterBlock(filePath);
+    if (frontmatter === null) return { description: null, userInvocable: true };
 
     const descMatch = frontmatter.match(/^description:\s*(.+)$/m);
     const description = descMatch ? stripWrappingQuotes(descMatch[1] ?? "") : null;
@@ -76,8 +76,6 @@ async function readYamlFrontmatter(
     return { description, userInvocable };
   } catch {
     return { description: null, userInvocable: true };
-  } finally {
-    await handle?.close().catch(() => {});
   }
 }
 
@@ -162,37 +160,78 @@ async function scanRecursiveFiles(
 }
 
 /** Immediate child directories that contain a `SKILL.md`, skipping hidden. */
-async function scanSkillDirectories(rootDir: string): Promise<RawCompletionEntry[]> {
+/** Immediate child folders of `rootDir` that hold a `SKILL.md` file. */
+async function listSkillFolders(rootDir: string): Promise<string[]> {
   const entries = await fs.readdir(rootDir, { withFileTypes: true }).catch(() => null);
   if (entries === null) return [];
 
+  const folders = await Promise.all(
+    entries.map(async (entry) => {
+      if (entry.name.startsWith(".")) return null;
+      // Skill managers commonly symlink skill folders in; the SKILL.md stat
+      // below follows the link and drops links to non-directories.
+      if (!entry.isDirectory() && !entry.isSymbolicLink()) return null;
+      try {
+        const stat = await fs.stat(path.join(rootDir, entry.name, "SKILL.md"));
+        return stat.isFile() ? entry.name : null;
+      } catch {
+        return null;
+      }
+    })
+  );
+  return folders.filter((name): name is string => name !== null);
+}
+
+/**
+ * Skill folders the way agy 1.4.10 reads them, probed live (#15243): the token
+ * is the frontmatter `name`, not the folder (`antigravity_guide/` lists as
+ * `/antigravity-guide`) and a skill without one is not listed; the description
+ * is real YAML, so folded `>-` blocks join into one line; and
+ * `user-invocable: false` does not hide the skill.
+ */
+async function scanNamedSkillDirectories(rootDir: string): Promise<RawCompletionEntry[]> {
   const results: RawCompletionEntry[] = [];
 
   await Promise.all(
-    entries.map(async (entry) => {
-      if (entry.name.startsWith(".")) return;
-      // Skill managers commonly symlink skill folders in; the SKILL.md stat
-      // below follows the link and drops links to non-directories.
-      if (!entry.isDirectory() && !entry.isSymbolicLink()) return;
+    (await listSkillFolders(rootDir)).map(async (folder) => {
+      const relativeSourcePath = path.join(folder, "SKILL.md");
+      const frontmatter = await readFrontmatterBlock(path.join(rootDir, relativeSourcePath));
+      if (frontmatter === null) return;
 
-      const skillFile = path.join(rootDir, entry.name, "SKILL.md");
+      let data: unknown;
       try {
-        const stat = await fs.stat(skillFile);
-        if (!stat.isFile()) return;
+        data = parseYaml(frontmatter);
       } catch {
         return;
       }
+      if (typeof data !== "object" || data === null) return;
 
-      const { description, userInvocable } = await readYamlFrontmatter(skillFile);
+      const { name, description } = data as Record<string, unknown>;
+      if (typeof name !== "string" || !/^\S+$/.test(name.trim())) return;
+      const text = typeof description === "string" ? description.replace(/\s+/g, " ").trim() : "";
+
       results.push({
-        nameParts: [entry.name],
-        relativeSourcePath: path.join(entry.name, "SKILL.md"),
-        description,
-        userInvocable,
+        nameParts: [name.trim()],
+        relativeSourcePath,
+        description: text || null,
+        userInvocable: true,
       });
     })
   );
 
+  return sortByPath(results);
+}
+
+async function scanSkillDirectories(rootDir: string): Promise<RawCompletionEntry[]> {
+  const results = await Promise.all(
+    (await listSkillFolders(rootDir)).map(async (folder): Promise<RawCompletionEntry> => {
+      const relativeSourcePath = path.join(folder, "SKILL.md");
+      const { description, userInvocable } = await readYamlFrontmatter(
+        path.join(rootDir, relativeSourcePath)
+      );
+      return { nameParts: [folder], relativeSourcePath, description, userInvocable };
+    })
+  );
   return sortByPath(results);
 }
 
@@ -401,6 +440,7 @@ export const COMPLETION_PARSERS: Record<CompletionParserName, CompletionParser> 
   "markdown-frontmatter": (rootDir) => scanRecursiveFiles(rootDir, ".md", readYamlFrontmatter),
   toml: (rootDir) => scanRecursiveFiles(rootDir, ".toml", readTomlDescription),
   "skill-dir": (rootDir) => scanSkillDirectories(rootDir),
+  "named-skill-dir": (rootDir) => scanNamedSkillDirectories(rootDir),
   "codex-plugin-registry": (rootDir) => scanCodexPluginRegistry(rootDir),
 };
 

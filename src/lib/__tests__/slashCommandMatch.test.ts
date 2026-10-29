@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { rankSlashCommands } from "../slashCommandMatch";
-import type { SlashCommand } from "@shared/types";
+import { getBuiltinSlashCommands, type SlashCommand } from "@shared/types";
 
 function cmd(label: string): SlashCommand {
   return {
@@ -116,5 +116,26 @@ describe("rankSlashCommands", () => {
         "/mango",
       ]);
     }
+  });
+});
+
+describe("rankSlashCommands over the Antigravity catalog", () => {
+  const agy = getBuiltinSlashCommands("antigravity");
+  const top = (query: string) => rankSlashCommands(agy, query)[0]?.label;
+
+  it("narrows a prefix to the command", () => {
+    expect(top("/us")).toBe("/usage");
+  });
+
+  it("finds a command by the alias agy displays", () => {
+    expect(top("/quota")).toBe("/usage");
+    expect(top("/cs")).toBe("/codesearch");
+    expect(top("/new")).toBe("/clear");
+  });
+
+  it("does not lend agy's aliases to another agent's menu", () => {
+    // Claude has a real /new; agy's `new` alias of /clear must not outrank it.
+    expect(rankSlashCommands(getBuiltinSlashCommands("claude"), "/new")[0]?.label).toBe("/new");
+    expect(rankSlashCommands(getBuiltinSlashCommands("claude"), "/quota")).toEqual([]);
   });
 });

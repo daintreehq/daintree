@@ -77,6 +77,12 @@ describe("adaptBuiltinSlashCommands", () => {
     }
   });
 
+  it("keeps a built-in's declared kind instead of stamping 'command'", () => {
+    const kinds = new Map(adaptBuiltinSlashCommands("antigravity", "/").map((c) => [c.id, c.kind]));
+    expect(kinds.get("antigravity-guide")).toBe("skill");
+    expect(kinds.get("usage")).toBe("command");
+  });
+
   it("honors the passed trigger rather than hardcoding '/'", () => {
     // Guards the source.trigger stamping (a static source could declare a
     // non-slash trigger); a hardcoded "/" would fail this.
@@ -484,6 +490,108 @@ Body.
       const labels = codex.filter((c) => c.trigger === "$").map((c) => c.label);
       expect(labels).toContain("$personal");
       expect(labels).toContain("$installed");
+    } finally {
+      restoreHome(prev);
+      await fsp.rm(homeRoot, { recursive: true, force: true });
+      await fsp.rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("CompletionDiscoveryEngine: Antigravity", () => {
+  // agy lists a skill under its frontmatter `name`, never its folder name.
+  const skill = (name: string, description: string) => `---
+name: ${name}
+description: "${description}"
+---
+
+Body.
+`;
+
+  it("lists agy's built-ins and the skills in every folder agy reads, and nothing it ignores", async () => {
+    const homeRoot = await makeTempDir();
+    const projectRoot = await makeTempDir();
+    const prev = overrideHome(homeRoot);
+    const engine = new CompletionDiscoveryEngine();
+
+    try {
+      await fsp.mkdir(path.join(projectRoot, ".git"));
+      const read: Array<[string[], string]> = [
+        [[projectRoot, ".agents", "skills"], "proj-agents"],
+        [[projectRoot, ".agent", "skills"], "proj-agent"],
+        [[homeRoot, ".gemini", "config", "skills"], "user-config"],
+        [[homeRoot, ".gemini", "antigravity-cli", "skills"], "user-cli"],
+        [[homeRoot, ".gemini", "skills"], "user-gemini"],
+      ];
+      const ignored: Array<[string[], string]> = [
+        [[projectRoot, ".gemini", "skills"], "proj-gemini"],
+        [[homeRoot, ".agents", "skills"], "user-agents"],
+        [[homeRoot, ".gemini", "antigravity-cli", "builtin", "skills"], "automation"],
+      ];
+      for (const [dir, name] of [...read, ...ignored]) {
+        await writeFile(path.join(...dir, `${name}_dir`, "SKILL.md"), skill(name, `${name} skill`));
+      }
+      await writeFile(
+        path.join(projectRoot, ".gemini", "commands", "deploy.toml"),
+        `description = "TOML command"\n`
+      );
+      await writeFile(
+        path.join(projectRoot, ".agents", "workflows", "release.md"),
+        `---\ndescription: "Legacy workflow"\n---\n`
+      );
+
+      const agy = await engine.list("antigravity", projectRoot);
+      const byLabel = new Map(agy.map((c) => [c.label, c]));
+
+      for (const [dir, name] of read) {
+        expect(byLabel.get(`/${name}`), name).toMatchObject({
+          kind: "skill",
+          trigger: "/",
+          scope: dir[0] === projectRoot ? "project" : "user",
+          description: `${name} skill`,
+        });
+      }
+      for (const [, name] of ignored) expect(byLabel.has(`/${name}`), name).toBe(false);
+      expect(byLabel.has("/deploy")).toBe(false);
+      expect(byLabel.has("/release")).toBe(false);
+
+      expect(byLabel.get("/usage")).toMatchObject({
+        scope: "built-in",
+        kind: "command",
+        aliases: ["quota"],
+      });
+      expect(byLabel.get("/agy-customizations")).toMatchObject({ kind: "skill" });
+      expect(agy.every((c) => c.trigger === "/")).toBe(true);
+    } finally {
+      restoreHome(prev);
+      await fsp.rm(homeRoot, { recursive: true, force: true });
+      await fsp.rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("lets a project skill win over a user skill of the same name", async () => {
+    const homeRoot = await makeTempDir();
+    const projectRoot = await makeTempDir();
+    const prev = overrideHome(homeRoot);
+    const engine = new CompletionDiscoveryEngine();
+
+    try {
+      await fsp.mkdir(path.join(projectRoot, ".git"));
+      await writeFile(
+        path.join(homeRoot, ".gemini", "skills", "ship", "SKILL.md"),
+        skill("ship", "user ship")
+      );
+      await writeFile(
+        path.join(projectRoot, ".agents", "skills", "ship", "SKILL.md"),
+        skill("ship", "project ship")
+      );
+
+      const ship = (await engine.list("antigravity", projectRoot)).filter(
+        (c) => c.label === "/ship"
+      );
+      expect(ship).toEqual([
+        expect.objectContaining({ scope: "project", description: "project ship" }),
+      ]);
     } finally {
       restoreHome(prev);
       await fsp.rm(homeRoot, { recursive: true, force: true });

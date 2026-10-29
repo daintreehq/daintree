@@ -316,3 +316,87 @@ describe("skill-dir parser", () => {
     }
   });
 });
+
+describe("named-skill-dir parser", () => {
+  async function run(skillsDir: string): Promise<Map<string, RawCompletionEntry>> {
+    const parser = getCompletionParser("named-skill-dir");
+    expect(parser).toBeDefined();
+    return byName(await parser!(skillsDir));
+  }
+
+  it("names a skill by its frontmatter, not its folder, and skips one without a name", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "daintree-named-skill-dir-"));
+    try {
+      await write(
+        path.join(root, "antigravity_guide", "SKILL.md"),
+        "---\nname: antigravity-guide\ndescription: guide\n---\n"
+      );
+      await write(path.join(root, "nameless", "SKILL.md"), "---\ndescription: orphan\n---\n");
+      await write(path.join(root, "no-frontmatter", "SKILL.md"), "# Just a body\n");
+      await write(path.join(root, "spaced", "SKILL.md"), "---\nname: two words\n---\n");
+
+      const entries = await run(root);
+      expect([...entries.keys()]).toEqual(["antigravity-guide"]);
+      expect(entries.get("antigravity-guide")).toMatchObject({
+        description: "guide",
+        relativeSourcePath: path.join("antigravity_guide", "SKILL.md"),
+      });
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reads YAML descriptions, including folded blocks, as one line", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "daintree-named-skill-dir-"));
+    try {
+      await write(
+        path.join(root, "folded", "SKILL.md"),
+        "---\nname: folded\ndescription: >-\n  Spans two\n  lines.\n---\n"
+      );
+      await write(
+        path.join(root, "literal", "SKILL.md"),
+        "---\nname: literal\ndescription: |\n  First\n  second\n---\n"
+      );
+      await write(path.join(root, "bare", "SKILL.md"), "---\nname: bare\n---\n");
+
+      const entries = await run(root);
+      expect(entries.get("folded")?.description).toBe("Spans two lines.");
+      expect(entries.get("literal")?.description).toBe("First second");
+      expect(entries.get("bare")?.description).toBeNull();
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a user-invocable: false skill and drops malformed YAML", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "daintree-named-skill-dir-"));
+    try {
+      await write(
+        path.join(root, "hidden", "SKILL.md"),
+        "---\nname: hidden\nuser-invocable: false\n---\n"
+      );
+      await write(path.join(root, "broken", "SKILL.md"), "---\nname: [unclosed\n---\n");
+
+      const entries = await run(root);
+      expect([...entries.keys()]).toEqual(["hidden"]);
+      expect(entries.get("hidden")?.userInvocable).toBe(true);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("follows symlinked skill folders", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "daintree-named-skill-dir-"));
+    try {
+      const skillsDir = path.join(root, "skills");
+      const elsewhere = path.join(root, "elsewhere", "linked");
+      await write(path.join(elsewhere, "SKILL.md"), "---\nname: linked\n---\n");
+      await fsp.mkdir(skillsDir, { recursive: true });
+      await fsp.symlink(elsewhere, path.join(skillsDir, "linked"), "junction");
+
+      expect([...(await run(skillsDir)).keys()]).toEqual(["linked"]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
