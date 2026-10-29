@@ -10,7 +10,9 @@ import { listDraftContextTokens, shareContextReferenceResolutions } from "../dra
 describe("listDraftContextTokens", () => {
   it("names each distinct token once, in the order the draft has them", () => {
     expect(
-      listDraftContextTokens("@terminal then @diff:staged and @rec:7 and @diff:staged again @selection")
+      listDraftContextTokens(
+        "@terminal then @diff:staged and @rec:7 and @diff:staged again @selection"
+      )
     ).toEqual([
       { text: "@terminal", kind: "terminal" },
       { text: "@diff:staged", kind: "diff" },

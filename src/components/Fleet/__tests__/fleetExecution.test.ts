@@ -697,12 +697,12 @@ describe("findCrossHostContextTargets", () => {
   it("names the other host's agents whose text still carries context", () => {
     expect(findCrossHostContextTargets("Review @diff", ["a", REMOTE])).toEqual([REMOTE]);
     expect(findCrossHostContextTargets("Review", ["a", REMOTE])).toEqual([]);
-    expect(findCrossHostContextTargets("Review @diff", ["a", REMOTE], { [REMOTE]: "Review" })).toEqual(
-      []
+    expect(
+      findCrossHostContextTargets("Review @diff", ["a", REMOTE], { [REMOTE]: "Review" })
+    ).toEqual([]);
+    expect(findCrossHostContextTargets("Review", ["a", REMOTE], { [REMOTE]: "@terminal" })).toEqual(
+      [REMOTE]
     );
-    expect(findCrossHostContextTargets("Review", ["a", REMOTE], { [REMOTE]: "@terminal" })).toEqual([
-      REMOTE,
-    ]);
   });
 });
 
