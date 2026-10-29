@@ -128,7 +128,7 @@ describe("Save as project follow-up", () => {
     expect(onOpenSavedProject).toHaveBeenCalledTimes(1);
   });
 
-  it("hands focus back to the palette input, which is still open behind it", () => {
+  it("forwards the palette input as the restore target, since it outlives the dialog", () => {
     renderFollowUp();
 
     expect(screen.getByTestId("confirm-dialog").getAttribute("data-restore-focus")).toBe(
