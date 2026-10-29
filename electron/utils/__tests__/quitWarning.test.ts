@@ -182,11 +182,45 @@ describe("showQuitWarning with attached Shells", () => {
 describe("showUpdateWarning", () => {
   it("names the machines and says the update stays ready", async () => {
     const showMessageBox = vi.fn().mockResolvedValue({ response: 0 });
-    const confirmed = await showUpdateWarning([{ clientName: "MacBook Pro" }], showMessageBox);
+    const confirmed = await showUpdateWarning(
+      { activeAgents: 0, attachedShells: [{ clientName: "MacBook Pro" }] },
+      showMessageBox
+    );
     const opts = showMessageBox.mock.calls[0]![0];
     expect(confirmed).toBe(true);
     expect(opts.detail).toContain("disconnects MacBook Pro");
     expect(opts.detail).toContain("stays ready");
+    expect(opts.detail).not.toContain("agent");
     expect(opts.buttons).toEqual(["Restart and Update", "Cancel"]);
+  });
+
+  it("asks about working agents with the same count Quit shows", async () => {
+    const showMessageBox = vi.fn().mockResolvedValue({ response: 1 });
+    const confirmed = await showUpdateWarning(
+      { activeAgents: 2, attachedShells: [] },
+      showMessageBox
+    );
+    const opts = showMessageBox.mock.calls[0]![0];
+    expect(confirmed).toBe(false);
+    expect(opts.title).toBe("Agents are working");
+    expect(opts.message).toBe("2 agents are currently working");
+    expect(opts.detail).toContain("interrupt active agents");
+    expect(opts.detail).toContain("stays ready");
+    expect(opts.buttons).toEqual(["Restart and Update", "Cancel"]);
+    expect(opts.cancelId).toBe(1);
+    expect(opts.defaultId).toBe(1);
+  });
+
+  it("mentions working agents beside the attached Shells in one dialog", async () => {
+    const showMessageBox = vi.fn().mockResolvedValue({ response: 0 });
+    await showUpdateWarning(
+      { activeAgents: 1, attachedShells: [{ clientName: "MacBook Pro" }] },
+      showMessageBox
+    );
+    const opts = showMessageBox.mock.calls[0]![0];
+    expect(opts.title).toBe("Other machines are attached");
+    expect(opts.detail).toContain("disconnects MacBook Pro");
+    expect(opts.detail).toContain("1 agent is currently working");
+    expect(opts.detail).toContain("stays ready");
   });
 });

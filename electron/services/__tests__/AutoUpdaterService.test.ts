@@ -128,8 +128,12 @@ vi.mock("electron", () => ({
   dialog: { showMessageBox: vi.fn() },
 }));
 
-const updateWarningMock = vi.hoisted(() => ({ showUpdateWarning: vi.fn() }));
+const updateWarningMock = vi.hoisted(() => ({
+  showUpdateWarning: vi.fn(),
+  getActiveAgentCount: vi.fn(() => 0),
+}));
 vi.mock("../../utils/quitWarning.js", () => updateWarningMock);
+vi.mock("../AgentAvailabilityStore.js", () => ({ getAgentAvailabilityStore: () => ({}) }));
 
 vi.mock("../../ipc/utils.js", () => ({
   broadcastToRenderer: broadcastMock,
@@ -2251,7 +2255,7 @@ describe("AutoUpdaterService", () => {
         await expect(autoUpdaterService.confirmAndQuitAndInstall()).resolves.toBe(false);
 
         expect(updateWarningMock.showUpdateWarning).toHaveBeenCalledWith(
-          [{ clientName: "MacBook Pro" }],
+          { activeAgents: 0, attachedShells: [{ clientName: "MacBook Pro" }] },
           expect.anything(),
           windowMock
         );
@@ -2300,6 +2304,85 @@ describe("AutoUpdaterService", () => {
         await expect(autoUpdaterService.confirmAndQuitAndInstall()).resolves.toBe(true);
 
         expect(updateWarningMock.showUpdateWarning).not.toHaveBeenCalled();
+      });
+    });
+
+    describe("with agents working", () => {
+      const quitHandler = () =>
+        (ipcMainMock.handle as Mock).mock.calls.find(
+          (args) => args[0] === CHANNELS.UPDATE_QUIT_AND_INSTALL
+        )![1] as (event: unknown) => void;
+
+      beforeEach(() => {
+        updateWarningMock.getActiveAgentCount.mockReturnValue(2);
+        downloadedHandler({ version: "2.0.0" });
+      });
+
+      afterEach(() => {
+        updateWarningMock.getActiveAgentCount.mockImplementation(() => 0);
+        updateWarningMock.showUpdateWarning.mockReset();
+        setAttachedShellsProvider(null);
+      });
+
+      it("asks first with the working count and leaves the update staged when cancelled", async () => {
+        updateWarningMock.showUpdateWarning.mockResolvedValue(false);
+
+        await expect(autoUpdaterService.confirmAndQuitAndInstall()).resolves.toBe(false);
+
+        expect(updateWarningMock.showUpdateWarning).toHaveBeenCalledWith(
+          { activeAgents: 2, attachedShells: [] },
+          expect.anything(),
+          windowMock
+        );
+        expect(shutdownCoordinatorMock.requestGracefulShutdownForUpdate).not.toHaveBeenCalled();
+        expect(autoUpdaterService.getMenuState()).toBe("ready");
+        expect(isExitConfirmationPending()).toBe(false);
+      });
+
+      it("installs once confirmed", async () => {
+        updateWarningMock.showUpdateWarning.mockResolvedValue(true);
+
+        await expect(autoUpdaterService.confirmAndQuitAndInstall()).resolves.toBe(true);
+
+        expect(shutdownCoordinatorMock.requestGracefulShutdownForUpdate).toHaveBeenCalledTimes(1);
+      });
+
+      it("asks once about both agents and attached Shells", async () => {
+        setAttachedShellsProvider(() => [{ clientName: "MacBook Pro" }]);
+        updateWarningMock.showUpdateWarning.mockResolvedValue(false);
+
+        await autoUpdaterService.confirmAndQuitAndInstall();
+
+        expect(updateWarningMock.showUpdateWarning).toHaveBeenCalledTimes(1);
+        expect(updateWarningMock.showUpdateWarning).toHaveBeenCalledWith(
+          { activeAgents: 2, attachedShells: [{ clientName: "MacBook Pro" }] },
+          expect.anything(),
+          windowMock
+        );
+      });
+
+      it("gates the renderer toast the same way, and a later restart still works", async () => {
+        updateWarningMock.showUpdateWarning.mockResolvedValue(false);
+
+        quitHandler()(TRUSTED_SENDER);
+        await vi.waitFor(() => expect(updateWarningMock.showUpdateWarning).toHaveBeenCalled());
+        await vi.waitFor(() => expect(isExitConfirmationPending()).toBe(false));
+        expect(shutdownCoordinatorMock.requestGracefulShutdownForUpdate).not.toHaveBeenCalled();
+
+        updateWarningMock.showUpdateWarning.mockResolvedValue(true);
+        quitHandler()(TRUSTED_SENDER);
+        await vi.waitFor(() =>
+          expect(shutdownCoordinatorMock.requestGracefulShutdownForUpdate).toHaveBeenCalledTimes(1)
+        );
+      });
+
+      it("restarts straight away once nothing is working", async () => {
+        updateWarningMock.getActiveAgentCount.mockReturnValue(0);
+
+        quitHandler()(TRUSTED_SENDER);
+
+        expect(updateWarningMock.showUpdateWarning).not.toHaveBeenCalled();
+        expect(shutdownCoordinatorMock.requestGracefulShutdownForUpdate).toHaveBeenCalledTimes(1);
       });
     });
 

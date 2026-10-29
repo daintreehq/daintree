@@ -15,13 +15,21 @@ export interface QuitImpact {
   attachedShells: AttachedShell[];
 }
 
+function agentsWorkingLine(activeAgents: number): string {
+  return `${activeAgents} agent${activeAgents > 1 ? "s are" : " is"} currently working`;
+}
+
+function attachedShellsMessage(attachedShells: AttachedShell[]): string {
+  return `${describeShellNames(attachedShells)} ${attachedShells.length > 1 ? "are" : "is"} attached to this host`;
+}
+
 export async function showQuitWarning(
   impact: QuitImpact,
   showMessageBox: Dialog["showMessageBox"],
   win?: BrowserWindow | null
 ): Promise<boolean> {
   const { activeAgents, attachedShells } = impact;
-  const agentsLine = `${activeAgents} agent${activeAgents > 1 ? "s are" : " is"} currently working`;
+  const agentsLine = agentsWorkingLine(activeAgents);
   const shellsLine = `Quitting disconnects ${describeShellNames(attachedShells)} and ends the work it has open on this machine.`;
 
   const opts: Electron.MessageBoxOptions =
@@ -41,7 +49,7 @@ export async function showQuitWarning(
           defaultId: 1,
           cancelId: 1,
           title: "Other machines are attached",
-          message: `${describeShellNames(attachedShells)} ${attachedShells.length > 1 ? "are" : "is"} attached to this host`,
+          message: attachedShellsMessage(attachedShells),
           detail:
             activeAgents > 0
               ? `${shellsLine} ${agentsLine}, and quitting will interrupt them too.`
@@ -54,20 +62,38 @@ export async function showQuitWarning(
 }
 
 export async function showUpdateWarning(
-  attachedShells: AttachedShell[],
+  impact: QuitImpact,
   showMessageBox: Dialog["showMessageBox"],
   win?: BrowserWindow | null
 ): Promise<boolean> {
-  const names = describeShellNames(attachedShells);
-  const opts: Electron.MessageBoxOptions = {
-    type: "warning",
-    buttons: ["Restart and Update", "Cancel"],
-    defaultId: 1,
-    cancelId: 1,
-    title: "Other machines are attached",
-    message: `${names} ${attachedShells.length > 1 ? "are" : "is"} attached to this host`,
-    detail: `Restarting to update disconnects ${names} and ends the work it has open on this machine. The update stays ready until you restart.`,
-  };
+  const { activeAgents, attachedShells } = impact;
+  const agentsLine = agentsWorkingLine(activeAgents);
+  const staysReady = "The update stays ready until you restart.";
+  const shellsLine = `Restarting to update disconnects ${describeShellNames(attachedShells)} and ends the work it has open on this machine.`;
+
+  const opts: Electron.MessageBoxOptions =
+    attachedShells.length === 0
+      ? {
+          type: "warning",
+          buttons: ["Restart and Update", "Cancel"],
+          defaultId: 1,
+          cancelId: 1,
+          title: "Agents are working",
+          message: agentsLine,
+          detail: `Restarting to update now will interrupt active agents. ${staysReady}`,
+        }
+      : {
+          type: "warning",
+          buttons: ["Restart and Update", "Cancel"],
+          defaultId: 1,
+          cancelId: 1,
+          title: "Other machines are attached",
+          message: attachedShellsMessage(attachedShells),
+          detail:
+            activeAgents > 0
+              ? `${shellsLine} ${agentsLine}, and restarting will interrupt them too. ${staysReady}`
+              : `${shellsLine} ${staysReady}`,
+        };
 
   const { response } = win ? await showMessageBox(win, opts) : await showMessageBox(opts);
 
