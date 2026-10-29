@@ -6,6 +6,8 @@ import {
   DropdownMenuTrigger,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { findAllDevServerCandidates, findDevServerCandidate } from "@/utils/devServerDetection";
@@ -20,18 +22,21 @@ import type { ProjectSettings } from "@shared/types";
 interface UseDevPreviewCommandConfigParams {
   currentProjectId?: string;
   devCommand: string;
+  /** The preview carries its own command, which wins over the project default. */
+  hasOwnCommand: boolean;
+  setOwnCommand: (command: string) => void;
   isUnconfigured: boolean;
   projectSettings: ProjectSettings | null;
-  stop: () => void;
   isMountedRef: React.RefObject<boolean>;
 }
 
 export function useDevPreviewCommandConfig({
   currentProjectId,
   devCommand,
+  hasOwnCommand,
+  setOwnCommand,
   isUnconfigured,
   projectSettings,
-  stop,
   isMountedRef,
 }: UseDevPreviewCommandConfigParams) {
   const { saveSettings, refresh: refreshSettings } = useProjectSettings();
@@ -140,13 +145,19 @@ export function useDevPreviewCommandConfig({
     [handleAutoDetect]
   );
 
+  // The pick changes whichever command this preview actually runs. No stop:
+  // useDevServer treats the new command as a config change and relaunches a
+  // running server on it, where a user stop would leave it down (#15026).
   const handleHeaderPickCandidate = useCallback(
-    async (candidate: { command: string }) => {
+    (candidate: { command: string }) => {
       if (candidate.command.trim() === devCommand.trim()) return;
-      const saved = await handleAutoDetect(candidate.command);
-      if (saved) stop();
+      if (hasOwnCommand) {
+        setOwnCommand(candidate.command);
+        return;
+      }
+      void handleAutoDetect(candidate.command);
     },
-    [devCommand, handleAutoDetect, stop]
+    [devCommand, hasOwnCommand, setOwnCommand, handleAutoDetect]
   );
 
   const handleSaveCommand = useCallback(async () => {
@@ -204,12 +215,15 @@ export function useDevPreviewCommandConfig({
           </TooltipContent>
         </Tooltip>
         <DropdownMenuContent align="end" sideOffset={4} className="w-72 p-1">
+          <DropdownMenuLabel>
+            {hasOwnCommand ? "This preview only" : "Project default"}
+          </DropdownMenuLabel>
           {candidates.map((c) => {
             const isActive = c.command.trim() === devCommand.trim();
             return (
               <DropdownMenuItem
                 key={c.id}
-                onSelect={() => void handleHeaderPickCandidate(c)}
+                onSelect={() => handleHeaderPickCandidate(c)}
                 // The command in use is a committed value, so it takes the check
                 // every picker gives one — a resting fill would read as a second
                 // highlighted row.
@@ -227,10 +241,25 @@ export function useDevPreviewCommandConfig({
               </DropdownMenuItem>
             );
           })}
+          {!hasOwnCommand && (
+            <>
+              <DropdownMenuSeparator />
+              <p className="px-2.5 py-1.5 text-2xs text-text-secondary select-none">
+                Other previews that use the project default switch too
+              </p>
+            </>
+          )}
         </DropdownMenuContent>
       </DropdownMenu>
     );
-  }, [isUnconfigured, candidates, devCommand, headerLabel, handleHeaderPickCandidate]);
+  }, [
+    isUnconfigured,
+    candidates,
+    devCommand,
+    headerLabel,
+    hasOwnCommand,
+    handleHeaderPickCandidate,
+  ]);
 
   const commandInputError = useMemo(() => getInvalidCommandMessage(commandInput), [commandInput]);
 

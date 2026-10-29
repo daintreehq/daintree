@@ -134,6 +134,7 @@ const {
     setDevPreviewConsoleOpen: vi.fn(),
     setDevPreviewConsoleTab: vi.fn(),
     setViewportPreset: vi.fn(),
+    setDevPreviewCommand: vi.fn(),
     setDevPreviewScrollPosition: vi.fn(
       (_id: string, position: { url: string; scrollY: number } | undefined) => {
         scrollPositionRef.current = position;
@@ -346,6 +347,7 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
       {children}
     </button>
   ),
+  DropdownMenuLabel: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   DropdownMenuSeparator: () => null,
 }));
 
@@ -2331,6 +2333,134 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       const { container } = render(<DevPreviewPane {...baseProps} />);
       expect(screen.getByTestId("panel-header-content")).toBeTruthy();
       expect(container.textContent).toContain("npm run custom");
+    });
+
+    const withTwoScripts = () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      useProjectSettingsStoreMock.mockImplementation((selector: (state: any) => unknown) =>
+        selector({
+          projectId: "project-1",
+          settings: {
+            devServerCommand: "npm run dev",
+            environmentVariables: {},
+            runCommands: [],
+          },
+          detectedRunners: [],
+          allDetectedRunners: [
+            { id: "r1", name: "Dev", command: "npm run dev", source: "package.json" as const },
+            { id: "r2", name: "Start", command: "npm start", source: "package.json" as const },
+          ],
+          isLoading: false,
+          error: null,
+          loadSettings: vi.fn(),
+          setSettings: vi.fn(),
+        })
+      );
+    };
+
+    it("runs the picked script on a preview with its own command, leaving the project default alone (#15026)", async () => {
+      let ownCommand = "npm run dev";
+      terminalStoreState.getTerminal.mockImplementation(() => ({
+        kind: "dev-preview",
+        id: "dev-preview-panel-1",
+        browserHistory: { past: [], present: "http://localhost:5173/", future: [] },
+        browserZoom: 1.0,
+        devPreviewConsoleOpen: false,
+        devCommand: ownCommand,
+        devPreviewScrollPosition: scrollPositionRef.current,
+      }));
+      terminalStoreState.setDevPreviewCommand.mockImplementation((_id: string, command: string) => {
+        ownCommand = command;
+      });
+      withTwoScripts();
+      const { rerender } = render(<DevPreviewPane {...baseProps} />);
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("menuitem", { name: /Start.*npm start/ }));
+        await Promise.resolve();
+      });
+      rerender(<DevPreviewPane {...baseProps} />);
+
+      expect(terminalStoreState.setDevPreviewCommand).toHaveBeenCalledWith(
+        "dev-preview-panel-1",
+        "npm start"
+      );
+      const lastDevServerArgs = (useDevServerMock.mock.lastCall as unknown[] | undefined)?.[0] as
+        { devCommand?: string } | undefined;
+      expect(lastDevServerArgs?.devCommand).toBe("npm start");
+      expect(saveSettingsMock).not.toHaveBeenCalled();
+      expect(devServerStateRef.current.stop).not.toHaveBeenCalled();
+    });
+
+    it("offers no script picker on a resource endpoint preview", () => {
+      terminalStoreState.getTerminal.mockImplementation(() => ({
+        kind: "dev-preview",
+        id: "dev-preview-panel-1",
+        browserHistory: { past: [], present: "", future: [] },
+        browserZoom: 1.0,
+        devPreviewConsoleOpen: false,
+        devCommand: "npm run dev",
+        previewsResourceEndpoint: true,
+        devPreviewScrollPosition: scrollPositionRef.current,
+      }));
+      withTwoScripts();
+      render(<DevPreviewPane {...baseProps} />);
+
+      expect(screen.queryByLabelText(/^Dev script:/)).toBeNull();
+    });
+
+    it("moves the project default from an inheriting preview without stopping it", async () => {
+      terminalStoreState.getTerminal.mockImplementation(() => ({
+        kind: "dev-preview",
+        id: "dev-preview-panel-1",
+        browserHistory: { past: [], present: "", future: [] },
+        browserZoom: 1.0,
+        devPreviewConsoleOpen: false,
+        // Whitespace is no command of its own: the preview inherits the default.
+        devCommand: "   ",
+        devPreviewScrollPosition: scrollPositionRef.current,
+      }));
+      let projectDefault = "npm run dev";
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      useProjectSettingsStoreMock.mockImplementation((selector: (state: any) => unknown) =>
+        selector({
+          projectId: "project-1",
+          settings: {
+            devServerCommand: projectDefault,
+            environmentVariables: {},
+            runCommands: [],
+          },
+          detectedRunners: [],
+          allDetectedRunners: [
+            { id: "r1", name: "Dev", command: "npm run dev", source: "package.json" as const },
+            { id: "r2", name: "Start", command: "npm start", source: "package.json" as const },
+          ],
+          isLoading: false,
+          error: null,
+          loadSettings: vi.fn(),
+          setSettings: vi.fn(),
+        })
+      );
+      saveSettingsMock.mockImplementation(async (settings: { devServerCommand: string }) => {
+        projectDefault = settings.devServerCommand;
+      });
+      const { rerender } = render(<DevPreviewPane {...baseProps} />);
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("menuitem", { name: /Start.*npm start/ }));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      rerender(<DevPreviewPane {...baseProps} />);
+
+      expect(saveSettingsMock).toHaveBeenCalledWith(
+        expect.objectContaining({ devServerCommand: "npm start" })
+      );
+      const lastDevServerArgs = (useDevServerMock.mock.lastCall as unknown[] | undefined)?.[0] as
+        { devCommand?: string } | undefined;
+      expect(lastDevServerArgs?.devCommand).toBe("npm start");
+      expect(terminalStoreState.setDevPreviewCommand).not.toHaveBeenCalled();
+      expect(devServerStateRef.current.stop).not.toHaveBeenCalled();
     });
 
     it("does not propagate pointerdown from the trigger to header ancestors", () => {

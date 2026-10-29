@@ -28,6 +28,7 @@ export const createBrowserActions = (
   | "setViewportRotated"
   | "setViewportDpr"
   | "setViewportFit"
+  | "setDevPreviewCommand"
   | "setDevPreviewScrollPosition"
   | "setDevServerState"
   | "setSpawnError"
@@ -184,6 +185,23 @@ export const createBrowserActions = (
       const newById = {
         ...state.panelsById,
         [id]: { ...terminal, viewportFit: fit },
+      };
+      saveNormalized(newById, state.panelIds);
+      return { panelsById: newById };
+    });
+  },
+
+  setDevPreviewCommand: (id, command) => {
+    set((state) => {
+      const terminal = state.panelsById[id];
+      if (!terminal) return state;
+      if (terminal.kind !== "dev-preview") return state;
+      const trimmed = command.trim();
+      if (!trimmed || terminal.devCommand?.trim() === trimmed) return state;
+
+      const newById = {
+        ...state.panelsById,
+        [id]: { ...terminal, devCommand: trimmed },
       };
       saveNormalized(newById, state.panelIds);
       return { panelsById: newById };
