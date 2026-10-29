@@ -18,7 +18,8 @@ interface UseAutocompleteApplyParams {
     nextValue: string,
     options?: { selection?: EditorSelection; focus?: boolean }
   ) => void;
-  sendText: (text: string) => void;
+  /** Runs an execute row's completed draft; where it goes is the host's call. */
+  onExecute: (text: string) => void;
   setActiveCompletionContext: (value: ActiveCompletionContext | null) => void;
   setSelectedIndex: (value: number) => void;
 }
@@ -33,7 +34,7 @@ function applyAutocompleteItem(
   latestRef: React.RefObject<LatestRefShape | null>,
   lastQueryRef: React.RefObject<string>,
   applyEditorValue: UseAutocompleteApplyParams["applyEditorValue"],
-  sendText: UseAutocompleteApplyParams["sendText"],
+  onExecute: UseAutocompleteApplyParams["onExecute"],
   setActiveCompletionContext: UseAutocompleteApplyParams["setActiveCompletionContext"],
   setSelectedIndex: UseAutocompleteApplyParams["setSelectedIndex"]
 ) {
@@ -70,7 +71,7 @@ function applyAutocompleteItem(
   };
 
   if (action === "execute") {
-    sendText(nextValue);
+    onExecute(nextValue);
     clear();
     return;
   }
@@ -88,7 +89,7 @@ export function useAutocompleteApply({
   latestRef,
   lastQueryRef,
   applyEditorValue,
-  sendText,
+  onExecute,
   setActiveCompletionContext,
   setSelectedIndex,
 }: UseAutocompleteApplyParams) {
@@ -105,7 +106,7 @@ export function useAutocompleteApply({
         latestRef,
         lastQueryRef,
         applyEditorValue,
-        sendText,
+        onExecute,
         setActiveCompletionContext,
         setSelectedIndex
       );
@@ -116,7 +117,7 @@ export function useAutocompleteApply({
       latestRef,
       lastQueryRef,
       applyEditorValue,
-      sendText,
+      onExecute,
       setActiveCompletionContext,
       setSelectedIndex,
     ]
@@ -131,7 +132,7 @@ export function useAutocompleteApply({
         latestRef,
         lastQueryRef,
         applyEditorValue,
-        sendText,
+        onExecute,
         setActiveCompletionContext,
         setSelectedIndex
       ),
@@ -140,7 +141,7 @@ export function useAutocompleteApply({
       latestRef,
       lastQueryRef,
       applyEditorValue,
-      sendText,
+      onExecute,
       setActiveCompletionContext,
       setSelectedIndex,
     ]

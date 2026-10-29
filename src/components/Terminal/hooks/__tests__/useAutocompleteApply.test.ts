@@ -20,7 +20,7 @@ function setup(
     state: EditorState.create({ doc, selection: { anchor: doc.length } }),
   });
   const applyEditorValue = vi.fn<Params["applyEditorValue"]>();
-  const sendText = vi.fn<Params["sendText"]>();
+  const onExecute = vi.fn<Params["onExecute"]>();
   const setActiveCompletionContext = vi.fn<Params["setActiveCompletionContext"]>();
   const latest: Latest = {
     autocompleteItems: [item],
@@ -33,13 +33,13 @@ function setup(
     latestRef: { current: latest },
     lastQueryRef: { current: "" },
     applyEditorValue,
-    sendText,
+    onExecute,
     setActiveCompletionContext,
     setSelectedIndex: vi.fn(),
   };
 
   const { result } = renderHook(() => useAutocompleteApply(params));
-  return { ...result.current, applyEditorValue, sendText, setActiveCompletionContext, view };
+  return { ...result.current, applyEditorValue, onExecute, setActiveCompletionContext, view };
 }
 
 const dollarContext: ActiveCompletionContext = {
@@ -103,7 +103,7 @@ describe("useAutocompleteApply", () => {
   });
 
   it("inserts the canonical token on click, never the display label", () => {
-    const { handleAutocompleteSelect, applyEditorValue, sendText, view } = setup(
+    const { handleAutocompleteSelect, applyEditorValue, onExecute, view } = setup(
       "$plug",
       capability,
       dollarContext
@@ -112,7 +112,7 @@ describe("useAutocompleteApply", () => {
       handleAutocompleteSelect(capability);
       expect(applyEditorValue).toHaveBeenCalledTimes(1);
       expect(applyEditorValue.mock.calls[0]![0]).toBe("$plugin-creator ");
-      expect(sendText).not.toHaveBeenCalled();
+      expect(onExecute).not.toHaveBeenCalled();
     } finally {
       view.destroy();
     }
@@ -122,7 +122,7 @@ describe("useAutocompleteApply", () => {
     const {
       applyAutocompleteSelection,
       applyEditorValue,
-      sendText,
+      onExecute,
       setActiveCompletionContext,
       view,
     } = setup("$plug", capability, dollarContext);
@@ -130,7 +130,7 @@ describe("useAutocompleteApply", () => {
       expect(applyAutocompleteSelection("enter")).toBe(true);
       expect(applyEditorValue).toHaveBeenCalledTimes(1);
       expect(applyEditorValue.mock.calls[0]![0]).toBe("$plugin-creator ");
-      expect(sendText).not.toHaveBeenCalled();
+      expect(onExecute).not.toHaveBeenCalled();
       // Menu closes after the first Enter — so the NEXT Enter has no active
       // context and falls through to a normal send (the two-Enter $ flow).
       expect(setActiveCompletionContext).toHaveBeenCalledWith(null);
@@ -140,15 +140,15 @@ describe("useAutocompleteApply", () => {
   });
 
   it("a / command executes on Enter with the canonical token", () => {
-    const { applyAutocompleteSelection, applyEditorValue, sendText, view } = setup(
+    const { applyAutocompleteSelection, applyEditorValue, onExecute, view } = setup(
       "/plug",
       command,
       slashContext
     );
     try {
       expect(applyAutocompleteSelection("enter")).toBe(true);
-      expect(sendText).toHaveBeenCalledTimes(1);
-      expect(sendText.mock.calls[0]![0]).toBe("/commit");
+      expect(onExecute).toHaveBeenCalledTimes(1);
+      expect(onExecute.mock.calls[0]![0]).toBe("/commit");
       expect(applyEditorValue).not.toHaveBeenCalled();
     } finally {
       view.destroy();
@@ -156,7 +156,7 @@ describe("useAutocompleteApply", () => {
   });
 
   it("Tab/complete always inserts even for an execute item", () => {
-    const { applyAutocompleteSelection, applyEditorValue, sendText, view } = setup(
+    const { applyAutocompleteSelection, applyEditorValue, onExecute, view } = setup(
       "/plug",
       command,
       slashContext
@@ -165,7 +165,7 @@ describe("useAutocompleteApply", () => {
       expect(applyAutocompleteSelection("complete")).toBe(true);
       expect(applyEditorValue).toHaveBeenCalledTimes(1);
       expect(applyEditorValue.mock.calls[0]![0]).toBe("/commit ");
-      expect(sendText).not.toHaveBeenCalled();
+      expect(onExecute).not.toHaveBeenCalled();
     } finally {
       view.destroy();
     }
