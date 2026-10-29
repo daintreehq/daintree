@@ -117,6 +117,38 @@ async function drainMicrotasks(iterations = 100): Promise<void> {
   }
 }
 
+// The queue waits on a visible attach only for a pane whose chrome is on the
+// page (#15271). These suites run without a DOM, so the panes a test treats as
+// mounted grid panes are put on a stand-in page. Restored by hand rather than
+// with vi.unstubAllGlobals, which would also drop vitest.setup's rAF stubs.
+const pageDescriptor = Object.getOwnPropertyDescriptor(globalThis, "document");
+let panesOnPage: string[] = [];
+function putPanesOnPage(ids: string[]): void {
+  panesOnPage = ids;
+  Object.defineProperty(globalThis, "document", {
+    configurable: true,
+    value: {
+      querySelectorAll: (selector: string) =>
+        selector === "[data-panel-id]"
+          ? panesOnPage.map((panelId) => ({ dataset: { panelId } }))
+          : [],
+    },
+  });
+}
+function clearPage(): void {
+  panesOnPage = [];
+  if (pageDescriptor) Object.defineProperty(globalThis, "document", pageDescriptor);
+  else Reflect.deleteProperty(globalThis, "document");
+}
+
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve: () => void = () => {};
+  const promise = new Promise<void>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
 describe("optimistic panel spawn (#5789)", () => {
   beforeEach(async () => {
     const { reset } = usePanelStore.getState();
@@ -133,6 +165,10 @@ describe("optimistic panel spawn (#5789)", () => {
     const waitForAttachSettledMock = vi.mocked(terminalInstanceService.waitForAttachSettled);
     waitForAttachSettledMock.mockReset();
     waitForAttachSettledMock.mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    clearPage();
   });
 
   it("commits the panel to the store before terminalClient.spawn resolves", async () => {
@@ -209,6 +245,7 @@ describe("optimistic panel spawn (#5789)", () => {
       }
       return Promise.resolve();
     });
+    putPanesOnPage(Array.from({ length: 6 }, (_, i) => `concurrent-${i}`));
 
     const { addPanel } = usePanelStore.getState();
     const launches = Array.from({ length: 6 }, (_, i) =>
@@ -292,6 +329,7 @@ describe("optimistic panel spawn (#5789)", () => {
       const index = Number(id.slice("recipe-".length));
       return attachGates[index]!;
     });
+    putPanesOnPage(Array.from({ length: 4 }, (_, i) => `recipe-${i}`));
 
     const { addPanel } = usePanelStore.getState();
     const launches = Array.from({ length: 4 }, (_, i) =>
@@ -328,6 +366,135 @@ describe("optimistic panel spawn (#5789)", () => {
       expect((state.panelsById[`recipe-${i}`] as PtyPanelData | undefined)?.spawnStatus).toBe(
         "ready"
       );
+    }
+  });
+
+  it("doesn't hold a burst of launches on panes that aren't on the page", async () => {
+    const terminalInstanceService = (
+      await import("@/services/TerminalInstanceService")
+    ).createTerminalPaintPlane();
+    const waitForAttachSettledMock = vi.mocked(terminalInstanceService.waitForAttachSettled);
+    // An attach that doesn't come: holding on it would cost each launch the timeout.
+    const attach = deferred();
+    waitForAttachSettledMock.mockImplementation(() => attach.promise);
+    putPanesOnPage([]);
+
+    try {
+      const { addPanel } = usePanelStore.getState();
+      const ids = Array.from({ length: 13 }, (_, i) => `fleet-${i}`);
+      await Promise.all(
+        ids.map((requestedId) =>
+          addPanel({
+            kind: "terminal",
+            launchAgentId: "claude",
+            command: "claude",
+            requestedId,
+            cwd: "/",
+            bypassLimits: true,
+          })
+        )
+      );
+      await drainMicrotasks(ids.length * 100);
+
+      expect(terminalClient.spawn).toHaveBeenCalledTimes(ids.length);
+      expect(waitForAttachSettledMock).not.toHaveBeenCalled();
+      for (const id of ids) {
+        expect(getPtyPanel(id)?.spawnStatus).toBe("ready");
+      }
+    } finally {
+      attach.resolve();
+      await drainMicrotasks();
+    }
+  });
+
+  it("holds the next spawn only behind a pane that is on the page", async () => {
+    const terminalInstanceService = (
+      await import("@/services/TerminalInstanceService")
+    ).createTerminalPaintPlane();
+    const waitForAttachSettledMock = vi.mocked(terminalInstanceService.waitForAttachSettled);
+    const attach = deferred();
+    waitForAttachSettledMock.mockImplementation(() => attach.promise);
+    putPanesOnPage(["mixed-1"]);
+
+    try {
+      const { addPanel } = usePanelStore.getState();
+      await Promise.all(
+        ["mixed-0", "mixed-1", "mixed-2"].map((requestedId) =>
+          addPanel({
+            kind: "terminal",
+            launchAgentId: "claude",
+            command: "claude",
+            requestedId,
+            cwd: "/",
+            bypassLimits: true,
+          })
+        )
+      );
+      await drainMicrotasks(300);
+
+      expect(terminalClient.spawn).toHaveBeenCalledTimes(2);
+      expect(terminalClient.spawn).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({ id: "mixed-0" })
+      );
+      expect(terminalClient.spawn).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ id: "mixed-1" })
+      );
+      expect(waitForAttachSettledMock).toHaveBeenCalledTimes(1);
+      expect(waitForAttachSettledMock).toHaveBeenCalledWith("mixed-1", expect.anything());
+    } finally {
+      attach.resolve();
+      await drainMicrotasks();
+    }
+
+    expect(terminalClient.spawn).toHaveBeenCalledTimes(3);
+    expect(getPtyPanel("mixed-2")?.spawnStatus).toBe("ready");
+  });
+
+  it("asks whether the pane is on the page when it turns ready, not when it was added", async () => {
+    const terminalInstanceService = (
+      await import("@/services/TerminalInstanceService")
+    ).createTerminalPaintPlane();
+    const waitForAttachSettledMock = vi.mocked(terminalInstanceService.waitForAttachSettled);
+    const attach = deferred();
+    waitForAttachSettledMock.mockImplementation(() => attach.promise);
+    const spawn = deferred();
+    terminalClient.spawn.mockImplementation(async ({ id }: { id: string }) => {
+      if (id === "left-0") await spawn.promise;
+      return id;
+    });
+    putPanesOnPage(["left-0", "left-1"]);
+
+    try {
+      const { addPanel } = usePanelStore.getState();
+      await Promise.all(
+        ["left-0", "left-1"].map((requestedId) =>
+          addPanel({
+            kind: "terminal",
+            launchAgentId: "claude",
+            command: "claude",
+            requestedId,
+            cwd: "/",
+            bypassLimits: true,
+          })
+        )
+      );
+      await drainMicrotasks();
+      expect(terminalClient.spawn).toHaveBeenCalledTimes(1);
+
+      // Switched away (another worktree, tab, or maximized pane) while it spawned.
+      putPanesOnPage(["left-1"]);
+      spawn.resolve();
+      await drainMicrotasks(300);
+
+      expect(waitForAttachSettledMock).not.toHaveBeenCalledWith("left-0", expect.anything());
+      expect(terminalClient.spawn).toHaveBeenCalledTimes(2);
+      expect(getPtyPanel("left-0")?.spawnStatus).toBe("ready");
+    } finally {
+      spawn.resolve();
+      attach.resolve();
+      await drainMicrotasks();
     }
   });
 
