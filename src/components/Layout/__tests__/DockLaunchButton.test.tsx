@@ -2887,41 +2887,63 @@ describe("DockLaunchButton — migrated toolbar affordances (#11691)", () => {
       mockMergedPresets = [{ id: "fast", name: "Fast" }];
     });
 
+    // Rows after ArrowRight: Default, Fast, Slow, Turbo. The agent-level and
+    // worktree defaults differ from each other and from every launched row.
+    const seedConflictingDefaults = () => {
+      mockMergedPresets = [
+        { id: "fast", name: "Fast" },
+        { id: "slow", name: "Slow" },
+        { id: "turbo", name: "Turbo" },
+      ];
+      mockAgentSettings = {
+        agents: { claude: { presetId: "fast", worktreePresets: { "wt-3": "slow" } } },
+      };
+    };
+
     it.each(["toolbar", "dock"] as const)(
       "launches the Default row once without touching either saved preset (%s)",
       (placement) => {
+        seedConflictingDefaults();
         const onLaunchAgent = vi.fn();
         const { container } = renderButton({
           agents: READY,
           placement,
-          activeWorktreeId: "wt-1",
+          activeWorktreeId: "wt-3",
           onLaunchAgent,
         });
         fireEvent.keyDown(searchInput(container), { key: "ArrowRight" });
         fireEvent.click(presetRows(container)[0]!);
 
+        expect(onLaunchAgent).toHaveBeenCalledTimes(1);
         expect(onLaunchAgent).toHaveBeenCalledWith("claude", null);
         expect(updateWorktreePresetMock).not.toHaveBeenCalled();
         expect(updateAgentMock).not.toHaveBeenCalled();
       }
     );
 
-    it.each(["toolbar", "dock"] as const)(
-      "launches a chosen preset once and leaves the worktree default alone (%s)",
-      (placement) => {
+    it.each([
+      ["toolbar", 1, "fast"],
+      ["dock", 1, "fast"],
+      ["toolbar", 3, "turbo"],
+      ["dock", 3, "turbo"],
+    ] as const)(
+      "launches a chosen preset once and leaves the worktree default alone (%s, row %s)",
+      (placement, rowIndex, presetId) => {
+        seedConflictingDefaults();
         const onLaunchAgent = vi.fn();
         const { container } = renderButton({
           agents: READY,
           placement,
-          activeWorktreeId: "wt-1",
+          activeWorktreeId: "wt-3",
           onLaunchAgent,
         });
         fireEvent.keyDown(searchInput(container), { key: "ArrowRight" });
-        fireEvent.click(presetRows(container)[1]!);
+        fireEvent.click(presetRows(container)[rowIndex]!);
 
         // A preset carries the account and permission mode, so a one-off
         // launch must not quietly become what the next plain launch starts (#15051).
-        expect(onLaunchAgent).toHaveBeenCalledWith("claude", "fast");
+        expect(onLaunchAgent).toHaveBeenCalledTimes(1);
+        expect(onLaunchAgent).toHaveBeenCalledWith("claude", presetId);
         expect(updateWorktreePresetMock).not.toHaveBeenCalled();
         expect(updateAgentMock).not.toHaveBeenCalled();
       }
@@ -2948,118 +2970,162 @@ describe("DockLaunchButton — migrated toolbar affordances (#11691)", () => {
       expect(updateAgentMock).not.toHaveBeenCalled();
       expect(updateWorktreePresetMock).not.toHaveBeenCalled();
     });
+  });
 
-    describe("set as default", () => {
-      const setDefaultControl = (row: HTMLElement) =>
-        row.querySelector<HTMLElement>("[data-launcher-set-default]");
+  describe("set as default", () => {
+    const setDefaultControl = (row: HTMLElement) =>
+      row.querySelector<HTMLElement>("[data-launcher-set-default]");
 
-      beforeEach(() => {
-        mockMergedPresets = [
-          { id: "fast", name: "Fast" },
-          { id: "slow", name: "Slow" },
-        ];
+    beforeEach(() => {
+      mockMergedPresets = [
+        { id: "fast", name: "Fast" },
+        { id: "slow", name: "Slow" },
+      ];
+    });
+
+    it("marks the saved preset as the current default", () => {
+      // The worktree slot wins over the agent-level preset.
+      mockAgentSettings = {
+        agents: { claude: { presetId: "slow", worktreePresets: { "wt-1": "fast" } } },
+      };
+      const { container } = renderButton({ agents: READY, activeWorktreeId: "wt-1" });
+      fireEvent.keyDown(searchInput(container), { key: "ArrowRight" });
+
+      const [defaultRow, fastRow, slowRow] = presetRows(container);
+      expect(qualifierTextOf(fastRow!)).toBe("Current default");
+      expect(fastRow!.getAttribute("aria-label")).toContain("Current default");
+      expect(qualifierTextOf(defaultRow!)).toBe("");
+      expect(qualifierTextOf(slowRow!)).toBe("");
+    });
+
+    it("saves a preset to the active worktree from its control without launching or closing", () => {
+      const onLaunchAgent = vi.fn();
+      const { container } = renderButton({
+        agents: READY,
+        activeWorktreeId: "wt-7",
+        onLaunchAgent,
       });
+      fireEvent.keyDown(searchInput(container), { key: "ArrowRight" });
+      fireEvent.click(setDefaultControl(presetRows(container)[2]!)!);
 
-      it("marks the saved preset as the current default", () => {
-        mockAgentSettings = { agents: { claude: { worktreePresets: { "wt-1": "fast" } } } };
-        const { container } = renderButton({ agents: READY, activeWorktreeId: "wt-1" });
-        fireEvent.keyDown(searchInput(container), { key: "ArrowRight" });
+      expect(updateWorktreePresetMock).toHaveBeenCalledTimes(1);
+      expect(updateWorktreePresetMock).toHaveBeenCalledWith("claude", "wt-7", "slow");
+      expect(updateAgentMock).not.toHaveBeenCalled();
+      expect(onLaunchAgent).not.toHaveBeenCalled();
+      expect(presetRows(container)).toHaveLength(3);
+    });
 
-        const [defaultRow, fastRow, slowRow] = presetRows(container);
-        expect(qualifierTextOf(fastRow!)).toBe("Current default");
-        expect(fastRow!.getAttribute("aria-label")).toContain("Current default");
-        expect(qualifierTextOf(defaultRow!)).toBe("");
-        expect(qualifierTextOf(slowRow!)).toBe("");
+    it("saves the bare agent for Default rather than clearing the slot", () => {
+      mockAgentSettings = { agents: { codex: { presetId: "fast" } } };
+      const onLaunchAgent = vi.fn();
+      const { container } = renderButton({
+        agents: [{ id: "codex", name: "Codex", availability: "ready" as const }],
+        activeWorktreeId: "wt-2",
+        onLaunchAgent,
       });
+      fireEvent.keyDown(searchInput(container), { key: "ArrowRight" });
+      fireEvent.click(setDefaultControl(presetRows(container)[0]!)!);
 
-      it("saves a preset to the active worktree from its control without launching or closing", () => {
-        const onLaunchAgent = vi.fn();
-        const { container } = renderButton({
-          agents: READY,
-          activeWorktreeId: "wt-1",
-          onLaunchAgent,
-        });
-        fireEvent.keyDown(searchInput(container), { key: "ArrowRight" });
-        fireEvent.click(setDefaultControl(presetRows(container)[1]!)!);
+      // Clearing would fall back to the agent-level preset (#15054).
+      expect(updateWorktreePresetMock).toHaveBeenCalledTimes(1);
+      expect(updateWorktreePresetMock).toHaveBeenCalledWith("codex", "wt-2", null);
+      expect(updateAgentMock).not.toHaveBeenCalled();
+      expect(onLaunchAgent).not.toHaveBeenCalled();
+    });
 
-        expect(updateWorktreePresetMock).toHaveBeenCalledWith("claude", "wt-1", "fast");
-        expect(updateAgentMock).not.toHaveBeenCalled();
-        expect(onLaunchAgent).not.toHaveBeenCalled();
-        expect(presetRows(container)).toHaveLength(3);
+    it("offers nothing to set on the row that is already the default", () => {
+      mockAgentSettings = { agents: { claude: { worktreePresets: { "wt-1": "fast" } } } };
+      const { container } = renderButton({ agents: READY, activeWorktreeId: "wt-1" });
+      const input = searchInput(container);
+      fireEvent.keyDown(input, { key: "ArrowRight" });
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+
+      const fastRow = presetRows(container)[1]!;
+      expect(fastRow.getAttribute("aria-selected")).toBe("true");
+      expect(setDefaultControl(fastRow)).toBeNull();
+      expect(fastRow.getAttribute("aria-label")).not.toContain("set as default");
+
+      fireEvent.keyDown(input, { key: "d", code: "KeyD", altKey: true });
+      expect(updateWorktreePresetMock).not.toHaveBeenCalled();
+    });
+
+    it("sets the selected preset with Alt+D and leaves a bare d to the search box", () => {
+      const onLaunchAgent = vi.fn();
+      const { container } = renderButton({
+        agents: READY,
+        activeWorktreeId: "wt-1",
+        onLaunchAgent,
       });
+      const input = searchInput(container);
+      fireEvent.keyDown(input, { key: "ArrowRight" });
+      fireEvent.keyDown(input, { key: "ArrowDown" });
 
-      it("saves the bare agent for Default rather than clearing the slot", () => {
-        mockAgentSettings = { agents: { claude: { presetId: "fast" } } };
-        const { container } = renderButton({ agents: READY, activeWorktreeId: "wt-1" });
-        fireEvent.keyDown(searchInput(container), { key: "ArrowRight" });
-        fireEvent.click(setDefaultControl(presetRows(container)[0]!)!);
+      expect(presetRows(container)[1]!.getAttribute("aria-label")).toContain("to set as default");
 
-        // Clearing would fall back to the agent-level preset (#15054).
-        expect(updateWorktreePresetMock).toHaveBeenCalledWith("claude", "wt-1", null);
-        expect(updateAgentMock).not.toHaveBeenCalled();
+      // Not consumed: a bare d is search text, and fireEvent returns false only
+      // when a handler prevented the default.
+      expect(fireEvent.keyDown(input, { key: "d", code: "KeyD" })).toBe(true);
+      fireEvent.keyDown(input, { key: "d", code: "KeyD", altKey: true, metaKey: true });
+      fireEvent.keyDown(input, { key: "d", code: "KeyD", altKey: true, shiftKey: true });
+      fireEvent.keyDown(input, { key: "d", code: "KeyD", altKey: true, ctrlKey: true });
+      fireEvent.keyDown(input, { key: "d", code: "KeyD", altKey: true, repeat: true });
+      expect(updateWorktreePresetMock).not.toHaveBeenCalled();
+
+      fireEvent.keyDown(input, { key: "d", code: "KeyD", altKey: true });
+      expect(updateWorktreePresetMock).toHaveBeenCalledTimes(1);
+      expect(updateWorktreePresetMock).toHaveBeenCalledWith("claude", "wt-1", "fast");
+      expect(onLaunchAgent).not.toHaveBeenCalled();
+    });
+
+    it("leaves Alt+D alone on an agent row", () => {
+      const { container } = renderButton({ agents: READY, activeWorktreeId: "wt-1" });
+      expect(selectedOption(container)?.getAttribute("data-row-kind")).toBe("item");
+
+      expect(
+        fireEvent.keyDown(searchInput(container), { key: "d", code: "KeyD", altKey: true })
+      ).toBe(true);
+      expect(updateWorktreePresetMock).not.toHaveBeenCalled();
+    });
+
+    it("declines an AltGraph keystroke on a preset row", () => {
+      // AltGr synthesizes Alt on Windows/Linux layouts that reach a character
+      // through it; claiming it would make that character untypable here.
+      const { container } = renderButton({ agents: READY, activeWorktreeId: "wt-1" });
+      const input = searchInput(container);
+      fireEvent.keyDown(input, { key: "ArrowRight" });
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+
+      const event = new KeyboardEvent("keydown", {
+        key: "d",
+        code: "KeyD",
+        altKey: true,
+        bubbles: true,
+        cancelable: true,
       });
-
-      it("offers nothing to set on the row that is already the default", () => {
-        mockAgentSettings = { agents: { claude: { worktreePresets: { "wt-1": "fast" } } } };
-        const { container } = renderButton({ agents: READY, activeWorktreeId: "wt-1" });
-        const input = searchInput(container);
-        fireEvent.keyDown(input, { key: "ArrowRight" });
-        fireEvent.keyDown(input, { key: "ArrowDown" });
-
-        const fastRow = presetRows(container)[1]!;
-        expect(fastRow.getAttribute("aria-selected")).toBe("true");
-        expect(setDefaultControl(fastRow)).toBeNull();
-        expect(fastRow.getAttribute("aria-label")).not.toContain("set as default");
-
-        fireEvent.keyDown(input, { key: "d", code: "KeyD", altKey: true });
-        expect(updateWorktreePresetMock).not.toHaveBeenCalled();
+      Object.defineProperty(event, "getModifierState", {
+        value: (mod: string) => mod === "AltGraph",
       });
+      fireEvent(input, event);
 
-      it("sets the selected preset with Alt+D and leaves a bare d to the search box", () => {
-        const onLaunchAgent = vi.fn();
-        const { container } = renderButton({
-          agents: READY,
-          activeWorktreeId: "wt-1",
-          onLaunchAgent,
-        });
-        const input = searchInput(container);
-        fireEvent.keyDown(input, { key: "ArrowRight" });
-        fireEvent.keyDown(input, { key: "ArrowDown" });
+      expect(event.defaultPrevented).toBe(false);
+      expect(updateWorktreePresetMock).not.toHaveBeenCalled();
+    });
 
-        expect(presetRows(container)[1]!.getAttribute("aria-label")).toContain("to set as default");
+    it("offers no default to set without an active worktree", () => {
+      const { container } = renderButton({ agents: READY, activeWorktreeId: null });
+      const input = searchInput(container);
+      fireEvent.keyDown(input, { key: "ArrowRight" });
+      fireEvent.keyDown(input, { key: "ArrowDown" });
 
-        fireEvent.keyDown(input, { key: "d", code: "KeyD" });
-        fireEvent.keyDown(input, { key: "d", code: "KeyD", altKey: true, metaKey: true });
-        fireEvent.keyDown(input, { key: "d", code: "KeyD", altKey: true, shiftKey: true });
-        fireEvent.keyDown(input, { key: "d", code: "KeyD", altKey: true, ctrlKey: true });
-        fireEvent.keyDown(input, { key: "d", code: "KeyD", altKey: true, repeat: true });
-        expect(updateWorktreePresetMock).not.toHaveBeenCalled();
-
-        fireEvent.keyDown(input, { key: "d", code: "KeyD", altKey: true });
-        expect(updateWorktreePresetMock).toHaveBeenCalledTimes(1);
-        expect(updateWorktreePresetMock).toHaveBeenCalledWith("claude", "wt-1", "fast");
-        expect(onLaunchAgent).not.toHaveBeenCalled();
-      });
-
-      it("leaves Alt+D alone on an agent row", () => {
-        const { container } = renderButton({ agents: READY, activeWorktreeId: "wt-1" });
-        fireEvent.keyDown(searchInput(container), { key: "d", code: "KeyD", altKey: true });
-        expect(updateWorktreePresetMock).not.toHaveBeenCalled();
-      });
-
-      it("offers no default to set without an active worktree", () => {
-        const { container } = renderButton({ agents: READY, activeWorktreeId: null });
-        const input = searchInput(container);
-        fireEvent.keyDown(input, { key: "ArrowRight" });
-        fireEvent.keyDown(input, { key: "ArrowDown" });
-
-        for (const row of presetRows(container)) {
-          expect(setDefaultControl(row)).toBeNull();
-          expect(row.getAttribute("aria-label")).not.toContain("set as default");
-        }
-        fireEvent.keyDown(input, { key: "d", code: "KeyD", altKey: true });
-        expect(updateWorktreePresetMock).not.toHaveBeenCalled();
-      });
+      const rows = presetRows(container);
+      expect(rows).toHaveLength(3);
+      expect(rows[1]!.getAttribute("aria-selected")).toBe("true");
+      for (const row of rows) {
+        expect(setDefaultControl(row)).toBeNull();
+        expect(row.getAttribute("aria-label")).not.toContain("set as default");
+      }
+      expect(fireEvent.keyDown(input, { key: "d", code: "KeyD", altKey: true })).toBe(true);
+      expect(updateWorktreePresetMock).not.toHaveBeenCalled();
     });
   });
 
