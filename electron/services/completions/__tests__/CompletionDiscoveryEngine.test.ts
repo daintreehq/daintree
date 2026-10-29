@@ -551,9 +551,17 @@ Body.
           description: `${name} skill`,
         });
       }
-      for (const [, name] of ignored) expect(byLabel.has(`/${name}`), name).toBe(false);
-      expect(byLabel.has("/deploy")).toBe(false);
-      expect(byLabel.has("/release")).toBe(false);
+      // By source path, not label, so an ignored folder scanned by any parser
+      // (folder-named or frontmatter-named) still fails here.
+      const readRoots = read.map(([dir]) => path.join(...dir) + path.sep);
+      const discovered = agy.filter((c) => c.sourcePath !== undefined);
+      expect(discovered).toHaveLength(read.length);
+      for (const c of discovered) {
+        expect(
+          readRoots.some((root) => c.sourcePath!.startsWith(root)),
+          c.sourcePath
+        ).toBe(true);
+      }
 
       expect(byLabel.get("/usage")).toMatchObject({
         scope: "built-in",
@@ -569,7 +577,7 @@ Body.
     }
   });
 
-  it("lets a project skill win over a user skill of the same name", async () => {
+  it("lets a project skill win over a user skill of the same name, whatever the folder rank", async () => {
     const homeRoot = await makeTempDir();
     const projectRoot = await makeTempDir();
     const prev = overrideHome(homeRoot);
@@ -577,12 +585,14 @@ Body.
 
     try {
       await fsp.mkdir(path.join(projectRoot, ".git"));
+      // The user folder outranks the project one within its own scope, so only
+      // scope can decide this collision.
       await writeFile(
-        path.join(homeRoot, ".gemini", "skills", "ship", "SKILL.md"),
+        path.join(homeRoot, ".gemini", "config", "skills", "ship", "SKILL.md"),
         skill("ship", "user ship")
       );
       await writeFile(
-        path.join(projectRoot, ".agents", "skills", "ship", "SKILL.md"),
+        path.join(projectRoot, ".agent", "skills", "ship", "SKILL.md"),
         skill("ship", "project ship")
       );
 

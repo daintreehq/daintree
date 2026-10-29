@@ -124,7 +124,11 @@ describe("rankSlashCommands over the Antigravity catalog", () => {
   const top = (query: string) => rankSlashCommands(agy, query)[0]?.label;
 
   it("narrows a prefix to the command", () => {
-    expect(top("/us")).toBe("/usage");
+    const labels = rankSlashCommands(agy, "/us").map((c) => c.label);
+    expect(labels[0]).toBe("/usage");
+    expect(labels.length).toBeLessThan(agy.length);
+    // Substring matches (/statusline) may trail it, but nothing unrelated does.
+    for (const label of labels) expect(label).toContain("us");
   });
 
   it("finds a command by the alias agy displays", () => {

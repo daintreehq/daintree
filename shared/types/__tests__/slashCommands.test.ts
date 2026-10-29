@@ -323,12 +323,17 @@ describe("Antigravity upstream conformance", () => {
 
   it("gives every command agy's own description, not another agent's", () => {
     // Shared ids like /clear, /copy and /diff behave differently in agy, so an
-    // entry agy shares must carry its own override.
+    // entry agy shares must not show any other agent's text.
     for (const entry of BUILTIN_SLASH_COMMANDS) {
-      if (!entry.supportedAgents.includes("antigravity") || entry.supportedAgents.length === 1) {
-        continue;
+      if (!entry.supportedAgents.includes("antigravity")) continue;
+      const agyText = agy.find((c) => c.id === entry.id)?.description;
+      for (const agentId of entry.supportedAgents) {
+        if (agentId === "antigravity") continue;
+        const theirs = getBuiltinSlashCommands(agentId).find((c) => c.id === entry.id);
+        expect(agyText, `/${entry.id} shows ${agentId}'s description`).not.toBe(
+          theirs?.description
+        );
       }
-      expect(entry.descriptions?.antigravity, `/${entry.id}`).toBeDefined();
     }
   });
 
