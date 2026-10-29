@@ -40,7 +40,7 @@ import {
 } from "./kitProps";
 import { useKitOverlayZClass } from "./kitScope";
 import { isThenable, reportPluginFault, runPluginAction, settleThenable } from "./kitDiagnostics";
-import { SkippedFilesNote, skippedFilesLines, sortFiles } from "./kitFiles";
+import { SkippedNote, skippedFilesLines, sortFiles } from "./kitFiles";
 import { invalidProp, useKitFieldControl } from "./kitField";
 import { AttachmentChipView, readAttachmentList } from "./PluginKitWorkflows";
 import { pickAria, joinIds, safely, attempt } from "./kitTextInputHelpers";
@@ -928,7 +928,7 @@ export function KitComposer(props: PluginComposerProps) {
         ])}
         aria-keyshortcuts={sendKeys}
       />
-      <SkippedFilesNote lines={skipped} className="px-1" />
+      <SkippedNote lines={skipped} className="px-1" />
       <div className="flex min-h-7 min-w-0 items-center gap-1">
         {attach ? (
           <>

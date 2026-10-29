@@ -62,8 +62,11 @@ export function skippedFilesLines(rejections: readonly PluginFileRejection[]): s
 
 const WarningGlyph = SEVERITY_GLYPH.warning;
 
-/** The host's own note of skipped files, for a plugin that has no `onReject`. */
-export function SkippedFilesNote({
+/**
+ * The host's own note of what an intake skipped: files a plugin has no
+ * `onReject` for, pasted lines past a cap.
+ */
+export function SkippedNote({
   lines,
   className,
 }: {

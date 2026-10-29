@@ -63,7 +63,7 @@ import {
 } from "./kitProps";
 import { useKitOverlayZClass, usePluginKitOwner } from "./kitScope";
 import { runPluginAction, safeFormat } from "./kitDiagnostics";
-import { SkippedFilesNote, skippedFilesLines, sortFiles } from "./kitFiles";
+import { SkippedNote, skippedFilesLines, sortFiles } from "./kitFiles";
 import { SliderReadout } from "./kitRangeSlider";
 import { getPluginKitHost } from "./kitHost";
 import { InlineError } from "@/components/ui/field";
@@ -1651,7 +1651,7 @@ function KitFileDropzone({
           {importError}
         </InlineError>
       ) : null}
-      <SkippedFilesNote lines={skipped} />
+      <SkippedNote lines={skipped} />
       <input
         ref={inputRef}
         type="file"

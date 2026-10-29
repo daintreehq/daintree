@@ -769,6 +769,30 @@ describe("KeyValueEditor", () => {
     expect(new Set(pairs.map((pair) => pair.id)).size).toBe(4);
   });
 
+  it("says how many pasted lines didn't fit under max, and refuses aloud when full", () => {
+    render(<Editor max={3} />);
+    fireEvent.click(screen.getByRole("button", { name: "Add header" }));
+    fireEvent.paste(screen.getByLabelText("Key 3"), {
+      clipboardData: { getData: () => "A=1\nB=2\nC=3" },
+    });
+    const keys = () =>
+      (JSON.parse(screen.getByTestId("pairs").textContent ?? "[]") as KeyValuePair[]).map(
+        (pair) => pair.key
+      );
+    expect(keys()).toEqual(["Authorization", "Accept", "A"]);
+    expect(screen.getByRole("alert").textContent).toBe("2 lines skipped, up to 3 entries");
+    const paste = new Event("paste", { bubbles: true, cancelable: true });
+    Object.assign(paste, { clipboardData: { getData: () => "D=4\nE=5" } });
+    act(() => {
+      screen.getByLabelText("Key 1").dispatchEvent(paste);
+    });
+    expect(paste.defaultPrevented).toBe(true);
+    expect(keys()).toEqual(["Authorization", "Accept", "A"]);
+    expect(screen.getByRole("alert").textContent).toBe("No room to paste, up to 3 entries");
+    fireEvent.change(screen.getByLabelText("Key 3"), { target: { value: "AA" } });
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("survives a throwing onValidityChange", () => {
     render(
       <kit.KeyValueEditor
@@ -822,6 +846,23 @@ describe("ListEditor", () => {
     expect(onValueChange).toHaveBeenLastCalledWith(["github.com", "gitlab.com", "bitbucket.org"]);
     fireEvent.click(screen.getByRole("button", { name: "Remove gitlab.com" }));
     expect(onValueChange).toHaveBeenLastCalledWith(["github.com", "bitbucket.org"]);
+  });
+
+  it("says how many pasted lines it skipped past max", () => {
+    const onValueChange = vi.fn();
+    render(
+      <kit.ListEditor
+        aria-label="Hosts"
+        defaultValue={[""]}
+        onValueChange={onValueChange}
+        max={2}
+      />
+    );
+    fireEvent.paste(screen.getByLabelText("Hosts 1"), {
+      clipboardData: { getData: () => "a.com\nb.com\nc.com\nd.com" },
+    });
+    expect(onValueChange).toHaveBeenLastCalledWith(["a.com", "b.com"]);
+    expect(screen.getByRole("alert").textContent).toBe("2 lines skipped, up to 2 items");
   });
 });
 

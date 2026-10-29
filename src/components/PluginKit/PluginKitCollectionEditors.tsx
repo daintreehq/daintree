@@ -8,8 +8,10 @@ import type {
 import { Button } from "@/components/ui/button";
 import { InlineError } from "@/components/ui/field";
 import { inputVariants } from "@/components/ui/input";
+import { pluralize } from "@/lib/pluralize";
 import { cn } from "@/lib/utils";
 import { field, fn, nonEmpty, pickRootProps, str, wholeLimit } from "./kitProps";
+import { SkippedNote } from "./kitFiles";
 import { pluginKitDnd } from "./PluginKitDnd";
 import { KitSecretInput } from "./PluginKitSecretInput";
 import { safely, verdict, REMOVE_ROW_CLASS } from "./kitTextInputHelpers";
@@ -126,6 +128,23 @@ function useFocusRequest(
  */
 const KV_GRID = "grid min-w-0 grid-cols-[minmax(0,2fr)_minmax(0,3fr)_auto] items-center gap-1.5";
 
+/**
+ * What a paste of `lines` couldn't fit with `room` left under `limit`, said
+ * rather than dropped: `null` when every line went in.
+ */
+function pasteOverflow(
+  lines: number,
+  room: number,
+  limit: number | undefined,
+  noun: [singular: string, plural: string]
+): string | null {
+  if (limit === undefined || room >= lines) return null;
+  const cap = pluralize(limit, ...noun);
+  return room <= 0
+    ? `No room to paste, up to ${cap}`
+    : `${pluralize(lines - room, "line")} skipped, up to ${cap}`;
+}
+
 /** A column head over a compact field: its text on the field text's own left edge. */
 const KV_HEAD = "min-w-0 truncate pl-[calc(0.5rem+1px)]";
 
@@ -153,6 +172,8 @@ export function KitKeyValueEditor(props: PluginKeyValueEditorProps) {
   const [own, setOwn] = useState(() => readPairs(defaultValue));
   const rows = controlled ? readPairs(value) : own;
   const [focusTarget, setFocusTarget] = useState<string | null>(null);
+  // What the last paste couldn't fit under `max`, until the next edit.
+  const [pasteNote, setPasteNote] = useState<string | null>(null);
   const counterRef = useRef(0);
   const rootRef = useRef<HTMLDivElement>(null);
   const baseId = useId();
@@ -176,6 +197,7 @@ export function KitKeyValueEditor(props: PluginKeyValueEditorProps) {
   useFocusRequest(rootRef, focusTarget, clearFocus);
 
   const update = (next: KeyValueRow[]) => {
+    setPasteNote(null);
     if (!controlled) setOwn(next);
     safely("KeyValueEditor onValueChange", handleValue, toPairs(next));
   };
@@ -205,8 +227,18 @@ export function KitKeyValueEditor(props: PluginKeyValueEditorProps) {
     event.preventDefault();
     // An empty row takes the first pair; otherwise they all go in after it.
     const fill = row.key === "" && row.value === "";
-    const room = limit === undefined ? parsed.length : limit - rows.length + (fill ? 1 : 0);
-    const incoming = parsed.slice(0, Math.max(0, room)).map((pair, at) => ({
+    const room = Math.max(
+      0,
+      limit === undefined ? parsed.length : limit - rows.length + (fill ? 1 : 0)
+    );
+    // Lines past `max` are never dropped unsaid, and a full editor says why
+    // nothing went in rather than eating the paste.
+    const note = pasteOverflow(parsed.length, room, limit, ["entry", "entries"]);
+    if (room === 0) {
+      setPasteNote(note);
+      return;
+    }
+    const incoming = parsed.slice(0, room).map((pair, at) => ({
       id: fill && at === 0 ? row.id : newId(),
       key: pair.key,
       value: pair.value,
@@ -217,6 +249,7 @@ export function KitKeyValueEditor(props: PluginKeyValueEditorProps) {
         ? [...rows.slice(0, index), ...incoming, ...rows.slice(index + 1)]
         : [...rows.slice(0, index + 1), ...incoming, ...rows.slice(index + 1)]
     );
+    setPasteNote(note);
   };
 
   const renderRow = (row: KeyValueRow, index: number) => {
@@ -355,6 +388,7 @@ export function KitKeyValueEditor(props: PluginKeyValueEditorProps) {
           {nonEmpty(addLabel) ?? "Add"}
         </Button>
       </div>
+      {pasteNote ? <SkippedNote lines={[pasteNote]} /> : null}
     </div>
   );
 }
@@ -403,6 +437,8 @@ export function KitListEditor(props: PluginListEditorProps) {
   const items = controlled ? readItems(value) : own;
   const [ids, setIds] = useState<string[]>([]);
   const [focusTarget, setFocusTarget] = useState<string | null>(null);
+  // What the last paste couldn't fit under `max`, until the next edit.
+  const [pasteNote, setPasteNote] = useState<string | null>(null);
   const counterRef = useRef(0);
   const rootRef = useRef<HTMLDivElement>(null);
   const baseId = useId();
@@ -434,6 +470,7 @@ export function KitListEditor(props: PluginListEditorProps) {
   useFocusRequest(rootRef, focusTarget, clearFocus);
 
   const update = (next: { id: string; value: string }[]) => {
+    setPasteNote(null);
     setIds(next.map((row) => row.id));
     const values = next.map((row) => row.value);
     if (!controlled) setOwn(values);
@@ -462,15 +499,24 @@ export function KitListEditor(props: PluginListEditorProps) {
     event.preventDefault();
     const row = rows[index]!;
     const fill = row.value === "";
-    const room = limit === undefined ? lines.length : limit - rows.length + (fill ? 1 : 0);
+    const room = Math.max(
+      0,
+      limit === undefined ? lines.length : limit - rows.length + (fill ? 1 : 0)
+    );
+    const note = pasteOverflow(lines.length, room, limit, ["item", "items"]);
+    if (room === 0) {
+      setPasteNote(note);
+      return;
+    }
     const incoming = lines
-      .slice(0, Math.max(0, room))
+      .slice(0, room)
       .map((line, at) => ({ id: fill && at === 0 ? row.id : newId(), value: line }));
     update(
       fill
         ? [...rows.slice(0, index), ...incoming, ...rows.slice(index + 1)]
         : [...rows.slice(0, index + 1), ...incoming, ...rows.slice(index + 1)]
     );
+    setPasteNote(note);
   };
 
   const renderRow = (row: { id: string; value: string }, index: number) => {
@@ -557,6 +603,7 @@ export function KitListEditor(props: PluginListEditorProps) {
           {nonEmpty(addLabel) ?? "Add"}
         </Button>
       </div>
+      {pasteNote ? <SkippedNote lines={[pasteNote]} /> : null}
     </div>
   );
 }
