@@ -2,13 +2,14 @@
  * The band under the toolbar that says fleet mode is on. It used to take the
  * category pill tint, which is the wrong strength for a full-width band: on
  * the warm light palettes 20% amber over white lands on the beige the toolbar
- * and sidebar already wear, and on dark the oklch mix keeps the canvas's hue
- * at 12%, so fiordland's band came out teal and highlands' purple.
+ * and sidebar already wear, and on dark 12% amber is a brown of chroma 0.02 or
+ * so that never reads as amber.
  *
  * Dark keeps the tint's lightness, the 12% step up from the canvas, so the
  * bar's text and controls keep their contrast on every theme. The step is
  * mixed in oklab into a neutral copy of the canvas, which leaves the hue
- * exactly amber's, and the chroma is then set from the lightness, just inside
+ * exactly amber's whatever tint the canvas has, and the chroma is then set
+ * from the lightness, just inside
  * what sRGB holds there for every amber, the colour-vision ones included. Light
  * holds one lightness and chroma instead, the way the remote-window light is
  * (toolbar/surface.css), because the blue-yellow amber is pale enough that a

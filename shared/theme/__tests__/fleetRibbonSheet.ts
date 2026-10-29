@@ -46,10 +46,17 @@ const baseBody = base?.[2];
 if (surfaceClass === undefined || baseBody === undefined) {
   throw new Error("fleet-ribbon.css has no surface rule");
 }
-const painted = baseBody.match(/background-color:\s*var\((--[\w-]+)\)/)?.[1];
-if (painted !== FLEET_RIBBON_FILL) {
+// One paint declaration in the whole sheet, so no later rule or polarity can
+// repaint the band with something the gate never measures.
+const paints = Array.from(
+  css
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .matchAll(/(?:^|[\s;{])(background(?:-color)?)\s*:\s*([^;]+);/g)
+);
+const painted = baseBody.match(/background-color:\s*var\((--[\w-]+)\)\s*;/)?.[1];
+if (paints.length !== 1 || painted !== FLEET_RIBBON_FILL) {
   throw new Error(
-    `the band paints with ${painted ?? "nothing"}, not the ${FLEET_RIBBON_FILL} its contrast gate measures`
+    `the band must paint once, with the ${FLEET_RIBBON_FILL} its contrast gate measures; fleet-ribbon.css paints ${paints.map((m) => `${m[1]}: ${m[2]?.trim()}`).join(", ") || "nothing"}`
   );
 }
 const lightBody = css.match(

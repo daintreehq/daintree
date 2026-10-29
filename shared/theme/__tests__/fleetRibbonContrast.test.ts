@@ -33,6 +33,7 @@ const TEXT_SURFACES = [
 ] as const;
 /** How far a control that was already under AA on the pill tint may move: rounding, not a regression. */
 const BELOW_AA_TOLERANCE = 0.05;
+const BLINK_ACHROMATIC_CHROMA = 0.02;
 
 const MODES = [
   ["default", {}],
@@ -88,14 +89,20 @@ function resolveDerivation(
  * asked that the bar's text and controls keep the contrast they had on it.
  */
 function pillTint(amber: string, base: string, share: number): string {
+  const baseLch = toOklch(opaque(base, "pill base"));
+  if (!baseLch) throw new Error(`unconvertible pill base: ${base}`);
+  // Blink treats an oklch chroma under 0.02 as having no hue when it mixes, so
+  // the near-neutral canvases borrow amber's hue rather than turning it.
+  const hue = baseLch.c < BLINK_ACHROMATIC_CHROMA ? undefined : baseLch.h;
   return formatHex(
-    interpolate([opaque(amber, "amber"), opaque(base, "pill base")], "oklch")(1 - share)
+    interpolate([opaque(amber, "amber"), { ...baseLch, h: hue }], "oklch")(1 - share)
   );
 }
 
+/** Six-digit hex only: the compositing below takes colours as opaque. */
 function plainColor(value: string, what: string): string {
-  if (!isHexColor(value)) {
-    throw new Error(`${what} is not a flat hex colour this gate can model: ${value}`);
+  if (!/^#[0-9a-f]{6}$/i.test(value)) {
+    throw new Error(`${what} is not an opaque hex colour this gate can model: ${value}`);
   }
   return value;
 }

@@ -394,6 +394,7 @@ describe("Fleet ribbon design invariants", () => {
     // fleetRibbonContrast.test.ts holds the sheet's fill and ink to their
     // contrast floors; this holds the ribbon to drawing with them, so a mark
     // that drifts back to a shared token leaves the gate measuring nothing.
+    // The two variable names are the contract between the suites, not a style.
 
     // An SVG keeps a colour set on itself under forced colours, so an inked
     // glyph has to be one the forced-colours sheet sends to CanvasText.
@@ -421,12 +422,13 @@ describe("Fleet ribbon design invariants", () => {
 
       const marks: [string, string | undefined][] = [["stripe", readsVariable(shell, "before:bg")]];
       if (track) marks.push(["delivery track", readsVariable(track, "bg")]);
-      // An amber glyph is one coloured from the ribbon's sheet or a category hue.
+      // An amber glyph is one coloured from the ribbon's sheet or from a category
+      // hue, by utility or by variable.
       const glyphs = Array.from(shell.querySelectorAll("svg")).filter((svg) => {
         const variable = readsVariable(svg, "text");
         return (
           (variable !== undefined && fleetRibbonSheet.variables.has(variable)) ||
-          classes(svg).some((cls) => cls.startsWith("text-category-"))
+          classes(svg).some((cls) => cls.startsWith("text-") && cls.includes("category-"))
         );
       });
       for (const glyph of glyphs) {
