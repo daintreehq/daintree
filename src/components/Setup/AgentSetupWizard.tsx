@@ -1490,17 +1490,23 @@ export function CompleteStep({
                 {presetCount > 1 && (
                   <CountBadge data-testid="preset-count-badge">{presetCount} presets</CountBadge>
                 )}
-                {status && (
-                  <span
-                    data-agent-status={status.label}
-                    className="ml-auto flex shrink-0 items-center gap-1.5"
-                  >
-                    <status.Icon className="w-3.5 h-3.5 text-status-warning" aria-hidden="true" />
-                    <span className="text-xs text-text-secondary">{status.label}</span>
-                  </span>
-                )}
-                {shortcut && (
-                  <KbdChord shortcut={shortcut} className={status ? undefined : "ml-auto"} />
+                {(status || shortcut) && (
+                  // One right-aligned group, so a wrapped chord stays on the right edge too.
+                  <div className="ml-auto flex flex-wrap items-center justify-end gap-x-3 gap-y-1">
+                    {status && (
+                      <span
+                        data-agent-status={status.label}
+                        className="flex shrink-0 items-center gap-1.5"
+                      >
+                        <status.Icon
+                          className="w-3.5 h-3.5 text-status-warning"
+                          aria-hidden="true"
+                        />
+                        <span className="text-xs text-text-secondary">{status.label}</span>
+                      </span>
+                    )}
+                    {shortcut && <KbdChord shortcut={shortcut} />}
+                  </div>
                 )}
               </div>
             );
