@@ -844,7 +844,7 @@ registerPersistedStore({
 // Turning auto-start off in one project view must reach every cached view at
 // once, or switching to one of them would still start a billed session on
 // open. Each view otherwise keeps the value it loaded until it reloads.
-if (typeof window !== "undefined") {
+if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
   window.addEventListener("storage", (event) => {
     if (event.key !== HELP_PANEL_STORAGE_KEY) return;
     // A sibling writing something else still carries the flag as disk had it,
