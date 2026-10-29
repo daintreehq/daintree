@@ -11,7 +11,9 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
  * form, which rewrote "just" in every dictation; accepting one now keeps such a
  * word out. A learned entry was created with the form it was learned from
  * first, so only that one goes: anything after it was added by hand. The term
- * stays, so it still reaches keyterms and cleanup.
+ * stays, so it still reaches keyterms and cleanup. Unlike most migrations this
+ * uses the live everyday-word test, so an entry learned before is judged the
+ * way acceptSuggestion judges one learned now.
  */
 export const migration041: Migration = {
   version: 41,
