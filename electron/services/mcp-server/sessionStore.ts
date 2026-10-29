@@ -855,6 +855,7 @@ export class SessionStore {
   ): {
     tier: McpTier;
     activeGrants: Array<{
+      sessionId: string;
       toolId: string;
       expiresAt: number;
       maxExpiresAt: number;
@@ -887,6 +888,7 @@ export class SessionStore {
       // never reports a logically-ended grant as active; the next sweep's push
       // reconciles the renderer anyway.
       const activeGrants = this.grantCache.getLiveGrants(transportSessionId).map((g) => ({
+        sessionId: transportSessionId,
         toolId: g.toolId,
         expiresAt: g.expiresAt,
         maxExpiresAt: g.maxExpiresAt,
@@ -897,6 +899,7 @@ export class SessionStore {
       // the settings surface shows the full grant lifecycle. Lazy-eviction
       // semantics match the per-tool grants — drop logically-expired entries.
       const nativeGrants = this.grantCache.getLiveNativeGrants(transportSessionId).map((g) => ({
+        sessionId: transportSessionId,
         toolId: "*",
         expiresAt: g.expiresAt,
         maxExpiresAt: g.maxExpiresAt,

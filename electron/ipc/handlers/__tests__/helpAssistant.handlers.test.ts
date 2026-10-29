@@ -866,7 +866,7 @@ describe("registerHelpAssistantHandlers — getLiveSessionStatus (#10032)", () =
   it("returns a connected snapshot shaped from the service result", async () => {
     mcpServiceMock.getHelpSessionLiveStatus.mockReturnValue({
       tier: "full",
-      activeGrants: [{ toolId: "terminal.kill", expiresAt: 1000, ttlMs: 500 }],
+      activeGrants: [{ sessionId: "transport-1", toolId: "terminal.kill", expiresAt: 1000, ttlMs: 500 }],
     });
     registerHelpAssistantHandlers();
     const handler = ipcMainMock._handlers.get(LIVE_STATUS_CHANNEL)!;
@@ -876,7 +876,7 @@ describe("registerHelpAssistantHandlers — getLiveSessionStatus (#10032)", () =
     expect(result).toEqual({
       connected: true,
       tier: "full",
-      activeGrants: [{ toolId: "terminal.kill", expiresAt: 1000, ttlMs: 500 }],
+      activeGrants: [{ sessionId: "transport-1", toolId: "terminal.kill", expiresAt: 1000, ttlMs: 500 }],
     });
     // The public help id and the caller's webContentsId are threaded through.
     expect(mcpServiceMock.getHelpSessionLiveStatus).toHaveBeenCalledWith("help-1", 4242);

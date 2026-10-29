@@ -109,7 +109,14 @@ describe("useHelpSessionLiveStatus", () => {
     const withGrant: HelpSessionLiveStatus = {
       connected: true,
       tier: "core",
-      activeGrants: [{ toolId: "project.runCheck", expiresAt: 1_700_000_000_000, ttlMs: 900_000 }],
+      activeGrants: [
+        {
+          sessionId: "transport-1",
+          toolId: "project.runCheck",
+          expiresAt: 1_700_000_000_000,
+          ttlMs: 900_000,
+        },
+      ],
     };
     await act(async () => {
       pulls[1]!.resolve(withGrant);

@@ -179,6 +179,7 @@ function fakeDeps(overrides?: Partial<HttpLifecycleDeps>): HttpLifecycleDeps {
       grantCache: {
         clearDenialCounts: vi.fn(),
         revokeSession: vi.fn(() => 0),
+        revokeGrant: vi.fn(() => false),
         issueGrant: vi.fn(),
         issueNativeGrant: vi.fn(),
         getNativeGrant: vi.fn(() => undefined),
@@ -628,6 +629,62 @@ describe("HttpLifecycle", () => {
       const deps = fakeDeps();
       const lc = new HttpLifecycle(deps);
       expect(() => lc.resetDenialCounts("")).toThrow(/Invalid sessionId/);
+    });
+  });
+
+  describe("revokeGrant (#14975)", () => {
+    function grantCacheOf(deps: HttpLifecycleDeps) {
+      return (
+        deps.sessionStore as unknown as {
+          grantCache: {
+            revokeGrant: ReturnType<typeof vi.fn>;
+            revokeSession: ReturnType<typeof vi.fn>;
+          };
+        }
+      ).grantCache;
+    }
+
+    it("ends only the named tool's grant, never the whole session", () => {
+      const deps = fakeDeps();
+      deps.sessionStore.sessionWebContentsMap.set("sess-1", 42);
+      grantCacheOf(deps).revokeGrant.mockReturnValue(true);
+      const lc = new HttpLifecycle(deps);
+
+      expect(lc.revokeGrant("sess-1", "terminal.kill", 42)).toEqual({
+        sessionId: "sess-1",
+        toolId: "terminal.kill",
+        revoked: true,
+      });
+      expect(grantCacheOf(deps).revokeGrant).toHaveBeenCalledWith("sess-1", "terminal.kill", "user");
+      expect(grantCacheOf(deps).revokeSession).not.toHaveBeenCalled();
+    });
+
+    it("refuses a caller that isn't the session's pinned renderer before touching the cache", () => {
+      const deps = fakeDeps();
+      deps.sessionStore.sessionWebContentsMap.set("sess-pin", 42);
+      const lc = new HttpLifecycle(deps);
+
+      expect(() => lc.revokeGrant("sess-pin", "terminal.kill", 99)).toThrow(
+        /not the pinned renderer/
+      );
+      expect(grantCacheOf(deps).revokeGrant).not.toHaveBeenCalled();
+    });
+
+    it("reports revoked: false for a drained session instead of throwing", () => {
+      const deps = fakeDeps();
+      const lc = new HttpLifecycle(deps);
+
+      expect(lc.revokeGrant("sess-gone", "terminal.kill", 99)).toEqual({
+        sessionId: "sess-gone",
+        toolId: "terminal.kill",
+        revoked: false,
+      });
+    });
+
+    it("throws for blank ids", () => {
+      const lc = new HttpLifecycle(fakeDeps());
+      expect(() => lc.revokeGrant("", "terminal.kill")).toThrow(/Invalid sessionId/);
+      expect(() => lc.revokeGrant("sess-1", "")).toThrow(/Invalid toolId/);
     });
   });
 
