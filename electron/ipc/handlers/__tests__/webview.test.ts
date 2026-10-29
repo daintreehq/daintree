@@ -286,6 +286,55 @@ describe("registerWebviewHandlers", () => {
       });
     });
 
+    it("marks accessor properties instead of reporting them as undefined", async () => {
+      debuggerMock.sendCommand.mockImplementation((cmd: string) => {
+        if (cmd === "Runtime.getProperties") {
+          return Promise.resolve({
+            result: [
+              {
+                name: "total",
+                get: { type: "function", objectId: "getter-1", description: "get total() {}" },
+                set: { type: "undefined" },
+                configurable: true,
+                enumerable: true,
+                isOwn: true,
+              },
+              {
+                name: "sink",
+                get: { type: "undefined" },
+                set: { type: "function", objectId: "setter-1", description: "set sink(v) {}" },
+                configurable: true,
+                enumerable: true,
+                isOwn: true,
+              },
+              {
+                name: "missing",
+                value: { type: "undefined" },
+                configurable: true,
+                enumerable: true,
+                writable: true,
+                isOwn: true,
+              },
+            ],
+          });
+        }
+        return Promise.resolve();
+      });
+
+      cleanup = registerWebviewHandlers(deps);
+      const rowId = await emitObjectRow("pane-1", "obj-acc");
+      const handler = getHandler("webview:get-console-properties");
+      const result = await handler(null, 42, "pane-1", rowId, "obj-acc");
+
+      const [total, sink, missing] = result.properties;
+      expect(total.value).toBeUndefined();
+      expect(total.accessor).toEqual({ getter: true, setter: false });
+      expect(sink.value).toBeUndefined();
+      expect(sink.accessor).toEqual({ getter: false, setter: true });
+      expect(missing.accessor).toBeUndefined();
+      expect(missing.value).toEqual({ type: "primitive", kind: "undefined", value: null });
+    });
+
     it("returns empty properties when object not found", async () => {
       debuggerMock.sendCommand.mockImplementation((cmd: string) => {
         if (cmd === "Runtime.getProperties") {
