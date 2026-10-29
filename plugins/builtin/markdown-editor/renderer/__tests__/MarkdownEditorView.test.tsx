@@ -331,4 +331,85 @@ describe("MarkdownEditorView (#12323)", () => {
     await renderReady();
     expect(editorView().state.doc.toString()).toBe("# Plan\n\nBody\n\nkept");
   });
+
+  describe("Copy draft", () => {
+    const KEY = identityKey({ projectId: "p1", worktreePath: "/repo", filePath: FILE });
+    let writeText: ReturnType<typeof vi.fn>;
+
+    beforeEach(() => {
+      writeText = vi.fn(async () => undefined);
+      Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    });
+
+    async function renderOrphan() {
+      main.files.delete(FILE);
+      main.drafts.set(KEY, {
+        generation: 1,
+        record: {
+          stateVersion: 1,
+          identity: { projectId: "p1", worktreePath: "/repo", filePath: FILE },
+          baseRevision: "a".repeat(64),
+          baseText: "# Plan\n",
+          draftText: "# Plan\n\norphan\n",
+          hasBom: false,
+          eol: "\n",
+          updatedAt: 1,
+        },
+      });
+      render(view());
+      return screen.findByTestId("markdown-editor-copy-draft");
+    }
+
+    async function renderUnbacked() {
+      await renderReady();
+      await type("\nmore");
+      await act(async () => {
+        useDocumentStateStore.getState().upsert(KEY, (record) => ({
+          ...record,
+          storageWarning: "Draft recovery storage is full",
+        }));
+      });
+      return screen.getByTestId("markdown-editor-copy-draft");
+    }
+
+    it("confirms an orphaned draft on the button once it reaches the clipboard", async () => {
+      const button = await renderOrphan();
+      await act(async () => {
+        fireEvent.click(button);
+      });
+      expect(writeText).toHaveBeenCalledWith("# Plan\n\norphan\n");
+      expect(button.textContent).toContain("Copied");
+      expect(announceMock).toHaveBeenCalledWith("Copied", "polite");
+    });
+
+    it("says so on the button, and announces, when the clipboard refuses an orphaned draft", async () => {
+      writeText.mockRejectedValue(new Error("denied"));
+      const button = await renderOrphan();
+      await act(async () => {
+        fireEvent.click(button);
+      });
+      expect(button.textContent).toContain("Couldn't copy");
+      expect(button.textContent).not.toContain("Copied");
+      expect(announceMock).toHaveBeenCalledWith("Couldn't copy", "assertive");
+    });
+
+    it("copies the live buffer from the backup warning and confirms it", async () => {
+      const button = await renderUnbacked();
+      await act(async () => {
+        fireEvent.click(button);
+      });
+      expect(writeText).toHaveBeenCalledWith("# Plan\n\nBody\n\nmore");
+      expect(button.textContent).toContain("Copied");
+    });
+
+    it("says so on the backup warning's button when the clipboard refuses", async () => {
+      writeText.mockRejectedValue(new Error("denied"));
+      const button = await renderUnbacked();
+      await act(async () => {
+        fireEvent.click(button);
+      });
+      expect(button.textContent).toContain("Couldn't copy");
+      expect(announceMock).toHaveBeenCalledWith("Couldn't copy", "assertive");
+    });
+  });
 });
