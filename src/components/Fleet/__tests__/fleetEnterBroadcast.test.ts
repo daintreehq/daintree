@@ -412,12 +412,37 @@ describe("tryFleetBroadcastFromEditor — the composer lets go only of a deliver
     );
     const onDelivered = vi.fn();
     tryFleetBroadcastFromEditor("a", "hello", onDelivered);
-    while (pending.length < 2) await flush();
-    cancelActiveBroadcast();
-    for (const fn of pending.splice(0)) fn();
+    try {
+      await vi.waitFor(() => expect(pending).toHaveLength(2));
+      cancelActiveBroadcast();
+    } finally {
+      for (const fn of pending.splice(0)) fn();
+    }
     for (let i = 0; i < 10; i += 1) await flush();
     expect(useAnnouncerStore.getState().polite?.msg).toMatch(/Broadcast cancelled/);
     expect(onDelivered).not.toHaveBeenCalled();
+  });
+
+  it("leaves the cleanup to a newer Enter that pre-empted the send", async () => {
+    // The older run still reached its targets, but the composer has since
+    // sent again: its draft is the newer send's to clear, not the older's.
+    arm(["a", "b"]);
+    const pending: Array<() => void> = [];
+    submitMock.mockImplementation(() => new Promise<void>((resolve) => pending.push(resolve)));
+    const first = vi.fn();
+    const second = vi.fn();
+    try {
+      tryFleetBroadcastFromEditor("a", "hello", first);
+      await vi.waitFor(() => expect(pending).toHaveLength(2));
+      tryFleetBroadcastFromEditor("a", "hello again", second);
+      await vi.waitFor(() => expect(pending).toHaveLength(4));
+    } finally {
+      for (const resolve of pending.splice(0)) resolve();
+    }
+    for (let i = 0; i < 10; i += 1) await flush();
+    expect(submitMock).toHaveBeenCalledWith("a", "hello");
+    expect(first).not.toHaveBeenCalled();
+    expect(second).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the draft when every target dropped out of the fleet before dispatch", async () => {

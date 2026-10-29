@@ -7,6 +7,24 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const submitMock = vi.hoisted(() => vi.fn<(id: string, text: string) => Promise<void>>());
+// When set, the composer's fleet send is held here instead of broadcast, so a
+// test can settle it at an exact point.
+const heldFleetSend = vi.hoisted(() => ({
+  capture: null as null | ((settle: () => void) => void),
+}));
+vi.mock("../composerFleetBroadcast", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../composerFleetBroadcast")>();
+  return {
+    ...actual,
+    tryComposerFleetBroadcast: (
+      ...args: Parameters<typeof actual.tryComposerFleetBroadcast>
+    ): boolean => {
+      if (!heldFleetSend.capture) return actual.tryComposerFleetBroadcast(...args);
+      heldFleetSend.capture(args[3]);
+      return true;
+    },
+  };
+});
 vi.mock("@/clients", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/clients")>();
   return {
@@ -101,6 +119,7 @@ beforeEach(() => {
   __resetFleetTargetOverridesStoreForTesting();
   useFleetRunStore.getState()._reset();
   submitMock.mockReset().mockResolvedValue(undefined);
+  heldFleetSend.capture = null;
   Object.defineProperty(window, "electron", {
     configurable: true,
     writable: true,
@@ -187,13 +206,16 @@ describe("HybridInputBar's fleet send", () => {
   it("keeps what was typed while the broadcast was on its way, here and in the followers", async () => {
     const submits = holdSubmits();
     const { view, type, pressEnter, settle, draft } = await mount();
-    await type("first");
-    await pressEnter();
-    await settle();
-    expect(submits.count).toBe(2);
+    try {
+      await type("first");
+      await pressEnter();
+      await settle();
+      expect(submits.count).toBe(2);
 
-    await type(" and the next one");
-    await act(async () => submits.release());
+      await type(" and the next one");
+    } finally {
+      await act(async () => submits.release());
+    }
     await settle();
 
     expect(view.state.doc.toString()).toBe("first and the next one");
@@ -201,26 +223,30 @@ describe("HybridInputBar's fleet send", () => {
     expect(draft("term-2")).toBe("first and the next one");
   });
 
-  it("keeps what landed in the draft from outside while the broadcast was on its way", async () => {
-    const submits = holdSubmits();
+  it("keeps a write from outside that reached the draft but not yet the editor", async () => {
+    let delivered: (() => void) | null = null;
+    heldFleetSend.capture = (settle) => {
+      delivered = settle;
+    };
     const { view, type, pressEnter, settle, draft } = await mount();
     await type("first");
     await pressEnter();
-    await settle();
+    expect(delivered).not.toBeNull();
 
-    // A handoff or dictation writes the store first and reaches the
-    // editor an effect later: the broadcast settles in between.
-    await act(async () => {
+    // A handoff or dictation writes the store first and reaches the editor an
+    // effect later; the broadcast settles in between.
+    act(() => {
       const inputs = useTerminalInputStore.getState();
       inputs.setDraftInput("term-1", "first, then the logs", undefined);
       inputs.bumpExternalDraftRevision();
-      submits.release();
-      for (let i = 0; i < 10; i += 1) await Promise.resolve();
+      expect(view.state.doc.toString()).toBe("first");
+      delivered!();
+      expect(draft("term-1")).toBe("first, then the logs");
     });
     await settle();
 
-    expect(draft("term-1")).toBe("first, then the logs");
     expect(view.state.doc.toString()).toBe("first, then the logs");
+    expect(draft("term-2")).toBe("first, then the logs");
   });
 
   it("keeps the draft when every target is excluded", async () => {
@@ -251,5 +277,6 @@ describe("HybridInputBar's fleet send", () => {
     expect(submitMock).toHaveBeenCalledTimes(2);
     expect(view.state.doc.toString()).toBe("try again");
     expect(draft("term-1")).toBe("try again");
+    expect(draft("term-2")).toBe("try again");
   });
 });

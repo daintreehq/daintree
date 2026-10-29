@@ -14,6 +14,10 @@ import {
 import { pluralize } from "@/lib/pluralize";
 
 let activeBroadcastController: AbortController | null = null;
+// The composer send that owns the draft's cleanup. A newer Enter takes it
+// over: the older run settling later must not clear a draft that has since
+// been sent, cleared and typed again, or undo the newer send's own cleanup.
+let latestEditorSend: object | null = null;
 
 /**
  * Abort any in-flight fleet broadcast. Already-dispatched IPC writes can't
@@ -250,7 +254,8 @@ export async function sendDraftToFleet(text: string): Promise<boolean> {
  * `onDelivered` runs once the broadcast settles having reached at least one
  * target, so the composer can let go of what it sent. A send that reached
  * none — every target excluded or gone, or every write refused — leaves the
- * draft to the user to edit and send again.
+ * draft to the user to edit and send again, and so does one a newer Enter
+ * pre-empted, whose cleanup is the newer send's.
  */
 export function tryFleetBroadcastFromEditor(
   terminalId: string,
@@ -317,6 +322,8 @@ export function tryFleetBroadcastFromEditor(
     // `resolveFleetBroadcastTargetIds()`; re-run the panel-eligibility
     // filter so disposed PTYs are dropped too.
     const eligibleTargets = filterEligibleIds(effectiveTargets);
+    const send = {};
+    latestEditorSend = send;
     let delivered = false;
     try {
       // A second Enter while a broadcast is in-flight pre-empts the first;
@@ -333,7 +340,9 @@ export function tryFleetBroadcastFromEditor(
       // Clear them so the next broadcast starts from the resolved defaults.
       // Controller teardown is owned by `runManagedFleetBroadcast`.
       useFleetTargetOverridesStore.getState().clear();
-      if (delivered) onDelivered();
+      const owned = latestEditorSend === send;
+      if (owned) latestEditorSend = null;
+      if (delivered && owned) onDelivered();
     }
   };
 
