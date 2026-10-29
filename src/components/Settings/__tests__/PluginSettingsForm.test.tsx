@@ -537,6 +537,9 @@ describe("PluginSettingsForm", () => {
     fireEvent.change(input, { target: { value: "sk-first" } });
     fireEvent.click(screen.getByRole("button", { name: "Show Token" }));
     expect(input.type).toBe("text");
+    // Editing what is shown keeps it shown; only emptying the field re-masks.
+    fireEvent.change(input, { target: { value: "sk-firs" } });
+    expect(input.type).toBe("text");
 
     fireEvent.change(input, { target: { value: "" } });
     expect(input.type).toBe("password");
@@ -556,16 +559,19 @@ describe("PluginSettingsForm", () => {
     const input = (await screen.findByLabelText("Token")) as HTMLInputElement;
     await waitFor(() => expect(input.disabled).toBe(false));
     fireEvent.change(input, { target: { value: "sk-pasted" } });
-    const toggle = screen.getByRole("button", { name: "Show Token" });
+    const toggle = screen.getByRole("button", { name: "Show Token" }) as HTMLButtonElement;
+    expect(toggle.tabIndex).toBe(0);
 
-    // Focus moving from the field to its own eye is not leaving the field.
+    // Focus moving between the field and its own eye is not leaving the field.
     fireEvent.blur(input, { relatedTarget: toggle });
     fireEvent.click(toggle);
     expect(input.type).toBe("text");
     expect(input.value).toBe("sk-pasted");
+    fireEvent.blur(toggle, { relatedTarget: input });
+    expect(input.type).toBe("text");
     expect(pluginApi.setSettingValue).not.toHaveBeenCalled();
 
-    fireEvent.blur(toggle, { relatedTarget: document.body });
+    fireEvent.blur(input, { relatedTarget: document.body });
     await waitFor(() =>
       expect(pluginApi.setSettingValue).toHaveBeenCalledWith(
         "acme.test",
@@ -593,11 +599,16 @@ describe("PluginSettingsForm", () => {
     expect(input.value).toBe("");
     expect(input.type).toBe("password");
 
-    fireEvent.click(await screen.findByRole("button", { name: "Show Token" }));
+    const toggle = await screen.findByRole("button", { name: "Show Token" });
+    fireEvent.click(toggle);
     await waitFor(() => expect(input.value).toBe("sekret"));
     expect(input.type).toBe("text");
+    // Tabbing to the eye stays inside the field: nothing saves yet.
+    fireEvent.blur(input, { relatedTarget: toggle });
+    expect(pluginApi.setSettingValue).not.toHaveBeenCalled();
+    expect(input.value).toBe("sekret");
 
-    fireEvent.blur(input);
+    fireEvent.blur(toggle);
     await waitFor(() =>
       expect(pluginApi.setSettingValue).toHaveBeenCalledWith(
         "acme.test",
@@ -652,6 +663,7 @@ describe("PluginSettingsForm", () => {
     // With no keychain at all, another try is refused the same way.
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
     // Nothing is stored, but the kept value can still be checked.
+    expect(screen.queryByRole("button", { name: "Clear Token" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Show Token" }));
     expect(input.type).toBe("text");
     expect(input.value).toBe("sk-typed");
