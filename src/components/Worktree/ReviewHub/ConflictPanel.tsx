@@ -84,6 +84,14 @@ interface ConflictPanelProps {
 
 type ScanCache = Map<string, ConflictMarkerScanEntry>;
 
+/** A scan's answers, kept with the worktree they were read from. */
+interface ScanResults {
+  worktreePath: string;
+  entries: ScanCache;
+}
+
+const NO_SCAN: ScanCache = new Map();
+
 /**
  * Vertical commit-sequence rail for an in-progress rebase. Entirely neutral:
  * the conflict view's one accent belongs to Continue.
@@ -253,9 +261,8 @@ export function ConflictPanel({
   const [busyFile, setBusyFile] = useState<string | null>(null);
   const [optimisticResolved, setOptimisticResolved] = useState<Set<string>>(() => new Set());
   const [showResolved, setShowResolved] = useState(false);
-  const [scanResults, setScanResults] = useState<ScanCache>(() => new Map());
+  const [scan, setScan] = useState<ScanResults | null>(null);
   const [scanNonce, setScanNonce] = useState(0);
-  const scanKeyRef = useRef<string>("");
   const rowRefs = useRef(new Map<string, HTMLLIElement>());
   const continueRef = useRef<HTMLDivElement>(null);
   // Where focus goes once a row the user was working in leaves the list.
@@ -342,22 +349,18 @@ export function ConflictPanel({
   const hasStagedResolutions = status.staged.length > 0;
   const continueBlocked = !canContinue || isAborting || isContinuing || busyFile !== null;
 
-  // Scan for hunk counts + first-marker line. The scan key is the sorted path
-  // set joined by a sentinel — it changes whenever the conflicted-files set
-  // changes, which is exactly when we want a fresh read. Path-set identity
-  // keeps `useEffect` from re-running on unrelated status changes.
-  const scanKey = useMemo(
-    () =>
-      status.conflictedFiles
-        .map((f) => f.path)
-        .slice()
-        .sort()
-        .join(" "),
-    [status.conflictedFiles]
-  );
+  // Scan for hunk counts + first-marker line on every status read that lands,
+  // not only when the conflicted path set moves. Fixing a region inside
+  // Daintree (an agent in a terminal, a save in a file panel) rewrites a file
+  // that stays conflicted; the hub hears the watcher's flush and re-reads
+  // status, and each read arrives as a fresh object over IPC.
+  const conflictedFiles = status.conflictedFiles;
+  // Paths are relative, so another worktree's answers would fit this one's rows
+  // until its own scan lands.
+  const scanResults = scan?.worktreePath === worktreePath ? scan.entries : NO_SCAN;
 
-  // Resolving happens in the user's editor, so the path set alone never
-  // notices a region being fixed. Rescan whenever the app regains focus.
+  // A write the watcher missed, from an editor outside the app, still gets a
+  // rescan when the app regains focus.
   useEffect(() => {
     const onFocus = () => setScanNonce((n) => n + 1);
     window.addEventListener("focus", onFocus);
@@ -365,20 +368,15 @@ export function ConflictPanel({
   }, []);
 
   useEffect(() => {
-    // Encode worktreePath so two worktrees with identically-named conflicted
-    // files (e.g. both have `src/app.ts`) don't share stale scan results when
-    // the panel is re-rendered with a different worktree.
-    const scopedKey = `${worktreePath}\0${scanKey}\0${scanNonce}`;
-    if (!worktreePath || scanKey === "") {
-      if (scanResults.size > 0) setScanResults(new Map());
-      scanKeyRef.current = scopedKey;
+    if (!worktreePath || conflictedFiles.length === 0) {
+      setScan(null);
       return;
     }
-    if (scanKeyRef.current === scopedKey) return;
-    scanKeyRef.current = scopedKey;
 
+    // A newer read, a focus or a worktree switch supersedes this scan, and the
+    // cleanup drops its answer so an older read never lands over a newer one.
     let cancelled = false;
-    const paths = status.conflictedFiles.map((f) => f.path);
+    const paths = conflictedFiles.map((f) => f.path);
     void (async () => {
       try {
         const results = await window.electron.git.scanConflictMarkers(worktreePath, paths);
@@ -387,16 +385,16 @@ export function ConflictPanel({
         for (const entry of results) {
           next.set(entry.path, entry);
         }
-        setScanResults(next);
+        setScan({ worktreePath, entries: next });
       } catch {
-        if (!cancelled) setScanResults(new Map());
+        if (!cancelled) setScan(null);
       }
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [scanKey, scanNonce, worktreePath, status.conflictedFiles, scanResults.size]);
+  }, [worktreePath, conflictedFiles, scanNonce]);
 
   const handleAbort = useCallback(async () => {
     setIsAborting(true);
