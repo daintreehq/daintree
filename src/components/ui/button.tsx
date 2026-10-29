@@ -148,13 +148,14 @@ const GAP_CLASS_MAP: Record<ButtonSize, string> = {
 // reads centred; busy, the shift drops and spinner and label centre together.
 // Half of spinner + gap per size, in lockstep with SPINNER_SIZE_MAP and
 // GAP_CLASS_MAP. The shift snaps, so reduced motion has nothing to remove.
-// Icon sizes have no label to keep readable and stay on the overlay.
+// Icon sizes have no label to keep readable, and `inline` sizes every glyph
+// to the text around it (`size-[1em]`), which would outgrow a fixed slot and
+// run into the label; both stay on the overlay.
 const LABELLED_IDLE_SHIFT_CLASS_MAP: Partial<Record<ButtonSize, string>> = {
   default: "-translate-x-3",
   sm: "-translate-x-2.5",
   xs: "-translate-x-2",
   lg: "-translate-x-3.25",
-  inline: "-translate-x-2",
 };
 
 export interface ButtonProps
@@ -172,7 +173,7 @@ export interface ButtonProps
    * `"labelled"` keeps the label readable, with the spinner in its own slot
    * before it. Pass it on every render, not only while loading: the slot is
    * reserved while idle too, which is what holds the width. Ignored for icon
-   * sizes and `asChild`, which keep the overlay.
+   * sizes, `inline` and `asChild`, which keep the overlay.
    */
   loadingPresentation?: "overlay" | "labelled";
   /**

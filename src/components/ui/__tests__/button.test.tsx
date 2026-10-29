@@ -302,7 +302,7 @@ describe("Button labelled loading presentation", () => {
   // Idle, the label sits after an empty slot and a gap; shifting back by half
   // of both is what centres it, at every size that has a label.
   it("shifts the idle label back by half the slot and gap at every labelled size", () => {
-    for (const size of ["default", "sm", "xs", "lg", "inline"] as const) {
+    for (const size of ["default", "sm", "xs", "lg"] as const) {
       const { container, unmount } = render(
         <Button size={size} loadingPresentation="labelled">
           Save
@@ -319,7 +319,7 @@ describe("Button labelled loading presentation", () => {
   });
 
   it("sizes the slot to the spinner it holds", () => {
-    for (const size of ["default", "sm", "xs", "lg", "inline"] as const) {
+    for (const size of ["default", "sm", "xs", "lg"] as const) {
       const { container, unmount } = render(
         <Button size={size} loading loadingPresentation="labelled">
           Save
@@ -333,7 +333,7 @@ describe("Button labelled loading presentation", () => {
     }
   });
 
-  it("keeps the overlay for icon sizes and asChild, which have no label to show", () => {
+  it("keeps the overlay for icon sizes, inline links and asChild", () => {
     const icon = render(
       <Button size="icon-sm" loading loadingPresentation="labelled" aria-label="Delete">
         <svg />
@@ -341,6 +341,15 @@ describe("Button labelled loading presentation", () => {
     );
     expect(icon.container.querySelector('[data-slot="button-spinner"]')).toBeTruthy();
     expect(icon.container.querySelector('[data-slot="button-spinner-slot"]')).toBeNull();
+
+    // An inline link draws its glyphs at 1em, which no fixed slot can hold.
+    const link = render(
+      <Button variant="link" loading loadingPresentation="labelled">
+        Retry
+      </Button>
+    );
+    expect(link.container.querySelector('[data-slot="button-spinner"]')).toBeTruthy();
+    expect(link.container.querySelector('[data-slot="button-spinner-slot"]')).toBeNull();
 
     const slotted = render(
       <Button asChild loading loadingPresentation="labelled">
