@@ -10,6 +10,9 @@
  * does not control. An action a new release adds stays out until it is added
  * here.
  *
+ * The forge reads (#15399) ask the host's own forge: their channels run where
+ * the project lives, with the host's credentials, so nothing here is read.
+ *
  * Four reach a little further, each on this Shell's terms:
  * - `browser.captureScreenshot` returns the pixels of a browser panel in the
  *   view the host already drives, as bytes; nothing lands on this clipboard.
@@ -66,6 +69,14 @@ export const HOST_DISPATCHABLE_ACTION_IDS: ReadonlySet<string> = new Set([
   "browser.captureScreenshot",
   "file.view",
   "fleet.getRunStatus",
+  "forge.getCIStatus",
+  "forge.getChecks",
+  "forge.getIssue",
+  "forge.getPR",
+  "forge.getPRs",
+  "forge.listIssueComments",
+  "forge.listIssues",
+  "forge.listPRs",
   "help.displayImage",
   "host.list",
   "host.switch",
