@@ -1,6 +1,8 @@
+import { useState } from "react";
 import type { PluginTaskSnapshot } from "@shared/types/plugin";
 import { pluginClient } from "@/clients";
 import { Button } from "@/components/ui/button";
+import { InlineError } from "@/components/ui/field";
 import { ProgressBar } from "@/components/ui/ProgressBar";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { ARIA_DISABLED_INERT_CLASSES } from "@/components/ui/ariaDisabled";
@@ -13,22 +15,50 @@ function taskStatus(task: PluginTaskSnapshot): string | null {
   return task.fraction !== null ? `${Math.round(task.fraction * 100)}%` : null;
 }
 
+/**
+ * A Cancel or Dismiss the user asked for, against the state the task was in
+ * then. Once the task moves on — to cancelling, or interrupted — the row says
+ * that instead, so the request stops counting.
+ */
+interface TaskRequest {
+  kind: "cancel" | "dismiss";
+  state: PluginTaskSnapshot["state"];
+  failed: boolean;
+}
+
 function PluginTaskRow({ task }: { task: PluginTaskSnapshot }) {
-  const status = taskStatus(task);
+  const [request, setRequest] = useState<TaskRequest | null>(null);
+  const live = request !== null && request.state === task.state ? request : null;
+  const asking = live !== null && !live.failed;
+  const cancelling = task.state === "cancelling" || (asking && live.kind === "cancel");
+  const status = cancelling ? "Cancelling…" : taskStatus(task);
   // The plugin's name always leads: every word on the row after the title is
   // the plugin's own, and this is what says whose.
   const context = task.detail ? `${task.pluginName} · ${task.detail}` : task.pluginName;
-  const cancelling = task.state === "cancelling";
 
-  const cancel = () => {
-    pluginClient.cancelTask(task.pluginId, task.id).catch((error: unknown) => {
-      logError("[PluginTaskList] Failed to cancel a plugin task", error);
-    });
-  };
-  const dismiss = () => {
-    pluginClient.dismissTask(task.pluginId, task.id).catch((error: unknown) => {
-      logError("[PluginTaskList] Failed to dismiss a plugin task", error);
-    });
+  // `false` is a real answer — the host refused, or the task wasn't in a state
+  // to take it — and so is a rejected call. Either way the row says so: one
+  // that looks untouched reads as a sync that stopped when it's still running.
+  // The row's own button is the retry.
+  const ask = (kind: TaskRequest["kind"]) => {
+    if (asking) return;
+    const state = task.state;
+    setRequest({ kind, state, failed: false });
+    const call =
+      kind === "cancel"
+        ? pluginClient.cancelTask(task.pluginId, task.id)
+        : pluginClient.dismissTask(task.pluginId, task.id);
+    call.then(
+      // Taken, it lapses when the task's own state moves on — cancelling, or
+      // gone — rather than flicking back to working in between.
+      (taken) => {
+        if (!taken) setRequest({ kind, state, failed: true });
+      },
+      (error: unknown) => {
+        logError(`[PluginTaskList] Failed to ${kind} a plugin task`, error);
+        setRequest({ kind, state, failed: true });
+      }
+    );
   };
 
   return (
@@ -46,7 +76,14 @@ function PluginTaskRow({ task }: { task: PluginTaskSnapshot }) {
           </div>
         </div>
         {task.state === "interrupted" ? (
-          <Button variant="ghost" size="xs" aria-label={`Dismiss ${task.title}`} onClick={dismiss}>
+          <Button
+            variant="ghost"
+            size="xs"
+            aria-label={`Dismiss ${task.title}`}
+            aria-disabled={asking || undefined}
+            onClick={asking ? undefined : () => ask("dismiss")}
+            className={asking ? ARIA_DISABLED_INERT_CLASSES : undefined}
+          >
             Dismiss
           </Button>
         ) : (
@@ -58,7 +95,7 @@ function PluginTaskRow({ task }: { task: PluginTaskSnapshot }) {
               size="xs"
               aria-label={`Cancel ${task.title}`}
               aria-disabled={cancelling || undefined}
-              onClick={cancelling ? undefined : cancel}
+              onClick={cancelling ? undefined : () => ask("cancel")}
               className={cancelling ? ARIA_DISABLED_INERT_CLASSES : undefined}
             >
               Cancel
@@ -66,6 +103,13 @@ function PluginTaskRow({ task }: { task: PluginTaskSnapshot }) {
           )
         )}
       </div>
+      {live?.failed && (
+        <InlineError role="alert" className="text-2xs">
+          {live.kind === "cancel"
+            ? "Couldn't cancel this task. It may still be running."
+            : "Couldn't dismiss this task."}
+        </InlineError>
+      )}
       {task.state !== "interrupted" && (
         <ProgressBar
           size="thin"
