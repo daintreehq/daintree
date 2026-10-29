@@ -2267,36 +2267,42 @@ describe("McpServerService", () => {
       }
     );
 
-    // Confirming an agent's PR passed CI is part of the default loop (#15399),
-    // down to which check failed.
-    it.each(["forge.getCIStatus", "forge.getChecks"])(
-      "core tier lists and can CALL %s",
-      async (actionId) => {
-        paneTokenTiers.set("token-core", "core");
-        const dispatchMock = vi.fn((payload: DispatchRequest): ActionDispatchResult => ({
-          ok: true,
-          result: { dispatched: payload.actionId },
-        }));
-        const { window } = createMockWindow({
-          getManifest: tierManifest,
-          dispatchAction: dispatchMock,
-        });
+    // Picking work, triaging it and confirming an agent's PR passed CI are the
+    // default loop (#15399), down to an issue's thread and which check failed.
+    it.each([
+      "forge.listIssues",
+      "forge.getIssue",
+      "forge.listIssueComments",
+      "forge.listPRs",
+      "forge.getPR",
+      "forge.getPRs",
+      "forge.getCIStatus",
+      "forge.getChecks",
+    ])("core tier lists and can CALL %s", async (actionId) => {
+      paneTokenTiers.set("token-core", "core");
+      const dispatchMock = vi.fn((payload: DispatchRequest): ActionDispatchResult => ({
+        ok: true,
+        result: { dispatched: payload.actionId },
+      }));
+      const { window } = createMockWindow({
+        getManifest: tierManifest,
+        dispatchAction: dispatchMock,
+      });
 
-        await service.start(window);
-        const { client, transport } = await connectClient(service.currentPort!, {
-          Authorization: "Bearer token-core",
-        });
-        transports.push(transport);
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!, {
+        Authorization: "Bearer token-core",
+      });
+      transports.push(transport);
 
-        const ids = (await client.listTools()).tools.map((tool) => tool.name);
-        expect(ids).toContain(actionId);
+      const ids = (await client.listTools()).tools.map((tool) => tool.name);
+      expect(ids).toContain(actionId);
 
-        const res = (await client.callTool({ name: actionId, arguments: {} })) as TextToolResult;
+      const res = (await client.callTool({ name: actionId, arguments: {} })) as TextToolResult;
 
-        expect(res.isError).toBeFalsy();
-        expect(dispatchMock).toHaveBeenCalledWith(expect.objectContaining({ actionId }));
-      }
-    );
+      expect(res.isError).toBeFalsy();
+      expect(dispatchMock).toHaveBeenCalledWith(expect.objectContaining({ actionId }));
+    });
 
     it("core tier leaves review readiness to full", async () => {
       paneTokenTiers.set("token-core", "core");

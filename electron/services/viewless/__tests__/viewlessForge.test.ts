@@ -201,8 +201,9 @@ describe("triage reads with no frontend (#15399)", () => {
             author: { login: "octo", rawData: { secret: "the provider's whole node" } },
           },
         ],
-        nextCursor: null,
-        hasMore: false,
+        nextCursor: "c3",
+        hasMore: true,
+        totalCount: 5,
       },
     });
 
@@ -218,8 +219,9 @@ describe("triage reads with no frontend (#15399)", () => {
       ok: true,
       result: {
         items: [{ id: "c2", author: { login: "octo" } }],
-        nextCursor: null,
-        hasMore: false,
+        nextCursor: "c3",
+        hasMore: true,
+        totalCount: 5,
       },
     });
     expect(JSON.stringify(result)).not.toContain("the provider's whole node");
@@ -273,7 +275,13 @@ describe("triage reads with no frontend (#15399)", () => {
     const { deps, invoke } = forgeDeps({
       [CHANNELS.FORGE_GET_CHECKS]: {
         checks: [
-          { name: "lint", status: "completed", conclusion: "failure", detailsUrl: "https://ci/1" },
+          {
+            name: "lint",
+            status: "completed",
+            conclusion: "failure",
+            detailsUrl: "https://ci/1",
+            rawData: { secret: "the provider's whole node" },
+          },
           { name: "test", status: "in_progress" },
         ],
       },
