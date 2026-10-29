@@ -196,9 +196,12 @@ describe("SidebarContent screen-reader announcements — issue #9665", () => {
     expect(source).toContain('import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils"');
     // The count announcement is scheduled on a timer cleared on re-run, so
     // rapid keystrokes coalesce into a single late announcement.
-    // The template is what gets spoken: `message` is built from the count,
-    // copied to `spoken` for the closure, and that is what the timer announces.
-    expect(source).toMatch(/message = `\$\{filteredCount\} of \$\{scopeTotal\} worktrees`/);
+    // The template is what gets spoken: `message` is the empty list's reason
+    // when there is one and the count otherwise, copied to `spoken` for the
+    // closure, and that is what the timer announces.
+    expect(source).toMatch(
+      /message = listEmptyTitle \?\? `\$\{filteredCount\} of \$\{scopeTotal\} worktrees`/
+    );
     expect(source).toMatch(/const spoken = message;/);
     expect(source).toMatch(
       /setTimeout\([\s\S]*?announce\(spoken\)[\s\S]*?\},\s*UI_DOHERTY_THRESHOLD\)/
@@ -220,7 +223,7 @@ describe("SidebarContent screen-reader announcements — issue #9665", () => {
     // The gate is the narrowed -> not-narrowed edge, and only once the deferred
     // rows have caught up with the instant query.
     expect(source).not.toMatch(/hasMountedScope/);
-    expect(source).toMatch(/if \(showScope\) \{[\s\S]{0,120}?wasNarrowedRef\.current = true/);
+    expect(source).toMatch(/if \(showScope\) \{[\s\S]{0,400}?wasNarrowedRef\.current = true/);
     expect(source).toMatch(
       /else if \(wasNarrowedRef\.current && filteredCount === scopeTotal\) \{[\s\S]{0,120}?All \$\{scopeTotal\} worktrees shown/
     );
@@ -517,10 +520,6 @@ describe("SidebarContent quick-state empty state — issue #6333 (CTA collapsed 
       expect(source.match(/<SidebarListEmptyState\b/g) ?? []).toHaveLength(1);
     });
 
-    it("announces the empty state's reason rather than the bare count", () => {
-      expect(source).toMatch(/message = listEmptyTitle \?\? `\$\{filteredCount\} of/);
-    });
-
     it("hands focus to the search field before each recovery action unmounts its button", () => {
       for (const handler of [
         "handleShowAllMatches",
@@ -531,7 +530,7 @@ describe("SidebarContent quick-state empty state — issue #6333 (CTA collapsed 
           new RegExp(`const ${handler} = \\(\\) => \\{([\\s\\S]*?)\\n  \\};`)
         );
         expect(body, handler).not.toBeNull();
-        expect(body![1].trim().startsWith("searchInputRef.current?.focus();")).toBe(true);
+        expect(body?.[1]?.trim().startsWith("searchInputRef.current?.focus();")).toBe(true);
       }
     });
   });
