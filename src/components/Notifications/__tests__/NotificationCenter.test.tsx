@@ -2551,6 +2551,68 @@ describe("NotificationCenter — keyboard navigation", () => {
     expect(useUIStore.getState().notificationCenterOpen).toBe(false);
   });
 
+  describe("Enter on a row from another workspace", () => {
+    const OTHER = "b".repeat(64);
+    const switchProject = vi.fn();
+    const initialSwitchProject = useProjectStore.getState().switchProject;
+
+    beforeEach(() => {
+      switchProject.mockReset().mockResolvedValue(undefined);
+      useAnnouncerStore.setState({ polite: null, assertive: null, nextId: 1 });
+      useUIStore.setState({ notificationCenterOpen: true });
+      useProjectStore.setState({
+        currentProject: {
+          id: "p1",
+          path: "/repos/helios",
+          name: "Helios",
+          emoji: "🌲",
+          lastOpened: 0,
+        },
+        projects: [{ id: OTHER, path: "/repos/atlas", name: "Atlas", emoji: "🌲", lastOpened: 0 }],
+        switchProject,
+      });
+    });
+    afterEach(() => {
+      useProjectStore.setState({ switchProject: initialSwitchProject });
+    });
+
+    async function pressEnterOn(context: NotificationHistoryEntry["context"]) {
+      setEntries([makeEntry({ id: "a", seenAsToast: false, context })]);
+      const { container } = render(<NotificationCenter open onClose={vi.fn()} />);
+      const row = getRows(container)[0]!;
+      act(() => {
+        row.focus();
+      });
+      await act(async () => {
+        fireEvent.keyDown(row, { key: "Enter" });
+      });
+    }
+
+    it("switches there, leaving the row unread and announcing nothing", async () => {
+      await pressEnterOn({ projectId: OTHER, worktreeId: "wt-9", panelId: "pane-9" });
+      expect(switchProject).toHaveBeenCalledWith(OTHER, {
+        focusIntent: { intent: "focus-panel", panelId: "pane-9", worktreeId: "wt-9" },
+      });
+      expect(useUIStore.getState().notificationCenterOpen).toBe(false);
+      expect(useNotificationHistoryStore.getState().entries[0]?.seenAsToast).toBe(false);
+      expect(useAnnouncerStore.getState().polite).toBeNull();
+    });
+
+    it("says a row from another machine can't be followed", async () => {
+      await pressEnterOn({ projectId: OTHER, panelId: "pane-9", hostName: "studio-01" });
+      expect(switchProject).not.toHaveBeenCalled();
+      expect(useUIStore.getState().notificationCenterOpen).toBe(true);
+      expect(useAnnouncerStore.getState().polite?.msg).toBe("It came from another machine");
+    });
+
+    it("says a row whose project is gone can't be followed", async () => {
+      await pressEnterOn({ projectId: "c".repeat(64), panelId: "pane-9" });
+      expect(switchProject).not.toHaveBeenCalled();
+      expect(useUIStore.getState().notificationCenterOpen).toBe(true);
+      expect(useAnnouncerStore.getState().polite?.msg).toBe("Its project is no longer available");
+    });
+  });
+
   it("goes to a live worktree when a worktree-only row is clicked", async () => {
     worktreeStoreMock.worktrees.set("wt-live", { worktreeId: "wt-live", name: "feature-live" });
     setWorktreeIdSetAccessor(() => new Set(["wt-live"]));

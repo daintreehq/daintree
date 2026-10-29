@@ -289,13 +289,19 @@ describe("goToNotificationSource", () => {
 
   describe("another workspace", () => {
     it("closes the inbox and switches with the panel, its worktree riding as the fallback", async () => {
+      let centerOpenAtSwitch: boolean | undefined;
+      switchProject.mockImplementation(() => {
+        centerOpenAtSwitch = useUIStore.getState().notificationCenterOpen;
+        // The switch settles in another view; the handoff must not wait on it.
+        return new Promise(() => {});
+      });
       await expect(
         goToNotificationSource(
           { projectId: OTHER_PROJECT, worktreeId: "wt-9", panelId: "pane-9" },
           "e1"
         )
       ).resolves.toBe(true);
-      expect(useUIStore.getState().notificationCenterOpen).toBe(false);
+      expect(centerOpenAtSwitch).toBe(false);
       expect(switchProject).toHaveBeenCalledWith(OTHER_PROJECT, {
         focusIntent: { intent: "focus-panel", panelId: "pane-9", worktreeId: "wt-9" },
       });
@@ -338,7 +344,13 @@ describe("goToNotificationSource", () => {
     });
 
     it("re-reads whether the workspace can still be opened at activation", async () => {
+      const context = { projectId: OTHER_PROJECT, panelId: "pane-9" };
+      expect(resolveLiveNotificationDestination(context).kind).toBe("project");
       useProjectStore.setState({ projects: [{ id: "p1", name: "Helios" }] } as never);
+      expect(resolveLiveNotificationDestination(context)).toEqual({
+        kind: "none",
+        reason: "other-project",
+      });
       await expect(
         goToNotificationSource({ projectId: OTHER_PROJECT, panelId: "pane-9" }, "e1")
       ).resolves.toBe(false);

@@ -11,6 +11,7 @@ import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { useUIStore } from "@/store/uiStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useProjectStore } from "@/store/projectStore";
+import { useScratchStore } from "@/store/scratchStore";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { APP_SOURCE_LABEL } from "@/lib/notificationSourceLabel";
 
@@ -1293,6 +1294,69 @@ describe("NotificationCenterEntry — go to source", () => {
         expect(useUIStore.getState().notificationCenterOpen).toBe(false);
       });
       expect(switchProject).toHaveBeenCalledOnce();
+    });
+
+    it("follows the project and scratch lists as they change", () => {
+      const SCRATCH = "0b2d7c4e-1f3a-4b5c-8d9e-0a1b2c3d4e5f";
+      const initialScratches = useScratchStore.getState().scratches;
+      try {
+        const { container } = render(
+          <div>
+            <NotificationCenterEntry
+              entry={makeEntry({ id: "e-project", context: { projectId: OTHER, panelId: "p" } })}
+            />
+            <NotificationCenterEntry
+              entry={makeEntry({ id: "e-scratch", context: { projectId: SCRATCH, panelId: "s" } })}
+            />
+          </div>
+        );
+        const rows = () => Array.from(container.firstElementChild?.children ?? []);
+        const navigable = () => rows().map((row) => row.getAttribute("data-navigable"));
+        expect(navigable()).toEqual(["true", null]);
+        act(() => {
+          useProjectStore.setState({
+            projects: useProjectStore
+              .getState()
+              .projects.map((p) => (p.id === OTHER ? { ...p, status: "missing" as const } : p)),
+          });
+          useScratchStore.setState({ scratches: [{ id: SCRATCH, name: "Scratch" }] as never });
+        });
+        expect(navigable()).toEqual([null, "true"]);
+      } finally {
+        useScratchStore.setState({ scratches: initialScratches });
+      }
+    });
+
+    it.each([
+      ["no longer registered", "c".repeat(64)],
+      ["whose folder is missing", "d".repeat(64)],
+    ])("says a project %s is unavailable, in the menu only", async (_label, projectId) => {
+      useProjectStore.setState({
+        projects: [
+          ...useProjectStore.getState().projects,
+          {
+            id: "d".repeat(64),
+            path: "/repos/gone",
+            emoji: "🌲",
+            name: "Gone",
+            lastOpened: 0,
+            status: "missing",
+          },
+        ],
+      });
+      const { container } = render(
+        <NotificationCenterEntry entry={makeEntry({ context: { projectId, panelId: "pane-9" } })} />
+      );
+      expect(getRow(container).getAttribute("data-navigable")).toBeNull();
+      expect(
+        container.querySelector('[data-testid="notification-destination-unavailable"]')
+      ).toBeNull();
+      await openMenu();
+      const item = screen.getByText("Go to source").closest('[role="menuitem"]') as HTMLElement;
+      expect(item.getAttribute("data-disabled")).not.toBeNull();
+      expect(item.getAttribute("aria-label")).toBe("Go to source, project unavailable");
+      expect(item.textContent).toContain("Project unavailable");
+      expect(switchProject).not.toHaveBeenCalled();
     });
 
     it("stays inert when it came from another machine, and the menu says so", async () => {

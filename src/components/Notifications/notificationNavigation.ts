@@ -163,6 +163,9 @@ function switchToNotificationWorkspace(destination: WorkspaceDestination): void 
       title: "Couldn't open the source",
       message: formatErrorMessage(error, "Daintree couldn't switch to the workspace it's in."),
       context: { eventKind: "uiFeedback" },
+      // The inbox has already closed, so a quiet inbox-only record would leave
+      // the click looking ignored; and the history keeps no callback actions.
+      priority: "high",
       actions: [
         {
           label: "Try again",
