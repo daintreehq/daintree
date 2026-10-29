@@ -55,7 +55,7 @@ type CorrectResult = {
   action: "no_change" | "replace";
   correctedText: string;
   failed?: true;
-  verdict?: "unchanged" | "rejected_command" | "rejected_low_confidence" | "failed" | "timed_out";
+  verdict?: "unchanged" | "failed" | "timed_out";
 };
 type CorrectRequest = { rawText: string; recentContext?: string[]; sessionId?: string };
 type Listener = (payload: never) => void;
@@ -623,12 +623,13 @@ describe("VoiceRecordingService — cleaning up a long dictation in chunks (#147
     });
   });
 
-  it("gives a chunk a cleanup check turned down back to the stop-time pass", async () => {
+  it("gives a chunk whose cleanup failed back to the stop-time pass", async () => {
     const { service, say, pause, draft, flush, baseline } = await setup();
     correct.mockResolvedValueOnce({
       action: "no_change",
       correctedText: OPENING_TEXT,
-      verdict: "rejected_low_confidence",
+      failed: true,
+      verdict: "failed",
     });
     for (const sentence of OPENING) say(sentence);
     pause();
@@ -655,7 +656,7 @@ describe("VoiceRecordingService — cleaning up a long dictation in chunks (#147
     });
   });
 
-  it("cleans a chunk turned down after the stop began in a pass of its own, which a send waits for", async () => {
+  it("cleans a chunk whose cleanup failed after the stop began in a pass of its own, which a send waits for", async () => {
     const { service, say, pause, draft, flush, baseline } = await setup();
     const chunk = deferred<CorrectResult>();
     const tail = deferred<CorrectResult>();
@@ -677,7 +678,8 @@ describe("VoiceRecordingService — cleaning up a long dictation in chunks (#147
     chunk.resolve({
       action: "no_change",
       correctedText: OPENING_TEXT,
-      verdict: "rejected_command",
+      failed: true,
+      verdict: "failed",
     });
     await flush();
     expect(correct).toHaveBeenCalledTimes(3);
@@ -699,7 +701,6 @@ describe("VoiceRecordingService — cleaning up a long dictation in chunks (#147
   });
 
   it.each([
-    ["turned down", { verdict: "rejected_low_confidence" }, 3],
     ["failed", { failed: true, verdict: "failed" }, 3],
     ["timed out", { failed: true, verdict: "timed_out" }, 3],
     ["left as it was", { verdict: "unchanged" }, 2],
@@ -757,7 +758,8 @@ describe("VoiceRecordingService — cleaning up a long dictation in chunks (#147
     chunk.resolve({
       action: "no_change",
       correctedText: OPENING_TEXT,
-      verdict: "rejected_command",
+      failed: true,
+      verdict: "failed",
     });
     await flush();
 
@@ -765,7 +767,7 @@ describe("VoiceRecordingService — cleaning up a long dictation in chunks (#147
     expect(service.hasPendingCorrection(PANEL)).toBe(false);
   });
 
-  it("cleans a turned-down chunk once more after the stop, and no more than that", async () => {
+  it("cleans a failed chunk once more after the stop, and no more than that", async () => {
     const { service, say, pause, draft, flush } = await setup();
     const chunk = deferred<CorrectResult>();
     correct
@@ -782,7 +784,8 @@ describe("VoiceRecordingService — cleaning up a long dictation in chunks (#147
     chunk.resolve({
       action: "no_change",
       correctedText: OPENING_TEXT,
-      verdict: "rejected_command",
+      failed: true,
+      verdict: "failed",
     });
     await flush();
     await flush();
@@ -811,7 +814,8 @@ describe("VoiceRecordingService — cleaning up a long dictation in chunks (#147
     chunk.resolve({
       action: "no_change",
       correctedText: OPENING_TEXT,
-      verdict: "rejected_command",
+      failed: true,
+      verdict: "failed",
     });
     await flush();
 

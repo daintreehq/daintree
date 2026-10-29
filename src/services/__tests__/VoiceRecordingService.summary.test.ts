@@ -106,8 +106,6 @@ const NO_PASSAGES = {
   applied: 0,
   unchanged: 0,
   skipped: 0,
-  rejectedCommand: 0,
-  rejectedLowConfidence: 0,
   failed: 0,
   timedOut: 0,
   dropped: 0,
@@ -851,8 +849,6 @@ describe("VoiceRecordingService — session summary (#14617)", () => {
   it.each([
     ["unchanged", "unchanged", "unchanged"],
     ["skipped", "unchanged", "skipped"],
-    ["rejected_command", "unchanged", "rejectedCommand"],
-    ["rejected_low_confidence", "unchanged", "rejectedLowConfidence"],
     ["failed", "failed", "failed"],
     ["timed_out", "failed", "timedOut"],
   ] as const)("counts a passage main answered %s under %s", async (verdict, correction, field) => {
@@ -1065,7 +1061,7 @@ describe("VoiceRecordingService — session summary (#14617)", () => {
     expect(summaries()[0]).toMatchObject({ correctionChunks: 1, correction: "unchanged" });
   });
 
-  it("waits for a chunk turned down after the stop, and counts it and its retry apart from the stop-time pass (#14932)", async () => {
+  it("waits for a chunk whose cleanup failed after the stop, and counts it and its retry apart from the stop-time pass (#14932)", async () => {
     const harness = setupGlobals({ correctionEnabled: true });
     let answerChunk!: (result: unknown) => void;
     let answerRetry!: (result: unknown) => void;
@@ -1103,7 +1099,7 @@ describe("VoiceRecordingService — session summary (#14617)", () => {
     expect(summaries()).toHaveLength(0);
 
     const chunkText = Array.from({ length: 7 }, () => sentence).join(" ");
-    answerChunk({ action: "no_change", correctedText: chunkText, verdict: "rejected_command" });
+    answerChunk({ action: "no_change", correctedText: chunkText, verdict: "failed" });
     await flushPromises();
     expect(harness.voiceInput.correct).toHaveBeenCalledTimes(3);
     expect(harness.voiceInput.correct).toHaveBeenLastCalledWith(
@@ -1122,7 +1118,7 @@ describe("VoiceRecordingService — session summary (#14617)", () => {
       correctionChunks: 1,
       correction: "unchanged",
       correctionPassages: { ...NO_PASSAGES, sent: 1, unchanged: 1 },
-      correctionChunkPassages: { ...NO_PASSAGES, sent: 2, rejectedCommand: 1, applied: 1 },
+      correctionChunkPassages: { ...NO_PASSAGES, sent: 2, failed: 1, applied: 1 },
     });
   });
 
@@ -1162,7 +1158,7 @@ describe("VoiceRecordingService — session summary (#14617)", () => {
       dropped: 1,
     });
 
-    answerChunk({ action: "no_change", correctedText: "", verdict: "rejected_command" });
+    answerChunk({ action: "no_change", correctedText: "", verdict: "failed" });
     await flushPromises();
     expect(summaries()).toHaveLength(1);
     expect(harness.voiceInput.correct).toHaveBeenCalledTimes(2);

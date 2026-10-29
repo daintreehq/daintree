@@ -642,12 +642,11 @@ export function seededShuffle<T>(items: readonly T[], seed: number): T[] {
 }
 
 /** What became of one passage. */
-export type Disposition = "applied" | "declined" | "rejected" | "failed" | "skipped";
+export type Disposition = "applied" | "declined" | "failed" | "skipped";
 
 /** A reply landed as production lands it: what a send would carry. */
 export interface Landing {
   disposition: Disposition;
-  rejectReason?: string;
   landed: string;
   landedScore: TextScore;
 }
@@ -657,12 +656,12 @@ export interface Trial {
   /** `model:effort/prompt`. */
   variant: string;
   repeat: number;
-  /** The reply as it parsed, before any check; absent when the request failed or was skipped. */
+  /** The reply as it parsed; absent when the request failed or was skipped. */
   reply?: { action: "no_change" | "replace"; correctedText: string; confidence: string };
   /** What the model proposed: its replacement, else the raw transcript. */
   proposal: string;
   proposalScore: TextScore;
-  /** The reply landed through production's command and confidence checks. */
+  /** The reply landed as production lands it. */
   landing: Landing;
   /** The service's own round trip, request out to reply read. */
   roundTripMs: number | null;
@@ -720,7 +719,6 @@ export interface VariantSummary {
   variant: string;
   trials: number;
   dispositions: Record<Disposition, number>;
-  rejectReasons: Record<string, number>;
   landed: QualitySummary;
   proposed: QualitySummary;
   /** Passages already right that came back byte for byte. */
@@ -863,17 +861,10 @@ export function summariseVariant(
   const dispositions: Record<Disposition, number> = {
     applied: 0,
     declined: 0,
-    rejected: 0,
     failed: 0,
     skipped: 0,
   };
-  const rejectReasons: Record<string, number> = {};
-  for (const { landing } of rows) {
-    dispositions[landing.disposition]++;
-    if (landing.rejectReason) {
-      rejectReasons[landing.rejectReason] = (rejectReasons[landing.rejectReason] ?? 0) + 1;
-    }
-  }
+  for (const { landing } of rows) dispositions[landing.disposition]++;
   const clean = rows.filter(({ entry }) => entry.raw === entry.reference);
   // A request that failed fast would flatter the cleanups that came back.
   const timed = rows.filter(
@@ -888,7 +879,6 @@ export function summariseVariant(
     variant,
     trials: rows.length,
     dispositions,
-    rejectReasons,
     landed: summariseQuality(
       rows.map(({ entry, landing }) => ({ entry, score: landing.landedScore }))
     ),

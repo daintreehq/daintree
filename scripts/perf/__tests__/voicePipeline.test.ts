@@ -375,7 +375,7 @@ describe("summarisePipeline", () => {
                 sentAt: 3_400,
                 firstTextAt: 4_000,
                 doneAt: 4_600,
-                verdict: text === raw ? "rejected_low_confidence" : "replaced",
+                verdict: text === raw ? "unchanged" : "replaced",
                 text,
                 failed: false,
                 speculation: "none",
@@ -388,7 +388,7 @@ describe("summarisePipeline", () => {
       "gpt-6.1-terra"
     );
 
-  it("scores what landed as written, and how often a check turned cleanup away", () => {
+  it("scores what landed as written, and how often cleanup changed it", () => {
     const [before, after] = summarisePipeline(
       [
         scored("before", "Run npm test dash-watch.", "Run npm test dash-watch."),
@@ -397,7 +397,7 @@ describe("summarisePipeline", () => {
       ["before", "after"]
     );
     expect(before).toMatchObject({ finalFormExactRate: 0, finalLiteralTermRecall: 0 });
-    expect(before!.verdicts).toEqual({ rejected_low_confidence: 1 });
+    expect(before!.verdicts).toEqual({ unchanged: 1 });
     expect(after).toMatchObject({ finalFormExactRate: 1, finalLiteralTermRecall: 1 });
     expect(after!.stopToSettledMs.p50).toBe(1_600);
   });
