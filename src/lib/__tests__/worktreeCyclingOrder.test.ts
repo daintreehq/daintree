@@ -281,6 +281,17 @@ describe("getVisibleWorktreesForCycling", () => {
     expect(ids).toEqual(["wt-alpha"]);
   });
 
+  it("treats a whitespace-only live query as empty, keeping main in the cycle", () => {
+    useWorktreeFilterStore.setState({ liveQuery: "   " });
+    setWorktrees([
+      createSnapshot({ id: "main", name: "main", branch: "main", isMainWorktree: true }),
+      createSnapshot({ id: "wt-bravo", name: "bravo", branch: "feature/bravo" }),
+    ]);
+
+    const ids = getVisibleWorktreesForCycling().map((w) => w.id);
+    expect(ids).toEqual(["main", "wt-bravo"]);
+  });
+
   it("respects the alwaysShowActive override for the active worktree", () => {
     useWorktreeFilterStore.setState({
       statusFilters: new Set(["active"]),

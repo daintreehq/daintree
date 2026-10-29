@@ -4,7 +4,6 @@ import { getWorktreeSortDragId } from "@/components/DragDrop/SortableWorktreeCar
 import { computeChipState } from "@/components/Worktree/utils/computeChipState";
 import { useWorktreeAgentBucketInputs } from "@/hooks/useWorktreeAgentBucketInputs";
 import { useWorktreeIds } from "@/hooks/useTerminalSelectors";
-import { parseExactNumber } from "@/lib/parseExactNumber";
 import {
   deriveWorktreeAgentBuckets,
   EMPTY_WORKTREE_AGENT_BUCKETS,
@@ -13,7 +12,7 @@ import {
 import {
   matchesFilters,
   matchesQuickStateFilter,
-  scoreWorktree,
+  matchesWorktreeQuery,
   computeChipCounts,
   type DerivedWorktreeMeta,
   type FilterState,
@@ -471,14 +470,8 @@ export function useSidebarWorktreeModel({
 
   // Main-row visibility. The main worktree is a pinned card rather than a list
   // row, so it takes the query and the facets but never the quick-state filter.
-  const worktreeMatchesQueryPre = (w: WorktreeState) => {
-    if (!deferredQuery) return true;
-    const exactNum = parseExactNumber(deferredQuery);
-    if (exactNum !== null) {
-      return w.issueNumber === exactNum || w.linked?.pr?.ref.number === exactNum;
-    }
-    return scoreWorktree(w, deferredQuery, worktreeCustomTitles[w.id]) > 0;
-  };
+  const worktreeMatchesQueryPre = (w: WorktreeState) =>
+    matchesWorktreeQuery(w, deferredQuery, worktreeCustomTitles[w.id]);
 
   const pinnedFiltersPre: FilterState = {
     query: deferredQuery,

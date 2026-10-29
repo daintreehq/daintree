@@ -184,6 +184,7 @@ describe("useSidebarWorktreeModel — rows", () => {
       store.setLiveQuery("   ");
     });
     expect(result.current.filteredWorktrees.map((w) => w.id)).toEqual(["a", "b"]);
+    expect(result.current.mainVisible).toBe(true);
 
     act(() => useWorktreeFilterStore.getState().toggleStatusFilter("dirty"));
     expect(result.current.filteredWorktrees).toEqual([]);
