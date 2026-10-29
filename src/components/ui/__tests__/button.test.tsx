@@ -19,6 +19,33 @@ describe("buttonVariants", () => {
     expect(transitions[0]).toContain("background-color");
     expect(transitions[0]).not.toMatch(/scale|transform|translate|rotate|all/);
   });
+
+  // A `truncate` label clips at its own box, and at `leading-none` that box is
+  // shorter than the glyphs, so the descenders are sliced off. The room comes
+  // from padding on the clip box, handed back by an equal negative margin so
+  // the label doesn't move and an `h-auto` button doesn't grow.
+  it("gives a truncating label room for its descenders without moving it", () => {
+    const sizes = ["default", "sm", "xs", "lg", "icon", "icon-sm", "icon-xs", "inline"] as const;
+    const tight = sizes.filter((size) =>
+      buttonVariants({ size }).split(/\s+/).includes("leading-none")
+    );
+    expect(tight.length).toBeGreaterThan(0);
+    for (const size of tight) {
+      const tokens = buttonVariants({ size }).split(/\s+/);
+      const amount = (utility: string) => {
+        const match = tokens
+          .map((token) =>
+            token.match(new RegExp(`^\\[&_\\.truncate\\]:${utility}-(\\d+(?:\\.\\d+)?)$`))
+          )
+          .find(Boolean);
+        return match ? Number(match[1]) : null;
+      };
+      const padding = amount("py");
+      expect(padding, size).not.toBeNull();
+      expect(padding, size).toBeGreaterThan(0);
+      expect(amount("-my"), size).toBe(padding);
+    }
+  });
 });
 
 describe("Button loading state", () => {
