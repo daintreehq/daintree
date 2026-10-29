@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render as rtlRender, screen } from "@testing-l
 import type { ReactElement } from "react";
 import type { CanopyHostEvent } from "@shared/types/ipc/canopyHost";
 import type { CanopySnapshot } from "@shared/types/ipc/canopy";
+import type { AgentDirectory, AgentDirectoryLiveEntry } from "@shared/types/agentDirectory";
 import type { FleetSnapshot } from "@shared/types/ipc/fleet";
 import type { HostListEntry, HostMetricsSummary } from "@shared/types/remoteHosts";
 
@@ -269,7 +270,7 @@ function installElectron() {
     setMode: vi.fn(async () => canopySnapshot()),
     captureBackdrop: vi.fn(async () => null),
     // No assistants: a full, empty directory of this machine.
-    readAgentDirectory: vi.fn(async () => ({
+    readAgentDirectory: vi.fn(async (): Promise<AgentDirectory> => ({
       coverage: "ok" as const,
       observedAt: 1,
       complete: true,
@@ -924,6 +925,55 @@ describe("All hosts", () => {
     expect(screen.getByTestId("canopy-host-picker").getAttribute("data-host-id")).toBe("*");
     // A read scope: no "This project" switch.
     expect(screen.queryByRole("radiogroup", { name: "Agents to show" })).toBeNull();
+  });
+
+  it("names this machine on an assistant's place line, as on its workers', not in its name (#15370)", async () => {
+    const own = installElectron();
+    const entry = (
+      scope: AgentDirectoryLiveEntry["subject"]["scope"],
+      terminalId: string
+    ): AgentDirectoryLiveEntry => ({
+      state: "live",
+      role: "assistant",
+      subject: {
+        hostId: "local",
+        scope,
+        terminalId,
+        incarnation: 1,
+        ...(scope.kind === "project" ? { lane: 0 } : {}),
+      },
+      agentId: "claude",
+      agentState: "waiting",
+      waitingReason: "prompt",
+      since: NOW - 10_000,
+      label: null,
+      attached: true,
+      handback: null,
+    });
+    own.readAgentDirectory.mockResolvedValue({
+      coverage: "ok",
+      observedAt: NOW,
+      complete: true,
+      omitted: 0,
+      entries: [
+        entry({ kind: "project", projectId: "p1" }, "help-0"),
+        entry({ kind: "global" }, "g-1"),
+      ],
+    });
+    render(<CanopyView />);
+    await settle();
+    const [lane, global] = [...document.querySelectorAll<HTMLElement>("[data-canopy-assistant]")];
+    const where = (row: HTMLElement) => row.querySelector("[data-canopy-where]")!;
+    const workerHost = where(cardOf("local", "shared-run")!).querySelector("[data-canopy-host]")!;
+    const host = workerHost.lastElementChild!.textContent!;
+    for (const row of [lane!, global!]) {
+      expect(where(row).querySelector("[data-canopy-host]")!.textContent).toBe(
+        workerHost.textContent
+      );
+      expect(row.querySelector("[data-canopy-assistant-name]")!.textContent).not.toContain(host);
+    }
+    expect(where(lane!).querySelector("[data-canopy-project]")!.textContent).toBe("local-app");
+    expect(where(global!).querySelector("[data-canopy-project]")!.textContent).toBe("Global");
   });
 
   it("asks each host about its own terminals, by the id it knows", async () => {

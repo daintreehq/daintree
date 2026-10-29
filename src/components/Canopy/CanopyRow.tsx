@@ -27,7 +27,7 @@ import {
 } from "./canopyModel";
 
 /** Waiting on the user at least this long, the row's clock stands out. */
-const OVERDUE_WAIT_MS = 5 * 60_000;
+export const OVERDUE_WAIT_MS = 5 * 60_000;
 
 /** What a run is doing when the readers have nothing better to say. */
 export const KIND_LABEL: Record<CanopyCategory, string> = {
@@ -232,8 +232,43 @@ export function itemDetail(item: CanopyItem): {
 }
 
 /** The meta line's separator: the same space either side, wherever it falls. */
-function MetaDot() {
+export function MetaDot() {
   return <span className="shrink-0 px-1">·</span>;
+}
+
+/**
+ * How long a row has been in its state, where a mail list puts the date; the
+ * glyph at the left already says which state.
+ */
+export function CanopyRowAge({
+  age,
+  overdue,
+  yieldsToArchive = false,
+}: {
+  age: string;
+  overdue: boolean;
+  /** The archive button takes its place under the pointer. */
+  yieldsToArchive?: boolean;
+}) {
+  return (
+    <span
+      data-overdue={overdue || undefined}
+      data-canopy-age=""
+      className={cn(
+        "flex shrink-0 items-center gap-1.5 text-xs leading-4 whitespace-nowrap tabular-nums",
+        // Left waiting this long, the wait itself is the news: the clock
+        // steps up to full ink, never to colour — that stays the glyph's.
+        overdue ? "font-medium text-text-primary" : "text-text-secondary",
+        // Faded, it still sits over the archive button that takes its
+        // place: it lets the pointer through, or the click lands on it.
+        yieldsToArchive &&
+          "transition-opacity duration-150 group-hover/row:pointer-events-none group-hover/row:opacity-0"
+      )}
+    >
+      <Clock aria-hidden="true" className="size-3.5" />
+      {age === "just now" ? "now" : age}
+    </span>
+  );
 }
 
 /**
@@ -589,26 +624,8 @@ export function CanopyRow({
           {dictating && (
             <Mic data-canopy-dictating="" className="size-3.5 shrink-0 text-text-secondary" />
           )}
-          {/* How long it has been in that state, where a mail list puts the
-              date; the glyph at the left already says which state. */}
           {row.age !== null && (
-            <span
-              data-overdue={overdue || undefined}
-              data-canopy-age=""
-              className={cn(
-                "flex shrink-0 items-center gap-1.5 text-xs leading-4 whitespace-nowrap tabular-nums",
-                // Left waiting this long, the wait itself is the news: the clock
-                // steps up to full ink, never to colour — that stays the glyph's.
-                overdue ? "font-medium text-text-primary" : "text-text-secondary",
-                // Faded, it still sits over the archive button that takes its
-                // place: it lets the pointer through, or the click lands on it.
-                onArchive &&
-                  "transition-opacity duration-150 group-hover/row:pointer-events-none group-hover/row:opacity-0"
-              )}
-            >
-              <Clock aria-hidden="true" className="size-3.5" />
-              {row.age === "just now" ? "now" : row.age}
-            </span>
+            <CanopyRowAge age={row.age} overdue={overdue} yieldsToArchive={!!onArchive} />
           )}
         </span>
         <span id={askId} className="flex h-4 min-w-0 items-center gap-1.5 text-xs leading-4">
