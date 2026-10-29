@@ -226,10 +226,10 @@ export async function runForgeRead(
       }
       case "forge.getChecks": {
         const { prNumber } = args.data as { prNumber: number };
-        const result = await invoke<{ checks: ForgeCheckRun[] } | null>(
-          CHANNELS.FORGE_GET_CHECKS,
-          { cwd, prNumber }
-        );
+        const result = await invoke<{ checks: ForgeCheckRun[] } | null>(CHANNELS.FORGE_GET_CHECKS, {
+          cwd,
+          prNumber,
+        });
         // `null` is no such PR; an empty list is a PR with no checks.
         return parsed(actionId, ForgeChecksActionResultSchema, {
           checks: result === null ? null : result.checks,
