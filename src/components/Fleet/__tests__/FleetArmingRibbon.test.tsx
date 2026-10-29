@@ -291,6 +291,31 @@ describe("FleetArmingRibbon", () => {
     expect(list.textContent).toContain("backend·main");
   });
 
+  it("marks a locked member as left out in the armed list and clears it on unlock (#14964)", () => {
+    seed([
+      { ...makeAgent("t1"), title: "frontend·main" } as PtyPanelData,
+      { ...makeAgent("t2"), title: "backend·main", isInputLocked: true } as PtyPanelData,
+    ]);
+    useFleetArmingStore.getState().armIds(["t1", "t2"]);
+    render(<FleetArmingRibbon />);
+    expect(screen.getByTestId("fleet-armed-count-chip").textContent).toContain("2");
+    fireEvent.click(screen.getByTestId("fleet-armed-count-chip"));
+    expect(screen.getByTestId("fleet-row-input-locked-t2").textContent).toContain("Input locked");
+    expect(screen.queryByTestId("fleet-row-input-locked-t1")).toBeNull();
+    expect(screen.getByLabelText(/Focus backend·main.*input locked/)).toBeTruthy();
+
+    act(() => {
+      usePanelStore.setState((s) => ({
+        panelsById: {
+          ...s.panelsById,
+          t2: { ...makeAgent("t2"), title: "backend·main", isInputLocked: false } as PtyPanelData,
+        },
+      }));
+    });
+    expect(screen.queryByTestId("fleet-row-input-locked-t2")).toBeNull();
+    expect(screen.getByLabelText("Focus backend·main")).toBeTruthy();
+  });
+
   it("per-row disarm button in the popover calls disarmId", () => {
     seed([
       { ...makeAgent("t1"), title: "frontend·main" } as PtyPanelData,

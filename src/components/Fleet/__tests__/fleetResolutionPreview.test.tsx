@@ -245,6 +245,50 @@ describe("FleetDraftingPill", () => {
     );
   });
 
+  it("leaves a locked peer out of the reach count and its row (#14964)", () => {
+    seedPanel(makeAgent("t-1"));
+    seedPanel(makeAgent("t-2"));
+    seedPanel(makeAgent("t-3", { isInputLocked: true }));
+    armAgent("t-1", 0);
+    armAgent("t-2", 1);
+    armAgent("t-3", 2);
+    usePanelStore.setState({ focusedId: "t-1" });
+    useFleetResolutionPreviewStore.getState().setDraft("deploy {{branch_name}}");
+
+    render(<FleetDraftingPill />);
+    expect(screen.getByTestId("fleet-drafting-pill-trigger").textContent).toMatch(
+      /Mirroring to 1 peer/
+    );
+    const rows = screen.getAllByTestId("fleet-resolution-row");
+    const locked = rows.find((row) => row.textContent?.includes("t-3"))!;
+    expect(locked.textContent).toContain("Input locked");
+    expect(locked.querySelector("[data-testid='fleet-resolution-row-textarea']")).toBeNull();
+    for (const row of rows) {
+      if (row !== locked) expect(row.textContent).not.toContain("Input locked");
+    }
+    expect(screen.getAllByTestId("fleet-resolution-row-textarea")).toHaveLength(2);
+  });
+
+  it("updates an open preview when a peer is locked or unlocked without another keystroke", () => {
+    seedPanel(makeAgent("t-1"));
+    seedPanel(makeAgent("t-2"));
+    armAgent("t-1", 0);
+    armAgent("t-2", 1);
+    usePanelStore.setState({ focusedId: "t-1" });
+    useFleetResolutionPreviewStore.getState().setDraft("deploy {{branch_name}}");
+    render(<FleetDraftingPill />);
+    const rowFor = (id: string) =>
+      screen.getAllByTestId("fleet-resolution-row").find((row) => row.textContent?.includes(id))!;
+    expect(rowFor("t-2").textContent).not.toContain("Input locked");
+
+    act(() => seedPanel(makeAgent("t-2", { isInputLocked: true })));
+    expect(rowFor("t-2").textContent).toContain("Input locked");
+
+    act(() => seedPanel(makeAgent("t-2", { isInputLocked: false })));
+    expect(rowFor("t-2").textContent).not.toContain("Input locked");
+    expect(useFleetResolutionPreviewStore.getState().draft).toBe("deploy {{branch_name}}");
+  });
+
   it("does not show chevron when no recipe variables in draft", () => {
     const a1 = makeAgent("t-1");
     const a2 = makeAgent("t-2");

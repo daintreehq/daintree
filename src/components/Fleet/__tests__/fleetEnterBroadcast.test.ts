@@ -52,7 +52,11 @@ vi.mock("@/clients", async (importOriginal) => {
   };
 });
 
-import { cancelActiveBroadcast, tryFleetBroadcastFromEditor } from "../fleetEnterBroadcast";
+import {
+  cancelActiveBroadcast,
+  sendDraftToFleet,
+  tryFleetBroadcastFromEditor,
+} from "../fleetEnterBroadcast";
 
 function makeAgent(id: string): PtyPanelData {
   return {
@@ -466,6 +470,102 @@ describe("tryFleetBroadcastFromEditor — the composer lets go only of a deliver
     await flush();
     expect(submitMock).not.toHaveBeenCalled();
     expect(onDelivered).not.toHaveBeenCalled();
+  });
+});
+
+describe("tryFleetBroadcastFromEditor — locked panes (#14964)", () => {
+  function lock(id: string, isInputLocked: boolean): void {
+    usePanelStore.setState((s) => ({
+      panelsById: { ...s.panelsById, [id]: { ...makeAgent(id), isInputLocked } as PtyPanelData },
+    }));
+  }
+
+  it("submits to every armed peer except a locked one, which stays armed", async () => {
+    arm(["a", "b", "c"]);
+    lock("b", true);
+
+    expect(tryFleetBroadcastFromEditor("a", "hello", vi.fn())).toBe(true);
+    await flush();
+    await flush();
+
+    expect(submitMock.mock.calls.map((call) => call[0]).sort()).toEqual(["a", "c"]);
+    expect(useFleetArmingStore.getState().armedIds.has("b")).toBe(true);
+  });
+
+  it("makes a pane a recipient again once it's unlocked while still armed", async () => {
+    arm(["a", "b", "c"]);
+    lock("b", true);
+    tryFleetBroadcastFromEditor("a", "first", vi.fn());
+    await flush();
+    await flush();
+    expect(submitMock.mock.calls.map((call) => call[0]).sort()).toEqual(["a", "c"]);
+
+    submitMock.mockClear();
+    lock("b", false);
+    expect(tryFleetBroadcastFromEditor("a", "second", vi.fn())).toBe(true);
+    await flush();
+    await flush();
+
+    expect(submitMock.mock.calls.map((call) => call[0]).sort()).toEqual(["a", "b", "c"]);
+  });
+
+  it("sends only to the origin when its only peer is locked, honouring its skip", async () => {
+    arm(["a", "b"]);
+    lock("b", true);
+
+    expect(tryFleetBroadcastFromEditor("a", "hello", vi.fn())).toBe(true);
+    await flush();
+    await flush();
+    expect(submitMock.mock.calls.map((call) => call[0])).toEqual(["a"]);
+
+    submitMock.mockClear();
+    useFleetTargetOverridesStore.getState().setSkipped("a", true);
+    expect(tryFleetBroadcastFromEditor("a", "hello", vi.fn())).toBe(true);
+    await flush();
+    expect(submitMock).not.toHaveBeenCalled();
+  });
+
+  it("leaves a locked pane out of the ribbon's own send and restores it once unlocked", async () => {
+    arm(["a", "b", "c"]);
+    lock("c", true);
+
+    expect(await sendDraftToFleet("hello")).toBe(true);
+    expect(submitMock.mock.calls.map((call) => call[0]).sort()).toEqual(["a", "b"]);
+
+    submitMock.mockClear();
+    lock("c", false);
+    expect(await sendDraftToFleet("hello")).toBe(true);
+    expect(submitMock.mock.calls.map((call) => call[0]).sort()).toEqual(["a", "b", "c"]);
+
+    submitMock.mockClear();
+    lock("b", true);
+    lock("c", true);
+    expect(await sendDraftToFleet("hello")).toBe(false);
+    expect(submitMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps the failure dot of a pane locked while a large broadcast runs", async () => {
+    const ids = Array.from({ length: 7 }, (_, i) => `p${i}`);
+    arm(ids);
+    const lateId = ids[6]!;
+    useFleetFailureStore.getState().recordFailure("earlier", [lateId]);
+    submitMock.mockImplementation(async (id) => {
+      if (id === ids[0]) lock(lateId, true);
+    });
+
+    expect(await sendDraftToFleet("x".repeat(120_000))).toBe(true);
+
+    expect(submitMock.mock.calls.map((call) => call[0])).not.toContain(lateId);
+    expect(useFleetFailureStore.getState().failedIds.has(lateId)).toBe(true);
+  });
+
+  it("never fans out from a locked origin", async () => {
+    arm(["a", "b", "c"]);
+    lock("a", true);
+
+    expect(tryFleetBroadcastFromEditor("a", "hello", vi.fn())).toBe(false);
+    await flush();
+    expect(submitMock).not.toHaveBeenCalled();
   });
 });
 

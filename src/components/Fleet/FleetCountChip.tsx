@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useRef, useState, type ReactElement } from "react";
-import { XCircle, ArrowLeft, ChevronDown, Plus, X } from "lucide-react";
+import { XCircle, ArrowLeft, ChevronDown, Lock, Plus, X } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
 import { useEscapeStack, useWorktreeColorMap } from "@/hooks";
@@ -122,6 +122,18 @@ export function FleetCountChip({
       const out: Record<string, string | undefined> = {};
       for (const id of armOrder) {
         out[id] = state.panelsById[id]?.worktreeId;
+      }
+      return out;
+    })
+  );
+  // A locked pane stays armed but gets nothing a broadcast sends (#14964), so
+  // its row says why it's being left out.
+  const inputLockedByPane = usePanelStore(
+    useShallow((state) => {
+      const out: Record<string, boolean> = {};
+      for (const id of armOrder) {
+        const p = state.panelsById[id];
+        out[id] = !!p && isPtyPanel(p) && p.isInputLocked === true;
       }
       return out;
     })
@@ -283,6 +295,7 @@ export function FleetCountChip({
                           `Focus ${title}`,
                           worktreeName ? `in ${worktreeName}` : null,
                           id === focusedId ? "(primary)" : null,
+                          inputLockedByPane[id] ? "(input locked, left out of broadcasts)" : null,
                         ]
                           .filter((part) => part !== null)
                           .join(" ")}
@@ -319,6 +332,15 @@ export function FleetCountChip({
                         >
                           <XCircle className="h-3 w-3 text-status-error" aria-hidden="true" />
                           Send failed
+                        </span>
+                      )}
+                      {inputLockedByPane[id] && (
+                        <span
+                          className="inline-flex shrink-0 items-center gap-1 text-3xs font-medium text-text-secondary"
+                          data-testid={`fleet-row-input-locked-${id}`}
+                        >
+                          <Lock className="h-3 w-3" aria-hidden="true" />
+                          Input locked
                         </span>
                       )}
                       {renderPaneStateBadge(id, agentStatesByPane[id], waitingReasonsByPane[id])}
