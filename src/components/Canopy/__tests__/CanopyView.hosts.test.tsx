@@ -761,6 +761,9 @@ describe("the Canopy host picker", () => {
     await settle();
     const callout = document.querySelector<HTMLElement>("[data-canopy-reading-offer]")!;
     expect(callout.textContent).toContain("on studio-01");
+    // Above that host's own agents.
+    const row = document.getElementById("canopy-card-remote-run")!;
+    expect(callout.compareDocumentPosition(row)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
     fireEvent.click(within(callout).getByRole("button", { name: "Turn on reading" }));
     await settle();
     await act(async () => {
@@ -1073,6 +1076,18 @@ describe("All hosts", () => {
     expect(own.setMode).not.toHaveBeenCalled();
     // What the host that is off adds is what Daintree observes of its runs.
     expect(cardOf("studio", "shared-run")).not.toBeNull();
+  });
+
+  it("offers no reading callout over every host's agents, even with the readers off", async () => {
+    const off = canopySnapshot({ activated: false, mode: "unset", cards: [] });
+    installElectron().setActive.mockResolvedValue(off);
+    useCanopyStore.setState({ snapshot: off });
+    remoteCanopy = off;
+    render(<CanopyView />);
+    await settle();
+    expect(cardOf("local", "shared-run")).not.toBeNull();
+    expect(cardOf("studio", "shared-run")).not.toBeNull();
+    expect(document.querySelector("[data-canopy-reading-offer]")).toBeNull();
   });
 
   it("names a host that can't be reached and keeps the others", async () => {

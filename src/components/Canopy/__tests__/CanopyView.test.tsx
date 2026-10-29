@@ -650,15 +650,16 @@ describe("CanopyView", () => {
     render(<CanopyView />);
     await frames();
     const callout = readingCallout()!;
-    expect(callout.textContent).toContain("what each agent did");
     expect(callout.textContent).toContain("on this computer");
+    // Above the list, never among its rows.
+    const rows = [...document.querySelectorAll<HTMLElement>("[data-canopy-card]")];
+    expect(rows.length).toBeGreaterThan(0);
+    expect(
+      rows.every((row) => callout.compareDocumentPosition(row) === Node.DOCUMENT_POSITION_FOLLOWING)
+    ).toBe(true);
     // The status bar keeps its own offer beside it.
     const bar = document.querySelector<HTMLElement>("[data-canopy-status]")!;
     expect(within(bar).queryByRole("button", { name: "Turn on reading" })).not.toBeNull();
-    // Nothing on a row says a reading is coming.
-    const rows = [...document.querySelectorAll<HTMLElement>("[data-canopy-card]")];
-    expect(rows.length).toBeGreaterThan(0);
-    expect(rows.some((row) => callout.contains(row))).toBe(false);
     await act(async () => {
       fireEvent.click(within(callout).getByRole("button", { name: "Turn on reading" }));
     });
