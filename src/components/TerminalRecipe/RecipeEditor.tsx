@@ -144,13 +144,13 @@ interface TypeStash {
 
 const FAILURE_PRESERVE_CAPTION = "Failures always preserve terminal for debugging";
 
-const OMITTED_PANEL_NOUNS: Record<string, string> = {
-  browser: "browser",
-  review: "review panel",
-  file: "file viewer",
-  "file-browser": "file browser",
-  diff: "diff viewer",
-};
+const OMITTED_PANEL_NOUNS = new Map<string, string>([
+  ["browser", "browser"],
+  ["review", "review panel"],
+  ["file", "file viewer"],
+  ["file-browser", "file browser"],
+  ["diff", "diff viewer"],
+]);
 
 const englishList = new Intl.ListFormat("en", { style: "long", type: "conjunction" });
 
@@ -166,7 +166,7 @@ function describeLayoutOmissions(omitted: RecipeLayoutOmissions): string[] {
   for (const [kind, count] of Object.entries(omitted.panelKinds)) {
     if (count <= 0) continue;
     unsupportedCount += count;
-    const noun = OMITTED_PANEL_NOUNS[kind];
+    const noun = OMITTED_PANEL_NOUNS.get(kind);
     if (noun) nounCounts.set(noun, (nounCounts.get(noun) ?? 0) + count);
     else otherCount += count;
   }
@@ -179,9 +179,10 @@ function describeLayoutOmissions(omitted: RecipeLayoutOmissions): string[] {
       `Recipes can't hold ${englishList.format(parts)}, so ${unsupportedCount === 1 ? "it was" : "they were"} left out.`
     );
   }
+  // "Panel", not "terminal": a dev preview past the cap is counted here too.
   if (omitted.cappedTerminalCount > 0) {
     sentences.push(
-      `${pluralize(omitted.cappedTerminalCount, "more terminal")} ${omitted.cappedTerminalCount === 1 ? "was" : "were"} left out: a recipe holds at most ${MAX_TERMINALS_PER_RECIPE}.`
+      `${pluralize(omitted.cappedTerminalCount, "more panel")} ${omitted.cappedTerminalCount === 1 ? "was" : "were"} left out: a recipe holds at most ${MAX_TERMINALS_PER_RECIPE} terminals.`
     );
   }
   return sentences;

@@ -396,18 +396,27 @@ describe("RecipeEditor", () => {
       expect(paragraphs).toEqual([
         "Some panels weren't captured",
         "Recipes can't hold 2 browsers and 1 file viewer, so they were left out.",
-        "3 more terminals were left out: a recipe holds at most 10.",
+        "3 more panels were left out: a recipe holds at most 10 terminals.",
       ]);
       expect(notice()!.dataset.callout).toBe("warning");
     });
 
     it("counts plugin panel kinds together without naming them", () => {
-      renderCapture({ panelKinds: { "acme.kanban": 1 }, cappedTerminalCount: 0 });
+      const view = renderCapture({ panelKinds: { "acme.kanban": 1 }, cappedTerminalCount: 0 });
       expect(notice()!.textContent).toContain(
         "Recipes can't hold 1 other panel, so it was left out."
       );
-      expect(notice()!.textContent).not.toContain("acme");
       expect(notice()!.dataset.callout).toBe("info");
+      view.unmount();
+
+      renderCapture({
+        panelKinds: { "acme.kanban": 1, review: 1, "acme.board": 2, constructor: 1 },
+        cappedTerminalCount: 0,
+      });
+      expect(notice()!.textContent).toContain(
+        "Recipes can't hold 1 review panel and 4 other panels, so they were left out."
+      );
+      expect(notice()!.textContent).not.toMatch(/acme|constructor/);
     });
 
     it("stays quiet for a complete capture and for an existing recipe", () => {
@@ -424,7 +433,10 @@ describe("RecipeEditor", () => {
       act(() => {
         screen.getByRole("button", { name: "Remove terminal 2" }).click();
       });
-      expect(notice()!.textContent).toContain("1 more terminal was left out");
+      expect(screen.queryByRole("button", { name: "Remove terminal 2" })).toBeNull();
+      expect(notice()!.textContent).toContain(
+        "1 more panel was left out: a recipe holds at most 10 terminals."
+      );
     });
   });
 });

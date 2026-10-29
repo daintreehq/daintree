@@ -1703,7 +1703,9 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
   captureRecipeFromLayout: (worktreeId) => {
     const terminalStore = usePanelStore.getState();
     const terminals: RecipeTerminal[] = [];
-    const omitted: RecipeLayoutOmissions = { panelKinds: {}, cappedTerminalCount: 0 };
+    // A Map, so a kind named like an Object.prototype key counts like any other.
+    const panelKinds = new Map<string, number>();
+    let cappedTerminalCount = 0;
 
     // Only panels a recipe can hold count toward the cap: a browser ahead of a
     // terminal must not spend the terminal's slot (#14968).
@@ -1712,17 +1714,20 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       if (!panel || panel.location === "trash" || panel.worktreeId !== worktreeId) continue;
       if (!isPtyPanel(panel) && !isDevPreviewPanel(panel)) {
         const kind = panel.kind ?? "terminal";
-        omitted.panelKinds[kind] = (omitted.panelKinds[kind] ?? 0) + 1;
+        panelKinds.set(kind, (panelKinds.get(kind) ?? 0) + 1);
         continue;
       }
       if (terminals.length >= MAX_TERMINALS_PER_RECIPE) {
-        omitted.cappedTerminalCount++;
+        cappedTerminalCount++;
         continue;
       }
       terminals.push(terminalToRecipeTerminal(panel));
     }
 
-    return { terminals, omitted };
+    return {
+      terminals,
+      omitted: { panelKinds: Object.fromEntries(panelKinds), cappedTerminalCount },
+    };
   },
 
   generateRecipeFromActiveTerminals: (worktreeId) =>

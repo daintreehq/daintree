@@ -452,7 +452,15 @@ describe("ProjectDialogHost", () => {
       expect(editor.dataset.omissions).toBe("");
     });
 
-    it("drops a malformed omission report rather than show it", async () => {
+    it.each([
+      ["a negative kind count", { panelKinds: { browser: -1 }, cappedTerminalCount: 0 }],
+      ["a fractional cap count", { panelKinds: {}, cappedTerminalCount: 1.5 }],
+      ["a string count", { panelKinds: { browser: "2" }, cappedTerminalCount: 0 }],
+      ["no cap count", { panelKinds: { browser: 1 } }],
+      ["null kinds", { panelKinds: null, cappedTerminalCount: 0 }],
+      ["array kinds", { panelKinds: [1], cappedTerminalCount: 0 }],
+      ["a null report", null],
+    ])("drops a report with %s rather than show it", async (_label, layoutOmissions) => {
       render(<ProjectDialogHost />);
 
       act(() => {
@@ -461,7 +469,27 @@ describe("ProjectDialogHost", () => {
             detail: {
               worktreeId: "wt-1",
               initialTerminals: [{ type: "terminal" }],
-              layoutOmissions: { panelKinds: { browser: -1 }, cappedTerminalCount: 0 },
+              layoutOmissions,
+            },
+          })
+        );
+      });
+
+      const editor = await screen.findByTestId("recipe-editor");
+      expect(editor.dataset.open).toBe("true");
+      expect(editor.dataset.terminals).toBe("1");
+      expect(editor.dataset.omissions).toBe("");
+    });
+
+    it("ignores a report that arrives without a captured draft", async () => {
+      render(<ProjectDialogHost />);
+
+      act(() => {
+        window.dispatchEvent(
+          new CustomEvent("daintree:open-recipe-editor", {
+            detail: {
+              worktreeId: "wt-1",
+              layoutOmissions: { panelKinds: { browser: 1 }, cappedTerminalCount: 0 },
             },
           })
         );
@@ -470,6 +498,68 @@ describe("ProjectDialogHost", () => {
       const editor = await screen.findByTestId("recipe-editor");
       expect(editor.dataset.open).toBe("true");
       expect(editor.dataset.omissions).toBe("");
+    });
+
+    it.each(["edit recipe", "new project recipe"])(
+      "drops a captured draft's report when the manager's %s takes over",
+      async (button) => {
+        render(<ProjectDialogHost />);
+        act(() => {
+          window.dispatchEvent(
+            new CustomEvent("daintree:open-recipe-editor", {
+              detail: {
+                worktreeId: "wt-1",
+                initialTerminals: [{ type: "terminal" }],
+                layoutOmissions: { panelKinds: { browser: 1 }, cappedTerminalCount: 0 },
+              },
+            })
+          );
+          window.dispatchEvent(new CustomEvent("daintree:open-recipe-manager"));
+        });
+        const editor = await screen.findByTestId("recipe-editor");
+        expect(editor.dataset.omissions).not.toBe("");
+
+        fireEvent.click(await screen.findByText(button));
+
+        expect(editor.dataset.omissions).toBe("");
+      }
+    );
+
+    it("swaps an open recipe and a captured draft without carrying either over", async () => {
+      const recipe: TerminalRecipe = {
+        id: "recipe-1",
+        name: "Dev",
+        projectId: "proj",
+        worktreeId: "wt-2",
+        terminals: [],
+        createdAt: 0,
+      };
+      useRecipeStore.setState({
+        getRecipeById: (id: string) => (id === recipe.id ? recipe : undefined),
+      });
+      render(<ProjectDialogHost />);
+      const open = (detail: Record<string, unknown>) =>
+        act(() => {
+          window.dispatchEvent(new CustomEvent("daintree:open-recipe-editor", { detail }));
+        });
+      const captured = {
+        worktreeId: "wt-1",
+        initialTerminals: [{ type: "terminal" }],
+        layoutOmissions: { panelKinds: {}, cappedTerminalCount: 1 },
+      };
+
+      open(captured);
+      open({ recipeId: "recipe-1" });
+      const editor = await screen.findByTestId("recipe-editor");
+      expect(editor.dataset.recipe).toBe("recipe-1");
+      expect(editor.dataset.omissions).toBe("");
+
+      // An existing recipe left in place would win over the capture and take its save.
+      open(captured);
+      expect(editor.dataset.recipe).toBe("");
+      expect(editor.dataset.scope).toBe("");
+      expect(editor.dataset.terminals).toBe("1");
+      expect(editor.dataset.omissions).not.toBe("");
     });
 
     it("opens an existing recipe by id in its own scope", async () => {

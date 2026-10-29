@@ -74,6 +74,11 @@ function useRecipeDialogState(): UseRecipeDialogStateReturn {
       initialTerminals?: RecipeTerminal[],
       layoutOmissions?: RecipeLayoutOmissions
     ) => {
+      // A new draft replaces whatever the editor held: left in place, an
+      // existing recipe would win over the capture and take its save.
+      setIsRecipeManagerOpen(false);
+      setRecipeManagerEdit(undefined);
+      setRecipeEditorDefaultScope(undefined);
       setRecipeEditorWorktreeId(worktreeId);
       setRecipeEditorInitialTerminals(initialTerminals);
       setRecipeEditorLayoutOmissions(layoutOmissions);

@@ -501,11 +501,13 @@ describe("recipeActions adversarial", () => {
   it("recipe.editor.openFromLayout dispatches terminals from the live layout", async () => {
     const terminals = [{ title: "t1" }, { title: "t2" }];
     const omitted = { panelKinds: { browser: 10 }, cappedTerminalCount: 0 };
-    setRecipeState({ captureRecipeFromLayout: capturedLayout(terminals, omitted) });
+    const capture = capturedLayout(terminals, omitted);
+    setRecipeState({ captureRecipeFromLayout: capture });
 
     const run = setupActions();
     await run("recipe.editor.openFromLayout", { worktreeId: "wt-a" });
 
+    expect(capture).toHaveBeenCalledWith("wt-a");
     expect(dispatchSpy).toHaveBeenCalledTimes(1);
     const event = dispatchSpy.mock.calls[0]![0] as unknown as {
       type: string;
@@ -606,9 +608,13 @@ describe("recipeActions adversarial", () => {
       expect(dispatchSpy).not.toHaveBeenCalled();
     });
 
-    it("reports the captured pane count from a live layout", async () => {
+    it.each([1, 2])("reports the %i captured pane(s) from a live layout", async (count) => {
       setRecipeState({
-        captureRecipeFromLayout: capturedLayout([{ type: "terminal" }, { type: "claude" }]),
+        captureRecipeFromLayout: capturedLayout(
+          Array.from({ length: count }, () => ({ type: "terminal" })),
+          // Steps the capture left out are the editor's to show, not counted here.
+          { panelKinds: { browser: 3 }, cappedTerminalCount: 2 }
+        ),
       });
 
       const run = setupActions();
@@ -619,7 +625,7 @@ describe("recipeActions adversarial", () => {
         mode: "fromLayout",
         worktreeId: "wt-a",
         recipeId: null,
-        terminalCount: 2,
+        terminalCount: count,
       });
     });
   });
