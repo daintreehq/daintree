@@ -17,9 +17,16 @@
  * id. Every other outcome leaves the pane as it was.
  */
 
+import { realpath } from "fs/promises";
 import { isHostThrowawayWorkspaceId } from "../../../shared/config/hostThrowaway.js";
 import type { ProjectState, TerminalSnapshot } from "../../../shared/types/project.js";
+import { HANDBACK_CODE_LENGTH } from "../../../shared/types/handback.js";
 import { sanitizeFirstPrompt } from "../../../shared/utils/firstPrompt.js";
+import {
+  buildHandbackInstruction,
+  handbackStartMarker,
+  isHandbackCode,
+} from "../../../shared/utils/handback.js";
 import { createLogger } from "../../utils/logger.js";
 import { events } from "../events.js";
 import type { PtyClient } from "../PtyClient.js";
@@ -28,6 +35,7 @@ import {
   sessionIdentityRevision,
   type PaneWritebackOutcome,
 } from "../pty/agentSessionCapturePersistence.js";
+import { getEnvVar, hasEnvVar } from "../pty/EnvironmentFilter.js";
 import { subagentTerminalAgentId } from "../subagentTerminalAgent.js";
 import { listCodexThreadsCreatedSince, type CodexCreatedThread } from "./CodexSubagentService.js";
 
@@ -45,6 +53,9 @@ const ATTEMPT_DELAYS_MS: readonly number[] = [2_000, 5_000, 15_000, 45_000];
 
 /** Bound on remembered finished runs; one entry per pane. */
 const MAX_SETTLED_RUNS = 1_000;
+
+/** A folder that won't resolve in this long is grouped by the path as written. */
+const REALPATH_TIMEOUT_MS = 1_000;
 
 /** Outcomes after which the pane holds the attributed id. */
 const HOLDS_ID: ReadonlySet<PaneWritebackOutcome> = new Set(["filled", "unchanged"]);
@@ -70,34 +81,47 @@ function normalizePromptText(text: string): string {
   return text.replace(/\s+/g, " ").trim();
 }
 
+const HANDBACK_MARKER_PREFIX = handbackStartMarker("");
+
 /**
- * Whether a thread's first message is the prompt, or the prompt with more
- * after it. The only thing Daintree appends is a handback instruction after a
- * blank line, so a whole prompt ends at the end of the message or at a space:
- * "Triage #1" must not read as the start of "Triage #12". A prompt cut at its
- * cap can end anywhere.
+ * Whether a thread's first message is exactly what Daintree launched with: the
+ * prompt alone, or the prompt followed by the handback instruction, the only
+ * thing Daintree appends. Anything else the message runs on with was typed by
+ * someone, so "Fix the tests" never fits a thread that says "Fix the tests and
+ * the lint". A prompt cut at its cap leaves the rest of the text unknown, so it
+ * only has to be the start.
  */
-function continuesPrompt(preview: string, prompt: string, truncated: boolean): boolean {
-  if (!preview.startsWith(prompt)) return false;
-  return truncated || preview.length === prompt.length || preview[prompt.length] === " ";
+function isLaunchedText(preview: string, prompt: string, truncated: boolean): boolean {
+  if (truncated) return preview.startsWith(prompt);
+  if (preview === prompt) return true;
+  if (!preview.startsWith(`${prompt} `)) return false;
+  const rest = preview.slice(prompt.length + 1);
+  const markerAt = rest.indexOf(HANDBACK_MARKER_PREFIX);
+  if (markerAt < 0) return false;
+  const start = markerAt + HANDBACK_MARKER_PREFIX.length;
+  const code = rest.slice(start, start + HANDBACK_CODE_LENGTH);
+  return isHandbackCode(code) && rest === normalizePromptText(buildHandbackInstruction(code));
 }
 
 /**
  * Pair panes with the threads they started, or decline to.
  *
- * A thread fits a pane when it was created no earlier than the pane's process,
- * and its first message begins with the whole prompt Daintree sent — the
- * stored prompt can be cut at its cap and can be followed by an appended
- * handback, so it is a prefix of what the thread received, never the reverse.
- * A preview shorter than the prompt therefore fits nothing, which is the safe
- * reading of a server that truncates (codex-cli 0.165.0 reports the whole
- * first message).
+ * A thread fits a pane when it was created no earlier than the pane's process
+ * and its first message is the text Daintree launched it with. A preview that
+ * stops short of that text fits nothing, which is the safe reading of a server
+ * that truncates (codex-cli 0.165.0 reports the whole first message).
  *
  * A pair is accepted only when the pane fits exactly one thread and that
  * thread fits exactly one pane. Nothing is ranked or chosen by proximity: two
- * panes sent the same prompt, or one prompt that begins another, stay
- * unattributed together. Threads another pane already holds are left out, so a
- * pane isn't counted ambiguous against a conversation that is someone else's.
+ * panes sent the same prompt stay unattributed together. Threads another pane
+ * already holds are left out, so a pane isn't counted ambiguous against a
+ * conversation that is someone else's.
+ *
+ * Panes Daintree sent no prompt are not in the running, so they can't make a
+ * thread ambiguous. Counting them would refuse every pane in a folder that also
+ * holds the Codex pane orchestrating them, and for one of them to own a match
+ * its own first message would have to be another pane's launch text, word for
+ * word.
  */
 export function matchLiveCodexThreads(
   panes: readonly LiveAttributionPane[],
@@ -125,7 +149,7 @@ export function matchLiveCodexThreads(
     const fits: string[] = [];
     for (const [sessionId, thread] of candidates) {
       if (thread.createdAt < spawnedAt) continue;
-      if (!continuesPrompt(thread.preview, prompt, pane.promptTruncated === true)) continue;
+      if (!isLaunchedText(thread.preview, prompt, pane.promptTruncated === true)) continue;
       fits.push(sessionId);
       panesPerThread.set(sessionId, (panesPerThread.get(sessionId) ?? 0) + 1);
     }
@@ -144,15 +168,17 @@ type TerminalRecord = Awaited<
   ReturnType<PtyClient["getAllTerminalsWithCompletenessAsync"]>
 >["terminals"][number];
 
-/** The launched Codex run is still the one in the pane, and nothing has named its conversation. */
-function isUnattributedCodexRun(info: TerminalRecord): boolean {
+/**
+ * The pane is still running the Codex session it launched, so the prompt on
+ * its record describes what it is running. Trashed panes keep running until
+ * they expire, so they stay in the running for threads; nothing writes to them.
+ */
+function isLaunchedCodexRun(info: TerminalRecord): boolean {
   return (
     info.launchAgentId === CODEX_AGENT_ID &&
     subagentTerminalAgentId(info) === CODEX_AGENT_ID &&
     info.agentIncarnation === 0 &&
     info.isAssistantTerminal !== true &&
-    info.isTrashed !== true &&
-    !info.agentSessionId &&
     typeof info.projectId === "string" &&
     !isHostThrowawayWorkspaceId(info.projectId) &&
     Boolean(info.cwd)
@@ -160,14 +186,36 @@ function isUnattributedCodexRun(info: TerminalRecord): boolean {
 }
 
 /**
- * A pane launched under its own `CODEX_HOME` keeps its conversations in that
- * profile, so it is matched against that profile's threads and no other.
+ * The Codex profile the pane runs against, read the way its launch env is
+ * applied: exact on POSIX, case-insensitive on Windows. Null for an explicit
+ * empty `CODEX_HOME`, which names no profile this can query.
  */
-function codexHomeOf(saved: TerminalSnapshot): string | undefined {
-  for (const [key, value] of Object.entries(saved.env ?? {})) {
-    if (key.toUpperCase() === "CODEX_HOME" && value) return value;
+function codexProfileOf(saved: TerminalSnapshot): { codexHome: string | undefined } | null {
+  const env = saved.env ?? {};
+  if (!hasEnvVar(env, "CODEX_HOME")) return { codexHome: undefined };
+  const codexHome = getEnvVar(env, "CODEX_HOME");
+  return codexHome ? { codexHome } : null;
+}
+
+/**
+ * One folder under one key whatever spelling a pane uses (`/tmp` against
+ * `/private/tmp`), so panes reaching it through different paths still compete.
+ * Bounded: `realpath` hangs on a dead network mount.
+ */
+async function canonicalFolder(cwd: string): Promise<string> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      realpath(cwd),
+      new Promise<string>((resolve) => {
+        timer = setTimeout(() => resolve(cwd), REALPATH_TIMEOUT_MS);
+      }),
+    ]);
+  } catch {
+    return cwd;
+  } finally {
+    if (timer) clearTimeout(timer);
   }
-  return undefined;
 }
 
 interface RunTrack {
@@ -176,12 +224,23 @@ interface RunTrack {
   timer: ReturnType<typeof setTimeout> | null;
 }
 
+interface CandidatePane extends LiveAttributionPane {
+  projectId: string;
+  identityRevision: number;
+  /** Generation of the host record the prompt and spawn time were read against. */
+  generation: number;
+  /** Null when this pane is only a rival: trashed, or under a profile this can't query. */
+  profileKey: string | null;
+}
+
+/** Every Codex run in one folder, and the profiles there with a due pane to answer for. */
 interface AttemptGroup {
-  cwd: string;
-  codexHome: string | undefined;
-  panes: Array<LiveAttributionPane & { projectId: string; identityRevision: number }>;
-  /** Earliest spawn, in protocol seconds, of a due pane here that has a prompt to match. */
-  since: number | null;
+  cwds: Set<string>;
+  panes: CandidatePane[];
+  /** Per profile key: its `CODEX_HOME`, and the earliest due pane's spawn in protocol seconds. */
+  profiles: Map<string, { codexHome: string | undefined; since: number }>;
+  /** Some run here couldn't be read, so a rival may be missing; skip the folder this pass. */
+  unavailable: boolean;
 }
 
 export interface CodexLiveSessionAttributionDeps {
@@ -194,14 +253,17 @@ export interface CodexLiveSessionAttributionDeps {
   getProjectState?: (projectId: string) => Promise<ProjectState | null>;
   listThreads?: typeof listCodexThreadsCreatedSince;
   persist?: typeof acceptLiveSessionAttribution;
+  canonicalFolder?: (cwd: string) => Promise<string>;
   attemptDelaysMs?: readonly number[];
 }
 
 /**
  * Watches for each Codex run's first turn and attributes it, with a few
- * bounded attempts per run. Process-wide and in memory only; attempts across
- * runs are serialized and batched, so a fleet of panes starting at once costs
- * one app-server query per folder per attempt rather than one per pane.
+ * bounded attempts per run. Process-wide and in memory only. Attempts across
+ * runs are serialized: panes that come due while a pass runs share the next
+ * one, and a pass writes every unique match in a folder, not just the due
+ * pane's, so a fleet starting at once costs a query per folder per pass rather
+ * than one per pane.
  */
 export class CodexLiveSessionAttribution {
   private readonly deps: Required<Omit<CodexLiveSessionAttributionDeps, "ptyClient">> &
@@ -225,6 +287,7 @@ export class CodexLiveSessionAttribution {
         (async (id) => (await import("../ProjectStore.js")).projectStore.getProjectState(id)),
       listThreads: deps.listThreads ?? listCodexThreadsCreatedSince,
       persist: deps.persist ?? ((attribution) => acceptLiveSessionAttribution(attribution)),
+      canonicalFolder: deps.canonicalFolder ?? canonicalFolder,
       attemptDelaysMs: deps.attemptDelaysMs ?? ATTEMPT_DELAYS_MS,
     };
     this.unsubscribe = events.on("agent:state-changed", (payload) => {
@@ -327,8 +390,9 @@ export class CodexLiveSessionAttribution {
   /**
    * One pass over every folder a due pane runs in. Returns the due panes that
    * are finished — attributed, or no longer a run attribution could apply to;
-   * the rest try again. A partial inventory or a failed query finishes nothing,
-   * since either could be hiding the rival that makes a match ambiguous.
+   * the rest try again. A partial inventory, a run whose record can't be read,
+   * or a failed query finishes nothing, since each could be hiding the rival
+   * that makes a match ambiguous.
    */
   private async attempt(due: ReadonlyMap<string, number>): Promise<Set<string>> {
     const finished = new Set<string>();
@@ -356,6 +420,15 @@ export class CodexLiveSessionAttribution {
       }
       return state;
     };
+    const folders = new Map<string, Promise<string>>();
+    const folderOf = (cwd: string): Promise<string> => {
+      let folder = folders.get(cwd);
+      if (!folder) {
+        folder = this.deps.canonicalFolder(cwd).catch(() => cwd);
+        folders.set(cwd, folder);
+      }
+      return folder;
+    };
 
     const claimed = new Set<string>();
     for (const info of inventory.terminals) {
@@ -364,37 +437,52 @@ export class CodexLiveSessionAttribution {
 
     const groups = new Map<string, AttemptGroup>();
     for (const info of inventory.terminals) {
-      if (!isUnattributedCodexRun(info)) {
-        if (due.has(info.id)) finished.add(info.id);
+      const dueGeneration = due.get(info.id);
+      if (!isLaunchedCodexRun(info) || info.agentSessionId) {
+        if (dueGeneration !== undefined) finished.add(info.id);
         continue;
       }
-      const generation = ptyClient.getLiveGeneration(info.id);
-      const dueGeneration = due.get(info.id);
-      if (dueGeneration !== undefined && generation !== dueGeneration) {
+      // The run the working observation was about has been replaced; its
+      // successor gets an observation of its own.
+      if (dueGeneration !== undefined && ptyClient.getLiveGeneration(info.id) !== dueGeneration) {
         finished.add(info.id);
+        continue;
+      }
+      const folder = await folderOf(info.cwd);
+      let group = groups.get(folder);
+      if (!group) {
+        group = { cwds: new Set(), panes: [], profiles: new Map(), unavailable: false };
+        groups.set(folder, group);
+      }
+      group.cwds.add(info.cwd);
+
+      // The prompt and spawn time are only this run's if the record that
+      // answered is the generation Main is running; mid-relaunch they aren't.
+      const generation = info.launchGeneration;
+      if (typeof generation !== "number" || ptyClient.getLiveGeneration(info.id) !== generation) {
+        group.unavailable = true;
         continue;
       }
       const projectId = info.projectId as string;
       const state = await stateOf(projectId);
-      for (const pane of state?.terminals ?? []) {
+      const saved = state?.terminals?.find((pane) => pane.id === info.id);
+      if (!state || !saved) {
+        group.unavailable = true;
+        continue;
+      }
+      for (const pane of state.terminals) {
         if (pane.agentSessionId) claimed.add(pane.agentSessionId);
       }
-      const saved = state?.terminals?.find((pane) => pane.id === info.id);
-      // Not saved yet is worth another look; saved with an id is done.
-      if (!saved || saved.location === "trash") continue;
       if (saved.agentSessionId) {
         if (dueGeneration !== undefined) finished.add(info.id);
         continue;
       }
-      const codexHome = codexHomeOf(saved);
-      const key = `${codexHome ?? ""}\0${info.cwd}`;
-      let group = groups.get(key);
-      if (!group) {
-        group = { cwd: info.cwd, codexHome, panes: [], since: null };
-        groups.set(key, group);
-      }
       const prompt = sanitizeFirstPrompt(saved.firstPrompt);
       if (!prompt) continue;
+
+      const profile = codexProfileOf(saved);
+      const target = profile !== null && info.isTrashed !== true && saved.location !== "trash";
+      const profileKey = target ? (profile.codexHome ?? "") : null;
       group.panes.push({
         terminalId: info.id,
         spawnedAtMs: info.spawnedAt,
@@ -402,10 +490,17 @@ export class CodexLiveSessionAttribution {
         ...(prompt.truncated && { promptTruncated: true }),
         projectId,
         identityRevision: revisions.get(info.id) ?? 0,
+        generation,
+        profileKey,
       });
-      if (dueGeneration !== undefined) {
+      if (dueGeneration !== undefined && profileKey === null) finished.add(info.id);
+      if (dueGeneration !== undefined && profileKey !== null) {
         const spawnedAt = Math.floor(info.spawnedAt / 1000);
-        group.since = group.since === null ? spawnedAt : Math.min(group.since, spawnedAt);
+        const existing = group.profiles.get(profileKey);
+        group.profiles.set(profileKey, {
+          codexHome: profile?.codexHome,
+          since: existing ? Math.min(existing.since, spawnedAt) : spawnedAt,
+        });
       }
     }
     // A due pane missing from a complete inventory has gone.
@@ -414,37 +509,48 @@ export class CodexLiveSessionAttribution {
     }
 
     for (const group of groups.values()) {
-      const { since } = group;
-      if (since === null || this.disposed || this.deps.isQuitting()) continue;
-      // Read back only as far as the due panes need. An older pane still counts
-      // against every thread its prompt fits, but threads from before the
-      // window are missing from its own list, so it can't be accepted here.
-      const threads = await this.deps.listThreads(group.cwd, since, group.codexHome);
-      if (!threads || this.disposed) continue;
-      const matches = matchLiveCodexThreads(group.panes, threads, claimed);
-      logger.info("Live Codex session attribution pass", {
-        panes: group.panes.length,
-        threads: threads.length,
-        matched: matches.size,
-      });
-      for (const pane of group.panes) {
-        const sessionId = matches.get(pane.terminalId);
-        if (sessionId === undefined || Math.floor(pane.spawnedAtMs / 1000) < since) continue;
-        const generation = ptyClient.getLiveGeneration(pane.terminalId);
-        if (generation === null) continue;
-        const outcome = await this.deps.persist({
-          terminalId: pane.terminalId,
-          generation,
-          projectId: pane.projectId,
-          agentId: CODEX_AGENT_ID,
-          sessionId,
-          identityRevision: pane.identityRevision,
+      if (group.unavailable) continue;
+      for (const [profileKey, { codexHome, since }] of group.profiles) {
+        if (this.disposed || this.deps.isQuitting()) return finished;
+        // Read back only as far as the due panes need. An older pane still
+        // counts against every thread its prompt fits, but threads from before
+        // the window are missing from its own list, so it can't be accepted.
+        // Every pane in the folder competes whatever its profile: two homes can
+        // be one directory, and a rival counted wrongly only costs a match.
+        const threads = await this.deps.listThreads([...group.cwds], since, codexHome);
+        if (this.disposed || this.deps.isQuitting()) return finished;
+        if (!threads) continue;
+        const matches = matchLiveCodexThreads(group.panes, threads, claimed);
+        logger.info("Live Codex session attribution pass", {
+          panes: group.panes.length,
+          threads: threads.length,
+          matched: matches.size,
         });
-        if (!HOLDS_ID.has(outcome)) continue;
-        ptyClient.noteLiveAgentSessionId(pane.terminalId, sessionId, generation);
-        finished.add(pane.terminalId);
-        // A pane matched before its own first turn was seen needs no attempts of its own.
-        if (!due.has(pane.terminalId)) this.settle(pane.terminalId, generation);
+        for (const pane of group.panes) {
+          if (pane.profileKey !== profileKey) continue;
+          const sessionId = matches.get(pane.terminalId);
+          if (sessionId === undefined || claimed.has(sessionId)) continue;
+          if (Math.floor(pane.spawnedAtMs / 1000) < since) continue;
+          if (ptyClient.getLiveGeneration(pane.terminalId) !== pane.generation) continue;
+          const outcome = await this.deps.persist({
+            terminalId: pane.terminalId,
+            generation: pane.generation,
+            projectId: pane.projectId,
+            agentId: CODEX_AGENT_ID,
+            sessionId,
+            identityRevision: pane.identityRevision,
+          });
+          if (!HOLDS_ID.has(outcome)) continue;
+          claimed.add(sessionId);
+          // The saved pane holds the id either way; only the host mirror and
+          // the next write are this service's to stop.
+          if (this.disposed) return finished;
+          ptyClient.noteLiveAgentSessionId(pane.terminalId, sessionId, pane.generation);
+          finished.add(pane.terminalId);
+          // A pane matched before its own first turn was seen needs no attempts of its own.
+          if (!due.has(pane.terminalId)) this.settle(pane.terminalId, pane.generation);
+          if (this.deps.isQuitting()) return finished;
+        }
       }
     }
     return finished;

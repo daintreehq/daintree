@@ -1287,7 +1287,7 @@ describe("listCodexThreadsCreatedSince (#15268)", () => {
       };
     });
 
-    await expect(listCodexThreadsCreatedSince("/tmp/repo", 100)).resolves.toEqual([
+    await expect(listCodexThreadsCreatedSince(["/tmp/repo"], 100)).resolves.toEqual([
       { sessionId: "new", preview: "triage #2", createdAt: 120 },
       { sessionId: "root-session", preview: "triage #1", createdAt: 110 },
     ]);
@@ -1314,7 +1314,7 @@ describe("listCodexThreadsCreatedSince (#15268)", () => {
         : { data: [{ id: "b", preview: "b", createdAt: 120 }], nextCursor: null };
     });
 
-    const threads = await listCodexThreadsCreatedSince("/repo", 100);
+    const threads = await listCodexThreadsCreatedSince(["/repo"], 100);
 
     expect(threads?.map((thread) => thread.sessionId)).toEqual(["a", "b"]);
     expect(cursors).toEqual([undefined, "page-2"]);
@@ -1329,18 +1329,42 @@ describe("listCodexThreadsCreatedSince (#15268)", () => {
     });
 
     // A thread left unread could be the rival that makes a match ambiguous.
-    await expect(listCodexThreadsCreatedSince("/repo", 100)).resolves.toBeNull();
+    await expect(listCodexThreadsCreatedSince(["/repo"], 100)).resolves.toBeNull();
     expect(page).toBe(4);
+  });
+
+  it("asks for every spelling of the folder its panes use", async () => {
+    let cwd: unknown;
+    scriptSession((method, params) => {
+      if (method === "thread/list") cwd = params.cwd;
+      return { data: [], nextCursor: null };
+    });
+
+    await listCodexThreadsCreatedSince(["/tmp/repo", "/private/tmp/repo", "/repo"], 100);
+
+    expect(cwd).toEqual(["/tmp/repo", "/private/tmp/repo", "/repo"]);
+  });
+
+  it("answers null when a later page comes back malformed", async () => {
+    scriptSession((method, params) => {
+      if (method !== "thread/list") return {};
+      return params.cursor === undefined
+        ? { data: [{ id: "a", createdAt: 150 }], nextCursor: "page-2" }
+        : { nextCursor: null };
+    });
+
+    // Page one alone would read as the whole window and hide a rival.
+    await expect(listCodexThreadsCreatedSince(["/repo"], 100)).resolves.toBeNull();
   });
 
   it("answers null for an undated row or a failed session", async () => {
     scriptSession((method) =>
       method === "thread/list" ? { data: [{ id: "x", preview: "x" }], nextCursor: null } : {}
     );
-    await expect(listCodexThreadsCreatedSince("/repo", 100)).resolves.toBeNull();
+    await expect(listCodexThreadsCreatedSince(["/repo"], 100)).resolves.toBeNull();
 
     runSession.mockRejectedValueOnce(new CodexAppServerError("cli-missing", "no codex"));
-    await expect(listCodexThreadsCreatedSince("/repo", 100)).resolves.toBeNull();
+    await expect(listCodexThreadsCreatedSince(["/repo"], 100)).resolves.toBeNull();
   });
 
   it("skips an id that could not be handed to `codex resume`", async () => {
@@ -1356,14 +1380,14 @@ describe("listCodexThreadsCreatedSince (#15268)", () => {
         : {}
     );
 
-    const threads = await listCodexThreadsCreatedSince("/repo", 100);
+    const threads = await listCodexThreadsCreatedSince(["/repo"], 100);
     expect(threads?.map((thread) => thread.sessionId)).toEqual(["ok-id"]);
   });
 
   it("runs against the pane's own profile", async () => {
     scriptSession(() => ({ data: [], nextCursor: null }));
 
-    await listCodexThreadsCreatedSince("/repo", 100, "/profiles/work");
+    await listCodexThreadsCreatedSince(["/repo"], 100, "/profiles/work");
 
     expect(runSession).toHaveBeenLastCalledWith(
       expect.any(Function),

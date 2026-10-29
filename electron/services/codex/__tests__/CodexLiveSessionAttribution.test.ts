@@ -23,6 +23,8 @@ vi.mock("../../pty/agentSessionCapturePersistence.js", () => ({
 }));
 
 import { events } from "../../events.js";
+import { appendHandbackInstruction } from "../../../../shared/utils/handback.js";
+import type { LiveSessionAttribution } from "../../pty/agentSessionCapturePersistence.js";
 import type { ProjectState, TerminalSnapshot } from "../../../../shared/types/project.js";
 import type { PaneWritebackOutcome } from "../../pty/agentSessionCapturePersistence.js";
 import type { CodexCreatedThread } from "../CodexSubagentService.js";
@@ -35,7 +37,8 @@ import {
 
 const SPAWN_MS = 1_800_000_000_000;
 const SPAWN_S = SPAWN_MS / 1000;
-const HANDBACK = "\n\nWhen you are done, print DAINTREE-DONE-abc then END-abc.";
+/** What the launcher sends for a prompt that asked for a handback. */
+const withHandback = (prompt: string, code = "abc123") => appendHandbackInstruction(prompt, code);
 
 function pane(terminalId: string, promptText: string, spawnedAtMs = SPAWN_MS): LiveAttributionPane {
   return { terminalId, spawnedAtMs, promptText };
@@ -52,7 +55,7 @@ describe("matchLiveCodexThreads", () => {
     );
     // Threads start in a different order from their panes, and close together.
     const threads = panes
-      .map((p, i) => thread(`session-${i}`, `${p.promptText}${HANDBACK}`, SPAWN_S + 20 - (i % 3)))
+      .map((p, i) => thread(`session-${i}`, withHandback(p.promptText), SPAWN_S + 20 - (i % 3)))
       .reverse();
 
     const matches = matchLiveCodexThreads(panes, threads, new Set());
@@ -75,17 +78,43 @@ describe("matchLiveCodexThreads", () => {
     // A conversation started outside Daintree with the same words.
     const matches = matchLiveCodexThreads(
       [pane("a", "Fix the tests")],
-      [thread("mine", "Fix the tests"), thread("by-hand", "Fix the tests please")],
+      [thread("mine", "Fix the tests"), thread("by-hand", "Fix the tests")],
       new Set()
     );
 
     expect(matches.size).toBe(0);
   });
 
+  it("fits only the launched text, not a longer message that starts with it", () => {
+    // Typed by hand somewhere else in the folder; it isn't what Daintree sent.
+    expect(
+      matchLiveCodexThreads(
+        [pane("a", "Fix the tests")],
+        [thread("by-hand", "Fix the tests and the lint")],
+        new Set()
+      ).size
+    ).toBe(0);
+    // The handback instruction is the one thing that may follow, and only exactly.
+    expect(
+      matchLiveCodexThreads(
+        [pane("a", "Fix the tests")],
+        [thread("with-handback", withHandback("Fix the tests"))],
+        new Set()
+      ).get("a")
+    ).toBe("with-handback");
+    expect(
+      matchLiveCodexThreads(
+        [pane("a", "Fix the tests")],
+        [thread("edited", `${withHandback("Fix the tests")} Also the lint.`)],
+        new Set()
+      ).size
+    ).toBe(0);
+  });
+
   it("doesn't read one prompt as the start of a longer sibling's", () => {
     const matches = matchLiveCodexThreads(
       [pane("a", "Triage #1"), pane("b", "Triage #12")],
-      [thread("s1", `Triage #1${HANDBACK}`), thread("s12", "Triage #12")],
+      [thread("s1", withHandback("Triage #1")), thread("s12", "Triage #12")],
       new Set()
     );
 
@@ -122,7 +151,7 @@ describe("matchLiveCodexThreads", () => {
   it("compares the words, not the line breaks the launch command flattened", () => {
     const matches = matchLiveCodexThreads(
       [pane("a", "  Fix the build.\r\nThen run\n\nthe tests.  ")],
-      [thread("s", `Fix the build. Then run the tests.${HANDBACK}`.replace(/\n/g, " "))],
+      [thread("s", withHandback("Fix the build. Then run the tests.").replace(/\n/g, " "))],
       new Set()
     );
 
@@ -179,6 +208,7 @@ function terminal(id: string, overrides: Partial<TerminalRecord> = {}): Terminal
     cwd: "/repo",
     spawnedAt: SPAWN_MS,
     hasPty: true,
+    launchGeneration: 1,
     ...overrides,
   } as TerminalRecord;
 }
@@ -206,6 +236,7 @@ function harness(
     threads?: CodexCreatedThread[] | null;
     degraded?: boolean;
     quitting?: boolean;
+    folders?: Record<string, string>;
   } = {}
 ) {
   const world = {
@@ -218,8 +249,12 @@ function harness(
     generations: new Map<string, number>(),
   };
   const ptyClient = {
+    // Each row answers for the generation the host is on when it is read.
     getAllTerminalsWithCompletenessAsync: vi.fn(async () => ({
-      terminals: world.terminals,
+      terminals: world.terminals.map((row) => ({
+        ...row,
+        launchGeneration: world.generations.get(row.id) ?? row.launchGeneration,
+      })),
       degraded: world.degraded,
       shardsTotal: 1,
       shardsFailed: world.degraded ? 1 : 0,
@@ -227,19 +262,24 @@ function harness(
     getLiveGeneration: vi.fn((id: string) => world.generations.get(id) ?? 1),
     noteLiveAgentSessionId: vi.fn(),
   };
-  const getProjectState = vi.fn(async (projectId: string): Promise<ProjectState> => ({
+  const getProjectState = vi.fn(async (projectId: string): Promise<ProjectState | null> => ({
     projectId,
     sidebarWidth: 350,
     terminals: world.panes,
   }));
-  const listThreads = vi.fn(async (_cwd: string, _since: number, _home?: string) => world.threads);
-  const persist = vi.fn(async (): Promise<PaneWritebackOutcome> => "filled");
+  const listThreads = vi.fn(
+    async (_cwds: readonly string[], _since: number, _home?: string) => world.threads
+  );
+  const persist = vi.fn(
+    async (_attribution: LiveSessionAttribution): Promise<PaneWritebackOutcome> => "filled"
+  );
   const service = new CodexLiveSessionAttribution({
     ptyClient,
     isQuitting: () => world.quitting,
     getProjectState,
     listThreads,
     persist,
+    canonicalFolder: async (cwd) => options.folders?.[cwd] ?? cwd,
     attemptDelaysMs: DELAYS,
   });
   return { world, ptyClient, getProjectState, listThreads, persist, service };
@@ -284,7 +324,7 @@ describe("CodexLiveSessionAttribution", () => {
     working("pane-1");
     await vi.advanceTimersByTimeAsync(DELAYS[0]);
 
-    expect(h.listThreads).toHaveBeenCalledWith("/repo", SPAWN_S, undefined);
+    expect(h.listThreads).toHaveBeenCalledWith(["/repo"], SPAWN_S, undefined);
     expect(h.persist).toHaveBeenCalledWith({
       terminalId: "pane-1",
       generation: 1,
@@ -307,7 +347,7 @@ describe("CodexLiveSessionAttribution", () => {
       harness({
         terminals: ids.map((id, i) => terminal(id, { spawnedAt: SPAWN_MS + i * 1_000 })),
         panes: ids.map((id) => saved(id, `Triage ${id}`)),
-        threads: ids.map((id, i) => thread(`session-${i}`, `Triage ${id}${HANDBACK}`)),
+        threads: ids.map((id, i) => thread(`session-${i}`, withHandback(`Triage ${id}`))),
       })
     );
 
@@ -315,9 +355,11 @@ describe("CodexLiveSessionAttribution", () => {
     await vi.advanceTimersByTimeAsync(DELAYS[0]);
 
     expect(h.listThreads).toHaveBeenCalledTimes(1);
-    expect(h.persist.mock.calls.map(([call]) => (call as { sessionId: string }).sessionId)).toEqual(
-      ["session-0", "session-1", "session-2"]
-    );
+    expect(h.persist.mock.calls.map(([call]) => call.sessionId)).toEqual([
+      "session-0",
+      "session-1",
+      "session-2",
+    ]);
   });
 
   it("retries while the prompt isn't saved yet, then stops for good", async () => {
@@ -397,7 +439,7 @@ describe("CodexLiveSessionAttribution", () => {
     working("pane-new");
     await vi.advanceTimersByTimeAsync(DELAYS[0]);
 
-    expect(h.listThreads).toHaveBeenCalledWith("/repo", SPAWN_S, undefined);
+    expect(h.listThreads).toHaveBeenCalledWith(["/repo"], SPAWN_S, undefined);
     expect(h.persist).toHaveBeenCalledTimes(1);
     expect(h.persist).toHaveBeenCalledWith(expect.objectContaining({ terminalId: "pane-new" }));
   });
@@ -487,28 +529,199 @@ describe("CodexLiveSessionAttribution", () => {
   });
 
   it("clears its timers and its subscription on dispose", async () => {
+    const realOn = events.on.bind(events);
+    const unsubscribed = vi.fn();
+    const on = vi.spyOn(events, "on").mockImplementation(((event, listener) => {
+      const off = realOn(event, listener);
+      return () => {
+        unsubscribed(event);
+        off();
+      };
+    }) as typeof events.on);
     const h = harness();
+    on.mockRestore();
 
     working("pane-1");
+    expect(vi.getTimerCount()).toBe(1);
     h.service.dispose();
-    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(vi.getTimerCount()).toBe(0);
+    expect(unsubscribed).toHaveBeenCalledWith("agent:state-changed");
     working("pane-1");
     await vi.advanceTimersByTimeAsync(1_000);
-
     expect(h.ptyClient.getAllTerminalsWithCompletenessAsync).not.toHaveBeenCalled();
   });
 
   it("queries a pane's own Codex profile", async () => {
     const h = track(
       harness({
-        panes: [saved("pane-1", "Triage issue #1", { env: { codex_home: "/profiles/work" } })],
+        panes: [saved("pane-1", "Triage issue #1", { env: { CODEX_HOME: "/profiles/work" } })],
       })
     );
 
     working("pane-1");
     await vi.advanceTimersByTimeAsync(DELAYS[0]);
 
-    expect(h.listThreads).toHaveBeenCalledWith("/repo", SPAWN_S, "/profiles/work");
+    expect(h.listThreads).toHaveBeenCalledWith(["/repo"], SPAWN_S, "/profiles/work");
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "reads CODEX_HOME the way a POSIX launch applies it",
+    async () => {
+      // A lowercase key doesn't redirect Codex outside Windows.
+      const h = track(
+        harness({
+          panes: [saved("pane-1", "Triage issue #1", { env: { codex_home: "/profiles/work" } })],
+        })
+      );
+
+      working("pane-1");
+      await vi.advanceTimersByTimeAsync(DELAYS[0]);
+
+      expect(h.listThreads).toHaveBeenCalledWith(["/repo"], SPAWN_S, undefined);
+    }
+  );
+
+  it("declines a pane under an empty CODEX_HOME", async () => {
+    const h = track(
+      harness({ panes: [saved("pane-1", "Triage issue #1", { env: { CODEX_HOME: "" } })] })
+    );
+
+    working("pane-1");
+    await vi.advanceTimersByTimeAsync(DELAYS.reduce((a, b) => a + b, 0) + 100);
+
+    expect(h.listThreads).not.toHaveBeenCalled();
+    expect(h.ptyClient.getAllTerminalsWithCompletenessAsync).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops a match whose pane relaunched while the query was out", async () => {
+    let release!: () => void;
+    const h = track(harness());
+    h.listThreads.mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return h.world.threads;
+    });
+
+    working("pane-1");
+    await vi.advanceTimersByTimeAsync(DELAYS[0]);
+    // The old run's prompt and spawn time are what the query is matching.
+    h.world.generations.set("pane-1", 2);
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(h.persist).not.toHaveBeenCalled();
+    expect(h.ptyClient.noteLiveAgentSessionId).not.toHaveBeenCalled();
+  });
+
+  it("carries the identity revision from before the saved pane was read", async () => {
+    let release!: () => void;
+    const h = track(harness());
+    h.getProjectState.mockImplementationOnce(async (projectId: string) => {
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return { projectId, sidebarWidth: 350, terminals: h.world.panes };
+    });
+    sessionIdentityRevision.mockReturnValue(4);
+
+    working("pane-1");
+    await vi.advanceTimersByTimeAsync(DELAYS[0]);
+    sessionIdentityRevision.mockReturnValue(5);
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(h.persist).toHaveBeenCalledWith(expect.objectContaining({ identityRevision: 4 }));
+  });
+
+  it.each([
+    ["has no saved record yet", [saved("pane-1", "Fix the tests")]],
+    ["has a record whose project can't be read", null],
+  ])("skips the folder while a sibling run %s", async (_label, panes) => {
+    const h = track(
+      harness({
+        terminals: [terminal("pane-1"), terminal("pane-2", { projectId: "project-2" })],
+        panes: [saved("pane-1", "Fix the tests")],
+        threads: [thread("session-2", "Fix the tests")],
+      })
+    );
+    if (panes === null) {
+      h.world.panes = [saved("pane-1", "Fix the tests"), saved("pane-2", "Fix the tests")];
+      h.getProjectState.mockImplementation(async (projectId: string) =>
+        projectId === "project-2"
+          ? null
+          : { projectId, sidebarWidth: 350, terminals: h.world.panes }
+      );
+    }
+
+    working("pane-1");
+    await vi.advanceTimersByTimeAsync(DELAYS[0]);
+
+    // The sibling's own thread could be the only one indexed so far.
+    expect(h.listThreads).not.toHaveBeenCalled();
+    expect(h.persist).not.toHaveBeenCalled();
+  });
+
+  it("puts every spelling of one folder in one group", async () => {
+    const h = track(
+      harness({
+        terminals: [
+          terminal("pane-1", { cwd: "/tmp/repo" }),
+          terminal("pane-2", { cwd: "/private/tmp/repo" }),
+        ],
+        panes: [saved("pane-1", "Fix the tests"), saved("pane-2", "Fix the tests")],
+        threads: [thread("session-1", "Fix the tests")],
+        folders: { "/tmp/repo": "/private/tmp/repo" },
+      })
+    );
+
+    working("pane-1");
+    await vi.advanceTimersByTimeAsync(DELAYS[0]);
+
+    expect(h.listThreads).toHaveBeenCalledTimes(1);
+    expect(h.listThreads).toHaveBeenCalledWith(
+      ["/tmp/repo", "/private/tmp/repo"],
+      SPAWN_S,
+      undefined
+    );
+    // The other spelling's pane was sent the same prompt, so it is a rival.
+    expect(h.persist).not.toHaveBeenCalled();
+  });
+
+  it("stops writing once disposed mid-pass", async () => {
+    const ids = ["pane-1", "pane-2"];
+    const h = track(
+      harness({
+        terminals: ids.map((id) => terminal(id)),
+        panes: ids.map((id) => saved(id, `Triage ${id}`)),
+        threads: ids.map((id, i) => thread(`session-${i}`, `Triage ${id}`)),
+      })
+    );
+    h.persist.mockImplementationOnce(async () => {
+      h.service.dispose();
+      return "filled";
+    });
+
+    working("pane-1");
+    working("pane-2");
+    await vi.advanceTimersByTimeAsync(DELAYS[0]);
+
+    expect(h.persist).toHaveBeenCalledTimes(1);
+    expect(h.ptyClient.noteLiveAgentSessionId).not.toHaveBeenCalled();
+  });
+
+  it("writes nothing once the app starts quitting mid-query", async () => {
+    const h = track(harness());
+    h.listThreads.mockImplementationOnce(async () => {
+      h.world.quitting = true;
+      return h.world.threads;
+    });
+
+    working("pane-1");
+    await vi.advanceTimersByTimeAsync(DELAYS[0]);
+
+    expect(h.persist).not.toHaveBeenCalled();
   });
 
   it("doesn't tell the host about an id the saved pane refused", async () => {

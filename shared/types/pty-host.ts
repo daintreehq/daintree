@@ -1211,6 +1211,8 @@ export interface PtyHostTerminalInfo {
    * means none was observed. Reset with the record when the PTY is replaced.
    */
   agentIncarnation?: number;
+  /** Lifecycle-ledger generation this record belongs to, so a reader can tell it from a relaunch's. */
+  launchGeneration?: number;
   /** Runtime-detected agent identity (cleared when the agent exits). */
   detectedAgentId?: BuiltInAgentId;
   /** Runtime-detected non-agent process icon id (npm, yarn, etc.). Cleared when the process exits. */

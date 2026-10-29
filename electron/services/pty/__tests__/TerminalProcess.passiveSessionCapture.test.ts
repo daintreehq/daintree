@@ -657,6 +657,19 @@ describe("passive agent session capture", () => {
       expect(captured[0].launchGeneration).toBe(7);
     });
 
+    it("still journals when Daintree's own teardown finds no farewell", async () => {
+      const terminal = track(createTerminal());
+      promoteCodex(terminal);
+      terminal.noteLiveAgentSessionId(LIVE_ID, 7);
+      // Adopted, not captured: the teardown never saw this id printed.
+      expect(terminal.getInfo().sessionIdCapturedAtTeardown).toBeUndefined();
+      terminal.kill("graceful-shutdown");
+      mockPty(terminal).__emitExit(0);
+
+      await flushCapture();
+      expect(captured.map((c) => c.record.sessionId)).toEqual([LIVE_ID]);
+    });
+
     it("gives way to a farewell naming the conversation the run ended in", async () => {
       const terminal = track(createTerminal());
       promoteCodex(terminal);

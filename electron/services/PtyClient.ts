@@ -203,6 +203,8 @@ interface TerminalInfoResponse {
    * means none was observed. Reset with the record when the PTY is replaced.
    */
   agentIncarnation?: number;
+  /** Lifecycle-ledger generation of the record that answered. */
+  launchGeneration?: number;
   /** Runtime-detected agent identity (cleared when the agent exits). */
   detectedAgentId?: BuiltInAgentId;
   /** Runtime-detected non-agent process icon id (npm, yarn, etc.). Cleared when the process exits. */

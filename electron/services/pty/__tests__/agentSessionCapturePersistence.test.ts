@@ -951,6 +951,29 @@ describe("captured agent session persistence (#12433)", () => {
       expect((await savedPane())?.agentSessionId).toBe("captured-at-exit");
     });
 
+    it("never replaces even an older generation's id this module wrote", async () => {
+      // An exit capture would supersede this one; a live attribution only fills.
+      const first = launch();
+      await seed([pane()]);
+      await writeBackCapturedSessionId(capture(first, { record: { sessionId: "first-run" } }));
+
+      const second = launch();
+      await expect(acceptLiveSessionAttribution(live(second))).resolves.toBe("conflict");
+      expect((await savedPane())?.agentSessionId).toBe("first-run");
+    });
+
+    it("leaves an exit capture's id to its own generation", async () => {
+      // The same-generation exception is for live claims only.
+      const generation = launch();
+      await seed([pane()]);
+      await writeBackCapturedSessionId(capture(generation, { record: { sessionId: "at-exit" } }));
+
+      await expect(
+        writeBackCapturedSessionId(capture(generation, { record: { sessionId: "again" } }))
+      ).resolves.toBe("conflict");
+      expect((await savedPane())?.agentSessionId).toBe("at-exit");
+    });
+
     it("refuses a run the pane has since relaunched past", async () => {
       const first = launch();
       launch();
@@ -1013,13 +1036,19 @@ describe("captured agent session persistence (#12433)", () => {
       const generation = launch();
       await seed([pane()]);
       const held = holdQueue();
-      const pending = acceptLiveSessionAttribution(live(generation));
+      void acceptLiveSessionAttribution(live(generation));
 
-      const drain = sealAndDrainCapturedSessionPersistence(5_000);
+      let drained = false;
+      const drain = sealAndDrainCapturedSessionPersistence(5_000).then((result) => {
+        drained = true;
+        return result;
+      });
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(drained).toBe(false);
+
       held.release();
       await expect(drain).resolves.toEqual({ drained: true, pending: 0 });
-      await expect(pending).resolves.toBe("filled");
-
+      expect((await savedPane())?.agentSessionId).toBe(SESSION_ID);
       await expect(acceptLiveSessionAttribution(live(generation))).resolves.toBe("sealed");
     });
 

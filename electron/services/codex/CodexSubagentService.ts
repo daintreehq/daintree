@@ -629,9 +629,10 @@ const CREATED_SINCE_MAX_PAGES = 4;
 const CREATED_SINCE_LOOKUP_TIMEOUT_MS = 5_000;
 
 /**
- * Every root thread in `cwd` created at or after `sinceSeconds`, newest first,
- * for attributing a live pane to its conversation. Null when the answer can't
- * be complete — a failed query, or more threads in the window than the page
+ * Every root thread in one folder created at or after `sinceSeconds`, newest
+ * first, for attributing a live pane to its conversation. `cwds` is every
+ * spelling the folder's panes use. Null when the answer can't be complete — a
+ * failed query, a malformed page, or more threads in the window than the page
  * budget reaches — because attribution is a uniqueness claim, and a thread left
  * unread could be the rival that makes a match ambiguous.
  *
@@ -640,26 +641,27 @@ const CREATED_SINCE_LOOKUP_TIMEOUT_MS = 5_000;
  * as it passes the window.
  */
 export async function listCodexThreadsCreatedSince(
-  cwd: string,
+  cwds: readonly string[],
   sinceSeconds: number,
   codexHome?: string
 ): Promise<CodexCreatedThread[] | null> {
   try {
     return await runCodexAppServerSession(
       async (call) => {
-        const cwds = await resolveCwdSpellings(cwd);
+        const spellings = [...new Set((await Promise.all(cwds.map(resolveCwdSpellings))).flat())];
         const found: CodexCreatedThread[] = [];
         let cursor: string | undefined;
         for (let page = 0; page < CREATED_SINCE_MAX_PAGES; page++) {
           const response = await call<{ data?: unknown; nextCursor?: unknown }>("thread/list", {
-            cwd: cwds,
+            cwd: spellings,
             sortKey: "created_at",
             sortDirection: "desc",
             limit: CREATED_SINCE_PAGE_SIZE,
             useStateDbOnly: true,
             ...(cursor !== undefined && { cursor }),
           });
-          const threads = Array.isArray(response?.data) ? (response.data as RawThread[]) : [];
+          if (!Array.isArray(response?.data)) return null;
+          const threads = response.data as RawThread[];
           let passedWindow = false;
           for (const thread of threads) {
             const createdAt = numberOf(thread.createdAt);
