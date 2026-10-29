@@ -55,6 +55,9 @@ import {
 } from "../../../ipc/endpointRegistry.js";
 import type { HttpLifecycleDeps } from "../httpLifecycle.js";
 import { MCP_SSE_HEARTBEAT_INTERVAL_MS, minimumPermittingTier } from "../shared.js";
+import { NATIVE_GRANT_TOOL_IDS } from "../../../../shared/config/mcpGrants.js";
+import { HELP_TIER_CUMULATIVE } from "../../../../shared/config/helpAssistantTierAllowlists.js";
+import { NATIVE_GRANT_USE_POLICY_OVERRIDES } from "../../../../shared/config/nativeGrantUsePolicies.js";
 import type { SessionServerDeps } from "../sessionServer.js";
 import { ResourceOwnershipLedger, helpOwnershipPrincipal } from "../resourceOwnership.js";
 import { SessionBindingError, WorkspaceBindingError } from "../rendererBridge.js";
@@ -933,6 +936,40 @@ describe("HttpLifecycle", () => {
       expect(attempt).toThrow(/cannot cover terminal\.closeAll:/);
       expect(attempt).toThrow(/Remove it\b/);
       expect(grantCacheOf(deps).issueNativeGrant).not.toHaveBeenCalled();
+    });
+
+    // The Settings form offers exactly `NATIVE_GRANT_TOOL_IDS` (#14982), so the
+    // list has to agree with this method in both directions: every offered tool
+    // mints, and every candidate left off it is one this method refuses.
+    it("accepts every tool the Settings form offers and refuses every one it leaves out", () => {
+      const deps = fakeDeps();
+      resolverOf(deps).mockReturnValue("transport-1");
+      grantCacheOf(deps).issueNativeGrant.mockImplementation(
+        (params: { allowedTools: string[] }) => mintEntry(params.allowedTools, 1)
+      );
+      const lc = new HttpLifecycle(deps);
+      expect(NATIVE_GRANT_TOOL_IDS.length).toBeGreaterThan(0);
+
+      for (const toolId of NATIVE_GRANT_TOOL_IDS) {
+        expect(() =>
+          lc.issueNativeGrant("help-1", { allowedTools: [toolId], maxUses: 1 }, 42)
+        ).not.toThrow();
+      }
+
+      const offered = new Set(NATIVE_GRANT_TOOL_IDS);
+      const leftOut = [
+        ...HELP_TIER_CUMULATIVE.full,
+        ...Object.keys(NATIVE_GRANT_USE_POLICY_OVERRIDES),
+      ].filter((toolId) => !offered.has(toolId));
+      expect(leftOut.length).toBeGreaterThan(0);
+      for (const toolId of leftOut) {
+        expect(() =>
+          lc.issueNativeGrant("help-1", { allowedTools: [toolId], maxUses: 1 }, 42)
+        ).toThrow();
+      }
+      expect(grantCacheOf(deps).issueNativeGrant).toHaveBeenCalledTimes(
+        NATIVE_GRANT_TOOL_IDS.length
+      );
     });
 
     it("rejects an out-of-range maxUses", () => {

@@ -81,7 +81,15 @@ export function SessionLiveStatusCard({ configuredTier }: SessionLiveStatusCardP
               ) : (
                 <div className="text-2xs text-text-secondary">No per-tool grants active</div>
               )}
-              {sessionId && <NativeGrantsSection helpSessionId={sessionId} grants={nativeGrants} />}
+              {/* Keyed like the per-tool list: an approval still in flight for
+                  the last session must not clear or fail this one's form. */}
+              {sessionId && (
+                <NativeGrantsSection
+                  key={sessionId}
+                  helpSessionId={sessionId}
+                  grants={nativeGrants}
+                />
+              )}
             </div>
           ) : undefined
         }

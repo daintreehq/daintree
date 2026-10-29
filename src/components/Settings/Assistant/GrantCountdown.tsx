@@ -2,6 +2,9 @@ import { useState } from "react";
 import { formatCountdown } from "@/utils/formatCountdown";
 import { grantDeadline } from "@/utils/grantDeadline";
 import { useVisibilityAwareInterval } from "@/hooks/useVisibilityAwareInterval";
+import { MCP_GRANT_MAX_LIFETIME_MS } from "@shared/config/mcpGrants";
+
+const CEILING_MINUTES = Math.round(MCP_GRANT_MAX_LIFETIME_MS / 60_000);
 
 // Grant expiry countdown. Re-renders once a second — a semantic countdown (the
 // decay IS the signal), so it sits outside the motion tiers. It counts to the
@@ -26,7 +29,7 @@ export function GrantCountdown({
     <span role="timer" className="font-mono text-text-secondary tabular-nums shrink-0">
       {remainingMs <= 0
         ? "expiring"
-        : `${formatCountdown(remainingMs / 1000)} left${atCeiling ? " · 30-minute limit" : ""}`}
+        : `${formatCountdown(remainingMs / 1000)} left${atCeiling ? ` · ${CEILING_MINUTES}-minute limit` : ""}`}
     </span>
   );
 }
