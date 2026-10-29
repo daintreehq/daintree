@@ -73,7 +73,12 @@ import { SinceReviewNotice, describeSinceReviewNotice } from "./SinceReviewNotic
 import type { DiffViewerAnnotations } from "@/components/Worktree/DiffViewer";
 import { useDiffNotesStore } from "@/store/diffNotesStore";
 import type { DiffNoteDeliveryResult } from "@/hooks/useDiffNoteDelivery";
-import { DiffNotesSendMenu, sendDiffNotes, type DiffNoteSendRequest } from "./DiffNotesSendMenu";
+import {
+  DiffNotesSendMenu,
+  offerSentNotesUndo,
+  sendDiffNotes,
+  type DiffNoteSendRequest,
+} from "./DiffNotesSendMenu";
 import { PendingFileNotes } from "@/components/Worktree/DiffNoteWidgets";
 import { PANE_TOOLBAR_TEXT_BUTTON_CLASS } from "@/components/ui/paneToolbarStyles";
 import { useToolbarRoving } from "@/hooks/useToolbarRoving";
@@ -501,7 +506,8 @@ export function DiffPane({
     )
   );
   // A failed send keeps its notes pending and names what failed, with a retry
-  // aimed at the same agent and scope; a delivered one says where it went.
+  // aimed at the same agent and scope; a delivered one says where it went, and
+  // its Undo rides on a toast so it outlives this pane.
   const [noteSend, setNoteSend] = useState<{
     request: DiffNoteSendRequest;
     result: DiffNoteDeliveryResult;
@@ -509,6 +515,7 @@ export function DiffPane({
   const handleNoteSendResult = useCallback(
     (request: DiffNoteSendRequest, result: DiffNoteDeliveryResult) => {
       setNoteSend({ request, result });
+      if (result.ok) offerSentNotesUndo(result);
     },
     []
   );

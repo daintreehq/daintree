@@ -84,7 +84,13 @@ describe("deliverDiffNotes", () => {
 
     const result = deliverDiffNotes("agent", [note]);
 
-    expect(result).toEqual({ ok: true, sent: 1, kept: 0, targetTitle: "Claude" });
+    expect(result).toEqual({
+      ok: true,
+      sent: 1,
+      kept: 0,
+      targetTitle: "Claude",
+      cleared: [note],
+    });
     expect(writeMock).toHaveBeenCalledTimes(1);
     const [targetId, data] = writeMock.mock.calls[0]!;
     expect(targetId).toBe("agent");
@@ -163,7 +169,13 @@ describe("deliverDiffNotes", () => {
 
     const result = deliverDiffNotes("agent", [editing, ready]);
 
-    expect(result).toEqual({ ok: true, sent: 1, kept: 1, targetTitle: "Claude" });
+    expect(result).toEqual({
+      ok: true,
+      sent: 1,
+      kept: 1,
+      targetTitle: "Claude",
+      cleared: [ready],
+    });
     expect(writeMock.mock.calls[0]![1]).toContain("Ready to go");
     expect(writeMock.mock.calls[0]![1]).not.toContain("Half written");
     expect(useDiffNotesStore.getState().notes[editing.id]).toBeDefined();

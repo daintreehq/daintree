@@ -70,7 +70,15 @@ export function useDiffNoteTargets(): DiffNoteTarget[] {
 }
 
 export type DiffNoteDeliveryResult =
-  { ok: true; sent: number; kept: number; targetTitle: string } | { ok: false; message: string };
+  | {
+      ok: true;
+      sent: number;
+      kept: number;
+      targetTitle: string;
+      /** The notes the send cleared, as they were stored, so an Undo can put them back. */
+      cleared: readonly DiffNote[];
+    }
+  | { ok: false; message: string };
 
 /**
  * Pastes the notes into an agent pane and clears the ones that went. Never
@@ -122,11 +130,12 @@ export function deliverDiffNotes(
   }
   if (managed) terminalService?.notifyUserInput(targetId);
 
-  const sent = useDiffNotesStore.getState().clearSent(ordered);
+  const cleared = useDiffNotesStore.getState().clearSent(ordered);
   return {
     ok: true,
-    sent,
-    kept: notes.length - sent,
+    sent: cleared.length,
+    kept: notes.length - cleared.length,
     targetTitle: getTerminalDisplayTitle(panel, "base"),
+    cleared,
   };
 }

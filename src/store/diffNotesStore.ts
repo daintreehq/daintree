@@ -46,11 +46,14 @@ interface DiffNotesState {
    * so an Undo can never overwrite a newer revision.
    */
   restoreNote: (note: DiffNote) => void;
+  /** `restoreNote` for a batch in one write — the Undo for `clearSent`. */
+  restoreNotes: (notes: readonly DiffNote[]) => number;
   /**
    * Removes notes that were delivered, but only where the stored note still
    * matches what was sent — one edited after the prompt was built stays.
+   * Returns the revisions it removed, which is what an Undo puts back.
    */
-  clearSent: (sent: readonly DiffNote[]) => number;
+  clearSent: (sent: readonly DiffNote[]) => DiffNote[];
 }
 
 type DiffNotesPersistedState = Pick<DiffNotesState, "notes">;
@@ -77,6 +80,15 @@ export function mergeDiffNotesPersistedWrite({
     if (id in incomingNotes) continue;
     const current = onDiskNotes[id];
     if (current && !deepEqualIgnoringUndefined(current, before)) merged[id] = current;
+  }
+  // Note ids are never reused, so a writer only adds one disk already holds by
+  // restoring it. An Undo's snapshot is never newer than a sibling's rewrite,
+  // and restoring never overwrites a newer revision. An edit made since the
+  // restore (whose own write may not have landed) is newer, and goes through.
+  for (const [id, note] of Object.entries(incomingNotes)) {
+    if (id in baselineNotes) continue;
+    const current = onDiskNotes[id];
+    if (current && current.updatedAt >= note.updatedAt) merged[id] = current;
   }
   return { version: incoming.version, state: { notes: merged } };
 }
@@ -141,14 +153,26 @@ export const useDiffNotesStore = create<DiffNotesState>()(
           return { notes: rest };
         }),
 
-      restoreNote: (note) =>
+      restoreNote: (note) => {
+        get().restoreNotes([note]);
+      },
+
+      restoreNotes: (notes) => {
+        let restored = 0;
         set((state) => {
-          if (note.id in state.notes) return state;
-          return { notes: { ...state.notes, [note.id]: note } };
-        }),
+          const next = { ...state.notes };
+          for (const note of notes) {
+            if (note.id in next) continue;
+            next[note.id] = note;
+            restored++;
+          }
+          return restored === 0 ? state : { notes: next };
+        });
+        return restored;
+      },
 
       clearSent: (sent) => {
-        let cleared = 0;
+        const cleared: DiffNote[] = [];
         set((state) => {
           const next = { ...state.notes };
           for (const note of sent) {
@@ -156,9 +180,9 @@ export const useDiffNotesStore = create<DiffNotesState>()(
             if (!current) continue;
             if (current.updatedAt !== note.updatedAt || current.body !== note.body) continue;
             delete next[note.id];
-            cleared++;
+            cleared.push(current);
           }
-          return cleared === 0 ? state : { notes: next };
+          return cleared.length === 0 ? state : { notes: next };
         });
         return cleared;
       },

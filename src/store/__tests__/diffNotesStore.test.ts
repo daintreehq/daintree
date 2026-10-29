@@ -74,7 +74,7 @@ describe("diffNotesStore", () => {
 
     const cleared = useDiffNotesStore.getState().clearSent(snapshot);
 
-    expect(cleared).toBe(1);
+    expect(cleared).toEqual([sentAsIs]);
     const notes = useDiffNotesStore.getState().notes;
     expect(notes[sentAsIs.id]).toBeUndefined();
     expect(notes[editedAfter.id]?.body).toBe("Changed my mind");
@@ -130,6 +130,55 @@ describe("diffNotesStore", () => {
     });
     expect(merged.state.notes).toEqual({});
   });
+
+  it("doesn't let an Undo overwrite a revision a sibling saved after the send", () => {
+    const original = add();
+    const rewritten = {
+      ...original,
+      body: "Rewritten elsewhere",
+      updatedAt: original.updatedAt + 1,
+    };
+    const merged = mergeDiffNotesPersistedWrite({
+      baseline: { version: 0, state: { notes: {} } },
+      incoming: { version: 0, state: { notes: { [original.id]: original } } },
+      onDisk: { version: 0, state: { notes: { [original.id]: rewritten } } },
+    });
+    expect(merged.state.notes).toEqual({ [original.id]: rewritten });
+  });
+
+  it("keeps a sibling's rewrite saved in the same millisecond as the note an Undo restores", () => {
+    const original = add();
+    const rewritten = { ...original, body: "Same tick, new words" };
+    const merged = mergeDiffNotesPersistedWrite({
+      baseline: { version: 0, state: { notes: {} } },
+      incoming: { version: 0, state: { notes: { [original.id]: original } } },
+      onDisk: { version: 0, state: { notes: { [original.id]: rewritten } } },
+    });
+    expect(merged.state.notes[original.id]?.body).toBe("Same tick, new words");
+  });
+
+  it("lands an edit to a restored note whose restore never reached disk", () => {
+    const original = add();
+    const sibling = { ...original, body: "Rewritten elsewhere", updatedAt: original.updatedAt + 1 };
+    const edited = { ...original, body: "Edited after Undo", updatedAt: original.updatedAt + 2 };
+    const merged = mergeDiffNotesPersistedWrite({
+      baseline: { version: 0, state: { notes: {} } },
+      incoming: { version: 0, state: { notes: { [original.id]: edited } } },
+      onDisk: { version: 0, state: { notes: { [original.id]: sibling } } },
+    });
+    expect(merged.state.notes).toEqual({ [original.id]: edited });
+  });
+
+  it("lands an Undo when disk no longer holds the note", () => {
+    const original = add();
+    const other = add("src/b.ts");
+    const merged = mergeDiffNotesPersistedWrite({
+      baseline: { version: 0, state: { notes: { [other.id]: other } } },
+      incoming: { version: 0, state: { notes: { [original.id]: original, [other.id]: other } } },
+      onDisk: { version: 0, state: { notes: { [other.id]: other } } },
+    });
+    expect(merged.state.notes).toEqual({ [original.id]: original, [other.id]: other });
+  });
 });
 
 describe("diffNotesStore restoreNote — the Undo for deleteNote", () => {
@@ -150,5 +199,49 @@ describe("diffNotesStore restoreNote — the Undo for deleteNote", () => {
     useDiffNotesStore.setState({ notes: { [note.id]: newer } });
     useDiffNotesStore.getState().restoreNote(note);
     expect(useDiffNotesStore.getState().notes[note.id]?.body).toBe("Edited since");
+  });
+});
+
+describe("diffNotesStore restoreNotes — the Undo for clearSent", () => {
+  beforeEach(() => {
+    useDiffNotesStore.setState({ notes: {}, editingIds: {} });
+  });
+
+  it("puts every sent note back exactly as it was cleared", () => {
+    const first = add("src/a.ts");
+    const second = add("src/b.ts");
+    const left = add("src/c.ts");
+    const cleared = useDiffNotesStore.getState().clearSent([first, second]);
+
+    expect(useDiffNotesStore.getState().restoreNotes(cleared)).toBe(2);
+    expect(useDiffNotesStore.getState().notes).toEqual({
+      [first.id]: first,
+      [second.id]: second,
+      [left.id]: left,
+    });
+  });
+
+  it("restores the rest of a send without overwriting a note that came back newer", () => {
+    const first = add("src/a.ts");
+    const second = add("src/b.ts");
+    const cleared = useDiffNotesStore.getState().clearSent([first, second]);
+    const newer = { ...first, body: "Rewritten since", updatedAt: first.updatedAt + 1 };
+    useDiffNotesStore.setState({ notes: { [first.id]: newer } });
+
+    expect(useDiffNotesStore.getState().restoreNotes(cleared)).toBe(1);
+    expect(useDiffNotesStore.getState().notes).toEqual({
+      [first.id]: newer,
+      [second.id]: second,
+    });
+  });
+
+  it("restores nothing and keeps the same state when every note is already back", () => {
+    const note = add();
+    const cleared = useDiffNotesStore.getState().clearSent([note]);
+    useDiffNotesStore.getState().restoreNotes(cleared);
+    const before = useDiffNotesStore.getState().notes;
+
+    expect(useDiffNotesStore.getState().restoreNotes(cleared)).toBe(0);
+    expect(useDiffNotesStore.getState().notes).toBe(before);
   });
 });
