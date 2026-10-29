@@ -75,13 +75,13 @@ describe("isLearnableTerm", () => {
 
 describe("isEverydayPhrase", () => {
   it("holds when every word of the phrase is ordinary English", () => {
-    for (const phrase of ["just", "Next.", "use  state", "in it", "players", "make sure"]) {
+    for (const phrase of ["just", "Next.", "use  state", "in it", "players", "curl"]) {
       expect(isEverydayPhrase(phrase), phrase).toBe(true);
     }
   });
 
   it("fails on a phrase with any word that isn't, or with no words at all", () => {
-    for (const phrase of ["zoo stand", "dock or compose", "racked", "jest", "", " -- "]) {
+    for (const phrase of ["zoo stand", "stand zoo", "dock or compose", "jest", "", " -- "]) {
       expect(isEverydayPhrase(phrase), phrase).toBe(false);
     }
   });

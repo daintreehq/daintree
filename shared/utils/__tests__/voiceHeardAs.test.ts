@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { VoiceDictionaryEntry } from "../../types/ipc/api.js";
 import { findCorrectionCandidates } from "../phoneticSimilarity.js";
-import { acceptSuggestion, dictionaryTerms, mergeSuggestions } from "../voiceDictionary.js";
+import {
+  acceptSuggestion,
+  addDictionaryEntry,
+  dictionaryTerms,
+  mergeSuggestions,
+  updateDictionaryEntry,
+} from "../voiceDictionary.js";
 import { MAX_HEARD_AS_RULES, collectHeardAsRules, createHeardAsRewriter } from "../voiceHeardAs.js";
 
 function entry(term: string, heardAs: string[] = []): VoiceDictionaryEntry {
@@ -93,6 +99,7 @@ describe("collectHeardAsRules", () => {
         learned("Jest", ["just"]),
         learned("Nuxt", ["Next."]),
         learned("Zustand", ["zoo stand"]),
+        learned("useState", ["use state"]),
         entry("Revue", ["review"]),
         { ...entry("Next", ["next"]), source: "imported" },
       ])
@@ -142,6 +149,11 @@ describe("a correction learned onto an everyday word", () => {
 
   it("keeps the rule when the user types the everyday word in by hand", () => {
     expect(rewriterFor(entry("Jest", ["just"]))(sentence)).toBe("I Jest want to check");
+    const learnedJest = [learned("Jest", ["jessed"])];
+    const added = addDictionaryEntry(learnedJest, { term: "jest", heardAs: ["just"] }, 2);
+    expect(rewriterFor(...added)(sentence)).toBe("I Jest want to check");
+    const edited = updateDictionaryEntry(learnedJest, "Jest", { heardAs: ["jessed", "next"] });
+    expect(rewriterFor(...edited)("run next")).toBe("run Jest");
   });
 });
 

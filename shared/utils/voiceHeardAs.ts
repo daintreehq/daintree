@@ -55,21 +55,22 @@ const phraseKey = (phrase: string) => phrase.split(/\s+/).join(" ").toLowerCase(
  * transcript is split on, so neither becomes a rule. Nor does an everyday
  * phrase a correction taught ("just" fixed to Jest): that fix was right where
  * it was made, not everywhere the word is said, so the entry teaches only its
- * term. A form the user typed in stays a rule whatever it is.
+ * term. That phrase is a learned entry's first form, the one it was learned
+ * from; a form the user typed in stays a rule whatever it is.
  */
 export function collectHeardAsRules(entries: readonly VoiceDictionaryEntry[]): HeardAsRule[] {
   const rules: HeardAsRule[] = [];
   const claimed = new Set<string>();
   for (const { term, heardAs, source } of entries) {
     if (LINE_BREAK_RE.test(term)) continue;
-    for (const raw of heardAs) {
+    for (const [index, raw] of heardAs.entries()) {
       const heard = raw.trim().split(/\s+/).join(" ");
       const key = heard.toLowerCase();
       if (
         !HAS_WORD_RE.test(heard) ||
         heard.length > MAX_DICTIONARY_TERM_LENGTH ||
         claimed.has(key) ||
-        (source === "learned" && isEverydayPhrase(heard))
+        (source === "learned" && index === 0 && isEverydayPhrase(heard))
       ) {
         continue;
       }

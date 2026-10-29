@@ -323,13 +323,14 @@ export function acceptSuggestion(
   if (!suggestion) return state;
   // The pair the user saw, when the queue's copy has since been overwritten.
   const heard = normalizePhrase(utterance ?? suggestion.utterance);
-  const existing = state.dictionary.find((entry) => fold(entry.term) === key);
-  // Only a learned entry keeps an everyday heard form out of the heard-as
-  // rules, so one the user added the term to by hand never takes it on.
+  // Only the heard form a learned entry starts with stays out of the heard-as
+  // rules when it's everyday English, so an everyday one is never merged into
+  // a term already there, whoever added it.
+  const exists = state.dictionary.some((entry) => fold(entry.term) === key);
   const keepsHeard =
     heard !== null &&
     heard.length <= MAX_DICTIONARY_TERM_LENGTH &&
-    !(existing && existing.source !== "learned" && isEverydayPhrase(heard));
+    !(exists && isEverydayPhrase(heard));
   return {
     dictionary: addDictionaryEntry(
       state.dictionary,
