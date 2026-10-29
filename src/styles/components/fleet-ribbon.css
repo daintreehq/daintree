@@ -1,0 +1,30 @@
+/* ── Fleet ribbon ──
+ * The band under the toolbar that says fleet mode is on. It used to take the
+ * category pill tint, and a pill mix is the wrong strength for a full-width
+ * band: on the warm light palettes 20% amber over white lands on the beige the
+ * toolbar and sidebar already wear, and on dark the oklch mix keeps the
+ * canvas's hue at 12%, so fiordland's band came out teal and highlands' purple.
+ * The band is amber held at one lightness and chroma per polarity instead, in
+ * the theme's own amber hue, the way the remote-window light is
+ * (toolbar/surface.css). Lightness stays near where the pill tint put it, so
+ * the bar's text and controls keep their contrast, and chroma does the
+ * separating. Each chroma sits just inside what sRGB holds at its lightness for
+ * every amber, the colour-vision ones included, so no band leans on gamut
+ * mapping.
+ *
+ * The ink is for the marks that carry the mode without colour: the left
+ * stripe, the delivery track and the confirm glyph. The category text token
+ * falls to about 2:1 on a light band under the blue-yellow palette.
+ *
+ * shared/theme/__tests__/fleetRibbonContrast.test.ts reads these values and
+ * holds them against every built-in theme and colour-vision palette. */
+.fleet-ribbon-surface {
+  --fleet-ribbon-fill: oklch(from var(--color-category-amber) 0.25 0.05 h);
+  --fleet-ribbon-ink: oklch(from var(--color-category-amber) 0.76 0.13 h);
+  background-color: var(--fleet-ribbon-fill);
+}
+
+:where(.light, [data-color-mode="light"]) .fleet-ribbon-surface {
+  --fleet-ribbon-fill: oklch(from var(--color-category-amber) 0.89 0.062 h);
+  --fleet-ribbon-ink: oklch(from var(--color-category-amber) 0.5 0.1 h);
+}
