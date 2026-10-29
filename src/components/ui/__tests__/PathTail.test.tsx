@@ -102,10 +102,13 @@ describe("PathTail", () => {
     expect(tail.hasAttribute("data-cut")).toBe(true);
 
     // One layout unit over still fits, and Blink draws no ellipsis there; a
-    // marker would sit on the path's first glyph.
-    lay(tail, 100, 100 + 1 / 64);
-    current().report([tail]);
-    expect(tail.hasAttribute("data-cut")).toBe(false);
+    // marker would sit on the path's first glyph. At the 25% zoom floor that
+    // unit reads four times larger.
+    for (const over of [1 / 64, 1 / 16]) {
+      lay(tail, 100, 100 + over);
+      current().report([tail]);
+      expect(tail.hasAttribute("data-cut")).toBe(false);
+    }
   });
 
   it("reads every box in a batch before marking any", () => {
@@ -163,6 +166,8 @@ describe("PathTail", () => {
 
   it("observes every box afresh when a font finishes loading, until the last leaves", () => {
     const fonts = new EventTarget();
+    const added = vi.spyOn(fonts, "addEventListener");
+    const removed = vi.spyOn(fonts, "removeEventListener");
     Object.defineProperty(document, "fonts", { value: fonts, configurable: true });
     try {
       const { container, unmount } = render(
@@ -179,10 +184,10 @@ describe("PathTail", () => {
       expect(observer.unobserve.mock.calls.map(([el]) => el)).toEqual(tails);
       expect(observer.observe.mock.calls.map(([el]) => el)).toEqual(tails);
 
+      expect(removed).not.toHaveBeenCalled();
       unmount();
-      const after = observed().length;
-      fonts.dispatchEvent(new Event("loadingdone"));
-      expect(observed()).toHaveLength(after);
+      expect(added).toHaveBeenCalledTimes(1);
+      expect(removed.mock.calls).toEqual(added.mock.calls);
     } finally {
       Reflect.deleteProperty(document, "fonts");
     }
@@ -209,10 +214,13 @@ describe("PathTail", () => {
       </StrictMode>
     );
     const tail = container.firstElementChild!;
-    expect(current().observe).toHaveBeenLastCalledWith(tail);
+    // Set up, torn down, set up again: the box ends up watched exactly once.
+    expect(observed()).toEqual([tail, tail]);
+    expect(unobserved()).toEqual([tail]);
     expect(current().disconnect).not.toHaveBeenCalled();
 
     unmount();
+    expect(unobserved()).toEqual([tail, tail]);
     expect(observers.every((o) => o.disconnect.mock.calls.length === 1)).toBe(true);
   });
 
