@@ -1190,6 +1190,22 @@ describe("AgentSetupWizard completion action", () => {
     expect(buttonLabels().filter((l) => l !== "Close dialog")).toEqual(["Launch an agent"]);
   });
 
+  // The summary's counts come from the wizard's live availability, which a
+  // CompleteStep-only render can't prove: Settings → General files an agent with
+  // no credentials detected under needs attention, so the wizard must not call it ready.
+  it("does not call an agent with no credentials detected ready", async () => {
+    await openAt({ claude: "ready", gemini: "unauthenticated" });
+    await clickButton("Continue"); // agents -> complete
+
+    expect(document.body.textContent).toContain(
+      "You have 1 agent ready to use. 1 other agent may ask you to sign in."
+    );
+    expect(document.querySelector('[data-testid="agent-card-gemini"]')?.textContent).toContain(
+      "No credentials detected"
+    );
+    expect(buttonLabels().filter((l) => l !== "Close dialog")).toEqual(["Launch an agent"]);
+  });
+
   it("starts the work and closes when the forward action is taken", async () => {
     const onClose = await openAt({ claude: "ready" });
     await clickButton("Continue");

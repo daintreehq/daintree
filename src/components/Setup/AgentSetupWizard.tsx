@@ -17,7 +17,13 @@ import { cliAvailabilityClient } from "@/clients";
 import { logError } from "@/utils/logger";
 import type { CliAvailability } from "@shared/types";
 import { useAgentSetupPoll } from "./useAgentSetupPoll";
-import { isAgentInstalled, isAgentLaunchable } from "../../../shared/utils/agentAvailability";
+import {
+  isAgentInstalled,
+  isAgentLaunchable,
+  isAgentReady,
+  isAgentUnauthenticated,
+} from "../../../shared/utils/agentAvailability";
+import { getAgentHealth } from "@/components/Settings/agentHealth";
 import {
   Sparkles,
   ChevronLeft,
@@ -731,7 +737,7 @@ export function AgentSetupWizard({
   const flow = useMemo(() => visibleFlowSteps(state), [state]);
   const totalSteps = flow.length;
   const stepNumber = Math.max(0, flow.indexOf(state.step.type));
-  // "Complete" is only true when something is ready; a deferred install saves
+  // "Complete" is only true when something can launch; a deferred install saves
   // the user's choices and says so rather than claiming success.
   const stepMeta =
     state.step.type === "complete" && installedAgents.length === 0
@@ -1008,7 +1014,11 @@ export function AgentSetupWizard({
               )}
               {state.step.type === "input" && <AgentInputStep onBusyChange={setIsSaving} />}
               {state.step.type === "complete" && (
-                <CompleteStep installedAgents={installedAgents} hasWorkspace={hasWorkspace} />
+                <CompleteStep
+                  installedAgents={installedAgents}
+                  availability={state.availability}
+                  hasWorkspace={hasWorkspace}
+                />
               )}
             </m.div>
           </AnimatePresence>
@@ -1411,20 +1421,41 @@ function PermissionsStep({
 
 export function CompleteStep({
   installedAgents,
+  availability,
   hasWorkspace = true,
 }: {
+  /** Launchable agents, which is wider than ready: see `availability`. */
   installedAgents: string[];
+  availability: CliAvailability;
   hasWorkspace?: boolean;
 }) {
   const hasAgents = installedAgents.length > 0;
-  const readyLine = `You have ${pluralize(installedAgents.length, "agent")} ready to use.`;
+  // Launchable includes agents with no credentials detected, which Settings → General
+  // files under needs attention. "Ready" here has to mean what it means there, so the
+  // two are counted apart rather than inferred from the list's length.
+  const readyCount = installedAgents.filter((id) => isAgentReady(availability[id])).length;
+  const unauthenticatedCount = installedAgents.filter((id) =>
+    isAgentUnauthenticated(availability[id])
+  ).length;
+  const readyLine =
+    unauthenticatedCount === 0
+      ? `You have ${pluralize(readyCount, "agent")} ready to use.`
+      : readyCount === 0
+        ? `You can launch ${pluralize(unauthenticatedCount, "agent")}, which may ask you to sign in.`
+        : `You have ${pluralize(readyCount, "agent")} ready to use. ${pluralize(unauthenticatedCount, "other agent")} may ask you to sign in.`;
 
   return (
     <div className="space-y-4">
       <div className="flex items-start gap-3">
         {/* Celebrate only a result: a deferred install is not one. */}
         {hasAgents && (
-          <Sparkles className="w-5 h-5 text-status-success shrink-0 mt-0.5" aria-hidden="true" />
+          <Sparkles
+            className={cn(
+              "w-5 h-5 shrink-0 mt-0.5",
+              readyCount > 0 ? "text-status-success" : "text-text-secondary"
+            )}
+            aria-hidden="true"
+          />
         )}
         <p className="text-sm text-text-secondary">
           {hasAgents
@@ -1443,6 +1474,8 @@ export function CompleteStep({
             const Icon = agent.icon;
             const presetCount = agent.presets?.length ?? 0;
             const shortcut = keybindingService.getEffectiveCombo(`agent.${id}`);
+            const health = getAgentHealth(availability[id]);
+            const status = health.kind === "attention" ? health : null;
 
             return (
               <div
@@ -1457,7 +1490,18 @@ export function CompleteStep({
                 {presetCount > 1 && (
                   <CountBadge data-testid="preset-count-badge">{presetCount} presets</CountBadge>
                 )}
-                {shortcut && <KbdChord shortcut={shortcut} className="ml-auto" />}
+                {status && (
+                  <span
+                    data-agent-status={status.label}
+                    className="ml-auto flex shrink-0 items-center gap-1.5"
+                  >
+                    <status.Icon className="w-3.5 h-3.5 text-status-warning" aria-hidden="true" />
+                    <span className="text-xs text-text-secondary">{status.label}</span>
+                  </span>
+                )}
+                {shortcut && (
+                  <KbdChord shortcut={shortcut} className={status ? undefined : "ml-auto"} />
+                )}
               </div>
             );
           })}
