@@ -4,15 +4,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   APP_THEME_TOKEN_KEYS,
   DIFF_TEXT_MIN_CONTRAST,
-  DISPLAY_SURFACES,
+  STATUS_TEXT_CONTRAST,
   STATUS_TEXT_INKS,
-  blendOverBackground,
   contrastRatio,
   getAppThemeById,
   getAppThemeCssVariables,
   hexToOklch,
   normalizeAppColorScheme,
   resolveDiffTextBackdrops,
+  resolveStatusTextBackdrops,
   type AppColorScheme,
 } from "@shared/theme";
 import { BLUE_YELLOW_OVERRIDES, RED_GREEN_OVERRIDES } from "@shared/theme/colorVisionOverrides";
@@ -353,41 +353,36 @@ describe("applyDefaultAppTheme (#9169)", () => {
 });
 
 describe("applyColorVisionMode status text inks", () => {
-  // A git status letter paints the text-grade twin of its status hue. The twin is
-  // measured against the theme's own surfaces, so the static CVD maps can't carry
-  // it: a mode that swaps the hue has to re-derive it, or the letter keeps the very
-  // red or green the mode exists to replace.
+  // A git status letter paints the text-grade twin of its status hue, lifted
+  // against the theme's own backdrops, so a mode that swaps the hue has to lift
+  // it again or the letter keeps the very red or green the mode replaces.
   it.each([
     ["red-green", RED_GREEN_OVERRIDES, "daintree"],
     ["red-green", RED_GREEN_OVERRIDES, "bondi"],
     ["blue-yellow", BLUE_YELLOW_OVERRIDES, "highlands"],
     ["blue-yellow", BLUE_YELLOW_OVERRIDES, "hokkaido"],
-  ] as const)("%s re-derives the letters it recolours on %s", (mode, overrides, id) => {
+  ] as const)("%s lifts the letters it recolours on %s", (mode, overrides, id) => {
     const scheme = getAppThemeById(id)!;
     const root = document.createElement("div");
     applyAppThemeToRoot(root, scheme);
     applyColorVisionMode(root, mode, scheme);
 
-    let recoloured = 0;
-    for (const [base, text] of Object.entries(STATUS_TEXT_INKS)) {
-      const hue = overrides[`--theme-${base}`];
+    const recoloured = Object.entries(STATUS_TEXT_INKS).filter(([status, text]) => {
+      const hue = overrides[`--theme-${status}`];
       const ink = root.style.getPropertyValue(`--theme-${text}`);
       if (!hue) {
         expect(ink, text).toBe(scheme.tokens[text]);
-        continue;
+        return false;
       }
-      recoloured++;
       expect(ink, text).not.toBe(scheme.tokens[text]);
-      for (const surfaceKey of DISPLAY_SURFACES) {
-        const surface = scheme.tokens[surfaceKey];
-        expect(contrastRatio(ink, surface), `${text} on ${surfaceKey}`).toBeGreaterThanOrEqual(4.5);
-        expect(
-          contrastRatio(ink, blendOverBackground(hue, surface, 0.15)),
-          `${text} on its wash over ${surfaceKey}`
-        ).toBeGreaterThanOrEqual(4.5);
+      for (const backdrop of resolveStatusTextBackdrops(hue, scheme.tokens)) {
+        expect(contrastRatio(ink, backdrop.hex), `${text} on ${backdrop.label}`).toBeGreaterThanOrEqual(
+          STATUS_TEXT_CONTRAST.minimum
+        );
       }
-    }
-    expect(recoloured).toBe(2);
+      return true;
+    });
+    expect(recoloured).toHaveLength(2);
   });
 
   it("returning to default restores the theme's own inks", () => {
