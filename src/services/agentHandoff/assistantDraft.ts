@@ -1,5 +1,7 @@
 import type { PluginSendToAgentRefusalReason, PluginSendToAgentResult } from "@shared/types/plugin";
 import { selectActiveSlot, useHelpPanelStore } from "@/store/helpPanelStore";
+import { useFocusStore } from "@/store/focusStore";
+import { suppressSidebarResizes } from "@/lib/sidebarToggle";
 import { resolveAssistantDraftRefusal } from "./draftTarget";
 import {
   appendHandoffToDraft,
@@ -32,10 +34,15 @@ export function draftAssistantContext(content: AgentHandoffContent): PluginSendT
   if (refusal !== null) return refuse(refusal);
 
   appendHandoffToDraft(terminalId, content);
-  // Re-selecting the active slot is what leaves the global assistant view, which
-  // would otherwise sit over the session that just took the draft.
+  // Revealed the way the panel's other reveals do it: a focus-mode hide would
+  // keep an open panel off screen, and re-selecting the active slot is what
+  // leaves the global assistant view that would otherwise cover the session.
+  useFocusStore.getState().clearAssistantGesture();
   help.setActiveSlot(help.activeSlot);
-  help.setOpen(true);
+  if (!help.isOpen) {
+    suppressSidebarResizes();
+    help.setOpen(true);
+  }
   help.requestFocus();
   reportDraftAdded("the Assistant");
   return { status: "drafted", terminalId };

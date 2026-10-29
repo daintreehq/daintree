@@ -4,7 +4,15 @@ import type { PtyPanelData } from "@shared/types/panel";
 
 // The real store graph pulls the whole app in; these are all the module reads,
 // and driving them directly keeps the draft contract legible.
-const { asStore, panelState, inputState, helpState, drafts } = vi.hoisted(() => {
+const {
+  asStore,
+  panelState,
+  inputState,
+  helpState,
+  drafts,
+  clearAssistantGesture,
+  suppressSidebarResizes,
+} = vi.hoisted(() => {
   const drafts = new Map<string, string>();
   return {
     drafts,
@@ -30,7 +38,10 @@ const { asStore, panelState, inputState, helpState, drafts } = vi.hoisted(() => 
       }),
       bumpExternalDraftRevision: vi.fn(),
     },
+    clearAssistantGesture: vi.fn(),
+    suppressSidebarResizes: vi.fn(),
     helpState: {
+      isOpen: false,
       activeSlot: 2,
       slot: { terminalId: "help" as string | null, agentId: "claude" as string | null },
       setActiveSlot: vi.fn<(slot: number) => void>(),
@@ -52,6 +63,8 @@ vi.mock("@/store/preferencesStore", () => ({
   usePreferencesStore: asStore({ showAgentTaskTitles: true }),
 }));
 vi.mock("@/store/createWorktreeStore", () => ({ getCurrentViewStoreOrNull: () => null }));
+vi.mock("@/store/focusStore", () => ({ useFocusStore: asStore({ clearAssistantGesture }) }));
+vi.mock("@/lib/sidebarToggle", () => ({ suppressSidebarResizes }));
 vi.mock("@/store/helpPanelStore", () => ({
   useHelpPanelStore: asStore(helpState),
   selectActiveSlot: (state: typeof helpState) => state.slot,
@@ -83,11 +96,12 @@ beforeEach(() => {
   panelState.panelsById = { help: assistantPanel() };
   inputState.hybridInputEnabled = true;
   helpState.slot = { terminalId: "help", agentId: "claude" };
+  helpState.isOpen = false;
   useTypingLocatorStore.setState({ message: null, revision: 0 });
 });
 
 describe("draftAssistantContext", () => {
-  it("drafts below what the user typed, submits nothing, and opens on the composer", () => {
+  it("drafts below what the user typed and opens the panel on the composer", () => {
     drafts.set("proj-1:help", "what went wrong here?");
     const result = draftAssistantContext({
       text: "Tests failed",
@@ -105,9 +119,26 @@ describe("draftAssistantContext", () => {
     expect(useTypingLocatorStore.getState().message?.kind).toBe("draft-added");
   });
 
-  it("re-selects the session it drafted into, so a global view doesn't cover it", () => {
+  it("re-selects the session it drafted into", () => {
     draftAssistantContext({ text: "body" });
     expect(helpState.setActiveSlot).toHaveBeenCalledWith(helpState.activeSlot);
+  });
+
+  it("lifts a focus-mode hide, which would keep the open panel off screen", () => {
+    draftAssistantContext({ text: "body" });
+    expect(clearAssistantGesture).toHaveBeenCalledTimes(1);
+  });
+
+  it("holds the grid still only when it opens the panel", () => {
+    draftAssistantContext({ text: "body" });
+    expect(suppressSidebarResizes).toHaveBeenCalledTimes(1);
+
+    vi.clearAllMocks();
+    helpState.isOpen = true;
+    draftAssistantContext({ text: "body" });
+    expect(suppressSidebarResizes).not.toHaveBeenCalled();
+    expect(helpState.setOpen).not.toHaveBeenCalled();
+    expect(helpState.requestFocus).toHaveBeenCalledTimes(1);
   });
 
   it("refuses with the reason, writes nothing, and leaves the panel alone", () => {
@@ -118,6 +149,7 @@ describe("draftAssistantContext", () => {
     expect(inputState.setDraftInput).not.toHaveBeenCalled();
     expect(helpState.setOpen).not.toHaveBeenCalled();
     expect(helpState.requestFocus).not.toHaveBeenCalled();
+    expect(clearAssistantGesture).not.toHaveBeenCalled();
     const message = useTypingLocatorStore.getState().message;
     expect(message?.kind).toBe("draft-refused");
     expect(message?.lead).toContain("locked");

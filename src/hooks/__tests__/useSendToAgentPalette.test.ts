@@ -36,13 +36,15 @@ vi.mock("@/clients", () => ({ terminalClient: { write: vi.fn() } }));
 vi.mock("@shared/config/panelKindRegistry", () => ({ panelKindHasPty: () => true }));
 vi.mock("@/utils/terminalChrome", () => ({ deriveTerminalChrome: () => ({ label: "" }) }));
 vi.mock("./useSearchablePalette", () => ({ useSearchablePalette: () => ({}) }));
-// The draft service and the pane focus request pull the real store graph into
-// this node-environment suite; the openers only need the heading.
+// The draft service, the pane focus request and the worktree selection pull the
+// real store graph into this node-environment suite; the openers only need the
+// heading.
 vi.mock("@/services/agentHandoff/agentDraft", () => ({
   draftAgentContext: vi.fn(),
   paneHandoffHeading: (_id: string, title: string) => ({ title }),
 }));
 vi.mock("@/components/Terminal/paneFocusRequest", () => ({ requestPaneFocus: vi.fn() }));
+vi.mock("@/store/worktreeStore", () => ({ useWorktreeSelectionStore: { getState: () => ({}) } }));
 
 import { openSendToAgentPalette, openSendToAgentPaletteWithText } from "../useSendToAgentPalette";
 import {

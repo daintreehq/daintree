@@ -13,8 +13,11 @@ import { getBuiltInRuntimeAgentId } from "@/utils/terminalType";
 import {
   draftAgentContext,
   paneHandoffHeading,
+  reportDraftNotAdded,
   type AgentHandoffContent,
 } from "@/services/agentHandoff/agentDraft";
+import { AGENT_CONTEXT_MAX_TEXT_LENGTH } from "@shared/utils/agentContextDrag";
+import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { requestPaneFocus } from "@/components/Terminal/paneFocusRequest";
 import { suppressPaletteFocusRestore } from "@/components/ui/paletteFocusRestore";
 import { useWorktreeStoreOptional } from "./useWorktreeStore";
@@ -146,7 +149,7 @@ function subtitleFor(
   return [lead, worktreeName].filter(Boolean).join(" · ") || undefined;
 }
 
-function deliveryFor(panel: PanelRecord): SendToAgentDelivery {
+function deliveryFor(panel: PtyPanelData): SendToAgentDelivery {
   return getBuiltInRuntimeAgentId(panel) !== undefined ? "draft" : "paste";
 }
 
@@ -178,6 +181,25 @@ function pasteToTarget(targetId: string, text: string): void {
   } else {
     terminalClient.write(targetId, formatForTerminalPaste(text, { bracketedPasteMode: true }));
   }
+}
+
+/**
+ * Bring a pane forward with the keyboard in its composer, the walk the other
+ * reveal paths take: its worktree, then its tab — a group renders its stored
+ * tab over the focused one — then focus.
+ */
+function revealComposer(terminalId: string): void {
+  const state = usePanelStore.getState();
+  const worktreeId = state.panelsById[terminalId]?.worktreeId?.trim();
+  const selection = useWorktreeSelectionStore.getState();
+  if (worktreeId && worktreeId !== selection.activeWorktreeId) {
+    selection.trackTerminalFocus(worktreeId, terminalId);
+    selection.selectWorktree(worktreeId);
+  }
+  const group = state.getPanelGroup(terminalId);
+  if (group) state.setActiveTab(group.id, terminalId);
+  state.activateTerminal(terminalId);
+  requestPaneFocus(terminalId, "hybridInput");
 }
 
 function clearPending(): void {
@@ -298,6 +320,14 @@ export function useSendToAgentPalette() {
         palette.close();
         return;
       }
+      // A draft holds a bounded block. A selection can run past it, and cutting
+      // it short would hand the agent less than the user picked without saying.
+      if (content.text.length > AGENT_CONTEXT_MAX_TEXT_LENGTH) {
+        reportDraftNotAdded(
+          `it's over ${AGENT_CONTEXT_MAX_TEXT_LENGTH.toLocaleString("en-US")} characters`
+        );
+        return;
+      }
       // The draft gate reports its own refusal.
       if (draftAgentContext(item.id, content).status !== "drafted") return;
       clearPending();
@@ -305,8 +335,7 @@ export function useSendToAgentPalette() {
       // write the instruction that goes with it.
       suppressPaletteFocusRestore();
       palette.close();
-      usePanelStore.getState().activateTerminal(item.id);
-      requestPaneFocus(item.id, "hybridInput");
+      revealComposer(item.id);
     },
     [palette]
   );

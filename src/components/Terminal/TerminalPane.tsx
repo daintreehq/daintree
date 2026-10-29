@@ -112,9 +112,7 @@ import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { terminalClient } from "@/clients";
 import { useHelpPanelStore, selectActiveSlot } from "@/store/helpPanelStore";
-import { openSendToAgentPaletteWithText } from "@/hooks/useSendToAgentPalette";
-import { paneHandoffHeading, type AgentHandoffContent } from "@/services/agentHandoff/agentDraft";
-import { draftAssistantContext } from "@/services/agentHandoff/assistantDraft";
+import { sendCompletionToAgent, sendCompletionToAssistant } from "./completionHandoff";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import type { HybridInputBarHandle } from "./HybridInputBar";
 const LazyHybridInputBar = lazy(() =>
@@ -393,16 +391,6 @@ export interface TerminalPaneProps {
   onTabClose?: (tabId: string) => void;
   onTabRename?: (tabId: string, newTitle: string) => void;
   onAddTab?: () => void;
-}
-
-/**
- * What a completion hand-off carries: the tail of the buffer, headed so the
- * receiving draft says where it came from. It is the scrollback rather than an
- * extracted answer, which is why it lands in a draft the user reads first.
- */
-function captureCompletionHandoff(terminalId: string): AgentHandoffContent | null {
-  const text = peekTerminalService()?.captureBufferText(terminalId, 20000) ?? "";
-  return text ? { text, ...paneHandoffHeading(terminalId, "Terminal output") } : null;
 }
 
 function TerminalPaneComponent({
@@ -1388,16 +1376,8 @@ function TerminalPaneComponent({
       })
   );
 
-  const handleSendToAssistant = useCallback(() => {
-    if (selectActiveSlot(useHelpPanelStore.getState()).terminalId === id) return;
-    const content = captureCompletionHandoff(id);
-    if (content) draftAssistantContext(content);
-  }, [id]);
-
-  const handleSendToAgent = useCallback(() => {
-    const content = captureCompletionHandoff(id);
-    if (content) openSendToAgentPaletteWithText(content, id);
-  }, [id]);
+  const handleSendToAssistant = useCallback(() => sendCompletionToAssistant(id), [id]);
+  const handleSendToAgent = useCallback(() => sendCompletionToAgent(id), [id]);
 
   const isWorking = agentState === "working";
   const allowPing = !isMaximized;

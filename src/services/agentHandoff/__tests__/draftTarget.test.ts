@@ -155,6 +155,9 @@ describe("resolveAssistantDraftRefusal", () => {
     expect(resolveAssistantDraftRefusal(state, "help", "claude")).toBeNull();
     expect(resolveAssistantDraftRefusal(state, "help", undefined)).toBe("not-agent");
     expect(resolveAssistantDraftRefusal(state, "help", "acme.custom-agent")).toBe("not-agent");
+    // And a built-in runtime identity can't stand in for a session that has none.
+    const identified = inputs([assistantPanel()]);
+    expect(resolveAssistantDraftRefusal(identified, "help", undefined)).toBe("not-agent");
   });
 
   it("is not refused by a broadcast it can't be part of", () => {
@@ -166,7 +169,15 @@ describe("resolveAssistantDraftRefusal", () => {
 
   it.each<[string, PanelInstance[], Partial<DraftTargetInputs>, string]>([
     ["a session with no terminal", [], {}, "unknown-terminal"],
+    ["a trashed session", [assistantPanel({ location: "trash" })], {}, "unknown-terminal"],
+    [
+      "a pane that isn't a terminal",
+      [{ id: "help", kind: "browser", title: "Docs", location: "overlay" }],
+      {},
+      "not-agent",
+    ],
     ["an exited session", [assistantPanel({ runtimeStatus: "exited" })], {}, "exited"],
+    ["a session that errored", [assistantPanel({ runtimeStatus: "error" })], {}, "exited"],
     ["a session with no PTY", [assistantPanel({ hasPty: false })], {}, "exited"],
     [
       "the input bar switched off",
@@ -182,6 +193,12 @@ describe("resolveAssistantDraftRefusal", () => {
     ],
     ["a locked input", [assistantPanel({ isInputLocked: true })], {}, "input-locked"],
     ["a restarting session", [assistantPanel({ isRestarting: true })], {}, "restarting"],
+    [
+      "a session held behind its restore",
+      [assistantPanel({ restoreRecovery: { reason: "sibling-owns-resume-latest-slot" } })],
+      {},
+      "restarting",
+    ],
     [
       "a dictation about to submit",
       [assistantPanel()],
