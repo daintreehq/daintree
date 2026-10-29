@@ -71,8 +71,6 @@ export function PanelTabList({
         <LayoutGroup id={layoutGroupId}>
           <div className="flex items-stretch">
             {performanceMode ? (
-              // No wrapper here: a sortable tab's drag is restricted to its
-              // parent element, and a per-tab box would pin it in place.
               tabs.map((tab) => renderTab(tab, isParked(tab)))
             ) : (
               <AnimatePresence initial={false} mode="popLayout">

@@ -292,7 +292,7 @@ vi.mock("@dnd-kit/sortable", () => ({
 
 vi.mock("@dnd-kit/modifiers", () => ({
   restrictToHorizontalAxis: vi.fn(),
-  restrictToParentElement: vi.fn(),
+  restrictToFirstScrollableAncestor: vi.fn(),
 }));
 
 vi.mock("framer-motion", () => ({
