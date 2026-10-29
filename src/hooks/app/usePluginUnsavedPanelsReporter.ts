@@ -10,27 +10,29 @@ import { usePanelStore } from "@/store/panelStore";
 const NOTHING_DIRTY = "[]";
 
 /**
- * Tells Main which of this view's plugin panels say they hold unsaved work, so
+ * Tells Main which of this view's plugin views say they hold unsaved work, so
  * the plugin manager in any view can ask before disabling, updating or
- * uninstalling their plugin (#15031). Sent when that set or one of its titles
- * changes. A view with nothing dirty never reports, and Main forgets a view's
- * report along with its document.
+ * uninstalling their plugin (#15031). Sent once on mount, so a new document
+ * replaces whatever the last one in this view said, then only when that set or
+ * one of its titles changes. A view hosted outside the grid has no panel record
+ * and goes by its own name.
  */
 export function usePluginUnsavedPanelsReporter() {
   useEffect(() => {
     const report = window.electron?.plugin?.reportUnsavedPanels;
     if (!report) return;
-    // `null` after a failed send, so the next change sends again.
-    let reported: string | null = NOTHING_DIRTY;
+    // `null` before the first send and after a failed one, so the next push sends.
+    let reported: string | null = null;
     const push = () => {
       if (reported === NOTHING_DIRTY && !hasAnyViewUnsavedChanges()) return;
       const { panelsById } = usePanelStore.getState();
-      const panels: PluginUnsavedPanelReport[] = [];
-      for (const { panelId, pluginId } of getViewUnsavedPluginPanels()) {
-        const panel = panelsById[panelId];
-        if (!panel) continue;
-        panels.push({ panelId, pluginId, title: panel.title?.trim() ?? "" });
-      }
+      const panels: PluginUnsavedPanelReport[] = getViewUnsavedPluginPanels().map(
+        ({ panelId, pluginId, displayName }) => ({
+          panelId,
+          pluginId,
+          title: panelsById[panelId]?.title?.trim() || displayName,
+        })
+      );
       const key = JSON.stringify(panels);
       if (key === reported) return;
       reported = key;

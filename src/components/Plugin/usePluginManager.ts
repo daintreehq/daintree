@@ -61,17 +61,21 @@ function installErrorMessage(error: PluginInstallError | undefined): string {
 
 /**
  * The open panels of a plugin, in any view, that say they hold unsaved work
- * (#15031). A failed read lets the action go ahead without asking: the action
- * needs main too, and nothing a plugin does can hold it up.
+ * (#15031), or `null` when main couldn't be asked. Main answers from what the
+ * views last reported, so no plugin code is waited on.
  */
-async function readUnsavedPanels(pluginId: string): Promise<PluginUnsavedPanel[]> {
+async function readUnsavedPanels(pluginId: string): Promise<PluginUnsavedPanel[] | null> {
   try {
     return await window.electron.plugin.getUnsavedPanels(pluginId);
   } catch (err) {
     logError("Failed to read plugin panels with unsaved work", err);
-    return [];
+    return null;
   }
 }
+
+/** A failed read stops the action: it is the only way to know what it would discard. */
+const UNSAVED_READ_FAILED =
+  "Couldn't check this plugin's panels for unsaved work, so nothing changed. Try again.";
 
 function unsavedPanelKey(panel: PluginUnsavedPanel): string {
   return `${panel.projectId ?? ""}\u0000${panel.panelId}`;
@@ -165,6 +169,11 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
   // Plugins whose unsaved-work read is in flight, so a double-click on the
   // switch can't start two disables.
   const unsavedReadsRef = useRef<Set<string>>(new Set());
+  const confirmingDiscardRef = useRef(false);
+  // Bumped whenever the list may have changed under an open confirm (a
+  // provenance change, a reopen). An answer read across a bump is dropped: it
+  // was given about a record that may be gone.
+  const listGenerationRef = useRef(0);
 
   // The uninstall confirm and the URL dialog render the shared error inline as
   // an alert, so opening either must drop an unrelated earlier failure rather
@@ -224,6 +233,13 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
   // so the install that follows is held to the preview the user approved
   // (#12612). Null for a manual URL install. Cleared with `pendingHttpUrlRef`.
   const pendingHttpExpectedRef = useRef<PluginInstallExpectation | null>(null);
+  // The update a reinstall parked behind the HTTP confirm, with the unsaved
+  // panels its confirm showed, so confirming HTTP checks for work that turned
+  // dirty while it was open and can put the update back up (#15031).
+  const pendingHttpReviewRef = useRef<{
+    update: PendingUpdate;
+    panels: PluginUnsavedPanel[];
+  } | null>(null);
   // "Update all" (#10893) drains available updates through the SAME per-plugin
   // capability-diff confirm as a single check: the queue holds the not-yet-shown
   // updates, `pendingUpdate` shows the head, and each confirm/skip/HTTP-gate
@@ -402,6 +418,10 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     setPendingHttpUrl(null);
     pendingHttpUrlRef.current = null;
     pendingHttpExpectedRef.current = null;
+    pendingHttpReviewRef.current = null;
+    pendingDiscardRef.current = null;
+    setPendingDiscardState(null);
+    listGenerationRef.current++;
     // Abandon any in-flight "Update all" batch — the fresh list supersedes it.
     isBatchActiveRef.current = false;
     pendingQueueRef.current = [];
@@ -472,6 +492,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
       setPendingUninstall(null);
       pendingDiscardRef.current = null;
       setPendingDiscardState(null);
+      listGenerationRef.current++;
     });
   }, []);
 
@@ -480,7 +501,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     const pluginId = pendingUninstall.manifest.name;
     let cancelled = false;
     void readUnsavedPanels(pluginId).then((panels) => {
-      if (!cancelled) setUninstallUnsaved({ pluginId, panels });
+      if (!cancelled && panels) setUninstallUnsaved({ pluginId, panels });
     });
     return () => {
       cancelled = true;
@@ -492,7 +513,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     const pluginId = pendingUpdate.plugin.manifest.name;
     let cancelled = false;
     void readUnsavedPanels(pluginId).then((panels) => {
-      if (!cancelled) setUpdateUnsaved({ pluginId, panels });
+      if (!cancelled && panels) setUpdateUnsaved({ pluginId, panels });
     });
     return () => {
       cancelled = true;
@@ -519,8 +540,14 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     const id = plugin.manifest.name;
     if (unsavedReadsRef.current.has(id)) return false;
     unsavedReadsRef.current.add(id);
+    const generation = listGenerationRef.current;
     const panels = await readUnsavedPanels(id);
     unsavedReadsRef.current.delete(id);
+    if (listGenerationRef.current !== generation) return false;
+    if (panels === null) {
+      setError(UNSAVED_READ_FAILED);
+      return false;
+    }
     if (panels.length === 0) return true;
     setPendingDiscard({ plugin, action, panels });
     return false;
@@ -615,13 +642,16 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
 
   const confirmDiscard = async () => {
     const prompt = pendingDiscardRef.current;
-    if (!prompt) return;
-    const id = prompt.plugin.manifest.name;
-    if (unsavedReadsRef.current.has(id)) return;
-    unsavedReadsRef.current.add(id);
-    const current = await readUnsavedPanels(id);
-    unsavedReadsRef.current.delete(id);
+    if (!prompt || confirmingDiscardRef.current) return;
+    confirmingDiscardRef.current = true;
+    const current = await readUnsavedPanels(prompt.plugin.manifest.name);
+    confirmingDiscardRef.current = false;
     if (pendingDiscardRef.current !== prompt) return;
+    if (current === null) {
+      setPendingDiscard(null);
+      setError(UNSAVED_READ_FAILED);
+      return;
+    }
     // Work that turned dirty under the open prompt wasn't part of the answer.
     if (hasUnshownPanels(current, prompt.panels)) {
       setPendingDiscard({ ...prompt, panels: current });
@@ -741,6 +771,8 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     pendingHttpUrlRef.current = null;
     const expected = pendingHttpExpectedRef.current ?? undefined;
     pendingHttpExpectedRef.current = null;
+    const review = pendingHttpReviewRef.current;
+    pendingHttpReviewRef.current = null;
     const fromReinstall = httpFromReinstallRef.current;
     httpFromReinstallRef.current = false;
     setPendingHttpUrl(null);
@@ -751,6 +783,22 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     if (expected && !plugins.some((p) => p.manifest.name === expected.pluginId)) {
       if (fromReinstall && isBatchActiveRef.current) advanceUpdateQueue();
       return;
+    }
+    if (review) {
+      const pluginId = review.update.plugin.manifest.name;
+      const current = await readUnsavedPanels(pluginId);
+      if (current === null) {
+        setError(UNSAVED_READ_FAILED);
+        if (isBatchActiveRef.current) advanceUpdateQueue();
+        return;
+      }
+      // Work that turned dirty behind the HTTP confirm puts the update back up
+      // with it named, rather than installing over it.
+      if (hasUnshownPanels(current, review.panels)) {
+        setUpdateUnsaved({ pluginId, panels: current });
+        setPendingUpdate(review.update);
+        return;
+      }
     }
     await performInstallFromUrl(url, expected);
     // A reinstall-over-http came from the update flow, not the manual install
@@ -764,6 +812,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     if (!pendingHttpUrlRef.current) return;
     pendingHttpUrlRef.current = null;
     pendingHttpExpectedRef.current = null;
+    pendingHttpReviewRef.current = null;
     const fromReinstall = httpFromReinstallRef.current;
     httpFromReinstallRef.current = false;
     setPendingHttpUrl(null);
@@ -872,7 +921,13 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     setIsUninstalling(true);
     // The dialog named what would be lost when it opened; work that turned
     // dirty since gets shown before anything is removed (#15031).
+    const generation = listGenerationRef.current;
     const current = await readUnsavedPanels(id);
+    if (listGenerationRef.current !== generation || current === null) {
+      if (current === null) setError(UNSAVED_READ_FAILED);
+      setIsUninstalling(false);
+      return;
+    }
     if (hasUnshownPanels(current, uninstallPanels)) {
       setUninstallUnsaved({ pluginId: id, panels: current });
       setIsUninstalling(false);
@@ -1066,9 +1121,19 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     const pluginId = pendingUpdate.plugin.manifest.name;
     reinstallingRef.current = true;
     setIsReinstalling(true);
+    const generation = listGenerationRef.current;
     const current = await readUnsavedPanels(pluginId);
     reinstallingRef.current = false;
     setIsReinstalling(false);
+    // Outside a batch a provenance change has closed this confirm. A batch
+    // keeps its queue across them, and main holds the install to the reviewed
+    // archive either way.
+    if (!isBatchActiveRef.current && listGenerationRef.current !== generation) return;
+    if (current === null) {
+      setError(UNSAVED_READ_FAILED);
+      advanceUpdateQueue();
+      return;
+    }
     if (hasUnshownPanels(current, updatePanels)) {
       setUpdateUnsaved({ pluginId, panels: current });
       return;
@@ -1096,6 +1161,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
       httpFromReinstallRef.current = true;
       pendingHttpUrlRef.current = url;
       pendingHttpExpectedRef.current = expected;
+      pendingHttpReviewRef.current = { update: pendingUpdate, panels: updatePanels };
       setPendingHttpUrl(url);
       return;
     }

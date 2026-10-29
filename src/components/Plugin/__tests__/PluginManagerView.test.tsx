@@ -2181,14 +2181,38 @@ describe("PluginManagerView — unsaved plugin panels (#15031)", () => {
     projectId: "project-a",
     projectName: "Accounts",
   };
+  // Same panel id as `invoice`, in another project: a different panel.
   const request: PluginUnsavedPanel = {
-    panelId: "panel-2",
+    panelId: "panel-1",
     title: "",
     projectId: "project-b",
     projectName: null,
   };
+  const REVIEWED_HASH = "d".repeat(64);
   const enableSwitch = () => screen.getByRole("switch", { name: "Enable Acme Demo" });
   const discardPrompt = () => screen.queryByRole("alertdialog", { name: "Disable 'Acme Demo'?" });
+  const unsavedList = () => screen.getByTestId("plugin-unsaved-panels");
+
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((r) => {
+      resolve = r;
+    });
+    return { promise, resolve };
+  }
+
+  function updatablePlugin(originalUrl = "https://example.com/p.dntr") {
+    vi.mocked(window.electron.plugin.list).mockResolvedValue([
+      makePlugin({ source: "url", originalUrl, archiveHash: "abc123" }),
+    ]);
+    vi.mocked(window.electron.plugin.checkForUpdate).mockResolvedValue({
+      status: "available",
+      name: "acme.demo",
+      version: "2.0.0",
+      capabilities: [],
+      archiveHash: REVIEWED_HASH,
+    });
+  }
 
   it("asks before disabling a plugin whose panel holds unsaved work, and Cancel keeps it on", async () => {
     vi.mocked(window.electron.plugin.list).mockResolvedValue([makePlugin()]);
@@ -2206,6 +2230,9 @@ describe("PluginManagerView — unsaved plugin panels (#15031)", () => {
     expect(window.electron.plugin.getUnsavedPanels).toHaveBeenCalledWith("acme.demo");
     expect(within(prompt).getByText("Disabling discards unsaved work in 1 panel")).toBeTruthy();
     expect(prompt.textContent).toContain("Invoice draft · Accounts");
+    await waitFor(() =>
+      expect(document.activeElement).toBe(within(prompt).getByRole("button", { name: "Cancel" }))
+    );
     expect(enableSwitch().getAttribute("aria-checked")).toBe("true");
 
     fireEvent.click(within(prompt).getByRole("button", { name: "Cancel" }));
@@ -2214,20 +2241,20 @@ describe("PluginManagerView — unsaved plugin panels (#15031)", () => {
     expect(enableSwitch().getAttribute("aria-checked")).toBe("true");
   });
 
-  it("disables the plugin once the user discards the changes", async () => {
+  it("disables the plugin once, after the user discards the changes", async () => {
     vi.mocked(window.electron.plugin.list).mockResolvedValue([makePlugin()]);
     vi.mocked(window.electron.plugin.getUnsavedPanels).mockResolvedValue([invoice]);
     renderDialog();
     await screen.findAllByText("Acme Demo");
 
     fireEvent.click(enableSwitch());
-    fireEvent.click(await screen.findByRole("button", { name: "Discard changes" }));
+    const discard = await screen.findByRole("button", { name: "Discard changes" });
+    expect(window.electron.plugin.setEnabled).not.toHaveBeenCalled();
+    fireEvent.click(discard);
 
-    await waitFor(() =>
-      expect(window.electron.plugin.setEnabled).toHaveBeenCalledWith("acme.demo", false)
-    );
+    await waitFor(() => expect(enableSwitch().getAttribute("aria-checked")).toBe("false"));
+    expect(vi.mocked(window.electron.plugin.setEnabled).mock.calls).toEqual([["acme.demo", false]]);
     expect(discardPrompt()).toBeNull();
-    expect(enableSwitch().getAttribute("aria-checked")).toBe("false");
   });
 
   it("disables a plugin with no dirty panels without asking", async () => {
@@ -2258,11 +2285,25 @@ describe("PluginManagerView — unsaved plugin panels (#15031)", () => {
     expect(window.electron.plugin.getUnsavedPanels).not.toHaveBeenCalled();
   });
 
+  it("changes nothing and says so when the panels can't be read", async () => {
+    vi.mocked(window.electron.plugin.list).mockResolvedValue([makePlugin()]);
+    vi.mocked(window.electron.plugin.getUnsavedPanels).mockRejectedValue(new Error("gone"));
+    renderDialog();
+    await screen.findAllByText("Acme Demo");
+
+    fireEvent.click(enableSwitch());
+
+    await waitFor(() =>
+      expect(screen.getByText(/Couldn't check this plugin's panels for unsaved work/)).toBeTruthy()
+    );
+    expect(window.electron.plugin.setEnabled).not.toHaveBeenCalled();
+    expect(enableSwitch().getAttribute("aria-checked")).toBe("true");
+  });
+
   it("shows a panel that turned dirty under the open prompt instead of disabling", async () => {
     vi.mocked(window.electron.plugin.list).mockResolvedValue([makePlugin()]);
     vi.mocked(window.electron.plugin.getUnsavedPanels)
       .mockResolvedValueOnce([invoice])
-      .mockResolvedValueOnce([invoice, request])
       .mockResolvedValue([invoice, request]);
     renderDialog();
     await screen.findAllByText("Acme Demo");
@@ -2282,23 +2323,75 @@ describe("PluginManagerView — unsaved plugin panels (#15031)", () => {
     );
   });
 
-  it("closes the prompt without acting on a cross-window provenance change", async () => {
+  it("drops a discard whose re-read lands after a cross-window provenance change", async () => {
     let fireProvenance: (() => void) | undefined;
     vi.mocked(window.electron.plugin.onProvenanceChanged).mockImplementation((cb) => {
-      fireProvenance = cb;
+      fireProvenance = () => cb({});
       return () => {};
     });
     vi.mocked(window.electron.plugin.list).mockResolvedValue([makePlugin()]);
-    vi.mocked(window.electron.plugin.getUnsavedPanels).mockResolvedValue([invoice]);
+    const reread = deferred<PluginUnsavedPanel[]>();
+    vi.mocked(window.electron.plugin.getUnsavedPanels)
+      .mockResolvedValueOnce([invoice])
+      .mockReturnValueOnce(reread.promise);
     renderDialog();
     await screen.findAllByText("Acme Demo");
 
     fireEvent.click(enableSwitch());
-    await waitFor(() => expect(discardPrompt()).toBeTruthy());
+    fireEvent.click(await screen.findByRole("button", { name: "Discard changes" }));
+    await waitFor(() => expect(window.electron.plugin.getUnsavedPanels).toHaveBeenCalledTimes(2));
 
     act(() => fireProvenance?.());
     await waitFor(() => expect(discardPrompt()).toBeNull());
+    await act(async () => reread.resolve([invoice]));
+
     expect(window.electron.plugin.setEnabled).not.toHaveBeenCalled();
+  });
+
+  it("asks again when the switch is used after cancelling a discard mid-read", async () => {
+    vi.mocked(window.electron.plugin.list).mockResolvedValue([makePlugin()]);
+    const reread = deferred<PluginUnsavedPanel[]>();
+    vi.mocked(window.electron.plugin.getUnsavedPanels)
+      .mockResolvedValueOnce([invoice])
+      .mockReturnValueOnce(reread.promise)
+      .mockResolvedValue([invoice]);
+    renderDialog();
+    await screen.findAllByText("Acme Demo");
+
+    fireEvent.click(enableSwitch());
+    fireEvent.click(await screen.findByRole("button", { name: "Discard changes" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(discardPrompt()).toBeNull());
+
+    fireEvent.click(enableSwitch());
+    await waitFor(() => expect(discardPrompt()).toBeTruthy());
+    await act(async () => reread.resolve([invoice]));
+
+    expect(discardPrompt()).toBeTruthy();
+    expect(window.electron.plugin.setEnabled).not.toHaveBeenCalled();
+  });
+
+  it("asks before retrying a plugin that failed to start", async () => {
+    vi.mocked(window.electron.plugin.list).mockResolvedValue([
+      makePlugin({ loadError: { message: "boom", at: 1 } }),
+    ]);
+    vi.mocked(window.electron.plugin.getUnsavedPanels).mockResolvedValue([invoice]);
+    renderDialog();
+    await selectPlugin();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+
+    const prompt = await screen.findByRole("alertdialog", { name: "Retry 'Acme Demo'?" });
+    expect(within(prompt).getByText("Retrying discards unsaved work in 1 panel")).toBeTruthy();
+    expect(window.electron.plugin.setEnabled).not.toHaveBeenCalled();
+
+    fireEvent.click(within(prompt).getByRole("button", { name: "Discard changes" }));
+    await waitFor(() =>
+      expect(vi.mocked(window.electron.plugin.setEnabled).mock.calls).toEqual([
+        ["acme.demo", false],
+        ["acme.demo", true],
+      ])
+    );
   });
 
   it("names dirty panels in the uninstall confirm and re-shows a newly dirty one before uninstalling", async () => {
@@ -2313,17 +2406,21 @@ describe("PluginManagerView — unsaved plugin panels (#15031)", () => {
     await waitFor(() =>
       expect(screen.getByText("Uninstalling discards unsaved work in 1 panel")).toBeTruthy()
     );
+    expect(unsavedList().textContent).toContain("Invoice draft · Accounts");
+    expect(unsavedList().textContent).not.toContain("Untitled panel");
 
     fireEvent.click(screen.getByRole("button", { name: "Uninstall plugin" }));
     await waitFor(() =>
       expect(screen.getByText("Uninstalling discards unsaved work in 2 panels")).toBeTruthy()
     );
+    expect(unsavedList().textContent).toContain("Untitled panel");
     expect(window.electron.plugin.uninstall).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Uninstall plugin" }));
     await waitFor(() =>
       expect(window.electron.plugin.uninstall).toHaveBeenCalledWith("acme.demo", false)
     );
+    expect(window.electron.plugin.uninstall).toHaveBeenCalledTimes(1);
   });
 
   it("leaves the uninstall confirm unchanged for a plugin with no dirty panels", async () => {
@@ -2343,22 +2440,11 @@ describe("PluginManagerView — unsaved plugin panels (#15031)", () => {
     );
   });
 
-  it("names dirty panels in the update confirm and reinstalls once confirmed", async () => {
-    vi.mocked(window.electron.plugin.list).mockResolvedValue([
-      makePlugin({
-        source: "url",
-        originalUrl: "https://example.com/p.dntr",
-        archiveHash: "abc123",
-      }),
-    ]);
-    vi.mocked(window.electron.plugin.checkForUpdate).mockResolvedValue({
-      status: "available",
-      name: "acme.demo",
-      version: "2.0.0",
-      capabilities: [],
-      archiveHash: "d".repeat(64),
-    });
-    vi.mocked(window.electron.plugin.getUnsavedPanels).mockResolvedValue([invoice]);
+  it("names dirty panels in the update confirm and re-shows a newly dirty one before reinstalling", async () => {
+    updatablePlugin();
+    vi.mocked(window.electron.plugin.getUnsavedPanels)
+      .mockResolvedValueOnce([invoice])
+      .mockResolvedValue([invoice, request]);
     renderDialog();
     await selectPlugin();
 
@@ -2369,11 +2455,40 @@ describe("PluginManagerView — unsaved plugin panels (#15031)", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Reinstall plugin" }));
     await waitFor(() =>
+      expect(screen.getByText("Updating discards unsaved work in 2 panels")).toBeTruthy()
+    );
+    expect(window.electron.plugin.installFromUrl).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Reinstall plugin" }));
+    await waitFor(() =>
       expect(window.electron.plugin.installFromUrl).toHaveBeenCalledWith(
         "https://example.com/p.dntr",
         expect.any(String),
-        { pluginId: "acme.demo", archiveHash: "d".repeat(64) }
+        { pluginId: "acme.demo", archiveHash: REVIEWED_HASH }
       )
     );
+    expect(window.electron.plugin.installFromUrl).toHaveBeenCalledTimes(1);
+  });
+
+  it("puts an HTTP update back up when a panel turned dirty behind the HTTP confirm", async () => {
+    updatablePlugin("http://example.com/p.dntr");
+    vi.mocked(window.electron.plugin.getUnsavedPanels)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValue([invoice]);
+    renderDialog();
+    await selectPlugin();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Check Acme Demo for updates" }));
+    await waitFor(() => expect(screen.getByText("Update 'Acme Demo'?")).toBeTruthy());
+    await waitFor(() => expect(window.electron.plugin.getUnsavedPanels).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole("button", { name: "Reinstall plugin" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Install over HTTP" }));
+
+    await waitFor(() =>
+      expect(screen.getByText("Updating discards unsaved work in 1 panel")).toBeTruthy()
+    );
+    expect(screen.getByText("Update 'Acme Demo'?")).toBeTruthy();
+    expect(window.electron.plugin.installFromUrl).not.toHaveBeenCalled();
   });
 });

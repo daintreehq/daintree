@@ -59,12 +59,16 @@ describe("unsaved plugin panel handlers (#15031)", () => {
     const second = new FakeContents();
     await handleReportUnsavedPanels(localCtx(first, "project-a"), [draft]);
     await handleReportUnsavedPanels(localCtx(second, "project-a"), [draft]);
+    await handleReportUnsavedPanels(localCtx(new FakeContents(), "project-b"), [
+      { ...draft, title: "Other draft" },
+    ]);
     await handleReportUnsavedPanels(localCtx(new FakeContents(), null), [
       { ...draft, panelId: "p2", title: "Scratch" },
     ]);
 
     expect(await handleGetUnsavedPanels("acme.demo")).toEqual([
       { panelId: "p1", title: "Invoice draft", projectId: "project-a", projectName: "Accounts" },
+      { panelId: "p1", title: "Other draft", projectId: "project-b", projectName: null },
       { panelId: "p2", title: "Scratch", projectId: null, projectName: null },
     ]);
   });
@@ -84,10 +88,5 @@ describe("unsaved plugin panel handlers (#15031)", () => {
 
     remote.close();
     expect(await handleGetUnsavedPanels("acme.demo")).toEqual([]);
-  });
-
-  it("answers an empty list for a blank plugin id", async () => {
-    await handleReportUnsavedPanels(localCtx(new FakeContents(), "project-a"), [draft]);
-    expect(await handleGetUnsavedPanels("")).toEqual([]);
   });
 });

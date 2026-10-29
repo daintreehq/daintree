@@ -126,8 +126,8 @@ export function watchWebContentsDocument(wc: Electron.WebContents): UnsavedPanel
     wc.on("did-fail-load", onFailLoad);
     wc.once("render-process-gone", onGone);
     wc.once("destroyed", onGone);
+    // Destruction leaves JS listeners on the wrapper, so remove them even then.
     return () => {
-      if (wc.isDestroyed()) return;
       wc.removeListener("did-navigate", onGone);
       wc.removeListener("did-fail-load", onFailLoad);
       wc.removeListener("render-process-gone", onGone);
@@ -136,7 +136,7 @@ export function watchWebContentsDocument(wc: Electron.WebContents): UnsavedPanel
   };
 }
 
-/** A remote view's document lasts as long as its endpoint. */
+/** A remote view is forgotten when its endpoint closes; a reload replaces its report on mount. */
 export function watchSourceHandle(
   handle: PanelLifecycleSourceHandle
 ): UnsavedPanelsDocumentWatcher {

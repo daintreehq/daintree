@@ -84,7 +84,7 @@ describe("pluginUnsavedPanels", () => {
     expect(wc.listenerCount("render-process-gone")).toBe(0);
   });
 
-  it("forgets a view whose document navigated, crashed or was destroyed", () => {
+  it("forgets a view whose document navigated, crashed or was destroyed, and its listeners", () => {
     const navigated = new FakeContents();
     const crashed = new FakeContents();
     const destroyed = new FakeContents();
@@ -97,8 +97,11 @@ describe("pluginUnsavedPanels", () => {
     destroyed.destroy();
 
     expect(getUnsavedPluginPanels("acme.demo")).toEqual([]);
-    expect(navigated.listenerCount("did-navigate")).toBe(0);
-    expect(crashed.listenerCount("did-navigate")).toBe(0);
+    for (const wc of [navigated, crashed, destroyed]) {
+      for (const event of ["did-navigate", "did-fail-load", "render-process-gone", "destroyed"]) {
+        expect(wc.listenerCount(event)).toBe(0);
+      }
+    }
   });
 
   it("forgets a view on a failed main-frame load but not an aborted or subframe one", () => {
@@ -113,14 +116,21 @@ describe("pluginUnsavedPanels", () => {
     expect(getUnsavedPluginPanels("acme.demo")).toEqual([]);
   });
 
-  it("does not let a forgotten report's listener clear the view's next one", () => {
-    const wc = new FakeContents();
-    report(wc, [panel("p1")]);
-    wc.emit("did-navigate");
-    report(wc, [panel("p2")]);
+  it("does not let a forgotten report's watcher clear the view's next one", () => {
+    const forgets: Array<() => void> = [];
+    const watch = (forget: () => void) => {
+      forgets.push(forget);
+      return () => {};
+    };
+    recordUnsavedPluginPanels(1, watch, null, [panel("p1")]);
+    recordUnsavedPluginPanels(1, watch, null, []);
+    recordUnsavedPluginPanels(1, watch, null, [panel("p2")]);
+    expect(forgets).toHaveLength(2);
 
+    forgets[0]!();
     expect(getUnsavedPluginPanels("acme.demo").map((p) => p.panelId)).toEqual(["p2"]);
-    expect(wc.listenerCount("did-navigate")).toBe(1);
+    forgets[1]!();
+    expect(getUnsavedPluginPanels("acme.demo")).toEqual([]);
   });
 
   it("forgets a remote view when its endpoint closes", () => {
@@ -138,20 +148,27 @@ describe("pluginUnsavedPanels", () => {
     expect(getUnsavedPluginPanels("acme.demo")).toEqual([]);
   });
 
-  it("drops malformed entries and caps titles", () => {
+  it("drops malformed entries and caps titles, ids and the list", () => {
     const wc = new FakeContents();
     report(wc, [
       null,
       { panelId: "", pluginId: "acme.demo", title: "empty id" },
+      { panelId: "x".repeat(513), pluginId: "acme.demo", title: "long id" },
       { panelId: "p1", pluginId: 42, title: "bad plugin" },
       { panelId: "p2", pluginId: "acme.demo", title: 7 },
-      { panelId: "p3", pluginId: "acme.demo", title: "x".repeat(500) },
+      { panelId: "p3", pluginId: "acme.demo", title: `Draft ${"x".repeat(500)}` },
     ]);
 
     const panels = getUnsavedPluginPanels("acme.demo");
     expect(panels.map((p) => p.panelId)).toEqual(["p2", "p3"]);
     expect(panels[0]!.title).toBe("");
-    expect(panels[1]!.title.length).toBeLessThan(500);
+    expect(panels[1]!.title).toBe(`Draft ${"x".repeat(500)}`.slice(0, 200));
+
+    report(
+      wc,
+      Array.from({ length: 1_005 }, (_, i) => panel(`p${i}`))
+    );
+    expect(getUnsavedPluginPanels("acme.demo")).toHaveLength(1_000);
   });
 
   it("ignores a report that is not a list", () => {
