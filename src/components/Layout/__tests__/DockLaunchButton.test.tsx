@@ -2499,7 +2499,11 @@ describe("DockLaunchButton — migrated toolbar affordances (#11691)", () => {
       expect(qualifierTextOf(rowByName(bare.container, "Claude"))).toBe("");
       bare.unmount();
 
-      const inheriting = renderButton({ agents: READY, placement: "dock", activeWorktreeId: "wt-2" });
+      const inheriting = renderButton({
+        agents: READY,
+        placement: "dock",
+        activeWorktreeId: "wt-2",
+      });
       expect(qualifierTextOf(rowByName(inheriting.container, "Claude"))).toBe("Fast");
     });
 
