@@ -299,6 +299,251 @@ describe("TerminalSettingsTab panel limits", () => {
   });
 });
 
+describe("TerminalSettingsTab panel limit editing", () => {
+  const field = (name: string) => screen.getByRole("spinbutton", { name }) as HTMLInputElement;
+
+  beforeEach(() => {
+    usePanelLimitStore.setState({
+      softWarningLimit: 12,
+      confirmationLimit: 20,
+      hardLimit: 32,
+      warningsDisabled: false,
+      hardwareDefaultsApplied: true,
+    });
+  });
+
+  it("lets a two-digit number be typed without clamping the first digit", () => {
+    renderSubtab("performance");
+    const soft = field("Soft warning");
+
+    fireEvent.change(soft, { target: { value: "2" } });
+    expect(soft.value).toBe("2");
+    expect(usePanelLimitStore.getState().softWarningLimit).toBe(12);
+
+    fireEvent.change(soft, { target: { value: "20" } });
+    expect(soft.value).toBe("20");
+
+    fireEvent.blur(soft);
+    expect(usePanelLimitStore.getState().softWarningLimit).toBe(20);
+    expect(soft.value).toBe("20");
+  });
+
+  it("lets a field be cleared and typed afresh", () => {
+    renderSubtab("performance");
+    const hard = field("Hard limit");
+
+    fireEvent.change(hard, { target: { value: "" } });
+    expect(hard.value).toBe("");
+
+    fireEvent.change(hard, { target: { value: "50" } });
+    fireEvent.blur(hard);
+    expect(usePanelLimitStore.getState().hardLimit).toBe(50);
+  });
+
+  it.each([
+    ["Soft warning", "softWarningLimit", 12, 10],
+    ["Confirmation required", "confirmationLimit", 20, 25],
+    ["Hard limit", "hardLimit", 32, 50],
+  ] as const)("commits %s on Enter", (name, key, before, typed) => {
+    renderSubtab("performance");
+    const input = field(name);
+
+    fireEvent.change(input, { target: { value: String(typed) } });
+    expect(usePanelLimitStore.getState()[key]).toBe(before);
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(usePanelLimitStore.getState()[key]).toBe(typed);
+  });
+
+  it("corrects an out-of-range number when it is committed, not while typing", () => {
+    renderSubtab("performance");
+    const hard = field("Hard limit");
+
+    fireEvent.change(hard, { target: { value: "500" } });
+    expect(hard.value).toBe("500");
+    expect(usePanelLimitStore.getState().hardLimit).toBe(32);
+
+    fireEvent.blur(hard);
+    expect(usePanelLimitStore.getState().hardLimit).toBe(100);
+    expect(hard.value).toBe("100");
+  });
+
+  it("puts the stored number back when an empty field is committed", () => {
+    renderSubtab("performance");
+    const soft = field("Soft warning");
+
+    fireEvent.change(soft, { target: { value: "" } });
+    fireEvent.blur(soft);
+    expect(usePanelLimitStore.getState().softWarningLimit).toBe(12);
+    expect(soft.value).toBe("12");
+  });
+
+  it.each([
+    [
+      "Soft warning",
+      "softWarningLimit",
+      "Reset soft warning to the hardware-recommended value",
+      16,
+    ],
+    [
+      "Confirmation required",
+      "confirmationLimit",
+      "Reset confirmation limit to the hardware-recommended value",
+      30,
+    ],
+    ["Hard limit", "hardLimit", "Reset hard limit to the hardware-recommended value", 48],
+  ] as const)(
+    "resets %s over a draft to the recommended number",
+    async (name, key, button, rec) => {
+      getHardwareInfo.mockResolvedValue({ totalMemoryBytes: 16 * 1024 ** 3, logicalCpuCount: 8 });
+      renderSubtab("performance");
+      await act(async () => {});
+      const input = field(name);
+
+      fireEvent.change(input, { target: { value: "7" } });
+      fireEvent.click(screen.getByRole("button", { name: button }));
+
+      expect(usePanelLimitStore.getState()[key]).toBe(rec);
+      expect(input.value).toBe(String(rec));
+    }
+  );
+
+  it("corrects a number below the minimum on commit and ignores a decimal", () => {
+    renderSubtab("performance");
+    const soft = field("Soft warning");
+
+    fireEvent.change(soft, { target: { value: "1" } });
+    expect(usePanelLimitStore.getState().softWarningLimit).toBe(12);
+    fireEvent.blur(soft);
+    expect(usePanelLimitStore.getState().softWarningLimit).toBe(4);
+    expect(soft.value).toBe("4");
+
+    fireEvent.change(soft, { target: { value: "9.5" } });
+    fireEvent.blur(soft);
+    expect(usePanelLimitStore.getState().softWarningLimit).toBe(4);
+    expect(soft.value).toBe("4");
+  });
+
+  it("keeps a half-typed number in one field when another is committed", () => {
+    renderSubtab("performance");
+    const soft = field("Soft warning");
+    const hard = field("Hard limit");
+
+    fireEvent.change(soft, { target: { value: "1" } });
+    fireEvent.change(hard, { target: { value: "50" } });
+    fireEvent.blur(hard);
+
+    expect(usePanelLimitStore.getState().hardLimit).toBe(50);
+    expect(soft.value).toBe("1");
+  });
+
+  // The second start is already on the recommendation: the reset then changes no
+  // stored number, so only dropping the drafts can bring the fields back to it.
+  it.each([
+    [
+      "away from the recommendation",
+      { softWarningLimit: 12, confirmationLimit: 20, hardLimit: 32 },
+    ],
+    ["on the recommendation", { softWarningLimit: 16, confirmationLimit: 30, hardLimit: 48 }],
+  ] as const)(
+    "applies the hardware-recommended limits over a draft, starting %s",
+    async (_, start) => {
+      getHardwareInfo.mockResolvedValue({ totalMemoryBytes: 16 * 1024 ** 3, logicalCpuCount: 8 });
+      usePanelLimitStore.setState(start);
+      renderSubtab("performance");
+      await act(async () => {});
+
+      fireEvent.change(field("Soft warning"), { target: { value: "7" } });
+      fireEvent.change(field("Confirmation required"), { target: { value: "8" } });
+      fireEvent.change(field("Hard limit"), { target: { value: "9" } });
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole("button", { name: "Reset to hardware-recommended defaults" })
+        );
+      });
+
+      expect(usePanelLimitStore.getState()).toMatchObject({
+        softWarningLimit: 16,
+        confirmationLimit: 30,
+        hardLimit: 48,
+      });
+      expect(field("Soft warning").value).toBe("16");
+      expect(field("Confirmation required").value).toBe("30");
+      expect(field("Hard limit").value).toBe("48");
+
+      fireEvent.blur(field("Soft warning"));
+      expect(usePanelLimitStore.getState().softWarningLimit).toBe(16);
+    }
+  );
+
+  describe("limits out of order", () => {
+    it("points out a warning above the hard limit without refusing it", () => {
+      renderSubtab("performance");
+      const soft = field("Soft warning");
+
+      fireEvent.change(soft, { target: { value: "40" } });
+      expect(screen.queryByText(/never appears/i)).toBeNull();
+      fireEvent.blur(soft);
+
+      expect(usePanelLimitStore.getState().softWarningLimit).toBe(40);
+      expect(screen.getByText(/hard limit of 32, so this warning never appears/i)).toBeTruthy();
+      expect(soft.getAttribute("aria-invalid")).toBe("true");
+      expect(field("Confirmation required").getAttribute("aria-invalid")).not.toBe("true");
+    });
+
+    it("points out a confirmation at the hard limit, but not one slot below it", () => {
+      renderSubtab("performance");
+      const confirm = field("Confirmation required");
+
+      fireEvent.change(confirm, { target: { value: "31" } });
+      fireEvent.blur(confirm);
+      expect(confirm.getAttribute("aria-invalid")).not.toBe("true");
+
+      fireEvent.change(confirm, { target: { value: "32" } });
+      fireEvent.blur(confirm);
+      expect(usePanelLimitStore.getState().confirmationLimit).toBe(32);
+      expect(confirm.getAttribute("aria-invalid")).toBe("true");
+      expect(
+        screen.getByText(/hard limit of 32, so batches are never asked to confirm/i)
+      ).toBeTruthy();
+    });
+
+    it("re-evaluates both rows when the hard limit moves, and clears them once ordered", () => {
+      renderSubtab("performance");
+      const hard = field("Hard limit");
+
+      fireEvent.change(hard, { target: { value: "10" } });
+      fireEvent.blur(hard);
+      expect(field("Soft warning").getAttribute("aria-invalid")).toBe("true");
+      expect(field("Confirmation required").getAttribute("aria-invalid")).toBe("true");
+
+      fireEvent.change(hard, { target: { value: "60" } });
+      fireEvent.blur(hard);
+      expect(field("Soft warning").getAttribute("aria-invalid")).not.toBe("true");
+      expect(field("Confirmation required").getAttribute("aria-invalid")).not.toBe("true");
+    });
+
+    it("points out a configuration that was already saved out of order", () => {
+      usePanelLimitStore.setState({ softWarningLimit: 50, confirmationLimit: 60, hardLimit: 32 });
+      renderSubtab("performance");
+
+      expect(field("Soft warning").getAttribute("aria-invalid")).toBe("true");
+      expect(field("Confirmation required").getAttribute("aria-invalid")).toBe("true");
+    });
+
+    it("stays quiet while panel warnings are off", () => {
+      usePanelLimitStore.setState({
+        softWarningLimit: 50,
+        confirmationLimit: 60,
+        warningsDisabled: true,
+      });
+      renderSubtab("performance");
+
+      expect(screen.queryByText(/never appears/i)).toBeNull();
+      expect(screen.queryByText(/never asked to confirm/i)).toBeNull();
+    });
+  });
+});
+
 describe("TerminalSettingsTab auto-restart threshold", () => {
   it("keeps an out-of-range draft out of the store and puts the effective value back on blur", () => {
     useResourceMonitoringStore.getState().setEnabled(true);
