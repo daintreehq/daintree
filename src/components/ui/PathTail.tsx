@@ -3,8 +3,14 @@ import { cn } from "@/lib/utils";
 
 const CUT_ATTR = "data-cut";
 
+// Blink still fits a line one layout unit (1/64px) past its box, which reads as
+// 1/16px through getBoundingClientRect at the 25% zoom floor. A false cut would
+// draw an ellipsis over the first glyph of a path that fits, so the line sits
+// above that; a near miss only keeps the native ellipsis.
+const CUT_TOLERANCE_PX = 0.1;
+
 let observer: ResizeObserver | null = null;
-let watched = 0;
+const watched = new Set<HTMLElement>();
 
 // Every read before any write: a write adds the box's `::before`, which dirties
 // layout, and the next read would then force it once per row of a resized list.
@@ -18,22 +24,38 @@ function markCut(entries: ResizeObserverEntry[]) {
     // directory over by less than one is still cut.
     return (
       path !== null &&
-      path.getBoundingClientRect().width - target.getBoundingClientRect().width > 0.01
+      path.getBoundingClientRect().width - target.getBoundingClientRect().width > CUT_TOLERANCE_PX
     );
   });
   entries.forEach(({ target }, i) => target.toggleAttribute(CUT_ATTR, cuts[i]));
 }
 
+// A late font changes every path's width, but not the width of a box the row
+// sizes rather than its text. A fresh observation reports in the next frame
+// whatever the box's size, so each is measured again.
+function reobserveAll() {
+  for (const el of watched) {
+    observer?.unobserve(el);
+    observer?.observe(el);
+  }
+}
+
 function watch(el: HTMLElement) {
   if (typeof ResizeObserver === "undefined") return undefined;
-  observer ??= new ResizeObserver(markCut);
+  if (!observer) {
+    observer = new ResizeObserver(markCut);
+    // jsdom has no FontFaceSet.
+    document.fonts?.addEventListener("loadingdone", reobserveAll);
+  }
   observer.observe(el);
-  watched++;
+  watched.add(el);
   return () => {
     observer?.unobserve(el);
-    if (--watched === 0) {
+    watched.delete(el);
+    if (watched.size === 0) {
       observer?.disconnect();
       observer = null;
+      document.fonts?.removeEventListener("loadingdone", reobserveAll);
     }
   };
 }
@@ -66,13 +88,12 @@ export function PathTail({
 >) {
   const tailRef = useRef<HTMLSpanElement | null>(null);
 
-  // Re-observed when the path changes: a new path in a box that keeps its
-  // width can cross the cut without the box resizing, and a fresh observation
-  // reports at once.
+  // Observed afresh when the path or its classes change: either can carry the
+  // path across the cut in a box that keeps its width.
   useLayoutEffect(() => {
     const el = tailRef.current;
     return el ? watch(el) : undefined;
-  }, [children]);
+  }, [children, className]);
 
   return (
     <span
