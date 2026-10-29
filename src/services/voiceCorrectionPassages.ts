@@ -241,20 +241,20 @@ export function joinPassageTexts(texts: string[]): string | null {
 }
 
 /**
- * Every passage's reply, in passage order, and main's timing from the one
- * that came back last: it is the one the draft waited on.
+ * Every passage's reply, in passage order, and the one that came back last:
+ * it is the one the draft waited on, so main's account of it is the pass's.
  */
-export async function settlePassageReplies<T extends { timing: unknown }>(
+export async function settlePassageReplies<T>(
   replies: ReadonlyArray<Promise<T>>
-): Promise<{ results: T[]; lastTiming: unknown }> {
-  let lastTiming: unknown = null;
+): Promise<{ results: T[]; last: T | null }> {
+  let last: T | null = null;
   const results = await Promise.all(
     replies.map((reply) =>
       reply.then((result) => {
-        lastTiming = result.timing;
+        last = result;
         return result;
       })
     )
   );
-  return { results, lastTiming };
+  return { results, last };
 }

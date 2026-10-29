@@ -1,10 +1,13 @@
 import { VOICE_SESSION_SUMMARY_MESSAGE } from "@shared/utils/voiceLogFields";
 import {
   VoiceCorrectionTimingSchema,
+  VoicePrefetchMatchSchema,
   VoiceSessionReportSchema,
   VoiceSessionSummarySchema,
   type VoiceCorrectionPassages,
   type VoiceCorrectionTiming,
+  type VoicePrefetchMatch,
+  type VoicePrefetchOutcome,
   type VoiceSessionReport,
   type VoiceSessionSummary,
   type VoiceStopReason,
@@ -27,6 +30,16 @@ export const VOICE_FRAME_WAIT_MS = 1_000;
 
 function roundMs(value: number | null | undefined): number | null {
   return value === null || value === undefined ? null : Math.max(0, Math.round(value));
+}
+
+// Main can't tell a miss's cause once the session is gone; its report can.
+function prefetchOutcome(
+  match: VoicePrefetchMatch | null,
+  started: number | null
+): VoicePrefetchOutcome | null {
+  if (match !== "not_matched") return match;
+  if (started === null) return null;
+  return started > 0 ? "request_changed" : "none_started";
 }
 
 type Mark = "cue" | "micLive" | "socketReady" | "firstText" | "stopRequested" | "settled";
@@ -60,6 +73,7 @@ export class VoiceSessionTimeline {
   private correctionMs: number | null = null;
   private correctionRepliedAt: number | null = null;
   private correctionTiming: VoiceCorrectionTiming | null = null;
+  private correctionPrefetch: VoicePrefetchMatch | null = null;
   private correctionApplyMs: number | null = null;
   private correction: "none" | VoiceCorrectionOutcome = "none";
   private correctionPassages: VoiceCorrectionPassages = countPassageFates([]);
@@ -69,6 +83,7 @@ export class VoiceSessionTimeline {
   private droppedQueued = 0;
   private charsCommitted = 0;
   private heardSignal = false;
+  private lastSpeechAt: number | null = null;
   private provider: VoiceTranscriptionProvider | null = null;
   private backend:
     | { state: "none" | "pending" | "unreported" }
@@ -144,6 +159,11 @@ export class VoiceSessionTimeline {
     this.heardSignal = true;
   }
 
+  /** A chunk at speech level arrived from the capture. */
+  noteSpeech(): void {
+    if (!this.done) this.lastSpeechAt = this.deps.now();
+  }
+
   /** The start request went to main, so main will report how the session ended. */
   expectReport(): void {
     if (this.backend.state === "none") this.backend = { state: "pending" };
@@ -183,9 +203,10 @@ export class VoiceSessionTimeline {
 
   /**
    * Every passage's reply is back: what follows is the draft taking them.
-   * `timing` is main's account of the last one back, checked like its report.
+   * `timing` and `prefetch` are main's account of the last one back, checked
+   * like its report.
    */
-  noteCorrectionReplies(timing: unknown): void {
+  noteCorrectionReplies(timing: unknown, prefetch: unknown): void {
     if (
       this.done ||
       this.correctionStartedAt === null ||
@@ -197,6 +218,8 @@ export class VoiceSessionTimeline {
     this.correctionRepliedAt = this.deps.now();
     const parsed = VoiceCorrectionTimingSchema.safeParse(timing);
     this.correctionTiming = parsed.success ? parsed.data : null;
+    const match = VoicePrefetchMatchSchema.safeParse(prefetch);
+    this.correctionPrefetch = match.success ? match.data : null;
   }
 
   endCorrection(outcome: VoiceCorrectionOutcome, passages: VoiceCorrectionPassages): void {
@@ -298,12 +321,20 @@ export class VoiceSessionTimeline {
       socketReadyMs: this.since("socketReady"),
       firstTextMs: this.since("firstText"),
       stopRequestedMs: this.since("stopRequested"),
+      stopTailMs:
+        stopAt === undefined || this.lastSpeechAt === null
+          ? null
+          : Math.max(0, Math.round(stopAt - this.lastSpeechAt)),
       stopSettledMs: stopAt === undefined ? null : this.since("settled", stopAt),
       correctionMs: this.correctionMs === null ? null : Math.round(this.correctionMs),
       correctionPrepMs: roundMs(this.correctionTiming?.prepMs),
       correctionRequestMs: roundMs(this.correctionTiming?.requestMs),
       correctionApplyMs: roundMs(this.correctionApplyMs),
       correction: this.correction,
+      correctionPrefetch: prefetchOutcome(
+        this.correctionPrefetch,
+        report?.prefetchesStarted ?? null
+      ),
       correctionPassages: this.correctionPassages,
       correctionChunks: this.correctionChunks,
       correctionChunkPassages: this.correctionChunkPassages,
@@ -319,6 +350,7 @@ export class VoiceSessionTimeline {
       reconnects: report?.reconnects ?? null,
       completedSegments: report?.completedSegments ?? null,
       emptyCompletions: report?.emptyCompletions ?? null,
+      prefetchesStarted: report?.prefetchesStarted ?? null,
     };
   }
 }

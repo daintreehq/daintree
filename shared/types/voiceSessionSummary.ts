@@ -66,6 +66,8 @@ export const VoiceSessionReportSchema = z
     reconnects: count,
     completedSegments: count,
     emptyCompletions: count,
+    // Cleanup runs its pauses started ahead of the stop.
+    prefetchesStarted: count,
   })
   .strict();
 
@@ -122,6 +124,38 @@ export const VoiceCorrectionTimingSchema = z
 
 export type VoiceCorrectionTiming = z.infer<typeof VoiceCorrectionTimingSchema>;
 
+/**
+ * What main found when a stop's passage went for cleanup: a pause's run of the
+ * same request whose context matched and whose reply it took, one whose
+ * context read differently since, one that failed (the stop then sends its
+ * own, unless the account refused it), or none of the same request.
+ */
+export const VOICE_PREFETCH_MATCHES = [
+  "adopted",
+  "inputs_changed",
+  "prefetch_failed",
+  "not_matched",
+] as const;
+
+export type VoicePrefetchMatch = (typeof VOICE_PREFETCH_MATCHES)[number];
+
+export const VoicePrefetchMatchSchema = z.enum(VOICE_PREFETCH_MATCHES);
+
+/**
+ * Where the stop-time pass's cleanup came from. A miss is told apart by
+ * whether the session started any prefetch: one it started may have been
+ * replaced by a later pause, or lapsed, as well as asked for other words.
+ */
+export const VOICE_PREFETCH_OUTCOMES = [
+  "adopted",
+  "inputs_changed",
+  "request_changed",
+  "prefetch_failed",
+  "none_started",
+] as const;
+
+export type VoicePrefetchOutcome = (typeof VOICE_PREFETCH_OUTCOMES)[number];
+
 export const VoiceSessionSummarySchema = z
   .object({
     origin: z.enum(["key", "call"]),
@@ -135,6 +169,9 @@ export const VoiceSessionSummarySchema = z
     socketReadyMs: ms,
     firstTextMs: ms,
     stopRequestedMs: ms,
+    // From the last speech-level chunk to the stop request; null when none
+    // was heard. A chunk the stop flushed held speech up to it, and reads 0.
+    stopTailMs: ms,
     // From the stop request to the last committed text.
     stopSettledMs: ms,
     correctionMs: ms,
@@ -145,6 +182,9 @@ export const VoiceSessionSummarySchema = z
     correctionRequestMs: ms,
     correctionApplyMs: ms,
     correction: z.enum(["none", "applied", "unchanged", "failed", "discarded"]),
+    // Whether the last passage back took a pause's prefetch, or why not; null
+    // where no reply said, or a miss came without main's report.
+    correctionPrefetch: z.enum(VOICE_PREFETCH_OUTCOMES).nullable(),
     // The reasons behind it, passage by passage; all zero when no cleanup ran.
     correctionPassages: VoiceCorrectionPassagesSchema,
     // Chunks of a long dictation sent for cleanup while it ran. The correction
@@ -169,6 +209,7 @@ export const VoiceSessionSummarySchema = z
     reconnects: count.nullable(),
     completedSegments: count.nullable(),
     emptyCompletions: count.nullable(),
+    prefetchesStarted: count.nullable(),
   })
   .strict();
 

@@ -32,6 +32,7 @@ import type {
 import type {
   VoiceCorrectionTiming,
   VoiceCorrectionVerdict,
+  VoicePrefetchMatch,
   VoiceSessionReport,
 } from "../voiceSessionSummary.js";
 export type { VoiceInputError, VoiceInputStatus };
@@ -2327,6 +2328,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       /** Why the passage came back as it did: a code, never text. */
       verdict?: VoiceCorrectionVerdict;
       timing?: VoiceCorrectionTiming;
+      /** What became of a pause's prefetch of the passage; only for a passage with a session. */
+      prefetch?: VoicePrefetchMatch;
       /** A failure that will recur, on the one reply of its outage that should say so. */
       cleanupFailure?: VoiceCleanupFailure;
     }>;
