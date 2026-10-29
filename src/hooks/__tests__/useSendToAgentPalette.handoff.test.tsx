@@ -284,6 +284,19 @@ describe("send to agent, an agent target", () => {
     expect(writeMock.mock.calls[0]![1]).toContain(text);
   });
 
+  it("measures the text as the draft will hold it, so CRLF line endings don't count twice", () => {
+    const text = "x\r\n".repeat(Math.floor(AGENT_CONTEXT_MAX_TEXT_LENGTH / 2));
+    expect(text.length).toBeGreaterThan(AGENT_CONTEXT_MAX_TEXT_LENGTH);
+    const { result, row } = openWith([agent("source"), agent("b")], { ...COMPLETION, text });
+
+    act(() => {
+      result.current.selectItem(row("b"));
+    });
+
+    expect(draftOf("b")).toContain("x\nx\n");
+    expect(usePaletteStore.getState().activePaletteId).toBeNull();
+  });
+
   it("does not paste into an agent that quit back to its shell while the palette was open", () => {
     const { result, row } = openWith([agent("source"), agent("b")]);
     const offered = row("b");

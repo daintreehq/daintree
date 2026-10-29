@@ -124,10 +124,15 @@ describe("draftAssistantContext", () => {
     expect(helpState.setActiveSlot).toHaveBeenCalledWith(helpState.activeSlot);
   });
 
-  it("lifts a focus-mode hide, which would keep the open panel off screen", () => {
-    draftAssistantContext({ text: "body" });
-    expect(clearAssistantGesture).toHaveBeenCalledTimes(1);
-  });
+  it.each([false, true])(
+    "lifts a focus-mode hide, which would keep the panel off screen (open: %s)",
+    (isOpen) => {
+      // An open panel hidden by focus mode is the case the hide matters for.
+      helpState.isOpen = isOpen;
+      draftAssistantContext({ text: "body" });
+      expect(clearAssistantGesture).toHaveBeenCalledTimes(1);
+    }
+  );
 
   it("holds the grid still only when it opens the panel", () => {
     draftAssistantContext({ text: "body" });

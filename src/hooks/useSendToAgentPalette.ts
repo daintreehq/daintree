@@ -16,7 +16,10 @@ import {
   reportDraftNotAdded,
   type AgentHandoffContent,
 } from "@/services/agentHandoff/agentDraft";
-import { AGENT_CONTEXT_MAX_TEXT_LENGTH } from "@shared/utils/agentContextDrag";
+import {
+  AGENT_CONTEXT_MAX_TEXT_LENGTH,
+  normalizeAgentContextText,
+} from "@shared/utils/agentContextDrag";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { requestPaneFocus } from "@/components/Terminal/paneFocusRequest";
 import { suppressPaletteFocusRestore } from "@/components/ui/paletteFocusRestore";
@@ -322,7 +325,8 @@ export function useSendToAgentPalette() {
       }
       // A draft holds a bounded block. A selection can run past it, and cutting
       // it short would hand the agent less than the user picked without saying.
-      if (content.text.length > AGENT_CONTEXT_MAX_TEXT_LENGTH) {
+      // Measured as the block will hold it, line endings unified.
+      if (normalizeAgentContextText(content.text).length > AGENT_CONTEXT_MAX_TEXT_LENGTH) {
         reportDraftNotAdded(
           `it's over ${AGENT_CONTEXT_MAX_TEXT_LENGTH.toLocaleString("en-US")} characters`
         );
