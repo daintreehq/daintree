@@ -75,6 +75,8 @@ export function PanelPalette({
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      // While an IME composes, its candidate keys belong to the composition.
+      if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
       switch (e.key) {
         case "ArrowUp":
           e.preventDefault();
@@ -102,8 +104,6 @@ export function PanelPalette({
           onConfirm();
           break;
         case "Escape":
-          // An IME spends Escape cancelling its candidate; leave the query alone.
-          if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) break;
           e.preventDefault();
           // A query clears before the palette closes, as in every SearchablePalette.
           // Stopped so the dialog's document-level Escape backstop cannot close it.
