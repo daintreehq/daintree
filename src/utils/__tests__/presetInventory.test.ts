@@ -3,12 +3,24 @@ import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { presetInventoryState, waitForLaunchPresets } from "../presetInventory";
 
+const { useAgentSettingsStore } = await import("@/store/agentSettingsStore");
+
 vi.mock("@/store/agentSettingsStore", async () => {
   const { create } = await import("zustand");
-  return { useAgentSettingsStore: create(() => ({ settings: null })) };
+  return {
+    useAgentSettingsStore: create<{ settings: { agents: Record<string, never> } | null }>(() => ({
+      settings: null,
+    })),
+  };
 });
 
 describe("presetInventoryState", () => {
+  it("passes the CCR read through whatever the project's state", () => {
+    const scope = { projectId: "a", scratchId: undefined };
+    expect(presetInventoryState(false, "a", scope)).toEqual({ ccr: false, project: true });
+    expect(presetInventoryState(true, null, scope)).toEqual({ ccr: true, project: false });
+  });
+
   it("counts a project's presets as loaded only when the snapshot is that project's", () => {
     const scope = { projectId: "a", scratchId: undefined };
     expect(presetInventoryState(true, "a", scope).project).toBe(true);
@@ -31,6 +43,7 @@ describe("waitForLaunchPresets", () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     useCcrPresetsStore.setState({ ccrPresetsByAgent: {}, isInitialized: false });
     useProjectPresetsStore.setState({ presetsByAgent: {}, hydratedProjectId: null });
+    useAgentSettingsStore.setState({ settings: null });
   });
 
   afterEach(() => {
@@ -52,6 +65,39 @@ describe("waitForLaunchPresets", () => {
 
     const calls = isSettled.mock.calls.length;
     useCcrPresetsStore.getState().markInitialized();
+    expect(isSettled).toHaveBeenCalledTimes(calls);
+  });
+
+  it("wakes on the CCR routes alone", async () => {
+    const wait = waitForLaunchPresets(() => useCcrPresetsStore.getState().isInitialized);
+
+    useCcrPresetsStore.getState().markInitialized();
+
+    await expect(wait).resolves.toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("wakes when the agent settings change, as when a different preset is chosen", async () => {
+    const wait = waitForLaunchPresets(() => useAgentSettingsStore.getState().settings !== null);
+
+    useAgentSettingsStore.setState({ settings: { agents: {} } });
+
+    await expect(wait).resolves.toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("stops listening to every store once it settles", async () => {
+    let settled = false;
+    const isSettled = vi.fn(() => settled);
+    const wait = waitForLaunchPresets(isSettled);
+    settled = true;
+    useCcrPresetsStore.getState().markInitialized();
+    await expect(wait).resolves.toBe(true);
+
+    const calls = isSettled.mock.calls.length;
+    useCcrPresetsStore.setState({ isInitialized: false });
+    useProjectPresetsStore.getState().setPresetsByAgent("b", {});
+    useAgentSettingsStore.setState({ settings: { agents: {} } });
     expect(isSettled).toHaveBeenCalledTimes(calls);
   });
 

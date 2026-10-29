@@ -155,9 +155,15 @@ describe("PresetSelector", () => {
       <PresetSelector {...props} selectionLoading />
     );
 
-    expect(getByTestId("preset-selector-trigger").textContent).not.toContain("Default");
+    expect(getByTestId("preset-selector-trigger").textContent).toContain("Loading saved preset…");
     expect(getByTestId("preset-option-default").getAttribute("aria-current")).toBeNull();
     expect(queryAllByTestId("check-icon")).toHaveLength(0);
+
+    // Still a picker meanwhile: Default and the presets on hand can be chosen.
+    fireEvent.click(getByTestId("preset-option-default"));
+    expect(onChange).toHaveBeenLastCalledWith(undefined);
+    fireEvent.click(getByTestId("preset-option-user-x"));
+    expect(onChange).toHaveBeenLastCalledWith("user-x");
 
     // Once its presets have loaded without it, it's an ordinary stale id again.
     rerender(<PresetSelector {...props} />);

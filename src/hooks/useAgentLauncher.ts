@@ -511,8 +511,20 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
         });
         const declinePresetsLoading = (): null => {
           logWarn(`Declined a launch of ${agentId}: its preset's inventory hasn't loaded`);
+          // A fresh start of the same agent where this one was headed, never
+          // a replay: a caller's prompt, handback and requested id belong to a
+          // dispatch that has already been answered.
+          const retryOptions: LaunchAgentOptions = {
+            worktreeId: effectiveWorktreeId ?? undefined,
+            location: launchOptions?.location,
+            presetId: launchOptions?.presetId,
+            modelId: launchOptions?.modelId,
+          };
           notifyPresetsLoading(agentConfig?.name ?? agentId, effectiveWorktreeId, () => {
-            void launchAgentRef.current?.(agentId, { ...launchOptions, onDecline: undefined });
+            if (!isMounted.current) return;
+            launchAgentRef.current?.(agentId, retryOptions).catch((error: unknown) => {
+              logError(`Failed to retry a launch of ${agentId}`, error);
+            });
           });
           return decline("presets-loading");
         };
@@ -527,6 +539,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
         ) {
           return declinePresetsLoading();
         }
+        if (!isMounted.current) return decline("unavailable");
         const plan = await buildAgentLaunchPlan({
           ...presetSources(),
           agentConfig,

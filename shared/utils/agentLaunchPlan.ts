@@ -101,11 +101,11 @@ export interface AgentLaunchPlan {
 }
 
 /**
- * The saved or requested preset id a launch can't resolve yet because the
+ * The saved or requested preset id a launch can't settle yet because an
  * inventory that could hold it hasn't loaded (#15025), or `undefined` when the
- * launch's preset is settled: found, deliberately none, or really gone. A
- * stale worktree pick falls back to the agent default, so that fallback has to
- * be settled too before the launch can go ahead.
+ * launch's preset is settled: found where nothing unread could outrank it,
+ * deliberately none, or really gone. A stale worktree pick falls back to the
+ * agent default, so that fallback has to be settled too.
  */
 export function findUnloadedLaunchPreset(
   input: Pick<
@@ -123,12 +123,25 @@ export function findUnloadedLaunchPreset(
   const { agentId, worktreeId, options, presetInventory } = input;
   if (!input.isAgent || options?.presetId === null) return undefined;
   const entry = input.settings?.agents?.[agentId] ?? {};
-  const unresolved = (id: string) =>
-    !getMergedPreset(agentId, id, entry.customPresets, input.ccrPresets, input.projectPresets);
+  const resolves = (id: string) =>
+    getMergedPreset(agentId, id, entry.customPresets, input.ccrPresets, input.projectPresets) !==
+    undefined;
+  const holds = (bucket: AgentPreset[] | undefined, id: string) =>
+    Array.isArray(bucket) && bucket.some((preset) => preset.id === id);
+  // Custom presets outrank every source and project presets outrank CCR and
+  // the registry, so a CCR or built-in match can still lose to a project
+  // preset of the same id that hasn't arrived.
+  const settled = (id: string) =>
+    resolves(id)
+      ? presetInventory.project ||
+        holds(entry.customPresets, id) ||
+        holds(input.projectPresets, id)
+      : isPresetAbsenceSettled(id, presetInventory);
 
   const requestedId = options?.presetId ?? resolveEffectivePresetId(entry, worktreeId);
-  if (!requestedId || !unresolved(requestedId)) return undefined;
-  if (!isPresetAbsenceSettled(requestedId, presetInventory)) return requestedId;
+  if (!requestedId) return undefined;
+  if (!settled(requestedId)) return requestedId;
+  if (resolves(requestedId)) return undefined;
 
   const scopedId =
     worktreeId && entry.worktreePresets ? entry.worktreePresets[worktreeId] : undefined;
@@ -138,8 +151,7 @@ export function findUnloadedLaunchPreset(
     scopedId === requestedId &&
     fallbackId &&
     fallbackId !== scopedId &&
-    unresolved(fallbackId) &&
-    !isPresetAbsenceSettled(fallbackId, presetInventory)
+    !settled(fallbackId)
   ) {
     return fallbackId;
   }

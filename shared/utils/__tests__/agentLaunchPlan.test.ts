@@ -109,7 +109,7 @@ describe("buildAgentLaunchPlan", () => {
       expect(getCliDetail).not.toHaveBeenCalled();
     });
 
-    it("resolves the same pick once the project's presets arrive", async () => {
+    it("resolves a project pick that is on hand even before the load is marked done", async () => {
       const plan = await buildAgentLaunchPlan(
         input({
           settings: settingsWith({ worktreePresets: { "/repo-wt/a": "team" } }),
@@ -165,6 +165,67 @@ describe("buildAgentLaunchPlan", () => {
 
       expect(plan.unloadedPresetId).toBe("ccr-opus");
       expect(onStalePreset).not.toHaveBeenCalled();
+    });
+
+    it("holds a CCR match that an unread project preset of the same id would outrank", async () => {
+      const opus = { id: "ccr-opus", name: "CCR: Opus", env: { WHO: "ccr" } };
+      const unread = await buildAgentLaunchPlan(
+        input({
+          settings: settingsWith({ presetId: "ccr-opus" }),
+          ccrPresets: [opus],
+          presetInventory: { ccr: true, project: false },
+        })
+      );
+      const loaded = await buildAgentLaunchPlan(
+        input({ settings: settingsWith({ presetId: "ccr-opus" }), ccrPresets: [opus] })
+      );
+
+      expect(unread.unloadedPresetId).toBe("ccr-opus");
+      expect(loaded.preset?.id).toBe("ccr-opus");
+    });
+
+    it("never holds a custom match, which nothing unread can outrank", async () => {
+      const plan = await buildAgentLaunchPlan(
+        input({
+          settings: settingsWith({ presetId: "global", customPresets: PRESETS }),
+          presetInventory: { ccr: false, project: false },
+        })
+      );
+
+      expect(plan.unloadedPresetId).toBeUndefined();
+      expect(plan.preset?.id).toBe("global");
+    });
+
+    it("doesn't wait on the saved fallback for an explicit pick that is really gone", async () => {
+      const plan = await buildAgentLaunchPlan(
+        input({
+          settings: settingsWith({
+            presetId: "ccr-opus",
+            worktreePresets: { "/repo-wt/a": "user-gone" },
+          }),
+          options: { presetId: "user-gone" },
+          presetInventory: { ccr: false, project: true },
+        })
+      );
+
+      expect(plan.unloadedPresetId).toBeUndefined();
+      expect(plan.preset).toBeUndefined();
+    });
+
+    it("uses a fallback that is already on hand while CCR is still unread", async () => {
+      const plan = await buildAgentLaunchPlan(
+        input({
+          settings: settingsWith({
+            presetId: "ccr-opus",
+            worktreePresets: { "/repo-wt/a": "user-gone" },
+          }),
+          ccrPresets: [{ id: "ccr-opus", name: "CCR: Opus" }],
+          presetInventory: { ccr: false, project: true },
+        })
+      );
+
+      expect(plan.unloadedPresetId).toBeUndefined();
+      expect(plan.preset?.id).toBe("ccr-opus");
     });
 
     it("never holds a launch that asks for no preset", async () => {
