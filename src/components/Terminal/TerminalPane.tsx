@@ -38,6 +38,7 @@ import { useGridScrollRoot } from "./GridScrollRootContext";
 import { useUnmountVisibilityCleanup } from "./useUnmountVisibilityCleanup";
 import { useTerminalVisibilityObserver } from "./useTerminalVisibilityObserver";
 import { FleetDraftingPill } from "@/components/Fleet/FleetDraftingPill";
+import { FleetRawInputNotice } from "@/components/Fleet/FleetRawInputNotice";
 import { TerminalRestartStatusBanner } from "./TerminalRestartStatusBanner";
 import { FindCodexSessionAction } from "./FindCodexSessionAction";
 import {
@@ -1861,6 +1862,15 @@ function TerminalPaneComponent({
                 <TerminalChipRow
                   leading={isFleetPrimary ? <FleetDraftingPill /> : null}
                   trailing={<TerminalScrollIndicator terminalId={id} />}
+                  notice={
+                    // Keys typed here never reach agents armed on other hosts,
+                    // so the pane they're typed into says so (#14957).
+                    isArmed && isFocused && !isInputLocked ? (
+                      <FleetRawInputNotice
+                        composerReachesFleet={showHybridInputBar && !isHybridInputDisabled}
+                      />
+                    ) : null
+                  }
                 />
 
                 {(isBackendDisconnected || isBackendRecovering) && (
