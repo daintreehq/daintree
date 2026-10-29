@@ -98,10 +98,17 @@ describe("matchLiveCodexThreads", () => {
   });
 
   it("lets a prompt cut at its cap run on mid-word", () => {
-    const cut: LiveAttributionPane = { ...pane("a", "Rewrite the parser so it han"), promptTruncated: true };
+    const cut: LiveAttributionPane = {
+      ...pane("a", "Rewrite the parser so it han"),
+      promptTruncated: true,
+    };
 
     expect(
-      matchLiveCodexThreads([cut], [thread("s", "Rewrite the parser so it handles BOMs")], new Set())
+      matchLiveCodexThreads(
+        [cut],
+        [thread("s", "Rewrite the parser so it handles BOMs")],
+        new Set()
+      )
     ).toEqual(new Map([["a", "s"]]));
     expect(
       matchLiveCodexThreads(
@@ -176,7 +183,11 @@ function terminal(id: string, overrides: Partial<TerminalRecord> = {}): Terminal
   } as TerminalRecord;
 }
 
-function saved(id: string, prompt?: string, overrides: Partial<TerminalSnapshot> = {}): TerminalSnapshot {
+function saved(
+  id: string,
+  prompt?: string,
+  overrides: Partial<TerminalSnapshot> = {}
+): TerminalSnapshot {
   return {
     id,
     kind: "terminal",
@@ -200,7 +211,8 @@ function harness(
   const world = {
     terminals: options.terminals ?? [terminal("pane-1")],
     panes: options.panes ?? [saved("pane-1", "Triage issue #1")],
-    threads: options.threads === undefined ? [thread("session-1", "Triage issue #1")] : options.threads,
+    threads:
+      options.threads === undefined ? [thread("session-1", "Triage issue #1")] : options.threads,
     degraded: options.degraded ?? false,
     quitting: options.quitting ?? false,
     generations: new Map<string, number>(),
@@ -215,13 +227,11 @@ function harness(
     getLiveGeneration: vi.fn((id: string) => world.generations.get(id) ?? 1),
     noteLiveAgentSessionId: vi.fn(),
   };
-  const getProjectState = vi.fn(
-    async (projectId: string): Promise<ProjectState> => ({
-      projectId,
-      sidebarWidth: 350,
-      terminals: world.panes,
-    })
-  );
+  const getProjectState = vi.fn(async (projectId: string): Promise<ProjectState> => ({
+    projectId,
+    sidebarWidth: 350,
+    terminals: world.panes,
+  }));
   const listThreads = vi.fn(async (_cwd: string, _since: number, _home?: string) => world.threads);
   const persist = vi.fn(async (): Promise<PaneWritebackOutcome> => "filled");
   const service = new CodexLiveSessionAttribution({
@@ -305,11 +315,9 @@ describe("CodexLiveSessionAttribution", () => {
     await vi.advanceTimersByTimeAsync(DELAYS[0]);
 
     expect(h.listThreads).toHaveBeenCalledTimes(1);
-    expect(h.persist.mock.calls.map(([call]) => (call as { sessionId: string }).sessionId)).toEqual([
-      "session-0",
-      "session-1",
-      "session-2",
-    ]);
+    expect(h.persist.mock.calls.map(([call]) => (call as { sessionId: string }).sessionId)).toEqual(
+      ["session-0", "session-1", "session-2"]
+    );
   });
 
   it("retries while the prompt isn't saved yet, then stops for good", async () => {
@@ -398,7 +406,10 @@ describe("CodexLiveSessionAttribution", () => {
     const h = track(
       harness({
         terminals: [terminal("pane-1"), terminal("pane-2", { agentSessionId: "session-held" })],
-        panes: [saved("pane-1", "Fix the tests"), saved("pane-3", undefined, { agentSessionId: "session-saved" })],
+        panes: [
+          saved("pane-1", "Fix the tests"),
+          saved("pane-3", undefined, { agentSessionId: "session-saved" }),
+        ],
         threads: [
           thread("session-held", "Fix the tests"),
           thread("session-saved", "Fix the tests"),
@@ -431,7 +442,9 @@ describe("CodexLiveSessionAttribution", () => {
   });
 
   it("stops once the saved pane has an id", async () => {
-    const h = track(harness({ panes: [saved("pane-1", "Triage issue #1", { agentSessionId: "x" })] }));
+    const h = track(
+      harness({ panes: [saved("pane-1", "Triage issue #1", { agentSessionId: "x" })] })
+    );
 
     working("pane-1");
     await vi.advanceTimersByTimeAsync(DELAYS.reduce((a, b) => a + b, 0) + 100);
@@ -487,7 +500,9 @@ describe("CodexLiveSessionAttribution", () => {
 
   it("queries a pane's own Codex profile", async () => {
     const h = track(
-      harness({ panes: [saved("pane-1", "Triage issue #1", { env: { codex_home: "/profiles/work" } })] })
+      harness({
+        panes: [saved("pane-1", "Triage issue #1", { env: { codex_home: "/profiles/work" } })],
+      })
     );
 
     working("pane-1");

@@ -156,7 +156,12 @@ describe("lifecycle note-live-agent-session-id handler", () => {
     const ctx = makeCtx();
     const dispatch = createPtyHostMessageDispatcher(ctx);
 
-    dispatch({ type: "note-live-agent-session-id", id: "t1", sessionId: "s1", launchGeneration: 4 });
+    dispatch({
+      type: "note-live-agent-session-id",
+      id: "t1",
+      sessionId: "s1",
+      launchGeneration: 4,
+    });
 
     expect(ctx.ptyManager.noteLiveAgentSessionId).toHaveBeenCalledWith("t1", "s1", 4);
   });
