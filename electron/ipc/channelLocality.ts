@@ -444,6 +444,7 @@ export const CHANNEL_LOCALITY = {
   "git:list-remote-commits": "host",
   "git:mark-safe-directory": "host",
   "git:merge-base-into-branch": "host",
+  "git:preview-file-mutation": "host",
   "git:pull-rebase": "host",
   "git:push": "host",
   "git:push-progress": "host",

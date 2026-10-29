@@ -1,7 +1,19 @@
 import path from "node:path";
-import { lstat, realpath } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { constants as fsConstants } from "node:fs";
+import { lstat, open, readlink, realpath, type FileHandle } from "node:fs/promises";
 import type { SimpleGit } from "simple-git";
+import type {
+  FileChangeSide,
+  FileChurn,
+  FileDiscardPreview,
+  FileTextSample,
+  FileTrashPreview,
+  DiscardOutcome,
+} from "../../../shared/types/fileMutation.js";
+import { AppError, isAppError } from "../../utils/errorTypes.js";
 import { createHardenedGit } from "../../utils/hardenedGit.js";
+import { runWithCappedStdout } from "../../utils/cappedGitOutput.js";
 import { runExclusive } from "../../utils/keyedMutex.js";
 
 /**
@@ -141,9 +153,71 @@ async function lstatOrNull(absolutePath: string) {
 async function refuseDirectory(absolutePath: string, gitPath: string): Promise<boolean> {
   const stats = await lstatOrNull(absolutePath);
   if (stats?.isDirectory()) {
-    throw new Error(`'${gitPath}' is a folder. Only files can be discarded or deleted.`);
+    throw new AppError({
+      code: "NOT_A_FILE",
+      message: `'${gitPath}' is a folder. Only files can be discarded or deleted.`,
+    });
   }
   return stats !== null;
+}
+
+/**
+ * Electron's `trashItem` rejects with whatever the platform said, which is
+ * rarely an errno, so the refusal travels as a code the renderer can word
+ * without parsing it. The message stays the platform's, for the log.
+ */
+async function moveToTrash(trashItem: TrashItem, absolutePath: string): Promise<void> {
+  try {
+    await trashItem(absolutePath);
+  } catch (error) {
+    throw new AppError({
+      code: "UNSUPPORTED",
+      message: error instanceof Error ? error.message : String(error),
+      cause: error instanceof Error ? error : undefined,
+    });
+  }
+}
+
+/**
+ * Gives a failure from the file system or git a code the renderer can word.
+ * Done here because the packaged build scrubs absolute paths from messages on
+ * the way out, and the lock's path is how its collision is recognised.
+ * Daintree's own refusals already carry codes and pass through.
+ */
+function classifyFailure(error: unknown): unknown {
+  if (isAppError(error)) return error;
+  const cause = error instanceof Error ? error : undefined;
+  const message = cause?.message ?? String(error);
+  const errno = (error as NodeJS.ErrnoException | null)?.code;
+  // Checked before the lock: git reports a lock it isn't allowed to create
+  // with the lock's path too, and waiting for another process won't fix that.
+  if (
+    errno === "EACCES" ||
+    errno === "EPERM" ||
+    /permission denied|operation not permitted/i.test(message)
+  ) {
+    return new AppError({ code: "PERMISSION", message, cause });
+  }
+  // A lock that exists: another git process is mid-operation.
+  if (/index\.lock'?: File exists|another git process seems to be running/i.test(message)) {
+    return new AppError({ code: "GIT_INDEX_LOCKED", message, cause });
+  }
+  return error;
+}
+
+async function classified<T>(run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    throw classifyFailure(error);
+  }
+}
+
+function changedWhileWaiting(gitPath: string): AppError {
+  return new AppError({
+    code: "FILE_CHANGED_SINCE_REVIEW",
+    message: `'${gitPath}' changed while waiting. Try again.`,
+  });
 }
 
 /** Holds every key at once, in a fixed order so two callers can never deadlock. */
@@ -197,7 +271,10 @@ async function readHeadEntry(
     if (tab === -1 || record.slice(tab + 1) !== gitPath) continue;
     const [mode, type] = record.slice(0, tab).split(" ");
     if (mode === "160000") {
-      throw new Error(`'${gitPath}' is a submodule. Discard it from inside the submodule.`);
+      throw new AppError({
+        code: "NOT_A_FILE",
+        message: `'${gitPath}' is a submodule. Discard it from inside the submodule.`,
+      });
     }
     if (type === "blob") return "blob";
   }
@@ -220,13 +297,29 @@ async function readHeadEntry(
  *   exactly what someone might want back.
  *
  * Untracked and conflicted files are refused: one has nothing to restore to
- * (the Delete item is the operation for it) and the other belongs to the
+ * (the Trash file item is the operation for it) and the other belongs to the
  * conflict panel.
  */
-export async function discardFileChanges(
+export function discardFileChanges(
   worktreePath: string,
   relativePath: string,
-  trashItem: TrashItem
+  trashItem: TrashItem,
+  /**
+   * The `token` of the preview the user approved. When given, the discard
+   * refuses unless every version it would act on is still the one that preview
+   * read: an agent saving between the confirm and the click would otherwise
+   * lose work the user never saw.
+   */
+  expectedToken?: string
+): Promise<void> {
+  return classified(() => runDiscard(worktreePath, relativePath, trashItem, expectedToken));
+}
+
+async function runDiscard(
+  worktreePath: string,
+  relativePath: string,
+  trashItem: TrashItem,
+  expectedToken: string | undefined
 ): Promise<void> {
   const target = await resolveTarget(worktreePath, relativePath);
   const git = await createHardenedGit(target.root);
@@ -235,40 +328,78 @@ export async function discardFileChanges(
   // anything checked before the wait — the status, a rename's partner, what is
   // on disk, where a parent symlink leads — can change while queued behind an
   // editor save, and acting on the stale answer is how the wrong file goes.
-  const keys = (await planDiscard(git, target)).targets.map((t) => t.lockKey);
+  //
+  // A reviewed file with nothing left to discard changed since the review —
+  // committed, reverted, unstaged into an untracked file — so the confirm
+  // should ask again rather than report a refusal it can't explain.
+  const planOrStale = async (from: ResolvedTarget): Promise<DiscardPlan> => {
+    try {
+      return await planDiscard(git, from);
+    } catch (error) {
+      if (expectedToken !== undefined && isAppError(error) && error.code === "NOT_FOUND") {
+        throw new AppError({
+          code: "FILE_CHANGED_SINCE_REVIEW",
+          message: `'${from.gitPath}' changed after the discard was reviewed.`,
+        });
+      }
+      throw error;
+    }
+  };
+  const keys = (await planOrStale(target)).targets.map((t) => t.lockKey);
   await runExclusiveAll(keys, async () => {
-    const plan = await planDiscard(git, await resolveTarget(worktreePath, relativePath));
+    const plan = await planOrStale(await resolveTarget(worktreePath, relativePath));
     const lockedKeys = plan.targets.map((t) => t.lockKey);
     if (lockedKeys.some((key) => !keys.includes(key))) {
-      throw new Error(`'${target.gitPath}' changed while waiting. Try again.`);
+      throw changedWhileWaiting(target.gitPath);
+    }
+    if (expectedToken !== undefined && (await fingerprintPlan(git, plan)) !== expectedToken) {
+      throw new AppError({
+        code: "FILE_CHANGED_SINCE_REVIEW",
+        message: `'${target.gitPath}' changed after the discard was reviewed.`,
+      });
     }
     const toRemove = plan.targets.filter((t) => t.head === "absent");
     const toRestore = plan.targets.filter((t) => t.head === "blob");
 
     // Trash before touching the index, so a refused Trash leaves the change
     // exactly as it was rather than half-discarded.
+    let trashedPath: string | null = null;
     for (const t of toRemove) {
-      if (t.onDisk) await trashItem(t.absolutePath);
+      if (t.onDisk) {
+        await moveToTrash(trashItem, t.absolutePath);
+        trashedPath = t.gitPath;
+      }
     }
-    if (toRemove.length > 0) {
-      await git.raw([
-        "rm",
-        "--cached",
-        "--quiet",
-        "--ignore-unmatch",
-        "--",
-        ...toRemove.map((t) => t.gitPath),
-      ]);
-    }
-    if (toRestore.length > 0 && plan.headOid !== null) {
-      await git.raw([
-        "restore",
-        `--source=${plan.headOid}`,
-        "--staged",
-        "--worktree",
-        "--",
-        ...toRestore.map((t) => t.gitPath),
-      ]);
+    try {
+      if (toRemove.length > 0) {
+        await git.raw([
+          "rm",
+          "--cached",
+          "--quiet",
+          "--ignore-unmatch",
+          "--",
+          ...toRemove.map((t) => t.gitPath),
+        ]);
+      }
+      if (toRestore.length > 0 && plan.headOid !== null) {
+        await git.raw([
+          "restore",
+          `--source=${plan.headOid}`,
+          "--staged",
+          "--worktree",
+          "--",
+          ...toRestore.map((t) => t.gitPath),
+        ]);
+      }
+    } catch (error) {
+      // The file is already in the Trash; saying only "couldn't discard" would
+      // read as though nothing happened.
+      if (trashedPath === null) throw error;
+      throw new AppError({
+        code: "INTERNAL",
+        message: `'${trashedPath}' is in the Trash, but git stopped before the discard finished.`,
+        cause: error instanceof Error ? error : undefined,
+      });
     }
   });
 }
@@ -278,11 +409,14 @@ interface DiscardTarget extends ResolvedTarget {
   head: HeadEntry;
 }
 
+interface DiscardPlan {
+  headOid: string | null;
+  entry: PorcelainEntry;
+  targets: DiscardTarget[];
+}
+
 /** Works out which paths discarding `target` touches, refusing what it must not. */
-async function planDiscard(
-  git: SimpleGit,
-  target: ResolvedTarget
-): Promise<{ headOid: string | null; targets: DiscardTarget[] }> {
+async function planDiscard(git: SimpleGit, target: ResolvedTarget): Promise<DiscardPlan> {
   const status = parsePorcelainV1Z(
     await git.raw(["status", "--porcelain=v1", "-z", "--untracked-files=no"])
   );
@@ -295,7 +429,10 @@ async function planDiscard(
         candidate.origPath === target.gitPath && (candidate.x === "R" || candidate.y === "R")
     );
   if (!entry) {
-    throw new Error(`'${target.gitPath}' has no changes to discard.`);
+    throw new AppError({
+      code: "NOT_FOUND",
+      message: `'${target.gitPath}' has no changes to discard.`,
+    });
   }
   if (isConflicted(entry)) {
     throw new Error(`'${target.gitPath}' has a merge conflict. Resolve it in the conflict panel.`);
@@ -318,7 +455,10 @@ async function planDiscard(
       entry.origPath === target.gitPath ? target : await resolveTarget(target.root, entry.origPath);
     const sourceStats = await lstatOrNull(source.absolutePath);
     if (sourceStats?.isDirectory()) {
-      throw new Error(`'${entry.origPath}' is a folder. Only files can be discarded or deleted.`);
+      throw new AppError({
+        code: "NOT_A_FILE",
+        message: `'${entry.origPath}' is a folder. Only files can be discarded or deleted.`,
+      });
     }
     // The rename took the source out of the index, so a file standing there
     // now is a new one the user made, and restoring HEAD over it would lose it.
@@ -341,14 +481,22 @@ async function planDiscard(
       head: await readHeadEntry(git, headOid, entry.origPath),
     });
   }
-  return { headOid, targets };
+  return { headOid, entry, targets };
 }
 
 /**
  * Moves one file to the OS Trash. The index is left alone: deleting a tracked
  * file shows up as a deletion to stage or discard like any other.
  */
-export async function trashFile(
+export function trashFile(
+  worktreePath: string,
+  relativePath: string,
+  trashItem: TrashItem
+): Promise<void> {
+  return classified(() => runTrash(worktreePath, relativePath, trashItem));
+}
+
+async function runTrash(
   worktreePath: string,
   relativePath: string,
   trashItem: TrashItem
@@ -359,11 +507,347 @@ export async function trashFile(
     // for a symlink, while this waited must not be what goes to the Trash.
     const current = await resolveTarget(worktreePath, relativePath);
     if (current.lockKey !== target.lockKey) {
-      throw new Error(`'${target.gitPath}' changed while waiting. Try again.`);
+      throw changedWhileWaiting(target.gitPath);
     }
     if (!(await refuseDirectory(current.absolutePath, current.gitPath))) {
-      throw new Error(`'${current.gitPath}' no longer exists.`);
+      throw new AppError({
+        code: "NOT_FOUND",
+        message: `'${current.gitPath}' no longer exists.`,
+      });
     }
-    await trashItem(current.absolutePath);
+    await moveToTrash(trashItem, current.absolutePath);
   });
+}
+
+/** Patch text past this is cut at a line: the preview shows a sample, not the change. */
+const PATCH_CAP_BYTES = 24 * 1024;
+/** A patch git is still writing past this is abandoned rather than read. */
+const PATCH_READ_CAP_BYTES = 512 * 1024;
+/** Files past this aren't read to count their lines. */
+const LINE_COUNT_CAP_BYTES = 1024 * 1024;
+const EXCERPT_LINES = 24;
+const EXCERPT_CAP_BYTES = 4 * 1024;
+
+function capAtLine(text: string, capBytes: number): { text: string; truncated: boolean } {
+  const bytes = Buffer.from(text, "utf8");
+  if (bytes.byteLength <= capBytes) return { text, truncated: false };
+  // A cut mid-character decodes as U+FFFD; dropping back to the last whole
+  // line removes it along with the partial line.
+  const cut = bytes.subarray(0, capBytes).toString("utf8");
+  const end = cut.lastIndexOf("\n");
+  return { text: end > 0 ? cut.slice(0, end + 1) : "", truncated: true };
+}
+
+/** Sums `git diff --numstat`; null when git reports nothing. */
+function parseNumstat(out: string): FileChurn | null {
+  let insertions = 0;
+  let deletions = 0;
+  let any = false;
+  for (const line of out.split("\n")) {
+    if (line.trim() === "") continue;
+    const [added, removed] = line.split("\t");
+    if (added === "-" || removed === "-") return "binary";
+    insertions += Number(added) || 0;
+    deletions += Number(removed) || 0;
+    any = true;
+  }
+  return any ? { insertions, deletions } : null;
+}
+
+// `--no-ext-diff --no-textconv` on every read: a configured diff driver or
+// textconv filter would otherwise run an arbitrary command just because the
+// confirm opened, and a slow or interactive one would hold the confirm up.
+const DIFF_FLAGS = ["--no-color", "--no-ext-diff", "--no-textconv", "-M"];
+
+async function readChurn(
+  git: SimpleGit,
+  args: string[],
+  paths: string[]
+): Promise<FileChurn | null> {
+  return parseNumstat(await git.raw(["diff", ...args, ...DIFF_FLAGS, "--numstat", "--", ...paths]));
+}
+
+async function readSide(
+  root: string,
+  git: SimpleGit,
+  args: string[],
+  paths: string[]
+): Promise<FileChangeSide | null> {
+  const churn = await readChurn(git, args, paths);
+  if (churn === null) return null;
+  if (churn === "binary") return { churn, patch: "", truncated: false };
+  // Stopped while git writes it, so a huge generated file can't be buffered
+  // whole in the main process just to show its first lines.
+  const raw = await runWithCappedStdout(root, PATCH_READ_CAP_BYTES, (capped) =>
+    capped.raw(["diff", ...args, ...DIFF_FLAGS, "--unified=2", "--", ...paths])
+  );
+  if (raw === null) return { churn, patch: "", truncated: true };
+  const { text, truncated } = capAtLine(raw, PATCH_CAP_BYTES);
+  return { churn, patch: text, truncated };
+}
+
+/**
+ * Opens a file for reading only if it is still a regular file once open.
+ * Non-blocking, so a FIFO swapped in after an `lstat` can't hang the open,
+ * and checked on the descriptor itself, so the swap can't slip between the
+ * check and the read. Null for anything that isn't a regular file.
+ */
+async function openRegularFile(absolutePath: string): Promise<FileHandle | null> {
+  const handle = await open(absolutePath, fsConstants.O_RDONLY | (fsConstants.O_NONBLOCK ?? 0));
+  if ((await handle.stat()).isFile()) return handle;
+  await handle.close();
+  return null;
+}
+
+async function hashDisk(absolutePath: string): Promise<string> {
+  const stats = await lstatOrNull(absolutePath);
+  if (stats === null) return "absent";
+  if (stats.isSymbolicLink()) return `link:${await readlink(absolutePath)}`;
+  // Special files are fingerprinted by what they are, never read.
+  if (!stats.isFile()) return `special:${stats.mode}:${stats.ino}`;
+  const handle = await openRegularFile(absolutePath);
+  if (handle === null) return `special:${stats.mode}:${stats.ino}`;
+  const hash = createHash("sha256");
+  try {
+    await new Promise<void>((resolve, reject) => {
+      handle
+        .createReadStream({ autoClose: false })
+        .on("data", (chunk) => hash.update(chunk))
+        .on("end", () => resolve())
+        .on("error", reject);
+    });
+  } finally {
+    await handle.close();
+  }
+  // The mode too: git tracks the executable bit, and flipping it is a change
+  // a discard would undo.
+  return `file:${stats.mode}:${hash.digest("hex")}`;
+}
+
+/**
+ * Every version a discard would act on — the commit it restores from, each
+ * path's index entry and what is on disk — folded into one value, so the
+ * discard can tell whether anything moved since the preview was read.
+ */
+async function fingerprintPlan(git: SimpleGit, plan: DiscardPlan): Promise<string> {
+  const { entry } = plan;
+  const hash = createHash("sha256");
+  hash.update(`head:${plan.headOid ?? "unborn"}\0`);
+  // The status that chose what the preview read and said: the same content
+  // under a different status (a staged addition that has since gained
+  // unstaged edits) is a different discard.
+  hash.update(`status:${entry.x}${entry.y}\0${entry.path}\0${entry.origPath ?? ""}\0`);
+  for (const target of plan.targets) {
+    const index = await git.raw(["ls-files", "--stage", "-z", "--", target.gitPath]);
+    hash.update(
+      `${target.gitPath}\0${target.head}\0${target.onDisk}\0${index}\0${await hashDisk(target.absolutePath)}\0`
+    );
+  }
+  return hash.digest("hex");
+}
+
+/**
+ * What discarding loses, judged by the versions involved rather than the
+ * status letter. A path in the last commit comes back from it, so only a pure
+ * deletion loses nothing. A path the last commit doesn't have goes to the
+ * Trash, so its disk copy survives; what doesn't is a staged version that
+ * differs from it (a rename's staged copy is the committed content under a new
+ * name until it carries edits of its own).
+ */
+function discardOutcome(plan: DiscardPlan, stagedIsOwnVersion: boolean): DiscardOutcome {
+  const { entry } = plan;
+  const destination = plan.targets[0]!;
+  if (destination.head === "blob") {
+    // A staged deletion with a file standing at the path again: the restore
+    // writes over that file, which git has never seen.
+    const pureDeletion =
+      (entry.x === " " || entry.x === "D") &&
+      (entry.y === " " || entry.y === "D") &&
+      !(entry.x === "D" && destination.onDisk);
+    return pureDeletion ? "restore" : "lose";
+  }
+  if (!destination.onDisk) return stagedIsOwnVersion ? "lose" : "restore";
+  return entry.y !== " " && stagedIsOwnVersion ? "lose" : "trash";
+}
+
+/**
+ * Whether the index holds a version of a path the last commit doesn't have
+ * that nothing else will keep once it leaves the index. A staged addition
+ * does; a rename or copy does only when its staged blob (or mode) differs
+ * from its source's committed one, which HEAD keeps either way.
+ */
+async function stagedIsOwnVersion(git: SimpleGit, plan: DiscardPlan): Promise<boolean> {
+  const { entry } = plan;
+  if (entry.x === "A") return true;
+  if ((entry.x !== "R" && entry.x !== "C") || !entry.origPath || plan.headOid === null) {
+    return false;
+  }
+  // `<mode> <oid> <stage>\t<path>` and `<mode> <type> <oid>\t<path>`.
+  const staged = (await git.raw(["ls-files", "--stage", "-z", "--", entry.path])).split("\t")[0];
+  const committed = (
+    await git.raw(["ls-tree", "-z", "--full-tree", plan.headOid, "--", entry.origPath])
+  ).split("\t")[0];
+  const [stagedMode, stagedOid] = (staged ?? "").split(" ");
+  const [committedMode, , committedOid] = (committed ?? "").split(" ");
+  return !stagedOid || stagedOid !== committedOid || stagedMode !== committedMode;
+}
+
+/** Reads that keep seeing the file change give up rather than show a moving target. */
+const PREVIEW_ATTEMPTS = 3;
+
+/**
+ * Reads what `discardFileChanges` would do to one file, without doing it: the
+ * same plan, its two sides with a sample of each patch, and a fingerprint the
+ * discard checks. Refuses exactly what the discard refuses.
+ *
+ * The fingerprint is taken before and after the patches are read and must
+ * match: an agent saving between the two would otherwise leave the dialog
+ * showing one version while the approval vouched for the next.
+ */
+export function previewDiscard(
+  worktreePath: string,
+  relativePath: string
+): Promise<FileDiscardPreview> {
+  return classified(() => readDiscardPreview(worktreePath, relativePath));
+}
+
+async function readDiscardPreview(
+  worktreePath: string,
+  relativePath: string
+): Promise<FileDiscardPreview> {
+  const target = await resolveTarget(worktreePath, relativePath);
+  const git = await createHardenedGit(target.root);
+  for (let attempt = 0; attempt < PREVIEW_ATTEMPTS; attempt++) {
+    const plan = await planDiscard(git, target);
+    const before = await fingerprintPlan(git, plan);
+    const { entry } = plan;
+    const destination = plan.targets[0]!;
+    const isRename = entry.x === "R" || entry.y === "R";
+    const isCopy = entry.x === "C" || entry.y === "C";
+    const stagedPaths = isRename && entry.origPath ? [entry.origPath, entry.path] : [entry.path];
+    const staged =
+      entry.x === " " ? null : await readSide(target.root, git, ["--cached"], stagedPaths);
+    const unstaged = entry.y === " " ? null : await readSide(target.root, git, [], [entry.path]);
+    const ownStaged = await stagedIsOwnVersion(git, plan);
+    const overwrites =
+      destination.head === "blob" && entry.x === "D" && destination.onDisk
+        ? await readTextSample(destination.absolutePath, true)
+        : null;
+    const after = await fingerprintPlan(git, await planDiscard(git, target));
+    if (after !== before) continue;
+    return {
+      kind: "discard",
+      path: entry.path,
+      renamedFrom: isRename ? (entry.origPath ?? null) : null,
+      copiedFrom: isCopy ? (entry.origPath ?? null) : null,
+      inLastCommit: destination.head === "blob",
+      outcome: discardOutcome(plan, ownStaged),
+      staged,
+      unstaged,
+      overwrites,
+      token: before,
+    };
+  }
+  throw new AppError({
+    code: "FILE_CHANGED_SINCE_REVIEW",
+    message: `'${target.gitPath}' kept changing while it was read.`,
+  });
+}
+
+async function readHead(absolutePath: string, bytes: number): Promise<Buffer | null> {
+  const handle = await openRegularFile(absolutePath);
+  if (handle === null) return null;
+  try {
+    const buffer = Buffer.alloc(bytes);
+    const { bytesRead } = await handle.read(buffer, 0, bytes, 0);
+    return buffer.subarray(0, bytesRead);
+  } finally {
+    await handle.close();
+  }
+}
+
+/** Size, line count and (when wanted) the first lines of a file on disk. */
+async function readTextSample(absolutePath: string, wantExcerpt: boolean): Promise<FileTextSample> {
+  const stats = await lstat(absolutePath);
+  const sample: FileTextSample = {
+    bytes: stats.size,
+    binary: false,
+    lines: null,
+    excerpt: null,
+    excerptTruncated: false,
+  };
+  if (!stats.isFile()) return sample;
+  // A file past the cap is sampled from its start rather than read whole: its
+  // first lines still identify it, though its line count is unknown.
+  const whole = stats.size <= LINE_COUNT_CAP_BYTES;
+  const content = await readHead(absolutePath, whole ? stats.size : EXCERPT_CAP_BYTES * 2);
+  if (content === null) return sample;
+  if (content.subarray(0, 8192).includes(0)) {
+    sample.binary = true;
+    return sample;
+  }
+  const text = content.toString("utf8");
+  const lines = text === "" ? 0 : text.split("\n").length - (text.endsWith("\n") ? 1 : 0);
+  if (whole) sample.lines = lines;
+  if (wantExcerpt) {
+    const head = text.split("\n").slice(0, EXCERPT_LINES).join("\n");
+    const capped = capAtLine(head, EXCERPT_CAP_BYTES);
+    sample.excerpt =
+      capped.text === "" && head !== "" ? head.slice(0, EXCERPT_CAP_BYTES) : capped.text;
+    sample.excerptTruncated = !whole || capped.truncated || lines > EXCERPT_LINES;
+  }
+  return sample;
+}
+
+/**
+ * Reads what moving one file to the Trash would leave behind: which copies
+ * git keeps (the committed one, a staged one, or none), the changes the Trash
+ * copy carries, and — for a file git has no copy of — its first lines, since
+ * the Trash will hold the only one.
+ */
+export function previewTrash(
+  worktreePath: string,
+  relativePath: string
+): Promise<FileTrashPreview> {
+  return classified(() => readTrashPreview(worktreePath, relativePath));
+}
+
+async function readTrashPreview(
+  worktreePath: string,
+  relativePath: string
+): Promise<FileTrashPreview> {
+  const target = await resolveTarget(worktreePath, relativePath);
+  const stats = await lstatOrNull(target.absolutePath);
+  if (stats === null) {
+    throw new AppError({ code: "NOT_FOUND", message: `'${target.gitPath}' no longer exists.` });
+  }
+  if (stats.isDirectory()) {
+    throw new AppError({
+      code: "NOT_A_FILE",
+      message: `'${target.gitPath}' is a folder. Only files can be discarded or deleted.`,
+    });
+  }
+  const git = await createHardenedGit(target.root);
+  const inIndex = (await git.raw(["ls-files", "-z", "--", target.gitPath])) !== "";
+  const headOid = await resolveHeadOid(git);
+  const inLastCommit = (await readHeadEntry(git, headOid, target.gitPath)) === "blob";
+  // check-ignore answers with its exit code; a failure to run reads as "not
+  // ignored", which only softens the copy to "untracked".
+  const ignored =
+    !inIndex &&
+    !inLastCommit &&
+    (await tryRaw(git, ["check-ignore", "-q", "--", target.gitPath])) !== null;
+  // Ignored files are often secrets (.env), so their content stays off screen.
+  const wantExcerpt = !inIndex && !inLastCommit && !ignored;
+
+  return {
+    kind: "trash",
+    path: target.gitPath,
+    inLastCommit,
+    inIndex,
+    ignored,
+    staged: inIndex ? await readChurn(git, ["--cached"], [target.gitPath]) : null,
+    unstaged: inIndex ? await readChurn(git, [], [target.gitPath]) : null,
+    ...(await readTextSample(target.absolutePath, wantExcerpt)),
+  };
 }

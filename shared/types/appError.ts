@@ -89,6 +89,12 @@ export type AppErrorCode =
   // A host's settings changed after the copy to it was previewed; it applies
   // nothing and asks for a fresh preview rather than write over the change.
   | "SETTINGS_PREVIEW_STALE"
+  // A file changed between the confirm that previewed a discard and the
+  // discard itself; nothing is touched and the confirm asks again (#15122).
+  | "FILE_CHANGED_SINCE_REVIEW"
+  // Another git process holds the worktree's index lock. Classified in main,
+  // before the packaged sanitiser scrubs the lock's path out of the message.
+  | "GIT_INDEX_LOCKED"
   // The host's last settings copy was replaced or already undone since the
   // page showed it; nothing is undone and the page refreshes to see why.
   | "SETTINGS_COPY_UNDO_STALE"

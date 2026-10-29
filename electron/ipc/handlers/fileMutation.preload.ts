@@ -2,6 +2,7 @@ import type { IpcInvokeMap } from "../../types/index.js";
 
 export const GIT_DISCARD_METHOD_CHANNELS = {
   discardFileChanges: "git:discard-file-changes",
+  previewFileMutation: "git:preview-file-mutation",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 export const FILES_TRASH_METHOD_CHANNELS = {
@@ -14,10 +15,22 @@ export interface FileMutationPayload {
   relativePath: string;
 }
 
+export interface FileDiscardPayload extends FileMutationPayload {
+  /** The approved preview's `token`; the discard refuses if the file moved since. */
+  expectedToken?: string;
+}
+
+export interface FileMutationPreviewPayload extends FileMutationPayload {
+  kind: "discard" | "trash";
+}
+
 export interface GitDiscardPreloadBindings {
   discardFileChanges(
-    payload: FileMutationPayload
+    payload: FileDiscardPayload
   ): Promise<IpcInvokeMap["git:discard-file-changes"]["result"]>;
+  previewFileMutation(
+    payload: FileMutationPreviewPayload
+  ): Promise<IpcInvokeMap["git:preview-file-mutation"]["result"]>;
 }
 
 export interface FilesTrashPreloadBindings {
@@ -31,6 +44,10 @@ export function buildGitDiscardPreloadBindings(invoke: Invoker): GitDiscardPrelo
     discardFileChanges: (payload) =>
       invoke(GIT_DISCARD_METHOD_CHANNELS.discardFileChanges, payload) as Promise<
         IpcInvokeMap["git:discard-file-changes"]["result"]
+      >,
+    previewFileMutation: (payload) =>
+      invoke(GIT_DISCARD_METHOD_CHANNELS.previewFileMutation, payload) as Promise<
+        IpcInvokeMap["git:preview-file-mutation"]["result"]
       >,
   };
 }

@@ -310,6 +310,7 @@ export const CHANNEL_LEASE_POLICY = {
   "git:list-remote-commits": "free",
   "git:mark-safe-directory": "free",
   "git:merge-base-into-branch": "driver",
+  "git:preview-file-mutation": "free",
   "git:pull-rebase": "driver",
   "git:push": "driver",
   "git:push-progress": "free",

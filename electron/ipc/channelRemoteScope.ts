@@ -56,6 +56,7 @@ export const CHANNEL_REMOTE_SCOPE: Readonly<Record<string, RemoteScopeTarget>> =
   // another project's is not.
   "git:mark-safe-directory": [{ from: "path", at: [0], unowned: "allow" }],
   "git:get-file-diff": CWD_FIELD,
+  "git:preview-file-mutation": [{ from: "path", at: [0, "worktreePath"] }],
   "git:get-working-diff": CWD_FIELD,
   "git:get-staging-status": CWD_ARG,
   "git:get-username": CWD_ARG,

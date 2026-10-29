@@ -552,6 +552,9 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["git:discard-file-changes"]["args"]
     ): Promise<IpcInvokeMap["git:discard-file-changes"]["result"]>;
     fetch(...args: IpcInvokeMap["git:fetch"]["args"]): Promise<IpcInvokeMap["git:fetch"]["result"]>;
+    previewFileMutation(
+      ...args: IpcInvokeMap["git:preview-file-mutation"]["args"]
+    ): Promise<IpcInvokeMap["git:preview-file-mutation"]["result"]>;
   };
   help: {
     adoptDetachedSession(
