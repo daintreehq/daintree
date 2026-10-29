@@ -7,6 +7,13 @@ import type { GlobalAssistantView } from "@shared/types/ipc/help";
 
 const host = vi.hoisted(() => ({ id: null as string | null }));
 const canopy = vi.hoisted(() => ({ isOpen: false }));
+/** The props the pane last gave the composer, so a test can press Enter or a key as the composer would. */
+const composer = vi.hoisted(() => ({
+  props: null as {
+    submitText: (text: string, imagePaths: readonly string[]) => Promise<boolean>;
+    onSendKey: (key: string) => void;
+  } | null,
+}));
 /** Every live pane api the pane made: its subject and the input stamp it types under. */
 const apis = vi.hoisted(
   () =>
@@ -15,8 +22,13 @@ const apis = vi.hoisted(
       stamp: unknown;
       disposed: boolean;
       terminalSubmit: ReturnType<typeof vi.fn>;
+      terminalSendKey: ReturnType<typeof vi.fn>;
     }>
 );
+/** What the stream mock reports once it has mounted. */
+const stream = vi.hoisted(() => ({
+  state: { watchId: 1 as number | null, ended: false, secretPrompt: false },
+}));
 
 vi.mock("@/clients/agentDefaultsClient", () => ({ agentDefaultsClient: { set: vi.fn() } }));
 vi.mock("@/hooks/useHostConnection", () => ({ getViewHostId: () => host.id }));
@@ -53,19 +65,28 @@ vi.mock("@/components/Canopy/CanopyTerminal", async () => {
       onStreamChange,
     }: {
       runId: string;
-      onStreamChange?: (state: { watchId: number; ended: boolean; secretPrompt: boolean }) => void;
+      onStreamChange?: (state: {
+        watchId: number | null;
+        ended: boolean;
+        secretPrompt: boolean;
+      }) => void;
     }) => {
       useEffect(() => {
-        onStreamChange?.({ watchId: 1, ended: false, secretPrompt: false });
+        onStreamChange?.(stream.state);
       }, [onStreamChange]);
       return <div data-testid="global-terminal" data-run={runId} />;
     },
   };
 });
 vi.mock("@/components/Terminal/HybridInputBar", () => ({
-  HybridInputBar: ({ disabled }: { disabled?: boolean }) => (
-    <div data-testid="global-composer" data-disabled={String(disabled === true)} />
-  ),
+  HybridInputBar: (props: {
+    disabled?: boolean;
+    submitText: (text: string, imagePaths: readonly string[]) => Promise<boolean>;
+    onSendKey: (key: string) => void;
+  }) => {
+    composer.props = props;
+    return <div data-testid="global-composer" data-disabled={String(props.disabled === true)} />;
+  },
 }));
 
 const { GlobalAssistantPane } = await import("../GlobalAssistantPane");
@@ -150,6 +171,35 @@ function renderPane(isVisible = true) {
 
 const flush = () => act(async () => {});
 
+/** A refusal as it arrives from main: an AppError's user message packed into `Error.message`. */
+function refusedBy(code: string, userMessage: string): Error {
+  return new Error(`[AppError|${code}|${encodeURIComponent(userMessage)}] internal detail`);
+}
+
+const failureBanner = () => screen.queryByTestId("help-global-send-failed");
+
+/** Press Enter in the composer the way it does: through the pane's `submitText`. */
+async function sendFromComposer(text = "hello", imagePaths: readonly string[] = []) {
+  let accepted: boolean | undefined;
+  await act(async () => {
+    accepted = await composer.props?.submitText(text, imagePaths);
+  });
+  return accepted;
+}
+
+async function pressKey(key: string) {
+  await act(async () => {
+    composer.props?.onSendKey(key);
+  });
+}
+
+async function renderOwned() {
+  installHelp(running({ inputOwner: "a1", inputEpoch: 3 }));
+  renderPane();
+  await flush();
+  return apis.at(-1)!;
+}
+
 describe("GlobalAssistantPane (#14454)", () => {
   beforeAll(async () => {
     await primeRadix();
@@ -158,6 +208,8 @@ describe("GlobalAssistantPane (#14454)", () => {
   beforeEach(() => {
     host.id = null;
     canopy.isOpen = false;
+    composer.props = null;
+    stream.state = { watchId: 1, ended: false, secretPrompt: false };
     apis.length = 0;
     useHelpPanelStore.setState({ isOpen: true, globalSelected: true, globalTarget: null });
   });
@@ -321,5 +373,195 @@ describe("GlobalAssistantPane (#14454)", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Restart conversation" }));
     await flush();
     expect(help.restartGlobalAssistant).toHaveBeenCalledWith(7);
+  });
+
+  describe("a refused send or key (#14977)", () => {
+    it("says why a refused message didn't go, and that the draft is still there", async () => {
+      const api = await renderOwned();
+      expect(failureBanner()).toBeNull();
+      api.terminalSubmit.mockRejectedValueOnce(
+        refusedBy("PERMISSION", "Another window has this assistant's input.")
+      );
+
+      expect(await sendFromComposer()).toBe(false);
+      const banner = failureBanner()!;
+      expect(banner.getAttribute("role")).toBe("status");
+      expect(banner.textContent).toContain("Couldn't send to assistant");
+      expect(banner.textContent).toContain("Another window has this assistant's input.");
+      expect(banner.textContent).toContain("Your message is still in the box; press Enter");
+      expect(banner.textContent).not.toContain("internal detail");
+    });
+
+    it("shows the words of a plain rejection and a fallback for one with none", async () => {
+      const api = await renderOwned();
+      api.terminalSubmit.mockRejectedValueOnce(new Error("That agent isn't running any more."));
+      await sendFromComposer();
+      expect(failureBanner()!.textContent).toContain("That agent isn't running any more.");
+
+      api.terminalSubmit.mockRejectedValueOnce(undefined);
+      await sendFromComposer();
+      expect(failureBanner()!.textContent).toContain("The assistant didn't take it.");
+    });
+
+    it("clears on an accepted send, which still carries its images", async () => {
+      const api = await renderOwned();
+      api.terminalSubmit.mockRejectedValueOnce(new Error("Couldn't reach it."));
+      await sendFromComposer();
+      expect(failureBanner()).not.toBeNull();
+
+      expect(await sendFromComposer("again", ["/tmp/a.png"])).toBe(true);
+      expect(failureBanner()).toBeNull();
+      expect(api.terminalSubmit).toHaveBeenLastCalledWith(1, "again", ["/tmp/a.png"]);
+    });
+
+    it("says a refused key didn't go, without claiming a draft", async () => {
+      const api = await renderOwned();
+      api.terminalSendKey.mockRejectedValueOnce(
+        refusedBy("NOT_FOUND", "That assistant isn't running any more.")
+      );
+
+      await pressKey("escape");
+      const banner = failureBanner()!;
+      expect(banner.textContent).toContain("Couldn't send key to assistant");
+      expect(banner.textContent).toContain("That assistant isn't running any more.");
+      expect(banner.textContent).not.toContain("still in the box");
+
+      await pressKey("up");
+      expect(failureBanner()).toBeNull();
+      expect(api.terminalSendKey).toHaveBeenLastCalledWith(1, "up");
+    });
+
+    it("keeps an unsent message's banner through a key that goes", async () => {
+      const api = await renderOwned();
+      api.terminalSubmit.mockRejectedValueOnce(new Error("Couldn't reach it."));
+      await sendFromComposer();
+      await pressKey("down");
+      expect(api.terminalSendKey).toHaveBeenCalledTimes(1);
+      expect(failureBanner()!.textContent).toContain("Couldn't send to assistant");
+    });
+
+    it("lets the newest attempt decide when a slow one settles after it", async () => {
+      const api = await renderOwned();
+      let refuseFirst!: (error: unknown) => void;
+      api.terminalSubmit.mockImplementationOnce(
+        () => new Promise((_, reject) => (refuseFirst = reject))
+      );
+      let first: Promise<boolean> | undefined;
+      act(() => {
+        first = composer.props?.submitText("one", []);
+      });
+      expect(await sendFromComposer("two")).toBe(true);
+
+      await act(async () => refuseFirst(new Error("Too late.")));
+      expect(await first).toBe(false);
+      expect(failureBanner()).toBeNull();
+    });
+
+    it("drops the old banner while the next send is on its way", async () => {
+      const api = await renderOwned();
+      api.terminalSubmit.mockRejectedValueOnce(new Error("Couldn't reach it."));
+      await sendFromComposer();
+      expect(failureBanner()).not.toBeNull();
+
+      api.terminalSubmit.mockImplementationOnce(() => new Promise(() => {}));
+      act(() => {
+        void composer.props?.submitText("again", []);
+      });
+      expect(failureBanner()).toBeNull();
+    });
+
+    it("keeps the refusal when input moves, and points at taking it back", async () => {
+      const api = await renderOwned();
+      api.terminalSubmit.mockRejectedValueOnce(
+        refusedBy("PERMISSION", "Another window has this assistant's input.")
+      );
+      await sendFromComposer();
+
+      push(running({ inputOwner: "b1", inputEpoch: 4 }));
+      await flush();
+      expect(apis.at(-1)).not.toBe(api);
+      const banner = failureBanner()!;
+      expect(banner.textContent).toContain("Another window has this assistant's input.");
+      expect(banner.textContent).toContain("take input to send it again");
+      expect(screen.getByTestId("help-global-take-input")).not.toBeNull();
+
+      fireEvent.click(screen.getByTestId("help-global-take-input"));
+      await flush();
+      expect(failureBanner()!.textContent).toContain("press Enter to try again");
+    });
+
+    it("lands a refusal that arrives after input moved", async () => {
+      const api = await renderOwned();
+      let refuse!: (error: unknown) => void;
+      api.terminalSubmit.mockImplementationOnce(
+        () => new Promise((_, reject) => (refuse = reject))
+      );
+      let sent: Promise<boolean> | undefined;
+      act(() => {
+        sent = composer.props?.submitText("hello", []);
+      });
+      push(running({ inputOwner: "b1", inputEpoch: 4 }));
+      await flush();
+
+      await act(async () =>
+        refuse(refusedBy("PERMISSION", "Another window has this assistant's input."))
+      );
+      expect(await sent).toBe(false);
+      expect(failureBanner()!.textContent).toContain("Another window has this assistant's input.");
+    });
+
+    it("forgets the refusal once the run it was sent to is replaced", async () => {
+      const api = await renderOwned();
+      api.terminalSubmit.mockRejectedValueOnce(new Error("Couldn't reach it."));
+      await sendFromComposer();
+      expect(failureBanner()).not.toBeNull();
+
+      push(
+        running({
+          generation: 2,
+          terminalId: "g2",
+          subject: { ...subject, terminalId: "g2", incarnation: 3 },
+          inputOwner: "a1",
+          inputEpoch: 3,
+        })
+      );
+      await flush();
+      expect(screen.getByTestId("global-terminal").getAttribute("data-run")).toBe("g2");
+      expect(failureBanner()).toBeNull();
+    });
+
+    it("says which when there is nowhere to type, without calling main", async () => {
+      installHelp(running({ inputOwner: "b1", inputEpoch: 4 }));
+      renderPane();
+      await flush();
+      expect(await sendFromComposer()).toBe(false);
+      expect(failureBanner()!.textContent).toContain("Another window has this assistant's input.");
+      expect(apis.at(-1)!.terminalSubmit).not.toHaveBeenCalled();
+
+      await pressKey("escape");
+      expect(failureBanner()!.textContent).toContain("Couldn't send key to assistant");
+      expect(apis.at(-1)!.terminalSendKey).not.toHaveBeenCalled();
+    });
+
+    it("says no window has input when none does", async () => {
+      installHelp(running({ inputOwner: null }));
+      renderPane();
+      await flush();
+      await sendFromComposer();
+      expect(failureBanner()!.textContent).toContain("No window has this assistant's input.");
+    });
+
+    it("tells an ended stream from one that is still opening", async () => {
+      stream.state = { watchId: null, ended: true, secretPrompt: false };
+      await renderOwned();
+      await sendFromComposer();
+      expect(failureBanner()!.textContent).toContain("That assistant isn't running any more.");
+
+      cleanup();
+      stream.state = { watchId: null, ended: false, secretPrompt: false };
+      await renderOwned();
+      await sendFromComposer();
+      expect(failureBanner()!.textContent).toContain("The assistant's terminal isn't ready yet.");
+    });
   });
 });

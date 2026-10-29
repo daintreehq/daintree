@@ -25,6 +25,13 @@ import type { AgentDirectorySubject } from "@shared/types/agentDirectory";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
 import type { GlobalAssistantInputStamp } from "@shared/types/ipc/help";
 import { useGlobalAssistant } from "./useGlobalAssistant";
+import {
+  refusalReason,
+  useAssistantSendFailure,
+  type AssistantSendAttempt,
+  type AssistantSendFailure,
+  type AssistantSendKind,
+} from "./useAssistantSendFailure";
 import { HEADER_ACTION_CLASS } from "./HelpPanelHeader";
 import { TabAgentMark } from "./HelpSessionTabs";
 
@@ -33,6 +40,12 @@ const LazyHybridInputBar = lazy(() =>
 );
 
 const NO_STREAM: CanopyStreamState = { watchId: null, ended: false, secretPrompt: false };
+
+// Said in main's words where main refuses, so a refusal the pane catches first reads the same.
+const INPUT_ELSEWHERE_REASON = "Another window has this assistant's input.";
+const NO_INPUT_REASON = "No window has this assistant's input.";
+const ENDED_REASON = "That assistant isn't running any more.";
+const NOT_READY_REASON = "The assistant's terminal isn't ready yet.";
 
 function sameRun(a: AgentDirectorySubject | null, b: AgentDirectorySubject | null): boolean {
   return (
@@ -106,6 +119,9 @@ export function GlobalAssistantPane({
   const paneKey = shown
     ? `${shown.terminalId}:${shown.incarnation}:${stamp ? stamp.inputEpoch : "read"}`
     : null;
+  // Held here, not in the terminal: input moving remounts that.
+  const runKey = shown ? `${shown.terminalId}:${shown.incarnation}` : null;
+  const { failure: sendFailure, start: startSend } = useAssistantSendFailure(runKey);
 
   const agentId = view?.agentId ?? null;
   const agentName = agentId ? (getAgentConfig(agentId)?.name ?? agentId) : null;
@@ -305,6 +321,8 @@ export function GlobalAssistantPane({
           stamp={stamp}
           agentId={composerAgentId}
           inputOwner={view.inputOwner}
+          sendFailure={sendFailure}
+          startSend={startSend}
           canClaimInput={controllable && attachmentId !== null}
           onClaimInput={() => {
             // Taking input remounts the terminal under the new ownership, which
@@ -358,6 +376,8 @@ function GlobalAssistantTerminal({
   stamp,
   agentId,
   inputOwner,
+  sendFailure,
+  startSend,
   canClaimInput,
   onClaimInput,
 }: {
@@ -365,6 +385,8 @@ function GlobalAssistantTerminal({
   stamp: GlobalAssistantInputStamp | null;
   agentId: BuiltInAgentId | undefined;
   inputOwner: string | null;
+  sendFailure: AssistantSendFailure | null;
+  startSend: (kind: AssistantSendKind, runKey: string) => AssistantSendAttempt;
   canClaimInput: boolean;
   onClaimInput: () => void;
 }) {
@@ -372,20 +394,50 @@ function GlobalAssistantTerminal({
   useEffect(() => () => api.dispose(), [api]);
   const [stream, setStream] = useState<CanopyStreamState>(NO_STREAM);
 
-  // The draft clears only once main took the text; a refused send leaves it.
+  const runKey = `${subject.terminalId}:${subject.incarnation}`;
+
+  // The stream to type through, or why there is none: a refusal says which.
+  const typingTarget = (): { watchId: number } | { reason: string } => {
+    if (!stamp) return { reason: inputOwner === null ? NO_INPUT_REASON : INPUT_ELSEWHERE_REASON };
+    if (stream.watchId === null) {
+      return { reason: stream.ended ? ENDED_REASON : NOT_READY_REASON };
+    }
+    return { watchId: stream.watchId };
+  };
+
+  // The draft clears only once main took the text; a refused send leaves it
+  // and says so.
   const submit = async (text: string, imagePaths?: readonly string[]): Promise<boolean> => {
-    const watchId = stream.watchId;
-    if (watchId === null || !stamp) return false;
+    const attempt = startSend("message", runKey);
+    const target = typingTarget();
+    if ("reason" in target) {
+      attempt.failed(target.reason);
+      return false;
+    }
     try {
       await api.terminalSubmit(
-        watchId,
+        target.watchId,
         text,
         imagePaths && imagePaths.length > 0 ? [...imagePaths] : undefined
       );
-      return true;
-    } catch {
+    } catch (error) {
+      attempt.failed(refusalReason(error));
       return false;
     }
+    attempt.sent();
+    return true;
+  };
+
+  const sendKey = (key: string) => {
+    const attempt = startSend("key", runKey);
+    const target = typingTarget();
+    if ("reason" in target) {
+      attempt.failed(target.reason);
+      return;
+    }
+    api.terminalSendKey(target.watchId, key).then(attempt.sent, (error: unknown) => {
+      attempt.failed(refusalReason(error));
+    });
   };
 
   return (
@@ -396,6 +448,30 @@ function GlobalAssistantTerminal({
         api={api}
         onStreamChange={setStream}
       />
+      {sendFailure && (
+        <div className="shrink-0 px-3 pb-2">
+          <Callout
+            severity="error"
+            size="compact"
+            role="status"
+            title={
+              sendFailure.kind === "message"
+                ? "Couldn't send to assistant"
+                : "Couldn't send key to assistant"
+            }
+            data-testid="help-global-send-failed"
+          >
+            <p>{sendFailure.reason}</p>
+            {sendFailure.kind === "message" && (
+              <p>
+                {stamp
+                  ? "Your message is still in the box; press Enter to try again."
+                  : "Your message is still in the box; take input to send it again."}
+              </p>
+            )}
+          </Callout>
+        </div>
+      )}
       <div data-keybindings-isolated="" className="contents">
         <Suspense fallback={null}>
           <LazyHybridInputBar
@@ -406,11 +482,7 @@ function GlobalAssistantTerminal({
             disabled={!stamp || stream.watchId === null || stream.secretPrompt}
             onSend={({ text, imagePaths }) => void submit(text, imagePaths)}
             submitText={submit}
-            onSendKey={(key) => {
-              const watchId = stream.watchId;
-              if (watchId === null || !stamp) return;
-              void api.terminalSendKey(watchId, key).catch(() => {});
-            }}
+            onSendKey={sendKey}
           />
         </Suspense>
       </div>
