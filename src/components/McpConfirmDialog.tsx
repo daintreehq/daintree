@@ -85,6 +85,9 @@ const PREVIEW_MAX_BODY_HEIGHT = "max-h-[13rem]";
 /** The house's long-wait mark: past it, a loading state says it is still going. */
 const PREVIEW_STILL_WORKING_MS = 5_000;
 
+/** What an expired request says beside its dead button (#14989). */
+const EXPIRED_HINT = "Timed out before an answer, so nothing ran";
+
 function truncateUserAgent(userAgent: string): string {
   return userAgent.length > MAX_USER_AGENT_DISPLAY
     ? `${userAgent.slice(0, MAX_USER_AGENT_DISPLAY - 1)}…`
@@ -338,7 +341,9 @@ export function McpConfirmDialog() {
       // Wraps rather than truncating: beside the long session label the reason
       // the button is dead would otherwise shrink to an ellipsis. Two lines of
       // text-xs sit inside the button's height, so the row never moves.
-      <span aria-live="polite" className="line-clamp-2 min-w-0 break-words">
+      // The expiry is announced by the status line in the body, which is
+      // there before it happens; this one would only announce it twice.
+      <span aria-live={expired ? "off" : "polite"} className="line-clamp-2 min-w-0 break-words">
         {hint}
       </span>
     ) : undefined,
@@ -349,6 +354,12 @@ export function McpConfirmDialog() {
   // that the other doesn't repeat (forge.dismissReview's merge-safety note).
   const body = (
     <div className="space-y-4">
+      {/* Mounted for the whole request, so the expiry is a change a screen
+          reader announces rather than a live region that arrived already full. */}
+      <span role="status" className="sr-only">
+        {expired ? EXPIRED_HINT : ""}
+      </span>
+
       <RequesterRow current={current} />
 
       <AppDialog.Description>{current.actionDescription}</AppDialog.Description>
@@ -1071,7 +1082,7 @@ function gateHintText(
 ): string | null {
   const parts: string[] = [];
   if (expired) {
-    parts.push("Timed out before an answer, so nothing ran");
+    parts.push(EXPIRED_HINT);
   } else if (previewState === "pending") {
     parts.push(previewSlow ? "Still working…" : "Checking what this affects…");
   }

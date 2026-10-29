@@ -307,6 +307,19 @@ const resolvers = new Map<string, (resolution: McpConfirmResolution) => void>();
 const holds = new Map<string, McpConfirmHold>();
 
 /**
+ * Requests whose on-screen grant has landed. Main's grant for being on screen
+ * replaces its grant for waiting, so only once it has landed is a waiting
+ * reply stale; until then the waiting grant is the best deadline there is.
+ */
+const shownGrants = new Set<string>();
+
+function forget(requestId: string): void {
+  resolvers.delete(requestId);
+  holds.delete(requestId);
+  shownGrants.delete(requestId);
+}
+
+/**
  * The moment a request stops offering approval (#14989): the end of its
  * decision window once it is on screen, and never later than shortly before
  * main's deadline. Undefined while nothing bounds it.
@@ -320,8 +333,7 @@ export function confirmationEndsAt(item: PendingMcpConfirm): number | undefined 
 
 function settle(requestId: string, resolution: McpConfirmResolution): void {
   const resolve = resolvers.get(requestId);
-  resolvers.delete(requestId);
-  holds.delete(requestId);
+  forget(requestId);
   resolve?.(resolution);
 }
 
@@ -343,18 +355,14 @@ function advance(set: (partial: Partial<McpConfirmState>) => void, queue: Pendin
   // let it go, so it goes unseen rather than opening only to close again.
   const now = Date.now();
   let start = 0;
-  while (start < queue.length) {
-    const endsAt = confirmationEndsAt(queue[start]);
+  for (const item of queue) {
+    const endsAt = confirmationEndsAt(item);
     if (endsAt === undefined || endsAt > now) break;
-    settle(queue[start].requestId, { decision: "timeout", unseen: true });
+    settle(item.requestId, { decision: "timeout", unseen: true });
     start += 1;
   }
-  if (start >= queue.length) {
-    set({ current: null, queue: [] });
-    return;
-  }
   const [next, ...rest] = queue.slice(start);
-  set({ current: next, queue: rest });
+  set(next === undefined ? { current: null, queue: [] } : { current: next, queue: rest });
 }
 
 export const useMcpConfirmStore = create<McpConfirmState & McpConfirmActions>((set, get) => ({
@@ -394,6 +402,13 @@ export const useMcpConfirmStore = create<McpConfirmState & McpConfirmActions>((s
       return;
     }
     const shownAt = Date.now();
+    // A view coming back after its time ran out (a laptop waking, say) must
+    // not count the request as seen before its timeout gets to say otherwise.
+    const endsAt = confirmationEndsAt(current);
+    if (endsAt !== undefined && endsAt <= shownAt) {
+      get().expire(requestId);
+      return;
+    }
     set({ current: { ...current, shownAt, decisionEndsAt: shownAt + MCP_CONFIRM_DECISION_MS } });
     requestHold(requestId, "shown");
   },
@@ -405,9 +420,8 @@ export const useMcpConfirmStore = create<McpConfirmState & McpConfirmActions>((s
       get().expire(requestId);
       return;
     }
-    // Main's grant for being on screen replaces its grant for waiting, so a
-    // waiting reply that lands after the request was shown is stale.
-    if (phase === "queued" && findItem(requestId)?.shownAt !== undefined) return;
+    if (phase === "queued" && shownGrants.has(requestId)) return;
+    if (phase === "shown") shownGrants.add(requestId);
     patchItem(requestId, { deadlineAt: askedAt + remainingMs });
   },
 
@@ -440,8 +454,7 @@ export const useMcpConfirmStore = create<McpConfirmState & McpConfirmActions>((s
     // moves the queue on.
     if (current === null || current.expired) return;
     const resolve = resolvers.get(current.requestId);
-    resolvers.delete(current.requestId);
-    holds.delete(current.requestId);
+    forget(current.requestId);
     // Only an approval carries a selection. A rejection or timeout resolved
     // nothing about individual targets, and handing back a stale checkbox state
     // there would let the bridge stamp per-target approvals nobody gave. The
@@ -462,8 +475,7 @@ export const useMcpConfirmStore = create<McpConfirmState & McpConfirmActions>((s
 
   drop: (requestId) => {
     const { current, queue } = get();
-    resolvers.delete(requestId);
-    holds.delete(requestId);
+    forget(requestId);
     if (current?.requestId === requestId) {
       advance(set, queue);
       return;
@@ -477,6 +489,7 @@ export const useMcpConfirmStore = create<McpConfirmState & McpConfirmActions>((s
   reset: () => {
     resolvers.clear();
     holds.clear();
+    shownGrants.clear();
     set({ queue: [], current: null });
   },
 }));

@@ -131,20 +131,22 @@ const TIMEOUT_RESULT: ActionDispatchResult = {
 };
 
 /**
- * The same timeout, when the view asking was reported hidden throughout: an
- * observation, not a refusal. A view of a host's project is always on the
- * machine the person works at, never the host, so the agent there is told
- * where it was rather than left to guess its own screen.
+ * The same timeout, for a request that never reached the screen: its view was
+ * reported hidden throughout, or other requests were ahead of it until its
+ * time ran out (#14989). An observation, not a refusal. A view of a host's
+ * project is always on the machine the person works at, never the host, so
+ * the agent there is told where it was rather than left to guess its own
+ * screen.
  */
 export function unseenTimeoutResult(hostId: string | undefined): ActionDispatchResult {
   const where = hostId
-    ? "It opened on the machine the person works at, in the window showing this host's project, and that view was hidden the whole time"
-    : "The Daintree view showing it was hidden the whole time";
+    ? "It was raised on the machine the person works at, in the window showing this host's project, and never reached the screen there"
+    : "It never reached the screen";
   return {
     ok: false,
     error: {
       code: "CONFIRMATION_TIMEOUT",
-      message: `Confirmation timed out without a response. ${where}, so nobody saw it to answer. Nothing was declined.`,
+      message: `Confirmation timed out without a response. ${where}: the view was hidden, or other requests were ahead of it. Nobody saw it to answer, and nothing was declined.`,
     },
   };
 }
@@ -1211,6 +1213,9 @@ export function useMcpBridge(): void {
         // Set only when the user ticked "Allow for this session" on a dialog
         // main said may offer it (#12692); main mints the grant, never this.
         let approvalScope: McpApprovalScope | undefined;
+        // When the run main granted an approval ends (#14989). Undefined for a
+        // dispatch nobody was asked about, which main times as it always did.
+        let runDeadlineAt: number | undefined;
         // Declared outside the confirm block so the approved dispatch can pin
         // itself to the previewed cwd. Stays undefined for pre-granted
         // dispatches, which show no modal and so previewed nothing to pin to.
@@ -1516,7 +1521,7 @@ export function useMcpBridge(): void {
                 });
                 return;
               }
-              const runDeadlineAt = claimedAt + runMs;
+              runDeadlineAt = claimedAt + runMs;
               if (selectableTargets !== undefined) {
                 // Only the rows still checked, each carrying the agent state its
                 // row was SHOWING. `run()` re-reads that state live before it
@@ -1545,7 +1550,7 @@ export function useMcpBridge(): void {
                 // failure, so the deadline wins over the approval. The re-check
                 // budget is held back for the send latency nobody here can see.
                 const refusal =
-                  Date.now() >= runDeadlineAt - GATE_RECHECK_BUDGET_MS
+                  Date.now() >= claimedAt + runMs - GATE_RECHECK_BUDGET_MS
                     ? EXPIRED_APPROVAL_RESULT
                     : worktreeDeleteGateRefusal(
                         resolveWorktreeDeleteGate(previewTarget, outcome),
@@ -1581,6 +1586,18 @@ export function useMcpBridge(): void {
                 observedAgentRunning: target.agentRunning,
               }));
             }
+          }
+
+          // An approval main accepted is still not permission to start once
+          // that grant has run out: a view stalled past it would act after the
+          // agent was told the call timed out.
+          if (runDeadlineAt !== undefined && Date.now() >= runDeadlineAt) {
+            window.electron.mcpBridge.sendDispatchActionResponse({
+              requestId,
+              result: LATE_APPROVAL_RESULT,
+              confirmationDecision: "timeout",
+            });
+            return;
           }
 
           const dispatchArgs = tagMcpSpawnSource(

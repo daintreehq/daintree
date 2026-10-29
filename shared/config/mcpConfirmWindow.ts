@@ -35,12 +35,22 @@ export const MCP_CONFIRM_DECISION_MS = 120_000;
 export const MCP_CONFIRM_HOLD_GRACE_MS = 5_000;
 
 /**
- * The longest a confirm-gated call can stay open end to end. Every client
- * timeout Daintree sets on its own server must cover it, or the agent's CLI
- * gives up on a call the person is still answering.
+ * The longest one confirmation can hold a dispatch open: its first deadline,
+ * by which its view must report it waiting, then the wait, the window and the
+ * run its approval buys.
  */
-export const MCP_CONFIRMABLE_CALL_MAX_MS =
+export const MCP_CONFIRM_ASK_MAX_MS =
+  MCP_DISPATCH_TIMEOUT_MS +
   MCP_CONFIRM_QUEUE_HOLD_MS +
   MCP_CONFIRM_DECISION_MS +
   MCP_CONFIRM_HOLD_GRACE_MS +
   MCP_DISPATCH_TIMEOUT_MS;
+
+/**
+ * The longest a confirm-gated tool call can stay open end to end. A call can
+ * ask twice: an agent pane's call above its tier is approved first, and some
+ * still raise their own dialog after (#12692). Every client timeout Daintree
+ * sets on its own server must cover it, or the agent's CLI gives up on a call
+ * the person is still answering.
+ */
+export const MCP_CONFIRMABLE_CALL_MAX_MS = 2 * MCP_CONFIRM_ASK_MAX_MS;

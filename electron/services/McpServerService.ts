@@ -1473,27 +1473,7 @@ export class McpServerService {
     ...args: Parameters<typeof this.bridge.dispatchActionForWebContents>
   ): ReturnType<typeof this.bridge.dispatchActionForWebContents> {
     this.ensureHostBridgeListeners();
-    // The host times the call, so this view can't hold it open past that (#14989).
-    const [
-      id,
-      actionId,
-      actionArgs,
-      confirmed,
-      contextOverride,
-      sessionOrigin,
-      approval,
-      callerInfo,
-    ] = args;
-    return this.bridge.dispatchActionForWebContents(
-      id,
-      actionId,
-      actionArgs,
-      confirmed,
-      contextOverride,
-      sessionOrigin,
-      { ...approval, fixedDeadline: true },
-      callerInfo
-    );
+    return this.bridge.dispatchActionForWebContents(...args);
   }
 
   /**

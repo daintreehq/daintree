@@ -61,11 +61,7 @@ import { computeMcpAuditSeverity } from "../../../shared/types/ipc/mcpServer.js"
 import type { TurnOutcomeService } from "./turnOutcomeLog.js";
 import { helpNotifyKey, relayNoticePane } from "./terminalNotify.js";
 import type { AbusePolicy } from "./abusePolicy.js";
-import {
-  MCP_CONFIRM_DECISION_MS,
-  MCP_CONFIRM_HOLD_GRACE_MS,
-  MCP_CONFIRM_QUEUE_HOLD_MS,
-} from "../../../shared/config/mcpConfirmWindow.js";
+import { MCP_CONFIRMABLE_CALL_MAX_MS } from "../../../shared/config/mcpConfirmWindow.js";
 import { createLogger } from "../../utils/logger.js";
 
 const pinnedViewLogger = createLogger("main:McpPinnedView");
@@ -107,14 +103,6 @@ export function sendToPinnedView(
 
 /** Time past the dispatch deadline a confirmation is still shown, for the hop to the dialog. */
 const CONFIRMATION_DEADLINE_GRACE_MS = 2_000;
-
-/**
- * The latest a call can still be waiting on the person (#14989): the longest
- * it may wait to reach the screen, then a whole decision window. Most end well
- * before it; the marker's settle is what normally clears it.
- */
-const CONFIRMATION_WAIT_MAX_MS =
-  MCP_CONFIRM_QUEUE_HOLD_MS + MCP_CONFIRM_DECISION_MS + MCP_CONFIRM_HOLD_GRACE_MS;
 
 /** One call of one session, as its started and settled notices both name it. */
 function confirmationCallKey(sessionId: string, toolId: string, startedAt: number): string {
@@ -452,7 +440,9 @@ function createSessionNotifiers(
           {
             actionId: payload.toolId,
             since: waitingSince,
-            expiresAt: waitingSince + CONFIRMATION_WAIT_MAX_MS + CONFIRMATION_DEADLINE_GRACE_MS,
+            // The latest the call can still be open (#14989); the marker's
+            // settle is what normally clears it, well before.
+            expiresAt: waitingSince + MCP_CONFIRMABLE_CALL_MAX_MS + CONFIRMATION_DEADLINE_GRACE_MS,
           }
         );
       }

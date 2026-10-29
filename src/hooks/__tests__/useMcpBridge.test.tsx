@@ -720,12 +720,15 @@ describe("useMcpBridge", () => {
     await dispatched;
 
     expect(mocks.dispatch).not.toHaveBeenCalled();
+    expect(sendDispatchActionResponse).toHaveBeenCalledTimes(1);
     expect(sendDispatchActionResponse).toHaveBeenCalledWith({
       requestId: "req-ask",
       result: { ok: true, result: null },
       confirmationDecision: "approved",
       approvalScope: "session",
     });
+    // Main runs this call itself on the answer, so nothing here claims a run (#14989).
+    expect(holdDispatch).not.toHaveBeenCalledWith(expect.objectContaining({ phase: "approved" }));
   });
 
   it("reports a declined approval-only request as USER_REJECTED", async () => {
@@ -1761,7 +1764,7 @@ describe("useMcpBridge", () => {
     });
   });
 
-  it("refuses a force delete whose re-check would outlast the run main granted (#12115)", async () => {
+  it("refuses a force delete when less run is left than its re-check may take (#12115)", async () => {
     cleanForceDeleteTarget();
     // Less run left than the re-check may spend: the delete could start after
     // main's deadline, so the approval is not acted on.
@@ -1795,6 +1798,45 @@ describe("useMcpBridge", () => {
       },
       confirmationDecision: "approved",
     });
+  });
+
+  it("never starts an approved action once the run main granted has passed (#14989)", async () => {
+    mocks.get.mockReturnValue(confirmManifestEntry());
+    mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
+    const start = Date.now();
+    let elapsed = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => start + elapsed);
+    // Main accepts the claim, but this view only reads the answer after the
+    // run it granted is over, as a view stalled for that long would.
+    holdDispatch.mockImplementation(async ({ phase }: { phase: keyof typeof HOLD_GRANTS_MS }) => {
+      if (phase === "approved") elapsed += HOLD_GRANTS_MS.approved;
+      return { held: true, remainingMs: HOLD_GRANTS_MS[phase] };
+    });
+
+    try {
+      renderHook(() => useMcpBridge());
+      const dispatched = dispatchHandler?.({
+        requestId: "req-stalled",
+        actionId: "worktree.delete",
+        args: { worktreeId: "wt-1" },
+      });
+      await Promise.resolve();
+      useMcpConfirmStore.getState().resolveCurrent("approved");
+      await dispatched;
+
+      expect(mocks.dispatch).not.toHaveBeenCalled();
+      expect(sendDispatchActionResponse).toHaveBeenCalledTimes(1);
+      expect(sendDispatchActionResponse).toHaveBeenCalledWith({
+        requestId: "req-stalled",
+        result: expect.objectContaining({
+          ok: false,
+          error: expect.objectContaining({ code: "CONFIRMATION_TIMEOUT" }),
+        }),
+        confirmationDecision: "timeout",
+      });
+    } finally {
+      vi.mocked(Date.now).mockRestore();
+    }
   });
 
   it("runs an approval given long after the dispatch arrived, once main accepts it (#14989)", async () => {

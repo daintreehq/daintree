@@ -3048,6 +3048,19 @@ describe("rendererBridge — holding a confirm-gated dispatch open (#14989)", ()
     expect(call.outcome()).toMatchObject({ result: { ok: true, result: "deleted" } });
   });
 
+  it("gives an accepted approval the run budget and no more", async () => {
+    const call = await startDispatch(808);
+    bridge.holdDispatch(808, call.requestId(), "shown");
+    await vi.advanceTimersByTimeAsync(MCP_CONFIRM_DECISION_MS);
+    bridge.holdDispatch(808, call.requestId(), "approved");
+
+    // Past the shown deadline it replaced, still inside the run.
+    await vi.advanceTimersByTimeAsync(MCP_DISPATCH_TIMEOUT_MS - 1);
+    expect(call.outcome()).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(call.outcome()).toBeInstanceOf(Error);
+  });
+
   it("answers a call whose prompt ran out as the confirmation timeout it is", async () => {
     const call = await startDispatch(802);
     bridge.holdDispatch(802, call.requestId(), "queued");

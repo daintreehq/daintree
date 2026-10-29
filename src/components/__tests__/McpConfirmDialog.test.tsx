@@ -255,7 +255,11 @@ describe("McpConfirmDialog", () => {
         render(<McpConfirmDialog />);
         // Held while the view stays hidden, and never granted a decision window.
         await act(async () => {
-          await vi.advanceTimersByTimeAsync(MCP_CONFIRM_QUEUE_HOLD_MS);
+          await vi.advanceTimersByTimeAsync(MCP_CONFIRM_QUEUE_HOLD_MS - 5_000);
+        });
+        await expectStillPending(pending);
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(5_000);
         });
         expect(await pending).toEqual({ decision: "timeout", unseen: true });
         expect(deadline.phases).toEqual(["queued"]);
@@ -1282,9 +1286,10 @@ describe("McpConfirmDialog", () => {
         await vi.advanceTimersByTimeAsync(1_000);
       });
 
-      await expect(p).resolves.toEqual({ decision: "timeout" });
-      const confirm = screen.getByRole("button", { name: "Delete worktree" });
-      expect(confirm.getAttribute("aria-disabled")).toBe("true");
+      // Its time ran out before it reached the screen, so it never opens to
+      // be approved at all.
+      await expect(p).resolves.toEqual({ decision: "timeout", unseen: true });
+      expect(screen.queryByRole("button", { name: "Delete worktree" })).toBeNull();
     } finally {
       vi.runOnlyPendingTimers();
       vi.useRealTimers();

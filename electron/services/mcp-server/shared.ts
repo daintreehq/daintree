@@ -194,8 +194,9 @@ export interface WorkspaceDispatchOptions {
   authorization?: McpDispatchAuthorization;
   /**
    * Another machine is timing this call (#14989): a host's dispatch into the
-   * view this Shell drives it from. Its view can't hold the call open past the
-   * host's own deadline, which is the one the host's agent is told about.
+   * view this Shell drives it from, or its question about a call it runs
+   * itself. Its view can't hold the call open past the host's own deadline,
+   * which is the one the host's agent is told about.
    */
   fixedDeadline?: true;
   /**

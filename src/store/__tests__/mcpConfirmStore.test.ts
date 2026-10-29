@@ -282,6 +282,34 @@ describe("mcpConfirmStore", () => {
       expect(useMcpConfirmStore.getState().current?.deadlineAt).toBe(shownAt + 125_000);
     });
 
+    it("keeps the waiting grant while the on-screen one is still on its way", async () => {
+      vi.useFakeTimers();
+      const { hold, asks } = controlledHold();
+      const asked = Date.now();
+      void requestMcpConfirmation(pendingFixture(), { deadlineAt: asked + 30_000, hold });
+      useMcpConfirmStore.getState().markShown("req-1");
+
+      asks[0]!.answer(135_000);
+      await Promise.resolve();
+
+      expect(useMcpConfirmStore.getState().current?.deadlineAt).toBe(asked + 135_000);
+    });
+
+    it("lets a request whose time ran out while hidden go unseen when its view comes back", async () => {
+      vi.useFakeTimers();
+      const first = requestMcpConfirmation(pendingFixture({ requestId: "a" }), {
+        deadlineAt: Date.now() + 30_000,
+      });
+      void requestMcpConfirmation(pendingFixture({ requestId: "b" }));
+
+      // The clock moves on with no timer run: a sleeping machine waking up.
+      vi.setSystemTime(Date.now() + 60_000);
+      useMcpConfirmStore.getState().markShown("a");
+
+      expect(await first).toEqual({ decision: "timeout", unseen: true });
+      expect(useMcpConfirmStore.getState().current?.requestId).toBe("b");
+    });
+
     it("times a request out as soon as main says it no longer holds it", async () => {
       const { hold, asks } = controlledHold();
       const first = requestMcpConfirmation(pendingFixture({ requestId: "a" }));
