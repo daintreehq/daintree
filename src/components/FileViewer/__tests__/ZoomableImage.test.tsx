@@ -129,6 +129,23 @@ describe("ZoomableImage wheel", () => {
     expect(view().offset).toEqual({ x: 0, y: 0 });
   });
 
+  it("keeps a wheel zoom's pan when the drag carries on", () => {
+    const { stage, view } = renderStage();
+    // jsdom has no pointer capture, which the press and release call.
+    stage.setPointerCapture = () => {};
+    stage.hasPointerCapture = () => false;
+    stage.releasePointerCapture = () => {};
+    fireEvent.pointerDown(stage, { pointerId: 1, button: 0, clientX: 220, clientY: 160 });
+    fireEvent.pointerMove(stage, { pointerId: 1, clientX: 230, clientY: 170 });
+    expect(view().offset).toEqual({ x: 10, y: 10 });
+
+    fireEvent.wheel(stage, { deltaY: -400, clientX: 320, clientY: 210 });
+    const zoomed = view().offset;
+    fireEvent.pointerMove(stage, { pointerId: 1, clientX: 235, clientY: 170 });
+    expect(view().offset.x).toBeCloseTo(zoomed.x + 5, 9);
+    expect(view().offset.y).toBeCloseTo(zoomed.y, 9);
+  });
+
   it("leaves the pan alone when the zoom buttons and keys step", () => {
     const { stage, view } = renderStage();
     fireEvent.keyDown(stage, { key: "ArrowLeft" });

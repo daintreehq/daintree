@@ -118,7 +118,7 @@ export function ZoomableImage({ filePath, rootPath, alt, cacheBust, onError }: Z
   const containerRef = useRef<HTMLDivElement>(null);
   const controlsRef = useRef<HTMLDivElement>(null);
   const handleControlsKeyDown = useToolbarRoving(controlsRef);
-  const dragRef = useRef<{ pointerId: number; startX: number; startY: number } | null>(null);
+  const dragRef = useRef<{ pointerId: number; lastX: number; lastY: number } | null>(null);
   const [natural, setNatural] = useState<{ width: number; height: number } | null>(null);
   const [stage, setStage] = useState<{ width: number; height: number } | null>(null);
   const src =
@@ -174,20 +174,22 @@ export function ZoomableImage({ filePath, rootPath, alt, cacheBust, onError }: Z
 
   const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
-    dragRef.current = {
-      pointerId: event.pointerId,
-      startX: event.clientX - offset.x,
-      startY: event.clientY - offset.y,
-    };
+    dragRef.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY };
     event.currentTarget.setPointerCapture(event.pointerId);
   };
 
   const handlePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
     const drag = dragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
+    // Applied as a step rather than measured from where the press began, so a
+    // wheel zoom mid-drag keeps the pan it made.
+    const dx = event.clientX - drag.lastX;
+    const dy = event.clientY - drag.lastY;
+    drag.lastX = event.clientX;
+    drag.lastY = event.clientY;
     setView((current) => ({
       ...current,
-      offset: { x: event.clientX - drag.startX, y: event.clientY - drag.startY },
+      offset: { x: current.offset.x + dx, y: current.offset.y + dy },
     }));
   };
 
