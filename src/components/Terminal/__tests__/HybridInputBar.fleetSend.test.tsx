@@ -301,17 +301,18 @@ describe("HybridInputBar's fleet send with context tokens (#14953)", () => {
   it("keeps the draft and says why when the token would reach another host", async () => {
     useFleetArmingStore.getState().armCrossHostTarget({
       key: "host-fleet:studio:r-1",
-      hostId: "studio" as never,
+      hostId: "studio",
       hostName: "Studio",
       terminalId: "r-1",
       title: "remote",
     });
-    const { view, type, pressEnter, settle, draft } = await mount();
+    const { view, type, pressEnter, settle, draft, onSend } = await mount();
     await type("Review @diff now");
     await pressEnter();
     await settle();
 
     expect(submitMock).not.toHaveBeenCalled();
+    expect(onSend).not.toHaveBeenCalled();
     expect(view.state.doc.toString()).toBe("Review @diff now");
     expect(draft("term-1")).toBe("Review @diff now");
     expect(document.querySelector("[data-send-refused-caption]")?.textContent).toContain(

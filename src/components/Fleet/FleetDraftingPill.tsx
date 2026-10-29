@@ -79,6 +79,10 @@ export function FleetDraftingPill(): ReactElement | null {
     }
   }, [open]);
 
+  // The preview opens itself as a variable or a context token is typed; the
+  // composer keeps the keyboard then. Opened from the pill, it takes focus.
+  const openedFromPillRef = useRef(false);
+
   const peerNoun = peerCount === 1 ? "peer" : "peers";
   const reachLabel = `Mirroring to ${peerCount} ${peerNoun}`;
 
@@ -87,6 +91,7 @@ export function FleetDraftingPill(): ReactElement | null {
   if (peerCount < 1 && !open) return null;
 
   const handleOpenChange = (next: boolean) => {
+    openedFromPillRef.current = next;
     setOpen(next);
   };
 
@@ -143,6 +148,10 @@ export function FleetDraftingPill(): ReactElement | null {
           side="bottom"
           align="start"
           sideOffset={4}
+          onOpenAutoFocus={(e) => {
+            if (!openedFromPillRef.current) e.preventDefault();
+            openedFromPillRef.current = false;
+          }}
           onEscapeKeyDown={(e) => {
             // Escape inside an override textarea should clear focus or the
             // edit, not collapse the popover. Block the dismiss; the

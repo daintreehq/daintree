@@ -275,6 +275,10 @@ function shouldBatchAcrossTargets(resolved: ResolvedSubmission[]): boolean {
   return false;
 }
 
+// The progress store follows one broadcast. A newer one aborts and takes it
+// over, so a superseded run settling later leaves it alone.
+let latestRun = 0;
+
 /**
  * Execute a fleet broadcast to the given target IDs with per-target payload
  * overrides. Returns structured results including which targets failed for
@@ -303,7 +307,13 @@ export async function executeFleetBroadcast(
   options: { retry?: boolean } = {}
 ): Promise<FleetExecutionResult> {
   const retry = options.retry === true;
+  const run = ++latestRun;
+  const progress = () => (run === latestRun ? useFleetBroadcastProgressStore.getState() : null);
   let resolved = resolveSubmissions(draft, targetIds, perTargetOverrides);
+  // Targets that stopped being fleet recipients while their context was read.
+  let leftFleet: ReadonlySet<string> | null = null;
+  const canDispatch = (r: ResolvedSubmission) =>
+    !isLocalTargetLocked(r.terminalId) && !leftFleet?.has(r.terminalId);
   const results: PromiseSettledResult<void>[] = [];
   // Parallel to `results`: what was actually sent, since a pane locked
   // mid-broadcast drops out of its batch.
@@ -311,7 +321,7 @@ export async function executeFleetBroadcast(
   let dispatchedCount = 0;
   let finalized = false;
 
-  useFleetBroadcastProgressStore.getState().init(resolved.length);
+  progress()?.init(resolved.length);
 
   const buildResult = (cancelled: boolean): FleetExecutionResult => {
     const perTarget: FleetExecutionResult["perTarget"] = results.map((r, i) => {
@@ -351,7 +361,7 @@ export async function executeFleetBroadcast(
 
   try {
     if (signal?.aborted) {
-      useFleetBroadcastProgressStore.getState().finishCancelled();
+      progress()?.finishCancelled();
       finalized = true;
       return buildResult(true);
     }
@@ -361,21 +371,24 @@ export async function executeFleetBroadcast(
       // can land in before anything has gone out.
       resolved = await expandSubmissionContext(resolved);
       if (signal?.aborted) {
-        useFleetBroadcastProgressStore.getState().finishCancelled();
+        progress()?.finishCancelled();
         finalized = true;
         return buildResult(true);
       }
+      const ids = resolved.map((r) => r.terminalId);
+      const eligible = new Set(filterEligibleIds(ids));
+      leftFleet = new Set(ids.filter((id) => !eligible.has(id)));
     }
 
     if (shouldBatchAcrossTargets(resolved)) {
       for (let i = 0; i < resolved.length; i += FLEET_LARGE_PASTE_BATCH_SIZE) {
         if (signal?.aborted) {
-          useFleetBroadcastProgressStore.getState().finishCancelled();
+          progress()?.finishCancelled();
           finalized = true;
           return buildResult(true);
         }
         const slice = resolved.slice(i, i + FLEET_LARGE_PASTE_BATCH_SIZE);
-        const batch = slice.filter((r) => !isLocalTargetLocked(r.terminalId));
+        const batch = slice.filter(canDispatch);
         dispatchedCount += batch.length;
         // Enter `directing` on every target BEFORE submit dispatches —
         // mirrors what xterm onData → onUserInput does for the origin.
@@ -405,14 +418,14 @@ export async function executeFleetBroadcast(
         }
 
         const batchFailures = batchResults.filter((r) => r.status === "rejected").length;
-        useFleetBroadcastProgressStore.getState().advance(slice.length, batchFailures);
+        progress()?.advance(slice.length, batchFailures);
 
         if (i + FLEET_LARGE_PASTE_BATCH_SIZE < resolved.length) {
           await yieldToScheduler();
         }
       }
     } else {
-      const batch = resolved.filter((r) => !isLocalTargetLocked(r.terminalId));
+      const batch = resolved.filter(canDispatch);
       dispatchedCount = batch.length;
       // Same ordering rule as the batched path — see comment above.
       for (const r of batch) noteUserInput(r.terminalId, r.payload);
@@ -429,13 +442,13 @@ export async function executeFleetBroadcast(
         }
       }
       const nonBatchedFailures = all.filter((r) => r.status === "rejected").length;
-      useFleetBroadcastProgressStore.getState().advance(resolved.length, nonBatchedFailures);
+      progress()?.advance(resolved.length, nonBatchedFailures);
     }
 
     return buildResult(signal?.aborted ?? false);
   } finally {
     if (!finalized) {
-      useFleetBroadcastProgressStore.getState().finish();
+      progress()?.finish();
     }
   }
 }

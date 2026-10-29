@@ -42,12 +42,12 @@ describe("shareContextReferenceResolutions", () => {
     const a = { prefix: "rec", id: "1" };
     const b = { prefix: "rec", id: "2" };
 
-    const [first, second] = await Promise.all([shared([a, b]), shared([b, a, a])]);
+    const [first, second] = await Promise.all([shared([a, a, b, b]), shared([b, a])]);
 
     expect(resolve).toHaveBeenCalledTimes(1);
     expect(resolve).toHaveBeenCalledWith([a, b]);
-    expect(first).toEqual([resolved("1"), resolved("2")]);
-    expect(second).toEqual([resolved("2"), resolved("1"), resolved("1")]);
+    expect(first).toEqual([resolved("1"), resolved("1"), resolved("2"), resolved("2")]);
+    expect(second).toEqual([resolved("2"), resolved("1")]);
   });
 
   it("asks again only for a reference it hasn't seen", async () => {
@@ -63,11 +63,13 @@ describe("shareContextReferenceResolutions", () => {
   });
 
   it("hands every draft the failure when main can't be asked", async () => {
-    const shared = shareContextReferenceResolutions(async () => {
+    const resolve = vi.fn(async (): Promise<ContextReferenceResolution[]> => {
       throw new Error("main gone");
     });
+    const shared = shareContextReferenceResolutions(resolve);
     const ref = { prefix: "rec", id: "1" };
     await expect(shared([ref])).rejects.toThrow("main gone");
     await expect(shared([ref])).rejects.toThrow("main gone");
+    expect(resolve).toHaveBeenCalledTimes(1);
   });
 });

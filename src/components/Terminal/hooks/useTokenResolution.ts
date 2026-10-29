@@ -8,7 +8,7 @@ import { useDictationRangeStore } from "@/store/dictationRangeStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useDictionaryLearnPromptStore } from "@/store/dictionaryLearnPromptStore";
 import { mapSpanKeepingEdits, minimalDocChange } from "@/lib/textRangeMapping";
-import type { ActiveCompletionContext } from "../hybridInputParsing";
+import { resolveTokenExpansions, type ActiveCompletionContext } from "../hybridInputParsing";
 import { expandDraftContext } from "../draftContextExpansion";
 
 /** A dictated passage as it settled, and the same passage as the user is sending it. */
@@ -305,9 +305,11 @@ export function useTokenResolution({
           text,
           options?.dictationSessions
         );
+        // With nothing to expand, a fence left open above a handoff block is
+        // still closed.
         const resolvedText = expandContext
           ? await expandDraftContext(text, { terminalId, cwd })
-          : text;
+          : resolveTokenExpansions(text, []);
 
         const outgoing = options?.compose ? options.compose(resolvedText) : resolvedText;
         // Checked on the composed result rather than the raw draft: an empty

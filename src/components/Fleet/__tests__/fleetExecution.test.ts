@@ -597,6 +597,7 @@ describe("executeFleetBroadcast", () => {
 describe("executeFleetBroadcast — context tokens (#14953)", () => {
   const readDiff = async (cwd: string, type: string) => `diff ${type} in ${cwd}`;
   const getWorkingDiff = vi.fn(readDiff);
+  const remoteSubmit = vi.fn();
   const resolveContextReferences = vi.fn(async (refs: Array<{ prefix: string; id: string }>) =>
     refs.map((ref) => ({
       status: "resolved" as const,
@@ -610,11 +611,28 @@ describe("executeFleetBroadcast — context tokens (#14953)", () => {
     reset();
     getWorkingDiff.mockReset().mockImplementation(readDiff);
     resolveContextReferences.mockClear();
-    (window as unknown as { electron: unknown }).electron = {
-      git: { getWorkingDiff },
-      plugin: { resolveContextReferences },
-    };
+    remoteSubmit.mockReset().mockResolvedValue(undefined);
+    Object.assign(window, {
+      electron: {
+        git: { getWorkingDiff },
+        plugin: { resolveContextReferences },
+        hostMetrics: { submitFleet: remoteSubmit },
+      },
+    });
   });
+
+  /** Holds each `@diff` read until the test lets it answer. */
+  function holdDiffs() {
+    const waiting = new Map<string, () => void>();
+    getWorkingDiff.mockImplementation(
+      (cwd: string) =>
+        new Promise<string>((resolve) => waiting.set(cwd, () => resolve(`diff in ${cwd}`)))
+    );
+    return async (cwd: string) => {
+      await vi.waitFor(() => expect(waiting.has(cwd)).toBe(true));
+      waiting.get(cwd)!();
+    };
+  }
 
   const sentBy = () => new Map(submitMock.mock.calls.map(([id, payload]) => [id, payload]));
 
@@ -644,6 +662,7 @@ describe("executeFleetBroadcast — context tokens (#14953)", () => {
     await executeFleetBroadcast("Use @rec:142", ["a", "b", "c"], { c: "Also @rec:142 here" });
     expect(resolveContextReferences).toHaveBeenCalledTimes(1);
     expect(resolveContextReferences).toHaveBeenCalledWith([{ prefix: "rec", id: "142" }]);
+    expect([...sentBy().keys()].sort()).toEqual(["a", "b", "c"]);
     for (const payload of sentBy().values()) expect(payload).toContain("record 142");
   });
 
@@ -684,6 +703,63 @@ describe("executeFleetBroadcast — context tokens (#14953)", () => {
     expect(useFleetBroadcastProgressStore.getState().cancelled).toBe(true);
   });
 
+  it("never expands context for an agent on another host", async () => {
+    const remote = crossHostTargetKey("host-2", "t9");
+    useFleetArmingStore.setState({
+      crossHostTargets: [
+        { key: remote, hostId: "host-2", hostName: "Studio", terminalId: "t9", title: "t9" },
+      ],
+    });
+    seedPanels([makeAgent("a", { cwd: "/wt/a" })]);
+    await executeFleetBroadcast("Review @diff", ["a", remote]);
+    expect(sentBy().get("a")).toContain("diff unstaged in /wt/a");
+    expect(getWorkingDiff).toHaveBeenCalledTimes(1);
+    expect(remoteSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({ terminalId: "t9", text: "Review @diff" })
+    );
+  });
+
+  it("sends nothing to a pane that left the fleet while its context was read", async () => {
+    seedPanels([makeAgent("a", { cwd: "/wt/a" }), makeAgent("b", { cwd: "/wt/b" })]);
+    const answer = holdDiffs();
+    const sending = executeFleetBroadcast("Review @diff", ["a", "b"]);
+    usePanelStore.setState((state) => ({
+      panelsById: { ...state.panelsById, b: { ...state.panelsById.b!, location: "dock" } },
+    }));
+    await answer("/wt/a");
+    await answer("/wt/b");
+    const result = await sending;
+    expect([...sentBy().keys()]).toEqual(["a"]);
+    expect(notifyUserInputMock).not.toHaveBeenCalledWith("b", expect.anything());
+    expect(result.skippedCount).toBe(1);
+  });
+
+  it("leaves the progress of a newer broadcast alone when a superseded one settles", async () => {
+    seedPanels([makeAgent("a", { cwd: "/wt/a" }), makeAgent("b", { cwd: "/wt/b" })]);
+    const answer = holdDiffs();
+    const older = new AbortController();
+    const first = executeFleetBroadcast("Review @diff", ["a"], undefined, older.signal);
+    older.abort();
+    const second = executeFleetBroadcast("Review @diff", ["b"]);
+
+    await answer("/wt/a");
+    expect((await first).cancelled).toBe(true);
+    expect(useFleetBroadcastProgressStore.getState()).toMatchObject({
+      isActive: true,
+      cancelled: false,
+      total: 1,
+    });
+
+    await answer("/wt/b");
+    await second;
+    expect(useFleetBroadcastProgressStore.getState()).toMatchObject({
+      isActive: false,
+      cancelled: false,
+      completed: 1,
+    });
+    expect([...sentBy().keys()]).toEqual(["b"]);
+  });
+
   it("leaves a draft with no context to go out without waiting on anything", () => {
     seedPanels([makeAgent("a"), makeAgent("b")]);
     void executeFleetBroadcast("plain text", ["a", "b"]);
@@ -692,7 +768,7 @@ describe("executeFleetBroadcast — context tokens (#14953)", () => {
 });
 
 describe("findCrossHostContextTargets", () => {
-  const REMOTE = crossHostTargetKey("host-2" as never, "t9");
+  const REMOTE = crossHostTargetKey("host-2", "t9");
 
   it("names the other host's agents whose text still carries context", () => {
     expect(findCrossHostContextTargets("Review @diff", ["a", REMOTE])).toEqual([REMOTE]);

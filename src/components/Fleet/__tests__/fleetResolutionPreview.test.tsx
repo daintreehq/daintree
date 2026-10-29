@@ -10,6 +10,8 @@ import {
 } from "@/store/fleetTargetOverridesStore";
 import { usePanelStore } from "@/store/panelStore";
 import { FleetDraftingPill } from "../FleetDraftingPill";
+import { crossHostTargetKey } from "../crossHostFleet";
+import { findCrossHostContextTargets } from "../fleetExecution";
 import type { PtyPanelData } from "@shared/types/panel";
 
 function resetStores() {
@@ -452,25 +454,46 @@ describe("the preview for a draft with context tokens (#14953)", () => {
   it("follows a per-target edit, and says nothing for a skipped agent", () => {
     useFleetResolutionPreviewStore.getState().setDraft("Review @diff");
     render(<FleetDraftingPill />);
+    const contextOf = (id: string) =>
+      rowFor(id).querySelector("[data-testid='fleet-resolution-row-context']")?.textContent;
+    act(() => {
+      useFleetTargetOverridesStore.getState().setPayloadOverride("t-2", "Explain @selection");
+    });
+    expect(contextOf("t-2")).toContain("@selection from its own selection");
+    expect(contextOf("t-2")).not.toContain("@diff");
+    expect(contextOf("t-1")).toContain("@diff from /wt/one");
+
     act(() => {
       useFleetTargetOverridesStore.getState().setPayloadOverride("t-2", "Review your changes");
       useFleetTargetOverridesStore.getState().setSkipped("t-1", true);
     });
     expect(screen.queryByTestId("fleet-resolution-row-context")).toBeNull();
+    act(() => useFleetTargetOverridesStore.getState().setSkipped("t-1", false));
+    expect(contextOf("t-1")).toContain("@diff from /wt/one");
+  });
+
+  it("leaves the keyboard in the composer when the preview opens itself", () => {
+    const composer = document.createElement("textarea");
+    document.body.appendChild(composer);
+    try {
+      render(<FleetDraftingPill />);
+      composer.focus();
+      act(() => useFleetResolutionPreviewStore.getState().setDraft("Review @diff"));
+      expect(screen.getByTestId("fleet-resolution-popover")).toBeTruthy();
+      expect(document.activeElement).toBe(composer);
+    } finally {
+      composer.remove();
+    }
   });
 
   it("flags an agent on another host, which the token can't reach", () => {
+    const key = crossHostTargetKey("studio", "r-1");
     useFleetArmingStore.setState({
       crossHostTargets: [
-        {
-          key: "remote-key",
-          hostId: "studio" as never,
-          hostName: "Studio",
-          terminalId: "r-1",
-          title: "remote",
-        },
+        { key, hostId: "studio", hostName: "Studio", terminalId: "r-1", title: "remote" },
       ],
     });
+    expect(findCrossHostContextTargets("Review @diff", ["t-1", key])).toEqual([key]);
     useFleetResolutionPreviewStore.getState().setDraft("Review @diff");
     render(<FleetDraftingPill />);
     const remote = rowFor("remote");

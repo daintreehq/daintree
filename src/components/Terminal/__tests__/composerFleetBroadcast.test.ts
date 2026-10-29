@@ -119,6 +119,7 @@ describe("Enter in an armed composer", () => {
       terminalId: "remote-1",
       title: "remote agent",
     });
+    useFleetTargetOverridesStore.getState().setPayloadOverride("t-1", "Review @diff here");
     const onSent = vi.fn();
     const onRefused = vi.fn();
     expect(tryComposerFleetBroadcast(true, "t-1", "Review @diff", onSent, onRefused)).toBe(true);
@@ -128,6 +129,10 @@ describe("Enter in an armed composer", () => {
     expect(onSent).not.toHaveBeenCalled();
     expect(submitMock).not.toHaveBeenCalled();
     expect(submitCrossHostMock).not.toHaveBeenCalled();
+    // What was set up for this send waits for the next one.
+    expect(useFleetTargetOverridesStore.getState().payloadOverrides).toEqual({
+      "t-1": "Review @diff here",
+    });
   });
 
   it("lets the send go once the agent on another host is skipped", async () => {
