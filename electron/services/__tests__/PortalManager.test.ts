@@ -1221,7 +1221,13 @@ describe("PortalManager across project views (#14537)", () => {
     handlerFor(createdWebContents[0], "did-navigate")({}, "http://localhost:3000/next");
 
     expect(sentOn(cachedView, "portal:nav-event")).toEqual([
-      { tabId: "tab-1", title: "Test Page", url: "http://localhost:3000/next" },
+      {
+        tabId: "tab-1",
+        title: "Test Page",
+        url: "http://localhost:3000/next",
+        canGoBack: false,
+        canGoForward: false,
+      },
     ]);
   });
 
@@ -1236,8 +1242,127 @@ describe("PortalManager across project views (#14537)", () => {
     handlerFor(createdWebContents[1], "did-navigate")({}, "http://localhost:3000/new");
 
     expect(sentOn(cachedView, "portal:nav-event")).toEqual([
-      { tabId: "tab-1", title: "Test Page", url: "http://localhost:3000/new" },
+      {
+        tabId: "tab-1",
+        title: "Test Page",
+        url: "http://localhost:3000/new",
+        canGoBack: false,
+        canGoForward: false,
+      },
     ]);
+  });
+
+  describe("tab history (#15040)", () => {
+    const history = (wc: { send: ReturnType<typeof vi.fn> }) =>
+      (sentOn(wc, "portal:nav-event") as Array<Record<string, unknown>>).map(
+        ({ url, canGoBack, canGoForward }) => ({ url, canGoBack, canGoForward })
+      );
+
+    it("reports where the tab can go with each navigation", () => {
+      const manager = new PortalManagerClass(mockWindow);
+      manager.createTab("tab-1", "http://localhost:3000");
+      const wc = createdWebContents[0];
+
+      wc.canGoBack.mockReturnValue(true);
+      handlerFor(wc, "did-navigate")({}, "http://localhost:3000/next");
+      wc.canGoBack.mockReturnValue(false);
+      wc.canGoForward.mockReturnValue(true);
+      handlerFor(wc, "did-navigate-in-page")({}, "http://localhost:3000/#top", true);
+
+      expect(history(cachedView)).toEqual([
+        { url: "http://localhost:3000/next", canGoBack: true, canGoForward: false },
+        { url: "http://localhost:3000/#top", canGoBack: false, canGoForward: true },
+      ]);
+    });
+
+    it("reports a subframe's history at the page's own URL", () => {
+      const manager = new PortalManagerClass(mockWindow);
+      manager.createTab("tab-1", "http://localhost:3000");
+      const wc = createdWebContents[0];
+      wc.getURL.mockReturnValue("http://localhost:3000/page");
+      wc.canGoBack.mockReturnValue(true);
+
+      handlerFor(wc, "did-frame-navigate")({}, "http://embed.test/a", 200, "OK", false);
+      handlerFor(wc, "did-navigate-in-page")({}, "http://embed.test/a#b", false);
+
+      expect(history(cachedView)).toEqual([
+        { url: "http://localhost:3000/page", canGoBack: true, canGoForward: false },
+        { url: "http://localhost:3000/page", canGoBack: true, canGoForward: false },
+      ]);
+    });
+
+    it("leaves a main-frame commit to did-navigate", () => {
+      const manager = new PortalManagerClass(mockWindow);
+      manager.createTab("tab-1", "http://localhost:3000");
+
+      handlerFor(createdWebContents[0], "did-frame-navigate")(
+        {},
+        "http://localhost:3000/next",
+        200,
+        "OK",
+        true
+      );
+
+      expect(sentOn(cachedView, "portal:nav-event")).toEqual([]);
+    });
+
+    it("reports history when a load ends without a commit event", () => {
+      const manager = new PortalManagerClass(mockWindow);
+      manager.createTab("tab-1", "http://localhost:3000");
+      const wc = createdWebContents[0];
+      wc.getURL.mockReturnValue("http://localhost:3000/down");
+      wc.canGoBack.mockReturnValue(true);
+
+      handlerFor(wc, "did-stop-loading")();
+
+      expect(history(cachedView)).toEqual([
+        { url: "http://localhost:3000/down", canGoBack: true, canGoForward: false },
+      ]);
+    });
+
+    it("reports the tab's history every time it is shown", async () => {
+      const manager = new PortalManagerClass(mockWindow);
+      manager.createTab("tab-1", "http://localhost:3000");
+      manager.createTab("tab-2", "http://localhost:3001");
+      createdWebContents[0].canGoBack.mockReturnValue(true);
+      const bounds = { x: 0, y: 0, width: 800, height: 600 };
+
+      await manager.showTab("tab-1", bounds);
+      await manager.showTab("tab-2", bounds);
+      await manager.showTab("tab-1", bounds);
+
+      expect(
+        (sentOn(frontView, "portal:nav-event") as Array<{ tabId: string; canGoBack: boolean }>).map(
+          ({ tabId, canGoBack }) => [tabId, canGoBack]
+        )
+      ).toEqual([
+        ["tab-1", true],
+        ["tab-2", false],
+        ["tab-1", true],
+      ]);
+    });
+
+    it("reports nothing for a view shown before its first commit", async () => {
+      const manager = new PortalManagerClass(mockWindow);
+      manager.createTab("tab-1", "http://localhost:3000");
+      createdWebContents[0].getURL.mockReturnValue("");
+
+      await manager.showTab("tab-1", { x: 0, y: 0, width: 800, height: 600 });
+
+      expect(sentOn(cachedView, "portal:nav-event")).toEqual([]);
+    });
+
+    it("reports nothing from a destroyed view", () => {
+      const manager = new PortalManagerClass(mockWindow);
+      manager.createTab("tab-1", "http://localhost:3000");
+      const wc = createdWebContents[0];
+      wc.isDestroyed.mockReturnValue(true);
+
+      handlerFor(wc, "did-stop-loading")();
+
+      expect(sentOn(cachedView, "portal:nav-event")).toEqual([]);
+      expect(wc.canGoBack).not.toHaveBeenCalled();
+    });
   });
 
   it("spares a tab between its create and its show from memory pressure", async () => {
