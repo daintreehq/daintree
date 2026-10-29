@@ -5,13 +5,15 @@ import type {
   ReviewComparisonFile,
   ReviewComparisonIncompleteReason,
 } from "@shared/types/reviewComparison";
+import type { ReviewPointHead } from "@shared/types/reviewPoint";
 import type { ReviewMarkApplicability } from "@shared/utils/reviewMarkApplicability";
 import { pluralize } from "@/lib/pluralize";
+import { formatTimeAgo } from "@/utils/timeAgo";
 
 /**
  * What the review mark line says after "Reviewed … at …" (#14585). Counts come
- * only from a complete comparison of the worktree as it is now; anything less
- * says what's missing instead, and "nothing new" needs a complete one too.
+ * only from a comparison complete for the list they count; anything less says
+ * what's missing instead, and "nothing new" needs a complete one.
  */
 export type ReviewMarkComparisonView =
   | { kind: "comparing" }
@@ -23,14 +25,46 @@ export type ReviewMarkComparisonView =
   | { kind: "unavailable"; text: string }
   | { kind: "failed"; text: string };
 
-export const INCOMPLETE_TEXT: Record<ReviewComparisonIncompleteReason, string> = {
-  "reviewed-point-incomplete": "the reviewed state wasn't read in full",
-  "current-state-incomplete": "the worktree couldn't be read in full",
-  "reviewed-state-unavailable": "the reviewed commit and its base are gone",
-  "change-set-too-large": "too many changes to compare",
-  "path-limit": "too many changed files to list",
-  "commits-unavailable": "the commits couldn't be listed",
+/**
+ * One sentence per reason a comparison is incomplete, and which list it leaves
+ * short. Review language rather than git's: what the user can't see, not why
+ * git couldn't produce it.
+ */
+export const INCOMPLETE_REASON: Record<
+  ReviewComparisonIncompleteReason,
+  { list: "files" | "commits"; text: string }
+> = {
+  "reviewed-point-incomplete": {
+    list: "files",
+    text: "Your review mark didn't record every file, so changes to the others can't be shown.",
+  },
+  "current-state-incomplete": {
+    list: "files",
+    text: "Review Hub couldn't read the whole worktree this time.",
+  },
+  "reviewed-state-unavailable": {
+    list: "files",
+    text: "The reviewed commit and its base no longer exist, so files outside your reviewed changes can't be compared.",
+  },
+  "change-set-too-large": {
+    list: "files",
+    text: "There were too many changes to compare every file.",
+  },
+  "path-limit": { list: "files", text: "More files changed than can be listed." },
+  "commits-unavailable": { list: "commits", text: "The commits couldn't be listed." },
 };
+
+/** How the hub names a mark in a sentence: its commit (or unborn branch) and its age. */
+export function describeMarkPoint(
+  mark: { head: ReviewPointHead; markedAt: number },
+  now: number = Date.now()
+): { point: string; ago: string } {
+  return {
+    point:
+      mark.head.kind === "unborn" ? `the unborn ${mark.head.branch}` : mark.head.commit.slice(0, 7),
+    ago: formatTimeAgo(mark.markedAt, now),
+  };
+}
 
 /** Failures that only mean a newer comparison took over; the hook asks again. */
 export function isTransientComparisonFailure(outcome: ReviewMarkCompareOutcome): boolean {
@@ -39,6 +73,16 @@ export function isTransientComparisonFailure(outcome: ReviewMarkCompareOutcome):
     outcome.result.state === "failed" &&
     (outcome.result.reason === "superseded" || outcome.result.reason === "cancelled")
   );
+}
+
+/** Commits whose change isn't already in the reviewed history. */
+function newCommits(commits: ReviewComparisonCommit[]): number {
+  return commits.filter((commit) => commit.kind === "new").length;
+}
+
+/** Files this branch changed, as opposed to ones only the base update did. */
+function branchFiles(files: ReviewComparisonFile[]): number {
+  return files.filter((file) => file.baseUpdate !== "only").length;
 }
 
 /**
@@ -55,43 +99,50 @@ export function describeReviewMarkComparison(
     return { kind: "comparing" };
   }
   if (outcome.status === "unavailable") {
-    return { kind: "unavailable", text: "The reviewed state can't be read" };
+    return { kind: "unavailable", text: "Can't read the state you reviewed" };
   }
   if (outcome.status === "too-large") {
-    return { kind: "incomplete", text: "Too many changes to compare" };
+    return { kind: "unavailable", text: "Too many changes to compare" };
   }
   const { result } = outcome;
   switch (result.state) {
     case "different-branch":
       return { kind: "other-branch" };
     case "failed":
-      return { kind: "failed", text: "Couldn't compare with the review" };
+      return { kind: "failed", text: "Couldn't compare with your review" };
     case "incomplete":
+      return { kind: "incomplete", text: "Some changes may not be listed" };
+    case "reviewed-commit-missing": {
+      const files = branchFiles(result.files);
       return {
         kind: "incomplete",
-        text: `Comparison incomplete: ${INCOMPLETE_TEXT[result.reasons[0] ?? "current-state-incomplete"]}`,
+        text:
+          files > 0
+            ? `${pluralize(files, "file")} since · commits can't be listed`
+            : "Commits since review can't be listed",
       };
-    case "reviewed-commit-missing":
-      return {
-        kind: "incomplete",
-        text: "The reviewed commit is gone, so commits can't be counted",
-      };
+    }
     case "comparable": {
       if (result.commits.kind !== "listed") {
-        return { kind: "incomplete", text: "The commits couldn't be listed" };
+        return { kind: "incomplete", text: "Some changes may not be listed" };
       }
-      if (result.commits.truncated) {
-        return { kind: "incomplete", text: "Too many commits to count" };
-      }
-      const commits = result.commits.commits.length;
-      const files = result.files.length;
+      const commits = newCommits(result.commits.commits);
+      const files = branchFiles(result.files);
+      const { truncated } = result.commits;
       const rewritten = result.commits.history === "rewritten";
-      if (commits === 0 && files === 0 && !rewritten) return { kind: "nothing-new" };
+      const anyChange = result.commits.commits.length > 0 || result.files.length > 0 || rewritten;
+      if (!anyChange) return { kind: "nothing-new" };
+      // A truncated list can't say how many new commits there are, or that
+      // there are none: what it left out may be exactly that.
       const counts = [
-        commits > 0 ? pluralize(commits, "commit") : null,
+        truncated
+          ? "more commits than can be listed"
+          : commits > 0
+            ? pluralize(commits, "new commit")
+            : null,
         files > 0 ? pluralize(files, "file") : null,
       ].filter((part): part is string => part !== null);
-      const since = counts.length > 0 ? `${counts.join(", ")} since` : "no new files";
+      const since = counts.length > 0 ? `${counts.join(", ")} since` : "Nothing new on this branch";
       return { kind: "counts", text: rewritten ? `History rewritten · ${since}` : since };
     }
   }
@@ -104,8 +155,15 @@ export function describeReviewMarkComparison(
 export type ReviewMarkNotice =
   | {
       kind: "not-covered";
+      /** Every path the comparison listed, changed or not checked. */
       paths: string[];
+      /** The paths a since-review diff can open: git spelled them in UTF-8. */
+      openablePaths: string[];
+      /** Of `paths`, how many couldn't be checked rather than were seen to change. */
+      unchecked: number;
       commits: number;
+      /** The commit list was cut short, so `commits` is a floor. */
+      commitsTruncated: boolean;
       /** The check didn't cover everything, so more may have changed. */
       partial: boolean;
     }
@@ -119,32 +177,45 @@ export function reviewMarkNoticeFor(outcome: ReviewMarkCompareOutcome): ReviewMa
   const { result } = outcome;
   if (result.state === "different-branch") return { kind: "other-branch" };
   if (result.state === "failed") return { kind: "unchecked" };
-  const commits =
-    result.commits.kind === "listed"
-      ? result.commits.commits.filter((commit) => commit.kind === "new").length
-      : 0;
+  const commits = result.commits.kind === "listed" ? newCommits(result.commits.commits) : 0;
   const partial =
     result.state !== "comparable" || result.commits.kind !== "listed" || result.commits.truncated;
   if (result.files.length === 0 && commits === 0 && !partial) return null;
-  return { kind: "not-covered", paths: result.files.map((file) => file.path), commits, partial };
+  return {
+    kind: "not-covered",
+    paths: result.files.map((file) => file.path),
+    openablePaths: result.files
+      .filter((file) => file.pathBytes === undefined)
+      .map((file) => file.path),
+    unchecked: result.files.filter(
+      (file) => file.index !== "changed" && file.worktree !== "changed"
+    ).length,
+    commits,
+    commitsTruncated: result.commits.kind === "listed" && result.commits.truncated,
+    partial,
+  };
 }
 
-const NOTICE_PATHS = 3;
-
-/** One sentence for a not-covered notice: the first few paths, then a count. */
+/**
+ * The sentence under a not-covered notice's title: how much changed after the
+ * read, and whether the check saw everything.
+ */
 export function describeNotCovered(
   notice: Extract<ReviewMarkNotice, { kind: "not-covered" }>
 ): string {
-  const parts: string[] = [];
-  if (notice.paths.length > 0) {
-    const shown = notice.paths.slice(0, NOTICE_PATHS).join(", ");
-    const more = notice.paths.length - NOTICE_PATHS;
-    parts.push(more > 0 ? `${shown} and ${pluralize(more, "more file")}` : shown);
-  }
-  if (notice.commits > 0) parts.push(pluralize(notice.commits, "new commit"));
-  const listed = parts.length > 0 ? `Not covered: ${parts.join("; ")}.` : "";
-  const partial = notice.partial ? " The check was incomplete, so more may have changed." : "";
-  return `${listed}${partial}`.trim();
+  const changedFiles = notice.paths.length - notice.unchecked;
+  const parts = [
+    changedFiles > 0 ? pluralize(changedFiles, "file") : null,
+    notice.commits > 0
+      ? `${notice.commitsTruncated ? "at least " : ""}${pluralize(notice.commits, "new commit")}`
+      : null,
+  ].filter((part): part is string => part !== null);
+  const sentences = [
+    parts.length > 0 ? `${parts.join(" and ")} changed after Review Hub read the worktree.` : null,
+    notice.unchecked > 0 ? `${pluralize(notice.unchecked, "file")} couldn't be checked.` : null,
+    notice.partial ? "The check didn't cover everything, so more may have changed." : null,
+  ].filter((sentence): sentence is string => sentence !== null);
+  return sentences.join(" ");
 }
 
 /** The part of the since-review view a file belongs to. */
@@ -158,10 +229,20 @@ export interface SinceReviewFile {
   group: SinceReviewFileGroup;
   /** The base update changed this path and the branch touches it too. */
   alsoBaseUpdate: boolean;
+  /** Listed because it couldn't be checked, not because it was seen to change. */
+  unverified: boolean;
 }
 
 export type SinceReviewCommitsView =
-  | { kind: "listed"; rewritten: boolean; commits: ReviewComparisonCommit[]; truncated: boolean }
+  | {
+      kind: "listed";
+      rewritten: boolean;
+      /** Commits whose change isn't in the reviewed history, newest first. */
+      fresh: ReviewComparisonCommit[];
+      /** Same change as a commit in the reviewed history: rebased or cherry-picked copies. */
+      equivalent: ReviewComparisonCommit[];
+      truncated: boolean;
+    }
   | { kind: "unavailable"; text: string };
 
 /**
@@ -170,26 +251,30 @@ export type SinceReviewCommitsView =
  * their own kinds, and an incomplete one still lists what it found.
  */
 export type SinceReviewView =
-  | { kind: "unavailable"; reason: string }
+  | { kind: "unavailable"; reason: "no-mark" | "branch-unknown" }
   | { kind: "comparing" }
-  | { kind: "other-branch" }
-  | { kind: "failed"; text: string }
-  | { kind: "unreadable"; text: string }
+  /** `markedOn` is the mark's branch, or null for a detached HEAD. */
+  | { kind: "other-branch"; markedOn: string | null }
+  | { kind: "failed"; detail: string | null }
+  | { kind: "unreadable"; cause: "unavailable" | "too-large" }
   | { kind: "empty" }
   | {
       kind: "listed";
-      /** Why the lists may be missing something; null for a complete comparison. */
-      incomplete: string | null;
+      /** One sentence per reason the lists may be short; null for a complete comparison. */
+      incomplete: string[] | null;
+      /** More files may have changed than are listed. */
+      filesPartial: boolean;
       commits: SinceReviewCommitsView;
       files: SinceReviewFile[];
     };
 
 const COMMITS_UNAVAILABLE_TEXT = {
-  "reviewed-commit-missing": "The reviewed commit is gone, so commits can't be listed.",
+  "reviewed-commit-missing":
+    "The reviewed commit no longer exists, so commits since it can't be listed.",
   limit: "Too many commits to list.",
-  unreadable: "The history couldn't be read in full, so commits can't be listed.",
+  unreadable: "Git couldn't read the whole history, so commits can't be listed.",
   "base-unavailable":
-    "The base the review was compared against is gone, so commits can't be listed.",
+    "The base branch the review was compared with no longer resolves, so commits can't be listed.",
 } as const;
 
 /** Why the "Since review" view can't be opened, or null when it can. */
@@ -202,48 +287,51 @@ export function sinceReviewUnavailableReason(
 }
 
 export function describeSinceReview(
-  reviewMark: { applicability: ReviewMarkApplicability } | null,
+  reviewMark: { mark: { head: ReviewPointHead }; applicability: ReviewMarkApplicability } | null,
   outcome: ReviewMarkCompareOutcome | null
 ): SinceReviewView {
-  const reason = sinceReviewUnavailableReason(reviewMark);
-  if (reason !== null) return { kind: "unavailable", reason };
-  if (reviewMark?.applicability === "branch-changed") return { kind: "other-branch" };
+  if (!reviewMark) return { kind: "unavailable", reason: "no-mark" };
+  if (reviewMark.applicability === "branch-unknown") {
+    return { kind: "unavailable", reason: "branch-unknown" };
+  }
+  const markedOn = reviewMark.mark.head.kind === "detached" ? null : reviewMark.mark.head.branch;
+  if (reviewMark.applicability === "branch-changed") return { kind: "other-branch", markedOn };
   if (!outcome || outcome.status === "none" || isTransientComparisonFailure(outcome)) {
     return { kind: "comparing" };
   }
-  if (outcome.status === "unavailable") {
-    return { kind: "unreadable", text: "The reviewed state can't be read." };
-  }
-  if (outcome.status === "too-large") {
-    return { kind: "unreadable", text: "There are too many changes to compare." };
-  }
+  if (outcome.status === "unavailable") return { kind: "unreadable", cause: "unavailable" };
+  if (outcome.status === "too-large") return { kind: "unreadable", cause: "too-large" };
   const { result } = outcome;
   switch (result.state) {
     case "different-branch":
-      return { kind: "other-branch" };
+      return { kind: "other-branch", markedOn };
     case "failed":
-      return { kind: "failed", text: "Couldn't compare with the review." };
+      return { kind: "failed", detail: result.message.trim() || null };
     case "incomplete":
     case "reviewed-commit-missing":
     case "comparable": {
       const files = result.files.map(sinceReviewFile);
       const commits = sinceReviewCommits(result.commits);
-      const incomplete =
-        result.state === "incomplete"
-          ? `Comparison incomplete: ${result.reasons.map((r) => INCOMPLETE_TEXT[r]).join("; ")}.`
-          : result.state === "reviewed-commit-missing"
-            ? "The reviewed commit is gone, so commits can't be listed. The files below are complete."
-            : commits.kind === "unavailable"
-              ? "The commits couldn't be listed."
-              : commits.truncated
-                ? "Too many commits to list."
-                : null;
-      const noCommits = commits.kind === "listed" && commits.commits.length === 0;
+      const reasons = result.state === "incomplete" ? result.reasons : [];
+      // The commits band says for itself why it's empty; the banner speaks only
+      // for what the bands can't show.
+      const incomplete = reasons
+        .filter((reason) => INCOMPLETE_REASON[reason].list === "files" || commits.kind === "listed")
+        .map((reason) => INCOMPLETE_REASON[reason].text);
+      const filesPartial = reasons.some((reason) => INCOMPLETE_REASON[reason].list === "files");
+      const noCommits =
+        commits.kind === "listed" && commits.fresh.length === 0 && commits.equivalent.length === 0;
       const rewritten = commits.kind === "listed" && commits.rewritten;
-      if (incomplete === null && files.length === 0 && noCommits && !rewritten) {
-        return { kind: "empty" };
-      }
-      return { kind: "listed", incomplete, commits, files };
+      const complete =
+        result.state === "comparable" && commits.kind === "listed" && !commits.truncated;
+      if (complete && files.length === 0 && noCommits && !rewritten) return { kind: "empty" };
+      return {
+        kind: "listed",
+        incomplete: incomplete.length > 0 ? incomplete : null,
+        filesPartial,
+        commits,
+        files,
+      };
     }
   }
 }
@@ -255,6 +343,7 @@ function sinceReviewFile(file: ReviewComparisonFile): SinceReviewFile {
     status: file.status,
     group: file.baseUpdate === "only" ? "base-update" : "branch",
     alsoBaseUpdate: file.baseUpdate === "also",
+    unverified: file.index !== "changed" && file.worktree !== "changed",
   };
 }
 
@@ -265,7 +354,8 @@ function sinceReviewCommits(commits: ReviewComparisonCommits): SinceReviewCommit
   return {
     kind: "listed",
     rewritten: commits.history === "rewritten",
-    commits: commits.commits,
+    fresh: commits.commits.filter((commit) => commit.kind === "new"),
+    equivalent: commits.commits.filter((commit) => commit.kind === "patch-equivalent"),
     truncated: commits.truncated,
   };
 }
