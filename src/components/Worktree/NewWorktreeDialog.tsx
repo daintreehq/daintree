@@ -1187,7 +1187,7 @@ export function NewWorktreeDialog({
   // Provenance first, as `getRecipeScope` reads it: a plugin's id can carry the
   // legacy in-repo prefix.
   const runsElsewhere = (recipe: TerminalRecipe | undefined): recipe is TerminalRecipe =>
-    recipe !== undefined && !isPluginRecipe(recipe) && isInRepoRecipeId(recipe);
+    recipe ? !isPluginRecipe(recipe) && isInRepoRecipeId(recipe) : false;
   const placedChoiceRecipe = placedRecipeChoice
     ? startingLayoutRecipes.find((recipe) => recipe.id === placedRecipeChoice)
     : undefined;

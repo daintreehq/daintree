@@ -2375,6 +2375,7 @@ describe("NewWorktreeDialog — creating on another host (#14991)", () => {
           : {
               hostId: hostName,
               hostName,
+              homeName: "This Mac",
               status: "idle",
               unavailable: null,
               relativePath: "../root-worktrees/feature-placed",
@@ -2456,7 +2457,7 @@ describe("NewWorktreeDialog — creating on another host (#14991)", () => {
 
     await chooseHost("studio-02");
     expect(screen.getByTestId("placement-setup-note").textContent).toBe(
-      "studio-02 creates the worktree and can run a team recipe. The agent and prompt apply only to a worktree created on this host."
+      "The agent and prompt are off on studio-02. Your choices are kept for This Mac."
     );
     expect(screen.getByTestId("first-agent-picker").getAttribute("data-disabled")).toBe("true");
     const prompt = screen.getByTestId("first-agent-prompt") as HTMLTextAreaElement;
@@ -2478,7 +2479,7 @@ describe("NewWorktreeDialog — creating on another host (#14991)", () => {
     await chooseHost("studio-02");
 
     expect(screen.getByTestId("placed-recipe-note").textContent).toBe(
-      "studio-02 only runs team recipes from the repository, so this one won't run there"
+      "studio-02 runs only team recipes. Setup is kept for This Mac."
     );
     expect(draft()).toMatchObject({ recipeId: null });
   });
@@ -2496,7 +2497,7 @@ describe("NewWorktreeDialog — creating on another host (#14991)", () => {
     await chooseHost("studio-02");
 
     expect(screen.getByTestId("placed-recipe-note").textContent).toBe(
-      "studio-02 only runs team recipes from the repository, so this one won't run there"
+      "studio-02 runs only team recipes. Setup is kept for This Mac."
     );
     expect(draft()).toMatchObject({ recipeId: null });
   });
@@ -2529,7 +2530,7 @@ describe("NewWorktreeDialog — creating on another host (#14991)", () => {
 
     await chooseHost("studio-02");
     expect(screen.getByTestId("placed-recipe-note").textContent).toBe(
-      "studio-02 can't clone this window's layout, so the worktree opens there without it"
+      "studio-02 can't clone this window's layout. Clone current layout is kept for This Mac."
     );
     expect(draft()).toMatchObject({ recipeId: null });
   });
