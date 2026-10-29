@@ -10,6 +10,7 @@ import { readIndexCss } from "@/__tests__/support/hostCss";
 interface Declaration {
   property: string;
   value: string;
+  important: boolean;
 }
 
 interface CssRule {
@@ -53,8 +54,11 @@ function parseDeclarations(text: string): Declaration[] {
   return splitTopLevel(text, /;/).flatMap((part) => {
     const colon = part.indexOf(":");
     if (colon <= 0) return [];
-    const value = squash(part.slice(colon + 1)).replace(/\s*!important$/i, "");
-    return [{ property: part.slice(0, colon).trim().toLowerCase(), value }];
+    const raw = squash(part.slice(colon + 1));
+    const value = raw.replace(/\s*!important$/i, "");
+    return [
+      { property: part.slice(0, colon).trim().toLowerCase(), value, important: value !== raw },
+    ];
   });
 }
 
@@ -107,18 +111,27 @@ function excludesForcedColors(at: string): boolean {
   const query = /^@media (.*)$/.exec(at)?.[1];
   if (!query || /,|\bor\b/.test(query)) return false;
   if (/^not \( ?forced-colors ?: ?active ?\)$/.test(query)) return true;
-  return !/^not\b/.test(query) && /\( ?forced-colors ?: ?none ?\)/.test(query);
+  return !/\bnot\b/.test(query) && /\( ?forced-colors ?: ?none ?\)/.test(query);
 }
 
 /**
  * Whether a selector applies to a radio at rest (`checked` false) or chosen. A
  * transient state (hover, focus, disabled) is neither.
  */
-function appliesTo(prelude: string, checked: boolean): boolean {
-  if (/:(?:hover|focus|active|disabled|indeterminate)\b/.test(prelude)) return false;
-  if (/:checked/.test(prelude.replace(/:not\([^)]*\)/g, ""))) return checked;
-  if (/:not\([^)]*:checked[^)]*\)/.test(prelude)) return !checked;
+function appliesTo(selector: string, checked: boolean): boolean {
+  const positive = selector.replace(/:not\([^)]*\)/g, "");
+  if (/:(?:hover|focus|active|disabled|indeterminate)\b/.test(positive)) return false;
+  if (/:checked/.test(positive)) return checked;
+  if (/:not\([^)]*:checked[^)]*\)/.test(selector)) return !checked;
   return true;
+}
+
+/** A rule's radio selectors, each led by its enclosing style rules so nesting resolves. */
+function radioSelectors(rule: CssRule): string[] {
+  const ancestry = rule.context.filter((at) => !at.startsWith("@")).join(" ");
+  return splitTopLevel(rule.prelude, /,/)
+    .map((selector) => `${ancestry} ${selector}`.trim())
+    .filter((selector) => RADIO.test(selector));
 }
 
 interface Paint {
@@ -130,6 +143,7 @@ interface Paint {
 
 const BORDER_STYLES = /^(?:none|hidden|solid|dashed|dotted|double|groove|ridge|inset|outset)$/;
 const BORDER_WIDTHS = /^(?:thin|medium|thick|-?[\d.]+[a-z%]*)$/;
+const VISIBLE_WIDTH = /^(?:thin|medium|thick|(?=[\d.]*[1-9])\d*\.?\d+[a-z]+)$/;
 
 /** The border and background image a state ends with, folding its rules in source order. */
 function resolvePaint(rules: CssRule[]): Paint {
@@ -139,25 +153,33 @@ function resolvePaint(rules: CssRule[]): Paint {
     borderColor: "currentcolor",
     image: "none",
   };
-  for (const { property, value } of rules.flatMap((rule) => rule.declarations)) {
+  const locked = new Set<keyof Paint>();
+  for (const { property, value, important } of rules.flatMap((rule) => rule.declarations)) {
+    const set = (field: keyof Paint, next: string) => {
+      if (locked.has(field) && !important) return;
+      paint[field] = next;
+      if (important) locked.add(field);
+    };
     if (property === "border") {
       const tokens = splitTopLevel(value, /\s/);
-      paint.borderWidth = tokens.find((t) => BORDER_WIDTHS.test(t)) ?? "medium";
-      paint.borderStyle = tokens.find((t) => BORDER_STYLES.test(t)) ?? "none";
-      paint.borderColor =
-        tokens.find((t) => !BORDER_WIDTHS.test(t) && !BORDER_STYLES.test(t)) ?? "currentcolor";
-    } else if (property === "border-width") paint.borderWidth = value;
-    else if (property === "border-style") paint.borderStyle = value;
-    else if (property === "border-color") paint.borderColor = value;
+      set("borderWidth", tokens.find((t) => BORDER_WIDTHS.test(t)) ?? "medium");
+      set("borderStyle", tokens.find((t) => BORDER_STYLES.test(t)) ?? "none");
+      set(
+        "borderColor",
+        tokens.find((t) => !BORDER_WIDTHS.test(t) && !BORDER_STYLES.test(t)) ?? "currentcolor"
+      );
+    } else if (property === "border-width") set("borderWidth", value);
+    else if (property === "border-style") set("borderStyle", value);
+    else if (property === "border-color") set("borderColor", value);
     // The shorthand resets the image when it names none, so it counts as a write.
-    else if (property === "background" || property === "background-image") paint.image = value;
+    else if (property === "background" || property === "background-image") set("image", value);
   }
   return paint;
 }
 
 const hasRing = (paint: Paint) =>
   !/^(?:none|hidden)$/.test(paint.borderStyle) &&
-  !/^-?0*\.?0*[a-z%]*$/.test(paint.borderWidth) &&
+  VISIBLE_WIDTH.test(paint.borderWidth) &&
   paint.borderColor !== "transparent";
 
 const hasImage = (paint: Paint) =>
@@ -167,7 +189,7 @@ const RADIO = /\[type=["']?radio["']?\]/;
 const DRAWING = /^(?:appearance|width|height|border(?:-[a-z-]+)?|background(?:-[a-z-]+)?)$/;
 
 const rules = collectRules(readIndexCss());
-const radioRules = rules.filter((rule) => RADIO.test(rule.prelude));
+const radioRules = rules.filter((rule) => radioSelectors(rule).length > 0);
 const drawnRules = radioRules.filter((rule) => rule.context.some(excludesForcedColors));
 
 describe("radio appearance contract (#15361)", () => {
@@ -187,8 +209,10 @@ describe("radio appearance contract (#15361)", () => {
   });
 
   it("draws an empty ring at rest and adds a dot only when checked", () => {
-    const resting = resolvePaint(drawnRules.filter((rule) => appliesTo(rule.prelude, false)));
-    const checked = resolvePaint(drawnRules.filter((rule) => appliesTo(rule.prelude, true)));
+    const inState = (checked: boolean) =>
+      drawnRules.filter((rule) => radioSelectors(rule).some((s) => appliesTo(s, checked)));
+    const resting = resolvePaint(inState(false));
+    const checked = resolvePaint(inState(true));
 
     expect(hasRing(resting)).toBe(true);
     expect(hasImage(resting)).toBe(false);
