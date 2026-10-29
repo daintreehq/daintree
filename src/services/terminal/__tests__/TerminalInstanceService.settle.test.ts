@@ -55,6 +55,7 @@ type RestoreState = ManagedTerminal["scrollbackRestoreState"];
 
 type SettleTestService = {
   instances: Map<string, unknown>;
+  waitForAttachSettled: (id: string, options?: { timeoutMs?: number }) => Promise<void>;
   waitForFullySettled: (id: string, options?: { timeoutMs?: number }) => Promise<void>;
   waitForAllFullySettled: (ids: string[], options?: { timeoutMs?: number }) => Promise<void>;
   notifyRestoreSettledWaiters: (id: string) => void;
@@ -239,6 +240,43 @@ describe("TerminalInstanceService fully-settled waits", () => {
     await expect(service.waitForFullySettled("t1", { timeoutMs: 30 })).rejects.toThrow(
       /in-progress/
     );
+  });
+
+  describe("attach-settled deadline", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("settles every waiter at the first deadline when the attach finished without a notify", async () => {
+      vi.useFakeTimers();
+      const managed = makeManaged("t1", { isAttaching: true });
+      const outcomes: string[] = [];
+      void service.waitForAttachSettled("t1", { timeoutMs: 100 }).then(() => outcomes.push("a"));
+      void service.waitForAttachSettled("t1", { timeoutMs: 5000 }).then(() => outcomes.push("b"));
+      managed.isAttaching = false;
+
+      await vi.advanceTimersByTimeAsync(99);
+      expect(outcomes).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(outcomes).toEqual(["a", "b"]);
+    });
+
+    it("still rejects at the deadline when the attach never settled", async () => {
+      vi.useFakeTimers();
+      makeManaged("t1", { isAttaching: true });
+      let outcome = "pending";
+      void service.waitForAttachSettled("t1", { timeoutMs: 100 }).then(
+        () => (outcome = "resolved"),
+        (error: Error) => (outcome = error.message)
+      );
+
+      await vi.advanceTimersByTimeAsync(99);
+      expect(outcome).toBe("pending");
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(outcome).toMatch(/attach settle timeout after 100ms/);
+    });
   });
 
   it("rejects waiters when the terminal is destroyed before settling", async () => {

@@ -313,31 +313,76 @@ describe("TerminalInstanceService attach reveal", () => {
     expect(settled).toBe(true);
   });
 
-  it("resolves attach-settled waiters when the post-attach fit throws", async () => {
-    const managed = makeMockManaged("t1");
-    const offscreen = document.createElement("div");
-    offscreen.appendChild(managed.hostElement);
-    service.instances.set("t1", managed);
+  describe("a reveal step that throws", () => {
+    const attachAndWait = (managed: ReturnType<typeof makeMockManaged>, onPage = true) => {
+      const offscreen = document.createElement("div");
+      offscreen.appendChild(managed.hostElement);
+      service.instances.set(managed.id, managed);
+      const container = document.createElement("div");
+      if (onPage) document.body.appendChild(container);
+      service.attach(managed.id, container);
+      const outcome = { settled: false };
+      void service.waitForAttachSettled(managed.id, { timeoutMs: 1000 }).then(
+        () => (outcome.settled = true),
+        () => {}
+      );
+      return outcome;
+    };
 
-    vi.spyOn(service.resizeController, "fit").mockImplementation(() => {
-      throw new Error("renderer has no dimensions");
+    it("still releases its waiters when the post-attach fit throws", async () => {
+      const fit = vi.spyOn(service.resizeController, "fit").mockImplementation(() => {
+        throw new Error("renderer has no dimensions");
+      });
+      try {
+        const outcome = attachAndWait(makeMockManaged("t1"));
+
+        await vi.advanceTimersByTimeAsync(16);
+        expect(outcome.settled).toBe(false);
+
+        // The second frame, well inside the deadline: the settle step releases it.
+        await vi.advanceTimersByTimeAsync(16);
+        expect(fit).toHaveBeenCalledWith("t1");
+        expect(outcome.settled).toBe(true);
+      } finally {
+        fit.mockRestore();
+      }
     });
 
-    const container = document.createElement("div");
-    document.body.appendChild(container);
+    it("still releases its waiters when prepare throws after the attach cleared", async () => {
+      const managed = makeMockManaged("t1");
+      Object.assign(managed, {
+        getRefreshTier: () => {
+          throw new Error("tier lookup failed");
+        },
+      });
+      const outcome = attachAndWait(managed);
 
-    service.attach("t1", container);
-
-    let settled = false;
-    void service.waitForAttachSettled("t1", { timeoutMs: 1000 }).then(() => {
-      settled = true;
+      await vi.advanceTimersByTimeAsync(16);
+      expect(managed.isAttaching).toBe(false);
+      expect(outcome.settled).toBe(true);
     });
 
-    // Two frames, well inside the deadline: the settle step itself releases it.
-    await vi.advanceTimersByTimeAsync(32);
+    it("still releases its waiters when the reveal throws", async () => {
+      const managed = makeMockManaged("t1");
+      managed.terminal.refresh.mockImplementation(() => {
+        throw new Error("refresh failed");
+      });
+      const outcome = attachAndWait(managed);
 
-    expect(service.resizeController.fit).toHaveBeenCalledWith("t1");
-    expect(settled).toBe(true);
+      await vi.advanceTimersByTimeAsync(16);
+      expect(outcome.settled).toBe(true);
+    });
+
+    it("leaves its waiters pending when the attach still hasn't settled", async () => {
+      const managed = makeMockManaged("t1");
+      managed.terminal.refresh.mockImplementation(() => {
+        throw new Error("refresh failed");
+      });
+      const outcome = attachAndWait(managed, false);
+
+      await vi.advanceTimersByTimeAsync(32);
+      expect(outcome.settled).toBe(false);
+    });
   });
 
   describe("early synchronous resize for warm terminals", () => {
