@@ -136,9 +136,19 @@ export function useFocusOnActivateIntent(isStateLoaded: boolean): void {
       return;
     }
     if (pending.intent === "focus-panel") {
-      // The terminal can exit or be trashed while the project switch is in flight.
-      void actionService.dispatch("panel.focus", { panelId: pending.panelId }).then((result) => {
-        if (result.ok) return;
+      // The terminal can exit or be trashed while the project switch is in
+      // flight. A sender that named its worktree lands there instead.
+      const { panelId, worktreeId } = pending;
+      let superseded = false;
+      cancelLanding.current = () => {
+        superseded = true;
+      };
+      void actionService.dispatch("panel.focus", { panelId }).then((result) => {
+        if (result.ok || superseded) return;
+        if (worktreeId) {
+          cancelLanding.current = landOnWorktree(worktreeId, worktreeStore);
+          return;
+        }
         notify({
           type: "warning",
           title: "Terminal is gone",

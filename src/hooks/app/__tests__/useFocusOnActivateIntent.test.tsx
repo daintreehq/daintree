@@ -4,7 +4,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 
 type FocusPayload =
   | { intent: "focus-next-waiting" }
-  | { intent: "focus-panel"; panelId: string }
+  | { intent: "focus-panel"; panelId: string; worktreeId?: string }
   | { intent: "focus-worktree"; worktreeId: string }
   | { intent: "open-assistant"; subject: Record<string, unknown> }
   | { intent: "restore-trashed"; runId: string; spawnedAt: number; expiresAt: number }
@@ -281,6 +281,85 @@ describe("useFocusOnActivateIntent", () => {
     });
     expect(notifyMock).toHaveBeenCalledTimes(1);
     expect(notifyMock).toHaveBeenCalledWith(expect.objectContaining({ title: "Terminal is gone" }));
+  });
+
+  it("lands on the named fallback worktree, saying nothing, when the terminal is gone", async () => {
+    dispatchMock.mockResolvedValue({
+      ok: false,
+      error: { code: "EXECUTION_ERROR", message: "Terminal panel no longer exists" },
+    });
+    renderHook(() => useFocusOnActivateIntent(true));
+    await act(async () => {
+      lastCallback?.({ intent: "focus-panel", panelId: "t1", worktreeId: "/repo-feature" });
+    });
+    expect(dispatchMock).toHaveBeenCalledWith("panel.focus", { panelId: "t1" });
+    expect(landOnWorktreeMock).toHaveBeenCalledWith("/repo-feature", worktreeStore);
+    expect(notifyMock).not.toHaveBeenCalled();
+  });
+
+  it("cancels a fallback landing still waiting when a newer intent arrives or the view unmounts", async () => {
+    dispatchMock.mockResolvedValue({
+      ok: false,
+      error: { code: "EXECUTION_ERROR", message: "Terminal panel no longer exists" },
+    });
+    const { unmount } = renderHook(() => useFocusOnActivateIntent(true));
+    await act(async () => {
+      lastCallback?.({ intent: "focus-panel", panelId: "t1", worktreeId: "/repo-a" });
+    });
+    const cancelFirst = landOnWorktreeMock.mock.results[0]!.value;
+    act(() => {
+      lastCallback?.({ intent: "focus-worktree", worktreeId: "/repo-b" });
+    });
+    expect(cancelFirst).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      lastCallback?.({ intent: "focus-panel", panelId: "t2", worktreeId: "/repo-c" });
+    });
+    const cancelThird = landOnWorktreeMock.mock.results[2]!.value;
+    expect(landOnWorktreeMock.mock.calls[2]![0]).toBe("/repo-c");
+    unmount();
+    expect(cancelThird).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not fall back to the worktree when the terminal was still there", async () => {
+    dispatchMock.mockResolvedValue({ ok: true, data: undefined });
+    renderHook(() => useFocusOnActivateIntent(true));
+    await act(async () => {
+      lastCallback?.({ intent: "focus-panel", panelId: "t1", worktreeId: "/repo-feature" });
+    });
+    expect(landOnWorktreeMock).not.toHaveBeenCalled();
+  });
+
+  it("drops a terminal's fallback once a newer intent arrives or the view unmounts", async () => {
+    let failFocus!: (result: unknown) => void;
+    dispatchMock.mockImplementation(
+      (id: string) =>
+        new Promise((resolve) => {
+          if (id === "panel.focus") failFocus = resolve;
+          else resolve({ ok: true, data: undefined });
+        })
+    );
+    const { unmount } = renderHook(() => useFocusOnActivateIntent(true));
+    act(() => {
+      lastCallback?.({ intent: "focus-panel", panelId: "t1", worktreeId: "/repo-feature" });
+    });
+    act(() => {
+      lastCallback?.({ intent: "focus-next-waiting" });
+    });
+    await act(async () => {
+      failFocus({ ok: false, error: { code: "EXECUTION_ERROR", message: "gone" } });
+    });
+    expect(landOnWorktreeMock).not.toHaveBeenCalled();
+    expect(notifyMock).not.toHaveBeenCalled();
+
+    act(() => {
+      lastCallback?.({ intent: "focus-panel", panelId: "t2" });
+    });
+    unmount();
+    await act(async () => {
+      failFocus({ ok: false, error: { code: "EXECUTION_ERROR", message: "gone" } });
+    });
+    expect(notifyMock).not.toHaveBeenCalled();
   });
 
   it("lands on the worktree it was sent once hydrated, dispatching nothing else (#14569)", () => {
