@@ -819,6 +819,17 @@ describe("external tool surface budget (#11585)", () => {
   // and other agents' terminals alike, so an external caller could trash a
   // terminal it has no relationship to; trash is then purged after 20s
   // (TRASH_TTL_MS), killing the PTY, with no restore action on this surface.
+  // The held pane's way out sits exactly where `terminal.restart` does
+  // (#15270): the assistant's full tier, never a pane bearer or an API key.
+  it("offers terminal.startHeld only to the assistant's full tier", () => {
+    expect(BUILT_IN_ACTION_IDS as readonly string[]).toContain("terminal.startHeld");
+    expect(isTierPermitted("full", "terminal.startHeld", true)).toBe(true);
+    expect(isTierPermitted("full", "terminal.startHeld", false)).toBe(false);
+    expect(isTierPermitted("core", "terminal.startHeld", true)).toBe(false);
+    expect(isTierPermitted("external", "terminal.startHeld")).toBe(false);
+    expect(shouldExposeTool(makeEntry({ id: "terminal.startHeld" }), "external")).toBe(false);
+  });
+
   it("authorizes no terminal-destroying tool externally", () => {
     for (const id of [
       "terminal.close",

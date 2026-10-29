@@ -1132,6 +1132,7 @@ describe("McpServerService", () => {
         id: "terminal.startHeld" as ActionId,
         title: "Start Held Pane",
         description: "Start a pane restore held, in place",
+        danger: "confirm",
       }),
       createManifestEntry({
         id: "terminal.arm" as ActionId,

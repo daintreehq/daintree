@@ -35,7 +35,10 @@ import {
 } from "./terminalPlacement";
 import { isForegroundDispatch } from "./dispatchSource";
 import { readTerminalPaneInfo } from "@/services/terminal/readTerminalPaneInfo";
-import { launchFromRestoreRecovery } from "@/services/terminal/restoreRecoveryLaunch";
+import {
+  isRestoreRecoveryLaunching,
+  launchFromRestoreRecovery,
+} from "@/services/terminal/restoreRecoveryLaunch";
 import { UnactionableTargetError } from "@/services/actions/unactionableTarget";
 import { logWarn } from "@/utils/logger";
 import {
@@ -95,6 +98,29 @@ function clearPendingIf(kind: TerminalPendingDestructiveActionKind): void {
   if (pending && pending.kind === kind) {
     useTerminalPendingDestructiveActionStore.getState().clear();
   }
+}
+
+/** Why `terminal.startHeld` can't start this pane as it stands, or undefined if it can. */
+function startHeldRefusal(terminalId: string, start: "resume" | "fresh"): string | undefined {
+  const panel = usePanelStore.getState().panelsById[terminalId];
+  if (!panel || !isPtyPanel(panel)) return `No terminal '${terminalId}' in this project.`;
+  const recovery = panel.restoreRecovery;
+  if (!recovery) {
+    return `Terminal '${terminalId}' isn't held for recovery; use terminal.restart for a running one.`;
+  }
+  if (recovery.awaitingDestination) {
+    return `Terminal '${terminalId}' is waiting for a worktree to run in. Move it onto one, or keep its original folder from the pane.`;
+  }
+  if (panel.location !== "grid" && panel.location !== "dock") {
+    return `Terminal '${terminalId}' is in the ${panel.location}; only a held pane in the grid or dock can start.`;
+  }
+  if (start === "resume" && recovery.sessionId === undefined) {
+    return `Terminal '${terminalId}' was held (${recovery.reason}) with no recorded conversation to resume. Start it fresh, or leave the pane for the user to pick one.`;
+  }
+  if (isRestoreRecoveryLaunching(terminalId)) {
+    return `Terminal '${terminalId}' is already starting. Watch its status rather than starting it again.`;
+  }
+  return undefined;
 }
 
 export const terminalLifecycleActionRuns = {
@@ -297,34 +323,15 @@ export const terminalLifecycleActionRuns = {
   },
   "terminal.startHeld": async (args: unknown) => {
     const { terminalId, start } = StartHeldArgsSchema.parse(args);
+    const refusal = startHeldRefusal(terminalId, start);
+    if (refusal !== undefined) throw new UnactionableTargetError(refusal);
     const panel = usePanelStore.getState().panelsById[terminalId];
-    if (!panel || !isPtyPanel(panel)) {
-      throw new UnactionableTargetError(`No terminal '${terminalId}' in this project.`);
-    }
-    const recovery = panel.restoreRecovery;
-    if (!recovery) {
-      throw new UnactionableTargetError(
-        `Terminal '${terminalId}' isn't held for recovery; use terminal.restart for a running one.`
-      );
-    }
-    if (recovery.awaitingDestination) {
-      throw new UnactionableTargetError(
-        `Terminal '${terminalId}' is waiting for a worktree to run in. Move it onto one, or keep its original folder from the pane.`
-      );
-    }
-    if (panel.location !== "grid" && panel.location !== "dock") {
-      throw new UnactionableTargetError(
-        `Terminal '${terminalId}' is in the ${panel.location}; only a held pane in the grid or dock can start.`
-      );
-    }
     // Only the conversation the hold recorded, never one the caller names:
     // choosing among the rest is what the hold leaves to the user (#12434).
-    const sessionId = start === "resume" ? recovery.sessionId : undefined;
-    if (start === "resume" && sessionId === undefined) {
-      throw new UnactionableTargetError(
-        `Terminal '${terminalId}' was held (${recovery.reason}) with no recorded conversation to resume. Start it fresh, or leave the pane for the user to pick one.`
-      );
-    }
+    const sessionId =
+      start === "resume" && panel && isPtyPanel(panel)
+        ? panel.restoreRecovery?.sessionId
+        : undefined;
     const outcome = await launchFromRestoreRecovery(
       terminalId,
       sessionId !== undefined ? { kind: "resume", sessionId } : { kind: "fresh" }
@@ -335,7 +342,12 @@ export const terminalLifecycleActionRuns = {
       );
     }
     if (outcome === "unavailable") {
-      throw new Error(`Terminal '${terminalId}' changed while it was starting and didn't launch.`);
+      // Read again: another start of this pane, or its closing, while this one
+      // waited is not a failed launch, and a caller told only "didn't launch"
+      // starts a replacement beside a pane that is already coming up.
+      const after = startHeldRefusal(terminalId, start);
+      if (after !== undefined) throw new UnactionableTargetError(after);
+      throw new Error(`Terminal '${terminalId}' is still held: its launch didn't go through.`);
     }
     return { terminalId, start, ...(sessionId !== undefined && { sessionId }) };
   },
