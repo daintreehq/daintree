@@ -210,5 +210,13 @@ describe("useHelpSessionLiveStatus", () => {
 
     rerender({ id: null });
     expect(result.current).toEqual(DISCONNECTED);
+
+    // Coming back to help-2 must wait for a fresh pull, not revive the old one.
+    rerender({ id: "help-2" });
+    expect(result.current).toEqual(DISCONNECTED);
+    await act(async () => {
+      pulls[2]!.resolve(CONNECTED);
+    });
+    expect(result.current).toEqual(CONNECTED);
   });
 });

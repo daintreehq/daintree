@@ -1033,6 +1033,30 @@ describe("HelpSessionController — grant lifecycle (#10042)", () => {
     ctrl.stop();
   });
 
+  it("a use that slides the grant mid-revoke doesn't stop the reply from removing its row", async () => {
+    const ctrl = startController();
+    issue("t1");
+    let resolveRevoke: (() => void) | undefined;
+    mockMcpRevokeGrant.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveRevoke = () => resolve({ sessionId: "s1", toolId: "t1", revoked: true });
+      })
+    );
+    ctrl.revokeGrant(keyOf(ctrl, "t1"));
+    grantLifecycleListeners[0]?.({
+      type: "grant.refreshed",
+      sessionId: "s1",
+      toolId: "t1",
+      ttlMs: 900_000,
+      expiresAt: Date.now() + 1_000_000,
+    });
+    resolveRevoke?.();
+    await vi.waitFor(() => {
+      expect(ctrl.getSnapshot().activeGrants).toEqual([]);
+    });
+    ctrl.stop();
+  });
+
   it("a revoke reply that lands after the same tool was approved again keeps the new approval", async () => {
     const ctrl = startController();
     issue("t1");

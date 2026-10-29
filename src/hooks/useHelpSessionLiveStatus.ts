@@ -8,6 +8,13 @@ const DISCONNECTED: HelpSessionLiveStatus = {
   activeGrants: [],
 };
 
+interface PulledStatus {
+  sessionId: string | null;
+  status: HelpSessionLiveStatus;
+}
+
+const NOTHING_PULLED: PulledStatus = { sessionId: null, status: DISCONNECTED };
+
 /**
  * Live tier + per-tool grants for the pinned help session, addressed by its
  * public help-session id (`helpPanelStore.sessionId`). Unlike the persisted
@@ -28,16 +35,15 @@ const DISCONNECTED: HelpSessionLiveStatus = {
  * Returns safe `connected: false` defaults when `sessionId` is null or no live
  * session is pinned to this renderer — callers render that as a quiet idle
  * state, never a spinner. A snapshot is only ever returned for the id it was
- * pulled for: after a session switch the previous session's grants (and their
- * revoke buttons) don't linger while the new pull is in flight.
+ * pulled for, and is dropped on every session change: the previous session's
+ * grants (and their revoke buttons) never linger while the next pull is in
+ * flight, nor come back stale when the user returns to that session.
  */
 export function useHelpSessionLiveStatus(sessionId: string | null): HelpSessionLiveStatus {
-  const [snapshot, setSnapshot] = useState<{
-    sessionId: string | null;
-    status: HelpSessionLiveStatus;
-  }>({ sessionId: null, status: DISCONNECTED });
+  const [snapshot, setSnapshot] = useState<PulledStatus>(NOTHING_PULLED);
 
   useEffect(() => {
+    setSnapshot(NOTHING_PULLED);
     if (!sessionId) return;
 
     let cancelled = false;

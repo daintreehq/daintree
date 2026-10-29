@@ -102,12 +102,16 @@ describe("SessionLiveStatusCard per-tool revoke (#14975)", () => {
   });
 
   it("drops a pending revoke and its error when the active session changes", async () => {
-    revokeGrant.mockRejectedValue(new Error("Caller is not the pinned renderer"));
-    const { getByRole, findByRole, queryByRole, rerender } = render(
+    let rejectRevoke: (() => void) | undefined;
+    revokeGrant.mockReturnValue(
+      new Promise((_, reject) => {
+        rejectRevoke = () => reject(new Error("Caller is not the pinned renderer"));
+      })
+    );
+    const { getByRole, queryByRole, rerender } = render(
       <SessionLiveStatusCard configuredTier="core" />
     );
     fireEvent.click(getByRole("button", { name: "Revoke terminal.kill" }));
-    await findByRole("alert");
 
     activeSessionId.current = "help-2";
     liveStatus.current = {
@@ -116,7 +120,12 @@ describe("SessionLiveStatusCard per-tool revoke (#14975)", () => {
       activeGrants: [{ ...perTool("terminal.kill"), sessionId: "transport-2" }],
     };
     rerender(<SessionLiveStatusCard configuredTier="core" />);
+    expect(
+      getByRole("button", { name: "Revoke terminal.kill" }).getAttribute("aria-busy")
+    ).toBeNull();
 
+    rejectRevoke?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(queryByRole("alert")).toBeNull();
   });
 });
