@@ -41,6 +41,7 @@ import {
   acquireHelpSessionController,
   useHelpSessionController,
 } from "@/controllers/helpSessionControllerRegistry";
+import { assistantSlotKey } from "@shared/config/assistantSlots";
 import { HelpPanelBanners } from "./HelpPanelBanners";
 import { usePastSessionsNote } from "./pastSessionsNote";
 import { HelpPanelVersionGate } from "./HelpPanelVersionGate";
@@ -985,14 +986,19 @@ export function HelpPanel({
   // new tab itself rather than leaving that to the tab's auto-launch, which only
   // runs with "Start when the panel opens" on (#14976). Queued before the tab's
   // first input sync; with several agents and no default, the tab asks instead.
+  // A tab that turns out to hold a captured conversation (a cold view whose
+  // lanes are still being listed) is left to offer its own Resume: the default
+  // agent started there would replace that conversation.
   const handleNewSession = useCallback(() => {
     const slot = handleOpenParallelSession();
     if (slot === null || !launchableAgentId) return;
+    const { hibernateSessions } = useHelpPanelStore.getState();
+    if (activeWorkspaceId && hibernateSessions[assistantSlotKey(activeWorkspaceId, slot)]) return;
     acquireHelpSessionController(slot).launchWhenReady({
       agentId: launchableAgentId,
       replaceExisting: true,
     });
-  }, [handleOpenParallelSession, launchableAgentId]);
+  }, [activeWorkspaceId, handleOpenParallelSession, launchableAgentId]);
 
   // A starter never submits into a live session: if one has appeared since the
   // card rendered, the prompt lands in its input as a draft for the user to send.

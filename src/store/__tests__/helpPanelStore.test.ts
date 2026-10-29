@@ -1429,6 +1429,18 @@ describe("helpPanelStore persistence migration", () => {
         expect(store.getState().autoLaunchEnabled).toBe(false);
       });
 
+      it("ignores a sibling's first write onto an empty key, which only carries the default", async () => {
+        const backing = installLocalStorage({});
+        const { useHelpPanelStore: store } = await import("../helpPanelStore");
+
+        // Turned on here, still inside the write debounce, when a sibling's
+        // first-ever write lands with the default in it.
+        store.getState().setAutoLaunchEnabled(true);
+        siblingWrites(backing, null, blob(false, 640));
+
+        expect(store.getState().autoLaunchEnabled).toBe(true);
+      });
+
       it("never turns it on from a pre-v8 blob, a non-boolean, or another key", async () => {
         const backing = installLocalStorage({});
         const { useHelpPanelStore: store } = await import("../helpPanelStore");

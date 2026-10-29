@@ -849,10 +849,13 @@ if (typeof window !== "undefined") {
     if (event.key !== HELP_PANEL_STORAGE_KEY) return;
     // A sibling writing something else still carries the flag as disk had it,
     // and taking that would undo a change here that's still in its write
-    // debounce. Only a write that moved the flag counts.
-    if (storedAutoLaunchEnabled(event.oldValue) === storedAutoLaunchEnabled(event.newValue)) {
-      return;
-    }
+    // debounce. Only a write that moved the flag counts; a first write onto an
+    // empty key moves it only if it isn't the default.
+    const before =
+      storedAutoLaunchEnabled(event.oldValue) ?? HELP_PANEL_PERSISTED_DEFAULTS.autoLaunchEnabled;
+    const after =
+      storedAutoLaunchEnabled(event.newValue) ?? HELP_PANEL_PERSISTED_DEFAULTS.autoLaunchEnabled;
+    if (before === after) return;
     // What the store holds now, not what the event carried: events queue, and
     // an older one must not undo a newer change.
     let enabled: boolean | undefined;

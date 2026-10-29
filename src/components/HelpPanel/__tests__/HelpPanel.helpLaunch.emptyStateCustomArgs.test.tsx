@@ -478,7 +478,11 @@ vi.mock("../FigureRail", () => ({ FigureRail: () => null }));
 
 import { HelpPanel } from "../HelpPanel";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
-import { __resetHelpSessionControllersForTests } from "@/controllers/helpSessionControllerRegistry";
+import {
+  __resetHelpSessionControllersForTests,
+  acquireHelpSessionController,
+} from "@/controllers/helpSessionControllerRegistry";
+import { assistantSlotKey } from "@shared/config/assistantSlots";
 
 // The real `app:view-revealed` bridge fans out to every registered listener;
 // HelpPanel registers the switch-back recovery effect against it (#10739).
@@ -731,27 +735,56 @@ describe("HelpPanel — empty state hero (Daintree-relevant entry points)", () =
     expect(helpPanelState.setAutoLaunchEnabled).toHaveBeenLastCalledWith(false);
   });
 
-  it("the strip's New session starts the default agent itself, with auto-start off (#14976)", async () => {
+  it.each([false, true])(
+    "the strip's New session queues the default agent on the new tab itself (auto-start %s, #14976)",
+    async (autoLaunchEnabled) => {
+      helpPanelState.autoLaunchEnabled = autoLaunchEnabled;
+      helpPanelState.preferredAgentId = "claude";
+      helpPanelState.openSlot = vi.fn(() => 1);
+      cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
+      mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
+      mockGetFolderPath.mockResolvedValue("/help");
+      mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "new-term" } });
+
+      render(<HelpPanel width={380} />);
+      // With auto-start on, the empty tab on screen starts its own session.
+      await vi.waitFor(() => {
+        expect(mockProvisionSession).toHaveBeenCalledTimes(autoLaunchEnabled ? 1 : 0);
+      });
+      const launchesBefore = mockProvisionSession.mock.calls.length;
+
+      await act(async () => {
+        fireEvent.click(screen.getByLabelText("New session"));
+      });
+
+      // Waiting on the new tab's first input sync, not launched through the
+      // tab on screen, and never by turning auto-start on.
+      expect(acquireHelpSessionController(1)["_queuedLaunch"]).toEqual({
+        agentId: "claude",
+        replaceExisting: true,
+      });
+      expect(mockProvisionSession.mock.calls.length).toBe(launchesBefore);
+      expect(helpPanelState.setAutoLaunchEnabled).not.toHaveBeenCalled();
+    }
+  );
+
+  it("leaves a new tab that holds a captured conversation to offer its own Resume (#14976)", async () => {
     helpPanelState.autoLaunchEnabled = false;
     helpPanelState.preferredAgentId = "claude";
-    helpPanelState.openSlot = vi.fn(() => 0);
+    helpPanelState.openSlot = vi.fn(() => 1);
+    helpPanelState.hibernateSessions = {
+      [assistantSlotKey("proj-default", 1)]: { sessionId: "s1", cwd: "/help", agentId: "codex" },
+    };
     cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
     mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
-    mockGetFolderPath.mockResolvedValue("/help");
-    mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "new-term" } });
 
     render(<HelpPanel width={380} />);
-    expect(mockProvisionSession).not.toHaveBeenCalled();
-
     await act(async () => {
       fireEvent.click(screen.getByLabelText("New session"));
     });
 
     expect(helpPanelState.openSlot).toHaveBeenCalled();
-    expect(helpPanelState.setAutoLaunchEnabled).not.toHaveBeenCalled();
-    expect(mockProvisionSession).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: "claude" })
-    );
+    expect(acquireHelpSessionController(1)["_queuedLaunch"]).toBeNull();
   });
 
   it("first-run starter-prompt chip launches without turning on auto-start (#10699, #14976)", async () => {
