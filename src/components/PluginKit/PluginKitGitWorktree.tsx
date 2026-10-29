@@ -481,6 +481,13 @@ export function KitWorktreePicker(props: PluginWorktreePickerProps) {
   const entries = readWorktrees(worktrees);
   const current = valueControlled ? (str(props.value) ?? "") : ownValue;
   const chosen = entries.find((entry) => entry.id === current);
+  // The last name the chosen id was listed under, so a choice that drops out of
+  // `worktrees` (deleted, or not loaded yet) still reads as itself on the trigger.
+  const [lastKnown, setLastKnown] = useState<{ id: string; name: string } | null>(null);
+  if (chosen && (chosen.id !== lastKnown?.id || chosen.name !== lastKnown.name)) {
+    setLastKnown({ id: chosen.id, name: chosen.name });
+  }
+  const missing = !chosen && current !== "";
   const inert = disabled === true;
   const open = !inert && (openControlled ? props.open === true : ownOpen);
   const change = fn(onValueChange);
@@ -569,7 +576,7 @@ export function KitWorktreePicker(props: PluginWorktreePickerProps) {
           aria-expanded={open}
           aria-controls={open ? listId : undefined}
           disabled={inert}
-          data-placeholder={chosen ? undefined : ""}
+          data-placeholder={chosen || missing ? undefined : ""}
           onPointerDown={() => {
             pointerOpen.current = true;
           }}
@@ -594,6 +601,14 @@ export function KitWorktreePicker(props: PluginWorktreePickerProps) {
         >
           {chosen ? (
             <WorktreeTriggerContent entry={chosen} />
+          ) : missing ? (
+            <span data-worktree-missing="" className="flex min-w-0 flex-1 items-center gap-2">
+              <FolderGit2 aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-text-secondary" />
+              <span className="min-w-0 shrink truncate">
+                {lastKnown?.id === current ? lastKnown.name : current}
+              </span>
+              <span className="shrink-0 text-xs text-text-secondary">Not found</span>
+            </span>
           ) : (
             <span className="min-w-0 flex-1 truncate">
               {nonEmpty(placeholder) ?? "Choose a worktree"}
@@ -648,12 +663,11 @@ export function KitWorktreePicker(props: PluginWorktreePickerProps) {
         >
           {rows.map((row, index) =>
             row.kind === "label" ? (
+              // A visual band only, as AgentPicker's are: an option here would be
+              // announced as an unavailable worktree and skew the count.
               <div
                 key={`group:${row.label}`}
-                role="option"
-                aria-disabled="true"
-                aria-selected="false"
-                aria-label={row.label}
+                aria-hidden="true"
                 className={cn("px-2 pt-2 pb-1", PALETTE_SECTION_LABEL_CLASS)}
               >
                 {row.label}

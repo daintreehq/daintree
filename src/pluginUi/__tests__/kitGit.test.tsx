@@ -295,10 +295,13 @@ describe("WorktreePicker", () => {
     expect(trigger.textContent).toContain("native-git");
     fireEvent.keyDown(trigger, { key: "ArrowDown" });
     const listbox = screen.getByRole("listbox", { name: "Worktree" });
-    const labels = [...listbox.querySelectorAll('[aria-disabled="true"]')].map(
+    const labels = [...listbox.querySelectorAll(':scope > [aria-hidden="true"]')].map(
       (el) => el.textContent
     );
     expect(labels).toEqual(["Main worktree", "Worktrees"]);
+    // Headings are a visual band, never options a screen reader counts.
+    expect(listbox.querySelectorAll('[role="option"]')).toHaveLength(WORKTREES.length);
+    expect(listbox.querySelector('[aria-disabled="true"]')).toBeNull();
     const current = listbox.querySelector('[aria-current="true"]');
     expect(current?.getAttribute("data-worktree-id")).toBe("wt-1");
     expect(current?.textContent).toContain("Current");
@@ -333,6 +336,36 @@ describe("WorktreePicker", () => {
     expect(onChange).toHaveBeenCalledWith("main");
   });
 
+  it("keeps a chosen worktree that left the list on the trigger, marked not found", () => {
+    function Shrinking() {
+      const [list, setList] = useState(WORKTREES);
+      return createElement(
+        "div",
+        null,
+        createElement(kit.WorktreePicker, { worktrees: list, value: "wt-2", "aria-label": "Worktree" }),
+        createElement("button", { type: "button", onClick: () => setList(WORKTREES.slice(0, 2)) }, "drop")
+      );
+    }
+    render(withTooltips(createElement(Shrinking)));
+    const trigger = screen.getByRole("combobox", { name: "Worktree" });
+    expect(trigger.textContent).toContain("fix-crash");
+    expect(trigger.querySelector("[data-worktree-missing]")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "drop" }));
+    expect(trigger.querySelector("[data-worktree-missing]")?.textContent).toBe("fix-crashNot found");
+    expect(trigger.hasAttribute("data-placeholder")).toBe(false);
+  });
+
+  it("shows an unknown id on the trigger rather than the placeholder", () => {
+    render(
+      withTooltips(
+        createElement(kit.WorktreePicker, { worktrees: WORKTREES, value: "gone", placeholder: "Pick one" })
+      )
+    );
+    const trigger = screen.getByRole("combobox", { name: "Worktree" });
+    expect(trigger.textContent).not.toContain("Pick one");
+    expect(trigger.querySelector("[data-worktree-missing]")?.textContent).toBe("goneNot found");
+  });
+
   it("uses the author's groups, says when nothing matches, and can start open", () => {
     const grouped = WORKTREES.map((worktree, index) => ({
       ...worktree,
@@ -348,9 +381,9 @@ describe("WorktreePicker", () => {
       )
     );
     expect(screen.getByRole("combobox", { name: "Worktree" }).textContent).toContain("Pick one");
-    const labels = [...screen.getByRole("listbox").querySelectorAll('[aria-disabled="true"]')].map(
-      (el) => el.textContent
-    );
+    const labels = [
+      ...screen.getByRole("listbox").querySelectorAll(':scope > [aria-hidden="true"]'),
+    ].map((el) => el.textContent);
     expect(labels).toEqual(["Pinned", "Recent"]);
     fireEvent.change(screen.getByRole("combobox", { name: "Search worktrees" }), {
       target: { value: "zzz" },
