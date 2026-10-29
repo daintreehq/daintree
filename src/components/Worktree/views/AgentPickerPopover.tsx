@@ -59,6 +59,7 @@ export function AgentPickerPopover({
   const { activeIndex, setActiveIndex, listRef, handleKeyDown } = useListboxCursor({
     itemCount: options.length,
     open,
+    initialIndex: options.findIndex((option) => option.id === selectedAgentId),
     onSelect: (index) => {
       const option = options[index];
       if (option) handleSelect(option.id);

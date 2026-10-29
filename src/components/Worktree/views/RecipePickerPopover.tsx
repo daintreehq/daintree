@@ -72,6 +72,9 @@ export function RecipePickerPopover({
   const { activeIndex, setActiveIndex, listRef, handleKeyDown } = useListboxCursor({
     itemCount: options.length,
     open,
+    // The committed row, so Enter on a freshly opened list keeps the pick
+    // rather than acting on whichever row happens to lead.
+    initialIndex: options.findIndex((option) => option.id === selectedRecipeId),
     onSelect: (index) => {
       const option = options[index];
       if (option) handleSelect(option);
