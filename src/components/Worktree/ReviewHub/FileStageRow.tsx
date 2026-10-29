@@ -21,42 +21,42 @@ const STATUS_CONFIG: Record<GitStatus, { label: string; bg: string; text: string
   modified: {
     label: "M",
     bg: "bg-status-warning/15",
-    text: "text-status-warning",
+    text: "text-status-warning-text",
   },
   added: {
     label: "A",
     bg: "bg-status-success/15",
-    text: "text-status-success",
+    text: "text-status-success-text",
   },
   deleted: {
     label: "D",
     bg: "bg-status-error/15",
-    text: "text-status-error",
+    text: "text-status-danger-text",
   },
   untracked: {
     label: "?",
     bg: "bg-status-success/15",
-    text: "text-status-success",
+    text: "text-status-success-text",
   },
   renamed: {
     label: "R",
     bg: "bg-status-info/15",
-    text: "text-status-info",
+    text: "text-status-info-text",
   },
   copied: {
     label: "C",
     bg: "bg-status-info/15",
-    text: "text-status-info",
+    text: "text-status-info-text",
   },
   ignored: {
     label: "I",
     bg: "bg-tint/[0.06]",
-    text: "text-text-secondary",
+    text: "text-text-primary",
   },
   conflicted: {
     label: "!",
     bg: "bg-status-error/15",
-    text: "text-status-error",
+    text: "text-status-danger-text",
   },
 };
 

@@ -7,14 +7,14 @@ import type { DiffChangeSetEntry } from "@shared/types/git";
 export type { DiffChangeSetEntry };
 
 export const DIFF_STATUS_CONFIG: Record<GitStatus, { label: string; color: string }> = {
-  modified: { label: "M", color: "text-status-warning" },
-  added: { label: "A", color: "text-status-success" },
-  deleted: { label: "D", color: "text-status-error" },
-  untracked: { label: "?", color: "text-status-success" },
-  renamed: { label: "R", color: "text-status-info" },
-  copied: { label: "C", color: "text-status-info" },
+  modified: { label: "M", color: "text-status-warning-text" },
+  added: { label: "A", color: "text-status-success-text" },
+  deleted: { label: "D", color: "text-status-danger-text" },
+  untracked: { label: "?", color: "text-status-success-text" },
+  renamed: { label: "R", color: "text-status-info-text" },
+  copied: { label: "C", color: "text-status-info-text" },
   ignored: { label: "I", color: "text-text-secondary" },
-  conflicted: { label: "!", color: "text-status-error" },
+  conflicted: { label: "!", color: "text-status-danger-text" },
 };
 
 /** A directory band's label: the last few segments, so deep paths keep the part that differs. */

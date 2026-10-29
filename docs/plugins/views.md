@@ -203,7 +203,7 @@ Prefer **container queries** (`@container`, `@sm:`, `@md:`) over viewport breakp
 
 **Status** — shown with `bg-`; `text-` and `border-` take the same names
 
-`bg-status-success` `bg-status-warning` `bg-status-danger` `bg-status-info` `bg-status-danger-surface` `bg-status-success-surface` `bg-status-warning-surface` `bg-status-info-surface` `bg-status-error` `bg-status-error-surface`
+`bg-status-success` `bg-status-warning` `bg-status-danger` `bg-status-info` `bg-status-danger-surface` `bg-status-success-surface` `bg-status-warning-surface` `bg-status-info-surface` `bg-status-danger-text` `bg-status-success-text` `bg-status-warning-text` `bg-status-info-text` `bg-status-error` `bg-status-error-surface`
 
 **Accent** — shown with `bg-`; `text-` and `border-` take the same names
 

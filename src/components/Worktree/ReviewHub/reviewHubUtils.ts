@@ -236,12 +236,12 @@ export function getPushBannerConfig(
 }
 
 const BASE_BRANCH_STATUS_CONFIG: Record<string, { label: string; bg: string; text: string }> = {
-  A: { label: "A", bg: "bg-status-success/15", text: "text-status-success" },
-  D: { label: "D", bg: "bg-status-error/15", text: "text-status-error" },
-  M: { label: "M", bg: "bg-status-warning/15", text: "text-status-warning" },
-  R: { label: "R", bg: "bg-status-info/15", text: "text-status-info" },
-  C: { label: "C", bg: "bg-status-info/15", text: "text-status-info" },
-  U: { label: "U", bg: "bg-status-error/15", text: "text-status-error" },
+  A: { label: "A", bg: "bg-status-success/15", text: "text-status-success-text" },
+  D: { label: "D", bg: "bg-status-error/15", text: "text-status-danger-text" },
+  M: { label: "M", bg: "bg-status-warning/15", text: "text-status-warning-text" },
+  R: { label: "R", bg: "bg-status-info/15", text: "text-status-info-text" },
+  C: { label: "C", bg: "bg-status-info/15", text: "text-status-info-text" },
+  U: { label: "U", bg: "bg-status-error/15", text: "text-status-danger-text" },
 };
 
 export function getBaseBranchStatusConfig(status: string): {
@@ -253,7 +253,7 @@ export function getBaseBranchStatusConfig(status: string): {
     BASE_BRANCH_STATUS_CONFIG[status] ?? {
       label: status,
       bg: "bg-tint/[0.06]",
-      text: "text-text-secondary",
+      text: "text-text-primary",
     }
   );
 }

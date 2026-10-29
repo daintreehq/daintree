@@ -126,6 +126,10 @@
   --color-status-success-surface: var(--theme-status-success-surface);
   --color-status-warning-surface: var(--theme-status-warning-surface);
   --color-status-info-surface: var(--theme-status-info-surface);
+  --color-status-danger-text: var(--theme-status-danger-text);
+  --color-status-success-text: var(--theme-status-success-text);
+  --color-status-warning-text: var(--theme-status-warning-text);
+  --color-status-info-text: var(--theme-status-info-text);
   --color-knob-base: var(--theme-knob-base);
   --color-state-modified: var(--theme-state-modified);
   --color-activity-active: var(--theme-activity-active);

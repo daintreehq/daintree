@@ -4,6 +4,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   APP_THEME_TOKEN_KEYS,
   DIFF_TEXT_MIN_CONTRAST,
+  DISPLAY_SURFACES,
+  STATUS_TEXT_INKS,
+  blendOverBackground,
   contrastRatio,
   getAppThemeById,
   getAppThemeCssVariables,
@@ -12,7 +15,7 @@ import {
   resolveDiffTextBackdrops,
   type AppColorScheme,
 } from "@shared/theme";
-import { RED_GREEN_OVERRIDES } from "@shared/theme/colorVisionOverrides";
+import { BLUE_YELLOW_OVERRIDES, RED_GREEN_OVERRIDES } from "@shared/theme/colorVisionOverrides";
 import { applyAppThemeToRoot, applyColorVisionMode, applyDefaultAppTheme } from "../applyAppTheme";
 
 const DIFF_TOKENS = [
@@ -346,5 +349,57 @@ describe("applyDefaultAppTheme (#9169)", () => {
 
     expect(applied.id).toBe("daintree");
     expect(root.dataset.theme).toBe("daintree");
+  });
+});
+
+describe("applyColorVisionMode status text inks", () => {
+  // A git status letter paints the text-grade twin of its status hue. The twin is
+  // measured against the theme's own surfaces, so the static CVD maps can't carry
+  // it: a mode that swaps the hue has to re-derive it, or the letter keeps the very
+  // red or green the mode exists to replace.
+  it.each([
+    ["red-green", RED_GREEN_OVERRIDES, "daintree"],
+    ["red-green", RED_GREEN_OVERRIDES, "bondi"],
+    ["blue-yellow", BLUE_YELLOW_OVERRIDES, "highlands"],
+    ["blue-yellow", BLUE_YELLOW_OVERRIDES, "hokkaido"],
+  ] as const)("%s re-derives the letters it recolours on %s", (mode, overrides, id) => {
+    const scheme = getAppThemeById(id)!;
+    const root = document.createElement("div");
+    applyAppThemeToRoot(root, scheme);
+    applyColorVisionMode(root, mode, scheme);
+
+    let recoloured = 0;
+    for (const [base, text] of Object.entries(STATUS_TEXT_INKS)) {
+      const hue = overrides[`--theme-${base}`];
+      const ink = root.style.getPropertyValue(`--theme-${text}`);
+      if (!hue) {
+        expect(ink, text).toBe(scheme.tokens[text]);
+        continue;
+      }
+      recoloured++;
+      expect(ink, text).not.toBe(scheme.tokens[text]);
+      for (const surfaceKey of DISPLAY_SURFACES) {
+        const surface = scheme.tokens[surfaceKey];
+        expect(contrastRatio(ink, surface), `${text} on ${surfaceKey}`).toBeGreaterThanOrEqual(4.5);
+        expect(
+          contrastRatio(ink, blendOverBackground(hue, surface, 0.15)),
+          `${text} on its wash over ${surfaceKey}`
+        ).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+    expect(recoloured).toBe(2);
+  });
+
+  it("returning to default restores the theme's own inks", () => {
+    const scheme = getAppThemeById("bondi")!;
+    const root = document.createElement("div");
+    applyAppThemeToRoot(root, scheme);
+    applyColorVisionMode(root, "red-green", scheme);
+    applyColorVisionMode(root, "blue-yellow", scheme);
+    applyColorVisionMode(root, "default", scheme);
+
+    for (const text of Object.values(STATUS_TEXT_INKS)) {
+      expect(root.style.getPropertyValue(`--theme-${text}`), text).toBe(scheme.tokens[text]);
+    }
   });
 });

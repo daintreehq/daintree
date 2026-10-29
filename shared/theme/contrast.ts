@@ -58,6 +58,19 @@ export const DESTRUCTIVE_BUTTON_CONTRAST = {
   brightness: { hover: 1.1, press: 0.95 },
 } as const;
 
+// Git status letters (A, M, D…) are small text in a status hue, drawn bare or on a
+// `/15` wash of that same hue. The status inks are graphical colours held to 3:1 for
+// dots, icons and borders, so a letter painted with one fell under AA on most themes
+// (#15424). Each gets a text-grade twin, lifted the way DiffStat's churn inks are.
+export const STATUS_TEXT_INKS = {
+  "status-success": "status-success-text",
+  "status-warning": "status-warning-text",
+  "status-danger": "status-danger-text",
+  "status-info": "status-info-text",
+} as const satisfies Partial<Record<AppThemeTokenKey, AppThemeTokenKey>>;
+
+export const STATUS_TEXT_CONTRAST = { minimum: 4.5, washOpacity: 0.15 } as const;
+
 const CONTRAST_PAIRS: Array<{
   foreground: AppThemeTokenKey;
   background: AppThemeTokenKey;
@@ -627,6 +640,7 @@ export function getThemeContrastWarnings(scheme: AppColorScheme): AppThemeValida
   warnings.push(...getRecentActivityDotWarnings(scheme));
   warnings.push(...getDestructiveButtonWarnings(scheme));
   warnings.push(...getDiffTextContrastWarnings(scheme));
+  warnings.push(...getStatusTextWarnings(scheme));
 
   // Terminal ANSI / syntax legibility and distinctness — OKLab-based because
   // the terminal background is always dark and WCAG ratios are unreliable there.
@@ -1083,6 +1097,72 @@ function getDestructiveButtonWarnings(scheme: AppColorScheme): AppThemeValidatio
       warnings.push({
         kind: "low-contrast",
         message: `${foreground} on ${background} (destructive button, ${state}) is ${ratio.toFixed(2)}:1; target is ${minimum.toFixed(1)}:1`,
+      });
+    }
+  }
+  return warnings;
+}
+
+/**
+ * Every backdrop a status letter can paint on. The letters sit in the same file
+ * rows as DiffStat's counts, so they meet the same surfaces, frame and row fills,
+ * and each of those again under the letter's own wash. A status ink this math
+ * can't composite gets no wash backdrops; the gate reports it.
+ */
+export function resolveStatusTextBackdrops(
+  graphical: string,
+  tokens: Partial<Record<AppThemeTokenKey, string>>
+): Array<{ label: string; hex: string }> {
+  const rows = resolveDiffTextBackdrops(tokens);
+  const wash = isHexColor(graphical) ? parseTranslucent(graphical) : null;
+  if (!wash) return rows;
+  const opacity = STATUS_TEXT_CONTRAST.washOpacity * wash.opacity;
+  return rows.flatMap((row) => [
+    row,
+    {
+      label: `its ${STATUS_TEXT_CONTRAST.washOpacity * 100}% wash over ${row.label}`,
+      hex: blendOverBackground(wash.hex, row.hex, opacity),
+    },
+  ]);
+}
+
+/**
+ * The status letter inks hold AA on every backdrop they paint on. Row fills the
+ * math can't composite are already named by the churn gate, which shares them.
+ */
+function getStatusTextWarnings(scheme: AppColorScheme): AppThemeValidationWarning[] {
+  const warnings: AppThemeValidationWarning[] = [];
+  const { minimum } = STATUS_TEXT_CONTRAST;
+  for (const [graphicalKey, textKey] of Object.entries(STATUS_TEXT_INKS) as Array<
+    [AppThemeTokenKey, AppThemeTokenKey]
+  >) {
+    const graphical = scheme.tokens[graphicalKey];
+    const ink = scheme.tokens[textKey];
+    if (!isHexColor(graphical)) {
+      warnings.push({
+        kind: "unevaluable",
+        message: `Cannot evaluate ${textKey} contrast on its wash: ${graphicalKey}="${graphical}" is not a hex color`,
+      });
+      continue;
+    }
+    let worst: { label: string; ratio: number } | null = null;
+    for (const backdrop of resolveStatusTextBackdrops(graphical, scheme.tokens)) {
+      const painted = resolveOverBackdrop(ink, backdrop.hex);
+      if (painted === null) {
+        warnings.push({
+          kind: "unevaluable",
+          message: `Cannot evaluate ${textKey} contrast: ${textKey}="${ink}" is neither hex nor rgba()`,
+        });
+        worst = null;
+        break;
+      }
+      const ratio = contrastRatio(painted, backdrop.hex);
+      if (worst === null || ratio < worst.ratio) worst = { label: backdrop.label, ratio };
+    }
+    if (worst && worst.ratio < minimum) {
+      warnings.push({
+        kind: "low-contrast",
+        message: `${textKey} on ${worst.label} is ${worst.ratio.toFixed(2)}:1; target is ${minimum.toFixed(1)}:1`,
       });
     }
   }
