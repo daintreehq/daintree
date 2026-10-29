@@ -2474,6 +2474,39 @@ describe("WorkspaceService.switchWorktreeEnvironment", () => {
     });
   });
 
+  it("doesn't stop a setup for approval of a provision the switch superseded", async () => {
+    const monitor = createMonitorOnAlpha();
+    const lifecycleService = service["lifecycleService"];
+    vi.mocked(lifecycleService.resolveConfig).mockResolvedValue({
+      config: { setup: ["npm install"] },
+      origin: "project",
+      path: "/test/root/.daintree/config.json",
+    } as never);
+    let approveAlpha!: (approved: boolean) => void;
+    vi.spyOn(lifecycleService, "isResourceApproved").mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          approveAlpha = resolve;
+        })
+    );
+    await setupSpawn(0);
+    const runResourceActionSpy = vi.spyOn(service, "runResourceAction");
+
+    const setup = service["setupCoordinator"].runLifecycleSetup(
+      "/test/worktree",
+      "/test/worktree",
+      "/test/root",
+      true
+    );
+    await vi.waitFor(() => expect(approveAlpha).toBeDefined());
+    await service.switchWorktreeEnvironment("req-beta", "/test/worktree", "beta");
+    approveAlpha(false);
+
+    await expect(setup).resolves.toEqual({ ok: true });
+    expect(monitor.lifecycleStatus?.state).toBe("success");
+    expect(runResourceActionSpy).not.toHaveBeenCalled();
+  });
+
   /** Holds the next lifecycle setup open; resolves to its settle function once it has started. */
   function holdNextSetup() {
     return new Promise<(outcome: { shouldProvision: boolean; needsApproval: boolean }) => void>(

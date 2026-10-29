@@ -1057,13 +1057,17 @@ export class WorktreeLifecycleService {
 
     const setupApproved =
       !config.setup?.length || (await this.isConfigApproved(resolvedConfig, projectRootPath));
-    const provisionApproved =
-      !(provisionResource && resolvedResource?.provision?.length) || resourceApproved;
-
     const monitor = ctx.getMonitor(worktreeId);
     if (!monitor) {
       return { shouldProvision: false, needsApproval: false };
     }
+
+    // A provision for an environment the worktree has since left never runs,
+    // so its commands are not something this setup can wait on approval for.
+    const provisionApproved =
+      !(provisionResource && resolvedResource?.provision?.length) ||
+      resourceApproved ||
+      !inEnvironment(monitor);
 
     const worktreeName = monitor.name;
     const vars = this.buildVariables(worktreePath, projectRootPath, worktreeName, monitor.branch);
