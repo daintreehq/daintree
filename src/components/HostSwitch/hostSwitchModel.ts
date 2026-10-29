@@ -1,5 +1,9 @@
 import type { BranchCheck, HostSwitchPreparation } from "@shared/types/ipc/hostSwitch";
-import type { PlacedWorktree, ProjectMatchCandidate } from "@shared/types/ipc/projectMatch";
+import type {
+  HostCloneDepth,
+  PlacedWorktree,
+  ProjectMatchCandidate,
+} from "@shared/types/ipc/projectMatch";
 import { extractHostname } from "@shared/utils/forgeHostnames";
 import { isSupportedCloneUrl, normalizeGitRemoteUrl } from "@shared/utils/gitRemoteUrl";
 import { pluralize } from "@/lib/pluralize";
@@ -174,33 +178,189 @@ function forgeName(url: string | null): string | null {
 }
 
 /**
- * A clone the target host couldn't do: name the host, keep git's own words,
- * and say what the host needs (its own access, never this machine's).
+ * A clone the target host couldn't do: name the host, say what it needs (its
+ * own access, never this machine's) and that the primary then retries, and
+ * keep git's own words behind that.
  */
 export function describeCloneFailure(input: {
   reason: string;
   message: string;
   hostName: string;
   url: string | null;
-}): { title: string; gitText: string; fix: string | null } {
+}): { title: string; gitText: string; fix: string } {
   const { reason, hostName, url } = input;
   const title = url
     ? `${hostName} couldn't clone ${url}`
     : `${hostName} couldn't clone the repository`;
-  let fix: string | null = null;
+  let fix: string;
   if (reason === "auth-failed" || reason === "repository-not-found") {
     const forge = forgeName(url);
     fix = forge
-      ? `${hostName} needs its own access to this repo: add an SSH key on ${hostName}, or connect ${forge} on ${hostName} (Settings on ${hostName} → ${forge}).`
-      : `${hostName} needs its own access to this repo: add an SSH key or credentials on ${hostName}.`;
+      ? `${hostName} needs its own access to this repository. Add an SSH key on ${hostName}, or connect ${forge} on ${hostName} (Settings on ${hostName} → ${forge}), then retry.`
+      : `${hostName} needs its own access to this repository. Add an SSH key or git credentials on ${hostName}, then retry.`;
   } else if (reason === "network-unavailable") {
-    fix = `${hostName} couldn't reach the server. Check its network and try again.`;
+    fix = `${hostName} couldn't reach the server. Check its network, then retry.`;
   } else if (reason === "git-not-installed") {
-    fix = `Install git on ${hostName}.`;
+    fix = `Install git on ${hostName}, then retry.`;
   } else if (reason === "lfs-missing") {
-    fix = `Install Git LFS on ${hostName}.`;
+    fix = `Install Git LFS on ${hostName}, then retry.`;
+  } else {
+    fix = `Retry, or read git's output for what stopped it.`;
   }
   return { title, gitText: input.message, fix };
+}
+
+/**
+ * A step that ended in an error rather than a git result: the host turned the
+ * request down before starting, or the step didn't come back.
+ */
+export function describeStepFailure(input: {
+  label: string;
+  code: string | null;
+  message: string;
+  hostName: string;
+}): { title: string; detail: string; fix: string } {
+  if (input.code === "VALIDATION") {
+    return {
+      title: `${input.hostName} turned this down`,
+      detail: input.message,
+      fix: "Change what it refused, then retry.",
+    };
+  }
+  return {
+    title: `${input.label} didn't finish`,
+    detail: input.message,
+    fix: `Check that ${input.hostName} is still connected, then retry.`,
+  };
+}
+
+export const CLONE_DEPTHS: HostCloneDepth[] = ["full", "shallow", "partial"];
+
+export function cloneDepthLabel(depth: HostCloneDepth): string {
+  if (depth === "shallow") return "Shallow clone";
+  if (depth === "partial") return "Partial clone";
+  return "Full clone";
+}
+
+/** What each history choice gives up, as the person will notice it on the host. */
+export function cloneDepthDescription(depth: HostCloneDepth, hostName: string): string {
+  if (depth === "shallow") {
+    return `Only the latest commit. Faster, but log and blame on ${hostName} have almost nothing to show.`;
+  }
+  if (depth === "partial") {
+    return `Every commit, with older file contents fetched when first read, so ${hostName} has to reach the remote again for them.`;
+  }
+  return `Every commit and file, so log and blame work fully on ${hostName}.`;
+}
+
+/** The clone options as they stand, for the closed disclosure. Null: no submodule choice. */
+export function cloneOptionsSummary(depth: HostCloneDepth, submodules: boolean | null): string {
+  const label = cloneDepthLabel(depth);
+  if (submodules === null) return label;
+  return `${label}, ${submodules ? "submodules initialised" : "submodules left out"}`;
+}
+
+function cloneVerb(depth: HostCloneDepth, what: string): string {
+  if (depth === "shallow") return `makes a shallow clone of ${what}`;
+  if (depth === "partial") return `makes a partial clone of ${what}`;
+  return `clones ${what}`;
+}
+
+/**
+ * Every operation the switch's primary runs, in order, naming the machine and
+ * whose credentials each uses (user-signals, destructive rule 4).
+ */
+export function describeCloneSteps(input: {
+  sourceName: string;
+  targetName: string;
+  /** The remote's name for a clone, or a bundle of the source's history. */
+  source: { kind: "remote"; remoteName: string | null } | { kind: "bundle" };
+  destination: string;
+  depth: HostCloneDepth;
+  submodules: boolean;
+  push: { commits: number; branch: string; target: string } | null;
+  /** The branch given a worktree, and the version it starts from. */
+  branch: { name: string; from: string } | null;
+  placed: PlacedWorktree | null;
+  recipeName: string | null;
+  newWindow: boolean;
+  /** The repository is on the host already: only what follows the clone is left. */
+  cloned?: boolean;
+}): string[] {
+  const { sourceName, targetName, push } = input;
+  const steps: string[] = [];
+  if (input.cloned) {
+    if (input.placed) {
+      steps.push(`${targetName} creates ${input.placed.newBranch} in a new worktree.`);
+    }
+  } else if (push) {
+    const what = push.commits > 0 ? pluralize(push.commits, "commit") : push.branch;
+    steps.push(`${sourceName} pushes ${what} to ${push.target}, with its own credentials.`);
+  }
+  const into = input.destination ? `into ${input.destination}` : "into the folder you choose";
+  if (input.cloned) {
+    // Nothing to fetch or clone again.
+  } else if (input.source.kind === "bundle") {
+    steps.push(
+      `${sourceName} sends ${targetName} a copy of its committed history, which ${targetName} unpacks ${into}.`
+    );
+  } else {
+    const what = input.source.remoteName ?? "the repository";
+    const andSubmodules = input.submodules ? " and its submodules" : "";
+    steps.push(
+      `${targetName} ${cloneVerb(input.depth, what)}${andSubmodules} ${into}, with its own credentials.`
+    );
+  }
+  if (input.cloned) {
+    // Said first, above.
+  } else if (input.placed) {
+    steps.push(`It creates ${input.placed.newBranch} in a new worktree there.`);
+  } else if (input.branch) {
+    steps.push(`It opens ${input.branch.name} in a worktree, from ${input.branch.from}.`);
+  } else {
+    steps.push("It opens on the repository's default branch.");
+  }
+  const land = input.newWindow
+    ? `A new window opens on ${targetName}`
+    : `This window switches to ${targetName}`;
+  // A short recipe name stays on one line rather than splitting inside its quotes.
+  const recipe =
+    input.recipeName && input.recipeName.length <= 24
+      ? input.recipeName.replace(/ /g, "\u00a0")
+      : input.recipeName;
+  steps.push(
+    recipe ? `${land} and offers to run "${recipe}" there, showing its commands first.` : `${land}.`
+  );
+  return steps;
+}
+
+/** Add project…: the host's own clone (or a folder already there), then this window going there. */
+export function describeAddSteps(input: {
+  hostName: string;
+  destination: string;
+  depth: HostCloneDepth;
+  submodules: boolean;
+  /** A folder already on the host, being opened instead of a clone. */
+  opening?: string | null;
+  /** The person typed or picked the folder, so the host isn't the one suggesting it. */
+  chosen?: boolean;
+}): string[] {
+  if (input.opening) {
+    return [
+      `${input.hostName} opens ${input.opening} as it is: nothing is cloned.`,
+      `It's added to ${input.hostName}'s projects, and this window switches to ${input.hostName}.`,
+    ];
+  }
+  const into = input.destination
+    ? `into ${input.destination}`
+    : input.chosen
+      ? "into the folder you choose"
+      : "into the folder it suggests";
+  const andSubmodules = input.submodules ? " and any submodules" : "";
+  return [
+    `${input.hostName} ${cloneVerb(input.depth, "the repository")}${andSubmodules} ${into}, with its own credentials.`,
+    `It's added to ${input.hostName}'s projects, and this window switches to ${input.hostName}.`,
+  ];
 }
 
 /**
@@ -292,10 +452,10 @@ export function hostDisplayName(
 export function describePlacedWorktree(worktree: PlacedWorktree, hostName: string): string {
   const from = worktree.useExistingBranch
     ? `Checks out the existing branch on ${hostName}`
-    : `New branch from ${worktree.baseBranch}${worktree.fromRemote ? " on the remote" : ""}`;
+    : `New branch from ${worktree.fromRemote ? `the remote's ${worktree.baseBranch}` : worktree.baseBranch}`;
   const where = worktree.relativePath
     ? `, at ${worktree.relativePath} beside the project`
-    : `, where ${hostName} puts new worktrees`;
+    : `, in the folder ${hostName} keeps new worktrees in`;
   return `${from}${where}.`;
 }
 

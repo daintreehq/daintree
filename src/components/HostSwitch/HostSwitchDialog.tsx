@@ -1,5 +1,5 @@
-import { useEffect, useEffectEvent, useId, useMemo, useState } from "react";
-import { FolderGit2, GitBranch, Server } from "lucide-react";
+import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
+import { GitBranch, Server } from "lucide-react";
 import type {
   HostSwitchExecutePayload,
   HostSwitchExecuteResult,
@@ -15,10 +15,7 @@ import { LOCAL_HOST_ID } from "@shared/types/remoteHosts";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { clientErrorCode, clientErrorText } from "@/utils/clientAppError";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
-import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
+import { Callout } from "@/components/ui/Callout";
 import { RadioChoiceGroup, RadioChoiceRow } from "@/components/ui/RadioChoice";
 import {
   Select,
@@ -29,7 +26,8 @@ import {
 } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/Spinner";
 import { useDeferredLoading } from "@/hooks/useDeferredLoading";
-import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
+import { UI_DOHERTY_THRESHOLD, UI_STILL_WORKING_MS } from "@/lib/animationUtils";
+import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { mintOperationId } from "@/clients/operationsClient";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { clientPlatform, localHostLabel } from "@/components/Hosts/hostModel";
@@ -42,7 +40,9 @@ import {
   cloneableRemotes,
   describeBranchHandoff,
   describeCloneFailure,
+  describeCloneSteps,
   describePlacedWorktree,
+  describeStepFailure,
   destinationInFolder,
   hostDisplayName,
   initialView,
@@ -50,6 +50,15 @@ import {
   type BranchPlan,
 } from "./hostSwitchModel";
 import { GitFailureCallout, type HostGitFailure } from "./GitFailureCallout";
+import {
+  CloneOptions,
+  DestinationField,
+  FieldHelp,
+  folderHint,
+  folderStateOf,
+  FormRow,
+  OperationSteps,
+} from "./hostCloneForm";
 import { setHostSwitchBusy, type HostSwitchRequest } from "./hostSwitchRequests";
 
 /**
@@ -80,7 +89,24 @@ const NO_RECIPE = "__none__";
 
 type View = "existing" | "clone" | "local-only";
 
-type Failure = HostGitFailure;
+/** Where a failure is shown: beside the decision it's about, or atop the body. */
+type FailureSlot = "top" | "destination" | "branch" | "worktree";
+
+interface Failure extends HostGitFailure {
+  near: FailureSlot;
+  /** The control that goes back to the choice that fixes it. */
+  action?: { label: string; run: () => void } | null;
+  /** Pressing the primary again would repeat what failed; false once the plan itself changed. */
+  retryable?: boolean;
+}
+
+/** What the primary repeats after a failure; its label is read from the plan as it stands. */
+type Retry =
+  | { kind: "clone" }
+  | { kind: "bundle" }
+  | { kind: "open"; candidate: { projectId: string | null; path: string } }
+  | { kind: "create"; opened: Extract<HostSwitchExecuteResult, { kind: "opened" }> }
+  | { kind: "checkout" };
 
 interface CheckoutOffer {
   result: Extract<HostSwitchExecuteResult, { kind: "opened" }>;
@@ -96,17 +122,11 @@ type StepPayload = HostSwitchExecutePayload extends infer P
 function runStep(
   opId: string,
   payload: StepPayload,
-  label: string,
-  onFailure: (failure: Failure) => void
+  onError: (code: string | null, message: string) => void
 ): Promise<HostSwitchExecuteResult | null> {
   return window.electron.hostSwitch.execute({ ...payload, opId }).catch((error: unknown) => {
-    if (clientErrorCode(error) !== "CANCELLED") {
-      onFailure({
-        title: `${label} didn't finish`,
-        gitText: clientErrorText(error, "Something went wrong."),
-        fix: null,
-      });
-    }
+    const code = clientErrorCode(error) ?? null;
+    if (code !== "CANCELLED") onError(code, clientErrorText(error, "Something went wrong."));
     return null;
   });
 }
@@ -130,15 +150,6 @@ export function describePushObservation(
 
 function currentHostId(): string {
   return window.__DAINTREE_HOST_ID__?.id ?? LOCAL_HOST_ID;
-}
-
-function Row({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="grid grid-cols-[4.5rem_minmax(0,1fr)] items-baseline gap-3">
-      <span className="text-xs text-text-secondary">{label}</span>
-      <div className="min-w-0 text-sm text-text-primary">{children}</div>
-    </div>
-  );
 }
 
 /**
@@ -181,11 +192,22 @@ export function HostSwitchDialog({
   const [checkAttempt, setCheckAttempt] = useState(0);
   const [submodules, setSubmodules] = useState(false);
   const [depth, setDepth] = useState<HostCloneDepth>("full");
-  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [recipeId, setRecipeId] = useState<string>(NO_RECIPE);
-  const [running, setRunning] = useState<{ opId: string; label: string } | null>(null);
+  const [running, setRunning] = useState<{ opId: string; label: string; hostName: string } | null>(
+    null
+  );
   const [status, setStatus] = useState<HostSwitchStatus | null>(null);
+  // The step that has run past the "Still working…" threshold.
+  const [stillWorkingOp, setStillWorkingOp] = useState<string | null>(null);
   const [failure, setFailure] = useState<Failure | null>(null);
+  const [retry, setRetry] = useState<Retry | null>(null);
+  /** The commit a push in this dialog already published: a retry doesn't push it again. */
+  const [pushedSha, setPushedSha] = useState<string | null>(null);
+  /** The clone landed but what follows it (the placed worktree) didn't: only that is left. */
+  const [landed, setLanded] = useState<Extract<HostSwitchExecuteResult, { kind: "opened" }> | null>(
+    null
+  );
+  const failureRef = useRef<HTMLDivElement>(null);
   const [checkoutOffer, setCheckoutOffer] = useState<CheckoutOffer | null>(null);
   /** Opening without a question was started once; a failure then shows the full dialog. */
   const [autoOpenStarted, setAutoOpenStarted] = useState(false);
@@ -193,7 +215,6 @@ export function HostSwitchDialog({
   const [autoOpening, setAutoOpening] = useState(false);
   /** Bumped to look at the source again, after a push found the branch had moved. */
   const [prepareAttempt, setPrepareAttempt] = useState(0);
-  const submodulesId = useId();
   const showLoading = useDeferredLoading(prep === null && loadError === null, UI_DOHERTY_THRESHOLD);
 
   useEffect(() => {
@@ -226,11 +247,17 @@ export function HostSwitchDialog({
         setDestinationCheck(prepared.destination);
         setCheckedInput(prepared.destination?.path ?? null);
         setSubmodules(prepared.hasSubmodules);
-        // A default from another machine is that machine's say-so: start with none.
+        // A placed worktree brings the recipe New Worktree chose; otherwise a
+        // default from another machine is that machine's say-so: start with none.
+        const placedRecipe = placed?.recipeId ?? null;
         setRecipeId(
-          prepared.fromHostId === LOCAL_HOST_ID && prepared.defaultRecipeId
-            ? prepared.defaultRecipeId
-            : NO_RECIPE
+          placed
+            ? placedRecipe && prepared.recipes.some((r) => r.id === placedRecipe)
+              ? placedRecipe
+              : NO_RECIPE
+            : prepared.fromHostId === LOCAL_HOST_ID && prepared.defaultRecipeId
+              ? prepared.defaultRecipeId
+              : NO_RECIPE
         );
       })
       .catch((error: unknown) => {
@@ -257,8 +284,17 @@ export function HostSwitchDialog({
         .then(setStatus)
         .catch(() => {});
     }, STATUS_POLL_MS);
-    return () => clearInterval(timer);
+    const slow = setTimeout(() => setStillWorkingOp(running.opId), UI_STILL_WORKING_MS);
+    return () => {
+      clearInterval(timer);
+      clearTimeout(slow);
+    };
   }, [running]);
+
+  // A failure lands beside its decision, which may be scrolled away.
+  useEffect(() => {
+    if (failure) failureRef.current?.scrollIntoView({ block: "nearest" });
+  }, [failure]);
 
   const remoteUrls = useMemo(() => prep?.remotes.map((r) => r.url) ?? [], [prep]);
 
@@ -298,11 +334,15 @@ export function HostSwitchDialog({
       ? describeBranchHandoff(prep, sourceName, view === "existing")
       : null;
   const pushing = branchPlan === "push-then-worktree" && prep?.pushDestination != null;
+  // Pushing was chosen and hasn't gone through yet: every label that promises a push reads this.
+  const needsPush = pushing && (pushedSha === null || pushedSha !== prep?.headSha);
   const pushTarget = prep?.pushDestination
     ? `${prep.pushDestination.remote}/${prep.pushDestination.branch}`
     : null;
   const destinationReady =
     destinationCheck?.status === "free" && checkedInput === destination.trim();
+  // Offered only for a repository whose submodules are in use where it comes from.
+  const showSubmodules = view === "clone" && prep?.hasSubmodules === true;
 
   const branchTarget = (): HostBranchTarget | null => {
     if (!prep?.branch || branchPlan === "no-worktree") return null;
@@ -318,16 +358,24 @@ export function HostSwitchDialog({
   /** One step; once the flow was stopped, its result is dropped and nothing follows it. */
   const execute = (
     label: string,
-    payload: StepPayload
+    payload: StepPayload,
+    near: FailureSlot
   ): Promise<HostSwitchExecuteResult | null> => {
     const requestId = request.id;
     if (flowEnded(requestId)) return Promise.resolve(null);
     const opId = mintOperationId();
     // Held before the step is sent, so no request replaces the dialog mid-step.
     setHostSwitchBusy(requestId, true);
-    setRunning({ opId, label });
+    setRunning({ opId, label, hostName: payload.kind === "push" ? sourceName : targetName });
     setStatus(null);
-    return runStep(opId, payload, label, setFailure)
+    const hostName = payload.kind === "push" ? sourceName : targetName;
+    return runStep(opId, payload, (code, message) =>
+      setFailure({
+        ...describeStepFailure({ label, code, message, hostName }),
+        gitText: null,
+        near,
+      })
+    )
       .then((result) => (flowEnded(requestId) ? null : result))
       .finally(() => {
         setHostSwitchBusy(requestId, false);
@@ -336,35 +384,48 @@ export function HostSwitchDialog({
   };
 
   /** A new flow, started by the person: an earlier Cancel no longer applies. */
-  const startFlow = () => {
+  const startFlow = (next: Retry) => {
     flowOf(request.id).stopped = false;
     setFailure(null);
+    setRetry(next);
+  };
+
+  const choosePlan = (plan: BranchPlan) => {
+    setBranchPlan(plan);
+    if (failure?.near === "branch") setFailure(null);
   };
 
   /** The source-side push the user chose, before anything happens on the target. */
   const pushIfChosen = async (): Promise<boolean> => {
     if (branchPlan !== "push-then-worktree") return true;
+    if (pushedSha !== null && pushedSha === prep?.headSha) return true;
     const destination = prep?.pushDestination;
     // Exactly what was shown: this branch, this commit, to where git pushes it.
     if (!prep?.branch || !destination || !prep.headSha) return false;
-    const result = await execute(`Pushing ${prep.branch} to ${pushTarget}`, {
-      kind: "push",
-      fromHostId,
-      projectId: prep.projectId,
-      worktreePath: prep.worktreePath,
-      branch: prep.branch,
-      remote: destination.remote,
-      remoteBranch: destination.branch,
-      sha: prep.headSha,
-    });
+    const result = await execute(
+      `Pushing ${prep.branch} to ${pushTarget}`,
+      {
+        kind: "push",
+        fromHostId,
+        projectId: prep.projectId,
+        worktreePath: prep.worktreePath,
+        branch: prep.branch,
+        remote: destination.remote,
+        remoteBranch: destination.branch,
+        sha: prep.headSha,
+      },
+      "branch"
+    );
     if (
       result?.kind === "git-failed" &&
       (result.reason === "branch-moved" || result.reason === "destination-changed")
     ) {
       setFailure({
         title: `Didn't push ${prep.branch}`,
+        fix: `${prep.branch} changed on ${sourceName} after it was shown here. Look over what's there now, then choose again.`,
         gitText: result.message,
-        fix: `Look over what ${sourceName} has now, then choose again.`,
+        near: "branch",
+        retryable: false,
       });
       setPrep(null);
       // What comes back is looked at again by the person, never opened unasked.
@@ -375,20 +436,25 @@ export function HostSwitchDialog({
     if (result?.kind === "git-failed") {
       setFailure({
         title: `Couldn't push ${prep.branch} from ${sourceName}`,
+        fix: `${destination.remote} refused the push. Sort it out on ${sourceName} and retry, or pick the choice above that doesn't push.`,
         gitText: result.message,
-        fix: null,
+        near: "branch",
       });
       return false;
     }
     if (result?.kind === "push-unconfirmed") {
       setFailure({
         title: `Couldn't confirm the push of ${prep.branch} from ${sourceName}`,
-        gitText: describePushObservation(result, sourceName),
-        fix: "Check the branch on its remote before pushing again.",
+        fix: `Check ${pushTarget} before pushing again, or pick the choice above that doesn't push.`,
+        detail: describePushObservation(result, sourceName),
+        gitText: null,
+        near: "branch",
       });
       return false;
     }
-    return result?.kind === "pushed";
+    if (result?.kind !== "pushed") return false;
+    setPushedSha(prep.headSha);
+    return true;
   };
 
   /** `note` is what the host said it didn't do, shown in the view the switch lands in. */
@@ -413,18 +479,31 @@ export function HostSwitchDialog({
     opened: Extract<HostSwitchExecuteResult, { kind: "opened" }>
   ) => {
     if (!placed) return;
-    const result = await execute(`Creating ${placed.newBranch}`, {
-      kind: "create-worktree",
-      toHostId: request.toHostId,
-      projectId: opened.projectId,
-      worktree: placed,
-    });
+    // The project is on the host now: a retry creates the worktree, never clones again.
+    setLanded(opened);
+    setRetry({ kind: "create", opened });
+    // The Setup row is where the recipe is chosen once it shows; elsewhere New Worktree's stands.
+    const choosesRecipe = view !== "existing" && (prep?.recipes.length ?? 0) > 0;
+    const result = await execute(
+      `Creating ${placed.newBranch}`,
+      {
+        kind: "create-worktree",
+        toHostId: request.toHostId,
+        projectId: opened.projectId,
+        worktree: choosesRecipe
+          ? { ...placed, recipeId: recipeId === NO_RECIPE ? null : recipeId }
+          : placed,
+      },
+      "worktree"
+    );
     if (!result) return;
     if (result.kind === "git-failed") {
       setFailure({
         title: `Couldn't create ${placed.newBranch} on ${targetName}`,
+        fix: `${opened.projectName} is on ${targetName} now. Retry, or open it there without the worktree.`,
         gitText: result.message,
-        fix: null,
+        near: "worktree",
+        action: { label: "Open without it", run: () => finish(opened) },
       });
       return;
     }
@@ -439,15 +518,19 @@ export function HostSwitchDialog({
         result.step === "push"
           ? {
               title: `Couldn't push from ${sourceName}`,
+              fix: `Sort it out on ${sourceName} and retry, or pick the choice above that doesn't push.`,
               gitText: result.message,
-              fix: null,
+              near: "branch",
             }
-          : describeCloneFailure({
-              reason: result.reason,
-              message: result.message,
-              hostName: targetName,
-              url: view === "local-only" ? null : cloneUrl,
-            })
+          : {
+              ...describeCloneFailure({
+                reason: result.reason,
+                message: result.message,
+                hostName: targetName,
+                url: view === "local-only" ? null : cloneUrl,
+              }),
+              near: "destination",
+            }
       );
       return;
     }
@@ -465,35 +548,44 @@ export function HostSwitchDialog({
 
   const clone = async (source: "remote" | "bundle") => {
     if (!destinationReady || !prep || !destinationCheck) return;
-    startFlow();
+    startFlow({ kind: source === "bundle" ? "bundle" : "clone" });
     if (!(await pushIfChosen())) return;
-    const result = await execute(source === "bundle" ? "Sending a copy" : "Cloning", {
-      kind: "clone",
-      fromHostId,
-      toHostId: request.toHostId,
-      projectId: prep.projectId,
-      source: source === "bundle" ? { kind: "bundle" } : { kind: "remote", url: cloneUrl },
-      destination: destinationCheck.path,
-      branch: branchTarget(),
-      options: { submodules: source === "remote" && submodules, depth },
-      setupRecipeId: recipeId === NO_RECIPE ? null : recipeId,
-    });
+    const result = await execute(
+      source === "bundle" ? "Sending a copy" : "Cloning",
+      {
+        kind: "clone",
+        fromHostId,
+        toHostId: request.toHostId,
+        projectId: prep.projectId,
+        source: source === "bundle" ? { kind: "bundle" } : { kind: "remote", url: cloneUrl },
+        destination: destinationCheck.path,
+        branch: branchTarget(),
+        options: { submodules: source === "remote" && showSubmodules && submodules, depth },
+        // A placed worktree carries the recipe itself, so the project's setup isn't asked twice.
+        setupRecipeId: placed || recipeId === NO_RECIPE ? null : recipeId,
+      },
+      "destination"
+    );
     handleOpened(result);
   };
 
   const openCandidate = async (candidate: { projectId: string | null; path: string }) => {
     if (!prep) return;
-    startFlow();
+    startFlow({ kind: "open", candidate });
     if (!(await pushIfChosen())) return;
-    const result = await execute("Opening", {
-      kind: "open",
-      toHostId: request.toHostId,
-      candidate,
-      remoteUrls,
-      branch: branchTarget(),
-      branchRemoteUrl: branchRemoteUrl(),
-      ...(navigateOnly ? { navigateOnly: true } : {}),
-    });
+    const result = await execute(
+      "Opening",
+      {
+        kind: "open",
+        toHostId: request.toHostId,
+        candidate,
+        remoteUrls,
+        branch: branchTarget(),
+        branchRemoteUrl: branchRemoteUrl(),
+        ...(navigateOnly ? { navigateOnly: true } : {}),
+      },
+      "destination"
+    );
     handleOpened(result);
   };
 
@@ -511,7 +603,7 @@ export function HostSwitchDialog({
     const picked = await pickHostPaths({
       mode: "directory",
       title: `Choose ${prep?.projectName ?? "the project"}'s folder on ${targetName}`,
-      buttonLabel: pushing ? "Push, then use this folder" : "Use this folder",
+      buttonLabel: needsPush ? "Push, then use this folder" : "Use this folder",
       hostId: request.toHostId,
     });
     const path = picked?.[0];
@@ -532,28 +624,40 @@ export function HostSwitchDialog({
     });
     const folder = picked?.[0];
     if (!folder) return;
-    setDestination(destinationInFolder(folder, destination, prep?.projectName ?? "project"));
+    changeDestination(destinationInFolder(folder, destination, prep?.projectName ?? "project"));
+  };
+
+  /** Every way the folder changes: what was checked, or failed, for the old one no longer holds. */
+  const changeDestination = (next: string) => {
+    setDestination(next);
     setDestinationCheck(null);
     setCheckedInput(null);
+    if (failure?.near === "destination") setFailure(null);
   };
 
   const checkOutHere = async () => {
     const offer = checkoutOffer;
     const target = branchTarget();
     if (!offer || !target) return;
-    startFlow();
-    const result = await execute(`Checking out ${target.name}`, {
-      kind: "checkout",
-      toHostId: request.toHostId,
-      projectId: offer.result.projectId,
-      branch: target,
-      branchRemoteUrl: branchRemoteUrl(),
-    });
+    startFlow({ kind: "checkout" });
+    const result = await execute(
+      `Checking out ${target.name}`,
+      {
+        kind: "checkout",
+        toHostId: request.toHostId,
+        projectId: offer.result.projectId,
+        branch: target,
+        branchRemoteUrl: branchRemoteUrl(),
+      },
+      "top"
+    );
     if (result?.kind === "opened" && !result.worktreePath && result.branchNote) {
       setFailure({
         title: `Couldn't check out ${target.name} on ${targetName}`,
+        fix: `Retry, or open ${offer.result.projectName} there without it.`,
         gitText: result.branchNote,
-        fix: null,
+        near: "top",
+        action: { label: "Open without it", run: () => finish(offer.result) },
       });
       return;
     }
@@ -573,12 +677,39 @@ export function HostSwitchDialog({
     });
   };
 
+  /** The primary after a failure, named for what is left of the plan as it stands now. */
+  const retryLabel = (next: Retry): string => {
+    const pushFirst = needsPush;
+    if (next.kind === "clone") return pushFirst ? "Retry push, then clone" : "Retry clone";
+    if (next.kind === "bundle") return "Retry sending a copy";
+    if (next.kind === "open") return pushFirst ? "Retry push, then open" : "Retry opening";
+    if (next.kind === "checkout") return "Retry checkout";
+    return "Retry creating worktree";
+  };
+
+  /** The primary after a failure: the step that failed, from where it failed. */
+  const runRetry = (next: Retry) => {
+    if (next.kind === "clone") void clone("remote");
+    else if (next.kind === "bundle") void clone("bundle");
+    else if (next.kind === "open") void openCandidate(next.candidate);
+    else if (next.kind === "checkout") void checkOutHere();
+    else {
+      startFlow(next);
+      void createPlacedWorktree(next.opened);
+    }
+  };
+
   const projectName = prep?.projectName ?? "This project";
   const title =
     view === "existing"
       ? `Open ${projectName} on ${targetName}`
-      : `${projectName} isn't on ${targetName} yet`;
+      : landed
+        ? `${projectName} is on ${targetName} now`
+        : `${projectName} isn't on ${targetName} yet`;
   const busy = running !== null;
+  // Once the clone landed, what it was cloned from and into is history.
+  const locked = busy || landed !== null;
+  const showProgress = useDeferredLoading(busy, UI_DOHERTY_THRESHOLD);
   useEffect(() => {
     const flow = flowOf(request.id);
     flow.closed = false;
@@ -614,263 +745,338 @@ export function HostSwitchDialog({
   const quietlyOpening = autoOpening && failure === null && checkoutOffer === null;
   const lfsWarning =
     prep?.usesLfs && !prep.targetGitLfsAvailable
-      ? `This repository uses Git LFS, and git lfs isn't installed on ${targetName}. Files kept in LFS would arrive as pointer files; install it there first.`
+      ? `This repository uses Git LFS, and ${targetName} doesn't have Git LFS installed. Files kept in LFS would arrive as pointer files: install it there first.`
       : null;
+  const cloneable = prep ? cloneableRemotes(prep.remotes) : [];
+  const chosenRemote = cloneable.find((r) => r.url === cloneUrl) ?? null;
+  const checkedRemote =
+    prep?.branchCheck && "remote" in prep.branchCheck ? prep.branchCheck.remote : null;
+  // The branch was checked on one remote and the clone comes from another: its version is the
+  // clone's, and a push to the first wouldn't reach it, so pushing isn't offered.
+  const cloningOther =
+    view === "clone" && chosenRemote !== null && checkedRemote !== null
+      ? chosenRemote.name !== checkedRemote
+      : false;
+  const otherRemote =
+    cloningOther && branchTarget() && chosenRemote && checkedRemote
+      ? { checked: checkedRemote, cloned: chosenRemote.name }
+      : null;
+  const branchChoices = (handoff?.choices ?? [])
+    .filter((choice) => !cloningOther || choice.plan !== "push-then-worktree")
+    .map((choice) =>
+      cloningOther && chosenRemote && choice.plan === "worktree"
+        ? { ...choice, label: `Continue from ${chosenRemote.name}'s version` }
+        : choice
+    );
+  const recipeName =
+    recipeId === NO_RECIPE ? null : (prep?.recipes.find((r) => r.id === recipeId)?.name ?? null);
+  const folderState = folderStateOf({
+    value: destination,
+    check: destinationCheck,
+    checkedInput,
+    checkError,
+  });
 
-  const destinationField = (
-    <Row label="Into">
-      <div className="flex min-w-0 items-center gap-2">
-        <Input
-          density="compact"
-          aria-label={`Folder on ${targetName}`}
-          value={destination}
-          spellCheck={false}
-          autoComplete="off"
-          disabled={busy}
-          invalid={destinationCheck !== null && destinationCheck.status !== "free"}
-          onChange={(event) => {
-            setDestination(event.target.value);
-            setDestinationCheck(null);
-            setCheckedInput(null);
-          }}
+  const viewSlots: FailureSlot[] =
+    !prep || loadError || quietlyOpening || checkoutOffer
+      ? []
+      : view === "existing"
+        ? handoff
+          ? ["branch"]
+          : []
+        : view === "clone"
+          ? ["destination", placed ? "worktree" : "branch"]
+          : prep.isGitRepository && !prep.isUnborn
+            ? ["destination", ...(placed ? (["worktree"] as const) : [])]
+            : [];
+  const failureFor = (slot: FailureSlot) => {
+    if (!failure) return null;
+    const here = failure.near === slot || (slot === "top" && !viewSlots.includes(failure.near));
+    if (!here) return null;
+    const action = failure.action;
+    return (
+      <div ref={failureRef}>
+        <GitFailureCallout
+          failure={failure}
+          action={
+            action && (
+              <Button variant="outline" size="xs" disabled={busy} onClick={action.run}>
+                {action.label}
+              </Button>
+            )
+          }
         />
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={busy}
-          onClick={() => void pickDestination()}
-          aria-label={`Choose a folder on ${targetName}`}
-        >
-          Change…
-        </Button>
       </div>
-      {checkError && (
-        <p role="alert" className="mt-1 text-xs text-status-error">
-          Couldn't check this folder on {targetName}: {checkError}{" "}
-          <button
-            type="button"
-            className="underline underline-offset-2 text-text-primary"
-            disabled={busy}
-            onClick={() => setCheckAttempt((n) => n + 1)}
-          >
-            Retry
-          </button>
-        </p>
-      )}
-      {destinationCheck && destinationCheck.status !== "free" && (
-        <p className="mt-1 text-xs text-status-warning">
-          {destinationCheck.detail}
-          {destinationCheck.suggestion && (
-            <>
-              {" "}
-              <button
-                type="button"
-                className="underline underline-offset-2 text-text-primary"
-                onClick={() => {
-                  setDestination(destinationCheck.suggestion!);
-                  setDestinationCheck(null);
-                  setCheckedInput(null);
-                }}
-              >
-                Use {destinationCheck.suggestion}
-              </button>
-            </>
+    );
+  };
+
+  const existingFolderLink = (label: string) => (
+    <Button
+      variant="link"
+      size="inline"
+      className="self-start text-xs"
+      disabled={locked}
+      onClick={() => void pickExistingFolder()}
+    >
+      {label}
+    </Button>
+  );
+
+  const destinationRow = (
+    <FormRow label="Into">
+      <DestinationField
+        hostName={targetName}
+        value={destination}
+        state={folderState}
+        disabled={locked}
+        onChange={changeDestination}
+        onPick={() => void pickDestination()}
+        onUseSuggestion={changeDestination}
+        sameRepository={
+          view === "clone"
+            ? {
+                label: needsPush ? "Push, then use it" : "Use this folder",
+                onUse: () =>
+                  void openCandidate({
+                    projectId: null,
+                    path: destinationCheck?.path ?? destination.trim(),
+                  }),
+              }
+            : undefined
+        }
+        onRetry={() => setCheckAttempt((n) => n + 1)}
+      >
+        {view === "clone" &&
+          folderState.kind !== "same-repository" &&
+          existingFolderLink(
+            needsPush
+              ? `Push, then use an existing folder on ${targetName}…`
+              : `Use an existing folder on ${targetName}…`
           )}
-          {destinationCheck.status === "same-repository" && view === "clone" && (
-            <>
-              {" "}
-              <button
-                type="button"
-                className="underline underline-offset-2 text-text-primary"
-                disabled={busy}
-                onClick={() => void openCandidate({ projectId: null, path: destinationCheck.path })}
-              >
-                {pushing ? "Push, then use existing folder" : "Use existing folder"}
-              </button>
-            </>
-          )}
-        </p>
-      )}
-    </Row>
+      </DestinationField>
+      {failureFor("destination")}
+    </FormRow>
   );
 
   const placedSection = placed && (
-    <Row label="Worktree">
-      <div className="space-y-1">
-        <p className="flex items-center gap-1.5">
-          <GitBranch className="h-3.5 w-3.5 shrink-0 text-text-secondary" aria-hidden />
-          <span className="truncate font-mono text-xs">{placed.newBranch}</span>
-        </p>
-        <p className="text-xs text-text-secondary">{describePlacedWorktree(placed, targetName)}</p>
-      </div>
-    </Row>
+    <FormRow label="Worktree">
+      <p className="flex items-center gap-1.5">
+        <GitBranch className="h-3.5 w-3.5 shrink-0 text-text-secondary" aria-hidden />
+        <span className="truncate font-mono text-xs">{placed.newBranch}</span>
+      </p>
+      <FieldHelp>{describePlacedWorktree(placed, targetName)}</FieldHelp>
+      {failureFor("worktree")}
+    </FormRow>
   );
 
-  const existingFolderLink = (label: string) => (
-    <button
-      type="button"
-      className="flex items-center gap-1.5 text-xs text-text-secondary underline-offset-2 hover:underline"
-      disabled={busy}
-      onClick={() => void pickExistingFolder()}
-    >
-      <FolderGit2 className="h-3.5 w-3.5" aria-hidden />
-      {label}
-    </button>
+  const uncommittedNote = prep?.hasUncommittedChanges && (
+    <FieldHelp>
+      {pluralize(Math.max(prep.uncommittedChangeCount, 1), "uncommitted change")} on {sourceName}{" "}
+      {prep.uncommittedChangeCount === 1 ? "stays" : "stay"} there.
+    </FieldHelp>
   );
 
+  const WarningGlyph = SEVERITY_GLYPH.warning;
+  // The push went through and something after it didn't: the branch is published now.
+  const alreadyPushed = pushing && !needsPush;
   const branchSection = placed
     ? placedSection
     : handoff && (
-        <Row label="Branch">
-          <div className="space-y-2">
-            <p className="flex items-center gap-1.5">
-              <GitBranch className="h-3.5 w-3.5 shrink-0 text-text-secondary" aria-hidden />
-              <span className="truncate font-mono text-xs">{prep?.branch ?? "(detached)"}</span>
-            </p>
-            <p
-              className={
-                handoff.tone === "attention" ? "text-status-warning" : "text-text-secondary"
-              }
-            >
-              {handoff.summary}
-            </p>
-            {handoff.detail && <p className="text-xs text-text-secondary">{handoff.detail}</p>}
-            {pushing && prep && (
-              <div className="space-y-1">
-                <p className="text-xs text-text-secondary">
-                  {prep.unpushedCommits.length > 0
+        <FormRow label="Branch">
+          <p className="flex items-center gap-1.5">
+            <GitBranch className="h-3.5 w-3.5 shrink-0 text-text-secondary" aria-hidden />
+            <span className="truncate font-mono text-xs">{prep?.branch ?? "(detached)"}</span>
+          </p>
+          <p className="flex items-start gap-1.5 [text-wrap:pretty]">
+            {handoff.tone === "attention" && !alreadyPushed && (
+              <WarningGlyph
+                className="mt-0.5 h-3.5 w-3.5 shrink-0 text-status-warning"
+                aria-hidden
+                data-severity-glyph=""
+              />
+            )}
+            <span>
+              {alreadyPushed ? `Pushed to ${pushTarget} from ${sourceName}` : handoff.summary}
+            </span>
+          </p>
+          {handoff.detail && !alreadyPushed && <FieldHelp>{handoff.detail}</FieldHelp>}
+          {otherRemote && (
+            <FieldHelp>
+              Checked against {otherRemote.checked}. Cloning {otherRemote.cloned}, the worktree
+              comes from {otherRemote.cloned}'s {prep?.branch} if it has one.
+            </FieldHelp>
+          )}
+          {pushing && prep && (
+            <div className="space-y-1">
+              <FieldHelp>
+                {alreadyPushed
+                  ? `${sourceName} published ${prep.unpushedCommitCount === 1 ? "this commit" : "these commits"} to ${pushTarget}:`
+                  : prep.unpushedCommits.length > 0
                     ? `The push publishes ${prep.unpushedCommitCount === 1 ? "this commit" : "these commits"} to ${pushTarget}:`
                     : `The push publishes ${prep.branch} as it is to ${pushTarget}.`}
-                </p>
-                {prep.unpushedCommits.length > 0 && (
-                  <ul className="max-h-32 overflow-auto rounded-[var(--radius-md)] border border-border-default px-2 py-1 font-mono text-xs text-text-primary">
-                    {prep.unpushedCommits.map((c) => (
-                      <li key={c.sha} className="truncate">
-                        <span className="text-text-secondary">{c.sha}</span> {c.subject}
-                      </li>
-                    ))}
-                    {prep.unpushedCommitCount > prep.unpushedCommits.length && (
-                      <li className="text-text-secondary">
-                        and {prep.unpushedCommitCount - prep.unpushedCommits.length} more
-                      </li>
-                    )}
-                  </ul>
-                )}
-                {prep.headSha && (
-                  <p className="text-xs text-text-secondary">
-                    Only up to {prep.headSha.slice(0, 8)}: commits added after this is shown aren't
-                    pushed.
-                  </p>
-                )}
-              </div>
-            )}
-            {handoff.choices.length > 0 && (
-              <RadioChoiceGroup legend="What to do with the branch" legendHidden>
-                {handoff.choices.map((choice) => (
-                  <RadioChoiceRow
-                    key={choice.plan}
-                    name="host-switch-branch"
-                    value={choice.plan}
-                    checked={branchPlan === choice.plan}
-                    onChange={() => setBranchPlan(choice.plan)}
-                    label={choice.label}
-                    description={choice.description ?? undefined}
-                    disabled={busy}
-                  />
-                ))}
-              </RadioChoiceGroup>
-            )}
-            {prep?.hasUncommittedChanges && (
-              <p className="text-xs text-text-secondary">
-                {pluralize(Math.max(prep.uncommittedChangeCount, 1), "uncommitted change")} on{" "}
-                {sourceName} {prep.uncommittedChangeCount === 1 ? "stays" : "stay"} there.
-              </p>
-            )}
-          </div>
-        </Row>
-      );
-
-  const cloneOptions = prep && (
-    <>
-      {view === "clone" && (
-        <label htmlFor={submodulesId} className="flex items-center gap-2 text-sm text-text-primary">
-          <Checkbox
-            id={submodulesId}
-            size="sm"
-            checked={submodules}
-            disabled={busy}
-            onCheckedChange={(checked) => setSubmodules(checked === true)}
-          />
-          Initialise submodules
-        </label>
-      )}
-      {prep.recipes.length > 0 && (
-        <Row label="Setup">
-          <Select value={recipeId} onValueChange={setRecipeId} disabled={busy}>
-            <SelectTrigger aria-label="Recipe to run after cloning" className="h-8">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={NO_RECIPE}>No setup recipe</SelectItem>
-              {prep.recipes.map((recipe) => (
-                <SelectItem key={recipe.id} value={recipe.id}>
-                  {recipe.name}
-                </SelectItem>
+              </FieldHelp>
+              {prep.unpushedCommits.length > 0 && (
+                <ul className="max-h-32 overflow-auto rounded-[var(--radius-md)] border border-border-default px-2 py-1 font-mono text-xs text-text-primary">
+                  {prep.unpushedCommits.map((c) => (
+                    <li key={c.sha} className="truncate">
+                      <span className="text-text-secondary">{c.sha}</span> {c.subject}
+                    </li>
+                  ))}
+                  {prep.unpushedCommitCount > prep.unpushedCommits.length && (
+                    <li className="font-sans text-text-secondary">
+                      and {prep.unpushedCommitCount - prep.unpushedCommits.length} more
+                    </li>
+                  )}
+                </ul>
+              )}
+              {prep.headSha && (
+                <FieldHelp>
+                  {alreadyPushed
+                    ? "A retry clones without pushing again."
+                    : `Only up to ${prep.headSha.slice(0, 8)}: anything committed after this list was shown isn't pushed.`}
+                </FieldHelp>
+              )}
+            </div>
+          )}
+          {branchChoices.length > 1 && !alreadyPushed && (
+            <RadioChoiceGroup legend="What to do with the branch" legendHidden>
+              {branchChoices.map((choice) => (
+                <RadioChoiceRow
+                  key={choice.plan}
+                  name="host-switch-branch"
+                  value={choice.plan}
+                  checked={branchPlan === choice.plan}
+                  onChange={() => choosePlan(choice.plan)}
+                  label={choice.label}
+                  description={choice.description ?? undefined}
+                  disabled={locked}
+                />
               ))}
-            </SelectContent>
-          </Select>
-        </Row>
-      )}
-      {view === "clone" && (
-        <div>
-          <button
-            type="button"
-            className="text-xs text-text-secondary underline-offset-2 hover:underline"
-            aria-expanded={advancedOpen}
-            onClick={() => setAdvancedOpen((open) => !open)}
-          >
-            Advanced
-          </button>
-          {advancedOpen && (
-            <RadioChoiceGroup legend="How much history to clone" className="mt-2">
-              <RadioChoiceRow
-                name="host-switch-depth"
-                value="full"
-                checked={depth === "full"}
-                onChange={() => setDepth("full")}
-                label="Full clone"
-                disabled={busy}
-              />
-              <RadioChoiceRow
-                name="host-switch-depth"
-                value="shallow"
-                checked={depth === "shallow"}
-                onChange={() => setDepth("shallow")}
-                label="Shallow clone"
-                description="Only the latest commit."
-                disabled={busy}
-              />
-              <RadioChoiceRow
-                name="host-switch-depth"
-                value="partial"
-                checked={depth === "partial"}
-                onChange={() => setDepth("partial")}
-                label="Partial clone"
-                description="All history; file contents are fetched when needed."
-                disabled={busy}
-              />
             </RadioChoiceGroup>
           )}
-        </div>
-      )}
-    </>
+          {uncommittedNote}
+          {failureFor("branch")}
+        </FormRow>
+      );
+
+  // Sent as a copy, the branch has no remote state to weigh: it comes along or it doesn't.
+  const copiedBranchSection = placed
+    ? placedSection
+    : prep?.branch && (
+        <FormRow label="Branch">
+          <p className="flex items-center gap-1.5">
+            <GitBranch className="h-3.5 w-3.5 shrink-0 text-text-secondary" aria-hidden />
+            <span className="truncate font-mono text-xs">{prep.branch}</span>
+          </p>
+          <FieldHelp>
+            {branchTarget()
+              ? `It opens in a worktree for ${prep.branch}.`
+              : `Its commits come along in the copy, but it opens on the default branch.`}
+          </FieldHelp>
+          {uncommittedNote}
+        </FormRow>
+      );
+
+  const fromElsewhere =
+    prep !== null && prep.fromHostId !== LOCAL_HOST_ID && prep.defaultRecipeId !== null;
+  const recipeHelp =
+    recipeId !== NO_RECIPE
+      ? `It starts its terminals and agents on ${targetName} once the project opens there. You'll see its commands before anything runs.`
+      : fromElsewhere
+        ? `None is picked for you: the project's default was set on ${sourceName}. A recipe starts terminals and agents on ${targetName}, after showing you its commands.`
+        : `A recipe starts terminals and agents on ${targetName} once the project opens there, after showing you its commands.`;
+  const recipeRow = prep && prep.recipes.length > 0 && (
+    <FormRow label="Setup">
+      <Select value={recipeId} onValueChange={setRecipeId} disabled={busy}>
+        <SelectTrigger aria-label={`Setup recipe to offer on ${targetName}`} density="compact">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={NO_RECIPE}>No setup recipe</SelectItem>
+          {prep.recipes.map((recipe) => (
+            <SelectItem key={recipe.id} value={recipe.id}>
+              {recipe.name}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <FieldHelp>{recipeHelp}</FieldHelp>
+    </FormRow>
   );
+
+  const optionsRow = view === "clone" && (
+    <FormRow label="Options">
+      <CloneOptions
+        name="host-switch-depth"
+        hostName={targetName}
+        depth={depth}
+        onDepth={setDepth}
+        submodules={
+          showSubmodules
+            ? { checked: submodules, label: "Initialise submodules", onChange: setSubmodules }
+            : null
+        }
+        disabled={locked}
+      />
+    </FormRow>
+  );
+
+  const fromRow = (
+    <FormRow label="From">
+      {cloneable.length > 1 ? (
+        <Select
+          value={cloneUrl}
+          onValueChange={(url) => {
+            setCloneUrl(url);
+            setFailure(null);
+            // A push goes where git pushes the branch: cloning another remote drops it.
+            const name = cloneable.find((r) => r.url === url)?.name ?? null;
+            if (branchPlan === "push-then-worktree" && name !== checkedRemote) {
+              setBranchPlan(handoff?.defaultPlan ?? "worktree");
+            }
+          }}
+          disabled={locked}
+        >
+          <SelectTrigger aria-label="Remote to clone" density="compact">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent className="max-w-[var(--radix-select-trigger-width)]">
+            {cloneable.map((remote) => (
+              <SelectItem
+                key={remote.name}
+                value={remote.url}
+                description={<span className="break-all font-mono">{remote.url}</span>}
+              >
+                {remote.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      ) : (
+        <p>{chosenRemote?.name ?? "origin"}</p>
+      )}
+      <p className="break-all font-mono text-xs text-text-secondary">{cloneUrl}</p>
+      {lfsWarning && <Callout severity="warning">{lfsWarning}</Callout>}
+    </FormRow>
+  );
+
+  const branchStep = (): { name: string; from: string } | null => {
+    const target = branchTarget();
+    if (!target) return null;
+    if (pushing) return { name: target.name, from: "the commits just pushed" };
+    if (view === "local-only") return { name: target.name, from: `${sourceName}'s copy` };
+    if (otherRemote) {
+      return { name: target.name, from: `${otherRemote.cloned}'s version, if it has the branch` };
+    }
+    return { name: target.name, from: `${checkedRemote ?? "the remote"}'s version` };
+  };
 
   let body: React.ReactNode;
   let primary: { label: string; onClick: () => void; disabled?: boolean } | null = null;
+  let steps: string[] = [];
 
   if (loadError) {
-    body = <p className="text-sm text-status-error">{loadError}</p>;
+    body = <Callout severity="error">{loadError}</Callout>;
   } else if (!prep) {
     body = showLoading ? (
       <div className="flex items-center gap-2 text-sm text-text-secondary">
@@ -913,19 +1119,20 @@ export function HostSwitchDialog({
         {branchSection}
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
           {existingFolderLink(
-            pushing
+            needsPush
               ? `Push, then use another folder on ${targetName}…`
               : `Use another folder on ${targetName}…`
           )}
-          {cloneableRemotes(prep.remotes).length > 0 && (
-            <button
-              type="button"
-              className="text-xs text-text-secondary underline-offset-2 hover:underline"
+          {cloneable.length > 0 && (
+            <Button
+              variant="link"
+              size="inline"
+              className="text-xs"
               disabled={busy}
               onClick={() => setView("clone")}
             >
               Clone a fresh copy instead
-            </button>
+            </Button>
           )}
         </div>
       </div>
@@ -934,50 +1141,32 @@ export function HostSwitchDialog({
     primary = {
       label:
         candidate?.source === "on-disk"
-          ? pushing
+          ? needsPush
             ? "Push, then use existing folder"
             : "Use existing folder"
           : placed
             ? `Create worktree on ${targetName}`
-            : branchPlan === "push-then-worktree"
+            : needsPush
               ? "Push, then open"
               : `Open on ${targetName}`,
       onClick: () => void openExisting(),
     };
   } else if (view === "clone") {
     body = (
-      <div className="space-y-3">
-        <Row label="Clone">
-          {cloneableRemotes(prep.remotes).length > 1 ? (
-            <Select value={cloneUrl} onValueChange={setCloneUrl} disabled={busy}>
-              <SelectTrigger aria-label="Remote to clone" className="h-8">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {cloneableRemotes(prep.remotes).map((remote) => (
-                  <SelectItem key={remote.name} value={remote.url}>
-                    {remote.name} · {remote.url}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          ) : (
-            <span className="break-all font-mono text-xs">{cloneUrl}</span>
-          )}
-        </Row>
-        {destinationField}
+      <>
+        {fromRow}
+        {destinationRow}
         {branchSection}
-        {lfsWarning && <p className="text-xs text-status-warning">{lfsWarning}</p>}
-        {cloneOptions}
-        {existingFolderLink(
-          pushing
-            ? `Push, then use an existing folder on ${targetName}…`
-            : `Use an existing folder on ${targetName}…`
-        )}
-      </div>
+        {recipeRow}
+        {optionsRow}
+      </>
     );
     primary = {
-      label: branchPlan === "push-then-worktree" ? "Push, then clone" : "Clone and open",
+      label: needsPush
+        ? "Push, then clone"
+        : placed
+          ? "Clone and create worktree"
+          : "Clone and open",
       onClick: () => void clone("remote"),
       disabled: !destinationReady,
     };
@@ -991,74 +1180,118 @@ export function HostSwitchDialog({
     );
   } else {
     body = (
-      <div className="space-y-3">
-        <p className="text-sm text-text-primary">
-          {prep.remotes.length === 0
-            ? `${projectName} has no remote, so there's nothing for ${targetName} to clone from.`
-            : `${projectName}'s remotes are on this machine's disk, which ${targetName} can't clone from.`}
-        </p>
-        <p className="text-sm text-text-secondary">
-          Send a copy of the repository: its committed history only. The working tree, submodule
-          repositories and LFS objects stay on {sourceName}. Or add a remote first (publish it to a
-          forge), then switch again.
-        </p>
-        {destinationField}
-        {cloneOptions}
-      </div>
+      <>
+        <FormRow label="From">
+          <p className="[text-wrap:pretty]">
+            {prep.remotes.length === 0
+              ? `${projectName} has no remote, so ${targetName} has nothing to clone from.`
+              : `${projectName}'s remotes are folders on ${sourceName}, which ${targetName} can't clone from.`}
+          </p>
+          <FieldHelp>
+            {sourceName} sends a copy of its committed history instead. The working tree, submodule
+            repositories and LFS objects stay on {sourceName}. To clone from a forge, add a remote
+            there first, then switch again.
+          </FieldHelp>
+        </FormRow>
+        {destinationRow}
+        {copiedBranchSection}
+        {recipeRow}
+      </>
     );
     primary = {
-      label: "Send a copy of the repository",
+      label: "Send a copy",
       onClick: () => void clone("bundle"),
       disabled: !destinationReady,
     };
   }
 
+  if (view !== "existing" && primary && !checkoutOffer && !quietlyOpening && !loadError) {
+    steps = describeCloneSteps({
+      sourceName,
+      targetName,
+      source:
+        view === "clone"
+          ? { kind: "remote", remoteName: chosenRemote?.name ?? null }
+          : { kind: "bundle" },
+      // A folder that can't take the clone isn't where it goes.
+      destination:
+        folderState.kind === "free" || folderState.kind === "checking" ? destination.trim() : "",
+      depth,
+      submodules: showSubmodules && submodules,
+      push:
+        pushing && prep?.branch && pushTarget && pushedSha !== prep.headSha
+          ? { commits: prep.unpushedCommitCount, branch: prep.branch, target: pushTarget }
+          : null,
+      branch: placed ? null : branchStep(),
+      placed,
+      recipeName,
+      newWindow,
+      cloned: landed !== null,
+    });
+  }
+
+  // After a failure the primary repeats what failed, and says so.
+  if (primary && failure && failure.retryable !== false && retry) {
+    const again = retry;
+    primary = {
+      label: retryLabel(again),
+      onClick: () => runRetry(again),
+      disabled:
+        (again.kind === "clone" || again.kind === "bundle") && !destinationReady ? true : undefined,
+    };
+  }
+
+  const fraction = status?.fraction != null ? ` · ${Math.round(status.fraction * 100)}%` : "";
   const hint = running ? (
-    <span className="flex items-center gap-2 text-xs text-text-secondary" aria-live="polite">
-      <Spinner size="xs" />
-      {status?.message ?? running.label}
-      {status?.fraction != null && ` · ${Math.round(status.fraction * 100)}%`}
-    </span>
+    showProgress ? (
+      <span className="flex min-w-0 items-center gap-2" aria-live="polite">
+        <Spinner size="xs" />
+        <span className="min-w-0 [overflow-wrap:anywhere] [text-wrap:pretty]">
+          {status?.message ?? running.label} on {running.hostName}
+          {fraction}
+          {stillWorkingOp === running.opId && " · Still working…"}
+        </span>
+      </span>
+    ) : undefined
+  ) : primary?.disabled && (view === "clone" || view === "local-only") ? (
+    (folderHint(folderState, targetName) ?? undefined)
   ) : undefined;
 
   return (
-    <AppDialog isOpen onClose={closeDialog} size="md" initialFocus="none">
+    <AppDialog isOpen onClose={closeDialog} size="md" initialFocus="surface">
       <AppDialog.Header className="py-3">
         <AppDialog.Title icon={<Server className="h-4 w-4 text-text-secondary" />}>
           {title}
         </AppDialog.Title>
         <AppDialog.CloseButton />
       </AppDialog.Header>
-      <div className="flex flex-col gap-4 px-6 py-4">
-        {body}
-        {failure && <GitFailureCallout failure={failure} />}
-      </div>
-      <AppDialog.Footer hint={hint}>
-        <div className="flex shrink-0 items-center gap-3">
-          {busy ? (
-            <Button variant="ghost" onClick={cancelRunning}>
-              Cancel
-            </Button>
-          ) : (
-            <Button variant="ghost" onClick={justSwitch}>
-              Switch host only
-            </Button>
-          )}
-          {primary && (
-            <Button
-              variant="contrast"
-              onClick={() => {
-                if (busy || primary.disabled === true) return;
-                primary.onClick();
-              }}
-              aria-disabled={busy || primary.disabled === true || undefined}
-              className={cn((busy || primary.disabled === true) && ARIA_DISABLED_CLASSES)}
-            >
-              {primary.label}
-            </Button>
-          )}
+      <AppDialog.Body>
+        <div className="flex flex-col gap-4">
+          {failureFor("top")}
+          {body}
+          <OperationSteps label="What happens" steps={steps} placement="inline" />
         </div>
-      </AppDialog.Footer>
+      </AppDialog.Body>
+      <OperationSteps label="What happens" steps={steps} placement="band" />
+      <AppDialog.Footer
+        hint={hint}
+        hintPlacement="above"
+        className="flex-wrap"
+        // Once the project landed there, switching without it is no longer the alternative.
+        leadingAction={
+          busy || landed ? undefined : { label: "Switch host only", onClick: justSwitch }
+        }
+        secondaryAction={{ label: "Cancel", onClick: busy ? cancelRunning : closeDialog }}
+        primaryAction={
+          primary
+            ? {
+                label: primary.label,
+                onClick: primary.onClick,
+                disabled: busy || primary.disabled === true,
+              }
+            : undefined
+        }
+      />
     </AppDialog>
   );
 }

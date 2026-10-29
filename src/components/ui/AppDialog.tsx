@@ -59,7 +59,12 @@ import { ARIA_DISABLED_CLASSES } from "./ariaDisabled";
 type DialogSize = "sm" | "md" | "lg" | "4xl" | "5xl" | "6xl" | "7xl" | "workspace";
 type DialogVariant = "default" | "destructive" | "info";
 type DialogZIndex = "modal" | "nested";
-type DialogInitialFocus = "first" | "cancel" | "confirm" | "none";
+/**
+ * `surface` puts focus on the dialog itself: inside the modal, on no control,
+ * for a form whose first control is a consequential choice rather than a
+ * field to type into. `none` leaves focus wherever the caller puts it.
+ */
+type DialogInitialFocus = "first" | "cancel" | "confirm" | "surface" | "none";
 /**
  * Where the surface sits. `center` is the dialog card; `right` and `left` are a
  * full-height sheet against that edge of the window, for a record's detail or
@@ -440,6 +445,10 @@ export function AppDialog({
       // initial focus (Cancel, for a destructive one) has to replace it.
       const active = document.activeElement;
       if (root.contains(active) && active !== focusAtOpenRef.current) return;
+      if (effectiveInitialFocus === "surface") {
+        root.focus();
+        return;
+      }
       let target: HTMLElement | null = null;
       if (effectiveInitialFocus === "cancel" || effectiveInitialFocus === "confirm") {
         target = root.querySelector<HTMLElement>(`[data-confirm-role="${effectiveInitialFocus}"]`);
@@ -593,6 +602,14 @@ export function AppDialog({
 
       const first = focusable[0]!;
       const last = focusable[focusable.length - 1]!;
+
+      // Focus on the surface itself (`initialFocus="surface"`) is inside the
+      // trap but at neither end of it: step to the edge Tab is heading for.
+      if (document.activeElement === dialogRef.current) {
+        e.preventDefault();
+        (e.shiftKey ? last : first).focus();
+        return;
+      }
 
       if (e.shiftKey && document.activeElement === first) {
         e.preventDefault();
@@ -979,6 +996,19 @@ AppDialog.Footer = function AppDialogFooter({
   // unavailable primary points at it — otherwise a screen reader lands on a
   // dimmed button with no reason attached.
   const primaryDescribedBy = hint && primaryAction?.disabled ? hintId : undefined;
+  const hintAbove = Boolean(hint) && hintPlacement === "above";
+  const hintNode = hint && (
+    <div
+      id={hintId}
+      className={cn(
+        "text-xs leading-[inherit] text-text-secondary flex min-w-0 flex-1 items-center gap-1",
+        hintPlacement === "above" && "basis-full"
+      )}
+      data-testid="app-dialog-hint"
+    >
+      {hint}
+    </div>
+  );
 
   // The standard dialog primary action is the high-contrast neutral button, not the
   // accent fill: its fill is the theme's own body-text colour, so it resolves near-white
@@ -1002,6 +1032,9 @@ AppDialog.Footer = function AppDialogFooter({
         className
       )}
     >
+      {/* Above, the hint is its own first row, so a leading action stays on the
+          row with the others instead of stranding above it. */}
+      {hintAbove && hintNode}
       {leadingAction && (
         <Button
           variant={leadingAction.intent === "destructive" ? "ghost-danger" : "ghost"}
@@ -1029,24 +1062,14 @@ AppDialog.Footer = function AppDialogFooter({
           explanatory, an action is how the dialog is answered. flex-1 pins the
           hint's width to the dialog rather than to its own text, which is what
           lets a hint measure its own box and crop to it. */}
-      {hint && (
-        <div
-          id={hintId}
-          className={cn(
-            "text-xs leading-[inherit] text-text-secondary flex min-w-0 flex-1 items-center gap-1",
-            hintPlacement === "above" && "basis-full"
-          )}
-          data-testid="app-dialog-hint"
-        >
-          {hint}
-        </div>
-      )}
+      {!hintAbove && hintNode}
       {children}
       {!children && (
         <div
           className={cn(
             "flex shrink-0 items-center gap-3",
-            hint && hintPlacement === "above" && "ml-auto"
+            // Wrapped under a leading action or a hint, the answers stay on the trailing edge.
+            (hintAbove || leadingAction) && "ml-auto"
           )}
         >
           {secondaryAction && (
