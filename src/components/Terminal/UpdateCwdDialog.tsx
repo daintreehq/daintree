@@ -188,8 +188,9 @@ export function UpdateCwdDialog({ isOpen, terminalId, currentCwd, onClose }: Upd
       updateTerminalCwd(terminalId, path);
       try {
         // Suppress resume-latest: cwd is changing, so a CWD-scoped fallback
-        // would pick up an unrelated session in the new directory.
-        await restartTerminal(terminalId, { allowResumeLatest: false });
+        // would pick up an unrelated session in the new directory. The folder
+        // is the user's choice, so the restart keeps it.
+        await restartTerminal(terminalId, { allowResumeLatest: false, keepCwd: true });
       } catch (error) {
         if (isCurrent()) setRestartError("The folder is set, but the terminal didn't start.");
         logError("Failed to restart terminal after cwd change", error);

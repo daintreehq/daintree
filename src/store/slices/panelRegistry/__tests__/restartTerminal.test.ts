@@ -2384,3 +2384,376 @@ describe("restartTerminal and the run's first prompt (#14592)", () => {
     expect(paneAfterRestart().firstPrompt).toBeUndefined();
   });
 });
+
+/**
+ * A live move refiles a pane without touching its process, so `cwd` keeps
+ * naming the worktree it left. A restart is a new process, and it belongs in
+ * the worktree the pane is filed under — the same rule Duplicate follows
+ * (#11854) — unless the launch root is one the user chose (#14954).
+ */
+describe("restartTerminal starts a moved pane where it is filed (#14954)", () => {
+  const worktreeA = "/repo/.worktrees/a";
+  const worktreeB = "/repo/.worktrees/b";
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    getMergedPresetMock.mockReturnValue(undefined);
+    buildAgentLaunchFlagsMock.mockReturnValue([]);
+    mockGracefulKill.mockResolvedValue(null);
+    const { agentSettingsClient, projectClient } = await import("@/clients");
+    vi.mocked(agentSettingsClient.get).mockResolvedValue({ agents: {} });
+    vi.mocked(projectClient.getSettings).mockResolvedValue({ runCommands: [] });
+    const { buildResumeCommand, buildResumeLatestCommand, buildLaunchCommandFromFlags } =
+      await import("@shared/types");
+    vi.mocked(buildResumeCommand).mockReturnValue(undefined);
+    vi.mocked(buildResumeLatestCommand).mockReturnValue(undefined);
+    // Echoes the flags, so a test can see which selectors reached the launch.
+    vi.mocked(buildLaunchCommandFromFlags).mockImplementation(
+      (_base: string, agentId: string, flags: readonly string[]) => [agentId, ...flags].join(" ")
+    );
+    const { setWorktreePathIndexAccessor } = await import("@/store/storeAccessors");
+    setWorktreePathIndexAccessor(
+      () =>
+        new Map([
+          ["wt-a", worktreeA],
+          ["wt-b", worktreeB],
+        ])
+    );
+    const { reset } = usePanelStore.getState();
+    await reset();
+    usePanelStore.setState({
+      panelsById: {},
+      panelIds: [],
+      tabGroups: new Map(),
+      trashedTerminals: new Map(),
+      backgroundedTerminals: new Map(),
+      focusedId: null,
+      maximizedId: null,
+      commandQueue: [],
+    });
+  });
+
+  afterAll(async () => {
+    const { setWorktreePathIndexAccessor } = await import("@/store/storeAccessors");
+    setWorktreePathIndexAccessor(() => null);
+  });
+
+  function paneAfterRestart(): PtyPanelData {
+    const panel = usePanelStore.getState().panelsById["test-1"];
+    if (!panel || !isPtyPanel(panel)) throw new Error("restarted pane is gone");
+    return panel;
+  }
+
+  function show(pane: PtyPanelData): void {
+    usePanelStore.setState({ panelsById: { [pane.id]: pane }, panelIds: [pane.id] });
+  }
+
+  const movedShell: PtyPanelData = {
+    id: "test-1",
+    kind: "terminal",
+    title: "Shell",
+    cwd: worktreeA,
+    cols: 80,
+    rows: 24,
+    location: "grid",
+    worktreeId: "wt-b",
+  };
+
+  it("relaunches a moved shell in the worktree it is filed under", async () => {
+    show(movedShell);
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    expect(mockSpawn.mock.calls[0]![0].cwd).toBe(worktreeB);
+    expect(mockSpawn.mock.calls[0]![0].worktreeId).toBe("wt-b");
+    expect(paneAfterRestart().cwd).toBe(worktreeB);
+  });
+
+  it("keeps a subdirectory of the filed worktree", async () => {
+    show({ ...movedShell, cwd: `${worktreeB}/packages/api` });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    expect(mockSpawn.mock.calls[0]![0].cwd).toBe(`${worktreeB}/packages/api`);
+    expect(paneAfterRestart().cwd).toBe(`${worktreeB}/packages/api`);
+  });
+
+  it("keeps a folder under no worktree", async () => {
+    show({ ...movedShell, cwd: "/tmp/scratch" });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    expect(mockSpawn.mock.calls[0]![0].cwd).toBe("/tmp/scratch");
+    expect(paneAfterRestart().cwd).toBe("/tmp/scratch");
+  });
+
+  it("records the launch where it actually starts", async () => {
+    const { agentLifecycleLedger } = await import("@/services/terminal/lifecycleLedger");
+    const recordLaunch = vi.spyOn(agentLifecycleLedger, "recordLaunch");
+    show(movedShell);
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    expect(recordLaunch).toHaveBeenCalledWith(
+      "test-1",
+      expect.objectContaining({ cwd: worktreeB, worktreeId: "wt-b" })
+    );
+    recordLaunch.mockRestore();
+  });
+
+  it("validates the folder it will start in, not the one it left", async () => {
+    const { validateTerminalConfig } = await import("@/utils/terminalValidation");
+    show(movedShell);
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    expect(vi.mocked(validateTerminalConfig).mock.calls[0]![0]).toMatchObject({ cwd: worktreeB });
+  });
+
+  it("follows a move that lands while the restart is awaiting", async () => {
+    show({ ...movedShell, cwd: worktreeA, worktreeId: "wt-a" });
+    mockKill.mockImplementationOnce(async () => {
+      usePanelStore.setState((state) => ({
+        panelsById: {
+          ...state.panelsById,
+          "test-1": { ...state.panelsById["test-1"]!, worktreeId: "wt-b" },
+        },
+      }));
+    });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    expect(mockSpawn.mock.calls[0]![0].cwd).toBe(worktreeB);
+    expect(mockSpawn.mock.calls[0]![0].worktreeId).toBe("wt-b");
+    expect(paneAfterRestart().cwd).toBe(worktreeB);
+  });
+
+  it("keeps the folder the user just chose for the pane", async () => {
+    show(movedShell);
+
+    await usePanelStore
+      .getState()
+      .restartTerminal("test-1", { allowResumeLatest: false, keepCwd: true });
+
+    expect(mockSpawn.mock.calls[0]![0].cwd).toBe(worktreeA);
+    expect(paneAfterRestart().cwd).toBe(worktreeA);
+  });
+
+  const movedClaude: PtyPanelData = {
+    ...agentPanelBase,
+    cwd: worktreeA,
+    worktreeId: "wt-b",
+    agentState: "working",
+  };
+
+  it("starts a moved directory-bound agent over in its worktree", async () => {
+    // Claude reopens a conversation only in the folder it began in, so carrying
+    // it into B would fail; the restart journaled it, and it reopens from A.
+    const { buildResumeCommand, buildResumeLatestCommand } = await import("@shared/types");
+    vi.mocked(buildResumeCommand).mockReturnValue("claude --resume sess-live");
+    vi.mocked(buildResumeLatestCommand).mockReturnValue("claude --continue");
+    mockGracefulKill.mockResolvedValueOnce("sess-live");
+    show({ ...movedClaude, agentSessionId: "sess-stored" });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    const payload = mockSpawn.mock.calls[0]![0];
+    expect(payload.cwd).toBe(worktreeB);
+    expect(payload.launchAgentId).toBe("claude");
+    expect(payload.command).toBe("claude --persisted-flag");
+    expect(payload.agentSessionId).toBeUndefined();
+    const after = paneAfterRestart();
+    expect(after.cwd).toBe(worktreeB);
+    expect(after.agentSessionId).toBeUndefined();
+    expect(after.conversationCwd).toBeUndefined();
+  });
+
+  it("still resumes a directory-bound agent that stays where its conversation began", async () => {
+    const { buildResumeCommand } = await import("@shared/types");
+    vi.mocked(buildResumeCommand).mockReturnValue("claude --resume sess-live");
+    mockGracefulKill.mockResolvedValueOnce("sess-live");
+    show({ ...movedClaude, worktreeId: "wt-a" });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    expect(vi.mocked(buildResumeCommand).mock.calls[0]?.slice(0, 2)).toEqual([
+      "claude",
+      "sess-live",
+    ]);
+    expect(mockSpawn.mock.calls[0]![0].command).toBe("claude --resume sess-live");
+    expect(mockSpawn.mock.calls[0]![0].cwd).toBe(worktreeA);
+  });
+
+  it("reopens an explicitly named conversation where a directory-bound agent began it", async () => {
+    const { buildResumeCommand } = await import("@shared/types");
+    vi.mocked(buildResumeCommand).mockReturnValue("claude --resume sess-ended");
+    show(movedClaude);
+
+    await usePanelStore.getState().restartTerminal("test-1", { resumeSessionId: "sess-ended" });
+
+    expect(vi.mocked(buildResumeCommand).mock.calls[0]?.slice(0, 2)).toEqual([
+      "claude",
+      "sess-ended",
+    ]);
+    expect(mockSpawn.mock.calls[0]![0].command).toBe("claude --resume sess-ended");
+    expect(mockSpawn.mock.calls[0]![0].cwd).toBe(worktreeA);
+    expect(paneAfterRestart().cwd).toBe(worktreeA);
+  });
+
+  it("carries a cross-directory agent's conversation into its worktree", async () => {
+    const { buildResumeCommand } = await import("@shared/types");
+    vi.mocked(buildResumeCommand).mockReturnValue("codex resume sess-a");
+    show({ ...movedClaude, launchAgentId: "codex", agentSessionId: "sess-a" });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    expect(vi.mocked(buildResumeCommand).mock.calls[0]?.slice(0, 2)).toEqual(["codex", "sess-a"]);
+    const payload = mockSpawn.mock.calls[0]![0];
+    expect(payload.command).toBe("codex resume sess-a");
+    expect(payload.cwd).toBe(worktreeB);
+    const after = paneAfterRestart();
+    expect(after.cwd).toBe(worktreeB);
+    // Where the conversation lives, so the next resume can still find it.
+    expect(after.conversationCwd).toBe(worktreeA);
+  });
+
+  it("never runs resume-latest from the worktree a pane is about to move into", async () => {
+    const { buildResumeLatestCommand } = await import("@shared/types");
+    vi.mocked(buildResumeLatestCommand).mockReturnValue("codex resume --last");
+    show({ ...movedClaude, launchAgentId: "codex" });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    expect(buildResumeLatestCommand).not.toHaveBeenCalled();
+    const payload = mockSpawn.mock.calls[0]![0];
+    expect(payload.cwd).toBe(worktreeB);
+    expect(payload.launchAgentId).toBe("codex");
+    // The fresh launch, with whatever display flags codex's reconcile adds.
+    expect(payload.command).toMatch(/^codex --persisted-flag( |$)/);
+    expect(paneAfterRestart().conversationCwd).toBeUndefined();
+  });
+
+  it("carries an explicitly named conversation into the worktree for a cross-directory agent", async () => {
+    const { buildResumeCommand } = await import("@shared/types");
+    vi.mocked(buildResumeCommand).mockReturnValue("codex resume sess-ended");
+    show({ ...movedClaude, launchAgentId: "codex" });
+
+    await usePanelStore.getState().restartTerminal("test-1", { resumeSessionId: "sess-ended" });
+
+    expect(vi.mocked(buildResumeCommand).mock.calls[0]?.slice(0, 2)).toEqual([
+      "codex",
+      "sess-ended",
+    ]);
+    expect(mockSpawn.mock.calls[0]![0].cwd).toBe(worktreeB);
+    expect(paneAfterRestart().conversationCwd).toBe(worktreeA);
+  });
+
+  it("drops a caller's own conversation selector when the restart moves the pane", async () => {
+    show({
+      ...movedClaude,
+      agentLaunchFlags: ["--persisted-flag", "--continue"],
+      callerLaunchFlags: ["--continue"],
+    });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    expect(mockSpawn.mock.calls[0]![0].command).toBe("claude --persisted-flag");
+    const after = paneAfterRestart();
+    expect(after.agentLaunchFlags).toEqual(["--persisted-flag"]);
+    expect(after.callerLaunchFlags).toBeUndefined();
+  });
+
+  it("keeps a caller's own conversation selector when the pane stays put", async () => {
+    show({
+      ...movedClaude,
+      worktreeId: "wt-a",
+      agentLaunchFlags: ["--persisted-flag", "--continue"],
+      callerLaunchFlags: ["--continue"],
+    });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    expect(mockSpawn.mock.calls[0]![0].command).toBe("claude --persisted-flag --continue");
+    expect(paneAfterRestart().callerLaunchFlags).toEqual(["--continue"]);
+  });
+
+  it("reports the folder it tried when the moved pane fails validation", async () => {
+    const { validateTerminalConfig } = await import("@/utils/terminalValidation");
+    vi.mocked(validateTerminalConfig).mockResolvedValueOnce({
+      valid: false,
+      errors: [{ type: "cwd", message: "missing", code: "ENOENT", recoverable: true }],
+    });
+    show(movedShell);
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    expect(mockSpawn).not.toHaveBeenCalled();
+    expect(paneAfterRestart().restartError?.context?.failedCwd).toBe(worktreeB);
+  });
+
+  it("reports the folder it tried when the moved pane fails to spawn", async () => {
+    mockSpawn.mockRejectedValueOnce(new Error("spawn failed"));
+    show(movedShell);
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    expect(mockSpawn.mock.calls[0]![0].cwd).toBe(worktreeB);
+    const after = paneAfterRestart();
+    expect(after.cwd).toBe(worktreeB);
+    expect(after.restartError?.context?.failedCwd).toBe(worktreeB);
+  });
+
+  it("starts a preset fallback hop in the pane's worktree", async () => {
+    getMergedPresetMock.mockReturnValue({
+      id: "amber-provider",
+      name: "Amber Provider",
+      color: "#ffbb33",
+      args: ["--provider", "amber"],
+    });
+    show({ ...movedClaude, agentPresetId: "blue-provider" });
+
+    await usePanelStore
+      .getState()
+      .activateFallbackPreset("test-1", "amber-provider", "blue-provider");
+
+    expect(mockSpawn.mock.calls[0]![0].cwd).toBe(worktreeB);
+    expect(paneAfterRestart().cwd).toBe(worktreeB);
+  });
+
+  it("starts a preset switch in the pane's worktree", async () => {
+    getMergedPresetMock.mockReturnValue({
+      id: "amber-provider",
+      name: "Amber Provider",
+      color: "#ffbb33",
+      args: ["--provider", "amber"],
+    });
+    show({ ...movedClaude, agentPresetId: "blue-provider" });
+
+    await usePanelStore.getState().restartTerminalOnPreset("test-1", "amber-provider");
+
+    expect(mockSpawn.mock.calls[0]![0].cwd).toBe(worktreeB);
+    expect(paneAfterRestart().cwd).toBe(worktreeB);
+  });
+
+  it("drops a caller's own conversation selector when a fallback hop moves the pane", async () => {
+    getMergedPresetMock.mockReturnValue({
+      id: "amber-provider",
+      name: "Amber Provider",
+      color: "#ffbb33",
+      args: ["--provider", "amber"],
+    });
+    show({
+      ...movedClaude,
+      agentPresetId: "blue-provider",
+      agentLaunchFlags: ["--persisted-flag", "--continue"],
+      callerLaunchFlags: ["--continue"],
+    });
+
+    await usePanelStore
+      .getState()
+      .activateFallbackPreset("test-1", "amber-provider", "blue-provider");
+
+    expect(mockSpawn.mock.calls[0]![0].command).not.toContain("--continue");
+    expect(paneAfterRestart().callerLaunchFlags).toBeUndefined();
+  });
+});
