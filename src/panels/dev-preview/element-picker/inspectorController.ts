@@ -1944,10 +1944,6 @@ export class InspectorController implements DevPreviewToolSession {
     return record.epoch === state.epoch ? "id" : null;
   }
 
-  canSelectComponent(): boolean {
-    return this.componentSelection() !== null;
-  }
-
   /**
    * Select the component a crumb in the trail names, the way Option/Alt+Up
    * would, aimed: the page re-selects the element it last proved and widens it
