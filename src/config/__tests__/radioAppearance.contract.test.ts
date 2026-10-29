@@ -64,10 +64,10 @@ function parseDeclarations(text: string): Declaration[] {
 
 function collectRules(css: string): CssRule[] {
   const src = css.replace(COMMENT_OR_STRING, (match) => (match.startsWith("/*") ? "" : match));
-  const rules: CssRule[] = [];
+  const rules: (CssRule & { opened: number })[] = [];
   // `own` gathers a block's text outside its children; `cursor` is where the
   // next stretch of it starts, just past the last child to close.
-  const stack: { prelude: string; own: string; cursor: number }[] = [];
+  const stack: { prelude: string; own: string; cursor: number; opened: number }[] = [];
   let preludeStart = 0;
   let quote: string | null = null;
 
@@ -83,7 +83,12 @@ function collectRules(css: string): CssRule[] {
     } else if (ch === "{") {
       const parent = stack.at(-1);
       if (parent) parent.own += src.slice(parent.cursor, preludeStart);
-      stack.push({ prelude: squash(src.slice(preludeStart, i)), own: "", cursor: i + 1 });
+      stack.push({
+        prelude: squash(src.slice(preludeStart, i)),
+        own: "",
+        cursor: i + 1,
+        opened: i,
+      });
       preludeStart = i + 1;
     } else if (ch === "}") {
       const block = stack.pop();
@@ -93,6 +98,7 @@ function collectRules(css: string): CssRule[] {
           prelude: block.prelude,
           declarations: parseDeclarations(block.own),
           context: stack.map((b) => b.prelude),
+          opened: block.opened,
         });
       }
       const parent = stack.at(-1);
@@ -103,7 +109,8 @@ function collectRules(css: string): CssRule[] {
     }
   }
 
-  return rules;
+  // Blocks close child-first; the cascade reads them in the order they open.
+  return rules.sort((a, b) => a.opened - b.opened);
 }
 
 /** True only for a media query no forced-colours-active environment can match. */
@@ -111,7 +118,9 @@ function excludesForcedColors(at: string): boolean {
   const query = /^@media (.*)$/.exec(at)?.[1];
   if (!query || /,|\bor\b/.test(query)) return false;
   if (/^not \( ?forced-colors ?: ?active ?\)$/.test(query)) return true;
-  return !/\bnot\b/.test(query) && /\( ?forced-colors ?: ?none ?\)/.test(query);
+  return (
+    !/^not\b|\bnot \(+ ?forced-colors/.test(query) && /\( ?forced-colors ?: ?none ?\)/.test(query)
+  );
 }
 
 /**
@@ -128,9 +137,14 @@ function appliesTo(selector: string, checked: boolean): boolean {
 
 /** A rule's radio selectors, each led by its enclosing style rules so nesting resolves. */
 function radioSelectors(rule: CssRule): string[] {
-  const ancestry = rule.context.filter((at) => !at.startsWith("@")).join(" ");
-  return splitTopLevel(rule.prelude, /,/)
-    .map((selector) => `${ancestry} ${selector}`.trim())
+  const levels = [...rule.context.filter((at) => !at.startsWith("@")), rule.prelude];
+  return levels
+    .map((prelude) => splitTopLevel(prelude, /,/))
+    .reduce(
+      (paths, alternatives) => paths.flatMap((path) => alternatives.map((s) => `${path} ${s}`)),
+      [""]
+    )
+    .map((selector) => selector.trim())
     .filter((selector) => RADIO.test(selector));
 }
 
