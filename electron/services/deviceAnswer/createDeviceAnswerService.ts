@@ -1,4 +1,3 @@
-import { hostname } from "node:os";
 import { CHANNELS } from "../../ipc/channels.js";
 import { LOCAL_CLIENT_ID } from "../../ipc/endpoint.js";
 import { getRemoteService } from "../../remote/runtime.js";
@@ -11,6 +10,8 @@ import { DeviceAnswerService } from "./DeviceAnswerService.js";
 import { sanitizeDeviceAnswerSettings } from "./deviceAnswerSettings.js";
 import type { DeviceWaitingList, DeviceWaitingRun } from "./deviceAnswerRuns.js";
 import { answerLocalRun, listLocalWaitingRuns } from "./localDeviceAnswer.js";
+import { machineDisplayName } from "../../utils/machineName.js";
+import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
 
 /** Settings belong to this machine's own windows, never to a remote Shell. */
 function broadcastLocal(event: DeviceAnswerEvent): void {
@@ -24,12 +25,22 @@ function broadcastLocal(event: DeviceAnswerEvent): void {
   }
 }
 
+let machineName: string | null = null;
+
+/** The name other machines know this one by; read once, since a Mac's takes a subprocess. */
 function thisMachineName(): string {
-  try {
-    return hostname() || "This computer";
-  } catch {
-    return "This computer";
+  if (machineName === null) {
+    try {
+      machineName = machineDisplayName() || "This computer";
+    } catch {
+      machineName = "This computer";
+    }
   }
+  return machineName;
+}
+
+function agentName(agentId: string | null): string | null {
+  return agentId ? (getEffectiveAgentConfig(agentId)?.name ?? null) : null;
 }
 
 /** Longest waiting first, whichever machine it waits on. */
@@ -62,8 +73,9 @@ async function listWaiting(options: { hosts: boolean }): Promise<DeviceWaitingLi
     ...hosts.flatMap(({ hostId, host, runs: hostRuns }) =>
       hostRuns.map((run) => ({ ...run, hostId, host }))
     ),
-  ];
+  ].map((run) => ({ ...run, agentName: agentName(run.agentId) }));
   return {
+    computer: name,
     runs: runs.sort(bySince),
     hosts: hosts.map(({ hostId, host, status }) => ({ hostId, host, status })),
     ...(hostsUnlisted ? { hostsUnlisted } : {}),
