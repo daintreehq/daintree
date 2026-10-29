@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
-import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act, cleanup } from "@testing-library/react";
 import type {
   LoadedPluginInfo,
   PluginManifest,
@@ -191,6 +191,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Unmount first: the panel subscribes to the stores reset below.
+  cleanup();
   delete (window as { __DAINTREE_HOST_ID__?: unknown }).__DAINTREE_HOST_ID__;
   placeholderMock.mockClear();
   __resetProjectPluginStoreForTesting();
@@ -430,9 +432,39 @@ describe("PluginMissingPanel", () => {
       await act(async () => pending.reject(new Error("view closed")));
       expect(logWarn).not.toHaveBeenCalled();
     });
+
+    it("says nothing about a failed read a newer one already answered", async () => {
+      const stale = deferred<LoadedPluginInfo[]>();
+      const newest = deferred<LoadedPluginInfo[]>();
+      pluginApi.list.mockReturnValueOnce(stale.promise).mockReturnValueOnce(newest.promise);
+      render(
+        <PluginMissingPanel kind="acme.tools.board" pluginId="acme.tools" onRemove={vi.fn()} />
+      );
+
+      act(() => pluginApi.onProvenanceChanged.mock.calls[0]![0]());
+      await act(async () => newest.resolve([installed({ disabled: true })]));
+      await act(async () => stale.reject(new Error("superseded")));
+      expect(logWarn).not.toHaveBeenCalled();
+      expect(screen.getByText("Enable this plugin")).toBeDefined();
+    });
   });
 
   describe("a repository plugin", () => {
+    it("keeps a restored panel on Project settings until this project's plugins arrive", async () => {
+      pluginApi.list.mockResolvedValue([]);
+      render(
+        <PluginMissingPanel kind={PROJECT_KIND} pluginId="acme.dashboard" onRemove={vi.fn()} />
+      );
+      await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
+      await act(async () => {});
+      expect(screen.getByRole("button", { name: "Open project settings" })).toBeDefined();
+
+      act(() => useProjectPluginStore.setState({ projectId: PROJECT_ID, plugins: [repoPlugin()] }));
+      expect(screen.getByText("Turn on this plugin")).toBeDefined();
+      fireEvent.click(screen.getByRole("button", { name: "Open project settings" }));
+      expect(usePluginManagerStore.getState().settingsRequest?.pluginId).toBe(REPO_INSTANCE);
+    });
+
     it("sends a plugin switched off here to Project settings though no list carries it", async () => {
       pluginApi.list.mockResolvedValue([]);
       useProjectPluginStore.setState({ projectId: PROJECT_ID, plugins: [repoPlugin()] });
@@ -592,6 +624,8 @@ describe("resolvePluginRecovery", () => {
     identity: ReturnType<typeof identifyMissingPlugin>;
     inventory: LoadedPluginInfo[] | null;
     repository?: ProjectPluginInfo[];
+    /** The project the repository snapshot describes; `null` before one arrived. */
+    repositoryProjectId?: string | null;
     visibility?: ProjectPluginVisibility;
     expected: ReturnType<typeof outcome>;
   }>([
@@ -658,7 +692,7 @@ describe("resolvePluginRecovery", () => {
       expected: { home: "project", state: "unknown", target: REPO_INSTANCE },
     },
     {
-      name: "an invalid manifest offers no selection to land on",
+      name: "an unreadable manifest in a folder named for the plugin offers no selection",
       identity: restored,
       inventory: [],
       repository: [repoPlugin({ state: "invalid", muted: false, instanceId: undefined })],
@@ -708,6 +742,35 @@ describe("resolvePluginRecovery", () => {
       expected: { home: "manager", state: "unknown", target: null },
     },
     {
+      name: "a restored panel waits for this project's own plugins before leaving Project settings",
+      identity: restored,
+      inventory: [],
+      repositoryProjectId: null,
+      expected: { home: "project", state: "unknown", target: null },
+    },
+    {
+      name: "a restored panel stays with Project settings while a manifest there is unreadable",
+      identity: restored,
+      inventory: [],
+      repository: [
+        repoPlugin({
+          id: "dashboard",
+          dirName: "dashboard",
+          instanceId: undefined,
+          state: "invalid",
+          muted: false,
+        }),
+      ],
+      expected: { home: "project", state: "unknown", target: null },
+    },
+    {
+      name: "another project's snapshot says nothing about this panel's project",
+      identity: restored,
+      inventory: [],
+      repositoryProjectId: OTHER_PROJECT_ID,
+      expected: { home: "project", state: "unknown", target: null },
+    },
+    {
       name: "a restored panel claims nothing before the list is read",
       identity: restored,
       inventory: null,
@@ -719,9 +782,23 @@ describe("resolvePluginRecovery", () => {
       inventory: null,
       expected: { home: "project", state: "unknown", target: null },
     },
-  ])("$name", ({ identity, inventory, repository = [], visibility = VISIBLE, expected }) => {
-    expect(outcome(resolvePluginRecovery(identity, inventory, repository, visibility))).toEqual(
-      expected
-    );
-  });
+  ])(
+    "$name",
+    ({
+      identity,
+      inventory,
+      repository = [],
+      repositoryProjectId = PROJECT_ID,
+      visibility = VISIBLE,
+      expected,
+    }) => {
+      const recovery = resolvePluginRecovery(
+        identity,
+        inventory,
+        { projectId: repositoryProjectId, plugins: repository },
+        visibility
+      );
+      expect(outcome(recovery)).toEqual(expected);
+    }
+  );
 });

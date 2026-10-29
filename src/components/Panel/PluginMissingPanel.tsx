@@ -84,6 +84,12 @@ export function identifyMissingPlugin(
 export type PluginRecoveryHome = "manager" | "project";
 export type PluginRecoveryState = "off" | "hidden" | "blocked" | "missing" | "unknown";
 
+/** This view's repository plugins, and the project they describe once a snapshot arrived. */
+export interface RepositoryPlugins {
+  projectId: string | null;
+  plugins: readonly ProjectPluginInfo[];
+}
+
 export interface PluginRecovery {
   /** Where the plugin is turned back on, or reinstalled. */
   home: PluginRecoveryHome;
@@ -116,7 +122,7 @@ function managerRecovery(
 export function resolvePluginRecovery(
   identity: MissingPluginIdentity,
   inventory: readonly LoadedPluginInfo[] | null,
-  repository: readonly ProjectPluginInfo[],
+  repository: RepositoryPlugins,
   visibility: ProjectPluginVisibility
 ): PluginRecovery {
   const { manifestId, projectId } = identity;
@@ -142,7 +148,7 @@ export function resolvePluginRecovery(
   }
 
   if (identity.installedInstance !== true) {
-    const repo = repository.find(
+    const repo = repository.plugins.find(
       (p) => p.id === manifestId && (projectId === null || p.projectId === projectId)
     );
     if (repo) {
@@ -172,9 +178,14 @@ export function resolvePluginRecovery(
     }
     if (identity.installedInstance === true) return managerRecovery("missing", undefined);
     // A restored panel can't say whose instance it was, and neither list
-    // carries it. Of the two, only a package can be brought back from inside
-    // Daintree, and that happens in the plugin manager.
-    return managerRecovery("unknown", undefined);
+    // carries it. Once this project's own plugins are known, none of them an
+    // unreadable manifest that could be this one, only a package can be brought
+    // back from inside Daintree, and that happens in the plugin manager.
+    const repositoryKnown =
+      repository.projectId !== null && (projectId === null || repository.projectId === projectId);
+    if (repositoryKnown && !repository.plugins.some((p) => p.state === "invalid")) {
+      return managerRecovery("unknown", undefined);
+    }
   }
 
   return { home: "project", state: "unknown", displayName: null, settingsTarget: null };
@@ -206,7 +217,7 @@ function recoveryCopy({ home, state }: PluginRecovery): RecoveryCopy {
         return {
           title: "Check this plugin",
           status: "which isn't offering it in this project right now.",
-          next: "Project settings shows its status.",
+          next: "Look for it in Project settings.",
         };
     }
   }
@@ -233,7 +244,7 @@ function recoveryCopy({ home, state }: PluginRecovery): RecoveryCopy {
       return {
         title: "Check this plugin",
         status: "which isn't offering it right now.",
-        next: "The plugin manager shows its status.",
+        next: "Look for it in the plugin manager.",
       };
   }
 }
@@ -322,9 +333,15 @@ export function PluginMissingPanel({ pluginId, kind, onRemove }: PluginMissingPa
 function LocalPluginMissingPanel({ pluginId, kind, onRemove }: PluginMissingPanelProps) {
   const identity = identifyMissingPlugin(kind, pluginId);
   const inventory = usePluginInventory();
-  const repository = useProjectPluginStore((s) => s.plugins);
+  const repositoryProjectId = useProjectPluginStore((s) => s.projectId);
+  const repositoryPlugins = useProjectPluginStore((s) => s.plugins);
   const visibility = useProjectPluginStore((s) => s.visibility);
-  const recovery = resolvePluginRecovery(identity, inventory, repository, visibility);
+  const recovery = resolvePluginRecovery(
+    identity,
+    inventory,
+    { projectId: repositoryProjectId, plugins: repositoryPlugins },
+    visibility
+  );
   const copy = recoveryCopy(recovery);
 
   const name: ReactNode =
