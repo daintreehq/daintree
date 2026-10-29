@@ -52,6 +52,18 @@ vi.mock("../sessionIdCapture.js", async (importOriginal) => {
 const CTRL_C = String.fromCharCode(3);
 
 /**
+ * What `codex-cli 0.165.0` prints, recorded from a real PTY, for a Ctrl-C that
+ * interrupts a running turn: one history line inserted above the composer, and
+ * nothing else that acknowledges the press (#15267).
+ */
+const CODEX_INTERRUPT_FRAME =
+  "\x1b[39;49m\x1b[K■ Conversation interrupted - use /feedback if something went wrong\x1b[39m\x1b[49m\x1b[0m";
+
+/** The same CLI's first frame for a Ctrl-C that quits it. Its hint follows ~0.5s later. */
+const CODEX_SHUTDOWN_FRAME =
+  "\x1b[?25l\x1b[20;1H\x1b[2m›\x1b[22m \x1b[2mShutting down...\x1b[21;1H\x1b[22m \x1b[39m\x1b[49m\x1b[0m\x1b[?2026l";
+
+/**
  * Codex's declared escalation, read from the config the implementation reads.
  * Copying the numbers here instead would let an implementation that hardcoded
  * them — rather than honouring `shutdownSignal` — pass every test below.
@@ -775,7 +787,7 @@ describe("TerminalProcess.gracefulShutdown — gated Ctrl-C escalation (#11851)"
 
   it("stops at one press when that press was enough", async () => {
     // An idle session with a clean composer quits on the first press and never
-    // prints the footer at all. Pressing again on a process already on its way
+    // prints a gate at all. Pressing again on a process already on its way
     // out is the fatal case, so silence must mean stop.
     const handles = createMockPty();
     const terminal = createAgentTerminal(handles, "codex");
@@ -784,9 +796,42 @@ describe("TerminalProcess.gracefulShutdown — gated Ctrl-C escalation (#11851)"
     await Promise.resolve();
     await Promise.resolve();
 
+    // The quit's own output, and the half second before its hint, must not
+    // read as an acknowledgement either.
+    handles.emitData(CODEX_SHUTDOWN_FRAME);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(handles.writeMock).toHaveBeenCalledTimes(1);
+
     handles.emitData("  codex resume single-press\n");
     await expect(promise).resolves.toBe("single-press");
     expect(handles.writeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("presses again once a mid-turn press is acknowledged by the interrupt notice (#15267)", async () => {
+    // Mid-turn, the first press only interrupts the turn, and current Codex
+    // acknowledges it with the interrupt notice alone — no confirm-to-quit
+    // footer. Waiting for the footer stopped every busy pane at one press, so
+    // the budget ran out with the session still up and nothing captured.
+    const handles = createMockPty();
+    const terminal = createAgentTerminal(handles, "codex");
+
+    const promise = terminal.gracefulShutdown();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(handles.writeMock).toHaveBeenCalledTimes(1);
+
+    handles.emitData("\r\n\r\n");
+    handles.emitData(CODEX_INTERRUPT_FRAME);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(handles.writeMock).toHaveBeenCalledTimes(2);
+    expect(handles.writeMock.mock.calls[1]?.[0]).toBe(CTRL_C);
+
+    handles.emitData(CODEX_SHUTDOWN_FRAME);
+    await vi.advanceTimersByTimeAsync(500);
+    handles.emitData("To continue this session, run:\r\n  codex resume mid-turn-1\r\n");
+    await expect(promise).resolves.toBe("mid-turn-1");
+    expect(terminal.getInfo().agentSessionId).toBe("mid-turn-1");
+    expect(handles.writeMock).toHaveBeenCalledTimes(2);
   });
 
   it("sends the next press only after a fresh gate match", async () => {
@@ -1270,6 +1315,7 @@ describe("TerminalProcess.gracefulShutdown — outcome logging", () => {
           agentId?: string;
           outcome?: string;
           captured?: boolean;
+          pressesSent?: number;
           elapsedMs?: number;
         }
       | undefined;
@@ -1309,6 +1355,26 @@ describe("TerminalProcess.gracefulShutdown — outcome logging", () => {
       handles.pty
     );
   }
+
+  it("counts both presses on a mid-turn Codex capture (#15267)", async () => {
+    // The press count is what showed the second press had never once been
+    // sent, so a capture that took two has to say so.
+    const handles = createMockPty();
+    const terminal = createAgentTerminal(handles, "codex");
+
+    const promise = terminal.gracefulShutdown();
+    await Promise.resolve();
+    await Promise.resolve();
+    handles.emitData(CODEX_INTERRUPT_FRAME);
+    await vi.advanceTimersByTimeAsync(1);
+    handles.emitData("  codex resume logged-mid-turn\n");
+    await expect(promise).resolves.toBe("logged-mid-turn");
+
+    const entries = shutdownEntries();
+    expect(entries).toHaveLength(1);
+    expect(contextOf(entries[0])?.outcome).toBe("captured");
+    expect(contextOf(entries[0])?.pressesSent).toBe(2);
+  });
 
   it("stays silent for a terminal that never had an agent", async () => {
     // The scope gate. A plain shell fails `isAgentLive` for lack of any agent
@@ -1754,14 +1820,6 @@ describe("TerminalProcess.gracefulShutdown — outcome logging", () => {
 
 const NATIVE_READ_BYTES = 64 * 1024;
 
-function codexGateText(): string {
-  const resume = getAgentConfig("codex")?.resume;
-  if (resume?.kind !== "session-id" || !resume.shutdownSignal) {
-    throw new Error("codex must declare a gated shutdown signal");
-  }
-  return resume.shutdownSignal.gateText;
-}
-
 /**
  * A PTY that behaves like node-pty under flow control: while paused, what the
  * agent prints waits (in the kernel buffer, for real) and reaches listeners
@@ -2040,8 +2098,8 @@ describe("TerminalProcess.gracefulShutdown — capture window (#12432)", () => {
     bystander.output("still held\n");
     expect(bystander.backlog).toBe(1);
 
-    // Fresh footer output reaches the gate, so the escalation can continue.
-    capturing.output(`\x1b[2K  Ctrl+C ${codexGateText()}  \x1b[0m`);
+    // Fresh gate output reaches the escalation, so it can continue.
+    capturing.output(CODEX_INTERRUPT_FRAME);
     await flushMicrotasks();
     expect(capturing.writes).toEqual([CTRL_C, CTRL_C]);
 
@@ -2171,7 +2229,7 @@ describe("TerminalProcess.gracefulShutdown — capture window (#12432)", () => {
     );
   });
 
-  it("reads the footer at the head of a burst larger than the capture buffer", async () => {
+  it("reads the gate at the head of a burst larger than the capture buffer", async () => {
     const host = createHost();
     const handles = createPausablePty();
     const { terminal } = host.spawn("t1", handles, { agentId: "codex" });
@@ -2180,7 +2238,7 @@ describe("TerminalProcess.gracefulShutdown — capture window (#12432)", () => {
     await flushMicrotasks();
     expect(handles.writes).toEqual([CTRL_C]);
 
-    handles.output(`  Ctrl+C ${codexGateText()}  ${"\x1b[0m.".repeat(8 * 1024)}`);
+    handles.output(`${CODEX_INTERRUPT_FRAME}${"\x1b[0m.".repeat(8 * 1024)}`);
     await flushMicrotasks();
     expect(handles.writes).toEqual([CTRL_C, CTRL_C]);
 

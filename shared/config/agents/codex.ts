@@ -169,24 +169,28 @@ export const config: AgentConfig = {
     // it outright, and every launch is busy for its first 10-30s booting MCP
     // servers. Ctrl-C survives all three because it is not composer text.
     //
-    // The footer substring is harvested from the real `codex-cli 0.147.0`
-    // binary — deliberately a short fragment rather than the full sentence, so
-    // a wording tweak upstream doesn't silently stop matching. 750ms is
-    // generous for a footer that redraws within a frame.
+    // Mid-turn, the first press interrupts the turn and the only thing Codex
+    // prints for it is the interrupt notice ("■ Conversation interrupted - ...",
+    // same prefix in 0.147.0 and 0.165.0); the second press quits (#15267). An
+    // idle press quits outright and prints neither gate. "again to quit" is the
+    // double-press footer, compiled out of every release from 0.100.0 through
+    // 0.165.0 and kept only for a CLI that still draws it. The notice comes back
+    // from Codex's core rather than being drawn with the key press, so the
+    // per-press window allows for a loaded machine on app quit.
     //
-    // TWO presses, not three. Two sufficed in every measured state and three
-    // produced nothing at all after 12s, so a third can only ever lose. The cap
-    // has to carry that on its own because the gate cannot: Ratatui repaints
-    // the whole frame, so a repaint emitted while press two is already tearing
-    // the TUI down looks identical to a genuine re-arm, and the substring can
-    // in principle be satisfied by conversation text too. Raise this only with
-    // a measured state where two presses demonstrably fail.
+    // TWO presses, not three. Three ungated presses produced nothing at all
+    // after 12s, and the cap has to carry that on its own because the gate
+    // cannot: a gate string can in principle be satisfied by conversation text
+    // too. A press that only clears a draft prints nothing safe to gate on, so
+    // a draft in the composer, or a queued follow-up the interrupt restores
+    // into it (measured on `codex-cli 0.165.0`), still ends the escalation
+    // early.
     shutdownSignal: {
       kind: "gated-key-escalation",
       keySequence: "\x03",
-      gateText: "again to quit",
+      gateTexts: ["■ Conversation interrupted", "again to quit"],
       maxPresses: 2,
-      perPressTimeoutMs: 750,
+      perPressTimeoutMs: 1500,
     },
   },
   help: {

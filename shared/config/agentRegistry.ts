@@ -281,10 +281,11 @@ export type AgentInterruptStrategy = "double-escape" | "ctrl-c";
  * at all. The press count needed varies with state (leftover composer text
  * costs one, being mid-turn costs another), so no constant is correct.
  *
- * `gateText` is the escape hatch: the TUI prints a confirm-to-quit footer after
- * an absorbed press, so a fresh match is positive proof the TUI is still alive
- * and in raw mode — i.e. that the next press is still a keystroke. Send one,
- * wait for a fresh match, and only then send the next.
+ * `gateTexts` is the escape hatch: the TUI prints something of its own when it
+ * absorbs a press without quitting (a confirm-to-quit footer, or the notice for
+ * a turn it just interrupted), so a fresh match is positive proof the TUI is
+ * still alive and in raw mode — i.e. that the next press is still a keystroke.
+ * Send one, wait for a fresh match, and only then send the next.
  *
  * Declaring this REPLACES the `quitCommand` path entirely: no input-clear
  * prelude, no slash command, no fallback. Writing `quitCommand` after a stalled
@@ -300,11 +301,13 @@ export interface AgentGatedKeyEscalation {
   /** Raw bytes written per press (e.g. Ctrl-C). */
   keySequence: string;
   /**
-   * Literal substring (NOT a regex) matched against ANSI-stripped output
-   * produced since the last press. A literal keeps an unescapable TUI glyph
-   * from silently compiling into a pattern that never matches.
+   * Literal substrings (NOT regexes) matched against ANSI-stripped output
+   * produced since the last press; any one of them opens the gate. A literal
+   * keeps an unescapable TUI glyph from silently compiling into a pattern that
+   * never matches. Each must be something the TUI prints only for a press it
+   * absorbed, never for one that is quitting it.
    */
-  gateText: string;
+  gateTexts: readonly [string, ...string[]];
   /**
    * Hard cap on presses. A safety net, not the mechanism — the gate is what
    * actually decides whether another press is safe. Reaching the cap stops the
@@ -312,7 +315,7 @@ export interface AgentGatedKeyEscalation {
    */
   maxPresses: number;
   /**
-   * How long to wait for a fresh `gateText` match after a press. On expiry the
+   * How long to wait for a fresh `gateTexts` match after a press. On expiry the
    * escalation stops and the teardown keeps listening for the session pattern
    * on its remaining budget — a press that quit the agent outright, or one that
    * dismissed a modal without redrawing the footer, still gets its hint read.
