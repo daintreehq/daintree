@@ -539,6 +539,74 @@ describe("readCodexQuotaProfiles (#13686)", () => {
       respondPerHome((home) => (home === second ? 80 : 10));
       expect(used(await readCodexQuota())).toBe(80);
     });
+
+    it("gives a preset on main's home its own row once the default has moved", async () => {
+      codexEntry({
+        globalEnv: { CODEX_HOME: second },
+        customPresets: [{ id: "p", name: "Personal", env: { CODEX_HOME: defaultHome } }],
+      });
+      respondPerHome((home) => (home === second ? 80 : 10));
+      const profiles = await readCodexQuotaProfiles();
+      expect(profiles.map((p) => [p.isDefault, p.presetNames, used(p.result)])).toEqual([
+        [true, [], 80],
+        [false, ["Personal"], 10],
+      ]);
+      // Named outright: the preset's home must not depend on main's env.
+      expect(runSession.mock.calls.map((call) => call[1])).toEqual([
+        { codexHome: second },
+        { codexHome: defaultHome },
+      ]);
+    });
+
+    it("folds a preset naming the agent-wide home into the default row", async () => {
+      codexEntry({
+        globalEnv: { CODEX_HOME: second },
+        customPresets: [{ id: "w", name: "Work", env: { CODEX_HOME: `${second}/` } }],
+      });
+      respondPerHome(() => 5);
+      const profiles = await readCodexQuotaProfiles();
+      expect(profiles.map((p) => [p.isDefault, p.presetNames])).toEqual([[true, ["Work"]]]);
+      expect(runSession).toHaveBeenCalledTimes(1);
+    });
+
+    it("never falls back to main's account for a missing or relative agent-wide home", async () => {
+      const missing = path.join(root, "nope");
+      for (const home of [missing, "~/.codex-2"]) {
+        codexEntry({ globalEnv: { CODEX_HOME: home } });
+        respondPerHome(() => 10);
+        const profiles = await readCodexQuotaProfiles();
+        expect(profiles.map((p) => [p.isDefault, p.result])).toEqual([
+          [
+            true,
+            {
+              status: "unavailable",
+              reason: home === missing ? "home-missing" : "home-not-absolute",
+              fetchedAt: expect.any(Number),
+            },
+          ],
+        ]);
+        // The MCP schema has no home reasons; it still never reads main's home.
+        await expect(refreshCodexQuota()).resolves.toMatchObject({ reason: "read-failed" });
+      }
+      expect(runSession).not.toHaveBeenCalled();
+      expect(existsSync(missing)).toBe(false);
+    });
+
+    it("falls through to main's home when the launch would drop the value", async () => {
+      codexEntry({ globalEnv: { CODEX_HOME: `${second};x` } });
+      respondPerHome((home) => (home === undefined ? 10 : 80));
+      const profiles = await readCodexQuotaProfiles();
+      expect(profiles.map((p) => used(p.result))).toEqual([10]);
+      expect(runSession.mock.calls.map((call) => call[1])).toEqual([{}]);
+    });
+
+    it("shares the agent-wide home's reading between Settings and MCP", async () => {
+      codexEntry({ globalEnv: { CODEX_HOME: second } });
+      respondPerHome(() => 10);
+      await readCodexQuotaProfiles();
+      await readCodexQuota();
+      expect(runSession).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("keeps going after one home's read fails", async () => {
