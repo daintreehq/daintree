@@ -259,7 +259,7 @@ Numbers, ages and paths go through one formatter each, so the same value never r
 | Time remaining | `formatCountdown` + " left" | "4m 59s left" — not a clock face |
 | Size | `formatBytes` (`src/lib/formatBytes.ts`) | "512 B", "1.5 KB", "3 MB" |
 | Tokens | `formatTokenCount` | "842", "4.2k", "45k", "1.2M" — never "1000k", never a lower-case m |
-| Line churn | `DiffStat` | "+12 -3": success and error inks, space-separated, ASCII minus, nothing when both are zero |
+| Line churn | `DiffStat` | "+12 -3": the `diff-text-insert` and `diff-text-delete` inks (the success and error inks lifted to 4.5:1), space-separated, ASCII minus, nothing when both are zero |
 | Task progress | `ProgressBar` | One track, one fill, `size="thin"` under a line of text; indeterminate pulses the empty track |
 | Path | `formatPath` then `middleTruncatePath`, in `font-mono` | "~/Projects/app/…/index.ts" |
 | Branch | `truncateBranchName` when it must be cut, in `font-mono` | "feature/125-…dock-drop" |
