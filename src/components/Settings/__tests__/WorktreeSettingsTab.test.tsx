@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, renderHook, screen } from "@testing-library/react";
 import { useContext } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_WORKTREE_PATH_PATTERN } from "@shared/utils/pathPattern";
@@ -163,27 +163,25 @@ describe("WorktreeSettingsTab save in flight", () => {
   });
 });
 
-// The dialog's close-time flush, without the dialog.
+// The tab under the dialog's flush registry; `flushAll` is the close-time flush.
 let flushAll: () => Promise<FailedSettingsFlush[]> = async () => [];
-function FlushProbe() {
-  flushAll = useContext(SettingsFlushContext)!.flushAll;
-  return null;
-}
-
 async function renderInDialog(setPattern: () => Promise<unknown>) {
   dispatch.mockImplementation((id: string) =>
     id === "worktreeConfig.get"
       ? Promise.resolve({ ok: true, result: { pathPattern: CUSTOM_PATTERN } })
       : setPattern()
   );
-  render(
-    <SettingsFlushProvider>
-      <FlushProbe />
-      <TooltipProvider>
-        <WorktreeSettingsTab />
-      </TooltipProvider>
-    </SettingsFlushProvider>
-  );
+  const { result } = renderHook(() => useContext(SettingsFlushContext)!, {
+    wrapper: ({ children }) => (
+      <SettingsFlushProvider>
+        <TooltipProvider>
+          <WorktreeSettingsTab />
+        </TooltipProvider>
+        {children}
+      </SettingsFlushProvider>
+    ),
+  });
+  flushAll = () => result.current.flushAll();
   await act(async () => {});
 }
 

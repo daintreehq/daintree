@@ -33,13 +33,17 @@ vi.stubGlobal(
 );
 
 beforeEach(() => {
-  window.electron = {
-    ...window.electron,
-    globalEnv: {
-      get: vi.fn().mockResolvedValue({ GOOD: "1" }),
-      set: vi.fn().mockResolvedValue(undefined),
+  Object.defineProperty(window, "electron", {
+    configurable: true,
+    writable: true,
+    value: {
+      ...window.electron,
+      globalEnv: {
+        get: vi.fn().mockResolvedValue({ GOOD: "1" }),
+        set: vi.fn().mockResolvedValue(undefined),
+      },
     },
-  } as unknown as typeof window.electron;
+  });
 });
 
 async function openOnEnvironment() {
@@ -65,7 +69,7 @@ describe("SettingsDialog close with a draft that didn't save", () => {
   it("stays open on the page that failed, with focus on the field in error", async () => {
     const onClose = await openOnEnvironment();
     fireEvent.click(screen.getByRole("button", { name: /add variable/i }));
-    const badName = screen.getAllByLabelText("Environment variable name")[1]!;
+    const badName = screen.getAllByLabelText<HTMLInputElement>("Environment variable name")[1]!;
     fireEvent.change(badName, { target: { value: "1BAD" } });
 
     // Leave the page, so the close has to bring it back.
@@ -80,7 +84,7 @@ describe("SettingsDialog close with a draft that didn't save", () => {
     expect(panel("environment").classList.contains("hidden")).toBe(false);
     expect(document.activeElement).toBe(badName);
     expect(badName.getAttribute("aria-invalid")).toBe("true");
-    expect((badName as HTMLInputElement).value).toBe("1BAD");
+    expect(badName.value).toBe("1BAD");
     expect(window.electron.globalEnv.set).not.toHaveBeenCalled();
   });
 
@@ -116,12 +120,13 @@ describe("SettingsDialog close with a draft that didn't save", () => {
   it("lets a hide flush through without holding anything open", async () => {
     const onClose = await openOnEnvironment();
     fireEvent.click(screen.getByRole("button", { name: /add variable/i }));
-    fireEvent.change(screen.getAllByLabelText("Environment variable name")[1]!, {
-      target: { value: "1BAD" },
-    });
+    const badName = screen.getAllByLabelText("Environment variable name")[1]!;
+    fireEvent.change(badName, { target: { value: "1BAD" } });
     await act(async () => {
       fireEvent.click(document.getElementById("settings-tab-general")!);
     });
+    // Unflagged until something tries to save it.
+    expect(badName.getAttribute("aria-invalid")).not.toBe("true");
 
     const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(true);
     try {
@@ -132,7 +137,8 @@ describe("SettingsDialog close with a draft that didn't save", () => {
       hidden.mockRestore();
     }
 
-    // Nothing to close, and nothing navigates: the page it was on stays shown.
+    // The hide flushed the page, and that is all: nothing closes or navigates.
+    expect(badName.getAttribute("aria-invalid")).toBe("true");
     expect(onClose).not.toHaveBeenCalled();
     expect(panel("environment").classList.contains("hidden")).toBe(true);
     expect(window.electron.globalEnv.set).not.toHaveBeenCalled();

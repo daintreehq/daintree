@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import { useContext } from "react";
 import { EnvironmentSettingsTab } from "../EnvironmentSettingsTab";
 import { SettingsValidationProvider } from "../SettingsValidationRegistry";
@@ -43,22 +43,20 @@ function renderTab() {
   );
 }
 
-// The dialog's close-time flush, without the dialog.
+// The tab under the dialog's flush registry; `flushAll` is the close-time flush.
 let flushAll: () => Promise<FailedSettingsFlush[]> = async () => [];
-function FlushProbe() {
-  flushAll = useContext(SettingsFlushContext)!.flushAll;
-  return null;
-}
-
 function renderTabInDialog() {
-  return render(
-    <SettingsValidationProvider>
-      <SettingsFlushProvider>
-        <FlushProbe />
-        <EnvironmentSettingsTab />
-      </SettingsFlushProvider>
-    </SettingsValidationProvider>
-  );
+  const { result } = renderHook(() => useContext(SettingsFlushContext)!, {
+    wrapper: ({ children }) => (
+      <SettingsValidationProvider>
+        <SettingsFlushProvider>
+          <EnvironmentSettingsTab />
+          {children}
+        </SettingsFlushProvider>
+      </SettingsValidationProvider>
+    ),
+  });
+  flushAll = () => result.current.flushAll();
 }
 
 async function closeFlush() {
@@ -227,7 +225,7 @@ describe("EnvironmentSettingsTab close-time save", () => {
     });
 
     fireEvent.click(screen.getByRole("button", { name: /add variable/i }));
-    const badName = screen.getAllByLabelText("Environment variable name")[1]!;
+    const badName = screen.getAllByLabelText<HTMLInputElement>("Environment variable name")[1]!;
     fireEvent.change(badName, { target: { value: "1BAD" } });
 
     const failed = await closeFlush();
@@ -241,7 +239,7 @@ describe("EnvironmentSettingsTab close-time save", () => {
     );
     // The reason is on screen once the close has tried to save.
     expect(badName.getAttribute("aria-invalid")).toBe("true");
-    expect((badName as HTMLInputElement).value).toBe("1BAD");
+    expect(badName.value).toBe("1BAD");
     expect(window.electron.globalEnv.set).not.toHaveBeenCalled();
   });
 

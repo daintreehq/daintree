@@ -395,15 +395,22 @@ describe("EnvironmentVariablesEditor close-time flush", () => {
     const onChange = vi.fn<(value: EnvVar[]) => void>();
     const onFlush = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
     renderEditor(onChange, onFlush);
-    const name = screen.getByLabelText("Environment variable name");
-    fireEvent.change(name, { target: { value: "1BAD" } });
-    const failed = await flushAll!();
+    fireEvent.click(screen.getAllByRole("button", { name: /add variable/i })[0]!);
+    const [healthy, name] = screen.getAllByLabelText("Environment variable name");
+    fireEvent.change(name!, { target: { value: "1BAD" } });
+    let failed: FailedSettingsFlush[] = [];
+    await act(async () => {
+      failed = await flushAll!();
+    });
     expect(onChange).not.toHaveBeenCalled();
     expect(onFlush).not.toHaveBeenCalled();
-    // The close stays open on the row instead of dropping it.
+    // The close stays open on the row in error, not the healthy one above it.
     expect(failed).toHaveLength(1);
     expect(failed[0]!.tab).toBe("project:variables");
-    expect(document.getElementById(failed[0]!.landOn)?.contains(name)).toBe(true);
+    const landing = document.getElementById(failed[0]!.landOn);
+    expect(landing?.contains(name!)).toBe(true);
+    expect(landing?.contains(healthy!)).toBe(false);
+    expect(name!.getAttribute("aria-invalid")).toBe("true");
   });
 
   it("keeps a draft whose save failed when the dialog flushes", async () => {

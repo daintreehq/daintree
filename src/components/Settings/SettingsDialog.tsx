@@ -604,6 +604,10 @@ function SettingsDialogInner({
   // draft and error, rather than closing as if it had saved: the user fixes it
   // or uses that page's Discard. The page shown wins over others that failed.
   const flushBeforeClose = async () => {
+    // A hide flush still running took its list of drafts when it started, so one
+    // made since isn't in it: let it finish, then flush again for the close.
+    const lifecycleFlush = flushInFlightRef.current;
+    if (lifecycleFlush) await lifecycleFlush;
     const failed = await flushDialog();
     const shown = failed.find((f) => f.tab === activeTabRef.current) ?? failed[0];
     if (!shown) return true;
@@ -615,14 +619,17 @@ function SettingsDialogInner({
   // the hidden-setting note. Its tab is already mounted, since only a mounted
   // tab registers a flush, so the switch can't suspend and needs no transition.
   const revealFailedFlush = ({ tab, landOn }: FailedSettingsFlush) => {
-    if (editingOther) {
+    const scope = scopeForTab(tab);
+    // Judged by the scope the page is in, not the one shown: a close from project
+    // scope still lands behind the other machine's page once global comes back.
+    if (target !== null && scope === "global") {
       if (ownerForTab(tab) === "device") setShowingDevicePage(true);
       else setTargetHostId(null);
     }
     setSearchQuery("");
     setHiddenSettingBanner(null);
     pendingRequirementRef.current = null;
-    setActiveScope(scopeForTab(tab));
+    setActiveScope(scope);
     setActiveTab(tab);
     setScrollToSection(landOn);
   };
