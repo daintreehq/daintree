@@ -133,9 +133,7 @@ export function findUnloadedLaunchPreset(
   // preset of the same id that hasn't arrived.
   const settled = (id: string) =>
     resolves(id)
-      ? presetInventory.project ||
-        holds(entry.customPresets, id) ||
-        holds(input.projectPresets, id)
+      ? presetInventory.project || holds(entry.customPresets, id) || holds(input.projectPresets, id)
       : isPresetAbsenceSettled(id, presetInventory);
 
   const requestedId = options?.presetId ?? resolveEffectivePresetId(entry, worktreeId);
