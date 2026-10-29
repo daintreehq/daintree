@@ -2128,8 +2128,7 @@ function buildElectronApi(): ElectronAPI {
           canGoBack: boolean;
           canGoForward: boolean;
         }) => void
-      ) =>
-        _typedOn(CHANNELS.PORTAL_NAV_EVENT, callback),
+      ) => _typedOn(CHANNELS.PORTAL_NAV_EVENT, callback),
 
       onFocus: (callback: () => void) => _typedOn(CHANNELS.PORTAL_FOCUS, callback),
 
