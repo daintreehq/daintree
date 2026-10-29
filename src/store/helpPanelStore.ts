@@ -391,6 +391,14 @@ type HelpPanelPersistedState = Pick<
   "width" | "autoLaunchEnabled" | "introDismissed" | "hibernateSessions"
 >;
 
+const HELP_PANEL_STORAGE_KEY = "help-panel-storage";
+
+// Before v8 any Start click wrote `autoLaunchEnabled: true`, so a stored `true`
+// from an older blob was never a choice to auto-start and reads as false
+// wherever it turns up: hydration, a write merge, a sibling's storage event
+// (#14976).
+const AUTO_LAUNCH_CONSENT_SINCE_VERSION = 8;
+
 const HELP_PANEL_PERSISTED_DEFAULTS: HelpPanelPersistedState = {
   width: HELP_PANEL_DEFAULT_WIDTH,
   autoLaunchEnabled: false,
@@ -406,7 +414,10 @@ const HELP_PANEL_PERSISTED_DEFAULTS: HelpPanelPersistedState = {
  * untouched fields compare equal to `incoming` and thus defer to a sibling's
  * on-disk value instead of clobbering it (issue #11351).
  */
-function toHelpPanelPersisted(state: Partial<HelpPanelState> | undefined): HelpPanelPersistedState {
+function toHelpPanelPersisted(
+  state: Partial<HelpPanelState> | undefined,
+  version: number | undefined
+): HelpPanelPersistedState {
   if (!state) return HELP_PANEL_PERSISTED_DEFAULTS;
   return {
     // Clamp width exactly as the v5 hydration `merge` does, so a raw baseline
@@ -417,10 +428,33 @@ function toHelpPanelPersisted(state: Partial<HelpPanelState> | undefined): HelpP
       typeof state.width === "number"
         ? Math.min(Math.max(state.width, HELP_PANEL_MIN_WIDTH), HELP_PANEL_MAX_WIDTH)
         : HELP_PANEL_PERSISTED_DEFAULTS.width,
-    autoLaunchEnabled: state.autoLaunchEnabled === true,
+    autoLaunchEnabled:
+      (version ?? 0) >= AUTO_LAUNCH_CONSENT_SINCE_VERSION && state.autoLaunchEnabled === true,
     introDismissed: state.introDismissed === true,
     hibernateSessions: sanitizeHibernateSessions(state.hibernateSessions),
   };
+}
+
+/**
+ * The auto-launch choice in a raw stored blob, as a sibling view left it.
+ * Undefined when the blob says nothing usable about it.
+ */
+function storedAutoLaunchEnabled(raw: string | null): boolean | undefined {
+  if (raw === null) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+  if (typeof parsed !== "object" || parsed === null || !("state" in parsed)) return undefined;
+  const { state } = parsed;
+  if (typeof state !== "object" || state === null || !("autoLaunchEnabled" in state)) {
+    return undefined;
+  }
+  const version = "version" in parsed && typeof parsed.version === "number" ? parsed.version : 0;
+  if (version < AUTO_LAUNCH_CONSENT_SINCE_VERSION) return false;
+  return typeof state.autoLaunchEnabled === "boolean" ? state.autoLaunchEnabled : undefined;
 }
 
 /**
@@ -442,9 +476,11 @@ function mergeHelpPanelPersistedWrite({
 }: PersistWriteMergeContext<HelpPanelPersistedState>): StorageValue<HelpPanelPersistedState> {
   // No shared value on disk yet → nothing to reconcile against.
   if (!onDisk) return incoming;
-  const base = baseline ? toHelpPanelPersisted(baseline.state) : HELP_PANEL_PERSISTED_DEFAULTS;
-  const disk = toHelpPanelPersisted(onDisk.state);
-  const inc = toHelpPanelPersisted(incoming.state);
+  const base = baseline
+    ? toHelpPanelPersisted(baseline.state, baseline.version)
+    : HELP_PANEL_PERSISTED_DEFAULTS;
+  const disk = toHelpPanelPersisted(onDisk.state, onDisk.version);
+  const inc = toHelpPanelPersisted(incoming.state, incoming.version);
   const merged: HelpPanelPersistedState = {
     width: pickFieldByWriterDelta(base.width, inc.width, disk.width),
     autoLaunchEnabled: pickFieldByWriterDelta(
@@ -740,7 +776,7 @@ export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
         ),
     }),
     {
-      name: "help-panel-storage",
+      name: HELP_PANEL_STORAGE_KEY,
       storage: createDebouncedSafeJSONStorage<HelpPanelPersistedState>(300, {
         mergeOnWrite: mergeHelpPanelPersistedWrite,
       }),
@@ -750,16 +786,17 @@ export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
       // through, so no separate migration step can be skipped.
       // v7: `preferredAgentId` is the host's and no longer persisted here
       // (#13345). A v6 value stays on disk only until a local window moves it.
-      // v8: `autoLaunchEnabled` before v8 was set by any Start click, never by
-      // a choice to auto-start, so it is dropped rather than kept as consent
-      // (#14976).
-      version: 8,
+      // v8: a stored `autoLaunchEnabled` is dropped rather than kept as
+      // consent (`AUTO_LAUNCH_CONSENT_SINCE_VERSION`, #14976).
+      version: AUTO_LAUNCH_CONSENT_SINCE_VERSION,
       migrate: (persistedState, version) => {
-        if (version < 8 && persistedState && typeof persistedState === "object") {
-          return { ...persistedState, autoLaunchEnabled: false } as HelpPanelState &
-            HelpPanelActions;
-        }
-        return persistedState as HelpPanelState & HelpPanelActions;
+        const migrated =
+          version < AUTO_LAUNCH_CONSENT_SINCE_VERSION &&
+          typeof persistedState === "object" &&
+          persistedState !== null
+            ? { ...persistedState, autoLaunchEnabled: false }
+            : persistedState;
+        return migrated as HelpPanelState & HelpPanelActions;
       },
       partialize: (state): HelpPanelPersistedState => ({
         width: state.width,
@@ -809,22 +846,22 @@ registerPersistedStore({
 // open. Each view otherwise keeps the value it loaded until it reloads.
 if (typeof window !== "undefined") {
   window.addEventListener("storage", (event) => {
-    if (event.key !== "help-panel-storage") return;
+    if (event.key !== HELP_PANEL_STORAGE_KEY) return;
+    // A sibling writing something else still carries the flag as disk had it,
+    // and taking that would undo a change here that's still in its write
+    // debounce. Only a write that moved the flag counts.
+    if (storedAutoLaunchEnabled(event.oldValue) === storedAutoLaunchEnabled(event.newValue)) {
+      return;
+    }
     // What the store holds now, not what the event carried: events queue, and
     // an older one must not undo a newer change.
-    let enabled: unknown;
+    let enabled: boolean | undefined;
     try {
-      const latest = window.localStorage.getItem("help-panel-storage");
-      if (latest === null) return;
-      enabled = (JSON.parse(latest) as { state?: { autoLaunchEnabled?: unknown } }).state
-        ?.autoLaunchEnabled;
+      enabled = storedAutoLaunchEnabled(window.localStorage.getItem(HELP_PANEL_STORAGE_KEY));
     } catch {
       return;
     }
-    if (
-      typeof enabled === "boolean" &&
-      enabled !== useHelpPanelStore.getState().autoLaunchEnabled
-    ) {
+    if (enabled !== undefined && enabled !== useHelpPanelStore.getState().autoLaunchEnabled) {
       useHelpPanelStore.setState({ autoLaunchEnabled: enabled });
     }
   });

@@ -148,6 +148,8 @@ describe("HelpPanelHeader", () => {
         onEndSession={vi.fn()}
         onResumePastSession={vi.fn()}
         onOpenDocs={vi.fn()}
+        autoLaunchEnabled={false}
+        onAutoLaunchEnabledChange={vi.fn()}
         onClose={vi.fn()}
       />
     );

@@ -731,6 +731,29 @@ describe("HelpPanel — empty state hero (Daintree-relevant entry points)", () =
     expect(helpPanelState.setAutoLaunchEnabled).toHaveBeenLastCalledWith(false);
   });
 
+  it("the strip's New session starts the default agent itself, with auto-start off (#14976)", async () => {
+    helpPanelState.autoLaunchEnabled = false;
+    helpPanelState.preferredAgentId = "claude";
+    helpPanelState.openSlot = vi.fn(() => 0);
+    cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
+    mockGetFolderPath.mockResolvedValue("/help");
+    mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "new-term" } });
+
+    render(<HelpPanel width={380} />);
+    expect(mockProvisionSession).not.toHaveBeenCalled();
+
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText("New session"));
+    });
+
+    expect(helpPanelState.openSlot).toHaveBeenCalled();
+    expect(helpPanelState.setAutoLaunchEnabled).not.toHaveBeenCalled();
+    expect(mockProvisionSession).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "claude" })
+    );
+  });
+
   it("first-run starter-prompt chip launches without turning on auto-start (#10699, #14976)", async () => {
     helpPanelState.autoLaunchEnabled = false;
     helpPanelState.preferredAgentId = "claude";

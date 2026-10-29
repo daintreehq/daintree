@@ -649,6 +649,26 @@ describe("HelpSessionController — launch phase FSM", () => {
     ctrl.stop();
   });
 
+  it("consent turned on while closed applies to the open it arrives with (#14976)", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    helpPanelState.preferredAgentId = "claude";
+    const inputs = {
+      isOpen: false,
+      isReadyToLaunch: true,
+      currentProject: { id: "proj", path: "/repo" },
+      terminalId: null,
+      preferredAgentId: "claude",
+      supportedInstalledAgentIds: ["claude"],
+      autoLaunchEnabled: false,
+      visibilityEpoch: 0,
+    };
+    ctrl.syncInputs(inputs);
+    ctrl.syncInputs({ ...inputs, isOpen: true, autoLaunchEnabled: true });
+    expect(ctrl.getSnapshot().phase).toBe("version-checking");
+    ctrl.stop();
+  });
+
   it("an explicit start still launches after consent was turned on in the same open (#14976)", () => {
     const ctrl = new HelpSessionController();
     ctrl.start();

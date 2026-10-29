@@ -191,11 +191,12 @@ export function useHelpSessionLanes({
     };
   }, [activeWorkspaceId, openSlots.length, terminalId]);
 
-  const handleOpenParallelSession = useCallback(() => {
+  const handleOpenParallelSession = useCallback((): number | null => {
     const slot = useHelpPanelStore.getState().openSlot();
-    if (slot === null) return;
+    if (slot === null) return null;
     useHelpPanelStore.getState().setOpen(true);
     useHelpPanelStore.getState().requestFocus();
+    return slot;
   }, []);
 
   // One session on a named agent (#13442); the default stays where it is.

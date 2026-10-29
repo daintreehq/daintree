@@ -37,7 +37,10 @@ import {
   markHelpPanelRuntimeMounted,
   markHelpPanelRuntimeUnmounted,
 } from "@/lib/helpPanelRuntimeGate";
-import { useHelpSessionController } from "@/controllers/helpSessionControllerRegistry";
+import {
+  acquireHelpSessionController,
+  useHelpSessionController,
+} from "@/controllers/helpSessionControllerRegistry";
 import { HelpPanelBanners } from "./HelpPanelBanners";
 import { usePastSessionsNote } from "./pastSessionsNote";
 import { HelpPanelVersionGate } from "./HelpPanelVersionGate";
@@ -978,6 +981,19 @@ export function HelpPanel({
     [controller, launchableAgentId]
   );
 
+  // The strip's "New session" is an explicit start too, so it launches into the
+  // new tab itself rather than leaving that to the tab's auto-launch, which only
+  // runs with "Start when the panel opens" on (#14976). Queued before the tab's
+  // first input sync; with several agents and no default, the tab asks instead.
+  const handleNewSession = useCallback(() => {
+    const slot = handleOpenParallelSession();
+    if (slot === null || !launchableAgentId) return;
+    acquireHelpSessionController(slot).launchWhenReady({
+      agentId: launchableAgentId,
+      replaceExisting: true,
+    });
+  }, [handleOpenParallelSession, launchableAgentId]);
+
   // A starter never submits into a live session: if one has appeared since the
   // card rendered, the prompt lands in its input as a draft for the user to send.
   const handleStarterPrompt = useCallback(
@@ -1163,7 +1179,7 @@ export function HelpPanel({
           // header's overflow menu as well, which put the one findable route to a
           // second session two clicks behind an ellipsis.
           canOpenSession={canOpenParallelSession}
-          onOpenSession={handleOpenParallelSession}
+          onOpenSession={handleNewSession}
           newSessionAgentIds={supportedInstalledAgentIds}
           canOpenSessionWithAgent={canStartSessionWithAgent}
           onOpenSessionWithAgent={handleOpenSessionWithAgent}
