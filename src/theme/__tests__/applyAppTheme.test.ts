@@ -357,13 +357,22 @@ describe("applyColorVisionMode status text inks", () => {
   // against the theme's own backdrops, so a mode that swaps the hue has to lift
   // it again or the letter keeps the very red or green the mode replaces.
 
-  /** Perceptual hue difference, which scales with chroma so a grey's angle can't trip it. */
-  function hueDifference(a: string, b: string): number {
-    const x = hexToOklch(a)!;
-    const y = hexToOklch(b)!;
-    const angle = Math.abs(x.h - y.h) % 360;
-    const d = angle > 180 ? 360 - angle : angle;
-    return 2 * Math.sqrt(x.c * y.c) * Math.sin((d * Math.PI) / 360);
+  /**
+   * The lifted ink is still the mode's colour: a chromatic override keeps at least
+   * half its chroma (lifting toward white or black sheds some to stay in sRGB) at
+   * the same hue angle, and a grey override stays grey. Lifting all the way to a
+   * neutral would pass every contrast check while throwing the mode's hue away.
+   */
+  function expectOnHue(ink: string, hue: string, label: string): void {
+    const lifted = hexToOklch(ink)!;
+    const source = hexToOklch(hue)!;
+    if (source.c < 0.005) {
+      expect(lifted.c, `${label} stays neutral`).toBeLessThan(0.005);
+      return;
+    }
+    const angle = Math.abs(lifted.h - source.h) % 360;
+    expect(Math.min(angle, 360 - angle), `${label} hue`).toBeLessThan(2.5);
+    expect(lifted.c, `${label} chroma`).toBeGreaterThan(source.c * 0.5);
   }
 
   it.each([
@@ -385,8 +394,7 @@ describe("applyColorVisionMode status text inks", () => {
         return false;
       }
       expect(ink, text).not.toBe(scheme.tokens[text]);
-      // On the mode's hue, not lifted all the way to a neutral.
-      expect(hueDifference(ink, hue), `${text} hue`).toBeLessThan(0.003);
+      expectOnHue(ink, hue, text);
       for (const backdrop of resolveStatusTextBackdrops(hue, scheme.tokens)) {
         expect(
           contrastRatio(ink, backdrop.hex),
