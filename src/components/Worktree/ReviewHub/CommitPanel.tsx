@@ -413,7 +413,7 @@ export function CommitPanel({
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
       const isHistoryKey = e.key === "ArrowUp" || e.key === "ArrowDown";
-      const hasModifier = e.altKey || e.metaKey || e.ctrlKey;
+      const hasModifier = e.altKey || e.metaKey || e.ctrlKey || e.shiftKey;
       const isCaretAtStart =
         e.currentTarget.selectionStart === 0 && e.currentTarget.selectionEnd === 0;
       const visibleMessage = e.currentTarget.value;
@@ -421,7 +421,16 @@ export function CommitPanel({
       const isCyclingHistory =
         pendingFirstApplyRef.current || historyIndexRef.current >= 0 || isAppliedHistoryVisible;
 
-      if (isHistoryKey && !hasModifier && (isCaretAtStart || isCyclingHistory)) {
+      // Down only means "newer message" while a recall is in flight; otherwise it is plain caret movement.
+      const isDownWithoutRecall =
+        e.key === "ArrowDown" && historyIndexRef.current < 0 && !pendingFirstApplyRef.current;
+
+      if (
+        isHistoryKey &&
+        !hasModifier &&
+        !isDownWithoutRecall &&
+        (isCaretAtStart || isCyclingHistory)
+      ) {
         e.preventDefault();
 
         if (e.key === "ArrowUp") {
@@ -440,7 +449,10 @@ export function CommitPanel({
 
           const messages = historyMessagesRef.current;
           if (messages !== null) {
-            if (messages.length === 0) return;
+            if (messages.length === 0) {
+              pendingFirstApplyRef.current = false;
+              return;
+            }
 
             if (pendingFirstApplyRef.current) {
               pendingFirstApplyRef.current = false;
@@ -456,7 +468,10 @@ export function CommitPanel({
             });
           } else {
             void fetchHistoryMessages().then((msgs) => {
-              if (msgs.length === 0) return;
+              if (msgs.length === 0) {
+                pendingFirstApplyRef.current = false;
+                return;
+              }
 
               if (pendingFirstApplyRef.current) {
                 const visibleIndex = msgs.indexOf(visibleMessage);
