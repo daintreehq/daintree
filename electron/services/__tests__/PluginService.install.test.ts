@@ -829,6 +829,33 @@ describe("installPlugin — load + provenance edge cases", () => {
     service.dispose();
   });
 
+  it("lists the version a disabled install wrote, not the one it replaced (#15053)", async () => {
+    storeState.set("plugins", { disabled: ["acme.disabled-list"] });
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    const row = () => service.listPlugins().filter((p) => p.instanceId === "acme.disabled-list");
+
+    try {
+      const v1 = await makeArchive({ name: "acme.disabled-list", version: "1.0.0" });
+      expect((await service.installPlugin(v1)).status).toBe("installed");
+      // A fresh disabled install is listed straight away, as the next launch would.
+      expect(row()).toMatchObject([{ manifest: { version: "1.0.0" }, disabled: true }]);
+
+      const v3 = await makeArchive({ name: "acme.disabled-list", version: "3.0.0" });
+      expect((await service.installPlugin(v3)).status).toBe("installed");
+      expect(row()).toMatchObject([{ manifest: { version: "3.0.0" }, disabled: true }]);
+      expect(service.hasPlugin("acme.disabled-list")).toBe(false);
+
+      // Uninstalling releases what the disabled install recorded, so the id
+      // can be installed again this session.
+      await service.uninstallPlugin("acme.disabled-list");
+      expect(row()).toEqual([]);
+      const again = await makeArchive({ name: "acme.disabled-list", version: "2.0.0" });
+      expect((await service.installPlugin(again)).status).toBe("installed");
+    } finally {
+      service.dispose();
+    }
+  });
+
   it("leaves the OLD installed record intact when an upgrade's load fails post-swap", async () => {
     const service = new PluginService(pluginsRoot, "0.0.0");
 

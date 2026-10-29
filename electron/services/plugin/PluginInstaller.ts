@@ -784,6 +784,12 @@ export class PluginInstaller {
             console.warn(`[PluginService] Failed to remove parked old plugin dir ${parked}:`, err);
           });
         }
+        // What the next launch's scan would record for this folder. Without it
+        // the list keeps the replaced version (or no row at all for a fresh
+        // install) until a restart, and the archive confirm compares against
+        // that, calling a downgrade over a same-session upgrade an update.
+        this.deps.disabledPlugins.set(pluginId, { manifest, dir: finalDir, isBuiltin: false });
+        this.deps.reservedNames.add(pluginId);
         this.deps.broadcastProvenanceChanged();
         this._offerCapabilityGrantsBack(pluginId, manifest, hash, purgedGrants);
         return { status: "installed", pluginId };
