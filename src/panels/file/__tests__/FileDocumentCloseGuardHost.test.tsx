@@ -327,6 +327,35 @@ describe("FileDocumentCloseGuardHost: a Save that doesn't land (#15017)", () => 
     expect(notifyMock).not.toHaveBeenCalled();
   });
 
+  it("a guard a close captured before teardown answers Cancel when it runs after", async () => {
+    const { unmount } = render(
+      <TooltipProvider>
+        <FileDocumentCloseGuardHost />
+      </TooltipProvider>
+    );
+    publish("p1", projection());
+    // The registry runs the guard a microtask later; the host is gone by then.
+    const verdict = consultPanelCloseGuards(["p1"]);
+    unmount();
+    await expect(verdict).resolves.toBe(false);
+  });
+
+  it("teardown answers a prompt whose render never committed", async () => {
+    const { unmount } = render(
+      <TooltipProvider>
+        <FileDocumentCloseGuardHost />
+      </TooltipProvider>
+    );
+    publish("p1", projection());
+    const verdict = consultPanelCloseGuards(["p1"]);
+    // The guard has run and queued its prompt, but React hasn't rendered it.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(screen.queryByTestId("file-pane-close-prompt")).toBeNull();
+    unmount();
+    await expect(verdict).resolves.toBe(false);
+  });
+
   it("stays quiet when the panel was removed while the save ran", async () => {
     render(
       <TooltipProvider>

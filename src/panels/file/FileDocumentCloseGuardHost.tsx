@@ -85,16 +85,21 @@ export function FileDocumentCloseGuardHost() {
   useLayoutEffect(() => {
     queueRef.current = queue;
   }, [queue]);
-  // Unmounting answers what is still asked, and a save that resolves after
-  // has no prompt left to settle or report on.
-  useEffect(
-    () => () => {
-      const pending = queueRef.current;
+  // Every prompt asked and not yet answered, kept apart from rendered state so
+  // teardown can answer one whose render never committed. After teardown a
+  // guard a close already captured answers Cancel at once, and a save that
+  // resolves late has no prompt left to settle or report on.
+  const outstandingRef = useRef(new Set<Prompt>());
+  const aliveRef = useRef(false);
+  useEffect(() => {
+    aliveRef.current = true;
+    const outstanding = outstandingRef.current;
+    return () => {
+      aliveRef.current = false;
       queueRef.current = [];
-      for (const prompt of pending) prompt.resolve("cancel");
-    },
-    []
-  );
+      for (const prompt of [...outstanding]) prompt.resolve("cancel");
+    };
+  }, []);
   const [busy, setBusy] = useState<"save" | "discard" | null>(null);
   // The prompt whose Save or Discard is in flight. Its document goes clean
   // mid-operation, which must not read as "this prompt is stale".
@@ -107,7 +112,19 @@ export function FileDocumentCloseGuardHost() {
         panelId,
         () =>
           new Promise<PanelCloseVerdict>((resolve) => {
-            setQueue((current) => [...current, { panelId, resolve }]);
+            if (!aliveRef.current) {
+              resolve("cancel");
+              return;
+            }
+            const prompt: Prompt = {
+              panelId,
+              resolve: (verdict) => {
+                outstandingRef.current.delete(prompt);
+                resolve(verdict);
+              },
+            };
+            outstandingRef.current.add(prompt);
+            setQueue((current) => [...current, prompt]);
           })
       )
     );
