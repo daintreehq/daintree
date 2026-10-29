@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useRef } from "react";
+import { Fragment, forwardRef, useEffect, useRef } from "react";
 import { isPointerClaimed } from "@/lib/pointerClaim";
 import type { CompletionKind } from "@shared/types";
 import { cn } from "@/lib/utils";
@@ -67,6 +67,14 @@ export interface AutocompleteItem {
   badge?: string;
   /** Shown but never selected or inserted, like a stale row, without the "Updating" state. */
   disabled?: boolean;
+  /** The band the row is listed under; its label is drawn where the band begins. */
+  group?: string;
+  /**
+   * A plugin's prompt template, by its runtime key. Picking the row by any
+   * means (Enter, Tab, click) opens the template's form, or fills the draft
+   * when it asks for nothing, and never inserts `insertText`.
+   */
+  template?: { key: string; opensForm: boolean };
   /** Enter behavior; defaults to `insert` when absent. */
   enterAction?: AutocompleteEnterAction;
   /** Send-time behavior; defaults to `literal` when absent. */
@@ -130,6 +138,7 @@ const TAB: HintKey = { key: "⇥", keyName: "Tab" };
  */
 function getKeyHints(item: AutocompleteItem | undefined, isStale: boolean): KeyHint[] {
   if (!item || isStale) return [];
+  if (item.template) return [{ keys: [ENTER, TAB], label: pickLabel(item) }];
   if (item.enterAction === "execute") {
     return [
       { keys: [ENTER], label: "run" },
@@ -140,8 +149,37 @@ function getKeyHints(item: AutocompleteItem | undefined, isStale: boolean): KeyH
   return [{ keys: [ENTER, TAB], label: "insert" }];
 }
 
+/** What Tab does to a row: insert it, or for a template, what the template does. */
+function pickLabel(item: AutocompleteItem): string {
+  if (!item.template) return "insert";
+  return item.template.opensForm ? "open form" : "fill draft";
+}
+
 /** With no row selected, Tab still takes the first one; Enter does not. */
-const TAB_FIRST_HINT: KeyHint = { keys: [TAB], label: "insert first" };
+function tabFirstHint(first: AutocompleteItem): KeyHint {
+  return { keys: [TAB], label: `${pickLabel(first)} first` };
+}
+
+/**
+ * A band's label. Listbox children must be options, and `role="group"` loses
+ * its label under Chromium + VoiceOver, so it stands as an inert option, kept
+ * out of `items` so the arrow keys and option ids never count it — the shape
+ * the palettes use.
+ */
+function BandLabel({ label, first }: { label: string; first: boolean }) {
+  return (
+    <div
+      role="option"
+      aria-disabled="true"
+      aria-selected="false"
+      aria-label={label}
+      data-autocomplete-band=""
+      className={cn(PALETTE_SECTION_LABEL_CLASS, "flex h-6 items-center px-2", !first && "mt-1")}
+    >
+      {label}
+    </div>
+  );
+}
 
 function spokenHint(hint: KeyHint): string {
   return `${hint.keys.map((k) => k.keyName).join(" or ")} to ${hint.label}`;
@@ -262,7 +300,10 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
       firstItem !== undefined &&
       !(staleKeys?.has(firstItem.key) ?? false) &&
       firstItem.disabled !== true;
-    const keyHints = tabTakesFirst ? [TAB_FIRST_HINT] : getKeyHints(selectedItem, isSelectedStale);
+    const keyHints =
+      tabTakesFirst && firstItem
+        ? [tabFirstHint(firstItem)]
+        : getKeyHints(selectedItem, isSelectedStale);
     const hasRows = items.length > 0;
     // Spoken for every state, shown only when there are no rows to show instead:
     // with rows on screen the header carries "Updating…" visibly. No row is
@@ -271,7 +312,7 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
       ? isLoading || hasStaleRows
         ? "Updating results…"
         : tabTakesFirst
-          ? "Tab to insert the first match"
+          ? `Tab to ${firstItem?.template ? "pick" : "insert"} the first match`
           : ""
       : isLoading
         ? "Searching…"
@@ -370,59 +411,73 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
                 "min-w-0 text-3xs leading-4",
                 isSelected ? "text-text-primary" : "text-text-secondary"
               );
+              const band =
+                item.group !== undefined && item.group !== items[idx - 1]?.group
+                  ? item.group
+                  : undefined;
 
               return (
-                <button
-                  key={item.key}
-                  id={listboxId ? autocompleteOptionId(listboxId, idx) : undefined}
-                  type="button"
-                  role="option"
-                  // Focus stays in the editor; the rows are reached through
-                  // `aria-activedescendant`, never the Tab sequence.
-                  tabIndex={-1}
-                  aria-selected={isSelected}
-                  aria-disabled={isRowStale || undefined}
-                  className={cn(
-                    PALETTE_ROW_CLASS,
-                    PALETTE_ROW_FOCUS_CLASS,
-                    "flex h-7 w-full items-center gap-2 rounded-sm px-2 text-left",
-                    "text-text-secondary",
-                    isRowStale && "opacity-50"
-                  )}
-                  // An inert row doesn't answer the pointer either.
-                  onPointerMove={
-                    isRowStale || !onHoverIndex || isSelected ? undefined : () => onHoverIndex(idx)
-                  }
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => {
-                    if (isRowStale) return;
-                    onSelect(item);
-                  }}
-                >
-                  {/* The token is what the row is; it gives way last. */}
-                  <span className="max-w-[calc(100%-5rem)] shrink-0 truncate font-mono text-xs leading-4">
-                    {item.label}
-                  </span>
-                  {badge && (
-                    <>
-                      <Badge aria-hidden="true" size="xs" tone="outline" className="leading-3">
-                        {badge}
-                      </Badge>
-                      <span className="sr-only">Category: {badge}</span>
-                    </>
-                  )}
-                  {item.description &&
-                    (isPath ? (
-                      <PathTail className={descriptionClass}>{item.description}</PathTail>
-                    ) : (
-                      <span className={cn(descriptionClass, "truncate")}>{item.description}</span>
-                    ))}
-                  {/* The header's hint band is hidden from assistive tech, so the
+                <Fragment key={item.key}>
+                  {band && <BandLabel label={band} first={idx === 0} />}
+                  <button
+                    id={listboxId ? autocompleteOptionId(listboxId, idx) : undefined}
+                    type="button"
+                    role="option"
+                    // Focus stays in the editor; the rows are reached through
+                    // `aria-activedescendant`, never the Tab sequence.
+                    tabIndex={-1}
+                    aria-selected={isSelected}
+                    aria-disabled={isRowStale || undefined}
+                    className={cn(
+                      PALETTE_ROW_CLASS,
+                      PALETTE_ROW_FOCUS_CLASS,
+                      "flex h-7 w-full items-center gap-2 rounded-sm px-2 text-left",
+                      "text-text-secondary",
+                      isRowStale && "opacity-50"
+                    )}
+                    // An inert row doesn't answer the pointer either.
+                    onPointerMove={
+                      isRowStale || !onHoverIndex || isSelected
+                        ? undefined
+                        : () => onHoverIndex(idx)
+                    }
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => {
+                      if (isRowStale) return;
+                      onSelect(item);
+                    }}
+                  >
+                    {/* The token is what the row is; it gives way last. A
+                      template's title is a name, not something typed. */}
+                    <span
+                      className={cn(
+                        "max-w-[calc(100%-5rem)] shrink-0 truncate text-xs leading-4",
+                        !item.template && "font-mono"
+                      )}
+                    >
+                      {item.label}
+                    </span>
+                    {badge && (
+                      <>
+                        <Badge aria-hidden="true" size="xs" tone="outline" className="leading-3">
+                          {badge}
+                        </Badge>
+                        <span className="sr-only">Category: {badge}</span>
+                      </>
+                    )}
+                    {item.description &&
+                      (isPath ? (
+                        <PathTail className={descriptionClass}>{item.description}</PathTail>
+                      ) : (
+                        <span className={cn(descriptionClass, "truncate")}>{item.description}</span>
+                      ))}
+                    {/* The header's hint band is hidden from assistive tech, so the
                       row Enter acts on carries the same instruction in words. */}
-                  {isSelected && keyHints.length > 0 && (
-                    <span className="sr-only">{`, ${keyHints.map(spokenHint).join(", ")}`}</span>
-                  )}
-                </button>
+                    {isSelected && keyHints.length > 0 && (
+                      <span className="sr-only">{`, ${keyHints.map(spokenHint).join(", ")}`}</span>
+                    )}
+                  </button>
+                </Fragment>
               );
             })}
           </div>

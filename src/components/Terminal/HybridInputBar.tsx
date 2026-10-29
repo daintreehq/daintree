@@ -14,7 +14,6 @@ import { EditorSelection, Transaction } from "@codemirror/state";
 import { isolateHistory } from "@codemirror/commands";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
 import type { AgentState } from "@/types";
-import { logError } from "@/utils/logger";
 import { getAgentConfig } from "@/config/agents";
 import { cn } from "@/lib/utils";
 import { useFileAutocomplete } from "@/hooks/useFileAutocomplete";
@@ -41,11 +40,13 @@ import {
   contextReferenceChipProviders,
   type ContextReferenceChipProvider,
 } from "./inputEditorExtensions/contextReferenceChip";
-import { CommandPickerHost } from "@/components/Commands";
+import { PromptTemplateForm } from "@/components/Commands/PromptTemplateForm";
 import { PromptHistoryPalette } from "./PromptHistoryPalette";
 import { useCanopyStore } from "@/store/canopyStore";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
-import { useCommandStore } from "@/store/commandStore";
+import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
+import { usePluginPromptTemplates } from "@/hooks/usePluginPromptTemplates";
+import { renderPromptTemplate } from "@shared/utils/pluginPromptTemplates";
 import { useProjectStore } from "@/store/projectStore";
 import { usePanelStore, useVoiceRecordingStore } from "@/store";
 import type {
@@ -90,7 +91,11 @@ import {
   selectHomeFocusTarget,
   unregisterInputController,
 } from "@/store/terminalInputStore";
-import type { CommandResult } from "@shared/types/commands";
+import {
+  promptTemplateTokenCut,
+  toPromptTemplateItems,
+  type DraftSpan,
+} from "./promptTemplateCompletion";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { ScrollShadowOverlay } from "@/components/ui/ScrollShadow";
 import {
@@ -341,6 +346,7 @@ type ApplyEditorValue = (
 const EMPTY_STALE_KEYS: ReadonlySet<string> = new Set<string>();
 const NO_CONTEXT_CHIP_PROVIDERS: ReadonlyMap<string, ContextReferenceChipProvider> = new Map();
 const NO_CONTEXT_ITEMS: ContextProviderItem[] = [];
+const NO_TEMPLATE_ITEMS: AutocompleteItem[] = [];
 // As long as a scratch refusal stays, counted from when the border shows it.
 const FILE_REFERENCE_NOTE_MS = 6_000;
 
@@ -509,10 +515,6 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const latestRef = useRef<LatestState | null>(null);
     const applyEditorValueRef = useRef<ApplyEditorValue>(() => {});
 
-    const openPicker = useCommandStore((s) => s.openPicker);
-    // Every agent pane mounts a picker host on the one command store; this
-    // composer's id is what keeps the others' palettes closed when it opens one.
-    const pickerOwnerId = useId();
     const currentProject = useProjectStore((s) => s.currentProject);
     const voiceStatus = useVoiceRecordingStore((s) => s.status);
     // Dictation lands in a draft of this machine's project, by terminal id:
@@ -557,8 +559,6 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       (isVoiceRecording || isVoiceConnecting) && voiceMicSignal === "live";
     const isVoiceHeldChrome =
       isVoicePaused || isVoiceFinishing || isVoiceReconnecting || isVoiceMicStarting;
-
-    const commandContext = { terminalId, cwd, projectId };
 
     const isAgentTerminal = agentId !== undefined;
     const altChords = agentId ? getAgentConfig(agentId)?.capabilities?.altChords : undefined;
@@ -899,6 +899,31 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
     const { commandMap } = useSlashCommandList({ agentId, projectPath: cwd });
 
+    // A plugin's prompt templates (#13799) share the `/` menu, in a band of
+    // their own after the agent's commands.
+    const promptTemplates = usePluginPromptTemplates(currentProjectId);
+    const isSlashMenuOpen = isCompleting && triggerChar === "/";
+    // A plugin attached in dev mode announces itself without a provenance event.
+    useEffect(() => {
+      if (isSlashMenuOpen) usePluginRuntimeStore.getState().refresh();
+    }, [isSlashMenuOpen]);
+    const templateItems = useMemo(
+      () =>
+        isSlashMenuOpen
+          ? toPromptTemplateItems(promptTemplates, completionQuery)
+          : NO_TEMPLATE_ITEMS,
+      [isSlashMenuOpen, promptTemplates, completionQuery]
+    );
+    // Held by key and read back through the live list, so a plugin that is
+    // disabled, unloaded or changed while its form is open takes the form with it.
+    const [activeTemplateKey, setActiveTemplateKey] = useState<string | null>(null);
+    useEffect(() => {
+      if (activeTemplateKey !== null && !promptTemplates.some((t) => t.key === activeTemplateKey)) {
+        setActiveTemplateKey(null);
+      }
+    }, [activeTemplateKey, promptTemplates]);
+    const activeTemplate = promptTemplates.find((t) => t.key === activeTemplateKey) ?? null;
+
     const forgeReferences = useForgeReferences({
       projectId: currentProjectId,
       cwd,
@@ -911,6 +936,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       isAutocompleteLoading,
       autocompleteCommands,
       isCommandsLoading,
+      templateItems,
       contextClaim,
       contextItems,
       isContextLoading,
@@ -1712,57 +1738,89 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       if (!intercepted) void sendText(text);
     };
 
-    const { applyAutocompleteSelection, handleAutocompleteSelect } = useAutocompleteApply({
-      editorViewRef,
-      latestRef,
-      lastQueryRef,
-      applyEditorValue,
-      onExecute: runCompletedCommand,
-      setActiveCompletionContext,
-      setSelectedIndex,
-    });
-
-    const handleCommandExecuted = (_commandId: string, result: CommandResult) => {
-      if (result.success && result.prompt) {
-        sendText(result.prompt);
-      } else if (!result.success && result.error) {
-        logError("[HybridInputBar] Command execution failed", result.error);
-      }
+    // The `/` token a template was picked with, as an undo step of its own: a
+    // pick made straight after typing the token would otherwise merge with
+    // that typing.
+    const cutTemplateToken = (view: EditorView, cut: DraftSpan) => {
+      view.dispatch({
+        changes: cut,
+        annotations: [isolateHistory.of("full"), Transaction.userEvent.of("delete")],
+      });
     };
 
     // A template fills an empty draft and goes after a written one; routing it
     // through sendText would submit it. After the text rather than at the
-    // caret: the picker's own click has already focused the editor, so a
-    // composer the user never clicked into reports a caret at 0 they never chose.
-    const handleTemplateDraft = (rendered: string) => {
+    // caret, which sits wherever the `/` token was typed. That token, when one
+    // is given, comes out in the same step, so one undo takes back the pick.
+    const handleTemplateDraft = (rendered: string, token?: DraftSpan) => {
       // The editor stores every break as "\n", so a CRLF template would put
       // the caret past the end of the document it lands in.
       const text = rendered.replace(/\r\n?/g, "\n");
       const view = editorViewRef.current;
-      const draft = view?.state.doc.toString() ?? lastEmittedValueRef.current;
+      const doc = view?.state.doc.toString() ?? lastEmittedValueRef.current;
+      const cut = token ? promptTemplateTokenCut(doc, token) : null;
+      const draft = cut ? doc.slice(0, cut.from) + doc.slice(cut.to) : doc;
       const written = draft.trim() !== "";
       if (written && text.trim() === "") {
+        if (view && cut) cutTemplateToken(view, cut);
         view?.focus();
         return;
       }
       const next = composeDraftWithInstruction(draft, text);
-      if (!view || !written) {
+      if (!view) {
         applyEditorValue(next, {
           selection: EditorSelection.create([EditorSelection.cursor(next.length)]),
           focus: true,
         });
         return;
       }
-      // Only the new span goes in, so the words, chips and undo steps already
-      // there are untouched and undo takes the template back out on its own.
+      // After a written draft only the new span goes in, so the words, chips
+      // and undo steps already there are untouched. Either way the write is an
+      // undo step of its own, or one undo straight after a quick pick would
+      // take the typed token and the template back together.
       view.dispatch({
-        changes: { from: draft.length, insert: next.slice(draft.length) },
+        changes: written
+          ? [...(cut ? [cut] : []), { from: doc.length, insert: next.slice(draft.length) }]
+          : { from: 0, to: doc.length, insert: next },
         selection: EditorSelection.cursor(next.length),
         scrollIntoView: true,
         annotations: [isolateHistory.of("full"), Transaction.userEvent.of("input.paste")],
       });
       view.focus();
     };
+
+    // Read from the live list: the row may answer a plugin that has since gone.
+    const handlePickTemplate = (templateKey: string, token: DraftSpan) => {
+      const entry = promptTemplates.find((t) => t.key === templateKey);
+      if (!entry) return;
+      if (entry.template.args.length === 0) {
+        handleTemplateDraft(renderPromptTemplate(entry.template.body, {}), token);
+        return;
+      }
+      // The form has the pick from here, so the token it was made with is spent.
+      const view = editorViewRef.current;
+      if (view) cutTemplateToken(view, promptTemplateTokenCut(view.state.doc.toString(), token));
+      setActiveTemplateKey(entry.key);
+    };
+
+    // Filled against the draft as it stands when the form is, so anything
+    // written while it was open stays.
+    const handleTemplateSubmit = (values: Record<string, string>) => {
+      if (!activeTemplate) return;
+      setActiveTemplateKey(null);
+      handleTemplateDraft(renderPromptTemplate(activeTemplate.template.body, values));
+    };
+
+    const { applyAutocompleteSelection, handleAutocompleteSelect } = useAutocompleteApply({
+      editorViewRef,
+      latestRef,
+      lastQueryRef,
+      applyEditorValue,
+      onExecute: runCompletedCommand,
+      onPickTemplate: handlePickTemplate,
+      setActiveCompletionContext,
+      setSelectedIndex,
+    });
 
     useImperativeHandle(
       ref,
@@ -2303,32 +2361,21 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               }
             />
             {isDragOverCompact && <FileDropOverlay className="rounded-md" />}
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  type="button"
-                  onClick={() => openPicker(pickerOwnerId)}
-                  disabled={disabled}
-                  // `h-6 w-6` is the WCAG 2.5.8 floor on both axes: at `leading-5`
-                  // the button was 20px tall, and at its old `pl-2 pr-1` it was
-                  // 19px wide with its spacing circle over the canvas.
-                  //
-                  // Colour comes from the shell's own palette, like every
-                  // control in it — see `composerControlStyles.ts`.
-                  className={cn(
-                    "relative flex h-6 w-6 shrink-0 items-center justify-center select-none rounded-full font-mono text-xs font-semibold leading-5 transition-colors cursor-pointer",
-                    COMPOSER_CONTROL_TEXT_CLASS,
-                    COMPOSER_MARKER_TEXT_CLASS,
-                    COMPOSER_CONTROL_HOVER_BG_CLASS,
-                    COMPOSER_CONTROL_FOCUS_CLASS
-                  )}
-                  aria-label="Open command picker"
-                >
-                  <span aria-hidden="true">❯</span>
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="top">Open command picker</TooltipContent>
-            </Tooltip>
+            {/* A prompt marker, not a control: it is what makes the box read as
+                somewhere to type. A press on it focuses the editor through the
+                root's handlers, like one anywhere else in the shell. `h-6` keeps
+                it centred on the draft's last 24px row; `ml-2` is the shell's
+                left inset, so the box is only as wide as the glyph. */}
+            <span
+              aria-hidden="true"
+              data-composer-marker=""
+              className={cn(
+                "ml-2 flex h-6 shrink-0 select-none items-center font-mono text-xs font-semibold leading-5",
+                COMPOSER_MARKER_TEXT_CLASS
+              )}
+            >
+              ❯
+            </span>
             <ContextMenu>
               <ContextMenuTrigger asChild onContextMenu={handleEditorContextMenu}>
                 {/* `min-w-0`: a flex item defaults to `min-width: auto`, so the
@@ -2342,15 +2389,15 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                     rail foot, also 20px) is the same size as the text row that
                     later fills it — the composer grows one line at a time.
 
-                    The canvas shares its row with the picker in every state:
-                    the `❯` is a prompt marker and sits beside the line being
-                    typed, and the column it takes is paid on every line of a
-                    wrapped draft on purpose, the same way it is elsewhere in
-                    the app. The trailing controls take no column (see below),
-                    so the text runs to the shell's right inset. `pr-1` plus the
-                    editor's own 4px puts its last glyph about 9px from the
-                    border, level with the controls' ink and with the `❯`'s on
-                    the left. */}
+                    The canvas shares its row with the `❯` in every state: it
+                    is a prompt marker and sits beside the line being typed, and
+                    the column it takes, only the glyph's width, is paid on every
+                    line of a wrapped draft on purpose, the same way it is
+                    elsewhere in the app. The trailing controls take no column
+                    (see below), so the text runs to the shell's right inset.
+                    `pr-1` plus the editor's own 4px puts its last glyph about
+                    9px from the border, level with the controls' ink and with
+                    the `❯`'s on the left. */}
                 <div
                   ref={canvasTrackRef}
                   data-composer-canvas
@@ -2599,14 +2646,17 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           />
           {barContent}
         </div>
-        <CommandPickerHost
-          ownerId={pickerOwnerId}
-          context={commandContext}
-          onCommandExecuted={handleCommandExecuted}
-          templateProjectId={currentProjectId}
-          onDraftReady={handleTemplateDraft}
-          getDraftFocusTarget={() => editorViewRef.current?.contentDOM ?? null}
-        />
+        {activeTemplate && (
+          <PromptTemplateForm
+            key={activeTemplate.key}
+            title={activeTemplate.template.title}
+            pluginName={activeTemplate.pluginName}
+            args={activeTemplate.template.args}
+            onSubmit={handleTemplateSubmit}
+            onCancel={() => setActiveTemplateKey(null)}
+            restoreFocusTo={() => editorViewRef.current?.contentDOM ?? null}
+          />
+        )}
         {isRemote && <LazyUploadConfirmHost />}
         <AppDialog
           isOpen={isExpanded}

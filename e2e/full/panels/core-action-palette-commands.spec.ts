@@ -5,7 +5,6 @@ import { openAndOnboardProject } from "../../helpers/project";
 import { getGridPanelCount, openTerminal } from "../../helpers/panels";
 import { ensureWindowFocused, expectPaletteFocused } from "../../helpers/focus";
 import { SEL } from "../../helpers/selectors";
-import { installFakeAgent, fakeAgentEnv } from "../../helpers/fakeAgent";
 import { T_SHORT, T_MEDIUM, T_LONG } from "../../helpers/timeouts";
 
 const mod = process.platform === "darwin" ? "Meta" : "Control";
@@ -14,15 +13,12 @@ let ctx: AppContext;
 let fixtureDir: string;
 let fixtureCleanup: (() => void) | undefined;
 
-test.describe.serial("Core: Action Palette, Command Picker & Quick Switcher", () => {
+test.describe.serial("Core: Action Palette & Quick Switcher", () => {
   test.beforeAll(async () => {
     const { dir, cleanup } = createFixtureRepo({ name: "palettes-test", withMultipleFiles: true });
     fixtureDir = dir;
     fixtureCleanup = cleanup;
-    // A fake Claude CLI on PATH, so the agent panel (and its command picker)
-    // exists whether or not the real CLI is installed.
-    const fakeBinDir = installFakeAgent(fixtureDir);
-    ctx = await launchApp({ env: fakeAgentEnv(fakeBinDir) });
+    ctx = await launchApp();
     ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Palette Test");
   });
 
@@ -202,85 +198,6 @@ test.describe.serial("Core: Action Palette, Command Picker & Quick Switcher", ()
         const dialog = window.locator(SEL.quickSwitcher.dialog);
         await expect(dialog).not.toBeVisible({ timeout: T_MEDIUM });
         await expect(dialog).toHaveCount(0, { timeout: T_MEDIUM });
-      });
-    });
-  });
-
-  // ── Command Picker (2 tests) ──────────────────────────────
-
-  test.describe.serial("Command Picker", () => {
-    test.afterAll(async () => {
-      try {
-        await ctx.window.keyboard.press("Escape");
-        await expect(ctx.window.locator(SEL.commandPicker.dialog)).toHaveCount(0, {
-          timeout: T_SHORT,
-        });
-        let count = await getGridPanelCount(ctx.window);
-        while (count > 0) {
-          const panel = ctx.window.locator(SEL.panel.gridPanel).first();
-          await panel.locator(SEL.panel.close).first().click({ force: true });
-          await expect
-            .poll(() => getGridPanelCount(ctx.window), { timeout: T_MEDIUM })
-            .toBe(count - 1);
-          count--;
-        }
-      } catch {
-        // Best-effort cleanup
-      }
-    });
-
-    test("opens via button click on agent panel", async () => {
-      const { window } = ctx;
-
-      await test.step("Start an agent panel", async () => {
-        const startBtn = window.locator(SEL.agent.startButton);
-        await expect(startBtn).toBeVisible({ timeout: T_LONG });
-        await startBtn.click();
-      });
-
-      const openPickerBtn = window.locator(SEL.commandPicker.openButton);
-      await test.step("Wait for command picker open button to appear", async () => {
-        // HybridInputBar's command picker button only renders on agent panels
-        await expect(openPickerBtn).toBeVisible({ timeout: T_LONG });
-      });
-
-      await test.step("Open command picker dialog and verify visibility", async () => {
-        await openPickerBtn.click();
-        const dialog = window.locator(SEL.commandPicker.dialog);
-        await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
-      });
-    });
-
-    test("search filters commands and Escape closes", async () => {
-      const { window } = ctx;
-      const searchInput = window.locator(SEL.commandPicker.searchInput);
-      const options = window.locator(SEL.commandPicker.options);
-      let unfilteredCount = 0;
-
-      await test.step("Verify command list renders and capture unfiltered count", async () => {
-        const list = window.locator(SEL.commandPicker.list);
-        await expect(list).toBeVisible({ timeout: T_MEDIUM });
-
-        unfilteredCount = await options.count();
-      });
-
-      await test.step("Filter by 'git' and verify result count narrows", async () => {
-        await searchInput.fill("git");
-        await expect.poll(() => options.count(), { timeout: T_MEDIUM }).toBeGreaterThanOrEqual(1);
-
-        const filteredCount = await options.count();
-        expect(filteredCount).toBeGreaterThanOrEqual(1);
-        if (unfilteredCount > 1) {
-          expect(filteredCount).toBeLessThanOrEqual(unfilteredCount);
-        }
-      });
-
-      await test.step("Clear query and press Escape to close dialog", async () => {
-        await searchInput.fill("");
-        await searchInput.press("Escape");
-
-        const dialog = window.locator(SEL.commandPicker.dialog);
-        await expect(dialog).not.toBeVisible({ timeout: T_MEDIUM });
       });
     });
   });

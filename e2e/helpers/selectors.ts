@@ -394,13 +394,6 @@ export const SEL = {
     list: "#quick-switcher-list",
     options: '#quick-switcher-list [role="option"]',
   },
-  commandPicker: {
-    openButton: '[aria-label="Open command picker"]',
-    dialog: '[role="dialog"][aria-label="Command picker"]',
-    searchInput: '[aria-label="Search commands"]',
-    list: "#command-list",
-    options: '#command-list [role="option"]',
-  },
   errorBoundary: {
     fallback: '[data-testid="error-fallback"]',
     title: '[data-testid="error-fallback-title"]',

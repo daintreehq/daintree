@@ -609,6 +609,101 @@ describe("AutocompleteMenu", () => {
     }
   });
 
+  describe("bands", () => {
+    const commands: AutocompleteItem[] = ["/clear", "/review"].map((label) => ({
+      key: label,
+      label,
+      insertText: label,
+      enterAction: "execute",
+    }));
+    const templates: AutocompleteItem[] = [
+      {
+        key: "template:a",
+        label: "Add boilerplate",
+        insertText: "",
+        group: "Prompt templates",
+        template: { key: "a", opensForm: true },
+      },
+      {
+        key: "template:b",
+        label: "Close out",
+        insertText: "",
+        group: "Prompt templates",
+        template: { key: "b", opensForm: false },
+      },
+    ];
+
+    it("labels a band where it begins, outside the rows the keys move through", () => {
+      const onHoverIndex = vi.fn();
+      render(
+        <AutocompleteMenu
+          isOpen
+          items={[...commands, ...templates]}
+          selectedIndex={2}
+          onSelect={noop}
+          onHoverIndex={onHoverIndex}
+          listboxId="menu"
+          title="Commands"
+          emptyMessage="No matches"
+        />
+      );
+      const options = screen.getAllByRole("option");
+      const labels = options.filter((o) => o.getAttribute("aria-disabled") === "true");
+      expect(labels.map((o) => o.getAttribute("aria-label"))).toEqual(["Prompt templates"]);
+      expect(options.indexOf(labels[0]!)).toBe(2);
+      expect(labels[0]!.getAttribute("aria-selected")).toBe("false");
+      expect(labels[0]!.id).toBe("");
+
+      // Rows keep the index the editor names them by, band or not.
+      const rows = options.filter((o) => o !== labels[0]);
+      expect(rows.map((o) => o.id)).toEqual(
+        [0, 1, 2, 3].map((i) => autocompleteOptionId("menu", i))
+      );
+      expect(rows[2]!.getAttribute("aria-selected")).toBe("true");
+      fireEvent.pointerMove(rows[3]!);
+      expect(onHoverIndex).toHaveBeenCalledWith(3);
+    });
+
+    it("draws nothing extra for rows outside any band", () => {
+      render(
+        <AutocompleteMenu
+          isOpen
+          items={commands}
+          selectedIndex={0}
+          onSelect={noop}
+          title="Commands"
+          emptyMessage="No matches"
+        />
+      );
+      expect(screen.getAllByRole("option")).toHaveLength(commands.length);
+    });
+
+    it("says what picking a template does, on both keys", () => {
+      const header = (selectedIndex: number) => {
+        const { container, unmount } = render(
+          <AutocompleteMenu
+            isOpen
+            items={templates}
+            selectedIndex={selectedIndex}
+            onSelect={noop}
+            title="Commands"
+            emptyMessage="No matches"
+          />
+        );
+        const text = container.querySelector("kbd")?.closest("[aria-hidden]")?.textContent ?? "";
+        const spoken = screen.getAllByRole("option").map((o) => o.textContent ?? "");
+        unmount();
+        return { text, spoken };
+      };
+
+      const opensForm = header(0);
+      expect(opensForm.text).toMatch(/↵.*⇥.*open form/);
+      expect(opensForm.spoken.some((t) => /Enter or Tab to open form/.test(t))).toBe(true);
+      expect(header(1).text).toMatch(/fill draft/);
+      expect(header(-1).text).toMatch(/open form first/);
+    });
+  });
+
   describe("getComboboxState", () => {
     const items: AutocompleteItem[] = [
       { key: "a", label: "alpha", insertText: "alpha" },

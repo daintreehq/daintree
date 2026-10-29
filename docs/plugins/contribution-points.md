@@ -1314,7 +1314,7 @@ Markdown the Daintree Assistant is given about the plugin's agent tools: short `
 
 ## Prompt templates — _Shipped_
 
-Prompt templates a plugin offers in the composer's ❯ command picker, for the well-worn prompts of its domain. Choosing one asks for its arguments, if it has any, then puts the expanded text in the composer's draft for the user to edit and send. A template **never submits**, and it never appears in the `/` or `$` menus, which belong to the agent CLI's own commands. Each row names the plugin it comes from. Templates are declarative content and require no capability. An installed plugin's templates appear in every project; a [project plugin](./project-local.md)'s appear only in its own project.
+Prompt templates a plugin offers in the composer's `/` menu, for the well-worn prompts of its domain. They are listed under their own "Prompt templates" heading after the agent CLI's own commands, each row naming the plugin it comes from, and what is typed after the `/` narrows them by title, id or plugin name. Choosing one, by Enter, Tab or a click, asks for its arguments if it has any, then puts the expanded text in the composer's draft for the user to edit and send; the `/` token it was chosen with is taken out of the draft. A template **never submits**, and it never appears in the `$` menu. Templates are declarative content and require no capability. An installed plugin's templates appear in every project; a [project plugin](./project-local.md)'s appear only in its own project.
 
 ```json
 {
@@ -1339,13 +1339,13 @@ Prompt templates a plugin offers in the composer's ❯ command picker, for the w
 
 | Field | Required | Notes |
 | --- | --- | --- |
-| `id` | yes | Unique within the plugin's `promptTemplates`. |
-| `title` | yes | The row's name in the picker. At most 80 characters. |
+| `id` | yes | Unique within the plugin's `promptTemplates`. Matched, with the title, by what is typed after `/`. |
+| `title` | yes | The row's name in the `/` menu and the title of its form. At most 80 characters. |
 | `description` | yes | The row's summary line. At most 300 characters. |
 | `body` | yes | The prompt. `{{name}}` is replaced by the argument of that name. At most 8192 characters. |
 | `args` | no | Up to 20 single-line text fields, each `{ name, label, required? }`. `name` is lowercase letters, digits and underscores, starting with a letter. A template with no `args` fills the draft as soon as it is chosen. |
 
-Every `{{name}}` in the body must name a declared argument; anything else is a manifest error. Values are inserted exactly as typed, once: a value that itself contains `{{other}}` is not expanded again. An optional argument left blank becomes empty text. Choosing a template replaces the current draft, and the replacement can be undone.
+Every `{{name}}` in the body must name a declared argument; anything else is a manifest error. Values are inserted exactly as typed, once: a value that itself contains `{{other}}` is not expanded again. An optional argument left blank becomes empty text. A template fills an empty draft and goes a blank line after a written one, leaving the words already there as they are; one undo takes the choice back.
 
 ## Terminal links — _Shipped_
 

@@ -139,7 +139,7 @@ const PROMPT_TEMPLATE_UTIL = "shared/utils/pluginPromptTemplates.ts";
 const PLUGIN_RUNTIME_STORE = "src/store/pluginRuntimeStore.ts";
 const PLUGIN_TERMINAL_LINKS = "src/services/terminal/pluginTerminalLinks.ts";
 const PLUGIN_TERMINAL_LINK_UTIL = "shared/utils/pluginTerminalLinks.ts";
-const COMMAND_PICKER = "src/components/Commands/CommandPicker.tsx";
+const PROMPT_TEMPLATE_COMPLETION = "src/components/Terminal/promptTemplateCompletion.ts";
 const PROMPT_TEMPLATE_FORM = "src/components/Commands/PromptTemplateForm.tsx";
 const THEME_REGISTRY = "electron/services/plugin/PluginThemeRegistry.ts";
 const RECIPE_REGISTRY = "electron/services/plugin/PluginRecipeRegistry.ts";
@@ -1574,18 +1574,24 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
   promptTemplates: {
     id: {
       mode: "verbatim",
-      consumers: [{ file: PLUGIN_RUNTIME_STORE, symbol: "pullPluginRuntimeSnapshot (key)" }],
-      note: "Namespaced under the plugin's instance id into the picker row's key.",
+      consumers: [
+        { file: PLUGIN_RUNTIME_STORE, symbol: "pullPluginRuntimeSnapshot (key)" },
+        { file: PROMPT_TEMPLATE_COMPLETION, symbol: "scorePromptTemplate" },
+      ],
+      note: "Namespaced under the plugin's instance id into the template's key; searched by the `/` menu.",
     },
     title: {
       mode: "verbatim",
-      consumers: [{ file: COMMAND_PICKER, symbol: "CommandPicker (template row) / scoreTemplate" }],
-      note: "The row's name in the command picker and the form's title; searched.",
+      consumers: [
+        { file: PROMPT_TEMPLATE_COMPLETION, symbol: "toPromptTemplateItems / scorePromptTemplate" },
+        { file: PROMPT_TEMPLATE_FORM, symbol: "PromptTemplateForm" },
+      ],
+      note: "The row's name in the composer's `/` menu and the form's title; searched.",
     },
     description: {
       mode: "verbatim",
-      consumers: [{ file: COMMAND_PICKER, symbol: "CommandPicker (template row) / scoreTemplate" }],
-      note: "The row's summary line in the command picker; searched.",
+      consumers: [{ file: PROMPT_TEMPLATE_COMPLETION, symbol: "toPromptTemplateItems" }],
+      note: "The row's description in the composer's `/` menu.",
     },
     body: {
       mode: "verbatim",

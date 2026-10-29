@@ -10,7 +10,6 @@ const BLOCKING_PALETTE_SELECTORS = [
   '[role="dialog"][aria-label="Worktree palette"]',
   SEL.worktree.quickCreatePalette,
   SEL.quickSwitcher.dialog,
-  SEL.commandPicker.dialog,
 ];
 
 async function visibleBlockingPalette(page: Page) {

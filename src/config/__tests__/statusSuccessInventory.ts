@@ -97,20 +97,6 @@ export const STATUS_SUCCESS_INVENTORY = {
       rationale: "Recorded result of the last CI run on the pull request",
     },
   ],
-  "src/components/Commands/CommandBuilder.tsx": [
-    {
-      category: "outcome",
-      signature: "bg-status-success/15",
-      expectedOccurrences: 1,
-      rationale: "Recorded result of the command the user just ran; leaves with the dialog",
-    },
-    {
-      category: "outcome",
-      signature: "text-status-success",
-      expectedOccurrences: 1,
-      rationale: "Recorded result of the command the user just ran; leaves with the dialog",
-    },
-  ],
   "src/components/FileViewer/diffChangeSet.ts": [
     {
       category: "domain",
@@ -524,5 +510,5 @@ export const STATUS_SUCCESS_INVENTORY = {
  * another added) still trips the per-site checks, and these catch the case
  * where a whole file moves without either check firing.
  */
-export const EXPECTED_STATUS_SUCCESS_SITES = 57;
-export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 59;
+export const EXPECTED_STATUS_SUCCESS_SITES = 55;
+export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 57;
