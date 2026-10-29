@@ -91,10 +91,16 @@ describe("FilterBuilder", () => {
     render(createElement(Builder, { initial: none, onChange }));
     const add = screen.getByRole("button", { name: "Add condition" });
     fireEvent.click(add);
-    expect(document.activeElement).toBe(
-      within(rows()[0]!).getByRole("combobox", { name: "Field" })
+    // A new row lands on what it still needs, and says so without calling it an error.
+    const value = within(rows()[0]!).getByRole("combobox", { name: "Value" });
+    expect(document.activeElement).toBe(value);
+    expect(rows()[0]!.hasAttribute("data-unfinished")).toBe(true);
+    expect(rows()[0]!.hasAttribute("data-invalid")).toBe(false);
+    expect(document.getElementById(value.getAttribute("aria-describedby") ?? "")?.textContent).toBe(
+      "Choose a value for Status"
     );
     pick(rows()[0]!, "Value", "open");
+    expect(rows()[0]!.hasAttribute("data-unfinished")).toBe(false);
     fireEvent.click(add);
     pick(rows()[1]!, "Field", "owner");
     pick(rows()[1]!, "Value", "me");
@@ -668,6 +674,44 @@ describe("SavedViews", () => {
     });
     expect(stateShown().filter).toEqual(mine);
     expect(trigger().getAttribute("aria-label")).toBe("Saved views: Mine");
+  });
+
+  it("won't save a filter with a condition still waiting for its value, and says why", async () => {
+    const { wrapper } = hostWith();
+    const waiting: PluginFilterCondition[] = [
+      { field: "status", op: "eq", value: "open" },
+      { field: "owner", op: "eq" },
+    ];
+    render(
+      createElement(Screen, {
+        initial: { filter: { match: "all", conditions: waiting }, sort: null, hiddenColumns: [] },
+        defaultActiveViewId: "mine",
+      }),
+      { wrapper }
+    );
+    const menu = await openMenu();
+    expect(menuItem(menu, "Save changes")?.hasAttribute("data-disabled")).toBe(true);
+    expect(menuItem(menu, "Save as new view…")?.hasAttribute("data-disabled")).toBe(true);
+    expect(document.getElementById(menu.getAttribute("aria-describedby") ?? "")?.textContent).toBe(
+      "Finish the filter to save it"
+    );
+  });
+
+  it("still saves a comparison that takes no value", async () => {
+    const { wrapper } = hostWith();
+    render(
+      createElement(Screen, {
+        initial: {
+          filter: { match: "all", conditions: [{ field: "owner", op: "empty" }] },
+          sort: null,
+          hiddenColumns: [],
+        },
+      }),
+      { wrapper }
+    );
+    const menu = await openMenu();
+    expect(menuItem(menu, "Save view…")?.hasAttribute("data-disabled")).toBe(false);
+    expect(menu.getAttribute("aria-describedby")).toBeNull();
   });
 
   it("starts from nothing when what was remembered is not views at all", () => {
