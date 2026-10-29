@@ -1918,6 +1918,23 @@ export class HttpLifecycle {
   }
 
   /**
+   * The help lane a session serves, for a line on its notice line (#14995):
+   * the help session it is bound to, the terminal running it now, and its
+   * project. Null for any session that isn't a help lane's, or whose lane
+   * has no terminal or project to type into.
+   */
+  helpLaneFor(
+    sessionId: string
+  ): { helpSessionId: string; terminalId: string; projectId: string } | null {
+    const helpSessionId = this.deps.sessionStore.sessionHelpIdMap.get(sessionId);
+    if (helpSessionId === undefined) return null;
+    const terminalId = this.helpSessionTerminalResolver?.(helpSessionId) ?? null;
+    const projectId = this.assistantControlBinding?.sessionProject(helpSessionId) ?? null;
+    if (terminalId === null || projectId === null) return null;
+    return { helpSessionId, terminalId, projectId };
+  }
+
+  /**
    * Mint a time-bounded per-`(sessionId, toolId)` grant — the "Approve
    * once" pathway that replaces sticky session-tier elevation for single
    * tool calls (#8442). Validates the same caller-pin invariant as

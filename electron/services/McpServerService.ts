@@ -63,6 +63,8 @@ import {
   type LaneWake,
 } from "./mcp-server/terminalNotify.js";
 import { ReplyWaiterService } from "./mcp-server/replyWaiter.js";
+import { createApprovalWake } from "./mcp-server/approvalWake.js";
+import type { AssistantApproval } from "./mcp-server/noticeFormat.js";
 import type { PaneNotifyState } from "../../shared/types/terminalNotify.js";
 import { broadcastToProjectRenderers } from "../ipc/utils.js";
 import { cleanupResourceSubscriptions } from "./mcp-server/sessionServer.js";
@@ -1241,7 +1243,11 @@ export class McpServerService {
     tier: HelpAssistantTier,
     callerWcId?: number
   ): { sessionId: string; tier: McpTier } {
-    return this.httpLifecycle.setSessionTier(sessionId, tier, callerWcId);
+    const before = this.sessionStore.getTier(sessionId);
+    const result = this.httpLifecycle.setSessionTier(sessionId, tier, callerWcId);
+    if (result.tier !== before)
+      this.queueApprovalLine(sessionId, { kind: "tier", tier: result.tier });
+    return result;
   }
 
   /**
@@ -1251,7 +1257,33 @@ export class McpServerService {
    * Returns the grant metadata so the renderer can render a countdown.
    */
   issueGrant(sessionId: string, toolId: string, callerWcId?: number): McpIssueGrantResult {
-    return this.httpLifecycle.issueGrant(sessionId, toolId, callerWcId);
+    const result = this.httpLifecycle.issueGrant(sessionId, toolId, callerWcId);
+    this.queueApprovalLine(sessionId, { kind: "tool", toolId });
+    return result;
+  }
+
+  /**
+   * Tell the help lane's assistant what the user just approved from the
+   * panel's tier banner (#14995), whose refusal it last heard. Never fails
+   * the approval: the grant stands whether or not the line can be typed.
+   */
+  private queueApprovalLine(sessionId: string, approval: AssistantApproval): void {
+    try {
+      const lane = this.httpLifecycle.helpLaneFor(sessionId);
+      if (lane === null) return;
+      const wake = createApprovalWake(
+        {
+          sessionStore: this.sessionStore,
+          helpLaneFor: (id) => this.httpLifecycle.helpLaneFor(id),
+        },
+        sessionId,
+        lane,
+        approval
+      );
+      this.queueLaneWake(lane, wake);
+    } catch (err) {
+      console.error("[MCP] Queueing an approval line failed:", err);
+    }
   }
 
   /**

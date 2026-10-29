@@ -716,6 +716,43 @@ describe("HttpLifecycle", () => {
   // so without this check a pinned renderer could mint a grant for an id in no
   // tier at all and the authorization contract would rest on the UI never
   // offering the button rather than on main refusing it (#11585).
+  describe("helpLaneFor (#14995)", () => {
+    function wired(terminalId: string | null, projectId: string | null) {
+      const deps = fakeDeps();
+      deps.sessionStore.sessionHelpIdMap.set("sess-1", "help-1");
+      const lc = new HttpLifecycle(deps);
+      lc.setHelpSessionTerminalResolver((id) => (id === "help-1" ? terminalId : null));
+      lc.setAssistantControl({
+        control: {} as never,
+        sessionProject: (id) => (id === "help-1" ? projectId : null),
+      });
+      return lc;
+    }
+
+    it("names the help session, its terminal now, and its project", () => {
+      expect(wired("term-1", "proj-1").helpLaneFor("sess-1")).toEqual({
+        helpSessionId: "help-1",
+        terminalId: "term-1",
+        projectId: "proj-1",
+      });
+    });
+
+    it("has no lane for a session no help session is bound to", () => {
+      expect(wired("term-1", "proj-1").helpLaneFor("sess-other")).toBeNull();
+    });
+
+    it("has no lane without a terminal or a project to type into", () => {
+      expect(wired(null, "proj-1").helpLaneFor("sess-1")).toBeNull();
+      expect(wired("term-1", null).helpLaneFor("sess-1")).toBeNull();
+    });
+
+    it("has no lane while the help service isn't wired", () => {
+      const deps = fakeDeps();
+      deps.sessionStore.sessionHelpIdMap.set("sess-1", "help-1");
+      expect(new HttpLifecycle(deps).helpLaneFor("sess-1")).toBeNull();
+    });
+  });
+
   describe("issueGrant tool validation (#11585)", () => {
     function grantCacheOf(deps: HttpLifecycleDeps) {
       return (
@@ -4045,6 +4082,19 @@ describe("sendToPinnedView", () => {
 
     expect(sendToPinnedView(7, "mcp:x", () => ({}), "x")).toBe(false);
     expect(sendToPinnedView(8, "mcp:x", () => ({}), "x")).toBe(false);
+  });
+
+  // A refusal points at the banner only when it was sent (#14995).
+  it("reports a send that threw as not sent", () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    mockWebContentsById.set(7, {
+      isDestroyed: () => false,
+      send: vi.fn(() => {
+        throw new Error("render frame disposed");
+      }),
+    });
+    expect(sendToPinnedView(7, "mcp:x", () => ({}), "x")).toBe(false);
+    errorSpy.mockRestore();
   });
 
   it("reaches a view attached over a link through its endpoint", () => {

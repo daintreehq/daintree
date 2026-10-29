@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  formatAssistantApprovalLine,
   formatHostNoticeLine,
   formatHostNoticesLostLine,
   formatHostWatchLine,
@@ -219,5 +220,22 @@ describe("the host watch line (#14463)", () => {
     });
     expect(line).toContain("last seen an unreadable time");
     expect(line).toContain("last sample taken an unreadable time");
+  });
+});
+
+describe("the approval line (#14995)", () => {
+  it.each(["project.runCheck", "github.listIssues"])(
+    "names %s as allowed for this session and invites a retry rather than claiming one",
+    (toolId) => {
+      expect(formatAssistantApprovalLine({ kind: "tool", toolId })).toBe(
+        `Daintree: the user allowed '${toolId}' for this session. Retry it if you still need it.`
+      );
+    }
+  );
+
+  it("names the tool set a raised session now holds", () => {
+    expect(formatAssistantApprovalLine({ kind: "tier", tier: "full" })).toBe(
+      "Daintree: the user raised this session to the 'full' tool set. Retry what it refused if you still need it."
+    );
   });
 });

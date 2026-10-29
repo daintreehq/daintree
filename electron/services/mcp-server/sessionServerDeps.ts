@@ -86,6 +86,7 @@ export function sendToPinnedView(
       endpoint.send({ type: "event", channel, args: [buildPayload()] });
     } catch (err) {
       console.error(`[MCP] ${label} send failed:`, err);
+      return false;
     }
     return true;
   }
@@ -95,6 +96,7 @@ export function sendToPinnedView(
     wc.send(channel, buildPayload());
   } catch (err) {
     console.error(`[MCP] ${label} send failed:`, err);
+    return false;
   }
   return true;
 }
@@ -365,10 +367,10 @@ function createSessionNotifiers(
     // approve. Targeted at the pinned WebContents so the assistant panel
     // that triggered the call gets the event, even if a different project
     // view is currently focused.
-    if (!isRendererOwned(payload.sessionId)) return;
+    if (!isRendererOwned(payload.sessionId)) return false;
     const id = deps.sessionStore.sessionWebContentsMap.get(payload.sessionId);
-    if (id === undefined) return;
-    sendToPinnedView(
+    if (id === undefined) return false;
+    return sendToPinnedView(
       id,
       CHANNELS.MCP_TIER_NOT_PERMITTED,
       () => ({

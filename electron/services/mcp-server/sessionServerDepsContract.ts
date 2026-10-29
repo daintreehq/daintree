@@ -342,7 +342,8 @@ export interface SessionServerDeps extends OwnedMainExecutors {
    * Optional renderer notifier fired when a help-session tool call is denied
    * because the session tier doesn't permit it. Implemented by httpLifecycle
    * for help-session bearers (pinned WebContents); absent for external/api-key
-   * sessions, which have no associated UI.
+   * sessions, which have no associated UI. True only when the banner event
+   * reached a live view, the one case the refusal may point at it (#14995).
    */
   notifyTierMismatch?: (payload: {
     sessionId: string;
@@ -357,7 +358,7 @@ export interface SessionServerDeps extends OwnedMainExecutors {
      * withholds both affordances — the denial isn't actionable.
      */
     targetTier: HelpAssistantTier | null;
-  }) => void;
+  }) => boolean;
   /**
    * Feed a denial into the abuse policy — both 401s and tier-mismatches
    * share the same per-session sliding-window counter. Returns
