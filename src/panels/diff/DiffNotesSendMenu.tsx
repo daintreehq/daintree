@@ -157,7 +157,10 @@ function DiffNoteTargetItems({
             <TerminalIcon kind={target.kind} chrome={target.chrome} className="h-3.5 w-3.5" />
           </span>
           <span className="truncate">{target.title}</span>
-          <DropdownMenuMeta className="max-w-[140px] truncate">
+          <DropdownMenuMeta
+            className="max-w-[140px] truncate"
+            title={target.worktreeName ?? undefined}
+          >
             {target.worktreeName ?? "No worktree"}
           </DropdownMenuMeta>
         </DropdownMenuItem>
