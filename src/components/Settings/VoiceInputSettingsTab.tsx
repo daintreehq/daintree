@@ -908,7 +908,7 @@ export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTab
       {settings.enabled && (
         <SettingsSection
           title="AI text correction"
-          description={`When you stop dictating, the whole passage is corrected once by the cleanup model to fix technical terms, punctuation and filler words, resolve self-corrections, and lay out spoken lists. The text, the prompts you recently sent from the same terminal, the terminal's recent output with credential-like lines removed, the repository's package, folder and dependency names, and the worktree's issue or PR title are sent to ${CLEANUP_PROVIDER_PRIVACY[cleanupProvider]}.`}
+          description={`Short dictations are corrected when you stop; long ones are corrected a stretch at a time as you go. The cleanup model fixes technical terms, punctuation and filler words, resolves self-corrections, and lays out spoken lists. The text, the prompts you recently sent from the same terminal, the terminal's recent output with credential-like lines removed, the repository's package, folder and dependency names, and the worktree's issue or PR title are sent to ${CLEANUP_PROVIDER_PRIVACY[cleanupProvider]}.`}
           id="voice-ai-correction"
         >
           {saveError("correction")}
@@ -916,7 +916,7 @@ export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTab
             <SettingsSwitchCard
               id="voice-ai-correction-enable"
               title="Clean up transcriptions"
-              subtitle="Correct the passage automatically when you stop dictating"
+              subtitle="Correct dictation automatically, when you stop or a stretch at a time during long dictations"
               isEnabled={settings.correctionEnabled}
               onChange={() => void update({ correctionEnabled: !settings.correctionEnabled })}
               isModified={settings.correctionEnabled !== DEFAULT_SETTINGS.correctionEnabled}
