@@ -124,10 +124,9 @@ describe("Increase Contrast control frame (#15376)", () => {
     (_id, scheme) => {
       const ink = tokenOf(colourRule?.declarations.get("border-color"), "border-default");
       const { ratio, surface } = worstRatio(scheme, ink, DISPLAY_SURFACES);
-      expect(
-        ratio,
-        `${ink} is ${ratio.toFixed(2)}:1 on ${surface}`
-      ).toBeGreaterThanOrEqual(CONTROL_BOUNDARY_MIN_CONTRAST);
+      expect(ratio, `${ink} is ${ratio.toFixed(2)}:1 on ${surface}`).toBeGreaterThanOrEqual(
+        CONTROL_BOUNDARY_MIN_CONTRAST
+      );
     }
   );
 
@@ -136,10 +135,9 @@ describe("Increase Contrast control frame (#15376)", () => {
     (_id, scheme) => {
       const ink = tokenOf(fieldEdgeRule?.declarations.get("--theme-border-input"), "border-input");
       const { ratio, surface } = worstRatio(scheme, ink, [...DISPLAY_SURFACES, "surface-input"]);
-      expect(
-        ratio,
-        `${ink} is ${ratio.toFixed(2)}:1 on ${surface}`
-      ).toBeGreaterThanOrEqual(CONTROL_BOUNDARY_MIN_CONTRAST);
+      expect(ratio, `${ink} is ${ratio.toFixed(2)}:1 on ${surface}`).toBeGreaterThanOrEqual(
+        CONTROL_BOUNDARY_MIN_CONTRAST
+      );
     }
   );
 
