@@ -566,10 +566,7 @@ export function ModalHostLayer({
               onSaveAsProject={(scratchId) => void projectSwitcherPalette.saveAsProject(scratchId)}
               saveAsProjectConfirm={projectSwitcherPalette.saveAsProjectConfirm}
               onDismissSaveAsProjectConfirm={projectSwitcherPalette.dismissSaveAsProjectConfirm}
-              onConfirmDeleteOriginalScratch={() =>
-                void projectSwitcherPalette.confirmDeleteOriginalScratch()
-              }
-              isDeletingOriginalScratch={projectSwitcherPalette.isDeletingOriginalScratch}
+              onOpenSavedProject={projectSwitcherPalette.openSavedProject}
             />
           </Suspense>
         )}

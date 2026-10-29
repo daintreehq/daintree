@@ -43,16 +43,15 @@ export interface ProjectSwitcherConfirmState {
   onConfirmDeleteAllScratches?: () => void;
   isDeletingAllScratches?: boolean;
   /**
-   * "Delete original?" follow-up after a successful Save-as-Project copy.
+   * "Open project?" follow-up after a successful Save-as-Project copy.
    * Surfaced as a top-level ConfirmDialog above the palette.
    */
   saveAsProjectConfirm?: {
-    scratch: SearchableScratch;
+    scratch: Pick<SearchableScratch, "name">;
     project: { name: string; path: string };
   } | null;
   onDismissSaveAsProjectConfirm?: () => void;
-  onConfirmDeleteOriginalScratch?: () => void;
-  isDeletingOriginalScratch?: boolean;
+  onOpenSavedProject?: () => void;
 }
 
 /**
@@ -162,8 +161,7 @@ export function ProjectSwitcherConfirmDialogs({
   isDeletingAllScratches = false,
   saveAsProjectConfirm,
   onDismissSaveAsProjectConfirm,
-  onConfirmDeleteOriginalScratch,
-  isDeletingOriginalScratch = false,
+  onOpenSavedProject,
   paletteInputRef,
 }: ProjectSwitcherConfirmState & {
   /** The search box, which outlives every row a confirm can remove. */
@@ -396,25 +394,36 @@ export function ProjectSwitcherConfirmDialogs({
             </div>
           </ConfirmDialog>
         )}
-      {saveAsProjectConfirm && onDismissSaveAsProjectConfirm && onConfirmDeleteOriginalScratch && (
+      {/*
+       * Never an offer to delete the scratch (#15004). The save is a copy, and
+       * the scratch's terminals and agents keep working in the original folder,
+       * so whatever they change after it exists only there. Its row's own
+       * Delete stays the way to remove it, with the consequence spelled out.
+       */}
+      {saveAsProjectConfirm && onDismissSaveAsProjectConfirm && onOpenSavedProject && (
         <ConfirmDialog
           isOpen={true}
           onClose={onDismissSaveAsProjectConfirm}
-          title={`Delete '${saveAsProjectConfirm.scratch.name}'?`}
+          title={`Open '${saveAsProjectConfirm.project.name}'?`}
           zIndex="nested"
-          confirmLabel="Delete scratch"
-          cancelLabel="Keep scratch"
-          onConfirm={onConfirmDeleteOriginalScratch}
-          isConfirmLoading={isDeletingOriginalScratch}
-          variant="destructive"
+          confirmLabel="Open project"
+          cancelLabel="Not now"
+          onConfirm={onOpenSavedProject}
+          variant="default"
+          restoreFocusTo={paletteInputRef}
         >
           <div className="space-y-3">
             <div className="text-sm">
-              Saved as <span className="font-medium">{saveAsProjectConfirm.project.name}</span>. The
-              original scratch folder is no longer needed.
+              The project is a copy of{" "}
+              <span className="font-medium">{saveAsProjectConfirm.scratch.name}</span> as it was
+              when you saved it.
             </div>
             <div className="text-xs text-text-secondary font-mono">
-              <PathSegments path={saveAsProjectConfirm.scratch.path} />
+              <PathSegments path={saveAsProjectConfirm.project.path} />
+            </div>
+            <div className="text-sm text-text-secondary">
+              The scratch is kept. Anything its terminals or agents change from now on stays there,
+              not in the project.
             </div>
           </div>
         </ConfirmDialog>
