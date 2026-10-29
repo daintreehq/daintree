@@ -1046,6 +1046,22 @@ describe("FileBrowserViewer PDF preview (#11427)", () => {
   });
 });
 
+describe("FileBrowserViewer unparseable SVG (#15030)", () => {
+  it("says an SVG that passes the sanitizer but doesn't parse couldn't be parsed", async () => {
+    // Truncated mid-write: still has its `<svg`, so the sanitizer passes it.
+    readMock.mockResolvedValue({
+      content: '<svg xmlns="http://www.w3.org/2000/svg"><rect></svg>',
+    });
+    const { container } = renderViewer("/repo/icon.svg");
+
+    const unavailable = await screen.findByTestId("file-browser-unavailable");
+    expect(unavailable.textContent).toContain("Can't preview this SVG");
+    expect(unavailable.textContent).toContain("couldn't be parsed");
+    expect(within(unavailable).queryAllByRole("button").length).toBeGreaterThan(0);
+    expect(container.querySelector('img[src^="data:image/svg+xml,"]')).toBeNull();
+  });
+});
+
 describe("FileBrowserViewer Refresh control (#11586, #11938)", () => {
   it("leaves Refresh to the tree header while the tree column is mounted and nothing is open", () => {
     renderViewer(null, { sidebarCollapsed: false });

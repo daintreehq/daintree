@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type { ReactNode } from "react";
-import { render, act, cleanup, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render, act, cleanup, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ContextMenuItem } from "@/components/ui/context-menu";
 import type { GitStatus } from "@shared/types/git";
@@ -2756,6 +2756,36 @@ describe("FilePane live disk refresh (#11451)", () => {
     // Settled into the error surface — not still sitting on the skeleton.
     await waitFor(() => expect(screen.getByText("Retry")).toBeTruthy());
     expect(loadingSkeleton(container)).toBeNull();
+  });
+
+  it("says an SVG that passes the sanitizer but doesn't parse couldn't be parsed (#15030)", async () => {
+    // Truncated mid-write: still has its `<svg`, so the sanitizer passes it.
+    readMock.mockResolvedValue({
+      content: '<svg xmlns="http://www.w3.org/2000/svg"><rect></svg>',
+    });
+    await renderPane({ filePath: "/repo/assets/icon.svg" });
+
+    const body = await screen.findByTestId("file-pane-unavailable");
+    expect(body.textContent).toContain("Can't preview this SVG");
+    expect(body.textContent).toContain("couldn't be parsed");
+    expect(within(body).getByRole("button", { name: "Open in editor" })).toBeTruthy();
+    expect(within(body).getByRole("button", { name: "Retry" })).toBeTruthy();
+  });
+
+  it("keeps the last good SVG when a background re-read catches it unparseable", async () => {
+    seedWorktree(OUTER_ID, "/repo", { git: 100 });
+    readMock.mockResolvedValue({
+      content: '<svg xmlns="http://www.w3.org/2000/svg"><rect /></svg>',
+    });
+    const { container, rerender } = await renderPane({ filePath: "/repo/assets/icon.svg" });
+    await waitFor(() => expect(shownSvgPart(container, "rect")).not.toBeNull());
+
+    readMock.mockResolvedValue({ content: '<svg xmlns="http://www.w3.org/2000/svg"><circle>' });
+    seedWorktree(OUTER_ID, "/repo", { git: 200 });
+    await commitTick(rerender);
+
+    expect(shownSvgPart(container, "rect")).not.toBeNull();
+    expect(screen.queryByTestId("file-pane-unavailable")).toBeNull();
   });
 
   it("re-reads an SVG when the app window regains the foreground", async () => {
