@@ -9,7 +9,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { Callout, CALLOUT_ICON, CALLOUT_ICON_TONE, calloutVariants } from "@/components/ui/Callout";
-import { useState, useEffect, useRef, useMemo, useDeferredValue } from "react";
+import { useState, useEffect, useRef, useMemo, useDeferredValue, useId } from "react";
 import { createPortal } from "react-dom";
 import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
 import { Button } from "@/components/ui/button";
@@ -330,6 +330,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
     intent: deepLinkIntent ?? null,
     onConsumed: onDeepLinkConsumed,
   });
+  const deleteDataHintId = useId();
   // Install-from-URL and uninstall both keep their dialog open on a correctable
   // failure, and both wrote the reason to the one error slot in the master
   // column — behind the dialog's own scrim. Each now renders the message
@@ -1126,7 +1127,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
         isOpen={pm.pendingUninstall !== null}
         onClose={pm.closeUninstall}
         title={pm.pendingUninstall ? `Uninstall '${pluginLabel(pm.pendingUninstall)}'?` : ""}
-        description="Removes the plugin and deletes its files, unloading its panels, commands, and integrations. Per-project settings under .daintree/ are always kept; this plugin's saved settings are kept too unless you check the box below."
+        description="Removes the plugin and deletes its installed files, unloading its panels, commands, and integrations. Its settings, connected accounts, and stored data are kept unless you check the box below."
         confirmLabel="Uninstall plugin"
         cancelLabel="Keep plugin"
         onConfirm={() => void pm.confirmUninstall()}
@@ -1139,10 +1140,16 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
             checked={pm.deleteSettings}
             onCheckedChange={(checked) => pm.setDeleteSettings(checked === true)}
             disabled={pm.isUninstalling}
+            aria-describedby={deleteDataHintId}
             className="mt-0.5"
           />
-          Also delete this plugin's saved settings
+          Also delete its settings, connected accounts, and stored data
         </label>
+        <p id={deleteDataHintId} className="mt-1 pl-6 text-xs text-text-secondary">
+          Covers every project on this machine, secrets included, and signs the plugin out.
+          Databases and files the plugin created are kept, as are settings under a repository's
+          .daintree/.
+        </p>
         {/* A failed uninstall leaves this dialog open and sets the error, which
             the master column no longer renders while the dialog owns it — so
             without this the failure would be invisible in both places. */}

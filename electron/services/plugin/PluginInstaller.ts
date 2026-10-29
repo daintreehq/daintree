@@ -29,7 +29,6 @@ import { getPluginMcpConsentService, getPluginMcpRateLimiter } from "../plugin-m
 import { getPluginCapabilityConsentService } from "../plugin-capability/instances.js";
 import { clearProjectPluginVisibilityForPlugin } from "./projectPluginVisibility.js";
 import { findUnusablePluginAssets } from "./pluginManifestAssetFiles.js";
-import { wipeSettingsFile } from "../PluginSettingsStore.js";
 import type {
   PluginManifest,
   PluginInstallError,
@@ -90,8 +89,6 @@ interface PluginInstallerDeps {
   getPluginsRoot: () => string;
   /** Persisted provenance record CRUD + disabled-list reads. */
   records: PluginInstalledRecordsStore;
-  /** Per-(plugin,scope) user-settings file root — uninstall optionally deletes the file. */
-  getSettingsRoot: () => string;
   /** Core lifecycle callbacks — reached purely through injection so no PluginService back-reference. */
   loadPlugin: (
     root: string,
@@ -112,11 +109,11 @@ interface PluginInstallerDeps {
    */
   purgeRecipeMetadata: (pluginId: string) => Promise<void>;
   /**
-   * Delete the user-scope settings, secrets, accounts and storage of every
-   * per-project instance an `instanceMode: "project"` package ever had. Wired to
-   * the settings-wiping uninstall only, beside the package's own files.
+   * Delete the settings, secrets, local settings, account tokens and user-scope
+   * storage this machine keeps for a plugin id and for every per-project
+   * instance of it. Wired to the settings-wiping uninstall only.
    */
-  wipeProjectInstanceData?: (pluginId: string) => Promise<void>;
+  wipePluginData: (pluginId: string) => Promise<void>;
   /** Lookup for the running or skipped-at-launch plugin (only `isBuiltin` is consumed). */
   getPlugin: (pluginId: string) => InstallerPluginInfo | undefined;
   /** Shared launch-time name reservation set — stays PluginService-owned (read by a test cast). */
@@ -1292,7 +1289,7 @@ export class PluginInstaller {
    * install, and drop its provenance record. Composes the existing
    * `unloadPlugin` (which tears down all of the plugin's contributions and
    * broadcasts the registry changes) with deletion of the plugin directory,
-   * optional deletion of its user-scope settings/secrets, and removal of the
+   * optional deletion of its settings, secrets, accounts and stored data, and removal of the
    * persisted `plugins.installed` record, then fires a
    * `plugin:provenance-changed` broadcast so every project view's Settings tab
    * re-pulls the list.
@@ -1300,8 +1297,8 @@ export class PluginInstaller {
    * Holds the same `install.lock` {@link installPlugin} uses, so an install and
    * an uninstall of the same plugin can't race on the directory. A throwing
    * disposer never blocks the on-disk deletion — a broken plugin must still be
-   * uninstallable. `deleteSettings` defaults to `false` so stored secrets
-   * survive a reinstall; project-scope settings (per-repo `.daintree/`, tracked
+   * uninstallable. `deleteSettings` defaults to `false` so stored secrets,
+   * sign-ins and data survive a reinstall; project-scope settings (per-repo `.daintree/`, tracked
    * git artifacts) are never touched. Built-ins are app-bundled with no
    * installed record — their directory is never deleted.
    */
@@ -1418,27 +1415,14 @@ export class PluginInstaller {
         await fs.rm(pluginDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       }
 
-      // Optionally delete user-scope stored settings/secrets. The in-memory store
-      // was already dropped by `unloadPlugin`'s clearPluginSettingsState step, but
-      // a write it queued can still be waiting on a keychain prompt, so the file
-      // is deleted through the stores' own write queue, which also keeps any
-      // such write from putting it back.
+      // Optionally delete what the plugin kept on this machine: settings and
+      // secrets, account tokens and storage, the same for a singleton as for a
+      // per-project package's instances. The in-memory stores were already
+      // dropped by unload, but a write one queued can still be waiting on a
+      // keychain prompt, so the files go through the stores' own write queue,
+      // which also keeps any such write from putting them back.
       if (wipeSettings) {
-        await wipeSettingsFile(path.join(this.deps.getSettingsRoot(), `${pluginId}.json`));
-        // The host-managed account's tokens go with the settings they sit beside.
-        await wipeSettingsFile(
-          path.join(this.deps.getSettingsRoot(), "accounts", `${pluginId}.json`)
-        );
-        if (this.deps.wipeProjectInstanceData) {
-          try {
-            await this.deps.wipeProjectInstanceData(pluginId);
-          } catch (err) {
-            console.error(
-              `[PluginService] wiping per-project instance data during uninstall of "${pluginId}" threw:`,
-              err
-            );
-          }
-        }
+        await this.deps.wipePluginData(pluginId);
       }
 
       // Bookkeeping runs only after the filesystem deletion succeeds — if `fs.rm`

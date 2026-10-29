@@ -169,7 +169,7 @@ program
   .description("Uninstall a plugin from the running Daintree")
   .option(
     "--delete-settings",
-    "also delete this plugin's user-scope settings (per-project .daintree/ settings are always kept)"
+    "also delete its settings and secrets, connected accounts and stored data in every project on this machine (databases and files it created, and repository .daintree/ settings, are kept)"
   )
   .action(async (pluginId: string, opts: { deleteSettings?: boolean }) => {
     try {

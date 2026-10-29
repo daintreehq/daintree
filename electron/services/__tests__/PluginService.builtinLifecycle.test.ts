@@ -213,6 +213,8 @@ vi.mock("../plugin/PluginDevWorkerMainBridge.js", () => ({
 }));
 
 import { PluginService } from "../PluginService.js";
+import { PluginSettingsStore } from "../PluginSettingsStore.js";
+import type { SecretCipher } from "../plugin/secretCipher.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import {
   clearPluginHostedViewRegistry,
@@ -771,6 +773,89 @@ describe("PluginService built-in plugin loading", () => {
 
       await expect(fs.access(path.join(pluginsRoot, "acme.wipe"))).rejects.toThrow();
       await expect(fs.access(settingsFile)).rejects.toThrow();
+    });
+
+    it("deletes a singleton's accounts, local settings and stored data with deleteSettings, as for a per-project instance", async () => {
+      const pluginsRoot = path.join(tmpDir, "plugins");
+      await fs.mkdir(path.join(pluginsRoot, "acme.wipe"), { recursive: true });
+      await fs.writeFile(
+        path.join(pluginsRoot, "acme.wipe", "plugin.json"),
+        JSON.stringify({ name: "acme.wipe", version: "1.0.0" })
+      );
+      const wiped = [
+        path.join(tmpDir, "plugin-settings", "acme.wipe.json"),
+        path.join(tmpDir, "plugin-settings", "accounts", "acme.wipe.json"),
+        path.join(tmpDir, "plugin-settings", "local", "a".repeat(64), "acme.wipe.json"),
+        path.join(tmpDir, "plugin-settings", "local", "b".repeat(64), "acme.wipe.json"),
+        path.join(tmpDir, "plugin-storage", "acme.wipe.json"),
+      ];
+      const kept = [
+        path.join(tmpDir, "plugin-settings", "acme.other.json"),
+        path.join(tmpDir, "plugin-storage", "acme.other.json"),
+        path.join(tmpDir, "some-project", ".daintree", "plugin-storage", "acme.wipe.json"),
+      ];
+      for (const file of [...wiped, ...kept]) {
+        await fs.mkdir(path.dirname(file), { recursive: true });
+        await fs.writeFile(file, "{}");
+      }
+      const service = new PluginService(pluginsRoot, "0.0.0", { builtinPluginsRoot: builtinDir });
+      await service.initialize();
+
+      await service.uninstallPlugin("acme.wipe", true);
+
+      for (const file of wiped) await expect(fs.access(file)).rejects.toThrow();
+      for (const file of kept) await expect(fs.access(file)).resolves.toBeUndefined();
+    });
+
+    it("deletes a local secret whose first write was still waiting on the keychain", async () => {
+      const pluginsRoot = path.join(tmpDir, "plugins");
+      await fs.mkdir(path.join(pluginsRoot, "acme.wipe"), { recursive: true });
+      await fs.writeFile(
+        path.join(pluginsRoot, "acme.wipe", "plugin.json"),
+        JSON.stringify({ name: "acme.wipe", version: "1.0.0" })
+      );
+      // The project's local directory doesn't exist yet: only the queued write knows the path.
+      const localFile = path.join(
+        tmpDir,
+        "plugin-settings",
+        "local",
+        "c".repeat(64),
+        "acme.wipe.json"
+      );
+      let reached!: () => void;
+      const encryptReached = new Promise<void>((resolve) => (reached = resolve));
+      let release!: () => void;
+      const encryptReleased = new Promise<void>((resolve) => (release = resolve));
+      const heldCipher: SecretCipher = {
+        tier: () => "keychain",
+        encrypt: async (plaintext) => {
+          reached();
+          await encryptReleased;
+          return Buffer.from(`enc:${plaintext}`, "utf-8").toString("base64");
+        },
+        decrypt: async () => ({ plaintext: "", reencrypt: false }),
+      };
+      const service = new PluginService(pluginsRoot, "0.0.0", { builtinPluginsRoot: builtinDir });
+      await service.initialize();
+
+      const write = new PluginSettingsStore(localFile, heldCipher).set("token", "sk-1", {
+        secret: true,
+      });
+      await encryptReached;
+      const localRoot = path.join(tmpDir, "plugin-settings", "local");
+      const readdir = vi.spyOn(fs, "readdir");
+      const uninstall = service.uninstallPlugin("acme.wipe", true);
+      // The sweep registers its wipes before it first lists the local root, so
+      // the held write can only resume after that.
+      await vi.waitFor(() =>
+        expect(readdir.mock.calls.some(([dir]) => String(dir) === localRoot)).toBe(true)
+      );
+      readdir.mockRestore();
+      release();
+
+      await expect(write).rejects.toThrow(/settings were deleted/);
+      await uninstall;
+      await expect(fs.access(localFile)).rejects.toThrow();
     });
 
     it("never deletes a project-scope settings file, even with deleteSettings", async () => {
