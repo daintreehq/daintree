@@ -136,24 +136,13 @@ export function composerPreviewIds(): Set<string> {
   return ids;
 }
 
-/** Whether any request this preview made, in any worktree, is still on its way. */
-export function hasRequestsInFlight(previewPanelId: string): boolean {
-  for (const [key, memory] of memories) {
-    if (!key.startsWith(`${previewPanelId}\n`)) continue;
-    if (memory.deliveries.some((delivery) => !isSettledDelivery(delivery))) return true;
-  }
-  return false;
-}
-
-export function subscribeComposerMemory(listener: () => void): () => void {
+function subscribe(listener: () => void): () => void {
   listeners.add(listener);
-  return () => {
-    listeners.delete(listener);
-  };
+  return () => listeners.delete(listener);
 }
 
 export function useComposerMemory(previewPanelId: string): ComposerMemory {
-  return useSyncExternalStore(subscribeComposerMemory, () => readComposerMemory(previewPanelId));
+  return useSyncExternalStore(subscribe, () => readComposerMemory(previewPanelId));
 }
 
 /**
@@ -163,7 +152,7 @@ export function useComposerMemory(previewPanelId: string): ComposerMemory {
  * keystroke the way {@link useComposerMemory} would.
  */
 export function useComposerOccupied(previewPanelId: string): boolean {
-  return useSyncExternalStore(subscribeComposerMemory, () => {
+  return useSyncExternalStore(subscribe, () => {
     const memory = readComposerMemory(previewPanelId);
     return memory.deliveries.length > 0 || memory.draft.trim() !== "";
   });
@@ -178,7 +167,7 @@ const collapsedDrawers = new Set<string>();
 
 /** Whether the user folded the picker's drawer away for this preview. */
 export function useDrawerCollapsed(previewPanelId: string): boolean {
-  return useSyncExternalStore(subscribeComposerMemory, () => collapsedDrawers.has(previewPanelId));
+  return useSyncExternalStore(subscribe, () => collapsedDrawers.has(previewPanelId));
 }
 
 export function setDrawerCollapsed(previewPanelId: string, collapsed: boolean): void {

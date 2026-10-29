@@ -329,56 +329,63 @@ export function AgentComposer({
     };
     let checked: { about: Pinned; scope: TaskScope | undefined } | null = null;
     let builtFor: string | null = null;
-    void deliverAgentRequest({
-      memoryKey,
-      worktreeId,
-      sentDraft: instruction,
-      subject: made,
-      // What the prompt is about, beside the words: the same sentence aimed at
-      // another element, or another scope, builds a different prompt, so it
-      // must not be folded into a run already going. A selection carries the
-      // revisions it cites, so its id stands for its bytes too.
-      subjectKey: `${made.selection.selectionId}\n${made.scope}`,
-      destination:
-        target.kind === "launch"
-          ? { kind: "launch", agentId: target.agentId, title: target.name }
-          : { kind: "terminal", terminalId: target.target.terminalId, title: target.target.title },
-      settled: () => resolve() !== "pending",
-      // Locations in the prompt are only true of the bytes they were read from,
-      // and an agent can take minutes to reach its prompt. Checked right before
-      // the request goes in; its words stay on its row either way.
-      // One subject per attempt: what the check vouched for is what the
-      // prompt is built from, and the check after building is about that same
-      // prompt. Resolving afresh each time let a selection proved again in
-      // between put one element's locations under another's revisions.
-      verify: async (after) => {
-        const now = resolve();
-        if (now === "pending") return SUBJECT_UNSETTLED;
-        if (after === "built" && builtFor !== now.about.selection.selectionId) return STALE_SOURCE;
-        if (!(await controller.sourcesUnchanged(now.about.selection))) return STALE_SOURCE;
-        if (after !== "built") checked = now;
-        return null;
-      },
-      buildPrompt: async () => {
-        const now = checked ?? { about: made, scope: madeScopes[made.scope] };
-        const about = now.about.selection;
-        builtFor = about.selectionId;
-        const [picture, project] = await Promise.all([
-          controller.pagePicture(about.selectionId),
-          controller.projectFor(about),
-        ]);
-        return buildAgentTaskPrompt(
-          promptInputFor({
-            instruction,
-            selection: about,
-            scope: now.scope,
-            worktreePath,
-            project,
-            picture,
-          })
-        );
-      },
-    });
+    controller.holdWhile(
+      deliverAgentRequest({
+        memoryKey,
+        worktreeId,
+        sentDraft: instruction,
+        subject: made,
+        // What the prompt is about, beside the words: the same sentence aimed at
+        // another element, or another scope, builds a different prompt, so it
+        // must not be folded into a run already going. A selection carries the
+        // revisions it cites, so its id stands for its bytes too.
+        subjectKey: `${made.selection.selectionId}\n${made.scope}`,
+        destination:
+          target.kind === "launch"
+            ? { kind: "launch", agentId: target.agentId, title: target.name }
+            : {
+                kind: "terminal",
+                terminalId: target.target.terminalId,
+                title: target.target.title,
+              },
+        settled: () => resolve() !== "pending",
+        // Locations in the prompt are only true of the bytes they were read from,
+        // and an agent can take minutes to reach its prompt. Checked right before
+        // the request goes in; its words stay on its row either way.
+        // One subject per attempt: what the check vouched for is what the
+        // prompt is built from, and the check after building is about that same
+        // prompt. Resolving afresh each time let a selection proved again in
+        // between put one element's locations under another's revisions.
+        verify: async (after) => {
+          const now = resolve();
+          if (now === "pending") return SUBJECT_UNSETTLED;
+          if (after === "built" && builtFor !== now.about.selection.selectionId)
+            return STALE_SOURCE;
+          if (!(await controller.sourcesUnchanged(now.about.selection))) return STALE_SOURCE;
+          if (after !== "built") checked = now;
+          return null;
+        },
+        buildPrompt: async () => {
+          const now = checked ?? { about: made, scope: madeScopes[made.scope] };
+          const about = now.about.selection;
+          builtFor = about.selectionId;
+          const [picture, project] = await Promise.all([
+            controller.pagePicture(about.selectionId),
+            controller.projectFor(about),
+          ]);
+          return buildAgentTaskPrompt(
+            promptInputFor({
+              instruction,
+              selection: about,
+              scope: now.scope,
+              worktreePath,
+              project,
+              picture,
+            })
+          );
+        },
+      })
+    );
   };
 
   const send = () => {

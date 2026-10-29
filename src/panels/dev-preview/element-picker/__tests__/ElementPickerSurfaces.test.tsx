@@ -2485,10 +2485,18 @@ describe("delivery across the picker's lifetime", () => {
 
     cleanup();
     await switchOff();
-    await act(async () => switchOn());
+    // The next session gets a workspace of its own, as the host hands out.
+    host.openWith = () => ({
+      status: "ready",
+      workspaceId: "ws-2",
+      appPath: ".",
+      appPaths: ["."],
+      scanComplete: true,
+    });
     mount();
+    await waitFor(() => expect(host.calls("openWorkspace")).toHaveLength(2));
+    await screen.findByRole("radio", { name: "Browse" });
     await act(async () => host.documentReady(0));
-    await act(async () => host.select(0));
 
     const reopened = (await screen.findByRole("textbox", {
       name: "Request for the agent",
@@ -2497,6 +2505,52 @@ describe("delivery across the picker's lifetime", () => {
     expect(readComposerMemory(composerMemoryKey("preview-1", "wt-1")).deliveries).toEqual([
       expect.objectContaining({ instruction: "Say Upgrade", state: { status: "queued" } }),
     ]);
+
+    // Still about what it was written about, and sendable through the new session.
+    const send = () => screen.getByRole("button", { name: "Send to agent" }) as HTMLButtonElement;
+    await waitFor(() => expect(send().disabled).toBe(false));
+    fireEvent.click(send());
+    agent.becomeReady();
+
+    await waitFor(() => expect(agent.sent).toHaveLength(2), { timeout: 8_000 });
+    expect(agent.sent[0]).toContain("Say Upgrade");
+    expect(agent.sent[1]).toContain("And make it bold");
+    // The closed session waited for its own request, then let its workspace go.
+    await waitFor(() => expect(host.calls("closeWorkspace")).toEqual([{ workspaceId: "ws-1" }]));
+  });
+
+  it("won't send a restored draft whose source changed while the picker was closed", async () => {
+    panels(true);
+    const agent = await agentActions();
+    await mountSelected();
+    const request = screen.getByRole("textbox", { name: "Request for the agent" });
+    fireEvent.change(request, { target: { value: "Say Upgrade" } });
+
+    cleanup();
+    await switchOff();
+    host.diskRevisions.set(FILE, sha("edited while closed"));
+    host.openWith = () => ({
+      status: "ready",
+      workspaceId: "ws-2",
+      appPath: ".",
+      appPaths: ["."],
+      scanComplete: true,
+    });
+    mount();
+    await waitFor(() => expect(host.calls("openWorkspace")).toHaveLength(2));
+    agent.becomeReady();
+    const send = () => screen.getByRole("button", { name: "Send to agent" }) as HTMLButtonElement;
+    await waitFor(() => expect(send().disabled).toBe(false));
+    fireEvent.click(send());
+
+    await waitFor(() =>
+      expect(readComposerMemory(composerMemoryKey("preview-1", "wt-1")).deliveries).toEqual([
+        expect.objectContaining({
+          instruction: "Say Upgrade",
+          state: expect.objectContaining({ status: "failed" }),
+        }),
+      ])
+    );
     expect(agent.sent).toEqual([]);
   });
 
@@ -2528,7 +2582,7 @@ describe("delivery across the picker's lifetime", () => {
     // And the run really stopped, rather than quietly polling on.
     expect(agent.polls()).toBe(pollsAtTrash);
     expect(readComposerMemory(composerMemoryKey("preview-1", "wt-1")).deliveries).toEqual([]);
-    expect(host.calls("closeWorkspace")).toEqual([{ workspaceId: "ws-1" }]);
+    await waitFor(() => expect(host.calls("closeWorkspace")).toEqual([{ workspaceId: "ws-1" }]));
   });
 
   it("doesn't retry a request the picker was switched off in the middle of writing", async () => {

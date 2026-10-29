@@ -169,6 +169,30 @@ describe("deliverAgentRequest", () => {
     expect(readComposerMemory(KEY).draft).toBe("");
   });
 
+  it("ends a waiting request the moment its preview moves to another worktree", async () => {
+    terminal();
+    void send();
+    await vi.advanceTimersByTimeAsync(0);
+    previewIn("wt-2");
+    // Before the request's own next check: the move itself ends it.
+    expect(last()?.state).toEqual({
+      status: "failed",
+      message: "Stopped before the request was sent",
+    });
+  });
+
+  it("ends a waiting request and drops its record when the last panel goes", async () => {
+    const agent = terminal();
+    const run = send();
+    await vi.advanceTimersByTimeAsync(1_000);
+    usePanelStore.setState({ panelIds: [], panelsById: {} } as never);
+    agent.setState("waiting");
+    await vi.advanceTimersByTimeAsync(2_000);
+    await run;
+    expect(agent.sent).toEqual([]);
+    expect(readComposerMemory(KEY).deliveries).toEqual([]);
+  });
+
   it("ends a waiting request when the preview moves away and back before its next check", async () => {
     const agent = terminal();
     const run = send();
