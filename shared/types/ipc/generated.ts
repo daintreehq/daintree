@@ -305,7 +305,7 @@ export interface GeneratedIpcInvokeMap {
       entries: (
         | {
             state: "live";
-            role: "assistant" | "worker";
+            role: "worker" | "assistant";
             subject: {
               hostId: string;
               scope: { kind: "project"; projectId: string } | { kind: "global" };
@@ -1209,7 +1209,7 @@ export interface GeneratedIpcInvokeMap {
               sourceMap: {
                 mapUrl: string | null;
                 mapRevision: string;
-                sourceCheck: "unchecked" | "matches" | "differs";
+                sourceCheck: "matches" | "differs" | "unchecked";
               };
               candidateId: string;
               claim:
@@ -1244,7 +1244,7 @@ export interface GeneratedIpcInvokeMap {
                 | {
                     mapUrl: string | null;
                     mapRevision: string;
-                    sourceCheck: "unchecked" | "matches" | "differs";
+                    sourceCheck: "matches" | "differs" | "unchecked";
                   }
                 | undefined;
               placedBy?: "structure" | undefined;
@@ -1290,7 +1290,7 @@ export interface GeneratedIpcInvokeMap {
                     sourceMap: {
                       mapUrl: string | null;
                       mapRevision: string;
-                      sourceCheck: "unchecked" | "matches" | "differs";
+                      sourceCheck: "matches" | "differs" | "unchecked";
                     };
                   }
                 | {
@@ -1311,7 +1311,7 @@ export interface GeneratedIpcInvokeMap {
                       | {
                           mapUrl: string | null;
                           mapRevision: string;
-                          sourceCheck: "unchecked" | "matches" | "differs";
+                          sourceCheck: "matches" | "differs" | "unchecked";
                         }
                       | undefined;
                     placedBy?: "structure" | undefined;
@@ -1360,7 +1360,7 @@ export interface GeneratedIpcInvokeMap {
                     sourceMap: {
                       mapUrl: string | null;
                       mapRevision: string;
-                      sourceCheck: "unchecked" | "matches" | "differs";
+                      sourceCheck: "matches" | "differs" | "unchecked";
                     };
                   }
                 | {
@@ -1381,7 +1381,7 @@ export interface GeneratedIpcInvokeMap {
                       | {
                           mapUrl: string | null;
                           mapRevision: string;
-                          sourceCheck: "unchecked" | "matches" | "differs";
+                          sourceCheck: "matches" | "differs" | "unchecked";
                         }
                       | undefined;
                     placedBy?: "structure" | undefined;
@@ -1401,10 +1401,10 @@ export interface GeneratedIpcInvokeMap {
               reason:
                 | "cancelled"
                 | "unsupported"
-                | "mismatch"
                 | "file-missing"
                 | "outside-workspace"
                 | "map-missing"
+                | "mismatch"
                 | "budget-exhausted";
               candidateId: string;
               claim:
@@ -2288,13 +2288,13 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { sessionId: string }];
     result: void;
   };
+  "mcp-server:revoke-grant": {
+    args: [payload: { sessionId: string; toolId: string }];
+    result: import("./mcpServer.js").McpRevokeGrantResult;
+  };
   "mcp-server:revoke-native-grant": {
     args: [payload: { grantId: string }];
     result: import("./mcpServer.js").McpRevokeNativeGrantResult;
-  };
-  "mcp-server:revoke-session-grants": {
-    args: [payload: { sessionId: string }];
-    result: import("./mcpServer.js").McpRevokeSessionGrantsResult;
   };
   "mcp-server:rotate-api-key": {
     args: [];
@@ -3522,17 +3522,17 @@ export interface GeneratedIpcInvokeMap {
             | {
                 kind: "unverifiable";
                 reason:
-                  "unreadable" | "file-too-large" | "byte-limit" | "deadline" | "special-file";
+                  "file-too-large" | "byte-limit" | "deadline" | "unreadable" | "special-file";
               };
           path: string;
           pathBytes?: string | undefined;
         }[];
         incomplete: {
           reasons: (
-            | "unreadable"
             | "file-too-large"
             | "byte-limit"
             | "deadline"
+            | "unreadable"
             | "special-file"
             | "path-limit"
             | "nested-repository"
@@ -3543,10 +3543,10 @@ export interface GeneratedIpcInvokeMap {
           )[];
           uncovered: {
             reason:
-              | "unreadable"
               | "file-too-large"
               | "byte-limit"
               | "deadline"
+              | "unreadable"
               | "special-file"
               | "path-limit"
               | "nested-repository"
@@ -4250,7 +4250,7 @@ export interface GeneratedIpcInvokeMap {
           sourcePrNumber?: number | undefined;
           sourcePrTitle?: string | undefined;
           sourcePrUrl?: string | undefined;
-          sourcePrState?: "open" | "merged" | "closed" | undefined;
+          sourcePrState?: "open" | "closed" | "merged" | undefined;
           sourcePrLinkedIssueNumber?: number | undefined;
           submoduleInit?: "none" | "inherit" | "all" | undefined;
           collisionPolicy?: "error" | "suffix" | undefined;

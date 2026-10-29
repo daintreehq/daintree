@@ -811,11 +811,10 @@ export const CHANNELS = {
    */
   MCP_SERVER_ISSUE_GRANT: "mcp-server:issue-grant",
   /**
-   * Revoke every grant currently held by the named session. Returns the
-   * count of revoked grants for the renderer's confirmation copy. Caller-
-   * pin checked.
+   * Revoke one per-`(sessionId, toolId)` grant, leaving the session's other
+   * grants alone. Idempotent. Caller-pin checked.
    */
-  MCP_SERVER_REVOKE_SESSION_GRANTS: "mcp-server:revoke-session-grants",
+  MCP_SERVER_REVOKE_GRANT: "mcp-server:revoke-grant",
   /**
    * Approve a native session-scoped automation grant (#10648), addressed by
    * the public help-session id. Authorizes a bounded set of tools for a

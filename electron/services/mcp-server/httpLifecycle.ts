@@ -43,7 +43,7 @@ import type {
   McpIssueGrantResult,
   McpIssueNativeGrantResult,
   McpRevokeNativeGrantResult,
-  McpRevokeSessionGrantsResult,
+  McpRevokeGrantResult,
   McpTurnOutcomeAlertPayload,
 } from "../../../shared/types/ipc/mcpServer.js";
 import {
@@ -1969,13 +1969,18 @@ export class HttpLifecycle {
   }
 
   /**
-   * Drop every grant currently held by the session. Caller-pin checked
-   * identically to {@link issueGrant}. Returns the count of revoked
-   * grants for the renderer's confirmation copy.
+   * Drop the one per-tool grant for the pair, leaving the session's other
+   * grants alone. Caller-pin checked identically to {@link issueGrant}, but
+   * with no grantability check: a grant that exists can always be ended, even
+   * if the tool's policy changed since it was issued. `revoked` is false when
+   * the grant was already gone.
    */
-  revokeSessionGrants(sessionId: string, callerWcId?: number): McpRevokeSessionGrantsResult {
+  revokeGrant(sessionId: string, toolId: string, callerWcId?: number): McpRevokeGrantResult {
     if (!sessionId || typeof sessionId !== "string") {
       throw new Error("Invalid sessionId");
+    }
+    if (!toolId || typeof toolId !== "string") {
+      throw new Error("Invalid toolId");
     }
     // Caller-pin is enforced when the session is still alive; if the
     // session has already drained (idle reaper / explicit close) the
@@ -1986,8 +1991,8 @@ export class HttpLifecycle {
     if (pinnedWcId !== undefined && callerWcId !== undefined && callerWcId !== pinnedWcId) {
       throw new Error("Caller is not the pinned renderer for this session");
     }
-    const revokedCount = this.deps.sessionStore.grantCache.revokeSession(sessionId, "user");
-    return { sessionId, revokedCount };
+    const revoked = this.deps.sessionStore.grantCache.revokeGrant(sessionId, toolId, "user");
+    return { sessionId, toolId, revoked };
   }
 
   /**
@@ -2128,7 +2133,7 @@ export class HttpLifecycle {
    * touching its grants. Called when the user dismisses the tier-mismatch
    * banner (Cancel) so the next out-of-tier call re-shows the banner instead
    * of being silently suppressed by the abuse policy after the denial
-   * threshold. Caller-pin checked identically to {@link revokeSessionGrants};
+   * threshold. Caller-pin checked identically to {@link revokeGrant};
    * a drained session is an idempotent no-op so the renderer's dismissal
    * cleanup always succeeds.
    */
