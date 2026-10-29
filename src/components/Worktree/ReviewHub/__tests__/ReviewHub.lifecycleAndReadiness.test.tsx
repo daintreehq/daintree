@@ -283,6 +283,7 @@ vi.mock("@/components/ui/EmptyState", () => ({
 
 import { ReviewHubContent } from "../ReviewHubContent";
 import { useUIStore } from "@/store/uiStore";
+import { useReviewCommitDraftStore } from "@/store/reviewCommitDraftStore";
 import { useGitPushConfirmStore } from "@/store/gitPushConfirmStore";
 import { useGitPullRebaseConfirmStore } from "@/store/gitPullRebaseConfirmStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
@@ -362,6 +363,8 @@ describe("ReviewHub", () => {
     // renders, and clearing also stops a test that collapses it from leaking
     // into the next one.
     useUIStore.setState({ reviewHubFileListExpanded: {} });
+    // Typed drafts outlive the hub (#15007); one test's draft must not seed the next.
+    useReviewCommitDraftStore.setState({ draftsByWorktree: {} });
 
     // #8025: reset the per-worktree push-confirm opt-out so a previous test
     // that pre-set it can't leak into the next one.
@@ -600,6 +603,156 @@ describe("ReviewHub", () => {
         />
       );
       expect(textarea.value).toBe("human override");
+    });
+  });
+
+  describe("commit message draft (issue #15007)", () => {
+    async function openHub(props: { initialCommitMessage?: string; worktreePath?: string } = {}) {
+      const view = render(
+        <ReviewHubContent
+          isOpen={true}
+          worktreePath={props.worktreePath ?? WORKTREE_PATH}
+          onClose={vi.fn()}
+          initialCommitMessage={props.initialCommitMessage}
+        />
+      );
+      await waitFor(() => screen.getByLabelText("Commit message"));
+      return {
+        ...view,
+        textarea: screen.getByLabelText("Commit message") as HTMLTextAreaElement,
+      };
+    }
+
+    it("keeps a typed message across closing and reopening the hub", async () => {
+      const first = await openHub();
+      fireEvent.change(first.textarea, { target: { value: "feat: carefully worded" } });
+      first.unmount();
+
+      const second = await openHub();
+      expect(second.textarea.value).toBe("feat: carefully worded");
+    });
+
+    it("keeps the typed message over the note's seed on reopen", async () => {
+      const first = await openHub({ initialCommitMessage: "from AI note" });
+      fireEvent.change(first.textarea, { target: { value: "human edit" } });
+      first.unmount();
+
+      const second = await openHub({ initialCommitMessage: "newer AI note" });
+      expect(second.textarea.value).toBe("human edit");
+    });
+
+    it("never keeps an untouched seed as a draft", async () => {
+      const first = await openHub({ initialCommitMessage: "from AI note" });
+      expect(first.textarea.value).toBe("from AI note");
+      first.unmount();
+
+      const second = await openHub();
+      expect(second.textarea.value).toBe("");
+      expect(useReviewCommitDraftStore.getState().draftsByWorktree).toEqual({});
+    });
+
+    it("forgets a typed draft the user clears", async () => {
+      const first = await openHub();
+      fireEvent.change(first.textarea, { target: { value: "feat: second thoughts" } });
+      fireEvent.change(first.textarea, { target: { value: "" } });
+      first.unmount();
+
+      const second = await openHub();
+      expect(second.textarea.value).toBe("");
+      expect(useReviewCommitDraftStore.getState().draftsByWorktree).toEqual({});
+    });
+
+    it("lets a cleared field fall back to the seed on the next open", async () => {
+      const first = await openHub({ initialCommitMessage: "from AI note" });
+      fireEvent.change(first.textarea, { target: { value: "" } });
+      expect(first.textarea.value).toBe("");
+      first.unmount();
+
+      const second = await openHub({ initialCommitMessage: "newer AI note" });
+      expect(second.textarea.value).toBe("newer AI note");
+    });
+
+    it("keeps drafts apart per worktree", async () => {
+      const first = await openHub();
+      fireEvent.change(first.textarea, { target: { value: "for the first worktree" } });
+      first.unmount();
+
+      const other = await openHub({ worktreePath: "/home/user/other" });
+      expect(other.textarea.value).toBe("");
+    });
+
+    it("drops the draft once the commit succeeds", async () => {
+      const first = await openHub();
+      fireEvent.change(first.textarea, { target: { value: "feat: ship it" } });
+      fireEvent.click(screen.getByTestId("review-hub-commit-primary"));
+      await waitFor(() => expect(commitMock).toHaveBeenCalled());
+      await waitFor(() => expect(first.textarea.value).toBe(""));
+      first.unmount();
+
+      const second = await openHub();
+      expect(second.textarea.value).toBe("");
+    });
+
+    it("keeps a newer draft when an older commit lands after a close and reopen", async () => {
+      let landCommit: (value: { hash: string; summary: string }) => void = () => {};
+      commitMock.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            landCommit = resolve;
+          })
+      );
+      const first = await openHub();
+      fireEvent.change(first.textarea, { target: { value: "feat: first" } });
+      fireEvent.click(screen.getByTestId("review-hub-commit-primary"));
+      await waitFor(() => expect(commitMock).toHaveBeenCalled());
+      first.unmount();
+
+      const second = await openHub();
+      expect(second.textarea.value).toBe("feat: first");
+      fireEvent.change(second.textarea, { target: { value: "feat: second" } });
+      // The landed commit refreshes the status, then drops the draft it made.
+      const readsBefore = getStagingStatusMock.mock.calls.length;
+      await act(async () => {
+        landCommit({ hash: "abc123", summary: "commit" });
+      });
+      await waitFor(() =>
+        expect(getStagingStatusMock.mock.calls.length).toBeGreaterThan(readsBefore)
+      );
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(second.textarea.value).toBe("feat: second");
+      expect(useReviewCommitDraftStore.getState().draftsByWorktree[WORKTREE_PATH]).toBe(
+        "feat: second"
+      );
+    });
+
+    it("never brings the seed back once another hub's draft has replaced it", async () => {
+      const hub = await openHub({ initialCommitMessage: "from AI note" });
+      expect(hub.textarea.value).toBe("from AI note");
+
+      act(() => {
+        useReviewCommitDraftStore.getState().setDraft(WORKTREE_PATH, "typed in the other hub");
+      });
+      expect(hub.textarea.value).toBe("typed in the other hub");
+
+      act(() => {
+        useReviewCommitDraftStore.getState().setDraft(WORKTREE_PATH, "");
+      });
+      expect(hub.textarea.value).toBe("");
+    });
+
+    it("keeps the draft when the commit fails", async () => {
+      commitMock.mockRejectedValueOnce(new Error("hook rejected"));
+      const first = await openHub();
+      fireEvent.change(first.textarea, { target: { value: "feat: try again" } });
+      fireEvent.click(screen.getByTestId("review-hub-commit-primary"));
+      await waitFor(() => expect(commitMock).toHaveBeenCalled());
+      first.unmount();
+
+      const second = await openHub();
+      expect(second.textarea.value).toBe("feat: try again");
     });
   });
 

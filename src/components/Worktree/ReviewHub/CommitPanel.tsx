@@ -114,6 +114,10 @@ interface CommitPanelProps {
   currentBranch?: string | null;
   commitMessage: string;
   onCommitMessageChange: (message: string) => void;
+  /**
+   * Resolves once the commit lands. Clearing `commitMessage` is the parent's
+   * job: only it can tell whether the draft is still the one committed.
+   */
   onCommit: (message: string) => Promise<void>;
   onCommitAndPush: (message: string) => Promise<void>;
   onFocusBlocker?: (blocker: "conflicts" | "staged-files") => void;
@@ -320,14 +324,13 @@ export function CommitPanel({
     setPendingAction("commit");
     try {
       await onCommit(commitMessage);
-      onCommitMessageChange("");
     } catch {
       // Error is handled by the parent via setActionError
     } finally {
       setPendingAction(null);
       actionInFlightRef.current = false;
     }
-  }, [canCommit, actionsBusy, stagedCount, commitMessage, onCommit, onCommitMessageChange]);
+  }, [canCommit, actionsBusy, stagedCount, commitMessage, onCommit]);
 
   const handleCommitAndPush = useCallback(async () => {
     if (!canCommit || actionsBusy) return;
@@ -337,14 +340,13 @@ export function CommitPanel({
     setPendingAction("commit-push");
     try {
       await onCommitAndPush(commitMessage);
-      onCommitMessageChange("");
     } catch {
       // Error is handled by the parent via setActionError
     } finally {
       setPendingAction(null);
       actionInFlightRef.current = false;
     }
-  }, [canCommit, actionsBusy, stagedCount, commitMessage, onCommitAndPush, onCommitMessageChange]);
+  }, [canCommit, actionsBusy, stagedCount, commitMessage, onCommitAndPush]);
 
   const handlePrimaryClick = useCallback(() => {
     if (isBlocked) {
