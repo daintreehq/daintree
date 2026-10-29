@@ -9,8 +9,11 @@ import type { ThemePalette, ThemeStrategy } from "./palette.js";
 import type { ExtensionKey } from "./types.js";
 import {
   DIFF_TEXT_MIN_CONTRAST,
+  STATUS_TEXT_CONTRAST,
+  STATUS_TEXT_INKS,
   getThemeContrastWarnings,
   resolveDiffTextBackdrops,
+  resolveStatusTextBackdrops,
 } from "./contrast.js";
 import { liftToContrast } from "./oklch.js";
 import { sanitizeThemeExtensions } from "./extensionKeys.js";
@@ -414,9 +417,15 @@ export function createDaintreeTokens(
     "status-info-surface":
       tokens["status-info-surface"] ??
       withAlpha(tokens["status-info"], statusSurfaceAlpha(dark ? 0.1 : 0.08)),
+    // Lifted below with the churn inks, against the same final backdrops.
+    "status-danger-text": tokens["status-danger"],
+    "status-success-text": tokens["status-success"],
+    "status-warning-text": tokens["status-warning"],
+    "status-info-text": tokens["status-info"],
     ...tokens,
   };
   followStatusForDiffText(resolved, tokens, type);
+  followStatusForText(resolved, tokens, type);
   return resolved;
 }
 
@@ -669,11 +678,14 @@ function followRaisedForHighlight(
 // Headroom over the gate for the compositor rounding a channel the other way
 // from `blendOverBackground`.
 const DIFF_TEXT_DERIVATION_TARGET = DIFF_TEXT_MIN_CONTRAST + 0.05;
+const STATUS_TEXT_DERIVATION_TARGET = STATUS_TEXT_CONTRAST.minimum + 0.05;
 
 const DIFF_TEXT_SOURCES = [
   ["diff-text-insert", "status-success"],
   ["diff-text-delete", "status-danger"],
 ] as const;
+
+type StatusTextKey = (typeof STATUS_TEXT_INKS)[keyof typeof STATUS_TEXT_INKS];
 
 /**
  * DiffStat's churn inks: each status ink lifted to the nearest lightness that
@@ -697,6 +709,26 @@ export function deriveDiffTextInks(
 }
 
 /**
+ * The git status letter inks, lifted the same way: the letters share the churn
+ * counts' rows and also sit on a wash of their own hue (#15424).
+ */
+export function deriveStatusTextInks(
+  tokens: Partial<Record<AppThemeTokenKey, string>>,
+  type: "dark" | "light"
+): Partial<Pick<AppColorSchemeTokens, StatusTextKey>> {
+  const inks: Partial<Pick<AppColorSchemeTokens, StatusTextKey>> = {};
+  for (const [source, key] of Object.entries(STATUS_TEXT_INKS) as Array<
+    [keyof typeof STATUS_TEXT_INKS, StatusTextKey]
+  >) {
+    const ink = tokens[source];
+    if (typeof ink !== "string") continue;
+    const backdrops = resolveStatusTextBackdrops(ink, tokens).map((backdrop) => backdrop.hex);
+    inks[key] = liftToContrast(ink, backdrops, STATUS_TEXT_DERIVATION_TARGET, type);
+  }
+  return inks;
+}
+
+/**
  * The churn inks follow the status inks unless the theme names them, and are
  * lifted from the final tokens for the same reason as the two follows above: a
  * theme that retunes a status ink, a surface or a row fill after the engine ran
@@ -715,6 +747,19 @@ function followStatusForDiffText(
   }
 }
 
+/** The status letter inks follow their status inks the same way. */
+function followStatusForText(
+  tokens: Record<string, unknown>,
+  overrides: Record<string, unknown> | undefined,
+  type: "dark" | "light"
+): void {
+  const inks = deriveStatusTextInks(tokens as Partial<Record<AppThemeTokenKey, string>>, type);
+  for (const key of Object.values(STATUS_TEXT_INKS)) {
+    if (typeof overrides?.[key] === "string") continue;
+    if (inks[key] !== undefined) tokens[key] = inks[key];
+  }
+}
+
 function createThemeFromSource(source: BuiltInThemeSource): AppColorScheme {
   const compiledTokens = compilePaletteToTokens(source.palette);
   const tokens = source.tokens
@@ -723,6 +768,7 @@ function createThemeFromSource(source: BuiltInThemeSource): AppColorScheme {
   if (source.tokens) followBorderStrongForInput(tokens, source.tokens);
   if (source.tokens) followRaisedForHighlight(tokens, source.tokens, source.type);
   if (source.tokens) followStatusForDiffText(tokens, source.tokens, source.type);
+  if (source.tokens) followStatusForText(tokens, source.tokens, source.type);
   const extensions = resolveStrategyExtensions(source.palette, source.extensions);
 
   return {
@@ -1168,6 +1214,7 @@ export function normalizeAppColorScheme(
   followBorderStrongForInput(normalizedTokens, tokenOverrides);
   followRaisedForHighlight(normalizedTokens, tokenOverrides, resolvedType);
   followStatusForDiffText(normalizedTokens, tokenOverrides, resolvedType);
+  followStatusForText(normalizedTokens, tokenOverrides, resolvedType);
   if (
     typeof tokenOverrides["accent-foreground"] !== "string" &&
     typeof normalizedTokens["accent-primary"] === "string"

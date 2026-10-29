@@ -19,6 +19,17 @@ const STATUS_SURFACE_TOKENS: Record<string, string> = {
   "--theme-status-info": "--theme-status-info-surface",
 };
 
+// Status base token -> its text-grade twin, which git status letters paint. Like
+// the churn inks below it is lifted against the active theme's own surfaces, so
+// the raw override stands in here and `applyColorVisionMode` lifts it whenever
+// it has the scheme.
+const STATUS_TEXT_TOKENS: Record<string, string> = {
+  "--theme-status-success": "--theme-status-success-text",
+  "--theme-status-danger": "--theme-status-danger-text",
+  "--theme-status-warning": "--theme-status-warning-text",
+  "--theme-status-info": "--theme-status-info-text",
+};
+
 // Wash alpha for the derived surfaces. The engine uses 0.10 (dark) / 0.08
 // (light); these static overrides apply across both polarities, and the
 // perceptual gap between those alphas on a low-alpha wash is negligible — the
@@ -81,6 +92,10 @@ function withStatusSurfaces(overrides: Record<string, string>): Record<string, s
   for (const [baseToken, surfaceToken] of Object.entries(STATUS_SURFACE_TOKENS)) {
     const hex = overrides[baseToken];
     if (hex) result[surfaceToken] = hexToRgba(hex, CVD_STATUS_SURFACE_ALPHA);
+  }
+  for (const [baseToken, textToken] of Object.entries(STATUS_TEXT_TOKENS)) {
+    const hex = overrides[baseToken];
+    if (hex) result[textToken] = hex;
   }
   return result;
 }

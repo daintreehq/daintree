@@ -114,14 +114,14 @@ export const STATUS_SUCCESS_INVENTORY = {
   "src/components/FileViewer/diffChangeSet.ts": [
     {
       category: "domain",
-      signature: "text-status-success",
+      signature: "text-status-success-text",
       anchor: 'label: "A"',
       expectedOccurrences: 1,
       rationale: "Git status letter A, the notation git itself paints green",
     },
     {
       category: "domain",
-      signature: "text-status-success",
+      signature: "text-status-success-text",
       anchor: 'label: "?"',
       expectedOccurrences: 1,
       rationale: "Git status letter ?, the notation git itself paints green",
@@ -311,7 +311,7 @@ export const STATUS_SUCCESS_INVENTORY = {
     },
     {
       category: "domain",
-      signature: "text-status-success",
+      signature: "text-status-success-text",
       anchor: 'label: "A"',
       expectedOccurrences: 1,
       rationale: "Git status letter A, the notation git itself paints green",
@@ -325,7 +325,7 @@ export const STATUS_SUCCESS_INVENTORY = {
     },
     {
       category: "domain",
-      signature: "text-status-success",
+      signature: "text-status-success-text",
       anchor: 'label: "?"',
       expectedOccurrences: 1,
       rationale: "Git status letter ?, the notation git itself paints green",
@@ -357,7 +357,7 @@ export const STATUS_SUCCESS_INVENTORY = {
     },
     {
       category: "domain",
-      signature: "text-status-success",
+      signature: "text-status-success-text",
       expectedOccurrences: 1,
       rationale: "Git status letter A, the notation git itself paints green",
     },
@@ -435,14 +435,14 @@ export const STATUS_SUCCESS_INVENTORY = {
   "src/lib/gitStatusPresentation.ts": [
     {
       category: "domain",
-      signature: "text-status-success",
+      signature: "text-status-success-text",
       anchor: 'name: "Added"',
       expectedOccurrences: 1,
       rationale: "Git status letter A, the notation git itself paints green",
     },
     {
       category: "domain",
-      signature: "text-status-success",
+      signature: "text-status-success-text",
       anchor: 'name: "Untracked"',
       expectedOccurrences: 1,
       rationale: "Git status letter ?, the notation git itself paints green",

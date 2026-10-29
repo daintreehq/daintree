@@ -25,6 +25,7 @@ vi.mock("@/utils/logger", async (importOriginal) => ({
 import * as kit from "@daintreehq/plugin-ui";
 import type { CheckRun, Commit, WorktreeItem } from "@daintreehq/plugin-ui";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { getGitStatusPresentation } from "@/lib/gitStatusPresentation";
 import {
   checksSummary,
   ciLook,
@@ -81,9 +82,11 @@ describe("GitStatusBadge", () => {
     const m = screen.getByTestId("m");
     expect(m.textContent).toBe("M");
     expect(m.getAttribute("aria-label")).toBe("Modified");
-    expect(m.className).toContain("text-status-warning");
+    expect(m.className).toContain(getGitStatusPresentation("modified").colorClass);
     expect(screen.getByTestId("c").textContent).toBe("!");
-    expect(screen.getByTestId("c").className).toContain("text-status-error");
+    expect(screen.getByTestId("c").className).toContain(
+      getGitStatusPresentation("conflicted").colorClass
+    );
     expect(screen.getByTestId("u").textContent).toBe("?");
   });
 

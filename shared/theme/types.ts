@@ -76,6 +76,12 @@ export const APP_THEME_TOKEN_KEYS = [
   "status-success-surface",
   "status-warning-surface",
   "status-info-surface",
+  // Status text: text-grade twins of the status inks for status-coloured small
+  // text such as git status letters. Derived by deriveStatusTextInk (contrast.ts).
+  "status-danger-text",
+  "status-success-text",
+  "status-warning-text",
+  "status-info-text",
 
   // Activity (real-time agent states)
   "activity-active",

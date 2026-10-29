@@ -10,6 +10,8 @@ export interface GitStatusPresentation {
    * for one load-bearing signal per focus region, and status is inherently
    * multi-element. The marker letter is what carries the meaning for anyone
    * who cannot separate the hues — colour is the secondary channel here.
+   * The marker is small text, so it takes a `status-*-text` ink: the plain
+   * `status-*` inks are graphical colours that fall under AA as text.
    */
   colorClass: string;
 }
@@ -20,14 +22,14 @@ export interface GitStatusPresentation {
  * into three different letters for the same state.
  */
 export const GIT_STATUS_PRESENTATION = {
-  modified: { marker: "M", name: "Modified", colorClass: "text-status-warning" },
-  added: { marker: "A", name: "Added", colorClass: "text-status-success" },
-  deleted: { marker: "D", name: "Deleted", colorClass: "text-status-error" },
-  untracked: { marker: "?", name: "Untracked", colorClass: "text-status-success" },
-  renamed: { marker: "R", name: "Renamed", colorClass: "text-status-info" },
-  copied: { marker: "C", name: "Copied", colorClass: "text-status-info" },
+  modified: { marker: "M", name: "Modified", colorClass: "text-status-warning-text" },
+  added: { marker: "A", name: "Added", colorClass: "text-status-success-text" },
+  deleted: { marker: "D", name: "Deleted", colorClass: "text-status-danger-text" },
+  untracked: { marker: "?", name: "Untracked", colorClass: "text-status-success-text" },
+  renamed: { marker: "R", name: "Renamed", colorClass: "text-status-info-text" },
+  copied: { marker: "C", name: "Copied", colorClass: "text-status-info-text" },
   ignored: { marker: "I", name: "Ignored", colorClass: "text-text-secondary" },
-  conflicted: { marker: "!", name: "Conflicted", colorClass: "text-status-error" },
+  conflicted: { marker: "!", name: "Conflicted", colorClass: "text-status-danger-text" },
 } satisfies Record<GitStatus, GitStatusPresentation>;
 
 /**
