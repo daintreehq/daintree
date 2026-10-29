@@ -54,49 +54,76 @@ describe("diffCorrection", () => {
     expect(changedWords("use 2 workers", "Use two workers.")).toEqual([["two", "2"]]);
   });
 
-  it("reads the capital of every sentence's first word as position, not a change", () => {
-    const raw = "it failed. then we retried. i'm not sure\nwhy";
-    expect(diffCorrection(raw, "It failed. Then we retried. I'm not sure\nWhy")).toEqual({
+  it("reads each sentence's first word as position, wherever the breaks fall", () => {
+    expect(
+      diffCorrection(
+        "it failed then we retried i'm not sure\nwhy",
+        "It failed. Then we retried. I'm not sure\nWhy"
+      )
+    ).toEqual({ changed: [], removed: [] });
+    // A run-on joined gives up the capital it had.
+    expect(diffCorrection("It failed. Then we retried", "It failed, then we retried.")).toEqual({
       changed: [],
       removed: [],
     });
-    // The capital a joined sentence gives up goes quietly too.
-    expect(diffCorrection("It failed. Then we retried", "It failed, then we retried.")).toEqual({
+    expect(diffCorrection('he said "done." then retry', 'He said "done." Then retry.')).toEqual({
+      changed: [],
+      removed: [],
+    });
+  });
+
+  it("keeps a sentence's opening across a token of only punctuation", () => {
+    expect(diffCorrection("— hello", "— Hello.")).toEqual({ changed: [], removed: [] });
+    expect(diffCorrection("done. — then go", "Done. — Then go.")).toEqual({
       changed: [],
       removed: [],
     });
   });
 
   it("reads the pronoun I as itself wherever it sits", () => {
-    expect(diffCorrection("and i said i'll go", "and I said I'll go")).toEqual({
+    expect(diffCorrection("and i think i'm ready", "and I think I’m ready")).toEqual({
       changed: [],
       removed: [],
+    });
+    expect(changedWords("and i'd go", "and I'd go")).toEqual([]);
+    // The apostrophe is the word's own: it still marks.
+    expect(changedWords("and id go", "and I'd go")).toEqual([["I'd", "id"]]);
+  });
+
+  it("keeps a capital that stays put as the same word when words around it go", () => {
+    expect(diffCorrection("um Open the store", "Open the store.")).toEqual({
+      changed: [],
+      removed: [{ at: 0, afterWord: false, heard: "um" }],
     });
   });
 
   it("still marks a change inside the word", () => {
-    expect(changedWords("it dont work", "It doesn't work.")).toEqual([["doesn't", "dont"]]);
     expect(changedWords("we dont know", "We don't know.")).toEqual([["don't", "dont"]]);
-    expect(changedWords("push to github now", "Push to GitHub now.")).toEqual([
-      ["GitHub", "github"],
-    ]);
-    expect(changedWords("call usestate here", "Call useState here.")).toEqual([
+    expect(changedWords("push github now", "Push GitHub now.")).toEqual([["GitHub", "github"]]);
+    expect(changedWords("call usestate now", "Call useState now.")).toEqual([
       ["useState", "usestate"],
     ]);
-    expect(changedWords("open the github page", "Open the Github page")).toEqual([
-      ["Github", "github"],
+    expect(changedWords("open github now", "Open the github now")).toEqual([["the", ""]]);
+    expect(changedWords("see github now", "see Github now")).toEqual([["Github", "github"]]);
+    expect(changedWords("ok now", "OK now.")).toEqual([["OK", "ok"]]);
+    expect(changedWords("OK now", "oK now.")).toEqual([["oK", "OK"]]);
+    expect(changedWords("use 1,000 now", "Use 1000 now.")).toEqual([["1000", "1,000"]]);
+    expect(changedWords("use e-mail now", "Use email now.")).toEqual([["email", "e-mail"]]);
+    expect(changedWords("the workers tools", "the workers' tools")).toEqual([
+      ["workers'", "workers"],
     ]);
-    expect(changedWords("ship it ok", "Ship it OK.")).toEqual([["OK.", "ok"]]);
   });
 
-  it("still marks a symbol the correction put on a word", () => {
-    expect(changedWords("run build now", "Run build() now.")).toEqual([["build()", "build"]]);
-    expect(changedWords("run github-create-issue", "Run /github-create-issue.")).toEqual([
-      ["/github-create-issue.", "github-create-issue"],
-    ]);
-    expect(changedWords("it costs 5 dollars", "It costs $5 dollars.")).toEqual([
-      ["$5", "5"],
-    ]);
+  it.each([
+    ["foo", "foo()"],
+    ["command", "/command"],
+    ["file", "@file"],
+    ["flag", "--flag"],
+    ["tag", "#tag"],
+    ["5", "$5"],
+    ["10", "10%"],
+  ])("still marks a symbol the correction put on a word: %s to %s", (heard, written) => {
+    expect(changedWords(`use ${heard} now`, `Use ${written} now.`)).toEqual([[written, heard]]);
   });
 
   it("reads a curly apostrophe as the straight one", () => {
@@ -106,11 +133,30 @@ describe("diffCorrection", () => {
   it("ignores a token that is only punctuation", () => {
     expect(diffCorrection("yes no", "Yes — no.")).toEqual({ changed: [], removed: [] });
     expect(diffCorrection("yes ... no", "Yes, no.")).toEqual({ changed: [], removed: [] });
+    expect(diffCorrection("...", "—")).toEqual({ changed: [], removed: [] });
   });
 
-  it("keeps the gap for words dropped beside a quiet capital", () => {
-    const corrected = "So we need it.";
-    expect(diffCorrection("um so we need it", corrected)).toEqual({
+  it("keeps the gap for words dropped beside a quiet capital or token of punctuation", () => {
+    expect(diffCorrection("um so we need it", "So we need it.")).toEqual({
+      changed: [],
+      removed: [{ at: 0, afterWord: false, heard: "um" }],
+    });
+    expect(diffCorrection("we um go", "We — go.")).toEqual({
+      changed: [],
+      removed: [{ at: 2, afterWord: true, heard: "um" }],
+    });
+    expect(diffCorrection("go go now", "Go now.")).toEqual({
+      changed: [],
+      removed: [{ at: 2, afterWord: true, heard: "go" }],
+    });
+    expect(diffCorrection("um — uh go", "Go.")).toEqual({
+      changed: [],
+      removed: [{ at: 0, afterWord: false, heard: "um — uh" }],
+    });
+  });
+
+  it("keeps the gap when the correction left only punctuation", () => {
+    expect(diffCorrection("um", "...")).toEqual({
       changed: [],
       removed: [{ at: 0, afterWord: false, heard: "um" }],
     });
@@ -260,6 +306,28 @@ describe("correction review", () => {
     expect(marked(view)).toEqual([]);
     expect(reviewing(view)).toBe(false);
     expect(onShown).not.toHaveBeenCalled();
+  });
+
+  it("shows nothing when cleanup only capitalised and punctuated, and still undoes it", () => {
+    const punctuated: CorrectionReview = {
+      from: 0,
+      rawText: "hello world",
+      correctedText: "Hello, world.",
+    };
+    const view = mount(punctuated.rawText);
+    land(view, punctuated);
+
+    expect(view.state.doc.toString()).toBe(punctuated.correctedText);
+    expect(marked(view)).toEqual([]);
+    expect(reviewing(view)).toBe(false);
+    expect(onShown).not.toHaveBeenCalled();
+
+    undoKey(view);
+    expect(view.state.doc.toString()).toBe(punctuated.rawText);
+    expect(onSwapped).toHaveBeenLastCalledWith(punctuated, "raw");
+    redoKey(view);
+    expect(view.state.doc.toString()).toBe(punctuated.correctedText);
+    expect(onSwapped).toHaveBeenLastCalledWith(punctuated, "corrected");
   });
 
   it("fades the marks on its own and keeps the review until the next edit", () => {

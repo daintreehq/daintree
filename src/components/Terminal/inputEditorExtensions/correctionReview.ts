@@ -49,44 +49,58 @@ export interface CorrectionChanges {
   removed: { at: number; afterWord: boolean; heard: string }[];
 }
 
-// Punctuation that rides on a word's edge without changing the word. The two
-// sets differ so `foo()` keeps its `(` and still reads as another word than `foo`.
-const LEADING_PUNCTUATION = /^[(\[{"'“‘«…—–]+/u;
-const TRAILING_PUNCTUATION = /[)\]}"'”’».,;:!?…—–]+$/u;
+// Punctuation that rides on a word's edge without changing it. Single quotes
+// and brackets stay: `workers'` is a possessive, and `foo()` is not `foo`.
+const LEADING_PUNCTUATION = /^["“«…—–]+/u;
+const TRAILING_PUNCTUATION = /["”».,;:!?…—–]+$/u;
 const SENTENCE_END = /[.!?…][)\]}"'”’»]*$/u;
-const PRONOUN_I = /^I(?:['’]\p{L}+)?$/u;
+const PRONOUN_I = /^I(?:'(?:m|ll|ve|d))?$/;
+// The only capital in the word, as a sentence's first word takes.
+const LONE_CAPITAL = /^\p{Lu}(?=[^\p{Lu}]*$)/u;
 
 interface DiffWord extends WordToken {
-  /** What two words must share to be the same word: see `diffWords`. */
+  /** The word without the punctuation on its edges. */
+  core: string;
+  /** `core` without the capital that sentence position (or the pronoun I) gives it. */
   key: string;
 }
 
 /**
- * The words of `text` as the review compares them. Punctuation on a word's
- * edges and the capital a word takes from sitting first in a sentence (or from
- * being the pronoun I) don't make it another word, and a token that is only
- * punctuation isn't a word. Anything inside the word does: an apostrophe, a
- * digit for a spelled number, a capital that makes a name.
+ * The words of `text` as the review compares them. A token of only punctuation
+ * isn't a word. Inside a word everything counts: an apostrophe, a digit for a
+ * spelled number, a capital that makes a name. Sentences are read from full
+ * stops and line breaks, so an abbreviation can open one that isn't.
  */
 function diffWords(text: string): DiffWord[] {
-  const tokens = tokenizeWords(text);
   const words: DiffWord[] = [];
-  tokens.forEach((token, i) => {
+  // A token of only punctuation can end a sentence but never uses up the
+  // opening of the next.
+  let opens = true;
+  let prevTo = 0;
+  for (const token of tokenizeWords(text)) {
+    if (text.slice(prevTo, token.from).includes("\n")) opens = true;
+    prevTo = token.to;
     const core = token.text
+      .replaceAll("’", "'")
       .replace(LEADING_PUNCTUATION, "")
-      .replace(TRAILING_PUNCTUATION, "")
-      .replaceAll("’", "'");
-    if (core === "") return;
-    const prev = tokens[i - 1];
-    const sentenceStart =
-      !prev || SENTENCE_END.test(prev.text) || text.slice(prev.to, token.from).includes("\n");
-    const key =
-      sentenceStart || PRONOUN_I.test(core)
-        ? core.replace(/^\p{Lu}/u, (letter) => letter.toLowerCase())
-        : core;
-    words.push({ ...token, key });
-  });
+      .replace(TRAILING_PUNCTUATION, "");
+    if (core !== "") {
+      const folds = opens || PRONOUN_I.test(core);
+      words.push({
+        ...token,
+        core,
+        key: folds ? core.replace(LONE_CAPITAL, (capital) => capital.toLowerCase()) : core,
+      });
+      opens = false;
+    }
+    if (SENTENCE_END.test(token.text)) opens = true;
+  }
   return words;
+}
+
+// A capital that stays put is the same word wherever the sentence breaks fall.
+function sameWord(x: DiffWord, y: DiffWord): boolean {
+  return x.core === y.core || x.key === y.key;
 }
 
 /**
@@ -101,7 +115,7 @@ export function diffCorrection(rawText: string, correctedText: string): Correcti
   // Framed by the positions just outside either end, so every gap is between two pairs.
   const kept: [number, number][] = [
     [-1, -1],
-    ...alignWords(a, b, (x, y) => x.key === y.key),
+    ...alignWords(a, b, sameWord),
     [a.length, b.length],
   ];
 
@@ -116,6 +130,9 @@ export function diffCorrection(rawText: string, correctedText: string): Correcti
       if (prevB >= 0) changes.removed.push({ at: b[prevB]!.to, afterWord: true, heard });
       else if (nextB < b.length) {
         changes.removed.push({ at: b[nextB]!.from, afterWord: false, heard });
+      } else if (correctedText.trim() !== "") {
+        // The correction left only punctuation: the gap stands at the passage's start.
+        changes.removed.push({ at: 0, afterWord: false, heard });
       }
     }
   }
