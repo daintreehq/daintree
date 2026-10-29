@@ -517,24 +517,6 @@ export const STATUS_SUCCESS_INVENTORY = {
         "PullRequestRow's review verdict: the forge's recorded approval of the pull request",
     },
   ],
-  "src/components/ui/DiffStat.tsx": [
-    {
-      category: "domain",
-      signature: "text-status-success",
-      expectedOccurrences: 1,
-      rationale:
-        "The one line-churn stat: the insertion count every diff row, summary and card renders through",
-    },
-  ],
-  "src/components/Tour/scenes/ReviewScene.tsx": [
-    {
-      category: "domain",
-      signature: "text-status-success",
-      expectedOccurrences: 1,
-      rationale:
-        "The tour's Review Hub mock spells DiffStat's insertion count inline (tour scenes can't import host components)",
-    },
-  ],
 } as const satisfies StatusSuccessInventory;
 
 /**
@@ -542,5 +524,5 @@ export const STATUS_SUCCESS_INVENTORY = {
  * another added) still trips the per-site checks, and these catch the case
  * where a whole file moves without either check firing.
  */
-export const EXPECTED_STATUS_SUCCESS_SITES = 59;
-export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 61;
+export const EXPECTED_STATUS_SUCCESS_SITES = 57;
+export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 59;

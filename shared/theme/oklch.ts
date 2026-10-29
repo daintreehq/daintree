@@ -106,6 +106,83 @@ export function hexToOklch(hex: string): OklchColor | null {
   return { l: L, c: C, h };
 }
 
+/** Linear sRGB for an OKLab colour; out-of-gamut channels fall outside 0–1. */
+function oklabToLinear(L: number, a: number, b: number): [number, number, number] {
+  const l = (L + 0.3963377774 * a + 0.2158037573 * b) ** 3;
+  const m = (L - 0.1055613458 * a - 0.0638541728 * b) ** 3;
+  const s = (L - 0.0894841775 * a - 1.291485548 * b) ** 3;
+  return [
+    4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+    -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+    -0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s,
+  ];
+}
+
+const inGamut = (channels: number[]) => channels.every((c) => c >= -1e-4 && c <= 1 + 1e-4);
+
+function linearToHexByte(value: number): string {
+  const c = value <= 0.0031308 ? value * 12.92 : 1.055 * value ** (1 / 2.4) - 0.055;
+  return Math.round(Math.min(1, Math.max(0, c)) * 255)
+    .toString(16)
+    .padStart(2, "0");
+}
+
+/**
+ * The hex for an OKLCH colour, keeping as much of its chroma as sRGB can show
+ * at that lightness and hue. The inverse of `hexToOklch`.
+ */
+export function oklchToHex({ l, c, h }: OklchColor): string {
+  const a = c * Math.cos((h * Math.PI) / 180);
+  const b = c * Math.sin((h * Math.PI) / 180);
+  let keep = 1;
+  if (!inGamut(oklabToLinear(l, a, b))) {
+    let lo = 0;
+    let hi = 1;
+    for (let step = 0; step < 16; step++) {
+      const mid = (lo + hi) / 2;
+      if (inGamut(oklabToLinear(l, a * mid, b * mid))) lo = mid;
+      else hi = mid;
+    }
+    keep = lo;
+  }
+  return `#${oklabToLinear(l, a * keep, b * keep)
+    .map(linearToHexByte)
+    .join("")}`;
+}
+
+const OPAQUE_HEX = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
+
+/**
+ * `ink` itself when it already clears `minimum` against every backdrop,
+ * otherwise the nearest OKLCH lightness that does (lighter on a dark theme,
+ * darker on a light one) at the same hue and as much of its chroma as sRGB
+ * allows. The bisection measures the rounded hex that will actually ship, so
+ * whatever it returns has passed. An ink that isn't an opaque hex, or that no
+ * lightness rescues, comes back unchanged for the contrast gate to report.
+ */
+export function liftToContrast(
+  ink: string,
+  backdrops: readonly string[],
+  minimum: number,
+  type: "dark" | "light"
+): string {
+  const start = OPAQUE_HEX.test(ink.trim()) ? hexToOklch(ink.trim()) : null;
+  if (!start) return ink;
+  const reads = (hex: string) =>
+    backdrops.every((backdrop) => contrastRatio(hex, backdrop) >= minimum);
+  if (reads(ink)) return ink;
+  const at = (l: number) => oklchToHex({ ...start, l });
+  let near = start.l;
+  let far = type === "dark" ? 1 : 0;
+  if (!reads(at(far))) return ink;
+  for (let step = 0; step < 24; step++) {
+    const mid = (near + far) / 2;
+    if (reads(at(mid))) far = mid;
+    else near = mid;
+  }
+  return at(far);
+}
+
 // --- Distance ---
 
 /**

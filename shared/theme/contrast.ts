@@ -626,6 +626,7 @@ export function getThemeContrastWarnings(scheme: AppColorScheme): AppThemeValida
   warnings.push(...getPaletteSelectionWarnings(scheme));
   warnings.push(...getRecentActivityDotWarnings(scheme));
   warnings.push(...getDestructiveButtonWarnings(scheme));
+  warnings.push(...getDiffTextContrastWarnings(scheme));
 
   // Terminal ANSI / syntax legibility and distinctness — OKLab-based because
   // the terminal background is always dark and WCAG ratios are unreliable there.
@@ -814,6 +815,93 @@ function getRecentActivityDotWarnings(scheme: AppColorScheme): AppThemeValidatio
     }
   }
 
+  return warnings;
+}
+
+/** AA for normal text: DiffStat's counts are text read beside other text. */
+export const DIFF_TEXT_MIN_CONTRAST = 4.5;
+
+// The fills churn sits on besides the bare surfaces: the git confirm preview
+// frame (`bg-tint/[0.04]`), hovered rows and summary bands (`overlay-subtle`,
+// `overlay-soft`), and selected rows (`overlay-highlight` in list-detail lists,
+// `overlay-selected` elsewhere). Each is composited over every display surface,
+// since a row carries no record of which surface it landed on.
+const DIFF_TEXT_TINT_OPACITY = 0.04;
+const DIFF_TEXT_ROW_FILLS = [
+  "overlay-subtle",
+  "overlay-soft",
+  "overlay-highlight",
+  "overlay-selected",
+] as const satisfies readonly AppThemeTokenKey[];
+
+/**
+ * Every backdrop DiffStat's counts can paint on, resolved to an opaque hex. A
+ * fill that can't be resolved (a `color-mix()` row fill from a partial import)
+ * is left out rather than guessed; the palette gates already report an
+ * unevaluable `overlay-highlight`.
+ */
+export function resolveDiffTextBackdrops(
+  tokens: Partial<Record<AppThemeTokenKey, string>>
+): Array<{ label: string; hex: string }> {
+  const backdrops: Array<{ label: string; hex: string }> = [];
+  const tint = tokens["tint"];
+  for (const surfaceKey of DISPLAY_SURFACES) {
+    const surface = tokens[surfaceKey];
+    if (typeof surface !== "string" || !isHexColor(surface)) continue;
+    backdrops.push({ label: surfaceKey, hex: surface });
+    if (typeof tint === "string" && isHexColor(tint)) {
+      backdrops.push({
+        label: `tint at ${DIFF_TEXT_TINT_OPACITY * 100}% over ${surfaceKey}`,
+        hex: blendOverBackground(tint, surface, DIFF_TEXT_TINT_OPACITY),
+      });
+    }
+    for (const fillKey of DIFF_TEXT_ROW_FILLS) {
+      const fill = tokens[fillKey];
+      const hex = typeof fill === "string" ? resolveOverBackdrop(fill, surface) : null;
+      if (hex) backdrops.push({ label: `${fillKey} over ${surfaceKey}`, hex });
+    }
+  }
+  return backdrops;
+}
+
+/**
+ * The churn inks hold AA against every backdrop they paint on (#15319). The
+ * status inks they're lifted from only carry the 3:1 non-text floor, which is
+ * why they need tokens of their own.
+ */
+function getDiffTextContrastWarnings(scheme: AppColorScheme): AppThemeValidationWarning[] {
+  const warnings: AppThemeValidationWarning[] = [];
+  const backdrops = resolveDiffTextBackdrops(scheme.tokens);
+  if (backdrops.length === 0) {
+    warnings.push({
+      kind: "unevaluable",
+      message: "Cannot evaluate diff churn text contrast: no display surface is a hex color",
+    });
+    return warnings;
+  }
+  for (const key of ["diff-text-insert", "diff-text-delete"] as const) {
+    const ink = scheme.tokens[key];
+    let worst: { label: string; ratio: number } | null = null;
+    for (const backdrop of backdrops) {
+      const painted = resolveOverBackdrop(ink, backdrop.hex);
+      if (painted === null) {
+        warnings.push({
+          kind: "unevaluable",
+          message: `Cannot evaluate diff churn text contrast: ${key}="${ink}" is neither hex nor rgba()`,
+        });
+        worst = null;
+        break;
+      }
+      const ratio = contrastRatio(painted, backdrop.hex);
+      if (worst === null || ratio < worst.ratio) worst = { label: backdrop.label, ratio };
+    }
+    if (worst && worst.ratio < DIFF_TEXT_MIN_CONTRAST) {
+      warnings.push({
+        kind: "low-contrast",
+        message: `${key} on ${worst.label} is ${worst.ratio.toFixed(2)}:1; target is ${DIFF_TEXT_MIN_CONTRAST.toFixed(1)}:1`,
+      });
+    }
+  }
   return warnings;
 }
 

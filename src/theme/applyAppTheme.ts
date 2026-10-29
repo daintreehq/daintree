@@ -1,8 +1,10 @@
 import {
+  deriveDiffTextInks,
   getAppThemeById,
   getAppThemeCssVariables,
   resolveAppTheme,
   type AppColorScheme,
+  type AppThemeTokenKey,
 } from "@shared/theme";
 import {
   RED_GREEN_OVERRIDES,
@@ -79,6 +81,17 @@ export function applyColorVisionMode(
   if (overrides) {
     for (const [name, value] of Object.entries(overrides)) {
       root.style.setProperty(name, value);
+    }
+    // The churn inks are the overridden status inks lifted to read as text on
+    // this theme's surfaces, which the static map can't do on its own.
+    if (scheme) {
+      const effective: Partial<Record<AppThemeTokenKey, string>> = { ...scheme.tokens };
+      for (const [name, value] of Object.entries(overrides)) {
+        effective[name.slice("--theme-".length) as AppThemeTokenKey] = value;
+      }
+      for (const [token, value] of Object.entries(deriveDiffTextInks(effective, scheme.type))) {
+        root.style.setProperty(`--theme-${token}`, value);
+      }
     }
   }
 }

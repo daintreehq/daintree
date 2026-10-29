@@ -7,7 +7,12 @@ import type {
 } from "./types.js";
 import type { ThemePalette, ThemeStrategy } from "./palette.js";
 import type { ExtensionKey } from "./types.js";
-import { getThemeContrastWarnings } from "./contrast.js";
+import {
+  DIFF_TEXT_MIN_CONTRAST,
+  getThemeContrastWarnings,
+  resolveDiffTextBackdrops,
+} from "./contrast.js";
+import { liftToContrast } from "./oklch.js";
 import { sanitizeThemeExtensions } from "./extensionKeys.js";
 import { BUILT_IN_THEME_SOURCES, type BuiltInThemeSource } from "./builtInThemeSources.js";
 
@@ -195,7 +200,7 @@ export function createDaintreeTokens(
         "category-slate": "oklch(0.50 0.03 228)",
       };
 
-  return {
+  const resolved: AppColorSchemeTokens = {
     ...prStateDefaults,
     ...categoryDefaults,
     // RC-6: light borders raised and floored by contrast vs the brightest adjacent
@@ -388,6 +393,9 @@ export function createDaintreeTokens(
       withAlpha(tokens["status-danger"], dark ? 0.28 : 0.2),
     "diff-gutter-insert": tokens["diff-gutter-insert"] ?? tokens["status-success"],
     "diff-gutter-delete": tokens["diff-gutter-delete"] ?? tokens["status-danger"],
+    // Lifted below, once the surfaces and row fills they're measured against are final.
+    "diff-text-insert": tokens["status-success"],
+    "diff-text-delete": tokens["status-danger"],
     "diff-selected-background":
       tokens["diff-selected-background"] ?? withAlpha(overlayTone, dark ? 0.06 : 0.06),
     "diff-omit-gutter-line": tokens["diff-omit-gutter-line"] ?? tokens["activity-idle"],
@@ -408,6 +416,8 @@ export function createDaintreeTokens(
       withAlpha(tokens["status-info"], statusSurfaceAlpha(dark ? 0.1 : 0.08)),
     ...tokens,
   };
+  followStatusForDiffText(resolved, tokens, type);
+  return resolved;
 }
 
 export interface ShadowProfiles {
@@ -656,6 +666,55 @@ function followRaisedForHighlight(
   }
 }
 
+// Headroom over the gate for the compositor rounding a channel the other way
+// from `blendOverBackground`.
+const DIFF_TEXT_DERIVATION_TARGET = DIFF_TEXT_MIN_CONTRAST + 0.05;
+
+const DIFF_TEXT_SOURCES = [
+  ["diff-text-insert", "status-success"],
+  ["diff-text-delete", "status-danger"],
+] as const;
+
+/**
+ * DiffStat's churn inks: each status ink lifted to the nearest lightness that
+ * reads as text on every backdrop churn paints on. The status inks only carry
+ * the 3:1 non-text floor, and on a raised panel or a tinted frame most themes'
+ * fall well under 4.5:1 (#15319).
+ */
+export function deriveDiffTextInks(
+  tokens: Partial<Record<AppThemeTokenKey, string>>,
+  type: "dark" | "light"
+): Partial<Pick<AppColorSchemeTokens, "diff-text-insert" | "diff-text-delete">> {
+  const backdrops = resolveDiffTextBackdrops(tokens).map((backdrop) => backdrop.hex);
+  const inks: Partial<Pick<AppColorSchemeTokens, "diff-text-insert" | "diff-text-delete">> = {};
+  for (const [key, source] of DIFF_TEXT_SOURCES) {
+    const ink = tokens[source];
+    if (typeof ink === "string") {
+      inks[key] = liftToContrast(ink, backdrops, DIFF_TEXT_DERIVATION_TARGET, type);
+    }
+  }
+  return inks;
+}
+
+/**
+ * The churn inks follow the status inks unless the theme names them, and are
+ * lifted from the final tokens for the same reason as the two follows above: a
+ * theme that retunes a status ink, a surface or a row fill after the engine ran
+ * would otherwise keep inks measured against another theme's backdrops. Runs
+ * after `followRaisedForHighlight`, since the highlight is one of them.
+ */
+function followStatusForDiffText(
+  tokens: Record<string, unknown>,
+  overrides: Record<string, unknown> | undefined,
+  type: "dark" | "light"
+): void {
+  const inks = deriveDiffTextInks(tokens as Partial<Record<AppThemeTokenKey, string>>, type);
+  for (const [key] of DIFF_TEXT_SOURCES) {
+    if (typeof overrides?.[key] === "string") continue;
+    if (inks[key] !== undefined) tokens[key] = inks[key];
+  }
+}
+
 function createThemeFromSource(source: BuiltInThemeSource): AppColorScheme {
   const compiledTokens = compilePaletteToTokens(source.palette);
   const tokens = source.tokens
@@ -663,6 +722,7 @@ function createThemeFromSource(source: BuiltInThemeSource): AppColorScheme {
     : compiledTokens;
   if (source.tokens) followBorderStrongForInput(tokens, source.tokens);
   if (source.tokens) followRaisedForHighlight(tokens, source.tokens, source.type);
+  if (source.tokens) followStatusForDiffText(tokens, source.tokens, source.type);
   const extensions = resolveStrategyExtensions(source.palette, source.extensions);
 
   return {
@@ -1107,6 +1167,7 @@ export function normalizeAppColorScheme(
   Object.assign(normalizedTokens, normalizeAppThemeTokens(tokenOverrides, normalizedTokens));
   followBorderStrongForInput(normalizedTokens, tokenOverrides);
   followRaisedForHighlight(normalizedTokens, tokenOverrides, resolvedType);
+  followStatusForDiffText(normalizedTokens, tokenOverrides, resolvedType);
   if (
     typeof tokenOverrides["accent-foreground"] !== "string" &&
     typeof normalizedTokens["accent-primary"] === "string"

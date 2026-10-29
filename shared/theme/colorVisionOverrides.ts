@@ -33,22 +33,28 @@ const CVD_STATUS_SURFACE_ALPHA = 0.1;
 // highlights, and gutters on the original (non-CVD) hue. Re-derive them here.
 // Dark mode is unaffected (its CSS reads --color-status-* directly), so we use
 // the light-polarity alphas only.
+//
+// The churn text inks are lifted against the active theme's own surfaces, which
+// a theme-independent map can't know. The raw override stands in here, and
+// `applyColorVisionMode` lifts it whenever it has the scheme.
 const CVD_DIFF_BACKGROUND_ALPHA = 0.1;
 const CVD_DIFF_EDIT_BACKGROUND_ALPHA = 0.2;
 
 const STATUS_DIFF_TOKENS: Record<
   string,
-  { background: string; editBackground: string; gutter: string }
+  { background: string; editBackground: string; gutter: string; text: string }
 > = {
   "--theme-status-success": {
     background: "--theme-diff-insert-background",
     editBackground: "--theme-diff-insert-edit-background",
     gutter: "--theme-diff-gutter-insert",
+    text: "--theme-diff-text-insert",
   },
   "--theme-status-danger": {
     background: "--theme-diff-delete-background",
     editBackground: "--theme-diff-delete-edit-background",
     gutter: "--theme-diff-gutter-delete",
+    text: "--theme-diff-text-delete",
   },
 };
 
@@ -87,6 +93,7 @@ function withDiffSurfaces(overrides: Record<string, string>): Record<string, str
     result[diffTokens.background] = hexToRgba(hex, CVD_DIFF_BACKGROUND_ALPHA);
     result[diffTokens.editBackground] = hexToRgba(hex, CVD_DIFF_EDIT_BACKGROUND_ALPHA);
     result[diffTokens.gutter] = hex;
+    result[diffTokens.text] = hex;
   }
   return result;
 }
