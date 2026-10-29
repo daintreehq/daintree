@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import type { PanelInstance } from "@shared/types/panel";
+import type { PanelInstance, TabGroup } from "@shared/types/panel";
 import {
   _resetSelectorCacheForTests,
   getNarrowPanel,
@@ -7,7 +7,9 @@ import {
   getRenderablePanel,
   isPanelRenderEligible,
   selectHasMultipleSessionLost,
+  selectWorktreeMovePanelIds,
 } from "../selectors";
+import type { TrashedTerminal } from "../types";
 
 // Adapter selectors that narrow the legacy `TerminalInstance` carrier to the
 // `PanelInstance` union via the kind type guards (#8957). A missing `kind`
@@ -182,5 +184,51 @@ describe("selectHasMultipleSessionLost", () => {
     expect(selectHasMultipleSessionLost({ a: lost("a"), b: lost("b") })).toBe(true);
     expect(selectHasMultipleSessionLost({ a: lost("a") })).toBe(false);
     expect(selectHasMultipleSessionLost({ a: lost("a"), b: lost("b"), c: lost("c") })).toBe(true);
+  });
+});
+
+describe("selectWorktreeMovePanelIds", () => {
+  const group: TabGroup = {
+    id: "g1",
+    location: "grid",
+    worktreeId: "wt-a",
+    activeTabId: "a",
+    panelIds: ["a", "b", "c"],
+  };
+  function state(
+    panels: PanelInstance[],
+    trashed: string[] = [],
+    groups: TabGroup[] = [group]
+  ): Parameters<typeof selectWorktreeMovePanelIds>[0] {
+    return {
+      panelsById: Object.fromEntries(panels.map((p) => [p.id, p])),
+      trashedTerminals: new Map(trashed.map((id) => [id, {} as TrashedTerminal])),
+      getPanelGroup: (id) => groups.find((g) => g.panelIds.includes(id)),
+    };
+  }
+
+  it("moves an ungrouped panel alone", () => {
+    expect(selectWorktreeMovePanelIds(state([panel("x")]), "x")).toEqual(["x"]);
+  });
+
+  it("moves every live member of the panel's group, in group order", () => {
+    expect(selectWorktreeMovePanelIds(state([panel("c"), panel("a"), panel("b")]), "b")).toEqual([
+      "a",
+      "b",
+      "c",
+    ]);
+  });
+
+  it("leaves trashed and missing members out of the move", () => {
+    expect(
+      selectWorktreeMovePanelIds(state([panel("a"), panel("b", { location: "trash" })]), "a")
+    ).toEqual(["a"]);
+    expect(
+      selectWorktreeMovePanelIds(state([panel("a"), panel("b"), panel("c")], ["c"]), "a")
+    ).toEqual(["a", "b"]);
+  });
+
+  it("falls back to the panel itself when no member is live", () => {
+    expect(selectWorktreeMovePanelIds(state([], ["a"]), "a")).toEqual(["a"]);
   });
 });

@@ -1,4 +1,5 @@
 import { usePanelStore } from "@/store/panelStore";
+import { selectWorktreeMovePanelIds } from "@/store/slices/panelRegistry/selectors";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { getCurrentViewStoreOrNull } from "@/store/createWorktreeStore";
 import { classifyLaunchRootAlignment } from "@/utils/worktreeAlignment";
@@ -43,14 +44,7 @@ function readWorktreePaths(): { id: string; path: string; name?: string }[] {
  * group, so every member is in scope even though only one was dragged.
  */
 export function collectMovedPanelIds(terminalId: string): string[] {
-  const group = usePanelStore.getState().getPanelGroup(terminalId);
-  if (!group) return [terminalId];
-  const state = usePanelStore.getState();
-  const panelIds = group.panelIds.filter((pid) => {
-    const panel = state.panelsById[pid];
-    return panel && panel.location !== "trash" && !state.trashedTerminals.has(pid);
-  });
-  return panelIds.length > 0 ? panelIds : [terminalId];
+  return selectWorktreeMovePanelIds(usePanelStore.getState(), terminalId);
 }
 
 /**

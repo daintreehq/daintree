@@ -202,6 +202,27 @@ export function shouldCancelDrop(params: CancelDropParams): boolean {
   }
 }
 
+/** The panel drag fields a worktree card reads to decide whether to light up. */
+export interface WorktreeCardDragData {
+  terminal?: unknown;
+  origin?: string;
+  worktreeId?: string;
+}
+
+/**
+ * Whether a drag over a worktree card is one handleDragEnd would move onto it:
+ * any panel drag, a whole tab group included (#14962). Worktree-sort drags
+ * carry no terminal, and a sidebar row dragged within its own worktree is a
+ * reorder, so neither lights the card.
+ */
+export function isPanelDragMovableToWorktree(
+  dragData: WorktreeCardDragData | undefined,
+  worktreeId: string
+): boolean {
+  if (dragData?.terminal === undefined) return false;
+  return dragData.origin !== "accordion" || dragData.worktreeId !== worktreeId;
+}
+
 /** Minimal dnd-kit droppable shape the dock collision filter reads. */
 interface DockCollisionCandidate {
   data: { current?: { container?: string; sortable?: { containerId?: string } } | null };

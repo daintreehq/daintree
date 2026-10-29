@@ -1,6 +1,7 @@
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { m } from "framer-motion";
+import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
 import { UI_ANIMATION_DURATION, DRAG_GHOST_OPACITY, DRAG_GHOST_EASING } from "@/lib/animationUtils";
 import type { PanelInstance } from "@shared/types/panel";
@@ -8,6 +9,8 @@ import type { WorktreeDragData } from "./DndProvider";
 import { DragHandleProvider } from "./DragHandleContext";
 import { pixelSnapTransform } from "./SortableTerminal";
 import { useBuiltInSidebarViewHidden } from "@/components/Sidebar/sidebarViewContext";
+import { usePanelStore } from "@/store/panelStore";
+import { selectWorktreeMovePanelIds } from "@/store/slices/panelRegistry/selectors";
 
 interface SortableWorktreeTerminalProps {
   terminal: PanelInstance;
@@ -34,12 +37,21 @@ export function SortableWorktreeTerminal({
   sourceIndex,
   children,
 }: SortableWorktreeTerminalProps) {
+  // Dropped on another worktree, a grouped row takes its whole tab group along,
+  // so the drag carries the group the way a grid or dock group drag does and
+  // the ghost's tab count shows it before release (#14962).
+  const groupId = usePanelStore((s) => s.getPanelGroup(terminal.id)?.id);
+  const movedPanelIds = usePanelStore(
+    useShallow((s) => selectWorktreeMovePanelIds(s, terminal.id))
+  );
   const dragData: WorktreeDragData = {
     terminal,
     sourceLocation: terminal.location === "dock" ? "dock" : "grid",
     sourceIndex,
     worktreeId,
     origin: "accordion",
+    ...(groupId !== undefined &&
+      movedPanelIds.length > 1 && { groupId, groupPanelIds: movedPanelIds }),
   };
 
   const isHiddenInSidebar = useBuiltInSidebarViewHidden();

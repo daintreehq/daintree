@@ -3,6 +3,7 @@ import type { MutableRefObject } from "react";
 import type { Active, Over } from "@dnd-kit/core";
 import {
   createDragAnnouncements,
+  getDragLabel,
   getOverDragLabel,
   GRID_PLACEHOLDER_ID,
   TRASH_DROPPABLE_ID,
@@ -379,5 +380,41 @@ describe("getOverDragLabel — synthetic droppables", () => {
     expect(getOverDragLabel(makeOver("term-1", { terminal: { title: "Terminal" } }))).toBe(
       "Terminal"
     );
+  });
+});
+
+describe("getDragLabel — tab group drags (#14962)", () => {
+  const group = (ids: string[]) => ({
+    terminal: { id: ids[0], title: "Build agent" },
+    groupId: "group-1",
+    groupPanelIds: ids,
+  });
+
+  it("states how many tabs a group drag carries", () => {
+    expect(getDragLabel(group(["a", "b", "c"]))).toBe("Build agent (3 tabs)");
+  });
+
+  it("keeps the plain title for a single panel, a one-member group, or ids without a group", () => {
+    expect(getDragLabel({ terminal: { id: "a", title: "Build agent" } })).toBe("Build agent");
+    expect(getDragLabel(group(["a"]))).toBe("Build agent");
+    expect(
+      getDragLabel({ terminal: { id: "a", title: "Build agent" }, groupPanelIds: ["a", "b"] })
+    ).toBe("Build agent");
+  });
+
+  it("carries the count into the pickup and keyboard hover announcements", () => {
+    const announcements = createDragAnnouncements(
+      makeRefs({ isKeyboardDrag: true }),
+      (a) => getDragLabel(a.data.current),
+      getOverDragLabel
+    );
+    const active = makeActive(group(["a", "b"]));
+    expect(announcements.onDragStart({ active })).toContain("Build agent (2 tabs)");
+    expect(
+      announcements.onDragOver!({
+        active,
+        over: makeOver("term-9", { terminal: { title: "Shell" } }),
+      })
+    ).toBe("Build agent (2 tabs) is over Shell");
   });
 });

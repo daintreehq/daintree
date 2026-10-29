@@ -9,6 +9,7 @@ import {
   type PanelKind,
 } from "@shared/types/panel";
 import { isRegisteredPanelKind } from "@shared/config/panelKindRegistry";
+import type { PanelRegistrySlice } from "./types";
 
 let _prevById: Record<string, PanelInstance> | null = null;
 let _prevIds: string[] | null = null;
@@ -165,6 +166,26 @@ export function selectHasMultipleSessionLost(panelsById: Record<string, PanelIns
   _prevSessionLostById = panelsById;
   _prevSessionLostResult = seen > 1;
   return _prevSessionLostResult;
+}
+
+/**
+ * Panels a move of `panelId` to another worktree relocates: every live member of
+ * its tab group, since a group never splits across worktrees, or the panel
+ * alone. The move and the sidebar row's drag payload both read this, so the
+ * count a drag shows is the count that moves (#14962). A fresh array per call —
+ * wrap it in `useShallow` when selecting.
+ */
+export function selectWorktreeMovePanelIds(
+  state: Pick<PanelRegistrySlice, "panelsById" | "trashedTerminals" | "getPanelGroup">,
+  panelId: string
+): string[] {
+  const group = state.getPanelGroup(panelId);
+  if (!group) return [panelId];
+  const panelIds = group.panelIds.filter((pid) => {
+    const panel = state.panelsById[pid];
+    return panel && panel.location !== "trash" && !state.trashedTerminals.has(pid);
+  });
+  return panelIds.length > 0 ? panelIds : [panelId];
 }
 
 export function _resetSelectorCacheForTests(): void {

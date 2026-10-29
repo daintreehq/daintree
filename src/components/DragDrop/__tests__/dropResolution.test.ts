@@ -11,6 +11,7 @@ import {
   dragCarriesNonDockableIntoDock,
   filterOutDockDroppables,
   shouldCancelDrop,
+  isPanelDragMovableToWorktree,
   type ClientRectLike,
   type OverDropData,
 } from "../dropResolution";
@@ -901,5 +902,29 @@ describe("shouldCancelDrop", () => {
     it("cancels worktree-sort with no over target (no-over predicate fires first)", () => {
       expect(run({ overData: null, activeData: makeDragData(), isWorktreeSort: true })).toBe(true);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isPanelDragMovableToWorktree
+// ---------------------------------------------------------------------------
+describe("isPanelDragMovableToWorktree", () => {
+  const terminal = makeTerminal("panel-1", "grid", "wt-a");
+
+  it("lights the card for a tab group drag as well as a single panel (#14962)", () => {
+    expect(isPanelDragMovableToWorktree({ terminal }, "wt-b")).toBe(true);
+    const group = { terminal, groupId: "group-1", groupPanelIds: ["panel-1", "panel-2"] };
+    expect(isPanelDragMovableToWorktree(group, "wt-b")).toBe(true);
+  });
+
+  it("lights the card for a sidebar row from another worktree, not its own", () => {
+    const row = { terminal, origin: "accordion", worktreeId: "wt-a" };
+    expect(isPanelDragMovableToWorktree(row, "wt-b")).toBe(true);
+    expect(isPanelDragMovableToWorktree(row, "wt-a")).toBe(false);
+  });
+
+  it("ignores drags that carry no panel, like a worktree-sort drag", () => {
+    expect(isPanelDragMovableToWorktree(undefined, "wt-b")).toBe(false);
+    expect(isPanelDragMovableToWorktree({ worktreeId: "wt-a" }, "wt-b")).toBe(false);
   });
 });
