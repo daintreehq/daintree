@@ -5,7 +5,7 @@
  * serializes calls through `switchChain` so only one switch runs at a time.
  */
 
-import type { WebContentsView } from "electron";
+import type { WebContents, WebContentsView } from "electron";
 import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
@@ -40,6 +40,7 @@ import { createCancelledSwitchError, reportSwitchFailure } from "./projectSwitch
 import { setupViewHandlers } from "./ProjectViewHandlers.js";
 import { deliverOpenSystemMemoryPressure } from "./systemMemoryPressureDelivery.js";
 import { evictStaleViews } from "./ProjectViewEvictionController.js";
+import { prepareSwitchScreenHandoff, type SwitchScreenHandoff } from "./switchScreenHandoff.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
 import type { SwitchRequestOptions, ViewEntry } from "./ProjectViewManagerTypes.js";
 import type {
@@ -63,6 +64,21 @@ function consumePendingFocusIntent(
   host.pendingFocusIntent = null;
   if (pending.projectId !== projectId) return null;
   return pending.intent;
+}
+
+/**
+ * Cover the incoming view with the host switch screen the outgoing one shows,
+ * so the swap fades it out instead of cutting it (#15300). Only a host switch
+ * can have one up; every other switch swaps as it always has.
+ */
+function prepareHandoff(
+  host: ProjectViewManager,
+  request: SwitchRequestOptions | undefined,
+  outgoingView: WebContentsView | null,
+  incoming: WebContents
+): Promise<SwitchScreenHandoff | null> {
+  if (!request?.switchScreenHandoff || !outgoingView) return Promise.resolve(null);
+  return prepareSwitchScreenHandoff(outgoingView.webContents, incoming, host.win);
 }
 
 function deliverFocusIntent(view: WebContentsView, intent: ProjectFocusOnActivateIntent): void {
@@ -335,14 +351,22 @@ export async function performSwitch(
       // Clean frame painted (or grace period exhausted) — detach the outgoing
       // bridge view, revealing the repaired cached view. Guard on the active
       // project still being this one in case a superseding switch cancelled the
-      // gate ("cancelled" leaves the new switch to own the teardown).
+      // gate ("cancelled" leaves the new switch to own the teardown), and check
+      // it again after the handoff, which a switch can supersede too.
+      const handoff =
+        gateResult !== "cancelled" && host.activeProjectId === projectId
+          ? await prepareHandoff(host, request, outgoingView, cachedWc)
+          : null;
       if (gateResult !== "cancelled" && host.activeProjectId === projectId) {
         if (previousEntry) {
           deactivateEntry(host, previousEntry);
         } else if (unboundOutgoingView) {
           detachUnboundOutgoingView(host, unboundOutgoingView);
         }
+        handoff?.release();
         mark(PERF_MARKS.PROJECT_SWITCH_REVEALED, { isNew: false });
+      } else {
+        handoff?.cancel();
       }
     } else {
       // No outgoing view to bridge through (e.g. first-run with no welcome
@@ -709,11 +733,18 @@ export async function performSwitch(
     }
 
     // Readiness signalled and a frame confirmed — detach the outgoing view.
+    const handoff =
+      host.activeProjectId === projectId
+        ? await prepareHandoff(host, request, outgoingView, incomingWc)
+        : null;
     if (previousEntry && host.activeProjectId === projectId) {
       deactivateEntry(host, previousEntry);
     } else if (unboundOutgoingView && host.activeProjectId === projectId) {
       detachUnboundOutgoingView(host, unboundOutgoingView);
     }
+    // A handoff exists only with an outgoing view, so this is the detach above.
+    if (host.activeProjectId === projectId) handoff?.release();
+    else handoff?.cancel();
     mark(PERF_MARKS.PROJECT_SWITCH_REVEALED, { isNew: true });
 
     logInfo("projectview.coldstart", {
