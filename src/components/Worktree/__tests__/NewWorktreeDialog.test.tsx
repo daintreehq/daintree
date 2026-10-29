@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, cleanup, act, fireEvent } from "@testing-library/react";
+import { render, screen, cleanup, act, fireEvent, within } from "@testing-library/react";
 import { useState } from "react";
 import type { BranchInfo } from "@/types/electron";
 import { _resetHostPlatformForTests, setHostPlatformInfo } from "@/hooks/useHostPlatform";
@@ -252,7 +252,10 @@ vi.mock("@/components/Worktree/hooks/useRecipePicker", async (importOriginal) =>
 }));
 
 const projectSettingsFixture = vi.hoisted(() => ({
-  value: null as { defaultWorktreeRecipeId?: string } | null,
+  value: null as {
+    defaultWorktreeRecipeId?: string;
+    resourceEnvironments?: Record<string, object>;
+  } | null,
 }));
 vi.mock("@/components/Worktree/hooks/useNewWorktreeProjectSettings", () => ({
   useNewWorktreeProjectSettings: () => ({
@@ -1669,6 +1672,48 @@ describe("NewWorktreeDialog — recipe scope visibility (#11510)", () => {
     await advanceTimersGradually(500);
 
     expect(recipePickerCalls.last?.defaultRecipeId).toBe("global-work");
+  });
+});
+
+describe("NewWorktreeDialog — environment picker with a saved local key", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockListBranches.mockResolvedValue(TEST_BRANCHES);
+    mockGetRecentBranches.mockResolvedValue([]);
+    mockGetAvailableBranch.mockImplementation((_root: string, name: string) =>
+      Promise.resolve(name)
+    );
+    mockGetDefaultPath.mockImplementation((_root: string, branch: string) =>
+      Promise.resolve(`/test/root-worktrees/${branch}`)
+    );
+    mockGetCurrentUser.mockResolvedValue(null);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    cleanup();
+    vi.clearAllMocks();
+    projectSettingsFixture.value = null;
+  });
+
+  it("hides the Environment row when local is the only saved environment", async () => {
+    projectSettingsFixture.value = { resourceEnvironments: { local: {} } };
+
+    renderDialog();
+    await advanceTimersGradually(500);
+
+    expect(screen.queryByRole("radiogroup", { name: "Environment" })).toBeNull();
+  });
+
+  it("offers Local once beside the usable environments", async () => {
+    projectSettingsFixture.value = { resourceEnvironments: { local: {}, staging: {} } };
+
+    renderDialog();
+    await advanceTimersGradually(500);
+
+    const group = screen.getByRole("radiogroup", { name: "Environment" });
+    const radios = within(group).getAllByRole("radio");
+    expect(radios.map((r) => r.textContent?.trim())).toEqual(["Local", "staging"]);
   });
 });
 
