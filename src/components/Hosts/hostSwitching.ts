@@ -55,8 +55,14 @@ export function followSwitchResult(result: SwitchWindowHostResult | null | undef
 
 /** The one recovery a failed switch to a host offers. */
 export interface HostSwitchRecovery {
+  kind: "retry" | "settings" | "setup" | "update" | "choose-project";
   label: string;
   run: () => void;
+  /**
+   * Why this is the way back, where the host's own words don't already say:
+   * what Settings has for an ssh refusal, which builds a mismatch is between.
+   */
+  hint?: string;
 }
 
 /**
@@ -104,26 +110,38 @@ export function hostSwitchRecovery(
     isClientAppError(error) && error.code === "HOST_VERSION_MISMATCH"
       ? getHostListSnapshot().hosts.find((candidate) => candidate.descriptor.id === hostId)
       : undefined;
+  const update = entry ? hostUpdateOffer(entry) : null;
+  if (update) {
+    const mismatch = entry?.connection.status === "version-mismatch" && entry.connection.mismatch;
+    return {
+      kind: "update",
+      label: update.label,
+      run: () => runHostUpdate(update.target, update.hostId),
+      // Which end is behind is what says which one to update.
+      ...(mismatch && mismatch.kind === "version"
+        ? {
+            hint: `${hostName(hostId)} runs Daintree ${mismatch.remote}, and this machine runs ${mismatch.local}.`,
+          }
+        : {}),
+    };
+  }
   // Host mode off on a host this machine has never reached: setting it up is
   // what gets it working. One it has reached is set up already, and its
   // Daintree not listening is retried once it is running there again.
-  const update = entry
-    ? hostUpdateOffer(entry)
-    : isClientAppError(error) && error.code === "HOST_MODE_OFF" && neverReached(hostId)
-      ? { hostId, target: "host" as const, label: "Set up…" }
-      : null;
-  if (update) {
-    return { label: update.label, run: () => runHostUpdate(update.target, update.hostId) };
+  if (isClientAppError(error) && error.code === "HOST_MODE_OFF" && neverReached(hostId)) {
+    return { kind: "setup", label: "Set up…", run: () => runHostUpdate("host", hostId) };
   }
   // ssh couldn't log in: fixed outside Daintree, and the host's details show
   // everything ssh said. Retrying first would only fail the same way.
   if (isClientAppError(error) && error.code === "HOST_SSH_ACCESS_DENIED") {
     return {
+      kind: "settings",
       label: "Settings…",
       run: () => {
         requestHostSettings({ kind: "detail", hostId });
         openHostsSettingsTab();
       },
+      hint: `Settings has ${hostName(hostId)}'s connection details and everything ssh said.`,
     };
   }
   // The host said the project is gone: trying again can't help, picking another
@@ -133,9 +151,14 @@ export function hostSwitchRecovery(
     error.code === "NOT_FOUND" &&
     getHostListSnapshot().hosts.some((candidate) => candidate.descriptor.id === hostId)
   ) {
-    return { label: "Choose project…", run: () => void requestHostProjectPicker(hostId) };
+    return {
+      kind: "choose-project",
+      label: "Choose project…",
+      run: () => void requestHostProjectPicker(hostId),
+      hint: `Pick one of the projects that are on ${hostName(hostId)}.`,
+    };
   }
-  return { label: "Retry", run: retry };
+  return { kind: "retry", label: "Retry", run: retry };
 }
 
 /**

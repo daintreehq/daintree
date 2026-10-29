@@ -11,13 +11,16 @@ export function pendingHostSwitchHeading(pending: PendingHostSwitch): string {
     : `Switching to ${pending.hostName}`;
 }
 
+type WaitingPhase = Exclude<PendingHostSwitch["phase"], "failed">;
+
+/** A switch's steps, in the order main moves through them. */
+export const HOST_SWITCH_STEPS: readonly WaitingPhase[] = ["connecting", "starting", "opening"];
+
 /**
  * What a waiting switch is doing, in words that change only with the phase:
  * learning the project's name mid-phase does not reword it.
  */
-export function pendingHostSwitchStatus(
-  phase: Exclude<PendingHostSwitch["phase"], "failed">
-): string {
+export function pendingHostSwitchStatus(phase: WaitingPhase): string {
   switch (phase) {
     case "connecting":
       return "Connecting…";
@@ -25,6 +28,38 @@ export function pendingHostSwitchStatus(
       return "Starting Daintree on the host…";
     case "opening":
       return "Opening the project…";
+  }
+}
+
+/**
+ * How one step reads: what it is doing while it is the phase, what was seen
+ * once main has moved past it, and what is still to come. A host already
+ * running Daintree skips `starting`, and "running" stays true of it.
+ */
+export function hostSwitchStepLabel(
+  step: WaitingPhase,
+  state: "done" | "active" | "pending"
+): string {
+  if (state === "active") return pendingHostSwitchStatus(step);
+  switch (step) {
+    case "connecting":
+      return state === "done" ? "Reached the host" : "Connect to the host";
+    case "starting":
+      return state === "done" ? "Daintree is running on the host" : "Start Daintree on the host";
+    case "opening":
+      return state === "done" ? "Project open" : "Open the project";
+  }
+}
+
+/** Where a failed switch stopped, as main recorded it. */
+export function hostSwitchStoppedIn(phase: WaitingPhase): string {
+  switch (phase) {
+    case "connecting":
+      return "Stopped while connecting";
+    case "starting":
+      return "Stopped while starting Daintree";
+    case "opening":
+      return "Stopped while opening the project";
   }
 }
 

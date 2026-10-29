@@ -128,13 +128,9 @@ describe("HostSwitchScreen", () => {
     expect(document.activeElement).toBe(button("Retry"));
     fireEvent.keyDown(screen(), { key: "Tab" });
     expect(document.activeElement).toBe(button("Cancel"));
-    // The failure's reason can outgrow its zone, so it is a stop of its own.
-    fireEvent.keyDown(screen(), { key: "Tab" });
-    expect(document.activeElement?.textContent).toBe("down");
+    // The reason is in flow, never a scroll box, so it is not a stop of its own.
     fireEvent.keyDown(screen(), { key: "Tab" });
     expect(document.activeElement).toBe(button("Retry"));
-    fireEvent.keyDown(screen(), { key: "Tab", shiftKey: true });
-    expect(document.activeElement?.textContent).toBe("down");
     fireEvent.keyDown(screen(), { key: "Tab", shiftKey: true });
     expect(document.activeElement).toBe(button("Cancel"));
   });
@@ -165,7 +161,7 @@ describe("HostSwitchScreen", () => {
     const root = screen();
     const mark = document.querySelector('[data-testid="daintree-mark"]');
     expect(mark).not.toBeNull();
-    expect(root.querySelector('[role="status"] .animate-spin')).not.toBeNull();
+    expect(root.querySelector('[aria-current="step"] .animate-spin')).not.toBeNull();
     expect(root.textContent).toContain("Connecting…");
     const heading = root.querySelector("h2")!;
     expect(heading.textContent).toBe("Switching to studio-02");
