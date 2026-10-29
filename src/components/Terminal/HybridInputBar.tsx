@@ -1490,7 +1490,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     // through sendText would submit it. After the text rather than at the
     // caret: the picker's own click has already focused the editor, so a
     // composer the user never clicked into reports a caret at 0 they never chose.
-    const handleTemplateDraft = (text: string) => {
+    const handleTemplateDraft = (rendered: string) => {
+      // The editor stores every break as "\n", so a CRLF template would put
+      // the caret past the end of the document it lands in.
+      const text = rendered.replace(/\r\n?/g, "\n");
       const view = editorViewRef.current;
       const draft = view?.state.doc.toString() ?? lastEmittedValueRef.current;
       const written = draft.trim() !== "";

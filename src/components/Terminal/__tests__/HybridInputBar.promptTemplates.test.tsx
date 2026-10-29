@@ -165,13 +165,49 @@ describe("HybridInputBar prompt templates", () => {
     expect(storedDraft()).toBe("Run the tests.");
   });
 
-  it("takes the template back out with one undo and nothing else", async () => {
+  it("makes the template an undo step of its own, apart from the draft and from typing after it", async () => {
     const { view } = await renderComposer("Fix the retry loop.", entry("Run the tests."));
 
     await pickTemplate();
     act(() => {
+      view.dispatch({
+        changes: { from: view.state.doc.length, insert: "!" },
+        userEvent: "input.type",
+      });
+    });
+    expect(view.state.doc.toString()).toBe("Fix the retry loop.\n\nRun the tests.!");
+
+    act(() => {
       undo(view);
     });
+    expect(view.state.doc.toString()).toBe("Fix the retry loop.\n\nRun the tests.");
+
+    act(() => {
+      undo(view);
+    });
+    expect(view.state.doc.toString()).toBe("Fix the retry loop.");
+    expect(storedDraft()).toBe("Fix the retry loop.");
+  });
+
+  it("lands a template written with CRLF breaks, with the caret after it", async () => {
+    const { view } = await renderComposer("Fix the retry loop.", entry("Run:\r\n- tests\r- lint"));
+
+    await pickTemplate();
+
+    const expected = "Fix the retry loop.\n\nRun:\n- tests\n- lint";
+    expect(view.state.doc.toString()).toBe(expected);
+    expect(view.state.selection.main.head).toBe(expected.length);
+  });
+
+  it("leaves a written draft as it is when the template renders to nothing", async () => {
+    const { view } = await renderComposer(
+      "Fix the retry loop.",
+      entry("{{extra}}", [{ name: "extra", label: "Extra" }])
+    );
+
+    await pickTemplate();
+    fireEvent.click(await screen.findByRole("button", { name: "Fill draft" }));
+    await act(async () => {});
 
     expect(view.state.doc.toString()).toBe("Fix the retry loop.");
     expect(storedDraft()).toBe("Fix the retry loop.");
