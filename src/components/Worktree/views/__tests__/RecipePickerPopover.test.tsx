@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, cleanup, within, fireEvent } from "@testing-library/react";
 import { RecipePickerPopover } from "../RecipePickerPopover";
+import { CLONE_LAYOUT_ID } from "../../hooks/useRecipePicker";
 import type { TerminalRecipe } from "@/types";
 
 vi.stubGlobal(
@@ -161,7 +162,8 @@ describe("RecipePickerPopover — keyboard", () => {
     const props = renderOpen();
     const trigger = screen.getByRole("combobox");
 
-    fireEvent.keyDown(trigger, { key: "ArrowDown" });
+    // Nothing is committed here, which is the "No recipe" row, second from the top.
+    expect(cursorIndex()).toBe(1);
     fireEvent.keyDown(trigger, { key: "ArrowDown" });
     expect(cursorIndex()).toBe(2);
     expect(trigger.getAttribute("aria-activedescendant")).toBe(cursorRow().id);
@@ -216,6 +218,73 @@ describe("RecipePickerPopover — keyboard", () => {
 
     fireEvent.keyDown(screen.getByRole("combobox"), { key: "ArrowDown" });
     expect(props.onOpenChange).toHaveBeenCalledWith(true);
+  });
+
+  describe("where the cursor starts", () => {
+    /** The rows carrying the check (`aria-current`) and the cursor (`aria-selected`). */
+    function committedAndCursor() {
+      const rows = within(screen.getByRole("listbox")).getAllByRole("option");
+      const committed = rows.filter((row) => row.getAttribute("aria-current") === "true");
+      expect(committed).toHaveLength(1);
+      return { committed: committed[0]!, cursor: cursorRow() };
+    }
+
+    it.each([
+      ["no recipe", null, "none"],
+      ["a recipe", "b", "recipe"],
+      ["clone current layout", CLONE_LAYOUT_ID, "clone"],
+    ])("opens on the committed row when the pick is %s", (_label, selectedRecipeId, kind) => {
+      renderOpen({ selectedRecipeId });
+
+      const { committed, cursor } = committedAndCursor();
+      expect(cursor).toBe(committed);
+      expect(cursor.getAttribute("data-option-kind")).toBe(kind);
+      expect(screen.getByRole("combobox").getAttribute("aria-activedescendant")).toBe(cursor.id);
+    });
+
+    it("commits the existing pick when Enter is the first key after opening", () => {
+      const props = renderOpen({ selectedRecipeId: "b" });
+
+      fireEvent.keyDown(screen.getByRole("combobox"), { key: "Enter" });
+
+      expect(props.onSelectRecipe).toHaveBeenCalledWith("b");
+    });
+
+    it("keeps the cursor off an unavailable row when another host's pick is No recipe", () => {
+      const props = renderOpen({
+        selectedRecipeId: null,
+        unavailableReason: (option) => (option.kind === "clone" ? "This Mac only" : null),
+      });
+
+      expect(cursorRow().getAttribute("data-option-kind")).toBe("none");
+      fireEvent.keyDown(screen.getByRole("combobox"), { key: "Enter" });
+      expect(props.onSelectRecipe).toHaveBeenCalledWith(null);
+    });
+
+    it("reopens on the pick that was just made rather than where the cursor wandered", () => {
+      const picker = (open: boolean, selectedRecipeId: string | null) => (
+        <RecipePickerPopover
+          recipes={[makeRecipe({ id: "a", name: "Alpha" }), makeRecipe({ id: "b", name: "Beta" })]}
+          selectedRecipeId={selectedRecipeId}
+          selectedRecipe={undefined}
+          open={open}
+          onOpenChange={vi.fn()}
+          onSelectRecipe={vi.fn()}
+          onMarkTouched={vi.fn()}
+          listId="recipe-list"
+        />
+      );
+      const { rerender } = render(picker(true, "a"));
+      fireEvent.keyDown(screen.getByRole("combobox"), { key: "End" });
+      expect(cursorIndex()).toBe(3);
+
+      rerender(picker(false, "b"));
+      rerender(picker(true, "b"));
+
+      const { committed, cursor } = committedAndCursor();
+      expect(cursor).toBe(committed);
+      expect(cursor.textContent).toContain("Beta");
+    });
   });
 
   it("marks the committed recipe with aria-current, leaving aria-selected to the cursor", () => {

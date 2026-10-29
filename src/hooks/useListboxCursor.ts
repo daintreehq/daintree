@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useState } from "react";
 
 export interface ListboxCursorKeyEvent {
   key: string;
@@ -21,6 +21,17 @@ export interface UseListboxCursorArgs {
   /** Whether the surface holding the list is open — resets the cursor on each session. */
   open: boolean;
   /**
+   * The row the cursor rests on at the start of each session, and again after
+   * each `resetKey` change: the committed option of a select-only combobox,
+   * which the APG opens with the active descendant on. Omit, or pass `-1` for
+   * "nothing committed", to start at the first row.
+   *
+   * Read when a session starts and never after, so a committed value or a
+   * reordered list changing while the list is open does not yank the cursor
+   * from under the user.
+   */
+  initialIndex?: number;
+  /**
    * Identity of the current result set (a query string, a generation counter).
    * Changing it rewinds the raw cursor, not just the clamped one: clamping hides
    * an out-of-range index without discarding it, so narrowing to one row and
@@ -35,8 +46,12 @@ export interface UseListboxCursorArgs {
 export interface UseListboxCursorResult {
   activeIndex: number;
   setActiveIndex: (index: number) => void;
-  /** Attach to the scroll container; rows carry `data-option-index`. */
-  listRef: React.RefObject<HTMLDivElement | null>;
+  /**
+   * Attach to the scroll container; rows carry `data-option-index`. A callback
+   * rather than a ref object because a popover mounts its list a render after
+   * `open` flips, and the cursor row has to be scrolled to once the list exists.
+   */
+  listRef: React.RefCallback<HTMLDivElement>;
   handleKeyDown: (e: ListboxCursorKeyEvent) => void;
 }
 
@@ -118,6 +133,13 @@ export function keyBelongsToField(e: {
   );
 }
 
+/** Where a session starts: the seed if it is a row of the current list, else the first. */
+function sessionStartIndex(initialIndex: number | undefined, itemCount: number): number {
+  return initialIndex !== undefined && initialIndex >= 0 && initialIndex < itemCount
+    ? initialIndex
+    : 0;
+}
+
 /**
  * The roving cursor a popover listbox needs to be usable from the keyboard:
  * arrows wrap, Home/End jump, Enter commits, Escape closes.
@@ -134,29 +156,38 @@ export function keyBelongsToField(e: {
 export function useListboxCursor({
   itemCount,
   open,
+  initialIndex,
   resetKey,
   onSelect,
   onClose,
 }: UseListboxCursorArgs): UseListboxCursorResult {
-  const [cursorIndex, setCursorIndex] = useState(0);
-  const listRef = useRef<HTMLDivElement>(null);
+  const [cursorIndex, setCursorIndex] = useState(() => sessionStartIndex(initialIndex, itemCount));
+  const [session, setSession] = useState({ open, resetKey });
+  const [listNode, setListNode] = useState<HTMLDivElement | null>(null);
 
   const activeIndex =
     cursorIndex >= 0 && cursorIndex < itemCount ? cursorIndex : itemCount > 0 ? 0 : -1;
 
   // Reset on every transition, not just close: Radix cancels the exit animation
   // when a popover reopens inside it, so a reset armed only on the close path
-  // would be skipped and fire against the next session instead.
-  useEffect(() => {
-    setCursorIndex(0);
-  }, [open, resetKey]);
+  // would be skipped and fire against the next session instead. Done while
+  // rendering rather than in an effect, so the render that opens the list
+  // already carries the session's starting row — an effect would commit one
+  // frame of the last session's cursor, and its active descendant, first.
+  if (session.open !== open || !Object.is(session.resetKey, resetKey)) {
+    setSession({ open, resetKey });
+    setCursorIndex(sessionStartIndex(initialIndex, itemCount));
+  }
 
-  useEffect(() => {
-    if (!listRef.current || activeIndex < 0) return;
-    listRef.current
+  // Keyed on the mounted list as well as the row: the list is a node of its own
+  // each time the popover opens, and the row it opens on may be the one the
+  // cursor was already on, so the index alone would never ask for the scroll.
+  useLayoutEffect(() => {
+    if (!open || !listNode || activeIndex < 0) return;
+    listNode
       .querySelector<HTMLElement>(`[data-option-index="${activeIndex}"]`)
       ?.scrollIntoView({ block: "nearest" });
-  }, [activeIndex]);
+  }, [listNode, open, activeIndex]);
 
   const handleKeyDown = useCallback(
     (e: ListboxCursorKeyEvent) => {
@@ -200,5 +231,5 @@ export function useListboxCursor({
     [activeIndex, itemCount, onClose, onSelect]
   );
 
-  return { activeIndex, setActiveIndex: setCursorIndex, listRef, handleKeyDown };
+  return { activeIndex, setActiveIndex: setCursorIndex, listRef: setListNode, handleKeyDown };
 }

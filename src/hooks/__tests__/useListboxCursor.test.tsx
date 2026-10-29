@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { renderHook, act } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { useLayoutEffect, useState } from "react";
+import { renderHook, render, act, cleanup } from "@testing-library/react";
 import {
   keyBelongsToField,
   stepListboxCursor,
@@ -34,30 +35,46 @@ function keyEvent(
   } satisfies ListboxCursorKeyEvent;
 }
 
-function renderCursor(
-  initial: { itemCount: number; open?: boolean; resetKey?: unknown } = {
-    itemCount: 4,
-  }
-) {
+interface CursorProps {
+  itemCount: number;
+  open?: boolean;
+  initialIndex?: number;
+  resetKey?: unknown;
+}
+
+function renderCursor(initial: CursorProps = { itemCount: 4 }) {
   const onSelect = vi.fn<(index: number) => void>();
   const onClose = vi.fn();
+  const committed: Array<{ open: boolean; activeIndex: number }> = [];
   const view = renderHook(
-    (props: { itemCount: number; open?: boolean; resetKey?: unknown }) =>
-      useListboxCursor({
+    (props: CursorProps) => {
+      const open = props.open ?? true;
+      const cursor = useListboxCursor({
         itemCount: props.itemCount,
-        open: props.open ?? true,
+        open,
+        initialIndex: props.initialIndex,
         resetKey: props.resetKey,
         onSelect,
         onClose,
-      }),
+      });
+      // A layout effect only sees what was committed: the render-phase reset
+      // throws its first pass away, so recording from the render body would
+      // report a cursor the user never had.
+      useLayoutEffect(() => {
+        committed.push({ open, activeIndex: cursor.activeIndex });
+      });
+      return cursor;
+    },
     { initialProps: initial }
   );
-  return { ...view, onSelect, onClose };
+  return { ...view, onSelect, onClose, committed };
 }
 
 beforeEach(() => {
   Element.prototype.scrollIntoView = vi.fn();
 });
+
+afterEach(cleanup);
 
 describe("useListboxCursor", () => {
   it("wraps in both directions and commits the row Enter is pointed at", () => {
@@ -117,6 +134,71 @@ describe("useListboxCursor", () => {
     expect(result.current.activeIndex).toBe(0);
   });
 
+  it("starts each open session on the committed row and returns to it after wandering", () => {
+    const { result, rerender, onSelect } = renderCursor({
+      itemCount: 5,
+      open: true,
+      initialIndex: 3,
+    });
+    expect(result.current.activeIndex).toBe(3);
+
+    act(() => result.current.handleKeyDown(keyEvent("Home")));
+    rerender({ itemCount: 5, open: false, initialIndex: 3 });
+    rerender({ itemCount: 5, open: true, initialIndex: 3 });
+    expect(result.current.activeIndex).toBe(3);
+
+    act(() => result.current.handleKeyDown(keyEvent("Enter")));
+    expect(onSelect).toHaveBeenCalledWith(3);
+  });
+
+  it("never commits a frame on the last session's row when the committed row moved while closed", () => {
+    const { rerender, committed } = renderCursor({ itemCount: 5, open: false, initialIndex: 1 });
+
+    rerender({ itemCount: 5, open: false, initialIndex: 4 });
+    rerender({ itemCount: 5, open: true, initialIndex: 4 });
+
+    const opening = committed.filter((frame) => frame.open);
+    expect(opening.length).toBeGreaterThan(0);
+    expect(opening.every((frame) => frame.activeIndex === 4)).toBe(true);
+  });
+
+  it("leaves the cursor alone when the committed row or the list changes mid-session", () => {
+    const { result, rerender } = renderCursor({ itemCount: 5, open: true, initialIndex: 1 });
+
+    act(() => result.current.setActiveIndex(3));
+    rerender({ itemCount: 6, open: true, initialIndex: 0 });
+
+    expect(result.current.activeIndex).toBe(3);
+  });
+
+  it("starts at the first row when nothing is committed or the committed row is not in the list", () => {
+    for (const initialIndex of [undefined, -1, 7]) {
+      const { result, unmount } = renderCursor({ itemCount: 3, initialIndex });
+      expect(result.current.activeIndex).toBe(0);
+      unmount();
+    }
+  });
+
+  it("does not park an out-of-range committed row for a later, longer list", () => {
+    const { result, rerender } = renderCursor({ itemCount: 2, open: true, initialIndex: 6 });
+    expect(result.current.activeIndex).toBe(0);
+
+    rerender({ itemCount: 10, open: true, initialIndex: 6 });
+    expect(result.current.activeIndex).toBe(0);
+  });
+
+  it("returns to the committed row, not the top, when the result set changes", () => {
+    const { result, rerender } = renderCursor({
+      itemCount: 5,
+      initialIndex: 2,
+      resetKey: "a",
+    });
+    act(() => result.current.setActiveIndex(4));
+
+    rerender({ itemCount: 5, initialIndex: 2, resetKey: "b" });
+    expect(result.current.activeIndex).toBe(2);
+  });
+
   it("leaves a modified chord to whatever bound it", () => {
     const { result, onSelect } = renderCursor({ itemCount: 3 });
 
@@ -161,6 +243,71 @@ describe("useListboxCursor", () => {
     act(() => result.current.handleKeyDown(keyEvent("Enter", { keyCode: 229 })));
 
     expect(onSelect).not.toHaveBeenCalled();
+  });
+});
+
+describe("useListboxCursor — scrolling the cursor row into view", () => {
+  const scrolled: string[] = [];
+
+  beforeEach(() => {
+    scrolled.length = 0;
+    Element.prototype.scrollIntoView = vi.fn(function (this: Element) {
+      scrolled.push(this.getAttribute("data-option-index") ?? "?");
+    });
+  });
+
+  // The list mounts after the render that opens it, as a Radix popover's does.
+  function Harness({ open, initialIndex, tick }: CursorProps & { tick?: number }) {
+    const { listRef } = useListboxCursor({
+      itemCount: 6,
+      open,
+      initialIndex,
+      onSelect: vi.fn(),
+      onClose: vi.fn(),
+    });
+    const [listMounted, setListMounted] = useState(false);
+    useLayoutEffect(() => {
+      setListMounted(open);
+    }, [open]);
+    return (
+      <div data-tick={tick}>
+        {listMounted && (
+          <div ref={listRef} data-testid="list">
+            {[0, 1, 2, 3, 4, 5].map((i) => (
+              <div key={i} data-option-index={i} />
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  it("scrolls the committed row into view once a late-mounting list appears", () => {
+    const { rerender } = render(<Harness itemCount={6} open={false} initialIndex={4} />);
+    expect(scrolled).toEqual([]);
+
+    rerender(<Harness itemCount={6} open={true} initialIndex={4} />);
+    expect(scrolled).toContain("4");
+  });
+
+  it("scrolls again when the list reopens on the row the cursor was already on", () => {
+    const { rerender } = render(<Harness itemCount={6} open={true} initialIndex={4} />);
+    rerender(<Harness itemCount={6} open={false} initialIndex={4} />);
+    scrolled.length = 0;
+
+    rerender(<Harness itemCount={6} open={true} initialIndex={4} />);
+    expect(scrolled).toContain("4");
+  });
+
+  it("does not scroll a closed list, or re-scroll on an unrelated render", () => {
+    const { rerender } = render(<Harness itemCount={6} open={true} initialIndex={2} tick={0} />);
+    const afterOpen = scrolled.length;
+
+    rerender(<Harness itemCount={6} open={true} initialIndex={2} tick={1} />);
+    expect(scrolled).toHaveLength(afterOpen);
+
+    rerender(<Harness itemCount={6} open={false} initialIndex={2} tick={1} />);
+    expect(scrolled).toHaveLength(afterOpen);
   });
 });
 
