@@ -54,6 +54,9 @@ export type CompletionKind = "command" | "skill" | "app" | "plugin";
  *    from the TOML `description` key (bounded read).
  *  - `skill-dir`: immediate child directories containing `SKILL.md`, name from
  *    the child directory name, description from the `SKILL.md` frontmatter.
+ *  - `named-skill-dir`: the same folders, read the way agy does: name from the
+ *    frontmatter `name` (a skill without one is skipped), description parsed
+ *    as YAML, and `user-invocable` not applied.
  *  - `codex-plugin-registry`: a `registry` parser (not a plain directory scan)
  *    handed `$CODEX_HOME`. It intersects the enabled `[plugins."name@market"]`
  *    tables in `config.toml` with the manifests under `plugins/cache/*`, picks
@@ -61,7 +64,7 @@ export type CompletionKind = "command" | "skill" | "app" | "plugin";
  *    (fallback `.claude-plugin/plugin.json`) for the name/description.
  */
 export type CompletionParserName =
-  "markdown-frontmatter" | "toml" | "skill-dir" | "codex-plugin-registry";
+  "markdown-frontmatter" | "toml" | "skill-dir" | "named-skill-dir" | "codex-plugin-registry";
 
 /** Platforms a location applies to. Matches `process.platform` values. */
 export type CompletionPlatform = "darwin" | "win32" | "linux";
