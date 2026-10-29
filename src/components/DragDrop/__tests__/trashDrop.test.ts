@@ -1,0 +1,145 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("@/utils/logger", () => ({ logError: vi.fn() }));
+
+const store = vi.hoisted(() => ({
+  trashPanelGroup: vi.fn(),
+  getPanelGroup: vi.fn(),
+  pushLayoutSnapshot: vi.fn(),
+  panelsById: {} as Record<string, { location: string }>,
+}));
+
+vi.mock("@/store", () => ({
+  usePanelStore: {
+    getState: () => ({
+      trashPanelGroup: store.trashPanelGroup,
+      getPanelGroup: store.getPanelGroup,
+      panelsById: store.panelsById,
+    }),
+  },
+}));
+
+vi.mock("@/store/layoutUndoStore", () => ({
+  useLayoutUndoStore: { getState: () => ({ pushLayoutSnapshot: store.pushLayoutSnapshot }) },
+}));
+
+import {
+  __resetPanelCloseGuardsForTests,
+  registerPanelCloseGuard,
+  type PanelCloseVerdict,
+} from "@/services/panelCloseGuard";
+import { trashDroppedPanel } from "../trashDrop";
+
+function deferredGuard() {
+  let answer!: (verdict: PanelCloseVerdict) => void;
+  const guard = vi.fn(
+    () =>
+      new Promise<PanelCloseVerdict>((resolve) => {
+        answer = resolve;
+      })
+  );
+  return { guard, answer: (verdict: PanelCloseVerdict) => answer(verdict) };
+}
+
+const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+describe("trashDroppedPanel (#14943)", () => {
+  beforeEach(() => {
+    __resetPanelCloseGuardsForTests();
+    store.trashPanelGroup.mockReset();
+    store.getPanelGroup.mockReset();
+    store.pushLayoutSnapshot.mockReset();
+    store.panelsById = {
+      p1: { location: "grid" },
+      p2: { location: "grid" },
+      p3: { location: "grid" },
+    };
+  });
+
+  it("trashes an unguarded panel synchronously", () => {
+    trashDroppedPanel("p1");
+
+    expect(store.trashPanelGroup).toHaveBeenCalledWith("p1");
+    expect(store.pushLayoutSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks a dirty panel's guard first and trashes only once it proceeds", async () => {
+    const { guard, answer } = deferredGuard();
+    registerPanelCloseGuard("p1", guard);
+
+    trashDroppedPanel("p1");
+    await flush();
+
+    expect(guard).toHaveBeenCalledTimes(1);
+    expect(store.trashPanelGroup).not.toHaveBeenCalled();
+
+    answer("proceed");
+    await flush();
+
+    expect(store.trashPanelGroup).toHaveBeenCalledWith("p1");
+    expect(store.pushLayoutSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves the panel and the undo history alone on cancel", async () => {
+    registerPanelCloseGuard("p1", async () => "cancel");
+
+    trashDroppedPanel("p1");
+    await flush();
+
+    expect(store.trashPanelGroup).not.toHaveBeenCalled();
+    expect(store.pushLayoutSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("asks each dirty group member in turn and keeps the whole group on a cancel", async () => {
+    store.getPanelGroup.mockReturnValue({ id: "g1", panelIds: ["p1", "p2", "p3"] });
+    const first = vi.fn(async (): Promise<PanelCloseVerdict> => "proceed");
+    const second = vi.fn(async (): Promise<PanelCloseVerdict> => "cancel");
+    registerPanelCloseGuard("p2", first);
+    registerPanelCloseGuard("p3", second);
+
+    // Dragging the clean tab still consults its dirty siblings.
+    trashDroppedPanel("p1");
+    await flush();
+
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(second).toHaveBeenCalledTimes(1);
+    expect(store.trashPanelGroup).not.toHaveBeenCalled();
+  });
+
+  it("trashes the group once every dirty member proceeds", async () => {
+    store.getPanelGroup.mockReturnValue({ id: "g1", panelIds: ["p1", "p2"] });
+    registerPanelCloseGuard("p2", async () => "proceed");
+
+    trashDroppedPanel("p1");
+    await flush();
+
+    expect(store.trashPanelGroup).toHaveBeenCalledWith("p1");
+  });
+
+  it("ignores a second drop while the prompt is still open", async () => {
+    const { guard, answer } = deferredGuard();
+    registerPanelCloseGuard("p1", guard);
+
+    trashDroppedPanel("p1");
+    await flush();
+    trashDroppedPanel("p1");
+    answer("proceed");
+    await flush();
+
+    expect(guard).toHaveBeenCalledTimes(1);
+    expect(store.trashPanelGroup).toHaveBeenCalledTimes(1);
+  });
+
+  it("does nothing when the panel left the grid while the prompt was open", async () => {
+    const { guard, answer } = deferredGuard();
+    registerPanelCloseGuard("p1", guard);
+
+    trashDroppedPanel("p1");
+    await flush();
+    store.panelsById = { ...store.panelsById, p1: { location: "trash" } };
+    answer("proceed");
+    await flush();
+
+    expect(store.trashPanelGroup).not.toHaveBeenCalled();
+  });
+});

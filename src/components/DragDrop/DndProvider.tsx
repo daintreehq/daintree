@@ -116,6 +116,7 @@ import {
   type OverDropData,
 } from "./dropResolution";
 import { useDragRecovery } from "./useDragRecovery";
+import { trashDroppedPanel } from "./trashDrop";
 import { MOUSE_SENSOR_OPTIONS, TOUCH_SENSOR_OPTIONS } from "./dragActivation";
 import {
   DURATION_100,
@@ -924,18 +925,19 @@ export function DndProvider({ children }: DndProviderProps) {
       // If we reach this point, the drop was validated.
       if (!over || !activeData || !draggedId) return;
 
-      // Capture layout state before any mutations for undo support
-      useLayoutUndoStore.getState().pushLayoutSnapshot();
-
       const overId = over.id as string;
 
-      // Drag-to-trash: drop on the trash pill trashes the panel — or its whole tab
-      // group, matching the X-button path — and skips reorder logic. trashPanelGroup
-      // falls back to trashPanel when the dragged panel has no group.
+      // Drag-to-trash: drop on the trash pill closes the panel — or its whole tab
+      // group, matching the X-button path, unsaved-work prompts included — and
+      // skips reorder logic. It takes its own undo snapshot, only once the trash
+      // actually happens.
       if (overId === TRASH_DROPPABLE_ID) {
-        usePanelStore.getState().trashPanelGroup(draggedId);
+        trashDroppedPanel(draggedId);
         return;
       }
+
+      // Capture layout state before any mutations for undo support
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
 
       const overData = over.data.current as
         | {
