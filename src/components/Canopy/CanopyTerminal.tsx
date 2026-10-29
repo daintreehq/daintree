@@ -1,15 +1,48 @@
 import { useEffect, useRef, useState, type MouseEvent } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { Terminal } from "@xterm/xterm";
+import { Terminal, type IDisposable } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import type { WebglAddon } from "@xterm/addon-webgl";
+import type { SearchAddon } from "@xterm/addon-search";
 import type { CanopyTerminalData, CanopyTerminalView } from "@shared/types/ipc/canopy";
+import { LOCAL_HOST_ID, isLocalHostId, type HostId } from "@shared/types/remoteHosts";
+import { isPtyPanel } from "@shared/types/panel";
+import { resolveWorktreePathScope } from "@shared/utils/path";
 import { isSecretPrompt } from "@shared/utils/secretPrompt";
+import { formatForTerminalPaste } from "@shared/utils/terminalInputProtocol";
 import { isTerminalSubmission } from "@shared/utils/terminalSubmission";
+import { systemClient } from "@/clients/systemClient";
 import { getEffectiveScrollbarWidth, getXtermOptions } from "@/config/xtermConfig";
+import { keybindingService } from "@/services/KeybindingService";
 import { getXtermCellDimensions } from "@/services/terminal/TerminalResizeController";
-import { subscribeWhenReady as subscribeTerminalServiceWhenReady } from "@/services/terminal/terminalInstanceServiceAccessor";
+import {
+  peek as peekTerminalService,
+  subscribeWhenReady as subscribeTerminalServiceWhenReady,
+} from "@/services/terminal/terminalInstanceServiceAccessor";
+import {
+  activateUnicode11,
+  createImageAddon,
+  createSearchAddon,
+} from "@/services/terminal/TerminalAddonManager";
+import { reportFileLinkFailure } from "@/services/terminal/FileLinksAddon";
+import { resolveSelectedFilePath } from "@/services/terminal/filePathDetection";
+import { TerminalLinkHandler } from "@/services/terminal/TerminalLinkHandler";
+import { remoteHostOfView } from "@/services/terminal/remoteLoopbackLinks";
+import {
+  disposeTerminalLinkProviders,
+  hoveredUrlPluginName,
+  installTerminalLinkProviders,
+  sharedTerminalOptions,
+  type TerminalLinkSlots,
+  type TerminalLinkTarget,
+} from "@/services/terminal/terminalLinkSurface";
+import { hideTerminalLinkTooltip } from "@/services/terminal/terminalLinkTooltip";
+import type { TerminalLink } from "@/services/terminal/types";
+import { loadXtermCore } from "@/services/terminal/xtermCore";
+import { hasUsableRenderer } from "@/services/terminal/xtermRendererProbe";
+import { getCurrentViewStoreOrNull } from "@/store/createWorktreeStore";
+import { usePanelStore } from "@/store/panelStore";
 import { useTerminalFontStore } from "@/store/terminalFontStore";
 import { useScreenReaderStore } from "@/store/screenReaderStore";
 import {
@@ -22,10 +55,15 @@ import { isTerminalReply } from "@/services/terminal/inputUtils";
 import { logWarn } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import {
+  TerminalSearchBar,
+  type TerminalSearchTarget,
+} from "@/components/Terminal/TerminalSearchBar";
+import {
   ownCanopyTerminalApi,
   unlessHostDisconnected,
   type CanopyTerminalApi,
 } from "./canopyHostSource";
+import { CanopyTerminalMenu, type CanopyTerminalMenuHandle } from "./CanopyTerminalMenu";
 
 const SCROLLBACK = 2_000;
 /** The smallest grid worth handing an agent; a smaller measure is a pane mid-layout. */
@@ -59,6 +97,27 @@ const GESTURE_EVENTS = [
   "wheel",
 ] as const;
 
+const linkHandler = new TerminalLinkHandler();
+/** Why another host's paths don't open: here they would name this machine's files. */
+const OTHER_HOST_PATH = "This path is on another host. Open it from a window on that host.";
+
+function sameHost(a: HostId, b: HostId): boolean {
+  return isLocalHostId(a) ? isLocalHostId(b) : a === b;
+}
+
+/** The cwd the run's own pane in this view resolves its paths against. */
+function panelCwdOf(id: string): string {
+  const panel = usePanelStore.getState().panelsById[id];
+  return (panel && isPtyPanel(panel) ? panel.cwd : undefined) ?? "";
+}
+
+/** Find in the focused panel, which a keybinding-isolated surface answers itself. */
+function isFindKey(event: KeyboardEvent): boolean {
+  return keybindingService
+    .getTriggerCombos("find.inFocusedPanel")
+    .some((combo) => !combo.includes(" ") && keybindingService.matchesEvent(event, combo));
+}
+
 /** Where the live view's stream stands, for the controls around it. */
 export interface CanopyStreamState {
   /** The open stream input goes through; null until it opens, or once it ends. */
@@ -73,6 +132,8 @@ interface CanopyTerminalProps {
   spawnedAt: number;
   /** The host the run is on; the window's own by default. */
   api?: CanopyTerminalApi;
+  /** The run's working directory: relative paths in its output resolve against it. */
+  cwd?: string;
   /**
    * The link to the run's host is down: the stream is gone with it, so input
    * stops and the pane says so until the link's return opens it again.
@@ -88,6 +149,12 @@ interface CanopyTerminalProps {
 /**
  * A live view of one agent's terminal, from any project: its own xterm on the
  * WebGL renderer, fed by the stream main brokers for the canopy panel.
+ *
+ * Built like the run's grid pane — the same options, widths, link providers,
+ * images, search and output menu — so it behaves like that pane. What it
+ * opens is resolved against the run: its cwd, and its host, so a `localhost`
+ * link means the run's host and another host's files aren't opened as local
+ * ones. A file opens in the viewer dialog, over the panel rather than behind it.
  *
  * Sized to the panel, at the user's own font size: once the stream is open the
  * PTY is held at the grid this pane fits, so the agent draws for the space it
@@ -108,6 +175,7 @@ export function CanopyTerminal({
   runId,
   spawnedAt,
   api = ownCanopyTerminalApi,
+  cwd,
   reconnecting = false,
   onStreamChange,
   onSubmitted,
@@ -118,10 +186,21 @@ export function CanopyTerminal({
   const hostRef = useRef<HTMLDivElement>(null);
   const onStreamChangeRef = useRef(onStreamChange);
   const onSubmittedRef = useRef(onSubmitted);
+  const cwdRef = useRef(cwd);
   useEffect(() => {
     onStreamChangeRef.current = onStreamChange;
     onSubmittedRef.current = onSubmitted;
+    cwdRef.current = cwd;
   });
+  const rootRef = useRef<HTMLDivElement>(null);
+  // The current xterm's menu and search, for handlers that outlive one generation.
+  const menuRef = useRef<CanopyTerminalMenuHandle | null>(null);
+  const searchRef = useRef<TerminalSearchTarget | null>(null);
+  const [search] = useState<TerminalSearchTarget>(() => ({
+    ensureSearchAddon: () => searchRef.current?.ensureSearchAddon() ?? Promise.resolve(null),
+    getSearchAddon: () => searchRef.current?.getSearchAddon() ?? null,
+  }));
+  const [searchOpen, setSearchOpen] = useState(false);
   // The grid's own resolved setting, so a screen reader meets this terminal
   // exactly as it meets the same terminal in its pane.
   const screenReaderEnabled = useScreenReaderStore((s) => s.resolvedScreenReaderEnabled());
@@ -162,6 +241,29 @@ export function CanopyTerminal({
       onStreamChangeRef.current?.({ ...stream });
     };
 
+    // The local terminal's own id: a routed run is keyed by host, the terminal service is not.
+    const localId = api.holdsSize ? runId : (api.ownSizedId?.(runId) ?? null);
+    const hostId = api.hostOf(runId);
+    // Only this view's host serves its files here; another host's paths would
+    // open whatever this machine has at the same place.
+    const filesHere = sameHost(hostId, remoteHostOfView() ?? LOCAL_HOST_ID);
+    let hoveredLink: TerminalLink | null = null;
+    const links: TerminalLinkTarget = {
+      // As this view's panels know it: a run this view doesn't hold has no
+      // panel, plugin subject or help lane here, so its links open on their own.
+      terminalId: localId,
+      getTerminal: () => (disposed ? null : terminal),
+      getCwd: () => cwdRef.current ?? (localId === null ? "" : panelCwdOf(localId)),
+      getRuntimeAgentId: () =>
+        localId === null ? undefined : peekTerminalService()?.get(localId)?.runtimeAgentId,
+      setHoveredLink: (link) => {
+        hoveredLink = link;
+      },
+      openLink: (url, event, options) =>
+        linkHandler.openLink(url, localId, event, { ...options, hostId }),
+      fileRoute: { dialogOnly: true, refusal: () => (filesHere ? null : OTHER_HOST_PATH) },
+    };
+
     const { fontSize, fontFamily } = useTerminalFontStore.getState();
     const theme = selectEffectiveTheme(useTerminalColorSchemeStore.getState());
     const terminal = new Terminal({
@@ -173,10 +275,13 @@ export function CanopyTerminal({
         performanceMode: false,
         screenReaderMode: useScreenReaderStore.getState().resolvedScreenReaderEnabled(),
       }),
+      ...sharedTerminalOptions(links),
       cols: 80,
       rows: 24,
       cursorBlink: false,
     });
+    // Awaited before the snapshot's first write, so widths are recorded as the grid records them.
+    const unicodeReady = activateUnicode11(terminal);
     terminal.open(host);
     if (refocusRef.current) {
       refocusRef.current = false;
@@ -186,6 +291,63 @@ export function CanopyTerminal({
       }
     }
     terminalRef.current = terminal;
+
+    const linkSlots: TerminalLinkSlots = {
+      commandLinksDisposable: null,
+      fileLinksDisposable: null,
+      imageLinksDisposable: null,
+      webLinksAddon: null,
+      pluginLinksDisposable: null,
+    };
+    // The web links addon comes with the core the grid loads on its first terminal.
+    void loadXtermCore().then(
+      () => {
+        if (!disposed) installTerminalLinkProviders(terminal, linkSlots, links);
+      },
+      (error: unknown) => logWarn("[Canopy] couldn't load the terminal's links", { error })
+    );
+    // Only on a terminal that paints: built before its renderer, the image
+    // addon wedges every later open (#11776).
+    let image: IDisposable | null = null;
+    let imageTried = false;
+    const ensureImageAddon = () => {
+      if (imageTried || disposed || !hasUsableRenderer(terminal)) return;
+      imageTried = true;
+      createImageAddon(terminal).then(
+        (addon) => {
+          if (disposed) addon.dispose();
+          else image = addon;
+        },
+        (error: unknown) => logWarn("[Canopy] couldn't load the image addon", { error })
+      );
+    };
+    ensureImageAddon();
+
+    let searchAddon: SearchAddon | null = null;
+    let searchLoad: Promise<SearchAddon | null> | null = null;
+    const searchTarget: TerminalSearchTarget = {
+      ensureSearchAddon: () => {
+        if (searchAddon) return Promise.resolve(searchAddon);
+        searchLoad ??= createSearchAddon(terminal).then(
+          (addon) => {
+            if (disposed) {
+              addon.dispose();
+              return null;
+            }
+            searchAddon = addon;
+            return addon;
+          },
+          (error: unknown) => {
+            searchLoad = null;
+            logWarn("[Canopy] couldn't load terminal search", { error });
+            return null;
+          }
+        );
+        return searchLoad;
+      },
+      getSearchAddon: () => searchAddon,
+    };
+    searchRef.current = searchTarget;
 
     let webgl: WebglAddon | undefined;
     void import("@xterm/addon-webgl").then(
@@ -207,8 +369,6 @@ export function CanopyTerminal({
       (error: unknown) => logWarn("[Canopy] couldn't load the WebGL renderer", { error })
     );
 
-    // The local terminal's own id: a routed run is keyed by host, the terminal service is not.
-    const localId = api.holdsSize ? runId : (api.ownSizedId?.(runId) ?? null);
     // Another host's terminal is sized only once its watch answer says the host takes it.
     let holdsSize = localId !== null;
 
@@ -258,7 +418,10 @@ export function CanopyTerminal({
     };
     // The cell size moves with the renderer (WebGL arriving or lost, a display
     // change) and with the user's font; either changes the grid the pane fits.
-    const dimensionsChange = terminal.onDimensionsChange(() => requestPanelSize());
+    const dimensionsChange = terminal.onDimensionsChange(() => {
+      ensureImageAddon();
+      requestPanelSize();
+    });
     const unsubscribeFont = useTerminalFontStore.subscribe((font, previous) => {
       if (font.fontSize === previous.fontSize && font.fontFamily === previous.fontFamily) return;
       terminal.options.fontSize = font.fontSize;
@@ -379,6 +542,63 @@ export function CanopyTerminal({
       );
     });
 
+    // The link under the pointer when the menu opened: the hover ends as the pointer reaches it.
+    let menuLink: TerminalLink | null = null;
+    const menu: CanopyTerminalMenuHandle = {
+      read: () => {
+        menuLink = hoveredLink;
+        const selection = terminal.getSelection();
+        const onDisk = menuLink?.kind === "file" || menuLink?.kind === "directory";
+        const filePath = filesHere && onDisk ? (menuLink?.absolutePath ?? null) : null;
+        const worktrees = getCurrentViewStoreOrNull()?.getState().worktrees;
+        return {
+          selection,
+          hoveredUrl: menuLink?.text ?? null,
+          hoveredUrlPluginName: hoveredUrlPluginName(links, menuLink),
+          hoveredFilePath: filePath,
+          hoveredFileKind: filePath !== null && onDisk ? (menuLink?.kind ?? null) : null,
+          hoveredFileScope:
+            filePath !== null && worktrees
+              ? resolveWorktreePathScope(filePath, worktrees.values())
+              : null,
+          selectionFilePath:
+            filesHere && selection
+              ? (resolveSelectedFilePath(selection, links.getCwd(), systemClient.getCachedHomeDir())
+                  ?.absolutePath ?? null)
+              : null,
+        };
+      },
+      openHoveredLink: () => {
+        const link = menuLink;
+        if (!link) return;
+        void Promise.resolve()
+          .then(() => link.activate(new MouseEvent("click"), link.text))
+          .catch((error: unknown) =>
+            reportFileLinkFailure("Failed to activate hovered link", error, link.text)
+          );
+      },
+      openLink: (url, options) => links.openLink(url, undefined, options),
+      copy: (text) => {
+        void navigator.clipboard?.writeText(text).catch(() => {});
+      },
+      // Chosen from the menu, so the user's own input: sent through the stream
+      // like a typed paste, formatted as the grid's paste is.
+      paste: () => {
+        void navigator.clipboard
+          ?.readText()
+          .then((text) => {
+            const watchId = stream.watchId;
+            if (!text || disposed || watchId === null || reconnectingRef.current) return;
+            const data = formatForTerminalPaste(text, {
+              bracketedPasteMode: terminal.modes.bracketedPasteMode,
+            });
+            return api.terminalInput(watchId, data);
+          })
+          .catch((error: unknown) => logWarn("[Canopy] paste refused", { error }));
+      },
+    };
+    menuRef.current = menu;
+
     // Each opening of the stream; an answer to an earlier one is old news.
     let attempt = 0;
     let openTimer: ReturnType<typeof setTimeout> | null = null;
@@ -387,7 +607,9 @@ export function CanopyTerminal({
       const mine = ++attempt;
       api.watchTerminal(runId, { spawnedAt }).then(
         (opened) => {
-          if (mine === attempt) onOpened(opened);
+          void unicodeReady.then(() => {
+            if (mine === attempt) onOpened(opened);
+          });
         },
         (error: unknown) => {
           if (mine === attempt) onOpenFailed(error);
@@ -516,6 +738,12 @@ export function CanopyTerminal({
       offResync();
       offData();
       input.dispose();
+      if (menuRef.current === menu) menuRef.current = null;
+      if (searchRef.current === searchTarget) searchRef.current = null;
+      disposeTerminalLinkProviders(linkSlots);
+      hideTerminalLinkTooltip(terminal);
+      image?.dispose();
+      searchAddon?.dispose();
       bufferChange.dispose();
       dimensionsChange.dispose();
       unsubscribeFont();
@@ -562,59 +790,96 @@ export function CanopyTerminal({
     if (terminal) terminal.options.screenReaderMode = screenReaderEnabled;
   }, [screenReaderEnabled]);
 
+  // The frame keeps app shortcuts away from the run, so Find is answered here,
+  // before the key reaches the terminal as input.
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.isComposing || !isFindKey(event)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setSearchOpen(true);
+      requestAnimationFrame(() => {
+        root.querySelector<HTMLInputElement>("[data-terminal-search-input]")?.focus();
+      });
+    };
+    root.addEventListener("keydown", onKeyDown, true);
+    return () => root.removeEventListener("keydown", onKeyDown, true);
+  }, []);
+
+  const closeSearch = () => {
+    setSearchOpen(false);
+    terminalRef.current?.focus();
+  };
+
   return (
-    <div
-      ref={frameRef}
-      data-canopy-terminal=""
-      data-keybindings-isolated=""
-      style={{ background }}
-      // A grid pane's terminal body: the terminal's own background, inset p-3
-      // on the normal buffer and flush on the alternate one.
-      className={cn(
-        // Clipped at the top when too tall (the bottom is what matters), and
-        // scrollable sideways when too wide (a cut-off line would lose words).
-        "relative flex min-h-0 flex-1 flex-col items-start overflow-x-auto overflow-y-hidden",
-        overflowing ? "justify-end" : "justify-start",
-        altBuffer ? "terminal-alt-buffer" : "p-3"
-      )}
-    >
-      {/* The pane's full width at least, so xterm's scrollbar sits at the pane's
+    <div ref={rootRef} className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+      <CanopyTerminalMenu handle={menuRef}>
+        <div
+          ref={frameRef}
+          data-canopy-terminal=""
+          data-keybindings-isolated=""
+          style={{ background }}
+          // A grid pane's terminal body: the terminal's own background, inset p-3
+          // on the normal buffer and flush on the alternate one.
+          className={cn(
+            // Clipped at the top when too tall (the bottom is what matters), and
+            // scrollable sideways when too wide (a cut-off line would lose words).
+            "relative flex min-h-0 flex-1 flex-col items-start overflow-x-auto overflow-y-hidden",
+            overflowing ? "justify-end" : "justify-start",
+            altBuffer ? "terminal-alt-buffer" : "p-3"
+          )}
+        >
+          {/* The pane's full width at least, so xterm's scrollbar sits at the pane's
           edge, in the gutter the grid was measured to leave, not over the last
           column; wider when the PTY is, and the frame scrolls. */}
-      <div ref={hostRef} className="min-w-full shrink-0" />
-      {(status === "reconnecting" || reconnecting) && status !== "ended" && (
-        <div
-          role="status"
-          data-canopy-reconnecting=""
-          className="absolute inset-x-0 top-3 flex justify-center text-xs text-text-secondary"
-        >
-          <p className="rounded-full bg-surface-panel px-2.5 py-1 shadow-[var(--theme-shadow-ambient)]">
-            Reconnecting…
-          </p>
-        </div>
-      )}
-      {(status === "failed" || status === "ended") && !reconnecting && (
-        <div
-          role="status"
-          className="absolute inset-x-0 top-3 flex flex-col items-center gap-2 text-center text-xs text-text-secondary"
-        >
-          {status === "ended" ? (
-            <p>This terminal has exited. Archive it, or trash it to clear it away.</p>
-          ) : (
-            <>
-              <p>Couldn't show this terminal here</p>
-              {onGoTo ? (
-                <Button variant="outline" size="xs" onClick={onGoTo}>
-                  Go to terminal
-                </Button>
-              ) : (
-                // No pane to go to: the stream is opened again here.
-                <Button variant="outline" size="xs" onClick={() => reopenRef.current?.("opening")}>
-                  Retry
-                </Button>
-              )}
-            </>
+          <div ref={hostRef} className="min-w-full shrink-0" />
+          {(status === "reconnecting" || reconnecting) && status !== "ended" && (
+            <div
+              role="status"
+              data-canopy-reconnecting=""
+              className="absolute inset-x-0 top-3 flex justify-center text-xs text-text-secondary"
+            >
+              <p className="rounded-full bg-surface-panel px-2.5 py-1 shadow-[var(--theme-shadow-ambient)]">
+                Reconnecting…
+              </p>
+            </div>
           )}
+          {(status === "failed" || status === "ended") && !reconnecting && (
+            <div
+              role="status"
+              className="absolute inset-x-0 top-3 flex flex-col items-center gap-2 text-center text-xs text-text-secondary"
+            >
+              {status === "ended" ? (
+                <p>This terminal has exited. Archive it, or trash it to clear it away.</p>
+              ) : (
+                <>
+                  <p>Couldn't show this terminal here</p>
+                  {onGoTo ? (
+                    <Button variant="outline" size="xs" onClick={onGoTo}>
+                      Go to terminal
+                    </Button>
+                  ) : (
+                    // No pane to go to: the stream is opened again here.
+                    <Button
+                      variant="outline"
+                      size="xs"
+                      onClick={() => reopenRef.current?.("opening")}
+                    >
+                      Retry
+                    </Button>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      </CanopyTerminalMenu>
+      {searchOpen && (
+        // Typed into here, not the terminal: still none of the grid's shortcuts.
+        <div data-keybindings-isolated="" className="contents">
+          <TerminalSearchBar key={generation} search={search} onClose={closeSearch} />
         </div>
       )}
     </div>

@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { canopyHostClient } from "@/clients/canopyHostClient";
 import { remoteHostsClient } from "@/clients/remoteHostsClient";
+import { remoteHostOfView } from "@/services/terminal/remoteLoopbackLinks";
 import type { BulkTransport } from "@shared/utils/canopyBulkEnable";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { clientErrorCode } from "@/utils/clientAppError";
@@ -164,6 +165,8 @@ export function canopyBulkTransport(
  */
 export interface CanopyTerminalApi {
   holdsSize: boolean;
+  /** The host the run is on: its links and files are that host's. */
+  hostOf: (runId: string) => HostId;
   /**
    * For an API that routes by run: the local terminal's own id when this run is
    * on the window's own host and so sized from here, otherwise null.
@@ -185,6 +188,7 @@ const NO_RESYNC = () => () => {};
 
 export const ownCanopyTerminalApi: CanopyTerminalApi = {
   holdsSize: true,
+  hostOf: () => remoteHostOfView() ?? LOCAL_HOST_ID,
   watchTerminal: (...args) => window.electron.canopy.watchTerminal(...args),
   unwatchTerminal: (...args) => window.electron.canopy.unwatchTerminal(...args),
   terminalInput: (...args) => window.electron.canopy.terminalInput(...args),
@@ -204,6 +208,7 @@ export function remoteCanopyTerminalApi(hostId: HostId): CanopyTerminalApi {
       canopyHostClient.invoke(hostId, channel, ...args);
   return {
     holdsSize: false,
+    hostOf: () => hostId,
     watchTerminal: on("canopy:watch-terminal"),
     unwatchTerminal: on("canopy:unwatch-terminal"),
     terminalInput: on("canopy:terminal-input"),

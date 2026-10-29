@@ -1,6 +1,5 @@
 import { useCallback, useState } from "react";
 import type React from "react";
-import { isRemoteWindow, isWslWindow } from "@/hooks/useHostPlatform";
 import { usePanelStore } from "@/store";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import {
@@ -18,7 +17,6 @@ import {
 } from "@/services/panelCloseGuard";
 import { isBrowserPanel } from "@shared/types/panel";
 import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
-import { reportFileLinkFailure } from "@/services/terminal/FileLinksAddon";
 import type { WorktreeScope } from "@shared/utils/path";
 import { closeAndAnnounce } from "@/lib/accessibility";
 import { terminalHasRunningAgentSession } from "@/utils/destructiveSessionConfirm";
@@ -37,8 +35,11 @@ import {
   pluginMenuCommandActionId,
   readPanelKindMenuCapabilities,
 } from "@/components/Panel/genericPanelMenu";
-import { copyWithToast } from "@/lib/copyWithToast";
 import type { MenuPanel, PendingMenuDispatch } from "./menuShared";
+import {
+  openTerminalPathInFileBrowser,
+  runTerminalOutputMenuAction,
+} from "./terminalOutputMenuActions";
 
 export type DestructiveConfirmRequest = { kind: "kill" | "restart" } & DestructiveConfirmCopy;
 
@@ -82,22 +83,16 @@ export function useTerminalMenuCommands({
     (actionId: string) => {
       if (!terminal) return;
 
-      if (actionId === "open-link") {
-        void peekTerminalService()?.openHoveredLink(terminalId);
-        return;
-      }
-
-      // The URL was captured when the menu opened; the hover itself ends as
-      // soon as the pointer moves onto the menu.
-      if (actionId.startsWith("open-link-claimed:")) {
-        peekTerminalService()?.openLink(terminalId, actionId.slice("open-link-claimed:".length));
-        return;
-      }
-
-      if (actionId.startsWith("open-link-external:")) {
-        peekTerminalService()?.openLink(terminalId, actionId.slice("open-link-external:".length), {
-          external: true,
-        });
+      if (
+        runTerminalOutputMenuAction(
+          actionId,
+          {
+            openHoveredLink: () => void peekTerminalService()?.openHoveredLink(terminalId),
+            openLink: (url, options) => peekTerminalService()?.openLink(terminalId, url, options),
+          },
+          sourceRef.current
+        )
+      ) {
         return;
       }
 
@@ -108,35 +103,6 @@ export function useTerminalMenuCommands({
           args: { panelId: terminalId },
           source: sourceRef.current,
         });
-        return;
-      }
-
-      if (actionId.startsWith("copy-link:")) {
-        const url = actionId.slice("copy-link:".length);
-        void actionService.dispatch("terminal.copyLink", { url }, { source: sourceRef.current });
-        return;
-      }
-
-      if (actionId.startsWith("reveal-in-finder:")) {
-        const path = actionId.slice("reveal-in-finder:".length);
-        // The path is the host's; a remote host's file manager is on a screen
-        // nobody is looking at, so hand the path over instead. A WSL distro's
-        // files are on this PC, so those reveal in Explorer like local ones.
-        if (isRemoteWindow() && !isWslWindow()) {
-          copyWithToast("Host path", path);
-          return;
-        }
-        // Unlike copy-link, guard rejections (OUTSIDE_ROOT) and a since-deleted
-        // file (NOT_FOUND) are real, expected failure modes here — surface them
-        // rather than fire-and-forget. dispatch wraps the thrown error as
-        // EXECUTION_ERROR, so the original coded error lives on `.details`.
-        void actionService
-          .dispatch("file.showItemInFolder", { path }, { source: sourceRef.current })
-          .then((result) => {
-            if (!result.ok) {
-              reportFileLinkFailure("Failed to reveal in file manager", result.error.details, path);
-            }
-          });
         return;
       }
 
@@ -485,31 +451,8 @@ export function useTerminalMenuCommands({
   }, [terminalId, sourceRef]);
 
   const handleOpenInFileBrowser = useCallback(
-    (scope: WorktreeScope, path: string, kind: "file" | "directory" | null) => {
-      void actionService
-        .dispatch(
-          "worktree.openFileBrowser",
-          {
-            worktreeId: scope.worktreeId,
-            revealPath: scope.relativePath || undefined,
-            // Carried through rather than assumed: a directory is expanded as
-            // well as selected, so guessing "file" would leave a right-clicked
-            // folder collapsed while left-clicking the same link opens it.
-            revealKind: kind ?? "file",
-          },
-          { source: sourceRef.current }
-        )
-        .then((result) => {
-          if (!result.ok) {
-            reportFileLinkFailure(
-              "Failed to open file browser",
-              result.error.details,
-              path,
-              kind === "directory" ? "folder" : "file"
-            );
-          }
-        });
-    },
+    (scope: WorktreeScope, path: string, kind: "file" | "directory" | null) =>
+      openTerminalPathInFileBrowser(scope, path, kind, sourceRef.current),
     [sourceRef]
   );
 

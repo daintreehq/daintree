@@ -1,4 +1,5 @@
-import { useState, useCallback, useRef, useEffect, useId } from "react";
+import { useState, useCallback, useRef, useEffect, useId, useMemo } from "react";
+import type { SearchAddon } from "@xterm/addon-search";
 import { X, ChevronUp, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -29,13 +30,43 @@ function formatCount(count: number): string {
   return count >= SEARCH_HIGHLIGHT_LIMIT ? `${SEARCH_HIGHLIGHT_LIMIT}+` : String(count);
 }
 
-interface TerminalSearchBarProps {
-  terminalId: string;
-  onClose: () => void;
-  className?: string;
+/** The xterm a search bar searches: a grid terminal by id, or one of its own. */
+export interface TerminalSearchTarget {
+  /** The search addon, built on first use. */
+  ensureSearchAddon(): Promise<SearchAddon | null>;
+  /** The search addon if it has been built. */
+  getSearchAddon(): SearchAddon | null;
+  /** Keeps the results while the bar stays open; returns the release. */
+  pinHistory?(): (() => void) | undefined;
 }
 
-export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSearchBarProps) {
+function gridSearchTarget(terminalId: string): TerminalSearchTarget {
+  return {
+    ensureSearchAddon: () =>
+      peekTerminalService()?.ensureSearchAddon(terminalId) ?? Promise.resolve(null),
+    getSearchAddon: () => peekTerminalService()?.get(terminalId)?.searchAddon ?? null,
+    pinHistory: () => peekTerminalService()?.pinHistory(terminalId),
+  };
+}
+
+type TerminalSearchBarProps = (
+  | { terminalId: string; search?: undefined }
+  | { terminalId?: undefined; search: TerminalSearchTarget }
+) & {
+  onClose: () => void;
+  className?: string;
+};
+
+export function TerminalSearchBar({
+  terminalId,
+  search,
+  onClose,
+  className,
+}: TerminalSearchBarProps) {
+  const target = useMemo(
+    () => search ?? gridSearchTarget(terminalId ?? ""),
+    [search, terminalId]
+  );
   const addSearch = useTerminalSearchHistoryStore((s) => s.addSearch);
   const setToggles = useTerminalSearchHistoryStore((s) => s.setToggles);
 
@@ -66,13 +97,13 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
   }, []);
 
   // A parked dock pane keeps its bar open; its results live in the history.
-  useEffect(() => peekTerminalService()?.pinHistory(terminalId), [terminalId]);
+  useEffect(() => target.pinHistory?.(), [target]);
 
   useEffect(() => {
     let disposed = false;
     let resultSubscription: { dispose: () => void } | null = null;
-    void peekTerminalService()
-      ?.ensureSearchAddon(terminalId)
+    void target
+      .ensureSearchAddon()
       .then((addon) => {
         if (disposed || !addon?.onDidChangeResults) return;
         resultSubscription = addon.onDidChangeResults(({ resultIndex, resultCount }) => {
@@ -84,7 +115,7 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
       disposed = true;
       resultSubscription?.dispose();
     };
-  }, [terminalId]);
+  }, [target]);
 
   const performSearch = useCallback(
     (
@@ -109,8 +140,7 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
           setSearchStatus("invalidRegex");
           setMatchResults(null);
           setRegexError(validation.error ?? "Invalid regex pattern");
-          const managed = peekTerminalService()?.get(terminalId) ?? null;
-          managed?.searchAddon?.clearDecorations();
+          target.getSearchAddon()?.clearDecorations();
           return;
         }
       }
@@ -123,8 +153,8 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
         effectiveWholeWord
       );
 
-      void peekTerminalService()
-        ?.ensureSearchAddon(terminalId)
+      void target
+        .ensureSearchAddon()
         .then((searchAddon) => {
           if (!searchAddon) return;
           const found =
@@ -144,10 +174,10 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
           if (effectiveRegexEnabled && error instanceof Error) {
             setRegexError(describeRegexError(error.message));
           }
-          peekTerminalService()?.get(terminalId)?.searchAddon?.clearDecorations();
+          target.getSearchAddon()?.clearDecorations();
         });
     },
-    [terminalId, caseSensitive, regexEnabled, wholeWord]
+    [target, caseSensitive, regexEnabled, wholeWord]
   );
 
   const cancelPendingSearch = useCallback(() => {
@@ -159,12 +189,11 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
 
   const clearSearch = useCallback(() => {
     cancelPendingSearch();
-    const managed = peekTerminalService()?.get(terminalId) ?? null;
-    managed?.searchAddon?.clearDecorations();
+    target.getSearchAddon()?.clearDecorations();
     setSearchStatus("idle");
     setMatchResults(null);
     setRegexError(null);
-  }, [terminalId, cancelPendingSearch]);
+  }, [target, cancelPendingSearch]);
 
   const handleInputChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {

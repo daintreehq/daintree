@@ -1,4 +1,5 @@
-import type { ILinkHandler, Terminal } from "@xterm/xterm";
+import type { Terminal } from "@xterm/xterm";
+import type { sharedTerminalOptions } from "./terminalLinkSurface";
 import { loadXtermCore } from "./xtermCore";
 import { TerminalRefreshTier } from "@/types";
 import type { ManagedTerminal } from "./types";
@@ -35,8 +36,8 @@ export interface TerminalAttachRecoveryControllerDeps {
   getInstance: (id: string) => ManagedTerminal | undefined;
   hostHasRenderableDims: (managed: ManagedTerminal) => boolean;
   ensureOpened: (id: string, managed: ManagedTerminal) => void;
-  /** The xterm `linkHandler` option, shared with the creation path. */
-  makeLinkHandler: (id: string) => ILinkHandler;
+  /** The options every terminal is built with, shared with the creation path. */
+  sharedOptions: (id: string) => ReturnType<typeof sharedTerminalOptions>;
   makeListenerInstallDeps: () => TerminalListenerInstallDeps;
   applyDeferredResize: (id: string) => void;
   drawDataLossMarker: (id: string, droppedBytes: number) => void;
@@ -85,11 +86,7 @@ export class TerminalAttachRecoveryController {
         error,
       });
     }
-    return {
-      ...inherited,
-      rescaleOverlappingGlyphs: true,
-      linkHandler: this.deps.makeLinkHandler(managed.id),
-    };
+    return { ...inherited, ...this.deps.sharedOptions(managed.id) };
   }
 
   /**

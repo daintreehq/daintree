@@ -1004,6 +1004,7 @@ export function CanopyCard({
           runId={item.runId}
           spawnedAt={run.spawnedAt}
           api={terminalApi}
+          cwd={run.cwd}
           reconnecting={reconnecting}
           onStreamChange={setStream}
           onSubmitted={() => onSent(item)}
