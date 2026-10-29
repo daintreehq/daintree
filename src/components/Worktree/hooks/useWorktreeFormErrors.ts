@@ -11,6 +11,7 @@ export interface WorktreeFormErrors {
     branchInput: boolean;
     worktreePath: boolean;
     recipe: boolean;
+    agent: boolean;
     issue: boolean;
   };
 }
@@ -30,6 +31,7 @@ const initialState: WorktreeFormErrors = {
     branchInput: false,
     worktreePath: false,
     recipe: false,
+    agent: false,
     issue: false,
   },
 };
