@@ -39,13 +39,14 @@ describe("sanitizeSvgForPreview", () => {
   });
 
   it("checks the sanitized markup, not the raw input", () => {
-    // The script goes, and what's left still parses.
-    const outcome = sanitizeSvgForPreview(
-      `<svg xmlns="${SVG_NS}"><script>alert(1)</script><rect /></svg>`
-    );
+    // The raw markup doesn't parse, but the broken part sits inside the script
+    // the sanitizer strips, so what's left to draw does.
+    const raw = `<svg xmlns="${SVG_NS}"><script><unclosed></script><rect /></svg>`;
+    expect(renderableSvg(raw)).toBeNull();
+    const sanitized = sanitizeSvg(raw);
+    expect(sanitized.ok).toBe(true);
 
-    expect(outcome.ok).toBe(true);
-    if (outcome.ok) expect(outcome.svg).not.toContain("script");
+    expect(sanitizeSvgForPreview(raw)).toEqual(sanitized);
   });
 });
 

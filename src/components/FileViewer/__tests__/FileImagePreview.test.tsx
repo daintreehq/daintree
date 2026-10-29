@@ -12,13 +12,24 @@ import { render, cleanup, fireEvent } from "@testing-library/react";
 import { afterEach } from "vitest";
 import { FileImagePreview } from "../FileImagePreview";
 import { buildDaintreeFileUrl } from "../filePreviewKinds";
+import type { MediaPreviewError } from "../useMediaSourceUrl";
 
 afterEach(cleanup);
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 const SVG_DATA_PREFIX = "data:image/svg+xml,";
 
-function renderSvg(markup: string, onError?: () => void) {
+const errorSpy = () => vi.fn<(error?: MediaPreviewError) => void>();
+
+/** Asserts the spy was told once, and with a reason matching `reason`. */
+function expectReportedOnce(onError: ReturnType<typeof errorSpy>, reason: RegExp) {
+  expect(onError).toHaveBeenCalledTimes(1);
+  expect(onError).toHaveBeenCalledWith(
+    expect.objectContaining({ title: expect.stringMatching(reason) })
+  );
+}
+
+function renderSvg(markup: string, onError?: (error?: MediaPreviewError) => void) {
   const { container } = render(
     <FileImagePreview
       filePath="/repo/icon.svg"
@@ -58,24 +69,23 @@ describe("FileImagePreview SVG", () => {
   });
 
   it("reports markup that does not parse instead of showing an empty stage (#15030)", () => {
-    const onError = vi.fn();
+    const onError = errorSpy();
     const container = renderSvg("<svg><unclosed></svg>", onError);
 
     expect(container.querySelector("img")).toBeNull();
-    expect(onError).toHaveBeenCalledTimes(1);
-    expect(onError.mock.calls[0][0]?.title).toMatch(/couldn't be parsed/);
+    expectReportedOnce(onError, /couldn't be parsed/);
   });
 
   it("reports a root element that is not an svg", () => {
-    const onError = vi.fn();
+    const onError = errorSpy();
     const container = renderSvg(`<wrapper xmlns="${SVG_NS}"><svg /></wrapper>`, onError);
 
     expect(container.querySelector("img")).toBeNull();
-    expect(onError).toHaveBeenCalledTimes(1);
+    expectReportedOnce(onError, /couldn't be parsed/);
   });
 
-  it("reports unusable markup once, not on every render", () => {
-    const onError = vi.fn();
+  it("reports unusable markup once per markup, to the latest callback", () => {
+    const onError = errorSpy();
     const { rerender } = render(
       <FileImagePreview
         filePath="/repo/icon.svg"
@@ -91,28 +101,43 @@ describe("FileImagePreview SVG", () => {
         rootPath="/repo"
         alt="icon.svg"
         sanitizedSvg="<svg><a></svg>"
-        onError={() => onError()}
+        onError={(error) => onError(error)}
       />
     );
 
     expect(onError).toHaveBeenCalledTimes(1);
+
+    // Different broken markup is a new failure to report, and to whoever is
+    // listening now.
+    const latest = errorSpy();
+    rerender(
+      <FileImagePreview
+        filePath="/repo/icon.svg"
+        rootPath="/repo"
+        alt="icon.svg"
+        sanitizedSvg="<svg><b></svg>"
+        onError={latest}
+      />
+    );
+
+    expect(onError).toHaveBeenCalledTimes(1);
+    expectReportedOnce(latest, /couldn't be parsed/);
   });
 
   it("stays quiet for markup that renders", () => {
-    const onError = vi.fn();
+    const onError = errorSpy();
     renderSvg(`<svg xmlns="${SVG_NS}" />`, onError);
 
     expect(onError).not.toHaveBeenCalled();
   });
 
   it("reports an SVG the image decoder can't draw with its own reason", () => {
-    const onError = vi.fn();
+    const onError = errorSpy();
     const container = renderSvg(`<svg xmlns="${SVG_NS}"><rect /></svg>`, onError);
 
     fireEvent.error(container.querySelector("img")!);
 
-    expect(onError).toHaveBeenCalledTimes(1);
-    expect(onError.mock.calls[0][0]?.title).toMatch(/couldn't be drawn/);
+    expectReportedOnce(onError, /couldn't be drawn/);
   });
 
   it("keeps the SVG's own styles out of this document", () => {
