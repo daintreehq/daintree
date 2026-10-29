@@ -19,7 +19,6 @@ const MIGRATED_FILES = [
   "src/components/Worktree/LifecycleCommandApprovalDialog.tsx",
   "src/components/Project/CodeForgeTab.tsx",
   "src/components/Terminal/UpdateCwdDialog.tsx",
-  "src/components/Commands/CommandBuilder.tsx",
   "src/components/Worktree/NewWorktreeDialog.tsx",
   "src/components/Settings/DaintreeAssistantSettingsTab.tsx",
   "src/components/Settings/Assistant/AssistantStatus.tsx",

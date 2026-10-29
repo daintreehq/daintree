@@ -18,11 +18,10 @@ export const COMPOSER_CONTROL_TEXT_CLASS =
   "text-[color-mix(in_oklab,var(--ib-fg)_var(--ib-control-mix,72%),var(--ib-bg))] hover:text-[var(--ib-fg)] focus-visible:text-[var(--ib-fg)]";
 
 /**
- * The `❯` marker sits at the head of the line being typed, so it is the
- * control that says which composer is the selected one: `--ib-marker` steps up
- * on the selected composer and stays at the control ink everywhere else.
- * Layered after `COMPOSER_CONTROL_TEXT_CLASS`, it replaces only the rest ink
- * (`cn` keeps the later colour), so hover and focus stay the shared recipe.
+ * The `❯` marker sits at the head of the line being typed, so it is what says
+ * which composer is the selected one: `--ib-marker` steps up on the selected
+ * composer and stays at the control ink everywhere else. It is a glyph, not a
+ * control, so it takes no hover or focus recipe.
  */
 export const COMPOSER_MARKER_TEXT_CLASS = "text-[var(--ib-marker)]";
 

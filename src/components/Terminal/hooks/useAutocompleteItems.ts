@@ -24,6 +24,8 @@ interface UseAutocompleteItemsParams {
   isAutocompleteLoading: boolean;
   autocompleteCommands: AutocompleteItem[];
   isCommandsLoading: boolean;
+  /** Plugin prompt templates matching a `/` query, listed after the agent's commands. */
+  templateItems?: AutocompleteItem[];
   contextClaim?: ContextProviderClaim | null;
   contextItems?: ContextProviderItem[];
   isContextLoading?: boolean;
@@ -32,6 +34,7 @@ interface UseAutocompleteItemsParams {
 
 const NO_CONTEXT_ITEMS: ContextProviderItem[] = [];
 const NO_FORGE_REFERENCES: ForgeReference[] = [];
+const NO_TEMPLATE_ITEMS: AutocompleteItem[] = [];
 const FORGE_REFERENCE_LIMIT = 50;
 
 /** What a `#` row says about its item: whether it's an issue or a PR, and its state. */
@@ -92,7 +95,7 @@ const SELECTION_ITEM: AutocompleteItem = {
 
 /**
  * Merge the active trigger's completion items. `/` and `$` come pre-mapped from
- * discovery; `#` narrows the project's open issues and pull requests; `@` is
+ * discovery, and `/` adds the plugins' prompt templates after them; `#` narrows the project's open issues and pull requests; `@` is
  * served by Daintree's diff/terminal/selection providers (which claim their
  * prefixes ahead of file search) with `@file` fuzzy search as the fallback
  * provider.
@@ -103,6 +106,7 @@ export function useAutocompleteItems({
   isAutocompleteLoading,
   autocompleteCommands,
   isCommandsLoading,
+  templateItems = NO_TEMPLATE_ITEMS,
   contextClaim = null,
   contextItems = NO_CONTEXT_ITEMS,
   isContextLoading = false,
@@ -176,6 +180,12 @@ export function useAutocompleteItems({
     const ctx = activeCompletionContext;
     if (!ctx) return { autocompleteItems: [], isLoading: false };
 
+    if (ctx.triggerChar === "/" && templateItems.length > 0) {
+      return {
+        autocompleteItems: [...autocompleteCommands, ...templateItems],
+        isLoading: isCommandsLoading,
+      };
+    }
     if (ctx.triggerChar === "/" || ctx.triggerChar === "$") {
       return { autocompleteItems: autocompleteCommands, isLoading: isCommandsLoading };
     }
@@ -195,6 +205,7 @@ export function useAutocompleteItems({
     activeCompletionContext,
     autocompleteCommands,
     isCommandsLoading,
+    templateItems,
     diffItems,
     fileItems,
     isAutocompleteLoading,
