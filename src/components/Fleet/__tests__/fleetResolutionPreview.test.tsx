@@ -472,14 +472,24 @@ describe("the preview for a draft with context tokens (#14953)", () => {
     expect(contextOf("t-1")).toContain("@diff from /wt/one");
   });
 
-  it("leaves the keyboard in the composer when the preview opens itself", () => {
+  it("leaves the keyboard in the composer when the preview opens and closes itself", async () => {
     const composer = document.createElement("textarea");
     document.body.appendChild(composer);
+    const settle = () => act(async () => await new Promise((resolve) => setTimeout(resolve, 0)));
     try {
       render(<FleetDraftingPill />);
+      // A click on the pill with nothing to preview opens nothing.
+      fireEvent.click(screen.getByTestId("fleet-drafting-pill-trigger"));
       composer.focus();
+
       act(() => useFleetResolutionPreviewStore.getState().setDraft("Review @diff"));
+      await settle();
       expect(screen.getByTestId("fleet-resolution-popover")).toBeTruthy();
+      expect(document.activeElement).toBe(composer);
+
+      act(() => useFleetResolutionPreviewStore.getState().setDraft("Review @dif"));
+      await settle();
+      expect(screen.queryByTestId("fleet-resolution-popover")).toBeNull();
       expect(document.activeElement).toBe(composer);
     } finally {
       composer.remove();
