@@ -143,9 +143,9 @@ import {
   clearComposerHistory,
   createComboboxAttributes,
   captureRewriteSelection,
+  dictationWrite,
   endCorrectionReview,
   outsideDraftWrite,
-  outsideWrite,
   selectionAfterOutsideWrite,
   readImageChipPaths,
   replayLandedCorrection,
@@ -1716,7 +1716,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         // Before the guard: the composer's own writes (a template, a completion)
         // change the draft the note was about too.
         dropSendRefusal(
-          next.trim() !== "" && update.transactions.every((tr) => tr.annotation(outsideWrite))
+          next.trim() !== "" && update.transactions.every((tr) => tr.annotation(dictationWrite))
         );
         if (next === lastEmittedValueRef.current) return false;
         lastEmittedValueRef.current = next;

@@ -128,6 +128,7 @@ describe("useVoiceWaitSubmit", () => {
 
       expect(stopMock).toHaveBeenCalledTimes(1);
       expect(sendFromEditor).toHaveBeenCalledTimes(1);
+      expect(onSpokenSendTooShort).not.toHaveBeenCalled();
     });
 
     it("waits for the correction before sending, as Enter does", async () => {
@@ -209,6 +210,7 @@ describe("useVoiceWaitSubmit", () => {
     // #14944: the service found the draft too short and stopped the dictation itself.
     it("says a reply was too short to send without stopping, waiting or sending", async () => {
       useTerminalInputStore.getState().setDraftInput(PANEL_ID, "yes");
+      hasPendingMock.mockReturnValue(true);
       const claimSendHandBack = vi.fn(() => vi.fn());
       renderWaitSubmit(undefined, claimSendHandBack);
 
@@ -218,6 +220,7 @@ describe("useVoiceWaitSubmit", () => {
 
       expect(onSpokenSendTooShort).toHaveBeenCalledTimes(1);
       expect(stopMock).not.toHaveBeenCalled();
+      expect(waitMock).not.toHaveBeenCalled();
       expect(sendFromEditor).not.toHaveBeenCalled();
       expect(claimSendHandBack).not.toHaveBeenCalled();
       expect(useTerminalInputStore.getState().isVoiceSubmitting(PANEL_ID)).toBe(false);
@@ -323,6 +326,30 @@ describe("useVoiceWaitSubmit", () => {
       expect(sendFromEditor).not.toHaveBeenCalled();
       expect(useTerminalInputStore.getState().isVoiceSubmitting(PANEL_ID)).toBe(false);
       expect(onSpokenSendTooShort).toHaveBeenCalledTimes(1);
+    });
+
+    it.each(["", "  "])("says nothing of a reply when the cleanup leaves %j", async (cleaned) => {
+      useTerminalInputStore.getState().setDraftInput(PANEL_ID, "um so yeah");
+      hasPendingMock.mockReturnValue(true);
+      let landCorrection!: (landed: boolean) => void;
+      waitMock.mockImplementation(
+        () =>
+          new Promise<boolean>((resolve) => {
+            landCorrection = resolve;
+          })
+      );
+      renderWaitSubmit();
+
+      await act(async () => {
+        spokenSendHandler()();
+      });
+      await act(async () => {
+        useTerminalInputStore.getState().setDraftInput(PANEL_ID, cleaned);
+        landCorrection(true);
+      });
+
+      expect(sendFromEditor).not.toHaveBeenCalled();
+      expect(onSpokenSendTooShort).not.toHaveBeenCalled();
     });
 
     it("claims the keyboard's hand-back at the command and sends with it, as Enter does", async () => {

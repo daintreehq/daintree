@@ -229,8 +229,9 @@ describe("VoiceRecordingService — spoken send (#14633)", () => {
     expect(stop).not.toHaveBeenCalled();
   });
 
-  it("only stops dictation when the draft is empty", async () => {
+  it.each(["", "   "])("only stops dictation when the draft is %j", async (empty) => {
     const { voiceRecordingService, stop } = await setup();
+    draftState.draft = empty;
     const handler = vi.fn();
     voiceRecordingService.onSpokenSend(PANEL_ID, undefined, handler);
 
@@ -246,11 +247,14 @@ describe("VoiceRecordingService — spoken send (#14633)", () => {
     async (reply) => {
       const { voiceRecordingService, useVoiceRecordingStore, stop } = await setup();
       draftState.draft = reply;
-      const handler = vi.fn();
+      // The composer hears of it once the stop is under way, never ahead of it.
+      const stopsBeforeHandler: number[] = [];
+      const handler = vi.fn(() => stopsBeforeHandler.push(stop.mock.calls.length));
       voiceRecordingService.onSpokenSend(PANEL_ID, undefined, handler);
 
       complete("", "item-a", true);
 
+      expect(stopsBeforeHandler).toEqual([1]);
       expect(handler).toHaveBeenCalledTimes(1);
       expect(handler).toHaveBeenCalledWith({ tooShort: true });
       expect(stop).toHaveBeenCalledTimes(1);
@@ -389,6 +393,7 @@ describe("VoiceRecordingService — spoken send (#14633)", () => {
       voiceRecordingService.onSpokenSend(PANEL_ID, undefined, vi.fn());
       complete("", "item-a", true);
       await finish();
+      expect(useVoiceRecordingStore.getState().announcement).toBeNull();
 
       useVoiceRecordingStore.getState().beginSession({ panelId: PANEL_ID });
       useVoiceRecordingStore.getState().setStatus("recording");

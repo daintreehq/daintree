@@ -71,9 +71,24 @@ const originalGetAnimations = Object.getOwnPropertyDescriptor(Element.prototype,
 beforeAll(() => {
   Object.defineProperty(Range.prototype, "getClientRects", { configurable: true, value: () => [] });
   Range.prototype.getBoundingClientRect = () => new DOMRect();
+  // jsdom has no Web Animations. A send's wait that outlasts the progress gate
+  // on a slow runner fades out before the note shows, so each fade finishes.
   Object.defineProperty(Element.prototype, "animate", {
     configurable: true,
-    value: () => ({ cancel: () => {}, pause: () => {}, onfinish: null }),
+    value: () => {
+      let onfinish: (() => void) | null = null;
+      return {
+        cancel: () => {},
+        pause: () => {},
+        get onfinish() {
+          return onfinish;
+        },
+        set onfinish(fn: (() => void) | null) {
+          onfinish = fn;
+          if (fn) queueMicrotask(() => onfinish?.());
+        },
+      };
+    },
   });
   Object.defineProperty(Element.prototype, "getAnimations", {
     configurable: true,
@@ -180,12 +195,20 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function mount() {
+async function mount({
+  submitText,
+}: { submitText?: (text: string, imagePaths: readonly string[]) => Promise<boolean> } = {}) {
   const onSend = vi.fn();
   const result = render(
     <TooltipProvider>
       <WorktreeStoreContext.Provider value={createWorktreeStore()}>
-        <HybridInputBar terminalId={PANEL_ID} cwd={WT_ID} agentId="claude" onSend={onSend} />
+        <HybridInputBar
+          terminalId={PANEL_ID}
+          cwd={WT_ID}
+          agentId="claude"
+          onSend={onSend}
+          submitText={submitText}
+        />
       </WorktreeStoreContext.Provider>
     </TooltipProvider>
   );
@@ -202,7 +225,26 @@ async function mount() {
       runScopeHandlers(view, new KeyboardEvent("keydown", { key: "Enter" }), "editor");
     });
   };
-  return { view, onSend, caption, spoken, pressEnter };
+  const type = async (text: string) => {
+    await act(async () => {
+      view.dispatch({
+        changes: { from: view.state.doc.length, insert: text },
+        userEvent: "input.type",
+      });
+    });
+  };
+  return { view, onSend, caption, spoken, pressEnter, type };
+}
+
+// A draft written from outside the composer, as a recalled prompt or a host
+// writes it (moving the caret), or as the dictation does (leaving it).
+async function writeDraft(text: string, { dictation = false } = {}) {
+  await act(async () => {
+    useTerminalInputStore.getState().setDraftInput(PANEL_ID, text);
+    useTerminalInputStore
+      .getState()
+      .bumpExternalDraftRevision(dictation ? { keepsSelection: true } : undefined);
+  });
 }
 
 const SHORT_CAPTION = "Too short to send by voice · Enter to send";
@@ -245,42 +287,116 @@ describe("HybridInputBar spoken send of a reply too short to send by voice (#149
 
   it("drops the note once the reply is edited", async () => {
     correct.mockResolvedValue({ action: "no_change", correctedText: "" });
-    const { view, caption, spoken } = await mount();
+    const { view, caption, spoken, type } = await mount();
     await act(async () => {
       startDictating();
       say("go ahead", true);
     });
     expect(caption()).toBe(SHORT_CAPTION);
 
+    await type(" please");
+
+    expect(view.state.doc.toString()).toBe("go ahead please");
+    expect(draft()).toBe("go ahead please");
+    expect(caption()).toBeNull();
+    expect(spoken()).not.toContain("Not sent");
+  });
+
+  it("drops the note when another prompt takes the reply's place", async () => {
+    correct.mockResolvedValue({ action: "no_change", correctedText: "" });
+    const { view, caption, spoken } = await mount();
     await act(async () => {
-      view.dispatch({
-        changes: { from: view.state.doc.length, insert: " please" },
-        userEvent: "input.type",
-      });
+      startDictating();
+      say("yes", true);
     });
+    expect(caption()).toBe(SHORT_CAPTION);
+
+    await writeDraft("fix the login bug");
+
+    expect(view.state.doc.toString()).toBe("fix the login bug");
+    expect(caption()).toBeNull();
+    expect(spoken()).not.toContain("Not sent");
+  });
+
+  it.each(["", "  "])("drops the note when the dictation leaves the draft %j", async (emptied) => {
+    correct.mockResolvedValue({ action: "no_change", correctedText: "" });
+    const { caption, spoken } = await mount();
+    await act(async () => {
+      startDictating();
+      say("yes", true);
+    });
+    expect(caption()).toBe(SHORT_CAPTION);
+
+    await writeDraft(emptied, { dictation: true });
 
     expect(caption()).toBeNull();
     expect(spoken()).not.toContain("Not sent");
   });
 
-  it("drops the note when dictation starts again on the reply, and leaves it gone after", async () => {
+  it.each(["arming", "connecting", "recording"] as const)(
+    "drops the note when dictation on the reply is %s again, and leaves it gone after",
+    async (status) => {
+      correct.mockResolvedValue({ action: "no_change", correctedText: "" });
+      const { caption } = await mount();
+      await act(async () => {
+        startDictating();
+        say("continue", true);
+      });
+      expect(caption()).toBe(SHORT_CAPTION);
+
+      await act(async () => {
+        const voice = useVoiceRecordingStore.getState();
+        if (status === "arming") voice.setArming({ panelId: PANEL_ID });
+        else voice.beginSession({ panelId: PANEL_ID });
+        if (status === "recording") voice.setStatus("recording");
+      });
+      expect(useVoiceRecordingStore.getState().status).toBe(status);
+      expect(caption()).toBeNull();
+
+      await act(async () => {
+        await voiceRecordingService.stop("Dictation stopped.", { reason: "user" });
+      });
+      expect(caption()).toBeNull();
+    }
+  );
+
+  it("keeps the note while dictation goes to another pane", async () => {
     correct.mockResolvedValue({ action: "no_change", correctedText: "" });
     const { caption } = await mount();
     await act(async () => {
       startDictating();
       say("continue", true);
     });
+
+    await act(async () => {
+      useVoiceRecordingStore.getState().beginSession({ panelId: "term-2" });
+      useVoiceRecordingStore.getState().setStatus("recording");
+    });
+
     expect(caption()).toBe(SHORT_CAPTION);
+  });
+
+  it("keeps the note over an earlier send turned down after it", async () => {
+    correct.mockResolvedValue({ action: "no_change", correctedText: "" });
+    const settles: Array<(accepted: boolean) => void> = [];
+    const submitText = vi.fn(() => new Promise<boolean>((resolve) => settles.push(resolve)));
+    const { caption, spoken, type, pressEnter } = await mount({ submitText });
+    await type("ok");
+    await pressEnter();
+    expect(submitText).toHaveBeenCalledTimes(1);
 
     await act(async () => {
       startDictating();
+      say("yes", true);
     });
-    expect(caption()).toBeNull();
+    expect(caption()).toBe(SHORT_CAPTION);
 
     await act(async () => {
-      await voiceRecordingService.stop("Dictation stopped.", { reason: "user" });
+      settles.shift()!(false);
     });
-    expect(caption()).toBeNull();
+
+    expect(caption()).toBe(SHORT_CAPTION);
+    expect(spoken()).toContain("Not sent: a voice send needs three or more words");
   });
 
   it("says nothing more than the stop for a send on an empty draft", async () => {
@@ -307,11 +423,15 @@ describe("HybridInputBar spoken send of a reply too short to send by voice (#149
       say("um so yeah", true);
     });
     // Long enough as heard, so the send waits on the cleanup as Enter would.
+    expect(correct).toHaveBeenCalledTimes(1);
+    expect(useTerminalInputStore.getState().isVoiceSubmitting(PANEL_ID)).toBe(true);
     expect(caption()).toBeNull();
 
     await act(async () => {
       cleanup.resolve({ action: "replace", correctedText: "Yeah." });
     });
+    // A wait long enough to show its progress fades out before the note shows.
+    await act(async () => {});
 
     expect(onSend).not.toHaveBeenCalled();
     expect(view.state.doc.toString()).toBe("Yeah.");

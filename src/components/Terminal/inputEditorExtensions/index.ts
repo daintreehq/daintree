@@ -87,6 +87,7 @@ export { createCursorBlink } from "./cursorBlink";
 export {
   createComposerHistory,
   clearComposerHistory,
+  dictationWrite,
   outsideDraftWrite,
   selectionAfterOutsideWrite,
 } from "./composerHistory";
@@ -94,7 +95,6 @@ export {
   correctionLanded,
   createCorrectionReview,
   endCorrectionReview,
-  outsideWrite,
   replayLandedCorrection,
 } from "./correctionReview";
 export type { CorrectionReview } from "./correctionReview";
