@@ -422,6 +422,21 @@ export function ThemeBrowser() {
     clearPendingAnnouncement();
   }, [setPreviewSchemeId, clearPendingAnnouncement]);
 
+  // A text filter can hide the previewed row just like the appearance switch
+  // does; revert so Enter and Set theme never commit a theme the list no longer shows.
+  const handleQueryChange = useCallback(
+    (next: string) => {
+      setQuery(next);
+      const previewId = useAppThemeStore.getState().previewSchemeId;
+      if (previewId === null) return;
+      const needle = next.toLowerCase();
+      if (!needle) return;
+      const previewed = allSchemes.find((s) => s.id === previewId);
+      if (!previewed || !previewed.name.toLowerCase().includes(needle)) revertPreview();
+    },
+    [allSchemes, revertPreview]
+  );
+
   const handlePreview = useCallback(
     (id: string, debounceAnnounce?: boolean) => {
       const state = useAppThemeStore.getState();
@@ -718,7 +733,7 @@ export function ThemeBrowser() {
           aria-activedescendant={activeRowId}
           aria-autocomplete="list"
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={(e) => handleQueryChange(e.target.value)}
           onClear={() => setQuery("")}
           clearLabel="Clear filter"
           onKeyDown={handleSearchKeyDown}
