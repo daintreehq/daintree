@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type MouseEvent } from "react";
 import { cn } from "@/lib/utils";
+import { copyWithToast } from "@/lib/copyWithToast";
 import { Button } from "@/components/ui/button";
 import { Terminal, type IDisposable } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
@@ -591,9 +592,7 @@ export function CanopyTerminal({
           );
       },
       openLink: (url, options) => links.openLink(url, undefined, options),
-      copy: (text) => {
-        void navigator.clipboard?.writeText(text).catch(() => {});
-      },
+      copy: (text) => copyWithToast("Selection", text),
       // Chosen from the menu, so the user's own input: sent through the stream
       // like a typed paste, formatted as the grid's paste is.
       paste: () => {
