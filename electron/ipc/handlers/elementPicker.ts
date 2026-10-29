@@ -72,6 +72,7 @@ const reselectSchema = z
       })
       .strict()
       .optional(),
+    componentId: z.string().min(1).max(128).optional(),
     reveal: z.boolean().optional(),
   })
   .strict();

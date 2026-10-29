@@ -989,6 +989,10 @@ function plainReselectRequest(
         : { component: { file: component.file, line: component.line, column: component.column } }),
     };
   }
+  if (request.componentId !== undefined) {
+    if (!isPlainString(request.componentId)) return null;
+    out.componentId = request.componentId;
+  }
   if (request.reveal !== undefined) {
     if (typeof request.reveal !== "boolean") return null;
     out.reveal = request.reveal;

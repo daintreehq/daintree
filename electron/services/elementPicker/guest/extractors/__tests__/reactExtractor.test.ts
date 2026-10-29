@@ -397,6 +397,32 @@ describe.each(["plain", "compiled"] as const)("the React extractor, compiler %s"
     expect(events).toHaveLength(count);
   });
 
+  it("selects a component a crumb names by its id, and nothing for one the chain does not carry", () => {
+    mount(fixtures[variant]);
+    const roots = [idOf("main.app"), idOf(".modal-body")];
+    const picked = pick("li.item");
+    const app = record(picked, "App").componentId;
+    expect(
+      picker!.reselect({ elementId: picked.elementId, framework: "react", componentId: app })
+    ).toBe(true);
+    expect(selected()).toEqual({
+      scope: { kind: "component", componentId: app },
+      elementIds: roots,
+    });
+
+    const badge = record(pick("span.badge"), "Badge").componentId;
+    pick("li.item");
+    const count = events.length;
+    // Badge is a real component, but not one this selection sits inside.
+    expect(
+      picker!.reselect({ elementId: picked.elementId, framework: "react", componentId: badge })
+    ).toBe(false);
+    expect(
+      picker!.reselect({ elementId: picked.elementId, framework: "vue", componentId: app })
+    ).toBe(false);
+    expect(events).toHaveLength(count);
+  });
+
   it("widens from a component's roots after a render retired the fibers it was read from", () => {
     mount(fixtures[variant]);
     bump();
