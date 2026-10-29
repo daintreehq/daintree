@@ -173,6 +173,7 @@ describe("buildAssistantItems", () => {
       "Global",
     ]);
     expect(assistantMatches(items[0]!, ["this mac"])).toBe(true);
+    expect(assistantMatches(items[2]!, ["global", "this mac"])).toBe(true);
   });
 
   it("keeps the agent it runs on, unnamed when the directory doesn't know it", () => {
@@ -372,6 +373,21 @@ describe("the row's one note, and supervision in full (#15370)", () => {
     ]);
   });
 
+  it("puts a host that can't be reached before anything it watches", () => {
+    const [unreachable] = buildAssistantItems(
+      {
+        ...directory([
+          live(0, { notices: { pending: 2, ready: 1, delivery: "held" }, attached: false }),
+        ]),
+        coverage: "unreachable",
+        complete: false,
+      },
+      options
+    );
+    expect(assistantRowNote(unreachable!)).toBe("This host can't be reached");
+    expect(assistantSupervision(unreachable!)).toHaveLength(3);
+  });
+
   it("names notices stuck on their way, then a missing window, before a count of terminals", () => {
     expect(
       assistantRowNote(
@@ -444,8 +460,38 @@ describe("the row's clock (#15370)", () => {
       items.find((item) => item.subject.lane === lane)
     );
     expect(assistantAgePhrase(asking!, "3m")).toBe("waiting for 3m");
-    expect(assistantAgePhrase(working!, "3m")).toBe("working for 3m");
+    expect(assistantAgePhrase(working!, "2h")).toBe("working for 2h");
     expect(assistantAgePhrase(handedBack!, "just now")).toBe("handed back just now");
+    expect(assistantAgePhrase(handedBack!, "4m")).toBe("handed back 4m ago");
+  });
+
+  it("dates a confirmation, an error, a rest and an end each in its own words", () => {
+    const items = buildAssistantItems(
+      directory([
+        live(0, {
+          agentState: "working",
+          waitingReason: null,
+          confirmations: { waiting: [confirmation], omitted: 0 },
+        }),
+        live(1, { waitingReason: "error" }),
+        live(2),
+        live(3, { agentState: "completed", waitingReason: null }),
+        live(4, { agentState: "exited", waitingReason: null }),
+      ]),
+      { ...options, now: 1 }
+    );
+    const phrase = (lane: number) =>
+      assistantAgePhrase(
+        items.find((item) => item.subject.lane === lane)!,
+        "5m"
+      );
+    expect([0, 1, 2, 3, 4].map(phrase)).toEqual([
+      "waiting for 5m",
+      "blocked for 5m",
+      "at its prompt for 5m",
+      "finished 5m ago",
+      "exited 5m ago",
+    ]);
   });
 });
 

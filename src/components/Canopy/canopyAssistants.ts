@@ -341,6 +341,8 @@ export function assistantMatches(item: CanopyAssistantItem, terms: readonly stri
   const haystack = [
     "assistant",
     item.scopeLabel,
+    // The global assistant's label leaves out the host its row shows.
+    item.hostName ?? "",
     item.label ?? "",
     item.agentName ?? "",
     assistantStatus(item),

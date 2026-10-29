@@ -254,6 +254,7 @@ afterEach(() => {
 
 describe("CanopyView role filter", () => {
   it("lists workers and each assistant lane together, workers in their own order", async () => {
+    directory.entries = [assistant(0, { label: "Refactor" }), assistant(1)];
     render(<CanopyView />);
     await settle();
     const workersAlone = workerIds();
@@ -265,14 +266,26 @@ describe("CanopyView role filter", () => {
       "Daintree Assistant, Session 1, Claude",
       "Daintree Assistant, Session 2, Claude",
     ]);
-    expect(description(assistantRows()[0]!)).toContain("app");
+    // Its identity is said once, in the name; the description says the rest.
+    const said = description(assistantRows()[0]!);
+    for (const part of ["At its prompt", "app", "Refactor"]) expect(said).toContain(part);
+    expect(said).not.toContain("Claude");
   });
 
   it("builds an assistant's row in the shape of the worker rows around it (#15370)", async () => {
+    // Half a minute into the third, so the clock reads the same however long the suite has run.
+    const since = NOW - 3.5 * 60_000;
     directory.entries = [
-      assistant(0, { waitingReason: "question", since: NOW - 3 * 60_000 }),
-      assistant(1, { waitingReason: "question", agentId: "codex", since: NOW - 3 * 60_000 }),
+      assistant(0, { waitingReason: "question", since }),
+      assistant(1, { waitingReason: "question", agentId: "codex", since }),
     ];
+    const snapshot = useFleetSnapshotStore.getState().snapshot!;
+    useFleetSnapshotStore.setState({
+      snapshot: {
+        ...snapshot,
+        runs: [...snapshot.runs, run("codex-run", { agentId: "codex", agentState: "working" })],
+      },
+    });
     render(<CanopyView />);
     await settle();
     const band = document.querySelector("[data-testid=canopy-needs-you]")!.parentElement!;
@@ -280,31 +293,96 @@ describe("CanopyView role filter", () => {
     const [claude, codex] = [...band.querySelectorAll<HTMLElement>("[data-canopy-assistant]")];
     expect(band.contains(worker)).toBe(true);
 
+    const parts = (row: HTMLElement) => {
+      const lead = row.querySelector<HTMLElement>("[data-canopy-lead]")!;
+      const lines = lead.nextElementSibling as HTMLElement;
+      return { lead, lines, where: lines.lastElementChild as HTMLElement };
+    };
     const shape = (row: HTMLElement) => {
-      const lead = row.querySelector("[data-canopy-lead]");
-      const lines = lead?.nextElementSibling;
-      const where = lines?.lastElementChild;
+      const { lead, lines, where } = parts(row);
       return {
-        lines: lines?.children.length,
-        ageOnName: lines?.firstElementChild?.querySelector("[data-canopy-age]") !== null,
-        whereLast: where?.hasAttribute("data-canopy-where"),
-        emoji: where?.firstElementChild?.textContent,
-        project: where?.querySelector("[data-canopy-project]")?.textContent,
-        agent: lead
-          ?.querySelector("[data-terminal-icon-id]")
-          ?.getAttribute("data-terminal-icon-id"),
+        // The same box, inset and lead as the worker beside it, however those are styled.
+        row: row.className,
+        lead: lead.className,
+        column: lines.className,
+        lines: lines.children.length,
+        ageOnName: lines.firstElementChild!.lastElementChild!.hasAttribute("data-canopy-age"),
+        whereLast: where.hasAttribute("data-canopy-where"),
+        emoji: where.firstElementChild?.textContent,
+        project: where.querySelector("[data-canopy-project]")?.textContent,
+        agent: lead.querySelector("[data-terminal-icon-id]")?.getAttribute("data-terminal-icon-id"),
       };
     };
     expect(shape(claude!)).toEqual(shape(worker));
     expect(shape(worker)).toMatchObject({ lines: 3, ageOnName: true, whereLast: true });
+    const codexWorker = document.getElementById("canopy-card-codex-run")!;
+    expect(shape(codex!).agent).toBe(shape(codexWorker).agent);
     expect(shape(codex!).agent).not.toBe(shape(claude!).agent);
+    expect(codex!.getAttribute("aria-label")).toBe("Daintree Assistant, Session 2, Codex");
 
-    const name = claude!.querySelector("[data-canopy-assistant-name]")!.textContent;
-    expect(name).toContain("Daintree Assistant");
-    expect(name).toContain("Session 1");
-    expect(name).not.toContain("app");
+    const { lines } = parts(claude!);
+    const name = lines.firstElementChild!.firstElementChild!;
+    expect(name.hasAttribute("data-canopy-assistant-name")).toBe(true);
+    expect(name.textContent).toContain("Daintree Assistant");
+    expect(name.textContent).toContain("Session 1");
+    expect(name.textContent).not.toContain("app");
+    expect(lines.children[1]!.textContent).toBe("Asking you");
     expect(claude!.querySelector("[data-canopy-age]")!.textContent).toBe("3m");
     expect(description(claude!)).toContain("waiting for 3m");
+  });
+
+  it("names an assistant whose agent isn't known by its role alone, with the plain terminal glyph", async () => {
+    directory.entries = [assistant(0, { agentId: null })];
+    useCanopyStore.setState({ roleFilter: "assistants" });
+    render(<CanopyView />);
+    await settle();
+    const [row] = assistantRows();
+    expect(row!.getAttribute("aria-label")).toBe("Daintree Assistant, Session 1");
+    expect(
+      row!
+        .querySelector("[data-canopy-lead] [data-terminal-icon-id]")!
+        .getAttribute("data-terminal-icon-id")
+    ).toBe("terminal");
+  });
+
+  it("dates each assistant from what its row says, and steps up only an ask left waiting (#15370)", async () => {
+    const minutes = (count: number) => NOW - count * 60_000;
+    directory.entries = [
+      assistant(0, { waitingReason: "question", since: minutes(5.5) }),
+      assistant(1, { waitingReason: "question", since: minutes(4.5) }),
+      assistant(2, { since: minutes(20.5) }),
+      assistant(3, { since: null }),
+      assistant(4, {
+        agentState: "working",
+        waitingReason: null,
+        since: minutes(20.5),
+        confirmations: {
+          waiting: [{ actionId: "worktree.delete", since: NOW - 5_000, expiresAt: NOW + 60_000 }],
+          omitted: 0,
+        },
+      }),
+      assistant(5, { since: minutes(30.5), handback: { observedAt: minutes(10.5) } }),
+    ];
+    useCanopyStore.setState({ roleFilter: "assistants" });
+    render(<CanopyView />);
+    await settle();
+    const lane = (index: number) =>
+      assistantRows().find((row) => row.id.includes(encodeURIComponent(`"help-${index}"`)))!;
+    const clock = (index: number) => {
+      const age = lane(index).querySelector("[data-canopy-age]");
+      return age === null ? null : [age.textContent, age.getAttribute("data-overdue")];
+    };
+    expect([0, 1, 2, 3, 4, 5].map(clock)).toEqual([
+      ["5m", "true"],
+      ["4m", null],
+      ["20m", null],
+      null,
+      ["now", null],
+      ["10m", null],
+    ]);
+    expect(description(lane(0))).toContain("waiting a while");
+    expect(description(lane(1))).not.toContain("waiting a while");
+    expect(description(lane(5))).toContain("handed back 10m ago");
   });
 
   it("gives the global assistant its scope where a project would be", async () => {
@@ -329,10 +407,16 @@ describe("CanopyView role filter", () => {
     render(<CanopyView />);
     await settle();
     const [row] = assistantRows();
-    expect(row!.querySelector("[data-canopy-assistant-note]")!.textContent).toBe(
-      "1 notice not delivered (held for now)"
-    );
-    const pane = document.querySelector("[data-canopy-assistant-supervision]")!.textContent;
+    const notes = row!.querySelectorAll("[data-canopy-assistant-note]");
+    expect(notes).toHaveLength(1);
+    // On the status line, beside what it is doing.
+    const status = row!.querySelector("[data-canopy-lead]")!.nextElementSibling!.children[1]!;
+    expect(notes[0]!.parentElement).toBe(status);
+    expect(notes[0]!.textContent).toBe("1 notice not delivered (held for now)");
+    expect(row!.querySelector("[data-canopy-assistant-supervision]")).toBeNull();
+    const pane = document
+      .querySelector("[data-testid=canopy-assistant-pane]")!
+      .querySelector("[data-canopy-assistant-supervision]")!.textContent;
     for (const said of [
       "Watching 2 terminals",
       "1 notice not delivered (held for now)",
