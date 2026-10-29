@@ -6,10 +6,11 @@ import { cn } from "@/lib/utils";
  *
  * Deliberately not `SettingsChoicebox`: that one is `role="radio"` buttons with
  * a roving tabindex, so its arrow keys move focus without moving the selection.
- * A native radio group moves both together, is one tab stop, and has its checked
- * state painted by the user agent — which is the only thing that still reads as
- * "chosen" once `forced-colors: active` has flattened every author fill and
- * border. Anything mutually exclusive and keyboard-driven should use this;
+ * A native radio group moves both together, is one tab stop, and under
+ * `forced-colors: active` has its checked state painted by the user agent —
+ * the only thing that still reads as "chosen" once every author fill and border
+ * is flattened. (Otherwise the host draws it; see the radio rule in `base.css`.)
+ * Anything mutually exclusive and keyboard-driven should use this;
  * `SettingsChoicebox` remains for the settings-form grid it is built into.
  *
  * The row is the click target, so the whole card is the `<label>`. That would
@@ -23,7 +24,7 @@ import { cn } from "@/lib/utils";
  * tailwind-merge resolves same-property utilities by order, so a `block` in this
  * string silently wins and drops the control onto its own line.
  *
- * The focus ring sits on the row rather than the ~13px control — the row is what
+ * The focus ring sits on the row rather than the 16px control — the row is what
  * the pointer targets and it encloses the control. Scoped to `input` so focusing
  * a nested dependent control does not also light up the card.
  */
