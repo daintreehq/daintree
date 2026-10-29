@@ -71,7 +71,7 @@ function SkippedTargetsNotice({
       )}
     >
       <Info className="mt-0.5 h-3 w-3 shrink-0" aria-hidden="true" />
-      <span className="min-w-0">
+      <span className="min-w-0 wrap-anywhere">
         {composerReachesFleet ? `${skipped} · send from the composer to reach them` : skipped}
       </span>
     </div>
