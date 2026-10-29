@@ -19,6 +19,7 @@ import { CodeViewer, type CodeViewerHandle } from "@/components/FileViewer/CodeV
 import { FileSourceMetadataStrip } from "@/components/FileViewer/FileSourceMetadataStrip";
 import { revealCopy } from "@/components/FileViewer/revealCopy";
 import { FileImagePreview } from "@/components/FileViewer/FileImagePreview";
+import { ZoomableImage } from "@/components/FileViewer/ZoomableImage";
 import { FileVideoPreview } from "@/components/FileViewer/FileVideoPreview";
 import { FileAudioPreview } from "@/components/FileViewer/FileAudioPreview";
 import { FilePdfPreview } from "@/components/FileViewer/FilePdfPreview";
@@ -842,26 +843,31 @@ export function FilePane({
               />
             )}
 
-          {filePath &&
-            !showPluginViewer &&
-            viewMode !== "diff" &&
-            (loadState === "image" || loadState === "svg") && (
-              <FileImagePreview
-                filePath={filePath}
-                rootPath={effectiveRootPath}
-                alt={fileName ?? filePath}
-                sanitizedSvg={loadState === "svg" ? sanitizedSvg : null}
-                cacheBust={String(reloadNonce)}
-                onError={(error) => {
-                  // Drawn from markup already read, so an SVG's failure is the
-                  // markup's: the sanitizer rejection's surface, not a lost file.
-                  if (loadState === "svg")
-                    failPreview("INVALID_PATH", error?.title ?? SVG_DRAW_ERROR);
-                  else failPreview(previewErrorCode(error, "NOT_FOUND"));
-                }}
-                maxHeightClassName="max-h-full"
-              />
-            )}
+          {filePath && !showPluginViewer && viewMode !== "diff" && loadState === "image" && (
+            // `cacheBust` rather than a new `key`: a rewritten image reloads its
+            // bytes in place, so the reader keeps the zoom and pan they were
+            // inspecting it at.
+            <ZoomableImage
+              filePath={filePath}
+              rootPath={effectiveRootPath}
+              alt={fileName ?? filePath}
+              cacheBust={String(reloadNonce)}
+              onError={(error) => failPreview(previewErrorCode(error, "NOT_FOUND"))}
+            />
+          )}
+
+          {filePath && !showPluginViewer && viewMode !== "diff" && loadState === "svg" && (
+            <FileImagePreview
+              filePath={filePath}
+              rootPath={effectiveRootPath}
+              alt={fileName ?? filePath}
+              sanitizedSvg={sanitizedSvg}
+              // Drawn from markup already read, so an SVG's failure is the
+              // markup's: the sanitizer rejection's surface, not a lost file.
+              onError={(error) => failPreview("INVALID_PATH", error?.title ?? SVG_DRAW_ERROR)}
+              maxHeightClassName="max-h-full"
+            />
+          )}
 
           {filePath && !showPluginViewer && viewMode !== "diff" && loadState === "video" && (
             <FileVideoPreview

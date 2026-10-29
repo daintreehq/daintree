@@ -38,8 +38,10 @@ interface FileImagePreviewProps {
 /**
  * Renders an image or SVG preview.
  *
- * Shared by `FilePane` and `FileBrowserViewer` so both surfaces preview the
- * same files the same way.
+ * The fit-only preview: SVG in `FilePane` and `FileBrowserViewer`, where the
+ * markup is shown as an image of itself, and any raster surface that
+ * deliberately has no zoom. Raster images in those two panes go through
+ * `ZoomableImage`.
  *
  * SVG markup is shown as an `<img>` of its own data URL, never inserted into
  * this document. An SVG image fetches nothing but `data:` URLs, runs no script

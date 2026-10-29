@@ -107,10 +107,13 @@ export function fitScale(
  * Read-only image surface with a transparency checkerboard, wheel zoom and
  * drag pan.
  *
+ * Raster images in the file panel and the File Browser viewer both render
+ * through this, so the two views zoom and pan the same way.
+ *
  * Separate from `FileImagePreview` rather than an option on it: that component
- * is a plain fit-to-box `<img>` used by the file panel and the viewer modal,
- * and giving it a pan/zoom mode would put an interaction surface into two
- * places that deliberately have none.
+ * is a plain fit-to-box `<img>` that also carries SVG, and the fit-only
+ * surfaces (SVG, the temporary viewer dialog) deliberately have no interaction
+ * surface to give a pan/zoom mode to.
  */
 export function ZoomableImage({ filePath, rootPath, alt, cacheBust, onError }: ZoomableImageProps) {
   const [view, setView] = useState<ZoomView>(FIT_VIEW);
