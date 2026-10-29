@@ -766,7 +766,7 @@ export class VoiceCorrectionService {
         ...voiceErrorLogFields(error),
         status: rejection?.status,
         code: rejection?.code,
-        ...(reason ? { persistent: reason } : {}),
+        persistent: reason,
       });
       return {
         action: "no_change",
