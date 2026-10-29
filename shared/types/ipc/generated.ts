@@ -1982,8 +1982,8 @@ export interface GeneratedIpcInvokeMap {
     result: import("./help.js").GlobalAssistantView;
   };
   "help:list-past-sessions": {
-    args: [projectId: string];
-    result: import("./help.js").HelpPastSession[];
+    args: [projectId: string, options?: { listing?: boolean | undefined } | undefined];
+    result: import("./help.js").HelpPastSessionsListing | import("./help.js").HelpPastSession[];
   };
   "help:list-pending-hibernation-slots": {
     args: [projectId: string];

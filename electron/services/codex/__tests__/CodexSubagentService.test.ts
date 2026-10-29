@@ -783,6 +783,65 @@ describe("listCodexSessionsForCwd", () => {
     expect(options?.codexHome).toBe("/pane/.codex");
   });
 
+  it("asks for the page size it was given and says when older threads were left off", async () => {
+    let listParams: QueryParams = {};
+    scriptSession((method, params) => {
+      if (method === "thread/list") {
+        listParams = params;
+        return { data: [{ id: "root", sessionId: "root", recencyAt: 5 }], nextCursor: "page-2" };
+      }
+      return {};
+    });
+
+    const result = await listCodexSessionsForCwd("/repo", undefined, 50);
+
+    expect(listParams.limit).toBe(50);
+    expect(result).toEqual({
+      status: "ok",
+      sessions: [{ id: "root", preview: "", updatedAt: 5_000 }],
+      more: true,
+    });
+  });
+
+  it("calls the page whole when the server says it reached the end", async () => {
+    scriptSession((method) =>
+      method === "thread/list"
+        ? {
+            data: [
+              { id: "a", sessionId: "a", recencyAt: 2 },
+              { id: "b", sessionId: "b", recencyAt: 1 },
+            ],
+            nextCursor: null,
+          }
+        : {}
+    );
+
+    await expect(listCodexSessionsForCwd("/repo", undefined, 2)).resolves.toEqual({
+      status: "ok",
+      sessions: [
+        { id: "a", preview: "", updatedAt: 2_000 },
+        { id: "b", preview: "", updatedAt: 1_000 },
+      ],
+    });
+  });
+
+  it("reads a full page from a server that sends no cursor as possibly cut", async () => {
+    scriptSession((method) =>
+      method === "thread/list"
+        ? {
+            data: [
+              { id: "a", sessionId: "a", recencyAt: 2 },
+              { id: "b", sessionId: "b", recencyAt: 1 },
+            ],
+          }
+        : {}
+    );
+
+    await expect(listCodexSessionsForCwd("/repo", undefined, 2)).resolves.toMatchObject({
+      more: true,
+    });
+  });
+
   it("reports unavailable rather than throwing when Codex cannot be reached", async () => {
     runSession.mockRejectedValue(new CodexAppServerError("cli-missing", "no codex"));
 

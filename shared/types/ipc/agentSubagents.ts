@@ -159,6 +159,8 @@ export interface CodexFolderSession {
 export interface CodexFolderSessionsOk {
   status: "ok";
   sessions: CodexFolderSession[];
+  /** The folder holds older sessions than the page returned. */
+  more?: boolean;
 }
 
 export type CodexFolderSessionsResult = CodexFolderSessionsOk | AgentSubagentsUnavailable;

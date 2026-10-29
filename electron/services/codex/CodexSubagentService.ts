@@ -334,17 +334,31 @@ async function resolveCwdSpellings(cwd: string): Promise<string[]> {
   return cwds;
 }
 
-async function listThreadsInCwd(call: CodexAppServerCall, cwds: string[]): Promise<RawThread[]> {
-  const response = await call<{ data?: unknown }>("thread/list", {
+async function listThreadPageInCwd(
+  call: CodexAppServerCall,
+  cwds: string[],
+  limit: number
+): Promise<{ threads: RawThread[]; more: boolean }> {
+  const response = await call<{ data?: unknown; nextCursor?: unknown }>("thread/list", {
     cwd: cwds,
     sortKey: "recency_at",
     sortDirection: "desc",
-    limit: PARENT_CANDIDATE_LIMIT,
+    limit,
     // Reads the state-DB index instead of rescanning JSONL rollouts to repair
     // metadata: ~3ms against ~900ms, for data this feature only displays.
     useStateDbOnly: true,
   });
-  return Array.isArray(response?.data) ? (response.data as RawThread[]) : [];
+  const threads = Array.isArray(response?.data) ? (response.data as RawThread[]) : [];
+  // `nextCursor` is null exactly when the page reached the end. A server that
+  // omits it can only be read by whether the page came back full.
+  const more =
+    typeof response?.nextCursor === "string" ||
+    (response?.nextCursor === undefined && threads.length >= limit);
+  return { threads, more };
+}
+
+async function listThreadsInCwd(call: CodexAppServerCall, cwds: string[]): Promise<RawThread[]> {
+  return (await listThreadPageInCwd(call, cwds, PARENT_CANDIDATE_LIMIT)).threads;
 }
 
 async function listChildren(
@@ -622,21 +636,29 @@ function toFolderSession(thread: RawThread): CodexFolderSession | null {
  * client has no way to learn a pane's redirected profile on its own, and
  * querying main's default one would silently show the wrong folder's history
  * or nothing at all.
+ *
+ * One page of `limit` threads, newest first; `more` says older ones were left
+ * out, so a caller showing the page never presents it as the whole history.
  */
 export async function listCodexSessionsForCwd(
   cwd: string,
-  codexHome?: string
+  codexHome?: string,
+  limit = PARENT_CANDIDATE_LIMIT
 ): Promise<CodexFolderSessionsResult> {
   try {
     return await runCodexAppServerSession(
       async (call) => {
-        const threads = await listThreadsInCwd(call, await resolveCwdSpellings(cwd));
+        const { threads, more } = await listThreadPageInCwd(
+          call,
+          await resolveCwdSpellings(cwd),
+          limit
+        );
         const sessions = threads
           .filter((thread) => asString(thread.parentThreadId) === null)
           .map(toFolderSession)
           .filter((session): session is CodexFolderSession => session !== null)
           .sort((a, b) => b.updatedAt - a.updatedAt);
-        return { status: "ok" as const, sessions };
+        return { status: "ok" as const, sessions, ...(more && { more }) };
       },
       { codexHome }
     );
