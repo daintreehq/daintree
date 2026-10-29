@@ -5,7 +5,6 @@ vi.mock("@/utils/logger", () => ({ logError: vi.fn() }));
 const store = vi.hoisted(() => ({
   trashPanelGroup: vi.fn(),
   getPanelGroup: vi.fn(),
-  pushLayoutSnapshot: vi.fn(),
   panelsById: {} as Record<string, { location: string }>,
 }));
 
@@ -17,10 +16,6 @@ vi.mock("@/store", () => ({
       panelsById: store.panelsById,
     }),
   },
-}));
-
-vi.mock("@/store/layoutUndoStore", () => ({
-  useLayoutUndoStore: { getState: () => ({ pushLayoutSnapshot: store.pushLayoutSnapshot }) },
 }));
 
 import {
@@ -48,7 +43,6 @@ describe("trashDroppedPanel (#14943)", () => {
     __resetPanelCloseGuardsForTests();
     store.trashPanelGroup.mockReset();
     store.getPanelGroup.mockReset();
-    store.pushLayoutSnapshot.mockReset();
     store.panelsById = {
       p1: { location: "grid" },
       p2: { location: "grid" },
@@ -60,7 +54,6 @@ describe("trashDroppedPanel (#14943)", () => {
     trashDroppedPanel("p1");
 
     expect(store.trashPanelGroup).toHaveBeenCalledWith("p1");
-    expect(store.pushLayoutSnapshot).toHaveBeenCalledTimes(1);
   });
 
   it("asks a dirty panel's guard first and trashes only once it proceeds", async () => {
@@ -77,17 +70,26 @@ describe("trashDroppedPanel (#14943)", () => {
     await flush();
 
     expect(store.trashPanelGroup).toHaveBeenCalledWith("p1");
-    expect(store.pushLayoutSnapshot).toHaveBeenCalledTimes(1);
   });
 
-  it("leaves the panel and the undo history alone on cancel", async () => {
+  it("leaves the panel where it was on cancel", async () => {
     registerPanelCloseGuard("p1", async () => "cancel");
 
     trashDroppedPanel("p1");
     await flush();
 
     expect(store.trashPanelGroup).not.toHaveBeenCalled();
-    expect(store.pushLayoutSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("keeps the panel when its guard throws", async () => {
+    registerPanelCloseGuard("p1", async () => {
+      throw new Error("prompt failed");
+    });
+
+    trashDroppedPanel("p1");
+    await flush();
+
+    expect(store.trashPanelGroup).not.toHaveBeenCalled();
   });
 
   it("asks each dirty group member in turn and keeps the whole group on a cancel", async () => {
@@ -137,6 +139,35 @@ describe("trashDroppedPanel (#14943)", () => {
     trashDroppedPanel("p1");
     await flush();
     store.panelsById = { ...store.panelsById, p1: { location: "trash" } };
+    answer("proceed");
+    await flush();
+
+    expect(store.trashPanelGroup).not.toHaveBeenCalled();
+  });
+
+  it("ignores a drop on another member while a sibling's prompt is open", async () => {
+    store.getPanelGroup.mockReturnValue({ id: "g1", panelIds: ["p1", "p2"] });
+    const { guard, answer } = deferredGuard();
+    registerPanelCloseGuard("p2", guard);
+
+    trashDroppedPanel("p2");
+    await flush();
+    trashDroppedPanel("p1");
+    answer("proceed");
+    await flush();
+
+    expect(guard).toHaveBeenCalledTimes(1);
+    expect(store.trashPanelGroup).toHaveBeenCalledTimes(1);
+  });
+
+  it("does nothing when the group gained a member while the prompt was open", async () => {
+    store.getPanelGroup.mockReturnValue({ id: "g1", panelIds: ["p1", "p2"] });
+    const { guard, answer } = deferredGuard();
+    registerPanelCloseGuard("p2", guard);
+
+    trashDroppedPanel("p1");
+    await flush();
+    store.getPanelGroup.mockReturnValue({ id: "g1", panelIds: ["p1", "p2", "p3"] });
     answer("proceed");
     await flush();
 

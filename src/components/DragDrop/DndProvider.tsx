@@ -929,8 +929,8 @@ export function DndProvider({ children }: DndProviderProps) {
 
       // Drag-to-trash: drop on the trash pill closes the panel — or its whole tab
       // group, matching the X-button path, unsaved-work prompts included — and
-      // skips reorder logic. It takes its own undo snapshot, only once the trash
-      // actually happens.
+      // skips reorder logic. It takes no layout snapshot: undo can't bring a
+      // panel back out of the trash, so one would only clear the redo stack.
       if (overId === TRASH_DROPPABLE_ID) {
         trashDroppedPanel(draggedId);
         return;
