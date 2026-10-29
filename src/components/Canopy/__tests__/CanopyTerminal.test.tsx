@@ -857,7 +857,8 @@ describe("CanopyTerminal links, as the run's grid pane opens them (#15332)", () 
     openMenu(frame);
     await act(async () => screen.getByText("View file").click());
     // Once the menu has closed and handed the keyboard back to the terminal.
-    await vi.waitFor(() => expect(dispatch).toHaveBeenCalled());
+    expect(dispatch).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(1));
     expect(dispatch).toHaveBeenCalledWith(
       "file.view",
       { path: "/repo/src/app.ts" },

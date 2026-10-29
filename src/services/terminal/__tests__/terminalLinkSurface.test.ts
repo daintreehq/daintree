@@ -184,9 +184,10 @@ describe("sharedTerminalOptions", () => {
     t.hovered!.activate(menuClick, t.hovered!.text);
     expect(t.opened.at(-1)).toEqual([url, menuClick]);
 
+    hideTooltip.mockClear();
     linkHandler.leave?.({ type: "mouseout" } as MouseEvent, url, range);
     expect(t.hovered).toBeNull();
-    expect(hideTooltip).toHaveBeenCalledWith(terminal);
+    expect(hideTooltip).toHaveBeenCalledTimes(1);
   });
 
   it("names the plugin a hovered URL goes to, only for a terminal it can be handed from", () => {

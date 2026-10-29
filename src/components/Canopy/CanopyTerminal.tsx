@@ -335,7 +335,10 @@ export function CanopyTerminal({
     let searchAddon: SearchAddon | null = null;
     let searchLoad: Promise<SearchAddon | null> | null = null;
     const searchTarget: TerminalSearchTarget = {
+      // Nothing once this xterm has gone: a search queued before a reopen
+      // finds no addon rather than a disposed one.
       ensureSearchAddon: () => {
+        if (disposed) return Promise.resolve(null);
         if (searchAddon) return Promise.resolve(searchAddon);
         searchLoad ??= createSearchAddon(terminal).then(
           (addon) => {
@@ -354,7 +357,7 @@ export function CanopyTerminal({
         );
         return searchLoad;
       },
-      getSearchAddon: () => searchAddon,
+      getSearchAddon: () => (disposed ? null : searchAddon),
     };
     setSearch(searchTarget);
 

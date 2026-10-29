@@ -357,6 +357,17 @@ export function TerminalSearchBar({
     }
   }, [performSearch]);
 
+  // A terminal replaced under the open bar (Canopy's, reopened) holds none of
+  // the last one's matches: search it for what the field says now.
+  const searchedTargetRef = useRef(target);
+  useEffect(() => {
+    if (searchedTargetRef.current === target) return;
+    searchedTargetRef.current = target;
+    cancelPendingSearch();
+    setMatchResults(null);
+    performSearch(searchTerm, "next");
+  }, [target, searchTerm, performSearch, cancelPendingSearch]);
+
   useEffect(() => {
     return () => {
       if (debounceRef.current) {

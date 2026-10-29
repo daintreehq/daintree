@@ -801,7 +801,7 @@ describe("TerminalSearchBar", () => {
       getSearchAddon: vi.fn(() => mock.searchAddon as never),
     };
     vi.mocked(terminalInstanceService.ensureSearchAddon).mockClear();
-    render(<TerminalSearchBar search={target} onClose={vi.fn()} />);
+    const view = render(<TerminalSearchBar search={target} onClose={vi.fn()} />);
     const input = screen.getByPlaceholderText("Find in terminal");
     await act(() => {
       fireEvent.change(input, { target: { value: "hello" } });
@@ -813,6 +813,21 @@ describe("TerminalSearchBar", () => {
     expect(terminalInstanceService.ensureSearchAddon).not.toHaveBeenCalled();
     expect(terminalInstanceService.pinHistory).not.toHaveBeenCalled();
 
+    const next = createMockManaged(true);
+    const { rerender } = view;
+    rerender(
+      <TerminalSearchBar
+        search={{
+          ensureSearchAddon: async () => next.searchAddon as never,
+          getSearchAddon: () => next.searchAddon as never,
+        }}
+        onClose={vi.fn()}
+      />
+    );
+    await act(async () => {});
+    expect(next.searchAddon.findNext).toHaveBeenCalledWith("hello", expect.anything());
+
+    rerender(<TerminalSearchBar search={target} onClose={vi.fn()} />);
     await act(() => {
       fireEvent.change(input, { target: { value: "" } });
     });
