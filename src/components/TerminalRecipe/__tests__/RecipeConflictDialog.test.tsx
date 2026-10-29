@@ -93,6 +93,23 @@ describe("RecipeConflictDialog", () => {
     expect(footerButton("leading").textContent).toBe("Overwrite and discard");
   });
 
+  // Cancel backs out of the save and the editor keeps the draft (#15035), so
+  // neither variant may tell the user that answer throws their edit away.
+  it.each(["stale", "forward-compat"] as const)(
+    "never says Cancel loses the edit (%s)",
+    (reason) => {
+      park({ reason });
+      render(<RecipeConflictDialog />);
+
+      const cancelSentence = (document.body.textContent ?? "")
+        .split(/(?<=\.)\s+/)
+        .find((sentence) => sentence.startsWith("Cancel"));
+      expect(cancelSentence).toBeDefined();
+      expect(cancelSentence).not.toMatch(/\bdrops?\b|\blos(e|es|t)\b|\bdiscards?\b/);
+      expect(cancelSentence).toMatch(/\bedit\b/);
+    }
+  );
+
   it("omits the detail block when the main process sent none", () => {
     park({ reason: "forward-compat" });
     render(<RecipeConflictDialog />);
