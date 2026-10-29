@@ -1755,7 +1755,10 @@ describe("VoiceRecordingService — a lock on a pane with no composer (#14955)",
       "an agent pane whose agent exited to its shell",
       { kind: "terminal", launchAgentId: "claude", agentState: "exited" },
     ],
-    ["a pane held for recovery", { kind: "terminal", launchAgentId: "claude", restoreRecovery: {} }],
+    [
+      "a pane held for recovery",
+      { kind: "terminal", launchAgentId: "claude", restoreRecovery: {} },
+    ],
   ])(
     "starts nothing in %s it is locked to, and doesn't move to the focused pane",
     async (_n, locked) => {

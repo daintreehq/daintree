@@ -3,7 +3,13 @@ import type { PanelInstance } from "@shared/types/panel";
 import { panelHasComposer } from "../terminalComposer";
 
 function pane(fields: Record<string, unknown>): PanelInstance {
-  return { id: "p1", title: "Pane", location: "grid", kind: "terminal", ...fields } as PanelInstance;
+  return {
+    id: "p1",
+    title: "Pane",
+    location: "grid",
+    kind: "terminal",
+    ...fields,
+  } as PanelInstance;
 }
 
 const ON = { hybridInputEnabled: true, isFleetArmed: false, fleetSize: 0 };
@@ -12,7 +18,10 @@ describe("panelHasComposer (#14955)", () => {
   it.each([
     ["launched as an agent", { launchAgentId: "claude" }],
     ["running a detected agent", { detectedAgentId: "codex" }],
-    ["holding an agent runtime identity", { runtimeIdentity: { kind: "agent", agentId: "claude" } }],
+    [
+      "holding an agent runtime identity",
+      { runtimeIdentity: { kind: "agent", agentId: "claude" } },
+    ],
   ])("is true for a pane %s", (_n, fields) => {
     expect(panelHasComposer(pane(fields), ON)).toBe(true);
   });

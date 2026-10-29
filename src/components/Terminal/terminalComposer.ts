@@ -26,5 +26,8 @@ export function panelHasComposer(
     detectedProcessId: panel.detectedProcessId,
     agentState: panel.agentState,
   });
-  return shouldShowHybridInputBar({ hasAgentIdentity: isBuiltInAgentId(chrome.agentId), ...options });
+  return shouldShowHybridInputBar({
+    hasAgentIdentity: isBuiltInAgentId(chrome.agentId),
+    ...options,
+  });
 }
