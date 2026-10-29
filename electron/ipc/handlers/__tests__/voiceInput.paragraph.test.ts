@@ -210,6 +210,7 @@ vi.mock("../../channels.js", () => ({
 import { registerVoiceInputHandlers, getVoiceSettings, validateOpenAIKey } from "../voiceInput.js";
 import { isDictationViewHeld } from "../../../services/voice/dictationViewHold.js";
 import { ValidationError } from "../../validationError.js";
+import { acceptSuggestion } from "../../../../shared/utils/voiceDictionary.js";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -1931,13 +1932,18 @@ describe("voiceInput — context keyterms wiring", () => {
     "teaches a term learned from an everyday word without rewriting the word, cleanup $cleanup",
     async ({ correctionEnabled }) => {
       const { store } = await import("../../../store.js");
+      const { dictionary } = acceptSuggestion(
+        {
+          dictionary: [{ term: "Zustand", heardAs: ["zoo stand"], source: "learned", addedAt: 1 }],
+          suggestedDictionary: [{ word: "Jest", utterance: "just", suggestedAt: 1, frequency: 1 }],
+        },
+        "Jest",
+        2
+      );
       vi.mocked(store.get).mockReturnValue({
         ...providerSettings("openai"),
         correctionEnabled,
-        dictionary: [
-          { term: "Jest", heardAs: ["just"], source: "learned", addedAt: 1 },
-          { term: "Zustand", heardAs: ["zoo stand"], source: "learned", addedAt: 2 },
-        ],
+        dictionary,
       });
       const { assembleTaggedKeyterms } = await import("../../../services/voiceContextKeyterms.js");
 
@@ -1954,7 +1960,7 @@ describe("voiceInput — context keyterms wiring", () => {
       ]);
       expect(completes[1]).not.toHaveProperty("heard");
       expect(vi.mocked(assembleTaggedKeyterms).mock.calls.at(-1)?.[0]).toMatchObject({
-        customDictionary: ["Jest", "Zustand"],
+        customDictionary: ["Zustand", "Jest"],
       });
       if (!correctionEnabled) return;
 
@@ -1963,7 +1969,7 @@ describe("voiceInput — context keyterms wiring", () => {
         { rawText: "I just want to check" }
       );
       expect(shared.correctionCalls.at(-1)?.settings).toMatchObject({
-        customDictionary: ["Jest", "Zustand"],
+        customDictionary: ["Zustand", "Jest"],
         heardAs: [{ heard: "zoo stand", term: "Zustand" }],
       });
     }

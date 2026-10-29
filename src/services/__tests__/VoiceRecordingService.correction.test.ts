@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { VoiceDictionaryEntry } from "@shared/types";
+import { acceptSuggestion } from "@shared/utils/voiceDictionary";
 
 // Drives the real voice and draft stores through stop() to prove a post-stop
 // correction belongs to its own session and panel (#14611): another session
@@ -101,12 +103,7 @@ const correct =
     }) => Promise<CorrectResult>
   >();
 
-let dictionary: Array<{
-  term: string;
-  heardAs: string[];
-  source: "manual" | "learned";
-  addedAt: number;
-}> = [];
+let dictionary: VoiceDictionaryEntry[] = [];
 
 function stubElectron() {
   const electron = {
@@ -1187,10 +1184,16 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
     ])(
       "leaves an everyday word a correction taught as it was said, cleanup $cleanup",
       async ({ correctionEnabled }) => {
-        dictionary = [
-          { ...rule("Jest", "just"), source: "learned" },
-          { ...rule("Zustand", "zoo stand"), source: "learned" },
-        ];
+        ({ dictionary } = acceptSuggestion(
+          {
+            dictionary: [{ ...rule("Zustand", "zoo stand"), source: "learned" }],
+            suggestedDictionary: [
+              { word: "Jest", utterance: "just", suggestedAt: 0, frequency: 1 },
+            ],
+          },
+          "Jest",
+          0
+        ));
         const { service, dictate, say, draft, voiceStore } = await setup();
         voiceStore.getState().setCorrectionEnabled(correctionEnabled);
         correct.mockResolvedValue({ action: "no_change", correctedText: "" });

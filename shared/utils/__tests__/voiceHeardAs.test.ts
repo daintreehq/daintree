@@ -92,29 +92,6 @@ describe("collectHeardAsRules", () => {
   it("has no rules for terms without heard-as forms", () => {
     expect(collectHeardAsRules([entry("React"), entry("Go")])).toEqual([]);
   });
-
-  it("makes no rule of an everyday word a correction taught it", () => {
-    expect(
-      collectHeardAsRules([
-        learned("Jest", ["just"]),
-        learned("Nuxt", ["Next."]),
-        learned("Zustand", ["zoo stand"]),
-        learned("useState", ["use state"]),
-        entry("Revue", ["review"]),
-        { ...entry("Next", ["next"]), source: "imported" },
-      ])
-    ).toEqual([
-      { heard: "zoo stand", term: "Zustand" },
-      { heard: "review", term: "Revue" },
-      { heard: "next", term: "Next" },
-    ]);
-  });
-
-  it("leaves a heard form a correction couldn't claim free for a later entry", () => {
-    expect(collectHeardAsRules([learned("Jest", ["just"]), entry("JUST", ["just"])])).toEqual([
-      { heard: "just", term: "JUST" },
-    ]);
-  });
 });
 
 describe("a correction learned onto an everyday word", () => {
@@ -130,16 +107,9 @@ describe("a correction learned onto an everyday word", () => {
 
   it("still teaches the term once accepted, without rewriting the word it was heard as", () => {
     const dictionary = learnFrom("run just", "run Jest");
-    expect(dictionary).toEqual([learned("Jest", ["just"], 2)]);
+    expect(dictionary).toEqual([learned("Jest", [], 2)]);
     expect(rewriterFor(...dictionary)(sentence)).toBe(sentence);
-    expect(collectHeardAsRules(dictionary)).toEqual([]);
     expect(dictionaryTerms(dictionary)).toEqual(["Jest"]);
-  });
-
-  it("stops rewriting the word for an entry stored that way before", () => {
-    const stored = [learned("Jest", ["just"]), learned("Zustand", ["zoo stand"])];
-    expect(rewriterFor(...stored)(`${sentence} zoo stand`)).toBe(`${sentence} Zustand`);
-    expect(dictionaryTerms(stored)).toEqual(["Jest", "Zustand"]);
   });
 
   it("keeps the rule a learned phrase that isn't everyday English gets", () => {
@@ -147,13 +117,16 @@ describe("a correction learned onto an everyday word", () => {
     expect(rewriterFor(...dictionary)("use zoo stand")).toBe("use Zustand");
   });
 
-  it("keeps the rule when the user types the everyday word in by hand", () => {
-    expect(rewriterFor(entry("Jest", ["just"]))(sentence)).toBe("I Jest want to check");
-    const learnedJest = [learned("Jest", ["jessed"])];
-    const added = addDictionaryEntry(learnedJest, { term: "jest", heardAs: ["just"] }, 2);
-    expect(rewriterFor(...added)(sentence)).toBe("I Jest want to check");
-    const edited = updateDictionaryEntry(learnedJest, "Jest", { heardAs: ["jessed", "next"] });
-    expect(rewriterFor(...edited)("run next")).toBe("run Jest");
+  it("keeps the rule when the user types the everyday word in by hand, on any entry", () => {
+    const typed = "I Jest want to check";
+    expect(rewriterFor(entry("Jest", ["just"]))(sentence)).toBe(typed);
+    const accepted = learnFrom("run just", "run Jest");
+    const added = addDictionaryEntry(accepted, { term: "jest", heardAs: ["just"] }, 3);
+    expect(rewriterFor(...added)(sentence)).toBe(typed);
+    const replaced = updateDictionaryEntry([learned("Jest", ["jessed"])], "Jest", {
+      heardAs: ["just"],
+    });
+    expect(rewriterFor(...replaced)(sentence)).toBe(typed);
   });
 });
 

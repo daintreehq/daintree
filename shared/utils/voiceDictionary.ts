@@ -308,9 +308,12 @@ export function mergeSuggestions(
 
 /**
  * Move a suggestion into the dictionary as a learned entry that keeps what it
- * was heard as. A word no longer queued was dismissed or accepted from
- * somewhere else, so acting on it now is acting on a stale copy: nothing
- * changes, and a term removed since stays removed.
+ * was heard as, unless that is everyday English: a heard-as form rewrites
+ * every dictation, and a fix to "just" was right where it was made, not
+ * everywhere the word is said, so the entry teaches only its term. A word no
+ * longer queued was dismissed or accepted from somewhere else, so acting on
+ * it now is acting on a stale copy: nothing changes, and a term removed since
+ * stays removed.
  */
 export function acceptSuggestion(
   state: VoiceDictionaryState,
@@ -323,14 +326,8 @@ export function acceptSuggestion(
   if (!suggestion) return state;
   // The pair the user saw, when the queue's copy has since been overwritten.
   const heard = normalizePhrase(utterance ?? suggestion.utterance);
-  // Only the heard form a learned entry starts with stays out of the heard-as
-  // rules when it's everyday English, so an everyday one is never merged into
-  // a term already there, whoever added it.
-  const exists = state.dictionary.some((entry) => fold(entry.term) === key);
   const keepsHeard =
-    heard !== null &&
-    heard.length <= MAX_DICTIONARY_TERM_LENGTH &&
-    !(exists && isEverydayPhrase(heard));
+    heard !== null && heard.length <= MAX_DICTIONARY_TERM_LENGTH && !isEverydayPhrase(heard);
   return {
     dictionary: addDictionaryEntry(
       state.dictionary,

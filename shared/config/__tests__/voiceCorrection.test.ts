@@ -12,8 +12,7 @@ import {
   TRANSCRIBER_NOTES,
   type CorrectionPromptContext,
 } from "../voiceCorrection.js";
-import type { VoiceDictionaryEntry } from "../../types/ipc/api.js";
-import { dictionaryTerms } from "../../utils/voiceDictionary.js";
+import { acceptSuggestion, dictionaryTerms } from "../../utils/voiceDictionary.js";
 import { collectHeardAsRules } from "../../utils/voiceHeardAs.js";
 
 describe("CORE_CORRECTION_PROMPT", () => {
@@ -336,15 +335,19 @@ describe("buildCorrectionSystemPrompt", () => {
   });
 
   it("gives cleanup a term learned from an everyday word as a term, not a heard-as rule", () => {
-    const dictionary: VoiceDictionaryEntry[] = [
-      { term: "Jest", heardAs: ["just"], source: "learned", addedAt: 1 },
-      { term: "Zustand", heardAs: ["zoo stand"], source: "learned", addedAt: 2 },
-    ];
+    const { dictionary } = acceptSuggestion(
+      {
+        dictionary: [{ term: "Zustand", heardAs: ["zoo stand"], source: "learned", addedAt: 1 }],
+        suggestedDictionary: [{ word: "Jest", utterance: "just", suggestedAt: 1, frequency: 1 }],
+      },
+      "Jest",
+      2
+    );
     const prompt = buildCorrectionSystemPrompt({
       customDictionary: dictionaryTerms(dictionary),
       heardAs: collectHeardAsRules(dictionary),
     });
-    expect(prompt).toContain('"Jest" | "Zustand"');
+    expect(prompt).toContain('"Zustand" | "Jest"');
     expect(prompt).toContain("<user_terms>\nzoo stand: Zustand\n</user_terms>");
   });
 

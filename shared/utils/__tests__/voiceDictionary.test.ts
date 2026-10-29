@@ -217,7 +217,15 @@ describe("suggestions", () => {
     });
   });
 
-  it("accepting a word added since it was queued leaves an everyday heard form out", () => {
+  it("accepting leaves an everyday heard form out, for a new term or one already there", () => {
+    expect(
+      acceptSuggestion(
+        { dictionary: [], suggestedDictionary: [suggestion("Jest", "just")] },
+        "Jest",
+        T1
+      ).dictionary
+    ).toEqual([{ term: "Jest", heardAs: [], source: "learned", addedAt: T1 }]);
+
     const state = {
       dictionary: [
         entry("Jest"),
