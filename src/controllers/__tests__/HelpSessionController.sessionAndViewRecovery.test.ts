@@ -833,9 +833,13 @@ describe("HelpSessionController — grant lifecycle (#10042)", () => {
 
     native("native-b", "grant.refreshed", { expiresAt: now + 1_200_000 });
     expect(ctrl.getSnapshot().activeGrant?.expiresAt).toBe(now + 1_200_000);
-    native("native-b", "grant.revoked");
+    // A per-tool event never ends a native grant, even one naming "*".
+    grantLifecycleListeners[0]?.({ type: "grant.expired", sessionId: "s1", toolId: "*", ttlMs: 1 });
+    expect(ctrl.getSnapshot().activeGrant?.grantId).toBe("native-b");
+    // Its lazy expiry names the tool that tripped it, and still retires it.
+    native("native-b", "grant.expired", { toolId: "t9" });
     expect(ctrl.getSnapshot().activeGrant).toBeNull();
-    expect(ctrl.getSnapshot().grantEnded).toEqual({ toolId: "*", reason: "grant-ceiling" });
+    expect(ctrl.getSnapshot().grantEnded).toEqual({ toolId: "*", reason: "expired" });
 
     // A native lazy expiry names the tool that tripped it; it must not end a
     // per-tool grant for that same tool.
