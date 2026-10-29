@@ -446,6 +446,12 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       danger: "safe",
       scope: "renderer",
       argsSchema: getPRArgsSchema,
+      examples: [
+        {
+          args: { prNumber: 42 },
+          description: "Fetch PR #42 from the active worktree's repo",
+        },
+      ],
       resultSchema: ForgePRActionResultSchema,
       mcpOutputSchema: true,
       run: (args, ctx) => runForgeAction("forge.getPR", args, ctx),
