@@ -358,8 +358,7 @@ export function IssuePickerDialog({
   };
 
   useEffect(() => {
-    const option =
-      scrollRef.current?.querySelectorAll<HTMLElement>('[role="option"]')[cursor];
+    const option = scrollRef.current?.querySelectorAll<HTMLElement>('[role="option"]')[cursor];
     option?.scrollIntoView({ block: "nearest" });
   }, [cursor]);
 

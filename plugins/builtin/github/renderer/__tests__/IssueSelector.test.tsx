@@ -613,10 +613,12 @@ describe("IssueSelector", () => {
 
       const input = screen.getByPlaceholderText("Search issues");
       fireEvent.keyDown(input, { key: "End" });
-      await waitFor(() => expect(input.getAttribute("aria-activedescendant")).toBe("issue-option-2"));
-      expect(
-        screen.getByRole("option", { name: "Load more" }).getAttribute("aria-selected")
-      ).toBe("true");
+      await waitFor(() =>
+        expect(input.getAttribute("aria-activedescendant")).toBe("issue-option-2")
+      );
+      expect(screen.getByRole("option", { name: "Load more" }).getAttribute("aria-selected")).toBe(
+        "true"
+      );
 
       fireEvent.keyDown(input, { key: "Enter" });
       await waitFor(() => screen.getByRole("option", { name: /Issue 4/ }));
@@ -680,9 +682,7 @@ describe("IssueSelector", () => {
 
       fireEvent.click(trigger);
       // Lands while closed: nothing has replaced the set yet but the close.
-      await act(async () =>
-        resolvePage({ items: pageOf(3, 2), hasMore: false, nextCursor: null })
-      );
+      await act(async () => resolvePage({ items: pageOf(3, 2), hasMore: false, nextCursor: null }));
 
       mockListIssues.mockReturnValue(new Promise(() => {}));
       fireEvent.click(trigger);

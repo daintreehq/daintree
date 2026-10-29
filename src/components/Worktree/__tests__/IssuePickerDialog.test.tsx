@@ -604,7 +604,9 @@ describe("IssuePickerDialog paging", () => {
   it("says more are available when the forge reports no total", async () => {
     listIssuesMock.mockResolvedValue({ items: pageOf(1, 2), hasMore: true, nextCursor: "page-2" });
     const { container } = renderDialog();
-    await waitFor(() => expect(liveStatus(container)).toBe("Showing 2 open issues, more available"));
+    await waitFor(() =>
+      expect(liveStatus(container)).toBe("Showing 2 open issues, more available")
+    );
   });
 
   it("offers no Load more once the forge says the set is complete", async () => {
