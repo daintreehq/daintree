@@ -360,6 +360,20 @@ export function getViewUnsavedPanelIds(): string[] {
   return [...unsavedOwners.keys()].sort();
 }
 
+/**
+ * The panels whose live view says it holds unsaved work, with the plugin each
+ * belongs to. A panel the store observer has not placed yet names no plugin and
+ * is left out.
+ */
+export function getViewUnsavedPluginPanels(): Array<{ panelId: string; pluginId: string }> {
+  const panels: Array<{ panelId: string; pluginId: string }> = [];
+  for (const panelId of getViewUnsavedPanelIds()) {
+    const pluginId = tracked.get(panelId)?.pluginId;
+    if (pluginId) panels.push({ panelId, pluginId });
+  }
+  return panels;
+}
+
 /** Fires when a panel's unsaved status flips, not on every owner change. */
 export function subscribeViewUnsavedChanges(listener: () => void): () => void {
   unsavedListeners.add(listener);

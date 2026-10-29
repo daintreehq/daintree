@@ -49,6 +49,7 @@ import {
   useAccessibilityAnnouncements,
   useUnloadCleanup,
   usePanelRecoveryResponder,
+  usePluginUnsavedPanelsReporter,
   useHomeDir,
   usePerformanceMonitors,
   useSettingsDialog,
@@ -131,6 +132,7 @@ function AppInner() {
   useErrors();
   useUnloadCleanup();
   usePanelRecoveryResponder();
+  usePluginUnsavedPanelsReporter();
   useResourceProfile();
   usePowerSavingMotion();
   useOverlayClaimCountMarker();
