@@ -197,6 +197,30 @@ describe("AddPresetDialog — what gets created matches what was chosen", () => 
     expect(payload.env).not.toBe(CURRENT.env);
   });
 
+  it("clones every field Duplicate does, fallback chain included, minus id and display title", () => {
+    const source: AgentPreset = {
+      ...CURRENT,
+      description: "Backup route",
+      displayTitle: "My GLM",
+      fallbacks: ["preset-2", "preset-3"],
+      fallbackOnRateLimit: true,
+      color: "#123456",
+    };
+    const { onCreate } = renderDialog({ currentPreset: source });
+
+    fireEvent.click(screen.getByRole("radio", { name: "Clone current" }));
+    fireEvent.click(screen.getByRole("button", { name: /create preset/i }));
+
+    const payload = onCreate.mock.calls[0]![0] as Partial<AgentPreset>;
+    expect(payload.fallbacks).toEqual(["preset-2", "preset-3"]);
+    expect(payload.fallbacks).not.toBe(source.fallbacks);
+    expect(payload.fallbackOnRateLimit).toBe(true);
+    expect(payload.description).toBe("Backup route");
+    expect(payload.color).toBe("#123456");
+    expect(payload.displayTitle).toBeUndefined();
+    expect("id" in payload).toBe(false);
+  });
+
   it("creates from the chosen template, carrying its settings", () => {
     const { onCreate } = renderDialog();
 
