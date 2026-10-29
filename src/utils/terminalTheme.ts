@@ -41,6 +41,32 @@ export interface InputBarColors {
   /** The `❯` marker, at rest and on the selected composer. */
   marker: string;
   markerSelected: string;
+  /**
+   * The draft's ink: the terminal's foreground, or, on a palette whose own
+   * foreground can't reach 4.5:1 on the shell (Solarized Light's sits at
+   * 3.95:1), that foreground leaned toward black or white just far enough.
+   * The placeholder, pill and reference inks build on it.
+   */
+  textInk: string;
+  /**
+   * How much foreground the shell's controls mix into its fill: 72% wherever
+   * that clears 3:1 on the resting, hovered and selected shell, and more on a
+   * palette whose foreground sits close to its background (Solarized Light).
+   */
+  controlMix: string;
+  /**
+   * `/command` and `@file` ink: the palette's cyan where it reads at 4.5:1 on
+   * every shell fill and the staged-for-delete fill, leaned toward the pill
+   * label's ink only as far as that needs.
+   */
+  referenceInk: string;
+  /**
+   * A pill chip's label: the draft's ink, leaned further only where the pill's
+   * own wash (10% foreground) or its staged fill (16%) costs it the floor.
+   */
+  chipText: string;
+  /** How much of `chipText` a pill's remove × mixes into the shell: 3:1 on every pill fill. */
+  chipControlMix: string;
   /** Placeholder ink, fitted to 4.5:1 against the fills it sits on. */
   placeholder: string;
   placeholderSelected: string;
@@ -81,6 +107,10 @@ export interface InputBarColors {
   isDark: boolean;
 }
 
+/** A pill chip's wash, and its fill once staged for delete (`base.ts`). */
+export const CHIP_WASH_MIX = 10;
+export const CHIP_STAGED_MIX = 16;
+
 /** How much accent the listening shell's fill carries (`HybridInputBar`). */
 export const VOICE_LISTENING_FILL_MIX = 12;
 
@@ -96,6 +126,7 @@ const VOICE_CARET_MIN_OPACITY = 0.55;
 type Rgb = readonly [number, number, number];
 
 const BLACK: Rgb = [0, 0, 0];
+const WHITE: Rgb = [1, 1, 1];
 
 interface ParsedColor {
   rgb: Rgb;
@@ -204,6 +235,7 @@ export function resolveInputBarColors(theme: ITheme): InputBarColors {
   const accent = theme.cursor ?? theme.blue ?? "#58a6ff";
   const foreground = theme.foreground ?? "#cccccc";
   const background = theme.background ?? "#1e1e1e";
+  const chipColor = theme.cyan ?? theme.brightCyan ?? theme.cursor ?? "#58a6ff";
 
   // A translucent background has no one colour to fit against. A translucent
   // ink paints as its composite over the background, so that is what is
@@ -245,14 +277,90 @@ export function resolveInputBarColors(theme: ITheme): InputBarColors {
   let voiceSignal = acInk?.css ?? accent;
   let voiceHeldPct = 60;
   let voiceCaretFloor = VOICE_CARET_MIN_OPACITY;
+  let controlPct = 72;
+  let referenceInk = chipColor;
+  let textInk = fgCss;
+  let chipText = fgCss;
+  let chipControlPct = 72;
   if (fg && bg) {
     const rest = mixOklab(bg, BLACK, restDim);
     const hover = mixOklab(bg, BLACK, hoverDim);
     const selected = mixOklab(fg, bg, 0.03);
-    placeholderPct = fitMix(fg, bg, 48, 4.6, [rest, hover]) ?? 100;
+    const shells = [rest, hover, selected];
+    let ink = fg;
+    if (!shells.every((s) => contrast(fg, s) >= 4.6)) {
+      const pole = isDark ? WHITE : BLACK;
+      for (let p = 1; p <= 100; p++) {
+        const leaned = mixOklab(pole, fg, p / 100);
+        if (shells.every((s) => contrast(leaned, s) >= 4.6)) {
+          ink = leaned;
+          break;
+        }
+      }
+      textInk = toHex(ink);
+    }
+    placeholderPct = fitMix(ink, bg, 48, 4.6, [rest, hover]) ?? 100;
+    // The controls mix toward the shell's own fill (`--ib-bg`), which is the
+    // selected fill on the selected composer, so each fill is fitted with its
+    // own mix; a hovered shell keeps the resting mix under a lighter fill.
+    controlPct = 100;
+    for (let p = 72; p <= 100; p++) {
+      const onRest = mixOklab(fg, rest, p / 100);
+      const onSelected = mixOklab(fg, selected, p / 100);
+      if (
+        contrast(onRest, rest) >= 3.1 &&
+        contrast(onRest, hover) >= 3.1 &&
+        contrast(onSelected, selected) >= 3.1
+      ) {
+        controlPct = p;
+        break;
+      }
+    }
+    // What a chip paints on: a pill's translucent wash over each shell fill
+    // (`chipStyle`), and the opaque fill of a chip staged by Backspace.
+    const staged = mixOklab(fg, rest, CHIP_STAGED_MIX / 100);
+    const pills = [...shells.map((s) => over(fg, s, CHIP_WASH_MIX / 100)), staged];
+    let label = ink;
+    if (!pills.every((s) => contrast(ink, s) >= 4.6)) {
+      const pole = isDark ? WHITE : BLACK;
+      label = pole;
+      for (let p = 1; p <= 100; p++) {
+        const leaned = mixOklab(pole, ink, p / 100);
+        if (pills.every((s) => contrast(leaned, s) >= 4.6)) {
+          label = leaned;
+          break;
+        }
+      }
+      chipText = toHex(label);
+    } else if (ink !== fg) {
+      chipText = textInk;
+    }
+    // Leaned toward the pill label, which clears the shells and the staged
+    // fill by construction, so the fit always lands and never falls back to
+    // the raw cyan.
+    const chipInk = solid(chipColor);
+    if (chipInk) {
+      const surfaces = [...shells, staged];
+      referenceInk = toHex(label);
+      for (let p = 0; p <= 100; p++) {
+        const leaned = mixOklab(label, chipInk.rgb, p / 100);
+        if (surfaces.every((s) => contrast(leaned, s) >= 4.6)) {
+          referenceInk = p === 0 ? chipInk.css : toHex(leaned);
+          break;
+        }
+      }
+    }
+    chipControlPct = 100;
+    for (let p = 72; p <= 100; p++) {
+      const glyph = mixOklab(label, rest, p / 100);
+      if (pills.every((s) => contrast(glyph, s) >= 3.1)) {
+        chipControlPct = p;
+        break;
+      }
+    }
     placeholderSelectedPct = Math.min(
       100,
-      Math.max(placeholderPct + 6, fitMix(fg, bg, 48, 4.6, [selected]) ?? 100)
+      Math.max(placeholderPct + 6, fitMix(ink, bg, 48, 4.6, [selected]) ?? 100)
     );
     const listeningFill = acInk ? [mixOklab(acInk.rgb, bg, VOICE_LISTENING_FILL_MIX / 100)] : [];
     interimPct = fitMix(fg, bg, 48, 4.6, [rest, ...listeningFill]) ?? 100;
@@ -315,7 +423,7 @@ export function resolveInputBarColors(theme: ITheme): InputBarColors {
     foreground,
     background,
     selectionBg: theme.selectionBackground ?? theme.cursor ?? "#264f78",
-    chipColor: theme.cyan ?? theme.brightCyan ?? theme.cursor ?? "#58a6ff",
+    chipColor,
     errorColor: theme.red ?? "#f44747",
     successColor: theme.green ?? "#89d185",
     shellBg: mix(background, restDim * 100, "black"),
@@ -328,8 +436,13 @@ export function resolveInputBarColors(theme: ITheme): InputBarColors {
     shellFocusRing: focusRing,
     marker: "color-mix(in oklab, var(--ib-fg) 72%, var(--ib-bg))",
     markerSelected: "color-mix(in oklab, var(--ib-fg) 90%, var(--ib-bg))",
-    placeholder: mix(fgCss, placeholderPct, background),
-    placeholderSelected: mix(fgCss, placeholderSelectedPct, background),
+    textInk,
+    controlMix: `${controlPct}%`,
+    referenceInk,
+    chipText,
+    chipControlMix: `${chipControlPct}%`,
+    placeholder: mix(textInk, placeholderPct, background),
+    placeholderSelected: mix(textInk, placeholderSelectedPct, background),
     placeholderMore: mix(fgCss, Math.max(85, placeholderSelectedPct), background),
     interim: mix(fgCss, interimPct, background),
     waitEdge: mix(fgCss, waitEdgePct, background),

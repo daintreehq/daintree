@@ -79,16 +79,24 @@ export function createSlashChipField(config: SlashChipFieldConfig) {
         const fieldValue = view.state.field(f, false);
         if (!fieldValue || fieldValue.tokens.length === 0) return Decoration.none;
         const pending = view.state.field(chipPendingDeleteField, false) ?? null;
-        const ranges = fieldValue.tokens.map((token) => {
+        const { main } = view.state.selection;
+        const ranges = fieldValue.tokens.flatMap((token) => {
           // Only a recognized command solidifies into an atomic chip. A token
           // that's still being typed or mistyped stays plain editable text
           // (single-char Backspace) with just a "no match" hint, so a finger
           // slip is fixable instead of nuking the whole draft.
           if (!token.isValid) {
-            return Decoration.mark({ class: "cm-slash-command-chip-invalid" }).range(
-              token.start,
-              token.end
-            );
+            // Still being typed, with commands that start with it: plain
+            // text, as the menu beside it is offering those commands. The
+            // hint lands once the caret leaves an unmatched token.
+            const typing = main.empty && main.head >= token.start && main.head <= token.end;
+            if (typing && commandPrefixMatches(config.commandMap, token.command)) return [];
+            return [
+              Decoration.mark({ class: "cm-slash-command-chip-invalid" }).range(
+                token.start,
+                token.end
+              ),
+            ];
           }
           const selected = isChipSelected(pending, token.start, token.end);
           return Decoration.replace({
@@ -117,6 +125,13 @@ export function createSlashChipField(config: SlashChipFieldConfig) {
 
 function slashCommandDescription(command: SlashCommand | undefined): string {
   return command?.description ?? command?.label ?? "";
+}
+
+function commandPrefixMatches(commandMap: Map<string, SlashCommand>, prefix: string): boolean {
+  for (const command of commandMap.keys()) {
+    if (command.startsWith(prefix)) return true;
+  }
+  return false;
 }
 
 export function createSlashTooltip(commandMap: Map<string, SlashCommand>) {
