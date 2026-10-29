@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.47.1] - 2026-10-29
+
+A patch for three rough edges in 0.47.0: a dictation cleanup that turned one spoken name into a command you hadn't asked for was thrown away whole, the dictation caret took width and pushed the text after it aside, and Canopy's All hosts view warned about every host that was simply off.
+
+### Bug Fixes
+
+- A dictation cleanup that turns a spoken name into an agent command you never named ("a design review workflow" coming back as "a /design-review workflow") now lands with that one command written back as the words you said, instead of the whole passage losing every correction, which Grok's punctuation of pauses ("the next... batch. Skill.") made frequent (#15078)
+- The dictation caret is one mark that takes no width: text after a mid-draft insertion no longer shifts, a line no longer wraps because of the meter, the keyboard caret no longer shows a second mark where grey interim words begin, and the "Listening…" placeholder is gone, with the meter alone at the start of an empty draft (#14942)
+- In Canopy's All hosts view, a host that's off or out of range is left out quietly: no warning callout, Retry button or "Not every host could be read" header, and its agents reappear on their own when the link comes back; picking that host on its own still shows "Can't reach" with Retry (#15230)
+
 ## [0.47.0] - 2026-10-28
 
 Dictation is rebuilt around AI cleanup that hands the agent the message you'd have typed, reading the terminal, the repository and your pauses, with Grok as a third provider and `Cmd+D` as the macOS key. Canopy reads screens on your own machine with a 21 MB open model, a global Daintree Assistant reaches every project and host, project plugins can ship whole applications, idle projects can sleep with their terminals, and Element Picker traces React, Vue, Angular and more to source.
