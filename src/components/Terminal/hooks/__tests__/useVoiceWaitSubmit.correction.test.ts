@@ -467,7 +467,11 @@ describe("useVoiceWaitSubmit with a real correction pass (#14611, #14780)", () =
   });
 
   it("says the cleanup failed when it fails before the wait for it begins", async () => {
-    correct.mockResolvedValueOnce({ action: "no_change", correctedText: "hello wrld", failed: true });
+    correct.mockResolvedValueOnce({
+      action: "no_change",
+      correctedText: "hello wrld",
+      failed: true,
+    });
     dictate(PANEL_ID, "hello wrld");
     const result = renderComposer();
 
