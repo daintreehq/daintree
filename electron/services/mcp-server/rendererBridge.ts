@@ -903,7 +903,6 @@ export function createRendererBridge(
         timer,
         webContentsId,
         destroyedCleanup: settle,
-        hold,
       });
 
       onArmed?.({
@@ -1076,6 +1075,7 @@ export function createRendererBridge(
         timer,
         webContentsId,
         destroyedCleanup: settle,
+        hold,
       });
 
       const send = () => {

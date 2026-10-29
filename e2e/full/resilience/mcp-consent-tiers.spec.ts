@@ -84,8 +84,9 @@ async function post(
   body: unknown,
   headers: Record<string, string> = {}
 ): Promise<{ status: number; sessionId: string | null; body: any }> {
-  // Longer than the renderer's 30s confirmation deadline, so a call parked on
-  // a dialog nobody answers comes back as the product's timeout, not ours.
+  // Every call here is answered or refused well inside this. A call left on a
+  // dialog nobody answers is held for minutes (#14989), so this cuts it off
+  // rather than letting a failing test wait out the product's own deadline.
   const res = await fetch(`http://127.0.0.1:${endpoint.port}/mcp`, {
     method: "POST",
     headers: {
