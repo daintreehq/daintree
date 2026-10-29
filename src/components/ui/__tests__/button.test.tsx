@@ -346,7 +346,9 @@ describe("destructive variant", () => {
   // model, would leave that guarantee describing a button nobody sees.
   it("paints the label and fill the theme validator measures", () => {
     const fill = classes().filter((c) => /^bg-[a-z-]+$/.test(c));
-    const label = classes().filter((c) => /^text-[a-z-]+$/.test(c) && !/^text-(xs|sm|base)$/.test(c));
+    const label = classes().filter(
+      (c) => /^text-[a-z-]+$/.test(c) && !/^text-(xs|sm|base)$/.test(c)
+    );
     expect(fill).toHaveLength(1);
     expect(label).toHaveLength(1);
     expect(themeTokenOf(fill[0]!, "bg-")).toBe(DESTRUCTIVE_BUTTON_CONTRAST.background);
