@@ -35,11 +35,13 @@ import {
 } from "./terminalPlacement";
 import { isForegroundDispatch } from "./dispatchSource";
 import { readTerminalPaneInfo } from "@/services/terminal/readTerminalPaneInfo";
+import { launchFromRestoreRecovery } from "@/services/terminal/restoreRecoveryLaunch";
 import { UnactionableTargetError } from "@/services/actions/unactionableTarget";
 import { logWarn } from "@/utils/logger";
 import {
   RestartOnPresetArgsSchema,
   SetHoldOnRestartArgsSchema,
+  StartHeldArgsSchema,
   TerminalKillBatchArgsSchema,
 } from "./terminalLifecycleActionArgs";
 
@@ -269,6 +271,14 @@ export const terminalLifecycleActionRuns = {
     const targetId = terminalId ?? focusedAtDispatch;
     if (!targetId) return;
     const terminal = state.panelsById[targetId];
+    // `restartTerminal` only logs its refusal of a held pane, so without this
+    // the caller reads a pane still waiting for its conversation as restarted
+    // and launches a replacement beside it (#15270).
+    if (terminal && isPtyPanel(terminal) && terminal.restoreRecovery) {
+      throw new UnactionableTargetError(
+        `Terminal '${targetId}' is held for recovery (${terminal.restoreRecovery.reason}) and hasn't started, so there's nothing to restart. Start it in place with terminal.startHeld.`
+      );
+    }
     if (!isConfirmed(args, ctx) && terminalHasRunningAgentSession(terminal)) {
       stageConfirmation(
         {
@@ -284,6 +294,50 @@ export const terminalLifecycleActionRuns = {
     }
     clearPendingIf("restart");
     state.restartTerminal(targetId);
+  },
+  "terminal.startHeld": async (args: unknown) => {
+    const { terminalId, start } = StartHeldArgsSchema.parse(args);
+    const panel = usePanelStore.getState().panelsById[terminalId];
+    if (!panel || !isPtyPanel(panel)) {
+      throw new UnactionableTargetError(`No terminal '${terminalId}' in this project.`);
+    }
+    const recovery = panel.restoreRecovery;
+    if (!recovery) {
+      throw new UnactionableTargetError(
+        `Terminal '${terminalId}' isn't held for recovery; use terminal.restart for a running one.`
+      );
+    }
+    if (recovery.awaitingDestination) {
+      throw new UnactionableTargetError(
+        `Terminal '${terminalId}' is waiting for a worktree to run in. Move it onto one, or keep its original folder from the pane.`
+      );
+    }
+    if (panel.location !== "grid" && panel.location !== "dock") {
+      throw new UnactionableTargetError(
+        `Terminal '${terminalId}' is in the ${panel.location}; only a held pane in the grid or dock can start.`
+      );
+    }
+    // Only the conversation the hold recorded, never one the caller names:
+    // choosing among the rest is what the hold leaves to the user (#12434).
+    const sessionId = start === "resume" ? recovery.sessionId : undefined;
+    if (start === "resume" && sessionId === undefined) {
+      throw new UnactionableTargetError(
+        `Terminal '${terminalId}' was held (${recovery.reason}) with no recorded conversation to resume. Start it fresh, or leave the pane for the user to pick one.`
+      );
+    }
+    const outcome = await launchFromRestoreRecovery(
+      terminalId,
+      sessionId !== undefined ? { kind: "resume", sessionId } : { kind: "fresh" }
+    );
+    if (outcome === "held-elsewhere") {
+      throw new UnactionableTargetError(
+        `Another pane already has conversation '${sessionId}' open, or is opening it.`
+      );
+    }
+    if (outcome === "unavailable") {
+      throw new Error(`Terminal '${terminalId}' changed while it was starting and didn't launch.`);
+    }
+    return { terminalId, start, ...(sessionId !== undefined && { sessionId }) };
   },
   "terminal.restartOnPreset": async (
     args: unknown,

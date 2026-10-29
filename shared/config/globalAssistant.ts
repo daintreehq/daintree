@@ -158,6 +158,7 @@ export const GLOBAL_WITHHELD_TOOLS: ReadonlySet<string> = new Set([
   "terminal.close",
   "terminal.kill",
   "terminal.restart",
+  "terminal.startHeld",
   "terminal.closeAll",
   "worktree.delete",
   "copyTree.injectToTerminal",

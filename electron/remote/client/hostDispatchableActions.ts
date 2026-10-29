@@ -110,6 +110,7 @@ export const HOST_DISPATCHABLE_ACTION_IDS: ReadonlySet<string> = new Set([
   "terminal.sendKeys",
   "terminal.sendKeysOwned",
   "terminal.setClientMetadata",
+  "terminal.startHeld",
   "terminal.waitUntilIdle",
   "terminal.waitUntilIdleBatch",
   "terminal.watch",

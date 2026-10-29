@@ -74,10 +74,16 @@ const optimisticPanelCloseMock = vi.hoisted(() => ({
 }));
 vi.mock("@/services/terminal/optimisticPanelClose", () => optimisticPanelCloseMock);
 
+const launchFromRestoreRecoveryMock = vi.hoisted(() => vi.fn());
+vi.mock("@/services/terminal/restoreRecoveryLaunch", () => ({
+  launchFromRestoreRecovery: launchFromRestoreRecoveryMock,
+}));
+
 import { registerTerminalLifecycleActions } from "../terminalLifecycleActions";
 import type { TerminalPendingDestructiveActionSnapshot } from "@/store/terminalPendingDestructiveActionStore";
 import { MAX_KILL_BATCH_TERMINALS } from "@shared/types/terminalKillBatch";
 import { TerminalInOtherProjectError } from "@shared/utils/terminalInOtherProject";
+import { UnactionableTargetError } from "@/services/actions/unactionableTarget";
 import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 
 // The service mock never evaluates the real module, so nothing registers it;
@@ -438,7 +444,8 @@ describe("terminal.closeAll result contract (#11805)", () => {
 
 type AgentPanel = {
   id: string;
-  location: "grid" | "dock" | "trash";
+  kind?: string;
+  location: "grid" | "dock" | "trash" | "background";
   excludeFromPersistence?: boolean;
   removeOnExit?: boolean;
   detectedAgentId?: string;
@@ -446,6 +453,7 @@ type AgentPanel = {
   agentState?: string;
   worktreeId?: string;
   agentPresetId?: string;
+  restoreRecovery?: { reason: string; sessionId?: string; awaitingDestination?: true };
 };
 
 function setRichPanelState(options: { focusedId?: string | null; panels: AgentPanel[] }) {
@@ -1044,6 +1052,144 @@ describe("terminal.restart confirm gate", () => {
     await run("terminal.restart", { terminalId: "p1", confirmed: true });
 
     expect(restartTerminal).toHaveBeenCalledWith("p1");
+  });
+
+  it("fails on a pane held for recovery, naming the hold, instead of reporting success", async () => {
+    const { restartTerminal } = setRichPanelState({
+      focusedId: "p1",
+      panels: [
+        {
+          id: "p1",
+          location: "grid",
+          launchAgentId: "codex",
+          restoreRecovery: { reason: "sibling-owns-resume-latest-slot" },
+        },
+      ],
+    });
+    const run = setupActions();
+
+    const failure = run("terminal.restart", { terminalId: "p1", confirmed: true });
+
+    await expect(failure).rejects.toBeInstanceOf(UnactionableTargetError);
+    await expect(failure).rejects.toThrow(/sibling-owns-resume-latest-slot/);
+    expect(restartTerminal).not.toHaveBeenCalled();
+  });
+});
+
+describe("terminal.startHeld (#15270)", () => {
+  function setHeldPane(panel: Partial<AgentPanel> = {}) {
+    return setRichPanelState({
+      panels: [
+        {
+          id: "p1",
+          location: "grid",
+          launchAgentId: "codex",
+          restoreRecovery: { reason: "host-ended-uncleanly", sessionId: "sess-1" },
+          ...panel,
+        },
+      ],
+    });
+  }
+
+  it("resumes the conversation the hold recorded, in place", async () => {
+    setHeldPane();
+    launchFromRestoreRecoveryMock.mockResolvedValue("launched");
+    const run = setupActions();
+
+    const result = await run("terminal.startHeld", { terminalId: "p1", start: "resume" });
+
+    expect(launchFromRestoreRecoveryMock).toHaveBeenCalledWith("p1", {
+      kind: "resume",
+      sessionId: "sess-1",
+    });
+    expect(result).toEqual({ terminalId: "p1", start: "resume", sessionId: "sess-1" });
+  });
+
+  it("starts a new conversation on fresh, even when the hold recorded one", async () => {
+    setHeldPane();
+    launchFromRestoreRecoveryMock.mockResolvedValue("launched");
+    const run = setupActions();
+
+    const result = await run("terminal.startHeld", { terminalId: "p1", start: "fresh" });
+
+    expect(launchFromRestoreRecoveryMock).toHaveBeenCalledWith("p1", { kind: "fresh" });
+    expect(result).toEqual({ terminalId: "p1", start: "fresh" });
+  });
+
+  it("refuses to resume a hold with no recorded conversation rather than starting fresh", async () => {
+    setHeldPane({ restoreRecovery: { reason: "sibling-owns-resume-latest-slot" } });
+    const run = setupActions();
+
+    const failure = run("terminal.startHeld", { terminalId: "p1", start: "resume" });
+
+    await expect(failure).rejects.toBeInstanceOf(UnactionableTargetError);
+    await expect(failure).rejects.toThrow(/sibling-owns-resume-latest-slot/);
+    expect(launchFromRestoreRecoveryMock).not.toHaveBeenCalled();
+  });
+
+  it("never resumes a conversation the caller names in place of the recorded one", async () => {
+    setHeldPane();
+    launchFromRestoreRecoveryMock.mockResolvedValue("launched");
+    const run = setupActions();
+
+    await run("terminal.startHeld", { terminalId: "p1", start: "resume", sessionId: "other" });
+
+    expect(launchFromRestoreRecoveryMock).toHaveBeenCalledWith("p1", {
+      kind: "resume",
+      sessionId: "sess-1",
+    });
+  });
+
+  it.each([
+    ["a pane that isn't held", { restoreRecovery: undefined }, /isn't held/],
+    [
+      "a pane waiting for a worktree",
+      { restoreRecovery: { reason: "destination-unavailable", awaitingDestination: true as const } },
+      /waiting for a worktree/,
+    ],
+    ["a held pane in the trash", { location: "trash" as const }, /in the trash/],
+    ["a panel with no process", { kind: "browser" }, /No terminal 'p1'/],
+  ])("refuses %s without launching", async (_label, panel, message) => {
+    setHeldPane(panel);
+    const run = setupActions();
+
+    const failure = run("terminal.startHeld", { terminalId: "p1", start: "fresh" });
+
+    await expect(failure).rejects.toBeInstanceOf(UnactionableTargetError);
+    await expect(failure).rejects.toThrow(message);
+    expect(launchFromRestoreRecoveryMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses a pane that isn't in this view", async () => {
+    setRichPanelState({ panels: [] });
+    const run = setupActions();
+
+    await expect(
+      run("terminal.startHeld", { terminalId: "missing", start: "fresh" })
+    ).rejects.toBeInstanceOf(UnactionableTargetError);
+    expect(launchFromRestoreRecoveryMock).not.toHaveBeenCalled();
+  });
+
+  it("fails without retry advice when another pane has the conversation", async () => {
+    setHeldPane();
+    launchFromRestoreRecoveryMock.mockResolvedValue("held-elsewhere");
+    const run = setupActions();
+
+    const failure = run("terminal.startHeld", { terminalId: "p1", start: "resume" });
+
+    await expect(failure).rejects.toBeInstanceOf(UnactionableTargetError);
+    await expect(failure).rejects.toThrow(/sess-1/);
+  });
+
+  it("fails, rather than reporting a launch, when the pane changed mid-start", async () => {
+    setHeldPane();
+    launchFromRestoreRecoveryMock.mockResolvedValue("unavailable");
+    const run = setupActions();
+
+    const failure = run("terminal.startHeld", { terminalId: "p1", start: "fresh" });
+
+    await expect(failure).rejects.toThrow(/didn't launch/);
+    await expect(failure).rejects.not.toBeInstanceOf(UnactionableTargetError);
   });
 });
 

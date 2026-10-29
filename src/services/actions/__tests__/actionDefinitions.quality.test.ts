@@ -1088,6 +1088,7 @@ const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
   "terminal.restartOnPreset",
   "terminal.restartOnPresetOwned",
   "terminal.restartAll",
+  "terminal.startHeld",
   "terminal.arm",
   "worktree.delete",
   // Delegates into `worktree.delete` from the main process, so it has to carry
@@ -1244,6 +1245,11 @@ const BYPASS_WIRED: ReadonlyArray<ActionId> = [
   // the generic McpConfirmDialog, which is mounted globally and keyed on the
   // pending request rather than on any one action id.
   "terminal.killBatch",
+  // Agent/MCP-only start of a held pane (#15270). Palette-hidden; the user
+  // starts one from the pane's own recovery gate, which calls the launcher
+  // directly rather than ActionService, so the generic McpConfirmDialog is the
+  // only confirm and there is no dispatch path to co-locate a dialog with.
+  "terminal.startHeld",
   // Agent/MCP-only — palette-hidden and unbound, configured from Settings via the
   // client (not ActionService). danger:"confirm" gates agent dispatch (resetting
   // all agents at once is destructive-local with no undo); there is no UI

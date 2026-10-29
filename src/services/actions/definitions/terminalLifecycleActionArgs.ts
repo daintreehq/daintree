@@ -26,3 +26,10 @@ export const SetHoldOnRestartArgsSchema = z.object({
     .describe("An agent terminal this plugin started with agent.launch."),
   hold: z.boolean().describe("False hands the terminal back to the resume setting."),
 });
+
+export const StartHeldArgsSchema = z.object({
+  terminalId: z.string().min(1).describe("A held pane: one with `restored.heldReason`."),
+  start: z
+    .enum(["resume", "fresh"])
+    .describe("resume reopens the conversation its hold recorded, if any; fresh starts a new one."),
+});

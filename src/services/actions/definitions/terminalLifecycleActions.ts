@@ -12,6 +12,7 @@ import { TerminalRestoredSchema } from "./schemas";
 import {
   RestartOnPresetArgsSchema,
   SetHoldOnRestartArgsSchema,
+  StartHeldArgsSchema,
   TerminalKillBatchArgsSchema,
 } from "./terminalLifecycleActionArgs";
 import type { TerminalLifecycleActionRunId } from "./terminalLifecycleActions.impl";
@@ -352,7 +353,7 @@ export function registerTerminalLifecycleActions(
     id: "terminal.restart",
     title: "Restart terminal",
     description:
-      "Restart a terminal's process in place, keeping the pane. Returns before the restart finishes; watch its status before sending. A running agent session is left alone unless confirmed; otherwise whatever ran is killed and unsaved state lost. A panel with no process is ignored.",
+      "Restart a terminal's process in place, keeping the pane. Returns before the restart finishes; watch its status before sending. A running agent session is left alone unless confirmed; otherwise whatever ran is killed and unsaved state lost. Fails on a held pane.",
     category: "terminal",
     kind: "command",
     danger: "confirm",
@@ -371,6 +372,35 @@ export function registerTerminalLifecycleActions(
     }),
     run: (args: unknown, ctx: ActionContext) =>
       runTerminalLifecycleAction("terminal.restart", args, ctx),
+  }));
+
+  // The MCP way out of a restore hold (#15270): a held pane has no process for
+  // terminal.restart to restart, and launching a replacement beside it leaves
+  // the original waiting in the grid. Confirm-gated, because which conversation
+  // a held pane continues is the user's call (#12434).
+  actions.set("terminal.startHeld", () => ({
+    id: "terminal.startHeld",
+    title: "Start held pane",
+    description:
+      "Start a pane restore held, in place under the same id, rather than launching a replacement beside it. Only the conversation its hold recorded can be resumed. Returns once the launch is queued; watch its status before sending.",
+    category: "terminal",
+    kind: "command",
+    danger: "confirm",
+    scope: "renderer",
+    dangerRationale:
+      "Starts the held agent, resuming its recorded conversation or beginning a new one: the choice restore left to you.",
+    keywords: ["resume", "recover", "held", "restore"],
+    // Needs a held pane's id and a choice the palette has no way to ask for;
+    // the pane carries its own buttons for both.
+    palette: { mode: "hidden" },
+    argsSchema: StartHeldArgsSchema,
+    resultSchema: z.object({
+      terminalId: z.string(),
+      start: z.enum(["resume", "fresh"]),
+      sessionId: z.string().optional().describe("The conversation asked for, on resume."),
+    }),
+    run: (args: unknown, ctx: ActionContext) =>
+      runTerminalLifecycleAction("terminal.startHeld", args, ctx),
   }));
 
   actions.set("terminal.restartOnPreset", () => ({

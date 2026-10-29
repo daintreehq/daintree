@@ -434,6 +434,7 @@ export const BUILT_IN_ACTION_IDS = [
   "terminal.restart",
   "terminal.restartOnPreset",
   "terminal.restartOnPresetOwned",
+  "terminal.startHeld",
   "terminal.redraw",
   "terminal.forceResume",
   "terminal.toggleInputLock",
