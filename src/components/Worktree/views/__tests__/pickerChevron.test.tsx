@@ -8,7 +8,13 @@ import { describe, it, expect, vi, afterEach, beforeAll } from "vitest";
 import { render, cleanup } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { PickerChevron } from "@/components/ui/PickerChevron";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { BaseBranchCombobox } from "../BaseBranchCombobox";
 import { ExistingBranchPicker } from "../ExistingBranchPicker";
 import { RecipePickerPopover } from "../RecipePickerPopover";
