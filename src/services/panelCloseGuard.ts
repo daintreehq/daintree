@@ -6,8 +6,8 @@ import { logError } from "@/utils/logger";
  * The panel store has no confirm-before-remove hook, and giving it one would
  * make every synchronous close path async. Instead the surfaces that *ask* for
  * a close consult this registry first: the optimistic-close coordinator (grid
- * X, Cmd+W, grid tab close, `terminal.trash`), the docked tab close, and the
- * Alt+click force close. A panel with no guard takes exactly the path it took
+ * X, Cmd+W, grid tab close, `terminal.trash`), the docked tab close, the
+ * Trash pill drop, and the Alt+click force close. A panel with no guard takes exactly the path it took
  * before — the registry only adds a wait where something registered one.
  *
  * Bulk and teardown paths (the panel-count warning, worktree deletion,
