@@ -1418,7 +1418,12 @@ describe("voiceInput — session identity", () => {
     it("counts each run a pause starts, and none for one it already has", async () => {
       await start(ownerA, "a");
       // Each pause's runs reach OpenAI before the next pause replaces them.
-      for (const last of ["then the lint", "then the lint", "then the lint check"]) {
+      for (const last of [
+        "then the lint",
+        "then the lint",
+        "then the lint",
+        "then the lint check",
+      ]) {
         await prefetch(ownerA, "a", "run the tests", last);
         await settle();
       }

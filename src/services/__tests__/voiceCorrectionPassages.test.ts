@@ -35,6 +35,11 @@ describe("settlePassageReplies", () => {
     expect(results.map((result) => result.text)).toEqual(["A", "B"]);
     // Its timing and its prefetch come together, from the same reply.
     expect(last).toBe(lastBack);
+    expect(last).toStrictEqual({
+      text: "A",
+      timing: { prepMs: 8, requestMs: 1_400 },
+      prefetch: "not_matched",
+    });
   });
 
   it("takes a last reply that carries nothing over an earlier one that did", async () => {
@@ -48,7 +53,9 @@ describe("settlePassageReplies", () => {
     second.resolve(lastBack);
 
     // Nothing of the earlier reply's carries over to stand in for it.
-    expect((await settled).last).toBe(lastBack);
+    const { last } = await settled;
+    expect(last).toBe(lastBack);
+    expect(last).toStrictEqual({ text: "B", timing: null });
   });
 
   it("has no last reply for no passages", async () => {

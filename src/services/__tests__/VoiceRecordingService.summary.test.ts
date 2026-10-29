@@ -503,9 +503,12 @@ describe("VoiceRecordingService — session summary (#14617)", () => {
     // The worklet's partial chunk, said before the stop, lands after it.
     vi.mocked(node.port.postMessage).mockImplementation((message: unknown) => {
       if ((message as { type?: string } | null)?.type !== "flush") return;
-      clock += 30;
-      sendChunk(node, 2_000);
-      void Promise.resolve().then(() => node.port.onmessage?.({ data: { type: "flushed" } }));
+      // Posted back from the audio thread, after the stop is under way.
+      void Promise.resolve().then(() => {
+        clock += 30;
+        sendChunk(node, 2_000);
+        node.port.onmessage?.({ data: { type: "flushed" } });
+      });
     });
     clock += 800;
     await service.stop("Dictation stopped.", { reason: "user" });
