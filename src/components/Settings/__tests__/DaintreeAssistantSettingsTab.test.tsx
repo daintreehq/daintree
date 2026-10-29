@@ -140,7 +140,13 @@ vi.mock("../SettingsInput", () => ({
 const helpPanelState = {
   preferredAgentId: null as string | null,
   droppedPreferredAgentId: null as string | null,
+  // The one lane on screen, flattened: `selectActiveSlot` projects the state as it.
+  activeSlot: 0,
   sessionId: null as string | null,
+  agentId: null as string | null,
+  terminalId: null as string | null,
+  globalSelected: false,
+  globalTarget: null,
   setPreferredAgent: vi.fn(),
   clearDroppedPreferredAgent: vi.fn(),
 };
@@ -204,6 +210,11 @@ import type { HelpAssistantTier } from "@shared/types";
 
 const writeText = vi.fn().mockResolvedValue(undefined);
 
+interface HelpApi {
+  getGlobalAssistantState: ReturnType<typeof vi.fn>;
+  onGlobalAssistantChanged: ReturnType<typeof vi.fn>;
+}
+
 interface HelpAssistantApi {
   getSettings: ReturnType<typeof vi.fn>;
   setSettings: ReturnType<typeof vi.fn>;
@@ -234,7 +245,8 @@ interface SystemApi {
 function installApi(
   helpAssistant: Partial<HelpAssistantApi> = {},
   mcpServer: Partial<McpServerApi> = {},
-  system: Partial<SystemApi> = {}
+  system: Partial<SystemApi> = {},
+  help: Partial<HelpApi> = {}
 ) {
   const helpDefaults: HelpAssistantApi = {
     getSettings: vi.fn().mockResolvedValue({
@@ -295,7 +307,21 @@ function installApi(
       lastChecked: null,
     }),
   };
+  const globalHelpDefaults: HelpApi = {
+    getGlobalAssistantState: vi.fn().mockResolvedValue({
+      phase: "absent",
+      generation: 0,
+      agentId: null,
+      terminalId: null,
+      attachments: [],
+      inputOwner: null,
+      inputEpoch: 0,
+      subject: null,
+    }),
+    onGlobalAssistantChanged: vi.fn(() => () => {}),
+  };
   window.electron = {
+    help: { ...globalHelpDefaults, ...help },
     helpAssistant: { ...helpDefaults, ...helpAssistant },
     mcpServer: { ...mcpDefaults, ...mcpServer },
     system: { ...systemDefaults, ...system },
@@ -2288,6 +2314,8 @@ describe("SessionLiveStatusCard (live help session)", () => {
 
   afterEach(() => {
     helpPanelState.sessionId = null;
+    helpPanelState.agentId = null;
+    helpPanelState.globalSelected = false;
   });
 
   const settingsWithTier = (tier: HelpAssistantTier) => ({
@@ -2383,6 +2411,72 @@ describe("SessionLiveStatusCard (live help session)", () => {
     );
 
     await waitFor(() => expect(getLiveSessionStatus).toHaveBeenCalledWith({ sessionId: "help-1" }));
+  });
+
+  it("names the lane it reads and the agent running it (#14990)", async () => {
+    helpPanelState.agentId = "claude";
+    installApi(
+      {
+        getSettings: vi.fn().mockResolvedValue(settingsWithTier("core")),
+        getLiveSessionStatus: vi
+          .fn()
+          .mockResolvedValue({ connected: true, tier: "core", activeGrants: [] }),
+      },
+      {}
+    );
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+
+    await waitFor(() => expect(container.textContent).toContain("matches the configured default"));
+    expect(
+      container.querySelector('[data-testid="assistant-live-session-identity"]')?.textContent
+    ).toBe("Project · Session 1 · Claude Code");
+  });
+
+  it("never reads the project lane's status while the dock shows Global (#14990)", async () => {
+    helpPanelState.globalSelected = true;
+    const getLiveSessionStatus = vi
+      .fn()
+      .mockResolvedValue({ connected: true, tier: "core", activeGrants: [] });
+    installApi(
+      { getSettings: vi.fn().mockResolvedValue(settingsWithTier("core")), getLiveSessionStatus },
+      {},
+      {},
+      {
+        getGlobalAssistantState: vi.fn().mockResolvedValue({
+          phase: "running",
+          generation: 1,
+          agentId: "codex",
+          terminalId: "g-1",
+          attachments: [],
+          inputOwner: null,
+          inputEpoch: 0,
+          subject: {
+            hostId: "local",
+            scope: { kind: "global" },
+            terminalId: "g-1",
+            incarnation: 1,
+          },
+        }),
+      }
+    );
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+
+    await waitFor(() => expect(container.textContent).toContain("Running. Its tool set"), {
+      timeout: 5000,
+    });
+    expect(
+      container.querySelector('[data-testid="assistant-live-session-identity"]')?.textContent
+    ).toBe("Global · Codex");
+    expect(getLiveSessionStatus).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Approve grant" })).toBeNull();
   });
 });
 
