@@ -27,10 +27,15 @@ import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { initBuiltInPanelKinds } from "@/panels/registry";
 import { registerPanelFocusHandler } from "@/components/Panel/panelFocusRegistry";
 import { SCRATCH_REFUSAL_CAPTION, SCRATCH_REFUSAL_STATUS } from "@/services/voiceScratchCommand";
+import {
+  unresolvedFileReferencesCaption,
+  unresolvedFileReferencesStatus,
+} from "@/services/voiceFileReferences";
 import { HybridInputBar } from "../HybridInputBar";
 import { _resetPaneFocusRequestsForTesting } from "../paneFocusRequest";
 
 const WT_ID = "/repo/wt";
+const MISSED = [{ description: "old API" }];
 const isMac = /Mac/.test(navigator.platform);
 const originalElectron = Object.getOwnPropertyDescriptor(window, "electron");
 
@@ -95,7 +100,12 @@ afterEach(() => {
   unregisterTerminal?.();
   unregisterTerminal = null;
   _resetPaneFocusRequestsForTesting();
-  useVoiceRecordingStore.setState({ status: "idle", activeTarget: null, scratchRefusal: null });
+  useVoiceRecordingStore.setState({
+    status: "idle",
+    activeTarget: null,
+    scratchRefusal: null,
+    fileReferenceNote: null,
+  });
   useFleetArmingStore.setState({ armedIds: new Set() });
   if (originalElectron) Object.defineProperty(window, "electron", originalElectron);
   else delete (window as { electron?: unknown }).electron;
@@ -351,6 +361,65 @@ describe("HybridInputBar with a host that says whether the terminal took the sen
 
     expect(scratchCaption()).toBeNull();
     expect(caption()?.textContent).toBe("Not sent");
+  });
+
+  it("keeps a missed file reference through a send the terminal took (#14983)", async () => {
+    const { container, type, pressEnter, settle } = await mount();
+    const fileCaption = () => container.querySelector("[data-file-reference-caption]");
+    await type("link to the old API");
+    act(() => {
+      useVoiceRecordingStore.setState({
+        fileReferenceNote: { panelId: "term-1", references: MISSED, id: 1 },
+      });
+    });
+
+    await pressEnter();
+    await settle(true);
+
+    expect(draft()).toBe("");
+    expect(fileCaption()?.textContent).toBe(unresolvedFileReferencesCaption(MISSED));
+  });
+
+  it("lets a send refused after a missed file reference take the border back", async () => {
+    const { container, type, pressEnter, settle, caption } = await mount();
+    const fileCaption = () => container.querySelector("[data-file-reference-caption]");
+    await type("link to the old API");
+    await pressEnter();
+    act(() => {
+      useVoiceRecordingStore.setState({
+        fileReferenceNote: { panelId: "term-1", references: MISSED, id: 1 },
+      });
+    });
+    expect(fileCaption()).not.toBeNull();
+    expect(caption()).toBeNull();
+
+    await settle(false);
+
+    expect(useVoiceRecordingStore.getState().fileReferenceNote).toBeNull();
+    expect(fileCaption()).toBeNull();
+    expect(caption()?.textContent).toBe("Not sent");
+  });
+
+  it("says a missed file reference in the Expanded Editor's header, and from inside its dialog", async () => {
+    const { chord } = await mount();
+    await chord("e");
+    act(() => {
+      for (const cb of frames.splice(0)) cb(0);
+    });
+    const dialog = document.querySelector('[role="dialog"]');
+    expect(dialog).not.toBeNull();
+
+    act(() => {
+      useVoiceRecordingStore.setState({
+        fileReferenceNote: { panelId: "term-1", references: MISSED, id: 1 },
+      });
+    });
+
+    expect(dialog!.textContent).toContain(unresolvedFileReferencesCaption(MISSED));
+    const spoken = Array.from(dialog!.querySelectorAll('[role="status"]')).map(
+      (node) => node.textContent
+    );
+    expect(spoken.join("|")).toContain(unresolvedFileReferencesStatus(MISSED));
   });
 
   it("says a scratch refusal in the Expanded Editor's header, and from inside its dialog", async () => {

@@ -414,3 +414,53 @@ describe("HybridInputBar dictated send with the next dictation already started (
     expect(draft()).toBe("next");
   });
 });
+
+describe("HybridInputBar with a missed file reference arriving during a dictated send (#14983)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    useVoiceRecordingStore.setState({ fileReferenceNote: null });
+  });
+
+  it("holds the note while the send waits, then shows it its full time after", async () => {
+    const pending = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(pending.promise);
+    const onSend = vi.fn();
+    act(() => {
+      dictate("link to the old API");
+    });
+    const view = await mount(onSend);
+    const caption = () => document.querySelector("[data-file-reference-caption]");
+
+    await act(async () => {
+      runScopeHandlers(view, new KeyboardEvent("keydown", { key: "Enter" }), "editor");
+    });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const note = { panelId: PANEL_ID, references: [{ description: "old API" }], id: 1 };
+    act(() => {
+      useVoiceRecordingStore.setState({ fileReferenceNote: note });
+    });
+    expect(caption()).toBeNull();
+
+    // A cleanup slower than the note lasts.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(useVoiceRecordingStore.getState().fileReferenceNote).toBe(note);
+
+    await act(async () => {
+      pending.resolve({ action: "no_change", correctedText: "link to the old API" });
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(onSend).toHaveBeenCalledTimes(1);
+    expect(onSend.mock.calls[0]![0].text).toBe("link to the old API");
+    expect(caption()).not.toBeNull();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6_000);
+    });
+    expect(useVoiceRecordingStore.getState().fileReferenceNote).toBeNull();
+    expect(caption()).toBeNull();
+  });
+});
