@@ -76,8 +76,10 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
   // different recipe (#14994). Shadowed recipes stay listed (dimmed, marked
   // "Overridden") rather than vanishing — the row still launches, resolved to
   // the winner (#11510).
+  // Customize… stays while any recipe exists, so a project whose recipes are
+  // all worktree recipes still reaches the dialog rather than "No recipes yet".
   const offeredRecipes = branchName ? recipes : recipes.filter(isStartingLayoutRecipe);
-  const hasRecipes = offeredRecipes.length > 0;
+  const hasRecipes = recipes.length > 0;
   const items: QuickCreateItem[] = hasRecipes
     ? [
         ...offeredRecipes.map((r): QuickCreateItem => ({ ...r, _kind: "recipe" })),

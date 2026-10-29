@@ -213,12 +213,62 @@ describe("useQuickCreatePalette — worktree-scoped recipes (#14994)", () => {
     );
   });
 
-  it("offers no rows when every recipe is worktree-scoped and the pick opens the dialog", () => {
-    quickCreateContext.value = { issue: null, pr: null };
-    mockRecipes.value = [makeRecipe({ id: "pinned", projectId: "p", worktreeId: "wt-1" })];
+  it("keeps worktree recipes for a PR, whose title names the branch", () => {
+    quickCreateContext.value = { issue: null, pr: { number: 12, title: "Tidy the sidebar" } };
+    mockRecipes.value = recipes();
 
     renderHook(() => useQuickCreatePalette());
 
-    expect(listedIds()).toEqual([]);
+    expect(listedIds()).toEqual(["project", "pinned", "__customize__"]);
+  });
+
+  it("keeps worktree recipes when a provider-suggested branch stands in for an unusable title", () => {
+    quickCreateContext.value = {
+      issue: { number: 7, title: "!!!", branchName: "eng-7-fix" } as never,
+      pr: null,
+    };
+    mockRecipes.value = recipes();
+
+    renderHook(() => useQuickCreatePalette());
+
+    expect(listedIds()).toEqual(["project", "pinned", "__customize__"]);
+  });
+
+  it("still offers Customize… when every recipe is a worktree recipe and the pick opens the dialog", () => {
+    quickCreateContext.value = { issue: null, pr: null };
+    mockRecipes.value = [makeRecipe({ id: "pinned", projectId: "p", worktreeId: "wt-1" })];
+
+    const { result } = renderHook(() => useQuickCreatePalette());
+    expect(listedIds()).toEqual(["__customize__"]);
+
+    act(() => {
+      result.current.confirmItem(paletteCapture.items[0] as never);
+    });
+
+    expect(openCreateDialogMock).toHaveBeenCalledWith(null);
+  });
+
+  it("judges a shadowed row by its own scope, not its winner's, on the dialog path", () => {
+    // The dialog lists rows by their own id, so a shadowed worktree row would
+    // still be swapped out even though its winner is project-wide, while a
+    // shadowed project row is listed there and hands its own id over.
+    quickCreateContext.value = { issue: null, pr: null };
+    mockRecipes.value = [
+      makeRecipe({ id: "winner", scope: "inrepo" }),
+      makeRecipe({ id: "project-loser", projectId: "p", shadowedBy: "Work" }),
+      makeRecipe({ id: "pinned-loser", projectId: "p", worktreeId: "wt-1", shadowedBy: "Work" }),
+    ];
+
+    const { result } = renderHook(() => useQuickCreatePalette());
+    expect(listedIds()).toEqual(["winner", "project-loser", "__customize__"]);
+
+    const loser = (paletteCapture.items as Array<{ id: string }>).find(
+      (i) => i.id === "project-loser"
+    );
+    act(() => {
+      result.current.confirmItem(loser as never);
+    });
+
+    expect(openCreateDialogMock).toHaveBeenCalledWith(null, { initialRecipeId: "project-loser" });
   });
 });
