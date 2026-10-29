@@ -235,6 +235,9 @@ describe("VoiceSubmitProgress", () => {
     });
 
     it("tells it once: a receipt that has faded stays gone", () => {
+      // Every animation hands back this one, so it holds the caption's fade last.
+      const fade = { cancel() {}, pause() {}, onfinish: null as (() => void) | null };
+      animate.mockReturnValue(fade);
       const onPresentChange = vi.fn();
       const view = render(
         <VoiceSubmitProgress
@@ -252,7 +255,6 @@ describe("VoiceSubmitProgress", () => {
       );
       expect(captionOf(view.container)).toMatch(/failed/);
 
-      const fade = animate.mock.results.at(-1)!.value as { onfinish: (() => void) | null };
       act(() => {
         fade.onfinish?.();
       });
