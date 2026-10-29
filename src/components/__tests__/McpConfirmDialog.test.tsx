@@ -268,6 +268,30 @@ describe("McpConfirmDialog", () => {
     });
   });
 
+  describe("decision window (#14989)", () => {
+    it("does not charge a queued request for the time it waited behind another", async () => {
+      vi.useFakeTimers();
+      try {
+        const first = enqueue({ requestId: "req-first", actionTitle: "Delete worktree" });
+        const second = enqueue({ requestId: "req-second", actionTitle: "Push branch" });
+        render(<McpConfirmDialog />);
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(25_000);
+        });
+        act(() => {
+          fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+        });
+        expect(await first).toEqual({ decision: "rejected" });
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(20_000);
+        });
+        await expectStillPending(second);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   describe("selectable target checklist (#12123)", () => {
     it("starts with every target checked and names the count on the confirm button", async () => {
       vi.useFakeTimers();
