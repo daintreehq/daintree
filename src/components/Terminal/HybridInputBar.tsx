@@ -1154,6 +1154,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     // so an earlier dictated send's outcome is never read out again over it;
     // a dictated send leaves its own outcome to speak until it is refused.
     const [sendNote, setSendNote] = useState<{ terminalId: string; refused: boolean } | null>(null);
+    const dropSendRefusal = () =>
+      setSendNote((note) => (note?.refused ? { ...note, refused: false } : note));
     const submitAttemptRef = useRef(0);
     const notingRefusal = useCallback(
       (submit: (outgoing: string) => Promise<boolean>, dictated: boolean) =>
@@ -1310,6 +1312,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     // what it is waiting on is only told once the wait outlasts the inline
     // gate, so a send that goes at once says nothing more.
     const isVoiceSubmitting = voiceSubmitPhase !== null;
+    // A dictated send waiting is the newest send: its progress and outcome,
+    // cancellation included, speak from here.
+    if (isVoiceSubmitting && sendNote !== null) setSendNote(null);
     const isVoiceSendHandingOver = voiceSubmitOutcome?.kind === "sending";
     const voiceSubmitAttempt = voiceSubmitWait?.attempt ?? voiceSubmitOutcome?.attempt ?? 0;
     const showVoiceSubmitStatus = useDeferredLoading(
@@ -1373,11 +1378,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     // Editor waits there, and a live region outside its modal goes unheard.
     const voiceSubmitAnnouncer = (
       <div role="status" aria-live="polite" className="sr-only">
-        {ownSendNote && !voiceSubmitWait
-          ? isSendRefused
-            ? SEND_HELD_STATUS
-            : ""
-          : voiceSubmitStatus}
+        {ownSendNote ? (isSendRefused ? SEND_HELD_STATUS : "") : voiceSubmitStatus}
       </div>
     );
     // The Expanded Editor has no composer shell to draw the wait's progress
@@ -1647,7 +1648,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       applyDocChange: (next) => {
         // Before the guard: the composer's own writes (a template, a completion)
         // change the draft the note was about too.
-        setSendNote((note) => (note?.refused ? { ...note, refused: false } : note));
+        dropSendRefusal();
         if (next === lastEmittedValueRef.current) return false;
         lastEmittedValueRef.current = next;
         setValue(next);
@@ -1681,7 +1682,13 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       handleDictationEscape,
       hasPendingVoiceCorrection,
       stashEditorState,
-      popStashedEditorState,
+      // A popped stash replaces the editor's state outright, past the
+      // document-change listener that drops the note.
+      popStashedEditorState: (terminalId, projectId) => {
+        const stashed = popStashedEditorState(terminalId, projectId);
+        if (stashed) dropSendRefusal();
+        return stashed;
+      },
       setActiveCompletionContext,
       setIsExpanded,
       setSelectedIndex,

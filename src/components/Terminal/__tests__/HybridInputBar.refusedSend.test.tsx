@@ -146,20 +146,24 @@ async function mount({ isolated = false } = {}) {
     });
   };
   await act(async () => {});
-  const view = EditorView.findFromDOM(result.container.querySelector<HTMLElement>(".cm-editor")!)!;
+  // A move to another terminal mounts a new editor.
+  const liveView = () =>
+    EditorView.findFromDOM(result.container.querySelector<HTMLElement>(".cm-editor")!)!;
+  const view = liveView();
   view.contentDOM.focus();
 
   const type = async (text: string) => {
     await act(async () => {
-      view.dispatch({
-        changes: { from: view.state.doc.length, insert: text },
+      const live = liveView();
+      live.dispatch({
+        changes: { from: live.state.doc.length, insert: text },
         userEvent: "input.type",
       });
     });
   };
   const pressEnter = async () => {
     await act(async () => {
-      runScopeHandlers(view, new KeyboardEvent("keydown", { key: "Enter" }), "editor");
+      runScopeHandlers(liveView(), new KeyboardEvent("keydown", { key: "Enter" }), "editor");
     });
   };
   const settle = async (accepted: boolean) => {
@@ -295,7 +299,7 @@ describe("HybridInputBar with a host that says whether the terminal took the sen
   });
 
   it("drops the note when the composer moves to another terminal, and a late refusal stays with the first", async () => {
-    const { type, pressEnter, settle, caption, announced, switchTo } = await mount();
+    const { submitText, type, pressEnter, settle, caption, announced, switchTo } = await mount();
     await type("ship it");
     await pressEnter();
     await settle(false);
@@ -306,8 +310,9 @@ describe("HybridInputBar with a host that says whether the terminal took the sen
     expect(announced()).not.toContain("Not sent");
 
     await switchTo("term-1");
-    await type("again");
+    await type(" again");
     await pressEnter();
+    expect(submitText).toHaveBeenLastCalledWith("ship it again", []);
     await switchTo("term-2");
     await settle(false);
     expect(caption()).toBeNull();
