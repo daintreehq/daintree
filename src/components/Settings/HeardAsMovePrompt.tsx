@@ -37,7 +37,16 @@ export function HeardAsMovePrompt({
   }, [takesFocus]);
 
   return (
-    <div className="space-y-2">
+    // Escape answers the question rather than reaching the dialog around it.
+    <div
+      className="space-y-2"
+      onKeyDown={(event) => {
+        if (event.key !== "Escape") return;
+        event.preventDefault();
+        event.stopPropagation();
+        onCancel();
+      }}
+    >
       <p className="text-sm text-text-secondary">{heardAsMoveQuestion(term, conflicts)}</p>
       <SettingsRowActions>
         <Button ref={cancelRef} size="sm" variant="outline" onClick={onCancel}>

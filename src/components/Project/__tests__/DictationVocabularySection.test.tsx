@@ -165,10 +165,15 @@ describe("DictationVocabularySection", () => {
       );
       render(<DictationVocabularySection projectId="p1" />);
       await screen.findByText("Zustand");
+      const status = screen.getByRole("status");
+      expect(status.textContent).toBe("");
       fireEvent.change(termInput(), { target: { value: "Zoostand" } });
       fireEvent.change(heardAsInput(), { target: { value: "Zoo Stand" } });
+      act(() => heardAsInput().focus());
       fireEvent.keyDown(heardAsInput(), { key: "Enter" });
 
+      expect(screen.getByRole("status")).toBe(status);
+      expect(document.activeElement).toBe(heardAsInput());
       const question = "“Zoo Stand” already belongs to Zustand. Move it to Zoostand?";
       expect(screen.getByRole("status").textContent).toBe(question);
       expect(screen.getAllByText(question)).toHaveLength(2);

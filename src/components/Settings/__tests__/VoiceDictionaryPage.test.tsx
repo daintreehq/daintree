@@ -292,6 +292,19 @@ describe("VoiceDictionaryPage", () => {
 
       fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
       expect(document.activeElement).toBe(heard);
+
+      // Asked from the field, the question leaves the keyboard there; Escape answers it.
+      act(() => heard.focus());
+      fireEvent.keyDown(heard, { key: "Enter" });
+      expect(document.activeElement).toBe(heard);
+      const onDialogKey = vi.fn();
+      document.addEventListener("keydown", onDialogKey);
+      fireEvent.keyDown(screen.getByRole("button", { name: "Move phrase" }), { key: "Escape" });
+      document.removeEventListener("keydown", onDialogKey);
+      expect(onDialogKey).not.toHaveBeenCalled();
+      expect(screen.queryByRole("button", { name: "Move phrase" })).toBeNull();
+      expect(document.activeElement).toBe(heard);
+
       fireEvent.click(screen.getByRole("button", { name: "Save" }));
       fireEvent.click(screen.getByRole("button", { name: "Move phrase" }));
 

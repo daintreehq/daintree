@@ -35,6 +35,20 @@ describe("describeHeardAsConflicts", () => {
     ).toBe("“zoo stand” already belongs to Zustand");
   });
 
+  it("limits the phrases it names after dropping repeats", () => {
+    expect(
+      describeHeardAsConflicts(
+        [
+          { phrase: "a", owner: "X" },
+          { phrase: "A", owner: "X" },
+          { phrase: "b", owner: "X" },
+          { phrase: "c", owner: "Y" },
+        ],
+        2
+      )
+    ).toBe("“a” and “b” already belong to X, and 1 more");
+  });
+
   it("counts the phrases past the limit", () => {
     const conflicts = ["a", "b", "c", "d"].map((phrase) => ({ phrase, owner: "Term" }));
     expect(describeHeardAsConflicts(conflicts, 2)).toBe(
