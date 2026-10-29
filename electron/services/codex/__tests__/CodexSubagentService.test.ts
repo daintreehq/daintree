@@ -885,7 +885,15 @@ describe("matchCodexRestoreSessions", () => {
       if (method !== "thread/list") return {};
       requests.push(params);
       if (params.sortKey === "recency_at") return { data: recency, nextCursor: null };
-      return pages[(params.cursor as string | undefined) ?? "first"] ?? { data: [] };
+      const page = pages[(params.cursor as string | undefined) ?? "first"] ?? { data: [] };
+      // Filters by source the way the server does: absent means interactive only.
+      const kinds = (params.sourceKinds as string[] | undefined) ?? ["cli", "vscode"];
+      return {
+        ...page,
+        data: page.data.filter((thread) =>
+          kinds.includes((thread as { source?: string }).source ?? "cli")
+        ),
+      };
     });
     return requests;
   }
@@ -993,7 +1001,7 @@ describe("matchCodexRestoreSessions", () => {
   it("answers nothing when a row past the cut-off is out of order", async () => {
     scriptPages({
       first: {
-        data: [row("t-a", "Task A"), row("t-old", "Old", AT_S - 3_600), row("t-b", "Task A")],
+        data: [row("t-a", "Task A"), row("t-old", "Old", AT_S - 3_600), row("t-b", "Other")],
         nextCursor: null,
       },
     });
@@ -1009,6 +1017,7 @@ describe("matchCodexRestoreSessions", () => {
   it.each([
     ["a root with no id", { id: undefined, sessionId: undefined }],
     ["a root with no first message", { preview: undefined }],
+    ["a root whose first message isn't text", { preview: [] }],
   ])("answers nothing when it reads %s", async (_label, broken) => {
     scriptPages({
       first: { data: [row("t-a", "Task A"), row("t-x", "x", AT_S + 2, broken)], nextCursor: null },
@@ -1022,16 +1031,54 @@ describe("matchCodexRestoreSessions", () => {
     expect(result.matches).toEqual([]);
   });
 
-  it("answers nothing when one thread is listed twice with different details", async () => {
-    scriptPages({
-      first: {
-        data: [row("t-x", "Task A", AT_S + 900), row("t-y", "Task A"), row("t-x", "Task A")],
-        nextCursor: null,
-      },
-    });
+  it.each([
+    [
+      "creation times",
+      [row("t-x", "Task A", AT_S + 900), row("t-y", "Task A"), row("t-x", "Task A")],
+    ],
+    ["first messages", [row("t-y", "Task A"), row("t-x", "Other"), row("t-x", "Task A")]],
+  ])("answers nothing when one thread is listed twice with different %s", async (_label, data) => {
+    scriptPages({ first: { data, nextCursor: null } });
 
     const result = await matchCodexRestoreSessions({
       scopes: [{ cwd: "/repo", panes: [pane("a", "Task A")] }],
+      exclude: [],
+    });
+
+    expect(result.matches).toEqual([]);
+  });
+
+  it.each(["vscode", "exec", "appServer", "unknown"])(
+    "counts a %s thread as a rival to a cli one",
+    async (source) => {
+      scriptPages({
+        first: {
+          data: [row("t-rival", "Task A", AT_S + 4, { source }), row("t-a", "Task A")],
+          nextCursor: null,
+        },
+      });
+
+      const result = await matchCodexRestoreSessions({
+        scopes: [{ cwd: "/repo", panes: [pane("a", "Task A")] }],
+        exclude: [],
+      });
+
+      expect(result.matches).toEqual([]);
+    }
+  );
+
+  it.each([
+    ["a malformed last row", [row("t-b", "Task B", AT_S + 3, { recencyAt: AT_S + 50 }), null]],
+    ["an empty page", []],
+  ])("answers nothing when the `--last` read ends on %s with more to come", async (_l, recency) => {
+    scriptSession((method, params) => {
+      if (method !== "thread/list") return {};
+      if (params.sortKey === "recency_at") return { data: recency, nextCursor: "more" };
+      return { data: [row("t-b", "Task B", AT_S + 4), row("t-a", "Task A")], nextCursor: null };
+    });
+
+    const result = await matchCodexRestoreSessions({
+      scopes: [{ cwd: "/repo", reserveLatest: true, panes: [pane("a", "Task A")] }],
       exclude: [],
     });
 

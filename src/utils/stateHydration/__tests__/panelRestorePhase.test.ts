@@ -3082,12 +3082,21 @@ describe("restorePanelsPhase — naming held panes' conversations by launch prom
     expect(matchRestoreSessionsMock).not.toHaveBeenCalled();
   });
 
+  it("asks nothing for a folder with a sibling whose prompt record was cut", async () => {
+    await restore([
+      codexPane("kept", undefined, { agentSessionId: "s-1" }),
+      codexPane("a", "Task A"),
+      codexPane("cut", undefined, {
+        firstPrompt: { text: "Task A", via: "launch", at: AT, truncated: true },
+      } as Partial<TerminalState>),
+    ]);
+
+    expect(matchRestoreSessionsMock).not.toHaveBeenCalled();
+  });
+
   it("only treats a launch prompt kept whole as evidence", async () => {
     await restore([
       codexPane("kept", undefined, { agentSessionId: "s-1" }),
-      codexPane("cut", undefined, {
-        firstPrompt: { text: "Task", via: "launch", at: AT, truncated: true },
-      } as Partial<TerminalState>),
       codexPane("sent", undefined, {
         firstPrompt: { text: "Task", via: "send", at: AT },
       } as Partial<TerminalState>),

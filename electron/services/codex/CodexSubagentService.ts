@@ -775,7 +775,8 @@ async function listResumeLatestIds(call: CodexAppServerCall, cwds: string[]): Pr
   let top = Number.NEGATIVE_INFINITY;
   let ids: string[] = [];
   for (const thread of threads) {
-    if (!thread || asString(thread.parentThreadId) !== null) continue;
+    if (!thread || typeof thread !== "object") throw new RestoreMatchIncomplete();
+    if (asString(thread.parentThreadId) !== null) continue;
     const id = asString(thread.sessionId) ?? asString(thread.id);
     if (id === null) throw new RestoreMatchIncomplete();
     const activity = activityOf(thread);
@@ -786,10 +787,11 @@ async function listResumeLatestIds(call: CodexAppServerCall, cwds: string[]): Pr
       ids.push(id);
     }
   }
+  // Settled only by the end of the listing, or by a row already below the top.
   const last = threads[threads.length - 1];
-  if (last && ids.length > 0 && activityOf(last) === top && response.nextCursor !== null) {
-    throw new RestoreMatchIncomplete();
-  }
+  const settled =
+    response.nextCursor === null || (ids.length > 0 && last && activityOf(last) < top);
+  if (!settled) throw new RestoreMatchIncomplete();
   return ids;
 }
 

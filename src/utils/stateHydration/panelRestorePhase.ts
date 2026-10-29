@@ -520,16 +520,19 @@ async function launchPromptHash(text: string): Promise<string> {
  * anyone who came back to a row of them before this existed. Every other Codex
  * pane with a prompt on record goes along as a claimant only, so a thread it
  * might own is never handed to someone else. A folder is left out entirely
- * where something could be running a conversation nobody knows the id of: a
- * live PTY with no id, a pane the bulk probe didn't report or found alive in
- * another workspace, or a pane under a profile that can't be named to main.
+ * where a rival can't be counted: a live PTY with no id, a pane the bulk probe
+ * didn't report or found alive in another workspace, a pane under a profile
+ * that can't be named to main, or one whose prompt record was cut at its cap,
+ * which no digest can stand in for.
  *
  * Only a launch prompt kept whole is evidence. A sent one may follow whatever
  * was typed by hand, and one starting with `-` reached the CLI as an option.
- * A prompt cut at the record's cap opened a thread longer than any prompt that
- * asks, so it can't be a rival. A sibling with no prompt on record opened its
- * thread with something typed, which would have to repeat another pane's
- * launch prompt exactly, within minutes of that launch, to be mistaken for it.
+ * A sibling with no prompt on record is the one rival left uncounted, because
+ * holding a folder for it would hold every folder an agent was started in by
+ * hand. Taking its thread needs two things at once: it was handed this pane's
+ * exact launch prompt some other way (typed, or broadcast after a bare
+ * launch) within minutes of this launch, and this pane's own thread is
+ * missing, since otherwise both match and the pane is held as ambiguous.
  * Each prompt crosses as a digest of the form the CLI received, so no
  * conversation text leaves the renderer.
  *
@@ -620,9 +623,9 @@ function planCodexRestoreMatches(
     }
 
     const prompt = sanitizeFirstPrompt("firstPrompt" in saved ? saved.firstPrompt : undefined);
-    if (!prompt || prompt.truncated || prompt.at <= 0) continue;
+    if (!prompt || prompt.at <= 0) continue;
     const codexHome = codexHomeOf(saved.env);
-    if (codexHome === null || !MATCH_KEY_PATTERN.test(saved.id)) {
+    if (prompt.truncated || codexHome === null || !MATCH_KEY_PATTERN.test(saved.id)) {
       blockedScopes.add(scope);
       continue;
     }
