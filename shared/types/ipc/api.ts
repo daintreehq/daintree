@@ -3138,6 +3138,33 @@ export interface VoiceDictionaryState {
   suggestedDictionary: SuggestedDictionaryEntry[];
 }
 
+/**
+ * What to do with a heard-as phrase another entry in the same dictionary
+ * already has: refuse the whole change, leave the phrase out, or take it from
+ * that entry. Only the entry listed first ever fires for a phrase.
+ */
+export type HeardAsConflictPolicy = "reject" | "skip" | "move";
+
+/** A heard-as phrase an add or edit asked for that another entry already has. */
+export interface HeardAsConflict {
+  /** The phrase as it was asked for. */
+  phrase: string;
+  /** The term of the entry the phrase fires for now. */
+  owner: string;
+}
+
+/** An add or edit of the user's dictionary, and the phrases it didn't get. */
+export interface VoiceDictionaryChange extends VoiceDictionaryState {
+  /** Left out under "skip"; under "reject", why nothing changed. Empty otherwise. */
+  conflicts: HeardAsConflict[];
+}
+
+/** An add or edit of a project's dictionary, and the phrases it didn't get. */
+export interface ProjectVoiceDictionaryChange {
+  dictionary: VoiceDictionaryEntry[];
+  conflicts: HeardAsConflict[];
+}
+
 /** A word and what it was heard as, the pair a dismissed suggestion keeps from coming back. */
 export interface DismissedSuggestion {
   word: string;

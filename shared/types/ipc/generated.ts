@@ -3993,7 +3993,7 @@ export interface GeneratedIpcInvokeMap {
   };
   "voice-dictionary:accept-suggestion": {
     args: [__0: { word: string; utterance?: string | undefined }];
-    result: import("./api.js").VoiceDictionaryState;
+    result: import("./api.js").VoiceDictionaryChange;
   };
   "voice-dictionary:add": {
     args: [
@@ -4002,9 +4002,10 @@ export interface GeneratedIpcInvokeMap {
         heardAs?: string[] | undefined;
         source?: "manual" | "learned" | "imported" | undefined;
         addedAt?: number | undefined;
+        heardAsConflict?: "reject" | "skip" | "move" | undefined;
       },
     ];
-    result: import("./api.js").VoiceDictionaryState;
+    result: import("./api.js").VoiceDictionaryChange;
   };
   "voice-dictionary:add-to-project": {
     args: [
@@ -4013,10 +4014,11 @@ export interface GeneratedIpcInvokeMap {
         term: string;
         source?: "manual" | "learned" | "imported" | undefined;
         addedAt?: number | undefined;
+        heardAsConflict?: "reject" | "skip" | "move" | undefined;
         heardAs?: string[] | undefined;
       },
     ];
-    result: import("./api.js").VoiceDictionaryEntry[];
+    result: import("./api.js").ProjectVoiceDictionaryChange;
   };
   "voice-dictionary:dismiss-suggestion": {
     args: [__0: { word: string; utterance?: string | undefined }];
@@ -4040,19 +4042,30 @@ export interface GeneratedIpcInvokeMap {
   };
   "voice-dictionary:update": {
     args: [
-      __0: { term: string; changes: { term?: string | undefined; heardAs?: string[] | undefined } },
+      __0: {
+        term: string;
+        changes: {
+          term?: string | undefined;
+          heardAs?: string[] | undefined;
+          heardAsConflict?: "reject" | "move" | undefined;
+        };
+      },
     ];
-    result: import("./api.js").VoiceDictionaryState;
+    result: import("./api.js").VoiceDictionaryChange;
   };
   "voice-dictionary:update-in-project": {
     args: [
       __0: {
         term: string;
         projectId: string;
-        changes: { term?: string | undefined; heardAs?: string[] | undefined };
+        changes: {
+          term?: string | undefined;
+          heardAs?: string[] | undefined;
+          heardAsConflict?: "reject" | "move" | undefined;
+        };
       },
     ];
-    result: import("./api.js").VoiceDictionaryEntry[];
+    result: import("./api.js").ProjectVoiceDictionaryChange;
   };
   "voice-input:cancel": {
     args: [sessionId: string];

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { SuggestedDictionaryEntry, VoiceDictionaryEntry } from "../../types/ipc/api.js";
+import type {
+  HeardAsConflict,
+  SuggestedDictionaryEntry,
+  VoiceDictionaryEntry,
+} from "../../types/ipc/api.js";
 import {
   MAX_DICTIONARY_TERM_LENGTH,
   MAX_SUGGESTED_WORDS,
@@ -67,6 +71,95 @@ describe("addDictionaryEntry", () => {
     expect(added).toEqual({ term: "xterm", heardAs: ["ex term"], source: "imported", addedAt: T1 });
   });
 
+  describe("a heard-as phrase another entry already has", () => {
+    const entries = [entry("Zustand", { heardAs: ["zoo stand", "zu stand"] }), entry("Vite")];
+
+    it("refuses the whole add by default, naming the entry it fires for", () => {
+      const conflicts: HeardAsConflict[] = [];
+      const next = addDictionaryEntry(
+        entries,
+        { term: "Zoostand", heardAs: ["zoo-stand", "Zoo  Stand"] },
+        T1,
+        conflicts
+      );
+      expect(next).toBe(entries);
+      expect(conflicts).toEqual([{ phrase: "Zoo  Stand", owner: "Zustand" }]);
+    });
+
+    it("leaves the phrase out under skip, keeping the term and every free phrase", () => {
+      const conflicts: HeardAsConflict[] = [];
+      const next = addDictionaryEntry(
+        entries,
+        {
+          term: "Zoostand",
+          heardAs: ["Zoo  Stand", "zoo-stand"],
+          source: "imported",
+          heardAsConflict: "skip",
+        },
+        T1,
+        conflicts
+      );
+      expect(next).toEqual([
+        ...entries,
+        { term: "Zoostand", heardAs: ["zoo-stand"], source: "imported", addedAt: T1 },
+      ]);
+      expect(next[0]).toBe(entries[0]);
+      expect(conflicts).toEqual([{ phrase: "Zoo  Stand", owner: "Zustand" }]);
+    });
+
+    it("changes nothing under skip when an existing term only gains claimed phrases", () => {
+      expect(
+        addDictionaryEntry(
+          entries,
+          { term: "vite", heardAs: ["zu stand"], heardAsConflict: "skip" },
+          T1
+        )
+      ).toBe(entries);
+    });
+
+    it("moves the phrase, in every case and spacing, keeping each entry where it was", () => {
+      const legacy = [...entries, entry("Zoo", { heardAs: ["ZOO STAND"], addedAt: 9 })];
+      const conflicts: HeardAsConflict[] = [];
+      const next = addDictionaryEntry(
+        legacy,
+        { term: "vite", heardAs: ["zoo  stand"], heardAsConflict: "move" },
+        T1,
+        conflicts
+      );
+      expect(next).toEqual([
+        entry("Zustand", { heardAs: ["zu stand"] }),
+        entry("Vite", { heardAs: ["zoo  stand"] }),
+        entry("Zoo", { heardAs: [], addedAt: 9 }),
+      ]);
+      expect(conflicts).toEqual([]);
+    });
+
+    it("is no conflict for the entry the phrase already fires for", () => {
+      const legacy = [...entries, entry("Zoo", { heardAs: ["zoo stand"] })];
+      const conflicts: HeardAsConflict[] = [];
+      const next = addDictionaryEntry(
+        legacy,
+        { term: "zustand", heardAs: ["Zoo Stand", "zustand js"] },
+        T1,
+        conflicts
+      );
+      expect(next[0]!.heardAs).toEqual(["zoo stand", "zu stand", "zustand js"]);
+      expect(next[2]).toBe(legacy[2]);
+      expect(conflicts).toEqual([]);
+    });
+
+    it("takes a phrase back from its owner for an entry holding a copy that never fires", () => {
+      const legacy = [...entries, entry("Zoo", { heardAs: ["zoo stand"] })];
+      const next = addDictionaryEntry(
+        legacy,
+        { term: "Zoo", heardAs: ["zoo stand"], heardAsConflict: "move" },
+        T1
+      );
+      expect(next[0]!.heardAs).toEqual(["zu stand"]);
+      expect(next[2]).toBe(legacy[2]);
+    });
+  });
+
   it("refuses an empty or over-length term or heard-as phrase", () => {
     const tooLong = "a".repeat(MAX_DICTIONARY_TERM_LENGTH + 1);
     expect(() => addDictionaryEntry([], { term: "   " }, T1)).toThrow(/empty/);
@@ -126,6 +219,41 @@ describe("updateDictionaryEntry", () => {
     expect(message).toMatch(/already in the dictionary/);
     expect(message.toLowerCase()).not.toContain("daintree");
     expect(message.toLowerCase()).not.toContain("zustand");
+  });
+
+  it("refuses heard-as forms another entry fires for, reporting them rather than throwing", () => {
+    const conflicts: HeardAsConflict[] = [];
+    const next = updateDictionaryEntry(
+      entries,
+      "Daintree",
+      { term: "daintree", heardAs: ["day tree", "Zoo  Stand"] },
+      conflicts
+    );
+    expect(next).toBe(entries);
+    expect(conflicts).toEqual([{ phrase: "Zoo  Stand", owner: "zustand" }]);
+  });
+
+  it("moves heard-as forms from the entry that had them when asked to", () => {
+    const next = updateDictionaryEntry(entries, "Daintree", {
+      heardAs: ["day tree", "Zoo  Stand"],
+      heardAsConflict: "move",
+    });
+    expect(next).toEqual([
+      entry("Daintree", { heardAs: ["day tree", "Zoo  Stand"] }),
+      entry("zustand", { heardAs: [], source: "learned", addedAt: 5 }),
+    ]);
+  });
+
+  it("checks only a replaced heard-as list, so a rename alone keeps a copy that never fires", () => {
+    const legacy = [...entries, entry("Zoo", { heardAs: ["zoo stand"] })];
+    const conflicts: HeardAsConflict[] = [];
+    expect(updateDictionaryEntry(legacy, "zoo", { term: "ZOO" }, conflicts)[2]).toEqual(
+      entry("ZOO", { heardAs: ["zoo stand"] })
+    );
+    expect(updateDictionaryEntry(legacy, "Zoo", { heardAs: ["zoo stand"] }, conflicts)).toBe(
+      legacy
+    );
+    expect(conflicts).toEqual([{ phrase: "zoo stand", owner: "zustand" }]);
   });
 
   it("leaves the list alone when the entry is gone or nothing changes", () => {
@@ -215,6 +343,22 @@ describe("suggestions", () => {
       dictionary: [entry("Zustand", { heardAs: ["zoo stand"] })],
       suggestedDictionary: [],
     });
+  });
+
+  it("accepting learns the word without a heard form another entry already fires for", () => {
+    const state = {
+      dictionary: [entry("Zustand", { heardAs: ["zoo stand"] })],
+      suggestedDictionary: [suggestion("Zoostand", "Zoo Stand")],
+    };
+    const conflicts: HeardAsConflict[] = [];
+    expect(acceptSuggestion(state, "Zoostand", T1, undefined, conflicts)).toEqual({
+      dictionary: [
+        entry("Zustand", { heardAs: ["zoo stand"] }),
+        { term: "Zoostand", heardAs: [], source: "learned", addedAt: T1 },
+      ],
+      suggestedDictionary: [],
+    });
+    expect(conflicts).toEqual([{ phrase: "Zoo Stand", owner: "Zustand" }]);
   });
 
   it("accepting leaves an everyday heard form out, for a new term or one already there", () => {

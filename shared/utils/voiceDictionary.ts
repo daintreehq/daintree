@@ -1,5 +1,7 @@
 import type {
   DismissedSuggestion,
+  HeardAsConflict,
+  HeardAsConflictPolicy,
   SuggestedDictionaryEntry,
   VoiceDictionaryEntry,
   VoiceDictionarySource,
@@ -61,6 +63,64 @@ function appendHeardAs(existing: readonly string[], incoming: readonly string[])
 
 function sameList(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((value, i) => value === b[i]);
+}
+
+/** A heard-as phrase as a rule tells it apart: any case, any run of spaces. */
+export function heardAsKey(phrase: string): string {
+  return phrase.trim().split(/\s+/).join(" ").toLowerCase();
+}
+
+/**
+ * The term each heard-as phrase fires for, keyed by `heardAsKey`: the first
+ * entry that lists it, as the dictation rules give phrases out.
+ */
+export function heardAsOwners(entries: readonly VoiceDictionaryEntry[]): Map<string, string> {
+  const owners = new Map<string, string>();
+  for (const { term, heardAs } of entries) {
+    for (const phrase of heardAs) {
+      const key = heardAsKey(phrase);
+      if (!owners.has(key)) owners.set(key, term);
+    }
+  }
+  return owners;
+}
+
+/**
+ * The phrases in `heardAs` that fire for an entry other than the one `term`
+ * names, one conflict per phrase. A phrase that entry already fires for is
+ * no conflict, even where a later entry lists it too.
+ */
+export function findHeardAsConflicts(
+  owners: ReadonlyMap<string, string>,
+  term: string,
+  heardAs: readonly string[]
+): HeardAsConflict[] {
+  const self = fold(term.trim());
+  const seen = new Set<string>();
+  const conflicts: HeardAsConflict[] = [];
+  for (const raw of heardAs) {
+    const key = heardAsKey(raw);
+    const owner = owners.get(key);
+    if (owner === undefined || fold(owner) === self || seen.has(key)) continue;
+    seen.add(key);
+    conflicts.push({ phrase: raw.trim(), owner });
+  }
+  return conflicts;
+}
+
+/** Takes the conflicting phrases, in any case or spacing, off every entry but the one `term` names. */
+function releaseHeardAs(
+  entries: VoiceDictionaryEntry[],
+  term: string,
+  conflicts: readonly HeardAsConflict[]
+): VoiceDictionaryEntry[] {
+  if (conflicts.length === 0) return entries;
+  const keys = new Set(conflicts.map(({ phrase }) => heardAsKey(phrase)));
+  return entries.map((entry) => {
+    if (fold(entry.term) === fold(term)) return entry;
+    const heardAs = entry.heardAs.filter((phrase) => !keys.has(heardAsKey(phrase)));
+    return heardAs.length === entry.heardAs.length ? entry : { ...entry, heardAs };
+  });
 }
 
 /** The written terms, oldest first: the plain list keyterm assembly and the correction prompt take. */
@@ -184,24 +244,40 @@ export interface AddDictionaryEntryInput {
   source?: VoiceDictionarySource;
   /** Keeps the original time on a restored entry; defaults to now. */
   addedAt?: number;
+  /** A heard-as phrase another entry has refuses the add unless this says otherwise. */
+  heardAsConflict?: HeardAsConflictPolicy;
 }
 
 /**
  * Add a term, or, when it is already there under any casing, add only the
  * heard-as forms it doesn't have yet. The stored casing, source and time stay.
- * Returns the same array when nothing changed.
+ * A phrase another entry has is never saved beside it as a rule that can't
+ * fire: the add is refused, the phrase left out, or the phrase moved, by
+ * `heardAsConflict`. Refused and left-out phrases are pushed onto
+ * `conflicts`. Returns the same array when nothing changed.
  */
 export function addDictionaryEntry(
   entries: VoiceDictionaryEntry[],
   input: AddDictionaryEntryInput,
-  now: number
+  now: number,
+  conflicts?: HeardAsConflict[]
 ): VoiceDictionaryEntry[] {
   const term = requirePhrase(input.term, "term");
-  const heardAs = (input.heardAs ?? []).map((phrase) => requirePhrase(phrase, "heard-as phrase"));
-  const index = entries.findIndex((entry) => fold(entry.term) === fold(term));
+  const requested = (input.heardAs ?? []).map((phrase) => requirePhrase(phrase, "heard-as phrase"));
+  const policy = input.heardAsConflict ?? "reject";
+  const claimed = findHeardAsConflicts(heardAsOwners(entries), term, requested);
+  if (claimed.length > 0 && policy !== "move") {
+    conflicts?.push(...claimed);
+    if (policy === "reject") return entries;
+  }
+  const taken = new Set(claimed.map(({ phrase }) => heardAsKey(phrase)));
+  const heardAs =
+    policy === "move" ? requested : requested.filter((phrase) => !taken.has(heardAsKey(phrase)));
+  const base = policy === "move" ? releaseHeardAs(entries, term, claimed) : entries;
+  const index = base.findIndex((entry) => fold(entry.term) === fold(term));
   if (index < 0) {
     return [
-      ...entries,
+      ...base,
       {
         term,
         heardAs: appendHeardAs([], heardAs),
@@ -210,10 +286,10 @@ export function addDictionaryEntry(
       },
     ];
   }
-  const existing = entries[index]!;
+  const existing = base[index]!;
   const merged = appendHeardAs(existing.heardAs, heardAs);
-  if (merged.length === existing.heardAs.length) return entries;
-  return entries.map((entry, i) => (i === index ? { ...existing, heardAs: merged } : entry));
+  if (merged.length === existing.heardAs.length) return base;
+  return base.map((entry, i) => (i === index ? { ...existing, heardAs: merged } : entry));
 }
 
 /** Remove a term matched ignoring case. Returns the same array when it isn't there. */
@@ -231,17 +307,22 @@ export interface DictionaryEntryChanges {
   term?: string;
   /** Replaces the heard-as forms. */
   heardAs?: readonly string[];
+  /** A heard-as phrase another entry has refuses the edit unless it is moved here. */
+  heardAsConflict?: Exclude<HeardAsConflictPolicy, "skip">;
 }
 
 /**
  * Change one entry, found by its term ignoring case. An entry that has gone
  * since the caller last saw it is left gone. Source and time never change.
+ * New heard-as forms that fire for another entry refuse the edit, pushed onto
+ * `conflicts`, unless `heardAsConflict` moves them here.
  * Returns the same array when nothing changed.
  */
 export function updateDictionaryEntry(
   entries: VoiceDictionaryEntry[],
   term: string,
-  changes: DictionaryEntryChanges
+  changes: DictionaryEntryChanges,
+  conflicts?: HeardAsConflict[]
 ): VoiceDictionaryEntry[] {
   const key = fold(normalizePhrase(term) ?? "");
   const index = entries.findIndex((entry) => fold(entry.term) === key);
@@ -252,15 +333,20 @@ export function updateDictionaryEntry(
     // No term in the message: a thrown IPC error is logged in full, and terms are user content.
     throw new Error("That term is already in the dictionary");
   }
-  const nextHeardAs =
-    changes.heardAs === undefined
-      ? existing.heardAs
-      : appendHeardAs(
-          [],
-          changes.heardAs.map((phrase) => requirePhrase(phrase, "heard-as phrase"))
-        );
-  if (nextTerm === existing.term && sameList(nextHeardAs, existing.heardAs)) return entries;
-  return entries.map((entry, i) =>
+  let base = entries;
+  let nextHeardAs = existing.heardAs;
+  if (changes.heardAs !== undefined) {
+    const requested = changes.heardAs.map((phrase) => requirePhrase(phrase, "heard-as phrase"));
+    const claimed = findHeardAsConflicts(heardAsOwners(entries), existing.term, requested);
+    if (claimed.length > 0 && changes.heardAsConflict !== "move") {
+      conflicts?.push(...claimed);
+      return entries;
+    }
+    base = releaseHeardAs(entries, existing.term, claimed);
+    nextHeardAs = appendHeardAs([], requested);
+  }
+  if (nextTerm === existing.term && sameList(nextHeardAs, existing.heardAs)) return base;
+  return base.map((entry, i) =>
     i === index ? { ...existing, term: nextTerm, heardAs: nextHeardAs } : entry
   );
 }
@@ -313,13 +399,15 @@ export function mergeSuggestions(
  * everywhere the word is said, so the entry teaches only its term. A word no
  * longer queued was dismissed or accepted from somewhere else, so acting on
  * it now is acting on a stale copy: nothing changes, and a term removed since
- * stays removed.
+ * stays removed. A heard form another entry already fires for is left out and
+ * pushed onto `conflicts`; the word is still learned.
  */
 export function acceptSuggestion(
   state: VoiceDictionaryState,
   word: string,
   now: number,
-  utterance?: string
+  utterance?: string,
+  conflicts?: HeardAsConflict[]
 ): VoiceDictionaryState {
   const key = fold(normalizePhrase(word) ?? "");
   const suggestion = state.suggestedDictionary.find((entry) => fold(entry.word) === key);
@@ -335,8 +423,10 @@ export function acceptSuggestion(
         term: suggestion.word,
         heardAs: keepsHeard ? [heard] : [],
         source: "learned",
+        heardAsConflict: "skip",
       },
-      now
+      now,
+      conflicts
     ),
     suggestedDictionary: state.suggestedDictionary.filter((entry) => entry !== suggestion),
   };

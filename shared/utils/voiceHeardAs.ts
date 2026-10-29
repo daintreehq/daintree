@@ -1,5 +1,5 @@
 import type { VoiceDictionaryEntry } from "../types/ipc/api.js";
-import { MAX_DICTIONARY_TERM_LENGTH } from "./voiceDictionary.js";
+import { MAX_DICTIONARY_TERM_LENGTH, heardAsKey } from "./voiceDictionary.js";
 import { findProtectedRanges } from "./voiceProtectedSpans.js";
 import type { VoiceTextEdit } from "./voiceUncertainWords.js";
 
@@ -45,11 +45,9 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-const phraseKey = (phrase: string) => phrase.split(/\s+/).join(" ").toLowerCase();
-
 /**
  * Every heard-as pair, oldest entry first. A heard form claimed by two
- * entries belongs to the first. A form with no letters or digits can't be
+ * entries belongs to the first, as `heardAsOwners` reports. A form with no letters or digits can't be
  * matched as a word, and a term with a line break would move the breaks a
  * transcript is split on, so neither becomes a rule.
  */
@@ -60,7 +58,7 @@ export function collectHeardAsRules(entries: readonly VoiceDictionaryEntry[]): H
     if (LINE_BREAK_RE.test(term)) continue;
     for (const raw of heardAs) {
       const heard = raw.trim().split(/\s+/).join(" ");
-      const key = heard.toLowerCase();
+      const key = heardAsKey(heard);
       if (
         !HAS_WORD_RE.test(heard) ||
         heard.length > MAX_DICTIONARY_TERM_LENGTH ||
@@ -98,7 +96,7 @@ export function createHeardAsRewriter(rules: readonly HeardAsRule[]): HeardAsRew
     .sort((a, b) => b.heard.length - a.heard.length || a.index - b.index);
   const byKey = new Map<string, CompiledRule>();
   for (const rule of ordered) {
-    const key = phraseKey(rule.heard);
+    const key = heardAsKey(rule.heard);
     if (!byKey.has(key)) byKey.set(key, rule);
   }
   const pattern = new RegExp(
@@ -108,7 +106,7 @@ export function createHeardAsRewriter(rules: readonly HeardAsRule[]): HeardAsRew
   // The regex folds case for a few letters toLowerCase leaves alone ("ſ", "ς").
   const termFor = (match: string): string | undefined =>
     (
-      byKey.get(phraseKey(match)) ??
+      byKey.get(heardAsKey(match)) ??
       ordered.find((rule) => (rule.exact ??= new RegExp(`^(?:${rule.source})$`, "iu")).test(match))
     )?.term;
 
