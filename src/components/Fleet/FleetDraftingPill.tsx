@@ -15,6 +15,7 @@ import { detectUnresolvedVariables, splitByRecipeVariables } from "@/utils/recip
 import { RECIPE_VARIABLE_TOKEN } from "@/components/TerminalRecipe/recipeVariableTokens";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import type { FleetTargetPreview } from "./fleetExecution";
+import { isPtyPanel } from "@shared/types/panel";
 import { LIST_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { pluralize } from "@/lib/pluralize";
 
@@ -35,6 +36,21 @@ export function FleetDraftingPill(): ReactElement | null {
     }
     return n;
   });
+
+  // Previews rebuild on each keystroke, but locking a peer changes nothing the
+  // composer sees, so rebuild them here or the rows go stale until the next one.
+  const lockedPeers = usePanelStore((state) => {
+    let key = "";
+    for (const id of armOrder) {
+      const p = state.panelsById[id];
+      if (p && isPtyPanel(p) && p.isInputLocked === true) key += `${id}\0`;
+    }
+    return key;
+  });
+  useEffect(() => {
+    const preview = useFleetResolutionPreviewStore.getState();
+    if (preview.hasVariables) preview.setDraft(preview.draft);
+  }, [lockedPeers]);
 
   const open = useFleetResolutionPreviewStore((s) => s.open);
   const hasVariables = useFleetResolutionPreviewStore((s) => s.hasVariables);

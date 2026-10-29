@@ -186,6 +186,17 @@ describe("broadcastFleetRawInput", () => {
     expect(broadcastMock).toHaveBeenLastCalledWith(["a", "b", "c"], "y", false);
   });
 
+  it("never fans out raw input from a locked origin", () => {
+    seedPanels([makeTerminal("a", { isInputLocked: true }), makeTerminal("b"), makeTerminal("c")]);
+    useFleetArmingStore.getState().armIds(["a", "b", "c"]);
+    const before = useFleetArmingStore.getState().broadcastSignal;
+
+    expect(broadcastFleetRawInput("a", "x")).toBe(false);
+    expect(broadcastMock).not.toHaveBeenCalled();
+    expect(notifyUserInputMock).not.toHaveBeenCalled();
+    expect(useFleetArmingStore.getState().broadcastSignal).toBe(before);
+  });
+
   it("types only locally when the only armed peer is locked", () => {
     seedPanels([makeTerminal("a"), makeTerminal("b", { isInputLocked: true })]);
     useFleetArmingStore.getState().armIds(["a", "b"]);

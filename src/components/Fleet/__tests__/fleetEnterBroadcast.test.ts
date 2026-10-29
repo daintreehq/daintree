@@ -52,7 +52,11 @@ vi.mock("@/clients", async (importOriginal) => {
   };
 });
 
-import { cancelActiveBroadcast, tryFleetBroadcastFromEditor } from "../fleetEnterBroadcast";
+import {
+  cancelActiveBroadcast,
+  sendDraftToFleet,
+  tryFleetBroadcastFromEditor,
+} from "../fleetEnterBroadcast";
 
 function makeAgent(id: string): PtyPanelData {
   return {
@@ -489,23 +493,54 @@ describe("tryFleetBroadcastFromEditor — locked panes (#14964)", () => {
   });
 
   it("makes a pane a recipient again once it's unlocked while still armed", async () => {
+    arm(["a", "b", "c"]);
+    lock("b", true);
+    tryFleetBroadcastFromEditor("a", "first", vi.fn());
+    await flush();
+    await flush();
+    expect(submitMock.mock.calls.map((call) => call[0]).sort()).toEqual(["a", "c"]);
+
+    submitMock.mockClear();
+    lock("b", false);
+    expect(tryFleetBroadcastFromEditor("a", "second", vi.fn())).toBe(true);
+    await flush();
+    await flush();
+
+    expect(submitMock.mock.calls.map((call) => call[0]).sort()).toEqual(["a", "b", "c"]);
+  });
+
+  it("sends only to the origin when its only peer is locked, honouring its skip", async () => {
     arm(["a", "b"]);
     lock("b", true);
-    lock("b", false);
 
     expect(tryFleetBroadcastFromEditor("a", "hello", vi.fn())).toBe(true);
     await flush();
     await flush();
+    expect(submitMock.mock.calls.map((call) => call[0])).toEqual(["a"]);
 
-    expect(submitMock.mock.calls.map((call) => call[0]).sort()).toEqual(["a", "b"]);
+    submitMock.mockClear();
+    useFleetTargetOverridesStore.getState().setSkipped("a", true);
+    expect(tryFleetBroadcastFromEditor("a", "hello", vi.fn())).toBe(true);
+    await flush();
+    expect(submitMock).not.toHaveBeenCalled();
   });
 
-  it("leaves Enter to the pane's own send when its only peer is locked", async () => {
-    arm(["a", "b"]);
-    lock("b", true);
+  it("leaves a locked pane out of the ribbon's own send and restores it once unlocked", async () => {
+    arm(["a", "b", "c"]);
+    lock("c", true);
 
-    expect(tryFleetBroadcastFromEditor("a", "hello", vi.fn())).toBe(false);
-    await flush();
+    expect(await sendDraftToFleet("hello")).toBe(true);
+    expect(submitMock.mock.calls.map((call) => call[0]).sort()).toEqual(["a", "b"]);
+
+    submitMock.mockClear();
+    lock("c", false);
+    expect(await sendDraftToFleet("hello")).toBe(true);
+    expect(submitMock.mock.calls.map((call) => call[0]).sort()).toEqual(["a", "b", "c"]);
+
+    submitMock.mockClear();
+    lock("b", true);
+    lock("c", true);
+    expect(await sendDraftToFleet("hello")).toBe(false);
     expect(submitMock).not.toHaveBeenCalled();
   });
 

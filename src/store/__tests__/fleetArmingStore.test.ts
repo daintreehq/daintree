@@ -945,9 +945,11 @@ describe("fleetArmingStore", () => {
         makeAgentTerminal("c"),
       ]);
       expect(useFleetArmingStore.getState().armOrder).toEqual(["a", "b", "c"]);
+      expect(useFleetArmingStore.getState().armedIds.has("b")).toBe(true);
 
       seedPanels([makeAgentTerminal("a"), makeAgentTerminal("b"), makeAgentTerminal("c")]);
       expect(useFleetArmingStore.getState().armOrder).toEqual(["a", "b", "c"]);
+      expect(useFleetArmingStore.getState().armedIds.has("b")).toBe(true);
     });
 
     it("drops armed ids when a panel mutates into a non-PTY kind (#8957 batch B)", () => {

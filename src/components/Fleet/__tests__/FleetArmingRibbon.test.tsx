@@ -313,6 +313,7 @@ describe("FleetArmingRibbon", () => {
       }));
     });
     expect(screen.queryByTestId("fleet-row-input-locked-t2")).toBeNull();
+    expect(screen.getByLabelText("Focus backend·main")).toBeTruthy();
   });
 
   it("per-row disarm button in the popover calls disarmId", () => {

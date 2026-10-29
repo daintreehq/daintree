@@ -281,7 +281,12 @@ export const fleetActionRuns = {
         }
       }
       const stillFailed = new Set(result.transientlyFailedIds);
+      // A failed pane that's locked now was left out, not retried: its failure
+      // stays so it can be retried once it's unlocked.
+      const sent = new Set(eligibleTargets);
+      const { panelsById } = usePanelStore.getState();
       for (const id of targets) {
+        if (!sent.has(id) && isFleetArmEligible(getNarrowPanel(panelsById, id))) continue;
         if (!stillFailed.has(id) && !awaitingConfirmation.has(id)) {
           useFleetFailureStore.getState().dismissId(id);
         }

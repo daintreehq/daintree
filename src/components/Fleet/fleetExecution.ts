@@ -10,6 +10,7 @@ import {
 } from "@/services/terminal/terminalInstanceServiceAccessor";
 import { isTerminalFleetBroadcastTarget, isTerminalFleetEligible } from "@/store/fleetEligibility";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
+import { isPtyPanel } from "@shared/types/panel";
 import { replaceRecipeVariables, detectUnresolvedVariables } from "@/utils/recipeVariables";
 import {
   buildFleetBroadcastRecipeContext,
@@ -193,6 +194,14 @@ function submitAndNote(submission: ResolvedSubmission, retry: boolean): Promise<
   });
 }
 
+// Callers filter locked panes when they pick targets, but a pane locked while a
+// broadcast waits its turn or between large-paste batches must still get nothing.
+function isLocalTargetLocked(terminalId: string): boolean {
+  if (isCrossHostTargetId(terminalId)) return false;
+  const panel = getNarrowPanel(usePanelStore.getState().panelsById, terminalId);
+  return panel !== undefined && isPtyPanel(panel) && panel.isInputLocked === true;
+}
+
 function shouldBatchAcrossTargets(resolved: ResolvedSubmission[]): boolean {
   if (resolved.length <= FLEET_LARGE_PASTE_BATCH_SIZE) return false;
   for (const r of resolved) {
@@ -233,6 +242,9 @@ export async function executeFleetBroadcast(
   const retry = options.retry === true;
   const resolved = resolveSubmissions(draft, targetIds, perTargetOverrides);
   const results: PromiseSettledResult<void>[] = [];
+  // Parallel to `results`: what was actually sent, since a pane locked
+  // mid-broadcast drops out of its batch.
+  const dispatched: ResolvedSubmission[] = [];
   let dispatchedCount = 0;
   let finalized = false;
 
@@ -241,11 +253,11 @@ export async function executeFleetBroadcast(
   const buildResult = (cancelled: boolean): FleetExecutionResult => {
     const perTarget: FleetExecutionResult["perTarget"] = results.map((r, i) => {
       if (r.status === "fulfilled") {
-        return { terminalId: resolved[i]!.terminalId, status: "fulfilled" };
+        return { terminalId: dispatched[i]!.terminalId, status: "fulfilled" };
       }
       const reason = String(r.reason);
       return {
-        terminalId: resolved[i]!.terminalId,
+        terminalId: dispatched[i]!.terminalId,
         status: "rejected",
         reason,
         kind: classifyFleetRejectionReason(reason),
@@ -288,7 +300,8 @@ export async function executeFleetBroadcast(
           finalized = true;
           return buildResult(true);
         }
-        const batch = resolved.slice(i, i + FLEET_LARGE_PASTE_BATCH_SIZE);
+        const slice = resolved.slice(i, i + FLEET_LARGE_PASTE_BATCH_SIZE);
+        const batch = slice.filter((r) => !isLocalTargetLocked(r.terminalId));
         dispatchedCount += batch.length;
         // Enter `directing` on every target BEFORE submit dispatches —
         // mirrors what xterm onData → onUserInput does for the origin.
@@ -302,6 +315,7 @@ export async function executeFleetBroadcast(
         for (let j = 0; j < batchResults.length; j += 1) {
           const r = batchResults[j]!;
           results.push(r);
+          dispatched.push(batch[j]!);
           const terminalId = batch[j]!.terminalId;
           if (r.status === "fulfilled") {
             // Submit landed — close out directing and flip to working.
@@ -317,21 +331,23 @@ export async function executeFleetBroadcast(
         }
 
         const batchFailures = batchResults.filter((r) => r.status === "rejected").length;
-        useFleetBroadcastProgressStore.getState().advance(batch.length, batchFailures);
+        useFleetBroadcastProgressStore.getState().advance(slice.length, batchFailures);
 
         if (i + FLEET_LARGE_PASTE_BATCH_SIZE < resolved.length) {
           await yieldToScheduler();
         }
       }
     } else {
-      dispatchedCount = resolved.length;
+      const batch = resolved.filter((r) => !isLocalTargetLocked(r.terminalId));
+      dispatchedCount = batch.length;
       // Same ordering rule as the batched path — see comment above.
-      for (const r of resolved) noteUserInput(r.terminalId, r.payload);
-      const all = await Promise.allSettled(resolved.map((r) => submitAndNote(r, retry)));
+      for (const r of batch) noteUserInput(r.terminalId, r.payload);
+      const all = await Promise.allSettled(batch.map((r) => submitAndNote(r, retry)));
       for (let j = 0; j < all.length; j += 1) {
         const r = all[j]!;
         results.push(r);
-        const terminalId = resolved[j]!.terminalId;
+        dispatched.push(batch[j]!);
+        const terminalId = batch[j]!.terminalId;
         if (r.status === "fulfilled") {
           noteSubmitted(terminalId);
         } else {

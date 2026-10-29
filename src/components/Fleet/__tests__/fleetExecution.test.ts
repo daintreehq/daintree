@@ -607,7 +607,18 @@ describe("buildFleetTargetPreviews", () => {
     const locked = previews.find((p) => p.terminalId === "locked");
     expect(locked?.excluded).toBe(true);
     expect(locked?.exclusionReason).toBe("Input locked");
+    expect(locked?.inputLocked).toBe(true);
     expect(previews.find((p) => p.terminalId === "open")?.excluded).toBe(false);
+    expect(previews.find((p) => p.terminalId === "open")?.inputLocked).toBeUndefined();
+  });
+
+  it("doesn't call a dead pane input-locked", () => {
+    seedPanels([makeAgent("open"), makeAgent("dead", { isInputLocked: true, hasPty: false })]);
+    useFleetArmingStore.getState().armIds(["open", "dead"]);
+    const dead = buildFleetTargetPreviews("hi").find((p) => p.terminalId === "dead");
+    expect(dead?.excluded).toBe(true);
+    expect(dead?.inputLocked).toBeUndefined();
+    expect(dead?.exclusionReason).toBe("Panel no longer eligible");
   });
 
   it("falls back to 'Unknown' title when an armed id is no longer in the carrier", () => {
@@ -711,5 +722,51 @@ describe("filterEligibleIds", () => {
 
     seedPanels([makeAgent("a"), makeAgent("b", { isInputLocked: false })]);
     expect(filterEligibleIds(["a", "b"])).toEqual(["a", "b"]);
+  });
+});
+
+describe("executeFleetBroadcast — panes locked after targets were picked (#14964)", () => {
+  beforeEach(() => {
+    reset();
+  });
+
+  it("skips a target locked before dispatch and reports the rest against the right ids", async () => {
+    seedPanels([makeAgent("a"), makeAgent("b", { isInputLocked: true }), makeAgent("c")]);
+    submitMock.mockImplementation(async (id) => {
+      if (id === "c") throw new Error("EAGAIN: busy");
+    });
+
+    const result = await executeFleetBroadcast("hi", ["a", "b", "c"]);
+
+    expect(submitMock.mock.calls.map((call) => call[0])).toEqual(["a", "c"]);
+    expect(notifyUserInputMock.mock.calls.map((call) => call[0])).toEqual(["a", "c"]);
+    expect(result.perTarget.map((t) => [t.terminalId, t.status])).toEqual([
+      ["a", "fulfilled"],
+      ["c", "rejected"],
+    ]);
+    expect(result.failedIds).toEqual(["c"]);
+    expect(result.skippedCount).toBe(1);
+  });
+
+  it("skips a pane locked between large-paste batches", async () => {
+    const ids = Array.from({ length: FLEET_LARGE_PASTE_BATCH_SIZE + 2 }, (_, i) => `t${i}`);
+    seedPanels(ids.map((id) => makeAgent(id)));
+    const lateId = ids[ids.length - 1]!;
+    submitMock.mockImplementation(async (id) => {
+      if (id === ids[0]) {
+        usePanelStore.setState((s) => ({
+          panelsById: { ...s.panelsById, [lateId]: makeAgent(lateId, { isInputLocked: true }) },
+        }));
+      }
+    });
+
+    const result = await executeFleetBroadcast("x".repeat(120_000), ids);
+
+    const sent = submitMock.mock.calls.map((call) => call[0]);
+    expect(sent).not.toContain(lateId);
+    expect(sent).toHaveLength(ids.length - 1);
+    expect(result.successCount).toBe(ids.length - 1);
+    expect(result.skippedCount).toBe(1);
+    expect(useFleetBroadcastProgressStore.getState().isActive).toBe(false);
   });
 });

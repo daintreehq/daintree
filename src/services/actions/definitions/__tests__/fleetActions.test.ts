@@ -256,6 +256,30 @@ describe("fleet actions — threshold confirmation", () => {
     expect(write.mock.calls.map((c) => c[0])).toEqual(["full"]);
   });
 
+  it("fleet.accept and fleet.reject leave a locked waiting agent alone (#14964)", async () => {
+    seedPanels([
+      makeAgent("a", { agentState: "waiting" }),
+      makeAgent("locked", { agentState: "waiting", isInputLocked: true }),
+    ]);
+    useFleetArmingStore.getState().armIds(["a", "locked"]);
+    const registry = await buildRegistry();
+    await run(registry, "fleet.accept");
+    await run(registry, "fleet.reject");
+    expect(vi.mocked(terminalClient.write).mock.calls.map((c) => c[0])).toEqual(["a", "a"]);
+    expect(useFleetArmingStore.getState().armedIds.has("locked")).toBe(true);
+  });
+
+  it("fleet.interrupt leaves a locked working agent alone (#14964)", async () => {
+    seedPanels([
+      makeAgent("a", { agentState: "working" }),
+      makeAgent("locked", { agentState: "working", isInputLocked: true }),
+    ]);
+    useFleetArmingStore.getState().armIds(["a", "locked"]);
+    const registry = await buildRegistry();
+    await run(registry, "fleet.interrupt");
+    expect(terminalClient.batchDoubleEscape).toHaveBeenCalledWith(["a"]);
+  });
+
   it("fleet.accept drops terminals that are no longer eligible at dispatch time", async () => {
     seedPanels([
       makeAgent("a", { agentState: "waiting" }),
@@ -645,6 +669,20 @@ describe("fleet.retryFailures", () => {
     const [, targets, overrides] = call as [string, string[], Record<string, string>];
     expect(targets).toEqual(["t1"]);
     expect(overrides).toEqual({ t1: "ls\r" });
+  });
+
+  it("keeps a locked pane's failure for after it's unlocked, while dismissing the retried one", async () => {
+    seedPanels([makeAgent("t1"), makeAgent("t2", { isInputLocked: true })]);
+    useFleetArmingStore.getState().armIds(["t1", "t2"]);
+    vi.mocked(filterEligibleIds).mockReturnValueOnce(["t1"]);
+    useFleetFailureStore.setState({
+      failedIds: new Set(["t1", "t2"]),
+      payload: "ls\r",
+    });
+    const registry = await buildRegistry();
+    await run(registry, "fleet.retryFailures");
+    expect(vi.mocked(runManagedFleetBroadcast).mock.calls[0]?.[1]).toEqual(["t1"]);
+    expect([...useFleetFailureStore.getState().failedIds]).toEqual(["t2"]);
   });
 
   it("leaves out, and keeps failed, another host's agent whose safe retry window has passed", async () => {

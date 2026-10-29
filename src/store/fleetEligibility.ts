@@ -102,17 +102,21 @@ export function isAgentTerminalFleetEligible(
   return isTerminalFleetEligible(t) && isAgentTerminal(t);
 }
 
+// Accept, reject and interrupt write keystrokes, so a locked pane is left out
+// of them the same as a broadcast.
 export function isFleetWaitingAgentEligible(
   t: PanelInstance | CarrierPanel | undefined
 ): t is PtyPanelData {
-  return isAgentFleetActionEligible(t) && t.agentState === "waiting";
+  return isAgentFleetActionEligible(t) && t.isInputLocked !== true && t.agentState === "waiting";
 }
 
 export function isFleetInterruptAgentEligible(
   t: PanelInstance | CarrierPanel | undefined
 ): t is PtyPanelData {
   return (
-    isAgentFleetActionEligible(t) && (t.agentState === "working" || t.agentState === "waiting")
+    isAgentFleetActionEligible(t) &&
+    t.isInputLocked !== true &&
+    (t.agentState === "working" || t.agentState === "waiting")
   );
 }
 
