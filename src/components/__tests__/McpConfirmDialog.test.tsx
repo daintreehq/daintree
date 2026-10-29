@@ -395,9 +395,14 @@ describe("McpConfirmDialog", () => {
         );
         const next = enqueue({ requestId: "req-next", actionTitle: "Push branch" }, mainDeadline());
         render(<McpConfirmDialog />);
+        // Already mounted, and empty, so the expiry is a change it announces.
+        const status = screen.getByRole("status");
+        expect(status.textContent).toBe("");
         await act(async () => {
           await vi.advanceTimersByTimeAsync(MCP_CONFIRM_DECISION_MS);
         });
+        expect(screen.getByRole("status")).toBe(status);
+        expect(status.textContent).toContain("nothing ran");
 
         // The caller hears at once; the person still sees what they were answering.
         expect(await expiring).toEqual({ decision: "timeout" });
