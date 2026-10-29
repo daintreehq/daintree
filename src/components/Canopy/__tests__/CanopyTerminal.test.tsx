@@ -1,11 +1,20 @@
 // @vitest-environment jsdom
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import type { ILinkHandler } from "@xterm/xterm";
 import type { CanopyTerminalData, CanopyTerminalView } from "@shared/types/ipc/canopy";
+import type { FileLinkRoute } from "@/services/terminal/FileLinksAddon";
+
+/** The OSC 8 link the mock terminal holds: Claude Code prints issue links this way. */
+const OSC_URL = vi.hoisted(() => "https://github.com/daintreehq/daintree/issues/15332");
 
 const xterm = vi.hoisted(() => ({
   current: null as null | {
+    /** What the user has selected in the terminal. */
+    selection: string;
     writes: Array<string | Uint8Array>;
+    /** The Unicode version each write landed under. */
+    widths: string[];
     resizes: Array<[number, number]>;
     emitData: (data: string) => void;
   },
@@ -19,23 +28,51 @@ vi.mock("@xterm/xterm", () => ({
       onBufferChange: () => ({ dispose() {} }),
     };
     private onDataListener: ((data: string) => void) | null = null;
+    unicode = { activeVersion: "6" };
+    modes = { bracketedPasteMode: false };
     cols = 80;
     rows = 24;
     constructor(options: Record<string, unknown>) {
       this.options = { ...options };
       xterm.current = {
+        selection: "",
         writes: [],
+        widths: [],
         resizes: [],
         emitData: (data) => this.onDataListener?.(data),
       };
     }
-    open() {}
+    element: HTMLElement | undefined;
+    // An OSC 8 link, as xterm's own provider answers it: through the link
+    // handler the terminal was built with, or else with its `confirm()` prompt.
+    open(host: HTMLElement) {
+      this.element = host;
+      const link = document.createElement("a");
+      link.dataset.oscLink = "";
+      link.addEventListener("click", (event) => {
+        const handler = this.options.linkHandler as ILinkHandler | undefined;
+        if (handler) handler.activate(event, OSC_URL);
+        else window.confirm(`Do you want to navigate to ${OSC_URL}?`);
+      });
+      link.addEventListener("mouseover", (event) => {
+        const handler = this.options.linkHandler as ILinkHandler | undefined;
+        handler?.hover?.(event, OSC_URL, { start: { x: 1, y: 1 }, end: { x: 40, y: 1 } });
+      });
+      host.appendChild(link);
+    }
     focus() {}
+    getSelection() {
+      return xterm.current!.selection;
+    }
+    registerLinkProvider() {
+      return { dispose() {} };
+    }
     reset() {
       xterm.current!.writes.push("<reset>");
     }
     write(data: string | Uint8Array, callback?: () => void) {
       xterm.current!.writes.push(data);
+      xterm.current!.widths.push(this.unicode.activeVersion);
       callback?.();
     }
     resize(cols: number, rows: number) {
@@ -75,6 +112,25 @@ vi.mock("@/services/TerminalInstanceService", () => {
   };
 });
 
+const fileRoutes = vi.hoisted(() => [] as Array<FileLinkRoute | undefined>);
+vi.mock("@/services/terminal/TerminalAddonManager", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/services/terminal/TerminalAddonManager")>();
+  return {
+    ...actual,
+    createFileLinksAddon: (...args: Parameters<typeof actual.createFileLinksAddon>) => {
+      fileRoutes.push(args[3]);
+      return actual.createFileLinksAddon(...args);
+    },
+  };
+});
+
+vi.mock("@xterm/addon-unicode11", () => ({
+  Unicode11Addon: class {
+    activate() {}
+    dispose() {}
+  },
+}));
+
 vi.mock("@xterm/addon-webgl", () => {
   throw new Error("no WebGL in jsdom");
 });
@@ -85,6 +141,9 @@ import {
   type CanopyStreamState,
 } from "../CanopyTerminal";
 import type { CanopyTerminalApi } from "../canopyHostSource";
+import { ownCanopyTerminalApi } from "../canopyHostSource";
+import { TerminalLinkHandler } from "@/services/terminal/TerminalLinkHandler";
+import { actionService } from "@/services/ActionService";
 
 import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 
@@ -464,6 +523,7 @@ describe("CanopyTerminal", () => {
       let push: (chunk: CanopyTerminalData) => void = () => {};
       const api: CanopyTerminalApi = {
         holdsSize: false,
+        hostOf: () => "other-host",
         watchTerminal: vi.fn(
           () => new Promise<CanopyTerminalView>((resolve) => opens.push(resolve))
         ),
@@ -692,5 +752,127 @@ describe("CanopyTerminal", () => {
       await act(async () => retry?.click());
       expect(remote.opens).toHaveLength(2);
     });
+  });
+});
+
+describe("CanopyTerminal links, as the run's grid pane opens them (#15332)", () => {
+  let openLink: ReturnType<typeof vi.spyOn<TerminalLinkHandler, "openLink">>;
+  let confirm: ReturnType<typeof vi.spyOn<Window, "confirm">>;
+
+  beforeEach(() => {
+    fileRoutes.length = 0;
+    openLink = vi.spyOn(TerminalLinkHandler.prototype, "openLink").mockImplementation(() => {});
+    confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  });
+
+  afterEach(() => {
+    openLink.mockRestore();
+    confirm.mockRestore();
+  });
+
+  /** Another host's run, read through a stream that host serves. */
+  const otherHostApi = (): CanopyTerminalApi => ({
+    ...ownCanopyTerminalApi,
+    holdsSize: false,
+    hostOf: () => "other-host",
+    watchTerminal: () => new Promise<CanopyTerminalView>(() => {}),
+    onTerminalData: () => () => {},
+  });
+
+  const openMenu = (frame: Element) =>
+    act(() => {
+      frame.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true }));
+    });
+
+  it("opens an OSC 8 link through the grid's link handler, never xterm's confirm prompt", () => {
+    const { container } = mount();
+    fireEvent.click(container.querySelector("[data-osc-link]")!);
+    expect(confirm).not.toHaveBeenCalled();
+    expect(openLink).toHaveBeenCalledWith(OSC_URL, "run-1", expect.any(MouseEvent), {
+      hostId: "local",
+    });
+  });
+
+  it("opens another host's link from that host, for a terminal this view doesn't hold", () => {
+    const { container } = render(<CanopyTerminal runId="r" spawnedAt={1} api={otherHostApi()} />);
+    fireEvent.click(container.querySelector("[data-osc-link]")!);
+    expect(confirm).not.toHaveBeenCalled();
+    expect(openLink).toHaveBeenCalledWith(OSC_URL, null, expect.any(MouseEvent), {
+      hostId: "other-host",
+    });
+  });
+
+  it("opens the run's files in the viewer dialog, and another host's not at all", async () => {
+    render(<CanopyTerminal runId="run-1" spawnedAt={1} cwd="/repo" />);
+    render(<CanopyTerminal runId="r" spawnedAt={1} api={otherHostApi()} />);
+    await vi.waitFor(() => expect(fileRoutes).toHaveLength(2));
+    const [own, other] = fileRoutes;
+    expect(own?.dialogOnly).toBe(true);
+    expect(own?.refusal()).toBeNull();
+    expect(other?.refusal()).toMatch(/another host/);
+  });
+
+  it("offers the hovered link from its menu, and opens it from the run's host", async () => {
+    const { container, frame } = mount();
+    fireEvent.mouseOver(container.querySelector("[data-osc-link]")!);
+    openMenu(frame);
+    expect(screen.getByText("Copy link address")).toBeTruthy();
+    await act(async () => screen.getByText("Open link").click());
+    expect(openLink).toHaveBeenCalledWith(OSC_URL, "run-1", expect.any(MouseEvent), {
+      hostId: "local",
+    });
+  });
+
+  it("views a selected path in the viewer dialog, over the panel rather than behind it", async () => {
+    const dispatch = vi
+      .spyOn(actionService, "dispatch")
+      .mockResolvedValue({ ok: true, result: undefined });
+    const { frame } = mount();
+    xterm.current!.selection = "/repo/src/app.ts";
+    openMenu(frame);
+    await act(async () => screen.getByText("View file").click());
+    expect(dispatch).toHaveBeenCalledWith(
+      "file.view",
+      { path: "/repo/src/app.ts" },
+      expect.anything()
+    );
+    expect(dispatch).not.toHaveBeenCalledWith("file.openPanel", expect.anything(), expect.anything());
+    dispatch.mockRestore();
+  });
+
+  it("offers nothing to open for another host's selected path", () => {
+    const { container } = render(<CanopyTerminal runId="r" spawnedAt={1} api={otherHostApi()} />);
+    xterm.current!.selection = "/repo/src/app.ts";
+    openMenu(container.querySelector("[data-canopy-terminal]")!);
+    expect(screen.getByText("Copy")).toBeTruthy();
+    expect(screen.queryByText("View file")).toBeNull();
+  });
+
+  it("pastes from its menu through the open stream", async () => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { readText: async () => "ls", writeText: async () => {} },
+    });
+    const { frame } = mount();
+    await open({ watchId: 7, snapshot: { data: "", cols: 80, rows: 24 } });
+    openMenu(frame);
+    await act(async () => screen.getByText("Paste").click());
+    expect(terminalInput).toHaveBeenCalledWith(7, "ls");
+  });
+
+  it("answers Find itself, with a search of its own terminal, and sends the key nowhere", async () => {
+    const { container, frame } = mount();
+    await open({ watchId: 7, snapshot: { data: "", cols: 80, rows: 24 } });
+    const textarea = document.createElement("textarea");
+    frame.appendChild(textarea);
+    const reachedTerminal = vi.fn();
+    textarea.addEventListener("keydown", reachedTerminal);
+    fireEvent.keyDown(textarea, { key: "f", code: "KeyF", ctrlKey: true, metaKey: true });
+    expect(reachedTerminal).not.toHaveBeenCalled();
+    const input = container.querySelector<HTMLInputElement>("[data-terminal-search-input]");
+    expect(input).not.toBeNull();
+    fireEvent.keyDown(input!, { key: "Escape" });
+    expect(container.querySelector("[data-terminal-search-input]")).toBeNull();
+    expect(terminalInput).not.toHaveBeenCalled();
   });
 });

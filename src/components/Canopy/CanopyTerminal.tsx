@@ -548,15 +548,16 @@ export function CanopyTerminal({
       read: () => {
         menuLink = hoveredLink;
         const selection = terminal.getSelection();
-        const onDisk = menuLink?.kind === "file" || menuLink?.kind === "directory";
-        const filePath = filesHere && onDisk ? (menuLink?.absolutePath ?? null) : null;
+        const fileKind =
+          menuLink?.kind === "file" || menuLink?.kind === "directory" ? menuLink.kind : null;
+        const filePath = filesHere && fileKind !== null ? (menuLink?.absolutePath ?? null) : null;
         const worktrees = getCurrentViewStoreOrNull()?.getState().worktrees;
         return {
           selection,
           hoveredUrl: menuLink?.text ?? null,
           hoveredUrlPluginName: hoveredUrlPluginName(links, menuLink),
           hoveredFilePath: filePath,
-          hoveredFileKind: filePath !== null && onDisk ? (menuLink?.kind ?? null) : null,
+          hoveredFileKind: filePath !== null ? fileKind : null,
           hoveredFileScope:
             filePath !== null && worktrees
               ? resolveWorktreePathScope(filePath, worktrees.values())

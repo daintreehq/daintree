@@ -19,7 +19,6 @@ import {
   RefreshTierProvider,
   AgentStateCallback,
   PostCompleteHook,
-  TerminalLink,
   TerminalResyncOptions,
 } from "./types";
 import { NO_PADDING_PAINT, type TerminalPaddingPaint } from "./terminalPaddingPaint";

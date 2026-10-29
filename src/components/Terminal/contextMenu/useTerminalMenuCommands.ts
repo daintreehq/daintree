@@ -35,6 +35,7 @@ import {
   pluginMenuCommandActionId,
   readPanelKindMenuCapabilities,
 } from "@/components/Panel/genericPanelMenu";
+import { copyWithToast } from "@/lib/copyWithToast";
 import type { MenuPanel, PendingMenuDispatch } from "./menuShared";
 import {
   openTerminalPathInFileBrowser,
@@ -88,7 +89,7 @@ export function useTerminalMenuCommands({
           actionId,
           {
             openHoveredLink: () => void peekTerminalService()?.openHoveredLink(terminalId),
-            openLink: (url, options) => peekTerminalService()?.openLink(terminalId, url, options),
+            openLink: (...args) => peekTerminalService()?.openLink(terminalId, ...args),
           },
           sourceRef.current
         )
