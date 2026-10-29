@@ -4,9 +4,20 @@ import { render, screen, fireEvent, act, cleanup } from "@testing-library/react"
 import { DictionaryLearnPrompt } from "../DictionaryLearnPrompt";
 import { useDictionaryLearnPromptStore } from "@/store/dictionaryLearnPromptStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
+import type { HeardAsConflict, VoiceDictionaryChange, VoiceDictionaryState } from "@shared/types";
 
-const acceptSuggestion = vi.fn(() => Promise.resolve());
-const dismissSuggestion = vi.fn(() => Promise.resolve());
+const saved = (conflicts: HeardAsConflict[] = []): VoiceDictionaryChange => ({
+  dictionary: [],
+  suggestedDictionary: [],
+  conflicts,
+});
+const acceptSuggestion = vi.fn((_request: { word: string; utterance?: string }) =>
+  Promise.resolve(saved())
+);
+const dismissSuggestion = vi.fn(
+  (_request: { word: string; utterance?: string }): Promise<VoiceDictionaryState> =>
+    Promise.resolve(saved())
+);
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -56,8 +67,10 @@ describe("DictionaryLearnPrompt", () => {
   });
 
   it("keeps the line until the save settles, and takes one answer at a time", async () => {
-    let finish: () => void = () => {};
-    acceptSuggestion.mockImplementationOnce(() => new Promise<void>((r) => (finish = r)));
+    let finish: (state: VoiceDictionaryChange) => void = () => {};
+    acceptSuggestion.mockImplementationOnce(
+      () => new Promise<VoiceDictionaryChange>((r) => (finish = r))
+    );
     render(<DictionaryLearnPrompt terminalId="t1" />);
     offer();
     fireEvent.click(screen.getByText("Add"));
@@ -71,7 +84,7 @@ describe("DictionaryLearnPrompt", () => {
     });
     expect(screen.getByRole("status").textContent).toContain("Zustand");
 
-    await act(async () => finish());
+    await act(async () => finish(saved()));
     expect(screen.queryByRole("status")).toBeNull();
   });
 
@@ -98,7 +111,7 @@ describe("DictionaryLearnPrompt", () => {
   it("keeps a failure that lands after the composer was typed into", async () => {
     let fail: (error: Error) => void = () => {};
     acceptSuggestion.mockImplementationOnce(
-      () => new Promise<void>((_resolve, reject) => (fail = reject))
+      () => new Promise<VoiceDictionaryChange>((_resolve, reject) => (fail = reject))
     );
     render(<DictionaryLearnPrompt terminalId="t1" />);
     offer();
@@ -144,8 +157,10 @@ describe("DictionaryLearnPrompt", () => {
   });
 
   it("leaves a newer offer alone when an older answer settles", async () => {
-    let finish: () => void = () => {};
-    acceptSuggestion.mockImplementationOnce(() => new Promise<void>((r) => (finish = r)));
+    let finish: (state: VoiceDictionaryChange) => void = () => {};
+    acceptSuggestion.mockImplementationOnce(
+      () => new Promise<VoiceDictionaryChange>((r) => (finish = r))
+    );
     render(<DictionaryLearnPrompt terminalId="t1" />);
     offer();
     fireEvent.click(screen.getByText("Add"));
@@ -154,7 +169,7 @@ describe("DictionaryLearnPrompt", () => {
         .getState()
         .offer("t1", { word: "Vitest", utterance: "vee test" });
     });
-    await act(async () => finish());
+    await act(async () => finish(saved()));
     expect(screen.getByRole("status").textContent).toContain("Vitest");
     expect(screen.getByText("Add")).toBeTruthy();
   });
@@ -194,6 +209,51 @@ describe("DictionaryLearnPrompt", () => {
       vi.advanceTimersByTime(30_000);
     });
     expect(screen.getByRole("status")).toBeTruthy();
+  });
+
+  it("says which phrase an added word was learned without, then goes as usual", async () => {
+    acceptSuggestion.mockResolvedValueOnce(saved([{ phrase: "zoo stand", owner: "Zoostand" }]));
+    const onReturnFocus = vi.fn();
+    render(<DictionaryLearnPrompt terminalId="t1" onReturnFocus={onReturnFocus} />);
+    offer();
+    const add = screen.getByRole("button", { name: "Add" });
+    act(() => add.focus());
+    fireEvent.click(add);
+    await settle();
+
+    expect(screen.getByRole("status").textContent).toBe(
+      "Added “Zustand”, but “zoo stand” already belongs to Zoostand"
+    );
+    expect(screen.queryByText("Retry")).toBeNull();
+    expect(onReturnFocus).toHaveBeenCalledTimes(1);
+    act(() => {
+      vi.advanceTimersByTime(10_000);
+    });
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(acceptSuggestion).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves a newer offer and its focus alone when an older add settles with a left-out phrase", async () => {
+    let finish: (state: VoiceDictionaryChange) => void = () => {};
+    acceptSuggestion.mockImplementationOnce(
+      () => new Promise<VoiceDictionaryChange>((r) => (finish = r))
+    );
+    const onReturnFocus = vi.fn();
+    render(<DictionaryLearnPrompt terminalId="t1" onReturnFocus={onReturnFocus} />);
+    offer();
+    fireEvent.click(screen.getByText("Add"));
+    act(() => {
+      useDictionaryLearnPromptStore
+        .getState()
+        .offer("t1", { word: "Vitest", utterance: "vee test" });
+    });
+    const add = screen.getByRole("button", { name: "Add" });
+    act(() => add.focus());
+    await act(async () => finish(saved([{ phrase: "zoo stand", owner: "Zoostand" }])));
+
+    expect(screen.getByRole("status").textContent).toContain("Learn “Vitest”");
+    expect(document.activeElement).toBe(add);
+    expect(onReturnFocus).not.toHaveBeenCalled();
   });
 
   it("hands the keyboard back to the composer when it goes with focus inside", async () => {

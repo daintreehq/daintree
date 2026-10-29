@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { VoiceDictionaryState, VoiceInputSettings } from "../../../../shared/types/ipc/api.js";
+import type {
+  ProjectVoiceDictionaryChange,
+  VoiceDictionaryChange,
+  VoiceInputSettings,
+} from "../../../../shared/types/ipc/api.js";
 
 const ipcMainMock = vi.hoisted(() => ({
   handle: vi.fn(),
@@ -123,7 +127,7 @@ async function call<T>(channel: string, ...args: unknown[]): Promise<T> {
 }
 
 const op = (method: keyof typeof VOICE_DICTIONARY_METHOD_CHANNELS, payload: unknown) =>
-  call<VoiceDictionaryState>(VOICE_DICTIONARY_METHOD_CHANNELS[method], payload);
+  call<VoiceDictionaryChange>(VOICE_DICTIONARY_METHOD_CHANNELS[method], payload);
 const stored = () => disk.state.data.voiceInput as Record<string, unknown>;
 const storedTerms = () =>
   (stored().dictionary as { term: string }[] | undefined)?.map((entry) => entry.term);
@@ -182,6 +186,75 @@ describe("voiceDictionary operations", () => {
       { term: "Zustand", heardAs: ["zoo stand"] },
     ]);
     expect(storedTerms()).toEqual(["Daintree", "Zustand"]);
+  });
+
+  describe("a heard-as phrase another entry already has", () => {
+    beforeEach(async () => {
+      await op("add", { term: "Zustand", heardAs: ["zoo stand"] });
+      vi.mocked(store.set).mockClear();
+    });
+
+    it("refuses an add or edit by default, naming the entry, and writes nothing", async () => {
+      const added = await op("add", { term: "Zoostand", heardAs: ["Zoo Stand"] });
+      expect(added.conflicts).toEqual([{ phrase: "Zoo Stand", owner: "Zustand" }]);
+      expect(added.dictionary.map((e) => e.term)).toEqual(["Zustand"]);
+      expect(store.set).not.toHaveBeenCalled();
+
+      await op("add", { term: "Vite" });
+      vi.mocked(store.set).mockClear();
+      const edited = await op("update", { term: "Vite", changes: { heardAs: ["zoo stand"] } });
+      expect(edited.conflicts).toEqual([{ phrase: "zoo stand", owner: "Zustand" }]);
+      expect(store.set).not.toHaveBeenCalled();
+    });
+
+    it("leaves the phrase out of an import and reports it", async () => {
+      const added = await op("add", {
+        term: "Zoostand",
+        heardAs: ["zoo stand", "zoo-stand"],
+        source: "imported",
+        heardAsConflict: "skip",
+      });
+      expect(added.conflicts).toEqual([{ phrase: "zoo stand", owner: "Zustand" }]);
+      expect(added.dictionary[1]).toMatchObject({ term: "Zoostand", heardAs: ["zoo-stand"] });
+      expect(store.set).toHaveBeenCalledTimes(1);
+      expect(stored()).not.toHaveProperty("conflicts");
+      expect(storedTerms()).toEqual(["Zustand", "Zoostand"]);
+    });
+
+    it("moves the phrase in one write, and never stores the report", async () => {
+      const moved = await op("add", {
+        term: "Zoostand",
+        heardAs: ["zoo stand"],
+        heardAsConflict: "move",
+      });
+      expect(moved.conflicts).toEqual([]);
+      expect(moved.dictionary.map(({ term, heardAs }) => ({ term, heardAs }))).toEqual([
+        { term: "Zustand", heardAs: [] },
+        { term: "Zoostand", heardAs: ["zoo stand"] },
+      ]);
+      expect(store.set).toHaveBeenCalledTimes(1);
+      expect(stored()).not.toHaveProperty("conflicts");
+    });
+
+    it("learns an accepted word without the phrase, and refuses skip on an edit", async () => {
+      disk.state.data.voiceInput = {
+        ...stored(),
+        suggestedDictionary: [
+          { word: "Zoostand", utterance: "zoo stand", suggestedAt: 1, frequency: 1 },
+        ],
+      };
+      const accepted = await op("acceptSuggestion", { word: "Zoostand" });
+      expect(accepted.conflicts).toEqual([{ phrase: "zoo stand", owner: "Zustand" }]);
+      expect(accepted.dictionary[1]).toMatchObject({ term: "Zoostand", heardAs: [] });
+      expect(accepted.suggestedDictionary).toEqual([]);
+
+      await expect(
+        op("update", {
+          term: "Zoostand",
+          changes: { heardAs: ["zoo stand"], heardAsConflict: "skip" },
+        })
+      ).rejects.toThrow();
+    });
   });
 
   it("accepting a suggestion keeps a word learned after the page loaded", async () => {
@@ -404,9 +477,12 @@ describe("project vocabulary operations", () => {
       term: " PtyClient ",
       heardAs: ["PTY client"],
     });
-    expect(added).toEqual([
-      expect.objectContaining({ term: "PtyClient", heardAs: ["PTY client"], source: "manual" }),
-    ]);
+    expect(added).toEqual({
+      dictionary: [
+        expect.objectContaining({ term: "PtyClient", heardAs: ["PTY client"], source: "manual" }),
+      ],
+      conflicts: [],
+    });
     expect(terms(projects.local.get("local"))).toEqual(["PtyClient"]);
     expect(projects.repo.size).toBe(0);
     expect(storedTerms()).toEqual([]);
@@ -437,6 +513,56 @@ describe("project vocabulary operations", () => {
     expect(terms(removed)).toEqual(["Zustand"]);
     expect(terms(await projectOp("getProject", { projectId: "shared" }))).toEqual(["Zustand"]);
     expect(terms(projects.local.get("shared"))).toEqual(["LocalOnly"]);
+  });
+
+  it("refuses, or moves on request, a project phrase another entry has, in either home", async () => {
+    for (const projectId of ["local", "shared"]) {
+      await projectOp("addToProject", { projectId, term: "Zustand", heardAs: ["zoo stand"] });
+      const refused = (await projectOp("addToProject", {
+        projectId,
+        term: "Zoostand",
+        heardAs: ["zoo stand"],
+      })) as unknown as ProjectVoiceDictionaryChange;
+      expect(refused.conflicts).toEqual([{ phrase: "zoo stand", owner: "Zustand" }]);
+      expect(terms(refused.dictionary)).toEqual(["Zustand"]);
+
+      const moved = (await projectOp("addToProject", {
+        projectId,
+        term: "Zoostand",
+        heardAs: ["zoo stand"],
+        heardAsConflict: "move",
+      })) as unknown as ProjectVoiceDictionaryChange;
+      expect(moved.conflicts).toEqual([]);
+      expect(moved.dictionary.map(({ term, heardAs }) => ({ term, heardAs }))).toEqual([
+        { term: "Zustand", heardAs: [] },
+        { term: "Zoostand", heardAs: ["zoo stand"] },
+      ]);
+    }
+    expect(projects.local.get("local")?.[1]).toMatchObject({ heardAs: ["zoo stand"] });
+    expect(projects.repo.get("/repos/shared")?.[1]).toMatchObject({ heardAs: ["zoo stand"] });
+
+    for (const projectId of ["local", "shared"]) {
+      const refused = (await projectOp("updateInProject", {
+        projectId,
+        term: "Zustand",
+        changes: { heardAs: ["Zoo Stand"] },
+      })) as unknown as ProjectVoiceDictionaryChange;
+      expect(refused.conflicts).toEqual([{ phrase: "Zoo Stand", owner: "Zoostand" }]);
+      expect(refused.dictionary[0]).toMatchObject({ term: "Zustand", heardAs: [] });
+
+      const moved = (await projectOp("updateInProject", {
+        projectId,
+        term: "Zustand",
+        changes: { heardAs: ["Zoo Stand"], heardAsConflict: "move" },
+      })) as unknown as ProjectVoiceDictionaryChange;
+      expect(moved.conflicts).toEqual([]);
+      expect(moved.dictionary.map(({ heardAs }) => heardAs)).toEqual([["Zoo Stand"], []]);
+    }
+    expect(projects.local.get("local")?.map(({ heardAs }) => heardAs)).toEqual([["Zoo Stand"], []]);
+    expect(projects.repo.get("/repos/shared")?.map(({ heardAs }) => heardAs)).toEqual([
+      ["Zoo Stand"],
+      [],
+    ]);
   });
 
   it("removes a term from a project that keeps its vocabulary locally", async () => {

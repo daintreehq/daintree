@@ -1021,6 +1021,7 @@ describe("VoiceInputSettingsTab dictionary", () => {
         add: vi.fn().mockResolvedValue({
           dictionary: [term("Zustand"), term("Daintree")],
           suggestedDictionary: [],
+          conflicts: [],
         }),
       }
     );
@@ -1043,7 +1044,9 @@ describe("VoiceInputSettingsTab dictionary", () => {
   });
 
   it("adds pasted lines, comma lists and heard -> Term pairs as imports", async () => {
-    const add = vi.fn().mockResolvedValue({ dictionary: [], suggestedDictionary: [] });
+    const add = vi
+      .fn()
+      .mockResolvedValue({ dictionary: [], suggestedDictionary: [], conflicts: [] });
     install({}, {}, { add });
     render(<VoiceInputSettingsTab />);
     await openPage();
@@ -1054,12 +1057,13 @@ describe("VoiceInputSettingsTab dictionary", () => {
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
 
     await waitFor(() => expect(add).toHaveBeenCalledTimes(3));
-    expect(add).toHaveBeenNthCalledWith(1, { term: "Vite", heardAs: [], source: "imported" });
-    expect(add).toHaveBeenNthCalledWith(2, { term: "Daintree", heardAs: [], source: "imported" });
+    const imported = { source: "imported", heardAsConflict: "skip" };
+    expect(add).toHaveBeenNthCalledWith(1, { term: "Vite", heardAs: [], ...imported });
+    expect(add).toHaveBeenNthCalledWith(2, { term: "Daintree", heardAs: [], ...imported });
     expect(add).toHaveBeenNthCalledWith(3, {
       term: "Zustand",
       heardAs: ["zoo stand", "zu stand"],
-      source: "imported",
+      ...imported,
     });
   });
 
@@ -1071,6 +1075,7 @@ describe("VoiceInputSettingsTab dictionary", () => {
         add: vi.fn().mockResolvedValue({
           dictionary: [{ ...term("Zustand"), heardAs: ["zoo stand"] }],
           suggestedDictionary: [],
+          conflicts: [],
         }),
       }
     );
@@ -1097,6 +1102,7 @@ describe("VoiceInputSettingsTab dictionary", () => {
         acceptSuggestion: vi.fn().mockResolvedValue({
           dictionary: [{ ...term("Zustand"), heardAs: ["zoo stand"], source: "learned" }],
           suggestedDictionary: [suggestion("Tailwind", "tail wind")],
+          conflicts: [],
         }),
       }
     );
@@ -1119,7 +1125,11 @@ describe("VoiceInputSettingsTab dictionary", () => {
     const add = vi
       .fn()
       .mockRejectedValueOnce(new Error("EROFS"))
-      .mockResolvedValue({ dictionary: [term("Daintree")], suggestedDictionary: [] });
+      .mockResolvedValue({
+        dictionary: [term("Daintree")],
+        suggestedDictionary: [],
+        conflicts: [],
+      });
     install({}, {}, { add });
     const { container } = render(<VoiceInputSettingsTab />);
     await openPage();
@@ -1165,6 +1175,7 @@ describe("VoiceInputSettingsTab dictionary", () => {
         add: vi.fn().mockResolvedValue({
           dictionary: [term("Vite"), learned],
           suggestedDictionary: [suggestion("Tailwind", "tail wind")],
+          conflicts: [],
         }),
         dismissSuggestion: vi.fn().mockResolvedValue({
           dictionary: [term("Vite"), learned],
@@ -1191,6 +1202,7 @@ describe("VoiceInputSettingsTab dictionary", () => {
       heardAs: ["dain tree"],
       source: "learned",
       addedAt: 42,
+      heardAsConflict: "skip",
     });
     expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
 
@@ -1221,6 +1233,7 @@ describe("VoiceInputSettingsTab dictionary", () => {
     const update = vi.fn().mockResolvedValue({
       dictionary: [{ ...term("Zustand"), heardAs: ["zu stand"] }, term("Vite")],
       suggestedDictionary: [],
+      conflicts: [],
     });
     install(
       { dictionary: [{ ...term("Zustand"), heardAs: ["zoo stand"] }, term("Vite")] },

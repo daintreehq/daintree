@@ -5,9 +5,15 @@ import { Input } from "@/components/ui/input";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
 import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
-import { MAX_DICTIONARY_TERM_LENGTH } from "@shared/utils/voiceDictionary";
-import type { VoiceDictionaryEntry } from "@shared/types/ipc/api";
+import { HeardAsMovePrompt, heardAsMoveQuestion } from "@/components/Settings/HeardAsMovePrompt";
+import {
+  MAX_DICTIONARY_TERM_LENGTH,
+  findHeardAsConflicts,
+  heardAsOwners,
+} from "@shared/utils/voiceDictionary";
+import type { HeardAsConflict, VoiceDictionaryEntry } from "@shared/types/ipc/api";
 import { pluralize } from "@/lib/pluralize";
+import { describeHeardAsConflicts } from "@/lib/heardAsConflictCopy";
 import { logWarn } from "@/utils/logger";
 import { voiceErrorLogFields } from "@shared/utils/voiceLogFields";
 
@@ -58,6 +64,17 @@ function enqueue(
   attempt();
 }
 
+/** An entry's heard-as phrases, and those an older entry fires for instead. */
+function describeEntry(
+  entry: VoiceDictionaryEntry,
+  owners: ReadonlyMap<string, string>
+): string | undefined {
+  if (entry.heardAs.length === 0) return undefined;
+  const heard = `Heard as ${entry.heardAs.map((phrase) => `“${phrase}”`).join(", ")}`;
+  const shadowed = findHeardAsConflicts(owners, entry.term, entry.heardAs);
+  return shadowed.length > 0 ? `${heard}. Not used: ${describeHeardAsConflicts(shadowed)}` : heard;
+}
+
 /**
  * The project's own dictation terms. Main owns the list and where it lives
  * (the repo file when project settings are stored there), so every change is
@@ -68,6 +85,14 @@ export function DictationVocabularySection({ projectId }: { projectId: string })
   const [term, setTerm] = useState("");
   const [heardAs, setHeardAs] = useState("");
   const [failure, setFailure] = useState<Failure | null>(null);
+  // An add waiting on whether to move phrases another term has, for the draft as it was.
+  const [moving, setMoving] = useState<{
+    term: string;
+    heardAs: string;
+    conflicts: HeardAsConflict[];
+  } | null>(null);
+  // A refused add whose draft had moved on by the time main answered.
+  const [notice, setNotice] = useState<string | null>(null);
   const termInputRef = useRef<HTMLInputElement>(null);
   // The draft as typed, read when a save lands after further edits.
   const draftRef = useRef({ term, heardAs });
@@ -87,6 +112,8 @@ export function DictationVocabularySection({ projectId }: { projectId: string })
     queueRef.current = Promise.resolve();
     setEntries([]);
     setFailure(null);
+    setMoving(null);
+    setNotice(null);
     enqueue(
       { queueRef, visitRef, setEntries, setFailure },
       () => window.electron.voiceDictionary.getProject({ projectId }),
@@ -117,24 +144,54 @@ export function DictationVocabularySection({ projectId }: { projectId: string })
     );
   };
 
-  const add = () => {
+  const owners = heardAsOwners(entries);
+  // Editing the draft drops the question: a move applies to the draft it was asked about.
+  const pendingMove =
+    moving !== null && moving.term === term && moving.heardAs === heardAs ? moving : null;
+
+  const add = (move = false) => {
     const nextTerm = term.trim();
     if (!nextTerm) return;
     const submittedTerm = term;
     const submittedHeardAs = heardAs;
     const nextHeardAs = parseHeardAs(heardAs);
+    if (!move) {
+      const conflicts = findHeardAsConflicts(owners, nextTerm, nextHeardAs);
+      if (conflicts.length > 0) {
+        setMoving({ term, heardAs, conflicts });
+        return;
+      }
+    }
+    setMoving(null);
+    setNotice(null);
     termInputRef.current?.focus();
+    let left: HeardAsConflict[] = [];
     change(
-      () =>
-        window.electron.voiceDictionary.addToProject({
+      async () => {
+        const result = await window.electron.voiceDictionary.addToProject({
           projectId,
           term: nextTerm,
           ...(nextHeardAs.length > 0 ? { heardAs: nextHeardAs } : {}),
-        }),
-      // A draft edited while this was saving is the user's next entry.
+          ...(move ? { heardAsConflict: "move" as const } : {}),
+        });
+        left = result.conflicts;
+        return result.dictionary;
+      },
       () => {
-        if (draftRef.current.term !== submittedTerm) return;
-        if (draftRef.current.heardAs !== submittedHeardAs) return;
+        // A draft edited while this was saving is the user's next entry.
+        const unchanged =
+          draftRef.current.term === submittedTerm && draftRef.current.heardAs === submittedHeardAs;
+        // Refused for a phrase another term took since this page last read the list: ask, or
+        // say so when the draft has moved on and the question has nothing to hang on.
+        if (left.length > 0) {
+          if (unchanged) {
+            setMoving({ term: submittedTerm, heardAs: submittedHeardAs, conflicts: left });
+          } else {
+            setNotice(`Didn't add ${nextTerm}: ${describeHeardAsConflicts(left)}`);
+          }
+          return;
+        }
+        if (!unchanged) return;
         setTerm("");
         setHeardAs("");
       }
@@ -149,6 +206,11 @@ export function DictationVocabularySection({ projectId }: { projectId: string })
     if (event.key !== "Enter") return;
     event.preventDefault();
     add();
+  };
+
+  const cancelMove = () => {
+    setMoving(null);
+    termInputRef.current?.focus();
   };
 
   return (
@@ -174,32 +236,48 @@ export function DictationVocabularySection({ projectId }: { projectId: string })
           }
           layout="stacked"
           control={({ labelId, descriptionId }) => (
-            <div className="flex flex-wrap gap-2">
-              <Input
-                ref={termInputRef}
-                type="text"
-                value={term}
-                maxLength={MAX_DICTIONARY_TERM_LENGTH}
-                aria-labelledby={labelId}
-                aria-describedby={descriptionId}
-                onChange={(e) => setTerm(e.target.value)}
-                onKeyDown={submitOnEnter}
-                placeholder="Term, as written…"
-                className="w-auto min-w-40 flex-1"
-              />
-              <Input
-                type="text"
-                value={heardAs}
-                aria-label="Heard as"
-                onChange={(e) => setHeardAs(e.target.value)}
-                onKeyDown={submitOnEnter}
-                placeholder="Heard as, comma separated (optional)…"
-                className="w-auto min-w-40 flex-1"
-              />
-              <Button onClick={add} disabled={!term.trim()} size="sm" variant="outline">
-                <Plus aria-hidden="true" />
-                Add
-              </Button>
+            <div className="space-y-2">
+              {/* Always in the tree, so the question or notice is announced when it appears. */}
+              <p role="status" className="sr-only">
+                {pendingMove ? heardAsMoveQuestion(term.trim(), pendingMove.conflicts) : notice}
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <Input
+                  ref={termInputRef}
+                  type="text"
+                  value={term}
+                  maxLength={MAX_DICTIONARY_TERM_LENGTH}
+                  aria-labelledby={labelId}
+                  aria-describedby={descriptionId}
+                  onChange={(e) => setTerm(e.target.value)}
+                  onKeyDown={submitOnEnter}
+                  placeholder="Term, as written…"
+                  className="w-auto min-w-40 flex-1"
+                />
+                <Input
+                  type="text"
+                  value={heardAs}
+                  aria-label="Heard as"
+                  onChange={(e) => setHeardAs(e.target.value)}
+                  onKeyDown={submitOnEnter}
+                  placeholder="Heard as, comma separated (optional)…"
+                  className="w-auto min-w-40 flex-1"
+                />
+                <Button onClick={() => add()} disabled={!term.trim()} size="sm" variant="outline">
+                  <Plus aria-hidden="true" />
+                  Add
+                </Button>
+              </div>
+              {pendingMove ? (
+                <HeardAsMovePrompt
+                  term={term.trim()}
+                  conflicts={pendingMove.conflicts}
+                  onMove={() => add(true)}
+                  onCancel={cancelMove}
+                />
+              ) : (
+                notice && <p className="text-sm text-text-secondary">{notice}</p>
+              )}
             </div>
           )}
         />
@@ -207,11 +285,7 @@ export function DictationVocabularySection({ projectId }: { projectId: string })
           <SettingsRow
             key={entry.term}
             label={entry.term}
-            description={
-              entry.heardAs.length > 0
-                ? `Heard as ${entry.heardAs.map((phrase) => `“${phrase}”`).join(", ")}`
-                : undefined
-            }
+            description={describeEntry(entry, owners)}
             control={
               <Button
                 size="icon-sm"

@@ -61,6 +61,18 @@ describe("collectHeardAsRules", () => {
     );
   });
 
+  it("fires a heard form moved to a newer entry for that entry, not the one it left", () => {
+    const entries = [entry("Zustand", ["zoo stand"]), entry("Daintree")];
+    const refused = addDictionaryEntry(entries, { term: "Zoostand", heardAs: ["Zoo  Stand"] }, 1);
+    expect(refused).toBe(entries);
+    const moved = addDictionaryEntry(
+      entries,
+      { term: "Zoostand", heardAs: ["Zoo  Stand"], heardAsConflict: "move" },
+      1
+    );
+    expect(rewriterFor(...moved)("use zoo stand here")).toBe("use Zoostand here");
+  });
+
   it("collapses spacing and drops forms with no letters or digits", () => {
     expect(collectHeardAsRules([entry("Zustand", ["  zoo   stand ", "--", "  "])])).toEqual([
       { heard: "zoo stand", term: "Zustand" },
