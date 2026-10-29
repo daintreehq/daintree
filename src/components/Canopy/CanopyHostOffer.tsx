@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { HardDrive } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { canopyLocalOn, canopyStopOn } from "./canopyTerms";
@@ -20,6 +20,15 @@ export function CanopyHostOffer({
 }) {
   const [pending, setPending] = useState(false);
   const [failed, setFailed] = useState(false);
+  // Asked for from the inbox, whose button left with it: the keyboard lands on
+  // the heading, never on Turn on, where a reflexive Enter would turn it on.
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => {
+      headingRef.current?.focus({ preventScroll: true, focusVisible: false });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, []);
   const turnOn = () => {
     setPending(true);
     setFailed(false);
@@ -40,7 +49,9 @@ export function CanopyHostOffer({
       <div className="flex max-w-md flex-col gap-4">
         <div className="flex flex-col gap-2">
           <h2
+            ref={headingRef}
             id="canopy-host-offer-title"
+            tabIndex={-1}
             className="text-lg font-semibold tracking-tight text-text-primary"
           >
             Canopy is off on {hostName}

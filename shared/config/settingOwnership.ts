@@ -264,6 +264,7 @@ export const SETTING_CATALOG = {
       "daintree-canopy-acknowledged": device,
       "daintree-canopy-role": device,
       "daintree-canopy-assistant-handbacks": device,
+      "daintree-canopy-reading-offer-dismissed": device,
       "daintree:cliAvailability:v3": device,
       "daintree:fleet-selection-hint-dismissed": device,
       "daintree:host-build-noticed:*": devicePerHost,

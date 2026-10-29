@@ -37,6 +37,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
 import { Callout } from "@/components/ui/Callout";
+import { DismissButton } from "@/components/ui/DismissButton";
 import { itemNeedsAttention, repliedAt, type CanopyItem } from "./canopyModel";
 import { isWorkerEntry } from "./canopyInboxProjection";
 import { CanopyCard, canopyCardDomId } from "./CanopyCard";
@@ -947,6 +948,8 @@ function CanopyInbox({
     readerOff && !hostOutdated
       ? (onOfferReading ?? (hostOffer ? () => setHostOfferOpen(true) : null))
       : null;
+  const readingOfferDismissed = useCanopyStore((s) => s.readingOfferDismissed);
+  const dismissReadingOffer = useCanopyStore((s) => s.dismissReadingOffer);
 
   // Canopy's Trash: every agent run the host's trash holds, any project's.
   const trashRef = useRef<CanopyTrashSectionHandle>(null);
@@ -1641,6 +1644,48 @@ function CanopyInbox({
             )}
           </div>
         )}
+        {/* A listed inbox with the reader off reads as broken unless it says
+            why: the offer once, above it, until put away. An empty one has
+            the status bar's offer under its own message, and the assistants
+            alone aren't what reading reads. */}
+        {offerReading &&
+          !readingOfferDismissed &&
+          !hostHeld &&
+          workersShown &&
+          items.length > 0 && (
+            <div
+              data-canopy-reading-offer=""
+              className="flex shrink-0 flex-col gap-2 border-b border-border-default p-3"
+            >
+              <Callout
+                severity="neutral"
+                size="compact"
+                action={
+                  <Button variant="outline" size="xs" onClick={offerReading}>
+                    Turn on reading
+                  </Button>
+                }
+                dismiss={
+                  <DismissButton
+                    aria-label="Dismiss reading offer"
+                    className="-my-1"
+                    onClick={(event) => {
+                      // The X leaves with the callout: the keyboard stays in the
+                      // panel, on the search.
+                      searchRef.current?.focus({
+                        preventScroll: true,
+                        focusVisible: event.detail === 0,
+                      });
+                      dismissReadingOffer();
+                    }}
+                  />
+                }
+              >
+                Get a short summary of what each agent did, from a small model on{" "}
+                {otherHost ? hostName : "this computer"}.
+              </Callout>
+            </div>
+          )}
         {!hostHeld && (items.length > 0 || listsAssistants || listsTrash) && (
           // An inbox: what needs you down a sidebar, most urgent first, the rest
           // folded away beneath it, and the selected agent's own terminal beside

@@ -1,6 +1,13 @@
 // @vitest-environment jsdom
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render as rtlRender, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render as rtlRender,
+  screen,
+  within,
+} from "@testing-library/react";
 import type { ReactElement } from "react";
 import type { CanopyHostEvent } from "@shared/types/ipc/canopyHost";
 import type { CanopySnapshot } from "@shared/types/ipc/canopy";
@@ -735,7 +742,8 @@ describe("the Canopy host picker", () => {
     await settle();
     // Its agents stay listed as it observed them, with the offer one press away.
     expect(document.body.textContent).not.toContain("Canopy is off on studio-01");
-    fireEvent.click(screen.getByRole("button", { name: "Turn on reading" }));
+    const bar = document.querySelector<HTMLElement>("[data-canopy-status]")!;
+    fireEvent.click(within(bar).getByRole("button", { name: "Turn on reading" }));
     await settle();
     expect(document.body.textContent).toContain("Canopy is off on studio-01");
     expect(document.querySelector("[data-canopy-card]")).toBeNull();
@@ -743,6 +751,29 @@ describe("the Canopy host picker", () => {
     await settle();
     expect(state.invoke).toHaveBeenCalledWith("studio", "canopy:set-mode", "on");
     expect(own.setMode).not.toHaveBeenCalled();
+  });
+
+  it("offers reading above the picked host's agents by its name, opening that host's offer", async () => {
+    installElectron();
+    remoteCanopy = canopySnapshot({ mode: "unset", activated: false });
+    useCanopyStore.setState({ hostId: "studio" });
+    render(<CanopyView />);
+    await settle();
+    const callout = document.querySelector<HTMLElement>("[data-canopy-reading-offer]")!;
+    expect(callout.textContent).toContain("on studio-01");
+    // Above that host's own agents.
+    const row = document.getElementById("canopy-card-remote-run")!;
+    expect(callout.compareDocumentPosition(row)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    fireEvent.click(within(callout).getByRole("button", { name: "Turn on reading" }));
+    await settle();
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+    expect(document.body.textContent).toContain("Canopy is off on studio-01");
+    expect(document.querySelector("[data-canopy-reading-offer]")).toBeNull();
+    // The button left with the inbox: the keyboard lands on the offer's heading, not Turn on.
+    expect(document.activeElement?.id).toBe("canopy-host-offer-title");
+    expect(state.invoke).not.toHaveBeenCalledWith("studio", "canopy:set-mode", "on");
   });
 
   it("says why a host can't be reached, never showing another host's agents instead", async () => {
@@ -1045,6 +1076,18 @@ describe("All hosts", () => {
     expect(own.setMode).not.toHaveBeenCalled();
     // What the host that is off adds is what Daintree observes of its runs.
     expect(cardOf("studio", "shared-run")).not.toBeNull();
+  });
+
+  it("offers no reading callout over every host's agents, even with the readers off", async () => {
+    const off = canopySnapshot({ activated: false, mode: "unset", cards: [] });
+    installElectron().setActive.mockResolvedValue(off);
+    useCanopyStore.setState({ snapshot: off });
+    remoteCanopy = off;
+    render(<CanopyView />);
+    await settle();
+    expect(cardOf("local", "shared-run")).not.toBeNull();
+    expect(cardOf("studio", "shared-run")).not.toBeNull();
+    expect(document.querySelector("[data-canopy-reading-offer]")).toBeNull();
   });
 
   it("names a host that can't be reached and keeps the others", async () => {
