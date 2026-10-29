@@ -18,7 +18,8 @@ import { useRecipeConflictStore } from "@/store/recipeConflictStore";
  *
  * - "Reload from disk" — discard the in-flight edit, refresh state to match disk.
  * - "Overwrite" — re-apply the edit with `force: true`, replacing disk content.
- * - Cancel (footer, close button / Esc) — leave the rolled-back state; user can retry later.
+ * - Cancel (footer, close button / Esc) — write nothing and back out of the save,
+ *   not the edit: the editor stays open with the draft, to retry or discard (#15035).
  *
  * Tier D1 per CLAUDE.md: local irreversible, no typed-name gate. The destructive
  * intent sits on Overwrite (in-memory edit beats disk), which takes the footer's
@@ -79,8 +80,8 @@ function RecipeConflictDialogInner() {
             never rests on reading the button labels alone. */}
         <p className="text-sm text-text-secondary">
           {isForwardCompat
-            ? "Overwrite and discard saves your edit and removes the unsupported parts from the file. Reload from disk drops your edit and keeps the file as it is. Cancel drops your edit too and leaves the file untouched."
-            : "Overwrite recipe replaces the file with your edit. Reload from disk drops your edit and loads the file's new version. Cancel drops your edit too and leaves the file untouched."}
+            ? "Overwrite and discard saves your edit and removes the unsupported parts from the file. Reload from disk drops your edit and keeps the file as it is. Cancel leaves the file untouched and keeps any edit open in the recipe editor."
+            : "Overwrite recipe replaces the file with your edit. Reload from disk drops your edit and loads the file's new version. Cancel leaves the file untouched and keeps any edit open in the recipe editor."}
         </p>
       </AppDialog.Body>
       <AppDialog.Footer

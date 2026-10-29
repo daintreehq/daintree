@@ -413,7 +413,6 @@ describe("ProjectDialogHost", () => {
       expect(editor.dataset.open).toBe("true");
       expect(editor.dataset.worktree).toBe("wt-1");
       expect(editor.dataset.terminals).toBe("2");
-      expect(useRecipeEditorActivityStore.getState().openCount).toBe(1);
     });
 
     it("opens an existing recipe by id in its own scope", async () => {
@@ -481,7 +480,9 @@ describe("ProjectDialogHost", () => {
       expect(editor.dataset.recipe).toBe("recipe-managed");
       expect(editor.dataset.worktree).toBe("wt-3");
       expect(editor.dataset.scope).toBe("project");
-      expect(useRecipeEditorActivityStore.getState().openCount).toBe(1);
+      // The manager lets go as it hands off; the editor (mocked here) holds its
+      // own registration wherever it is mounted.
+      expect(useRecipeEditorActivityStore.getState().openCount).toBe(0);
     });
 
     it("hands a new recipe from the manager to a blank editor in the chosen scope", async () => {

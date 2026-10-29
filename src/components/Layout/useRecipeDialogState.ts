@@ -31,15 +31,9 @@ function useRecipeDialogState(): UseRecipeDialogStateReturn {
   const [isRecipeManagerOpen, setIsRecipeManagerOpen] = useState(false);
   const [recipeManagerEdit, setRecipeManagerEdit] = useState<TerminalRecipe | undefined>(undefined);
 
-  // Mirror the open/close transitions of the two recipe surfaces into the
-  // shared activity store so the focus-reload hook can suppress its silent
-  // reload while the user is mid-edit (#9186).
-  useEffect(() => {
-    if (!isRecipeEditorOpen) return;
-    useRecipeEditorActivityStore.getState().enter();
-    return () => useRecipeEditorActivityStore.getState().leave();
-  }, [isRecipeEditorOpen]);
-
+  // Mirror the manager's open/close transitions into the shared activity store
+  // so the focus-reload hook can suppress its silent reload while the user is
+  // mid-edit (#9186). The editor registers itself, wherever it is mounted.
   useEffect(() => {
     if (!isRecipeManagerOpen) return;
     useRecipeEditorActivityStore.getState().enter();

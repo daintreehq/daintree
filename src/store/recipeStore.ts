@@ -79,6 +79,14 @@ import {
 import { isRemoteWindow, resolveHostTmpDir } from "@/hooks/useHostPlatform";
 import { agentClipboardDirectory } from "@shared/types/agentSettings";
 
+/**
+ * How an `updateRecipe` call settled. `"cancelled"` is a refused in-repo write
+ * the user backed out of at the conflict dialog: nothing was written and the
+ * store is rolled back, but the caller's draft is still theirs to keep (#15035).
+ * `"reloaded"` means they dropped it for the file's newer version instead.
+ */
+export type RecipeUpdateResult = "saved" | "reloaded" | "cancelled";
+
 export interface RecipeSpawnResult {
   index: number;
   terminalId: string;
@@ -291,7 +299,7 @@ interface RecipeState {
   updateRecipe: (
     id: string,
     updates: Partial<Omit<TerminalRecipe, "id" | "projectId" | "createdAt">>
-  ) => Promise<void>;
+  ) => Promise<RecipeUpdateResult>;
   deleteRecipe: (id: string) => Promise<void>;
 
   getRecipesForWorktree: (worktreeId: string | undefined) => TerminalRecipe[];
@@ -649,7 +657,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
           `"${recipe.name}" is provided by the ${pluginManifestIdFromInstanceKey(recipe.origin.pluginId)} plugin and can't be edited. Save it to the repo to make an editable copy.`
         );
       }
-      if (Object.keys(patch).length === 0) return;
+      if (Object.keys(patch).length === 0) return "saved";
 
       const applyPatch = (target: TerminalRecipe): TerminalRecipe => {
         const next = { ...target };
@@ -692,7 +700,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
         logError("Failed to persist plugin recipe preference", error);
         throw error;
       }
-      return;
+      return "saved";
     }
 
     const isInRepo = isInRepoRecipeId(recipe);
@@ -809,7 +817,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
         });
         if (resolution === "reload" && projectId) {
           void get().loadRecipes(projectId);
-          return;
+          return "reloaded";
         }
         if (resolution === "overwrite" && projectId) {
           try {
@@ -832,20 +840,21 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
                 get().pluginRecipes
               ),
             });
-            return;
+            return "saved";
           } catch (retryError) {
             logError("Failed to overwrite recipe after conflict", retryError);
             throw retryError;
           }
         }
-        // Cancel / dismissed: leave the rolled-back state in place. The user
-        // can re-attempt the edit; the focus-reload hook (or a manual reload)
-        // brings the in-memory state back in sync with disk.
-        return;
+        // Cancel / dismissed: leave the rolled-back state in place and say so,
+        // so the editor keeps the draft open for another try instead of closing
+        // as if it had saved (#15035).
+        return "cancelled";
       }
       logError("Failed to persist recipe update", error);
       throw error;
     }
+    return "saved";
   },
 
   deleteRecipe: async (id) => {

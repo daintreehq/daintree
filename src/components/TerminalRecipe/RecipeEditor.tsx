@@ -20,6 +20,7 @@ import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { isEnterToSubmit } from "@/lib/enterToSubmit";
 import { useRecipeStore, MAX_TERMINALS_PER_RECIPE } from "@/store/recipeStore";
+import { useRecipeEditorActivityStore } from "@/store/recipeEditorActivityStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useUnsavedChanges } from "@/hooks/useUnsavedChanges";
 import { isInRepoRecipeId } from "@shared/utils/recipeFilename";
@@ -214,6 +215,15 @@ export function RecipeEditor({
     target?.scrollIntoView({ block: "nearest" });
   }, [terminals.length]);
 
+  // Holds off the focus reload while the editor is open, wherever it is mounted
+  // (#9186). A reload refreshes main's hash cache, so a draft kept here after a
+  // cancelled conflict would then save over the newer file without the dialog.
+  useEffect(() => {
+    if (!isOpen) return;
+    useRecipeEditorActivityStore.getState().enter();
+    return () => useRecipeEditorActivityStore.getState().leave();
+  }, [isOpen]);
+
   // The banner sits below every card, and the body may be scrolled anywhere
   // when Save is pressed from the footer.
   useEffect(() => {
@@ -376,12 +386,21 @@ export function RecipeEditor({
 
     try {
       if (recipe) {
-        await updateRecipe(recipe.id, {
+        const result = await updateRecipe(recipe.id, {
           name: recipeName,
           terminals,
           showInEmptyState,
           autoAssign,
         });
+        // Cancel on a conflict backs out of the save, not the edit: the draft
+        // stays here to copy, save again or discard (#15035).
+        if (result === "cancelled") return;
+        // Reload dropped the draft for the file's newer version, so nothing
+        // was saved to report.
+        if (result === "reloaded") {
+          onClose();
+          return;
+        }
       } else {
         const isGlobal = scope === "global";
         if (!isGlobal && !currentProject?.id) {

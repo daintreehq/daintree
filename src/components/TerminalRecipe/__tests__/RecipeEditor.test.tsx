@@ -61,7 +61,7 @@ const updateRecipe = vi.fn<ReturnType<typeof useRecipeStore.getState>["updateRec
 const createRecipe = vi.fn();
 
 beforeEach(() => {
-  updateRecipe.mockReset().mockResolvedValue(undefined);
+  updateRecipe.mockReset().mockResolvedValue("saved");
   createRecipe.mockReset().mockResolvedValue(undefined);
   useRecipeStore.setState({ updateRecipe, createRecipe });
   useProjectStore.setState({

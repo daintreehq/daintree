@@ -2870,7 +2870,7 @@ describe("recipeStore", () => {
 
       await expect(
         useRecipeStore.getState().updateRecipe("inrepo-test", { lastUsedAt: 999 })
-      ).resolves.toBeUndefined();
+      ).resolves.toBe("saved");
 
       // The mirror write WAS attempted (and rejected) — not silently skipped.
       expect(updateRecipeMock).toHaveBeenCalledTimes(1);
@@ -3187,11 +3187,31 @@ describe("recipeStore", () => {
 
         // Resolve as cancel — the updateRecipe call should settle without throwing.
         store.getState().resolveConflict("cancel");
-        await expect(promise).resolves.toBeUndefined();
+        await expect(promise).resolves.toBe("cancelled");
 
         // State rolled back to pre-edit snapshot.
         const state = useRecipeStore.getState();
         expect(state.inRepoRecipes[0]?.name).toBe("Conflict Recipe");
+      });
+
+      // The caller keeps the draft on "cancelled" (#15035), so the store must
+      // have written nothing and left nothing of the edit behind.
+      it("'cancel' reports the save as cancelled without writing, reloading or keeping the edit", async () => {
+        seedStore();
+        const store = await importConflictStore();
+        updateInRepoRecipeMock.mockRejectedValueOnce(makeConflictError("Conflict Recipe"));
+
+        const promise = useRecipeStore.getState().updateRecipe("inrepo-test", { name: "Mine" });
+        await Promise.resolve();
+        await Promise.resolve();
+        store.getState().resolveConflict("cancel");
+        await expect(promise).resolves.toBe("cancelled");
+
+        expect(updateInRepoRecipeMock).toHaveBeenCalledTimes(1);
+        expect(getInRepoRecipesMock).not.toHaveBeenCalled();
+        const state = useRecipeStore.getState();
+        expect(state.inRepoRecipes.map((r) => r.name)).toEqual(["Conflict Recipe"]);
+        expect(state.recipes.map((r) => r.name)).toEqual(["Conflict Recipe"]);
       });
 
       it("'reload' resolution triggers loadRecipes and does not rethrow", async () => {
@@ -3206,7 +3226,7 @@ describe("recipeStore", () => {
         await Promise.resolve();
         await Promise.resolve();
         store.getState().resolveConflict("reload");
-        await expect(promise).resolves.toBeUndefined();
+        await expect(promise).resolves.toBe("reloaded");
         // Wait one more tick for the fire-and-forget loadRecipes to settle.
         await new Promise((r) => setTimeout(r, 0));
         expect(getInRepoRecipesMock).toHaveBeenCalled();
@@ -3224,7 +3244,7 @@ describe("recipeStore", () => {
         await Promise.resolve();
         await Promise.resolve();
         store.getState().resolveConflict("overwrite");
-        await expect(promise).resolves.toBeUndefined();
+        await expect(promise).resolves.toBe("saved");
 
         expect(updateInRepoRecipeMock).toHaveBeenCalledTimes(2);
         // Second call carries force:true and the previous-name (for rename support).
@@ -3295,7 +3315,7 @@ describe("recipeStore", () => {
         expect(pending?.detail).toBe(detail);
 
         store.getState().resolveConflict("cancel");
-        await expect(promise).resolves.toBeUndefined();
+        await expect(promise).resolves.toBe("cancelled");
         // Rolled back — the rejected edit must not linger in memory.
         expect(useRecipeStore.getState().inRepoRecipes[0]?.name).toBe("Future Recipe");
       });
@@ -3310,7 +3330,7 @@ describe("recipeStore", () => {
         await Promise.resolve();
         await Promise.resolve();
         store.getState().resolveConflict("overwrite");
-        await expect(promise).resolves.toBeUndefined();
+        await expect(promise).resolves.toBe("saved");
 
         expect(updateInRepoRecipeMock).toHaveBeenCalledTimes(2);
         expect(updateInRepoRecipeMock.mock.calls[1]?.[3]).toEqual({ force: true });
@@ -3406,7 +3426,9 @@ describe("recipeStore", () => {
         currentProjectId: "project-1",
       });
 
-      await useRecipeStore.getState().updateRecipe("inrepo-old-name", { name: "New Name" });
+      await expect(
+        useRecipeStore.getState().updateRecipe("inrepo-old-name", { name: "New Name" })
+      ).resolves.toBe("saved");
 
       expect(updateInRepoRecipeMock).toHaveBeenCalledTimes(1);
       // The id is stable across the rename; previousName tells the main process
