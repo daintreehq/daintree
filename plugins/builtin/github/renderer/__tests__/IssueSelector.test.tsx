@@ -587,14 +587,26 @@ describe("IssueSelector", () => {
     };
 
     async function openWithRows(onSelect = vi.fn()) {
+      const dialogKeyDown = vi.fn();
       mockListIssues.mockResolvedValueOnce({
         items: [mockIssue({ number: 1, title: "Old top hit" })],
       });
-      render(<IssueSelector {...defaultProps} onSelect={onSelect} />);
+      render(
+        // The popover portals out of this subtree, but React still bubbles its
+        // keys here, the way they reach the create-worktree dialog.
+        <div onKeyDown={dialogKeyDown}>
+          <IssueSelector {...defaultProps} onSelect={onSelect} />
+        </div>
+      );
       const trigger = screen.getByRole("combobox");
       fireEvent.click(trigger);
       await screen.findByRole("option", { name: /Old top hit/ });
-      return { onSelect, trigger, input: screen.getByPlaceholderText("Search issues") };
+      return {
+        onSelect,
+        dialogKeyDown,
+        trigger,
+        input: screen.getByPlaceholderText("Search issues"),
+      };
     }
 
     it("runs the typed query at once instead of picking the old top hit", async () => {
@@ -642,11 +654,12 @@ describe("IssueSelector", () => {
 
     it("leaves a modified Enter to the dialog while the rows are stale", async () => {
       debounceMode.real = true;
-      const { onSelect, input } = await openWithRows();
+      const { onSelect, dialogKeyDown, input } = await openWithRows();
 
       fireEvent.change(input, { target: { value: "sharper" } });
       expect(fireEvent.keyDown(input, { key: "Enter", metaKey: true })).toBe(true);
 
+      expect(dialogKeyDown).toHaveBeenCalledTimes(1);
       expect(onSelect).not.toHaveBeenCalled();
       expect(mockListIssues).toHaveBeenCalledTimes(1);
     });
