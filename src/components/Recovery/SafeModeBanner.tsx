@@ -192,9 +192,11 @@ export function SafeModeBanner() {
         isOpen={isConfirmOpen}
         onClose={() => setIsConfirmOpen(false)}
         title="Restart Daintree normally?"
-        description="All running terminals and agent sessions will be killed. Scrollback and in-flight agent work will be lost."
+        // `resetAndRelaunch` keeps the session through the capture chain, so the
+        // restart takes back nothing a normal quit wouldn't.
+        description="Running processes restart and agents come back with their conversations. The panels safe mode skipped load again, and only a turn an agent is in the middle of is interrupted."
         confirmLabel="Restart normally"
-        variant="destructive"
+        variant="default"
         onConfirm={handleRestart}
         isConfirmLoading={isRestarting}
       >

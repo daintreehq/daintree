@@ -49,7 +49,8 @@ interface ToolbarButtonsContextMenuProps {
  *
  * Right-click only. Nothing on the toolbar takes focus without being a control,
  * so there is no keyboard route here; every control's own menu carries
- * "Customize toolbar…" instead.
+ * "Customize toolbar…" instead, and Settings → Toolbar's "This project" switch
+ * is the other way to "Use this project's toolbar" (#15232).
  *
  * macOS and Linux deliver the right-click — Electron forwards secondary clicks
  * out of a macOS drag region (electron#44761), and Linux windows are framed. On

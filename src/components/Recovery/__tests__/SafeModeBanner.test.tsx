@@ -165,9 +165,10 @@ describe("SafeModeBanner", () => {
     render(<SafeModeBanner />);
     fireEvent.click(screen.getByRole("button", { name: /Restart normally/i }));
     expect(screen.getByText("Restart Daintree normally?")).toBeTruthy();
-    expect(
-      screen.getByText(/All running terminals and agent sessions will be killed/)
-    ).toBeTruthy();
+    const body = screen.getByRole("dialog").textContent ?? "";
+    // The restart keeps the session, so the confirm never warns of losing it.
+    expect(body).toContain("agents come back with their conversations");
+    expect(body).not.toMatch(/killed|lost/);
     expect(resetAndRelaunch).not.toHaveBeenCalled();
   });
 
@@ -176,7 +177,7 @@ describe("SafeModeBanner", () => {
     render(<SafeModeBanner />);
     fireEvent.click(screen.getByRole("button", { name: /Restart normally/i }));
     fireEvent.click(
-      within(screen.getByRole("alertdialog")).getByRole("button", { name: /^Restart normally$/ })
+      within(screen.getByRole("dialog")).getByRole("button", { name: /^Restart normally$/ })
     );
     expect(resetAndRelaunch).toHaveBeenCalledTimes(1);
   });
@@ -207,7 +208,7 @@ describe("SafeModeBanner", () => {
     const button = screen.getByRole("button", { name: /Restart normally/i }) as HTMLButtonElement;
     fireEvent.click(button);
     fireEvent.click(
-      within(screen.getByRole("alertdialog")).getByRole("button", { name: /^Restart normally$/ })
+      within(screen.getByRole("dialog")).getByRole("button", { name: /^Restart normally$/ })
     );
     expect(button.getAttribute("aria-disabled")).toBe("true");
     await act(async () => {

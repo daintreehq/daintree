@@ -79,7 +79,10 @@ import { getAgentConfig } from "@/config/agents";
 import { usePluginToolbarButtons } from "@/hooks/usePluginToolbarButtons";
 
 import { buildPluginToolbarMeta } from "@/components/Layout/pluginToolbarMeta";
-import { ProjectToolbarProfileNotice } from "@/components/Settings/ProjectToolbarProfileNotice";
+import {
+  ProjectToolbarProfileNotice,
+  ProjectToolbarResetRow,
+} from "@/components/Settings/ProjectToolbarProfileNotice";
 import { cn } from "@/lib/utils";
 import { DROP_TARGET_FRAME } from "@/components/DragDrop/dropIndicator";
 import { useArmedDropTarget } from "@/components/DragDrop/useArmedDropTarget";
@@ -1286,6 +1289,8 @@ export function ToolbarSettingsTab() {
             </Button>
           )}
         />
+        {/* Last: unlike the app-wide reset above, it has no undo. */}
+        <ProjectToolbarResetRow />
       </SettingsGroup>
     </div>
   );

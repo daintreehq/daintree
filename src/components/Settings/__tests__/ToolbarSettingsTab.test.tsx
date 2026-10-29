@@ -91,9 +91,10 @@ vi.mock("@/store", () => ({
 
 const setStateMock = vi.fn();
 const mockNotify = vi.fn();
-// The project overlay notice has its own tests; it reads stores this file mocks partially.
+// The project toolbar rows have their own tests; they read stores this file mocks partially.
 vi.mock("@/components/Settings/ProjectToolbarProfileNotice", () => ({
   ProjectToolbarProfileNotice: () => null,
+  ProjectToolbarResetRow: () => null,
 }));
 vi.mock("@/lib/notify", () => ({ notify: (...args: unknown[]) => mockNotify(...args) }));
 
