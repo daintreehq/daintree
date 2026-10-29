@@ -73,9 +73,7 @@ export function NativeGrantToolPicker({
           );
         })}
         {visible.length === 0 && (
-          <p className="px-2 py-1 text-2xs text-text-secondary">
-            No tools match “{query.trim()}”
-          </p>
+          <p className="px-2 py-1 text-2xs text-text-secondary">No tools match “{query.trim()}”</p>
         )}
       </div>
     </div>

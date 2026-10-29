@@ -944,8 +944,8 @@ describe("HttpLifecycle", () => {
     it("accepts every tool the Settings form offers and refuses every one it leaves out", () => {
       const deps = fakeDeps();
       resolverOf(deps).mockReturnValue("transport-1");
-      grantCacheOf(deps).issueNativeGrant.mockImplementation(
-        (params: { allowedTools: string[] }) => mintEntry(params.allowedTools, 1)
+      grantCacheOf(deps).issueNativeGrant.mockImplementation((params: { allowedTools: string[] }) =>
+        mintEntry(params.allowedTools, 1)
       );
       const lc = new HttpLifecycle(deps);
       expect(NATIVE_GRANT_TOOL_IDS.length).toBeGreaterThan(0);

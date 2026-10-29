@@ -20,8 +20,8 @@ export function nativeGrantToolTitle(id: string): string {
 }
 
 export function listNativeGrantTools(): NativeGrantTool[] {
-  return NATIVE_GRANT_TOOL_IDS.map((id) => ({ id, title: nativeGrantToolTitle(id) })).sort(
-    (a, b) => a.title.localeCompare(b.title)
+  return NATIVE_GRANT_TOOL_IDS.map((id) => ({ id, title: nativeGrantToolTitle(id) })).sort((a, b) =>
+    a.title.localeCompare(b.title)
   );
 }
 

@@ -37,8 +37,8 @@ function renderSection(grants: HelpSessionActiveGrant[] = []) {
   const approveButton = () =>
     view.getByRole("button", { name: "Approve grant" }) as HTMLButtonElement;
   const summary = () =>
-    document.getElementById(approveButton().getAttribute("aria-describedby") ?? "")
-      ?.textContent ?? "";
+    document.getElementById(approveButton().getAttribute("aria-describedby") ?? "")?.textContent ??
+    "";
   const toolList = () => view.getByRole("group", { name: "Tools to approve" });
   return { ...view, approveButton, summary, toolList };
 }
@@ -47,9 +47,7 @@ describe("NativeGrantsSection (#14982)", () => {
   it("offers every grantable tool by name and nothing main would refuse", () => {
     const { getByLabelText, queryByText, toolList } = renderSection();
 
-    expect(within(toolList()).getAllByRole("checkbox")).toHaveLength(
-      NATIVE_GRANT_TOOL_IDS.length
-    );
+    expect(within(toolList()).getAllByRole("checkbox")).toHaveLength(NATIVE_GRANT_TOOL_IDS.length);
     expect(getByLabelText(/Run recipe/)).toBeTruthy();
     expect(queryByText("terminal.closeAll")).toBeNull();
   });
