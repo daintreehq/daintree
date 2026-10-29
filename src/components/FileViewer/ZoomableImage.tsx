@@ -50,6 +50,39 @@ export function zoomForWheel(currentZoom: number, deltaY: number): number {
   return clampZoom(currentZoom * Math.exp(-deltaY * WHEEL_ZOOM_SENSITIVITY));
 }
 
+export interface ZoomView {
+  zoom: number;
+  /** Pan, in CSS px from where the stage centres the image. */
+  offset: { x: number; y: number };
+}
+
+const FIT_VIEW: ZoomView = { zoom: 1, offset: { x: 0, y: 0 } };
+
+/**
+ * The view after zooming to `nextZoom` while the image point under `anchor`
+ * stays where it is on screen. `anchor` is a stage position measured from the
+ * stage's centre. The image is centred in the stage and scales about its own
+ * centre, which sits at the stage centre plus `offset`, so the pan has to take
+ * up whatever the scale change moves the anchored point by. Exported for tests.
+ */
+export function zoomViewAt(
+  view: ZoomView,
+  nextZoom: number,
+  anchor: { x: number; y: number }
+): ZoomView {
+  const zoom = clampZoom(nextZoom);
+  // Pinned at a limit, nothing moves: returning the same object also spares a render.
+  if (zoom === view.zoom) return view;
+  const ratio = zoom / view.zoom;
+  return {
+    zoom,
+    offset: {
+      x: anchor.x - (anchor.x - view.offset.x) * ratio,
+      y: anchor.y - (anchor.y - view.offset.y) * ratio,
+    },
+  };
+}
+
 /** How far one arrow press pans a zoomed image, in CSS px. */
 const KEYBOARD_PAN_STEP = 48;
 
@@ -80,8 +113,8 @@ export function fitScale(
  * places that deliberately have none.
  */
 export function ZoomableImage({ filePath, rootPath, alt, cacheBust, onError }: ZoomableImageProps) {
-  const [zoom, setZoom] = useState(1);
-  const [offset, setOffset] = useState({ x: 0, y: 0 });
+  const [view, setView] = useState<ZoomView>(FIT_VIEW);
+  const { zoom, offset } = view;
   const containerRef = useRef<HTMLDivElement>(null);
   const controlsRef = useRef<HTMLDivElement>(null);
   const handleControlsKeyDown = useToolbarRoving(controlsRef);
@@ -108,15 +141,15 @@ export function ZoomableImage({ filePath, rootPath, alt, cacheBust, onError }: Z
   // the previous one's zoom and pan, which reads as a broken image when the two
   // have different dimensions.
   useEffect(() => {
-    setZoom(1);
-    setOffset({ x: 0, y: 0 });
+    setView(FIT_VIEW);
     setNatural(null);
   }, [filePath]);
 
-  const resetView = useCallback(() => {
-    setZoom(1);
-    setOffset({ x: 0, y: 0 });
-  }, []);
+  const resetView = useCallback(() => setView(FIT_VIEW), []);
+
+  // Keeps the current pan, so the image zooms about its own centre.
+  const stepZoom = (factor: number) =>
+    setView((current) => ({ ...current, zoom: clampZoom(current.zoom * factor) }));
 
   // Registered natively rather than via onWheel because React attaches wheel
   // listeners as passive, and a passive listener cannot preventDefault — the
@@ -126,7 +159,14 @@ export function ZoomableImage({ filePath, rootPath, alt, cacheBust, onError }: Z
     if (!element) return;
     const handleWheel = (event: WheelEvent) => {
       event.preventDefault();
-      setZoom((current) => zoomForWheel(current, event.deltaY));
+      // Measured here, not in the updater: wheel events can land several to a
+      // frame, and each one has to compose onto the view the last one left.
+      const rect = element.getBoundingClientRect();
+      const anchor = {
+        x: event.clientX - (rect.left + rect.width / 2),
+        y: event.clientY - (rect.top + rect.height / 2),
+      };
+      setView((current) => zoomViewAt(current, zoomForWheel(current.zoom, event.deltaY), anchor));
     };
     element.addEventListener("wheel", handleWheel, { passive: false });
     return () => element.removeEventListener("wheel", handleWheel);
@@ -145,7 +185,10 @@ export function ZoomableImage({ filePath, rootPath, alt, cacheBust, onError }: Z
   const handlePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
     const drag = dragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
-    setOffset({ x: event.clientX - drag.startX, y: event.clientY - drag.startY });
+    setView((current) => ({
+      ...current,
+      offset: { x: event.clientX - drag.startX, y: event.clientY - drag.startY },
+    }));
   };
 
   const endDrag = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -172,15 +215,18 @@ export function ZoomableImage({ filePath, rootPath, alt, cacheBust, onError }: Z
     const delta = pan[event.key];
     if (delta) {
       event.preventDefault();
-      setOffset((current) => ({ x: current.x + delta[0], y: current.y + delta[1] }));
+      setView((current) => ({
+        ...current,
+        offset: { x: current.offset.x + delta[0], y: current.offset.y + delta[1] },
+      }));
       return;
     }
     if (event.key === "+" || event.key === "=") {
       event.preventDefault();
-      setZoom((current) => clampZoom(current * BUTTON_ZOOM_STEP));
+      stepZoom(BUTTON_ZOOM_STEP);
     } else if (event.key === "-") {
       event.preventDefault();
-      setZoom((current) => clampZoom(current / BUTTON_ZOOM_STEP));
+      stepZoom(1 / BUTTON_ZOOM_STEP);
     } else if (event.key === "0") {
       event.preventDefault();
       resetView();
@@ -271,14 +317,14 @@ export function ZoomableImage({ filePath, rootPath, alt, cacheBust, onError }: Z
           <ZoomButton
             label="Zoom out"
             disabled={zoom <= MIN_ZOOM}
-            onClick={() => setZoom((current) => clampZoom(current / BUTTON_ZOOM_STEP))}
+            onClick={() => stepZoom(1 / BUTTON_ZOOM_STEP)}
           >
             <Minus className={PANE_TOOLBAR_ICON_CLASS} aria-hidden="true" />
           </ZoomButton>
           <ZoomButton
             label="Zoom in"
             disabled={zoom >= MAX_ZOOM}
-            onClick={() => setZoom((current) => clampZoom(current * BUTTON_ZOOM_STEP))}
+            onClick={() => stepZoom(BUTTON_ZOOM_STEP)}
           >
             <Plus className={PANE_TOOLBAR_ICON_CLASS} aria-hidden="true" />
           </ZoomButton>
