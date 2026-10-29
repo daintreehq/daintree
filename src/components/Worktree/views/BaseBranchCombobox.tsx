@@ -14,6 +14,8 @@ interface BaseBranchComboboxProps {
   disabled?: boolean;
   /** Shown in place of the branch when there is no honest one to show. */
   unavailableLabel?: string;
+  /** Id of text that qualifies the base — e.g. that a pull request set it. */
+  describedBy?: string;
 }
 
 /** Control only — "Base" and its help text live on the form's label rail. */
@@ -23,6 +25,7 @@ export function BaseBranchCombobox({
   errorField,
   disabled,
   unavailableLabel,
+  describedBy,
 }: BaseBranchComboboxProps) {
   const hasError = errorField === "base-branch";
   return (
@@ -36,7 +39,10 @@ export function BaseBranchCombobox({
           aria-haspopup="listbox"
           aria-controls={controller.open ? "branch-list" : undefined}
           aria-invalid={hasError ? true : undefined}
-          aria-describedby={hasError ? "validation-error" : undefined}
+          aria-describedby={
+            [hasError ? "validation-error" : null, describedBy].filter(Boolean).join(" ") ||
+            undefined
+          }
           className={cn(
             FIELD_TRIGGER,
             hasError && "border-status-error focus-visible:outline-status-error"

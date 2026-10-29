@@ -46,8 +46,13 @@ const LABEL_CLASSES = "text-xs text-text-secondary";
  * a hint that sits as far from its control as the next row does belongs to
  * neither. Exported so a skeleton standing in for a hint row can match it — the
  * two drifting apart is a 4px jump on resolve.
+ *
+ * The cell carries the hint's own type size, not just its contents. An inline
+ * `text-xs` span can't shrink a line box below its block's strut, so in a cell
+ * inheriting the body's 24px leading such a hint sat 14px under its control and
+ * wrapped double-spaced.
  */
-export const HINT_CELL = "col-start-2 -mt-1 min-w-0";
+export const HINT_CELL = "col-start-2 -mt-1 min-w-0 text-xs";
 
 interface FormSectionProps {
   title: string;

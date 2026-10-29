@@ -10,6 +10,8 @@ interface EnvironmentRadioGroupProps {
   onChange: (mode: string) => void;
   resourceEnvironments: Record<string, unknown> | undefined;
   hasAnyEnvironments: boolean;
+  /** Id of the hint under the row while it shows — see `EnvironmentHint`. */
+  describedBy?: string;
   disabled?: boolean;
 }
 
@@ -19,6 +21,7 @@ export function EnvironmentRadioGroup({
   onChange,
   resourceEnvironments,
   hasAnyEnvironments,
+  describedBy,
   disabled,
 }: EnvironmentRadioGroupProps) {
   const options = useMemo<SegmentedRadioOption<string>[]>(
@@ -37,6 +40,7 @@ export function EnvironmentRadioGroup({
       value={worktreeMode}
       onChange={onChange}
       aria-label="Environment"
+      aria-describedby={describedBy}
       disabled={disabled}
     />
   );
@@ -45,11 +49,12 @@ export function EnvironmentRadioGroup({
 /**
  * What a non-local choice does, on the row's hint rail rather than in the
  * control cell — inside, it pulled the "Environment" label below the pills.
+ * Keeps the id the group's `aria-describedby` points at.
  */
 export function EnvironmentHint({ worktreeMode }: { worktreeMode: string }) {
   if (worktreeMode === "local") return null;
   return (
-    <p className="text-xs text-text-secondary">
+    <p id="environment-hint" className="text-xs text-text-secondary">
       Provisions the {worktreeMode} environment after setup
     </p>
   );
