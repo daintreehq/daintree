@@ -19,10 +19,11 @@ import { createLogger } from "../../utils/logger.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import type { HelpAssistantTier } from "../../../shared/types/ipc/maps.js";
 import type { ActionContext } from "../../../shared/types/actions.js";
-import type {
-  HelpAdoptResult,
-  HelpPastSession,
-  PinnedActionContextSnapshot,
+import {
+  HELP_PAST_SESSIONS_LIMIT,
+  type HelpAdoptResult,
+  type HelpPastSessionsListing,
+  type PinnedActionContextSnapshot,
 } from "../../../shared/types/ipc/help.js";
 import { getPtyClient } from "../../window/serviceRefs.js";
 import {
@@ -551,15 +552,17 @@ async function handleListPendingHibernationSlots(
 async function handleListPastSessions(
   ctx: import("../types.js").IpcContext,
   projectId: string
-): Promise<HelpPastSession[]> {
-  if (typeof projectId !== "string" || !projectId) return [];
+): Promise<HelpPastSessionsListing> {
+  // A refusal reads as no history at all, never as history that failed to load.
+  const nothing: HelpPastSessionsListing = { sessions: [], unreadable: [], truncated: false };
+  if (typeof projectId !== "string" || !projectId) return nothing;
   if (!ctx.projectId || ctx.projectId !== projectId) {
     console.warn("[help] listPastSessions: projectId mismatch — refusing cross-project read", {
       requested: projectId,
       fromView: ctx.projectId,
       webContentsId: ctx.webContentsId,
     });
-    return [];
+    return nothing;
   }
   const [{ helpSessionService }, lister, claudeStore, codex, { projectStore }, { scratchStore }] =
     await Promise.all([
@@ -574,7 +577,7 @@ async function handleListPastSessions(
   // renderer: a path it supplied could name another project's history.
   const projectPath =
     projectStore.getProjectById(projectId)?.path ?? scratchStore.getScratchById(projectId)?.path;
-  if (!projectPath) return [];
+  if (!projectPath) return nothing;
   const codexPath = helpSessionService.getSessionPathForProject(projectPath, "codex");
   const legacyPath = helpSessionService.getLegacySessionPathForProject(projectPath);
   const paths = {
@@ -584,7 +587,8 @@ async function handleListPastSessions(
   return lister.listHelpPastSessions(paths, {
     claudeProjectsRoot:
       claudeStore.resolvePaneClaudeProjectsRoot() ?? lister.defaultClaudeProjectsRoot(),
-    listCodexSessions: (cwd) => codex.listCodexSessionsForCwd(cwd),
+    listCodexSessions: (cwd) =>
+      codex.listCodexSessionsForCwd(cwd, undefined, HELP_PAST_SESSIONS_LIMIT),
   });
 }
 

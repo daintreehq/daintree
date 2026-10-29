@@ -29,6 +29,22 @@ export interface HelpPastSession {
   updatedAt: number;
 }
 
+/** Rows a past-sessions listing holds at most. Older conversations stay resumable through `/resume`. */
+export const HELP_PAST_SESSIONS_LIMIT = 50;
+
+/**
+ * The answer to `help:list-past-sessions` (#14984). The rows alone can't say
+ * whether they are the whole history, so the listing carries what it left out.
+ */
+export interface HelpPastSessionsListing {
+  /** Newest first, at most `HELP_PAST_SESSIONS_LIMIT`. */
+  sessions: HelpPastSession[];
+  /** Stores that hold this project's history but couldn't be read: their rows may be missing. */
+  unreadable: HelpPastSession["agentId"][];
+  /** More conversations exist than `sessions` holds; the oldest were left out. */
+  truncated: boolean;
+}
+
 /**
  * A running assistant a remote view took over from a view that went away
  * (#13360). Its PTY never stopped, so the view reconnects a pane to it rather

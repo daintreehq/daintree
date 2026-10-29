@@ -1977,7 +1977,7 @@ export interface GeneratedIpcInvokeMap {
   };
   "help:list-past-sessions": {
     args: [projectId: string];
-    result: import("./help.js").HelpPastSession[];
+    result: import("./help.js").HelpPastSessionsListing;
   };
   "help:list-pending-hibernation-slots": {
     args: [projectId: string];
