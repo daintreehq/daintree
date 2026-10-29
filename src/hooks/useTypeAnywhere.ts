@@ -15,6 +15,7 @@ import { focusPanelInput } from "@/components/Panel/panelFocusRegistry";
 import { requestPaneFocus, requestedPaneSurface } from "@/components/Terminal/paneFocusRequest";
 import {
   findPanelIdForElement,
+  focusOwnsKey,
   getFocusTarget,
   hasBlockingOverlay,
   hasUsefulFocus,
@@ -149,7 +150,7 @@ export function useTypeAnywhere(): void {
       }
 
       // --- Rescue: the keystroke is about to go nowhere ---
-      if (hasUsefulFocus(active)) return;
+      if (hasUsefulFocus(active) || focusOwnsKey(active, e.key)) return;
 
       // Screen-reader browse mode uses single letters as quick-nav keys —
       // hijacking them would break navigation outright.

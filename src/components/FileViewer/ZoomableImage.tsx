@@ -107,10 +107,13 @@ export function fitScale(
  * Read-only image surface with a transparency checkerboard, wheel zoom and
  * drag pan.
  *
+ * Raster images in the file panel and the File Browser viewer both render
+ * through this, so the two views zoom and pan the same way.
+ *
  * Separate from `FileImagePreview` rather than an option on it: that component
- * is a plain fit-to-box `<img>` used by the file panel and the viewer modal,
- * and giving it a pan/zoom mode would put an interaction surface into two
- * places that deliberately have none.
+ * is a plain fit-to-box `<img>` that also carries SVG, and the fit-only
+ * surfaces (SVG, the temporary viewer dialog) deliberately have no interaction
+ * surface to give a pan/zoom mode to.
  */
 export function ZoomableImage({ filePath, rootPath, alt, cacheBust, onError }: ZoomableImageProps) {
   const [view, setView] = useState<ZoomView>(FIT_VIEW);
@@ -173,7 +176,8 @@ export function ZoomableImage({ filePath, rootPath, alt, cacheBust, onError }: Z
   }, []);
 
   const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0) return;
+    // Control-click is the context menu on macOS: leave it uncaptured.
+    if (event.button !== 0 || event.ctrlKey) return;
     dragRef.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY };
     event.currentTarget.setPointerCapture(event.pointerId);
   };
@@ -208,6 +212,9 @@ export function ZoomableImage({ filePath, rootPath, alt, cacheBust, onError }: Z
   // + and - zoom, 0 fits. Panning is the part the footer buttons can't give,
   // and without it a zoomed image's edges are reachable only by pointer.
   const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    // Chords belong to the app: Cmd+arrows move between panels and Cmd+/-/0 are
+    // its own zoom. Shift stays ours, since `+` is Shift+= on most layouts.
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
     const pan: Record<string, [number, number]> = {
       ArrowLeft: [KEYBOARD_PAN_STEP, 0],
       ArrowRight: [-KEYBOARD_PAN_STEP, 0],
@@ -217,6 +224,9 @@ export function ZoomableImage({ filePath, rootPath, alt, cacheBust, onError }: Z
     const delta = pan[event.key];
     if (delta) {
       event.preventDefault();
+      // Stopped so the grid's arrow-key panel navigation, which doesn't check
+      // `defaultPrevented`, doesn't also move focus away.
+      event.stopPropagation();
       setView((current) => ({
         ...current,
         offset: { x: current.offset.x + delta[0], y: current.offset.y + delta[1] },
@@ -225,12 +235,15 @@ export function ZoomableImage({ filePath, rootPath, alt, cacheBust, onError }: Z
     }
     if (event.key === "+" || event.key === "=") {
       event.preventDefault();
+      event.stopPropagation();
       stepZoom(BUTTON_ZOOM_STEP);
     } else if (event.key === "-") {
       event.preventDefault();
+      event.stopPropagation();
       stepZoom(1 / BUTTON_ZOOM_STEP);
     } else if (event.key === "0") {
       event.preventDefault();
+      event.stopPropagation();
       resetView();
     }
   };
@@ -247,9 +260,13 @@ export function ZoomableImage({ filePath, rootPath, alt, cacheBust, onError }: Z
         onPointerMove={handlePointerMove}
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
+        onLostPointerCapture={endDrag}
         onDoubleClick={resetView}
         onKeyDown={handleKeyDown}
         tabIndex={0}
+        // Keeps the hybrid input's type-anywhere rescue from typing these into
+        // an agent's draft before `handleKeyDown` sees them.
+        data-owned-keys="+=-0"
         role="group"
         aria-label={`${alt}. Arrow keys pan, plus and minus zoom, 0 fits to screen.`}
         className={cn(

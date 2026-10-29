@@ -19,6 +19,7 @@ import { CodeViewer, type CodeViewerHandle } from "@/components/FileViewer/CodeV
 import { FileSourceMetadataStrip } from "@/components/FileViewer/FileSourceMetadataStrip";
 import { revealCopy } from "@/components/FileViewer/revealCopy";
 import { FileImagePreview } from "@/components/FileViewer/FileImagePreview";
+import { ZoomableImage } from "@/components/FileViewer/ZoomableImage";
 import { FileVideoPreview } from "@/components/FileViewer/FileVideoPreview";
 import { FileAudioPreview } from "@/components/FileViewer/FileAudioPreview";
 import { FilePdfPreview } from "@/components/FileViewer/FilePdfPreview";
@@ -845,7 +846,26 @@ export function FilePane({
           {filePath &&
             !showPluginViewer &&
             viewMode !== "diff" &&
-            (loadState === "image" || loadState === "svg") && (
+            loadState === "image" &&
+            location !== "dialog" && (
+              // `cacheBust` rather than a new `key`: a rewritten image reloads its
+              // bytes in place, so the reader keeps the zoom and pan they were
+              // inspecting it at.
+              <ZoomableImage
+                filePath={filePath}
+                rootPath={effectiveRootPath}
+                alt={fileName ?? filePath}
+                cacheBust={String(reloadNonce)}
+                onError={(error) => failPreview(previewErrorCode(error, "NOT_FOUND"))}
+              />
+            )}
+
+          {/* SVG, and the temporary viewer dialog, stay fit-only: a dialog is a
+              glance at a file, not a place to inspect pixels. */}
+          {filePath &&
+            !showPluginViewer &&
+            viewMode !== "diff" &&
+            (loadState === "svg" || (loadState === "image" && location === "dialog")) && (
               <FileImagePreview
                 filePath={filePath}
                 rootPath={effectiveRootPath}

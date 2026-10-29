@@ -351,6 +351,22 @@ describe("useTypeAnywhere", () => {
       expect(draftOf("a1")).toBe("");
     });
 
+    it("leaves a key alone that the focused surface acts on, and rescues one it doesn't", () => {
+      document.body.innerHTML = `<div id="stage" tabindex="0" data-owned-keys="+-"></div>`;
+      const stage = document.getElementById("stage");
+      stage?.focus();
+      renderHook(() => useTypeAnywhere());
+
+      const owned = press("+");
+      expect(owned.defaultPrevented).toBe(false);
+      expect(draftOf("a1")).toBe("");
+
+      // The same surface would swallow this one, so it still goes to the agent.
+      const unowned = press("r");
+      expect(unowned.defaultPrevented).toBe(true);
+      expect(draftOf("a1")).toBe("r");
+    });
+
     it("leaves menu typeahead alone", () => {
       // An open menu consumes bare letters to jump between items. Stealing "h"
       // would break navigation and silently append it to an agent draft.
