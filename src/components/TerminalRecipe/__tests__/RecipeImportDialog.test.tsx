@@ -109,7 +109,7 @@ describe("RecipeImportDialog", () => {
 
   it("offers only a scope that can succeed when no project is open", async () => {
     render(<RecipeImportDialog isOpen onClose={() => {}} projectId={undefined} />);
-    const project = screen.getByRole("option", { name: /^Project/ });
+    const project = screen.getByRole("option", { name: /^Team/ });
     expect(project.hasAttribute("disabled")).toBe(true);
 
     await submit('{"name": "Ok", "terminals": []}');
@@ -254,5 +254,14 @@ describe("RecipeImportDialog", () => {
       expect(banner()!.textContent).toContain("Invalid recipe format");
       expect(screen.queryByRole("button", { name: "Import recipe" })).not.toBeNull();
     });
+  });
+
+  it("says before importing that a project recipe is written into the repository", () => {
+    render(<RecipeImportDialog isOpen onClose={() => {}} projectId="proj" />);
+    expect(document.body.textContent).toContain(".daintree/recipes/");
+
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "global" } });
+    expect(document.body.textContent).toContain("Stays on this machine");
+    expect(document.body.textContent).not.toContain(".daintree/recipes/");
   });
 });

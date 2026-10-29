@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/select";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { FIELD_CONTROL_SIZE, FormGrid, FormRow } from "@/components/Worktree/views";
+import { GLOBAL_SCOPE_LABEL, PROJECT_SCOPE_LABEL, newRecipeScopeDetail } from "./recipeScopeCopy";
 import { useRecipeStore } from "@/store/recipeStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -65,6 +66,7 @@ export function RecipeImportDialog({
   const [review, setReview] = useState<RecipeImportDropsTerminalsError | null>(null);
   const [isImporting, setIsImporting] = useState(false);
   const scopeId = useId();
+  const scopeHelpId = useId();
   const jsonLabelId = useId();
 
   useEffect(() => {
@@ -138,7 +140,15 @@ export function RecipeImportDialog({
 
       <AppDialog.Body>
         <FormGrid>
-          <FormRow label="Import as" htmlFor={scopeId}>
+          <FormRow
+            label="Import as"
+            htmlFor={scopeId}
+            hint={
+              <p id={scopeHelpId} className="text-xs text-text-secondary select-text">
+                {newRecipeScopeDetail(scope)}
+              </p>
+            }
+          >
             <Select
               value={scope}
               onValueChange={(value) => {
@@ -148,14 +158,18 @@ export function RecipeImportDialog({
               }}
               disabled={isImporting}
             >
-              <SelectTrigger id={scopeId} className={FIELD_CONTROL_SIZE}>
+              <SelectTrigger
+                id={scopeId}
+                className={FIELD_CONTROL_SIZE}
+                aria-describedby={scopeHelpId}
+              >
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="project" disabled={!projectId}>
-                  Project (current project only)
+                  {PROJECT_SCOPE_LABEL}
                 </SelectItem>
-                <SelectItem value="global">Global (all projects)</SelectItem>
+                <SelectItem value="global">{GLOBAL_SCOPE_LABEL}</SelectItem>
               </SelectContent>
             </Select>
           </FormRow>

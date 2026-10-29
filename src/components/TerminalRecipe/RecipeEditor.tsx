@@ -39,6 +39,7 @@ import {
 } from "@/components/Worktree/views";
 import { RecipeVariablePreview } from "@/components/TerminalRecipe/RecipeVariablePreview";
 import { getAgentConfig } from "@/config/agents";
+import { GLOBAL_SCOPE_LABEL, PROJECT_SCOPE_LABEL, newRecipeScopeDetail } from "./recipeScopeCopy";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import { getRecipeScope } from "@/utils/recipeScope";
 import { pluralize } from "@/lib/pluralize";
@@ -589,7 +590,10 @@ export function RecipeEditor({
             <FormRow
               label="Scope"
               htmlFor={recipe ? undefined : "recipe-scope"}
-              hint={recipe ? hint("recipe-scope-help", savedScope(recipe).detail) : undefined}
+              hint={hint(
+                "recipe-scope-help",
+                recipe ? savedScope(recipe).detail : newRecipeScopeDetail(scope)
+              )}
             >
               {recipe ? (
                 (() => {
@@ -610,14 +614,18 @@ export function RecipeEditor({
                   onValueChange={(value) => setScope(value as "global" | "project")}
                   disabled={isSaving}
                 >
-                  <SelectTrigger id="recipe-scope" className={FIELD_CONTROL_SIZE}>
+                  <SelectTrigger
+                    id="recipe-scope"
+                    className={FIELD_CONTROL_SIZE}
+                    aria-describedby="recipe-scope-help"
+                  >
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="project" disabled={!hasProject}>
-                      Project (current project only)
+                      {PROJECT_SCOPE_LABEL}
                     </SelectItem>
-                    <SelectItem value="global">Global (all projects)</SelectItem>
+                    <SelectItem value="global">{GLOBAL_SCOPE_LABEL}</SelectItem>
                   </SelectContent>
                 </Select>
               )}
