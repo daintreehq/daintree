@@ -119,7 +119,8 @@ export function connectionLabel(state: HostConnectionState, now: number = Date.n
       // Exact builds are the Build row's; here, what it means for connecting.
       return "Can't connect · needs a compatible build";
     case "driven-elsewhere":
-      return `Driven from ${state.driver.clientName}`;
+      // In the window banner's words.
+      return `${state.driver.isHostLocal ? "Its own screen" : state.driver.clientName} has control`;
   }
 }
 

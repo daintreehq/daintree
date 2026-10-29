@@ -390,19 +390,24 @@ export function hostChipStatusText(status: HostChipStatus): string | null {
   }
 }
 
-/**
- * Which side a mismatch asks to update: the one that is behind. Builds that
- * can't be ordered (same version, different commit) update the host, since
- * hosts follow the client.
- */
-export function updateTargetFor(mismatch: HandshakeMismatch): "host" | "local" {
+/** Which side runs the older build; null when the two have no order (a commit apart). */
+export function olderBuildSide(mismatch: HandshakeMismatch): "host" | "local" | null {
   const order =
     mismatch.kind === "protocol"
       ? mismatch.remote - mismatch.local
       : mismatch.kind === "version"
         ? (compareReleaseVersions(mismatch.remote, mismatch.local) ?? 0)
         : 0;
-  return order > 0 ? "local" : "host";
+  return order > 0 ? "local" : order < 0 ? "host" : null;
+}
+
+/**
+ * Which side a mismatch asks to update: the one that is behind. Builds that
+ * can't be ordered (same version, different commit) update the host, since
+ * hosts follow the client.
+ */
+export function updateTargetFor(mismatch: HandshakeMismatch): "host" | "local" {
+  return olderBuildSide(mismatch) === "local" ? "local" : "host";
 }
 
 export function updateActionLabel(mismatch: HandshakeMismatch, hostName: string): string {

@@ -143,8 +143,11 @@ import { isPtyPanel } from "@shared/types/panel";
 import { useSessionLostBanner } from "./useSessionLostBanner";
 import { useWorktreeMoveBanner, resolveWorktreeMoveRoute } from "./useWorktreeMoveBanner";
 import { useTerminalInputBlock } from "@/hooks/useHostConnection";
-import { ControlConfirmedBanner, TerminalInputBlockBanner } from "./TerminalInputBlockBanner";
-import { useControlConfirmed } from "@/components/Recovery/takeControl";
+import {
+  ControlConfirmedBanner,
+  TerminalInputBlockBanner,
+  usePaneInputNotice,
+} from "./TerminalInputBlockBanner";
 import { WorktreeMoveBanner } from "./WorktreeMoveBanner";
 import { VoiceMicNoticeBanner } from "./VoiceMicNoticeBanner";
 import type { TerminalRuntimeIdentity } from "@shared/types/panel";
@@ -750,7 +753,7 @@ function TerminalPaneComponent({
   // Single gate across waiting → injecting so the banner doesn't flicker on
   // the phase transition; fast injections (<400ms) show nothing.
   const showInjectionBanner = useDohertyGate(isInjecting || isPendingInjection);
-  const controlConfirmed = useControlConfirmed(id);
+  const paneInputNotice = usePaneInputNotice(id, paneInputBlock);
 
   // Cancel auto-restart if terminal is intentionally trashed/removed
   useEffect(() => {
@@ -1584,11 +1587,11 @@ function TerminalPaneComponent({
       {/* A PTY-backed plugin kind's "needs setup" strip, in flow above the
           terminal rather than over it. Nothing for a plain terminal. */}
       {storedKind !== undefined && <PluginKindSetupStrip kind={storedKind} />}
-      <BannerSlot visible={paneInputBlock !== null || controlConfirmed}>
-        {paneInputBlock ? (
+      <BannerSlot visible={paneInputNotice !== null}>
+        {paneInputNotice === "blocked" && paneInputBlock ? (
           <TerminalInputBlockBanner block={paneInputBlock} panelId={id} />
         ) : (
-          controlConfirmed && <ControlConfirmedBanner />
+          paneInputNotice === "confirmed" && <ControlConfirmedBanner />
         )}
       </BannerSlot>
 
@@ -1787,7 +1790,7 @@ function TerminalPaneComponent({
               onCancel={() => onClose()}
             />
           ) : isWaitingForControl ? (
-            <DriveLeaseGate agentId={agentId} containerRef={recoveryGateRef} />
+            <DriveLeaseGate agentId={agentId} panelId={id} containerRef={recoveryGateRef} />
           ) : spawnStatus === "spawning" && !eagerAttach ? (
             <TerminalStartupPlaceholder agentId={agentId} onCancel={() => onClose()} />
           ) : spawnStatus === "failed" ? (

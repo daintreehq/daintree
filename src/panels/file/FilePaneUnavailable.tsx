@@ -8,7 +8,7 @@ import {
   type RemoteFileContext,
   type UnavailableReason,
 } from "@/components/FileViewer/FileUnavailableState";
-import { SaveHostFileButton, TakeControlButton } from "@/components/FileViewer/hostFileActions";
+import { ControlRefusedState, SaveHostFileButton } from "@/components/FileViewer/hostFileActions";
 import {
   isAudioFilePath,
   isImageFilePath,
@@ -64,6 +64,8 @@ const NOT_RETRYABLE: ReadonlySet<UnavailableReason> = new Set<UnavailableReason>
   "UNSUPPORTED_MEDIA",
   "BINARY_FILE",
   "OUTSIDE_PROJECT",
+  // Reloads by itself once this window has control (useRetryOnControl).
+  "DRIVEN_ELSEWHERE",
 ]);
 
 /**
@@ -100,6 +102,15 @@ export function FilePaneUnavailable({
   onExternal: (target: ExternalTarget) => void;
 }) {
   const reason = toUnavailableReason(filePath, errorCode, errorMessage);
+  if (reason === "DRIVEN_ELSEWHERE") {
+    return (
+      <ControlRefusedState
+        icon={getFileTypeIcon(fileName).Icon}
+        what="The file"
+        data-testid="file-pane-unavailable"
+      />
+    );
+  }
   const shared = unavailableCopy(reason, errorMessage ?? "", remote);
   // Refreshing this pane can't turn a folder into something it can show; the
   // file manager can.
@@ -135,7 +146,6 @@ export function FilePaneUnavailable({
       data-testid="file-pane-unavailable"
       action={
         <div className="flex flex-wrap items-center justify-center gap-2">
-          {copy.action === "take-control" && <TakeControlButton />}
           {copy.action === "save" && <SaveHostFileButton hostPath={filePath} />}
           {openVia !== null && (
             <Button variant="subtle" size="sm" onClick={() => onExternal(openVia)}>

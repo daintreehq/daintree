@@ -38,8 +38,8 @@ export function describePlacementProjectFacts(
   }
   if (host.presence === "has") {
     const driver = live ? describeProjectDriver(summary, host.projectIds) : null;
-    if (driver === null) lines.push("Who drives it not reported");
-    else lines.push(driver === "" ? "Nobody drives it" : driver);
+    if (driver === null) lines.push("Who has control not reported");
+    else lines.push(driver === "" ? "Nobody has control" : driver);
   }
   return lines;
 }

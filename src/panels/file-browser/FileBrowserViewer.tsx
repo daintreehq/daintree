@@ -69,7 +69,7 @@ import {
 } from "@/components/FileViewer/FileUnavailableState";
 import {
   SaveHostFileButton,
-  TakeControlButton,
+  ControlRefusedState,
   useRemoteFileContext,
   useRetryOnControl,
 } from "@/components/FileViewer/hostFileActions";
@@ -1328,11 +1328,18 @@ export function FileBrowserViewer({
         );
 
       case "error": {
+        if (state.reason === "DRIVEN_ELSEWHERE") {
+          return (
+            <ControlRefusedState
+              icon={getFileTypeIcon(fileName).Icon}
+              what="The file"
+              data-testid="file-browser-unavailable"
+            />
+          );
+        }
         const copy = unavailableCopy(state.reason, state.message, remoteFile);
         const action =
-          copy.action === "take-control" ? (
-            <TakeControlButton />
-          ) : copy.action === "save" ? (
+          copy.action === "save" ? (
             <SaveHostFileButton hostPath={filePath} />
           ) : copy.action === "open" ? (
             <Button variant="subtle" size="sm" onClick={runOpen}>

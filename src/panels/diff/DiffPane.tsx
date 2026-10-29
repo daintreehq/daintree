@@ -44,7 +44,7 @@ import {
 } from "@/components/FileViewer/FileUnavailableState";
 import {
   SaveHostFileButton,
-  TakeControlButton,
+  ControlRefusedState,
   useRemoteFileContext,
   useRetryOnControl,
 } from "@/components/FileViewer/hostFileActions";
@@ -1652,6 +1652,15 @@ function DiffPreviewUnavailable({
   onExternal: (target: "reveal" | "default-app") => void;
 }) {
   const refused = refusalReason(error);
+  if (refused === "DRIVEN_ELSEWHERE") {
+    return (
+      <ControlRefusedState
+        icon={getFileTypeIcon(filePath).Icon}
+        what="The preview"
+        data-testid="diff-pane-unavailable"
+      />
+    );
+  }
   const copy =
     refused !== null || remote?.saveTarget != null
       ? unavailableCopy(refused ?? fileReason, error.title, remote)
@@ -1663,9 +1672,7 @@ function DiffPreviewUnavailable({
       description={copy.description}
       data-testid="diff-pane-unavailable"
       action={
-        copy.action === "take-control" ? (
-          <TakeControlButton variant="contrast" />
-        ) : copy.action === "save" ? (
+        copy.action === "save" ? (
           <SaveHostFileButton hostPath={hostPath} variant="contrast" />
         ) : copy.action === "reveal" ? (
           <Button variant="contrast" size="sm" onClick={() => onExternal("reveal")}>

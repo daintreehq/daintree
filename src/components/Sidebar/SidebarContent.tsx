@@ -38,7 +38,7 @@ import {
 } from "@/components/Worktree";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
-import { WorktreesReconnectingBadge } from "./WorktreesReconnectingBadge";
+import { WorktreesReconnectingBadge, WorktreesReconnectingRow } from "./WorktreesReconnectingBadge";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { Server } from "@/components/icons";
 import { getViewHostId } from "@/hooks/useHostConnection";
@@ -937,7 +937,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     />
   );
   return (
-    <div className="flex flex-col h-full">
+    <div className="@container/sidebar flex flex-col h-full">
       {/* Header Section */}
       {/* The control zone carries ONE horizontal rule, at its bottom edge. When
           the search rail renders it owns that rule, so the header goes without;
@@ -1100,6 +1100,13 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         </div>
       </div>
 
+      {/* Too narrow for "Reconnecting…" beside the title: it says it on its
+          own line under the header instead of shrinking to a bare spinner. */}
+      {showReconnecting && (
+        <WorktreesReconnectingRow
+          escalatedSince={showReconnectingEscalated ? reconnectingAt : null}
+        />
+      )}
       {/* Inline search bar — only when there are non-main worktrees */}
       {hasNonMainWorktrees && (
         <WorktreeSidebarSearchBar
