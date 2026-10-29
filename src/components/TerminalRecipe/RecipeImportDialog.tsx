@@ -1,5 +1,5 @@
 import { useEffect, useId, useState } from "react";
-import { AppDialog } from "@/components/ui/AppDialog";
+import { AppDialog, type RestoreFocusTarget } from "@/components/ui/AppDialog";
 import { Field, FieldError } from "@/components/ui/field";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -33,6 +33,8 @@ interface RecipeImportDialogProps {
    * wrong, so the user can fix it in place or import what can be.
    */
   refusedImport?: { json: string; error: unknown } | null;
+  /** Where focus goes on close when the control that opened the dialog is gone. */
+  restoreFocusTo?: RestoreFocusTarget;
 }
 
 /**
@@ -45,6 +47,7 @@ export function RecipeImportDialog({
   onClose,
   projectId,
   refusedImport,
+  restoreFocusTo,
 }: RecipeImportDialogProps) {
   const importRecipe = useRecipeStore((s) => s.importRecipe);
   // With no project open only Global can succeed, so it is the starting choice
@@ -121,7 +124,13 @@ export function RecipeImportDialog({
   };
 
   return (
-    <AppDialog isOpen={isOpen} onClose={onClose} size="md" dismissible={!isImporting}>
+    <AppDialog
+      isOpen={isOpen}
+      onClose={onClose}
+      size="md"
+      dismissible={!isImporting}
+      restoreFocusTo={restoreFocusTo}
+    >
       <AppDialog.Header>
         <AppDialog.Title>Import recipe</AppDialog.Title>
         <AppDialog.CloseButton />

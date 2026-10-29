@@ -79,6 +79,15 @@ describe("describeRejectedTerminal", () => {
     expect(shown.some((c) => c.codePointAt(0)! < 0x20 || c === "\u202e")).toBe(false);
   });
 
+  it("cuts a long title or type between characters, never inside one", () => {
+    const long = `${"a".repeat(59)}\u{1F600}${"b".repeat(10)}`;
+    const [described] = describeAll([{ type: long, title: long }]);
+    const expected = `${"a".repeat(59)}\u{1F600}…`;
+
+    expect(described!.label).toBe(`Terminal 1 · ${expected}`);
+    expect(described!.reason).toBe(`this version of Daintree can't launch type "${expected}"`);
+  });
+
   it("falls back to the position alone for a blank title", () => {
     expect(describeAll([{ type: "nope", title: " \n " }])[0]!.label).toBe("Terminal 1");
   });

@@ -6,6 +6,8 @@ import type { ReactNode } from "react";
 interface MockAction {
   label: string;
   onClick: () => void;
+  disabled?: boolean;
+  loading?: boolean;
 }
 
 vi.mock("@/components/ui/select", () => import("@/components/ui/__tests__/nativeSelectMock"));
@@ -17,12 +19,29 @@ vi.mock("@/components/ui/AppDialog", () => {
   Dialog.Title = ({ children }: { children: ReactNode }) => <h2>{children}</h2>;
   Dialog.CloseButton = () => <button type="button" aria-label="Close dialog" />;
   Dialog.Body = ({ children }: { children: ReactNode }) => <div>{children}</div>;
-  Dialog.Footer = ({ primaryAction }: { primaryAction?: MockAction }) =>
-    primaryAction ? (
-      <button type="button" onClick={primaryAction.onClick}>
-        {primaryAction.label}
-      </button>
-    ) : null;
+  Dialog.Footer = ({
+    primaryAction,
+    secondaryAction,
+  }: {
+    primaryAction?: MockAction;
+    secondaryAction?: MockAction;
+  }) => (
+    <>
+      {[secondaryAction, primaryAction].map(
+        (action) =>
+          action && (
+            <button
+              key={action.label}
+              type="button"
+              disabled={action.disabled || action.loading}
+              onClick={action.onClick}
+            >
+              {action.label}
+            </button>
+          )
+      )}
+    </>
+  );
   return { AppDialog: Dialog };
 });
 
@@ -146,7 +165,8 @@ describe("RecipeImportDialog", () => {
       fireEvent.change(screen.getByRole("combobox"), { target: { value: "global" } });
 
       expect(banner()).toBeNull();
-      expect(screen.queryByRole("button", { name: "Import recipe" })).not.toBeNull();
+      await click("Import recipe");
+      expect(importRecipe).toHaveBeenLastCalledWith(undefined, MIXED, undefined);
     });
 
     it("offers nothing to import when no terminal would survive", async () => {
@@ -170,7 +190,11 @@ describe("RecipeImportDialog", () => {
       await click("Import 2 terminals");
 
       expect(document.body.textContent).toContain("Disk full");
-      expect(screen.queryByRole("button", { name: "Import 2 terminals" })).not.toBeNull();
+      await click("Import 2 terminals");
+      expect(importRecipe).toHaveBeenCalledTimes(3);
+      expect(importRecipe).toHaveBeenLastCalledWith("proj", MIXED, {
+        allowDroppedTerminals: true,
+      });
     });
 
     it("opens a refused file import with its JSON and the review", () => {
@@ -186,6 +210,34 @@ describe("RecipeImportDialog", () => {
       expect((textarea() as HTMLTextAreaElement).value).toBe(MIXED);
       expect(banner()!.textContent).toContain("Plugin agent");
       expect(screen.queryByRole("button", { name: "Import 2 terminals" })).not.toBeNull();
+    });
+
+    it("seeds a file's JSON once per opening and forgets it on close", () => {
+      const seed = { json: MIXED, error: refusalFor(MIXED_TERMINALS) };
+      const { rerender } = render(
+        <RecipeImportDialog isOpen onClose={() => {}} projectId="proj" refusedImport={seed} />
+      );
+      fireEvent.change(textarea(), { target: { value: "{}" } });
+      rerender(
+        <RecipeImportDialog isOpen onClose={() => {}} projectId="proj" refusedImport={seed} />
+      );
+      expect((textarea() as HTMLTextAreaElement).value).toBe("{}");
+      expect(banner()).toBeNull();
+
+      rerender(
+        <RecipeImportDialog
+          isOpen={false}
+          onClose={() => {}}
+          projectId="proj"
+          refusedImport={null}
+        />
+      );
+      rerender(
+        <RecipeImportDialog isOpen onClose={() => {}} projectId="proj" refusedImport={null} />
+      );
+      expect((textarea() as HTMLTextAreaElement).value).toBe("");
+      expect(banner()).toBeNull();
+      expect(screen.queryByRole("button", { name: "Import 2 terminals" })).toBeNull();
     });
 
     it("opens a file the store refused outright with its JSON and the reason", () => {

@@ -10,7 +10,22 @@ vi.mock("@/components/ui/AppDialog", () => {
   Dialog.Title = ({ children }: { children: ReactNode }) => <h2>{children}</h2>;
   Dialog.CloseButton = () => <button type="button" aria-label="Close dialog" />;
   Dialog.Body = ({ children }: { children: ReactNode }) => <div>{children}</div>;
-  Dialog.Footer = ({ children }: { children: ReactNode }) => <div>{children}</div>;
+  Dialog.Footer = ({
+    children,
+    secondaryAction,
+  }: {
+    children?: ReactNode;
+    secondaryAction?: { label: string; onClick: () => void };
+  }) => (
+    <div>
+      {children}
+      {secondaryAction && (
+        <button type="button" onClick={secondaryAction.onClick}>
+          {secondaryAction.label}
+        </button>
+      )}
+    </div>
+  );
   return { AppDialog: Dialog };
 });
 vi.mock("@/components/ui/ConfirmDialog", () => ({ ConfirmDialog: () => null }));
@@ -24,8 +39,10 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
   DropdownMenu: ({ children }: { children: ReactNode }) => <>{children}</>,
   DropdownMenuTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
   DropdownMenuContent: ({ children }: { children: ReactNode }) => <div role="menu">{children}</div>,
-  DropdownMenuItem: ({ children }: { children: ReactNode }) => (
-    <div role="menuitem">{children}</div>
+  DropdownMenuItem: ({ children, onSelect }: { children: ReactNode; onSelect?: () => void }) => (
+    <div role="menuitem" onClick={onSelect}>
+      {children}
+    </div>
   ),
   DropdownMenuSeparator: () => <hr />,
 }));
@@ -193,34 +210,63 @@ describe("RecipeManager — a file import that can't come across whole (#15044)"
     terminals: [{ type: "terminal", command: "ls" }, { type: "acme-agent" }],
   });
 
-  async function importFromFile(result: unknown) {
-    const importRecipeFromFile = vi.fn().mockResolvedValue(result);
-    useRecipeStore.setState({ importRecipeFromFile });
-    seed({});
-    renderManager();
-    await act(async () => {
-      screen.getByRole("button", { name: "Import from file" }).click();
-    });
-    return importRecipeFromFile;
-  }
-
-  it("opens the import dialog on the file's JSON and what would be dropped", async () => {
+  const refused = () => {
     const { accepted, rejected } = inspectRecipeTerminals(JSON.parse(json).terminals);
-    const importRecipeFromFile = await importFromFile({
+    return {
       status: "refused",
       json,
       error: new RecipeImportDropsTerminalsError(accepted.length, rejected),
-    });
+    };
+  };
 
-    expect(importRecipeFromFile).toHaveBeenCalledWith("proj");
-    const field = screen.getByTestId("recipe-import-textarea") as HTMLTextAreaElement;
-    expect(field.value).toBe(json);
-    expect(document.body.textContent).toContain("1 terminal can't be imported");
-    expect(document.body.textContent).toContain('can\'t launch type "acme-agent"');
+  const activate = async (el: HTMLElement) => {
+    await act(async () => {
+      el.click();
+    });
+  };
+
+  async function importFromFile(result: unknown, inventory: Parameters<typeof seed>[0] = {}) {
+    const importRecipeFromFile = vi.fn().mockResolvedValue(result);
+    useRecipeStore.setState({ importRecipeFromFile });
+    seed(inventory);
+    renderManager();
+    const entry =
+      screen.queryByRole("button", { name: "Import from file" }) ??
+      screen.getByRole("menuitem", { name: /Import from file/ });
+    await activate(entry);
+    return importRecipeFromFile;
+  }
+
+  const field = () => screen.queryByTestId<HTMLTextAreaElement>("recipe-import-textarea");
+
+  it.each([
+    ["the empty state", {}],
+    ["the inventory's import menu", { global: GLOBAL }],
+  ])(
+    "opens the import dialog from %s on the file's JSON and what would be dropped",
+    async (_, inventory) => {
+      const importRecipeFromFile = await importFromFile(refused(), inventory);
+
+      expect(importRecipeFromFile).toHaveBeenCalledWith("proj");
+      expect(field()?.value).toBe(json);
+      expect(document.body.textContent).toContain("1 terminal can't be imported");
+      expect(document.body.textContent).toContain('can\'t launch type "acme-agent"');
+    }
+  );
+
+  it("forgets the file once the dialog closes", async () => {
+    await importFromFile(refused(), { global: GLOBAL });
+    await activate(screen.getByRole("button", { name: "Cancel" }));
+    expect(field()).toBeNull();
+
+    await activate(screen.getByRole("menuitem", { name: /Import from clipboard/ }));
+    expect(field()?.value).toBe("");
+    expect(document.body.textContent).not.toContain("can't be imported");
   });
 
   it("leaves a clean file import at one click", async () => {
-    await importFromFile({ status: "imported" });
-    expect(screen.queryByTestId("recipe-import-textarea")).toBeNull();
+    const importRecipeFromFile = await importFromFile({ status: "imported" });
+    expect(importRecipeFromFile).toHaveBeenCalledTimes(1);
+    expect(field()).toBeNull();
   });
 });

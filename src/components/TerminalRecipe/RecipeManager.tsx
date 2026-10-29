@@ -790,6 +790,12 @@ export function RecipeManager({
         }}
         projectId={currentProject?.id}
         refusedImport={refusedFileImport}
+        // Importing the first recipe swaps the empty state, and the button that
+        // opened this dialog with it, for the inventory and its filter.
+        restoreFocusTo={() =>
+          inventoryFocusFallbackRef.current?.querySelector<HTMLElement>("input") ??
+          emptyStateActionRef.current
+        }
       />
     </>
   );

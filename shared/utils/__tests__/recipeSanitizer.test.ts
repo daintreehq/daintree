@@ -327,9 +327,32 @@ describe("inspectRecipeTerminals (#15044)", () => {
       { type: "codex", initialPrompt: "hi\r\n", args: "  --fast  " },
       { type: "dev-preview", devCommand: "a\nb" },
     ];
-    expect(inspectRecipeTerminals(input).accepted).toEqual(sanitizeRecipeTerminals(input));
-    expect(inspectRecipeTerminals(input).accepted[0]).toMatchObject({ command: "npm test" });
-    expect(inspectRecipeTerminals(input).accepted[0]).not.toHaveProperty("extra");
+    const { accepted, rejected } = inspectRecipeTerminals(input);
+    expect(accepted).toEqual([
+      {
+        type: "terminal",
+        title: undefined,
+        command: "npm test",
+        env: undefined,
+        initialPrompt: undefined,
+        devCommand: undefined,
+        args: undefined,
+        exitBehavior: undefined,
+      },
+      {
+        type: "codex",
+        title: undefined,
+        command: undefined,
+        env: undefined,
+        initialPrompt: "hi",
+        devCommand: undefined,
+        args: "--fast",
+        exitBehavior: undefined,
+      },
+    ]);
+    expect(accepted[0]).not.toHaveProperty("extra");
+    expect(rejected.map((r) => r.index)).toEqual([1, 3]);
+    expect(sanitizeRecipeTerminals(input)).toEqual(accepted);
   });
 
   it("returns nothing for input that isn't an array", () => {
