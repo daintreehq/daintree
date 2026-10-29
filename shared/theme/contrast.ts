@@ -41,6 +41,23 @@ export const ACCENT_CONTRAST_PAIR = {
   minimum: 4.5,
 } as const;
 
+// The destructive Button variant (`src/components/ui/button.tsx`) paints `text-inverse`
+// on a solid `status-danger` fill: the label read right before pushing, merging or
+// deleting a worktree (#15363). Its hover and press cues are `filter: brightness()` on
+// the whole button, so the label scales with the fill. Filter functions multiply
+// gamma-encoded sRGB and clamp (Filter Effects 1 §5), so a near-white label cannot
+// brighten with its fill on hover, and the ratio's fixed 0.05 flare term keeps a
+// near-black label from tracking its fill down on press. A pair just over the floor at
+// rest dips under it in one state or the other: bali measured 4.99:1 at rest and 4.31:1
+// hovered. Exported so the button's own suite holds the variant's classes to the pair
+// and states measured here.
+export const DESTRUCTIVE_BUTTON_CONTRAST = {
+  foreground: "text-inverse",
+  background: "status-danger",
+  minimum: 4.5,
+  brightness: { hover: 1.1, press: 0.95 },
+} as const;
+
 const CONTRAST_PAIRS: Array<{
   foreground: AppThemeTokenKey;
   background: AppThemeTokenKey;
@@ -608,6 +625,7 @@ export function getThemeContrastWarnings(scheme: AppColorScheme): AppThemeValida
   // outline) against the highlight fill and the surface around it.
   warnings.push(...getPaletteSelectionWarnings(scheme));
   warnings.push(...getRecentActivityDotWarnings(scheme));
+  warnings.push(...getDestructiveButtonWarnings(scheme));
 
   // Terminal ANSI / syntax legibility and distinctness — OKLab-based because
   // the terminal background is always dark and WCAG ratios are unreliable there.
@@ -897,6 +915,43 @@ function getPaletteSelectionWarnings(scheme: AppColorScheme): AppThemeValidation
     warnings.push({ kind: "unevaluable", message: unevaluableDanger });
   }
 
+  return warnings;
+}
+
+// What `filter: brightness(amount)` paints for an opaque colour: each sRGB channel
+// scaled and clamped, the same per-channel matrix Chromium applies.
+function applyBrightness(hex: string, amount: number): string {
+  return `#${hexToRgb(hex)
+    .map((channel) =>
+      Math.min(255, Math.round(channel * amount))
+        .toString(16)
+        .padStart(2, "0")
+    )
+    .join("")}`;
+}
+
+function getDestructiveButtonWarnings(scheme: AppColorScheme): AppThemeValidationWarning[] {
+  const { foreground, background, minimum, brightness } = DESTRUCTIVE_BUTTON_CONTRAST;
+  const label = scheme.tokens[foreground];
+  const fill = scheme.tokens[background];
+  // A non-hex value for either token is already reported as unevaluable by the
+  // CONTRAST_PAIRS entries that read it; a second notice would only repeat it.
+  if (!isHexColor(label) || !isHexColor(fill)) return [];
+
+  const warnings: AppThemeValidationWarning[] = [];
+  for (const [state, amount] of [
+    ["at rest", 1],
+    ["hovered", brightness.hover],
+    ["pressed", brightness.press],
+  ] as const) {
+    const ratio = contrastRatio(applyBrightness(label, amount), applyBrightness(fill, amount));
+    if (ratio < minimum) {
+      warnings.push({
+        kind: "low-contrast",
+        message: `${foreground} on ${background} (destructive button, ${state}) is ${ratio.toFixed(2)}:1; target is ${minimum.toFixed(1)}:1`,
+      });
+    }
+  }
   return warnings;
 }
 

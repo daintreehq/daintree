@@ -258,6 +258,8 @@ describe("getThemeContrastWarnings", () => {
       "status-warning": "#000000" as AppColorSchemeTokens["status-warning"],
       "status-danger": "#000000" as AppColorSchemeTokens["status-danger"],
       "status-info": "#000000" as AppColorSchemeTokens["status-info"],
+      // The destructive button paints this on a status-danger fill; white keeps it clear.
+      "text-inverse": "#ffffff" as AppColorSchemeTokens["text-inverse"],
       "surface-panel": "#ffffff" as AppColorSchemeTokens["surface-panel"],
       "surface-grid": "#ffffff" as AppColorSchemeTokens["surface-grid"],
       "surface-sidebar": "#ffffff" as AppColorSchemeTokens["surface-sidebar"],
@@ -922,5 +924,55 @@ describe("contrast-CTA pair (text-inverse on text-primary)", () => {
     });
     expect(findWarning(dark)).toBeUndefined();
     expect(findWarning(light)).toBeUndefined();
+  });
+});
+
+describe("destructive button label", () => {
+  const destructiveMessages = (label: string, fill: string) =>
+    getThemeContrastWarnings(
+      makeScheme({
+        "text-inverse": label as AppColorSchemeTokens["text-inverse"],
+        "status-danger": fill as AppColorSchemeTokens["status-danger"],
+      })
+    )
+      .map((w) => w.message)
+      .filter((m) => m.includes("destructive button"));
+
+  it("fails a dark label that clears the fill at rest but not once pressed darkens both", () => {
+    // 4.81:1 at rest; brightness(0.95) on both colours leaves 4.41:1.
+    const messages = destructiveMessages("#000000", "#B85F56");
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toContain("pressed");
+  });
+
+  it("fails a white label that clears the fill at rest but not once hover brightens it", () => {
+    // The label is already at the clamp, so only the fill moves: 4.99:1 to 4.31:1.
+    const messages = destructiveMessages("#FDFEFB", "#C0453A");
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toContain("hovered");
+  });
+
+  it("names each state that falls short", () => {
+    const messages = destructiveMessages("#1B1715", "#B85F56");
+    expect(messages.map((m) => /\(destructive button, ([a-z ]+)\)/.exec(m)?.[1])).toEqual([
+      "at rest",
+      "pressed",
+    ]);
+  });
+
+  it("passes a pair that holds the floor in every state", () => {
+    expect(destructiveMessages("#1a1918", "#C8746C")).toEqual([]);
+  });
+
+  it("leaves a non-hex fill to the unevaluable notice the surface pairs already raise", () => {
+    const warnings = getThemeContrastWarnings(
+      makeScheme({
+        "status-danger": "color-mix(in oklab, red, black)" as AppColorSchemeTokens["status-danger"],
+      })
+    );
+    expect(warnings.some((w) => w.message.includes("destructive button"))).toBe(false);
+    expect(
+      warnings.some((w) => w.kind === "unevaluable" && w.message.includes("status-danger"))
+    ).toBe(true);
   });
 });

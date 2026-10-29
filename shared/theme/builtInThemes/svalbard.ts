@@ -35,7 +35,7 @@ export const theme: BuiltInThemeSource = {
     status: {
       success: "#1E7A5C",
       warning: "#8A661A",
-      danger: "#C0413E",
+      danger: "#BC3D3A",
       info: "#2E6E96",
     },
     activity: {
