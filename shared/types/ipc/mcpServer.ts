@@ -986,8 +986,7 @@ export interface McpBearerIdentity {
  * to call it in its own stores. Display-only: it grants and routes nothing.
  */
 export type McpRequester =
-  | { kind: "pane"; terminalId: string }
-  | { kind: "assistant"; helpSessionId: string };
+  { kind: "pane"; terminalId: string } | { kind: "assistant"; helpSessionId: string };
 
 /**
  * Result of a renderer-driven `disconnectBearer` IPC. `disconnected` is true
