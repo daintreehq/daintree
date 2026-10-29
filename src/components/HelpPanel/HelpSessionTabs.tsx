@@ -448,10 +448,10 @@ export function HelpSessionTabs({
   const slots = useMemo(() => tabs.map((t) => t.slot), [tabs]);
 
   /**
-   * Closing a lane with a live agent raises a confirm dialog first, and `tabs` is rebuilt
-   * on every `agentState` transition, so the handoff waits for THAT lane to be gone.
-   * Closing the active lane makes the store pick a new active lane — the lowest remaining
-   * slot, not the neighbour — and focus follows the selection there.
+   * Closing a lane with a working agent raises a confirm dialog first, and `tabs` is
+   * rebuilt on every `agentState` transition, so the handoff waits for THAT lane to be
+   * gone. Closing the active lane makes the store select its neighbour, the following
+   * one first, and focus follows the selection there.
    */
   const { armKeyboardClose, disarmKeyboardClose } = useKeyboardTabClose({
     ids: slots,
