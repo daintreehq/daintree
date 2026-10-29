@@ -69,20 +69,36 @@ function isExcludedFromLayout(panel: CarrierPanel): boolean {
   );
 }
 
+let lastPanelsById: Record<string, CarrierPanel | undefined> | null = null;
+let lastLayoutPanelIds: ReadonlySet<string> = new Set();
+
 /**
  * The panels a snapshot can still restore: live and inside layout history. Read
  * from `panelsById` rather than `panelIds`, the same lookup `applySnapshot`
- * restores through.
+ * restores through. The orchestrator runs this on every panel-store write, so
+ * a write that leaves `panelsById` alone hands back the same set.
  */
 export function selectLayoutPanelIds(state: {
   panelsById: Record<string, CarrierPanel | undefined>;
-}): Set<string> {
+}): ReadonlySet<string> {
+  if (state.panelsById === lastPanelsById) return lastLayoutPanelIds;
   const ids = new Set<string>();
   for (const id in state.panelsById) {
     const panel = state.panelsById[id];
     if (panel && !isExcludedFromLayout(panel)) ids.add(id);
   }
+  lastPanelsById = state.panelsById;
+  lastLayoutPanelIds = ids;
   return ids;
+}
+
+export function sameLayoutPanelIds(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
+  if (a === b) return true;
+  if (a.size !== b.size) return false;
+  for (const id of a) {
+    if (!b.has(id)) return false;
+  }
+  return true;
 }
 
 // A snapshot with even one surviving panel is still worth applying: the rest of
@@ -244,6 +260,20 @@ function applySnapshot(snapshot: LayoutSnapshot): void {
     newTerminalIds.push(entry.id);
   }
 
+  // A panel inside a spawn batch is in `panelsById` (and its worktree bucket)
+  // before the flush appends it to `panelIds`, and the flush only reveals ids
+  // still registered. Carry it through untouched and leave the reveal to the
+  // flush; dropping it here would delete a live panel.
+  const placedIds = new Set(newTerminalIds);
+  const pendingIds: string[] = [];
+  for (const id in panelsById) {
+    const pending = panelsById[id];
+    if (pending && !placedIds.has(id)) {
+      newTerminalsById[id] = pending;
+      pendingIds.push(id);
+    }
+  }
+
   // A snapshot `activeDockTerminalId` that no longer points at a panel currently
   // living (and renderable) in the dock would open the popover onto nothing —
   // clear it (#11375).
@@ -281,7 +311,7 @@ function applySnapshot(snapshot: LayoutSnapshot): void {
     // Bulk restore can change panels' worktreeId, so rebuild the per-worktree
     // index — sidebar summaries and worktree cycling read it and would
     // otherwise see stale buckets after an undo of a cross-worktree move.
-    panelIdsByWorktreeId: buildWorktreeIndex(newTerminalIds, newTerminalsById),
+    panelIdsByWorktreeId: buildWorktreeIndex([...newTerminalIds, ...pendingIds], newTerminalsById),
     tabGroups: restoredGroups,
     focusedId: layoutPointer(snapshot.focusedId),
     maximizedId: restoredMaximizedId,
@@ -337,13 +367,16 @@ export const useLayoutUndoStore = create<LayoutUndoState>()((set, get) => ({
 
   pushLayoutSnapshot: () => {
     const snapshot = captureCurrentLayout();
+    const layoutPanelIds = selectLayoutPanelIds(usePanelStore.getState());
     set((state) => {
-      // A capture with no layout panels has nothing to put back; it still ends
-      // the redo branch, since a layout change is starting.
-      const undoStack =
-        snapshot.terminals.length > 0
-          ? [...state.undoStack, snapshot].slice(-MAX_UNDO_HISTORY)
-          : state.undoStack;
+      // A layout change is starting, so the redo branch ends. A capture with no
+      // layout panels has nothing to put back and is filtered out with any
+      // other dead entry.
+      const undoStack = restorableHistory(
+        [...state.undoStack, snapshot],
+        [],
+        layoutPanelIds
+      ).undoStack.slice(-MAX_UNDO_HISTORY);
       return {
         undoStack,
         redoStack: [],

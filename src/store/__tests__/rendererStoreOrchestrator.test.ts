@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import type { PtyPanelData, PanelInstance } from "@shared/types/panel";
+import type { BrowserPanelData, PtyPanelData, PanelInstance } from "@shared/types/panel";
 import type { StagingStatus } from "@shared/types";
 
 vi.mock("@/clients", () => ({
@@ -557,20 +557,11 @@ describe("rendererStoreOrchestrator", () => {
   });
 
   describe("layout undo history (#14969)", () => {
-    function browserPanel(id: string, overrides: Partial<PanelInstance> = {}): PanelInstance {
-      return {
-        id,
-        kind: "browser",
-        title: id,
-        cwd: "/test",
-        cols: 80,
-        rows: 24,
-        location: "grid",
-        ...overrides,
-      } as PanelInstance;
+    function browserPanel(id: string, overrides: Partial<BrowserPanelData> = {}): BrowserPanelData {
+      return { id, kind: "browser", title: id, location: "grid", ...overrides };
     }
 
-    function seedPanels(panels: PanelInstance[]) {
+    function seedPanels(panels: BrowserPanelData[]) {
       usePanelStore.setState({
         panelsById: Object.fromEntries(panels.map((p) => [p.id, p])),
         panelIds: panels.map((p) => p.id),
@@ -629,13 +620,20 @@ describe("rendererStoreOrchestrator", () => {
       expect(state.panelsById["c"]!.location).toBe("dock");
     });
 
-    it("disables undo once the only panel an entry restores goes to the trash", () => {
+    it.each<[string, Partial<BrowserPanelData>]>([
+      ["goes to the trash", { location: "trash" }],
+      ["moves into a dialog", { location: "dialog" }],
+      ["is excluded from persistence", { excludeFromPersistence: true }],
+    ])("disables undo once the only panel an entry restores %s", (_label, change) => {
       seedPanels([browserPanel("a"), browserPanel("b", { location: "trash" })]);
       useLayoutUndoStore.getState().pushLayoutSnapshot();
       movePanel("b", "grid");
       expect(useLayoutUndoStore.getState().canUndo).toBe(true);
 
-      movePanel("a", "trash");
+      const { panelsById } = usePanelStore.getState();
+      usePanelStore.setState({
+        panelsById: { ...panelsById, a: { ...panelsById["a"]!, ...change } },
+      });
 
       expect(usePanelStore.getState().panelIds).toEqual(["a", "b"]);
       expect(useLayoutUndoStore.getState().canUndo).toBe(false);
@@ -660,8 +658,11 @@ describe("rendererStoreOrchestrator", () => {
       seedPanels([browserPanel("a"), browserPanel("b")]);
       useLayoutUndoStore.getState().pushLayoutSnapshot();
       movePanel("a", "dock");
-      useLayoutUndoStore.getState().undo();
       useLayoutUndoStore.getState().pushLayoutSnapshot();
+      movePanel("b", "dock");
+      useLayoutUndoStore.getState().undo();
+      expect(useLayoutUndoStore.getState().undoStack).toHaveLength(1);
+      expect(useLayoutUndoStore.getState().redoStack).toHaveLength(1);
 
       usePanelStore.setState({ panelsById: {}, panelIds: [] });
 
@@ -675,15 +676,17 @@ describe("rendererStoreOrchestrator", () => {
     it("leaves history alone on reorders and metadata updates", () => {
       seedPanels([browserPanel("a"), browserPanel("b")]);
       useLayoutUndoStore.getState().pushLayoutSnapshot();
-      const before = useLayoutUndoStore.getState();
+      const prune = vi.spyOn(useLayoutUndoStore.getState(), "pruneHistory");
 
       usePanelStore.setState({ panelIds: ["b", "a"] });
       usePanelStore.getState().updateTitle("a", "renamed", "automation");
 
-      expect(useLayoutUndoStore.getState()).toBe(before);
+      expect(prune).not.toHaveBeenCalled();
+      prune.mockRestore();
+      expect(useLayoutUndoStore.getState().undoStack).toHaveLength(1);
     });
 
-    it("stops pruning once the orchestrator is torn down", () => {
+    it("stops pruning once torn down and catches up when re-initialized", () => {
       seedPanels([browserPanel("a")]);
       useLayoutUndoStore.getState().pushLayoutSnapshot();
 
@@ -691,6 +694,12 @@ describe("rendererStoreOrchestrator", () => {
       usePanelStore.setState({ panelsById: {}, panelIds: [] });
 
       expect(useLayoutUndoStore.getState().undoStack).toHaveLength(1);
+
+      // Coming back up reconciles the history it missed, without waiting for
+      // another panel change.
+      initStoreOrchestrator();
+      expect(useLayoutUndoStore.getState().undoStack).toHaveLength(0);
+      expect(useLayoutUndoStore.getState().canUndo).toBe(false);
     });
   });
 

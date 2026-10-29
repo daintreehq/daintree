@@ -303,14 +303,73 @@ describe("layoutUndoStore", () => {
     expect(undoState.canRedo).toBe(false);
   });
 
-  it("does not record a snapshot with no panels in layout history", () => {
-    const trashed = makeTerminal({ id: "trashed", location: "trash" });
-    seedTerminals([trashed]);
+  it("disables redo without touching the layout when no entry has a panel left", () => {
+    const a = makeTerminal({ id: "a", location: "grid" });
+    seedTerminals([a]);
 
     useLayoutUndoStore.getState().pushLayoutSnapshot();
+    setTerminals([{ ...a, location: "dock" }]);
+    useLayoutUndoStore.getState().undo();
+    const c = makeTerminal({ id: "c", location: "dock" });
+    setTerminals([c]);
+    usePanelStore.setState({ focusedId: "c" });
 
-    expect(useLayoutUndoStore.getState().undoStack).toHaveLength(0);
-    expect(useLayoutUndoStore.getState().canUndo).toBe(false);
+    useLayoutUndoStore.getState().redo();
+
+    const state = usePanelStore.getState();
+    expect(state.panelIds).toEqual(["c"]);
+    expect(state.panelsById["c"]!.location).toBe("dock");
+    expect(state.focusedId).toBe("c");
+    const undoState = useLayoutUndoStore.getState();
+    expect(undoState.redoStack).toHaveLength(0);
+    expect(undoState.canRedo).toBe(false);
+    expect(undoState.undoStack).toHaveLength(0);
+    expect(undoState.canUndo).toBe(false);
+  });
+
+  it("keeps a panel still inside a spawn batch through undo", () => {
+    const a = makeTerminal({ id: "a", location: "grid", worktreeId: "w1" });
+    seedTerminals([a]);
+
+    useLayoutUndoStore.getState().pushLayoutSnapshot();
+    // A batched spawn registers the panel and files it in its worktree bucket,
+    // but only appends it to `panelIds` at the flush.
+    const pending = makeTerminal({ id: "pending", location: "grid", worktreeId: "w1" });
+    usePanelStore.setState({
+      panelsById: { a: { ...a, location: "dock" }, pending },
+      panelIds: ["a"],
+      panelIdsByWorktreeId: { w1: ["a", "pending"] },
+    });
+
+    useLayoutUndoStore.getState().undo();
+
+    const state = usePanelStore.getState();
+    expect(state.panelsById["a"]!.location).toBe("grid");
+    expect(state.panelsById["pending"]).toBe(pending);
+    expect(state.panelIds).toEqual(["a"]);
+    expect(state.panelIdsByWorktreeId["w1"]).toEqual(["a", "pending"]);
+  });
+
+  it("drops a capture with no layout panels and still ends the redo branch", () => {
+    const a = makeTerminal({ id: "a", location: "grid" });
+    seedTerminals([a]);
+
+    useLayoutUndoStore.getState().pushLayoutSnapshot();
+    setTerminals([{ ...a, location: "dock" }]);
+    useLayoutUndoStore.getState().pushLayoutSnapshot();
+    setTerminals([a]);
+    useLayoutUndoStore.getState().undo();
+    expect(useLayoutUndoStore.getState().undoStack).toHaveLength(1);
+    expect(useLayoutUndoStore.getState().redoStack).toHaveLength(1);
+
+    setTerminals([{ ...a, location: "trash" }]);
+    useLayoutUndoStore.getState().pushLayoutSnapshot();
+
+    const undoState = useLayoutUndoStore.getState();
+    expect(undoState.undoStack).toHaveLength(0);
+    expect(undoState.redoStack).toHaveLength(0);
+    expect(undoState.canUndo).toBe(false);
+    expect(undoState.canRedo).toBe(false);
   });
 
   it("pruneHistory drops only the entries with nothing left to restore", () => {
@@ -336,6 +395,24 @@ describe("layoutUndoStore", () => {
     undoState = useLayoutUndoStore.getState();
     expect(undoState.undoStack).toHaveLength(0);
     expect(undoState.canUndo).toBe(false);
+  });
+
+  it("pruneHistory writes nothing when every entry can still restore", () => {
+    const a = makeTerminal({ id: "a", location: "grid" });
+    seedTerminals([a]);
+    const writes = vi.fn();
+    const unsubscribe = useLayoutUndoStore.subscribe(writes);
+
+    useLayoutUndoStore.getState().pruneHistory();
+    expect(writes).not.toHaveBeenCalled();
+
+    useLayoutUndoStore.getState().pushLayoutSnapshot();
+    writes.mockClear();
+    useLayoutUndoStore.getState().pruneHistory();
+
+    unsubscribe();
+    expect(writes).not.toHaveBeenCalled();
+    expect(useLayoutUndoStore.getState().undoStack).toHaveLength(1);
   });
 
   it("clearHistory empties both stacks", () => {

@@ -25,7 +25,7 @@ import { usePluginPanelAttentionStore } from "./pluginPanelAttentionStore";
 import { usePluginPanelToolbarStore } from "./pluginPanelToolbarStore";
 import { usePluginPanelMenuStore } from "./pluginPanelMenuStore";
 import { usePluginPanelOpenRequestStore } from "./pluginPanelOpenRequestStore";
-import { selectLayoutPanelIds, useLayoutUndoStore } from "./layoutUndoStore";
+import { sameLayoutPanelIds, selectLayoutPanelIds, useLayoutUndoStore } from "./layoutUndoStore";
 import { useCliAvailabilityStore } from "./cliAvailabilityStore";
 import { useAgentSettingsStore } from "./agentSettingsStore";
 import { useHelpPanelStore } from "./helpPanelStore";
@@ -537,7 +537,7 @@ export function initStoreOrchestrator(): () => void {
       usePanelStore.subscribe(
         selectLayoutPanelIds,
         () => useLayoutUndoStore.getState().pruneHistory(),
-        { equalityFn: shallow, fireImmediately: true }
+        { equalityFn: sameLayoutPanelIds, fireImmediately: true }
       )
     )
   );
