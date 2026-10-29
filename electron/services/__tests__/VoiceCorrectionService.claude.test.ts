@@ -335,7 +335,9 @@ describe("VoiceCorrectionService on Claude", () => {
       "Your credit balance is too low to access the Anthropic API.",
     ],
   ] as const)("names a %i %s a failure that will recur", async (status, type, reason, text) => {
-    const fetchMock = stubFetch(jsonResponse({ type: "error", error: { type, message: text } }, status));
+    const fetchMock = stubFetch(
+      jsonResponse({ type: "error", error: { type, message: text } }, status)
+    );
     const result = await new VoiceCorrectionService().correct({ rawText: "run v test" }, SETTINGS);
     expect(result).toMatchObject({
       confirmedText: "run v test",

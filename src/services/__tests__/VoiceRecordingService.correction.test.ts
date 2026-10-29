@@ -1943,7 +1943,12 @@ describe("VoiceRecordingService — a cleanup failure that will recur (#14963)",
 
   it("gives each reason its own fix", async () => {
     const { service, dictate, flush } = await setup();
-    const reasons = ["key_rejected", "billing_required", "region_refused", "access_denied"] as const;
+    const reasons = [
+      "key_rejected",
+      "billing_required",
+      "region_refused",
+      "access_denied",
+    ] as const;
     for (const reason of reasons) {
       correct.mockResolvedValueOnce({
         action: "no_change",
