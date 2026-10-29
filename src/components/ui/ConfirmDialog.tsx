@@ -2,6 +2,7 @@ import type React from "react";
 import { useLayoutEffect, useState } from "react";
 import {
   AppDialog,
+  type DialogAction,
   type DialogInitialFocus,
   type DialogSize,
   type DialogZIndex,
@@ -116,6 +117,11 @@ type ConfirmDialogBaseProps = {
   /** Forwarded to {@link AppDialog.Footer.hintPlacement}. */
   hintPlacement?: "inline" | "above";
   /**
+   * Forwarded to {@link AppDialog.Footer.leadingAction}: a third answer beside
+   * Cancel and the primary. Locked with them while the confirm runs.
+   */
+  leadingAction?: DialogAction;
+  /**
    * Forwarded to {@link AppDialog.hasPreview}: set to true when the dialog
    * body contains scrollable preview content (commit lists, directory tables).
    * Switches the ARIA role from `alertdialog` to `dialog` for destructive
@@ -181,6 +187,7 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
     size = "sm",
     hint,
     hintPlacement,
+    leadingAction,
     bodyResetKey,
     compactBodyShadow,
   } = props;
@@ -338,6 +345,9 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
         // can't see, since the typed value lives here.
         hint={hint ?? (hasTypedNameGate && !isTypedMatched ? TYPED_GATE_HINT : undefined)}
         hintPlacement={hintPlacement}
+        leadingAction={
+          leadingAction && { ...leadingAction, disabled: isLocked || leadingAction.disabled }
+        }
         secondaryAction={{
           label: cancelLabel,
           onClick: handleClose,
