@@ -343,7 +343,7 @@ export function GlobalAssistantPane({
         }
         description={
           pendingConfirm?.kind === "discard"
-            ? "Its agent stops in every window and the conversation is discarded"
+            ? "Its agent stops in every window and the next start opens a new conversation"
             : "Its agent stops in every window and a new conversation starts"
         }
         confirmLabel={

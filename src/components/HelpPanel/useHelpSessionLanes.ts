@@ -48,8 +48,9 @@ export function useHelpSessionLanes({
   // already cleared.
   const restartFocusSlotRef = useRef<number | null>(null);
   // The lane a tab's close button is waiting on confirmation for (#12108).
-  // Null means no close is pending — closing is destructive (the conversation
-  // is discarded, not paused), so it takes the same gate the Stop control uses.
+  // Null means no close is pending — closing is destructive (the run ends and
+  // the lane forgets its conversation, not pauses it), so it takes the same gate
+  // the Stop control uses.
   const [pendingCloseSlot, setPendingCloseSlot] = useState<number | null>(null);
   // The lane focus should land on once a confirmed close removes a background
   // lane: its neighbour, the following one first. Null when the lane being
