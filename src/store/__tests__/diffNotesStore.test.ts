@@ -74,7 +74,7 @@ describe("diffNotesStore", () => {
 
     const cleared = useDiffNotesStore.getState().clearSent(snapshot);
 
-    expect(cleared).toBe(1);
+    expect(cleared).toEqual([sentAsIs]);
     const notes = useDiffNotesStore.getState().notes;
     expect(notes[sentAsIs.id]).toBeUndefined();
     expect(notes[editedAfter.id]?.body).toBe("Changed my mind");
@@ -150,5 +150,49 @@ describe("diffNotesStore restoreNote — the Undo for deleteNote", () => {
     useDiffNotesStore.setState({ notes: { [note.id]: newer } });
     useDiffNotesStore.getState().restoreNote(note);
     expect(useDiffNotesStore.getState().notes[note.id]?.body).toBe("Edited since");
+  });
+});
+
+describe("diffNotesStore restoreNotes — the Undo for clearSent", () => {
+  beforeEach(() => {
+    useDiffNotesStore.setState({ notes: {}, editingIds: {} });
+  });
+
+  it("puts every sent note back exactly as it was cleared", () => {
+    const first = add("src/a.ts");
+    const second = add("src/b.ts");
+    const left = add("src/c.ts");
+    const cleared = useDiffNotesStore.getState().clearSent([first, second]);
+
+    expect(useDiffNotesStore.getState().restoreNotes(cleared)).toBe(2);
+    expect(useDiffNotesStore.getState().notes).toEqual({
+      [first.id]: first,
+      [second.id]: second,
+      [left.id]: left,
+    });
+  });
+
+  it("restores the rest of a send without overwriting a note that came back newer", () => {
+    const first = add("src/a.ts");
+    const second = add("src/b.ts");
+    const cleared = useDiffNotesStore.getState().clearSent([first, second]);
+    const newer = { ...first, body: "Rewritten since", updatedAt: first.updatedAt + 1 };
+    useDiffNotesStore.setState({ notes: { [first.id]: newer } });
+
+    expect(useDiffNotesStore.getState().restoreNotes(cleared)).toBe(1);
+    expect(useDiffNotesStore.getState().notes).toEqual({
+      [first.id]: newer,
+      [second.id]: second,
+    });
+  });
+
+  it("restores nothing and keeps the same state when every note is already back", () => {
+    const note = add();
+    const cleared = useDiffNotesStore.getState().clearSent([note]);
+    useDiffNotesStore.getState().restoreNotes(cleared);
+    const before = useDiffNotesStore.getState().notes;
+
+    expect(useDiffNotesStore.getState().restoreNotes(cleared)).toBe(0);
+    expect(useDiffNotesStore.getState().notes).toBe(before);
   });
 });
