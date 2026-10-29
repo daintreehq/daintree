@@ -379,17 +379,15 @@ export function ResourceEnvironmentsSection({
                   </SelectContent>
                 </Select>
                 <IconPickerButton currentIcon={env.icon} onChange={(icon) => updateEnv({ icon })} />
-                {(envKeys.length > 1 || isReservedEnvironmentKey(currentEnvName)) && (
-                  <Button
-                    type="button"
-                    variant="ghost-danger"
-                    size="icon-sm"
-                    onClick={() => setPendingDeleteEnvironment(currentEnvName)}
-                    aria-label={`Delete ${currentEnvName} environment`}
-                  >
-                    <Trash2 />
-                  </Button>
-                )}
+                <Button
+                  type="button"
+                  variant="ghost-danger"
+                  size="icon-sm"
+                  onClick={() => setPendingDeleteEnvironment(currentEnvName)}
+                  aria-label={`Delete ${currentEnvName} environment`}
+                >
+                  <Trash2 />
+                </Button>
               </div>
             )}
           />

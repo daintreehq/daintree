@@ -541,24 +541,27 @@ describe("ResourceEnvironmentsSection — the reserved local name", () => {
     expect(saved["docker-local"]).toEqual(mockResourceEnvironments["docker-local"]);
   });
 
-  it.each(["docker-local", "Local"])(
-    "keeps the delete button off a sole %s environment",
-    (name) => {
-      render(
-        <ResourceEnvironmentsSection
-          resourceEnvironments={{ [name]: {} }}
-          onResourceEnvironmentsChange={vi.fn()}
-          activeResourceEnvironment={name}
-          onActiveResourceEnvironmentChange={vi.fn()}
-          defaultWorktreeMode="local"
-          onDefaultWorktreeModeChange={vi.fn()}
-          isOpen={true}
-        />
-      );
+  it.each(["docker-local", "Local"])("removes a sole %s environment", (name) => {
+    const onResourceEnvironmentsChange = vi.fn();
+    render(
+      <ResourceEnvironmentsSection
+        resourceEnvironments={{ [name]: {} }}
+        onResourceEnvironmentsChange={onResourceEnvironmentsChange}
+        activeResourceEnvironment={name}
+        onActiveResourceEnvironmentChange={vi.fn()}
+        defaultWorktreeMode="local"
+        onDefaultWorktreeModeChange={vi.fn()}
+        isOpen={true}
+      />
+    );
 
-      expect(screen.queryByRole("button", { name: `Delete ${name} environment` })).toBeNull();
-    }
-  );
+    fireEvent.click(screen.getByRole("button", { name: `Delete ${name} environment` }));
+    fireEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", { name: "Remove environment" })
+    );
+
+    expect(onResourceEnvironmentsChange).toHaveBeenCalledWith({});
+  });
 
   it("leaves an environment named Local unflagged, since it is a different key", () => {
     render(
