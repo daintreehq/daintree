@@ -2055,4 +2055,24 @@ describe("AppDialog — shared chrome contract", () => {
     fireEvent.click(discard);
     expect(onDiscard).not.toHaveBeenCalled();
   });
+
+  // Under forced colours the red label is gone, and `forced-colors.css` frames
+  // `button[data-variant="ghost-danger"]` instead, so only a destructive
+  // leading action may carry that variant, and it has to be a real button.
+  it("renders only a destructive leading action as the danger ghost that forced colours frames", () => {
+    const footer = (intent?: "destructive") => (
+      <AppDialog isOpen onClose={() => {}}>
+        <AppDialog.Footer
+          leadingAction={{ label: "Discard changes", onClick: () => {}, intent }}
+          primaryAction={{ label: "Save", onClick: () => {} }}
+        />
+      </AppDialog>
+    );
+    const leading = () => screen.getByRole("button", { name: "Discard changes" });
+    const { rerender } = render(footer("destructive"));
+    expect(leading().tagName).toBe("BUTTON");
+    expect(leading().getAttribute("data-variant")).toBe("ghost-danger");
+    rerender(footer());
+    expect(leading().getAttribute("data-variant")).toBe("ghost");
+  });
 });
