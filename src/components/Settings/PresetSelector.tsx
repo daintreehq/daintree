@@ -22,6 +22,8 @@ export interface PresetSelectorProps {
   /** Per-team shared presets sourced from `.daintree/presets/`. Defaults to empty. */
   projectPresets?: AgentPreset[];
   customPresets: AgentPreset[];
+  /** The selected id isn't in the lists because its presets haven't loaded, not because it's gone. */
+  selectionLoading?: boolean;
   onChange: (presetId: string | undefined) => void;
   agentColor: string;
   /** Wires the trigger to the row label that names it. */
@@ -33,10 +35,11 @@ type Item = {
   id: string;
   label: string;
   color: string;
-  source: "default" | "ccr" | "project" | "custom";
+  source: "default" | "ccr" | "project" | "custom" | "loading";
 };
 
 const DEFAULT_LABEL = "Default settings";
+const LOADING_LABEL = "Loading saved preset…";
 
 function stripCcrPrefix(name: string): string {
   return name.replace(/^CCR:\s*/, "");
@@ -48,6 +51,7 @@ export function PresetSelector({
   ccrPresets,
   projectPresets = [],
   customPresets,
+  selectionLoading = false,
   onChange,
   agentColor,
   "aria-labelledby": ariaLabelledBy,
@@ -92,10 +96,14 @@ export function PresetSelector({
         source: "ccr",
       };
     }
+    // Not loaded yet: still the saved choice, so Default isn't shown as picked.
+    if (selectionLoading) {
+      return { id: selectedPresetId, label: LOADING_LABEL, color: agentColor, source: "loading" };
+    }
     // Stale selection — fall back to default presentation but don't clear
     // state here (the parent clears stale IDs on launch).
     return { id: "", label: DEFAULT_LABEL, color: agentColor, source: "default" };
-  }, [selectedPresetId, ccrPresets, projectPresets, customPresets, agentColor]);
+  }, [selectedPresetId, ccrPresets, projectPresets, customPresets, selectionLoading, agentColor]);
 
   // Flat option order, in the order the groups render, for arrow-key movement.
   const options: Item[] = [

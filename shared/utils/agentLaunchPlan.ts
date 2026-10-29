@@ -12,7 +12,13 @@ import {
 } from "../types/agentSettings.js";
 import type { AgentCliDetail } from "../types/ipc/system.js";
 import { appendCallerLaunchFlagsToCommand } from "./callerLaunchFlags.js";
-import { applyPresetBehaviorOverrides, getMergedPreset, sanitizeAgentEnv } from "./agentPresets.js";
+import {
+  applyPresetBehaviorOverrides,
+  getMergedPreset,
+  isPresetAbsenceSettled,
+  sanitizeAgentEnv,
+  type PresetInventoryState,
+} from "./agentPresets.js";
 import { sanitizeTerminalName } from "./agentLaunchValidation.js";
 import { isAbsolute, isPathInside, pathComparisonKey } from "./path.js";
 
@@ -55,6 +61,8 @@ export interface AgentLaunchPlanInput {
   settings: AgentSettings | null | undefined;
   ccrPresets: AgentPreset[] | undefined;
   projectPresets: AgentPreset[] | undefined;
+  /** Which of `ccrPresets` and `projectPresets` are loaded, so a missing id can be told from an unread one. */
+  presetInventory: PresetInventoryState;
   options: AgentLaunchPlanOptions | undefined;
   /** The shell of the host the command runs on. */
   shellDialect: "posix" | "windows" | undefined;
@@ -84,6 +92,58 @@ export interface AgentLaunchPlan {
   title: string;
   /** "custom" when the title is the caller's name or a preset's, so detection keeps it. */
   titleMode: "custom" | undefined;
+  /**
+   * The preset id the launch would need but couldn't find while its inventory
+   * was still unread. Set only on a plan that resolved nothing: the caller must
+   * not start it.
+   */
+  unloadedPresetId: string | undefined;
+}
+
+/**
+ * The saved or requested preset id a launch can't resolve yet because the
+ * inventory that could hold it hasn't loaded (#15025), or `undefined` when the
+ * launch's preset is settled: found, deliberately none, or really gone. A
+ * stale worktree pick falls back to the agent default, so that fallback has to
+ * be settled too before the launch can go ahead.
+ */
+export function findUnloadedLaunchPreset(
+  input: Pick<
+    AgentLaunchPlanInput,
+    | "agentId"
+    | "isAgent"
+    | "worktreeId"
+    | "settings"
+    | "ccrPresets"
+    | "projectPresets"
+    | "presetInventory"
+    | "options"
+  >
+): string | undefined {
+  const { agentId, worktreeId, options, presetInventory } = input;
+  if (!input.isAgent || options?.presetId === null) return undefined;
+  const entry = input.settings?.agents?.[agentId] ?? {};
+  const unresolved = (id: string) =>
+    !getMergedPreset(agentId, id, entry.customPresets, input.ccrPresets, input.projectPresets);
+
+  const requestedId = options?.presetId ?? resolveEffectivePresetId(entry, worktreeId);
+  if (!requestedId || !unresolved(requestedId)) return undefined;
+  if (!isPresetAbsenceSettled(requestedId, presetInventory)) return requestedId;
+
+  const scopedId =
+    worktreeId && entry.worktreePresets ? entry.worktreePresets[worktreeId] : undefined;
+  const fallbackId = entry.presetId;
+  if (
+    options?.presetId === undefined &&
+    scopedId === requestedId &&
+    fallbackId &&
+    fallbackId !== scopedId &&
+    unresolved(fallbackId) &&
+    !isPresetAbsenceSettled(fallbackId, presetInventory)
+  ) {
+    return fallbackId;
+  }
+  return undefined;
 }
 
 /**
@@ -108,6 +168,24 @@ export async function buildAgentLaunchPlan(input: AgentLaunchPlanInput): Promise
   let env: Record<string, string> | undefined;
   let preset: AgentPreset | undefined;
   let cliDetail: AgentCliDetail | undefined;
+
+  // Before anything else, so an unread inventory never reaches the fallback,
+  // the stale-slot cleanup or a command built without the preset.
+  const unloadedPresetId = agentConfig ? findUnloadedLaunchPreset(input) : undefined;
+  if (unloadedPresetId !== undefined) {
+    return {
+      command: undefined,
+      launchFlags: undefined,
+      callerLaunchFlags: undefined,
+      assignedSessionId: undefined,
+      env: undefined,
+      preset: undefined,
+      cliDetail: undefined,
+      title: agentConfig?.name ?? "Terminal",
+      titleMode: undefined,
+      unloadedPresetId,
+    };
+  }
 
   if (agentConfig) {
     const entry = input.settings?.agents?.[agentId] ?? {};
@@ -262,6 +340,7 @@ export async function buildAgentLaunchPlan(input: AgentLaunchPlanInput): Promise
     // Any non-default title is pinned so the agent-detected title sync can't
     // clobber it with the bare agent name.
     titleMode: trimmedName || hasPresetTitle ? "custom" : undefined,
+    unloadedPresetId: undefined,
   };
 }
 

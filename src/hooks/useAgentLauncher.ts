@@ -18,8 +18,8 @@ import { logError, logWarn } from "@/utils/logger";
 import { markRendererPerformance } from "@/utils/performance";
 import { resolveWorkspaceCwd } from "@/utils/workspaceCwd";
 import { readViewDevServerCommand } from "@/utils/devServerCommand";
-import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
-import { useProjectPresetsStore } from "@/store/projectPresetsStore";
+import { readLaunchPresetSources, waitForLaunchPresets } from "@/utils/presetInventory";
+import { notify } from "@/lib/notify";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { addToWorktreeIndex } from "@/store/slices/panelRegistry/worktreeIndex";
 import type {
@@ -34,6 +34,7 @@ import { isAssistantFocused } from "@/store/macroFocusStore";
 import {
   buildAgentLaunchPlan,
   buildLaunchIdentity,
+  findUnloadedLaunchPreset,
   type LaunchAgentIdentity,
 } from "@shared/utils/agentLaunchPlan";
 import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
@@ -249,7 +250,11 @@ export interface LaunchAgentOptions {
 
 /** Why `launchAgent` resolved to `null` without throwing. */
 export type LaunchDeclineReason =
-  "panel-limit" | "already-launching" | "spawn-failed" | "unavailable";
+  | "panel-limit"
+  | "already-launching"
+  | "spawn-failed"
+  | "unavailable"
+  | "presets-loading";
 
 export interface LaunchDecline {
   reason: LaunchDeclineReason;
@@ -262,6 +267,27 @@ export interface LaunchAgentResult extends LaunchAgentIdentity {
   location: "grid" | "dock" | "background";
   /** Atomic launch result: no PTY was started; a setup diagnostic panel was opened. */
   spawnStatus?: "missing-cli";
+}
+
+/**
+ * Why a launch that would have run without its saved preset didn't start at
+ * all: running a different setup than the one chosen is worse than not
+ * running, and nothing else on screen would say so.
+ */
+function notifyPresetsLoading(
+  agentName: string,
+  worktreeId: string | null | undefined,
+  retry: () => void
+): void {
+  notify({
+    type: "error",
+    title: `Couldn't start ${agentName}`,
+    message: "Its saved preset hasn't loaded yet, so it wasn't started without it.",
+    context: { eventKind: "agent", ...(worktreeId ? { worktreeId } : {}) },
+    urgent: true,
+    replaceKey: `launch-presets-loading:${agentName}`,
+    action: { label: "Try again", onClick: retry },
+  });
 }
 
 export interface UseAgentLauncherReturn {
@@ -293,6 +319,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
 
   const isMounted = useRef(true);
   const launchingAgentsRef = useRef<Set<string>>(new Set());
+  const launchAgentRef = useRef<UseAgentLauncherReturn["launchAgent"] | null>(null);
 
   const checkAvailabilityAndLoadSettings = useCallback(async () => {
     if (!isElectronAvailable()) {
@@ -477,15 +504,36 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
         if (agentConfig && !useAgentSettingsStore.getState().isInitialized) {
           await useAgentSettingsStore.getState().initialize();
         }
-        const plan = await buildAgentLaunchPlan({
+        const presetScope = { projectId: currentProject?.id, scratchId: currentScratch?.id };
+        const presetSources = () => ({
           agentId,
-          agentConfig,
           isAgent,
           worktreeId: effectiveWorktreeId,
           settings: useAgentSettingsStore.getState().settings ?? agentSettings,
-          ccrPresets: useCcrPresetsStore.getState().ccrPresetsByAgent[agentId],
-          projectPresets: useProjectPresetsStore.getState().presetsByAgent[agentId],
           options: launchOptions,
+          ...readLaunchPresetSources(agentId, presetScope),
+        });
+        const declinePresetsLoading = (): null => {
+          logWarn(`Declined a launch of ${agentId}: its preset's inventory hasn't loaded`);
+          notifyPresetsLoading(agentConfig?.name ?? agentId, effectiveWorktreeId, () => {
+            void launchAgentRef.current?.(agentId, { ...launchOptions, onDecline: undefined });
+          });
+          return decline("presets-loading");
+        };
+        // A preset that isn't found while its inventory is still loading is
+        // waited for, never cleared or launched without (#15025). The wait
+        // costs nothing when the preset resolves, which is nearly every launch.
+        if (
+          agentConfig &&
+          !(await waitForLaunchPresets(
+            () => findUnloadedLaunchPreset(presetSources()) === undefined
+          ))
+        ) {
+          return declinePresetsLoading();
+        }
+        const plan = await buildAgentLaunchPlan({
+          ...presetSources(),
+          agentConfig,
           shellDialect: hostShellDialect(),
           resolveBaseCommand: (registryCommand, detail) =>
             resolveAgentLaunchBaseCommand(registryCommand, detail),
@@ -513,6 +561,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
             }
           },
         });
+        if (plan.unloadedPresetId !== undefined) return declinePresetsLoading();
         const { command, assignedSessionId, preset } = plan;
         const cachedLaunchCliDetail = plan.cliDetail;
 
@@ -725,6 +774,10 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
       homeDir,
     ]
   );
+  // Read by a refusal's Try again, which runs well after this render.
+  useEffect(() => {
+    launchAgentRef.current = launchAgent;
+  }, [launchAgent]);
 
   return {
     launchAgent,

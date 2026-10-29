@@ -13,6 +13,10 @@ import { agentToolbarPin } from "@shared/types/ipc/agentToolbarPins";
 import { cliAvailabilityClient } from "@/clients";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
+import { useProjectStore } from "@/store/projectStore";
+import { useScratchStore } from "@/store/scratchStore";
+import { presetInventoryState } from "@/utils/presetInventory";
+import { savedPresetStatus } from "./AgentScopeEditor/scopeUtils";
 import { logError } from "@/utils/logger";
 
 import { Button } from "@/components/ui/button";
@@ -277,6 +281,14 @@ export function AgentSettings({
 
   const ccrPresetsByAgent = useCcrPresetsStore((s) => s.ccrPresetsByAgent);
   const projectPresetsByAgent = useProjectPresetsStore((s) => s.presetsByAgent);
+  const ccrPresetsInitialized = useCcrPresetsStore((s) => s.isInitialized);
+  const hydratedProjectId = useProjectPresetsStore((s) => s.hydratedProjectId);
+  const currentProjectId = useProjectStore((s) => s.currentProject?.id);
+  const currentScratchId = useScratchStore((s) => s.currentScratch?.id);
+  const presetInventory = presetInventoryState(ccrPresetsInitialized, hydratedProjectId, {
+    projectId: currentProjectId,
+    scratchId: currentScratchId,
+  });
 
   // Rate limiting refs
   const lastAddTimeRef = useRef(0);
@@ -337,10 +349,12 @@ export function AgentSettings({
   // (deleted custom preset, CCR route removed from config), clear it so the
   // Settings UI and the stored settings agree. useAgentLauncher.ts does this
   // cleanup on the next launch, but the UI otherwise shows default with a
-  // zombie presetId in storage until the user launches the agent again.
+  // zombie presetId in storage until the user launches the agent again. An id
+  // whose presets haven't loaded yet is kept (#15025), and the load finishing
+  // reruns this even when it brings nothing.
   // updateAgent/onSettingsChange are stable Zustand actions / prop callbacks;
   // calling them via useEffectEvent keeps them out of the deps array so the
-  // effect only reruns on activeAgentId/settings/ccrPresetsByAgent changes.
+  // effect only reruns when the settings or the presets change.
   const clearStalePreset = useEffectEvent(() => {
     if (!activeAgentId) return;
     const entry = settings?.agents?.[activeAgentId];
@@ -348,8 +362,7 @@ export function AgentSettings({
     const ccr = ccrPresetsByAgent[activeAgentId];
     const project = projectPresetsByAgent[activeAgentId];
     const merged = getMergedPresets(activeAgentId, entry.customPresets, ccr, project);
-    const stillExists = merged.some((f) => f.id === entry.presetId);
-    if (!stillExists) {
+    if (savedPresetStatus(entry.presetId, merged, presetInventory) === "missing") {
       void (async () => {
         await updateAgent(activeAgentId, { presetId: undefined });
         onSettingsChange?.();
@@ -361,8 +374,17 @@ export function AgentSettings({
     void settings;
     void ccrPresetsByAgent;
     void projectPresetsByAgent;
+    void presetInventory.ccr;
+    void presetInventory.project;
     clearStalePreset();
-  }, [activeAgentId, settings, ccrPresetsByAgent, projectPresetsByAgent]);
+  }, [
+    activeAgentId,
+    settings,
+    ccrPresetsByAgent,
+    projectPresetsByAgent,
+    presetInventory.ccr,
+    presetInventory.project,
+  ]);
 
   const agentOptions = useMemo(
     () =>
@@ -684,6 +706,7 @@ export function AgentSettings({
             activeEntry={activeEntry}
             ccrPresets={ccrPresetsByAgent[activeAgent.id]}
             projectPresets={projectPresetsByAgent[activeAgent.id]}
+            presetInventory={presetInventory}
             defaultDangerousArg={defaultDangerousArg}
             editingPresetId={editingPresetId}
             setEditingPresetId={setEditingPresetId}
