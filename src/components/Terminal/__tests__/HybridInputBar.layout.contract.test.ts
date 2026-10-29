@@ -145,7 +145,7 @@ describe("HybridInputBar layout contract", () => {
     expect(classes).not.toMatch(/(^|[\s"])(min-)?w-/);
     expect(classes).not.toMatch(/\b(hover|focus-visible|group-hover):/);
     expect(classes).not.toMatch(/COMPOSER_CONTROL_/);
-    const tooltips = text.match(/<Tooltip>[\s\S]*?<\/Tooltip>/g) ?? [];
+    const tooltips = text.match(/<Tooltip\b[\s\S]*?<\/Tooltip>/g) ?? [];
     expect(tooltips.some((block) => block.includes("data-composer-marker"))).toBe(false);
   });
 

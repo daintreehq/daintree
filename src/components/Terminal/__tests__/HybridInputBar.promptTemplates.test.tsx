@@ -349,7 +349,30 @@ describe("HybridInputBar prompt templates in the `/` menu", () => {
     await act(async () => {});
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(view.state.doc.toString()).toBe("Fix the retry loop.");
+    await type("!");
 
+    act(() => {
+      undo(view);
+    });
+    expect(view.state.doc.toString()).toBe("Fix the retry loop.");
+    act(() => {
+      undo(view);
+    });
+    expect(view.state.doc.toString()).toBe("Fix the retry loop. /boiler");
+  });
+
+  it("takes only the token out for a template that fills nothing, as its own undo step", async () => {
+    const { view, type, press } = await renderComposer("Fix the retry loop.", [entry("   ")]);
+
+    await type(" /boiler");
+    await press("Enter");
+    expect(view.state.doc.toString()).toBe("Fix the retry loop.");
+    await type("!");
+
+    act(() => {
+      undo(view);
+    });
+    expect(view.state.doc.toString()).toBe("Fix the retry loop.");
     act(() => {
       undo(view);
     });
@@ -514,6 +537,11 @@ describe("HybridInputBar prompt marker", () => {
     expect(marker).toBeDefined();
     expect(marker!.closest("button, [role='button']")).toBeNull();
     expect(marker!.hasAttribute("tabindex")).toBe(false);
+    // As drawn, whatever the class constants hold: no width of its own and no hover or focus look.
+    const drawn = marker!.className.split(/\s+/);
+    expect(drawn.filter((c) => /^(min-)?w-|^(hover|focus-visible|group-hover):/.test(c))).toEqual(
+      []
+    );
     expect(marker!.closest("[aria-hidden='true']")).not.toBeNull();
     expect(screen.queryByRole("button", { name: /command picker/i })).toBeNull();
   });
