@@ -749,9 +749,12 @@ const STEPS: Step[] = [
 ];
 
 test.describe("device answer page review", () => {
-  test.skip(!ENABLED, "design capture harness — set DAINTREE_SHOT_DEVICE_ANSWER=1");
-
   test("captures every state", async () => {
+    test.info().annotations.push({
+      type: "conditional-skip",
+      description: "DAINTREE_SHOT_DEVICE_ANSWER is required for the device answer page capture",
+    });
+    test.skip(!ENABLED, "Set DAINTREE_SHOT_DEVICE_ANSWER to run the device answer page capture");
     test.setTimeout(30 * 60_000);
     mkdirSync(OUT_DIR, { recursive: true });
     for (const name of readdirSync(OUT_DIR)) {
