@@ -84,6 +84,14 @@ interface ConflictPanelProps {
 
 type ScanCache = Map<string, ConflictMarkerScanEntry>;
 
+/** A scan's answers, kept with the worktree they were read from. */
+interface ScanResults {
+  worktreePath: string;
+  entries: ScanCache;
+}
+
+const NO_SCAN: ScanCache = new Map();
+
 /**
  * Vertical commit-sequence rail for an in-progress rebase. Entirely neutral:
  * the conflict view's one accent belongs to Continue.
@@ -253,7 +261,7 @@ export function ConflictPanel({
   const [busyFile, setBusyFile] = useState<string | null>(null);
   const [optimisticResolved, setOptimisticResolved] = useState<Set<string>>(() => new Set());
   const [showResolved, setShowResolved] = useState(false);
-  const [scanResults, setScanResults] = useState<ScanCache>(() => new Map());
+  const [scan, setScan] = useState<ScanResults | null>(null);
   const [scanNonce, setScanNonce] = useState(0);
   const rowRefs = useRef(new Map<string, HTMLLIElement>());
   const continueRef = useRef<HTMLDivElement>(null);
@@ -347,6 +355,9 @@ export function ConflictPanel({
   // that stays conflicted; the hub hears the watcher's flush and re-reads
   // status, and each read arrives as a fresh object over IPC.
   const conflictedFiles = status.conflictedFiles;
+  // Paths are relative, so another worktree's answers would fit this one's rows
+  // until its own scan lands.
+  const scanResults = scan?.worktreePath === worktreePath ? scan.entries : NO_SCAN;
 
   // A write the watcher missed, from an editor outside the app, still gets a
   // rescan when the app regains focus.
@@ -358,7 +369,7 @@ export function ConflictPanel({
 
   useEffect(() => {
     if (!worktreePath || conflictedFiles.length === 0) {
-      setScanResults((prev) => (prev.size > 0 ? new Map() : prev));
+      setScan(null);
       return;
     }
 
@@ -374,9 +385,9 @@ export function ConflictPanel({
         for (const entry of results) {
           next.set(entry.path, entry);
         }
-        setScanResults(next);
+        setScan({ worktreePath, entries: next });
       } catch {
-        if (!cancelled) setScanResults(new Map());
+        if (!cancelled) setScan(null);
       }
     })();
 
