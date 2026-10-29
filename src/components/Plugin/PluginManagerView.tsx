@@ -744,6 +744,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
               size="sm"
               onClick={() => void pm.checkAllForUpdates()}
               loading={pm.isCheckingAllUpdates}
+              disabled={pm.updateBatch !== null}
               className="app-no-drag"
             >
               <RefreshCw />

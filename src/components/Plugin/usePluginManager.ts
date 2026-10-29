@@ -991,6 +991,10 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
           );
           break;
         case "available":
+          // An "Update all" run that started while this check was out, or
+          // whose install is running now, owns the confirm, and it checked
+          // this plugin itself. Showing this one would replace its update.
+          if (isBatchActiveRef.current) break;
           setPendingUpdate({ plugin, result });
           break;
         case "fetch-failed":
@@ -1066,7 +1070,9 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
   // silently and never collapses the per-plugin capability preview into one
   // blanket accept.
   const checkAllForUpdates = async () => {
-    if (isCheckingAllUpdatesRef.current) return;
+    // A run between confirms (installing, say) is still running: a second one
+    // would take over its queue, and its install would then advance the new one.
+    if (isCheckingAllUpdatesRef.current || isBatchActiveRef.current) return;
     const targets = plugins.filter((p) => !p.isBuiltin && !!p.originalUrl);
     if (targets.length === 0) return;
     isCheckingAllUpdatesRef.current = true;
