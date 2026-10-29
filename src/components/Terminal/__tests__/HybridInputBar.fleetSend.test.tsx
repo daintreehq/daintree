@@ -53,7 +53,8 @@ import {
   useFleetTargetOverridesStore,
 } from "@/store/fleetTargetOverridesStore";
 import { initBuiltInPanelKinds } from "@/panels/registry";
-import { HybridInputBar } from "../HybridInputBar";
+import { HybridInputBar, type HybridInputBarProps } from "../HybridInputBar";
+import { composerUploadSurface, trackUpload } from "../uploads/pendingUploads";
 
 const WT_ID = "/repo/wt";
 const originalElectron = Object.getOwnPropertyDescriptor(window, "electron");
@@ -141,7 +142,7 @@ afterEach(() => {
 });
 
 async function mount() {
-  const onSend = vi.fn(() => Promise.resolve(true));
+  const onSend = vi.fn<HybridInputBarProps["onSend"]>(() => Promise.resolve(true));
   const result = render(
     <TooltipProvider>
       <WorktreeStoreContext.Provider value={createWorktreeStore()}>
@@ -345,6 +346,9 @@ describe("HybridInputBar's fleet send", () => {
     const { view, type, pressEnter, settle, onSend, draft } = await mount();
     await type("/compa");
     await settle();
+    expect(document.querySelector('[role="option"][aria-selected="true"]')?.textContent).toContain(
+      "/compact"
+    );
 
     await pressEnter();
     await settle();
@@ -353,6 +357,33 @@ describe("HybridInputBar's fleet send", () => {
     expect(submitMock).not.toHaveBeenCalled();
     expect(view.state.doc.toString()).toBe("/compa");
     expect(draft("term-1")).toBe("/compa");
+  });
+
+  it("runs a slash command from the menu on no pane while an upload is on its way", async () => {
+    let finishUpload!: () => void;
+    const upload = trackUpload(
+      composerUploadSurface("term-1"),
+      "shot.png",
+      () => new Promise<void>((resolve) => (finishUpload = resolve))
+    );
+    const { view, type, pressEnter, settle, onSend } = await mount();
+    try {
+      await type("/compa");
+      await settle();
+      expect(
+        document.querySelector('[role="option"][aria-selected="true"]')?.textContent
+      ).toContain("/compact");
+
+      await pressEnter();
+      await settle();
+
+      expect(onSend).not.toHaveBeenCalled();
+      expect(submitMock).not.toHaveBeenCalled();
+      expect(view.state.doc.toString()).toBe("/compa");
+    } finally {
+      finishUpload();
+      await upload;
+    }
   });
 
   it("keeps what was typed while a slash command from the menu was on its way", async () => {

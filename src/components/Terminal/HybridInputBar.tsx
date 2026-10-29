@@ -1607,6 +1607,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       // The menu takes Enter before the keymap asks whether the composer is
       // disabled, and the fleet would never ask.
       if (!latest || latest.disabled) return;
+      // An upload still on its way would leave its reference out, as on Enter.
+      if (hasPendingUploads(uploadSurface)) return;
       // The editor still reads the partial token: only that leaves the draft.
       const isDraftUnchanged = guardSentDraft(latest.projectId);
       const intercepted = tryComposerFleetBroadcast(isFocusedTerminal, terminalId, text, () => {
