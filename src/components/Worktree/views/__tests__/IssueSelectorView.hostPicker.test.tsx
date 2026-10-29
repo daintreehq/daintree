@@ -56,6 +56,7 @@ vi.mock("@/components/ui/tooltip", () => ({
 }));
 
 import { IssueLinkerView } from "../IssueSelectorView";
+import { PickerChevron } from "@/components/ui/PickerChevron";
 
 const ISSUE: Issue = {
   number: 42,
@@ -148,6 +149,18 @@ describe("IssueLinkerView host fallback", () => {
       <IssueLinkerView projectPath="/proj" selectedIssue={withoutKey} onSelectIssue={vi.fn()} />
     );
     expect(getByRole("button", { name: "Issue #42 Fix the thing" })).toBeTruthy();
+  });
+
+  it("ends in the chevron every other picker on the form draws", () => {
+    const shared = render(<PickerChevron />);
+    const expected = shared.container.querySelector("svg")!.getAttribute("class");
+    shared.unmount();
+
+    const { getByRole } = render(
+      <IssueLinkerView projectPath="/proj" selectedIssue={null} onSelectIssue={vi.fn()} />
+    );
+    const svgs = getByRole("button", { name: /Select an issue/ }).querySelectorAll("svg");
+    expect(svgs[svgs.length - 1]!.getAttribute("class")).toBe(expected);
   });
 
   it("defers to the provider's own selector when it contributes one", () => {
