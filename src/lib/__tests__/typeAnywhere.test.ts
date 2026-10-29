@@ -231,6 +231,25 @@ describe("hasBlockingOverlay", () => {
     document.body.innerHTML = `<div role="dialog"></div>`;
     expect(hasBlockingOverlay()).toBe(false);
   });
+
+  // It blocks one pane, not the window (#15037).
+  it("counts a page dialog only when focus is inside it", () => {
+    document.body.innerHTML = `<div role="dialog" data-pane-dialog><button id="ok"></button></div><button id="elsewhere"></button>`;
+    const ok = document.getElementById("ok")!;
+    const elsewhere = document.getElementById("elsewhere")!;
+
+    expect(hasBlockingOverlay(elsewhere)).toBe(false);
+    expect(hasBlockingOverlay(ok)).toBe(true);
+    expect(hasBlockingOverlay()).toBe(false);
+    ok.focus();
+    expect(hasBlockingOverlay()).toBe(true);
+  });
+
+  it("still blocks everywhere for an app modal beside a page dialog", () => {
+    document.body.innerHTML = `<div role="dialog" data-pane-dialog></div><div role="dialog" aria-modal="true"></div><button id="elsewhere"></button>`;
+
+    expect(hasBlockingOverlay(document.getElementById("elsewhere"))).toBe(true);
+  });
 });
 
 describe("findPanelIdForElement", () => {

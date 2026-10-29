@@ -260,7 +260,7 @@ test("contained webview dialog review — alert, confirm and prompt over a brows
     const addressBar = panel.locator(SEL.browser.addressBar);
     // Scoped to the browser panel: the app shell has other dialog roles, and a
     // page-level `[role="dialog"]` would match whichever painted last.
-    const dialog = panel.locator('[role="dialog"][aria-modal="true"]');
+    const dialog = panel.locator('[role="dialog"][data-pane-dialog]');
 
     const panelId = await panel.getAttribute("data-panel-id");
     if (!panelId) throw new Error("browser panel has no data-panel-id to address dialogs to");

@@ -1,5 +1,6 @@
 import type { PanelInstance } from "@shared/types/panel";
 import { isAgentFleetActionEligible } from "@/store/fleetEligibility";
+import { isInPaneDialog } from "@/lib/paneDialog";
 
 /**
  * Pure decision logic for the type-anywhere rescue and the off-screen focus
@@ -123,10 +124,13 @@ export function hasUsefulFocus(el: Element | null): boolean {
  *
  * Existence, not ancestry: Radix portals dialog content outside the dialog's
  * DOM subtree, so `closest()` from the focused element misses it and the
- * listener would steal keys from an open modal.
+ * listener would steal keys from an open modal. A page's dialog blocks only its
+ * own pane, so it owns the key only when `focus` is inside it (#15037).
  */
-export function hasBlockingOverlay(): boolean {
-  return document.querySelector('[role="dialog"][aria-modal="true"]') !== null;
+export function hasBlockingOverlay(focus: Element | null = document.activeElement): boolean {
+  return (
+    document.querySelector('[role="dialog"][aria-modal="true"]') !== null || isInPaneDialog(focus)
+  );
 }
 
 /** The panel that owns the currently focused DOM node, if any. */

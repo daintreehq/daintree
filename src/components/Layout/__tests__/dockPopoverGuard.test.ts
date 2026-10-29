@@ -273,8 +273,8 @@ describe("handleDockEscapeKeyDown — yielding to a dialog above the popover", (
   it("still dismisses the dock for a modal that the backstop does not handle", () => {
     const container = document.createElement("div");
     document.body.appendChild(container);
-    // WorktreeOverviewModal, ThemeBrowser and WebviewDialog are aria-modal but
-    // register no backstop handler. Yielding to one would block the dock's
+    // WorktreeOverviewModal and ThemeBrowser are aria-modal but register no
+    // backstop handler. Yielding to one would block the dock's
     // dismissal with nothing left to act on the keypress.
     const modal = document.createElement("div");
     modal.setAttribute("role", "dialog");

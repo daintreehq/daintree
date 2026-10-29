@@ -6,6 +6,7 @@ import { useMacroFocusStore } from "@/store/macroFocusStore";
 import { useCanopyStore } from "@/store/canopyStore";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { getChromeWhenContext } from "@/services/chromeWhenContext";
+import { isInPaneDialog } from "@/lib/paneDialog";
 
 /**
  * Live `when`-clause context for keybinding resolution — the documented
@@ -52,7 +53,11 @@ export function buildKeybindingWhenContext(event: KeyboardEvent): WhenClauseCont
     terminalFocused: inTerminal,
     // xterm's own input is a textarea; it doesn't count as a text field.
     textInputFocused: editable && !inTerminal,
-    modalOpen: document.querySelector('[role="dialog"][aria-modal="true"]') !== null,
+    // A page's dialog blocks only its own pane: open as far as the keys typed
+    // into it are concerned, and nowhere else (#15037).
+    modalOpen:
+      document.querySelector('[role="dialog"][aria-modal="true"]') !== null ||
+      isInPaneDialog(target),
     paletteOpen: paletteId !== null,
     paletteId: paletteId ?? "",
     fleetArmed: armedIds.size > 0,
