@@ -10,6 +10,7 @@ import {
 } from "react";
 import type React from "react";
 import { type PanelLocation } from "@/types";
+import type { TerminalLink } from "@/services/terminal/types";
 import { usePanelStore } from "@/store";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
@@ -428,6 +429,9 @@ function TerminalContextMenuBody({
   const [hoveredUrl, setHoveredUrl] = useState<string | null>(null);
   // The plugin that claims the hovered URL (#13798), read with it on open.
   const [hoveredUrlPluginName, setHoveredUrlPluginName] = useState<string | null>(null);
+  // The hovered link itself, for "Open link": the hover ends as the pointer
+  // moves onto the menu, so the item cannot read it when it is chosen (#14960).
+  const hoveredLinkRef = useRef<TerminalLink | null>(null);
   const [hoveredFilePath, setHoveredFilePath] = useState<string | null>(null);
   const [hoveredFileKind, setHoveredFileKind] = useState<"file" | "directory" | null>(null);
   const [selectedText, setSelectedText] = useState<string | null>(null);
@@ -489,6 +493,7 @@ function TerminalContextMenuBody({
 
       const managed = peekTerminalService()?.get(terminalId) ?? null;
       if (!managed?.terminal) {
+        hoveredLinkRef.current = null;
         setHasSelection(false);
         setHoveredUrl(null);
         setHoveredUrlPluginName(null);
@@ -503,6 +508,7 @@ function TerminalContextMenuBody({
       setHasSelection(!!selection);
       setSelectedText(selection || null);
       setHomeDir(systemClient.getCachedHomeDir());
+      hoveredLinkRef.current = managed.hoveredLink;
       setHoveredUrl(peekTerminalService()?.getHoveredLinkText(terminalId) ?? null);
       setHoveredUrlPluginName(peekTerminalService()?.getHoveredLinkPluginName(terminalId) ?? null);
       setHoveredFilePath(peekTerminalService()?.getHoveredFilePath(terminalId) ?? null);
@@ -568,6 +574,7 @@ function TerminalContextMenuBody({
     panelKindRegistry,
     registeredTourIds,
     sourceRef,
+    hoveredLinkRef,
     deferMenuDispatch,
     suppressNextCloseAutoFocus,
   });
