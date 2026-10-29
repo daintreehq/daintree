@@ -12,6 +12,7 @@ vi.mock("@/services/VoiceRecordingService", () => ({
     hasPendingCorrection: vi.fn(() => false),
     expectedCorrectionWindow: vi.fn(() => null),
     waitForPendingCorrections: vi.fn().mockResolvedValue(true),
+    observeSendCorrections: vi.fn(() => ({ failed: () => false, release: () => {} })),
     onSpokenSend: vi.fn(() => () => {}),
   },
 }));
@@ -45,6 +46,7 @@ const waitMock = vi.mocked(voiceRecordingService.waitForPendingCorrections);
 const onSpokenSendMock = vi.mocked(voiceRecordingService.onSpokenSend);
 const sendSessionsMock = vi.mocked(voiceRecordingService.sendSessions);
 const landingMock = vi.mocked(voiceRecordingService.expectedCorrectionWindow);
+const observeMock = vi.mocked(voiceRecordingService.observeSendCorrections);
 // The sessions a send reads as it starts, which its wait and send take.
 const OWNED = new Set(["owned-session"]);
 
@@ -91,6 +93,8 @@ describe("useVoiceWaitSubmit", () => {
     sendSessionsMock.mockReturnValue(OWNED);
     landingMock.mockReset();
     landingMock.mockReturnValue(null);
+    observeMock.mockReset();
+    observeMock.mockReturnValue({ failed: () => false, release: () => {} });
     useTerminalInputStore.getState().clearDraftInput(PANEL_ID);
     panelState.focusedId = null;
     voiceState.status = "recording";
@@ -602,7 +606,99 @@ describe("useVoiceWaitSubmit", () => {
     expect(useTerminalInputStore.getState().isVoiceSubmitting(PANEL_ID)).toBe(false);
   });
 
+  it("says the cleanup failed when a pass it followed did, and lets the passes go", async () => {
+    const release = vi.fn();
+    observeMock.mockReturnValueOnce({ failed: () => true, release });
+
+    const { result } = renderWaitSubmit();
+    await act(async () => {
+      result.current.startVoiceWaitSubmit();
+    });
+
+    expect(observeMock).toHaveBeenLastCalledWith(PANEL_ID, OWNED);
+    expect(sendFromEditor).toHaveBeenCalledTimes(1);
+    expect(result.current.voiceSubmitOutcome).toEqual({
+      kind: "sent",
+      attempt: 1,
+      cleanup: "failed",
+    });
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the cleanup's word through a handover, and leaves it off a send held back", async () => {
+    observeMock.mockReturnValue({ failed: () => true, release: () => {} });
+    let handOver!: (taken: boolean) => void;
+    const send = vi
+      .fn<() => boolean | Promise<boolean>>()
+      .mockReturnValueOnce(
+        new Promise<boolean>((resolve) => {
+          handOver = resolve;
+        })
+      )
+      .mockReturnValueOnce(false);
+    const { result } = renderHook(() =>
+      useVoiceWaitSubmit({
+        terminalId: PANEL_ID,
+        editorViewRef: { current: null },
+        editableCompartmentRef: { current: new Compartment() },
+        sendFromEditor: send,
+      })
+    );
+
+    await act(async () => {
+      result.current.startVoiceWaitSubmit();
+    });
+    expect(result.current.voiceSubmitOutcome).toEqual({
+      kind: "sending",
+      attempt: 1,
+      cleanup: "failed",
+    });
+    await act(async () => {
+      handOver(true);
+    });
+    expect(result.current.voiceSubmitOutcome).toEqual({
+      kind: "sent",
+      attempt: 1,
+      cleanup: "failed",
+    });
+
+    await act(async () => {
+      result.current.startVoiceWaitSubmit();
+    });
+    expect(result.current.voiceSubmitOutcome).toEqual({ kind: "held", attempt: 2 });
+  });
+
+  it.each(["refused", "rejected"] as const)(
+    "leaves the cleanup's word off a handover that was %s",
+    async (how) => {
+      observeMock.mockReturnValue({ failed: () => true, release: () => {} });
+      let refuse!: () => void;
+      const handover = new Promise<boolean>((resolve, reject) => {
+        refuse = how === "refused" ? () => resolve(false) : () => reject(new Error("no host"));
+      });
+      const { result } = renderHook(() =>
+        useVoiceWaitSubmit({
+          terminalId: PANEL_ID,
+          editorViewRef: { current: null },
+          editableCompartmentRef: { current: new Compartment() },
+          sendFromEditor: () => handover,
+        })
+      );
+
+      await act(async () => {
+        result.current.startVoiceWaitSubmit();
+      });
+      expect(result.current.voiceSubmitOutcome?.kind).toBe("sending");
+      await act(async () => {
+        refuse();
+      });
+      expect(result.current.voiceSubmitOutcome).toEqual({ kind: "held", attempt: 1 });
+    }
+  );
+
   it("leaves the correction to land when Escape cancels the wait for it", async () => {
+    const release = vi.fn();
+    observeMock.mockReturnValueOnce({ failed: () => false, release });
     let finishCorrection!: (landed: boolean) => void;
     hasPendingMock.mockReturnValue(true);
     waitMock.mockImplementation(
@@ -620,6 +716,8 @@ describe("useVoiceWaitSubmit", () => {
       expect(result.current.cancelVoiceWaitSubmit()).toBe(true);
     });
     expect(result.current.voiceSubmitPhase).toBeNull();
+    // At Escape, not once the wait it abandoned settles.
+    expect(release).toHaveBeenCalled();
 
     await act(async () => {
       finishCorrection(true);
@@ -722,6 +820,8 @@ describe("useVoiceWaitSubmit keys during the wait (#14780)", () => {
     stopMock.mockResolvedValue(undefined);
     hasPendingMock.mockReset();
     hasPendingMock.mockReturnValue(true);
+    observeMock.mockReset();
+    observeMock.mockReturnValue({ failed: () => false, release: () => {} });
     waitMock.mockReset();
     // A cleanup that never lands on its own: only the wait's signal ends it.
     waitMock.mockImplementation(
@@ -776,6 +876,11 @@ describe("useVoiceWaitSubmit keys during the wait (#14780)", () => {
     expect(sendFromEditor).toHaveBeenCalledTimes(1);
     expect(result.current.voiceSubmitPhase).toBeNull();
     expect(useTerminalInputStore.getState().isVoiceSubmitting(PANEL_ID)).toBe(false);
+    expect(result.current.voiceSubmitOutcome).toEqual({
+      kind: "sent",
+      attempt: 1,
+      cleanup: "skipped",
+    });
   });
 
   it("skips the cleanup wait once the transcript drains after a second Enter", async () => {
@@ -803,6 +908,45 @@ describe("useVoiceWaitSubmit keys during the wait (#14780)", () => {
     });
     expect(waitMock).not.toHaveBeenCalled();
     expect(sendFromEditor).toHaveBeenCalledTimes(1);
+    expect(result.current.voiceSubmitOutcome?.cleanup).toBe("skipped");
+  });
+
+  it("says a send that dropped a cleanup still on its way skipped it, whatever else failed", async () => {
+    observeMock.mockReturnValue({ failed: () => true, release: () => {} });
+    const { result } = renderWaitSubmit();
+    await act(async () => {
+      result.current.startVoiceWaitSubmit();
+    });
+    await act(async () => {
+      pressKey("Enter");
+    });
+
+    expect(sendFromEditor).toHaveBeenCalledTimes(1);
+    expect(result.current.voiceSubmitOutcome?.cleanup).toBe("skipped");
+  });
+
+  it("says nothing of a cleanup that landed between a second Enter and the send", async () => {
+    let resolveStop!: () => void;
+    stopMock.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveStop = resolve;
+        })
+    );
+    const { result } = renderWaitSubmit();
+    act(() => {
+      result.current.startVoiceWaitSubmit();
+    });
+    await act(async () => {
+      pressKey("Enter");
+    });
+
+    hasPendingMock.mockReturnValue(false);
+    await act(async () => {
+      resolveStop();
+    });
+    expect(sendFromEditor).toHaveBeenCalledTimes(1);
+    expect(result.current.voiceSubmitOutcome).toEqual({ kind: "sent", attempt: 1 });
   });
 
   it("keeps the route the wait was started with through a second Enter, and drops it at Escape", async () => {
