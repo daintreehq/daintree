@@ -2387,6 +2387,17 @@ describe("NewWorktreeDialog — creating on another host (#14991)", () => {
     return submit;
   }
 
+  it("widens the host label cap only when the summary has moved above the buttons", async () => {
+    renderDialog();
+    await advanceTimersGradually(500);
+    await nameBranch();
+    await chooseHost("studio-02");
+    const label = () => screen.getByTestId("create-worktree-button").querySelector("span.truncate");
+    expect(label()?.className).toContain("max-w-60");
+    await chooseHost("Greg's Mac Studio (build-west)");
+    expect(label()?.className).toContain("max-w-96");
+  });
+
   it("makes its one primary create on the chosen host, by click and by Cmd+Enter", async () => {
     renderDialog();
     await advanceTimersGradually(500);

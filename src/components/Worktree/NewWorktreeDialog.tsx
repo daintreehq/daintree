@@ -1951,7 +1951,7 @@ export function NewWorktreeDialog({
               data-testid="create-worktree-button"
             >
               {placement ? (
-                <span className="max-w-60 truncate">
+                <span className={cn("truncate", longPlacementHost ? "max-w-96" : "max-w-60")}>
                   {initialPR ? "Check out on" : "Create on"} {placement.hostName}
                 </span>
               ) : initialPR ? (
