@@ -6,7 +6,11 @@ import {
   __resetPluginArchiveInstallStoreForTesting,
   usePluginArchiveInstallStore,
 } from "@/store/pluginArchiveInstallStore";
-import type { PluginArchiveInstallIntent, PluginInstallResult } from "@shared/types/plugin";
+import type {
+  LoadedPluginInfo,
+  PluginArchiveInstallIntent,
+  PluginInstallResult,
+} from "@shared/types/plugin";
 
 vi.mock("zustand/react/shallow", () => ({ useShallow: (fn: unknown) => fn }));
 vi.mock("@/store", () => ({ usePortalStore: () => ({ isOpen: false, width: 0 }) }));
@@ -606,6 +610,329 @@ describe("PluginArchiveInstallConfirmDialog", () => {
       enqueue(recipeIntent(1));
 
       expect(screen.getByText(/Adds 1 launch recipe,/)).toBeTruthy();
+    });
+  });
+
+  describe("an archive for a plugin that's already installed (#15053)", () => {
+    const list = vi.fn<() => Promise<LoadedPluginInfo[]>>();
+    const provenanceListeners = new Set<() => void>();
+
+    function emitProvenanceChanged() {
+      act(() => {
+        for (const listener of [...provenanceListeners]) listener();
+      });
+    }
+
+    function row(version: string, overrides: Record<string, unknown> = {}): LoadedPluginInfo {
+      return {
+        manifest: { name: "acme.tool", version },
+        instanceId: "acme.tool",
+        origin: "global",
+        projectId: null,
+        isBuiltin: false,
+        disabled: false,
+        devMode: false,
+        ...overrides,
+      } as unknown as LoadedPluginInfo;
+    }
+
+    function deferred<T>() {
+      let resolve!: (value: T) => void;
+      let reject!: (reason: unknown) => void;
+      const promise = new Promise<T>((res, rej) => {
+        resolve = res;
+        reject = rej;
+      });
+      return { promise, resolve, reject };
+    }
+
+    /** Drain the lookup's promise chain, which adopts the bridge's promise. */
+    async function settle() {
+      await act(async () => {
+        for (let i = 0; i < 10; i++) await Promise.resolve();
+      });
+    }
+
+    function installedRowText(): string | null {
+      return screen.queryByTestId("archive-installed-version")?.textContent ?? null;
+    }
+
+    beforeEach(() => {
+      provenanceListeners.clear();
+      list.mockReset();
+      list.mockResolvedValue([]);
+      Object.assign(window, {
+        electron: {
+          plugin: {
+            installFromPath,
+            list,
+            onProvenanceChanged: (listener: () => void) => {
+              provenanceListeners.add(listener);
+              return () => provenanceListeners.delete(listener);
+            },
+          },
+        },
+      });
+    });
+
+    it("reads as a fresh install when nothing is installed under the archive's id", async () => {
+      list.mockResolvedValue([row("9.9.9", { instanceId: "other.tool" })]);
+      render(<PluginArchiveInstallConfirmDialog />);
+      enqueue(intent());
+      await settle();
+
+      expect(screen.getByText("Install 'Acme Tool'?")).toBeTruthy();
+      expect(screen.getByText(/replacing any installed plugin with the same ID/)).toBeTruthy();
+      expect(installedRowText()).toBeNull();
+      armConfirm();
+      expect(confirmButton().hasAttribute("aria-disabled")).toBe(false);
+    });
+
+    it("names both versions and calls a newer archive an update", async () => {
+      list.mockResolvedValue([row("1.0.0")]);
+      render(<PluginArchiveInstallConfirmDialog />);
+      enqueue(intent());
+      await settle();
+
+      expect(
+        screen.getByText(/Installing replaces the installed v1\.0\.0 with this newer v1\.2\.3\./)
+      ).toBeTruthy();
+      expect(screen.queryByText(/replacing any installed plugin/)).toBeNull();
+      expect(installedRowText()).toBe("Replaces installed v1.0.0Update");
+    });
+
+    it("calls the same version a reinstall", async () => {
+      list.mockResolvedValue([row("1.2.3")]);
+      render(<PluginArchiveInstallConfirmDialog />);
+      enqueue(intent());
+      await settle();
+
+      expect(screen.getByText(/v1\.2\.3 is already installed\./)).toBeTruthy();
+      expect(installedRowText()).toBe("Replaces installed v1.2.3Reinstall");
+    });
+
+    it("says outright that an older archive is a downgrade", async () => {
+      list.mockResolvedValue([row("2.0.0")]);
+      render(<PluginArchiveInstallConfirmDialog />);
+      enqueue(intent());
+      await settle();
+
+      expect(
+        screen.getByText(
+          /This archive is older than the installed version\. Installing replaces v2\.0\.0 with the older v1\.2\.3\./
+        )
+      ).toBeTruthy();
+      expect(installedRowText()).toBe("Replaces installed v2.0.0Downgrade");
+    });
+
+    it("shows both versions without a direction when they can't be ordered", async () => {
+      list.mockResolvedValue([row("1.2.3+build.1")]);
+      render(<PluginArchiveInstallConfirmDialog />);
+      enqueue(intent({ manifest: { ...intent().manifest, version: "1.2.3+build.2" } }));
+      await settle();
+
+      expect(
+        screen.getByText(
+          /Installing replaces the installed v1\.2\.3\+build\.1 with this archive's v1\.2\.3\+build\.2\./
+        )
+      ).toBeTruthy();
+      expect(installedRowText()).toBe("Replaces installed v1.2.3+build.1");
+    });
+
+    it("counts a disabled install, since its folder is what gets replaced", async () => {
+      list.mockResolvedValue([row("1.0.0", { disabled: true })]);
+      render(<PluginArchiveInstallConfirmDialog />);
+      enqueue(intent());
+      await settle();
+
+      expect(installedRowText()).toBe("Replaces installed v1.0.0Update");
+    });
+
+    it("ignores a builtin, a project plugin and a per-project instance sharing the id", async () => {
+      list.mockResolvedValue([
+        row("9.0.0", { isBuiltin: true }),
+        row("9.0.0", { origin: "project", projectId: "p1", instanceId: "project__p1__acme.tool" }),
+        row("9.0.0", { projectId: "p1", instanceId: "project__p1__installed__acme.tool" }),
+      ]);
+      render(<PluginArchiveInstallConfirmDialog />);
+      enqueue(intent());
+      await settle();
+
+      expect(installedRowText()).toBeNull();
+      expect(screen.getByText(/replacing any installed plugin with the same ID/)).toBeTruthy();
+    });
+
+    it("holds the confirm past the cooldown until the installed version is known", async () => {
+      const pending = deferred<LoadedPluginInfo[]>();
+      list.mockReturnValue(pending.promise);
+      render(<PluginArchiveInstallConfirmDialog />);
+      enqueue(intent());
+      armConfirm();
+
+      expect(confirmButton().getAttribute("aria-disabled")).toBe("true");
+      expect(screen.getByText("Checking which version is installed…")).toBeTruthy();
+      click(confirmButton());
+      expect(installFromPath).not.toHaveBeenCalled();
+
+      pending.resolve([row("2.0.0")]);
+      await settle();
+
+      expect(confirmButton().hasAttribute("aria-disabled")).toBe(false);
+      expect(screen.queryByText("Checking which version is installed…")).toBeNull();
+      expect(installedRowText()).toBe("Replaces installed v2.0.0Downgrade");
+    });
+
+    it("keeps the hint back for a read that settles quickly", async () => {
+      const pending = deferred<LoadedPluginInfo[]>();
+      list.mockReturnValue(pending.promise);
+      render(<PluginArchiveInstallConfirmDialog />);
+      enqueue(intent());
+      act(() => {
+        vi.advanceTimersByTime(100);
+      });
+
+      expect(screen.queryByText("Checking which version is installed…")).toBeNull();
+      pending.resolve([]);
+      await settle();
+      armConfirm();
+      expect(screen.queryByText("Checking which version is installed…")).toBeNull();
+    });
+
+    it("falls back to today's copy and releases the confirm when the read fails", async () => {
+      list.mockRejectedValue(new Error("host unreachable"));
+      render(<PluginArchiveInstallConfirmDialog />);
+      enqueue(intent());
+      await settle();
+      armConfirm();
+
+      expect(confirmButton().hasAttribute("aria-disabled")).toBe(false);
+      expect(screen.getByText(/replacing any installed plugin with the same ID/)).toBeTruthy();
+      expect(installedRowText()).toBeNull();
+    });
+
+    it("treats a bridge that throws synchronously like a failed read", async () => {
+      list.mockImplementation(() => {
+        throw new Error("bridge torn down");
+      });
+      render(<PluginArchiveInstallConfirmDialog />);
+      enqueue(intent());
+      await settle();
+      armConfirm();
+
+      expect(confirmButton().hasAttribute("aria-disabled")).toBe(false);
+      expect(installedRowText()).toBeNull();
+    });
+
+    it("follows an install or uninstall made elsewhere while it's open", async () => {
+      list.mockResolvedValue([row("1.0.0")]);
+      render(<PluginArchiveInstallConfirmDialog />);
+      enqueue(intent());
+      await settle();
+      expect(installedRowText()).toBe("Replaces installed v1.0.0Update");
+
+      list.mockResolvedValue([row("1.2.3")]);
+      emitProvenanceChanged();
+      await settle();
+      expect(installedRowText()).toBe("Replaces installed v1.2.3Reinstall");
+
+      list.mockResolvedValue([]);
+      emitProvenanceChanged();
+      await settle();
+      expect(installedRowText()).toBeNull();
+    });
+
+    it("keeps the answer it has when a refresh fails", async () => {
+      list.mockResolvedValue([row("2.0.0")]);
+      render(<PluginArchiveInstallConfirmDialog />);
+      enqueue(intent());
+      await settle();
+
+      list.mockRejectedValue(new Error("host unreachable"));
+      emitProvenanceChanged();
+      await settle();
+
+      expect(installedRowText()).toBe("Replaces installed v2.0.0Downgrade");
+    });
+
+    it("never lets an older read overwrite a newer one", async () => {
+      const first = deferred<LoadedPluginInfo[]>();
+      const second = deferred<LoadedPluginInfo[]>();
+      list.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+      render(<PluginArchiveInstallConfirmDialog />);
+      enqueue(intent());
+      await settle();
+      emitProvenanceChanged();
+      await settle();
+
+      second.resolve([row("2.0.0")]);
+      await settle();
+      first.resolve([]);
+      await settle();
+
+      expect(installedRowText()).toBe("Replaces installed v2.0.0Downgrade");
+    });
+
+    it("doesn't re-read while its own install runs, and reads again if it fails", async () => {
+      list.mockResolvedValue([row("1.0.0")]);
+      const install = deferred<PluginInstallResult>();
+      installFromPath.mockReturnValue(install.promise);
+      render(<PluginArchiveInstallConfirmDialog />);
+      enqueue(intent());
+      await settle();
+      armConfirm();
+      const readsBeforeInstall = list.mock.calls.length;
+
+      click(confirmButton());
+      await settle();
+      // The install's own provenance push lands before its reply.
+      list.mockResolvedValue([row("1.2.3")]);
+      emitProvenanceChanged();
+      await settle();
+
+      expect(list.mock.calls.length).toBe(readsBeforeInstall);
+      expect(installedRowText()).toBe("Replaces installed v1.0.0Update");
+
+      install.resolve({ status: "failed", errors: [{ code: "archive_invalid", message: "Bad" }] });
+      await settle();
+
+      expect(list.mock.calls.length).toBeGreaterThan(readsBeforeInstall);
+      expect(installedRowText()).toBe("Replaces installed v1.2.3Reinstall");
+    });
+
+    it("reads again for the next queued archive of the same plugin", async () => {
+      render(<PluginArchiveInstallConfirmDialog />);
+      enqueue(intent());
+      enqueue(
+        intent({
+          intentId: "i2",
+          archivePath: "/tmp/acme-1.3.0.dntr",
+          archiveFileName: "acme-1.3.0.dntr",
+          manifest: { ...intent().manifest, version: "1.3.0" },
+        })
+      );
+      await settle();
+      expect(installedRowText()).toBeNull();
+      armConfirm();
+
+      list.mockResolvedValue([row("1.2.3")]);
+      click(confirmButton());
+      await settle();
+
+      expect(usePluginArchiveInstallStore.getState().current?.intentId).toBe("i2");
+      expect(installedRowText()).toBe("Replaces installed v1.2.3Update");
+    });
+
+    it("stops listening once the dialog has nothing to show", async () => {
+      render(<PluginArchiveInstallConfirmDialog />);
+      enqueue(intent());
+      await settle();
+      expect(provenanceListeners.size).toBe(1);
+
+      click(screen.getByRole("button", { name: "Cancel" }));
+      await settle();
+
+      expect(usePluginArchiveInstallStore.getState().current).toBeNull();
+      expect(provenanceListeners.size).toBe(0);
     });
   });
 });
