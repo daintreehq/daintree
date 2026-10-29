@@ -1067,15 +1067,42 @@ describe("matchCodexRestoreSessions", () => {
     }
   );
 
-  it.each([
-    ["a malformed last row", [row("t-b", "Task B", AT_S + 3, { recencyAt: AT_S + 50 }), null]],
-    ["an empty page", []],
-  ])("answers nothing when the `--last` read ends on %s with more to come", async (_l, recency) => {
+  /** `--last`'s read, newest first; t-b is the top unless a row says otherwise. */
+  function scriptLatest(recency: unknown[], nextCursor: string | null) {
     scriptSession((method, params) => {
       if (method !== "thread/list") return {};
-      if (params.sortKey === "recency_at") return { data: recency, nextCursor: "more" };
+      if (params.sortKey === "recency_at") return { data: recency, nextCursor };
       return { data: [row("t-b", "Task B", AT_S + 4), row("t-a", "Task A")], nextCursor: null };
     });
+  }
+  const top = row("t-b", "Task B", AT_S + 3, { recencyAt: AT_S + 50 });
+
+  it.each([
+    ["a root below the top", [top, row("t-old", "Old", AT_S - 900, { recencyAt: AT_S - 900 })]],
+    [
+      "a child below the top",
+      [top, row("t-kid", "Kid", AT_S + 3, { recencyAt: AT_S + 10, parentThreadId: "t-b" })],
+    ],
+  ])("settles `--last` mid-listing once it reaches %s", async (_label, recency) => {
+    scriptLatest(recency, "more");
+
+    const result = await matchCodexRestoreSessions({
+      scopes: [
+        { cwd: "/repo", reserveLatest: true, panes: [pane("a", "Task A"), pane("b", "Task B")] },
+      ],
+      exclude: [],
+    });
+
+    expect(result.matches).toEqual([{ key: "a", sessionId: "t-a" }]);
+  });
+
+  it.each([
+    ["a malformed row", [top, null, row("t-old", "Old", AT_S - 900, { recencyAt: AT_S - 900 })]],
+    ["a row with no recency", [top, row("t-x", "X", AT_S, { recencyAt: null })]],
+    ["only children", [row("t-kid", "Kid", AT_S + 3, { parentThreadId: "t-b" })]],
+    ["an empty page", []],
+  ])("answers nothing when the `--last` read holds %s with more to come", async (_l, recency) => {
+    scriptLatest(recency, "more");
 
     const result = await matchCodexRestoreSessions({
       scopes: [{ cwd: "/repo", reserveLatest: true, panes: [pane("a", "Task A")] }],

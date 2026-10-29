@@ -774,12 +774,15 @@ async function listResumeLatestIds(call: CodexAppServerCall, cwds: string[]): Pr
   const threads = response.data as Array<RawThread | null | undefined>;
   let top = Number.NEGATIVE_INFINITY;
   let ids: string[] = [];
+  let lastActivity: number | null = null;
   for (const thread of threads) {
-    if (!thread || typeof thread !== "object") throw new RestoreMatchIncomplete();
+    // The listing is ordered by this key, so the proof below reads only it.
+    const activity = numberOf(thread?.recencyAt);
+    if (!thread || activity === null) throw new RestoreMatchIncomplete();
+    lastActivity = activity;
     if (asString(thread.parentThreadId) !== null) continue;
     const id = asString(thread.sessionId) ?? asString(thread.id);
     if (id === null) throw new RestoreMatchIncomplete();
-    const activity = activityOf(thread);
     if (activity > top) {
       top = activity;
       ids = [id];
@@ -788,9 +791,8 @@ async function listResumeLatestIds(call: CodexAppServerCall, cwds: string[]): Pr
     }
   }
   // Settled only by the end of the listing, or by a row already below the top.
-  const last = threads[threads.length - 1];
   const settled =
-    response.nextCursor === null || (ids.length > 0 && last && activityOf(last) < top);
+    response.nextCursor === null || (ids.length > 0 && lastActivity !== null && lastActivity < top);
   if (!settled) throw new RestoreMatchIncomplete();
   return ids;
 }
