@@ -27,9 +27,11 @@ vi.mock("fs/promises", () => ({
 }));
 
 import { CodexAppServerError } from "../CodexAppServerClient.js";
+import { createHash } from "crypto";
 import {
   listCodexSubagents,
   listCodexSessionsForCwd,
+  matchCodexRestoreSessions,
   readCodexSubagentTranscript,
   resolveCodexResumeLatestSession,
   selectParentThread,
@@ -849,5 +851,420 @@ describe("listCodexSessionsForCwd", () => {
       status: "unavailable",
       reason: "cli-missing",
     });
+  });
+});
+
+// issue #15269 — naming held same-folder panes' conversations by launch prompt.
+describe("matchCodexRestoreSessions", () => {
+  const AT = 1_800_000_000_000;
+  const AT_S = AT / 1000;
+  const hash = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
+  const pane = (key: string, text: string, resolve = true) => ({
+    key,
+    promptHash: hash(text),
+    at: AT,
+    resolve,
+  });
+  const row = (id: string, preview: string, createdAt = AT_S + 3, extra: QueryParams = {}) => ({
+    id,
+    sessionId: id,
+    preview,
+    source: "cli",
+    createdAt,
+    recencyAt: createdAt,
+    ...extra,
+  });
+
+  /** Answers each `thread/list` from `pages` by cursor, and records every request. */
+  function scriptPages(
+    pages: Record<string, { data: unknown[]; nextCursor?: string | null }>,
+    recency: unknown[] = []
+  ): QueryParams[] {
+    const requests: QueryParams[] = [];
+    scriptSession((method, params) => {
+      if (method !== "thread/list") return {};
+      requests.push(params);
+      if (params.sortKey === "recency_at") return { data: recency, nextCursor: null };
+      const page = pages[(params.cursor as string | undefined) ?? "first"] ?? { data: [] };
+      // Filters by source the way the server does: absent means interactive only.
+      const kinds = (params.sourceKinds as string[] | undefined) ?? ["cli", "vscode"];
+      return {
+        ...page,
+        data: page.data.filter((thread) =>
+          kinds.includes((thread as { source?: string }).source ?? "cli")
+        ),
+      };
+    });
+    return requests;
+  }
+
+  it("names each pane's thread from the folder's threads, newest first by creation", async () => {
+    const requests = scriptPages({
+      first: { data: [row("t-b", "Task B"), row("t-a", "Task A")], nextCursor: null },
+    });
+
+    const result = await matchCodexRestoreSessions({
+      scopes: [{ cwd: "/repo", panes: [pane("a", "Task A"), pane("b", "Task B")] }],
+      exclude: [],
+    });
+
+    expect(result).toEqual({
+      matches: [
+        { key: "a", sessionId: "t-a" },
+        { key: "b", sessionId: "t-b" },
+      ],
+    });
+    expect(requests[0]).toMatchObject({
+      cwd: ["/repo"],
+      sortKey: "created_at",
+      sortDirection: "desc",
+      useStateDbOnly: true,
+    });
+    // A pane launched with `codex exec` has a thread too, and it has to count.
+    expect(requests[0]?.sourceKinds).toEqual(expect.arrayContaining(["cli", "exec"]));
+    expect(requests[0]).not.toHaveProperty("archived");
+  });
+
+  it("follows the cursor and stops at the first thread older than every launch", async () => {
+    const requests = scriptPages({
+      first: { data: [row("t-new", "Later work", AT_S + 900)], nextCursor: "page-2" },
+      "page-2": {
+        data: [row("t-a", "Task A"), row("t-old", "Task A", AT_S - 3_600)],
+        nextCursor: "page-3",
+      },
+    });
+
+    const result = await matchCodexRestoreSessions({
+      scopes: [{ cwd: "/repo", panes: [pane("a", "Task A")] }],
+      exclude: [],
+    });
+
+    expect(result.matches).toEqual([{ key: "a", sessionId: "t-a" }]);
+    expect(requests.map((request) => request.cursor)).toEqual([undefined, "page-2"]);
+  });
+
+  it("answers nothing when the history can't be read to the earliest launch", async () => {
+    // The first page holds the answer, but every page after it stays inside
+    // the launch window, so the cap ends the walk before the cut-off can prove
+    // nothing older shares the prompt.
+    scriptSession((method, params) => {
+      if (method !== "thread/list") return {};
+      const page = Number((params.cursor as string | undefined) ?? 0);
+      return {
+        data: [page === 0 ? row("t-a", "Task A") : row(`t-${page}`, "Other", AT_S + 2)],
+        nextCursor: String(page + 1),
+      };
+    });
+
+    const result = await matchCodexRestoreSessions({
+      scopes: [{ cwd: "/repo", panes: [pane("a", "Task A")] }],
+      exclude: [],
+    });
+
+    expect(result.matches).toEqual([]);
+  });
+
+  it("answers nothing when rows arrive out of creation order", async () => {
+    scriptPages({
+      first: {
+        data: [row("t-a", "Task A"), row("t-later", "Other", AT_S + 60)],
+        nextCursor: null,
+      },
+    });
+
+    const result = await matchCodexRestoreSessions({
+      scopes: [{ cwd: "/repo", panes: [pane("a", "Task A")] }],
+      exclude: [],
+    });
+
+    expect(result.matches).toEqual([]);
+  });
+
+  it.each([
+    ["a full page", 50],
+    ["a short page", 2],
+  ])("answers nothing when %s doesn't say whether more follow", async (_label, length) => {
+    scriptPages({
+      first: {
+        data: Array.from({ length }, (_, i) => row(`t-${i}`, `Task ${i}`, AT_S + 100 - i)),
+      },
+    });
+
+    const result = await matchCodexRestoreSessions({
+      scopes: [{ cwd: "/repo", panes: [pane("a", "Task 1")] }],
+      exclude: [],
+    });
+
+    expect(result.matches).toEqual([]);
+  });
+
+  it("answers nothing when a row past the cut-off is out of order", async () => {
+    scriptPages({
+      first: {
+        data: [row("t-a", "Task A"), row("t-old", "Old", AT_S - 3_600), row("t-b", "Other")],
+        nextCursor: null,
+      },
+    });
+
+    const result = await matchCodexRestoreSessions({
+      scopes: [{ cwd: "/repo", panes: [pane("a", "Task A")] }],
+      exclude: [],
+    });
+
+    expect(result.matches).toEqual([]);
+  });
+
+  it.each([
+    ["a root with no id", { id: undefined, sessionId: undefined }],
+    ["a root with no first message", { preview: undefined }],
+    ["a root whose first message isn't text", { preview: [] }],
+  ])("answers nothing when it reads %s", async (_label, broken) => {
+    scriptPages({
+      first: { data: [row("t-a", "Task A"), row("t-x", "x", AT_S + 2, broken)], nextCursor: null },
+    });
+
+    const result = await matchCodexRestoreSessions({
+      scopes: [{ cwd: "/repo", panes: [pane("a", "Task A")] }],
+      exclude: [],
+    });
+
+    expect(result.matches).toEqual([]);
+  });
+
+  it.each([
+    [
+      "creation times",
+      [row("t-x", "Task A", AT_S + 900), row("t-y", "Task A"), row("t-x", "Task A")],
+    ],
+    ["first messages", [row("t-y", "Task A"), row("t-x", "Other"), row("t-x", "Task A")]],
+  ])("answers nothing when one thread is listed twice with different %s", async (_label, data) => {
+    scriptPages({ first: { data, nextCursor: null } });
+
+    const result = await matchCodexRestoreSessions({
+      scopes: [{ cwd: "/repo", panes: [pane("a", "Task A")] }],
+      exclude: [],
+    });
+
+    expect(result.matches).toEqual([]);
+  });
+
+  it.each(["vscode", "exec", "appServer", "unknown"])(
+    "counts a %s thread as a rival to a cli one",
+    async (source) => {
+      scriptPages({
+        first: {
+          data: [row("t-rival", "Task A", AT_S + 4, { source }), row("t-a", "Task A")],
+          nextCursor: null,
+        },
+      });
+
+      const result = await matchCodexRestoreSessions({
+        scopes: [{ cwd: "/repo", panes: [pane("a", "Task A")] }],
+        exclude: [],
+      });
+
+      expect(result.matches).toEqual([]);
+    }
+  );
+
+  /** `--last`'s read, newest first; t-b is the top unless a row says otherwise. */
+  function scriptLatest(recency: unknown[], nextCursor: string | null) {
+    scriptSession((method, params) => {
+      if (method !== "thread/list") return {};
+      if (params.sortKey === "recency_at") return { data: recency, nextCursor };
+      return { data: [row("t-b", "Task B", AT_S + 4), row("t-a", "Task A")], nextCursor: null };
+    });
+  }
+  const top = row("t-b", "Task B", AT_S + 3, { recencyAt: AT_S + 50 });
+
+  it.each([
+    ["a root below the top", [top, row("t-old", "Old", AT_S - 900, { recencyAt: AT_S - 900 })]],
+    [
+      "a child below the top",
+      [top, row("t-kid", "Kid", AT_S + 3, { recencyAt: AT_S + 10, parentThreadId: "t-b" })],
+    ],
+  ])("settles `--last` mid-listing once it reaches %s", async (_label, recency) => {
+    scriptLatest(recency, "more");
+
+    const result = await matchCodexRestoreSessions({
+      scopes: [
+        { cwd: "/repo", reserveLatest: true, panes: [pane("a", "Task A"), pane("b", "Task B")] },
+      ],
+      exclude: [],
+    });
+
+    expect(result.matches).toEqual([{ key: "a", sessionId: "t-a" }]);
+  });
+
+  it.each([
+    ["a malformed row", [top, null, row("t-old", "Old", AT_S - 900, { recencyAt: AT_S - 900 })]],
+    [
+      "a row with no recency",
+      [top, row("t-x", "X", AT_S, { recencyAt: null }), row("t-old", "Old", AT_S - 900)],
+    ],
+    [
+      "a child with no recency",
+      [
+        top,
+        row("t-kid", "Kid", AT_S, { recencyAt: null, parentThreadId: "t-b" }),
+        row("t-old", "Old", AT_S - 900),
+      ],
+    ],
+    ["only children", [row("t-kid", "Kid", AT_S + 3, { parentThreadId: "t-b" })]],
+    ["an empty page", []],
+  ])("answers nothing when the `--last` read holds %s with more to come", async (_l, recency) => {
+    scriptLatest(recency, "more");
+
+    const result = await matchCodexRestoreSessions({
+      scopes: [{ cwd: "/repo", reserveLatest: true, panes: [pane("a", "Task A")] }],
+      exclude: [],
+    });
+
+    expect(result.matches).toEqual([]);
+  });
+
+  it("counts a `codex exec` thread as a rival but never hands it out", async () => {
+    scriptPages({
+      first: {
+        data: [
+          row("t-exec", "Task A", AT_S + 4, { source: "exec" }),
+          row("t-a", "Task A"),
+          row("t-only-exec", "Task B", AT_S + 2, { source: "exec" }),
+        ],
+        nextCursor: null,
+      },
+    });
+
+    const result = await matchCodexRestoreSessions({
+      scopes: [{ cwd: "/repo", panes: [pane("a", "Task A"), pane("b", "Task B")] }],
+      exclude: [],
+    });
+
+    expect(result.matches).toEqual([]);
+  });
+
+  it("matches only root threads", async () => {
+    scriptPages({
+      first: {
+        data: [row("t-child", "Task A", AT_S + 4, { parentThreadId: "t-a" }), row("t-a", "Task A")],
+        nextCursor: null,
+      },
+    });
+
+    const result = await matchCodexRestoreSessions({
+      scopes: [{ cwd: "/repo", panes: [pane("a", "Task A")] }],
+      exclude: [],
+    });
+
+    expect(result.matches).toEqual([{ key: "a", sessionId: "t-a" }]);
+  });
+
+  it("answers nothing when the tie for `--last` may run on past the page", async () => {
+    scriptSession((method, params) => {
+      if (method !== "thread/list") return {};
+      if (params.sortKey === "recency_at") {
+        // Only the top of a tie that the next page may continue: t-a could be in it.
+        return {
+          data: [row("t-b", "Task B", AT_S + 3, { recencyAt: AT_S + 50 })],
+          nextCursor: "more",
+        };
+      }
+      return { data: [row("t-b", "Task B", AT_S + 4), row("t-a", "Task A")], nextCursor: null };
+    });
+
+    const result = await matchCodexRestoreSessions({
+      scopes: [
+        { cwd: "/repo", reserveLatest: true, panes: [pane("a", "Task A"), pane("b", "Task B")] },
+      ],
+      exclude: [],
+    });
+
+    expect(result.matches).toEqual([]);
+  });
+
+  it("keeps the thread a sibling's `--last` would open for that sibling", async () => {
+    scriptPages(
+      { first: { data: [row("t-b", "Task B"), row("t-a", "Task A")], nextCursor: null } },
+      [row("t-b", "Task B", AT_S + 3, { recencyAt: AT_S + 50 }), row("t-a", "Task A")]
+    );
+
+    const result = await matchCodexRestoreSessions({
+      scopes: [
+        {
+          cwd: "/repo",
+          reserveLatest: true,
+          panes: [pane("a", "Task A"), pane("b", "Task B")],
+        },
+      ],
+      exclude: [],
+    });
+
+    expect(result.matches).toEqual([{ key: "a", sessionId: "t-a" }]);
+  });
+
+  it("never names a thread another pane already holds", async () => {
+    scriptPages({ first: { data: [row("t-a", "Task A")], nextCursor: null } });
+
+    const result = await matchCodexRestoreSessions({
+      scopes: [{ cwd: "/repo", panes: [pane("a", "Task A")] }],
+      exclude: ["t-a"],
+    });
+
+    expect(result.matches).toEqual([]);
+  });
+
+  it("never names a thread whose id isn't safe to put on a command line", async () => {
+    scriptPages({ first: { data: [row("t a;rm", "Task A")], nextCursor: null } });
+
+    const result = await matchCodexRestoreSessions({
+      scopes: [{ cwd: "/repo", panes: [pane("a", "Task A")] }],
+      exclude: [],
+    });
+
+    expect(result.matches).toEqual([]);
+  });
+
+  it("asks each profile under its own CODEX_HOME, on the restore budget", async () => {
+    scriptPages({ first: { data: [row("t-a", "Task A")], nextCursor: null } });
+
+    await matchCodexRestoreSessions({
+      scopes: [
+        { cwd: "/repo", panes: [pane("a", "Task A")] },
+        { cwd: "/repo", codexHome: "/profiles/work", panes: [pane("b", "Task B")] },
+      ],
+      exclude: [],
+    });
+
+    const options = runSession.mock.calls.map(
+      (call) => call[1] as { codexHome?: string; timeoutMs?: number }
+    );
+    expect(options.map((option) => option.codexHome)).toEqual([undefined, "/profiles/work"]);
+    expect(options.every((option) => option.timeoutMs === 2_000)).toBe(true);
+  });
+
+  it("answers nothing, rather than throwing, when Codex can't be reached", async () => {
+    runSession.mockRejectedValue(new CodexAppServerError("timeout", "slow"));
+
+    await expect(
+      matchCodexRestoreSessions({
+        scopes: [{ cwd: "/repo", panes: [pane("a", "Task A")] }],
+        exclude: [],
+      })
+    ).resolves.toEqual({ matches: [] });
+  });
+
+  it("answers nothing for a request that names one pane twice", async () => {
+    scriptPages({ first: { data: [row("t-a", "Task A")], nextCursor: null } });
+
+    const result = await matchCodexRestoreSessions({
+      scopes: [
+        { cwd: "/repo", panes: [pane("a", "Task A")] },
+        { cwd: "/other", panes: [pane("a", "Task A")] },
+      ],
+      exclude: [],
+    });
+
+    expect(result.matches).toEqual([]);
+    expect(runSession).not.toHaveBeenCalled();
   });
 });

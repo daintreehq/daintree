@@ -248,6 +248,9 @@ export interface GeneratedElectronAPI {
     listSubagents(
       ...args: IpcInvokeMap["codex:list-subagents"]["args"]
     ): Promise<IpcInvokeMap["codex:list-subagents"]["result"]>;
+    matchRestoreSessions(
+      ...args: IpcInvokeMap["codex:match-restore-sessions"]["args"]
+    ): Promise<IpcInvokeMap["codex:match-restore-sessions"]["result"]>;
     readQuota(
       ...args: IpcInvokeMap["codex:read-quota"]["args"]
     ): Promise<IpcInvokeMap["codex:read-quota"]["result"]>;
