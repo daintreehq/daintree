@@ -522,7 +522,7 @@ describe("GlobalAssistantPane (#14454)", () => {
       expect(failureBanner()).toBeNull();
     });
 
-    it("lets the newest key decide when an older one settles after it", async () => {
+    it("keeps a newer key refusal when an older key turns out to have gone", async () => {
       const api = await renderOwned();
       const older = holdNext(api.terminalSendKey);
       await pressKey("up");
@@ -532,8 +532,29 @@ describe("GlobalAssistantPane (#14454)", () => {
 
       await older.accept();
       expect(failureBanner()!.textContent).toContain("Newer.");
+    });
+
+    it("keeps a newer key refusal when an older key is refused after it", async () => {
+      const api = await renderOwned();
+      const older = holdNext(api.terminalSendKey);
+      await pressKey("up");
+      api.terminalSendKey.mockRejectedValueOnce(new Error("Newer."));
+      await pressKey("down");
+
       await older.refuse(new Error("Older."));
+      expect(failureBanner()!.textContent).toContain("Newer.");
       expect(failureBanner()!.textContent).not.toContain("Older.");
+    });
+
+    it("lets a newer key that went hold off an older key's refusal", async () => {
+      const api = await renderOwned();
+      const older = holdNext(api.terminalSendKey);
+      await pressKey("up");
+      await pressKey("down");
+      expect(api.terminalSendKey).toHaveBeenCalledTimes(2);
+
+      await older.refuse(new Error("Too late."));
+      expect(failureBanner()).toBeNull();
     });
 
     it("keeps a message's attempts apart from a key's", async () => {
@@ -657,25 +678,36 @@ describe("GlobalAssistantPane (#14454)", () => {
       expect(failureBanner()!.textContent).toContain("New run trouble.");
     });
 
+    const TAKE_INPUT = "Your message is still in the box; take input to send it again.";
+    const KEPT = "Your message is still in the box.";
     const nowhereToType = [
       [
         "another window holds input",
         { inputOwner: "b1" },
         {},
         "Another window has this assistant's input.",
+        TAKE_INPUT,
       ],
-      ["no window holds input", { inputOwner: null }, {}, "No window has this assistant's input."],
+      [
+        "no window holds input",
+        { inputOwner: null },
+        {},
+        "No window has this assistant's input.",
+        TAKE_INPUT,
+      ],
       [
         "the stream ended",
         { inputOwner: "a1" },
         { watchId: null, ended: true },
         "That assistant isn't running any more.",
+        KEPT,
       ],
       [
         "the stream is still opening",
         { inputOwner: "a1" },
         { watchId: null, ended: false },
         "The assistant's terminal isn't ready yet.",
+        KEPT,
       ],
     ] as const;
 
@@ -692,11 +724,13 @@ describe("GlobalAssistantPane (#14454)", () => {
 
     it.each(nowhereToType)(
       "says why a message can't go when %s, without calling main",
-      async (_name, owner, streamState, reason) => {
+      async (_name, owner, streamState, reason, recovery) => {
         const api = await renderWhereNothingTypes(owner, streamState);
         expect(await sendFromComposer()).toBe(false);
         expect(failureBanner()!.textContent).toContain("Couldn't send to assistant");
         expect(failureBanner()!.textContent).toContain(reason);
+        expect(failureBanner()!.textContent).toContain(recovery);
+        expect(failureBanner()!.textContent).not.toContain("press Enter");
         expect(api.terminalSubmit).not.toHaveBeenCalled();
         expect(api.terminalSendKey).not.toHaveBeenCalled();
       }
