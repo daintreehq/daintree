@@ -150,10 +150,12 @@ export function AttachmentChipView({
       ) : (
         <span className="truncate">{attachment.name}</span>
       )}
+      {/* The error glyph is hidden, and a detail is the cause, not the state:
+          "Failed" is always said, whatever the detail. */}
+      {failed ? <span className="sr-only">Failed</span> : null}
       {attachment.detail ? (
         <span className="shrink-0 text-text-secondary">{attachment.detail}</span>
       ) : null}
-      {failed && !attachment.detail ? <span className="sr-only">Failed</span> : null}
       {attachment.status === "pending" ? <span className="sr-only">Uploading</span> : null}
       {onRemove ? (
         <button
@@ -198,13 +200,44 @@ function KitAttachmentChip({
         status: oneOf(status, ATTACHMENT_STATUSES) ?? "ready",
       }}
       onOpen={open ? () => runPluginAction("AttachmentChip onOpen", open) : undefined}
-      onRemove={remove ? () => runPluginAction("AttachmentChip onRemove", remove) : undefined}
+      onRemove={
+        remove
+          ? (button) => {
+              focusPastChip(button);
+              runPluginAction("AttachmentChip onRemove", remove);
+            }
+          : undefined
+      }
       removeLabel={nonEmpty(removeLabel)}
       disabled={disabled === true}
       rootAttributes={pickRootProps(rest)}
       className={str(className)}
     />
   );
+}
+
+const TABBABLE =
+  'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+/**
+ * Focus for a standalone chip's removal, taken before the plugin drops it:
+ * the nearest control on from the chip, else the one before it, searched
+ * outward from its parent, so a keyboard user is never left on the page.
+ */
+function focusPastChip(button: HTMLButtonElement) {
+  if (button.ownerDocument.activeElement !== button) return;
+  const chip = button.closest<HTMLElement>("[data-attachment]") ?? button;
+  for (let scope = chip.parentElement; scope !== null; scope = scope.parentElement) {
+    const others = [...scope.querySelectorAll<HTMLElement>(TABBABLE)].filter(
+      (element) => !chip.contains(element)
+    );
+    if (others.length === 0) continue;
+    const after = others.find(
+      (element) => chip.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING
+    );
+    (after ?? others[others.length - 1])!.focus();
+    return;
+  }
 }
 
 /**
@@ -313,12 +346,11 @@ function KitAttachmentList({
                     item.status === "failed" ? "text-text-primary" : "text-text-secondary"
                   )}
                 >
-                  {item.detail ??
-                    (item.status === "pending"
-                      ? "Uploading"
-                      : item.status === "failed"
-                        ? "Failed"
-                        : null)}
+                  {item.status === "failed"
+                    ? item.detail
+                      ? `Failed · ${item.detail}`
+                      : "Failed"
+                    : (item.detail ?? (item.status === "pending" ? "Uploading" : null))}
                 </span>
                 {removeItem ? (
                   <button
@@ -348,7 +380,9 @@ const AVAILABILITIES = ["available", "loading", "missing", "forbidden"] as const
 
 const UNAVAILABLE_WORD: Record<Exclude<PluginEntityAvailability, "available">, string> = {
   loading: "Loading",
-  missing: "Deleted",
+  // Missing covers a record that never existed as well as a deleted one, so
+  // the chip says what it saw, not which.
+  missing: "Not found",
   forbidden: "No access",
 };
 
