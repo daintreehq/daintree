@@ -2,6 +2,9 @@ import { useCallback, useEffect, useRef, type RefObject } from "react";
 import { isPtyPanel, type PanelWorktreeMoveNotice } from "@shared/types/panel";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
+import { useProjectStore } from "@/store/projectStore";
+import { useTerminalInputStore } from "@/store/terminalInputStore";
+import { makeDraftKey } from "@/lib/draftKey";
 import { getCurrentViewStoreOrNull } from "@/store/createWorktreeStore";
 import { actionService } from "@/services/ActionService";
 import { buildWorktreeMoveInstruction } from "@/services/terminal/worktreeMoveInstruction";
@@ -46,6 +49,13 @@ export interface WorktreeMoveBanner {
    * default gets shipped (#7880).
    */
   destinationPath: string | undefined;
+  /**
+   * True when a tell from this pane would send the composer's draft along with
+   * the instruction (#11867): the hybrid route with something in the draft. The
+   * fleet route sends the sentence alone, and an empty or whitespace-only draft
+   * composes to the sentence alone as well.
+   */
+  carriesDraft: boolean;
   /** True once a tell has been tried and the terminal did not take it. */
   deliveryFailed: boolean;
   /** Send the instruction, and hide the bar only if the terminal took it. */
@@ -111,6 +121,14 @@ export function useWorktreeMoveBanner(
 
   const destinationPath = useWorktreeStore((state) =>
     notice ? state.worktrees.get(notice.destinationWorktreeId)?.path : undefined
+  );
+
+  // Keyed the way the composer keys its own draft, so this reads the draft the
+  // bar would submit. The store trails the editor by an effect, which is fine
+  // for a tooltip: the send itself composes from the live document.
+  const draftProjectId = useProjectStore((state) => state.currentProject?.id);
+  const hasDraft = useTerminalInputStore(
+    (state) => (state.draftInputs.get(makeDraftKey(panelId, draftProjectId)) ?? "").trim() !== ""
   );
 
   const setWorktreeMoveNotice = usePanelStore((state) => state.setWorktreeMoveNotice);
@@ -191,6 +209,7 @@ export function useWorktreeMoveBanner(
   return {
     visible: notice !== undefined,
     destinationPath: destinationPath?.trim() ? destinationPath : undefined,
+    carriesDraft: route === "hybrid" && hasDraft,
     deliveryFailed: notice?.deliveryFailed === true,
     tell,
     dismiss,
