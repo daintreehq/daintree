@@ -25,6 +25,7 @@ import { isPluginNotOnHostError, isRemoteUnsupportedError } from "../remotePlugi
 import { PluginNotOnHostPlaceholder } from "../PluginNotOnHostPlaceholder";
 import { _resetPluginPanelRemovalForTesting, trackPluginPanelKinds } from "../pluginPanelRemoval";
 import { useHostPluginParityNotice } from "../useHostPluginParityNotice";
+import { useSettingsDialog } from "@/hooks/app/useSettingsDialog";
 import {
   describeIncompatibility,
   pluginParityErrorText,
@@ -401,15 +402,20 @@ describe("the switch notice", () => {
     const payload = notifyMock.mock.calls[0]![0];
     expect(payload.message).toBe("2 of your plugins aren't installed on studio-01");
     expect(payload.action.label).toBe("Review");
+    // The toast's Review and the inbox's go the same way: the action and its args.
+    expect(payload.action.actionId).toBe("app.settings.openTab");
     payload.action.onClick();
-    expect(takePendingHostPlugins()).toBe("studio-01");
-    // Review opens that host's plugins, never the Add host flow.
     expect(dispatchMock).toHaveBeenCalledTimes(1);
     expect(dispatchMock).toHaveBeenCalledWith(
       "app.settings.openTab",
-      { tab: "hosts" },
+      payload.action.actionArgs,
       { source: "user" }
     );
+    // Review opens that host's plugins, never the Add host flow.
+    const { result } = renderHook(() => useSettingsDialog());
+    act(() => result.current.handleOpenSettingsTab(payload.action.actionArgs));
+    expect(result.current.settingsTab).toBe("hosts");
+    expect(takePendingHostPlugins()).toBe("studio-01");
     expect(dispatchMock).not.toHaveBeenCalledWith("host.add", expect.anything(), expect.anything());
   });
 

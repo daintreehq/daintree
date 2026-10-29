@@ -1,4 +1,6 @@
-import type { HostId } from "@shared/types/remoteHosts";
+import { isValidRemoteHostId, type HostId } from "@shared/types/remoteHosts";
+import type { SettingsNavTarget } from "@/components/Settings";
+import { HOSTS_SETTINGS_TAB } from "@/components/Hosts/hostModel";
 
 type Listener = (hostId: HostId) => void;
 
@@ -31,4 +33,29 @@ export function onHostPluginsRequest(listener: Listener): () => void {
   return () => {
     listeners.delete(listener);
   };
+}
+
+/** The section of a host's details that lists its plugins. */
+export const HOST_PLUGINS_SECTION_ID = "host-plugins";
+
+/**
+ * Settings → Hosts on one host's plugins, as a target `app.settings.openTab`
+ * takes. A notice's button needs this form to work from the inbox, which keeps
+ * an action's id and args but never its callback.
+ */
+export function hostPluginsSettingsTarget(hostId: HostId) {
+  return {
+    tab: HOSTS_SETTINGS_TAB,
+    subtab: hostId,
+    sectionId: HOST_PLUGINS_SECTION_ID,
+  } satisfies SettingsNavTarget;
+}
+
+/** The host whose plugins a settings target asks for, or null when it asks for anything else. */
+export function hostPluginsTargetHost(target: SettingsNavTarget): HostId | null {
+  if (target.tab !== HOSTS_SETTINGS_TAB || target.sectionId !== HOST_PLUGINS_SECTION_ID) {
+    return null;
+  }
+  const hostId = target.subtab;
+  return hostId !== undefined && isValidRemoteHostId(hostId) ? hostId : null;
 }

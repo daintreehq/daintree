@@ -8,6 +8,7 @@ vi.mock("@/components/Settings/settingsTabIds", () => ({
 }));
 
 import type { SettingsTab } from "@/components/Settings/settingsTabIds";
+import { takePendingHostPlugins } from "@/components/Settings/Hosts/hostPluginRequests";
 import { useSettingsDialog } from "../useSettingsDialog";
 
 // Stale/fake ids exercised below sit outside the SettingsTab union by design —
@@ -113,5 +114,38 @@ describe("useSettingsDialog — repeat navigation", () => {
 
     expect(result.current.settingsTab).toBe("general");
     expect(result.current.settingsNavNonce).not.toBe(first);
+  });
+});
+
+describe("useSettingsDialog — a host's plugins", () => {
+  it("asks Settings → Hosts for the plugins of a remote host and drops the section", () => {
+    const { result } = renderHook(() => useSettingsDialog());
+
+    act(() => {
+      result.current.handleOpenSettingsTab({
+        tab: asTab("hosts"),
+        subtab: "studio-01",
+        sectionId: "host-plugins",
+      });
+    });
+
+    expect(takePendingHostPlugins()).toBe("studio-01");
+    expect(result.current.settingsSubtab).toBeUndefined();
+    expect(result.current.settingsSectionId).toBeUndefined();
+  });
+
+  it("asks for nothing when the target names no remote host", () => {
+    const { result } = renderHook(() => useSettingsDialog());
+
+    act(() => {
+      result.current.handleOpenSettingsTab({
+        tab: asTab("hosts"),
+        subtab: "local",
+        sectionId: "host-plugins",
+      });
+    });
+
+    expect(takePendingHostPlugins()).toBeNull();
+    expect(result.current.settingsSectionId).toBe("host-plugins");
   });
 });
