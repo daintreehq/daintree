@@ -1971,8 +1971,8 @@ describe("AgentButton preset UX", () => {
           );
           // The visible key cap is decoration for sighted keyboard users; the
           // instruction above already speaks it, so announcing it twice is noise.
-          const keyCap = Array.from(row.querySelectorAll('[aria-hidden="true"]')).find(
-            (el) => el.textContent?.trim() === "D"
+          const keyCap = Array.from(row.children).find(
+            (el) => el.getAttribute("aria-hidden") === "true" && el.querySelector("kbd")
           );
           expect(keyCap).toBeDefined();
         }
