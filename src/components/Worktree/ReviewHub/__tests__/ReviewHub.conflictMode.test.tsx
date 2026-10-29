@@ -816,7 +816,9 @@ describe("ReviewHub", () => {
       await waitFor(() =>
         expect(screen.getByTestId("conflict-hunk-count-src/app.ts").textContent).toBe("1 region")
       );
-      fireEvent.click(screen.getByRole("button", { name: /Open src\/app\.ts in external editor/i }));
+      fireEvent.click(
+        screen.getByRole("button", { name: /Open src\/app\.ts in external editor/i })
+      );
       await waitFor(() => {
         expect(openInEditorMock).toHaveBeenCalledWith({
           path: `${WORKTREE_PATH}/src/app.ts`,
@@ -915,7 +917,9 @@ describe("ReviewHub", () => {
 
       screen.getByTestId("conflict-panel");
       expect(screen.queryByTestId("conflict-hunk-count-src/app.ts")).toBeNull();
-      fireEvent.click(screen.getByRole("button", { name: /Open src\/app\.ts in external editor/i }));
+      fireEvent.click(
+        screen.getByRole("button", { name: /Open src\/app\.ts in external editor/i })
+      );
       await waitFor(() => {
         expect(openInEditorMock).toHaveBeenCalledWith({
           path: `${OTHER_PATH}/src/app.ts`,
