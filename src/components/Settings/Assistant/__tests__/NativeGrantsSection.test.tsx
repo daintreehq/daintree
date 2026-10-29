@@ -98,8 +98,14 @@ describe("NativeGrantsSection (#14982)", () => {
       "run Delete owned worktree and Run recipe without Daintree's usual confirmation"
     );
     expect(summary()).toContain("A few checks still ask");
-    expect(summary()).toContain("Allows 3 uses in total");
-    expect(summary()).toMatch(/Lasts \d+ minutes, which most successful calls renew/);
+    expect(summary()).toContain(
+      "Allows 3 uses in total across these tools, and a call that fails still spends one"
+    );
+    expect(summary()).toMatch(
+      /Lasts \d+ minutes, which a successful call can renew, and ends \d+ minutes after approval at the latest/
+    );
+    fireEvent.change(usesInput(), { target: { value: "8" } });
+    expect(summary()).toContain("Allows 8 uses in total");
     expect(approveButton().disabled).toBe(false);
     expect(issueNativeGrant).not.toHaveBeenCalled();
   });
@@ -180,7 +186,9 @@ describe("NativeGrantsSection (#14982)", () => {
 
   it("locks only unchosen tools at the limit and lets one be swapped for another", () => {
     issueNativeGrant.mockReturnValue(new Promise(() => {}));
-    const { approveButton, boxes, toolIdOf, getByText } = renderSection();
+    const { approveButton, boxes, toolIdOf, toolList } = renderSection();
+    const listHint = () => describedText(toolList());
+    expect(listHint()).toBe(`0 of ${MCP_NATIVE_GRANT_MAX_ALLOWED_TOOLS} chosen`);
     for (const box of boxes().slice(0, MCP_NATIVE_GRANT_MAX_ALLOWED_TOOLS)) {
       fireEvent.click(box);
     }
@@ -190,16 +198,14 @@ describe("NativeGrantsSection (#14982)", () => {
     expect(replacement).toBeDefined();
     expect([dropped!, ...kept].every((box) => !box.disabled)).toBe(true);
     expect([replacement!, ...rest].every((box) => box.disabled)).toBe(true);
-    expect(getByText(/Uncheck one to choose another/)).toBeTruthy();
+    expect(listHint()).toContain("Uncheck one to choose another");
 
     fireEvent.click(dropped!);
     expect(dropped!.dataset.state).toBe("unchecked");
     expect(kept.every((box) => box.dataset.state === "checked")).toBe(true);
-    expect(
-      getByText(
-        `${MCP_NATIVE_GRANT_MAX_ALLOWED_TOOLS - 1} of ${MCP_NATIVE_GRANT_MAX_ALLOWED_TOOLS} chosen`
-      )
-    ).toBeTruthy();
+    expect(listHint()).toBe(
+      `${MCP_NATIVE_GRANT_MAX_ALLOWED_TOOLS - 1} of ${MCP_NATIVE_GRANT_MAX_ALLOWED_TOOLS} chosen`
+    );
     expect(replacement!.disabled).toBe(false);
 
     fireEvent.click(replacement!);

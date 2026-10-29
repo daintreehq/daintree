@@ -45,8 +45,8 @@ function minutes(ms: number): string {
  * What approving does, in the order the user weighs it: which calls stop
  * asking, how many uses, and for how long. Hedged where main is: the target
  * checks (a busy agent's terminal, a force delete's typed name) still ask, the
- * use is charged before the call runs, and the main-only tools return before
- * the refresh that renews the window.
+ * use is charged before the call runs, and a main-only tool like `skills.search`
+ * returns before the refresh that renews the window.
  */
 export function describeNativeGrant(titles: readonly string[], maxUses: number | null): string {
   const tools = titles.length === 0 ? "the tools you choose" : listFormat.format(titles);
@@ -60,7 +60,7 @@ export function describeNativeGrant(titles: readonly string[], maxUses: number |
     );
   }
   sentences.push(
-    `Lasts ${minutes(MCP_GRANT_TTL_MS)}, which most successful calls renew, and ends ${minutes(MCP_GRANT_MAX_LIFETIME_MS)} after approval at the latest.`
+    `Lasts ${minutes(MCP_GRANT_TTL_MS)}, which a successful call can renew, and ends ${minutes(MCP_GRANT_MAX_LIFETIME_MS)} after approval at the latest.`
   );
   return sentences.join(" ");
 }
