@@ -47,6 +47,23 @@ export function useProjectSurface(slot: ProjectSurfaceSlot): ResolvedProjectSurf
 }
 
 /**
+ * The claim on `slot` once the user has switched it to stock, while it could
+ * still render; `null` otherwise.
+ *
+ * For a mount that was showing the surface when the answer landed, so it can
+ * play its own exit before stock takes over rather than vanish in the render
+ * the answer arrives in. Never a reason to show the surface:
+ * {@link useProjectSurface} stays the one resolver of what draws.
+ */
+export function useSurfaceSwitchedToStock(slot: ProjectSurfaceSlot): ResolvedProjectSurface | null {
+  const renderable = useRenderableSurfaceClaim(slot);
+  const switched = usePluginProjectSurfacesStore(
+    (s) => s.choicesLoaded && selectSurfaceChoice(s, slot) === "stock"
+  );
+  return switched ? renderable : null;
+}
+
+/**
  * Mount a project surface's view through the shared hosted-view path
  * (`PluginHostedView`), as `hostContext: "surface"`.
  *
