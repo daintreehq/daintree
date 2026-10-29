@@ -18,7 +18,12 @@ interface PanelOptions {
 }
 interface NotifyPayload {
   type?: string;
-  action?: { label: string; actionId?: string; actionArgs?: Record<string, unknown> };
+  action?: {
+    label: string;
+    actionId?: string;
+    actionArgs?: Record<string, unknown>;
+    onClick: () => void;
+  };
 }
 
 const addPanel = vi.fn<(options: PanelOptions) => Promise<string | null>>();
@@ -92,6 +97,9 @@ vi.mock("@/utils/agentLaunchCommand", () => ({
 }));
 
 vi.mock("@/lib/notify", () => ({ notify: (payload: NotifyPayload) => notify(payload) }));
+
+const dispatch = vi.fn<(...args: unknown[]) => Promise<void>>();
+vi.mock("@/services/ActionService", () => ({ actionService: { dispatch } }));
 
 vi.mock("@/clients", () => ({
   systemClient: { onWake: vi.fn(() => () => {}), getTmpDir: vi.fn().mockResolvedValue("/tmp") },
@@ -193,6 +201,14 @@ describe("useAgentLauncher — a saved preset whose inventory hasn't loaded (#15
         actionArgs: { tab: "agents", subtab: "claude", sectionId: "agents-presets" },
       },
     });
+    notify.mock.calls[0]?.[0]?.action?.onClick();
+    await vi.waitFor(() => expect(dispatch).toHaveBeenCalledOnce());
+    expect(dispatch).toHaveBeenCalledWith(
+      "app.settings.openTab",
+      notify.mock.calls[0]?.[0]?.action?.actionArgs,
+      { source: "user" }
+    );
+    expect(addPanel).not.toHaveBeenCalled();
   });
 
   it("tells the user even when a caller owns the launch", async () => {

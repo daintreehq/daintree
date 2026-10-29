@@ -282,7 +282,7 @@ function notifyPresetsLoading(
     type: "error",
     title: `Couldn't start ${agentName}`,
     message:
-      "Its saved preset hasn't loaded yet, so it wasn't started without it. Try again in a moment, or choose another preset.",
+      "Its saved preset hasn't loaded yet, so it wasn't started without it. Try again in a moment.",
     context: { eventKind: "agent", ...(worktreeId ? { worktreeId } : {}) },
     urgent: true,
     replaceKey: `launch-presets-loading:${agentId}`,
