@@ -436,30 +436,44 @@ describe("TerminalSettingsTab panel limit editing", () => {
     expect(soft.value).toBe("1");
   });
 
-  it("applies the hardware-recommended limits over a draft in every field", async () => {
-    // Already on the recommendation, so the reset changes no stored number and only
-    // dropping the drafts can bring the fields back to it.
-    getHardwareInfo.mockResolvedValue({ totalMemoryBytes: 16 * 1024 ** 3, logicalCpuCount: 8 });
-    usePanelLimitStore.setState({ softWarningLimit: 16, confirmationLimit: 30, hardLimit: 48 });
-    renderSubtab("performance");
-    await act(async () => {});
+  // The second start is already on the recommendation: the reset then changes no
+  // stored number, so only dropping the drafts can bring the fields back to it.
+  it.each([
+    [
+      "away from the recommendation",
+      { softWarningLimit: 12, confirmationLimit: 20, hardLimit: 32 },
+    ],
+    ["on the recommendation", { softWarningLimit: 16, confirmationLimit: 30, hardLimit: 48 }],
+  ] as const)(
+    "applies the hardware-recommended limits over a draft, starting %s",
+    async (_, start) => {
+      getHardwareInfo.mockResolvedValue({ totalMemoryBytes: 16 * 1024 ** 3, logicalCpuCount: 8 });
+      usePanelLimitStore.setState(start);
+      renderSubtab("performance");
+      await act(async () => {});
 
-    fireEvent.change(field("Soft warning"), { target: { value: "7" } });
-    fireEvent.change(field("Confirmation required"), { target: { value: "8" } });
-    fireEvent.change(field("Hard limit"), { target: { value: "9" } });
-    await act(async () => {
-      fireEvent.click(
-        screen.getByRole("button", { name: "Reset to hardware-recommended defaults" })
-      );
-    });
+      fireEvent.change(field("Soft warning"), { target: { value: "7" } });
+      fireEvent.change(field("Confirmation required"), { target: { value: "8" } });
+      fireEvent.change(field("Hard limit"), { target: { value: "9" } });
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole("button", { name: "Reset to hardware-recommended defaults" })
+        );
+      });
 
-    expect(field("Soft warning").value).toBe("16");
-    expect(field("Confirmation required").value).toBe("30");
-    expect(field("Hard limit").value).toBe("48");
+      expect(usePanelLimitStore.getState()).toMatchObject({
+        softWarningLimit: 16,
+        confirmationLimit: 30,
+        hardLimit: 48,
+      });
+      expect(field("Soft warning").value).toBe("16");
+      expect(field("Confirmation required").value).toBe("30");
+      expect(field("Hard limit").value).toBe("48");
 
-    fireEvent.blur(field("Soft warning"));
-    expect(usePanelLimitStore.getState().softWarningLimit).toBe(16);
-  });
+      fireEvent.blur(field("Soft warning"));
+      expect(usePanelLimitStore.getState().softWarningLimit).toBe(16);
+    }
+  );
 
   describe("limits out of order", () => {
     it("points out a warning above the hard limit without refusing it", () => {
