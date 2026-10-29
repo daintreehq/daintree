@@ -284,20 +284,39 @@ export function unseenLabelMs(item: CanopyItem, nowMs: number): number | null {
 
 /**
  * The row's name: the one the agent's pane goes by everywhere else in
- * Daintree — a name the user gave it, or the title the agent gave its own
- * task — so the same agent is never called two things. Only a pane that goes
- * by its agent's name alone borrows the readers' title for the user's request,
- * or failing that its worktree's name.
+ * Daintree — a name the user or automation gave it, or the title the agent
+ * gave its own task — so the same agent is never called two things. Only a
+ * pane that goes by its agent's name alone borrows the readers' title for the
+ * user's request, or failing that its worktree's name.
  */
 export function itemSubject(item: CanopyItem): string {
   return rowSubject(item.row, item.workspace.name);
 }
 
+const PRESET_STAMP = /\s*\[[^\]]*\]$/;
+const MODEL_STAMP = /\s*\([^)]*\)$/;
+
+/**
+ * Whether a title only says which agent this is — its name, alone or with the
+ * model and preset stamps a launch adds ("Claude (Opus) [Z.ai]") — and so can't
+ * tell two of them apart.
+ */
+function namesOnlyItsAgent(title: string, agentLabel: string): boolean {
+  const bare = title.replace(PRESET_STAMP, "").replace(MODEL_STAMP, "").trim();
+  return bare.toLowerCase() === agentLabel.toLowerCase();
+}
+
 /** {@link itemSubject} for a row alone, with the name of the project it runs in. */
 export function rowSubject(row: PilotAgentRow, workspaceName: string | undefined): string {
   const run = row.run;
+  // "custom" is a name automation gave the pane (an MCP launch title or rename,
+  // a plugin's), which the header shows as it is; a launch's preset stamp is
+  // "custom" too, and that one is only the agent's name again.
   const panelNamesWork =
     run.titleMode === "user" ||
+    (run.titleMode === "custom" &&
+      run.title !== undefined &&
+      !namesOnlyItsAgent(run.title, row.chrome.label)) ||
     getTerminalTaskTitle({
       title: run.title ?? row.chrome.label,
       ...(run.titleMode !== undefined ? { titleMode: run.titleMode } : {}),
