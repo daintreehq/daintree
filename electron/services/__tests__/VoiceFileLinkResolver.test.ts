@@ -319,16 +319,27 @@ describe("VoiceFileLinkResolver", () => {
     });
 
     it("rejects when the rerank runs out its own time, though its caller still waits", async () => {
-      const controller = new AbortController();
+      const caller = new AbortController();
+      const rerankClock = new AbortController();
+      vi.spyOn(AbortSignal, "timeout").mockReturnValue(rerankClock.signal);
       vi.stubGlobal(
         "fetch",
-        vi.fn().mockRejectedValue(new DOMException("timed out", "TimeoutError"))
+        vi.fn(
+          (_url: string, init: RequestInit) =>
+            new Promise<Response>((_resolve, reject) => {
+              init.signal!.addEventListener("abort", () => reject(init.signal!.reason), {
+                once: true,
+              });
+            })
+        )
       );
 
       const resolver = new VoiceFileLinkResolver();
-      await expect(resolver.pick({ ...AMBIGUOUS, signal: controller.signal })).rejects.toThrow(
-        "timed out"
-      );
+      const picking = resolver.pick({ ...AMBIGUOUS, signal: caller.signal });
+      rerankClock.abort(new DOMException("timed out", "TimeoutError"));
+
+      await expect(picking).rejects.toThrow("timed out");
+      expect(caller.signal.aborted).toBe(false);
     });
 
     it("rejects on a rerank reply that isn't the JSON it asked for", async () => {
