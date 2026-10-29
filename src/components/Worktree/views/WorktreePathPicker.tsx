@@ -11,6 +11,8 @@ interface WorktreePathPickerProps {
   isPending?: boolean;
   isGeneratingPath: boolean;
   errorField?: ErrorField | null;
+  /** The path was renamed to dodge an existing directory — see `PathResolvedHint`. */
+  pathWasAutoResolved?: boolean;
   onBrowseClick: () => void;
   disabled?: boolean;
 }
@@ -29,6 +31,7 @@ export function WorktreePathPicker({
   isPending,
   isGeneratingPath,
   errorField,
+  pathWasAutoResolved,
   onBrowseClick,
   disabled,
 }: WorktreePathPickerProps) {
@@ -67,7 +70,11 @@ export function WorktreePathPicker({
       className="font-mono text-xs"
       disabled={isPending}
       invalid={hasError}
-      aria-describedby={hasError ? "validation-error" : undefined}
+      aria-describedby={
+        [hasError ? "validation-error" : null, pathWasAutoResolved ? "path-resolved-hint" : null]
+          .filter(Boolean)
+          .join(" ") || undefined
+      }
       trailing={
         <>
           {showGeneratingSpinner && (
@@ -84,10 +91,18 @@ export function WorktreePathPicker({
   );
 }
 
-/** Rides the row's hint rail — see `BranchResolvedHint`. */
+/**
+ * Rides the row's hint rail — see `BranchResolvedHint`. Keeps the id the
+ * input's `aria-describedby` points at.
+ */
 export function PathResolvedHint() {
   return (
-    <p className="text-xs text-text-secondary" role="status" aria-live="polite">
+    <p
+      id="path-resolved-hint"
+      className="text-xs text-text-secondary"
+      role="status"
+      aria-live="polite"
+    >
       Renamed to avoid a conflict with an existing directory
     </p>
   );

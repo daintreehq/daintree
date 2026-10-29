@@ -1500,6 +1500,14 @@ export function NewWorktreeDialog({
       );
   }, [placementHost, shownRecipeId, shownRecipeName]);
 
+  // The Base row's hint. A PR's head is the source, so it is shown, not
+  // offered: a different base under "Check out" would build the branch from
+  // somewhere the PR isn't. Nothing to pick from when the list failed to load.
+  // With neither a notice nor a note there is no hint row at all, since an empty
+  // one still costs the 8px a hint sits below its control.
+  const baseHintNotice = branchLoadNotice ?? fieldError("base-branch");
+  const showBaseHintNote = initialPR ? !prBranchUnavailable : !branchLoadError;
+
   // Same flags the real sections are built from, so the skeleton is the shape
   // that is actually about to render rather than a generic three-block guess.
   // Rows are modelled individually because a `hint` occupies its own grid row —
@@ -1604,19 +1612,18 @@ export function NewWorktreeDialog({
                       label="Base"
                       htmlFor="base-branch"
                       hint={
-                        <div className="flex flex-col gap-2">
-                          {branchLoadNotice ?? fieldError("base-branch")}
-                          {initialPR
-                            ? // The PR's head is the source, so it is shown, not
-                              // offered: a different base under "Check out" would
-                              // build the branch from somewhere the PR isn't.
-                              !prBranchUnavailable && (
-                                <span className="text-xs text-text-secondary">
+                        (baseHintNotice || showBaseHintNote) && (
+                          <div className="flex flex-col gap-2">
+                            {baseHintNotice}
+                            {showBaseHintNote &&
+                              (initialPR ? (
+                                <span
+                                  id="base-branch-pr-note"
+                                  className="text-xs text-text-secondary"
+                                >
                                   Set by pull request #{initialPR.number}
                                 </span>
-                              )
-                            : // Nothing to pick from when the list failed to load.
-                              !branchLoadError && (
+                              ) : (
                                 <label className="flex w-fit cursor-pointer items-center gap-2 text-xs text-text-secondary hover:text-text-primary">
                                   <Checkbox
                                     id="from-remote"
@@ -1628,8 +1635,9 @@ export function NewWorktreeDialog({
                                   />
                                   Create from remote branch
                                 </label>
-                              )}
-                        </div>
+                              ))}
+                          </div>
+                        )
                       }
                     >
                       <BaseBranchCombobox
@@ -1639,6 +1647,9 @@ export function NewWorktreeDialog({
                         disabled={!!initialPR}
                         unavailableLabel={
                           prBranchUnavailable ? "Pull request branch unavailable" : undefined
+                        }
+                        describedBy={
+                          initialPR && showBaseHintNote ? "base-branch-pr-note" : undefined
                         }
                       />
                     </FormRow>
@@ -1738,6 +1749,7 @@ export function NewWorktreeDialog({
                         onChange={handleWorktreePathChange}
                         isGeneratingPath={isGeneratingPath}
                         errorField={errors.errorField}
+                        pathWasAutoResolved={pathWasAutoResolved}
                         onBrowseClick={handleBrowseClick}
                       />
                     </FormRow>
@@ -1786,6 +1798,11 @@ export function NewWorktreeDialog({
                         onChange={setWorktreeMode}
                         resourceEnvironments={resourceEnvironments}
                         hasAnyEnvironments={hasAnyEnvironments}
+                        describedBy={
+                          worktreeMode !== "local" && !placementElsewhere
+                            ? "environment-hint"
+                            : undefined
+                        }
                         disabled={placementElsewhere}
                       />
                     </FormRow>
@@ -1797,13 +1814,13 @@ export function NewWorktreeDialog({
                       htmlFor="recipe-selector-trigger"
                       hint={
                         placedRecipeNote && (
-                          <span
+                          <p
                             id={placedRecipeNoteId}
-                            className="text-xs text-text-secondary"
+                            className="text-xs text-balance text-text-secondary"
                             data-testid="placed-recipe-note"
                           >
                             {placedRecipeNote}
-                          </span>
+                          </p>
                         )
                       }
                     >
@@ -1833,16 +1850,16 @@ export function NewWorktreeDialog({
                     hint={
                       promptBlocked &&
                       !placementElsewhere && (
-                        <span
+                        <p
                           id="first-agent-conflict"
-                          className="text-xs text-text-secondary"
+                          className="text-xs text-balance text-text-secondary"
                           role="status"
                           aria-live="polite"
                         >
                           {cloneStartsAgent ? "The cloned layout" : "This recipe"} already starts an
-                          agent, so {firstAgent.name}
-                          {firstPrompt.trim() ? " and its prompt" : ""} won&apos;t start
-                        </span>
+                          agent, so {firstAgent.name} won&apos;t start
+                          {firstPrompt.trim() ? " or receive your prompt" : ""}
+                        </p>
                       )
                     }
                   >
