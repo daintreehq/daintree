@@ -611,6 +611,7 @@ describe("focus after a cross-worktree move (#14974)", () => {
 
     expect(usePanelStore.getState().focusedId).toBe("d1");
     expect(usePanelStore.getState().maximizedId).toBeNull();
+    expect(usePanelStore.getState().maximizeTarget).toBeNull();
   });
 
   it("hands focus on in a view with no worktree selected", () => {
