@@ -648,7 +648,9 @@ export async function listCodexThreadsCreatedSince(
   try {
     return await runCodexAppServerSession(
       async (call) => {
-        const spellings = [...new Set((await Promise.all(cwds.map(resolveCwdSpellings))).flat())];
+        // As given: the caller grouped panes by these, and resolving them again
+        // here could reach a folder a retargeted link now points at.
+        const spellings = [...new Set(cwds)];
         const found: CodexCreatedThread[] = [];
         let cursor: string | undefined;
         for (let page = 0; page < CREATED_SINCE_MAX_PAGES; page++) {

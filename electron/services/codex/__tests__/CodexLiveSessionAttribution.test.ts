@@ -886,7 +886,7 @@ describe("CodexLiveSessionAttribution", () => {
     expect(h.canonicalFolder.mock.calls.filter(([cwd]) => cwd === "/alias/repo")).toHaveLength(2);
   });
 
-  it("ignores threads from the second the inventory was read onward", async () => {
+  it("decides nothing in a folder with threads from the second of the read onward", async () => {
     // A run spawned or relaunched after the read isn't in it to compete.
     const h = track(harness({ threads: [thread("later", "Triage issue #1", NOW_MS / 1000)] }));
 

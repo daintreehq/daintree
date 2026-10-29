@@ -1294,7 +1294,8 @@ describe("listCodexThreadsCreatedSince (#15268)", () => {
     // Passing the window ends the walk even though the server has more.
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject({
-      cwd: ["/tmp/repo", "/private/tmp/repo"],
+      // As given: the caller already settled which folder these spell.
+      cwd: ["/tmp/repo"],
       sortKey: "created_at",
       sortDirection: "desc",
       useStateDbOnly: true,

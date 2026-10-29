@@ -443,7 +443,7 @@ export class CodexLiveSessionAttribution {
     const { ptyClient } = this.deps;
     // Taken before the inventory is asked for. A thread created from this
     // second on can belong to a run the inventory doesn't show, whether newly
-    // spawned or relaunched while the pass was out, so none of those count.
+    // spawned or relaunched while the pass was out, so its folder waits.
     const readAtSeconds = Math.floor(this.deps.now() / 1000);
     const inventory = await ptyClient.getAllTerminalsWithCompletenessAsync();
     if (inventory.degraded || this.disposed) return finished;
@@ -465,6 +465,7 @@ export class CodexLiveSessionAttribution {
       return state;
     };
     const folders = new Map<string, Promise<string | null>>();
+    const folderOfPath = new Map<string, string>();
     const folderOf = async (terminalId: string, generation: number, cwd: string) => {
       const known = this.runFolders.get(terminalId);
       if (known?.generation === generation) return known.folder;
@@ -516,6 +517,9 @@ export class CodexLiveSessionAttribution {
       // Unresolved, this pane could be any folder's rival, so nothing can be
       // shown unique this pass.
       if (folder === null) return finished;
+      // One path, two runs in different folders: a link moved between them.
+      if ((folderOfPath.get(info.cwd) ?? folder) !== folder) return finished;
+      folderOfPath.set(info.cwd, folder);
       let group = groups.get(folder);
       if (!group) {
         group = { cwds: new Set(), panes: [], profiles: new Map(), unavailable: false };
@@ -567,7 +571,7 @@ export class CodexLiveSessionAttribution {
       if (!inventory.terminals.some((info) => info.id === terminalId)) finished.add(terminalId);
     }
 
-    for (const group of groups.values()) {
+    for (const [folder, group] of groups) {
       if (group.unavailable) continue;
       for (const [profileKey, { codexHome, since }] of group.profiles) {
         if (this.disposed || this.deps.isQuitting()) return finished;
@@ -576,10 +580,15 @@ export class CodexLiveSessionAttribution {
         // the window are missing from its own list, so it can't be accepted.
         // Every pane in the folder competes whatever its profile: two homes can
         // be one directory, and a rival counted wrongly only costs a match.
-        const listed = await this.deps.listThreads([...group.cwds], since, codexHome);
+        const threads = await this.deps.listThreads(
+          [...new Set([...group.cwds, folder])],
+          since,
+          codexHome
+        );
         if (this.disposed || this.deps.isQuitting()) return finished;
-        if (!listed) continue;
-        const threads = listed.filter((thread) => thread.createdAt < readAtSeconds);
+        // Skipped, not filtered: dropping a thread whose owner isn't known
+        // could leave a pane fitting only someone else's.
+        if (!threads || threads.some((thread) => thread.createdAt >= readAtSeconds)) continue;
         const matches = matchLiveCodexThreads(group.panes, threads, claimed);
         logger.info("Live Codex session attribution pass", {
           panes: group.panes.length,
