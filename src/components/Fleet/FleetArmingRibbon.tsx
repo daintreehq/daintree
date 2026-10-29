@@ -233,6 +233,9 @@ function FleetRunStatusLine({
   );
 }
 
+/** Where focus was before it entered the ribbon: one ribbon per view, so one slot. */
+let focusBeforeRibbon: HTMLElement | null = null;
+
 /**
  * A fleet of other hosts' agents has no pane of its own to hand focus back to
  * when it ends, so whatever in the ribbon held focus (the composer, Exit) would
@@ -241,16 +244,14 @@ function FleetRunStatusLine({
  */
 function ReturnFocusOnRemoval({
   containerRef,
-  returnTo,
 }: {
   containerRef: RefObject<HTMLDivElement | null>;
-  returnTo: RefObject<HTMLElement | null>;
 }): null {
   useLayoutEffect(() => {
     const container = containerRef.current;
     return () => {
       if (!container?.contains(document.activeElement)) return;
-      const back = returnTo.current;
+      const back = focusBeforeRibbon;
       queueMicrotask(() => {
         // Focus that already landed somewhere is left where it is.
         if (document.activeElement !== document.body && document.activeElement !== null) return;
@@ -261,7 +262,7 @@ function ReturnFocusOnRemoval({
         }
       });
     };
-  }, [containerRef, returnTo]);
+  }, [containerRef]);
   return null;
 }
 
@@ -330,8 +331,6 @@ export function FleetArmingRibbon(): ReactElement | null {
     useShallow((s) => s.settings?.fleetSavedScopes ?? [])
   );
   const ribbonRef = useRef<HTMLDivElement | null>(null);
-  // Where focus was before it entered the ribbon, for a remote-only fleet's end.
-  const focusBeforeRibbon = useRef<HTMLElement | null>(null);
   const reduceMotion = useShouldSkipMotion();
 
   useEffect(() => {
@@ -775,7 +774,7 @@ export function FleetArmingRibbon(): ReactElement | null {
             onFocus={(e) => {
               const from = e.relatedTarget;
               if (from instanceof HTMLElement && !e.currentTarget.contains(from)) {
-                focusBeforeRibbon.current = from;
+                focusBeforeRibbon = from;
               }
             }}
             // Clipped across only: the composer's editor grows down over the grid
@@ -784,9 +783,7 @@ export function FleetArmingRibbon(): ReactElement | null {
             data-testid="fleet-arming-ribbon"
             {...ribbonMotionProps}
           >
-            {localArmedCount === 0 && (
-              <ReturnFocusOnRemoval containerRef={ribbonRef} returnTo={focusBeforeRibbon} />
-            )}
+            {localArmedCount === 0 && <ReturnFocusOnRemoval containerRef={ribbonRef} />}
             {/* Three areas — a fixed membership anchor, a flexible status slot,
              * and the trailing controls — so the transient centre content can
              * come and go without moving the menu or Exit. */}
