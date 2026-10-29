@@ -182,6 +182,10 @@ function assistantRows() {
   return [...document.querySelectorAll<HTMLElement>("[data-canopy-assistant]")];
 }
 
+function description(row: HTMLElement) {
+  return document.getElementById(row.getAttribute("aria-describedby")!)!.textContent ?? "";
+}
+
 /** What each empty section says, by its main line. */
 function emptyLines() {
   return [...document.querySelectorAll("[data-canopy-empty-line] > p:first-child")].map(
@@ -254,11 +258,89 @@ describe("CanopyView role filter", () => {
     await settle();
     const workersAlone = workerIds();
     expect(workersAlone).toEqual(["waiting", "working"]);
+    // Named as a worker is, by what it is and the agent it runs on; where it
+    // runs follows in its description.
     const names = assistantRows().map((row) => row.getAttribute("aria-label"));
     expect(names).toEqual([
-      "Daintree Assistant, app · Session 1",
-      "Daintree Assistant, app · Session 2",
+      "Daintree Assistant, Session 1, Claude",
+      "Daintree Assistant, Session 2, Claude",
     ]);
+    expect(description(assistantRows()[0]!)).toContain("app");
+  });
+
+  it("builds an assistant's row in the shape of the worker rows around it (#15370)", async () => {
+    directory.entries = [
+      assistant(0, { waitingReason: "question", since: NOW - 3 * 60_000 }),
+      assistant(1, { waitingReason: "question", agentId: "codex", since: NOW - 3 * 60_000 }),
+    ];
+    render(<CanopyView />);
+    await settle();
+    const band = document.querySelector("[data-testid=canopy-needs-you]")!.parentElement!;
+    const worker = document.getElementById("canopy-card-waiting")!;
+    const [claude, codex] = [...band.querySelectorAll<HTMLElement>("[data-canopy-assistant]")];
+    expect(band.contains(worker)).toBe(true);
+
+    const shape = (row: HTMLElement) => {
+      const lead = row.querySelector("[data-canopy-lead]");
+      const lines = lead?.nextElementSibling;
+      const where = lines?.lastElementChild;
+      return {
+        lines: lines?.children.length,
+        ageOnName: lines?.firstElementChild?.querySelector("[data-canopy-age]") !== null,
+        whereLast: where?.hasAttribute("data-canopy-where"),
+        emoji: where?.firstElementChild?.textContent,
+        project: where?.querySelector("[data-canopy-project]")?.textContent,
+        agent: lead
+          ?.querySelector("[data-terminal-icon-id]")
+          ?.getAttribute("data-terminal-icon-id"),
+      };
+    };
+    expect(shape(claude!)).toEqual(shape(worker));
+    expect(shape(worker)).toMatchObject({ lines: 3, ageOnName: true, whereLast: true });
+    expect(shape(codex!).agent).not.toBe(shape(claude!).agent);
+
+    const name = claude!.querySelector("[data-canopy-assistant-name]")!.textContent;
+    expect(name).toContain("Daintree Assistant");
+    expect(name).toContain("Session 1");
+    expect(name).not.toContain("app");
+    expect(claude!.querySelector("[data-canopy-age]")!.textContent).toBe("3m");
+    expect(description(claude!)).toContain("waiting for 3m");
+  });
+
+  it("gives the global assistant its scope where a project would be", async () => {
+    directory.entries = [
+      assistant(0, {
+        subject: { hostId: "local", scope: { kind: "global" }, terminalId: "g-1", incarnation: 4 },
+      }),
+    ];
+    useCanopyStore.setState({ roleFilter: "assistants" });
+    render(<CanopyView />);
+    await settle();
+    const [row] = assistantRows();
+    expect(row!.getAttribute("aria-label")).toBe("Daintree Assistant, Claude");
+    expect(row!.querySelector("[data-canopy-where]")!.textContent).toBe("Global");
+  });
+
+  it("gives supervision the row's one note, and all of it to the pane (#15370)", async () => {
+    directory.entries = [
+      assistant(0, { notices: { pending: 2, ready: 1, delivery: "held" }, attached: false }),
+    ];
+    useCanopyStore.setState({ roleFilter: "assistants" });
+    render(<CanopyView />);
+    await settle();
+    const [row] = assistantRows();
+    expect(row!.querySelector("[data-canopy-assistant-note]")!.textContent).toBe(
+      "1 notice not delivered (held for now)"
+    );
+    const pane = document.querySelector("[data-canopy-assistant-supervision]")!.textContent;
+    for (const said of [
+      "Watching 2 terminals",
+      "1 notice not delivered (held for now)",
+      "No window here",
+    ]) {
+      expect(pane).toContain(said);
+      expect(description(row!)).toContain(said);
+    }
   });
 
   it("shows only workers, then only assistants, keeping the choice for the next opening", async () => {
@@ -518,6 +600,7 @@ describe("CanopyView role filter", () => {
     render(<CanopyView />);
     await settle();
     expect(document.querySelector("[data-canopy-assistant-supervision]")).toBeNull();
+    expect(document.querySelector("[data-canopy-assistant-note]")).toBeNull();
     expect(assistantRows()[0]!.getAttribute("data-ask")).toBeNull();
   });
 

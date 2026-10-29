@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render as rtlRender, screen } from "@testing-l
 import type { ReactElement } from "react";
 import type { CanopyHostEvent } from "@shared/types/ipc/canopyHost";
 import type { CanopySnapshot } from "@shared/types/ipc/canopy";
+import type { AgentDirectory } from "@shared/types/agentDirectory";
 import type { FleetSnapshot } from "@shared/types/ipc/fleet";
 import type { HostListEntry, HostMetricsSummary } from "@shared/types/remoteHosts";
 
@@ -924,6 +925,45 @@ describe("All hosts", () => {
     expect(screen.getByTestId("canopy-host-picker").getAttribute("data-host-id")).toBe("*");
     // A read scope: no "This project" switch.
     expect(screen.queryByRole("radiogroup", { name: "Agents to show" })).toBeNull();
+  });
+
+  it("names this machine on an assistant's place line, as on its workers', not in its name (#15370)", async () => {
+    const own = installElectron();
+    const listing: AgentDirectory = {
+      coverage: "ok",
+      observedAt: NOW,
+      complete: true,
+      omitted: 0,
+      entries: [
+        {
+          state: "live",
+          role: "assistant",
+          subject: {
+            hostId: "local",
+            scope: { kind: "project", projectId: "p1" },
+            terminalId: "help-0",
+            incarnation: 1,
+            lane: 0,
+          },
+          agentId: "claude",
+          agentState: "waiting",
+          waitingReason: "prompt",
+          since: NOW - 10_000,
+          label: null,
+          attached: true,
+          handback: null,
+        },
+      ],
+    };
+    own.readAgentDirectory.mockImplementation(async () => listing as never);
+    render(<CanopyView />);
+    await settle();
+    const row = document.querySelector<HTMLElement>("[data-canopy-assistant]")!;
+    const workerHost = cardOf("local", "shared-run")!.querySelector("[data-canopy-host]")!;
+    const host = workerHost.lastElementChild!.textContent!;
+    expect(row.querySelector("[data-canopy-host]")!.textContent).toBe(workerHost.textContent);
+    expect(row.querySelector("[data-canopy-project]")!.textContent).toBe("local-app");
+    expect(row.querySelector("[data-canopy-assistant-name]")!.textContent).not.toContain(host);
   });
 
   it("asks each host about its own terminals, by the id it knows", async () => {
