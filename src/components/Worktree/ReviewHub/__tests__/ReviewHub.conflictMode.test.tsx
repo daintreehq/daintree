@@ -782,6 +782,45 @@ describe("ReviewHub", () => {
       expect(badge.textContent).toBe("3 regions");
     });
 
+    it("rescans a conflicted file rewritten inside Daintree, with no focus change", async () => {
+      let fireTick: (() => void) | undefined;
+      onUpdateMock.mockImplementation((type: string, callback: (data: unknown) => void) => {
+        if (type === "worktree-tick") {
+          fireTick = () => callback({ tick: { worktreeId: "main-wt", path: WORKTREE_PATH } });
+        }
+        return mockUnsubscribe;
+      });
+      // Each read is a fresh object, as it is over IPC; the path set never moves.
+      getStagingStatusMock.mockImplementation(async () => makeMergingStatus());
+      scanConflictMarkersMock.mockResolvedValue([
+        { path: "src/app.ts", hunkCount: 3, firstMarkerLine: 12 },
+      ]);
+
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+
+      const badge = await screen.findByTestId("conflict-hunk-count-src/app.ts");
+      expect(badge.textContent).toBe("3 regions");
+
+      // An agent in a terminal fixes two of the three regions: the watcher's
+      // flush reaches the hub as a tick, and the file stays conflicted.
+      scanConflictMarkersMock.mockResolvedValue([
+        { path: "src/app.ts", hunkCount: 1, firstMarkerLine: 40 },
+      ]);
+      act(() => fireTick?.());
+
+      await waitFor(() =>
+        expect(screen.getByTestId("conflict-hunk-count-src/app.ts").textContent).toBe("1 region")
+      );
+      fireEvent.click(screen.getByRole("button", { name: /Open src\/app\.ts in external editor/i }));
+      await waitFor(() => {
+        expect(openInEditorMock).toHaveBeenCalledWith({
+          path: `${WORKTREE_PATH}/src/app.ts`,
+          line: 40,
+          projectId: REVIEW_PROJECT_ID,
+        });
+      });
+    });
+
     it("opens confirm dialog before aborting and calls abort on confirm", async () => {
       getStagingStatusMock.mockResolvedValue(makeMergingStatus());
 
