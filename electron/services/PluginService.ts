@@ -7198,7 +7198,14 @@ export class PluginService {
         wiped.add(file);
       }
     }
-    const wipes = [...wiped].map((file) => wipeSettingsFile(file));
+    // Each wipe is marked handled as it starts, since the scan below awaits
+    // before anything else listens; its error still reaches the awaits at the end.
+    const startWipe = (file: string): Promise<void> => {
+      const wipe = wipeSettingsFile(file);
+      wipe.catch(() => {});
+      return wipe;
+    };
+    const wipes = [...wiped].map(startWipe);
     try {
       const dirs = [...userDirs];
       for (const projectId of await listDir(localRoot)) {
@@ -7209,7 +7216,7 @@ export class PluginService {
           const file = path.resolve(dir, name);
           if (isPluginFile(name) && !wiped.has(file)) {
             wiped.add(file);
-            wipes.push(wipeSettingsFile(file));
+            wipes.push(startWipe(file));
           }
         }
       }

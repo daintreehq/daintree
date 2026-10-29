@@ -842,13 +842,15 @@ describe("PluginService built-in plugin loading", () => {
         secret: true,
       });
       await encryptReached;
+      const localRoot = path.join(tmpDir, "plugin-settings", "local");
+      const readdir = vi.spyOn(fs, "readdir");
       const uninstall = service.uninstallPlugin("acme.wipe", true);
-      // The sweep registers its wipes synchronously once the install directory
-      // is gone, so the held write can only resume after that.
+      // The sweep registers its wipes before it first lists the local root, so
+      // the held write can only resume after that.
       await vi.waitFor(() =>
-        expect(fs.access(path.join(pluginsRoot, "acme.wipe"))).rejects.toThrow()
+        expect(readdir.mock.calls.some(([dir]) => String(dir) === localRoot)).toBe(true)
       );
-      await new Promise((resolve) => setImmediate(resolve));
+      readdir.mockRestore();
       release();
 
       await expect(write).rejects.toThrow(/settings were deleted/);
