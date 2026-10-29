@@ -18,6 +18,7 @@ import {
 } from "@/components/PluginKit/PluginKitTextInputs";
 import { setPluginKitHost } from "@/components/PluginKit/kitHost";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { BUILT_IN_APP_SCHEMES, blendOverBackground, contrastRatio, parseRgba } from "@shared/theme";
 import { keybindingService } from "@/services/KeybindingService";
 
 beforeAll(async () => {
@@ -1434,5 +1435,48 @@ describe("ShortcutRecorder", () => {
     const field = recorder();
     expect(field.tabIndex).toBe(-1);
     expect(screen.queryByRole("button", { name: "Clear shortcut" })).toBeNull();
+  });
+
+  // The resting edge is the field's 3:1 boundary, so hover and recording have to
+  // read as a step up from it on every built-in theme, against the fill inside
+  // the edge and the panel outside it. Measured on the themes' real values.
+  it("steps its edge up from rest on hover and while recording", () => {
+    const edgeToken = (field: HTMLElement, prefix: string) => {
+      const token = field.className
+        .split(/\s+/)
+        .find((x) => x.startsWith(`${prefix}border-`) && !x.slice(prefix.length).includes(":"))
+        ?.slice(prefix.length + "border-".length);
+      if (!token) throw new Error(`no ${prefix || "rest"} edge`);
+      return token;
+    };
+    render(<kit.ShortcutRecorder checkHostConflicts={false} />);
+    const rest = edgeToken(recorder(), "");
+    const hover = edgeToken(recorder(), "hover:");
+    arm(recorder());
+    expect(recorder().getAttribute("aria-pressed")).toBe("true");
+    const recording = edgeToken(recorder(), "");
+
+    for (const scheme of BUILT_IN_APP_SCHEMES) {
+      const tokens = scheme.tokens as Record<string, string>;
+      const contrastOn = (token: string, surface: string) => {
+        const value = tokens[token];
+        if (!value) throw new Error(`${token} is not a ${scheme.id} theme token`);
+        const bg = tokens[surface]!;
+        const alpha = parseRgba(value);
+        return contrastRatio(alpha ? blendOverBackground(alpha.hex, bg, alpha.opacity) : value, bg);
+      };
+      for (const surface of ["surface-input", "surface-panel"]) {
+        const at = `${scheme.id} on ${surface}`;
+        const r = contrastOn(rest, surface);
+        expect(
+          contrastOn(hover, surface),
+          `${at}: hover ${hover} over rest ${rest}`
+        ).toBeGreaterThan(r);
+        expect(
+          contrastOn(recording, surface),
+          `${at}: recording ${recording} over rest ${rest}`
+        ).toBeGreaterThan(r);
+      }
+    }
   });
 });

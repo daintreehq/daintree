@@ -363,9 +363,11 @@ export function KitShortcutRecorder(props: PluginShortcutRecorderProps) {
             RECORDER_FIELD,
             RECORDER_DENSITY[compact ? "compact" : "default"],
             "relative select-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary",
+            // Hover and recording step up from the resting edge, so neither can
+            // take `border-strong`: it is lighter than `border-input` on every theme.
             recording
-              ? "border-border-strong bg-overlay-subtle text-text-primary"
-              : "border-border-input bg-surface-input text-text-primary hover:border-border-strong",
+              ? "border-text-secondary bg-overlay-subtle text-text-primary"
+              : "border-border-input bg-surface-input text-text-primary hover:border-text-secondary",
             error && "border-status-error",
             inert ? "cursor-not-allowed opacity-50" : "cursor-pointer"
           )}

@@ -90,6 +90,10 @@ export const theme: BuiltInThemeSource = {
   tokens: {
     "accent-muted": "rgba(33,133,70,0.30)",
     "accent-soft": "rgba(33,133,70,0.18)",
+    // Solid so the field edge clears 3:1 on every surface a field sits on
+    // (3.07–3.68:1); the alpha `border-strong` it used to follow measured
+    // 1.46–1.47:1.
+    "border-input": "#828686",
     // Flat chrome: the engine sheen is a screen-scale gradient (banding risk).
     "chrome-noise-texture": "none",
     "focus-ring": "rgba(33,133,70,0.35)",
