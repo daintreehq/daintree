@@ -1243,6 +1243,39 @@ describe("NotificationCenter — Needs attention pinned section", () => {
     ).toBeTruthy();
   });
 
+  it("drops a thread from the rail when it ages out while the inbox stays open", () => {
+    vi.useFakeTimers();
+    try {
+      const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
+      setEntries([
+        makeEntry({ type: "warning", message: "Token expiring", seenAsToast: false }),
+        makeEntry({
+          type: "error",
+          message: "Yesterday's failure",
+          timestamp: dayAgo + 90_000,
+          seenAsToast: false,
+        }),
+      ]);
+
+      render(<NotificationCenter open onClose={vi.fn()} />);
+      const pinned = () => screen.getByTestId("needs-attention-section");
+      expect(within(pinned()).getByText("Yesterday's failure")).toBeTruthy();
+
+      // Nothing in history changes and no quiet-hours tick is running: the
+      // rail's own wake-up is the only thing that can move it.
+      act(() => {
+        vi.advanceTimersByTime(91_000);
+      });
+      expect(within(pinned()).queryByText("Yesterday's failure")).toBeNull();
+      expect(within(pinned()).getByText("Token expiring")).toBeTruthy();
+      expect(
+        within(screen.getByTestId("chrono-section")).getByText("Yesterday's failure")
+      ).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("omits the overflow note when severe unread threads fit within the cap", () => {
     setEntries([makeEntry({ type: "error", message: "Build failed", seenAsToast: false })]);
 

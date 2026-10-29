@@ -18,6 +18,13 @@ function isUnreadGroup(group: ThreadGroup): boolean {
   return group.entries.some((e) => !e.seenAsToast);
 }
 
+/** Unread and warning-or-worse: what the rail pins while it is recent and not snoozed. */
+function isRailCandidate(group: ThreadGroup): boolean {
+  if (!isUnreadGroup(group)) return false;
+  const sev = getWorstSeverity(group.entries);
+  return sev === "error" || sev === "warning";
+}
+
 /** When the thread last got something the user hasn't seen. A newer read entry doesn't count. */
 function newestUnreadTimestamp(group: ThreadGroup): number {
   let newest = -Infinity;
@@ -197,7 +204,7 @@ export function deriveTriageView({
   groupByContext: boolean;
   lastClosedAt: number;
   snoozedThreads: Record<string, number>;
-  /** The clock for the rail's age horizon. Minute resolution is plenty. */
+  /** The clock for the rail's age horizon, moved by `msUntilNeedsAttentionExpiry`. */
   now: number;
 }): TriageView {
   const snoozeNow = Date.now();
@@ -216,10 +223,8 @@ export function deriveTriageView({
       : groupByCorrelationId(entries.filter((e) => e.archivedAt === null))
           .filter((g) => {
             if (isSnoozedGroup(g)) return false;
-            if (!isUnreadGroup(g)) return false;
-            if (now - newestUnreadTimestamp(g) > NEEDS_ATTENTION_MAX_AGE_MS) return false;
-            const sev = getWorstSeverity(g.entries);
-            return sev === "error" || sev === "warning";
+            if (!isRailCandidate(g)) return false;
+            return now - newestUnreadTimestamp(g) <= NEEDS_ATTENTION_MAX_AGE_MS;
           })
           .sort((a, b) => {
             // Asking first. The brief's first question is "is anything
@@ -264,6 +269,25 @@ export function deriveTriageView({
     chronoSections: sections,
     dividerGroupId: divider,
   };
+}
+
+/**
+ * How long until the next thread ages out of Needs attention, or null when
+ * none will. Snoozed threads count too, so the clock is already current when
+ * one wakes and the rail recomputes for some other reason.
+ */
+export function msUntilNeedsAttentionExpiry(
+  entries: NotificationHistoryEntry[],
+  now: number
+): number | null {
+  let soonest: number | null = null;
+  for (const g of groupByCorrelationId(entries.filter((e) => e.archivedAt === null))) {
+    if (!isRailCandidate(g)) continue;
+    const left = newestUnreadTimestamp(g) + NEEDS_ATTENTION_MAX_AGE_MS - now;
+    if (left >= 0 && (soonest === null || left < soonest)) soonest = left;
+  }
+  // Still pinned at exactly the horizon, so land just past it.
+  return soonest === null ? null : soonest + 1;
 }
 
 /** One roving-focus stop per rendered row: the pinned rail first, then the list. */

@@ -5,6 +5,7 @@ import {
   deriveTriageView,
   filterTriageEntries,
   groupByCorrelationId,
+  msUntilNeedsAttentionExpiry,
   NEEDS_ATTENTION_MAX_AGE_MS,
   type NotificationFilter,
 } from "../notificationTriageModel";
@@ -181,6 +182,29 @@ describe("notificationTriageModel", () => {
       ids(recent.slice(0, 3))
     );
     expect(result.needsAttentionOverflow).toBe(1);
+  });
+
+  it("wakes the rail just past the soonest candidate's horizon, snoozed ones included", () => {
+    const now = 50_000_000_000;
+    const ageOutIn = (ms: number) => now + ms - NEEDS_ATTENTION_MAX_AGE_MS;
+    const later = entry({ type: "error", seenAsToast: false, timestamp: ageOutIn(90_000) });
+    const snoozedSooner = entry({
+      type: "warning",
+      seenAsToast: false,
+      timestamp: ageOutIn(30_000),
+      correlationId: "s",
+    });
+    expect(msUntilNeedsAttentionExpiry([later, snoozedSooner], now)).toBe(30_001);
+
+    // Nothing that could ever pin schedules a wake-up.
+    const notCandidates = [
+      entry({ type: "error", seenAsToast: true, timestamp: ageOutIn(10_000) }),
+      entry({ type: "info", seenAsToast: false, timestamp: ageOutIn(10_000) }),
+      entry({ type: "error", seenAsToast: false, timestamp: ageOutIn(10_000), archivedAt: now }),
+      entry({ type: "error", seenAsToast: false, timestamp: ageOutIn(-1) }),
+    ];
+    expect(msUntilNeedsAttentionExpiry(notCandidates, now)).toBeNull();
+    expect(msUntilNeedsAttentionExpiry([...notCandidates, later], now)).toBe(90_001);
   });
 
   it("keeps the pinned rail out of Archived and Snoozed", () => {

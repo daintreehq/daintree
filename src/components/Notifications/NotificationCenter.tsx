@@ -62,10 +62,12 @@ import {
   PANE_TOOLBAR_TEXT_BUTTON_CLASS,
 } from "@/components/ui/paneToolbarStyles";
 import { FilterChip } from "@/components/ui/FilterChip";
+import { useWallClock } from "@/hooks/useWallClock";
 import {
   buildFlatRows,
   deriveTriageView,
   filterTriageEntries,
+  msUntilNeedsAttentionExpiry,
   type NotificationFilter,
 } from "./notificationTriageModel";
 import { useNotificationRowActions } from "./useNotificationRowActions";
@@ -183,9 +185,8 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
   const [, forceTick] = useState(0);
   const now = Date.now();
   // Quantized to the minute so every row doesn't get a fresh prop on each
-  // unrelated re-render — snooze expiry and the Needs attention age horizon
-  // only need minute resolution, and the quiet-hours tick already re-renders
-  // on minute boundaries.
+  // unrelated re-render — snooze expiry only needs minute resolution, and the
+  // quiet-hours tick already re-renders on minute boundaries.
   const snoozeRenderTime = now - (now % 60_000);
   const isSessionMuted = quietUntil > now;
   const isScheduledMuted = isScheduledQuietNow({
@@ -322,6 +323,11 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
     [entries, filter, frozenUnreadIds, snoozedThreads]
   );
 
+  // In state, not a render-time Date.now(): the compiler caches that with the
+  // memo reading it, and an open inbox would keep pinning a thread that had
+  // aged out. Re-read on new history and the moment a pinned thread ages out.
+  const railNow = useWallClock(entries, (at) => msUntilNeedsAttentionExpiry(entries, at));
+
   const { needsAttentionGroups, needsAttentionOverflow, chronoSections, dividerGroupId } = useMemo(
     () =>
       deriveTriageView({
@@ -331,17 +337,9 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
         groupByContext,
         lastClosedAt,
         snoozedThreads,
-        now: snoozeRenderTime,
+        now: railNow,
       }),
-    [
-      entries,
-      filteredEntries,
-      groupByContext,
-      lastClosedAt,
-      filter,
-      snoozedThreads,
-      snoozeRenderTime,
-    ]
+    [entries, filteredEntries, groupByContext, lastClosedAt, filter, snoozedThreads, railNow]
   );
 
   const totalChronoGroups = chronoSections.reduce((sum, s) => sum + s.groups.length, 0);
