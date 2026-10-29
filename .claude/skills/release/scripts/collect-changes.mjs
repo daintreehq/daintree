@@ -135,7 +135,7 @@ const records = prs.map((p) => {
 // A docs/chore PR that touches shipped code is not internal; only drop it when
 // every file it touches (all of them: a truncated list keeps the PR) is
 // outside what the app is built from. Kept in step with SHIPPED in
-// dry-run-check.mjs, plus build/ for packaging inputs.
+// readiness.mjs, plus build/ for packaging inputs.
 const SHIPPED = /^(src|electron|shared|plugins\/builtin|packages\/tour\/src|assistant|build)\//;
 const isInternal = (r) =>
   !r.breaking &&

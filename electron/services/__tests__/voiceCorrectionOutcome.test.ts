@@ -82,6 +82,54 @@ describe("correctionOutcome", () => {
     ).toMatchObject({ verdict: "rejected_command", rejected: { reason: "unknown_command" } });
   });
 
+  it("lands a cleanup with a command nobody named written back as the words said", () => {
+    const vocabulary = buildVoiceCommandVocabulary(
+      getBuiltinSlashCommands("claude"),
+      getAgentConfig("claude")!.completionSources!
+    );
+    expect(
+      correctionOutcome(
+        "so um I'm happy with the model, ship it",
+        replace("I'm happy with the /model. Ship it."),
+        { vocabulary, startsPrompt: true }
+      )
+    ).toEqual({
+      action: "replace",
+      confirmedText: "I'm happy with the model. Ship it.",
+      verdict: "replaced",
+      commandsAsSaid: true,
+    });
+    expect(
+      correctionOutcome("I'm happy with the model", replace("I'm happy with the /model.", "low"), {
+        vocabulary,
+        startsPrompt: true,
+      })
+    ).toEqual({
+      action: "no_change",
+      confirmedText: "I'm happy with the model",
+      verdict: "rejected_low_confidence",
+      rejected: { reason: "low_confidence", candidate: "I'm happy with the model." },
+    });
+  });
+
+  it("turns the cleanup down when writing a command back leaves another unaccounted for", () => {
+    const vocabulary = buildVoiceCommandVocabulary(
+      getBuiltinSlashCommands("claude"),
+      getAgentConfig("claude")!.completionSources!
+    );
+    expect(
+      correctionOutcome("Then model command blue.", replace("Then /model /model command blue."), {
+        vocabulary,
+        startsPrompt: true,
+      })
+    ).toEqual({
+      action: "no_change",
+      confirmedText: "Then model command blue.",
+      verdict: "rejected_command",
+      rejected: { reason: "unprompted_command", candidate: "Then /model /model command blue." },
+    });
+  });
+
   it("measures a command written for its spoken request as that command", () => {
     const vocabulary = buildVoiceCommandVocabulary(
       getBuiltinSlashCommands("claude"),

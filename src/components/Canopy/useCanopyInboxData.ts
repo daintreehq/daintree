@@ -12,12 +12,14 @@ import {
   ownCanopyTerminalApi,
   remoteCanopyApi,
   remoteCanopyTerminalApi,
+  unlessHostDisconnected,
   useRemoteCanopies,
   useRemoteCanopy,
 } from "./canopyHostSource";
 import {
   allHostsKey,
   createAllHostsRoute,
+  hostAway,
   mergeHostReadings,
   type HostReading,
 } from "./canopyAllHosts";
@@ -96,10 +98,26 @@ export function useCanopyInboxData({
   );
   const ownCanopy = useCanopyStore((s) => s.snapshot);
   const ownFleet = useFleetSnapshotStore((s) => s.snapshot);
+  // A host that can't be reached is read as if it weren't listed, its viewer
+  // still open: the link coming back brings its agents with it.
+  const awayKey = everyHost
+    ? remoteIds
+        .filter((id) =>
+          hostAway(
+            (hostRows ?? []).find((row) => row.hostId === id)?.connection ?? null,
+            (remotes.states.get(id)?.fleet ?? null) !== null
+          )
+        )
+        .join("\u0000")
+    : "";
+  const present = useMemo(
+    () => participants.filter((id) => !awayKey.split("\u0000").includes(id)),
+    [participants, awayKey]
+  );
   const readings = useMemo<HostReading[]>(
     () =>
       everyHost
-        ? participants.map((id) =>
+        ? present.map((id) =>
             id === ownHostId
               ? { hostId: id, canopy: ownCanopy, fleet: ownFleet, error: null }
               : {
@@ -110,7 +128,7 @@ export function useCanopyInboxData({
                 }
           )
         : [],
-    [everyHost, participants, ownHostId, ownCanopy, ownFleet, remotes.states]
+    [everyHost, present, ownHostId, ownCanopy, ownFleet, remotes.states]
   );
   const merged = useMemo(
     () => (everyHost ? mergeHostReadings(readings) : null),
@@ -161,7 +179,9 @@ export function useCanopyInboxData({
   // cost nothing. Said again whenever another host's link comes back.
   useEffect(() => {
     if (!isOpen) return;
-    safeFireAndForget(api.setScope(scope === "project" ? getViewWorkspaceId() : null));
+    safeFireAndForget(
+      unlessHostDisconnected(api.setScope(scope === "project" ? getViewWorkspaceId() : null))
+    );
   }, [isOpen, scope, api, recoveries]);
 
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -274,7 +294,7 @@ export function useCanopyInboxData({
     hostName,
     remote,
     remotes,
-    participants,
+    participants: present,
     api,
     terminalApi,
     readings,

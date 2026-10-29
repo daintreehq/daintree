@@ -59,6 +59,10 @@ vi.mock("@/services/terminal/TerminalResizeController", () => ({
   getXtermCellDimensions: () => cell.current,
 }));
 const pane = vi.hoisted(() => ({ events: [] as string[] }));
+const reportError = vi.hoisted(() => vi.fn());
+vi.mock("@/utils/rendererGlobalErrorHandlers", () => ({
+  reportRendererGlobalError: reportError,
+}));
 vi.mock("@/services/TerminalInstanceService", () => {
   const terminalInstanceService = {
     holdGeometry: (id: string) => {
@@ -406,6 +410,40 @@ describe("CanopyTerminal", () => {
     unmount();
     expect(vi.mocked(window.electron.canopy.unwatchTerminal).mock.calls).toEqual([[9]]);
   });
+
+  it.each([
+    [
+      "a host whose link is down, reporting nothing",
+      "[AppError|HOST_DISCONNECTED] Host studio is not connected",
+      0,
+    ],
+    ["anything else, reporting it", "[AppError|INTERNAL] stream lost", 1],
+  ] as const)(
+    "lets its pane go when ending its stream fails on %s",
+    async (_case, message, reports) => {
+      window.electron.canopy.unwatchTerminal = vi.fn(async () => {
+        throw new Error(message);
+      });
+      const { unmount } = mount();
+      await open({ watchId: 9, snapshot: { data: "", cols: 80, rows: 24 } });
+      unmount();
+      await act(async () => {
+        for (let i = 0; i < 5; i++) await Promise.resolve();
+      });
+      expect(pane.events).toEqual(["hold run-1", "release run-1"]);
+      expect(reportError).toHaveBeenCalledTimes(reports);
+
+      reportError.mockClear();
+      _resetCanopyWatchBurstForTests();
+      const late = mount();
+      late.unmount();
+      await open({ watchId: 11, snapshot: { data: "", cols: 80, rows: 24 } });
+      await act(async () => {
+        for (let i = 0; i < 5; i++) await Promise.resolve();
+      });
+      expect(reportError).toHaveBeenCalledTimes(reports);
+    }
+  );
 
   it("says it couldn't show a terminal the host had no screen for, with the way to see it", async () => {
     const onGoTo = vi.fn();

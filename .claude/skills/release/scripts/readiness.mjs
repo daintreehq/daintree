@@ -1,13 +1,19 @@
 #!/usr/bin/env node
-// Decides which OSes, if any, need a release dry run, from evidence: whether a
-// stabilize run finished green recently and how much has landed since, and
-// whether files only the release pipeline exercises (packaging, signing,
-// release workflows) changed since the last tag without a green nightly or dry
-// run having built that exact content.
+// What could still fail in the tag run, found before the tag:
+// - which OSes, if any, need a full dry run: whether a stabilize run finished
+//   green recently and how much has landed since, and whether files only the
+//   release pipeline exercises (packaging, signing, release workflows) changed
+//   since the last tag without a green nightly or dry run building them;
+// - E2E specs that no CI run has executed on an OS yet (PR CI runs no E2E):
+//   on Linux and Windows those changed since stabilize's validated commit, on
+//   macOS those changed since the last green macOS release run, because
+//   stabilize covers macOS only with a local pass on a big screen, never the
+//   macos-15 runner's 1024x768 one. Each needs an e2e-single proof first;
+// - unit-test jobs whose last release run used most of their timeout.
 //
-// Usage: node dry-run-check.mjs [--head <sha|ref>] [--max-age-hours 72] [--max-prs 15] [--max-lines 3000]
+// Usage: node readiness.mjs [--head <sha|ref>] [--max-age-hours 72] [--max-prs 15] [--max-lines 3000]
 //
-// Prints JSON: { recommend: "skip" | "dry-run", oses: [...], reasons: [...], facts: {...} }.
+// Prints JSON: { recommend: "skip" | "dry-run", oses, reasons, specs, unitHeadroom, facts }.
 // Exits 2 on bad arguments or when the baseline can't be established.
 
 import { execFileSync } from "node:child_process";
@@ -239,6 +245,71 @@ for (const os of OSES) {
   if (files.length) need(`${os}: release-pipeline files changed since ${lastTag} that no green nightly or dry run has built: ${files.slice(0, 6).join(", ")}`, [os]);
 }
 
+// E2E specs with no CI run on an OS yet. A spec's Playwright project is the
+// directory it lives in (playwright.config.ts): e2e/core → core,
+// e2e/full/<x> → full-<x>; specs elsewhere don't run in the release gates.
+const suiteOf = (file) => {
+  const m = file.match(/^e2e\/(core|full\/(\w+))\//);
+  return m ? (m[2] ? `full-${m[2]}` : "core") : null;
+};
+// --no-renames: a spec moved (or moved between projects) counts as added.
+const specsChangedSince = (base) =>
+  git("diff", "--no-renames", "--name-only", "--diff-filter=AM", `${base}..${head}`, "--", "e2e")
+    .split("\n")
+    .filter((f) => /\.spec\.ts$/.test(f) && suiteOf(f))
+    .map((file) => ({ file, suite: suiteOf(file) }));
+const releaseRuns = Object.fromEntries(
+  OSES.map((os) => [
+    os,
+    gh("run", "list", `--workflow=release-${os}.yml`, "--limit", "30", "--json", "databaseId,headSha,conclusion,event,url").filter(
+      (r) => r.conclusion === "success" && haveCommit(r.headSha)
+    ),
+  ])
+);
+const macosGreen = releaseRuns.macos[0] ?? null;
+const stabilizeBase = stabilize?.validatedBase ? git("merge-base", stabilizeRuns[0].headSha, head) : null;
+const baselines = {
+  macos: macosGreen ? tryGit("merge-base", macosGreen.headSha, head) : null,
+  linux: stabilizeBase,
+  windows: stabilizeBase,
+};
+const specs = {};
+for (const os of OSES) {
+  // No baseline: everything since the last tag is unproven on that OS.
+  specs[os] = specsChangedSince(baselines[os] ?? lastTag);
+  if (!baselines[os]) reasons.push(`${os}: no CI E2E baseline found, so every spec changed since ${lastTag} is listed`);
+  if (specs[os].length) reasons.push(`${os}: ${specs[os].length} E2E spec(s) never run there on CI; prove each with e2e-single before tagging`);
+}
+
+// Unit-test headroom: the longest unit job in each OS's last release run
+// against the timeout its workflow sets now. A suite that grows quietly blows
+// the limit only in a tag run (v0.47.0 lost two hours to it).
+// Only runs whose unit jobs actually ran count: a Windows smoke-only dispatch
+// is green with them skipped.
+const unitHeadroom = {};
+for (const os of OSES) {
+  const workflow = tryGit("show", `${head}:.github/workflows/release-${os}.yml`) ?? "";
+  const unitBlock = workflow.match(/\n  unit-tests:\n([\s\S]*?)\n  [\w-]+:\n/)?.[1] ?? "";
+  const timeout = Number(unitBlock.match(/timeout-minutes:\s*(\d+)/)?.[1]);
+  let found = null;
+  for (const r of releaseRuns[os].slice(0, 5)) {
+    const durations = gh("run", "view", String(r.databaseId), "--json", "jobs")
+      .jobs.filter((j) => /^Unit Tests/.test(j.name) && j.conclusion === "success" && j.startedAt && j.completedAt)
+      .map((j) => (Date.parse(j.completedAt) - Date.parse(j.startedAt)) / 60_000);
+    if (durations.length) {
+      found = { minutes: Math.max(...durations), run: r.url };
+      break;
+    }
+  }
+  if (!found || !timeout) {
+    unitHeadroom[os] = { unknown: !found ? "no recent green release run with executed unit jobs" : "no timeout-minutes on the unit-tests job" };
+    reasons.push(`${os}: unit-job headroom unknown (${unitHeadroom[os].unknown})`);
+    continue;
+  }
+  unitHeadroom[os] = { longestMinutes: Math.round(found.minutes), timeout, run: found.run };
+  if (found.minutes > timeout * 0.75) need(`${os}: the unit job took ${Math.round(found.minutes)} of its ${timeout} minutes last release; shard it or find what got slower before tagging`, [os]);
+}
+
 const recommend = oses.size ? "dry-run" : "skip";
 if (recommend === "skip") {
   reasons.push(
@@ -256,6 +327,8 @@ console.log(
       recommend,
       oses: OSES.filter((os) => oses.has(os)),
       reasons,
+      specs,
+      unitHeadroom,
       facts: {
         head: head.slice(0, 10),
         lastTag,

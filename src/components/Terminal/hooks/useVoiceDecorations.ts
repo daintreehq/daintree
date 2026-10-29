@@ -86,11 +86,28 @@ export function useVoiceDecorations({ terminalId, editorViewRef }: UseVoiceDecor
       // store), the preview stays where it was, mapped through the typing.
       if (anchor && inStep) {
         // Shown as it will be written, spacing included, where it will go.
-        const { change } = planVoiceWords(draft, anchor, liveText);
-        preview = { text: change.insert, pos: change.from };
+        const { change, separatorAfter } = planVoiceWords(draft, anchor, liveText);
+        const trailLength = separatorAfter ? separatorAfter.to - separatorAfter.from : 0;
+        const wordsEnd = change.insert.length - trailLength;
+        preview = {
+          text: change.insert.slice(0, wordsEnd),
+          pos: change.from,
+          ...(trailLength > 0 ? { trail: change.insert.slice(wordsEnd) } : {}),
+        };
       } else {
         const shown = view.state.field(interimWidgetField, false);
-        preview = { text: liveText, pos: anchor ? (shown?.pos ?? null) : null };
+        if (anchor && shown?.text) {
+          // Keeps the spacing it was planned with, so the words around it
+          // don't close up and part again around a keystroke.
+          const leading = /^\s*/.exec(shown.text)?.[0] ?? "";
+          preview = {
+            text: /^\s/.test(liveText) ? liveText : leading + liveText,
+            pos: shown.pos,
+            ...(shown.trail ? { trail: shown.trail } : {}),
+          };
+        } else {
+          preview = { text: liveText, pos: anchor ? (shown?.pos ?? null) : null };
+        }
       }
     }
 

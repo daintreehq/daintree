@@ -93,6 +93,18 @@ export function remoteCanopyApi(hostId: HostId): CanopyApi {
   };
 }
 
+/**
+ * A call the panel makes on its own to a host whose link is down: nothing is
+ * lost, since it is said again when the link comes back (`epoch`). Any other
+ * failure still reaches whoever awaits it.
+ */
+export function unlessHostDisconnected<T>(call: Promise<T>): Promise<T | undefined> {
+  return call.catch((error: unknown) => {
+    if (clientErrorCode(error) === "HOST_DISCONNECTED") return undefined;
+    throw error;
+  });
+}
+
 /** How long a bulk run waits on a saved host it had to dial. */
 const BULK_CONNECT_MS = 20_000;
 
@@ -344,7 +356,7 @@ function connectHost(
     dispose: () => {
       live = false;
       off();
-      safeFireAndForget(canopyHostClient.release(hostId));
+      safeFireAndForget(unlessHostDisconnected(canopyHostClient.release(hostId)));
     },
   };
 }

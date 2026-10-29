@@ -17,7 +17,7 @@ import {
 } from "@shared/types/ipc/canopy";
 import type { FleetSnapshot } from "@shared/types/ipc/fleet";
 import { CANOPY_TRASH_LIMIT } from "@shared/config/trash";
-import type { HostId } from "@shared/types/remoteHosts";
+import type { HostConnectionState, HostId } from "@shared/types/remoteHosts";
 
 /**
  * The All hosts panel shows one list built from every host's own snapshot, so
@@ -44,6 +44,26 @@ export interface HostReading {
   canopy: CanopySnapshot | null;
   fleet: FleetSnapshot | null;
   error: unknown;
+}
+
+/**
+ * A host All hosts leaves out as if it weren't listed: one that is off, asleep
+ * or out of range is normal there, not a fault. That is a link that failed to
+ * come up, a dial retried after one did, or a link gone after its agents were
+ * read. A first dial is connecting, and a link up but refused (another build,
+ * another driver) still says why.
+ */
+export function hostAway(connection: HostConnectionState | null, read: boolean): boolean {
+  switch (connection?.status) {
+    case "unreachable":
+      return true;
+    case "connecting":
+      return read || connection.attempt > 1;
+    case "disconnected":
+      return read;
+    default:
+      return false;
+  }
 }
 
 function keyed<T extends { runId: string }>(hostId: HostId, item: T): T {
