@@ -87,7 +87,7 @@ export function AssistantExternalClientsSection({
       <SettingsSection
         id="assistant-mcp-status"
         title="External clients"
-        description="Share the assistant's local MCP server with other clients, such as Claude Code or Cursor"
+        description="Share the assistant's local MCP server with other clients, such as Claude Code or Cursor. Connected clients get Daintree's fixed external tool set, which the Tool set setting doesn't change, and can only drive terminals they started themselves."
       >
         {connectionError && (
           <TabError onRetry={() => void handleCopyConfig()}>{connectionError}</TabError>
