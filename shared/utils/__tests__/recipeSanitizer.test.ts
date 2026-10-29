@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { sanitizeRecipeTerminals } from "../recipeSanitizer.js";
+import { inspectRecipeTerminals, sanitizeRecipeTerminals } from "../recipeSanitizer.js";
 
 describe("sanitizeRecipeTerminals", () => {
   it("returns empty array for non-array input", () => {
@@ -221,5 +221,118 @@ describe("sanitizeRecipeTerminals", () => {
         })
       ).toEqual([]);
     });
+  });
+});
+
+describe("inspectRecipeTerminals (#15044)", () => {
+  const reasonsFor = (
+    terminals: unknown[],
+    options?: Parameters<typeof inspectRecipeTerminals>[1]
+  ) => inspectRecipeTerminals(terminals, options).rejected.map((r) => r.rejection);
+
+  it("names each dropped terminal by its original position and title", () => {
+    const { accepted, rejected } = inspectRecipeTerminals([
+      { type: "terminal", title: "Shell", command: "npm test" },
+      { type: "acme-agent", title: "Plugin agent" },
+      "not a terminal",
+      { type: "claude", title: 42, args: "--model\u0000evil" },
+    ]);
+
+    expect(accepted.map((t) => t.title)).toEqual(["Shell"]);
+    expect(rejected).toEqual([
+      {
+        index: 1,
+        title: "Plugin agent",
+        rejection: { kind: "unsupported-type", type: "acme-agent" },
+      },
+      { index: 2, rejection: { kind: "not-an-object" } },
+      { index: 3, rejection: { kind: "control-char", field: "args" } },
+    ]);
+  });
+
+  it("says why for every check a terminal can fail", () => {
+    expect(
+      reasonsFor([
+        { command: "no type" },
+        { type: "" },
+        { type: 7 },
+        { type: "terminal", command: ["npm", "test"] },
+        { type: "terminal", command: "a\rb" },
+        { type: "claude", initialPrompt: "bell\u0007" },
+        { type: "dev-preview", devCommand: "npm\nrun" },
+        { type: "terminal", env: "FOO=bar" },
+        { type: "terminal", env: { FOO: 1 } },
+        { type: "terminal", env: { "BAD\nKEY": "v" } },
+        { type: "terminal", exitBehavior: "restart" },
+      ])
+    ).toEqual([
+      { kind: "missing-type" },
+      { kind: "missing-type" },
+      { kind: "missing-type" },
+      { kind: "wrong-shape", field: "command" },
+      { kind: "control-char", field: "command" },
+      { kind: "control-char", field: "initialPrompt" },
+      { kind: "control-char", field: "devCommand" },
+      { kind: "wrong-shape", field: "env" },
+      { kind: "wrong-shape", field: "env" },
+      { kind: "control-char", field: "env" },
+      { kind: "unsupported-value", field: "exitBehavior" },
+    ]);
+  });
+
+  it("reports only the first check a terminal fails", () => {
+    expect(reasonsFor([{ type: "terminal", command: 1, args: "x\ny", env: "nope" }])).toEqual([
+      { kind: "wrong-shape", field: "command" },
+    ]);
+  });
+
+  it("follows the boundary's options for plugin steps and system prompts", () => {
+    expect(reasonsFor([{ type: "plugin-panel", panelKindId: "acme.records" }])).toEqual([
+      { kind: "unsupported-type", type: "plugin-panel" },
+    ]);
+    const panels = { pluginPanelKinds: new Set(["acme.records"]) };
+    expect(
+      reasonsFor(
+        [
+          { type: "plugin-panel", panelKindId: "acme.other" },
+          { type: "plugin-panel", panelKindId: 3 },
+          { type: "plugin-panel", panelKindId: "acme.records", panelArgs: ["no"] },
+        ],
+        panels
+      )
+    ).toEqual([
+      { kind: "unsupported-value", field: "panelKindId" },
+      { kind: "wrong-shape", field: "panelKindId" },
+      { kind: "unsupported-value", field: "panelArgs" },
+    ]);
+    const prompt = [{ type: "claude", systemPrompt: "bell\u0007" }];
+    expect(reasonsFor(prompt)).toEqual([]);
+    expect(reasonsFor(prompt, { allowSystemPrompt: true })).toEqual([
+      { kind: "control-char", field: "systemPrompt" },
+    ]);
+  });
+
+  it("keeps the empty type admissible where a boundary explicitly allows it", () => {
+    const { accepted, rejected } = inspectRecipeTerminals([{ type: "" }], {
+      additionalAllowedTypes: new Set([""]),
+    });
+    expect(rejected).toEqual([]);
+    expect(accepted).toHaveLength(1);
+  });
+
+  it("accepts exactly what sanitizeRecipeTerminals keeps", () => {
+    const input = [
+      { type: "terminal", command: "  npm test  ", extra: "dropped field" },
+      { type: "bogus" },
+      { type: "codex", initialPrompt: "hi\r\n", args: "  --fast  " },
+      { type: "dev-preview", devCommand: "a\nb" },
+    ];
+    expect(inspectRecipeTerminals(input).accepted).toEqual(sanitizeRecipeTerminals(input));
+    expect(inspectRecipeTerminals(input).accepted[0]).toMatchObject({ command: "npm test" });
+    expect(inspectRecipeTerminals(input).accepted[0]).not.toHaveProperty("extra");
+  });
+
+  it("returns nothing for input that isn't an array", () => {
+    expect(inspectRecipeTerminals({ type: "terminal" })).toEqual({ accepted: [], rejected: [] });
   });
 });

@@ -156,6 +156,7 @@ import { useRecipeStore } from "../recipeStore";
 import { usePanelLimitStore } from "../panelLimitStore";
 import type { RecipeTerminal } from "@shared/types/project";
 import { recipeApprovalDigest } from "@/utils/recipeApprovalDigest";
+import { RecipeImportDropsTerminalsError } from "@/utils/recipeImport";
 
 /** A host approval that genuinely covers `recipe`, as the bridge would issue it. */
 function approvalFor(recipe: { id: string; terminals: RecipeTerminal[] }, terminalCount?: number) {
@@ -2268,7 +2269,88 @@ describe("recipeStore", () => {
     });
   });
 
-  it("keeps importing valid terminals even when others are invalid", async () => {
+  describe("import that would drop terminals (#15044)", () => {
+    const mixed = JSON.stringify({
+      name: "Mixed",
+      terminals: [
+        { type: "terminal", command: "npm test" },
+        { type: "acme-agent", title: "Plugin agent", command: "whoami" },
+        { type: "claude" },
+      ],
+    });
+
+    it.each([
+      ["project", "project-1"],
+      ["global", undefined],
+    ])("saves nothing to the %s tier and says which terminals would go", async (_, projectId) => {
+      const error = await useRecipeStore
+        .getState()
+        .importRecipe(projectId, mixed)
+        .catch((err: unknown) => err);
+
+      expect(error).toBeInstanceOf(RecipeImportDropsTerminalsError);
+      const refusal = error as RecipeImportDropsTerminalsError;
+      expect(refusal.acceptedCount).toBe(2);
+      expect(refusal.rejected).toEqual([
+        {
+          index: 1,
+          title: "Plugin agent",
+          rejection: { kind: "unsupported-type", type: "acme-agent" },
+        },
+      ]);
+      expect(updateInRepoRecipeMock).not.toHaveBeenCalled();
+      expect(globalAddRecipeMock).not.toHaveBeenCalled();
+      expect(useRecipeStore.getState().recipes).toHaveLength(0);
+    });
+
+    it("refuses a recipe with no valid terminals even when told to import the rest", async () => {
+      const input = JSON.stringify({
+        name: "Nothing left",
+        terminals: [{ type: "acme-agent" }, { type: "terminal", command: "a\nb" }],
+      });
+
+      const error = await useRecipeStore
+        .getState()
+        .importRecipe("project-1", input, { allowDroppedTerminals: true })
+        .catch((err: unknown) => err);
+
+      expect(error).toBeInstanceOf(RecipeImportDropsTerminalsError);
+      expect((error as RecipeImportDropsTerminalsError).acceptedCount).toBe(0);
+      expect((error as RecipeImportDropsTerminalsError).rejected.map((r) => r.index)).toEqual([
+        0, 1,
+      ]);
+      expect(updateInRepoRecipeMock).not.toHaveBeenCalled();
+    });
+
+    it("still refuses plugin-only content when told to import the rest", async () => {
+      const input = JSON.stringify({
+        name: "Plugin copy",
+        terminals: [
+          { type: "terminal", command: "ok" },
+          { type: "plugin-panel", panelKindId: "acme.board" },
+        ],
+      });
+
+      await expect(
+        useRecipeStore.getState().importRecipe("project-1", input, { allowDroppedTerminals: true })
+      ).rejects.toThrow(/can't be imported/);
+      expect(updateInRepoRecipeMock).not.toHaveBeenCalled();
+    });
+
+    it("imports a recipe whose every terminal is valid without being told to", async () => {
+      const input = JSON.stringify({
+        name: "Clean",
+        terminals: [{ type: "terminal", command: "npm test" }, { type: "claude" }],
+      });
+
+      await useRecipeStore.getState().importRecipe("project-1", input);
+
+      expect(updateInRepoRecipeMock).toHaveBeenCalledTimes(1);
+      expect(useRecipeStore.getState().recipes[0]?.terminals).toHaveLength(2);
+    });
+  });
+
+  it("imports the valid terminals once told to drop the others", async () => {
     const input = JSON.stringify({
       name: "Mixed",
       terminals: [
@@ -2277,7 +2359,9 @@ describe("recipeStore", () => {
       ],
     });
 
-    await useRecipeStore.getState().importRecipe("project-1", input);
+    await useRecipeStore
+      .getState()
+      .importRecipe("project-1", input, { allowDroppedTerminals: true });
 
     const recipe = useRecipeStore.getState().recipes[0];
     expect(recipe?.terminals).toHaveLength(1);
@@ -2309,7 +2393,12 @@ describe("recipeStore", () => {
       ],
     });
 
-    await useRecipeStore.getState().importRecipe("project-1", input);
+    await expect(useRecipeStore.getState().importRecipe("project-1", input)).rejects.toThrow(
+      RecipeImportDropsTerminalsError
+    );
+    await useRecipeStore
+      .getState()
+      .importRecipe("project-1", input, { allowDroppedTerminals: true });
 
     const recipe = useRecipeStore.getState().recipes[0];
     expect(recipe?.terminals).toHaveLength(1);
@@ -2325,7 +2414,12 @@ describe("recipeStore", () => {
       ],
     });
 
-    await useRecipeStore.getState().importRecipe("project-1", input);
+    await expect(useRecipeStore.getState().importRecipe("project-1", input)).rejects.toThrow(
+      RecipeImportDropsTerminalsError
+    );
+    await useRecipeStore
+      .getState()
+      .importRecipe("project-1", input, { allowDroppedTerminals: true });
 
     const recipe = useRecipeStore.getState().recipes[0];
     expect(recipe?.terminals).toHaveLength(1);
@@ -2353,7 +2447,12 @@ describe("recipeStore", () => {
       ],
     });
 
-    await useRecipeStore.getState().importRecipe("project-1", input);
+    await expect(useRecipeStore.getState().importRecipe("project-1", input)).rejects.toThrow(
+      RecipeImportDropsTerminalsError
+    );
+    await useRecipeStore
+      .getState()
+      .importRecipe("project-1", input, { allowDroppedTerminals: true });
 
     const recipe = useRecipeStore.getState().recipes[0];
     expect(recipe?.terminals).toHaveLength(1);
@@ -3912,10 +4011,35 @@ describe("recipeStore", () => {
       expect(json).not.toHaveProperty("projectId");
     });
 
-    it("importRecipeFromFile returns false when cancelled", async () => {
+    it("importRecipeFromFile reports a cancelled pick", async () => {
       importRecipeFromFileMock.mockResolvedValueOnce(null);
       const result = await useRecipeStore.getState().importRecipeFromFile("proj-1");
-      expect(result).toBe(false);
+      expect(result).toEqual({ status: "cancelled" });
+    });
+
+    it("importRecipeFromFile imports a clean file straight away", async () => {
+      importRecipeFromFileMock.mockResolvedValueOnce(
+        JSON.stringify({ name: "From file", terminals: [{ type: "terminal", command: "ls" }] })
+      );
+      const result = await useRecipeStore.getState().importRecipeFromFile("proj-1");
+      expect(result).toEqual({ status: "imported" });
+      expect(updateInRepoRecipeMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("importRecipeFromFile hands back a file that would lose terminals, unsaved (#15044)", async () => {
+      const json = JSON.stringify({
+        name: "From file",
+        terminals: [{ type: "terminal", command: "ls" }, { type: "acme-agent" }],
+      });
+      importRecipeFromFileMock.mockResolvedValueOnce(json);
+
+      const result = await useRecipeStore.getState().importRecipeFromFile("proj-1");
+
+      expect(result.status).toBe("refused");
+      if (result.status !== "refused") return;
+      expect(result.json).toBe(json);
+      expect(result.error).toBeInstanceOf(RecipeImportDropsTerminalsError);
+      expect(updateInRepoRecipeMock).not.toHaveBeenCalled();
     });
   });
 
