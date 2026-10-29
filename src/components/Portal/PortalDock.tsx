@@ -159,14 +159,11 @@ export function PortalDock() {
   // Keybindings for portal scope are handled by the global keybinding handler
   // useKeybindingScope above tells the service when portal is focused
 
-  const handleClose = useCallback(async () => {
-    await actionService.dispatch("portal.closeAllTabs", undefined, { source: "user" });
-    // At 3+ tabs the action escalates to a confirm dialog and leaves the
-    // tabs intact; collapsing the dock here would hide the portal out from
-    // under that dialog. Only collapse once the tabs are actually gone.
-    if (usePortalStore.getState().tabs.length === 0) {
-      setOpen(false);
-    }
+  // The close button advertises the panel.togglePortal shortcut in its tooltip,
+  // so it hides the portal exactly as the shortcut does and leaves the tabs
+  // alone. Closing every tab is its own command (portal.closeAllTabs).
+  const handleClose = useCallback(() => {
+    setOpen(false);
   }, [setOpen]);
 
   const handleGoBack = useCallback(async () => {
