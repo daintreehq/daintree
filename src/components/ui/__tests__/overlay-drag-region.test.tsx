@@ -153,9 +153,8 @@ describe("no ui/ surface portals over the toolbar without opting out", () => {
       "non-interactive, so there is no dead click zone to fix — and opting it out would carve a dead *drag* zone out of the title bar for as long as one shows",
     "ShortcutHint.tsx": "pointer-events-none and aria-hidden — nothing in it is clickable",
     "CopyFlash.tsx": 'same as ShortcutHint.tsx — a pointer-events-none, aria-hidden "Copied" card',
-    "AppDialog.tsx":
-      "centred modal panel; it only reaches the drag band on a short window with a global banner up, and whether a window should drag at all behind an open modal is a separate call",
-    "AppPaletteDialog.tsx": "same as AppDialog.tsx — pt-[15vh] panel, modal",
+    "AppPaletteDialog.tsx":
+      "centred pt-[15vh] modal panel; it only reaches the drag band on a short window with a global banner up, and whether a window should drag at all behind an open modal is a separate call",
   };
 
   // Named, not counted, so extending one of these files is a deliberate edit
@@ -168,6 +167,11 @@ describe("no ui/ surface portals over the toolbar without opting out", () => {
     "fixed-dropdown.tsx": ["FixedDropdown panel"],
     "toaster.tsx": ["Toast", "OverflowPill"],
     "ReEntrySummary.tsx": ["summary card"],
+    // The side sheets, which run up to the toolbar band. The centred panel is
+    // deliberately unstamped: it only reaches the band on a short window with a
+    // global banner up, and whether a window should drag at all behind an open
+    // modal is a separate call.
+    "AppDialog.tsx": ["right sheet surface", "left sheet surface"],
   };
 
   function readModule(file: string): string {
