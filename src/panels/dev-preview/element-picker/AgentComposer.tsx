@@ -641,7 +641,7 @@ export function AgentComposer({
             className="max-w-full min-w-0"
             onClick={() => setPinned(current)}
           >
-            <span className="truncate leading-normal">
+            <span className="truncate">
               {`Switch to ${elementLabel(primaryObservation(current.selection))}`}
             </span>
           </Button>
@@ -898,14 +898,13 @@ export function AgentComposer({
           className="flex flex-wrap gap-1"
         >
           {/* The shared pill variant, not a hand-rolled one. Prose, so
-              proportional. `leading-normal`: the xs size's `leading-none`
-              clipped every descender. */}
+              proportional. */}
           {suggestions.map((words) => (
             <Button
               key={words}
               variant="pill"
               size="xs"
-              className="max-w-full min-w-0 font-normal leading-normal text-text-secondary"
+              className="max-w-full min-w-0 font-normal text-text-secondary"
               onClick={() => applyIntent(words)}
             >
               <span className="truncate">{words}</span>
@@ -1337,7 +1336,7 @@ function DeliveryRow({
   const retryButton = retry ? (
     <Button variant="subtle" size="xs" className="max-w-full min-w-0" onClick={retry.run}>
       <RefreshCw aria-hidden="true" />
-      <span className="truncate leading-normal">{retry.label}</span>
+      <span className="truncate">{retry.label}</span>
     </Button>
   ) : null;
 
