@@ -5,6 +5,12 @@ import {
   type ClipScore,
 } from "../../../e2e/helpers/voiceReplayScore";
 import type { GrokTranscriptionTuning } from "../../../electron/services/voice/grokTranscriptionTuning";
+import {
+  trailingDictationCommands,
+  trailingSendCommand,
+} from "../../../electron/services/voiceDictationCommands";
+import { mayReferenceFile } from "../../../shared/utils/voiceFileLinkCommands";
+import { stripHesitations } from "../../../shared/utils/voiceHesitations";
 import { percentile, requestCost, type TokenUsage } from "./voiceCleanupScore";
 
 /**
@@ -138,6 +144,8 @@ export interface ScoredPipelineSession {
   verdict: string;
   /** Share of the final transcript's words on screen, as preview or text, when stop was pressed. */
   shownAtStop: number | null;
+  /** How the text at the stop compares with the final, for a cleanup started at the stop. */
+  stopPreview: StopPreviewFate;
   errored: boolean;
   firstDeltaMs: number | null;
   firstFinalMs: number | null;
@@ -238,6 +246,62 @@ export function shownAtStop(session: PipelineSession): number | null {
 }
 
 /**
+ * How the text the provider held at the stop compares with the text the final
+ * commits, for a cleanup started at the stop and kept only when the stop's own
+ * request would be the same (#15076).
+ */
+export type StopPreviewFate =
+  /** Nothing was pending at the stop: the draft already held its final text, the prefetch's case. */
+  | "settled"
+  /** The final ends in a spoken command, which production rewrites once it lands. */
+  | "command"
+  /** The final names a file, which production swaps for a reference once it lands. */
+  | "file"
+  | "match"
+  | "mismatch";
+
+// Each completion as production lands it before cleanup reads it: trimmed,
+// its hesitations gone (voiceInput's forwardEvent, for English), joined to
+// the last as the draft joins them.
+function landedText(pieces: readonly string[]): string {
+  return pieces
+    .map((piece) => stripHesitations(piece.trim()).trim())
+    .filter(Boolean)
+    .join(" ");
+}
+
+export function stopPreviewFate(session: PipelineSession): StopPreviewFate {
+  const completed: string[] = [];
+  const done = new Set<string>();
+  // Each open item's latest preview, in the order the items opened.
+  const previews = new Map<string | null, string>();
+  for (const event of session.events) {
+    if (event.at > session.stopMs) break;
+    if (event.type === "complete") {
+      completed.push(event.text);
+      if (event.itemId) {
+        done.add(event.itemId);
+        previews.delete(event.itemId);
+      }
+    } else if (event.type === "delta" && !(event.itemId && done.has(event.itemId))) {
+      previews.set(event.itemId, event.text);
+    }
+  }
+  const after = session.events.filter(
+    (event): event is Extract<PipelineEvent, { type: "complete" }> =>
+      event.type === "complete" && event.at > session.stopMs && event.text.trim() !== ""
+  );
+  const pending = [...previews.values()].filter((text) => text.trim() !== "");
+  if (pending.length === 0 && after.length === 0) return "settled";
+  const final = landedText(
+    session.events.flatMap((event) => (event.type === "complete" ? [event.text] : []))
+  );
+  if (trailingSendCommand(final) || trailingDictationCommands(final)) return "command";
+  if (mayReferenceFile(final)) return "file";
+  return landedText([...completed, ...pending]) === final ? "match" : "mismatch";
+}
+
+/**
  * Other ways of writing a clip's reference that are just as right, kept to two
  * kinds so the scores can't be argued up: spellings the audio can't tell apart,
  * and the layout cleanup's own prompt asks for, a counted list as a numbered
@@ -312,6 +376,7 @@ export function scorePipelineSession(
     brokenWords: brokenWords(finalReference, session.raw, finalText),
     verdict: cleanup?.verdict ?? "none",
     shownAtStop: shownAtStop(session),
+    stopPreview: stopPreviewFate(session),
     errored:
       session.startError !== null ||
       session.events.some((event) => event.type === "error") ||
@@ -527,6 +592,70 @@ export function renderVoiceTable(
       `| ${voice} | ${mine.length} | ${pct(pooledWer(mine.map((s) => s.rawScore)))} → ${pct(pooledWer(mine.map((s) => s.finalScore)))} | ${pct(pooledFormWer(mine.map((s) => s.rawForm)))} → ${pct(pooledFormWer(mine.map((s) => s.finalForm)))} | ${pct(mine.filter((s) => s.finalForm.exact).length / (mine.length || 1))} |`
     );
   }
+  return lines.join("\n");
+}
+
+export interface StopPreviewSummary {
+  sessions: number;
+  /** Dictations with something pending at the stop: all but the settled. */
+  waited: number;
+  match: number;
+  command: number;
+  file: number;
+  /** Matches over the dictations that waited, commands and files counted as misses. */
+  exactShare: number | null;
+  /** Stop to the drain's end, when the stop's own cleanup goes out, over the dictations that waited. */
+  stopToFinalMs: Stat;
+}
+
+export function summariseStopPreview(rows: readonly ScoredPipelineSession[]): StopPreviewSummary {
+  const waited = rows.filter((row) => row.stopPreview !== "settled");
+  const count = (fate: StopPreviewFate) => rows.filter((row) => row.stopPreview === fate).length;
+  return {
+    sessions: rows.length,
+    waited: waited.length,
+    match: count("match"),
+    command: count("command"),
+    file: count("file"),
+    exactShare: waited.length === 0 ? null : count("match") / waited.length,
+    stopToFinalMs: stat(waited.map((row) => row.stopToDrainMs)),
+  };
+}
+
+/**
+ * Whether the text at the stop is the text the final commits, for one arm,
+ * per stop tail and voice, then every stop together (#15076). A cleanup
+ * started at the stop and kept on an exact match would save the wait from the
+ * stop to the final, so that wait is timed over the dictations that had one.
+ */
+export function renderStopPreviewTable(
+  scored: readonly ScoredPipelineSession[],
+  arm: string,
+  arms: readonly string[] = [arm]
+): string {
+  const shared = sharedSessions(scored, arms);
+  const rows = scored.filter((s) => s.session.arm === arm && shared.has(sessionKey(s.session)));
+  const tails = [...new Set(rows.map((s) => s.session.stopTailMs))].sort((a, b) => a - b);
+  const voices = [...new Set(rows.map((s) => s.session.voice))];
+  const lines = [
+    `| Tail | Voice (${arm}) | n | Waited | Exact | Command | File | Exact of waited | Stop → final, waited |`,
+    "| --- | --- | --: | --: | --: | --: | --: | --: | --- |",
+  ];
+  const row = (tail: string, voice: string, mine: readonly ScoredPipelineSession[]) => {
+    const s = summariseStopPreview(mine);
+    lines.push(
+      `| ${tail} | ${voice} | ${s.sessions} | ${s.waited} | ${s.match} | ${s.command} | ${s.file} | ${s.exactShare === null ? "–" : pct(s.exactShare)} | ${statCell(s.stopToFinalMs)} |`
+    );
+  };
+  for (const tail of tails) {
+    const atTail = rows.filter((s) => s.session.stopTailMs === tail);
+    for (const voice of voices) {
+      const mine = atTail.filter((s) => s.session.voice === voice);
+      if (mine.length > 0) row(`${tail} ms`, voice, mine);
+    }
+    row(`${tail} ms`, "all", atTail);
+  }
+  row("all", "all", rows);
   return lines.join("\n");
 }
 
