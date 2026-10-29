@@ -89,6 +89,7 @@ const {
     setBrowserUrl: vi.fn(),
     setBrowserHistory: vi.fn(),
     setBrowserZoom: vi.fn(),
+    stampLastActive: vi.fn(),
   };
   const usePanelStoreMock = vi.fn((selector: (state: typeof terminalStoreState) => unknown) =>
     selector(terminalStoreState)
@@ -311,6 +312,21 @@ describe("BrowserPane webview lifecycle regression", () => {
     const { container } = render(<BrowserPane {...baseProps} />);
     const webview = getWebviewElement(container);
     expect(webview.hasAttribute("allowpopups")).toBe(true);
+  });
+
+  it("marks the pane used when the keyboard enters its page, and only then (#14965)", () => {
+    const { container, unmount } = render(<BrowserPane {...baseProps} />);
+    const webview = getWebviewElement(container);
+    emitWebviewEvent(webview, "did-stop-loading");
+    expect(terminalStoreState.stampLastActive).not.toHaveBeenCalled();
+
+    // What Electron dispatches on the <webview> when its guest takes focus.
+    webview.dispatchEvent(new Event("focus"));
+    expect(terminalStoreState.stampLastActive).toHaveBeenCalledExactlyOnceWith("browser-panel-1");
+
+    unmount();
+    webview.dispatchEvent(new Event("focus"));
+    expect(terminalStoreState.stampLastActive).toHaveBeenCalledTimes(1);
   });
 
   describe("a view on another machine", () => {

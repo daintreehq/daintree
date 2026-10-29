@@ -106,6 +106,115 @@ describe("modifier-click on a host's localhost link", () => {
   });
 });
 
+describe("which browser pane a modifier-click reuses (#14965)", () => {
+  function addBrowser(id: string, fields: Record<string, unknown> = {}): void {
+    panelState.panelsById[id] = { id, kind: "browser", worktreeId: "w1", ...fields };
+    panelState.panelIds = [...panelState.panelIds, id];
+  }
+
+  function navigatedPane(): string | undefined {
+    new TerminalLinkHandler().openLink("http://localhost:5173/", "t1", cmdClick);
+    return setBrowserUrl.mock.calls[0]?.[0] as string | undefined;
+  }
+
+  it("takes the most recently used pane, not the first one created", () => {
+    addBrowser("first", { location: "grid", lastActiveAt: 1_000 });
+    addBrowser("second", { location: "grid", lastActiveAt: 3_000 });
+    addBrowser("third", { location: "grid", lastActiveAt: 2_000 });
+    expect(navigatedPane()).toBe("second");
+    expect(activateTerminal).toHaveBeenCalledWith("second");
+    expect(addPanel).not.toHaveBeenCalled();
+  });
+
+  it("reuses a docked pane", () => {
+    addBrowser("gridded", { location: "grid", lastActiveAt: 1_000 });
+    addBrowser("docked", { location: "dock", lastActiveAt: 2_000 });
+    expect(navigatedPane()).toBe("docked");
+  });
+
+  it.each(["trash", "background", "dialog", "overlay"])(
+    "skips a %s pane even when it was used last",
+    (location) => {
+      addBrowser("hidden", { location, lastActiveAt: 9_000 });
+      addBrowser("visible", { location: "grid", lastActiveAt: 1_000 });
+      expect(navigatedPane()).toBe("visible");
+      expect(activateTerminal).toHaveBeenCalledWith("visible");
+    }
+  );
+
+  it("opens a new pane when the only browsers in the worktree are out of sight", () => {
+    addBrowser("trashed", { location: "trash", lastActiveAt: 3_000 });
+    addBrowser("parked", { location: "background", lastActiveAt: 2_000 });
+    addBrowser("modal", { location: "dialog", lastActiveAt: 1_000 });
+    expect(navigatedPane()).toBeUndefined();
+    expect(activateTerminal).not.toHaveBeenCalled();
+    expect(addPanel).toHaveBeenCalledWith({
+      kind: "browser",
+      browserUrl: "http://localhost:5173/",
+      worktreeId: "w1",
+      cwd: "/repo",
+    });
+  });
+
+  it("ignores a more recent pane in another worktree", () => {
+    addBrowser("mine", { location: "grid", lastActiveAt: 1_000 });
+    addBrowser("theirs", { location: "grid", worktreeId: "w2", lastActiveAt: 5_000 });
+    expect(navigatedPane()).toBe("mine");
+  });
+
+  it("prefers a pane that has been used over one that never has", () => {
+    addBrowser("unused", { location: "grid" });
+    addBrowser("used", { location: "grid", lastActiveAt: 1_000 });
+    expect(navigatedPane()).toBe("used");
+  });
+
+  it("keeps panel order between panes used at the same moment or never", () => {
+    addBrowser("a", { location: "grid", lastActiveAt: 1_000 });
+    addBrowser("b", { location: "grid", lastActiveAt: 1_000 });
+    expect(navigatedPane()).toBe("a");
+
+    setBrowserUrl.mockClear();
+    panelState.panelIds = ["t1"];
+    addBrowser("c");
+    addBrowser("d");
+    expect(navigatedPane()).toBe("c");
+  });
+
+  it("reuses a legacy pane saved before panels had a location", () => {
+    addBrowser("trashed", { location: "trash", lastActiveAt: 2_000 });
+    addBrowser("legacy", { lastActiveAt: 1_000 });
+    expect(navigatedPane()).toBe("legacy");
+  });
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, 0, -5])(
+    "does not let a %s stamp outrank a real one",
+    (stamp) => {
+      addBrowser("corrupt", { location: "grid", lastActiveAt: stamp });
+      addBrowser("real", { location: "grid", lastActiveAt: 1_000 });
+      expect(navigatedPane()).toBe("real");
+    }
+  );
+
+  it("skips an id the registry no longer holds", () => {
+    panelState.panelIds = ["t1", "vanished"];
+    addBrowser("live", { location: "grid", lastActiveAt: 1_000 });
+    expect(navigatedPane()).toBe("live");
+  });
+
+  it("navigates and activates the pane it picked", () => {
+    addBrowser("stale", { location: "grid", lastActiveAt: 1_000 });
+    addBrowser("recent", { location: "grid", lastActiveAt: 2_000 });
+    new TerminalLinkHandler().openLink("http://localhost:5173/", "t1", cmdClick);
+    expect(setBrowserUrl).toHaveBeenCalledExactlyOnceWith("recent", "http://localhost:5173/");
+    expect(activateTerminal).toHaveBeenCalledExactlyOnceWith("recent");
+    expect(dispatch).toHaveBeenCalledExactlyOnceWith(
+      "browser.navigate",
+      { url: "http://localhost:5173/", terminalId: "recent" },
+      { source: "user" }
+    );
+  });
+});
+
 describe("plain click on a host's localhost link", () => {
   it("opens the forwarded local address in the system browser", async () => {
     bindView("studio-01");
