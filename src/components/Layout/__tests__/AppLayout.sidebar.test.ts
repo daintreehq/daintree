@@ -1043,6 +1043,37 @@ describe("AppLayout theme browser mount gate — issue #5738", () => {
     source = await fs.readFile(APP_LAYOUT_PATH, "utf-8");
   });
 
+  it("claims the viewport for the sheet's whole presence, under its own id (issue #15029)", () => {
+    // Settings no longer collapses the Portal, so leaving Settings for the
+    // browser must not leave a gap with no claim while the lazy ThemeBrowser
+    // chunk loads. The claim follows the presence the store flag drives, and
+    // never shares ThemeBrowser's id, since one holder's cleanup would release
+    // the other's.
+    const file = ts.createSourceFile(
+      APP_LAYOUT_PATH,
+      source,
+      ts.ScriptTarget.Latest,
+      true,
+      ts.ScriptKind.TSX
+    );
+    const claims: ts.CallExpression[] = [];
+    const visit = (node: ts.Node): void => {
+      if (ts.isCallExpression(node) && node.expression.getText(file) === "useOverlayClaim") {
+        claims.push(node);
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(file);
+
+    const presenceClaims = claims.filter(
+      (c) => c.arguments[1]?.getText(file) === "themeBrowserRendered"
+    );
+    expect(presenceClaims).toHaveLength(1);
+    const id = presenceClaims[0]!.arguments[0]!;
+    expect(ts.isStringLiteral(id)).toBe(true);
+    expect((id as ts.StringLiteral).text).not.toBe("theme-browser");
+  });
+
   it("reads the mount gate from the store, not from the overlay claim", () => {
     // The overlay claim is registered by ThemeBrowser's own useEffect, so using
     // it as the mount gate produces a chicken-and-egg deadlock (the regression

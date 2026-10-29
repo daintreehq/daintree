@@ -56,7 +56,7 @@ import { useDockPopoverLayerSync } from "@/components/Layout/useOpenDockPopoverI
 import type { RetryAction } from "@/store";
 import { appClient } from "@/clients";
 import type { CliAvailability } from "@shared/types";
-import { useLayoutState, useOverlayOpen } from "@/hooks";
+import { useLayoutState, useOverlayClaim, useOverlayOpen } from "@/hooks";
 import { useKeepMounted } from "@/hooks/useKeepMounted";
 import { useGlobalBannerHeightVar } from "@/hooks/useGlobalBannerHeightVar";
 import { useWorkspaceRoot } from "@/hooks/useWorkspaceRoot";
@@ -258,6 +258,12 @@ export function AppLayout({
       animationDuration: getPerformanceModeFloor(PANEL_MINIMIZE_DURATION),
       syncEnter: true,
     });
+  // ThemeBrowser claims the viewport only once its lazy chunk mounts. Entered
+  // from Settings, the dialog's claim can drop before that (at once in
+  // performance mode), and the Portal's native view would flash in the gap.
+  // Its own id: claims don't count holders, so sharing ThemeBrowser's would
+  // let either cleanup release both.
+  useOverlayClaim("theme-browser-presence", themeBrowserRendered);
   const themeBrowserMotion = {
     duration: themeBrowserVisible ? PANEL_RESTORE_DURATION : PANEL_MINIMIZE_DURATION,
     easing: themeBrowserVisible ? PANEL_RESTORE_EASING : PANEL_MINIMIZE_EASING,

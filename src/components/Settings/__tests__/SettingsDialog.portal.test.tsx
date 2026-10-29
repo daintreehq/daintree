@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, waitFor } from "@testing-library/react";
+import { cleanup, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { usePortalStore } from "@/store";
 import { useUIStore } from "@/store/uiStore";
@@ -21,6 +21,7 @@ vi.mock("@/clients", async (importOriginal) => ({
 }));
 
 import { SettingsDialog } from "../SettingsDialog";
+import { PortalVisibilityController } from "@/components/Portal/PortalVisibilityController";
 
 vi.stubGlobal("requestIdleCallback", () => 0);
 vi.stubGlobal("cancelIdleCallback", () => {});
@@ -33,38 +34,77 @@ vi.stubGlobal(
   }
 );
 
+const portal = {
+  create: vi.fn().mockResolvedValue(undefined),
+  show: vi.fn().mockResolvedValue(undefined),
+  hide: vi.fn().mockResolvedValue(undefined),
+  onTabEvicted: vi.fn(() => () => {}),
+  onTabsEvicted: vi.fn(() => () => {}),
+  onNavEvent: vi.fn(() => () => {}),
+};
+
 beforeEach(() => {
+  vi.clearAllMocks();
   Object.defineProperty(window, "electron", {
     configurable: true,
     writable: true,
     value: {
       ...window.electron,
       globalEnv: { get: vi.fn().mockResolvedValue({}), set: vi.fn() },
+      portal,
+      app: { ...window.electron?.app, isViewCached: () => false },
+      window: { ...window.electron?.window, getZoomFactor: () => 1 },
     },
   });
-  usePortalStore.setState({ isOpen: true });
+
+  const placeholder = document.createElement("div");
+  placeholder.id = "portal-placeholder";
+  placeholder.getBoundingClientRect = () => ({ x: 900, y: 48, width: 400, height: 600 }) as DOMRect;
+  document.body.appendChild(placeholder);
+
+  usePortalStore.setState({
+    isOpen: true,
+    activeTabId: "tab-1",
+    tabs: [{ id: "tab-1", title: "Docs", url: "https://example.com/docs" }],
+    createdTabs: new Set(["tab-1"]),
+  });
   useUIStore.setState({ overlayStack: [] });
 });
 
 afterEach(() => {
-  usePortalStore.setState({ isOpen: false });
+  cleanup();
+  document.getElementById("portal-placeholder")?.remove();
+  usePortalStore.getState().reset();
 });
 
+function renderWithPortal(isOpen: boolean) {
+  return (
+    <>
+      <PortalVisibilityController />
+      <SettingsDialog isOpen={isOpen} onClose={() => {}} defaultTab="general" />
+    </>
+  );
+}
+
 describe("SettingsDialog and an open Portal (#15029)", () => {
-  it("leaves the Portal open while Settings covers it, and after Settings closes", async () => {
-    const { rerender } = render(<SettingsDialog isOpen onClose={() => {}} defaultTab="general" />);
+  it("hides the Portal while Settings is open and shows the same tab again once it closes", async () => {
+    const { rerender } = render(renderWithPortal(true));
 
-    // Settings hides the Portal's native view by claiming the viewport, not by collapsing it.
-    await waitFor(() => {
-      expect(useUIStore.getState().overlayStack.length).toBeGreaterThan(0);
-    });
+    // Settings hides the native view by claiming the viewport, not by collapsing the Portal.
+    await waitFor(() => expect(portal.hide).toHaveBeenCalled());
     expect(usePortalStore.getState().isOpen).toBe(true);
+    expect(portal.show).not.toHaveBeenCalled();
 
-    rerender(<SettingsDialog isOpen={false} onClose={() => {}} defaultTab="general" />);
+    rerender(renderWithPortal(false));
 
-    await waitFor(() => {
-      expect(useUIStore.getState().overlayStack).toEqual([]);
-    });
+    await waitFor(() =>
+      expect(portal.show).toHaveBeenCalledWith({
+        tabId: "tab-1",
+        bounds: { x: 900, y: 48, width: 400, height: 600 },
+      })
+    );
+    expect(useUIStore.getState().overlayStack).toEqual([]);
     expect(usePortalStore.getState().isOpen).toBe(true);
+    expect(portal.create).not.toHaveBeenCalled();
   });
 });
