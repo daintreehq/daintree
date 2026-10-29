@@ -3,9 +3,10 @@ import type { VoiceReasoningEffort } from "../../shared/config/voiceCorrection.j
 export const CLAUDE_ORIGIN = "https://api.anthropic.com/";
 export const CLAUDE_MESSAGES_URL = "https://api.anthropic.com/v1/messages";
 const CLAUDE_API_VERSION = "2026-10-21";
-// Thinking counts toward max_tokens, so a request that may think gets room for
-// it on top of the whole passage coming back.
-const THINKING_HEADROOM_TOKENS = 4096;
+// Thinking counts toward max_tokens, as reasoning does toward OpenAI's
+// max_output_tokens, so a request that may think gets room for it on top of
+// the whole passage coming back.
+export const THINKING_HEADROOM_TOKENS = 4096;
 
 const CACHE_BREAKPOINT = { type: "ephemeral" } as const;
 

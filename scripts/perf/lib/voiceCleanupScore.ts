@@ -29,7 +29,7 @@ export const VOICE_CLEANUP_SCHEMA_VERSION = 4;
 // rescore still reads them and lands each saved reply once, as schema 4 does.
 export const VOICE_CLEANUP_READABLE_SCHEMAS: readonly number[] = [3, VOICE_CLEANUP_SCHEMA_VERSION];
 // Bump when a definition below changes, so runs scored differently aren't compared.
-export const VOICE_CLEANUP_SCORING_VERSION = 8;
+export const VOICE_CLEANUP_SCORING_VERSION = 9;
 
 /** Today's send yardstick (#14793): the wait a send used to give cleanup. */
 export const SEND_WAIT_TARGET_MS = 2000;
@@ -117,6 +117,8 @@ function countKept(haystack: string, keep: string): number {
  * "can you, can you" was.
  */
 function countPhrase(haystack: string, phrase: string): number {
+  // A trail-off ("...") has no words to match, so it's counted as written.
+  if (phrase === "...") return (haystack.match(/\.\.\.|…/gu) ?? []).length;
   const words = straightenApostrophes(phrase)
     .split(/[^\p{L}\p{N}']+/u)
     .filter(Boolean)
@@ -159,7 +161,8 @@ function keepChecks(entry: CleanupCase): KeepCheck[] {
   const checks: KeepCheck[] = [];
   const seen = new Set<string>();
   for (const { text: span } of scanProtectedSpans(entry.raw)) {
-    if (seen.has(span)) continue;
+    // A span the reference rewrites was misheard ("@all" for "at all"), not protected.
+    if (seen.has(span) || !entry.reference.includes(span)) continue;
     seen.add(span);
     checks.push({ label: span, count: (text) => countProtectedSpan(text, span) });
   }

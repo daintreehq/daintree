@@ -7,6 +7,7 @@ import {
   VOICE_DICTATION_REASONING_EFFORT,
   buildCorrectionSystemPrompt,
   buildRewriteSystemPrompt,
+  cleanupReasoningEffortFor,
   correctionInstructionsFor,
   isVoiceCleanupModel,
   voiceCleanupProviderOf,
@@ -45,6 +46,7 @@ import {
   claudeMessageText,
   claudeRequestBody,
   readClaudeUsage,
+  THINKING_HEADROOM_TOKENS,
   type ClaudeMessage,
   type ClaudeStreamEvent,
 } from "./voiceCleanupClaude.js";
@@ -56,6 +58,9 @@ const P = "[VoiceCorrection]";
 const SHORT_CORRECTION_TIMEOUT_MS = 7000;
 const LONG_CORRECTION_TIMEOUT_MS = 15000;
 const LONG_CORRECTION_MIN_CHARS = 140;
+// What a request that reasons gets on top of its deadline: Haiku at medium
+// came back in up to 7 s on short passages, with a stalled first try to fit.
+const REASONING_TIMEOUT_MS = 4000;
 const MAX_CORRECTION_TIMEOUT_MS = 60000;
 const CORRECTION_TIMEOUT_MS_PER_CHAR = 5;
 // Past this a passage stays raw on purpose rather than risk a cut-off reply.
@@ -91,6 +96,14 @@ const WARM_TIMEOUT_MS = 10_000;
 const WARM_MAX_OUTPUT_TOKENS = 16;
 const WARM_USER_MESSAGE = "<job>\nreason=warmup\n</job>\n\n<target>\n</target>";
 const PRECONNECT_TIMEOUT_MS = 3000;
+// A streamed cleanup's headers come back within a second; one that hasn't
+// answered by now has stalled rather than slowed, so it goes out once more.
+const STALL_MS = 4000;
+// Busy, failing or rate limiting: worth one more try. 529 is Anthropic's overloaded.
+const RETRY_STATUSES = new Set([408, 429, 500, 502, 503, 504, 529]);
+// Undici's message for a request that never reached the server, as opposed to
+// one fetch refused to build.
+const FETCH_FAILED = "fetch failed";
 const PRECONNECT_WAIT_MS = 250;
 // Fetch keeps an idle socket for four seconds; one this fresh will still be
 // there for a passage sent now.
@@ -201,7 +214,7 @@ export interface VoiceRewriteRequest {
 
 export interface VoiceCorrectionSettings {
   model: string;
-  /** Overrides VOICE_DICTATION_REASONING_EFFORT for cleanup, its warm-up and rewrite. */
+  /** Overrides `cleanupReasoningEffortFor` for cleanup, its warm-up and rewrite. */
   reasoningEffort?: VoiceReasoningEffort;
   /** Cleanup rules in place of the model's own (`correctionInstructionsFor`): the cleanup benchmark's prompt variants. */
   instructions?: CorrectionInstructions;
@@ -424,6 +437,11 @@ function takeStreamEvents(buffer: string): { events: unknown[]; rest: string } {
 }
 
 // Carries the status and the API's error code only; the body's message can echo request content.
+/** Room in OpenAI's output cap for reasoning, which counts toward it. */
+function reasoningHeadroom(effort: VoiceReasoningEffort): number {
+  return effort === "none" ? 0 : THINKING_HEADROOM_TOKENS;
+}
+
 class CleanupRequestError extends Error {
   constructor(
     readonly status: number,
@@ -930,9 +948,10 @@ export class VoiceCorrectionService {
     if (!selectedText.trim() || !instruction) return { status: "no_change" };
 
     const maxOutputTokens = this.getMaxOutputTokens({ rawText: selectedText });
+    const effort = settings.reasoningEffort ?? cleanupReasoningEffortFor(settings.model);
     const timeoutMs = Math.max(
       MIN_REWRITE_TIMEOUT_MS,
-      this.getCorrectionTimeoutMs({ rawText: selectedText, segmentCount: 2 })
+      this.getCorrectionTimeoutMs({ rawText: selectedText, segmentCount: 2 }, effort)
     );
     const deadline = createTimeoutSignal(timeoutMs);
     const startedAt = performance.now();
@@ -940,7 +959,6 @@ export class VoiceCorrectionService {
       const provider = voiceCleanupProviderOf(settings.model);
       const system = buildRewriteSystemPrompt({ language: settings.language });
       const user = `<selection>\n${selectedText}\n</selection>\n\n<instruction>\n${instruction}\n</instruction>`;
-      const effort = settings.reasoningEffort ?? VOICE_DICTATION_REASONING_EFFORT;
       const { url, headers } = this.endpointFor(settings);
       const response = await fetch(url, {
         method: "POST",
@@ -974,7 +992,7 @@ export class VoiceCorrectionService {
                     schema: REWRITE_RESULT_SCHEMA,
                   },
                 },
-                max_output_tokens: maxOutputTokens,
+                max_output_tokens: maxOutputTokens + reasoningHeadroom(effort),
               }
         ),
       });
@@ -1121,16 +1139,18 @@ export class VoiceCorrectionService {
   }
 
   private getCorrectionTimeoutMs(
-    request: Pick<VoiceCorrectionRequest, "rawText" | "segmentCount">
+    request: Pick<VoiceCorrectionRequest, "rawText" | "segmentCount">,
+    effort: VoiceReasoningEffort
   ): number {
+    const reasoning = effort === "none" ? 0 : REASONING_TIMEOUT_MS;
     const length = request.rawText.length;
     if (length < LONG_CORRECTION_MIN_CHARS && (request.segmentCount ?? 0) <= 1) {
-      return SHORT_CORRECTION_TIMEOUT_MS;
+      return SHORT_CORRECTION_TIMEOUT_MS + reasoning;
     }
     const extraChars = Math.max(0, length - 1000);
     return Math.min(
       MAX_CORRECTION_TIMEOUT_MS,
-      LONG_CORRECTION_TIMEOUT_MS + extraChars * CORRECTION_TIMEOUT_MS_PER_CHAR
+      LONG_CORRECTION_TIMEOUT_MS + extraChars * CORRECTION_TIMEOUT_MS_PER_CHAR + reasoning
     );
   }
 
@@ -1189,7 +1209,10 @@ export class VoiceCorrectionService {
     });
 
     return await withTimeoutSignal(
-      this.getCorrectionTimeoutMs(request),
+      this.getCorrectionTimeoutMs(
+        request,
+        settings.reasoningEffort ?? cleanupReasoningEffortFor(settings.model)
+      ),
       (deadline) =>
         this.requestCorrection(
           request,
@@ -1255,10 +1278,11 @@ export class VoiceCorrectionService {
     userMessage: UserTurn,
     maxOutputTokens: number
   ): object {
+    const effort = settings.reasoningEffort ?? cleanupReasoningEffortFor(settings.model);
     if (voiceCleanupProviderOf(settings.model) === "anthropic") {
       return claudeRequestBody({
         model: settings.model,
-        effort: settings.reasoningEffort ?? VOICE_DICTATION_REASONING_EFFORT,
+        effort,
         system: systemPrompt,
         user: userMessage,
         schema: CORRECTION_RESULT_SCHEMA,
@@ -1279,9 +1303,8 @@ export class VoiceCorrectionService {
       // Every request is one-shot: nothing reads a response back or continues
       // one, so OpenAI has no reason to keep it as application state.
       store: false,
-      // Explicit low-latency effort: the dictation models default to "medium"
-      // when omitted, so we pin the lowest tier rather than inherit that default.
-      reasoning: { effort: settings.reasoningEffort ?? VOICE_DICTATION_REASONING_EFFORT },
+      // Explicit effort: the dictation models default to "medium" when omitted.
+      reasoning: { effort },
       text: {
         format: {
           type: "json_schema",
@@ -1290,7 +1313,7 @@ export class VoiceCorrectionService {
           schema: CORRECTION_RESULT_SCHEMA,
         },
       },
-      max_output_tokens: maxOutputTokens,
+      max_output_tokens: maxOutputTokens + reasoningHeadroom(effort),
     };
   }
 
@@ -1428,18 +1451,48 @@ export class VoiceCorrectionService {
     const sentAt = performance.now();
     trace.sentAt = sentAt;
     try {
-      const result = await this.sendCorrection(
-        request,
-        settings,
-        body,
-        signal,
-        maxOutputTokens,
-        onText,
-        trace,
-        marked
-      );
-      this.notePromptUsed(this.promptIdentity(settings, systemPrompt), sentAt);
-      return result;
+      for (let attempt = 1; ; attempt++) {
+        // Only a streamed reply answers before it's written, so only its
+        // silence means a stall; a whole reply's headers wait for all of it.
+        const stall = onText ? createTimeoutSignal(STALL_MS) : null;
+        let answered = false;
+        try {
+          const result = await this.sendCorrection(
+            request,
+            settings,
+            body,
+            stall ? AbortSignal.any([signal, stall.signal]) : signal,
+            maxOutputTokens,
+            onText,
+            trace,
+            marked,
+            () => {
+              answered = true;
+              stall?.dispose();
+            }
+          );
+          this.notePromptUsed(this.promptIdentity(settings, systemPrompt), sentAt);
+          return result;
+        } catch (error) {
+          // A cancel or the deadline ends it, whatever the attempt was doing.
+          signal.throwIfAborted();
+          // Nothing has reached the composer before an answer, so a retry
+          // can't take back text it already showed.
+          const stalled = stall?.signal.aborted === true;
+          const busy = error instanceof CleanupRequestError && RETRY_STATUSES.has(error.status);
+          const unreached =
+            !answered && error instanceof TypeError && error.message === FETCH_FAILED;
+          if (attempt > 1 || !(stalled || busy || unreached)) throw error;
+          logWarn(`${P} Correction request retried`, {
+            reason: stalled ? "stalled" : busy ? "status" : "network",
+            ...(error instanceof CleanupRequestError
+              ? { status: error.status, code: error.code }
+              : {}),
+          });
+        } finally {
+          stall?.dispose();
+        }
+      }
     } finally {
       trace.settledAt = performance.now();
     }
@@ -1453,11 +1506,13 @@ export class VoiceCorrectionService {
     maxOutputTokens: number,
     onText: ((text: string) => void) | undefined,
     trace: RequestTrace,
-    marked: boolean
+    marked: boolean,
+    onAnswered: () => void
   ): Promise<VoiceCorrectionProposal> {
     const provider = voiceCleanupProviderOf(settings.model);
     const { url, headers } = this.endpointFor(settings);
     const response = await fetch(url, { method: "POST", headers, signal, body });
+    onAnswered();
 
     if (!response.ok) {
       throw await CleanupRequestError.fromResponse(response, provider);

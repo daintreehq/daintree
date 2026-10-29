@@ -882,6 +882,85 @@ const HAIKU_EX3 = revise(HAIKU_EX2_RULES, {
   core: [[HAIKU_EXAMPLES_2, `${HAIKU_EXAMPLES_2}${HAIKU_EXAMPLES_3}`]],
 });
 
+// Round 5 (2026-10-29): Haiku stayed too light on long dictations: a
+// misheard opening the speaker saw and said again later stayed misheard with
+// the restatement beside it, trail-off ellipses stayed in, and so did "So,
+// yeah". The whole passage is read first, and later words settle earlier ones.
+const HAIKU_WHOLE_PASSAGE = `THE WHOLE PASSAGE: Read the whole target before you change anything. The speaker watches the transcript appear as they talk, and when they see a phrase come out wrong they often say it again later. Use what comes later to settle what came earlier:
+- A phrase that makes no sense where it stands, followed later by words that sound like it and make sense in its place, was misheard: write it as the later words say it. The misheard phrase can be several words long and made of real words, the first word of the passage included ("when about heaviest users" is "one of our heaviest users", so the "When" goes too), so replace all of it. The restatement has then done its job: drop it, with any "so", "yeah", "I mean" or "that's what I said" around it, and keep only what new it adds: "Add the bad lock to the tab. Yeah, the badge, with the unread count." is "Add the badge to the tab, with the unread count."
+- A request or fact the speaker says twice in other words, even with a sentence between the two, is written once, where it was first said, keeping every detail either copy had: "Can you add a retry to the upload? It fails on slow networks, so, yeah, I want the upload to retry. Three attempts max." is "Can you add a retry to the upload? It fails on slow networks. Three attempts max." Two different things that sound alike (two users, two runs, a step and its repeat) are both kept.
+- A hesitation restart keeps only the restart: "The tests... the end-to-end tests are flaky" is "The end-to-end tests are flaky".
+- A trail-off ("...") marks a hesitation, never content: take it out and punctuate as the sentence reads ("Can you... check the logs" is "Can you check the logs", "it was 0.47... So" is "it was 0.47. So"). Keep "..." only inside quotes, code or text the speaker gives to be used exactly ("Loading...").
+
+`;
+
+const HAIKU_DENSE_EXAMPLES = `- Target: "Merge the fight tree into develop when the checks pass. So, yeah, the fix branch. Then delete it."
+  Corrected: "Merge the fix branch into develop when the checks pass. Then delete it." (the later "fix branch" settles the misheard "fight tree", then goes)
+- Target: "Then we're tree folders open at once, the sidebar lags. Yeah, when three folders are open, it lags badly."
+  Corrected: "When three folders are open at once, the sidebar lags badly." (the whole misheard opening is replaced; the restatement goes, its "badly" kept)
+- Target: "So it's... it's slow on the first launch... like five seconds, I think. Can you profile it? Yeah, profile the first launch."
+  Corrected: "It's slow on the first launch, like five seconds, I think. Can you profile the first launch?"
+`;
+
+const HAIKU_DENSE = revise(HAIKU_EX2_RULES, {
+  core: [
+    ["CORRECTION PRIORITY:\n", `${HAIKU_WHOLE_PASSAGE}CORRECTION PRIORITY:\n`],
+    [
+      "never paraphrase, summarize, merge instructions, or add anything.",
+      "never paraphrase, summarize, merge instructions, or add anything, beyond writing a restatement once under THE WHOLE PASSAGE.",
+    ],
+    [HAIKU_EXAMPLES_2, `${HAIKU_EXAMPLES_2}${HAIKU_DENSE_EXAMPLES}`],
+  ],
+});
+
+// Two more misses from live dictation: a question abandoned for another one
+// stayed in, and an "@all" the transcriber wrote for "at all" was kept as an
+// @-reference.
+const HAIKU_DENSE_2 = revise(HAIKU_DENSE, {
+  core: [
+    [
+      '- A hesitation restart keeps only the restart: "The tests... the end-to-end tests are flaky" is "The end-to-end tests are flaky".',
+      '- A hesitation restart keeps only the restart, and a question abandoned for another is dropped: "The tests... the end-to-end tests are flaky" is "The end-to-end tests are flaky", and "So as a follow-up, how many... So will it finish today?" is "As a follow-up, will it finish today?".',
+    ],
+    [
+      "- Copy @-references, text inside backticks,",
+      '- An @ joined to an ordinary word, where the sentence needs the word "at" ("barely corrected @all", "look @ the logs"), is the transcriber writing "at": write "at" ("barely corrected at all"). An @-reference names a file, folder or path, or a person or agent being mentioned.\n- Copy @-references, text inside backticks,',
+    ],
+  ],
+});
+
+// Review and the full run: the round had no line saying it never overrides
+// a retracted negation or number, a quote or a command's arguments, or a
+// group mention; and at medium effort Haiku declined passages it was only
+// partly sure of, told that a low-confidence reply is thrown away, which
+// nothing has done since cleanup landed replies as written.
+const HAIKU_DENSE_3 = revise(HAIKU_DENSE_2, {
+  core: [
+    [
+      '("Loading...").\n\nCORRECTION PRIORITY:',
+      '("Loading...").\n- None of this overrides MEANING IS FIXED: a self-correction whose retracted words hold a negation or a number stays as spoken ("set the timeout to 3... set the timeout to 5" keeps both numbers), and quoted words and a command\'s arguments stay as they are. When you can\'t tell whether two phrases say the same thing, keep both.\n\nCORRECTION PRIORITY:',
+    ],
+    [
+      "or a person or agent being mentioned.",
+      'or a person, agent or group being mentioned: "tag @all in the release thread" and "ping @here" keep the @.',
+    ],
+    [
+      '- Target: "Merge the fight tree into develop when the checks pass. So, yeah, the fix branch. Then delete it."\n  Corrected: "Merge the fix branch into develop when the checks pass. Then delete it." (the later "fix branch" settles the misheard "fight tree", then goes)',
+      '- Target: "Merge the fetch branch into develop when the checks pass. So, yeah, the fix branch. Then delete it."\n  Corrected: "Merge the fix branch into develop when the checks pass. Then delete it." (the later "fix branch" settles the misheard "fetch branch", then goes)',
+    ],
+  ],
+  suffix: [
+    [
+      '- Use "no_change" when the input should remain exactly as-is, or when you are not sure a change keeps the meaning.',
+      '- Use "no_change" only when the target is already clean. When you are sure of some edits and not of others, make the sure ones and leave the rest as spoken: a passage with filler, a tic, a trail-off or a clear mishearing in it still gets those cleaned up.',
+    ],
+    [
+      ' "low" when any edit is a guess. Low-confidence replacements are discarded.',
+      ' "low" when any edit is a guess. Leave out an edit you would have to guess at rather than make it.',
+    ],
+  ],
+});
+
 export const PROMPT_VARIANTS: Readonly<Record<string, PromptVariant>> = {
   v11: { description: "the rules production sent before #14786", instructionsFor: fixed(V11) },
   firm: {
@@ -1040,6 +1119,21 @@ export const PROMPT_VARIANTS: Readonly<Record<string, PromptVariant>> = {
   "haiku-ex3": {
     description: "Haiku round 4: haiku-ex2-rules with examples for its remaining misses",
     instructionsFor: fixed(HAIKU_EX3),
+  },
+  "haiku-dense": {
+    description:
+      "Haiku round 5: haiku-ex2-rules reading the whole passage, later restatements settling earlier mishearings, trail-offs dropped",
+    instructionsFor: fixed(HAIKU_DENSE),
+  },
+  "haiku-dense2": {
+    description:
+      'Haiku round 5: haiku-dense with abandoned questions dropped and an @ that means "at" written as the word',
+    instructionsFor: fixed(HAIKU_DENSE_2),
+  },
+  "haiku-dense3": {
+    description:
+      "Haiku round 5: haiku-dense2 under MEANING IS FIXED, group mentions kept, declining only a clean passage",
+    instructionsFor: fixed(HAIKU_DENSE_3),
   },
   production: {
     description: "the rules production sends each model now",

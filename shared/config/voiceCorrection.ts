@@ -78,7 +78,8 @@ export function voiceCleanupProviderOf(model: string): VoiceCorrectionProvider {
 }
 
 /**
- * Reasoning effort sent explicitly on every voice-dictation Responses request.
+ * Reasoning effort sent explicitly on file-link detection; cleanup asks for
+ * `cleanupReasoningEffortFor` instead.
  * Both dictation models default to "medium" when the field is omitted — a
  * latency/cost regression for these fast, strict-JSON tasks — so we pin the
  * lowest tier at each call site rather than inheriting the model default.
@@ -88,6 +89,16 @@ export const VOICE_DICTATION_REASONING_EFFORT = "none" as const;
 
 /** The Responses API reasoning tiers a voice-dictation request may ask for. */
 export type VoiceReasoningEffort = "none" | "low" | "medium" | "high";
+
+/**
+ * The reasoning effort cleanup, its warm-up and rewrite ask each model for,
+ * chosen on the cleanup benchmark (2026-10-29). A little reasoning made every
+ * model's edits safer: Haiku at medium lost a fifth of the words it lost with
+ * none, and the other models gained at low, Sonnet coming back faster too.
+ */
+export function cleanupReasoningEffortFor(model: string): VoiceReasoningEffort {
+  return model === "claude-haiku-5-5" ? "medium" : "low";
+}
 
 /** The longest selection a spoken rewrite takes, matching cleanup's passage cap. */
 export const VOICE_REWRITE_MAX_SELECTION_CHARS = 12_000;

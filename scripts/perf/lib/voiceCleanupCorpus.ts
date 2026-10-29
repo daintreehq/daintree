@@ -39,6 +39,7 @@ export type CaseSource =
   | "prompts"
   | "names"
   | "ramble"
+  | "dense"
   | "tics"
   | "lookalike"
   | "codenames"
@@ -1353,6 +1354,242 @@ const RAMBLE: readonly AuthoredCase[] = [
   },
 ];
 
+// What Haiku 5.5 left too light (2026-10-29): a misheard opening the speaker
+// saw and said again later, which the restatement settles and then has no
+// more job to do, trail-off ellipses, hesitations and restarts, and a request
+// said twice. Each beside passages where a repeat or an ellipsis is content.
+const DENSE: readonly AuthoredCase[] = [
+  {
+    id: "dense-heavy-user:grok",
+    style: "grok",
+    source: "dense",
+    raw: "When about heaviest users saw this after he rebooted Daintree into version 0.47.1, I think, or maybe it was just 0.47... So, yeah, he was one of our heaviest users. He's obviously doing a lot here, but can you figure out what happened, and if there's anything that needs fixing? Don't fix anything yet, we're just going to log some issues for this.",
+    reference:
+      "One of our heaviest users saw this after he rebooted Daintree into version 0.47.1, I think, or maybe it was just 0.47. He's obviously doing a lot here, but can you figure out what happened, and if there's anything that needs fixing? Don't fix anything yet, we're just going to log some issues for this.",
+    fixes: { "One of our heaviest users saw this": "misread" },
+    drops: ["...", "yeah", "he was one of our heaviest users"],
+    keep: ["Don't fix anything yet", "I think"],
+  },
+  {
+    id: "dense-heavy-user:openai",
+    style: "openai",
+    source: "dense",
+    raw: "Um, when about heaviest users saw this after he rebooted Daintree into version 0.47.1, I think, or maybe it was just 0.47... So, yeah, he was one of our, you know, heaviest users. He's obviously doing a lot here, but, uh, can you figure out what happened, and if there's anything that needs fixing? Don't fix anything yet, we're just going to log some issues for this.",
+    reference:
+      "One of our heaviest users saw this after he rebooted Daintree into version 0.47.1, I think, or maybe it was just 0.47. He's obviously doing a lot here, but can you figure out what happened, and if there's anything that needs fixing? Don't fix anything yet, we're just going to log some issues for this.",
+    fixes: { "One of our heaviest users saw this": "misread" },
+    drops: ["um", "uh", "...", "yeah", "you know", "he was one of our"],
+    keep: ["Don't fix anything yet", "I think"],
+  },
+  {
+    id: "dense-plugin-lab:grok",
+    style: "grok",
+    source: "dense",
+    raw: "The plug in lap won't load since this morning's build. Yeah, the plugin lab, it just shows a blank panel. Can you check what changed in the loader?",
+    reference:
+      "The plugin lab won't load since this morning's build. It just shows a blank panel. Can you check what changed in the loader?",
+    alsoAccept: [
+      "The plugin lab won't load since this morning's build. The plugin lab just shows a blank panel. Can you check what changed in the loader?",
+      "The plugin lab won't load since this morning's build; it just shows a blank panel. Can you check what changed in the loader?",
+    ],
+    fixes: { "The plugin lab won't load": "misread" },
+    drops: ["yeah"],
+    keep: ["just shows a blank panel"],
+  },
+  {
+    id: "dense-cache-key:grok",
+    style: "grok",
+    source: "dense",
+    raw: "So the cash key for the cleanup prompt changes on every request, the cache key, and that's why we never get a cache hit. Can you find what's changing it?",
+    reference:
+      "The cache key for the cleanup prompt changes on every request, and that's why we never get a cache hit. Can you find what's changing it?",
+    alsoAccept: [
+      "The cache key for the cleanup prompt changes on every request, so we never get a cache hit. Can you find what's changing it?",
+    ],
+    fixes: { "The cache key for the cleanup prompt": "misread" },
+  },
+  {
+    id: "dense-dashboard:grok",
+    style: "grok",
+    source: "dense",
+    raw: "Open the worked reed dashboard when the app starts. The worktree dashboard, that's what I said. And only if there's more than one worktree.",
+    reference:
+      "Open the worktree dashboard when the app starts, and only if there's more than one worktree.",
+    alsoAccept: [
+      "Open the worktree dashboard when the app starts. And only if there's more than one worktree.",
+      "Open the worktree dashboard when the app starts, but only if there's more than one worktree.",
+      "Open the worktree dashboard when the app starts. Only if there's more than one worktree.",
+    ],
+    fixes: { "Open the worktree dashboard": "misread" },
+    drops: ["that's what I said"],
+    keep: ["only if there's more than one worktree"],
+  },
+  {
+    id: "dense-hesitations:grok",
+    style: "grok",
+    source: "dense",
+    raw: "Can you... check the pty host logs for the second project... and see if it restarted after the laptop woke up? I'm not sure it did, but... yeah, just check.",
+    reference:
+      "Can you check the pty host logs for the second project and see if it restarted after the laptop woke up? I'm not sure it did, but just check.",
+    alsoAccept: [
+      "Can you check the pty-host logs for the second project and see if it restarted after the laptop woke up? I'm not sure it did, but just check.",
+      "Can you check the pty host logs for the second project and see if it restarted after the laptop woke up? I'm not sure it did, just check.",
+    ],
+    drops: ["...", "yeah"],
+    keep: ["I'm not sure it did"],
+  },
+  {
+    id: "dense-restart:grok",
+    style: "grok",
+    source: "dense",
+    raw: "The tests... the end-to-end tests for the settings dialog are flaking on Windows. Not the unit tests, those are fine.",
+    reference:
+      "The end-to-end tests for the settings dialog are flaking on Windows. Not the unit tests, those are fine.",
+    drops: ["..."],
+    keep: ["Not the unit tests, those are fine"],
+  },
+  {
+    id: "dense-said-twice:openai",
+    style: "openai",
+    source: "dense",
+    raw: "Can you make the sidebar remember its width? Like, when I drag it wider and restart, it goes back to the default, so, yeah, I want it to remember the width I dragged it to. Store it per project.",
+    reference:
+      "Can you make the sidebar remember its width? When I drag it wider and restart, it goes back to the default. Store it per project.",
+    alsoAccept: [
+      "Can you make the sidebar remember its width? When I drag it wider and restart, it goes back to the default. I want it to remember the width I dragged it to. Store it per project.",
+    ],
+    drops: ["like", "yeah"],
+    keep: ["Store it per project"],
+  },
+  {
+    id: "dense-version-hedge:grok",
+    style: "grok",
+    source: "dense",
+    raw: "This started in 0.46, I think... or maybe 0.45. Not sure. Either way, can you bisect the restore regression between 0.44 and develop?",
+    reference:
+      "This started in 0.46, I think, or maybe 0.45. Not sure. Either way, can you bisect the restore regression between 0.44 and develop?",
+    drops: ["..."],
+    keep: ["or maybe 0.45", "I think", "Not sure"],
+  },
+  {
+    id: "dense-trail-off:grok",
+    style: "grok",
+    source: "dense",
+    raw: "The diff view loses its scroll position when you switch files. Can you keep it per file? That would be... yeah, that would be great.",
+    reference:
+      "The diff view loses its scroll position when you switch files. Can you keep it per file? That would be great.",
+    alsoAccept: [
+      "The diff view loses its scroll position when you switch files. Can you keep it per file?",
+    ],
+    drops: ["...", "yeah"],
+    keep: ["Can you keep it per file?"],
+  },
+  {
+    id: "dense-too-light:grok",
+    style: "grok",
+    source: "dense",
+    raw: "So, the Haiku transcription correction is being a little bit too light. It's not correcting things. It's also leaving in ellipses, which are not important... It should know to remove those. And here it could have made a correction at the beginning of this text, so it was clear that there was a transcription error, and I corrected it later because I saw it, and it didn't know to correct this.",
+    reference:
+      "The Haiku transcription correction is being a little bit too light. It's not correcting things. It's also leaving in ellipses, which are not important. It should know to remove those. And here it could have made a correction at the beginning of this text, so it was clear that there was a transcription error. I corrected it later because I saw it, and it didn't know to correct this.",
+    drops: ["..."],
+    keep: ["a little bit too light", "I corrected it later because I saw it"],
+    maxSentenceWords: 30,
+  },
+  {
+    id: "dense-follow-up:grok",
+    style: "grok",
+    source: "dense",
+    raw: "So as a quick follow-up to that last question, how many... So will we be able to get through the current 148 issues using the current allocation?",
+    reference:
+      "As a quick follow-up to that last question, will we be able to get through the current 148 issues using the current allocation?",
+    drops: ["...", "how many", "so"],
+    keep: ["using the current allocation"],
+  },
+  {
+    id: "dense-at-all:grok",
+    style: "grok",
+    source: "dense",
+    raw: "That seems like it was barely corrected @all. So yeah, include that in your test.",
+    reference: "That seems like it was barely corrected at all. Include that in your test.",
+    fixes: { "at all": "misread" },
+    drops: ["yeah"],
+  },
+  {
+    id: "dense-at-ref:grok",
+    style: "grok",
+    source: "dense",
+    raw: "Check @docs/voice-input.md and don't change it at all.",
+    reference: "Check @docs/voice-input.md and don't change it at all.",
+    keep: ["don't change it at all"],
+  },
+  {
+    id: "dense-research:grok",
+    style: "grok",
+    source: "dense",
+    raw: "Can you do a little bit of research into... given what we're trying to achieve here, would InWorld's voice be better, or would Gemini 3.8 Flash text-to-speech be better?",
+    reference:
+      "Given what we're trying to achieve here, can you do a little bit of research into whether InWorld's voice would be better, or Gemini 3.8 Flash text-to-speech?",
+    alsoAccept: [
+      "Can you do a little bit of research? Given what we're trying to achieve here, would InWorld's voice be better, or would Gemini 3.8 Flash text-to-speech be better?",
+      "Can you do a little bit of research into whether, given what we're trying to achieve here, InWorld's voice would be better, or Gemini 3.8 Flash text-to-speech?",
+      "Can you do a little bit of research into this: given what we're trying to achieve here, would InWorld's voice be better, or would Gemini 3.8 Flash text-to-speech be better?",
+    ],
+    drops: ["..."],
+    keep: ["Gemini 3.8 Flash"],
+  },
+  {
+    id: "dense-retracted-number:grok",
+    style: "grok",
+    source: "dense",
+    raw: "Set the retry timeout to 3... set the retry timeout to 5 seconds and log each attempt.",
+    reference:
+      "Set the retry timeout to 3, set the retry timeout to 5 seconds and log each attempt.",
+    alsoAccept: [
+      "Set the retry timeout to 3. Set the retry timeout to 5 seconds and log each attempt.",
+      "Set the retry timeout to 3... set the retry timeout to 5 seconds and log each attempt.",
+    ],
+    keep: ["log each attempt"],
+  },
+  {
+    id: "dense-group-mention:grok",
+    style: "grok",
+    source: "dense",
+    raw: "Post the release notes in the team channel and tag @all so everyone sees them.",
+    reference: "Post the release notes in the team channel and tag @all so everyone sees them.",
+    keep: ["tag @all"],
+  },
+  {
+    id: "dense-two-users:grok",
+    style: "grok",
+    source: "dense",
+    raw: "One of our users saw this on 0.47.1. Another user saw it on 0.46, so it's not new. Can you check both release notes for anything that touched the restore path?",
+    reference:
+      "One of our users saw this on 0.47.1. Another user saw it on 0.46, so it's not new. Can you check both release notes for anything that touched the restore path?",
+    keep: ["Another user saw it on 0.46", "so it's not new"],
+  },
+  {
+    id: "dense-loading-label:grok",
+    style: "grok",
+    source: "dense",
+    raw: "Change the button label to Loading... with the three dots, and keep the spinner beside it.",
+    reference:
+      'Change the button label to "Loading..." with the three dots, and keep the spinner beside it.',
+    alsoAccept: [
+      "Change the button label to Loading... with the three dots, and keep the spinner beside it.",
+    ],
+    keep: ["Loading...", "with the three dots"],
+  },
+  {
+    id: "dense-run-twice:openai",
+    style: "openai",
+    source: "dense",
+    raw: "Run the tests, then run them again with the cache cleared, and compare the timings.",
+    reference:
+      "Run the tests, then run them again with the cache cleared, and compare the timings.",
+    keep: ["run them again with the cache cleared"],
+  },
+];
+
 // What the dictations that reached the agent still had in them (#14786):
 // filler, "yeah" and "so yeah", hedges, verbal tics, false starts, run-on
 // sentences and misheard names. Each reference is the message the speaker
@@ -2181,6 +2418,7 @@ export const CLEANUP_CORPUS: readonly CleanupCase[] = [
     ...NAMES,
     ...SPELLED_BARE,
     ...RAMBLE,
+    ...DENSE,
     ...TICS,
     ...LOOKALIKE,
     ...CODE_NAMES,
