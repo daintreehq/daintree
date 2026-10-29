@@ -202,7 +202,7 @@ Each worktree card shows:
 
 Agent state is a glyph, not a pill. Every state is a circle, or a circle with a mark inside, drawn at one outer diameter (`src/components/icons/AgentStateCircles.tsx`):
 
-- **Working:** `SpinnerCircle` in `state-working` (green), spinning. It stands still only where the stillness is the message: dimmed in a quick-state filter bar's empty Working segment, and in the waiting hue for Pilot's quiet band, a run that has gone silent
+- **Working:** `SpinnerCircle` in `state-working` (green), spinning unless a reduced-motion, performance or power-saving mode stills it. By design it stands still only where the stillness is the message: in a quick-state filter bar's Working segment while nothing is working (dimmed at zero), and in the waiting hue for Pilot's quiet band, a run that has gone silent
 - **Waiting:** `HollowCircle` in `state-waiting` (amber); an agent asking a question adds a `?`
 - **Directing:** ring with a plus in `category-blue`
 - **Finished:** ring with a check in `text-secondary`, white in the pane header
