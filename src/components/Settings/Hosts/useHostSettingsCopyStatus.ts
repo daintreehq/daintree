@@ -7,7 +7,15 @@ export type HostSettingsCopyStatusState =
   | { kind: "idle" }
   | { kind: "loading"; previous: SettingsCopyStatus | null }
   | { kind: "ready"; status: SettingsCopyStatus }
-  | { kind: "error"; message: string };
+  /** `previous` is what the last answer said, kept so a failed refresh doesn't hide it. */
+  | { kind: "error"; message: string; previous: SettingsCopyStatus | null };
+
+/** The last status the page was given, whatever is happening now. */
+export function statusOf(state: HostSettingsCopyStatusState): SettingsCopyStatus | null {
+  if (state.kind === "ready") return state.status;
+  if (state.kind === "loading" || state.kind === "error") return state.previous;
+  return null;
+}
 
 /**
  * What a copy to the host would change, and the last copy it received
@@ -21,11 +29,7 @@ export function useHostSettingsCopyStatus(hostId: HostId, hostName: string, conn
   const refresh = useCallback(() => {
     if (!connected) return;
     const ticket = ++generation.current;
-    setState((prev) => ({
-      kind: "loading",
-      previous:
-        prev.kind === "ready" ? prev.status : prev.kind === "loading" ? prev.previous : null,
-    }));
+    setState((prev) => ({ kind: "loading", previous: statusOf(prev) }));
     window.electron.settingsCopy.status({ hostId }).then(
       (status) => {
         if (generation.current !== ticket) return;
@@ -33,10 +37,11 @@ export function useHostSettingsCopyStatus(hostId: HostId, hostName: string, conn
       },
       (err: unknown) => {
         if (generation.current !== ticket) return;
-        setState({
+        setState((prev) => ({
           kind: "error",
-          message: clientErrorText(err, `Couldn't check settings on ${hostName}`),
-        });
+          message: clientErrorText(err, `Couldn't compare settings with ${hostName}`),
+          previous: statusOf(prev),
+        }));
       }
     );
   }, [hostId, hostName, connected]);

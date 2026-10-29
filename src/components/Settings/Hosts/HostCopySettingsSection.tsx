@@ -1,26 +1,49 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
+import { Callout } from "@/components/ui/Callout";
+import { deviceOwnerPhrase } from "@/hooks/useSettingsOwner";
 import {
   PORTABLE_SETTINGS_CATEGORIES,
   type PortableSettingsCategory,
   type PortableSettingsCategoryId,
 } from "@shared/config/portableSettings";
-import type { ConfigBundlePreviewSection, ConfigImportReport } from "@shared/types/configBundle";
+import type { ConfigImportReport } from "@shared/types/configBundle";
 import type { SettingsCopyPreview } from "@shared/types/ipc/settingsCopy";
 import type { HostId } from "@shared/types/remoteHosts";
 import { clientErrorCode, clientErrorText } from "@/utils/clientAppError";
-import { pluralNoun, pluralize } from "@/lib/pluralize";
+import { pluralize } from "@/lib/pluralize";
 import { SettingsCheckbox } from "../SettingsCheckbox";
 import { SettingsSection } from "../SettingsSection";
-import { SettingsActions, SettingsEmptyRow, SettingsGroup, SettingsRow } from "../SettingsGroup";
-import { HostCopyStatusGroup } from "./HostCopyStatusGroup";
+import {
+  SettingsActions,
+  SettingsEmptyRow,
+  SettingsGroup,
+  SettingsInlineError,
+  SettingsRow,
+} from "../SettingsGroup";
+import { HostCopyDriftGroup, HostLastCopyGroup } from "./HostCopyStatusGroup";
+import {
+  CategoryPreviewRows,
+  CategoryReportRows,
+  CopiedCategoriesRow,
+  QuietCategoryRows,
+  UncopiedCategoryRows,
+  UpdateDaintreeButton,
+  needsReport,
+} from "./settingsCopyParts";
 import {
   DEVICE_CATEGORIES,
   HOST_CATEGORIES,
-  changeTotal,
-  describeChange,
+  categoryPreviews,
+  categoryReports,
+  changePhrase,
+  classifyPreview,
+  isQuiet,
+  listPhrase,
+  previewTotals,
+  reportTotals,
 } from "./settingsCopyPreview";
-import { useHostSettingsCopyStatus } from "./useHostSettingsCopyStatus";
+import { statusOf, useHostSettingsCopyStatus } from "./useHostSettingsCopyStatus";
 
 interface HostCopySettingsSectionProps {
   hostId: HostId;
@@ -32,7 +55,8 @@ interface HostCopySettingsSectionProps {
 
 type Phase =
   | { kind: "choose" }
-  | { kind: "previewing" }
+  /** `differences`: asked for from the comparison at the top, whose button shows the wait. */
+  | { kind: "previewing"; from: "choose" | "differences" }
   | { kind: "preview"; preview: SettingsCopyPreview }
   | { kind: "applying"; preview: SettingsCopyPreview }
   | { kind: "result"; preview: SettingsCopyPreview; report: ConfigImportReport };
@@ -49,11 +73,13 @@ function defaultSelection(): Set<PortableSettingsCategoryId> {
   );
 }
 
-function sectionsOf(
-  category: PortableSettingsCategory,
-  sections: ConfigBundlePreviewSection[]
-): ConfigBundlePreviewSection[] {
-  return sections.filter((section) => category.sections.includes(section.section));
+/**
+ * Focus the control that replaced the one just pressed, without a scroll.
+ * Chromium rings a script focus only when the last input was a key, so a
+ * keyboard user sees where they landed and a click leaves no ring.
+ */
+function successorFocus(element: HTMLElement | null) {
+  element?.focus({ preventScroll: true });
 }
 
 /**
@@ -62,6 +88,10 @@ function sectionsOf(
  * against its live settings and applies exactly what was shown, or asks for a
  * fresh preview if its settings changed in between. Credentials, consent and
  * per-project state never travel; nothing syncs afterwards.
+ *
+ * Choosing, the review and the result each replace the step before, so the
+ * decision sits right under what it is about; changing the choice after a
+ * preview is a deliberate step back, never a side effect of a checkbox.
  */
 export function HostCopySettingsSection({
   hostId,
@@ -72,10 +102,11 @@ export function HostCopySettingsSection({
   const [selected, setSelected] = useState(defaultSelection);
   const [phase, setPhase] = useState<Phase>({ kind: "choose" });
   const [error, setError] = useState<CopyError | null>(null);
-  // Answers for a request that has since been superseded (selection changed,
-  // a newer preview, the host went away) are dropped, never shown.
+  // Answers for a request that has since been superseded (a newer preview,
+  // the host went away) are dropped, never shown.
   const generation = useRef(0);
   const status = useHostSettingsCopyStatus(hostId, hostName, connected);
+  const sectionRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     generation.current += 1;
@@ -90,7 +121,20 @@ export function HostCopySettingsSection({
     []
   );
 
+  // The step that replaced the pressed button takes focus, so a keyboard user
+  // isn't left on the page body: the review from its start, the result at its actions.
+  useEffect(() => {
+    const active = document.activeElement;
+    if (active && active !== document.body) return;
+    const target = phase.kind === "preview" || phase.kind === "result" ? phase.kind : "choose";
+    successorFocus(
+      sectionRef.current?.querySelector<HTMLElement>(`[data-copy-focus="${target}"]`) ?? null
+    );
+  }, [phase.kind]);
+
   const busy = phase.kind === "previewing" || phase.kind === "applying";
+  const chosen = PORTABLE_SETTINGS_CATEGORIES.filter((category) => selected.has(category.id));
+  const thisMac = deviceOwnerPhrase();
 
   const reset = () => {
     generation.current += 1;
@@ -106,41 +150,43 @@ export function HostCopySettingsSection({
       else next.delete(id);
       return next;
     });
-    // What was previewed is no longer what would be copied.
-    if (phase.kind !== "choose") reset();
   };
 
   const allSelected = PORTABLE_SETTINGS_CATEGORIES.every((category) => selected.has(category.id));
   const toggleAll = (on: boolean) => {
     if (busy) return;
     setSelected(on ? new Set(PORTABLE_SETTINGS_CATEGORIES.map((c) => c.id)) : new Set());
-    if (phase.kind !== "choose") reset();
   };
 
-  const preview = () => {
-    if (busy || selected.size === 0) return;
+  const preview = (
+    ids: PortableSettingsCategoryId[] = chosen.map((c) => c.id),
+    from: "choose" | "differences" = "choose"
+  ) => {
+    if (busy || ids.length === 0) return;
     const ticket = ++generation.current;
-    setPhase({ kind: "previewing" });
+    setPhase({ kind: "previewing", from });
     setError(null);
-    window.electron.settingsCopy
-      .preview({
-        hostId,
-        categories: PORTABLE_SETTINGS_CATEGORIES.filter((c) => selected.has(c.id)).map((c) => c.id),
-      })
-      .then(
-        (result) => {
-          if (generation.current !== ticket) return;
-          setPhase({ kind: "preview", preview: result });
-        },
-        (err: unknown) => {
-          if (generation.current !== ticket) return;
-          setPhase({ kind: "choose" });
-          setError({
-            message: clientErrorText(err, `Couldn't preview the copy on ${hostName}`),
-            previewAgain: false,
-          });
-        }
-      );
+    window.electron.settingsCopy.preview({ hostId, categories: ids }).then(
+      (result) => {
+        if (generation.current !== ticket) return;
+        setPhase({ kind: "preview", preview: result });
+      },
+      (err: unknown) => {
+        if (generation.current !== ticket) return;
+        setPhase({ kind: "choose" });
+        setError({
+          message: clientErrorText(err, `Couldn't preview the copy on ${hostName}`),
+          previewAgain: true,
+        });
+      }
+    );
+  };
+
+  /** From the comparison at the top: exactly the categories that differ. */
+  const previewDifferences = (ids: PortableSettingsCategoryId[]) => {
+    if (busy) return;
+    setSelected(new Set(ids));
+    preview(ids, "differences");
   };
 
   const apply = () => {
@@ -159,20 +205,20 @@ export function HostCopySettingsSection({
       (err: unknown) => {
         if (clientErrorCode(err) === "OUTCOME_UNKNOWN") status.refresh();
         if (generation.current !== ticket) return;
-        const code = clientErrorCode(err);
-        const previewAgain = code === "SETTINGS_PREVIEW_STALE" || code === "OUTCOME_UNKNOWN";
-        setPhase(previewAgain ? { kind: "choose" } : { kind: "preview", preview: shown });
+        // The host spends a preview's ticket on the attempt, so whatever went
+        // wrong, the next copy starts from a fresh preview.
+        setPhase({ kind: "choose" });
         setError({
           message: clientErrorText(err, `Couldn't copy settings to ${hostName}`),
-          previewAgain,
+          previewAgain: true,
         });
       }
     );
   };
 
   const description = offered
-    ? `${hostName} starts from defaults. Copy this computer's settings to it now, or come back here later`
-    : `Copy this computer's settings to ${hostName}, once. Credentials, permissions you granted and plugins stay on each machine`;
+    ? `${hostName} starts from defaults. Copy ${thisMac}'s settings to it now, or come back here later`
+    : `Copy ${thisMac}'s settings to ${hostName}, once. Credentials, permissions you granted and plugins stay on each machine`;
 
   if (!connected) {
     return (
@@ -183,8 +229,6 @@ export function HostCopySettingsSection({
       </SettingsSection>
     );
   }
-
-  const shown = phase.kind === "choose" || phase.kind === "previewing" ? null : phase.preview;
 
   const categoryRow = (category: PortableSettingsCategory) => (
     <SettingsCheckbox
@@ -198,98 +242,91 @@ export function HostCopySettingsSection({
     />
   );
 
+  const choosing = phase.kind === "choose" || phase.kind === "previewing";
+  const errorStatus = error ? (
+    <SettingsInlineError role="alert">{error.message}</SettingsInlineError>
+  ) : null;
+
   return (
     <SettingsSection id="host-copy-settings" title="Copy settings" description={description}>
-      <div className="space-y-4">
-        <HostCopyStatusGroup
-          hostId={hostId}
+      <div className="space-y-4" ref={sectionRef}>
+        <HostCopyDriftGroup
           hostName={hostName}
           state={status.state}
           busy={busy}
           onRefresh={status.refresh}
-          onUndone={(lastCopy) => {
-            // Shown at once; the refresh then brings the drift up to date.
-            const current =
-              status.state.kind === "ready"
-                ? status.state.status
-                : status.state.kind === "loading"
-                  ? status.state.previous
-                  : null;
-            if (current) status.show({ ...current, lastCopy });
-            status.refresh();
-          }}
+          onPreview={previewDifferences}
+          previewing={phase.kind === "previewing" && phase.from === "differences"}
         />
-        <SettingsGroup label="What to copy">
-          <SettingsCheckbox
-            id="host-copy-all"
-            label="Select all"
-            description={`${pluralize(selected.size, "category", "categories")} of ${PORTABLE_SETTINGS_CATEGORIES.length} chosen`}
-            checked={allSelected}
-            onChange={toggleAll}
-            disabled={busy}
-          />
-          {HOST_CATEGORIES.map(categoryRow)}
-        </SettingsGroup>
-        <SettingsGroup label={`For using ${hostName} directly`}>
-          {DEVICE_CATEGORIES.map(categoryRow)}
-          {shown === null && (
-            <SettingsActions
-              status={
-                error ? (
-                  <span role="alert" className="text-status-error select-text">
-                    {error.message}
-                  </span>
-                ) : selected.size === 0 ? (
-                  "Choose what to copy"
-                ) : undefined
-              }
-            >
-              <Button
-                variant="contrast"
-                size="sm"
-                onClick={preview}
-                disabled={busy || selected.size === 0}
-                aria-busy={phase.kind === "previewing" || undefined}
-              >
-                {error?.previewAgain ? "Preview again" : `Preview changes on ${hostName}`}
-              </Button>
-            </SettingsActions>
-          )}
-        </SettingsGroup>
 
-        {shown !== null && phase.kind !== "result" && (
-          <PreviewGroups
-            preview={shown}
-            hostName={hostName}
-            selected={selected}
-            footer={
+        {choosing ? (
+          <>
+            <SettingsGroup label="What to copy">
+              <SettingsCheckbox
+                id="host-copy-all"
+                label="Select all"
+                description={`${pluralize(selected.size, "category", "categories")} of ${PORTABLE_SETTINGS_CATEGORIES.length} chosen`}
+                checked={allSelected ? true : selected.size > 0 ? "indeterminate" : false}
+                onChange={toggleAll}
+                disabled={busy}
+              />
+              {HOST_CATEGORIES.map(categoryRow)}
+            </SettingsGroup>
+            <SettingsGroup label={`For using ${hostName} directly`}>
+              {DEVICE_CATEGORIES.map(categoryRow)}
               <SettingsActions
                 status={
-                  error ? (
-                    <span role="alert" className="text-status-error select-text">
-                      {error.message}
-                    </span>
-                  ) : changeTotal(shown) === 0 ? (
-                    `${hostName} already has these settings`
-                  ) : (
-                    `${pluralize(changeTotal(shown), "change")} on ${hostName}`
-                  )
+                  errorStatus ??
+                  (phase.kind === "previewing"
+                    ? `Previewing on ${hostName}…`
+                    : selected.size === 0
+                      ? "Choose what to copy"
+                      : undefined)
                 }
               >
-                <Button variant="outline" size="sm" onClick={reset} disabled={busy}>
-                  Cancel
-                </Button>
                 <Button
                   variant="contrast"
                   size="sm"
-                  onClick={apply}
-                  disabled={busy || changeTotal(shown) === 0}
-                  aria-busy={phase.kind === "applying" || undefined}
+                  onClick={() => preview()}
+                  disabled={selected.size === 0}
+                  loading={phase.kind === "previewing" && phase.from === "choose"}
+                  data-copy-focus="choose"
                 >
-                  Copy to {hostName}
+                  {error?.previewAgain ? "Preview again" : `Preview changes on ${hostName}`}
                 </Button>
               </SettingsActions>
-            }
+            </SettingsGroup>
+          </>
+        ) : phase.kind === "result" ? null : (
+          <SettingsGroup label="What to copy">
+            <SettingsRow
+              label={pluralize(chosen.length, "category", "categories")}
+              description={listPhrase(chosen.map((category) => category.label))}
+              control={
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={reset}
+                  disabled={busy}
+                  data-copy-focus="preview"
+                >
+                  Change
+                </Button>
+              }
+            />
+          </SettingsGroup>
+        )}
+
+        {(phase.kind === "preview" || phase.kind === "applying") && (
+          <PreviewGroup
+            hostId={hostId}
+            hostName={hostName}
+            preview={phase.preview}
+            categories={chosen}
+            applying={phase.kind === "applying"}
+            error={errorStatus}
+            onCancel={reset}
+            onCopy={apply}
           />
         )}
 
@@ -298,75 +335,118 @@ export function HostCopySettingsSection({
             preview={phase.preview}
             report={phase.report}
             hostName={hostName}
-            selected={selected}
+            categories={chosen}
+            onPreviewAgain={() => preview()}
             onDone={reset}
           />
         )}
+
+        <HostLastCopyGroup
+          hostId={hostId}
+          hostName={hostName}
+          state={status.state}
+          busy={busy}
+          onRefresh={status.refresh}
+          onUndone={(lastCopy) => {
+            // Shown at once; the refresh then brings the comparison up to date.
+            const current = statusOf(status.state);
+            if (current) status.show({ ...current, lastCopy });
+            status.refresh();
+          }}
+        />
       </div>
     </SettingsSection>
   );
 }
 
-interface PreviewGroupsProps {
-  preview: SettingsCopyPreview;
+interface PreviewGroupProps {
+  hostId: HostId;
   hostName: string;
-  selected: ReadonlySet<PortableSettingsCategoryId>;
-  footer: ReactNode;
+  preview: SettingsCopyPreview;
+  categories: readonly PortableSettingsCategory[];
+  applying: boolean;
+  error: ReactNode;
+  onCancel: () => void;
+  onCopy: () => void;
 }
 
-function PreviewGroups({ preview, hostName, selected, footer }: PreviewGroupsProps) {
-  const categories = PORTABLE_SETTINGS_CATEGORIES.filter((category) => selected.has(category.id));
+/**
+ * The review: each category with something in it leads with its counts and
+ * lists its settings under it; the ones already the same share a row; the
+ * Copy button ends the group, where the review ends.
+ */
+function PreviewGroup({
+  hostId,
+  hostName,
+  preview,
+  categories,
+  applying,
+  error,
+  onCancel,
+  onCopy,
+}: PreviewGroupProps) {
+  const items = categoryPreviews(preview, categories);
+  const totals = previewTotals(items);
+  const total = totals.update + totals.add;
+  const kind = classifyPreview(items);
+  const headline =
+    kind === "changes"
+      ? `${pluralize(total, "change")} on ${hostName}`
+      : kind === "blocked"
+        ? `Nothing here can be copied to ${hostName}`
+        : kind === "same"
+          ? `${hostName} already has these settings`
+          : `Nothing set on ${deviceOwnerPhrase()} to copy`;
+  const detail = [
+    total > 0 ? changePhrase(totals.update, totals.add) : null,
+    totals.notCopied > 0 ? `${totals.notCopied} won't copy` : null,
+    totals.tooOld > 0
+      ? `${pluralize(totals.tooOld, "category", "categories")} ${totals.tooOld === 1 ? "needs" : "need"} a newer Daintree`
+      : null,
+  ].filter((part): part is string => part !== null);
+  const sentenceCase = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
+  const summary = detail.length > 0 ? sentenceCase(detail.join(". ")) : undefined;
   return (
-    <>
-      {categories.map((category, index) => {
-        const sections = sectionsOf(category, preview.sections);
-        const changes = sections.flatMap((section) => section.changes);
-        const skipped = sections.flatMap((section) => section.skipped ?? []);
-        const unknown = category.sections.filter((id) => preview.unknownSections.includes(id));
-        const withheld = preview.withheld.filter((w) => category.sections.includes(w.section));
-        const unchanged = sections.reduce((sum, section) => sum + section.unchanged, 0);
-        const last = index === categories.length - 1;
-        return (
-          <SettingsGroup key={category.id} label={category.label}>
-            {unknown.length > 0 && (
-              <SettingsEmptyRow>
-                Daintree on {hostName} doesn&apos;t know{" "}
-                {unknown.length === category.sections.length ? "these settings" : "some of these"}{" "}
-                yet. Update it there to copy them
-              </SettingsEmptyRow>
-            )}
-            {changes.map((change) => (
-              <SettingsRow
-                key={`change-${change.key}`}
-                label={change.label}
-                description={describeChange(change)}
-              />
-            ))}
-            {skipped.map((skip) => (
-              <SettingsRow
-                key={`skip-${skip.key}`}
-                label={skip.label}
-                description={`Skipped · ${skip.reason}`}
-              />
-            ))}
-            {withheld.length > 0 && (
-              <SettingsRow
-                label="Stays on this computer"
-                description={`${withheld.map((w) => w.name).join(", ")} ${pluralNoun(withheld.length, "looks like a secret", "look like secrets")}`}
-              />
-            )}
-            {changes.length === 0 && skipped.length === 0 && unknown.length === 0 && (
-              <SettingsEmptyRow>
-                {unchanged > 0
-                  ? `Already the same on ${hostName}`
-                  : "Nothing set on this computer to copy"}
-              </SettingsEmptyRow>
-            )}
-            {last && footer}
-          </SettingsGroup>
-        );
-      })}
-    </>
+    <SettingsGroup label={`Preview on ${hostName}`}>
+      <SettingsRow
+        label={headline}
+        description={summary}
+        control={
+          totals.tooOld > 0 ? (
+            <UpdateDaintreeButton hostId={hostId} hostName={hostName} />
+          ) : undefined
+        }
+      />
+      {items
+        .filter((item) => !isQuiet(item))
+        .map((item) => (
+          <CategoryPreviewRows key={item.category.id} item={item} hostName={hostName} />
+        ))}
+      <QuietCategoryRows items={items} hostName={hostName} />
+      <SettingsActions
+        status={
+          error ??
+          (applying
+            ? `Copying to ${hostName}…`
+            : total > 0
+              ? `${pluralize(total, "change")}: ${changePhrase(totals.update, totals.add)}`
+              : undefined)
+        }
+      >
+        <Button variant="outline" size="sm" onClick={onCancel} disabled={applying}>
+          Cancel
+        </Button>
+        <Button
+          variant="contrast"
+          size="sm"
+          onClick={onCopy}
+          disabled={total === 0}
+          loading={applying}
+        >
+          Copy to {hostName}
+        </Button>
+      </SettingsActions>
+    </SettingsGroup>
   );
 }
 
@@ -374,85 +454,134 @@ interface ResultGroupsProps {
   preview: SettingsCopyPreview;
   report: ConfigImportReport;
   hostName: string;
-  selected: ReadonlySet<PortableSettingsCategoryId>;
+  categories: readonly PortableSettingsCategory[];
+  onPreviewAgain: () => void;
   onDone: () => void;
 }
 
-function ResultGroups({ preview, report, hostName, selected, onDone }: ResultGroupsProps) {
-  const categories = PORTABLE_SETTINGS_CATEGORIES.filter((category) => selected.has(category.id));
-  const labels = new Map(
-    preview.sections.flatMap((section) => [
-      ...section.changes.map(
-        (change) => [`${section.section}:${change.key}`, change.label] as const
-      ),
-      ...(section.skipped ?? []).map(
-        (skip) => [`${section.section}:${skip.key}`, skip.label] as const
-      ),
-    ])
-  );
-  const applied = report.sections.reduce((sum, section) => sum + section.applied, 0);
+/** The outcome first, in one verdict; then what each category did and what didn't copy. */
+function ResultGroups({
+  preview,
+  report,
+  hostName,
+  categories,
+  onPreviewAgain,
+  onDone,
+}: ResultGroupsProps) {
+  const [details, setDetails] = useState(false);
+  const detailsId = useId();
+  const totals = reportTotals(report);
   const rolledBack = report.outcome === "rolled-back";
   // Undoing an earlier category failed too: some of it may have stayed.
   const partly = rolledBack && report.restoreFailed === true;
+  const failedAll = !rolledBack && totals.failed > 0 && totals.applied === 0;
+  // Everything the result lists below besides failures: skipped settings, categories
+  // the host doesn't know, names kept here as secrets.
+  const items = categoryPreviews(preview, categories);
+  const tooOld = items.filter((item) => item.unknown.length > 0).length;
+  const keptHere = items.reduce((sum, item) => sum + item.withheld.length, 0);
+  const exceptions = [
+    totals.skipped > 0 ? `${totals.skipped} skipped` : null,
+    tooOld > 0
+      ? `${pluralize(tooOld, "category", "categories")} ${hostName} doesn't know yet`
+      : null,
+    keptHere > 0 ? `${keptHere} kept on ${deviceOwnerPhrase()}` : null,
+  ].filter((part): part is string => part !== null);
+  const retry = rolledBack || totals.failed > 0;
+
+  const verdict = rolledBack ? (
+    <Callout
+      severity="error"
+      role="alert"
+      title={partly ? `Settings on ${hostName} may be partly changed` : "Nothing was copied"}
+    >
+      <p>
+        {partly
+          ? `The copy failed and ${hostName} couldn't put everything back. Preview again to see where its settings stand.`
+          : `${hostName} hit a problem partway, so it put back everything it had changed.`}
+      </p>
+      {report.errors.length > 0 && (
+        <>
+          <Button
+            variant="link"
+            size="inline"
+            className="mt-1"
+            aria-expanded={details}
+            aria-controls={detailsId}
+            onClick={() => setDetails((value) => !value)}
+          >
+            {details ? "Hide details" : "Show details"}
+          </Button>
+          {details && (
+            <ul id={detailsId} className="mt-1 space-y-0.5 break-words select-text">
+              {report.errors.map((message) => (
+                <li key={message}>{message}</li>
+              ))}
+            </ul>
+          )}
+        </>
+      )}
+    </Callout>
+  ) : failedAll ? (
+    <Callout severity="error" role="alert" title="Nothing was copied">
+      {`${pluralize(totals.failed, "setting")} failed on ${hostName}. Each is listed below with why`}
+    </Callout>
+  ) : totals.failed > 0 ? (
+    <Callout
+      severity="warning"
+      role="alert"
+      title={`${pluralize(totals.failed, "setting")} didn't copy`}
+    >
+      {`${totals.applied} copied to ${hostName}. The ones that failed are listed below with why`}
+    </Callout>
+  ) : (
+    <Callout
+      severity="success"
+      role="status"
+      title={`${pluralize(totals.applied, "setting")} copied to ${hostName}`}
+    >
+      {exceptions.length > 0
+        ? `${exceptions.join(", ").replace(/^./, (c) => c.toUpperCase())}. Listed below with why`
+        : undefined}
+    </Callout>
+  );
+
+  const reports = rolledBack ? [] : categoryReports(report, preview, categories);
+  const reported = new Set(reports.map((item) => item.category.id));
+  const absent = categories.filter((category) => !reported.has(category.id));
 
   return (
     <>
-      {rolledBack ? (
-        <SettingsGroup label="Not copied">
-          {report.errors.map((message) => (
-            <SettingsRow
-              key={message}
-              label={partly ? "Partly changed" : "Nothing changed"}
-              description={message}
-            />
-          ))}
-        </SettingsGroup>
-      ) : (
-        categories.map((category) => {
-          const sections = report.sections.filter(
-            (section) => section.present && category.sections.includes(section.section)
-          );
-          if (sections.length === 0) return null;
-          const sum = (key: "applied" | "unchanged" | "skipped" | "failed") =>
-            sections.reduce((total, section) => total + section[key], 0);
-          const parts = [
-            sum("applied") > 0 ? `${sum("applied")} applied` : null,
-            sum("unchanged") > 0 ? `${sum("unchanged")} unchanged` : null,
-            sum("skipped") > 0 ? `${sum("skipped")} skipped` : null,
-            sum("failed") > 0 ? `${sum("failed")} failed` : null,
-          ].filter((part): part is string => part !== null);
-          const skippedLeaves = sections.flatMap((section) =>
-            section.leaves
-              .filter((leaf) => leaf.status === "skipped" || leaf.status === "failed")
-              .map((leaf) => ({ section: section.section, leaf }))
-          );
-          return (
-            <SettingsGroup key={category.id} label={category.label}>
-              <SettingsRow label={parts.length > 0 ? parts.join(" · ") : "Nothing to copy"} />
-              {skippedLeaves.map(({ section, leaf }) => (
-                <SettingsRow
-                  key={`${section}:${leaf.key}`}
-                  label={labels.get(`${section}:${leaf.key}`) ?? leaf.key}
-                  description={`${leaf.status === "failed" ? "Failed" : "Skipped"}${leaf.reason ? ` · ${leaf.reason}` : ""}`}
-                />
-              ))}
-            </SettingsGroup>
-          );
-        })
-      )}
-      <SettingsGroup>
-        <SettingsActions
-          status={
-            partly
-              ? `Settings on ${hostName} may be partly changed. Preview again to see where they stand`
-              : rolledBack
-                ? `Nothing on ${hostName} was changed`
-                : `${pluralize(applied, "setting")} copied to ${hostName}`
-          }
-        >
-          <Button variant="outline" size="sm" onClick={onDone}>
+      {verdict}
+      <SettingsGroup label={`Copy to ${hostName}`}>
+        {rolledBack ? (
+          <SettingsRow
+            label={`${pluralize(categories.length, "category", "categories")} tried`}
+            description={listPhrase(categories.map((category) => category.label))}
+          />
+        ) : (
+          <>
+            {reports.filter(needsReport).map((item) => (
+              <CategoryReportRows key={item.category.id} item={item} hostName={hostName} />
+            ))}
+            <CopiedCategoriesRow items={reports} />
+            <UncopiedCategoryRows items={categoryPreviews(preview, absent)} hostName={hostName} />
+          </>
+        )}
+        <SettingsActions>
+          <Button
+            variant={retry ? "outline" : "contrast"}
+            size="sm"
+            onClick={onDone}
+            data-copy-focus={retry ? undefined : "result"}
+          >
             Done
           </Button>
+          {retry && (
+            <Button variant="contrast" size="sm" onClick={onPreviewAgain} data-copy-focus="result">
+              Preview again
+            </Button>
+          )}
         </SettingsActions>
       </SettingsGroup>
     </>

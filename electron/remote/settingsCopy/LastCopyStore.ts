@@ -13,6 +13,10 @@ export interface LastCopyLeaf {
   section: ConfigBundleSectionId;
   key: string;
   label: string;
+  /** Added by the copy, or replacing what was there. */
+  kind?: "add" | "update";
+  /** What the preview showed it held before, for scalar settings. */
+  from?: string;
   before?: unknown;
   after?: unknown;
 }
@@ -39,6 +43,7 @@ const FileSchema = z.object({
       z.object({ section: z.string(), applied: z.number().int(), skipped: z.number().int() })
     ),
     undo: z.enum(["available", "unavailable", "done"]),
+    undoUnavailable: z.enum(["too-large", "later-copy"]).optional(),
     undone: z
       .object({
         at: z.number().int().nonnegative(),
@@ -59,6 +64,8 @@ const FileSchema = z.object({
         section: z.string(),
         key: z.string(),
         label: z.string(),
+        kind: z.enum(["add", "update"]).optional(),
+        from: z.string().optional(),
         before: z.unknown().optional(),
         after: z.unknown().optional(),
       })
@@ -114,7 +121,7 @@ export class LastCopyStore {
     let kept = record;
     let data = serialize(kept);
     if (kept.leaves && Buffer.byteLength(data, "utf8") > LAST_COPY_MAX_BYTES) {
-      kept = { copy: { ...record.copy, undo: "unavailable" } };
+      kept = { copy: { ...record.copy, undo: "unavailable", undoUnavailable: "too-large" } };
       data = serialize(kept);
     }
     await fs.mkdir(path.dirname(this.filePath), { recursive: true, mode: 0o700 });

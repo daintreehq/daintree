@@ -55,6 +55,26 @@ export interface SettingsCopyUndone {
 }
 
 /**
+ * One leaf an undo would take back. `kind` says whether the copy added it (an
+ * undo removes it) or replaced it; `from` is the value the preview showed it
+ * had before, for scalar settings only, never a secret.
+ */
+export interface SettingsCopyChangedLeaf {
+  section: ConfigBundleSectionId;
+  key: string;
+  label: string;
+  kind?: "add" | "update";
+  from?: string;
+}
+
+/**
+ * Why the host kept no undo: `too-large` when the earlier values outgrew its
+ * record, `later-copy` when a later copy retired it and then didn't land or
+ * didn't record. Absent from a host that predates the reason.
+ */
+export type SettingsCopyUndoUnavailable = "too-large" | "later-copy";
+
+/**
  * The last copy the host received, as the host recorded it. `source` is the
  * name the copying machine gave when it connected: who to thank, not proof.
  */
@@ -63,10 +83,11 @@ export interface SettingsCopyLastCopy {
   source: string;
   at: number;
   sections: SettingsCopySectionSummary[];
-  /** `unavailable`: the host kept no undo for it (too large, or a later copy failed to record). */
+  /** `unavailable`: the host kept no undo for it; `undoUnavailable` says why. */
   undo: "available" | "unavailable" | "done";
+  undoUnavailable?: SettingsCopyUndoUnavailable;
   /** The leaves an undo would take back, by name, while it is available. */
-  changed?: Array<{ section: ConfigBundleSectionId; key: string; label: string }>;
+  changed?: SettingsCopyChangedLeaf[];
   undone?: SettingsCopyUndone;
 }
 
@@ -78,6 +99,8 @@ export interface SettingsCopyStatus {
    * null when this computer's settings are too large to compare in one go.
    */
   changes: PortableSettingsCategoryId[] | null;
+  /** How many settings a copy would add and replace, per category in `changes`. */
+  changeCounts?: Partial<Record<PortableSettingsCategoryId, { add: number; update: number }>>;
   lastCopy: SettingsCopyLastCopy | null;
 }
 

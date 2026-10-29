@@ -9,7 +9,8 @@ interface SettingsCheckboxProps {
   id?: string;
   label: string;
   description: string;
-  checked: boolean;
+  /** `indeterminate` for a "select all" row over a partial selection. */
+  checked: boolean | "indeterminate";
   onChange: (value: boolean) => void;
   disabled?: boolean;
   error?: string;

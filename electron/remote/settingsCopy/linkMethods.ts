@@ -130,8 +130,17 @@ const lastCopy = z.object({
   at: z.number().int().nonnegative(),
   sections: z.array(z.object({ section: sectionId, applied: count, skipped: count })).max(64),
   undo: z.enum(["available", "unavailable", "done"]),
+  undoUnavailable: z.enum(["too-large", "later-copy"]).optional(),
   changed: z
-    .array(z.object({ section: sectionId, key: text, label: text }))
+    .array(
+      z.object({
+        section: sectionId,
+        key: text,
+        label: text,
+        kind: z.enum(["add", "update"]).optional(),
+        from: text.optional(),
+      })
+    )
     .max(10_000)
     .optional(),
   undone: undone.optional(),

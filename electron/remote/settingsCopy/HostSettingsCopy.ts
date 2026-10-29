@@ -14,7 +14,7 @@ import type {
   SettingsCopyUndoLeaf,
 } from "../../../shared/types/ipc/settingsCopy.js";
 import type { LinkSession } from "../link/session.js";
-import type { LastCopyRecord } from "./LastCopyStore.js";
+import type { LastCopyLeaf, LastCopyRecord } from "./LastCopyStore.js";
 import {
   SettingsCopyApplySchema,
   SettingsCopyLinkMethod,
@@ -49,8 +49,8 @@ interface Ticket {
   expiresAt: number;
   /** Leaves the preview refused and the payload no longer carries, reported with the result. */
   refused: Map<ConfigBundleSectionId, ConfigImportLeafResult[]>;
-  /** What the preview called each changed leaf, `section:key`, for the record. */
-  labels: Map<string, string>;
+  /** What the preview showed for each changed leaf, `section:key`, for the record. */
+  labels: Map<string, Pick<LastCopyLeaf, "label" | "kind" | "from">>;
 }
 
 function splitPayload(request: SettingsCopyPreviewRequest): {
@@ -125,12 +125,22 @@ function withRefused(
 const TICKET_TTL_MS = 15 * 60_000;
 const MAX_TICKETS_PER_SESSION = 4;
 
-/** The record as a Shell may see it: names of what changed, never a value. */
+/**
+ * The record as a Shell may see it: what changed by name, whether the copy
+ * added or replaced it, and for scalar settings the display value its preview
+ * already showed. Never a raw earlier value: those stay here for the undo.
+ */
 function publicCopy(record: LastCopyRecord): SettingsCopyLastCopy {
   if (record.copy.undo !== "available" || !record.leaves) return record.copy;
   return {
     ...record.copy,
-    changed: record.leaves.map(({ section, key, label }) => ({ section, key, label })),
+    changed: record.leaves.map(({ section, key, label, kind, from }) => ({
+      section,
+      key,
+      label,
+      ...(kind ? { kind } : {}),
+      ...(from !== undefined ? { from } : {}),
+    })),
   };
 }
 
@@ -223,7 +233,19 @@ export class HostSettingsCopy {
     const { sections: accepted, refused } = withoutRefused(sections, previews);
     const labels = new Map(
       previews.flatMap((preview) =>
-        preview.changes.map((change) => [`${preview.section}:${change.key}`, change.label] as const)
+        preview.changes.map(
+          (change) =>
+            [
+              `${preview.section}:${change.key}`,
+              {
+                label: change.label,
+                kind: change.kind,
+                ...(change.kind === "update" && change.from !== undefined
+                  ? { from: change.from }
+                  : {}),
+              },
+            ] as const
+        )
       )
     );
     tickets.set(ticket, {
@@ -300,7 +322,8 @@ export class HostSettingsCopy {
       leaves: captured.flatMap(({ section, leaves }) =>
         leaves.map((leaf) => ({
           section,
-          label: entry.labels.get(`${section}:${leaf.key}`) ?? leaf.key,
+          label: leaf.key,
+          ...entry.labels.get(`${section}:${leaf.key}`),
           ...leaf,
         }))
       ),
@@ -323,7 +346,9 @@ export class HostSettingsCopy {
     const previous = await this.deps.records.read();
     if (!previous || previous.copy.undo !== "available") return null;
     try {
-      await this.deps.records.write({ copy: { ...previous.copy, undo: "unavailable" } });
+      await this.deps.records.write({
+        copy: { ...previous.copy, undo: "unavailable", undoUnavailable: "later-copy" },
+      });
     } catch (error) {
       throw new AppError({
         code: "INTERNAL",
