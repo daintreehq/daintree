@@ -17,6 +17,7 @@ import {
 } from "@/services/panelCloseGuard";
 import { isBrowserPanel } from "@shared/types/panel";
 import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
+import type { TerminalLink } from "@/services/terminal/types";
 import type { WorktreeScope } from "@shared/utils/path";
 import { closeAndAnnounce } from "@/lib/accessibility";
 import { terminalHasRunningAgentSession } from "@/utils/destructiveSessionConfirm";
@@ -38,6 +39,7 @@ import {
 import { copyWithToast } from "@/lib/copyWithToast";
 import type { MenuPanel, PendingMenuDispatch } from "./menuShared";
 import {
+  activateCapturedLink,
   openTerminalPathInFileBrowser,
   runTerminalOutputMenuAction,
 } from "./terminalOutputMenuActions";
@@ -51,6 +53,8 @@ interface TerminalMenuCommandsOptions {
   panelKindRegistry: Readonly<Record<string, PanelKindConfig>>;
   registeredTourIds: ReadonlySet<string>;
   sourceRef: React.RefObject<MenuActionSourceValue>;
+  /** The link the menu opened on: the live hover is gone by the time an item is chosen. */
+  hoveredLinkRef: React.RefObject<TerminalLink | null>;
   /** Runs an action once the menu has closed and focus is back on the pane. */
   deferMenuDispatch: (dispatch: PendingMenuDispatch) => void;
   /** Keeps the menu's close from handing focus back (Rename takes it). */
@@ -68,6 +72,7 @@ export function useTerminalMenuCommands({
   panelKindRegistry,
   registeredTourIds,
   sourceRef,
+  hoveredLinkRef,
   deferMenuDispatch,
   suppressNextCloseAutoFocus,
 }: TerminalMenuCommandsOptions) {
@@ -88,7 +93,9 @@ export function useTerminalMenuCommands({
         runTerminalOutputMenuAction(
           actionId,
           {
-            openHoveredLink: () => void peekTerminalService()?.openHoveredLink(terminalId),
+            openHoveredLink: () => {
+              if (hoveredLinkRef.current) activateCapturedLink(hoveredLinkRef.current);
+            },
             openLink: (...args) => peekTerminalService()?.openLink(terminalId, ...args),
           },
           sourceRef.current
@@ -413,6 +420,7 @@ export function useTerminalMenuCommands({
       panelKindRegistry,
       registeredTourIds,
       sourceRef,
+      hoveredLinkRef,
       deferMenuDispatch,
       suppressNextCloseAutoFocus,
     ]

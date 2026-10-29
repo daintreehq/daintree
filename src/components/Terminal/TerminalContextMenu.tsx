@@ -10,6 +10,7 @@ import {
 } from "react";
 import type React from "react";
 import { type PanelLocation } from "@/types";
+import type { TerminalLink } from "@/services/terminal/types";
 import { usePanelStore } from "@/store";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
@@ -378,15 +379,6 @@ function TerminalContextMenuBody({
     [proxy, captureMovePickerAnchor]
   );
 
-  // Radix also opens the menu from a touch or pen long-press, which never
-  // raises the contextmenu event the capture above hangs off.
-  const captureMovePickerAnchorOnPress = useCallback(
-    (event: React.PointerEvent<HTMLElement>) => {
-      if (event.pointerType !== "mouse") captureMovePickerAnchor(event);
-    },
-    [captureMovePickerAnchor]
-  );
-
   const isWatched = usePanelStore((state) => state.watchedPanels.has(terminalId));
   const isArmed = useFleetArmingStore((s) => s.armedIds.has(terminalId));
   const fleetSize = useFleetArmingStore((s) => s.armedIds.size);
@@ -428,8 +420,18 @@ function TerminalContextMenuBody({
   const [hoveredUrl, setHoveredUrl] = useState<string | null>(null);
   // The plugin that claims the hovered URL (#13798), read with it on open.
   const [hoveredUrlPluginName, setHoveredUrlPluginName] = useState<string | null>(null);
+  // The hovered link itself, for "Open link": the hover ends as the pointer
+  // moves onto the menu, so the item cannot read it when it is chosen (#14960).
+  const hoveredLinkRef = useRef<TerminalLink | null>(null);
   const [hoveredFilePath, setHoveredFilePath] = useState<string | null>(null);
   const [hoveredFileKind, setHoveredFileKind] = useState<"file" | "directory" | null>(null);
+  const clearHoveredLink = useCallback(() => {
+    hoveredLinkRef.current = null;
+    setHoveredUrl(null);
+    setHoveredUrlPluginName(null);
+    setHoveredFilePath(null);
+    setHoveredFileKind(null);
+  }, []);
   const [selectedText, setSelectedText] = useState<string | null>(null);
   const suppressNextCloseAutoFocusRef = useRef(false);
   const [restartOnPresetRequest, setRestartOnPresetRequest] =
@@ -489,11 +491,8 @@ function TerminalContextMenuBody({
 
       const managed = peekTerminalService()?.get(terminalId) ?? null;
       if (!managed?.terminal) {
+        clearHoveredLink();
         setHasSelection(false);
-        setHoveredUrl(null);
-        setHoveredUrlPluginName(null);
-        setHoveredFilePath(null);
-        setHoveredFileKind(null);
         setSelectedText(null);
         return;
       }
@@ -503,12 +502,25 @@ function TerminalContextMenuBody({
       setHasSelection(!!selection);
       setSelectedText(selection || null);
       setHomeDir(systemClient.getCachedHomeDir());
+      hoveredLinkRef.current = managed.hoveredLink;
       setHoveredUrl(peekTerminalService()?.getHoveredLinkText(terminalId) ?? null);
       setHoveredUrlPluginName(peekTerminalService()?.getHoveredLinkPluginName(terminalId) ?? null);
       setHoveredFilePath(peekTerminalService()?.getHoveredFilePath(terminalId) ?? null);
       setHoveredFileKind(peekTerminalService()?.getHoveredFileKind(terminalId) ?? null);
     },
-    [handleTriggerContextMenu, terminalId, recentVoiceTargets]
+    [handleTriggerContextMenu, terminalId, recentVoiceTargets, clearHoveredLink]
+  );
+
+  // Radix also opens the menu from a touch or pen long-press, which never
+  // raises the contextmenu event the hover capture above hangs off, so the
+  // previous opening's link must not survive into this one.
+  const captureMovePickerAnchorOnPress = useCallback(
+    (event: React.PointerEvent<HTMLElement>) => {
+      if (event.pointerType === "mouse") return;
+      clearHoveredLink();
+      captureMovePickerAnchor(event);
+    },
+    [captureMovePickerAnchor, clearHoveredLink]
   );
 
   const terminalPty = terminal && isPtyPanel(terminal) ? terminal : undefined;
@@ -568,6 +580,7 @@ function TerminalContextMenuBody({
     panelKindRegistry,
     registeredTourIds,
     sourceRef,
+    hoveredLinkRef,
     deferMenuDispatch,
     suppressNextCloseAutoFocus,
   });

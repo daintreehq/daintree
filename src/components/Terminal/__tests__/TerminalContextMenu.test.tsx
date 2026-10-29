@@ -39,6 +39,7 @@ const {
   dispatch,
   hoveredUrl,
   hoveredUrlPlugin,
+  liveHoveredLink,
   openLink,
   hoveredFilePath,
   hoveredFileKind,
@@ -58,6 +59,7 @@ const {
   dispatch: vi.fn<(...args: unknown[]) => Promise<unknown>>(),
   hoveredUrl: { current: null as string | null },
   hoveredUrlPlugin: { current: null as string | null },
+  liveHoveredLink: { current: null as Record<string, unknown> | null },
   openLink: vi.fn(),
   hoveredFilePath: { current: null as string | null },
   hoveredFileKind: { current: "file" as "file" | "directory" | null },
@@ -92,7 +94,7 @@ vi.mock("@/services/TerminalInstanceService", () => {
   const terminalInstanceService = {
     // A live xterm is what unlocks the hovered-path branch; without it
     // `handleContextMenu` bails and clears every hover field.
-    get: () => ({ terminal: { getSelection: () => "" } }),
+    get: () => ({ terminal: { getSelection: () => "" }, hoveredLink: liveHoveredLink.current }),
     getTerminal: () => undefined,
     getSelection: () => "",
     getHoveredLinkText: () => hoveredUrl.current,
@@ -100,7 +102,10 @@ vi.mock("@/services/TerminalInstanceService", () => {
     openLink,
     getHoveredFilePath: () => hoveredFilePath.current,
     getHoveredFileKind: () => (hoveredFilePath.current ? hoveredFileKind.current : null),
-    openHoveredLink: vi.fn(),
+    // Reads the live hover, as the real service does: by the time an item is
+    // chosen it is already gone.
+    openHoveredLink: () =>
+      void (liveHoveredLink.current as { activate?: () => void } | null)?.activate?.(),
   };
   return {
     createTerminalPaintPlane: () => terminalInstanceService,
@@ -499,6 +504,145 @@ describe("TerminalContextMenu — open in file browser (#11483)", () => {
       { worktreeId: "wt-1", revealPath: "src/components", revealKind: "directory" },
       { source: "user" }
     );
+  });
+});
+
+/**
+ * Open link on a hovered link (#14960). The hover ends as the pointer leaves
+ * the terminal for the menu, so the item has to open the link the menu was
+ * opened on, not whatever is under the pointer when it is chosen.
+ */
+describe("TerminalContextMenu — Open link after the hover ends (#14960)", () => {
+  const URL_TEXT = "https://example.com/docs";
+
+  function link(text: string, kind: "url" | "file" | "directory" = "url") {
+    return {
+      kind,
+      text,
+      range: {},
+      activate: vi.fn<(event: MouseEvent, text: string) => unknown>(),
+    };
+  }
+
+  function hover(target: ReturnType<typeof link> | null) {
+    liveHoveredLink.current = target;
+    hoveredUrl.current = target?.text ?? null;
+  }
+
+  afterEach(() => {
+    hover(null);
+    hoveredFilePath.current = null;
+    hoveredFileKind.current = "file";
+    reportFileLinkFailure.mockReset();
+  });
+
+  it("opens the link the menu was opened on once the pointer has left it", async () => {
+    const opened = link(URL_TEXT);
+    hover(opened);
+    openMenu({ hovered: null });
+    hover(null);
+
+    await act(async () => screen.getByText("Open link").click());
+
+    expect(opened.activate).toHaveBeenCalledTimes(1);
+    const [event, text] = opened.activate.mock.calls[0]!;
+    expect(text).toBe(URL_TEXT);
+    expect(event).toBeInstanceOf(MouseEvent);
+    expect(event.metaKey || event.ctrlKey).toBe(false);
+  });
+
+  it("opens the link it was opened on, not another one the pointer crossed", async () => {
+    const opened = link(URL_TEXT);
+    const crossed = link("https://example.com/other");
+    hover(opened);
+    openMenu({ hovered: null });
+    hover(crossed);
+
+    await act(async () => screen.getByText("Open link").click());
+
+    expect(opened.activate).toHaveBeenCalledTimes(1);
+    expect(crossed.activate).not.toHaveBeenCalled();
+  });
+
+  it("opens a file link through its own activation", async () => {
+    const opened = link("./src/main.ts:12", "file");
+    hover(opened);
+    openMenu({ hovered: "/repo/src/main.ts" });
+    hover(null);
+
+    await act(async () => screen.getByText("Open link").click());
+
+    expect(opened.activate).toHaveBeenCalledTimes(1);
+    expect(opened.activate.mock.calls[0]![1]).toBe("./src/main.ts:12");
+  });
+
+  it("follows the link under the pointer at each opening", async () => {
+    const first = link(URL_TEXT);
+    const second = link("https://example.com/second");
+    hover(first);
+    const { container } = openMenu({ hovered: null });
+    hover(second);
+    act(() => {
+      container
+        .querySelector('[data-context-trigger="panel-1"]')!
+        .dispatchEvent(new MouseEvent("contextmenu", { bubbles: true }));
+    });
+    hover(null);
+
+    await act(async () => screen.getByText("Open link").click());
+
+    expect(second.activate).toHaveBeenCalledTimes(1);
+    expect(first.activate).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "rejects",
+      (activate: ReturnType<typeof link>["activate"], failure: Error) =>
+        activate.mockRejectedValue(failure),
+    ],
+    [
+      "throws",
+      (activate: ReturnType<typeof link>["activate"], failure: Error) =>
+        activate.mockImplementation(() => {
+          throw failure;
+        }),
+    ],
+  ])("reports a link whose activation %s instead of dropping it", async (_how, fail) => {
+    const failure = new Error("no handler");
+    const opened = link(URL_TEXT);
+    fail(opened.activate, failure);
+    hover(opened);
+    openMenu({ hovered: null });
+    hover(null);
+
+    await act(async () => screen.getByText("Open link").click());
+
+    expect(reportFileLinkFailure).toHaveBeenCalledWith(expect.any(String), failure, URL_TEXT);
+  });
+
+  it("does nothing for a menu that was opened without a link behind its URL", async () => {
+    hoveredUrl.current = URL_TEXT;
+    openMenu({ hovered: null });
+
+    await act(async () => screen.getByText("Open link").click());
+
+    expect(reportFileLinkFailure).not.toHaveBeenCalled();
+  });
+
+  it("does not carry a link into a touch or pen opening, which captures no hover", () => {
+    const earlier = link(URL_TEXT);
+    hover(earlier);
+    const { container } = openMenu({ hovered: null });
+    expect(screen.getByText("Open link")).toBeTruthy();
+
+    act(() => {
+      container
+        .querySelector('[data-context-trigger="panel-1"]')!
+        .dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerType: "touch" }));
+    });
+
+    expect(screen.queryByText("Open link")).toBeNull();
   });
 });
 

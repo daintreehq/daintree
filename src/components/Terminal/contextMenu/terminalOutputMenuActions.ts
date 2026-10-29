@@ -2,6 +2,7 @@ import { isRemoteWindow, isWslWindow } from "@/hooks/useHostPlatform";
 import { actionService } from "@/services/ActionService";
 import { reportFileLinkFailure } from "@/services/terminal/FileLinksAddon";
 import type { OpenLinkOptions } from "@/services/terminal/TerminalLinkHandler";
+import type { TerminalLink } from "@/services/terminal/types";
 import type { WorktreeScope } from "@shared/utils/path";
 import type { MenuActionSourceValue } from "@/components/ui/menu-source";
 import { copyWithToast } from "@/lib/copyWithToast";
@@ -12,6 +13,19 @@ export interface TerminalOutputMenuTarget {
   openHoveredLink(): void;
   /** Opens a URL the menu captured when it opened, from the run's own host. */
   openLink(url: string, options?: OpenLinkOptions): void;
+}
+
+/**
+ * Opens the link a menu captured when it opened, through its own activation so
+ * a URL, an OSC 8 link and a file path each route as a click on them would.
+ * The terminal's live hover is not read: it ends as the pointer reaches the menu.
+ */
+export function activateCapturedLink(link: TerminalLink): void {
+  void Promise.resolve()
+    .then(() => link.activate(new MouseEvent("click"), link.text))
+    .catch((error: unknown) =>
+      reportFileLinkFailure("Failed to activate hovered link", error, link.text)
+    );
 }
 
 /**
