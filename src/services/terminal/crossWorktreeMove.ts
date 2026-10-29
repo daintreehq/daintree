@@ -179,13 +179,15 @@ export function moveTerminalToWorktreeAndFollowRescue(
   // the panels have already been filed under.
   const movedPanelIds = collectMovedPanelIds(terminalId);
 
-  // Focus leaves only if it was inside what moved (#14974). A grid pane hands it
-  // on the way a close would, picked before the move for the same reason as the
-  // membership above; a source the user isn't standing in hands it to nobody,
-  // since focusing a pane there would switch worktrees under them. A dock pane's
-  // popover closes, and the dock has its own hand-back for that (#11133).
+  // Focus leaves only if it was inside what moved and the move takes it out of
+  // the worktree the user is in (#14974). A grid pane hands it on the way a close
+  // would, picked before the move for the same reason as the membership above; a
+  // source the user isn't standing in hands it to nobody, since focusing a pane
+  // there would switch worktrees under them. A dock pane's popover closes, and
+  // the dock has its own hand-back for that (#11133).
   const { focusedId, panelsById } = usePanelStore.getState();
   const movesFocus = focusedId !== null && movedPanelIds.includes(focusedId);
+  const focusStaysInView = targetWorktreeId === before.activeWorktreeId;
   const focusWasDocked = movesFocus && panelsById[focusedId]?.location === "dock";
   const focusSuccessor =
     movesFocus &&
@@ -199,11 +201,16 @@ export function moveTerminalToWorktreeAndFollowRescue(
     movesFocus &&
     usePanelStore.getState().panelsById[focusedId]?.worktreeId === targetWorktreeId
   ) {
-    if (focusWasDocked) usePanelStore.getState().closeDockTerminal(focusedId);
-    // The dock stands down for a popover it doesn't think is open, and focus
-    // still can't stay behind on a pane that has left.
-    if (usePanelStore.getState().focusedId === focusedId) {
-      usePanelStore.getState().setFocused(focusSuccessor);
+    if (focusStaysInView) {
+      // Re-asserted so a pane that left the dock for the grid drops the dock pointer.
+      usePanelStore.getState().setFocused(focusedId);
+    } else {
+      if (focusWasDocked) usePanelStore.getState().closeDockTerminal(focusedId);
+      // The dock stands down for a popover it doesn't think is open, and focus
+      // still can't stay behind on a pane that has left.
+      if (usePanelStore.getState().focusedId === focusedId) {
+        usePanelStore.getState().setFocused(focusSuccessor);
+      }
     }
   }
 

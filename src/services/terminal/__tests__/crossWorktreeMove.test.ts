@@ -574,6 +574,42 @@ describe("focus after a cross-worktree move (#14974)", () => {
     expect(usePanelStore.getState().focusedId).toBe("g1");
   });
 
+  it("keeps focus on a dock pane that lands in the worktree the user is in", () => {
+    const globalDock: PtyPanelData = { ...panel("d1", "wt-a", "dock"), worktreeId: undefined };
+    usePanelStore.setState({
+      panelsById: { d1: globalDock, g1: panel("g1", "wt-a") },
+      panelIds: ["d1", "g1"],
+      panelIdsByWorktreeId: { "wt-a": ["g1"] },
+    });
+    standIn("wt-a");
+    setLiveWorktrees(["wt-a"]);
+    usePanelStore.getState().setFocused("d1");
+
+    moveTerminalToWorktreeAndFollowRescue("d1", "wt-a");
+
+    // Still on screen, now in the grid: the pane keeps the keyboard and the dock
+    // lets go of it.
+    expect(usePanelStore.getState().panelsById["d1"]?.location).toBe("grid");
+    expect(usePanelStore.getState().focusedId).toBe("d1");
+    expect(usePanelStore.getState().activeDockTerminalId).toBeNull();
+  });
+
+  it("hands focus on in a view with no worktree selected", () => {
+    const loose = (id: string): PtyPanelData => ({ ...panel(id, "wt-a"), worktreeId: undefined });
+    usePanelStore.setState({
+      panelsById: { t1: loose("t1"), t2: loose("t2") },
+      panelIds: ["t1", "t2"],
+      panelIdsByWorktreeId: {},
+    });
+    useWorktreeSelectionStore.setState({ activeWorktreeId: null });
+    setLiveWorktrees(["wt-b"]);
+    usePanelStore.getState().setFocused("t1");
+
+    moveTerminalToWorktreeAndFollowRescue("t1", "wt-b");
+
+    expect(usePanelStore.getState().focusedId).toBe("t2");
+  });
+
   it("still lands on the destination's last-focused pane when rescuing the focused one", () => {
     seedPanels([panel("t1", "wt-dead"), panel("resident", "wt-live")]);
     useWorktreeSelectionStore.getState().addDeletedWorktree(deletedRow("wt-dead"));
