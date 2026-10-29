@@ -2667,9 +2667,9 @@ describe("GrokTranscriptionProvider", () => {
       for (let i = 0; i < 20; i++) provider.sendAudioChunk(chunk(i));
       expect(provider.getSessionStats().droppedConnect).toBeGreaterThan(0);
       expect(replayLossReportsOf(events)).toBe(1);
-      expect(events.some((e) => e.type === "error" && e.error.code === "audio_buffer_overflow")).toBe(
-        false
-      );
+      expect(
+        events.some((e) => e.type === "error" && e.error.code === "audio_buffer_overflow")
+      ).toBe(false);
       provider.stop();
 
       const next = await bringSessionReady(provider);
