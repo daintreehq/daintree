@@ -5,7 +5,12 @@ import { usePanelStore } from "@/store/panelStore";
 import { isMac } from "@/lib/platform";
 import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";
-import { isGridPanelLocation, isPtyPanel, type PanelInstance } from "@shared/types/panel";
+import {
+  isBrowserPanel,
+  isGridPanelLocation,
+  isPtyPanel,
+  type PanelInstance,
+} from "@shared/types/panel";
 import {
   hostForwardFailure,
   parseLoopbackLink,
@@ -38,7 +43,7 @@ function pickReusableBrowser(
   let bestUsedAt = 0;
   for (const id of panelIds) {
     const panel = panelsById[id];
-    if (!panel || panel.kind !== "browser" || (panel.worktreeId ?? null) !== worktreeId) continue;
+    if (!panel || !isBrowserPanel(panel) || (panel.worktreeId ?? null) !== worktreeId) continue;
     if (!isGridPanelLocation(panel.location) && panel.location !== "dock") continue;
     const stamp = panel.lastActiveAt;
     const usedAt = stamp !== undefined && Number.isFinite(stamp) && stamp > 0 ? stamp : 0;
@@ -107,6 +112,10 @@ export class TerminalLinkHandler {
 
       if (existingBrowser) {
         store.setBrowserUrl(existingBrowser.id, normalized.url);
+        // A group renders its stored tab over the focused one, so a pane behind
+        // another tab would take focus and stay hidden.
+        const group = store.getPanelGroup(existingBrowser.id);
+        if (group) store.setActiveTab(group.id, existingBrowser.id);
         store.activateTerminal(existingBrowser.id);
         // The store only records the address; the pane navigates (and, on a host, forwards) on this.
         actionService

@@ -4,8 +4,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const dispatch = vi.hoisted(() => vi.fn(() => Promise.resolve({ ok: true })));
 const notify = vi.hoisted(() => vi.fn());
 const addPanel = vi.hoisted(() => vi.fn(() => Promise.resolve("new")));
-const setBrowserUrl = vi.hoisted(() => vi.fn());
-const activateTerminal = vi.hoisted(() => vi.fn());
+const setBrowserUrl = vi.hoisted(() => vi.fn<(id: string, url: string) => void>());
+const activateTerminal = vi.hoisted(() => vi.fn<(id: string) => void>());
+const setActiveTab = vi.hoisted(() => vi.fn<(groupId: string, panelId: string) => void>());
+const getPanelGroup = vi.hoisted(() =>
+  vi.fn<(panelId: string) => { id: string; panelIds: string[] } | undefined>()
+);
 const activatePluginUrlLink = vi.hoisted(() => vi.fn<(url: string, id: string) => boolean>());
 const panelState = vi.hoisted(() => ({
   panelsById: {} as Record<string, unknown>,
@@ -19,7 +23,14 @@ vi.mock("@/lib/platform", () => ({ isMac: () => true }));
 vi.mock("../pluginTerminalLinks", () => ({ activatePluginUrlLink }));
 vi.mock("@/store/panelStore", () => ({
   usePanelStore: {
-    getState: () => ({ ...panelState, addPanel, setBrowserUrl, activateTerminal }),
+    getState: () => ({
+      ...panelState,
+      addPanel,
+      setBrowserUrl,
+      activateTerminal,
+      getPanelGroup,
+      setActiveTab,
+    }),
   },
 }));
 
@@ -51,6 +62,8 @@ beforeEach(() => {
   addPanel.mockClear();
   setBrowserUrl.mockClear();
   activateTerminal.mockClear();
+  setActiveTab.mockClear();
+  getPanelGroup.mockReset().mockReturnValue(undefined);
   panelState.panelsById = { t1: { id: "t1", kind: "terminal", cwd: "/repo", worktreeId: "w1" } };
   panelState.panelIds = ["t1"];
   Object.defineProperty(window, "electron", {
@@ -114,7 +127,7 @@ describe("which browser pane a modifier-click reuses (#14965)", () => {
 
   function navigatedPane(): string | undefined {
     new TerminalLinkHandler().openLink("http://localhost:5173/", "t1", cmdClick);
-    return setBrowserUrl.mock.calls[0]?.[0] as string | undefined;
+    return setBrowserUrl.mock.calls[0]?.[0];
   }
 
   it("takes the most recently used pane, not the first one created", () => {
@@ -178,6 +191,31 @@ describe("which browser pane a modifier-click reuses (#14965)", () => {
     addBrowser("c");
     addBrowser("d");
     expect(navigatedPane()).toBe("c");
+  });
+
+  it("treats a negative stamp as never used", () => {
+    addBrowser("negative", { location: "grid", lastActiveAt: -5 });
+    addBrowser("unstamped", { location: "grid" });
+    expect(navigatedPane()).toBe("negative");
+  });
+
+  it("brings a pane behind another tab forward before activating it", () => {
+    addBrowser("tabbed", { location: "grid", lastActiveAt: 2_000 });
+    getPanelGroup.mockImplementation((id) =>
+      id === "tabbed" ? { id: "g1", panelIds: ["other", "tabbed"] } : undefined
+    );
+    expect(navigatedPane()).toBe("tabbed");
+    expect(setActiveTab).toHaveBeenCalledExactlyOnceWith("g1", "tabbed");
+    expect(setActiveTab.mock.invocationCallOrder[0]).toBeLessThan(
+      activateTerminal.mock.invocationCallOrder[0]!
+    );
+  });
+
+  it("leaves tabs alone for a pane outside a group", () => {
+    addBrowser("loose", { location: "grid", lastActiveAt: 1_000 });
+    expect(navigatedPane()).toBe("loose");
+    expect(getPanelGroup).toHaveBeenCalledWith("loose");
+    expect(setActiveTab).not.toHaveBeenCalled();
   });
 
   it("reuses a legacy pane saved before panels had a location", () => {
