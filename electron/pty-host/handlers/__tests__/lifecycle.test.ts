@@ -45,6 +45,7 @@ function makeCtx(overrides: Partial<HostContext> = {}): HostContext {
     markChecked: vi.fn(),
     updateObservedTitle: vi.fn(),
     updateTitle: vi.fn(),
+    noteLiveAgentSessionId: vi.fn(),
     updateWorktreeId: vi.fn(),
     transitionState: vi.fn(() => true),
     trimScrollback: vi.fn(),
@@ -147,6 +148,17 @@ describe("lifecycle update-title handler", () => {
     dispatch({ type: "update-title", id: "t1", title: "Add valuation tool", titleMode: "user" });
 
     expect(ctx.ptyManager.updateTitle).toHaveBeenCalledWith("t1", "Add valuation tool", "user");
+  });
+});
+
+describe("lifecycle note-live-agent-session-id handler", () => {
+  it("forwards the generation the id was matched against", () => {
+    const ctx = makeCtx();
+    const dispatch = createPtyHostMessageDispatcher(ctx);
+
+    dispatch({ type: "note-live-agent-session-id", id: "t1", sessionId: "s1", launchGeneration: 4 });
+
+    expect(ctx.ptyManager.noteLiveAgentSessionId).toHaveBeenCalledWith("t1", "s1", 4);
   });
 });
 

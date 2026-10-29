@@ -22,7 +22,6 @@ import type { ProjectState, TerminalSnapshot } from "../../../shared/types/proje
 import { sanitizeFirstPrompt } from "../../../shared/utils/firstPrompt.js";
 import { createLogger } from "../../utils/logger.js";
 import { events } from "../events.js";
-import { projectStore } from "../ProjectStore.js";
 import type { PtyClient } from "../PtyClient.js";
 import {
   acceptLiveSessionAttribution,
@@ -56,6 +55,8 @@ export interface LiveAttributionPane {
   spawnedAtMs: number;
   /** The first prompt Daintree delivered to this run. Conversation text: never log it. */
   promptText: string;
+  /** The stored prompt was cut at its cap, so the thread's text runs on mid-word. */
+  promptTruncated?: boolean;
 }
 
 /**
@@ -70,6 +71,18 @@ function normalizePromptText(text: string): string {
 }
 
 /**
+ * Whether a thread's first message is the prompt, or the prompt with more
+ * after it. The only thing Daintree appends is a handback instruction after a
+ * blank line, so a whole prompt ends at the end of the message or at a space:
+ * "Triage #1" must not read as the start of "Triage #12". A prompt cut at its
+ * cap can end anywhere.
+ */
+function continuesPrompt(preview: string, prompt: string, truncated: boolean): boolean {
+  if (!preview.startsWith(prompt)) return false;
+  return truncated || preview.length === prompt.length || preview[prompt.length] === " ";
+}
+
+/**
  * Pair panes with the threads they started, or decline to.
  *
  * A thread fits a pane when it was created no earlier than the pane's process,
@@ -77,7 +90,8 @@ function normalizePromptText(text: string): string {
  * stored prompt can be cut at its cap and can be followed by an appended
  * handback, so it is a prefix of what the thread received, never the reverse.
  * A preview shorter than the prompt therefore fits nothing, which is the safe
- * reading of a server that truncates.
+ * reading of a server that truncates (codex-cli 0.165.0 reports the whole
+ * first message).
  *
  * A pair is accepted only when the pane fits exactly one thread and that
  * thread fits exactly one pane. Nothing is ranked or chosen by proximity: two
@@ -110,7 +124,8 @@ export function matchLiveCodexThreads(
     if (!prompt || !(spawnedAt > 0)) continue;
     const fits: string[] = [];
     for (const [sessionId, thread] of candidates) {
-      if (thread.createdAt < spawnedAt || !thread.preview.startsWith(prompt)) continue;
+      if (thread.createdAt < spawnedAt) continue;
+      if (!continuesPrompt(thread.preview, prompt, pane.promptTruncated === true)) continue;
       fits.push(sessionId);
       panesPerThread.set(sessionId, (panesPerThread.get(sessionId) ?? 0) + 1);
     }
@@ -203,9 +218,13 @@ export class CodexLiveSessionAttribution {
     this.deps = {
       ptyClient: deps.ptyClient,
       isQuitting: deps.isQuitting ?? (() => false),
-      getProjectState: deps.getProjectState ?? ((id) => projectStore.getProjectState(id)),
+      // Resolved on first use: the store's module constructs it, and this is
+      // built for every terminal-event registration, tests included.
+      getProjectState:
+        deps.getProjectState ??
+        (async (id) => (await import("../ProjectStore.js")).projectStore.getProjectState(id)),
       listThreads: deps.listThreads ?? listCodexThreadsCreatedSince,
-      persist: deps.persist ?? acceptLiveSessionAttribution,
+      persist: deps.persist ?? ((attribution) => acceptLiveSessionAttribution(attribution)),
       attemptDelaysMs: deps.attemptDelaysMs ?? ATTEMPT_DELAYS_MS,
     };
     this.unsubscribe = events.on("agent:state-changed", (payload) => {
@@ -380,6 +399,7 @@ export class CodexLiveSessionAttribution {
         terminalId: info.id,
         spawnedAtMs: info.spawnedAt,
         promptText: prompt.text,
+        ...(prompt.truncated && { promptTruncated: true }),
         projectId,
         identityRevision: revisions.get(info.id) ?? 0,
       });

@@ -614,6 +614,61 @@ describe("passive agent session capture", () => {
     });
   });
 
+  describe("an id Main attributed while the run was live (#15268)", () => {
+    const LIVE_ID = "019a0000-0000-7000-8000-00000000live";
+
+    it("is adopted only for the incarnation Main matched, and never over an id", () => {
+      const terminal = track(createTerminal());
+      promoteCodex(terminal);
+
+      terminal.noteLiveAgentSessionId(LIVE_ID, 6);
+      expect(terminal.getInfo().agentSessionId).toBeUndefined();
+
+      terminal.noteLiveAgentSessionId(LIVE_ID, 7);
+      expect(terminal.getInfo().agentSessionId).toBe(LIVE_ID);
+
+      terminal.noteLiveAgentSessionId("another", 7);
+      expect(terminal.getInfo().agentSessionId).toBe(LIVE_ID);
+    });
+
+    it("is refused once another agent session owns the pane", () => {
+      const later = track(createTerminal());
+      promoteCodex(later);
+      later.getInfo().agentIncarnation = 1;
+      later.noteLiveAgentSessionId(LIVE_ID, 7);
+      expect(later.getInfo().agentSessionId).toBeUndefined();
+
+      const other = track(createTerminal());
+      detect(other, makeAgentResult({ agentType: "claude", processIconId: "claude" }));
+      other.noteLiveAgentSessionId(LIVE_ID, 7);
+      expect(other.getInfo().agentSessionId).toBeUndefined();
+    });
+
+    it("still journals when the run dies with no farewell", async () => {
+      const terminal = track(createTerminal());
+      promoteCodex(terminal);
+      terminal.noteLiveAgentSessionId(LIVE_ID, 7);
+      mockPty(terminal).__emitData("thinking\n");
+      mockPty(terminal).__emitExit(1);
+
+      await flushCapture();
+      expect(captured).toHaveLength(1);
+      expect(captured[0].record.sessionId).toBe(LIVE_ID);
+      expect(captured[0].launchGeneration).toBe(7);
+    });
+
+    it("gives way to a farewell naming the conversation the run ended in", async () => {
+      const terminal = track(createTerminal());
+      promoteCodex(terminal);
+      terminal.noteLiveAgentSessionId(LIVE_ID, 7);
+      mockPty(terminal).__emitData(`${codexHint(SESSION_ID)}\n`);
+      mockPty(terminal).__emitExit(0);
+
+      await flushCapture();
+      expect(captured.map((c) => c.record.sessionId)).toEqual([SESSION_ID]);
+    });
+  });
+
   describe("a launched run that ends without a farewell (#13226)", () => {
     const LAUNCH_ID = "01a124b5-0000-7000-8000-000000000001";
 
