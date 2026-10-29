@@ -1,16 +1,6 @@
-import type { RecipeTerminal, TerminalRecipe } from "@shared/types/project";
+import type { TerminalRecipe } from "@shared/types/project";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-
-/** Everything about one terminal that decides what runs, as the recipe in the repository says. */
-function describeTerminal(terminal: RecipeTerminal): string[] {
-  const lines: string[] = [];
-  const head = terminal.command ?? terminal.devCommand ?? terminal.type;
-  lines.push(terminal.args ? `${head} ${terminal.args}` : head);
-  if (terminal.command && terminal.devCommand) lines.push(`dev server: ${terminal.devCommand}`);
-  for (const [key, value] of Object.entries(terminal.env ?? {})) lines.push(`${key}=${value}`);
-  if (terminal.initialPrompt) lines.push(`prompt: ${terminal.initialPrompt}`);
-  return lines;
-}
+import { describeTerminal } from "@/components/TerminalRecipe/recipeConfirmPreview";
 
 /**
  * Before a setup recipe that came with a cloned project runs, show the
@@ -40,7 +30,7 @@ export function HostSetupRecipeConfirm({
       <ol className="max-h-72 space-y-2 overflow-y-auto font-mono text-xs text-text-secondary select-text">
         {recipe.terminals.map((terminal, index) => (
           <li key={index} className="space-y-0.5">
-            {describeTerminal(terminal).map((line, lineIndex) => (
+            {describeTerminal(terminal, { full: true }).map((line, lineIndex) => (
               <p key={lineIndex} className="break-all whitespace-pre-wrap">
                 {line}
               </p>

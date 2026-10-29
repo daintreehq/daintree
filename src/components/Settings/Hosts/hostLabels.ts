@@ -173,7 +173,7 @@ export function localNameSuggestion(sshTarget: string, sshError: string | null):
 
 /** A target as one shell word: the host list accepts `[` and `]`, which a shell reads as a glob. */
 export function shellWord(target: string): string {
-  return /^[\w@.%+-]+$/.test(target) ? target : `'${target}'`;
+  return /^[\w@.%+-]+$/.test(target) ? target : `'${target.replace(/'/g, "'\\''")}'`;
 }
 
 export type SshRefusalAdvice = "untrusted-host-key" | "changed-host-key" | "login-refused";

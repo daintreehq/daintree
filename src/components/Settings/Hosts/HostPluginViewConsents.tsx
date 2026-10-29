@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { remoteHostsClient } from "@/clients/remoteHostsClient";
 import type { PluginViewConsentEntry } from "@shared/types/ipc/remoteHosts";
@@ -17,82 +17,136 @@ function pluginLabel(pluginId: string): string {
   return parts[parts.length - 1] ?? pluginId;
 }
 
+type ListState =
+  | { status: "loading" }
+  | { status: "loaded"; plugins: PluginViewConsentEntry[] }
+  /** `plugins` is the last list read, kept while a later read failed. */
+  | { status: "failed"; message: string; plugins: PluginViewConsentEntry[] | null };
+
 /**
  * The host plugins this computer was asked about running the view code of:
  * the ones allowed, and the ones refused this run. Resetting forgets the
  * answer, so the plugin asks again before its view next loads.
  */
 export function HostPluginViewConsents({ hostId, hostName }: HostPluginViewConsentsProps) {
-  const [plugins, setPlugins] = useState<PluginViewConsentEntry[]>([]);
-  const [error, setError] = useState<string | null>(null);
+  const [list, setList] = useState<ListState>({ status: "loading" });
+  const [resetErrors, setResetErrors] = useState<Record<string, string>>({});
+  const [resetting, setResetting] = useState<ReadonlySet<string>>(() => new Set());
+  // Read before React commits, so a second press can't start a second reset.
+  const resettingRef = useRef(new Set<string>());
+  // Only the latest read lands: an older one finishing late would bring back a reset row.
+  const loadSeq = useRef(0);
 
   const load = useCallback(() => {
+    const seq = ++loadSeq.current;
     remoteHostsClient.listPluginViewConsents(hostId).then(
-      (next) => {
-        setPlugins(next);
-        setError(null);
+      (plugins) => {
+        if (seq === loadSeq.current) setList({ status: "loaded", plugins });
       },
-      (err: unknown) => setError(clientErrorText(err, "Couldn't load plugin views"))
+      (err: unknown) => {
+        if (seq !== loadSeq.current) return;
+        setList((prev) => ({
+          status: "failed",
+          message: clientErrorText(err, "Couldn't load plugin views"),
+          plugins: prev.status === "loading" ? null : prev.plugins,
+        }));
+      }
     );
   }, [hostId]);
 
   useEffect(() => {
     load();
+    return () => {
+      loadSeq.current += 1;
+    };
   }, [load]);
 
   const reset = (pluginId: string) => {
-    remoteHostsClient
-      .resetPluginViewConsent(hostId, pluginId)
-      .then(load, (err: unknown) =>
-        setError(clientErrorText(err, "Couldn't reset the plugin view"))
-      );
+    if (resettingRef.current.has(pluginId)) return;
+    resettingRef.current.add(pluginId);
+    setResetting(new Set(resettingRef.current));
+    setResetErrors(({ [pluginId]: _previous, ...rest }) => rest);
+    const settle = () => {
+      resettingRef.current.delete(pluginId);
+      setResetting(new Set(resettingRef.current));
+    };
+    remoteHostsClient.resetPluginViewConsent(hostId, pluginId).then(
+      () => {
+        settle();
+        load();
+      },
+      (err: unknown) => {
+        settle();
+        const why = clientErrorText(err, "");
+        setResetErrors((prev) => ({
+          ...prev,
+          [pluginId]: why ? `Couldn't reset it: ${why}` : "Couldn't reset it",
+        }));
+      }
+    );
   };
+
+  const plugins = list.status === "loading" ? null : list.plugins;
 
   return (
     <SettingsSection
       title="Plugin views"
       description={`Plugins from ${hostName} you were asked about running on this computer. A view already open keeps running until its window reloads.`}
     >
-      <SettingsGroup>
-        {error !== null && (
-          <SettingsRow
-            label="Couldn't load plugin views"
-            description={<span role="alert">{error}</span>}
-            control={
-              <Button variant="outline" size="sm" onClick={load}>
-                Retry
-              </Button>
-            }
-          />
-        )}
-        {plugins.length === 0 ? (
-          <SettingsEmptyRow>
-            No plugin from {hostName} has asked to run its view here
-          </SettingsEmptyRow>
-        ) : (
-          plugins.map(({ pluginId, state }) => (
+      {/* Nothing is claimed about the list until it has been read. */}
+      {list.status !== "loading" && (
+        <SettingsGroup>
+          {list.status === "failed" && (
             <SettingsRow
-              key={pluginId}
-              label={pluginLabel(pluginId)}
-              description={
-                state === "allowed"
-                  ? "Allowed. A changed plugin asks again."
-                  : "Blocked until Daintree restarts here"
-              }
+              label="Couldn't load plugin views"
+              description={<span role="alert">{list.message}</span>}
               control={
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => reset(pluginId)}
-                  aria-label={`Reset the plugin view for ${pluginLabel(pluginId)}`}
-                >
-                  Reset
+                <Button variant="outline" size="sm" onClick={load}>
+                  Retry
                 </Button>
               }
             />
-          ))
-        )}
-      </SettingsGroup>
+          )}
+          {list.status === "loaded" && list.plugins.length === 0 && (
+            <SettingsEmptyRow>
+              No plugin from {hostName} has asked to run its view here
+            </SettingsEmptyRow>
+          )}
+          {plugins?.map(({ pluginId, state }) => {
+            const label = pluginLabel(pluginId);
+            const failed = resetErrors[pluginId];
+            const pending = resetting.has(pluginId);
+            return (
+              <SettingsRow
+                key={pluginId}
+                label={label}
+                description={
+                  state === "allowed"
+                    ? "Allowed. A changed plugin asks again."
+                    : "Blocked until Daintree restarts here"
+                }
+                error={failed ? <span role="alert">{failed}</span> : undefined}
+                control={
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => reset(pluginId)}
+                    disabled={pending}
+                    loading={pending}
+                    aria-label={
+                      failed
+                        ? `Retry resetting the plugin view for ${label}`
+                        : `Reset the plugin view for ${label}`
+                    }
+                  >
+                    {failed ? "Retry" : "Reset"}
+                  </Button>
+                }
+              />
+            );
+          })}
+        </SettingsGroup>
+      )}
     </SettingsSection>
   );
 }

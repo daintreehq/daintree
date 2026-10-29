@@ -42,6 +42,8 @@ export interface DeviceAnswerStatus {
   listening: boolean;
   port: number;
   tailnetHost: string | null;
+  /** This machine as `ssh` on a device would reach it: the login at the hostname. */
+  sshTarget: string;
   /** Why the listener isn't up although it's on, in words Settings shows as is. */
   error: string | null;
   /** The open pairing code, formatted for reading, until it expires or is used. */
