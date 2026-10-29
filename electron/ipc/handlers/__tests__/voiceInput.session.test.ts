@@ -1556,24 +1556,41 @@ describe("voiceInput — session identity", () => {
       expect(await refused(ownerA, "fix the bug")).toMatchObject(TOLD);
     });
 
+    // A frame as Electron gives it: its token belongs to one document, and
+    // reading it once the frame is gone throws.
+    const askingFrame = () => {
+      const frame = {
+        token: "t1",
+        destroyed: false,
+        isDestroyed: () => frame.destroyed,
+        get frameToken() {
+          if (frame.destroyed) throw new Error("Render frame was disposed");
+          return frame.token;
+        },
+      };
+      return frame;
+    };
+    type AskingFrame = ReturnType<typeof askingFrame>;
+
+    it("tells a view whose frame is still the one that asked", async () => {
+      await start(ownerA, "a");
+      await stop(ownerA, "a");
+      const reply = getHandler(CHANNELS.VOICE_INPUT_CORRECT)(
+        { sender: ownerA, senderFrame: askingFrame() },
+        { rawText: "fix the bug", sessionId: "a" }
+      );
+      (await nextRequest("fix the bug")).refuse("key_rejected");
+      expect(await reply).toMatchObject(TOLD);
+    });
+
     it.each([
       // The frame follows the reload to the new document, with a new token.
-      [
-        "reloaded",
-        (frame: { frameToken: string; destroyed: boolean }) => (frame.frameToken = "t2"),
-      ],
-      [
-        "lost its frame",
-        (frame: { frameToken: string; destroyed: boolean }) => (frame.destroyed = true),
-      ],
+      ["reloaded", (frame: AskingFrame) => (frame.token = "t2")],
+      ["lost its frame", (frame: AskingFrame) => (frame.destroyed = true)],
     ])("tells nothing to a view that %s since it asked", async (_label, leave) => {
       await start(ownerA, "a");
       await stop(ownerA, "a");
-      const frame = {
-        frameToken: "t1",
-        destroyed: false,
-        isDestroyed: () => frame.destroyed,
-      };
+      const frame = askingFrame();
       const reply = getHandler(CHANNELS.VOICE_INPUT_CORRECT)(
         { sender: ownerA, senderFrame: frame },
         { rawText: "fix the bug", sessionId: "a" }
