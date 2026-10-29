@@ -1035,7 +1035,7 @@ export function HelpPanel({
   const dismissTierMismatch = useCallback(() => controller.dismissTierMismatch(), [controller]);
   const approveTierOnce = useCallback(() => controller.approveTierOnce(), [controller]);
   const alwaysAllowTier = useCallback(() => controller.alwaysAllowTier(), [controller]);
-  const revokeGrant = useCallback(() => controller.revokeGrant(), [controller]);
+  const revokeGrant = useCallback((key: string) => controller.revokeGrant(key), [controller]);
   const dismissGrantEnded = useCallback(() => controller.dismissGrantEnded(), [controller]);
   const cancelLaunch = useCallback(() => controller.cancelLaunch(), [controller]);
   const checkVersionAgain = useCallback(() => controller.checkVersionAgain(), [controller]);
@@ -1219,9 +1219,9 @@ export function HelpPanel({
             launchError={session.launchError}
             sessionRevoked={session.sessionRevoked}
             isApprovingTier={session.isApprovingTier}
-            activeGrant={session.activeGrant}
+            activeGrants={session.activeGrants}
             grantEnded={session.grantEnded}
-            isRevokingGrant={session.isRevokingGrant}
+            revokingGrantKeys={session.revokingGrantKeys}
             onDismissResume={dismissResume}
             onDismissTierMismatch={dismissTierMismatch}
             onApproveOnce={approveTierOnce}

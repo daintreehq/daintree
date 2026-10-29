@@ -148,14 +148,16 @@ export interface McpToolActivityState {
 }
 
 /**
- * The live per-`(sessionId, toolId)` grant minted by "Approve once" (#10042).
- * Drives the ambient countdown banner in the Help Panel. `expiresAt` is the
- * absolute epoch-ms the grant would lapse without further use — the renderer
- * counts down against it without polling (the `issueGrant` result and the
- * `grant.issued` lifecycle event both carry it). Single-slot: the most
- * recently issued grant is the one shown.
+ * One live grant the session holds (#10042): a per-`(sessionId, toolId)` grant
+ * minted by "Approve once", or a native automation grant. Drives the ambient
+ * countdown banner in the Help Panel. `expiresAt` is the absolute epoch-ms the
+ * grant would lapse without further use — the renderer counts down against it
+ * without polling (the `grant.issued` lifecycle event carries it). A session
+ * can hold several at once, so the snapshot keeps every one (#14975).
  */
 export interface ActiveGrantState {
+  /** Identity within the list: the tool for a per-tool grant, the id for a native one. */
+  key: string;
   sessionId: string;
   toolId: string;
   expiresAt: number;
@@ -164,6 +166,8 @@ export interface ActiveGrantState {
   ttlMs: number;
   /** Set for a native automation grant, whose `toolId` is always `"*"`. */
   grantId?: string;
+  /** The tools a native automation grant covers. */
+  allowedTools?: string[];
 }
 
 /**
@@ -198,12 +202,12 @@ export interface HelpSessionSnapshot {
   mcpActivity: McpToolActivityState | null;
   /** Set when the abuse policy revoked the active session (#10017); null otherwise. */
   sessionRevoked: SessionRevokedState | null;
-  /** The live "Approve once" grant being counted down (#10042); null when none. */
-  activeGrant: ActiveGrantState | null;
-  /** Brief notice that the watched grant lapsed (#10042); null when none. */
+  /** Every live grant being counted down (#10042, #14975), oldest first. */
+  activeGrants: readonly ActiveGrantState[];
+  /** Brief notice that a watched grant lapsed (#10042); null when none. */
   grantEnded: GrantEndedState | null;
-  /** True while a user-initiated grant revoke is in flight (#10042). */
-  isRevokingGrant: boolean;
+  /** Keys of the grants whose user-initiated revoke is in flight (#10042). */
+  revokingGrantKeys: readonly string[];
   /**
    * Most recent alertable turn outcome (`agent-stuck` / `reasoning-loop`) for
    * the bound help session (#10018); null when none is pending. Drives the
@@ -341,9 +345,9 @@ const INITIAL_SNAPSHOT: HelpSessionSnapshot = Object.freeze({
   launchError: null,
   mcpActivity: null,
   sessionRevoked: null,
-  activeGrant: null,
+  activeGrants: [],
   grantEnded: null,
-  isRevokingGrant: false,
+  revokingGrantKeys: [],
   outcomeAlert: null,
 });
 
@@ -1009,8 +1013,8 @@ export class HelpSessionController {
     this._mcpTracker.dismissGrantEnded();
   }
 
-  revokeGrant(): void {
-    this._mcpTracker.revokeGrant();
+  revokeGrant(key: string): void {
+    this._mcpTracker.revokeGrant(key);
   }
 
   approveTierOnce(): void {
@@ -1155,9 +1159,9 @@ export class HelpSessionController {
       next.launchError === this._snapshot.launchError &&
       next.mcpActivity === this._snapshot.mcpActivity &&
       next.sessionRevoked === this._snapshot.sessionRevoked &&
-      next.activeGrant === this._snapshot.activeGrant &&
+      next.activeGrants === this._snapshot.activeGrants &&
       next.grantEnded === this._snapshot.grantEnded &&
-      next.isRevokingGrant === this._snapshot.isRevokingGrant &&
+      next.revokingGrantKeys === this._snapshot.revokingGrantKeys &&
       next.outcomeAlert === this._snapshot.outcomeAlert
     ) {
       return;

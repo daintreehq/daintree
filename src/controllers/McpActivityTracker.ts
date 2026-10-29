@@ -21,9 +21,10 @@ const GRANT_ENDED_BANNER_AUTO_DISMISS_MS = 15_000;
 
 // Native grants are told apart by `grantId` (their lazy expiry names the tool
 // that tripped it, not "*"); per-tool grants, which carry none, by tool.
-function isSameGrant(active: ActiveGrantState, payload: McpGrantLifecyclePayload): boolean {
-  if (active.sessionId !== payload.sessionId || active.grantId !== payload.grantId) return false;
-  return active.grantId !== undefined || active.toolId === payload.toolId;
+function grantKeyOf(payload: McpGrantLifecyclePayload): string {
+  return payload.grantId !== undefined
+    ? `native:${payload.sessionId}:${payload.grantId}`
+    : `tool:${payload.sessionId}:${payload.toolId}`;
 }
 
 export interface McpActivityTrackerHost {
@@ -188,44 +189,41 @@ export class McpActivityTracker {
   }
 
   /**
-   * End the live per-tool grant early (#10042). Revokes every grant on
-   * the session — the help session only ever holds one per-tool grant at a
-   * time, so this maps to the single banner the user sees. Normally the
-   * `grant.revoked` lifecycle event (reason `user`) clears the banner first;
-   * the `.then` clears `activeGrant` as a renderer-authoritative fallback so a
-   * dropped event (WebContents torn down before it fired) can't leave a zombie
-   * countdown. The fallback runs only on success and is scoped to the exact
-   * `(session, toolId)` we revoked, so a failed revoke leaves the banner up as
-   * its own retry surface and a newer grant that arrived meanwhile survives.
-   * No `ConfirmDialog` — this is a D1 action whose inverse (re-approve) is one
-   * tool call away.
+   * End one live grant early (#10042), leaving the session's others alone
+   * (#14975): a per-tool grant by its `(session, toolId)`, a native automation
+   * grant by its id. Normally the `grant.revoked` lifecycle event (reason
+   * `user`) removes its row first; the `.then` removes it as a
+   * renderer-authoritative fallback so a dropped event (WebContents torn down
+   * before it fired) can't leave a zombie countdown. The fallback runs only on
+   * success, so a failed revoke leaves the row up as its own retry surface.
+   * No `ConfirmDialog` — the inverse (re-approve) is one tool call away.
    */
-  revokeGrant(): void {
-    const active = this.host.getSnapshot().activeGrant;
-    if (!active || this.host.getSnapshot().isRevokingGrant) return;
-    const { sessionId, toolId } = active;
-    this.host.patch({ isRevokingGrant: true });
+  revokeGrant(key: string): void {
+    const { activeGrants, revokingGrantKeys } = this.host.getSnapshot();
+    const grant = activeGrants.find((g) => g.key === key);
+    if (!grant || revokingGrantKeys.includes(key)) return;
+    this.host.patch({ revokingGrantKeys: [...revokingGrantKeys, key] });
+    const request: Promise<unknown> =
+      grant.grantId !== undefined
+        ? window.electron.mcpServer.revokeNativeGrant({ grantId: grant.grantId })
+        : window.electron.mcpServer.revokeGrant({
+            sessionId: grant.sessionId,
+            toolId: grant.toolId,
+          });
     safeFireAndForget(
-      window.electron.mcpServer
-        .revokeSessionGrants({ sessionId })
+      request
         .then(() => {
-          // Renderer-authoritative clear on success: normally the
-          // `grant.revoked` (reason `user`) lifecycle event already cleared the
-          // banner; this covers a dropped event (WebContents torn down before
-          // it fired). Scoped to the exact `(session, toolId)` we revoked so a
-          // newer grant that arrived in the meantime survives.
-          const current = this.host.getSnapshot().activeGrant;
-          if (current?.sessionId === sessionId && current?.toolId === toolId) {
-            this.host.patch({ activeGrant: null });
-          }
+          this._removeGrant(key);
         })
         .catch((err) => {
-          // The grant is still live and its countdown banner stays put, so the
-          // banner itself is the retry surface — diagnostic only, no toast.
-          logError("HelpPanel: revokeSessionGrants failed", err);
+          // The grant is still live and its row stays put, so the row itself
+          // is the retry surface — diagnostic only, no toast.
+          logError("HelpPanel: revokeGrant failed", err);
         })
         .finally(() => {
-          this.host.patch({ isRevokingGrant: false });
+          const pending = this.host.getSnapshot().revokingGrantKeys;
+          if (!pending.includes(key)) return;
+          this.host.patch({ revokingGrantKeys: pending.filter((k) => k !== key) });
         }),
       { context: "HelpPanel:revokeGrant" }
     );
@@ -436,37 +434,46 @@ export class McpActivityTracker {
   }
 
   /**
-   * Consume a live grant lifecycle push (#10042). `grant.issued` arms the
-   * countdown banner and dismisses the mismatch that prompted it;
-   * `grant.refreshed` moves its deadline after a use slides it (#14998);
-   * `grant.expired`/`grant.revoked` retire the banner and, for the two
-   * user-actionable reasons, surface a brief "approval ended" notice. The
-   * `refreshed`/`expired`/`revoked` cases are scoped to the grant currently on
-   * screen, so a push for a different tool can't move or wipe the countdown,
-   * and a refresh never re-arms a banner that's already gone.
-   * `tier.elevated`/`tier.decayed` are session-tier transitions, not per-tool
-   * grants — they leave the countdown untouched (the audit viewer records
-   * them). Native automation grants (#10648) all share `toolId: "*"`, so the
-   * on-screen grant is matched by `grantId` when it has one, or one native
-   * grant's use would move another's countdown.
+   * Consume a live grant lifecycle push (#10042). `grant.issued` adds the
+   * grant's countdown (or replaces the same grant's, on a re-approval) and
+   * dismisses the mismatch that prompted it; `grant.refreshed` moves its
+   * deadline after a use slides it (#14998); `grant.expired`/`grant.revoked`
+   * retire its row and, for the two user-actionable reasons, surface a brief
+   * "approval ended" notice; a native grant's `grant.exhausted` retires its row
+   * silently. Every case but `issued` touches only the grant it names, so a
+   * push for one tool can't move or wipe another's countdown, and a refresh
+   * never re-arms a row that's already gone. `tier.elevated`/`tier.decayed`
+   * are session-tier transitions, not grants — they leave the countdowns
+   * untouched (the audit viewer records them). Native automation grants
+   * (#10648) all share `toolId: "*"`, so they are matched by `grantId`, or one
+   * native grant's use would move another's countdown.
    */
   private _onGrantLifecycle(
     payload: import("@shared/types/ipc/mcpServer").McpGrantLifecyclePayload
   ): void {
+    const key = grantKeyOf(payload);
+    const { activeGrants } = this.host.getSnapshot();
     if (payload.type === "grant.issued") {
       // `expiresAt` is always set on `grant.issued`; bail defensively if a
       // malformed payload omits it rather than seed a NaN countdown.
       if (payload.expiresAt === undefined) return;
       this._clearGrantEndedTimer();
+      const grant: ActiveGrantState = {
+        key,
+        sessionId: payload.sessionId,
+        toolId: payload.toolId,
+        expiresAt: payload.expiresAt,
+        maxExpiresAt: payload.maxExpiresAt,
+        ttlMs: payload.ttlMs,
+        grantId: payload.grantId,
+        allowedTools: payload.allowedTools,
+      };
+      const index = activeGrants.findIndex((g) => g.key === key);
       this.host.patch({
-        activeGrant: {
-          sessionId: payload.sessionId,
-          toolId: payload.toolId,
-          expiresAt: payload.expiresAt,
-          maxExpiresAt: payload.maxExpiresAt,
-          ttlMs: payload.ttlMs,
-          grantId: payload.grantId,
-        },
+        activeGrants:
+          index === -1
+            ? [...activeGrants, grant]
+            : activeGrants.map((g, i) => (i === index ? grant : g)),
         grantEnded: null,
       });
       // The mint resolves the mismatch that triggered it. Idempotent with the
@@ -474,28 +481,38 @@ export class McpActivityTracker {
       this._clearTierMismatchIfStillCurrent(payload.sessionId, payload.toolId);
       return;
     }
-    const active = this.host.getSnapshot().activeGrant;
-    if (!active || !isSameGrant(active, payload)) return;
+    const active = activeGrants.find((g) => g.key === key);
+    if (!active) return;
     if (payload.type === "grant.refreshed") {
       if (payload.expiresAt === undefined) return;
+      const expiresAt = payload.expiresAt;
       this.host.patch({
-        activeGrant: {
-          ...active,
-          expiresAt: payload.expiresAt,
-          maxExpiresAt: payload.maxExpiresAt ?? active.maxExpiresAt,
-        },
+        activeGrants: activeGrants.map((g) =>
+          g === active
+            ? { ...g, expiresAt, maxExpiresAt: payload.maxExpiresAt ?? g.maxExpiresAt }
+            : g
+        ),
       });
       return;
     }
-    if (payload.type === "grant.expired" || payload.type === "grant.revoked") {
-      const reason = this._grantEndReason(payload);
-      this._clearGrantEndedTimer();
-      this.host.patch({
-        activeGrant: null,
-        grantEnded: reason ? { toolId: active.toolId, reason } : null,
-      });
-      if (reason) this._armGrantEndedAutoDismiss();
+    if (payload.type === "grant.exhausted") {
+      this._removeGrant(key);
+      return;
     }
+    if (payload.type === "grant.expired" || payload.type === "grant.revoked") {
+      this._removeGrant(key);
+      const reason = this._grantEndReason(payload);
+      if (!reason) return;
+      this._clearGrantEndedTimer();
+      this.host.patch({ grantEnded: { toolId: active.toolId, reason } });
+      this._armGrantEndedAutoDismiss();
+    }
+  }
+
+  private _removeGrant(key: string): void {
+    const { activeGrants } = this.host.getSnapshot();
+    if (!activeGrants.some((g) => g.key === key)) return;
+    this.host.patch({ activeGrants: activeGrants.filter((g) => g.key !== key) });
   }
 
   /**
@@ -512,9 +529,9 @@ export class McpActivityTracker {
 
   clearGrantState(): void {
     this._clearGrantEndedTimer();
-    // Clear `isRevokingGrant` too: a teardown mid-revoke would otherwise leak
-    // a stuck-disabled "Revoke access" button into the next session's grant.
-    this.host.patch({ activeGrant: null, grantEnded: null, isRevokingGrant: false });
+    // Clear the in-flight revokes too: a teardown mid-revoke would otherwise
+    // leak a stuck-disabled "Revoke access" button into the next session.
+    this.host.patch({ activeGrants: [], grantEnded: null, revokingGrantKeys: [] });
   }
 
   private _clearGrantEndedTimer(): void {
