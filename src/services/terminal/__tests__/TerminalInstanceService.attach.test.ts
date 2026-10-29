@@ -321,10 +321,10 @@ describe("TerminalInstanceService attach reveal", () => {
       const container = document.createElement("div");
       if (onPage) document.body.appendChild(container);
       service.attach(managed.id, container);
-      const outcome = { settled: false };
+      const outcome = { state: "pending" };
       void service.waitForAttachSettled(managed.id, { timeoutMs: 1000 }).then(
-        () => (outcome.settled = true),
-        () => {}
+        () => (outcome.state = "settled"),
+        () => (outcome.state = "rejected")
       );
       return outcome;
     };
@@ -337,12 +337,12 @@ describe("TerminalInstanceService attach reveal", () => {
         const outcome = attachAndWait(makeMockManaged("t1"));
 
         await vi.advanceTimersByTimeAsync(16);
-        expect(outcome.settled).toBe(false);
+        expect(outcome.state).toBe("pending");
 
         // The second frame, well inside the deadline: the settle step releases it.
         await vi.advanceTimersByTimeAsync(16);
         expect(fit).toHaveBeenCalledWith("t1");
-        expect(outcome.settled).toBe(true);
+        expect(outcome.state).toBe("settled");
       } finally {
         fit.mockRestore();
       }
@@ -359,7 +359,7 @@ describe("TerminalInstanceService attach reveal", () => {
 
       await vi.advanceTimersByTimeAsync(16);
       expect(managed.isAttaching).toBe(false);
-      expect(outcome.settled).toBe(true);
+      expect(outcome.state).toBe("settled");
     });
 
     it("still releases its waiters when the reveal throws", async () => {
@@ -370,7 +370,7 @@ describe("TerminalInstanceService attach reveal", () => {
       const outcome = attachAndWait(managed);
 
       await vi.advanceTimersByTimeAsync(16);
-      expect(outcome.settled).toBe(true);
+      expect(outcome.state).toBe("settled");
     });
 
     it("leaves its waiters pending when the attach still hasn't settled", async () => {
@@ -381,7 +381,11 @@ describe("TerminalInstanceService attach reveal", () => {
       const outcome = attachAndWait(managed, false);
 
       await vi.advanceTimersByTimeAsync(32);
-      expect(outcome.settled).toBe(false);
+      expect(outcome.state).toBe("pending");
+
+      // Run it out, so no waiter outlives the test on the shared service.
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(outcome.state).toBe("rejected");
     });
   });
 
