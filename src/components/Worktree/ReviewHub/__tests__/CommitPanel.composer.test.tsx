@@ -159,4 +159,27 @@ describe("CommitPanel composer", () => {
     for (const button of buttons) expect(button.textContent).not.toMatch(/\(0\)/);
     expect(screen.getByTestId("review-hub-commit-status").textContent).not.toMatch(/0 files/);
   });
+
+  describe("history keys at the caret start", () => {
+    function pressAtStart(key: string, init: { shiftKey?: boolean } = {}) {
+      renderPanel({ commitMessage: "subject\nbody" });
+      const box = screen.getByLabelText("Commit message") as HTMLTextAreaElement;
+      box.setSelectionRange(0, 0);
+      return fireEvent.keyDown(box, { key, ...init });
+    }
+
+    it("leaves Down alone when no message was recalled", () => {
+      expect(pressAtStart("ArrowDown")).toBe(true);
+    });
+
+    it("leaves Shift+Down and Shift+Up to text selection", () => {
+      expect(pressAtStart("ArrowDown", { shiftKey: true })).toBe(true);
+      cleanup();
+      expect(pressAtStart("ArrowUp", { shiftKey: true })).toBe(true);
+    });
+
+    it("still claims Up at the start for history recall", () => {
+      expect(pressAtStart("ArrowUp")).toBe(false);
+    });
+  });
 });
