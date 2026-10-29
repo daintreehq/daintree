@@ -826,7 +826,10 @@ AppDialog.Header = function AppDialogHeader({ children, className }: AppDialogHe
 function AppDialogWindowHeader({ children, className }: AppDialogHeaderProps) {
   const reservation = useWindowControlsReservation();
   return (
-    <SurfaceHeader className={cn("dialog-window-header h-12 px-4 py-0", className)} style={reservation}>
+    <SurfaceHeader
+      className={cn("dialog-window-header h-12 px-4 py-0", className)}
+      style={reservation}
+    >
       {children}
     </SurfaceHeader>
   );
