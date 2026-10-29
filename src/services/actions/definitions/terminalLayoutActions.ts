@@ -1,13 +1,22 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
+import type { ActionContext } from "@shared/types/actions";
 import { z } from "zod";
 import { appClient } from "@/clients";
 import { computeGridColumns } from "@/lib/terminalLayout";
 import { useLayoutConfigStore } from "@/store/layoutConfigStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useLayoutUndoStore } from "@/store/layoutUndoStore";
+import { useHelpPanelStore, selectSlotTerminalIds } from "@/store/helpPanelStore";
 import { panelKindIsDockable } from "@shared/config/panelKindRegistry";
 import { getGridLayoutSnapshot } from "@/components/Terminal/gridLayoutSnapshot";
 import { animatePanelMove } from "@/components/Panel/animatePanelMove";
+import {
+  buildDockRenderItems,
+  collectDockPanels,
+  filterRailDockPanels,
+  planDockChipMove,
+} from "@/components/Layout/dockRenderItems";
+import { getFocusedDockChip, keepDockChipFocus } from "@/components/Layout/dockChipFocus";
 import { requireExplicitTerminalIdForAgentDispatch } from "./terminalTargetBinding";
 import {
   PLACEMENT_DESTINATIONS,
@@ -197,63 +206,77 @@ export function registerTerminalLayoutActions(
     },
   }));
 
-  // Terminal reordering
+  // Terminal reordering. A docked panel moves its chip along the dock; a grid
+  // panel moves one slot in the grid. Undo is snapshotted only for a move that
+  // happens, so a press at either end leaves history and the redo stack alone.
+  const moveAlongRow = (direction: -1 | 1, ctx: ActionContext): void => {
+    const state = usePanelStore.getState();
+    const chip = ctx.dispatchSource === "keybinding" ? getFocusedDockChip() : null;
+    const targetId = chip?.panelId ?? state.focusedId;
+    if (!targetId) return;
+    const activeWorktreeId = callbacks.getActiveWorktreeId();
+
+    if (state.panelsById[targetId]?.location === "dock") {
+      const railPanels = filterRailDockPanels(
+        collectDockPanels(state, activeWorktreeId),
+        activeWorktreeId,
+        selectSlotTerminalIds(useHelpPanelStore.getState())
+      );
+      const nextPanelIds = planDockChipMove(
+        state.panelIds,
+        buildDockRenderItems(railPanels, state.tabGroups, activeWorktreeId),
+        targetId,
+        direction
+      );
+      if (!nextPanelIds) return;
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
+      const reorder = () => state.restoreTerminalOrder(nextPanelIds);
+      if (chip) {
+        keepDockChipFocus(chip.element, reorder);
+      } else {
+        reorder();
+      }
+      return;
+    }
+
+    const gridTerminals = state.panelIds
+      .map((id) => state.panelsById[id])
+      .filter(
+        (t) =>
+          t &&
+          (t.location === "grid" || t.location === undefined) &&
+          (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
+      );
+    const currentIndex = gridTerminals.findIndex((t) => t!.id === targetId);
+    const toIndex = currentIndex + direction;
+    if (currentIndex < 0 || toIndex < 0 || toIndex >= gridTerminals.length) return;
+    useLayoutUndoStore.getState().pushLayoutSnapshot();
+    // `null`, not `undefined`: an undefined scope reorders every worktree's grid
+    // panels, while the list above holds only the worktree-less ones.
+    state.reorderTerminals(currentIndex, toIndex, "grid", activeWorktreeId ?? null);
+  };
+
   actions.set("terminal.moveLeft", () => ({
     id: "terminal.moveLeft",
     title: "Move terminal left",
-    description: "Move terminal left in the grid",
+    description: "Move the focused panel left in the grid, or its chip one place left in the dock",
     category: "terminal",
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    run: async () => {
-      const state = usePanelStore.getState();
-      const { focusedId, panelIds, panelsById, reorderTerminals } = state;
-      if (!focusedId) return;
-      useLayoutUndoStore.getState().pushLayoutSnapshot();
-      const activeWorktreeId = callbacks.getActiveWorktreeId();
-      const gridTerminals = panelIds
-        .map((id) => panelsById[id])
-        .filter(
-          (t) =>
-            t &&
-            (t.location === "grid" || t.location === undefined) &&
-            (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
-        );
-      const currentIndex = gridTerminals.findIndex((t) => t!.id === focusedId);
-      if (currentIndex > 0) {
-        reorderTerminals(currentIndex, currentIndex - 1, "grid", activeWorktreeId);
-      }
-    },
+    run: async (_args: unknown, ctx) => moveAlongRow(-1, ctx),
   }));
 
   actions.set("terminal.moveRight", () => ({
     id: "terminal.moveRight",
     title: "Move terminal right",
-    description: "Move terminal right in the grid",
+    description:
+      "Move the focused panel right in the grid, or its chip one place right in the dock",
     category: "terminal",
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    run: async () => {
-      const state = usePanelStore.getState();
-      const { focusedId, panelIds, panelsById, reorderTerminals } = state;
-      if (!focusedId) return;
-      useLayoutUndoStore.getState().pushLayoutSnapshot();
-      const activeWorktreeId = callbacks.getActiveWorktreeId();
-      const gridTerminals = panelIds
-        .map((id) => panelsById[id])
-        .filter(
-          (t) =>
-            t &&
-            (t.location === "grid" || t.location === undefined) &&
-            (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
-        );
-      const currentIndex = gridTerminals.findIndex((t) => t!.id === focusedId);
-      if (currentIndex >= 0 && currentIndex < gridTerminals.length - 1) {
-        reorderTerminals(currentIndex, currentIndex + 1, "grid", activeWorktreeId);
-      }
-    },
+    run: async (_args: unknown, ctx) => moveAlongRow(1, ctx),
   }));
 
   actions.set("terminal.moveUp", () => ({
@@ -268,7 +291,6 @@ export function registerTerminalLayoutActions(
       const state = usePanelStore.getState();
       const { focusedId, panelIds, panelsById, reorderTerminals } = state;
       if (!focusedId) return;
-      useLayoutUndoStore.getState().pushLayoutSnapshot();
       const terminal = panelsById[focusedId];
       if (!terminal || terminal.location === "dock") return;
       const activeWorktreeId = callbacks.getActiveWorktreeId();
@@ -290,7 +312,8 @@ export function registerTerminalLayoutActions(
         layoutConfig.value
       );
       if (currentIndex >= cols) {
-        reorderTerminals(currentIndex, currentIndex - cols, "grid", activeWorktreeId);
+        useLayoutUndoStore.getState().pushLayoutSnapshot();
+        reorderTerminals(currentIndex, currentIndex - cols, "grid", activeWorktreeId ?? null);
       }
     },
   }));
@@ -307,7 +330,6 @@ export function registerTerminalLayoutActions(
       const state = usePanelStore.getState();
       const { focusedId, panelIds, panelsById, reorderTerminals } = state;
       if (!focusedId) return;
-      useLayoutUndoStore.getState().pushLayoutSnapshot();
       const terminal = panelsById[focusedId];
       if (!terminal || terminal.location === "dock") return;
       const activeWorktreeId = callbacks.getActiveWorktreeId();
@@ -329,7 +351,8 @@ export function registerTerminalLayoutActions(
         layoutConfig.value
       );
       if (currentIndex + cols < gridTerminals.length) {
-        reorderTerminals(currentIndex, currentIndex + cols, "grid", activeWorktreeId);
+        useLayoutUndoStore.getState().pushLayoutSnapshot();
+        reorderTerminals(currentIndex, currentIndex + cols, "grid", activeWorktreeId ?? null);
       }
     },
   }));

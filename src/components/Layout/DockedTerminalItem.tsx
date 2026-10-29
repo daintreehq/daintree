@@ -80,8 +80,8 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
   // Space/Enter handler calls preventDefault() to start a keyboard drag, which
   // would suppress this native <button>'s activation click — the sole keyboard
   // path to the chip's primary action. (Grid PanelHeader has no such conflict:
-  // its drag surface is a non-interactive <div>.) Keyboard-driven reordering of
-  // dock chips is intentionally out of scope.
+  // its drag surface is a non-interactive <div>.) The keyboard reorders chips
+  // through `terminal.moveLeft`/`moveRight` instead (#14972).
   const dragHandle = useDragHandle();
   const dragPointerListeners: DraggableSyntheticListeners = dragHandle?.listeners
     ? Object.fromEntries(

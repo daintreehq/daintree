@@ -199,7 +199,7 @@ vi.mock("../BackgroundContainer", () => ({ BackgroundContainer: () => null }));
 import { ContentDock } from "../ContentDock";
 
 function renderDock() {
-  render(<ContentDock />);
+  const view = render(<ContentDock />);
 
   const rail = screen.getByRole("toolbar", { name: "Docked panels" });
   const chips = fixture.dockPanels.map((panel) => screen.getByTestId(`chip-${panel.id}`));
@@ -217,7 +217,7 @@ function renderDock() {
     cancelled: screen.getByRole("textbox", { name: "Cancelled terminal input" }),
     uncancelled: screen.getByRole("textbox", { name: "Uncancelled terminal input" }),
   };
-  return { rail, chips, inputs };
+  return { rail, chips, inputs, rerender: () => view.rerender(<ContentDock />) };
 }
 
 /** Roving tabindex keeps the active chip as the rail's only tab stop. */
@@ -263,6 +263,28 @@ describe("ContentDock — arrow keys from a docked terminal (issue #11156)", () 
     }
   );
 
+  it("keeps the tab stop on a chip that moved, so arrows rove from its new slot (#14972)", () => {
+    const { chips, rerender } = renderDock();
+    const [first, second] = chips as [HTMLElement, HTMLElement];
+    const { panelIds } = fixture.panelState;
+
+    first.focus();
+    try {
+      fixture.panelState.panelIds = [...panelIds].reverse();
+      rerender();
+
+      const rail = screen.getAllByTestId(/^chip-/);
+      expect(rail).toEqual([second, first]);
+      expect(tabStops(rail)).toEqual([-1, 0]);
+
+      fireEvent.keyDown(first, { key: "ArrowLeft" });
+
+      expect(document.activeElement).toBe(second);
+    } finally {
+      fixture.panelState.panelIds = panelIds;
+    }
+  });
+
   it("does not adopt the portaled terminal as the rail's active chip on focus", () => {
     const { chips, inputs } = renderDock();
 
@@ -293,10 +315,14 @@ describe("ContentDock regression test", () => {
   // dockable plugin panel, so pin the selector here.
   it("reads dock panels through getRenderablePanel so plugin kinds are not dropped", () => {
     const content = readFileSync(resolve(__dirname, "../ContentDock.tsx"), "utf-8");
+    // Membership lives in `collectDockPanels`, shared with the keyboard chip
+    // move (#14972); dockRenderItems.test.ts covers plugin kinds behaviourally.
+    const membership = readFileSync(resolve(__dirname, "../dockRenderItems.ts"), "utf-8");
 
     // Target the call sites (not prose) so a doc mention can't mask a revert.
-    expect(content).toContain("getRenderablePanel(state.panelsById");
-    expect(content).not.toContain("getNarrowPanel(state.panelsById");
+    expect(content).toContain("collectDockPanels(state, activeWorktreeId)");
+    expect(membership).toContain("getRenderablePanel(state.panelsById");
+    expect(membership).not.toContain("getNarrowPanel(state.panelsById");
   });
 
   // Issue #11332 — the single-panel chip renders through the generic

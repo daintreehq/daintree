@@ -54,8 +54,8 @@ Default keyboard shortcuts shipped with Daintree. This page lists defaults only 
 | Switch to next tab in focused panel | `⌘+⇧+]` | `Ctrl+Shift+]` |
 | Switch to previous tab in focused panel | `⌘+⇧+[` | `Ctrl+Shift+[` |
 | Toggle maximize terminal | `⌃+⇧+F` | `Ctrl+Shift+F` |
-| Move terminal left in grid | `⌘+⇧+⌥+←` | `Ctrl+Shift+Alt+Left` |
-| Move terminal right in grid | `⌘+⇧+⌥+→` | `Ctrl+Shift+Alt+Right` |
+| Move terminal left in grid or dock | `⌘+⇧+⌥+←` | `Ctrl+Shift+Alt+Left` |
+| Move terminal right in grid or dock | `⌘+⇧+⌥+→` | `Ctrl+Shift+Alt+Right` |
 | Move terminal up in grid | `⌘+⇧+⌥+↑` | `Ctrl+Shift+Alt+Up` |
 | Move terminal down in grid | `⌘+⇧+⌥+↓` | `Ctrl+Shift+Alt+Down` |
 | Move terminal to dock | `⌘+⇧+⌥+D` | `Ctrl+Shift+Alt+D` |

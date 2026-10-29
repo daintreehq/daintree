@@ -261,7 +261,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     combo: "Cmd+Shift+Alt+ArrowLeft",
     scope: "global",
     priority: 0,
-    description: "Move terminal left in grid",
+    description: "Move terminal left in grid or dock",
     category: "Terminal",
   },
   {
@@ -269,7 +269,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     combo: "Cmd+Shift+Alt+ArrowRight",
     scope: "global",
     priority: 0,
-    description: "Move terminal right in grid",
+    description: "Move terminal right in grid or dock",
     category: "Terminal",
   },
   {
