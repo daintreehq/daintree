@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, type KeyboardEvent, type ReactElement } from "react";
-import { RadioTower, ChevronDown, AlertTriangle } from "lucide-react";
+import { RadioTower, ChevronDown, AlertTriangle, Lock } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
@@ -165,7 +165,15 @@ interface FleetResolutionRowProps {
 }
 
 function FleetResolutionRow({ preview }: FleetResolutionRowProps): ReactElement {
-  const { terminalId, title, resolvedPayload, unresolvedVars, excluded, exclusionReason } = preview;
+  const {
+    terminalId,
+    title,
+    resolvedPayload,
+    unresolvedVars,
+    excluded,
+    exclusionReason,
+    inputLocked,
+  } = preview;
   const draft = useFleetResolutionPreviewStore((s) => s.draft);
   const override = useFleetTargetOverridesStore((s) => s.payloadOverrides[terminalId]);
   const isSkipped = useFleetTargetOverridesStore((s) => s.skippedIds.has(terminalId));
@@ -256,9 +264,19 @@ function FleetResolutionRow({ preview }: FleetResolutionRowProps): ReactElement 
           aria-label={`Include ${title} in broadcast`}
         />
         <span className={cn("truncate", isSkipped && "line-through opacity-50")}>{title}</span>
+        {/* A lock is the person's own choice, so it reads as neutral state, not a warning. */}
         {excluded && exclusionReason && (
-          <span className="inline-flex items-center gap-0.5 text-3xs text-category-rose-text shrink-0">
-            <AlertTriangle className="h-2.5 w-2.5" aria-hidden="true" />
+          <span
+            className={cn(
+              "inline-flex items-center gap-0.5 text-3xs shrink-0",
+              inputLocked ? "text-text-secondary" : "text-category-rose-text"
+            )}
+          >
+            {inputLocked ? (
+              <Lock className="h-2.5 w-2.5" aria-hidden="true" />
+            ) : (
+              <AlertTriangle className="h-2.5 w-2.5" aria-hidden="true" />
+            )}
             {exclusionReason}
           </span>
         )}

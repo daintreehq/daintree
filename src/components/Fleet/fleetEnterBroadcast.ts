@@ -266,7 +266,10 @@ export function tryFleetBroadcastFromEditor(
   if (!arming.armedIds.has(terminalId) || selectFleetMemberCount(arming) < 2) return false;
 
   const targets = resolveFleetBroadcastTargetIds();
-  if (targets.length === 0) return false;
+  // A locked origin never fans out, whoever calls in, and an origin whose only
+  // reachable peers are locked just sends to itself. Either way the pane's own
+  // send path takes it, the same as raw input.
+  if (targets.length < 2 || !targets.includes(terminalId)) return false;
 
   // Snapshot the override + skip state at the moment Enter is pressed so
   // the broadcast submits the user's intent as it stood at press time —

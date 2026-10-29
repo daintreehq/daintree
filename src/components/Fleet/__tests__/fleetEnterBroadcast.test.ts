@@ -469,6 +469,56 @@ describe("tryFleetBroadcastFromEditor — the composer lets go only of a deliver
   });
 });
 
+describe("tryFleetBroadcastFromEditor — locked panes (#14964)", () => {
+  function lock(id: string, isInputLocked: boolean): void {
+    usePanelStore.setState((s) => ({
+      panelsById: { ...s.panelsById, [id]: { ...makeAgent(id), isInputLocked } as PtyPanelData },
+    }));
+  }
+
+  it("submits to every armed peer except a locked one, which stays armed", async () => {
+    arm(["a", "b", "c"]);
+    lock("b", true);
+
+    expect(tryFleetBroadcastFromEditor("a", "hello", vi.fn())).toBe(true);
+    await flush();
+    await flush();
+
+    expect(submitMock.mock.calls.map((call) => call[0]).sort()).toEqual(["a", "c"]);
+    expect(useFleetArmingStore.getState().armedIds.has("b")).toBe(true);
+  });
+
+  it("makes a pane a recipient again once it's unlocked while still armed", async () => {
+    arm(["a", "b"]);
+    lock("b", true);
+    lock("b", false);
+
+    expect(tryFleetBroadcastFromEditor("a", "hello", vi.fn())).toBe(true);
+    await flush();
+    await flush();
+
+    expect(submitMock.mock.calls.map((call) => call[0]).sort()).toEqual(["a", "b"]);
+  });
+
+  it("leaves Enter to the pane's own send when its only peer is locked", async () => {
+    arm(["a", "b"]);
+    lock("b", true);
+
+    expect(tryFleetBroadcastFromEditor("a", "hello", vi.fn())).toBe(false);
+    await flush();
+    expect(submitMock).not.toHaveBeenCalled();
+  });
+
+  it("never fans out from a locked origin", async () => {
+    arm(["a", "b", "c"]);
+    lock("a", true);
+
+    expect(tryFleetBroadcastFromEditor("a", "hello", vi.fn())).toBe(false);
+    await flush();
+    expect(submitMock).not.toHaveBeenCalled();
+  });
+});
+
 describe("cancelActiveBroadcast", () => {
   it("aborts the in-flight controller so the run finalizes as cancelled", async () => {
     arm(["a", "b", "c"]);

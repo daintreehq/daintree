@@ -31,6 +31,8 @@ export interface FleetTargetPreview {
   unresolvedVars: string[];
   excluded: boolean;
   exclusionReason?: string;
+  /** Left out because the person locked the pane's input, not because it broke. */
+  inputLocked?: boolean;
 }
 
 export interface FleetExecutionResult {
@@ -84,15 +86,15 @@ export function buildFleetTargetPreviews(draft: string): FleetTargetPreview[] {
         excluded: false,
       });
     } else {
+      const inputLocked = isTerminalFleetEligible(panel);
       previews.push({
         terminalId: id,
         title: panel?.title ?? "Unknown",
         resolvedPayload: draft,
         unresolvedVars: [],
         excluded: true,
-        exclusionReason: isTerminalFleetEligible(panel)
-          ? "Input locked"
-          : "Panel no longer eligible",
+        exclusionReason: inputLocked ? "Input locked" : "Panel no longer eligible",
+        ...(inputLocked ? { inputLocked: true } : {}),
       });
     }
   }

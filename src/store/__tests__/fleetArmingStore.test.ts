@@ -935,6 +935,21 @@ describe("fleetArmingStore", () => {
       expect([...useFleetArmingStore.getState().armedIds]).toEqual(["a"]);
     });
 
+    it("keeps a pane armed in place across lock and unlock (#14964)", () => {
+      seedPanels([makeAgentTerminal("a"), makeAgentTerminal("b"), makeAgentTerminal("c")]);
+      useFleetArmingStore.getState().armIds(["a", "b", "c"]);
+
+      seedPanels([
+        makeAgentTerminal("a"),
+        makeAgentTerminal("b", { isInputLocked: true }),
+        makeAgentTerminal("c"),
+      ]);
+      expect(useFleetArmingStore.getState().armOrder).toEqual(["a", "b", "c"]);
+
+      seedPanels([makeAgentTerminal("a"), makeAgentTerminal("b"), makeAgentTerminal("c")]);
+      expect(useFleetArmingStore.getState().armOrder).toEqual(["a", "b", "c"]);
+    });
+
     it("drops armed ids when a panel mutates into a non-PTY kind (#8957 batch B)", () => {
       // The reconcileAgainst path inside the subscription now consumes
       // the narrowed PanelInstance union via getNarrowPanel. A panel

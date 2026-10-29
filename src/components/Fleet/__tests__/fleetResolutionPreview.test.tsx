@@ -245,6 +245,27 @@ describe("FleetDraftingPill", () => {
     );
   });
 
+  it("leaves a locked peer out of the reach count and its row (#14964)", () => {
+    seedPanel(makeAgent("t-1"));
+    seedPanel(makeAgent("t-2"));
+    seedPanel(makeAgent("t-3", { isInputLocked: true }));
+    armAgent("t-1", 0);
+    armAgent("t-2", 1);
+    armAgent("t-3", 2);
+    usePanelStore.setState({ focusedId: "t-1" });
+    useFleetResolutionPreviewStore.getState().setDraft("deploy {{branch_name}}");
+
+    render(<FleetDraftingPill />);
+    expect(screen.getByTestId("fleet-drafting-pill-trigger").textContent).toMatch(
+      /Mirroring to 1 peer/
+    );
+    const rows = screen.getAllByTestId("fleet-resolution-row");
+    const locked = rows.find((row) => row.textContent?.includes("t-3"))!;
+    expect(locked.textContent).toContain("Input locked");
+    expect(locked.querySelector("[data-testid='fleet-resolution-row-textarea']")).toBeNull();
+    expect(screen.getAllByTestId("fleet-resolution-row-textarea")).toHaveLength(2);
+  });
+
   it("does not show chevron when no recipe variables in draft", () => {
     const a1 = makeAgent("t-1");
     const a2 = makeAgent("t-2");
