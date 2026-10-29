@@ -2530,8 +2530,8 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
 
   // Cleanup requests still out, cancelled when the handlers go.
   const openCorrections = new Set<AbortController>();
-  // The account whose cleanup failure has been told, until a cleanup on it works.
-  let toldCleanupFailure: string | null = null;
+  // Accounts whose cleanup failure has been told, each until a cleanup on it works.
+  const toldCleanupFailures = new Set<string>();
   // Cleanup started at a pause while a dictation runs, for its stop to take.
   const prefetcher = new CorrectionPrefetcher<PrefetchRun>();
   const prefetchOwner = (webContentsId: number, sessionId: string) =>
@@ -2617,18 +2617,24 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     const account = cleanupAccountOf(settings);
     const { cleanupFailure, ...rest } = reply;
     if (!cleanupFailure) {
-      if (
-        (reply.verdict === "replaced" || reply.verdict === "unchanged") &&
-        toldCleanupFailure === account
-      ) {
-        toldCleanupFailure = null;
+      if (reply.verdict === "replaced" || reply.verdict === "unchanged") {
+        toldCleanupFailures.delete(account);
       }
       return reply;
     }
-    if (toldCleanupFailure === account || disposed || ctx.event?.sender?.isDestroyed()) {
+    // A view that went or reloaded since it asked has no one to tell; the
+    // next passage tells it instead.
+    const frame = ctx.event?.senderFrame;
+    if (
+      toldCleanupFailures.has(account) ||
+      disposed ||
+      ctx.event?.sender?.isDestroyed() ||
+      frame === null ||
+      frame?.isDestroyed()
+    ) {
       return rest;
     }
-    toldCleanupFailure = account;
+    toldCleanupFailures.add(account);
     return reply;
   };
 

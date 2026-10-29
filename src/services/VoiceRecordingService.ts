@@ -246,11 +246,11 @@ function cleanupFailureMessage({ reason, provider }: VoiceCleanupFailure): strin
     case "key_rejected":
       return `${issuer} rejected the API key, ${kept} Update the key in voice settings.`;
     case "billing_required":
-      return `The ${issuer} account is out of credit or over its spending limit, ${kept} Add credit, or use another key.`;
+      return `The ${issuer} account is out of credit or at its spending limit, ${kept} Add credit, raise the limit, or use a key from another account.`;
     case "region_refused":
       return `${issuer} isn't available in your region, ${kept} Choose another cleanup provider in voice settings.`;
     case "access_denied":
-      return `${issuer} refused the key access to the cleanup model, ${kept} Check the key or choose another model in voice settings.`;
+      return `The cleanup model isn't available to this ${issuer} key, ${kept} Check the key's access or choose another model in voice settings.`;
   }
 }
 

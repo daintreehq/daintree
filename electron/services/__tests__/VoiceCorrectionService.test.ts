@@ -391,7 +391,11 @@ describe("VoiceCorrectionService", () => {
     [401, "invalid_api_key", "key_rejected"],
     [401, undefined, "key_rejected"],
     [429, "insufficient_quota", "billing_required"],
+    [429, "credit_balance_exhausted", "billing_required"],
+    [429, "project_spend_limit_exceeded", "billing_required"],
     [403, "unsupported_country_region_territory", "region_refused"],
+    // The code decides whatever the status says.
+    [400, "invalid_api_key", "key_rejected"],
     [403, undefined, "access_denied"],
     [404, "model_not_found", "access_denied"],
   ] as const)("names a %i (%s) a failure that will recur", async (status, code, reason) => {
@@ -414,6 +418,24 @@ describe("VoiceCorrectionService", () => {
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(JSON.stringify(result)).not.toContain("secret");
+  });
+
+  it("names any refusal of the billing type, whichever code it carries", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 429,
+        json: async () => ({ error: { type: "insufficient_quota", code: "a_code_added_later" } }),
+      } as unknown as Response)
+    );
+
+    const result = await new VoiceCorrectionService().correct(
+      { rawText: "react is great" },
+      BASE_SETTINGS
+    );
+
+    expect(result.cleanupFailure).toEqual({ reason: "billing_required", provider: "openai" });
   });
 
   it.each([

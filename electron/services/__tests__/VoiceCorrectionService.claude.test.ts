@@ -325,19 +325,38 @@ describe("VoiceCorrectionService on Claude", () => {
   // #14963: an account every passage will fail on says why, as a code, and
   // isn't asked twice; the message that told it never travels.
   it.each([
-    [401, "authentication_error", "key_rejected", "invalid x-api-key"],
-    [402, "billing_error", "billing_required", "payment declined"],
-    [403, "permission_error", "access_denied", "not allowed"],
+    [401, { type: "authentication_error", message: "invalid x-api-key" }, "key_rejected"],
+    [402, { type: "billing_error", message: "payment declined" }, "billing_required"],
+    [403, { type: "permission_error", message: "not allowed" }, "access_denied"],
+    // A 402 is billing whatever type it names.
+    [402, { type: "api_error", message: "billing trouble" }, "billing_required"],
     [
       400,
-      "invalid_request_error",
+      {
+        type: "invalid_request_error",
+        message: "Your credit balance is too low to access the Anthropic API.",
+      },
       "billing_required",
-      "Your credit balance is too low to access the Anthropic API.",
     ],
-  ] as const)("names a %i %s a failure that will recur", async (status, type, reason, text) => {
-    const fetchMock = stubFetch(
-      jsonResponse({ type: "error", error: { type, message: text } }, status)
-    );
+    [
+      400,
+      {
+        type: "invalid_request_error",
+        message: "You have reached your specified API usage limits.",
+      },
+      "billing_required",
+    ],
+    [
+      429,
+      {
+        type: "rate_limit_error",
+        message: "You have reached your API usage limits for the month.",
+        details: { error_code: "enforced_spend_limit_reached" },
+      },
+      "billing_required",
+    ],
+  ] as const)("names a %i %o a failure that will recur", async (status, error, reason) => {
+    const fetchMock = stubFetch(jsonResponse({ type: "error", error }, status));
     const result = await new VoiceCorrectionService().correct({ rawText: "run v test" }, SETTINGS);
     expect(result).toMatchObject({
       confirmedText: "run v test",
@@ -348,14 +367,16 @@ describe("VoiceCorrectionService on Claude", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(logWarn).toHaveBeenLastCalledWith(
       expect.stringContaining("Correction failed"),
-      expect.objectContaining({ status, code: type, persistent: reason })
+      expect.objectContaining({ status, code: error.type, persistent: reason })
     );
-    expect(JSON.stringify(result)).not.toContain(text);
-    expect(JSON.stringify(vi.mocked(logWarn).mock.calls)).not.toContain(text);
+    expect(JSON.stringify(result)).not.toContain(error.message);
+    expect(JSON.stringify(vi.mocked(logWarn).mock.calls)).not.toContain(error.message);
   });
 
   it.each([
     [400, "invalid_request_error", "The prompt says your credit balance is too low."],
+    // The sentence only counts from the type that sends it.
+    [500, "api_error", "Your credit balance is too low to access the Anthropic API."],
     [429, "rate_limit_error", "slow down"],
     [529, "overloaded_error", "busy"],
   ] as const)("leaves a %i %s unnamed: the next passage may pass", async (status, type, text) => {
@@ -366,12 +387,13 @@ describe("VoiceCorrectionService on Claude", () => {
     expect(result).not.toHaveProperty("cleanupFailure");
   });
 
-  it("names an account that runs out of credit mid-stream", async () => {
+  it.each([
+    ["billing_error", "billing_required"],
+    ["authentication_error", "key_rejected"],
+    ["permission_error", "access_denied"],
+  ] as const)("names a %s mid-stream, where the status says 200", async (type, reason) => {
     stubFetch(
-      streamed([
-        frames(reply("Ok."))[0]!,
-        { type: "error", error: { type: "billing_error", message: "echoes ok" } },
-      ])
+      streamed([frames(reply("Ok."))[0]!, { type: "error", error: { type, message: "echoes ok" } }])
     );
     const result = await new VoiceCorrectionService().correct(
       { rawText: "ok" },
@@ -381,7 +403,7 @@ describe("VoiceCorrectionService on Claude", () => {
     );
     expect(result).toMatchObject({
       failed: true,
-      cleanupFailure: { reason: "billing_required", provider: "anthropic" },
+      cleanupFailure: { reason, provider: "anthropic" },
     });
   });
 

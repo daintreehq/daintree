@@ -43,8 +43,8 @@ import {
   CLAUDE_ORIGIN,
   ClaudeStreamReader,
   claudeErrorCode,
+  claudeBillingRefused,
   claudeHeaders,
-  claudeOutOfCredit,
   claudeMessageText,
   claudeRequestBody,
   readClaudeUsage,
@@ -460,6 +460,10 @@ function persistentFailureOf(
     case "authentication_error":
       return "key_rejected";
     case "insufficient_quota":
+    case "credit_balance_exhausted":
+    case "organization_spend_limit_exceeded":
+    case "organization_usage_limit_exceeded":
+    case "project_spend_limit_exceeded":
     case "billing_error":
       return "billing_required";
     case "unsupported_country_region_territory":
@@ -481,12 +485,12 @@ class CleanupRequestError extends Error {
     readonly status: number,
     readonly code: string | undefined,
     provider: VoiceCorrectionProvider = "openai",
-    outOfCredit = false
+    billingRefused = false
   ) {
     super(
       `${provider === "anthropic" ? "Anthropic" : "OpenAI"} API error: ${status}${code ? ` (${code})` : ""}`
     );
-    this.persistent = outOfCredit ? "billing_required" : persistentFailureOf(status, code);
+    this.persistent = billingRefused ? "billing_required" : persistentFailureOf(status, code);
   }
 
   static async fromResponse(
@@ -494,17 +498,21 @@ class CleanupRequestError extends Error {
     provider: VoiceCorrectionProvider = "openai"
   ): Promise<CleanupRequestError> {
     let code: string | undefined;
-    let outOfCredit = false;
+    let billingRefused = false;
     try {
-      const body = (await response.json()) as { error?: { code?: unknown } };
+      const body = (await response.json()) as { error?: { code?: unknown; type?: unknown } };
       if (provider === "anthropic") {
         code = claudeErrorCode(body);
-        outOfCredit = claudeOutOfCredit(body);
-      } else if (typeof body.error?.code === "string") code = body.error.code;
+        billingRefused = claudeBillingRefused(body);
+      } else {
+        if (typeof body.error?.code === "string") code = body.error.code;
+        // The type every billing refusal shares, whichever code it names.
+        billingRefused = body.error?.type === "insufficient_quota";
+      }
     } catch {
       // Non-JSON error body: the status alone is enough.
     }
-    return new CleanupRequestError(response.status, code, provider, outOfCredit);
+    return new CleanupRequestError(response.status, code, provider, billingRefused);
   }
 }
 
@@ -600,7 +608,7 @@ function claudeStreamReader(status: number): StreamReader<ClaudeMessage> {
           status,
           claudeErrorCode(event),
           "anthropic",
-          claudeOutOfCredit(event)
+          claudeBillingRefused(event)
         );
       }
       return reader.take(event);

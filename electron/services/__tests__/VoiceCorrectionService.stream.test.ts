@@ -367,12 +367,16 @@ describe("VoiceCorrectionService streaming", () => {
     expect(JSON.stringify(vi.mocked(logWarn).mock.calls)).not.toContain("parser");
   });
 
-  // #14963: the stream answered 200, so only the code says the account is empty.
-  it("names a quota error mid-stream a failure that will recur", async () => {
+  // #14963: the stream answered 200, so only the code says why.
+  it.each([
+    ["insufficient_quota", "billing_required"],
+    ["invalid_api_key", "key_rejected"],
+    ["model_not_found", "access_denied"],
+  ] as const)("names a %s mid-stream a failure that will recur", async (code, reason) => {
     const frames = replyFrames(reply("Fix the parser now."), null).slice(0, 3);
     frames.push({
       type: "response.failed",
-      response: { error: { code: "insufficient_quota", message: "fix the parser now" } },
+      response: { error: { code, message: "fix the parser now" } },
     });
     stubFetch(streamed(frames));
 
@@ -386,7 +390,7 @@ describe("VoiceCorrectionService streaming", () => {
     expect(result).toMatchObject({
       confirmedText: "fix the parser now",
       failed: true,
-      cleanupFailure: { reason: "billing_required", provider: "openai" },
+      cleanupFailure: { reason, provider: "openai" },
     });
   });
 

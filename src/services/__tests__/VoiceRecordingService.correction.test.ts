@@ -1969,22 +1969,51 @@ describe("VoiceRecordingService — a cleanup failure that will recur (#14963)",
 
   it("stays quiet for a failure main didn't hand the notice", async () => {
     const { service, dictate, draft, flush } = await setup();
-    correct.mockResolvedValueOnce({
+    const untold: Array<() => Promise<CorrectResult>> = [
+      async () => ({
+        action: "no_change",
+        correctedText: "timed out",
+        failed: true,
+        verdict: "timed_out",
+      }),
+      // The same outage, already told on an earlier reply.
+      async () => ({
+        action: "no_change",
+        correctedText: "told before",
+        failed: true,
+        verdict: "failed",
+      }),
+      () => Promise.reject(new Error("IPC gone")),
+    ];
+    for (const [index, reply] of untold.entries()) {
+      correct.mockImplementationOnce(reply);
+      dictate(`panel-${index}`, `passage ${index}`);
+      await service.stop();
+      await flush();
+      expect(draft(`panel-${index}`)).toBe(`passage ${index}`);
+    }
+
+    expect(told()).toEqual([]);
+  });
+
+  it("tells every reply main hands the notice, keeping no count of its own", async () => {
+    const { service, dictate, flush } = await setup();
+    const refused: CorrectResult = {
       action: "no_change",
-      correctedText: "fix the parsr",
+      correctedText: "",
       failed: true,
-      verdict: "timed_out",
-    });
-    dictate("panel-1", "fix the parsr");
+      verdict: "failed",
+      cleanupFailure: { reason: "key_rejected", provider: "openai" },
+    };
+    correct.mockResolvedValue(refused);
+
+    dictate("panel-1", "first outage");
     await service.stop();
     await flush();
-    correct.mockRejectedValueOnce(new Error("IPC gone"));
-    dictate("panel-2", "and the lexr");
+    dictate("panel-1", "second outage");
     await service.stop();
     await flush();
 
-    expect(draft("panel-1")).toBe("fix the parsr");
-    expect(draft("panel-2")).toBe("and the lexr");
-    expect(told()).toEqual([]);
+    expect(told()).toHaveLength(2);
   });
 });

@@ -49,6 +49,8 @@ const shared = vi.hoisted(() => ({
     fail: () => void;
     /** Settles it as refused by the account, a failure every passage will meet. */
     refuse: (reason: string) => void;
+    /** Settles it as a cleanup that worked and left the words as they were. */
+    keep: () => void;
   }>,
   /** The cleanup key in the voice settings. */
   openaiApiKey: "sk-test",
@@ -141,6 +143,12 @@ vi.mock("../../../services/VoiceCorrectionService.js", () => ({
               failed: true,
               verdict: "failed",
               cleanupFailure: { reason, provider: "openai" },
+            }),
+          keep: () =>
+            resolve({
+              action: "no_change",
+              confirmedText: request.rawText,
+              verdict: "unchanged",
             }),
         });
       });
@@ -1454,16 +1462,48 @@ describe("voiceInput — session identity", () => {
       }
     });
 
-    it("tells it again after a cleanup on the account works", async () => {
+    it.each([
+      ["replaced it", (request: { finish: (text: string) => void }) => request.finish("Fixed.")],
+      ["left it as it was", (request: { keep: () => void }) => request.keep()],
+    ])(
+      "tells it again after a cleanup on the account works and %s",
+      async (_label, settleWorking) => {
+        await start(ownerA, "a");
+        await stop(ownerA, "a");
+        await refused(ownerA, "fix the bug");
+
+        const worked = correct(ownerA, "a", "fix the bug");
+        settleWorking(await nextRequest("fix the bug"));
+        expect(await worked).not.toHaveProperty("failed");
+
+        expect(await refused(ownerA, "fix the bug")).toMatchObject(TOLD);
+      }
+    );
+
+    it("keeps an outage told through a failure that may pass", async () => {
       await start(ownerA, "a");
       await stop(ownerA, "a");
       await refused(ownerA, "fix the bug");
 
-      const worked = correct(ownerA, "a", "fix the bug");
-      (await nextRequest("fix the bug")).finish("Fix the bug.");
-      await expect(worked).resolves.toMatchObject({ correctedText: "Fix the bug." });
+      const failed = correct(ownerA, "a", "fix the bug");
+      (await nextRequest("fix the bug")).fail();
+      await failed;
 
+      expect(await refused(ownerA, "fix the bug")).not.toHaveProperty("cleanupFailure");
+    });
+
+    it("keeps each account's outage apart when their replies cross", async () => {
+      await start(ownerA, "a");
+      await stop(ownerA, "a");
+      const oldKey = correct(ownerA, "a", "with the old key");
+      const oldRequest = await nextRequest("with the old key");
+
+      shared.openaiApiKey = "sk-replaced";
       expect(await refused(ownerA, "fix the bug")).toMatchObject(TOLD);
+      oldRequest.refuse("key_rejected");
+      expect(await oldKey).toMatchObject(TOLD);
+
+      expect(await refused(ownerA, "fix the bug")).not.toHaveProperty("cleanupFailure");
     });
 
     it("tells a new key's failure, however recently the old key's was told", async () => {
@@ -1492,6 +1532,30 @@ describe("voiceInput — session identity", () => {
       const reply = correct(gone, "a", "fix the bug");
       const request = await nextRequest("fix the bug");
       gone.destroyed = true;
+      request.refuse("key_rejected");
+      expect(await reply).not.toHaveProperty("cleanupFailure");
+
+      expect(await refused(ownerA, "fix the bug")).toMatchObject(TOLD);
+    });
+
+    it("tells nothing to a view that reloaded since it asked", async () => {
+      await start(ownerA, "a");
+      await stop(ownerA, "a");
+      let navigated = false;
+      const frame = { isDestroyed: () => false };
+      const event = {
+        sender: ownerA,
+        // Electron's answer once the frame that asked has navigated away.
+        get senderFrame() {
+          return navigated ? null : frame;
+        },
+      };
+      const reply = getHandler(CHANNELS.VOICE_INPUT_CORRECT)(event, {
+        rawText: "fix the bug",
+        sessionId: "a",
+      });
+      const request = await nextRequest("fix the bug");
+      navigated = true;
       request.refuse("key_rejected");
       expect(await reply).not.toHaveProperty("cleanupFailure");
 
