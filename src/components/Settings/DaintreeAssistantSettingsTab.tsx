@@ -490,7 +490,14 @@ export function DaintreeAssistantSettingsTab() {
         />
       )}
 
-      <SettingsSection title="Agent" description="Changes apply to new assistant sessions.">
+      {/* A pick isn't future-only: HelpPanel answers the switch request against the
+          project's selected lane, even while Global is on screen, and
+          GlobalAssistantService ends a global run once the launchable agent it
+          resolves to changes. */}
+      <SettingsSection
+        title="Agent"
+        description="Picking an agent switches this project's selected assistant tab to it, asking first unless the tab has been idle since it opened. The global assistant stops if this changes its agent."
+      >
         {saveError("agent")}
         <SettingsGroup>
           <SettingsSelect
@@ -516,7 +523,7 @@ export function DaintreeAssistantSettingsTab() {
                     </Button>
                   </>
                 ) : (
-                  "A --model flag in Custom CLI args overrides this"
+                  "Applies the next time this agent starts. A --model flag in Custom CLI args overrides it."
                 )
               }
               value={modelSelectValue}
@@ -557,9 +564,10 @@ export function DaintreeAssistantSettingsTab() {
         )}
       </SettingsSection>
 
+      {/* All three are read once, when the session is provisioned. */}
       <SettingsSection
         title="Behavior"
-        description="Which tools the assistant can use during help sessions"
+        description="Which tools the assistant gets when it starts. A conversation already running keeps the tools it started with."
       >
         {saveError("behavior")}
         <SettingsGroup>
