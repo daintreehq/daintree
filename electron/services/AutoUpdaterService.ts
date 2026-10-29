@@ -526,7 +526,6 @@ class AutoUpdaterService {
   }
 
   private async confirmRestartImpact(impact: QuitImpact): Promise<boolean> {
-    if (this.installInFlight || isExitConfirmationPending()) return false;
     setExitConfirmationPending(true);
     try {
       const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null;
@@ -542,6 +541,9 @@ class AutoUpdaterService {
   async confirmAndQuitAndInstall(): Promise<boolean> {
     if (isWindowsStoreBuild()) return false;
     if (this.menuState !== "ready" || !this.updateDownloaded) return false;
+    // Checked before the impact, so a second click can't slip past an open
+    // dialog because the agents stopped or the Shells left meanwhile.
+    if (this.installInFlight || isExitConfirmationPending()) return false;
     const impact = this.restartImpact();
     if (impact && !(await this.confirmRestartImpact(impact))) return false;
     return this.quitAndInstallIfReady();
@@ -1237,6 +1239,7 @@ class AutoUpdaterService {
           console.warn("[MAIN] Quit-and-install called before download completed");
           return;
         }
+        if (this.installInFlight || isExitConfirmationPending()) return;
         const impact = this.restartImpact();
         if (!impact) {
           this.startQuitAndInstall();

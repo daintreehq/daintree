@@ -2376,6 +2376,24 @@ describe("AutoUpdaterService", () => {
         );
       });
 
+      it("does not restart past an open dialog after the agents stop", async () => {
+        let answer: (confirmed: boolean) => void = () => {};
+        updateWarningMock.showUpdateWarning.mockReturnValue(
+          new Promise<boolean>((resolve) => {
+            answer = resolve;
+          })
+        );
+
+        const first = autoUpdaterService.confirmAndQuitAndInstall();
+        updateWarningMock.getActiveAgentCount.mockReturnValue(0);
+        await expect(autoUpdaterService.confirmAndQuitAndInstall()).resolves.toBe(false);
+        quitHandler()(TRUSTED_SENDER);
+        answer(false);
+        await first;
+
+        expect(shutdownCoordinatorMock.requestGracefulShutdownForUpdate).not.toHaveBeenCalled();
+      });
+
       it("restarts straight away once nothing is working", async () => {
         updateWarningMock.getActiveAgentCount.mockReturnValue(0);
 
