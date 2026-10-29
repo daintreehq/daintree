@@ -374,10 +374,14 @@ describe("the row's one note, and supervision in full (#15370)", () => {
 
   it("names notices stuck on their way, then a missing window, before a count of terminals", () => {
     expect(
-      assistantRowNote(item({ notices: { pending: 2, ready: 1, delivery: "held" }, attached: false }))
+      assistantRowNote(
+        item({ notices: { pending: 2, ready: 1, delivery: "held" }, attached: false })
+      )
     ).toBe("1 notice not delivered (held for now)");
     expect(
-      assistantRowNote(item({ notices: { pending: 2, ready: 0, delivery: "idle" }, attached: false }))
+      assistantRowNote(
+        item({ notices: { pending: 2, ready: 0, delivery: "idle" }, attached: false })
+      )
     ).toBe("No window here");
     expect(assistantRowNote(item({ notices: { pending: 2, ready: 0, delivery: "idle" } }))).toBe(
       "Watching 2 terminals"
