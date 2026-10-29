@@ -35,6 +35,11 @@ function cancel(pending: PendingHostSwitch): void {
  *
  * Painted below dialogs and palettes, so one opened over it can still take the
  * window somewhere else, which leaves this screen for good.
+ *
+ * It leaves with this view when the switch lands, so main reads its root (the
+ * canvas, transparent inside the gate) and its first child (the title band)
+ * just before the swap, and the destination fades that surface out
+ * (electron/window/switchScreenHandoff.ts).
  */
 export function HostSwitchScreen({ pending }: { pending: PendingHostSwitch }) {
   const titleId = useId();

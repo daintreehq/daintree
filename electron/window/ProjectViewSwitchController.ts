@@ -40,6 +40,7 @@ import { createCancelledSwitchError, reportSwitchFailure } from "./projectSwitch
 import { setupViewHandlers } from "./ProjectViewHandlers.js";
 import { deliverOpenSystemMemoryPressure } from "./systemMemoryPressureDelivery.js";
 import { evictStaleViews } from "./ProjectViewEvictionController.js";
+import { prepareSwitchScreenHandoff, type SwitchScreenHandoff } from "./switchScreenHandoff.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
 import type { SwitchRequestOptions, ViewEntry } from "./ProjectViewManagerTypes.js";
 import type {
@@ -282,16 +283,33 @@ export async function performSwitch(
         });
       }
       let gateResult: Awaited<typeof warmGate>;
+      let handoff: SwitchScreenHandoff | null = null;
       try {
         gateResult = await warmGate;
+        mark(PERF_MARKS.PROJECT_SWITCH_GATE_RESOLVED, {
+          gateOutcome: gateResult,
+          releaseChannel: "warm-painted",
+          waitedMs: Math.round(performance.now() - warmStart),
+        });
+        // A host switch hands its screen over before the swap, so the swap
+        // fades it rather than cutting it (#15300); no other switch has one.
+        // The crash watch stays on through it: a view lost there is as
+        // unpainted as one lost inside the gate.
+        if (
+          request?.switchScreenHandoff &&
+          (gateResult === "signal" || gateResult === "hard-timeout") &&
+          host.activeProjectId === projectId
+        ) {
+          handoff = await prepareSwitchScreenHandoff(outgoingView.webContents, cachedWc, host.win);
+          if (cachedRendererGone) {
+            handoff?.cancel();
+            handoff = null;
+            gateResult = "unpainted";
+          }
+        }
       } finally {
         cachedWc.removeListener("render-process-gone", failOnRendererGone);
       }
-      mark(PERF_MARKS.PROJECT_SWITCH_GATE_RESOLVED, {
-        gateOutcome: gateResult,
-        releaseChannel: "warm-painted",
-        waitedMs: Math.round(performance.now() - warmStart),
-      });
       if (gateResult === "hard-timeout") {
         logWarn("projectview.warmpaintgate.hardtimeout", {
           projectId,
@@ -335,14 +353,21 @@ export async function performSwitch(
       // Clean frame painted (or grace period exhausted) — detach the outgoing
       // bridge view, revealing the repaired cached view. Guard on the active
       // project still being this one in case a superseding switch cancelled the
-      // gate ("cancelled" leaves the new switch to own the teardown).
+      // gate ("cancelled" leaves the new switch to own the teardown), or the
+      // window went while the handoff waited.
       if (gateResult !== "cancelled" && host.activeProjectId === projectId) {
-        if (previousEntry) {
-          deactivateEntry(host, previousEntry);
-        } else if (unboundOutgoingView) {
-          detachUnboundOutgoingView(host, unboundOutgoingView);
+        try {
+          if (previousEntry) {
+            deactivateEntry(host, previousEntry);
+          } else if (unboundOutgoingView) {
+            detachUnboundOutgoingView(host, unboundOutgoingView);
+          }
+        } finally {
+          handoff?.release();
         }
         mark(PERF_MARKS.PROJECT_SWITCH_REVEALED, { isNew: false });
+      } else {
+        handoff?.cancel();
       }
     } else {
       // No outgoing view to bridge through (e.g. first-run with no welcome
@@ -708,11 +733,48 @@ export async function performSwitch(
       });
     }
 
+    // A host switch hands its screen over before the swap, so the swap fades
+    // it rather than cutting it (#15300); no other switch has one. The crash
+    // handler leaves this view to the switch until it settles, so a renderer
+    // lost during the handoff rolls back like one lost inside the gate.
+    let handoff: SwitchScreenHandoff | null = null;
+    if (request?.switchScreenHandoff && host.activeProjectId === projectId) {
+      let rendererGone = false;
+      const onRendererGone = () => {
+        rendererGone = true;
+      };
+      incomingWc.on("render-process-gone", onRendererGone);
+      try {
+        handoff = await prepareSwitchScreenHandoff(outgoingView?.webContents, incomingWc, host.win);
+      } finally {
+        incomingWc.removeListener("render-process-gone", onRendererGone);
+      }
+      if (rendererGone) {
+        handoff?.cancel();
+        throw createCancelledSwitchError({
+          message:
+            "View never painted: project view renderer gone during the switch screen handoff",
+          context: {
+            phase: "paint",
+            projectId,
+            waitedMs: Math.round(performance.now() - visibleAt),
+          },
+          previousProjectId,
+        });
+      }
+    }
+
     // Readiness signalled and a frame confirmed — detach the outgoing view.
-    if (previousEntry && host.activeProjectId === projectId) {
-      deactivateEntry(host, previousEntry);
-    } else if (unboundOutgoingView && host.activeProjectId === projectId) {
-      detachUnboundOutgoingView(host, unboundOutgoingView);
+    // A handoff exists only with an outgoing view, so it settles with this detach.
+    try {
+      if (previousEntry && host.activeProjectId === projectId) {
+        deactivateEntry(host, previousEntry);
+      } else if (unboundOutgoingView && host.activeProjectId === projectId) {
+        detachUnboundOutgoingView(host, unboundOutgoingView);
+      }
+    } finally {
+      if (host.activeProjectId === projectId) handoff?.release();
+      else handoff?.cancel();
     }
     mark(PERF_MARKS.PROJECT_SWITCH_REVEALED, { isNew: true });
 

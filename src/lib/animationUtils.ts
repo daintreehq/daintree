@@ -1,3 +1,5 @@
+import { UI_EXIT_DURATION, UI_EXIT_EASING } from "@shared/config/uiMotion";
+
 /* Motion token scale — mirrors the CSS custom properties in src/index.css so
  * React components using `motion` props and JS timers stay in sync with CSS
  * keyframes and Tailwind utilities. See @theme block at the top of index.css.
@@ -49,7 +51,7 @@ export function getPerformanceModeFloor(ms: number): number {
 }
 
 export const UI_ENTER_DURATION = DURATION_200;
-export const UI_EXIT_DURATION = 120;
+export { UI_EXIT_DURATION, UI_EXIT_EASING };
 
 export const UI_PALETTE_ENTER_DURATION = DURATION_150;
 export const UI_PALETTE_EXIT_DURATION = DURATION_100;
@@ -204,7 +206,6 @@ export const UI_TOOLTIP_DELAY_DURATION = 500;
 export const UI_TOOLTIP_SKIP_DELAY_DURATION = DURATION_300;
 
 export const UI_ENTER_EASING = EASE_SPRING_CRITICAL;
-export const UI_EXIT_EASING = "cubic-bezier(0.2, 0, 0.7, 0)";
 
 /** Scrim/backdrop fade easing. A dialog backdrop only interpolates opacity, and
  *  opacity has no perceived mass — the eased and spring curves used for the card
