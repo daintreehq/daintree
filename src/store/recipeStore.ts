@@ -102,6 +102,22 @@ export interface RecipeSpawnResults {
   failed: RecipeSpawnFailure[];
 }
 
+/**
+ * What a layout capture left out of the draft, so the editor can say so before
+ * the person saves (#14968). `panelKinds` counts panels a recipe can't hold, by
+ * kind, in the order they first appear; `cappedTerminalCount` counts the
+ * capturable panels past {@link MAX_TERMINALS_PER_RECIPE}.
+ */
+export interface RecipeLayoutOmissions {
+  panelKinds: Record<string, number>;
+  cappedTerminalCount: number;
+}
+
+export interface RecipeLayoutCapture {
+  terminals: RecipeTerminal[];
+  omitted: RecipeLayoutOmissions;
+}
+
 export interface RecipeRunOptions {
   spawnedBy?: TerminalSpawnSource;
   focusPolicy?: AddPanelFocusPolicy;
@@ -326,6 +342,7 @@ interface RecipeState {
   exportRecipe: (id: string) => string | null;
   importRecipe: (projectId: string | undefined, json: string) => Promise<void>;
 
+  captureRecipeFromLayout: (worktreeId: string) => RecipeLayoutCapture;
   generateRecipeFromActiveTerminals: (worktreeId: string) => RecipeTerminal[];
 
   reset: () => void;
@@ -1683,22 +1700,33 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     }
   },
 
-  generateRecipeFromActiveTerminals: (worktreeId) => {
+  captureRecipeFromLayout: (worktreeId) => {
     const terminalStore = usePanelStore.getState();
+    const terminals: RecipeTerminal[] = [];
+    const omitted: RecipeLayoutOmissions = { panelKinds: {}, cappedTerminalCount: 0 };
 
-    const activeTerminals = terminalStore.panelIds
-      .map((id) => terminalStore.panelsById[id])
-      .filter(
-        (t): t is NonNullable<typeof t> =>
-          Boolean(t) && t!.location !== "trash" && t!.worktreeId === worktreeId
-      );
+    // Only panels a recipe can hold count toward the cap: a browser ahead of a
+    // terminal must not spend the terminal's slot (#14968).
+    for (const id of terminalStore.panelIds) {
+      const panel = terminalStore.panelsById[id];
+      if (!panel || panel.location === "trash" || panel.worktreeId !== worktreeId) continue;
+      if (!isPtyPanel(panel) && !isDevPreviewPanel(panel)) {
+        const kind = panel.kind ?? "terminal";
+        omitted.panelKinds[kind] = (omitted.panelKinds[kind] ?? 0) + 1;
+        continue;
+      }
+      if (terminals.length >= MAX_TERMINALS_PER_RECIPE) {
+        omitted.cappedTerminalCount++;
+        continue;
+      }
+      terminals.push(terminalToRecipeTerminal(panel));
+    }
 
-    const terminalsToCapture = activeTerminals.slice(0, MAX_TERMINALS_PER_RECIPE);
-
-    return terminalsToCapture
-      .filter((t): t is PtyPanelData | DevPreviewPanelData => isPtyPanel(t) || isDevPreviewPanel(t))
-      .map(terminalToRecipeTerminal);
+    return { terminals, omitted };
   },
+
+  generateRecipeFromActiveTerminals: (worktreeId) =>
+    get().captureRecipeFromLayout(worktreeId).terminals,
 
   reset: () => {
     lastCollisionSignatureByProject.clear();
