@@ -519,6 +519,28 @@ describe("readCodexQuotaProfiles (#13686)", () => {
     });
   });
 
+  describe("the agent-wide CODEX_HOME (#15047)", () => {
+    function codexEntry(entry: Record<string, unknown>) {
+      agentSettings.value = { agents: { codex: entry } };
+    }
+
+    it("reads the default row from the agent-wide home, not main's", async () => {
+      codexEntry({ globalEnv: { CODEX_HOME: second } });
+      respondPerHome((home) => (home === second ? 80 : 10));
+      const profiles = await readCodexQuotaProfiles();
+      expect(profiles.map((p) => [p.isDefault, p.presetNames, used(p.result)])).toEqual([
+        [true, [], 80],
+      ]);
+      expect(runSession.mock.calls.map((call) => call[1])).toEqual([{ codexHome: second }]);
+    });
+
+    it("points the MCP default reading at the agent-wide home too", async () => {
+      codexEntry({ globalEnv: { codex_home: second } });
+      respondPerHome((home) => (home === second ? 80 : 10));
+      expect(used(await readCodexQuota())).toBe(80);
+    });
+  });
+
   it("keeps going after one home's read fails", async () => {
     presets({ id: "second", name: "Second", env: { CODEX_HOME: second } });
     runSession.mockImplementation(
