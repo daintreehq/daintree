@@ -46,7 +46,7 @@ export const codexClient = {
   },
 
   /**
-   * Codex account quota for main's own profile and each distinct `CODEX_HOME`
+   * Codex account quota for the default profile and each distinct `CODEX_HOME`
    * a Codex preset sets (#12797, #13686). Never rejects on a failed read.
    */
   readQuota: (): Promise<CodexQuotaProfile[]> => {

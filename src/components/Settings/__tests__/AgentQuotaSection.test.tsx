@@ -26,6 +26,9 @@ vi.mock("@/hooks/useGlobalMinuteTicker", () => ({
 }));
 
 import { AgentQuotaSection, windowLabel } from "../AgentQuotaSection";
+import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { useProjectPresetsStore } from "@/store/projectPresetsStore";
+import type { AgentSettings } from "@shared/types";
 
 const NOW = 1_700_000_000_000;
 
@@ -47,6 +50,8 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  useAgentSettingsStore.setState({ settings: null });
+  useProjectPresetsStore.getState().reset();
 });
 
 describe("AgentQuotaSection (#12797)", () => {
@@ -249,6 +254,23 @@ describe("AgentQuotaSection profiles (#13686)", () => {
     expect(document.body.textContent).toContain("isn't a folder Daintree can open");
   });
 
+  it("points the default profile's unreadable home at Codex's own variables (#15047)", async () => {
+    readProfiles.mockResolvedValue([
+      {
+        key: "a",
+        isDefault: true,
+        presetNames: [],
+        result: { status: "unavailable", reason: "home-not-absolute", fetchedAt: NOW },
+      },
+    ]);
+    await renderFor("codex");
+
+    expect(document.body.textContent).toContain(
+      "The CODEX_HOME in Codex's environment variables isn't a full path"
+    );
+    expect(document.body.textContent).not.toContain("This preset's");
+  });
+
   it("lets a batch that outlasts the poll interval finish instead of discarding it", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     try {
@@ -303,6 +325,63 @@ describe("AgentQuotaSection profiles (#13686)", () => {
       cleanup();
       vi.useRealTimers();
     }
+  });
+});
+
+describe("AgentQuotaSection project presets (#15047)", () => {
+  const project = (id: string, name: string, env?: Record<string, string>) => ({ id, name, env });
+
+  function disclosure() {
+    return screen.queryByText("Project presets not included")?.closest("div")?.parentElement
+      ?.textContent;
+  }
+
+  beforeEach(() => {
+    readQuota.mockResolvedValue({ status: "unavailable", reason: "read-failed", fetchedAt: NOW });
+  });
+
+  it("says which project presets with their own home it doesn't read", async () => {
+    useProjectPresetsStore.getState().setPresetsByAgent("p1", {
+      codex: [
+        project("team", "Team account", { CODEX_HOME: "/Users/me/.codex-team" }),
+        project("plain", "Plain", { OTHER: "1" }),
+        project("blank", "Blank", { CODEX_HOME: "" }),
+        project("mine", "Shadowed", { codex_home: "/Users/me/.codex-x" }),
+      ],
+      claude: [project("other", "Other agent", { CODEX_HOME: "/Users/me/.codex-y" })],
+    });
+    // A custom preset with the same id is the one that launches.
+    useAgentSettingsStore.setState({
+      settings: { agents: { codex: { customPresets: [project("mine", "Mine")] } } } as AgentSettings,
+    });
+    await renderFor("codex");
+
+    expect(disclosure()).toContain("Team account sets its own CODEX_HOME");
+    expect(disclosure()).toContain("no reading for it.");
+    for (const name of ["Plain", "Blank", "Shadowed", "Other agent"]) {
+      expect(disclosure()).not.toContain(name);
+    }
+  });
+
+  it("lists several in one sentence", async () => {
+    useProjectPresetsStore.getState().setPresetsByAgent("p1", {
+      codex: [
+        project("a", "Work", { CODEX_HOME: "/a" }),
+        project("b", "Review", { CODEX_HOME: "/b" }),
+      ],
+    });
+    await renderFor("codex");
+
+    expect(disclosure()).toContain("Work and Review set their own CODEX_HOME");
+  });
+
+  it("says nothing when no project preset names a home", async () => {
+    useProjectPresetsStore.getState().setPresetsByAgent("p1", {
+      codex: [project("plain", "Plain", { OTHER: "1" })],
+    });
+    await renderFor("codex");
+
+    expect(disclosure()).toBeUndefined();
   });
 });
 
