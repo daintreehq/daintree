@@ -313,6 +313,33 @@ describe("TerminalInstanceService attach reveal", () => {
     expect(settled).toBe(true);
   });
 
+  it("resolves attach-settled waiters when the post-attach fit throws", async () => {
+    const managed = makeMockManaged("t1");
+    const offscreen = document.createElement("div");
+    offscreen.appendChild(managed.hostElement);
+    service.instances.set("t1", managed);
+
+    vi.spyOn(service.resizeController, "fit").mockImplementation(() => {
+      throw new Error("renderer has no dimensions");
+    });
+
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+
+    service.attach("t1", container);
+
+    let settled = false;
+    void service.waitForAttachSettled("t1", { timeoutMs: 1000 }).then(() => {
+      settled = true;
+    });
+
+    // Two frames, well inside the deadline: the settle step itself releases it.
+    await vi.advanceTimersByTimeAsync(32);
+
+    expect(service.resizeController.fit).toHaveBeenCalledWith("t1");
+    expect(settled).toBe(true);
+  });
+
   describe("early synchronous resize for warm terminals", () => {
     it("applies resize synchronously before rAF when warm terminal has target dimensions", () => {
       const managed = makeMockManaged("t1");

@@ -117,6 +117,15 @@ async function drainMicrotasks(iterations = 100): Promise<void> {
   }
 }
 
+// The queue waits on a visible attach only for a pane whose chrome is on the
+// page (#15271). These suites run without a DOM, so the panes a test treats as
+// mounted grid panes are put on a stand-in page.
+function putPanesOnPage(ids: string[]): void {
+  vi.stubGlobal("document", {
+    querySelectorAll: () => ids.map((panelId) => ({ dataset: { panelId } })),
+  });
+}
+
 describe("optimistic panel spawn (#5789)", () => {
   beforeEach(async () => {
     const { reset } = usePanelStore.getState();
@@ -133,6 +142,10 @@ describe("optimistic panel spawn (#5789)", () => {
     const waitForAttachSettledMock = vi.mocked(terminalInstanceService.waitForAttachSettled);
     waitForAttachSettledMock.mockReset();
     waitForAttachSettledMock.mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it("commits the panel to the store before terminalClient.spawn resolves", async () => {
@@ -209,6 +222,7 @@ describe("optimistic panel spawn (#5789)", () => {
       }
       return Promise.resolve();
     });
+    putPanesOnPage(Array.from({ length: 6 }, (_, i) => `concurrent-${i}`));
 
     const { addPanel } = usePanelStore.getState();
     const launches = Array.from({ length: 6 }, (_, i) =>
@@ -292,6 +306,7 @@ describe("optimistic panel spawn (#5789)", () => {
       const index = Number(id.slice("recipe-".length));
       return attachGates[index]!;
     });
+    putPanesOnPage(Array.from({ length: 4 }, (_, i) => `recipe-${i}`));
 
     const { addPanel } = usePanelStore.getState();
     const launches = Array.from({ length: 4 }, (_, i) =>
@@ -329,6 +344,85 @@ describe("optimistic panel spawn (#5789)", () => {
         "ready"
       );
     }
+  });
+
+  it("doesn't hold a burst of launches on panes that aren't on the page", async () => {
+    const { terminalClient } = (await import("@/clients")) as unknown as {
+      terminalClient: { spawn: ReturnType<typeof vi.fn> };
+    };
+    const terminalInstanceService = (
+      await import("@/services/TerminalInstanceService")
+    ).createTerminalPaintPlane();
+    const waitForAttachSettledMock = vi.mocked(terminalInstanceService.waitForAttachSettled);
+    // An attach that never comes: the wait would hold each launch to its timeout.
+    waitForAttachSettledMock.mockImplementation(() => new Promise<void>(() => {}));
+    putPanesOnPage([]);
+
+    const { addPanel } = usePanelStore.getState();
+    const ids = Array.from({ length: 13 }, (_, i) => `fleet-${i}`);
+    await Promise.all(
+      ids.map((requestedId) =>
+        addPanel({
+          kind: "terminal",
+          launchAgentId: "claude",
+          command: "claude",
+          requestedId,
+          cwd: "/",
+          bypassLimits: true,
+        })
+      )
+    );
+    await drainMicrotasks(ids.length * 100);
+
+    expect(terminalClient.spawn).toHaveBeenCalledTimes(ids.length);
+    expect(waitForAttachSettledMock).not.toHaveBeenCalled();
+    for (const id of ids) {
+      expect(getPtyPanel(id)?.spawnStatus).toBe("ready");
+    }
+  });
+
+  it("holds the next spawn only behind a pane that is on the page", async () => {
+    const { terminalClient } = (await import("@/clients")) as unknown as {
+      terminalClient: { spawn: ReturnType<typeof vi.fn> };
+    };
+    const terminalInstanceService = (
+      await import("@/services/TerminalInstanceService")
+    ).createTerminalPaintPlane();
+    const waitForAttachSettledMock = vi.mocked(terminalInstanceService.waitForAttachSettled);
+    let releaseAttach: () => void = () => {};
+    const attachGate = new Promise<void>((resolve) => {
+      releaseAttach = resolve;
+    });
+    waitForAttachSettledMock.mockImplementation(() => attachGate);
+    putPanesOnPage(["mixed-1"]);
+
+    const { addPanel } = usePanelStore.getState();
+    await Promise.all(
+      ["mixed-0", "mixed-1", "mixed-2"].map((requestedId) =>
+        addPanel({
+          kind: "terminal",
+          launchAgentId: "claude",
+          command: "claude",
+          requestedId,
+          cwd: "/",
+          bypassLimits: true,
+        })
+      )
+    );
+    await drainMicrotasks(300);
+
+    expect(terminalClient.spawn.mock.calls.map(([args]) => (args as { id: string }).id)).toEqual([
+      "mixed-0",
+      "mixed-1",
+    ]);
+    expect(waitForAttachSettledMock).toHaveBeenCalledTimes(1);
+    expect(waitForAttachSettledMock.mock.calls[0]?.[0]).toBe("mixed-1");
+
+    releaseAttach();
+    await drainMicrotasks();
+
+    expect(terminalClient.spawn).toHaveBeenCalledTimes(3);
+    expect(getPtyPanel("mixed-2")?.spawnStatus).toBe("ready");
   });
 
   it("does not stamp eagerAttach on dock launches", async () => {

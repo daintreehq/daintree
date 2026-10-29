@@ -2425,6 +2425,7 @@ class TerminalInstanceService {
         if (element) prepared.push({ job, element });
       } catch (error) {
         logError("attach reveal failed", error, { id: job.id });
+        this.settleAfterFailedReveal(job.id);
       }
     }
 
@@ -2440,6 +2441,7 @@ class TerminalInstanceService {
         settles.push(job.reveal());
       } catch (error) {
         logError("attach reveal failed", error, { id: job.id });
+        this.settleAfterFailedReveal(job.id);
       }
     }
     if (settles.length === 0) return;
@@ -2453,10 +2455,26 @@ class TerminalInstanceService {
             settle[step]();
           } catch (error) {
             logError("attach settle failed", error, { id: settle.id });
+            if (step === "settle") this.settleAfterFailedReveal(settle.id);
           }
         }
       }
     });
+  }
+
+  /**
+   * A reveal step that throws still leaves the xterm attached, so its waiters
+   * hear about it: the startup queue holds the next spawn on that wait, and a
+   * missed notify cost every launch behind it the full timeout (#15271). The
+   * notify re-checks the settle predicate, so a pane still mid-attach stays
+   * pending.
+   */
+  private settleAfterFailedReveal(id: string): void {
+    try {
+      this.settleWaiters.notifyAttachSettledWaiters(id);
+    } catch (error) {
+      logError("attach settle notify failed", error, { id });
+    }
   }
 
   attach(id: string, container: HTMLElement): ManagedTerminal | null {
