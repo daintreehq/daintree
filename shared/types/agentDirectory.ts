@@ -59,6 +59,16 @@ export const AgentDirectorySubjectSchema = z.object({
 });
 export type AgentDirectorySubject = z.infer<typeof AgentDirectorySubjectSchema>;
 
+/** Whether two subjects name the same run: one terminal, one PTY launch. A successor never matches. */
+export function isSameAssistantRun(
+  a: AgentDirectorySubject | null,
+  b: AgentDirectorySubject | null
+): boolean {
+  return (
+    a !== null && b !== null && a.terminalId === b.terminalId && a.incarnation === b.incarnation
+  );
+}
+
 const agentStateSchema = z.enum(["idle", "working", "waiting", "directing", "completed", "exited"]);
 const waitingReasonSchema = z.enum(["prompt", "question", "approval", "error"]);
 
