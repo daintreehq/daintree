@@ -73,15 +73,16 @@ const SCOPE_BADGE_LABEL: Record<PluginSettingsScope, string> = {
 };
 
 /**
- * A `user` value is stored under the instance key, and a project-owned
- * instance's key carries its project id, so there the value reaches this
- * project on this machine, never every project.
+ * Where this instance's value actually lands, which the scope alone misstates
+ * twice: a `user` value is stored under the instance key, and a project-owned
+ * instance's key carries its project id; and a `project` secret is kept in the
+ * local file, never in the repository.
  */
-function scopeBadgeLabel(scope: PluginSettingsScope, pluginId: string): string {
-  if (scope === "user" && projectIdFromPluginInstanceKey(pluginId) !== null) {
-    return SCOPE_BADGE_LABEL.local;
-  }
-  return SCOPE_BADGE_LABEL[scope];
+function scopeBadgeLabel(scope: PluginSettingsScope, pluginId: string, isSecret: boolean): string {
+  const machineOnly =
+    (scope === "user" && projectIdFromPluginInstanceKey(pluginId) !== null) ||
+    (scope === "project" && isSecret);
+  return machineOnly ? SCOPE_BADGE_LABEL.local : SCOPE_BADGE_LABEL[scope];
 }
 
 /**
@@ -583,7 +584,7 @@ function SettingField({
   };
   const scopeBadge = (
     <>
-      <Badge size="xs">{scopeBadgeLabel(scope, pluginId)}</Badge>
+      <Badge size="xs">{scopeBadgeLabel(scope, pluginId, isSecret)}</Badge>
       {def.required === true && <Badge size="xs">Required</Badge>}
     </>
   );
