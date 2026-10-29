@@ -523,8 +523,9 @@ export class DevPreviewSessionService {
 
       // A config change is an explicit "try again with new settings" — clear a
       // tripped crash-loop guard so the fresh config gets its full attempt
-      // budget instead of inheriting a stopped state from the old config.
-      if (launchConfigChanged) {
+      // budget instead of inheriting a stopped state from the old config. A
+      // user's Start is just as explicit, and must not wait behind a backoff.
+      if (launchConfigChanged || request.resumeUserStopped) {
         resetCrashLoopGuard(session);
       }
 

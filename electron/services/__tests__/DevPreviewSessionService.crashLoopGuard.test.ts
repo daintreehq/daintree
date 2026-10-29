@@ -343,6 +343,25 @@ describe("DevPreviewSessionService crash-loop guard", () => {
     expect(service.getState(stateRequest).status).toBe("installing");
   });
 
+  it("launches a user's Start at once instead of waiting on a pending backoff", async () => {
+    const started = await service.ensure(baseRequest);
+    let devId: string | null = started.terminalId!;
+
+    devId = await crashThroughInstall(devId!);
+    ptyClient.emitData(devId!, "missing deps");
+    ptyClient.emitExit(devId!, 1);
+    const spawnsWhilePending = ptyClient.spawn.mock.calls.length;
+    expect(currentTerminalId()).toBeNull(); // backoff pending, no install yet
+
+    const resumed = await service.ensure({ ...baseRequest, resumeUserStopped: true });
+    expect(resumed.terminalId).toBeTruthy();
+    expect(ptyClient.spawn.mock.calls.length).toBe(spawnsWhilePending + 1);
+
+    // The superseded backoff install never fires.
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(ptyClient.spawn.mock.calls.length).toBe(spawnsWhilePending + 1);
+  });
+
   it("does not run a backoff install after the service is disposed", async () => {
     const started = await service.ensure(baseRequest);
     let devId: string | null = started.terminalId!;
