@@ -96,7 +96,7 @@ export function RecipeRunner({ activeWorktreeId, defaultCwd }: RecipeRunnerProps
         <div className="mb-3" data-testid="recipe-unresolved-vars-banner">
           <InlineStatusBanner
             title={formatUnresolvedVarsTitle(runner.unresolvedVars)}
-            description="These variables stayed empty in the launched commands."
+            description="Plugin variables only get values when their plugin runs the recipe, so these launched empty."
             severity="warning"
             role="status"
             actions={[]}

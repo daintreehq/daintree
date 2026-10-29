@@ -14,6 +14,7 @@ const mcpConfirmState = vi.hoisted(() => ({ current: { requestId: "mcp-1" } }));
 const pluginConfirmState = vi.hoisted(() => ({ current: { requestId: "plugin-1" } }));
 const pluginMcpConfirmState = vi.hoisted(() => ({ current: null as { requestId: string } | null }));
 const pluginCapabilityConfirmState = vi.hoisted(() => ({ current: { requestId: "cap-1" } }));
+const recipeRunConfirmState = vi.hoisted(() => ({ current: { requestId: "run-1" } }));
 const diagnosticsReviewState = vi.hoisted(() => ({ requestSeq: 5 }));
 
 function selectorMock<T>(state: T) {
@@ -56,6 +57,9 @@ vi.mock("@/store/pluginMcpConfirmStore", () => ({
 vi.mock("@/store/pluginCapabilityConfirmStore", () => ({
   usePluginCapabilityConfirmStore: selectorMock(pluginCapabilityConfirmState),
 }));
+vi.mock("@/store/recipeRunConfirmStore", () => ({
+  useRecipeRunConfirmStore: selectorMock(recipeRunConfirmState),
+}));
 vi.mock("@/store/diagnosticsReviewStore", () => ({
   useDiagnosticsReviewStore: selectorMock(diagnosticsReviewState),
 }));
@@ -84,6 +88,7 @@ describe("useModalResetKeys", () => {
       pluginMcpConfirmResetKey: "",
       pluginCapabilityConfirmResetKey: "cap-1",
       pluginArchiveInstallResetKey: "",
+      recipeRunConfirmResetKey: "run-1",
       diagnosticsReviewResetKey: 5,
       terminalInfoResetKey: 0,
     });
