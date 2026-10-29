@@ -44,7 +44,15 @@ describe("describeAttachedMachines", () => {
     expect(describeAttachedMachines(["Studio", "", ""]).object).toBe("Studio and 2 other machines");
   });
 
-  it("keeps a lowercase machine name as it is", () => {
+  it("keeps a machine's own name as it is, even one that reads like the fallback", () => {
     expect(describeAttachedMachines(["greg-mbp"]).subject).toBe("greg-mbp");
+    expect(describeAttachedMachines(["another machine"]).subject).toBe("another machine");
+    expect(describeAttachedMachines(["another machine-room"]).subject).toBe("another machine-room");
+  });
+
+  it("groups names that differ only by surrounding space, and counts past two", () => {
+    expect(describeAttachedMachines([" Studio", "Studio ", "Studio"]).object).toBe(
+      "3 machines named Studio"
+    );
   });
 });

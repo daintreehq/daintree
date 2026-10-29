@@ -213,6 +213,24 @@ describe("HostModeGroup", () => {
       expect(clientMock.setEnabled).toHaveBeenCalledWith({ enabled: false });
     });
 
+    it("speaks of one unnamed machine in the singular", async () => {
+      clientMock.onEvent.mockReturnValue(() => {});
+      clientMock.getStatus.mockResolvedValue({
+        ...ON,
+        attachedClients: [
+          { clientId: "a", clientName: " ", connectedAt: 1, drivingProjectIds: [] },
+        ],
+      });
+      const { container } = await renderGroup();
+      await act(async () => {
+        fireEvent.click(switchFor(container, "Allow this machine to be a host"));
+      });
+
+      expect(document.body.textContent).toContain(
+        "Another machine is attached to this machine. Turning hosting off disconnects it and ends the work it has open here."
+      );
+    });
+
     it("counts two machines with one name as two", async () => {
       clientMock.onEvent.mockReturnValue(() => {});
       clientMock.getStatus.mockResolvedValue({

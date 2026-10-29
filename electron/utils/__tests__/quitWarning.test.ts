@@ -259,6 +259,8 @@ describe("showUpdateWarning", () => {
     );
     const opts = showMessageBox.mock.calls[0]![0];
     expect(opts.message).toBe("2 machines named MacBook Pro are attached to this host");
-    expect(opts.detail).toContain("ends the work they have open");
+    expect(opts.detail).toBe(
+      "Restarting to update disconnects 2 machines named MacBook Pro and ends the work they have open on this machine. The update stays ready until you restart."
+    );
   });
 });

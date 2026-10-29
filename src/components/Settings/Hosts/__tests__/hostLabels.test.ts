@@ -242,4 +242,8 @@ describe("shellWord", () => {
     expect(shellWord("greg@studio.local")).toBe("greg@studio.local");
     expect(shellWord("greg@[studio]")).toBe("'greg@[studio]'");
   });
+
+  it("keeps a quote inside the word from ending it", () => {
+    expect(shellWord("o'brien@studio")).toBe(`'o'\\''brien@studio'`);
+  });
 });

@@ -57,6 +57,8 @@ export function PluginNotOnHostPlaceholder({
     window.electron.pluginParity.diff({ hostId }).then(
       (rows) => {
         if (cancelled) return;
+        // A comparison after an install is the evidence from then on.
+        setInstalled(false);
         setRowState({
           status: "ready",
           row: rows.find((candidate) => candidate.pluginId === pluginId) ?? null,
@@ -113,7 +115,7 @@ export function PluginNotOnHostPlaceholder({
   let title: string;
   let detail: string;
   if (rowState.status === "loading") {
-    title = `${name} isn't available on ${host}`;
+    title = `${name} isn't available from ${host}`;
     detail = `Checking which plugins ${host} has`;
   } else if (rowState.status === "unavailable") {
     title = `Couldn't check ${name} on ${host}`;
@@ -123,13 +125,12 @@ export function PluginNotOnHostPlaceholder({
       `Couldn't compare this machine's plugins with ${host}'s.`
     );
   } else if (onHost) {
-    // A copy is there; what the comparison saw about it is the reason it isn't here.
-    title = `${name} isn't running on ${host}`;
-    detail =
-      reason ??
-      (installed
-        ? `Installed on ${host}. If this panel doesn't appear, check the plugin in Plugins on ${host}.`
-        : `It's installed on ${host}, but hasn't loaded there.`);
+    // A copy is there. All that's seen is that the host didn't offer this panel.
+    title = `${name}'s panel isn't available from ${host}`;
+    const seen = installed
+      ? `Installed on ${host}.`
+      : `It's installed on ${host}, but ${host} hasn't offered this panel here.`;
+    detail = reason ?? `${seen} If it doesn't appear, check the plugin in Plugins on ${host}.`;
   } else if (canInstall) {
     title = `${name} isn't installed on ${host}`;
     detail = reason
@@ -139,11 +140,9 @@ export function PluginNotOnHostPlaceholder({
     title = `${name} can't run here from ${host}`;
     detail = reason;
   } else {
-    title = `${name} isn't installed on ${host}`;
-    detail =
-      row === null
-        ? "It isn't installed on this machine either, so there's no copy to install there."
-        : `${host} doesn't have it, and this machine's copy can't be installed there.`;
+    // No row says nothing about this machine: project plugins are never compared.
+    title = `${name} isn't available from ${host}`;
+    detail = `Daintree has no copy of it here that it can install on ${host}.`;
   }
   const description = installError ?? detail;
 

@@ -33,5 +33,10 @@ describe("sshLoginTarget", () => {
       throw new Error("ENOENT: no passwd entry");
     };
     expect(sshLoginTarget("studio.local", fails)).toBe("studio.local");
+    expect(sshLoginTarget("box.lan", () => "")).toBe("box.lan");
+  });
+
+  it("pairs whichever login and hostname it is given", () => {
+    expect(sshLoginTarget("box.lan", () => "ana")).toBe("ana@box.lan");
   });
 });

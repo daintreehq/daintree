@@ -77,7 +77,10 @@ describe("HostPluginViewConsents", () => {
   });
 
   it("keeps a failed reset on its own row, and its Retry resets again", async () => {
-    client.plugins = [{ pluginId: "acme.graph", state: "allowed" }];
+    client.plugins = [
+      { pluginId: "acme.graph", state: "allowed" },
+      { pluginId: "acme.peek", state: "refused" },
+    ];
     client.resetPluginViewConsent.mockRejectedValueOnce(new Error("host gone"));
     await act(async () => {
       render(<HostPluginViewConsents hostId="studio-01" hostName="studio" />);
@@ -85,7 +88,12 @@ describe("HostPluginViewConsents", () => {
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Reset the plugin view for acme.graph" }));
     });
-    expect(screen.getByRole("alert").textContent).toBe("Couldn't reset it: host gone");
+    expect(screen.getAllByRole("alert").map((alert) => alert.textContent)).toEqual([
+      "Couldn't reset it: host gone",
+    ]);
+    expect(
+      screen.getByRole("button", { name: "Reset the plugin view for acme.peek" })
+    ).toBeTruthy();
     expect(screen.queryByText("Couldn't load plugin views")).toBeNull();
     expect(client.listPluginViewConsents).toHaveBeenCalledTimes(1);
 
@@ -94,8 +102,10 @@ describe("HostPluginViewConsents", () => {
         screen.getByRole("button", { name: "Retry resetting the plugin view for acme.graph" })
       );
     });
+    expect(client.resetPluginViewConsent).toHaveBeenLastCalledWith("studio-01", "acme.graph");
     expect(client.resetPluginViewConsent).toHaveBeenCalledTimes(2);
     expect(screen.queryByText("acme.graph")).toBeNull();
+    expect(screen.getByText("acme.peek")).toBeTruthy();
   });
 
   it("starts one reset however often it is pressed while it runs", async () => {
@@ -111,6 +121,9 @@ describe("HostPluginViewConsents", () => {
     fireEvent.click(button);
     fireEvent.click(button);
     expect(client.resetPluginViewConsent).toHaveBeenCalledTimes(1);
+    expect(button.getAttribute("aria-busy")).toBe("true");
+    expect(button.getAttribute("aria-disabled")).toBe("true");
     await act(async () => finish());
+    expect(screen.queryByText("acme.graph")).toBeNull();
   });
 });

@@ -157,11 +157,22 @@ describe("HostDetail SSH target", () => {
       "studio-01 can't connect until ssh reaches greg@newbox"
     );
 
+    // Check again is the confirm slot, the rebind only the leading one.
+    expect(screen.getByRole("button", { name: "Check again" }).dataset.confirmRole).toBe("confirm");
+    expect(screen.getByRole("button", { name: "Change target anyway" }).dataset.confirmRole).toBe(
+      "leading"
+    );
+    await act(async () => {
+      fireEvent.keyDown(screen.getByDisplayValue("greg@newbox"), { key: "Enter" });
+    });
+    expect(client.probe).toHaveBeenCalledTimes(2);
+    expect(client.update).not.toHaveBeenCalled();
+
     client.probe.mockImplementation(async () => probe());
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Check again" }));
     });
-    expect(client.probe).toHaveBeenCalledTimes(2);
+    expect(client.probe).toHaveBeenCalledTimes(3);
     expect(client.probe).toHaveBeenLastCalledWith({ kind: "ssh", target: "greg@newbox" });
     expect(screen.getByRole("button", { name: "Change target" })).toBeTruthy();
     expect(client.update).not.toHaveBeenCalled();

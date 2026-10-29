@@ -1,9 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("electron", () => ({ app: { isPackaged: true }, dialog: {} }));
+const electron = vi.hoisted(() => ({
+  app: { isPackaged: true, whenReady: vi.fn(async () => {}), exit: vi.fn() },
+  dialog: { showMessageBox: vi.fn() },
+}));
+const armRelaunch = vi.hoisted(() => vi.fn());
+const execFile = vi.hoisted(() => vi.fn());
+
+vi.mock("electron", () => electron);
+vi.mock("../../../lifecycle/armRelaunch.js", () => ({ armRelaunch }));
+vi.mock("node:child_process", () => ({ execFile }));
 
 import {
   TAKEOVER_PROMPT,
+  offerHeadlessHostTakeover,
   hostUnitFromCgroup,
   isHeadlessHostCommandLine,
   processStartTime,
@@ -17,6 +27,25 @@ describe("headless Host takeover", () => {
     expect(defaultId).toBe(cancelId);
     expect(buttons[defaultId!]).toBe("Cancel");
     expect(buttons[0]).toBe("Restart with a window");
+  });
+
+  // Cancel, Escape and Enter on the default all answer with cancelId.
+  it("leaves the Host and its work running when the prompt is cancelled", async () => {
+    electron.dialog.showMessageBox.mockResolvedValueOnce({ response: TAKEOVER_PROMPT.cancelId });
+    const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
+    try {
+      await offerHeadlessHostTakeover(
+        { pid: 424242, unit: "daintree-host.service", startTime: "1234" },
+        ["daintree"]
+      );
+      expect(electron.dialog.showMessageBox).toHaveBeenLastCalledWith(TAKEOVER_PROMPT);
+      expect(electron.app.exit).toHaveBeenLastCalledWith(0);
+      expect(execFile).not.toHaveBeenCalled();
+      expect(kill).not.toHaveBeenCalled();
+      expect(armRelaunch).not.toHaveBeenCalled();
+    } finally {
+      kill.mockRestore();
+    }
   });
 
   it("is only for a launch that wants a window, on a desktop that can show one", () => {

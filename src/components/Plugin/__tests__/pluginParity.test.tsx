@@ -168,7 +168,9 @@ describe("PluginNotOnHostPlaceholder", () => {
     ]);
     const { container, queryByRole } = render(<PluginNotOnHostPlaceholder pluginId="acme.md" />);
     await waitFor(() =>
-      expect(container.textContent).toContain("Markdown Preview isn't running on studio-01")
+      expect(container.textContent).toContain(
+        "Markdown Preview's panel isn't available from studio-01"
+      )
     );
     expect(container.textContent).toContain("Set it up on studio-01: API key isn't set there.");
     expect(container.textContent).not.toContain("isn't installed");
@@ -195,9 +197,12 @@ describe("PluginNotOnHostPlaceholder", () => {
     expect(container.textContent).toContain("Markdown Preview isn't installed on studio-01");
   });
 
-  it("says an install went in and offers no second one while the panel hasn't appeared", async () => {
+  it("says an install went in, offers no second one, and then goes by the next comparison", async () => {
+    let settle: (rows: PluginParityRow[]) => void = () => {};
     parity.diff.mockResolvedValueOnce([row({})]);
-    parity.diff.mockResolvedValueOnce([row({ group: "same", hostVersion: "1.0.0", action: null })]);
+    parity.diff.mockImplementationOnce(
+      () => new Promise<PluginParityRow[]>((resolve) => (settle = resolve))
+    );
     const { container, findByRole, getByRole, queryByRole } = render(
       <PluginNotOnHostPlaceholder pluginId="acme.md" />
     );
@@ -206,11 +211,40 @@ describe("PluginNotOnHostPlaceholder", () => {
       fireEvent.click(getByRole("button", { name: "Install on studio-01" }));
       expect(parity.installOnHost).toHaveBeenCalled();
     });
+    // The row still offers an install until the comparison after it answers.
     await waitFor(() => expect(container.textContent).toContain("Installed on studio-01."));
-    expect(parity.installOnHost).toHaveBeenCalledTimes(1);
-    expect(container.textContent).toContain("Markdown Preview isn't running on studio-01");
     expect(queryByRole("button", { name: /Install on/ })).toBeNull();
+    expect(parity.diff).toHaveBeenCalledTimes(2);
+
+    await act(async () => settle([row({ group: "same", hostVersion: "1.0.0", action: null })]));
+    await waitFor(() =>
+      expect(container.textContent).toContain(
+        "It's installed on studio-01, but studio-01 hasn't offered this panel here."
+      )
+    );
+    expect(queryByRole("button", { name: /Install on/ })).toBeNull();
+  });
+
+  it("offers the install again when a later comparison finds the host's copy gone", async () => {
+    parity.diff.mockResolvedValueOnce([row({})]);
+    parity.diff.mockResolvedValueOnce([row({})]);
+    const { findByRole, getByRole } = render(<PluginNotOnHostPlaceholder pluginId="acme.md" />);
+    await findByRole("button", { name: "Install on studio-01" });
+    await waitFor(() => {
+      fireEvent.click(getByRole("button", { name: "Install on studio-01" }));
+      expect(parity.installOnHost).toHaveBeenCalled();
+    });
     await waitFor(() => expect(parity.diff).toHaveBeenCalledTimes(2));
+    await findByRole("button", { name: "Install on studio-01" });
+  });
+
+  it("claims nothing about this machine when the comparison has no row for the plugin", async () => {
+    parity.diff.mockResolvedValue([]);
+    const { container, queryByRole } = render(<PluginNotOnHostPlaceholder pluginId="acme.md" />);
+    await waitFor(() => expect(container.textContent).toContain("Daintree has no copy of it here"));
+    expect(container.textContent).toContain("acme.md isn't available from studio-01");
+    expect(container.textContent).not.toMatch(/Install it|isn't installed on this machine/);
+    expect(queryByRole("button", { name: /Install on/ })).toBeNull();
   });
 
   it("shows one toast when the host removes a plugin under open panels, none for a restore", async () => {

@@ -199,6 +199,13 @@ describe("DeviceAnswerGroup", () => {
     ).toBeTruthy();
   });
 
+  it("quotes a login a shell would split, on the port in use", async () => {
+    renderGroup(
+      makeStatus({ enabled: true, listening: true, port: 8123, sshTarget: "o'brien@studio" })
+    );
+    expect(await screen.findByText("ssh -L 8123:127.0.0.1:8123 'o'\\''brien@studio'")).toBeTruthy();
+  });
+
   it("announces the code once instead of every tick of its countdown", async () => {
     const on = makeStatus({ enabled: true, listening: true });
     renderGroup({ ...on, pairing: { code: "ABCD-EFGH", expiresAt: Date.now() + 120_000 } });
@@ -207,6 +214,31 @@ describe("DeviceAnswerGroup", () => {
     expect(live).toHaveLength(1);
     expect(live[0]!.textContent).toBe("Pairing code ABCD-EFGH");
     expect(screen.getByText(/Expires in/).closest("[aria-live]")).toBeNull();
+  });
+
+  it("keeps the live region still while the countdown ticks, warns once, and clears at expiry", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+    try {
+      const on = makeStatus({ enabled: true, listening: true });
+      renderGroup({ ...on, pairing: { code: "ABCD-EFGH", expiresAt: Date.now() + 120_000 } });
+      await screen.findByText("ABCD-EFGH");
+      const live = () => document.querySelector("#device-answer-pair [aria-live]")!.textContent;
+      expect(live()).toBe("Pairing code ABCD-EFGH");
+
+      act(() => vi.advanceTimersByTime(30_000));
+      expect(screen.getByText("Expires in 1:30")).toBeTruthy();
+      expect(live()).toBe("Pairing code ABCD-EFGH");
+
+      act(() => vi.advanceTimersByTime(61_000));
+      expect(screen.getByText("Expires in 0:29")).toBeTruthy();
+      expect(live()).toBe("Pairing code ABCD-EFGH, expires in under 30 seconds");
+
+      act(() => vi.advanceTimersByTime(30_000));
+      expect(screen.queryByText("ABCD-EFGH")).toBeNull();
+      expect(live()).toBe("");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("still reads out a code first shown near its expiry, with the warning", async () => {

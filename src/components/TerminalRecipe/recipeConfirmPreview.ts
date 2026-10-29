@@ -51,7 +51,9 @@ export function describeTerminal(
   if (terminal.type === "terminal") {
     lines.push(terminal.command ? `$ ${fragment(terminal.command)}` : "$ (default shell)");
   } else if (terminal.type === "dev-preview") {
-    lines.push(terminal.devCommand ? `$ ${fragment(terminal.devCommand)}` : "$ (no dev command)");
+    lines.push(
+      terminal.devCommand ? `$ ${fragment(terminal.devCommand)}` : "$ (the project's dev command)"
+    );
   } else if (terminal.type === "plugin-panel") {
     // A recipe from another machine can name a panel no plugin here registers.
     const kind = full && terminal.panelKindId ? ` (${terminal.panelKindId})` : "";

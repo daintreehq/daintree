@@ -46,7 +46,8 @@ export function describeAttachedMachines(names: readonly string[]): AttachedMach
   const plural = names.length > 1;
   return {
     count: names.length,
-    subject: object.startsWith("another machine") ? `A${object.slice(1)}` : object,
+    // Only the fallback is ours to capitalise; a machine's own name keeps its case.
+    subject: named.size === 0 && unnamed === 1 ? "Another machine" : object,
     object,
     verb: plural ? "are" : "is",
     pronoun: plural ? "them" : "it",
