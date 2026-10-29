@@ -867,7 +867,7 @@ describe("resume configuration", () => {
     }
   });
 
-  it("no gated escalation declares a blank gate", () => {
+  it("no gated escalation declares a blank gate or quit marker", () => {
     // Any string includes "", so a blank gate would release every press the cap
     // allows without the TUI acknowledging a single one.
     for (const id of getAgentIds()) {
@@ -875,6 +875,10 @@ describe("resume configuration", () => {
       if (resume?.kind !== "session-id" || !resume.shutdownSignal) continue;
       for (const gate of resume.shutdownSignal.gateTexts) {
         expect(gate.trim(), `${id} declares a blank gate`).not.toBe("");
+      }
+      // A blank quit marker would veto every press after the first.
+      for (const text of resume.shutdownSignal.quittingTexts ?? []) {
+        expect(text.trim(), `${id} declares a blank quit marker`).not.toBe("");
       }
     }
   });
@@ -941,6 +945,12 @@ describe("resume configuration", () => {
       "To continue this session, run:\r\n  codex resume 01a1867b-a012-7320-a3a8-c6adc343eb4e\r\n" +
       "Or run codex resume and select Run sleep command.\r\n";
     expect(gates.some((gate) => quitting.includes(gate))).toBe(false);
+    // The same two outputs the other way round for the quit veto: it has to
+    // recognise the quit, and must never fire on the interrupt notice or it
+    // would end every mid-turn escalation at one press.
+    const quitMarkers = signal?.quittingTexts ?? [];
+    expect(quitMarkers.some((text) => quitting.includes(text))).toBe(true);
+    expect(quitMarkers.some((text) => interrupted.includes(text))).toBe(false);
     // Budget fit lives in the pty suite, which owns GRACEFUL_SHUTDOWN_TIMEOUT_MS —
     // importing it here would drag electron into a shared/ test.
     expect(signal?.maxPresses).toBeGreaterThan(1);

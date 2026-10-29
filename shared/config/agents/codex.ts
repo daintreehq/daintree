@@ -185,10 +185,15 @@ export const config: AgentConfig = {
     // a draft in the composer, or a queued follow-up the interrupt restores
     // into it (measured on `codex-cli 0.165.0`), still ends the escalation
     // early.
+    //
+    // "Shutting down..." replaces the composer the moment a press starts the
+    // quit (0.165.0), so a stale interrupt notice delivered beside it can't
+    // release a press into the teardown.
     shutdownSignal: {
       kind: "gated-key-escalation",
       keySequence: "\x03",
       gateTexts: ["■ Conversation interrupted", "again to quit"],
+      quittingTexts: ["Shutting down..."],
       maxPresses: 2,
       perPressTimeoutMs: 1500,
     },

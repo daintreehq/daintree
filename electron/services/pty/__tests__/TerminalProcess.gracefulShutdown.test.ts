@@ -834,6 +834,46 @@ describe("TerminalProcess.gracefulShutdown — gated Ctrl-C escalation (#11851)"
     expect(handles.writeMock).toHaveBeenCalledTimes(2);
   });
 
+  it("presses no more once the press is seen quitting, even beside a gate", async () => {
+    // Held-back reads resume as one burst (#12432), so an interrupt notice
+    // printed BEFORE the press can arrive together with the shutdown that press
+    // started. The notice is stale and the shutdown is not: a second press here
+    // lands after raw mode is gone.
+    const handles = createMockPty();
+    const terminal = createAgentTerminal(handles, "codex");
+
+    const promise = terminal.gracefulShutdown();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    handles.emitData(`${CODEX_INTERRUPT_FRAME}\r\n${CODEX_SHUTDOWN_FRAME}`);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(handles.writeMock).toHaveBeenCalledTimes(1);
+
+    handles.emitData("  codex resume quit-beside-gate\n");
+    await expect(promise).resolves.toBe("quit-beside-gate");
+    expect(handles.writeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("presses no more when a gate arrives after the press was seen quitting", async () => {
+    const handles = createMockPty();
+    const terminal = createAgentTerminal(handles, "codex");
+
+    const promise = terminal.gracefulShutdown();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    handles.emitData(CODEX_SHUTDOWN_FRAME);
+    await vi.advanceTimersByTimeAsync(1);
+    handles.emitData(CODEX_INTERRUPT_FRAME);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(handles.writeMock).toHaveBeenCalledTimes(1);
+
+    handles.emitData("  codex resume quit-then-gate\n");
+    await expect(promise).resolves.toBe("quit-then-gate");
+    expect(handles.writeMock).toHaveBeenCalledTimes(1);
+  });
+
   it("sends the next press only after a fresh gate match", async () => {
     const handles = createMockPty();
     const terminal = createAgentTerminal(handles, "codex");
@@ -1356,24 +1396,48 @@ describe("TerminalProcess.gracefulShutdown — outcome logging", () => {
     );
   }
 
-  it("counts both presses on a mid-turn Codex capture (#15267)", async () => {
+  it("logs how many presses actually went out (#15267)", async () => {
     // The press count is what showed the second press had never once been
-    // sent, so a capture that took two has to say so.
-    const handles = createMockPty();
-    const terminal = createAgentTerminal(handles, "codex");
+    // sent, so it has to follow the writes rather than any one path's value.
+    const loggedPresses = async (
+      agentId: string,
+      drive: (handles: MockPtyHandles) => Promise<void>
+    ): Promise<{ written: number; logged: number | undefined }> => {
+      const handles = createMockPty();
+      const terminal = createAgentTerminal(handles, agentId);
+      const promise = terminal.gracefulShutdown();
+      await Promise.resolve();
+      await Promise.resolve();
+      await drive(handles);
+      await promise;
+      const entries = shutdownEntries();
+      expect(entries).toHaveLength(1);
+      expect(contextOf(entries[0])?.outcome).toBe("captured");
+      logBuffer.clear();
+      const written = handles.writeMock.mock.calls.filter(([data]) => data === CTRL_C).length;
+      return { written, logged: contextOf(entries[0])?.pressesSent };
+    };
 
-    const promise = terminal.gracefulShutdown();
-    await Promise.resolve();
-    await Promise.resolve();
-    handles.emitData(CODEX_INTERRUPT_FRAME);
-    await vi.advanceTimersByTimeAsync(1);
-    handles.emitData("  codex resume logged-mid-turn\n");
-    await expect(promise).resolves.toBe("logged-mid-turn");
+    const midTurn = await loggedPresses("codex", async (handles) => {
+      handles.emitData(CODEX_INTERRUPT_FRAME);
+      await vi.advanceTimersByTimeAsync(1);
+      handles.emitData("  codex resume logged-mid-turn\n");
+    });
+    expect(midTurn).toEqual({ written: 2, logged: 2 });
 
-    const entries = shutdownEntries();
-    expect(entries).toHaveLength(1);
-    expect(contextOf(entries[0])?.outcome).toBe("captured");
-    expect(contextOf(entries[0])?.pressesSent).toBe(2);
+    const idle = await loggedPresses("codex", async (handles) => {
+      handles.emitData(CODEX_SHUTDOWN_FRAME);
+      await vi.advanceTimersByTimeAsync(500);
+      handles.emitData("  codex resume logged-idle\n");
+    });
+    expect(idle).toEqual({ written: 1, logged: 1 });
+
+    // The quit-command path presses nothing.
+    const quitCommand = await loggedPresses("gemini", async (handles) => {
+      await vi.advanceTimersByTimeAsync(GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS + SUBMIT_ENTER_DELAY_MS);
+      handles.emitData("gemini --resume logged-quit-command\n");
+    });
+    expect(quitCommand).toEqual({ written: 0, logged: 0 });
   });
 
   it("stays silent for a terminal that never had an agent", async () => {

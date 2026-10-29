@@ -309,6 +309,13 @@ export interface AgentGatedKeyEscalation {
    */
   gateTexts: readonly [string, ...string[]];
   /**
+   * Literal substrings the TUI prints once a press has started quitting it.
+   * Seen once, no further press is sent, even with a gate in the same output:
+   * a gate proves only that its text arrived after the press, and held-back
+   * reads can deliver one printed before it. Capture keeps listening.
+   */
+  quittingTexts?: readonly [string, ...string[]];
+  /**
    * Hard cap on presses. A safety net, not the mechanism — the gate is what
    * actually decides whether another press is safe. Reaching the cap stops the
    * escalation but does NOT end the teardown.

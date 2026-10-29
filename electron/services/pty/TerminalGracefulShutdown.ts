@@ -351,7 +351,16 @@ export async function gracefulShutdown(host: TerminalGracefulShutdownHost): Prom
         if (gateArm && shutdownSignal) {
           gateProbe += data;
           const visible = stripAnsiCodes(gateProbe);
-          gateMatched = shutdownSignal.gateTexts.some((gate) => visible.includes(gate));
+          // A press seen quitting the TUI ends the escalation even with a gate
+          // beside it. A gate proves only that its text was DELIVERED after the
+          // press, not printed after it: held-back reads resume as one burst
+          // (#12432), and an acknowledgement printed before the press can ride
+          // in with the shutdown that press started.
+          if (shutdownSignal.quittingTexts?.some((text) => visible.includes(text))) {
+            settleGateArm(false);
+          } else {
+            gateMatched = shutdownSignal.gateTexts.some((gate) => visible.includes(gate));
+          }
         }
         if (gateProbe.length > GRACEFUL_SHUTDOWN_BUFFER_SIZE) {
           gateProbe = gateProbe.slice(-GRACEFUL_SHUTDOWN_BUFFER_SIZE);
