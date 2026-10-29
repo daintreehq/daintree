@@ -33,8 +33,9 @@ export interface HelpPastSession {
 export const HELP_PAST_SESSIONS_LIMIT = 50;
 
 /**
- * The answer to `help:list-past-sessions` (#14984). The rows alone can't say
- * whether they are the whole history, so the listing carries what it left out.
+ * The answer to `help:list-past-sessions` when asked with `{ listing: true }`
+ * (#14984). The rows alone can't say whether they are the whole history, so
+ * the listing carries what it left out.
  */
 export interface HelpPastSessionsListing {
   /** Newest first, at most `HELP_PAST_SESSIONS_LIMIT`. */

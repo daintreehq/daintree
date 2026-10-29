@@ -816,9 +816,13 @@ describe("listCodexSessionsForCwd", () => {
         : {}
     );
 
-    await expect(listCodexSessionsForCwd("/repo", undefined, 2)).resolves.not.toHaveProperty(
-      "more"
-    );
+    await expect(listCodexSessionsForCwd("/repo", undefined, 2)).resolves.toEqual({
+      status: "ok",
+      sessions: [
+        { id: "a", preview: "", updatedAt: 2_000 },
+        { id: "b", preview: "", updatedAt: 1_000 },
+      ],
+    });
   });
 
   it("reads a full page from a server that sends no cursor as possibly cut", async () => {

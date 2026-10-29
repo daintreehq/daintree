@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { cn } from "@/lib/utils";
-import { isMac } from "@/lib/platform";
 import { pluralize } from "@/lib/pluralize";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
@@ -42,8 +41,6 @@ const NO_LISTING: HelpPastSessionsListing = { sessions: [], unreadable: [], trun
 
 interface LoadedListing {
   workspaceId: string;
-  /** The retry that produced it; behind the current one while a retry is in flight. */
-  attempt: number;
   listing: HelpPastSessionsListing;
   /** The request itself failed, so nothing is known about either store. */
   loadFailed: boolean;
@@ -56,12 +53,6 @@ function failureTitle(loaded: LoadedListing): string | null {
   if (unreadable.length > 1) return "Couldn't read assistant history";
   const [agentId] = unreadable;
   return agentId ? `Couldn't read ${getAgentConfig(agentId)?.name ?? agentId} history` : null;
-}
-
-function isRetryChord(e: React.KeyboardEvent): boolean {
-  return (
-    (isMac() ? e.metaKey : e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "r"
-  );
 }
 
 interface HelpPastSessionsPaletteProps {
@@ -85,6 +76,9 @@ export function HelpPastSessionsPalette({ workspace, tabs }: HelpPastSessionsPal
   const workspaceId = workspace?.id ?? null;
   const [loaded, setLoaded] = useState<LoadedListing | null>(null);
   const [attempt, setAttempt] = useState(0);
+  // Every opening refetches as well as every retry, so "in flight" can't be
+  // read off the attempt count.
+  const [pending, setPending] = useState(false);
   const [replacing, setReplacing] = useState<HelpPastSession | null>(null);
 
   useEffect(() => {
@@ -94,12 +88,14 @@ export function HelpPastSessionsPalette({ workspace, tabs }: HelpPastSessionsPal
   useEffect(() => {
     if (!isOpen || !workspaceId) return;
     let cancelled = false;
-    window.electron.help.listPastSessions(workspaceId).then(
+    setPending(true);
+    window.electron.help.listPastSessions(workspaceId, { listing: true }).then(
       (answer) => {
         if (cancelled) return;
-        // A remote host on an older build answers with the bare rows.
+        // A remote host on an older build ignores the option and sends bare rows.
         const listing = Array.isArray(answer) ? { ...NO_LISTING, sessions: answer } : answer;
-        setLoaded({ workspaceId, attempt, listing, loadFailed: false });
+        setLoaded({ workspaceId, listing, loadFailed: false });
+        setPending(false);
       },
       (err) => {
         logWarn("HelpPanel: failed to list past assistant sessions", err);
@@ -107,10 +103,10 @@ export function HelpPastSessionsPalette({ workspace, tabs }: HelpPastSessionsPal
         // A failed refresh keeps the rows an earlier answer gave.
         setLoaded((prev) => ({
           workspaceId,
-          attempt,
           listing: prev?.workspaceId === workspaceId ? prev.listing : NO_LISTING,
           loadFailed: true,
         }));
+        setPending(false);
       }
     );
     return () => {
@@ -120,16 +116,16 @@ export function HelpPastSessionsPalette({ workspace, tabs }: HelpPastSessionsPal
 
   const current = loaded && loaded.workspaceId === workspaceId ? loaded : null;
   const sessions = current ? current.listing.sessions : null;
-  const retrying = current !== null && current.attempt !== attempt;
   const failure = current && !replacing ? failureTitle(current) : null;
   // Nothing listed and something failed: the failure is the whole story, and
   // Enter has no row to resume, so it retries.
   const failedEmpty = failure !== null && sessions !== null && sessions.length === 0;
+  const enterRetries = failedEmpty && !pending;
   const truncated = !replacing && current !== null && current.listing.truncated;
 
   const retry = useCallback(() => {
-    if (!retrying) setAttempt((n) => n + 1);
-  }, [retrying]);
+    if (!pending) setAttempt((n) => n + 1);
+  }, [pending]);
   const laneTerminals = useHelpPanelStore((s) =>
     tabs.map((tab) => s.sessions[tab.slot]?.terminalId ?? null).join("\0")
   );
@@ -214,18 +210,6 @@ export function HelpPastSessionsPalette({ workspace, tabs }: HelpPastSessionsPal
     if (item) void pick(item);
   }, [failedEmpty, retry, results, selectedIndex, pick]);
 
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent<HTMLInputElement>) => {
-      // Tab moves the list selection, so the chord is the keyboard's way to a
-      // Retry that sits beside rows Enter would resume.
-      if (failure === null || !isRetryChord(e)) return;
-      e.preventDefault();
-      e.stopPropagation();
-      retry();
-    },
-    [failure, retry]
-  );
-
   const handleClose = useCallback(() => {
     // Escape from the tab choice steps back to the list rather than out.
     if (replacing) {
@@ -287,25 +271,18 @@ export function HelpPastSessionsPalette({ workspace, tabs }: HelpPastSessionsPal
     [pick, setSelectedIndex]
   );
 
-  const retryChord = [isMac() ? "⌘" : "Ctrl", "R"];
   const retryButton = (
     <Button
       type="button"
       variant="outline"
       size="sm"
+      disabled={pending}
       // Keeps focus in the search field, where the list keys live.
       onPointerDown={(e) => e.preventDefault()}
       onClick={retry}
     >
       Retry
     </Button>
-  );
-  const retryHint = (
-    // The field reads this out: focus never leaves it, and the empty state
-    // announces only its title.
-    <span id={RETRY_HINT_ID} className="sr-only">
-      {failedEmpty ? "Press Enter to retry" : `Press ${retryChord.join("+")} to retry`}
-    </span>
   );
 
   return (
@@ -324,7 +301,6 @@ export function HelpPastSessionsPalette({ workspace, tabs }: HelpPastSessionsPal
       onHoverIndex={setSelectedIndex}
       getItemId={(item) => item.id}
       renderItem={renderItem}
-      onKeyDown={handleKeyDown}
       label={
         replacing
           ? `All ${MAX_ASSISTANT_SLOTS} tabs are in use — choose one to replace`
@@ -332,9 +308,9 @@ export function HelpPastSessionsPalette({ workspace, tabs }: HelpPastSessionsPal
       }
       ariaLabel={replacing ? "Choose an assistant tab to replace" : "Resume a past session"}
       searchPlaceholder={replacing ? "Search tabs" : "Search session titles"}
-      searchAriaDescribedBy={failure !== null ? RETRY_HINT_ID : undefined}
+      searchAriaDescribedBy={enterRetries ? RETRY_HINT_ID : undefined}
       itemIdPrefix="help-past-session"
-      isLoading={!replacing && (sessions === null || retrying)}
+      isLoading={!replacing && (sessions === null || pending)}
       emptyMessage={
         failedEmpty
           ? failure
@@ -345,23 +321,20 @@ export function HelpPastSessionsPalette({ workspace, tabs }: HelpPastSessionsPal
       // A failure typed over is still a failure, not "no matches".
       noMatchMessage={failedEmpty ? failure : undefined}
       emptyContent={
-        failedEmpty ? (
-          <div className="mt-3 flex justify-center">
-            {retryHint}
-            {retryButton}
-          </div>
-        ) : undefined
+        failedEmpty ? <div className="mt-3 flex justify-center">{retryButton}</div> : undefined
       }
-      noMatchContent={
-        failedEmpty ? (
-          <>
-            {retryHint}
-            {retryButton}
-          </>
-        ) : undefined
-      }
+      noMatchContent={failedEmpty ? retryButton : undefined}
       beforeList={
-        failure !== null && !failedEmpty ? (
+        failure === null ? undefined : failedEmpty ? (
+          enterRetries ? (
+            // The field reads this out, since focus never leaves it. Kept out
+            // of the empty state, which a crossfade can render twice and a
+            // load hides.
+            <span id={RETRY_HINT_ID} className="sr-only">
+              Press Enter to retry
+            </span>
+          ) : undefined
+        ) : (
           <Callout
             severity="error"
             size="compact"
@@ -370,10 +343,9 @@ export function HelpPastSessionsPalette({ workspace, tabs }: HelpPastSessionsPal
             action={retryButton}
             className="mb-1"
           >
-            {retryHint}
             <p>Some conversations may be missing</p>
           </Callout>
-        ) : undefined
+        )
       }
       afterList={
         truncated && sessions !== null ? (
@@ -384,15 +356,10 @@ export function HelpPastSessionsPalette({ workspace, tabs }: HelpPastSessionsPal
         ) : undefined
       }
       footer={
-        failure === null ? undefined : (
-          <PaletteFooterHints
-            primaryHint={
-              failedEmpty
-                ? { keys: ["↵"], label: "to retry" }
-                : { keys: retryChord, label: "to retry" }
-            }
-          />
-        )
+        // Only while Enter retries: beside rows it resumes, as it always has.
+        enterRetries ? (
+          <PaletteFooterHints primaryHint={{ keys: ["↵"], label: "to retry" }} />
+        ) : undefined
       }
     />
   );

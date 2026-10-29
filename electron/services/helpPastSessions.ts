@@ -312,11 +312,12 @@ export interface HelpPastSessionPaths {
   codex: readonly string[];
 }
 
-async function isDirectory(dirPath: string): Promise<boolean> {
+/** A directory, or a path that couldn't be inspected and so may be one. */
+async function mayBeDirectory(dirPath: string): Promise<boolean> {
   try {
     return (await lstat(dirPath)).isDirectory();
-  } catch {
-    return false;
+  } catch (error) {
+    return !isAbsent(error);
   }
 }
 
@@ -344,7 +345,7 @@ async function readCodexHelpSessions(
   // No CLI is no history for a project that never ran Codex, which is most of
   // them. Only Codex's own session directory says it ran here: the shared one
   // from before the split is Claude's now, and exists for every Claude user.
-  const ranHere = codexPath !== paths.claude && (await isDirectory(codexPath));
+  const ranHere = codexPath !== paths.claude && (await mayBeDirectory(codexPath));
   return { sessions: [], readable: !ranHere, more: false };
 }
 

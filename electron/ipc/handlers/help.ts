@@ -22,6 +22,7 @@ import type { ActionContext } from "../../../shared/types/actions.js";
 import {
   HELP_PAST_SESSIONS_LIMIT,
   type HelpAdoptResult,
+  type HelpPastSession,
   type HelpPastSessionsListing,
   type PinnedActionContextSnapshot,
 } from "../../../shared/types/ipc/help.js";
@@ -548,8 +549,20 @@ async function handleListPendingHibernationSlots(
  * Past assistant conversations for this project (#13206), read from the agents'
  * own transcript stores. Same cross-project guard as the hibernation reads:
  * titles are conversation text, so only the view bound to the project may ask.
+ *
+ * Bare rows unless the caller asks for the listing (#14984): a shell on an
+ * older build reaches this host over a remote link and expects an array.
  */
-async function handleListPastSessions(
+export async function handleListPastSessions(
+  ctx: import("../types.js").IpcContext,
+  projectId: string,
+  options?: { listing?: boolean }
+): Promise<HelpPastSessionsListing | HelpPastSession[]> {
+  const listing = await listPastSessionsFor(ctx, projectId);
+  return options?.listing === true ? listing : listing.sessions;
+}
+
+async function listPastSessionsFor(
   ctx: import("../types.js").IpcContext,
   projectId: string
 ): Promise<HelpPastSessionsListing> {

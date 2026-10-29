@@ -3,13 +3,10 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { HelpPastSession, HelpPastSessionsListing } from "@shared/types/ipc/help";
 
-vi.mock("@/services/ActionService", () => ({
-  actionService: { dispatch: vi.fn(async () => ({ ok: true, result: { outcome: "resumed" } })) },
-}));
-vi.mock("@/lib/platform", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/platform")>()),
-  isMac: () => true,
-}));
+const dispatch = vi.hoisted(() =>
+  vi.fn(async (..._args: unknown[]) => ({ ok: true, result: { outcome: "resumed" } }))
+);
+vi.mock("@/services/ActionService", () => ({ actionService: { dispatch } }));
 vi.mock("@/utils/logger", () => ({
   logError: vi.fn(),
   logDebug: vi.fn(),
@@ -53,7 +50,13 @@ const { HelpPastSessionsPalette } = await import("../HelpPastSessionsPalette");
 const { usePaletteStore } = await import("@/store/paletteStore");
 const { TooltipProvider } = await import("@/components/ui/tooltip");
 
-const listPastSessions = vi.fn<(projectId: string) => Promise<HelpPastSessionsListing>>();
+const listPastSessions =
+  vi.fn<
+    (
+      projectId: string,
+      options?: { listing?: boolean }
+    ) => Promise<HelpPastSessionsListing | HelpPastSession[]>
+  >();
 
 const session = (sessionId: string, title: string, updatedAt = 1): HelpPastSession => ({
   agentId: "claude",
@@ -79,9 +82,22 @@ function renderPalette() {
 const input = () => screen.getByRole("combobox") as HTMLInputElement;
 const retryButton = () => screen.queryByRole("button", { name: "Retry" });
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
 beforeEach(() => {
   listPastSessions.mockReset();
-  (window as unknown as { electron: unknown }).electron = { help: { listPastSessions } };
+  dispatch.mockClear();
+  Object.defineProperty(window, "electron", {
+    value: { help: { listPastSessions } },
+    configurable: true,
+    writable: true,
+  });
 });
 
 afterEach(() => {
@@ -130,25 +146,80 @@ describe("HelpPastSessionsPalette", () => {
     expect(retryButton()).toBeNull();
   });
 
-  it("retries from the keyboard: the chord beside rows, Enter when nothing listed", async () => {
+  it("asks for the listing, not the bare rows an older shell gets", async () => {
+    listPastSessions.mockResolvedValue(listing());
+    renderPalette();
+    await screen.findByText("No past sessions yet");
+
+    expect(listPastSessions).toHaveBeenCalledWith("p1", { listing: true });
+  });
+
+  it("retries on Enter when nothing listed, and says so to the field", async () => {
     listPastSessions
-      .mockResolvedValueOnce(listing({ sessions: [session("a", "Kept")], unreadable: ["claude"] }))
       .mockResolvedValueOnce(listing({ unreadable: ["claude"] }))
       .mockResolvedValueOnce(listing({ sessions: [session("b", "Back")] }));
     renderPalette();
-    await screen.findByText("Kept");
+    await screen.findByText("Couldn't read Claude history");
 
-    fireEvent.keyDown(input(), { key: "r", metaKey: true });
-    expect(await screen.findByText("Couldn't read Claude history")).toBeTruthy();
-    expect(screen.queryByText("Kept")).toBeNull();
-    expect(input().getAttribute("aria-describedby")).toBeTruthy();
-    expect(document.getElementById(input().getAttribute("aria-describedby")!)?.textContent).toBe(
-      "Press Enter to retry"
-    );
+    const hintId = input().getAttribute("aria-describedby");
+    expect(hintId && document.getElementById(hintId)?.textContent).toBe("Press Enter to retry");
+    expect(document.querySelectorAll(`[id="${hintId}"]`)).toHaveLength(1);
 
     fireEvent.keyDown(input(), { key: "Enter" });
     expect(await screen.findByText("Back")).toBeTruthy();
-    expect(listPastSessions).toHaveBeenCalledTimes(3);
+    expect(listPastSessions).toHaveBeenCalledTimes(2);
+    expect(input().getAttribute("aria-describedby")).toBeNull();
+  });
+
+  it("resumes the selected row on Enter even beside a failure", async () => {
+    listPastSessions.mockResolvedValue(
+      listing({ sessions: [session("a", "Fix the build")], unreadable: ["codex"] })
+    );
+    renderPalette();
+    await screen.findByText("Fix the build");
+    await waitFor(() => expect(retryButton()?.hasAttribute("disabled")).toBe(false));
+
+    fireEvent.keyDown(input(), { key: "Enter" });
+
+    await waitFor(() => expect(dispatch).toHaveBeenCalledTimes(1));
+    expect(dispatch.mock.calls[0]?.[1]).toEqual({ agentId: "claude", sessionId: "a" });
+    expect(listPastSessions).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the rows an earlier answer gave when a refresh is rejected", async () => {
+    listPastSessions
+      .mockResolvedValueOnce(
+        listing({ sessions: [session("a", "Still here")], unreadable: ["codex"] })
+      )
+      .mockRejectedValueOnce(new Error("ipc down"));
+    renderPalette();
+    await screen.findByText("Still here");
+    await waitFor(() => expect(retryButton()?.hasAttribute("disabled")).toBe(false));
+
+    fireEvent.click(retryButton()!);
+
+    expect(await screen.findByText("Couldn't load past sessions")).toBeTruthy();
+    expect(screen.getByText("Still here")).toBeTruthy();
+  });
+
+  it("holds Retry while a reopening's own request is still out", async () => {
+    const reopened = deferred<HelpPastSessionsListing>();
+    listPastSessions
+      .mockResolvedValueOnce(listing({ unreadable: ["codex"] }))
+      .mockReturnValueOnce(reopened.promise);
+    renderPalette();
+    await screen.findByText("Couldn't read Codex history");
+
+    act(() => usePaletteStore.getState().closePalette("assistant-sessions"));
+    act(() => usePaletteStore.getState().openPalette("assistant-sessions"));
+    await waitFor(() => expect(listPastSessions).toHaveBeenCalledTimes(2));
+
+    fireEvent.keyDown(input(), { key: "Enter" });
+    expect(listPastSessions).toHaveBeenCalledTimes(2);
+
+    await act(async () => reopened.resolve(listing({ sessions: [session("a", "Recovered")] })));
+    expect(await screen.findByText("Recovered")).toBeTruthy();
+    expect(retryButton()).toBeNull();
   });
 
   it("treats a rejected request as a failed load, not an empty history", async () => {
@@ -187,9 +258,7 @@ describe("HelpPastSessionsPalette", () => {
   });
 
   it("shows rows from a host on an older build that answers with the bare list", async () => {
-    listPastSessions.mockResolvedValue([
-      session("a", "From an old host"),
-    ] as unknown as HelpPastSessionsListing);
+    listPastSessions.mockResolvedValue([session("a", "From an old host")]);
     renderPalette();
 
     expect(await screen.findByText("From an old host")).toBeTruthy();
