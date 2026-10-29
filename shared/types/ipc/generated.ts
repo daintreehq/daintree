@@ -2882,6 +2882,10 @@ export interface GeneratedIpcInvokeMap {
     args: [events: import("../plugin.js").PluginPanelLifecycleEvent[]];
     result: void;
   };
+  "plugin:report-unsaved-panels": {
+    args: [panels: import("../pluginUnsavedPanels.js").PluginUnsavedPanelReport[]];
+    result: void;
+  };
   "plugin:restart-worker": {
     args: [pluginId: string];
     result: import("../plugin.js").PluginRuntimeStatus | null;
@@ -2989,6 +2993,10 @@ export interface GeneratedIpcInvokeMap {
   "plugin:uninstall": {
     args: [pluginId: string, deleteSettings?: boolean | undefined];
     result: void;
+  };
+  "plugin:unsaved-panels-get": {
+    args: [pluginId: string];
+    result: import("../pluginUnsavedPanels.js").PluginUnsavedPanel[];
   };
   "plugin:validate-action-ids": {
     args: [actionIds: string[]];

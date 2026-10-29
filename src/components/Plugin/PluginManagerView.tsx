@@ -52,6 +52,7 @@ import { isMac, isWindows } from "@/lib/platform";
 import { WINDOWS_CAPTION_WIDTH_PX } from "@shared/config/windowChrome";
 import { usePluginManager } from "./usePluginManager";
 import { PluginDetailPane, SOURCE_BADGE_LABELS, pluginLabel } from "./PluginDetailPane";
+import { UnsavedPanelsCallout } from "./UnsavedPanelsCallout";
 import { PluginInstallProgressBanner } from "./PluginInstallProgressBanner";
 import { PluginCatalog } from "./PluginCatalog";
 import { PluginIconTile } from "./pluginIcons";
@@ -1135,6 +1136,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
         variant="destructive"
         zIndex="nested"
       >
+        <UnsavedPanelsCallout verb="Uninstalling" panels={pm.uninstallPanels} className="mb-3" />
         <label className="flex cursor-pointer items-start gap-2 text-sm text-text-primary select-none">
           <Checkbox
             checked={pm.deleteSettings}
@@ -1169,9 +1171,10 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
         cancelLabel="Cancel"
         onConfirm={() => void pm.confirmReinstall()}
         isConfirmLoading={pm.isReinstalling}
-        variant="default"
+        variant={pm.updatePanels.length > 0 ? "destructive" : "default"}
         zIndex="nested"
       >
+        <UnsavedPanelsCallout verb="Updating" panels={pm.updatePanels} className="mt-3" />
         {pm.pendingUpdate && (
           <div className="mt-3 space-y-1.5 text-xs text-text-secondary">
             <div>
@@ -1203,6 +1206,33 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
               </div>
             )}
           </div>
+        )}
+      </ConfirmDialog>
+
+      <ConfirmDialog
+        isOpen={pm.pendingDiscard !== null}
+        onClose={pm.closeDiscard}
+        title={
+          pm.pendingDiscard
+            ? `${pm.pendingDiscard.action === "disable" ? "Disable" : "Retry"} '${pluginLabel(pm.pendingDiscard.plugin)}'?`
+            : ""
+        }
+        description={
+          pm.pendingDiscard?.action === "retry"
+            ? "Retrying loads the plugin again, unloading its open panels first."
+            : "Disabling the plugin unloads its open panels."
+        }
+        confirmLabel="Discard changes"
+        cancelLabel="Cancel"
+        onConfirm={() => void pm.confirmDiscard()}
+        variant="destructive"
+        zIndex="nested"
+      >
+        {pm.pendingDiscard && (
+          <UnsavedPanelsCallout
+            verb={pm.pendingDiscard.action === "disable" ? "Disabling" : "Retrying"}
+            panels={pm.pendingDiscard.panels}
+          />
         )}
       </ConfirmDialog>
 

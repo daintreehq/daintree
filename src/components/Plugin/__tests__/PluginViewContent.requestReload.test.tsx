@@ -913,9 +913,15 @@ describe("setHasUnsavedChanges (#12611)", () => {
 
     act(() => latest().setHasUnsavedChanges?.(true));
     expect(lifecycle.hasViewUnsavedChanges("panel-1")).toBe(true);
+    // Raised with the view's own plugin and name, which is all a recordless
+    // host has to name it by (#15031).
+    expect(lifecycle.getViewUnsavedPluginPanels()).toEqual([
+      { panelId: "panel-1", pluginId: "acme", displayName: "Dashboard" },
+    ]);
 
     act(() => latest().setHasUnsavedChanges?.(false));
     expect(lifecycle.hasViewUnsavedChanges("panel-1")).toBe(false);
+    expect(lifecycle.getViewUnsavedPluginPanels()).toEqual([]);
   });
 
   it("keeps one setter per attempt", async () => {

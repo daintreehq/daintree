@@ -1068,6 +1068,9 @@ export interface GeneratedElectronAPI {
     getTours(
       ...args: IpcInvokeMap["plugin:tours-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:tours-get"]["result"]>;
+    getUnsavedPanels(
+      ...args: IpcInvokeMap["plugin:unsaved-panels-get"]["args"]
+    ): Promise<IpcInvokeMap["plugin:unsaved-panels-get"]["result"]>;
     getWorktreeDeleteNotes(
       ...args: IpcInvokeMap["plugin:worktree-delete-notes-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:worktree-delete-notes-get"]["result"]>;
@@ -1137,6 +1140,9 @@ export interface GeneratedElectronAPI {
     reportPanelLifecycle(
       ...args: IpcInvokeMap["plugin:report-panel-lifecycle"]["args"]
     ): Promise<IpcInvokeMap["plugin:report-panel-lifecycle"]["result"]>;
+    reportUnsavedPanels(
+      ...args: IpcInvokeMap["plugin:report-unsaved-panels"]["args"]
+    ): Promise<IpcInvokeMap["plugin:report-unsaved-panels"]["result"]>;
     resolveContextReferences(
       ...args: IpcInvokeMap["plugin:context-references-resolve"]["args"]
     ): Promise<IpcInvokeMap["plugin:context-references-resolve"]["result"]>;

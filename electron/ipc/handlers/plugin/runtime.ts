@@ -15,12 +15,22 @@ import {
   type PluginRuntimeStatus,
   type PluginPanelLifecycleEvent,
 } from "../../../../shared/types/plugin.js";
+import type {
+  PluginUnsavedPanel,
+  PluginUnsavedPanelReport,
+} from "../../../../shared/types/pluginUnsavedPanels.js";
 import type { IpcContext } from "../../types.js";
 import {
   isSafePluginInstanceId,
   projectIdFromPluginInstanceKey,
   PROJECT_PLUGIN_INSTANCE_PREFIX,
 } from "../../../services/plugin/projectPluginIdentity.js";
+import {
+  getUnsavedPluginPanels,
+  recordUnsavedPluginPanels,
+  watchSourceHandle,
+  watchWebContentsDocument,
+} from "../../../services/plugin/pluginUnsavedPanels.js";
 import { panelLifecycleSourceFor } from "../pluginPanelLifecycleSource.js";
 import { getPluginService } from "./service.js";
 import { isRemoteCaller, remoteUnsupportedError } from "./senderScope.js";
@@ -333,4 +343,53 @@ export async function handleReportPanelInventory(
     nonPluginPanelIds,
     panelLifecycleSourceFor(ctx)
   );
+}
+
+/**
+ * Record which of the sender's plugin panels say they hold unsaved work
+ * (#15031). Keyed by sender and forgotten with its document, so a reload or a
+ * closed view never leaves a stale prompt behind.
+ */
+export async function handleReportUnsavedPanels(
+  ctx: IpcContext,
+  panels: PluginUnsavedPanelReport[]
+): Promise<void> {
+  const sender = ctx.event?.sender;
+  const source = sender ? undefined : panelLifecycleSourceFor(ctx);
+  const watch = sender
+    ? watchWebContentsDocument(sender)
+    : source
+      ? watchSourceHandle(source)
+      : undefined;
+  if (!watch) return;
+  recordUnsavedPluginPanels(ctx.webContentsId, watch, ctx.projectId, panels);
+}
+
+/**
+ * Every open panel of `pluginId`, in any view, that says it holds unsaved work:
+ * what disabling, updating or uninstalling the plugin would discard (#15031).
+ * Panels open in two views of one project are listed once.
+ */
+export async function handleGetUnsavedPanels(pluginId: string): Promise<PluginUnsavedPanel[]> {
+  if (typeof pluginId !== "string" || pluginId.length === 0) return [];
+  const reported = getUnsavedPluginPanels(pluginId);
+  if (reported.length === 0) return [];
+  const { projectStore } = await import("../../../services/ProjectStore.js");
+  const names = new Map<string, string | null>();
+  const seen = new Set<string>();
+  const panels: PluginUnsavedPanel[] = [];
+  for (const { panelId, title, projectId } of reported) {
+    const key = `${projectId ?? ""}\u0000${panelId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    let projectName: string | null = null;
+    if (projectId) {
+      if (!names.has(projectId)) {
+        names.set(projectId, projectStore.getProjectById(projectId)?.name ?? null);
+      }
+      projectName = names.get(projectId) ?? null;
+    }
+    panels.push({ panelId, title, projectId, projectName });
+  }
+  return panels;
 }
