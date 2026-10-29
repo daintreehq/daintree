@@ -24,6 +24,7 @@ export {
   Blocks, // a dependency branch (deps/) — building blocks, kept apart from the packaged plugin's Package
   BookDashed, // a Scratchpad's notes are temporary — kept only while its terminal is open; the dashed outline reads as a mode, not a warning
   BookmarkCheck, // a review mark — the point a worktree was marked reviewed at, kept to say what's new since
+  BookmarkPlus, // a worktree with no review mark yet — marking it sets the first one
   Bot, // a commit author that is a bot account (a `[bot]` name) with no picture — shape says machine where initials would say person
   Cable, // a project attachment — a resource the whole project shares (a tunnel, a test device) that one worktree holds at a time
   ChartNoAxesColumn, // frecency sort order ("Most used" — decayed access score)

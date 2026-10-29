@@ -20,7 +20,8 @@ import {
 } from "@/components/ui/paneToolbarStyles";
 
 import { RefreshCw, CircleCheck, ArrowUpFromLine, ChevronRight, AlertTriangle } from "lucide-react";
-import { BookmarkCheck } from "@/components/icons";
+import { BookmarkCheck, BookmarkPlus } from "@/components/icons";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { isProtectedBranch } from "@shared/utils/gitConstants";
 import { useUIStore } from "@/store/uiStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
@@ -57,7 +58,12 @@ import { useReviewMarksStore } from "@/store/reviewMarksStore";
 import { useReviewHubMark } from "./useReviewHubMark";
 import { ReviewMarkLine } from "./ReviewMarkLine";
 import { SinceReviewPanel } from "./SinceReviewPanel";
-import { describeSinceReview, sinceReviewUnavailableReason } from "./reviewMarkComparison";
+import { ReviewHubListSkeleton } from "./ReviewHubListSkeleton";
+import {
+  describeMarkPoint,
+  describeSinceReview,
+  sinceReviewUnavailableReason,
+} from "./reviewMarkComparison";
 import { registerReviewHubMarkTarget } from "./reviewHubMarkTargets";
 import { useReviewHubBaseBranch } from "./useReviewHubBaseBranch";
 import { useReviewHubCommitAndPush } from "./useReviewHubCommitAndPush";
@@ -444,6 +450,20 @@ export function ReviewHubContent({
   // Row element that opened a diff modal; AppDialog falls back to it when the
   // trigger unmounted (e.g. the file left the list while the modal was open).
   const diffTriggerRef = useRef<HTMLElement | null>(null);
+  const openSinceReviewFile = useCallback((path: string, trigger: HTMLElement) => {
+    diffTriggerRef.current = trigger;
+    setSelectedSinceReviewPath(path);
+  }, []);
+  // Clearing or replacing a mark drops the reviewed state for good (the point
+  // lives only on the host), so the hub's own controls confirm both, naming
+  // the mark they drop. A first mark drops nothing and goes straight through.
+  const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
+  const [updateConfirmOpen, setUpdateConfirmOpen] = useState(false);
+  useEffect(() => {
+    if (hasReviewMark) return;
+    setClearConfirmOpen(false);
+    setUpdateConfirmOpen(false);
+  }, [hasReviewMark]);
   // One-shot guard for the auto-stage-on-open behavior. Resets in the close
   // branch of the isOpen effect so reopening re-arms the check.
   const hasAutoStagedRef = useRef(false);
@@ -1409,6 +1429,9 @@ export function ReviewHubContent({
   // `immediate` since the gate already absorbs the threshold.
   const showWorkingTreeSkeleton = useDohertyGate(loading && !status);
   const showBaseBranchSkeleton = useDohertyGate(baseBranchLoading);
+  // The confirms lock at once and only show a spinner past the gate.
+  const showClearSpinner = useDohertyGate(reviewMark.isClearing);
+  const showMarkSpinner = useDohertyGate(isMarking);
 
   if (!isOpen) return null;
 
@@ -1421,6 +1444,12 @@ export function ReviewHubContent({
   const hasUnstagedSelection = selectionSection === "unstaged" && selectedPaths.size > 0;
   const stagedPaths = status?.staged.map((f) => f.path) ?? [];
   const sinceReviewUnavailable = sinceReviewUnavailableReason(currentReviewMark);
+  const markedAt = currentReviewMark ? describeMarkPoint(currentReviewMark.mark) : null;
+  const markButtonLabel = hasReviewMark ? "Update review mark" : "Mark reviewed";
+  // Marking clears every Viewed check in the worktree; say so where it's done.
+  const markButtonEffect = markedAt
+    ? `Replaces the mark at ${markedAt.point} from ${markedAt.ago} with the commit, staged changes and working tree on screen now, and clears Viewed checks`
+    : "Records the commit, staged changes and working tree on screen now, and clears Viewed checks";
   const refreshBusy =
     diffMode === "base-branch"
       ? baseBranchLoading
@@ -1533,8 +1562,13 @@ export function ReviewHubContent({
                   {
                     value: "since-review" as const,
                     label: "Since review",
-                    disabled: sinceReviewUnavailable !== null,
-                    tooltip: sinceReviewUnavailable ?? undefined,
+                    // A selected segment that reads as disabled says nothing; the
+                    // view itself explains why it can't compare.
+                    disabled: sinceReviewUnavailable !== null && diffMode !== "since-review",
+                    tooltip:
+                      sinceReviewUnavailable !== null && diffMode !== "since-review"
+                        ? sinceReviewUnavailable
+                        : undefined,
                   },
                 ]}
               />
@@ -1544,23 +1578,38 @@ export function ReviewHubContent({
                   <button
                     type="button"
                     onClick={() => {
-                      if (!markBlockedReason) void markReviewed();
+                      if (markBlockedReason) return;
+                      if (hasReviewMark) setUpdateConfirmOpen(true);
+                      else void markReviewed();
                     }}
                     // Not `disabled`, as for Refresh: focus stays on the control.
                     aria-disabled={markBlockedReason !== null || undefined}
                     aria-busy={isMarking || undefined}
+                    aria-description={markButtonEffect}
                     // In the strip the two actions sit at its far end, under Close.
                     className={cn(PANE_TOOLBAR_ICON_BUTTON_CLASS, "@max-[960px]/header:ml-auto")}
-                    aria-label="Mark reviewed"
+                    aria-label={markButtonLabel}
                     data-testid="review-hub-mark-reviewed"
+                    data-has-mark={hasReviewMark || undefined}
                   >
-                    <BookmarkCheck className={PANE_TOOLBAR_ICON_CLASS} aria-hidden="true" />
+                    {/* The glyph says whether a mark exists: pressing it then
+                        replaces that mark rather than setting a first one. */}
+                    {hasReviewMark ? (
+                      <BookmarkCheck className={PANE_TOOLBAR_ICON_CLASS} aria-hidden="true" />
+                    ) : (
+                      <BookmarkPlus className={PANE_TOOLBAR_ICON_CLASS} aria-hidden="true" />
+                    )}
                   </button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom">
-                  {markBlockedReason && !isMarking
-                    ? `Mark reviewed (${markBlockedReason})`
-                    : "Mark reviewed"}
+                  <div className="flex flex-col gap-0.5">
+                    <span className="font-medium">
+                      {markBlockedReason && !isMarking
+                        ? `${markButtonLabel} (${markBlockedReason})`
+                        : markButtonLabel}
+                    </span>
+                    <span className="text-text-secondary">{markButtonEffect}</span>
+                  </div>
                 </TooltipContent>
               </Tooltip>
 
@@ -1622,11 +1671,11 @@ export function ReviewHubContent({
           notice={reviewMark.notice}
           isRecording={reviewMark.isRecording}
           isClearing={reviewMark.isClearing}
-          onClear={() => void clearReviewMark()}
+          inSinceReview={diffMode === "since-review"}
+          onClear={() => setClearConfirmOpen(true)}
           onRetry={reviewMark.retryCompare}
-          onOpenSinceReview={
-            diffMode === "since-review" ? undefined : () => handleDiffModeChange("since-review")
-          }
+          onOpenSinceReview={() => handleDiffModeChange("since-review")}
+          onOpenFile={openSinceReviewFile}
           onDismissNotice={reviewMark.dismissNotice}
         />
 
@@ -1748,39 +1797,20 @@ export function ReviewHubContent({
             {diffMode === "since-review" ? (
               <SinceReviewPanel
                 view={sinceReviewView}
-                onOpenFile={(path, trigger) => {
-                  diffTriggerRef.current = trigger;
-                  setSelectedSinceReviewPath(path);
-                }}
-                onClear={() => void clearReviewMark()}
+                baseBranch={mainBranch}
+                onOpenFile={openSinceReviewFile}
+                onClear={() => setClearConfirmOpen(true)}
                 onRetry={reviewMark.retryCompare}
+                onShowWorkingTree={() => handleDiffModeChange("working-tree")}
               />
             ) : diffMode === "base-branch" ? (
               /* Base-branch diff panel */
               baseBranchLoading ? (
                 showBaseBranchSkeleton ? (
-                  <>
-                    <Skeleton label={`Loading changes vs ${mainBranch}`}>
-                      <SkeletonBone immediate className="h-8 mx-4 my-2" />
-                      <div className="px-2 py-1 flex flex-col gap-0.5">
-                        {Array.from({ length: 8 }).map((_, i) => (
-                          <div key={i} className="flex items-center gap-2 px-1.5 py-1.5">
-                            <SkeletonBone immediate className="h-4 w-4 shrink-0 rounded-sm" />
-                            <SkeletonBone
-                              immediate
-                              className={cn(
-                                "h-2.5",
-                                ["w-48", "w-32", "w-56", "w-24", "w-40", "w-36", "w-52", "w-28"][
-                                  i % 8
-                                ]
-                              )}
-                            />
-                          </div>
-                        ))}
-                      </div>
-                    </Skeleton>
-                    <SkeletonHint className="px-3 py-2" onRetry={() => void fetchBaseBranch()} />
-                  </>
+                  <ReviewHubListSkeleton
+                    label={`Loading changes vs ${mainBranch}`}
+                    onRetry={() => void fetchBaseBranch()}
+                  />
                 ) : null
               ) : baseBranchError ? (
                 /* A SECONDARY failure — the comparison could not be computed, but
@@ -2240,6 +2270,40 @@ export function ReviewHubContent({
             />
           )}
       </div>
+      <ConfirmDialog
+        isOpen={clearConfirmOpen && markedAt !== null}
+        onClose={() => {
+          if (!reviewMark.isClearing) setClearConfirmOpen(false);
+        }}
+        title={`Clear the review mark at ${markedAt?.point ?? "this worktree"}?`}
+        description={`The state you marked reviewed ${markedAt?.ago ?? ""} goes, and Since review has nothing to compare with until you mark this worktree reviewed again.`}
+        confirmLabel="Clear review mark"
+        variant="destructive"
+        isBusy={reviewMark.isClearing}
+        isConfirmLoading={showClearSpinner}
+        onConfirm={async () => {
+          await clearReviewMark();
+          setClearConfirmOpen(false);
+        }}
+      />
+      <ConfirmDialog
+        isOpen={updateConfirmOpen && markedAt !== null}
+        onClose={() => {
+          if (!isMarking) setUpdateConfirmOpen(false);
+        }}
+        title={`Update the review mark at ${markedAt?.point ?? "this worktree"}?`}
+        description={`Since review will compare with what's on screen now instead of the state you marked reviewed ${markedAt?.ago ?? ""}, and this worktree's Viewed checks are cleared.`}
+        confirmLabel="Update review mark"
+        variant="default"
+        isBusy={isMarking}
+        isConfirmLoading={showMarkSpinner}
+        confirmDisabled={markBlockedReason !== null && !isMarking}
+        hint={markBlockedReason !== null && !isMarking ? markBlockedReason : undefined}
+        onConfirm={async () => {
+          await markReviewed();
+          setUpdateConfirmOpen(false);
+        }}
+      />
     </>
   );
 }

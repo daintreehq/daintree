@@ -1219,7 +1219,9 @@ export function DiffPane({
         <SinceReviewNotice
           outcome={sinceReview}
           view={sinceReviewNotice}
+          worktreeId={worktreeId}
           onSideChange={(side) => setSinceReviewSideChoice({ file: filePath, side })}
+          onRetry={retry}
         />
       )}
       {externalError ? (
