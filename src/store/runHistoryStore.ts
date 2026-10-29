@@ -31,16 +31,20 @@ let unsubscribe: (() => void) | null = null;
 // snapshot must not overwrite it.
 let pushVersion = 0;
 let pulling = false;
+// Bumped by the test reset so a pull started before it can't settle into the next case.
+let generation = 0;
 
 export const useRunHistoryStore = create<RunHistoryState>((set, get) => {
   const pull = () => {
     if (pulling) return;
     pulling = true;
     const versionAtStart = pushVersion;
+    const generationAtStart = generation;
     set({ loadFailed: false, loading: get().records.length === 0 });
     window.electron.runHistory
       .getRecords()
       .then((records) => {
+        if (generation !== generationAtStart) return;
         pulling = false;
         set(
           pushVersion !== versionAtStart
@@ -49,6 +53,7 @@ export const useRunHistoryStore = create<RunHistoryState>((set, get) => {
         );
       })
       .catch((err) => {
+        if (generation !== generationAtStart) return;
         pulling = false;
         logError("Failed to load run history", err);
         // A push that landed meanwhile already supplied what this read failed to.
@@ -104,5 +109,6 @@ export function _resetRunHistoryStoreForTest(): void {
   initialized = false;
   pushVersion = 0;
   pulling = false;
+  generation++;
   useRunHistoryStore.setState({ records: [], loading: true, loadFailed: false });
 }
