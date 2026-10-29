@@ -47,6 +47,8 @@ const {
   fleetEligible,
   snapshotState,
   panelsById,
+  voiceState,
+  armed,
   selectWorktree,
   trackTerminalFocus,
   restoreBackgroundTerminal,
@@ -70,6 +72,11 @@ const {
     current: null as { runs: Array<Record<string, unknown>>; degraded?: boolean } | null,
   },
   panelsById: { current: {} as Record<string, unknown> },
+  voiceState: {
+    lockedTarget: null as { panelId: string } | null,
+    recentTargets: [] as Array<Record<string, unknown>>,
+  },
+  armed: { armedIds: new Set<string>() },
   selectWorktree: vi.fn(),
   trackTerminalFocus: vi.fn(),
   restoreBackgroundTerminal: vi.fn(),
@@ -109,16 +116,17 @@ vi.mock("@/hooks/useIsHibernated", () => ({ useIsHibernated: () => false }));
 vi.mock("@/hooks/usePluginContextMenuItems", () => ({ usePluginContextMenuItems: () => [] }));
 
 vi.mock("@/store/voiceRecordingStore", () => ({
-  useVoiceRecordingStore: (selector: (s: unknown) => unknown) =>
-    selector({ lockedTarget: null, recentTargets: [] }),
+  useVoiceRecordingStore: (selector: (s: unknown) => unknown) => selector(voiceState),
 }));
 
 // Fleet eligibility only means "live PTY in a grid location" — it says nothing
 // about the terminal being an agent. It gets the fleet items rendered; Park and
 // Snooze need the run on the snapshot as well.
 vi.mock("@/store/fleetArmingStore", () => ({
-  useFleetArmingStore: (selector: (s: { armedIds: Set<string> }) => unknown) =>
-    selector({ armedIds: new Set<string>() }),
+  useFleetArmingStore: Object.assign(
+    (selector: (s: { armedIds: Set<string> }) => unknown) => selector(armed),
+    { getState: () => armed }
+  ),
   isFleetArmEligible: () => fleetEligible.current,
 }));
 
@@ -153,6 +161,7 @@ vi.mock("@/store", () => {
 });
 
 import { TerminalContextMenu } from "../TerminalContextMenu";
+import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { AGENT_SNOOZE_LABEL } from "@shared/utils/agentSnoozeDurations";
 import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 
@@ -732,5 +741,111 @@ describe("TerminalContextMenu — Snooze submenu (#11783)", () => {
     fireEvent.click(screen.getByText("Wake now"));
 
     expect(unsnoozeRun).toHaveBeenCalledWith("panel-1");
+  });
+});
+
+describe("TerminalContextMenu — dictation lock and recent targets (#14955)", () => {
+  afterEach(() => {
+    voiceState.lockedTarget = null;
+    voiceState.recentTargets = [];
+    armed.armedIds = new Set();
+    useTerminalInputStore.setState({ hybridInputEnabled: true });
+  });
+
+  function openOn(panel: { id: string } & Record<string, unknown>, others: object[] = []) {
+    panelsById.current = Object.fromEntries(
+      [panel, ...others].map((p) => [(p as { id: string }).id, p])
+    );
+    const result = render(
+      <TerminalContextMenu terminalId={panel.id}>
+        <div>Panel body</div>
+      </TerminalContextMenu>
+    );
+    act(() => {
+      result.container
+        .querySelector(`[data-context-trigger="${panel.id}"]`)!
+        .dispatchEvent(new MouseEvent("contextmenu", { bubbles: true }));
+    });
+    return result;
+  }
+
+  const shell = { id: "shell-1", title: "zsh", kind: "terminal", worktreeId: "wt-1" };
+
+  it("offers the lock on a pane with a composer", () => {
+    openOn(agentPanel);
+    expect(screen.queryByText("Lock dictation to this panel")).not.toBeNull();
+  });
+
+  it.each([
+    ["a plain shell", shell],
+    ["an agent pane whose agent exited", { ...agentPanel, agentState: "exited" }],
+  ])("doesn't offer the lock on %s", (_n, panel) => {
+    openOn(panel);
+    expect(screen.queryByText("Lock dictation to this panel")).toBeNull();
+    expect(screen.queryByText("Unlock dictation")).toBeNull();
+  });
+
+  it("doesn't offer the lock on an agent pane while hybrid input is off", () => {
+    useTerminalInputStore.setState({ hybridInputEnabled: false });
+    openOn(agentPanel);
+    expect(screen.queryByText("Lock dictation to this panel")).toBeNull();
+  });
+
+  it("still offers Unlock on a locked pane that has lost its composer", () => {
+    voiceState.lockedTarget = { panelId: "shell-1" };
+    openOn(shell);
+    fireEvent.click(screen.getByText("Unlock dictation"));
+    expect(dispatch).toHaveBeenCalledWith("voiceInput.unlockTarget", undefined, expect.anything());
+  });
+
+  it("lists only recent targets with a composer, matching a saved title to one that has", () => {
+    const otherAgent = { id: "agent-2", title: "Codex", kind: "terminal", launchAgentId: "codex" };
+    const twinShell = { id: "twin-shell", title: "Twin", kind: "terminal", worktreeId: "wt-1" };
+    const twinAgent = { ...twinShell, id: "twin-agent", launchAgentId: "claude" };
+    voiceState.recentTargets = [
+      { panelId: "agent-2", panelTitle: "Codex" },
+      { panelId: "shell-2", panelTitle: "Bash" },
+      { worktreeId: "wt-1", panelTitle: "Twin" },
+    ];
+    openOn(agentPanel, [
+      otherAgent,
+      { id: "shell-2", title: "Bash", kind: "terminal" },
+      twinShell,
+      twinAgent,
+    ]);
+
+    expect(screen.queryByText("Codex")).not.toBeNull();
+    expect(screen.queryByText("Bash")).toBeNull();
+    fireEvent.click(screen.getByText("Twin"));
+    expect(dispatch).toHaveBeenCalledWith(
+      "voiceInput.recallRecentTarget",
+      { panelId: "twin-agent" },
+      expect.anything()
+    );
+  });
+
+  it("offers the lock on a plain shell armed in a fleet of two, and not on one left out", () => {
+    armed.armedIds = new Set(["shell-1", "agent-2"]);
+    openOn(shell);
+    expect(screen.queryByText("Lock dictation to this panel")).not.toBeNull();
+    cleanup();
+
+    armed.armedIds = new Set(["agent-2", "agent-3"]);
+    openOn(shell);
+    expect(screen.queryByText("Lock dictation to this panel")).toBeNull();
+  });
+
+  it("lists a recent shell target only while it is armed in the fleet", () => {
+    const fleetShell = { id: "shell-2", title: "Bash", kind: "terminal" };
+    voiceState.recentTargets = [{ panelId: "shell-2", panelTitle: "Bash" }];
+
+    armed.armedIds = new Set(["shell-2", "panel-1"]);
+    openOn(agentPanel, [fleetShell]);
+    expect(screen.queryByText("Bash")).not.toBeNull();
+    cleanup();
+
+    armed.armedIds = new Set(["panel-1", "agent-3"]);
+    openOn(agentPanel, [fleetShell]);
+    expect(screen.queryByText("Bash")).toBeNull();
   });
 });

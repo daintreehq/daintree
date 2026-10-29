@@ -97,8 +97,11 @@ vi.mock("@/store/voiceRecordingStore", () => ({
     selector({ lockedTarget: null, recentTargets: [] }),
 }));
 vi.mock("@/store/fleetArmingStore", () => ({
-  useFleetArmingStore: (selector: (s: { armedIds: Set<string> }) => unknown) =>
-    selector({ armedIds: new Set<string>() }),
+  useFleetArmingStore: Object.assign(
+    (selector: (s: { armedIds: Set<string> }) => unknown) =>
+      selector({ armedIds: new Set<string>() }),
+    { getState: () => ({ armedIds: new Set<string>() }) }
+  ),
   isFleetArmEligible: () => true,
   collectEligibleIds: () => [],
 }));
@@ -114,6 +117,7 @@ vi.mock("../TerminalHandOver", () => ({
 
 import { primeRadix } from "@/components/ui/radix-loader";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
+import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { TerminalContextMenu } from "../TerminalContextMenu";
 import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 
@@ -200,6 +204,7 @@ beforeEach(() => {
   stores.panels.setState({ panelsById });
   stores.worktrees.setState({ worktrees: new Map([["wt-0", snapshot(0)]]) });
   useFleetSnapshotStore.setState({ snapshot: null });
+  useTerminalInputStore.setState({ hybridInputEnabled: true });
   radixCold.current = false;
   counters.bodyRenders = 0;
   counters.orderCalls = 0;
@@ -230,6 +235,21 @@ describe("TerminalContextMenu while closed", () => {
 
     expect(counters.bodyRenders).toBe(0);
     expect(counters.orderCalls).toBe(0);
+  });
+
+  // Every closed menu would otherwise re-render on the hybrid-input setting,
+  // which only the open menu's dictation lock reads (#14955).
+  it("skips hybrid-input toggles, and opens by the setting as it stands", () => {
+    renderMenus();
+    counters.bodyRenders = 0;
+
+    act(() => useTerminalInputStore.setState({ hybridInputEnabled: false }));
+    act(() => useTerminalInputStore.setState({ hybridInputEnabled: true }));
+    act(() => useTerminalInputStore.setState({ hybridInputEnabled: false }));
+    expect(counters.bodyRenders).toBe(0);
+
+    openMenu(1);
+    expect(screen.queryByRole("menuitem", { name: "Lock dictation to this panel" })).toBeNull();
   });
 
   it("still re-renders when the panel changes worktree", () => {
@@ -288,6 +308,7 @@ describe("TerminalContextMenu while closed", () => {
     expect(screen.getByRole("menuitem", { name: "Move to worktree" })).toBeTruthy();
     expect(screen.getByRole("menuitem", { name: "Unlock input" })).toBeTruthy();
     expect(screen.getByRole("menuitem", { name: /Snooze/ })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: "Lock dictation to this panel" })).toBeTruthy();
   });
 
   it("follows writes while open, and stops once the menu closes", () => {

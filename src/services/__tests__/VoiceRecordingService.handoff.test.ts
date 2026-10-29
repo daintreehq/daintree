@@ -729,6 +729,48 @@ describe("VoiceRecordingService — starting while a session finishes (#14604)",
     expect(store().status).toBe("idle");
   });
 
+  // Recall's stop for a pane that lost its composer (#14955): a stop, never a
+  // resume, so speech after it goes nowhere.
+  it("keeps a stopped start stopped when stopPanelDictation reaches it", async () => {
+    const {
+      voiceRecordingService,
+      store,
+      drains,
+      callbacks,
+      sentChunks,
+      tracks,
+      attached,
+      press,
+      release,
+      speak,
+    } = await setup("push-to-talk");
+
+    press();
+    await voiceRecordingService.toggleFocusedPanel();
+    callbacks.status!("recording");
+    release();
+    await vi.waitFor(() => expect(drains).toHaveLength(1));
+
+    press();
+    const secondHold = voiceRecordingService.toggleFocusedPanel();
+    await attached(1);
+    const firstWords = speak(1);
+    release();
+
+    const stopping = voiceRecordingService.stopPanelDictation("panel-a");
+    expect(stopping).not.toBeNull();
+    speak(1);
+
+    drains[0]!.resolve();
+    await vi.waitFor(() => expect(drains).toHaveLength(2));
+    expect(sentChunks).toEqual(firstWords);
+    expect(tracks[1]!.stop).toHaveBeenCalled();
+    drains[1]!.resolve();
+    await secondHold;
+    await stopping;
+    expect(store().status).toBe("idle");
+  });
+
   it("leaves nothing stuck when a stopped start's backend then fails", async () => {
     const {
       voiceRecordingService,
