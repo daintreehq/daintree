@@ -669,7 +669,12 @@ describe("Slider", () => {
     fireEvent.change(slider, { target: { value: "70" } });
     expect(onValueChange).toHaveBeenCalledWith(70);
     expect(slider.getAttribute("aria-valuetext")).toBe("70%");
-    expect(screen.getByText("70%").getAttribute("aria-hidden")).toBe("true");
+    const readout = screen.getByText("70%").closest("[data-slider-readout]")!;
+    expect(readout.getAttribute("aria-hidden")).toBe("true");
+    // Both ends' texts hold the readout's width, so the track never resizes mid-drag.
+    expect(
+      [...readout.querySelectorAll("[data-readout-reserve]")].map((ghost) => ghost.textContent)
+    ).toEqual(["0%", "100%"]);
     fireEvent.pointerUp(slider);
     expect(onValueCommit).toHaveBeenCalledWith(70);
   });

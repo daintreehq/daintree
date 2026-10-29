@@ -63,6 +63,7 @@ import {
 } from "./kitProps";
 import { useKitOverlayZClass, usePluginKitOwner } from "./kitScope";
 import { safeFormat } from "./kitDiagnostics";
+import { SliderReadout } from "./kitRangeSlider";
 import { getPluginKitHost } from "./kitHost";
 import { InlineError } from "@/components/ui/field";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -687,15 +688,13 @@ function KitSlider(props: PluginSliderProps) {
         style={fillStyle}
       />
       {showValue === true ? (
-        <span
-          aria-hidden="true"
-          className={cn(
-            "shrink-0 text-xs tabular-nums text-text-secondary",
-            disabled === true && "opacity-50"
+        <SliderReadout
+          text={words ?? String(current)}
+          reserve={[lo, hi].map(
+            (end) => (formatter ? nonEmpty(safeFormat(formatter, end, String)) : undefined) ?? String(end)
           )}
-        >
-          {words ?? String(current)}
-        </span>
+          className={disabled === true ? "opacity-50" : undefined}
+        />
       ) : null}
     </div>
   );

@@ -589,7 +589,11 @@ describe("RangeSlider", () => {
       "aria-label": "Priority",
     });
     expect(screen.getByText("Mid")).toBeTruthy();
-    expect(screen.getByText("1 – 3").getAttribute("aria-hidden")).toBe("true");
+    const readout = screen.getByText("1 – 3").closest("[data-slider-readout]")!;
+    expect(readout.getAttribute("aria-hidden")).toBe("true");
+    expect(
+      [...readout.querySelectorAll("[data-readout-reserve]")].map((ghost) => ghost.textContent)
+    ).toContain("4 – 4");
     const hidden = [...document.querySelectorAll<HTMLInputElement>('input[name="priority"]')];
     expect(hidden.map((input) => input.value)).toEqual(["1", "3"]);
   });
