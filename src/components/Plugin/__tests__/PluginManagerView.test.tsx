@@ -1950,6 +1950,86 @@ describe("PluginManagerView", () => {
         { pluginId: "acme.b", archiveHash: digestFor("acme.b") },
       ]);
     });
+
+    describe("dismissing a confirm mid-run (#15042)", () => {
+      const threeAvailable = () => {
+        listMock().mockResolvedValue([
+          makeUrl("acme.a", "Plugin A"),
+          makeUrl("acme.b", "Plugin B"),
+          makeUrl("acme.c", "Plugin C"),
+        ]);
+        checkMock().mockImplementation(async (id: string) => ({
+          status: "available",
+          name: id,
+          version: "2.0.0",
+          capabilities: [],
+          archiveHash: id.slice(-1).repeat(64),
+        }));
+      };
+
+      const confirmFor = async (label: string) => {
+        const title = await screen.findByText(`Update '${label}'?`);
+        const dialog = title.closest<HTMLElement>('[role="dialog"], [role="alertdialog"]');
+        if (!dialog) throw new Error(`No dialog for ${label}`);
+        return dialog;
+      };
+
+      const positionOf = (dialog: HTMLElement) =>
+        dialog.querySelector('[data-testid="app-dialog-hint"]')?.textContent ?? null;
+
+      it("labels the dismissal as a skip and says where the run is", async () => {
+        threeAvailable();
+        renderDialog();
+        fireEvent.click(await screen.findByRole("button", { name: "Update all" }));
+
+        const first = await confirmFor("Plugin A");
+        expect(positionOf(first)).toBe("Update 1 of 3");
+        expect(within(first).queryByRole("button", { name: "Cancel" })).toBeNull();
+        fireEvent.click(within(first).getByRole("button", { name: "Skip update" }));
+
+        const second = await confirmFor("Plugin B");
+        expect(positionOf(second)).toBe("Update 2 of 3");
+        expect(installMock()).not.toHaveBeenCalled();
+      });
+
+      it("stops the remaining updates from a confirm without installing them", async () => {
+        threeAvailable();
+        renderDialog();
+        fireEvent.click(await screen.findByRole("button", { name: "Update all" }));
+
+        fireEvent.click(
+          within(await confirmFor("Plugin A")).getByRole("button", { name: "Reinstall plugin" })
+        );
+        const second = await confirmFor("Plugin B");
+        fireEvent.click(within(second).getByRole("button", { name: "Stop updates" }));
+
+        await waitFor(() => expect(screen.queryByText(/^Update '/)).toBeNull());
+        expect(screen.queryByText("Update 'Plugin C'?")).toBeNull();
+        expect(installMock().mock.calls.map((c) => c[2])).toEqual([
+          { pluginId: "acme.a", archiveHash: "a".repeat(64) },
+        ]);
+      });
+
+      it("keeps plain Cancel for a single-plugin check", async () => {
+        listMock().mockResolvedValue([makeUrl("acme.a", "Plugin A")]);
+        checkMock().mockResolvedValue({
+          status: "available",
+          name: "acme.a",
+          version: "2.0.0",
+          capabilities: [],
+          archiveHash: "a".repeat(64),
+        });
+        renderDialog();
+        fireEvent.click((await screen.findAllByText("Plugin A"))[0]!);
+        fireEvent.click(await screen.findByRole("button", { name: "Check Plugin A for updates" }));
+
+        const dialog = await confirmFor("Plugin A");
+        expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeTruthy();
+        expect(within(dialog).queryByRole("button", { name: "Skip update" })).toBeNull();
+        expect(within(dialog).queryByRole("button", { name: "Stop updates" })).toBeNull();
+        expect(positionOf(dialog)).toBeNull();
+      });
+    });
   });
 });
 

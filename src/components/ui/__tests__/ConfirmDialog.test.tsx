@@ -1316,6 +1316,33 @@ describe("ConfirmDialog activation guards while the confirm is running", () => {
     expect(onConfirm).toHaveBeenCalledTimes(1);
     expect(findConfirm().hasAttribute("aria-disabled")).toBe(false);
   });
+
+  it("locks a leading action with Cancel, and runs it once settled", () => {
+    const onLeading = vi.fn();
+    const onClose = vi.fn();
+    const props = {
+      isOpen: true,
+      onClose,
+      title: "Update 'foo'?",
+      confirmLabel: "Reinstall plugin",
+      onConfirm: () => {},
+      variant: "default" as const,
+      leadingAction: { label: "Stop updates", onClick: onLeading },
+    };
+    const findLeading = () =>
+      document.querySelector<HTMLButtonElement>('[data-confirm-role="leading"]')!;
+    const { rerender } = render(<ConfirmDialog {...props} isConfirmLoading={true} />);
+
+    expect(findLeading().getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(findLeading());
+    expect(onLeading).not.toHaveBeenCalled();
+
+    rerender(<ConfirmDialog {...props} isConfirmLoading={false} />);
+    expect(findLeading().hasAttribute("aria-disabled")).toBe(false);
+    fireEvent.click(findLeading());
+    expect(onLeading).toHaveBeenCalledTimes(1);
+    expect(onClose).not.toHaveBeenCalled();
+  });
 });
 
 describe("ConfirmDialog — close button while the confirm runs", () => {
