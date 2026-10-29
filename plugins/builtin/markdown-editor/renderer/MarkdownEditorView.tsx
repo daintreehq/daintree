@@ -22,6 +22,7 @@ import {
   SkeletonText,
   useDaintreeTheme,
 } from "@daintreehq/plugin-ui";
+import { CopyButton } from "@/components/ui/CopyButton";
 import { cn } from "@/lib/utils";
 import { isEnterToSubmit } from "@/lib/enterToSubmit";
 import { MarkdownEditorStatusBar } from "./MarkdownEditorStatusBar.js";
@@ -317,14 +318,13 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
                 Retry
               </Button>
               {orphanDraft !== null && (
-                <Button
+                <CopyButton
+                  label="Copy draft"
+                  text={orphanDraft}
                   variant="outline"
                   size="sm"
-                  onClick={() => void navigator.clipboard.writeText(orphanDraft)}
                   data-testid="markdown-editor-copy-draft"
-                >
-                  Copy draft
-                </Button>
+                />
               )}
             </div>
           }
@@ -467,14 +467,14 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
           aria-live="polite"
           actionPlacement="below"
           action={
-            <Button
+            <CopyButton
+              label="Copy draft"
+              text={text}
               variant="outline"
               size="sm"
               data-notification-action="primary"
-              onClick={() => void navigator.clipboard.writeText(text)}
-            >
-              Copy draft
-            </Button>
+              data-testid="markdown-editor-copy-draft"
+            />
           }
         >
           {record.storageWarning}
