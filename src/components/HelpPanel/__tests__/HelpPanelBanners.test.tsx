@@ -357,6 +357,11 @@ describe("HelpPanelBanners — active grant countdown (#10042)", () => {
       const text = getByTestId("help-grant-active-banner").textContent ?? "";
       expect(text).toContain("10m left");
       expect(text).not.toContain("limit");
+      // The tick keeps counting from the new expiry, not the one it mounted with.
+      act(() => {
+        vi.advanceTimersByTime(60_000);
+      });
+      expect(getByTestId("help-grant-active-banner").textContent).toContain("9m left");
     } finally {
       vi.useRealTimers();
     }
@@ -366,20 +371,31 @@ describe("HelpPanelBanners — active grant countdown (#10042)", () => {
     vi.useFakeTimers();
     try {
       const base = Date.now();
-      const { getByTestId } = render(
+      const grant = { sessionId: "s1", toolId: "t1", ttlMs: 900_000, expiresAt: base + 900_000 };
+      const { getByTestId, rerender } = render(
         <HelpPanelBanners
           {...baseProps()}
-          activeGrant={{
-            sessionId: "s1",
-            toolId: "t1",
-            ttlMs: 900_000,
-            expiresAt: base + 900_000,
-            maxExpiresAt: base + 120_000,
-          }}
+          activeGrant={{ ...grant, maxExpiresAt: base + 1_800_000 }}
+        />
+      );
+      expect(getByTestId("help-grant-active-banner").textContent).toContain("15m left");
+
+      // Only the ceiling changes: the countdown must re-target it.
+      rerender(
+        <HelpPanelBanners
+          {...baseProps()}
+          activeGrant={{ ...grant, maxExpiresAt: base + 120_000 }}
         />
       );
       expect(getByTestId("help-grant-active-banner").textContent).toContain(
         "2m left · 30-minute limit"
+      );
+      // The tick stops at the ceiling rather than running on to the sliding expiry.
+      act(() => {
+        vi.advanceTimersByTime(180_000);
+      });
+      expect(getByTestId("help-grant-active-banner").textContent).toContain(
+        "0s left · 30-minute limit"
       );
     } finally {
       vi.useRealTimers();

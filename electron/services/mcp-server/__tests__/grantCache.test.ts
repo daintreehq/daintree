@@ -911,29 +911,32 @@ describe("GrantCache.getLiveGrants", () => {
 
 describe("GrantCache refresh pushes the moved deadline (#14998)", () => {
   const MINUTE = 60_000;
+  // A nonzero epoch, so a ceiling measured from zero instead of from issuance fails.
+  const T0 = 1_700_000_000_000;
+  const at = (minutes: number) => T0 + minutes * MINUTE;
 
   function realisticCache(now: () => number) {
     return newCache({ ttlMs: 15 * MINUTE, maxLifetimeMs: 30 * MINUTE, now });
   }
 
   it("grant.issued carries the hard ceiling beside the sliding expiry", () => {
-    const { cache, emitted } = realisticCache(() => 0);
+    const { cache, emitted } = realisticCache(() => at(0));
     cache.issueGrant("s1", "project.runCheck");
     expect(emitted[0].payload).toMatchObject({
       type: "grant.issued",
-      expiresAt: 15 * MINUTE,
-      maxExpiresAt: 30 * MINUTE,
+      expiresAt: at(15),
+      maxExpiresAt: at(30),
     });
     cache.dispose();
   });
 
   it("a use at minute 10 moves the pushed expiry from minute 15 to minute 25", () => {
-    let now = 0;
+    let now = at(0);
     const { cache, emitted } = realisticCache(() => now);
     const entry = cache.issueGrant("s1", "project.runCheck");
     emitted.length = 0;
 
-    now = 10 * MINUTE;
+    now = at(10);
     expect(cache.refresh("s1", "project.runCheck", entry.issuedAt)).toBe(true);
     expect(emitted).toEqual([
       {
@@ -943,8 +946,8 @@ describe("GrantCache refresh pushes the moved deadline (#14998)", () => {
           sessionId: "s1",
           toolId: "project.runCheck",
           ttlMs: 15 * MINUTE,
-          expiresAt: 25 * MINUTE,
-          maxExpiresAt: 30 * MINUTE,
+          expiresAt: at(25),
+          maxExpiresAt: at(30),
         },
       },
     ]);
@@ -952,39 +955,39 @@ describe("GrantCache refresh pushes the moved deadline (#14998)", () => {
   });
 
   it("stops pushing once the ceiling is what ends the grant", () => {
-    let now = 0;
+    let now = at(0);
     const { cache, emitted } = realisticCache(() => now);
     const entry = cache.issueGrant("s1", "project.runCheck");
     emitted.length = 0;
 
     // Minute 20: the sliding expiry (35) passes the ceiling (30), so the
     // deadline the user sees moves from 15 to 30 — one push.
-    now = 20 * MINUTE;
+    now = at(20);
     cache.refresh("s1", "project.runCheck", entry.issuedAt);
     expect(emitted).toHaveLength(1);
     expect(emitted[0].payload).toMatchObject({
       type: "grant.refreshed",
-      expiresAt: 35 * MINUTE,
-      maxExpiresAt: 30 * MINUTE,
+      expiresAt: at(35),
+      maxExpiresAt: at(30),
     });
 
     // Minute 25: the ceiling still ends it first, so nothing the user sees moved.
-    now = 25 * MINUTE;
+    now = at(25);
     expect(cache.refresh("s1", "project.runCheck", entry.issuedAt)).toBe(true);
     expect(emitted).toHaveLength(1);
     cache.dispose();
   });
 
   it("a refresh that loses the #2243 race pushes nothing", () => {
-    let now = 0;
+    let now = at(0);
     const { cache, emitted } = realisticCache(() => now);
     const original = cache.issueGrant("s1", "project.runCheck");
     cache.revokeSession("s1", "user");
-    now = 1000;
+    now = at(0) + 1000;
     cache.issueGrant("s1", "project.runCheck");
     emitted.length = 0;
 
-    now = 10 * MINUTE;
+    now = at(10);
     expect(cache.refresh("s1", "project.runCheck", original.issuedAt)).toBe(false);
     expect(cache.refresh("s1", "other.tool", original.issuedAt)).toBe(false);
     expect(emitted).toEqual([]);
@@ -992,19 +995,19 @@ describe("GrantCache refresh pushes the moved deadline (#14998)", () => {
   });
 
   it("a refresh past the ceiling revokes without a refresh push", () => {
-    let now = 0;
+    let now = at(0);
     const { cache, emitted } = realisticCache(() => now);
     const entry = cache.issueGrant("s1", "project.runCheck");
     emitted.length = 0;
 
-    now = 30 * MINUTE + 1;
+    now = at(30) + 1;
     expect(cache.refresh("s1", "project.runCheck", entry.issuedAt)).toBe(false);
     expect(emitted.map((e) => e.payload.type)).toEqual(["grant.revoked"]);
     cache.dispose();
   });
 
   it("a native grant's refresh pushes its new expiry and id", () => {
-    let now = 0;
+    let now = at(0);
     const { cache, emitted } = realisticCache(() => now);
     const entry = cache.issueNativeGrant({
       sessionId: "s1",
@@ -1013,20 +1016,31 @@ describe("GrantCache refresh pushes the moved deadline (#14998)", () => {
       allowedTools: ["project.runCheck"],
       maxUses: 3,
     });
-    expect(emitted[0].payload).toMatchObject({ maxExpiresAt: 30 * MINUTE });
+    expect(emitted[0].payload).toMatchObject({ maxExpiresAt: at(30) });
     emitted.length = 0;
 
-    now = 10 * MINUTE;
+    now = at(10);
     expect(cache.refreshNativeGrant(entry.id)).toBe(true);
     expect(emitted.map((e) => e.payload)).toEqual([
       expect.objectContaining({
         type: "grant.refreshed",
         toolId: "*",
         grantId: entry.id,
-        expiresAt: 25 * MINUTE,
-        maxExpiresAt: 30 * MINUTE,
+        expiresAt: at(25),
+        maxExpiresAt: at(30),
       }),
     ]);
+
+    // A second use in the same instant moves nothing.
+    expect(cache.refreshNativeGrant(entry.id)).toBe(true);
+    expect(emitted).toHaveLength(1);
+
+    // Minute 20 hands the deadline to the ceiling (one push); minute 25 can't move it.
+    now = at(20);
+    expect(cache.refreshNativeGrant(entry.id)).toBe(true);
+    now = at(25);
+    expect(cache.refreshNativeGrant(entry.id)).toBe(true);
+    expect(emitted.map((e) => e.payload.expiresAt)).toEqual([at(25), at(35)]);
 
     cache.revokeNativeGrant(entry.id);
     emitted.length = 0;

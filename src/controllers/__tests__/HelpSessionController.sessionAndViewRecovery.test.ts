@@ -759,21 +759,33 @@ describe("HelpSessionController — grant lifecycle (#10042)", () => {
       expiresAt: issuedAt + 900_000,
       maxExpiresAt: issuedAt + 1_800_000,
     });
+    expect(ctrl.getSnapshot().activeGrant?.maxExpiresAt).toBe(issuedAt + 1_800_000);
+
     grantLifecycleListeners[0]?.({
       type: "grant.refreshed",
       sessionId: "s1",
       toolId: "t1",
       ttlMs: 900_000,
       expiresAt: issuedAt + 1_500_000,
-      maxExpiresAt: issuedAt + 1_800_000,
+      maxExpiresAt: issuedAt + 1_700_000,
     });
     expect(ctrl.getSnapshot().activeGrant).toEqual({
       sessionId: "s1",
       toolId: "t1",
       ttlMs: 900_000,
       expiresAt: issuedAt + 1_500_000,
-      maxExpiresAt: issuedAt + 1_800_000,
+      maxExpiresAt: issuedAt + 1_700_000,
     });
+
+    // A refresh that doesn't restate the ceiling keeps the one already known.
+    grantLifecycleListeners[0]?.({
+      type: "grant.refreshed",
+      sessionId: "s1",
+      toolId: "t1",
+      ttlMs: 900_000,
+      expiresAt: issuedAt + 1_600_000,
+    });
+    expect(ctrl.getSnapshot().activeGrant?.maxExpiresAt).toBe(issuedAt + 1_700_000);
 
     // Another tool's slide must not move this countdown.
     grantLifecycleListeners[0]?.({
@@ -783,7 +795,41 @@ describe("HelpSessionController — grant lifecycle (#10042)", () => {
       ttlMs: 900_000,
       expiresAt: issuedAt + 1_700_000,
     });
-    expect(ctrl.getSnapshot().activeGrant?.expiresAt).toBe(issuedAt + 1_500_000);
+    expect(ctrl.getSnapshot().activeGrant?.expiresAt).toBe(issuedAt + 1_600_000);
+    ctrl.stop();
+  });
+
+  it("native automation grants never take over or move the per-tool countdown", () => {
+    helpPanelState.sessionId = "s1";
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    const native = (grantId: string, type: "grant.issued" | "grant.refreshed" | "grant.revoked") =>
+      grantLifecycleListeners[0]?.({
+        type,
+        sessionId: "s1",
+        toolId: "*",
+        ttlMs: 900_000,
+        expiresAt: Date.now() + 1_200_000,
+        grantId,
+        revokedReason: type === "grant.revoked" ? "grant-ceiling" : undefined,
+      });
+
+    native("native-a", "grant.issued");
+    expect(ctrl.getSnapshot().activeGrant).toBeNull();
+
+    const expiresAt = Date.now() + 900_000;
+    grantLifecycleListeners[0]?.({
+      type: "grant.issued",
+      sessionId: "s1",
+      toolId: "t1",
+      ttlMs: 900_000,
+      expiresAt,
+    });
+    native("native-b", "grant.issued");
+    native("native-a", "grant.refreshed");
+    native("native-a", "grant.revoked");
+    expect(ctrl.getSnapshot().activeGrant).toMatchObject({ toolId: "t1", expiresAt });
+    expect(ctrl.getSnapshot().grantEnded).toBeNull();
     ctrl.stop();
   });
 

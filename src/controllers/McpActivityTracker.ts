@@ -434,11 +434,14 @@ export class McpActivityTracker {
    * and a refresh never re-arms a banner that's already gone.
    * `tier.elevated`/`tier.decayed` are session-tier transitions, not per-tool
    * grants — they leave the countdown untouched (the audit viewer records
-   * them).
+   * them). Native automation grants (#10648, any payload with a `grantId`)
+   * have their own settings card: they all share `toolId: "*"`, so letting
+   * them in would have one grant's use move another's countdown.
    */
   private _onGrantLifecycle(
     payload: import("@shared/types/ipc/mcpServer").McpGrantLifecyclePayload
   ): void {
+    if (payload.grantId !== undefined) return;
     if (payload.type === "grant.issued") {
       // `expiresAt` is always set on `grant.issued`; bail defensively if a
       // malformed payload omits it rather than seed a NaN countdown.

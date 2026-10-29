@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render } from "@testing-library/react";
+import { act, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GrantCountdown } from "../GrantCountdown";
 
@@ -27,13 +27,24 @@ describe("GrantCountdown (#14998)", () => {
       <GrantCountdown expiresAt={base + 900_000} maxExpiresAt={base + 300_000} />
     );
     expect(getByRole("timer").textContent).toBe("5m left · 30-minute limit");
+    act(() => {
+      vi.advanceTimersByTime(300_001);
+    });
+    expect(getByRole("timer").textContent).toBe("expiring");
   });
 
   it("moves with a re-read expiry instead of reading 'expiring' while the grant lives", () => {
-    const { getByRole, rerender } = render(<GrantCountdown expiresAt={base - 1_000} />);
+    const { getByRole, rerender } = render(<GrantCountdown expiresAt={base + 5_000} />);
+    act(() => {
+      vi.advanceTimersByTime(6_000);
+    });
     expect(getByRole("timer").textContent).toBe("expiring");
 
-    rerender(<GrantCountdown expiresAt={base + 600_000} />);
+    rerender(<GrantCountdown expiresAt={base + 606_000} />);
     expect(getByRole("timer").textContent).toBe("10m left");
+    act(() => {
+      vi.advanceTimersByTime(60_000);
+    });
+    expect(getByRole("timer").textContent).toBe("9m left");
   });
 });
