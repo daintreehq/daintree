@@ -141,10 +141,9 @@ function ProjectSleepConfirmDialogInner() {
             <ProjectRow key={project.id} project={project} showMemory={showMemory} />
           ))}
         </ul>
-        {(kind === "idle" ||
-          terminalCount > 0 ||
-          activeAgentCount > 0 ||
-          waitingAgentCount > 0) && (
+        {/* An idle batch can hold only projects with nothing running, and the
+            warning names what will be stopped. */}
+        {(terminalCount > 0 || activeAgentCount > 0 || waitingAgentCount > 0) && (
           <Callout
             severity="warning"
             title={single ? "Its terminals will be stopped" : "Their terminals will be stopped"}

@@ -275,7 +275,9 @@ describe("SidebarMemoryNotice", () => {
     expect(sleepProject.mock.calls.map(([id]) => id)).toEqual(["a", "b"]);
   });
 
-  it("says the terminals stop even when it has no counts to show", async () => {
+  async function previewWithLiveTerminals(
+    terminals: Awaited<ReturnType<typeof terminalClient.getAll>>
+  ) {
     act(() => {
       seedIdleProjects(["a"], 0);
       useSystemMemoryNoticeStore
@@ -286,14 +288,28 @@ describe("SidebarMemoryNotice", () => {
       thisWindow: [],
       otherWindows: [],
     });
-    vi.spyOn(terminalClient, "getAll").mockResolvedValue([]);
+    vi.spyOn(terminalClient, "getAll").mockResolvedValue(terminals);
     const { container } = renderRow();
 
     const sleepItem = openMenu(container).querySelector("[data-sidebar-memory-sleep]")!;
     fireEvent.click(sleepItem);
     const dialog = await findDialog();
     expect(dialog.textContent).toContain("Sleep 'Project a'?");
+    return dialog;
+  }
+
+  it("warns of nothing stopping when nothing is running (#15232)", async () => {
+    const dialog = await previewWithLiveTerminals([]);
+    expect(dialog.textContent).not.toContain("terminals will be stopped");
+  });
+
+  it("says the terminals stop when the live read finds one the stats leave out", async () => {
+    // A hidden assistant reports no state, so the stats count no terminal.
+    const dialog = await previewWithLiveTerminals([
+      { id: "assistant", projectId: "a", cwd: "/", spawnedAt: 0, hasPty: true },
+    ]);
     expect(dialog.textContent).toContain("Its terminals will be stopped");
+    expect(dialog.textContent).toContain("1 terminal");
     expect(dialog.textContent).not.toContain("waiting agent");
   });
 

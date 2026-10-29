@@ -113,11 +113,15 @@ async function confirmStillIdle(ids: readonly string[]): Promise<IdleProject[]> 
     if (keepsProjectAwake(t.agentState, t.waitingReason)) live.busy = true;
     liveByProject.set(t.projectId, live);
   }
-  return currentCandidates().filter((project) => {
-    if (!wanted.has(project.id) || shownSomewhere.has(project.id)) return false;
+  return currentCandidates().flatMap((project) => {
+    if (!wanted.has(project.id) || shownSomewhere.has(project.id)) return [];
     const live = liveByProject.get(project.id);
-    if (live?.busy) return false;
-    return project.terminalCount === 0 || (live?.count ?? 0) > 0;
+    if (live?.busy) return [];
+    const liveCount = live?.count ?? 0;
+    if (project.terminalCount > 0 && liveCount === 0) return [];
+    // The live read sees terminals the stats leave out (assistants), so the
+    // preview counts them too and warns only when something will stop (#15232).
+    return [{ ...project, terminalCount: Math.max(project.terminalCount, liveCount) }];
   });
 }
 

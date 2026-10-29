@@ -3,6 +3,14 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const mocks = vi.hoisted(() => ({ logError: vi.fn() }));
+
+vi.mock(import("../../../utils/logger.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  logError: mocks.logError,
+}));
+
 import {
   PROJECT_TEMPLATE_LIMITS,
   ProjectTemplateError,
@@ -314,6 +322,53 @@ describe("previewProjectTemplate", () => {
       status: "unusable",
       reason: "This template is no longer available.",
     });
+  });
+
+  it("says the files couldn't be read without the errno or path, and logs both", async () => {
+    await put("README.md");
+    registerPluginProjectTemplates("acme.sites", "Acme Sites", pluginDir, [
+      { id: "site", title: "Site", description: "A site." },
+    ]);
+    const failure = Object.assign(
+      new Error(`EACCES: permission denied, scandir '${templateDir}'`),
+      { code: "EACCES" }
+    );
+    const readdir = vi.spyOn(fs, "readdir").mockRejectedValueOnce(failure);
+
+    try {
+      expect(await previewProjectTemplate("acme.sites", "site")).toEqual({
+        status: "unusable",
+        reason: "Couldn't read this template's files.",
+        retryable: true,
+      });
+      expect(mocks.logError).toHaveBeenCalledWith("Couldn't read this template's files.", failure, {
+        pluginId: "acme.sites",
+        templateId: "site",
+      });
+    } finally {
+      readdir.mockRestore();
+    }
+  });
+
+  it("reads a folder it can't inspect as a read failure, not a missing folder", async () => {
+    await put("README.md");
+    registerPluginProjectTemplates("acme.sites", "Acme Sites", pluginDir, [
+      { id: "site", title: "Site", description: "A site." },
+    ]);
+    const failure = Object.assign(new Error(`EACCES: permission denied, lstat '${templateDir}'`), {
+      code: "EACCES",
+    });
+    const lstat = vi.spyOn(fs, "lstat").mockRejectedValueOnce(failure);
+
+    try {
+      expect(await previewProjectTemplate("acme.sites", "site")).toEqual({
+        status: "unusable",
+        reason: "Couldn't read this template's files.",
+        retryable: true,
+      });
+    } finally {
+      lstat.mockRestore();
+    }
   });
 
   it("reports why a template can't be copied, as data", async () => {

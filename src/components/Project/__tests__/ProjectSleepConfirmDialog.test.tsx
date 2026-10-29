@@ -116,6 +116,22 @@ describe("ProjectSleepConfirmDialog", () => {
     expect(el.textContent).toContain("Sleep 2 idle projects?");
   });
 
+  it("warns about stopped terminals in an idle batch only when one has something running", async () => {
+    render(<ProjectSleepConfirmDialog />);
+    void open({ kind: "idle", projects: [project("a"), project("b")] });
+    let el = await dialog();
+    // Nothing is running, so there is nothing to stop and no empty warning box.
+    expect(el.textContent).not.toContain("terminals will be stopped");
+
+    act(() => {
+      useProjectSleepConfirmStore.getState().resolveConfirmation(false);
+    });
+    void open({ kind: "idle", projects: [project("a"), project("b", { terminalCount: 2 })] });
+    el = await dialog();
+    expect(el.textContent).toContain("Their terminals will be stopped");
+    expect(el.textContent).toContain("2 terminals");
+  });
+
   it("resolves false on cancel", async () => {
     render(<ProjectSleepConfirmDialog />);
     const answer = open({ kind: "idle", projects: [project("a")] });

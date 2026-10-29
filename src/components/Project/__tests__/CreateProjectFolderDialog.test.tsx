@@ -12,12 +12,19 @@ const {
   getHomeDirMock,
   getProjectTemplatesMock,
   previewProjectTemplateMock,
+  logErrorMock,
 } = vi.hoisted(() => ({
   createProjectFolderMock: vi.fn(),
   openDialogMock: vi.fn(),
   getHomeDirMock: vi.fn(),
   getProjectTemplatesMock: vi.fn(),
   previewProjectTemplateMock: vi.fn(),
+  logErrorMock: vi.fn(),
+}));
+
+vi.mock(import("@/utils/logger"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  logError: logErrorMock,
 }));
 
 vi.mock("@/components/ui/tooltip", () => ({
@@ -452,11 +459,54 @@ describe("CreateProjectFolderDialog project templates (#13825)", () => {
 
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain(".mcp.json");
+    // Reading the same files again can't change a refusal.
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
     expect(createButton().getAttribute("aria-disabled")).toBe("true");
     await act(async () => {
       fireEvent.click(createButton());
     });
     expect(createProjectFolderMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps a failed read's path and errno out of the dialog, and reads again on Retry", async () => {
+    const failure = new Error(
+      "EACCES: permission denied, open '/Users/me/.daintree/plugins/acme/project-templates/site/a.txt'"
+    );
+    let resolveRetry: (value: unknown) => void = () => {};
+    previewProjectTemplateMock
+      .mockRejectedValueOnce(failure)
+      .mockImplementationOnce(() => new Promise((resolve) => (resolveRetry = resolve)));
+    await renderDialog();
+    fireEvent.change(folderInput(), { target: { value: "my-site" } });
+    await waitFor(() => templateSelect());
+
+    chooseTemplate(1);
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Couldn't read this template's files.");
+    expect(alert.textContent).not.toMatch(/EACCES|\/Users\/me/);
+    expect(logErrorMock).toHaveBeenCalledWith("Couldn't preview a project template", failure);
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(previewProjectTemplateMock).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(createButton().getAttribute("aria-disabled")).toBe("true");
+
+    await act(async () => {
+      resolveRetry({ ...sitePreview, digest: "retried-digest" });
+    });
+    await act(async () => {
+      fireEvent.click(createButton());
+    });
+    expect(createProjectFolderMock).toHaveBeenCalledWith(
+      "/Users/test",
+      "my-site",
+      suggestProjectEmoji("my-site"),
+      {
+        disposition: "current",
+        template: { pluginId: "acme.sites", templateId: "site", digest: "retried-digest" },
+      }
+    );
   });
 
   it("never shows or submits a preview for a template the user has moved off", async () => {

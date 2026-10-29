@@ -2551,7 +2551,12 @@ export interface ProjectTemplateFile {
  */
 export type ProjectTemplatePreview =
   | { status: "ready"; digest: string; files: ProjectTemplateFile[]; totalBytes: number }
-  | { status: "unusable"; reason: string };
+  | {
+      status: "unusable";
+      reason: string;
+      /** The files couldn't be read, rather than the template refused: reading again may work. */
+      retryable?: true;
+    };
 
 /** The template a new project folder starts from, as the dialog previewed it. */
 export interface ProjectTemplateSelection {
