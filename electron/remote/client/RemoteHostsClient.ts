@@ -274,6 +274,8 @@ const DEFAULT_FORGET_SWITCH_WAIT_MS = 5_000;
 const MAX_PROJECT_ID_LENGTH = 256;
 /** A worktree's id is its path. */
 const MAX_WORKTREE_ID_LENGTH = 4096;
+/** As long as the link lets a host's note on what it opened be. */
+const MAX_PLACEMENT_NOTE_LENGTH = 16_384;
 
 /** A readiness probe's answer when the host hasn't settled yet. */
 const NOT_SETTLED = Symbol("not-settled");
@@ -313,6 +315,7 @@ function focusIntentOf(payload: SwitchWindowHostPayload): ProjectFocusOnActivate
       runId,
       spawnedAt,
       expiresAt,
+      note,
     } = intent as {
       intent?: unknown;
       panelId?: unknown;
@@ -321,6 +324,7 @@ function focusIntentOf(payload: SwitchWindowHostPayload): ProjectFocusOnActivate
       runId?: unknown;
       spawnedAt?: unknown;
       expiresAt?: unknown;
+      note?: unknown;
     };
     if (kind === "focus-next-waiting") return { intent: kind };
     if (kind === "open-assistant") {
@@ -370,6 +374,14 @@ function focusIntentOf(payload: SwitchWindowHostPayload): ProjectFocusOnActivate
         spawnedAt: spawnedAt as number,
         expiresAt: expiresAt as number,
       };
+    }
+    if (
+      kind === "placement-note" &&
+      typeof note === "string" &&
+      note.length > 0 &&
+      note.length <= MAX_PLACEMENT_NOTE_LENGTH
+    ) {
+      return { intent: kind, note };
     }
   }
   throw invalid("focusIntent is not a focus intent");

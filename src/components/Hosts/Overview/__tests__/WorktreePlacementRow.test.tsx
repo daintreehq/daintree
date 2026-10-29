@@ -136,7 +136,7 @@ describe("WorktreePlacementRow", () => {
       true
     );
     expect(screen.queryByTestId("worktree-placement-continue")).toBeNull();
-    expect(onElsewhereChange).toHaveBeenLastCalledWith(false);
+    expect(onElsewhereChange).toHaveBeenLastCalledWith(null);
   });
 
   it("shows the facts without a pick when no host leads on both", () => {
@@ -166,7 +166,7 @@ describe("WorktreePlacementRow", () => {
       />
     );
     fireEvent.click(screen.getByRole("button", { name: "Use studio-02" }));
-    expect(onElsewhereChange).toHaveBeenLastCalledWith(true);
+    expect(onElsewhereChange).toHaveBeenLastCalledWith("studio-02");
     await act(async () => {
       fireEvent.click(screen.getByTestId("worktree-placement-continue"));
     });
@@ -236,9 +236,9 @@ describe("WorktreePlacementRow", () => {
       />
     );
     fireEvent.click(screen.getByRole("button", { name: "Use studio-02" }));
-    expect(onElsewhereChange).toHaveBeenLastCalledWith(true);
+    expect(onElsewhereChange).toHaveBeenLastCalledWith("studio-02");
     unmount();
-    expect(onElsewhereChange).toHaveBeenLastCalledWith(false);
+    expect(onElsewhereChange).toHaveBeenLastCalledWith(null);
   });
 
   it("stays open, ready to retry, when the host's dialog is closed without creating it", async () => {

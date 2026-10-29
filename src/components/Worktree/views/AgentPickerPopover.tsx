@@ -21,6 +21,7 @@ interface AgentPickerPopoverProps {
   listId: string;
   /** Id of text that qualifies the pick — e.g. why the chosen agent won't start. */
   describedBy?: string;
+  disabled?: boolean;
 }
 
 type AgentRowOption = { id: null; agent: null } | { id: string; agent: FirstAgentOption };
@@ -42,6 +43,7 @@ export function AgentPickerPopover({
   onSelectAgent,
   listId,
   describedBy,
+  disabled,
 }: AgentPickerPopoverProps) {
   const options = useMemo<AgentRowOption[]>(
     () => [{ id: null, agent: null }, ...agents.map((agent) => ({ id: agent.id, agent }))],
@@ -79,6 +81,7 @@ export function AgentPickerPopover({
           aria-activedescendant={open && activeIndex >= 0 ? optionId(activeIndex) : undefined}
           aria-describedby={describedBy}
           className={FIELD_TRIGGER}
+          disabled={disabled}
           onKeyDown={(event) => {
             if (!open && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
               event.preventDefault();

@@ -38,8 +38,11 @@ interface WorktreePlacementRowProps {
   getDraft: () => PlacementDraft | null;
   /** Close the new-worktree dialog once the worktree exists on the chosen host. */
   onLeave: () => void;
-  /** True while another host than the window's is chosen: nothing is created here then. */
-  onElsewhereChange?: (elsewhere: boolean) => void;
+  /**
+   * The other host chosen, by name, while one is: nothing is created here then,
+   * and the form says what that host won't apply. Null for the window's own host.
+   */
+  onElsewhereChange?: (hostName: string | null) => void;
 }
 
 export function suggestPlacement(
@@ -110,18 +113,21 @@ export function WorktreePlacementRow({
   const visible = isRemoteShellSupported() && hasRemoteHosts(hostList);
 
   useEffect(() => (visible ? startHostMetricsFeed() : undefined), [visible]);
-  const elsewhere = visible && chosen !== windowHostId;
-  useEffect(() => onElsewhereChange?.(elsewhere), [elsewhere, onElsewhereChange]);
-  // Gone from the dialog, it chooses no other host: local Create must not stay blocked.
-  useEffect(() => () => onElsewhereChange?.(false), [onElsewhereChange]);
-
-  if (!visible) return null;
-
   const rows = buildHostMenuRows(hostList.hosts, {
     localPlatform: clientPlatform(),
     currentHostId: windowHostId,
     localSummary: history.get(LOCAL_HOST_ID)?.[0] ?? hostList.localSummary,
   });
+  const chosenRow = rows.find((row) => row.hostId === chosen) ?? rows[0]!;
+  const elsewhere = visible && chosen !== windowHostId;
+  // The name Create's button uses, so the form's notes and the button agree.
+  const elsewhereName = elsewhere ? chosenRow.name : null;
+  useEffect(() => onElsewhereChange?.(elsewhereName), [elsewhereName, onElsewhereChange]);
+  // Gone from the dialog, it chooses no other host: local Create must not stay blocked.
+  useEffect(() => () => onElsewhereChange?.(null), [onElsewhereChange]);
+
+  if (!visible) return null;
+
   const comparison = suggestPlacement(rows, history);
   const best = rows.find((row) => row.hostId === comparison.suggestedHostId) ?? null;
   const factsOf = (hostId: HostId) =>
@@ -135,7 +141,6 @@ export function WorktreePlacementRow({
       history.get(hostId)?.[0] ?? host.row.summary
     );
   };
-  const chosenRow = rows.find((row) => row.hostId === chosen) ?? rows[0]!;
 
   // The dialog stays open until the worktree exists on the host: closing
   // first would leave a failed or abandoned handoff with nothing to retry from.

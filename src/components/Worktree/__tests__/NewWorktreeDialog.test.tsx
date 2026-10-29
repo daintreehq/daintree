@@ -20,11 +20,16 @@ const mockDispatch = vi.fn();
 /** The form's draft for another host, as the placement row would ask for it. */
 const placement = vi.hoisted(() => ({
   getDraft: null as null | (() => unknown),
+  onElsewhereChange: null as null | ((hostName: string | null) => void),
 }));
 
 vi.mock("@/components/Hosts/Overview/LazyHostOverviewParts", () => ({
-  LazyWorktreePlacementRow: (props: { getDraft: () => unknown }) => {
+  LazyWorktreePlacementRow: (props: {
+    getDraft: () => unknown;
+    onElsewhereChange?: (hostName: string | null) => void;
+  }) => {
     placement.getDraft = props.getDraft;
+    placement.onElsewhereChange = props.onElsewhereChange ?? null;
     return null;
   },
 }));
@@ -150,14 +155,25 @@ vi.mock("@/components/Worktree/views/AgentPickerPopover", () => ({
     agents,
     selectedAgentId,
     onSelectAgent,
+    disabled,
   }: {
     agents: { id: string; name: string }[];
     selectedAgentId: string | null;
     onSelectAgent: (id: string | null) => void;
+    disabled?: boolean;
   }) => (
-    <div data-testid="first-agent-picker" data-selected={selectedAgentId ?? ""}>
+    <div
+      data-testid="first-agent-picker"
+      data-selected={selectedAgentId ?? ""}
+      data-disabled={disabled ? "true" : undefined}
+    >
       {agents.map((a) => (
-        <button key={a.id} data-testid={`pick-agent-${a.id}`} onClick={() => onSelectAgent(a.id)}>
+        <button
+          key={a.id}
+          data-testid={`pick-agent-${a.id}`}
+          disabled={disabled}
+          onClick={() => onSelectAgent(a.id)}
+        >
           {a.name}
         </button>
       ))}
@@ -357,6 +373,7 @@ vi.mock("@/components/Worktree/worktreeCreationErrors", () => ({
 Element.prototype.scrollIntoView = vi.fn();
 
 import { NewWorktreeDialog, clearBranchListCache } from "../NewWorktreeDialog";
+import { CLONE_LAYOUT_ID } from "../hooks/useRecipePicker";
 import { useRecipeStore } from "@/store/recipeStore";
 import {
   buildCacheKey,
@@ -2241,5 +2258,145 @@ describe("NewWorktreeDialog — first agent and prompt (#12796)", () => {
     );
     expect(handedBack).toBeDefined();
     expect(JSON.stringify(handedBack)).not.toContain("SENTINEL");
+  });
+});
+
+describe("NewWorktreeDialog — creating on another host (#14991)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockListBranches.mockResolvedValue(TEST_BRANCHES);
+    mockGetRecentBranches.mockResolvedValue([]);
+    mockGetAvailableBranch.mockImplementation((_root: string, name: string) =>
+      Promise.resolve(name)
+    );
+    mockGetDefaultPath.mockImplementation((_root: string, branch: string) =>
+      Promise.resolve(`/test/root-worktrees/${branch}`)
+    );
+    mockGetCurrentUser.mockResolvedValue(null);
+  });
+
+  afterEach(() => {
+    recipePickerCalls.selected = null;
+    placement.onElsewhereChange = null;
+    vi.useRealTimers();
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  async function nameBranch() {
+    await act(async () => {
+      fireEvent.change(screen.getByTestId("branch-name-input"), {
+        target: { value: "feature/placed" },
+      });
+    });
+    await advanceTimersGradually(500);
+  }
+
+  async function chooseHost(hostName: string | null) {
+    await act(async () => {
+      placement.onElsewhereChange?.(hostName);
+    });
+  }
+
+  function draft(): { recipeId?: string | null } | null {
+    let value: { recipeId?: string | null } | null = null;
+    act(() => {
+      value = (placement.getDraft?.() ?? null) as { recipeId?: string | null } | null;
+    });
+    return value;
+  }
+
+  it("turns off the setup another host won't apply, says so, and keeps it for this host", async () => {
+    renderDialog();
+    await advanceTimersGradually(500);
+    await nameBranch();
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("pick-agent-claude"));
+    });
+    await act(async () => {
+      fireEvent.change(screen.getByTestId("first-agent-prompt"), {
+        target: { value: "fix the login bug" },
+      });
+    });
+    expect(screen.queryByTestId("placement-setup-note")).toBeNull();
+
+    await chooseHost("studio-02");
+    expect(screen.getByTestId("placement-setup-note").textContent).toBe(
+      "studio-02 creates the worktree and can run a team recipe. The agent and prompt apply only to a worktree created on this host."
+    );
+    expect(screen.getByTestId("first-agent-picker").getAttribute("data-disabled")).toBe("true");
+    const prompt = screen.getByTestId("first-agent-prompt") as HTMLTextAreaElement;
+    expect(prompt.disabled).toBe(true);
+    expect(prompt.value).toBe("fix the login bug");
+
+    await chooseHost(null);
+    expect(screen.queryByTestId("placement-setup-note")).toBeNull();
+    expect(screen.getByTestId("first-agent-picker").getAttribute("data-disabled")).toBeNull();
+    expect((screen.getByTestId("first-agent-prompt") as HTMLTextAreaElement).disabled).toBe(false);
+    expect(screen.getByTestId("first-agent-picker").getAttribute("data-selected")).toBe("claude");
+  });
+
+  it("says a recipe kept on this host won't run there, and doesn't send it", async () => {
+    recipePickerCalls.selected = { id: "personal-setup", name: "Setup", terminals: [] };
+    renderDialog();
+    await advanceTimersGradually(500);
+    await nameBranch();
+    await chooseHost("studio-02");
+
+    expect(screen.getByTestId("placed-recipe-note").textContent).toBe(
+      "studio-02 only runs team recipes from the repository, so this one won't run there"
+    );
+    expect(draft()).toMatchObject({ recipeId: null });
+  });
+
+  it("doesn't take a plugin's recipe for a team one, whatever its id (#14991)", async () => {
+    recipePickerCalls.selected = {
+      id: "inrepo-acme.tools.setup",
+      name: "Setup",
+      terminals: [],
+      origin: { kind: "plugin", pluginId: "inrepo-acme.tools", contributionId: "setup" },
+    } as typeof recipePickerCalls.selected;
+    renderDialog();
+    await advanceTimersGradually(500);
+    await nameBranch();
+    await chooseHost("studio-02");
+
+    expect(screen.getByTestId("placed-recipe-note").textContent).toBe(
+      "studio-02 only runs team recipes from the repository, so this one won't run there"
+    );
+    expect(draft()).toMatchObject({ recipeId: null });
+  });
+
+  it("sends a team recipe, saying it runs only if that host's copy has it", async () => {
+    recipePickerCalls.selected = {
+      id: "0f9c1e5a-team",
+      name: "Setup",
+      terminals: [],
+      scope: "inrepo",
+    } as typeof recipePickerCalls.selected;
+    renderDialog();
+    await advanceTimersGradually(500);
+    await nameBranch();
+    await chooseHost("studio-02");
+
+    expect(screen.getByTestId("placed-recipe-note").textContent).toBe(
+      "Runs only if studio-02's copy of the repository has this recipe"
+    );
+    expect(draft()).toMatchObject({ recipeId: "0f9c1e5a-team" });
+  });
+
+  it("says a cloned layout won't be made there, even when it was only the default", async () => {
+    // No saved recipes and no agent: on this host the Recipe row stays hidden.
+    recipePickerCalls.selected = { id: CLONE_LAYOUT_ID, name: "", terminals: [] };
+    renderDialog();
+    await advanceTimersGradually(500);
+    await nameBranch();
+    expect(screen.queryByTestId("placed-recipe-note")).toBeNull();
+
+    await chooseHost("studio-02");
+    expect(screen.getByTestId("placed-recipe-note").textContent).toBe(
+      "studio-02 can't clone this window's layout, so the worktree opens there without it"
+    );
+    expect(draft()).toMatchObject({ recipeId: null });
   });
 });

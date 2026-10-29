@@ -46,7 +46,8 @@ export function useFocusOnActivateIntent(isStateLoaded: boolean): void {
         payload?.intent !== "focus-worktree" &&
         payload?.intent !== "run-plugin-action" &&
         payload?.intent !== "open-assistant" &&
-        payload?.intent !== "restore-trashed"
+        payload?.intent !== "restore-trashed" &&
+        payload?.intent !== "placement-note"
       ) {
         return;
       }
@@ -114,6 +115,20 @@ export function useFocusOnActivateIntent(isStateLoaded: boolean): void {
           }),
         { context: "Restoring a run from Canopy's Trash" }
       );
+      return;
+    }
+    if (pending.intent === "placement-note") {
+      // Grid-bar: it comes from the host this view now shows, after the dialog
+      // that asked for the worktree has closed in another view.
+      notify({
+        type: "warning",
+        title: "Part of the setup didn't run",
+        message: pending.note,
+        context: { eventKind: "agent" },
+        placement: "grid-bar",
+        duration: 0,
+        replaceKey: "focus-on-activate:placement-note",
+      });
       return;
     }
     if (pending.intent === "focus-worktree") {

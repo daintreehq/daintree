@@ -107,6 +107,12 @@ export type ProjectFocusOnActivateIntent =
    * pane it comes back in.
    */
   | { intent: "restore-trashed"; runId: string; spawnedAt: number; expiresAt: number }
+  /**
+   * A worktree another host's new-worktree dialog placed here: what this host
+   * reported it didn't apply (a setup recipe its copy lacks), said once the
+   * project is showing rather than dropped with the dialog (#14991).
+   */
+  | { intent: "placement-note"; note: string }
   | {
       /**
        * A plugin's OS banner was clicked (#13505): run its first action, which

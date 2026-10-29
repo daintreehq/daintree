@@ -753,6 +753,30 @@ describe("HostSwitchDialog placed worktree", () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
+  it("carries what the host says it skipped into the view the switch lands in (#14991)", async () => {
+    const note = "The setup recipe isn't in this host's copy of the repository, so it won't run.";
+    prepare.mockResolvedValue(preparation({ candidates: [CANDIDATE] }));
+    execute.mockResolvedValueOnce(openedOn("host-p1")).mockResolvedValueOnce(
+      openedOn("host-p1", {
+        worktreePath: "/home/greg/code/daintree-worktrees/feature-placed",
+        branchNote: note,
+      })
+    );
+    const onComplete = vi.fn();
+    render(
+      <HostSwitchDialog
+        request={{ ...request, worktree: { ...worktree, recipeId: "inrepo-setup" } }}
+        onClose={() => {}}
+        onComplete={onComplete}
+      />
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Create worktree on studio-01" }));
+    await waitFor(() => expect(onComplete).toHaveBeenCalled());
+    expect(switchToHost).toHaveBeenCalledWith("studio-01", false, "host-p1", {
+      focusIntent: { intent: "placement-note", note },
+    });
+  });
+
   it("keeps the dialog open with git's words when the host can't create it", async () => {
     prepare.mockResolvedValue(preparation({ candidates: [CANDIDATE] }));
     execute.mockResolvedValueOnce(openedOn("host-p1")).mockResolvedValueOnce({
