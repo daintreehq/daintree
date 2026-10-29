@@ -3147,7 +3147,10 @@ describe("recipeStore", () => {
         // Loaded lazily to avoid initialization order coupling with the
         // hoisted client mocks above.
         const mod = await import("../recipeConflictStore");
-        mod.useRecipeConflictStore.setState({ pendingConflict: null });
+        // Release rather than drop, so a failed test's awaiter doesn't hang.
+        if (mod.useRecipeConflictStore.getState().pendingConflict) {
+          mod.useRecipeConflictStore.getState().resolveConflict("cancel");
+        }
         return mod.useRecipeConflictStore;
       }
 
@@ -3192,16 +3195,23 @@ describe("recipeStore", () => {
         // State rolled back to pre-edit snapshot.
         const state = useRecipeStore.getState();
         expect(state.inRepoRecipes[0]?.name).toBe("Conflict Recipe");
+        expect(state.inRepoRecipes[0]?.lastUsedAt).toBeUndefined();
       });
 
       // The caller keeps the draft on "cancelled" (#15035), so the store must
       // have written nothing and left nothing of the edit behind.
       it("'cancel' reports the save as cancelled without writing, reloading or keeping the edit", async () => {
         seedStore();
+        // The reconciled ProjectFileStore mirror carries the same id and must
+        // be restored as well, or it surfaces the rejected edit.
+        useRecipeStore.setState({ projectRecipes: [inRepoRecipe] });
         const store = await importConflictStore();
         updateInRepoRecipeMock.mockRejectedValueOnce(makeConflictError("Conflict Recipe"));
 
-        const promise = useRecipeStore.getState().updateRecipe("inrepo-test", { name: "Mine" });
+        const promise = useRecipeStore.getState().updateRecipe("inrepo-test", {
+          name: "Mine",
+          terminals: [{ type: "terminal", title: "Shell", command: "mine", env: {} }],
+        });
         await Promise.resolve();
         await Promise.resolve();
         store.getState().resolveConflict("cancel");
@@ -3210,8 +3220,9 @@ describe("recipeStore", () => {
         expect(updateInRepoRecipeMock).toHaveBeenCalledTimes(1);
         expect(getInRepoRecipesMock).not.toHaveBeenCalled();
         const state = useRecipeStore.getState();
-        expect(state.inRepoRecipes.map((r) => r.name)).toEqual(["Conflict Recipe"]);
-        expect(state.recipes.map((r) => r.name)).toEqual(["Conflict Recipe"]);
+        for (const slice of [state.inRepoRecipes, state.projectRecipes, state.recipes]) {
+          expect(slice).toEqual([inRepoRecipe]);
+        }
       });
 
       it("'reload' resolution triggers loadRecipes and does not rethrow", async () => {
@@ -3227,9 +3238,13 @@ describe("recipeStore", () => {
         await Promise.resolve();
         store.getState().resolveConflict("reload");
         await expect(promise).resolves.toBe("reloaded");
-        // Wait one more tick for the fire-and-forget loadRecipes to settle.
-        await new Promise((r) => setTimeout(r, 0));
-        expect(getInRepoRecipesMock).toHaveBeenCalled();
+        // The reload is fire-and-forget; the file's version lands once it settles.
+        await vi.waitFor(() =>
+          expect(useRecipeStore.getState().inRepoRecipes.map((r) => r.name)).toEqual([
+            "Disk Version",
+          ])
+        );
+        expect(useRecipeStore.getState().recipes.map((r) => r.name)).toEqual(["Disk Version"]);
       });
 
       it("'overwrite' resolution retries the IPC call with force:true and re-applies the edit", async () => {

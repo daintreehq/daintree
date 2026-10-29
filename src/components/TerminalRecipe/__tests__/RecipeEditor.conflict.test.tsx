@@ -79,66 +79,78 @@ function renderEditor() {
   return { onClose, onSave };
 }
 
-const nameField = () => document.getElementById("recipe-name") as HTMLInputElement;
-const commandField = () => document.getElementById("terminal-command-0") as HTMLInputElement;
+function inputById(id: string): HTMLInputElement {
+  const el = document.getElementById(id);
+  if (!(el instanceof HTMLInputElement)) throw new Error(`no input #${id}`);
+  return el;
+}
+
+const nameField = () => inputById("recipe-name");
+const commandField = () => inputById("terminal-command-0");
 const editorDialog = () => screen.getByRole("dialog", { name: "Edit recipe" });
 const conflictDialog = () => screen.queryByRole("dialog", { name: /^Recipe 'Build v2'/ });
 
 /** A pointer press focuses the button in Chromium; jsdom's `click()` alone doesn't. */
-function pressSave() {
+function pressSave(): HTMLElement {
   const save = within(editorDialog()).getByRole("button", { name: "Update recipe" });
   save.focus();
   save.click();
+  return save;
 }
 
-async function editAndHitConflict(code: Parameters<typeof refusal>[0]) {
+/** Saves an edit into a refusal and returns the Save button the conflict opened from. */
+async function editAndHitConflict(code: Parameters<typeof refusal>[0]): Promise<HTMLElement> {
   updateInRepoRecipe.mockRejectedValueOnce(refusal(code));
   fireEvent.change(nameField(), { target: { value: "Build v2" } });
   fireEvent.change(commandField(), { target: { value: "npm run build:all" } });
+  let save: HTMLElement | undefined;
   await act(async () => {
-    pressSave();
+    save = pressSave();
   });
-  await waitFor(() => expect(conflictDialog()).not.toBeNull());
+  // Focus has to have moved into the conflict, or a later return to Save proves nothing.
+  await waitFor(() => expect(conflictDialog()?.contains(document.activeElement)).toBe(true));
+  return save!;
 }
 
-const dismissals = {
-  "the Cancel button": () =>
-    within(conflictDialog()!).getByRole("button", { name: "Cancel" }).click(),
-  "the close button": () =>
-    within(conflictDialog()!).getByRole("button", { name: "Close dialog" }).click(),
-  Escape: () => fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" }),
-};
+const cancelConflict = () =>
+  within(conflictDialog()!).getByRole("button", { name: "Cancel" }).click();
+
+const dismissals: [string, () => void][] = [
+  ["the Cancel button", cancelConflict],
+  [
+    "the close button",
+    () => within(conflictDialog()!).getByRole("button", { name: "Close dialog" }).click(),
+  ],
+  ["Escape", () => fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" })],
+];
 
 describe("RecipeEditor save conflict (#15035)", () => {
   describe.each(["RECIPE_STALE_CONFLICT", "RECIPE_FORWARD_COMPAT_CONFLICT"] as const)(
     "%s",
     (code) => {
-      it.each(Object.keys(dismissals) as (keyof typeof dismissals)[])(
-        "backs out of the save, not the edit, from %s",
-        async (how) => {
-          const { onClose, onSave } = renderEditor();
-          await editAndHitConflict(code);
+      it.each(dismissals)("backs out of the save, not the edit, from %s", async (_how, dismiss) => {
+        const { onClose, onSave } = renderEditor();
+        const save = await editAndHitConflict(code);
 
-          await act(async () => {
-            dismissals[how]();
-          });
-          await waitFor(() => expect(conflictDialog()).toBeNull());
+        await act(async () => {
+          dismiss();
+        });
+        await waitFor(() => expect(conflictDialog()).toBeNull());
 
-          // Still editing, with the draft exactly as typed and nothing reported.
-          expect(onClose).not.toHaveBeenCalled();
-          expect(onSave).not.toHaveBeenCalled();
-          expect(nameField().value).toBe("Build v2");
-          expect(commandField().value).toBe("npm run build:all");
-          expect(nameField().readOnly).toBe(false);
-          expect(document.querySelector("[data-inline-status-banner]")).toBeNull();
-          // Focus comes back into the editor rather than falling behind it.
-          await waitFor(() => expect(editorDialog().contains(document.activeElement)).toBe(true));
+        // Still editing, with the draft exactly as typed and nothing reported.
+        expect(onClose).not.toHaveBeenCalled();
+        expect(onSave).not.toHaveBeenCalled();
+        expect(nameField().value).toBe("Build v2");
+        expect(commandField().value).toBe("npm run build:all");
+        expect(nameField().readOnly).toBe(false);
+        expect(document.querySelector("[data-inline-status-banner]")).toBeNull();
+        // Focus comes back to where the save started rather than falling behind the editor.
+        await waitFor(() => expect(document.activeElement).toBe(save));
 
-          // Nothing was forced through, and the store holds no trace of the edit.
-          expect(updateInRepoRecipe).toHaveBeenCalledTimes(1);
-          expect(useRecipeStore.getState().recipes.map((r) => r.name)).toEqual(["Build"]);
-        }
-      );
+        // Nothing was forced through, and the store holds no trace of the edit.
+        expect(updateInRepoRecipe).toHaveBeenCalledTimes(1);
+        expect(useRecipeStore.getState().recipes.map((r) => r.name)).toEqual(["Build"]);
+      });
     }
   );
 
@@ -146,7 +158,7 @@ describe("RecipeEditor save conflict (#15035)", () => {
     const { onClose, onSave } = renderEditor();
     await editAndHitConflict("RECIPE_STALE_CONFLICT");
     await act(async () => {
-      dismissals["the Cancel button"]();
+      cancelConflict();
     });
     await waitFor(() => expect(conflictDialog()).toBeNull());
 
@@ -168,7 +180,7 @@ describe("RecipeEditor save conflict (#15035)", () => {
     const { onClose } = renderEditor();
     await editAndHitConflict("RECIPE_STALE_CONFLICT");
     await act(async () => {
-      dismissals["the Cancel button"]();
+      cancelConflict();
     });
     await waitFor(() => expect(conflictDialog()).toBeNull());
 
