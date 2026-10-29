@@ -203,7 +203,12 @@ describe("selectWorktreeMovePanelIds", () => {
   ): Parameters<typeof selectWorktreeMovePanelIds>[0] {
     return {
       panelsById: Object.fromEntries(panels.map((p) => [p.id, p])),
-      trashedTerminals: new Map(trashed.map((id) => [id, {} as TrashedTerminal])),
+      trashedTerminals: new Map(
+        trashed.map((id): [string, TrashedTerminal] => [
+          id,
+          { id, expiresAt: 0, originalLocation: "grid" },
+        ])
+      ),
       getPanelGroup: (id) => groups.find((g) => g.panelIds.includes(id)),
     };
   }

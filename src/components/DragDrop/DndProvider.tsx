@@ -1426,15 +1426,7 @@ export function DndProvider({ children }: DndProviderProps) {
           usePanelStore.getState().panelsById
         ),
     }),
-    [
-      placeholderIndex,
-      activeData?.sourceLocation,
-      activeData?.groupId,
-      activeData?.groupPanelIds,
-      activeTerminal,
-      activeId,
-      isWorktreeSortActive,
-    ]
+    [placeholderIndex, activeData, activeTerminal, activeId, isWorktreeSortActive]
   );
 
   useEffect(() => {

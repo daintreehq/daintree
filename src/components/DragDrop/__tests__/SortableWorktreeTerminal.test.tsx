@@ -6,7 +6,7 @@ import { SidebarViewSwitcherContext } from "@/components/Sidebar/sidebarViewCont
 import { SortableWorktreeTerminal } from "../SortableWorktreeTerminal";
 import { useDragHandle } from "../DragHandleContext";
 import { usePanelStore } from "@/store/panelStore";
-import type { PanelInstance } from "@shared/types/panel";
+import type { PanelInstance, PanelLocation, TabGroup } from "@shared/types/panel";
 
 let mockIsDragging = false;
 const mockSetActivatorNodeRef = vi.fn();
@@ -20,8 +20,9 @@ const sortableArgs = vi.hoisted(() => ({
 // only the panel's when it lives where the panel does.
 vi.mock("@/store/panelStore", async () => {
   const { create } = await import("zustand");
-  type Panel = { id: string; location?: string };
-  type Group = { id: string; location: "grid" | "dock"; panelIds: string[] };
+  type Panel = import("@shared/types/panel").PanelInstance;
+  type Group = import("@shared/types/panel").TabGroup;
+  type Trashed = import("@/store/slices/panelRegistry/types").TrashedTerminal;
   const groupLocation = (panel: Panel | undefined) => {
     if (!panel) return null;
     if (panel.location === "grid" || panel.location === undefined) return "grid";
@@ -29,17 +30,17 @@ vi.mock("@/store/panelStore", async () => {
   };
   const usePanelStore = create<{
     panelsById: Record<string, Panel>;
-    trashedTerminals: Map<string, unknown>;
-    tabGroups: Group[];
+    trashedTerminals: Map<string, Trashed>;
+    tabGroups: Map<string, Group>;
     getPanelGroup: (id: string) => Group | undefined;
   }>()((_set, get) => ({
     panelsById: {},
     trashedTerminals: new Map(),
-    tabGroups: [],
+    tabGroups: new Map(),
     getPanelGroup: (id) => {
       const { panelsById, tabGroups } = get();
       const location = groupLocation(panelsById[id]);
-      return tabGroups.find(
+      return [...tabGroups.values()].find(
         (g) => g.panelIds.includes(id) && (location === null || location === g.location)
       );
     },
@@ -100,28 +101,36 @@ function underPluginView(children: ReactNode) {
 }
 
 describe("SortableWorktreeTerminal", () => {
-  const sibling = (id: string, location = "grid") => ({ ...terminal, id, location });
-  const group = (id: string, panelIds: string[], location: "grid" | "dock" = "grid") => ({
+  const sibling = (id: string, location: PanelLocation = "grid"): PanelInstance => ({
+    ...terminal,
     id,
     location,
+  });
+  const group = (id: string, panelIds: string[], location: "grid" | "dock" = "grid"): TabGroup => ({
+    id,
+    location,
+    worktreeId: "wt1",
+    activeTabId: panelIds[0]!,
     panelIds,
   });
 
-  function seed(
-    panels: { id: string; location?: string }[],
-    tabGroups: ReturnType<typeof group>[],
-    trashed: string[] = []
-  ) {
+  function seed(panels: PanelInstance[], tabGroups: TabGroup[], trashed: string[] = []) {
     usePanelStore.setState({
       panelsById: Object.fromEntries(panels.map((p) => [p.id, p])),
-      tabGroups,
-      trashedTerminals: new Map(trashed.map((id) => [id, {}])),
-    } as never);
+      tabGroups: new Map(tabGroups.map((g) => [g.id, g])),
+      trashedTerminals: new Map(
+        trashed.map((id) => [id, { id, expiresAt: 0, originalLocation: "grid" }])
+      ),
+    });
+  }
+
+  function resetCapture() {
+    sortableArgs.last = null;
   }
 
   /** The payload of the render this call makes, never a stale earlier one. */
   function renderRow() {
-    sortableArgs.last = null;
+    resetCapture();
     const view = render(
       <SortableWorktreeTerminal terminal={terminal} worktreeId="wt1" sourceIndex={0}>
         <span />

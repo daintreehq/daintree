@@ -393,8 +393,8 @@ describe("moveTerminalToWorktreeAndFollowRescue", () => {
 });
 
 describe("moveDroppedPanelToWorktree", () => {
-  function seedGroup(worktreeId: string): void {
-    seedPanels([panel("t1", worktreeId), panel("t2", worktreeId), panel("solo", worktreeId)]);
+  function seedGroup(worktreeId: string, panelIds = ["t1", "t2", "solo"]): void {
+    seedPanels(panelIds.map((id) => panel(id, worktreeId)));
     usePanelStore.setState({
       tabGroups: new Map([
         [
@@ -424,6 +424,23 @@ describe("moveDroppedPanelToWorktree", () => {
     expect(panels["t2"]?.worktreeId).toBe("wt-b");
     expect(panels["solo"]?.worktreeId).toBe("wt-a");
     expect(usePanelStore.getState().tabGroups.get("g1")?.worktreeId).toBe("wt-b");
+  });
+
+  // The drop goes through the rescue-aware move, not a bare store write: an
+  // emptied deleted row follows its group to the live card.
+  it("follows a rescued group dropped on a live card", () => {
+    seedGroup("wt-dead", ["t1", "t2"]);
+    useWorktreeSelectionStore.getState().addDeletedWorktree(deletedRow("wt-dead"));
+    useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-dead" });
+    usePanelStore.getState().setFocused("t1");
+    unsubscribe = wirePruneSubscriber(["wt-live"]);
+
+    moveDroppedPanelToWorktree("t1", "wt-live");
+
+    const selection = useWorktreeSelectionStore.getState();
+    expect(selection.deletedWorktrees.has("wt-dead")).toBe(false);
+    expect(selection.activeWorktreeId).toBe("wt-live");
+    expect(usePanelStore.getState().focusedId).not.toBe("t1");
   });
 
   it("moves nothing onto a worktree that isn't live", () => {

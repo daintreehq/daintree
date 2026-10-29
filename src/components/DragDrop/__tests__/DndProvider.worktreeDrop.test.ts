@@ -66,10 +66,29 @@ describe("DndProvider card-drop dispatch (#14962)", () => {
     return found;
   }
 
-  function moveCalls(root: ts.Node): string[][] {
-    return collect(ts.isCallExpression, root)
-      .filter((call) => call.expression.getText(source) === "moveDroppedPanelToWorktree")
-      .map((call) => call.arguments.map((arg) => arg.getText(source)));
+  /**
+   * The move calls made as statements of `branch`'s own block: unconditional
+   * once the branch is taken, so a nested `if` around one doesn't count.
+   */
+  function directMoveCalls(branch: ts.IfStatement): string[][] {
+    const block = branch.thenStatement;
+    if (!ts.isBlock(block)) return [];
+    return block.statements.flatMap((statement) => {
+      if (!ts.isExpressionStatement(statement)) return [];
+      const call = statement.expression;
+      if (!ts.isCallExpression(call)) return [];
+      if (call.expression.getText(source) !== "moveDroppedPanelToWorktree") return [];
+      return [call.arguments.map((arg) => arg.getText(source))];
+    });
+  }
+
+  /** `if` statements in handleDragEnd's own body (not its timers) with this condition. */
+  function branchesOn(condition: string): ts.IfStatement[] {
+    const callback = handleDragEnd();
+    return collect(ts.isIfStatement, callback).filter(
+      (node) =>
+        node.expression.getText(source) === condition && enclosingFunction(node) === callback
+    );
   }
 
   /** handleDragEnd's own callback, not the timers it schedules. */
@@ -91,15 +110,11 @@ describe("DndProvider card-drop dispatch (#14962)", () => {
   }
 
   it("moves any panel drag, group or not, dropped on a card, then skips the reorder logic", () => {
-    const callback = handleDragEnd();
-    const branches = collect(ts.isIfStatement, callback).filter(
-      (node) =>
-        node.expression.getText(source) === "isWorktreeDrop" && enclosingFunction(node) === callback
-    );
+    const branches = branchesOn("isWorktreeDrop");
     expect(branches).toHaveLength(1);
     const branch = branches[0]!;
 
-    expect(moveCalls(branch.thenStatement)).toEqual([["draggedId", "dropWorktreeId"]]);
+    expect(directMoveCalls(branch)).toEqual([["draggedId", "dropWorktreeId"]]);
     expect(collect(ts.isReturnStatement, branch.thenStatement)).toHaveLength(0);
 
     const declaration = collect(ts.isVariableDeclaration, source).find(
@@ -116,7 +131,11 @@ describe("DndProvider card-drop dispatch (#14962)", () => {
   });
 
   it("moves a sidebar row dropped on another worktree's card", () => {
-    expect(moveCalls(source)).toContainEqual(["actualDraggedId", "targetWorktreeId"]);
+    const branches = branchesOn(
+      "targetWorktreeId && targetWorktreeId !== (accordionWorktreeId ?? null)"
+    );
+    expect(branches).toHaveLength(1);
+    expect(directMoveCalls(branches[0]!)).toEqual([["actualDraggedId", "targetWorktreeId"]]);
     const target = collect(ts.isVariableDeclaration, source).find(
       (node) => node.name.getText(source) === "targetWorktreeId"
     );
