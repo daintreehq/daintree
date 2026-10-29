@@ -517,6 +517,14 @@ describe("corpusProblems", () => {
         drops: [],
       }),
       makeCase({ id: "g", style: "grok", uncertain: ["cash"] }),
+      makeCase({
+        id: "h",
+        raw: "rerun --watch",
+        reference: "Rerun --watch.",
+        alsoAccept: ["Rerun."],
+        fixes: {},
+        drops: [],
+      }),
     ]);
     expect(problems).toEqual([
       'a: fix "the cache" is already in the raw transcript',
@@ -526,10 +534,11 @@ describe("corpusProblems", () => {
       "d: duplicate id",
       'd: unsure phrase "cache" is not in the raw transcript',
       'e: keep "the branch" does not survive into "Invalidate the cache on change."',
+      // No "--watch" keep for f: its reference rewrites the span, so it was misheard.
       'f: fix "rebuild" is not in the reference',
-      'f: keep "--watch" does not survive into "Invalidate the cache when the branch changes."',
       // Grok's streamed words carry no confidence, so production never flags one.
       "g: only Deepgram flags unsure words",
+      'h: keep "--watch" does not survive into "Rerun."',
     ]);
   });
 

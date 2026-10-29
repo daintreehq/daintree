@@ -1479,15 +1479,15 @@ export class VoiceCorrectionService {
           // Nothing has reached the composer before an answer, so a retry
           // can't take back text it already showed.
           const stalled = stall?.signal.aborted === true;
-          const busy = error instanceof CleanupRequestError && RETRY_STATUSES.has(error.status);
+          const rejection = error instanceof CleanupRequestError ? error : undefined;
+          const busy = rejection !== undefined && RETRY_STATUSES.has(rejection.status);
           const unreached =
             !answered && error instanceof TypeError && error.message === FETCH_FAILED;
           if (attempt > 1 || !(stalled || busy || unreached)) throw error;
           logWarn(`${P} Correction request retried`, {
             reason: stalled ? "stalled" : busy ? "status" : "network",
-            ...(error instanceof CleanupRequestError
-              ? { status: error.status, code: error.code }
-              : {}),
+            status: rejection?.status,
+            code: rejection?.code,
           });
         } finally {
           stall?.dispose();
