@@ -238,10 +238,17 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
   // Request tokens to guard stale async responses
   const compareTokenRef = useRef(0);
   const fileDiffTokenRef = useRef(0);
+  const selectedFileRef = useRef<CrossWorktreeFile | null>(null);
+  // The key of the comparison `result` belongs to, so a rerun for the same
+  // comparison can refresh in place instead of starting over.
+  const resultKeyRef = useRef<string | null>(null);
 
   // Initialize / reset state when modal opens or closes
   useEffect(() => {
     if (!isOpen) {
+      resultKeyRef.current = null;
+      compareTokenRef.current++;
+      fileDiffTokenRef.current++;
       setLeftId(null);
       setRightId(null);
       setResult(null);
@@ -263,68 +270,41 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
   const leftWorktree = worktrees.find((wt) => wt.id === leftId) ?? null;
   const rightWorktree = worktrees.find((wt) => wt.id === rightId) ?? null;
 
-  const fetchComparison = useCallback(async () => {
-    if (!leftWorktree?.branch || !rightWorktree?.branch) return;
-    if (leftWorktree.branch === rightWorktree.branch) return;
-
-    const token = ++compareTokenRef.current;
-
-    setLoading(true);
-    setError(null);
-    setResult(null);
-    setSelectedFile(null);
-    setFileDiff(null);
-    setFileDiffError(false);
-
-    try {
-      const res = await window.electron.git.compareWorktrees(
-        leftWorktree.path,
-        leftWorktree.branch,
-        rightWorktree.branch
-      );
-      if (token !== compareTokenRef.current) return; // stale response
-      // Only a file list is a comparison; anything else would leave the
-      // canvas with nothing to say, so it takes the retryable failure path.
-      if (!res || typeof res !== "object" || !Array.isArray(res.files)) {
-        setError("The comparison came back without a file list.");
-        return;
-      }
-      setResult(res);
-    } catch (err) {
-      if (token !== compareTokenRef.current) return;
-      setError(formatErrorMessage(err, "Failed to compare worktrees"));
-    } finally {
-      if (token === compareTokenRef.current) setLoading(false);
-    }
-  }, [leftWorktree, rightWorktree]);
-
-  // Auto-fetch when both sides are selected
-  useEffect(() => {
-    if (leftId && rightId && leftId !== rightId) {
-      void fetchComparison();
-    }
-  }, [leftId, rightId, fetchComparison]);
+  // The comparison is branch against branch, so it depends on these values and
+  // not on the snapshot objects, which the store replaces for every status or
+  // activity update in either worktree (#15009).
+  const leftPath = leftWorktree?.path;
+  const leftBranch = leftWorktree?.branch;
+  const rightBranch = rightWorktree?.branch;
+  const leftHead = leftWorktree?.worktreeChanges?.headOid;
+  const rightHead = rightWorktree?.worktreeChanges?.headOid;
+  const comparisonKey = JSON.stringify([leftId, rightId, leftPath, leftBranch, rightBranch]);
 
   const ignoreWhitespace = usePreferencesStore((s) => s.diffIgnoreWhitespace);
   const diffWrapLines = usePreferencesStore((s) => s.diffWrapLines);
   const setDiffWrapLines = usePreferencesStore((s) => s.setDiffWrapLines);
 
+  // A refresh keeps the diff on screen until the new one lands and ignores
+  // failures, so a background update never swaps what is being read for a
+  // loading state or an error.
   const fetchFileDiff = useCallback(
-    async (file: CrossWorktreeFile) => {
-      if (!leftWorktree?.branch || !rightWorktree?.branch) return;
+    async (file: CrossWorktreeFile, refresh = false) => {
+      if (!leftPath || !leftBranch || !rightBranch) return;
 
       const token = ++fileDiffTokenRef.current;
 
       setSelectedFile(file);
-      setFileDiff(null);
-      setFileDiffError(false);
-      setFileDiffLoading(true);
+      if (!refresh) {
+        setFileDiff(null);
+        setFileDiffError(false);
+        setFileDiffLoading(true);
+      }
 
       try {
         const diff = await window.electron.git.compareWorktrees(
-          leftWorktree.path,
-          leftWorktree.branch,
-          rightWorktree.branch,
+          leftPath,
+          leftBranch,
+          rightBranch,
           file.path,
           undefined,
           ignoreWhitespace
@@ -332,18 +312,91 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
         if (token !== fileDiffTokenRef.current) return; // stale response
         // Anything but diff text is a failure the user can retry, not a blank pane.
         const ok = typeof diff === "string";
-        setFileDiff(ok ? diff : null);
-        setFileDiffError(!ok);
+        if (ok) {
+          setFileDiff(diff);
+          setFileDiffError(false);
+        } else if (!refresh) {
+          setFileDiff(null);
+          setFileDiffError(true);
+        }
       } catch {
         if (token !== fileDiffTokenRef.current) return;
-        setFileDiff(null);
-        setFileDiffError(true);
+        if (!refresh) {
+          setFileDiff(null);
+          setFileDiffError(true);
+        }
       } finally {
         if (token === fileDiffTokenRef.current) setFileDiffLoading(false);
       }
     },
-    [leftWorktree, rightWorktree, ignoreWhitespace]
+    [leftPath, leftBranch, rightBranch, ignoreWhitespace]
   );
+
+  useEffect(() => {
+    selectedFileRef.current = selectedFile;
+  }, [selectedFile]);
+
+  const fetchComparison = useCallback(
+    async (refresh = false) => {
+      if (!leftPath || !leftBranch || !rightBranch) return;
+      if (leftBranch === rightBranch) return;
+
+      const token = ++compareTokenRef.current;
+
+      if (!refresh) {
+        resultKeyRef.current = null;
+        fileDiffTokenRef.current++;
+        setLoading(true);
+        setError(null);
+        setResult(null);
+        setSelectedFile(null);
+        setFileDiff(null);
+        setFileDiffError(false);
+        setFileDiffLoading(false);
+      }
+
+      try {
+        const res = await window.electron.git.compareWorktrees(leftPath, leftBranch, rightBranch);
+        if (token !== compareTokenRef.current) return; // stale response
+        // Only a file list is a comparison; anything else would leave the
+        // canvas with nothing to say, so it takes the retryable failure path.
+        if (!res || typeof res !== "object" || !Array.isArray(res.files)) {
+          if (!refresh) setError("The comparison came back without a file list.");
+          return;
+        }
+        resultKeyRef.current = comparisonKey;
+        setResult(res);
+        if (refresh) {
+          const open = selectedFileRef.current;
+          const kept = open ? res.files.find((f) => isSameFile(f, open)) : undefined;
+          if (kept) {
+            void fetchFileDiff(kept, true);
+          } else {
+            fileDiffTokenRef.current++;
+            setSelectedFile(null);
+            setFileDiff(null);
+            setFileDiffError(false);
+            setFileDiffLoading(false);
+          }
+        }
+      } catch (err) {
+        if (token !== compareTokenRef.current) return;
+        if (!refresh) setError(formatErrorMessage(err, "Failed to compare worktrees"));
+      } finally {
+        if (token === compareTokenRef.current) setLoading(false);
+      }
+    },
+    [leftPath, leftBranch, rightBranch, comparisonKey, fetchFileDiff]
+  );
+
+  // Auto-fetch when both sides are selected, and again when either branch
+  // moves to a new commit. Only that second case may refresh in place.
+  useEffect(() => {
+    if (leftId && rightId && leftId !== rightId) {
+      void fetchComparison(resultKeyRef.current === comparisonKey);
+    }
+    // The heads are triggers, not inputs: a new commit reruns the comparison.
+  }, [leftId, rightId, comparisonKey, leftHead, rightHead, fetchComparison]);
 
   // File stepping through the comparison set, mirroring the diff modals:
   // `[` / `]` keys plus a footer stepper in the diff panel.
