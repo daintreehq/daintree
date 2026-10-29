@@ -126,6 +126,17 @@ export interface LastTypedAgentTarget {
   terminalId: string;
 }
 
+/**
+ * A fleet member's own draft, set aside while the fleet's draft is mirrored
+ * over it (#14949). `draft` is null for a member whose own draft became the
+ * fleet's: it was the primary before anything was mirrored into it, so the
+ * fleet's text is its text and there is nothing to give back.
+ */
+export interface FleetDraftHold {
+  terminalId: string;
+  draft: string | null;
+}
+
 export interface TerminalInputState {
   hybridInputEnabled: boolean;
   hybridInputAutoFocus: boolean;
@@ -160,6 +171,20 @@ export interface TerminalInputState {
   popPendingDraft: (terminalId: string, projectId?: string) => string | undefined;
   clearPendingDraft: (terminalId: string, projectId?: string) => void;
   stashedEditorStates: Map<string, EditorState>;
+  /** By draft key, for every fleet member the fleet's draft has reached. */
+  fleetDraftHolds: Map<string, FleetDraftHold>;
+  /**
+   * The primary's draft into each other armed pane. A pane's own draft is held
+   * the first time the fleet's replaces it, unless its draft is the fleet's.
+   */
+  mirrorFleetDraft: (
+    primaryId: string,
+    value: string,
+    armedIds: ReadonlySet<string>,
+    projectId?: string
+  ) => void;
+  /** Every member not in `fleetIds` gets its held draft back and is forgotten. */
+  releaseFleetDraftHolds: (fleetIds: ReadonlySet<string>) => void;
   stashEditorState: (terminalId: string, state: EditorState, projectId?: string) => void;
   popStashedEditorState: (terminalId: string, projectId?: string) => EditorState | undefined;
   hasStashedEditorState: (terminalId: string, projectId?: string) => boolean;
@@ -214,6 +239,7 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
   pendingDrafts: new Map(),
   pendingDraftRevision: 0,
   stashedEditorStates: new Map(),
+  fleetDraftHolds: new Map(),
   voiceSubmittingPanels: new Set(),
 
   setVoiceSubmitting: (panelId, submitting) =>
@@ -284,10 +310,58 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
       pendingDrafts: new Map(),
       pendingDraftRevision: 0,
       stashedEditorStates: new Map(),
+      fleetDraftHolds: new Map(),
       commandHistory: new Map(),
       historyIndex: new Map(),
       tempDraft: new Map(),
       lastTypedAgentTarget: null,
+    }),
+
+  mirrorFleetDraft: (primaryId, value, armedIds, projectId) =>
+    set((state) => {
+      let holds: Map<string, FleetDraftHold> | null = null;
+      let drafts: Map<string, string> | null = null;
+      const primaryKey = makeDraftKey(primaryId, projectId);
+      if (!state.fleetDraftHolds.has(primaryKey)) {
+        holds = new Map(state.fleetDraftHolds);
+        holds.set(primaryKey, { terminalId: primaryId, draft: null });
+      }
+      for (const id of armedIds) {
+        if (id === primaryId) continue;
+        const key = makeDraftKey(id, projectId);
+        const existing = state.draftInputs.get(key) ?? "";
+        if (existing === value) continue;
+        if (!(holds ?? state.fleetDraftHolds).has(key)) {
+          holds ??= new Map(state.fleetDraftHolds);
+          holds.set(key, { terminalId: id, draft: existing });
+        }
+        drafts ??= new Map(state.draftInputs);
+        if (value === "") drafts.delete(key);
+        else drafts.set(key, value);
+      }
+      if (holds === null && drafts === null) return state;
+      return {
+        ...(holds && { fleetDraftHolds: holds }),
+        ...(drafts && { draftInputs: drafts }),
+      };
+    }),
+
+  releaseFleetDraftHolds: (fleetIds) =>
+    set((state) => {
+      let holds: Map<string, FleetDraftHold> | null = null;
+      let drafts: Map<string, string> | null = null;
+      for (const [key, hold] of state.fleetDraftHolds) {
+        if (fleetIds.has(hold.terminalId)) continue;
+        holds ??= new Map(state.fleetDraftHolds);
+        holds.delete(key);
+        if (hold.draft === null) continue;
+        if ((state.draftInputs.get(key) ?? "") === hold.draft) continue;
+        drafts ??= new Map(state.draftInputs);
+        if (hold.draft === "") drafts.delete(key);
+        else drafts.set(key, hold.draft);
+      }
+      if (holds === null) return state;
+      return { fleetDraftHolds: holds, ...(drafts && { draftInputs: drafts }) };
     }),
 
   stashEditorState: (terminalId, editorState, projectId) =>
@@ -490,6 +564,7 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
       const newDraftInputs = deleteTerminalKeys(state.draftInputs, terminalId);
       const newPendingDrafts = deleteTerminalKeys(state.pendingDrafts, terminalId);
       const newStashed = deleteTerminalKeys(state.stashedEditorStates, terminalId);
+      const newHolds = deleteTerminalKeys(state.fleetDraftHolds, terminalId);
       const newHistory = deleteTerminalKeys(state.commandHistory, terminalId);
       const newSent = deleteTerminalKeys(state.sentPrompts, terminalId);
       const newIndex = deleteTerminalKeys(state.historyIndex, terminalId);
@@ -510,6 +585,7 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
         newDraftInputs !== state.draftInputs ||
         newPendingDrafts !== state.pendingDrafts ||
         newStashed !== state.stashedEditorStates ||
+        newHolds !== state.fleetDraftHolds ||
         newHistory !== state.commandHistory ||
         newSent !== state.sentPrompts ||
         newIndex !== state.historyIndex ||
@@ -523,6 +599,7 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
         draftInputs: newDraftInputs,
         pendingDrafts: newPendingDrafts,
         stashedEditorStates: newStashed,
+        fleetDraftHolds: newHolds,
         commandHistory: newHistory,
         sentPrompts: newSent,
         historyIndex: newIndex,
@@ -545,6 +622,7 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
         projectId,
         preserveTerminalIds
       );
+      const newHolds = deleteProjectKeys(state.fleetDraftHolds, projectId, preserveTerminalIds);
       const newHistory = deleteProjectKeys(state.commandHistory, projectId, preserveTerminalIds);
       const newSent = deleteProjectKeys(state.sentPrompts, projectId, preserveTerminalIds);
       const newIndex = deleteProjectKeys(state.historyIndex, projectId, preserveTerminalIds);
@@ -564,6 +642,7 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
         newDraftInputs !== state.draftInputs ||
         newPendingDrafts !== state.pendingDrafts ||
         newStashed !== state.stashedEditorStates ||
+        newHolds !== state.fleetDraftHolds ||
         newHistory !== state.commandHistory ||
         newSent !== state.sentPrompts ||
         newIndex !== state.historyIndex ||
@@ -576,6 +655,7 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
         draftInputs: newDraftInputs,
         pendingDrafts: newPendingDrafts,
         stashedEditorStates: newStashed,
+        fleetDraftHolds: newHolds,
         commandHistory: newHistory,
         sentPrompts: newSent,
         historyIndex: newIndex,
@@ -601,12 +681,20 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
   restoreProjectDraftInputs: (projectId, inputs) =>
     set((state) => {
       const newDraftInputs = new Map(state.draftInputs);
+      let newHolds = state.fleetDraftHolds;
       for (const [terminalId, value] of Object.entries(inputs)) {
         if (terminalId && value) {
-          newDraftInputs.set(`${projectId}:${terminalId}`, value);
+          const key = `${projectId}:${terminalId}`;
+          newDraftInputs.set(key, value);
+          // Newer than the draft held for the pane, which leaving the fleet
+          // would otherwise put back over it.
+          if (newHolds.has(key)) {
+            if (newHolds === state.fleetDraftHolds) newHolds = new Map(newHolds);
+            newHolds.delete(key);
+          }
         }
       }
-      return { draftInputs: newDraftInputs };
+      return { draftInputs: newDraftInputs, fleetDraftHolds: newHolds };
     }),
 
   getDraftProjectIds: () => {

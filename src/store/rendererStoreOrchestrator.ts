@@ -7,6 +7,7 @@ import {
 } from "./worktreeStore";
 import { useFleetArmingStore, subscribeFleetArmingPanelPruning } from "./fleetArmingStore";
 import { subscribeFleetTargetOverridesPruning } from "./fleetTargetOverridesStore";
+import { subscribeFleetDraftHoldRelease } from "./fleetDraftHoldRelease";
 import { subscribeFleetFailureAutoClear } from "./fleetFailureStore";
 import { subscribeFleetRunWatcher } from "./fleetRunStore";
 import { useTerminalInputStore, unregisterInputController } from "./terminalInputStore";
@@ -663,6 +664,11 @@ export function initStoreOrchestrator(): () => void {
   //     view keeps a copy current for the voice menu and palette.
   disposables.add(toDisposable(subscribeRecentDictationsSync()));
   disposables.add(toDisposable(trackComposerSurface()));
+
+  // 5h. Fleet draft holds (#14949): a pane leaving the fleet gets back the
+  //     draft it had before the fleet's was mirrored over it. Same
+  //     orchestrator-scoped lifecycle as 5a–5d.
+  disposables.add(toDisposable(subscribeFleetDraftHoldRelease()));
 
   // 5. Availability → agent-settings re-normalization: real availability data
   //    is the input to `normalizeAgentSelection`, so re-run normalization any

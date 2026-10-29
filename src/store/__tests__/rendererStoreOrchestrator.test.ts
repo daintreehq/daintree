@@ -1916,6 +1916,74 @@ describe("rendererStoreOrchestrator", () => {
     });
   });
 
+  describe("fleet draft holds (#14949)", () => {
+    function agent(id: string): PtyPanelData {
+      return {
+        id,
+        kind: "terminal",
+        title: id,
+        location: "grid",
+        worktreeId: "wt-1",
+        detectedAgentId: "claude",
+        everDetectedAgent: true,
+        agentState: "idle",
+        hasPty: true,
+      } as PtyPanelData;
+    }
+
+    async function armWithHeldDraft() {
+      const { useFleetArmingStore } = await import("../fleetArmingStore");
+      usePanelStore.setState({
+        panelsById: { "agent-a": agent("agent-a"), "agent-b": agent("agent-b") },
+        panelIds: ["agent-a", "agent-b"],
+      });
+      useTerminalInputStore.setState({ draftInputs: new Map(), fleetDraftHolds: new Map() });
+      useTerminalInputStore.getState().setDraftInput("agent-b", "b's own");
+      useFleetArmingStore.getState().armIds(["agent-a", "agent-b"]);
+      useTerminalInputStore
+        .getState()
+        .mirrorFleetDraft("agent-a", "shared", useFleetArmingStore.getState().armedIds);
+      expect(useTerminalInputStore.getState().getDraftInput("agent-b")).toBe("shared");
+      return useFleetArmingStore;
+    }
+
+    it("gives a pane trashed out of the fleet its own draft back", async () => {
+      await armWithHeldDraft();
+
+      usePanelStore.setState({
+        panelsById: {
+          ...usePanelStore.getState().panelsById,
+          "agent-b": { ...agent("agent-b"), location: "trash" } as PtyPanelData,
+        },
+      });
+
+      expect(useTerminalInputStore.getState().getDraftInput("agent-b")).toBe("b's own");
+      expect(useTerminalInputStore.getState().fleetDraftHolds.size).toBe(0);
+    });
+
+    it("puts nothing back for a pane that was closed", async () => {
+      await armWithHeldDraft();
+
+      usePanelStore.setState({
+        panelsById: { "agent-a": agent("agent-a") },
+        panelIds: ["agent-a"],
+      });
+
+      expect(useTerminalInputStore.getState().draftInputs.has("agent-b")).toBe(false);
+      expect(useTerminalInputStore.getState().fleetDraftHolds.size).toBe(0);
+    });
+
+    it("releases holds left behind while it was torn down", async () => {
+      const useFleetArmingStore = await armWithHeldDraft();
+      destroyStoreOrchestrator();
+      useFleetArmingStore.getState().clear();
+
+      initStoreOrchestrator();
+
+      expect(useTerminalInputStore.getState().getDraftInput("agent-b")).toBe("b's own");
+    });
+  });
+
   describe("fleet failure auto-clear (issue #9923)", () => {
     type FleetStores = {
       useFleetArmingStore: typeof import("../fleetArmingStore").useFleetArmingStore;
