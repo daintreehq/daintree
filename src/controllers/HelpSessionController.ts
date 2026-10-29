@@ -162,6 +162,8 @@ export interface ActiveGrantState {
   /** The hard ceiling no use can extend past; the grant ends at the earlier. */
   maxExpiresAt?: number;
   ttlMs: number;
+  /** Set for a native automation grant, whose `toolId` is always `"*"`. */
+  grantId?: string;
 }
 
 /**

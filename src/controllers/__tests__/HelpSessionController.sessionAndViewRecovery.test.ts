@@ -799,37 +799,60 @@ describe("HelpSessionController — grant lifecycle (#10042)", () => {
     ctrl.stop();
   });
 
-  it("native automation grants never take over or move the per-tool countdown", () => {
+  it('tells native grants apart by grantId, not their shared "*" tool id (#14998)', () => {
     helpPanelState.sessionId = "s1";
     const ctrl = new HelpSessionController();
     ctrl.start();
-    const native = (grantId: string, type: "grant.issued" | "grant.refreshed" | "grant.revoked") =>
+    const now = Date.now();
+    const native = (
+      grantId: string,
+      type: "grant.issued" | "grant.refreshed" | "grant.expired" | "grant.revoked",
+      extra: { toolId?: string; expiresAt?: number } = {}
+    ) =>
       grantLifecycleListeners[0]?.({
         type,
         sessionId: "s1",
-        toolId: "*",
+        toolId: extra.toolId ?? "*",
         ttlMs: 900_000,
-        expiresAt: Date.now() + 1_200_000,
+        expiresAt: extra.expiresAt,
         grantId,
         revokedReason: type === "grant.revoked" ? "grant-ceiling" : undefined,
       });
 
-    native("native-a", "grant.issued");
-    expect(ctrl.getSnapshot().activeGrant).toBeNull();
+    native("native-a", "grant.issued", { expiresAt: now + 900_000 });
+    native("native-b", "grant.issued", { expiresAt: now + 900_000 });
+    expect(ctrl.getSnapshot().activeGrant).toMatchObject({ toolId: "*", grantId: "native-b" });
 
-    const expiresAt = Date.now() + 900_000;
+    // native-a's use and its end leave native-b's countdown alone.
+    native("native-a", "grant.refreshed", { expiresAt: now + 1_200_000 });
+    native("native-a", "grant.revoked");
+    expect(ctrl.getSnapshot().activeGrant).toMatchObject({
+      grantId: "native-b",
+      expiresAt: now + 900_000,
+    });
+
+    native("native-b", "grant.refreshed", { expiresAt: now + 1_200_000 });
+    expect(ctrl.getSnapshot().activeGrant?.expiresAt).toBe(now + 1_200_000);
+    native("native-b", "grant.revoked");
+    expect(ctrl.getSnapshot().activeGrant).toBeNull();
+    expect(ctrl.getSnapshot().grantEnded).toEqual({ toolId: "*", reason: "grant-ceiling" });
+
+    // A native lazy expiry names the tool that tripped it; it must not end a
+    // per-tool grant for that same tool.
     grantLifecycleListeners[0]?.({
       type: "grant.issued",
       sessionId: "s1",
       toolId: "t1",
       ttlMs: 900_000,
-      expiresAt,
+      expiresAt: now + 900_000,
     });
-    native("native-b", "grant.issued");
-    native("native-a", "grant.refreshed");
-    native("native-a", "grant.revoked");
-    expect(ctrl.getSnapshot().activeGrant).toMatchObject({ toolId: "t1", expiresAt });
-    expect(ctrl.getSnapshot().grantEnded).toBeNull();
+    native("native-c", "grant.expired", { toolId: "t1" });
+    native("native-c", "grant.refreshed", { toolId: "t1", expiresAt: now + 1_200_000 });
+    expect(ctrl.getSnapshot().activeGrant).toMatchObject({
+      toolId: "t1",
+      expiresAt: now + 900_000,
+    });
+    expect(ctrl.getSnapshot().activeGrant?.grantId).toBeUndefined();
     ctrl.stop();
   });
 

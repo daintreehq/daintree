@@ -10,9 +10,21 @@ import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import type { HelpSessionSnapshot, GrantEndReason } from "./HelpSessionController";
+import type {
+  ActiveGrantState,
+  HelpSessionSnapshot,
+  GrantEndReason,
+} from "./HelpSessionController";
+import type { McpGrantLifecyclePayload } from "@shared/types/ipc/mcpServer";
 
 const GRANT_ENDED_BANNER_AUTO_DISMISS_MS = 15_000;
+
+// Native grants are told apart by `grantId` (their lazy expiry names the tool
+// that tripped it, not "*"); per-tool grants, which carry none, by tool.
+function isSameGrant(active: ActiveGrantState, payload: McpGrantLifecyclePayload): boolean {
+  if (active.sessionId !== payload.sessionId || active.grantId !== payload.grantId) return false;
+  return active.grantId !== undefined || active.toolId === payload.toolId;
+}
 
 export interface McpActivityTrackerHost {
   getSnapshot(): HelpSessionSnapshot;
@@ -434,14 +446,13 @@ export class McpActivityTracker {
    * and a refresh never re-arms a banner that's already gone.
    * `tier.elevated`/`tier.decayed` are session-tier transitions, not per-tool
    * grants — they leave the countdown untouched (the audit viewer records
-   * them). Native automation grants (#10648, any payload with a `grantId`)
-   * have their own settings card: they all share `toolId: "*"`, so letting
-   * them in would have one grant's use move another's countdown.
+   * them). Native automation grants (#10648) all share `toolId: "*"`, so the
+   * on-screen grant is matched by `grantId` when it has one, or one native
+   * grant's use would move another's countdown.
    */
   private _onGrantLifecycle(
     payload: import("@shared/types/ipc/mcpServer").McpGrantLifecyclePayload
   ): void {
-    if (payload.grantId !== undefined) return;
     if (payload.type === "grant.issued") {
       // `expiresAt` is always set on `grant.issued`; bail defensively if a
       // malformed payload omits it rather than seed a NaN countdown.
@@ -454,6 +465,7 @@ export class McpActivityTracker {
           expiresAt: payload.expiresAt,
           maxExpiresAt: payload.maxExpiresAt,
           ttlMs: payload.ttlMs,
+          grantId: payload.grantId,
         },
         grantEnded: null,
       });
@@ -463,9 +475,7 @@ export class McpActivityTracker {
       return;
     }
     const active = this.host.getSnapshot().activeGrant;
-    if (!active || active.sessionId !== payload.sessionId || active.toolId !== payload.toolId) {
-      return;
-    }
+    if (!active || !isSameGrant(active, payload)) return;
     if (payload.type === "grant.refreshed") {
       if (payload.expiresAt === undefined) return;
       this.host.patch({
@@ -482,7 +492,7 @@ export class McpActivityTracker {
       this._clearGrantEndedTimer();
       this.host.patch({
         activeGrant: null,
-        grantEnded: reason ? { toolId: payload.toolId, reason } : null,
+        grantEnded: reason ? { toolId: active.toolId, reason } : null,
       });
       if (reason) this._armGrantEndedAutoDismiss();
     }
