@@ -2,6 +2,7 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import type { ProjectSettings } from "@shared/types";
 import { z } from "zod";
 import { projectClient, globalEnvClient } from "@/clients";
+import { isReservedEnvironmentKey } from "@/lib/resourceEnvironments";
 
 const resourceEnvSchema = z.object({
   provision: z.array(z.string()).optional(),
@@ -127,6 +128,11 @@ export function registerEnvActions(actions: ActionRegistry, _callbacks: ActionCa
         projectId: string;
         resourceEnvironments: Record<string, z.infer<typeof resourceEnvSchema>>;
       };
+      if (Object.keys(resourceEnvironments).some(isReservedEnvironmentKey)) {
+        throw new Error(
+          'The environment name "local" is reserved for Local mode, so worktrees could never run in it. Save it under another name.'
+        );
+      }
       const current: Partial<ProjectSettings> = (await projectClient.getSettings(projectId)) ?? {};
       const next: ProjectSettings = { runCommands: [], ...current, resourceEnvironments };
       await projectClient.saveSettings(projectId, next);

@@ -109,4 +109,24 @@ describe("env action definitions", () => {
     expect(savedSettings.resourceEnvironments).toEqual({ new: { provision: ["a"] } });
     expect(savedSettings.runCommands).toEqual([]);
   });
+
+  it("worktree.resource.config.set refuses an environment named local without saving", async () => {
+    mockGetSettings.mockResolvedValue({ runCommands: [] });
+    const def = registry.get("worktree.resource.config.set")!();
+    await expect(
+      def.run(
+        { projectId: "p1", resourceEnvironments: { local: { provision: ["a"] }, ok: {} } },
+        stubCtx
+      )
+    ).rejects.toThrow(/reserved for Local mode/);
+    expect(mockSaveSettings).not.toHaveBeenCalled();
+  });
+
+  it("worktree.resource.config.set accepts an environment named Local", async () => {
+    mockGetSettings.mockResolvedValue({ runCommands: [] });
+    mockSaveSettings.mockResolvedValue(undefined);
+    const def = registry.get("worktree.resource.config.set")!();
+    await def.run({ projectId: "p1", resourceEnvironments: { Local: {} } }, stubCtx);
+    expect(mockSaveSettings.mock.calls[0]![1].resourceEnvironments).toEqual({ Local: {} });
+  });
 });

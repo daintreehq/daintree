@@ -22,6 +22,7 @@ import { usePreferencesStore } from "@/store/preferencesStore";
 import { notify } from "@/lib/notify";
 import { UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
 import { patchIssueAssigneeCache } from "@/lib/forgeResourceCache";
+import { usableEnvironmentKeys } from "@/lib/resourceEnvironments";
 import { systemClient } from "@/clients/systemClient";
 import { useRecipeStore } from "@/store/recipeStore";
 import { notifyRecipeSpawnFailures } from "@/utils/recipeNotify";
@@ -247,7 +248,7 @@ export function NewWorktreeDialog({
   const { projectSettings, configuredBranchPrefix } = useNewWorktreeProjectSettings({ isOpen });
 
   const resourceEnvironments = projectSettings?.resourceEnvironments;
-  const hasAnyEnvironments = Object.keys(resourceEnvironments ?? {}).length > 0;
+  const hasAnyEnvironments = usableEnvironmentKeys(resourceEnvironments).length > 0;
 
   const persistedDefaultRecipeId = projectSettings?.defaultWorktreeRecipeId;
   // Shadowed recipes stay listed (dimmed, marked "Overridden") instead of being

@@ -3,6 +3,7 @@ import {
   SegmentedRadioGroup,
   type SegmentedRadioOption,
 } from "@/components/ui/SegmentedRadioGroup";
+import { usableEnvironmentKeys } from "@/lib/resourceEnvironments";
 
 interface EnvironmentRadioGroupProps {
   worktreeMode: string;
@@ -23,7 +24,7 @@ export function EnvironmentRadioGroup({
   const options = useMemo<SegmentedRadioOption<string>[]>(
     () => [
       { value: "local", label: "Local" },
-      ...Object.keys(resourceEnvironments ?? {}).map((key) => ({ value: key, label: key })),
+      ...usableEnvironmentKeys(resourceEnvironments).map((key) => ({ value: key, label: key })),
     ],
     [resourceEnvironments]
   );

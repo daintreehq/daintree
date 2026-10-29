@@ -423,3 +423,146 @@ describe("ResourceEnvironmentsSection — removing an environment", () => {
     });
   });
 });
+
+describe("ResourceEnvironmentsSection — the reserved local name", () => {
+  function addEnvironment(name: string) {
+    fireEvent.click(screen.getByRole("button", { name: /add environment/i }));
+    const input = screen.getByRole("textbox", { name: "New environment name" });
+    fireEvent.change(input, { target: { value: name } });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    return input;
+  }
+
+  it.each(["local", " local ", "Local", "LOCAL"])("refuses %j with an inline error", (name) => {
+    const onResourceEnvironmentsChange = vi.fn();
+    render(
+      <ResourceEnvironmentsSection
+        resourceEnvironments={mockResourceEnvironments}
+        onResourceEnvironmentsChange={onResourceEnvironmentsChange}
+        activeResourceEnvironment="docker-local"
+        onActiveResourceEnvironmentChange={vi.fn()}
+        defaultWorktreeMode="local"
+        onDefaultWorktreeModeChange={vi.fn()}
+        isOpen={true}
+      />
+    );
+
+    const input = addEnvironment(name);
+
+    expect(onResourceEnvironmentsChange).not.toHaveBeenCalled();
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+    expect(screen.getByRole("alert").textContent).toMatch(/local/i);
+  });
+
+  it("offers a saved environment named local only as the Local default", () => {
+    render(
+      <ResourceEnvironmentsSection
+        resourceEnvironments={{ ...mockResourceEnvironments, local: { provision: ["up"] } }}
+        onResourceEnvironmentsChange={vi.fn()}
+        activeResourceEnvironment="docker-local"
+        onActiveResourceEnvironmentChange={vi.fn()}
+        defaultWorktreeMode="local"
+        onDefaultWorktreeModeChange={vi.fn()}
+        isOpen={true}
+      />
+    );
+
+    const radios = screen.getAllByRole("radio") as HTMLInputElement[];
+    expect(radios.map((r) => r.value)).toEqual(["local", "docker-local"]);
+    expect(radios.filter((r) => r.checked)).toHaveLength(1);
+  });
+
+  it("offers no default worktree mode when local is the only saved environment", () => {
+    render(
+      <ResourceEnvironmentsSection
+        resourceEnvironments={{ local: { provision: ["up"] } }}
+        onResourceEnvironmentsChange={vi.fn()}
+        activeResourceEnvironment="local"
+        onActiveResourceEnvironmentChange={vi.fn()}
+        defaultWorktreeMode="local"
+        onDefaultWorktreeModeChange={vi.fn()}
+        isOpen={true}
+      />
+    );
+
+    expect(screen.queryByText("Default worktree mode")).toBeNull();
+    expect(screen.queryAllByRole("radio")).toHaveLength(0);
+  });
+
+  it("flags a saved environment named local as unusable while keeping its commands", () => {
+    render(
+      <ResourceEnvironmentsSection
+        resourceEnvironments={{ ...mockResourceEnvironments, local: { provision: ["make up"] } }}
+        onResourceEnvironmentsChange={vi.fn()}
+        activeResourceEnvironment="local"
+        onActiveResourceEnvironmentChange={vi.fn()}
+        defaultWorktreeMode="local"
+        onDefaultWorktreeModeChange={vi.fn()}
+        isOpen={true}
+      />
+    );
+
+    expect(screen.getByText(`Worktrees can't run in "local"`)).toBeTruthy();
+    const values = (screen.getAllByRole("textbox") as HTMLInputElement[]).map((i) => i.value);
+    expect(values).toContain("make up");
+  });
+
+  it("leaves an environment named Local unflagged, since it is a different key", () => {
+    render(
+      <ResourceEnvironmentsSection
+        resourceEnvironments={{ Local: { provision: ["make up"] } }}
+        onResourceEnvironmentsChange={vi.fn()}
+        activeResourceEnvironment="Local"
+        onActiveResourceEnvironmentChange={vi.fn()}
+        defaultWorktreeMode="Local"
+        onDefaultWorktreeModeChange={vi.fn()}
+        isOpen={true}
+      />
+    );
+
+    expect(screen.queryByText(/can't run in/)).toBeNull();
+    const radios = screen.getAllByRole("radio") as HTMLInputElement[];
+    expect(radios.map((r) => r.value)).toEqual(["local", "Local"]);
+    expect(radios.find((r) => r.checked)?.value).toBe("Local");
+  });
+
+  it.each([true, false])(
+    "removes a sole local environment that Local worktrees can't be using (worktrees loaded: %s)",
+    (isInitialized) => {
+      const store = createWorktreeStore();
+      const localWorktree: WorktreeSnapshot = {
+        id: "w1",
+        worktreeId: "w1",
+        path: "/repo/feature",
+        name: "feature",
+        isCurrent: false,
+        worktreeMode: "local",
+      };
+      store.setState({ worktrees: new Map([[localWorktree.id, localWorktree]]), isInitialized });
+      const onResourceEnvironmentsChange = vi.fn();
+      render(
+        <WorktreeStoreContext.Provider value={store}>
+          <ResourceEnvironmentsSection
+            resourceEnvironments={{ local: { provision: ["make up"] } }}
+            onResourceEnvironmentsChange={onResourceEnvironmentsChange}
+            activeResourceEnvironment="local"
+            onActiveResourceEnvironmentChange={vi.fn()}
+            defaultWorktreeMode="local"
+            onDefaultWorktreeModeChange={vi.fn()}
+            isOpen={true}
+          />
+        </WorktreeStoreContext.Provider>
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "Delete local environment" }));
+      const confirmDialog = screen.getByRole("dialog");
+      expect(confirmDialog.textContent).not.toContain("feature");
+      expect(confirmDialog.textContent).not.toMatch(/New worktrees will start on Local/);
+      const confirm = within(confirmDialog).getByRole("button", { name: "Remove environment" });
+      expect((confirm as HTMLButtonElement).disabled).toBe(false);
+      fireEvent.click(confirm);
+
+      expect(onResourceEnvironmentsChange).toHaveBeenCalledWith({});
+    }
+  );
+});

@@ -554,10 +554,9 @@ describe("WorktreeMenuItems — Runtime", () => {
     expect(screen.queryByText("Connect")).not.toBeNull();
   });
 
-  it("renders one radio per environment when a key is literally named local", () => {
-    // Settings rejects only blank and duplicate names, so "local" is a
-    // representable key — and two items sharing the fixed row's value would
-    // both come back checked.
+  it("renders one radio per environment when a saved key is literally named local", () => {
+    // Settings now refuses the name, but older project settings can still carry
+    // it — and two items sharing the fixed row's value would both come back checked.
     renderWorktreeMenu({
       hasResourceConfig: true,
       worktreeMode: "local",
@@ -568,6 +567,18 @@ describe("WorktreeMenuItems — Runtime", () => {
     const radios = screen.getAllByRole("menuitemradio");
     expect(radios.map((r) => r.textContent?.trim())).toEqual(["Local", "staging"]);
     expect(radios.filter((r) => r.getAttribute("aria-checked") === "true")).toHaveLength(1);
+  });
+
+  it("offers no environment switch when the only saved key is local", () => {
+    renderWorktreeMenu({
+      hasResourceConfig: true,
+      worktreeMode: "local",
+      resourceEnvironmentKeys: ["local"],
+      onSwitchEnvironment: vi.fn(),
+    });
+
+    expect(screen.queryByText("Switch environment")).toBeNull();
+    expect(screen.queryAllByRole("menuitemradio")).toHaveLength(0);
   });
 
   it("prefers Pause over Resume while the environment reports running", () => {
