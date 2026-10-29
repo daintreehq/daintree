@@ -9,6 +9,13 @@ const paletteCapture = vi.hoisted(() => ({
   selectedIndex: 0,
 }));
 const dispatchMock = vi.hoisted(() => vi.fn());
+const quickCreateContext = vi.hoisted(() => ({
+  value: {
+    issue: { number: 7, title: "Fix the thing" } as { number: number; title: string } | null,
+    pr: null as { number: number; title: string } | null,
+  },
+}));
+const openCreateDialogMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/store/recipeStore", () => ({
   useRecipeStore: (selector: (s: Record<string, unknown>) => unknown) =>
@@ -29,8 +36,8 @@ vi.mock("@/store/worktreeStore", () => ({
   useWorktreeSelectionStore: Object.assign(
     (selector: (s: Record<string, unknown>) => unknown) =>
       selector({
-        quickCreate: { isOpen: false, issue: { number: 7, title: "Fix the thing" }, pr: null },
-        openCreateDialog: vi.fn(),
+        quickCreate: { isOpen: false, ...quickCreateContext.value },
+        openCreateDialog: openCreateDialogMock,
         closeQuickCreate: vi.fn(),
       }),
     {
@@ -84,6 +91,8 @@ function makeRecipe(overrides: Partial<TerminalRecipe>): TerminalRecipe {
 
 beforeEach(() => {
   dispatchMock.mockReset();
+  openCreateDialogMock.mockReset();
+  quickCreateContext.value = { issue: { number: 7, title: "Fix the thing" }, pr: null };
   dispatchMock.mockResolvedValue({ ok: false, error: new Error("stop here") });
   paletteCapture.items = [];
   paletteCapture.selectedIndex = 0;
@@ -137,5 +146,79 @@ describe("useQuickCreatePalette — shadowed recipes (#11510)", () => {
       expect.objectContaining({ recipeId: "loser" }),
       expect.anything()
     );
+  });
+});
+
+describe("useQuickCreatePalette — worktree-scoped recipes (#14994)", () => {
+  const recipes = () => [
+    makeRecipe({ id: "project", name: "Project", projectId: "p" }),
+    makeRecipe({ id: "pinned", name: "Pinned", projectId: "p", worktreeId: "wt-1" }),
+  ];
+
+  function listedIds(): string[] {
+    return (paletteCapture.items as Array<{ id: string }>).map((i) => i.id);
+  }
+
+  it("leaves worktree recipes out when a pick opens the New Worktree dialog", () => {
+    // The plain action carries no issue or PR, so every pick hands off to the
+    // dialog, whose picker can't select a worktree recipe.
+    quickCreateContext.value = { issue: null, pr: null };
+    mockRecipes.value = recipes();
+
+    renderHook(() => useQuickCreatePalette());
+
+    expect(listedIds()).toEqual(["project", "__customize__"]);
+  });
+
+  it("hands the dialog the recipe that was picked", () => {
+    quickCreateContext.value = { issue: null, pr: null };
+    mockRecipes.value = recipes();
+
+    const { result } = renderHook(() => useQuickCreatePalette());
+    const project = (paletteCapture.items as Array<{ id: string }>).find((i) => i.id === "project");
+
+    act(() => {
+      result.current.confirmItem(project as never);
+    });
+
+    expect(openCreateDialogMock).toHaveBeenCalledWith(null, { initialRecipeId: "project" });
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it("leaves worktree recipes out when the issue title can't name a branch", () => {
+    // A title that slugs to nothing also falls through to the dialog.
+    quickCreateContext.value = { issue: { number: 7, title: "!!!" }, pr: null };
+    mockRecipes.value = recipes();
+
+    renderHook(() => useQuickCreatePalette());
+
+    expect(listedIds()).toEqual(["project", "__customize__"]);
+  });
+
+  it("keeps worktree recipes when an issue names the branch and the recipe runs directly", async () => {
+    mockRecipes.value = recipes();
+
+    const { result } = renderHook(() => useQuickCreatePalette());
+    expect(listedIds()).toEqual(["project", "pinned", "__customize__"]);
+
+    const pinned = (paletteCapture.items as Array<{ id: string }>).find((i) => i.id === "pinned");
+    await act(async () => {
+      result.current.confirmItem(pinned as never);
+    });
+
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "worktree.createWithRecipe",
+      expect.objectContaining({ recipeId: "pinned" }),
+      expect.anything()
+    );
+  });
+
+  it("offers no rows when every recipe is worktree-scoped and the pick opens the dialog", () => {
+    quickCreateContext.value = { issue: null, pr: null };
+    mockRecipes.value = [makeRecipe({ id: "pinned", projectId: "p", worktreeId: "wt-1" })];
+
+    renderHook(() => useQuickCreatePalette());
+
+    expect(listedIds()).toEqual([]);
   });
 });

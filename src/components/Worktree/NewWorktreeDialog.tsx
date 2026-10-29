@@ -49,6 +49,7 @@ import { usePrefixPicker } from "./hooks/usePrefixPicker";
 import {
   useRecipePicker,
   resolveEligibleDefaultRecipeId,
+  isStartingLayoutRecipe,
   CLONE_LAYOUT_ID,
 } from "./hooks/useRecipePicker";
 import { useWorktreeFormErrors, type ErrorField } from "./hooks/useWorktreeFormErrors";
@@ -251,7 +252,7 @@ export function NewWorktreeDialog({
   const persistedDefaultRecipeId = projectSettings?.defaultWorktreeRecipeId;
   // Shadowed recipes stay listed (dimmed, marked "Overridden") instead of being
   // hidden — hiding an executable target is the silent failure #11510 is about.
-  const startingLayoutRecipes = useMemo(() => recipes.filter((r) => !r.worktreeId), [recipes]);
+  const startingLayoutRecipes = useMemo(() => recipes.filter(isStartingLayoutRecipe), [recipes]);
   const defaultRecipeId = useMemo(
     () => resolveEligibleDefaultRecipeId(startingLayoutRecipes, persistedDefaultRecipeId),
     [startingLayoutRecipes, persistedDefaultRecipeId]
