@@ -268,8 +268,8 @@ export interface StopPreview {
   /** The text held at the stop is the final's, whatever the fate. */
   equal: boolean;
   /**
-   * Words landing after the stop end in a break command, or the last of them
-   * in a send, which later words would have let go as text.
+   * Words landing after the stop end in a break command, or in a send that
+   * nothing heard after it let go as words.
    */
   command: boolean;
   /** A completion says a command that inserts a file reference, whose lookup the drain awaits. */
@@ -323,10 +323,22 @@ export function stopPreview(session: PipelineSession): StopPreview {
   const pending = [...previews.values()].filter((text) => text.trim() !== "");
   const final = landedText(completes.map((event) => event.text));
   const equal = landedText([...completed, ...pending]) === final;
-  const command = later.some((text, i) => {
-    const send = trailingSendCommand(text);
-    if (send && i === later.length - 1) return true;
-    return trailingDictationCommands(send ? text.slice(0, send.cut) : text) !== null;
+  // A send heard in the drain waits for its end, and goes out as words, its
+  // break commands with it, once a preview or more words arrive first
+  // (voiceInput's settleHeldSend, UtteranceCommands' literal release).
+  const heardAfter = (index: number) =>
+    session.events
+      .slice(index + 1)
+      .some(
+        (event) => event.type === "delta" || (event.type === "complete" && event.text.trim() !== "")
+      );
+  const command = session.events.some((event, index) => {
+    if (event.type !== "complete" || event.at <= session.stopMs) return false;
+    const text = landedText([event.text]);
+    if (!text) return false;
+    return trailingSendCommand(text)
+      ? !heardAfter(index)
+      : trailingDictationCommands(text) !== null;
   });
   // Main reads each completion for a file command on its own, never across two.
   const file = completes.some((event) => mayReferenceFile(landedText([event.text])));

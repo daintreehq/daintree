@@ -440,21 +440,49 @@ describe("stopPreview", () => {
     ).toMatchObject({ fate: "match", command: false });
   });
 
-  it("excludes a send only in the last words to land, since later ones let it go as text", () => {
-    const drained = (first: string) =>
+  it("excludes a send only when nothing heard after it let it go as words", () => {
+    const drained = (first: string, after: PipelineEvent[]) =>
+      stopPreview(
+        session({
+          stopMs: 3_000,
+          events: [delta(2_900, first, "b"), complete(3_400, first, "b"), ...after],
+        })
+      );
+    expect(drained("Fix it, send it.", [])).toMatchObject({ fate: "excluded", command: true });
+    const thenTests = complete(3_900, "Then add tests.", "c");
+    expect(
       stopPreview(
         session({
           stopMs: 3_000,
           events: [
-            delta(2_900, `${first} Then add tests.`, "b"),
-            complete(3_400, first, "b"),
-            complete(3_900, "Then add tests.", "c"),
+            delta(2_900, "Fix it, send it. Then add tests.", "b"),
+            complete(3_400, "Fix it, send it.", "b"),
+            thenTests,
           ],
         })
-      );
-    expect(drained("Fix it, send it.")).toMatchObject({ fate: "match", command: false });
-    // A break command stays a break, a send after it or not.
-    expect(drained("Fix it new line send it.")).toMatchObject({ fate: "excluded", command: true });
+      )
+    ).toMatchObject({ fate: "match", command: false });
+    // A preview alone lets it go, as does a completion of nothing but a hesitation.
+    expect(
+      drained("Fix it, send it.", [delta(3_600, "And", "c"), complete(3_900, "", "c")])
+    ).toMatchObject({ fate: "match", command: false });
+    expect(drained("Fix it, send it.", [complete(3_900, "Um", "c")])).toMatchObject({
+      fate: "match",
+      command: false,
+    });
+    // Let go as words, it keeps a break command before it as words too.
+    expect(
+      stopPreview(
+        session({
+          stopMs: 3_000,
+          events: [
+            delta(2_900, "Fix it new line send it. Then add tests.", "b"),
+            complete(3_400, "Fix it new line send it.", "b"),
+            thenTests,
+          ],
+        })
+      )
+    ).toMatchObject({ fate: "match", command: false });
   });
 });
 
@@ -575,18 +603,21 @@ describe("summariseStopPreview and renderStopPreviewTable", () => {
     expect(cells("0 ms", "gemini:Kore")).toBeUndefined();
     expect(cells("700 ms", "all")?.slice(0, 7)).toEqual(["3", "0", "2", "1", "1", "0", "50.0%"]);
     expect(cells("all", "all")?.slice(0, 7)).toEqual(["6", "1", "4", "2", "1", "0", "50.0%"]);
-    expect(
-      table.slice(2).map((line) =>
+    // Tails in order whatever order the dictations ran in; voices as they first appear.
+    const order = renderStopPreviewTable([...rows].reverse(), "prod")
+      .split("\n")
+      .slice(2)
+      .map((line) =>
         line
           .split("|")
           .slice(1, 3)
           .map((cell) => cell.trim())
-      )
-    ).toEqual([
+      );
+    expect(order).toEqual([
       ["0 ms", "say"],
       ["0 ms", "all"],
-      ["700 ms", "say"],
       ["700 ms", "gemini:Kore"],
+      ["700 ms", "say"],
       ["700 ms", "all"],
       ["all", "all"],
     ]);
