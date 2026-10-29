@@ -2,43 +2,12 @@ import { z } from "zod";
 import type { ActionRegistry } from "../actionTypes";
 import { voiceRecordingService } from "@/services/VoiceRecordingService";
 import { usePanelStore } from "@/store/panelStore";
-import { useProjectStore } from "@/store/projectStore";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
-import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { usePaletteStore } from "@/store/paletteStore";
-import { panelKindHasPty } from "@shared/config/panelKindRegistry";
+import { notify } from "@/lib/notify";
 
 const lockTargetArgsSchema = z.object({ panelId: z.string().optional() });
 const recallRecentTargetArgsSchema = z.object({ panelId: z.string() });
-
-function resolveTargetForPanel(panelId: string): {
-  panelId: string;
-  panelTitle?: string;
-  projectId?: string;
-  projectName?: string;
-  worktreeId?: string;
-  worktreeLabel?: string;
-} | null {
-  const panel = usePanelStore.getState().panelsById[panelId];
-  if (!panel || panel.location === "trash") return null;
-  // Only PTY-backed panels can receive dictation — browsers and dev-preview
-  // panels have no input surface for the transcript to land in. Without this
-  // guard, hotkey/palette invocations could lock dictation to a browser panel
-  // (no `panelId` arg falls back to focusedId).
-  if (!panelKindHasPty(panel.kind)) return null;
-  const currentProject = useProjectStore.getState().currentProject;
-  const worktree = panel.worktreeId
-    ? getCurrentViewStore().getState().worktrees.get(panel.worktreeId)
-    : undefined;
-  return {
-    panelId: panel.id,
-    panelTitle: panel.title,
-    projectId: currentProject?.id,
-    projectName: currentProject?.name,
-    worktreeId: panel.worktreeId,
-    worktreeLabel: worktree?.isMainWorktree ? worktree?.name : worktree?.branch || worktree?.name,
-  };
-}
 
 export function registerVoiceActions(actions: ActionRegistry): void {
   actions.set("voiceInput.toggle", () => ({
@@ -142,12 +111,24 @@ export function registerVoiceActions(actions: ActionRegistry): void {
         useVoiceRecordingStore.getState().announce("Focus a panel before locking dictation to it.");
         return;
       }
-      const target = resolveTargetForPanel(requestedId);
+      // Only a pane whose composer can show the words (#14955).
+      const target = voiceRecordingService.getDictationTarget(requestedId);
       if (!target) {
+        const message = "Only an agent terminal's input can take dictation.";
         useVoiceRecordingStore.getState().setLastError({
           severity: "transient",
           code: "lock_target_unavailable",
-          message: "Couldn't lock dictation to that panel.",
+          message,
+        });
+        useVoiceRecordingStore.getState().announce(`Dictation not locked. ${message}`);
+        notify({
+          type: "info",
+          title: "Dictation not locked",
+          message,
+          transient: true,
+          priority: "high",
+          replaceKey: "voice-lock-target",
+          context: { eventKind: "uiFeedback" },
         });
         return;
       }
@@ -189,7 +170,7 @@ export function registerVoiceActions(actions: ActionRegistry): void {
     run: async (args: unknown) => {
       const parsed = recallRecentTargetArgsSchema.safeParse(args);
       if (!parsed.success) return;
-      const target = resolveTargetForPanel(parsed.data.panelId);
+      const target = voiceRecordingService.getDictationTarget(parsed.data.panelId);
       if (!target) {
         useVoiceRecordingStore.getState().setLastError({
           severity: "transient",

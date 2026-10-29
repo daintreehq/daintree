@@ -12,6 +12,7 @@ import type React from "react";
 import { type PanelLocation } from "@/types";
 import { usePanelStore } from "@/store";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
+import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import { useSidebarWorktreeOrder } from "@/hooks/useSidebarWorktreeOrder";
@@ -61,6 +62,7 @@ import {
   subscribeToTourRegistry,
 } from "@/components/Tour/tourRegistry";
 import { PanelContextMenuTriggerScope } from "./PanelContextMenuTrigger";
+import { panelHasComposer } from "./terminalComposer";
 import {
   canReloadPanelKind,
   hasGenericPanelMenu,
@@ -390,6 +392,7 @@ function TerminalContextMenuBody({
   const fleetSize = useFleetArmingStore((s) => s.armedIds.size);
   const isHibernated = useIsHibernated(terminalId);
   const isVoiceLockedHere = useVoiceRecordingStore((s) => s.lockedTarget?.panelId === terminalId);
+  const hybridInputEnabled = useTerminalInputStore((s) => isMenuLive && s.hybridInputEnabled);
   const recentVoiceTargets = useVoiceRecordingStore((s) => s.recentTargets);
   // Pull the panel directly here (rather than indexing through the shallow
   // selector above) so the eligibility check sees the live record. The
@@ -449,19 +452,27 @@ function TerminalContextMenuBody({
     (e: React.MouseEvent<HTMLElement>) => {
       handleTriggerContextMenu(e);
       const { panelsById } = usePanelStore.getState();
+      const { armedIds } = useFleetArmingStore.getState();
+      const composerOptions = {
+        hybridInputEnabled: useTerminalInputStore.getState().hybridInputEnabled,
+        fleetSize: armedIds.size,
+      };
+      // Only a pane whose composer can show the words is offered (#14955).
+      const canDictate = (panel: (typeof panelsById)[string] | undefined) =>
+        panelHasComposer(panel, {
+          ...composerOptions,
+          isFleetArmed: panel !== undefined && armedIds.has(panel.id),
+        });
       const resolved: Array<{ panelId: string; label: string }> = [];
       const seenIds = new Set<string>([terminalId]);
       for (const t of recentVoiceTargets) {
         let livePanelId: string | undefined;
         if (t.panelId) {
-          const panel = panelsById[t.panelId];
-          if (panel && panel.location !== "trash") livePanelId = t.panelId;
+          if (canDictate(panelsById[t.panelId])) livePanelId = t.panelId;
         } else if (t.worktreeId && t.panelTitle) {
           const titleMatch = Object.values(panelsById).find(
             (panel) =>
-              panel.worktreeId === t.worktreeId &&
-              panel.title === t.panelTitle &&
-              panel.location !== "trash"
+              panel.worktreeId === t.worktreeId && panel.title === t.panelTitle && canDictate(panel)
           );
           if (titleMatch) livePanelId = titleMatch.id;
         }
@@ -863,6 +874,10 @@ function TerminalContextMenuBody({
             isPaused={isPaused}
             isInputLocked={terminal.isInputLocked}
             isVoiceLockedHere={isVoiceLockedHere}
+            canDictateHere={
+              isMenuLive &&
+              panelHasComposer(terminal, { hybridInputEnabled, isFleetArmed: isArmed, fleetSize })
+            }
             liveRecentVoiceTargets={liveRecentVoiceTargets}
             detectedAgentId={terminal.detectedAgentId}
             isWatched={isWatched}

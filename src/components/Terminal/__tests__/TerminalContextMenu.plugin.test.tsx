@@ -122,8 +122,11 @@ vi.mock("@/store/voiceRecordingStore", () => ({
 }));
 
 vi.mock("@/store/fleetArmingStore", () => ({
-  useFleetArmingStore: (selector: (s: { armedIds: Set<string> }) => unknown) =>
-    selector({ armedIds: new Set<string>() }),
+  useFleetArmingStore: Object.assign(
+    (selector: (s: { armedIds: Set<string> }) => unknown) =>
+      selector({ armedIds: new Set<string>() }),
+    { getState: () => ({ armedIds: new Set<string>() }) }
+  ),
   isFleetArmEligible: () => false,
 }));
 

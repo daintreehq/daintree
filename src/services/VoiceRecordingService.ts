@@ -2,8 +2,6 @@ import { useProjectStore } from "@/store/projectStore";
 import { scratchName, useScratchStore } from "@/store/scratchStore";
 import { isScratchWorkspaceId } from "@shared/utils/workspaceIds";
 import { usePanelStore } from "@/store/panelStore";
-import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
-import { isBuiltInAgentId } from "@shared/config/agentIds";
 import {
   cleanupKeyIssuer,
   hasCleanupKey,
@@ -21,7 +19,7 @@ import {
   shiftPausePositions,
   slicePausePositions,
 } from "@shared/utils/voicePausePositions";
-import { shouldShowHybridInputBar } from "@/components/Terminal/terminalFocus";
+import { panelHasComposer } from "@/components/Terminal/terminalComposer";
 import { useHelpPanelStore, selectActiveSlot } from "@/store/helpPanelStore";
 import { isAssistantFocused } from "@/store/macroFocusStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
@@ -94,7 +92,6 @@ import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { notify } from "@/lib/notify";
 import type { NotificationAction } from "@/store/notificationStore";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
-import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import {
   OPENING_CHUNK_WINDOW,
@@ -4672,10 +4669,18 @@ class VoiceRecordingService {
     // fired (mirrors the assistant-focus pattern below for #6959). When the
     // locked panel has been trashed or removed, clear the stale lock and fall
     // through to normal focus-based resolution rather than failing silently.
+    // A locked panel that has lost its composer (its agent exited, hybrid
+    // input went off) starts nothing and keeps the lock, since the composer
+    // may come back; falling through would hand the words to a pane the lock
+    // was taken to keep them out of (#14955).
     const lockedTarget = useVoiceRecordingStore.getState().lockedTarget;
     if (lockedTarget) {
       const lockedPanel = usePanelStore.getState().panelsById[lockedTarget.panelId];
       if (lockedPanel && lockedPanel.location !== "trash") {
+        if (!this.getDictationTarget(lockedTarget.panelId)) {
+          this.reportLockedPanelUnavailable(lockedTarget);
+          return;
+        }
         await this.toggle(lockedTarget);
         return;
       }
@@ -4726,6 +4731,22 @@ class VoiceRecordingService {
     }
 
     await this.startOrToggle(target);
+  }
+
+  private reportLockedPanelUnavailable(locked: VoiceRecordingTarget): void {
+    const why = `Dictation is locked to ${locked.panelTitle?.trim() || "a panel"}, which has no input to dictate into.`;
+    const voiceStore = useVoiceRecordingStore.getState();
+    voiceStore.setLastError({ severity: "fatal", code: "renderer_error", message: why });
+    voiceStore.announce(why);
+    this.reportStartFailure(
+      "Dictation unavailable",
+      `${why} Unlock it to dictate into the focused agent terminal.`,
+      {
+        label: "Unlock dictation",
+        // Only this lock: one taken since the toast went up stays.
+        onClick: () => useVoiceRecordingStore.getState().clearLockedTarget(locked.panelId),
+      }
+    );
   }
 
   private async toggleCanopyReply(): Promise<void> {
@@ -4999,7 +5020,7 @@ class VoiceRecordingService {
     if (selectActiveSlot(useHelpPanelStore.getState()).terminalId === terminalId) {
       return this.getAssistantTarget();
     }
-    return this.getPanelTarget(terminalId);
+    return this.getDictationTarget(terminalId);
   }
 
   // In push-to-talk mode the keyboard shortcut starts recording; the keyup
@@ -5165,40 +5186,25 @@ class VoiceRecordingService {
     return assistant ? this.getAssistantTarget() : this.getFocusedPanelTarget();
   }
 
-  // Mirrors shouldShowHybridInputBar: dictation lands in the composer, so a
-  // panel that renders none would take the text into a draft nobody can see.
-  private hasComposer(panel: PanelInstance): boolean {
-    if (!isPtyPanel(panel)) return false;
-    const chrome = deriveTerminalChrome({
-      kind: "terminal",
-      launchAgentId: panel.launchAgentId,
-      runtimeIdentity: panel.runtimeIdentity,
-      detectedAgentId: panel.detectedAgentId,
-      detectedProcessId: panel.detectedProcessId,
-    });
-    const armed = useFleetArmingStore.getState().armedIds;
-    return shouldShowHybridInputBar({
-      hasAgentIdentity: isBuiltInAgentId(chrome.agentId),
-      hybridInputEnabled: useTerminalInputStore.getState().hybridInputEnabled,
-      isFleetArmed: armed.has(panel.id),
-      fleetSize: armed.size,
-    });
-  }
-
   private getFocusedPanelTarget(): VoiceRecordingTarget | null {
     const panelId = usePanelStore.getState().focusedId;
-    return panelId ? this.getPanelTarget(panelId) : null;
+    return panelId ? this.getDictationTarget(panelId) : null;
   }
 
-  private getPanelTarget(panelId: string): VoiceRecordingTarget | null {
-    const terminalState = usePanelStore.getState();
-
-    const foundPanel = terminalState.panelsById[panelId];
-    if (!foundPanel || foundPanel.location === "trash") return null;
-    // A pane held for recovery (#12434) has no input surface to dictate into.
-    if (isPtyPanel(foundPanel) && foundPanel.restoreRecovery) return null;
-    if (!this.hasComposer(foundPanel)) return null;
-    const panel = foundPanel;
+  /** The pane as a dictation target, or null when it has no composer to show the words. */
+  getDictationTarget(panelId: string): VoiceRecordingTarget | null {
+    const panel = usePanelStore.getState().panelsById[panelId];
+    if (!panel) return null;
+    const armed = useFleetArmingStore.getState().armedIds;
+    if (
+      !panelHasComposer(panel, {
+        hybridInputEnabled: useTerminalInputStore.getState().hybridInputEnabled,
+        isFleetArmed: armed.has(panelId),
+        fleetSize: armed.size,
+      })
+    ) {
+      return null;
+    }
 
     const currentProject = useProjectStore.getState().currentProject;
     const worktree = panel.worktreeId

@@ -312,6 +312,7 @@ export function TerminalSessionMenuItems({
   isPaused,
   isInputLocked,
   isVoiceLockedHere,
+  canDictateHere,
   liveRecentVoiceTargets,
   detectedAgentId,
   isWatched,
@@ -327,6 +328,8 @@ export function TerminalSessionMenuItems({
   isPaused: boolean;
   isInputLocked: boolean | undefined;
   isVoiceLockedHere: boolean;
+  /** The pane has a composer to dictate into, so it can be taken as the lock (#14955). */
+  canDictateHere: boolean;
   liveRecentVoiceTargets: ReadonlyArray<{ panelId: string; label: string }>;
   detectedAgentId: string | undefined;
   isWatched: boolean;
@@ -377,7 +380,7 @@ export function TerminalSessionMenuItems({
         )}
         {isInputLocked ? "Unlock input" : "Lock input"}
       </ContextMenuItem>
-      {hasPty && (
+      {(isVoiceLockedHere || canDictateHere) && (
         <ContextMenuItem
           onSelect={() => onAction(isVoiceLockedHere ? "voice-unlock-target" : "voice-lock-target")}
         >

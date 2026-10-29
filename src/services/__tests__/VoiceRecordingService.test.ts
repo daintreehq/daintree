@@ -1751,6 +1751,10 @@ describe("VoiceRecordingService — a lock on a pane with no composer (#14955)",
 
   it.each([
     ["a plain shell", { kind: "terminal" }],
+    [
+      "an agent pane whose agent exited to its shell",
+      { kind: "terminal", launchAgentId: "claude", agentState: "exited" },
+    ],
     ["a pane held for recovery", { kind: "terminal", launchAgentId: "claude", restoreRecovery: {} }],
   ])(
     "starts nothing in %s it is locked to, and doesn't move to the focused pane",
@@ -1761,12 +1765,30 @@ describe("VoiceRecordingService — a lock on a pane with no composer (#14955)",
 
       expect(toggleSpy).not.toHaveBeenCalled();
       expect(notify).toHaveBeenCalledTimes(1);
-      expect(notify.mock.calls[0]![0]).toMatchObject({ type: "error" });
-      expect(store.announce).toHaveBeenCalledTimes(1);
+      expect(notify.mock.calls[0]![0]).toMatchObject({
+        type: "error",
+        message: expect.stringContaining("Locked"),
+        action: { label: "Unlock dictation" },
+      });
+      expect(store.setLastError).toHaveBeenCalledWith(
+        expect.objectContaining({ severity: "fatal" })
+      );
+      expect(store.announce).toHaveBeenCalledWith(expect.stringContaining("locked to Locked"));
       expect(store.clearLockedTarget).not.toHaveBeenCalled();
       expect(voice.__state.lockedTarget).toEqual({ panelId: "locked-1", panelTitle: "Locked" });
     }
   );
+
+  it("unlocks from the toast only the lock it was raised for", async () => {
+    const { voiceRecordingService, store, notify } = await arrange({ kind: "terminal" });
+
+    await voiceRecordingService.toggleFocusedPanel();
+    const { action } = notify.mock.calls[0]![0] as { action: { onClick: () => void } };
+    action.onClick();
+
+    expect(store.clearLockedTarget).toHaveBeenCalledWith("locked-1");
+    expect(store.unlockTarget).not.toHaveBeenCalled();
+  });
 
   it("still starts in a locked agent pane", async () => {
     const { voiceRecordingService, toggleSpy, notify } = await arrange({
