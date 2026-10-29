@@ -213,7 +213,11 @@ describe("forced-colors shared status-mark contract (#12000)", () => {
 describe("forced-colors heavier-border hooks survive the 1px pin-back", () => {
   // The hooks that land on buttons. Hooks on non-button elements (the segmented
   // thumb is a span) are out of the pin-back's reach and need no exemption.
-  const BUTTON_HOOKS = ['[data-variant="destructive"]', '[data-notification-action="primary"]'];
+  const BUTTON_HOOKS = [
+    '[data-variant="destructive"]',
+    '[data-variant="contrast"]',
+    '[data-notification-action="primary"]',
+  ];
 
   it("exempts every button hook that asserts a 2px ButtonText border", () => {
     // Comments quote these selectors, so match live rules only.
@@ -286,6 +290,8 @@ describe("forced-colors ghost-danger button distinction (#15377)", () => {
     const blocks = liveBlocks();
     const danger = borderStyle(ruleBody(blocks, "ghost-danger"));
     expect(danger).toBeDefined();
+    // Not drawn at all, or drawn as shades the forced palette doesn't have.
+    expect(["none", "hidden", "groove", "ridge", "inset", "outset"]).not.toContain(danger);
     // The blanket button frame Cancel and the plain ghost take.
     const blanket = blocks.match(/button,\s*\[role="button"\][^{]*\{([^}]*)\}/);
     expect(blanket).not.toBeNull();
@@ -299,13 +305,12 @@ describe("forced-colors ghost-danger button distinction (#15377)", () => {
     }
   });
 
-  it("is wide enough for its style to draw as more than one line", () => {
+  // Under 3px a double border has no room for its gap and draws one solid line.
+  it("is wide enough for a double rule to draw as two lines", () => {
     const body = ruleBody(liveBlocks(), "ghost-danger");
-    const minimum: Record<string, number> = { double: 3, groove: 2, ridge: 2 };
-    const style = borderStyle(body)!;
     const width = borderWidthPx(body);
     expect(width).toBeDefined();
-    expect(width!).toBeGreaterThanOrEqual(minimum[style] ?? 1);
+    if (borderStyle(body) === "double") expect(width!).toBeGreaterThanOrEqual(3);
   });
 
   // A shorthand would reset border-color to ButtonText at the same specificity
