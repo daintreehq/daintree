@@ -17,6 +17,11 @@ import { PrStatusChip } from "../PrStatusChip";
 
 afterEach(cleanup);
 
+function triggerDescription(trigger: HTMLElement): string {
+  const id = trigger.getAttribute("aria-describedby");
+  return (id && document.getElementById(id)?.textContent) || "";
+}
+
 const PR_STATES: NormalizedPRState[] = ["open", "merged", "closed", "declined"];
 const CI_STATES: Array<CIStatusState | undefined> = [
   "success",
@@ -83,7 +88,7 @@ describe("PrStatusChip", () => {
     // The method is its own chip segment, behind the chip's separator.
     expect(getByTestId("pr-merge-intent").textContent).toBe("auto-merge");
     expect(getByTestId("pr-merge-intent-method").textContent).toBe("squash");
-    expect(getByTestId("pr-checks-trigger").getAttribute("aria-label")).toMatch(/armed by octocat/);
+    expect(triggerDescription(getByTestId("pr-checks-trigger"))).toMatch(/armed by octocat/);
   });
 
   it("flags a head that moved while armed", () => {
@@ -102,9 +107,7 @@ describe("PrStatusChip", () => {
       />
     );
     expect(getByTestId("pr-merge-intent").textContent).toBe("queued");
-    expect(getByTestId("pr-checks-trigger").getAttribute("aria-label")).toMatch(
-      /without another review/
-    );
+    expect(triggerDescription(getByTestId("pr-checks-trigger"))).toMatch(/without another review/);
   });
 
   it("drops a stale intent once the PR has merged", () => {

@@ -1,6 +1,10 @@
 import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
 import { surfaceHeaderVariants } from "@/components/ui/SurfaceHeader";
-import { REVIEW_HUB_SECTION_BAND } from "@/components/Worktree/ReviewHub/reviewHubUtils";
+import {
+  REVIEW_HUB_HEADER_ROWS,
+  REVIEW_HUB_HEADER_TOOLBAR,
+  REVIEW_HUB_SECTION_BAND,
+} from "@/components/Worktree/ReviewHub/reviewHubUtils";
 import { cn } from "@/lib/utils";
 
 // Bones are immediate, not delayed: this renders as a Suspense fallback, which
@@ -12,16 +16,25 @@ export function ReviewPaneSkeleton() {
   return (
     <div className="relative flex flex-col h-full w-full">
       <Skeleton label={label} className="flex flex-col h-full w-full bg-surface-canvas">
-        {/* Header — matches ReviewHubContent: title, branch chip, diff-mode toggle */}
-        <div
-          className={cn(surfaceHeaderVariants({ density: "compact" }), "gap-2")}
-          aria-hidden="true"
-        >
-          <div className="flex items-center gap-2">
-            <SkeletonBone immediate className="h-4 w-32" />
-            <SkeletonBone immediate className="h-5 w-24" />
+        {/* Header — matches ReviewHubContent: title, branch chip, and the
+            diff-mode toggle beside them or on its own strip in a narrow pane,
+            so the content below does not move when the hub arrives. */}
+        <div className="@container/header shrink-0" aria-hidden="true">
+          <div
+            className={cn(
+              surfaceHeaderVariants({ density: "compact" }),
+              REVIEW_HUB_HEADER_ROWS,
+              "grid-cols-[minmax(0,1fr)_auto] @max-[959px]/header:grid-cols-[minmax(0,1fr)]"
+            )}
+          >
+            <div className="col-start-1 row-start-1 flex min-w-0 items-center gap-2">
+              <SkeletonBone immediate className="h-4 w-32" />
+              <SkeletonBone immediate className="h-5 w-24" />
+            </div>
+            <div className={REVIEW_HUB_HEADER_TOOLBAR}>
+              <SkeletonBone immediate className="h-6 w-28" />
+            </div>
           </div>
-          <SkeletonBone immediate className="h-6 w-28" />
         </div>
 
         {/* Staged/unstaged section headers and file rows */}
