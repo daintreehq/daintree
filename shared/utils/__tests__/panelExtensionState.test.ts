@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   decodePanelExtensionState,
+  panelExtensionStateVersionDiagnostic,
   panelExtensionStateVersionMessage,
   restoredExtensionStateVersion,
 } from "../panelExtensionState.js";
@@ -90,14 +91,21 @@ describe("decodePanelExtensionState", () => {
 });
 
 describe("panelExtensionStateVersionMessage", () => {
-  it("names both versions so the direction of the mismatch is visible", () => {
-    const message = panelExtensionStateVersionMessage("Acme Dashboard", 3, 2);
-    expect(message).toContain("Acme Dashboard");
-    expect(message).toContain("3");
-    expect(message).toContain("2");
+  it("names the owning plugin and what to do, and leaves the formats to the log (#15236)", () => {
+    const message = panelExtensionStateVersionMessage("Acme Dashboard");
+    expect(message).toContain("newer version of the Acme Dashboard plugin");
     // The action, and the reassurance that waiting costs nothing.
     expect(message).toContain("Update the plugin");
     expect(message).toContain("kept");
+    expect(message).not.toMatch(/\d/);
+  });
+
+  it("says 'its plugin' while the owner's name isn't known", () => {
+    expect(panelExtensionStateVersionMessage(null)).toContain("newer version of its plugin");
+  });
+
+  it("keeps both formats for diagnostics, so the direction of the mismatch is visible", () => {
+    expect(panelExtensionStateVersionDiagnostic(3, 2)).toBe("state format 3; this version reads 2");
   });
 });
 

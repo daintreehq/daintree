@@ -6,15 +6,13 @@ import { makePluginViewContent } from "@/components/Plugin/PluginViewContent";
 import { PluginSetupStrip } from "@/components/Plugin/PluginSetupStrip";
 import { PluginPanelToolbar } from "@/components/Panel/PluginPanelToolbar";
 import { PluginViewLoadError } from "@/components/Plugin/PluginViewLoadError";
+import { PluginViewStateVersionError } from "@/components/Plugin/PluginViewStateVersionError";
 import {
   getPanelStoreSnapshot,
   persistPanelExtensionStateThroughAccessor,
   setPanelTitleThroughAccessor,
 } from "@/store/storeAccessors";
-import {
-  decodePanelExtensionState,
-  panelExtensionStateVersionMessage,
-} from "@shared/utils/panelExtensionState";
+import { decodePanelExtensionState } from "@shared/utils/panelExtensionState";
 
 /**
  * Plugin panels are ordinary grid panels: `ContentPanel` owns their chrome and
@@ -211,14 +209,11 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Plugi
             setPanelTitle={setPanelTitle}
           />
         ) : (
-          <PluginViewLoadError
+          <PluginViewStateVersionError
             pluginId={ownerPluginId}
             displayName={displayName}
-            message={panelExtensionStateVersionMessage(
-              displayName,
-              decoded.persistedVersion,
-              decoded.declaredVersion
-            )}
+            persistedVersion={decoded.persistedVersion}
+            declaredVersion={decoded.declaredVersion}
           />
         )}
       </ContentPanel>

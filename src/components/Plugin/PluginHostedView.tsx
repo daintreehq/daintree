@@ -17,8 +17,7 @@ import {
   type PluginViewContentProps,
 } from "@/components/Plugin/PluginViewContent";
 import { usePluginHostedViewsStore } from "@/store/pluginHostedViewsStore";
-import { PluginViewLoadError } from "@/components/Plugin/PluginViewLoadError";
-import { panelExtensionStateVersionMessage } from "@shared/utils/panelExtensionState";
+import { PluginViewStateVersionError } from "@/components/Plugin/PluginViewStateVersionError";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { currentHostId } from "@/hooks/useHostPlatform";
 import {
@@ -350,14 +349,11 @@ function HostedViewMount({
     // rather than mounting a view whose every write would be refused. The bag
     // stays in storage for the newer build.
     return (
-      <PluginViewLoadError
+      <PluginViewStateVersionError
         pluginId={pluginId}
         displayName={displayName}
-        message={panelExtensionStateVersionMessage(
-          displayName,
-          mountState.persistedVersion,
-          mountState.declaredVersion
-        )}
+        persistedVersion={mountState.persistedVersion}
+        declaredVersion={mountState.declaredVersion}
       />
     );
   }
