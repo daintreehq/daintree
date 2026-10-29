@@ -154,6 +154,7 @@ export function SearchField({
       <input
         ref={setRefs}
         type="text"
+        spellCheck={false}
         value={value}
         className={cn("search-field-input", className)}
         aria-invalid={invalid || undefined}
