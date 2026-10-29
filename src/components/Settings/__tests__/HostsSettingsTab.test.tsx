@@ -392,14 +392,17 @@ describe("HostsSettingsTab", () => {
       );
       expect(takePendingHostPlugins()).toBeNull();
 
+      // A repeat of the same section scrolls there again, as does a change.
       for (const [sectionId, title] of [
-        ["host-plugins", "Plugins"],
         ["host-plugin-views", "Plugin views"],
         ["host-plugins", "Plugins"],
+        ["host-plugins", "Plugins"],
+        ["host-plugin-views", "Plugin views"],
       ] as const) {
         scrolls.length = 0;
         act(() => requestHostPlugins("studio-03", sectionId));
         await waitFor(() => expect(lastScroll()?.id).toBe(sectionId));
+        expect(lastScroll()?.options).toEqual({ block: "start" });
         expect(document.getElementById(sectionId)?.textContent).toContain(title);
       }
     } finally {
