@@ -17,7 +17,6 @@ import {
   arrayMove,
   sortableKeyboardCoordinates,
 } from "@dnd-kit/sortable";
-import { restrictToHorizontalAxis, restrictToParentElement } from "@dnd-kit/modifiers";
 import {
   MOUSE_SENSOR_OPTIONS,
   PrimaryMouseSensor,
@@ -96,6 +95,7 @@ import {
   useTransientDockFinishedCue,
 } from "./useDockActivityState";
 import { SortableTabButton } from "@/components/Panel/SortableTabButton";
+import { TAB_DRAG_MODIFIERS } from "@/components/Panel/tabDragModifiers";
 import { tabDomId } from "@/components/Panel/TabButton";
 import { revealTabInStrip } from "@/components/ui/document-tab";
 import { makeSortableAnnouncements } from "@/components/DragDrop/sortableAnnouncements";
@@ -870,7 +870,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
             onDragStart={handleTabDragStart}
             onDragEnd={handleTabDragEnd}
             onDragCancel={handleTabDragCancel}
-            modifiers={[restrictToHorizontalAxis, restrictToParentElement]}
+            modifiers={TAB_DRAG_MODIFIERS}
             autoScroll={tabAutoScroll}
             accessibility={{ announcements: tabAnnouncements }}
           >
