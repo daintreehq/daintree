@@ -1317,7 +1317,7 @@ describe("DaintreeAssistantSettingsTab", () => {
     await waitForContent(container, "Tool set");
 
     expect(container.textContent).toContain(
-      "Create worktrees, launch and prompt agents, and move, rename or close terminals"
+      "Create worktrees, launch and prompt agents, move, rename or close terminals, and read issues and PRs"
     );
     expect(container.textContent).not.toContain("This covers most orchestration");
 

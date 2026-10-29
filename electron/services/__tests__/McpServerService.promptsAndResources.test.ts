@@ -1033,10 +1033,11 @@ describe("McpServerService", () => {
       }
     });
 
-    // The in-app half: the backing actions are `full`-only, so a core session
-    // is handed neither resource and is refused a read of either before the
-    // renderer is touched — the same boundary as external above.
-    it("core tier keeps terminal/agent resources but loses issues and pulse", async () => {
+    // The in-app half. Resources follow their backing action, so the issues
+    // resource reaches core with `forge.listIssues` (#15399) while the pulse,
+    // whose `git.getProjectPulse` stays `full`-only, is withheld from a core
+    // session and refused at read before the renderer is touched.
+    it("core tier keeps terminal, agent and issues resources but loses pulse", async () => {
       const dispatchMock = vi.fn((payload: DispatchRequest): ActionDispatchResult => {
         if (payload.actionId === "worktree.list") {
           return { ok: true, result: [{ id: "wt-1", branch: "feature/foo" }] };
@@ -1046,6 +1047,9 @@ describe("McpServerService", () => {
             ok: true,
             result: [{ id: "term-1", title: "agent: claude", agentId: "agent-claude-1" }],
           };
+        }
+        if (payload.actionId === "forge.listIssues") {
+          return { ok: true, result: [{ number: 1, title: "Hello" }] };
         }
         return { ok: true, result: [] };
       });
@@ -1063,7 +1067,7 @@ describe("McpServerService", () => {
       const uris = (await client.listResources()).resources.map((r) => r.uri);
       expect(uris).toContain("daintree://terminal/term-1/scrollback");
       expect(uris).toContain("daintree://agent/agent-claude-1/state");
-      expect(uris).not.toContain("daintree://project/current/issues");
+      expect(uris).toContain("daintree://project/current/issues");
       expect(uris).not.toContain("daintree://worktree/wt-1/pulse");
 
       const patterns = (await client.listResourceTemplates()).resourceTemplates.map(
@@ -1072,15 +1076,15 @@ describe("McpServerService", () => {
       expect(patterns).toContain("daintree://terminal/{id}/scrollback");
       expect(patterns).not.toContain("daintree://worktree/{id}/pulse");
 
-      await expect(
-        client.readResource({ uri: "daintree://project/current/issues" })
-      ).rejects.toThrow(/not permitted/i);
+      const issues = await client.readResource({ uri: "daintree://project/current/issues" });
+      const content = issues.contents[0] as { text: string };
+      expect(JSON.parse(content.text)).toEqual([{ number: 1, title: "Hello" }]);
       await expect(client.readResource({ uri: "daintree://worktree/wt-1/pulse" })).rejects.toThrow(
         /not permitted/i
       );
-      for (const actionId of ["forge.listIssues", "git.getProjectPulse"]) {
-        expect(dispatchMock).not.toHaveBeenCalledWith(expect.objectContaining({ actionId }));
-      }
+      expect(dispatchMock).not.toHaveBeenCalledWith(
+        expect.objectContaining({ actionId: "git.getProjectPulse" })
+      );
     });
 
     it("readResource for project issues dispatches forge.listIssues", async () => {

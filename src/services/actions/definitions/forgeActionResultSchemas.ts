@@ -6,14 +6,6 @@
 import { z } from "zod";
 import { ForgeUserResultSchema } from "@shared/types/forgeActionResults";
 
-// Comment returned by the add-comment write action.
-export const ForgeCommentResultSchema = z.object({
-  id: z.string(),
-  body: z.string(),
-  url: z.string(),
-  createdAt: z.number(),
-});
-
 // Resulting assignee list after an assign/unassign. The list is authoritative:
 // forges silently drop assignees the account can't take, so it can omit the
 // username that was just requested.

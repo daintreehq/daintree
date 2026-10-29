@@ -197,6 +197,14 @@ describe("help prompt outputs", () => {
       expect(tier).toMatch(/`unavailable`/);
     });
 
+    // #15399: an assistant told issues and PRs were `full` refused to read them
+    // at the default tool set, and wouldn't reach for `gh` either.
+    it.each(ALL_GENERATED)("%s puts issue and PR reads on the default tool set", (_name, body) => {
+      const tier = section(body, "## Tier Model");
+      expect(tier).toMatch(/\*\*`core`\*\* \(default;[^)]*issues, PRs\)/);
+      expect(tier).not.toMatch(/\*\*`full`\*\* \([^)]*(issue|forge|CI)/);
+    });
+
     // #14995: the panel's "Allow this tool" lifts a refusal in place, so the
     // prompt must neither forbid the retry nor send the user to a new session.
     it.each(ALL_GENERATED)("%s lets a refused tool be retried once allowed", (_name, body) => {

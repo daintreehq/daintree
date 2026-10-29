@@ -749,22 +749,23 @@ describe("external tool surface budget (#11585)", () => {
   // — the apiKey back-compat guarantee and #11544's CI-status routes — so a
   // future reader sees the reversal was intentional.
   //
-  // Every one of them stays reachable for the in-app assistant by `full` at the
-  // latest, which is not subject to any third-party client's cap. The paired internal-tier
-  // assertion is what makes this a boundary rather than a deletion.
+  // Every one of them stays reachable for the in-app assistant, which is not
+  // subject to any third-party client's cap: the forge reads from `core` since
+  // #15399, the rest by `full`. The paired internal-tier assertion is what
+  // makes this a boundary rather than a deletion.
   const CUT_FROM_EXTERNAL_KEPT_INTERNALLY = [
     // #11544's two CI-status routes.
-    "forge.getCIStatus",
-    "worktree.reviewReadiness",
-    "forge.listIssues",
-    "git.getProjectPulse",
-    "project.runCheck",
-    "worktree.resource.provision",
+    ["forge.getCIStatus", "core"],
+    ["worktree.reviewReadiness", "full"],
+    ["forge.listIssues", "core"],
+    ["git.getProjectPulse", "full"],
+    ["project.runCheck", "full"],
+    ["worktree.resource.provision", "full"],
   ] as const;
 
   it.each(CUT_FROM_EXTERNAL_KEPT_INTERNALLY)(
-    "%s is denied externally but still reachable by the assistant at full",
-    (id) => {
+    "%s is denied externally but still reachable by the assistant at %s",
+    (id, minimumTier) => {
       // Pin to ground truth first, so a rename turns this into a red test
       // rather than a vacuous "unknown string is absent from a set".
       expect(BUILT_IN_ACTION_IDS as readonly string[]).toContain(id);
@@ -773,9 +774,9 @@ describe("external tool surface budget (#11585)", () => {
       expect(shouldExposeTool(makeEntry({ id }), "external")).toBe(false);
 
       expect(isTierPermitted("full", id, true)).toBe(true);
-      expect(isTierPermitted("core", id, true)).toBe(false);
+      expect(isTierPermitted("core", id, true)).toBe(minimumTier === "core");
       expect(
-        shouldExposeTool(makeEntry({ id }), "full", {
+        shouldExposeTool(makeEntry({ id }), minimumTier, {
           ...UNBOUND_SESSION_SURFACE,
           rendererOwnedOrigin: true,
         })
@@ -785,14 +786,13 @@ describe("external tool surface budget (#11585)", () => {
 
   // The core/full split went further than #11585 for the in-app tiers: these
   // used to be reachable by the assistant and now reach no session at all. An
-  // agent has its own shell git and filesystem, and forge writes and the
-  // per-check read had no caller. Asserted at every tier and both origins, so a
-  // future "just put it back at full" has to argue with a red test.
+  // agent has its own shell git and filesystem, and forge writes had no caller.
+  // Asserted at every tier and both origins, so a future "just put it back at
+  // full" has to argue with a red test.
   const CUT_FROM_EVERY_TIER = [
     "git.push",
     "git.commit",
     "git.getFileDiff",
-    "forge.getChecks",
     "forge.createIssue",
     "file.read",
     "project.getCurrent",
@@ -948,37 +948,39 @@ describe("external tool surface budget (#11585)", () => {
 // Forge used to be curated by hand in two separate files with nothing linking
 // them, and adding a read to only one shipped a tool invisible to the other
 // caller class twice (#10696, #11545). #11585 removed the whole forge surface
-// from `external`, and the core/full split cut the in-app side down to the five
-// reads an orchestrator actually uses, all in `full`. Forge writes reach no MCP
-// session: an agent has `gh` or its provider's own tooling, and the assistant
-// hands an approved issue draft to the user rather than filing it. The
-// assertions below lock that split so a future "why not just add it back?" has
-// to argue with a red test.
+// from `external`. In-app, the reads an orchestrator uses to pick work, triage
+// it and confirm a PR landed green are on `core` (#15399): the default session
+// is the one that does that. Forge writes reach no MCP session: an agent has
+// `gh` or its provider's own tooling. The assertions below lock that split so a
+// future "why not just add it back?" has to argue with a red test.
 describe("forge tool exposure (#11585)", () => {
   it("no forge tool is reachable at the external tier", () => {
     expect([...TIER_ALLOWLISTS.external].filter((id) => id.startsWith("forge."))).toEqual([]);
   });
 
-  const FORGE_READS_IN_FULL = [
-    "forge.getPR",
-    "forge.listPRs",
-    "forge.getIssue",
+  const FORGE_READS_IN_CORE = [
     "forge.listIssues",
+    "forge.getIssue",
+    "forge.listIssueComments",
+    "forge.listPRs",
+    "forge.getPR",
+    "forge.getPRs",
     "forge.getCIStatus",
+    "forge.getChecks",
   ];
 
   // Exact equality against the real registry, so the set can neither grow a
-  // write nor quietly drain away.
-  it("admits exactly the orchestration forge reads, and only at full", () => {
+  // write nor quietly drain away, and `full` adds no forge tool of its own.
+  it("admits exactly the orchestration forge reads, from core up", () => {
     const allForgeActions = BUILT_IN_ACTION_IDS.filter((id) => id.startsWith("forge."));
-    expect(allForgeActions.length).toBeGreaterThan(FORGE_READS_IN_FULL.length);
+    expect(allForgeActions.length).toBeGreaterThan(FORGE_READS_IN_CORE.length);
     for (const rendererOwned of [true, false]) {
-      const full = getTierPermittedActionIds("full", rendererOwned);
-      const core = getTierPermittedActionIds("core", rendererOwned);
-      expect(new Set(allForgeActions.filter((id) => full.has(id)))).toEqual(
-        new Set(FORGE_READS_IN_FULL)
-      );
-      expect(allForgeActions.filter((id) => core.has(id))).toEqual([]);
+      for (const tier of ["core", "full"] as const) {
+        const permitted = getTierPermittedActionIds(tier, rendererOwned);
+        expect(new Set(allForgeActions.filter((id) => permitted.has(id)))).toEqual(
+          new Set(FORGE_READS_IN_CORE)
+        );
+      }
     }
   });
 

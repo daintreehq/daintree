@@ -37,7 +37,8 @@ export function normalizeHelpAssistantTier(value: unknown): HelpAssistantTier | 
 
 /**
  * The orchestration surface: create worktrees, launch agents, prompt them,
- * read and wait on them, move and close them. It is the default because it
+ * read and wait on them, move and close them, and read the issues and pull
+ * requests that work comes from and lands in. It is the default because it
  * covers what the Daintree assistant and its runbooks actually call — terminal
  * reads, sends and launches are nearly all real traffic — and every tool here
  * is re-sent to the model on each turn, so what is not needed for that loop
@@ -77,6 +78,22 @@ export const CORE_TIER_TOOLS = [
   // `worktree.createWithRecipe` takes a recipe id, and nothing else says what
   // the ids are.
   "recipe.list",
+
+  // Choosing what to work on, triaging it and confirming an agent's PR landed
+  // green are the orchestration loop, not extras (#15399). Reads only: forge
+  // writes are on no tier, and an agent has its own forge CLI for those.
+  "forge.listIssues",
+  "forge.getIssue",
+  // `forge.getIssue` reports only how many comments exist; triage needs the thread.
+  "forge.listIssueComments",
+  "forge.listPRs",
+  "forge.getPR",
+  // Several agents' PRs in one call, with a failed lookup kept apart from a
+  // missing PR.
+  "forge.getPRs",
+  "forge.getCIStatus",
+  // Which check failed, once the roll-up shows trouble.
+  "forge.getChecks",
 
   "agent.launch",
   // One prompt to every named agent in one call, each run as `agent.launch`.
@@ -171,7 +188,7 @@ export const CORE_TIER_TOOLS = [
 
 /**
  * Added on top of `core`. Everything an orchestrator reaches for less often —
- * recipes and workflows, project checks, forge and git reads, context bundles,
+ * recipes and workflows, project checks, git activity, context bundles,
  * diagnostics, worktree resources, the plugin-authoring loop.
  *
  * Deliberately absent from both sets, and so from MCP entirely: git writes and
@@ -225,11 +242,6 @@ export const FULL_TIER_ADDONS = [
   "project.runCheck",
 
   "git.getProjectPulse",
-  "forge.getPR",
-  "forge.listPRs",
-  "forge.getIssue",
-  "forge.listIssues",
-  "forge.getCIStatus",
 
   "copyTree.generate",
   "copyTree.injectToTerminal",

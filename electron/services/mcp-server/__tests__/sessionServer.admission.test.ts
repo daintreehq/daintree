@@ -1552,3 +1552,61 @@ describe("unscoped terminal input by session origin (#12407)", () => {
     for (const id of RESERVED) expect(names).not.toContain(id);
   });
 });
+
+// Picking work, triaging it and confirming an agent's PR passed CI happen in the
+// assistant's default session (#15399), so every forge read is listed and
+// dispatched at core, for the assistant and for an agent pane alike.
+describe("sessionServer forge reads at core (#15399)", () => {
+  const FORGE_READS: ReadonlyArray<[string, Record<string, unknown>]> = [
+    ["forge.listIssues", { search: "no:assignee", state: "open" }],
+    ["forge.getIssue", { issueNumber: 42 }],
+    ["forge.listIssueComments", { issueNumber: 42, cursor: "c1" }],
+    ["forge.listPRs", { search: "author:@me", state: "open" }],
+    ["forge.getPR", { prNumber: 7 }],
+    ["forge.getPRs", { prNumbers: [7, 8] }],
+    ["forge.getCIStatus", { prNumber: 7 }],
+    ["forge.getChecks", { prNumber: 7 }],
+  ];
+
+  function coreDeps(origin: "help" | "external") {
+    const manifest = [
+      ...FORGE_READS.map(([id]) => makeManifestEntry(id)),
+      { ...makeManifestEntry("forge.createIssue"), kind: "command" as const },
+    ];
+    const deps = fakeDeps({
+      sessionStore: fakeSessionStore("core"),
+      requestManifest: vi.fn().mockResolvedValue(manifest),
+      getCachedManifest: vi.fn(() => manifest),
+    });
+    deps.sessionStore.sessionOriginMap.set("s-forge", origin);
+    return deps;
+  }
+
+  it.each(["help", "external"] as const)(
+    "lists every forge read and no forge write to a %s session",
+    async (origin) => {
+      const server = createSessionServer("s-forge", coreDeps(origin));
+      const names = (await listTools(server)).tools.map((t) => t.name).sort();
+      expect(names).toEqual(FORGE_READS.map(([id]) => id).sort());
+    }
+  );
+
+  it.each(["help", "external"] as const)(
+    "dispatches every forge read for a %s session",
+    async (origin) => {
+      const deps = coreDeps(origin);
+      const server = createSessionServer("s-forge", deps);
+      await server.connect(makeMockTransport());
+
+      for (const [name, args] of FORGE_READS) {
+        const result = await callTool(server, { name, arguments: args });
+        expect(result.isError, name).not.toBe(true);
+        expect(deps.dispatchAction).toHaveBeenCalledWith(
+          name,
+          expect.objectContaining(args),
+          false
+        );
+      }
+    }
+  );
+});

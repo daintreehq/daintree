@@ -1747,7 +1747,9 @@ describe("McpServerService", () => {
           ["project.detectRunners", "Detect Runners"],
           ["git.getProjectPulse", "Get Project Pulse"],
           ["forge.listPRs", "List PRs"],
+          ["forge.getPRs", "Get PRs"],
           ["forge.getIssue", "Get Issue"],
+          ["forge.listIssueComments", "List Issue Comments"],
           ["forge.listIssues", "List Issues"],
           ["copyTree.generate", "Generate Context"],
           ["skills.search", "Search Skills"],
@@ -1810,7 +1812,6 @@ describe("McpServerService", () => {
       "forge.createIssue",
       "forge.addIssueComment",
       "forge.openPR",
-      "forge.getChecks",
       "terminal.arm",
       "terminal.disarm",
       "terminal.disarmAll",
@@ -2192,9 +2193,9 @@ describe("McpServerService", () => {
     // external agent is sitting in a terminal with `gh` and can answer it
     // itself, and every slot on a capped surface has to earn its place against
     // something only Daintree can do. The in-app assistant has no shell, so
-    // #11544's fix survives where it was actually load-bearing — on the full
-    // tool set, through `forge.getCIStatus` and `worktree.reviewReadiness`; see
-    // the full-tier assertions below.
+    // #11544's fix survives where it was actually load-bearing — the forge CI
+    // reads on the core tool set (#15399) and `worktree.reviewReadiness` on
+    // full; see the in-app assertions below.
     it("external tier (apiKey) no longer carries the CI-status routes (#11585)", async () => {
       const dispatchMock = vi.fn((payload: DispatchRequest): ActionDispatchResult => ({
         ok: true,
@@ -2266,13 +2267,22 @@ describe("McpServerService", () => {
       }
     );
 
-    // `forge.getChecks` left both tool sets with the core/full split; the
-    // roll-up is the in-app route to "is this PR green?".
-    it("keeps forge.getChecks off the full tier, listed nowhere and refused at dispatch", async () => {
-      paneTokenTiers.set("token-full", "full");
-      const dispatchMock = vi.fn((): ActionDispatchResult => ({
+    // Picking work, triaging it and confirming an agent's PR passed CI are the
+    // default loop (#15399), down to an issue's thread and which check failed.
+    it.each([
+      "forge.listIssues",
+      "forge.getIssue",
+      "forge.listIssueComments",
+      "forge.listPRs",
+      "forge.getPR",
+      "forge.getPRs",
+      "forge.getCIStatus",
+      "forge.getChecks",
+    ])("core tier lists and can CALL %s", async (actionId) => {
+      paneTokenTiers.set("token-core", "core");
+      const dispatchMock = vi.fn((payload: DispatchRequest): ActionDispatchResult => ({
         ok: true,
-        result: "should-not-run",
+        result: { dispatched: payload.actionId },
       }));
       const { window } = createMockWindow({
         getManifest: tierManifest,
@@ -2281,23 +2291,20 @@ describe("McpServerService", () => {
 
       await service.start(window);
       const { client, transport } = await connectClient(service.currentPort!, {
-        Authorization: "Bearer token-full",
+        Authorization: "Bearer token-core",
       });
       transports.push(transport);
 
       const ids = (await client.listTools()).tools.map((tool) => tool.name);
-      expect(ids).not.toContain("forge.getChecks");
+      expect(ids).toContain(actionId);
 
-      const denied = (await client.callTool({
-        name: "forge.getChecks",
-        arguments: {},
-      })) as TextToolResult;
-      expect(denied.isError).toBe(true);
-      expect(denied.content[0]?.text).toContain("TIER_NOT_PERMITTED");
-      expect(dispatchMock).not.toHaveBeenCalled();
+      const res = (await client.callTool({ name: actionId, arguments: {} })) as TextToolResult;
+
+      expect(res.isError).toBeFalsy();
+      expect(dispatchMock).toHaveBeenCalledWith(expect.objectContaining({ actionId }));
     });
 
-    it("core tier leaves the CI routes to full", async () => {
+    it("core tier leaves review readiness to full", async () => {
       paneTokenTiers.set("token-core", "core");
       const { window } = createMockWindow({ getManifest: tierManifest });
 
@@ -2308,7 +2315,7 @@ describe("McpServerService", () => {
       transports.push(transport);
 
       const ids = (await client.listTools()).tools.map((tool) => tool.name);
-      expect(ids).not.toContain("forge.getCIStatus");
+      expect(ids).toContain("forge.getCIStatus");
       expect(ids).not.toContain("worktree.reviewReadiness");
     });
 

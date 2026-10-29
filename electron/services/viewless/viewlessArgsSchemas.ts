@@ -44,8 +44,27 @@ export const VIEWLESS_FORGE_ARGS_SCHEMAS = {
     })
     .strict(),
   "forge.getIssue": z.object({ ...location, issueNumber: z.number().int().positive() }),
+  "forge.listIssueComments": z.object({
+    ...location,
+    issueNumber: z.number().int().positive(),
+    cursor: z.string().optional(),
+    perPage: z.number().int().min(1).max(100).optional(),
+  }),
   "forge.getPR": z.object({ ...location, prNumber: z.number().int().positive() }),
+  // The renderer action's bounds and its refusal of repeats, which keep the
+  // batch from answering what the singular lookup should.
+  "forge.getPRs": z.object({
+    ...location,
+    prNumbers: z
+      .array(z.number().int().positive())
+      .min(2)
+      .max(20)
+      .refine((numbers) => new Set(numbers).size === numbers.length, {
+        message: "prNumbers must not contain duplicates",
+      }),
+  }),
   "forge.getCIStatus": z.object({ ...location, prNumber: z.number().int().positive() }),
+  "forge.getChecks": z.object({ ...location, prNumber: z.number().int().positive() }),
 } as const;
 
 const branchName = z.string().trim().min(1);

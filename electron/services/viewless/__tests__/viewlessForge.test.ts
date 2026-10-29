@@ -187,3 +187,145 @@ describe("forge reads with no frontend (#13501)", () => {
     });
   });
 });
+
+describe("triage reads with no frontend (#15399)", () => {
+  it("pages an issue's thread with the cursor it was given, dropping the provider's raw node", async () => {
+    const { deps, invoke } = forgeDeps({
+      [CHANNELS.FORGE_LIST_ISSUE_COMMENTS]: {
+        items: [
+          {
+            id: "c2",
+            body: "Second",
+            url: "https://example.test/issue/3#c2",
+            createdAt: 2,
+            author: { login: "octo", rawData: { secret: "the provider's whole node" } },
+          },
+        ],
+        nextCursor: "c3",
+        hasMore: true,
+        totalCount: 5,
+      },
+    });
+
+    const result = await executeViewlessAction(
+      request("forge.listIssueComments", { issueNumber: 3, cursor: "c1", perPage: 50 }),
+      deps
+    );
+
+    expect(invoke).toHaveBeenCalledWith(PROJECT.id, CHANNELS.FORGE_LIST_ISSUE_COMMENTS, [
+      { cwd: "/repo", issueNumber: 3, opts: { cursor: "c1", perPage: 50 } },
+    ]);
+    expect(result).toMatchObject({
+      ok: true,
+      result: {
+        items: [{ id: "c2", author: { login: "octo" } }],
+        nextCursor: "c3",
+        hasMore: true,
+        totalCount: 5,
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain("the provider's whole node");
+  });
+
+  it("keeps a failed lookup apart from a missing pull request in a batch", async () => {
+    const { deps, invoke } = forgeDeps({
+      [CHANNELS.FORGE_GET_PRS_BY_NUMBERS]: [
+        { number: 7, status: "found", pr: PR },
+        { number: 8, status: "not_found" },
+        { number: 9, status: "unresolved", reason: "provider_error" },
+      ],
+    });
+
+    const result = await executeViewlessAction(
+      request("forge.getPRs", { prNumbers: [7, 8, 9] }),
+      deps
+    );
+
+    expect(invoke).toHaveBeenCalledWith(PROJECT.id, CHANNELS.FORGE_GET_PRS_BY_NUMBERS, [
+      { cwd: "/repo", numbers: [7, 8, 9] },
+    ]);
+    expect(result).toEqual({
+      ok: true,
+      result: {
+        results: [
+          { number: 7, status: "found", pr: expect.objectContaining({ number: 7 }) },
+          { number: 8, status: "not_found" },
+          { number: 9, status: "unresolved", reason: "provider_error" },
+        ],
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain("the provider's whole node");
+  });
+
+  it("refuses a batch of one number or of repeats, as the renderer action does", async () => {
+    const { deps, invoke } = forgeDeps();
+
+    for (const prNumbers of [[7], [7, 7]]) {
+      const result = await executeViewlessAction(request("forge.getPRs", { prNumbers }), deps);
+      expect(result).toMatchObject({ ok: false, error: { code: "VALIDATION_ERROR" } });
+    }
+    expect(invoke).not.toHaveBeenCalledWith(
+      PROJECT.id,
+      CHANNELS.FORGE_GET_PRS_BY_NUMBERS,
+      expect.anything()
+    );
+  });
+
+  it("tells a PR with no checks from no such PR", async () => {
+    const { deps, invoke } = forgeDeps({
+      [CHANNELS.FORGE_GET_CHECKS]: {
+        checks: [
+          {
+            name: "lint",
+            status: "completed",
+            conclusion: "failure",
+            detailsUrl: "https://ci/1",
+            rawData: { secret: "the provider's whole node" },
+          },
+          { name: "test", status: "in_progress" },
+        ],
+      },
+    });
+
+    const listed = await executeViewlessAction(request("forge.getChecks", { prNumber: 7 }), deps);
+    expect(invoke).toHaveBeenCalledWith(PROJECT.id, CHANNELS.FORGE_GET_CHECKS, [
+      { cwd: "/repo", prNumber: 7 },
+    ]);
+    expect(listed).toEqual({
+      ok: true,
+      result: {
+        checks: [
+          { name: "lint", status: "completed", conclusion: "failure", detailsUrl: "https://ci/1" },
+          { name: "test", status: "in_progress" },
+        ],
+      },
+    });
+
+    const empty = forgeDeps({ [CHANNELS.FORGE_GET_CHECKS]: { checks: [] } });
+    expect(
+      await executeViewlessAction(request("forge.getChecks", { prNumber: 7 }), empty.deps)
+    ).toEqual({ ok: true, result: { checks: [] } });
+  });
+
+  it("answers a missing PR's checks as null and a provider that can't read them as an error", async () => {
+    const { deps, invoke } = forgeDeps({ [CHANNELS.FORGE_GET_CHECKS]: null });
+
+    expect(await executeViewlessAction(request("forge.getChecks", { prNumber: 9 }), deps)).toEqual({
+      ok: true,
+      result: { checks: null },
+    });
+
+    invoke.mockImplementation(async (_projectId, channel) => {
+      if (channel === CHANNELS.FORGE_GET_CHECKS) {
+        throw new Error("The active forge provider does not support reading individual CI checks");
+      }
+      return { worktrees: [makeWorktree()], gitBacked: true };
+    });
+    expect(
+      await executeViewlessAction(request("forge.getChecks", { prNumber: 9 }), deps)
+    ).toMatchObject({
+      ok: false,
+      error: { code: "EXECUTION_ERROR", message: expect.stringContaining("does not support") },
+    });
+  });
+});

@@ -58,8 +58,8 @@ import { useAssistantVersionWarning } from "./Assistant/useAssistantVersionWarni
 // One sentence of consequence beside the select; the rest lives in the tool set's
 // disclosure with the action inventory, where it can be read in full.
 const TIER_SUMMARIES: Record<HelpAssistantTier, string> = {
-  core: "Create worktrees, launch and prompt agents, and move, rename or close terminals",
-  full: "Adds recipes, workflows, project checks, forge and git reads, context tools and diagnostics",
+  core: "Create worktrees, launch and prompt agents, move, rename or close terminals, and read issues and PRs",
+  full: "Adds recipes, workflows, project checks, git activity, context tools and diagnostics",
 };
 
 // Descriptive exclusive choice: each tool set's consequence stays readable in full, so
@@ -70,8 +70,8 @@ const TIER_CHOICES: { value: HelpAssistantTier; label: string; description: stri
 ];
 
 const TIER_DETAILS: Record<HelpAssistantTier, string> = {
-  core: "The assistant can create worktrees, launch agents and send them prompts, read and wait on terminals, and move, rename or close them. It can delete worktrees, including ones an earlier session created, which asks you to confirm unless Daintree confirmations says otherwise. It can message and start assistants on your other hosts, as each host's settings allow. This covers most orchestration and keeps the tool list the model rereads every turn short.",
-  full: "Adds recipes and project checks, starting work on an issue, forge PR, issue and CI reads, git activity, CopyTree context, managing worktree resources, and diagnostics. Teardowns ask you to confirm unless Daintree confirmations says otherwise. Git and forge writes and file edits aren't available in either tool set.",
+  core: "The assistant can create worktrees, launch agents and send them prompts, read and wait on terminals, and move, rename or close them. It can read issues and their comments, and pull requests with their CI checks. It can delete worktrees, including ones an earlier session created, which asks you to confirm unless Daintree confirmations says otherwise. It can message and start assistants on your other hosts, as each host's settings allow. This covers most orchestration and keeps the tool list the model rereads every turn short.",
+  full: "Adds recipes and project checks, starting work on an issue, git activity, CopyTree context, managing worktree resources, and diagnostics. Teardowns ask you to confirm unless Daintree confirmations says otherwise. Git and forge writes and file edits aren't available in either tool set.",
 };
 
 function groupToolsByNamespace(tools: readonly string[]): Array<[string, string[]]> {

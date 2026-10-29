@@ -2,12 +2,22 @@ import { isAbsolute, relative, resolve, sep } from "node:path";
 import { z } from "zod";
 import { CHANNELS } from "../../ipc/channels.js";
 import type { ActionDispatchResult } from "../../../shared/types/actions.js";
-import type { Issue, ListOptions, Page, PR } from "../../../shared/types/forge.js";
-import type { ForgeCIStatusSummary } from "../../../shared/types/ipc/forge.js";
+import type {
+  Issue,
+  IssueComment,
+  ListOptions,
+  Page,
+  PR,
+  PRLookupResult,
+} from "../../../shared/types/forge.js";
+import type { ForgeCheckRun, ForgeCIStatusSummary } from "../../../shared/types/ipc/forge.js";
 import {
   ForgeCIStatusActionResultSchema,
+  ForgeChecksActionResultSchema,
+  ForgeCommentPageResultSchema,
   ForgeIssueResultSchema,
   ForgePRActionResultSchema,
+  ForgePRsActionResultSchema,
 } from "../../../shared/types/forgeActionResults.js";
 import type { Project } from "../../../shared/types/project.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
@@ -182,10 +192,29 @@ export async function runForgeRead(
         const issue = await invoke<Issue | null>(CHANNELS.FORGE_GET_ISSUE, { cwd, issueNumber });
         return parsed(actionId, ForgeIssueResultSchema.nullable(), issue);
       }
+      case "forge.listIssueComments": {
+        const { issueNumber, cursor, perPage } = args.data as z.infer<
+          (typeof VIEWLESS_FORGE_ARGS_SCHEMAS)["forge.listIssueComments"]
+        >;
+        const page = await invoke<Page<IssueComment>>(CHANNELS.FORGE_LIST_ISSUE_COMMENTS, {
+          cwd,
+          issueNumber,
+          opts: { cursor, perPage },
+        });
+        return parsed(actionId, ForgeCommentPageResultSchema, page);
+      }
       case "forge.getPR": {
         const { prNumber } = args.data as { prNumber: number };
         const pr = await invoke<PR | null>(CHANNELS.FORGE_GET_PR, { cwd, prNumber });
         return parsed(actionId, ForgePRActionResultSchema, { pr });
+      }
+      case "forge.getPRs": {
+        const { prNumbers } = args.data as { prNumbers: number[] };
+        const results = await invoke<PRLookupResult[]>(CHANNELS.FORGE_GET_PRS_BY_NUMBERS, {
+          cwd,
+          numbers: prNumbers,
+        });
+        return parsed(actionId, ForgePRsActionResultSchema, { results });
       }
       case "forge.getCIStatus": {
         const { prNumber } = args.data as { prNumber: number };
@@ -194,6 +223,17 @@ export async function runForgeRead(
           prNumber,
         });
         return parsed(actionId, ForgeCIStatusActionResultSchema, { ciStatus });
+      }
+      case "forge.getChecks": {
+        const { prNumber } = args.data as { prNumber: number };
+        const result = await invoke<{ checks: ForgeCheckRun[] } | null>(CHANNELS.FORGE_GET_CHECKS, {
+          cwd,
+          prNumber,
+        });
+        // `null` is no such PR; an empty list is a PR with no checks.
+        return parsed(actionId, ForgeChecksActionResultSchema, {
+          checks: result === null ? null : result.checks,
+        });
       }
       default:
         return null;

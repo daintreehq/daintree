@@ -553,7 +553,12 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // than beside a replacement, that only its recorded conversation resumes, and
   // that the launch is only queued. `terminal.restart` gave back 14 B. In-app
   // only, off the external surface.
-  const MAX_COHORT_TOTAL_BYTES = 22_600;
+  // 22_600 → 23_750 for #15399, measured at 23_708 B: `forge.listIssueComments`,
+  // `forge.getPRs` and `forge.getChecks` join the core tool set with the other
+  // forge reads, so the default assistant can read a whole issue thread, check
+  // several agents' PRs in one call and see which check failed. Their prose is
+  // unchanged. In-app only, off the external surface.
+  const MAX_COHORT_TOTAL_BYTES = 23_750;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 
@@ -706,11 +711,10 @@ describe("LLM-facing tool descriptions (#11542)", () => {
     // this is a contract table rather than a derivation because no test can
     // infer an arbitrary handler's requirements by inspecting its body.
     //
-    // Read from the registry rather than the cohort. `git.commit`,
-    // `forge.getPRs` and `forge.getChecks` are on neither tool set since the
-    // core/full split, but the schema is still what every other dispatcher
-    // validates against, and holding the rows here means the contract is
-    // already pinned if one of them is exposed again.
+    // Read from the registry rather than the cohort. `git.commit` is on neither
+    // tool set since the core/full split, but the schema is still what every
+    // other dispatcher validates against, and holding the row here means the
+    // contract is already pinned if it is exposed again.
     const MUST_BE_REQUIRED: Record<string, string[]> = {
       "git.commit": ["message"],
       "forge.getPR": ["prNumber"],

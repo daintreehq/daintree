@@ -16,7 +16,7 @@ const write = (danger: ActionDanger = "safe"): ViewlessActionEntry => ({ danger,
  * The set is what an orchestrator drives through a whole loop with no window
  * open (#13495): open a terminal or an agent, read and steer it, close it,
  * make and delete worktrees, discover projects and runners, read the forge
- * the runbooks consult (#13501), find the host's tools (#13493), list an
+ * the runbooks consult (#13501) and the threads and checks triage needs (#15399), find the host's tools (#13493), list an
  * agent's slash commands before typing one and the host's workspaces with
  * whether a frontend is attached to each (#14122), and look up what a launch
  * or a create takes and wait on a pull request (#14139), and the two reads
@@ -60,10 +60,13 @@ export const VIEWLESS_ACTIONS: Readonly<Record<string, ViewlessActionEntry>> = {
   // Listing reconciles the project's recipe files, as it does in a view.
   "recipe.list": write(),
   "forge.getPR": read(),
+  "forge.getPRs": read(),
   "forge.listPRs": read(),
   "forge.getIssue": read(),
+  "forge.listIssueComments": read(),
   "forge.listIssues": read(),
   "forge.getCIStatus": read(),
+  "forge.getChecks": read(),
   "agentSessionHistory.list": read(),
   "git.getProjectPulse": read(),
   "actions.list": read(),
