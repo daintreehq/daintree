@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { EditorView } from "@codemirror/view";
 import { EditorSelection } from "@codemirror/state";
@@ -23,6 +23,21 @@ import { useCommandStore } from "@/store/commandStore";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import { initBuiltInPanelKinds } from "@/panels/registry";
 import { HybridInputBar } from "../HybridInputBar";
+
+// CodeMirror measures text through Range rects on an animation frame, which
+// can land after a test ends; jsdom has neither method.
+const originalRangeRects = Object.getOwnPropertyDescriptor(Range.prototype, "getClientRects");
+const originalRangeBounds = Range.prototype.getBoundingClientRect;
+beforeAll(() => {
+  Object.defineProperty(Range.prototype, "getClientRects", { configurable: true, value: () => [] });
+  Range.prototype.getBoundingClientRect = () => new DOMRect();
+});
+afterAll(() => {
+  if (originalRangeRects)
+    Object.defineProperty(Range.prototype, "getClientRects", originalRangeRects);
+  else delete (Range.prototype as Partial<Range>).getClientRects;
+  Range.prototype.getBoundingClientRect = originalRangeBounds;
+});
 
 // A template is added to what the user has written, never put in its place
 // (#14956), and never sent (#13799). These drive the real picker into the real
