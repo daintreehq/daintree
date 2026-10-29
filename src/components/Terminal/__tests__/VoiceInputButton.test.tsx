@@ -98,7 +98,7 @@ describe("VoiceInputButton", () => {
     expect((await screen.findByRole("tooltip")).textContent).toBe("Stop recording");
   });
 
-  it("offers setup again once the session that outlived dictation has closed", () => {
+  it("offers setup again once the session that outlived dictation has closed", async () => {
     useVoiceRecordingStore.setState({
       isConfigured: false,
       status: "finishing",
@@ -110,6 +110,9 @@ describe("VoiceInputButton", () => {
     const button = getByRole("button");
     expect(button.getAttribute("aria-label")).toBe("Set up voice input");
     expect(button.getAttribute("aria-pressed")).toBeNull();
+    // Its last words are still on their way, but it offers no restart.
+    fireEvent.focus(button);
+    expect((await screen.findByRole("tooltip")).textContent).toBe("Finishing transcription…");
   });
 
   it("renders a resume affordance when this panel is paused", async () => {

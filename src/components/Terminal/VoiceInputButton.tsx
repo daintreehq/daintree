@@ -282,31 +282,32 @@ export function VoiceInputButton({
     canopyRow,
   ]);
 
-  const tooltipText = needsSetup
-    ? "Configure voice input"
-    : hasError
-      ? formatVoiceErrorTooltip(lastError)
-      : isPending
-        ? "Starting microphone… Click to stop"
-        : isFinishing
-          ? disabled
-            ? "Finishing transcription…"
-            : "Finishing transcription… Click to start again"
-          : isPaused
-            ? pauseStopWarning
-              ? "Paused — stops in 10s · Click to resume"
-              : "Paused — click to resume"
-            : isMicStarting
-              ? micSignal === "silent"
-                ? `No audio from ${micDeviceLabel ?? "microphone"} · Click to stop`
-                : "Starting microphone… Click to stop"
-              : isReconnecting
-                ? "Reconnecting… Click to stop"
-                : isListening
-                  ? idleStopWarning
-                    ? "Stopping in 10s unless you speak · Click to stop"
-                    : "Stop recording"
-                  : "Start voice input";
+  const tooltipText =
+    needsSetup && !isFinishing
+      ? "Configure voice input"
+      : hasError
+        ? formatVoiceErrorTooltip(lastError)
+        : isPending
+          ? "Starting microphone… Click to stop"
+          : isFinishing
+            ? disabled || !isConfigured
+              ? "Finishing transcription…"
+              : "Finishing transcription… Click to start again"
+            : isPaused
+              ? pauseStopWarning
+                ? "Paused — stops in 10s · Click to resume"
+                : "Paused — click to resume"
+              : isMicStarting
+                ? micSignal === "silent"
+                  ? `No audio from ${micDeviceLabel ?? "microphone"} · Click to stop`
+                  : "Starting microphone… Click to stop"
+                : isReconnecting
+                  ? "Reconnecting… Click to stop"
+                  : isListening
+                    ? idleStopWarning
+                      ? "Stopping in 10s unless you speak · Click to stop"
+                      : "Stop recording"
+                    : "Start voice input";
 
   return (
     <div

@@ -37,6 +37,8 @@ const shared = vi.hoisted(() => ({
   endDrain: null as null | (() => void),
   /** Cleanup turned on in the voice settings. */
   correctionEnabled: false,
+  /** Dictation turned on in the voice settings; a saved patch writes it. */
+  enabled: true,
   /** Every cleanup request that reached the correction service, still open. */
   cleanups: [] as Array<{
     rawText: string;
@@ -160,7 +162,7 @@ vi.mock("../../../store.js", () => ({
     get: vi.fn((key: string) =>
       key === "voiceInput"
         ? {
-            enabled: true,
+            enabled: shared.enabled,
             openaiApiKey: "sk-test",
             deepgramApiKey: "dg-test",
             transcriptionProvider: shared.transcriptionProvider,
@@ -168,7 +170,10 @@ vi.mock("../../../store.js", () => ({
           }
         : undefined
     ),
-    set: vi.fn(),
+    set: vi.fn((key: string, value: { enabled?: unknown }) => {
+      if (key === "voiceInput" && typeof value.enabled === "boolean")
+        shared.enabled = value.enabled;
+    }),
   },
 }));
 
@@ -311,6 +316,10 @@ function deferDrain() {
   shared.endDrain = resolve;
   return () => resolve();
 }
+
+beforeEach(() => {
+  shared.enabled = true;
+});
 
 // What the view received, minus its session-ended notice.
 const received = (sender: FakeSender) =>
@@ -1646,6 +1655,16 @@ describe("voiceInput — a session live in another view (#14601)", () => {
     // The owner drains it, so what was said stays in its draft.
     expect(shared.calls).not.toContain("hard-stop");
     expect(winA.focus).not.toHaveBeenCalled();
+  });
+
+  it("refuses a start that reaches main after dictation was turned off", async () => {
+    await invoke(CHANNELS.VOICE_INPUT_SET_SETTINGS, viewB, { enabled: false });
+
+    expect(await start(ownerA, "a")).toEqual({ status: "failed", error: expect.any(String) });
+
+    expect(getLiveVoiceSession()).toBeNull();
+    expect(liveUpdates(viewB)).toEqual([]);
+    expect(shared.calls).toEqual([]);
   });
 
   it("asks nothing of a view when dictation is turned off with nothing live", async () => {
