@@ -76,21 +76,25 @@ export function ReviewMarkLine({
           data-testid="review-hub-review-mark"
         >
           <BookmarkCheck className="size-3.5 shrink-0" aria-hidden="true" />
-          <span className="shrink-0">
-            Reviewed <TimeAgo timestamp={mark.markedAt} /> {at}
-          </span>
-          {/* The separator shares the status's clipping box, so it can't outlive
-              the text it introduces. The floor keeps a few words on screen: a
-              box clipped to a few pixels paints a sliver of the dot. */}
-          <span className="min-w-[8ch] truncate">
-            <span aria-hidden="true">·&nbsp;</span>
-            <span
-              role="status"
-              aria-live="polite"
-              data-testid="review-hub-review-mark-since"
-              data-state={view.kind}
-            >
-              {since}
+          {/* Clipped as a pair: a row too narrow even for the status's floor cuts
+              its end rather than pushing Retry, View and Clear out of the pane. */}
+          <span className="flex min-w-0 items-center gap-1.5 overflow-hidden">
+            <span className="shrink-0">
+              Reviewed <TimeAgo timestamp={mark.markedAt} /> {at}
+            </span>
+            {/* The separator shares the status's clipping box, so it can't outlive
+                the text it introduces. The floor keeps a few words on screen: a
+                box clipped to a few pixels paints a sliver of the dot. */}
+            <span className="min-w-[8ch] truncate">
+              <span aria-hidden="true">·&nbsp;</span>
+              <span
+                role="status"
+                aria-live="polite"
+                data-testid="review-hub-review-mark-since"
+                data-state={view.kind}
+              >
+                {since}
+              </span>
             </span>
           </span>
           {view.kind === "failed" && (
