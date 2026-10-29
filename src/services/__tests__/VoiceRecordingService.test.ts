@@ -2036,6 +2036,26 @@ describe("VoiceRecordingService — shortcut stops from anywhere (#12832)", () =
     });
   }
 
+  // #14951: Settings' mic test stops a dictation where the person is.
+  it("stops without going back to the dictation when asked not to", async () => {
+    const { voiceRecordingService, stopSpy, startSpy, toggleSpy } = await arrange({
+      status: "recording",
+    });
+    beginDictationReturn.mockClear();
+
+    await voiceRecordingService.stopActiveSession({ returnToTarget: false });
+    expect(stopSpy).toHaveBeenCalledWith("Dictation stopped.", {
+      preserveLiveText: true,
+      reason: "user",
+    });
+    expect(beginDictationReturn).not.toHaveBeenCalled();
+
+    await voiceRecordingService.stopActiveSession();
+    expect(beginDictationReturn).toHaveBeenCalledWith("panel-a", { pressedHere: true });
+    expect(startSpy).not.toHaveBeenCalled();
+    expect(toggleSpy).not.toHaveBeenCalled();
+  });
+
   it.each(["idle", "finishing"])(
     "the session panel's Stop starts nothing once the session is %s",
     async (status) => {

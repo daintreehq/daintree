@@ -5656,11 +5656,13 @@ class VoiceRecordingService {
    * The session panel's Stop: the dictation key's stop for whatever this view
    * is recording, taking the person back to it as the key does (#14791), and
    * nothing when there is nothing left to stop, so a late click can't start
-   * another session.
+   * another session. Settings' mic test stops it without going there (#14951).
    */
-  stopActiveSession(): Promise<void> {
+  stopActiveSession({ returnToTarget = true }: { returnToTarget?: boolean } = {}): Promise<void> {
     this.initialize();
-    return this.stopAnySession({ pressedHere: true }) ?? Promise.resolve();
+    return (
+      this.stopAnySession(returnToTarget ? { pressedHere: true } : undefined) ?? Promise.resolve()
+    );
   }
 
   /**
