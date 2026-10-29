@@ -50,11 +50,13 @@ describe("offerSentNotesUndo", () => {
     });
   });
 
-  it("names how many went where and how many are still pending", () => {
+  it("names how many went where, and that Undo leaves the paste behind", () => {
     const { payload } = send([add("src/a.ts"), add("src/b.ts")], 1);
-    expect(payload.title).toBe("Pasted 2 notes into Claude");
-    expect(payload.message.startsWith("1 still pending. ")).toBe(true);
-    expect(payload.transient).toBe(true);
+    expect(payload.title).toBe("Notes sent");
+    expect(payload.message).toBe(
+      "Pasted 2 notes into Claude. Undo restores them but leaves the pasted text in place."
+    );
+    expect(send([add("src/c.ts")]).payload.title).toBe("Note sent");
   });
 
   it("offers nothing when the send cleared nothing", () => {

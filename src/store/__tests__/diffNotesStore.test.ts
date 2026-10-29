@@ -146,6 +146,29 @@ describe("diffNotesStore", () => {
     expect(merged.state.notes).toEqual({ [original.id]: rewritten });
   });
 
+  it("keeps a sibling's rewrite saved in the same millisecond as the note an Undo restores", () => {
+    const original = add();
+    const rewritten = { ...original, body: "Same tick, new words" };
+    const merged = mergeDiffNotesPersistedWrite({
+      baseline: { version: 0, state: { notes: {} } },
+      incoming: { version: 0, state: { notes: { [original.id]: original } } },
+      onDisk: { version: 0, state: { notes: { [original.id]: rewritten } } },
+    });
+    expect(merged.state.notes[original.id]?.body).toBe("Same tick, new words");
+  });
+
+  it("lands an edit to a restored note whose restore never reached disk", () => {
+    const original = add();
+    const sibling = { ...original, body: "Rewritten elsewhere", updatedAt: original.updatedAt + 1 };
+    const edited = { ...original, body: "Edited after Undo", updatedAt: original.updatedAt + 2 };
+    const merged = mergeDiffNotesPersistedWrite({
+      baseline: { version: 0, state: { notes: {} } },
+      incoming: { version: 0, state: { notes: { [original.id]: edited } } },
+      onDisk: { version: 0, state: { notes: { [original.id]: sibling } } },
+    });
+    expect(merged.state.notes).toEqual({ [original.id]: edited });
+  });
+
   it("lands an Undo when disk no longer holds the note", () => {
     const original = add();
     const other = add("src/b.ts");

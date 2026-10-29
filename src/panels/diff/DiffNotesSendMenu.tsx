@@ -169,19 +169,21 @@ export function sendDiffNotes(request: DiffNoteSendRequest): DiffNoteDeliveryRes
 /**
  * A send clears the notes it pasted, so it offers the Undo a deleted note
  * gets (D0). The paste can't be taken back out of the agent, so the toast says
- * Undo only brings the notes back. A toast rather than pane status: the
- * reviewer is usually looking at the agent's composer when they want it.
+ * Undo only brings the notes back. A toast rather than the pane's status line:
+ * the reviewer is usually looking at the agent's composer when they want it.
  */
 export function offerSentNotesUndo(result: Extract<DiffNoteDeliveryResult, { ok: true }>): void {
   if (result.cleared.length === 0) return;
   // Per note, so a note that came back and went out again answers only to the
   // newest toast holding it.
   const guards = result.cleared.map((note) => latestUndoOnly(`diff-note:${note.id}`, () => note));
-  const pending = result.kept > 0 ? `${result.kept} still pending. ` : "";
+  const one = result.cleared.length === 1;
   notify({
     type: "success",
-    title: `Pasted ${pluralize(result.sent, "note")} into ${result.targetTitle}`,
-    message: `${pending}Undo restores the notes but leaves the pasted text in place.`,
+    title: one ? "Note sent" : "Notes sent",
+    message:
+      `Pasted ${pluralize(result.sent, "note")} into ${result.targetTitle}. ` +
+      `Undo restores ${one ? "it" : "them"} but leaves the pasted text in place.`,
     priority: "high",
     transient: true,
     duration: UNDO_TOAST_DURATION_MS,

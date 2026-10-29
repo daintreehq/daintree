@@ -107,6 +107,7 @@ import type { MarkdownDiffFailure } from "@/components/Worktree/markdownBlockDif
 import type { DiffSubject } from "./diffContentCache";
 import type { BasePanelProps } from "@/components/Panel/ContentPanel";
 import type { TabInfo } from "@/components/Panel/TabButton";
+import { pluralize } from "@/lib/pluralize";
 
 /**
  * The layout segments the toolbar offers. `rendered` is deliberately not a
@@ -174,6 +175,8 @@ const LazyRenderedMarkdownDiff = lazy(() =>
   }))
 );
 
+const NOTE_SENT_STATUS_MS = 5000;
+
 // Content values `useDiffContent` returns in place of a patch.
 const DIFF_SENTINEL_CONTENT: ReadonlySet<string> = new Set([
   "NO_CHANGES",
@@ -181,6 +184,11 @@ const DIFF_SENTINEL_CONTENT: ReadonlySet<string> = new Set([
   "FILE_TOO_LARGE",
   "ERROR",
 ]);
+
+function describeNotesSent(result: Extract<DiffNoteDeliveryResult, { ok: true }>): string {
+  const sent = `Pasted ${pluralize(result.sent, "note")} into ${result.targetTitle}`;
+  return result.kept > 0 ? `${sent} · ${result.kept} still pending` : sent;
+}
 
 export interface DiffPaneProps extends BasePanelProps {
   tabs?: TabInfo[];
@@ -498,25 +506,26 @@ export function DiffPane({
     )
   );
   // A failed send keeps its notes pending and names what failed, with a retry
-  // aimed at the same agent and scope; a delivered one says where it went and
-  // offers an Undo from a toast that outlives this pane.
-  const [noteSendFailure, setNoteSendFailure] = useState<{
+  // aimed at the same agent and scope; a delivered one says where it went, and
+  // its Undo rides on a toast so it outlives this pane.
+  const [noteSend, setNoteSend] = useState<{
     request: DiffNoteSendRequest;
-    message: string;
+    result: DiffNoteDeliveryResult;
   } | null>(null);
   const handleNoteSendResult = useCallback(
     (request: DiffNoteSendRequest, result: DiffNoteDeliveryResult) => {
-      if (result.ok) {
-        setNoteSendFailure(null);
-        offerSentNotesUndo(result);
-        return;
-      }
-      setNoteSendFailure({ request, message: result.message });
+      setNoteSend({ request, result });
+      if (result.ok) offerSentNotesUndo(result);
     },
     []
   );
   useEffect(() => {
-    setNoteSendFailure(null);
+    if (!noteSend?.result.ok) return;
+    const timer = setTimeout(() => setNoteSend(null), NOTE_SENT_STATUS_MS);
+    return () => clearTimeout(timer);
+  }, [noteSend]);
+  useEffect(() => {
+    setNoteSend(null);
   }, [worktreePath, filePath]);
 
   // Forces a fresh request in video, audio and PDF mode — the diff content hooks
@@ -1516,30 +1525,30 @@ export function DiffPane({
         </div>
       </div>
 
-      {noteSendFailure && (
+      {noteSend && !noteSend.result.ok && (
         <InlineStatusBanner
           icon={XCircle}
           severity="error"
           layout="pane"
           title="Couldn't send notes"
-          description={noteSendFailure.message}
+          description={noteSend.result.message}
           action={{
             id: "retry-send-notes",
             label: "Retry",
             icon: RefreshCw,
             variant: "dangerFilled",
             onClick: () => {
-              const { request } = noteSendFailure;
+              const { request } = noteSend;
               handleNoteSendResult(request, sendDiffNotes(request));
             },
             ariaLabel: "Retry sending notes",
           }}
-          onClose={() => setNoteSendFailure(null)}
+          onClose={() => setNoteSend(null)}
           closeAriaLabel="Dismiss send error"
         />
       )}
 
-      {(isWorkspace || currentEntry !== undefined || hasPendingNotes) && (
+      {(isWorkspace || currentEntry !== undefined || hasPendingNotes || noteSend !== null) && (
         <div
           ref={footerRef}
           data-testid="diff-pane-footer"
@@ -1596,6 +1605,11 @@ export function DiffPane({
             )}
           </div>
           <div className="flex items-center gap-2 min-w-0">
+            {noteSend?.result.ok && (
+              <span role="status" className="truncate text-xs text-text-secondary">
+                {describeNotesSent(noteSend.result)}
+              </span>
+            )}
             {worktreePath && (
               <DiffNotesSendMenu
                 worktreePath={worktreePath}

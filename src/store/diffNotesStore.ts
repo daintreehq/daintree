@@ -82,12 +82,13 @@ export function mergeDiffNotesPersistedWrite({
     if (current && !deepEqualIgnoringUndefined(current, before)) merged[id] = current;
   }
   // Note ids are never reused, so a writer only adds one disk already holds by
-  // restoring it. A sibling's revision there is newer than the snapshot an Undo
-  // carries, and restoring never overwrites a newer revision.
-  for (const id of Object.keys(incomingNotes)) {
+  // restoring it. An Undo's snapshot is never newer than a sibling's rewrite,
+  // and restoring never overwrites a newer revision. An edit made since the
+  // restore (whose own write may not have landed) is newer, and goes through.
+  for (const [id, note] of Object.entries(incomingNotes)) {
     if (id in baselineNotes) continue;
     const current = onDiskNotes[id];
-    if (current) merged[id] = current;
+    if (current && current.updatedAt >= note.updatedAt) merged[id] = current;
   }
   return { version: incoming.version, state: { notes: merged } };
 }
