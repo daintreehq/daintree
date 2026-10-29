@@ -3,7 +3,10 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import type { CdpGetPropertiesResult, CdpPropertyDescriptor } from "@shared/types/ipc/webviewConsole";
+import type {
+  CdpGetPropertiesResult,
+  CdpPropertyDescriptor,
+} from "@shared/types/ipc/webviewConsole";
 import { ObjectInspector } from "../ObjectInspector";
 
 vi.mock("@/components/ui/tooltip", () => ({

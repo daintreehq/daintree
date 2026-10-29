@@ -89,7 +89,10 @@ function unreadValueText(prop: CdpPropertyDescriptor): { label: string; explanat
   // as the value it might return.
   if (prop.accessor?.getter) return { label: "(…)", explanation: "Getter not run" };
   if (prop.accessor) {
-    return { label: "(no getter)", explanation: "Accessor without a getter, so it reads as undefined" };
+    return {
+      label: "(no getter)",
+      explanation: "Accessor without a getter, so it reads as undefined",
+    };
   }
   return { label: "(no value)", explanation: "No value was reported for this property" };
 }
