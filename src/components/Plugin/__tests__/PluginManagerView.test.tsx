@@ -2010,6 +2010,117 @@ describe("PluginManagerView", () => {
         ]);
       });
 
+      it("skips on Escape too, and offers Stop up to the last confirm", async () => {
+        threeAvailable();
+        renderDialog();
+        fireEvent.click(await screen.findByRole("button", { name: "Update all" }));
+
+        await confirmFor("Plugin A");
+        fireEvent.keyDown(document, { key: "Escape" });
+        const second = await confirmFor("Plugin B");
+        expect(positionOf(second)).toBe("Update 2 of 3");
+        fireEvent.click(within(second).getByRole("button", { name: "Skip update" }));
+
+        const last = await confirmFor("Plugin C");
+        expect(positionOf(last)).toBe("Update 3 of 3");
+        fireEvent.click(within(last).getByRole("button", { name: "Stop updates" }));
+        await waitFor(() => expect(screen.queryByText(/^Update '/)).toBeNull());
+        expect(installMock()).not.toHaveBeenCalled();
+      });
+
+      it("keeps plain Cancel when Update all finds only one update", async () => {
+        listMock().mockResolvedValue([makeUrl("acme.a", "Plugin A"), makeUrl("acme.b", "Plugin B")]);
+        checkMock().mockImplementation(async (id: string) =>
+          id === "acme.a"
+            ? {
+                status: "available",
+                name: id,
+                version: "2.0.0",
+                capabilities: [],
+                archiveHash: "a".repeat(64),
+              }
+            : { status: "up-to-date" }
+        );
+        renderDialog();
+        fireEvent.click(await screen.findByRole("button", { name: "Update all" }));
+
+        const dialog = await confirmFor("Plugin A");
+        expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeTruthy();
+        expect(within(dialog).queryByRole("button", { name: "Stop updates" })).toBeNull();
+        expect(positionOf(dialog)).toBeNull();
+      });
+
+      it("leaves no run behind for a later single check once stopped", async () => {
+        threeAvailable();
+        renderDialog();
+        fireEvent.click(await screen.findByRole("button", { name: "Update all" }));
+        fireEvent.click(
+          within(await confirmFor("Plugin A")).getByRole("button", { name: "Stop updates" })
+        );
+        await waitFor(() => expect(screen.queryByText(/^Update '/)).toBeNull());
+
+        fireEvent.click((await screen.findAllByText("Plugin B"))[0]!);
+        fireEvent.click(await screen.findByRole("button", { name: "Check Plugin B for updates" }));
+        const single = await confirmFor("Plugin B");
+        expect(within(single).getByRole("button", { name: "Cancel" })).toBeTruthy();
+        expect(positionOf(single)).toBeNull();
+      });
+
+      describe("behind the HTTP warning", () => {
+        const httpFirst = () => {
+          listMock().mockResolvedValue([
+            makeUrl("acme.a", "Plugin A", "http://example.com/acme.a.dntr"),
+            makeUrl("acme.b", "Plugin B"),
+          ]);
+          checkMock().mockImplementation(async (id: string) => ({
+            status: "available",
+            name: id,
+            version: "2.0.0",
+            capabilities: [],
+            archiveHash: id.slice(-1).repeat(64),
+          }));
+        };
+
+        const httpWarning = async () => {
+          await screen.findByText("Install over HTTP?");
+          return screen.getByRole("alertdialog");
+        };
+
+        it("skips to the next update without reopening the URL dialog", async () => {
+          httpFirst();
+          renderDialog();
+          fireEvent.click(await screen.findByRole("button", { name: "Update all" }));
+          fireEvent.click(
+            within(await confirmFor("Plugin A")).getByRole("button", { name: "Reinstall plugin" })
+          );
+
+          const warning = await httpWarning();
+          expect(positionOf(warning)).toBe("Update 1 of 2");
+          fireEvent.click(within(warning).getByRole("button", { name: "Skip update" }));
+
+          expect(positionOf(await confirmFor("Plugin B"))).toBe("Update 2 of 2");
+          expect(screen.queryByLabelText("Plugin URL")).toBeNull();
+          expect(installMock()).not.toHaveBeenCalled();
+        });
+
+        it("stops the run, dropping the parked install", async () => {
+          httpFirst();
+          renderDialog();
+          fireEvent.click(await screen.findByRole("button", { name: "Update all" }));
+          fireEvent.click(
+            within(await confirmFor("Plugin A")).getByRole("button", { name: "Reinstall plugin" })
+          );
+
+          fireEvent.click(
+            within(await httpWarning()).getByRole("button", { name: "Stop updates" })
+          );
+          await waitFor(() => expect(screen.queryByText("Install over HTTP?")).toBeNull());
+          expect(screen.queryByText(/^Update '/)).toBeNull();
+          expect(screen.queryByLabelText("Plugin URL")).toBeNull();
+          expect(installMock()).not.toHaveBeenCalled();
+        });
+      });
+
       it("keeps plain Cancel for a single-plugin check", async () => {
         listMock().mockResolvedValue([makeUrl("acme.a", "Plugin A")]);
         checkMock().mockResolvedValue({

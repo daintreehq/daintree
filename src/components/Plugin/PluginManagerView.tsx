@@ -337,6 +337,19 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
   // column — behind the dialog's own scrim. Each now renders the message
   // itself, and this stops the sidebar showing a second, hidden copy.
   const errorOwnedByDialog = pm.showUrlDialog || pm.pendingUninstall !== null;
+  // An "Update all" run with more than one update walks them one confirm at a
+  // time, so dismissing one skips it rather than ending the run. Those confirms
+  // say so, say where the run is, and offer a way out of the rest (#15042). A
+  // single check, or a run that found one update, keeps its plain Cancel.
+  const updateBatch = pm.updateBatch && pm.updateBatch.total > 1 ? pm.updateBatch : null;
+  const batchControls = updateBatch && {
+    cancelLabel: "Skip update",
+    hint: `Update ${updateBatch.position} of ${updateBatch.total}`,
+    hintPlacement: "above" as const,
+    leadingAction: { label: "Stop updates", onClick: pm.stopUpdateBatch },
+    initialFocus: "cancel" as const,
+  };
+  const httpBatchControls = pm.pendingHttpFromReinstall ? batchControls : null;
 
   // Selection is pure UI state owned by the view — `usePluginManager` stays
   // data/IPC only. The detail pane derives from the selected id.
@@ -1173,6 +1186,11 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
         isConfirmLoading={pm.isReinstalling}
         variant={pm.updatePanels.length > 0 ? "destructive" : "default"}
         zIndex="nested"
+        // Skipping keeps this one dialog open on the next plugin, which must
+        // not inherit the last one's focus or scroll.
+        focusResetKey={pm.pendingUpdate?.plugin.manifest.name}
+        bodyResetKey={pm.pendingUpdate?.plugin.manifest.name}
+        {...batchControls}
       >
         <UnsavedPanelsCallout verb="Updating" panels={pm.updatePanels} className="mt-3" />
         {pm.pendingUpdate && (
@@ -1247,6 +1265,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
         isConfirmLoading={pm.isInstalling}
         variant="destructive"
         zIndex="nested"
+        {...httpBatchControls}
       />
 
       <AppDialog
