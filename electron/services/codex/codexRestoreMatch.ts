@@ -58,9 +58,8 @@ function escapeRegExp(text: string): string {
  * both markers.
  */
 const HANDBACK_SUFFIX = (() => {
-  const [head, ...rest] = HANDBACK_INSTRUCTION_TEMPLATE.split(HANDBACK_CODE_TOKEN).map(
-    escapeRegExp
-  );
+  const [head, ...rest] =
+    HANDBACK_INSTRUCTION_TEMPLATE.split(HANDBACK_CODE_TOKEN).map(escapeRegExp);
   const body = rest.reduce(
     (pattern, part, index) => `${pattern}${index === 0 ? "([a-z0-9]{6})" : "\\1"}${part}`,
     head ?? ""

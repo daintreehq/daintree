@@ -827,7 +827,10 @@ export async function matchCodexRestoreSessions(
  * be resumed — both stay candidates, so they still make a pane ambiguous, but
  * neither is ever handed out.
  */
-function toRestoreMatchThreads(threads: RawThread[], unavailable: Set<string>): RestoreMatchThread[] {
+function toRestoreMatchThreads(
+  threads: RawThread[],
+  unavailable: Set<string>
+): RestoreMatchThread[] {
   const byId = new Map<string, RestoreMatchThread>();
   for (const thread of threads) {
     const id = asString(thread.sessionId) ?? asString(thread.id);

@@ -491,7 +491,8 @@ function codexHomeOf(env: TerminalState["env"]): string | null | undefined {
   if (key === undefined) return undefined;
   const value = env[key];
   if (typeof value !== "string" || value.length > 4096 || value.includes("\0")) return null;
-  const absolute = value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value) || value.startsWith("\\\\");
+  const absolute =
+    value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value) || value.startsWith("\\\\");
   return absolute ? value : null;
 }
 
@@ -663,20 +664,23 @@ function planCodexRestoreMatches(
     return NO_CODEX_RESTORE_MATCHES;
   }
 
-  const paneIds = new Set(asking.flat().filter((entry) => entry.resolve).map((entry) => entry.key));
+  const paneIds = new Set(
+    asking
+      .flat()
+      .filter((entry) => entry.resolve)
+      .map((entry) => entry.key)
+  );
   const matches = (async (): Promise<ReadonlyMap<string, string>> => {
     const scopes = await Promise.all(
       asking.map(async (group): Promise<CodexRestoreMatchScope> => {
         const first = group[0]!;
         const panes = await Promise.all(
-          group.map(
-            async (entry): Promise<CodexRestoreMatchPane> => ({
-              key: entry.key,
-              promptHash: await launchPromptHash(entry.text),
-              at: entry.at,
-              resolve: entry.resolve,
-            })
-          )
+          group.map(async (entry): Promise<CodexRestoreMatchPane> => ({
+            key: entry.key,
+            promptHash: await launchPromptHash(entry.text),
+            at: entry.at,
+            resolve: entry.resolve,
+          }))
         );
         return {
           cwd: first.cwd,
@@ -1396,7 +1400,9 @@ export async function restorePanelsPhase(
                     ? { ...saved, agentSessionId: matchedSessionId, restoreRecovery: undefined }
                     : saved;
                 if (respawnSaved !== saved) {
-                  logHydrationInfo(`Resuming ${saved.id} on the conversation its launch prompt names`);
+                  logHydrationInfo(
+                    `Resuming ${saved.id} on the conversation its launch prompt names`
+                  );
                 }
                 const respawnArgs = buildArgsForRespawn(
                   respawnSaved,

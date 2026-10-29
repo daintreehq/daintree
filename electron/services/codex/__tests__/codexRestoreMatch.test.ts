@@ -18,11 +18,19 @@ function paneHash(text: string): string {
   return hashPromptText(launchPromptArgText(text));
 }
 
-function thread(sessionId: string, firstMessage: string, createdAtMs = AT + 2_000): RestoreMatchThread {
+function thread(
+  sessionId: string,
+  firstMessage: string,
+  createdAtMs = AT + 2_000
+): RestoreMatchThread {
   return { sessionId, createdAtMs, promptHashes: promptHashesForFirstMessage(firstMessage) };
 }
 
-function pane(key: string, text: string, overrides: Partial<RestoreMatchPane> = {}): RestoreMatchPane {
+function pane(
+  key: string,
+  text: string,
+  overrides: Partial<RestoreMatchPane> = {}
+): RestoreMatchPane {
   return { key, promptHash: paneHash(text), at: AT, resolve: true, ...overrides };
 }
 
@@ -190,7 +198,12 @@ describe("matchRestorePanes", () => {
 
   it("answers the same whatever order the panes and threads arrive in", () => {
     const threads = [thread("t-a", "Task A"), thread("t-b", "Task B"), thread("t-x", "Shared")];
-    const panes = [pane("a", "Task A"), pane("b", "Task B"), pane("x", "Shared"), pane("y", "Shared")];
+    const panes = [
+      pane("a", "Task A"),
+      pane("b", "Task B"),
+      pane("x", "Shared"),
+      pane("y", "Shared"),
+    ];
 
     const forward = matchRestorePanes([{ threads, panes }], new Set());
     const reversed = matchRestorePanes(
