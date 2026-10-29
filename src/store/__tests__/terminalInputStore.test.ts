@@ -23,10 +23,166 @@ describe("terminalInputStore", () => {
       pendingDrafts: new Map(),
       pendingDraftRevision: 0,
       stashedEditorStates: new Map(),
+      fleetDraftHolds: new Map(),
       externalDraftRevision: 0,
       lastTypedAgentTarget: null,
     });
     vi.mocked(getViewWorkspaceId).mockReturnValue(null);
+  });
+
+  describe("fleet draft holds (#14949)", () => {
+    const P = "proj-1";
+    const fleet = (...ids: string[]) => new Set(ids);
+    const draft = (id: string) => useTerminalInputStore.getState().getDraftInput(id, P);
+    const hold = (id: string) => useTerminalInputStore.getState().fleetDraftHolds.get(`${P}:${id}`);
+
+    it("holds a follower's own draft the first time the fleet's replaces it", () => {
+      const store = useTerminalInputStore.getState();
+      store.setDraftInput("a", "shared", P);
+      store.setDraftInput("b", "b's own", P);
+
+      store.mirrorFleetDraft("a", "shared", fleet("a", "b"), P);
+      store.mirrorFleetDraft("a", "shared, edited", fleet("a", "b"), P);
+
+      expect(draft("b")).toBe("shared, edited");
+      expect(hold("b")).toEqual({ terminalId: "b", draft: "b's own" });
+    });
+
+    it("holds an empty draft, and takes an empty primary's draft over a follower's", () => {
+      const store = useTerminalInputStore.getState();
+      store.setDraftInput("b", "b's own", P);
+
+      store.mirrorFleetDraft("a", "", fleet("a", "b"), P);
+      expect(useTerminalInputStore.getState().draftInputs.has(`${P}:b`)).toBe(false);
+      store.mirrorFleetDraft("a", "x", fleet("a", "b", "c"), P);
+
+      expect(draft("b")).toBe("x");
+      expect(hold("b")?.draft).toBe("b's own");
+      expect(hold("c")?.draft).toBe("");
+    });
+
+    it("holds nothing for a primary: its draft is the fleet's", () => {
+      const store = useTerminalInputStore.getState();
+      store.setDraftInput("a", "a's draft", P);
+      store.setDraftInput("b", "b's own", P);
+      store.mirrorFleetDraft("a", "a's draft", fleet("a", "b"), P);
+
+      // B takes focus and edits the fleet's draft, which reaches A.
+      store.mirrorFleetDraft("b", "a's draft, edited in b", fleet("a", "b"), P);
+      store.releaseFleetDraftHolds(fleet());
+
+      expect(draft("a")).toBe("a's draft, edited in b");
+      expect(draft("b")).toBe("b's own");
+    });
+
+    it("leaves the store untouched when the fleet's draft is already everywhere", () => {
+      const store = useTerminalInputStore.getState();
+      store.setDraftInput("a", "same", P);
+      store.setDraftInput("b", "same", P);
+      store.mirrorFleetDraft("a", "same", fleet("a", "b"), P);
+      const before = useTerminalInputStore.getState();
+
+      store.mirrorFleetDraft("a", "same", fleet("a", "b"), P);
+
+      expect(useTerminalInputStore.getState()).toBe(before);
+      expect(hold("b")).toBeUndefined();
+    });
+
+    it("gives back only the drafts of members no longer in the fleet", () => {
+      const store = useTerminalInputStore.getState();
+      store.setDraftInput("b", "b's own", P);
+      store.setDraftInput("c", "c's own", P);
+      store.mirrorFleetDraft("a", "shared", fleet("a", "b", "c"), P);
+
+      store.releaseFleetDraftHolds(fleet("a", "c"));
+
+      expect(draft("b")).toBe("b's own");
+      expect(hold("b")).toBeUndefined();
+      expect(draft("c")).toBe("shared");
+      expect(hold("c")?.draft).toBe("c's own");
+      expect(hold("a")?.draft).toBeNull();
+    });
+
+    it("gives an empty draft back as no draft", () => {
+      const store = useTerminalInputStore.getState();
+      store.mirrorFleetDraft("a", "shared", fleet("a", "b"), P);
+
+      store.releaseFleetDraftHolds(fleet());
+
+      expect(useTerminalInputStore.getState().draftInputs.has(`${P}:b`)).toBe(false);
+      expect(useTerminalInputStore.getState().fleetDraftHolds.size).toBe(0);
+    });
+
+    it("drops the hold when the pane already shows its own draft again", () => {
+      const store = useTerminalInputStore.getState();
+      store.setDraftInput("b", "b's own", P);
+      store.mirrorFleetDraft("a", "shared", fleet("a", "b"), P);
+      store.setDraftInput("b", "b's own", P);
+
+      store.releaseFleetDraftHolds(fleet());
+
+      expect(hold("b")).toBeUndefined();
+      expect(draft("b")).toBe("b's own");
+    });
+
+    // An empty primary leaves B nothing in the draft map: the hold is all it has.
+    function holdUnderEmptyFleetDraft(): void {
+      const store = useTerminalInputStore.getState();
+      store.setDraftInput("b", "b's own", P);
+      store.setDraftInput("c", "c's own", P);
+      store.mirrorFleetDraft("a", "", fleet("a", "b", "c"), P);
+      store.setDraftInput("d", "d's own", "proj-2");
+      store.mirrorFleetDraft("e", "", fleet("e", "d"), "proj-2");
+    }
+
+    it("drops a closed terminal's hold without giving its draft back", () => {
+      holdUnderEmptyFleetDraft();
+      const store = useTerminalInputStore.getState();
+
+      store.clearTerminalState("b");
+
+      expect(hold("b")).toBeUndefined();
+      expect(hold("c")?.draft).toBe("c's own");
+      store.releaseFleetDraftHolds(fleet());
+      expect(draft("b")).toBe("");
+      expect(draft("c")).toBe("c's own");
+    });
+
+    it("drops a project's holds on a switch, keeping preserved terminals' and other projects'", () => {
+      holdUnderEmptyFleetDraft();
+      const store = useTerminalInputStore.getState();
+
+      store.resetForProjectSwitch(P, new Set(["c"]));
+
+      expect(hold("b")).toBeUndefined();
+      expect(hold("c")?.draft).toBe("c's own");
+      expect(useTerminalInputStore.getState().fleetDraftHolds.get("proj-2:d")?.draft).toBe(
+        "d's own"
+      );
+      store.releaseFleetDraftHolds(fleet());
+      expect(draft("b")).toBe("");
+    });
+
+    it("drops a hold when a newer draft is restored for the pane, and only that one", () => {
+      holdUnderEmptyFleetDraft();
+      const store = useTerminalInputStore.getState();
+
+      store.restoreProjectDraftInputs(P, { b: "edited on another screen" });
+      store.releaseFleetDraftHolds(fleet());
+
+      expect(draft("b")).toBe("edited on another screen");
+      expect(draft("c")).toBe("c's own");
+    });
+
+    it("drops every hold with all drafts", () => {
+      const store = useTerminalInputStore.getState();
+      store.setDraftInput("b", "b's own", P);
+      store.mirrorFleetDraft("a", "shared", fleet("a", "b"), P);
+
+      store.clearAllDraftInputs();
+
+      expect(useTerminalInputStore.getState().fleetDraftHolds.size).toBe(0);
+    });
   });
 
   describe("sent prompts", () => {

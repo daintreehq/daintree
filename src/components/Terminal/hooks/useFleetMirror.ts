@@ -36,14 +36,15 @@ export function useFleetMirror({
   const isApplyingExternalValueRef = useRef(false);
   const armedIds = useFleetArmingStore((s) => s.armedIds);
 
-  // Primary → followers: write our current draft to each other armed pane's draft slot
+  // Primary → followers: write our current draft to each other armed pane's
+  // draft slot, holding each one's own draft the first time it's replaced.
   useEffect(() => {
     if (isolated || !isFleetPrimary || disabled) return;
-    const setDraft = useTerminalInputStore.getState().setDraftInput;
-    for (const otherId of armedIds) {
-      if (otherId === terminalId) continue;
-      setDraft(otherId, value, projectId);
-    }
+    // The fleet as it is now, not as it rendered: a fleet cleared since would
+    // otherwise get this draft, and holds nothing is left to release.
+    const liveArmedIds = useFleetArmingStore.getState().armedIds;
+    if (!liveArmedIds.has(terminalId) || liveArmedIds.size < 2) return;
+    useTerminalInputStore.getState().mirrorFleetDraft(terminalId, value, liveArmedIds, projectId);
     useFleetResolutionPreviewStore.getState().setDraft(value);
   }, [isFleetPrimary, value, armedIds, terminalId, projectId, isolated]);
 
@@ -68,6 +69,31 @@ export function useFleetMirror({
       clearComposerHistory(view);
     }
   }, [externalDraft, isFleetFollower, value, isolated]);
+
+  // Leaving the fleet: the draft store has this pane's own draft back.
+  const holdsOwnDraft = useTerminalInputStore(
+    (s) => typeof s.fleetDraftHolds.get(externalDraftKey)?.draft === "string"
+  );
+  const heldOwnDraftRef = useRef(holdsOwnDraft);
+  useEffect(() => {
+    const wasHeld = heldOwnDraftRef.current;
+    heldOwnDraftRef.current = holdsOwnDraft;
+    if (isolated || holdsOwnDraft || !wasHeld) return;
+    const draft = useTerminalInputStore.getState().draftInputs.get(externalDraftKey) ?? "";
+    lastEmittedValueRef.current = draft;
+    setValue(draft);
+    const view = editorViewRef.current;
+    if (!view) return;
+    if (view.state.doc.toString() !== draft) {
+      isApplyingExternalValueRef.current = true;
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: draft },
+        annotations: Transaction.addToHistory.of(false),
+      });
+    }
+    // Every step since it was held edited the fleet's draft, not this one.
+    clearComposerHistory(view);
+  }, [holdsOwnDraft, externalDraftKey, isolated, editorViewRef, lastEmittedValueRef, setValue]);
 
   // Clear resolution preview when not primary or disabled. Per-target
   // overrides (#8691) ride alongside — they're ephemeral per-broadcast and
