@@ -34,8 +34,15 @@ function seedTabs(count: number) {
     url: `https://example.com/${i}`,
     title: `Tab ${i}`,
   }));
+  // The store gets its own copies so an in-place mutation can't change the
+  // expected value along with the actual one, and the last tab is active so a
+  // reset to the first tab shows up.
   act(() => {
-    usePortalStore.setState({ isOpen: true, tabs, activeTabId: tabs[0]?.id ?? null });
+    usePortalStore.setState({
+      isOpen: true,
+      tabs: tabs.map((tab) => ({ ...tab })),
+      activeTabId: tabs[tabs.length - 1]!.id,
+    });
   });
   return tabs;
 }
@@ -78,7 +85,7 @@ describe("PortalDock — close button", () => {
     const state = usePortalStore.getState();
     expect(state.isOpen).toBe(false);
     expect(state.tabs).toEqual(tabs);
-    expect(state.activeTabId).toBe(tabs[0]!.id);
+    expect(state.activeTabId).toBe(tabs[tabs.length - 1]!.id);
   });
 
   it("does not dispatch portal.closeAllTabs", () => {
