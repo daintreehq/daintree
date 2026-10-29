@@ -241,8 +241,8 @@ export interface SendTextOptions {
   /**
    * Handed what the pane's `onSend` returned — a promise of whether the
    * terminal accepted the text, from a host that can say — once the composer
-   * has been reset after the send. Not called when `submit` replaces the
-   * handoff.
+   * has been reset after the send. With `submit`, the terminal has already
+   * taken the text by then, and a draft the send left alone hands nothing.
    */
   onHandedOff?: (accepted: Promise<boolean> | void) => void;
 }
@@ -463,7 +463,8 @@ export function useTokenResolution({
         // The whole composer reset is one decision: if the draft is newer than
         // what went out, collapsing it and closing the completion the user has
         // since opened would be the same overreach as deleting their text.
-        if (options?.isDraftUnchanged?.() ?? true) {
+        const reset = options?.isDraftUnchanged?.() ?? true;
+        if (reset) {
           setIsExpanded(false);
           if (options?.keepDraft) {
             options.keepDraft();
@@ -477,6 +478,7 @@ export function useTokenResolution({
           setActiveCompletionContext(null);
         }
         if (!options?.submit) options?.onHandedOff?.(accepted);
+        else if (reset) options.onHandedOff?.(Promise.resolve(true));
         return true;
       } finally {
         isSendingRef.current = false;

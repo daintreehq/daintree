@@ -4,8 +4,9 @@ import { logWarn } from "@/utils/logger";
 /**
  * Submits a pane's composer text and says whether the terminal accepted it,
  * which is when a terminal-first user gets the keyboard back (#14692). submit
- * rejects when the PTY is gone (#8706); the single-pane path has no recovery
- * UI for that, so it is logged. Banners/agent-state surface the dead pane.
+ * rejects when the PTY is gone (#8706), input is blocked, or main refuses an
+ * attachment: the composer then keeps the draft and says it wasn't sent
+ * (#14945), and the reason is logged here.
  */
 export function submitComposerText(
   id: string,

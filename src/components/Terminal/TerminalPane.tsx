@@ -25,6 +25,7 @@ import type {
 import { cn } from "@/lib/utils";
 import { isMac } from "@/lib/platform";
 import { reportCanopySent } from "@/lib/canopySeen";
+import { buildTerminalSendPayload } from "@/lib/terminalInput";
 import { BANNER_ENTER_DURATION, BANNER_EXIT_DURATION } from "@/lib/animationUtils";
 import { XtermAdapter } from "./XtermAdapter";
 import { ArtifactOverlay } from "./ArtifactOverlay";
@@ -889,6 +890,22 @@ function TerminalPaneComponent({
     },
     [id, inputTracker, updateLastCommand]
   );
+
+  // Says whether the terminal took the composer's text: the composer keeps a
+  // refused draft where it was typed (#14945). Only an accepted send counts
+  // as the user's input to the agent.
+  const submitFromComposer = async (
+    text: string,
+    imagePaths: readonly string[] | undefined
+  ): Promise<boolean> => {
+    if (isInputLocked || isRestarting) return false;
+    withTerminalService((service) => service.notifyUserInput(id), id);
+    const accepted = await submitComposerText(id, text, imagePaths ? [...imagePaths] : undefined);
+    if (!accepted) return false;
+    reportCanopySent(id);
+    handleInput(buildTerminalSendPayload(text).trackerData);
+    return true;
+  };
 
   useEffect(() => {
     const handleFindInPanel = () => {
@@ -1859,14 +1876,8 @@ function TerminalPaneComponent({
                     agentState={agentState}
                     restartKey={restartKey}
                     onActivate={handleClick}
-                    onSend={({ trackerData, text, imagePaths }) => {
-                      if (isInputLocked || isRestarting) return;
-                      withTerminalService((service) => service.notifyUserInput(id), id);
-                      reportCanopySent(id);
-                      const accepted = submitComposerText(id, text, imagePaths);
-                      handleInput(trackerData);
-                      return accepted;
-                    }}
+                    onSend={({ text, imagePaths }) => void submitFromComposer(text, imagePaths)}
+                    submitText={submitFromComposer}
                     onSendKey={(key) => {
                       if (!isInputLocked && !isRestarting) {
                         if (key === "escape") {

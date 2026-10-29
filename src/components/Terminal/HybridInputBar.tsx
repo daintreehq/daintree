@@ -122,7 +122,11 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useVoiceDecorations } from "./hooks/useVoiceDecorations";
 import { useContextDetection } from "./hooks/useContextDetection";
-import { draftUnchangedSince, useTokenResolution } from "./hooks/useTokenResolution";
+import {
+  draftUnchangedSince,
+  useTokenResolution,
+  type SendTextOptions,
+} from "./hooks/useTokenResolution";
 import { useEditorKeymap, type ComposerSendRoute } from "./hooks/useEditorKeymap";
 import { useCompartmentDriver } from "./hooks/useCompartmentDriver";
 import { usePasteExtensions } from "./hooks/usePasteExtensions";
@@ -327,11 +331,12 @@ function editorOwnsDomFocus(view: EditorView): boolean {
  * Drag feedback for both editor hosts — the compact bar and the Expanded
  * Editor. Shared so the two drop targets cannot drift apart again (#12570).
  */
+const SEND_HELD_STATUS = "Not sent. The draft is still here.";
 const VOICE_SUBMIT_OUTCOME_STATUS: Record<VoiceSubmitOutcome["kind"], string> = {
   sending: "Sending…",
   sent: "Sent",
   cancelled: "Send cancelled",
-  held: "Not sent. The draft is still here.",
+  held: SEND_HELD_STATUS,
 };
 
 function FileDropOverlay({ className }: { className?: string }) {
@@ -1143,31 +1148,52 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       afterExpandedEditorCloses,
     });
 
+    // A send the terminal turned down leaves its draft where it was typed, and
+    // says so until the draft is next edited or sent (#14945). A dictated send
+    // says it through its own outcome instead.
+    const [refusedSendFor, setRefusedSendFor] = useState<string | null>(null);
+    const submitAttemptRef = useRef(0);
+    const notingRefusal = useCallback(
+      (submit: (outgoing: string) => Promise<boolean>, saidElsewhere: boolean) =>
+        async (outgoing: string): Promise<boolean> => {
+          const attempt = ++submitAttemptRef.current;
+          setRefusedSendFor(null);
+          const accepted = await submit(outgoing).catch(() => false);
+          if (!accepted && !saidElsewhere && submitAttemptRef.current === attempt) {
+            setRefusedSendFor(terminalId);
+          }
+          return accepted;
+        },
+      [terminalId]
+    );
+
     // Every way this composer sends — Enter, a picked slash command, a prompt
     // from the command picker — goes through `submitText` when it is given, so
     // a refused send never eats the draft, whichever path sent it.
-    const sendText = useCallback<typeof sendResolvedText>(
-      (text, options) => {
-        const submit = submitTextRef.current;
-        if (options?.submit) return sendResolvedText(text, options);
-        if (!submit) {
-          // Claimed before any expansion is awaited, so a press while a diff
-          // is fetched calls the hand-back off.
-          return sendResolvedText(text, {
-            ...options,
-            onHandedOff: options?.onHandedOff ?? claimSendHandBack(),
-          });
-        }
-        const imagePaths = options?.imagePaths ?? [];
+    const sendText = useCallback(
+      (text: string, options?: SendTextOptions & { refusalSaidElsewhere?: boolean }) => {
+        const { refusalSaidElsewhere = false, ...sendOptions } = options ?? {};
+        if (sendOptions.submit) return sendResolvedText(text, sendOptions);
+        // Claimed before any expansion is awaited, so a press while a diff
+        // is fetched calls the hand-back off.
+        const onHandedOff = sendOptions.onHandedOff ?? claimSendHandBack();
+        if (!submitTextRef.current) return sendResolvedText(text, { ...sendOptions, onHandedOff });
+        const imagePaths = sendOptions.imagePaths ?? [];
         return sendResolvedText(text, {
           // Awaited now, so the user can type while it is on its way: only the
           // text that went out is cleared, whichever path sent it.
           isDraftUnchanged: guardSentDraft(latestRef.current?.projectId),
-          ...options,
-          submit: (outgoing: string) => submit(outgoing, imagePaths),
+          ...sendOptions,
+          onHandedOff,
+          // The host's as it stands when the text goes, not at the press: an
+          // expansion awaited in between can outlast a lock or a restart.
+          submit: notingRefusal(
+            (outgoing) => submitTextRef.current?.(outgoing, imagePaths) ?? Promise.resolve(false),
+            refusalSaidElsewhere
+          ),
         });
       },
-      [sendResolvedText, guardSentDraft, claimSendHandBack]
+      [sendResolvedText, guardSentDraft, claimSendHandBack, notingRefusal]
     );
 
     const resetEditorDoc = () => {
@@ -1244,8 +1270,14 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         onHandedOff: handBack,
         keepDraft,
         dictationSessions: voiceSend?.sessions,
+        refusalSaidElsewhere: voiceSend !== undefined,
         // Routed at its key press: through the route, in place of `submitText`.
-        ...(route && { submit: (outgoing: string) => route.submitText(outgoing, imagePaths) }),
+        ...(route && {
+          submit: notingRefusal(
+            (outgoing) => route.submitText(outgoing, imagePaths),
+            voiceSend !== undefined
+          ),
+        }),
       });
     };
 
@@ -1301,11 +1333,14 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     );
     // The session's status on the border, for a draft that hides the
     // placeholder saying it. The send's own caption has the border first.
+    const isSendRefused = refusedSendFor === terminalId;
+    const showSendRefusedCaption = isSendRefused && !isVoiceSubmitting && !isVoiceSubmitPresenting;
     const showVoiceSessionCaption =
       voiceSessionStatus !== null &&
       (value.length > 0 || hasVoicePreview) &&
       !isVoiceSubmitting &&
-      !isVoiceSubmitPresenting;
+      !isVoiceSubmitPresenting &&
+      !showSendRefusedCaption;
 
     const voiceSlotRef = useRef<HTMLSpanElement>(null);
     const voiceSlotFocusedRef = useRef(false);
@@ -1330,16 +1365,20 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     // Editor waits there, and a live region outside its modal goes unheard.
     const voiceSubmitAnnouncer = (
       <div role="status" aria-live="polite" className="sr-only">
-        {voiceSubmitStatus}
+        {isSendRefused ? SEND_HELD_STATUS : voiceSubmitStatus}
       </div>
     );
     // The Expanded Editor has no composer shell to draw the wait's progress
-    // in, so its header names the wait. Nothing covers the draft: the cleanup
-    // is still writing over it.
-    const expandedVoiceSubmitLabel =
+    // in, so its header names the wait, or a send that didn't go. Nothing
+    // covers the draft: the cleanup is still writing over it.
+    const expandedSubmitLabel =
       voiceSubmitWait && showVoiceSubmitStatus ? (
         <span aria-hidden="true" className="ml-auto mr-3 text-xs text-text-secondary">
           {voiceSubmitWaitCaption(voiceSubmitWait)}
+        </span>
+      ) : isSendRefused ? (
+        <span aria-hidden="true" className="ml-auto mr-3 text-xs text-text-secondary">
+          Not sent
         </span>
       ) : null;
 
@@ -1597,6 +1636,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         if (next === lastEmittedValueRef.current) return false;
         lastEmittedValueRef.current = next;
         setValue(next);
+        setRefusedSendFor(null);
         return true;
       },
       consumeExternalValueFlag: () => {
@@ -1932,6 +1972,15 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                 className={COMPOSER_BORDER_CAPTION_CLASS}
               >
                 {voiceSessionStatus}
+              </div>
+            )}
+            {showSendRefusedCaption && (
+              <div
+                aria-hidden="true"
+                data-send-refused-caption=""
+                className={COMPOSER_BORDER_CAPTION_CLASS}
+              >
+                Not sent
               </div>
             )}
             <AutocompleteMenu
@@ -2291,7 +2340,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         >
           <AppDialog.Header>
             <AppDialog.Title>Expanded editor</AppDialog.Title>
-            {isExpanded && expandedVoiceSubmitLabel}
+            {isExpanded && expandedSubmitLabel}
             <AppDialog.CloseButton />
           </AppDialog.Header>
           {/* CodeMirror claims file drops to suppress its own text insertion

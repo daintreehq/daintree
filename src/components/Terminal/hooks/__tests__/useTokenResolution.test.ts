@@ -425,15 +425,37 @@ describe("useTokenResolution.sendText — the pane's acceptance (#14692)", () =>
     expect(onHandedOff).toHaveBeenCalledWith(undefined);
   });
 
-  it("is not told about a targeted submit, accepted or refused", async () => {
-    const { sendText } = setup();
-    const onHandedOff = vi.fn();
+  it("hands on an accepted submit once the composer has been reset, and never a refused one", async () => {
+    const { sendText, clearDraftInput } = setup();
+    const onHandedOff = vi.fn((_accepted: Promise<boolean> | void) => {
+      expect(clearDraftInput).toHaveBeenCalledTimes(1);
+    });
+
+    await act(async () => {
+      await sendText("ship it", { submit: async () => false, onHandedOff });
+    });
+    expect(onHandedOff).not.toHaveBeenCalled();
 
     await act(async () => {
       await sendText("ship it", { submit: async () => true, onHandedOff });
-      await sendText("ship it", { submit: async () => false, onHandedOff });
+    });
+    expect(onHandedOff).toHaveBeenCalledTimes(1);
+    await expect(onHandedOff.mock.calls[0]![0]).resolves.toBe(true);
+  });
+
+  it("hands on nothing from an accepted submit whose draft changed while it was on its way", async () => {
+    const { sendText, clearDraftInput } = setup();
+    const onHandedOff = vi.fn();
+
+    await act(async () => {
+      await sendText("ship it", {
+        submit: async () => true,
+        isDraftUnchanged: () => false,
+        onHandedOff,
+      });
     });
 
+    expect(clearDraftInput).not.toHaveBeenCalled();
     expect(onHandedOff).not.toHaveBeenCalled();
   });
 });
