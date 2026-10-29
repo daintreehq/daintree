@@ -1705,10 +1705,7 @@ export function Toolbar({
                         }
                         saveAsProjectConfirm={projectSwitcher.saveAsProjectConfirm}
                         onDismissSaveAsProjectConfirm={projectSwitcher.dismissSaveAsProjectConfirm}
-                        onConfirmDeleteOriginalScratch={() =>
-                          void projectSwitcher.confirmDeleteOriginalScratch()
-                        }
-                        isDeletingOriginalScratch={projectSwitcher.isDeletingOriginalScratch}
+                        onOpenSavedProject={projectSwitcher.openSavedProject}
                       >
                         {projectSwitcherTrigger}
                       </LazyProjectSwitcherPalette>

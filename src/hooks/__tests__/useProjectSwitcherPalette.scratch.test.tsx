@@ -9,7 +9,7 @@
  */
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Scratch } from "@shared/types";
+import type { Project, Scratch } from "@shared/types";
 
 /**
  * The slice of a notify() payload these specs read back. Declaring it here lets the
@@ -49,7 +49,8 @@ const {
   };
 
   const projectState = {
-    projects: [],
+    // Typed so the save-as-project specs can seed the row a refresh would bring.
+    projects: [] as Project[],
     currentProject: null as { id: string } | null,
     switchProject: vi.fn().mockResolvedValue(undefined),
     reopenProject: vi.fn().mockResolvedValue(undefined),
@@ -161,7 +162,7 @@ const { closeAndAnnounce: realCloseAndAnnounce } =
 
 import { useProjectSwitcherPalette } from "../useProjectSwitcherPalette";
 import type { SearchableScratch } from "../useProjectSwitcherPalette";
-import { projectClient } from "@/clients";
+import { projectClient, scratchClient } from "@/clients";
 
 /** Pulls the "Try again" handler out of the last error notification. */
 function lastRetryAction(): () => Promise<void> {
@@ -183,6 +184,11 @@ beforeEach(() => {
   scratchState.renameScratch.mockResolvedValue(undefined);
   scratchState.removeScratch.mockResolvedValue(undefined);
   closeAndAnnounceSpy.mockImplementation(realCloseAndAnnounce);
+  // `clearAllMocks` keeps resolved values and plain fields, so a save-as-project
+  // spec's saved result or seeded project row would otherwise reach every
+  // describe that runs after it.
+  useProjectStoreMock.getState().projects = [];
+  vi.mocked(scratchClient.saveAsProject).mockResolvedValue({ status: "cancelled" });
 });
 
 /**
@@ -1560,5 +1566,157 @@ describe("fleetLiveness", () => {
     // launched, and folding it in would make the worker tally a lie.
     expect(result.current.fleetLiveness.runningAgentCount).toBe(2);
     expect(result.current.fleetLiveness.workingAssistantCount).toBe(1);
+  });
+});
+
+/**
+ * Save as project is a copy (#15004). The scratch's terminals and agents keep
+ * working in the original folder, so the follow-up must never take the scratch
+ * away; what it offers is a way into the project the copy became.
+ */
+describe("saveAsProject follow-up", () => {
+  const savedProject: Project = {
+    id: "project-saved",
+    path: "/Users/me/code/retry-queue",
+    name: "retry-queue",
+    emoji: "🌲",
+    lastOpened: 5_000,
+    status: "closed",
+  };
+
+  beforeEach(() => {
+    vi.mocked(scratchClient.saveAsProject).mockResolvedValue({
+      status: "saved",
+      project: savedProject,
+      destinationPath: savedProject.path,
+    });
+  });
+
+  async function saveFirstScratch() {
+    seedScratches(1);
+    // The scratch is busy: the case where deleting it would lose work.
+    projectStatsState.stats = {
+      "scratch-1": { activeAgentCount: 1, waitingAgentCount: 0, processCount: 2 },
+    };
+    const hook = renderHook(() => useProjectSwitcherPalette());
+    act(() => {
+      hook.result.current.open();
+    });
+    await act(async () => {
+      await hook.result.current.saveAsProject("scratch-1");
+    });
+    return hook;
+  }
+
+  it("names the copy and the project it became, and leaves the scratch alone", async () => {
+    const { result } = await saveFirstScratch();
+
+    expect(result.current.saveAsProjectConfirm).toEqual({
+      scratch: { id: "scratch-1", name: "Spike 1" },
+      project: savedProject,
+    });
+    expect(scratchState.removeScratch).not.toHaveBeenCalled();
+    // Saving alone never moves the window: the user decides whether to go.
+    expect(useProjectStoreMock.getState().switchProject).not.toHaveBeenCalled();
+  });
+
+  it("opens no follow-up when the picker is cancelled", async () => {
+    vi.mocked(scratchClient.saveAsProject).mockResolvedValue({ status: "cancelled" });
+
+    const { result } = await saveFirstScratch();
+
+    expect(result.current.saveAsProjectConfirm).toBeNull();
+  });
+
+  it("switches to the saved project and closes the follow-up and the palette", async () => {
+    const { result } = await saveFirstScratch();
+
+    act(() => {
+      result.current.openSavedProject();
+    });
+
+    expect(useProjectStoreMock.getState().switchProject).toHaveBeenCalledWith("project-saved");
+    expect(result.current.saveAsProjectConfirm).toBeNull();
+    expect(result.current.isOpen).toBe(false);
+    expect(scratchState.removeScratch).not.toHaveBeenCalled();
+  });
+
+  it("switches once when Open is double-fired in a single tick", async () => {
+    const { result } = await saveFirstScratch();
+
+    act(() => {
+      result.current.openSavedProject();
+      result.current.openSavedProject();
+    });
+
+    expect(useProjectStoreMock.getState().switchProject).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens the project through its live row once the list has it", async () => {
+    // The returned record says closed; while the follow-up is open, the list
+    // refreshes with the project running in the background (another window
+    // opened it). The live row wins, so the open goes through `reopenProject`
+    // like picking that row would, and a callback holding the list from before
+    // the refresh would miss it.
+    const { result, rerender } = await saveFirstScratch();
+    act(() => {
+      useProjectStoreMock.getState().projects = [{ ...savedProject, status: "background" }];
+      rerender();
+    });
+
+    act(() => {
+      result.current.openSavedProject();
+    });
+
+    expect(useProjectStoreMock.getState().reopenProject).toHaveBeenCalledWith("project-saved");
+    expect(useProjectStoreMock.getState().switchProject).not.toHaveBeenCalled();
+  });
+
+  it("opens again after a second save of the same project", async () => {
+    // The double-press guard is per follow-up. One that stayed latched would
+    // leave the next save's Open doing nothing.
+    const { result } = await saveFirstScratch();
+    act(() => {
+      result.current.openSavedProject();
+    });
+
+    act(() => {
+      result.current.open();
+    });
+    await act(async () => {
+      await result.current.saveAsProject("scratch-1");
+    });
+    expect(result.current.saveAsProjectConfirm).not.toBeNull();
+    act(() => {
+      result.current.openSavedProject();
+    });
+
+    expect(useProjectStoreMock.getState().switchProject).toHaveBeenCalledTimes(2);
+    expect(result.current.saveAsProjectConfirm).toBeNull();
+  });
+
+  it("reports a failed save and opens no follow-up", async () => {
+    vi.mocked(scratchClient.saveAsProject).mockRejectedValue(new Error("Destination is read-only"));
+
+    const { result } = await saveFirstScratch();
+
+    expect(result.current.saveAsProjectConfirm).toBeNull();
+    expect(lastNotification().type).toBe("error");
+    expect(lastNotification().message).toContain("Destination is read-only");
+    expect(useProjectStoreMock.getState().switchProject).not.toHaveBeenCalled();
+    expect(scratchState.removeScratch).not.toHaveBeenCalled();
+  });
+
+  it("dismissing closes only the follow-up", async () => {
+    const { result } = await saveFirstScratch();
+
+    act(() => {
+      result.current.dismissSaveAsProjectConfirm();
+    });
+
+    expect(result.current.saveAsProjectConfirm).toBeNull();
+    expect(result.current.isOpen).toBe(true);
+    expect(useProjectStoreMock.getState().switchProject).not.toHaveBeenCalled();
+    expect(scratchState.removeScratch).not.toHaveBeenCalled();
   });
 });

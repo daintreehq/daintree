@@ -13,6 +13,7 @@ import { notify } from "@/lib/notify";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import { classifyAssistantActivity } from "@/lib/projectAssistantActivity";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import type { Project } from "@shared/types";
 import {
   buildBandRanks,
   buildBrowseBands,
@@ -23,6 +24,7 @@ import {
   makeSortModeFor,
   sortBrowseOrder,
   toProjectRow,
+  toSearchableProject,
 } from "./projectSwitcher/ordering";
 import { useFrozenSwitcherLayout } from "./projectSwitcher/useFrozenSwitcherLayout";
 import { useProjectHoverPrefetch } from "./projectSwitcher/useProjectHoverPrefetch";
@@ -51,6 +53,7 @@ export {
   type ProjectSwitcherRow,
   type ProjectSwitcherScratchRow,
   type ProjectSwitchSelectSource,
+  type SaveAsProjectFollowUp,
   type SearchableProject,
   type SearchableScratch,
   type UseProjectSwitcherPaletteReturn,
@@ -542,10 +545,26 @@ export function useProjectSwitcherPalette({
     useProjectStore.getState().openCloneRepoDialog();
   }, [close]);
 
+  // A project saved from a scratch a moment ago, so its row may be missing if
+  // the list refresh after the save failed. The returned record still opens it.
+  const openProject = useCallback(
+    (project: Project) => {
+      const row =
+        searchableProjects.find((candidate) => candidate.id === project.id) ??
+        toSearchableProject(project, projectStats[project.id], {
+          ...rowContext,
+          frecencyNow: Date.now(),
+        });
+      void selectProject(row);
+    },
+    [searchableProjects, projectStats, rowContext, selectProject]
+  );
+
   const scratchMutations = useProjectSwitcherScratchMutations({
     close,
     scratches,
     scratchResults,
+    openProject,
   });
 
   return {

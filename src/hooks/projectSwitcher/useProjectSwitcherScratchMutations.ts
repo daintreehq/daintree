@@ -10,6 +10,7 @@ import type { Project, Scratch } from "@shared/types";
 import type {
   DeleteAllScratchesSnapshot,
   DeleteScratchTarget,
+  SaveAsProjectFollowUp,
   SearchableScratch,
   UseProjectSwitcherPaletteReturn,
 } from "./types";
@@ -31,8 +32,7 @@ export type ProjectSwitcherScratchMutations = Pick<
   | "saveAsProject"
   | "saveAsProjectConfirm"
   | "dismissSaveAsProjectConfirm"
-  | "confirmDeleteOriginalScratch"
-  | "isDeletingOriginalScratch"
+  | "openSavedProject"
 >;
 
 export interface UseProjectSwitcherScratchMutationsOptions {
@@ -42,6 +42,8 @@ export interface UseProjectSwitcherScratchMutationsOptions {
   scratches: Scratch[];
   /** The rows the confirms are opened from. */
   scratchResults: SearchableScratch[];
+  /** Switches to a project the way picking its row would, closing the palette. */
+  openProject: (project: Project) => void;
 }
 
 /**
@@ -52,12 +54,14 @@ export function useProjectSwitcherScratchMutations({
   close,
   scratches,
   scratchResults,
+  openProject,
 }: UseProjectSwitcherScratchMutationsOptions): ProjectSwitcherScratchMutations {
-  const [saveAsProjectConfirm, setSaveAsProjectConfirm] = useState<{
-    scratch: SearchableScratch;
-    project: Project;
-  } | null>(null);
-  const [isDeletingOriginalScratch, setIsDeletingOriginalScratch] = useState(false);
+  const [saveAsProjectConfirm, setSaveAsProjectConfirm] = useState<SaveAsProjectFollowUp | null>(
+    null
+  );
+  // Keyed to the follow-up rather than a boolean: a double-press lands twice
+  // before the cleared state re-renders, and only the first may switch.
+  const openedSaveAsProjectRef = useRef<SaveAsProjectFollowUp | null>(null);
   const [deleteAllScratchesConfirm, setDeleteAllScratchesConfirm] =
     useState<DeleteAllScratchesSnapshot | null>(null);
   const [isDeletingAllScratches, setIsDeletingAllScratches] = useState(false);
@@ -349,7 +353,10 @@ export function useProjectSwitcherScratchMutations({
         const result = await scratchClient.saveAsProject(scratchId);
         if (result.status === "cancelled") return;
         await loadProjects();
-        setSaveAsProjectConfirm({ scratch, project: result.project });
+        setSaveAsProjectConfirm({
+          scratch: { id: scratch.id, name: scratch.name },
+          project: result.project,
+        });
       } catch (error) {
         // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
         notify({
@@ -366,24 +373,14 @@ export function useProjectSwitcherScratchMutations({
     setSaveAsProjectConfirm(null);
   }, []);
 
-  const confirmDeleteOriginalScratch = useCallback(async () => {
-    if (!saveAsProjectConfirm || isDeletingOriginalScratch) return;
-    setIsDeletingOriginalScratch(true);
-    const scratchId = saveAsProjectConfirm.scratch.id;
-    try {
-      await removeScratchActionStore(scratchId);
-      setSaveAsProjectConfirm(null);
-    } catch (error) {
-      // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
-      notify({
-        type: "error",
-        title: "Couldn't remove original scratch",
-        message: formatErrorMessage(error, "Couldn't remove the original scratch workspace"),
-      });
-    } finally {
-      setIsDeletingOriginalScratch(false);
-    }
-  }, [saveAsProjectConfirm, isDeletingOriginalScratch, removeScratchActionStore]);
+  // Cleared before the switch: the outgoing view is parked, not unmounted, and
+  // would come back with the follow-up still open.
+  const openSavedProject = useCallback(() => {
+    if (!saveAsProjectConfirm || openedSaveAsProjectRef.current === saveAsProjectConfirm) return;
+    openedSaveAsProjectRef.current = saveAsProjectConfirm;
+    setSaveAsProjectConfirm(null);
+    openProject(saveAsProjectConfirm.project);
+  }, [saveAsProjectConfirm, openProject]);
 
   return {
     createScratch,
@@ -401,7 +398,6 @@ export function useProjectSwitcherScratchMutations({
     saveAsProject,
     saveAsProjectConfirm,
     dismissSaveAsProjectConfirm,
-    confirmDeleteOriginalScratch,
-    isDeletingOriginalScratch,
+    openSavedProject,
   };
 }
