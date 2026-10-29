@@ -1142,7 +1142,9 @@ describe("NotificationCenterEntry — go to source", () => {
     await waitFor(() => {
       expect(useUIStore.getState().notificationCenterOpen).toBe(false);
     });
-    expect(useNotificationHistoryStore.getState().entries[0]!.seenAsToast).toBe(true);
+    const read = useNotificationHistoryStore.getState().entries[0]!.seenAsToast;
+    useNotificationHistoryStore.setState({ entries: [], unreadCount: 0 });
+    expect(read).toBe(true);
   });
 
   it("makes a row whose panel is gone inert, readable, and says so", async () => {
