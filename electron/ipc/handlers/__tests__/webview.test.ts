@@ -323,6 +323,14 @@ describe("registerWebviewHandlers", () => {
                 isOwn: true,
               },
               {
+                name: "proxied",
+                get: { type: "object", subtype: "proxy", objectId: "proxy-1" },
+                set: { type: "undefined" },
+                configurable: true,
+                enumerable: true,
+                isOwn: true,
+              },
+              {
                 name: "missing",
                 value: { type: "undefined" },
                 configurable: true,
@@ -330,6 +338,7 @@ describe("registerWebviewHandlers", () => {
                 writable: true,
                 isOwn: true,
               },
+              { name: "bare", configurable: true, enumerable: true, isOwn: true },
             ],
           });
         }
@@ -341,18 +350,21 @@ describe("registerWebviewHandlers", () => {
       const handler = getHandler("webview:get-console-properties");
       const result = await handler(null, 42, "pane-1", rowId, "obj-acc");
 
-      const [total, sink, both, writeOnly, missing] = result.properties;
+      const [total, sink, both, writeOnly, proxied, missing, bare] = result.properties;
       expect(total.value).toBeUndefined();
       expect(total.accessor).toEqual({ getter: true, setter: false });
       expect(sink.value).toBeUndefined();
       expect(sink.accessor).toEqual({ getter: false, setter: true });
       expect(both.accessor).toEqual({ getter: true, setter: true });
       expect(writeOnly.accessor).toEqual({ getter: false, setter: true });
+      expect(proxied.accessor).toEqual({ getter: true, setter: false });
       expect(missing.accessor).toBeUndefined();
       expect(missing.value).toEqual({ type: "primitive", kind: "undefined", value: null });
+      expect(bare.accessor).toBeUndefined();
+      expect(bare.value).toBeUndefined();
 
       // Expanding never runs the getter: nothing but the property read reaches the page.
-      const commands = debuggerMock.sendCommand.mock.calls.map(([cmd]: [string]) => cmd);
+      const commands = debuggerMock.sendCommand.mock.calls.map(([cmd]) => cmd);
       expect(commands).not.toContain("Runtime.callFunctionOn");
       expect(commands).not.toContain("Runtime.evaluate");
     });

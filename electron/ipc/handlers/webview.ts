@@ -1109,15 +1109,16 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
         for (const prop of raw.result as any[]) {
           collectHandles(prop);
           // V8 sends `{ type: "undefined" }` for the missing half of an
-          // accessor, so a half exists only when its mirror is a function.
+          // accessor. Any other mirror is a real half, and not always a
+          // function: a callable Proxy mirrors as an object.
           const isAccessor = !prop.value && (prop.get !== undefined || prop.set !== undefined);
           properties.push({
             name: prop.name ?? "",
             value: prop.value ? normalizeRemoteObject(prop.value) : undefined,
             ...(isAccessor && {
               accessor: {
-                getter: prop.get?.type === "function",
-                setter: prop.set?.type === "function",
+                getter: prop.get != null && prop.get.type !== "undefined",
+                setter: prop.set != null && prop.set.type !== "undefined",
               },
             }),
             configurable: prop.configurable ?? false,

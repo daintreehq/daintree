@@ -2,21 +2,13 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import type {
   CdpGetPropertiesResult,
   CdpPropertyDescriptor,
 } from "@shared/types/ipc/webviewConsole";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { ObjectInspector } from "../ObjectInspector";
-
-vi.mock("@/components/ui/tooltip", () => ({
-  Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  TooltipContent: ({ children }: { children: React.ReactNode }) => (
-    <span data-testid="tooltip">{children}</span>
-  ),
-  TooltipProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  TooltipTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-}));
 
 const getConsoleProperties =
   vi.fn<
@@ -38,13 +30,16 @@ function prop(
 async function expandWith(properties: CdpPropertyDescriptor[]): Promise<HTMLElement> {
   getConsoleProperties.mockResolvedValue({ properties });
   const { container } = render(
-    <ObjectInspector
-      arg={{ type: "object", objectId: "obj-1", preview: "{…}" }}
-      webContentsId={7}
-      paneId="pane-1"
-      rowId={3}
-      path="0"
-    />
+    // No hover delay, so a tooltip opened by a pointer is up by the next check.
+    <TooltipProvider delayDuration={0}>
+      <ObjectInspector
+        arg={{ type: "object", objectId: "obj-1", preview: "{…}" }}
+        webContentsId={7}
+        paneId="pane-1"
+        rowId={3}
+        path="0"
+      />
+    </TooltipProvider>
   );
   fireEvent.click(screen.getByRole("button", { name: /\{…\}/ }));
   await waitFor(() => expect(container.querySelector("[id]")).not.toBeNull());
@@ -59,11 +54,13 @@ function propertyRow(container: HTMLElement, name: string): HTMLElement {
   return label.parentElement;
 }
 
-/** What a sighted reader sees: everything outside the sr-only text and the tooltip. */
-function visibleValue(row: HTMLElement): string {
-  const clone = row.cloneNode(true) as HTMLElement;
-  clone.querySelectorAll(".sr-only, [data-testid='tooltip']").forEach((el) => el.remove());
-  return (clone.textContent ?? "").replace(/^[^:]+:/, "").trim();
+/** The marker a sighted reader sees in place of a value; assistive tech skips it. */
+function marker(row: HTMLElement): HTMLElement | null {
+  return row.querySelector<HTMLElement>('[aria-hidden="true"]');
+}
+
+function explanation(row: HTMLElement): string | undefined {
+  return row.querySelector(".sr-only")?.textContent ?? undefined;
 }
 
 beforeEach(() => {
@@ -76,7 +73,7 @@ beforeEach(() => {
 
 afterEach(() => {
   getConsoleProperties.mockReset();
-  delete (window as unknown as { electron?: unknown }).electron;
+  Reflect.deleteProperty(window, "electron");
 });
 
 describe("ObjectInspector property values", () => {
@@ -89,32 +86,54 @@ describe("ObjectInspector property values", () => {
     expect(getConsoleProperties).toHaveBeenCalledWith(7, "pane-1", 3, "obj-1");
 
     const total = propertyRow(container, "total");
-    expect(visibleValue(total)).toBe("(…)");
-    expect(total.querySelector(".sr-only")?.textContent).toBe("Getter not run");
-    expect(total.querySelector("[data-testid='tooltip']")?.textContent).toBe("Getter not run");
+    expect(marker(total)?.textContent).toBe("(…)");
+    expect(total.textContent).not.toContain("undefined");
 
-    expect(visibleValue(propertyRow(container, "missing"))).toBe("undefined");
+    const missing = propertyRow(container, "missing");
+    expect(marker(missing)).toBeNull();
+    expect(missing.textContent).toBe("missing:undefined");
   });
 
-  it("says a getter was not run even when the accessor also has a setter", async () => {
+  it("gives every kind of unread value its own marker and explanation", async () => {
     const container = await expandWith([
-      prop("both", { accessor: { getter: true, setter: true } }),
+      prop("getOnly", { accessor: { getter: true, setter: false } }),
+      prop("getSet", { accessor: { getter: true, setter: true } }),
+      prop("setOnly", { accessor: { getter: false, setter: true } }),
+      prop("neither", { accessor: { getter: false, setter: false } }),
+      prop("bare", {}),
     ]);
-    expect(visibleValue(propertyRow(container, "both"))).toBe("(…)");
+    const read = (name: string) => {
+      const row = propertyRow(container, name);
+      return { label: marker(row)?.textContent, explanation: explanation(row) };
+    };
+    const getOnly = read("getOnly");
+    const setOnly = read("setOnly");
+    const bare = read("bare");
+
+    // A getter reads the same whether or not a setter sits beside it, and so
+    // does an accessor without a getter whatever its setter.
+    expect(read("getSet")).toEqual(getOnly);
+    expect(read("neither")).toEqual(setOnly);
+
+    const kinds = [getOnly, setOnly, bare];
+    for (const kind of kinds) {
+      expect(kind.label).toBeTruthy();
+      expect(kind.label).not.toBe("undefined");
+      expect(kind.explanation).toBeTruthy();
+    }
+    expect(new Set(kinds.map((k) => k.label)).size).toBe(kinds.length);
+    expect(new Set(kinds.map((k) => k.explanation)).size).toBe(kinds.length);
   });
 
-  it("marks an accessor without a getter instead of claiming a getter was skipped", async () => {
+  it("explains the marker in a tooltip on hover, matching what assistive tech reads", async () => {
     const container = await expandWith([
-      prop("sink", { accessor: { getter: false, setter: true } }),
+      prop("total", { accessor: { getter: true, setter: false } }),
     ]);
-    const sink = propertyRow(container, "sink");
-    expect(visibleValue(sink)).toBe("(no getter)");
-    expect(sink.querySelector(".sr-only")?.textContent).not.toMatch(/getter not run/i);
-  });
+    const total = propertyRow(container, "total");
+    expect(screen.queryByRole("tooltip")).toBeNull();
 
-  it("never prints undefined for a property that reported no value at all", async () => {
-    const container = await expandWith([prop("odd", {})]);
-    expect(visibleValue(propertyRow(container, "odd"))).not.toBe("undefined");
+    fireEvent.pointerMove(marker(total)!, { pointerType: "mouse" });
+    expect((await screen.findByRole("tooltip")).textContent).toBe(explanation(total));
   });
 
   it("adds no control for the marker and reads nothing more from the page", async () => {
@@ -124,7 +143,8 @@ describe("ObjectInspector property values", () => {
     const total = propertyRow(container, "total");
     expect(total.querySelector("button, a, [tabindex]")).toBeNull();
 
-    fireEvent.click(total);
+    fireEvent.click(marker(total)!);
+    await act(async () => {});
     expect(getConsoleProperties).toHaveBeenCalledTimes(1);
   });
 });
