@@ -26,6 +26,7 @@ import {
   clientPlatform,
   describeHostMenuState,
   hostAgentCliNames,
+  localHostLabel,
   type HostMenuRow,
 } from "../hostModel";
 import { isNewWindowClick } from "../hostSwitching";
@@ -57,6 +58,11 @@ export type PlacementStatus = "idle" | "pending" | "failed" | "cancelled";
 export interface PlacementCommit {
   hostId: HostId;
   hostName: string;
+  /**
+   * This window's own host as the host menu names it ("This Mac", or a host's
+   * name): where the choices the chosen host won't use are kept.
+   */
+  homeName: string;
   status: PlacementStatus;
   /** The link's own words while the host can't take it ("Not connected"); null while it can. */
   unavailable: string | null;
@@ -250,13 +256,15 @@ export function WorktreePlacementRow({
   );
 
   const hostName = elsewhere ? chosenRow.name : null;
+  const homeName =
+    rows.find((row) => row.hostId === windowHostId)?.name ?? localHostLabel(clientPlatform());
   useEffect(() => {
     onCommitChange?.(
       hostName === null
         ? null
-        : { hostId: chosen, hostName, status, unavailable, relativePath, submit }
+        : { hostId: chosen, hostName, homeName, status, unavailable, relativePath, submit }
     );
-  }, [onCommitChange, chosen, hostName, status, unavailable, relativePath, submit]);
+  }, [onCommitChange, chosen, hostName, homeName, status, unavailable, relativePath, submit]);
   // Gone from the dialog, it chooses no other host: local Create must not stay blocked.
   useEffect(() => () => onCommitChange?.(null), [onCommitChange]);
 
