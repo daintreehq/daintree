@@ -392,8 +392,11 @@ describe("GrantCache.revokeSession", () => {
 });
 
 describe("GrantCache.revokeGrant", () => {
+  // A frozen clock, so a slow run can never age the surviving grants out.
+  const FIXED_NOW = 1_700_000_000_000;
+
   it("ends one tool's grant and leaves the session's other grants live (#14975)", () => {
-    const { cache, emitted } = newCache();
+    const { cache, emitted } = newCache({ now: () => FIXED_NOW });
     cache.issueGrant("s1", "project.runCheck");
     cache.issueGrant("s1", "terminal.new");
     cache.issueGrant("s2", "terminal.new");
@@ -425,7 +428,7 @@ describe("GrantCache.revokeGrant", () => {
   });
 
   it("is an idempotent no-op once the grant is gone", () => {
-    const { cache, emitted } = newCache();
+    const { cache, emitted } = newCache({ now: () => FIXED_NOW });
     cache.issueGrant("s1", "terminal.new");
     cache.revokeGrant("s1", "terminal.new");
     emitted.length = 0;
@@ -437,7 +440,7 @@ describe("GrantCache.revokeGrant", () => {
   });
 
   it("a dispatch in flight through the revoked grant can't refresh it back", () => {
-    const { cache } = newCache();
+    const { cache } = newCache({ now: () => FIXED_NOW });
     const { issuedAt } = cache.issueGrant("s1", "terminal.new");
     cache.revokeGrant("s1", "terminal.new");
 

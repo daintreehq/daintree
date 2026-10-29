@@ -188,4 +188,27 @@ describe("useHelpSessionLiveStatus", () => {
     expect(getLiveSessionStatus).toHaveBeenLastCalledWith({ sessionId: "help-2" });
     expect(onGrantLifecycle).toHaveBeenCalledTimes(2);
   });
+
+  it("never shows the previous session's snapshot while the new one loads", async () => {
+    const { result, rerender } = renderHook(({ id }) => useHelpSessionLiveStatus(id), {
+      initialProps: { id: "help-1" as string | null },
+    });
+    await act(async () => {
+      pulls[0]!.resolve(CONNECTED);
+    });
+    expect(result.current).toEqual(CONNECTED);
+
+    // help-1's grants carry revoke buttons in Settings; they must not stay
+    // actionable under help-2 for the length of its pull.
+    rerender({ id: "help-2" });
+    expect(result.current).toEqual(DISCONNECTED);
+
+    await act(async () => {
+      pulls[1]!.resolve(CONNECTED);
+    });
+    expect(result.current).toEqual(CONNECTED);
+
+    rerender({ id: null });
+    expect(result.current).toEqual(DISCONNECTED);
+  });
 });

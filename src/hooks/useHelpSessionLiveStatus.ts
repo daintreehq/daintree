@@ -27,16 +27,18 @@ const DISCONNECTED: HelpSessionLiveStatus = {
  *
  * Returns safe `connected: false` defaults when `sessionId` is null or no live
  * session is pinned to this renderer — callers render that as a quiet idle
- * state, never a spinner.
+ * state, never a spinner. A snapshot is only ever returned for the id it was
+ * pulled for: after a session switch the previous session's grants (and their
+ * revoke buttons) don't linger while the new pull is in flight.
  */
 export function useHelpSessionLiveStatus(sessionId: string | null): HelpSessionLiveStatus {
-  const [status, setStatus] = useState<HelpSessionLiveStatus>(DISCONNECTED);
+  const [snapshot, setSnapshot] = useState<{
+    sessionId: string | null;
+    status: HelpSessionLiveStatus;
+  }>({ sessionId: null, status: DISCONNECTED });
 
   useEffect(() => {
-    if (!sessionId) {
-      setStatus(DISCONNECTED);
-      return;
-    }
+    if (!sessionId) return;
 
     let cancelled = false;
     let inFlight = false;
@@ -48,12 +50,12 @@ export function useHelpSessionLiveStatus(sessionId: string | null): HelpSessionL
         .getLiveSessionStatus({ sessionId })
         .then((live) => {
           if (cancelled) return;
-          setStatus(live);
+          setSnapshot({ sessionId, status: live });
         })
         .catch((err) => {
           if (cancelled) return;
           logError("Failed to load live help-session status", err);
-          setStatus(DISCONNECTED);
+          setSnapshot({ sessionId, status: DISCONNECTED });
         })
         .finally(() => {
           inFlight = false;
@@ -85,5 +87,5 @@ export function useHelpSessionLiveStatus(sessionId: string | null): HelpSessionL
     };
   }, [sessionId]);
 
-  return status;
+  return snapshot.sessionId === sessionId ? snapshot.status : DISCONNECTED;
 }

@@ -422,6 +422,18 @@ describe("HelpPanelBanners — several live approvals (#14975)", () => {
     ];
   }
 
+  function automationGrant(): ActiveGrantState {
+    return {
+      key: "native:s1:g1",
+      sessionId: "s1",
+      toolId: "*",
+      ttlMs: 900_000,
+      expiresAt: Date.now() + 60_000,
+      grantId: "g1",
+      allowedTools: ["recipe.run", "worktree.deleteOwned"],
+    };
+  }
+
   it("names every approval with its own countdown and says how many there are", () => {
     const { getByTestId } = render(
       <HelpPanelBanners {...baseProps()} activeGrants={twoGrants()} />
@@ -439,13 +451,20 @@ describe("HelpPanelBanners — several live approvals (#14975)", () => {
 
   it("revokes only the approval whose button was pressed, with no clear-all control", () => {
     const onRevokeGrant = vi.fn();
-    const grants = twoGrants();
+    const grants = [...twoGrants(), automationGrant()];
     const { getByRole, queryByText } = render(
       <HelpPanelBanners {...baseProps()} activeGrants={grants} onRevokeGrant={onRevokeGrant} />
     );
     fireEvent.click(getByRole("button", { name: "Revoke access to project.runCheck" }));
-    expect(onRevokeGrant).toHaveBeenCalledTimes(1);
-    expect(onRevokeGrant).toHaveBeenCalledWith(grants[1]!.key);
+    fireEvent.click(
+      getByRole("button", { name: "Revoke access to recipe.run, worktree.deleteOwned" })
+    );
+    fireEvent.click(getByRole("button", { name: "Revoke access to terminal.kill" }));
+    expect(onRevokeGrant.mock.calls).toEqual([
+      [grants[1]!.key],
+      [grants[2]!.key],
+      [grants[0]!.key],
+    ]);
     expect(queryByText("Revoke access")).toBeNull();
   });
 
@@ -464,29 +483,23 @@ describe("HelpPanelBanners — several live approvals (#14975)", () => {
     expect(idle.getAttribute("aria-busy")).toBeNull();
   });
 
-  it("names an automation grant by the tools it covers", () => {
-    const automation: ActiveGrantState = {
-      key: "native:s1:g1",
-      sessionId: "s1",
-      toolId: "*",
-      ttlMs: 900_000,
-      expiresAt: Date.now() + 60_000,
-      grantId: "g1",
-      allowedTools: ["recipe.run", "worktree.deleteOwned"],
-    };
+  it("names an automation grant by the tools it covers and counts it", () => {
     const { getByTestId, getByRole } = render(
-      <HelpPanelBanners {...baseProps()} activeGrants={[...twoGrants(), automation]} />
+      <HelpPanelBanners {...baseProps()} activeGrants={[...twoGrants(), automationGrant()]} />
     );
-    expect(getByTestId("help-grant-active-banner").textContent).not.toContain("*");
+    const text = getByTestId("help-grant-active-banner").textContent ?? "";
+    expect(text).toContain("3 approvals active");
+    expect(text).not.toContain("*");
     expect(
       getByRole("button", { name: "Revoke access to recipe.run, worktree.deleteOwned" })
     ).toBeTruthy();
   });
 
-  it("keeps ticking every countdown and stops after unmount", () => {
+  it("keeps ticking every countdown on one timer and clears it on unmount", () => {
     vi.useFakeTimers();
     try {
       const base = Date.now();
+      const timersBefore = vi.getTimerCount();
       const { getByTestId, unmount } = render(
         <HelpPanelBanners
           {...baseProps()}
@@ -504,12 +517,9 @@ describe("HelpPanelBanners — several live approvals (#14975)", () => {
       );
       expect(rows[0]).toContain("3s left");
       expect(rows[1]).toContain("7s left");
+      expect(vi.getTimerCount()).toBe(timersBefore + 1);
       unmount();
-      expect(() =>
-        act(() => {
-          vi.advanceTimersByTime(5_000);
-        })
-      ).not.toThrow();
+      expect(vi.getTimerCount()).toBe(timersBefore);
     } finally {
       vi.useRealTimers();
     }

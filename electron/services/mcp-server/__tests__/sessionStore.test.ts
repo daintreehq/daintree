@@ -1223,6 +1223,7 @@ describe("SessionStore.getLiveStatusForHelpSession (#10032)", () => {
     });
     expect(store.getLiveStatusForHelpSession(HELP_ID, WC)?.activeGrants).toEqual([
       expect.objectContaining({
+        sessionId: TRANSPORT,
         kind: "native",
         expiresAt: issuedAt + MCP_GRANT_TTL_MS,
         maxExpiresAt: issuedAt + MCP_GRANT_MAX_LIFETIME_MS,

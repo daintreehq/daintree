@@ -674,6 +674,24 @@ describe("HttpLifecycle", () => {
       expect(grantCacheOf(deps).revokeGrant).not.toHaveBeenCalled();
     });
 
+    it("passes through the cache's revoked: false for a live, correctly pinned session", () => {
+      const deps = fakeDeps();
+      deps.sessionStore.sessionWebContentsMap.set("sess-1", 42);
+      grantCacheOf(deps).revokeGrant.mockReturnValue(false);
+      const lc = new HttpLifecycle(deps);
+
+      expect(lc.revokeGrant("sess-1", "terminal.kill", 42)).toEqual({
+        sessionId: "sess-1",
+        toolId: "terminal.kill",
+        revoked: false,
+      });
+      expect(grantCacheOf(deps).revokeGrant).toHaveBeenCalledWith(
+        "sess-1",
+        "terminal.kill",
+        "user"
+      );
+    });
+
     it("reports revoked: false for a drained session instead of throwing", () => {
       const deps = fakeDeps();
       const lc = new HttpLifecycle(deps);

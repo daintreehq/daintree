@@ -60,6 +60,10 @@ export class McpActivityTracker {
   private _outcomeAlertTurnId: string | null = null;
   private _grantEndedBannerTimer: ReturnType<typeof setTimeout> | null = null;
   private _disposers: Array<() => void> = [];
+  // Which issuance each live grant row is, so a revoke reply that lands after
+  // the same tool was approved again can't remove the new approval's row.
+  private _grantIssuance = new Map<string, number>();
+  private _issuanceSeq = 0;
 
   constructor(private readonly host: McpActivityTrackerHost) {}
 
@@ -203,6 +207,7 @@ export class McpActivityTracker {
     const grant = activeGrants.find((g) => g.key === key);
     if (!grant || revokingGrantKeys.includes(key)) return;
     this.host.patch({ revokingGrantKeys: [...revokingGrantKeys, key] });
+    const issuance = this._grantIssuance.get(key);
     const request: Promise<unknown> =
       grant.grantId !== undefined
         ? window.electron.mcpServer.revokeNativeGrant({ grantId: grant.grantId })
@@ -213,7 +218,7 @@ export class McpActivityTracker {
     safeFireAndForget(
       request
         .then(() => {
-          this._removeGrant(key);
+          if (this._grantIssuance.get(key) === issuance) this._removeGrant(key);
         })
         .catch((err) => {
           // The grant is still live and its row stays put, so the row itself
@@ -469,6 +474,7 @@ export class McpActivityTracker {
         allowedTools: payload.allowedTools,
       };
       const index = activeGrants.findIndex((g) => g.key === key);
+      this._grantIssuance.set(key, ++this._issuanceSeq);
       this.host.patch({
         activeGrants:
           index === -1
@@ -510,6 +516,7 @@ export class McpActivityTracker {
   }
 
   private _removeGrant(key: string): void {
+    this._grantIssuance.delete(key);
     const { activeGrants } = this.host.getSnapshot();
     if (!activeGrants.some((g) => g.key === key)) return;
     this.host.patch({ activeGrants: activeGrants.filter((g) => g.key !== key) });
@@ -529,6 +536,7 @@ export class McpActivityTracker {
 
   clearGrantState(): void {
     this._clearGrantEndedTimer();
+    this._grantIssuance.clear();
     // Clear the in-flight revokes too: a teardown mid-revoke would otherwise
     // leak a stuck-disabled "Revoke access" button into the next session.
     this.host.patch({ activeGrants: [], grantEnded: null, revokingGrantKeys: [] });

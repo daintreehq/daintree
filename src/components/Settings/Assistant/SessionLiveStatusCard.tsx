@@ -74,7 +74,9 @@ export function SessionLiveStatusCard({ configuredTier }: SessionLiveStatusCardP
                   <div className="text-xs text-text-secondary font-mono">
                     Active grants ({perToolGrants.length})
                   </div>
-                  <PerToolGrantList grants={perToolGrants} />
+                  {/* Keyed by session so a pending revoke or its error never
+                      carries over to another session's grants. */}
+                  <PerToolGrantList key={sessionId} grants={perToolGrants} />
                 </div>
               ) : (
                 <div className="text-2xs text-text-secondary">No per-tool grants active</div>
