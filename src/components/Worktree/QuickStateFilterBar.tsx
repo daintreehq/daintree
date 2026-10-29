@@ -142,6 +142,8 @@ export function QuickStateFilterBar({
           // the zero registers at a glance; no counts at all means no fade.
           const shouldFadeIcon = hasCount && rawCount === 0;
           const visual = option.value === "all" ? null : FILTER_VISUALS[option.value];
+          // Still at zero, which the glyph rule allows: spinning an empty bucket
+          // would claim work that isn't happening.
           const isSpinningWorking = option.value === "working" && workingActive;
           const isFinishedUnread = option.value === "finished" && finishedUnseen > 0;
           const Icon = isSpinningWorking
