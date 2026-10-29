@@ -149,6 +149,11 @@ async function renderComposer(draft: string, templates: PluginPromptTemplate[] =
 
 const storedDraft = () => useTerminalInputStore.getState().getDraftInput(TERMINAL_ID);
 
+// CodeMirror groups undo steps made within 500ms of each other, so an edit
+// that should stand alone only proves it does when the next one comes inside
+// that window, however slowly the run goes.
+const pinHistoryClock = () => vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+
 // A template is added to what the user has written, never put in its place
 // (#14956), and never sent (#13799). It is picked from the `/` menu (#15309).
 describe("HybridInputBar prompt templates in the `/` menu", () => {
@@ -339,6 +344,7 @@ describe("HybridInputBar prompt templates in the `/` menu", () => {
   });
 
   it("keeps the token it took for a form as its own undo step when the form is cancelled", async () => {
+    pinHistoryClock();
     const { view, type, press } = await renderComposer("Fix the retry loop.", [
       entry("Tell {{who}} when done.", [{ name: "who", label: "Who" }]),
     ]);
@@ -362,6 +368,7 @@ describe("HybridInputBar prompt templates in the `/` menu", () => {
   });
 
   it("takes only the token out for a template that fills nothing, as its own undo step", async () => {
+    pinHistoryClock();
     const { view, type, press } = await renderComposer("Fix the retry loop.", [entry("   ")]);
 
     await type(" /boiler");
