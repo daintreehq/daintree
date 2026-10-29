@@ -54,8 +54,12 @@ function notifySaveFailed(panelId: string, fileName: string, reason: string): vo
     title: `Couldn't save '${fileName}'`,
     message: `${sentence} Your draft is kept.`,
     // uiFeedback is passive, and a toast is the point: the failure happened
-    // on a modal the user was looking at, and its reason is off screen.
+    // on a modal the user was looking at, and its reason is off screen. The
+    // answer to a press they just made outruns quiet hours and the shared
+    // per-worktree error budget; a retry that fails again replaces it.
     priority: "high",
+    urgent: true,
+    replaceKey: `file-save-failed:${panelId}`,
     context: { eventKind: "uiFeedback", ...panelNotificationAddress(panelId) },
     action: { label: "Review draft", onClick: () => showFileDraft(panelId) },
   });
@@ -81,6 +85,16 @@ export function FileDocumentCloseGuardHost() {
   useLayoutEffect(() => {
     queueRef.current = queue;
   }, [queue]);
+  // Unmounting answers what is still asked, and a save that resolves after
+  // has no prompt left to settle or report on.
+  useEffect(
+    () => () => {
+      const pending = queueRef.current;
+      queueRef.current = [];
+      for (const prompt of pending) prompt.resolve("cancel");
+    },
+    []
+  );
   const [busy, setBusy] = useState<"save" | "discard" | null>(null);
   // The prompt whose Save or Discard is in flight. Its document goes clean
   // mid-operation, which must not read as "this prompt is stale".

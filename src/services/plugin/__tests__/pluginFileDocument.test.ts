@@ -199,6 +199,30 @@ describe("pluginFileDocument (#13809)", () => {
     }
   );
 
+  it("doesn't report saved when newer edits landed while the close prompt's Save ran", async () => {
+    bridge.read.mockResolvedValueOnce({ status: "ok", text: "{}", revision: REV_A });
+    let release: (value: unknown) => void = () => {};
+    bridge.save.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        })
+    );
+    const handle = openPluginFileDocument(target());
+    handle.retain();
+    await handle.document.read();
+    handle.document.setDraft("first");
+    const saving = useFileDocumentStore.getState().byPanelId["panel-1"]!.save();
+    handle.document.setDraft("second");
+    release({ status: "saved", revision: REV_B });
+    await expect(saving).resolves.toEqual({
+      status: "refused",
+      reason: "Edits made during the save are still unsaved",
+    });
+    expect(handle.document.getDraft()).toBe("second");
+    expect(useFileDocumentStore.getState().byPanelId["panel-1"]?.dirty).toBe(true);
+  });
+
   it("refuses the close prompt's Save for a draft with no revision read yet", async () => {
     const handle = openPluginFileDocument(target());
     handle.retain();

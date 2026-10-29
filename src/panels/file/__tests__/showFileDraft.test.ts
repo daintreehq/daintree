@@ -44,6 +44,9 @@ describe("showFileDraft (#15017)", () => {
     expect(selection.selectWorktree).not.toHaveBeenCalled();
     expect(panelState.setFileViewMode).toHaveBeenCalledWith("p1", "edit");
     expect(panelState.setActiveTab).toHaveBeenCalledWith("g1", "p1");
+    expect(panelState.setActiveTab.mock.invocationCallOrder[0]!).toBeLessThan(
+      dispatch.mock.invocationCallOrder[0]!
+    );
     expect(dispatch).toHaveBeenCalledWith("panel.focus", { panelId: "p1" }, { source: "user" });
     expect(panelState.pingTerminal).toHaveBeenCalledWith("p1");
   });
@@ -55,9 +58,13 @@ describe("showFileDraft (#15017)", () => {
 
     expect(selection.trackTerminalFocus).toHaveBeenCalledWith("wt-2", "p1");
     expect(selection.selectWorktree).toHaveBeenCalledWith("wt-2");
-    expect(selection.trackTerminalFocus.mock.invocationCallOrder[0]).toBeLessThan(
-      dispatch.mock.invocationCallOrder[0]!
-    );
+    // Tracked before the switch, which restores whatever the worktree last tracked.
+    const tracked = selection.trackTerminalFocus.mock.invocationCallOrder[0]!;
+    const selected = selection.selectWorktree.mock.invocationCallOrder[0]!;
+    const focused = dispatch.mock.invocationCallOrder[0]!;
+    expect(tracked).toBeLessThan(selected);
+    expect(selected).toBeLessThan(focused);
+    expect(panelState.setFileViewMode.mock.invocationCallOrder[0]!).toBeLessThan(focused);
   });
 
   it("does nothing for a panel that is gone or out of reach", async () => {

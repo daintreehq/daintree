@@ -273,13 +273,43 @@ describe("DocumentController (#12323)", () => {
       reason: "This file can't be saved as Markdown",
     });
 
+    main.overrides.set(CHANNELS.save, () => ({ status: "refused", reason: "TOO_LARGE" }));
+    await expect(getFileDocumentProjection("panel-1")!.save()).resolves.toEqual({
+      status: "refused",
+      reason: expect.stringMatching(/over 2 MiB/),
+    });
+
     main.overrides.set(CHANNELS.save, () => ({ status: "unavailable" }));
     await expect(getFileDocumentProjection("panel-1")!.save()).resolves.toEqual({
       status: "unavailable",
       reason: "The file isn't where it was",
     });
+    expect(controller.record()).toMatchObject({ status: "unavailable", saving: false });
     expect(controller.record().draft?.text).toBe("# Plan\n\nmine\n");
     expect(getFileDocumentProjection("panel-1")?.dirty).toBe(true);
+  });
+
+  it("a second save while one is in flight is refused without writing (#15017)", async () => {
+    const controller = await open();
+    controller.setText("# Plan\n\nmine\n");
+    let release: (value: unknown) => void = () => {};
+    main.overrides.set(
+      CHANNELS.save,
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        })
+    );
+    const first = controller.save();
+    await flush();
+    main.calls.length = 0;
+    await expect(getFileDocumentProjection("panel-1")!.save()).resolves.toEqual({
+      status: "refused",
+      reason: "A save is already running",
+    });
+    expect(main.calls.some((c) => c.channel === CHANNELS.save)).toBe(false);
+    release({ status: "saved", revision: sha("# Plan\n\nmine\n"), wrote: true });
+    await expect(first).resolves.toEqual({ status: "saved" });
   });
 
   it("restores a stored draft on open, as a conflict when the base moved", async () => {

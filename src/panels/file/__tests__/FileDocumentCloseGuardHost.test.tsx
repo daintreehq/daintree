@@ -112,7 +112,10 @@ describe("FileDocumentCloseGuardHost (#12323)", () => {
     publish(
       "p1",
       projection({
-        save: vi.fn(async () => ({ status: "error" as const, reason: "Disk full" })),
+        save: vi.fn(async () => ({
+          status: "refused" as const,
+          reason: "The file hasn't finished loading",
+        })),
         discard: vi.fn(async () => {
           throw new Error("disk full");
         }),
@@ -185,6 +188,11 @@ describe("FileDocumentCloseGuardHost: a Save that doesn't land (#15017)", () => 
       "The file isn't where it was. Your draft is kept.",
     ],
     ["error", "EACCES: permission denied.", "EACCES: permission denied. Your draft is kept."],
+    [
+      "refused",
+      "The draft is too large for this editor to save",
+      "The draft is too large for this editor to save. Your draft is kept.",
+    ],
   ] as const)(
     "on %s, Save answers Cancel and says why, with a way back to the editor",
     async (status, reason, message) => {
@@ -206,6 +214,8 @@ describe("FileDocumentCloseGuardHost: a Save that doesn't land (#15017)", () => 
         title: "Couldn't save 'plan.md'",
         message,
         priority: "high",
+        urgent: true,
+        replaceKey: "file-save-failed:p1",
         context: { eventKind: "uiFeedback", panelId: "p1", worktreeId: "wt-1" },
       });
       expect(payload.action.label).toBe("Review draft");
@@ -251,6 +261,70 @@ describe("FileDocumentCloseGuardHost: a Save that doesn't land (#15017)", () => 
     await pressSave();
     await expect(verdict).resolves.toBe(false);
     expect(notifyMock.mock.calls[0]![0].title).toBe("Couldn't save 'notes.md'");
+  });
+
+  it("a failed Save leaves the next queued prompt standing and names only its own file", async () => {
+    panelsById.p2 = { id: "p2", kind: "file", filePath: "/repo/docs/other.md" };
+    render(
+      <TooltipProvider>
+        <FileDocumentCloseGuardHost />
+      </TooltipProvider>
+    );
+    let fail: () => void = () => {};
+    const firstSave = vi.fn(
+      () =>
+        new Promise<{ status: "conflict"; reason: string }>((resolve) => {
+          fail = () => resolve({ status: "conflict", reason: "The file changed on disk" });
+        })
+    );
+    const secondSave = vi.fn(async () => ({ status: "saved" as const }));
+    publish("p1", projection({ save: firstSave }));
+    publish("p2", projection({ identityKey: "doc-2", save: secondSave }));
+
+    const first = consultPanelCloseGuards(["p1"]);
+    await screen.findByText("Save changes to 'plan.md'?");
+    const second = consultPanelCloseGuards(["p2"]);
+    await pressSave();
+    await act(async () => {
+      fail();
+    });
+    await expect(first).resolves.toBe(false);
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+    expect(notifyMock.mock.calls[0]![0].title).toBe("Couldn't save 'plan.md'");
+
+    expect(await screen.findByText("Save changes to 'other.md'?")).toBeTruthy();
+    await pressSave();
+    await expect(second).resolves.toBe(true);
+    expect(secondSave).toHaveBeenCalledTimes(1);
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("unmounting answers Cancel, and a save that lands after reports nothing", async () => {
+    const { unmount } = render(
+      <TooltipProvider>
+        <FileDocumentCloseGuardHost />
+      </TooltipProvider>
+    );
+    let fail: () => void = () => {};
+    publish(
+      "p1",
+      projection({
+        save: vi.fn(
+          () =>
+            new Promise<{ status: "error"; reason: string }>((resolve) => {
+              fail = () => resolve({ status: "error", reason: "Disk full" });
+            })
+        ),
+      })
+    );
+    const verdict = consultPanelCloseGuards(["p1"]);
+    await pressSave();
+    unmount();
+    await expect(verdict).resolves.toBe(false);
+    await act(async () => {
+      fail();
+    });
+    expect(notifyMock).not.toHaveBeenCalled();
   });
 
   it("stays quiet when the panel was removed while the save ran", async () => {
