@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import type { ReactNode } from "react";
 import { render } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { KeyRound } from "lucide-react";
@@ -57,6 +58,45 @@ describe("Callout", () => {
       expect(el.getAttribute("class"), el.outerHTML).not.toMatch(/\btext-status-/);
     }
     expect(root?.getAttribute("class")).toContain("rounded-[var(--radius-md)]");
+  });
+
+  it("lets the action drop under the message rather than squeeze it into a column", () => {
+    // jsdom draws nothing, so this pins the mechanism: the message and the
+    // action share one wrapping row, and the message claims a readable measure
+    // before the action may sit beside it.
+    const { getByRole, getByText } = render(
+      <Callout severity="warning" action={<button type="button">Use suggested folder</button>}>
+        /Users/someone/Projects/a-very-long-folder-name/that-keeps-going
+      </Callout>
+    );
+    const message = getByText(/a-very-long-folder-name/);
+    const slot = getByRole("button", { name: "Use suggested folder" }).parentElement;
+    const row = slot?.parentElement;
+
+    expect(row?.getAttribute("class")).toMatch(/\bflex-wrap\b/);
+    expect(row?.contains(message)).toBe(true);
+    expect(message.getAttribute("class")).toMatch(/\bgrow\b/);
+    expect(message.getAttribute("class")).toMatch(/\bbasis-/);
+    expect(message.getAttribute("class")).not.toMatch(/\bflex-1\b/);
+    expect(slot?.getAttribute("class")).toMatch(/\bshrink-0\b/);
+  });
+
+  it("keeps the message mounted when an action comes or goes", () => {
+    const body = (action?: ReactNode) => (
+      <Callout severity="error" action={action}>
+        <input aria-label="Note" defaultValue="" />
+      </Callout>
+    );
+    const { getByRole, rerender } = render(body());
+    const input = getByRole("textbox", { name: "Note" }) as HTMLInputElement;
+    input.value = "typed before the retry appeared";
+
+    rerender(body(<button type="button">Retry</button>));
+    expect(getByRole("textbox", { name: "Note" })).toBe(input);
+    expect(input.value).toBe("typed before the retry appeared");
+
+    rerender(body());
+    expect(getByRole("textbox", { name: "Note" })).toBe(input);
   });
 
   it("announces nothing unless the caller asks it to", () => {

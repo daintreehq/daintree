@@ -454,7 +454,7 @@ describe("@daintreehq/plugin-ui avatars, popovers and hints", () => {
     expect(root.getAttribute("aria-label")).toBe("Sync warning");
     // Below: the action sits in the text column, not the trailing slot.
     const retry = screen.getByRole("button", { name: "Retry" });
-    expect(retry.closest(".min-w-0")).not.toBeNull();
+    expect(screen.getByText("Sync paused.").contains(retry)).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Dismiss warning" }));
     expect(onDismiss).toHaveBeenCalledTimes(1);
     expect(container.querySelector("[data-severity-glyph]")).not.toBeNull();
