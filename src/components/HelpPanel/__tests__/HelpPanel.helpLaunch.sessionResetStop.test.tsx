@@ -11,6 +11,8 @@ const {
   mockProvisionSession,
   mockRevokeSession,
   mockTakePendingHibernation,
+  mockPeekPendingHibernation,
+  mockDiscardConversation,
   mockGetAssistantSupportedAgentIds,
   mockGetHelpAssistantSettings,
   mockGetAgentVersion,
@@ -38,6 +40,8 @@ const {
   mockProvisionSession: vi.fn().mockResolvedValue(null),
   mockRevokeSession: vi.fn().mockResolvedValue(undefined),
   mockTakePendingHibernation: vi.fn().mockResolvedValue(null),
+  mockPeekPendingHibernation: vi.fn().mockResolvedValue(null),
+  mockDiscardConversation: vi.fn().mockResolvedValue(undefined),
   mockGetAssistantSupportedAgentIds: vi.fn(() => ["claude"]),
   mockGetHelpAssistantSettings: vi.fn().mockResolvedValue({
     docSearch: true,
@@ -511,6 +515,8 @@ let viewRevealedCbs: Array<() => void> = [];
 
 function resetState() {
   viewRevealedCbs = [];
+  mockPeekPendingHibernation.mockReset();
+  mockPeekPendingHibernation.mockResolvedValue(null);
   helpPanelState.isOpen = true;
   helpPanelState.width = 380;
   helpPanelState.terminalId = null;
@@ -652,6 +658,8 @@ beforeEach(() => {
           provisionSession: mockProvisionSession,
           revokeSession: mockRevokeSession,
           takePendingHibernation: mockTakePendingHibernation,
+          peekPendingHibernation: mockPeekPendingHibernation,
+          discardConversation: mockDiscardConversation,
           restorePendingHibernation: vi.fn().mockResolvedValue(false),
           getPinnedActionContext: vi.fn().mockResolvedValue({}),
         },
@@ -1020,6 +1028,156 @@ describe("HelpPanel — + New session destructive reset", () => {
     await act(async () => {
       resolveProvision?.(null);
     });
+  });
+});
+
+describe("HelpPanel — restarting a paused lane (#14981)", () => {
+  // Main captured this lane's conversation and killed its process, so the lane has
+  // no terminal and the panel offers Resume. A clean start has to be reachable
+  // from here without paying for the resume first.
+  function setupPausedLane(capture: { agentId?: string; live?: boolean } = {}) {
+    helpPanelState.autoLaunchEnabled = false;
+    projectStoreState.currentProject = { id: "proj-1", path: "/repo" };
+    mockPeekPendingHibernation.mockResolvedValue({
+      agentId: capture.agentId ?? "claude",
+      agentSessionId: capture.live ? "" : "abc-123",
+      cwd: "/help",
+      panelWasOpen: false,
+      ...(capture.live ? { live: true } : {}),
+    });
+  }
+
+  async function renderPaused() {
+    const view = render(<HelpPanel width={380} />);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(view.queryByTestId("help-resume-assistant")).not.toBeNull();
+    return view;
+  }
+
+  async function flushLaunch() {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+  }
+
+  it("offers a restart beside Resume, in the header and in the lane's own tab menu", async () => {
+    setupPausedLane();
+
+    const { container, getByTestId } = await renderPaused();
+
+    expect(getByTestId("help-restart-paused-conversation").textContent).toBe(
+      "Restart conversation"
+    );
+    expect(restartConversationButton(container)).not.toBeNull();
+    expect(tabMenuItem(container, 0, "Restart conversation")).not.toBeNull();
+    // Stop still needs something running to stop.
+    expect(
+      Array.from(container.querySelectorAll("button")).find((b) =>
+        b.textContent?.includes("Stop assistant")
+      )
+    ).toBeUndefined();
+  });
+
+  it("always asks first, naming a new conversation rather than an agent that stops", async () => {
+    setupPausedLane();
+
+    const { getByTestId } = await renderPaused();
+    fireEvent.click(getByTestId("help-restart-paused-conversation"));
+
+    expect(getByTestId("dialog-title").textContent).toBe("Restart this conversation?");
+    const description = getByTestId("dialog-description").textContent;
+    expect(description).toMatch(/^This tab starts a new conversation\. .*stays in past sessions/);
+    expect(mockDiscardConversation).not.toHaveBeenCalled();
+    expect(helpPanelState.clearHibernateSession).not.toHaveBeenCalled();
+  });
+
+  it("says the agent stops when the paused lane's assistant is still running on the host", async () => {
+    setupPausedLane({ live: true });
+
+    const { getByTestId } = await renderPaused();
+    fireEvent.click(getByTestId("help-restart-paused-conversation"));
+
+    expectStaysInPastSessions(getByTestId("dialog-description").textContent);
+  });
+
+  it("keeps the paused conversation when the confirm is cancelled", async () => {
+    setupPausedLane();
+
+    const { getByTestId, queryByTestId } = await renderPaused();
+    fireEvent.click(getByTestId("help-restart-paused-conversation"));
+    await act(async () => {
+      fireEvent.click(getByTestId("dialog-cancel"));
+    });
+
+    expect(queryByTestId("confirm-dialog")).toBeNull();
+    expect(mockDiscardConversation).not.toHaveBeenCalled();
+    expect(helpPanelState.clearHibernateSession).not.toHaveBeenCalled();
+    expect(mockDispatch).not.toHaveBeenCalledWith("agent.launch", expect.anything(), expect.anything());
+  });
+
+  it("discards the paused conversation and starts the captured agent fresh once confirmed", async () => {
+    setupPausedLane();
+    mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "terminal-fresh" } });
+    mockProvisionSession.mockResolvedValue({
+      sessionId: "sess-fresh",
+      sessionPath: "/sessions/fresh",
+      token: "tok-fresh",
+      tier: "core",
+      mcpUrl: null,
+      windowId: 1,
+    });
+
+    const { container, getByTestId } = await renderPaused();
+    fireEvent.click(restartConversationButton(container)!);
+    await act(async () => {
+      fireEvent.click(getByTestId("dialog-confirm"));
+    });
+    await flushLaunch();
+
+    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1", 0);
+    expect(mockDiscardConversation).toHaveBeenCalledWith("proj-1", 0);
+    expect(mockDispatch).toHaveBeenCalledWith(
+      "agent.launch",
+      expect.objectContaining({
+        agentId: "claude",
+        requestedId: expect.stringMatching(/^terminal-/),
+      }),
+      { source: "user" }
+    );
+    // A fresh start: the captured conversation is never claimed for a resume.
+    expect(mockTakePendingHibernation).not.toHaveBeenCalled();
+    // Restarting is not consent to start on every open (#10699).
+    expect(helpPanelState.setAutoLaunchEnabled).not.toHaveBeenCalled();
+  });
+
+  it("restarts nothing when the lane picked up a terminal while the confirm was open", async () => {
+    setupPausedLane();
+    const newSession = vi.spyOn(acquireHelpSessionController(0), "newSession");
+
+    const { getByTestId } = await renderPaused();
+    fireEvent.click(getByTestId("help-restart-paused-conversation"));
+    helpPanelState.terminalId = "term-resumed";
+    helpPanelState.agentId = "claude";
+    await act(async () => {
+      fireEvent.click(getByTestId("dialog-confirm"));
+    });
+
+    expect(newSession).not.toHaveBeenCalled();
+    expect(mockDiscardConversation).not.toHaveBeenCalled();
+  });
+
+  it("offers no restart when the captured agent is no longer installed", async () => {
+    // Resume can still take a running process over; a fresh start would launch an
+    // agent that isn't there.
+    setupPausedLane({ agentId: "codex", live: true });
+
+    const { container, queryByTestId } = await renderPaused();
+
+    expect(queryByTestId("help-restart-paused-conversation")).toBeNull();
+    expect(restartConversationButton(container)).toBeNull();
+    expect(tabMenuItem(container, 0, "Restart conversation")).toBeNull();
   });
 });
 

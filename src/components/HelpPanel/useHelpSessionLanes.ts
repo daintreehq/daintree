@@ -56,11 +56,29 @@ function spokenLaneLabel(tab: HelpSessionTab | undefined): string {
   return tab.fullTitle !== undefined ? `'${tab.fullTitle}'` : tab.label;
 }
 
+/**
+ * The lane on screen, paused on a conversation main captured for it (#14981): no
+ * terminal, and the agent a fresh start runs on, the one the conversation had.
+ */
+export interface PausedLane {
+  workspaceId: string;
+  agentId: string;
+  /** Its assistant is still running on the host, so a restart stops it. */
+  live: boolean;
+}
+
+interface PendingRestart {
+  slot: number;
+  /** Set when the request was for a paused lane rather than a running one. */
+  paused: PausedLane | null;
+}
+
 interface UseHelpSessionLanesOptions {
   panelRef: RefObject<HTMLElement | null>;
   activeSlot: number;
   activeWorkspaceId: string | null;
   terminalId: string | null;
+  pausedLane: PausedLane | null;
 }
 
 // The session-lane tab strip: its tab model, the select/close/restart handlers,
@@ -71,11 +89,13 @@ export function useHelpSessionLanes({
   activeSlot,
   activeWorkspaceId,
   terminalId,
+  pausedLane,
 }: UseHelpSessionLanesOptions) {
-  // The lane a restart is waiting on confirmation for. The header's overflow item
-  // and every tab's own menu share it, so the lane that restarts is the one the
-  // request named rather than whichever is in front when the user confirms.
-  const [pendingRestartSlot, setPendingRestartSlot] = useState<number | null>(null);
+  // The lane a restart is waiting on confirmation for. The header's overflow item,
+  // every tab's own menu and the paused lane's own button share it, so the lane
+  // that restarts is the one the request named rather than whichever is in front
+  // when the user confirms.
+  const [pendingRestart, setPendingRestart] = useState<PendingRestart | null>(null);
   // Where the restart confirm hands focus back: a tab menu's item is gone by the
   // time the dialog closes, but the lane's tab survives a restart. A ref because
   // the dialog resolves it after its exit animation, once the pending slot is
@@ -134,8 +154,10 @@ export function useHelpSessionLanes({
   );
 
   // The header's "Restart conversation" gate, per lane, so each tab's menu offers
-  // the same item exactly where the overflow menu would for that lane.
-  const laneCanRestart = useHelpPanelStore(
+  // the same item exactly where the overflow menu would for that lane. A paused
+  // lane joins it below: only the lane on screen is peeked, so a background tab
+  // offers it once it is selected.
+  const laneIsLive = useHelpPanelStore(
     useShallow((s) =>
       openSlots.map((slot) => {
         const lane = selectSlot(s, slot);
@@ -190,10 +212,18 @@ export function useHelpSessionLanes({
           fullTitle: task?.fullTitle,
           agentState: laneAgentStates[index],
           agentId: laneAgentIds[index] ?? null,
-          canRestart: laneCanRestart[index],
+          canRestart: laneIsLive[index] || (slot === activeSlot && pausedLane !== null),
         };
       }),
-    [openSlots, laneAgentStates, laneTaskTitles, laneAgentIds, laneCanRestart]
+    [
+      openSlots,
+      laneAgentStates,
+      laneTaskTitles,
+      laneAgentIds,
+      laneIsLive,
+      activeSlot,
+      pausedLane,
+    ]
   );
 
   // Bring back the tabs for lanes whose conversations an eviction or crash
@@ -440,25 +470,48 @@ export function useHelpSessionLanes({
 
   // Read at call time rather than from the render that offered the item: a
   // confirm can outlive its lane, and acquiring a controller for a closed slot
-  // would mint one with nothing to run.
-  const restartSlotNow = useCallback((slot: number) => {
-    const lane = selectSlot(useHelpPanelStore.getState(), slot);
-    if (!lane.terminalId || !lane.agentId) return;
-    acquireHelpSessionController(slot).newSession();
-  }, []);
+  // would mint one with nothing to run. A paused request also has to find the
+  // same pause it was asked about: a lane resumed, or a capture discarded,
+  // meanwhile is not the conversation the user agreed to throw away.
+  const restartSlotNow = useCallback(
+    (slot: number, paused: PausedLane | null) => {
+      const lane = selectSlot(useHelpPanelStore.getState(), slot);
+      if (paused) {
+        if (
+          lane.terminalId ||
+          slot !== activeSlot ||
+          pausedLane?.workspaceId !== paused.workspaceId ||
+          pausedLane.agentId !== paused.agentId
+        ) {
+          return;
+        }
+        acquireHelpSessionController(slot).newSession(paused.agentId);
+        return;
+      }
+      if (!lane.terminalId || !lane.agentId) return;
+      acquireHelpSessionController(slot).newSession();
+    },
+    [activeSlot, pausedLane]
+  );
 
   const handleRestartSlot = useCallback(
     (slot: number) => {
       const lane = selectSlot(useHelpPanelStore.getState(), slot);
+      if (!lane.terminalId && slot === activeSlot && pausedLane) {
+        // Always asks: the captured conversation is exactly what a restart discards.
+        restartFocusSlotRef.current = slot;
+        setPendingRestart({ slot, paused: pausedLane });
+        return;
+      }
       if (!lane.terminalId || !lane.agentId) return;
       if (laneNeedsDiscardConfirm(slot)) {
         restartFocusSlotRef.current = slot;
-        setPendingRestartSlot(slot);
+        setPendingRestart({ slot, paused: null });
         return;
       }
-      restartSlotNow(slot);
+      restartSlotNow(slot, null);
     },
-    [laneNeedsDiscardConfirm, restartSlotNow]
+    [activeSlot, pausedLane, laneNeedsDiscardConfirm, restartSlotNow]
   );
 
   // The header's overflow item and the revoked-session banner act on the lane on screen.
@@ -468,13 +521,13 @@ export function useHelpSessionLanes({
   );
 
   const handleConfirmRestartSlot = useCallback(() => {
-    const slot = pendingRestartSlot;
-    setPendingRestartSlot(null);
-    if (slot !== null) restartSlotNow(slot);
-  }, [pendingRestartSlot, restartSlotNow]);
+    const pending = pendingRestart;
+    setPendingRestart(null);
+    if (pending) restartSlotNow(pending.slot, pending.paused);
+  }, [pendingRestart, restartSlotNow]);
 
   const handleCancelRestartSlot = useCallback(() => {
-    setPendingRestartSlot(null);
+    setPendingRestart(null);
   }, []);
 
   const resolveRestartFocusTarget = useCallback(
@@ -519,7 +572,8 @@ export function useHelpSessionLanes({
     handleCloseSlot,
     handleRestartSlot,
     handleRestartActiveSlot,
-    pendingRestartSlot,
+    pendingRestartSlot: pendingRestart?.slot ?? null,
+    pendingRestartPaused: pendingRestart?.paused ?? null,
     handleConfirmRestartSlot,
     handleCancelRestartSlot,
     resolveRestartFocusTarget,

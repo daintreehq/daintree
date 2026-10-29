@@ -263,6 +263,13 @@ export interface HelpLaunchOptions {
    * Pass for "+ New session" and "Run anyway" paths.
    */
   requestedId?: string;
+  /**
+   * Run the version gate even though `requestedId` is set. A reserved launch
+   * normally skips it because the terminal it replaces already passed it; a
+   * paused lane has no such terminal, and may have been captured before an
+   * app update raised the minimum (#14981).
+   */
+  checkVersion?: boolean;
   /** For run-anyway: bypass missing-CLI guard. */
   force?: boolean;
   /** For new-session / run-anyway: ask the dispatcher to activate the dock. */
@@ -720,16 +727,23 @@ export class HelpSessionController {
    * same agent. The reserved id is pre-recorded in the store synchronously
    * so the dock filter sees the new reservation the instant `addPanel`
    * commits (#6951).
+   *
+   * A paused lane has no terminal, so it names the agent its captured
+   * conversation belongs to (#14981). The same discard runs, and the reserved
+   * launch never adopts or resumes: provisioning displaces an assistant still
+   * running on the host for this lane.
    */
-  newSession(): void {
+  newSession(capturedAgentId?: string): void {
     const { terminalId, agentId } = this._slotState();
-    if (!terminalId || !agentId) return;
+    const launchAgentId = terminalId ? agentId : capturedAgentId;
+    if (!launchAgentId) return;
     const reservedId = `terminal-${crypto.randomUUID()}`;
     this.launch({
-      agentId,
+      agentId: launchAgentId,
       requestedId: reservedId,
       replaceExisting: true,
       activateDock: true,
+      checkVersion: !terminalId,
     });
   }
 
@@ -1475,9 +1489,10 @@ export class HelpSessionController {
     this._armLaunchWatchdog(gen, launchAgentId);
     try {
       // reservedId paths (newSession/runAnyway) skip the version gate, so they
-      // open straight at "provisioning"; the empty-state flow starts at the
-      // version probe.
-      this._patch({ phase: reservedId ? "provisioning" : "version-checking" });
+      // open straight at "provisioning"; the empty-state flow, and a paused
+      // lane's restart, start at the version probe.
+      const checksVersion = !reservedId || options.checkVersion === true;
+      this._patch({ phase: checksVersion ? "version-checking" : "provisioning" });
       const folderPathRequest = Promise.resolve(window.electron.help.getFolderPath());
       // Settled below unless the take-over binds first; never left unhandled.
       folderPathRequest.catch(() => undefined);
@@ -1527,8 +1542,8 @@ export class HelpSessionController {
       // session token we'd immediately discard. Skipped for the
       // "requestedId" paths (newSession/runAnyway) because those are
       // triggered from a live terminal where the version was already
-      // accepted on the initial launch.
-      if (!reservedId) {
+      // accepted on the initial launch — unless a paused lane asked for it.
+      if (checksVersion) {
         const launchAgentName = getAgentConfig(launchAgentId)?.name ?? launchAgentId;
         const versionBlock = await checkAssistantVersion(
           launchAgentId,
@@ -1553,6 +1568,9 @@ export class HelpSessionController {
           }
           this._hasAutoLaunched = false;
           this._versionGate.setHasBlockedThisSession(true);
+          // A reserved launch already holds the lane's terminal slot; the gate
+          // only shows over a lane that has none.
+          this._abandonInFlightLaunch(reservedId, session, { resetAutoLaunch: false });
           this._patch({ assistantVersionTooOld: versionBlock });
           return;
         }
