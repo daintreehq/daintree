@@ -10,7 +10,8 @@ import {
   useState,
 } from "react";
 import { EditorView } from "@codemirror/view";
-import { EditorSelection } from "@codemirror/state";
+import { EditorSelection, Transaction } from "@codemirror/state";
+import { isolateHistory } from "@codemirror/commands";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
 import type { AgentState } from "@/types";
 import { logError } from "@/utils/logger";
@@ -1485,13 +1486,35 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       }
     };
 
-    // A template fills the draft and leaves the sending to the user; routing it
-    // through sendText would submit it.
+    // A template fills an empty draft and goes after a written one; routing it
+    // through sendText would submit it. After the text rather than at the
+    // caret: the picker's own click has already focused the editor, so a
+    // composer the user never clicked into reports a caret at 0 they never chose.
     const handleTemplateDraft = (text: string) => {
-      applyEditorValue(text, {
-        selection: EditorSelection.create([EditorSelection.cursor(text.length)]),
-        focus: true,
+      const view = editorViewRef.current;
+      const draft = view?.state.doc.toString() ?? lastEmittedValueRef.current;
+      const written = draft.trim() !== "";
+      if (written && text.trim() === "") {
+        view?.focus();
+        return;
+      }
+      const next = composeDraftWithInstruction(draft, text);
+      if (!view || !written) {
+        applyEditorValue(next, {
+          selection: EditorSelection.create([EditorSelection.cursor(next.length)]),
+          focus: true,
+        });
+        return;
+      }
+      // Only the new span goes in, so the words, chips and undo steps already
+      // there are untouched and undo takes the template back out on its own.
+      view.dispatch({
+        changes: { from: draft.length, insert: next.slice(draft.length) },
+        selection: EditorSelection.cursor(next.length),
+        scrollIntoView: true,
+        annotations: [isolateHistory.of("full"), Transaction.userEvent.of("input.paste")],
       });
+      view.focus();
     };
 
     useImperativeHandle(
