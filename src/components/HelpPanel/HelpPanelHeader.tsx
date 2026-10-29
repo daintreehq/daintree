@@ -3,6 +3,7 @@ import { ChevronRight, CircleHelp, CircleStop, Ellipsis, History, RotateCw } fro
 import { DaintreeIcon } from "@/components/icons/DaintreeIcon";
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
@@ -132,6 +133,9 @@ interface HelpPanelHeaderProps {
   onEndSession: () => void;
   onResumePastSession: () => void;
   onOpenDocs: () => void;
+  /** Whether opening the panel starts a session by itself. */
+  autoLaunchEnabled: boolean;
+  onAutoLaunchEnabledChange: (enabled: boolean) => void;
   onClose: () => void;
   isFocused?: boolean;
   /** Agents a session can be started on by name; offered only when there are several. */
@@ -153,6 +157,8 @@ export function HelpPanelHeader({
   onEndSession,
   onResumePastSession,
   onOpenDocs,
+  autoLaunchEnabled,
+  onAutoLaunchEnabledChange,
   onClose,
   isFocused = false,
   newSessionAgentIds = [],
@@ -264,6 +270,17 @@ export function HelpPanelHeader({
               <CircleHelp className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
               Open docs
             </DropdownMenuItem>
+            {/* The one place auto-start is turned on or off, so its state is
+                visible from the panel it governs. Starting a session never
+                turns it on by the way (#14976). */}
+            <DropdownMenuSeparator />
+            <DropdownMenuCheckboxItem
+              checked={autoLaunchEnabled}
+              onCheckedChange={onAutoLaunchEnabledChange}
+              data-testid="assistant-auto-launch-toggle"
+            >
+              Start when the panel opens
+            </DropdownMenuCheckboxItem>
             {canEndSession && (
               <>
                 <DropdownMenuSeparator />

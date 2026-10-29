@@ -195,6 +195,23 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
     </button>
   ),
   DropdownMenuSeparator: () => <hr />,
+  DropdownMenuCheckboxItem: ({
+    children,
+    checked,
+    onCheckedChange,
+  }: {
+    children: React.ReactNode;
+    checked?: boolean;
+    onCheckedChange?: (checked: boolean) => void;
+  }) => (
+    <button
+      role="menuitemcheckbox"
+      aria-checked={checked === true}
+      onClick={() => onCheckedChange?.(!checked)}
+    >
+      {children}
+    </button>
+  ),
 }));
 
 // The session tabs' per-lane menu is incidental here, and the real primitive
@@ -461,7 +478,11 @@ vi.mock("../FigureRail", () => ({ FigureRail: () => null }));
 
 import { HelpPanel } from "../HelpPanel";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
-import { __resetHelpSessionControllersForTests } from "@/controllers/helpSessionControllerRegistry";
+import {
+  __resetHelpSessionControllersForTests,
+  acquireHelpSessionController,
+} from "@/controllers/helpSessionControllerRegistry";
+import { assistantSlotKey } from "@shared/config/assistantSlots";
 
 // The real `app:view-revealed` bridge fans out to every registered listener;
 // HelpPanel registers the switch-back recovery effect against it (#10739).
@@ -663,7 +684,7 @@ beforeEach(() => {
 });
 
 describe("HelpPanel — empty state hero (Daintree-relevant entry points)", () => {
-  it("'Start assistant' CTA records consent and launches, with no auto-launch beforehand (#10699)", async () => {
+  it("'Start assistant' CTA launches without turning on auto-start, with no auto-launch beforehand (#10699, #14976)", async () => {
     // Consent off: opening the panel must show the CTA and start nothing.
     helpPanelState.autoLaunchEnabled = false;
     helpPanelState.preferredAgentId = "claude";
@@ -681,7 +702,8 @@ describe("HelpPanel — empty state hero (Daintree-relevant entry points)", () =
       fireEvent.click(cta);
     });
 
-    expect(helpPanelState.setAutoLaunchEnabled).toHaveBeenCalledWith(true);
+    // One session, not consent to every later open starting one (#14976).
+    expect(helpPanelState.setAutoLaunchEnabled).not.toHaveBeenCalled();
     expect(mockProvisionSession).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: "claude" })
     );
@@ -692,7 +714,80 @@ describe("HelpPanel — empty state hero (Daintree-relevant entry points)", () =
     );
   });
 
-  it("first-run starter-prompt chip records consent and launches (#10699)", async () => {
+  it("shows auto-start in the panel menu and turns it either way from there (#14976)", async () => {
+    helpPanelState.autoLaunchEnabled = false;
+    helpPanelState.preferredAgentId = "claude";
+    cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
+
+    const { rerender } = render(<HelpPanel width={380} />);
+
+    const item = screen.getByRole("menuitemcheckbox", { name: "Start when the panel opens" });
+    expect(item.getAttribute("aria-checked")).toBe("false");
+    fireEvent.click(item);
+    expect(helpPanelState.setAutoLaunchEnabled).toHaveBeenLastCalledWith(true);
+
+    helpPanelState.autoLaunchEnabled = true;
+    rerender(<HelpPanel width={380} />);
+    const checked = screen.getByRole("menuitemcheckbox", { name: "Start when the panel opens" });
+    expect(checked.getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(checked);
+    expect(helpPanelState.setAutoLaunchEnabled).toHaveBeenLastCalledWith(false);
+  });
+
+  it.each([false, true])(
+    "the strip's New session queues the default agent on the new tab itself (auto-start %s, #14976)",
+    async (autoLaunchEnabled) => {
+      helpPanelState.autoLaunchEnabled = autoLaunchEnabled;
+      helpPanelState.preferredAgentId = "claude";
+      helpPanelState.openSlot = vi.fn(() => 1);
+      cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
+      mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
+      mockGetFolderPath.mockResolvedValue("/help");
+      mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "new-term" } });
+
+      render(<HelpPanel width={380} />);
+      // With auto-start on, the empty tab on screen starts its own session.
+      await vi.waitFor(() => {
+        expect(mockProvisionSession).toHaveBeenCalledTimes(autoLaunchEnabled ? 1 : 0);
+      });
+      const launchesBefore = mockProvisionSession.mock.calls.length;
+
+      await act(async () => {
+        fireEvent.click(screen.getByLabelText("New session"));
+      });
+
+      // Waiting on the new tab's first input sync, not launched through the
+      // tab on screen, and never by turning auto-start on.
+      expect(acquireHelpSessionController(1)["_queuedLaunch"]).toEqual({
+        agentId: "claude",
+        replaceExisting: true,
+      });
+      expect(mockProvisionSession.mock.calls.length).toBe(launchesBefore);
+      expect(helpPanelState.setAutoLaunchEnabled).not.toHaveBeenCalled();
+    }
+  );
+
+  it("leaves a new tab that holds a captured conversation to offer its own Resume (#14976)", async () => {
+    helpPanelState.autoLaunchEnabled = false;
+    helpPanelState.preferredAgentId = "claude";
+    helpPanelState.openSlot = vi.fn(() => 1);
+    helpPanelState.hibernateSessions = {
+      [assistantSlotKey("proj-default", 1)]: { sessionId: "s1", cwd: "/help", agentId: "codex" },
+    };
+    cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
+
+    render(<HelpPanel width={380} />);
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText("New session"));
+    });
+
+    expect(helpPanelState.openSlot).toHaveBeenCalled();
+    expect(acquireHelpSessionController(1)["_queuedLaunch"]).toBeNull();
+  });
+
+  it("first-run starter-prompt chip launches without turning on auto-start (#10699, #14976)", async () => {
     helpPanelState.autoLaunchEnabled = false;
     helpPanelState.preferredAgentId = "claude";
     // No prior agent launches → the first-run starter chips render.
@@ -712,7 +807,7 @@ describe("HelpPanel — empty state hero (Daintree-relevant entry points)", () =
       fireEvent.click(chip);
     });
 
-    expect(helpPanelState.setAutoLaunchEnabled).toHaveBeenCalledWith(true);
+    expect(helpPanelState.setAutoLaunchEnabled).not.toHaveBeenCalled();
     expect(mockProvisionSession).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: "claude" })
     );
@@ -840,7 +935,7 @@ describe("HelpPanel — empty state hero (Daintree-relevant entry points)", () =
     expect(mockProvisionSession).not.toHaveBeenCalled();
   });
 
-  it("stores the chosen agent as the default and starts it", async () => {
+  it("stores the chosen agent as the default and starts it, leaving auto-start off (#14976)", async () => {
     helpPanelState.autoLaunchEnabled = false;
     helpPanelState.preferredAgentId = null;
     cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
@@ -857,7 +952,7 @@ describe("HelpPanel — empty state hero (Daintree-relevant entry points)", () =
     expect(helpPanelState.setPreferredAgent).toHaveBeenCalledWith("codex", {
       switchSession: false,
     });
-    expect(helpPanelState.setAutoLaunchEnabled).toHaveBeenCalledWith(true);
+    expect(helpPanelState.setAutoLaunchEnabled).not.toHaveBeenCalled();
     expect(mockProvisionSession).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: "codex" })
     );
