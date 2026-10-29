@@ -15,8 +15,12 @@ interface CssRule {
   context: string[];
 }
 
+// Strings are matched so they are skipped: the entry's `@source` globs end in a
+// slash-star that would otherwise open a comment and swallow real rules.
+const COMMENT_OR_STRING = /\/\*[\s\S]*?\*\/|"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'/g;
+
 function collectRules(css: string): CssRule[] {
-  const src = css.replace(/\/\*[\s\S]*?\*\//g, "");
+  const src = css.replace(COMMENT_OR_STRING, (match) => (match.startsWith("/*") ? "" : match));
   const rules: CssRule[] = [];
   const stack: { prelude: string; bodyStart: number }[] = [];
   let preludeStart = 0;
