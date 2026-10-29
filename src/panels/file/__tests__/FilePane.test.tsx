@@ -3837,7 +3837,7 @@ describe("FilePane edit mode (#12323)", () => {
         draftText: "# Plan (edited)\n",
         dirty: true,
         conflict: false,
-        save: async () => true,
+        save: async () => ({ status: "saved" as const }),
         discard: async () => {},
       });
     });
@@ -3852,7 +3852,7 @@ describe("FilePane edit mode (#12323)", () => {
         draftText: "# Plan (edited)\n",
         dirty: true,
         conflict: true,
-        save: async () => true,
+        save: async () => ({ status: "saved" as const }),
         discard: async () => {},
       });
     });
@@ -3929,7 +3929,7 @@ describe("FilePane edit mode (#12323)", () => {
           draftText: "# Plan (edited)\n",
           dirty: true,
           conflict: false,
-          save: async () => false,
+          save: async () => ({ status: "conflict" as const, reason: "The file changed on disk" }),
           discard: async () => {},
         });
       });
@@ -4039,7 +4039,7 @@ describe("FilePane edit mode (#12323)", () => {
         draftText: "# Plan (edited)\n",
         dirty: true,
         conflict: false,
-        save: async () => true,
+        save: async () => ({ status: "saved" as const }),
         discard: async () => {},
       });
       await renderPane({ fileViewMode: "edit" });

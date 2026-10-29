@@ -3280,7 +3280,7 @@ describe("file browser document navigation guards", () => {
         draftText: "draft",
         dirty: true,
         conflict: false,
-        save: async () => true,
+        save: async () => ({ status: "saved" as const }),
         discard: async () => {},
       });
       const guard = vi.fn(async () => verdict);

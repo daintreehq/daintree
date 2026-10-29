@@ -67,7 +67,9 @@ describe("pluginFileDocument (#13809)", () => {
     release();
     const listener = vi.fn();
     handle.document.onDidChange(listener);
-    await expect(useFileDocumentStore.getState().byPanelId["panel-1"]!.save()).resolves.toBe(true);
+    await expect(useFileDocumentStore.getState().byPanelId["panel-1"]!.save()).resolves.toEqual({
+      status: "saved",
+    });
     expect(bridge.save).toHaveBeenCalledWith(
       expect.objectContaining({ text: '{"a":1}', expectedRevision: REV_A })
     );
@@ -167,6 +169,71 @@ describe("pluginFileDocument (#13809)", () => {
     expect(useFileDocumentStore.getState().byPanelId["panel-1"]?.dirty).toBe(false);
   });
 
+  it.each([
+    [
+      { status: "error", message: "Disk full" },
+      { status: "error", reason: "Disk full" },
+    ],
+    [
+      { status: "refused", reason: "unavailable" },
+      { status: "unavailable", reason: "The file isn't where it was" },
+    ],
+    [
+      { status: "refused", reason: "too-large" },
+      { status: "refused", reason: "The draft is too large for this editor to save" },
+    ],
+  ])(
+    "the close prompt's Save names why %o didn't land and keeps the draft (#15017)",
+    async (result, outcome) => {
+      bridge.read.mockResolvedValueOnce({ status: "ok", text: "{}", revision: REV_A });
+      bridge.save.mockResolvedValue(result);
+      const handle = openPluginFileDocument(target());
+      handle.retain();
+      await handle.document.read();
+      handle.document.setDraft("mine");
+      await expect(useFileDocumentStore.getState().byPanelId["panel-1"]!.save()).resolves.toEqual(
+        outcome
+      );
+      expect(handle.document.getDraft()).toBe("mine");
+      expect(useFileDocumentStore.getState().byPanelId["panel-1"]?.dirty).toBe(true);
+    }
+  );
+
+  it("doesn't report saved when newer edits landed while the close prompt's Save ran", async () => {
+    bridge.read.mockResolvedValueOnce({ status: "ok", text: "{}", revision: REV_A });
+    let release: (value: unknown) => void = () => {};
+    bridge.save.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        })
+    );
+    const handle = openPluginFileDocument(target());
+    handle.retain();
+    await handle.document.read();
+    handle.document.setDraft("first");
+    const saving = useFileDocumentStore.getState().byPanelId["panel-1"]!.save();
+    handle.document.setDraft("second");
+    release({ status: "saved", revision: REV_B });
+    await expect(saving).resolves.toEqual({
+      status: "refused",
+      reason: "Edits made during the save are still unsaved",
+    });
+    expect(handle.document.getDraft()).toBe("second");
+    expect(useFileDocumentStore.getState().byPanelId["panel-1"]?.dirty).toBe(true);
+  });
+
+  it("refuses the close prompt's Save for a draft with no revision read yet", async () => {
+    const handle = openPluginFileDocument(target());
+    handle.retain();
+    handle.document.setDraft("mine");
+    await expect(useFileDocumentStore.getState().byPanelId["panel-1"]!.save()).resolves.toEqual({
+      status: "refused",
+      reason: "The file hasn't finished loading",
+    });
+    expect(bridge.save).not.toHaveBeenCalled();
+  });
+
   it("never rebases a standing draft on a re-read, so the close prompt can't overwrite a change", async () => {
     bridge.read.mockResolvedValueOnce({ status: "ok", text: "{}", revision: REV_A });
     bridge.save.mockResolvedValue({ status: "conflict", revision: REV_B });
@@ -177,7 +244,10 @@ describe("pluginFileDocument (#13809)", () => {
     // The disk moved on and a remounted view re-reads it.
     bridge.read.mockResolvedValueOnce({ status: "ok", text: "theirs", revision: REV_B });
     await handle.document.read();
-    await expect(useFileDocumentStore.getState().byPanelId["panel-1"]!.save()).resolves.toBe(false);
+    await expect(useFileDocumentStore.getState().byPanelId["panel-1"]!.save()).resolves.toEqual({
+      status: "conflict",
+      reason: "The file changed on disk",
+    });
     expect(bridge.save).toHaveBeenCalledWith(expect.objectContaining({ expectedRevision: REV_A }));
   });
 
