@@ -146,6 +146,34 @@ describe("MentionTextarea", () => {
     expect(field.getAttribute("aria-controls")).toBeNull();
   });
 
+  it("says suggestions failed to load rather than that nothing matched", async () => {
+    let fail = true;
+    render(
+      <Mentions
+        getSuggestions={(_trigger, query) =>
+          fail
+            ? Promise.reject(new Error("offline"))
+            : PEOPLE.filter((person) => person.label.startsWith(query)).slice(0, 0)
+        }
+      />
+    );
+    const field = textarea();
+    type(field, "@a");
+    await flush();
+    expect(document.querySelector("[data-autocomplete-menu]")?.textContent).toContain(
+      "Couldn't load suggestions"
+    );
+    expect(document.querySelector("[data-autocomplete-menu]")?.textContent).not.toContain(
+      "No people match"
+    );
+    fail = false;
+    type(field, "@al");
+    await flush();
+    expect(document.querySelector("[data-autocomplete-menu]")?.textContent).toContain(
+      "No people match"
+    );
+  });
+
   it("puts the caret after the inserted token", () => {
     render(<Mentions />);
     const field = textarea();

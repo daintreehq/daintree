@@ -386,6 +386,9 @@ function MentionField(props: MentionFieldProps) {
   const [session, setSession] = useState<MentionSession | null>(null);
   const [items, setItems] = useState<PluginMentionSuggestion[]>([]);
   const [itemsKey, setItemsKey] = useState<string | null>(null);
+  // Whether those items stand for a lookup that failed, not one that found
+  // nothing: the plugin's static empty copy can't tell the two apart.
+  const [failed, setFailed] = useState(false);
   const [loading, setLoading] = useState(false);
   const [selected, setSelected] = useState(0);
   // The trigger Escape closed; the menu stays shut until the caret leaves it.
@@ -473,11 +476,12 @@ function MentionField(props: MentionFieldProps) {
   const request = (next: MentionSession) => {
     const seq = ++requestRef.current;
     const key = sessionKey(next);
-    const settle = (list: unknown) => {
+    const settle = (list: unknown, didFail = false) => {
       if (requestRef.current !== seq) return;
       const read = readSuggestions(list);
       setItems(read);
       setItemsKey(key);
+      setFailed(didFail);
       setLoading(false);
       setSelected(firstEnabled(read));
     };
@@ -485,15 +489,18 @@ function MentionField(props: MentionFieldProps) {
     const outcome = attempt(() => load(next.char, next.query));
     if (!outcome.ok) {
       reportPluginFault("MentionTextarea getSuggestions threw", outcome.error);
-      settle([]);
+      settle([], true);
       return;
     }
     if (isThenable(outcome.value)) {
       setLoading(true);
-      settleThenable(outcome.value).then(settle, (error: unknown) => {
-        reportPluginFault("MentionTextarea getSuggestions rejected", error);
-        settle([]);
-      });
+      settleThenable(outcome.value).then(
+        (list) => settle(list),
+        (error: unknown) => {
+          reportPluginFault("MentionTextarea getSuggestions rejected", error);
+          settle([], true);
+        }
+      );
       return;
     }
     settle(outcome.value);
@@ -686,7 +693,9 @@ function MentionField(props: MentionFieldProps) {
                 listboxId={listboxId}
                 title={trigger?.title}
                 ariaLabel={trigger?.title ?? "Suggestions"}
-                emptyMessage={trigger?.emptyMessage ?? "No matches"}
+                emptyMessage={
+                  failed ? "Couldn't load suggestions" : (trigger?.emptyMessage ?? "No matches")
+                }
               />
             </div>,
             document.body
