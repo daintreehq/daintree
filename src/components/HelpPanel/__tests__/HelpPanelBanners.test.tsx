@@ -337,7 +337,12 @@ describe("HelpPanelBanners — active grant countdown (#10042)", () => {
     vi.useFakeTimers();
     try {
       const base = Date.now();
-      const grant = { sessionId: "s1", toolId: "t1", ttlMs: 900_000, maxExpiresAt: base + 1_800_000 };
+      const grant = {
+        sessionId: "s1",
+        toolId: "t1",
+        ttlMs: 900_000,
+        maxExpiresAt: base + 1_800_000,
+      };
       const { getByTestId, rerender } = render(
         <HelpPanelBanners {...baseProps()} activeGrant={{ ...grant, expiresAt: base + 5_000 }} />
       );

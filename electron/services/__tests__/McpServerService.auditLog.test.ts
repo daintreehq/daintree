@@ -504,9 +504,7 @@ describe("McpServerService", () => {
       emit("help-transport", { ...grant, type: "grant.issued", expiresAt: 900_000 });
       emit("help-transport", { ...grant, type: "grant.refreshed", expiresAt: 1_500_000 });
 
-      expect(appendGrantRecord.mock.calls.map(([record]) => record.type)).toEqual([
-        "grant.issued",
-      ]);
+      expect(appendGrantRecord.mock.calls.map(([record]) => record.type)).toEqual(["grant.issued"]);
       const pushed = webContents.send.mock.calls
         .filter(([channel]) => channel === CHANNELS.MCP_GRANT_LIFECYCLE)
         .map(([, payload]) => (payload as McpGrantLifecyclePayload).type);

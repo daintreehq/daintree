@@ -78,7 +78,10 @@ export function SessionLiveStatusCard({ configuredTier }: SessionLiveStatusCardP
                         <span className="font-mono text-text-secondary break-all">
                           {grant.toolId}
                         </span>
-                        <GrantCountdown expiresAt={grant.expiresAt} maxExpiresAt={grant.maxExpiresAt} />
+                        <GrantCountdown
+                          expiresAt={grant.expiresAt}
+                          maxExpiresAt={grant.maxExpiresAt}
+                        />
                       </div>
                     ))}
                   </div>
