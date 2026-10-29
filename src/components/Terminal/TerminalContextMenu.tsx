@@ -886,6 +886,10 @@ function TerminalContextMenuBody({
             onRequestRestartOnPreset={setRestartOnPresetRequest}
             onAction={handleAction}
           />
+          {/* Other plugins' rows sit above the identity group, never after
+              Trash and Kill: destruction ends the menu, as on the worktree
+              menu, so no third-party row is one slip from killing the agent. */}
+          <PluginContextMenuSection items={pluginItems} dispatchArgs={pluginDispatchArgs} />
           <ContextMenuSeparator />
           <TerminalIdentityMenuItems
             canDuplicate={canDuplicatePanelKind(kind)}
@@ -894,7 +898,6 @@ function TerminalContextMenuBody({
             isBackgrounded={isBackgrounded}
             onAction={handleAction}
           />
-          <PluginContextMenuSection items={pluginItems} dispatchArgs={pluginDispatchArgs} />
         </>,
         handleContextMenu
       )}
