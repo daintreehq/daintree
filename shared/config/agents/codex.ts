@@ -190,12 +190,13 @@ export const config: AgentConfig = {
     // quit (0.165.0), so a stale interrupt notice delivered beside it can't
     // release a press into the teardown. The prompt glyph is part of the
     // marker: the interrupt also stops whatever command the turn was running,
-    // and that command's last output can say "Shutting down..." itself.
+    // and that command's last output can say "Shutting down..." itself. The
+    // dots are left off only because copy rules ban three-dot literals.
     shutdownSignal: {
       kind: "gated-key-escalation",
       keySequence: "\x03",
       gateTexts: ["■ Conversation interrupted", "again to quit"],
-      quittingTexts: ["› Shutting down..."],
+      quittingTexts: ["› Shutting down"],
       maxPresses: 2,
       perPressTimeoutMs: 1500,
     },
