@@ -1143,6 +1143,9 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     // One write, so fields saved together (a mic's id and its name) land
     // together or not at all.
     store.set("voiceInput", { ...store.get("voiceInput"), ...updates });
+    // Off means the microphone is off (#14947): a running session ends the way
+    // a stop would, in whichever view owns it, so its text stays in the draft.
+    if (updates.enabled === false) requestLiveSessionStop();
   };
 
   const reportAudioOverflow = (session: VoiceSession) => {
@@ -1459,6 +1462,10 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       endSession(session, "cancelled");
       if (ownsProvider) service?.stop();
     });
+    // Dictation turned off after this view read the settings, or while it
+    // waited behind the session turning it off stopped (#14947). It may already
+    // hold speech, so it stops as a stop would rather than being refused.
+    if (!getVoiceSettings().enabled) requestLiveSessionStop(session.id);
     // Main-process clock only; correlate with renderer start steps by session id.
     const startedAt = performance.now();
     // Whatever already ended it (a stop, a newer start, its view going away)
