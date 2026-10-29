@@ -2349,6 +2349,24 @@ describe("NewWorktreeDialog — creating on another host (#14991)", () => {
     expect(draft()).toMatchObject({ recipeId: null });
   });
 
+  it("doesn't take a plugin's recipe for a team one, whatever its id (#14991)", async () => {
+    recipePickerCalls.selected = {
+      id: "inrepo-acme.tools.setup",
+      name: "Setup",
+      terminals: [],
+      origin: { kind: "plugin", pluginId: "inrepo-acme.tools", contributionId: "setup" },
+    } as typeof recipePickerCalls.selected;
+    renderDialog();
+    await advanceTimersGradually(500);
+    await nameBranch();
+    await chooseHost("studio-02");
+
+    expect(screen.getByTestId("placed-recipe-note").textContent).toBe(
+      "studio-02 only runs team recipes from the repository, so this one won't run there"
+    );
+    expect(draft()).toMatchObject({ recipeId: null });
+  });
+
   it("sends a team recipe, saying it runs only if that host's copy has it", async () => {
     recipePickerCalls.selected = {
       id: "0f9c1e5a-team",

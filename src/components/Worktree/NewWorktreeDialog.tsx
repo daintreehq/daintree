@@ -54,6 +54,7 @@ import { useWorktreeFormErrors, type ErrorField } from "./hooks/useWorktreeFormE
 import { useWorktreeFormValidation } from "./hooks/useWorktreeFormValidation";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { isInRepoRecipeId } from "@shared/utils/recipeFilename";
+import { isPluginRecipe } from "@shared/types/project";
 import { recipeTerminalsStartAgent, spawnPanelsFromRecipe } from "./panelSpawning";
 import {
   notifyAgentNotStarted,
@@ -1191,8 +1192,13 @@ export function NewWorktreeDialog({
   const placementElsewhere = placementHost !== null;
   // Another host runs only a team recipe, from its own copy of the repository:
   // a cloned layout or a recipe kept on this host is never sent (#14991).
+  // Provenance first, as `getRecipeScope` reads it: a plugin's id can carry the
+  // legacy in-repo prefix.
   const placedRecipeId =
-    selectedRecipeId !== null && selectedRecipe && isInRepoRecipeId(selectedRecipe)
+    selectedRecipeId !== null &&
+    selectedRecipe &&
+    !isPluginRecipe(selectedRecipe) &&
+    isInRepoRecipeId(selectedRecipe)
       ? selectedRecipeId
       : null;
   // The form as it stands, for another host to create: validated here, so the
