@@ -3209,13 +3209,15 @@ class VoiceRecordingService {
           finished = takeFinishedTranscript(stoppedTarget, stoppedSessionId);
         }
         if (shouldAnnounce && this.stopAnnounces) {
-          // A refusal still on the border goes with it: this would cut one
-          // just heard off before the announcer reads it.
+          // A refusal still on the session's border goes with it: this would
+          // cut one just heard off before the announcer reads it.
           const refusal = useVoiceRecordingStore.getState().scratchRefusal;
           useVoiceRecordingStore
             .getState()
             .announce(
-              refusal ? `${announcement} ${SCRATCH_REFUSAL_STATUS[refusal.reason]}` : announcement
+              refusal && refusal.panelId === stoppedTarget?.panelId
+                ? `${announcement} ${SCRATCH_REFUSAL_STATUS[refusal.reason]}`
+                : announcement
             );
         }
       } else if (nextStatus === "idle") {

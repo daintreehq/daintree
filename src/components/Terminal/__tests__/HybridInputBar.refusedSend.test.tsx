@@ -314,6 +314,24 @@ describe("HybridInputBar with a host that says whether the terminal took the sen
     expect(caption()?.textContent).toBe("Not sent");
   });
 
+  it("lets a send refused after a scratch refusal take the border back", async () => {
+    const { container, type, pressEnter, settle, caption } = await mount();
+    const scratchCaption = () => container.querySelector("[data-scratch-refused-caption]");
+    await type("ship it");
+    await pressEnter();
+    act(() => {
+      useVoiceRecordingStore.setState({
+        scratchRefusal: { panelId: "term-1", reason: "nothing", id: 1 },
+      });
+    });
+    expect(scratchCaption()).not.toBeNull();
+
+    await settle(false);
+
+    expect(scratchCaption()).toBeNull();
+    expect(caption()?.textContent).toBe("Not sent");
+  });
+
   it("says a scratch refusal in the Expanded Editor's header, and from inside its dialog", async () => {
     const { chord } = await mount();
     await chord("e");

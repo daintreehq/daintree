@@ -509,6 +509,14 @@ describe("VoiceRecordingService — a scratch that removes nothing says why (#14
     voiceStore.getState().beginSession({ panelId: PANEL, projectId: PROJECT }, "session-2");
     await service.stop("Dictation stopped.");
     expect(voiceStore.getState().announcement?.text).toBe("Dictation stopped.");
+
+    // Nor one from a session before the one a stop catches still arming.
+    voiceStore.getState().beginSession({ panelId: PANEL, projectId: PROJECT }, "session-3");
+    complete("Scratch that.", "c");
+    expect(voiceStore.getState().scratchRefusal).not.toBeNull();
+    voiceStore.setState({ status: "arming", activeTarget: { panelId: "panel-2" } });
+    await service.stop("Dictation stopped.");
+    expect(voiceStore.getState().announcement?.text).toBe("Dictation stopped.");
   });
 
   it("leaves an open Canopy reply's refusal to its own composer", async () => {

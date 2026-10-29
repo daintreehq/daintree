@@ -1178,14 +1178,16 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           : note
       );
     const submitAttemptRef = useRef(0);
+    // A send, and its outcome, are newer than any scratch refusal on the border.
+    const dropScratchRefusal = useCallback(() => {
+      const voice = useVoiceRecordingStore.getState();
+      if (voice.scratchRefusal?.panelId === voiceId) voice.setScratchRefusal(null);
+    }, [voiceId]);
     const notingRefusal = useCallback(
       (submit: (outgoing: string) => Promise<boolean>, dictated: boolean) =>
         async (outgoing: string): Promise<boolean> => {
           const attempt = ++submitAttemptRef.current;
           setSendNote(dictated ? null : { terminalId, refused: false });
-          // Newer than any scratch refusal, which leaves the border to its outcome.
-          const voice = useVoiceRecordingStore.getState();
-          if (voice.scratchRefusal?.panelId === voiceId) voice.setScratchRefusal(null);
           let accepted: boolean;
           try {
             accepted = await submit(outgoing);
@@ -1193,6 +1195,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             accepted = false;
           }
           if (!accepted && submitAttemptRef.current === attempt) {
+            dropScratchRefusal();
             // A voice wait begun since this send went has taken the status over.
             setSendNote((note) =>
               dictated || note !== null ? { terminalId, refused: true } : note
@@ -1200,7 +1203,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           }
           return accepted;
         },
-      [terminalId, voiceId]
+      [terminalId, dropScratchRefusal]
     );
     const noteSpokenSendTooShort = useCallback(() => {
       // An earlier send still on its way can't say over it that it wasn't sent.
@@ -1214,6 +1217,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const sendText = useCallback(
       (text: string, options?: SendTextOptions & { dictated?: boolean }) => {
         const { dictated = false, ...sendOptions } = options ?? {};
+        dropScratchRefusal();
         if (sendOptions.submit) return sendResolvedText(text, sendOptions);
         // Claimed before any expansion is awaited, so a press while a diff
         // is fetched calls the hand-back off.
@@ -1234,7 +1238,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           ),
         });
       },
-      [sendResolvedText, guardSentDraft, claimSendHandBack, notingRefusal]
+      [sendResolvedText, guardSentDraft, claimSendHandBack, notingRefusal, dropScratchRefusal]
     );
 
     const resetEditorDoc = () => {
