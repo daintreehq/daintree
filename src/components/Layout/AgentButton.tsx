@@ -47,6 +47,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { useMenuActionSource } from "@/components/ui/menu-source";
+import { useOverlayFocusRestore } from "@/components/ui/overlay-focus-restore";
 import {
   Bookmark,
   Check,
@@ -136,21 +137,23 @@ interface WorktreeMenuItemsProps {
 // Grid/Dock) into one row per worktree. Row click (and keyboard Enter)
 // launches in grid; the inline Dock affordance gives mouse users the
 // secondary location without a second submenu hop, mirroring the pin
-// button pattern in DockLaunchButton.
+// button pattern in DockLaunchButton. D on a highlighted row is its keyboard
+// twin, since the aria-hidden span has no focus of its own; the row names it
+// to assistive tech.
 //
 // Closing-the-menu mechanics: Radix ContextMenu Root has no `open` prop,
-// so we can't use a controlled-state shortcut. Instead, the inline Dock
-// click is allowed to bubble to the parent ContextMenuItem so Radix's
-// normal handleSelect → onClose chain still fires (which is what closes
-// the menu). To avoid double-firing the row's grid dispatch on top of
-// the dock dispatch, the inline button sets a ref before bubbling; the
-// row's onSelect honors the ref and skips the grid dispatch when set.
-// pointerDown/pointerUp still stopPropagation to keep Radix from
-// treating the icon press as the row's primary selection event.
+// so we can't use a controlled-state shortcut. Instead, the Dock click (or
+// D, via a synthetic click on the row, as Radix does for Enter) reaches the
+// ContextMenuItem so Radix's normal handleSelect → onClose chain still fires
+// (which is what closes the menu). Both set a ref first, and the row's
+// onSelect is the only dispatch site: it launches where the ref says and
+// resets it to grid. pointerDown/pointerUp still stopPropagation to keep
+// Radix from treating the icon press as the row's primary selection event.
 function WorktreeMenuItems({ agentType }: WorktreeMenuItemsProps) {
   const { worktrees } = useWorktrees();
-  const dockClickedRef = useRef(false);
+  const locationRef = useRef<"grid" | "dock">("grid");
   const source = useMenuActionSource();
+  const focusRestore = useOverlayFocusRestore();
   return (
     <>
       {worktrees.map((wt) => {
@@ -160,21 +163,40 @@ function WorktreeMenuItems({ agentType }: WorktreeMenuItemsProps) {
             key={wt.id}
             className="group/wt-row pr-1"
             data-testid={`agent-context-worktree-${wt.id}`}
+            textValue={label}
             onSelect={() => {
-              if (dockClickedRef.current) {
-                dockClickedRef.current = false;
-                return;
-              }
+              const location = locationRef.current;
+              locationRef.current = "grid";
               void actionService.dispatch(
                 "agent.launch",
-                { agentId: agentType, worktreeId: wt.id, location: "grid" },
+                { agentId: agentType, worktreeId: wt.id, location },
                 { source }
               );
+            }}
+            onKeyDown={(e) => {
+              if (e.key !== "d" && e.key !== "D") return;
+              if (e.metaKey || e.ctrlKey || e.altKey) return;
+              e.preventDefault();
+              e.stopPropagation();
+              // The menu content resets its pointer-gesture flags on keydown, but
+              // stopPropagation keeps this key from reaching it.
+              focusRestore?.onContentKeyDown();
+              locationRef.current = "dock";
+              e.currentTarget.click();
             }}
           >
             <FolderGit2 data-menu-icon className="mr-2 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
             <span className="flex-1 truncate">{label}</span>
-            <RowControlTooltip label="Launch in dock">
+            <span className="sr-only">, press D to launch in dock</span>
+            {/* Shown on :focus-visible only, so a hover never suggests D; always
+                laid out so moving focus never resizes the menu. */}
+            <span
+              aria-hidden="true"
+              className="ml-2 shrink-0 opacity-0 group-focus-visible/wt-row:opacity-100"
+            >
+              <KbdChord shortcut="D" density="compact" />
+            </span>
+            <RowControlTooltip label="Launch in dock" shortcut="D">
               <span
                 role="presentation"
                 aria-hidden="true"
@@ -182,12 +204,7 @@ function WorktreeMenuItems({ agentType }: WorktreeMenuItemsProps) {
                 onPointerDown={stopPointer}
                 onPointerUp={stopPointer}
                 onClick={() => {
-                  dockClickedRef.current = true;
-                  void actionService.dispatch(
-                    "agent.launch",
-                    { agentId: agentType, worktreeId: wt.id, location: "dock" },
-                    { source }
-                  );
+                  locationRef.current = "dock";
                 }}
                 className={cn(
                   ROW_CONTROL_CLASS,
