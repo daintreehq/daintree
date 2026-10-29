@@ -2120,8 +2120,15 @@ function buildElectronApi(): ElectronAPI {
     portal: {
       ...buildPortalPreloadBindings(_unwrappingInvoke),
 
-      onNavEvent: (callback: (data: { tabId: string; title: string; url: string }) => void) =>
-        _typedOn(CHANNELS.PORTAL_NAV_EVENT, callback),
+      onNavEvent: (
+        callback: (data: {
+          tabId: string;
+          title: string;
+          url: string;
+          canGoBack: boolean;
+          canGoForward: boolean;
+        }) => void
+      ) => _typedOn(CHANNELS.PORTAL_NAV_EVENT, callback),
 
       onFocus: (callback: () => void) => _typedOn(CHANNELS.PORTAL_FOCUS, callback),
 

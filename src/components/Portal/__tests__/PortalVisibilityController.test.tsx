@@ -2,6 +2,7 @@
 import { StrictMode } from "react";
 import { act, cleanup, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { PortalNavEvent } from "@shared/types";
 import { PortalVisibilityController } from "../PortalVisibilityController";
 import { usePortalStore } from "@/store";
 import { useUIStore } from "@/store/uiStore";
@@ -46,7 +47,7 @@ describe("PortalVisibilityController", () => {
         tabsEvictedCallbacks = tabsEvictedCallbacks.filter((c) => c !== cb);
       };
     }),
-    onNavEvent: vi.fn((cb: (data: { tabId: string; title: string; url: string }) => void) => {
+    onNavEvent: vi.fn((cb: (data: PortalNavEvent) => void) => {
       navCallbacks.push(cb);
       return () => {
         navCallbacks = navCallbacks.filter((c) => c !== cb);
@@ -54,7 +55,7 @@ describe("PortalVisibilityController", () => {
     }),
   };
   let tabsEvictedCallbacks: Array<(payload: { tabIds: string[] }) => void> = [];
-  let navCallbacks: Array<(data: { tabId: string; title: string; url: string }) => void> = [];
+  let navCallbacks: Array<(data: PortalNavEvent) => void> = [];
   let viewCached = false;
   let revealCallbacks: Array<() => void> = [];
   let cachedCallbacks: Array<() => void> = [];
@@ -613,7 +614,13 @@ describe("PortalVisibilityController", () => {
       act(() => {
         cacheView();
         for (const cb of navCallbacks) {
-          cb({ tabId: "tab-1", title: "A next", url: "https://example.com/a/next" });
+          cb({
+            tabId: "tab-1",
+            title: "A next",
+            url: "https://example.com/a/next",
+            canGoBack: true,
+            canGoForward: false,
+          });
         }
       });
 
@@ -629,7 +636,13 @@ describe("PortalVisibilityController", () => {
 
       act(() => {
         for (const cb of navCallbacks) {
-          cb({ tabId: "tab-1", title: "A next", url: "https://example.com/a/next" });
+          cb({
+            tabId: "tab-1",
+            title: "A next",
+            url: "https://example.com/a/next",
+            canGoBack: true,
+            canGoForward: false,
+          });
         }
         for (const cb of evictionCallbacks) cb({ tabId: "tab-1" });
       });
@@ -643,6 +656,52 @@ describe("PortalVisibilityController", () => {
       expect(portal.create).toHaveBeenCalledWith(
         expect.objectContaining({ tabId: "tab-1", url: "https://example.com/a/next" })
       );
+    });
+
+    it("tracks each tab's history while the dock is collapsed, until main lets the view go (#15040)", () => {
+      openWithCreatedTab();
+      usePortalStore.setState({ isOpen: false });
+      render(<PortalVisibilityController />);
+      const navigate = (event: PortalNavEvent) => {
+        for (const cb of navCallbacks) cb(event);
+      };
+
+      act(() => {
+        navigate({
+          tabId: "tab-1",
+          title: "A next",
+          url: "https://example.com/a/next",
+          canGoBack: true,
+          canGoForward: false,
+        });
+        navigate({
+          tabId: "tab-2",
+          title: "B",
+          url: "https://example.com/b",
+          canGoBack: false,
+          canGoForward: true,
+        });
+        navigate({
+          tabId: "tab-gone",
+          title: "Gone",
+          url: "https://example.com/gone",
+          canGoBack: true,
+          canGoForward: true,
+        });
+      });
+
+      expect(usePortalStore.getState().tabHistory).toEqual({
+        "tab-1": { canGoBack: true, canGoForward: false },
+        "tab-2": { canGoBack: false, canGoForward: true },
+      });
+
+      act(() => {
+        for (const cb of evictionCallbacks) cb({ tabId: "tab-1" });
+      });
+
+      expect(usePortalStore.getState().tabHistory).toEqual({
+        "tab-2": { canGoBack: false, canGoForward: true },
+      });
     });
 
     it("recreates a selected tab that main reports missing on show", async () => {

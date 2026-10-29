@@ -202,6 +202,10 @@ export function PortalVisibilityController(): null {
       const agentInfo = getAIAgentInfo(data.url);
       store.updateTabTitle(data.tabId, agentInfo?.title ?? data.title);
       store.updateTabUrl(data.tabId, data.url);
+      store.updateTabHistory(data.tabId, {
+        canGoBack: data.canGoBack,
+        canGoForward: data.canGoForward,
+      });
       if (agentInfo?.icon) {
         store.updateTabIcon(data.tabId, agentInfo.icon);
       }

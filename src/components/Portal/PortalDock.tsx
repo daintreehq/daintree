@@ -43,6 +43,7 @@ export function PortalDock() {
     links,
     createdTabs,
     restoreFailedTabs,
+    tabHistory,
     setWidth,
     setOpen,
     defaultNewTabUrl,
@@ -56,6 +57,7 @@ export function PortalDock() {
       links: s.links,
       createdTabs: s.createdTabs,
       restoreFailedTabs: s.restoreFailedTabs,
+      tabHistory: s.tabHistory,
       setWidth: s.setWidth,
       setOpen: s.setOpen,
       defaultNewTabUrl: s.defaultNewTabUrl,
@@ -87,6 +89,10 @@ export function PortalDock() {
   const showLaunchpad = activeTabId === null || tabs.length === 0 || isBlankTab;
   const hasActiveUrl =
     activeTab?.url !== undefined && activeTab.url !== null && activeTab.url !== "";
+  // Main reports history as soon as it shows a tab, which can land just ahead
+  // of the tab being marked created.
+  const activeHistory =
+    activeTabId !== null && createdTabs.has(activeTabId) ? tabHistory[activeTabId] : undefined;
 
   // Render a skeleton in the content placeholder while the active tab's view is
   // being (re)created. Triggers on cold start with a persisted activeTabId and
@@ -455,6 +461,8 @@ export function PortalDock() {
             onOpenExternal={handleOpenExternal}
             onCopyUrl={handleCopyUrl}
             hasActiveUrl={hasActiveUrl}
+            canGoBack={activeHistory?.canGoBack ?? false}
+            canGoForward={activeHistory?.canGoForward ?? false}
             onDuplicateTab={handleDuplicateTab}
             onCloseOthers={handleCloseOthers}
             onCloseToRight={handleCloseToRight}

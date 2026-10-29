@@ -550,6 +550,7 @@ export type {
   PortalTab,
   PortalBounds,
   PortalNavEvent,
+  PortalTabHistory,
   PortalCreatePayload,
   PortalShowPayload,
   PortalCloseTabPayload,

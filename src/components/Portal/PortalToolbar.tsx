@@ -320,6 +320,8 @@ interface PortalToolbarProps {
   onOpenExternal?: () => void;
   onCopyUrl?: () => void;
   hasActiveUrl?: boolean;
+  canGoBack?: boolean;
+  canGoForward?: boolean;
   onDuplicateTab?: (tabId: string) => void;
   onCloseOthers?: (tabId: string) => void;
   onCloseToRight?: (tabId: string) => void;
@@ -343,6 +345,8 @@ export function PortalToolbar({
   onOpenExternal,
   onCopyUrl,
   hasActiveUrl = false,
+  canGoBack = false,
+  canGoForward = false,
   onDuplicateTab,
   onCloseOthers,
   onCloseToRight,
@@ -550,9 +554,9 @@ export function PortalToolbar({
             <button
               type="button"
               onClick={() => {
-                if (hasActiveUrl) onGoBack?.();
+                if (canGoBack) onGoBack?.();
               }}
-              aria-disabled={!hasActiveUrl || undefined}
+              aria-disabled={!canGoBack || undefined}
               aria-label="Go back"
               className={iconButtonClass}
             >
@@ -566,9 +570,9 @@ export function PortalToolbar({
             <button
               type="button"
               onClick={() => {
-                if (hasActiveUrl) onGoForward?.();
+                if (canGoForward) onGoForward?.();
               }}
-              aria-disabled={!hasActiveUrl || undefined}
+              aria-disabled={!canGoForward || undefined}
               aria-label="Go forward"
               className={iconButtonClass}
             >
