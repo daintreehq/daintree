@@ -194,12 +194,13 @@ export function liftToContrast(
     near = l;
   }
   if (far === null) return ink;
+  let pass = far;
   for (let step = 0; step < 24; step++) {
-    const mid = (near + far) / 2;
-    if (reads(at(mid))) far = mid;
+    const mid = (near + pass) / 2;
+    if (reads(at(mid))) pass = mid;
     else near = mid;
   }
-  return at(far);
+  return at(pass);
 }
 
 // --- Distance ---
