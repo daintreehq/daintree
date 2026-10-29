@@ -260,30 +260,37 @@ const LIVE_DEV_PREVIEW_STATUSES: ReadonlySet<DevPreviewSessionStatus> = new Set(
 
 /**
  * In-flight relaunch per worktree. A relaunch is a sequence of async `addPanel`
- * spawns; a fresh `runDeleteAsync` for the same worktree awaits this before
- * closing terminals, so a rapid retry can't interleave its close with spawns
- * still in flight (which would strand panels against the git remove or leak them
- * onto a deleted worktree).
+ * spawns plus the dev-preview ensures; a fresh `runDeleteAsync` for the same
+ * worktree awaits this before closing terminals, so a rapid retry can't
+ * interleave its close with spawns still in flight (which would strand panels
+ * against the git remove or leak them onto a deleted worktree), nor stop the
+ * dev servers before their restart has reached Main.
  */
 const restoreInFlight = new Map<string, Promise<void>>();
 
 /** Bring back what a definitively abandoned delete (won't be auto-retried)
  *  closed: relaunch its terminals and restart its dev servers, then drop both
  *  snapshots. No-op when the delete closed nothing or a prior branch already
- *  consumed them. Tracks the terminal relaunch per worktree so a concurrent
- *  delete can await it. */
+ *  consumed them. Tracks the restore per worktree so a concurrent delete can
+ *  await it. */
 function consumeDeleteRestore(worktreeId: string, mutationId: string): void {
+  const restores: Promise<void>[] = [];
   const devPreviewPanelIds = pendingDevPreviewRestores.get(mutationId);
   if (devPreviewPanelIds) {
     pendingDevPreviewRestores.delete(mutationId);
-    resumeDevPreviews(devPreviewPanelIds);
+    restores.push(resumeDevPreviews(worktreeId, devPreviewPanelIds));
   }
   const snapshot = pendingTerminalRestores.get(mutationId);
-  if (!snapshot) return;
-  pendingTerminalRestores.delete(mutationId);
-  const done = restoreClosedTerminals(snapshot).finally(() => {
-    if (restoreInFlight.get(worktreeId) === done) restoreInFlight.delete(worktreeId);
-  });
+  if (snapshot) {
+    pendingTerminalRestores.delete(mutationId);
+    restores.push(restoreClosedTerminals(snapshot));
+  }
+  if (restores.length === 0) return;
+  const done = Promise.all(restores)
+    .then(() => undefined)
+    .finally(() => {
+      if (restoreInFlight.get(worktreeId) === done) restoreInFlight.delete(worktreeId);
+    });
   restoreInFlight.set(worktreeId, done);
 }
 
@@ -377,7 +384,9 @@ async function captureLiveDevPreviewPanels(worktreeId: string): Promise<string[]
     return sessions
       .filter(
         (session) =>
-          session.worktreeId === worktreeId && LIVE_DEV_PREVIEW_STATUSES.has(session.status)
+          session.worktreeId === worktreeId &&
+          LIVE_DEV_PREVIEW_STATUSES.has(session.status) &&
+          session.userStopped !== true
       )
       .map((session) => session.panelId);
   } catch (error) {

@@ -49,6 +49,7 @@ function buildState(overrides: Partial<DevPreviewSessionState>): DevPreviewSessi
 
 import { useDevServer, _resetPersistedEnsureCacheForTests } from "../useDevServer";
 import { notifyHostResync } from "@/store/hostResyncSignal";
+import { resumeDevPreviews } from "@/store/devPreviewResumeSignal";
 
 describe("useDevServer adversarial races", () => {
   let ensureMock: ReturnType<typeof vi.fn>;
@@ -2042,6 +2043,149 @@ describe("useDevServer adversarial races", () => {
       expect(ensureMock).toHaveBeenCalledTimes(1);
       expect(result.current.status).toBe("error");
       expect(result.current.error?.message).toContain("Resume failed");
+    });
+  });
+
+  describe("restart after an abandoned worktree delete (#15002)", () => {
+    const props = {
+      panelId: "panel-1",
+      devCommand: "npm run dev",
+      cwd: "/repo/wt-1",
+      worktreeId: "wt-1",
+    };
+
+    function running(projectId: string) {
+      return buildState({
+        panelId: "panel-1",
+        projectId,
+        worktreeId: "wt-1",
+        status: "running",
+        terminalId: "term-1",
+        url: "http://localhost:3000/",
+      });
+    }
+
+    beforeEach(() => {
+      ensureMock.mockImplementation((request: { projectId: string }) =>
+        Promise.resolve(running(request.projectId))
+      );
+      getStateMock.mockImplementation((request: { projectId: string }) =>
+        Promise.resolve(running(request.projectId))
+      );
+    });
+
+    it("re-sends the unchanged config, without lifting a user Stop, once the ensure lands", async () => {
+      let emit: (payload: { state: DevPreviewSessionState }) => void = () => {};
+      onStateChangedMock.mockImplementation(
+        (callback: (payload: { state: DevPreviewSessionState }) => void) => {
+          emit = callback;
+          return vi.fn();
+        }
+      );
+      const { result } = renderHook(() => useDevServer(props));
+      await waitFor(() => {
+        expect(ensureMock).toHaveBeenCalledTimes(1);
+        expect(result.current.status).toBe("running");
+      });
+
+      // The delete's stopByWorktree drops the session in Main.
+      act(() => {
+        emit({
+          state: buildState({ panelId: "panel-1", worktreeId: "wt-1", status: "stopped" }),
+        });
+      });
+      expect(result.current.status).toBe("stopped");
+
+      const secondEnsure = createDeferred<DevPreviewSessionState>();
+      ensureMock.mockImplementationOnce(() => secondEnsure.promise);
+      let settled = false;
+      let resumed!: Promise<void>;
+      act(() => {
+        resumed = resumeDevPreviews("wt-1", ["panel-1"]).then(() => {
+          settled = true;
+        });
+      });
+
+      expect(ensureMock).toHaveBeenCalledTimes(2);
+      expect(ensureMock.mock.calls[1]?.[0]).toMatchObject({
+        panelId: "panel-1",
+        worktreeId: "wt-1",
+        devCommand: "npm run dev",
+      });
+      expect(ensureMock.mock.calls[1]?.[0]).not.toHaveProperty("resumeUserStopped");
+      await Promise.resolve();
+      expect(settled).toBe(false);
+
+      await act(async () => {
+        secondEnsure.resolve(running("project-1"));
+        await resumed;
+      });
+      expect(settled).toBe(true);
+      expect(result.current.status).toBe("running");
+    });
+
+    it("ignores a resume for other panels or for a worktree the panel has left", async () => {
+      renderHook(() => useDevServer(props));
+      await waitFor(() => {
+        expect(ensureMock).toHaveBeenCalledTimes(1);
+      });
+
+      await act(async () => {
+        await resumeDevPreviews("wt-1", ["panel-2"]);
+        await resumeDevPreviews("wt-2", ["panel-1"]);
+      });
+
+      expect(ensureMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("a resume behind an in-flight ensure of the same config still goes out", async () => {
+      const firstEnsure = createDeferred<DevPreviewSessionState>();
+      ensureMock.mockImplementationOnce(() => firstEnsure.promise);
+
+      renderHook(() => useDevServer(props));
+      await waitFor(() => {
+        expect(ensureMock).toHaveBeenCalledTimes(1);
+      });
+
+      await act(async () => {
+        await resumeDevPreviews("wt-1", ["panel-1"]);
+      });
+      expect(ensureMock).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        firstEnsure.resolve(running("project-1"));
+        await firstEnsure.promise;
+      });
+
+      await waitFor(() => {
+        expect(ensureMock).toHaveBeenCalledTimes(2);
+      });
+      expect(ensureMock.mock.calls[1]?.[0]).not.toHaveProperty("resumeUserStopped");
+    });
+
+    it("a panel that wasn't mounted ensures again on its next mount", async () => {
+      const first = renderHook(() => useDevServer(props));
+      await waitFor(() => {
+        expect(ensureMock).toHaveBeenCalledTimes(1);
+        expect(first.result.current.status).toBe("running");
+      });
+      first.unmount();
+
+      // Main dropped the session while nothing was listening for its state.
+      getStateMock.mockImplementation((request: { projectId: string }) =>
+        Promise.resolve(buildState({ panelId: "panel-1", projectId: request.projectId }))
+      );
+      await act(async () => {
+        await resumeDevPreviews("wt-1", ["panel-1"]);
+      });
+      expect(ensureMock).toHaveBeenCalledTimes(1);
+
+      const second = renderHook(() => useDevServer(props));
+      await waitFor(() => {
+        expect(ensureMock).toHaveBeenCalledTimes(2);
+        expect(second.result.current.status).toBe("running");
+      });
+      expect(ensureMock.mock.calls[1]?.[0]).not.toHaveProperty("resumeUserStopped");
     });
   });
 });

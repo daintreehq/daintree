@@ -5,6 +5,7 @@ import type { DevPreviewSessionState } from "../../shared/types/ipc/devPreview";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { onHostResync } from "@/store/hostResyncSignal";
+import { onDevPreviewResume } from "@/store/devPreviewResumeSignal";
 
 export type DevPreviewStatus =
   "stopped" | "starting" | "installing" | "running" | "stopping" | "error" | "restored-stopped";
@@ -90,6 +91,13 @@ const persistedEnsureCache = new Map<string, string>();
 export function _resetPersistedEnsureCacheForTests(): void {
   persistedEnsureCache.clear();
 }
+
+// Module scope, not the hook: a panel in a worktree that isn't on screen has no
+// mounted hook to hear the resume, and its cached key would otherwise skip the
+// ensure on its next mount even though Main dropped the session (#15002).
+onDevPreviewResume(({ panelIds }) => {
+  for (const panelId of panelIds) persistedEnsureCache.delete(panelId);
+});
 
 function serializeEnv(env?: Record<string, string>): string {
   if (!env) return "";
@@ -196,7 +204,7 @@ export function useDevServer({
   /** The latest host resync's ask; an older one's answer is dropped. */
   const resyncAskRef = useRef(0);
   const lastEnsureConfigRef = useRef<string>("");
-  const pendingEnsureRef = useRef<{ resume: boolean } | null>(null);
+  const pendingEnsureRef = useRef<{ resume: boolean; force: boolean } | null>(null);
   const userStoppedRef = useRef(false);
   // Bumped by every endpoint restart and every Stop. A restart whose resource
   // cycle finishes after its number moved on was superseded and must not connect.
@@ -302,12 +310,15 @@ export function useDevServer({
   // `resume` marks an explicit Start: only that may lift a user Stop in Main.
   // Automatic ensures (mount, remount, config edits) leave a stopped panel
   // stopped, so a queued Start keeps its resume through later config changes
-  // and always drains; only a Stop cancels it.
+  // and always drains; only a Stop cancels it. `force` re-sends an unchanged
+  // config without lifting a user Stop, for a server Main dropped behind the
+  // panel's back (#15002).
   const ensureLatestConfig = useCallback(
-    async (resume = false) => {
+    async (resume = false, force = false) => {
       if (isEnsuringRef.current) {
         pendingEnsureRef.current = {
           resume: resume || (pendingEnsureRef.current?.resume ?? false),
+          force: force || (pendingEnsureRef.current?.force ?? false),
         };
         return;
       }
@@ -360,8 +371,8 @@ export function useDevServer({
         // but still delivers a Start the user clicked.
         const drains = pending !== null && (isMountedRef.current || pending.resume);
         const nextKey = drains ? ensureKeyFor(latestContextRef.current) : null;
-        if (pending && nextKey && (nextKey !== sentKey || pending.resume)) {
-          safeFireAndForget(ensureLatestConfig(pending.resume), {
+        if (pending && nextKey && (nextKey !== sentKey || pending.resume || pending.force)) {
+          safeFireAndForget(ensureLatestConfig(pending.resume, pending.force), {
             context: "Re-running queued dev preview ensure",
           });
         }
@@ -588,6 +599,21 @@ export function useDevServer({
       applyState(state);
     });
   }, [panelId, currentProjectId, applyState]);
+
+  // A worktree delete stopped this panel's server and was then abandoned, so
+  // the worktree is still here (#15002). Main dropped the session and the
+  // config hasn't changed, so the auto-start below won't fire again by itself.
+  // Not a Start: a Stop the user made since still holds in Main.
+  useEffect(() => {
+    if (!currentProjectId) return;
+    return onDevPreviewResume(({ worktreeId: resumedWorktreeId, panelIds }) => {
+      if (!panelIds.has(panelId)) return;
+      if (latestContextRef.current.worktreeId !== resumedWorktreeId) return;
+      // An endpoint restart reconnects by itself once its resource cycle ends.
+      if (endpointCyclingRef.current) return;
+      return ensureLatestConfig(false, true);
+    });
+  }, [panelId, currentProjectId, ensureLatestConfig]);
 
   const target = launchTarget(devCommand, endpoint);
 
