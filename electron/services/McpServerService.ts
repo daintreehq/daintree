@@ -1245,7 +1245,8 @@ export class McpServerService {
   ): { sessionId: string; tier: McpTier } {
     const before = this.sessionStore.getTier(sessionId);
     const result = this.httpLifecycle.setSessionTier(sessionId, tier, callerWcId);
-    if (result.tier !== before) this.queueApprovalLine(sessionId, { kind: "tier", tier: result.tier });
+    if (result.tier !== before)
+      this.queueApprovalLine(sessionId, { kind: "tier", tier: result.tier });
     return result;
   }
 

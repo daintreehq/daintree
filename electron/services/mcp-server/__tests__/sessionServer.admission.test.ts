@@ -252,10 +252,7 @@ describe("sessionServer tier-mismatch notifier", () => {
 
     it("leaves it out for a session with no banner to answer", async () => {
       // External origin: the notifier paints nothing for a third-party client.
-      const text = await refusalText(
-        fakeDeps({ notifyTierMismatch: vi.fn() }),
-        "project.runCheck"
-      );
+      const text = await refusalText(fakeDeps({ notifyTierMismatch: vi.fn() }), "project.runCheck");
       expect(text).toContain("TIER_NOT_PERMITTED");
       expect(text).not.toContain(HINT);
     });
