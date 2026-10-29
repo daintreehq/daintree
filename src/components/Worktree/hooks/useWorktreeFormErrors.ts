@@ -101,7 +101,11 @@ export function useWorktreeFormErrors() {
   const isFormDirty = (): boolean => {
     const { touchedFields: touched } = state;
     return (
-      touched.branchInput || touched.worktreePath || touched.recipe || touched.agent || touched.issue
+      touched.branchInput ||
+      touched.worktreePath ||
+      touched.recipe ||
+      touched.agent ||
+      touched.issue
     );
   };
 
