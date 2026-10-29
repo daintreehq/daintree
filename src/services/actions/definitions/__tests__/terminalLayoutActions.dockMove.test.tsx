@@ -221,18 +221,52 @@ describe("terminal.moveLeft / moveRight on a docked panel (#14972)", () => {
     useLayoutUndoStore.getState().redo();
     expect(order("dock")).toEqual(["b1", "b2", "a1", "a2"]);
   });
+});
 
-  it("refuses to move while a spawn batch holds panels back from panelIds", async () => {
-    seed([panel("a", "dock"), panel("b", "dock")], "b");
+describe("keyboard moves while a spawn batch holds panels back from panelIds", () => {
+  // The batch has put `pending` in its worktree bucket but not in `panelIds`;
+  // a reorder rebuilds the bucket from `panelIds`, and the flush never re-adds it.
+  function seedWithPendingPanel(focusedId: string): void {
+    useLayoutConfigStore.setState({ layoutConfig: { strategy: "fixed-columns", value: 2 } });
+    const panels = [
+      panel("g1", "grid"),
+      panel("g2", "grid"),
+      panel("g3", "grid"),
+      panel("d1", "dock"),
+      panel("d2", "dock"),
+    ];
+    seed(panels, focusedId);
+    usePanelStore.setState((state) => ({
+      panelsById: { ...state.panelsById, pending: panel("pending", "grid") },
+      panelIdsByWorktreeId: { "wt-1": [...panels.map((p) => p.id), "pending"] },
+    }));
+  }
+
+  afterEach(() => {
+    resetBatchState();
+  });
+
+  it.each([
+    ["terminal.moveLeft", "d2"],
+    ["terminal.moveRight", "g1"],
+    ["terminal.moveDown", "g1"],
+    ["terminal.moveUp", "g3"],
+  ])("%s on %s waits for the batch to close", async (actionId, focusedId) => {
+    seedWithPendingPanel(focusedId);
+    const before = usePanelStore.getState().panelIds;
     beginSpawnBatch();
-    try {
-      await run("terminal.moveLeft");
-    } finally {
-      resetBatchState();
-    }
 
-    expect(order("dock")).toEqual(["a", "b"]);
+    await run(actionId);
+
+    expect(usePanelStore.getState().panelIds).toEqual(before);
+    expect(usePanelStore.getState().panelIdsByWorktreeId["wt-1"]).toContain("pending");
     expect(undoDepth()).toBe(0);
+
+    resetBatchState();
+    await run(actionId);
+
+    expect(usePanelStore.getState().panelIds).not.toEqual(before);
+    expect(undoDepth()).toBe(1);
   });
 });
 
