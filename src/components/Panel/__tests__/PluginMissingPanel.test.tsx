@@ -1,17 +1,29 @@
 // @vitest-environment jsdom
+import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
-import type { LoadedPluginInfo, PluginManifest, ProjectPluginInfo } from "@shared/types/plugin";
-import { PluginMissingPanel } from "../PluginMissingPanel";
+import type {
+  LoadedPluginInfo,
+  PluginManifest,
+  ProjectPluginInfo,
+  ProjectPluginVisibility,
+} from "@shared/types/plugin";
+import {
+  PluginMissingPanel,
+  identifyMissingPlugin,
+  resolvePluginRecovery,
+  type PluginRecovery,
+} from "../PluginMissingPanel";
 import {
   useProjectPluginStore,
   __resetProjectPluginStoreForTesting,
 } from "@/store/projectPluginStore";
 import { usePluginManagerStore } from "@/store/pluginManagerStore";
 
-const { placeholderMock, dispatch } = vi.hoisted(() => ({
+const { placeholderMock, dispatch, logWarn } = vi.hoisted(() => ({
   placeholderMock: vi.fn(),
   dispatch: vi.fn<(actionId: string, args?: unknown, options?: unknown) => Promise<unknown>>(),
+  logWarn: vi.fn<(message: string, context?: unknown) => void>(),
 }));
 
 vi.mock("@/components/Plugin/PluginNotOnHostPlaceholder", () => ({
@@ -35,7 +47,13 @@ vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch },
 }));
 
+vi.mock("@/utils/logger", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/utils/logger")>()),
+  logWarn,
+}));
+
 const PROJECT_ID = "a".repeat(64);
+const OTHER_PROJECT_ID = "b".repeat(64);
 const REPO_INSTANCE = `project__${PROJECT_ID}__acme.dashboard`;
 const PACKAGE_INSTANCE = `project__${PROJECT_ID}__installed__acme.dashboard`;
 const PROJECT_KIND = `project:${PROJECT_ID}/acme.dashboard/overview`;
@@ -87,15 +105,40 @@ function installed(over: Partial<LoadedPluginInfo> = {}): LoadedPluginInfo {
   };
 }
 
-function dashboardPackage(over: Partial<LoadedPluginInfo> = {}): LoadedPluginInfo {
+function unrelatedPlugin(): LoadedPluginInfo {
   return installed({
+    manifest: {
+      name: "other.plugin",
+      version: "1.0.0",
+      displayName: "Other",
+      contributes: EMPTY_CONTRIBUTES,
+    },
+    instanceId: "other.plugin",
+  });
+}
+
+/** An installed singleton that happens to share the repository plugin's manifest id. */
+function dashboardSingleton(over: Partial<LoadedPluginInfo> = {}): LoadedPluginInfo {
+  return installed({
+    manifest: {
+      name: "acme.dashboard",
+      version: "1.0.0",
+      displayName: "Dashboard Singleton",
+      contributes: EMPTY_CONTRIBUTES,
+    },
+    instanceId: "acme.dashboard",
+    ...over,
+  });
+}
+
+function dashboardPackage(over: Partial<LoadedPluginInfo> = {}): LoadedPluginInfo {
+  return dashboardSingleton({
     manifest: {
       name: "acme.dashboard",
       version: "1.0.0",
       displayName: "Dashboard Package",
       contributes: EMPTY_CONTRIBUTES,
     },
-    instanceId: "acme.dashboard",
     instanceMode: "project",
     enabledInProjects: [],
     ...over,
@@ -136,7 +179,8 @@ const unsubscribe = vi.fn();
 
 beforeEach(() => {
   vi.clearAllMocks();
-  pluginApi.list.mockResolvedValue([]);
+  // Unread by default: a spec that needs the list settled says what it holds.
+  pluginApi.list.mockReturnValue(new Promise(() => {}));
   pluginApi.onProvenanceChanged.mockReturnValue(unsubscribe);
   dispatch.mockResolvedValue({ ok: true });
   Object.defineProperty(window, "electron", {
@@ -161,12 +205,30 @@ function description(): string {
   return screen.getByRole("region", { name: "Plugin unavailable" }).textContent ?? "";
 }
 
+function expectProjectSettingsOpened() {
+  expect(dispatch).toHaveBeenCalledWith(
+    "app.settings.openTab",
+    { tab: "project:plugins" },
+    { source: "user" }
+  );
+}
+
+function expectManagerOpened() {
+  expect(dispatch).toHaveBeenCalledWith("app.pluginManager", undefined, { source: "user" });
+}
+
 describe("PluginMissingPanel", () => {
   it("shows the plugin name from pluginId when provided", () => {
     render(
-      <PluginMissingPanel kind="my-plugin.custom-panel" pluginId="my-plugin" onRemove={() => {}} />
+      <PluginMissingPanel kind="other.vendor.panel" pluginId="my-plugin" onRemove={() => {}} />
     );
     expect(screen.getByText("my-plugin")).toBeDefined();
+    expect(screen.queryByText("other.vendor")).toBeNull();
+  });
+
+  it("recovers a scoped manifest id from a global kind", () => {
+    render(<PluginMissingPanel kind="daintree.github.prs" onRemove={() => {}} />);
+    expect(screen.getByText("daintree.github")).toBeDefined();
   });
 
   it("recovers the manifest id from a project-qualified kind", () => {
@@ -225,11 +287,11 @@ describe("PluginMissingPanel", () => {
       expect(actionLabels()).toEqual(["Open plugin manager", "Remove panel"]);
 
       fireEvent.click(screen.getByRole("button", { name: "Open plugin manager" }));
-      expect(dispatch).toHaveBeenCalledWith("app.pluginManager", undefined, { source: "user" });
+      expectManagerOpened();
       expect(onRemove).not.toHaveBeenCalled();
     });
 
-    it("treats a disabled builtin the same way", async () => {
+    it("sends a disabled builtin to the plugin manager too", async () => {
       pluginApi.list.mockResolvedValue([
         installed({ isBuiltin: true, source: "builtin", disabled: true }),
       ]);
@@ -237,37 +299,39 @@ describe("PluginMissingPanel", () => {
         <PluginMissingPanel kind="acme.tools.board" pluginId="acme.tools" onRemove={vi.fn()} />
       );
       await screen.findByText("Enable this plugin");
+      fireEvent.click(screen.getByRole("button", { name: "Open plugin manager" }));
+      expectManagerOpened();
     });
 
-    it("offers a reinstall, not a re-enable, once the plugin is gone", async () => {
-      pluginApi.list.mockResolvedValue([installed({ instanceId: "other.plugin" })]);
+    it("asks for an install, not a re-enable, once the plugin is gone", async () => {
+      pluginApi.list.mockResolvedValue([unrelatedPlugin()]);
       render(
         <PluginMissingPanel kind="acme.tools.board" pluginId="acme.tools" onRemove={vi.fn()} />
       );
 
-      await screen.findByText("Reinstall this plugin");
-      expect(description()).toContain("isn't installed anymore");
-      expect(description()).not.toMatch(/enable/i);
+      await screen.findByText("Install this plugin");
+      expect(description()).toContain("isn't installed");
+      expect(description()).not.toMatch(/enable|turn/i);
       fireEvent.click(screen.getByRole("button", { name: "Open plugin manager" }));
-      expect(dispatch).toHaveBeenCalledWith("app.pluginManager", undefined, { source: "user" });
+      expectManagerOpened();
     });
 
     it("says a blocked plugin is blocked rather than asking to enable it", async () => {
-      pluginApi.list.mockResolvedValue([installed({ blocklisted: true })]);
+      pluginApi.list.mockResolvedValue([installed({ blocklisted: true, disabled: true })]);
       render(
         <PluginMissingPanel kind="acme.tools.board" pluginId="acme.tools" onRemove={vi.fn()} />
       );
-      await screen.findByText("Plugin blocked");
-      expect(screen.getByRole("button", { name: "Open plugin manager" })).toBeDefined();
+      await screen.findByText("See why this plugin is blocked");
+      expect(description()).toContain("blocked");
+      expect(description()).not.toMatch(/enable/i);
     });
 
     it("claims nothing about the plugin until the list is read", () => {
-      pluginApi.list.mockReturnValue(new Promise(() => {}));
       render(
         <PluginMissingPanel kind="acme.tools.board" pluginId="acme.tools" onRemove={vi.fn()} />
       );
-      expect(screen.getByText("Plugin unavailable")).toBeDefined();
-      expect(description()).not.toContain("installed");
+      expect(screen.getByText("Check this plugin")).toBeDefined();
+      expect(description()).not.toMatch(/installed|turned off|running/);
       expect(actionLabels()).toEqual(["Open plugin manager", "Remove panel"]);
     });
 
@@ -276,10 +340,21 @@ describe("PluginMissingPanel", () => {
       render(
         <PluginMissingPanel kind="acme.tools.board" pluginId="acme.tools" onRemove={vi.fn()} />
       );
-      await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
-      await act(async () => {});
-      expect(screen.getByText("Plugin unavailable")).toBeDefined();
-      expect(description()).not.toContain("installed");
+      await waitFor(() => expect(logWarn).toHaveBeenCalledOnce());
+      expect(screen.getByText("Check this plugin")).toBeDefined();
+    });
+
+    it("keeps what it knew when a later read fails", async () => {
+      pluginApi.list.mockResolvedValue([installed({ disabled: true })]);
+      render(
+        <PluginMissingPanel kind="acme.tools.board" pluginId="acme.tools" onRemove={vi.fn()} />
+      );
+      await screen.findByText("Enable this plugin");
+
+      pluginApi.list.mockRejectedValue(new Error("ipc down"));
+      act(() => pluginApi.onProvenanceChanged.mock.calls[0]![0]());
+      await waitFor(() => expect(logWarn).toHaveBeenCalledOnce());
+      expect(screen.getByText("Enable this plugin")).toBeDefined();
     });
 
     it("sends a plugin hidden in this project to Project settings, selecting it there", async () => {
@@ -297,24 +372,7 @@ describe("PluginMissingPanel", () => {
         pluginId: "acme.tools",
         home: "project",
       });
-      expect(dispatch).toHaveBeenCalledWith(
-        "app.settings.openTab",
-        { tab: "project:plugins" },
-        { source: "user" }
-      );
-    });
-
-    it("lets this project's explicit answer beat the hidden-by-default list", async () => {
-      pluginApi.list.mockResolvedValue([installed()]);
-      useProjectPluginStore.setState({
-        visibility: { defaultHiddenPluginIds: ["acme.tools"], overrides: { "acme.tools": true } },
-      });
-      render(
-        <PluginMissingPanel kind="acme.tools.board" pluginId="acme.tools" onRemove={vi.fn()} />
-      );
-      await screen.findByText("Acme Tools");
-      expect(screen.queryByText("Show this plugin in this project")).toBeNull();
-      expect(screen.getByRole("button", { name: "Open plugin manager" })).toBeDefined();
+      expectProjectSettingsOpened();
     });
 
     it("follows the plugin through an uninstall while the placeholder is up", async () => {
@@ -325,9 +383,8 @@ describe("PluginMissingPanel", () => {
       await screen.findByText("Enable this plugin");
 
       pluginApi.list.mockResolvedValue([]);
-      const onChanged = pluginApi.onProvenanceChanged.mock.calls[0]![0];
-      act(() => onChanged());
-      await screen.findByText("Reinstall this plugin");
+      act(() => pluginApi.onProvenanceChanged.mock.calls[0]![0]());
+      await screen.findByText("Install this plugin");
     });
 
     it("keeps the newest read when an older one answers last", async () => {
@@ -341,21 +398,43 @@ describe("PluginMissingPanel", () => {
       act(() => pluginApi.onProvenanceChanged.mock.calls[0]![0]());
       await act(async () => second.resolve([]));
       await act(async () => first.resolve([installed({ disabled: true })]));
-      expect(screen.getByText("Reinstall this plugin")).toBeDefined();
+      expect(screen.getByText("Install this plugin")).toBeDefined();
     });
 
-    it("stops listening when it unmounts", () => {
+    it("ignores a read from an effect that was cleaned up", async () => {
+      const discarded = deferred<LoadedPluginInfo[]>();
+      const current = deferred<LoadedPluginInfo[]>();
+      pluginApi.list.mockReturnValueOnce(discarded.promise).mockReturnValueOnce(current.promise);
+      render(
+        <StrictMode>
+          <PluginMissingPanel kind="acme.tools.board" pluginId="acme.tools" onRemove={vi.fn()} />
+        </StrictMode>
+      );
+      expect(pluginApi.list).toHaveBeenCalledTimes(2);
+
+      await act(async () => current.resolve([]));
+      await act(async () => discarded.resolve([installed({ disabled: true })]));
+      expect(screen.getByText("Install this plugin")).toBeDefined();
+    });
+
+    it("stops listening when it unmounts, and drops a read still in flight", async () => {
+      const pending = deferred<LoadedPluginInfo[]>();
+      pluginApi.list.mockReturnValue(pending.promise);
       const { unmount } = render(
         <PluginMissingPanel kind="acme.tools.board" pluginId="acme.tools" onRemove={vi.fn()} />
       );
       expect(unsubscribe).not.toHaveBeenCalled();
       unmount();
       expect(unsubscribe).toHaveBeenCalledOnce();
+
+      await act(async () => pending.reject(new Error("view closed")));
+      expect(logWarn).not.toHaveBeenCalled();
     });
   });
 
   describe("a repository plugin", () => {
     it("sends a plugin switched off here to Project settings though no list carries it", async () => {
+      pluginApi.list.mockResolvedValue([]);
       useProjectPluginStore.setState({ projectId: PROJECT_ID, plugins: [repoPlugin()] });
       const onRemove = vi.fn();
       render(
@@ -363,7 +442,7 @@ describe("PluginMissingPanel", () => {
       );
 
       await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
-      expect(screen.getByText("Enable this plugin")).toBeDefined();
+      expect(screen.getByText("Turn on this plugin")).toBeDefined();
       expect(screen.getByText("Acme Dashboard")).toBeDefined();
       expect(description()).toContain("turned off in this project");
       expect(actionLabels()).toEqual(["Open project settings", "Remove panel"]);
@@ -373,11 +452,7 @@ describe("PluginMissingPanel", () => {
         pluginId: REPO_INSTANCE,
         home: "project",
       });
-      expect(dispatch).toHaveBeenCalledWith(
-        "app.settings.openTab",
-        { tab: "project:plugins" },
-        { source: "user" }
-      );
+      expectProjectSettingsOpened();
       expect(onRemove).not.toHaveBeenCalled();
     });
 
@@ -386,39 +461,40 @@ describe("PluginMissingPanel", () => {
       render(
         <PluginMissingPanel kind={PROJECT_KIND} pluginId="acme.dashboard" onRemove={vi.fn()} />
       );
-      expect(screen.getByText("Enable this plugin")).toBeDefined();
+      expect(screen.getByText("Turn on this plugin")).toBeDefined();
+      expect(screen.getByText("Acme Dashboard")).toBeDefined();
+      fireEvent.click(screen.getByRole("button", { name: "Open project settings" }));
+      expect(usePluginManagerStore.getState().settingsRequest?.pluginId).toBe(REPO_INSTANCE);
     });
 
     it("isn't confused with an installed plugin of the same name", async () => {
-      pluginApi.list.mockResolvedValue([
-        dashboardPackage({ instanceMode: undefined, enabledInProjects: undefined, disabled: true }),
-      ]);
+      pluginApi.list.mockResolvedValue([dashboardSingleton({ disabled: true })]);
       useProjectPluginStore.setState({ projectId: PROJECT_ID, plugins: [repoPlugin()] });
       render(
         <PluginMissingPanel kind={PROJECT_KIND} pluginId={REPO_INSTANCE} onRemove={vi.fn()} />
       );
       await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
       await act(async () => {});
-      expect(screen.getByRole("button", { name: "Open project settings" })).toBeDefined();
+
+      expect(screen.getByText("Acme Dashboard")).toBeDefined();
       expect(screen.queryByRole("button", { name: "Open plugin manager" })).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: "Open project settings" }));
+      expect(usePluginManagerStore.getState().settingsRequest?.pluginId).toBe(REPO_INSTANCE);
     });
 
     it("opens Project settings without a selection when the plugin isn't listed", async () => {
+      pluginApi.list.mockResolvedValue([]);
       render(
         <PluginMissingPanel kind={PROJECT_KIND} pluginId={REPO_INSTANCE} onRemove={vi.fn()} />
       );
       await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
       await act(async () => {});
-      expect(screen.getByText("Plugin unavailable")).toBeDefined();
-      expect(description()).not.toMatch(/enable|turned off/i);
+      expect(screen.getByText("Check this plugin")).toBeDefined();
+      expect(description()).not.toMatch(/enable|turned off|installed/i);
 
       fireEvent.click(screen.getByRole("button", { name: "Open project settings" }));
       expect(usePluginManagerStore.getState().settingsRequest).toBeNull();
-      expect(dispatch).toHaveBeenCalledWith(
-        "app.settings.openTab",
-        { tab: "project:plugins" },
-        { source: "user" }
-      );
+      expectProjectSettingsOpened();
     });
   });
 
@@ -429,33 +505,34 @@ describe("PluginMissingPanel", () => {
         <PluginMissingPanel kind={PROJECT_KIND} pluginId={PACKAGE_INSTANCE} onRemove={vi.fn()} />
       );
       await screen.findByText("Dashboard Package");
-      expect(description()).toContain("turned off in this project");
+      expect(screen.getByText("Turn on this plugin")).toBeDefined();
 
       fireEvent.click(screen.getByRole("button", { name: "Open project settings" }));
       expect(usePluginManagerStore.getState().settingsRequest).toMatchObject({
         pluginId: "acme.dashboard",
         home: "project",
       });
+      expectProjectSettingsOpened();
     });
 
     it("sends a package disabled everywhere to the plugin manager first", async () => {
-      pluginApi.list.mockResolvedValue([
-        dashboardPackage({ disabled: true, enabledInProjects: [PROJECT_ID] }),
-      ]);
+      pluginApi.list.mockResolvedValue([dashboardPackage({ disabled: true })]);
       render(
         <PluginMissingPanel kind={PROJECT_KIND} pluginId={PACKAGE_INSTANCE} onRemove={vi.fn()} />
       );
       await screen.findByText("Enable this plugin");
       expect(description()).not.toContain("in this project");
-      expect(screen.getByRole("button", { name: "Open plugin manager" })).toBeDefined();
+      fireEvent.click(screen.getByRole("button", { name: "Open plugin manager" }));
+      expectManagerOpened();
     });
 
-    it("offers a reinstall once the package is gone", async () => {
+    it("asks for an install once the package is gone", async () => {
+      pluginApi.list.mockResolvedValue([]);
       useProjectPluginStore.setState({ projectId: PROJECT_ID, plugins: [repoPlugin()] });
       render(
         <PluginMissingPanel kind={PROJECT_KIND} pluginId={PACKAGE_INSTANCE} onRemove={vi.fn()} />
       );
-      await screen.findByText("Reinstall this plugin");
+      await screen.findByText("Install this plugin");
       expect(screen.getByRole("button", { name: "Open plugin manager" })).toBeDefined();
     });
   });
@@ -467,7 +544,7 @@ describe("PluginMissingPanel", () => {
       render(
         <PluginMissingPanel kind="project:project-7/acme.dashboard/overview" onRemove={onRemove} />
       );
-      expect(screen.queryByText("Plugin unavailable")).toBeNull();
+      expect(screen.queryByRole("region", { name: "Plugin unavailable" })).toBeNull();
       expect(placeholderMock).toHaveBeenCalledWith({
         pluginId: "acme.dashboard",
         kind: "project:project-7/acme.dashboard/overview",
@@ -479,7 +556,7 @@ describe("PluginMissingPanel", () => {
 
     it("prefers the explicit plugin id", () => {
       window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
-      render(<PluginMissingPanel kind="plug.panel" pluginId="plug" onRemove={() => {}} />);
+      render(<PluginMissingPanel kind="other.vendor.panel" pluginId="plug" onRemove={() => {}} />);
       expect(placeholderMock.mock.calls[0]![0]).toMatchObject({ pluginId: "plug" });
     });
 
@@ -496,5 +573,155 @@ describe("PluginMissingPanel", () => {
       expect(screen.getByRole("region", { name: "Plugin unavailable" })).toBeDefined();
       expect(placeholderMock).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe("resolvePluginRecovery", () => {
+  const VISIBLE: ProjectPluginVisibility = { defaultHiddenPluginIds: [], overrides: {} };
+  const globalTools = identifyMissingPlugin("acme.tools.board", "acme.tools");
+  const liveRepo = identifyMissingPlugin(PROJECT_KIND, REPO_INSTANCE);
+  const livePackage = identifyMissingPlugin(PROJECT_KIND, PACKAGE_INSTANCE);
+  const restored = identifyMissingPlugin(PROJECT_KIND, "acme.dashboard");
+
+  function outcome(recovery: PluginRecovery) {
+    return { home: recovery.home, state: recovery.state, target: recovery.settingsTarget };
+  }
+
+  it.each<{
+    name: string;
+    identity: ReturnType<typeof identifyMissingPlugin>;
+    inventory: LoadedPluginInfo[] | null;
+    repository?: ProjectPluginInfo[];
+    visibility?: ProjectPluginVisibility;
+    expected: ReturnType<typeof outcome>;
+  }>([
+    {
+      name: "a blocklisted plugin is blocked before it is off",
+      identity: globalTools,
+      inventory: [installed({ blocklisted: true, disabled: true })],
+      expected: { home: "manager", state: "blocked", target: null },
+    },
+    {
+      name: "a disabled plugin is off before it is hidden",
+      identity: globalTools,
+      inventory: [installed({ disabled: true })],
+      visibility: { defaultHiddenPluginIds: ["acme.tools"], overrides: {} },
+      expected: { home: "manager", state: "off", target: null },
+    },
+    {
+      name: "this project's explicit show beats the hidden-by-default list",
+      identity: globalTools,
+      inventory: [installed()],
+      visibility: { defaultHiddenPluginIds: ["acme.tools"], overrides: { "acme.tools": true } },
+      expected: { home: "manager", state: "unknown", target: null },
+    },
+    {
+      name: "this project's explicit hide beats the visible default",
+      identity: globalTools,
+      inventory: [installed()],
+      visibility: { defaultHiddenPluginIds: [], overrides: { "acme.tools": false } },
+      expected: { home: "project", state: "hidden", target: "acme.tools" },
+    },
+    {
+      name: "a plugin that is on and shown is only unexplained",
+      identity: globalTools,
+      inventory: [installed()],
+      expected: { home: "manager", state: "unknown", target: null },
+    },
+    {
+      name: "a project-origin row of the same name is no installed plugin",
+      identity: globalTools,
+      inventory: [
+        installed({ instanceId: `project__${PROJECT_ID}__acme.tools`, origin: "project" }),
+      ],
+      expected: { home: "manager", state: "missing", target: null },
+    },
+    {
+      name: "a running repository plugin is unexplained, not off",
+      identity: liveRepo,
+      inventory: [],
+      repository: [repoPlugin({ state: "active", muted: false })],
+      expected: { home: "project", state: "unknown", target: REPO_INSTANCE },
+    },
+    {
+      name: "a staged repository plugin needs activating, not turning on",
+      identity: liveRepo,
+      inventory: [],
+      repository: [repoPlugin({ state: "staged", muted: false })],
+      expected: { home: "project", state: "unknown", target: REPO_INSTANCE },
+    },
+    {
+      name: "an untrusted folder's plugin isn't off by its own switch",
+      identity: liveRepo,
+      inventory: [],
+      repository: [repoPlugin({ state: "blocked", muted: false })],
+      expected: { home: "project", state: "unknown", target: REPO_INSTANCE },
+    },
+    {
+      name: "an invalid manifest offers no selection to land on",
+      identity: restored,
+      inventory: [],
+      repository: [repoPlugin({ state: "invalid", muted: false, instanceId: undefined })],
+      expected: { home: "project", state: "unknown", target: null },
+    },
+    {
+      name: "another project's repository row is not this panel's plugin",
+      identity: liveRepo,
+      inventory: [],
+      repository: [repoPlugin({ projectId: OTHER_PROJECT_ID })],
+      expected: { home: "project", state: "unknown", target: null },
+    },
+    {
+      name: "a repository panel never adopts a package of the same name",
+      identity: liveRepo,
+      inventory: [dashboardPackage({ disabled: true })],
+      expected: { home: "project", state: "unknown", target: null },
+    },
+    {
+      name: "a restored panel never adopts an installed singleton of the same name",
+      identity: restored,
+      inventory: [dashboardSingleton({ disabled: true })],
+      expected: { home: "manager", state: "unknown", target: null },
+    },
+    {
+      name: "a blocklisted package is blocked",
+      identity: livePackage,
+      inventory: [dashboardPackage({ blocklisted: true })],
+      expected: { home: "manager", state: "blocked", target: null },
+    },
+    {
+      name: "a package on in this project is only unexplained",
+      identity: livePackage,
+      inventory: [dashboardPackage({ enabledInProjects: [PROJECT_ID] })],
+      expected: { home: "project", state: "unknown", target: "acme.dashboard" },
+    },
+    {
+      name: "a restored package panel finds its package",
+      identity: restored,
+      inventory: [dashboardPackage()],
+      expected: { home: "project", state: "off", target: "acme.dashboard" },
+    },
+    {
+      name: "a restored panel neither list carries goes where a package comes back from",
+      identity: restored,
+      inventory: [],
+      expected: { home: "manager", state: "unknown", target: null },
+    },
+    {
+      name: "a restored panel claims nothing before the list is read",
+      identity: restored,
+      inventory: null,
+      expected: { home: "project", state: "unknown", target: null },
+    },
+    {
+      name: "a live package panel claims nothing before the list is read",
+      identity: livePackage,
+      inventory: null,
+      expected: { home: "project", state: "unknown", target: null },
+    },
+  ])("$name", ({ identity, inventory, repository = [], visibility = VISIBLE, expected }) => {
+    expect(outcome(resolvePluginRecovery(identity, inventory, repository, visibility))).toEqual(
+      expected
+    );
   });
 });

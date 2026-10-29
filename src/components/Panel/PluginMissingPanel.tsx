@@ -108,10 +108,10 @@ function managerRecovery(
 
 /**
  * What the panel's plugin is doing now and where it is switched back on. Only a
- * list that was read can prove a plugin gone, so an unread one says `unknown`;
- * so does a plugin every list shows as on, since a running plugin can still
- * stop offering a panel kind. A repository plugin is never looked for in
- * `inventory` alone: switched off, it has no loaded row there at all.
+ * list that was read can prove a plugin absent, so an unread one says
+ * `unknown`; so does a plugin every list shows as on, since a running plugin
+ * can still stop offering a panel kind. A repository plugin is never looked for
+ * in `inventory` alone: switched off, it has no loaded row there at all.
  */
 export function resolvePluginRecovery(
   identity: MissingPluginIdentity,
@@ -146,10 +146,11 @@ export function resolvePluginRecovery(
       (p) => p.id === manifestId && (projectId === null || p.projectId === projectId)
     );
     if (repo) {
-      const running = repo.state === "active" && !repo.muted;
+      // Only a mute is the user's own off switch. A staged plugin, an untrusted
+      // folder or a broken manifest each need something else done in its pane.
       return {
         home: "project",
-        state: running ? "unknown" : "off",
+        state: repo.muted ? "off" : "unknown",
         displayName: repo.displayName,
         settingsTarget: repo.instanceId ?? null,
       };
@@ -170,6 +171,10 @@ export function resolvePluginRecovery(
       };
     }
     if (identity.installedInstance === true) return managerRecovery("missing", undefined);
+    // A restored panel can't say whose instance it was, and neither list
+    // carries it. Of the two, only a package can be brought back from inside
+    // Daintree, and that happens in the plugin manager.
+    return managerRecovery("unknown", undefined);
   }
 
   return { home: "project", state: "unknown", displayName: null, settingsTarget: null };
@@ -177,7 +182,7 @@ export function resolvePluginRecovery(
 
 interface RecoveryCopy {
   title: string;
-  /** What the plugin is doing, after "This panel needs the {name} plugin, ". */
+  /** What the plugin is doing, after "This panel comes from the {name} plugin, ". */
   status: string;
   next: string;
 }
@@ -187,9 +192,9 @@ function recoveryCopy({ home, state }: PluginRecovery): RecoveryCopy {
     switch (state) {
       case "off":
         return {
-          title: "Enable this plugin",
+          title: "Turn on this plugin",
           status: "which is turned off in this project.",
-          next: "Turn it back on in Project settings to restore the panel.",
+          next: "Turn it on in Project settings to restore the panel.",
         };
       case "hidden":
         return {
@@ -199,9 +204,9 @@ function recoveryCopy({ home, state }: PluginRecovery): RecoveryCopy {
         };
       default:
         return {
-          title: "Plugin unavailable",
-          status: "which isn't running in this project.",
-          next: "Check it in Project settings.",
+          title: "Check this plugin",
+          status: "which isn't offering it in this project right now.",
+          next: "Project settings shows its status.",
         };
     }
   }
@@ -214,21 +219,21 @@ function recoveryCopy({ home, state }: PluginRecovery): RecoveryCopy {
       };
     case "missing":
       return {
-        title: "Reinstall this plugin",
-        status: "which isn't installed anymore.",
-        next: "Install it again from the plugin manager to restore the panel.",
+        title: "Install this plugin",
+        status: "which isn't installed.",
+        next: "Install it from the plugin manager to restore the panel.",
       };
     case "blocked":
       return {
-        title: "Plugin blocked",
+        title: "See why this plugin is blocked",
         status: "which Daintree has blocked.",
-        next: "The plugin manager says why.",
+        next: "The plugin manager shows the reason.",
       };
     default:
       return {
-        title: "Plugin unavailable",
-        status: "which isn't running.",
-        next: "Check it in the plugin manager.",
+        title: "Check this plugin",
+        status: "which isn't offering it right now.",
+        next: "The plugin manager shows its status.",
       };
   }
 }
@@ -345,7 +350,7 @@ function LocalPluginMissingPanel({ pluginId, kind, onRemove }: PluginMissingPane
         title={copy.title}
         description={
           <>
-            This panel needs the {name} plugin, {copy.status} {copy.next}
+            This panel comes from the {name} plugin, {copy.status} {copy.next}
           </>
         }
         action={
