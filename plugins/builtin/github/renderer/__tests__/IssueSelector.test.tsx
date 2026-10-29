@@ -633,7 +633,7 @@ describe("IssueSelector", () => {
       mockListIssues
         .mockResolvedValueOnce({ items: pageOf(1, 2), hasMore: true, nextCursor: "page-2" })
         .mockRejectedValueOnce(new Error("boom"))
-        .mockResolvedValueOnce({ items: pageOf(3, 1), hasMore: false, nextCursor: null });
+        .mockResolvedValueOnce({ items: pageOf(3, 1), hasMore: true, nextCursor: "page-3" });
 
       render(<IssueSelector {...defaultProps} />);
       fireEvent.click(screen.getByRole("combobox"));
@@ -642,12 +642,62 @@ describe("IssueSelector", () => {
       const retry = await screen.findByRole("option", {
         name: /Couldn't load more issues.*Retry/,
       });
-      expect(screen.getByRole("option", { name: /Issue 2/ })).toBeDefined();
+      expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual([
+        "#1 Issue 1",
+        "#2 Issue 2",
+        expect.stringContaining("Retry"),
+      ]);
 
       fireEvent.click(retry);
       await waitFor(() => screen.getByRole("option", { name: /Issue 3/ }));
       expect(mockListIssues.mock.calls[2]?.[0]).toEqual(mockListIssues.mock.calls[1]?.[0]);
       expect(mockListIssues.mock.calls[2]?.[0]?.cursor).toBe("page-2");
+      // A recovered page puts the row back to what it offers next.
+      expect(screen.getByRole("option", { name: "Load more" })).toBeDefined();
+    });
+
+    it("continues the search the rows answer", async () => {
+      mockListIssues.mockResolvedValue({
+        items: pageOf(1, 2),
+        hasMore: true,
+        nextCursor: "page-2",
+      });
+
+      render(<IssueSelector {...defaultProps} />);
+      fireEvent.click(screen.getByRole("combobox"));
+      await screen.findByRole("option", { name: "Load more" });
+      fireEvent.change(screen.getByPlaceholderText("Search issues"), {
+        target: { value: "crash" },
+      });
+      await waitFor(() => expect(mockListIssues).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(screen.getByRole("listbox").getAttribute("aria-busy")).toBeNull());
+
+      fireEvent.click(screen.getByRole("option", { name: "Load more" }));
+      await waitFor(() => expect(mockListIssues).toHaveBeenCalledTimes(3));
+      expect(mockListIssues).toHaveBeenLastCalledWith({
+        cwd: "/test/project",
+        state: "open",
+        search: "crash",
+        cursor: "page-2",
+      });
+    });
+
+    it("drops the next page of a set a failed search left on screen", async () => {
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      mockListIssues
+        .mockResolvedValueOnce({ items: pageOf(1, 2), hasMore: true, nextCursor: "page-2" })
+        .mockRejectedValueOnce(new Error("boom"));
+
+      render(<IssueSelector {...defaultProps} />);
+      fireEvent.click(screen.getByRole("combobox"));
+      await screen.findByRole("option", { name: "Load more" });
+      fireEvent.change(screen.getByPlaceholderText("Search issues"), {
+        target: { value: "crash" },
+      });
+
+      await screen.findByText("Couldn't load issues");
+      expect(screen.getAllByRole("option")).toHaveLength(2);
+      expect(screen.queryByRole("option", { name: "Load more" })).toBeNull();
     });
 
     it("starts one request however many times Load more is pressed", async () => {
@@ -658,11 +708,21 @@ describe("IssueSelector", () => {
       render(<IssueSelector {...defaultProps} />);
       fireEvent.click(screen.getByRole("combobox"));
       const loadMore = await screen.findByRole("option", { name: "Load more" });
-      fireEvent.click(loadMore);
-      fireEvent.click(loadMore);
+      const input = screen.getByPlaceholderText("Search issues");
+      fireEvent.keyDown(input, { key: "End" });
+      await waitFor(() => expect(loadMore.getAttribute("aria-selected")).toBe("true"));
+      // In one batch, so no render lands between the presses: only the
+      // synchronous guard stands between them and a second request.
+      act(() => {
+        loadMore.click();
+        loadMore.click();
+        fireEvent.keyDown(input, { key: "Enter" });
+      });
 
       await waitFor(() => expect(loadMore.getAttribute("aria-disabled")).toBe("true"));
       expect(mockListIssues).toHaveBeenCalledTimes(2);
+      // A cancelled mousedown is what keeps focus, and the arrow keys, in the search.
+      expect(fireEvent.mouseDown(loadMore)).toBe(false);
     });
 
     it("drops a page that lands after the popover closed", async () => {

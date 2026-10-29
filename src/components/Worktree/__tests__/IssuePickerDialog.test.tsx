@@ -6,6 +6,7 @@ import { act, render, screen, cleanup, fireEvent, waitFor } from "@testing-libra
 import type { Issue } from "@shared/types/forge";
 import type { WorktreeState } from "@/types";
 import { IssuePickerDialog } from "../IssuePickerDialog";
+import { UI_DOHERTY_THRESHOLD, UI_STILL_WORKING_MS } from "@/lib/animationUtils";
 
 class ResizeObserverStub {
   observe() {}
@@ -587,6 +588,19 @@ describe("IssuePickerDialog paging", () => {
   const pageOf = (from: number, count: number) =>
     Array.from({ length: count }, (_, i) => makeIssue(from + i, `Issue ${from + i}`));
 
+  function deferred() {
+    let resolve!: (value: unknown) => void;
+    const promise = new Promise((r) => {
+      resolve = r;
+    });
+    return { promise, resolve };
+  }
+
+  function activeOptionText(): string | null | undefined {
+    const id = input().getAttribute("aria-activedescendant");
+    return id ? document.getElementById(id)?.textContent : null;
+  }
+
   it("never announces one page as the whole set, and offers the rest", async () => {
     listIssuesMock.mockResolvedValue({
       items: pageOf(1, 20),
@@ -601,8 +615,16 @@ describe("IssuePickerDialog paging", () => {
     expect(screen.getByRole("option", { name: "Load more" })).toBeTruthy();
   });
 
-  it("says more are available when the forge reports no total", async () => {
-    listIssuesMock.mockResolvedValue({ items: pageOf(1, 2), hasMore: true, nextCursor: "page-2" });
+  it.each([
+    ["no total", undefined],
+    ["a total no larger than what is shown", 2],
+  ])("says more are available when the forge reports %s", async (_label, totalCount) => {
+    listIssuesMock.mockResolvedValue({
+      items: pageOf(1, 2),
+      hasMore: true,
+      nextCursor: "page-2",
+      totalCount,
+    });
     const { container } = renderDialog();
     await waitFor(() =>
       expect(liveStatus(container)).toBe("Showing 2 open issues, more available")
@@ -621,7 +643,7 @@ describe("IssuePickerDialog paging", () => {
     expect(screen.queryByRole("option", { name: "Load more" })).toBeNull();
   });
 
-  it("reaches Load more from the keyboard and appends the next page of the same query", async () => {
+  it("reaches Load more from the keyboard and lands the cursor on the first new issue", async () => {
     listIssuesMock
       .mockResolvedValueOnce({
         items: pageOf(1, 2),
@@ -638,6 +660,7 @@ describe("IssuePickerDialog paging", () => {
       });
     const { container } = renderDialog();
     await waitFor(() => screen.getByText("Issue 2", VISIBLE));
+    expect(liveStatus(container)).toBe("Showing 2 of 4 open issues");
 
     const combobox = input();
     fireEvent.keyDown(combobox, { key: "End" });
@@ -661,9 +684,69 @@ describe("IssuePickerDialog paging", () => {
       expect.stringContaining("Issue 4"),
     ]);
     expect(liveStatus(container)).toBe("4 open issues");
-    // The cursor stays where Load more was, which is now the first new issue.
-    const activeId = combobox.getAttribute("aria-activedescendant");
-    expect(activeId ? document.getElementById(activeId)?.textContent : null).toContain("Issue 3");
+    expect(activeOptionText()).toContain("Issue 3");
+  });
+
+  it("follows each page's cursor, dedups within a page, and keeps the last total it was told", async () => {
+    listIssuesMock
+      .mockResolvedValueOnce({
+        items: pageOf(1, 2),
+        hasMore: true,
+        nextCursor: "c2",
+        totalCount: 6,
+      })
+      .mockResolvedValueOnce({
+        items: [makeIssue(3, "Issue 3"), makeIssue(3, "Issue 3"), makeIssue(4, "Issue 4")],
+        hasMore: true,
+        nextCursor: "c3",
+        totalCount: 8,
+      })
+      .mockResolvedValueOnce({ items: pageOf(5, 2), hasMore: true, nextCursor: "c4" })
+      .mockResolvedValueOnce({ items: pageOf(7, 1), hasMore: false, nextCursor: null });
+    const { container } = renderDialog();
+    await waitFor(() => screen.getByText("Issue 2", VISIBLE));
+    expect(liveStatus(container)).toBe("Showing 2 of 6 open issues");
+
+    const loadMore = () => screen.getByRole("option", { name: "Load more" });
+    fireEvent.click(loadMore());
+    await waitFor(() => expect(liveStatus(container)).toBe("Showing 4 of 8 open issues"));
+    fireEvent.click(loadMore());
+    await waitFor(() => expect(liveStatus(container)).toBe("Showing 6 of 8 open issues"));
+    fireEvent.click(loadMore());
+    await waitFor(() => expect(liveStatus(container)).toBe("7 open issues"));
+
+    expect(listIssuesMock.mock.calls.slice(1).map((call) => call[1]?.cursor)).toEqual([
+      "c2",
+      "c3",
+      "c4",
+    ]);
+    expect(screen.getAllByRole("option")).toHaveLength(7);
+  });
+
+  it("continues the committed search and filter", async () => {
+    vi.useFakeTimers();
+    try {
+      listIssuesMock.mockResolvedValue({
+        items: pageOf(1, 2),
+        hasMore: true,
+        nextCursor: "page-2",
+      });
+      renderDialog();
+      await flush(FIRST_PAINT_MS);
+      fireEvent.change(input(), { target: { value: "crash" } });
+      await flush(300);
+      fireEvent.click(screen.getByRole("radio", { name: "Closed" }));
+      await flush();
+
+      const callsBefore = listIssuesMock.mock.calls.length;
+      fireEvent.click(screen.getByRole("option", { name: "Load more" }));
+      await flush();
+      expect(listIssuesMock.mock.calls.slice(callsBefore).map((call) => call[1])).toEqual([
+        { search: "crash", state: "closed", cursor: "page-2" },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("starts one request however many times Load more is pressed", async () => {
@@ -677,20 +760,70 @@ describe("IssuePickerDialog paging", () => {
     await waitFor(() => screen.getByText("Issue 2", VISIBLE));
 
     const loadMore = screen.getByRole("option", { name: "Load more" });
-    fireEvent.click(loadMore);
-    fireEvent.click(loadMore);
     fireEvent.keyDown(input(), { key: "End" });
-    fireEvent.keyDown(input(), { key: "Enter" });
+    // In one batch, so no render lands between the presses: only the
+    // synchronous guard stands between them and a second request.
+    act(() => {
+      loadMore.click();
+      loadMore.click();
+      fireEvent.keyDown(input(), { key: "Enter" });
+    });
 
     await waitFor(() => expect(loadMore.getAttribute("aria-disabled")).toBe("true"));
     expect(listIssuesMock).toHaveBeenCalledTimes(2);
+    // Enter does nothing while the page is in flight, so nothing claims it does.
+    expect(screen.getByTestId("footer").textContent).not.toContain("to load more");
+  });
+
+  it("holds the loading copy back until the wait is long enough to need it", async () => {
+    vi.useFakeTimers();
+    try {
+      const page = deferred();
+      listIssuesMock
+        .mockResolvedValueOnce({ items: pageOf(1, 2), hasMore: true, nextCursor: "page-2" })
+        .mockReturnValueOnce(page.promise);
+      renderDialog();
+      await flush(FIRST_PAINT_MS);
+
+      const loadMore = screen.getByRole("option", { name: "Load more" });
+      fireEvent.click(loadMore);
+      await flush(UI_DOHERTY_THRESHOLD - 50);
+      expect(loadMore.textContent).toBe("Load more");
+      await flush(100);
+      expect(loadMore.textContent).toContain("Loading…");
+      await flush(UI_STILL_WORKING_MS);
+      expect(loadMore.textContent).toContain("Still working…");
+
+      await act(async () => {
+        page.resolve({ items: pageOf(3, 1), hasMore: true, nextCursor: "page-3" });
+        await vi.runAllTimersAsync();
+      });
+      expect(screen.getByRole("option", { name: "Load more" }).textContent).toBe("Load more");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("moves the cursor onto Load more under the pointer without taking focus from the search", async () => {
+    listIssuesMock.mockResolvedValue({ items: pageOf(1, 2), hasMore: true, nextCursor: "page-2" });
+    renderDialog();
+    await waitFor(() => screen.getByText("Issue 2", VISIBLE));
+
+    const loadMore = screen.getByRole("option", { name: "Load more" });
+    fireEvent.pointerMove(loadMore);
+    expect(input().getAttribute("aria-activedescendant")).toBe(loadMore.id);
+    expect(screen.getAllByRole("option").filter((o) => o.ariaSelected === "true")).toEqual([
+      loadMore,
+    ]);
+    // A cancelled mousedown is what keeps focus, and the arrow keys, in the search.
+    expect(fireEvent.mouseDown(loadMore)).toBe(false);
   });
 
   it("keeps the rows when a page fails, and retries the same page from the same row", async () => {
     listIssuesMock
       .mockResolvedValueOnce({ items: pageOf(1, 2), hasMore: true, nextCursor: "page-2" })
       .mockRejectedValueOnce(new Error("boom"))
-      .mockResolvedValueOnce({ items: pageOf(3, 1), hasMore: false, nextCursor: null });
+      .mockResolvedValueOnce({ items: pageOf(3, 1), hasMore: true, nextCursor: "page-3" });
     const { container } = renderDialog();
     await waitFor(() => screen.getByText("Issue 2", VISIBLE));
 
@@ -699,23 +832,44 @@ describe("IssuePickerDialog paging", () => {
     expect(liveStatus(container)).toBe("Couldn't load more issues");
     expect(screen.getByText("Issue 1", VISIBLE)).toBeTruthy();
     expect(screen.getByText("Issue 2", VISIBLE)).toBeTruthy();
+    fireEvent.keyDown(input(), { key: "End" });
+    expect(screen.getByTestId("footer").textContent).toContain("to retry");
 
     fireEvent.click(retry);
     await waitFor(() => screen.getByText("Issue 3", VISIBLE));
     expect(listIssuesMock.mock.calls[2]?.[1]).toEqual(listIssuesMock.mock.calls[1]?.[1]);
     expect(listIssuesMock.mock.calls[2]?.[1]?.cursor).toBe("page-2");
-    expect(liveStatus(container)).toBe("3 open issues");
+    expect(liveStatus(container)).toBe("Showing 3 open issues, more available");
+    expect(screen.getByRole("option", { name: "Load more" })).toBeTruthy();
+  });
+
+  it("keeps a valid cursor when the last page brings nothing new", async () => {
+    const onAttach = vi.fn();
+    listIssuesMock
+      .mockResolvedValueOnce({ items: pageOf(1, 2), hasMore: true, nextCursor: "page-2" })
+      .mockResolvedValueOnce({
+        items: [makeIssue(2, "Issue 2")],
+        hasMore: false,
+        nextCursor: null,
+      });
+    renderDialog({ onAttach });
+    await waitFor(() => screen.getByText("Issue 2", VISIBLE));
+
+    fireEvent.keyDown(input(), { key: "End" });
+    fireEvent.keyDown(input(), { key: "Enter" });
+    await waitFor(() => expect(screen.queryByRole("option", { name: "Load more" })).toBeNull());
+
+    expect(screen.getAllByRole("option")).toHaveLength(2);
+    expect(activeOptionText()).toContain("Issue 2");
+    fireEvent.keyDown(input(), { key: "Enter" });
+    expect(onAttach).toHaveBeenCalledWith(expect.objectContaining({ number: 2 }));
   });
 
   it("keeps the scroll position when a page is appended", async () => {
-    let resolvePage: ((value: unknown) => void) | undefined;
+    const page = deferred();
     listIssuesMock
       .mockResolvedValueOnce({ items: pageOf(1, 2), hasMore: true, nextCursor: "page-2" })
-      .mockReturnValueOnce(
-        new Promise((r) => {
-          resolvePage = r;
-        })
-      );
+      .mockReturnValueOnce(page.promise);
     renderDialog();
     await waitFor(() => screen.getByText("Issue 2", VISIBLE));
 
@@ -723,23 +877,19 @@ describe("IssuePickerDialog paging", () => {
     scroller.scrollTop = 120;
     fireEvent.click(screen.getByRole("option", { name: "Load more" }));
     await act(async () => {
-      resolvePage?.({ items: pageOf(3, 2), hasMore: false, nextCursor: null });
+      page.resolve({ items: pageOf(3, 2), hasMore: false, nextCursor: null });
     });
     await waitFor(() => screen.getByText("Issue 4", VISIBLE));
     expect(scroller.scrollTop).toBe(120);
   });
 
-  it("drops a page that lands after the query changed", async () => {
+  it("drops a page that lands while a new query is still debouncing", async () => {
     vi.useFakeTimers();
     try {
-      let resolvePage: ((value: unknown) => void) | undefined;
+      const page = deferred();
       listIssuesMock
         .mockResolvedValueOnce({ items: pageOf(1, 2), hasMore: true, nextCursor: "page-2" })
-        .mockReturnValueOnce(
-          new Promise((r) => {
-            resolvePage = r;
-          })
-        )
+        .mockReturnValueOnce(page.promise)
         .mockResolvedValueOnce({
           items: [makeIssue(50, "Searched issue")],
           hasMore: false,
@@ -750,14 +900,15 @@ describe("IssuePickerDialog paging", () => {
 
       fireEvent.click(screen.getByRole("option", { name: "Load more" }));
       fireEvent.change(input(), { target: { value: "searched" } });
-      await flush(300);
-      expect(screen.getByText("Searched issue", VISIBLE)).toBeTruthy();
-
+      // The keystroke alone, before its fetch starts, retires the old set.
       await act(async () => {
-        resolvePage?.({ items: pageOf(3, 2), hasMore: false, nextCursor: null });
-        await vi.runAllTimersAsync();
+        page.resolve({ items: pageOf(3, 2), hasMore: false, nextCursor: null });
       });
       expect(screen.queryByText("Issue 3", VISIBLE)).toBeNull();
+      expect(screen.getByTestId("footer").textContent).not.toContain("to load more");
+
+      await flush(300);
+      expect(screen.getByText("Searched issue", VISIBLE)).toBeTruthy();
       expect(screen.getAllByRole("option")).toHaveLength(1);
     } finally {
       vi.useRealTimers();

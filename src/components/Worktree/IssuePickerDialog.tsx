@@ -411,6 +411,21 @@ export function IssuePickerDialog({
 
   const isLinked = currentIssueNumber !== undefined && currentIssueNumber > 0;
 
+  // Only where Enter will do what the hint says: on Load more, a stale list
+  // makes Enter re-run the search and a page in flight makes it do nothing.
+  const enterHint =
+    isLinked || !hasResults
+      ? null
+      : !isLoadMoreActive
+        ? draft
+          ? "to select"
+          : "to link"
+        : !resultsAreCurrent || isLoadingMore
+          ? null
+          : loadMoreFailed
+            ? "to retry"
+            : "to load more";
+
   let body: React.ReactNode;
   if (showSkeleton) {
     body = (
@@ -535,7 +550,7 @@ export function IssuePickerDialog({
             onClick={() => void loadMore()}
             className={cn(
               PALETTE_ROW_CLASS,
-              "w-full px-3 py-2 rounded-[var(--radius-md)] flex items-center justify-center gap-2",
+              "w-full px-3 py-1.5 rounded-[var(--radius-md)] flex items-center justify-center gap-2",
               "text-sm text-text-secondary"
             )}
           >
@@ -630,11 +645,10 @@ export function IssuePickerDialog({
 
       <AppDialog.Footer
         hint={
-          // Only where Enter can actually link something.
-          isLinked || !hasResults ? undefined : (
+          enterHint && (
             <>
               <Kbd>↵</Kbd>
-              <span>{isLoadMoreActive ? "to load more" : draft ? "to select" : "to link"}</span>
+              <span>{enterHint}</span>
             </>
           )
         }
