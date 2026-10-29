@@ -725,6 +725,20 @@ function expectNoPastSessionsNote(description: string | null) {
   expect(description).not.toMatch(/past session|discard|delet/i);
 }
 
+/**
+ * Closing a working lane names its agent and the turn it cuts short, then says
+ * whether the conversation can come back from inside the app (#15385).
+ */
+function expectWorkingCloseConfirm(description: string | null, agentName: string, listed: boolean) {
+  expect(description).toMatch(
+    new RegExp(`^${agentName} is working\\. Closing stops its current turn and closes this tab\\. `)
+  );
+  expect(description).toMatch(
+    listed ? /stays in past sessions\.$/ : /can't resume this conversation in Daintree\.$/
+  );
+  expect(description).not.toMatch(/discard|delet/i);
+}
+
 describe("HelpPanel — + New session destructive reset", () => {
   function setupBoundTerminal(opts: {
     agentState?: string;
@@ -1369,7 +1383,7 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
     expect(helpPanelState.closeSlot).not.toHaveBeenCalled();
     expect(getByTestId("dialog-title").textContent).toBe("Close Session 2?");
     expect(getByTestId("dialog-confirm").textContent).toBe("Close session");
-    expectStaysInPastSessions(getByTestId("dialog-description").textContent);
+    expectWorkingCloseConfirm(getByTestId("dialog-description").textContent, "Claude", true);
 
     fireEvent.click(getByTestId("dialog-confirm"));
     expect(mockRevokeSession).toHaveBeenCalledWith("sess-back");
@@ -1383,7 +1397,7 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
     // Lanes on different agents name theirs in the tab.
     const first = render(<HelpPanel width={380} />);
     fireEvent.click(closeButtonFor(first.container, "Session 2 — Gemini"));
-    expectNoPastSessionsNote(first.getByTestId("dialog-description").textContent);
+    expectWorkingCloseConfirm(first.getByTestId("dialog-description").textContent, "Gemini", false);
     first.unmount();
 
     // And the other way round: an unlisted agent in front, a listed one behind.
@@ -1392,7 +1406,7 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
     helpPanelState.sessions[0]!.agentId = "gemini";
     const second = render(<HelpPanel width={380} />);
     fireEvent.click(closeButtonFor(second.container, "Session 2 — Codex"));
-    expectStaysInPastSessions(second.getByTestId("dialog-description").textContent);
+    expectWorkingCloseConfirm(second.getByTestId("dialog-description").textContent, "Codex", true);
   });
 
   it("names a lane after the task its agent reports, and falls back to its number otherwise", () => {

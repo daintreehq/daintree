@@ -669,7 +669,7 @@ describe("helpPanelStore persistence migration", () => {
       expect(store.getState().sessions[1]!.figures).toHaveLength(1);
     });
 
-    it("closeSlot drops the lane and falls back to the lowest remaining one", async () => {
+    it("closeSlot drops the lane and falls back to the one before it when none follows", async () => {
       installLocalStorage({});
       const { useHelpPanelStore: store } = await import("../helpPanelStore");
       store.getState().openSlot();
@@ -681,6 +681,19 @@ describe("helpPanelStore persistence migration", () => {
       expect(store.getState().sessions[1]).toBeUndefined();
       expect(store.getState().activeSlot).toBe(0);
       expect(store.getState().sessions[0]!.terminalId).toBe("term-0");
+    });
+
+    it("closeSlot selects the following lane when the selected one closes between two", async () => {
+      installLocalStorage({});
+      const { useHelpPanelStore: store } = await import("../helpPanelStore");
+      store.getState().openSlot();
+      store.getState().openSlot();
+      store.getState().setActiveSlot(1);
+
+      store.getState().closeSlot(1);
+
+      // Its neighbour, as a browser tab strip does, not the lowest remaining slot.
+      expect(store.getState().activeSlot).toBe(2);
     });
 
     it("never leaves the panel lane-less: closing the last lane resets slot 0", async () => {
