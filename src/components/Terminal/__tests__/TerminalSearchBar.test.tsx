@@ -793,4 +793,24 @@ describe("TerminalSearchBar", () => {
       expect(input.value).toBe("draft");
     });
   });
+
+  it("searches the terminal it is given rather than one the grid holds (#15332)", async () => {
+    const mock = createMockManaged(true);
+    const target = {
+      ensureSearchAddon: vi.fn(async () => mock.searchAddon as never),
+      getSearchAddon: vi.fn(() => mock.searchAddon as never),
+    };
+    vi.mocked(terminalInstanceService.ensureSearchAddon).mockClear();
+    render(<TerminalSearchBar search={target} onClose={vi.fn()} />);
+    const input = screen.getByPlaceholderText("Find in terminal");
+    await act(() => {
+      fireEvent.change(input, { target: { value: "hello" } });
+    });
+    await act(() => {
+      vi.advanceTimersByTime(150);
+    });
+    expect(mock.searchAddon.findNext).toHaveBeenCalledWith("hello", expect.anything());
+    expect(terminalInstanceService.ensureSearchAddon).not.toHaveBeenCalled();
+    expect(terminalInstanceService.pinHistory).not.toHaveBeenCalled();
+  });
 });

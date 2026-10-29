@@ -597,6 +597,16 @@ export function CanopyTerminal({
           })
           .catch((error: unknown) => logWarn("[Canopy] paste refused", { error }));
       },
+      refocus: () => {
+        if (disposed) return;
+        const active = document.activeElement;
+        if (active !== null && frame.contains(active)) return;
+        // A dialog the menu opened (the file viewer) keeps the keyboard.
+        const around = frame.closest('[role="dialog"]');
+        if (active === null || active === document.body || around?.contains(active)) {
+          terminal.focus();
+        }
+      },
     };
     menuRef.current = menu;
 

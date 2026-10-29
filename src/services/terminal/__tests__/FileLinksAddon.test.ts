@@ -2290,3 +2290,84 @@ describe("FileLinksAddon home-relative paths", () => {
     expect(fileBrowserClient.statPaths).toHaveBeenCalledWith({ worktreeId: root, paths: ["src"] });
   });
 });
+
+describe("FileLinksAddon routed for a surface over the grid (#15332)", () => {
+  const OTHER_HOST = "This path is on another host. Open it from a window on that host.";
+  const otherHost = { refusal: () => OTHER_HOST, dialogOnly: true };
+  const thisHost = { refusal: () => null, dialogOnly: true };
+
+  beforeEach(() => {
+    vi.mocked(actionService.dispatch).mockReset();
+    vi.mocked(actionService.dispatch).mockResolvedValue({ ok: true, result: { panelId: "p1" } });
+    vi.mocked(notify).mockClear();
+    vi.mocked(grantClickedHostFile).mockClear();
+    vi.mocked(systemClient.openPath).mockReset();
+    vi.mocked(systemClient.openInEditor).mockReset();
+    vi.mocked(fileBrowserClient.statPaths).mockReset();
+  });
+
+  const fileLink = async (route: typeof otherHost | typeof thisHost) => {
+    const addon = new FileLinksAddon(
+      makeTerminal(["Error at /repo/src/App.tsx:45"]),
+      () => "/repo",
+      undefined,
+      () => undefined,
+      route
+    );
+    const links = await provide(addon);
+    expect(links).toHaveLength(1);
+    return links![0]!;
+  };
+
+  it.each([
+    ["a plain click", { metaKey: false, ctrlKey: false }],
+    ["a modified click", { metaKey: true, ctrlKey: false }],
+  ])("says plainly it can't open another host's file on %s, and opens nothing", async (_, mods) => {
+    const link = await fileLink(otherHost);
+    link.activate(mods as MouseEvent, link.text);
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Couldn't open file link",
+        message: expect.stringContaining("another host"),
+      })
+    );
+    await Promise.resolve();
+    expect(actionService.dispatch).not.toHaveBeenCalled();
+    expect(grantClickedHostFile).not.toHaveBeenCalled();
+    expect(systemClient.openPath).not.toHaveBeenCalled();
+    expect(systemClient.openInEditor).not.toHaveBeenCalled();
+  });
+
+  it("keeps a file in the viewer dialog even where a plugin made its editor the default", async () => {
+    fileEditorDefaultMock.mockReturnValue({ slot: "fileEditor:**/*.tsx" });
+    const link = await fileLink(thisHost);
+    link.activate({ metaKey: false, ctrlKey: false } as MouseEvent, link.text);
+    await vi.waitFor(() => expect(actionService.dispatch).toHaveBeenCalled());
+    expect(actionService.dispatch).toHaveBeenCalledWith(
+      "file.view",
+      expect.objectContaining({ path: "/repo/src/App.tsx", line: 45 }),
+      { source: "user" }
+    );
+    expect(actionService.dispatch).not.toHaveBeenCalledWith(
+      "file.openPanel",
+      expect.anything(),
+      expect.anything()
+    );
+    fileEditorDefaultMock.mockReturnValue(null);
+  });
+
+  it("links none of another host's folders, which would resolve to this view's", async () => {
+    const root = nextRoot();
+    bindWorktrees(new Map([[root, { id: root, path: root }]]));
+    vi.mocked(fileBrowserClient.statPaths).mockResolvedValue(["directory"]);
+    const addon = new FileLinksAddon(
+      makeTerminal(["wrote files under src/utils today"]),
+      () => root,
+      undefined,
+      () => undefined,
+      otherHost
+    );
+    expect(await provide(addon)).toBeUndefined();
+    expect(fileBrowserClient.statPaths).not.toHaveBeenCalled();
+  });
+});

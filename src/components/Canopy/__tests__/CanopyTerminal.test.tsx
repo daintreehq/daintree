@@ -836,7 +836,11 @@ describe("CanopyTerminal links, as the run's grid pane opens them (#15332)", () 
       { path: "/repo/src/app.ts" },
       expect.anything()
     );
-    expect(dispatch).not.toHaveBeenCalledWith("file.openPanel", expect.anything(), expect.anything());
+    expect(dispatch).not.toHaveBeenCalledWith(
+      "file.openPanel",
+      expect.anything(),
+      expect.anything()
+    );
     dispatch.mockRestore();
   });
 

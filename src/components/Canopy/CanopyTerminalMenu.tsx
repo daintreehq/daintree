@@ -26,6 +26,12 @@ export interface CanopyTerminalMenuHandle extends TerminalOutputMenuTarget {
   read(): CanopyTerminalMenuState;
   copy(text: string): void;
   paste(): void;
+  /**
+   * Back to the terminal once the menu has closed, unless the keyboard went to
+   * something else: a right-click lands where nothing takes focus, and the menu
+   * would otherwise hand it to whatever had it before, a row of the list.
+   */
+  refocus(): void;
 }
 
 /**
@@ -46,7 +52,11 @@ export function CanopyTerminalMenu({
       <ContextMenuTrigger asChild onContextMenu={() => setState(handle.current?.read() ?? null)}>
         {children}
       </ContextMenuTrigger>
-      <ContextMenuContent data-canopy-terminal-menu="">
+      <ContextMenuContent
+        data-canopy-terminal-menu=""
+        // After the menu's own restore, so it settles what that left.
+        onCloseAutoFocus={() => setTimeout(() => handle.current?.refocus(), 0)}
+      >
         <CanopyTerminalMenuItems state={state} handle={handle} />
       </ContextMenuContent>
     </ContextMenu>
