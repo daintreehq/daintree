@@ -1272,7 +1272,14 @@ export function HostSwitchDialog({
   ) : undefined;
 
   return (
-    <AppDialog isOpen onClose={closeDialog} size="md" initialFocus="surface">
+    // Retry removes the button that held focus while the next look is out.
+    <AppDialog
+      isOpen
+      onClose={closeDialog}
+      size="md"
+      initialFocus="surface"
+      focusResetKey={prepareAttempt}
+    >
       <AppDialog.Header className="py-3">
         <AppDialog.Title icon={<Server className="h-4 w-4 text-text-secondary" />}>
           {title}

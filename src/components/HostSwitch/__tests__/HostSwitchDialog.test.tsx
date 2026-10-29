@@ -1,7 +1,7 @@
 /**
  * @vitest-environment jsdom
  */
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ButtonHTMLAttributes, ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -24,14 +24,16 @@ vi.mock("@/components/ui/AppDialog", () => {
   const AppDialog = ({
     isOpen,
     onClose,
+    focusResetKey,
     children,
   }: {
     isOpen: boolean;
     onClose: () => void;
+    focusResetKey?: string | number;
     children: ReactNode;
   }) =>
     isOpen ? (
-      <div data-testid="app-dialog">
+      <div data-testid="app-dialog" data-focus-reset-key={focusResetKey}>
         <button type="button" onClick={onClose}>
           close
         </button>
@@ -840,9 +842,14 @@ describe("HostSwitchDialog when looking at the project fails", () => {
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("The link to studio-01 dropped.");
     expect(screen.getByRole("button", { name: "Switch host only" })).toBeTruthy();
+    const focusKeyBefore = screen.getByTestId("app-dialog").getAttribute("data-focus-reset-key");
 
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(await screen.findByText("daintree isn't on studio-01 yet")).toBeTruthy();
+    // Retry removes the button that held focus, so the dialog is asked to place it again.
+    expect(screen.getByTestId("app-dialog").getAttribute("data-focus-reset-key")).not.toBe(
+      focusKeyBefore
+    );
     expect(prepare).toHaveBeenCalledTimes(2);
     expect(prepare.mock.calls[1]![0]).toEqual(prepare.mock.calls[0]![0]);
     expect(prepare.mock.calls[1]![0]).toMatchObject({
@@ -903,5 +910,46 @@ describe("HostSwitchDialog when looking at the project fails", () => {
     expect(prepare).toHaveBeenCalledTimes(3);
     expect(execute).toHaveBeenCalledTimes(1);
     expect(switchToHost).not.toHaveBeenCalled();
+  });
+
+  it("retries the look rather than an earlier failed step, and hides the earlier answer meanwhile", async () => {
+    prepare.mockResolvedValueOnce(preparation());
+    execute.mockResolvedValue({
+      kind: "git-failed",
+      step: "clone",
+      hostId: "studio-01",
+      reason: "auth-failed",
+      message: "Permission denied (publickey).",
+    });
+    const { rerender } = render(<HostSwitchDialog request={request} onClose={() => {}} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Clone and open" }));
+    await screen.findByRole("button", { name: "Retry clone" });
+
+    // The request changing under the dialog asks the hosts again, and that look fails.
+    prepare.mockRejectedValueOnce(dropped);
+    rerender(
+      <HostSwitchDialog
+        request={{ ...request, worktreePath: "/Users/greg/Projects/other" }}
+        onClose={() => {}}
+      />
+    );
+    await screen.findByText("The link to studio-01 dropped.");
+    expect(screen.queryByRole("button", { name: "Retry clone" })).toBeNull();
+
+    let finishLook!: (prepared: HostSwitchPreparation) => void;
+    prepare.mockReturnValueOnce(
+      new Promise<HostSwitchPreparation>((resolve) => {
+        finishLook = resolve;
+      })
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(screen.queryByText("daintree isn't on studio-01 yet")).toBeNull();
+    expect(prepare).toHaveBeenCalledTimes(3);
+    expect(execute).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      finishLook(preparation());
+    });
+    expect(await screen.findByText("daintree isn't on studio-01 yet")).toBeTruthy();
   });
 });
