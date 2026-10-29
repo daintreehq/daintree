@@ -274,9 +274,13 @@ export function PortalDock() {
   }, []);
 
   // Clearing the failure is the retry: PortalVisibilityController restores the
-  // selected tab when its failure clears.
+  // selected tab when its failure clears. Retry unmounts with the failure, so
+  // focus moves to the dock first rather than dropping to the page.
   const handleRetryRestore = useCallback(() => {
-    if (activeTabId) usePortalStore.getState().clearTabRestoreFailed(activeTabId);
+    if (!activeTabId) return;
+    const dock = dockRef.current;
+    if (dock?.contains(document.activeElement)) dock.focus({ preventScroll: true });
+    usePortalStore.getState().clearTabRestoreFailed(activeTabId);
   }, [activeTabId]);
 
   const handleOpenRestoreFailedExternal = useCallback(() => {

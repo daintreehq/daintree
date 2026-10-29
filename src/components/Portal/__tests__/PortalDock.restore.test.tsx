@@ -28,7 +28,7 @@ const URL_A = "https://example.com/chat/a";
 const skeleton = () => document.querySelector('[data-testid="portal-tab-skeleton"]');
 const failure = () => document.querySelector('[role="alert"]');
 
-function selectUncreatedTab() {
+function selectUncreatedTab(activeTabId = "tab-1") {
   act(() => {
     usePortalStore.setState({
       isOpen: true,
@@ -36,7 +36,7 @@ function selectUncreatedTab() {
         { id: "tab-1", title: "A", url: URL_A },
         { id: "tab-2", title: "B", url: "https://example.com/b" },
       ],
-      activeTabId: "tab-1",
+      activeTabId,
       createdTabs: new Set<string>(),
     });
   });
@@ -102,16 +102,29 @@ describe("PortalDock — a tab whose restore gives up (#15043)", () => {
     expect(skeleton()).not.toBeNull();
   });
 
-  it("opens the failed tab's page in the system browser", () => {
+  it("keeps focus in the dock when Retry takes itself away", () => {
     selectUncreatedTab();
     act(() => usePortalStore.getState().markTabRestoreFailed("tab-1"));
+    render(<PortalDock />);
+    const retry = screen.getByRole("button", { name: "Retry" });
+    retry.focus();
+
+    fireEvent.click(retry);
+
+    expect(retry.isConnected).toBe(false);
+    expect(document.activeElement).toBe(screen.getByRole("region", { name: "Portal" }));
+  });
+
+  it("opens the failed tab's page in the system browser", () => {
+    selectUncreatedTab("tab-2");
+    act(() => usePortalStore.getState().markTabRestoreFailed("tab-2"));
     render(<PortalDock />);
 
     fireEvent.click(screen.getByRole("button", { name: "Open in external browser" }));
 
     expect(dispatchMock).toHaveBeenCalledWith(
       "portal.openTabExternal",
-      { tabId: "tab-1" },
+      { tabId: "tab-2" },
       { source: "user" }
     );
   });

@@ -146,6 +146,7 @@ describe("activatePortalTab with a tab main released (#14537)", () => {
 
 describe("activatePortalTab when the restore gives up (#15043)", () => {
   const markTabRestoreFailedMock = vi.fn();
+  const unmarkTabCreatedMock = vi.fn();
 
   beforeEach(() => {
     portalStoreMock.getState.mockReturnValue({
@@ -154,6 +155,7 @@ describe("activatePortalTab when the restore gives up (#15043)", () => {
       createdTabs: new Set<string>(),
       setActiveTab: setActiveTabMock,
       markTabCreated: markTabCreatedMock,
+      unmarkTabCreated: unmarkTabCreatedMock,
       markTabRestoreFailed: markTabRestoreFailedMock,
     });
   });
@@ -182,9 +184,39 @@ describe("activatePortalTab when the restore gives up (#15043)", () => {
     expect(markTabRestoreFailedMock).toHaveBeenCalledWith("tab-1");
   });
 
-  it("records nothing when the tab comes up", async () => {
+  it("takes back the created mark before recording a show that rejects", async () => {
+    showMock.mockRejectedValueOnce(new Error("boom"));
+
     await activatePortalTab("tab-1");
 
+    expect(markTabCreatedMock).toHaveBeenCalledWith("tab-1");
+    expect(unmarkTabCreatedMock).toHaveBeenCalledWith("tab-1");
+    expect(markTabRestoreFailedMock).toHaveBeenCalledWith("tab-1");
+    expect(unmarkTabCreatedMock.mock.invocationCallOrder[0]).toBeLessThan(
+      markTabRestoreFailedMock.mock.invocationCallOrder[0]!
+    );
+  });
+
+  it("leaves a tab it didn't create marked when its show rejects", async () => {
+    portalStoreMock.getState.mockReturnValue({
+      ...portalStoreMock.getState(),
+      createdTabs: new Set<string>(["tab-1"]),
+    });
+    showMock.mockRejectedValueOnce(new Error("boom"));
+
+    await activatePortalTab("tab-1");
+
+    expect(createMock).not.toHaveBeenCalled();
+    expect(unmarkTabCreatedMock).not.toHaveBeenCalled();
+  });
+
+  it("records nothing when the tab comes up", async () => {
+    showMock.mockResolvedValueOnce(true);
+
+    await activatePortalTab("tab-1");
+
+    expect(createMock).toHaveBeenCalledOnce();
+    expect(markTabCreatedMock).toHaveBeenCalledWith("tab-1");
     expect(showMock).toHaveBeenCalledWith({ tabId: "tab-1", bounds: BOUNDS });
     expect(markTabRestoreFailedMock).not.toHaveBeenCalled();
   });

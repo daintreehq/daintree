@@ -81,15 +81,19 @@ export const activatePortalTab = async (tabId: string): Promise<void> => {
     return;
   }
 
+  let createdHere = false;
   try {
     // Read after the bounds wait: an eviction notice may have landed during it.
     if (!usePortalStore.getState().createdTabs.has(tabId)) {
       await window.electron.portal.create({ tabId, url: tab.url, partition: tab.partition });
       state.markTabCreated(tabId);
+      createdHere = true;
     }
     await showPortalTabIfNoOverlay(tabId, bounds);
   } catch (error) {
     logError("Failed to activate portal tab", error);
+    // A tab created here that never showed is still restoring, so it can fail.
+    if (createdHere) usePortalStore.getState().unmarkTabCreated(tabId);
     usePortalStore.getState().markTabRestoreFailed(tabId);
   }
 };

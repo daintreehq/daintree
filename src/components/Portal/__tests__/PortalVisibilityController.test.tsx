@@ -726,6 +726,7 @@ describe("PortalVisibilityController", () => {
       openPortal();
       await settle();
 
+      expect(portal.show).toHaveBeenCalledTimes(1);
       expect(failed()).toBe(true);
     });
 
@@ -744,8 +745,15 @@ describe("PortalVisibilityController", () => {
       vi.spyOn(document, "getElementById").mockReturnValue(null);
       renderWithClosedTab();
       openPortal();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(500);
+      });
+      // Still waiting for the dock to mount.
+      expect(failed()).toBe(false);
+
       await settle();
 
+      expect(portal.create).toHaveBeenCalledTimes(1);
       expect(portal.show).not.toHaveBeenCalled();
       expect(failed()).toBe(true);
     });
@@ -757,8 +765,78 @@ describe("PortalVisibilityController", () => {
       openPortal();
       await settle();
 
+      expect(portal.create).toHaveBeenCalledTimes(2);
+      expect(portal.show).toHaveBeenCalledTimes(2);
       expect(usePortalStore.getState().createdTabs.has("tab-1")).toBe(true);
       expect(failed()).toBe(false);
+    });
+
+    it("leaves the failure to work queued for the same tab", async () => {
+      mockPlaceholder();
+      const firstCreate = deferredPromise();
+      const secondCreate = deferredPromise();
+      portal.create
+        .mockImplementationOnce(() => firstCreate.promise)
+        .mockImplementationOnce(() => secondCreate.promise);
+      renderWithClosedTab();
+      openPortal();
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      // An overlay coming and going asks for the same tab again mid-create.
+      act(() => useUIStore.setState({ overlayStack: ["settings"] }));
+      act(() => useUIStore.setState({ overlayStack: [] }));
+      expect(portal.hide).toHaveBeenCalledTimes(1);
+
+      firstCreate.reject(new Error("boom"));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(portal.create).toHaveBeenCalledTimes(2);
+      expect(failed()).toBe(false);
+      expect(portal.hide).toHaveBeenCalledTimes(1);
+
+      secondCreate.resolve();
+      await settle();
+
+      expect(usePortalStore.getState().createdTabs.has("tab-1")).toBe(true);
+      expect(failed()).toBe(false);
+    });
+
+    it("records a cached view's failure without hiding the front project's portal", async () => {
+      mockPlaceholder();
+      const createRequest = deferredPromise();
+      portal.create.mockImplementationOnce(() => createRequest.promise);
+      renderWithClosedTab();
+      openPortal();
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      cacheView();
+      createRequest.reject(new Error("boom"));
+      await settle();
+
+      expect(failed()).toBe(true);
+      expect(portal.hide).not.toHaveBeenCalled();
+    });
+
+    it("starts nothing when a failed tab is created after all", async () => {
+      mockPlaceholder();
+      portal.create.mockRejectedValueOnce(new Error("boom"));
+      renderWithClosedTab();
+      openPortal();
+      await settle();
+      expect(failed()).toBe(true);
+
+      act(() => usePortalStore.getState().markTabCreated("tab-1"));
+      await settle();
+
+      expect(failed()).toBe(false);
+      expect(portal.create).toHaveBeenCalledTimes(1);
+      expect(portal.show).not.toHaveBeenCalled();
     });
 
     it("records nothing for a tab the user moved off while it was restoring", async () => {
