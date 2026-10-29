@@ -73,8 +73,13 @@ export const activatePortalTab = async (tabId: string): Promise<void> => {
     return;
   }
 
+  // Reselecting the tab already selected doesn't wake PortalVisibilityController,
+  // so a restore that gives up here has to say so or the dock loads forever.
   const bounds = await getPortalBoundsWithRetry();
-  if (!bounds) return;
+  if (!bounds) {
+    usePortalStore.getState().markTabRestoreFailed(tabId);
+    return;
+  }
 
   try {
     // Read after the bounds wait: an eviction notice may have landed during it.
@@ -85,5 +90,6 @@ export const activatePortalTab = async (tabId: string): Promise<void> => {
     await showPortalTabIfNoOverlay(tabId, bounds);
   } catch (error) {
     logError("Failed to activate portal tab", error);
+    usePortalStore.getState().markTabRestoreFailed(tabId);
   }
 };

@@ -14,6 +14,7 @@ import { useUIStore } from "./uiStore";
 import { createDebouncedSafeJSONStorage } from "./persistence/safeStorage";
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
+import { isProjectViewCached } from "@/lib/viewCacheState";
 
 interface PortalState {
   isOpen: boolean;
@@ -21,6 +22,10 @@ interface PortalState {
   activeTabId: string | null;
   tabs: PortalTab[];
   createdTabs: Set<string>;
+  // Tabs whose restore gave up, so the dock stops showing a load that will never
+  // finish. Cleared by a successful create or the user's Retry; eviction notices
+  // leave it alone, since the tab is already uncreated.
+  restoreFailedTabs: Set<string>;
   links: PortalLink[];
   defaultNewTabUrl: string | null;
   // Opt-in cross-worktree dev-server dashboard, rendered below the active tab
@@ -50,6 +55,8 @@ interface PortalActions {
   markTabCreated: (id: string) => void;
   unmarkTabCreated: (id: string) => void;
   markTabsUncreated: (tabIds: string[]) => void;
+  markTabRestoreFailed: (id: string) => void;
+  clearTabRestoreFailed: (id: string) => void;
   isTabCreated: (id: string) => boolean;
   reset: () => void;
   addLink: (link: Omit<PortalLink, "id" | "order">) => void;
@@ -70,10 +77,23 @@ const initialState: PortalState = {
   activeTabId: null,
   tabs: DEFAULT_PORTAL_TABS,
   createdTabs: new Set<string>(),
+  restoreFailedTabs: new Set<string>(),
   links: [...DEFAULT_SYSTEM_LINKS],
   defaultNewTabUrl: null,
   showDevDashboard: false,
 };
+
+function withoutTab(tabIds: Set<string>, id: string): Set<string> {
+  if (!tabIds.has(id)) return tabIds;
+  const next = new Set(tabIds);
+  next.delete(id);
+  return next;
+}
+
+function keepTabs(tabIds: Set<string>, tabs: PortalTab[]): Set<string> {
+  if (tabIds.size === 0) return tabIds;
+  return new Set([...tabIds].filter((id) => tabs.some((t) => t.id === id)));
+}
 
 function isPersistedTab(value: unknown): value is PortalTab {
   if (!value || typeof value !== "object") return false;
@@ -193,7 +213,12 @@ const createPortalStore: StateCreator<PortalState & PortalActions> = (set, get) 
       }
       const nextCreatedTabs = new Set(state.createdTabs);
       nextCreatedTabs.delete(id);
-      set({ tabs: newTabs, activeTabId: newActiveId, createdTabs: nextCreatedTabs });
+      set({
+        tabs: newTabs,
+        activeTabId: newActiveId,
+        createdTabs: nextCreatedTabs,
+        restoreFailedTabs: withoutTab(state.restoreFailedTabs, id),
+      });
       window.electron.portal.closeTab({ tabId: id });
 
       if (!wasActive) return;
@@ -240,7 +265,12 @@ const createPortalStore: StateCreator<PortalState & PortalActions> = (set, get) 
       for (const tabId of state.createdTabs) {
         window.electron.portal.closeTab({ tabId });
       }
-      set({ tabs: [], activeTabId: null, createdTabs: new Set<string>() });
+      set({
+        tabs: [],
+        activeTabId: null,
+        createdTabs: new Set<string>(),
+        restoreFailedTabs: new Set<string>(),
+      });
     },
 
     duplicateTab: (id) => {
@@ -275,7 +305,12 @@ const createPortalStore: StateCreator<PortalState & PortalActions> = (set, get) 
       }
       const nextCreatedTabs = new Set<string>();
       if (state.createdTabs.has(id)) nextCreatedTabs.add(id);
-      set({ tabs: [keptTab], activeTabId: id, createdTabs: nextCreatedTabs });
+      set({
+        tabs: [keptTab],
+        activeTabId: id,
+        createdTabs: nextCreatedTabs,
+        restoreFailedTabs: keepTabs(state.restoreFailedTabs, [keptTab]),
+      });
     },
 
     closeTabsAfter: (id) => {
@@ -297,7 +332,12 @@ const createPortalStore: StateCreator<PortalState & PortalActions> = (set, get) 
       const nextCreatedTabs = new Set(
         [...state.createdTabs].filter((tabId) => remainingTabs.some((t) => t.id === tabId))
       );
-      set({ tabs: remainingTabs, activeTabId: newActiveId, createdTabs: nextCreatedTabs });
+      set({
+        tabs: remainingTabs,
+        activeTabId: newActiveId,
+        createdTabs: nextCreatedTabs,
+        restoreFailedTabs: keepTabs(state.restoreFailedTabs, remainingTabs),
+      });
     },
 
     updateTabTitle: (id, title) =>
@@ -319,7 +359,7 @@ const createPortalStore: StateCreator<PortalState & PortalActions> = (set, get) 
       set((s) => {
         const newSet = new Set(s.createdTabs);
         newSet.add(id);
-        return { createdTabs: newSet };
+        return { createdTabs: newSet, restoreFailedTabs: withoutTab(s.restoreFailedTabs, id) };
       }),
 
     unmarkTabCreated: (id) =>
@@ -336,12 +376,39 @@ const createPortalStore: StateCreator<PortalState & PortalActions> = (set, get) 
         return { createdTabs: newSet };
       }),
 
+    // Only the selected tab of an open Portal is waiting on a restore. A tab
+    // anywhere else comes back through whatever puts it on screen again.
+    markTabRestoreFailed: (id) => {
+      const state = get();
+      const tab = state.tabs.find((t) => t.id === id);
+      if (!tab?.url || !state.isOpen || state.activeTabId !== id) return;
+      if (state.createdTabs.has(id)) return;
+      if (!state.restoreFailedTabs.has(id)) {
+        set({ restoreFailedTabs: new Set(state.restoreFailedTabs).add(id) });
+      }
+      // Main parks the previous tab's view only when a show succeeds, so that
+      // page would still cover the failure. A cached view must not hide the
+      // front project's tab.
+      if (!isProjectViewCached()) {
+        safeFireAndForget(Promise.resolve(window.electron.portal.hide()), {
+          context: "Hide portal after a failed restore",
+        });
+      }
+    },
+
+    clearTabRestoreFailed: (id) =>
+      set((s) => {
+        if (!s.restoreFailedTabs.has(id)) return s;
+        return { restoreFailedTabs: withoutTab(s.restoreFailedTabs, id) };
+      }),
+
     isTabCreated: (id) => get().createdTabs.has(id),
 
     reset: () =>
       set({
         ...initialState,
         createdTabs: new Set<string>(),
+        restoreFailedTabs: new Set<string>(),
       }),
 
     addLink: (link) =>

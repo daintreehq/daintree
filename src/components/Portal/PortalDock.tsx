@@ -11,6 +11,7 @@ import { PortalDefaultNewTabSubmenu } from "./PortalDefaultNewTabSubmenu";
 import { PortalLaunchpad } from "./PortalLaunchpad";
 import { DevServerDashboard } from "./DevServerDashboard";
 import { PortalTabSkeleton } from "./PortalTabSkeleton";
+import { PortalTabRestoreError } from "./PortalTabRestoreError";
 import { useSkeletonGate, useSkeletonFloor } from "@/hooks/useDeferredLoading";
 import {
   PORTAL_MIN_WIDTH,
@@ -41,6 +42,7 @@ export function PortalDock() {
     tabs,
     links,
     createdTabs,
+    restoreFailedTabs,
     setWidth,
     setOpen,
     defaultNewTabUrl,
@@ -53,6 +55,7 @@ export function PortalDock() {
       tabs: s.tabs,
       links: s.links,
       createdTabs: s.createdTabs,
+      restoreFailedTabs: s.restoreFailedTabs,
       setWidth: s.setWidth,
       setOpen: s.setOpen,
       defaultNewTabUrl: s.defaultNewTabUrl,
@@ -89,8 +92,11 @@ export function PortalDock() {
   // being (re)created. Triggers on cold start with a persisted activeTabId and
   // on click of an LRU-evicted tab (PortalManager evicts beyond PORTAL_MAX_LIVE_TABS),
   // both of which take 300-800ms to resolve via portal.create + bounds wait + portal.show.
+  // A restore that gave up replaces the skeleton outright: the floor would
+  // otherwise hold the skeleton up past the failure.
   const isTabRestoring = !showLaunchpad && activeTabId !== null && !createdTabs.has(activeTabId);
-  const isRestoringGated = useSkeletonGate(isTabRestoring);
+  const isRestoreFailed = isTabRestoring && restoreFailedTabs.has(activeTabId);
+  const isRestoringGated = useSkeletonGate(isTabRestoring && !isRestoreFailed);
   const showSkeleton = useSkeletonFloor(isRestoringGated);
 
   const syncBounds = useCallback(() => {
@@ -266,6 +272,16 @@ export function PortalDock() {
       logError("Failed to open tab externally", undefined, { error: result.error });
     }
   }, []);
+
+  // Clearing the failure is the retry: PortalVisibilityController restores the
+  // selected tab when its failure clears.
+  const handleRetryRestore = useCallback(() => {
+    if (activeTabId) usePortalStore.getState().clearTabRestoreFailed(activeTabId);
+  }, [activeTabId]);
+
+  const handleOpenRestoreFailedExternal = useCallback(() => {
+    if (activeTabId) void handleOpenTabExternal(activeTabId);
+  }, [activeTabId, handleOpenTabExternal]);
 
   const handleReloadTab = useCallback(async (tabId: string) => {
     const result = await actionService.dispatch("portal.reloadTab", { tabId }, { source: "user" });
@@ -454,6 +470,12 @@ export function PortalDock() {
           >
             {showLaunchpad ? (
               <PortalLaunchpad links={enabledLinks} onOpenUrl={handleOpenUrl} />
+            ) : isRestoreFailed && activeTab?.url ? (
+              <PortalTabRestoreError
+                url={activeTab.url}
+                onRetry={handleRetryRestore}
+                onOpenExternal={handleOpenRestoreFailedExternal}
+              />
             ) : showSkeleton ? (
               <PortalTabSkeleton />
             ) : (

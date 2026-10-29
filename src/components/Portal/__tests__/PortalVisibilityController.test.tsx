@@ -680,4 +680,72 @@ describe("PortalVisibilityController", () => {
       expect(usePortalStore.getState().createdTabs.has("tab-1")).toBe(false);
     });
   });
+
+  describe("restores that fail (#15043)", () => {
+    const openUncreatedTab = () =>
+      usePortalStore.setState({
+        isOpen: true,
+        activeTabId: "tab-1",
+        tabs: [{ id: "tab-1", title: "A", url: "https://example.com/a" }],
+        createdTabs: new Set<string>(),
+      });
+    const settle = () =>
+      act(async () => {
+        await vi.runAllTimersAsync();
+      });
+    const failed = () => usePortalStore.getState().restoreFailedTabs.has("tab-1");
+    const mockPlaceholder = () => {
+      const placeholder = Object.assign(document.createElement("div"), {
+        getBoundingClientRect: () => DOMRect.fromRect(createPlaceholderRect()),
+      });
+      vi.spyOn(document, "getElementById").mockReturnValue(placeholder);
+    };
+
+    it("marks the tab failed when create rejects", async () => {
+      mockPlaceholder();
+      portal.create.mockRejectedValue(new Error("boom"));
+      render(<PortalVisibilityController />);
+
+      act(() => openUncreatedTab());
+      await settle();
+
+      expect(failed()).toBe(true);
+      expect(usePortalStore.getState().createdTabs.has("tab-1")).toBe(false);
+      expect(usePortalStore.getState().tabs[0]!.url).toBe("https://example.com/a");
+    });
+
+    it("marks the tab failed when show rejects", async () => {
+      mockPlaceholder();
+      portal.show.mockRejectedValue(new Error("boom"));
+      render(<PortalVisibilityController />);
+
+      act(() => openUncreatedTab());
+      await settle();
+
+      expect(failed()).toBe(true);
+    });
+
+    it("marks the tab failed when main refuses it on both the show and its retry", async () => {
+      mockPlaceholder();
+      portal.show.mockResolvedValue(false);
+      render(<PortalVisibilityController />);
+
+      act(() => openUncreatedTab());
+      await settle();
+
+      expect(portal.show).toHaveBeenCalledTimes(2);
+      expect(failed()).toBe(true);
+    });
+
+    it("marks the tab failed when the placeholder never appears", async () => {
+      vi.spyOn(document, "getElementById").mockReturnValue(null);
+      render(<PortalVisibilityController />);
+
+      act(() => openUncreatedTab());
+      await settle();
+
+      expect(portal.show).not.toHaveBeenCalled();
+      expect(failed()).toBe(true);
+    });
+  });
 });
