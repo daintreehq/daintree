@@ -174,7 +174,11 @@ describe("component selection", () => {
     $("a-title").dispatchEvent(new MouseEvent("pointermove", { bubbles: true, composed: true }));
     runFrames();
 
-    expect(picker.getOverlayRoot()?.textContent).toContain("Card h2#a-title");
+    // The element first, then the component a selection here would widen to.
+    const label = picker.getOverlayRoot()?.textContent ?? "";
+    expect(label).toContain("h2#a-title");
+    expect(label).toContain("in Card");
+    expect(label.indexOf("h2#a-title")).toBeLessThan(label.indexOf("in Card"));
   });
 });
 
