@@ -741,10 +741,10 @@ describe("AgentButton preset UX", () => {
       expect(updateWorktreePresetMock).not.toHaveBeenCalled();
     });
 
-    it("Agent default gutter clears both the worktree override and the agent-level pick without launching", () => {
-      // Seed an agent-level presetId so the updateAgent assertion proves the
-      // gutter actually clears it — without a stale agent-level value to fall
-      // through to, the original #6358 bug couldn't manifest.
+    it("Agent default gutter saves the bare agent to this worktree only, without launching", () => {
+      // Seed an agent-level presetId: an emptied worktree slot would fall
+      // through to it (#6358), and clearing it instead would take it from every
+      // other worktree inheriting it (#15054).
       mockActiveWorktreeId = "wt-A";
       mockSettings = settingsWith({
         claude: { presetId: "user-alpha", worktreePresets: { "wt-A": "user-alpha" } },
@@ -759,9 +759,31 @@ describe("AgentButton preset UX", () => {
       );
       clickGutter(rowByText(getAllByTestId, "Agent default"));
 
-      expect(updateAgentMock).toHaveBeenCalledWith("claude", { presetId: undefined });
-      expect(updateWorktreePresetMock).toHaveBeenCalledWith("claude", "wt-A", undefined);
+      expect(updateWorktreePresetMock).toHaveBeenCalledWith("claude", "wt-A", null);
+      expect(updateAgentMock).not.toHaveBeenCalled();
       expect(dispatchMock).not.toHaveBeenCalled();
+    });
+
+    it("a bare-agent worktree reads Agent default while another worktree keeps the agent-level preset", () => {
+      mockActiveWorktreeId = "wt-A";
+      mockSettings = settingsWith({
+        claude: { presetId: "user-alpha", worktreePresets: { "wt-A": null } },
+      });
+      mockMergedPresetsFn = () => [{ id: "user-alpha", name: "Alpha" }];
+
+      const { getAllByTestId, rerender, container } = render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+      expect(rowByText(getAllByTestId, "Agent default").textContent).toContain("Current default");
+      expect(rowByText(getAllByTestId, "Alpha").textContent).not.toContain("Current default");
+      expect(container.textContent).not.toContain("Start Claude · Alpha");
+
+      mockActiveWorktreeId = "wt-B";
+      rerender(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+      expect(rowByText(getAllByTestId, "Alpha").textContent).toContain("Current default");
+      expect(container.textContent).toContain("Start Claude · Alpha");
     });
 
     it("Agent default label launches with a null preset (no row preset)", () => {
@@ -911,10 +933,9 @@ describe("AgentButton preset UX", () => {
       );
     });
 
-    it("Agent default gutter clears the agent-level pick even with no active worktree", () => {
-      // persistWorktreePick guards on activeWorktreeId, but updateAgent does
-      // not — clearing the global default must still fire so the next launch
-      // doesn't resolve to the stale agent-level preset.
+    it("Agent default gutter writes neither scope with no active worktree", () => {
+      // Same as a named pick: with no worktree there is no slot to save to, and
+      // the agent-level preset belongs to Settings.
       mockActiveWorktreeId = null;
       mockSettings = settingsWith({ claude: { presetId: "user-alpha" } });
       mockMergedPresetsFn = () => [{ id: "user-alpha", name: "Alpha" }];
@@ -924,7 +945,7 @@ describe("AgentButton preset UX", () => {
       );
       clickGutter(rowByText(getAllByTestId, "Agent default"));
 
-      expect(updateAgentMock).toHaveBeenCalledWith("claude", { presetId: undefined });
+      expect(updateAgentMock).not.toHaveBeenCalled();
       expect(updateWorktreePresetMock).not.toHaveBeenCalled();
       expect(dispatchMock).not.toHaveBeenCalled();
     });
@@ -954,7 +975,7 @@ describe("AgentButton preset UX", () => {
       expect(dropdownOpenState).toBe(true);
     });
 
-    it("D on Agent default clears both scopes, same as its gutter", () => {
+    it("D on Agent default saves the bare agent to this worktree, same as its gutter", () => {
       mockActiveWorktreeId = "wt-A";
       mockSettings = settingsWith({
         claude: { presetId: "user-alpha", worktreePresets: { "wt-A": "user-alpha" } },
@@ -964,8 +985,8 @@ describe("AgentButton preset UX", () => {
       const { getAllByTestId } = render(<AgentButton type="claude" availability="ready" />);
       pressD(rowByText(getAllByTestId, "Agent default"));
 
-      expect(updateAgentMock).toHaveBeenCalledWith("claude", { presetId: undefined });
-      expect(updateWorktreePresetMock).toHaveBeenCalledWith("claude", "wt-A", undefined);
+      expect(updateWorktreePresetMock).toHaveBeenCalledWith("claude", "wt-A", null);
+      expect(updateAgentMock).not.toHaveBeenCalled();
       expect(dispatchMock).not.toHaveBeenCalled();
     });
 
@@ -1185,11 +1206,11 @@ describe("AgentButton preset UX", () => {
       );
     });
 
-    it("context-menu Agent default clears the override and still launches with null preset", () => {
-      // The context-menu sub is a launcher, but it must also clear the
-      // agent-level presetId — otherwise resolveEffectivePresetId falls back
-      // to the stale agent-level value on the next plain primary click and
-      // the bug from #6358 returns.
+    it("context-menu Agent default saves the bare agent to this worktree and launches with null preset", () => {
+      // The context-menu sub is a launcher, but it must also persist the bare
+      // agent — an emptied slot falls back to the agent-level value on the
+      // next plain primary click (#6358), and clearing that value instead
+      // reaches every other worktree (#15054).
       mockActiveWorktreeId = "wt-A";
       mockSettings = settingsWith({
         claude: { presetId: "user-blue", worktreePresets: { "wt-A": "user-blue" } },
@@ -1203,8 +1224,8 @@ describe("AgentButton preset UX", () => {
       const defaultItem = items.find((el) => el.textContent?.includes("Agent default"))!;
       fireEvent.click(defaultItem);
 
-      expect(updateAgentMock).toHaveBeenCalledWith("claude", { presetId: undefined });
-      expect(updateWorktreePresetMock).toHaveBeenCalledWith("claude", "wt-A", undefined);
+      expect(updateWorktreePresetMock).toHaveBeenCalledWith("claude", "wt-A", null);
+      expect(updateAgentMock).not.toHaveBeenCalled();
       expect(dispatchMock).toHaveBeenCalledWith(
         "agent.launch",
         { agentId: "claude", presetId: null },

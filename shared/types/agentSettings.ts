@@ -104,11 +104,13 @@ export interface AgentSettingsEntry {
   presetId?: string;
   /**
    * Per-worktree preset overrides, keyed by worktreeId. Wins over `presetId`
-   * when resolving the effective launch preset. Updates via
-   * `updateWorktreePreset` in the renderer store so the IPC shallow-merge
-   * doesn't clobber sibling worktree keys.
+   * when resolving the effective launch preset. An absent key inherits
+   * `presetId`; `null` is the bare agent in that worktree alone, so picking it
+   * there leaves every other worktree on the agent-level default (#15054).
+   * Updates via `updateWorktreePreset` in the renderer store so the IPC
+   * shallow-merge doesn't clobber sibling worktree keys.
    */
-  worktreePresets?: Record<string, string>;
+  worktreePresets?: Record<string, string | null>;
   /** User-defined custom presets for this agent (persisted, editable from Settings) */
   customPresets?: Array<{
     id: string;
@@ -625,9 +627,10 @@ export function getAgentSettingsEntry(
 
 /**
  * Resolves the effective preset ID for a launch: worktree-scoped override
- * wins, then agent-level default, else `undefined`. Single source of truth
- * shared by `useAgentLauncher` and the toolbar components so resolution
- * can't drift between call sites.
+ * wins, then agent-level default, else `undefined`. A worktree slot holding
+ * `null` resolves to `undefined` without falling through — the bare agent in
+ * that worktree only. Single source of truth shared by `useAgentLauncher` and
+ * the toolbar components so resolution can't drift between call sites.
  */
 export function resolveEffectivePresetId(
   entry: AgentSettingsEntry | null | undefined,
@@ -636,6 +639,7 @@ export function resolveEffectivePresetId(
   if (!entry) return undefined;
   const scoped =
     worktreeId && entry.worktreePresets ? entry.worktreePresets[worktreeId] : undefined;
+  if (scoped === null) return undefined;
   return scoped ?? entry.presetId;
 }
 

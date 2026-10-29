@@ -73,8 +73,9 @@ export type DockLaunchPresetGroup = "default" | "ccr" | "project" | "custom";
 
 /**
  * One selectable preset for an agent. `presetId: null` is the synthetic
- * "Default" choice — the sentinel that clears a saved preset rather than
- * inheriting it, so it is deliberately distinct from `undefined`.
+ * "Default" choice — the sentinel that saves the bare agent to the active
+ * worktree rather than inheriting a saved preset, so it is deliberately
+ * distinct from `undefined`.
  */
 export interface DockLaunchPresetChoice {
   presetId: string | null;

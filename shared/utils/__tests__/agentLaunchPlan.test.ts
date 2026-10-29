@@ -95,6 +95,42 @@ describe("buildAgentLaunchPlan", () => {
     expect(plan.titleMode).toBeUndefined();
   });
 
+  it("launches the bare agent from a worktree saved as null while other worktrees inherit (#15054)", async () => {
+    const onStalePreset = vi.fn();
+    const settings = settingsWith({
+      presetId: "global",
+      worktreePresets: { "/repo-wt/a": null },
+      customPresets: PRESETS,
+    });
+
+    const bare = await buildAgentLaunchPlan(input({ settings, onStalePreset }));
+    expect(bare.preset).toBeUndefined();
+    expect(bare.env).toBeUndefined();
+    expect(bare.title).toBe("Claude");
+    // A deliberate bare pick is not a vanished preset.
+    expect(onStalePreset).not.toHaveBeenCalled();
+
+    const inheriting = await buildAgentLaunchPlan(
+      input({ settings, worktreeId: "/repo-wt/b", onStalePreset })
+    );
+    expect(inheriting.preset?.id).toBe("global");
+  });
+
+  it("lets an explicitly named preset override a worktree saved as null", async () => {
+    const plan = await buildAgentLaunchPlan(
+      input({
+        settings: settingsWith({
+          presetId: "global",
+          worktreePresets: { "/repo-wt/a": null },
+          customPresets: PRESETS,
+        }),
+        options: { presetId: "scoped" },
+      })
+    );
+
+    expect(plan.preset?.id).toBe("scoped");
+  });
+
   it("layers the caller's environment over the agent's and the preset's", async () => {
     const plan = await buildAgentLaunchPlan(
       input({

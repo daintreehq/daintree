@@ -346,6 +346,32 @@ describe("agentSettingsStore adversarial", () => {
       });
     });
 
+    it("saves null as this worktree's bare-agent pick without touching the agent-level preset", async () => {
+      useAgentSettingsStore.setState({
+        settings: {
+          agents: {
+            claude: { presetId: "user-111", worktreePresets: { "wt-B": "user-222" } },
+          },
+        } as never,
+        isInitialized: true,
+        isLoading: false,
+      });
+      clientMock.set.mockImplementation(
+        async (_agentId: string, updates: Record<string, unknown>) => ({
+          agents: { claude: { presetId: "user-111", worktreePresets: updates.worktreePresets } },
+        })
+      );
+
+      await useAgentSettingsStore.getState().updateWorktreePreset("claude", "wt-A", null);
+
+      expect(clientMock.set).toHaveBeenCalledWith("claude", {
+        worktreePresets: { "wt-B": "user-222", "wt-A": null },
+      });
+      const entry = useAgentSettingsStore.getState().settings?.agents?.claude;
+      expect(entry?.presetId).toBe("user-111");
+      expect(entry?.worktreePresets).toEqual({ "wt-B": "user-222", "wt-A": null });
+    });
+
     it("collapses an empty map to undefined when the last key is removed", async () => {
       useAgentSettingsStore.setState({
         settings: {

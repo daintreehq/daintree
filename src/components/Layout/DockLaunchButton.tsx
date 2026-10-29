@@ -699,17 +699,13 @@ export function DockLaunchButton({
       // Clear the NEW signal only for the agent actually launched — opening the
       // launcher alone must not burn the cue for every other one.
       void markAgentsSeen([agentId]);
-      // `null` = explicit default: clear the agent-level preset so
-      // `resolveEffectivePresetId` returns undefined and Default reads as the
-      // selection next time.
-      if (presetId === null) {
-        void useAgentSettingsStore.getState().updateAgent(agentId, { presetId: undefined });
-      }
       // Persist the pick to the worktree-scoped slot so a later press on this
       // worktree relaunches the same preset while other worktrees keep theirs.
-      // `undefined` is the plain fall-through and writes nothing.
+      // `null` (explicit Default) is saved as the bare agent for this worktree
+      // alone, leaving the agent-level preset to every worktree inheriting it
+      // (#15054). `undefined` is the plain fall-through and writes nothing.
       if (activeWorktreeId && presetId !== undefined) {
-        void updateWorktreePreset(agentId, activeWorktreeId, presetId ?? undefined);
+        void updateWorktreePreset(agentId, activeWorktreeId, presetId);
       }
       // Only a plugin entry passes options; every other row keeps the two-argument call.
       if (options) onLaunchAgent(agentId, presetId, options);

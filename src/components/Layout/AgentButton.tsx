@@ -433,16 +433,15 @@ export function AgentButton({
 
   // Persist the toolbar pick to the worktree-scoped slot so repeated launches
   // on the same worktree stay stable, while other worktrees keep their own
-  // defaults. Pass `undefined` to clear the worktree override (returning the
-  // button to the agent-level default). Guard on activeWorktreeId — when no
-  // worktree is active we skip persistence entirely rather than polluting the
-  // global scope.
+  // defaults. Pass `null` to pin the bare agent to this worktree. Guard on
+  // activeWorktreeId — when no worktree is active we skip persistence entirely
+  // rather than polluting the global scope.
   const dismissPresetNotice = () => {
     setPresetNotice(null);
     return ++presetNoticeGenerationRef.current;
   };
 
-  const persistWorktreePick = (presetId: string | undefined) => {
+  const persistWorktreePick = (presetId: string | null) => {
     if (!activeWorktreeId) return;
     const worktreeId = activeWorktreeId;
     const previous = savedPresetId ? activePreset : undefined;
@@ -469,13 +468,11 @@ export function AgentButton({
       .catch(() => {});
   };
 
-  // The agent-default row clears BOTH scopes: the worktree override and the
-  // stale agent-level pick that resolveEffectivePresetId would otherwise fall
-  // back to (issue #6358).
-  const clearDefaultPick = () => {
-    void useAgentSettingsStore.getState().updateAgent(type, { presetId: undefined });
-    persistWorktreePick(undefined);
-  };
+  // The agent-default row saves the bare agent to this worktree's slot rather
+  // than clearing it: an empty slot falls through to the agent-level preset
+  // (#6358), and clearing that instead would take it from every other
+  // worktree inheriting it (#15054). Settings owns the agent-level preset.
+  const pickAgentDefault = () => persistWorktreePick(null);
 
   // D on a highlighted row is the keyboard twin of a gutter click, mirroring the
   // plugin tray's P-to-pin: Enter and Space stay on launch, the menu stays open.
@@ -841,12 +838,12 @@ export function AgentButton({
                 <DropdownMenuItem
                   className="group/preset-row items-stretch py-0 pr-2.5 pl-0"
                   onSelect={(e) => e.preventDefault()}
-                  onKeyDown={(e) => setDefaultOnKey(e, clearDefaultPick)}
+                  onKeyDown={(e) => setDefaultOnKey(e, pickAgentDefault)}
                   onClick={(e) => {
                     // Element (not HTMLElement) so a gutter SVG-icon click still
                     // resolves; closest() lives on Element.
                     if (e.target instanceof Element && e.target.closest('[data-zone="gutter"]')) {
-                      clearDefaultPick();
+                      pickAgentDefault();
                       return;
                     }
                     launchWithPreset(null);
@@ -985,7 +982,7 @@ export function AgentButton({
                       <ContextMenuRadioItem
                         value=""
                         onSelect={() => {
-                          clearDefaultPick();
+                          pickAgentDefault();
                           void actionService.dispatch(
                             "agent.launch",
                             { agentId: type, presetId: null },
