@@ -918,16 +918,14 @@ function getPaletteSelectionWarnings(scheme: AppColorScheme): AppThemeValidation
   return warnings;
 }
 
-// What `filter: brightness(amount)` paints for an opaque colour: each sRGB channel
-// scaled and clamped, the same per-channel matrix Chromium applies.
-function applyBrightness(hex: string, amount: number): string {
-  return `#${hexToRgb(hex)
-    .map((channel) =>
-      Math.min(255, Math.round(channel * amount))
-        .toString(16)
-        .padStart(2, "0")
-    )
-    .join("")}`;
+// The relative luminance an opaque colour paints under `filter: brightness(amount)`:
+// each sRGB channel scaled and clamped before it is linearised, the same per-channel
+// matrix Chromium applies.
+function filteredLuminance(hex: string, amount: number): number {
+  const [red, green, blue] = hexToRgb(hex).map((channel) =>
+    hexToLinear(Math.min(255, channel * amount))
+  );
+  return 0.2126 * red! + 0.7152 * green! + 0.0722 * blue!;
 }
 
 function getDestructiveButtonWarnings(scheme: AppColorScheme): AppThemeValidationWarning[] {
@@ -944,7 +942,11 @@ function getDestructiveButtonWarnings(scheme: AppColorScheme): AppThemeValidatio
     ["hovered", brightness.hover],
     ["pressed", brightness.press],
   ] as const) {
-    const ratio = contrastRatio(applyBrightness(label, amount), applyBrightness(fill, amount));
+    const labelLuminance = filteredLuminance(label, amount);
+    const fillLuminance = filteredLuminance(fill, amount);
+    const ratio =
+      (Math.max(labelLuminance, fillLuminance) + 0.05) /
+      (Math.min(labelLuminance, fillLuminance) + 0.05);
     if (ratio < minimum) {
       warnings.push({
         kind: "low-contrast",
