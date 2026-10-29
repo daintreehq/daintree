@@ -182,8 +182,6 @@ export function shouldCancelDrop(params: CancelDropParams): boolean {
     const groupPanelIds = activeData.groupPanelIds;
     const isGroupDrag =
       !!activeData.groupId && Array.isArray(groupPanelIds) && groupPanelIds.length > 1;
-    const isWorktreeDrop = overData?.type === "worktree" && !!overData.worktreeId;
-    if (isGroupDrag && isWorktreeDrop) return true;
 
     // A panel whose kind the dock can't render must never commit into the
     // dock — it would strand invisibly (#11054). For a group drag EVERY member

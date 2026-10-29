@@ -850,10 +850,11 @@ describe("shouldCancelDrop", () => {
       groupPanelIds: ["panel-1", "panel-2"],
     });
 
-    it("cancels a multi-panel group dropped on a worktree", () => {
+    // The group moves as one unit, the same as a grouped single-tab move (#14962).
+    it("does not cancel a multi-panel group dropped on a worktree", () => {
       expect(
         run({ overData: { type: "worktree", worktreeId: "wt-1" }, activeData: groupData })
-      ).toBe(true);
+      ).toBe(false);
     });
 
     it("does not cancel a single panel dropped on a worktree", () => {

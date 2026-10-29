@@ -849,15 +849,14 @@ export function WorktreeCard({
   };
 
   const activeDragData = active?.data.current as Partial<WorktreeDragData> | undefined;
-  // Only drops handleDragEnd will actually accept: a single-panel drag —
-  // group drags are rejected by cancelDrop, and worktree-sort drags carry no
-  // terminal. Accordion drags count only when they come from a *different*
-  // worktree (a cross-worktree move); within their own worktree they are
-  // reorders and the card must not light up as a drop target.
+  // Only drops handleDragEnd will actually accept: a panel drag, whole tab
+  // group included — worktree-sort drags carry no terminal. Accordion drags
+  // count only when they come from a *different* worktree (a cross-worktree
+  // move); within their own worktree they are reorders and the card must not
+  // light up as a drop target.
   const isMovablePanelDrag =
     activeDragData?.terminal !== undefined &&
-    (activeDragData.origin !== "accordion" || activeDragData.worktreeId !== worktree.id) &&
-    !(activeDragData.groupId && (activeDragData.groupPanelIds?.length ?? 0) > 1);
+    (activeDragData.origin !== "accordion" || activeDragData.worktreeId !== worktree.id);
   // The sidebar row stacks two same-size droppables (this drop target inside
   // the SortableWorktreeCard sortable), and pointerWithin resolves their tie
   // by registration order — `over` can be either id, so match both. Mirrors

@@ -1008,7 +1008,8 @@ export function DndProvider({ children }: DndProviderProps) {
       // Track if this is a worktree drop (skip reorder logic, but still run stabilization)
       const isWorktreeDrop = overData?.type === "worktree" && !!overData.worktreeId;
       if (isWorktreeDrop) {
-        if (isGroupDrag) return; // Defensive: cancelDrop should catch this
+        // A grouped panel takes its whole tab group with it; the move resolves
+        // the group itself, so a group drag and a single-tab drag share this path.
         const currentTerminal = freshTerminalsById[draggedId];
         if (currentTerminal && currentTerminal.worktreeId !== overData.worktreeId) {
           moveTerminalToWorktreeAndFollowRescue(draggedId, overData.worktreeId!);
