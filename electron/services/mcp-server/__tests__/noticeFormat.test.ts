@@ -224,18 +224,18 @@ describe("the host watch line (#14463)", () => {
 });
 
 describe("the approval line (#14995)", () => {
-  it("names the allowed tool and invites a retry rather than claiming one", () => {
-    const line = formatAssistantApprovalLine({ kind: "tool", toolId: "project.runCheck" });
-    expect(line.startsWith("Daintree:")).toBe(true);
-    expect(line).toContain("'project.runCheck'");
-    expect(line).toMatch(/Retry it if you still need it/);
-    expect(line).not.toContain("\n");
-  });
+  it.each(["project.runCheck", "github.listIssues"])(
+    "names %s as allowed for this session and invites a retry rather than claiming one",
+    (toolId) => {
+      expect(formatAssistantApprovalLine({ kind: "tool", toolId })).toBe(
+        `Daintree: the user allowed '${toolId}' for this session. Retry it if you still need it.`
+      );
+    }
+  );
 
   it("names the tool set a raised session now holds", () => {
-    const line = formatAssistantApprovalLine({ kind: "tier", tier: "full" });
-    expect(line.startsWith("Daintree:")).toBe(true);
-    expect(line).toContain("'full' tool set");
-    expect(line).toMatch(/Retry what it refused if you still need it/);
+    expect(formatAssistantApprovalLine({ kind: "tier", tier: "full" })).toBe(
+      "Daintree: the user raised this session to the 'full' tool set. Retry what it refused if you still need it."
+    );
   });
 });

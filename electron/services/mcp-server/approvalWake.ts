@@ -21,8 +21,10 @@ export interface ApprovalWakeDeps {
  * line only says the next attempt can go through, and only while that is
  * still true when it is typed.
  *
- * The id is stable per tool or tier, so a second approval queued before the
- * first line goes out joins it rather than typing the same line twice.
+ * The id is stable per session and tool or tier, so a second approval queued
+ * before the first line goes out joins it rather than typing the same line
+ * twice. The session is part of it because a replacement transport (#13360)
+ * must not join a line its predecessor's recheck is about to drop.
  */
 export function createApprovalWake(
   deps: ApprovalWakeDeps,
@@ -30,10 +32,9 @@ export function createApprovalWake(
   lane: HelpLane,
   approval: AssistantApproval
 ): LaneWake {
-  const id =
-    approval.kind === "tool"
-      ? `approval-tool-${createHash("sha256").update(approval.toolId).digest("hex").slice(0, 32)}`
-      : `approval-tier-${approval.tier}`;
+  const subject =
+    approval.kind === "tool" ? `tool\u0000${approval.toolId}` : `tier\u0000${approval.tier}`;
+  const id = `approval-${createHash("sha256").update(`${sessionId}\u0000${subject}`).digest("hex").slice(0, 40)}`;
   const recheck = (): LaneWakeCheck => {
     const tier = deps.sessionStore.getTier(sessionId);
     if (tier === null) return { kind: "unavailable", reason: "session-gone" };

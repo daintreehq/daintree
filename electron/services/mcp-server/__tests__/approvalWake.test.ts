@@ -62,6 +62,14 @@ describe("createApprovalWake (#14995)", () => {
     expect(wake.recheck()).toEqual({ kind: "unavailable", reason: "relaunched" });
   });
 
+  it("goes once the session serves another help session in the same terminal", () => {
+    const { deps, grantCache, state } = setup();
+    grantCache.issueGrant("s-1", TOOL.toolId);
+    const wake = createApprovalWake(deps, "s-1", LANE, TOOL);
+    state.lane = { ...LANE, helpSessionId: "help-2" };
+    expect(wake.recheck()).toEqual({ kind: "unavailable", reason: "relaunched" });
+  });
+
   it("holds a raised tool set only while the session still has it", () => {
     const { deps, state } = setup();
     state.tier = "full";
@@ -71,17 +79,22 @@ describe("createApprovalWake (#14995)", () => {
     expect(wake.recheck()).toEqual({ kind: "unavailable", reason: "approval-ended" });
   });
 
-  it("keeps one id per tool, so a repeat approval joins the queued line", () => {
+  it("keeps one id per session and tool, so a repeat approval joins the queued line", () => {
     const { deps } = setup();
+    const TIER = { kind: "tier", tier: "full" } as const;
     const first = createApprovalWake(deps, "s-1", LANE, TOOL);
-    const again = createApprovalWake(deps, "s-1", LANE, TOOL);
-    const other = createApprovalWake(deps, "s-1", LANE, {
-      kind: "tool",
-      toolId: "github.listIssues",
-    });
-    const tier = createApprovalWake(deps, "s-1", LANE, { kind: "tier", tier: "full" });
-    expect(again.id).toBe(first.id);
-    expect(other.id).not.toBe(first.id);
-    for (const wake of [first, other, tier]) expect(wake.id).toMatch(LANE_WAKE_ID_PATTERN);
+    const tier = createApprovalWake(deps, "s-1", LANE, TIER);
+    const ids = [
+      first,
+      createApprovalWake(deps, "s-1", LANE, { kind: "tool", toolId: "github.listIssues" }),
+      tier,
+      // A replacement transport's approval must not join a line its
+      // predecessor's recheck is about to drop (#13360).
+      createApprovalWake(deps, "s-2", LANE, TOOL),
+    ].map((wake) => wake.id);
+    expect(createApprovalWake(deps, "s-1", LANE, TOOL).id).toBe(first.id);
+    expect(createApprovalWake(deps, "s-1", LANE, TIER).id).toBe(tier.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    for (const id of ids) expect(id).toMatch(LANE_WAKE_ID_PATTERN);
   });
 });

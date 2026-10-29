@@ -227,7 +227,8 @@ describe("sessionServer tier-mismatch notifier", () => {
     const HINT = "The user can allow it from the Assistant panel";
 
     function helpDeps(overrides: Partial<Parameters<typeof fakeDeps>[0]> = {}) {
-      const deps = fakeDeps({ notifyTierMismatch: vi.fn(), ...overrides });
+      // The notifier reports the banner reached a live view.
+      const deps = fakeDeps({ notifyTierMismatch: vi.fn(() => true), ...overrides });
       deps.sessionStore.sessionOriginMap.set("session-H", "help");
       return deps;
     }
@@ -252,7 +253,10 @@ describe("sessionServer tier-mismatch notifier", () => {
 
     it("leaves it out for a session with no banner to answer", async () => {
       // External origin: the notifier paints nothing for a third-party client.
-      const text = await refusalText(fakeDeps({ notifyTierMismatch: vi.fn() }), "project.runCheck");
+      const text = await refusalText(
+        fakeDeps({ notifyTierMismatch: vi.fn(() => true) }),
+        "project.runCheck"
+      );
       expect(text).toContain("TIER_NOT_PERMITTED");
       expect(text).not.toContain(HINT);
     });
@@ -264,8 +268,16 @@ describe("sessionServer tier-mismatch notifier", () => {
       expect(text).not.toContain(HINT);
     });
 
+    it("leaves it out when the banner reached no live view", async () => {
+      // No pinned view, or one already destroyed: nothing painted the button.
+      const deps = helpDeps({ notifyTierMismatch: vi.fn(() => false) });
+      const text = await refusalText(deps, "project.runCheck");
+      expect(text).toContain("TIER_NOT_PERMITTED");
+      expect(text).not.toContain(HINT);
+    });
+
     it("leaves it out once the banner is suppressed for repeat refusals", async () => {
-      const notify = vi.fn();
+      const notify = vi.fn(() => true);
       const deps = helpDeps({ notifyTierMismatch: notify });
       const server = createSessionServer("session-H", deps);
       await server.connect(makeMockTransport());

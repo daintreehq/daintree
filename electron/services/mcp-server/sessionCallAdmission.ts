@@ -278,15 +278,15 @@ export function admitToolCall(
     } catch (err) {
       console.error("[MCP] Failed to append audit record:", err);
     }
-    // Whether this refusal raised a banner whose "Allow this tool" the user
-    // can answer (#14995). The notifier paints only for renderer-owned
-    // sessions, and the button exists only when some tier would admit it.
+    // Whether this refusal reached a banner whose "Allow this tool" the user
+    // can answer (#14995): the notifier says whether it reached a live view,
+    // and the button exists only when some tier would admit the tool.
     let allowOffered = false;
     if (notifyTierMismatch && !suppressBanner) {
       const targetTier = minimumPermittingTier(actionId, rendererOwnedOrigin);
       try {
-        notifyTierMismatch({ sessionId, toolId: actionId, tier, targetTier });
-        allowOffered = rendererOwnedOrigin && targetTier !== null;
+        const sent = notifyTierMismatch({ sessionId, toolId: actionId, tier, targetTier });
+        allowOffered = sent && rendererOwnedOrigin && targetTier !== null;
       } catch (err) {
         console.error("[MCP] Failed to notify tier-mismatch:", err);
       }

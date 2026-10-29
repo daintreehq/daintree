@@ -201,7 +201,7 @@ describe("help prompt outputs", () => {
     // prompt must neither forbid the retry nor send the user to a new session.
     it.each(ALL_GENERATED)("%s lets a refused tool be retried once allowed", (_name, body) => {
       const tier = section(body, "## Tier Model");
-      expect(tier).toContain("**Allow this tool** lifts it here");
+      expect(tier).toContain("**Allow this tool** lifts that tool here");
       expect(tier).toMatch(/Retry once told it's allowed/);
       expect(tier).toMatch(/Tool set in new sessions/);
       expect(tier).not.toMatch(/Don't retry|start a new help session/);
@@ -589,10 +589,13 @@ describe("global assistant prompts (#14546)", () => {
     expect(body).toContain("<!-- DAINTREE_RUNBOOKS_START -->");
   });
 
-  it.each(GLOBAL)("%s retries a refused action once the tool set is changed", (_name, body) => {
-    expect(body).toMatch(/TIER_NOT_PERMITTED`\*\*, don't work around it/);
-    expect(body).toMatch(/Retry once told it's changed/);
-    expect(body).not.toMatch(/don't retry or look for a way around it/);
+  // #14995: `host.call` carries the caller's own tier and the global
+  // assistant has no Allow banner, so no change on any host lifts a refusal
+  // for the session already running.
+  it.each(GLOBAL)("%s sends a tier refusal to a new session", (_name, body) => {
+    expect(body).toMatch(/TIER_NOT_PERMITTED`\*\*, don't work around it or retry in this session/);
+    expect(body).toMatch(/Tool set changes it for new sessions/);
+    expect(body).not.toMatch(/host's Settings/);
   });
 
   it.each(GLOBAL)("%s omits the project assistant's direct-call text", (_name, body) => {
