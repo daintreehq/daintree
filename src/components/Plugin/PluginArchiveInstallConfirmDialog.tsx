@@ -1,15 +1,18 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Callout } from "@/components/ui/Callout";
-import { FileArchive, Users } from "lucide-react";
+import { FileArchive, Package, Users } from "lucide-react";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { notify } from "@/lib/notify";
+import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
+import { useDeferredLoading } from "@/hooks/useDeferredLoading";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { usePluginArchiveInstallStore } from "@/store/pluginArchiveInstallStore";
 import type { PendingPluginArchiveInstall } from "@/store/pluginArchiveInstallStore";
 import { BUILT_IN_PLUGIN_CAPABILITIES } from "@shared/types/plugin";
 import type {
   BuiltInPluginCapability,
+  LoadedPluginInfo,
   PluginArchiveManifestPreview,
   PluginAuthor,
 } from "@shared/types/plugin";
@@ -19,6 +22,7 @@ import { PluginGlyphTile, pluginIconForIdentity } from "./pluginIcons";
 import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { Badge } from "@/components/ui/badge";
 import { useRemoteTrustSentence } from "./remotePluginTrust";
+import { classifyArchiveReplacement, type ArchiveReplacementKind } from "./archiveReplacement";
 
 // Read-time gate: a double-clicked archive opens this dialog without the user
 // asking for it, so the primary button stays disabled long enough that a click
@@ -31,8 +35,127 @@ const CONFIRM_COOLDOWN_MS = 1_200;
 // so the title only needs a recognisable prefix.
 const TITLE_LABEL_MAX = 60;
 
-const INSTALL_DESCRIPTION =
-  "Installing writes this archive into Daintree's plugins folder, replacing any installed plugin with the same ID. Plugins run with full Node.js privileges — there's no sandbox and no signature check.";
+const PRIVILEGE_WARNING =
+  "Plugins run with full Node.js privileges — there's no sandbox and no signature check.";
+
+const INSTALL_DESCRIPTION = `Installing writes this archive into Daintree's plugins folder, replacing any installed plugin with the same ID. ${PRIVILEGE_WARNING}`;
+
+function replacementSentence(
+  kind: ArchiveReplacementKind,
+  installed: string,
+  archive: string
+): string {
+  switch (kind) {
+    case "upgrade":
+      return `Installing replaces the installed v${installed} with this newer v${archive}.`;
+    case "reinstall":
+      return `v${installed} is already installed. Installing replaces it with this archive's copy of the same version.`;
+    case "downgrade":
+      return `This archive is older than the installed version. Installing replaces v${installed} with the older v${archive}.`;
+    case "replace":
+      return `Installing replaces the installed v${installed} with this archive's v${archive}.`;
+  }
+}
+
+const REPLACEMENT_TAG: Record<ArchiveReplacementKind, string | null> = {
+  upgrade: "Update",
+  reinstall: "Reinstall",
+  downgrade: "Downgrade",
+  replace: null,
+};
+
+interface InstalledVersionLookup {
+  /** The first read for this archive hasn't settled, so the copy can't say yet. */
+  pending: boolean;
+  /** `null` when nothing is installed under the archive's id, or the read failed. */
+  installedVersion: string | null;
+}
+
+/**
+ * The installed plugin an approval would replace: a global, non-builtin row
+ * under the archive's id. Disabled, blocklisted and load-errored installs still
+ * count — their folder is what the installer swaps. A builtin is refused by the
+ * installer instead, and a project plugin lives elsewhere.
+ */
+function findInstalledRow(
+  list: readonly LoadedPluginInfo[],
+  pluginId: string
+): LoadedPluginInfo | undefined {
+  return list.find(
+    (row) => row.origin === "global" && !row.isBuiltin && row.instanceId === pluginId
+  );
+}
+
+/**
+ * What's installed under the current archive's id, read through
+ * `plugin.list()` — which, like `installFromPath`, answers for the host in a
+ * window attached to one, so the comparison is against the machine the install
+ * lands on. Keyed per intent, not per plugin id: two queued archives of one
+ * plugin each read what the previous approval left installed.
+ *
+ * `paused` holds the last answer while this dialog's own install runs: the
+ * install's provenance push arrives before its reply, and re-reading there
+ * would relabel the archive a reinstall just before the dialog closes.
+ */
+function useInstalledVersion(
+  intentId: string | null,
+  pluginId: string | null,
+  paused: boolean
+): InstalledVersionLookup {
+  const key = intentId === null || pluginId === null ? null : `${intentId}\u0000${pluginId}`;
+  const [lookup, setLookup] = useState<{
+    key: string;
+    installedVersion: string | null;
+  } | null>(null);
+  const canRead = typeof window.electron?.plugin?.list === "function";
+
+  useEffect(() => {
+    if (key === null || pluginId === null || paused) return;
+    const plugin = window.electron?.plugin;
+    if (typeof plugin?.list !== "function") return;
+
+    let active = true;
+    let started = 0;
+    let committed = 0;
+    const read = () => {
+      const seq = ++started;
+      // `Promise.resolve().then` so a bridge that throws synchronously settles
+      // the read like a rejection instead of escaping the effect.
+      Promise.resolve()
+        .then(() => plugin.list())
+        .then(
+          (list) => {
+            if (!active || seq < committed) return;
+            committed = seq;
+            setLookup({
+              key,
+              installedVersion: findInstalledRow(list, pluginId)?.manifest.version ?? null,
+            });
+          },
+          () => {
+            // A failed first read releases the confirm with today's copy; a
+            // failed refresh keeps the answer already shown.
+            if (!active) return;
+            setLookup((prev) => (prev?.key === key ? prev : { key, installedVersion: null }));
+          }
+        );
+    };
+
+    const off =
+      typeof plugin.onProvenanceChanged === "function" ? plugin.onProvenanceChanged(read) : null;
+    read();
+    return () => {
+      active = false;
+      off?.();
+    };
+  }, [key, pluginId, paused]);
+
+  const settled = lookup !== null && lookup.key === key ? lookup : null;
+  return {
+    pending: key !== null && canRead && settled === null,
+    installedVersion: settled?.installedVersion ?? null,
+  };
+}
 
 /**
  * Confirmation gate for a `.dntr` archive the user double-clicked (#11280).
@@ -66,6 +189,12 @@ export function PluginArchiveInstallConfirmDialog() {
   const remoteTrust = useRemoteTrustSentence(
     current ? `'${current.manifest.displayName || current.manifest.name}'` : "it"
   );
+  const lookup = useInstalledVersion(
+    current?.intentId ?? null,
+    current?.manifest.name ?? null,
+    isInstalling
+  );
+  const showLookupHint = useDeferredLoading(lookup.pending, UI_DOHERTY_THRESHOLD);
 
   // Always resolve by id, never "whatever is current". An install that settles
   // after this component remounted (ErrorBoundary reset) would otherwise
@@ -144,6 +273,20 @@ export function PluginArchiveInstallConfirmDialog() {
       ? `${labelPoints.slice(0, TITLE_LABEL_MAX).join("")}…`
       : label;
 
+  const { installedVersion } = lookup;
+  const replacement: ArchiveReplacement | null =
+    installedVersion === null
+      ? null
+      : {
+          installedVersion,
+          kind: classifyArchiveReplacement(installedVersion, current.manifest.version),
+        };
+  const effect =
+    replacement === null
+      ? INSTALL_DESCRIPTION
+      : `${replacementSentence(replacement.kind, replacement.installedVersion, current.manifest.version)} ${PRIVILEGE_WARNING}`;
+  const description = remoteTrust ? `${effect} ${remoteTrust}` : effect;
+
   return (
     <ConfirmDialog
       isOpen={true}
@@ -152,7 +295,11 @@ export function PluginArchiveInstallConfirmDialog() {
       // attacker-controlled run would otherwise refuse to shrink and clip
       // against the dialog edge; the clamp above bounds the wrapped height.
       title={<span className="min-w-0 break-words">{`Install '${titleLabel}'?`}</span>}
-      description={remoteTrust ? `${INSTALL_DESCRIPTION} ${remoteTrust}` : INSTALL_DESCRIPTION}
+      // Versions are author-controlled, and semver admits a 256-character run
+      // with nowhere to break — the same clip the title guards against.
+      description={
+        replacement === null ? description : <span className="break-words">{description}</span>
+      }
       confirmLabel="Install plugin"
       cancelLabel="Cancel"
       onConfirm={() => void handleConfirm()}
@@ -161,13 +308,18 @@ export function PluginArchiveInstallConfirmDialog() {
       hasPreview={true}
       confirmCooldownMs={CONFIRM_COOLDOWN_MS}
       cooldownKey={current.intentId}
+      // Held until the installed version is known, so a slow read (a cold
+      // launch waits out the plugin catalog) can't let an approval land on
+      // copy that's about to say this is a downgrade.
+      confirmDisabled={lookup.pending}
+      hint={showLookupHint ? "Checking which version is installed…" : undefined}
       zIndex="nested"
     >
       {/* pt-3 + space-y-4: evens the vertical rhythm — the Body's space-y-3
           leaves the description closer to the card than the header is to the
           description, and the denser blocks below need the larger step. */}
       <div className="pt-3 space-y-4">
-        <ArchiveIdentityCard intent={current} />
+        <ArchiveIdentityCard intent={current} replacement={replacement} />
         <ArchivePermissions capabilities={current.manifest.capabilities} />
         <ArchiveRecipes recipes={current.manifest.recipes} />
         <ArchiveProjectTemplates templates={current.manifest.projectTemplates} />
@@ -191,14 +343,27 @@ function formatAuthors(authors: PluginAuthor[]): string {
   return rest > 0 ? `${names} +${rest} more` : names;
 }
 
+interface ArchiveReplacement {
+  installedVersion: string;
+  kind: ArchiveReplacementKind;
+}
+
 /**
  * Who this archive claims to be — the same identity block the catalog and
- * detail pane render (icon tile, display name, id), plus the two facts unique
- * to install time: the version being written and the file it came from.
+ * detail pane render (icon tile, display name, id), plus the facts unique to
+ * install time: the version being written, the file it came from, and the
+ * installed version it replaces.
  */
-function ArchiveIdentityCard({ intent }: { intent: PendingPluginArchiveInstall }) {
+function ArchiveIdentityCard({
+  intent,
+  replacement,
+}: {
+  intent: PendingPluginArchiveInstall;
+  replacement: ArchiveReplacement | null;
+}) {
   const { manifest, archiveFileName } = intent;
   const label = manifest.displayName || manifest.name;
+  const tag = replacement === null ? null : REPLACEMENT_TAG[replacement.kind];
 
   return (
     <div className="rounded-[var(--radius-md)] border border-tint/[0.08] bg-tint/[0.04] px-3.5 py-3">
@@ -217,6 +382,23 @@ function ArchiveIdentityCard({ intent }: { intent: PendingPluginArchiveInstall }
         </div>
       </div>
       <div className="mt-3 pt-2.5 border-t border-tint/[0.08] space-y-1.5">
+        {replacement !== null && (
+          <div
+            className="flex items-start gap-1.5 text-2xs text-text-secondary"
+            data-testid="archive-installed-version"
+          >
+            <Package className="w-3 h-3 shrink-0 mt-[1.5px] text-text-secondary" aria-hidden />
+            <span className="break-words min-w-0">
+              Replaces installed{" "}
+              <span className="font-mono break-all">v{replacement.installedVersion}</span>
+            </span>
+            {tag !== null && (
+              <Badge size="xs" tone={replacement.kind === "downgrade" ? "warning" : "outline"}>
+                {tag}
+              </Badge>
+            )}
+          </div>
+        )}
         <div className="flex items-start gap-1.5 text-2xs text-text-secondary">
           <FileArchive className="w-3 h-3 shrink-0 mt-[1.5px] text-daintree-text/35" aria-hidden />
           <span className="font-mono break-all min-w-0">{archiveFileName}</span>
