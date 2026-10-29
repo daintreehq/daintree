@@ -350,9 +350,7 @@ describe("ResourceEnvironmentsSection — removing an environment", () => {
       expect(within(dialog).queryByRole("list")).toBeNull();
       expect(dialog.textContent).toContain("New worktrees will start on Local");
       fireEvent.click(within(dialog).getByRole("button", { name: "Remove environment" }));
-      expect(Object.keys(onResourceEnvironmentsChange.mock.calls[0]![0])).toEqual([
-        "docker-local",
-      ]);
+      expect(Object.keys(onResourceEnvironmentsChange.mock.calls[0]![0])).toEqual(["docker-local"]);
     });
   });
 });
