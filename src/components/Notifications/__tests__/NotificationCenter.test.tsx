@@ -2468,6 +2468,46 @@ describe("NotificationCenter — keyboard navigation", () => {
     expect(focusCalls).toEqual([["panel.focus", { panelId: "pane-new" }]]);
   });
 
+  it("marks an unread row read when a click, Enter or Go to source arrives, never on a dead link", async () => {
+    usePanelStore.setState({
+      panelsById: { "pane-1": { id: "pane-1", kind: "terminal", location: "grid" } },
+      focusedId: null,
+    } as never);
+    const unread = (id: string, panelId: string) =>
+      makeEntry({ id, message: `Row ${id}`, seenAsToast: false, context: { panelId } });
+    const isRead = (id: string) =>
+      useNotificationHistoryStore.getState().entries.find((e) => e.id === id)?.seenAsToast;
+
+    setEntries([unread("clicked", "pane-1"), unread("dead", "gone")]);
+    const { container } = render(<NotificationCenter open onClose={vi.fn()} />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("Row dead"));
+    });
+    expect(isRead("dead")).toBe(false);
+    expect(useNotificationHistoryStore.getState().unreadCount).toBe(2);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("Row clicked"));
+    });
+    expect(isRead("clicked")).toBe(true);
+    expect(isRead("dead")).toBe(false);
+    expect(useNotificationHistoryStore.getState().unreadCount).toBe(1);
+
+    useUIStore.setState({ notificationCenterOpen: true });
+    act(() => {
+      useNotificationHistoryStore.getState().markUnseenAsToast("clicked", { silent: true });
+    });
+    const row = getRows(container).find((r) => r.textContent?.includes("Row clicked"))!;
+    act(() => {
+      row.focus();
+    });
+    await act(async () => {
+      fireEvent.keyDown(row, { key: "Enter" });
+    });
+    expect(isRead("clicked")).toBe(true);
+  });
+
   it("does nothing on Enter when the row's source is gone", async () => {
     getMock.mockReturnValue({ enabled: true });
     setEntries([
