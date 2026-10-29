@@ -38,6 +38,8 @@ vi.mock("@/store/recipeStore", () => ({
   useRecipeStore: <T,>(selector: RecipeStoreSelector<T>) => selector(recipeStoreState),
 }));
 
+// The PR a worktree is linked to, read the way `buildContext` reads it.
+let linkedPrNumber: number | undefined;
 const fakeWorktreeStore = {
   getState: () => ({
     worktrees: new Map([
@@ -46,9 +48,10 @@ const fakeWorktreeStore = {
         {
           worktreeId: "wt-1",
           issueNumber: 42,
-          prNumber: undefined,
           branch: "feature/test",
-        } as { worktreeId: string; issueNumber?: number; prNumber?: number; branch?: string },
+          linked:
+            linkedPrNumber === undefined ? undefined : { pr: { ref: { number: linkedPrNumber } } },
+        },
       ],
     ]),
   }),
@@ -98,6 +101,7 @@ import {
   resolveRecipeRunConfirmation,
   useRecipeRunConfirmStore,
 } from "@/store/recipeRunConfirmStore";
+import { recipeApprovalDigest } from "@/utils/recipeApprovalDigest";
 
 const dispatchMock = vi.mocked(actionService.dispatch);
 
@@ -112,6 +116,7 @@ function makeRecipe(
 }
 
 beforeEach(() => {
+  linkedPrNumber = undefined;
   recipes.length = 0;
   recipeStoreState.recipes = recipes;
   projectSettingsState.allDetectedRunners = [];
@@ -496,6 +501,7 @@ describe("useRecipeRunner — missing variables hold the run (#15022)", () => {
   it("runs the recipe the user approved once they choose to run it empty", async () => {
     recipes.push(reviewRecipe());
     runRecipeWithResultsMock.mockResolvedValue({ spawned: [], failed: [] });
+    const approvedDigest = recipeApprovalDigest(reviewRecipe().terminals);
 
     const { result } = renderHook(() =>
       useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
@@ -503,6 +509,11 @@ describe("useRecipeRunner — missing variables hold the run (#15022)", () => {
     act(() => {
       result.current.handleRun("r1");
     });
+    // Edited while the dialog was open: the store has to see what was shown,
+    // so it can refuse the run rather than start the new terminals.
+    const edited = makeRecipe({ id: "r1", name: "Review", terminals: [{ type: "terminal" }] });
+    expect(recipeApprovalDigest(edited.terminals)).not.toBe(approvedDigest);
+    recipes.splice(0, 1, edited);
     await answer(true);
 
     expect(runRecipeWithResultsMock).toHaveBeenCalledTimes(1);
@@ -513,7 +524,7 @@ describe("useRecipeRunner — missing variables hold the run (#15022)", () => {
       expect.objectContaining({ issueNumber: 42 }),
       {
         spawnedBy: "recipe",
-        expectedRecipe: { id: "r1", terminalsDigest: expect.any(String) },
+        expectedRecipe: { id: "r1", terminalsDigest: approvedDigest },
       }
     );
   });
@@ -585,6 +596,28 @@ describe("useRecipeRunner — missing variables hold the run (#15022)", () => {
     );
   });
 
+  it("takes {{pr_number}} from the worktree's linked PR", () => {
+    linkedPrNumber = 17;
+    recipes.push(reviewRecipe());
+    runRecipeWithResultsMock.mockResolvedValue({ spawned: [], failed: [] });
+
+    const { result } = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
+    );
+    act(() => {
+      result.current.handleRun("r1");
+    });
+
+    expect(pending()).toBeNull();
+    expect(runRecipeWithResultsMock).toHaveBeenCalledWith(
+      "r1",
+      "/tmp",
+      "wt-1",
+      expect.objectContaining({ prNumber: 17 }),
+      { spawnedBy: "recipe" }
+    );
+  });
+
   it("a second Enter while the question is open doesn't stack another run", () => {
     recipes.push(reviewRecipe());
 
@@ -619,6 +652,42 @@ describe("useRecipeRunner — missing variables hold the run (#15022)", () => {
       result.current.handleRun("r1");
     });
     expect(pending()).not.toBeNull();
+  });
+
+  it("drops an approval that lands after the worktree changed", async () => {
+    recipes.push(reviewRecipe());
+
+    const { result, rerender } = renderHook(
+      ({ wt }: { wt: string }) => useRecipeRunner({ activeWorktreeId: wt, defaultCwd: "/tmp" }),
+      { initialProps: { wt: "wt-1" } }
+    );
+    act(() => {
+      result.current.handleRun("r1");
+    });
+
+    // Answered, but the switch lands before the answer's continuation runs.
+    resolveRecipeRunConfirmation(pending()!.requestId, true);
+    rerender({ wt: "wt-2" });
+    await flush();
+
+    expect(runRecipeWithResultsMock).not.toHaveBeenCalled();
+  });
+
+  it("drops an approval that lands after the runner unmounts", async () => {
+    recipes.push(reviewRecipe());
+
+    const { result, unmount } = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
+    );
+    act(() => {
+      result.current.handleRun("r1");
+    });
+
+    resolveRecipeRunConfirmation(pending()!.requestId, true);
+    unmount();
+    await flush();
+
+    expect(runRecipeWithResultsMock).not.toHaveBeenCalled();
   });
 
   it("withdraws the question when the runner unmounts", () => {
@@ -703,8 +772,47 @@ describe("useRecipeRunner — missing variables hold the run (#15022)", () => {
       {
         spawnedBy: "recipe",
         terminalIndices: [1],
-        expectedRecipe: { id: "r1", terminalsDigest: expect.any(String) },
+        expectedRecipe: { id: "r1", terminalsDigest: recipeApprovalDigest(recipes[0]!.terminals) },
       }
+    );
+  });
+
+  it("retries without asking when only the terminals that started miss a value", async () => {
+    recipes.push(
+      makeRecipe({
+        id: "r1",
+        name: "Pair",
+        terminals: [
+          { type: "claude-code", env: {}, initialPrompt: "review {{pr_number}}" },
+          { type: "claude-code", env: {}, initialPrompt: "fix {{issue_number}}" },
+        ],
+      })
+    );
+    runRecipeWithResultsMock.mockResolvedValue({
+      spawned: [{ index: 0, terminalId: "t-0" }],
+      failed: [{ index: 1, error: "Panel limit reached" }],
+    });
+
+    const { result } = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
+    );
+    act(() => {
+      result.current.handleRun("r1");
+    });
+    await answer(true);
+    await flush();
+
+    act(() => {
+      result.current.handleRetryFailed();
+    });
+
+    expect(pending()).toBeNull();
+    expect(runRecipeWithResultsMock).toHaveBeenLastCalledWith(
+      "r1",
+      "/tmp",
+      "wt-1",
+      expect.anything(),
+      { spawnedBy: "recipe", terminalIndices: [1] }
     );
   });
 });
@@ -734,6 +842,43 @@ describe("useRecipeRunner — plugin variables", () => {
     await flush();
 
     expect(useRecipeRunConfirmStore.getState().current).toBeNull();
+    expect(runRecipeWithResultsMock).toHaveBeenCalledTimes(1);
+    expect(result.current.unresolvedVars).toEqual(["plugin.notes"]);
+  });
+
+  it("asks only about the built-ins in a plugin recipe, then names its own variables", async () => {
+    recipes.push(
+      makeRecipe({
+        id: "acme.ledger.review",
+        name: "Ledger review",
+        origin: { kind: "plugin", pluginId: "acme.ledger", contributionId: "review" },
+        terminals: [
+          {
+            type: "claude-code",
+            env: {},
+            initialPrompt: "review {{plugin.notes}} for {{pr_number}}",
+          },
+        ],
+      })
+    );
+    runRecipeWithResultsMock.mockResolvedValue({ spawned: [], failed: [] });
+
+    const { result } = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
+    );
+    act(() => {
+      result.current.handleRun("acme.ledger.review");
+    });
+
+    expect(useRecipeRunConfirmStore.getState().current?.missing).toEqual(["pr_number"]);
+    expect(runRecipeWithResultsMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolveRecipeRunConfirmation(useRecipeRunConfirmStore.getState().current!.requestId, true);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
     expect(runRecipeWithResultsMock).toHaveBeenCalledTimes(1);
     expect(result.current.unresolvedVars).toEqual(["plugin.notes"]);
   });

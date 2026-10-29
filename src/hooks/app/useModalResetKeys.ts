@@ -7,6 +7,7 @@ import { useProjectSleepConfirmStore } from "@/store/projectSleepConfirmStore";
 import { useFileMutationConfirmStore } from "@/store/fileMutationConfirmStore";
 import { usePanelLimitStore } from "@/store/panelLimitStore";
 import { useRecipeConflictStore } from "@/store/recipeConflictStore";
+import { useRecipeRunConfirmStore } from "@/store/recipeRunConfirmStore";
 import { useMcpConfirmStore } from "@/store/mcpConfirmStore";
 import { usePluginConfirmStore } from "@/store/pluginConfirmStore";
 import { usePluginMcpConfirmStore } from "@/store/pluginMcpConfirmStore";
@@ -28,6 +29,7 @@ export interface ModalResetKeys {
   pluginMcpConfirmResetKey: string;
   pluginCapabilityConfirmResetKey: string;
   pluginArchiveInstallResetKey: string;
+  recipeRunConfirmResetKey: string;
   diagnosticsReviewResetKey: number;
   terminalInfoResetKey: number;
 }
@@ -63,6 +65,7 @@ export function useModalResetKeys(): ModalResetKeys {
   const pluginArchiveInstallResetKey = usePluginArchiveInstallStore(
     (s) => s.current?.intentId ?? ""
   );
+  const recipeRunConfirmResetKey = useRecipeRunConfirmStore((s) => s.current?.requestId ?? "");
   const diagnosticsReviewResetKey = useDiagnosticsReviewStore((s) => s.requestSeq);
   const [terminalInfoResetKey, setTerminalInfoResetKey] = useState(0);
   useEffect(() => {
@@ -87,6 +90,7 @@ export function useModalResetKeys(): ModalResetKeys {
     pluginMcpConfirmResetKey,
     pluginCapabilityConfirmResetKey,
     pluginArchiveInstallResetKey,
+    recipeRunConfirmResetKey,
     diagnosticsReviewResetKey,
     terminalInfoResetKey,
   };

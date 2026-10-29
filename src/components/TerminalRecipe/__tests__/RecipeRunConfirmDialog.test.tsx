@@ -32,8 +32,8 @@ afterEach(() => {
 
 describe("RecipeRunConfirmDialog (#15022)", () => {
   it("renders nothing when no run is waiting", () => {
-    const { container } = render(<RecipeRunConfirmDialog />);
-    expect(container.textContent).toBe("");
+    render(<RecipeRunConfirmDialog />);
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("names the recipe and every variable that would go out empty", () => {
@@ -53,6 +53,21 @@ describe("RecipeRunConfirmDialog (#15022)", () => {
     render(<RecipeRunConfirmDialog />);
 
     await waitFor(() => expect(document.activeElement).toBe(footerButton("cancel")));
+  });
+
+  it("lands the next waiting run back on Cancel, not where the last answer left focus", async () => {
+    const first = ask("Fix issue", ["issue_number"]);
+    const second = ask("Review PR", ["pr_number"]);
+    render(<RecipeRunConfirmDialog />);
+    await waitFor(() => expect(document.activeElement).toBe(footerButton("cancel")));
+
+    footerButton("confirm").focus();
+    fireEvent.click(footerButton("confirm"));
+
+    await waitFor(() => expect(first()).toBe(true));
+    expect(screen.getByRole("dialog").textContent).toContain("Run 'Review PR'");
+    await waitFor(() => expect(document.activeElement).toBe(footerButton("cancel")));
+    expect(second()).toBeUndefined();
   });
 
   it("runs only on the explicit choice", async () => {

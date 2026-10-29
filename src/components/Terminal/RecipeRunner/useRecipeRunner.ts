@@ -276,7 +276,6 @@ export function useRecipeRunner({
     (
       recipe: TerminalRecipe,
       missing: string[],
-      runId: number,
       proceed: (expectedRecipe?: RecipeRunOptions["expectedRecipe"]) => void
     ) => {
       if (missing.length === 0) {
@@ -290,7 +289,10 @@ export function useRecipeRunner({
         controller.signal
       ).then((approved) => {
         if (pendingConfirmRef.current === controller) pendingConfirmRef.current = null;
-        if (!approved || runGenerationRef.current !== runId) {
+        // A worktree switch or unmount aborts the question. One that lands
+        // after the answer still counts: the approval settled first, but its
+        // target is gone.
+        if (!approved || controller.signal.aborted) {
           isRunningRef.current = false;
           return;
         }
@@ -319,7 +321,7 @@ export function useRecipeRunner({
       isRunningRef.current = true;
       const runId = ++runGenerationRef.current;
 
-      gateOnMissingVariables(recipe, missing.builtIn, runId, (expectedRecipe) => {
+      gateOnMissingVariables(recipe, missing.builtIn, (expectedRecipe) => {
         // Clear any leftover failure banner from a prior run — the new run is
         // the user's current intent and the old retry button must not target a
         // recipe that's no longer relevant. Backing out of the confirm keeps it.
@@ -383,7 +385,7 @@ export function useRecipeRunner({
     const runId = ++runGenerationRef.current;
 
     // A retry is another launch: the worktree may have lost a value since.
-    gateOnMissingVariables(recipe, missing.builtIn, runId, (expectedRecipe) => {
+    gateOnMissingVariables(recipe, missing.builtIn, (expectedRecipe) => {
       setIsRetryingFailed(true);
       void (async () => {
         try {

@@ -153,6 +153,7 @@ interface ModalHostLayerProps {
   pluginMcpConfirmResetKey: string;
   pluginCapabilityConfirmResetKey: string;
   pluginArchiveInstallResetKey: string;
+  recipeRunConfirmResetKey: string;
   panelLimitResetKey: number;
   diagnosticsReviewResetKey: number;
   gitPushResetKey: number;
@@ -253,6 +254,7 @@ export function ModalHostLayer({
   pluginMcpConfirmResetKey,
   pluginCapabilityConfirmResetKey,
   pluginArchiveInstallResetKey,
+  recipeRunConfirmResetKey,
   panelLimitResetKey,
   diagnosticsReviewResetKey,
   gitPushResetKey,
@@ -840,6 +842,7 @@ export function ModalHostLayer({
         <ErrorBoundary
           variant="component"
           componentName="RecipeRunConfirmDialog"
+          resetKeys={[recipeRunConfirmResetKey]}
           // A held run waits on this dialog; one that can't render must not
           // leave it, and the runner's guard, pending for good.
           onError={() => cancelRecipeRunConfirmations()}

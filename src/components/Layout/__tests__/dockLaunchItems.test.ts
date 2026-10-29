@@ -100,6 +100,7 @@ import {
   resolveRecipeRunConfirmation,
   useRecipeRunConfirmStore,
 } from "@/store/recipeRunConfirmStore";
+import { recipeApprovalDigest } from "@/utils/recipeApprovalDigest";
 import { TOOLBAR_CUSTOMIZE_LABEL } from "../toolbarMenuStrings";
 import { PANEL_LIMIT_ERROR_SUFFIX } from "@/services/actions/definitions/panelLimitError";
 
@@ -1113,7 +1114,7 @@ describe("activateDockLaunchItem", () => {
 
       await vi.waitFor(() => expect(runRecipeWithResultsMock).toHaveBeenCalledTimes(1));
       expect(runRecipeWithResultsMock).toHaveBeenCalledWith("r1", "/repo", "wt-1", undefined, {
-        expectedRecipe: { id: "r1", terminalsDigest: expect.any(String) },
+        expectedRecipe: { id: "r1", terminalsDigest: recipeApprovalDigest(fixIssue().terminals) },
       });
       await vi.waitFor(() => expect(notifySpawnFailuresMock).toHaveBeenCalledTimes(1));
     });
@@ -1156,16 +1157,27 @@ describe("activateDockLaunchItem", () => {
       expect(runRecipeWithResultsMock).toHaveBeenCalledTimes(1);
     });
 
-    it("reads the team recipe a shadowed row actually runs", () => {
+    it("asks about, and approves, the team recipe a shadowed row actually runs", async () => {
       const model = build({
         recipes: [recipe({ id: "r1", name: "Fix issue", terminals: [{ type: "terminal" }] })],
       });
-      getRecipeByIdMock.mockReturnValue({ ...fixIssue(), id: "team-r1" });
+      const team = { ...fixIssue(), id: "team-r1" };
+      getRecipeByIdMock.mockReturnValue(team);
 
       activateDockLaunchItem(model.recipes[0]!, ctx);
 
       expect(runRecipeWithResultsMock).not.toHaveBeenCalled();
       expect(pending()?.missing).toEqual(["issue_number"]);
+
+      resolveRecipeRunConfirmation(pending()!.requestId, true);
+
+      // The row's own id goes through for the store to redirect; the approval
+      // names the recipe the store will resolve it to.
+      await vi.waitFor(() =>
+        expect(runRecipeWithResultsMock).toHaveBeenCalledWith("r1", "/repo", "wt-1", undefined, {
+          expectedRecipe: { id: "team-r1", terminalsDigest: recipeApprovalDigest(team.terminals) },
+        })
+      );
     });
   });
 });
