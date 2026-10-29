@@ -149,7 +149,9 @@ function FleetRunRow({ record }: { record: Extract<RunHistoryRecord, { kind: "fl
 export function RunHistorySettingsTab() {
   const records = useRunHistoryStore((s) => s.records);
   const loading = useRunHistoryStore((s) => s.loading);
+  const loadFailed = useRunHistoryStore((s) => s.loadFailed);
   const init = useRunHistoryStore((s) => s.init);
+  const retry = useRunHistoryStore((s) => s.retry);
   const clear = useRunHistoryStore((s) => s.clear);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
@@ -186,22 +188,40 @@ export function RunHistorySettingsTab() {
               <SkeletonBone className="h-5 w-2/3" />
               <SkeletonBone className="h-5 w-1/2" />
             </Skeleton>
-          ) : records.length === 0 ? (
-            <SettingsEmptyRow>
-              Run a recipe or broadcast to a fleet and the outcome shows up here
-            </SettingsEmptyRow>
           ) : (
-            <ul className="divide-y divide-border-subtle">
-              {records.map((record) => (
-                <li key={record.id} className="px-4 py-3">
-                  {record.kind === "recipe" ? (
-                    <RecipeRunRow record={record} />
-                  ) : (
-                    <FleetRunRow record={record} />
-                  )}
-                </li>
-              ))}
-            </ul>
+            <>
+              {loadFailed && (
+                <div className="flex items-center justify-between gap-3 px-4 py-3">
+                  <p role="alert" className="text-xs text-text-secondary">
+                    {records.length === 0
+                      ? "Run history couldn't be loaded."
+                      : "Run history couldn't be refreshed. These runs may be out of date."}
+                  </p>
+                  <Button size="sm" variant="outline" onClick={retry}>
+                    Retry
+                  </Button>
+                </div>
+              )}
+              {records.length > 0 ? (
+                <ul className="divide-y divide-border-subtle">
+                  {records.map((record) => (
+                    <li key={record.id} className="px-4 py-3">
+                      {record.kind === "recipe" ? (
+                        <RecipeRunRow record={record} />
+                      ) : (
+                        <FleetRunRow record={record} />
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                !loadFailed && (
+                  <SettingsEmptyRow>
+                    Run a recipe or broadcast to a fleet and the outcome shows up here
+                  </SettingsEmptyRow>
+                )
+              )}
+            </>
           )}
           {!loading && records.length > 0 && (
             <SettingsActions status={pluralize(records.length, "run")}>

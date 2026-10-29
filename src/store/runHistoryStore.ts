@@ -13,65 +13,96 @@ import type { RunHistoryRecord } from "@shared/types";
 interface RunHistoryState {
   records: RunHistoryRecord[];
   loading: boolean;
-  /** Idempotent: pulls the current snapshot and subscribes to live updates. */
+  /** The last snapshot read failed; `records` is whatever was already known, not proof of an empty log. */
+  loadFailed: boolean;
+  /** Idempotent: pulls the current snapshot and subscribes to live updates. Re-pulls when the last read failed. */
   init: () => void;
+  /** Read the snapshot again after a failed read. */
+  retry: () => void;
   /** Clear the durable log. Resolves false when the clear failed, so the caller can say so. */
   clear: () => Promise<boolean>;
 }
 
 let initialized = false;
 let unsubscribe: (() => void) | null = null;
-// True once an `run-history:update` push has populated the store. The pull-on-
-// mount `getRecords()` resolves asynchronously and can land AFTER a fresher
-// push during init (or during another window's concurrent append) — when a
-// push has already arrived, the stale snapshot must not overwrite it.
-let receivedPush = false;
+// Bumped by every `run-history:update` push. The pull `getRecords()` resolves
+// asynchronously and can land AFTER a fresher push (or another window's
+// concurrent append) — when a push arrived while a pull was in flight, the stale
+// snapshot must not overwrite it.
+let pushVersion = 0;
+let pulling = false;
 
-export const useRunHistoryStore = create<RunHistoryState>((set) => ({
-  records: [],
-  loading: true,
-  init: () => {
-    if (initialized) return;
-    initialized = true;
-
-    // Live updates: the main process pushes the full newest-first snapshot on
-    // every append/clear, and replays it to freshly-loaded views. This is the
-    // authoritative data path.
-    unsubscribe = window.electron.events.on("run-history:update", (records) => {
-      receivedPush = true;
-      set({ records, loading: false });
-    });
-
-    // Pull-on-mount so we have data even before the first push arrives. Skip
-    // applying the snapshot if a push already won the race — only clear loading.
+export const useRunHistoryStore = create<RunHistoryState>((set, get) => {
+  const pull = () => {
+    if (pulling) return;
+    pulling = true;
+    const versionAtStart = pushVersion;
+    set({ loadFailed: false, loading: get().records.length === 0 });
     window.electron.runHistory
       .getRecords()
-      .then((records) => set(receivedPush ? { loading: false } : { records, loading: false }))
+      .then((records) => {
+        pulling = false;
+        set(
+          pushVersion !== versionAtStart
+            ? { loading: false }
+            : { records, loading: false, loadFailed: false }
+        );
+      })
       .catch((err) => {
+        pulling = false;
         logError("Failed to load run history", err);
-        set({ loading: false });
+        // A push that landed meanwhile already supplied what this read failed to.
+        set(
+          pushVersion !== versionAtStart ? { loading: false } : { loading: false, loadFailed: true }
+        );
       });
-  },
-  clear: async () => {
-    try {
-      // No optimistic `set({ records: [] })`: the clear IPC handler calls
-      // `broadcastRunHistory()` synchronously before it resolves, so the empty
-      // snapshot arrives via the push path. An optimistic clear here could
-      // instead clobber a concurrent append broadcast from another window.
-      await window.electron.runHistory.clear();
-      return true;
-    } catch (err) {
-      logError("Failed to clear run history", err);
-      return false;
-    }
-  },
-}));
+  };
+
+  return {
+    records: [],
+    loading: true,
+    loadFailed: false,
+    retry: pull,
+    init: () => {
+      if (initialized) {
+        if (get().loadFailed) pull();
+        return;
+      }
+      initialized = true;
+
+      // Live updates: the main process pushes the full newest-first snapshot on
+      // every append/clear, and replays it to freshly-loaded views. This is the
+      // authoritative data path.
+      unsubscribe = window.electron.events.on("run-history:update", (records) => {
+        pushVersion++;
+        set({ records, loading: false, loadFailed: false });
+      });
+
+      // Pull-on-mount so we have data even before the first push arrives.
+      pull();
+    },
+    clear: async () => {
+      try {
+        // No optimistic `set({ records: [] })`: the clear IPC handler calls
+        // `broadcastRunHistory()` synchronously before it resolves, so the empty
+        // snapshot arrives via the push path. An optimistic clear here could
+        // instead clobber a concurrent append broadcast from another window.
+        await window.electron.runHistory.clear();
+        return true;
+      } catch (err) {
+        logError("Failed to clear run history", err);
+        return false;
+      }
+    },
+  };
+});
 
 /** Test-only: reset the module-level init guard between cases. */
 export function _resetRunHistoryStoreForTest(): void {
   unsubscribe?.();
   unsubscribe = null;
   initialized = false;
-  receivedPush = false;
-  useRunHistoryStore.setState({ records: [], loading: true });
+  pushVersion = 0;
+  pulling = false;
+  useRunHistoryStore.setState({ records: [], loading: true, loadFailed: false });
 }

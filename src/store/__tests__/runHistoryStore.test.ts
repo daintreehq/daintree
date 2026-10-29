@@ -98,12 +98,68 @@ describe("runHistoryStore", () => {
     expect(useRunHistoryStore.getState().records.map((r) => r.id)).toEqual(["fresh"]);
   });
 
-  it("survives a getRecords rejection without staying in loading", async () => {
+  it("flags a getRecords rejection instead of passing for an empty log", async () => {
     getRecords.mockRejectedValue(new Error("boom"));
     useRunHistoryStore.getState().init();
     await vi.waitFor(() => {
       expect(useRunHistoryStore.getState().loading).toBe(false);
     });
+    expect(useRunHistoryStore.getState().loadFailed).toBe(true);
+    expect(useRunHistoryStore.getState().records).toEqual([]);
+  });
+
+  it("retry re-reads after a failure and clears the flag", async () => {
+    getRecords.mockRejectedValueOnce(new Error("boom")).mockResolvedValueOnce([makeRecord("a")]);
+    useRunHistoryStore.getState().init();
+    await vi.waitFor(() => expect(useRunHistoryStore.getState().loadFailed).toBe(true));
+
+    useRunHistoryStore.getState().retry();
+    await vi.waitFor(() => expect(useRunHistoryStore.getState().loadFailed).toBe(false));
+    expect(useRunHistoryStore.getState().records.map((r) => r.id)).toEqual(["a"]);
+    expect(getRecords).toHaveBeenCalledTimes(2);
+  });
+
+  it("a later init after a failed read pulls again; after a good read it does not", async () => {
+    getRecords.mockRejectedValueOnce(new Error("boom")).mockResolvedValue([]);
+    useRunHistoryStore.getState().init();
+    await vi.waitFor(() => expect(useRunHistoryStore.getState().loadFailed).toBe(true));
+
+    useRunHistoryStore.getState().init();
+    await vi.waitFor(() => expect(useRunHistoryStore.getState().loadFailed).toBe(false));
+    expect(getRecords).toHaveBeenCalledTimes(2);
+
+    useRunHistoryStore.getState().init();
+    expect(getRecords).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the records on screen when a later read fails", async () => {
+    getRecords.mockRejectedValueOnce(new Error("boom"));
+    useRunHistoryStore.getState().init();
+    await vi.waitFor(() => expect(useRunHistoryStore.getState().loadFailed).toBe(true));
+    useRunHistoryStore.setState({ records: [makeRecord("kept")] });
+
+    getRecords.mockRejectedValueOnce(new Error("still down"));
+    useRunHistoryStore.getState().retry();
+    await vi.waitFor(() => expect(getRecords).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(useRunHistoryStore.getState().loadFailed).toBe(true));
+    expect(useRunHistoryStore.getState().records.map((r) => r.id)).toEqual(["kept"]);
+  });
+
+  it("a push clears the failed flag, and a failure that races a push does not set it", async () => {
+    let rejectGet: (err: Error) => void = () => {};
+    getRecords.mockReturnValue(
+      new Promise<RunHistoryRecord[]>((_, reject) => {
+        rejectGet = reject;
+      })
+    );
+    useRunHistoryStore.getState().init();
+    await vi.waitFor(() => expect(eventCallback).not.toBeNull());
+    eventCallback!([makeRecord("fresh")]);
+    rejectGet(new Error("boom"));
+    await vi.waitFor(() => expect(useRunHistoryStore.getState().loading).toBe(false));
+    await Promise.resolve();
+    expect(useRunHistoryStore.getState().loadFailed).toBe(false);
+    expect(useRunHistoryStore.getState().records.map((r) => r.id)).toEqual(["fresh"]);
   });
 
   it("clear reports whether it landed, so the caller can say it failed", async () => {
