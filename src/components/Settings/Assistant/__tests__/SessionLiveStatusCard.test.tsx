@@ -138,6 +138,7 @@ function globalView(patch: Partial<GlobalAssistantView> = {}): GlobalAssistantVi
     inputOwner: null,
     inputEpoch: 0,
     subject: null,
+    agentState: null,
     ...patch,
   };
 }

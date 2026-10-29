@@ -317,6 +317,7 @@ function installApi(
       inputOwner: null,
       inputEpoch: 0,
       subject: null,
+      agentState: null,
     }),
     onGlobalAssistantChanged: vi.fn(() => () => {}),
   };
@@ -2461,6 +2462,7 @@ describe("SessionLiveStatusCard (live help session)", () => {
             terminalId: "g-1",
             incarnation: 1,
           },
+          agentState: null,
         }),
       }
     );
