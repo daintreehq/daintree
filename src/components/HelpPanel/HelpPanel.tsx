@@ -962,21 +962,20 @@ export function HelpPanel({
     ? (getAgentConfig(resumableAgentId)?.icon ?? Sparkles)
     : Sparkles;
 
-  // Explicit, billed start (#10699). Records consent so future opens may
-  // auto-launch, then launches directly — relying on syncInputs re-evaluation
-  // would leave a render-cycle gap. An optional starter prompt seeds the first
-  // turn (skips the resume path by design).
+  // Explicit, billed start (#10699). Starts this one session and nothing more:
+  // whether later opens start one is the menu's "Start when the panel opens",
+  // never a side effect of this click (#14976). An optional starter prompt
+  // seeds the first turn (skips the resume path by design).
   const handleStartAssistant = useCallback(
     (seedPrompt?: string) => {
       if (!launchableAgentId) return;
-      setAutoLaunchEnabled(true);
       controller.launch({
         agentId: launchableAgentId,
         replaceExisting: true,
         ...(seedPrompt ? { seedPrompt } : {}),
       });
     },
-    [controller, launchableAgentId, setAutoLaunchEnabled]
+    [controller, launchableAgentId]
   );
 
   // A starter never submits into a live session: if one has appeared since the
@@ -1009,17 +1008,16 @@ export function HelpPanel({
     (chosenAgentId: string) => {
       // Launched directly below, so no switch request rides along.
       setPreferredAgent(chosenAgentId, { switchSession: false });
-      setAutoLaunchEnabled(true);
       controller.launch({ agentId: chosenAgentId, replaceExisting: true });
     },
-    [controller, setAutoLaunchEnabled, setPreferredAgent]
+    [controller, setPreferredAgent]
   );
 
   // Recovery resume after the eviction/crash path killed the assistant PTY on a
-  // project switch-away. Unlike "Start assistant", this deliberately does NOT
-  // record auto-launch consent (#10699): resuming a stranded session is a
-  // one-time, user-initiated recovery, not an opt-in to billed auto-launch on
-  // every future open. The launch flow seeds the captured entry from main and
+  // project switch-away. Like "Start assistant", this does NOT record
+  // auto-launch consent (#10699): resuming a stranded session is a one-time,
+  // user-initiated recovery, not an opt-in to billed auto-launch on every
+  // future open. The launch flow seeds the captured entry from main and
   // spawns a `--resume` process (HelpSessionController._executeLaunch). Launched
   // with the captured agent id (not the CTA agent) so the resume branch — gated
   // on `hibernated.agentId === launchAgentId` — actually fires.
@@ -1139,6 +1137,8 @@ export function HelpPanel({
         onEndSession={handleEndSession}
         onResumePastSession={handleResumePastSession}
         onOpenDocs={handleOpenAssistantDocs}
+        autoLaunchEnabled={autoLaunchEnabled}
+        onAutoLaunchEnabledChange={setAutoLaunchEnabled}
         onClose={handleClose}
         isFocused={isHighlighted}
         newSessionAgentIds={supportedInstalledAgentIds}
@@ -1389,8 +1389,8 @@ export function HelpPanel({
                 <div className="flex flex-col items-center gap-4 w-full max-w-[34ch]">
                   {/* Recovery resume — the eviction/crash path killed the PTY on
                       switch-away, but the conversation can be picked back up.
-                      Does not record auto-launch consent (#10699), unlike "Start
-                      assistant". This is the single load-bearing accent here.
+                      Does not record auto-launch consent (#10699). This is the
+                      single load-bearing accent here.
                       Starting fresh is the overflow menu's "Restart conversation". */}
                   <Button
                     type="button"

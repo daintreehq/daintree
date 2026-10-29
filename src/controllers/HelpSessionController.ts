@@ -243,8 +243,9 @@ export interface HelpSessionInputs {
   supportedInstalledAgentIds: readonly string[];
   /**
    * User consent to auto-launch a billed session when the panel opens (#10699).
-   * False until the user explicitly starts the assistant once; auto-launch is
-   * fully suppressed while false, so revealing the panel never bills a session.
+   * False until the user turns on "Start when the panel opens" (#14976);
+   * auto-launch is fully suppressed while false, so revealing the panel never
+   * bills a session.
    */
   autoLaunchEnabled: boolean;
   /** Bumped each time the panel becomes visible — re-evaluates auto-launch. */
@@ -398,6 +399,11 @@ export class HelpSessionController {
   // auto-launch path bumping the gen) still lets the owner release.
   private _isLaunchingGen = -1;
   private _hasAutoLaunched = false;
+  // Consent turned on while this lane was already open. The setting is about
+  // opening the panel, so it waits for the next open instead of starting a
+  // session the moment it's ticked (#14976). Separate from `_hasAutoLaunched`,
+  // which also marks a launch as automatic for reveal recovery.
+  private _autoLaunchDeferredToNextOpen = false;
   // Host terminal id → launches still committing a pane for it (#13360).
   private readonly _adoptingTerminals = new Map<string, number>();
   private _pendingSessionId: string | null = null;
@@ -541,6 +547,9 @@ export class HelpSessionController {
     // try again from scratch.
     if (!inputs.isOpen) {
       this._hasAutoLaunched = false;
+      this._autoLaunchDeferredToNextOpen = false;
+    } else if (prev?.isOpen && !prev.autoLaunchEnabled && inputs.autoLaunchEnabled) {
+      this._autoLaunchDeferredToNextOpen = true;
     }
 
     this._hibernationManager.maybeArm(inputs);
@@ -1223,7 +1232,7 @@ export class HelpSessionController {
     // Consent gate first (#10699): with no explicit opt-in, opening the panel
     // must never start a billed session. Placed ahead of the visibility check
     // so a visibilityEpoch re-arm can't bypass consent on a restore.
-    if (!inputs.autoLaunchEnabled) return;
+    if (!inputs.autoLaunchEnabled || this._autoLaunchDeferredToNextOpen) return;
     // A picked conversation or agent owns this lane — queued, in flight, or
     // failed and waiting on Retry. A blank session must not take its place.
     if (this._queuedLaunch || this._lastResumeTarget || this._lastPinnedAgentId) return;

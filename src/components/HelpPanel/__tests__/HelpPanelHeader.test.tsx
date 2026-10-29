@@ -57,6 +57,23 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
     </button>
   ),
   DropdownMenuSeparator: () => <hr />,
+  DropdownMenuCheckboxItem: ({
+    children,
+    checked,
+    onCheckedChange,
+  }: {
+    children: ReactNode;
+    checked?: boolean;
+    onCheckedChange?: (checked: boolean) => void;
+  }) => (
+    <button
+      role="menuitemcheckbox"
+      aria-checked={checked === true}
+      onClick={() => onCheckedChange?.(!checked)}
+    >
+      {children}
+    </button>
+  ),
 }));
 
 import { HelpPanelHeader, summarizeLaneActivity } from "../HelpPanelHeader";
@@ -73,6 +90,8 @@ function renderHeader(overrides: Partial<ComponentProps<typeof HelpPanelHeader>>
       onEndSession={vi.fn()}
       onResumePastSession={vi.fn()}
       onOpenDocs={vi.fn()}
+      autoLaunchEnabled={false}
+      onAutoLaunchEnabledChange={vi.fn()}
       onClose={vi.fn()}
       {...overrides}
     />
@@ -240,6 +259,37 @@ describe("HelpPanelHeader", () => {
 
     fireEvent.click(getByText("Resume a past session…"));
     expect(onResumePastSession).toHaveBeenCalledTimes(1);
+  });
+
+  describe("auto-start on open (#14976)", () => {
+    it("shows whether opening starts a session, under a label that never changes", () => {
+      const onAutoLaunchEnabledChange = vi.fn();
+      const off = renderHeader({ autoLaunchEnabled: false, onAutoLaunchEnabledChange });
+      const unchecked = off.getByRole("menuitemcheckbox", { name: "Start when the panel opens" });
+      expect(unchecked.getAttribute("aria-checked")).toBe("false");
+      fireEvent.click(unchecked);
+      expect(onAutoLaunchEnabledChange).toHaveBeenLastCalledWith(true);
+      off.unmount();
+
+      const on = renderHeader({ autoLaunchEnabled: true, onAutoLaunchEnabledChange });
+      const checked = on.getByRole("menuitemcheckbox", { name: "Start when the panel opens" });
+      expect(checked.getAttribute("aria-checked")).toBe("true");
+      fireEvent.click(checked);
+      expect(onAutoLaunchEnabledChange).toHaveBeenLastCalledWith(false);
+    });
+
+    it("is there with or without a session, and only in the project scope", () => {
+      const idle = renderHeader({ canRestartConversation: false, canEndSession: false });
+      expect(idle.queryByRole("menuitemcheckbox")).not.toBeNull();
+      idle.unmount();
+
+      const live = renderHeader({ canRestartConversation: true, canEndSession: true });
+      expect(live.queryByRole("menuitemcheckbox")).not.toBeNull();
+      live.unmount();
+
+      const global = renderHeader({ scope: "global" });
+      expect(global.queryByRole("menuitemcheckbox")).toBeNull();
+    });
   });
 
   describe("new session on a named agent (#13442)", () => {

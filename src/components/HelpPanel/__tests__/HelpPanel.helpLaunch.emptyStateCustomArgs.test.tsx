@@ -195,6 +195,23 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
     </button>
   ),
   DropdownMenuSeparator: () => <hr />,
+  DropdownMenuCheckboxItem: ({
+    children,
+    checked,
+    onCheckedChange,
+  }: {
+    children: React.ReactNode;
+    checked?: boolean;
+    onCheckedChange?: (checked: boolean) => void;
+  }) => (
+    <button
+      role="menuitemcheckbox"
+      aria-checked={checked === true}
+      onClick={() => onCheckedChange?.(!checked)}
+    >
+      {children}
+    </button>
+  ),
 }));
 
 // The session tabs' per-lane menu is incidental here, and the real primitive
@@ -663,7 +680,7 @@ beforeEach(() => {
 });
 
 describe("HelpPanel — empty state hero (Daintree-relevant entry points)", () => {
-  it("'Start assistant' CTA records consent and launches, with no auto-launch beforehand (#10699)", async () => {
+  it("'Start assistant' CTA launches without turning on auto-start, with no auto-launch beforehand (#10699, #14976)", async () => {
     // Consent off: opening the panel must show the CTA and start nothing.
     helpPanelState.autoLaunchEnabled = false;
     helpPanelState.preferredAgentId = "claude";
@@ -681,7 +698,8 @@ describe("HelpPanel — empty state hero (Daintree-relevant entry points)", () =
       fireEvent.click(cta);
     });
 
-    expect(helpPanelState.setAutoLaunchEnabled).toHaveBeenCalledWith(true);
+    // One session, not consent to every later open starting one (#14976).
+    expect(helpPanelState.setAutoLaunchEnabled).not.toHaveBeenCalled();
     expect(mockProvisionSession).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: "claude" })
     );
@@ -692,7 +710,28 @@ describe("HelpPanel — empty state hero (Daintree-relevant entry points)", () =
     );
   });
 
-  it("first-run starter-prompt chip records consent and launches (#10699)", async () => {
+  it("shows auto-start in the panel menu and turns it either way from there (#14976)", async () => {
+    helpPanelState.autoLaunchEnabled = false;
+    helpPanelState.preferredAgentId = "claude";
+    cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
+
+    const { rerender } = render(<HelpPanel width={380} />);
+
+    const item = screen.getByRole("menuitemcheckbox", { name: "Start when the panel opens" });
+    expect(item.getAttribute("aria-checked")).toBe("false");
+    fireEvent.click(item);
+    expect(helpPanelState.setAutoLaunchEnabled).toHaveBeenLastCalledWith(true);
+
+    helpPanelState.autoLaunchEnabled = true;
+    rerender(<HelpPanel width={380} />);
+    const checked = screen.getByRole("menuitemcheckbox", { name: "Start when the panel opens" });
+    expect(checked.getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(checked);
+    expect(helpPanelState.setAutoLaunchEnabled).toHaveBeenLastCalledWith(false);
+  });
+
+  it("first-run starter-prompt chip launches without turning on auto-start (#10699, #14976)", async () => {
     helpPanelState.autoLaunchEnabled = false;
     helpPanelState.preferredAgentId = "claude";
     // No prior agent launches → the first-run starter chips render.
@@ -712,7 +751,7 @@ describe("HelpPanel — empty state hero (Daintree-relevant entry points)", () =
       fireEvent.click(chip);
     });
 
-    expect(helpPanelState.setAutoLaunchEnabled).toHaveBeenCalledWith(true);
+    expect(helpPanelState.setAutoLaunchEnabled).not.toHaveBeenCalled();
     expect(mockProvisionSession).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: "claude" })
     );
@@ -840,7 +879,7 @@ describe("HelpPanel — empty state hero (Daintree-relevant entry points)", () =
     expect(mockProvisionSession).not.toHaveBeenCalled();
   });
 
-  it("stores the chosen agent as the default and starts it", async () => {
+  it("stores the chosen agent as the default and starts it, leaving auto-start off (#14976)", async () => {
     helpPanelState.autoLaunchEnabled = false;
     helpPanelState.preferredAgentId = null;
     cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
@@ -857,7 +896,7 @@ describe("HelpPanel — empty state hero (Daintree-relevant entry points)", () =
     expect(helpPanelState.setPreferredAgent).toHaveBeenCalledWith("codex", {
       switchSession: false,
     });
-    expect(helpPanelState.setAutoLaunchEnabled).toHaveBeenCalledWith(true);
+    expect(helpPanelState.setAutoLaunchEnabled).not.toHaveBeenCalled();
     expect(mockProvisionSession).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: "codex" })
     );

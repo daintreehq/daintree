@@ -186,6 +186,7 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
     </button>
   ),
   DropdownMenuSeparator: () => <hr />,
+  DropdownMenuCheckboxItem: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
 }));
 
 // The session tabs' per-lane menu is incidental here, and the real primitive
@@ -761,6 +762,60 @@ describe("HelpPanel — single-supported-agent launch (handleSelectAgent)", () =
 });
 
 describe("HelpPanel — auto-launch (preferredAgentId)", () => {
+  it("turning auto-start on while the panel is open waits for the next open (#14976)", async () => {
+    helpPanelState.autoLaunchEnabled = false;
+    helpPanelState.preferredAgentId = "claude";
+    mockGetFolderPath.mockResolvedValue("/help");
+    mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "auto-term-1" } });
+
+    const { rerender } = render(<HelpPanel width={380} />);
+
+    // Ticked from the open panel's menu: the setting is about opening, so
+    // nothing starts now.
+    helpPanelState.autoLaunchEnabled = true;
+    await act(async () => {
+      rerender(<HelpPanel width={380} />);
+    });
+    expect(mockProvisionSession).not.toHaveBeenCalled();
+    expect(mockDispatch).not.toHaveBeenCalled();
+
+    helpPanelState.isOpen = false;
+    await act(async () => {
+      rerender(<HelpPanel width={380} />);
+    });
+    helpPanelState.isOpen = true;
+    await act(async () => {
+      rerender(<HelpPanel width={380} />);
+    });
+
+    expect(mockProvisionSession).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "claude" })
+    );
+    expect(mockDispatch).toHaveBeenCalledWith(
+      "agent.launch",
+      expect.objectContaining({ agentId: "claude" }),
+      { source: "user" }
+    );
+  });
+
+  it("turning auto-start off stops the next open from starting a session (#14976)", async () => {
+    helpPanelState.isOpen = false;
+    helpPanelState.preferredAgentId = "claude";
+    mockGetFolderPath.mockResolvedValue("/help");
+    mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "auto-term-1" } });
+
+    const { rerender } = render(<HelpPanel width={380} />);
+
+    helpPanelState.autoLaunchEnabled = false;
+    helpPanelState.isOpen = true;
+    await act(async () => {
+      rerender(<HelpPanel width={380} />);
+    });
+
+    expect(mockProvisionSession).not.toHaveBeenCalled();
+    expect(mockDispatch).not.toHaveBeenCalled();
+  });
+
   it("waits for app hydration before launching a persisted-open assistant", async () => {
     helpPanelState.preferredAgentId = "claude";
     mockGetFolderPath.mockResolvedValue("/help");

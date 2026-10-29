@@ -201,9 +201,9 @@ interface HelpPanelState {
   /**
    * User consent to auto-launch a billed agent session when the panel opens.
    * Defaults to false so opening the panel never starts (and bills) a session
-   * without an explicit user action (#10699). The first-run "Start assistant"
-   * CTA and starter-prompt chips flip this true, so subsequent opens resume the
-   * auto-launch convenience the user has now opted into.
+   * without an explicit user action (#10699). Only the panel menu's "Start when
+   * the panel opens" item sets it, either way: starting one session is not
+   * consent to every later open starting another (#14976).
    */
   autoLaunchEnabled: boolean;
   /**
@@ -750,8 +750,17 @@ export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
       // through, so no separate migration step can be skipped.
       // v7: `preferredAgentId` is the host's and no longer persisted here
       // (#13345). A v6 value stays on disk only until a local window moves it.
-      version: 7,
-      migrate: (persistedState) => persistedState as HelpPanelState & HelpPanelActions,
+      // v8: `autoLaunchEnabled` before v8 was set by any Start click, never by
+      // a choice to auto-start, so it is dropped rather than kept as consent
+      // (#14976).
+      version: 8,
+      migrate: (persistedState, version) => {
+        if (version < 8 && persistedState && typeof persistedState === "object") {
+          return { ...persistedState, autoLaunchEnabled: false } as HelpPanelState &
+            HelpPanelActions;
+        }
+        return persistedState as HelpPanelState & HelpPanelActions;
+      },
       partialize: (state): HelpPanelPersistedState => ({
         width: state.width,
         autoLaunchEnabled: state.autoLaunchEnabled,
@@ -794,6 +803,32 @@ registerPersistedStore({
   persistedStateType:
     "Pick<HelpPanelState, 'width' | 'autoLaunchEnabled' | 'introDismissed' | 'hibernateSessions'>",
 });
+
+// Turning auto-start off in one project view must reach every cached view at
+// once, or switching to one of them would still start a billed session on
+// open. Each view otherwise keeps the value it loaded until it reloads.
+if (typeof window !== "undefined") {
+  window.addEventListener("storage", (event) => {
+    if (event.key !== "help-panel-storage") return;
+    // What the store holds now, not what the event carried: events queue, and
+    // an older one must not undo a newer change.
+    let enabled: unknown;
+    try {
+      const latest = window.localStorage.getItem("help-panel-storage");
+      if (latest === null) return;
+      enabled = (JSON.parse(latest) as { state?: { autoLaunchEnabled?: unknown } }).state
+        ?.autoLaunchEnabled;
+    } catch {
+      return;
+    }
+    if (
+      typeof enabled === "boolean" &&
+      enabled !== useHelpPanelStore.getState().autoLaunchEnabled
+    ) {
+      useHelpPanelStore.setState({ autoLaunchEnabled: enabled });
+    }
+  });
+}
 
 // Frozen module singleton so the "closed lane" answer keeps a stable identity
 // across reads — a fresh object each call would defeat every `useShallow` and

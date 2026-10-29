@@ -605,6 +605,73 @@ describe("HelpSessionController — launch phase FSM", () => {
     ctrl.stop();
   });
 
+  it("consent turned on while the lane is open waits for the next open (#14976)", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    helpPanelState.preferredAgentId = "claude";
+    const open = (autoLaunchEnabled: boolean, visibilityEpoch = 0) =>
+      ctrl.syncInputs({
+        isOpen: true,
+        isReadyToLaunch: true,
+        currentProject: { id: "proj", path: "/repo" },
+        terminalId: null,
+        preferredAgentId: "claude",
+        supportedInstalledAgentIds: ["claude"],
+        autoLaunchEnabled,
+        visibilityEpoch,
+      });
+
+    open(false);
+    open(true);
+    expect(ctrl.getSnapshot().phase).toBe("idle");
+
+    // Neither a visibility re-arm, a reveal re-drive, nor toggling off and on
+    // again within the same open starts it.
+    open(true, 1);
+    ctrl.handleViewRevealed();
+    open(false, 1);
+    open(true, 1);
+    expect(ctrl.getSnapshot().phase).toBe("idle");
+    expect(window.electron.help.provisionSession).not.toHaveBeenCalled();
+
+    ctrl.syncInputs({
+      isOpen: false,
+      isReadyToLaunch: true,
+      currentProject: { id: "proj", path: "/repo" },
+      terminalId: null,
+      preferredAgentId: "claude",
+      supportedInstalledAgentIds: ["claude"],
+      autoLaunchEnabled: true,
+      visibilityEpoch: 1,
+    });
+    open(true, 1);
+    expect(ctrl.getSnapshot().phase).toBe("version-checking");
+    ctrl.stop();
+  });
+
+  it("an explicit start still launches after consent was turned on in the same open (#14976)", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    helpPanelState.preferredAgentId = "claude";
+    const inputs = {
+      isOpen: true,
+      isReadyToLaunch: true,
+      currentProject: { id: "proj", path: "/repo" },
+      terminalId: null,
+      preferredAgentId: "claude",
+      supportedInstalledAgentIds: ["claude"],
+      autoLaunchEnabled: false,
+      visibilityEpoch: 0,
+    };
+    ctrl.syncInputs(inputs);
+    ctrl.syncInputs({ ...inputs, autoLaunchEnabled: true });
+    expect(ctrl.getSnapshot().phase).toBe("idle");
+
+    ctrl.launch({ agentId: "claude", replaceExisting: true });
+    expect(ctrl.getSnapshot().phase).toBe("version-checking");
+    ctrl.stop();
+  });
+
   it("_fireHibernate surfaces the hibernating phase, then resets to idle after teardown", async () => {
     const ctrl = new HelpSessionController();
     ctrl.start();

@@ -348,7 +348,7 @@ describe("helpPanelStore persistence migration", () => {
       const parsed: unknown = JSON.parse(backing.get(STORAGE_KEY)!);
       // The machine's own value, untouched until a local window has moved it.
       expect(parsed).toMatchObject({
-        version: 7,
+        version: 8,
         state: { width: 450, preferredAgentId: "claude" },
       });
 
@@ -416,7 +416,7 @@ describe("helpPanelStore persistence migration", () => {
       expect(written).toBeDefined();
       const parsed: unknown = JSON.parse(written!);
       expect(parsed).toMatchObject({
-        version: 7,
+        version: 8,
         state: { introDismissed: true },
       });
     } finally {
@@ -477,7 +477,7 @@ describe("helpPanelStore persistence migration", () => {
         version: number;
         state: Record<string, unknown>;
       };
-      expect(parsed.version).toBe(7);
+      expect(parsed.version).toBe(8);
       expect(parsed.state).not.toHaveProperty("isOpen");
     } finally {
       vi.useRealTimers();
@@ -834,7 +834,7 @@ describe("helpPanelStore persistence migration", () => {
           version: number;
           state: { hibernateSessions: Record<string, unknown> };
         };
-        expect(parsed.version).toBe(7);
+        expect(parsed.version).toBe(8);
         expect(parsed.state.hibernateSessions).toEqual({
           [slotKey("proj-a", 0)]: { sessionId: "session-a", cwd: "/tmp/a", agentId: "claude" },
         });
@@ -1276,10 +1276,25 @@ describe("helpPanelStore persistence migration", () => {
       expect(store.getState().autoLaunchEnabled).toBe(false);
     });
 
-    it("preserves autoLaunchEnabled: true from a persisted blob across rehydration", async () => {
+    it("drops a pre-v8 autoLaunchEnabled: true, which any Start click recorded (#14976)", async () => {
       const blob = JSON.stringify({
-        version: 6,
-        state: { width: 400, preferredAgentId: "claude", autoLaunchEnabled: true },
+        version: 7,
+        state: { width: 400, introDismissed: true, autoLaunchEnabled: true },
+      });
+      installLocalStorage({ [STORAGE_KEY]: blob });
+
+      const { useHelpPanelStore: store } = await import("../helpPanelStore");
+
+      expect(store.getState().autoLaunchEnabled).toBe(false);
+      // Only the recorded consent goes; the rest of the blob survives.
+      expect(store.getState().width).toBe(400);
+      expect(store.getState().introDismissed).toBe(true);
+    });
+
+    it("preserves autoLaunchEnabled: true from a v8 blob across rehydration", async () => {
+      const blob = JSON.stringify({
+        version: 8,
+        state: { width: 400, autoLaunchEnabled: true },
       });
       installLocalStorage({ [STORAGE_KEY]: blob });
 
@@ -1316,11 +1331,49 @@ describe("helpPanelStore persistence migration", () => {
           version: number;
           state: Record<string, unknown>;
         };
-        expect(parsed.version).toBe(7);
+        expect(parsed.version).toBe(8);
         expect(parsed.state.autoLaunchEnabled).toBe(true);
+
+        // And back off, persisted the same way (#14976).
+        store.getState().setAutoLaunchEnabled(false);
+        vi.advanceTimersByTime(400);
+        const off = JSON.parse(backing.get(STORAGE_KEY)!) as { state: Record<string, unknown> };
+        expect(off.state.autoLaunchEnabled).toBe(false);
       } finally {
         vi.useRealTimers();
       }
+    });
+
+    it("follows another view's change from the shared storage, as it stands now (#14976)", async () => {
+      const backing = installLocalStorage({});
+      const { useHelpPanelStore: store } = await import("../helpPanelStore");
+      store.setState({ autoLaunchEnabled: true, width: 500 });
+      const written = (enabled: boolean) =>
+        JSON.stringify({ state: { autoLaunchEnabled: enabled, width: 300 }, version: 8 });
+
+      // Another view turned it off.
+      backing.set(STORAGE_KEY, written(false));
+      window.dispatchEvent(
+        new StorageEvent("storage", { key: STORAGE_KEY, newValue: written(false) })
+      );
+      expect(store.getState().autoLaunchEnabled).toBe(false);
+      // Nothing else is taken from the event.
+      expect(store.getState().width).toBe(500);
+
+      // Then on again; a late event carrying the older value doesn't undo it.
+      backing.set(STORAGE_KEY, written(true));
+      window.dispatchEvent(
+        new StorageEvent("storage", { key: STORAGE_KEY, newValue: written(false) })
+      );
+      expect(store.getState().autoLaunchEnabled).toBe(true);
+
+      backing.set(STORAGE_KEY, "{not json");
+      window.dispatchEvent(new StorageEvent("storage", { key: STORAGE_KEY }));
+      backing.set(STORAGE_KEY, JSON.stringify({ state: { autoLaunchEnabled: "false" } }));
+      window.dispatchEvent(new StorageEvent("storage", { key: STORAGE_KEY }));
+      backing.set("other-key", written(false));
+      window.dispatchEvent(new StorageEvent("storage", { key: "other-key" }));
+      expect(store.getState().autoLaunchEnabled).toBe(true);
     });
   });
 
