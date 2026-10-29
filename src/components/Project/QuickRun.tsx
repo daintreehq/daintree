@@ -1,4 +1,4 @@
-import { Fragment, useState, useEffect, useMemo, useRef } from "react";
+import { Fragment, useId, useState, useEffect, useMemo, useRef } from "react";
 import {
   CornerDownLeft,
   GitBranch,
@@ -124,11 +124,12 @@ function QuickRunFailure({
   command: string;
   onRetry: () => void;
 }) {
+  const messageId = useId();
   return (
     <div className="mt-1 flex min-w-0 items-center gap-1.5 text-2xs text-text-primary">
       <SeverityMark severity="error" label="Error" decorative className="h-3 w-3" />
       <TruncatedTooltip content={`${summary} ${command}`}>
-        <span role="alert" className="min-w-0 flex-1 truncate">
+        <span id={messageId} role="alert" className="min-w-0 flex-1 truncate">
           {summary} <span className={COMMAND_TEXT_CLASS}>{command}</span>
         </span>
       </TruncatedTooltip>
@@ -139,6 +140,9 @@ function QuickRunFailure({
         // command was given back.
         onMouseDown={(e) => e.preventDefault()}
         onClick={onRetry}
+        // A launch and a pin can both be failing; the name stays "Retry" and the
+        // description says which one.
+        aria-describedby={messageId}
         className="-mr-1.5 shrink-0"
       >
         Retry

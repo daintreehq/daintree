@@ -740,13 +740,18 @@ describe("QuickRun", () => {
       expect(alert.textContent).toContain("Couldn't pin");
       expect(alert.textContent).toContain("docker compose up");
       // The row is still where it was, still lit, and the field still has focus.
-      expect(commandOptions().map((o) => o.getAttribute("data-command"))).toEqual([
-        "docker compose up",
-      ]);
+      const [row] = commandOptions();
+      expect(row!.getAttribute("data-command")).toBe("docker compose up");
+      expect(input.getAttribute("aria-activedescendant")).toBe(row!.id);
       expect(document.activeElement).toBe(input);
 
+      // A keyboard user activating Retry loses it when the message goes, so
+      // focus has to be handed back to the field before that.
+      const retry = screen.getByRole("button", { name: "Retry" });
+      expect(retry.getAttribute("aria-describedby")).toBe(alert.id);
+      retry.focus();
       await act(async () => {
-        fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+        fireEvent.click(retry);
       });
       expect(settingsMock.promoteToSaved).toHaveBeenCalledTimes(2);
       expect(settingsMock.promoteToSaved).toHaveBeenLastCalledWith(
@@ -769,6 +774,11 @@ describe("QuickRun", () => {
       const alert = screen.getByRole("alert");
       expect(alert.textContent).toContain("Couldn't unpin");
       expect(alert.textContent).toContain("npx serve docs");
+      // The row stays lit in the list, ready for another go.
+      const [row] = commandOptions();
+      expect(row!.getAttribute("data-command")).toBe("npx serve docs");
+      expect(input.getAttribute("aria-activedescendant")).toBe(row!.id);
+      expect(input.getAttribute("aria-expanded")).toBe("true");
 
       await act(async () => {
         fireEvent.click(screen.getByRole("button", { name: "Retry" }));
