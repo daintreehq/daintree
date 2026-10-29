@@ -388,13 +388,26 @@ describe("VoiceCorrectionService on Claude", () => {
   });
 
   it.each([
-    ["billing_error", "billing_required"],
-    ["authentication_error", "key_rejected"],
-    ["permission_error", "access_denied"],
-  ] as const)("names a %s mid-stream, where the status says 200", async (type, reason) => {
-    stubFetch(
-      streamed([frames(reply("Ok."))[0]!, { type: "error", error: { type, message: "echoes ok" } }])
-    );
+    [{ type: "billing_error", message: "echoes ok" }, "billing_required"],
+    [{ type: "authentication_error", message: "echoes ok" }, "key_rejected"],
+    [{ type: "permission_error", message: "echoes ok" }, "access_denied"],
+    [
+      {
+        type: "rate_limit_error",
+        message: "You have reached your API usage limits for the month.",
+        details: { error_code: "enforced_spend_limit_reached" },
+      },
+      "billing_required",
+    ],
+    [
+      {
+        type: "invalid_request_error",
+        message: "Your credit balance is too low to access the Anthropic API.",
+      },
+      "billing_required",
+    ],
+  ] as const)("names a %o mid-stream, where the status says 200", async (error, reason) => {
+    stubFetch(streamed([frames(reply("Ok."))[0]!, { type: "error", error }]));
     const result = await new VoiceCorrectionService().correct(
       { rawText: "ok" },
       SETTINGS,
@@ -405,6 +418,16 @@ describe("VoiceCorrectionService on Claude", () => {
       failed: true,
       cleanupFailure: { reason, provider: "anthropic" },
     });
+  });
+
+  it("sends a cleanup once more after an ordinary rate limit", async () => {
+    const fetchMock = stubFetch(
+      jsonResponse({ type: "error", error: { type: "rate_limit_error", message: "slow" } }, 429),
+      jsonResponse(message(reply("Run Vitest.")))
+    );
+    const result = await new VoiceCorrectionService().correct({ rawText: "run v test" }, SETTINGS);
+    expect(result).toMatchObject({ confirmedText: "Run Vitest.", verdict: "replaced" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("warms with the passage's own request shape, without OpenAI's store flag", async () => {

@@ -1492,6 +1492,24 @@ describe("voiceInput — session identity", () => {
       expect(await refused(ownerA, "fix the bug")).not.toHaveProperty("cleanupFailure");
     });
 
+    it("re-arms only the account whose cleanup worked", async () => {
+      await start(ownerA, "a");
+      await stop(ownerA, "a");
+      await refused(ownerA, "fix the bug");
+      shared.openaiApiKey = "sk-replaced";
+      await refused(ownerA, "fix the bug");
+
+      shared.openaiApiKey = "sk-test";
+      const worked = correct(ownerA, "a", "fix the bug");
+      (await nextRequest("fix the bug")).keep();
+      await worked;
+
+      shared.openaiApiKey = "sk-replaced";
+      expect(await refused(ownerA, "fix the bug")).not.toHaveProperty("cleanupFailure");
+      shared.openaiApiKey = "sk-test";
+      expect(await refused(ownerA, "fix the bug")).toMatchObject(TOLD);
+    });
+
     it("keeps each account's outage apart when their replies cross", async () => {
       await start(ownerA, "a");
       await stop(ownerA, "a");
@@ -1538,24 +1556,30 @@ describe("voiceInput — session identity", () => {
       expect(await refused(ownerA, "fix the bug")).toMatchObject(TOLD);
     });
 
-    it("tells nothing to a view that reloaded since it asked", async () => {
+    it.each([
+      // The frame follows the reload to the new document, with a new token.
+      [
+        "reloaded",
+        (frame: { frameToken: string; destroyed: boolean }) => (frame.frameToken = "t2"),
+      ],
+      [
+        "lost its frame",
+        (frame: { frameToken: string; destroyed: boolean }) => (frame.destroyed = true),
+      ],
+    ])("tells nothing to a view that %s since it asked", async (_label, leave) => {
       await start(ownerA, "a");
       await stop(ownerA, "a");
-      let navigated = false;
-      const frame = { isDestroyed: () => false };
-      const event = {
-        sender: ownerA,
-        // Electron's answer once the frame that asked has navigated away.
-        get senderFrame() {
-          return navigated ? null : frame;
-        },
+      const frame = {
+        frameToken: "t1",
+        destroyed: false,
+        isDestroyed: () => frame.destroyed,
       };
-      const reply = getHandler(CHANNELS.VOICE_INPUT_CORRECT)(event, {
-        rawText: "fix the bug",
-        sessionId: "a",
-      });
+      const reply = getHandler(CHANNELS.VOICE_INPUT_CORRECT)(
+        { sender: ownerA, senderFrame: frame },
+        { rawText: "fix the bug", sessionId: "a" }
+      );
       const request = await nextRequest("fix the bug");
-      navigated = true;
+      leave(frame);
       request.refuse("key_rejected");
       expect(await reply).not.toHaveProperty("cleanupFailure");
 

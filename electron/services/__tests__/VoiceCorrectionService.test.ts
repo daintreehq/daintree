@@ -393,6 +393,8 @@ describe("VoiceCorrectionService", () => {
     [429, "insufficient_quota", "billing_required"],
     [429, "credit_balance_exhausted", "billing_required"],
     [429, "project_spend_limit_exceeded", "billing_required"],
+    [429, "organization_spend_limit_exceeded", "billing_required"],
+    [429, "organization_usage_limit_exceeded", "billing_required"],
     [403, "unsupported_country_region_territory", "region_refused"],
     // The code decides whatever the status says.
     [400, "invalid_api_key", "key_rejected"],
