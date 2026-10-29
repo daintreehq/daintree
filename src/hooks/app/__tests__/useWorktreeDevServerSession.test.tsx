@@ -81,9 +81,7 @@ describe("useWorktreeDevServerSession", () => {
     expect(getByWorktree).not.toHaveBeenCalled();
 
     act(() => {
-      useWorktreeDevServerStore
-        .getState()
-        .setSession("w2", { ...makeSession("w2"), updatedAt: 2 });
+      useWorktreeDevServerStore.getState().setSession("w2", { ...makeSession("w2"), updatedAt: 2 });
     });
 
     await waitFor(() => {
