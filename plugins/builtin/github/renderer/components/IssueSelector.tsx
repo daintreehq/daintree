@@ -82,16 +82,31 @@ export function IssueSelector({
   // before the next render can't start a second request.
   const loadMoreRunRef = useRef<AbortController | null>(null);
   const debouncedQuery = useDebounce(query, 300);
+  // The query the fetch runs for. It follows the debounce once that settles on
+  // what is typed, and an early Enter sets it at once. It never steps back to
+  // an older debounced value, so a flushed "ab" stays put while "abc" is typed.
+  const [requestedQuery, setRequestedQuery] = useState("");
+  // The query and project the rows on screen were fetched for, set only when a
+  // first page lands. Enter acts on the rows only while this matches what is
+  // typed: until then they answer an earlier search.
+  const [resultScope, setResultScope] = useState<{ query: string; projectPath: string } | null>(
+    null
+  );
   const requestGenRef = useRef(0);
   const prevProjectPathRef = useRef(projectPath);
   const inputRef = useRef<HTMLInputElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
+    if (open && debouncedQuery === query) setRequestedQuery(query);
+  }, [open, query, debouncedQuery]);
+
+  useEffect(() => {
     if (prevProjectPathRef.current !== projectPath) {
       prevProjectPathRef.current = projectPath;
       setIssues([]);
       setNextCursor(null);
+      setResultScope(null);
     }
     if (!open) return;
 
@@ -105,12 +120,13 @@ export function IssueSelector({
     forgeClient
       .listIssues(projectPath, {
         state: "open",
-        search: debouncedQuery || undefined,
+        search: requestedQuery || undefined,
       })
       .then((res) => {
         if (!abortController.signal.aborted && requestGenRef.current === gen) {
           setIssues(appendUnique([], res.items));
           setNextCursor(res.hasMore ? res.nextCursor : null);
+          setResultScope({ query: requestedQuery, projectPath });
         }
       })
       .catch((err) => {
@@ -129,11 +145,24 @@ export function IssueSelector({
       });
 
     return () => abortController.abort();
-  }, [open, debouncedQuery, projectPath, retryTick]);
+  }, [open, requestedQuery, projectPath, retryTick]);
+
+  const resultsAreCurrent =
+    !loading &&
+    !loadFailed &&
+    resultScope?.query === query &&
+    resultScope.projectPath === projectPath;
+
+  // Enter typed faster than the search: run the query on screen now, or let the
+  // request already running for it land, rather than act on older rows.
+  const runTypedQuery = () => {
+    if (requestedQuery !== query) setRequestedQuery(query);
+    else if (!loading) setRetryTick((tick) => tick + 1);
+  };
 
   const loadMore = () => {
     const run = runRef.current;
-    if (loading || nextCursor === null || !run || run.signal.aborted) return;
+    if (loading || nextCursor === null || !resultScope || !run || run.signal.aborted) return;
     if (loadMoreRunRef.current === run) return;
     loadMoreRunRef.current = run;
     setLoadingMore(true);
@@ -141,7 +170,7 @@ export function IssueSelector({
     forgeClient
       .listIssues(projectPath, {
         state: "open",
-        search: debouncedQuery || undefined,
+        search: resultScope.query || undefined,
         cursor: nextCursor,
       })
       .then((res) => {
@@ -167,6 +196,8 @@ export function IssueSelector({
     setOpen(nextOpen);
     if (!nextOpen) {
       setQuery("");
+      setRequestedQuery("");
+      setResultScope(null);
       setIssues([]);
       setLoadFailed(false);
       setNextCursor(null);
@@ -185,10 +216,10 @@ export function IssueSelector({
     // Load more is the list's last option, so the cursor reaches it like a row.
     itemCount: issues.length + (hasMore ? 1 : 0),
     open,
-    // The rows are fetched, not filtered locally, so a new query replaces the
-    // whole set — the cursor rewinds with it rather than keeping a raw index
-    // that would resurface on an unrelated issue once the list widens again.
-    resetKey: debouncedQuery,
+    // The rows are fetched, not filtered locally, so a new set replaces the
+    // whole list — the cursor rewinds when it lands rather than keeping a raw
+    // index that would resurface on an unrelated issue once the list widens.
+    resetKey: resultScope,
     onSelect: (index) => {
       const issue = issues[index];
       if (issue) handleSelect(issue);
@@ -196,6 +227,25 @@ export function IssueSelector({
     },
     onClose: () => handleOpenChange(false),
   });
+
+  const handleSearchKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
+    // Consumed with no rows too: the popover portals out of the dialog, and an
+    // early Enter must not submit it before the search has answered.
+    if (
+      event.key === "Enter" &&
+      !event.metaKey &&
+      !event.ctrlKey &&
+      !event.altKey &&
+      !resultsAreCurrent
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      runTypedQuery();
+      return;
+    }
+    handleKeyDown(event);
+  };
 
   // Focus the search field on open. Paired with the panel's `onOpenAutoFocus`:
   // this covers the warm path, that one a cold mount where the lazy Radix chunk
@@ -206,7 +256,8 @@ export function IssueSelector({
     return () => cancelAnimationFrame(frame);
   }, [open]);
 
-  const trimmedQuery = debouncedQuery.trim();
+  const trimmedQuery = (resultScope?.query ?? "").trim();
+  const showStale = issues.length > 0 && !resultsAreCurrent;
 
   return (
     // Trigger and clear are siblings in one compound control, the same shape
@@ -307,7 +358,7 @@ export function IssueSelector({
           placeholder="Search issues"
           value={query}
           onValueChange={setQuery}
-          onKeyDown={handleKeyDown}
+          onKeyDown={handleSearchKeyDown}
           role="combobox"
           aria-label="Search issues"
           aria-autocomplete="list"
@@ -348,8 +399,8 @@ export function IssueSelector({
           id={LIST_ID}
           role="listbox"
           className="max-h-[300px]"
-          scrollClassName={cn("p-1", loading && issues.length > 0 && "palette-results-stale")}
-          data-stale={loading && issues.length > 0 ? "true" : undefined}
+          scrollClassName={cn("p-1", showStale && "palette-results-stale")}
+          data-stale={showStale ? "true" : undefined}
           aria-busy={loading || undefined}
         >
           {loading && issues.length === 0 ? (
