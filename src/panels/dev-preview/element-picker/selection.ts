@@ -393,6 +393,19 @@ export function matchScope(chosen: TaskScope | undefined, scopes: readonly TaskS
   });
 }
 
+/**
+ * The file a request with this scope points the agent at: where the element is
+ * written, the file a component was proven written in, or the route file.
+ * Null when the host holds no file for it.
+ */
+export function scopePlace(
+  selection: PickedSelection,
+  scope: TaskScope | undefined
+): HeldPlace | null {
+  if (scope === undefined || scope.kind === "element") return elementPlace(selection);
+  return scope.file === null ? null : { path: scope.file, line: null };
+}
+
 /** Whether a scope names a component nobody has proven the file of. */
 export function isUnresolvedScope(scope: TaskScope | undefined): boolean {
   return scope?.kind === "component" && scope.file === null;
