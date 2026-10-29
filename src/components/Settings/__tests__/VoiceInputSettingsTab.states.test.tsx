@@ -7,7 +7,7 @@ import {
   maskApiKey,
   recordingModeDescription,
 } from "../VoiceInputSettingsTab";
-import { VOICE_CLEANUP_MODELS } from "@shared/config/voiceCorrection";
+import { VOICE_CLEANUP_MODELS_BY_PROVIDER } from "@shared/config/voiceCorrection";
 import type { SuggestedDictionaryEntry, VoiceDictionaryEntry } from "@shared/types";
 
 vi.mock("@/lib/voiceInputSettingsEvents", () => ({
@@ -41,11 +41,13 @@ const BASE = {
   openaiApiKey: "",
   deepgramApiKey: "",
   xaiApiKey: "",
+  anthropicApiKey: "",
   language: "en",
   dictionary: [] as VoiceDictionaryEntry[],
   transcriptionProvider: "openai",
   transcriptionModel: "gpt-live-transcribe",
   correctionEnabled: false,
+  correctionProvider: "openai",
   correctionModel: "gpt-6.1-terra",
   correctionCustomInstructions: "",
   paragraphingStrategy: "spoken-command",
@@ -391,7 +393,7 @@ describe("VoiceInputSettingsTab copy", () => {
     }
   });
 
-  it("describes the once-per-stop pass and offers every cleanup model, the default picked", async () => {
+  it("describes the once-per-stop pass and offers the provider's cleanup models, the default picked", async () => {
     install({ correctionEnabled: true, openaiApiKey: "sk-test" });
     render(<VoiceInputSettingsTab />);
     const models = await screen.findByRole("radiogroup", { name: "Cleanup model" });
@@ -399,7 +401,7 @@ describe("VoiceInputSettingsTab copy", () => {
     expect(section?.textContent).toContain("whole passage is corrected once");
 
     const choices = within(models).getAllByRole("radio");
-    expect(choices).toHaveLength(VOICE_CLEANUP_MODELS.length);
+    expect(choices).toHaveLength(VOICE_CLEANUP_MODELS_BY_PROVIDER.openai.length);
     // Each choice says what its model is better at.
     for (const choice of choices) {
       expect(choice.getAttribute("aria-describedby")).toBeTruthy();
@@ -493,6 +495,107 @@ describe("VoiceInputSettingsTab provider switch", () => {
     expect(container.textContent).not.toContain("Incorrect API key");
     const deepgramInput = container.querySelector<HTMLInputElement>('input[type="password"]');
     expect(deepgramInput?.value).toBe("");
+  });
+});
+
+describe("VoiceInputSettingsTab cleanup provider", () => {
+  it("switches cleanup to Anthropic with Haiku in one save", async () => {
+    const setSettings = vi.fn().mockResolvedValue(undefined);
+    install({ correctionEnabled: true, openaiApiKey: "sk-test" }, { setSettings });
+    render(<VoiceInputSettingsTab />);
+
+    const trigger = await screen.findByRole("combobox", { name: "Cleanup provider" });
+    trigger.focus();
+    fireEvent.keyDown(trigger, { key: "Enter" });
+    fireEvent.keyDown(await screen.findByRole("option", { name: "Anthropic" }), { key: "Enter" });
+
+    await waitFor(() =>
+      expect(setSettings).toHaveBeenCalledWith({
+        correctionProvider: "anthropic",
+        correctionModel: "claude-haiku-5-5",
+      })
+    );
+  });
+
+  it("offers the Claude models behind the Anthropic key while OpenAI transcribes", async () => {
+    install({
+      correctionEnabled: true,
+      openaiApiKey: "sk-test",
+      correctionProvider: "anthropic",
+      correctionModel: "claude-haiku-5-5",
+    });
+    const { container } = render(<VoiceInputSettingsTab />);
+
+    const models = await screen.findByRole("radiogroup", { name: "Cleanup model" });
+    const names = within(models)
+      .getAllByRole("radio")
+      .map((choice) => choice.textContent);
+    expect(names).toEqual([expect.stringMatching(/Haiku/), expect.stringMatching(/Sonnet/)]);
+    const section = container.querySelector("#voice-ai-correction");
+    expect(section?.textContent).toContain("Anthropic API key");
+    expect(section?.textContent).not.toContain("covers transcription and cleanup");
+    expect(section?.textContent).toContain("Cleanup runs on Anthropic. Add an Anthropic API key");
+  });
+});
+
+describe("VoiceInputSettingsTab file references", () => {
+  it("stay switchable on their own OpenAI key while the Anthropic key is missing", async () => {
+    install({
+      correctionEnabled: true,
+      openaiApiKey: "sk-test",
+      correctionProvider: "anthropic",
+      correctionModel: "claude-haiku-5-5",
+    });
+    render(<VoiceInputSettingsTab />);
+
+    const models = await screen.findByRole("radiogroup", { name: "Cleanup model" });
+    expect(within(models).getAllByRole("radio")[0]!.hasAttribute("disabled")).toBe(true);
+    const fileRefs = await screen.findByRole("switch", { name: "Resolve file references" });
+    expect(fileRefs.hasAttribute("disabled")).toBe(false);
+  });
+
+  it("offer an OpenAI key row when neither selected provider shows one", async () => {
+    const setSettings = vi.fn().mockResolvedValue(undefined);
+    install(
+      {
+        transcriptionProvider: "deepgram",
+        deepgramApiKey: "dg_1",
+        correctionEnabled: true,
+        anthropicApiKey: "sk-ant-1",
+        correctionProvider: "anthropic",
+        correctionModel: "claude-haiku-5-5",
+      },
+      { setSettings }
+    );
+    const { container } = render(<VoiceInputSettingsTab />);
+
+    const fileRefs = await screen.findByRole("switch", { name: "Resolve file references" });
+    expect(fileRefs.hasAttribute("disabled")).toBe(true);
+    const input = await waitFor(() => {
+      const el = container.querySelector<HTMLInputElement>(
+        "#voice-ai-correction #voice-stt-openai-key input"
+      );
+      if (!el) throw new Error("no OpenAI key input yet");
+      return el;
+    });
+    fireEvent.change(input, { target: { value: "sk-proj-filelinks123" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() =>
+      expect(setSettings).toHaveBeenCalledWith({ openaiApiKey: "sk-proj-filelinks123" })
+    );
+  });
+
+  it("show no second OpenAI key row when Speech-to-text already has it", async () => {
+    install({
+      correctionEnabled: true,
+      openaiApiKey: "sk-test",
+      correctionProvider: "anthropic",
+      correctionModel: "claude-haiku-5-5",
+    });
+    const { container } = render(<VoiceInputSettingsTab />);
+    await screen.findByRole("switch", { name: "Resolve file references" });
+    expect(container.querySelectorAll("#voice-stt-openai-key")).toHaveLength(1);
+    expect(container.querySelector("#voice-ai-correction #voice-stt-openai-key")).toBeNull();
   });
 });
 

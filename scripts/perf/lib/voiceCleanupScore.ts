@@ -586,6 +586,10 @@ export interface ModelPrice {
 export const MODEL_PRICES: Readonly<Record<string, ModelPrice>> = {
   "gpt-6-luna": { input: 0.1, cachedInput: 0.01, cacheWrite: 0.125, output: 0.5 },
   "gpt-6.1-terra": { input: 1, cachedInput: 0.05, cacheWrite: 1.25, output: 5 },
+  // Anthropic's rates for prompts of 100K tokens or fewer: cache reads at 0.1
+  // times input, five-minute cache writes at 1.25 times.
+  "claude-haiku-5-5": { input: 0.1, cachedInput: 0.01, cacheWrite: 0.125, output: 0.5 },
+  "claude-sonnet-5-5": { input: 2, cachedInput: 0.2, cacheWrite: 2.5, output: 10 },
 };
 
 export interface TokenUsage {

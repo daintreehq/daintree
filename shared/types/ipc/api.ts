@@ -2996,7 +2996,14 @@ export type VoiceTranscriptionProvider = "openai" | "deepgram" | "grok";
  * `shared/config/voiceCorrection.ts` lists the same models
  * (`VOICE_CLEANUP_MODELS`) and names the default (`VOICE_CLEANUP_AI_MODEL`).
  */
-export type VoiceCorrectionModel = "gpt-6.1-terra" | "gpt-6-luna";
+export type VoiceCorrectionModel =
+  "gpt-6.1-terra" | "gpt-6-luna" | "claude-haiku-5-5" | "claude-sonnet-5-5";
+
+/**
+ * The API cleanup and spoken rewrite go to. Each has its own models
+ * (`VOICE_CLEANUP_MODELS_BY_PROVIDER`) and its own key.
+ */
+export type VoiceCorrectionProvider = "openai" | "anthropic";
 
 /**
  * Paragraphing strategy for voice dictation.
@@ -3035,6 +3042,8 @@ export interface VoiceInputSettings {
   deepgramApiKey: string;
   /** xAI API key for the Grok transcription provider. Empty string when unset. */
   xaiApiKey: string;
+  /** Anthropic API key for Claude cleanup. Empty string when unset. */
+  anthropicApiKey: string;
   language: string;
   /**
    * The user's dictionary, oldest entry first. Main owns every write: the
@@ -3046,6 +3055,9 @@ export interface VoiceInputSettings {
   transcriptionProvider: VoiceTranscriptionProvider;
   transcriptionModel: VoiceTranscriptionModel;
   correctionEnabled: boolean;
+  /** Which API cleans up and rewrites. Defaults to "openai". */
+  correctionProvider: VoiceCorrectionProvider;
+  /** One of the provider's own models (`VOICE_CLEANUP_MODELS_BY_PROVIDER`). */
   correctionModel: VoiceCorrectionModel;
   correctionCustomInstructions: string;
   /** Controls how paragraph breaks are inserted during dictation. Defaults to "spoken-command". */

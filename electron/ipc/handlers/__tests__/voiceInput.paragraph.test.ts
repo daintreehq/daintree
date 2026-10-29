@@ -2957,6 +2957,53 @@ describe("voiceInput — rewrite instructions", () => {
     }
   });
 
+  it("sends cleanup and spoken rewrite to Claude with the Anthropic key", async () => {
+    const { store } = await import("../../../store.js");
+    const stored = vi.mocked(store.get).getMockImplementation()!;
+    const withClaude = (patch: Record<string, unknown>) =>
+      vi.mocked(store.get).mockImplementation((key: string) =>
+        key === "voiceInput"
+          ? {
+              ...(stored(key) as Record<string, unknown>),
+              anthropicApiKey: "sk-ant-test",
+              correctionProvider: "anthropic",
+              ...patch,
+            }
+          : stored(key)
+      );
+    const handleCorrect = getHandler("voice-input:correct") as (
+      e: unknown,
+      request: unknown
+    ) => Promise<unknown>;
+    const handleRewrite = getHandler("voice-input:rewrite") as (
+      e: unknown,
+      request: unknown
+    ) => Promise<unknown>;
+    try {
+      withClaude({ correctionModel: "claude-sonnet-5-5" });
+      await handleCorrect(fakeEvent, { rawText: "helo world" });
+      await handleRewrite(fakeEvent, { selectedText: "a long sentence", instruction: "shorter" });
+      expect(shared.correctionCalls.at(-1)?.settings).toMatchObject({
+        model: "claude-sonnet-5-5",
+        apiKey: "sk-ant-test",
+      });
+      expect(shared.rewriteCalls.at(-1)?.settings).toMatchObject({
+        model: "claude-sonnet-5-5",
+        apiKey: "sk-ant-test",
+      });
+
+      // An OpenAI model left behind when the provider changed is Claude's default.
+      withClaude({ correctionModel: "gpt-6.1-terra" });
+      await handleCorrect(fakeEvent, { rawText: "helo again" });
+      expect(shared.correctionCalls.at(-1)?.settings).toMatchObject({
+        model: "claude-haiku-5-5",
+        apiKey: "sk-ant-test",
+      });
+    } finally {
+      vi.mocked(store.get).mockImplementation(stored);
+    }
+  });
+
   it("rewrite validates the payload and hands it to the correction model", async () => {
     const handleRewrite = getHandler("voice-input:rewrite") as (
       e: unknown,

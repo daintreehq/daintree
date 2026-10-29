@@ -29,6 +29,7 @@ describe("VoiceTranscriptionService integration", () => {
           openaiApiKey: OPENAI_API_KEY,
           deepgramApiKey: "",
           xaiApiKey: "",
+          anthropicApiKey: "",
           language: "en",
           dictionary: [],
           transcriptionProvider: "openai",
@@ -39,6 +40,7 @@ describe("VoiceTranscriptionService integration", () => {
           // session.update, so this is the only place that failure surfaces.
           keyterms: ["Daintree", "PtyClient", "AC-42"],
           correctionEnabled: false,
+          correctionProvider: "openai",
           correctionModel: "gpt-6.1-terra",
           correctionCustomInstructions: "",
           paragraphingStrategy: "spoken-command",
