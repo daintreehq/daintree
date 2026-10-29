@@ -382,7 +382,7 @@ export function registerTerminalLifecycleActions(
     id: "terminal.startHeld",
     title: "Start held pane",
     description:
-      "Start a pane restore held, in place under the same id, rather than launching a replacement beside it. Only the conversation its hold recorded can be resumed. Returns once the launch is queued; watch its status before sending.",
+      "Start a held pane in place under its id, instead of launching a replacement beside it. Only the conversation its hold recorded can be resumed. Returns once the launch is queued; watch its status before sending.",
     category: "terminal",
     kind: "command",
     danger: "confirm",

@@ -548,7 +548,12 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // first seen meeting the condition, that it only observes and never dials,
   // holds or acts, and that watches expire and can be cancelled or listed.
   // In-app only, off the external surface.
-  const MAX_COHORT_TOTAL_BYTES = 22_400;
+  // 22_400 → 22_600 for `terminal.startHeld` (#15270), measured at 22_585 B.
+  // What the prose has to carry is that the held pane starts in place rather
+  // than beside a replacement, that only its recorded conversation resumes, and
+  // that the launch is only queued. `terminal.restart` gave back 14 B. In-app
+  // only, off the external surface.
+  const MAX_COHORT_TOTAL_BYTES = 22_600;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 
@@ -1380,6 +1385,8 @@ describe("destructive-action danger metadata", () => {
       terminalIds: ["term-placeholder"],
       // terminal.restartOnPreset names the preset to respawn on.
       presetId: "preset-placeholder",
+      // terminal.startHeld names how the held pane starts.
+      start: "fresh",
       // session.bookmarkAndClose/delete need label + sessionId to clear arg
       // validation and reach the confirm gate.
       label: "placeholder",

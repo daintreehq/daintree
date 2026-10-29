@@ -910,7 +910,11 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // 153_342): `host.switch` takes `projectId` and `terminalId`, so another
   // host's waiting notice lands on the agent's terminal. In-app only, so the
   // external ceiling does not move.
-  const MAX_COHORT_PAYLOAD_BYTES = 153_540;
+  // 153_540 → 154_070 for #15270, measured at 154_060 B: `terminal.startHeld`
+  // joins the full tier beside `terminal.restart`, so an assistant that finds a
+  // held pane starts it in place instead of launching a replacement. In-app
+  // only, so the external ceiling does not move.
+  const MAX_COHORT_PAYLOAD_BYTES = 154_070;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 
