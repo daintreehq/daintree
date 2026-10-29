@@ -2125,6 +2125,23 @@ describe("recipeStore", () => {
         expect(call.agentLaunchFlags).toEqual(expect.arrayContaining(["--careful"]));
       });
 
+      it("launches the bare agent where the worktree saved Agent default (#15054)", async () => {
+        getAgentSettingsMock.mockResolvedValue({
+          agents: {
+            claude: {
+              presetId: "fast",
+              worktreePresets: { "worktree-1": null },
+              customPresets: [{ id: "fast", name: "Fast", args: ["--fast"] }],
+            },
+          },
+        });
+
+        const call = await runSingleAgentRecipe({ type: "claude", title: "Claude", env: {} });
+
+        expect(call.command).not.toContain("--fast");
+        expect(call.agentPresetId).toBeUndefined();
+      });
+
       it("lets recipe-defined env win over preset env on key conflicts", async () => {
         getAgentSettingsMock.mockResolvedValue({
           agents: {

@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
-import { getEffectiveAgentConfig } from "../../config/agentRegistry.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { getEffectiveAgentConfig, setUserRegistry } from "../../config/agentRegistry.js";
 import type { AgentSettings } from "../../types/agentSettings.js";
 import { buildAgentLaunchPlan, type AgentLaunchPlanInput } from "../agentLaunchPlan.js";
 
@@ -93,6 +93,76 @@ describe("buildAgentLaunchPlan", () => {
     expect(plan.preset).toBeUndefined();
     expect(plan.title).toBe("Claude");
     expect(plan.titleMode).toBeUndefined();
+  });
+
+  it("launches the bare agent from a worktree saved as null while other worktrees inherit (#15054)", async () => {
+    const onStalePreset = vi.fn();
+    const settings = settingsWith({
+      presetId: "global",
+      worktreePresets: { "/repo-wt/a": null },
+      customPresets: PRESETS,
+    });
+
+    const bare = await buildAgentLaunchPlan(input({ settings, onStalePreset }));
+    expect(bare.preset).toBeUndefined();
+    expect(bare.env).toBeUndefined();
+    expect(bare.title).toBe("Claude");
+    // A deliberate bare pick is not a vanished preset.
+    expect(onStalePreset).not.toHaveBeenCalled();
+
+    const inheriting = await buildAgentLaunchPlan(
+      input({ settings, worktreeId: "/repo-wt/b", onStalePreset })
+    );
+    expect(inheriting.preset?.id).toBe("global");
+  });
+
+  describe("with a registry default preset", () => {
+    const AGENT_ID = "registry-default-agent";
+    afterEach(() => setUserRegistry({}));
+
+    it("keeps the registry default out of a worktree saved as null", async () => {
+      const config = {
+        ...getEffectiveAgentConfig("claude")!,
+        id: AGENT_ID,
+        name: "Registry Agent",
+        presets: [{ id: "registry", name: "Registry", env: { WHO: "registry" } }],
+        defaultPresetId: "registry",
+      };
+      setUserRegistry({ [AGENT_ID]: config });
+      const launch = (worktreeId: string) =>
+        buildAgentLaunchPlan(
+          input({
+            agentId: AGENT_ID,
+            agentConfig: config,
+            worktreeId,
+            settings: {
+              agents: { [AGENT_ID]: { worktreePresets: { "/repo-wt/a": null } } },
+            },
+          })
+        );
+
+      // An inheriting worktree with nothing saved gets the registry default...
+      expect((await launch("/repo-wt/b")).preset?.id).toBe("registry");
+      // ...and the worktree that chose the bare agent does not.
+      const bare = await launch("/repo-wt/a");
+      expect(bare.preset).toBeUndefined();
+      expect(bare.env).toBeUndefined();
+    });
+  });
+
+  it("lets an explicitly named preset override a worktree saved as null", async () => {
+    const plan = await buildAgentLaunchPlan(
+      input({
+        settings: settingsWith({
+          presetId: "global",
+          worktreePresets: { "/repo-wt/a": null },
+          customPresets: PRESETS,
+        }),
+        options: { presetId: "scoped" },
+      })
+    );
+
+    expect(plan.preset?.id).toBe("scoped");
   });
 
   it("layers the caller's environment over the agent's and the preset's", async () => {

@@ -117,7 +117,9 @@ vi.mock("@/services/ActionService", () => ({
 // Pin state. `dispatchToolbarVisibility` is deliberately NOT mocked — it is the
 // seam Settings → Toolbar shares, and mocking it would let the launcher write
 // the pin any way it liked while the suite still passed.
-let mockAgentSettings: { agents?: Record<string, { presetId?: string }> } | null = { agents: {} };
+let mockAgentSettings: {
+  agents?: Record<string, { presetId?: string; worktreePresets?: Record<string, string | null> }>;
+} | null = { agents: {} };
 // This machine's toolbar pins (#14702).
 let mockAgentPins: Record<string, boolean> = {};
 let mockAgentAvailability: Record<string, string> = {};
@@ -2489,6 +2491,22 @@ describe("DockLaunchButton — migrated toolbar affordances (#11691)", () => {
       expect(qualifierTextOf(rowByName(container, "Claude"))).toBe("");
     });
 
+    it("keeps a worktree's bare-agent pick from hiding the agent-level preset elsewhere", () => {
+      mockAgentSettings = {
+        agents: { claude: { presetId: "fast", worktreePresets: { "wt-1": null } } },
+      };
+      const bare = renderButton({ agents: READY, placement: "dock", activeWorktreeId: "wt-1" });
+      expect(qualifierTextOf(rowByName(bare.container, "Claude"))).toBe("");
+      bare.unmount();
+
+      const inheriting = renderButton({
+        agents: READY,
+        placement: "dock",
+        activeWorktreeId: "wt-2",
+      });
+      expect(qualifierTextOf(rowByName(inheriting.container, "Claude"))).toBe("Fast");
+    });
+
     it("does not expand until asked, and keeps presets out of the flat list", () => {
       const { container } = renderButton({ agents: READY });
       expect(presetRows(container)).toHaveLength(0);
@@ -2869,20 +2887,19 @@ describe("DockLaunchButton — migrated toolbar affordances (#11691)", () => {
       mockMergedPresets = [{ id: "fast", name: "Fast" }];
     });
 
-    it("clears the saved preset when the Default row launches, in either placement", () => {
-      const { container } = renderButton({
-        agents: READY,
-        placement: "toolbar",
-        activeWorktreeId: "wt-1",
-      });
-      fireEvent.keyDown(searchInput(container), { key: "ArrowRight" });
-      fireEvent.click(presetRows(container)[0]!);
+    it.each(["toolbar", "dock"] as const)(
+      "saves the bare agent to the active worktree alone when the Default row launches (%s)",
+      (placement) => {
+        const { container } = renderButton({ agents: READY, placement, activeWorktreeId: "wt-1" });
+        fireEvent.keyDown(searchInput(container), { key: "ArrowRight" });
+        fireEvent.click(presetRows(container)[0]!);
 
-      // Both halves of "explicit default": the agent-level preset and the
-      // worktree-scoped override.
-      expect(updateAgentMock).toHaveBeenCalledWith("claude", { presetId: undefined });
-      expect(updateWorktreePresetMock).toHaveBeenCalledWith("claude", "wt-1", undefined);
-    });
+        // The agent-level preset is every other worktree's default, so an
+        // explicit Default here must leave it alone (#15054).
+        expect(updateWorktreePresetMock).toHaveBeenCalledWith("claude", "wt-1", null);
+        expect(updateAgentMock).not.toHaveBeenCalled();
+      }
+    );
 
     it("persists a chosen preset to the active worktree", () => {
       const { container } = renderButton({ agents: READY, activeWorktreeId: "wt-1" });

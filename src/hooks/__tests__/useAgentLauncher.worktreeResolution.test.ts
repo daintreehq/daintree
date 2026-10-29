@@ -412,6 +412,14 @@ describe("resolveEffectivePresetId helper", () => {
     ).toBe("global");
   });
 
+  it("resolves a null worktree slot to the bare agent without falling through (#15054)", () => {
+    const entry: AgentSettingsEntry = { presetId: "global", worktreePresets: { "wt-A": null } };
+    expect(resolveEffectivePresetId(entry, "wt-A")).toBeUndefined();
+    // Every other worktree keeps inheriting the agent-level default.
+    expect(resolveEffectivePresetId(entry, "wt-B")).toBe("global");
+    expect(resolveEffectivePresetId(entry, null)).toBe("global");
+  });
+
   it("returns agent-level default when worktreeId is null", () => {
     expect(resolveEffectivePresetId({ presetId: "global" }, null)).toBe("global");
   });

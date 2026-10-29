@@ -111,12 +111,17 @@ export async function buildAgentLaunchPlan(input: AgentLaunchPlanInput): Promise
 
   if (agentConfig) {
     const entry = input.settings?.agents?.[agentId] ?? {};
+    const scopedId =
+      worktreeId && entry.worktreePresets ? entry.worktreePresets[worktreeId] : undefined;
     // null = explicitly default — skip preset lookup entirely
     // undefined = use saved preset for this worktree (or agent-level
     //   default, or nothing). Worktree-scoped override wins over the
     //   agent-level `presetId` so switching worktrees doesn't silently
-    //   surface another worktree's pick.
-    const explicitDefault = options?.presetId === null;
+    //   surface another worktree's pick. A worktree slot saved as `null` is
+    //   the same explicit default, so the agent-level and registry defaults
+    //   stay out of this worktree's launches.
+    const explicitDefault =
+      options?.presetId === null || (options?.presetId === undefined && scopedId === null);
     const savedPresetId = resolveEffectivePresetId(entry, worktreeId);
     const resolvedPresetId = explicitDefault ? undefined : (options?.presetId ?? savedPresetId);
     const primaryPreset =
@@ -136,8 +141,6 @@ export async function buildAgentLaunchPlan(input: AgentLaunchPlanInput): Promise
     // this, a deleted scoped preset would launch preset-free even when a valid
     // global fallback exists. The stale scoped slot is still reported below so
     // the next launch resolves directly against global.
-    const scopedId =
-      worktreeId && entry.worktreePresets ? entry.worktreePresets[worktreeId] : undefined;
     if (
       !primaryPreset &&
       isAgent &&
