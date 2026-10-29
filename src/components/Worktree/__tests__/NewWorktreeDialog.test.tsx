@@ -100,7 +100,9 @@ vi.mock("@/store/panelStore", () => {
 });
 
 const mockGenerateRecipeFromActiveTerminals = vi.fn().mockReturnValue([]);
-const recipeFixtures = vi.hoisted(() => ({ recipes: [] as unknown[] }));
+const recipeFixtures = vi.hoisted(() => ({
+  recipes: [] as { id: string; name: string; terminals: { type: string }[] }[],
+}));
 vi.mock("@/store/recipeStore", () => {
   const recipeState = {
     get recipes() {
@@ -243,7 +245,11 @@ vi.mock("@/components/Worktree/hooks/useRecipePicker", async (importOriginal) =>
     recipePickerCalls.last = args;
     return {
       selectedRecipeId: recipePickerCalls.selected?.id ?? null,
-      setSelectedRecipeId: vi.fn(),
+      // Stands in for the hook's state: a pick also dispatches its touched
+      // flag, and the re-render that follows reads the new selection.
+      setSelectedRecipeId: (id: string | null) => {
+        recipePickerCalls.selected = recipeFixtures.recipes.find((r) => r.id === id) ?? null;
+      },
       recipePickerOpen: false,
       setRecipePickerOpen: vi.fn(),
       recipeSelectionTouchedRef: { current: false },
@@ -2532,6 +2538,17 @@ describe("NewWorktreeDialog — remembered setup on discard (#14996)", () => {
     });
   }
 
+  it("closes straight away when nothing was changed", async () => {
+    const onClose = vi.fn();
+    renderDialog({ onClose });
+    await advanceTimersGradually(500);
+
+    await cancel();
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "Discard changes" })).toBeNull();
+  });
+
   it("asks before discarding a changed agent, and keeps the remembered one", async () => {
     const onClose = vi.fn();
     renderDialog({ onClose });
@@ -2566,7 +2583,7 @@ describe("NewWorktreeDialog — remembered setup on discard (#14996)", () => {
 
   it("remembers the picked recipe and agent once the worktree is created", async () => {
     recipeFixtures.recipes = [WORK];
-    recipePickerCalls.selected = WORK;
+    recipePickerCalls.selected = { id: CLONE_LAYOUT_ID, name: "", terminals: [] };
     renderDialog();
     await advanceTimersGradually(500);
 
@@ -2578,12 +2595,15 @@ describe("NewWorktreeDialog — remembered setup on discard (#14996)", () => {
       });
     });
     await advanceTimersGradually(500);
+    expect(mockSetLastRecipe).not.toHaveBeenCalled();
+    expect(mockSetLastAgent).not.toHaveBeenCalled();
+
     await act(async () => {
       fireEvent.click(screen.getByTestId("create-worktree-button"));
     });
 
-    expect(mockSetLastRecipe).toHaveBeenCalledWith("test-project", "global-work");
-    expect(mockSetLastAgent).toHaveBeenCalledWith("test-project", "claude");
+    expect(mockSetLastRecipe.mock.calls).toEqual([["test-project", "global-work"]]);
+    expect(mockSetLastAgent.mock.calls).toEqual([["test-project", "claude"]]);
   });
 
   it("writes nothing when Create stops at validation", async () => {
