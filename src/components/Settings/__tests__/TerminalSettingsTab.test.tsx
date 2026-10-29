@@ -340,14 +340,18 @@ describe("TerminalSettingsTab panel limit editing", () => {
     expect(usePanelLimitStore.getState().hardLimit).toBe(50);
   });
 
-  it("commits on Enter", () => {
+  it.each([
+    ["Soft warning", "softWarningLimit", 12, 10],
+    ["Confirmation required", "confirmationLimit", 20, 25],
+    ["Hard limit", "hardLimit", 32, 50],
+  ] as const)("commits %s on Enter", (name, key, before, typed) => {
     renderSubtab("performance");
-    const confirm = field("Confirmation required");
+    const input = field(name);
 
-    fireEvent.change(confirm, { target: { value: "25" } });
-    expect(usePanelLimitStore.getState().confirmationLimit).toBe(20);
-    fireEvent.keyDown(confirm, { key: "Enter" });
-    expect(usePanelLimitStore.getState().confirmationLimit).toBe(25);
+    fireEvent.change(input, { target: { value: String(typed) } });
+    expect(usePanelLimitStore.getState()[key]).toBe(before);
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(usePanelLimitStore.getState()[key]).toBe(typed);
   });
 
   it("corrects an out-of-range number when it is committed, not while typing", () => {
@@ -373,18 +377,35 @@ describe("TerminalSettingsTab panel limit editing", () => {
     expect(soft.value).toBe("12");
   });
 
-  it("drops a draft when the reset button changes the stored number", async () => {
-    getHardwareInfo.mockResolvedValue({ totalMemoryBytes: 16 * 1024 ** 3, logicalCpuCount: 8 });
-    renderSubtab("performance");
-    await act(async () => {});
-    const soft = field("Soft warning");
+  it.each([
+    [
+      "Soft warning",
+      "softWarningLimit",
+      "Reset soft warning to the hardware-recommended value",
+      16,
+    ],
+    [
+      "Confirmation required",
+      "confirmationLimit",
+      "Reset confirmation limit to the hardware-recommended value",
+      30,
+    ],
+    ["Hard limit", "hardLimit", "Reset hard limit to the hardware-recommended value", 48],
+  ] as const)(
+    "resets %s over a draft to the recommended number",
+    async (name, key, button, rec) => {
+      getHardwareInfo.mockResolvedValue({ totalMemoryBytes: 16 * 1024 ** 3, logicalCpuCount: 8 });
+      renderSubtab("performance");
+      await act(async () => {});
+      const input = field(name);
 
-    fireEvent.change(soft, { target: { value: "7" } });
-    fireEvent.click(
-      screen.getByRole("button", { name: "Reset soft warning to the hardware-recommended value" })
-    );
-    expect(soft.value).toBe("16");
-  });
+      fireEvent.change(input, { target: { value: "7" } });
+      fireEvent.click(screen.getByRole("button", { name: button }));
+
+      expect(usePanelLimitStore.getState()[key]).toBe(rec);
+      expect(input.value).toBe(String(rec));
+    }
+  );
 
   it("corrects a number below the minimum on commit and ignores a decimal", () => {
     renderSubtab("performance");
@@ -416,7 +437,10 @@ describe("TerminalSettingsTab panel limit editing", () => {
   });
 
   it("applies the hardware-recommended limits over a draft in every field", async () => {
+    // Already on the recommendation, so the reset changes no stored number and only
+    // dropping the drafts can bring the fields back to it.
     getHardwareInfo.mockResolvedValue({ totalMemoryBytes: 16 * 1024 ** 3, logicalCpuCount: 8 });
+    usePanelLimitStore.setState({ softWarningLimit: 16, confirmationLimit: 30, hardLimit: 48 });
     renderSubtab("performance");
     await act(async () => {});
 
@@ -432,6 +456,9 @@ describe("TerminalSettingsTab panel limit editing", () => {
     expect(field("Soft warning").value).toBe("16");
     expect(field("Confirmation required").value).toBe("30");
     expect(field("Hard limit").value).toBe("48");
+
+    fireEvent.blur(field("Soft warning"));
+    expect(usePanelLimitStore.getState().softWarningLimit).toBe(16);
   });
 
   describe("limits out of order", () => {

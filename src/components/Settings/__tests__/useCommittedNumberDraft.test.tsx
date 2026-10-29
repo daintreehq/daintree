@@ -6,10 +6,21 @@ import { useCommittedNumberDraft } from "../useCommittedNumberDraft";
 
 const BOUNDS = { min: 4, max: 100 };
 
-function Field({ onCommit, initial = 12 }: { onCommit: (v: number) => void; initial?: number }) {
+function Field({
+  onCommit,
+  initial = 12,
+  bounds = BOUNDS,
+  keepStored = false,
+}: {
+  onCommit: (v: number) => void;
+  initial?: number;
+  bounds?: { min: number; max: number };
+  /** Leave the stored number alone on commit, so only the draft says a write happened. */
+  keepStored?: boolean;
+}) {
   const [stored, setStored] = useState(initial);
-  const draft = useCommittedNumberDraft(stored, BOUNDS, (v) => {
-    setStored(v);
+  const draft = useCommittedNumberDraft(stored, bounds, (v) => {
+    if (!keepStored) setStored(v);
     onCommit(v);
   });
   return (
@@ -36,6 +47,7 @@ describe("useCommittedNumberDraft", () => {
     render(<Field onCommit={onCommit} />);
 
     fireEvent.change(input(), { target: { value: "2" } });
+    fireEvent.keyDown(input(), { key: "0" });
     fireEvent.change(input(), { target: { value: "20" } });
     expect(input().value).toBe("20");
     expect(onCommit).not.toHaveBeenCalled();
@@ -47,13 +59,14 @@ describe("useCommittedNumberDraft", () => {
 
   it("commits on Enter without committing again when the field then blurs", () => {
     const onCommit = vi.fn();
-    render(<Field onCommit={onCommit} />);
+    render(<Field onCommit={onCommit} keepStored />);
 
     fireEvent.change(input(), { target: { value: "30" } });
     fireEvent.keyDown(input(), { key: "Enter" });
-    fireEvent.blur(input());
-
     expect(onCommit).toHaveBeenCalledExactlyOnceWith(30);
+
+    fireEvent.blur(input());
+    expect(onCommit).toHaveBeenCalledTimes(1);
   });
 
   it("corrects a number outside the bounds to the nearest bound only when committed", () => {
@@ -70,6 +83,20 @@ describe("useCommittedNumberDraft", () => {
     fireEvent.blur(input());
     expect(onCommit).toHaveBeenLastCalledWith(100);
     expect(input().value).toBe("100");
+  });
+
+  it("corrects to the bounds it was given", () => {
+    const onCommit = vi.fn();
+    render(<Field onCommit={onCommit} initial={20} bounds={{ min: 10, max: 40 }} />);
+
+    fireEvent.change(input(), { target: { value: "5" } });
+    fireEvent.blur(input());
+    expect(onCommit).toHaveBeenLastCalledWith(10);
+
+    fireEvent.change(input(), { target: { value: "75" } });
+    fireEvent.blur(input());
+    expect(onCommit).toHaveBeenLastCalledWith(40);
+    expect(input().value).toBe("40");
   });
 
   it("shows the corrected number even when it equals the one already stored", () => {
