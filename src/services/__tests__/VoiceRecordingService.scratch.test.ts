@@ -487,6 +487,7 @@ describe("VoiceRecordingService — a scratch that removes nothing says why (#14
     Reflect.set(service, "sessionId", SESSION_ID);
     vi.mocked(window.electron.voiceInput.stop).mockImplementationOnce(async () => {
       complete("Scratch that.", "a");
+      return { rawText: null };
     });
 
     await service.stop("Dictation stopped.");
