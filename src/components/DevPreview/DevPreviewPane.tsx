@@ -930,7 +930,8 @@ export function DevPreviewPane({
       showRestoreControl={showRestoreControl}
       isMultiPanelGrid={isMultiPanelGrid}
       kind="dev-preview"
-      headerContent={headerContent}
+      // An endpoint preview runs no dev command, so a script pick couldn't change it.
+      headerContent={endpoint === undefined ? headerContent : null}
       className={
         phaseLabel === "Compiling"
           ? "panel-state-compiling"

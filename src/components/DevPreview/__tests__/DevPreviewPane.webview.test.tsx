@@ -2359,20 +2359,55 @@ describe("DevPreviewPane webview lifecycle regression", () => {
     };
 
     it("runs the picked script on a preview with its own command, leaving the project default alone (#15026)", async () => {
+      let ownCommand = "npm run dev";
+      terminalStoreState.getTerminal.mockImplementation(() => ({
+        kind: "dev-preview",
+        id: "dev-preview-panel-1",
+        browserHistory: { past: [], present: "http://localhost:5173/", future: [] },
+        browserZoom: 1.0,
+        devPreviewConsoleOpen: false,
+        devCommand: ownCommand,
+        devPreviewScrollPosition: scrollPositionRef.current,
+      }));
+      terminalStoreState.setDevPreviewCommand.mockImplementation((_id: string, command: string) => {
+        ownCommand = command;
+      });
       withTwoScripts();
-      render(<DevPreviewPane {...baseProps} />);
+      const { rerender } = render(<DevPreviewPane {...baseProps} />);
 
       await act(async () => {
         fireEvent.click(screen.getByRole("menuitem", { name: /Start.*npm start/ }));
         await Promise.resolve();
       });
+      rerender(<DevPreviewPane {...baseProps} />);
 
       expect(terminalStoreState.setDevPreviewCommand).toHaveBeenCalledWith(
         "dev-preview-panel-1",
         "npm start"
       );
+      const lastDevServerArgs = (useDevServerMock.mock.lastCall as unknown[] | undefined)?.[0] as
+        | { devCommand?: string }
+        | undefined;
+      expect(lastDevServerArgs?.devCommand).toBe("npm start");
       expect(saveSettingsMock).not.toHaveBeenCalled();
       expect(devServerStateRef.current.stop).not.toHaveBeenCalled();
+    });
+
+    it("offers no script picker on a resource endpoint preview", () => {
+      terminalStoreState.getTerminal.mockImplementation(() => ({
+        kind: "dev-preview",
+        id: "dev-preview-panel-1",
+        browserHistory: { past: [], present: "", future: [] },
+        browserZoom: 1.0,
+        devPreviewConsoleOpen: false,
+        devCommand: "npm run dev",
+        previewsResourceEndpoint: true,
+        devPreviewScrollPosition: scrollPositionRef.current,
+      }));
+      withTwoScripts();
+      render(<DevPreviewPane {...baseProps} />);
+
+      expect(screen.queryByLabelText(/^Dev script:/)).toBeNull();
     });
 
     it("moves the project default from an inheriting preview without stopping it", async () => {

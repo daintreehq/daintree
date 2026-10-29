@@ -1489,6 +1489,33 @@ describe("useDevServer adversarial races", () => {
     });
   });
 
+  it("relaunches a running server on a switched command through ensure, never a user stop (#15026)", async () => {
+    getStateMock.mockImplementation(async (request: { projectId: string }) =>
+      buildState({
+        panelId: "panel-1",
+        projectId: request.projectId,
+        status: "running",
+        terminalId: "term-1",
+        url: "http://localhost:3000/",
+      })
+    );
+
+    const { rerender } = renderHook(
+      ({ devCommand }: { devCommand: string }) =>
+        useDevServer({ panelId: "panel-1", devCommand, cwd: "/repo" }),
+      { initialProps: { devCommand: "npm run dev" } }
+    );
+    await waitFor(() => expect(ensureMock).toHaveBeenCalledTimes(1));
+
+    rerender({ devCommand: "npm run dev:web" });
+
+    await waitFor(() => expect(ensureMock).toHaveBeenCalledTimes(2));
+    const relaunch = ensureMock.mock.calls[1]![0] as Record<string, unknown>;
+    expect(relaunch.devCommand).toBe("npm run dev:web");
+    expect(relaunch.resumeUserStopped).toBeUndefined();
+    expect(stopMock).not.toHaveBeenCalled();
+  });
+
   it("only applies the latest queued config after many rapid changes", async () => {
     const firstEnsure = createDeferred<DevPreviewSessionState>();
 
