@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { actionService } from "@/services/ActionService";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { routeVoiceWaitKey } from "@/lib/voiceWaitKeys";
+import { isInPaneDialog } from "@/lib/paneDialog";
 import type { FleetPendingActionSnapshot } from "@/store/fleetPendingActionStore";
 
 const DOUBLE_ESC_WINDOW_MS = 350;
@@ -52,9 +53,11 @@ export function useFleetEscapeChords(
       if (routeVoiceWaitKey(e)) return;
       // Escape inside a modal belongs to the modal and what it holds — the
       // canopy panel's live terminal among them — never to the fleet behind it.
+      // So does Escape inside a page's dialog over one pane.
       if (
         e.target instanceof Element &&
-        e.target.closest('[role="dialog"][aria-modal="true"]') !== null
+        (e.target.closest('[role="dialog"][aria-modal="true"]') !== null ||
+          isInPaneDialog(e.target))
       ) {
         lastBareEscapeMsRef.current = 0;
         return;

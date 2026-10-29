@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import React from "react";
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, fireEvent, screen, act } from "@testing-library/react";
 
 vi.mock("framer-motion", () => {
@@ -90,6 +90,7 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { dispatchEscape, _resetForTests as resetEscapeStack } from "@/lib/escapeStack";
+import { PANE_DIALOG_ATTR } from "@/lib/paneDialog";
 import type { PtyPanelData } from "@shared/types/panel";
 import type { ReactNode } from "react";
 
@@ -746,6 +747,28 @@ describe("FleetArmingRibbon", () => {
     dispatchSpy.mockRestore();
   });
 
+  it("bare Escape Escape inside a page dialog leaves the fleet alone", async () => {
+    seed([makeAgent("t1", "working"), makeAgent("t2", "working")]);
+    useFleetArmingStore.getState().armIds(["t1", "t2"]);
+    const actionServiceModule = await import("@/services/ActionService");
+    const dispatchSpy = vi.spyOn(actionServiceModule.actionService, "dispatch");
+    render(<FleetArmingRibbon />);
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "dialog");
+    dialog.setAttribute(PANE_DIALOG_ATTR, "");
+    dialog.innerHTML = "<button>Cancel</button>";
+    document.body.appendChild(dialog);
+    const cancel = dialog.querySelector("button")!;
+    try {
+      fireEvent.keyDown(cancel, { key: "Escape" });
+      fireEvent.keyDown(cancel, { key: "Escape" });
+      expect(dispatchSpy.mock.calls.some((c) => c[0] === "fleet.interrupt")).toBe(false);
+    } finally {
+      dialog.remove();
+    }
+    dispatchSpy.mockRestore();
+  });
+
   it("⌘Esc from a textarea still triggers the exit chord", () => {
     // The composer textarea is the primary input surface when armed —
     // the chord must fire from it, not be swallowed by focus heuristics.
@@ -886,6 +909,54 @@ describe("FleetArmingRibbon", () => {
         modal.remove();
         dispatchSpy.mockRestore();
       }
+    });
+  });
+
+  // A page's dialog blocks only its own pane (#15037): it holds Enter while the
+  // keyboard is on its buttons, the #11106 case, and nowhere else.
+  describe("with a page dialog open over one pane", () => {
+    let dialog: HTMLElement;
+
+    beforeEach(() => {
+      useFleetArmingStore.getState().armIds(["a", "b", "c"]);
+      useFleetPendingActionStore.setState({
+        pending: { kind: "kill", targetCount: 3, sessionLossCount: 0 },
+      });
+      dialog = document.createElement("div");
+      dialog.setAttribute("role", "dialog");
+      dialog.setAttribute(PANE_DIALOG_ATTR, "");
+      dialog.innerHTML = "<button>Cancel</button>";
+      document.body.appendChild(dialog);
+    });
+
+    afterEach(() => {
+      dialog.remove();
+    });
+
+    it("leaves Enter on the dialog's button to that button", async () => {
+      const actionServiceModule = await import("@/services/ActionService");
+      const dispatchSpy = vi.spyOn(actionServiceModule.actionService, "dispatch");
+      render(<FleetArmingRibbon />);
+      const cancel = dialog.querySelector("button")!;
+      cancel.focus();
+
+      const notPrevented = fireEvent.keyDown(cancel, { key: "Enter" });
+
+      expect(notPrevented).toBe(true);
+      expect(dispatchSpy.mock.calls.find((c) => c[0] === "fleet.kill")).toBeUndefined();
+      dispatchSpy.mockRestore();
+    });
+
+    it("still confirms the fleet action on Enter from elsewhere", async () => {
+      const actionServiceModule = await import("@/services/ActionService");
+      const dispatchSpy = vi.spyOn(actionServiceModule.actionService, "dispatch");
+      render(<FleetArmingRibbon />);
+
+      fireEvent.keyDown(window, { key: "Enter" });
+
+      const match = dispatchSpy.mock.calls.find((c) => c[0] === "fleet.kill");
+      expect(match?.[1]).toEqual({ confirmed: true });
+      dispatchSpy.mockRestore();
     });
   });
 

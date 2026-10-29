@@ -1,10 +1,10 @@
 import { useState, useEffect, useRef, useCallback, useId, type CSSProperties } from "react";
 import { Globe } from "lucide-react";
-import { AccessibilityAnnouncer } from "@/components/Accessibility/AccessibilityAnnouncer";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { SurfaceHeaderTitle } from "@/components/ui/SurfaceHeader";
 import { FIELD_INPUT } from "@/components/Worktree/views/WorktreeFormLayout";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
+import { focusPaneDialog, PANE_DIALOG_ATTR } from "@/lib/paneDialog";
 import {
   getUiTransitionDuration,
   UI_ENTER_DURATION,
@@ -36,8 +36,8 @@ const CARD_EXIT_STYLE: CSSProperties & Record<"--scroll-shadow-color", string> =
  * Moves like every AppDialog: the scrim fades, the card rises 4px and settles from
  * 98% while it fades in, from `@starting-style` in the first painted frame, and
  * reverses on the exit tier. The guest is answered the instant a button is pressed,
- * and the card stops being a dialog at that moment — `role` and the `aria-modal`
- * four input owners key off (see below) go at once — so the fade-out is only a
+ * and the card stops being a dialog at that moment — `role` and the pane marker
+ * the input owners key off (see below) go at once — so the fade-out is only a
  * picture, inert, holding nothing.
  */
 const SCRIM_STYLE: CSSProperties = {
@@ -87,6 +87,7 @@ export function WebviewDialog({ dialog, onRespond }: WebviewDialogProps) {
   const [inputValue, setInputValue] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+  const scrimRef = useRef<HTMLDivElement>(null);
   const titleId = useId();
   const messageId = useId();
   const inputId = useId();
@@ -110,41 +111,23 @@ export function WebviewDialog({ dialog, onRespond }: WebviewDialogProps) {
     });
   }, [dialog]);
 
+  // The scrim covers the page, which is frozen until it has its answer: Tab or a
+  // pane handoff that reached the <webview> would leave the keyboard in a guest
+  // that can't process it. Anything under the scrim that takes focus passes it on
+  // to the dialog instead.
+  const isOpen = dialog !== null;
   useEffect(() => {
-    if (!dialog) return;
-    const handleTabTrap = (e: KeyboardEvent) => {
-      if (e.key !== "Tab" || !panelRef.current) return;
-      const activeEl = document.activeElement;
-      if (activeEl) {
-        const closestModal = activeEl.closest('[aria-modal="true"]');
-        if (closestModal && !closestModal.contains(panelRef.current)) return;
-      }
-      const focusable = Array.from(
-        panelRef.current.querySelectorAll<HTMLElement>(TABBABLE_SELECTOR)
-      );
-      if (focusable.length === 0) {
-        e.preventDefault();
-        panelRef.current.focus();
-        return;
-      }
-      const first = focusable[0]!;
-      const last = focusable[focusable.length - 1]!;
-      if (!panelRef.current.contains(activeEl)) {
-        e.preventDefault();
-        first.focus();
-        return;
-      }
-      if (e.shiftKey && activeEl === first) {
-        e.preventDefault();
-        last.focus();
-      } else if (!e.shiftKey && activeEl === last) {
-        e.preventDefault();
-        first.focus();
-      }
+    if (!isOpen) return;
+    const scrim = scrimRef.current;
+    const covered = scrim?.parentElement;
+    if (!scrim || !covered) return;
+    const handleFocusIn = (e: FocusEvent) => {
+      if (e.target instanceof Node && scrim.contains(e.target)) return;
+      focusPaneDialog(scrim);
     };
-    window.addEventListener("keydown", handleTabTrap);
-    return () => window.removeEventListener("keydown", handleTabTrap);
-  }, [dialog]);
+    covered.addEventListener("focusin", handleFocusIn);
+    return () => covered.removeEventListener("focusin", handleFocusIn);
+  }, [isOpen]);
 
   const handleOk = useCallback(() => {
     if (!dialog) return;
@@ -159,11 +142,35 @@ export function WebviewDialog({ dialog, onRespond }: WebviewDialogProps) {
     onRespond(false);
   }, [onRespond]);
 
-  // Escape only. Enter is deliberately left alone so a focused button runs its
-  // native activation — intercepting it here cancelled the Cancel button's
-  // Enter-to-click and confirmed the guest's dialog instead (issue #11106).
-  const handleEscape = useCallback(
+  // Tab and Escape, bound to the dialog rather than the window: they are the
+  // dialog's only while the keyboard is in it, and Tab in another pane, the
+  // sidebar or a composer moves through the app as usual (#15037). Enter is
+  // deliberately left alone so a focused button runs its native activation —
+  // intercepting it here cancelled the Cancel button's Enter-to-click and
+  // confirmed the guest's dialog instead (issue #11106).
+  const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      if (e.key === "Tab") {
+        const panel = panelRef.current;
+        if (!panel) return;
+        const focusable = Array.from(panel.querySelectorAll<HTMLElement>(TABBABLE_SELECTOR));
+        if (focusable.length === 0) {
+          e.preventDefault();
+          panel.focus();
+          return;
+        }
+        const first = focusable[0]!;
+        const last = focusable[focusable.length - 1]!;
+        const activeEl = document.activeElement;
+        if (e.shiftKey && activeEl === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && activeEl === last) {
+          e.preventDefault();
+          first.focus();
+        }
+        return;
+      }
       if (e.key !== "Escape") return;
       e.preventDefault();
       if (dialog?.type === "alert") {
@@ -194,29 +201,25 @@ export function WebviewDialog({ dialog, onRespond }: WebviewDialogProps) {
 
   return (
     <div
+      ref={scrimRef}
       data-visible={isVisible}
       // Once answered the guest is gone: what remains is a picture of the card
       // fading out, which takes no pointer and no keys.
       inert={closing || undefined}
       className="absolute inset-0 z-50 flex items-center justify-center bg-scrim-medium p-4 transition-opacity starting:opacity-0 data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0"
       style={isVisible ? SCRIM_STYLE : SCRIM_EXIT_STYLE}
-      onKeyDown={handleEscape}
+      onKeyDown={handleKeyDown}
     >
       <div
         ref={panelRef}
         role={closing ? undefined : "dialog"}
-        // Strictly speaking this overstates the scope — the dialog blocks one pane, not
-        // the app, and ARIA reads `aria-modal` as "everything else is hidden". It stays
-        // because four consumers key off `[role="dialog"][aria-modal="true"]` to know a
-        // dialog owns input: `hasBlockingOverlay` (lib/typeAnywhere.ts), the `modalOpen`
-        // keybinding clause (services/keybindingWhenContext.ts), Escape ownership
-        // (hooks/useGlobalKeybindings.ts), and the capture-phase Enter guard in
-        // FleetArmingRibbon that exists because of #11106. Dropping it here would let
-        // type-anywhere eat keystrokes aimed at this dialog and let Enter confirm a fleet
-        // action instead of the focused button — the exact regression #11106 fixed.
-        // Narrowing the scope properly means giving those four a signal that is not
-        // `aria-modal`; that is a cross-cutting change, not this component's to make.
-        aria-modal={closing ? undefined : "true"}
+        // Not `aria-modal`: the dialog blocks one pane, and the rest of the app stays
+        // usable. The input owners that read `aria-modal` as "a dialog owns the
+        // keyboard" ask about this marker instead, and only while focus is inside it
+        // (see lib/paneDialog.ts) — so type-anywhere still never eats a keystroke
+        // aimed at this dialog, and Enter on its focused button still never confirms
+        // a fleet action (#11106).
+        {...(closing ? {} : { [PANE_DIALOG_ATTR]: "" })}
         // Named by Daintree's own header, described by the guest's message. Pointing the
         // name at the message would make the dialog's accessible name whatever the page
         // chose to put in alert() — so a screen reader would announce a page's
@@ -307,10 +310,6 @@ export function WebviewDialog({ dialog, onRespond }: WebviewDialogProps) {
           }
           primaryAction={{ label: "OK", onClick: handleOk }}
         />
-
-        {/* Co-located so store-dispatched announcements reach VoiceOver while
-            this aria-modal subtree holds focus (Chromium 354736464). */}
-        <AccessibilityAnnouncer />
       </div>
     </div>
   );

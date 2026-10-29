@@ -76,6 +76,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { pluralize } from "@/lib/pluralize";
+import { isInPaneDialog } from "@/lib/paneDialog";
 
 interface RunCountSegment {
   label: string;
@@ -313,11 +314,14 @@ export function FleetArmingRibbon(): ReactElement | null {
       // content can be portaled outside the dialog's subtree (Radix menus and
       // selects mount under <body>). The fleet's own confirmation is an inline
       // role="status" banner, not a modal, so its Enter stays reachable. A
-      // destructive AppDialog without a preview is an alertdialog.
+      // destructive AppDialog without a preview is an alertdialog. A page's
+      // dialog blocks only its own pane, so it holds Enter only while focus is
+      // inside it (#15037).
       if (
         document.querySelector(
           '[role="dialog"][aria-modal="true"], [role="alertdialog"][aria-modal="true"]'
-        ) !== null
+        ) !== null ||
+        isInPaneDialog(e.target)
       ) {
         return;
       }

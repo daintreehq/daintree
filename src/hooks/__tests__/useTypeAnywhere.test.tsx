@@ -304,6 +304,29 @@ describe("useTypeAnywhere", () => {
       expect(draftOf("a1")).toBe("");
     });
 
+    // A page's dialog blocks only its own pane (#15037): it keeps the keys
+    // typed at it, and the rest of the window rescues as usual.
+    it("refuses a keystroke aimed at a page dialog", () => {
+      document.body.innerHTML = `<div role="dialog" data-pane-dialog><button id="ok">OK</button></div>`;
+      document.getElementById("ok")?.focus();
+      renderHook(() => useTypeAnywhere());
+
+      const e = press("h");
+
+      expect(e.defaultPrevented).toBe(false);
+      expect(draftOf("a1")).toBe("");
+    });
+
+    it("still rescues while a page dialog is open in another pane", () => {
+      document.body.innerHTML = `<div role="dialog" data-pane-dialog><button>OK</button></div>`;
+      renderHook(() => useTypeAnywhere());
+
+      const e = press("h");
+
+      expect(e.defaultPrevented).toBe(true);
+      expect(draftOf("a1")).toBe("h");
+    });
+
     it("refuses while a palette is open", () => {
       activePaletteId = "actions";
       renderHook(() => useTypeAnywhere());

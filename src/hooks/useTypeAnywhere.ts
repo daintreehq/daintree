@@ -91,13 +91,13 @@ export function useTypeAnywhere(): void {
   useEffect(() => {
     handlerRef.current = (e: KeyboardEvent) => {
       if (!isRescuableKeystroke(e)) return;
-      // A modal or palette owns every key while open.
-      if (hasBlockingOverlay()) return;
-      if (usePaletteStore.getState().activePaletteId !== null) return;
-
       // Not `document.activeElement`: it retargets to the shadow host, which
       // would make a focused shadow-DOM input look inert and get its key stolen.
       const active = getFocusTarget(e);
+      // A modal or palette owns every key while open.
+      if (hasBlockingOverlay(active)) return;
+      if (usePaletteStore.getState().activePaletteId !== null) return;
+
       const panelStore = usePanelStore.getState();
 
       // --- Locate: focus is in a real terminal that has scrolled away ---

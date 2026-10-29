@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { focusPaneDialog } from "@/lib/paneDialog";
 import { registerPanelFocusHandler } from "./panelFocusRegistry";
 
 /**
@@ -47,10 +48,14 @@ export function usePanelRootFocus(options: {
  * hidden subtree (the dock's `content-visibility: hidden` parking container)
  * is refused by the browser, and a handler that reported success there would
  * strand focus on nothing.
+ *
+ * A page's dialog over the pane takes the keyboard when the pane does: it is
+ * what the pane is waiting on (#15037).
  */
 function focusPanelRoot(node: HTMLElement | null): boolean {
   if (!node) return false;
   if (node.contains(document.activeElement)) return true;
+  if (focusPaneDialog(node)) return true;
   node.focus({ preventScroll: true });
   return document.activeElement === node;
 }

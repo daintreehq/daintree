@@ -331,6 +331,29 @@ describe("ContentPanel focus", () => {
       expect(document.activeElement).toBe(search);
     });
 
+    // The page behind a browser pane's alert() can't take a key until it has its
+    // answer, so the dialog is where the pane's keyboard goes (#15037).
+    it("hands a page dialog over the pane the keyboard instead of the root", () => {
+      const outside = document.createElement("button");
+      document.body.appendChild(outside);
+      outside.focus();
+
+      const { container, focus } = renderPanel("p-1", "browser", {
+        children: (
+          <div role="dialog" data-pane-dialog="">
+            <button data-confirm-role="confirm">OK</button>
+          </div>
+        ),
+      });
+
+      focus(true);
+
+      expect(document.activeElement).toBe(
+        container.querySelector('[data-confirm-role="confirm"]')
+      );
+      outside.remove();
+    });
+
     it("does not reactively claim focus for PTY kinds", () => {
       // TerminalPane routes PTY focus to xterm or the hybrid input bar. A second
       // claimant here would land focus on the container instead.

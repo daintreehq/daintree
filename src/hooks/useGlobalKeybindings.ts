@@ -9,6 +9,7 @@ import { logError } from "@/utils/logger";
 import { isMac } from "@/lib/platform";
 import { dispatchEscape, hasHandlers } from "@/lib/escapeStack";
 import { ESCAPE_BACKSTOP_DIALOG_ATTR } from "@/lib/dialogEscapeBackstop";
+import { isInPaneDialog } from "@/lib/paneDialog";
 import { isTerminalReservedKey } from "@/services/terminalReservedKeys";
 import { CLOSE_OWNER_ATTR, requestOwnedClose } from "@/lib/closeRequest";
 import { DICTATION_OWNER_ATTR } from "@/services/canopyReplyDictation";
@@ -186,8 +187,12 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
       // Both flags only gate Escape handling. They are whole-document scans, so
       // skip them for every other keystroke (all typing flows through here).
       const isEscape = e.key === "Escape";
+      // A page's dialog blocks only its own pane, so it owns Escape only from
+      // inside (#15037): elsewhere, Escape does what it would without it.
+      const inPaneDialog = isEscape && isInPaneDialog(target);
       const hasModalDialog =
-        isEscape && document.querySelector('[role="dialog"][aria-modal="true"]') !== null;
+        isEscape &&
+        (document.querySelector('[role="dialog"][aria-modal="true"]') !== null || inPaneDialog);
       const hasDialogBackstop =
         isEscape && document.querySelector(`[${ESCAPE_BACKSTOP_DIALOG_ATTR}]`) !== null;
       // The command HUD's search input is the active typing surface while the
@@ -246,6 +251,10 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
           return;
         }
       }
+
+      // The dialog's own handler answers the page; no escape-stack entry
+      // behind it is what this Escape was aimed at.
+      if (inPaneDialog) return;
 
       // AppDialog/AppPaletteDialog arbitrate layered Escape at document bubble
       // through their dedicated LIFO backstop. Let that owner see the event;

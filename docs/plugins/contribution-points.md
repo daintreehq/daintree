@@ -919,7 +919,7 @@ Keybindings also see the focus and UI keys:
 | --- | --- | --- |
 | `terminalFocused` | boolean | Keyboard focus is inside an xterm terminal. |
 | `textInputFocused` | boolean | Keyboard focus is in a text field or editor (not a terminal). |
-| `modalOpen` | boolean | A modal dialog (`aria-modal`) is open. |
+| `modalOpen` | boolean | A modal dialog (`aria-modal`) is open, or the keyboard is in a page's `alert()`, `confirm()` or `prompt()` dialog, which blocks only its own Browser or dev preview pane. |
 | `paletteOpen` | boolean | Any palette (command palette, quick switcher, …) is open. |
 | `paletteId` | string | Identifier of the open palette, or `""` when none. |
 | `fleetArmed` | boolean | At least one terminal is armed for fleet broadcast. |

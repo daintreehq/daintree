@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { PtyPanelData } from "@shared/types/panel";
 import { buildKeybindingWhenContext } from "../keybindingWhenContext";
+import { PANE_DIALOG_ATTR } from "@/lib/paneDialog";
 import { usePaletteStore, usePanelStore } from "@/store";
 import type { PaletteId } from "@/store/paletteStore";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
@@ -132,6 +133,22 @@ describe("buildKeybindingWhenContext", () => {
     document.body.appendChild(dialog);
 
     expect(buildKeybindingWhenContext(eventFrom(null)).modalOpen).toBe(true);
+  });
+
+  // A page's dialog blocks only its own pane (#15037): a key typed into it
+  // sees a modal, a key anywhere else doesn't.
+  it("reports modalOpen for a page dialog only for keys inside it", () => {
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "dialog");
+    dialog.setAttribute(PANE_DIALOG_ATTR, "");
+    const ok = document.createElement("button");
+    dialog.appendChild(ok);
+    const elsewhere = document.createElement("button");
+    document.body.append(dialog, elsewhere);
+
+    expect(buildKeybindingWhenContext(eventFrom(ok)).modalOpen).toBe(true);
+    expect(buildKeybindingWhenContext(eventFrom(elsewhere)).modalOpen).toBe(false);
+    expect(buildKeybindingWhenContext(eventFrom(null)).modalOpen).toBe(false);
   });
 
   it("reports the open palette and its id", () => {

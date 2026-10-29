@@ -3,6 +3,7 @@ import { render, act } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { _resetForTests, registerEscape } from "@/lib/escapeStack";
 import { ESCAPE_BACKSTOP_DIALOG_ATTR } from "@/lib/dialogEscapeBackstop";
+import { PANE_DIALOG_ATTR } from "@/lib/paneDialog";
 import { claimVoiceWaitKeys } from "@/lib/voiceWaitKeys";
 import type { PaletteId } from "@/store/paletteStore";
 
@@ -953,6 +954,60 @@ describe("useGlobalKeybindings — palette Escape capture", () => {
     } finally {
       xterm.remove();
     }
+  });
+
+  // A page's dialog blocks only its own pane (#15037). Escape inside it answers
+  // the page; Escape anywhere else does what it would without the dialog.
+  describe("with a page dialog open over one pane", () => {
+    let dialog: HTMLElement;
+
+    beforeEach(() => {
+      mocks.keybindingService.resolveKeybinding.mockReturnValue({
+        match: undefined,
+        chordPrefix: false,
+        shouldConsume: false,
+      });
+      dialog = document.createElement("div");
+      dialog.setAttribute("role", "dialog");
+      dialog.setAttribute(PANE_DIALOG_ATTR, "");
+      dialog.innerHTML = "<button>Cancel</button>";
+      document.body.appendChild(dialog);
+    });
+
+    afterEach(() => {
+      dialog.remove();
+    });
+
+    it("leaves Escape inside it to the dialog, not the escape stack", () => {
+      const escapeHandler = vi.fn();
+      registerEscape(escapeHandler);
+
+      render(<Host />);
+      const event = dispatchEscape(dialog.querySelector("button")!);
+
+      expect(escapeHandler).not.toHaveBeenCalled();
+      expect(mocks.keybindingService.resolveKeybinding).not.toHaveBeenCalled();
+      expect(event.defaultPrevented).toBe(false);
+    });
+
+    it("leaves bare Escape in a terminal beside it to the terminal", () => {
+      const xterm = document.createElement("div");
+      xterm.className = "xterm";
+      document.body.appendChild(xterm);
+
+      try {
+        const escapeHandler = vi.fn();
+        registerEscape(escapeHandler);
+
+        render(<Host />);
+        const event = dispatchEscape(xterm);
+
+        expect(escapeHandler).not.toHaveBeenCalled();
+        expect(event.defaultPrevented).toBe(false);
+      } finally {
+        xterm.remove();
+      }
+    });
   });
 });
 
