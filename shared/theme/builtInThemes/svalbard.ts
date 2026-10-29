@@ -97,8 +97,9 @@ export const theme: BuiltInThemeSource = {
   tokens: {
     "accent-muted": "rgba(0,119,163,0.30)",
     "accent-soft": "rgba(0,119,163,0.18)",
-    // Solid so the field edge clears 3:1 on every surface (3.09–3.78:1); the
-    // alpha `border-strong` it used to follow measured 1.33–1.35:1.
+    // Solid so the field edge clears 3:1 on every surface a field sits on
+    // (3.09–3.78:1); the alpha `border-strong` it used to follow measured
+    // 1.33–1.35:1.
     "border-input": "#79858D",
     "focus-ring": "rgba(0,119,163,0.35)",
     "grain-opacity": "0.016",

@@ -81,8 +81,9 @@ export const theme: BuiltInThemeSource = {
     },
   },
   tokens: {
-    // Solid so the field edge clears 3:1 on every surface (3.08–3.94:1); the
-    // alpha `border-strong` it used to follow measured 1.17–1.21:1.
+    // Solid so the field edge clears 3:1 on every surface a field sits on
+    // (3.08–3.94:1); the alpha `border-strong` it used to follow measured
+    // 1.17–1.21:1.
     "border-input": "#85715A",
     "border-strong": "rgba(214,181,142,0.09)",
     "border-subtle": "rgba(214,181,142,0.05)",
