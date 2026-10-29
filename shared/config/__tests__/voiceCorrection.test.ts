@@ -12,6 +12,8 @@ import {
   TRANSCRIBER_NOTES,
   type CorrectionPromptContext,
 } from "../voiceCorrection.js";
+import { acceptSuggestion, dictionaryTerms } from "../../utils/voiceDictionary.js";
+import { collectHeardAsRules } from "../../utils/voiceHeardAs.js";
 
 describe("CORE_CORRECTION_PROMPT", () => {
   it("includes an explicit idempotency instruction", () => {
@@ -330,6 +332,23 @@ describe("buildCorrectionSystemPrompt", () => {
     expect(prompt.indexOf("</user_terms>")).toBeLessThan(prompt.indexOf("TRANSCRIBER:"));
     expect(prompt.indexOf("TRANSCRIBER:")).toBeLessThan(prompt.indexOf("TARGET:"));
     expect(buildCorrectionSystemPrompt({})).not.toContain("TRANSCRIBER:");
+  });
+
+  it("gives cleanup a term learned from an everyday word as a term, not a heard-as rule", () => {
+    const { dictionary } = acceptSuggestion(
+      {
+        dictionary: [{ term: "Zustand", heardAs: ["zoo stand"], source: "learned", addedAt: 1 }],
+        suggestedDictionary: [{ word: "Jest", utterance: "just", suggestedAt: 1, frequency: 1 }],
+      },
+      "Jest",
+      2
+    );
+    const prompt = buildCorrectionSystemPrompt({
+      customDictionary: dictionaryTerms(dictionary),
+      heardAs: collectHeardAsRules(dictionary),
+    });
+    expect(prompt).toContain('"Zustand" | "Jest"');
+    expect(prompt).toContain("<user_terms>\nzoo stand: Zustand\n</user_terms>");
   });
 
   it("omits the user terms section without heard-as rules", () => {

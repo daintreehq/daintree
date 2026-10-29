@@ -217,6 +217,34 @@ describe("suggestions", () => {
     });
   });
 
+  it("accepting leaves an everyday heard form out, for a new term or one already there", () => {
+    expect(
+      acceptSuggestion(
+        { dictionary: [], suggestedDictionary: [suggestion("Jest", "just")] },
+        "Jest",
+        T1
+      ).dictionary
+    ).toEqual([{ term: "Jest", heardAs: [], source: "learned", addedAt: T1 }]);
+
+    const state = {
+      dictionary: [
+        entry("Jest"),
+        entry("Nuxt", { source: "imported", heardAs: ["nukes"] }),
+        entry("useState", { source: "learned", heardAs: ["you state"] }),
+      ],
+      suggestedDictionary: [
+        suggestion("Jest", "just"),
+        suggestion("Nuxt", "next"),
+        suggestion("useState", "use state"),
+      ],
+    };
+    let accepted = state;
+    for (const word of ["Jest", "Nuxt", "useState"]) {
+      accepted = acceptSuggestion(accepted, word, T1);
+    }
+    expect(accepted).toEqual({ dictionary: state.dictionary, suggestedDictionary: [] });
+  });
+
   it("accepting a word no longer queued changes nothing, so a term removed since stays removed", () => {
     const state = { dictionary: [entry("Daintree")], suggestedDictionary: [suggestion("Vite")] };
     expect(acceptSuggestion(state, "Tailwind", T1)).toBe(state);

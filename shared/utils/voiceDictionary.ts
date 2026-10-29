@@ -5,7 +5,7 @@ import type {
   VoiceDictionarySource,
   VoiceDictionaryState,
 } from "../types/ipc/api.js";
-import type { CorrectionCandidate } from "./phoneticSimilarity.js";
+import { isEverydayPhrase, type CorrectionCandidate } from "./phoneticSimilarity.js";
 
 /** Deepgram rejects any keyterm over 100 characters, so a term or heard-as phrase can't be longer. */
 export const MAX_DICTIONARY_TERM_LENGTH = 100;
@@ -308,9 +308,12 @@ export function mergeSuggestions(
 
 /**
  * Move a suggestion into the dictionary as a learned entry that keeps what it
- * was heard as. A word no longer queued was dismissed or accepted from
- * somewhere else, so acting on it now is acting on a stale copy: nothing
- * changes, and a term removed since stays removed.
+ * was heard as, unless that is everyday English: a heard-as form rewrites
+ * every dictation, and a fix to "just" was right where it was made, not
+ * everywhere the word is said, so the entry teaches only its term. A word no
+ * longer queued was dismissed or accepted from somewhere else, so acting on
+ * it now is acting on a stale copy: nothing changes, and a term removed since
+ * stays removed.
  */
 export function acceptSuggestion(
   state: VoiceDictionaryState,
@@ -323,12 +326,14 @@ export function acceptSuggestion(
   if (!suggestion) return state;
   // The pair the user saw, when the queue's copy has since been overwritten.
   const heard = normalizePhrase(utterance ?? suggestion.utterance);
+  const keepsHeard =
+    heard !== null && heard.length <= MAX_DICTIONARY_TERM_LENGTH && !isEverydayPhrase(heard);
   return {
     dictionary: addDictionaryEntry(
       state.dictionary,
       {
         term: suggestion.word,
-        heardAs: heard && heard.length <= MAX_DICTIONARY_TERM_LENGTH ? [heard] : [],
+        heardAs: keepsHeard ? [heard] : [],
         source: "learned",
       },
       now

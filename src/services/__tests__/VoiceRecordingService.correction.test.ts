@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { VoiceDictionaryEntry } from "@shared/types";
+import { acceptSuggestion } from "@shared/utils/voiceDictionary";
 
 // Drives the real voice and draft stores through stop() to prove a post-stop
 // correction belongs to its own session and panel (#14611): another session
@@ -101,7 +103,7 @@ const correct =
     }) => Promise<CorrectResult>
   >();
 
-let dictionary: Array<{ term: string; heardAs: string[]; source: "manual"; addedAt: number }> = [];
+let dictionary: VoiceDictionaryEntry[] = [];
 
 function stubElectron() {
   const electron = {
@@ -1175,6 +1177,41 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
       expect(baseline("panel-1")).toBe("add Zustand");
       expect(correct).not.toHaveBeenCalled();
     });
+
+    it.each([
+      { cleanup: "on", correctionEnabled: true },
+      { cleanup: "off", correctionEnabled: false },
+    ])(
+      "leaves an everyday word a correction taught as it was said, cleanup $cleanup",
+      async ({ correctionEnabled }) => {
+        ({ dictionary } = acceptSuggestion(
+          {
+            dictionary: [{ ...rule("Zustand", "zoo stand"), source: "learned" }],
+            suggestedDictionary: [
+              { word: "Jest", utterance: "just", suggestedAt: 0, frequency: 1 },
+            ],
+          },
+          "Jest",
+          0
+        ));
+        const { service, dictate, say, draft, voiceStore } = await setup();
+        voiceStore.getState().setCorrectionEnabled(correctionEnabled);
+        correct.mockResolvedValue({ action: "no_change", correctedText: "" });
+
+        dictate("panel-1", "I just want to check zoo");
+        say("stand");
+        await service.stop();
+
+        expect(draft("panel-1")).toBe("I just want to check Zustand");
+        if (correctionEnabled) {
+          expect(correct.mock.lastCall?.[0]).toMatchObject({
+            rawText: "I just want to check Zustand",
+          });
+        } else {
+          expect(correct).not.toHaveBeenCalled();
+        }
+      }
+    );
 
     it("applies them on a stop that skips correction", async () => {
       dictionary = [rule("Zustand", "zoo stand")];
