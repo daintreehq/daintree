@@ -136,6 +136,14 @@ function text(): string {
   return document.body.textContent ?? "";
 }
 
+/** Send, by the destination it names: "Send to {session}" or "Start a new {agent} session and send". */
+const SEND_NAME = /^(Send to |Start a new .+ session and send$)/;
+
+/** Send is off through `aria-disabled`, so it stays focusable to say why. */
+function isOff(button: HTMLElement): boolean {
+  return button.getAttribute("aria-disabled") === "true";
+}
+
 /**
  * The buttons in a surface that act. Every crumb is a button so its name and
  * file are a focus away; the ones that can't be picked say so with
@@ -728,11 +736,10 @@ describe("selection identity", () => {
     );
     // The strip defers to the open drawer for the file.
     expect(strip.textContent).not.toContain(CARD_FILE);
-    // And the file is the checked scope's hover detail.
-    const scope = screen.getByRole("radio", { name: "PricingCard", checked: true });
-    expect(screen.queryByRole("tooltip")).toBeNull();
-    fireEvent.focus(scope);
-    expect((await screen.findByRole("tooltip")).textContent).toBe(CARD_FILE);
+    // And the checked target draws the file it points the agent at, in the
+    // composer itself rather than behind a hover.
+    expect(screen.getByRole("radio", { name: "PricingCard", checked: true })).toBeTruthy();
+    expect(screen.getByRole("group", { name: "Ask an agent" }).textContent).toContain(CARD_FILE);
   });
 
   it("won't send a request about a component nobody found the file of, and offers what it can be about", async () => {
@@ -751,13 +758,12 @@ describe("selection identity", () => {
     );
     const request = await screen.findByRole("textbox", { name: "Request for the agent" });
     fireEvent.change(request, { target: { value: "Make the card pop" } });
-    const sendButton = () =>
-      screen.getByRole("button", { name: "Send to agent" }) as HTMLButtonElement;
-    expect(sendButton().disabled).toBe(true);
+    const sendButton = () => screen.getByRole("button", { name: SEND_NAME }) as HTMLButtonElement;
+    expect(isOff(sendButton())).toBe(true);
     expect(text()).toContain("Couldn't find where PricingCard is written");
     // The element itself is still something the request can be about.
     fireEvent.click(screen.getByRole("radio", { name: "Element" }));
-    await waitFor(() => expect(sendButton().disabled).toBe(false));
+    await waitFor(() => expect(isOff(sendButton())).toBe(false));
   });
 
   it("shows a React element's components and the line its creation maps to", async () => {
@@ -832,8 +838,8 @@ describe("starting a fresh agent", () => {
       await mountSelected();
       const request = screen.getByRole("textbox", { name: "Request for the agent" });
       fireEvent.change(request, { target: { value: "Say Upgrade" } });
-      const sendButton = screen.getByRole("button", { name: "Send to agent" }) as HTMLButtonElement;
-      await waitFor(() => expect(sendButton.disabled).toBe(false));
+      const sendButton = screen.getByRole("button", { name: SEND_NAME }) as HTMLButtonElement;
+      await waitFor(() => expect(isOff(sendButton)).toBe(false));
       fireEvent.click(sendButton);
       await waitFor(() =>
         expect(dispatch).toHaveBeenCalledWith(
@@ -906,9 +912,9 @@ describe("request scope", () => {
     host.template = () => chain;
     await mountBound();
     await act(async () => host.select(0));
-    await screen.findByRole("combobox", { name: "What the request is about" });
+    await screen.findByRole("combobox", { name: "What the request targets" });
     // A list, not a row of segments: no scope radio is drawn beside the picker.
-    expect(screen.queryByRole("radiogroup", { name: "What the request is about" })).toBeNull();
+    expect(screen.queryByRole("radiogroup", { name: "What the request targets" })).toBeNull();
     expect(screen.queryByRole("radio", { name: "Element" })).toBeNull();
   });
 });
@@ -984,15 +990,14 @@ describe("the composer", () => {
     await mountSelected();
     const request = screen.getByRole("textbox", { name: "Request for the agent" });
     fireEvent.change(request, { target: { value: "Say Upgrade" } });
-    const sendButton = () =>
-      screen.getByRole("button", { name: "Send to agent" }) as HTMLButtonElement;
-    expect(sendButton().disabled).toBe(false);
+    const sendButton = () => screen.getByRole("button", { name: SEND_NAME }) as HTMLButtonElement;
+    expect(isOff(sendButton())).toBe(false);
 
     host.reselectFinds = false;
     await act(async () => host.epochAdvanced(1));
     // Blocked from the moment the page moved, not from when the panel gives up
     // asking the new page for it: unproven is unsendable either way.
-    await waitFor(() => expect(sendButton().disabled).toBe(true));
+    await waitFor(() => expect(isOff(sendButton())).toBe(true));
     expect((request as HTMLTextAreaElement).value).toBe("Say Upgrade");
   });
 
@@ -1005,10 +1010,10 @@ describe("the composer", () => {
     await mountSelected();
     const request = screen.getByRole("textbox", { name: "Request for the agent" });
     fireEvent.change(request, { target: { value: "Say Upgrade" } });
-    const send = () => screen.getByRole("button", { name: "Send to agent" }) as HTMLButtonElement;
-    await waitFor(() => expect(send().disabled).toBe(false));
+    const send = () => screen.getByRole("button", { name: SEND_NAME }) as HTMLButtonElement;
+    await waitFor(() => expect(isOff(send())).toBe(false));
     // And it is surfaced as an observation rather than swallowed.
-    expect(text()).toMatch(/Activity in /);
+    expect(text()).toMatch(/The terminal is showing activity/);
   });
 
   it("headlines a delivery with what was proven, never with a reading of the agent", async () => {
@@ -1030,43 +1035,31 @@ describe("the composer", () => {
         },
       ],
     });
-    // The delivery's notice, not the strip's live region, which is a status too.
-    const notice = await waitFor(() => {
-      const found = screen
-        .getAllByRole("status")
-        .find((element) => element.textContent?.includes("claude · pricing polish"));
-      if (!found) throw new Error("no delivery notice yet");
-      return found;
-    });
-    // The notice's headline is its first paragraph; the body follows it.
-    const headline = notice.querySelector("p")?.textContent ?? "";
+    // The request's row: its heading is the state and where it went.
+    const queue = await screen.findByRole("list", { name: "Requests" });
+    const row = within(queue).getAllByRole("listitem")[0]!;
+    const headline = within(row).getByText(/^Sent to /).textContent ?? "";
     expect(headline).toContain("claude · pricing polish");
     expect(headline).not.toMatch(/working|activity/i);
     // And the observation is not suppressed either — it just lives below the
     // headline, where it reads as something seen rather than something proven.
-    expect(notice.textContent ?? "").toMatch(/activity/i);
+    expect(row.textContent ?? "").toMatch(/activity/i);
   });
 
-  it("inserts a suggestion's whole instruction, not the short label on its chip", async () => {
-    // A chip may abbreviate itself to fit, but it must never put words into the
-    // draft that the user could not read before clicking.
+  it("inserts exactly the words a suggestion's chip shows", async () => {
+    // A chip must never put words into the draft that the user could not read
+    // on it before clicking.
     await mountSelected();
     const chips = within(screen.getByRole("group", { name: "Suggestions" })).getAllByRole("button");
     expect(chips.length).toBeGreaterThan(0);
     const chip = chips[0]!;
-    const label = chip.textContent?.trim() ?? "";
-    // Shown through the shared tooltip before the click, never the OS one.
-    expect(chip.hasAttribute("title")).toBe(false);
-    fireEvent.focus(chip);
-    const promised = (await screen.findByRole("tooltip")).textContent ?? "";
-    fireEvent.blur(chip);
-    expect(promised.length).toBeGreaterThan(0);
+    const words = chip.textContent?.trim() ?? "";
+    expect(words.length).toBeGreaterThan(0);
     fireEvent.click(chip);
     const request = screen.getByRole("textbox", {
       name: "Request for the agent",
     }) as HTMLTextAreaElement;
-    await waitFor(() => expect(request.value).toBe(promised));
-    expect(request.value.length).toBeGreaterThanOrEqual(label.length);
+    await waitFor(() => expect(request.value).toBe(words));
   });
 
   it("names the composer as a group, so it is reachable without a visible heading", async () => {
@@ -1081,9 +1074,8 @@ describe("the composer", () => {
     await mountSelected();
     const request = screen.getByRole("textbox", { name: "Request for the agent" });
     fireEvent.change(request, { target: { value: "Round the corners" } });
-    const sendButton = () =>
-      screen.getByRole("button", { name: "Send to agent" }) as HTMLButtonElement;
-    expect(sendButton().disabled).toBe(false);
+    const sendButton = () => screen.getByRole("button", { name: SEND_NAME }) as HTMLButtonElement;
+    expect(isOff(sendButton())).toBe(false);
 
     act(() => {
       updateComposerMemory(composerMemoryKey("preview-1", "wt-1"), {
@@ -1104,17 +1096,17 @@ describe("the composer", () => {
       });
     });
 
-    await waitFor(() => expect(sendButton().disabled).toBe(true));
-    // Answering the notice is the acknowledgement.
+    await waitFor(() => expect(isOff(sendButton())).toBe(true));
+    // Answering the row is the acknowledgement.
     fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
-    await waitFor(() => expect(sendButton().disabled).toBe(false));
+    await waitFor(() => expect(isOff(sendButton())).toBe(false));
     expect((request as HTMLTextAreaElement).value).toBe("Round the corners");
   });
 
   it("won't re-send on Enter when delivery couldn't be confirmed, but sends when asked to", async () => {
     // The host lost track of the submission: the request may be in the agent
     // already. The unchanged draft must not go again on a casual Enter — and
-    // the notice's own "Send it again" must actually send.
+    // the row's own Retry must actually send.
     usePanelStore.setState({
       panelsById: {
         "preview-1": { id: "preview-1", kind: "dev-preview", location: "grid", worktreeId: "wt-1" },
@@ -1156,9 +1148,8 @@ describe("the composer", () => {
     await mountSelected();
     const request = screen.getByRole("textbox", { name: "Request for the agent" });
     fireEvent.change(request, { target: { value: "Say Upgrade" } });
-    const sendButton = () =>
-      screen.getByRole("button", { name: "Send to agent" }) as HTMLButtonElement;
-    await waitFor(() => expect(sendButton().disabled).toBe(false));
+    const sendButton = () => screen.getByRole("button", { name: SEND_NAME }) as HTMLButtonElement;
+    await waitFor(() => expect(isOff(sendButton())).toBe(false));
 
     // What the row was about travels with it, which is what lets it be sent
     // again: the pin the composer made when the words were typed.
@@ -1182,20 +1173,22 @@ describe("the composer", () => {
         ],
       });
     });
-    await waitFor(() => expect(sendButton().disabled).toBe(true));
+    await waitFor(() => expect(isOff(sendButton())).toBe(true));
     const before = dispatch.mock.calls.length;
     fireEvent.keyDown(request, { key: "Enter" });
     await act(async () => {});
     expect(dispatch.mock.calls.length).toBe(before);
-    expect(text()).toContain("Delivery unconfirmed");
+    expect(text()).toContain("Unconfirmed in claude");
 
     expect(sent).toEqual([]);
 
-    fireEvent.click(screen.getByRole("button", { name: "Send it again" }));
+    // Its session is gone, so Retry names where it goes instead.
+    fireEvent.click(screen.getByRole("button", { name: /^Retry in New .+ session$/ }));
     // A new run, all the way to the terminal: exactly one more submission.
     await waitFor(() => expect(sent).toHaveLength(1), { timeout: 4000 });
     expect(sent[0]).toContain("Say Upgrade");
-    await screen.findByText(/^Sent to /);
+    // The row, not the status region that announces it in the same words.
+    await within(screen.getByRole("list", { name: "Requests" })).findByText(/^Sent to /);
   });
 
   it("doesn't offer to send again when there is nothing it could send", async () => {
@@ -1214,8 +1207,8 @@ describe("the composer", () => {
         ],
       });
     });
-    await screen.findByText("Delivery unconfirmed");
-    expect(screen.queryByRole("button", { name: "Send it again" })).toBeNull();
+    await screen.findByText("Unconfirmed in claude");
+    expect(screen.queryByRole("button", { name: /^Retry/ })).toBeNull();
   });
 
   it("hands a failed request's words back, and keeps a row open as its request moves on", async () => {
@@ -1230,7 +1223,7 @@ describe("the composer", () => {
       terminalId: "term-1",
     });
     act(() => updateComposerMemory(key, { deliveries: [record({ status: "queued" })] }));
-    fireEvent.click(await screen.findByRole("button", { name: /^Queued for claude/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /^Next for claude/ }));
     expect(screen.getByRole("group", { name: "Request text" }).textContent).toContain(
       "Round the corners"
     );
@@ -1298,11 +1291,11 @@ describe("the composer", () => {
     fireEvent.change(screen.getByRole("textbox", { name: "Request for the agent" }), {
       target: { value: "One more thing" },
     });
-    const send = screen.getByRole("button", { name: "Send to agent" }) as HTMLButtonElement;
-    await waitFor(() => expect(send.disabled).toBe(false));
+    const send = screen.getByRole("button", { name: SEND_NAME }) as HTMLButtonElement;
+    await waitFor(() => expect(isOff(send)).toBe(false));
 
     // Only the request at the head can be pushed on; either can be taken out.
-    const rows = within(queue).getAllByRole("button", { name: /^Queued for claude/ });
+    const rows = within(queue).getAllByRole("button", { name: /^(Next|Queued) for claude/ });
     expect(rows).toHaveLength(2);
     fireEvent.click(rows[0]!);
     expect(within(queue).getAllByRole("button", { name: "Send now" })).toHaveLength(1);
@@ -1316,7 +1309,7 @@ describe("the composer", () => {
 
     fireEvent.click(within(queue).getAllByRole("button", { name: "Remove" })[1]!);
     await waitFor(() => expect(within(queue).getAllByRole("listitem")).toHaveLength(2));
-    expect(text()).not.toContain("Add a hover state");
+    expect(queue.textContent).not.toContain("Add a hover state");
   });
 
   it("still allows an immediate retry when nothing was typed into the agent", async () => {
@@ -1339,10 +1332,9 @@ describe("the composer", () => {
         ],
       });
     });
-    const sendButton = () =>
-      screen.getByRole("button", { name: "Send to agent" }) as HTMLButtonElement;
-    await screen.findByText("Couldn't send to the agent");
-    expect(sendButton().disabled).toBe(false);
+    const sendButton = () => screen.getByRole("button", { name: SEND_NAME }) as HTMLButtonElement;
+    await screen.findByText("Couldn't send to claude");
+    expect(isOff(sendButton())).toBe(false);
   });
 });
 
@@ -1555,8 +1547,8 @@ async function recordSends() {
 async function sendRequest(sent: string[], words = "Make this bigger"): Promise<string> {
   const request = await screen.findByRole("textbox", { name: "Request for the agent" });
   fireEvent.change(request, { target: { value: words } });
-  const send = () => screen.getByRole("button", { name: "Send to agent" }) as HTMLButtonElement;
-  await waitFor(() => expect(send().disabled).toBe(false));
+  const send = () => screen.getByRole("button", { name: SEND_NAME }) as HTMLButtonElement;
+  await waitFor(() => expect(isOff(send())).toBe(false));
   fireEvent.click(send());
   await waitFor(() => expect(sent).toHaveLength(1), { timeout: 4000 });
   return sent[0]!;
@@ -1657,8 +1649,8 @@ describe("revision checks before a request goes", () => {
       url: "http://localhost:5173/pricing?plan=",
     });
 
-    // The notice keeps the exact request, one disclosure away.
-    fireEvent.click(await screen.findByRole("button", { name: "View request" }));
+    // The request's row keeps the exact request, one disclosure away.
+    fireEvent.click(await screen.findByRole("button", { name: /^Sent to / }));
     expect(screen.getByRole("group", { name: "Request text" }).textContent).toBe(prompt);
     // Beside the status region, not inside it: a status is read out whole.
     expect(
@@ -1688,17 +1680,17 @@ describe("stale selections", () => {
     fireEvent.change(screen.getByRole("textbox", { name: "Request for the agent" }), {
       target: { value: "Make it green" },
     });
-    const send = screen.getByRole("button", { name: "Send to agent" }) as HTMLButtonElement;
-    await waitFor(() => expect(send.disabled).toBe(false));
+    const send = screen.getByRole("button", { name: SEND_NAME }) as HTMLButtonElement;
+    await waitFor(() => expect(isOff(send)).toBe(false));
 
     await act(async () => host.sourceChanged(FILE, sha("an agent's edit")));
     // Unproven, so it can't be sent — but nobody is told to click again yet.
-    expect(send.disabled).toBe(true);
+    expect(isOff(send)).toBe(true);
     expect(screen.queryAllByText("File changed — select it again")).toHaveLength(0);
 
     // Proved again as a new selection, which the pinned draft moves to: it is
     // sendable, and not offered its own subject as a different one.
-    await waitFor(() => expect(send.disabled).toBe(false), { timeout: 4000 });
+    await waitFor(() => expect(isOff(send)).toBe(false), { timeout: 4000 });
     expect(host.calls("resolve")).toHaveLength(2);
     expect(host.picker.reselect).toHaveBeenCalledWith({
       sessionId: "session-1",
@@ -1739,14 +1731,14 @@ describe("stale selections", () => {
     await act(async () => host.select(0));
     const request = await screen.findByRole("textbox", { name: "Request for the agent" });
     fireEvent.change(request, { target: { value: "Make it green" } });
-    const send = screen.getByRole("button", { name: "Send to agent" }) as HTMLButtonElement;
-    await waitFor(() => expect(send.disabled).toBe(false));
+    const send = screen.getByRole("button", { name: SEND_NAME }) as HTMLButtonElement;
+    await waitFor(() => expect(isOff(send)).toBe(false));
 
     // The creation site was mapped, not read: its file carries no revision,
     // and an edit to it moves the line all the same.
     await act(async () => host.sourceChanged("src/Dashboard.tsx"));
-    expect(send.disabled).toBe(true);
-    await waitFor(() => expect(send.disabled).toBe(false), { timeout: 4000 });
+    expect(isOff(send)).toBe(true);
+    await waitFor(() => expect(isOff(send)).toBe(false), { timeout: 4000 });
     // React gives the page no locator, so the same node is all it can be asked for.
     expect(host.picker.reselect).toHaveBeenCalledWith({
       sessionId: "session-1",
@@ -2477,8 +2469,8 @@ async function agentActions(options: { onSend?: () => Promise<void> } = {}) {
 async function typeAndSend() {
   const request = screen.getByRole("textbox", { name: "Request for the agent" });
   fireEvent.change(request, { target: { value: "Say Upgrade" } });
-  const send = () => screen.getByRole("button", { name: "Send to agent" }) as HTMLButtonElement;
-  await waitFor(() => expect(send().disabled).toBe(false));
+  const send = () => screen.getByRole("button", { name: SEND_NAME }) as HTMLButtonElement;
+  await waitFor(() => expect(isOff(send())).toBe(false));
   fireEvent.click(send());
 }
 
@@ -2539,8 +2531,8 @@ describe("delivery across the picker's lifetime", () => {
     ]);
 
     // Still about what it was written about, and sendable through the new session.
-    const send = () => screen.getByRole("button", { name: "Send to agent" }) as HTMLButtonElement;
-    await waitFor(() => expect(send().disabled).toBe(false));
+    const send = () => screen.getByRole("button", { name: SEND_NAME }) as HTMLButtonElement;
+    await waitFor(() => expect(isOff(send())).toBe(false));
     fireEvent.click(send());
     agent.becomeReady();
 
@@ -2573,7 +2565,7 @@ describe("delivery across the picker's lifetime", () => {
     await act(async () => host.documentReady(0));
     await act(async () => host.select(0));
     // Same element, same epoch, new session: not the selection the draft was pinned to.
-    await screen.findByRole("button", { name: "Use current selection" });
+    await screen.findByRole("button", { name: /^Switch to / });
 
     cleanup();
     await switchOff();
@@ -2601,8 +2593,8 @@ describe("delivery across the picker's lifetime", () => {
     mount();
     await waitFor(() => expect(host.calls("openWorkspace")).toHaveLength(2));
     agent.becomeReady();
-    const send = () => screen.getByRole("button", { name: "Send to agent" }) as HTMLButtonElement;
-    await waitFor(() => expect(send().disabled).toBe(false));
+    const send = () => screen.getByRole("button", { name: SEND_NAME }) as HTMLButtonElement;
+    await waitFor(() => expect(isOff(send())).toBe(false));
     fireEvent.click(send());
 
     await waitFor(() =>
@@ -2694,7 +2686,7 @@ describe("delivery across the picker's lifetime", () => {
     await waitFor(() => expect(agent.sent).toHaveLength(1), { timeout: 4_000 });
     expect(agent.sent[0]).toContain("Say Upgrade");
     expect(agent.launches).toEqual(["claude"]);
-    await screen.findByText(/^Sent to /);
+    await within(await screen.findByRole("list", { name: "Requests" })).findByText(/^Sent to /);
   });
 });
 

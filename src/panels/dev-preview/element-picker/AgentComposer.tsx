@@ -548,16 +548,20 @@ export function AgentComposer({
       />
     ) : null;
 
-  // Mounted before the first request exists, so the first change is heard.
-  // Rows are not live regions themselves, so nobody hears a prompt recited.
+  // The status region is mounted before the first request exists, so the
+  // first change is heard; an alert is announced as it is inserted, so it only
+  // exists while there is a failure to say. Rows are not live regions
+  // themselves, so nobody hears a prompt recited.
   const announcer = (
     <>
       <span role="status" className="sr-only">
         {announcement && !announcement.urgent ? announcement.text : ""}
       </span>
-      <span role="alert" className="sr-only">
-        {announcement?.urgent ? announcement.text : ""}
-      </span>
+      {announcement?.urgent ? (
+        <span role="alert" className="sr-only">
+          {announcement.text}
+        </span>
+      ) : null}
     </>
   );
 
@@ -1083,6 +1087,15 @@ interface RequestMaterial {
   thumbnail: string | null;
 }
 
+async function readThumbnail(path: string, height: number): Promise<string | null> {
+  try {
+    const result = await window.electron.clipboard.thumbnailFromPath(path, { height });
+    return result.thumbnailDataUrl;
+  } catch {
+    return null;
+  }
+}
+
 /** The picture and project read a request about this selection is built from, and the picture's thumbnail. */
 function useRequestMaterial(
   controller: InspectorController,
@@ -1096,17 +1109,14 @@ function useRequestMaterial(
       controller.pagePicture(selection.selectionId),
       controller.projectFor(selection),
     ]).then(async ([picture, project]) => {
-      let thumbnail: string | null = null;
-      if (picture.status === "attached") {
-        // The capture sits where agents read pasted images, which is a root
-        // the thumbnail reader already allows.
-        // Big enough to inspect when the preview is open; the closed row draws
-        // the same image small.
-        thumbnail = await window.electron.clipboard
-          .thumbnailFromPath(picture.path, { height: SCREENSHOT_PREVIEW_HEIGHT })
-          .then((result) => result.thumbnailDataUrl)
-          .catch(() => null);
-      }
+      // The capture sits where agents read pasted images, which is a root the
+      // thumbnail reader already allows. Big enough to inspect when the preview
+      // is open; the closed row draws the same image small. Optional: the row
+      // and the text stand without it.
+      const thumbnail =
+        picture.status === "attached"
+          ? await readThumbnail(picture.path, SCREENSHOT_PREVIEW_HEIGHT)
+          : null;
       if (live) setMaterial({ selectionId: selection.selectionId, picture, project, thumbnail });
     });
     return () => {
@@ -1523,6 +1533,7 @@ function RequestText({ text }: { text: string }) {
       compact
       className="max-h-48 rounded-md border border-border-subtle bg-surface-inset"
       scrollClassName="px-2 py-1.5"
+      role="group"
       tabIndex={0}
       aria-label="Request text"
     >
