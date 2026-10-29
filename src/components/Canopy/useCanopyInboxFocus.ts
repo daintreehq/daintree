@@ -310,6 +310,20 @@ export function useCanopyInboxFocus({
   // in elsewhere keeps it.
   const lastIndexRef = useRef(0);
   const refreshRef = useRef<HTMLButtonElement>(null);
+  // What last had the keyboard: a row it was taken from by its own remount,
+  // rather than by anything else leaving, is still in the user's view.
+  const lastFocusedRef = useRef<Element | null>(null);
+  useEffect(() => {
+    if (!isOpen) return;
+    const note = (event: FocusEvent) => {
+      lastFocusedRef.current = event.target instanceof Element ? event.target : null;
+    };
+    document.addEventListener("focusin", note, true);
+    return () => {
+      document.removeEventListener("focusin", note, true);
+      lastFocusedRef.current = null;
+    };
+  }, [isOpen]);
   useEffect(() => {
     if (focusedIndex !== -1) lastIndexRef.current = focusedIndex;
     if (!landedRef.current || focusedId === null) return;
@@ -325,7 +339,15 @@ export function useCanopyInboxFocus({
       refreshRef.current?.focus();
       return;
     }
-    // Either the card left, or it moved section and its node was replaced.
+    // Its row moved section and was replaced: the keyboard comes back to it
+    // where it now is, with the pane and the list's scroll left as they were.
+    const lost = lastFocusedRef.current;
+    const domId = canopyCardDomId(focusedId);
+    if (focusedIndex !== -1 && lost !== null && !lost.isConnected && lost.id === domId) {
+      document.getElementById(domId)?.focus({ preventScroll: true });
+      return;
+    }
+    // Either the card left, or the keyboard was lost from somewhere else.
     const target =
       focusedIndex !== -1
         ? visible[focusedIndex]!
