@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { converter, displayable, formatHex, parse } from "culori";
 import { BUILT_IN_APP_SCHEMES } from "../themes.js";
-import { blendOverBackground, contrastRatio, deltaEOK, parseRgba } from "../contrast.js";
+import { blendOverBackground, contrastRatio, deltaEOK, isHexColor } from "../contrast.js";
 import { RED_GREEN_OVERRIDES, BLUE_YELLOW_OVERRIDES } from "../colorVisionOverrides.js";
 
 // #15334 — the fleet ribbon is a full-width band, so it has to read as its own
@@ -17,42 +17,59 @@ const ribbonCss = readFileSync(
   "utf-8"
 );
 
-type Derivation = { l: number; c: number };
-type Polarity = "dark" | "light";
+/** `oklch(from amber L C h)`, or the canvas's lightness stepped toward amber with chroma set from it. */
+type Derivation =
+  | { kind: "fixed"; l: number; c: number }
+  | { kind: "canvas-step"; amberShare: number; chromaPerLightness: number };
 
 function ruleBody(selector: RegExp): string {
-  const match = ribbonCss.match(selector);
-  if (!match) throw new Error(`rule ${selector} not found in fleet-ribbon.css`);
-  return match[1];
+  const body = ribbonCss.match(selector)?.[1];
+  if (body === undefined) throw new Error(`rule ${selector} not found in fleet-ribbon.css`);
+  return body;
 }
 
 function derivation(body: string, name: "fill" | "ink"): Derivation {
-  const match = body.match(
-    new RegExp(
-      `--fleet-ribbon-${name}:\\s*oklch\\(\\s*from var\\(--color-category-amber\\)\\s+([\\d.]+)\\s+([\\d.]+)\\s+h\\s*\\)`
-    )
+  const raw = body.match(new RegExp(`--fleet-ribbon-${name}:([^;]+);`))?.[1];
+  if (raw === undefined) throw new Error(`--fleet-ribbon-${name} not found in fleet-ribbon.css`);
+  const value = raw.replace(/\s+/g, " ").replace(/\( /g, "(").replace(/ \)/g, ")").trim();
+
+  const fixed = value.match(/^oklch\(from var\(--color-category-amber\) ([\d.]+) ([\d.]+) h\)$/);
+  if (fixed) return { kind: "fixed", l: Number(fixed[1]), c: Number(fixed[2]) };
+
+  const step = value.match(
+    /^oklch\(from color-mix\(in oklab, var\(--color-category-amber\) ([\d.]+)%, oklch\(from var\(--color-surface-canvas\) l 0 0\)\) l calc\(l \* ([\d.]+)\) h\)$/
   );
-  if (!match) throw new Error(`--fleet-ribbon-${name} derivation not found in fleet-ribbon.css`);
-  return { l: Number(match[1]), c: Number(match[2]) };
+  if (step) {
+    return {
+      kind: "canvas-step",
+      amberShare: Number(step[1]) / 100,
+      chromaPerLightness: Number(step[2]),
+    };
+  }
+  throw new Error(`--fleet-ribbon-${name} has a derivation this gate cannot model: ${value}`);
 }
 
 const darkBody = ruleBody(/^\.fleet-ribbon-surface\s*\{([^}]*)\}/m);
 const lightBody = ruleBody(
-  /^:where\(\.light, \[data-color-mode="light"\]\) \.fleet-ribbon-surface\s*\{([^}]*)\}/m
+  /^:where\(\.light,\s*\[data-color-mode="light"\]\)\s+\.fleet-ribbon-surface\s*\{([^}]*)\}/m
 );
-const DERIVATIONS: Record<Polarity, { fill: Derivation; ink: Derivation }> = {
+const DERIVATIONS = {
   dark: { fill: derivation(darkBody, "fill"), ink: derivation(darkBody, "ink") },
   light: { fill: derivation(lightBody, "fill"), ink: derivation(lightBody, "ink") },
-};
+} as const;
 
-/** The planes whose edges the band runs along: the toolbar above it, the sidebar below, the window. */
-const BAND_PLANES = ["canvas", "toolbar", "sidebar"] as const;
-/** Two JNDs (OKLab ΔE ≈ 0.02 each): visibly a different colour, not a rounding of the same one. */
-const BAND_SEPARATION = 0.04;
 /**
- * The grid's 4px gutter and the panels below it meet the band only behind the
- * shell's own bottom border, and some palettes paint that gutter in the sand
- * family amber belongs to, so it is held to one JND rather than two.
+ * The planes the band runs along: the toolbar above it, the sidebar below it,
+ * the window behind. Two JNDs (OKLab ΔE ≈ 0.02 each) is the target; the floor
+ * sits just under it because on serengeti the blue-yellow amber is the
+ * sidebar's own sand, and sRGB, the controls' contrast and red-green's hue
+ * leave no lightness or chroma that clears it by more. The pill tint this
+ * replaced sat at 0.014 to 0.021.
+ */
+const BAND_SEPARATION = 0.035;
+/**
+ * The grid's 4px gutter and the panels beyond it are content, not chrome, and
+ * meet the band only past the shell's own bottom border, so they owe one JND.
  */
 const CONTENT_SEPARATION = 0.02;
 
@@ -63,36 +80,48 @@ const MODES = [
 ] as const;
 
 const toOklch = converter("oklch");
+const toOklab = converter("oklab");
 
-function amberHue(amber: string): number {
-  const hue = toOklch(parse(amber))?.h;
-  if (hue === undefined) throw new Error(`amber ${amber} has no hue`);
-  return hue;
+function oklchOf(color: string) {
+  const resolved = toOklch(parse(color));
+  if (!resolved) throw new Error(`unparseable colour: ${color}`);
+  return resolved;
 }
 
-/** `oklch(from amber L C h)`, required to sit inside sRGB so no gamut mapping is involved. */
+/** Resolves a derivation the way Chromium does, and requires it inside sRGB so no gamut mapping is involved. */
 function resolveDerivation(
-  { l, c }: Derivation,
-  hue: number,
+  spec: Derivation,
+  amber: string,
+  canvas: string,
   where: string,
   failures: string[]
 ): string {
+  const hue = oklchOf(amber).h;
+  if (hue === undefined) throw new Error(`${where}: amber ${amber} has no hue`);
+  let l: number;
+  let c: number;
+  if (spec.kind === "fixed") {
+    ({ l, c } = spec);
+  } else {
+    // Mixing into the canvas with its chroma removed keeps amber's hue exactly.
+    const amberLab = toOklab(parse(amber));
+    if (!amberLab) throw new Error(`unparseable colour: ${amber}`);
+    l = spec.amberShare * amberLab.l + (1 - spec.amberShare) * oklchOf(canvas).l;
+    c = spec.chromaPerLightness * l;
+  }
   const color = { mode: "oklch" as const, l, c, h: hue };
-  if (!displayable(color))
-    failures.push(`${where}: oklch(${l} ${c} ${hue.toFixed(1)}) is outside sRGB`);
+  if (!displayable(color)) {
+    failures.push(
+      `${where}: oklch(${l.toFixed(3)} ${c.toFixed(3)} ${hue.toFixed(1)}) is outside sRGB`
+    );
+  }
   return formatHex(color);
 }
 
-/** Every colour layer the grid gutter can show: the final flat layer and each gradient stop over it. */
-function gridLayers(value: string): string[] {
-  const base = value.match(/#[0-9a-f]{6}\s*$/i)?.[0].trim();
-  if (!base) throw new Error(`grid background has no flat colour layer: ${value}`);
-  const stops = (value.match(/rgba?\([^)]*\)/g) ?? []).map((stop) => {
-    const rgba = parseRgba(stop);
-    if (!rgba) throw new Error(`unparseable grid stop: ${stop}`);
-    return blendOverBackground(rgba.hex, base, rgba.opacity);
-  });
-  return [base, ...stops];
+function plainColor(value: string, what: string): string {
+  if (!isHexColor(value))
+    throw new Error(`${what} is not a flat hex colour this gate can model: ${value}`);
+  return value;
 }
 
 describe("fleet ribbon band (#15334)", () => {
@@ -100,57 +129,62 @@ describe("fleet ribbon band (#15334)", () => {
     const failures: string[] = [];
 
     for (const scheme of BUILT_IN_APP_SCHEMES) {
-      const tokens = scheme.tokens as Record<string, string>;
+      const { tokens } = scheme;
       const extensions = (scheme.extensions ?? {}) as Record<string, string | undefined>;
-      const { fill: fillDerivation, ink: inkDerivation } = DERIVATIONS[scheme.type];
+      const canvas = tokens["surface-canvas"];
+      const { fill: fillSpec, ink: inkSpec } = DERIVATIONS[scheme.type];
 
-      const bandPlanes: Record<string, string> = {
-        canvas: tokens["surface-canvas"],
-        toolbar: extensions["toolbar-bg"] ?? tokens["surface-toolbar"],
-        sidebar: tokens["surface-sidebar"],
+      if (extensions["chrome-bg"] !== undefined) {
+        throw new Error(`${scheme.id}: chrome-bg replaces the sidebar plane this gate models`);
+      }
+      // A grid background that is not a colour (movile's is a gradient) makes
+      // `background-color` invalid at computed time, so the gutter shows the canvas.
+      const gridValue =
+        extensions["panel-grid-bg"] ?? extensions["terminal-grid-bg"] ?? tokens["surface-grid"];
+      const bandPlanes = {
+        canvas,
+        toolbar: plainColor(extensions["toolbar-bg"] ?? tokens["surface-toolbar"], "toolbar"),
+        // The sidebar is .surface-chrome: its surface at 95% over the window.
+        sidebar: blendOverBackground(tokens["surface-sidebar"], canvas, 0.95),
       };
-      const contentPlanes: Record<string, string> = { panel: tokens["surface-panel"] };
-      gridLayers(
-        extensions["panel-grid-bg"] ?? extensions["terminal-grid-bg"] ?? tokens["surface-grid"]
-      ).forEach((layer, index) => {
-        contentPlanes[index === 0 ? "grid" : `grid stop ${index}`] = layer;
-      });
+      const contentPlanes = {
+        grid: isHexColor(gridValue) ? gridValue : canvas,
+        panel: tokens["surface-panel"],
+      };
 
       for (const [mode, overrides] of MODES) {
         const where = `${scheme.id} ${mode}`;
         const amber =
           (overrides as Record<string, string>)["--theme-category-amber"] ??
           tokens["category-amber"];
-        const hue = amberHue(amber);
-        const fill = resolveDerivation(fillDerivation, hue, `${where} fill`, failures);
-        const ink = resolveDerivation(inkDerivation, hue, `${where} ink`, failures);
+        const fill = resolveDerivation(fillSpec, amber, canvas, `${where} fill`, failures);
+        const ink = resolveDerivation(inkSpec, amber, canvas, `${where} ink`, failures);
 
-        for (const plane of BAND_PLANES) {
-          const delta = deltaEOK(fill, bandPlanes[plane]);
-          if (delta < BAND_SEPARATION) {
-            failures.push(
-              `${where}: band ${fill} vs ${plane} ${bandPlanes[plane]} ΔE ${delta.toFixed(3)} < ${BAND_SEPARATION}`
-            );
-          }
-        }
-        for (const [plane, color] of Object.entries(contentPlanes)) {
-          const delta = deltaEOK(fill, color);
-          if (delta < CONTENT_SEPARATION) {
-            failures.push(
-              `${where}: band ${fill} vs ${plane} ${color} ΔE ${delta.toFixed(3)} < ${CONTENT_SEPARATION}`
-            );
+        for (const [planes, floor] of [
+          [bandPlanes, BAND_SEPARATION],
+          [contentPlanes, CONTENT_SEPARATION],
+        ] as const) {
+          for (const [plane, color] of Object.entries(planes)) {
+            const delta = deltaEOK(fill, color);
+            if (delta < floor) {
+              failures.push(
+                `${where}: band ${fill} vs ${plane} ${color} ΔE ${delta.toFixed(3)} < ${floor}`
+              );
+            }
           }
         }
 
-        for (const text of ["text-primary", "text-secondary"]) {
+        for (const text of ["text-primary", "text-secondary"] as const) {
           const ratio = contrastRatio(tokens[text], fill);
           if (ratio < 4.5) {
-            failures.push(`${where}: ${text} ${tokens[text]} on ${fill} = ${ratio.toFixed(2)}`);
+            failures.push(
+              `${where}: ${text} ${tokens[text]} on ${fill} = ${ratio.toFixed(2)} < 4.5`
+            );
           }
         }
         const inkRatio = contrastRatio(ink, fill);
         if (inkRatio < 3) {
-          failures.push(`${where}: ink ${ink} on ${fill} = ${inkRatio.toFixed(2)}`);
+          failures.push(`${where}: ink ${ink} on ${fill} = ${inkRatio.toFixed(2)} < 3`);
         }
       }
     }

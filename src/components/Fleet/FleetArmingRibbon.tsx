@@ -625,6 +625,7 @@ export function FleetArmingRibbon(): ReactElement | null {
               <AlertTriangle
                 className="h-3.5 w-3.5 shrink-0 text-[var(--fleet-ribbon-ink)]"
                 aria-hidden="true"
+                data-severity-glyph=""
               />
               <span className="truncate font-semibold">{message}</span>
             </div>
