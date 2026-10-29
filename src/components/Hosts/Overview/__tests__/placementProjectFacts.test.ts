@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { MAX_HOST_SUMMARY_DRIVERS, type HostDriverObservation } from "@shared/types/remoteHosts";
 import type { ProjectHost } from "../../projectHosts";
-import { describePlacementProjectFacts } from "../placementProjectFacts";
+import { CHECKING, describePlacementProjectFacts } from "../placementProjectFacts";
 import { makeRow, makeSummary } from "./fixtures";
 
 function driver(projectId: string, clientName: string): HostDriverObservation {
@@ -45,34 +45,46 @@ describe("describePlacementProjectFacts", () => {
       agentClis: [{ agentId: "claude", version: "2.0.0" }],
       drivers: [driver("p-remote", "Greg's MacBook"), driver("other", "Elsewhere")],
     });
-    const lines = describePlacementProjectFacts(hostFor(), makeRow({ summary }), summary);
-    expect(lines).toEqual([
-      "Has a copy of this project",
-      "Agent CLIs: Claude 2.0.0",
-      "Greg's MacBook has control",
-    ]);
+    expect(describePlacementProjectFacts(hostFor(), makeRow({ summary }), summary)).toEqual({
+      project: "Has a copy",
+      agentClis: ["Claude 2.0.0"],
+      control: "Greg's MacBook has control",
+    });
   });
 
-  it("says a host without a copy would clone one, and skips drivers", () => {
+  it("says a host without a copy clones one first, and has no control to report", () => {
     const summary = makeSummary({ agentClis: [], drivers: [] });
-    const lines = describePlacementProjectFacts(
-      hostFor({ presence: "none", projectIds: [] }),
-      makeRow({ summary }),
-      summary
-    );
-    expect(lines).toEqual(["No copy of this project, would clone it", "No agent CLIs reported"]);
+    expect(
+      describePlacementProjectFacts(
+        hostFor({ presence: "none", projectIds: [] }),
+        makeRow({ summary }),
+        summary
+      )
+    ).toEqual({ project: "No copy yet, so it's cloned there first", agentClis: [], control: null });
   });
 
   it("reads a host that reports nothing as not reported, never as none", () => {
     const away = hostFor({ presence: "unknown", projectIds: [], away: "Not connected" });
-    expect(describePlacementProjectFacts(away, makeRow({ summary: null }), null)).toEqual([
-      "Copy of this project not reported",
-      "Agent CLIs not reported",
-    ]);
+    expect(describePlacementProjectFacts(away, makeRow({ summary: null }), null)).toEqual({
+      project: "Not reported",
+      agentClis: null,
+      control: null,
+    });
     const silentDrivers = makeSummary({ drivers: undefined });
     expect(
       describePlacementProjectFacts(hostFor(), makeRow({ summary: silentDrivers }), silentDrivers)
-    ).toContain("Who has control not reported");
+        .control
+    ).toBe("Not reported");
+  });
+
+  it("says it is still checking while the host's answer is out", () => {
+    const summary = makeSummary();
+    const facts = describePlacementProjectFacts(
+      hostFor({ presence: "pending", projectIds: [] }),
+      makeRow({ summary }),
+      summary
+    );
+    expect([facts.project, facts.control]).toEqual([CHECKING, CHECKING]);
   });
 
   it("doesn't read a project missing from a capped drivers list as undriven", () => {
@@ -80,10 +92,10 @@ describe("describePlacementProjectFacts", () => {
       drivers: Array.from({ length: MAX_HOST_SUMMARY_DRIVERS }, (_, i) => driver(`x${i}`, "A")),
     });
     expect(
-      describePlacementProjectFacts(hostFor(), makeRow({ summary: capped }), capped)
-    ).toContain("Who has control not reported");
+      describePlacementProjectFacts(hostFor(), makeRow({ summary: capped }), capped).control
+    ).toBe("Not reported");
     const full = makeSummary({ drivers: [] });
-    expect(describePlacementProjectFacts(hostFor(), makeRow({ summary: full }), full)).toContain(
+    expect(describePlacementProjectFacts(hostFor(), makeRow({ summary: full }), full).control).toBe(
       "Nobody has control"
     );
   });
