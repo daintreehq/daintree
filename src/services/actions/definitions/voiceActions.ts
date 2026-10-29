@@ -172,6 +172,12 @@ export function registerVoiceActions(actions: ActionRegistry): void {
       if (!parsed.success) return;
       const target = voiceRecordingService.getDictationTarget(parsed.data.panelId);
       if (!target) {
+        // Only a start needs the composer: one already running there still stops.
+        const stopping = voiceRecordingService.stopPanelDictation(parsed.data.panelId);
+        if (stopping) {
+          await stopping;
+          return;
+        }
         useVoiceRecordingStore.getState().setLastError({
           severity: "transient",
           code: "recall_target_unavailable",

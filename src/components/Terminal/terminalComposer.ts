@@ -16,8 +16,9 @@ export function panelHasComposer(
   if (!panel || panel.location === "trash" || !isPtyPanel(panel)) return false;
   // A pane held for recovery (#12434) shows its recovery gate instead.
   if (panel.restoreRecovery) return false;
-  // `agentState` matters: an agent that exited back to its shell keeps its
-  // launch identity, and only the exit drops it.
+  // The exit signals matter: an agent that exited back to its shell keeps its
+  // launch identity, and only the exit drops it. Same inputs as the pane's own
+  // chrome (`buildPanelProps`).
   const chrome = deriveTerminalChrome({
     kind: panel.kind,
     launchAgentId: panel.launchAgentId,
@@ -25,6 +26,8 @@ export function panelHasComposer(
     detectedAgentId: panel.detectedAgentId,
     detectedProcessId: panel.detectedProcessId,
     agentState: panel.agentState,
+    runtimeStatus: panel.runtimeStatus,
+    exitCode: panel.exitCode,
   });
   return shouldShowHybridInputBar({
     hasAgentIdentity: isBuiltInAgentId(chrome.agentId),

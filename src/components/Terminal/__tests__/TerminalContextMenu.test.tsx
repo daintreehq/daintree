@@ -48,6 +48,7 @@ const {
   snapshotState,
   panelsById,
   voiceState,
+  armed,
   selectWorktree,
   trackTerminalFocus,
   restoreBackgroundTerminal,
@@ -75,6 +76,7 @@ const {
     lockedTarget: null as { panelId: string } | null,
     recentTargets: [] as Array<Record<string, unknown>>,
   },
+  armed: { armedIds: new Set<string>() },
   selectWorktree: vi.fn(),
   trackTerminalFocus: vi.fn(),
   restoreBackgroundTerminal: vi.fn(),
@@ -122,9 +124,8 @@ vi.mock("@/store/voiceRecordingStore", () => ({
 // Snooze need the run on the snapshot as well.
 vi.mock("@/store/fleetArmingStore", () => ({
   useFleetArmingStore: Object.assign(
-    (selector: (s: { armedIds: Set<string> }) => unknown) =>
-      selector({ armedIds: new Set<string>() }),
-    { getState: () => ({ armedIds: new Set<string>() }) }
+    (selector: (s: { armedIds: Set<string> }) => unknown) => selector(armed),
+    { getState: () => armed }
   ),
   isFleetArmEligible: () => fleetEligible.current,
 }));
@@ -747,6 +748,7 @@ describe("TerminalContextMenu — dictation lock and recent targets (#14955)", (
   afterEach(() => {
     voiceState.lockedTarget = null;
     voiceState.recentTargets = [];
+    armed.armedIds = new Set();
     useTerminalInputStore.setState({ hybridInputEnabled: true });
   });
 
@@ -820,5 +822,30 @@ describe("TerminalContextMenu — dictation lock and recent targets (#14955)", (
       { panelId: "twin-agent" },
       expect.anything()
     );
+  });
+
+  it("offers the lock on a plain shell armed in a fleet of two, and not on one left out", () => {
+    armed.armedIds = new Set(["shell-1", "agent-2"]);
+    openOn(shell);
+    expect(screen.queryByText("Lock dictation to this panel")).not.toBeNull();
+    cleanup();
+
+    armed.armedIds = new Set(["agent-2", "agent-3"]);
+    openOn(shell);
+    expect(screen.queryByText("Lock dictation to this panel")).toBeNull();
+  });
+
+  it("lists a recent shell target only while it is armed in the fleet", () => {
+    const fleetShell = { id: "shell-2", title: "Bash", kind: "terminal" };
+    voiceState.recentTargets = [{ panelId: "shell-2", panelTitle: "Bash" }];
+
+    armed.armedIds = new Set(["shell-2", "panel-1"]);
+    openOn(agentPanel, [fleetShell]);
+    expect(screen.queryByText("Bash")).not.toBeNull();
+    cleanup();
+
+    armed.armedIds = new Set(["panel-1", "agent-3"]);
+    openOn(agentPanel, [fleetShell]);
+    expect(screen.queryByText("Bash")).toBeNull();
   });
 });

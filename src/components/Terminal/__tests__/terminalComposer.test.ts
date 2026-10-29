@@ -26,10 +26,12 @@ describe("panelHasComposer (#14955)", () => {
     expect(panelHasComposer(pane(fields), ON)).toBe(true);
   });
 
-  it("is false once the agent a pane was launched with has exited to its shell", () => {
-    expect(panelHasComposer(pane({ launchAgentId: "claude", agentState: "exited" }), ON)).toBe(
-      false
-    );
+  it.each([
+    ["its agent state", { agentState: "exited" }],
+    ["its runtime status", { runtimeStatus: "exited" }],
+    ["its exit code", { exitCode: 0 }],
+  ])("is false once %s says the launched agent exited to its shell", (_n, exit) => {
+    expect(panelHasComposer(pane({ launchAgentId: "claude", ...exit }), ON)).toBe(false);
   });
 
   it("is false for an agent pane while hybrid input is off", () => {
@@ -41,6 +43,7 @@ describe("panelHasComposer (#14955)", () => {
   it("gives a plain shell a composer only while it is armed in a fleet of two or more", () => {
     const shell = pane({});
     expect(panelHasComposer(shell, ON)).toBe(false);
+    expect(panelHasComposer(shell, { ...ON, isFleetArmed: false, fleetSize: 2 })).toBe(false);
     expect(panelHasComposer(shell, { ...ON, isFleetArmed: true, fleetSize: 1 })).toBe(false);
     expect(panelHasComposer(shell, { ...ON, isFleetArmed: true, fleetSize: 2 })).toBe(true);
   });

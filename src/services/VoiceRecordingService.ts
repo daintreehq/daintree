@@ -1625,22 +1625,9 @@ class VoiceRecordingService {
       return;
     }
 
-    // A second press during the arming window aborts back to idle. No session
-    // exists yet, so there is nothing for stop() to drain — cancelArming()
-    // releases whatever the in-flight start() has opened and makes it bail at
-    // its next staleness check, discarding any audio it already queued.
-    // Once the mic is recording into the start's queue, the press keeps that
-    // speech and ends the session after it is sent.
-    if (
-      state.pendingTarget?.panelId === target.panelId ||
-      (isActiveTarget && state.status === "arming")
-    ) {
-      if (!this.deferStopToStartup("user")) this.cancelArming("user");
-      return;
-    }
-
-    if (isActiveTarget && isActive) {
-      await this.requestUserStop("user");
+    const stopping = this.stopPanelDictation(target.panelId);
+    if (stopping) {
+      await stopping;
       return;
     }
 
@@ -1656,6 +1643,30 @@ class VoiceRecordingService {
     // ~50–200ms, by which point beginSession() has overwritten this state.
     this.armTarget(target);
     await this.start(target);
+  }
+
+  /**
+   * Ends the dictation starting or running in `panelId`, as a second press of
+   * its toggle does, and never starts or resumes one, so it needs no composer
+   * there. Null when there's nothing in that panel to stop.
+   */
+  stopPanelDictation(panelId: string): Promise<void> | null {
+    const state = useVoiceRecordingStore.getState();
+    const isActiveTarget = state.activeTarget?.panelId === panelId;
+    // A second press during the arming window aborts back to idle. No session
+    // exists yet, so there is nothing for stop() to drain — cancelArming()
+    // releases whatever the in-flight start() has opened and makes it bail at
+    // its next staleness check, discarding any audio it already queued.
+    // Once the mic is recording into the start's queue, the press keeps that
+    // speech and ends the session after it is sent.
+    if (state.pendingTarget?.panelId === panelId || (isActiveTarget && state.status === "arming")) {
+      if (!this.deferStopToStartup("user")) this.cancelArming("user");
+      return Promise.resolve();
+    }
+    if (isActiveTarget && this.isStoppableSession(state.status)) {
+      return this.requestUserStop("user");
+    }
+    return null;
   }
 
   /**

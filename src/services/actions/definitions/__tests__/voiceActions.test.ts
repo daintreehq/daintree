@@ -12,8 +12,16 @@ const getDictationTarget = vi.hoisted(() =>
     dictatable.has(panelId) ? { panelId, panelTitle: `Pane ${panelId}` } : null
   )
 );
+// Null: nothing to stop in that panel.
+const stopPanelDictation = vi.hoisted(() => vi.fn((): Promise<void> | null => null));
 vi.mock("@/services/VoiceRecordingService", () => ({
-  voiceRecordingService: { toggleFocusedPanel, stopAndSend, toggle, getDictationTarget },
+  voiceRecordingService: {
+    toggleFocusedPanel,
+    stopAndSend,
+    toggle,
+    getDictationTarget,
+    stopPanelDictation,
+  },
 }));
 vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
 
@@ -79,6 +87,8 @@ describe("dictation locks and recalls only a pane with a composer (#14955)", () 
   beforeEach(() => {
     dictatable.clear();
     toggle.mockClear();
+    stopPanelDictation.mockClear();
+    useVoiceRecordingStore.getState().setLastError(null);
     vi.mocked(notify).mockClear();
     useVoiceRecordingStore.getState().unlockTarget();
     usePanelStore.setState({ focusedId: null });
@@ -120,5 +130,15 @@ describe("dictation locks and recalls only a pane with a composer (#14955)", () 
     await runAction("voiceInput.recallRecentTarget", { panelId: "shell-1" });
     expect(toggle).not.toHaveBeenCalled();
     expect(useVoiceRecordingStore.getState().lastError?.code).toBe("recall_target_unavailable");
+  });
+
+  it("still stops a dictation running in a recalled pane that has lost its composer", async () => {
+    stopPanelDictation.mockReturnValueOnce(Promise.resolve());
+
+    await runAction("voiceInput.recallRecentTarget", { panelId: "shell-1" });
+
+    expect(stopPanelDictation).toHaveBeenCalledWith("shell-1");
+    expect(toggle).not.toHaveBeenCalled();
+    expect(useVoiceRecordingStore.getState().lastError).toBeNull();
   });
 });

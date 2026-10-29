@@ -12,6 +12,8 @@ import {
 const suspendCallbacks = vi.hoisted(() => [] as Array<() => void>);
 
 const focusDictationComposer = vi.hoisted(() => vi.fn());
+// The global hybrid-input setting, which decides whether an agent pane renders its composer.
+const terminalInput = vi.hoisted(() => ({ hybridInputEnabled: true }));
 // The real one reads the DOM, which these suites stub in part; its own suite
 // is voiceComposerFocus.test.tsx.
 const revealDictationComposer = vi.hoisted(() => vi.fn());
@@ -128,7 +130,7 @@ vi.mock("@/store/terminalInputStore", () => {
     setDraftInput: vi.fn(),
     bumpExternalDraftRevision: vi.fn(),
   };
-  const getState = () => ({ ...fns, hybridInputEnabled: true });
+  const getState = () => ({ ...fns, hybridInputEnabled: terminalInput.hybridInputEnabled });
   return {
     useTerminalInputStore: Object.assign(getState, { getState, subscribe: () => () => {} }),
   };
@@ -1707,6 +1709,10 @@ describe("VoiceRecordingService — a lock on a pane with no composer (#14955)",
       __state: { lockedTarget: object | null };
     };
     voice.__state.lockedTarget = null;
+    terminalInput.hybridInputEnabled = true;
+    (await import("@/store/fleetArmingStore")).useFleetArmingStore.setState({
+      armedIds: new Set<string>(),
+    });
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -1783,14 +1789,63 @@ describe("VoiceRecordingService — a lock on a pane with no composer (#14955)",
   );
 
   it("unlocks from the toast only the lock it was raised for", async () => {
-    const { voiceRecordingService, store, notify } = await arrange({ kind: "terminal" });
+    const { voiceRecordingService, voice, store, notify } = await arrange({ kind: "terminal" });
 
     await voiceRecordingService.toggleFocusedPanel();
     const { action } = notify.mock.calls[0]![0] as { action: { onClick: () => void } };
+    // Locked somewhere else since the toast went up.
+    voice.__state.lockedTarget = { panelId: "agent-1" };
     action.onClick();
 
+    expect(store.clearLockedTarget).toHaveBeenCalledTimes(1);
     expect(store.clearLockedTarget).toHaveBeenCalledWith("locked-1");
     expect(store.unlockTarget).not.toHaveBeenCalled();
+  });
+
+  it("refuses a locked agent pane while hybrid input is off, and starts there once it's back", async () => {
+    const { voiceRecordingService, toggleSpy, voice, notify } = await arrange({
+      kind: "terminal",
+      launchAgentId: "claude",
+    });
+    terminalInput.hybridInputEnabled = false;
+
+    await voiceRecordingService.toggleFocusedPanel();
+    expect(toggleSpy).not.toHaveBeenCalled();
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(voice.__state.lockedTarget).toEqual({ panelId: "locked-1", panelTitle: "Locked" });
+
+    terminalInput.hybridInputEnabled = true;
+    await voiceRecordingService.toggleFocusedPanel();
+    expect(toggleSpy).toHaveBeenCalledWith(expect.objectContaining({ panelId: "locked-1" }));
+  });
+
+  it("starts in a locked plain shell while it is armed in a fleet of two", async () => {
+    const { voiceRecordingService, toggleSpy, notify } = await arrange({ kind: "terminal" });
+    (await import("@/store/fleetArmingStore")).useFleetArmingStore.setState({
+      armedIds: new Set(["locked-1", "agent-1"]),
+    });
+
+    await voiceRecordingService.toggleFocusedPanel();
+
+    expect(toggleSpy).toHaveBeenCalledWith(expect.objectContaining({ panelId: "locked-1" }));
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("stops a dictation running in a pane that has lost its composer, and starts none", async () => {
+    const { voiceRecordingService, voice } = await arrange({ kind: "terminal" });
+    const stopSpy = vi.spyOn(voiceRecordingService, "stop").mockResolvedValue();
+    expect(voiceRecordingService.getDictationTarget("locked-1")).toBeNull();
+
+    expect(voiceRecordingService.stopPanelDictation("locked-1")).toBeNull();
+    expect(stopSpy).not.toHaveBeenCalled();
+
+    voice.__state.status = "recording";
+    voice.__state.activeTarget = { panelId: "agent-1" };
+    expect(voiceRecordingService.stopPanelDictation("locked-1")).toBeNull();
+
+    voice.__state.activeTarget = { panelId: "locked-1" };
+    await voiceRecordingService.stopPanelDictation("locked-1");
+    expect(stopSpy).toHaveBeenCalledTimes(1);
   });
 
   it("still starts in a locked agent pane", async () => {
