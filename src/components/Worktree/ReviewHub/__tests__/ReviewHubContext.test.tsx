@@ -23,6 +23,34 @@ import { ReviewHubContext } from "../ReviewHubContext";
 
 const NOW = Date.now();
 
+/**
+ * jsdom lays nothing out, so give each element a height from its text: a line
+ * per newline or per 80 characters, cut to three lines while it carries the
+ * clamp. That is what the Full prompt control measures.
+ */
+function fakeLayout() {
+  const LINE = 16;
+  const lines = (el: HTMLElement) =>
+    (el.textContent ?? "")
+      .split("\n")
+      .reduce((n, line) => n + Math.max(1, Math.ceil(line.length / 80)), 0);
+  Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
+    configurable: true,
+    get(this: HTMLElement) {
+      return lines(this) * LINE;
+    },
+  });
+  Object.defineProperty(HTMLElement.prototype, "clientHeight", {
+    configurable: true,
+    get(this: HTMLElement) {
+      const shown = this.classList.contains("line-clamp-3")
+        ? Math.min(lines(this), 3)
+        : lines(this);
+      return shown * LINE;
+    },
+  });
+}
+
 function terminal(id: string, extra: Record<string, unknown> = {}) {
   return {
     id,
@@ -45,7 +73,11 @@ beforeEach(() => {
     issueTitle: "Fix the thing",
   });
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  Reflect.deleteProperty(HTMLElement.prototype, "scrollHeight");
+  Reflect.deleteProperty(HTMLElement.prototype, "clientHeight");
+});
 
 describe("ReviewHubContext", () => {
   it("renders nothing without an issue, a first prompt or a handback", () => {
@@ -77,7 +109,7 @@ describe("ReviewHubContext", () => {
       lastHandback: { message: "no", observedAt: NOW, truncated: false },
     });
     panelsById.c = terminal("c");
-    const { getAllByTestId, getByText } = render(
+    const { getAllByTestId, getByRole } = render(
       <ReviewHubContext worktreePath="/repo/wt" worktreeId="wt-1" />
     );
     const runs = getAllByTestId("review-hub-run");
@@ -89,13 +121,13 @@ describe("ReviewHubContext", () => {
     expect(cards[0]!.textContent).toContain("5 minutes ago");
     expect(cards[0]!.textContent).toContain("The agent said");
     expect(cards[0]!.textContent).toContain("Done <b>x</b>");
-    expect(cards[0]!.textContent).toContain("truncated");
+    expect(cards[0]!.textContent).toContain("first 500 characters kept");
     expect(cards[0]!.querySelector("b")).toBeNull();
-    fireEvent.click(getByText("Go to terminal"));
+    fireEvent.click(getByRole("button", { name: "Go to terminal: Agent a" }));
     expect(dispatch).toHaveBeenCalledWith("panel.focus", { panelId: "a" }, { source: "user" });
   });
 
-  it("handles a bare handback and orders newest first", () => {
+  it("handles a bare handback, orders newest first, and opens only the newest", () => {
     panelsById.a = terminal("a", {
       lastHandback: { message: "old", observedAt: NOW - 3_600_000, truncated: false },
     });
@@ -106,8 +138,16 @@ describe("ReviewHubContext", () => {
       <ReviewHubContext worktreePath="/repo/wt" worktreeId="wt-1" />
     );
     const cards = getAllByTestId("review-hub-handback");
+    expect(cards).toHaveLength(1);
     expect(cards[0]!.textContent).toContain("no summary");
-    expect(cards[1]!.textContent).toContain("old");
+    const toggles = getAllByTestId("review-hub-run-toggle");
+    expect(toggles.map((t) => t.getAttribute("aria-expanded"))).toEqual(["true", "false"]);
+    // The closed run keeps its claim on its one line, attributed to the agent.
+    const runs = getAllByTestId("review-hub-run");
+    expect(runs[1]!.textContent).toContain("The agent said: “old”");
+
+    fireEvent.click(toggles[1]!);
+    expect(getAllByTestId("review-hub-handback")).toHaveLength(2);
   });
 
   it("shows what the run launched with beside its handback, as plain text", () => {
@@ -139,7 +179,8 @@ describe("ReviewHubContext", () => {
     expect(queryByTestId("review-hub-handback")).toBeNull();
   });
 
-  it("says when a long prompt was cut, and clamps it behind Show more", () => {
+  it("says when a long prompt was cut, and clamps it behind Full prompt", () => {
+    fakeLayout();
     panelsById.a = terminal("a", {
       firstPrompt: { text: "x".repeat(400), via: "launch", at: NOW, truncated: true },
     });
@@ -147,33 +188,35 @@ describe("ReviewHubContext", () => {
       <ReviewHubContext worktreePath="/repo/wt" worktreeId="wt-1" />
     );
     const prompt = getByTestId("review-hub-first-prompt");
-    expect(prompt.textContent).toContain("Only the first 8,000 characters were kept");
-    const toggle = getByRole("button", { name: "Show more" });
+    expect(prompt.textContent).toContain("first 8,000 characters kept");
+    const toggle = getByRole("button", { name: "Full prompt for Agent a" });
     const text = document.getElementById(toggle.getAttribute("aria-controls") ?? "");
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
-    expect(text?.className).toContain("line-clamp-4");
+    expect(text?.className).toContain("line-clamp-3");
+
+    // The label stays put; only the state changes.
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(toggle.textContent).toBe("Full prompt");
+    expect(text?.className).not.toContain("line-clamp-3");
 
     fireEvent.click(toggle);
-    expect(getByRole("button", { name: "Show less" }).getAttribute("aria-expanded")).toBe("true");
-    expect(text?.className).not.toContain("line-clamp-4");
-
-    fireEvent.click(getByRole("button", { name: "Show less" }));
-    expect(text?.className).toContain("line-clamp-4");
+    expect(text?.className).toContain("line-clamp-3");
   });
 
-  it("clamps a short prompt that runs over several lines, and leaves a brief one whole", () => {
+  it("offers Full prompt only where the clamp cuts the text", () => {
+    fakeLayout();
     panelsById.a = terminal("a", {
       firstPrompt: { text: "one\ntwo\nthree\nfour\nfive", via: "launch", at: NOW },
     });
-    panelsById.b = terminal("b", { firstPrompt: { text: "Ship it", via: "launch", at: NOW } });
+    panelsById.b = terminal("b", { firstPrompt: { text: "Ship it", via: "launch", at: NOW - 1 } });
     const { getAllByRole, getAllByTestId } = render(
       <ReviewHubContext worktreePath="/repo/wt" worktreeId="wt-1" />
     );
-    expect(getAllByRole("button", { name: "Show more" })).toHaveLength(1);
-    const brief = getAllByTestId("review-hub-first-prompt").find((el) =>
-      el.textContent?.includes("Ship it")
-    );
-    expect(brief?.querySelector(".line-clamp-4")).toBeNull();
+    fireEvent.click(getAllByTestId("review-hub-run-toggle")[1]!);
+    expect(getAllByTestId("review-hub-first-prompt")).toHaveLength(2);
+    const controls = getAllByRole("button", { name: /^Full prompt for / });
+    expect(controls.map((c) => c.getAttribute("aria-label"))).toEqual(["Full prompt for Agent a"]);
   });
 
   it("still shows what a run was asked when a later restart of it fails", () => {

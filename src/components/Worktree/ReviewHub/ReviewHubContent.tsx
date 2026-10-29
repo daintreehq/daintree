@@ -1588,7 +1588,7 @@ export function ReviewHubContent({
           onDismissNotice={reviewMark.dismissNotice}
         />
 
-        <ReviewHubContext worktreePath={worktreePath} worktreeId={worktreeId} />
+        <ReviewHubContext worktreePath={worktreePath} worktreeId={worktreeId} isDialog={isDialog} />
 
         {/* Merge-readiness rail — hidden until staging status resolves.
             While `PushErrorBanner` is mounted it owns the push failure outright:
