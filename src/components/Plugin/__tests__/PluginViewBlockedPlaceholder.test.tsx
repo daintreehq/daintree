@@ -92,11 +92,13 @@ describe("PluginViewBlockedPlaceholder", () => {
   it("says the view is blocked here when this window drives the project", () => {
     seedDriveLeaseView(lease(true));
     const onRetry = vi.fn();
-    render(<PluginViewBlockedPlaceholder
+    render(
+      <PluginViewBlockedPlaceholder
         pluginId="acme.docker"
         pluginDisplayName="Docker Console"
         onRetry={onRetry}
-      />);
+      />
+    );
     expect(screen.getByText("Docker Console is blocked on this computer")).toBeTruthy();
     expect(onRetry).not.toHaveBeenCalled();
   });

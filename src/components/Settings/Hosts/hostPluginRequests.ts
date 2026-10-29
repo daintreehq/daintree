@@ -8,8 +8,7 @@ export const HOST_PLUGINS_SECTION_ID = "host-plugins";
 export const HOST_PLUGIN_VIEWS_SECTION_ID = "host-plugin-views";
 
 export type HostPluginsSectionId =
-  | typeof HOST_PLUGINS_SECTION_ID
-  | typeof HOST_PLUGIN_VIEWS_SECTION_ID;
+  typeof HOST_PLUGINS_SECTION_ID | typeof HOST_PLUGIN_VIEWS_SECTION_ID;
 
 export interface HostPluginsRequest {
   hostId: HostId;

@@ -74,9 +74,9 @@ export default function HostsSettingsTab() {
   };
   // Each "Update …" request remounts the detail so its update flow opens again.
   const [updateRequest, setUpdateRequest] = useState<{ hostId: HostId; seq: number } | null>(null);
-  const [pluginsRequest, setPluginsRequest] = useState<(HostPluginsRequest & { seq: number }) | null>(
-    null
-  );
+  const [pluginsRequest, setPluginsRequest] = useState<
+    (HostPluginsRequest & { seq: number }) | null
+  >(null);
   const [copyRequest, setCopyRequest] = useState<{ hostId: HostId; seq: number } | null>(null);
 
   useEffect(() => {
