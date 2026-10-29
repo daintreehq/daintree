@@ -1064,11 +1064,16 @@ describe("ShortcutRecorder", () => {
     return screen.getByRole("button", { name: "Shortcut" });
   }
 
-  it("records a combo on focus, holding the app's shortcuts back while it does", () => {
+  function arm(field: HTMLElement) {
+    act(() => field.focus());
+    fireEvent.click(field);
+  }
+
+  it("records a combo once armed, holding the app's shortcuts back while it does", () => {
     const onValueChange = vi.fn();
     render(<kit.ShortcutRecorder onValueChange={onValueChange} />);
     const field = recorder();
-    act(() => field.focus());
+    arm(field);
     expect(keybindingService.isCapturingShortcut()).toBe(true);
     fireEvent.keyDown(field, { key: "Control", code: "ControlLeft", ctrlKey: true });
     expect(field.textContent).toContain("Now press a key");
@@ -1083,7 +1088,7 @@ describe("ShortcutRecorder", () => {
     const onValueChange = vi.fn();
     render(<kit.ShortcutRecorder defaultValue="Cmd+J" onValueChange={onValueChange} />);
     const field = recorder();
-    act(() => field.focus());
+    arm(field);
     fireEvent.keyDown(field, { key: "j", code: "KeyJ" });
     expect(screen.getByRole("alert").textContent).toMatch(/Include Ctrl or Alt/);
     expect(onValueChange).not.toHaveBeenCalled();
@@ -1098,7 +1103,7 @@ describe("ShortcutRecorder", () => {
     const onValueChange = vi.fn();
     render(<kit.ShortcutRecorder allowChords onValueChange={onValueChange} />);
     const field = recorder();
-    act(() => field.focus());
+    arm(field);
     fireEvent.keyDown(field, { key: "k", code: "KeyK", ctrlKey: true });
     expect(field.textContent).toContain("Press second key");
     fireEvent.keyDown(field, { key: "s", code: "KeyS", ctrlKey: true });
@@ -1109,6 +1114,30 @@ describe("ShortcutRecorder", () => {
       vi.advanceTimersByTime(1100);
     });
     expect(onValueChange).toHaveBeenLastCalledWith("Alt+P");
+  });
+
+  it("rests on focus, so tabbing through and pressing a shortcut leaves it alone", () => {
+    const onValueChange = vi.fn();
+    render(<kit.ShortcutRecorder defaultValue="Cmd+J" onValueChange={onValueChange} />);
+    const field = recorder();
+    act(() => field.focus());
+    expect(field.getAttribute("aria-pressed")).toBe("false");
+    expect(keybindingService.isCapturingShortcut()).toBe(false);
+    fireEvent.keyDown(field, { key: "s", code: "KeyS", metaKey: true });
+    expect(onValueChange).not.toHaveBeenCalled();
+    expect(field.textContent).not.toContain("Press a shortcut");
+    fireEvent.keyDown(field, { key: "Enter" });
+    expect(field.getAttribute("aria-pressed")).toBe("true");
+    expect(keybindingService.isCapturingShortcut()).toBe(true);
+  });
+
+  it("names a conflicting action by its title, never its id", () => {
+    vi.spyOn(keybindingService, "findConflicts").mockReturnValue([
+      { actionId: "acme.sync.run", combo: "Cmd+T", kind: "conflict" } as never,
+    ]);
+    render(<kit.ShortcutRecorder value="Cmd+T" />);
+    expect(screen.queryByText(/acme\.sync\.run/)).toBeNull();
+    expect(screen.getByText(/Daintree uses this for another action/)).toBeTruthy();
   });
 
   it("flags a combo Daintree uses and the plugin's own conflicts", () => {
@@ -1134,7 +1163,7 @@ describe("ShortcutRecorder", () => {
   it("releases the app's shortcuts once a combo is recorded", () => {
     render(<kit.ShortcutRecorder />);
     const field = recorder();
-    act(() => field.focus());
+    arm(field);
     fireEvent.keyDown(field, { key: "k", code: "KeyK", ctrlKey: true });
     expect(keybindingService.isCapturingShortcut()).toBe(false);
   });
@@ -1144,7 +1173,7 @@ describe("ShortcutRecorder", () => {
     const onValueChange = vi.fn();
     render(<kit.ShortcutRecorder allowChords defaultValue="Cmd+J" onValueChange={onValueChange} />);
     const field = recorder();
-    act(() => field.focus());
+    arm(field);
     fireEvent.keyDown(field, { key: "k", code: "KeyK", ctrlKey: true });
     fireEvent.click(screen.getByRole("button", { name: "Clear shortcut" }));
     act(() => {
@@ -1158,7 +1187,7 @@ describe("ShortcutRecorder", () => {
     const onValueChange = vi.fn();
     const { rerender } = render(<kit.ShortcutRecorder allowChords onValueChange={onValueChange} />);
     const field = recorder();
-    act(() => field.focus());
+    arm(field);
     fireEvent.keyDown(field, { key: "k", code: "KeyK", ctrlKey: true });
     rerender(<kit.ShortcutRecorder allowChords onValueChange={onValueChange} disabled />);
     expect(keybindingService.isCapturingShortcut()).toBe(false);
@@ -1183,7 +1212,7 @@ describe("ShortcutRecorder", () => {
         : []
     );
     render(<kit.ShortcutRecorder defaultValue="Cmd+T" allowChords />);
-    act(() => recorder().focus());
+    arm(recorder());
     // Still in force until something new is pressed: no line that comes and goes on focus.
     expect(screen.getByText(/New terminal/)).toBeTruthy();
     fireEvent.keyDown(recorder(), { key: "k", code: "KeyK", ctrlKey: true });
@@ -1194,7 +1223,7 @@ describe("ShortcutRecorder", () => {
     vi.useFakeTimers();
     const onValueChange = vi.fn();
     render(<kit.ShortcutRecorder allowChords defaultValue="Cmd+J" onValueChange={onValueChange} />);
-    act(() => recorder().focus());
+    arm(recorder());
     fireEvent.keyDown(recorder(), { key: "k", code: "KeyK", ctrlKey: true });
     act(() => {
       window.dispatchEvent(new Event("blur"));

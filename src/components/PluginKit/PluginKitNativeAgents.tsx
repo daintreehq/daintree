@@ -1551,6 +1551,7 @@ function KitTerminalSnapshot({
   const at = typeof since === "number" ? since : undefined;
   const observation = useObservationLabel(observed ?? "idle", at);
   const activate = fn(onClick);
+  const transcriptId = useId();
   const name =
     nonEmpty(ariaLabel) ??
     [heading ?? (agent ? agentName(agent) : "Terminal"), observed ? observation : undefined]
@@ -1612,6 +1613,7 @@ function KitTerminalSnapshot({
     </div>
   );
 
+  const transcript = lines.map((spans) => spans.map((span) => span.text).join("")).join("\n");
   const isSelected = selected === true;
   const frame = cn(
     "flex min-w-0 flex-col overflow-hidden rounded-[var(--radius-md)] border border-border-default text-left",
@@ -1623,30 +1625,36 @@ function KitTerminalSnapshot({
   );
   const current = isSelected ? { "aria-current": true as const } : {};
   if (activate) {
+    // A button's content is flattened into its name, so the transcript sits
+    // beside it and describes it rather than being lost inside.
     return (
-      <button
-        type="button"
-        {...pickRootProps(rest)}
-        {...current}
-        aria-label={name}
-        onClick={() => activate()}
-        className={cn(
-          frame,
-          "cursor-pointer transition-colors duration-150 ease-out hover:border-border-strong focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
-        )}
-      >
-        {header}
-        {screen}
-      </button>
+      <>
+        <button
+          type="button"
+          {...pickRootProps(rest)}
+          {...current}
+          aria-label={name}
+          aria-describedby={transcriptId}
+          onClick={() => activate()}
+          className={cn(
+            frame,
+            "cursor-pointer transition-colors duration-150 ease-out hover:border-border-strong focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
+          )}
+        >
+          {header}
+          {screen}
+        </button>
+        <pre id={transcriptId} className="sr-only">
+          {transcript}
+        </pre>
+      </>
     );
   }
   return (
     <figure {...pickRootProps(rest)} {...current} aria-label={name} className={cn(frame, "m-0")}>
       {header}
       {screen}
-      <pre className="sr-only">
-        {lines.map((spans) => spans.map((span) => span.text).join("")).join("\n")}
-      </pre>
+      <pre className="sr-only">{transcript}</pre>
     </figure>
   );
 }
