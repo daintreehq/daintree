@@ -19,7 +19,6 @@ import { isPointerClaimed } from "@/lib/pointerClaim";
 import { logError } from "@/utils/logger";
 import { actionService } from "@/services/ActionService";
 import {
-  usePortalStore,
   usePerformanceModeStore,
   useScrollbackStore,
   useLayoutConfigStore,
@@ -328,16 +327,12 @@ function SettingsDialogInner({
   const [activeSubtabs, setActiveSubtabs] = useState<Partial<Record<SettingsTab, string>>>({});
   const [searchQuery, setSearchQuery] = useState("");
   const searchInputRef = useRef<HTMLInputElement>(null);
-  const setPortalOpen = usePortalStore((state) => state.setOpen);
   const setTab = useSettingsStore((s) => s.setTab);
   const setSubtab = useSettingsStore((s) => s.setSubtab);
 
   useEffect(() => {
-    if (isOpen) {
-      setPortalOpen(false);
-      refreshSettingOwnersShown();
-    }
-  }, [isOpen, setPortalOpen]);
+    if (isOpen) refreshSettingOwnersShown();
+  }, [isOpen]);
 
   const [appVersion, setAppVersion] = useState<string>(cachedVersionInfo?.appVersion ?? "");
   const [buildArch, setBuildArch] = useState<string | undefined>(cachedVersionInfo?.arch);

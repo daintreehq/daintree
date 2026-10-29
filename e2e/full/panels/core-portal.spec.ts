@@ -52,6 +52,25 @@ function app(): AppContext {
   return ctx;
 }
 
+// Main hides a tab by parking its view offscreen while it stays attached, so
+// "shown" means some view on this path sits at a non-negative x.
+async function isPortalPageOnscreen(pathname: string): Promise<boolean> {
+  return app().app.evaluate(({ BrowserWindow }, target) => {
+    const win = BrowserWindow.getAllWindows()[0];
+    if (!win || win.isDestroyed()) return false;
+    return win.contentView.children.some((child) => {
+      const wc = (child as Electron.WebContentsView).webContents;
+      if (!wc || wc.isDestroyed()) return false;
+      if (!wc.getURL().includes(target)) return false;
+      return child.getBounds().x >= 0;
+    });
+  }, pathname);
+}
+
+function overlayClaimCount(page: Page): Promise<string> {
+  return page.evaluate(() => document.documentElement.dataset.overlayClaims ?? "0");
+}
+
 // Serial: one journey on one app — the tab tests build on each other and the
 // final relaunch verifies the width the resize test left behind.
 test.describe.serial("Core: Portal", () => {
@@ -231,7 +250,7 @@ test.describe.serial("Core: Portal", () => {
   test.describe("Settings Overlay Interaction", () => {
     test.beforeEach(skipTabsOnWindowsCI);
 
-    test("opening Settings closes portal, reopening works after", async () => {
+    test("Settings hides the portal while it is open and brings it back on close", async () => {
       const { window } = app();
 
       await dispatchAction(window, "portal.openUrl", {
@@ -241,21 +260,26 @@ test.describe.serial("Core: Portal", () => {
 
       const portalContainer = window.locator(SEL.portal.container);
       await expect(portalContainer).toBeVisible({ timeout: T_LONG });
+      await expect.poll(() => isPortalPageOnscreen("/page-a"), { timeout: T_LONG }).toBe(true);
+      const toggle = window.locator(SEL.toolbar.portalToggle).first();
 
       await openSettings(window);
       await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
 
-      await expect(portalContainer).not.toBeVisible({ timeout: T_MEDIUM });
+      // Settings hides the native view through its overlay claim; the Portal itself stays open.
+      await expect.poll(() => overlayClaimCount(window)).not.toBe("0");
+      await expect.poll(() => isPortalPageOnscreen("/page-a"), { timeout: T_MEDIUM }).toBe(false);
+      await expect(toggle).toHaveAttribute("aria-pressed", "true", { timeout: T_SHORT });
 
       await window.locator(SEL.settings.closeButton).click();
       await expect(window.locator(SEL.settings.heading)).not.toBeVisible({ timeout: T_SHORT });
+      await expect.poll(() => overlayClaimCount(window)).toBe("0");
 
-      await window.locator(SEL.toolbar.portalToggle).first().click();
-
-      await expect(portalContainer).toBeVisible({ timeout: T_LONG });
+      await expect(toggle).toHaveAttribute("aria-pressed", "true", { timeout: T_SHORT });
       await expect(portalContainer.locator('[role="tab"][aria-label="Page A"]')).toBeVisible({
         timeout: T_MEDIUM,
       });
+      await expect.poll(() => isPortalPageOnscreen("/page-a"), { timeout: T_LONG }).toBe(true);
     });
   });
 
